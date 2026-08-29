@@ -224,7 +224,10 @@ export async function endCall(reason = 'ended') {
 
   if (transcript.length) {
     try {
-      await deps.appendJournal(getToday(), `FaceTime Audio call\n${renderTranscript(transcript)}`, { source: 'voice' });
+      // getToday() is async (it reads the configured timezone) — unawaited it
+      // resolved to a pending Promise, which appendJournal's isIsoDate() guard
+      // always rejects, so the call transcript was silently never written.
+      await deps.appendJournal(await getToday(), `FaceTime Audio call\n${renderTranscript(transcript)}`, { source: 'voice' });
     } catch (error) {
       console.error(`❌ voice call: journal append failed: ${error.message}`);
     }

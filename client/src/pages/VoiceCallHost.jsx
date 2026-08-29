@@ -1,20 +1,27 @@
 /**
- * The FaceTime Audio call host.
+ * The FaceTime Audio call host — and its second mode, meeting capture.
  *
- * This page is the audio path for a call: it opens BlackHole 16ch (what
- * FaceTime plays INTO), streams it to the server as 16 kHz mono PCM, and plays
- * the assistant's reply back out through BlackHole 2ch (what FaceTime listens
- * to as its microphone). It has to run in a real browser tab on the Mac
- * because device permissions and `setSinkId` need a real browser profile.
+ * Both modes share one audio bridge: a browser tab opens BlackHole 16ch
+ * (what FaceTime, Zoom, or Meet plays INTO) and streams it to the server as
+ * 16 kHz mono PCM. It has to run in a real browser tab on the Mac because
+ * device permissions and `setSinkId` need a real browser profile.
+ *
+ * - **Call** plays the assistant's reply back out through BlackHole 2ch
+ *   (what FaceTime listens to as its microphone) — the full voice pipeline.
+ * - **Capture system audio** only transcribes. It never talks back and needs
+ *   no BlackHole 2ch: it whisper-transcribes the meeting continuously and,
+ *   on stop, files the transcript into the daily journal and the Brain
+ *   inbox for review — no AI provider is called along the way.
  *
  * Everything here fails closed and says why. A bridge that half-works drops
- * the call audio silently, so a missing API, a missing device, an ungranted
+ * audio silently, so a missing API, a missing device, an ungranted
  * permission, and a second tab each produce their own message rather than a
  * spinner that never resolves.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Mic, MicOff, PhoneCall, Volume2 } from 'lucide-react';
+import { Mic, MicOff, PhoneCall, Radio, Volume2 } from 'lucide-react';
 import socket from '../services/socket';
+import { useDrawerTab } from '../hooks';
 import {
   CALL_FRAME_SAMPLES,
   CALL_HOST_LOCK,
@@ -44,11 +51,21 @@ registerProcessor('portos-call-tap', CallTapProcessor);
 
 const DEFAULT_INPUT_LABEL = 'BlackHole 16ch';
 const DEFAULT_OUTPUT_LABEL = 'BlackHole 2ch';
+const MODES = ['call', 'capture'];
 
 export default function VoiceCallHost() {
+  // Deep-linkable mode, not local state: `?mode=capture` is shareable and
+  // survives a reload, same convention as a drawer's active tab.
+  const [mode, setMode] = useDrawerTab('mode', 'call', MODES);
+  // Read inside callbacks that only close over `[]`/`[teardown]` deps, so a
+  // mode switch between mount and the next attach/detach isn't missed.
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+
   const [blocked, setBlocked] = useState(null);
   const [attached, setAttached] = useState(false);
   const [callState, setCallState] = useState(null);
+  const [captureState, setCaptureState] = useState(null);
   const [level, setLevel] = useState(0);
   const [notice, setNotice] = useState(null);
   const audio = useRef({ context: null, stream: null, node: null, source: null, outputId: null, pending: [] });
@@ -67,7 +84,9 @@ export default function VoiceCallHost() {
 
   // Play one WAV into BlackHole 2ch. `setSinkId` is what makes this land in the
   // call instead of the room's speakers, so a failure to route is surfaced
-  // rather than played anyway.
+  // rather than played anyway. Capture mode never receives a voice:call:tts
+  // event (the server never emits one for a capture session), so this only
+  // ever runs for a call.
   const playToCall = useCallback(async (wav) => {
     const element = new Audio();
     const blob = new Blob([wav], { type: 'audio/wav' });
@@ -91,7 +110,9 @@ export default function VoiceCallHost() {
     }
 
     // The lock is the local half of single-attach; the server refuses a second
-    // host too, but the lock catches it before any device is opened.
+    // host too, but the lock catches it before any device is opened. One lock
+    // name for both modes — they read the same physical BlackHole device, so
+    // a second tab must be refused regardless of which mode it picks.
     //
     // `locks.request` resolves only when its CALLBACK settles, and holding a
     // lock means never settling — so awaiting the request itself would hang
@@ -112,14 +133,22 @@ export default function VoiceCallHost() {
       return;
     }
 
+    const currentMode = modeRef.current;
     const devices = await navigator.mediaDevices.enumerateDevices().catch(() => null);
-    const problem = describeDeviceProblem(devices, { inputLabel: DEFAULT_INPUT_LABEL, outputLabel: DEFAULT_OUTPUT_LABEL });
+    const problem = describeDeviceProblem(devices, {
+      inputLabel: DEFAULT_INPUT_LABEL,
+      // Capture only listens — it never plays a reply back, so it has no
+      // BlackHole 2ch requirement.
+      outputLabel: currentMode === 'call' ? DEFAULT_OUTPUT_LABEL : undefined,
+    });
     if (problem) {
       setBlocked(problem);
       return;
     }
     const input = devices.find((device) => device.label === DEFAULT_INPUT_LABEL && device.kind === 'audioinput');
-    const output = devices.find((device) => device.label === DEFAULT_OUTPUT_LABEL && device.kind === 'audiooutput');
+    const output = currentMode === 'call'
+      ? devices.find((device) => device.label === DEFAULT_OUTPUT_LABEL && device.kind === 'audiooutput')
+      : null;
 
     let stream;
     try {
@@ -157,6 +186,8 @@ export default function VoiceCallHost() {
       carry.push(...resampled);
       // Ship fixed-size frames so the server's endpointer sees a steady
       // resolution regardless of the render quantum this browser chose.
+      // Both modes ride the same wire event — the server routes it to
+      // whichever host (call or capture) this socket currently holds.
       while (carry.length >= CALL_FRAME_SAMPLES) {
         const pcm = floatToInt16(Float32Array.from(carry.slice(0, CALL_FRAME_SAMPLES)));
         carry = carry.slice(CALL_FRAME_SAMPLES);
@@ -165,13 +196,19 @@ export default function VoiceCallHost() {
     };
     source.connect(node);
 
-    audio.current = { context, stream, node, source, outputId: output.deviceId, pending: [] };
-    socket.emit('voice:call:attach');
+    audio.current = { context, stream, node, source, outputId: output?.deviceId ?? null, pending: [] };
+    // Two literal emits, not a computed event name — a computed
+    // `socket.emit(x ? 'a' : 'b')` is invisible to the static
+    // socket-event-catalog scan (`scripts/generate-socket-event-catalog.js`),
+    // which greps for `socket.emit('literal')`.
+    if (currentMode === 'call') socket.emit('voice:call:attach');
+    else socket.emit('voice:capture:start');
     setBlocked(null);
   }, []);
 
   const stop = useCallback(() => {
-    socket.emit('voice:call:detach');
+    if (modeRef.current === 'call') socket.emit('voice:call:detach');
+    else socket.emit('voice:capture:stop');
     teardown();
     lockRelease.current?.();
     lockRelease.current = null;
@@ -179,22 +216,44 @@ export default function VoiceCallHost() {
   }, [teardown]);
 
   useEffect(() => {
-    const onState = (snapshot) => {
+    const onCallState = (snapshot) => {
       if (snapshot?.error === 'host-taken') {
         setBlocked('Another tab owns the call host.');
+        setAttached(false);
+        return;
+      }
+      if (snapshot?.error === 'capture-active') {
+        setBlocked('Meeting capture is running on this tab — stop it before attaching a call.');
         setAttached(false);
         return;
       }
       setCallState(snapshot);
       setAttached(Boolean(snapshot?.hostAttached));
     };
+    const onCaptureState = (snapshot) => {
+      if (snapshot?.error === 'host-taken') {
+        setBlocked('Another tab is already capturing a meeting.');
+        setAttached(false);
+        return;
+      }
+      if (snapshot?.error === 'call-active') {
+        setBlocked('A FaceTime call is active on this tab — hang up before starting a capture.');
+        setAttached(false);
+        return;
+      }
+      setCaptureState(snapshot);
+      setAttached(Boolean(snapshot?.hostAttached));
+    };
     const onTts = ({ wav }) => { if (wav) playToCall(wav); };
-    socket.on('voice:call:state', onState);
+    socket.on('voice:call:state', onCallState);
+    socket.on('voice:capture:state', onCaptureState);
     socket.on('voice:call:tts', onTts);
     return () => {
-      socket.off('voice:call:state', onState);
+      socket.off('voice:call:state', onCallState);
+      socket.off('voice:capture:state', onCaptureState);
       socket.off('voice:call:tts', onTts);
-      socket.emit('voice:call:detach');
+      if (modeRef.current === 'call') socket.emit('voice:call:detach');
+      else socket.emit('voice:capture:stop');
       teardown();
       lockRelease.current?.();
       lockRelease.current = null;
@@ -217,15 +276,48 @@ export default function VoiceCallHost() {
     source.start();
   };
 
+  const isCall = mode === 'call';
+  const statusText = attached
+    ? (isCall
+      ? `Attached · call ${callState?.state || 'idle'}${callState?.turns ? ` · ${callState.turns} turns` : ''}`
+      : `Capturing · ${captureState?.turns || 0} utterance${captureState?.turns === 1 ? '' : 's'} transcribed`)
+    : (isCall ? 'Not attached — no call audio reaches PortOS.' : 'Not capturing — nothing is being transcribed.');
+
   return (
     <div className="mx-auto max-w-2xl space-y-4 p-4">
       <header className="space-y-1">
         <h1 className="flex items-center gap-2 text-xl font-semibold text-white"><PhoneCall size={20} />Call host</h1>
         <p className="text-sm text-gray-400">
-          Keep this tab open on the Mac running PortOS. It carries the audio for a FaceTime Audio
-          call: FaceTime plays into {DEFAULT_INPUT_LABEL}, and PortOS answers through {DEFAULT_OUTPUT_LABEL}.
+          Keep this tab open on the Mac running PortOS. In <strong>Call</strong> mode it carries the
+          audio for a FaceTime Audio call: FaceTime plays into {DEFAULT_INPUT_LABEL}, and PortOS
+          answers through {DEFAULT_OUTPUT_LABEL}. In <strong>Capture system audio</strong> mode it only
+          listens to {DEFAULT_INPUT_LABEL} and transcribes — route any meeting app's output there via a
+          Multi-Output Device to capture it into the daily journal and the Brain inbox.
         </p>
       </header>
+
+      <div role="tablist" aria-label="Call host mode" className="flex gap-2">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={isCall}
+          disabled={attached}
+          onClick={() => setMode('call')}
+          className={`flex min-h-[44px] items-center gap-2 rounded px-3 text-sm disabled:opacity-50 ${isCall ? 'bg-port-accent/20 text-port-accent' : 'border border-port-border text-gray-300 hover:bg-port-border/50'}`}
+        >
+          <PhoneCall size={16} />Call
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={!isCall}
+          disabled={attached}
+          onClick={() => setMode('capture')}
+          className={`flex min-h-[44px] items-center gap-2 rounded px-3 text-sm disabled:opacity-50 ${!isCall ? 'bg-port-accent/20 text-port-accent' : 'border border-port-border text-gray-300 hover:bg-port-border/50'}`}
+        >
+          <Radio size={16} />Capture system audio
+        </button>
+      </div>
 
       {blocked && <p role="alert" className="rounded border border-port-error bg-port-error/10 p-3 text-sm text-port-error">{blocked}</p>}
       {notice && <p role="status" className="rounded border border-port-warning bg-port-warning/10 p-3 text-sm text-port-warning">{notice}</p>}
@@ -233,9 +325,11 @@ export default function VoiceCallHost() {
       <section className="space-y-3 rounded-lg border border-port-border bg-port-card p-4">
         <div className="flex flex-wrap items-center gap-2">
           {attached
-            ? <button type="button" onClick={stop} className="flex min-h-[44px] items-center gap-2 rounded border border-port-border px-3 text-sm text-gray-300 hover:bg-port-border/50"><MicOff size={16} />Detach call host</button>
-            : <button type="button" onClick={start} className="flex min-h-[44px] items-center gap-2 rounded bg-port-accent/20 px-3 text-sm text-port-accent hover:bg-port-accent/30"><Mic size={16} />Attach call host</button>}
-          <button type="button" onClick={playTestTone} disabled={!attached} className="flex min-h-[44px] items-center gap-2 rounded border border-port-border px-3 text-sm text-gray-300 hover:bg-port-border/50 disabled:opacity-50"><Volume2 size={16} />Test tone</button>
+            ? <button type="button" onClick={stop} className="flex min-h-[44px] items-center gap-2 rounded border border-port-border px-3 text-sm text-gray-300 hover:bg-port-border/50"><MicOff size={16} />{isCall ? 'Detach call host' : 'Stop capture'}</button>
+            : <button type="button" onClick={start} className="flex min-h-[44px] items-center gap-2 rounded bg-port-accent/20 px-3 text-sm text-port-accent hover:bg-port-accent/30"><Mic size={16} />{isCall ? 'Attach call host' : 'Start capture'}</button>}
+          {isCall && (
+            <button type="button" onClick={playTestTone} disabled={!attached} className="flex min-h-[44px] items-center gap-2 rounded border border-port-border px-3 text-sm text-gray-300 hover:bg-port-border/50 disabled:opacity-50"><Volume2 size={16} />Test tone</button>
+          )}
         </div>
 
         <div>
@@ -245,9 +339,7 @@ export default function VoiceCallHost() {
           </div>
         </div>
 
-        <p role="status" className="text-xs text-gray-400">
-          {attached ? `Attached · call ${callState?.state || 'idle'}${callState?.turns ? ` · ${callState.turns} turns` : ''}` : 'Not attached — no call audio reaches PortOS.'}
-        </p>
+        <p role="status" className="text-xs text-gray-400">{statusText}</p>
       </section>
     </div>
   );

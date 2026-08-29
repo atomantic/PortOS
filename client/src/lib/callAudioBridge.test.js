@@ -89,6 +89,13 @@ describe('call host device selection', () => {
     expect(describeDeviceProblem(noOutput, { inputLabel: 'BlackHole 16ch', outputLabel: 'BlackHole 2ch' })).toMatch(/BlackHole 2ch/);
     expect(describeDeviceProblem(null, {})).toMatch(/Could not read/);
   });
+
+  it('skips the output check entirely when no outputLabel is given', () => {
+    // Meeting capture only listens — it never plays a reply back, so it has
+    // no BlackHole 2ch requirement. A missing output device must not block it.
+    const noOutput = devices().filter((device) => device.label !== 'BlackHole 2ch');
+    expect(describeDeviceProblem(noOutput, { inputLabel: 'BlackHole 16ch' })).toBeNull();
+  });
 });
 
 describe('call host audio format', () => {

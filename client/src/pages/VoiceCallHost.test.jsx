@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 
 vi.mock('../services/socket', () => {
   const handlers = new Map();
@@ -41,7 +42,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('VoiceCallHost', () => {
   it('says nothing reaches PortOS until the host is attached', () => {
-    render(<VoiceCallHost />);
+    render(<VoiceCallHost />, { wrapper: MemoryRouter });
     expect(screen.getByText(/Not attached — no call audio reaches PortOS/)).toBeTruthy();
     expect(socket.emit).not.toHaveBeenCalledWith('voice:call:attach');
   });
@@ -49,7 +50,7 @@ describe('VoiceCallHost', () => {
   it('names every missing browser API at once instead of one per reload', async () => {
     vi.stubGlobal('MediaStreamTrackProcessor', undefined);
     vi.stubGlobal('AudioWorkletNode', undefined);
-    render(<VoiceCallHost />);
+    render(<VoiceCallHost />, { wrapper: MemoryRouter });
 
     await act(async () => { fireEvent.click(screen.getByText('Attach call host')); });
 
@@ -63,7 +64,7 @@ describe('VoiceCallHost', () => {
 
   it('refuses to open a device when another tab holds the lock', async () => {
     navigator.locks.request = vi.fn((_name, _options, fn) => Promise.resolve(fn(false)));
-    render(<VoiceCallHost />);
+    render(<VoiceCallHost />, { wrapper: MemoryRouter });
 
     await act(async () => { fireEvent.click(screen.getByText('Attach call host')); });
 
@@ -73,7 +74,7 @@ describe('VoiceCallHost', () => {
 
   it('reports the specific missing device rather than a generic failure', async () => {
     navigator.mediaDevices.enumerateDevices.mockResolvedValue([devices[1]]);
-    render(<VoiceCallHost />);
+    render(<VoiceCallHost />, { wrapper: MemoryRouter });
 
     await act(async () => { fireEvent.click(screen.getByText('Attach call host')); });
 
@@ -86,7 +87,7 @@ describe('VoiceCallHost', () => {
     // getUserMedia succeeding is as far as jsdom goes; the AudioContext work
     // after it belongs to the browser, so the assertion is the constraint set.
     navigator.mediaDevices.getUserMedia.mockRejectedValue(new Error('no audio hardware'));
-    render(<VoiceCallHost />);
+    render(<VoiceCallHost />, { wrapper: MemoryRouter });
 
     await act(async () => { fireEvent.click(screen.getByText('Attach call host')); });
 
@@ -102,7 +103,7 @@ describe('VoiceCallHost', () => {
   });
 
   it('surfaces the server refusing a second host', async () => {
-    render(<VoiceCallHost />);
+    render(<VoiceCallHost />, { wrapper: MemoryRouter });
 
     act(() => socket.__fire('voice:call:state', { error: 'host-taken' }));
 
@@ -110,7 +111,7 @@ describe('VoiceCallHost', () => {
   });
 
   it('reflects live call state once the server reports it attached', async () => {
-    render(<VoiceCallHost />);
+    render(<VoiceCallHost />, { wrapper: MemoryRouter });
 
     act(() => socket.__fire('voice:call:state', { hostAttached: true, state: 'listening', active: true, turns: 2 }));
 
@@ -119,8 +120,90 @@ describe('VoiceCallHost', () => {
   });
 
   it('detaches on unmount so a closed tab does not leave a phantom host', () => {
-    const { unmount } = render(<VoiceCallHost />);
+    const { unmount } = render(<VoiceCallHost />, { wrapper: MemoryRouter });
     unmount();
     expect(socket.emit).toHaveBeenCalledWith('voice:call:detach');
+  });
+});
+
+describe('VoiceCallHost — meeting capture mode', () => {
+  const renderCapturing = () => render(<VoiceCallHost />, {
+    wrapper: ({ children }) => <MemoryRouter initialEntries={['/?mode=capture']}>{children}</MemoryRouter>,
+  });
+
+  it('is reachable by URL, needs no output device, and emits voice:capture:start (not voice:call:attach)', async () => {
+    // Only the input half of the bridge exists — capture never plays a reply
+    // back, so it must not block on a missing BlackHole 2ch. jsdom has no
+    // real Web Audio API, so the pieces past getUserMedia are minimally
+    // stubbed here (the existing call-mode tests instead stop the flow by
+    // making getUserMedia reject — that would hide the emitted event name).
+    navigator.mediaDevices.enumerateDevices.mockResolvedValue([
+      { label: 'BlackHole 16ch', kind: 'audioinput', deviceId: 'in-1' },
+    ]);
+    navigator.mediaDevices.getUserMedia.mockResolvedValue({});
+    vi.stubGlobal('AudioContext', function FakeAudioContext() {
+      this.sampleRate = 48000;
+      this.audioWorklet = { addModule: () => Promise.resolve() };
+      this.createMediaStreamSource = () => ({ connect: () => {} });
+      this.close = () => {};
+    });
+    vi.stubGlobal('AudioWorkletNode', function FakeAudioWorkletNode() {
+      this.port = {};
+      this.disconnect = () => {};
+    });
+    renderCapturing();
+
+    await act(async () => { fireEvent.click(screen.getByText('Start capture')); });
+
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledWith({
+      audio: {
+        deviceId: { exact: 'in-1' },
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      },
+    });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(socket.emit).toHaveBeenCalledWith('voice:capture:start');
+    expect(socket.emit).not.toHaveBeenCalledWith('voice:call:attach');
+  });
+
+  it('still requires the input device by name', async () => {
+    navigator.mediaDevices.enumerateDevices.mockResolvedValue([]);
+    renderCapturing();
+
+    await act(async () => { fireEvent.click(screen.getByText('Start capture')); });
+
+    expect((await screen.findByRole('alert')).textContent).toMatch(/microphone access/);
+    expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it('hides the test tone control — capture never plays anything back', () => {
+    renderCapturing();
+    expect(screen.queryByText('Test tone')).toBeNull();
+  });
+
+  it('reflects live capture state once the server reports it attached', async () => {
+    renderCapturing();
+
+    act(() => socket.__fire('voice:capture:state', { hostAttached: true, active: true, turns: 3 }));
+
+    expect(await screen.findByText(/Capturing · 3 utterances transcribed/)).toBeTruthy();
+    expect(screen.getByText('Stop capture')).toBeTruthy();
+  });
+
+  it('surfaces the mutual-exclusion refusal when a call is active on this tab', async () => {
+    renderCapturing();
+
+    act(() => socket.__fire('voice:capture:state', { error: 'call-active' }));
+
+    expect((await screen.findByRole('alert')).textContent).toMatch(/FaceTime call is active/);
+  });
+
+  it('stops the capture (not the call) on unmount', () => {
+    const { unmount } = renderCapturing();
+    unmount();
+    expect(socket.emit).toHaveBeenCalledWith('voice:capture:stop');
+    expect(socket.emit).not.toHaveBeenCalledWith('voice:call:detach');
   });
 });

@@ -12,6 +12,9 @@
 // Call host (FaceTime Audio bridge):
 // Inbound:  voice:call:attach | voice:call:audio | voice:call:detach
 // Outbound: voice:call:state | voice:call:tts
+// Meeting capture (same page, same audio bridge, no LLM — STT only):
+// Inbound:  voice:capture:start | voice:call:audio | voice:capture:stop
+// Outbound: voice:capture:state
 
 import { runTurn } from '../services/voice/pipeline.js';
 import { getVoiceConfig } from '../services/voice/config.js';
@@ -23,6 +26,7 @@ import {
 } from '../services/voice/voiceOutput.js';
 import { isIsoDate } from '../services/brainJournal.js';
 import { pcmToWavBuffer } from '../lib/chiptuneRender.js';
+import { transcribe } from '../services/voice/stt.js';
 import { CALL_AUDIO_SAMPLE_RATE, createCallEndpointer, pcmToFloat } from '../services/voice/callEndpointing.js';
 import {
   attachHost,
@@ -35,6 +39,16 @@ import {
   recordTurn,
   setCallStateListener,
 } from '../services/voice/callSession.js';
+import {
+  attachCaptureHost,
+  detachCaptureHost,
+  endCapture,
+  getCaptureHost,
+  isCaptureActive,
+  recordUtterance,
+  setCaptureStateListener,
+  startCapture,
+} from '../services/voice/captureSession.js';
 
 // Cap by messages (each user utterance + assistant reply is ~2). 24 → ~12 turns.
 const HISTORY_MESSAGES = 24;
@@ -418,6 +432,14 @@ export const registerVoiceHandlers = (socket) => {
   socket.on('voice:call:attach', async () => {
     try {
       if (!(await ensureEnabled('call'))) return;
+      // Mutually exclusive with meeting capture: both want the same BlackHole
+      // input device and the same host tab, and a call also wants BlackHole
+      // 2ch to talk back through — running both at once would fight over the
+      // device rather than fail closed with a clear reason.
+      if (isCaptureActive() || getCaptureHost() === socket) {
+        socket.emit('voice:call:state', { error: 'capture-active', hostAttached: false, active: false, state: 'idle' });
+        return;
+      }
       const claim = attachHost(socket);
       if (!claim.ok) {
         // Refused, not displaced: two tabs reading the same device would each
@@ -436,7 +458,9 @@ export const registerVoiceHandlers = (socket) => {
 
   socket.on('voice:call:audio', async (payload = {}) => {
     try {
-      if (getCallHost() !== socket || !call.endpointer) return;
+      const asCallHost = getCallHost() === socket && call.endpointer;
+      const asCaptureHost = getCaptureHost() === socket && capture.endpointer;
+      if (!asCallHost && !asCaptureHost) return;
       const { pcm } = payload || {};
       const bytes = audioByteLength(pcm);
       if (!bytes || bytes > MAX_CALL_FRAME_BYTES) return;
@@ -444,18 +468,28 @@ export const registerVoiceHandlers = (socket) => {
         ? new Int16Array(pcm.buffer, pcm.byteOffset, Math.floor(pcm.byteLength / 2))
         : new Int16Array(pcm);
 
-      const utterance = call.endpointer.push(view);
-      // Barge-in: the caller talking over a reply cancels it, exactly as
-      // pressing the widget's interrupt does.
-      if (call.endpointer.speaking && call.busy) {
-        state.ctrl?.abort();
-        state.pendingDestructive = null;
-        socket.emit('voice:interrupt', { reason: 'barge-in' });
+      if (asCallHost) {
+        const utterance = call.endpointer.push(view);
+        // Barge-in: the caller talking over a reply cancels it, exactly as
+        // pressing the widget's interrupt does.
+        if (call.endpointer.speaking && call.busy) {
+          state.ctrl?.abort();
+          state.pendingDestructive = null;
+          socket.emit('voice:interrupt', { reason: 'barge-in' });
+        }
+        if (!utterance) return;
+        noteCallerSpeech();
+        if (call.busy) return;
+        await runCallUtterance(utterance);
+        return;
       }
-      if (!utterance) return;
-      noteCallerSpeech();
-      if (call.busy) return;
-      await runCallUtterance(utterance);
+
+      // Meeting capture: STT only, never the LLM/tools pipeline (no
+      // cold-bootstrap AI calls — see AGENTS.md). Utterances are queued and
+      // transcribed one at a time so a burst of speech can't run two whisper
+      // requests concurrently and interleave the transcript out of order.
+      const utterance = capture.endpointer.push(view);
+      if (utterance) enqueueCaptureUtterance(utterance);
     } catch (err) {
       console.error(`❌ voice:call:audio failed: ${err.message}`);
     }
@@ -464,6 +498,84 @@ export const registerVoiceHandlers = (socket) => {
   socket.on('voice:call:detach', async () => {
     call.endpointer = null;
     emitCallState(await detachHost(socket));
+  });
+
+  // ---------------------------------------------------------------------------
+  // Meeting capture — the same call-host page's other mode. Reads the same
+  // BlackHole 16ch device and rides the same `voice:call:audio` PCM frames,
+  // but only transcribes: it never runs the LLM/tools pipeline and never
+  // plays anything back. Stopping finalizes whatever is still buffered in the
+  // endpointer, then writes the transcript to the journal and the inbox.
+  // ---------------------------------------------------------------------------
+  const capture = { endpointer: null, queue: Promise.resolve() };
+
+  const emitCaptureState = (snapshot) => socket.emit('voice:capture:state', snapshot);
+
+  const runCaptureUtterance = async (utterance) => {
+    try {
+      const { text } = await transcribe(
+        pcmToWavBuffer(pcmToFloat(utterance.pcm), { sampleRate: CALL_AUDIO_SAMPLE_RATE }),
+        { mimeType: 'audio/wav' },
+      );
+      if (text) emitCaptureState(recordUtterance(text));
+    } catch (err) {
+      console.error(`🎙️ capture transcribe failed: ${err.message}`);
+      socket.emit('voice:error', { stage: 'capture', message: err.message });
+    }
+  };
+
+  // Serialize onto a per-socket queue (AGENTS.md: async handlers mutating
+  // shared module-level state must not fire concurrently) rather than
+  // dropping an utterance that arrives mid-transcription — a dropped chunk
+  // here is lost meeting content, not a superseded turn like call barge-in.
+  const enqueueCaptureUtterance = (utterance) => {
+    capture.queue = capture.queue.then(() => runCaptureUtterance(utterance));
+    return capture.queue;
+  };
+
+  socket.on('voice:capture:start', async () => {
+    try {
+      if (!(await ensureEnabled('capture'))) return;
+      if (isCallActive() || getCallHost() === socket) {
+        socket.emit('voice:capture:state', { error: 'call-active', hostAttached: false, active: false, state: 'idle' });
+        return;
+      }
+      const claim = attachCaptureHost(socket);
+      if (!claim.ok) {
+        socket.emit('voice:capture:state', { error: claim.reason, hostAttached: false, active: false, state: 'idle' });
+        return;
+      }
+      const started = startCapture(socket);
+      if (!started.ok) {
+        socket.emit('voice:capture:state', { error: started.reason, hostAttached: true, active: false, state: 'idle' });
+        return;
+      }
+      capture.endpointer = createCallEndpointer();
+      capture.queue = Promise.resolve();
+      setCaptureStateListener(emitCaptureState);
+      emitCaptureState(started.state);
+    } catch (err) {
+      console.error(`❌ voice:capture:start failed: ${err.message}`);
+      socket.emit('voice:error', { stage: 'capture', message: err.message });
+    }
+  });
+
+  socket.on('voice:capture:stop', async () => {
+    try {
+      if (getCaptureHost() !== socket) return;
+      // Finalize whatever speech is still buffered rather than dropping the
+      // last few seconds of the meeting on the floor.
+      const pending = capture.endpointer?.flush();
+      if (pending) enqueueCaptureUtterance(pending);
+      await capture.queue.catch(() => {});
+      capture.endpointer = null;
+      const ended = await endCapture('stopped');
+      emitCaptureState(ended);
+      emitCaptureState(await detachCaptureHost(socket));
+    } catch (err) {
+      console.error(`❌ voice:capture:stop failed: ${err.message}`);
+      socket.emit('voice:error', { stage: 'capture', message: err.message });
+    }
   });
 
   socket.on('disconnect', () => {
@@ -491,6 +603,13 @@ export const registerVoiceHandlers = (socket) => {
     if (getCallHost() === socket) {
       call.endpointer = null;
       detachHost(socket).catch((err) => console.error(`❌ voice call detach failed: ${err.message}`));
+    }
+    // Same for meeting capture — best-effort, no final flush of whatever was
+    // still mid-utterance (matches the call path above, which drops its own
+    // in-flight endpointer buffer on disconnect the same way).
+    if (getCaptureHost() === socket) {
+      capture.endpointer = null;
+      detachCaptureHost(socket).catch((err) => console.error(`❌ voice capture detach failed: ${err.message}`));
     }
   });
 };

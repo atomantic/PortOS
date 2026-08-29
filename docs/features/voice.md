@@ -65,6 +65,34 @@ a hangup.
 `Caller` and `PortOS`. The call audio is never persisted, and the configured
 handle never appears in the transcript or its metadata.
 
+### Meeting capture
+
+The call-host page's second mode: **/voice/call-host?mode=capture** (or the
+**Capture system audio** tab on the same page) turns live audio from a
+Zoom/Meet/FaceTime meeting into a timestamped transcript in the daily journal
+and the Brain inbox — no dialing, no reply, no LLM call.
+
+**Setup.** Reads the same BlackHole 16ch device as the call bridge, so it
+needs no separate driver — but only the input half: capture never plays
+anything back, so BlackHole 2ch is not required. Route the meeting app's
+output to BlackHole 16ch (a macOS Multi-Output Device lets you also hear it
+through your speakers at the same time).
+
+**Capturing.** Press **Start capture**; PortOS transcribes continuously with
+the same whisper.cpp STT and energy-based endpointing (700 ms trailing
+silence) the call bridge uses, but stops there — it never runs the LLM/tools
+pipeline, so no AI provider is called while a meeting is being captured.
+Press **Stop capture** (or close the tab) to finalize: the transcript is
+appended to the daily journal under a "Meeting capture" heading with
+start/stop timestamps, and filed as a Brain inbox item with auto-classify
+off — exactly like a manually-typed thought with classification skipped. The
+usual summarize/tag flow applies only once you ask for it from the inbox.
+
+**Mutually exclusive with a call.** Both modes read the same BlackHole
+device and the same host tab, so starting one while the other is active on
+this tab is refused with a specific reason rather than fighting over the
+device.
+
 ### Why Kokoro is the default
 
 Kokoro is a 82M-parameter frontier TTS model that runs in-process via ONNX Runtime + transformers.js — **no Python, no extra binaries, cross-platform**. Quality is significantly higher than Piper (more natural prosody, expressive pacing). First synthesis after server start has a 2–3 s cold start as the model loads; warm calls are 200–500 ms per sentence on CPU.
@@ -185,7 +213,9 @@ Barge-in works by aborting the shared `AbortController` tied to the current turn
 
 Socket events are documented in `server/sockets/voice.js` — including the
 call-host bridge (`voice:call:attach` / `voice:call:audio` / `voice:call:detach`
-inbound, `voice:call:state` / `voice:call:tts` outbound).
+inbound, `voice:call:state` / `voice:call:tts` outbound) and meeting capture,
+which reuses the same `voice:call:audio` PCM frames (`voice:capture:start` /
+`voice:capture:stop` inbound, `voice:capture:state` outbound).
 
 ## Troubleshooting
 

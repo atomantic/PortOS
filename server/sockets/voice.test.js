@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Force the enabled-gate open so the validation tests below deterministically
 // exercise the size/text guards (ensureEnabled runs BEFORE every guard; with
@@ -12,12 +12,23 @@ vi.mock(import('../services/voice/config.js'), async (importOriginal) => {
   };
 });
 
+// Meeting capture transcribes over the network (whisper.cpp's HTTP server);
+// stub it so the capture-routing tests below run offline and deterministically.
+vi.mock('../services/voice/stt.js', () => ({ transcribe: vi.fn() }));
+
 const { truncateOnWordBoundary, registerVoiceHandlers } = await import('./voice.js');
 const {
   getVoiceOutputSocket,
   emitVoiceOutput,
   __resetVoiceOutput,
 } = await import('../services/voice/voiceOutput.js');
+const { transcribe } = await import('../services/voice/stt.js');
+const { attachHost: attachCallHost, __resetCallSession } = await import('../services/voice/callSession.js');
+const {
+  __resetCaptureSession,
+  __setCaptureSessionDeps,
+  getCaptureState,
+} = await import('../services/voice/captureSession.js');
 
 // Minimal fake socket: records on() handlers so tests can fire inbound events,
 // and captures emit() calls. No real Socket.IO needed — the voice:ui:index /
@@ -255,5 +266,122 @@ describe('voice:output single-recipient wiring', () => {
 
     a.fire('disconnect');
     expect(getVoiceOutputSocket()).toBe(b);
+  });
+});
+
+describe('voice:capture socket handlers (meeting capture)', () => {
+  // ~20 ms of 16 kHz mono, matching the call-host page's frame size (see
+  // callAudioBridge.js CALL_FRAME_SAMPLES). Loud enough to clear the
+  // endpointer's RMS threshold (0.015) and long enough, over several frames,
+  // to clear its 250 ms minimum-utterance floor; the silent run after it
+  // clears the 700 ms trailing-silence endpoint.
+  const FRAME_SAMPLES = 320;
+  const loudFrame = () => {
+    const frame = new Int16Array(FRAME_SAMPLES);
+    for (let i = 0; i < FRAME_SAMPLES; i += 1) frame[i] = Math.round(Math.sin(i / 8) * 20000);
+    return frame;
+  };
+  const silentFrame = () => new Int16Array(FRAME_SAMPLES);
+  const flushMicrotasks = () => new Promise((resolve) => setImmediate(resolve));
+
+  let appendJournal;
+  let createInboxLog;
+
+  beforeEach(() => {
+    __resetCallSession();
+    __resetCaptureSession();
+    appendJournal = vi.fn().mockResolvedValue({});
+    createInboxLog = vi.fn().mockResolvedValue({ id: 'inbox-1' });
+    __setCaptureSessionDeps({
+      appendJournal,
+      getToday: vi.fn().mockResolvedValue('2026-08-29'),
+      createInboxLog,
+      now: Date.now,
+    });
+    transcribe.mockReset();
+  });
+
+  afterEach(() => {
+    __resetCallSession();
+    __resetCaptureSession();
+  });
+
+  it('registers the capture start/stop handlers', () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    expect(socket.has('voice:capture:start')).toBe(true);
+    expect(socket.has('voice:capture:stop')).toBe(true);
+  });
+
+  it('claims the single capture-host slot and refuses a second tab', async () => {
+    const first = makeFakeSocket();
+    const second = makeFakeSocket();
+    registerVoiceHandlers(first);
+    registerVoiceHandlers(second);
+
+    await first.fire('voice:capture:start');
+    await second.fire('voice:capture:start');
+
+    const refusal = second.emitted.find((e) => e.event === 'voice:capture:state');
+    expect(refusal.payload).toMatchObject({ error: 'host-taken' });
+  });
+
+  it('refuses to start a capture on a tab already hosting a FaceTime call', async () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    attachCallHost(socket); // same tab already owns the call-host slot
+
+    await socket.fire('voice:capture:start');
+
+    const state = socket.emitted.find((e) => e.event === 'voice:capture:state');
+    expect(state.payload).toMatchObject({ error: 'call-active' });
+  });
+
+  it('refuses to attach a call host on a tab already capturing', async () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    await socket.fire('voice:capture:start');
+
+    await socket.fire('voice:call:attach');
+
+    const state = socket.emitted.find((e) => e.event === 'voice:call:state');
+    expect(state.payload).toMatchObject({ error: 'capture-active' });
+  });
+
+  it('transcribes meeting audio through STT only — never the LLM/tools pipeline — and files the journal + inbox on stop', async () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    transcribe.mockResolvedValue({ text: 'let’s ship the capture mode', latencyMs: 5 });
+
+    await socket.fire('voice:capture:start');
+    expect(getCaptureState()).toMatchObject({ active: true });
+
+    for (let i = 0; i < 14; i += 1) socket.fire('voice:call:audio', { pcm: loudFrame() });
+    for (let i = 0; i < 36; i += 1) socket.fire('voice:call:audio', { pcm: silentFrame() });
+    await flushMicrotasks();
+
+    // One STT call for the one utterance — routed away from runTurn entirely,
+    // so nothing from the LLM/tools pipeline ever fired.
+    expect(transcribe).toHaveBeenCalledTimes(1);
+    expect(socket.emitted.some((e) => e.event === 'voice:llm:done')).toBe(false);
+    const states = socket.emitted.filter((e) => e.event === 'voice:capture:state');
+    expect(states.some((e) => e.payload.turns === 1)).toBe(true);
+
+    await socket.fire('voice:capture:stop');
+
+    expect(appendJournal).toHaveBeenCalledTimes(1);
+    expect(appendJournal.mock.calls[0][1]).toContain('let’s ship the capture mode');
+    expect(appendJournal.mock.calls[0][2]).toEqual({ source: 'voice' });
+    expect(createInboxLog).toHaveBeenCalledWith(expect.objectContaining({ status: 'needs_review', source: 'voice' }));
+    // No AI provider call anywhere in this flow — createInboxLog never carries
+    // classifier metadata, matching the auto-classify-off inbox shape.
+    expect(createInboxLog).toHaveBeenCalledWith(expect.not.objectContaining({ ai: expect.anything() }));
+  });
+
+  it('ignores voice:call:audio on a tab that never attached either host', () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    expect(() => socket.fire('voice:call:audio', { pcm: loudFrame() })).not.toThrow();
+    expect(transcribe).not.toHaveBeenCalled();
   });
 });

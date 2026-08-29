@@ -58,6 +58,11 @@ export function findAudioDevice(devices, label, kind) {
  * device: a browser that has not been granted microphone access returns
  * unlabeled entries, and telling the user to reinstall BlackHole then would
  * send them to fix the wrong thing.
+ *
+ * `outputLabel` is optional: capture mode only listens (BlackHole 16ch in),
+ * it never plays a reply back into anything, so it has no BlackHole 2ch
+ * requirement. Omitting it skips the output check entirely rather than
+ * reporting a device named "undefined" as missing.
  */
 export function describeDeviceProblem(devices, { inputLabel, outputLabel } = {}) {
   if (!Array.isArray(devices)) return 'Could not read this Mac’s audio devices.';
@@ -67,7 +72,7 @@ export function describeDeviceProblem(devices, { inputLabel, outputLabel } = {})
   if (!findAudioDevice(devices, inputLabel, 'audioinput')) {
     return `No audio input named “${inputLabel}”. Install BlackHole and set FaceTime’s output to it.`;
   }
-  if (!findAudioDevice(devices, outputLabel, 'audiooutput')) {
+  if (outputLabel && !findAudioDevice(devices, outputLabel, 'audiooutput')) {
     return `No audio output named “${outputLabel}”. Install BlackHole and set FaceTime’s microphone to it.`;
   }
   return null;
