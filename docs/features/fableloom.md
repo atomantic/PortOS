@@ -213,6 +213,11 @@ The broader character/environment canon-reference design, including structured
 scene bindings, provider input budgets, prompt compilation, provenance, and
 branch convergence, is specified in
 [`docs/plans/2026-08-29-fableloom-visual-continuity.md`](../plans/2026-08-29-fableloom-visual-continuity.md).
+The character voice, production provenance, playback-asset, QR join, and
+two-device hosted-mode contracts are specified in
+[`docs/plans/2026-08-29-fableloom-character-voice-hosted-production.md`](../plans/2026-08-29-fableloom-character-voice-hosted-production.md).
+Implementation is tracked under
+[epic #5377](https://github.com/atomantic/PortOS/issues/5377).
 
 ## Storage
 
