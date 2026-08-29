@@ -246,3 +246,17 @@ export const seriesPlanFeedbackSchema = z.object({
   feedback: z.string().trim().min(1).max(LOOM_LIMITS.FEEDBACK_MAX),
   ...llmPickFields,
 });
+
+export const hostedSessionCreateSchema = z.object({
+  audioTarget: z.enum(FABLELOOM_AUDIO_TARGETS).optional(),
+  startNodeId: nodeIdStr.optional(),
+  ttlMinutes: z.number().int().min(1).max(180).optional(),
+});
+
+export const hostedSessionPatchSchema = z.object({
+  audioTarget: z.enum(FABLELOOM_AUDIO_TARGETS).optional(),
+  currentNodeId: nodeIdStr.optional(),
+  playbackPhase: z.enum(['entry', 'hold', 'exit', 'ended']).optional(),
+  activeHoldIndex: z.number().int().min(0).max(10).optional(),
+});
+

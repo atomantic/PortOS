@@ -179,3 +179,5 @@ export * from './uuid.js';
 export * from './webglSupport.js';
 export * from './wrSceneCursor.js';
 export * from './writingGuide.js';
+export * from './qrCode.js';
+

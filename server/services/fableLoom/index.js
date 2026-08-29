@@ -52,3 +52,22 @@ export {
   asLoomFormat,
   isLoomFormat,
 } from './formats.js';
+export {
+  DEFAULT_SESSION_TTL_MINUTES,
+  MAX_SESSION_TTL_MINUTES,
+  _getInternalSession,
+  _resetHostedSessions,
+  abortHostedTurn,
+  checkHostedSessionReadiness,
+  createHostedSession,
+  endHostedSession,
+  getHostedSession,
+  initialPhaseForNode,
+  processHostedUtterance,
+  revalidateLiveConversationGate,
+  sanitizeHostedSession,
+  startHostedListening,
+  updateHostedSession,
+  verifyHostedToken,
+} from './hostedSession.js';
+

@@ -27,6 +27,11 @@ vi.mock('../services/fableLoom/index.js', () => ({
   updateNode: vi.fn(),
   updateNodeTransition: vi.fn(),
   weaveEpisode: vi.fn(),
+  checkHostedSessionReadiness: vi.fn(),
+  createHostedSession: vi.fn(),
+  getHostedSession: vi.fn(),
+  updateHostedSession: vi.fn(),
+  endHostedSession: vi.fn(),
 }));
 
 import * as fableLoom from '../services/fableLoom/index.js';
@@ -301,4 +306,53 @@ describe('FableLoom routes', () => {
       nodeId: 'node-1', message: 'open the gate', transcript: [{ role: 'reader', text: 'hi' }],
     });
   });
+
+  describe('QR-Hosted Sessions API', () => {
+    it('POST preflight checks readiness', async () => {
+      fableLoom.checkHostedSessionReadiness.mockResolvedValueOnce({ ready: true, checks: { https: { ok: true } } });
+      const res = await request(makeApp()).post('/api/fableloom/loom-1/episodes/ep-1/sessions/preflight');
+      expect(res.status).toBe(200);
+      expect(res.body.ready).toBe(true);
+      expect(fableLoom.checkHostedSessionReadiness).toHaveBeenCalledWith({ loomId: 'loom-1', episodeId: 'ep-1' });
+    });
+
+    it('POST host creates hosted session', async () => {
+      fableLoom.createHostedSession.mockResolvedValueOnce({ session: { id: 'sess-1' }, token: 'abc' });
+      const res = await request(makeApp())
+        .post('/api/fableloom/loom-1/episodes/ep-1/sessions/host')
+        .send({ audioTarget: 'host' });
+      expect(res.status).toBe(201);
+      expect(res.body.session.id).toBe('sess-1');
+      expect(fableLoom.createHostedSession).toHaveBeenCalledWith('loom-1', 'ep-1', { audioTarget: 'host' });
+    });
+
+    it('GET sessions/:sessionId retrieves session or 404s', async () => {
+      fableLoom.getHostedSession.mockReturnValueOnce({ id: 'sess-1', status: 'active' });
+      const res = await request(makeApp()).get('/api/fableloom/sessions/sess-1');
+      expect(res.status).toBe(200);
+      expect(res.body.id).toBe('sess-1');
+
+      fableLoom.getHostedSession.mockReturnValueOnce(null);
+      const notFound = await request(makeApp()).get('/api/fableloom/sessions/sess-2');
+      expect(notFound.status).toBe(404);
+    });
+
+    it('PATCH sessions/:sessionId updates session', async () => {
+      fableLoom.updateHostedSession.mockReturnValueOnce({ id: 'sess-1', audioTarget: 'audience' });
+      const res = await request(makeApp())
+        .patch('/api/fableloom/sessions/sess-1')
+        .send({ audioTarget: 'audience' });
+      expect(res.status).toBe(200);
+      expect(res.body.audioTarget).toBe('audience');
+    });
+
+    it('DELETE sessions/:sessionId ends session', async () => {
+      fableLoom.endHostedSession.mockReturnValueOnce({ ok: true });
+      const res = await request(makeApp()).delete('/api/fableloom/sessions/sess-1');
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(fableLoom.endHostedSession).toHaveBeenCalledWith('sess-1', { reason: 'api_deleted' });
+    });
+  });
 });
+

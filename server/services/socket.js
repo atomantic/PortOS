@@ -32,6 +32,7 @@ import {
 } from '../lib/socketValidation.js';
 import { registerVoiceHandlers } from '../sockets/voice.js';
 import { registerAppHandlers } from '../sockets/apps.js';
+import { registerFableLoomHostedNamespace } from '../sockets/fableLoomHosted.js';
 import { cleanupSocketStreams, registerLogHandlers } from '../sockets/logs.js';
 import { detachShellSocket, registerShellHandlers } from '../sockets/shell.js';
 import { getBuildId } from '../lib/buildId.js';
@@ -233,6 +234,7 @@ function setupCallStateEventForwarding() {
 
 export function initSocket(io) {
   registerAuthRevocationHandler(io);
+  registerFableLoomHostedNamespace(io);
 
   io.on('connection', (socket) => {
     console.log(`🔌 Client connected: ${socket.id}`);

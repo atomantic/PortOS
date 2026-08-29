@@ -96,3 +96,27 @@ export const reformatLoomEpisode = (id, episodeId, body, options = {}) =>
   request(episodePath(id, episodeId, '/reformat'), {
     method: 'POST', body: JSON.stringify(body), ...options,
   });
+
+export const preflightHostedLoomSession = (id, episodeId, options = {}) =>
+  request(episodePath(id, episodeId, '/sessions/preflight'), {
+    method: 'POST', body: JSON.stringify({}), ...options,
+  });
+
+export const createHostedLoomSession = (id, episodeId, body = {}, options = {}) =>
+  request(episodePath(id, episodeId, '/sessions/host'), {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
+
+export const getHostedLoomSession = (sessionId, options = {}) =>
+  request(`/fableloom/sessions/${encodeURIComponent(sessionId)}`, options);
+
+export const updateHostedLoomSession = (sessionId, patch = {}, options = {}) =>
+  request(`/fableloom/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'PATCH', body: JSON.stringify(patch), ...options,
+  });
+
+export const endHostedLoomSession = (sessionId, options = {}) =>
+  request(`/fableloom/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'DELETE', ...options,
+  });
+

@@ -117,6 +117,7 @@ const Sharing = lazyWithReload(() => import('./pages/Sharing'));
 const Importer = lazyWithReload(() => import('./pages/Importer'));
 const FableLoom = lazyWithReload(() => import('./pages/FableLoom'));
 const FableLoomStory = lazyWithReload(() => import('./pages/FableLoomStory'));
+const FableLoomHostedJoin = lazyWithReload(() => import('./pages/FableLoomHostedJoin'));
 const StartStory = lazyWithReload(() => import('./pages/StartStory'));
 const StoryBuilder = lazyWithReload(() => import('./pages/StoryBuilder'));
 const PipelineSeries = lazyWithReload(() => import('./pages/PipelineSeries'));
@@ -523,6 +524,7 @@ export default function App() {
           <Route path="sharing/:section" element={<Sharing />} />
           <Route path="sharing/:section/:bucketId" element={<Sharing />} />
           <Route path="importer" element={<Importer />} />
+          <Route path="fableloom/join" element={<FableLoomHostedJoin />} />
           <Route path="fableloom" element={<FableLoom />} />
           <Route path="fableloom/:loomId" element={<FableLoomStory />} />
           <Route path="fableloom/:loomId/:episodeId/outline" element={<FableLoomStory view="outline" />} />

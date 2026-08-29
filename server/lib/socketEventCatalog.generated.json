@@ -67,7 +67,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 434
+          "line": 436
         }
       ]
     },
@@ -80,7 +80,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 441
+          "line": 443
         }
       ]
     },
@@ -93,7 +93,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 442
+          "line": 444
         }
       ]
     },
@@ -119,7 +119,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 431
+          "line": 433
         }
       ]
     },
@@ -132,7 +132,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 437
+          "line": 439
         }
       ]
     },
@@ -145,7 +145,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 438
+          "line": 440
         }
       ]
     },
@@ -163,7 +163,7 @@
         {
           "direction": "client-to-server",
           "source": "server/services/socket.js",
-          "line": 124
+          "line": 125
         }
       ]
     },
@@ -176,7 +176,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 124
+          "line": 125
         }
       ]
     },
@@ -189,7 +189,7 @@
         {
           "direction": "client-to-server",
           "source": "server/services/socket.js",
-          "line": 124
+          "line": 125
         }
       ]
     },
@@ -202,7 +202,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 124
+          "line": 125
         }
       ]
     },
@@ -225,7 +225,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 304
+          "line": 306
         }
       ]
     },
@@ -601,7 +601,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 408
+          "line": 410
         }
       ]
     },
@@ -614,7 +614,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 596
+          "line": 598
         }
       ]
     },
@@ -627,7 +627,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 599
+          "line": 601
         }
       ]
     },
@@ -640,7 +640,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 593
+          "line": 595
         }
       ]
     },
@@ -653,7 +653,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 590
+          "line": 592
         }
       ]
     },
@@ -720,7 +720,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 449
+          "line": 451
         }
       ]
     },
@@ -738,7 +738,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 108
+          "line": 109
         }
       ]
     },
@@ -939,7 +939,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 266
+          "line": 268
         }
       ]
     },
@@ -1101,7 +1101,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 349
+          "line": 351
         }
       ]
     },
@@ -1150,7 +1150,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 347
+          "line": 349
         }
       ]
     },
@@ -1179,7 +1179,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 348
+          "line": 350
         }
       ]
     },
@@ -1218,7 +1218,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 345
+          "line": 347
         }
       ]
     },
@@ -1247,7 +1247,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 346
+          "line": 348
         }
       ]
     },
@@ -1260,7 +1260,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 364
+          "line": 366
         }
       ]
     },
@@ -1278,7 +1278,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 369
+          "line": 371
         }
       ]
     },
@@ -1301,7 +1301,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 370
+          "line": 372
         }
       ]
     },
@@ -1324,7 +1324,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 368
+          "line": 370
         }
       ]
     },
@@ -1342,7 +1342,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 360
+          "line": 362
         }
       ]
     },
@@ -1355,7 +1355,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 361
+          "line": 363
         }
       ]
     },
@@ -1378,7 +1378,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 332
+          "line": 334
         }
       ]
     },
@@ -1391,7 +1391,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 357
+          "line": 359
         }
       ]
     },
@@ -1404,7 +1404,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 353
+          "line": 355
         }
       ]
     },
@@ -1417,7 +1417,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 355
+          "line": 357
         }
       ]
     },
@@ -1430,7 +1430,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 356
+          "line": 358
         }
       ]
     },
@@ -1443,7 +1443,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 354
+          "line": 356
         }
       ]
     },
@@ -1461,7 +1461,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 217
+          "line": 218
         }
       ]
     },
@@ -1479,7 +1479,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 350
+          "line": 352
         }
       ]
     },
@@ -1497,7 +1497,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 379
+          "line": 381
         }
       ]
     },
@@ -1520,7 +1520,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 329
+          "line": 331
         }
       ]
     },
@@ -1569,7 +1569,7 @@
         {
           "direction": "client-to-server",
           "source": "server/services/socket.js",
-          "line": 121
+          "line": 122
         }
       ]
     },
@@ -1582,7 +1582,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 121
+          "line": 122
         }
       ]
     },
@@ -1595,7 +1595,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 365
+          "line": 367
         }
       ]
     },
@@ -1623,7 +1623,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 338
+          "line": 340
         }
       ]
     },
@@ -1646,7 +1646,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 342
+          "line": 344
         }
       ]
     },
@@ -1659,7 +1659,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 340
+          "line": 342
         }
       ]
     },
@@ -1687,7 +1687,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 339
+          "line": 341
         }
       ]
     },
@@ -1710,7 +1710,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 341
+          "line": 343
         }
       ]
     },
@@ -1723,7 +1723,7 @@
         {
           "direction": "client-to-server",
           "source": "server/services/socket.js",
-          "line": 121
+          "line": 122
         }
       ]
     },
@@ -1736,7 +1736,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 121
+          "line": 122
         }
       ]
     },
@@ -1749,7 +1749,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 373
+          "line": 375
         }
       ]
     },
@@ -1762,7 +1762,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 374
+          "line": 376
         }
       ]
     },
@@ -1911,7 +1911,12 @@
         {
           "direction": "client-to-server",
           "source": "server/services/socket.js",
-          "line": 153
+          "line": 154
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/fableLoomHosted.js",
+          "line": 198
         },
         {
           "direction": "client-to-server",
@@ -1952,7 +1957,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 393
+          "line": 395
         }
       ]
     },
@@ -1983,7 +1988,7 @@
         {
           "direction": "client-to-server",
           "source": "server/services/socket.js",
-          "line": 130
+          "line": 131
         }
       ]
     },
@@ -1996,7 +2001,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 147
+          "line": 148
         }
       ]
     },
@@ -2014,7 +2019,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 138
+          "line": 139
         }
       ]
     },
@@ -2050,7 +2055,7 @@
         {
           "direction": "client-to-server",
           "source": "server/services/socket.js",
-          "line": 122
+          "line": 123
         }
       ]
     },
@@ -2063,7 +2068,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 122
+          "line": 123
         }
       ]
     },
@@ -2081,7 +2086,7 @@
         {
           "direction": "client-to-server",
           "source": "server/services/socket.js",
-          "line": 122
+          "line": 123
         }
       ]
     },
@@ -2094,7 +2099,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 122
+          "line": 123
         }
       ]
     },
@@ -2144,6 +2149,262 @@
           "direction": "server-to-client",
           "source": "server/services/appleHealthXml.js",
           "line": 285
+        }
+      ]
+    },
+    {
+      "event": "hosted:audio:target",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/fableLoomHosted.js",
+          "line": 127
+        }
+      ]
+    },
+    {
+      "event": "hosted:error",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/fableLoomHosted.js",
+          "line": 123
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/fableLoomHosted.js",
+          "line": 133
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/fableLoomHosted.js",
+          "line": 148
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/fableLoomHosted.js",
+          "line": 172
+        },
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/fableLoomHosted.js",
+          "line": 181
+        }
+      ]
+    },
+    {
+      "event": "hosted:mic:frame",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/fableLoomHosted.js",
+          "line": 152
+        }
+      ]
+    },
+    {
+      "event": "hosted:mic:start",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/pages/FableLoomHostedJoin.jsx",
+          "line": 171
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/fableLoomHosted.js",
+          "line": 143
+        }
+      ]
+    },
+    {
+      "event": "hosted:mic:stop",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/pages/FableLoomHostedJoin.jsx",
+          "line": 161
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/fableLoomHosted.js",
+          "line": 159
+        }
+      ]
+    },
+    {
+      "event": "hosted:peer:status",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/fableloom/LoomPlayPanel.jsx",
+          "line": 101
+        }
+      ]
+    },
+    {
+      "event": "hosted:playback:update",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/fableLoomHosted.js",
+          "line": 109
+        }
+      ]
+    },
+    {
+      "event": "hosted:session:end",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/fableLoomHosted.js",
+          "line": 137
+        }
+      ]
+    },
+    {
+      "event": "hosted:session:ended",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/fableloom/LoomPlayPanel.jsx",
+          "line": 132
+        }
+      ]
+    },
+    {
+      "event": "hosted:session:sync",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "server/sockets/fableLoomHosted.js",
+          "line": 96
+        }
+      ]
+    },
+    {
+      "event": "hosted:speech:done",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/fableLoomHosted.js",
+          "line": 185
+        }
+      ]
+    },
+    {
+      "event": "hosted:story:transition",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/fableloom/LoomPlayPanel.jsx",
+          "line": 124
+        }
+      ]
+    },
+    {
+      "event": "hosted:turn:abort",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/fableLoomHosted.js",
+          "line": 193
+        }
+      ]
+    },
+    {
+      "event": "hosted:turn:phase",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/fableloom/LoomPlayPanel.jsx",
+          "line": 105
+        }
+      ]
+    },
+    {
+      "event": "hosted:turn:text",
+      "directions": [
+        "client-to-server"
+      ],
+      "sources": [
+        {
+          "direction": "client-to-server",
+          "source": "client/src/pages/FableLoomHostedJoin.jsx",
+          "line": 189
+        },
+        {
+          "direction": "client-to-server",
+          "source": "server/sockets/fableLoomHosted.js",
+          "line": 176
+        }
+      ]
+    },
+    {
+      "event": "hosted:turn:transcript",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/fableloom/LoomPlayPanel.jsx",
+          "line": 109
+        }
+      ]
+    },
+    {
+      "event": "hosted:turn:tts",
+      "directions": [
+        "server-to-client"
+      ],
+      "sources": [
+        {
+          "direction": "server-to-client",
+          "source": "client/src/components/fableloom/LoomPlayPanel.jsx",
+          "line": 113
         }
       ]
     },
@@ -2204,7 +2465,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 565
+          "line": 567
         }
       ]
     },
@@ -2242,7 +2503,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 568
+          "line": 570
         }
       ]
     },
@@ -2275,7 +2536,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 562
+          "line": 564
         }
       ]
     },
@@ -2308,7 +2569,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 559
+          "line": 561
         }
       ]
     },
@@ -2326,12 +2587,12 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 115
+          "line": 116
         },
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 257
+          "line": 259
         }
       ]
     },
@@ -2349,7 +2610,7 @@
         {
           "direction": "client-to-server",
           "source": "server/services/socket.js",
-          "line": 113
+          "line": 114
         }
       ]
     },
@@ -2367,7 +2628,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 497
+          "line": 499
         }
       ]
     },
@@ -2385,7 +2646,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 496
+          "line": 498
         }
       ]
     },
@@ -2403,7 +2664,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 494
+          "line": 496
         }
       ]
     },
@@ -2421,7 +2682,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 495
+          "line": 497
         }
       ]
     },
@@ -2439,7 +2700,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 493
+          "line": 495
         }
       ]
     },
@@ -2462,7 +2723,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 482
+          "line": 484
         }
       ]
     },
@@ -2480,7 +2741,7 @@
         {
           "direction": "client-to-server",
           "source": "server/services/socket.js",
-          "line": 125
+          "line": 126
         }
       ]
     },
@@ -2493,7 +2754,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 125
+          "line": 126
         }
       ]
     },
@@ -2511,7 +2772,7 @@
         {
           "direction": "client-to-server",
           "source": "server/services/socket.js",
-          "line": 125
+          "line": 126
         }
       ]
     },
@@ -2524,7 +2785,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 125
+          "line": 126
         }
       ]
     },
@@ -2778,7 +3039,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 541
+          "line": 543
         }
       ]
     },
@@ -2791,7 +3052,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 544
+          "line": 546
         }
       ]
     },
@@ -2809,7 +3070,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 547
+          "line": 549
         }
       ]
     },
@@ -2827,7 +3088,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 548
+          "line": 550
         }
       ]
     },
@@ -2845,7 +3106,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 546
+          "line": 548
         }
       ]
     },
@@ -2863,7 +3124,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 549
+          "line": 551
         }
       ]
     },
@@ -2876,7 +3137,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 543
+          "line": 545
         }
       ]
     },
@@ -2889,7 +3150,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 542
+          "line": 544
         }
       ]
     },
@@ -2902,7 +3163,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 545
+          "line": 547
         }
       ]
     },
@@ -2920,7 +3181,7 @@
         {
           "direction": "client-to-server",
           "source": "server/services/socket.js",
-          "line": 126
+          "line": 127
         }
       ]
     },
@@ -2933,7 +3194,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 126
+          "line": 127
         }
       ]
     },
@@ -2951,7 +3212,7 @@
         {
           "direction": "client-to-server",
           "source": "server/services/socket.js",
-          "line": 126
+          "line": 127
         }
       ]
     },
@@ -2964,7 +3225,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 126
+          "line": 127
         }
       ]
     },
@@ -3182,7 +3443,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 460
+          "line": 462
         }
       ]
     },
@@ -3200,7 +3461,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 457
+          "line": 459
         }
       ]
     },
@@ -3218,7 +3479,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 461
+          "line": 463
         }
       ]
     },
@@ -3236,7 +3497,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 462
+          "line": 464
         }
       ]
     },
@@ -3254,7 +3515,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 458
+          "line": 460
         }
       ]
     },
@@ -3272,7 +3533,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 467
+          "line": 469
         }
       ]
     },
@@ -3290,7 +3551,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 469
+          "line": 471
         }
       ]
     },
@@ -3308,7 +3569,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 468
+          "line": 470
         }
       ]
     },
@@ -3326,7 +3587,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 456
+          "line": 458
         }
       ]
     },
@@ -3344,7 +3605,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 459
+          "line": 461
         }
       ]
     },
@@ -3375,7 +3636,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 289
+          "line": 291
         }
       ]
     },
@@ -3388,7 +3649,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 295
+          "line": 297
         }
       ]
     },
@@ -3406,7 +3667,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 418
+          "line": 420
         }
       ]
     },
@@ -3429,7 +3690,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 422
+          "line": 424
         }
       ]
     },
@@ -3452,7 +3713,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 421
+          "line": 423
         }
       ]
     },
@@ -3470,7 +3731,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 419
+          "line": 421
         }
       ]
     },
@@ -3493,7 +3754,7 @@
         {
           "direction": "client-to-server",
           "source": "server/services/socket.js",
-          "line": 123
+          "line": 124
         }
       ]
     },
@@ -3506,7 +3767,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 123
+          "line": 124
         }
       ]
     },
@@ -3519,7 +3780,7 @@
         {
           "direction": "client-to-server",
           "source": "server/services/socket.js",
-          "line": 123
+          "line": 124
         }
       ]
     },
@@ -3532,7 +3793,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 123
+          "line": 124
         }
       ]
     },
@@ -3550,7 +3811,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 420
+          "line": 422
         }
       ]
     },
@@ -3640,7 +3901,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 523
+          "line": 525
         }
       ]
     },
@@ -3653,7 +3914,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 528
+          "line": 530
         }
       ]
     },
@@ -3766,7 +4027,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 506
+          "line": 508
         }
       ]
     },
@@ -3789,7 +4050,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 512
+          "line": 514
         }
       ]
     },
@@ -3812,7 +4073,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 509
+          "line": 511
         }
       ]
     },
@@ -4400,7 +4661,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 487
+          "line": 489
         }
       ]
     },
@@ -4493,7 +4754,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 578
+          "line": 580
         }
       ]
     },
@@ -4506,7 +4767,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 581
+          "line": 583
         }
       ]
     },
@@ -4519,7 +4780,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 575
+          "line": 577
         }
       ]
     },
@@ -4532,7 +4793,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 572
+          "line": 574
         }
       ]
     },
@@ -4632,7 +4893,7 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 230
+          "line": 231
         },
         {
           "direction": "server-to-client",
@@ -5210,16 +5471,16 @@
         {
           "direction": "server-to-client",
           "source": "server/services/socket.js",
-          "line": 277
+          "line": 279
         }
       ]
     }
   ],
   "stats": {
-    "events": 263,
-    "clientToServer": 63,
-    "serverToClient": 209,
+    "events": 280,
+    "clientToServer": 72,
+    "serverToClient": 217,
     "bidirectional": 9,
-    "sourceFiles": 104
+    "sourceFiles": 107
   }
 }

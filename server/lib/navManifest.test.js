@@ -514,6 +514,7 @@ const NAV_COVERAGE_OPT_OUT = new Map([
   ['/apps/create', 'create-app form, reached via the "New App" button on /apps'],
   ['/creative-commission/new', 'create-commission drawer, reached via the "New Commission" button on /creative-commission'],
   ['/feature-agents/create', 'create-agent form, reached via the "New Agent" button'],
+  ['/fableloom/join', 'scoped QR mobile join view, reached via scanned QR code with fragment credentials'],
   ['/login', 'auth gate — surfaced only when settings.secrets.auth is enabled, reached via 401 redirect'],
   ['/songbook/import', 'import-song form, reached via the "Import" button on /songbook'],
   ['/universes/new', 'create-mode sentinel for the Universe Builder editor'],

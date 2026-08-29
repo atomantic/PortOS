@@ -30,6 +30,8 @@ import {
   transitionCreateSchema,
   transitionPatchSchema,
   weaveSchema,
+  hostedSessionCreateSchema,
+  hostedSessionPatchSchema,
 } from '../lib/fableLoomValidation.js';
 import { analyzeEpisodeGraph } from '../lib/fableLoomGraph.js';
 import {
@@ -42,14 +44,18 @@ import {
   addNode,
   addNodeTransition,
   branchNode,
+  checkHostedSessionReadiness,
+  createHostedSession,
   createLoom,
   deleteEpisode,
   deleteLoom,
   deleteNode,
   deleteNodeTransition,
+  endHostedSession,
   feedbackEpisode,
   feedbackSeriesPlan,
   generateSeriesPlan,
+  getHostedSession,
   getLoom,
   listLoomSummaries,
   playTurn,
@@ -57,6 +63,7 @@ import {
   reviewEpisode,
   reviewSeriesPlan,
   updateEpisode,
+  updateHostedSession,
   updateLoom,
   updateNode,
   updateNodeTransition,
@@ -241,4 +248,31 @@ router.post('/:id/episodes/:episodeId/reformat', asyncHandler(async (req, res) =
   res.json(await reformatEpisodeScenes(req.params.id, req.params.episodeId, input));
 }));
 
+// --- QR-Hosted Sessions -----------------------------------------------------
+
+router.post('/:id/episodes/:episodeId/sessions/preflight', asyncHandler(async (req, res) => {
+  res.json(await checkHostedSessionReadiness({ loomId: req.params.id, episodeId: req.params.episodeId }));
+}));
+
+router.post('/:id/episodes/:episodeId/sessions/host', asyncHandler(async (req, res) => {
+  const input = validateRequest(hostedSessionCreateSchema, req.body);
+  res.status(201).json(await createHostedSession(req.params.id, req.params.episodeId, input));
+}));
+
+router.get('/sessions/:sessionId', asyncHandler(async (req, res) => {
+  const session = getHostedSession(req.params.sessionId);
+  if (!session) throw new ServerError('Session not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(session);
+}));
+
+router.patch('/sessions/:sessionId', asyncHandler(async (req, res) => {
+  const patch = validateRequest(hostedSessionPatchSchema, req.body);
+  res.json(updateHostedSession(req.params.sessionId, patch));
+}));
+
+router.delete('/sessions/:sessionId', asyncHandler(async (req, res) => {
+  res.json(endHostedSession(req.params.sessionId, { reason: 'api_deleted' }));
+}));
+
 export default router;
+

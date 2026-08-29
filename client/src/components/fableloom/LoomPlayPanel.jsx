@@ -14,11 +14,13 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, RotateCcw, Send, Flag, Volume2, Mic, CheckCircle2, AlertCircle } from 'lucide-react';
+import { io } from 'socket.io-client';
+import { Loader2, RotateCcw, Send, Flag, Volume2, Mic, CheckCircle2, AlertCircle, QrCode, Smartphone } from 'lucide-react';
 import MediaImage from '../MediaImage';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { playLoomTurn } from '../../services/api';
 import { sceneProseClass } from './fieldStyles';
+import LoomHostedSessionModal from './LoomHostedSessionModal';
 import { audienceCanParticipate } from '../../../../server/lib/fableLoomParticipation.js';
 import { resolvePlaybackPhaseAsset } from '../../../../server/lib/fableLoomPlayback.js';
 
@@ -79,7 +81,76 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode }) {
   const [previewMode, setPreviewMode] = useState('text');
   const [failedVideoId, setFailedVideoId] = useState(null);
   const [showInspector, setShowInspector] = useState(false);
+  const [hostedModalOpen, setHostedModalOpen] = useState(false);
+  const [hostedSession, setHostedSession] = useState(null);
+  const [hostedAudienceConnected, setHostedAudienceConnected] = useState(false);
+  const [hostedTurnPhase, setHostedTurnPhase] = useState('idle');
+  const hostAudioPlayerRef = useRef(null);
   const scrollRef = useRef(null);
+  const hostedSocketRef = useRef(null);
+
+  // Socket connection when hosted session is active
+  useEffect(() => {
+    if (!hostedSession?.id) return;
+    const socket = io('/fableloom-hosted', {
+      auth: { sessionId: hostedSession.id, role: 'host' },
+      transports: ['websocket', 'polling'],
+    });
+    hostedSocketRef.current = socket;
+
+    socket.on('hosted:peer:status', (data) => {
+      setHostedAudienceConnected(Boolean(data.hasAudienceConnected));
+    });
+
+    socket.on('hosted:turn:phase', (data) => {
+      setHostedTurnPhase(data.phase || 'idle');
+    });
+
+    socket.on('hosted:turn:transcript', (item) => {
+      setTranscript((prev) => [...prev, { role: item.role === 'audience' ? 'reader' : 'narrator', text: item.text }]);
+    });
+
+    socket.on('hosted:turn:tts', (data) => {
+      if (data.target === 'host' && data.audio && hostAudioPlayerRef.current) {
+        try {
+          hostAudioPlayerRef.current.src = `data:${data.mimeType || 'audio/wav'};base64,${data.audio}`;
+          hostAudioPlayerRef.current.play().catch(() => null);
+        } catch (err) {
+          console.warn('TTS playback error:', err);
+        }
+      }
+    });
+
+    socket.on('hosted:story:transition', (data) => {
+      if (data.node) {
+        setScene(data.node);
+        setPlaybackPhase(data.playbackPhase || 'hold');
+        setTranscript((prev) => [...prev, { role: 'scene', node: data.node }]);
+      }
+    });
+
+    socket.on('hosted:session:ended', () => {
+      setHostedSession(null);
+      setHostedAudienceConnected(false);
+      setHostedTurnPhase('idle');
+    });
+
+    return () => {
+      socket.disconnect();
+      hostedSocketRef.current = null;
+    };
+  }, [hostedSession?.id]);
+
+  // Sync playback phase & scene updates to hosted audience
+  useEffect(() => {
+    if (hostedSocketRef.current && hostedSession?.id && scene?.id) {
+      hostedSocketRef.current.emit('hosted:playback:update', {
+        nodeId: scene.id,
+        phase: playbackPhase,
+        activeHoldIndex,
+      });
+    }
+  }, [scene?.id, playbackPhase, activeHoldIndex, hostedSession?.id]);
   // Mirrors the server's terminal rule: an ending, or a dead-end scene with
   // no paths out, ends the read-through.
   const ended = !!scene && (scene.isEnding || !scene.choices?.length);
@@ -221,7 +292,27 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode }) {
   );
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full relative">
+      <audio ref={hostAudioPlayerRef} className="hidden" />
+
+      {hostedModalOpen && (
+        <LoomHostedSessionModal
+          loom={loom}
+          episode={episode}
+          isOpen={hostedModalOpen}
+          onClose={() => setHostedModalOpen(false)}
+          activeSession={hostedSession}
+          hasAudienceConnected={hostedAudienceConnected}
+          onSessionCreated={(sess, full) => {
+            setHostedSession(full || sess);
+          }}
+          onSessionEnded={() => {
+            setHostedSession(null);
+            setHostedAudienceConnected(false);
+          }}
+        />
+      )}
+
       <div className="border-b border-port-border p-3 flex items-center justify-between gap-3">
         <div>
           <p className="text-xs font-medium">Episode {episode.number || episodeIndex + 1 || 1}: {episode.title || 'Untitled'}</p>
@@ -236,17 +327,59 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode }) {
             </button>
           </div>
         </div>
-        <select
-          id="loom-preview-mode"
-          className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs"
-          value={previewMode}
-          onChange={(event) => setPreviewMode(event.target.value)}
-        >
-          <option value="text">Text</option>
-          <option value="image">Storyboard images</option>
-          <option value="video">Rendered video</option>
-        </select>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setHostedModalOpen(true)}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs border transition-colors ${
+              hostedSession
+                ? 'bg-port-accent/15 border-port-accent text-port-accent font-medium'
+                : 'bg-port-bg border-port-border text-port-text hover:border-port-accent'
+            }`}
+            title="Host two-device QR play session"
+          >
+            <QrCode size={13} />
+            <span>{hostedSession ? 'Hosted (Active)' : 'Host (QR)'}</span>
+            {hostedSession && (
+              <span className={`w-1.5 h-1.5 rounded-full ${hostedAudienceConnected ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
+            )}
+          </button>
+
+          <select
+            id="loom-preview-mode"
+            className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs"
+            value={previewMode}
+            onChange={(event) => setPreviewMode(event.target.value)}
+          >
+            <option value="text">Text</option>
+            <option value="image">Storyboard images</option>
+            <option value="video">Rendered video</option>
+          </select>
+        </div>
       </div>
+
+      {hostedSession && (
+        <div className="bg-indigo-500/10 border-b border-indigo-500/20 px-3 py-1.5 text-xs flex items-center justify-between text-indigo-400">
+          <div className="flex items-center gap-2">
+            <Smartphone size={13} />
+            <span className="font-medium">Hosted Session:</span>
+            <span>
+              {hostedTurnPhase === 'listening' ? 'Audience is speaking…' :
+               hostedTurnPhase === 'thinking' ? 'Protagonist is deciding…' :
+               hostedTurnPhase === 'speaking' ? 'Protagonist is answering…' :
+               hostedAudienceConnected ? 'Audience connected (Phone mic ready)' : 'Waiting for phone to scan QR link…'}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setHostedModalOpen(true)}
+            className="text-[11px] underline hover:text-indigo-300"
+          >
+            Manage QR
+          </button>
+        </div>
+      )}
 
       {showInspector && (
         <div className="bg-port-card/60 border-b border-port-border p-2.5 text-xs space-y-1.5" role="region" aria-label="Playback rehearsal">

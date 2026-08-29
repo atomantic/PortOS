@@ -210,3 +210,5 @@ grep -i "what you want to do" client/src/lib/README.md
 | `writingGuide.js` | Canonical Writers Room reference data + craft principles rendered by the Guide page (`/writers-room/guide`): `WRITING_LENGTH_TARGETS` (microfiction→novel word/char bands), `BOOK_LENGTH_ESTIMATES` (page-based), `WRITING_PRINCIPLES`, `PLANNED_ANALYSES` (e.g. the emotional-roadmap evaluator), and `classifyByWordCount(n)` for labelling a draft's length. Future word-count gauges / length checks read from here so targets don't drift from the docs. |
 | `universeMarkdownFilename.js` | `slugifyUniverseName` / `universeMarkdownFilename` — client-side safe filename helpers for Universe Markdown world-bible downloads, kept in step with the server attachment name. |
 | `universeMarkdownFilename.cases.js` | Shared client/server filename contract cases used to keep the browser download name and server attachment name in lockstep. |
+| `qrCode.js` | Deterministic SVG QR code generator for scoped mobile session join links (#5383). |
+
