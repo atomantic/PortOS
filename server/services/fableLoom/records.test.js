@@ -602,6 +602,7 @@ describe('attachNodeImage', () => {
     const node = updated.episodes[0].nodes[0];
     const visualConditioning = {
       version: 1, compilerVersion: '1.0.0', status: 'locked',
+      assetId: 'asset-node-still',
       capability: { kind: 'image', backend: 'local', referenceRoles: ['character-neutral'], injected: 'x'.repeat(1000) },
       bindings: { inferred: false, characterAppearances: [{ characterId: 'char-a' }], injected: 'x'.repeat(1000) },
       assets: [{ role: 'character-neutral', bindingId: 'char-a', filename: 'identity.png', path: '/private/identity.png' }],
@@ -612,6 +613,8 @@ describe('attachNodeImage', () => {
     });
     expect(attached.visualCanon.storyboardImageApproved).toBe(false);
     expect(attached.visualConditioning).toMatchObject({ version: 1, status: 'locked' });
+    expect(attached.playbackAssets.visualConditioningByAsset['asset-node-still'])
+      .toMatchObject({ version: 1, status: 'locked' });
     expect(JSON.stringify(attached.visualConditioning)).not.toContain('/private/');
     expect(attached.visualConditioning.capability.injected).toBeUndefined();
     expect(attached.visualConditioning.bindings.injected).toBeUndefined();
@@ -669,14 +672,38 @@ describe('attachNodePlaybackAsset and node playback fields', () => {
     let attached = await attachNodePlaybackAsset(loom.id, episodeId, node.id, {
       role: 'entry',
       videoHistoryId: 'video-entry-1',
+      visualConditioning: {
+        version: 1,
+        compilerVersion: 'visual-v1',
+        status: 'locked',
+        capability: { kind: 'video', backend: 'local', modelId: 'video-model', modelRevision: 'revision-1' },
+        bindings: { inferred: false, characterAppearances: [] },
+        assets: [],
+        adapters: [],
+        omitted: [],
+        warnings: [],
+      },
     });
     expect(attached.playbackAssets.entryVideoHistoryId).toBe('video-entry-1');
     expect(attached.videoHistoryId).toBe('video-entry-1'); // back-compat
+    expect(attached.playbackAssets.visualConditioningByAsset['video-entry-1'])
+      .toMatchObject({ capability: { modelRevision: 'revision-1' } });
 
     // Attach hold loop with occupancy manifest
     attached = await attachNodePlaybackAsset(loom.id, episodeId, node.id, {
       role: 'hold',
       videoHistoryId: 'video-hold-1',
+      visualConditioning: {
+        version: 1,
+        compilerVersion: 'visual-v1',
+        status: 'locked',
+        capability: { kind: 'video', backend: 'local', modelId: 'video-model', modelRevision: 'revision-2' },
+        bindings: { inferred: false, characterAppearances: [] },
+        assets: [],
+        adapters: [],
+        omitted: [],
+        warnings: [],
+      },
       audioOccupancy: {
         durationMs: 5000,
         music: [{ startMs: 0, endMs: 5000 }],
@@ -705,6 +732,10 @@ describe('attachNodePlaybackAsset and node playback fields', () => {
       entryVideoHistoryId: 'video-entry-1',
       holdLoopVideoHistoryIds: ['video-hold-1'],
       exitByTransition: { 'tr-escape': 'video-exit-1' },
+      visualConditioningByAsset: {
+        'video-entry-1': { capability: { modelRevision: 'revision-1' } },
+        'video-hold-1': { capability: { modelRevision: 'revision-2' } },
+      },
     });
   });
 
@@ -733,4 +764,3 @@ describe('attachNodePlaybackAsset and node playback fields', () => {
     expect(targetNode.playbackAssets.holdLoopVideoHistoryIds).toEqual(['vid-h1', 'vid-h2']);
   });
 });
-

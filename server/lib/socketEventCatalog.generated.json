@@ -215,7 +215,12 @@
         {
           "direction": "server-to-client",
           "source": "client/src/hooks/useAIStatusNotifications.js",
-          "line": 195
+          "line": 196
+        },
+        {
+          "direction": "server-to-client",
+          "source": "client/src/hooks/useFableLoomAiRun.js",
+          "line": 17
         },
         {
           "direction": "server-to-client",
@@ -5481,6 +5486,6 @@
     "clientToServer": 72,
     "serverToClient": 217,
     "bidirectional": 9,
-    "sourceFiles": 107
+    "sourceFiles": 108
   }
 }

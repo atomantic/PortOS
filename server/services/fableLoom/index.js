@@ -76,4 +76,11 @@ export {
   updateHostedSession,
   verifyHostedToken,
 } from './hostedSession.js';
-
+export {
+  cancelEpisodeProductionBatch,
+  getEpisodeProductionBatch,
+  planEpisodeProduction,
+  reviewEpisodeContinuity,
+  resumeEpisodeProductionBatch,
+  startEpisodeProductionBatch,
+} from './production.js';

@@ -32,6 +32,12 @@ vi.mock('../services/fableLoom/index.js', () => ({
   getHostedSession: vi.fn(),
   updateHostedSession: vi.fn(),
   endHostedSession: vi.fn(),
+  planEpisodeProduction: vi.fn(),
+  startEpisodeProductionBatch: vi.fn(),
+  getEpisodeProductionBatch: vi.fn(),
+  cancelEpisodeProductionBatch: vi.fn(),
+  resumeEpisodeProductionBatch: vi.fn(),
+  reviewEpisodeContinuity: vi.fn(),
 }));
 
 import * as fableLoom from '../services/fableLoom/index.js';
@@ -354,5 +360,64 @@ describe('FableLoom routes', () => {
       expect(fableLoom.endHostedSession).toHaveBeenCalledWith('sess-1', { reason: 'api_deleted' });
     });
   });
-});
 
+  describe('production orchestration & continuity review', () => {
+    it('POST /:id/episodes/:episodeId/production/plan returns production plan', async () => {
+      fableLoom.planEpisodeProduction.mockResolvedValueOnce({ mode: 'current_canon', plannedAssets: [] });
+      const res = await request(makeApp())
+        .post('/api/fableloom/loom-1/episodes/ep-1/production/plan')
+        .send({ mode: 'current_canon' });
+      expect(res.status).toBe(200);
+      expect(res.body.mode).toBe('current_canon');
+      expect(fableLoom.planEpisodeProduction).toHaveBeenCalledWith('loom-1', 'ep-1', { mode: 'current_canon' });
+    });
+
+    it('POST /:id/episodes/:episodeId/production/batch starts a batch run', async () => {
+      fableLoom.startEpisodeProductionBatch.mockResolvedValueOnce({ id: 'batch-1', status: 'in_progress' });
+      const res = await request(makeApp())
+        .post('/api/fableloom/loom-1/episodes/ep-1/production/batch')
+        .send({ mode: 'current_canon' });
+      expect(res.status).toBe(201);
+      expect(res.body.id).toBe('batch-1');
+      expect(fableLoom.startEpisodeProductionBatch).toHaveBeenCalledWith('loom-1', 'ep-1', { mode: 'current_canon' });
+    });
+
+    it('GET /:id/episodes/:episodeId/production/batch/:runId retrieves batch run or 404s', async () => {
+      fableLoom.getEpisodeProductionBatch.mockReturnValueOnce({ id: 'batch-1', loomId: 'loom-1', episodeId: 'ep-1', status: 'in_progress' });
+      const res = await request(makeApp()).get('/api/fableloom/loom-1/episodes/ep-1/production/batch/batch-1');
+      expect(res.status).toBe(200);
+      expect(res.body.id).toBe('batch-1');
+
+      fableLoom.getEpisodeProductionBatch.mockReturnValueOnce(null);
+      const notFound = await request(makeApp()).get('/api/fableloom/loom-1/episodes/ep-1/production/batch/batch-none');
+      expect(notFound.status).toBe(404);
+    });
+
+    it('POST /:id/episodes/:episodeId/production/batch/:runId/cancel cancels run', async () => {
+      fableLoom.getEpisodeProductionBatch.mockReturnValueOnce({ id: 'batch-1', loomId: 'loom-1', episodeId: 'ep-1', status: 'in_progress' });
+      fableLoom.cancelEpisodeProductionBatch.mockReturnValueOnce({ id: 'batch-1', status: 'canceled' });
+      const res = await request(makeApp()).post('/api/fableloom/loom-1/episodes/ep-1/production/batch/batch-1/cancel');
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('canceled');
+    });
+
+    it('POST /:id/episodes/:episodeId/production/batch/:runId/resume resumes a run', async () => {
+      fableLoom.getEpisodeProductionBatch.mockReturnValueOnce({ id: 'batch-1', loomId: 'loom-1', episodeId: 'ep-1', status: 'failed' });
+      fableLoom.resumeEpisodeProductionBatch.mockReturnValueOnce({ id: 'batch-1', status: 'in_progress' });
+      const res = await request(makeApp()).post('/api/fableloom/loom-1/episodes/ep-1/production/batch/batch-1/resume');
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('in_progress');
+      expect(fableLoom.resumeEpisodeProductionBatch).toHaveBeenCalledWith('batch-1');
+    });
+
+    it('POST /:id/episodes/:episodeId/continuity/review performs continuity review', async () => {
+      fableLoom.reviewEpisodeContinuity.mockResolvedValueOnce({ passed: true, findings: [] });
+      const res = await request(makeApp())
+        .post('/api/fableloom/loom-1/episodes/ep-1/continuity/review')
+        .send({});
+      expect(res.status).toBe(200);
+      expect(res.body.passed).toBe(true);
+      expect(fableLoom.reviewEpisodeContinuity).toHaveBeenCalledWith('loom-1', 'ep-1');
+    });
+  });
+});

@@ -215,6 +215,30 @@ draft/degraded work. The completion hook
 Decision videos are authored as seamless loops; automatic-cut videos land on
 a final beat that hands cleanly to the next node.
 
+### Episodic production and continuity
+
+The **Production & Continuity** panel plans a whole episode before it queues
+provider work. It enumerates reachable scenes and typed assets (still,
+entry/hold/exit clips, and live-dialogue readiness), orders them by their
+dependencies, and exposes the selected image/video provider, model, and effort
+controls. Starting a batch is an explicit author action; it can be canceled,
+polled, and resumed after a failed or canceled asset. Dialogue is kept as a
+hosted interaction route rather than silently generating an offline audio
+batch.
+
+Each queued render records its effective provider, model/revision, parameters,
+canon bindings, references, adapters, omissions, warnings, and temporal source
+alongside the scene asset. **Repeat exact inputs** checks those recorded
+manifests and refuses missing assets, local model revisions, or changed
+compiled conditioning instead of falling back to a newer local default.
+
+**Run Continuity Review** is also explicit and deterministic. It reports
+wrong or missing character/wardrobe/place/object bindings, ambiguous graph
+convergence, voice/profile and pronunciation drift, unsafe hold-loop audio,
+clipping, and hosted-interaction readiness. Findings include scene links and
+remediation text; the review never mutates canon or promotes a replacement
+asset.
+
 The character/environment canon-reference design and rationale is specified in
 [`docs/plans/2026-08-29-fableloom-visual-continuity.md`](../plans/2026-08-29-fableloom-visual-continuity.md).
 The character voice, production provenance, playback-asset, QR join, and

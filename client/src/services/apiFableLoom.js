@@ -120,3 +120,30 @@ export const endHostedLoomSession = (sessionId, options = {}) =>
     method: 'DELETE', ...options,
   });
 
+export const planLoomEpisodeProduction = (id, episodeId, body = {}, options = {}) =>
+  request(episodePath(id, episodeId, '/production/plan'), {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
+
+export const startLoomEpisodeProductionBatch = (id, episodeId, body = {}, options = {}) =>
+  request(episodePath(id, episodeId, '/production/batch'), {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
+
+export const getLoomEpisodeProductionBatch = (id, episodeId, runId, options = {}) =>
+  request(episodePath(id, episodeId, `/production/batch/${encodeURIComponent(runId)}`), options);
+
+export const cancelLoomEpisodeProductionBatch = (id, episodeId, runId, options = {}) =>
+  request(episodePath(id, episodeId, `/production/batch/${encodeURIComponent(runId)}/cancel`), {
+    method: 'POST', body: JSON.stringify({}), ...options,
+  });
+
+export const resumeLoomEpisodeProductionBatch = (id, episodeId, runId, options = {}) =>
+  request(episodePath(id, episodeId, `/production/batch/${encodeURIComponent(runId)}/resume`), {
+    method: 'POST', body: JSON.stringify({}), ...options,
+  });
+
+export const reviewLoomEpisodeContinuity = (id, episodeId, body = {}, options = {}) =>
+  request(episodePath(id, episodeId, '/continuity/review'), {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });

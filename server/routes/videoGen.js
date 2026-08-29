@@ -372,6 +372,8 @@ const generateBodySchema = z.object({
       loomId: z.string().min(1).max(200),
       episodeId: z.string().min(1).max(200),
       nodeId: z.string().min(1).max(200),
+      role: z.enum(['entry', 'hold', 'exit']).optional(),
+      transitionId: z.string().min(1).max(200).optional(),
     }).optional(),
   ),
   // Federated media provider (#4348). When set, the render is submitted to
@@ -1033,10 +1035,13 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
   const { backend, cleanupStaged } = prepared;
 
   if (body.fableLoom) {
+    const conditioningModel = backend === IMAGE_GEN_MODE.GROK
+      ? { id: 'grok-video', supportedModes: ['image'] }
+      : prepared.effectiveModel;
     const compiled = await compileFableLoomVisualRequest({
       tag: body.fableLoom,
       kind: 'video',
-      capability: fableLoomVideoCapabilities({ backend, model: prepared.effectiveModel }),
+      capability: fableLoomVideoCapabilities({ backend, model: conditioningModel }),
       authoredPrompt: body.prompt,
       authoredNegativePrompt: body.negativePrompt,
       sourceImagePath: prepared.sourceImagePath,

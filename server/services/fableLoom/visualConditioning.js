@@ -321,6 +321,9 @@ export async function compileFableLoomVisualRequest({
     omitted,
     warnings,
     temporalSourceNodeId: temporal.node?.id || null,
+    compiledPrompt: positive,
+    compiledNegativePrompt: negativePrompt,
+    referenceImageStrengths: allocation.accepted.map((asset) => asset.role === 'temporal-predecessor' ? 0.4 : 1),
     compiledAt: now(),
   };
   if (locked && failures.length) throw blockedError(unique(failures), { ...manifest, status: 'degraded', warnings: unique([...warnings, ...failures]) });
@@ -341,6 +344,7 @@ export function fableLoomImageCapabilities({ mode, model = null, inputBudget = 4
   const cloudEdit = ['codex', 'grok', 'agy'].includes(mode);
   return Object.freeze({
     version: 1, kind: 'image', backend: mode, modelId: model?.id || null,
+    modelRevision: model?.revision || null,
     referenceRoles: localFlux2 || cloudEdit
       ? ['temporal-predecessor', 'character-neutral', 'character-profile', 'character-full-body', 'character-expression-gesture', 'character-wardrobe', 'character-prop-scale', 'character-negative-identity', 'character-draft-reference', 'environment', 'object']
       : [],
@@ -356,6 +360,7 @@ export function fableLoomVideoCapabilities({ backend, model = null }) {
   const supportedModes = Array.isArray(model?.supportedModes) ? model.supportedModes : [];
   return Object.freeze({
     version: 1, kind: 'video', backend, modelId: model?.id || null,
+    modelRevision: model?.revision || null,
     referenceRoles: supportedModes.includes('image') ? ['storyboard-first-frame'] : [],
     referenceBudget: supportedModes.includes('image') ? 1 : 0,
     supportsLora: false,

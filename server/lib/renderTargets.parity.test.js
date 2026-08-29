@@ -32,9 +32,11 @@ import {
 } from '../../client/src/lib/imageGenModes.js';
 
 // Targets the Settings UI deliberately does NOT list — a pin nobody's
-// resolver reads would be a control that silently does nothing. Empty since
-// the Phase 4 video lane wired music-video (the last unlisted target).
-const DELIBERATELY_UNLISTED = new Set([]);
+// resolver reads would be a control that silently does nothing. FableLoom
+// production exposes per-run controls instead of a persistent Settings pin;
+// its server-only target exists so the service still goes through the shared
+// resolver guard.
+const DELIBERATELY_UNLISTED = new Set([RENDER_TARGET.FABLELOOM_PRODUCTION]);
 
 describe('render-target client mirror parity (#3231)', () => {
   it('every client option id is a real server render target', () => {

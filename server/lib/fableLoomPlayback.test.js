@@ -18,6 +18,7 @@ import {
   sanitizeAudioOccupancy,
   sanitizeInteractionWindow,
   sanitizePlaybackAssets,
+  sanitizeVisualConditioning,
   validateAudioOccupancy,
 } from './fableLoomPlayback.js';
 
@@ -73,6 +74,19 @@ describe('FableLoom audio occupancy and validation', () => {
       music: [{ startMs: 0, endMs: 6000 }],
     });
     expect(manifestWithBlocking.safeForLiveVoice).toBe(false);
+  });
+
+  it('treats clipped audio as unsafe even when the source marked it safe', () => {
+    const clipped = validateAudioOccupancy({
+      durationMs: 4000,
+      clippingDetected: true,
+      peakDb: 1.2,
+      safeForLiveVoice: true,
+    });
+
+    expect(clipped.clipping).toBe(true);
+    expect(clipped.peakDb).toBe(1.2);
+    expect(clipped.safeForLiveVoice).toBe(false);
   });
 
   it('allows live voice when only music / non-blocking ambience is present', () => {
@@ -149,6 +163,60 @@ describe('FableLoom playbackAssets and interactionWindow sanitizers', () => {
     expect(sanitized.holdLoopVideoHistoryIds).toEqual(['vid-hold-1', 'vid-hold-2']);
     expect(sanitized.exitByTransition).toEqual({ 'tr-1': 'vid-exit-1' });
     expect(sanitized.audioOccupancy['vid-hold-1'].safeForLiveVoice).toBe(true);
+  });
+
+  it('retains one sanitized visual-conditioning manifest per rendered clip', () => {
+    const manifest = {
+      version: 1,
+      compilerVersion: 'visual-v1',
+      status: 'locked',
+      capability: {
+        kind: 'image',
+        backend: 'local',
+        modelId: 'image-model',
+        modelRevision: 'revision-1',
+      },
+      bindings: { inferred: false, characterAppearances: [] },
+      assets: [{ role: 'environment', bindingId: 'place-1', required: true, filename: 'environment.png', path: '/private/input.png' }],
+      adapters: [],
+      omitted: [],
+      warnings: [],
+      compiledPrompt: 'A quiet example courtyard.',
+      compiledNegativePrompt: '',
+      referenceImageStrengths: [1],
+      render: {
+        provider: 'local',
+        modelId: 'image-model',
+        modelRevision: 'revision-1',
+        parameters: {
+          width: 1024,
+          initImagePath: '/private/input.png',
+          secret: 'must-not-persist',
+        },
+      },
+    };
+
+    expect(sanitizeVisualConditioning(manifest)).toMatchObject({
+      version: 1,
+      capability: { modelRevision: 'revision-1' },
+      compiledNegativePrompt: '',
+      render: { parameters: { width: 1024 } },
+    });
+    expect(JSON.stringify(sanitizeVisualConditioning(manifest))).not.toContain('/private/');
+    expect(sanitizeVisualConditioning(manifest).render.parameters.initImagePath).toBeUndefined();
+    expect(sanitizeVisualConditioning(manifest).render.parameters.secret).toBeUndefined();
+
+    const sanitized = sanitizePlaybackAssets({
+      entryVideoHistoryId: 'vid-entry',
+      visualConditioningByAsset: {
+        'vid-entry': manifest,
+        '../unsafe': manifest,
+      },
+    });
+    expect(sanitized.visualConditioningByAsset).toHaveProperty('vid-entry');
+    expect(sanitized.visualConditioningByAsset['vid-entry'])
+      .toMatchObject({ capability: { modelRevision: 'revision-1' } });
+    expect(sanitized.visualConditioningByAsset).not.toHaveProperty('../unsafe');
   });
 
   it('sanitizes interactionWindow with defaults and clamped duck dB', () => {
@@ -356,4 +424,3 @@ describe('inspectNodeProductionReadiness & inspectEpisodeProductionReadiness', (
     expect(epRes.nodeResults['node-1'].ready).toBe(true);
   });
 });
-

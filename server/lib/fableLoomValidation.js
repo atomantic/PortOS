@@ -18,6 +18,12 @@ import {
   FABLELOOM_AUDIENCE_CONNECTION_STATES,
   FABLELOOM_PARTICIPATION_MODES,
 } from './fableLoomParticipation.js';
+import {
+  FABLELOOM_ASSET_TYPES,
+  FABLELOOM_PRODUCTION_MODES,
+} from './fableLoomProduction.js';
+import { EFFORT_LEVELS } from './providerModels.js';
+import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 import { llmRoutePinSchema } from './llmRoutePin.js';
 
 const name = z.string().trim().min(1).max(LOOM_LIMITS.NAME_MAX);
@@ -163,6 +169,11 @@ export const audioOccupancySchema = z.object({
   characterDialogue: z.array(audioIntervalSchema).max(LOOM_LIMITS.AUDIO_INTERVALS_MAX).optional(),
   music: z.array(audioIntervalSchema).max(LOOM_LIMITS.AUDIO_INTERVALS_MAX).optional(),
   effects: z.array(audioIntervalSchema).max(LOOM_LIMITS.AUDIO_INTERVALS_MAX).optional(),
+  clipping: z.boolean().optional(),
+  clipped: z.boolean().optional(),
+  clippingDetected: z.boolean().optional(),
+  peakDb: z.number().optional(),
+  truePeakDb: z.number().optional(),
   safeForLiveVoice: z.boolean().optional(),
 });
 
@@ -172,6 +183,7 @@ export const playbackAssetsSchema = z.object({
   exitByTransition: z.record(z.string(), z.string().max(200)).optional(),
   audioOccupancy: z.record(z.string(), audioOccupancySchema).optional(),
   provenance: z.record(z.string(), z.any()).nullable().optional(),
+  visualConditioningByAsset: z.record(z.string().max(200), z.record(z.string(), z.any())).optional(),
 }).nullable();
 
 export const interactionWindowSchema = z.object({
@@ -276,3 +288,25 @@ export const hostedSessionPatchSchema = z.object({
   playbackPhase: z.enum(['entry', 'hold', 'exit', 'ended']).optional(),
   activeHoldIndex: z.number().int().min(0).max(10).optional(),
 });
+
+export const productionPlanSchema = z.object({
+  mode: z.enum(FABLELOOM_PRODUCTION_MODES).optional(),
+  imageMode: z.enum(QUEUEABLE_IMAGE_MODES).optional(),
+  imageModel: z.string().trim().min(1).max(200).optional(),
+  videoMode: z.enum(VIDEO_GEN_MODES).optional(),
+  videoModel: z.string().trim().min(1).max(200).optional(),
+  effort: z.enum(EFFORT_LEVELS).optional(),
+});
+
+export const productionBatchCreateSchema = z.object({
+  mode: z.enum(FABLELOOM_PRODUCTION_MODES).optional(),
+  assetTypes: z.array(z.enum(FABLELOOM_ASSET_TYPES)).max(20).optional(),
+  nodeIds: z.array(nodeIdStr).max(LOOM_LIMITS.NODES_MAX).optional(),
+  imageMode: z.enum(QUEUEABLE_IMAGE_MODES).optional(),
+  imageModel: z.string().trim().min(1).max(200).optional(),
+  videoMode: z.enum(VIDEO_GEN_MODES).optional(),
+  videoModel: z.string().trim().min(1).max(200).optional(),
+  effort: z.enum(EFFORT_LEVELS).optional(),
+});
+
+export const continuityReviewSchema = z.object({});

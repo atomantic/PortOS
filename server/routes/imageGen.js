@@ -177,6 +177,7 @@ const generateSchema = z.object({
     loomId: z.string().min(1).max(200),
     episodeId: z.string().min(1).max(200),
     nodeId: z.string().min(1).max(200),
+    role: z.literal('image').optional(),
   }).optional(),
   // Music Video scene reference-frame render (#1760 Phase 1b). When present, the
   // mediaJobQueue completion hook (`musicVideoSceneImageHook`) files the finished
@@ -399,7 +400,10 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   // approved assets and deterministic graph continuity own the final request.
   if (params.fableLoom) {
     const selected = mode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModel(params.modelId) : null;
-    const model = selected ? { ...selected, loraCompatKey: loraCompatKey(selected) } : null;
+    const cloud = selected ? null : resolveCloudProviderConfig(settings, mode, { model: params.cloudModel });
+    const model = selected
+      ? { ...selected, loraCompatKey: loraCompatKey(selected) }
+      : (cloud ? { id: cloud.modelId } : null);
     const providerMode = params.mediaProviderPeerId ? 'federated' : mode;
     const compiled = await compileFableLoomVisualRequest({
       tag: params.fableLoom,

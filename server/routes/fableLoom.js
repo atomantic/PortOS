@@ -32,6 +32,9 @@ import {
   weaveSchema,
   hostedSessionCreateSchema,
   hostedSessionPatchSchema,
+  productionPlanSchema,
+  productionBatchCreateSchema,
+  continuityReviewSchema,
 } from '../lib/fableLoomValidation.js';
 import { analyzeEpisodeGraph } from '../lib/fableLoomGraph.js';
 import {
@@ -44,6 +47,7 @@ import {
   addNode,
   addNodeTransition,
   branchNode,
+  cancelEpisodeProductionBatch,
   checkHostedSessionReadiness,
   createHostedSession,
   createLoom,
@@ -55,13 +59,18 @@ import {
   feedbackEpisode,
   feedbackSeriesPlan,
   generateSeriesPlan,
+  getEpisodeProductionBatch,
   getHostedSession,
   getLoom,
   listLoomSummaries,
+  planEpisodeProduction,
   playTurn,
   reformatEpisodeScenes,
   reviewEpisode,
+  reviewEpisodeContinuity,
+  resumeEpisodeProductionBatch,
   reviewSeriesPlan,
+  startEpisodeProductionBatch,
   updateEpisode,
   updateHostedSession,
   updateLoom,
@@ -274,5 +283,45 @@ router.delete('/sessions/:sessionId', asyncHandler(async (req, res) => {
   res.json(endHostedSession(req.params.sessionId, { reason: 'api_deleted' }));
 }));
 
-export default router;
+// --- Production Orchestration & Continuity Review ---------------------------
 
+router.post('/:id/episodes/:episodeId/production/plan', asyncHandler(async (req, res) => {
+  const input = validateRequest(productionPlanSchema, req.body ?? {});
+  res.json(await planEpisodeProduction(req.params.id, req.params.episodeId, input));
+}));
+
+router.post('/:id/episodes/:episodeId/production/batch', asyncHandler(async (req, res) => {
+  const input = validateRequest(productionBatchCreateSchema, req.body ?? {});
+  res.status(201).json(await startEpisodeProductionBatch(req.params.id, req.params.episodeId, input));
+}));
+
+router.get('/:id/episodes/:episodeId/production/batch/:runId', asyncHandler(async (req, res) => {
+  const run = getEpisodeProductionBatch(req.params.runId);
+  if (!run || run.loomId !== req.params.id || run.episodeId !== req.params.episodeId) {
+    throw new ServerError('Batch production run not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(run);
+}));
+
+router.post('/:id/episodes/:episodeId/production/batch/:runId/cancel', asyncHandler(async (req, res) => {
+  const run = getEpisodeProductionBatch(req.params.runId);
+  if (!run || run.loomId !== req.params.id || run.episodeId !== req.params.episodeId) {
+    throw new ServerError('Batch production run not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(await cancelEpisodeProductionBatch(req.params.runId));
+}));
+
+router.post('/:id/episodes/:episodeId/production/batch/:runId/resume', asyncHandler(async (req, res) => {
+  const run = getEpisodeProductionBatch(req.params.runId);
+  if (!run || run.loomId !== req.params.id || run.episodeId !== req.params.episodeId) {
+    throw new ServerError('Batch production run not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(resumeEpisodeProductionBatch(req.params.runId));
+}));
+
+router.post('/:id/episodes/:episodeId/continuity/review', asyncHandler(async (req, res) => {
+  validateRequest(continuityReviewSchema, req.body ?? {});
+  res.json(await reviewEpisodeContinuity(req.params.id, req.params.episodeId));
+}));
+
+export default router;

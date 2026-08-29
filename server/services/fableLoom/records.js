@@ -47,6 +47,7 @@ import {
   isSafeVideoHistoryId,
   sanitizeInteractionWindow,
   sanitizePlaybackAssets,
+  sanitizeVisualConditioning,
 } from '../../lib/fableLoomPlayback.js';
 import {
   FABLELOOM_LEGACY_PARTICIPATION_MODE,
@@ -66,78 +67,6 @@ const sanitizePos = (raw) => (raw && typeof raw === 'object'
   && Number.isFinite(raw.x) && Number.isFinite(raw.y)
   ? { x: Math.round(raw.x), y: Math.round(raw.y) }
   : null);
-
-const sanitizeVisualConditioning = (raw) => {
-  if (!raw || typeof raw !== 'object' || raw.version !== 1) return null;
-  const list = (value, max) => (Array.isArray(value) ? value.slice(0, max) : []);
-  const capability = raw.capability && typeof raw.capability === 'object' ? raw.capability : {};
-  const bindings = raw.bindings && typeof raw.bindings === 'object' ? raw.bindings : {};
-  return {
-    version: 1,
-    compilerVersion: trimTo(raw.compilerVersion, 40),
-    status: ['locked', 'draft', 'degraded'].includes(raw.status) ? raw.status : 'degraded',
-    universeId: nullableRef(raw.universeId),
-    capability: {
-      version: Number.isInteger(capability.version) ? capability.version : 1,
-      kind: capability.kind === 'video' ? 'video' : 'image',
-      backend: trimTo(capability.backend, 40),
-      modelId: nullableRef(capability.modelId),
-      referenceRoles: list(capability.referenceRoles, 24)
-        .map((item) => trimTo(item, 64)).filter(Boolean),
-      referenceBudget: Number.isInteger(capability.referenceBudget)
-        ? Math.max(0, Math.min(24, capability.referenceBudget)) : 0,
-      supportsLora: capability.supportsLora === true,
-      loraCompatKey: nullableRef(capability.loraCompatKey),
-      loraBudget: Number.isInteger(capability.loraBudget)
-        ? Math.max(0, Math.min(8, capability.loraBudget)) : 0,
-      multiCharacterPreservation: capability.multiCharacterPreservation === true,
-      ...(capability.kind === 'video' ? {
-        firstFrame: capability.firstFrame === true,
-        lastFrame: capability.lastFrame === true,
-        extension: capability.extension === true,
-      } : {}),
-    },
-    bindings: {
-      inferred: bindings.inferred === true,
-      characterAppearances: list(bindings.characterAppearances, LOOM_LIMITS.VISUAL_BINDINGS_MAX)
-        .filter((item) => item && typeof item === 'object' && nullableRef(item.characterId))
-        .map((item) => ({
-          characterId: nullableRef(item.characterId),
-          wardrobeId: nullableRef(item.wardrobeId),
-          expression: trimTo(item.expression, LOOM_LIMITS.VISUAL_NOTE_MAX),
-          continuityNotes: trimTo(item.continuityNotes, LOOM_LIMITS.VISUAL_NOTE_MAX),
-        })),
-      placeId: nullableRef(bindings.placeId),
-      objectIds: list(bindings.objectIds, LOOM_LIMITS.VISUAL_BINDINGS_MAX)
-        .map(nullableRef).filter(Boolean),
-    },
-    assets: list(raw.assets, LOOM_LIMITS.VISUAL_PROVENANCE_ASSETS_MAX)
-      .filter((item) => item && typeof item === 'object')
-      .map((item) => ({
-        role: trimTo(item.role, 64), bindingId: nullableRef(item.bindingId),
-        required: item.required === true, filename: trimTo(item.filename, 256),
-      })),
-    adapters: list(raw.adapters, 8)
-      .filter((item) => item && typeof item === 'object')
-      .map((item) => ({
-        characterId: nullableRef(item.characterId), filename: trimTo(item.filename, 256),
-        scale: Number.isFinite(item.scale) ? Math.max(0, Math.min(2, item.scale)) : 1,
-        sha256: typeof item.sha256 === 'string' && /^[a-f0-9]{64}$/i.test(item.sha256) ? item.sha256 : null,
-      })),
-    omitted: list(raw.omitted, LOOM_LIMITS.VISUAL_PROVENANCE_MESSAGES_MAX)
-      .filter((item) => item && typeof item === 'object')
-      .map((item) => ({
-        role: trimTo(item.role, 64), bindingId: nullableRef(item.bindingId),
-        reason: trimTo(item.reason, 80),
-        ...(item.filename ? { filename: trimTo(item.filename, 256) } : {}),
-      })),
-    warnings: (Array.isArray(raw.warnings) ? raw.warnings : [])
-      .map((item) => trimTo(item, LOOM_LIMITS.VISUAL_NOTE_MAX)).filter(Boolean)
-      .slice(0, LOOM_LIMITS.VISUAL_PROVENANCE_MESSAGES_MAX),
-    temporalSourceNodeId: nullableRef(raw.temporalSourceNodeId),
-    compiledAt: isStr(raw.compiledAt) ? raw.compiledAt : null,
-  };
-};
 
 const sanitizeVisualCanon = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
@@ -502,12 +431,13 @@ export async function deleteLoom(id) {
   emitRecordDeleted('fableLoom', id);
 }
 
-// A v1 peer cannot represent the v2 scene production fields. When that older
+// An older peer cannot represent newer scene production fields. When that
 // peer wins whole-record LWW after an unrelated edit, retain the local fields
 // on nodes that still exist instead of letting its unaware sanitizer clear
-// them. A v2 sender's present null remains an intentional clear.
+// them. A sender at the current schema version's present null remains an
+// intentional clear.
 const preserveLegacyVisualProduction = (remote, local, senderVersion) => {
-  if (!local || senderVersion >= 2) return remote;
+  if (!local || senderVersion >= 3) return remote;
   const localEpisodes = new Map(local.episodes.map((episode) => [episode.id, episode]));
   return {
     ...remote,
@@ -521,6 +451,14 @@ const preserveLegacyVisualProduction = (remote, local, senderVersion) => {
             ...node,
             visualCanon: localNode.visualCanon,
             visualConditioning: localNode.visualConditioning,
+            playbackAssets: senderVersion < 3
+              ? {
+                ...node.playbackAssets,
+                ...(localNode.playbackAssets?.visualConditioningByAsset
+                  ? { visualConditioningByAsset: localNode.playbackAssets.visualConditioningByAsset }
+                  : {}),
+              }
+              : node.playbackAssets,
           } : node;
         }),
       };
@@ -537,7 +475,7 @@ export async function mergeLoomsFromSync(
   remoteLooms,
   {
     source = { via: 'sync', peerId: null },
-    senderSchemaVersions = { fableLoom: 2 },
+    senderSchemaVersions = { fableLoom: 3 },
   } = {},
 ) {
   if (!Array.isArray(remoteLooms)) return { applied: false, count: 0 };
@@ -800,6 +738,15 @@ export async function attachNodeImage(loomId, episodeId, nodeId, { filename, job
     node.image = filename;
     node.imageJobId = isStr(jobId) ? jobId : null;
     node.visualConditioning = visualConditioning;
+    if (visualConditioning && isSafeVideoHistoryId(visualConditioning.assetId)) {
+      node.playbackAssets = {
+        ...(node.playbackAssets || {}),
+        visualConditioningByAsset: {
+          ...(node.playbackAssets?.visualConditioningByAsset || {}),
+          [visualConditioning.assetId]: visualConditioning,
+        },
+      };
+    }
     if (node.visualCanon) node.visualCanon.storyboardImageApproved = false;
     episode.updatedAt = new Date().toISOString();
     return loom;
@@ -836,6 +783,7 @@ export async function attachNodePlaybackAsset(loomId, episodeId, nodeId, {
   transitionId = null,
   audioOccupancy = null,
   provenance = null,
+  visualConditioning = null,
 } = {}) {
   if (!isValidLoomId(loomId) || !isSafeVideoHistoryId(videoHistoryId)) return null;
   const updated = await mutateLoom(loomId, (loom) => {
@@ -855,6 +803,7 @@ export async function attachNodePlaybackAsset(loomId, episodeId, nodeId, {
       exitByTransition: { ...(currentAssets.exitByTransition || {}) },
       audioOccupancy: { ...(currentAssets.audioOccupancy || {}) },
       holdLoopVideoHistoryIds: [...(currentAssets.holdLoopVideoHistoryIds || [])],
+      visualConditioningByAsset: { ...(currentAssets.visualConditioningByAsset || {}) },
     };
 
     if (role === 'entry') {
@@ -875,6 +824,10 @@ export async function attachNodePlaybackAsset(loomId, episodeId, nodeId, {
     if (provenance) {
       nextAssets.provenance = provenance;
     }
+    if (visualConditioning) {
+      nextAssets.visualConditioningByAsset[videoHistoryId] = visualConditioning;
+      node.visualConditioning = visualConditioning;
+    }
 
     node.playbackAssets = nextAssets;
     episode.updatedAt = new Date().toISOString();
@@ -883,4 +836,3 @@ export async function attachNodePlaybackAsset(loomId, episodeId, nodeId, {
 
   return updated?.episodes.find((e) => e.id === episodeId)?.nodes.find((n) => n.id === nodeId) ?? null;
 }
-

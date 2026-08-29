@@ -34,6 +34,11 @@ export const isSafeVideoHistoryId = (value) =>
 const isStr = (v) => typeof v === 'string' && v.trim().length > 0;
 const trimTo = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+const SAFE_PRODUCTION_PARAMETER_KEYS = new Set([
+  'width', 'height', 'numFrames', 'fps', 'steps', 'guidance', 'guidanceScale',
+  'seed', 'imageStrength', 'quantize', 'effort', 'mode', 'videoMode',
+  'aspectRatio', 'disableAudio', 'tiling',
+]);
 
 /**
  * Sanitize an audio interval (dialogue, music, or effect).
@@ -90,20 +95,135 @@ export function validateAudioOccupancy(raw) {
 
   const hasCharacterDialogue = characterDialogue.length > 0;
   const hasBlockingEffects = effects.some((e) => e.blocking === true);
+  const peakDb = Number.isFinite(raw.truePeakDb)
+    ? raw.truePeakDb
+    : (Number.isFinite(raw.peakDb) ? raw.peakDb : null);
+  const clipping = raw.clipping === true
+    || raw.clipped === true
+    || raw.clippingDetected === true
+    || (peakDb !== null && peakDb > 0);
 
-  // safeForLiveVoice is false if any dialogue or blocking effects exist
-  const safeForLiveVoice = !hasCharacterDialogue && !hasBlockingEffects;
+  // safeForLiveVoice is false if any dialogue, blocking effects, or clipping
+  // exists. A caller cannot override these derived safety fields with a stale
+  // `safeForLiveVoice: true` value from an older manifest.
+  const safeForLiveVoice = !hasCharacterDialogue && !hasBlockingEffects && !clipping;
 
   return {
     durationMs,
     characterDialogue,
     music,
     effects,
+    clipping,
+    ...(peakDb !== null ? { peakDb } : {}),
     safeForLiveVoice,
   };
 }
 
 export const sanitizeAudioOccupancy = validateAudioOccupancy;
+
+/**
+ * Sanitize the path-free visual conditioning manifest attached to a scene or
+ * typed playback asset. The playback module owns this shape so the node
+ * sanitizer can safely handle one manifest per rendered clip without a
+ * records-module import cycle.
+ */
+export function sanitizeVisualConditioning(raw) {
+  if (!raw || typeof raw !== 'object' || raw.version !== 1) return null;
+  const list = (value, max) => (Array.isArray(value) ? value.slice(0, max) : []);
+  const nullableRef = (value) => (isStr(value) ? trimTo(value, LOOM_LIMITS.REF_ID_MAX) : null);
+  const capability = raw.capability && typeof raw.capability === 'object' ? raw.capability : {};
+  const bindings = raw.bindings && typeof raw.bindings === 'object' ? raw.bindings : {};
+  const productionParameters = raw.render?.parameters && typeof raw.render.parameters === 'object'
+    ? Object.fromEntries(Object.entries(raw.render.parameters).flatMap(([key, value]) => {
+      if (!SAFE_PRODUCTION_PARAMETER_KEYS.has(key)) return [];
+      if (typeof value === 'number' && Number.isFinite(value)) return [[key.slice(0, 40), value]];
+      if (typeof value === 'boolean') return [[key.slice(0, 40), value]];
+      if (isStr(value)) return [[key.slice(0, 40), trimTo(value, 200)]];
+      return [];
+    }))
+    : {};
+  return {
+    version: 1,
+    compilerVersion: trimTo(raw.compilerVersion, 40),
+    status: ['locked', 'draft', 'degraded'].includes(raw.status) ? raw.status : 'degraded',
+    universeId: nullableRef(raw.universeId),
+    capability: {
+      version: Number.isInteger(capability.version) ? capability.version : 1,
+      kind: capability.kind === 'video' ? 'video' : 'image',
+      backend: trimTo(capability.backend, 40),
+      modelId: nullableRef(capability.modelId),
+      modelRevision: nullableRef(capability.modelRevision),
+      referenceRoles: list(capability.referenceRoles, 24)
+        .map((item) => trimTo(item, 64)).filter(Boolean),
+      referenceBudget: Number.isInteger(capability.referenceBudget)
+        ? Math.max(0, Math.min(24, capability.referenceBudget)) : 0,
+      supportsLora: capability.supportsLora === true,
+      loraCompatKey: nullableRef(capability.loraCompatKey),
+      loraBudget: Number.isInteger(capability.loraBudget)
+        ? Math.max(0, Math.min(8, capability.loraBudget)) : 0,
+      multiCharacterPreservation: capability.multiCharacterPreservation === true,
+      ...(capability.kind === 'video' ? {
+        firstFrame: capability.firstFrame === true,
+        lastFrame: capability.lastFrame === true,
+        extension: capability.extension === true,
+      } : {}),
+    },
+    bindings: {
+      inferred: bindings.inferred === true,
+      characterAppearances: list(bindings.characterAppearances, LOOM_LIMITS.VISUAL_BINDINGS_MAX)
+        .filter((item) => item && typeof item === 'object' && nullableRef(item.characterId))
+        .map((item) => ({
+          characterId: nullableRef(item.characterId),
+          wardrobeId: nullableRef(item.wardrobeId),
+          expression: trimTo(item.expression, LOOM_LIMITS.VISUAL_NOTE_MAX),
+          continuityNotes: trimTo(item.continuityNotes, LOOM_LIMITS.VISUAL_NOTE_MAX),
+        })),
+      placeId: nullableRef(bindings.placeId),
+      objectIds: list(bindings.objectIds, LOOM_LIMITS.VISUAL_BINDINGS_MAX)
+        .map(nullableRef).filter(Boolean),
+    },
+    assets: list(raw.assets, LOOM_LIMITS.VISUAL_PROVENANCE_ASSETS_MAX)
+      .filter((item) => item && typeof item === 'object')
+      .map((item) => ({
+        role: trimTo(item.role, 64), bindingId: nullableRef(item.bindingId),
+        required: item.required === true, filename: trimTo(item.filename, 256),
+      })),
+    adapters: list(raw.adapters, 8)
+      .filter((item) => item && typeof item === 'object')
+      .map((item) => ({
+        characterId: nullableRef(item.characterId), filename: trimTo(item.filename, 256),
+        scale: Number.isFinite(item.scale) ? Math.max(0, Math.min(2, item.scale)) : 1,
+        sha256: typeof item.sha256 === 'string' && /^[a-f0-9]{64}$/i.test(item.sha256) ? item.sha256 : null,
+      })),
+    omitted: list(raw.omitted, LOOM_LIMITS.VISUAL_PROVENANCE_MESSAGES_MAX)
+      .filter((item) => item && typeof item === 'object')
+      .map((item) => ({
+        role: trimTo(item.role, 64), bindingId: nullableRef(item.bindingId),
+        reason: trimTo(item.reason, 80),
+        ...(item.filename ? { filename: trimTo(item.filename, 256) } : {}),
+      })),
+    warnings: (Array.isArray(raw.warnings) ? raw.warnings : [])
+      .map((item) => trimTo(item, LOOM_LIMITS.VISUAL_NOTE_MAX)).filter(Boolean)
+      .slice(0, LOOM_LIMITS.VISUAL_PROVENANCE_MESSAGES_MAX),
+    temporalSourceNodeId: nullableRef(raw.temporalSourceNodeId),
+    ...(typeof raw.compiledPrompt === 'string' ? { compiledPrompt: trimTo(raw.compiledPrompt, 8000) } : {}),
+    ...(typeof raw.compiledNegativePrompt === 'string' ? { compiledNegativePrompt: trimTo(raw.compiledNegativePrompt, 8000) } : {}),
+    referenceImageStrengths: (Array.isArray(raw.referenceImageStrengths) ? raw.referenceImageStrengths : [])
+      .filter((value) => Number.isFinite(value))
+      .map((value) => Math.max(0, Math.min(1, value)))
+      .slice(0, LOOM_LIMITS.VISUAL_PROVENANCE_ASSETS_MAX),
+    ...(isStr(raw.assetId) ? { assetId: nullableRef(raw.assetId) } : {}),
+    ...(raw.render && typeof raw.render === 'object' ? {
+      render: {
+        provider: trimTo(raw.render.provider, 40),
+        modelId: nullableRef(raw.render.modelId),
+        modelRevision: nullableRef(raw.render.modelRevision),
+        parameters: productionParameters,
+      },
+    } : {}),
+    compiledAt: isStr(raw.compiledAt) ? raw.compiledAt : null,
+  };
+}
 
 /**
  * Check if a manifest or asset is safe for live voice.
@@ -210,6 +330,9 @@ export function sanitizeProvenance(raw) {
           profileVersion: Number.isFinite(c.voice.profileVersion) ? Math.round(c.voice.profileVersion) : 1,
           engine: trimTo(c.voice.engine, 80),
           modelRevision: trimTo(c.voice.modelRevision, 120),
+          pronunciationRevision: Number.isFinite(c.voice.pronunciationRevision)
+            ? Math.max(1, Math.round(c.voice.pronunciationRevision))
+            : null,
         } : null,
       })),
     visualConditioningVersion: Number.isFinite(raw.visualConditioningVersion) ? raw.visualConditioningVersion : 1,
@@ -253,13 +376,22 @@ export function sanitizePlaybackAssets(raw) {
   }
 
   const provenance = sanitizeProvenance(raw.provenance);
+  const visualConditioningByAsset = {};
+  if (raw.visualConditioningByAsset && typeof raw.visualConditioningByAsset === 'object') {
+    for (const [assetId, manifest] of Object.entries(raw.visualConditioningByAsset)) {
+      if (!isSafeVideoHistoryId(assetId)) continue;
+      const sanitized = sanitizeVisualConditioning(manifest);
+      if (sanitized) visualConditioningByAsset[assetId] = sanitized;
+    }
+  }
 
   // If completely empty, return null
   if (!entryVideoHistoryId
     && !holdLoopVideoHistoryIds.length
     && !Object.keys(exitByTransition).length
     && !Object.keys(audioOccupancy).length
-    && !provenance) {
+    && !provenance
+    && !Object.keys(visualConditioningByAsset).length) {
     return null;
   }
 
@@ -269,6 +401,7 @@ export function sanitizePlaybackAssets(raw) {
     exitByTransition,
     audioOccupancy,
     ...(provenance ? { provenance } : {}),
+    ...(Object.keys(visualConditioningByAsset).length ? { visualConditioningByAsset } : {}),
   };
 }
 
