@@ -121,6 +121,21 @@ const transitionSchema = z.object({
   ...transitionFields,
 });
 
+const visualCanonSchema = z.object({
+  mode: z.enum(['locked', 'draft']).optional(),
+  characterAppearances: z.array(z.object({
+    characterId: refId.unwrap(),
+    wardrobeId: refId.unwrap().nullable().optional(),
+    expression: z.string().max(LOOM_LIMITS.VISUAL_NOTE_MAX).optional(),
+    continuityNotes: z.string().max(LOOM_LIMITS.VISUAL_NOTE_MAX).optional(),
+  })).max(LOOM_LIMITS.VISUAL_BINDINGS_MAX).optional(),
+  placeId: refId.optional(),
+  objectIds: z.array(refId.unwrap()).max(LOOM_LIMITS.VISUAL_BINDINGS_MAX).optional(),
+  continuitySourceNodeId: nodeIdStr.nullable().optional(),
+  shotNotes: z.string().max(LOOM_LIMITS.VISUAL_NOTE_MAX).optional(),
+  storyboardImageApproved: z.boolean().optional(),
+}).nullable();
+
 // Sub-resource POST: no `id` — the server mints it.
 export const transitionCreateSchema = z.object(transitionFields);
 
@@ -174,6 +189,7 @@ const nodeFields = {
   imagePrompt: z.string().max(LOOM_LIMITS.IMAGE_PROMPT_MAX).optional(),
   videoPrompt: z.string().max(LOOM_LIMITS.VIDEO_PROMPT_MAX).optional(),
   cameraMovement: z.string().max(LOOM_LIMITS.CAMERA_MOVEMENT_MAX).optional(),
+  visualCanon: visualCanonSchema.optional(),
   playbackMode: z.enum(FABLELOOM_PLAYBACK_MODES).optional(),
   audienceConnection: z.enum(FABLELOOM_AUDIENCE_CONNECTION_STATES).optional(),
   videoHistoryId: z.string().max(200).nullable().optional(),

@@ -165,6 +165,7 @@ const generatedNodeFields = (raw) => ({
   imagePrompt: raw.imagePrompt,
   videoPrompt: raw.videoPrompt,
   cameraMovement: raw.cameraMovement,
+  visualCanon: raw.visualCanon,
   playbackMode: raw.playbackMode,
   audienceConnection: raw.audienceConnection,
   isEnding: raw.isEnding === true,

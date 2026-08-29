@@ -264,7 +264,7 @@ describe('FableLoomStory scene media lifecycle', () => {
     expect(toastMocks.success).toHaveBeenCalledWith('Scene image ready');
   });
 
-  it('passes the rendered incoming shot into the next scene image request', async () => {
+  it('sends only the scene tag so the server resolves typed graph continuity', async () => {
     const user = userEvent.setup();
     api.getLoom.mockResolvedValue(loom({
       episodes: [episode({
@@ -292,13 +292,11 @@ describe('FableLoomStory scene media lifecycle', () => {
 
     await waitFor(() => expect(api.generateImage).toHaveBeenCalledWith({
       prompt: 'the same scout crosses into the observatory',
-      referenceImageFiles: ['threshold.png'],
-      referenceStrengths: [0.4],
       fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-2' },
     }, { silent: true }));
   });
 
-  it('retries without continuity when the configured backend cannot accept the prior shot', async () => {
+  it('does not silently retry a rejected canon request without its conditioning', async () => {
     const user = userEvent.setup();
     api.getLoom.mockResolvedValue(loom({
       episodes: [episode({
@@ -316,23 +314,20 @@ describe('FableLoomStory scene media lifecycle', () => {
         ],
       })],
     }));
-    api.generateImage
-      .mockRejectedValueOnce(Object.assign(new Error('Text-to-image only'), {
-        code: 'IMAGE_EDIT_UNSUPPORTED_MODE',
-      }))
-      .mockResolvedValueOnce({ jobId: 'image-job-fallback', status: 'queued' });
+    api.generateImage.mockRejectedValueOnce(Object.assign(new Error('Canon conditioning unavailable'), {
+      code: 'FABLELOOM_CANON_CONDITIONING_UNAVAILABLE',
+    }));
     renderEditor();
 
     await user.click(await screen.findByRole('button', { name: 'Canvas generate second image' }));
 
-    await waitFor(() => expect(api.generateImage).toHaveBeenCalledTimes(2));
-    expect(api.generateImage.mock.calls[0][0]).toMatchObject({ referenceImageFiles: ['threshold.png'] });
-    expect(api.generateImage.mock.calls[1]).toEqual([{
+    await waitFor(() => expect(api.generateImage).toHaveBeenCalledTimes(1));
+    expect(api.generateImage.mock.calls[0]).toEqual([{
       prompt: 'the scout enters the observatory',
       fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-2' },
     }, { silent: true }]);
-    expect(toastMocks.warning).toHaveBeenCalledWith(
-      'The current image backend cannot use the prior shot — rendering this scene without continuity conditioning',
+    expect(toastMocks.error).toHaveBeenCalledWith(
+      'Could not start scene image: Canon conditioning unavailable',
     );
   });
 });

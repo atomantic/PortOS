@@ -44,7 +44,7 @@ const rowToPatch = ({ targetNodeId, intent, triggersText, description }) => ({
 });
 
 export default function LoomNodeEditor({
-  loom, episode, node, onLoomUpdate, onClearSelection, onMakeStart,
+  loom, episode, node, universe, onLoomUpdate, onClearSelection, onMakeStart,
   mediaJobs = {}, onGenerateImage, onGenerateVideo,
   generationDisabled = false, generationDisabledReason = '',
 }) {
@@ -70,6 +70,11 @@ export default function LoomNodeEditor({
       imagePrompt: node.imagePrompt || '',
       videoPrompt: node.videoPrompt || '',
       cameraMovement: node.cameraMovement || '',
+      visualCanon: node.visualCanon ? {
+        ...node.visualCanon,
+        characterAppearances: [...(node.visualCanon.characterAppearances || [])],
+        objectIds: [...(node.visualCanon.objectIds || [])],
+      } : null,
       playbackMode: node.playbackMode || 'decision',
       audienceConnection: node.audienceConnection || 'disconnected',
       playbackAssets: node.playbackAssets || null,
@@ -106,6 +111,13 @@ export default function LoomNodeEditor({
     if (updated) onLoomUpdate(updated);
     return updated;
   };
+
+  const saveVisualCanon = (next) => {
+    setForm((current) => ({ ...current, visualCanon: next }));
+    patchNode({ visualCanon: next });
+  };
+
+  const updateVisualCanon = (patch) => saveVisualCanon({ ...form.visualCanon, ...patch });
 
   // Blur-save helper: skip the round-trip when the value matches the record
   // (tabbing through the panel shouldn't rewrite the loom).
@@ -472,6 +484,187 @@ export default function LoomNodeEditor({
           generationDisabled={aiBlocked || generationDisabled}
           generationDisabledReason={aiBlocked ? 'Wait for scene changes to save' : generationDisabledReason}
         />
+      </div>
+
+      <div className="rounded border border-port-border p-3 space-y-3">
+        <label className="flex items-center gap-2 text-sm" htmlFor="loom-node-visual-canon">
+          <input
+            id="loom-node-visual-canon"
+            aria-label="Bind this shot to Universe canon"
+            type="checkbox"
+            checked={Boolean(form.visualCanon)}
+            onChange={(event) => saveVisualCanon(event.target.checked ? {
+              mode: 'locked', characterAppearances: [], placeId: null, objectIds: [],
+              continuitySourceNodeId: null, shotNotes: '', storyboardImageApproved: false,
+            } : null)}
+          />
+          Bind this shot to Universe canon
+        </label>
+        {form.visualCanon && (
+          <div className="space-y-3">
+            <label className="flex items-center gap-2 text-xs" htmlFor="loom-node-canon-draft">
+              <input
+                id="loom-node-canon-draft"
+                aria-label="Allow degraded canon draft"
+                type="checkbox"
+                checked={form.visualCanon.mode === 'draft'}
+                onChange={(event) => updateVisualCanon({ mode: event.target.checked ? 'draft' : 'locked' })}
+              />
+              Allow an explicitly degraded draft when this backend cannot preserve canon
+            </label>
+
+            <fieldset className="space-y-2">
+              <legend className={labelClass}>Characters</legend>
+              {(universe?.characters || []).map((character) => {
+                const appearance = form.visualCanon.characterAppearances
+                  .find((item) => item.characterId === character.id);
+                return (
+                  <div key={character.id} className="rounded bg-port-bg-subtle p-2 space-y-2">
+                    <label className="flex items-center gap-2 text-xs" htmlFor={`loom-canon-character-${character.id}`}>
+                      <input
+                        id={`loom-canon-character-${character.id}`}
+                        aria-label={character.name}
+                        type="checkbox"
+                        checked={Boolean(appearance)}
+                        onChange={(event) => updateVisualCanon({
+                          characterAppearances: event.target.checked
+                            ? [...form.visualCanon.characterAppearances, { characterId: character.id, wardrobeId: null, expression: '', continuityNotes: '' }]
+                            : form.visualCanon.characterAppearances.filter((item) => item.characterId !== character.id),
+                        })}
+                      />
+                      {character.name}
+                    </label>
+                    {appearance && (character.wardrobes || []).length > 0 && (
+                      <select
+                        className={fieldClass}
+                        aria-label={`${character.name} wardrobe`}
+                        value={appearance.wardrobeId || ''}
+                        onChange={(event) => updateVisualCanon({
+                          characterAppearances: form.visualCanon.characterAppearances.map((item) => (
+                            item.characterId === character.id ? { ...item, wardrobeId: event.target.value || null } : item
+                          )),
+                        })}
+                      >
+                        <option value="">Default wardrobe</option>
+                        {character.wardrobes.map((wardrobe) => (
+                          <option key={wardrobe.id} value={wardrobe.id}>{wardrobe.name || wardrobe.label || 'Wardrobe'}</option>
+                        ))}
+                      </select>
+                    )}
+                    {appearance && (
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <input
+                          className={fieldClass}
+                          aria-label={`${character.name} expression`}
+                          placeholder="Expression"
+                          value={appearance.expression || ''}
+                          onChange={(event) => setForm((current) => ({
+                            ...current,
+                            visualCanon: {
+                              ...current.visualCanon,
+                              characterAppearances: current.visualCanon.characterAppearances.map((item) => (
+                                item.characterId === character.id ? { ...item, expression: event.target.value } : item
+                              )),
+                            },
+                          }))}
+                          onBlur={() => patchNode({ visualCanon: form.visualCanon })}
+                        />
+                        <input
+                          className={fieldClass}
+                          aria-label={`${character.name} continuity notes`}
+                          placeholder="Continuity notes"
+                          value={appearance.continuityNotes || ''}
+                          onChange={(event) => setForm((current) => ({
+                            ...current,
+                            visualCanon: {
+                              ...current.visualCanon,
+                              characterAppearances: current.visualCanon.characterAppearances.map((item) => (
+                                item.characterId === character.id ? { ...item, continuityNotes: event.target.value } : item
+                              )),
+                            },
+                          }))}
+                          onBlur={() => patchNode({ visualCanon: form.visualCanon })}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </fieldset>
+
+            <FormField label="Location" labelClassName={labelClass}>
+              <select
+                className={fieldClass}
+                value={form.visualCanon.placeId || ''}
+                onChange={(event) => updateVisualCanon({ placeId: event.target.value || null })}
+              >
+                <option value="">No bound location</option>
+                {(universe?.places || []).map((place) => (
+                  <option key={place.id} value={place.id}>{place.name || place.slugline}</option>
+                ))}
+              </select>
+            </FormField>
+
+            {(universe?.objects || []).length > 0 && (
+              <fieldset className="space-y-1">
+                <legend className={labelClass}>Props and objects</legend>
+                {universe.objects.map((object) => (
+                  <label key={object.id} className="flex items-center gap-2 text-xs" htmlFor={`loom-canon-object-${object.id}`}>
+                    <input
+                      id={`loom-canon-object-${object.id}`}
+                      aria-label={object.name}
+                      type="checkbox"
+                      checked={form.visualCanon.objectIds.includes(object.id)}
+                      onChange={(event) => updateVisualCanon({
+                        objectIds: event.target.checked
+                          ? [...form.visualCanon.objectIds, object.id]
+                          : form.visualCanon.objectIds.filter((id) => id !== object.id),
+                      })}
+                    />
+                    {object.name}
+                  </label>
+                ))}
+              </fieldset>
+            )}
+
+            <FormField label="Continuity source" labelClassName={labelClass}>
+              <select
+                className={fieldClass}
+                value={form.visualCanon.continuitySourceNodeId || ''}
+                onChange={(event) => updateVisualCanon({ continuitySourceNodeId: event.target.value || null })}
+              >
+                <option value="">Automatic (only for one incoming scene)</option>
+                {otherNodes.filter((candidate) => candidate.transitions?.some((transition) => transition.targetNodeId === node.id))
+                  .map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.title || 'Untitled scene'}</option>)}
+              </select>
+            </FormField>
+
+            <FormField label="Shot continuity notes" labelClassName={labelClass}>
+              <textarea
+                rows={2}
+                className={fieldClass}
+                value={form.visualCanon.shotNotes || ''}
+                onChange={(event) => setForm((current) => ({
+                  ...current, visualCanon: { ...current.visualCanon, shotNotes: event.target.value },
+                }))}
+                onBlur={() => patchNode({ visualCanon: form.visualCanon })}
+              />
+            </FormField>
+
+            {node.image && (
+              <label className="flex items-center gap-2 text-xs" htmlFor="loom-node-storyboard-approved">
+                <input
+                  id="loom-node-storyboard-approved"
+                  aria-label="Approve storyboard image for video"
+                  type="checkbox"
+                  checked={form.visualCanon.storyboardImageApproved === true}
+                  onChange={(event) => updateVisualCanon({ storyboardImageApproved: event.target.checked })}
+                />
+                Approve the current storyboard image as this shot's video first frame
+              </label>
+            )}
+          </div>
+        )}
       </div>
 
       <div>

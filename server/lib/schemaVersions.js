@@ -354,7 +354,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // (record kind/category `fableLoom`). A pre-feature receiver has no merge
   // path for the whole-record story graph, so only this category pauses until
   // both peers upgrade; unrelated categories continue syncing.
-  fableLoom: 1,
+  // v2 = scene nodes gained portable `visualCanon` bindings plus the latest
+  // render's path-free `visualConditioning` provenance. A v1 peer would strip
+  // both during whole-record LWW, so newer sends must pause until it upgrades.
+  fableLoom: 2,
   // v1 = Creative Director projects (PostgreSQL `creative_director_projects`)
   // federated via the per-record peer-sync push pipeline (record kind
   // `creativeDirectorProject`, sync category `creativeDirectorProjects`, #1564).

@@ -645,6 +645,14 @@ describe('imageGen local.buildSidecarMeta', () => {
     expect(meta.referenceImageStrengths).toEqual([0.85, 0.5]);
   });
 
+  it('persists FableLoom visual-conditioning provenance without rewriting it', () => {
+    const visualConditioning = {
+      version: 1, compilerVersion: '1.0.0', status: 'locked', assets: [{ role: 'character-neutral', filename: 'aria.png' }],
+    };
+    const { meta } = buildSidecarMeta({ ...baseMetaInput, visualConditioning });
+    expect(meta.visualConditioning).toBe(visualConditioning);
+  });
+
   it('stamps regen lineage (cleanedFrom + regen* fields) when regenOf is set', () => {
     const { meta } = buildSidecarMeta({
       ...baseMetaInput,

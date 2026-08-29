@@ -72,6 +72,9 @@ import {
   streamVideoRuntimeInstall,
 } from '../services/videoGen/runtimeInstaller.js';
 import { detectSystemCapabilities, withHardwareCompatibility } from '../lib/systemCapabilities.js';
+import {
+  compileFableLoomVisualRequest, fableLoomVideoCapabilities,
+} from '../services/fableLoom/visualConditioning.js';
 
 const router = Router();
 
@@ -1029,6 +1032,31 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
   });
   const { backend, cleanupStaged } = prepared;
 
+  if (body.fableLoom) {
+    const compiled = await compileFableLoomVisualRequest({
+      tag: body.fableLoom,
+      kind: 'video',
+      capability: fableLoomVideoCapabilities({ backend, model: prepared.effectiveModel }),
+      authoredPrompt: body.prompt,
+      authoredNegativePrompt: body.negativePrompt,
+      sourceImagePath: prepared.sourceImagePath,
+    }).catch(async (error) => {
+      await cleanupStaged();
+      throw error;
+    });
+    if (compiled) {
+      body.prompt = compiled.prompt;
+      body.negativePrompt = compiled.negativePrompt;
+      if (prepared.sourceImagePath && !compiled.sourceImagePath) {
+        await prepared.discardSourceImage();
+        prepared.uploadedTempPath = null;
+        prepared.mode = 'text';
+      }
+      prepared.sourceImagePath = compiled.sourceImagePath;
+      body.visualConditioning = compiled.visualConditioning;
+    }
+  }
+
   // #3326 — `enqueueJob` is the last place a throw can strand the durable
   // copies the service staged (the job never exists, so the worker's cleanup
   // never runs). Release them, then rethrow untouched for the error middleware.
@@ -1130,6 +1158,7 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
     // FableLoom scene attach tag. Rides into persisted job.params so the
     // completion hook can file the clip even if the editor unmounted.
     ...(body.fableLoom ? { fableLoom: body.fableLoom } : {}),
+    ...(body.visualConditioning ? { visualConditioning: body.visualConditioning } : {}),
   });
   // Match the legacy response shape (jobId, generationId, filename, model,
   // mode) so existing client code keeps working; add status+position for

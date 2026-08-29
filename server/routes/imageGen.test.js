@@ -13,6 +13,23 @@ import { join as pathJoin } from 'path';
 const attachNodeImage = vi.hoisted(() => vi.fn(async () => ({})));
 vi.mock('../services/fableLoom/records.js', () => ({ attachNodeImage }));
 
+const compiledVisual = vi.hoisted(() => ({
+  version: 1, compilerVersion: '1.0.0', status: 'locked', assets: [], adapters: [], omitted: [], warnings: [],
+}));
+const compileFableLoomVisualRequest = vi.hoisted(() => vi.fn(async ({ authoredPrompt, authoredNegativePrompt }) => ({
+  prompt: authoredPrompt,
+  negativePrompt: authoredNegativePrompt || '',
+  referenceImagePaths: [],
+  referenceImageStrengths: [],
+  loraFilenames: [],
+  loraScales: [],
+  visualConditioning: compiledVisual,
+})));
+vi.mock('../services/fableLoom/visualConditioning.js', () => ({
+  compileFableLoomVisualRequest,
+  fableLoomImageCapabilities: vi.fn(() => ({ version: 1, kind: 'image' })),
+}));
+
 vi.mock('../services/imageGen/index.js', () => ({
   checkConnection: vi.fn(),
   generateImage: vi.fn(),
@@ -251,8 +268,11 @@ describe('Image Gen Routes', () => {
         'loom-1',
         'ep-1',
         'node-1',
-        { filename: 'scene.png', jobId: 'gen-scene-001' },
+        { filename: 'scene.png', jobId: 'gen-scene-001', visualConditioning: compiledVisual },
       );
+      expect(compileFableLoomVisualRequest).toHaveBeenCalledWith(expect.objectContaining({
+        tag: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' }, kind: 'image',
+      }));
     });
 
     it('accepts a missing/empty prompt (i2i / edit / unconditional), defaulting it to empty', async () => {

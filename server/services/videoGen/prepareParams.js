@@ -218,7 +218,8 @@ export const withStagedRollback = async (cleanupStaged, fn) => {
  *   from the route (which owns their Zod schemas) so this module never has to
  *   import back into `routes/`.
  * @returns {Promise<object>} On the grok lane:
- *   `{ backend, grok, sourceImagePath, uploadedTempPath, cleanupStaged }`.
+ *   `{ backend, grok, effectiveModel, sourceImagePath, uploadedTempPath,
+ *   discardSourceImage, cleanupStaged }`.
  *   On the local lane, additionally `{ pythonPath, effectiveModelId, mode,
  *   lastImagePath, audioFilePath, icReferencePaths, resolvedKeyframes,
  *   extendFromVideoPath, uploadedTempPaths, loras, effectiveChunks,
@@ -708,6 +709,14 @@ async function resolvePreparedParams({
       { status: 400, code: 'MUSIC_VIDEO_SOURCE_REQUIRED' },
     );
   }
+  const discardSourceImage = async () => {
+    if (uploadedTempPath) {
+      await unlink(uploadedTempPath).catch(() => {});
+      const index = stagedDurablePaths.indexOf(uploadedTempPath);
+      if (index >= 0) stagedDurablePaths.splice(index, 1);
+    }
+    if (uploads.sourceImage?.path) await unlink(uploads.sourceImage.path).catch(() => {});
+  };
   // Grok backend short-circuit (#2859 phase 2): everything past this point —
   // last-frame/keyframe staging, extend resolution, LoRA gating — is
   // local-runtime machinery grok doesn't use. sourceImagePath (upload or
@@ -724,7 +733,15 @@ async function resolvePreparedParams({
         { status: 400, code: 'GROK_IMAGEGEN_DISABLED' },
       );
     }
-    return { backend, grok, sourceImagePath, uploadedTempPath, cleanupStaged };
+    return {
+      backend,
+      grok,
+      effectiveModel: { id: 'grok', supportedModes: ['text', 'image'] },
+      sourceImagePath,
+      uploadedTempPath,
+      discardSourceImage,
+      cleanupStaged,
+    };
   }
 
   if (uploads.lastImage) {
@@ -1013,6 +1030,7 @@ async function resolvePreparedParams({
   return {
     backend,
     pythonPath,
+    effectiveModel,
     effectiveModelId,
     mode: body.mode,
     sourceImagePath,
@@ -1027,6 +1045,7 @@ async function resolvePreparedParams({
     effectiveChunks,
     effectiveChunkPrompts,
     effectiveContextFrames,
+    discardSourceImage,
     cleanupStaged,
   };
 }

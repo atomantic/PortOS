@@ -35,7 +35,11 @@ const hook = createMediaJobImageHook({
   sceneKey: ({ loomId, episodeId, nodeId }) => `${loomId}:${episodeId}:${nodeId}`,
   describe: ({ loomId, nodeId }) => `${loomId.slice(0, 13)}/${nodeId.slice(0, 13)}`,
   attach: ({ loomId, episodeId, nodeId, filename, job }) =>
-    attachNodeImage(loomId, episodeId, nodeId, { filename, jobId: deriveRenderJobId(job, filename) }),
+    attachNodeImage(loomId, episodeId, nodeId, {
+      filename,
+      jobId: deriveRenderJobId(job, filename),
+      ...(job.params?.visualConditioning ? { visualConditioning: job.params.visualConditioning } : {}),
+    }),
   onAttached: ({ loomId, nodeId, filename }, result) => {
     if (!result) return;
     console.log(`🧶 fableloom scene image ${loomId.slice(0, 13)}/${nodeId.slice(0, 13)} ← ${filename}`);

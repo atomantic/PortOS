@@ -2220,7 +2220,7 @@
         {
           "direction": "client-to-server",
           "source": "client/src/pages/FableLoomHostedJoin.jsx",
-          "line": 171
+          "line": 155
         },
         {
           "direction": "client-to-server",
@@ -2238,7 +2238,7 @@
         {
           "direction": "client-to-server",
           "source": "client/src/pages/FableLoomHostedJoin.jsx",
-          "line": 161
+          "line": 145
         },
         {
           "direction": "client-to-server",
@@ -2373,7 +2373,7 @@
         {
           "direction": "client-to-server",
           "source": "client/src/pages/FableLoomHostedJoin.jsx",
-          "line": 189
+          "line": 172
         },
         {
           "direction": "client-to-server",

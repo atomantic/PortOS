@@ -340,7 +340,7 @@ export async function applyIncomingPush(payload) {
   } else if (kind === 'moodBoard') {
     await mergeBoardsFromSync([record], { source });
   } else if (kind === 'fableLoom') {
-    await mergeLoomsFromSync([record], { source });
+    await mergeLoomsFromSync([record], { source, senderSchemaVersions });
   } else if (kind === 'writersRoomWork') {
     const mergeResult = await mergeWorksFromSync([record], { source });
     // Did the receiver accept the remote work (insert / remote-won LWW)? This

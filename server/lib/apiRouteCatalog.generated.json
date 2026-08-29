@@ -10099,7 +10099,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 750
+          "line": 788
         }
       ]
     },
@@ -10110,7 +10110,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 774
+          "line": 812
         }
       ]
     },
@@ -10121,7 +10121,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 769
+          "line": 807
         }
       ]
     },
@@ -10132,7 +10132,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 803
+          "line": 841
         }
       ]
     },
@@ -10143,7 +10143,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 788
+          "line": 826
         }
       ]
     },
@@ -10154,7 +10154,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 765
+          "line": 803
         }
       ]
     },
@@ -10165,7 +10165,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 693
+          "line": 731
         }
       ]
     },
@@ -10176,7 +10176,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 335
+          "line": 339
         }
       ]
     },
@@ -10187,7 +10187,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 339
+          "line": 343
         }
       ]
     },
@@ -10198,7 +10198,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 561
+          "line": 599
         }
       ]
     },
@@ -10209,7 +10209,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 699
+          "line": 737
         }
       ]
     },
@@ -10220,7 +10220,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 684
+          "line": 722
         }
       ]
     },
@@ -10231,7 +10231,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 385
+          "line": 389
         }
       ]
     },
@@ -10242,7 +10242,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 680
+          "line": 718
         }
       ]
     },
@@ -10253,7 +10253,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 583
+          "line": 621
         }
       ]
     },
@@ -10264,7 +10264,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 661
+          "line": 699
         }
       ]
     },
@@ -10275,7 +10275,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 642
+          "line": 680
         }
       ]
     },
@@ -10286,7 +10286,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 594
+          "line": 632
         }
       ]
     },
@@ -10297,7 +10297,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 622
+          "line": 660
         }
       ]
     },
@@ -10308,7 +10308,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 352
+          "line": 356
         }
       ]
     },
@@ -10418,7 +10418,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 321
+          "line": 325
         }
       ]
     },
@@ -10429,7 +10429,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 62
+          "line": 66
         }
       ]
     },
@@ -10440,7 +10440,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 577
+          "line": 615
         }
       ]
     },
@@ -21853,7 +21853,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 906
+          "line": 909
         }
       ]
     },
@@ -21864,7 +21864,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1256
+          "line": 1285
         }
       ]
     },
@@ -21875,7 +21875,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1232
+          "line": 1261
         }
       ]
     },
@@ -21886,7 +21886,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1261
+          "line": 1290
         }
       ]
     },
@@ -21897,7 +21897,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1290
+          "line": 1319
         }
       ]
     },
@@ -21908,7 +21908,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1338
+          "line": 1367
         }
       ]
     },
@@ -21919,7 +21919,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1310
+          "line": 1339
         }
       ]
     },
@@ -21930,7 +21930,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1346
+          "line": 1375
         }
       ]
     },
@@ -21941,7 +21941,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1342
+          "line": 1371
         }
       ]
     },
@@ -21952,7 +21952,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 785
+          "line": 788
         }
       ]
     },
@@ -21963,7 +21963,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 804
+          "line": 807
         }
       ]
     },
@@ -21974,7 +21974,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1363
+          "line": 1392
         }
       ]
     },
@@ -21985,7 +21985,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 438
+          "line": 441
         }
       ]
     },
@@ -21996,7 +21996,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 442
+          "line": 445
         }
       ]
     },
@@ -22007,7 +22007,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 510
+          "line": 513
         }
       ]
     },
@@ -22018,7 +22018,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 751
+          "line": 754
         }
       ]
     },
@@ -22029,7 +22029,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 736
+          "line": 739
         }
       ]
     },
@@ -22040,7 +22040,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 639
+          "line": 642
         }
       ]
     },
@@ -22051,7 +22051,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 719
+          "line": 722
         }
       ]
     },
@@ -22062,7 +22062,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 480
+          "line": 483
         }
       ]
     },
@@ -22073,7 +22073,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 482
+          "line": 485
         }
       ]
     },
@@ -22084,7 +22084,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 476
+          "line": 479
         }
       ]
     },
@@ -22095,7 +22095,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 388
+          "line": 391
         }
       ]
     },
@@ -22106,7 +22106,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1380
+          "line": 1409
         }
       ]
     },
@@ -22117,7 +22117,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 893
+          "line": 896
         }
       ]
     },
@@ -22128,7 +22128,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 879
+          "line": 882
         }
       ]
     },
@@ -22139,7 +22139,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 849
+          "line": 852
         }
       ]
     },
@@ -22150,7 +22150,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 859
+          "line": 862
         }
       ]
     },
@@ -22161,7 +22161,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1331
+          "line": 1360
         }
       ]
     },
@@ -22172,7 +22172,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1369
+          "line": 1398
         }
       ]
     },
@@ -23411,8 +23411,8 @@
   ],
   "stats": {
     "mounts": 145,
-    "operations": 2108,
-    "declarations": 2111,
+    "operations": 2112,
+    "declarations": 2115,
     "sourceFiles": 225
   }
 }

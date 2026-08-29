@@ -67,6 +67,101 @@ const sanitizePos = (raw) => (raw && typeof raw === 'object'
   ? { x: Math.round(raw.x), y: Math.round(raw.y) }
   : null);
 
+const sanitizeVisualConditioning = (raw) => {
+  if (!raw || typeof raw !== 'object' || raw.version !== 1) return null;
+  const list = (value, max) => (Array.isArray(value) ? value.slice(0, max) : []);
+  const capability = raw.capability && typeof raw.capability === 'object' ? raw.capability : {};
+  const bindings = raw.bindings && typeof raw.bindings === 'object' ? raw.bindings : {};
+  return {
+    version: 1,
+    compilerVersion: trimTo(raw.compilerVersion, 40),
+    status: ['locked', 'draft', 'degraded'].includes(raw.status) ? raw.status : 'degraded',
+    universeId: nullableRef(raw.universeId),
+    capability: {
+      version: Number.isInteger(capability.version) ? capability.version : 1,
+      kind: capability.kind === 'video' ? 'video' : 'image',
+      backend: trimTo(capability.backend, 40),
+      modelId: nullableRef(capability.modelId),
+      referenceRoles: list(capability.referenceRoles, 24)
+        .map((item) => trimTo(item, 64)).filter(Boolean),
+      referenceBudget: Number.isInteger(capability.referenceBudget)
+        ? Math.max(0, Math.min(24, capability.referenceBudget)) : 0,
+      supportsLora: capability.supportsLora === true,
+      loraCompatKey: nullableRef(capability.loraCompatKey),
+      loraBudget: Number.isInteger(capability.loraBudget)
+        ? Math.max(0, Math.min(8, capability.loraBudget)) : 0,
+      multiCharacterPreservation: capability.multiCharacterPreservation === true,
+      ...(capability.kind === 'video' ? {
+        firstFrame: capability.firstFrame === true,
+        lastFrame: capability.lastFrame === true,
+        extension: capability.extension === true,
+      } : {}),
+    },
+    bindings: {
+      inferred: bindings.inferred === true,
+      characterAppearances: list(bindings.characterAppearances, LOOM_LIMITS.VISUAL_BINDINGS_MAX)
+        .filter((item) => item && typeof item === 'object' && nullableRef(item.characterId))
+        .map((item) => ({
+          characterId: nullableRef(item.characterId),
+          wardrobeId: nullableRef(item.wardrobeId),
+          expression: trimTo(item.expression, LOOM_LIMITS.VISUAL_NOTE_MAX),
+          continuityNotes: trimTo(item.continuityNotes, LOOM_LIMITS.VISUAL_NOTE_MAX),
+        })),
+      placeId: nullableRef(bindings.placeId),
+      objectIds: list(bindings.objectIds, LOOM_LIMITS.VISUAL_BINDINGS_MAX)
+        .map(nullableRef).filter(Boolean),
+    },
+    assets: list(raw.assets, LOOM_LIMITS.VISUAL_PROVENANCE_ASSETS_MAX)
+      .filter((item) => item && typeof item === 'object')
+      .map((item) => ({
+        role: trimTo(item.role, 64), bindingId: nullableRef(item.bindingId),
+        required: item.required === true, filename: trimTo(item.filename, 256),
+      })),
+    adapters: list(raw.adapters, 8)
+      .filter((item) => item && typeof item === 'object')
+      .map((item) => ({
+        characterId: nullableRef(item.characterId), filename: trimTo(item.filename, 256),
+        scale: Number.isFinite(item.scale) ? Math.max(0, Math.min(2, item.scale)) : 1,
+        sha256: typeof item.sha256 === 'string' && /^[a-f0-9]{64}$/i.test(item.sha256) ? item.sha256 : null,
+      })),
+    omitted: list(raw.omitted, LOOM_LIMITS.VISUAL_PROVENANCE_MESSAGES_MAX)
+      .filter((item) => item && typeof item === 'object')
+      .map((item) => ({
+        role: trimTo(item.role, 64), bindingId: nullableRef(item.bindingId),
+        reason: trimTo(item.reason, 80),
+        ...(item.filename ? { filename: trimTo(item.filename, 256) } : {}),
+      })),
+    warnings: (Array.isArray(raw.warnings) ? raw.warnings : [])
+      .map((item) => trimTo(item, LOOM_LIMITS.VISUAL_NOTE_MAX)).filter(Boolean)
+      .slice(0, LOOM_LIMITS.VISUAL_PROVENANCE_MESSAGES_MAX),
+    temporalSourceNodeId: nullableRef(raw.temporalSourceNodeId),
+    compiledAt: isStr(raw.compiledAt) ? raw.compiledAt : null,
+  };
+};
+
+const sanitizeVisualCanon = (raw) => {
+  if (!raw || typeof raw !== 'object') return null;
+  const appearances = (Array.isArray(raw.characterAppearances) ? raw.characterAppearances : [])
+    .filter((item) => item && typeof item === 'object' && nullableRef(item.characterId))
+    .slice(0, LOOM_LIMITS.VISUAL_BINDINGS_MAX)
+    .map((item) => ({
+      characterId: nullableRef(item.characterId),
+      wardrobeId: nullableRef(item.wardrobeId),
+      expression: trimTo(item.expression, LOOM_LIMITS.VISUAL_NOTE_MAX),
+      continuityNotes: trimTo(item.continuityNotes, LOOM_LIMITS.VISUAL_NOTE_MAX),
+    }));
+  return {
+    mode: raw.mode === 'draft' ? 'draft' : 'locked',
+    characterAppearances: appearances,
+    placeId: nullableRef(raw.placeId),
+    objectIds: (Array.isArray(raw.objectIds) ? raw.objectIds : [])
+      .map(nullableRef).filter(Boolean).slice(0, LOOM_LIMITS.VISUAL_BINDINGS_MAX),
+    continuitySourceNodeId: nullableRef(raw.continuitySourceNodeId),
+    shotNotes: trimTo(raw.shotNotes, LOOM_LIMITS.VISUAL_NOTE_MAX),
+    storyboardImageApproved: raw.storyboardImageApproved === true,
+  };
+};
+
 function sanitizeTransition(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const intent = trimTo(raw.intent, LOOM_LIMITS.INTENT_MAX);
@@ -95,6 +190,8 @@ function sanitizeNode(raw) {
     imageJobId: isStr(raw.imageJobId) && raw.imageJobId ? raw.imageJobId.slice(0, 200) : null,
     videoPrompt: trimTo(raw.videoPrompt, LOOM_LIMITS.VIDEO_PROMPT_MAX),
     cameraMovement: trimTo(normalizeFableLoomCameraMovement(raw.cameraMovement), LOOM_LIMITS.CAMERA_MOVEMENT_MAX),
+    visualCanon: sanitizeVisualCanon(raw.visualCanon),
+    visualConditioning: sanitizeVisualConditioning(raw.visualConditioning),
     playbackMode: asFableLoomPlaybackMode(raw.playbackMode),
     audienceConnection: asFableLoomAudienceConnection(raw.audienceConnection),
     videoHistoryId: isSafeVideoHistoryId(raw.videoHistoryId) ? raw.videoHistoryId : null,
@@ -194,7 +291,7 @@ export function sanitizeLoom(raw) {
     .sort((a, b) => a.number - b.number || a.createdAt.localeCompare(b.createdAt));
   return {
     id: raw.id,
-    schemaVersion: 1,
+    schemaVersion: 2,
     name,
     logline: trimTo(raw.logline, LOOM_LIMITS.LOGLINE_MAX),
     premise: trimTo(raw.premise, LOOM_LIMITS.PREMISE_MAX),
@@ -405,6 +502,32 @@ export async function deleteLoom(id) {
   emitRecordDeleted('fableLoom', id);
 }
 
+// A v1 peer cannot represent the v2 scene production fields. When that older
+// peer wins whole-record LWW after an unrelated edit, retain the local fields
+// on nodes that still exist instead of letting its unaware sanitizer clear
+// them. A v2 sender's present null remains an intentional clear.
+const preserveLegacyVisualProduction = (remote, local, senderVersion) => {
+  if (!local || senderVersion >= 2) return remote;
+  const localEpisodes = new Map(local.episodes.map((episode) => [episode.id, episode]));
+  return {
+    ...remote,
+    episodes: remote.episodes.map((episode) => {
+      const localNodes = new Map((localEpisodes.get(episode.id)?.nodes || []).map((node) => [node.id, node]));
+      return {
+        ...episode,
+        nodes: episode.nodes.map((node) => {
+          const localNode = localNodes.get(node.id);
+          return localNode ? {
+            ...node,
+            visualCanon: localNode.visualCanon,
+            visualConditioning: localNode.visualConditioning,
+          } : node;
+        }),
+      };
+    }),
+  };
+};
+
 /**
  * Merge FableLoom records received from a federated peer. Records are
  * sanitized before persistence, unioned by id, and resolved by whole-record
@@ -412,7 +535,10 @@ export async function deleteLoom(id) {
  */
 export async function mergeLoomsFromSync(
   remoteLooms,
-  { source = { via: 'sync', peerId: null } } = {},
+  {
+    source = { via: 'sync', peerId: null },
+    senderSchemaVersions = { fableLoom: 2 },
+  } = {},
 ) {
   if (!Array.isArray(remoteLooms)) return { applied: false, count: 0 };
   const byId = new Map();
@@ -426,18 +552,23 @@ export async function mergeLoomsFromSync(
     const applied = await queueLoomWrite(remote.id, async () => {
       const local = sanitizeLoom(await readRaw(remote.id));
       if (local && !compareNewerWins(remote.updatedAt, local.updatedAt)) return false;
+      const merged = preserveLegacyVisualProduction(
+        remote,
+        local,
+        Number(senderSchemaVersions?.fableLoom) || 0,
+      );
       if (local) {
         await maybeJournalBeforeOverwrite({
-          kind: 'fableLoom', id: remote.id, local, remote, source,
+          kind: 'fableLoom', id: remote.id, local, remote: merged, source,
         });
       } else {
         await setSyncBaseHash(
           'fableLoom',
-          remote.id,
-          contentHashForRecord('fableLoom', remote),
+          merged.id,
+          contentHashForRecord('fableLoom', merged),
         );
       }
-      await writeRaw(remote.id, remote);
+      await writeRaw(merged.id, merged);
       return true;
     });
     if (applied) changed += 1;
@@ -534,7 +665,7 @@ export function deleteEpisode(loomId, episodeId) {
 
 const NODE_PATCH_FIELDS = [
   'title', 'prose', 'imagePrompt', 'videoPrompt', 'cameraMovement', 'playbackMode',
-  'audienceConnection', 'videoHistoryId', 'playbackAssets', 'interactionWindow',
+  'audienceConnection', 'visualCanon', 'videoHistoryId', 'playbackAssets', 'interactionWindow',
   'isEnding', 'endingLabel', 'pos', 'transitions',
 ];
 
@@ -660,7 +791,7 @@ export function deleteNodeTransition(loomId, episodeId, nodeId, transitionId) {
  * updated node (or null when the loom/episode/node has since been deleted —
  * the hook logs and moves on rather than erroring).
  */
-export async function attachNodeImage(loomId, episodeId, nodeId, { filename, jobId }) {
+export async function attachNodeImage(loomId, episodeId, nodeId, { filename, jobId, visualConditioning = null }) {
   if (!isValidLoomId(loomId) || !isSafeImageFilename(filename)) return null;
   const updated = await mutateLoom(loomId, (loom) => {
     const episode = loom.episodes.find((e) => e.id === episodeId);
@@ -668,6 +799,8 @@ export async function attachNodeImage(loomId, episodeId, nodeId, { filename, job
     if (!node) return null;
     node.image = filename;
     node.imageJobId = isStr(jobId) ? jobId : null;
+    node.visualConditioning = visualConditioning;
+    if (node.visualCanon) node.visualCanon.storyboardImageApproved = false;
     episode.updatedAt = new Date().toISOString();
     return loom;
   }).catch(() => null);
@@ -679,13 +812,14 @@ export async function attachNodeImage(loomId, episodeId, nodeId, { filename, job
  * are also the generated filenames under data/videos, but are kept as ids so
  * the node can use the same history/media conventions as other video surfaces.
  */
-export async function attachNodeVideo(loomId, episodeId, nodeId, { videoHistoryId }) {
+export async function attachNodeVideo(loomId, episodeId, nodeId, { videoHistoryId, visualConditioning = null }) {
   if (!isValidLoomId(loomId) || !isSafeVideoHistoryId(videoHistoryId)) return null;
   const updated = await mutateLoom(loomId, (loom) => {
     const episode = loom.episodes.find((e) => e.id === episodeId);
     const node = episode?.nodes.find((n) => n.id === nodeId);
     if (!node) return null;
     node.videoHistoryId = videoHistoryId;
+    node.visualConditioning = visualConditioning;
     episode.updatedAt = new Date().toISOString();
     return loom;
   }).catch(() => null);

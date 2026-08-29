@@ -233,6 +233,38 @@ describe('loom CRUD', () => {
     expect(await getLoom(local.id)).toBeNull();
   });
 
+  it('preserves v2 visual production fields when a v1 peer wins an unrelated LWW edit', async () => {
+    let loom = await makeLoom({ name: 'Local production' });
+    loom = await addEpisode(loom.id, { title: 'Pilot' });
+    loom = await addNode(loom.id, loom.episodes[0].id, {
+      title: 'Bound shot',
+      visualCanon: { mode: 'locked', characterAppearances: [{ characterId: 'char-a' }] },
+    });
+    const node = loom.episodes[0].nodes[0];
+    await attachNodeImage(loom.id, loom.episodes[0].id, node.id, {
+      filename: 'bound-shot.png',
+      jobId: 'job-visual',
+      visualConditioning: {
+        version: 1, compilerVersion: '1.0.0', status: 'locked', universeId: 'uni-1',
+      },
+    });
+    loom = await getLoom(loom.id);
+    const remoteV1 = {
+      ...loom,
+      name: 'Renamed by v1 peer',
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      episodes: loom.episodes.map((episode) => ({
+        ...episode,
+        nodes: episode.nodes.map(({ visualCanon: _canon, visualConditioning: _conditioning, ...rest }) => rest),
+      })),
+    };
+
+    await mergeLoomsFromSync([remoteV1], { senderSchemaVersions: { fableLoom: 1 } });
+    const mergedNode = (await getLoom(loom.id)).episodes[0].nodes[0];
+    expect(mergedNode.visualCanon).toMatchObject({ mode: 'locked', characterAppearances: [{ characterId: 'char-a' }] });
+    expect(mergedNode.visualConditioning).toMatchObject({ version: 1, compilerVersion: '1.0.0' });
+  });
+
   it('journals divergent story edits and can restore the authored snapshot', async () => {
     const local = await makeLoom({ name: 'Local story', premise: 'Local premise' });
     const base = { ...local, name: 'Shared story', premise: 'Shared premise' };
@@ -558,6 +590,31 @@ describe('attachNodeImage', () => {
     const attached = await attachNodeImage(loom.id, episodeId, node.id, { filename: 'job-1.png', jobId: 'job-1' });
     expect(attached).toMatchObject({ id: node.id, image: 'job-1.png', imageJobId: 'job-1' });
     expect((await getLoom(loom.id)).episodes[0].nodes[0].image).toBe('job-1.png');
+  });
+
+  it('stores render provenance and clears storyboard approval when a new image lands', async () => {
+    const loom = await makeLoom();
+    let updated = await addEpisode(loom.id, {});
+    const episodeId = updated.episodes[0].id;
+    updated = await addNode(loom.id, episodeId, {
+      title: 'A', visualCanon: { mode: 'locked', storyboardImageApproved: true },
+    });
+    const node = updated.episodes[0].nodes[0];
+    const visualConditioning = {
+      version: 1, compilerVersion: '1.0.0', status: 'locked',
+      capability: { kind: 'image', backend: 'local', referenceRoles: ['character-neutral'], injected: 'x'.repeat(1000) },
+      bindings: { inferred: false, characterAppearances: [{ characterId: 'char-a' }], injected: 'x'.repeat(1000) },
+      assets: [{ role: 'character-neutral', bindingId: 'char-a', filename: 'identity.png', path: '/private/identity.png' }],
+      adapters: [], omitted: [], warnings: [],
+    };
+    const attached = await attachNodeImage(loom.id, episodeId, node.id, {
+      filename: 'job-2.png', jobId: 'job-2', visualConditioning,
+    });
+    expect(attached.visualCanon.storyboardImageApproved).toBe(false);
+    expect(attached.visualConditioning).toMatchObject({ version: 1, status: 'locked' });
+    expect(JSON.stringify(attached.visualConditioning)).not.toContain('/private/');
+    expect(attached.visualConditioning.capability.injected).toBeUndefined();
+    expect(attached.visualConditioning.bindings.injected).toBeUndefined();
   });
 
   it('returns null (no throw) when the target is gone or the filename is unsafe', async () => {

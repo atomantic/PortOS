@@ -172,6 +172,7 @@ export function buildCodexAttachmentPrefix({ initPath, referenceCount, initImage
 export async function generateImage({
   codexPath, model, effort, prompt = '', width, height, negativePrompt,
   initImagePath, initImageStrength, referenceImagePaths = [],
+  visualConditioning = null,
   jobId: providedJobId = null,
   cleanC2PA = false,
   denoise = false,
@@ -259,6 +260,7 @@ export async function generateImage({
     id: jobId, prompt: prompt.trim(), negativePrompt: negativePrompt || '',
     width: width ? Number(width) : null, height: height ? Number(height) : null,
     filename, mode: IMAGE_GEN_MODE.CODEX, model: effectiveModel,
+    ...(visualConditioning ? { visualConditioning } : {}),
     createdAt: new Date().toISOString(),
   };
   const job = { ...meta, clients: [], status: 'running' };

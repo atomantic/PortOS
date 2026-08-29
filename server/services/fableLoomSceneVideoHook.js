@@ -25,8 +25,11 @@ const hook = createMediaJobImageHook({
   serializeKey: ({ loomId }) => loomId,
   sceneKey: ({ loomId, episodeId, nodeId }) => `${loomId}:${episodeId}:${nodeId}`,
   describe: ({ loomId, nodeId }) => `${loomId.slice(0, 13)}/${nodeId.slice(0, 13)}`,
-  attach: ({ loomId, episodeId, nodeId, videoHistoryId }) =>
-    attachNodeVideo(loomId, episodeId, nodeId, { videoHistoryId }),
+  attach: ({ loomId, episodeId, nodeId, videoHistoryId, job }) =>
+    attachNodeVideo(loomId, episodeId, nodeId, {
+      videoHistoryId,
+      ...(job.params?.visualConditioning ? { visualConditioning: job.params.visualConditioning } : {}),
+    }),
   onAttached: ({ loomId, nodeId, videoHistoryId }, result) => {
     if (!result) return;
     console.log(`🎬 fableloom scene video ${loomId.slice(0, 13)}/${nodeId.slice(0, 13)} ← ${videoHistoryId}`);

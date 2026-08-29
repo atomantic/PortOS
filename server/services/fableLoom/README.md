@@ -8,6 +8,7 @@ intent to a transition and moves them through the graph until an ending.
 | Module | Purpose |
 |---|---|
 | `records.js` | Sanitizer + CRUD + peer LWW/tombstone merge for looms/episodes/nodes; transitions are addressable one at a time (`addNodeTransition` / `updateNodeTransition` / `deleteNodeTransition`) as well as replaceable as a whole array via the node patch; `attachNodeImage`, `attachNodeVideo`, and `attachNodePlaybackAsset` for media-job hooks. |
+| `visualConditioning.js` | Compiles stable scene canon bindings into capability-budgeted prompts, typed reference assets, local character adapters, and durable render provenance. |
 | `weave.js` | AI ops via `runStagedLLM`: `generateSeriesPlan` (full arc / plot-point / side-quest scaffold), `weaveEpisode` (single-camera-cut graph with automatic cuts and looping decisions), `branchNode` (grow paths), `feedbackEpisode` (apply a conversational sparse patch to one episode), `reviewEpisode` (critique + deterministic analysis), `playTurn` (reader intent → transition; tapped/automatic paths resolve with NO LLM call), `reformatEpisodeScenes` (rewrite ONE episode's scenes into another format; the loom's format pin lands only once every episode is converted). |
 | `formats.js` | Scene formats (`prose` / `teleplay`) and the prompt contracts each generative stage renders for them. |
 | `hostedSession.js` | Scoped QR-hosted play session lifecycle, HTTPS readiness preflight, token hashing, live voice gate revalidation, and half-duplex turn taking (#5383). |

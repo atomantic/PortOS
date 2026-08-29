@@ -5,6 +5,25 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { DEFAULT_CONTEXT_FRAMES, MAX_CONTEXT_FRAMES } from '../lib/videoContinuity.js';
 
+const compiledVisual = vi.hoisted(() => ({
+  version: 1, compilerVersion: '1.0.0', status: 'locked', assets: [], adapters: [], omitted: [], warnings: [],
+}));
+const compileFableLoomVisualRequest = vi.hoisted(() => vi.fn(async ({ authoredPrompt, authoredNegativePrompt, sourceImagePath }) => ({
+  prompt: authoredPrompt,
+  negativePrompt: authoredNegativePrompt || '',
+  referenceImagePaths: [],
+  referenceImageStrengths: [],
+  loraFilenames: [],
+  loraScales: [],
+  sourceImagePath,
+  visualConditioning: compiledVisual,
+})));
+const fableLoomVideoCapabilities = vi.hoisted(() => vi.fn(() => ({ version: 1, kind: 'video' })));
+vi.mock('../services/fableLoom/visualConditioning.js', () => ({
+  compileFableLoomVisualRequest,
+  fableLoomVideoCapabilities,
+}));
+
 const installProcess = vi.hoisted(() => {
   const spawn = vi.fn();
   const makeChild = () => {
@@ -76,7 +95,9 @@ vi.mock('../services/videoGen/local.js', () => ({
   // include it so the a2v happy-path tests don't trip the A2V_REQUIRES_LTX2
   // guard. Tests that need to exercise the legacy runtime override the mock
   // per-test via mockReturnValueOnce.
-  listVideoModels: vi.fn(() => [{ id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'ltx2' }]),
+  listVideoModels: vi.fn(() => [{
+    id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'ltx2', supportedModes: ['text', 'image', 'fflf'],
+  }]),
   defaultVideoModelId: vi.fn(() => 'ltx2_unified'),
   loadHistory: vi.fn(async () => []),
   getHistoryItem: vi.fn(async () => null),
@@ -493,7 +514,9 @@ describe('videoGen routes', () => {
     it('returns the static catalog', async () => {
       const r = await request(app).get('/api/video-gen/models');
       expect(r.status).toBe(200);
-      expect(r.body).toEqual([{ id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'ltx2' }]);
+      expect(r.body).toEqual([{
+        id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'ltx2', supportedModes: ['text', 'image', 'fflf'],
+      }]);
     });
   });
 
@@ -1010,7 +1033,32 @@ describe('videoGen routes', () => {
         params: expect.objectContaining({
           sourceImagePath: '/mock/images/scene-image.png',
           fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' },
+          visualConditioning: compiledVisual,
         }),
+      }));
+      expect(compileFableLoomVisualRequest).toHaveBeenCalledWith(expect.objectContaining({
+        tag: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' }, kind: 'video',
+      }));
+      expect(fableLoomVideoCapabilities).toHaveBeenCalledWith(expect.objectContaining({
+        backend: 'local',
+        model: expect.objectContaining({ supportedModes: expect.any(Array) }),
+      }));
+    });
+
+    it('converts an explicitly degraded FableLoom render to text mode when its frame is omitted', async () => {
+      compileFableLoomVisualRequest.mockResolvedValueOnce({
+        prompt: 'the gate slowly opens', negativePrompt: '', sourceImagePath: null,
+        visualConditioning: { ...compiledVisual, status: 'degraded' },
+      });
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'the gate slowly opens',
+        mode: 'image',
+        sourceImageFile: 'scene-image.png',
+        fableLoom: JSON.stringify({ loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' }),
+      });
+      expect(r.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        params: expect.objectContaining({ mode: 'text', sourceImagePath: null }),
       }));
     });
 

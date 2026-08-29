@@ -2882,7 +2882,7 @@ describe('peerSync', () => {
       });
       expect(mergeLoomsFromSync).toHaveBeenCalledWith(
         [expect.objectContaining({ id: 'loom-1' })],
-        { source: { via: 'peer-push', peerId: 'peer-a' } },
+        { source: { via: 'peer-push', peerId: 'peer-a' }, senderSchemaVersions: {} },
       );
     });
 

@@ -134,7 +134,9 @@ describe('cleanupMultipartTemp', () => {
 describe('prepareVideoGenParams', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    listVideoModels.mockReturnValue([{ id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'ltx2' }]);
+    listVideoModels.mockReturnValue([{
+      id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'ltx2', supportedModes: ['text', 'image', 'fflf'],
+    }]);
     loadHistory.mockResolvedValue([]);
   });
 
@@ -143,6 +145,7 @@ describe('prepareVideoGenParams', () => {
       const prepared = await prepare({ mode: 'image', chunks: 2 }, { sourceImage: upload('sourceImage') });
       expect(prepared.backend).toBe('local');
       expect(prepared.effectiveModelId).toBe('ltx2_unified');
+      expect(prepared.effectiveModel.supportedModes).toEqual(['text', 'image', 'fflf']);
       expect(prepared.effectiveChunks).toBe(2);
       expect(posix(prepared.sourceImagePath)).toMatch(/^\/mock\/uploads\/video-source-.*\.png$/);
       // The start-frame upload rides the legacy single field so already-persisted
@@ -150,6 +153,10 @@ describe('prepareVideoGenParams', () => {
       expect(prepared.uploadedTempPath).toBe(prepared.sourceImagePath);
       expect(prepared.uploadedTempPaths).toEqual([]);
       expect(unlinkedDurablePaths()).toEqual([]);
+
+      await prepared.discardSourceImage();
+      expect(unlinkedDurablePaths()).toEqual([posix(prepared.uploadedTempPath)]);
+      expect(unlink).toHaveBeenCalledWith('/tmp/multipart-sourceImage-frame.png');
     });
 
     it('short-circuits for grok without staging local-only inputs', async () => {
@@ -157,6 +164,7 @@ describe('prepareVideoGenParams', () => {
       expect(prepared.backend).toBe('grok');
       expect(prepared.grok.grokPath).toBe('/usr/bin/grok');
       expect(prepared.sourceImagePath).toBe('/mock/images/still.png');
+      expect(prepared.effectiveModel).toMatchObject({ id: 'grok', supportedModes: ['text', 'image'] });
       // The local-only fields are absent entirely — the route must not read them.
       expect(prepared.effectiveChunks).toBeUndefined();
       expect(prepared.loras).toBeUndefined();

@@ -43,6 +43,11 @@ const renderEditor = (transitions = [existingPath]) => {
       loom={loom}
       episode={episode}
       node={nodes[0]}
+      universe={{
+        characters: [{ id: 'char-1', name: 'Aria', wardrobes: [{ id: 'coat', name: 'Travel coat' }] }],
+        places: [{ id: 'place-1', name: 'Atrium' }],
+        objects: [{ id: 'object-1', name: 'Compass' }],
+      }}
       onLoomUpdate={onLoomUpdate}
       onClearSelection={() => {}}
       onGenerateImage={onGenerateImage}
@@ -134,6 +139,29 @@ describe('LoomNodeEditor paths', () => {
 });
 
 describe('LoomNodeEditor scene media', () => {
+  it('persists structured canon bindings and explicit storyboard approval', async () => {
+    const user = userEvent.setup();
+    updateLoomNode.mockResolvedValue({ id: 'loom-1' });
+    renderEditor();
+
+    await user.click(screen.getByLabelText('Bind this shot to Universe canon'));
+    await user.click(screen.getByLabelText('Aria'));
+    await user.selectOptions(screen.getByLabelText('Aria wardrobe'), 'coat');
+    await user.selectOptions(screen.getByLabelText('Location'), 'place-1');
+    await user.click(screen.getByLabelText('Compass'));
+    await user.click(screen.getByLabelText("Approve the current storyboard image as this shot's video first frame"));
+
+    await waitFor(() => expect(updateLoomNode).toHaveBeenLastCalledWith(
+      'loom-1', 'ep-1', 'n1',
+      { visualCanon: expect.objectContaining({
+        mode: 'locked',
+        characterAppearances: [expect.objectContaining({ characterId: 'char-1', wardrobeId: 'coat' })],
+        placeId: 'place-1', objectIds: ['object-1'], storyboardImageApproved: true,
+      }) },
+      { silent: true },
+    ));
+  });
+
   it('queues a local video from the teleplay scene and rendered still', async () => {
     const user = userEvent.setup();
     const { onGenerateVideo } = renderEditor();

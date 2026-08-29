@@ -53,6 +53,12 @@ export {
   isLoomFormat,
 } from './formats.js';
 export {
+  FABLELOOM_VISUAL_COMPILER_VERSION,
+  compileFableLoomVisualRequest,
+  fableLoomImageCapabilities,
+  fableLoomVideoCapabilities,
+} from './visualConditioning.js';
+export {
   DEFAULT_SESSION_TTL_MINUTES,
   MAX_SESSION_TTL_MINUTES,
   _getInternalSession,

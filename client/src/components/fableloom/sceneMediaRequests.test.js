@@ -17,7 +17,7 @@ describe('FableLoom scene media request composition', () => {
     });
   });
 
-  it('conditions an image on its rendered direct predecessor, not an unrelated adjacent scene', () => {
+  it('leaves typed continuity allocation to the server-side compiler', () => {
     const target = { id: 'node-3', imagePrompt: 'the scout enters a crystal observatory' };
     const episode = {
       nodes: [
@@ -31,11 +31,9 @@ describe('FableLoom scene media request composition', () => {
       ],
     };
 
-    expect(buildFableLoomImageRequest({ loom, episode, episodeId: 'ep-1', node: target }))
-      .toMatchObject({
-        referenceImageFiles: ['prior-shot.png'],
-        referenceStrengths: [0.4],
-      });
+    const request = buildFableLoomImageRequest({ loom, episode, episodeId: 'ep-1', node: target });
+    expect(request).not.toHaveProperty('referenceImageFiles');
+    expect(request.fableLoom).toEqual({ loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-3' });
   });
 
   it('keeps an opening scene text-to-image when a loop points back to it', () => {

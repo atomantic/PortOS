@@ -45,12 +45,6 @@ import {
   weaveLoomEpisode,
 } from '../services/api';
 
-const CONTINUITY_FALLBACK_CODES = new Set([
-  'IMAGE_EDIT_UNSUPPORTED_MODE',
-  'REFERENCE_IMAGE_NOT_FOUND',
-  'REFERENCE_IMAGES_FLUX2_ONLY',
-]);
-
 export default function FableLoomStory({ view = 'graph' }) {
   const { loomId, episodeId, nodeId } = useParams();
   const navigate = useNavigate();
@@ -192,7 +186,13 @@ export default function FableLoomStory({ view = 'graph' }) {
       ...prev,
       episodes: prev.episodes.map((item) => ({
         ...item,
-        nodes: item.nodes.map((scene) => (scene.id === targetNodeId ? { ...scene, ...patch } : scene)),
+        nodes: item.nodes.map((scene) => (scene.id === targetNodeId ? {
+          ...scene,
+          ...patch,
+          ...(patch.image && scene.visualCanon ? {
+            visualCanon: { ...scene.visualCanon, storyboardImageApproved: false },
+          } : {}),
+        } : scene)),
       })),
     } : prev));
   }, []);
@@ -227,20 +227,13 @@ export default function FableLoomStory({ view = 'graph' }) {
     }
 
     setSceneMediaJob(targetNode.id, 'image', { jobId: null, status: 'submitting', progress: 0 });
-    const imageRequest = (includeContinuity) => buildFableLoomImageRequest({
+    const imageRequest = buildFableLoomImageRequest({
       loom,
-      episode: includeContinuity ? episode : null,
       episodeId,
       node: targetNode,
       stylePreset: sceneStylePreset,
     });
-    let continuityFallbackCode = null;
-    const queued = await generateImage(imageRequest(true), { silent: true })
-      .catch((err) => {
-        if (!CONTINUITY_FALLBACK_CODES.has(err.code)) throw err;
-        continuityFallbackCode = err.code;
-        return generateImage(imageRequest(false), { silent: true });
-      })
+    const queued = await generateImage(imageRequest, { silent: true })
       .catch((err) => {
         setSceneMediaJob(targetNode.id, 'image', {
           jobId: null, status: 'failed', progress: 0, error: err.message || 'Could not start the render',
@@ -249,11 +242,6 @@ export default function FableLoomStory({ view = 'graph' }) {
         return null;
       });
     if (!queued) return null;
-    if (continuityFallbackCode) {
-      toast.warning(continuityFallbackCode === 'REFERENCE_IMAGE_NOT_FOUND'
-        ? 'The prior shot image is missing — rendering this scene without continuity conditioning'
-        : 'The current image backend cannot use the prior shot — rendering this scene without continuity conditioning');
-    }
     // External SD-API renders synchronously: its generationId identifies the
     // completed request, not a media-job record. The server has already filed
     // the image onto the scene, so swap the preview immediately and do not
@@ -585,6 +573,7 @@ export default function FableLoomStory({ view = 'graph' }) {
                 loom={loom}
                 episode={episode}
                 node={node}
+                universe={linkedUniverse}
                 onLoomUpdate={setLoom}
                 onClearSelection={() => navigate(episodePath(episode.id))}
                 mediaJobs={mediaJobs[node.id]}

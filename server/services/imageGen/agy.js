@@ -213,6 +213,7 @@ export async function generateImage({
   initImagePath,
   initImageStrength,
   referenceImagePaths = [],
+  visualConditioning = null,
   jobId: providedJobId = null,
   cleanC2PA = false,
   denoise = false,
@@ -259,6 +260,7 @@ export async function generateImage({
     // renders on Antigravity's fixed server-side backend — record it so
     // provenance names the model that actually produced the pixels (#3231).
     imageModel: AGY_IMAGEGEN_IMAGE_MODEL,
+    ...(visualConditioning ? { visualConditioning } : {}),
     createdAt: new Date().toISOString(),
   };
   const job = { ...meta, clients: [], status: 'running' };

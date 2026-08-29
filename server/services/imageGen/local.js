@@ -333,6 +333,7 @@ export function buildSidecarMeta({
   initImageStrength = null,
   referenceImagePaths = [],
   referenceImageStrengths = [],
+  visualConditioning = null,
   // SynthID-defeat regen lineage. When `regenOf` is set, this render is a
   // post-hoc round-trip of an existing gallery image through local FLUX
   // img2img (issue #912) — stamp the source filename as `cleanedFrom` (so the
@@ -413,7 +414,7 @@ export function buildSidecarMeta({
   // a Flux2KVLayerCache.store + _flux2_kv_causal_attention patch that scales
   // each reference's V slice by the corresponding strength (1.0 = upstream
   // baseline, 0.0 = ignored). Mirrors the Python sidecar's `referenceStrengths`.
-  const meta = { id: jobId, prompt, negativePrompt, modelId, seed: actualSeed, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, quantize, filename, loraFilenames: validLoraFilenames, loraPaths: validLoras, loraScales, initImageFilename: validInitImagePath ? basename(validInitImagePath) : null, initImageStrength: validInitImageStrength, referenceImageFilenames: validReferenceImagePaths.map((p) => basename(p)), referenceImageStrengths: validReferenceImageStrengths, createdAt: now() };
+  const meta = { id: jobId, prompt, negativePrompt, modelId, seed: actualSeed, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, quantize, filename, loraFilenames: validLoraFilenames, loraPaths: validLoras, loraScales, initImageFilename: validInitImagePath ? basename(validInitImagePath) : null, initImageStrength: validInitImageStrength, referenceImageFilenames: validReferenceImagePaths.map((p) => basename(p)), referenceImageStrengths: validReferenceImageStrengths, ...(visualConditioning ? { visualConditioning } : {}), createdAt: now() };
   // Regen lineage (issue #912). `regenOf` is the source gallery filename this
   // render was generated from. We reuse the existing `cleanedFrom` field so the
   // lightbox's `computeImageVariantGroup` groups the regen under its source with
@@ -530,7 +531,7 @@ export function parseImageExecutionMarker(line) {
   };
 }
 
-export async function generateImage({ pythonPath, prompt = '', negativePrompt = '', modelId = LOCAL_IMAGEGEN_DEFAULT_MODEL, width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], jobId: providedJobId = null, cleanC2PA = false, denoise = false, regenOf = null, upscaleTo = null, outputTarget = null }) {
+export async function generateImage({ pythonPath, prompt = '', negativePrompt = '', modelId = LOCAL_IMAGEGEN_DEFAULT_MODEL, width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], visualConditioning = null, jobId: providedJobId = null, cleanC2PA = false, denoise = false, regenOf = null, upscaleTo = null, outputTarget = null }) {
   // Empty prompt is allowed: img2img / edit / unconditional renders are driven
   // by the init image (or run unconditionally), so text isn't required. The
   // mflux/diffusers runners accept an empty `--prompt` — the regen pass (#912)
@@ -618,6 +619,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     initImageStrength,
     referenceImagePaths,
     referenceImageStrengths,
+    visualConditioning,
     regenOf,
     loraTriggerWords,
     resolveInputPath: resolveImageInputPath,

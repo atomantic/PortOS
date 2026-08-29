@@ -183,35 +183,39 @@ nodeId }` destination tag. The completion hook
 (`server/services/fableLoomSceneImageHook.js`) files the finished render onto
 the node durably — even if the editor unmounted mid-render — with
 newest-render-wins per node. The loom's `styleNotes` are appended to the
-prompt for a consistent look. When a direct incoming scene already has a
-rendered still, its gallery filename is also sent as the next scene's init
-image at `0.4` strength. Graph edges, not node-array adjacency, define which
-shot is prior; at a convergence the first rendered incoming scene in stable
-episode order is the deterministic authoring-time source because there is no
-active reader path yet. Opening scenes and scenes without a rendered incoming
-neighbor remain text-to-image.
+prompt for a consistent look. The browser sends no untyped continuity images:
+`visualConditioning.js` resolves the current node, linked Universe, stable
+character/wardrobe/location/object ids, approved identity assets, compatible
+local character LoRAs, and graph predecessor on the server after the effective
+backend/model is known. A locked convergence uses an explicitly selected
+incoming node; without one it reports the ambiguity instead of guessing.
+Openings never inherit a loop-back shot.
 
-Continuity conditioning is best-effort for the current stopgap: if the active
-backend is text-to-image-only, or the predecessor's gallery file has since been
-removed, the editor warns and retries the scene without the init image rather
-than blocking production. Canon-locked generation will replace that fallback
-with an explicit capability gate in the planned typed-reference workflow.
+The scene editor's **Universe canon** section chooses locked or explicitly
+degraded-draft behavior. Locked image renders fail before enqueue if an
+identity package is incomplete, a required reference is unavailable or over
+budget, or the backend does not declare multi-character preservation. Draft
+renders remain usable but record every omitted input and warning. Each render
+stores a versioned `visualConditioning` manifest with bindings, backend
+capabilities, selected asset basenames, adapter SHA-256/scales, compiler
+version, temporal source, and omissions; machine-local paths never enter the
+loom or Universe record.
 
 **Generate video** prefers the node's dedicated single-clip `videoPrompt`, adds
 the selected movement's production direction from the shared camera registry,
 and falls back to scene text for legacy nodes. The registry includes dolly,
 truck, pan/tilt, crane, orbit, tracking, handheld, drone, focus, roll, parallax,
 body-mounted, bullet-time, hyperlapse, and locked-off setups. If the node has a
-rendered image, it becomes the video's first-frame conditioning image;
-otherwise the render is text-to-video. The completion hook
+rendered image, a locked scene also requires the author to approve that exact
+storyboard as the first-frame contract; replacing the still clears approval.
+Text-to-video and stale/unapproved first frames can render only as explicit
+draft/degraded work. The completion hook
 (`server/services/fableLoomSceneVideoHook.js`) files the finished
 `videoHistoryId` onto the node durably, with newest-render-wins per node.
 Decision videos are authored as seamless loops; automatic-cut videos land on
 a final beat that hands cleanly to the next node.
 
-The broader character/environment canon-reference design, including structured
-scene bindings, provider input budgets, prompt compilation, provenance, and
-branch convergence, is specified in
+The character/environment canon-reference design and rationale is specified in
 [`docs/plans/2026-08-29-fableloom-visual-continuity.md`](../plans/2026-08-29-fableloom-visual-continuity.md).
 The character voice, production provenance, playback-asset, QR join, and
 two-device hosted-mode contracts are specified in
