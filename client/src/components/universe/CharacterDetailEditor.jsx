@@ -13,7 +13,7 @@
 import {
   Plus, Trash2, WandSparkles, Loader2,
   Palette, Hand, Smile, Package, BookOpen, Eye, Activity, Users, Swords,
-  Drama, KeyRound,
+  Drama, KeyRound, Mic, Images, BadgeCheck,
 } from 'lucide-react';
 import { BIBLE_LIMITS as L } from '../../lib/bibleLimits';
 import useFieldDraft from '../../hooks/useFieldDraft';
@@ -82,6 +82,12 @@ const RELATIONSHIP_OPPOSITION_AXES = Object.freeze([
 // the field. `''` = unset.
 const CHARACTER_ARC_TYPES = Object.freeze(['positive', 'negative', 'flat']);
 const SLIDER_AXES = Object.freeze(['proactivity', 'likability', 'competence']);
+const VOICE_SOURCE_POLICIES = Object.freeze(['designed', 'consented-performance', 'licensed']);
+const IDENTITY_ASSET_ROLES = Object.freeze([
+  'neutral', 'profile', 'full-body', 'expression-gesture', 'wardrobe',
+  'prop-scale', 'negative-identity',
+]);
+const REQUIRED_IDENTITY_ROLES = Object.freeze(['neutral', 'profile', 'full-body']);
 
 const LIST_SECTIONS = Object.freeze([
   {
@@ -593,6 +599,193 @@ function ArcFrameworkControls({ entry, onPatch, disabled, idPrefix }) {
   );
 }
 
+const splitProductionTerms = (value, max) => value.split(',').map((item) => item.trim()).filter(Boolean).slice(0, max);
+
+function VoiceCanonPronunciationRow({ row, idx, onChange, onRemove, disabled }) {
+  const term = useFieldDraft(row.term || '', (value) => onChange({ term: value }));
+  const pronunciation = useFieldDraft(row.pronunciation || '', (value) => onChange({ pronunciation: value }));
+  return (
+    <div className="flex items-start gap-1.5">
+      <input
+        type="text" value={term.value} onChange={term.onChange} onBlur={term.onBlur}
+        maxLength={L.VOICE_CANON_PRONUNCIATION_TERM_MAX} placeholder="term"
+        disabled={disabled} aria-label={`pronunciation ${idx + 1} term`}
+        className={REL_SELECT_CLASS}
+      />
+      <input
+        type="text" value={pronunciation.value} onChange={pronunciation.onChange} onBlur={pronunciation.onBlur}
+        maxLength={L.VOICE_CANON_PRONUNCIATION_VALUE_MAX} placeholder="how it is said"
+        disabled={disabled} aria-label={`pronunciation ${idx + 1} pronunciation`}
+        className={REL_SELECT_CLASS}
+      />
+      <button
+        type="button" onClick={onRemove} disabled={disabled}
+        title="Remove pronunciation" aria-label={`remove pronunciation ${idx + 1}`}
+        className="shrink-0 text-gray-500 hover:text-port-error disabled:opacity-30"
+      >
+        <Trash2 size={12} />
+      </button>
+    </div>
+  );
+}
+
+function VoiceCanonSection({ entry, onPatch, disabled }) {
+  const canon = entry.voiceCanon || {};
+  const commit = (patch) => onPatch?.({
+    voiceCanon: { version: 1, ...canon, ...patch },
+  });
+  const description = useFieldDraft(canon.description || '', (value) => commit({ description: value }));
+  const delivery = useFieldDraft(canon.defaultDelivery || '', (value) => commit({ defaultDelivery: value }));
+  const emotionalRange = useFieldDraft((canon.emotionalRange || []).join(', '), (value) => commit({
+    emotionalRange: splitProductionTerms(value, L.VOICE_CANON_RANGE_MAX),
+  }));
+  const avoid = useFieldDraft((canon.avoid || []).join(', '), (value) => commit({
+    avoid: splitProductionTerms(value, L.VOICE_CANON_AVOID_MAX),
+  }));
+  const pronunciations = Array.isArray(canon.pronunciations) ? canon.pronunciations : [];
+  const approved = canon.approved === true;
+  return (
+    <BoxedSection icon={Mic} label="Voice canon" summary={approved ? `v${canon.version || 1} approved` : 'candidate'}>
+      <p className="text-[10px] leading-snug text-gray-500">
+        Portable performance direction only. Local profiles, recordings, providers, and model artifacts stay machine-local.
+      </p>
+      <div className="grid grid-cols-2 gap-1.5">
+        <div>
+          <label htmlFor={`voice-canon-version-${entry.id}`} className="block text-[10px] uppercase tracking-wider text-gray-500">Revision</label>
+          <input
+            id={`voice-canon-version-${entry.id}`} type="number" min="1" max={L.VOICE_CANON_VERSION_MAX}
+            value={canon.version || 1} onChange={(e) => commit({ version: Number(e.target.value) || 1 })}
+            disabled={disabled} className={REL_INPUT_CLASS}
+          />
+        </div>
+        <div>
+          <label htmlFor={`voice-canon-source-${entry.id}`} className="block text-[10px] uppercase tracking-wider text-gray-500">Source policy</label>
+          <select
+            id={`voice-canon-source-${entry.id}`} value={canon.sourcePolicy || ''}
+            onChange={(e) => commit({ sourcePolicy: e.target.value || null })} disabled={disabled}
+            className={REL_INPUT_CLASS}
+          >
+            <option value="">— unset —</option>
+            {VOICE_SOURCE_POLICIES.map((policy) => <option key={policy} value={policy}>{policy}</option>)}
+          </select>
+        </div>
+      </div>
+      <label className="flex items-center gap-1.5 text-[11px] text-gray-300">
+        <input type="checkbox" checked={approved} onChange={(e) => commit({ approved: e.target.checked })} disabled={disabled} />
+        <BadgeCheck size={12} className={approved ? 'text-port-success' : 'text-gray-500'} />
+        {approved ? 'Approved revision' : 'Candidate revision'}
+      </label>
+      <textarea
+        value={description.value} onChange={description.onChange} onBlur={description.onBlur}
+        placeholder="Voice description: timbre, texture, breath, and register"
+        maxLength={L.VOICE_CANON_DESCRIPTION_MAX} disabled={disabled} rows={2}
+        aria-label="voice canon description" className={REL_INPUT_CLASS}
+      />
+      <textarea
+        value={delivery.value} onChange={delivery.onChange} onBlur={delivery.onBlur}
+        placeholder="Default delivery: pacing, pauses, energy, and distance"
+        maxLength={L.VOICE_CANON_DELIVERY_MAX} disabled={disabled} rows={2}
+        aria-label="voice canon default delivery" className={REL_INPUT_CLASS}
+      />
+      <input
+        type="text" value={emotionalRange.value} onChange={emotionalRange.onChange} onBlur={emotionalRange.onBlur}
+        placeholder="Emotional range, comma-separated" maxLength={L.VOICE_CANON_RANGE_MAX * L.VOICE_CANON_RANGE_ITEM_MAX}
+        disabled={disabled} aria-label="voice canon emotional range" className={REL_INPUT_CLASS}
+      />
+      <input
+        type="text" value={avoid.value} onChange={avoid.onChange} onBlur={avoid.onBlur}
+        placeholder="Avoid in delivery, comma-separated" maxLength={L.VOICE_CANON_AVOID_MAX * L.VOICE_CANON_AVOID_ITEM_MAX}
+        disabled={disabled} aria-label="voice canon avoid" className={REL_INPUT_CLASS}
+      />
+      <div className="space-y-1">
+        <span className="block text-[10px] uppercase tracking-wider text-gray-500">Pronunciations</span>
+        {pronunciations.map((row, idx) => (
+          <VoiceCanonPronunciationRow
+            key={`${row.term}-${idx}`} row={row} idx={idx} disabled={disabled}
+            onChange={(patch) => commit({ pronunciations: pronunciations.map((item, i) => i === idx ? { ...item, ...patch } : item) })}
+            onRemove={() => commit({ pronunciations: pronunciations.filter((_, i) => i !== idx) })}
+          />
+        ))}
+        <button
+          type="button" disabled={disabled || pronunciations.length >= L.VOICE_CANON_PRONUNCIATIONS_MAX}
+          onClick={() => commit({ pronunciations: [...pronunciations, { term: '', pronunciation: '' }] })}
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+        >
+          <Plus size={10} /> Add pronunciation
+        </button>
+      </div>
+    </BoxedSection>
+  );
+}
+
+function IdentityPackSection({ entry, onPatch, disabled }) {
+  const pack = entry.identityPack || {};
+  const assets = Array.isArray(pack.assets) ? pack.assets : [];
+  const approved = assets.filter((asset) => asset?.approved === true);
+  const counts = new Map();
+  for (const asset of approved) counts.set(asset.role, (counts.get(asset.role) || 0) + 1);
+  const missing = REQUIRED_IDENTITY_ROLES.filter((role) => !counts.get(role));
+  const ambiguous = REQUIRED_IDENTITY_ROLES.filter((role) => (counts.get(role) || 0) > 1);
+  const status = ambiguous.length ? 'ambiguous' : missing.length ? 'missing' : 'ready';
+  const commit = (patch) => onPatch?.({ identityPack: { ...pack, ...patch } });
+  const add = () => {
+    const imageRef = entry.imageRefs?.[0];
+    if (!imageRef) return;
+    commit({ assets: [...assets, { imageRef, role: 'neutral', approved: false }] });
+  };
+  return (
+    <BoxedSection icon={Images} label="Identity pack" summary={status}>
+      <p className="text-[10px] leading-snug text-gray-500">
+        Curate existing character references. Canon-locked production requires one approved neutral, profile, and full-body reference; duplicate approved roles are ambiguous.
+      </p>
+      {assets.length ? (
+        <div className="space-y-1.5">
+          {assets.map((asset, idx) => (
+            <div key={`${asset.role}-${asset.imageRef}-${idx}`} className="flex items-center gap-1.5">
+              <select
+                value={asset.imageRef} disabled={disabled} aria-label={`identity asset ${idx + 1} image`}
+                onChange={(e) => commit({ assets: assets.map((item, i) => i === idx ? { ...item, imageRef: e.target.value } : item) })}
+                className={REL_SELECT_CLASS}
+              >
+                {(entry.imageRefs || []).map((ref) => <option key={ref} value={ref}>{ref}</option>)}
+              </select>
+              <select
+                value={asset.role} disabled={disabled} aria-label={`identity asset ${idx + 1} role`}
+                onChange={(e) => commit({ assets: assets.map((item, i) => i === idx ? { ...item, role: e.target.value } : item) })}
+                className="w-32 shrink-0 px-1.5 py-0.5 text-xs bg-port-bg border border-port-border rounded text-white disabled:opacity-50"
+              >
+                {IDENTITY_ASSET_ROLES.map((role) => <option key={role} value={role}>{role}</option>)}
+              </select>
+              <label className="inline-flex items-center gap-1 text-[10px] text-gray-300 whitespace-nowrap">
+                <input
+                  type="checkbox" checked={asset.approved === true} disabled={disabled}
+                  onChange={(e) => commit({ assets: assets.map((item, i) => i === idx ? { ...item, approved: e.target.checked } : item) })}
+                /> Approve
+              </label>
+              <button
+                type="button" disabled={disabled} onClick={() => commit({ assets: assets.filter((_, i) => i !== idx) })}
+                title="Remove identity asset" aria-label={`remove identity asset ${idx + 1}`}
+                className="shrink-0 text-gray-500 hover:text-port-error disabled:opacity-30"
+              >
+                <Trash2 size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : <p className="text-[11px] text-gray-500 italic">No identity assets curated yet.</p>}
+      {entry.imageRefs?.length ? (
+        <button
+          type="button" onClick={add} disabled={disabled || assets.length >= L.IDENTITY_PACK_ASSETS_MAX}
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+        >
+          <Plus size={10} /> Add reference
+        </button>
+      ) : <p className="text-[11px] text-gray-500 italic">Generate or attach a character reference before curating this pack.</p>}
+      {status !== 'ready' ? <p className="text-[10px] text-port-warning">{ambiguous.length ? `Ambiguous: ${ambiguous.join(', ')}` : `Missing: ${missing.join(', ')}`}</p> : null}
+    </BoxedSection>
+  );
+}
+
 export default function CharacterDetailEditor({ entry, onPatch, onExpand, expanding = false, disabled = false, characters = [] }) {
   if (!entry) return null;
 
@@ -655,6 +848,10 @@ export default function CharacterDetailEditor({ entry, onPatch, onExpand, expand
         disabled={disabled}
         idPrefix={entry.id}
       />
+
+      <VoiceCanonSection entry={entry} onPatch={onPatch} disabled={disabled} />
+
+      <IdentityPackSection entry={entry} onPatch={onPatch} disabled={disabled} />
 
       <RelationshipsSection
         entry={entry}

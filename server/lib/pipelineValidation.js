@@ -13,7 +13,10 @@ import { z } from 'zod';
 import { partialWithoutDefaults } from './zodCompat.js';
 import { WORK_KINDS, WORK_STATUSES, ANALYSIS_KINDS } from './writersRoomPresets.js';
 import { ALL_STYLE_IDS, STYLE_ID } from './writersRoomStylePresets.js';
-import { BIBLE_LIMITS, RELATIONSHIP_LINK_TYPES, RELATIONSHIP_OPPOSITION_AXES, ATTACHMENT_ROLES } from './storyBible.js';
+import {
+  BIBLE_LIMITS, RELATIONSHIP_LINK_TYPES, RELATIONSHIP_OPPOSITION_AXES,
+  ATTACHMENT_ROLES, VOICE_CANON_SOURCE_POLICIES, IDENTITY_ASSET_ROLES,
+} from './storyBible.js';
 import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from './aiToolkit/constants.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { CHECK_SCOPES, CHECK_SEVERITIES } from './editorial/checkRegistry.js';
@@ -424,6 +427,30 @@ const wrCharTextField = z.string().max(2000);
 // `engine:voiceName` (e.g. `kokoro:af_heart`). Nullable so a UI clear path
 // can null it explicitly.
 const wrVoiceIdField = z.string().trim().max(200).nullable();
+// Portable production metadata. The nested schemas intentionally contain no
+// provider/profile/path fields: those are machine-local voice/media concerns,
+// not Universe canon and not wire-safe record data.
+const voiceCanonField = z.object({
+  version: z.number().int().min(1).max(BIBLE_LIMITS.VOICE_CANON_VERSION_MAX).optional(),
+  description: z.string().max(BIBLE_LIMITS.VOICE_CANON_DESCRIPTION_MAX).optional(),
+  defaultDelivery: z.string().max(BIBLE_LIMITS.VOICE_CANON_DELIVERY_MAX).optional(),
+  emotionalRange: z.array(z.string().trim().min(1).max(BIBLE_LIMITS.VOICE_CANON_RANGE_ITEM_MAX)).max(BIBLE_LIMITS.VOICE_CANON_RANGE_MAX).optional(),
+  avoid: z.array(z.string().trim().min(1).max(BIBLE_LIMITS.VOICE_CANON_AVOID_ITEM_MAX)).max(BIBLE_LIMITS.VOICE_CANON_AVOID_MAX).optional(),
+  pronunciations: z.array(z.object({
+    term: z.string().trim().min(1).max(BIBLE_LIMITS.VOICE_CANON_PRONUNCIATION_TERM_MAX),
+    pronunciation: z.string().trim().min(1).max(BIBLE_LIMITS.VOICE_CANON_PRONUNCIATION_VALUE_MAX),
+  }).strict()).max(BIBLE_LIMITS.VOICE_CANON_PRONUNCIATIONS_MAX).optional(),
+  sourcePolicy: z.enum(VOICE_CANON_SOURCE_POLICIES).nullable().optional(),
+  approved: z.boolean().optional(),
+}).strict();
+const identityPackField = z.object({
+  assets: z.array(z.object({
+    role: z.enum(IDENTITY_ASSET_ROLES),
+    imageRef: z.string().trim().min(1).max(BIBLE_LIMITS.IMAGE_REF_MAX),
+    approved: z.boolean().optional(),
+  }).strict()).max(BIBLE_LIMITS.IDENTITY_PACK_ASSETS_MAX).optional(),
+  avoid: z.array(z.string().trim().min(1).max(BIBLE_LIMITS.IDENTITY_PACK_AVOID_ITEM_MAX)).max(BIBLE_LIMITS.IDENTITY_PACK_AVOID_MAX).optional(),
+}).strict();
 // Wardrobe array (A2). `id` is omitted on POSTs by the UI — the sanitizer
 // fills it from the server-side UUID factory. Limits sourced from
 // BIBLE_LIMITS so bumping the constant updates Zod automatically.
@@ -462,6 +489,8 @@ export const writersRoomCharacterCreateSchema = z.object({
   background: wrCharTextField.optional(),
   notes: wrCharTextField.optional(),
   voiceId: wrVoiceIdField.optional(),
+  voiceCanon: voiceCanonField.optional(),
+  identityPack: identityPackField.optional(),
   wardrobes: wrWardrobeField.optional(),
   relationshipLinks: wrRelationshipLinksField.optional(),
 }).strict();
@@ -474,6 +503,8 @@ export const writersRoomCharacterUpdateSchema = z.object({
   background: wrCharTextField.optional(),
   notes: wrCharTextField.optional(),
   voiceId: wrVoiceIdField.optional(),
+  voiceCanon: voiceCanonField.optional(),
+  identityPack: identityPackField.optional(),
   wardrobes: wrWardrobeField.optional(),
   relationshipLinks: wrRelationshipLinksField.optional(),
 }).strict();

@@ -67,7 +67,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // same rationale as v6/v7/v8: additive + gracefully degrading, but an older
   // peer that re-sanitizes a universe through its moodBoardId-unaware
   // `sanitizeTemplate` would silently strip the link and LWW the loss back.
-  universes: 9,
+  // v10 = character `voiceCanon` and `identityPack` added (#5378). These are
+  // portable, federated production-canon fields; a ≤v9 peer would sanitize
+  // them away and LWW the loss back after an unrelated Universe edit.
+  universes: 10,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode

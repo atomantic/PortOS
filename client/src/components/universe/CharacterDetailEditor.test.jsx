@@ -163,3 +163,26 @@ describe('CharacterDetailEditor — character framework (#2175)', () => {
     expect(screen.getByDisplayValue('I only matter if I win')).toBeInTheDocument();
   });
 });
+
+describe('CharacterDetailEditor — production package (#5378)', () => {
+  it('marks a voice-canon revision as approved', () => {
+    const onPatch = vi.fn();
+    render(<CharacterDetailEditor entry={ARIA} characters={[ARIA]} onPatch={onPatch} />);
+    fireEvent.click(screen.getByRole('button', { name: /Voice canon/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /Candidate revision/i }));
+    expect(onPatch).toHaveBeenCalledWith({
+      voiceCanon: { version: 1, approved: true },
+    });
+  });
+
+  it('adds an identity reference as a candidate and surfaces missing required roles', () => {
+    const onPatch = vi.fn();
+    render(<CharacterDetailEditor entry={{ ...ARIA, imageRefs: ['neutral.png'] }} characters={[ARIA]} onPatch={onPatch} />);
+    fireEvent.click(screen.getByRole('button', { name: /Identity pack/i }));
+    expect(screen.getByText(/Missing: neutral, profile, full-body/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Add reference/i }));
+    expect(onPatch).toHaveBeenCalledWith({
+      identityPack: { assets: [{ imageRef: 'neutral.png', role: 'neutral', approved: false }] },
+    });
+  });
+});

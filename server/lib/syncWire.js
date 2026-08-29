@@ -35,6 +35,44 @@ export function stripMusicVideoLocalRenderPins(record, { stripVideoBackend = tru
   return shared;
 }
 
+// Defense in depth for Universe character production packages (#5378). The
+// record sanitizer already allowlists these nested fields on normal reads and
+// writes, but peer sync is a privacy boundary: old/corrupt persisted records
+// must not send local profile ids, provider ids, artifact paths, recordings, or
+// performer/source material merely because they bypassed a normal PATCH.
+function stripUniverseCharacterLocalProductionFields(record) {
+  if (!Array.isArray(record.characters)) return record;
+  return {
+    ...record,
+    characters: record.characters.map((character) => {
+      if (!character || typeof character !== 'object' || Array.isArray(character)) return character;
+      const { voiceCanon, identityPack, ...characterRest } = character;
+      const portableVoiceCanon = voiceCanon && typeof voiceCanon === 'object' && !Array.isArray(voiceCanon)
+        ? (({ version, description, defaultDelivery, emotionalRange, avoid, pronunciations, sourcePolicy, approved }) => ({
+          version, description, defaultDelivery, emotionalRange, avoid, pronunciations, sourcePolicy, approved,
+        }))(voiceCanon)
+        : null;
+      const portableIdentityPack = identityPack && typeof identityPack === 'object' && !Array.isArray(identityPack)
+        ? {
+          ...(Array.isArray(identityPack.assets) ? {
+            assets: identityPack.assets.flatMap((asset) => (
+              asset && typeof asset === 'object' && !Array.isArray(asset)
+                ? [{ role: asset.role, imageRef: asset.imageRef, approved: asset.approved }]
+                : []
+            )),
+          } : {}),
+          ...(Array.isArray(identityPack.avoid) ? { avoid: identityPack.avoid } : {}),
+        }
+        : null;
+      return {
+        ...characterRest,
+        ...(portableVoiceCanon ? { voiceCanon: portableVoiceCanon } : {}),
+        ...(portableIdentityPack ? { identityPack: portableIdentityPack } : {}),
+      };
+    }),
+  };
+}
+
 // Single source of truth for what fields cross the federated-peer wire.
 //
 // Two transports carry universe / series / issue records between peers:
@@ -171,7 +209,8 @@ export function sanitizeRecordForWire(kind, record) {
       if (kind === 'universe' || kind === 'series') {
         const { imageMode: _imageMode, imageModelId: _imageModelId, ...noPinRest } = rest;
         if (kind === 'universe') {
-          const { styleImageRefs: _styleImageRefs, ...universeRest } = noPinRest;
+          const portableUniverse = stripUniverseCharacterLocalProductionFields(noPinRest);
+          const { styleImageRefs: _styleImageRefs, ...universeRest } = portableUniverse;
           return { ...universeRest, ...sanitizeSoftDeleteFields(record) };
         }
         return { ...noPinRest, ...sanitizeSoftDeleteFields(record) };
