@@ -41,6 +41,7 @@ const {
   canonHasRevealGated,
   revealGatedCanonRows,
   characterIdentityPackReadiness,
+  preserveLegacyCharacterProductionPackages,
 } = storyBible;
 
 const WORK_ID = 'wr-work-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
@@ -371,6 +372,21 @@ describe('storyBible — sanitizeCharacter', () => {
         { role: 'profile', imageRef: 'p2.png', approved: true },
       ] } };
       expect(characterIdentityPackReadiness(ambiguous)).toMatchObject({ status: 'ambiguous', ambiguous: ['profile'] });
+    });
+
+    it('preserves packages from a pre-v10 peer but honors a v10 clear', () => {
+      const local = [{
+        id: 'chr-1', name: 'A',
+        voiceCanon: { version: 2, approved: true },
+        identityPack: { assets: [{ role: 'neutral', imageRef: 'n.png', approved: true }] },
+      }];
+      const remote = [{ id: 'chr-1', name: 'A from peer' }];
+      expect(preserveLegacyCharacterProductionPackages(remote, local, 9)[0]).toMatchObject({
+        name: 'A from peer',
+        voiceCanon: local[0].voiceCanon,
+        identityPack: local[0].identityPack,
+      });
+      expect(preserveLegacyCharacterProductionPackages(remote, local, 10)).toEqual(remote);
     });
   });
 

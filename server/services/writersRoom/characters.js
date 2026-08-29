@@ -21,7 +21,10 @@ export const {
   idPrefix: 'wr-char-',
   dedupKey: (entry) => normalizeBibleName(entry?.name),
   primaryFields: ['name'],
-  editableFields: ['aliases', 'role', 'physicalDescription', 'personality', 'background', 'notes'],
+  editableFields: [
+    'aliases', 'role', 'physicalDescription', 'personality', 'background', 'notes',
+    'voiceCanon', 'identityPack',
+  ],
   requireOnCreate: (patch) => (String(patch?.name || '').trim() ? null : 'Character name required'),
   conflictMessage: ({ name }) => `A character named "${name}" already exists`,
   notFoundLabel: 'Character',

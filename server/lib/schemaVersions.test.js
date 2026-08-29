@@ -206,7 +206,12 @@ describe('scopeVersionDiff', () => {
     // Sender is ahead on mediaCollections only; a universe transfer scopes to
     // ['universes'] and stays compatible even though the union diff is not.
     const union = compareSchemaVersions(
-      { universes: 9, pipelineSeries: 2, pipelineIssues: 3, mediaCollections: 2 },
+      {
+        universes: PORTOS_SCHEMA_VERSIONS.universes,
+        pipelineSeries: 2,
+        pipelineIssues: 3,
+        mediaCollections: 2,
+      },
       PORTOS_SCHEMA_VERSIONS,
     );
     expect(union.compatible).toBe(false); // mediaCollections 2 > 1

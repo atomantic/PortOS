@@ -10,6 +10,7 @@
  * only knows the field shape.
  */
 
+import { useState } from 'react';
 import {
   Plus, Trash2, WandSparkles, Loader2,
   Palette, Hand, Smile, Package, BookOpen, Eye, Activity, Users, Swords,
@@ -599,7 +600,11 @@ function ArcFrameworkControls({ entry, onPatch, disabled, idPrefix }) {
   );
 }
 
-const splitProductionTerms = (value, max) => value.split(',').map((item) => item.trim()).filter(Boolean).slice(0, max);
+const splitProductionTerms = (value, max, itemMax) => value
+  .split(',')
+  .map((item) => item.trim().slice(0, itemMax))
+  .filter(Boolean)
+  .slice(0, max);
 
 function VoiceCanonPronunciationRow({ row, idx, onChange, onRemove, disabled }) {
   const term = useFieldDraft(row.term || '', (value) => onChange({ term: value }));
@@ -631,18 +636,29 @@ function VoiceCanonPronunciationRow({ row, idx, onChange, onRemove, disabled }) 
 
 function VoiceCanonSection({ entry, onPatch, disabled }) {
   const canon = entry.voiceCanon || {};
-  const commit = (patch) => onPatch?.({
-    voiceCanon: { version: 1, ...canon, ...patch },
-  });
+  const [newPronunciation, setNewPronunciation] = useState({ term: '', pronunciation: '' });
+  const commit = (patch) => {
+    const approvalPatch = Object.hasOwn(patch, 'approved') ? {} : { approved: false };
+    onPatch?.({
+      voiceCanon: { version: 1, ...canon, ...patch, ...approvalPatch },
+    });
+  };
   const description = useFieldDraft(canon.description || '', (value) => commit({ description: value }));
   const delivery = useFieldDraft(canon.defaultDelivery || '', (value) => commit({ defaultDelivery: value }));
   const emotionalRange = useFieldDraft((canon.emotionalRange || []).join(', '), (value) => commit({
-    emotionalRange: splitProductionTerms(value, L.VOICE_CANON_RANGE_MAX),
+    emotionalRange: splitProductionTerms(value, L.VOICE_CANON_RANGE_MAX, L.VOICE_CANON_RANGE_ITEM_MAX),
   }));
   const avoid = useFieldDraft((canon.avoid || []).join(', '), (value) => commit({
-    avoid: splitProductionTerms(value, L.VOICE_CANON_AVOID_MAX),
+    avoid: splitProductionTerms(value, L.VOICE_CANON_AVOID_MAX, L.VOICE_CANON_AVOID_ITEM_MAX),
   }));
   const pronunciations = Array.isArray(canon.pronunciations) ? canon.pronunciations : [];
+  const newTerm = newPronunciation.term.trim();
+  const newValue = newPronunciation.pronunciation.trim();
+  const addPronunciation = () => {
+    if (!newTerm || !newValue) return;
+    commit({ pronunciations: [...pronunciations, { term: newTerm, pronunciation: newValue }] });
+    setNewPronunciation({ term: '', pronunciation: '' });
+  };
   const approved = canon.approved === true;
   return (
     <BoxedSection icon={Mic} label="Voice canon" summary={approved ? `v${canon.version || 1} approved` : 'candidate'}>
@@ -701,14 +717,28 @@ function VoiceCanonSection({ entry, onPatch, disabled }) {
         <span className="block text-[10px] uppercase tracking-wider text-gray-500">Pronunciations</span>
         {pronunciations.map((row, idx) => (
           <VoiceCanonPronunciationRow
-            key={`${row.term}-${idx}`} row={row} idx={idx} disabled={disabled}
+            key={idx} row={row} idx={idx} disabled={disabled}
             onChange={(patch) => commit({ pronunciations: pronunciations.map((item, i) => i === idx ? { ...item, ...patch } : item) })}
             onRemove={() => commit({ pronunciations: pronunciations.filter((_, i) => i !== idx) })}
           />
         ))}
+        <div className="flex items-start gap-1.5">
+          <input
+            type="text" value={newPronunciation.term}
+            onChange={(e) => setNewPronunciation((current) => ({ ...current, term: e.target.value }))}
+            maxLength={L.VOICE_CANON_PRONUNCIATION_TERM_MAX} placeholder="new term"
+            disabled={disabled} aria-label="new pronunciation term" className={REL_SELECT_CLASS}
+          />
+          <input
+            type="text" value={newPronunciation.pronunciation}
+            onChange={(e) => setNewPronunciation((current) => ({ ...current, pronunciation: e.target.value }))}
+            maxLength={L.VOICE_CANON_PRONUNCIATION_VALUE_MAX} placeholder="how it is said"
+            disabled={disabled} aria-label="new pronunciation value" className={REL_SELECT_CLASS}
+          />
+        </div>
         <button
-          type="button" disabled={disabled || pronunciations.length >= L.VOICE_CANON_PRONUNCIATIONS_MAX}
-          onClick={() => commit({ pronunciations: [...pronunciations, { term: '', pronunciation: '' }] })}
+          type="button" disabled={disabled || !newTerm || !newValue || pronunciations.length >= L.VOICE_CANON_PRONUNCIATIONS_MAX}
+          onClick={addPronunciation}
           className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
         >
           <Plus size={10} /> Add pronunciation
@@ -744,14 +774,14 @@ function IdentityPackSection({ entry, onPatch, disabled }) {
             <div key={`${asset.role}-${asset.imageRef}-${idx}`} className="flex items-center gap-1.5">
               <select
                 value={asset.imageRef} disabled={disabled} aria-label={`identity asset ${idx + 1} image`}
-                onChange={(e) => commit({ assets: assets.map((item, i) => i === idx ? { ...item, imageRef: e.target.value } : item) })}
+                onChange={(e) => commit({ assets: assets.map((item, i) => i === idx ? { ...item, imageRef: e.target.value, approved: false } : item) })}
                 className={REL_SELECT_CLASS}
               >
                 {(entry.imageRefs || []).map((ref) => <option key={ref} value={ref}>{ref}</option>)}
               </select>
               <select
                 value={asset.role} disabled={disabled} aria-label={`identity asset ${idx + 1} role`}
-                onChange={(e) => commit({ assets: assets.map((item, i) => i === idx ? { ...item, role: e.target.value } : item) })}
+                onChange={(e) => commit({ assets: assets.map((item, i) => i === idx ? { ...item, role: e.target.value, approved: false } : item) })}
                 className="w-32 shrink-0 px-1.5 py-0.5 text-xs bg-port-bg border border-port-border rounded text-white disabled:opacity-50"
               >
                 {IDENTITY_ASSET_ROLES.map((role) => <option key={role} value={role}>{role}</option>)}
@@ -759,6 +789,7 @@ function IdentityPackSection({ entry, onPatch, disabled }) {
               <label className="inline-flex items-center gap-1 text-[10px] text-gray-300 whitespace-nowrap">
                 <input
                   type="checkbox" checked={asset.approved === true} disabled={disabled}
+                  aria-label={`approve identity asset ${idx + 1} ${asset.role}`}
                   onChange={(e) => commit({ assets: assets.map((item, i) => i === idx ? { ...item, approved: e.target.checked } : item) })}
                 /> Approve
               </label>

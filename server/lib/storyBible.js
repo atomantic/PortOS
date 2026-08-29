@@ -605,6 +605,29 @@ export function characterIdentityPackReadiness(character) {
   };
 }
 
+/**
+ * Preserve v10 character production fields when an older peer wins LWW with
+ * a character shape that could not represent them. A v10-aware sender's
+ * omission is an intentional clear and must pass through unchanged.
+ */
+export function preserveLegacyCharacterProductionPackages(remoteCharacters, localCharacters, senderUniversesVersion) {
+  if ((Number(senderUniversesVersion) || 0) >= 10
+    || !Array.isArray(remoteCharacters)
+    || !Array.isArray(localCharacters)) return remoteCharacters;
+  const localById = new Map(
+    localCharacters.filter((character) => character?.id).map((character) => [character.id, character]),
+  );
+  return remoteCharacters.map((character) => {
+    const localCharacter = localById.get(character?.id);
+    if (!localCharacter) return character;
+    return {
+      ...character,
+      ...(!character.voiceCanon && localCharacter.voiceCanon ? { voiceCanon: localCharacter.voiceCanon } : {}),
+      ...(!character.identityPack && localCharacter.identityPack ? { identityPack: localCharacter.identityPack } : {}),
+    };
+  });
+}
+
 // The legacy 'standard' variant lives in `character.referenceSheetImageRef`;
 // every other variant lives in `character.referenceSheets[<id>]`. Exported so
 // every reader/writer of either slot uses the same constant — the alternative
