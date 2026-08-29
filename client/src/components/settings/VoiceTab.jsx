@@ -368,6 +368,26 @@ export function VoiceTab() {
           <button type="button" onClick={refreshFaceTime} className="px-3 py-2 rounded bg-port-bg border border-port-border text-sm text-white">Check setup</button>
         </div>
         <div className="border-t border-port-border pt-3 space-y-2">
+          <h4 className="text-sm font-semibold text-white">Answer my calls</h4>
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              id="facetime-auto-answer"
+              type="checkbox"
+              checked={facetime.autoAnswer === true}
+              onChange={(e) => patch('facetime.autoAnswer', e.target.checked)}
+              disabled={faceTimeDirty}
+              className="w-4 h-4 mt-0.5 shrink-0"
+            />
+            <div className="min-w-0 flex-1">
+              <span className="text-sm text-white">Automatically answer incoming calls</span>
+              <p className="text-xs text-gray-500">
+                Only calls from your own configured handle are ever answered — every other caller is left ringing. Needs the <Link to="/voice/call-host" className="text-port-accent underline">call host</Link> tab open on this Mac; without it, an authorized call rings unanswered and a notification tells you why.
+              </p>
+            </div>
+          </label>
+        </div>
+
+        <div className="border-t border-port-border pt-3 space-y-2">
           <h4 className="text-sm font-semibold text-white">Call me when it matters</h4>
           <label className="flex items-start gap-3 cursor-pointer">
             <input

@@ -10,7 +10,7 @@
 //           | voice:screenshot:request
 //           | voice:speak | voice:output:primary | voice:output:detached
 // Call host (FaceTime Audio bridge):
-// Inbound:  voice:call:attach | voice:call:audio | voice:call:detach
+// Inbound:  voice:call:attach | voice:call:audio | voice:call:detach | voice:call:hangup
 // Outbound: voice:call:state | voice:call:tts
 // Meeting capture (same page, same audio bridge, no LLM — STT only):
 // Inbound:  voice:capture:start | voice:call:audio | voice:capture:stop
@@ -31,6 +31,7 @@ import { CALL_AUDIO_SAMPLE_RATE, createCallEndpointer, pcmToFloat } from '../ser
 import {
   attachHost,
   detachHost,
+  endCall,
   getCallContext,
   getCallHost,
   isCallActive,
@@ -534,6 +535,19 @@ export const registerVoiceHandlers = (socket) => {
   socket.on('voice:call:detach', async () => {
     call.endpointer = null;
     emitCallState(await detachHost(socket));
+  });
+
+  // Hang up the active call from any tab, not just the one carrying the
+  // audio — the Mind tab's "Hang up" button is not the call host. Routed
+  // through endCall() (not a raw facetimeBridge.hangup()) so the session is
+  // cleaned up the same way any other end-of-call is: journal write, mind
+  // handoff, state reset. A no-op when nothing is active.
+  socket.on('voice:call:hangup', async () => {
+    try {
+      if (isCallActive()) await endCall('user-hangup');
+    } catch (err) {
+      console.error(`❌ voice:call:hangup failed: ${err.message}`);
+    }
   });
 
   // ---------------------------------------------------------------------------

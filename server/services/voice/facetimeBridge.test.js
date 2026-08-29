@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CALL_AUDIO_DEVICE_RATE, checkAudioDevice, checkSetup, facetimeControlResultSchema } from './facetimeBridge.js';
+import { CALL_AUDIO_DEVICE_RATE, FACETIME_COMMANDS, checkAudioDevice, checkSetup, facetimeControlResultSchema } from './facetimeBridge.js';
 
 const device = (overrides = {}) => ({
   name: 'BlackHole 16ch',
@@ -62,6 +62,40 @@ describe('FaceTime Audio control protocol', () => {
     const { run } = await import('./facetimeBridge.js');
     await expect(run('probe', { facetime: { targetHandle: '', targetName: '' } }))
       .rejects.toThrow();
+  });
+
+  describe('answer command (phase 4 — inbound)', () => {
+    it('is one of the commands the strict helper contract accepts', () => {
+      expect(FACETIME_COMMANDS).toContain('answer');
+    });
+
+    it('accepts the same strict result contract answer/hangup share with probe/call', () => {
+      const result = facetimeControlResultSchema.safeParse({
+        ok: true, command: 'answer', state: 'connected', authorized: true,
+        action: 'press-notification-action', message: 'Answered the incoming call', errorCode: null,
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects an answer result naming a caller — the contract has no field for one', () => {
+      // The whole point of the fail-closed helper boundary: there is no way
+      // to report who called, so a leak would have to smuggle it through an
+      // existing field, and the schema being `.strict()` with a fixed field
+      // set means nothing extra fits.
+      const result = facetimeControlResultSchema.safeParse({
+        ok: true, command: 'answer', state: 'connected', authorized: true,
+        action: 'press-notification-action', message: 'Answered the incoming call', errorCode: null,
+        callerIdentity: 'private@example.com',
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('is exposed and, like every other command, refuses to run when identity is not configured', async () => {
+      const { answer, run } = await import('./facetimeBridge.js');
+      expect(typeof answer).toBe('function');
+      await expect(run('answer', { facetime: { targetHandle: '', targetName: '' } }))
+        .rejects.toThrow();
+    });
   });
 });
 

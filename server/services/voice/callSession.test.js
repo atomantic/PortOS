@@ -6,15 +6,32 @@ vi.mock('./config.js', () => ({ getVoiceConfig: vi.fn() }));
 // appendJournal's isIsoDate() guard silently rejected, so no transcript was ever
 // written. The mock has to match the real signature for the assertion to mean anything.
 vi.mock('../brainJournal.js', () => ({ appendJournal: vi.fn(), getToday: async () => '2026-08-29' }));
-vi.mock('./facetimeBridge.js', () => ({ probe: vi.fn(), call: vi.fn(), hangup: vi.fn() }));
+vi.mock('./facetimeBridge.js', () => ({ probe: vi.fn(), call: vi.fn(), answer: vi.fn(), hangup: vi.fn() }));
+vi.mock('../notifications.js', () => ({
+  addNotification: vi.fn().mockResolvedValue({ id: 'notif-1' }),
+  NOTIFICATION_TYPES: { AGENT_WARNING: 'agent_warning' },
+  PRIORITY_LEVELS: { LOW: 'low', MEDIUM: 'medium', HIGH: 'high', CRITICAL: 'critical' },
+}));
+// Real proactiveSpeech.js pulls in tts.js (Kokoro/Piper), which reads
+// voiceHome() at module-load time — importing it for real here would need the
+// whole TTS engine graph booted just to compute a quiet-hours boolean. Only
+// the wall clock behind isWithinQuietHours is injected; the predicate itself
+// is the real one so the overnight-wrap logic is genuinely exercised.
+vi.mock('./proactiveSpeech.js', async () => ({
+  isWithinQuietHours: (await import('../../lib/timezone.js')).isWithinTimeWindow,
+  getLocalMinutes: vi.fn(async () => 12 * 60),
+}));
 
 import { getVoiceConfig } from './config.js';
+import { addNotification } from '../notifications.js';
+import { getLocalMinutes } from './proactiveSpeech.js';
 import {
   PROBE_INTERVAL_MS,
   SILENCE_HANGUP_MS,
   __resetCallSession,
   __setCallSessionDeps,
   attachHost,
+  callStateEvents,
   detachHost,
   endCall,
   getCallContext,
@@ -22,6 +39,7 @@ import {
   markSpeaking,
   noteCallerSpeech,
   pollCall,
+  pollIncoming,
   recordTurn,
   setCallStateListener,
   startCall,
@@ -33,27 +51,35 @@ const socket = (id = 'host-1') => ({ id, connected: true, emit: vi.fn() });
 let clock;
 let probe;
 let call;
+let answer;
 let hangup;
 let appendJournal;
 let enqueueMindMessage;
+let isMindEnabled;
+let buildInboundContext;
 
 const install = (overrides = {}) => {
   clock = 1_000_000;
   probe = vi.fn().mockResolvedValue({ state: 'connected' });
   call = vi.fn().mockResolvedValue({ state: 'dialing' });
+  answer = vi.fn().mockResolvedValue({ ok: true, command: 'answer', state: 'connected', authorized: true, action: 'press-notification-action', message: 'Answered', errorCode: null });
   hangup = vi.fn().mockResolvedValue({ state: 'ended' });
   appendJournal = vi.fn().mockResolvedValue({});
   enqueueMindMessage = vi.fn().mockResolvedValue({ success: true });
-  __setCallSessionDeps({ probe, call, hangup, appendJournal, enqueueMindMessage, now: () => clock, ...overrides });
+  isMindEnabled = vi.fn().mockResolvedValue(false);
+  buildInboundContext = vi.fn().mockResolvedValue('# Persistent mind identity');
+  __setCallSessionDeps({ probe, call, answer, hangup, appendJournal, enqueueMindMessage, isMindEnabled, buildInboundContext, now: () => clock, ...overrides });
 };
 
 beforeEach(() => {
   __resetCallSession();
   install();
   getVoiceConfig.mockResolvedValue({ facetime: { maxCallMinutes: 15 } });
+  getLocalMinutes.mockResolvedValue(12 * 60);
+  addNotification.mockClear();
 });
 
-afterEach(() => { __resetCallSession(); });
+afterEach(() => { __resetCallSession(); vi.useRealTimers(); });
 
 describe('FaceTime call session', () => {
   it('refuses to dial without an attached call host', async () => {
@@ -341,5 +367,182 @@ describe('FaceTime call session', () => {
 
     expect(getCallState()).toMatchObject({ state: 'idle', active: false });
     consoleError.mockRestore();
+  });
+
+  it('broadcasts every state change on callStateEvents, for a tab that is not the call host', async () => {
+    const states = [];
+    callStateEvents.on('state', (snapshot) => states.push(snapshot.state));
+    attachHost(socket());
+    await startCall();
+    await endCall('remote-hangup');
+
+    expect(states).toContain('dialing');
+    expect(states).toContain('ended');
+  });
+});
+
+describe('FaceTime incoming-call watcher', () => {
+  it('never reads the helper while autoAnswer is off, even with a host attached', async () => {
+    getVoiceConfig.mockResolvedValue({ facetime: { maxCallMinutes: 15, autoAnswer: false } });
+    attachHost(socket());
+
+    expect(await pollIncoming()).toEqual({ checked: false, reason: 'auto-answer-off' });
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('answers an authorized incoming call, speaks a greeting, and runs it like any other call', async () => {
+    getVoiceConfig.mockResolvedValue({ facetime: { maxCallMinutes: 15, autoAnswer: true }, llm: { personality: { name: 'Alfred' } } });
+    probe.mockResolvedValue({ state: 'dialing', authorized: true });
+    attachHost(socket());
+
+    const result = await pollIncoming();
+
+    expect(result).toMatchObject({ incoming: true, answered: true });
+    expect(answer).toHaveBeenCalledTimes(1);
+    expect(getCallState()).toMatchObject({ state: 'listening', active: true });
+    expect(takeCallOpeningLine()).toBe("Hi, this is Alfred. Go ahead.");
+    expect(addNotification).not.toHaveBeenCalled();
+  });
+
+  it('leaves a call from any other handle ringing and logs nothing that names them', async () => {
+    getVoiceConfig.mockResolvedValue({ facetime: { maxCallMinutes: 15, autoAnswer: true } });
+    // The helper reports nothing distinguishing "no call" from "an
+    // unauthorized caller" — fail-closed at the helper boundary. This is the
+    // only shape an unmatched caller can produce.
+    probe.mockResolvedValue({ state: 'idle', authorized: false });
+    attachHost(socket());
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await pollIncoming();
+
+    expect(result).toEqual({ checked: true, incoming: false });
+    expect(answer).not.toHaveBeenCalled();
+    expect(addNotification).not.toHaveBeenCalled();
+    expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it('answers at any hour, but a quiet-hours greeting is softer, never withheld', async () => {
+    getVoiceConfig.mockResolvedValue({
+      facetime: { maxCallMinutes: 15, autoAnswer: true },
+      llm: { personality: { name: 'Alfred' }, proactive: { quietHours: { enabled: true, start: '22:00', end: '07:00' } } },
+    });
+    getLocalMinutes.mockResolvedValue(3 * 60); // 3am — inside the overnight window
+    probe.mockResolvedValue({ state: 'dialing', authorized: true });
+    attachHost(socket());
+
+    const result = await pollIncoming();
+
+    expect(result).toMatchObject({ answered: true });
+    expect(answer).toHaveBeenCalledTimes(1);
+    expect(takeCallOpeningLine()).toMatch(/it's late/i);
+  });
+
+  it('records a missed call, and never presses answer, when no host is attached', async () => {
+    getVoiceConfig.mockResolvedValue({ facetime: { maxCallMinutes: 15, autoAnswer: true } });
+    probe.mockResolvedValue({ state: 'dialing', authorized: true });
+    // No attachHost() in this test — the production timer would never reach
+    // here with `host` unset (see attachHost/detachHost), but a host that
+    // detaches between this tick starting and the answer landing is a real
+    // race, and pollIncoming has to be correct standalone regardless.
+
+    const result = await pollIncoming();
+
+    expect(result).toEqual({ checked: true, incoming: true, answered: false, reason: 'no-host' });
+    expect(answer).not.toHaveBeenCalled();
+    expect(addNotification).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'agent_warning',
+      title: 'Missed call from you — the call host was not attached',
+      priority: 'medium',
+    }));
+    expect(getCallState()).toMatchObject({ state: 'idle', active: false });
+  });
+
+  it('records a missed call when the helper fails to press an authorized ring', async () => {
+    getVoiceConfig.mockResolvedValue({ facetime: { maxCallMinutes: 15, autoAnswer: true } });
+    probe.mockResolvedValue({ state: 'dialing', authorized: true });
+    answer.mockRejectedValue(new Error('AX press failed'));
+    attachHost(socket());
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await pollIncoming();
+
+    expect(result).toEqual({ checked: true, incoming: true, answered: false, reason: 'helper-failed' });
+    expect(addNotification).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Missed call from you — the FaceTime helper failed to answer',
+    }));
+    consoleError.mockRestore();
+  });
+
+  it('notifies once per ring, not once per 2-second tick, while it keeps ringing unanswered', async () => {
+    getVoiceConfig.mockResolvedValue({ facetime: { maxCallMinutes: 15, autoAnswer: true } });
+    probe.mockResolvedValue({ state: 'dialing', authorized: true });
+    // host stays unattached for all three ticks.
+
+    await pollIncoming();
+    await pollIncoming();
+    await pollIncoming();
+
+    expect(addNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('is ready to notify again for the next ring once the first one stops', async () => {
+    getVoiceConfig.mockResolvedValue({ facetime: { maxCallMinutes: 15, autoAnswer: true } });
+    probe.mockResolvedValue({ state: 'dialing', authorized: true });
+
+    await pollIncoming();
+    expect(addNotification).toHaveBeenCalledTimes(1);
+
+    probe.mockResolvedValue({ state: 'idle', authorized: false }); // ring stopped
+    await pollIncoming();
+    probe.mockResolvedValue({ state: 'dialing', authorized: true }); // a second call rings
+    await pollIncoming();
+
+    expect(addNotification).toHaveBeenCalledTimes(2);
+  });
+
+  it('hands an answered call to the mind on hangup only when the mind was running when it answered', async () => {
+    getVoiceConfig.mockResolvedValue({ facetime: { maxCallMinutes: 15, autoAnswer: true } });
+    probe.mockResolvedValue({ state: 'dialing', authorized: true });
+    isMindEnabled.mockResolvedValue(true);
+    attachHost(socket());
+    await pollIncoming();
+    recordTurn('caller', 'Hey, it is me.');
+
+    await endCall('remote-hangup');
+
+    expect(buildInboundContext).toHaveBeenCalledTimes(1);
+    expect(enqueueMindMessage).toHaveBeenCalledTimes(1);
+    expect(enqueueMindMessage.mock.calls[0][0]).toContain('you answered');
+  });
+
+  it('runs the plain persona with no mind handoff when the mind was not running', async () => {
+    getVoiceConfig.mockResolvedValue({ facetime: { maxCallMinutes: 15, autoAnswer: true } });
+    probe.mockResolvedValue({ state: 'dialing', authorized: true });
+    isMindEnabled.mockResolvedValue(false);
+    attachHost(socket());
+    await pollIncoming();
+    recordTurn('caller', 'Hey, it is me.');
+
+    await endCall('remote-hangup');
+
+    expect(buildInboundContext).not.toHaveBeenCalled();
+    expect(enqueueMindMessage).not.toHaveBeenCalled();
+  });
+
+  it('polls the helper only while a call-host tab is attached, and stops on detach', async () => {
+    vi.useFakeTimers();
+    getVoiceConfig.mockResolvedValue({ facetime: { maxCallMinutes: 15, autoAnswer: true } });
+    probe.mockResolvedValue({ state: 'idle', authorized: false });
+    const host = socket();
+
+    attachHost(host);
+    await vi.advanceTimersByTimeAsync(PROBE_INTERVAL_MS * 2);
+    expect(probe.mock.calls.length).toBeGreaterThanOrEqual(2);
+
+    await detachHost(host);
+    probe.mockClear();
+    await vi.advanceTimersByTimeAsync(PROBE_INTERVAL_MS * 3);
+    expect(probe).not.toHaveBeenCalled();
   });
 });

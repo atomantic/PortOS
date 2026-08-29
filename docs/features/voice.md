@@ -75,6 +75,27 @@ cannot reset them. Escalation additionally fires only for a `critical`
 notification that is *still unread* after `escalateAfterMinutes`. See
 [Chief of Staff enhancement → Persistent Mind phone calls](./cos-enhancement.md#persistent-mind-phone-calls).
 
+**Calling PortOS back.** Turn on **Automatically answer incoming calls** in
+Settings → Voice → FaceTime Audio (`facetime.autoAnswer`, off by default) to
+call the Mac from your phone or watch and talk to your Chief of Staff. Fail
+closed by construction: the helper's `answer` command presses only the
+Notification Center action naming your own configured identity — a call from
+any other handle is left ringing, and PortOS never logs anything that would
+name who it was. Answering also needs the **call host** tab open and attached
+on this Mac (same tab the outbound bridge uses); without it, an authorized
+call rings unanswered and a `medium` notification records the miss instead of
+silently dropping it. Quiet hours change only the greeting's tone, never
+whether the call is picked up — you placed it, so PortOS answers at any hour.
+Once answered, the call runs exactly like an outbound one: whisper STT →
+voice LLM/persona → Kokoro/Piper TTS, the same silence/max-duration/hangup
+rules, and a transcript in the daily journal. If the Persistent Mind is
+running, the call carries its persona and context and the transcript is
+handed back to it as a message on hangup, continuing the same conversation on
+its next wake; if the mind isn't running, it's the plain voice persona, same
+as the widget. The Mind tab shows an active-call chip with a **Hang up**
+button (`voice:call:hangup`) for either direction, from any tab — not just
+the one carrying the audio.
+
 ### Meeting capture
 
 The call-host page's second mode: **/voice/call-host?mode=capture** (or the
@@ -223,8 +244,10 @@ Barge-in works by aborting the shared `AbortController` tied to the current turn
 
 Socket events are documented in `server/sockets/voice.js` — including the
 call-host bridge (`voice:call:attach` / `voice:call:audio` / `voice:call:detach`
-inbound, `voice:call:state` / `voice:call:tts` outbound) and meeting capture,
-which reuses the same `voice:call:audio` PCM frames (`voice:capture:start` /
+/ `voice:call:hangup` inbound, `voice:call:state` / `voice:call:tts` outbound —
+`voice:call:state` broadcasts to every connected tab, not just the call host,
+so the Mind tab's active-call chip stays in sync) and meeting capture, which
+reuses the same `voice:call:audio` PCM frames (`voice:capture:start` /
 `voice:capture:stop` inbound, `voice:capture:state` outbound).
 
 ## Troubleshooting

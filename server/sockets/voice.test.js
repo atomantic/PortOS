@@ -32,6 +32,7 @@ const {
   attachHost: attachCallHost,
   __resetCallSession,
   __setCallSessionDeps,
+  getCallState,
   pollCall,
   startCall,
 } = await import('../services/voice/callSession.js');
@@ -325,6 +326,44 @@ describe('call host opening line', () => {
     await flush();
 
     expect(host.emitted.filter((e) => e.event === 'voice:call:tts')).toHaveLength(0);
+  });
+});
+
+describe('voice:call:hangup', () => {
+  beforeEach(() => {
+    __resetCallSession();
+    __setCallSessionDeps({
+      probe: vi.fn(async () => ({ state: 'connected' })),
+      call: vi.fn(async () => ({ state: 'dialing' })),
+      hangup: vi.fn(async () => ({ state: 'ended' })),
+      appendJournal: vi.fn(async () => ({})),
+      enqueueMindMessage: vi.fn(async () => ({})),
+    });
+  });
+
+  it('ends the active call from any connected socket, not just the one carrying the audio', async () => {
+    // The Mind tab's hang-up button is not the call-host tab — this is the
+    // socket path it uses instead of a raw facetimeBridge.hangup() call, so
+    // the session is cleaned up (journal, mind handoff, state reset) the same
+    // way any other end-of-call is.
+    const host = makeFakeSocket();
+    registerVoiceHandlers(host);
+    await host.fire('voice:call:attach');
+    await startCall();
+    expect(getCallState().active).toBe(true);
+
+    const mindTab = makeFakeSocket();
+    registerVoiceHandlers(mindTab);
+    await mindTab.fire('voice:call:hangup');
+
+    expect(getCallState().active).toBe(false);
+  });
+
+  it('is a no-op when nothing is active', async () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    await expect(socket.fire('voice:call:hangup')).resolves.not.toThrow();
+    expect(getCallState().active).toBe(false);
   });
 });
 

@@ -48,6 +48,7 @@ const voiceConfigPatchSchema = z.object({
     blackHole16chLabel: z.string().trim().min(1).max(120).optional(),
     escalateCritical: z.boolean().optional(),
     escalateAfterMinutes: z.number().int().min(1).max(1440).optional(),
+    autoAnswer: z.boolean().optional(),
   }).partial().optional(),
   stt: z.object({
     engine: z.enum(['whisper', 'web-speech']).optional(),

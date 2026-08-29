@@ -30,6 +30,12 @@ export const VOICE_DEFAULTS = Object.freeze({
     // by itself make an install start ringing the user.
     escalateCritical: false,
     escalateAfterMinutes: 10,
+    // Answer an inbound call from the configured identity automatically. OFF
+    // by default — same reasoning as escalateCritical: enabling the feature
+    // must never by itself make the Mac start picking up calls. The watcher
+    // that acts on this also requires a call-host tab attached (see
+    // callSession.js) — this flag alone changes nothing without one.
+    autoAnswer: false,
   },
 
   stt: {

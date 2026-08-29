@@ -76,14 +76,16 @@ const trimmedIdentity = (config) => ({
 });
 
 /**
- * Render the bounded briefing the call runs with, so the voice on the phone is
- * continuous with the mind rather than a stranger who happens to share a voice.
+ * Render the bounded briefing a call runs with, so the voice on the phone is
+ * continuous with the mind rather than a stranger who happens to share a
+ * voice. `intro` sets the scene (outbound vs inbound) — everything else is
+ * shared between the two directions.
  *
  * Deliberately built without a summarizer: this runs on the mind's own turn,
  * and a call must never trigger an extra provider round the user did not ask
  * for. An unsummarized older history simply reads as unavailable.
  */
-async function buildCallContext(reason) {
+async function buildCallContext(intro) {
   const root = await loadState();
   const prompt = normalizePersistentMindPrompt(root.config?.persistentMindPrompt);
   const memories = await readPersistentMindMemories(PERSISTENT_MIND_ID);
@@ -94,11 +96,17 @@ async function buildCallContext(reason) {
     memories,
     maxChars: CALL_CONTEXT_MAX_CHARS,
   });
-  return [
-    'You are speaking on a phone call that you placed to the user. Keep it short, say why you called, and let them talk.',
-    `# Why you called\n${reason}`,
-    context.text,
-  ].join('\n\n').slice(0, CALL_CONTEXT_MAX_CHARS * 2);
+  return [intro, context.text].join('\n\n').slice(0, CALL_CONTEXT_MAX_CHARS * 2);
+}
+
+/**
+ * The inbound counterpart of the briefing above — used when the user calls
+ * PortOS back and the incoming-call watcher (`callSession.js#pollIncoming`)
+ * answers with the Persistent Mind running. No `reason` exists for a call the
+ * mind did not decide to place, so the intro just orients it to the situation.
+ */
+export async function buildInboundCallContext() {
+  return buildCallContext('You are on a phone call the user placed to reach you directly (they called you, not the other way around). Keep it short, greet them, and let them talk.');
 }
 
 /**
@@ -241,7 +249,9 @@ export async function requestUserCall({
   const verdict = persistentMindCallRateVerdict(root.persistentMind, now, PERSISTENT_MIND_CALL_LIMITS);
   if (!verdict.ok) return finish(suppressed(verdict.reason, { retryAt: verdict.retryAt }));
 
-  const context = await buildCallContext(request.reason).catch((error) => {
+  const context = await buildCallContext(
+    `You are speaking on a phone call that you placed to the user. Keep it short, say why you called, and let them talk.\n\n# Why you called\n${request.reason}`,
+  ).catch((error) => {
     // A briefing that could not be assembled is not a reason to leave the user
     // uncalled; the opening line alone still carries the message.
     console.error(`❌ mind call: context assembly failed: ${error.message}`);

@@ -144,6 +144,24 @@ describe('Voice Routes', () => {
       expect(config.updateVoiceConfig).toHaveBeenCalledWith(patch);
     });
 
+    it('accepts a facetime.autoAnswer patch', async () => {
+      config.updateVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG });
+      bootstrap.reconcile.mockResolvedValue({ skipped: true });
+      const patch = { facetime: { autoAnswer: true } };
+      const res = await request(buildApp()).put('/api/voice/config').send(patch);
+      expect(res.status).toBe(200);
+      expect(config.updateVoiceConfig).toHaveBeenCalledWith(patch);
+    });
+
+    it('rejects a non-boolean facetime.autoAnswer', async () => {
+      const res = await request(buildApp())
+        .put('/api/voice/config')
+        .send({ facetime: { autoAnswer: 'yes' } });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('VALIDATION_ERROR');
+      expect(config.updateVoiceConfig).not.toHaveBeenCalled();
+    });
+
     it('rejects out-of-range fastPath.browser params', async () => {
       const res = await request(buildApp())
         .put('/api/voice/config')

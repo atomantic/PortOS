@@ -32,6 +32,7 @@ const socket = vi.hoisted(() => {
   return {
     on: vi.fn((event, handler) => handlers.set(event, handler)),
     off: vi.fn((event) => handlers.delete(event)),
+    emit: vi.fn(),
     emitServer: (event, data) => handlers.get(event)?.(data),
     reset: () => handlers.clear(),
   };
@@ -625,5 +626,35 @@ describe('MindTab', () => {
     await user.click(screen.getByRole('tab', { name: 'Context' }));
 
     expect(await screen.findByText('# Context with new memory')).toBeInTheDocument();
+  });
+
+  it('shows the active-call chip from a broadcast state even when this tab is not the call host, and hangs it up', async () => {
+    renderTab();
+    await screen.findByText('Review the next bounded slice.');
+    expect(screen.queryByText('On a FaceTime Audio call')).not.toBeInTheDocument();
+
+    await act(async () => {
+      socket.emitServer('voice:call:state', { state: 'listening', active: true, hostAttached: true, turns: 2 });
+    });
+    expect(await screen.findByText('On a FaceTime Audio call')).toBeInTheDocument();
+    expect(screen.getByText('2 turns so far.')).toBeInTheDocument();
+
+    await userEvent.setup().click(screen.getByRole('button', { name: /Hang up/ }));
+    expect(socket.emit).toHaveBeenCalledWith('voice:call:hangup');
+
+    await act(async () => {
+      socket.emitServer('voice:call:state', { state: 'idle', active: false, hostAttached: false, turns: 0 });
+    });
+    expect(screen.queryByText('On a FaceTime Audio call')).not.toBeInTheDocument();
+  });
+
+  it('ignores an errored call-state broadcast rather than showing a stale chip', async () => {
+    renderTab();
+    await screen.findByText('Review the next bounded slice.');
+
+    await act(async () => {
+      socket.emitServer('voice:call:state', { error: 'host-taken', active: false, hostAttached: false, state: 'idle' });
+    });
+    expect(screen.queryByText('On a FaceTime Audio call')).not.toBeInTheDocument();
   });
 });

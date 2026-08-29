@@ -6,7 +6,7 @@
  * call is up, whether anyone can hear it, when to give up, and what is written
  * down afterwards.
  *
- * Three deliberate constraints:
+ * Four deliberate constraints:
  *
  * - **One call, one host.** A second call-host tab is refused rather than
  *   allowed to double-answer, mirroring the single-attach shell-session
@@ -18,11 +18,24 @@
  * - **Only text is kept.** The transcript goes to the daily journal like any
  *   other voice turn. The audio is never persisted, and the configured handle
  *   never appears in what is written down.
+ * - **Answering is fail-closed, and reading is not answering.** The incoming
+ *   watcher (`pollIncoming`) is only ever armed while a call-host tab is
+ *   attached (`attachHost`/`detachHost`), so it never runs unobserved. Within
+ *   a tick, `probe()` is a safe read — it never presses anything, and the
+ *   native helper reports nothing distinguishing "no call" from "a caller who
+ *   is not the configured identity" (fail-closed at the helper boundary), so
+ *   this module never learns an unauthorized caller exists and never logs
+ *   one. Only `answer()` — the press — is additionally gated on the host
+ *   being attached *at press time*, because answering a call nobody can hear
+ *   is worse than missing it.
  */
 
 import { appendJournal, getToday } from '../brainJournal.js';
 import * as facetimeBridge from './facetimeBridge.js';
 import { getVoiceConfig } from './config.js';
+import { getLocalMinutes, isWithinQuietHours } from './proactiveSpeech.js';
+import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from '../notifications.js';
+import { EventEmitter } from 'events';
 
 export const CALL_STATES = ['idle', 'dialing', 'connected', 'listening', 'speaking', 'ended'];
 export const PROBE_INTERVAL_MS = 2_000;
@@ -37,13 +50,19 @@ const initialState = () => ({
   lastVoiceAt: null,
   endedReason: null,
   transcript: [],
-  // Set only for a call PortOS placed on its own initiative. `origin` decides
-  // whether the transcript is handed back to the persistent mind afterwards;
-  // `openingLine` is what the call host speaks the moment the far end picks up
-  // (consumed once, so a state re-emit cannot make it say it twice).
+  // 'user' — PortOS placed this call on request. 'mind' — the Persistent Mind
+  // placed it (voice.call-user). 'inbound' — the user called PortOS and the
+  // autoAnswer watcher answered it. `origin` decides whether the transcript
+  // is handed back to the persistent mind afterwards; `openingLine` is what
+  // the call host speaks the moment the far end picks up (consumed once, so a
+  // state re-emit cannot make it say it twice).
   origin: 'user',
   openingLine: '',
   context: null,
+  // Only meaningful for `origin === 'inbound'`: whether the Persistent Mind
+  // was running at the moment the call was answered. Captured once so a mind
+  // that starts or stops mid-call cannot flip the hangup handoff decision.
+  mindEnabled: false,
 });
 
 let session = initialState();
@@ -51,21 +70,56 @@ let host = null;
 let timer = null;
 let listener = null;
 
+// Broadcast sink for anything other than the call-host socket — the Mind tab
+// wants to show an active-call chip regardless of which tab is carrying the
+// audio. `listener` above stays a single slot owned by the attached host
+// (it also drives that socket's opening-line delivery); this is a plain
+// multi-subscriber event, mirroring `notificationEvents` in notifications.js.
+export const callStateEvents = new EventEmitter();
+
 // Injectable so the state machine can be driven with stubs and fake timers
 // instead of a real helper and a real call.
 // Imported lazily: the persistent-mind supervisor pulls in a large service
-// graph, and a call the mind did not place never needs it.
+// graph, and a call the mind did not place — or answer — never needs it.
 const enqueueMindMessage = async (text) => {
   const { enqueuePersistentMindMessage } = await import('../persistentMindSupervisor.js');
   return enqueuePersistentMindMessage({ text });
 };
 
+const isMindEnabled = async () => {
+  const { getPersistentMindState } = await import('../persistentMindSupervisor.js');
+  const state = await getPersistentMindState();
+  return Boolean(state?.enabled);
+};
+
+const buildInboundContext = async () => {
+  const { buildInboundCallContext } = await import('../persistentMindCallCapability.js');
+  return buildInboundCallContext();
+};
+
+const MISSED_CALL_TITLES = {
+  'no-host': 'Missed call from you — the call host was not attached',
+  'helper-failed': 'Missed call from you — the FaceTime helper failed to answer',
+};
+
+const notifyMissedCall = async (reason) => addNotification({
+  type: NOTIFICATION_TYPES.AGENT_WARNING,
+  title: MISSED_CALL_TITLES[reason] || 'Missed call from you',
+  description: 'An incoming call from your configured identity rang and PortOS could not answer it automatically.',
+  priority: PRIORITY_LEVELS.MEDIUM,
+  metadata: { source: 'voice-facetime-incoming', reason },
+});
+
 const defaultDeps = () => ({
   probe: facetimeBridge.probe,
   call: facetimeBridge.call,
+  answer: facetimeBridge.answer,
   hangup: facetimeBridge.hangup,
   appendJournal,
   enqueueMindMessage,
+  isMindEnabled,
+  buildInboundContext,
+  notifyMissedCall,
   now: Date.now,
 });
 
@@ -94,6 +148,7 @@ const emitState = () => {
   } catch (error) {
     console.error(`❌ voice call: state listener failed: ${error.message}`);
   }
+  callStateEvents.emit('state', snapshot);
   return snapshot;
 };
 
@@ -133,6 +188,9 @@ export function attachHost(socket) {
   if (host && host !== socket && host.connected !== false) return { ok: false, reason: 'host-taken' };
   host = socket;
   console.log(`📞 voice call: host attached (${socket?.id ?? 'socket'})`);
+  // Arm the incoming-call watcher now that something could carry the audio.
+  // Idempotent on a reconnect of the same socket.
+  startIncomingWatcher();
   return { ok: true, state: emitState() };
 }
 
@@ -140,6 +198,8 @@ export async function detachHost(socket) {
   if (host !== socket) return publicState();
   host = null;
   console.log('📞 voice call: host detached');
+  // Never poll for an incoming call with nothing attached to carry it.
+  stopIncomingWatcher();
   // Losing the host loses the audio path, so an in-flight call is ended rather
   // than left running deaf.
   if (publicState().active) return endCall('host-detached');
@@ -200,6 +260,168 @@ const startPolling = () => {
   }, PROBE_INTERVAL_MS);
   timer.unref?.();
 };
+
+// ---------------------------------------------------------------------------
+// Incoming watcher — armed only while a call-host tab is attached (see
+// attachHost/detachHost above). Separate timer from the active-call poll
+// above: this one runs while the session is *idle*, watching for a call
+// PortOS did not place.
+// ---------------------------------------------------------------------------
+
+let incomingTimer = null;
+// Edge-detected so a ring that keeps being reported "authorized" for several
+// ticks in a row (waiting on a slow answer, or unanswerable because the host
+// went away) produces exactly one notification/answer attempt per ring, not
+// one every 2 seconds for as long as it rings.
+let incomingRingActive = false;
+
+const stopIncomingWatcher = () => {
+  if (incomingTimer) clearInterval(incomingTimer);
+  incomingTimer = null;
+  incomingRingActive = false;
+};
+
+const startIncomingWatcher = () => {
+  stopIncomingWatcher();
+  incomingTimer = setInterval(() => {
+    pollIncoming().catch((error) => console.error(`❌ voice call: incoming poll failed: ${error.message}`));
+  }, PROBE_INTERVAL_MS);
+  incomingTimer.unref?.();
+};
+
+const recordMissedCall = async (reason) => {
+  try {
+    await deps.notifyMissedCall(reason);
+  } catch (error) {
+    console.error(`❌ voice call: missed-call notification failed: ${error.message}`);
+  }
+};
+
+/**
+ * Compute the greeting an answered call opens with. Quiet hours change the
+ * style only, per the decided approach — they never decide whether to
+ * answer; the user placed the call, so PortOS answers at any hour.
+ */
+async function buildInboundGreeting(config) {
+  const persona = config?.llm?.personality?.name?.trim() || 'PortOS';
+  const quietHours = config?.llm?.proactive?.quietHours;
+  let quiet = false;
+  if (quietHours?.enabled) {
+    const nowMinutes = await getLocalMinutes();
+    quiet = isWithinQuietHours({ start: quietHours.start, end: quietHours.end, nowMinutes });
+  }
+  return quiet
+    ? `Hi, this is ${persona}. It's late, so I'll keep this brief — go ahead.`
+    : `Hi, this is ${persona}. Go ahead.`;
+}
+
+/**
+ * Take over the session for a call the helper just answered on our behalf.
+ * Skips `dialing` entirely — the helper already reports the call live — and
+ * reuses the same `listening` transition the outbound flow drives the
+ * opening-line delivery from (see `deliverOpeningLine` in sockets/voice.js).
+ */
+async function beginAnsweredCall(config) {
+  const greeting = await buildInboundGreeting(config);
+
+  let mindEnabled = false;
+  try {
+    mindEnabled = await deps.isMindEnabled();
+  } catch (error) {
+    console.error(`❌ voice call: mind status check failed: ${error.message}`);
+  }
+
+  let context = null;
+  if (mindEnabled) {
+    context = await deps.buildInboundContext().catch((error) => {
+      // A briefing that failed to assemble is not a reason to leave the call
+      // unanswered — the plain persona still carries the conversation.
+      console.error(`❌ voice call: inbound context assembly failed: ${error.message}`);
+      return null;
+    });
+  }
+
+  session = {
+    ...initialState(),
+    state: 'connected',
+    startedAt: deps.now(),
+    lastVoiceAt: deps.now(),
+    origin: 'inbound',
+    openingLine: greeting,
+    context,
+    mindEnabled,
+  };
+  emitState();
+  setState('listening');
+  startPolling();
+}
+
+/**
+ * One incoming-watch tick. Exported so a test can drive it directly, exactly
+ * like `pollCall` — including with `host` unset, which the production timer
+ * itself never does (see attachHost/detachHost), but which is exactly the
+ * "no host attached" failure mode `pollIncoming` still has to handle
+ * defensively (a host that detaches in the gap between this tick starting
+ * and the answer attempt landing is a real, if narrow, race).
+ */
+export async function pollIncoming() {
+  const config = await getVoiceConfig();
+  if (!config?.facetime?.autoAnswer) {
+    incomingRingActive = false;
+    return { checked: false, reason: 'auto-answer-off' };
+  }
+  if (publicState().active) return { checked: false, reason: 'call-in-progress' };
+
+  let observed = null;
+  try {
+    observed = await deps.probe();
+  } catch (error) {
+    // Mirrors pollCall: a probe that cannot answer is unknown, not evidence
+    // of anything — and never carries caller identity, so this is safe to log.
+    console.error(`❌ voice call: incoming probe failed: ${error.message}`);
+    return { checked: false, reason: 'probe-failed' };
+  }
+
+  // The helper reports nothing distinguishing "no call" from "a caller who is
+  // not the configured identity" — fail-closed at the helper boundary. Reused
+  // here: `authorized` on an idle-session probe means "the ringing caller
+  // matches the configured identity", never "no call at all".
+  const ringing = Boolean(observed?.authorized) && observed?.state === 'dialing';
+  if (!ringing) {
+    incomingRingActive = false;
+    return { checked: true, incoming: false };
+  }
+  if (incomingRingActive) return { checked: true, incoming: true, deduped: true };
+  incomingRingActive = true;
+
+  if (!host) {
+    await recordMissedCall('no-host');
+    return { checked: true, incoming: true, answered: false, reason: 'no-host' };
+  }
+
+  let result = null;
+  try {
+    result = await deps.answer();
+  } catch (error) {
+    console.error(`❌ voice call: incoming answer failed: ${error.message}`);
+    await recordMissedCall('helper-failed');
+    return { checked: true, incoming: true, answered: false, reason: 'helper-failed' };
+  }
+  if (!result?.ok) {
+    await recordMissedCall('helper-failed');
+    return { checked: true, incoming: true, answered: false, reason: 'helper-failed' };
+  }
+
+  // Reset the edge detector now: once answered, `publicState().active` short-
+  // circuits every tick for the rest of the call (see the top of this
+  // function), so the "ring stopped" branch above never runs again to clear
+  // it — leaving it stuck `true` would make the *next* genuine incoming call,
+  // after this one ends, look like a duplicate of this one and be silently
+  // skipped forever.
+  incomingRingActive = false;
+  await beginAnsweredCall(config);
+  return { checked: true, incoming: true, answered: true };
+}
 
 /**
  * Place a call. Fails closed when nothing can carry the audio.
@@ -268,6 +490,7 @@ export async function endCall(reason = 'ended') {
   stopPolling();
   const transcript = session.transcript;
   const origin = session.origin;
+  const mindEnabled = session.mindEnabled;
   session.endedReason = reason;
   setState('ended');
 
@@ -294,10 +517,18 @@ export async function endCall(reason = 'ended') {
   // thing — including after a call nobody picked up, which is exactly when an
   // empty transcript would otherwise leave it uninformed. Best-effort for the
   // same reason the journal append is.
-  if (origin === 'mind') {
+  //
+  // An answered inbound call gets the same handoff, but only when the mind
+  // was actually running when it was answered — an inbound call answered
+  // with the mind off ran the plain voice persona, and telling a mind that
+  // never took part about a conversation it did not have would be noise, not
+  // continuity.
+  const handToMind = origin === 'mind' || (origin === 'inbound' && mindEnabled);
+  if (handToMind) {
+    const verb = origin === 'mind' ? 'placed' : 'answered';
     try {
       await deps.enqueueMindMessage(
-        `Outcome of the FaceTime Audio call you placed (ended: ${reason}):\n${
+        `Outcome of the FaceTime Audio call you ${verb} (ended: ${reason}):\n${
           transcript.length ? renderTranscript(transcript) : 'The call ended with nothing said.'
         }`.slice(0, MIND_TRANSCRIPT_MAX_CHARS),
       );
@@ -313,8 +544,10 @@ export async function endCall(reason = 'ended') {
 /** Test helper — drop all state between cases. */
 export const __resetCallSession = () => {
   stopPolling();
+  stopIncomingWatcher();
   session = initialState();
   host = null;
   listener = null;
+  callStateEvents.removeAllListeners();
   __setCallSessionDeps();
 };
