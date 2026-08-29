@@ -123,7 +123,7 @@ describe('LoomCanvas', () => {
     expect(screen.getAllByRole('button', { name: 'Generate image' })[0]).toBeEnabled();
   });
 
-  it('keeps compact preview layers statically positioned inside the SVG node for WebKit', () => {
+  it('uses absolute SVG coordinates for compact media so WebKit keeps it inside the card', () => {
     const { rerender } = render(
       <LoomCanvas
         episode={episode()}
@@ -136,7 +136,13 @@ describe('LoomCanvas', () => {
     );
 
     const preview = screen.getByAltText('The Gate image generation preview').parentElement;
-    const mediaHost = screen.getByLabelText('Scene: The Gate').querySelector('foreignObject > div');
+    const sceneCard = screen.getByLabelText('Scene: The Gate');
+    const mediaSurface = document.querySelector('[data-node-media-id="n1"]');
+    const mediaHost = mediaSurface.querySelector('div');
+    const [, cardX, cardY] = /translate\(([^,]+), ([^)]+)\)/.exec(sceneCard.getAttribute('transform'));
+    expect(sceneCard).not.toContainElement(mediaSurface);
+    expect(mediaSurface).toHaveAttribute('x', String(Number(cardX) + 8));
+    expect(mediaSurface).toHaveAttribute('y', String(Number(cardY) + 24));
     expect(mediaHost).toHaveClass('h-full', 'w-full', 'min-w-0', 'overflow-hidden');
     expect(preview).toHaveClass('grid');
     expect(preview).toHaveClass('min-w-0');

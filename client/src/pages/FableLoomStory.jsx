@@ -7,14 +7,13 @@
  * play drawer rides ?play=1.
  * Left: the scene-graph canvas (stacks top-to-bottom under the `lg` rail
  * breakpoint). Right rail: the selected scene's editor, or the
- * structure/review panel when nothing is selected. On small screens the
- * rail sits under the canvas and is height-capped so the graph stays the
- * thing you scroll.
+ * structure/review panel when nothing is selected. On small screens a
+ * selected scene slides up over the graph as a dismissible details sheet.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router';
-import { ArrowLeft, BookOpenText, ListTree, Loader2, Plus, Settings, Sparkles, Trash2, Waypoints, Workflow as WorkflowIcon } from 'lucide-react';
+import { ArrowLeft, BookOpenText, ListTree, Loader2, Plus, Settings, Sparkles, Trash2, Waypoints, Workflow as WorkflowIcon, X } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Drawer from '../components/Drawer';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
@@ -320,6 +319,9 @@ export default function FableLoomStory({ view = 'graph' }) {
   const selectNode = (id) => {
     navigate(episodePath(episodeId, id) + (playOpen ? '?play=1' : ''));
   };
+  const clearNodeSelection = () => {
+    navigate(episodePath(episodeId) + (playOpen ? '?play=1' : ''));
+  };
 
   const setPlayOpen = (open) => {
     setSearchParams((prev) => {
@@ -524,7 +526,7 @@ export default function FableLoomStory({ view = 'graph' }) {
           onSelectNode={(id) => navigate(episodePath(episode.id, id))}
         />
       ) : (
-        <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
+        <div className="relative flex-1 min-h-0 flex flex-col lg:flex-row">
           <section className="flex-1 min-h-[55vh] lg:min-h-0 min-w-0 relative">
             {episode.nodes.length ? (
               <LoomCanvas
@@ -565,37 +567,66 @@ export default function FableLoomStory({ view = 'graph' }) {
               </div>
             )}
           </section>
+          {node && (
+            <button
+              type="button"
+              aria-label="Return to graph"
+              onClick={clearNodeSelection}
+              className="absolute inset-0 z-10 bg-black/45 lg:hidden"
+            />
+          )}
           <aside
-            className="lg:w-[380px] lg:shrink-0 max-h-dvh-cap lg:max-h-none border-t lg:border-t-0 lg:border-l border-port-border overflow-y-auto"
-            style={{ '--dvh-cap': '45vh', '--dvh-cap-dynamic': '45dvh' }}
+            data-testid={node ? 'scene-details-sheet' : 'loom-validation-rail'}
+            aria-label={node ? `${node.title || 'Scene'} details` : 'Episode validation'}
+            className={node
+              ? 'absolute inset-x-0 bottom-0 z-20 flex h-[calc(100%_-_0.75rem)] max-h-dvh-cap flex-col overflow-hidden rounded-t-2xl border border-b-0 border-port-border bg-port-card shadow-2xl motion-safe:animate-in motion-safe:slide-in-from-bottom-4 motion-safe:duration-200 lg:static lg:h-auto lg:max-h-none lg:w-[380px] lg:shrink-0 lg:rounded-none lg:border-y-0 lg:border-r-0 lg:border-l'
+              : 'max-h-dvh-cap overflow-hidden border-t border-port-border lg:max-h-none lg:w-[380px] lg:shrink-0 lg:border-t-0 lg:border-l'}
+            style={node
+              ? { '--dvh-cap': '78vh', '--dvh-cap-dynamic': '78dvh' }
+              : { '--dvh-cap': '45vh', '--dvh-cap-dynamic': '45dvh' }}
           >
-            {node ? (
-              <LoomNodeEditor
-                key={node.id}
-                loom={loom}
-                episode={episode}
-                node={node}
-                universe={linkedUniverse}
-                onLoomUpdate={setLoom}
-                onClearSelection={() => navigate(episodePath(episode.id))}
-                mediaJobs={mediaJobs[node.id]}
-                onGenerateImage={queueSceneImage}
-                onGenerateVideo={queueSceneVideo}
-                generationDisabled={styleContextLoading || styleContextUnavailable}
-                generationDisabledReason={generationDisabledReason}
-                onMakeStart={node.id !== episode.startNodeId ? async () => {
-                  const updated = await updateLoomEpisode(loomId, episode.id, { startNodeId: node.id })
-                    .catch(() => null);
-                  if (updated) setLoom(updated);
-                } : null}
-              />
-            ) : (
-              <LoomValidationPanel
-                loom={loom}
-                episode={episode}
-                onSelectNode={selectNode}
-              />
+            {node && (
+              <div className="relative flex shrink-0 items-center justify-center border-b border-port-border px-4 py-2 lg:hidden">
+                <span className="h-1 w-10 rounded-full bg-port-border" aria-hidden="true" />
+                <button
+                  type="button"
+                  onClick={clearNodeSelection}
+                  aria-label="Close scene details"
+                  className="absolute right-2 top-1/2 flex min-h-[44px] min-w-[44px] -translate-y-1/2 items-center justify-center rounded-lg text-port-text-muted hover:bg-port-border/50 hover:text-port-text"
+                >
+                  <X size={18} />
+                </button>
+              </div>
             )}
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              {node ? (
+                <LoomNodeEditor
+                  key={node.id}
+                  loom={loom}
+                  episode={episode}
+                  node={node}
+                  universe={linkedUniverse}
+                  onLoomUpdate={setLoom}
+                  onClearSelection={clearNodeSelection}
+                  mediaJobs={mediaJobs[node.id]}
+                  onGenerateImage={queueSceneImage}
+                  onGenerateVideo={queueSceneVideo}
+                  generationDisabled={styleContextLoading || styleContextUnavailable}
+                  generationDisabledReason={generationDisabledReason}
+                  onMakeStart={node.id !== episode.startNodeId ? async () => {
+                    const updated = await updateLoomEpisode(loomId, episode.id, { startNodeId: node.id })
+                      .catch(() => null);
+                    if (updated) setLoom(updated);
+                  } : null}
+                />
+              ) : (
+                <LoomValidationPanel
+                  loom={loom}
+                  episode={episode}
+                  onSelectNode={selectNode}
+                />
+              )}
+            </div>
           </aside>
         </div>
       )}

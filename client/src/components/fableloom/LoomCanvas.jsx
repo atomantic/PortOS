@@ -45,8 +45,10 @@ export default function LoomCanvas({
   // An in-flight drag lives entirely outside React state: the dragged <g>'s
   // transform is mutated directly per pointermove, and the position commits
   // once on release. Routing it through setState re-rendered every node card
-  // (each with a foreignObject subtree) ~60×/s. Edges catch up on release.
+  // (each with a foreignObject media surface) ~60×/s. Edges catch up on release.
   const dragRef = useRef(null);
+  const cardRefs = useRef(new Map());
+  const mediaRefs = useRef(new Map());
   const [measureRef, measuredWidth] = useContainerWidth();
   const viewportWidth = viewportWidthProp ?? measuredWidth;
   const markerId = useId().replace(/:/g, '');
@@ -78,7 +80,8 @@ export default function LoomCanvas({
     const start = positions[node.id] || { x: 0, y: 0 };
     dragRef.current = {
       id: node.id,
-      el: event.currentTarget,
+      cardEl: cardRefs.current.get(node.id),
+      mediaEl: mediaRefs.current.get(node.id),
       startX: event.clientX,
       startY: event.clientY,
       originX: start.x,
@@ -98,7 +101,11 @@ export default function LoomCanvas({
     drag.moved = true;
     drag.x = Math.max(0, drag.originX + dx);
     drag.y = Math.max(0, drag.originY + dy);
-    drag.el.setAttribute('transform', `translate(${drag.x}, ${drag.y})`);
+    drag.cardEl?.setAttribute('transform', `translate(${drag.x}, ${drag.y})`);
+    // Media foreignObjects are deliberately NOT children of the transformed
+    // card group. Move their absolute coordinates in lockstep while dragging.
+    drag.mediaEl?.setAttribute('x', drag.x + 8);
+    drag.mediaEl?.setAttribute('y', drag.y + 24);
   };
 
   const handlePointerUp = () => {
@@ -106,7 +113,8 @@ export default function LoomCanvas({
     dragRef.current = null;
     if (!drag) return;
     if (drag.moved) {
-      drag.el.dataset.loomDragged = '1';
+      if (drag.cardEl) drag.cardEl.dataset.loomDragged = '1';
+      if (drag.mediaEl) drag.mediaEl.dataset.loomDragged = '1';
       onMoveNode?.(drag.id, { x: Math.round(drag.x), y: Math.round(drag.y) });
     }
   };
@@ -223,6 +231,10 @@ export default function LoomCanvas({
             return (
               <g
                 key={node.id}
+                ref={(element) => {
+                  if (element) cardRefs.current.set(node.id, element);
+                  else cardRefs.current.delete(node.id);
+                }}
                 data-node-id={node.id}
                 transform={`translate(${pos.x}, ${pos.y})`}
                 className={stacked ? 'cursor-pointer' : 'cursor-grab'}
@@ -253,24 +265,6 @@ export default function LoomCanvas({
                 <text x={10} y={17} className="fill-port-text text-[11px] font-semibold pointer-events-none">
                   {truncate(node.title || 'Untitled scene', titleMax)}
                 </text>
-                <foreignObject
-                  x={8}
-                  y={24}
-                  width={nodeW - 16}
-                  height={nodeH - 48}
-                >
-                  <div className="h-full w-full min-w-0 overflow-hidden" xmlns="http://www.w3.org/1999/xhtml">
-                    <LoomSceneMedia
-                      node={node}
-                      jobs={mediaJobs[node.id]}
-                      onGenerateImage={onGenerateImage}
-                      onGenerateVideo={onGenerateVideo}
-                      compact
-                      generationDisabled={generationDisabled}
-                      generationDisabledReason={generationDisabledReason}
-                    />
-                  </div>
-                </foreignObject>
                 <g transform={`translate(10, ${nodeH - 16})`} className="pointer-events-none">
                   {isStart && (
                     <g>
@@ -300,6 +294,46 @@ export default function LoomCanvas({
                   </text>
                 )}
               </g>
+            );
+          })}
+        </g>
+        {/* WebKit/iOS paints HTML inside a foreignObject at the wrong place
+            when an ancestor SVG group is transformed. Keep each media surface
+            at the SVG root and give it already-resolved canvas coordinates so
+            images and videos stay inside their scene card on every engine. */}
+        <g>
+          {nodes.map((node) => {
+            const pos = positions[node.id];
+            if (!pos) return null;
+            return (
+              <foreignObject
+                key={node.id}
+                ref={(element) => {
+                  if (element) mediaRefs.current.set(node.id, element);
+                  else mediaRefs.current.delete(node.id);
+                }}
+                data-node-media-id={node.id}
+                x={pos.x + 8}
+                y={pos.y + 24}
+                width={nodeW - 16}
+                height={nodeH - 48}
+                onPointerDown={(event) => handlePointerDown(event, node)}
+                onPointerMove={handlePointerMove}
+                onPointerUp={handlePointerUp}
+                onClick={(event) => handleNodeActivate(event, node.id)}
+              >
+                <div className="h-full w-full min-w-0 overflow-hidden" xmlns="http://www.w3.org/1999/xhtml">
+                  <LoomSceneMedia
+                    node={node}
+                    jobs={mediaJobs[node.id]}
+                    onGenerateImage={onGenerateImage}
+                    onGenerateVideo={onGenerateVideo}
+                    compact
+                    generationDisabled={generationDisabled}
+                    generationDisabledReason={generationDisabledReason}
+                  />
+                </div>
+              </foreignObject>
             );
           })}
         </g>

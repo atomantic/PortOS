@@ -66,11 +66,13 @@ vi.mock('../components/fableloom/LoomMediaJobWatchers', () => ({
   },
 }));
 vi.mock('../components/fableloom/LoomEpisodeOutline', () => ({ default: ({ episode }) => <div data-testid="episode-outline">{episode.title}</div> }));
-vi.mock('../components/fableloom/LoomNodeEditor', () => ({ default: () => <div /> }));
+vi.mock('../components/fableloom/LoomNodeEditor', () => ({
+  default: ({ node }) => <div>Editing scene: {node.title}</div>,
+}));
 vi.mock('../components/fableloom/LoomPlayPanel', () => ({ default: () => <div /> }));
 vi.mock('../components/fableloom/LoomSettingsDrawer', () => ({ default: () => <div /> }));
 vi.mock('../components/fableloom/LoomSeriesPlan', () => ({ default: () => <div>Series planning workspace</div> }));
-vi.mock('../components/fableloom/LoomValidationPanel', () => ({ default: () => <div /> }));
+vi.mock('../components/fableloom/LoomValidationPanel', () => ({ default: () => <div>Episode validation</div> }));
 
 import * as api from '../services/api';
 import FableLoomStory from './FableLoomStory';
@@ -97,11 +99,12 @@ const episode = (fields = {}) => ({
   ...fields,
 });
 
-const renderEditor = () => render(
-  <MemoryRouter initialEntries={['/fableloom/loom-1']}>
+const renderEditor = (initialEntry = '/fableloom/loom-1') => render(
+  <MemoryRouter initialEntries={[initialEntry]}>
     <Routes>
       <Route path="/fableloom/:loomId" element={<FableLoomStory />} />
       <Route path="/fableloom/:loomId/:episodeId" element={<FableLoomStory />} />
+      <Route path="/fableloom/:loomId/:episodeId/:nodeId" element={<FableLoomStory />} />
     </Routes>
   </MemoryRouter>,
 );
@@ -191,6 +194,24 @@ describe('FableLoomStory episode outline route', () => {
 
     expect(await screen.findByTestId('episode-outline')).toHaveTextContent('The First Door');
     expect(screen.getByRole('tab', { name: 'Outline' })).toHaveAttribute('aria-selected', 'true');
+  });
+});
+
+describe('FableLoomStory mobile scene details', () => {
+  it('opens the selected scene in a slide-up sheet and closes back to the graph', async () => {
+    const user = userEvent.setup();
+    api.getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
+    renderEditor('/fableloom/loom-1/ep-1/node-1');
+
+    const sheet = await screen.findByTestId('scene-details-sheet');
+    expect(sheet).toHaveClass('absolute', 'bottom-0', 'rounded-t-2xl', 'lg:static');
+    expect(screen.getByText('Editing scene: Threshold')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Close scene details' }));
+
+    await waitFor(() => expect(screen.queryByTestId('scene-details-sheet')).not.toBeInTheDocument());
+    expect(screen.getByTestId('loom-validation-rail')).toBeInTheDocument();
+    expect(screen.getByText('Episode validation')).toBeInTheDocument();
   });
 });
 

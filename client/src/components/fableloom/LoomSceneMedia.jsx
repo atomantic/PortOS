@@ -76,9 +76,9 @@ export default function LoomSceneMedia({
   const buttonClass = compact
     ? 'inline-flex min-w-0 items-center justify-center gap-1 rounded border border-port-border bg-port-bg/80 px-1.5 py-1 text-[9px] text-port-text hover:border-port-accent hover:text-port-accent disabled:opacity-45'
     : 'inline-flex items-center justify-center gap-1.5 rounded border border-port-border px-2.5 py-1.5 text-xs text-port-text hover:border-port-accent hover:text-port-accent disabled:opacity-45';
-  // WebKit paints positioned HTML inside a transformed SVG foreignObject at
-  // the SVG origin. Compact media lives in that exact shape, so overlap its
-  // preview/status with one grid cell instead of relative/absolute positioning.
+  // Compact media still lives inside an SVG foreignObject. Keep its overlapping
+  // preview/status layers in one grid cell: WebKit handles that more reliably
+  // than positioned HTML descendants, while the canvas owns card coordinates.
   const previewClass = compact
     ? 'grid flex-1 min-h-0 min-w-0 overflow-hidden rounded border border-port-border bg-port-bg'
     : 'relative min-h-0 overflow-hidden rounded border border-port-border bg-port-bg aspect-video max-h-56';
