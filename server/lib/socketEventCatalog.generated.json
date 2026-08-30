@@ -2261,7 +2261,7 @@
         {
           "direction": "server-to-client",
           "source": "client/src/components/fableloom/LoomPlayPanel.jsx",
-          "line": 101
+          "line": 114
         }
       ]
     },
@@ -2300,7 +2300,7 @@
         {
           "direction": "server-to-client",
           "source": "client/src/components/fableloom/LoomPlayPanel.jsx",
-          "line": 132
+          "line": 145
         }
       ]
     },
@@ -2339,7 +2339,7 @@
         {
           "direction": "server-to-client",
           "source": "client/src/components/fableloom/LoomPlayPanel.jsx",
-          "line": 124
+          "line": 137
         }
       ]
     },
@@ -2365,7 +2365,7 @@
         {
           "direction": "server-to-client",
           "source": "client/src/components/fableloom/LoomPlayPanel.jsx",
-          "line": 105
+          "line": 118
         }
       ]
     },
@@ -2396,7 +2396,7 @@
         {
           "direction": "server-to-client",
           "source": "client/src/components/fableloom/LoomPlayPanel.jsx",
-          "line": 109
+          "line": 122
         }
       ]
     },
@@ -2409,7 +2409,7 @@
         {
           "direction": "server-to-client",
           "source": "client/src/components/fableloom/LoomPlayPanel.jsx",
-          "line": 113
+          "line": 126
         }
       ]
     },

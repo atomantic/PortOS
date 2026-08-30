@@ -69,6 +69,32 @@ describe('fableLoom production service', () => {
         id: 'ep-1',
         title: 'Episode 1',
         startNodeId: 'node-1',
+        storyOutline: {
+          version: 1,
+          startKey: 's1',
+          scenes: [
+            {
+              key: 's1', title: 'Opening', summary: 'The hero reaches the threshold.',
+              playbackMode: 'cut', audienceConnection: 'disconnected', protagonistPresence: 'onscreen',
+              isEnding: false, transitions: [{ targetKey: 's2', intent: 'Continue' }],
+            },
+            {
+              key: 's2', title: 'Choice', summary: 'The hero chooses a direction.',
+              playbackMode: 'decision', audienceConnection: 'connected', protagonistPresence: 'onscreen',
+              isEnding: false,
+              transitions: [
+                { targetKey: 's3', intent: 'Take the left path' },
+                { targetKey: 's3', intent: 'Take the right path' },
+              ],
+            },
+            {
+              key: 's3', title: 'Arrival', summary: 'The choice opens a way forward.',
+              playbackMode: 'cut', audienceConnection: 'disconnected', protagonistPresence: 'onscreen',
+              isEnding: true, endingLabel: 'Forward', transitions: [],
+            },
+          ],
+          validation: { status: 'valid', issues: [] },
+        },
         nodes: [
           {
             id: 'node-1',
@@ -142,6 +168,37 @@ describe('fableLoom production service', () => {
     expect(plan.plannedAssets.length).toBeGreaterThan(0);
     expect(plan.plannedAssets.some((a) => a.id === 'asset-node-1-still')).toBe(true);
     expect(plan.plannedAssets.some((a) => a.id === 'asset-node-2-still')).toBe(true);
+    expect(plan.seriesStoryReadiness.stats.ready).toBe(true);
+  });
+
+  it('blocks production planning until the complete series beat arc is validated', async () => {
+    const draftLoom = structuredClone(sampleLoom);
+    draftLoom.episodes[0].storyOutline.validation = { status: 'draft', issues: [] };
+    records.getLoom.mockResolvedValueOnce(draftLoom);
+
+    const plan = await planEpisodeProduction('loom-1', 'ep-1', { mode: 'current_canon' });
+
+    expect(plan.seriesStoryReadiness.stats.ready).toBe(false);
+    expect(plan.planningIssues).toEqual(expect.arrayContaining([
+      expect.stringContaining("Episode 1's beat outline must be validated"),
+    ]));
+  });
+
+  it('reports the ordered storyboard gate for a later episode', async () => {
+    const laterLoom = structuredClone(sampleLoom);
+    laterLoom.episodes.push({
+      id: 'ep-2', number: 2, title: 'Episode 2', startNodeId: 'later-node',
+      storyOutline: structuredClone(sampleLoom.episodes[0].storyOutline),
+      nodes: [{ id: 'later-node', title: 'Later node', prose: 'Later prose.', imagePrompt: 'Later prompt.', transitions: [] }],
+    });
+    records.getLoom.mockResolvedValueOnce(laterLoom);
+
+    const plan = await planEpisodeProduction('loom-1', 'ep-2', { mode: 'current_canon' });
+
+    expect(plan.episodeOrderReadiness.ready).toBe(false);
+    expect(plan.planningIssues).toEqual(expect.arrayContaining([
+      expect.stringContaining('Episode order: Finish storyboard images for Episode 1'),
+    ]));
   });
 
   it('creates and tracks batch production runs', async () => {

@@ -26,8 +26,9 @@ const { createLoom, addEpisode, addNode, mutateLoom, updateLoom, updateNode, get
 const { _resetFableLoomBackend } = await import('./store.js');
 const { aiStatusEvents } = await import('../aiStatusEvents.js');
 const {
-  branchNode, buildCanonDigest, feedbackEpisode, feedbackSeriesPlan, generateSeriesPlan, mapGeneratedGraph, playTurn,
-  reformatEpisodeScenes, reviewEpisode, reviewSeriesPlan, weaveEpisode,
+  branchNode, buildCanonDigest, feedbackEpisode, feedbackSeriesPlan, generateEpisodeOutline, generateSeriesPlan,
+  mapGeneratedGraph, playTurn, reformatEpisodeScenes, reviewEpisode, reviewEpisodeOutline, reviewSeriesPlan,
+  validateEpisodeOutline, reviewSeriesTeleplay, weaveEpisode,
 } = await import('./weave.js');
 
 beforeEach(() => {
@@ -59,6 +60,16 @@ const generatedGraph = () => ({
     ] },
     { key: 's2', title: 'Inside', prose: 'Torchlight.', transitions: [{ targetKey: 's3', intent: 'give up' }] },
     { key: 's3', title: 'The Road Home', isEnding: true, endingLabel: 'Turned back', transitions: [] },
+  ],
+});
+
+const generatedOutline = () => ({
+  startKey: 's1',
+  scenes: [
+    { key: 's1', title: 'Signal', summary: 'A signal proves the missing ship is alive.', playbackMode: 'cut', transitions: [{ targetKey: 's2', intent: 'follow the signal' }] },
+    { key: 's2', title: 'The choice', summary: 'The signal offers two routes with different costs.', playbackMode: 'decision', transitions: [{ targetKey: 's3', intent: 'protect the survivors' }, { targetKey: 's4', intent: 'take the shortcut' }] },
+    { key: 's3', title: 'Rescue', summary: 'The rescue succeeds but strands the protagonist.', isEnding: true, endingLabel: 'The long way home' },
+    { key: 's4', title: 'Shortcut', summary: 'The shortcut opens a door and leaves a voice behind.', isEnding: true, endingLabel: 'The open door' },
   ],
 });
 
@@ -153,6 +164,114 @@ describe('weaveEpisode', () => {
     const result = await weaveEpisode(loomId, episodeId);
     expect(result.loom.episodes[0].nodes.map((node) => node.audienceConnection))
       .toEqual(['disconnected', 'connected', 'disconnected']);
+  });
+
+  it('requires a validated beat outline before expansion', async () => {
+    const { loomId, episodeId } = await setup();
+    await expect(weaveEpisode(loomId, episodeId, { expandFromOutline: true }))
+      .rejects.toMatchObject({ code: 'OUTLINE_INVALID' });
+    expect(runStagedLLM).not.toHaveBeenCalled();
+  });
+
+  it('drafts, validates, and expands an outline without losing its story contract', async () => {
+    const { loomId, episodeId } = await setup();
+    runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-run' });
+    const drafted = await generateEpisodeOutline(loomId, episodeId, { guidance: 'Make the choice costly.' });
+    expect(drafted.runId).toBe('outline-run');
+    expect(drafted.outline.scenes).toHaveLength(4);
+    expect(drafted.outline.validation.status).toBe('draft');
+
+    const checked = await validateEpisodeOutline(loomId, episodeId);
+    expect(checked.validation.issues).toEqual([]);
+    expect(checked.outline.validation.status).toBe('valid');
+
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraph(), runId: 'expand-run' });
+    const expanded = await weaveEpisode(loomId, episodeId, {
+      guidance: 'Write the full teleplay now.', replace: false, expandFromOutline: true,
+    });
+    expect(expanded.runId).toBe('expand-run');
+    expect(expanded.loom.episodes[0].nodes).toHaveLength(3);
+    expect(runStagedLLM.mock.calls[1][0]).toBe('fableloom-weave-episode');
+    expect(runStagedLLM.mock.calls[1][1].outlineDigest).toContain('[s1] Signal');
+  });
+
+  it('uses the loom participation mode when normalizing helper outline beats', async () => {
+    const { loomId, episodeId } = await setup();
+    await updateLoom(loomId, {
+      participationMode: 'helper',
+      audienceCommunicationMedium: 'A pocket radio.',
+    });
+    const outline = generatedOutline();
+    outline.scenes[1].audienceConnection = 'connected';
+    runStagedLLM.mockResolvedValueOnce({ content: outline, runId: 'helper-outline-run' });
+
+    const drafted = await generateEpisodeOutline(loomId, episodeId, {});
+
+    expect(drafted.outline.scenes[1].protagonistPresence).toBe('offscreen');
+  });
+
+  it('does not expand one episode until every episode in the series has a validated outline', async () => {
+    const { loomId, episodeId } = await setup();
+    const withSecond = await addEpisode(loomId, { title: 'Second', synopsis: 'The consequence.' });
+    runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-run' });
+    await generateEpisodeOutline(loomId, episodeId, {});
+    await validateEpisodeOutline(loomId, episodeId);
+
+    await expect(weaveEpisode(loomId, episodeId, { expandFromOutline: true }))
+      .rejects.toMatchObject({ code: 'SERIES_OUTLINE_INVALID' });
+    expect(withSecond.episodes).toHaveLength(2);
+    expect(runStagedLLM).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('episode outline AI review', () => {
+  it('returns deterministic findings alongside editorial analysis', async () => {
+    const { loomId, episodeId } = await setup();
+    runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-run' });
+    await generateEpisodeOutline(loomId, episodeId, {});
+    runStagedLLM.mockResolvedValueOnce({
+      content: { summary: 'The turn lands.', strengths: ['The endings diverge.'], risks: ['The handoff needs a sharper hook.'], recommendations: ['Make the final beat reveal the next threat.'] },
+      runId: 'outline-review-run',
+    });
+    const result = await reviewEpisodeOutline(loomId, episodeId, {});
+    expect(result).toMatchObject({
+      runId: 'outline-review-run',
+      structural: { stats: { errorCount: 0 } },
+      analysis: { summary: 'The turn lands.' },
+    });
+  });
+});
+
+describe('reviewSeriesTeleplay', () => {
+  it('reviews all expanded episodes together and returns per-episode structure', async () => {
+    const { loomId, episodeId } = await setup();
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraph(), runId: 'expand-1' });
+    await weaveEpisode(loomId, episodeId, {});
+    const second = await addEpisode(loomId, { title: 'Second', synopsis: 'The consequence.' });
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraph(), runId: 'expand-2' });
+    await weaveEpisode(loomId, second.episodes[1].id, {});
+    runStagedLLM.mockResolvedValueOnce({
+      content: { summary: 'The series escalates.', strengths: ['The protagonist changes.'], risks: [], recommendations: [] },
+      runId: 'teleplay-review-run',
+    });
+
+    const result = await reviewSeriesTeleplay(loomId, {});
+    expect(result).toMatchObject({
+      runId: 'teleplay-review-run',
+      structural: [
+        { episodeId, episodeNumber: 1 },
+        { episodeNumber: 2 },
+      ],
+      analysis: { summary: 'The series escalates.' },
+    });
+    expect(runStagedLLM.mock.calls[2][0]).toBe('fableloom-review-series-teleplay');
+    expect(runStagedLLM.mock.calls[2][1].teleplayDigest).toContain('## Episode 1: Pilot');
+  });
+
+  it('refuses a full-series review while an episode has not expanded', async () => {
+    const { loomId } = await setup();
+    await expect(reviewSeriesTeleplay(loomId, {})).rejects.toMatchObject({ code: 'TELEPLAY_INCOMPLETE' });
+    expect(runStagedLLM).not.toHaveBeenCalled();
   });
 });
 
@@ -863,5 +982,36 @@ describe('series plan AI', () => {
     expect(runStagedLLM).toHaveBeenCalledWith('fableloom-weave-episode', expect.objectContaining({
       storyContext: expect.stringContaining('Plot point 1 [planned for Episode 1: Pilot]: Episode turn'),
     }), expect.anything());
+  });
+
+  it('carries enabled series delivery beats into episode context and preserves them during plan drafting', async () => {
+    const { loomId, episodeId } = await setup();
+    const delivery = {
+      deliveryOptions: { overnightVoicemails: true, nextSeasonTeaser: true },
+      interEpisodeVoicemails: [{
+        id: 'vm-1', fromEpisodeId: episodeId, toEpisodeId: null,
+        title: 'Night call', transcript: 'Keep the receiver warm.',
+      }],
+      nextSeasonTeaser: { title: 'Beyond', transcript: 'Something answers.' },
+    };
+    await updateLoom(loomId, { seriesPlan: {
+      storyArc: 'A courier learns to listen.', plotPoints: [], sideQuests: [], ...delivery,
+    } });
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraph(), runId: 'run-weave-delivery' });
+    await weaveEpisode(loomId, episodeId, {});
+    expect(runStagedLLM.mock.calls[0][1].storyContext).toContain('authored overnight voicemail');
+    expect(runStagedLLM.mock.calls[0][1].storyContext).toContain('Keep the receiver warm.');
+  });
+
+  it('tells episode expansion to frame unseen obstacles for off-screen helper scenes', async () => {
+    const { loomId, episodeId } = await setup();
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraph(), runId: 'run-offscreen-framing' });
+
+    await weaveEpisode(loomId, episodeId, {});
+
+    expect(runStagedLLM.mock.calls[0][1].storyContext)
+      .toContain('frame the obstacle or space the protagonist cannot see');
+    expect(runStagedLLM.mock.calls[0][1].storyContext)
+      .toContain('never make a standalone comms device the subject');
   });
 });

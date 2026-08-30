@@ -1,8 +1,9 @@
 /**
  * FableLoom validation panel — the deterministic graph checks plus the
- * optional AI story review. Structural checks run instantly server-side (no
- * LLM); "Review with AI" layers the story-editor critique on top. Clicking a
- * scene-anchored finding selects that node on the canvas.
+ * optional episode-level AI story review. Structural checks run instantly
+ * server-side (no LLM); the series-level "Review full teleplay" action lives
+ * in the series plan. Clicking a scene-anchored finding selects that node on
+ * the canvas.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -149,7 +150,7 @@ export default function LoomValidationPanel({ loom, episode, onSelectNode }) {
                 className="flex items-center gap-1 text-xs text-port-accent hover:underline disabled:opacity-50"
               >
                 {reviewing ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                Review with AI
+                Review episode teleplay with AI
               </button>
             </div>
             {review ? (
@@ -165,7 +166,7 @@ export default function LoomValidationPanel({ loom, episode, onSelectNode }) {
               </div>
             ) : (
               <p className="text-xs text-port-text-muted">
-                Ask the AI story editor to critique intents, branches, and endings.
+                Ask the AI story editor to critique this episode's intents, branches, scene craft, and endings.
               </p>
             )}
           </div>

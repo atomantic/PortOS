@@ -15,6 +15,7 @@ import { characterIdentityPackReadiness } from '../../lib/storyBible.js';
 import {
   matchCharactersInText, matchObjectsInText, matchPlacesInText,
 } from '../../lib/scenePrompt.js';
+import { resolveFableLoomProtagonistPresence } from '../../lib/fableLoomPlayback.js';
 import { getUniverse } from '../universeBuilder.js';
 import { resolveCharacterLoras } from '../characterLoraResolver.js';
 import { getSeries } from '../pipeline/series.js';
@@ -67,7 +68,7 @@ const resolveTemporalNode = (episode, node, explicitId) => {
   return { node: null, reason: incoming.length > 1 ? 'ambiguous-convergence' : 'no-predecessor' };
 };
 
-const bindScene = ({ node, episode, universe }) => {
+const bindScene = ({ node, episode, universe, loom }) => {
   const declared = node.visualCanon;
   const characters = Array.isArray(universe.characters) ? universe.characters : [];
   const places = Array.isArray(universe.places) ? universe.places : [];
@@ -76,9 +77,41 @@ const bindScene = ({ node, episode, universe }) => {
   const characterMap = byId(characters);
   const placeMap = byId(places);
   const objectMap = byId(objects);
-  const appearances = declared
+  const protagonistIds = unique([
+    loom?.protagonistCharacterId,
+    node.interactionWindow?.protagonistCharacterId,
+  ].map(text));
+  const protagonistId = protagonistIds[0] || null;
+  const protagonistPresence = resolveFableLoomProtagonistPresence(node, loom);
+  const rawAppearances = declared
     ? declared.characterAppearances || []
     : matchCharactersInText(sourceText, characters).map((character) => ({ characterId: character.id }));
+  const hasCanonicalProtagonist = rawAppearances.some((appearance) => (
+    appearance?.characterId === loom?.protagonistCharacterId
+  ));
+  const appearancesWithImplicitProtagonist = loom?.protagonistCharacterId
+    && protagonistPresence !== 'offscreen'
+    && characterMap.has(loom.protagonistCharacterId)
+    && !hasCanonicalProtagonist
+    ? [...rawAppearances, { characterId: loom.protagonistCharacterId }]
+    : rawAppearances;
+  const appearancesWithBaselineWardrobe = appearancesWithImplicitProtagonist.map((appearance) => {
+    if (appearance?.characterId !== loom?.protagonistCharacterId || !loom?.protagonistWardrobeId) {
+      return appearance;
+    }
+    // A selected wardrobe is the default for the protagonist. A locked
+    // wardrobe also overrides a stale scene-local selection so a re-render
+    // cannot silently change clothes between episodes.
+    return loom.protagonistWardrobeLocked || !appearance.wardrobeId
+      ? { ...appearance, wardrobeId: loom.protagonistWardrobeId }
+      : appearance;
+  });
+  const offscreenAppearances = protagonistPresence === 'offscreen'
+    ? appearancesWithBaselineWardrobe.filter((appearance) => protagonistIds.includes(appearance?.characterId))
+    : [];
+  const appearances = appearancesWithBaselineWardrobe.filter(
+    (appearance) => !offscreenAppearances.includes(appearance),
+  );
   const boundCharacters = appearances.map((appearance) => ({ appearance, character: characterMap.get(appearance.characterId) }))
     .filter((item) => item.character);
   const boundPlace = declared
@@ -95,8 +128,28 @@ const bindScene = ({ node, episode, universe }) => {
     }).map((item) => ({ role: 'wardrobe', bindingId: item.wardrobeId, reason: 'binding-not-found' })),
     ...(declared.placeId && !boundPlace ? [{ role: 'environment', bindingId: declared.placeId, reason: 'binding-not-found' }] : []),
     ...(declared.objectIds || []).filter((id) => !objectMap.has(id)).map((id) => ({ role: 'object', bindingId: id, reason: 'binding-not-found' })),
+    ...(loom?.protagonistCharacterId && !characterMap.has(loom.protagonistCharacterId)
+      ? [{ role: 'protagonist', bindingId: loom.protagonistCharacterId, reason: 'binding-not-found' }]
+      : []),
+    ...(protagonistPresence !== 'offscreen'
+      && loom?.protagonistWardrobeId
+      && characterMap.has(loom.protagonistCharacterId)
+      && !characterMap.get(loom.protagonistCharacterId).wardrobes?.some((wardrobe) => wardrobe.id === loom.protagonistWardrobeId)
+      ? [{ role: 'protagonist-wardrobe', bindingId: loom.protagonistWardrobeId, reason: 'binding-not-found' }]
+      : []),
   ] : [];
-  return { declared: Boolean(declared), appearances, boundCharacters, boundPlace, boundObjects, missing };
+  return {
+    declared: Boolean(declared),
+    appearances,
+    boundCharacters,
+    boundPlace,
+    boundObjects,
+    missing,
+    protagonistId,
+    protagonistPresence,
+    protagonistWardrobeId: loom?.protagonistWardrobeId || null,
+    offscreenAppearances,
+  };
 };
 
 const imageAssetsForCharacter = (character, locked, resolveAsset) => {
@@ -173,11 +226,16 @@ export async function compileFableLoomVisualRequest({
   if (!universe && !node.visualCanon) return null;
   if (!universe) throw new ServerError('FableLoom linked universe not found', { status: 409, code: 'FABLELOOM_UNIVERSE_UNAVAILABLE' });
 
-  const bindings = bindScene({ node, episode, universe });
+  const bindings = bindScene({ node, episode, universe, loom });
   const locked = bindings.declared && node.visualCanon.mode !== 'draft';
   const warnings = bindings.declared ? [] : ['Bindings inferred from scene text; render is draft-only'];
   const failures = [];
   const omitted = [...bindings.missing];
+  omitted.push(...bindings.offscreenAppearances.map((appearance) => ({
+    role: 'character',
+    bindingId: appearance.characterId,
+    reason: 'protagonist-offscreen',
+  })));
   if (locked && bindings.missing.length) failures.push('one or more stable bindings no longer resolve');
   if (locked && bindings.boundCharacters.length > 1 && !capability.multiCharacterPreservation) {
     failures.push(`backend does not declare multi-character preservation for ${bindings.boundCharacters.length} characters`);
@@ -291,15 +349,21 @@ export async function compileFableLoomVisualRequest({
     universe.influences?.embrace?.length && universe.influences.embrace.join(', '),
     universe.styleNotes,
   ]);
+  const protagonistFraming = bindings.protagonistPresence === 'offscreen'
+    ? 'Framing constraint: the canonical protagonist is speaking through the communicator off-screen. The camera is the remote witness: show the obstacle or environment the protagonist cannot see around a corner, beyond a bend, at a distance, or otherwise outside their sightline. The communicator stays on the protagonist\'s person and completely out of frame; never use a standalone comms device as the subject. Do not show their face, body, silhouette, or duplicate presence in this storyboard image.'
+    : '';
   const positive = compact([
     universeStyle.length && `Universe style: ${universeStyle.join('. ')}`,
     placePrompt, ...characterPrompts, ...objectPrompts,
+    protagonistFraming,
     authoredPrompt || (kind === 'video' ? node.videoPrompt || node.prose : node.imagePrompt),
     node.visualCanon?.shotNotes && `Shot continuity: ${node.visualCanon.shotNotes}`,
   ]).join('\n\n').slice(0, 8000);
   const identityAvoid = bindings.boundCharacters.flatMap(({ character }) => character.identityPack?.avoid || []);
   const negativePrompt = unique(compact([
-    authoredNegativePrompt, ...(universe.influences?.avoid || []), ...identityAvoid,
+    authoredNegativePrompt,
+    bindings.protagonistPresence === 'offscreen' && 'visible canonical protagonist, protagonist face, protagonist body, protagonist silhouette, standalone communicator, comms device close-up, radio prop hero shot',
+    ...(universe.influences?.avoid || []), ...identityAvoid,
   ])).join(', ').slice(0, 8000);
   const manifest = {
     version: 1,
@@ -309,6 +373,13 @@ export async function compileFableLoomVisualRequest({
     capability,
     bindings: {
       inferred: !bindings.declared,
+      ...(bindings.protagonistId ? {
+        protagonist: {
+          characterId: bindings.protagonistId,
+          wardrobeId: bindings.protagonistWardrobeId,
+          presence: bindings.protagonistPresence || null,
+        },
+      } : {}),
       characterAppearances: bindings.boundCharacters.map(({ character, appearance }) => ({
         characterId: character.id, wardrobeId: appearance.wardrobeId || null,
         expression: appearance.expression || '', continuityNotes: appearance.continuityNotes || '',

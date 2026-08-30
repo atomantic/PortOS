@@ -44,6 +44,7 @@ import { LOOM_LIMITS } from './limits.js';
 import { asLoomFormat, isLoomFormat } from './formats.js';
 import {
   asFableLoomPlaybackMode,
+  FABLELOOM_PROTAGONIST_PRESENCE,
   isSafeVideoHistoryId,
   sanitizeInteractionWindow,
   sanitizePlaybackAssets,
@@ -55,6 +56,7 @@ import {
   asFableLoomParticipationMode,
 } from '../../lib/fableLoomParticipation.js';
 import { normalizeFableLoomCameraMovement } from '../../lib/fableLoomCameraMovements.js';
+import { sanitizeStoryOutline } from '../../lib/fableLoomOutline.js';
 
 export { LOOM_LIMITS };
 
@@ -123,6 +125,9 @@ function sanitizeNode(raw) {
     visualConditioning: sanitizeVisualConditioning(raw.visualConditioning),
     playbackMode: asFableLoomPlaybackMode(raw.playbackMode),
     audienceConnection: asFableLoomAudienceConnection(raw.audienceConnection),
+    protagonistPresence: FABLELOOM_PROTAGONIST_PRESENCE.includes(raw.protagonistPresence)
+      ? raw.protagonistPresence
+      : null,
     videoHistoryId: isSafeVideoHistoryId(raw.videoHistoryId) ? raw.videoHistoryId : null,
     playbackAssets: sanitizePlaybackAssets(raw.playbackAssets),
     interactionWindow: sanitizeInteractionWindow(raw.interactionWindow),
@@ -142,7 +147,7 @@ function sanitizeNode(raw) {
   };
 }
 
-function sanitizeEpisode(raw) {
+function sanitizeEpisode(raw, participationMode = 'protagonist') {
   if (!raw || typeof raw !== 'object' || !isStr(raw.id) || !raw.id) return null;
   const nodes = (Array.isArray(raw.nodes) ? raw.nodes : [])
     .map(sanitizeNode)
@@ -153,6 +158,7 @@ function sanitizeEpisode(raw) {
   // since-deleted id) are deliberately KEPT — the graph validation surfaces
   // them as errors the author resolves, rather than silently rewriting edges.
   const now = new Date().toISOString();
+  const storyOutline = sanitizeStoryOutline(raw.storyOutline, { participationMode });
   return {
     id: raw.id,
     number: Number.isFinite(raw.number) ? Math.max(1, Math.round(raw.number)) : 1,
@@ -160,6 +166,7 @@ function sanitizeEpisode(raw) {
     synopsis: trimTo(raw.synopsis, LOOM_LIMITS.SYNOPSIS_MAX),
     startNodeId: isStr(raw.startNodeId) && nodeIds.has(raw.startNodeId) ? raw.startNodeId : (nodes[0]?.id ?? null),
     nodes,
+    ...(storyOutline ? { storyOutline } : {}),
     createdAt: isStr(raw.createdAt) && raw.createdAt ? raw.createdAt : now,
     updatedAt: isStr(raw.updatedAt) && raw.updatedAt ? raw.updatedAt : now,
   };
@@ -181,6 +188,33 @@ function sanitizeSeriesPlan(raw, episodes) {
   const episodeIds = new Set(episodes.map((episode) => episode.id));
   const plotIds = new Set();
   const questIds = new Set();
+  const hasDeliveryPlan = source.deliveryOptions && typeof source.deliveryOptions === 'object'
+    || Array.isArray(source.interEpisodeVoicemails)
+    || source.nextSeasonTeaser !== undefined;
+  const deliveryOptions = source.deliveryOptions && typeof source.deliveryOptions === 'object'
+    ? {
+      overnightVoicemails: source.deliveryOptions.overnightVoicemails === true,
+      nextSeasonTeaser: source.deliveryOptions.nextSeasonTeaser === true,
+    }
+    : { overnightVoicemails: false, nextSeasonTeaser: false };
+  const voicemailIds = new Set();
+  const interEpisodeVoicemails = (Array.isArray(source.interEpisodeVoicemails)
+    ? source.interEpisodeVoicemails : [])
+    .slice(0, LOOM_LIMITS.EPISODES_MAX)
+    .filter((item) => item && typeof item === 'object')
+    .map((item) => ({
+      id: planItemId('voicemail', item.id, voicemailIds),
+      fromEpisodeId: planEpisodeRef(item.fromEpisodeId, episodeIds),
+      toEpisodeId: planEpisodeRef(item.toEpisodeId, episodeIds),
+      title: trimTo(item.title, LOOM_LIMITS.PLAN_ITEM_TITLE_MAX),
+      transcript: trimTo(item.transcript, LOOM_LIMITS.DELIVERY_MESSAGE_MAX),
+    }));
+  const teaser = source.nextSeasonTeaser && typeof source.nextSeasonTeaser === 'object'
+    ? {
+      title: trimTo(source.nextSeasonTeaser.title, LOOM_LIMITS.PLAN_ITEM_TITLE_MAX),
+      transcript: trimTo(source.nextSeasonTeaser.transcript, LOOM_LIMITS.DELIVERY_MESSAGE_MAX),
+    }
+    : null;
   return {
     storyArc: trimTo(source.storyArc, LOOM_LIMITS.STORY_ARC_MAX),
     plotPoints: (Array.isArray(source.plotPoints) ? source.plotPoints : [])
@@ -203,6 +237,11 @@ function sanitizeSeriesPlan(raw, episodes) {
         startEpisodeId: planEpisodeRef(item.startEpisodeId, episodeIds),
         endEpisodeId: planEpisodeRef(item.endEpisodeId, episodeIds),
       })),
+    ...(hasDeliveryPlan ? {
+      deliveryOptions,
+      interEpisodeVoicemails,
+      nextSeasonTeaser: teaser,
+    } : {}),
   };
 }
 
@@ -213,11 +252,14 @@ export function sanitizeLoom(raw) {
   if (!name) return null;
   const now = new Date().toISOString();
   const { deleted, deletedAt } = sanitizeSoftDeleteFields(raw);
+  const participationMode = asFableLoomParticipationMode(raw.participationMode);
   const episodes = (Array.isArray(raw.episodes) ? raw.episodes : [])
-    .map(sanitizeEpisode)
+    .map((episode) => sanitizeEpisode(episode, participationMode))
     .filter(Boolean)
     .slice(0, LOOM_LIMITS.EPISODES_MAX)
     .sort((a, b) => a.number - b.number || a.createdAt.localeCompare(b.createdAt));
+  const protagonistCharacterId = nullableRef(raw.protagonistCharacterId);
+  const protagonistWardrobeId = nullableRef(raw.protagonistWardrobeId);
   return {
     id: raw.id,
     schemaVersion: 2,
@@ -225,7 +267,7 @@ export function sanitizeLoom(raw) {
     logline: trimTo(raw.logline, LOOM_LIMITS.LOGLINE_MAX),
     premise: trimTo(raw.premise, LOOM_LIMITS.PREMISE_MAX),
     styleNotes: trimTo(raw.styleNotes, LOOM_LIMITS.STYLE_NOTES_MAX),
-    participationMode: asFableLoomParticipationMode(raw.participationMode),
+    participationMode,
     audienceCommunicationMedium: trimTo(
       raw.audienceCommunicationMedium,
       LOOM_LIMITS.AUDIENCE_COMMUNICATION_MEDIUM_MAX,
@@ -235,6 +277,9 @@ export function sanitizeLoom(raw) {
     // turns a reader's free text into a path. An unset dimension stays null
     // ('fall through to the stage pin / active provider').
     playSettings: sanitizeLlmRoutePin(raw.playSettings),
+    protagonistCharacterId,
+    protagonistWardrobeId,
+    protagonistWardrobeLocked: Boolean(protagonistWardrobeId && raw.protagonistWardrobeLocked !== false),
     universeId: nullableRef(raw.universeId),
     seriesId: nullableRef(raw.seriesId),
     seriesPlan: sanitizeSeriesPlan(raw.seriesPlan, episodes),
@@ -329,6 +374,7 @@ const assertParticipationConfigured = ({ participationMode, audienceCommunicatio
 
 export async function createLoom({
   name, logline, premise, styleNotes, format, playSettings, seriesPlan,
+  protagonistCharacterId, protagonistWardrobeId, protagonistWardrobeLocked,
   participationMode = FABLELOOM_LEGACY_PARTICIPATION_MODE,
   audienceCommunicationMedium, universeId, seriesId,
 } = {}) {
@@ -345,6 +391,9 @@ export async function createLoom({
     audienceCommunicationMedium,
     format,
     playSettings,
+    protagonistCharacterId,
+    protagonistWardrobeId,
+    protagonistWardrobeLocked,
     seriesPlan,
     universeId,
     seriesId,
@@ -381,11 +430,13 @@ export async function mutateLoom(id, mutator) {
 
 const PATCH_FIELDS = [
   'name', 'logline', 'premise', 'styleNotes', 'format', 'playSettings', 'seriesPlan',
+  'protagonistCharacterId', 'protagonistWardrobeId', 'protagonistWardrobeLocked',
   'participationMode', 'audienceCommunicationMedium', 'universeId', 'seriesId',
 ];
 
 const RESTORABLE_FIELDS = [
   'name', 'logline', 'premise', 'styleNotes', 'format', 'playSettings', 'seriesPlan',
+  'protagonistCharacterId', 'protagonistWardrobeId', 'protagonistWardrobeLocked',
   'participationMode', 'audienceCommunicationMedium', 'episodes',
 ];
 
@@ -437,10 +488,15 @@ export async function deleteLoom(id) {
 // them. A sender at the current schema version's present null remains an
 // intentional clear.
 const preserveLegacyVisualProduction = (remote, local, senderVersion) => {
-  if (!local || senderVersion >= 3) return remote;
+  if (!local || senderVersion >= 4) return remote;
   const localEpisodes = new Map(local.episodes.map((episode) => [episode.id, episode]));
   return {
     ...remote,
+    ...(senderVersion < 4 ? {
+      protagonistCharacterId: local.protagonistCharacterId,
+      protagonistWardrobeId: local.protagonistWardrobeId,
+      protagonistWardrobeLocked: local.protagonistWardrobeLocked,
+    } : {}),
     episodes: remote.episodes.map((episode) => {
       const localNodes = new Map((localEpisodes.get(episode.id)?.nodes || []).map((node) => [node.id, node]));
       return {
@@ -449,16 +505,17 @@ const preserveLegacyVisualProduction = (remote, local, senderVersion) => {
           const localNode = localNodes.get(node.id);
           return localNode ? {
             ...node,
-            visualCanon: localNode.visualCanon,
-            visualConditioning: localNode.visualConditioning,
-            playbackAssets: senderVersion < 3
-              ? {
+            ...(senderVersion < 4 ? { protagonistPresence: localNode.protagonistPresence } : {}),
+            ...(senderVersion < 3 ? {
+              visualCanon: localNode.visualCanon,
+              visualConditioning: localNode.visualConditioning,
+              playbackAssets: {
                 ...node.playbackAssets,
                 ...(localNode.playbackAssets?.visualConditioningByAsset
                   ? { visualConditioningByAsset: localNode.playbackAssets.visualConditioningByAsset }
                   : {}),
-              }
-              : node.playbackAssets,
+              },
+            } : {}),
           } : node;
         }),
       };
@@ -475,7 +532,7 @@ export async function mergeLoomsFromSync(
   remoteLooms,
   {
     source = { via: 'sync', peerId: null },
-    senderSchemaVersions = { fableLoom: 3 },
+    senderSchemaVersions = { fableLoom: 4 },
   } = {},
 ) {
   if (!Array.isArray(remoteLooms)) return { applied: false, count: 0 };
@@ -586,6 +643,16 @@ export function updateEpisode(loomId, episodeId, patch = {}) {
     for (const key of ['title', 'synopsis', 'number', 'startNodeId']) {
       if (key in patch) episode[key] = patch[key];
     }
+    if ('storyOutline' in patch) {
+      episode.storyOutline = patch.storyOutline
+        ? { ...patch.storyOutline, validation: { status: 'draft', issues: [] } }
+        : null;
+    } else if (('title' in patch || 'synopsis' in patch) && episode.storyOutline) {
+      // A changed synopsis or title can change the dramatic contract the
+      // outline was validated against, so expansion must pass through the
+      // outline validation step again.
+      episode.storyOutline.validation = { status: 'draft', issues: [] };
+    }
     episode.updatedAt = new Date().toISOString();
     return loom;
   });
@@ -603,7 +670,7 @@ export function deleteEpisode(loomId, episodeId) {
 
 const NODE_PATCH_FIELDS = [
   'title', 'prose', 'imagePrompt', 'videoPrompt', 'cameraMovement', 'playbackMode',
-  'audienceConnection', 'visualCanon', 'videoHistoryId', 'playbackAssets', 'interactionWindow',
+  'audienceConnection', 'protagonistPresence', 'visualCanon', 'videoHistoryId', 'playbackAssets', 'interactionWindow',
   'isEnding', 'endingLabel', 'pos', 'transitions',
 ];
 

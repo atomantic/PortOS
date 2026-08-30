@@ -5,7 +5,8 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { BrainCircuit, ChevronDown, ChevronUp, Loader2, Plus, Save, Sparkles, Trash2 } from 'lucide-react';
+import { Link } from 'react-router';
+import { BrainCircuit, CheckCircle2, ChevronDown, ChevronUp, Loader2, Plus, Save, Sparkles, Trash2 } from 'lucide-react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import toast from '../ui/Toast';
 import { FormField } from '../ui/FormField.jsx';
@@ -17,7 +18,8 @@ import useFableLoomAiRun from '../../hooks/useFableLoomAiRun';
 import useProviderModels from '../../hooks/useProviderModels';
 import useUnsavedChangesGuard from '../../hooks/useUnsavedChangesGuard';
 import {
-  feedbackLoomSeriesPlan, generateLoomSeriesPlan, reviewLoomSeriesPlan, updateLoom,
+  feedbackLoomSeriesPlan, generateLoomSeriesPlan, reviewLoomSeriesPlan, reviewLoomTeleplay,
+  updateLoom, validateLoomSeriesOutlines,
 } from '../../services/api';
 import { uuidv4 } from '../../lib/uuid.js';
 import { effectiveModelFor, effortAwareModelOptions } from '../../utils/providers';
@@ -26,11 +28,38 @@ import LoomAiRunStatus from './LoomAiRunStatus';
 
 const newItemId = (prefix) => `${prefix}-${uuidv4()}`;
 
+const normalizeDeliveryOptions = (options) => ({
+  overnightVoicemails: options?.overnightVoicemails === true,
+  nextSeasonTeaser: options?.nextSeasonTeaser === true,
+});
+
 const normalizePlan = (plan) => ({
   storyArc: plan?.storyArc || '',
   plotPoints: Array.isArray(plan?.plotPoints) ? plan.plotPoints : [],
   sideQuests: Array.isArray(plan?.sideQuests) ? plan.sideQuests : [],
+  deliveryOptions: normalizeDeliveryOptions(plan?.deliveryOptions),
+  interEpisodeVoicemails: Array.isArray(plan?.interEpisodeVoicemails)
+    ? plan.interEpisodeVoicemails : [],
+  nextSeasonTeaser: plan?.nextSeasonTeaser || null,
 });
+
+const episodeBoundaryKey = (fromEpisodeId, toEpisodeId) => `${fromEpisodeId}::${toEpisodeId}`;
+
+const withVoicemailDrafts = (plan, episodes) => {
+  const current = new Map((plan.interEpisodeVoicemails || [])
+    .filter((item) => item?.fromEpisodeId && item?.toEpisodeId)
+    .map((item) => [episodeBoundaryKey(item.fromEpisodeId, item.toEpisodeId), item]));
+  return episodes.slice(0, -1).map((fromEpisode, index) => {
+    const toEpisode = episodes[index + 1];
+    return current.get(episodeBoundaryKey(fromEpisode.id, toEpisode.id)) || {
+      id: newItemId('voicemail'),
+      fromEpisodeId: fromEpisode.id,
+      toEpisodeId: toEpisode.id,
+      title: `Overnight voicemail: Episode ${fromEpisode.number || index + 1} → ${toEpisode.number || index + 2}`,
+      transcript: '',
+    };
+  });
+};
 
 export default function LoomSeriesPlan({ loom, onLoomUpdate }) {
   const [plan, setPlan] = useState(() => normalizePlan(loom.seriesPlan));
@@ -148,6 +177,8 @@ export default function LoomSeriesPlan({ loom, onLoomUpdate }) {
               </FormField>
             </div>
 
+            <EpisodeBeatReadiness loom={loom} />
+
             <PlanCollection
               title="Plot points"
               description="Order the tentpole beats and connect each one to the episode where it should land."
@@ -173,6 +204,12 @@ export default function LoomSeriesPlan({ loom, onLoomUpdate }) {
               onUpdate={(id, patch) => updateItem('sideQuests', id, patch)}
               onRemove={(id) => removeItem('sideQuests', id)}
               onMove={(index, direction) => moveItem('sideQuests', index, direction)}
+            />
+
+            <SeriesDeliveryPlan
+              plan={plan}
+              episodes={loom.episodes}
+              onChange={changePlan}
             />
           </div>
 
@@ -206,12 +243,108 @@ export default function LoomSeriesPlan({ loom, onLoomUpdate }) {
   );
 }
 
+function EpisodeBeatReadiness({ loom }) {
+  const episodes = loom.episodes || [];
+  const readyCount = episodes.filter((episode) => episode.storyOutline?.validation?.status === 'valid').length;
+  const [validation, setValidation] = useState(null);
+
+  useEffect(() => {
+    setValidation(null);
+  }, [loom.id, loom.updatedAt]);
+
+  const [validateArc, validating] = useAsyncAction(async () => {
+    const result = await validateLoomSeriesOutlines(loom.id, { silent: true });
+    setValidation(result);
+  }, { errorMessage: 'Full beat-arc validation failed' });
+
+  const validationIssues = validation?.issues || [];
+  const validationReady = validation?.stats?.ready === true;
+  return (
+    <section className="rounded-lg border border-port-accent/30 bg-port-accent/5 p-4 space-y-3" aria-label="Episode beat outlines">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="font-semibold">Episode beat outlines</h3>
+          <p className="mt-1 text-xs text-port-text-muted">
+            Draft the full series as scene log-lines first. Open episodes in order, review each arc, and validate every outline before expanding any teleplay.
+          </p>
+        </div>
+        <span className={`shrink-0 text-xs ${readyCount === episodes.length && episodes.length ? 'text-port-success' : 'text-port-warning'}`}>
+          {readyCount}/{episodes.length} ready
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={validateArc}
+          disabled={validating || !episodes.length}
+          className="flex items-center gap-1.5 rounded border border-port-accent px-3 py-2 text-xs text-port-accent hover:bg-port-accent/10 disabled:opacity-50"
+        >
+          {validating ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
+          {validating ? 'Validating full beat arc…' : 'Validate full beat arc'}
+        </button>
+        {validation ? (
+          <span className={`text-xs ${validationReady ? 'text-port-success' : 'text-port-error'}`} role="status">
+            {validationReady ? 'Series beat arc is structurally ready' : `${validation.stats?.errorCount || validationIssues.length} blocking issue${(validation.stats?.errorCount || validationIssues.length) === 1 ? '' : 's'}`}
+          </span>
+        ) : null}
+      </div>
+      {episodes.length ? (
+        <ol className="space-y-1.5">
+          {episodes.map((episode) => {
+            const status = episode.storyOutline?.validation?.status || 'missing';
+            const statusClass = status === 'valid' ? 'text-port-success' : 'text-port-warning';
+            return (
+              <li key={episode.id} className="flex items-center justify-between gap-3 text-sm">
+                <Link to={`/fableloom/${encodeURIComponent(loom.id)}/${encodeURIComponent(episode.id)}`} className="min-w-0 truncate text-port-accent hover:underline">
+                  Episode {episode.number}: {episode.title || 'Untitled'}
+                </Link>
+                <span className={`shrink-0 text-xs ${statusClass}`}>{status}</span>
+              </li>
+            );
+          })}
+        </ol>
+      ) : (
+        <p className="text-xs text-port-warning">Add episodes before drafting the beat arc.</p>
+      )}
+      {validation && validationIssues.length ? (
+        <div className="space-y-1.5 rounded border border-port-error/30 bg-port-error/5 p-3" aria-label="Full beat arc validation results">
+          <p className="text-xs font-semibold text-port-error">Resolve these before expanding any teleplay:</p>
+          <ul className="space-y-1 text-xs text-port-text-muted">
+            {validationIssues.slice(0, 12).map((issue, index) => {
+              const episode = episodes.find((candidate) => candidate.id === issue.episodeId);
+              return (
+                <li key={`${issue.code || 'issue'}-${issue.episodeId || 'series'}-${index}`}>
+                  {episode ? (
+                    <Link className="text-port-accent hover:underline" to={`/fableloom/${encodeURIComponent(loom.id)}/${encodeURIComponent(episode.id)}`}>
+                      Episode {episode.number}
+                    </Link>
+                  ) : <span>Series</span>}
+                  {': '}{issue.message}
+                </li>
+              );
+            })}
+          </ul>
+          {validationIssues.length > 12 ? <p className="text-[11px] text-port-text-muted">Showing the first 12 issues.</p> : null}
+        </div>
+      ) : validation ? (
+        <p className="text-xs text-port-success" role="status">Every episode outline and configured delivery handoff passes deterministic checks.</p>
+      ) : null}
+      {readyCount === episodes.length && episodes.length ? (
+        <p className="text-xs text-port-success">The complete episode beat arc is ready for ordered teleplay expansion.</p>
+      ) : (
+        <p className="text-xs text-port-text-muted">The expansion gate also checks any configured overnight voicemail and finale teaser handoffs.</p>
+      )}
+    </section>
+  );
+}
+
 function SeriesAiEditor({ loom, dirty, onLoomUpdate }) {
   const [feedback, setFeedback] = useState('');
   const [analysis, setAnalysis] = useState(null);
   const [route, setRoute] = useState({ providerId: '', model: '', effort: '' });
   const regenerateConfirm = useConfirmDelete();
   const reviewRun = useFableLoomAiRun();
+  const teleplayReviewRun = useFableLoomAiRun();
   const generateRun = useFableLoomAiRun();
   const feedbackRun = useFableLoomAiRun();
   const { providers, loading } = useProviderModels({ allowDefault: true, silent: true, withEffort: true });
@@ -249,7 +382,16 @@ function SeriesAiEditor({ loom, dirty, onLoomUpdate }) {
     toast.success(result.changes?.[0] || 'Series plan updated');
   }, { errorMessage: 'Series-plan feedback failed' });
 
-  const busy = generating || reviewing || applying;
+  const [reviewTeleplay, reviewingTeleplay] = useAsyncAction(async () => {
+    const operationId = teleplayReviewRun.begin();
+    const result = await reviewLoomTeleplay(loom.id, { ...routeBody, operationId }, { silent: true })
+      .catch((error) => { teleplayReviewRun.fail(error.message); throw error; });
+    setTeleplayAnalysis(result.analysis);
+  }, { errorMessage: 'Full teleplay review failed' });
+
+  const [teleplayAnalysis, setTeleplayAnalysis] = useState(null);
+  const fullTeleplayReady = loom.episodes.length > 0 && loom.episodes.every((episode) => episode.nodes?.length > 0);
+  const busy = generating || reviewing || applying || reviewingTeleplay;
   const hasPlan = !!loom.seriesPlan?.storyArc?.trim()
     || !!loom.seriesPlan?.plotPoints?.length
     || !!loom.seriesPlan?.sideQuests?.length;
@@ -326,8 +468,19 @@ function SeriesAiEditor({ loom, dirty, onLoomUpdate }) {
           {reviewing ? <Loader2 size={14} className="animate-spin" /> : <BrainCircuit size={14} />}
           {reviewing ? 'Analyzing…' : 'Analyze series'}
         </button>
+        <button
+          type="button"
+          onClick={reviewTeleplay}
+          disabled={busy || dirty || !fullTeleplayReady}
+          className="flex items-center gap-2 px-3 py-2 rounded border border-port-border text-sm hover:border-port-accent disabled:opacity-50"
+        >
+          {reviewingTeleplay ? <Loader2 size={14} className="animate-spin" /> : <BrainCircuit size={14} />}
+          {reviewingTeleplay ? 'Reviewing teleplay…' : 'Review full teleplay'}
+        </button>
       </div>
       <LoomAiRunStatus run={reviewRun.run} />
+      <LoomAiRunStatus run={teleplayReviewRun.run} />
+      {!fullTeleplayReady ? <p className="text-xs text-port-text-muted">Expand every episode before reviewing the complete teleplay series.</p> : null}
       <FormField
         label="Edit outline & plot points"
         hint="Ask the AI to refine or restructure plot points, story beats, or side quests across the entire series."
@@ -354,11 +507,12 @@ function SeriesAiEditor({ loom, dirty, onLoomUpdate }) {
       <LoomAiRunStatus run={feedbackRun.run} />
       {dirty ? <p className="text-xs text-port-warning">Save the plan before running AI so it reads the edits on screen.</p> : null}
       {analysis ? <SeriesAnalysis analysis={analysis} /> : null}
+      {teleplayAnalysis ? <SeriesAnalysis title="Full teleplay review" analysis={teleplayAnalysis} /> : null}
     </div>
   );
 }
 
-function SeriesAnalysis({ analysis }) {
+function SeriesAnalysis({ analysis, title = 'Series analysis' }) {
   const groups = [
     ['Strengths', analysis.strengths],
     ['Story risks', analysis.risks],
@@ -366,7 +520,7 @@ function SeriesAnalysis({ analysis }) {
   ];
   return (
     <div className="rounded border border-port-accent/30 bg-port-bg p-3 space-y-3" aria-live="polite">
-      <h4 className="text-sm font-semibold">Series analysis</h4>
+      <h4 className="text-sm font-semibold">{title}</h4>
       {analysis.summary ? <p className="text-sm text-port-text-muted">{analysis.summary}</p> : null}
       {groups.map(([label, items]) => items?.length ? (
         <div key={label}>
@@ -377,6 +531,159 @@ function SeriesAnalysis({ analysis }) {
         </div>
       ) : null)}
     </div>
+  );
+}
+
+function SeriesDeliveryPlan({ plan, episodes, onChange }) {
+  const options = normalizeDeliveryOptions(plan.deliveryOptions);
+  const boundaries = episodes.slice(0, -1).map((fromEpisode, index) => ({
+    fromEpisode,
+    toEpisode: episodes[index + 1],
+  }));
+  const voicemails = plan.interEpisodeVoicemails || [];
+  const voicemailFor = (fromEpisodeId, toEpisodeId) => voicemails.find((item) => (
+    item.fromEpisodeId === fromEpisodeId && item.toEpisodeId === toEpisodeId
+  )) || null;
+  const missingVoicemails = boundaries.filter(({ fromEpisode, toEpisode }) => {
+    const item = voicemailFor(fromEpisode.id, toEpisode.id);
+    return !item?.transcript?.trim();
+  }).length;
+
+  const toggle = (key, enabled) => onChange((current) => {
+    const next = {
+      ...current,
+      deliveryOptions: { ...normalizeDeliveryOptions(current.deliveryOptions), [key]: enabled },
+    };
+    if (key === 'overnightVoicemails' && enabled) {
+      next.interEpisodeVoicemails = withVoicemailDrafts(current, episodes);
+    }
+    if (key === 'nextSeasonTeaser' && enabled && !next.nextSeasonTeaser) {
+      next.nextSeasonTeaser = { title: 'A signal beyond the corridor', transcript: '' };
+    }
+    return next;
+  });
+
+  const updateVoicemail = (fromEpisodeId, toEpisodeId, patch) => onChange((current) => ({
+    ...current,
+    interEpisodeVoicemails: (current.interEpisodeVoicemails || []).map((item) => (
+      item.fromEpisodeId === fromEpisodeId && item.toEpisodeId === toEpisodeId
+        ? { ...item, ...patch } : item
+    )),
+  }));
+
+  return (
+    <section className="rounded-lg border border-port-border bg-port-card p-4 space-y-4" aria-label="Series delivery">
+      <div>
+        <h3 className="font-semibold">Viewer handoffs</h3>
+        <p className="text-xs text-port-text-muted mt-1">
+          Optional authored beats that carry the viewer from one episode to the next and leave the season looking forward.
+        </p>
+      </div>
+
+      <label className="flex items-start gap-2 text-sm" htmlFor="series-delivery-overnight-voicemails">
+        <input
+          id="series-delivery-overnight-voicemails"
+          type="checkbox"
+          checked={options.overnightVoicemails}
+          onChange={(event) => toggle('overnightVoicemails', event.target.checked)}
+          className="mt-0.5"
+        />
+        <span>
+          <span className="font-medium block">Overnight voicemail between episodes</span>
+          <span className="text-xs text-port-text-muted">The protagonist leaves a personal handoff after each episode to motivate the next watch.</span>
+        </span>
+      </label>
+
+      {options.overnightVoicemails && (
+        <div className="space-y-3 pl-5 border-l-2 border-port-accent/30">
+          {!boundaries.length ? (
+            <p className="text-xs text-port-warning">Add a second episode to author the first overnight voicemail.</p>
+          ) : boundaries.map(({ fromEpisode, toEpisode }) => {
+            const item = voicemailFor(fromEpisode.id, toEpisode.id);
+            return (
+              <div key={episodeBoundaryKey(fromEpisode.id, toEpisode.id)} className="rounded border border-port-border p-3 space-y-3">
+                <div className="text-xs font-medium text-port-text-muted">
+                  Episode {fromEpisode.number} → Episode {toEpisode.number}
+                </div>
+                <FormField label="Voicemail title" labelClassName={labelClass}>
+                  <input
+                    className={fieldClass}
+                    value={item?.title || ''}
+                    onChange={(event) => updateVoicemail(fromEpisode.id, toEpisode.id, { title: event.target.value })}
+                  />
+                </FormField>
+                <FormField
+                  label="Voicemail transcript"
+                  hint="Write what the protagonist says overnight. Voice rendering can be attached later without losing this authored text."
+                  labelClassName={labelClass}
+                >
+                  <textarea
+                    rows={4}
+                    className={`${fieldClass} ${item?.transcript?.trim() ? '' : 'border-port-warning/60'}`}
+                    value={item?.transcript || ''}
+                    onChange={(event) => updateVoicemail(fromEpisode.id, toEpisode.id, { transcript: event.target.value })}
+                    placeholder="I kept the receiver warm through the night…"
+                  />
+                </FormField>
+              </div>
+            );
+          })}
+          <p className={`text-xs ${missingVoicemails ? 'text-port-warning' : 'text-port-success'}`} role="status">
+            {missingVoicemails
+              ? `${missingVoicemails} voicemail${missingVoicemails === 1 ? '' : 's'} still needs a transcript.`
+              : 'Every episode boundary has an authored voicemail.'}
+          </p>
+        </div>
+      )}
+
+      <label className="flex items-start gap-2 text-sm" htmlFor="series-delivery-next-season-teaser">
+        <input
+          id="series-delivery-next-season-teaser"
+          type="checkbox"
+          checked={options.nextSeasonTeaser}
+          onChange={(event) => toggle('nextSeasonTeaser', event.target.checked)}
+          className="mt-0.5"
+        />
+        <span>
+          <span className="font-medium block">Next-season teaser after the finale</span>
+          <span className="text-xs text-port-text-muted">Leave a final image-preview/player beat that opens the next season’s question.</span>
+        </span>
+      </label>
+
+      {options.nextSeasonTeaser && (
+        <div className="pl-5 border-l-2 border-port-accent/30 space-y-3">
+          <FormField label="Teaser title" labelClassName={labelClass}>
+            <input
+              className={fieldClass}
+              value={plan.nextSeasonTeaser?.title || ''}
+              onChange={(event) => onChange((current) => ({
+                ...current,
+                nextSeasonTeaser: { ...(current.nextSeasonTeaser || {}), title: event.target.value },
+              }))}
+            />
+          </FormField>
+          <FormField
+            label="Teaser / cliffhanger"
+            hint="This plays after the final episode ending in the one-device walkthrough."
+            labelClassName={labelClass}
+          >
+            <textarea
+              rows={4}
+              className={`${fieldClass} ${plan.nextSeasonTeaser?.transcript?.trim() ? '' : 'border-port-warning/60'}`}
+              value={plan.nextSeasonTeaser?.transcript || ''}
+              onChange={(event) => onChange((current) => ({
+                ...current,
+                nextSeasonTeaser: { ...(current.nextSeasonTeaser || {}), transcript: event.target.value },
+              }))}
+              placeholder="Beyond the frozen relay, something answers in the protagonist’s own voice…"
+            />
+          </FormField>
+          <p className={`text-xs ${plan.nextSeasonTeaser?.transcript?.trim() ? 'text-port-success' : 'text-port-warning'}`} role="status">
+            {plan.nextSeasonTeaser?.transcript?.trim() ? 'Next-season teaser authored.' : 'Teaser transcript still needs to be authored.'}
+          </p>
+        </div>
+      )}
+    </section>
   );
 }
 

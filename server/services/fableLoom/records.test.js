@@ -132,6 +132,27 @@ describe('sanitizeLoom', () => {
     expect(loom.episodes[0].nodes[0].audienceConnection).toBe('disconnected');
   });
 
+  it('round-trips the canonical protagonist wardrobe pin and per-scene presence', () => {
+    const loom = sanitizeLoom({
+      id: 'loom-1',
+      name: 'X',
+      protagonistCharacterId: 'char-1',
+      protagonistWardrobeId: 'wardrobe-field',
+      protagonistWardrobeLocked: true,
+      episodes: [{
+        id: 'ep-1',
+        nodes: [{ id: 'n1', protagonistPresence: 'offscreen' }],
+      }],
+    });
+
+    expect(loom).toMatchObject({
+      protagonistCharacterId: 'char-1',
+      protagonistWardrobeId: 'wardrobe-field',
+      protagonistWardrobeLocked: true,
+    });
+    expect(loom.episodes[0].nodes[0].protagonistPresence).toBe('offscreen');
+  });
+
   it('keeps a partial play pin but collapses an all-empty one to null', () => {
     const pinned = sanitizeLoom({
       id: 'loom-1', name: 'X', playSettings: { providerId: '  claude  ', model: '', effort: null },
@@ -166,6 +187,51 @@ describe('sanitizeLoom', () => {
     expect(loom.seriesPlan.plotPoints[0]).toMatchObject({ title: 'Midpoint', episodeId: 'ep-1' });
     expect(loom.seriesPlan.plotPoints[0].id).toMatch(/^plot-/);
     expect(loom.seriesPlan.sideQuests[0]).toMatchObject({ status: 'idea', startEpisodeId: null, endEpisodeId: 'ep-1' });
+  });
+
+  it('sanitizes optional series delivery beats without accepting dangling episode ids', () => {
+    const loom = sanitizeLoom({
+      id: 'loom-1',
+      name: 'X',
+      episodes: [{ id: 'ep-1', number: 1 }, { id: 'ep-2', number: 2 }],
+      seriesPlan: {
+        storyArc: '', plotPoints: [], sideQuests: [],
+        deliveryOptions: { overnightVoicemails: true, nextSeasonTeaser: true },
+        interEpisodeVoicemails: [{
+          id: 'vm-1', fromEpisodeId: 'ep-1', toEpisodeId: 'gone',
+          title: 'Night call', transcript: 'The signal is still there.',
+        }],
+        nextSeasonTeaser: { title: 'Beyond', transcript: 'Something answers.' },
+      },
+    });
+
+    expect(loom.seriesPlan.deliveryOptions).toEqual({ overnightVoicemails: true, nextSeasonTeaser: true });
+    expect(loom.seriesPlan.interEpisodeVoicemails[0]).toMatchObject({
+      id: 'vm-1', fromEpisodeId: 'ep-1', toEpisodeId: null, transcript: 'The signal is still there.',
+    });
+    expect(loom.seriesPlan.nextSeasonTeaser).toEqual({ title: 'Beyond', transcript: 'Something answers.' });
+  });
+
+  it('round-trips an episode beat outline and invalidates it when the synopsis changes', async () => {
+    let loom = await makeLoom();
+    loom = await addEpisode(loom.id, { title: 'Pilot', synopsis: 'A signal appears.' });
+    const episodeId = loom.episodes[0].id;
+    const storyOutline = {
+      startKey: 's1',
+      scenes: [
+        { key: 's1', title: 'Signal', summary: 'A signal appears.', playbackMode: 'cut', transitions: [{ targetKey: 's2', intent: 'follow it' }] },
+        { key: 's2', title: 'Choice', summary: 'The signal asks for a sacrifice.', playbackMode: 'decision', transitions: [{ targetKey: 's3', intent: 'answer' }, { targetKey: 's4', intent: 'wait' }] },
+        { key: 's3', title: 'Answer', summary: 'The answer opens a door.', isEnding: true },
+        { key: 's4', title: 'Wait', summary: 'The silence closes in.', isEnding: true },
+      ],
+      validation: { status: 'valid', issues: [] },
+    };
+    const saved = await updateEpisode(loom.id, episodeId, { storyOutline });
+    expect(saved.episodes[0].storyOutline).toMatchObject({ version: 1, startKey: 's1' });
+    expect(saved.episodes[0].storyOutline.validation.status).toBe('draft');
+
+    const revised = await updateEpisode(loom.id, episodeId, { synopsis: 'The signal moves.' });
+    expect(revised.episodes[0].storyOutline.validation).toEqual({ status: 'draft', issues: [] });
   });
 
   it('re-mints duplicate planning ids so each editable row remains addressable', () => {
@@ -263,6 +329,38 @@ describe('loom CRUD', () => {
     const mergedNode = (await getLoom(loom.id)).episodes[0].nodes[0];
     expect(mergedNode.visualCanon).toMatchObject({ mode: 'locked', characterAppearances: [{ characterId: 'char-a' }] });
     expect(mergedNode.visualConditioning).toMatchObject({ version: 1, compilerVersion: '1.0.0' });
+  });
+
+  it('preserves canonical protagonist continuity fields when a v3 peer wins an unrelated LWW edit', async () => {
+    let loom = await makeLoom({
+      name: 'Local production',
+      protagonistCharacterId: 'char-1',
+      protagonistWardrobeId: 'wardrobe-field',
+      protagonistWardrobeLocked: true,
+    });
+    loom = await addEpisode(loom.id, { title: 'Pilot' });
+    loom = await addNode(loom.id, loom.episodes[0].id, { protagonistPresence: 'offscreen' });
+    const remoteV3 = {
+      ...loom,
+      name: 'Renamed by v3 peer',
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      protagonistCharacterId: undefined,
+      protagonistWardrobeId: undefined,
+      protagonistWardrobeLocked: undefined,
+      episodes: loom.episodes.map((episode) => ({
+        ...episode,
+        nodes: episode.nodes.map(({ protagonistPresence: _presence, ...rest }) => rest),
+      })),
+    };
+
+    await mergeLoomsFromSync([remoteV3], { senderSchemaVersions: { fableLoom: 3 } });
+    const merged = await getLoom(loom.id);
+    expect(merged).toMatchObject({
+      protagonistCharacterId: 'char-1',
+      protagonistWardrobeId: 'wardrobe-field',
+      protagonistWardrobeLocked: true,
+    });
+    expect(merged.episodes[0].nodes[0].protagonistPresence).toBe('offscreen');
   });
 
   it('journals divergent story edits and can restore the authored snapshot', async () => {

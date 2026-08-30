@@ -12,6 +12,17 @@ The design reuses the Universe's existing canon records and assets. It does not
 create a second FableLoom-only character or location registry, train models, or
 attempt automatic face recognition.
 
+FableLoom also pins an optional canonical protagonist and wardrobe at the loom
+level. This is the stable identity anchor for every episode: the scene binding
+may add other characters and per-shot state, but it cannot silently substitute
+another protagonist. Each scene separately declares `protagonistPresence` as
+`onscreen` or `offscreen`. Off-screen is a first-class visual state for a
+helper-mode connected decision: the protagonist speaks with the audience on a
+side device while the host's decision image remains open-ended and contains no
+protagonist appearance. A locked loom wardrobe is applied by the compiler to
+every on-screen protagonist binding, while off-screen bindings are recorded as
+intentional omissions.
+
 ## Why the prior-shot bridge is insufficient
 
 A previous shot can carry palette, lighting, costume, and likeness into the
@@ -76,6 +87,22 @@ Add an optional `visualCanon` object to each scene node:
   }
 }
 ```
+
+The loom-level identity pin is deliberately separate from this per-shot object:
+
+```json
+{
+  "protagonistCharacterId": "char-example",
+  "protagonistWardrobeId": "wardrobe-field",
+  "protagonistWardrobeLocked": true
+}
+```
+
+The editor links these ids to the Universe Cast, shows character-sheet and
+approved identity-pack readiness, and provides a one-click binding for any
+on-screen shot. `protagonistPresence: "offscreen"` removes the pinned
+protagonist from the compiled character cast and records the omission in the
+manifest; it is not treated as a missing canon reference.
 
 All keys are optional and bounded. IDs are soft references because Universe
 canon is independently editable; a missing id produces an explicit degraded
@@ -210,6 +237,12 @@ Batch generation follows graph topology and waits for each selected temporal
 source to finish before queueing its dependent. Independent branches may render
 in parallel. A failed predecessor blocks only descendants that require it;
 canon-only branches can continue.
+
+At the series level, storyboard production follows the ordered episode list as
+well: every reachable still in an earlier episode must exist before a later
+episode can render. The batch planner, scene-level image controls, and their
+server route share this gate, so a direct click cannot bypass temporal
+continuity.
 
 ## Provenance and observability
 

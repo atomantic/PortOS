@@ -17,7 +17,8 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Loader2, Sparkles } from 'lucide-react';
+import { CheckCircle2, Loader2, Sparkles } from 'lucide-react';
+import { Link } from 'react-router';
 import Drawer from '../Drawer';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { FormField } from '../ui/FormField.jsx';
@@ -42,7 +43,7 @@ const rewriteProgressLabel = ({ index, total, title, scenesLeft }) => [
   scenesLeft ? ` ${scenesLeft} scene${scenesLeft === 1 ? '' : 's'} left in it.` : '',
 ].join('');
 
-export default function LoomSettingsDrawer({ open, onClose, loom, onLoomUpdate, onRewritten }) {
+export default function LoomSettingsDrawer({ open, onClose, loom, universe, onLoomUpdate, onRewritten }) {
   const { providers } = useProviderModels({ allowDefault: true, silent: true, withEffort: true });
 
   // Which episode the rewrite is on. The walk is one request per episode, so
@@ -53,11 +54,17 @@ export default function LoomSettingsDrawer({ open, onClose, loom, onLoomUpdate, 
   const format = loom.format || 'prose';
   const [participationMode, setParticipationMode] = useState(loom.participationMode || 'protagonist');
   const [communicationMedium, setCommunicationMedium] = useState(loom.audienceCommunicationMedium || '');
+  const [protagonistCharacterId, setProtagonistCharacterId] = useState(loom.protagonistCharacterId || '');
+  const [protagonistWardrobeId, setProtagonistWardrobeId] = useState(loom.protagonistWardrobeId || '');
+  const [protagonistWardrobeLocked, setProtagonistWardrobeLocked] = useState(loom.protagonistWardrobeLocked === true);
   useEffect(() => {
     if (open) return;
     setParticipationMode(loom.participationMode || 'protagonist');
     setCommunicationMedium(loom.audienceCommunicationMedium || '');
-  }, [open, loom.participationMode, loom.audienceCommunicationMedium]);
+    setProtagonistCharacterId(loom.protagonistCharacterId || '');
+    setProtagonistWardrobeId(loom.protagonistWardrobeId || '');
+    setProtagonistWardrobeLocked(loom.protagonistWardrobeLocked === true);
+  }, [open, loom.participationMode, loom.audienceCommunicationMedium, loom.protagonistCharacterId, loom.protagonistWardrobeId, loom.protagonistWardrobeLocked]);
   const play = loom.playSettings || {};
   const playProvider = providers.find((p) => p.id === play.providerId);
   // Only scenes not already in the target format are sent, so this is what the
@@ -73,6 +80,49 @@ export default function LoomSettingsDrawer({ open, onClose, loom, onLoomUpdate, 
     async (body) => onLoomUpdate(await updateLoom(loom.id, body, { silent: true })),
     { errorMessage: 'Save failed' },
   );
+
+  const universeCharacters = Array.isArray(universe?.characters) ? universe.characters : [];
+  const protagonist = universeCharacters.find((character) => character.id === protagonistCharacterId) || null;
+  const protagonistWardrobes = Array.isArray(protagonist?.wardrobes) ? protagonist.wardrobes : [];
+  const protagonistSheets = [
+    protagonist?.referenceSheetImageRef,
+    ...Object.values(protagonist?.referenceSheets || {}),
+  ].filter(Boolean);
+  const approvedIdentityRoles = new Set(
+    (Array.isArray(protagonist?.identityPack?.assets) ? protagonist.identityPack.assets : [])
+      .filter((asset) => asset?.approved === true)
+      .map((asset) => asset.role),
+  );
+  const missingIdentityRoles = ['neutral', 'profile', 'full-body'].filter((role) => !approvedIdentityRoles.has(role));
+  const linkedUniverseId = universe?.id || loom.universeId || null;
+
+  const saveProtagonist = (changes) => patch(changes);
+
+  const chooseProtagonist = (event) => {
+    const nextId = event.target.value;
+    const nextCharacter = universeCharacters.find((character) => character.id === nextId);
+    const nextWardrobe = protagonistWardrobeId && nextCharacter?.wardrobes?.some((wardrobe) => wardrobe.id === protagonistWardrobeId)
+      ? protagonistWardrobeId
+      : '';
+    setProtagonistCharacterId(nextId);
+    setProtagonistWardrobeId(nextWardrobe);
+    setProtagonistWardrobeLocked(Boolean(nextWardrobe));
+    saveProtagonist({
+      protagonistCharacterId: nextId || null,
+      protagonistWardrobeId: nextWardrobe || null,
+      protagonistWardrobeLocked: Boolean(nextWardrobe),
+    });
+  };
+
+  const chooseProtagonistWardrobe = (event) => {
+    const nextId = event.target.value;
+    setProtagonistWardrobeId(nextId);
+    setProtagonistWardrobeLocked(Boolean(nextId));
+    saveProtagonist({
+      protagonistWardrobeId: nextId || null,
+      protagonistWardrobeLocked: Boolean(nextId),
+    });
+  };
 
   // The merge base is a ref, not the render-time props, because the picker can
   // emit TWO changes in one tick: choosing a model whose provider tier has no
@@ -202,6 +252,100 @@ export default function LoomSettingsDrawer({ open, onClose, loom, onLoomUpdate, 
                 </p>
               )}
             </FormField>
+          )}
+        </section>
+
+        <section className="border-t border-port-border pt-4 space-y-3">
+          <div>
+            <h4 className="text-sm font-semibold">Character continuity</h4>
+            <p className="mt-1 text-xs text-port-text-muted">
+              Set the one Universe character and wardrobe that anchor every on-screen protagonist beat. Scene editors can mark a beat off-screen when the audience is speaking with the protagonist on another device.
+            </p>
+          </div>
+          {!universe ? (
+            <div className="rounded border border-port-warning/40 bg-port-warning/5 p-3 text-xs text-port-warning">
+              Link a Universe before binding a canonical protagonist, character sheets, or wardrobe references.
+              {linkedUniverseId && (
+                <Link to={`/universes/${encodeURIComponent(linkedUniverseId)}?tab=cast`} className="ml-1 underline">
+                  Open Universe Cast
+                </Link>
+              )}
+            </div>
+          ) : (
+            <>
+              <FormField label="Canonical protagonist" labelClassName={labelClass}>
+                <select
+                  className={fieldClass}
+                  aria-label="Canonical protagonist"
+                  value={protagonistCharacterId}
+                  disabled={saving || reformatting}
+                  onChange={chooseProtagonist}
+                >
+                  <option value="">Choose a Universe character</option>
+                  {protagonistCharacterId && !protagonist && (
+                    <option value={protagonistCharacterId}>Missing Universe character ({protagonistCharacterId})</option>
+                  )}
+                  {universeCharacters.map((character) => (
+                    <option key={character.id} value={character.id}>{character.name || character.id}</option>
+                  ))}
+                </select>
+              </FormField>
+              <FormField label="Canonical wardrobe" labelClassName={labelClass}>
+                <select
+                  className={fieldClass}
+                  aria-label="Canonical protagonist wardrobe"
+                  value={protagonistWardrobeId}
+                  disabled={!protagonist || saving || reformatting}
+                  onChange={chooseProtagonistWardrobe}
+                >
+                  <option value="">Choose a wardrobe reference</option>
+                  {protagonistWardrobeId && !protagonistWardrobes.some((wardrobe) => wardrobe.id === protagonistWardrobeId) && (
+                    <option value={protagonistWardrobeId}>Missing wardrobe ({protagonistWardrobeId})</option>
+                  )}
+                  {protagonistWardrobes.map((wardrobe) => (
+                    <option key={wardrobe.id} value={wardrobe.id}>{wardrobe.name || wardrobe.label || 'Wardrobe'}</option>
+                  ))}
+                </select>
+              </FormField>
+              <label className="flex items-start gap-2 text-xs" htmlFor="loom-protagonist-wardrobe-locked">
+                <input
+                  id="loom-protagonist-wardrobe-locked"
+                  type="checkbox"
+                  checked={protagonistWardrobeLocked}
+                  disabled={!protagonistWardrobeId || saving || reformatting}
+                  onChange={(event) => {
+                    const locked = event.target.checked;
+                    setProtagonistWardrobeLocked(locked);
+                    saveProtagonist({ protagonistWardrobeLocked: locked });
+                  }}
+                />
+                <span>
+                  Lock this wardrobe across on-screen scenes
+                  <span className="mt-0.5 block text-[11px] text-port-text-muted">When locked, stale scene wardrobe choices are replaced by this canonical reference at render time.</span>
+                </span>
+              </label>
+              {protagonist && (
+                <div className="rounded border border-port-border/70 bg-port-bg/40 p-2.5 text-xs" role="status">
+                  <div className="flex items-center gap-1.5 font-medium">
+                    {protagonistSheets.length > 0 ? <CheckCircle2 size={13} className="text-port-success" /> : null}
+                    {protagonist.name || protagonist.id}
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
+                    <span className={protagonistSheets.length ? 'text-port-success' : 'text-port-warning'}>
+                      {protagonistSheets.length ? `${protagonistSheets.length} character sheet${protagonistSheets.length === 1 ? '' : 's'}` : 'Needs character sheet'}
+                    </span>
+                    <span className={missingIdentityRoles.length ? 'text-port-warning' : 'text-port-success'}>
+                      {missingIdentityRoles.length ? `Identity pack missing ${missingIdentityRoles.join(', ')}` : 'Identity pack ready'}
+                    </span>
+                  </div>
+                  {linkedUniverseId && (
+                    <Link to={`/universes/${encodeURIComponent(linkedUniverseId)}?tab=cast`} className="mt-1 inline-block text-[11px] text-port-accent hover:underline">
+                      Open character sheets and wardrobe references
+                    </Link>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </section>
 

@@ -38,8 +38,10 @@ import { cancelJob, enqueueJob, mediaJobEvents } from '../mediaJobQueue/index.js
 import {
   buildEpisodeProductionPlan,
   FABLELOOM_PRODUCTION_MODE_DEFAULT,
+  inspectEpisodeProductionOrder,
 } from '../../lib/fableLoomProduction.js';
 import { analyzeEpisodeContinuity } from '../../lib/fableLoomContinuity.js';
+import { analyzeSeriesStoryOutlines } from '../../lib/fableLoomOutline.js';
 import { getUniverse } from '../universeBuilder.js';
 import { listVoiceProfiles } from '../voice/profiles.js';
 import { listLoras } from '../loras.js';
@@ -728,6 +730,16 @@ export async function planEpisodeProduction(loomId, episodeId, {
     availableVideoModels: listVideoModels(),
     resolveAsset: resolveImageInputPath,
   });
+  const episodeOrderReadiness = inspectEpisodeProductionOrder(loom, episode);
+  plan.episodeOrderReadiness = episodeOrderReadiness;
+  if (!episodeOrderReadiness.ready) {
+    plan.planningIssues.push(`Episode order: ${episodeOrderReadiness.reason}`);
+  }
+  const seriesStoryReadiness = analyzeSeriesStoryOutlines(loom);
+  plan.seriesStoryReadiness = seriesStoryReadiness;
+  for (const issue of seriesStoryReadiness.issues.filter((candidate) => candidate.severity === 'error')) {
+    plan.planningIssues.push(`Story arc: ${issue.message}`);
+  }
   const render = normalizedRenderOptions({ imageMode, imageModel, videoMode, videoModel, effort });
   const settings = await getSettings();
   if (plan.mode === 'exact_inputs') {

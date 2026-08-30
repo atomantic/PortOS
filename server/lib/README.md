@@ -36,8 +36,9 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `fableLoomPlayback.js` | FableLoom node playback modes (`cut` auto-advances; `decision` loops while awaiting input), with the backward-compatible default. |
 | `fableLoomParticipation.js` | FableLoom audience roles (helper vs protagonist), per-scene connection availability, prompt contracts, and backward-compatible defaults. |
 | `fableLoomFormats.js` | FableLoom scene formats (`LOOM_FORMATS`, `asLoomFormat`, `sceneFormatContract`, …) — how a loom writes scene text, read by validation, the sanitizer, and every generative stage. |
-| `fableLoomProduction.js` | FableLoom production batch planning and topological orchestration: DAG resolution, asset enumeration, execution stages, and exact-input provenance verification. |
+| `fableLoomProduction.js` | FableLoom production batch planning and topological orchestration: ordered episode storyboard gates, DAG resolution, asset enumeration, execution stages, and exact-input provenance verification. |
 | `fableLoomContinuity.js` | FableLoom episodic continuity review: multi-vector deterministic checks for visual entity bindings, convergence clarity, voice profile consistency/drift, pronunciation anchors, and playback safety. |
+| `fableLoomOutline.js` | FableLoom story-first episode beat outlines: bounded log-lines, deterministic arc validation, and compact prompt rendering before teleplay expansion. |
 | `postDrillTypes.js` | MeatSpace POST drill vocabularies (`CACHEABLE_TYPES`, `COGNITIVE_DRILL_TYPES`), kept below validation so a route schema never pulls in the POST services (and, through them, the LLM drill generator). |
 | `spriteVocabulary.js` | Sprite id pattern, record kinds, the canonical 8-direction order + derived anchor set, `TURNAROUND_ID`, and the animation provider ids — the alphabets the sprite route schemas enumerate, kept below the sprite services. |
 | `spriteChromaKey.js` | Chroma-key selection color math (`CHROMA_KEYS`, `CHROMA_KEY_HEXES`, `DEFAULT_CHROMA_KEY`, hue-distance picking). Pure color math, no image I/O — that lives in `services/sprites/normalize.js`. |

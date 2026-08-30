@@ -15,17 +15,21 @@ vi.mock('../services/fableLoom/index.js', () => ({
   deleteNodeTransition: vi.fn(),
   feedbackEpisode: vi.fn(),
   feedbackSeriesPlan: vi.fn(),
+  generateEpisodeOutline: vi.fn(),
   generateSeriesPlan: vi.fn(),
   getLoom: vi.fn(),
   listLoomSummaries: vi.fn(async () => []),
   playTurn: vi.fn(),
   reformatEpisodeScenes: vi.fn(),
   reviewEpisode: vi.fn(),
+  reviewEpisodeOutline: vi.fn(),
   reviewSeriesPlan: vi.fn(),
+  reviewSeriesTeleplay: vi.fn(),
   updateEpisode: vi.fn(),
   updateLoom: vi.fn(),
   updateNode: vi.fn(),
   updateNodeTransition: vi.fn(),
+  validateEpisodeOutline: vi.fn(),
   weaveEpisode: vi.fn(),
   checkHostedSessionReadiness: vi.fn(),
   createHostedSession: vi.fn(),
@@ -138,6 +142,17 @@ describe('FableLoom routes', () => {
     expect(fableLoom.feedbackSeriesPlan).toHaveBeenCalledTimes(1);
   });
 
+  it('reviews the complete expanded teleplay through the series route', async () => {
+    fableLoom.reviewSeriesTeleplay.mockResolvedValueOnce({ analysis: { summary: 'The season holds together.' } });
+    const response = await request(makeApp())
+      .post('/api/fableloom/loom-1/review-teleplay')
+      .send({ providerId: 'writer', effort: 'high' });
+    expect(response.status).toBe(200);
+    expect(fableLoom.reviewSeriesTeleplay).toHaveBeenCalledWith('loom-1', {
+      providerId: 'writer', effort: 'high',
+    });
+  });
+
   it('validates and forwards structured series-plan patches', async () => {
     const seriesPlan = {
       storyArc: 'A courier becomes a leader.',
@@ -232,6 +247,13 @@ describe('FableLoom routes', () => {
     expect(response.body.issues).toEqual([]);
   });
 
+  it('GET /outlines/validate reports whether the complete series beat arc is ready', async () => {
+    fableLoom.getLoom.mockResolvedValueOnce({ id: 'loom-1', episodes: [] });
+    const response = await request(makeApp()).get('/api/fableloom/loom-1/outlines/validate');
+    expect(response.status).toBe(200);
+    expect(response.body.stats.ready).toBe(false);
+  });
+
   it('POST weave ignores legacy count hints and forwards current options', async () => {
     fableLoom.weaveEpisode.mockResolvedValueOnce({ loom: { id: 'loom-1' }, runId: 'r' });
     const ok = await request(makeApp())
@@ -239,6 +261,31 @@ describe('FableLoom routes', () => {
       .send({ guidance: 'darker', replace: true, nodeTarget: 999, endingTarget: 999 });
     expect(ok.status).toBe(200);
     expect(fableLoom.weaveEpisode).toHaveBeenCalledWith('loom-1', 'ep-1', { guidance: 'darker', replace: true });
+  });
+
+  it('plans, validates, and reviews an episode outline before expansion', async () => {
+    fableLoom.generateEpisodeOutline.mockResolvedValueOnce({ outline: { scenes: [] }, runId: 'outline-run' });
+    const generated = await request(makeApp())
+      .post('/api/fableloom/loom-1/episodes/ep-1/outline/generate')
+      .send({ guidance: 'Keep the turn costly.', providerId: 'writer', model: 'large' });
+    expect(generated.status).toBe(200);
+    expect(fableLoom.generateEpisodeOutline).toHaveBeenCalledWith('loom-1', 'ep-1', {
+      guidance: 'Keep the turn costly.', providerId: 'writer', model: 'large',
+    });
+
+    fableLoom.validateEpisodeOutline.mockResolvedValueOnce({ validation: { stats: { errorCount: 0 } } });
+    const validated = await request(makeApp())
+      .post('/api/fableloom/loom-1/episodes/ep-1/outline/validate')
+      .send({});
+    expect(validated.status).toBe(200);
+    expect(fableLoom.validateEpisodeOutline).toHaveBeenCalledWith('loom-1', 'ep-1');
+
+    fableLoom.reviewEpisodeOutline.mockResolvedValueOnce({ analysis: { summary: 'Sound.' } });
+    const reviewed = await request(makeApp())
+      .post('/api/fableloom/loom-1/episodes/ep-1/outline/review')
+      .send({ effort: 'high' });
+    expect(reviewed.status).toBe(200);
+    expect(fableLoom.reviewEpisodeOutline).toHaveBeenCalledWith('loom-1', 'ep-1', { effort: 'high' });
   });
 
   it('POST feedback requires an instruction and forwards the route selection', async () => {

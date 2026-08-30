@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router';
 import { GitBranch, Loader2, Trash2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
@@ -32,6 +33,7 @@ import {
   FABLELOOM_PLAYBACK_MODES,
   FABLELOOM_PROTAGONIST_PRESENCE,
   inspectNodeProductionReadiness,
+  resolveFableLoomProtagonistPresence,
 } from '../../../../server/lib/fableLoomPlayback.js';
 import { FABLELOOM_AUDIENCE_CONNECTION_STATES } from '../../../../server/lib/fableLoomParticipation.js';
 
@@ -42,6 +44,28 @@ const rowToPatch = ({ targetNodeId, intent, triggersText, description }) => ({
   triggers: (triggersText || '').split(';').map((s) => s.trim()).filter(Boolean),
   description: description || '',
 });
+
+const REQUIRED_IDENTITY_ROLES = ['neutral', 'profile', 'full-body'];
+
+const characterReferenceInfo = (character) => {
+  const imageRefs = Array.isArray(character?.imageRefs) ? character.imageRefs.filter(Boolean) : [];
+  const sheetRefs = [
+    character?.referenceSheetImageRef,
+    ...Object.values(character?.referenceSheets || {}),
+  ].filter(Boolean);
+  const approvedRoles = new Set(
+    (Array.isArray(character?.identityPack?.assets) ? character.identityPack.assets : [])
+      .filter((asset) => asset?.approved === true)
+      .map((asset) => asset.role),
+  );
+  const missingIdentityRoles = REQUIRED_IDENTITY_ROLES.filter((role) => !approvedRoles.has(role));
+  return {
+    hasVisualReference: imageRefs.length > 0 || sheetRefs.length > 0 || Boolean(character?.primaryImageRef),
+    sheetCount: sheetRefs.length,
+    identityPackReady: missingIdentityRoles.length === 0,
+    missingIdentityRoles,
+  };
+};
 
 export default function LoomNodeEditor({
   loom, episode, node, universe, onLoomUpdate, onClearSelection, onMakeStart,
@@ -77,6 +101,7 @@ export default function LoomNodeEditor({
       } : null,
       playbackMode: node.playbackMode || 'decision',
       audienceConnection: node.audienceConnection || 'disconnected',
+      protagonistPresence: node.protagonistPresence || null,
       playbackAssets: node.playbackAssets || null,
       interactionWindow: node.interactionWindow || {
         enabled: false,
@@ -235,6 +260,74 @@ export default function LoomNodeEditor({
   const aiBlocked = pendingSaves > 0;
   const helperMode = loom.participationMode === 'helper';
   const audienceConnected = !helperMode || form.audienceConnection === 'connected';
+  const universeCharacters = Array.isArray(universe?.characters) ? universe.characters : [];
+  const canonicalProtagonistId = loom.protagonistCharacterId || '';
+  const interactionProtagonistId = form.interactionWindow?.protagonistCharacterId || '';
+  const protagonistId = interactionProtagonistId || canonicalProtagonistId;
+  const protagonist = universeCharacters.find((character) => character.id === protagonistId) || null;
+  const protagonistReference = protagonist ? characterReferenceInfo(protagonist) : null;
+  const protagonistAppearance = form.visualCanon?.characterAppearances?.find(
+    (appearance) => appearance.characterId === protagonistId,
+  );
+  const linkedUniverseId = universe?.id || loom.universeId || null;
+  const recommendedPresence = helperMode && form.playbackMode === 'decision' && form.audienceConnection === 'connected'
+    ? 'offscreen'
+    : canonicalProtagonistId ? 'onscreen' : null;
+  const scenePresence = resolveFableLoomProtagonistPresence({
+    ...node,
+    playbackMode: form.playbackMode,
+    audienceConnection: form.audienceConnection,
+    protagonistPresence: form.protagonistPresence,
+    interactionWindow: form.interactionWindow,
+  }, loom) || recommendedPresence;
+  const presenceControlVisible = Boolean(
+    canonicalProtagonistId || protagonistId || form.visualCanon?.characterAppearances?.length,
+  );
+
+  const setScenePresence = (value) => {
+    const nextPresence = value || null;
+    const protagonistIds = new Set([canonicalProtagonistId, interactionProtagonistId, protagonistId].filter(Boolean));
+    let nextVisualCanon = form.visualCanon;
+    if (form.visualCanon && value === 'offscreen') {
+      nextVisualCanon = {
+        ...form.visualCanon,
+        characterAppearances: form.visualCanon.characterAppearances.filter(
+          (appearance) => !protagonistIds.has(appearance.characterId),
+        ),
+      };
+    } else if (form.visualCanon && value === 'onscreen' && canonicalProtagonistId
+      && !form.visualCanon.characterAppearances.some((appearance) => appearance.characterId === canonicalProtagonistId)) {
+      nextVisualCanon = {
+        ...form.visualCanon,
+        characterAppearances: [
+          ...form.visualCanon.characterAppearances,
+          {
+            characterId: canonicalProtagonistId,
+            wardrobeId: loom.protagonistWardrobeId || null,
+            expression: '',
+            continuityNotes: '',
+          },
+        ],
+      };
+    }
+    const nextInteraction = form.interactionWindow?.enabled
+      ? {
+        ...form.interactionWindow,
+        protagonistPresence: value || recommendedPresence || 'offscreen',
+      }
+      : form.interactionWindow;
+    setForm((current) => ({
+      ...current,
+      protagonistPresence: nextPresence,
+      visualCanon: nextVisualCanon,
+      interactionWindow: nextInteraction,
+    }));
+    patchNode({
+      protagonistPresence: nextPresence,
+      ...(form.interactionWindow?.enabled ? { interactionWindow: nextInteraction } : {}),
+      ...(nextVisualCanon !== form.visualCanon ? { visualCanon: nextVisualCanon } : {}),
+    });
+  };
 
   return (
     <div className="space-y-4 p-4">
@@ -338,6 +431,37 @@ export default function LoomNodeEditor({
         </FormField>
       )}
 
+      {presenceControlVisible && (
+        <div className="rounded border border-port-accent/30 bg-port-accent/5 p-3 space-y-2">
+          <FormField label="Visual protagonist presence" labelClassName={labelClass}>
+            <select
+              className={fieldClass}
+              aria-label="Visual protagonist presence"
+              value={form.protagonistPresence || ''}
+              onChange={(event) => setScenePresence(event.target.value)}
+            >
+              <option value="">
+                Inherit story default{recommendedPresence ? ` (${recommendedPresence === 'offscreen' ? 'off-screen' : 'on-screen'})` : ''}
+              </option>
+              {FABLELOOM_PROTAGONIST_PRESENCE.map((presence) => (
+                <option key={presence} value={presence}>
+                  {presence === 'offscreen' ? 'Off-screen — omit protagonist from storyboard' : 'On-screen — include protagonist in storyboard'}
+                </option>
+              ))}
+            </select>
+          </FormField>
+          {scenePresence === 'offscreen' ? (
+            <p className="text-[11px] text-port-accent">
+              Side-device conversation: the decision loop stays visible while the protagonist speaks directly with the audience. The protagonist is removed from this scene&apos;s visual cast.
+            </p>
+          ) : (
+            <p className="text-[11px] text-port-text-muted">
+              On-screen scenes inherit the loom&apos;s canonical protagonist and locked wardrobe when the shot is bound to Universe canon.
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="flex items-center gap-3">
         <label className="flex items-center gap-2 text-sm" htmlFor="loom-node-ending">
           <input
@@ -376,6 +500,12 @@ export default function LoomNodeEditor({
                 const nextInteraction = {
                   ...(form.interactionWindow || {}),
                   enabled: e.target.checked,
+                  protagonistCharacterId: form.interactionWindow?.protagonistCharacterId
+                    || canonicalProtagonistId
+                    || null,
+                  protagonistPresence: form.interactionWindow?.protagonistPresence
+                    || scenePresence
+                    || 'offscreen',
                 };
                 setForm((p) => ({ ...p, interactionWindow: nextInteraction }));
                 patchNode({ interactionWindow: nextInteraction });
@@ -386,29 +516,82 @@ export default function LoomNodeEditor({
 
           {form.interactionWindow?.enabled && (
             <div className="space-y-3 pl-5 pt-1 border-l-2 border-port-accent/30 text-xs">
-              <FormField label="Protagonist Character ID" labelClassName={labelClass}>
-                <input
+              <FormField label="Protagonist from Universe Bible" labelClassName={labelClass}>
+                <select
                   className={fieldClass}
-                  placeholder="e.g. char-protagonist"
-                  value={form.interactionWindow.protagonistCharacterId || ''}
+                  id="loom-protagonist-character"
+                  aria-label="Protagonist character"
+                  value={protagonistId}
                   onChange={(e) => {
-                    const next = { ...form.interactionWindow, protagonistCharacterId: e.target.value };
+                    const next = {
+                      ...form.interactionWindow,
+                      protagonistCharacterId: e.target.value || null,
+                    };
                     setForm((p) => ({ ...p, interactionWindow: next }));
+                    patchNode({ interactionWindow: next });
                   }}
-                  onBlur={() => patchNode({ interactionWindow: form.interactionWindow })}
-                />
+                >
+                  <option value="">Choose a Universe character</option>
+                  {protagonistId && !protagonist && (
+                    <option value={protagonistId}>Missing Universe character ({protagonistId})</option>
+                  )}
+                  {universeCharacters.map((character) => (
+                    <option key={character.id} value={character.id}>{character.name || character.id}</option>
+                  ))}
+                </select>
               </FormField>
+
+              {protagonist ? (
+                <div className="rounded border border-port-border/70 bg-port-bg/40 p-2 space-y-1.5" role="status">
+                  <div className="font-medium text-port-text">{protagonist.name || protagonist.id}</div>
+                  <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
+                    <span className={protagonistReference.hasVisualReference ? 'text-port-success' : 'text-port-warning'}>
+                      {protagonistReference.hasVisualReference ? 'Visual reference ready' : 'Needs visual reference'}
+                    </span>
+                    <span className={protagonistReference.sheetCount ? 'text-port-success' : 'text-port-warning'}>
+                      {protagonistReference.sheetCount
+                        ? `${protagonistReference.sheetCount} character sheet${protagonistReference.sheetCount === 1 ? '' : 's'}`
+                        : 'Needs character sheet'}
+                    </span>
+                    <span className={protagonistReference.identityPackReady ? 'text-port-success' : 'text-port-warning'}>
+                      {protagonistReference.identityPackReady
+                        ? 'Identity pack ready'
+                        : `Identity pack missing ${protagonistReference.missingIdentityRoles.join(', ')}`}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {linkedUniverseId && (
+                      <Link
+                        to={`/universes/${encodeURIComponent(linkedUniverseId)}?tab=cast`}
+                        className="text-[11px] text-port-accent hover:underline"
+                      >
+                        Open Universe character sheets
+                      </Link>
+                    )}
+                  </div>
+                  {scenePresence === 'offscreen' && form.visualCanon && protagonistAppearance && (
+                    <p className="text-[11px] text-port-accent">
+                      Protagonist binding is omitted from this off-screen storyboard; it will return when this scene is marked on-screen.
+                    </p>
+                  )}
+                  {scenePresence !== 'offscreen' && !protagonistAppearance && form.visualCanon && (
+                    <p className="text-[11px] text-port-warning">
+                      This scene&apos;s locked image/video cast does not include the protagonist yet.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <p className="text-[11px] text-port-warning">
+                  Select the protagonist from the linked Universe before enabling canon-locked voice or visual production.
+                </p>
+              )}
 
               <div className="grid grid-cols-2 gap-2">
                 <FormField label="Protagonist presence" labelClassName={labelClass}>
                   <select
                     className={fieldClass}
-                    value={form.interactionWindow.protagonistPresence || 'offscreen'}
-                    onChange={(e) => {
-                      const next = { ...form.interactionWindow, protagonistPresence: e.target.value };
-                      setForm((p) => ({ ...p, interactionWindow: next }));
-                      patchNode({ interactionWindow: next });
-                    }}
+                    value={form.interactionWindow.protagonistPresence || scenePresence || 'offscreen'}
+                    onChange={(e) => setScenePresence(e.target.value)}
                   >
                     {FABLELOOM_PROTAGONIST_PRESENCE.map((p) => (
                       <option key={p} value={p}>{p === 'offscreen' ? 'Off-screen' : 'On-screen'}</option>
@@ -453,7 +636,7 @@ export default function LoomNodeEditor({
           )}
 
           {(() => {
-            const readiness = inspectNodeProductionReadiness(node, { loom });
+            const readiness = inspectNodeProductionReadiness(node, { loom, universe });
             if (!readiness.findings.length) return null;
             return (
               <div className="mt-2 space-y-1.5 pt-2 border-t border-port-border/60">
@@ -520,30 +703,78 @@ export default function LoomNodeEditor({
 
             <fieldset className="space-y-2">
               <legend className={labelClass}>Characters</legend>
+              <p className="text-[11px] text-port-text-muted">
+                Bind every on-screen character to the Universe Bible. Canon-locked renders use each selected character&apos;s visual reference, wardrobe, and approved neutral/profile/full-body identity assets.
+              </p>
+              {canonicalProtagonistId && scenePresence !== 'offscreen'
+                && !form.visualCanon.characterAppearances.some((appearance) => appearance.characterId === canonicalProtagonistId) && (
+                <button
+                  type="button"
+                  aria-label="Add canonical protagonist to visual cast"
+                  className="text-xs text-port-accent hover:underline"
+                  onClick={() => updateVisualCanon({
+                    characterAppearances: [
+                      ...form.visualCanon.characterAppearances,
+                      {
+                        characterId: canonicalProtagonistId,
+                        wardrobeId: loom.protagonistWardrobeId || null,
+                        expression: '',
+                        continuityNotes: '',
+                      },
+                    ],
+                  })}
+                >
+                  Add canonical protagonist to visual cast
+                </button>
+              )}
               {(universe?.characters || []).map((character) => {
                 const appearance = form.visualCanon.characterAppearances
                   .find((item) => item.characterId === character.id);
+                const reference = characterReferenceInfo(character);
+                const canonicalWardrobeLocked = character.id === canonicalProtagonistId
+                  && loom.protagonistWardrobeLocked === true
+                  && Boolean(loom.protagonistWardrobeId);
+                const wardrobeValue = canonicalWardrobeLocked
+                  ? loom.protagonistWardrobeId
+                  : appearance?.wardrobeId || '';
                 return (
                   <div key={character.id} className="rounded bg-port-bg-subtle p-2 space-y-2">
-                    <label className="flex items-center gap-2 text-xs" htmlFor={`loom-canon-character-${character.id}`}>
-                      <input
-                        id={`loom-canon-character-${character.id}`}
-                        aria-label={character.name}
-                        type="checkbox"
-                        checked={Boolean(appearance)}
-                        onChange={(event) => updateVisualCanon({
-                          characterAppearances: event.target.checked
-                            ? [...form.visualCanon.characterAppearances, { characterId: character.id, wardrobeId: null, expression: '', continuityNotes: '' }]
-                            : form.visualCanon.characterAppearances.filter((item) => item.characterId !== character.id),
-                        })}
-                      />
-                      {character.name}
-                    </label>
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <label className="flex items-center gap-2 text-xs" htmlFor={`loom-canon-character-${character.id}`}>
+                        <input
+                          id={`loom-canon-character-${character.id}`}
+                          aria-label={character.name}
+                          type="checkbox"
+                          checked={Boolean(appearance)}
+                          onChange={(event) => updateVisualCanon({
+                            characterAppearances: event.target.checked
+                              ? [...form.visualCanon.characterAppearances, {
+                                characterId: character.id,
+                                wardrobeId: character.id === canonicalProtagonistId
+                                  ? loom.protagonistWardrobeId || null
+                                  : null,
+                                expression: '',
+                                continuityNotes: '',
+                              }]
+                              : form.visualCanon.characterAppearances.filter((item) => item.characterId !== character.id),
+                          })}
+                        />
+                        {character.name}
+                      </label>
+                      <span className={`text-[10px] ${reference.identityPackReady ? 'text-port-success' : 'text-port-warning'}`}>
+                        {reference.identityPackReady
+                          ? 'Identity pack ready'
+                          : reference.sheetCount
+                            ? `Sheet ready · identity missing ${reference.missingIdentityRoles.join(', ')}`
+                            : 'Needs character sheet'}
+                      </span>
+                    </div>
                     {appearance && (character.wardrobes || []).length > 0 && (
                       <select
                         className={fieldClass}
                         aria-label={`${character.name} wardrobe`}
-                        value={appearance.wardrobeId || ''}
+                        value={wardrobeValue}
+                        disabled={canonicalWardrobeLocked}
                         onChange={(event) => updateVisualCanon({
                           characterAppearances: form.visualCanon.characterAppearances.map((item) => (
                             item.characterId === character.id ? { ...item, wardrobeId: event.target.value || null } : item
@@ -551,10 +782,16 @@ export default function LoomNodeEditor({
                         })}
                       >
                         <option value="">Default wardrobe</option>
+                        {wardrobeValue && !character.wardrobes.some((wardrobe) => wardrobe.id === wardrobeValue) && (
+                          <option value={wardrobeValue}>Missing wardrobe ({wardrobeValue})</option>
+                        )}
                         {character.wardrobes.map((wardrobe) => (
                           <option key={wardrobe.id} value={wardrobe.id}>{wardrobe.name || wardrobe.label || 'Wardrobe'}</option>
                         ))}
                       </select>
+                    )}
+                    {appearance && canonicalWardrobeLocked && (
+                      <p className="text-[11px] text-port-accent">Locked to the loom&apos;s canonical protagonist wardrobe.</p>
                     )}
                     {appearance && (
                       <div className="grid gap-2 sm:grid-cols-2">

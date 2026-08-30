@@ -21,6 +21,9 @@ import {
   loomPatchSchema,
   nodeCreateSchema,
   nodePatchSchema,
+  outlineGenerateSchema,
+  outlineReviewSchema,
+  outlineValidateSchema,
   playTurnSchema,
   reformatSchema,
   reviewSchema,
@@ -37,6 +40,7 @@ import {
   continuityReviewSchema,
 } from '../lib/fableLoomValidation.js';
 import { analyzeEpisodeGraph } from '../lib/fableLoomGraph.js';
+import { analyzeSeriesStoryOutlines } from '../lib/fableLoomOutline.js';
 import {
   inspectEpisodeProductionReadiness,
   inspectNodeProductionReadiness,
@@ -58,6 +62,7 @@ import {
   endHostedSession,
   feedbackEpisode,
   feedbackSeriesPlan,
+  generateEpisodeOutline,
   generateSeriesPlan,
   getEpisodeProductionBatch,
   getHostedSession,
@@ -67,15 +72,18 @@ import {
   playTurn,
   reformatEpisodeScenes,
   reviewEpisode,
+  reviewEpisodeOutline,
   reviewEpisodeContinuity,
   resumeEpisodeProductionBatch,
   reviewSeriesPlan,
+  reviewSeriesTeleplay,
   startEpisodeProductionBatch,
   updateEpisode,
   updateHostedSession,
   updateLoom,
   updateNode,
   updateNodeTransition,
+  validateEpisodeOutline,
   weaveEpisode,
 } from '../services/fableLoom/index.js';
 
@@ -126,6 +134,11 @@ router.post('/:id/plan/review', asyncHandler(async (req, res) => {
   res.json(await reviewSeriesPlan(req.params.id, input));
 }));
 
+router.post('/:id/review-teleplay', asyncHandler(async (req, res) => {
+  const input = validateRequest(reviewSchema, req.body);
+  res.json(await reviewSeriesTeleplay(req.params.id, input));
+}));
+
 router.post('/:id/plan/feedback', asyncHandler(async (req, res) => {
   const input = validateRequest(seriesPlanFeedbackSchema, req.body);
   res.json(await feedbackSeriesPlan(req.params.id, input));
@@ -148,6 +161,12 @@ router.delete('/:id/episodes/:episodeId', asyncHandler(async (req, res) => {
 }));
 
 // Deterministic graph validation and production readiness — no LLM.
+router.get('/:id/outlines/validate', asyncHandler(async (req, res) => {
+  const loom = await getLoom(req.params.id);
+  if (!loom) throw new ServerError('Loom not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(analyzeSeriesStoryOutlines(loom));
+}));
+
 router.get('/:id/episodes/:episodeId/validate', asyncHandler(async (req, res) => {
   const loom = await getLoom(req.params.id);
   const episode = loom?.episodes.find((e) => e.id === req.params.episodeId);
@@ -221,6 +240,24 @@ router.delete('/:id/episodes/:episodeId/nodes/:nodeId/transitions/:transitionId'
 router.post('/:id/episodes/:episodeId/weave', asyncHandler(async (req, res) => {
   const input = validateRequest(weaveSchema, req.body);
   res.json(await weaveEpisode(req.params.id, req.params.episodeId, input));
+}));
+
+// Story-first authoring: draft and review the small beat outline before the
+// full teleplay graph is expanded. Validation is deterministic and persisted
+// so the expansion button can enforce the same gate from every client.
+router.post('/:id/episodes/:episodeId/outline/generate', asyncHandler(async (req, res) => {
+  const input = validateRequest(outlineGenerateSchema, req.body);
+  res.json(await generateEpisodeOutline(req.params.id, req.params.episodeId, input));
+}));
+
+router.post('/:id/episodes/:episodeId/outline/validate', asyncHandler(async (req, res) => {
+  validateRequest(outlineValidateSchema, req.body ?? {});
+  res.json(await validateEpisodeOutline(req.params.id, req.params.episodeId));
+}));
+
+router.post('/:id/episodes/:episodeId/outline/review', asyncHandler(async (req, res) => {
+  const input = validateRequest(outlineReviewSchema, req.body);
+  res.json(await reviewEpisodeOutline(req.params.id, req.params.episodeId, input));
 }));
 
 router.post('/:id/episodes/:episodeId/nodes/:nodeId/branch', asyncHandler(async (req, res) => {

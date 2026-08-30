@@ -66,6 +66,12 @@ vi.mock('../components/fableloom/LoomMediaJobWatchers', () => ({
   },
 }));
 vi.mock('../components/fableloom/LoomEpisodeOutline', () => ({ default: ({ episode }) => <div data-testid="episode-outline">{episode.title}</div> }));
+vi.mock('../components/fableloom/LoomEpisodeOutlinePlanner', () => ({
+  default: ({ onExpand }) => (
+    <button type="button" onClick={onExpand}>Expand validated outline to teleplay</button>
+  ),
+}));
+vi.mock('../components/fableloom/LoomEpisodeFeedback', () => ({ default: () => null }));
 vi.mock('../components/fableloom/LoomNodeEditor', () => ({
   default: ({ node }) => <div>Editing scene: {node.title}</div>,
 }));
@@ -93,6 +99,7 @@ const episode = (fields = {}) => ({
   title: 'The First Door',
   synopsis: 'A choice waits in the dark.',
   startNodeId: 'node-1',
+  storyOutline: { validation: { status: 'valid' } },
   nodes: [
     { id: 'node-1', title: 'Threshold', prose: 'You stand before the first door.', transitions: [] },
   ],
@@ -197,6 +204,46 @@ describe('FableLoomStory episode outline route', () => {
   });
 });
 
+describe('FableLoomStory episode expansion safety', () => {
+  it('exposes an explicit episode editor for changing the title and synopsis', async () => {
+    const user = userEvent.setup();
+    api.getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
+    renderEditor('/fableloom/loom-1/ep-1');
+
+    await user.click(await screen.findByRole('button', { name: 'Edit episode' }));
+
+    expect(screen.getByRole('heading', { name: 'Episode setup' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Title')).toHaveValue('The First Door');
+    expect(screen.getByLabelText('Synopsis (feeds the weave)')).toHaveValue('A choice waits in the dark.');
+  });
+
+  it('confirms before replacing an existing episode scene graph', async () => {
+    const user = userEvent.setup();
+    const existingEpisode = episode({ nodes: [
+      { id: 'node-1', title: 'Existing scene', prose: 'Existing text.', transitions: [] },
+      { id: 'node-2', title: 'Existing ending', prose: 'Existing ending text.', transitions: [] },
+    ] });
+    api.getLoom.mockResolvedValue(loom({ episodes: [existingEpisode] }));
+    api.weaveLoomEpisode.mockResolvedValue({ loom: loom({ episodes: [existingEpisode] }) });
+    renderEditor('/fableloom/loom-1/ep-1');
+
+    await user.click(await screen.findByRole('button', { name: 'Weave' }));
+    await user.click(screen.getByRole('button', { name: 'Expand validated outline to teleplay' }));
+
+    expect(api.weaveLoomEpisode).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Replace scenes' })).toBeInTheDocument();
+    expect(screen.getByText(/Replace 2 existing scenes and remove their rendered stills and video clips/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Replace scenes' }));
+    await waitFor(() => expect(api.weaveLoomEpisode).toHaveBeenCalledWith(
+      'loom-1',
+      'ep-1',
+      expect.objectContaining({ replace: true, expandFromOutline: true }),
+      { silent: true },
+    ));
+  });
+});
+
 describe('FableLoomStory mobile scene details', () => {
   it('opens the selected scene in a slide-up sheet and closes back to the graph', async () => {
     const user = userEvent.setup();
@@ -218,6 +265,15 @@ describe('FableLoomStory mobile scene details', () => {
 });
 
 describe('FableLoomStory scene media lifecycle', () => {
+  it('keeps scene media disabled until the ordered beat arc is validated', async () => {
+    api.getLoom.mockResolvedValue(loom({
+      episodes: [episode({ storyOutline: null })],
+    }));
+    renderEditor();
+
+    expect(await screen.findByRole('button', { name: 'Canvas generate image' })).toBeDisabled();
+  });
+
   it('queues with canonical universe style and notifies when the render later fails', async () => {
     const user = userEvent.setup();
     api.getLoom.mockResolvedValue(loom({

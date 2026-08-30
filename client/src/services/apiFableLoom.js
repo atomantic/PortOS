@@ -33,6 +33,9 @@ export const reviewLoomSeriesPlan = (id, body = {}, options = {}) => request(loo
 export const feedbackLoomSeriesPlan = (id, body, options = {}) => request(loomPath(id, '/plan/feedback'), {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
+export const reviewLoomTeleplay = (id, body = {}, options = {}) => request(loomPath(id, '/review-teleplay'), {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
 
 export const addLoomEpisode = (id, body, options = {}) => request(loomPath(id, '/episodes'), {
   method: 'POST', body: JSON.stringify(body), ...options,
@@ -45,6 +48,20 @@ export const deleteLoomEpisode = (id, episodeId, options = {}) => request(episod
 });
 export const validateLoomEpisode = (id, episodeId, options = {}) =>
   request(episodePath(id, episodeId, '/validate'), options);
+export const generateLoomEpisodeOutline = (id, episodeId, body = {}, options = {}) =>
+  request(episodePath(id, episodeId, '/outline/generate'), {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
+export const validateLoomEpisodeOutline = (id, episodeId, options = {}) =>
+  request(episodePath(id, episodeId, '/outline/validate'), {
+    method: 'POST', body: JSON.stringify({}), ...options,
+  });
+export const reviewLoomEpisodeOutline = (id, episodeId, body = {}, options = {}) =>
+  request(episodePath(id, episodeId, '/outline/review'), {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
+export const validateLoomSeriesOutlines = (id, options = {}) =>
+  request(loomPath(id, '/outlines/validate'), options);
 
 export const addLoomNode = (id, episodeId, body, options = {}) => request(episodePath(id, episodeId, '/nodes'), {
   method: 'POST', body: JSON.stringify(body), ...options,

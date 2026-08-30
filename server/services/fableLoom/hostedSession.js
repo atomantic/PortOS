@@ -550,7 +550,7 @@ export async function processHostedUtterance(sessionId, {
       playResult = {
         action: 'stay',
         narration: node?.prose?.slice(0, 200) || "I hear you. Let's see what happens next.",
-        node: node ? publicNode(node) : null,
+        node: node ? publicNode(node, loom) : null,
         ended: false,
       };
     }
@@ -634,7 +634,7 @@ export async function processHostedUtterance(sessionId, {
 
         if (io) {
           io.of('/fableloom-hosted').to(`session:${sessionId}`).emit('hosted:story:transition', {
-            node: publicNode(targetNode),
+            node: publicNode(targetNode, loom),
             transitionId: playResult.transitionId,
             playbackPhase: session.playbackPhase,
           });

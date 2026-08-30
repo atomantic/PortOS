@@ -210,6 +210,8 @@ export function describeGraphForPrompt(episode, {
       participationMode === 'helper'
         ? (node?.audienceConnection === 'connected' ? 'AUDIENCE CONNECTED' : 'AUDIENCE DISCONNECTED')
         : null,
+      node?.protagonistPresence === 'offscreen' ? 'PROTAGONIST OFF-SCREEN' : null,
+      node?.protagonistPresence === 'onscreen' ? 'PROTAGONIST ON-SCREEN' : null,
     ].filter(Boolean);
     lines.push(`[${node.id}] ${node.title || 'Untitled scene'}${flags.length ? ` (${flags.join(') (')})` : ''}`);
     const prose = typeof node.prose === 'string' ? node.prose.trim() : '';

@@ -45,7 +45,8 @@ import { getSettings } from '../services/settings.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';
 import { collectRemoteInputAssets } from '../services/federatedMedia/inputAssets.js';
 import { buildFederatedMediaRequest } from '../lib/federatedMediaRequest.js';
-import { attachNodeImage } from '../services/fableLoom/records.js';
+import { inspectEpisodeProductionOrder } from '../lib/fableLoomProduction.js';
+import { attachNodeImage, getLoom } from '../services/fableLoom/records.js';
 import {
   compileFableLoomVisualRequest, fableLoomImageCapabilities,
 } from '../services/fableLoom/visualConditioning.js';
@@ -399,6 +400,21 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   // browser's prompt/reference fields are hints only: stable scene bindings,
   // approved assets and deterministic graph continuity own the final request.
   if (params.fableLoom) {
+    const taggedLoom = await getLoom(params.fableLoom.loomId);
+    const taggedEpisode = taggedLoom?.episodes?.find((episode) => episode.id === params.fableLoom.episodeId);
+    if (taggedLoom && taggedEpisode) {
+      const episodeOrder = inspectEpisodeProductionOrder(taggedLoom, taggedEpisode);
+      if (!episodeOrder.ready) {
+        throw new ServerError(
+          `FableLoom storyboard production is out of order: ${episodeOrder.reason}`,
+          {
+            status: 409,
+            code: 'FABLELOOM_EPISODE_ORDER_BLOCKED',
+            context: { details: { episodeOrder } },
+          },
+        );
+      }
+    }
     const selected = mode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModel(params.modelId) : null;
     const cloud = selected ? null : resolveCloudProviderConfig(settings, mode, { model: params.cloudModel });
     const model = selected

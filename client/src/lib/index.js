@@ -29,6 +29,7 @@ export * from './creativeDirectorPlan.js';
 export * from './creativeDirectorPreview.js';
 export * from './editorialRoadmap.js';
 export * from './federatedMediaReadiness.js';
+export * from './fableLoomReadiness.js';
 export * from './glbFailure.js';
 export * from './grokVideoClip.js';
 export * from './imageCleaners.js';
@@ -180,4 +181,3 @@ export * from './webglSupport.js';
 export * from './wrSceneCursor.js';
 export * from './writingGuide.js';
 export * from './qrCode.js';
-

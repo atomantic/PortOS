@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildEpisodeProductionPlan,
   computeTopologicalNodeOrder,
+  inspectEpisodeProductionOrder,
   verifyExactInputProvenance,
 } from './fableLoomProduction.js';
 
@@ -71,6 +72,35 @@ describe('fableLoomProduction', () => {
     expect(topo.unreachableNodeIds.has('node-unreachable')).toBe(true);
   });
 
+  it('requires prior episodes to have reachable storyboard images before production', () => {
+    const firstEpisode = {
+      id: 'ep-1', number: 1, startNodeId: 'first-node', nodes: [
+        { id: 'first-node', title: 'First image', image: 'first.png', isEnding: true, transitions: [] },
+      ],
+    };
+    const secondEpisode = {
+      id: 'ep-2', number: 2, startNodeId: 'second-node', nodes: [
+        { id: 'second-node', title: 'Second image', transitions: [] },
+      ],
+    };
+    const loom = { episodes: [firstEpisode, secondEpisode] };
+
+    expect(inspectEpisodeProductionOrder(loom, firstEpisode)).toMatchObject({
+      ready: true, previousEpisodeCount: 0,
+    });
+    expect(inspectEpisodeProductionOrder(loom, secondEpisode)).toMatchObject({
+      ready: true, previousEpisodeCount: 1,
+    });
+
+    firstEpisode.nodes[0].image = '';
+    const blocked = inspectEpisodeProductionOrder(loom, secondEpisode);
+    expect(blocked.ready).toBe(false);
+    expect(blocked.reason).toContain('Episode 1');
+    expect(blocked.missingScenes).toEqual([
+      expect.objectContaining({ episodeId: 'ep-1', nodeId: 'first-node' }),
+    ]);
+  });
+
   it('builds comprehensive episode production plan with assets and dependencies', () => {
     const plan = buildEpisodeProductionPlan({
       episode: sampleEpisode,
@@ -106,6 +136,20 @@ describe('fableLoomProduction', () => {
     const stillStage = plan.executionStages.find((stage) => stage.assetIds.includes('asset-node-1-still'));
     const videoStage = plan.executionStages.find((stage) => stage.assetIds.includes('asset-node-1-video-entry'));
     expect(videoStage.stageIndex).toBeGreaterThan(stillStage.stageIndex);
+  });
+
+  it('blocks production when the canonical protagonist cannot resolve in the linked Universe', () => {
+    const plan = buildEpisodeProductionPlan({
+      episode: sampleEpisode,
+      loom: { id: 'loom-1', protagonistCharacterId: 'char-elena' },
+      universe: { id: 'universe-1', characters: [] },
+    });
+
+    expect(plan.isFullyReady).toBe(false);
+    expect(plan.plannedAssets
+      .filter((asset) => asset.status === 'blocked')
+      .some((asset) => asset.readiness.reasons.some((reason) => /canonical protagonist/i.test(reason))))
+      .toBe(true);
   });
 
   it('refuses exact-input planning when a node has no recorded provenance', () => {

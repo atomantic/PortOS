@@ -30,6 +30,7 @@ export {
 export {
   branchNode,
   buildCanonDigest,
+  generateEpisodeOutline,
   feedbackEpisode,
   feedbackSeriesPlan,
   generateSeriesPlan,
@@ -38,8 +39,11 @@ export {
   publicNode,
   reformatEpisodeScenes,
   reviewEpisode,
+  reviewEpisodeOutline,
   reviewSeriesPlan,
+  reviewSeriesTeleplay,
   weaveEpisode,
+  validateEpisodeOutline,
 } from './weave.js';
 export {
   _resetFableLoomBackend,

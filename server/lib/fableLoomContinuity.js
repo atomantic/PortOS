@@ -13,7 +13,11 @@
  */
 
 import { computeTopologicalNodeOrder } from './fableLoomProduction.js';
-import { validateAudioOccupancy } from './fableLoomPlayback.js';
+import {
+  resolveFableLoomProtagonistPresence,
+  validateAudioOccupancy,
+} from './fableLoomPlayback.js';
+import { characterIdentityPackReadiness } from './storyBible.js';
 
 export const CONTINUITY_CATEGORIES = Object.freeze(['visual', 'voice', 'playback', 'graph']);
 
@@ -23,6 +27,12 @@ export const CONTINUITY_CODES = Object.freeze({
   MISSING_UNIVERSE_OBJECT: 'MISSING_UNIVERSE_OBJECT',
   MISSING_WARDROBE_REFERENCE: 'MISSING_WARDROBE_REFERENCE',
   WARDROBE_DRIFT: 'WARDROBE_DRIFT',
+  CANONICAL_PROTAGONIST_UNRESOLVED: 'CANONICAL_PROTAGONIST_UNRESOLVED',
+  CANONICAL_WARDROBE_UNRESOLVED: 'CANONICAL_WARDROBE_UNRESOLVED',
+  CANONICAL_IDENTITY_PACK_NOT_READY: 'CANONICAL_IDENTITY_PACK_NOT_READY',
+  PROTAGONIST_BINDING_MISMATCH: 'PROTAGONIST_BINDING_MISMATCH',
+  PROTAGONIST_VISUAL_BINDING_WHILE_OFFSCREEN: 'PROTAGONIST_VISUAL_BINDING_WHILE_OFFSCREEN',
+  CANONICAL_WARDROBE_DRIFT: 'CANONICAL_WARDROBE_DRIFT',
   AMBIGUOUS_CONVERGENCE: 'AMBIGUOUS_CONVERGENCE',
   VOICE_PROFILE_REVISION_DRIFT: 'VOICE_PROFILE_REVISION_DRIFT',
   VOICE_ENGINE_DRIFT: 'VOICE_ENGINE_DRIFT',
@@ -112,6 +122,61 @@ export function analyzeEpisodeContinuity({
     }
   }
 
+  const canonicalProtagonistId = isStr(loom?.protagonistCharacterId)
+    ? loom.protagonistCharacterId
+    : null;
+  const canonicalWardrobeId = isStr(loom?.protagonistWardrobeId)
+    ? loom.protagonistWardrobeId
+    : null;
+  const canonicalProtagonist = canonicalProtagonistId && Array.isArray(universe?.characters)
+    ? universe.characters.find((character) => character.id === canonicalProtagonistId)
+    : null;
+  if (canonicalProtagonistId && !universe) {
+    push({
+      category: 'visual',
+      severity: 'error',
+      code: CONTINUITY_CODES.CANONICAL_PROTAGONIST_UNRESOLVED,
+      message: `Canonical protagonist "${canonicalProtagonistId}" cannot be resolved because the linked Universe is unavailable.`,
+      remediation: 'Restore the linked Universe before reviewing or rendering character continuity.',
+      characterId: canonicalProtagonistId,
+    });
+  } else if (canonicalProtagonistId && !canonicalProtagonist) {
+    push({
+      category: 'visual',
+      severity: 'error',
+      code: CONTINUITY_CODES.CANONICAL_PROTAGONIST_UNRESOLVED,
+      message: `Canonical protagonist "${canonicalProtagonistId}" is not present in the linked Universe.`,
+      remediation: 'Choose an existing Universe character or restore the missing character.',
+      characterId: canonicalProtagonistId,
+    });
+  } else if (canonicalProtagonist && canonicalWardrobeId) {
+    const wardrobeExists = Array.isArray(canonicalProtagonist.wardrobes)
+      && canonicalProtagonist.wardrobes.some((wardrobe) => wardrobe.id === canonicalWardrobeId);
+    if (!wardrobeExists) {
+      push({
+        category: 'visual',
+        severity: 'error',
+        code: CONTINUITY_CODES.CANONICAL_WARDROBE_UNRESOLVED,
+        message: `Canonical wardrobe "${canonicalWardrobeId}" is not present on protagonist "${canonicalProtagonistId}".`,
+        remediation: 'Choose a wardrobe from the protagonist character sheet or clear the stale reference.',
+        characterId: canonicalProtagonistId,
+      });
+    }
+  }
+  if (canonicalProtagonist) {
+    const identityReadiness = characterIdentityPackReadiness(canonicalProtagonist);
+    if (identityReadiness.status !== 'ready') {
+      push({
+        category: 'visual',
+        severity: 'warning',
+        code: CONTINUITY_CODES.CANONICAL_IDENTITY_PACK_NOT_READY,
+        message: `Canonical protagonist "${canonicalProtagonist.name || canonicalProtagonistId}" identity pack is ${identityReadiness.status}; canon-locked storyboard renders need approved neutral, profile, and full-body references.`,
+        remediation: 'Open the Universe character sheet and approve one neutral, profile, and full-body reference image.',
+        characterId: canonicalProtagonistId,
+      });
+    }
+  }
+
   // 1. Graph & Convergence Continuity
   for (const nodeId of unreachableNodeIds) {
     const node = nodeById.get(nodeId);
@@ -149,11 +214,63 @@ export function analyzeEpisodeContinuity({
     const visualCanon = node.visualCanon || {};
     const interaction = node.interactionWindow || {};
     const assets = node.playbackAssets || {};
+    const interactionProtagonistId = isStr(interaction.protagonistCharacterId)
+      ? interaction.protagonistCharacterId
+      : null;
+    const sceneProtagonistIds = new Set(
+      [canonicalProtagonistId, interactionProtagonistId].filter(Boolean),
+    );
+    const protagonistPresence = resolveFableLoomProtagonistPresence(node, loom);
 
     // Visual entity validation
     if (universe) {
       // Check character appearances
       const appearances = Array.isArray(visualCanon.characterAppearances) ? visualCanon.characterAppearances : [];
+      const protagonistAppearances = appearances.filter((appearance) => (
+        sceneProtagonistIds.has(appearance?.characterId)
+      ));
+      if (protagonistPresence === 'offscreen' && protagonistAppearances.length) {
+        push({
+          category: 'visual',
+          severity: 'warning',
+          code: CONTINUITY_CODES.PROTAGONIST_VISUAL_BINDING_WHILE_OFFSCREEN,
+          message: `Scene "${node.title || node.id}" is marked off-screen for the protagonist but still declares a protagonist visual binding; the render compiler will omit it.`,
+          remediation: 'Remove the protagonist from this scene cast, or mark the beat on-screen if the audience should see them.',
+          nodeId: node.id,
+          characterId: interactionProtagonistId || canonicalProtagonistId,
+        });
+      }
+      if (canonicalProtagonistId && interactionProtagonistId
+        && interactionProtagonistId !== canonicalProtagonistId) {
+        push({
+          category: 'playback',
+          severity: 'error',
+          code: CONTINUITY_CODES.PROTAGONIST_BINDING_MISMATCH,
+          message: `Live interaction in scene "${node.title || node.id}" binds protagonist "${interactionProtagonistId}" instead of the loom's canonical protagonist "${canonicalProtagonistId}".`,
+          remediation: 'Use the canonical protagonist selected in Story settings so voice and visual identity stay aligned.',
+          nodeId: node.id,
+          characterId: interactionProtagonistId,
+        });
+      }
+      if (canonicalProtagonistId && canonicalWardrobeId && protagonistPresence !== 'offscreen') {
+        for (const appearance of protagonistAppearances.filter(
+          (item) => item.characterId === canonicalProtagonistId,
+        )) {
+          if (appearance.wardrobeId && appearance.wardrobeId !== canonicalWardrobeId) {
+            push({
+              category: 'visual',
+              severity: loom.protagonistWardrobeLocked === true ? 'warning' : 'info',
+              code: CONTINUITY_CODES.CANONICAL_WARDROBE_DRIFT,
+              message: `Scene "${node.title || node.id}" selects wardrobe "${appearance.wardrobeId}" for the canonical protagonist instead of "${canonicalWardrobeId}".`,
+              remediation: loom.protagonistWardrobeLocked === true
+                ? 'Keep the scene wardrobe on the locked canonical reference or change the loom wardrobe deliberately in Story settings.'
+                : 'Confirm the wardrobe change is intentional, or select the loom canonical wardrobe for this scene.',
+              nodeId: node.id,
+              characterId: canonicalProtagonistId,
+            });
+          }
+        }
+      }
       for (const app of appearances) {
         const charId = app.characterId;
         const char = universe.characters?.find((c) => c.id === charId);

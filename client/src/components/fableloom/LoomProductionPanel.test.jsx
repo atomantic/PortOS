@@ -22,6 +22,10 @@ describe('LoomProductionPanel', () => {
     plannedAssets: [
       { id: 'asset-1', nodeId: 'node-1', type: 'image', status: 'ready' },
       { id: 'asset-2', nodeId: 'node-1', type: 'video_entry', status: 'ready' },
+      { id: 'asset-3', nodeId: 'node-2', type: 'image', status: 'already_rendered' },
+      { id: 'asset-4', nodeId: 'node-2', type: 'video_entry', status: 'ready' },
+      { id: 'asset-5', nodeId: 'node-3', type: 'image', status: 'ready' },
+      { id: 'asset-6', nodeId: 'node-3', type: 'video_entry', status: 'ready' },
     ],
     convergenceIssues: [],
     exactInputIssues: [],
@@ -60,8 +64,8 @@ describe('LoomProductionPanel', () => {
       expect(screen.getByText('Episodic Production Plan')).toBeInTheDocument();
     });
 
-    expect(screen.getByText('6')).toBeInTheDocument(); // total assets
-    expect(screen.getByText('Start Batch Production')).toBeInTheDocument();
+    expect(screen.getByText('3')).toBeInTheDocument(); // storyboard images only by default
+    expect(screen.getByText('Generate Storyboard Images')).toBeInTheDocument();
 
     const modeSelect = screen.getByLabelText('Mode:');
     fireEvent.change(modeSelect, { target: { value: 'exact_inputs' } });
@@ -75,15 +79,53 @@ describe('LoomProductionPanel', () => {
     render(<LoomProductionPanel loom={sampleLoom} episode={sampleEpisode} onSelectNode={vi.fn()} />);
 
     await waitFor(() => {
-      expect(screen.getByText('Start Batch Production')).toBeInTheDocument();
+      expect(screen.getByText('Generate Storyboard Images')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByText('Start Batch Production'));
+    fireEvent.click(screen.getByText('Generate Storyboard Images'));
 
     await waitFor(() => {
-      expect(api.startLoomEpisodeProductionBatch).toHaveBeenCalledWith('loom-1', 'ep-1', { mode: 'current_canon' }, { silent: true });
+      expect(api.startLoomEpisodeProductionBatch).toHaveBeenCalledWith(
+        'loom-1', 'ep-1', { mode: 'current_canon', assetTypes: ['image'] }, { silent: true },
+      );
       expect(screen.getByText('Cancel Production Batch')).toBeInTheDocument();
     });
+  });
+
+  it('blocks batch media until the ordered beat arc is ready', async () => {
+    render(
+      <LoomProductionPanel
+        loom={{ ...sampleLoom, episodes: [{ id: 'ep-1', number: 1 }] }}
+        episode={{ ...sampleEpisode, nodes: [{ id: 'node-1' }] }}
+        onSelectNode={vi.fn()}
+      />,
+    );
+
+    const generate = await screen.findByText('Generate Storyboard Images');
+    expect(generate).toBeDisabled();
+    expect(screen.getByText(/ordered beat arc/i)).toBeInTheDocument();
+    expect(api.startLoomEpisodeProductionBatch).not.toHaveBeenCalled();
+  });
+
+  it('shows and enforces the ordered storyboard sequence gate', async () => {
+    api.planLoomEpisodeProduction.mockResolvedValueOnce({
+      ...samplePlan,
+      episodeOrderReadiness: {
+        ready: false,
+        reason: 'Finish storyboard images for Episode 1 before generating Episode 2.',
+        missingScenes: [{ episodeId: 'ep-1', nodeId: 'node-1' }],
+      },
+      planningIssues: ['Episode order: Finish storyboard images for Episode 1 before generating Episode 2.'],
+    });
+
+    render(<LoomProductionPanel loom={sampleLoom} episode={sampleEpisode} onSelectNode={vi.fn()} />);
+
+    const generate = await screen.findByText('Generate Storyboard Images');
+    expect(generate).toBeDisabled();
+    expect(screen.getByText('Ordered storyboard sequence')).toBeInTheDocument();
+    expect(screen.getByText(/1 prior scene image\(s\) still need to be rendered/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Finish storyboard images for Episode 1 before generating Episode 2/i)).toHaveLength(2);
+    expect(api.startLoomEpisodeProductionBatch).not.toHaveBeenCalled();
   });
 
   it('runs continuity review and displays findings with node selection', async () => {

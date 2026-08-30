@@ -360,7 +360,12 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v3 = typed playback assets retain one visual-conditioning manifest per
   // rendered clip, so entry/hold/exit provenance cannot overwrite each other.
   // A v2 peer would strip that map during whole-record LWW.
-  fableLoom: 3,
+  // v4 = the loom pins one canonical protagonist and wardrobe, while each
+  // scene records whether that protagonist is on-screen or speaking through a
+  // side-device off-screen. A v3 peer would silently strip those fields on a
+  // whole-record round trip and could restore wardrobe drift or put a removed
+  // protagonist back into a scene.
+  fableLoom: 4,
   // v1 = Creative Director projects (PostgreSQL `creative_director_projects`)
   // federated via the per-record peer-sync push pipeline (record kind
   // `creativeDirectorProject`, sync category `creativeDirectorProjects`, #1564).
