@@ -1,9 +1,11 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 
 const mock = vi.hoisted(() => ({
   getInstanceFeatures: vi.fn(),
   updateInstanceFeature: vi.fn(),
+  installEidoverseFeature: vi.fn(),
 }));
 
 vi.mock('../../services/api', () => mock);
@@ -29,6 +31,23 @@ const JIRA_FEATURE = {
   configured: true,
 };
 
+const EIDOVERSE_FEATURE = {
+  id: 'eidoverse',
+  label: 'Eidoverse Worlds',
+  description: 'An optional shared 3D world for you and your agents.',
+  enabled: false,
+  source: 'default',
+  setup: {
+    installed: false,
+    partial: false,
+    bunAvailable: true,
+    registryAvailable: true,
+    appId: null,
+    uiPort: 8940,
+    runtimeStatus: 'not_registered',
+  },
+};
+
 describe('InstanceFeaturesTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -37,6 +56,14 @@ describe('InstanceFeaturesTab', () => {
     __resetInstanceFeatureCache();
     mock.getInstanceFeatures.mockResolvedValue({ features: [POST_FEATURE] });
     mock.updateInstanceFeature.mockResolvedValue({ features: [{ ...POST_FEATURE, enabled: false, source: 'explicit' }] });
+    mock.installEidoverseFeature.mockResolvedValue({
+      features: [{
+        ...EIDOVERSE_FEATURE,
+        enabled: true,
+        source: 'explicit',
+        setup: { ...EIDOVERSE_FEATURE.setup, installed: true, appId: 'app-eidoverse', runtimeStatus: 'not_started' },
+      }],
+    });
   });
 
   it('shows the instance-local feature switch', async () => {
@@ -72,6 +99,27 @@ describe('InstanceFeaturesTab', () => {
     render(<InstanceFeaturesTab />);
 
     expect(await screen.findByText(/no JIRA instance is configured yet/i)).toBeInTheDocument();
+  });
+
+  it('makes Eidoverse installation an explicit opt-in action', async () => {
+    mock.getInstanceFeatures.mockResolvedValue({ features: [EIDOVERSE_FEATURE] });
+    render(<MemoryRouter><InstanceFeaturesTab /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Install & enable' }));
+
+    await waitFor(() => expect(mock.installEidoverseFeature).toHaveBeenCalledWith({ silent: true }));
+    expect(await screen.findByRole('link', { name: 'Manage app' })).toHaveAttribute('href', '/apps/app-eidoverse');
+    expect(screen.getByText(/start it from the managed app/i)).toBeInTheDocument();
+  });
+
+  it('explains the Bun prerequisite before installation', async () => {
+    mock.getInstanceFeatures.mockResolvedValue({
+      features: [{ ...EIDOVERSE_FEATURE, setup: { ...EIDOVERSE_FEATURE.setup, bunAvailable: false } }],
+    });
+    render(<InstanceFeaturesTab />);
+
+    expect(await screen.findByRole('button', { name: 'Install & enable' })).toBeDisabled();
+    expect(screen.getByRole('link', { name: 'Install Bun' })).toHaveAttribute('href', 'https://bun.sh');
   });
 
   // The sidebar and ⌘K read the same module cache; a retry that updated only

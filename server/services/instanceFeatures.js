@@ -1,6 +1,7 @@
 import { ServerError } from '../lib/errorHandler.js';
 import { INSTANCE_FEATURES, INSTANCE_FEATURE_IDS } from '../lib/instanceFeatureRegistry.js';
 import { isPlainObject } from '../lib/objects.js';
+import { assertEidoverseInstalled, getEidoverseStatus } from './eidoverse.js';
 import { getSettingsWithStatus, updateSettingsWith } from './settings.js';
 
 // Runtime resolution for the feature registry in
@@ -110,12 +111,19 @@ export const resolveInstanceFeatures = (settings = {}, { corrupt = false, detect
   })
 );
 
+const attachSetupStatus = async (features) => {
+  const eidoverse = await getEidoverseStatus();
+  return features.map((feature) => (
+    feature.id === 'eidoverse' ? { ...feature, setup: eidoverse } : feature
+  ));
+};
+
 export async function getInstanceFeatures() {
   const [{ corrupt, settings }, detected] = await Promise.all([
     getSettingsWithStatus(),
     detectFeatureConfiguration(),
   ]);
-  return { features: resolveInstanceFeatures(settings, { corrupt, detected }) };
+  return { features: await attachSetupStatus(resolveInstanceFeatures(settings, { corrupt, detected })) };
 }
 
 // The same precedence ladder as `resolveInstanceFeatures`, but probing only this
@@ -136,6 +144,9 @@ export async function updateInstanceFeature(featureId, enabled) {
   if (!FEATURE_BY_ID.has(featureId)) {
     throw new ServerError(`Unknown instance feature: ${featureId}`, { status: 404, code: 'NOT_FOUND' });
   }
+  if (featureId === 'eidoverse' && enabled) {
+    await assertEidoverseInstalled();
+  }
 
   const settings = await updateSettingsWith((current) => {
     const instanceFeatures = isPlainObject(current.instanceFeatures) ? current.instanceFeatures : {};
@@ -150,5 +161,5 @@ export async function updateInstanceFeature(featureId, enabled) {
   });
 
   const detected = await detectFeatureConfiguration();
-  return { features: resolveInstanceFeatures(settings, { detected }) };
+  return { features: await attachSetupStatus(resolveInstanceFeatures(settings, { detected })) };
 }

@@ -44,10 +44,16 @@ vi.mock('../services/datadog.js', () => ({
 vi.mock('../services/jira.js', () => ({
   hasConfiguredInstances: vi.fn(async () => false),
 }));
+vi.mock('../services/eidoverse.js', () => ({
+  getEidoverseStatus: vi.fn(async () => ({ installed: false, bunAvailable: true, registryAvailable: true })),
+  assertEidoverseInstalled: vi.fn(async () => ({ installed: true })),
+  installEidoverse: vi.fn(async () => ({ installed: true })),
+}));
 
 import settingsRoutes from './settings.js';
 import { hasConfiguredInstances as hasConfiguredDatadogInstances } from '../services/datadog.js';
 import { hasConfiguredInstances as hasConfiguredJiraInstances } from '../services/jira.js';
+import { installEidoverse } from '../services/eidoverse.js';
 
 const buildApp = () => {
   const app = express();
@@ -115,6 +121,11 @@ describe('Settings routes — instance feature participation', () => {
     // detector responses so this default is independent of this host's setup.
     expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'datadog', enabled: false, source: 'auto' }));
     expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'jira', enabled: false, source: 'auto' }));
+    expect(res.body.features).toContainEqual(expect.objectContaining({
+      id: 'eidoverse',
+      enabled: false,
+      setup: expect.objectContaining({ installed: false }),
+    }));
     // GSD remains enabled by default so existing app planning tabs stay
     // available unless the install explicitly opts out.
     expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'gsd', enabled: true }));
@@ -161,6 +172,26 @@ describe('Settings routes — instance feature participation', () => {
     expect(res.status).toBe(200);
     expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'post', enabled: false }));
     expect(store).toEqual({ theme: 'dark', instanceFeatures: { post: { enabled: false } } });
+  });
+
+  it('installs and explicitly enables Eidoverse from its consent endpoint', async () => {
+    const res = await request(buildApp())
+      .post('/api/settings/features/eidoverse/install')
+      .send({});
+
+    expect(res.status).toBe(201);
+    expect(installEidoverse).toHaveBeenCalledOnce();
+    expect(store.instanceFeatures.eidoverse.enabled).toBe(true);
+    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'eidoverse', enabled: true }));
+  });
+
+  it('rejects unexpected install payload fields', async () => {
+    const res = await request(buildApp())
+      .post('/api/settings/features/eidoverse/install')
+      .send({ repository: 'https://example.com/untrusted.git' });
+
+    expect(res.status).toBe(400);
+    expect(installEidoverse).not.toHaveBeenCalled();
   });
 
   it('rejects unknown feature ids and malformed enabled values', async () => {

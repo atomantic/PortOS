@@ -1,9 +1,11 @@
 import { useState } from 'react';
+import { Link } from 'react-router';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import ToggleSwitch from '../ToggleSwitch';
 import { useInstanceFeatures, publishInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
-import { updateInstanceFeature } from '../../services/api';
+import { getPrimaryLaunchUrl } from '../../services/appUrls.js';
+import { installEidoverseFeature, updateInstanceFeature } from '../../services/api';
 
 // How the current value was decided, so a user who never touched the toggle can
 // see that the install picked it up from a configured integration rather than
@@ -36,6 +38,21 @@ export function InstanceFeaturesTab() {
     setSavingId(null);
   };
 
+  const handleEidoverseInstall = async (feature) => {
+    if (savingId) return;
+    setSavingId(feature.id);
+    const result = await installEidoverseFeature({ silent: true }).catch((err) => {
+      toast.error(err.message || 'Could not install Eidoverse Worlds');
+      return null;
+    });
+
+    if (result) {
+      publishInstanceFeatures(result.features, { featureId: feature.id, enabled: true });
+      toast.success('Eidoverse Worlds is installed and ready to start');
+    }
+    setSavingId(null);
+  };
+
   if (error) {
     return (
       <div className="space-y-3 max-w-3xl">
@@ -65,26 +82,81 @@ export function InstanceFeaturesTab() {
       <div className="space-y-3">
         {features.map((feature) => {
           const hint = sourceHint(feature);
+          const isEidoverse = feature.id === 'eidoverse';
+          const setup = isEidoverse ? feature.setup : null;
+          const needsInstall = isEidoverse && setup?.installed !== true;
+          const installing = savingId === feature.id;
+          const canInstall = setup?.bunAvailable === true && setup?.registryAvailable !== false;
+          const launchUrl = setup?.appId && setup?.uiPort
+            ? getPrimaryLaunchUrl({ id: setup.appId, uiPort: setup.uiPort })
+            : null;
           return (
             <div
               key={feature.id}
-              className="flex items-start justify-between gap-4 bg-port-card border border-port-border rounded-lg p-4"
+              className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 bg-port-card border border-port-border rounded-lg p-4"
             >
               <div className="min-w-0">
                 <h3 className="text-sm font-semibold text-white">{feature.label}</h3>
                 <p className="text-sm text-gray-400 mt-1">{feature.description}</p>
                 <p className={`text-xs mt-2 ${feature.enabled ? 'text-port-success' : 'text-gray-500'}`}>
-                  {feature.enabled ? 'Active on this instance' : 'Not used on this instance'}
+                  {needsInstall
+                    ? (setup?.partial ? 'Installation needs to be resumed' : 'Not installed')
+                    : (feature.enabled
+                      ? 'Active on this instance'
+                      : (isEidoverse ? 'Installed but disabled on this instance' : 'Not used on this instance'))}
                 </p>
                 {hint && <p className="text-xs text-gray-500 mt-1">{hint}</p>}
+                {needsInstall && (
+                  <div className="mt-3 space-y-1 text-xs text-gray-400">
+                    <p>
+                      PortOS will clone the Worlds fork and the upstream video runtime as separate AGPL-3.0 repositories, install their Bun dependencies, and register Worlds under Apps. It will not start the server automatically.
+                    </p>
+                    {setup?.bunAvailable === false && (
+                      <p className="text-port-warning">
+                        Bun is required. <a className="underline hover:text-white" href="https://bun.sh" target="_blank" rel="noreferrer">Install Bun</a>, then retry.
+                      </p>
+                    )}
+                    {setup?.registryAvailable === false && (
+                      <p className="text-port-error">The managed-app registry could not be read. Repair that before installing to avoid a duplicate app record.</p>
+                    )}
+                  </div>
+                )}
+                {setup?.installed && (
+                  <div className="flex flex-wrap items-center gap-3 mt-3 text-xs">
+                    {setup.appId && (
+                      <Link className="text-port-accent hover:text-white transition-colors" to={`/apps/${setup.appId}`}>
+                        Manage app
+                      </Link>
+                    )}
+                    {feature.enabled && setup.runtimeStatus === 'online' && launchUrl && (
+                      <a className="text-port-accent hover:text-white transition-colors" href={launchUrl} target="_blank" rel="noreferrer">
+                        Open world
+                      </a>
+                    )}
+                    {feature.enabled && setup.runtimeStatus !== 'online' && (
+                      <span className="text-gray-500">Start it from the managed app to enter the world.</span>
+                    )}
+                  </div>
+                )}
               </div>
-              <ToggleSwitch
-                enabled={feature.enabled}
-                onChange={() => handleToggle(feature)}
-                disabled={savingId !== null}
-                ariaLabel={`${feature.enabled ? 'Disable' : 'Enable'} ${feature.label} on this instance`}
-                className="mt-1"
-              />
+              {needsInstall ? (
+                <button
+                  type="button"
+                  onClick={() => handleEidoverseInstall(feature)}
+                  disabled={savingId !== null || !canInstall}
+                  className="shrink-0 inline-flex items-center justify-center min-h-[44px] px-3 text-sm bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded transition-colors"
+                >
+                  {installing ? 'Installing…' : (setup?.partial ? 'Resume install' : 'Install & enable')}
+                </button>
+              ) : (
+                <ToggleSwitch
+                  enabled={feature.enabled}
+                  onChange={() => handleToggle(feature)}
+                  disabled={savingId !== null}
+                  ariaLabel={`${feature.enabled ? 'Disable' : 'Enable'} ${feature.label} on this instance`}
+                  className="mt-1"
+                />
+              )}
             </div>
           );
         })}

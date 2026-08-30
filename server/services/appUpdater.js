@@ -22,8 +22,9 @@ const updatingApps = new Set();
 /**
  * Run a full update cycle for an app:
  * 1. git pull --rebase --autostash
- * 2. npm install in each subdir that has package.json (root, client, server)
- * 3. npm run setup if the root package.json has a setup script
+ * 2. install dependencies in each package directory (Bun apps use their
+ *    frozen lockfile; existing apps retain npm install)
+ * 3. run setup with the same package manager when the script exists
  * 4. Restart PM2 processes
  *
  * @param {object} app - The app object (must have repoPath, pm2ProcessNames, pm2Home)
@@ -47,6 +48,8 @@ export async function updateApp(app, emit) {
 async function _doUpdate(app, emit) {
   const dir = app.repoPath;
   const steps = [];
+  const packageManager = app.type === 'bun' ? 'bun' : 'npm';
+  const installArgs = packageManager === 'bun' ? ['install', '--frozen-lockfile'] : ['install'];
 
   emit('git-pull', 'running', 'Pulling latest changes...');
   const pullResult = await gitService.pull(dir);
@@ -58,9 +61,9 @@ async function _doUpdate(app, emit) {
     const subDir = sub ? join(dir, sub) : dir;
     if (existsSync(join(subDir, 'package.json'))) {
       const label = sub || 'root';
-      const stepId = `npm-install:${label}`;
+      const stepId = `${packageManager}-install:${label}`;
       emit(stepId, 'running', `Installing ${label} dependencies...`);
-      await runCommand('npm', ['install'], subDir);
+      await runCommand(packageManager, installArgs, subDir);
       emit(stepId, 'done', `${label} dependencies installed`);
       steps.push({ step: stepId, success: true });
     }
@@ -71,7 +74,7 @@ async function _doUpdate(app, emit) {
     const pkg = JSON.parse(await readFile(pkgPath, 'utf-8'));
     if (pkg.scripts?.setup) {
       emit('setup', 'running', 'Running setup...');
-      await runCommand('npm', ['run', 'setup'], dir);
+      await runCommand(packageManager, ['run', 'setup'], dir);
       emit('setup', 'done', 'Setup complete');
       steps.push({ step: 'setup', success: true });
     }

@@ -44,7 +44,7 @@ Identity & self: [digital-twin](./features/digital-twin.md) · [identity-system]
 
 Knowledge: [brain-system](./features/brain-system.md) · [messages-security](./features/messages-security.md)
 
-Create: [writers-room](./features/writers-room.md) · [fableloom](./features/fableloom.md) · [openworld](./features/openworld.md) · [sprite-export-contract](./features/sprite-export-contract.md) · [video-text-encoders](./features/video-text-encoders.md) · [video-speed-profiles](./features/video-speed-profiles.md)
+Create: [writers-room](./features/writers-room.md) · [fableloom](./features/fableloom.md) · [openworld](./features/openworld.md) · [Eidoverse Worlds integration](./features/eidoverse.md) · [sprite-export-contract](./features/sprite-export-contract.md) · [video-text-encoders](./features/video-text-encoders.md) · [video-speed-profiles](./features/video-speed-profiles.md)
 
 Comms & voice: [openclaw-operator-chat](./features/openclaw-operator-chat.md) ([pre-build audit](./research/2026-03-31-openclaw-operator-chat-audit.md)) · [stacker-news](./features/stacker-news.md) · [voice](./features/voice.md)
 
