@@ -1000,9 +1000,10 @@ describe.skipIf(!pyBin)('generate_ltx2.py MLX allocator-cache policy', () => {
   it('installs the run policy the render path then reasserts', () => {
     const result = runJson([
       ...MODERN_MLX,
-      'import json',
+      'import contextlib, io, json',
       'from types import SimpleNamespace',
-      'policy = runner.configure_mlx_cache(SimpleNamespace(mlx_cache_limit_mb="2048"))',
+      'with contextlib.redirect_stderr(io.StringIO()):',
+      '    policy = runner.configure_mlx_cache(SimpleNamespace(mlx_cache_limit_mb="2048"))',
       'runner._install_ltx_stepwise_preview = lambda pipe, args: (lambda: None)',
       'runner._run_with_ltx_stepwise_preview(object(), SimpleNamespace(), lambda: None)',
       'print(json.dumps({"policy": policy, "stored": runner._MLX_CACHE_POLICY, "calls": CALLS}))',

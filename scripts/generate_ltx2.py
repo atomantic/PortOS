@@ -1090,7 +1090,7 @@ def _run_with_ltx_stepwise_preview(pipe, args: argparse.Namespace, render):
     # Every mode routes its render through here, so this is where the allocator
     # cache ceiling is reasserted: loading weights resets it, and a two-stage or
     # chained job renders more than once inside one process.
-    apply_mlx_cache_policy(_MLX_CACHE_POLICY)
+    reassert_mlx_cache_policy()
     restore = _install_ltx_stepwise_preview(pipe, args)
     try:
         return render()
@@ -1491,6 +1491,10 @@ def run_extend(args: argparse.Namespace) -> str:
         pipe.feature_extractor = None
         pipe._loaded = False
         aggressive_cleanup()
+    # The full-res VAE decode below is this mode's largest allocation, and the
+    # cleanup above releases the allocator limit along with the buffers when it
+    # runs — so reassert the ceiling before the decoders come back in.
+    reassert_mlx_cache_policy()
     pipe._load_decoders()
     bind_output_fps(pipe, args.fps)
     return pipe._decode_and_save_video(video_latent, audio_latent, args.output)
@@ -1816,6 +1820,19 @@ def apply_mlx_cache_policy(policy: dict, announce: bool = False) -> bool:
     if announce:
         emit_status(f"MLX allocator cache capped at {limit_mb} MB ({policy.get('source')})")
     return True
+
+
+def reassert_mlx_cache_policy() -> bool:
+    """Re-apply this run's cache ceiling. Silent — startup already announced it.
+
+    Called at every boundary where the allocator limit can have been reset since
+    it was installed: before each render, and before the extend decode (which
+    frees the DiT behind an aggressive_cleanup() and pulls the VAE back in, the
+    single largest allocation of that mode). What a pipeline does INSIDE one call
+    — a stage-2 transformer reload — is out of this wrapper's reach; the cap
+    simply resumes at the next boundary.
+    """
+    return apply_mlx_cache_policy(_MLX_CACHE_POLICY)
 
 
 def configure_mlx_cache(args: argparse.Namespace) -> dict:
