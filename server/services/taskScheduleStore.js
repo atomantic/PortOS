@@ -199,6 +199,9 @@ async function readSchedule() {
       // No prompt set — initialize with current default and version
       config.prompt = DEFAULT_TASK_PROMPTS[taskType];
       config.promptVersion = PROMPT_VERSIONS[taskType] || 1;
+      // A prompt-less config pins nothing, so drop any stale provenance rather
+      // than let it freeze the freshly-installed default off the upgrade path.
+      if (config.promptSource) config.promptSource = null;
       needsSave = true;
     } else {
       // Legacy migration: infer customization when promptVersion is missing
@@ -216,8 +219,12 @@ async function readSchedule() {
           config.promptVersion = 1;
           needsSave = true;
         } else {
-          // Prompt differs from all known defaults — treat as user-customized
+          // Prompt differs from all known defaults — treat as user-customized.
+          // Stamp the provenance as INFERRED, not 'user': this branch is a guess
+          // made from a body we don't recognize, so the self-heal below must stay
+          // free to undo it once the body turns out to be a retired default.
           config.promptCustomized = true;
+          config.promptSource = 'legacy-inferred';
           config.promptVersion = PROMPT_VERSIONS[taskType] || 1;
           needsSave = true;
         }
@@ -241,7 +248,17 @@ async function readSchedule() {
       // forever, now un-flagged so nothing else notices. Reset the version to 1
       // whenever the body is a prior default rather than the current one, which
       // is the same stamp the version-inference branch above applies.
-      if (config.promptCustomized && promptMatchesShippedDefault(config.prompt, taskType)) {
+      //
+      // Gated on provenance (#5432): a user who deliberately pastes an older
+      // SHIPPED body into Settings → Scheduled Tasks also byte-matches a shipped
+      // default, and clearing THAT flag would let the next PROMPT_VERSIONS bump
+      // overwrite their chosen text. `promptSource === 'user'` marks an explicit
+      // write through updateTaskInterval and is left alone; 'legacy-inferred' and
+      // absent (every install upgrading into this field) self-heal exactly as
+      // they do today.
+      if (config.promptSource !== 'user'
+        && config.promptCustomized
+        && promptMatchesShippedDefault(config.prompt, taskType)) {
         config.promptCustomized = false;
         if (config.prompt !== DEFAULT_TASK_PROMPTS[taskType]) config.promptVersion = 1;
         needsSave = true;

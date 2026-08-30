@@ -427,6 +427,108 @@ describe('taskSchedule', () => {
     })
   })
 
+  describe('promptSource provenance (issue #5432)', () => {
+    // The self-heal above clears promptCustomized whenever the stored prompt
+    // byte-matches ANY shipped default (current or retired). That is right for a
+    // flag the legacy migration guessed at, but it cannot tell that apart from a
+    // user who deliberately pasted an older SHIPPED body into Settings →
+    // Scheduled Tasks — that pin was cleared on the next load and the next
+    // PROMPT_VERSIONS bump silently overwrote their chosen text. promptSource
+    // records which of the two wrote the flag.
+    const portosDocPrompt = PREVIOUS_DEFAULT_PROMPTS['documentation'].find((p) => p.includes('PortOS'))
+
+    const loadDocumentation = async (config) => {
+      mockSchedule({
+        tasks: { 'documentation': { type: 'once', enabled: false, providerId: null, model: null, ...config } }
+      })
+      return (await loadSchedule()).tasks['documentation']
+    }
+
+    it('keeps a user-pinned retired default pinned instead of self-healing it', async () => {
+      const task = await loadDocumentation({
+        prompt: portosDocPrompt,
+        promptVersion: 1,
+        promptCustomized: true,
+        promptSource: 'user'
+      })
+      expect(task.promptCustomized).toBe(true)
+      expect(task.prompt).toBe(portosDocPrompt)
+    })
+
+    it('still self-heals a legacy-inferred flag on a retired default', async () => {
+      const task = await loadDocumentation({
+        prompt: portosDocPrompt,
+        promptVersion: 1,
+        promptCustomized: true,
+        promptSource: 'legacy-inferred'
+      })
+      expect(task.promptCustomized).toBe(false)
+      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['documentation'])
+    })
+
+    // Every install that upgrades into this field carries no promptSource at all.
+    // Absent must keep behaving exactly as it does today, or the upgrade itself
+    // would freeze thousands of mis-flagged prompts on their retired bodies.
+    it('treats an absent promptSource as legacy-inferred (self-heals, as today)', async () => {
+      const task = await loadDocumentation({
+        prompt: portosDocPrompt,
+        promptVersion: 1,
+        promptCustomized: true
+      })
+      expect(task.promptSource).toBeUndefined()
+      expect(task.promptCustomized).toBe(false)
+      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['documentation'])
+    })
+
+    it('stamps legacy-inferred when the legacy migration flags an unrecognized body', async () => {
+      const custom = 'A documentation prompt that matches no shipped default at all.'
+      // No promptVersion → the legacy-migration branch runs.
+      const task = await loadDocumentation({ prompt: custom })
+      expect(task.promptCustomized).toBe(true)
+      expect(task.promptSource).toBe('legacy-inferred')
+    })
+
+    it('drops a stale promptSource when the config has no prompt to pin', async () => {
+      const task = await loadDocumentation({ prompt: null, promptSource: 'user' })
+      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['documentation'])
+      expect(task.promptSource).toBeNull()
+    })
+
+    it('survives a PROMPT_VERSIONS bump when the pin is user-sourced', async () => {
+      const original = PROMPT_VERSIONS['documentation']
+      PROMPT_VERSIONS['documentation'] = original + 1
+      try {
+        const task = await loadDocumentation({
+          prompt: portosDocPrompt,
+          promptVersion: original,
+          promptCustomized: true,
+          promptSource: 'user'
+        })
+        expect(task.prompt).toBe(portosDocPrompt)
+        expect(task.promptVersion).toBe(original)
+      } finally {
+        PROMPT_VERSIONS['documentation'] = original
+      }
+    })
+
+    it('upgrades the same body across a bump when the pin is legacy-inferred', async () => {
+      const original = PROMPT_VERSIONS['documentation']
+      PROMPT_VERSIONS['documentation'] = original + 1
+      try {
+        const task = await loadDocumentation({
+          prompt: portosDocPrompt,
+          promptVersion: original,
+          promptCustomized: true,
+          promptSource: 'legacy-inferred'
+        })
+        expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['documentation'])
+        expect(task.promptVersion).toBe(original + 1)
+      } finally {
+        PROMPT_VERSIONS['documentation'] = original
+      }
+    })
+  })
+
   describe('pre-unification prompt generations (self- + app-improvement split)', () => {
     // Before the two improvement schedules were unified, every basic task
     // shipped up to two bodies with different headers — `[Self-Improvement] …`
@@ -612,6 +714,37 @@ describe('taskSchedule', () => {
         prompt: null
       })
       expect(result.promptCustomized).toBe(false)
+    })
+
+    // An explicit prompt write is the ONE source of a 'user' pin (#5432) — it is
+    // what makes the store's self-heal leave a retired-but-deliberate body alone.
+    it('should stamp promptSource "user" when a custom prompt is written', async () => {
+      const result = await updateTaskInterval('security', {
+        prompt: 'Custom security audit prompt'
+      })
+      expect(result.promptSource).toBe('user')
+    })
+
+    it('should clear promptSource when the prompt is set to null', async () => {
+      const result = await updateTaskInterval('security', {
+        prompt: null
+      })
+      expect(result.promptSource).toBeNull()
+    })
+
+    it('should preserve an existing pin when the write does not touch the prompt', async () => {
+      mockSchedule({
+        tasks: {
+          'security': {
+            type: 'weekly', enabled: false, providerId: null, model: null,
+            prompt: 'A pinned body that matches no shipped default.',
+            promptVersion: 2, promptCustomized: true, promptSource: 'user'
+          }
+        }
+      })
+      const result = await updateTaskInterval('security', { enabled: true })
+      expect(result.promptSource).toBe('user')
+      expect(result.promptCustomized).toBe(true)
     })
 
     it('should create new task entry for unknown type', async () => {

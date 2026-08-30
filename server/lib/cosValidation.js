@@ -1428,6 +1428,25 @@ export const createLoopSchema = z.object({
 });
 
 // =============================================================================
+// TASK SCHEDULE SCHEMAS
+// =============================================================================
+
+// Provenance of a schedule config's stored prompt. `promptCustomized` alone cannot
+// tell a deliberate user pin from a flag the legacy migration inferred, so the
+// self-heal in taskScheduleStore.js reads this instead (#5432):
+//   'user'            — written by updateTaskInterval from an explicit prompt write.
+//   'legacy-inferred' — written by the legacy migration's "differs from every known
+//                       shipped default" branch.
+// Absent/null is pre-existing state and is treated as 'legacy-inferred', so an
+// install upgrading into this keeps today's self-heal behavior. Additive and
+// absent-tolerant, so no migration is required.
+export const PROMPT_SOURCES = ['user', 'legacy-inferred'];
+
+// Empty string from a client clears the provenance rather than 400ing, matching
+// the clearable-null convention the other schedule overrides use.
+export const promptSourceSchema = z.preprocess(emptyToNull, z.enum(PROMPT_SOURCES).nullable().optional());
+
+// =============================================================================
 // COS JOB SCHEMAS
 // =============================================================================
 

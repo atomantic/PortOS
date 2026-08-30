@@ -176,6 +176,44 @@ describe('CoS Schedule Routes', () => {
       expect(response.status).toBe(400);
       expect(taskSchedule.updateTaskInterval).not.toHaveBeenCalled();
     });
+
+    // promptSource carries the stored prompt's provenance (#5432). It must reach
+    // updateTaskInterval, or a PUT that round-trips a task config would strip a
+    // user's pin and hand the prompt back to the auto-upgrade.
+    it('forwards a valid promptSource', async () => {
+      taskSchedule.updateTaskInterval.mockResolvedValue({ type: 'weekly' });
+
+      const response = await request(app)
+        .put('/api/cos/schedule/task/documentation')
+        .send({ promptSource: 'user' });
+
+      expect(response.status).toBe(200);
+      expect(taskSchedule.updateTaskInterval).toHaveBeenCalledWith('documentation', expect.objectContaining({
+        promptSource: 'user'
+      }));
+    });
+
+    it('normalizes an empty promptSource to null', async () => {
+      taskSchedule.updateTaskInterval.mockResolvedValue({ type: 'weekly' });
+
+      const response = await request(app)
+        .put('/api/cos/schedule/task/documentation')
+        .send({ promptSource: '' });
+
+      expect(response.status).toBe(200);
+      expect(taskSchedule.updateTaskInterval).toHaveBeenCalledWith('documentation', expect.objectContaining({
+        promptSource: null
+      }));
+    });
+
+    it('rejects an unknown promptSource', async () => {
+      const response = await request(app)
+        .put('/api/cos/schedule/task/documentation')
+        .send({ promptSource: 'made-up' });
+
+      expect(response.status).toBe(400);
+      expect(taskSchedule.updateTaskInterval).not.toHaveBeenCalled();
+    });
   });
 
   describe('GET /api/cos/schedule/due', () => {
