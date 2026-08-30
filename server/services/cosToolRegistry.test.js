@@ -65,11 +65,21 @@ beforeEach(() => {
 describe('cosToolRegistry', () => {
   it('exports a compact canonical catalog and provider translations', () => {
     const catalog = getCosToolCatalog({ scope: 'mind', capabilities: { readPortos: true } });
-    expect(catalog.tools.map((tool) => tool.name)).toEqual(['cos.create-task', 'mind.cleanup', 'brain.search', 'brain.capture']);
+    expect(catalog.tools.map((tool) => tool.name)).toEqual([
+      'cos.create-task',
+      'mind.cleanup',
+      'eidoverse.status',
+      'eidoverse.project',
+      'eidoverse.augment',
+      'eidoverse.say',
+      'brain.search',
+      'brain.capture',
+    ]);
     expect(catalog.tools.find((tool) => tool.name === 'brain.search').granted).toBe(true);
     expect(catalog.tools.find((tool) => tool.name === 'brain.capture').granted).toBe(false);
     const openai = formatCosToolCatalog(catalog, 'openai');
     expect(openai.tools).toEqual([
+      expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'eidoverse_status' }) }),
       expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'brain_search' }) }),
     ]);
     const mcp = formatCosToolCatalog(catalog, 'mcp');

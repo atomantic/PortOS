@@ -16,43 +16,6 @@
 
 import { PORTOS_APP_ID } from './appIdentity.js';
 
-// Fast-travel destinations — one command per region in the client's OPEN_WORLD_REGIONS
-// registry (client/src/utils/openWorldRegions.js), so ⌘K and voice ("take me to the
-// memory quarter") can warp straight into the world. The list is duplicated rather than
-// imported because a server lib can't reach into client code; navManifest.test.js scrapes
-// the registry and fails on drift in the paths, the labels, AND the aliases.
-// Written as [id, label, aliases, feature?] tuples so the axis that varies is the only thing repeated.
-//
-// Aliases are authored in the human phrasing the fast-travel search box uses ("memory
-// quarter") and registered KEBAB-CASED, because resolveNavCommand normalizes its input to
-// kebab before matching: a space-separated alias can never be hit. Registering them raw
-// didn't just fail to resolve — the fallback tiers matched a substring against an unrelated
-// command, so "memory quarter" landed on /brain/memory and "voice beacon" on /settings/voice.
-const OPEN_WORLD_REGION_COMMANDS = [
-  ['downtown', 'Village Green', ['downtown', 'apps district', 'app towers', 'village green']],
-  ['ai-core', 'PortOS Common', ['ai core', 'core plaza', 'the core', 'reactor', 'common']],
-  ['task-queue', 'Task Workshop', ['task queue', 'queue', 'cos queue', 'task workshop']],
-  ['wellness', 'Wellness Greenhouse', ['wellness tower', 'health tower', 'vitals tower', 'greenhouse']],
-  ['archive', 'Archive Lodge', ['archive district', 'warehouse', 'cold storage', 'archive lodge']],
-  ['quiet-corner', 'Quiet Corner', ['quiet corner', 'easter eggs']],
-  ['productivity', 'Focus Farm', ['productivity terrace', 'productivity', 'throughput district', 'streak district', 'focus farm']],
-  ['backup-vault', 'Backup Cottage', ['backup vault', 'the vault', 'backup cottage']],
-  ['memory', 'Memory House', ['memory quarter', 'memory district', 'knowledge district', 'memory house']],
-  ['sprint-yard', 'Sprint Studio', ['sprint yard', 'jira yard', 'sprint district', 'sprint studio'], 'jira'],
-  ['voice', 'Voice Radio', ['voice beacon', 'the beacon', 'voice radio']],
-  ['goals', 'Goals Lodge', ['goal monuments', 'monuments', 'goals district', 'goals lodge']],
-  ['artifacts', 'Trophy House', ['hall of achievements', 'artifact hall', 'achievements hall', 'trophy house']],
-  ['data-harbor', 'Data Pier', ['data harbor', 'the harbor', 'piers', 'data pier']],
-].map(([id, label, aliases, feature]) => ({
-  id: `nav.openworld.region.${id}`,
-  path: `/openworld/region/${id}`,
-  label,
-  section: 'Main',
-  aliases: aliases.map((a) => a.replace(/\s+/g, '-')),
-  keywords: ['openworld', 'fast travel', 'warp', 'region', 'teleport'],
-  ...(feature ? { feature } : {}),
-}));
-
 // Sections whose every page belongs to one optional instance feature, so a page
 // added there inherits the gate with no edit. A single page inside an otherwise
 // ungated section (DataDog, JIRA) carries `feature` on its own entry instead.
@@ -68,10 +31,7 @@ export const SECTION_FEATURE = new Map([
 const RAW_NAV_COMMANDS = [
   { id: 'nav.dashboard', path: '/', label: 'Dashboard', section: 'Main', aliases: ['dashboard', 'home'], keywords: ['overview', 'start'] },
   { id: 'nav.review-hub', path: '/review', label: 'Review Hub', section: 'Main', aliases: ['review', 'review-hub'] },
-  { id: 'nav.eidoverse', path: '/eidoverse', label: 'Eidoverse', section: 'Main', feature: 'eidoverse', aliases: ['eidoverse', 'eidoverse-worlds', 'worlds'], keywords: ['3d', 'world', 'agents', 'spatial', 'managed app'] },
-  { id: 'nav.cybercity', path: '/openworld', label: 'OpenWorld', section: 'Main', previousPaths: ['/city'], aliases: ['openworld', 'open world', 'open-world', 'city'], keywords: ['3d', 'visualization', 'game', 'map', 'explore'] },
-  { id: 'nav.cybercity.settings', path: '/openworld/settings', label: 'OpenWorld Settings', section: 'Main', aliases: ['openworld settings', 'open world settings', 'world settings', 'city settings', 'city-settings', 'openworld-config'], keywords: ['openworld', 'settings', '3d', 'configure', 'world style', 'low poly'] },
-  ...OPEN_WORLD_REGION_COMMANDS,
+  { id: 'nav.eidoverse', path: '/eidoverse', label: 'Eidoverse', section: 'Main', feature: 'eidoverse', previousPaths: ['/openworld', '/city'], aliases: ['eidoverse', 'eidoverse-worlds', 'worlds', 'openworld', 'open-world', 'city'], keywords: ['3d', 'world', 'agents', 'spatial', 'managed app', 'private environment'] },
   { id: 'nav.apps', path: '/apps', label: 'Apps', section: 'Main', aliases: ['apps'] },
   // Submodules are per-app (a tab on the app detail page), so this entry is
   // explicitly PortOS's own — the only repo whose app id is a fixed constant.

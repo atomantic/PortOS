@@ -87,6 +87,7 @@ import autobiographyRoutes from './routes/autobiography.js';
 import backupRoutes from './routes/backup.js';
 import legacyExportRoutes from './routes/legacyExport.js';
 import openWorldRoutes from './routes/openWorldRoutes.js';
+import eidoverseWorldRoutes from './routes/eidoverseWorldRoutes.js';
 import databaseRoutes from './routes/database.js';
 import localLlmRoutes from './routes/localLlm.js';
 import codeReviewRoutes from './routes/codeReview.js';
@@ -296,6 +297,7 @@ app.use('/api/client-errors', clientErrorsRoutes);
 app.use('/api/autofix', autoFixMetricsRoutes);
 app.use('/api/backup', backupRoutes);
 app.use('/api/legacy-export', legacyExportRoutes);
+app.use('/api/eidoverse/world', eidoverseWorldRoutes);
 app.use('/api/openworld', openWorldRoutes);
 // Keep the pre-rename API prefix available to older clients and installed voice tools.
 app.use('/api/city', openWorldRoutes);

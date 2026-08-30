@@ -800,6 +800,173 @@ export const instanceFeatureUpdateSchema = z.object({
   enabled: z.boolean(),
 }).strict();
 
+// =============================================================================
+// EIDOVERSE WORLD PROJECTION
+// =============================================================================
+
+// Eidoverse identities are currently name-based when no archipelago session is
+// present. Keep the PortOS-side contract deliberately conservative: names and
+// ids are durable world keys, while display metadata stays in the private
+// world log and never becomes a federation payload.
+const eidoverseWorldNameSchema = z.string().trim().min(1).max(64).regex(
+  /^[a-z0-9_-]+$/i,
+  'must contain only letters, numbers, hyphens, and underscores',
+);
+const eidoverseIdentitySchema = z.string().trim().min(1).max(64).regex(
+  /^[^\u0000-\u001f\u007f]+$/,
+  'must not contain control characters',
+);
+const eidoverseVector3Schema = z.array(z.number().finite()).length(3);
+const eidoverseAssetPathSchema = z.string().trim().min(1).max(512).refine((value) => {
+  const normalized = value.replaceAll('\\', '/');
+  return !normalized.startsWith('/')
+    && !normalized.includes('..')
+    && (/^eidoverse\//i.test(normalized) || /^store\//i.test(normalized));
+}, 'must be a relative Eidoverse library or store asset path');
+
+// These are the resource lanes that the deterministic PortOS projection may
+// materialize. Keep the list explicit: a recipe must opt into known data
+// families rather than accepting an arbitrary source key that the service
+// would not know how to sanitize.
+export const EIDOVERSE_PROJECTION_SOURCE_KEYS = Object.freeze([
+  'apps',
+  'agents',
+  'tasks',
+  'features',
+  'peers',
+  'health',
+  'productivity',
+  'activity',
+  'goals',
+  'memory',
+  'storage',
+  'jira',
+  'operations',
+]);
+
+const eidoverseProjectionIncludesSchema = z.object({
+  apps: z.boolean(),
+  agents: z.boolean(),
+  tasks: z.boolean(),
+  features: z.boolean(),
+  peers: z.boolean(),
+  health: z.boolean(),
+  productivity: z.boolean(),
+  activity: z.boolean(),
+  goals: z.boolean(),
+  memory: z.boolean(),
+  storage: z.boolean(),
+  jira: z.boolean(),
+  operations: z.boolean(),
+}).strict();
+
+const eidoverseProjectionAssetsSchema = z.object({
+  app: eidoverseAssetPathSchema,
+  agent: eidoverseAssetPathSchema,
+  task: eidoverseAssetPathSchema,
+  feature: eidoverseAssetPathSchema,
+  peer: eidoverseAssetPathSchema,
+  health: eidoverseAssetPathSchema,
+  productivity: eidoverseAssetPathSchema,
+  activity: eidoverseAssetPathSchema,
+  goal: eidoverseAssetPathSchema,
+  memory: eidoverseAssetPathSchema,
+  storage: eidoverseAssetPathSchema,
+  jira: eidoverseAssetPathSchema,
+  operations: eidoverseAssetPathSchema,
+}).strict();
+
+const eidoverseProjectionTerrainLayerSchema = z.object({
+  color: z.string().trim().min(1).max(32),
+  repeat: z.number().finite().positive().max(128),
+}).strict();
+
+const eidoverseProjectionTerrainSchema = z.object({
+  seed: z.string().trim().min(1).max(64),
+  size: z.number().finite().positive().max(512),
+  segments: z.number().int().min(2).max(512),
+  amplitude: z.number().finite().min(0).max(100),
+  flatRadius: z.number().finite().min(0).max(256),
+  layers: z.array(eidoverseProjectionTerrainLayerSchema).max(8),
+}).strict();
+
+export const eidoverseProjectionRecipeSchema = z.object({
+  version: z.literal(1),
+  includes: eidoverseProjectionIncludesSchema,
+  limits: z.object({
+    apps: z.number().int().min(0).max(100),
+    agents: z.number().int().min(0).max(100),
+    tasks: z.number().int().min(0).max(100),
+    features: z.number().int().min(0).max(100),
+    peers: z.number().int().min(0).max(100),
+    health: z.number().int().min(0).max(100),
+    productivity: z.number().int().min(0).max(100),
+    activity: z.number().int().min(0).max(100),
+    goals: z.number().int().min(0).max(100),
+    memory: z.number().int().min(0).max(100),
+    storage: z.number().int().min(0).max(100),
+    jira: z.number().int().min(0).max(100),
+    operations: z.number().int().min(0).max(100),
+  }).strict(),
+  layout: z.object({
+    origin: eidoverseVector3Schema,
+    spacing: z.number().finite().min(2).max(100),
+    laneGap: z.number().finite().min(2).max(100),
+    columns: z.number().int().min(1).max(32),
+  }).strict(),
+  scale: z.object({
+    app: z.number().finite().positive().max(20),
+    agent: z.number().finite().positive().max(20),
+    task: z.number().finite().positive().max(20),
+    feature: z.number().finite().positive().max(20),
+    peer: z.number().finite().positive().max(20),
+    health: z.number().finite().positive().max(20),
+    productivity: z.number().finite().positive().max(20),
+    activity: z.number().finite().positive().max(20),
+    goal: z.number().finite().positive().max(20),
+    memory: z.number().finite().positive().max(20),
+    storage: z.number().finite().positive().max(20),
+    jira: z.number().finite().positive().max(20),
+    operations: z.number().finite().positive().max(20),
+  }).strict(),
+  assets: eidoverseProjectionAssetsSchema,
+  terrain: eidoverseProjectionTerrainSchema,
+}).strict();
+
+// This is intentionally an opaque, bounded argument bag at the HTTP boundary.
+// The PortOS service applies the narrower verb-specific checks immediately
+// before sending it to Eidoverse, which keeps this public schema forward-
+// compatible with the external world's evolving component vocabulary without
+// accepting unbounded payloads.
+const eidoverseAugmentArgsSchema = z.record(z.string().max(80), z.unknown()).superRefine((value, ctx) => {
+  if (JSON.stringify(value).length > 8192) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'arguments must be at most 8KB' });
+  }
+});
+
+export const EIDOVERSE_AUGMENT_VERBS = ['spawn', 'place', 'remove', 'comp', 'light', 'terrain', 'grass', 'sky', 'grant'];
+
+export const eidoverseWorldAugmentSchema = z.object({
+  operations: z.array(z.object({
+    verb: z.enum(EIDOVERSE_AUGMENT_VERBS),
+    args: eidoverseAugmentArgsSchema,
+  }).strict()).min(1).max(100),
+}).strict();
+
+export const eidoverseWorldSaySchema = z.object({
+  text: z.string().trim().min(1).max(2000),
+}).strict();
+
+export const eidoverseWorldConfigPatchSchema = z.object({
+  world: eidoverseWorldNameSchema.optional(),
+  humanName: eidoverseIdentitySchema.nullable().optional(),
+  humanAvatar: eidoverseAssetPathSchema.nullable().optional(),
+  cosId: eidoverseIdentitySchema.optional(),
+  cosAvatar: eidoverseAssetPathSchema.nullable().optional(),
+  cosEnabled: z.boolean().optional(),
+  recipe: eidoverseProjectionRecipeSchema.optional(),
+}).strict();
+
 export const subdirFilterSchema = z.string()
   .refine(isSafeSubdirFilter, 'subdirFilter must be a relative path with no wildcard, ".." , or leading "/" segments');
 

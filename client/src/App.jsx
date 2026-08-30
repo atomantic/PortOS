@@ -24,7 +24,6 @@ const DataDog = lazyWithReload(() => import('./pages/DataDog'));
 const FlowsDoc = lazyWithReload(() => import('./pages/FlowsDoc'));
 const GitHub = lazyWithReload(() => import('./pages/GitHub'));
 const Eidoverse = lazyWithReload(() => import('./pages/Eidoverse'));
-const OpenWorld = lazyWithReload(() => import('./pages/OpenWorld'));
 const AppDetail = lazyWithReload(() => import('./pages/AppDetail'));
 const FeatureAgents = lazyWithReload(() => import('./pages/FeatureAgents'));
 const FeatureAgentDetail = lazyWithReload(() => import('./pages/FeatureAgentDetail'));
@@ -198,11 +197,6 @@ const MEDIA_TRAINING_PREFIX = /^\/media\/training/;
 // is what a bookmark, a typed URL, or a half-remembered path lands on — alias it
 // rather than letting the catch-all swallow it (issue #3793).
 const ANNOTATE_PREFIX = /^\/annotate/;
-// The old city page became OpenWorld. Bookmarks, pinned sidebar entries, stored palette
-// history, and peers' deep links all still say /city — alias the whole prefix
-// (including /city/settings and /city/apps/:appId) rather than 404ing them.
-const LEGACY_CITY_PREFIX = /^\/city/;
-
 // Normalize a tab-less /creative-director/:id URL to its overview tab while
 // preserving any query string + hash. A bare `<Navigate to="overview">` would
 // drop them; building the relative target from useLocation keeps deep-link
@@ -393,12 +387,12 @@ export default function App() {
           <Route path="jira" element={<Navigate to="/devtools/jira" replace />} />
           <Route path="devtools/jira" element={<Jira />} />
           <Route path="devtools/jira/reports" element={<JiraReports />} />
-          <Route path="openworld" element={<OpenWorld />} />
-          <Route path="openworld/settings" element={<OpenWorld />} />
-          <Route path="openworld/apps/:appId" element={<OpenWorld />} />
-          <Route path="openworld/region/:regionId" element={<OpenWorld />} />
-          <Route path="city" element={<PrefixRedirect from={LEGACY_CITY_PREFIX} to="/openworld" />} />
-          <Route path="city/*" element={<PrefixRedirect from={LEGACY_CITY_PREFIX} to="/openworld" />} />
+          {/* OpenWorld is retired: preserve old bookmarks by landing in the
+              persistent private Eidoverse world, including query/hash state. */}
+          <Route path="openworld" element={<RedirectWithSearch to="/eidoverse" />} />
+          <Route path="openworld/*" element={<RedirectWithSearch to="/eidoverse" />} />
+          <Route path="city" element={<RedirectWithSearch to="/eidoverse" />} />
+          <Route path="city/*" element={<RedirectWithSearch to="/eidoverse" />} />
           <Route path="data" element={<DataManager />} />
           <Route path="character" element={<CharacterSheet />} />
           <Route path="ask" element={<Ask />} />

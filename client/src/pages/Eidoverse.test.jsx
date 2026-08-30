@@ -5,9 +5,12 @@ import { MemoryRouter } from 'react-router';
 
 vi.mock('../services/api', () => ({
   getApp: vi.fn(),
+  getEidoverseWorldStatus: vi.fn(),
   getInstanceFeatures: vi.fn(),
+  projectEidoverseWorld: vi.fn(),
   startApp: vi.fn(),
   startEidoverseHost: vi.fn(),
+  updateEidoverseWorldConfig: vi.fn(),
 }));
 
 import * as api from '../services/api';
@@ -28,6 +31,17 @@ const featureResponse = (overrides = {}) => ({
   }],
 });
 
+const worldResponse = {
+  world: 'portos',
+  identity: { name: 'example-portos-user' },
+  human: { name: 'example-portos-user' },
+  cos: { id: 'portos-cos', enabled: true },
+  recipe: {
+    includes: { apps: true, agents: true, tasks: true, features: true, peers: true, health: true },
+  },
+  presence: { connected: false },
+};
+
 const renderPage = () => render(
   <MemoryRouter initialEntries={['/eidoverse']}>
     <Eidoverse />
@@ -41,16 +55,25 @@ describe('Eidoverse hosted page', () => {
     api.getApp.mockResolvedValue({ id: setup.appId, overallStatus: 'online' });
     api.startApp.mockResolvedValue({ success: true, results: {} });
     api.startEidoverseHost.mockResolvedValue({ running: true, protocol: 'http', port: 5563 });
+    api.getEidoverseWorldStatus.mockResolvedValue(worldResponse);
+    api.projectEidoverseWorld.mockResolvedValue({
+      success: true,
+      projection: { lastSuccessAt: '2026-01-01T00:00:00.000Z' },
+      presence: { connected: true, role: 'builder' },
+    });
+    api.updateEidoverseWorldConfig.mockResolvedValue({ ...worldResponse, human: worldResponse.identity });
   });
 
   it('loads the installed managed app even when the optional nav entry is disabled', async () => {
     renderPage();
 
     const frame = await screen.findByTitle('Eidoverse Worlds');
-    expect(frame).toHaveAttribute('src', `http://${window.location.hostname}:8940/`);
+    expect(frame).toHaveAttribute('src', `http://${window.location.hostname}:8940/?world=portos&name=example-portos-user`);
     expect(api.getApp).toHaveBeenCalledWith('app-eidoverse', { silent: true });
     expect(api.startApp).not.toHaveBeenCalled();
     expect(api.startEidoverseHost).toHaveBeenCalledWith({ silent: true });
+    expect(api.getEidoverseWorldStatus).toHaveBeenCalledWith({ silent: true });
+    expect(api.projectEidoverseWorld).toHaveBeenCalledWith({ silent: true });
     expect(screen.getByRole('link', { name: 'Manage app' })).toHaveAttribute('href', '/apps/app-eidoverse/overview');
   });
 

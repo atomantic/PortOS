@@ -52,6 +52,7 @@
     "/api/digital-twin/autobiography",
     "/api/digital-twin/identity",
     "/api/digital-twin/social-accounts",
+    "/api/eidoverse/world",
     "/api/fableloom",
     "/api/feature-agents",
     "/api/federation/media/v1",
@@ -8714,6 +8715,72 @@
         {
           "source": "server/routes/digital-twin/tests.js",
           "line": 114
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/eidoverse/world/augment",
+      "mountPath": "/api/eidoverse/world",
+      "sources": [
+        {
+          "source": "server/routes/eidoverseWorldRoutes.js",
+          "line": 56
+        }
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/api/eidoverse/world/config",
+      "mountPath": "/api/eidoverse/world",
+      "sources": [
+        {
+          "source": "server/routes/eidoverseWorldRoutes.js",
+          "line": 36
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/eidoverse/world/presence",
+      "mountPath": "/api/eidoverse/world",
+      "sources": [
+        {
+          "source": "server/routes/eidoverseWorldRoutes.js",
+          "line": 43
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/eidoverse/world/project",
+      "mountPath": "/api/eidoverse/world",
+      "sources": [
+        {
+          "source": "server/routes/eidoverseWorldRoutes.js",
+          "line": 50
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/eidoverse/world/say",
+      "mountPath": "/api/eidoverse/world",
+      "sources": [
+        {
+          "source": "server/routes/eidoverseWorldRoutes.js",
+          "line": 63
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/eidoverse/world/status",
+      "mountPath": "/api/eidoverse/world",
+      "sources": [
+        {
+          "source": "server/routes/eidoverseWorldRoutes.js",
+          "line": 30
         }
       ]
     },
@@ -23564,9 +23631,9 @@
     }
   ],
   "stats": {
-    "mounts": 145,
-    "operations": 2126,
-    "declarations": 2129,
-    "sourceFiles": 225
+    "mounts": 146,
+    "operations": 2132,
+    "declarations": 2135,
+    "sourceFiles": 226
   }
 }

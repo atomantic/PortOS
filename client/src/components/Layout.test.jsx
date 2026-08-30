@@ -7,7 +7,7 @@ import { INSTANCE_FEATURES_CHANGED } from '../constants/events.js';
 
 // This suite locks the *integration* path that SingleNavRow.test.jsx can't reach:
 // pinning a top-level `single: true` row (Dashboard `/`, Review Hub `/review`,
-// OpenWorld `/openworld`, Goals `/goals/list`) must make it render in the sidebar Pinned
+// Eidoverse `/eidoverse`, Goals `/goals/list`) must make it render in the sidebar Pinned
 // section. That resolution lives in Layout itself — `navEntryByPath` indexes
 // `item.single` leaves, `resolveNavEntry` maps a stored path to a row, and
 // `useNavWorkingSet` feeds the Pinned-section render. We exercise the real
@@ -71,7 +71,14 @@ vi.mock('../services/api', () => ({
   getApps: vi.fn(() => Promise.resolve([])),
   listPipelineSeries: vi.fn(() => Promise.resolve([])),
   listUniverses: vi.fn(() => Promise.resolve([])),
-  getPaletteManifest: vi.fn(() => Promise.resolve({ nav: [] })),
+  getPaletteManifest: vi.fn(() => Promise.resolve({
+    nav: [{
+      path: '/eidoverse',
+      label: 'Eidoverse Worlds',
+      feature: 'eidoverse',
+      previousPaths: ['/openworld', '/city'],
+    }],
+  })),
   getDailyActions: vi.fn(() => Promise.resolve({ actions: [] })),
   getInstanceFeatures: vi.fn(() => Promise.resolve({ features: featureMock.features })),
 }));
@@ -181,7 +188,7 @@ describe('Layout — pinned single nav rows', () => {
     const pinned = pinnedSection();
     expect(within(pinned).getByRole('link', { name: /Dashboard/i })).toHaveAttribute('href', '/');
     expect(within(pinned).getByRole('link', { name: /Review Hub/i })).toHaveAttribute('href', '/review');
-    expect(within(pinned).getByRole('link', { name: /OpenWorld/i })).toHaveAttribute('href', '/openworld');
+    expect(within(pinned).getByRole('link', { name: /Eidoverse/i })).toHaveAttribute('href', '/eidoverse');
     expect(within(pinned).getByRole('link', { name: /Goals/i })).toHaveAttribute('href', '/goals/list');
   });
 
@@ -200,7 +207,7 @@ describe('Layout — pinned single nav rows', () => {
 
     const pinned = pinnedSection();
     expect(pinned).toBeTruthy();
-    expect(within(pinned).getByRole('link', { name: /OpenWorld/i })).toHaveAttribute('href', '/openworld');
+    expect(within(pinned).getByRole('link', { name: /Eidoverse/i })).toHaveAttribute('href', '/eidoverse');
     // The unknown path contributes no row.
     expect(within(pinned).getAllByRole('link')).toHaveLength(1);
   });

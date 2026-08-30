@@ -225,6 +225,22 @@ Phase 4 — Report:
     updatedAt: null
   },
   {
+    id: 'job-eidoverse-projection',
+    name: 'Eidoverse PortOS World Projection',
+    description: 'Project current PortOS apps, agents, tasks, features, peers, productivity, goals, memory summaries, storage, Jira, operations, and health into the private Eidoverse world. Deterministic and does not call an AI provider.',
+    category: 'eidoverse-projection',
+    interval: 'custom',
+    intervalMs: 15 * 60 * 1000,
+    enabled: false,
+    priority: 'LOW',
+    type: 'script',
+    scriptHandler: 'eidoverse-projection',
+    lastRun: null,
+    runCount: 0,
+    createdAt: null,
+    updatedAt: null
+  },
+  {
     id: 'job-agent-data-cleanup',
     name: 'Agent Data Cleanup',
     description: 'Remove completed agent data older than 7 days, reap worktrees/branches fully merged into main (clean working tree only), and integrate orphaned agent worktrees.',

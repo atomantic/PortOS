@@ -44,16 +44,96 @@ Apps launch action works from a Tailscale MagicDNS session. Managed updates pull
 both the selected Worlds checkout and its companion video runtime before using
 Bun's frozen lockfile rather than npm.
 
-When the feature is enabled, **Eidoverse** appears beside OpenWorld in PortOS's
-primary navigation. Opening it starts the managed app when needed and embeds its
-web client in a full-width PortOS page. OpenWorld remains available during this
-evaluation; replacing or redirecting it is a separate product decision after
-the Eidoverse integration proves the required behavior.
+When the feature is enabled, **Eidoverse** is the primary PortOS world surface.
+Opening it starts the managed app when needed and embeds its web client in a
+full-width PortOS page. The retired OpenWorld paths remain as compatibility
+redirects to Eidoverse, so old bookmarks do not create a second world renderer.
 
 Durable Eidoverse world logs live at `data/eidoverse/worlds`. This is
 machine-local `file-primary` data: PortOS backups include it, but PortOS does
 not federate it to peers. The git checkouts remain under `data/repos`, which is
 the existing re-cloneable repository backup class.
+
+## Private persistence and identity
+
+This is a private world for one PortOS install. It is not a public Eidoverse
+world and PortOS does not publish its world records or expose them through the
+peer-sync record layer. Trusted machines may reach the instance through the
+install's existing Tailscale boundary; the install remains the authority for
+the world and its history.
+
+PortOS-owned integration state is stored in
+`data/eidoverse/portos-world.json`. It contains the selected world, the human
+display name, the stable Persistent Mind identity, the CoS identity and local
+role observations, the projection recipe, and the last projection checkpoint.
+The human name can be configured explicitly. If it is cleared, PortOS derives a
+stable fallback from the persisted PortOS instance identity (using the instance
+name when available and a non-identifying instance-id-derived label otherwise).
+The browser receives that same identity in the Eidoverse launch URL, so a
+reload or a second trusted machine does not create a new anonymous user.
+The default installation uses Eidoverse's name-based join protocol with the
+empty join-token setting; the URL supplies the durable world, name, and avatar
+instead of inventing a browser-local account. If an operator later adds a
+join-token policy in the independent Eidoverse runtime, that policy remains an
+explicit runtime configuration rather than a secret stored in PortOS state.
+
+The Eidoverse runtime remains responsible for its own append-only world log,
+snapshot, roles, chat, poses, and assets under `data/eidoverse/worlds`. PortOS
+joins through the runtime's public WebSocket protocol and never edits the
+external checkout to seed content. On a fresh world, PortOS establishes the
+configured human identity first so it can own the world, then reconnects the
+stable CoS identity as an agent and grants it the configured builder role.
+That makes the human and CoS user/role durable in the Eidoverse world rather
+than merely a browser-session convenience.
+
+## PortOS projection recipe
+
+The PortOS projection is deterministic and local. It turns current PortOS
+resources into Eidoverse entities without an LLM call. The default lanes are:
+
+- managed apps, active agents, open CoS tasks, enabled features, and federated
+  peer summaries become individual model-backed entities;
+- goals and current-sprint Jira tickets become bounded individual entities;
+- productivity and activity become compact summary/history entities;
+- memory becomes category/graph summaries only (raw memory and journal bodies
+  are not copied into the world component payload);
+- storage becomes bounded PostgreSQL table and `data/` domain summaries;
+- health becomes one aggregate, while operations becomes one compact hub for
+  CoS/AI state, review, backup, inbox, notifications, voice, character,
+  chronotype, health metrics, and disk state;
+- the recipe controls which families are included, per-family caps, layout
+  spacing/scales, model assets, and procedural terrain parameters;
+- stable entity ids make repeated projections update existing buildings,
+  vehicles, crates, drones, and landmarks instead of accumulating duplicates;
+- an unavailable source is preserved as unknown and does not delete its last
+  good entities; a confirmed empty source may remove the generated entities for
+  that family.
+
+The Eidoverse renderer receives the resource label, source id, status, and
+bounded fields as generic `portos` component metadata alongside each model.
+That keeps the world useful even when a source is sparse and leaves the
+Eidoverse scene graph/inspector as the authoritative detail view; the PortOS
+adapter does not pretend that arbitrary metadata is a persistent 3D text label.
+
+The Eidoverse page exposes **Project PortOS now** and a recipe editor. The
+Persistent Mind can use the governed `eidoverse.status`, `eidoverse.project`,
+`eidoverse.augment`, and `eidoverse.say` tools. `eidoverse.augment` accepts
+only bounded world verbs (for example `spawn`, `place`, `comp`, `light`,
+`terrain`, `sky`, and `grant`); it cannot execute arbitrary runtime behavior or
+modify the installed Eidoverse source.
+
+## Growth and automation
+
+The projection recipe is intentionally separate from the current world log.
+As PortOS gains resources, the deterministic projection can be run manually,
+from a CoS task, or through the disabled-by-default autonomous job
+`job-eidoverse-projection`. Enabling that job is an explicit install-local
+choice; it performs no provider calls and only reflects resources that already
+exist. The hosted page starts the managed runtime when it is opened; an
+automated projection run expects that managed app to remain available, and
+records a failed run instead of silently publishing stale or fabricated data.
+CoS tasks can also augment the world with bounded authored landmarks or
+messages, while recipe changes remain visible and editable in PortOS.
 
 Disabling the feature does not delete repositories, unregister the app, stop a
 running process, or remove world history. It only records that this PortOS
@@ -78,7 +158,7 @@ returns an explicit unavailable state when the runtime does not become ready.
 
 ## PortOS bridge boundary
 
-The hosted UI and runtime management do not yet bridge Persistent Mind presence,
-agent identity, or dynamic PortOS buildings/assets. Those should be implemented
-as explicit adapters across the two projects' public protocols. They must remain
-opt-in and must not cause provider calls at PortOS boot.
+The hosted page, identity bridge, projection service, and CoS tools are explicit
+PortOS adapters across the two projects' public protocols. They remain
+deterministic and install-local: opening PortOS does not call an AI provider,
+and no raw Eidoverse world log is copied to another machine by federation.

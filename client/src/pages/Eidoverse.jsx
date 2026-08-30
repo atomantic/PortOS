@@ -5,9 +5,12 @@ import PageHeader from '../components/PageHeader';
 import BrailleSpinner from '../components/BrailleSpinner';
 import {
   getApp,
+  getEidoverseWorldStatus,
   getInstanceFeatures,
+  projectEidoverseWorld,
   startApp,
   startEidoverseHost,
+  updateEidoverseWorldConfig,
 } from '../services/api';
 
 const silent = { silent: true };
@@ -16,22 +19,81 @@ const RUNNING_STATUSES = new Set(['online', 'launching', 'unknown']);
 const failedStart = (result) => Object.values(result?.results || {})
   .find((entry) => entry?.success === false);
 
-export const hostUrlFor = (host, setup, location = window.location) => {
+export const hostUrlFor = (host, setup, location = window.location, identity = null) => {
+  let baseUrl;
   if (location.protocol === 'https:') {
     if (host.protocol !== 'https') {
       throw new Error('PortOS is using HTTPS, but the Eidoverse host could not load the shared certificate.');
     }
-    return `https://${location.hostname}:${host.port}/`;
+    baseUrl = `https://${location.hostname}:${host.port}/`;
+  } else {
+    baseUrl = `http://${location.hostname}:${setup.uiPort}/`;
   }
-  return `http://${location.hostname}:${setup.uiPort}/`;
+  if (!identity) return baseUrl;
+
+  const url = new URL(baseUrl);
+  if (identity.world) url.searchParams.set('world', identity.world);
+  if (identity.name) url.searchParams.set('name', identity.name);
+  if (identity.avatar) url.searchParams.set('avatar', identity.avatar);
+  return url.toString();
 };
+
+const RECIPE_INCLUDE_KEYS = [
+  'apps',
+  'agents',
+  'tasks',
+  'features',
+  'peers',
+  'health',
+  'productivity',
+  'activity',
+  'goals',
+  'memory',
+  'storage',
+  'jira',
+  'operations',
+];
+
+const RECIPE_KIND_BY_SOURCE = {
+  apps: 'app',
+  agents: 'agent',
+  tasks: 'task',
+  features: 'feature',
+  peers: 'peer',
+  health: 'health',
+  productivity: 'productivity',
+  activity: 'activity',
+  goals: 'goal',
+  memory: 'memory',
+  storage: 'storage',
+  jira: 'jira',
+  operations: 'operations',
+};
+
+const RECIPE_LAYOUT_KEYS = ['spacing', 'laneGap', 'columns'];
+const RECIPE_TERRAIN_KEYS = ['size', 'segments', 'amplitude', 'flatRadius'];
+
+const worldIdentityFor = (world) => ({
+  world: world?.world,
+  name: world?.identity?.name || world?.human?.name,
+  avatar: world?.identity?.avatar || world?.human?.avatar,
+});
 
 export default function Eidoverse() {
   const requestGeneration = useRef(0);
   const [phase, setPhase] = useState('loading');
   const [error, setError] = useState('');
   const [hostUrl, setHostUrl] = useState('');
+  const [hostInfo, setHostInfo] = useState(null);
+  const [setupState, setSetupState] = useState(null);
   const [appId, setAppId] = useState(null);
+  const [worldState, setWorldState] = useState(null);
+  const [worldName, setWorldName] = useState('');
+  const [humanName, setHumanName] = useState('');
+  const [recipeDraft, setRecipeDraft] = useState(null);
+  const [projectionStatus, setProjectionStatus] = useState('idle');
+  const [projectionError, setProjectionError] = useState('');
+  const [configStatus, setConfigStatus] = useState('');
 
   const prepare = useCallback(() => {
     const generation = ++requestGeneration.current;
@@ -41,6 +103,13 @@ export default function Eidoverse() {
     setPhase('loading');
     setError('');
     setHostUrl('');
+    setHostInfo(null);
+    setSetupState(null);
+    setWorldState(null);
+    setRecipeDraft(null);
+    setProjectionStatus('idle');
+    setProjectionError('');
+    setConfigStatus('');
 
     const load = async () => {
       const featureState = await getInstanceFeatures(silent);
@@ -60,10 +129,14 @@ export default function Eidoverse() {
       updatePhase('connecting');
       const host = await startEidoverseHost(silent);
       if (!host?.running) throw new Error('The Eidoverse host did not start.');
+      const world = await getEidoverseWorldStatus(silent);
       return {
         phase: 'ready',
         appId: setup.appId,
-        hostUrl: hostUrlFor(host, setup),
+        setup,
+        host,
+        world,
+        hostUrl: hostUrlFor(host, setup, window.location, worldIdentityFor(world)),
       };
     };
 
@@ -71,6 +144,12 @@ export default function Eidoverse() {
       if (!isCurrent()) return;
       setPhase(result.phase);
       setAppId(result.appId);
+      setSetupState(result.setup || null);
+      setHostInfo(result.host || null);
+      setWorldState(result.world || null);
+      setWorldName(result.world?.world || '');
+      setHumanName(result.world?.identity?.name || result.world?.human?.name || '');
+      setRecipeDraft(result.world?.recipe || null);
       setHostUrl(result.hostUrl || '');
     }, (reason) => {
       if (!isCurrent()) return;
@@ -78,6 +157,111 @@ export default function Eidoverse() {
       setError(reason?.message || 'Eidoverse Worlds could not be loaded.');
     });
   }, []);
+
+  const runProjection = useCallback(async () => {
+    setProjectionStatus('running');
+    setProjectionError('');
+    try {
+      const result = await projectEidoverseWorld(silent);
+      setWorldState((current) => current
+        ? {
+          ...current,
+          projection: result.projection || current.projection,
+          presence: result.presence || current.presence,
+        }
+        : current);
+      setProjectionStatus('complete');
+      return result;
+    } catch (reason) {
+      setProjectionStatus('error');
+      setProjectionError(reason?.message || 'PortOS could not project its current state into Eidoverse.');
+      throw reason;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (phase !== 'ready' || !hostUrl) return undefined;
+    void runProjection().catch(() => {});
+    return undefined;
+  }, [phase, hostUrl, runProjection]);
+
+  const saveWorldConfig = useCallback(async () => {
+    if (!recipeDraft) return;
+    setConfigStatus('saving');
+    try {
+      const updated = await updateEidoverseWorldConfig({
+        world: worldName.trim(),
+        humanName: humanName.trim() || null,
+        recipe: recipeDraft,
+      }, silent);
+      setWorldState((current) => current
+        ? { ...current, ...updated, identity: updated.human }
+        : current);
+      setWorldName(updated.world || '');
+      setHumanName(updated.human?.name || '');
+      setRecipeDraft(updated.recipe || recipeDraft);
+      setConfigStatus('saved');
+
+      const nextHostUrl = hostInfo && setupState
+        ? hostUrlFor(hostInfo, setupState, window.location, worldIdentityFor(updated))
+        : hostUrl;
+      if (nextHostUrl !== hostUrl) setHostUrl(nextHostUrl);
+      else await runProjection();
+    } catch (reason) {
+      setConfigStatus(reason?.message || 'Could not save the Eidoverse world configuration.');
+    }
+  }, [humanName, hostInfo, hostUrl, recipeDraft, runProjection, setupState, worldName]);
+
+  const toggleRecipeInclude = (key) => {
+    setRecipeDraft((current) => current
+      ? { ...current, includes: { ...current.includes, [key]: !current.includes[key] } }
+      : current);
+  };
+
+  const updateRecipeLimit = (key, value) => {
+    setRecipeDraft((current) => current
+      ? { ...current, limits: { ...current.limits, [key]: value === '' ? 0 : Number(value) } }
+      : current);
+  };
+
+  const updateRecipeNumber = (section, key, value) => {
+    setRecipeDraft((current) => current
+      ? {
+        ...current,
+        [section]: {
+          ...current[section],
+          [key]: value === '' ? '' : Number(value),
+        },
+      }
+      : current);
+  };
+
+  const updateRecipeText = (section, key, value) => {
+    setRecipeDraft((current) => current
+      ? { ...current, [section]: { ...current[section], [key]: value } }
+      : current);
+  };
+
+  const updateRecipeOrigin = (index, value) => {
+    setRecipeDraft((current) => current
+      ? {
+        ...current,
+        layout: {
+          ...current.layout,
+          origin: current.layout?.origin?.map((part, partIndex) => partIndex === index
+            ? (value === '' ? '' : Number(value))
+            : part) || [0, 0, 0],
+        },
+      }
+      : current);
+  };
+
+  const updateRecipeAsset = (sourceKey, value) => {
+    const kind = RECIPE_KIND_BY_SOURCE[sourceKey];
+    setRecipeDraft((current) => kind && current
+      ? { ...current, assets: { ...current.assets, [kind]: value } }
+      : current);
+  };
 
   useEffect(() => {
     prepare();
@@ -109,6 +293,214 @@ export default function Eidoverse() {
     </>
   );
 
+  const worldControls = phase === 'ready' && worldState && recipeDraft ? (
+    <div className="shrink-0 border-b border-port-border bg-port-bg px-3 py-2 sm:px-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-300">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="rounded-full border border-port-accent/40 px-2 py-0.5 text-port-accent">Private PortOS world</span>
+          <span>World: <span className="text-white">{worldState.world}</span></span>
+          <span>User: <span className="text-white">{worldState.identity?.name || 'not configured'}</span></span>
+          <span>CoS: <span className="text-white">{worldState.presence?.connected ? 'connected' : 'ready to reconnect'}</span>{worldState.presence?.role ? ` · ${worldState.presence.role}` : ''}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => { void runProjection().catch(() => {}); }}
+            disabled={projectionStatus === 'running'}
+            className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-port-border px-2.5 py-1.5 text-gray-200 transition-colors hover:border-port-accent hover:text-white disabled:cursor-wait disabled:opacity-50"
+          >
+            <RotateCcw size={14} aria-hidden="true" />
+            {projectionStatus === 'running' ? 'Projecting…' : 'Project PortOS now'}
+          </button>
+          <Link
+            to="/cos/jobs"
+            className="inline-flex min-h-[36px] items-center rounded-lg border border-port-border px-2.5 py-1.5 text-gray-200 transition-colors hover:border-port-accent hover:text-white"
+          >
+            CoS tasks
+          </Link>
+        </div>
+      </div>
+      {projectionError && (
+        <p className="mt-1 text-xs text-port-error" role="status">{projectionError}</p>
+      )}
+      <details className="mt-2 text-xs text-gray-300">
+        <summary className="cursor-pointer text-gray-400 hover:text-white">World identity and projection recipe</summary>
+        <form
+          className="mt-3 grid gap-3 rounded-lg border border-port-border bg-port-card p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] sm:items-end"
+          onSubmit={(event) => { event.preventDefault(); void saveWorldConfig(); }}
+        >
+          <label className="flex flex-col gap-1" htmlFor="eidoverse-world-name">
+            <span className="text-gray-400">World name</span>
+            <input
+              id="eidoverse-world-name"
+              value={worldName}
+              onChange={(event) => setWorldName(event.target.value)}
+              className="min-h-[36px] rounded border border-port-border bg-port-bg px-2 text-sm text-white"
+              maxLength={64}
+              required
+            />
+          </label>
+          <label className="flex flex-col gap-1" htmlFor="eidoverse-human-name">
+            <span className="text-gray-400">My Eidoverse name</span>
+            <input
+              id="eidoverse-human-name"
+              value={humanName}
+              onChange={(event) => setHumanName(event.target.value)}
+              className="min-h-[36px] rounded border border-port-border bg-port-bg px-2 text-sm text-white"
+              maxLength={64}
+              placeholder="Clear to use the persistent PortOS instance identity"
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={configStatus === 'saving'}
+            className="inline-flex min-h-[36px] items-center justify-center rounded-lg bg-port-accent px-3 py-1.5 font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-50"
+          >
+            {configStatus === 'saving' ? 'Saving…' : 'Save and project'}
+          </button>
+          <fieldset className="sm:col-span-3">
+            <legend className="mb-1 text-gray-400">Draw PortOS resources</legend>
+            <div className="flex flex-wrap gap-x-4 gap-y-2">
+              {RECIPE_INCLUDE_KEYS.map((key) => (
+                <label key={key} className="inline-flex items-center gap-1.5 capitalize">
+                  <input
+                    type="checkbox"
+                    checked={recipeDraft.includes?.[key] === true}
+                    onChange={() => toggleRecipeInclude(key)}
+                  />
+                  {key}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <fieldset className="sm:col-span-3">
+            <legend className="mb-1 text-gray-400">Per-resource caps</legend>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+              {RECIPE_INCLUDE_KEYS.map((key) => (
+                <label key={key} className="flex flex-col gap-1 capitalize" htmlFor={`eidoverse-limit-${key}`}>
+                  <span className="text-gray-500">{key}</span>
+                  <input
+                    id={`eidoverse-limit-${key}`}
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={recipeDraft.limits?.[key] ?? ''}
+                    onChange={(event) => updateRecipeLimit(key, event.target.value)}
+                    className="min-h-[34px] rounded border border-port-border bg-port-bg px-2 text-sm text-white"
+                  />
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <fieldset className="sm:col-span-3">
+            <legend className="mb-1 text-gray-400">World layout</legend>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+              {RECIPE_LAYOUT_KEYS.map((key) => (
+                <label key={key} className="flex flex-col gap-1 capitalize" htmlFor={`eidoverse-layout-${key}`}>
+                  <span className="text-gray-500">{key}</span>
+                  <input
+                    id={`eidoverse-layout-${key}`}
+                    type="number"
+                    min={key === 'columns' ? 1 : 2}
+                    max={key === 'columns' ? 32 : 100}
+                    step={key === 'columns' ? 1 : 0.5}
+                    value={recipeDraft.layout?.[key] ?? ''}
+                    onChange={(event) => updateRecipeNumber('layout', key, event.target.value)}
+                    className="min-h-[34px] rounded border border-port-border bg-port-bg px-2 text-sm text-white"
+                  />
+                </label>
+              ))}
+              {['x', 'y', 'z'].map((axis, index) => (
+                <label key={axis} className="flex flex-col gap-1" htmlFor={`eidoverse-origin-${axis}`}>
+                  <span className="text-gray-500">Origin {axis}</span>
+                  <input
+                    id={`eidoverse-origin-${axis}`}
+                    type="number"
+                    step="0.5"
+                    value={recipeDraft.layout?.origin?.[index] ?? ''}
+                    onChange={(event) => updateRecipeOrigin(index, event.target.value)}
+                    className="min-h-[34px] rounded border border-port-border bg-port-bg px-2 text-sm text-white"
+                  />
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <fieldset className="sm:col-span-3">
+            <legend className="mb-1 text-gray-400">Models and scales</legend>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {RECIPE_INCLUDE_KEYS.map((sourceKey) => {
+                const kind = RECIPE_KIND_BY_SOURCE[sourceKey];
+                return (
+                  <div key={sourceKey} className="rounded border border-port-border/70 p-2">
+                    <span className="capitalize text-gray-400">{sourceKey}</span>
+                    <label className="mt-1 flex flex-col gap-1" htmlFor={`eidoverse-asset-${kind}`}>
+                      <span className="text-gray-500">Asset path</span>
+                      <input
+                        id={`eidoverse-asset-${kind}`}
+                        value={recipeDraft.assets?.[kind] ?? ''}
+                        onChange={(event) => updateRecipeAsset(sourceKey, event.target.value)}
+                        className="min-h-[34px] rounded border border-port-border bg-port-bg px-2 text-xs text-white"
+                        maxLength={512}
+                      />
+                    </label>
+                    <label className="mt-1 flex items-center gap-2" htmlFor={`eidoverse-scale-${kind}`}>
+                      <span className="text-gray-500">Scale</span>
+                      <input
+                        id={`eidoverse-scale-${kind}`}
+                        type="number"
+                        min="0.01"
+                        max="20"
+                        step="0.05"
+                        value={recipeDraft.scale?.[kind] ?? ''}
+                        onChange={(event) => updateRecipeNumber('scale', kind, event.target.value)}
+                        className="min-h-[32px] w-24 rounded border border-port-border bg-port-bg px-2 text-xs text-white"
+                      />
+                    </label>
+                  </div>
+                );
+              })}
+            </div>
+          </fieldset>
+          <fieldset className="sm:col-span-3">
+            <legend className="mb-1 text-gray-400">Procedural terrain</legend>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+              <label className="flex flex-col gap-1" htmlFor="eidoverse-terrain-seed">
+                <span className="text-gray-500">Seed</span>
+                <input
+                  id="eidoverse-terrain-seed"
+                  value={recipeDraft.terrain?.seed ?? ''}
+                  onChange={(event) => updateRecipeText('terrain', 'seed', event.target.value)}
+                  className="min-h-[34px] rounded border border-port-border bg-port-bg px-2 text-sm text-white"
+                  maxLength={64}
+                />
+              </label>
+              {RECIPE_TERRAIN_KEYS.map((key) => (
+                <label key={key} className="flex flex-col gap-1 capitalize" htmlFor={`eidoverse-terrain-${key}`}>
+                  <span className="text-gray-500">{key}</span>
+                  <input
+                    id={`eidoverse-terrain-${key}`}
+                    type="number"
+                    min={key === 'segments' ? 2 : 0}
+                    max={key === 'segments' ? 512 : (key === 'size' ? 512 : 256)}
+                    step={key === 'segments' ? 1 : 0.5}
+                    value={recipeDraft.terrain?.[key] ?? ''}
+                    onChange={(event) => updateRecipeNumber('terrain', key, event.target.value)}
+                    className="min-h-[34px] rounded border border-port-border bg-port-bg px-2 text-sm text-white"
+                  />
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          {configStatus && configStatus !== 'saving' && (
+            <p className="sm:col-span-3 text-xs text-gray-400" role="status">
+              {configStatus === 'saved' ? 'Saved locally and projected.' : configStatus}
+            </p>
+          )}
+        </form>
+      </details>
+    </div>
+  ) : null;
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-black">
       <PageHeader
@@ -118,6 +510,8 @@ export default function Eidoverse() {
         actions={actions}
         className="bg-port-bg"
       />
+
+      {worldControls}
 
       {phase === 'ready' && (
         <iframe

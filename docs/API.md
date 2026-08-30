@@ -312,7 +312,26 @@ Context tools remain read-only. Semantic reads and writes are independent, defau
 | GET | `/usage/daily` | Get daily activity |
 | GET | `/usage/hourly` | Get hourly activity |
 
-### CyberCity
+### Eidoverse Worlds
+
+The PortOS-owned Eidoverse adapter is private and install-local. It stores its
+identity and projection recipe under `data/eidoverse/`, joins the separately
+installed Eidoverse runtime through its WebSocket protocol, and does not
+federate world records.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/eidoverse/world/status` | Private world identity, CoS presence, projection recipe, setup, and storage boundary |
+| PUT | `/eidoverse/world/config` | Persist the world identity and deterministic resource projection recipe |
+| POST | `/eidoverse/world/presence` | Establish the install's persistent CoS agent presence |
+| POST | `/eidoverse/world/project` | Project current PortOS resources into the world using the saved recipe |
+| POST | `/eidoverse/world/augment` | Apply bounded, allowlisted world construction/role operations |
+| POST | `/eidoverse/world/say` | Send a bounded message as the PortOS CoS presence |
+
+### Legacy OpenWorld / CyberCity
+
+The old UI routes redirect to Eidoverse; these APIs remain available as
+backward-compatible historical snapshot/introspection endpoints.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -579,7 +598,8 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/legacy-export` | Legacy data export |
 | `/api/database` | Postgres introspection |
 | `/api/image-clean` | Image metadata cleaning |
-| `/api/openworld`, `/api/city` | OpenWorld and CyberCity 3D snapshots/introspection |
+| `/api/eidoverse/world` | Private Eidoverse identity, projection, presence, augmentation, and chat adapter |
+| `/api/openworld`, `/api/city` | Legacy OpenWorld/CyberCity snapshots and introspection |
 | `/api/cos/gsd` | CoS GSD workflow |
 | `/api/feature-agents` | Feature agent runs |
 | `/api/feeds` | RSS/content feeds |

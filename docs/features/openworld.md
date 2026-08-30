@@ -1,7 +1,17 @@
 # OpenWorld
 
-> **Renamed 2026-08-19.** This surface shipped as *CyberCity* at `/city`. It is now
-> **OpenWorld** at `/openworld`; the `/city` routes redirect so existing bookmarks,
+> **Retired in favor of Eidoverse.** The implementation remains in the checkout
+> for compatibility and reference, but `/openworld` and `/city` now redirect to
+> the private, persistent Eidoverse PortOS world. New world content and PortOS
+> resource projection belong in [Eidoverse Worlds](./eidoverse.md).
+
+The historical snapshot scheduler is no longer started at PortOS boot. Existing
+snapshot files and compatibility endpoints remain readable for older clients;
+new automatic world synchronization is owned by Eidoverse's install-local
+projection job.
+
+> **Historical rename (2026-08-19).** This surface shipped as *CyberCity* at `/city`.
+> It was renamed **OpenWorld** at `/openworld`; the `/city` routes redirected so existing bookmarks,
 > pinned rows, palette history, and peer deep links keep working. Persisted nav-command
 > ids remain unchanged.
 
@@ -107,13 +117,11 @@ These mappings are symbolic and read-only. OpenWorld may navigate to an existing
 but it must not invent an implicit write path or trigger an automation merely because the
 player approached something.
 
-## Views and URL Contracts
+## Historical Views and URL Contracts
 
-- `/openworld` is the whole-world route.
-- `/openworld/apps/:appId` focuses one live app borough.
-- `/openworld/region/:regionId` focuses or warps to one named destination.
-- `/openworld/settings` opens world settings.
-- Legacy `/city` routes redirect to the equivalent OpenWorld route.
+- `/openworld` and `/city` redirect to `/eidoverse`.
+- Historical `/openworld/apps/:appId`, `/openworld/region/:regionId`, and
+  `/openworld/settings` paths are caught by the compatibility redirect.
 
 Selection remains in the URL. Building focus and region travel are bookmarkable,
 back/forward safe, and reachable from the command palette and voice navigation.

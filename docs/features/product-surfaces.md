@@ -183,8 +183,8 @@ Unified communication channels, local voice assistant, community stewardship, an
 | **Evergreen Personal Wiki** | `/wiki/*` | Curated personal knowledge base with markdown editing, link graphs, and full-text search. | — |
 | **Voice Mode** | `/settings/voice` | Hands-free voice assistant with continuous VAD (AudioWorklet), speech-to-text (Whisper local or Web Speech), local LLM orchestration, text-to-speech (Kokoro-82M in-process or Piper), barge-in support, and `ui_navigate` tool execution. | [Voice Mode](./voice.md) |
 | **Ambient Display Mode** | `/ambient` | Fullscreen idle dashboard, ambient animations, system status ticker, and display screensaver. | — |
-| **OpenWorld 3D Spatial Map** | `/openworld`, `/openworld/settings` | Interactive 3D visualization of the PortOS ecosystem rendered in Three.js / React Three Fiber. Apps appear as skyscrapers with live PM2 metrics, glowing holograms, and operational alert states. | [OpenWorld](./openworld.md) |
-| **OpenWorld Fast-Travel Regions** | `/openworld/region/:id` | Fast-travel destinations across 14 distinct city regions: Downtown (Apps District), AI Core Plaza, Task Queue, Wellness Tower, Archive District, Quiet Corner, Productivity Terrace, Backup Vault, Memory Quarter, Sprint Yard (JIRA), Voice Beacon, Goal Monuments, Hall of Achievements, and Data Harbor. | [OpenWorld](./openworld.md) |
+| **Eidoverse Worlds** | `/eidoverse` | Private, install-local 3D world for the human and Persistent Mind/CoS agents, with durable name-based identity, world history, deterministic PortOS resource projection, and governed world augmentation. | [Eidoverse Worlds](./eidoverse.md) |
+| **OpenWorld (retired compatibility surface)** | `/openworld`, `/city` | Historical Three.js / React Three Fiber world; legacy routes redirect to Eidoverse so existing bookmarks remain usable. | [OpenWorld](./openworld.md) |
 
 ---
 
@@ -216,7 +216,7 @@ When performing a **repo-study** task (`server/services/repoIntake.js`) or propo
 
 | External Repository Domain | Target PortOS Product Surface(s) | Primary Lens & Considerations |
 |---|---|---|
-| **3D Scenes, WebGL, Game Engines** | **Create → 3D & Sprites** (`/3d`, `/sprites`, `/game`) or **Main → OpenWorld** (`/openworld`) | Visual asset pipeline, procedural geometry, Three.js shaders, low-poly rendering, sprite sheet compilation. |
+| **3D Scenes, WebGL, Game Engines** | **Create → 3D & Sprites** (`/3d`, `/sprites`, `/game`) or **Main → Eidoverse Worlds** (`/eidoverse`) | Visual asset pipeline, procedural geometry, Three.js shaders, low-poly rendering, and install-local PortOS world projection. |
 | **Chatbots, Conversational LLMs, Assistants** | **Chief of Staff → Persistent Mind** (`/cos/mind`) or **Settings → Voice** (`/settings/voice`) or **Settings → OpenClaw** (`/openclaw`) | Context memory, MCP tool calling, speech-to-text/text-to-speech integration, barge-in support. |
 | **Note-Taking, Markdown Wikis, Second Brains** | **Brain → Inbox & Notes** (`/brain/*`) or **Brain → Wiki** (`/wiki/*`) or **Brain → Rapid Reader** (`/rapid-reader`) | Knowledge graphs, AI thought classification, RSVP speed-reading, Obsidian sync. |
 | **Writing Tools, Fiction Generators, Storyboarding** | **Create → Writers Room** (`/writers-room`), **Story Builder** (`/story-builder`), or **FableLoom** (`/fableloom`) | Prose editing, chapter versioning, interactive branching graphs, character consistency. |
