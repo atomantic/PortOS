@@ -3,9 +3,10 @@ import * as api from '../../services/api';
 import toast from '../ui/Toast';
 
 const normalizeCapabilities = (value) => ({
-  schemaVersion: 4,
+  schemaVersion: 5,
   createTasks: value?.createTasks === true,
   manageMind: value?.manageMind === true,
+  manageEidoverse: value?.manageEidoverse === true,
   callUser: value?.callUser === true,
   readPortos: value?.readPortos === true,
   writePortos: value?.writePortos === true,
@@ -31,6 +32,11 @@ const OPTIONS = [
     key: 'createTasks',
     label: 'Allow mind to queue CoS agent tasks',
     hint: 'Queues typed tasks through isolated worktrees, capacity, budget, review, CI, and landing-policy gates.',
+  },
+  {
+    key: 'manageEidoverse',
+    label: 'Allow private Eidoverse world management',
+    hint: 'Lets the mind project PortOS resources, apply bounded world-building and role operations, and speak as the persistent CoS identity. This does not grant generic PortOS record writes.',
   },
   {
     key: 'manageMind',
@@ -59,7 +65,7 @@ export default function PersistentMindTaskAccessControls({
 
   useEffect(() => {
     if (!saving) setDraft(normalizeCapabilities(capabilities));
-  }, [capabilities?.schemaVersion, capabilities?.createTasks, capabilities?.manageMind, capabilities?.callUser, capabilities?.readPortos, capabilities?.writePortos, capabilities?.taskModelAllowlist, capabilities?.taskModelAllowlistInvalid, capabilities?.allowedAppIds?.join('\0'), saving]);
+  }, [capabilities?.schemaVersion, capabilities?.createTasks, capabilities?.manageMind, capabilities?.manageEidoverse, capabilities?.callUser, capabilities?.readPortos, capabilities?.writePortos, capabilities?.taskModelAllowlist, capabilities?.taskModelAllowlistInvalid, capabilities?.allowedAppIds?.join('\0'), saving]);
 
   const save = async (key, enabled) => {
     const previous = draft;

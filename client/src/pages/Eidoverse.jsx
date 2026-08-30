@@ -72,6 +72,10 @@ const RECIPE_KIND_BY_SOURCE = {
 
 const RECIPE_LAYOUT_KEYS = ['spacing', 'laneGap', 'columns'];
 const RECIPE_TERRAIN_KEYS = ['size', 'segments', 'amplitude', 'flatRadius'];
+// Mirror the server's case-insensitive, slash-normalized path contract. HTML
+// patterns have no flag syntax, so spell out the case-insensitive prefixes and
+// accept either path separator explicitly.
+const EIDOVERSE_ASSET_PATTERN = '(?:[Ee][Ii][Dd][Oo][Vv][Ee][Rr][Ss][Ee]|[Ss][Tt][Oo][Rr][Ee])[\\\\/](?!.*\\.\\.).*';
 
 const worldIdentityFor = (world) => ({
   world: world?.world,
@@ -81,6 +85,7 @@ const worldIdentityFor = (world) => ({
 
 export default function Eidoverse() {
   const requestGeneration = useRef(0);
+  const configDraftRevision = useRef(0);
   const [phase, setPhase] = useState('loading');
   const [error, setError] = useState('');
   const [hostUrl, setHostUrl] = useState('');
@@ -110,6 +115,7 @@ export default function Eidoverse() {
     setProjectionStatus('idle');
     setProjectionError('');
     setConfigStatus('');
+    configDraftRevision.current = 0;
 
     const load = async () => {
       const featureState = await getInstanceFeatures(silent);
@@ -187,9 +193,11 @@ export default function Eidoverse() {
 
   const saveWorldConfig = useCallback(async () => {
     if (!recipeDraft) return;
+    const submittedRevision = configDraftRevision.current;
     setConfigStatus('saving');
+    let updated;
     try {
-      const updated = await updateEidoverseWorldConfig({
+      updated = await updateEidoverseWorldConfig({
         world: worldName.trim(),
         humanName: humanName.trim() || null,
         recipe: recipeDraft,
@@ -197,34 +205,47 @@ export default function Eidoverse() {
       setWorldState((current) => current
         ? { ...current, ...updated, identity: updated.human }
         : current);
-      setWorldName(updated.world || '');
-      setHumanName(updated.human?.name || '');
-      setRecipeDraft(updated.recipe || recipeDraft);
-      setConfigStatus('saved');
-
-      const nextHostUrl = hostInfo && setupState
-        ? hostUrlFor(hostInfo, setupState, window.location, worldIdentityFor(updated))
-        : hostUrl;
-      if (nextHostUrl !== hostUrl) setHostUrl(nextHostUrl);
-      else await runProjection();
+      if (configDraftRevision.current === submittedRevision) {
+        setWorldName(updated.world || '');
+        setHumanName(updated.human?.name || '');
+        setRecipeDraft(updated.recipe || recipeDraft);
+        setConfigStatus('saved');
+      } else {
+        setConfigStatus('');
+      }
     } catch (reason) {
       setConfigStatus(reason?.message || 'Could not save the Eidoverse world configuration.');
+      return;
     }
+
+    const nextHostUrl = hostInfo && setupState
+      ? hostUrlFor(hostInfo, setupState, window.location, worldIdentityFor(updated))
+      : hostUrl;
+    if (nextHostUrl !== hostUrl) setHostUrl(nextHostUrl);
+    else void runProjection().catch(() => {});
   }, [humanName, hostInfo, hostUrl, recipeDraft, runProjection, setupState, worldName]);
 
+  const markConfigDirty = () => {
+    configDraftRevision.current += 1;
+    setConfigStatus((current) => current === 'saving' ? current : '');
+  };
+
   const toggleRecipeInclude = (key) => {
+    markConfigDirty();
     setRecipeDraft((current) => current
       ? { ...current, includes: { ...current.includes, [key]: !current.includes[key] } }
       : current);
   };
 
   const updateRecipeLimit = (key, value) => {
+    markConfigDirty();
     setRecipeDraft((current) => current
       ? { ...current, limits: { ...current.limits, [key]: value === '' ? 0 : Number(value) } }
       : current);
   };
 
   const updateRecipeNumber = (section, key, value) => {
+    markConfigDirty();
     setRecipeDraft((current) => current
       ? {
         ...current,
@@ -237,12 +258,14 @@ export default function Eidoverse() {
   };
 
   const updateRecipeText = (section, key, value) => {
+    markConfigDirty();
     setRecipeDraft((current) => current
       ? { ...current, [section]: { ...current[section], [key]: value } }
       : current);
   };
 
   const updateRecipeOrigin = (index, value) => {
+    markConfigDirty();
     setRecipeDraft((current) => current
       ? {
         ...current,
@@ -258,6 +281,7 @@ export default function Eidoverse() {
 
   const updateRecipeAsset = (sourceKey, value) => {
     const kind = RECIPE_KIND_BY_SOURCE[sourceKey];
+    markConfigDirty();
     setRecipeDraft((current) => kind && current
       ? { ...current, assets: { ...current.assets, [kind]: value } }
       : current);
@@ -294,7 +318,7 @@ export default function Eidoverse() {
   );
 
   const worldControls = phase === 'ready' && worldState && recipeDraft ? (
-    <div className="shrink-0 border-b border-port-border bg-port-bg px-3 py-2 sm:px-4">
+    <div className="max-h-[55vh] shrink-0 overflow-y-auto overscroll-contain border-b border-port-border bg-port-bg px-3 py-2 sm:px-4">
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-300">
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
           <span className="rounded-full border border-port-accent/40 px-2 py-0.5 text-port-accent">Private PortOS world</span>
@@ -334,9 +358,13 @@ export default function Eidoverse() {
             <input
               id="eidoverse-world-name"
               value={worldName}
-              onChange={(event) => setWorldName(event.target.value)}
+              onChange={(event) => {
+                markConfigDirty();
+                setWorldName(event.target.value);
+              }}
               className="min-h-[36px] rounded border border-port-border bg-port-bg px-2 text-sm text-white"
               maxLength={64}
+              pattern="[A-Za-z0-9_-]+"
               required
             />
           </label>
@@ -345,7 +373,10 @@ export default function Eidoverse() {
             <input
               id="eidoverse-human-name"
               value={humanName}
-              onChange={(event) => setHumanName(event.target.value)}
+              onChange={(event) => {
+                markConfigDirty();
+                setHumanName(event.target.value);
+              }}
               className="min-h-[36px] rounded border border-port-border bg-port-bg px-2 text-sm text-white"
               maxLength={64}
               placeholder="Clear to use the persistent PortOS instance identity"
@@ -384,6 +415,7 @@ export default function Eidoverse() {
                     type="number"
                     min="0"
                     max="100"
+                    required
                     value={recipeDraft.limits?.[key] ?? ''}
                     onChange={(event) => updateRecipeLimit(key, event.target.value)}
                     className="min-h-[34px] rounded border border-port-border bg-port-bg px-2 text-sm text-white"
@@ -403,7 +435,8 @@ export default function Eidoverse() {
                     type="number"
                     min={key === 'columns' ? 1 : 2}
                     max={key === 'columns' ? 32 : 100}
-                    step={key === 'columns' ? 1 : 0.5}
+                    step={key === 'columns' ? 1 : 'any'}
+                    required
                     value={recipeDraft.layout?.[key] ?? ''}
                     onChange={(event) => updateRecipeNumber('layout', key, event.target.value)}
                     className="min-h-[34px] rounded border border-port-border bg-port-bg px-2 text-sm text-white"
@@ -416,7 +449,8 @@ export default function Eidoverse() {
                   <input
                     id={`eidoverse-origin-${axis}`}
                     type="number"
-                    step="0.5"
+                    step="any"
+                    required
                     value={recipeDraft.layout?.origin?.[index] ?? ''}
                     onChange={(event) => updateRecipeOrigin(index, event.target.value)}
                     className="min-h-[34px] rounded border border-port-border bg-port-bg px-2 text-sm text-white"
@@ -441,6 +475,8 @@ export default function Eidoverse() {
                         onChange={(event) => updateRecipeAsset(sourceKey, event.target.value)}
                         className="min-h-[34px] rounded border border-port-border bg-port-bg px-2 text-xs text-white"
                         maxLength={512}
+                        pattern={EIDOVERSE_ASSET_PATTERN}
+                        required
                       />
                     </label>
                     <label className="mt-1 flex items-center gap-2" htmlFor={`eidoverse-scale-${kind}`}>
@@ -448,11 +484,17 @@ export default function Eidoverse() {
                       <input
                         id={`eidoverse-scale-${kind}`}
                         type="number"
-                        min="0.01"
+                        min="0"
                         max="20"
-                        step="0.05"
+                        step="any"
+                        required
                         value={recipeDraft.scale?.[kind] ?? ''}
-                        onChange={(event) => updateRecipeNumber('scale', kind, event.target.value)}
+                        onChange={(event) => {
+                          event.currentTarget.setCustomValidity(
+                            event.currentTarget.valueAsNumber > 0 ? '' : 'Scale must be greater than zero.',
+                          );
+                          updateRecipeNumber('scale', kind, event.target.value);
+                        }}
                         className="min-h-[32px] w-24 rounded border border-port-border bg-port-bg px-2 text-xs text-white"
                       />
                     </label>
@@ -472,6 +514,7 @@ export default function Eidoverse() {
                   onChange={(event) => updateRecipeText('terrain', 'seed', event.target.value)}
                   className="min-h-[34px] rounded border border-port-border bg-port-bg px-2 text-sm text-white"
                   maxLength={64}
+                  required
                 />
               </label>
               {RECIPE_TERRAIN_KEYS.map((key) => (
@@ -480,9 +523,10 @@ export default function Eidoverse() {
                   <input
                     id={`eidoverse-terrain-${key}`}
                     type="number"
-                    min={key === 'segments' ? 2 : 0}
-                    max={key === 'segments' ? 512 : (key === 'size' ? 512 : 256)}
-                    step={key === 'segments' ? 1 : 0.5}
+                    min={key === 'segments' ? 2 : (key === 'size' ? 0.01 : 0)}
+                    max={key === 'amplitude' ? 100 : (key === 'flatRadius' ? 256 : 512)}
+                    step={key === 'segments' ? 1 : 'any'}
+                    required
                     value={recipeDraft.terrain?.[key] ?? ''}
                     onChange={(event) => updateRecipeNumber('terrain', key, event.target.value)}
                     className="min-h-[34px] rounded border border-port-border bg-port-bg px-2 text-sm text-white"
@@ -493,7 +537,7 @@ export default function Eidoverse() {
           </fieldset>
           {configStatus && configStatus !== 'saving' && (
             <p className="sm:col-span-3 text-xs text-gray-400" role="status">
-              {configStatus === 'saved' ? 'Saved locally and projected.' : configStatus}
+              {configStatus === 'saved' ? 'Saved locally.' : configStatus}
             </p>
           )}
         </form>

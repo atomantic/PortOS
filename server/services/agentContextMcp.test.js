@@ -77,8 +77,8 @@ describe('agentContextMcp service', () => {
     expect(manifest.scopes).toEqual(['navigation', 'workspaces']);
     expect(manifest.transport).toMatchObject({ loopbackOnly: true, stateful: false });
     expect(manifest).toMatchObject({
-      schemaVersion: 3,
-      actions: { readPortos: false, writePortos: false },
+      schemaVersion: 4,
+      actions: { readPortos: false, writePortos: false, manageEidoverse: false },
       limits: { maxApproxTokens: 5_000 },
     });
     expect(manifest.exclusions.join(' ')).toMatch(/Privacy Vault/);
@@ -95,7 +95,7 @@ describe('agentContextMcp service', () => {
       agentContext: {
         enabled: true,
         scopes: ['navigation'],
-        actions: { readPortos: true, writePortos: false },
+        actions: { readPortos: true, writePortos: false, manageEidoverse: true },
       },
     };
     const manifest = await getAgentContextManifest();
@@ -105,7 +105,10 @@ describe('agentContextMcp service', () => {
     expect(result.isError).toBeUndefined();
     expect(mocks.executeCosToolCall).toHaveBeenCalledWith(expect.objectContaining({
       call: expect.objectContaining({ requestId: 'agent-mcp:test', name: 'brain.search' }),
-      authority: { scope: 'agent', capabilities: { readPortos: true, writePortos: false } },
+      authority: {
+        scope: 'agent',
+        capabilities: { readPortos: true, writePortos: false, manageEidoverse: true },
+      },
     }));
   });
 

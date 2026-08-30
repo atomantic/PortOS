@@ -36,7 +36,7 @@ describe('Eidoverse world routes', () => {
     vi.clearAllMocks();
     mocks.getStatus.mockResolvedValue({ world: 'portos', identity: { name: 'example-user' } });
     mocks.updateConfig.mockResolvedValue({ world: 'portos', human: { name: 'example-user' } });
-    mocks.ensurePresence.mockResolvedValue({ connected: true, role: 'builder' });
+    mocks.ensurePresence.mockResolvedValue({ connected: true, role: 'owner' });
     mocks.project.mockResolvedValue({ success: true, summary: { operationCount: 0 } });
     mocks.augment.mockResolvedValue({ success: true, applied: 1 });
     mocks.say.mockResolvedValue({ success: true });

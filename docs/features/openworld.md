@@ -7,8 +7,8 @@
 
 The historical snapshot scheduler is no longer started at PortOS boot. Existing
 snapshot files and compatibility endpoints remain readable for older clients;
-new automatic world synchronization is owned by Eidoverse's install-local
-projection job.
+new automatic world synchronization is owned by Eidoverse's page-open refresh
+and optional install-local projection job.
 
 > **Historical rename (2026-08-19).** This surface shipped as *CyberCity* at `/city`.
 > It was renamed **OpenWorld** at `/openworld`; the `/city` routes redirected so existing bookmarks,

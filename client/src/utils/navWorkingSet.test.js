@@ -79,22 +79,23 @@ describe('migrateLegacyNavPath', () => {
   // Shaped like the real manifest: `previousPaths` is declared on the entry that
   // moved (server/lib/navManifest.js) and ships whole in the palette payload.
   const commands = [
-    { id: 'nav.openworld', path: '/openworld', label: 'OpenWorld', previousPaths: ['/city'] },
+    { id: 'nav.eidoverse', path: '/eidoverse', label: 'Eidoverse', previousPaths: ['/openworld', '/city'], preservePreviousPathSuffix: false },
     { id: 'nav.sprites', path: '/sprites', label: 'Sprites', previousPaths: ['/media/sprites', '/media/sprites/:id'] },
     { id: 'nav.universes', path: '/universes', label: 'Universes', previousPaths: ['/media/universe-builder', '/universe-builder'] },
     { id: 'nav.cityscape', path: '/cityscape', label: 'Cityscape' },
   ];
 
   it('maps a moved page onto its current path', () => {
-    expect(migrateLegacyNavPath('/city', commands)).toBe('/openworld');
+    expect(migrateLegacyNavPath('/city', commands)).toBe('/eidoverse');
     expect(migrateLegacyNavPath('/media/sprites', commands)).toBe('/sprites');
   });
 
   it('carries the trailing path across, including a subtree the manifest never spells out', () => {
-    // `/media/sprites/:id` declares the deep link; `/city/settings` is covered by
-    // the bare `/city` base the same way App.jsx's `city/*` redirect covers it.
+    // Record-detail moves retain the selection. Retired OpenWorld subroutes do
+    // not exist in Eidoverse, so its manifest explicitly collapses the suffix.
     expect(migrateLegacyNavPath('/media/sprites/s-1', commands)).toBe('/sprites/s-1');
-    expect(migrateLegacyNavPath('/city/apps/portos', commands)).toBe('/openworld/apps/portos');
+    expect(migrateLegacyNavPath('/city/apps/portos', commands)).toBe('/eidoverse');
+    expect(migrateLegacyNavPath('/openworld/region/example', commands)).toBe('/eidoverse');
   });
 
   it('is segment-anchored, so a sibling route that merely shares a prefix is untouched', () => {
@@ -107,7 +108,7 @@ describe('migrateLegacyNavPath', () => {
   });
 
   it('returns a current path, an unknown path, and a non-path unchanged', () => {
-    expect(migrateLegacyNavPath('/openworld', commands)).toBe('/openworld');
+    expect(migrateLegacyNavPath('/eidoverse', commands)).toBe('/eidoverse');
     expect(migrateLegacyNavPath('/whatever', commands)).toBe('/whatever');
     expect(migrateLegacyNavPath('//example.com', commands)).toBe('//example.com');
     expect(migrateLegacyNavPath(null, commands)).toBe(null);

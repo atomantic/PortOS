@@ -1,6 +1,6 @@
 // Single source of truth for PortOS navigation. Consumed by the sidebar,
 // server/services/voice/tools.js#ui_navigate, and the Cmd+K palette.
-// Entry: { id, path, label, section, aliases?, keywords?, previousPaths? }.
+// Entry: { id, path, label, section, aliases?, keywords?, previousPaths?, preservePreviousPathSuffix? }.
 // See AGENTS.md "Command Palette & Voice Nav" for the contract.
 //
 // `previousPaths` lists every path this page has ANSWERED TO BEFORE — including
@@ -31,7 +31,7 @@ export const SECTION_FEATURE = new Map([
 const RAW_NAV_COMMANDS = [
   { id: 'nav.dashboard', path: '/', label: 'Dashboard', section: 'Main', aliases: ['dashboard', 'home'], keywords: ['overview', 'start'] },
   { id: 'nav.review-hub', path: '/review', label: 'Review Hub', section: 'Main', aliases: ['review', 'review-hub'] },
-  { id: 'nav.eidoverse', path: '/eidoverse', label: 'Eidoverse', section: 'Main', feature: 'eidoverse', previousPaths: ['/openworld', '/city'], aliases: ['eidoverse', 'eidoverse-worlds', 'worlds', 'openworld', 'open-world', 'city'], keywords: ['3d', 'world', 'agents', 'spatial', 'managed app', 'private environment'] },
+  { id: 'nav.eidoverse', path: '/eidoverse', label: 'Eidoverse', section: 'Main', feature: 'eidoverse', previousPaths: ['/openworld', '/city'], preservePreviousPathSuffix: false, aliases: ['eidoverse', 'eidoverse-worlds', 'worlds', 'openworld', 'open-world', 'city'], keywords: ['3d', 'world', 'agents', 'spatial', 'managed app', 'private environment'] },
   { id: 'nav.apps', path: '/apps', label: 'Apps', section: 'Main', aliases: ['apps'] },
   // Submodules are per-app (a tab on the app detail page), so this entry is
   // explicitly PortOS's own — the only repo whose app id is a fixed constant.

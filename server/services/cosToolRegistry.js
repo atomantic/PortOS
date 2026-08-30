@@ -170,7 +170,7 @@ const eidoverseProjectTool = Object.freeze({
   output_schema: objectOutputSchema,
   policy: {
     scopes: ['agent', 'mind', 'ui'],
-    requiredCapabilities: ['writePortos'],
+    requiredCapabilities: ['readPortos', 'manageEidoverse'],
     sideEffect: 'write',
     idempotent: true,
     async: false,
@@ -190,7 +190,7 @@ const eidoverseAugmentTool = Object.freeze({
   output_schema: objectOutputSchema,
   policy: {
     scopes: ['agent', 'mind', 'ui'],
-    requiredCapabilities: ['writePortos'],
+    requiredCapabilities: ['manageEidoverse'],
     sideEffect: 'write',
     idempotent: false,
     async: false,
@@ -210,7 +210,7 @@ const eidoverseSayTool = Object.freeze({
   output_schema: objectOutputSchema,
   policy: {
     scopes: ['agent', 'mind', 'ui'],
-    requiredCapabilities: ['writePortos'],
+    requiredCapabilities: ['manageEidoverse'],
     sideEffect: 'write',
     idempotent: false,
     async: false,
@@ -359,9 +359,9 @@ const executeAdapter = async (tool, args, context) => {
   if (tool.adapter.kind === 'eidoverse-world') {
     const world = await import('./eidoverseWorld.js');
     if (tool.adapter.operation === 'status') return world.getEidoverseWorldStatus();
-    if (tool.adapter.operation === 'project') return world.projectEidoverseWorld();
-    if (tool.adapter.operation === 'augment') return world.augmentEidoverseWorld(args.operations);
-    return world.sayInEidoverseWorld(args.text);
+    if (tool.adapter.operation === 'project') return world.projectEidoverseWorld({ signal: context.signal });
+    if (tool.adapter.operation === 'augment') return world.augmentEidoverseWorld(args.operations, { signal: context.signal });
+    return world.sayInEidoverseWorld(args.text, { signal: context.signal });
   }
   const [outcome] = await executePersistentMindTaskRequests({
     taskRequests: [args],

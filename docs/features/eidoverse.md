@@ -64,8 +64,8 @@ the world and its history.
 
 PortOS-owned integration state is stored in
 `data/eidoverse/portos-world.json`. It contains the selected world, the human
-display name, the stable Persistent Mind identity, the CoS identity and local
-role observations, the projection recipe, and the last projection checkpoint.
+display name, the stable Persistent Mind/CoS identity and local role
+observations, the projection recipe, and the last projection checkpoint.
 The human name can be configured explicitly. If it is cleared, PortOS derives a
 stable fallback from the persisted PortOS instance identity (using the instance
 name when available and a non-identifying instance-id-derived label otherwise).
@@ -82,9 +82,16 @@ snapshot, roles, chat, poses, and assets under `data/eidoverse/worlds`. PortOS
 joins through the runtime's public WebSocket protocol and never edits the
 external checkout to seed content. On a fresh world, PortOS establishes the
 configured human identity first so it can own the world, then reconnects the
-stable CoS identity as an agent and grants it the configured builder role.
-That makes the human and CoS user/role durable in the Eidoverse world rather
-than merely a browser-session convenience.
+stable CoS identity as an agent and grants it an owner role. Eidoverse reserves
+terrain, sky, and role handoff for owners, so the persistent CoS must retain
+that role to maintain the projected world and hand ownership to a renamed
+human identity. Once the new identity owns the world, PortOS demotes the prior
+identity to visitor so a rename does not leave a stale owner behind. PortOS
+exposes that authority through the separate, disabled-by-default **Manage the
+private Eidoverse world** grant in both the Persistent Mind controls and the
+local Agent Tools (MCP) controls; generic PortOS write access does not imply it.
+This makes both the human and CoS roles durable in the Eidoverse world rather
+than browser-session conveniences.
 
 ## PortOS projection recipe
 
@@ -116,17 +123,22 @@ Eidoverse scene graph/inspector as the authoritative detail view; the PortOS
 adapter does not pretend that arbitrary metadata is a persistent 3D text label.
 
 The Eidoverse page exposes **Project PortOS now** and a recipe editor. The
-Persistent Mind can use the governed `eidoverse.status`, `eidoverse.project`,
-`eidoverse.augment`, and `eidoverse.say` tools. `eidoverse.augment` accepts
-only bounded world verbs (for example `spawn`, `place`, `comp`, `light`,
-`terrain`, `sky`, and `grant`); it cannot execute arbitrary runtime behavior or
-modify the installed Eidoverse source.
+Persistent Mind and explicitly granted local CoS agents can use the governed
+`eidoverse.status`, `eidoverse.project`, `eidoverse.augment`, and
+`eidoverse.say` tools. `eidoverse.augment` accepts only bounded world verbs (for
+example `spawn`, `place`, `comp`, `light`, `terrain`, `sky`, and `grant`); it
+cannot execute arbitrary runtime behavior or modify the installed Eidoverse
+source. Status requires bounded PortOS read access; projection additionally
+requires the dedicated Eidoverse-management grant, while augmentation and
+world chat require that dedicated grant without widening generic PortOS
+record-write authority.
 
 ## Growth and automation
 
 The projection recipe is intentionally separate from the current world log.
-As PortOS gains resources, the deterministic projection can be run manually,
-from a CoS task, or through the disabled-by-default autonomous job
+As PortOS gains resources, the deterministic projection runs when the hosted
+page opens and can also be run manually, from a CoS task, or through the
+disabled-by-default autonomous job
 `job-eidoverse-projection`. Enabling that job is an explicit install-local
 choice; it performs no provider calls and only reflects resources that already
 exist. The hosted page starts the managed runtime when it is opened; an
@@ -135,10 +147,10 @@ records a failed run instead of silently publishing stale or fabricated data.
 CoS tasks can also augment the world with bounded authored landmarks or
 messages, while recipe changes remain visible and editable in PortOS.
 
-Disabling the feature does not delete repositories, unregister the app, stop a
-running process, or remove world history. It only records that this PortOS
-instance is not actively using the integration. Destructive uninstall remains
-an explicit manual operation.
+Disabling the feature hides the optional navigation entry but does not delete
+repositories, unregister the app, stop a running process, block the direct
+`/eidoverse` route, disable a separately configured projection job, or remove
+world history. Destructive uninstall remains an explicit manual operation.
 
 ## Network boundary
 

@@ -28,7 +28,7 @@ const enabledManifest = {
   configurationValid: true,
   profile: 'metadata',
   scopes: ['navigation', 'workspaces'],
-  actions: { readPortos: false, writePortos: false },
+  actions: { readPortos: false, writePortos: false, manageEidoverse: false },
   tools: [{ name: 'context_profile', inputSchema: { type: 'object' } }],
 };
 
@@ -105,7 +105,7 @@ describe('agentContextMcp route', () => {
         enabled: true,
         profile: 'metadata',
         scopes: ['navigation', 'workspaces'],
-        actions: { readPortos: false, writePortos: false },
+        actions: { readPortos: false, writePortos: false, manageEidoverse: false },
       },
     }, {
       requestId: expect.stringMatching(/^agent-mcp:/),

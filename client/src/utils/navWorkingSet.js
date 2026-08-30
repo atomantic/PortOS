@@ -57,10 +57,16 @@ export const migrateLegacyNavPath = (path, commands) => {
       const base = staticBase(previous);
       if (!base || !(path === base || path.startsWith(`${base}/`))) continue;
       // Longest base wins, so `/media/universe-builder` beats `/universe-builder`.
-      if (!best || base.length > best.base.length) best = { base, to: command.path };
+      if (!best || base.length > best.base.length) {
+        best = {
+          base,
+          to: command.path,
+          preserveSuffix: command.preservePreviousPathSuffix !== false,
+        };
+      }
     }
   }
-  return best ? `${best.to}${path.slice(best.base.length)}` : path;
+  return best ? `${best.to}${best.preserveSuffix ? path.slice(best.base.length) : ''}` : path;
 };
 
 // Resolve stored recent paths against the server-backed nav manifest. Exact

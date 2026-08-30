@@ -11,7 +11,7 @@ const DEFAULT_AGENT_CONTEXT = {
   enabled: false,
   profile: 'metadata',
   scopes: ['navigation', 'workspaces'],
-  actions: { readPortos: false, writePortos: false },
+  actions: { readPortos: false, writePortos: false, manageEidoverse: false },
 };
 const AGENT_CONTEXT_SCOPES = [
   { id: 'navigation', label: 'Navigation', hint: 'PortOS page labels, aliases, and paths.' },
@@ -314,9 +314,17 @@ export function ApiAccessTab() {
               label="Allow semantic PortOS updates"
               hint="Typed Brain, journal, goals, health-log, and feed-state actions; no raw routes or shell."
             />
+            <Toggle
+              id="agent-context-action-eidoverse"
+              checked={agentContext.actions.manageEidoverse}
+              disabled={savingId !== null}
+              onChange={(value) => patchAgentContextAction('manageEidoverse', value)}
+              label="Allow private Eidoverse world management"
+              hint="Project resources, build bounded content, manage world roles, and speak as the persistent CoS identity."
+            />
           </div>
           <p className="text-xs text-gray-500">
-            Both default off. MCP advertises only granted actions, with schemas generated from the same contracts used at runtime.
+            All grants default off. MCP advertises only granted actions, with schemas generated from the same contracts used at runtime.
           </p>
         </fieldset>
 

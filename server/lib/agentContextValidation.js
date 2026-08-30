@@ -4,7 +4,7 @@ import {
   portosSemanticToolGrantsSchema,
 } from './cosToolContracts.js';
 
-export const AGENT_CONTEXT_SCHEMA_VERSION = 3;
+export const AGENT_CONTEXT_SCHEMA_VERSION = 4;
 export const AGENT_CONTEXT_PROTOCOL_VERSION = '2025-11-25';
 export const AGENT_CONTEXT_SUPPORTED_PROTOCOL_VERSIONS = Object.freeze([
   '2025-03-26',

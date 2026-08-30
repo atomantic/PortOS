@@ -18,6 +18,7 @@ describe('persistent mind capabilities', () => {
       expect.objectContaining({ id: 'cos.create-task', capability: 'createTasks', defaultEnabled: false }),
       expect.objectContaining({ id: 'portos.read', capability: 'readPortos', defaultEnabled: false }),
       expect.objectContaining({ id: 'portos.write', capability: 'writePortos', defaultEnabled: false }),
+      expect.objectContaining({ id: 'eidoverse.manage', capability: 'manageEidoverse', defaultEnabled: false }),
       expect.objectContaining({ id: 'mind.cleanup', capability: 'manageMind', defaultEnabled: false }),
       expect.objectContaining({ id: 'voice.call-user', capability: 'callUser', kind: 'typed-action', defaultEnabled: false }),
     ]);
@@ -32,22 +33,23 @@ describe('persistent mind capabilities', () => {
   });
 
   it('keeps task creation opt-in across fresh and legacy config', () => {
-    expect(createDefaultPersistentMindCapabilities()).toMatchObject({ createTasks: false, manageMind: false, callUser: false, readPortos: false, writePortos: false });
+    expect(createDefaultPersistentMindCapabilities()).toMatchObject({ createTasks: false, manageMind: false, manageEidoverse: false, callUser: false, readPortos: false, writePortos: false });
     // An install upgrading with the mind already running must gain no new
     // authority: stored config that predates the grant reads as false.
     expect(normalizePersistentMindCapabilities({ schemaVersion: 3, createTasks: true })).toMatchObject({ callUser: false });
-    expect(normalizePersistentMindCapabilities(null)).toMatchObject({ createTasks: false, manageMind: false, callUser: false, readPortos: false, writePortos: false });
+    expect(normalizePersistentMindCapabilities(null)).toMatchObject({ createTasks: false, manageMind: false, manageEidoverse: false, callUser: false, readPortos: false, writePortos: false });
     expect(normalizePersistentMindCapabilities({ createTasks: 'true', readPortos: 'true' })).toMatchObject({ createTasks: false, readPortos: false });
   });
 
   it('validates and merges the explicit task-creation grant', () => {
-    expect(persistentMindCapabilitiesSchema.safeParse({ createTasks: true, manageMind: true, readPortos: true, writePortos: false }).success).toBe(true);
+    expect(persistentMindCapabilitiesSchema.safeParse({ createTasks: true, manageMind: true, manageEidoverse: true, readPortos: true, writePortos: false }).success).toBe(true);
     expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 2, createTasks: true }).success).toBe(true);
     expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 3, callUser: true }).success).toBe(true);
-    expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 5 }).success).toBe(false);
+    expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 5 }).success).toBe(true);
+    expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 6 }).success).toBe(false);
     expect(persistentMindCapabilitiesSchema.safeParse({ taskModelAllowlist: [{ providerId: 'ollama', model: 'example-local' }] }).success).toBe(true);
     expect(normalizePersistentMindCapabilities({ schemaVersion: 2, createTasks: true }))
-      .toMatchObject({ schemaVersion: 4, createTasks: true, manageMind: false, callUser: false });
+      .toMatchObject({ schemaVersion: 5, createTasks: true, manageMind: false, manageEidoverse: false, callUser: false });
     expect(persistentMindCapabilitiesSchema.safeParse({ allowedAppIds: ['example-app', 'second-app'] }).success).toBe(true);
     expect(persistentMindCapabilitiesSchema.safeParse({ allowedAppIds: Array.from({ length: 51 }, (_, index) => `app-${index}`) }).success).toBe(false);
     expect(persistentMindCapabilitiesSchema.safeParse({ createTasks: true, shell: true }).success).toBe(false);

@@ -165,6 +165,9 @@ const DEFAULT_STATE = {
     enabled: true,
     role: null,
   },
+  ownership: {
+    retired: [],
+  },
   recipe: DEFAULT_EIDOVERSE_PROJECTION_RECIPE,
   projection: {
     lastRunAt: null,
@@ -179,6 +182,52 @@ const worldLock = createMutex();
 let cosPresence = null;
 
 const clone = (value) => structuredClone(value);
+
+function abortError(signal) {
+  return signal?.reason instanceof Error
+    ? signal.reason
+    : new DOMException(String(signal?.reason || 'The Eidoverse operation was canceled.'), 'AbortError');
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw abortError(signal);
+}
+
+function waitWithSignal(promise, signal) {
+  if (!signal) return promise;
+  throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      callback(value);
+    };
+    const onAbort = () => finish(reject, abortError(signal));
+    signal.addEventListener('abort', onAbort, { once: true });
+    Promise.resolve(promise).then(
+      (value) => finish(resolve, value),
+      (error) => finish(reject, error),
+    );
+  });
+}
+
+function abortableDelay(ms, signal) {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
+  throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(abortError(signal));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
 
 function stableStringify(value) {
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
@@ -284,6 +333,36 @@ function mergeRecipe(recipe) {
   };
 }
 
+function normalizeRetiredOwners(value) {
+  if (!Array.isArray(value)) return [];
+  const entries = new Map();
+  for (const candidate of value) {
+    const world = validWorldName(candidate?.world, '');
+    const id = validIdentity(candidate?.id, '');
+    if (!world || !id) continue;
+    const key = `${world}\0${id}`;
+    const actorId = validIdentity(candidate?.actorId, '');
+    const normalizedAvatar = safeText(candidate?.actorAvatar, '').replaceAll('\\', '/');
+    entries.set(key, {
+      world,
+      id,
+      ...(actorId ? {
+        actorId,
+        actorAvatar: isSafeAssetPath(normalizedAvatar) ? normalizedAvatar : DEFAULT_COS_AVATAR,
+      } : {}),
+    });
+  }
+  return [...entries.values()];
+}
+
+function rememberRetiredOwner(state, world, id, actor) {
+  state.ownership ||= { retired: [] };
+  state.ownership.retired = normalizeRetiredOwners([
+    ...state.ownership.retired,
+    { world, id, actorId: actor?.id, actorAvatar: actor?.avatar },
+  ]);
+}
+
 function normalizeState(raw) {
   const input = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
   return {
@@ -298,6 +377,9 @@ function normalizeState(raw) {
       ...DEFAULT_STATE.cos,
       ...(input.cos && typeof input.cos === 'object' ? input.cos : {}),
       role: validRole(input.cos?.role),
+    },
+    ownership: {
+      retired: normalizeRetiredOwners(input.ownership?.retired),
     },
     recipe: mergeRecipe(input.recipe),
     projection: {
@@ -329,6 +411,11 @@ function fallbackIdentity(self) {
 }
 
 function configFromState(state, presence = cosPresence) {
+  const activePresence = presence?.connection?.isOpen()
+    && presence.connection.world === state.world
+    && presence.connection.id === state.cos.id
+    ? presence
+    : null;
   return {
     schemaVersion: state.schemaVersion,
     world: state.world,
@@ -343,46 +430,53 @@ function configFromState(state, presence = cosPresence) {
       id: state.cos.id,
       avatar: state.cos.avatar,
       enabled: state.cos.enabled,
-      connected: Boolean(presence?.connection?.isOpen()),
-      role: presence
-        ? (presence.snapshot?.yourRights?.role || roleFromSnapshot(presence.snapshot, state.cos.id))
+      connected: Boolean(activePresence),
+      role: activePresence
+        ? (activePresence.snapshot?.yourRights?.role || roleFromSnapshot(activePresence.snapshot, state.cos.id))
         : validRole(state.cos.role),
-      gen: presence?.snapshot?.yourRights?.gen === true,
+      gen: activePresence?.snapshot?.yourRights?.gen === true,
     },
     recipe: state.recipe,
     projection: state.projection,
   };
 }
 
+function applyConfigDefaults(state, fallback) {
+  let changed = false;
+  if (!validIdentity(state.human.name, '')) {
+    state.human.name = fallback.name;
+    state.human.source = fallback.source;
+    changed = true;
+  } else if (!state.human.source) {
+    state.human.source = 'configured';
+    changed = true;
+  }
+  if (!validIdentity(state.cos.id, '')) {
+    state.cos.id = DEFAULT_COS_ID;
+    changed = true;
+  }
+  if (!isSafeAssetPath(state.human.avatar || DEFAULT_HUMAN_AVATAR)) {
+    state.human.avatar = DEFAULT_HUMAN_AVATAR;
+    changed = true;
+  }
+  if (!isSafeAssetPath(state.cos.avatar || DEFAULT_COS_AVATAR)) {
+    state.cos.avatar = DEFAULT_COS_AVATAR;
+    changed = true;
+  }
+  return changed;
+}
+
+async function readEidoverseWorldConfig(self) {
+  const state = await loadState();
+  applyConfigDefaults(state, fallbackIdentity(self));
+  return configFromState(state);
+}
+
 export async function ensureEidoverseWorldConfig() {
   const self = await ensureSelf();
   const fallback = fallbackIdentity(self);
   return mutateState((state) => {
-    let changed = false;
-    if (!validIdentity(state.human.name, '')) {
-      state.human.name = fallback.name;
-      state.human.source = fallback.source;
-      changed = true;
-    } else if (!state.human.source) {
-      state.human.source = 'configured';
-      changed = true;
-    }
-    if (!validIdentity(state.cos.id, '')) {
-      state.cos.id = DEFAULT_COS_ID;
-      changed = true;
-    }
-    if (!isSafeAssetPath(state.human.avatar || DEFAULT_HUMAN_AVATAR)) {
-      state.human.avatar = DEFAULT_HUMAN_AVATAR;
-      changed = true;
-    }
-    if (!isSafeAssetPath(state.cos.avatar || DEFAULT_COS_AVATAR)) {
-      state.cos.avatar = DEFAULT_COS_AVATAR;
-      changed = true;
-    }
-    // `mutateState` writes on every call by design: the first call creates the
-    // local config, while later calls also repair only the additive defaults
-    // introduced by a future PortOS recipe version.
-    void changed;
+    applyConfigDefaults(state, fallback);
     return configFromState(state);
   });
 }
@@ -392,8 +486,14 @@ export async function updateEidoverseWorldConfig(patch) {
     const self = await ensureSelf();
     const fallback = fallbackIdentity(self);
     const updated = await mutateState((state) => {
-      const previousCosId = state.cos.id;
-      const previousWorld = state.world;
+      const previousPresenceConfig = {
+        world: state.world,
+        humanName: state.human.name,
+        humanAvatar: state.human.avatar,
+        cosId: state.cos.id,
+        cosAvatar: state.cos.avatar,
+        cosEnabled: state.cos.enabled,
+      };
       if (patch.world !== undefined) state.world = validWorldName(patch.world);
       if (Object.hasOwn(patch, 'humanName')) {
         state.human.name = patch.humanName
@@ -406,12 +506,51 @@ export async function updateEidoverseWorldConfig(patch) {
       if (Object.hasOwn(patch, 'cosAvatar')) state.cos.avatar = patch.cosAvatar || DEFAULT_COS_AVATAR;
       if (patch.cosEnabled !== undefined) state.cos.enabled = patch.cosEnabled;
       if (patch.recipe !== undefined) state.recipe = mergeRecipe(patch.recipe);
-      return { previousCosId, previousWorld, config: configFromState(state) };
+      const worldChanged = previousPresenceConfig.world !== state.world;
+      const humanChanged = previousPresenceConfig.humanName !== state.human.name;
+      const cosChanged = previousPresenceConfig.cosId !== state.cos.id;
+      const previousOwner = {
+        id: previousPresenceConfig.cosId,
+        avatar: previousPresenceConfig.cosAvatar,
+      };
+      if (humanChanged) {
+        rememberRetiredOwner(
+          state,
+          previousPresenceConfig.world,
+          previousPresenceConfig.humanName,
+          previousOwner,
+        );
+      }
+      if (cosChanged) {
+        rememberRetiredOwner(
+          state,
+          previousPresenceConfig.world,
+          previousPresenceConfig.cosId,
+          previousOwner,
+        );
+      }
+      if (worldChanged || humanChanged) state.human.role = null;
+      if (worldChanged || cosChanged) state.cos.role = null;
+      state.ownership.retired = state.ownership.retired.filter((entry) => !(
+        entry.world === state.world
+        && (entry.id === state.human.name || entry.id === state.cos.id)
+      ));
+      return { previousPresenceConfig, config: configFromState(state) };
     });
-    if (updated.previousCosId !== updated.config.cos.id || updated.previousWorld !== updated.config.world) {
+    const currentPresenceConfig = {
+      world: updated.config.world,
+      humanName: updated.config.human.name,
+      humanAvatar: updated.config.human.avatar,
+      cosId: updated.config.cos.id,
+      cosAvatar: updated.config.cos.avatar,
+      cosEnabled: updated.config.cos.enabled,
+    };
+    if (Object.keys(currentPresenceConfig).some((key) => (
+      updated.previousPresenceConfig[key] !== currentPresenceConfig[key]
+    ))) {
       await closeCosPresenceInternal();
     }
-    return updated.config;
+    return readEidoverseWorldConfig(self);
   });
 }
 
@@ -441,6 +580,11 @@ function createWorldConnection({ world, id, avatar, agent = true, onClosed = nul
   let closeResolver = null;
   let messageTail = Promise.resolve();
   const pendingVerbs = [];
+
+  const cleanupPending = (pending) => {
+    clearTimeout(pending.timer);
+    pending.signal?.removeEventListener('abort', pending.onAbort);
+  };
 
   let resolveOpen;
   let rejectOpen;
@@ -478,7 +622,7 @@ function createWorldConnection({ world, id, avatar, agent = true, onClosed = nul
   const rejectPending = (error) => {
     while (pendingVerbs.length) {
       const pending = pendingVerbs.shift();
-      clearTimeout(pending.timer);
+      cleanupPending(pending);
       pending.reject(error);
     }
   };
@@ -525,7 +669,7 @@ function createWorldConnection({ world, id, avatar, agent = true, onClosed = nul
     const pending = pendingVerbs[0];
     if (message.entry.actor !== id || message.entry.verb !== pending.verb) return;
     pendingVerbs.shift();
-    clearTimeout(pending.timer);
+    cleanupPending(pending);
     pending.resolve(message.entry);
   };
 
@@ -575,35 +719,55 @@ function createWorldConnection({ world, id, avatar, agent = true, onClosed = nul
     socket.terminate();
   }, 8000);
 
-  const waitForSnapshot = async () => {
-    await openPromise;
-    return snapshotPromise;
+  const waitForSnapshot = async ({ signal } = {}) => {
+    await waitWithSignal(openPromise, signal);
+    return waitWithSignal(snapshotPromise, signal);
   };
 
-  const sendVerb = async (verb, args) => {
-    await openPromise;
+  const sendVerb = async (verb, args, { signal } = {}) => {
+    await waitWithSignal(openPromise, signal);
+    throwIfAborted(signal);
     if (closed || socket.readyState !== WebSocket.OPEN) throw failure || asConnectionError(new Error('socket is not open'));
     return new Promise((resolve, reject) => {
       const pending = {
         verb,
         resolve,
         reject,
+        signal,
+        onAbort: null,
         timer: setTimeout(() => {
           const index = pendingVerbs.indexOf(pending);
           if (index >= 0) pendingVerbs.splice(index, 1);
+          cleanupPending(pending);
           reject(new ServerError(`Eidoverse did not acknowledge the ${verb} operation.`, {
             status: 504,
             code: 'EIDOVERSE_WORLD_ACK_TIMEOUT',
           }));
+          socket.terminate();
         }, 10000),
       };
+      if (signal) {
+        pending.onAbort = () => {
+          const index = pendingVerbs.indexOf(pending);
+          if (index >= 0) pendingVerbs.splice(index, 1);
+          cleanupPending(pending);
+          reject(abortError(signal));
+          socket.terminate();
+        };
+        signal.addEventListener('abort', pending.onAbort, { once: true });
+      }
       pendingVerbs.push(pending);
+      if (signal?.aborted) {
+        pending.onAbort();
+        return;
+      }
       socket.send(JSON.stringify({ type: 'verb', verb, args }), (error) => {
         if (!error) return;
         const index = pendingVerbs.indexOf(pending);
         if (index >= 0) pendingVerbs.splice(index, 1);
-        clearTimeout(pending.timer);
+        cleanupPending(pending);
         reject(asConnectionError(error, 'Eidoverse Worlds could not receive the operation.'));
+        socket.terminate();
       });
     });
   };
@@ -677,16 +841,92 @@ async function rememberObservedRoles({ humanRole, cosRole }) {
   });
 }
 
+async function forgetRetiredOwners(targets) {
+  if (!targets.length) return;
+  const revoked = new Set(targets.map((entry) => `${entry.world}\0${entry.id}`));
+  await mutateState((current) => {
+    current.ownership.retired = current.ownership.retired.filter((entry) => (
+      !revoked.has(`${entry.world}\0${entry.id}`)
+    ));
+    return current;
+  });
+}
+
+async function demoteRetiredOwners(connection, targets, { signal } = {}) {
+  const ordered = [...targets].sort((left, right) => (
+    Number(left.id === connection.id) - Number(right.id === connection.id)
+  ));
+  for (const target of ordered) {
+    throwIfAborted(signal);
+    await connection.sendVerb('grant', { id: target.id, role: 'visitor' }, { signal });
+  }
+  await forgetRetiredOwners(targets);
+}
+
+async function revokeRetiredOwners(connection, config, { signal } = {}) {
+  const state = await loadState();
+  const targets = state.ownership.retired.filter((entry) => (
+    entry.world !== config.world
+    || (entry.id !== config.human.id && entry.id !== config.cos.id)
+  ));
+  if (!targets.length) return [];
+
+  const currentWorldTargets = targets.filter((entry) => entry.world === config.world);
+  if (currentWorldTargets.length) {
+    await demoteRetiredOwners(connection, currentWorldTargets, { signal });
+  }
+
+  const priorWorldGroups = new Map();
+  for (const target of targets.filter((entry) => entry.world !== config.world)) {
+    const actorId = target.actorId || config.cos.id;
+    const actorAvatar = target.actorAvatar || config.cos.avatar;
+    const key = `${target.world}\0${actorId}\0${actorAvatar}`;
+    const group = priorWorldGroups.get(key) || {
+      world: target.world,
+      actorId,
+      actorAvatar,
+      targets: [],
+    };
+    group.targets.push(target);
+    priorWorldGroups.set(key, group);
+  }
+
+  for (const group of priorWorldGroups.values()) {
+    throwIfAborted(signal);
+    const priorConnection = createWorldConnection({
+      world: group.world,
+      id: group.actorId,
+      avatar: group.actorAvatar,
+      agent: true,
+    });
+    await priorConnection.waitForSnapshot({ signal }).then(async (snapshot) => {
+      const actorRole = snapshot?.yourRights?.role || roleFromSnapshot(snapshot, group.actorId);
+      if (actorRole !== 'owner') {
+        throw new ServerError('PortOS could not retire a previous Eidoverse owner identity.', {
+          status: 409,
+          code: 'EIDOVERSE_OWNER_HANDOFF_FAILED',
+        });
+      }
+      await demoteRetiredOwners(priorConnection, group.targets, { signal });
+    }).finally(() => priorConnection.close());
+  }
+
+  return targets;
+}
+
 /**
  * Join as the configured human before the CoS connection. This makes the
  * install's known human identity the first embodied joiner when a world is
  * created, so the world grants that identity ownership rather than allowing a
  * scheduled CoS projection to claim ownership by accident. If the human is an
- * owner, persist the CoS builder role through Eidoverse's own grant verb.
+ * owner, persist the CoS owner role through Eidoverse's own grant verb. The
+ * projection manages terrain, sky, and role handoff, which are owner-only in
+ * Eidoverse; this authority is separately default-off in PortOS.
  * The connection is intentionally short-lived; the browser performs the live
  * user session with the same durable id from the URL query parameters.
  */
-async function seedHumanRoleAndCosGrant(config) {
+async function seedHumanRoleAndCosGrant(config, { signal } = {}) {
+  throwIfAborted(signal);
   let connection;
   connection = createWorldConnection({
     world: config.world,
@@ -694,14 +934,14 @@ async function seedHumanRoleAndCosGrant(config) {
     avatar: config.human.avatar,
     agent: false,
   });
-  return connection.waitForSnapshot().then(async (snapshot) => {
+  return connection.waitForSnapshot({ signal }).then(async (snapshot) => {
     const humanRole = snapshot?.yourRights?.role || roleFromSnapshot(snapshot, config.human.id);
     let cosRole = roleFromSnapshot(snapshot, config.cos.id);
     if (config.human.id !== config.cos.id
       && humanRole === 'owner'
-      && !['owner', 'builder'].includes(cosRole)) {
-      await connection.sendVerb('grant', { id: config.cos.id, role: 'builder' });
-      cosRole = 'builder';
+      && cosRole !== 'owner') {
+      await connection.sendVerb('grant', { id: config.cos.id, role: 'owner' }, { signal });
+      cosRole = 'owner';
     }
     return { humanRole, cosRole };
   }).then((roles) => connection.close().then(async () => {
@@ -710,8 +950,10 @@ async function seedHumanRoleAndCosGrant(config) {
   }), (error) => connection.close().then(() => { throw error; }));
 }
 
-async function ensureCosPresenceInternal({ fresh = false } = {}) {
+async function ensureCosPresenceInternal({ fresh = false, signal } = {}) {
+  throwIfAborted(signal);
   const config = await ensureEidoverseWorldConfig();
+  throwIfAborted(signal);
   if (!config.cos.enabled) {
     throw new ServerError('The PortOS CoS presence is disabled in the Eidoverse world configuration.', {
       status: 409,
@@ -721,7 +963,7 @@ async function ensureCosPresenceInternal({ fresh = false } = {}) {
   if (fresh || (cosPresence && !cosPresence.connection.isOpen())) await closeCosPresenceInternal();
   if (cosPresence?.connection.isOpen()) return cosPresence;
 
-  await seedHumanRoleAndCosGrant(config);
+  await seedHumanRoleAndCosGrant(config, { signal });
 
   let connection;
   connection = createWorldConnection({
@@ -733,9 +975,15 @@ async function ensureCosPresenceInternal({ fresh = false } = {}) {
       if (cosPresence?.connection === connection) cosPresence = null;
     },
   });
-  return connection.waitForSnapshot().then((snapshot) => {
+  return connection.waitForSnapshot({ signal }).then(async (snapshot) => {
     const cosRole = snapshot?.yourRights?.role || roleFromSnapshot(snapshot, config.cos.id);
-    return rememberObservedRoles({ cosRole }).then(() => {
+    let humanRole = roleFromSnapshot(snapshot, config.human.id);
+    if (config.human.id !== config.cos.id && cosRole === 'owner' && humanRole !== 'owner') {
+      await connection.sendVerb('grant', { id: config.human.id, role: 'owner' }, { signal });
+      humanRole = 'owner';
+    }
+    if (cosRole === 'owner') await revokeRetiredOwners(connection, config, { signal });
+    return rememberObservedRoles({ humanRole, cosRole }).then(() => {
       cosPresence = {
         connection,
         snapshot,
@@ -1097,8 +1345,9 @@ function healthSnapshot({ apps, cosStatus, review, backupState, notifications, c
   return available ? health : null;
 }
 
-async function collectProjectionSources() {
-  const [apps, appConfig, agents, taskState, cosStatus, review, featuresState, peers, backupState, notifications, character, healthMetrics, voiceConfig, memory, diskPercent, todayActivity, velocity, activityCalendar, goalsData, chronotype, memoryGraph, inboxCounts, introspection] = await Promise.all([
+async function collectProjectionSources({ signal } = {}) {
+  throwIfAborted(signal);
+  const [apps, appConfig, agents, taskState, cosStatus, review, featuresState, peers, backupState, notifications, character, healthMetrics, voiceConfig, memory, diskPercent, todayActivity, velocity, activityCalendar, goalsData, chronotype, memoryGraph, inboxCounts, introspection] = await waitWithSignal(Promise.all([
     getAppStatuses().catch(() => null),
     getAllApps({ includeArchived: false }).catch(() => null),
     getAgents().catch(() => null),
@@ -1122,7 +1371,7 @@ async function collectProjectionSources() {
     getBrainGraphOverview({ limit: 100 }).catch(() => null),
     getInboxLogCounts().catch(() => null),
     getOpenWorldIntrospection().catch(() => null),
-  ]);
+  ]), signal);
 
   const projectedAgents = Array.isArray(agents)
     ? agents
@@ -1164,7 +1413,7 @@ async function collectProjectionSources() {
     : null;
 
   const health = healthSnapshot({ apps, cosStatus, review, backupState, notifications, character, healthMetrics, voiceConfig, memory, diskPercent });
-  const jira = await projectedJira(appConfig, featuresState);
+  const jira = await waitWithSignal(projectedJira(appConfig, featuresState), signal);
 
   return {
     apps: Array.isArray(apps)
@@ -1346,11 +1595,12 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
   };
 }
 
-async function sendOperations(connection, operations) {
+async function sendOperations(connection, operations, { signal } = {}) {
   for (let index = 0; index < operations.length; index += 1) {
-    if (index > 0) await new Promise((resolve) => setTimeout(resolve, PROJECTION_VERB_INTERVAL_MS));
+    throwIfAborted(signal);
+    if (index > 0) await abortableDelay(PROJECTION_VERB_INTERVAL_MS, signal);
     const operation = operations[index];
-    await connection.sendVerb(operation.verb, operation.args);
+    await connection.sendVerb(operation.verb, operation.args, { signal });
   }
 }
 
@@ -1368,18 +1618,20 @@ async function recordProjection({ success, summary = null, error = null }) {
   });
 }
 
-export async function projectEidoverseWorld() {
+export async function projectEidoverseWorld({ signal } = {}) {
   const run = async () => {
+    throwIfAborted(signal);
     await assertInstalled();
     const config = await ensureEidoverseWorldConfig();
-    const presence = await ensureCosPresenceInternal({ fresh: true });
-    const source = await collectProjectionSources();
+    const presence = await ensureCosPresenceInternal({ fresh: true, signal });
+    const source = await collectProjectionSources({ signal });
+    throwIfAborted(signal);
     const plan = buildProjectionPlan({
       source,
       recipe: config.recipe,
       currentState: presence.snapshot?.state || {},
     });
-    await sendOperations(presence.connection, plan.operations);
+    await sendOperations(presence.connection, plan.operations, { signal });
     const summary = {
       world: config.world,
       cosId: config.cos.id,
@@ -1502,12 +1754,13 @@ function normalizeAugmentOperation(operation) {
   }
 }
 
-export async function augmentEidoverseWorld(operations) {
+export async function augmentEidoverseWorld(operations, { signal } = {}) {
   return worldLock(async () => {
+    throwIfAborted(signal);
     await assertInstalled();
-    const presence = await ensureCosPresenceInternal();
+    const presence = await ensureCosPresenceInternal({ signal });
     const normalized = operations.map(normalizeAugmentOperation);
-    await sendOperations(presence.connection, normalized);
+    await sendOperations(presence.connection, normalized, { signal });
     return {
       success: true,
       world: presence.connection.world,
@@ -1517,10 +1770,11 @@ export async function augmentEidoverseWorld(operations) {
   });
 }
 
-export async function sayInEidoverseWorld(text) {
+export async function sayInEidoverseWorld(text, { signal } = {}) {
   return worldLock(async () => {
+    throwIfAborted(signal);
     await assertInstalled();
-    const presence = await ensureCosPresenceInternal();
+    const presence = await ensureCosPresenceInternal({ signal });
     const message = safeText(text, '', 2000);
     if (!message) {
       throw new ServerError('A non-empty Eidoverse message is required.', {
@@ -1528,17 +1782,14 @@ export async function sayInEidoverseWorld(text) {
         code: 'EIDOVERSE_ARGUMENT_INVALID',
       });
     }
-    await presence.connection.sendVerb('say', { text: message });
+    await presence.connection.sendVerb('say', { text: message }, { signal });
     return { success: true, world: presence.connection.world, id: presence.connection.id };
   });
 }
 
 export async function getEidoverseWorldStatus() {
-  const [config, setup, self] = await Promise.all([
-    ensureEidoverseWorldConfig(),
-    getEidoverseStatus(),
-    getSelf(),
-  ]);
+  const [setup, self] = await Promise.all([getEidoverseStatus(), getSelf()]);
+  const config = await readEidoverseWorldConfig(self);
   return {
     ...config,
     identity: config.human,
