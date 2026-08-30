@@ -1,7 +1,8 @@
 import { execFile, spawn } from 'child_process';
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { promisify } from 'util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
@@ -11,7 +12,10 @@ import {
 } from '../../../scripts/generate_minimax_h3_ref2va.js';
 
 const execFileAsync = promisify(execFile);
-const WRAPPER = join(process.cwd(), '..', 'scripts', 'generate_minimax_h3_ref2va.js');
+const WRAPPER = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '..', '..', '..', 'scripts', 'generate_minimax_h3_ref2va.js',
+);
 
 describe('MiniMax H3 Ref2VA arbitrary-length wrapper', () => {
   let root;
