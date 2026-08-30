@@ -130,6 +130,19 @@ describe('InstanceFeaturesTab', () => {
     ));
   });
 
+  it('keeps installation disabled for an invalid repository URL', async () => {
+    mock.getInstanceFeatures.mockResolvedValue({ features: [EIDOVERSE_FEATURE] });
+    render(<MemoryRouter><InstanceFeaturesTab /></MemoryRouter>);
+
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Worlds GitHub repository' }), {
+      target: { value: 'https://example.com/not-github' },
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Enter a valid GitHub repository URL');
+    expect(screen.getByRole('button', { name: 'Install & enable' })).toBeDisabled();
+    expect(mock.installEidoverseFeature).not.toHaveBeenCalled();
+  });
+
   it('explains the Bun prerequisite before installation', async () => {
     mock.getInstanceFeatures.mockResolvedValue({
       features: [{ ...EIDOVERSE_FEATURE, setup: { ...EIDOVERSE_FEATURE.setup, bunAvailable: false } }],
@@ -138,6 +151,20 @@ describe('InstanceFeaturesTab', () => {
 
     expect(await screen.findByRole('button', { name: 'Install & enable' })).toBeDisabled();
     expect(screen.getByRole('link', { name: 'Install Bun' })).toHaveAttribute('href', 'https://bun.sh');
+  });
+
+  it('rechecks Eidoverse requirements after Bun is installed', async () => {
+    const missingBun = { ...EIDOVERSE_FEATURE, setup: { ...EIDOVERSE_FEATURE.setup, bunAvailable: false } };
+    mock.getInstanceFeatures
+      .mockResolvedValueOnce({ features: [missingBun] })
+      .mockResolvedValueOnce({ features: [EIDOVERSE_FEATURE] });
+    render(<InstanceFeaturesTab />);
+
+    expect(await screen.findByRole('button', { name: 'Install & enable' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Recheck requirements' }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Install & enable' })).toBeEnabled());
+    expect(mock.getInstanceFeatures).toHaveBeenCalledTimes(2);
   });
 
   // The sidebar and ⌘K read the same module cache; a retry that updated only

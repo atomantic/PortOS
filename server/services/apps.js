@@ -399,6 +399,7 @@ export async function createApp(appData) {
     name: appData.name,
     description: appData.description || '',
     repoPath: appData.repoPath,
+    companionRepoPaths: Array.isArray(appData.companionRepoPaths) ? [...appData.companionRepoPaths] : [],
     type: appData.type || 'unknown',
     uiPort: appData.uiPort || null,
     devUiPort: appData.devUiPort || null,

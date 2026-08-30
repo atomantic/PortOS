@@ -57,6 +57,19 @@ async function _doUpdate(app, emit) {
   emit('git-pull', 'done', pullMsg);
   steps.push({ step: 'git-pull', success: true, message: pullMsg });
 
+  const companionRepoPaths = Array.isArray(app.companionRepoPaths)
+    ? [...new Set(app.companionRepoPaths)].filter((path) => path && path !== dir)
+    : [];
+  for (let index = 0; index < companionRepoPaths.length; index += 1) {
+    const companionPath = companionRepoPaths[index];
+    const stepId = `git-pull:companion-${index + 1}`;
+    emit(stepId, 'running', `Pulling companion repository ${index + 1}/${companionRepoPaths.length}...`);
+    const companionPull = await gitService.pull(companionPath);
+    const companionMessage = companionPull.output?.trim() || 'Up to date';
+    emit(stepId, 'done', companionMessage);
+    steps.push({ step: stepId, success: true, message: companionMessage });
+  }
+
   for (const sub of ['', 'client', 'server', 'admin']) {
     const subDir = sub ? join(dir, sub) : dir;
     if (existsSync(join(subDir, 'package.json'))) {

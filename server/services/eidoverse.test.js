@@ -107,6 +107,7 @@ describe('Eidoverse managed-app installer', () => {
       name: 'Eidoverse Worlds',
       type: 'bun',
       repoPath: selectedPaths.worlds,
+      companionRepoPaths: [selectedPaths.video],
       startCommands: ['bun --env-file=.env.portos server/server.ts'],
     }));
     expect(status).toMatchObject({

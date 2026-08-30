@@ -4,6 +4,7 @@ import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import ToggleSwitch from '../ToggleSwitch';
 import { useInstanceFeatures, publishInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
+import { isGitHubRepoUrl } from '../../lib/githubRepoUrl.js';
 import { getPrimaryLaunchUrl } from '../../services/appUrls.js';
 import { installEidoverseFeature, updateInstanceFeature } from '../../services/api';
 
@@ -21,6 +22,7 @@ export function InstanceFeaturesTab() {
   const { features, error, reload } = useInstanceFeatures();
   const [savingId, setSavingId] = useState(null);
   const [eidoverseRepoUrl, setEidoverseRepoUrl] = useState(null);
+  const [recheckingEidoverse, setRecheckingEidoverse] = useState(false);
 
   // The toggle is announced on the shared INSTANCE_FEATURES_CHANGED channel, so
   // the sidebar, the ⌘K palette, and the dashboard widgets that already listen
@@ -54,6 +56,14 @@ export function InstanceFeaturesTab() {
       toast.success('Eidoverse Worlds is installed and ready to start');
     }
     setSavingId(null);
+  };
+
+  const handleEidoverseRecheck = () => {
+    if (recheckingEidoverse) return;
+    setRecheckingEidoverse(true);
+    reload()
+      .catch((err) => toast.error(err.message || 'Could not recheck Eidoverse requirements'))
+      .finally(() => setRecheckingEidoverse(false));
   };
 
   if (error) {
@@ -90,7 +100,8 @@ export function InstanceFeaturesTab() {
           const needsInstall = isEidoverse && setup?.installed !== true;
           const installing = savingId === feature.id;
           const selectedRepoUrl = eidoverseRepoUrl ?? setup?.worldsRepoUrl ?? '';
-          const canInstall = Boolean(selectedRepoUrl) && setup?.bunAvailable === true && setup?.registryAvailable !== false;
+          const repoIsValid = isGitHubRepoUrl(selectedRepoUrl);
+          const canInstall = repoIsValid && setup?.bunAvailable === true && setup?.registryAvailable !== false;
           const launchUrl = setup?.appId && setup?.uiPort
             ? getPrimaryLaunchUrl({ id: setup.appId, uiPort: setup.uiPort })
             : null;
@@ -124,10 +135,17 @@ export function InstanceFeaturesTab() {
                         value={selectedRepoUrl}
                         onChange={(event) => setEidoverseRepoUrl(event.target.value)}
                         disabled={savingId !== null}
+                        aria-invalid={selectedRepoUrl !== '' && !repoIsValid}
+                        aria-describedby={!repoIsValid ? 'eidoverse-worlds-repo-error' : undefined}
                         className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden disabled:opacity-50"
                         placeholder="https://github.com/your-account/eidoverse-worlds"
                       />
                     </label>
+                    {selectedRepoUrl !== '' && !repoIsValid && (
+                      <p id="eidoverse-worlds-repo-error" role="alert" className="text-port-error">
+                        Enter a valid GitHub repository URL.
+                      </p>
+                    )}
                     <p>Use your own fork if you want PortOS agents to prepare changes and PRs against it.</p>
                     {setup?.bunAvailable === false && (
                       <p className="text-port-warning">
@@ -136,6 +154,16 @@ export function InstanceFeaturesTab() {
                     )}
                     {setup?.registryAvailable === false && (
                       <p className="text-port-error">The managed-app registry could not be read. Repair that before installing to avoid a duplicate app record.</p>
+                    )}
+                    {(setup?.bunAvailable === false || setup?.registryAvailable === false) && (
+                      <button
+                        type="button"
+                        onClick={handleEidoverseRecheck}
+                        disabled={recheckingEidoverse}
+                        className="inline-flex items-center justify-center min-h-[44px] px-3 mt-2 text-sm bg-port-border hover:bg-port-border/70 disabled:opacity-50 text-white rounded transition-colors"
+                      >
+                        {recheckingEidoverse ? 'Rechecking…' : 'Recheck requirements'}
+                      </button>
                     )}
                   </div>
                 )}

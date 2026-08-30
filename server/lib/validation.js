@@ -255,6 +255,7 @@ export const nativeLaunchSchema = z.object({
 export const appSchema = z.object({
   name: z.string().min(1).max(100),
   repoPath: z.string().min(1),
+  companionRepoPaths: z.array(z.string().min(1)).max(8).optional(),
   type: z.string().optional().default('express'),
   uiPort: z.number().int().min(1).max(65535).nullable().optional(),
   devUiPort: z.number().int().min(1).max(65535).nullable().optional(),

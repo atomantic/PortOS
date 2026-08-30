@@ -35,18 +35,23 @@ describe('managed app updates', () => {
 
   it('uses Bun and its frozen lockfile for Bun-managed apps', async () => {
     const emit = vi.fn();
+    const companionRepo = join(repo, '..', 'eidoverse-video');
     const result = await updateApp({
       name: 'Eidoverse Worlds',
       type: 'bun',
       repoPath: repo,
+      companionRepoPaths: [companionRepo],
       pm2ProcessNames: ['eidoverse-worlds'],
     }, emit);
 
     expect(result.success).toBe(true);
+    expect(mock.pull).toHaveBeenNthCalledWith(1, repo);
+    expect(mock.pull).toHaveBeenNthCalledWith(2, companionRepo);
     expect(mock.spawn).toHaveBeenCalledWith('bun', ['install', '--frozen-lockfile'], expect.objectContaining({ cwd: repo }));
     expect(mock.spawn).toHaveBeenCalledWith('bun', ['install', '--frozen-lockfile'], expect.objectContaining({ cwd: join(repo, 'client') }));
     expect(mock.spawn).toHaveBeenCalledWith('bun', ['run', 'setup'], expect.objectContaining({ cwd: repo }));
     expect(mock.spawn).not.toHaveBeenCalledWith('npm', expect.anything(), expect.anything());
+    expect(emit).toHaveBeenCalledWith('git-pull:companion-1', 'done', 'Already up to date');
     expect(emit).toHaveBeenCalledWith('bun-install:root', 'done', 'root dependencies installed');
   });
 });

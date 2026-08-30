@@ -42,6 +42,7 @@ const managedAppFields = (paths) => ({
   name: 'Eidoverse Worlds',
   description: 'Private 3D world for a PortOS human and their agents. Installed separately under its own AGPL-3.0 license.',
   repoPath: paths.worlds,
+  companionRepoPaths: [paths.video],
   type: 'bun',
   uiPort: EIDOVERSE_PORT,
   apiPort: EIDOVERSE_PORT,
