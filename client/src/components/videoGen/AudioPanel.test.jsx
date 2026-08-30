@@ -123,7 +123,7 @@ describe('AudioPanel', () => {
     expect(screen.queryByText(/frames ÷ fps/i)).toBeNull();
   });
 
-  it('explains LTX duration-derived frames and surfaces the single-pass limit', () => {
+  it('does not claim a stale derived frame count when LTX audio exceeds the single-pass limit', () => {
     render(
       <AudioPanel
         audioFile={null}
@@ -137,7 +137,8 @@ describe('AudioPanel', () => {
         onClear={vi.fn()}
       />,
     );
-    expect(screen.getByText(/snaps up to 985 frames/i)).toBeTruthy();
+    expect(screen.queryByText(/985 frames/i)).toBeNull();
+    expect(screen.getByText(/snaps to the model's temporal grid/i)).toBeTruthy();
     expect(screen.getByText(/up to 42\.4s/i)).toBeTruthy();
     expect(screen.getByText(/too long for one LTX render/i)).toBeTruthy();
   });

@@ -883,6 +883,7 @@ describe('federated media provider — prompt-free status and projection payload
       repo: 'example/wan22',
       supportedModes: ['text'],
       frameStride: 4,
+      maxNumFrames: 1017,
       frameOptions: [25, 49, 73, 97, 121],
       resolutionOptions: [{ label: '1344x768 (16:9)', w: 1344, h: 768 }],
     }];
@@ -909,7 +910,7 @@ describe('federated media provider — prompt-free status and projection payload
     });
     expect(videoCap).toMatchObject({
       frameStride: 4,
-      maxNumFrames: 121,
+      maxNumFrames: 1017,
       frameOptions: [25, 49, 73, 97, 121],
       resolutionOptions: [{ label: '1344x768 (16:9)', w: 1344, h: 768 }],
     });

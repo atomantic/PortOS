@@ -15,6 +15,7 @@ import { EFFORT_LEVELS } from './providerModels.js';
 import { MAX_TIMEOUT as AI_RUN_TIMEOUT_MAX_MS, MIN_TIMEOUT as AI_RUN_TIMEOUT_MIN_MS } from './aiToolkit/constants.js';
 import {
   FEDERATED_MEDIA_ASSET_MAX_COUNT,
+  FEDERATED_MEDIA_MAX_VIDEO_FRAMES,
   federatedMediaInputAssetRefSchema,
   isFederatedMediaAudioPrompt,
 } from './federatedMediaWire.js';
@@ -1016,7 +1017,7 @@ export const federatedMediaVideoJobSubmissionBaseSchema = federatedMediaJobRouti
   negativePrompt: z.string().trim().max(4000).optional(),
   width: z.number().int().min(64).max(2048).optional(),
   height: z.number().int().min(64).max(2048).optional(),
-  numFrames: z.number().int().min(1).max(600).optional(),
+  numFrames: z.number().int().min(1).max(FEDERATED_MEDIA_MAX_VIDEO_FRAMES).optional(),
   fps: z.number().int().min(1).max(60).optional(),
   steps: z.number().int().min(1).max(150).optional(),
   guidance: z.number().finite().min(0).max(30).optional(),

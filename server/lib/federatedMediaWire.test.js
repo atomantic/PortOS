@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   FEDERATED_MEDIA_FEATURES,
+  FEDERATED_MEDIA_MAX_VIDEO_FRAMES,
   federatedMediaAudioProfileSchema,
   federatedMediaDeclaresFeatures,
   federatedMediaDeniesFeature,
@@ -136,7 +137,7 @@ describe('federated media status kind projection', () => {
       lyrics: false,
       autoDuration: false,
       frameStride: 4,
-      maxNumFrames: 121,
+      maxNumFrames: 1017,
       frameOptions: [25, 49, 73, 97, 121],
       fpsOptions: [16, 20, 24],
       resolutionOptions: [{ w: 1344, h: 768, label: '16:9 H3 default' }],
@@ -147,6 +148,10 @@ describe('federated media status kind projection', () => {
       kinds: ['video'],
       capabilities: [capability],
     })).success).toBe(true);
+    expect(federatedMediaCapabilitySchema.safeParse({
+      ...capability,
+      maxNumFrames: FEDERATED_MEDIA_MAX_VIDEO_FRAMES + 1,
+    }).success).toBe(false);
   });
 
   it('validates an older provider payload omitting the frame and canvas constraint fields', () => {

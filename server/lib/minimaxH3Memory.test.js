@@ -13,6 +13,7 @@ import {
 } from './minimaxH3Memory.js';
 
 const MLX_SPEC = MINIMAX_H3_MEMORY_PROFILES.minimax_h3_8bit;
+const REF2VA_SPEC = MINIMAX_H3_MEMORY_PROFILES.minimax_h3_ref2va_8bit;
 const CUDA_SPEC = MINIMAX_H3_MEMORY_PROFILES.minimax_h3_cuda;
 
 const mlxEntry = (overrides = {}) => ({
@@ -29,6 +30,13 @@ const cudaEntry = (overrides = {}) => ({
   ...overrides,
 });
 
+const ref2vaEntry = (overrides = {}) => ({
+  id: 'minimax_h3_ref2va_8bit',
+  repo: REF2VA_SPEC.shippedRepo,
+  revision: REF2VA_SPEC.shippedRevision,
+  ...overrides,
+});
+
 const decorated = (entry) => applyMiniMaxH3MemoryProfiles([entry])[0];
 
 describe('applyMiniMaxH3MemoryProfiles', () => {
@@ -38,6 +46,11 @@ describe('applyMiniMaxH3MemoryProfiles', () => {
     expect(next).not.toBe(entry);
     expect(entry).not.toHaveProperty('memoryProfiles');
     expect(next.memoryProfiles).toEqual([...MLX_SPEC.profiles]);
+  });
+
+  it('attaches the Ref2VA profile only to its pinned weights', () => {
+    expect(decorated(ref2vaEntry()).memoryProfiles).toEqual([...REF2VA_SPEC.profiles]);
+    expect(decorated(ref2vaEntry({ revision: 'deadbeef' }))).not.toHaveProperty('memoryProfiles');
   });
 
   it('leaves an explicit user value alone, including a deliberate empty list', () => {
@@ -74,6 +87,12 @@ describe('selectMiniMaxH3MemoryProfile', () => {
     expect(selectMiniMaxH3MemoryProfile({ model, totalMemoryGb: 127 }).profile).toBeNull();
   });
 
+  it('enforces the shipped Ref2VA 128 GB floor', () => {
+    const model = decorated(ref2vaEntry());
+    expect(selectMiniMaxH3MemoryProfile({ model, totalMemoryGb: 128 }).profile.id).toBe('unified-8bit');
+    expect(selectMiniMaxH3MemoryProfile({ model, totalMemoryGb: 96 }).profile).toBeNull();
+  });
+
   it('defers to the runner when the host was not measured', () => {
     // "Probe returned nothing" is not "this box has no memory" — an unmeasured
     // host gets the best profile unjudged rather than a refusal.
@@ -95,6 +114,15 @@ describe('miniMaxH3MemoryDeclineReason', () => {
     expect(reason.message).toContain('64 GB');
   });
 
+  it('refuses Ref2VA before spawn when the measured host is below its floor', () => {
+    const reason = miniMaxH3MemoryDeclineReason({
+      model: decorated(ref2vaEntry({ name: 'MiniMax H3 Ref2VA MLX 8-bit' })),
+      totalMemoryGb: 96,
+    });
+    expect(reason).toMatchObject({ code: 'MINIMAX_H3_MEMORY_INSUFFICIENT' });
+    expect(reason.message).toContain('128 GB');
+  });
+
   it('stays null for a box that fits, an unmeasured host, and a model with no table', () => {
     const model = decorated(cudaEntry());
     expect(miniMaxH3MemoryDeclineReason({ model, totalMemoryGb: 256 })).toBeNull();
@@ -107,7 +135,9 @@ describe('validateMiniMaxH3MemoryProfileTable / sanitize', () => {
   const problemFor = (memoryProfiles) => validateMiniMaxH3MemoryProfileTable([{ id: 'x', memoryProfiles }])[0];
 
   it('accepts the shipped table and absent/null keys', () => {
-    expect(validateMiniMaxH3MemoryProfileTable(applyMiniMaxH3MemoryProfiles([mlxEntry(), cudaEntry()]))).toEqual([]);
+    expect(validateMiniMaxH3MemoryProfileTable(
+      applyMiniMaxH3MemoryProfiles([mlxEntry(), ref2vaEntry(), cudaEntry()]),
+    )).toEqual([]);
     expect(validateMiniMaxH3MemoryProfileTable([{ id: 'x' }, { id: 'y', memoryProfiles: null }])).toEqual([]);
   });
 

@@ -16,7 +16,7 @@
             "url": "https://pypi.org/project/mlx-video-with-audio/"
           },
           "estimatedDownloadGb": 53.5,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         }
       },
       {
@@ -33,7 +33,7 @@
             "url": "https://pypi.org/project/mlx-video-with-audio/"
           },
           "estimatedDownloadGb": 22.8,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         }
       },
       {
@@ -54,7 +54,7 @@
             "url": "https://github.com/dgrauet/ltx-2-mlx/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 59.7,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         }
       },
       {
@@ -75,7 +75,7 @@
             "url": "https://github.com/dgrauet/ltx-2-mlx/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 87.5,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         }
       },
       {
@@ -100,7 +100,7 @@
             "url": "https://github.com/MrMoferFRAN/ltx-2-mlx/blob/57952288076766abe27dda3a774b2c24f7346977/LICENSE"
           },
           "estimatedDownloadGb": 67.7,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         },
         "speedProfiles": [
           {
@@ -249,7 +249,7 @@
             "url": "https://github.com/PipeNetwork/minimax-h3-mlx/blob/fcd9e9b79a1d6018d91ac477c0968de1fa067e49/LICENSE"
           },
           "estimatedDownloadGb": 103.3,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         },
         "termsGate": {
           "id": "minimax-h3-community-license-2026-08-02",
@@ -354,7 +354,7 @@
             "url": "https://github.com/sawfwair/mere-run/blob/v0.47.0/LICENSE"
           },
           "estimatedDownloadGb": 70.9,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         },
         "termsGate": {
           "id": "minimax-h3-community-license-2026-08-02",
@@ -368,7 +368,17 @@
             "Republic of Korea",
             "United States of America"
           ]
-        }
+        },
+        "memoryProfiles": [
+          {
+            "id": "unified-8bit",
+            "name": "Unified 8-bit Ref2VA",
+            "description": "8-bit Ref2VA weights and conditioning components resident in Apple unified memory.",
+            "minMemoryGb": 128,
+            "minVramGb": null,
+            "unified": true
+          }
+        ]
       },
       {
         "id": "wan22_ti2v_5b",
@@ -402,7 +412,7 @@
             "url": "https://github.com/lpalbou/mlx-gen/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 18.2,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         }
       },
       {
@@ -437,7 +447,7 @@
             "url": "https://github.com/lpalbou/mlx-gen/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 42.4,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         }
       },
       {
@@ -472,7 +482,7 @@
             "url": "https://github.com/lpalbou/mlx-gen/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 42.4,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         }
       },
       {
@@ -522,7 +532,7 @@
             "url": "https://github.com/lpalbou/mlx-gen/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 44.9,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         },
         "finishModelId": "wan22_t2v_a14b"
       },
@@ -573,7 +583,7 @@
             "url": "https://github.com/lpalbou/mlx-gen/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 44.9,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         }
       },
       {
@@ -603,7 +613,7 @@
             "url": "https://github.com/hao-ai-lab/FastVideo/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 3.5,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         }
       },
       {
@@ -633,7 +643,7 @@
             "url": "https://github.com/hao-ai-lab/FastVideo/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 10.2,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         }
       },
       {
@@ -663,7 +673,7 @@
             "url": "https://github.com/hao-ai-lab/FastVideo/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 25.4,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         }
       }
     ],
@@ -679,7 +689,7 @@
             "name": "Apache-2.0",
             "url": "https://github.com/huggingface/diffusers/blob/main/LICENSE"
           },
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         }
       },
       {
@@ -830,7 +840,7 @@
             "url": "https://github.com/huggingface/diffusers/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 144.1,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         },
         "termsGate": {
           "id": "minimax-h3-community-license-2026-08-02",

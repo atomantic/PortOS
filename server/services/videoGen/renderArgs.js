@@ -607,7 +607,7 @@ const buildWan22Args = ({ model, wanModelPath, wanRequiredWeights, prompt, negat
   return { bin: WAN22_VENV_PYTHON, args };
 };
 
-// Everything both H3 builders must clear before they start assembling argv:
+// Everything every H3 builder must clear before it starts assembling argv:
 // the venv is installed, the mode/source combination is legal, H3's fixed
 // controls were not overridden, and the entry carries its pin. The two lanes
 // had carried byte-identical copies of all four — the same shape that put the
@@ -654,7 +654,7 @@ const assertMiniMaxH3Preflight = ({
   if (memoryDecline) throw new ServerError(memoryDecline.message, { status: 400, code: memoryDecline.code });
 };
 
-// The capacity contract both H3 runners are handed: the host floor below which
+// The capacity contract every H3 runner is handed: the host floor below which
 // NO declared placement profile can run, and the reserve PortOS holds back for
 // the OS. Sent as argv rather than left to each runner's own constants so the
 // server-side gate above and the runner-side enforcement cannot state different

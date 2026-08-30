@@ -11,7 +11,16 @@ const SETUP_SCRIPT = join(REPO_ROOT, 'scripts', 'setup-image-video.sh');
 const source = readFileSync(SETUP_SCRIPT, 'utf8');
 const helper = source.match(/^venv_python\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
 const existsHelper = source.match(/^venv_exists\(\) \{.*\}\n/m)?.[0];
+const pythonRequiredHelper = source.match(/^python_required\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
 const tempVenvs = [];
+const installFlags = [
+  'INSTALL_MFLUX', 'INSTALL_VIDEO', 'INSTALL_LTX2', 'INSTALL_LTX25',
+  'INSTALL_FASTVIDEO', 'INSTALL_WAN22', 'INSTALL_MINIMAX_H3',
+  'INSTALL_MERERUN', 'INSTALL_MINIMAX_H3_CUDA', 'INSTALL_MUSICGEN',
+  'INSTALL_AUDIOLDM2', 'INSTALL_ACESTEP', 'INSTALL_ACESTEP15',
+  'INSTALL_MINIMAX_MUSIC3', 'INSTALL_MINIMAX_MUSIC3_MLX',
+  'INSTALL_MUSCRIPTOR', 'INSTALL_FLUX2',
+];
 
 afterEach(() => {
   while (tempVenvs.length) rmSync(tempVenvs.pop(), { recursive: true, force: true });
@@ -38,6 +47,16 @@ function venvExists(venv) {
     'bash',
     ['-c', `${existsHelper}\nvenv_exists "$1" && echo yes || echo no`, 'bash', venv],
     { encoding: 'utf8' }
+  ).trim();
+  return result === 'yes';
+}
+
+function pythonRequired(env = {}) {
+  const installEnv = Object.fromEntries(installFlags.map((name) => [name, '0']));
+  const result = execFileSync(
+    'bash',
+    ['-c', `${pythonRequiredHelper}\npython_required && echo yes || echo no`],
+    { encoding: 'utf8', env: { ...process.env, ...installEnv, ...env } },
   ).trim();
   return result === 'yes';
 }
@@ -72,6 +91,22 @@ describe('setup-image-video venv layout handling (issue #4200)', () => {
 
   it('defines the shared venv-exists predicate', () => {
     expect(existsHelper).toBeTruthy();
+  });
+
+  it('requires no Python only for an explicit mere.run-only install', () => {
+    expect(pythonRequiredHelper).toBeTruthy();
+    expect(pythonRequired({ INSTALL_MERERUN: '1' })).toBe(false);
+    expect(pythonRequired({ INSTALL_MERERUN: '1', INSTALL_LTX25: '1' })).toBe(true);
+    expect(pythonRequired({ INSTALL_MERERUN: '0' })).toBe(true);
+  });
+
+  it('requires both ffmpeg tools before reporting a mere.run install ready', () => {
+    const strictGate = source.match(
+      /if \[\[ "\$INSTALL_MERERUN" == "1" \]\]; then\n  MISSING_REF2VA_TOOLS=\(\)\n(?:.*\n)*?^fi$/m,
+    )?.[0];
+    expect(strictGate).toContain('for command_name in ffmpeg ffprobe');
+    expect(strictGate).toContain('exit 1');
+    expect(source).toContain('not required for this mere.run-only install');
   });
 
   // Windows CI runs Node directly; these bash-execution checks are POSIX-only,

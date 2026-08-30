@@ -60,13 +60,20 @@ export default {
     const mlxEntries = readVideoBucket(config?.video, VIDEO_BUCKET_MLX);
     if (!Array.isArray(mlxEntries)) return;
 
+    const shipped = readVideoBucket(config?._shippedDefaults?.video, VIDEO_BUCKET_MLX);
+    const wasAlreadyShipped = Array.isArray(shipped)
+      && shipped.includes(MINIMAX_H3_REF2VA_ENTRY.id);
+    let present = mlxEntries.some((entry) => entry?.id === MINIMAX_H3_REF2VA_ENTRY.id);
     let changed = false;
-    if (!mlxEntries.some((entry) => entry?.id === MINIMAX_H3_REF2VA_ENTRY.id)) {
+    // A recorded-but-missing built-in is an intentional user deletion. This
+    // matters when a lost/corrupt migrations ledger replays the migration:
+    // never resurrect a model the install already received and removed.
+    if (!present && !wasAlreadyShipped) {
       mlxEntries.push(structuredClone(MINIMAX_H3_REF2VA_ENTRY));
+      present = true;
       changed = true;
     }
-    const shipped = readVideoBucket(config?._shippedDefaults?.video, VIDEO_BUCKET_MLX);
-    if (Array.isArray(shipped) && !shipped.includes(MINIMAX_H3_REF2VA_ENTRY.id)) {
+    if (Array.isArray(shipped) && present && !wasAlreadyShipped) {
       shipped.push(MINIMAX_H3_REF2VA_ENTRY.id);
       changed = true;
     }

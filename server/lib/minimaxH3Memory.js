@@ -111,6 +111,25 @@ export const MINIMAX_H3_MEMORY_PROFILES = Object.freeze({
       }),
     ]),
   }),
+  // Sawfwair's Ref2VA MLX port uses the same unified-memory placement shape:
+  // one quantized DiT plus its conditioner and VAEs stay resident together.
+  // The 128 GB floor is the shipped entry's existing `memoryGb` requirement,
+  // hoisted here so render preflight enforces it rather than merely displaying
+  // it on the model card.
+  minimax_h3_ref2va_8bit: Object.freeze({
+    shippedRepo: 'Sawfwair/MiniMax-H3-Ref2VA-MLX-8bit',
+    shippedRevision: '61dc387ef1a7166425cdacd63c2340598dcc364f',
+    profiles: Object.freeze([
+      Object.freeze({
+        id: 'unified-8bit',
+        name: 'Unified 8-bit Ref2VA',
+        description: '8-bit Ref2VA weights and conditioning components resident in Apple unified memory.',
+        minMemoryGb: 128,
+        minVramGb: null,
+        unified: true,
+      }),
+    ]),
+  }),
   // diffusers' MiniMaxH3ModularPipeline on NVIDIA. The three recipes and their
   // thresholds are `resolve_offload_profile()`'s own, moved here so the server
   // can preflight them and the runner can fail closed on the same table instead

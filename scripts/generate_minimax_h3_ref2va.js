@@ -2,9 +2,58 @@
 
 import { spawn } from 'child_process';
 import { mkdtemp, rm } from 'fs/promises';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { tmpdir } from 'os';
+import { fileURLToPath } from 'url';
 import { planRef2vaAudioSegments } from '../server/services/videoGen/ref2vaPlan.js';
+
+export const MAX_REF2VA_XFADE_INPUTS = 8;
+
+let activeChild = null;
+let cancellationSignal = null;
+
+const signalChildGroup = (child, signal) => {
+  if (!child?.pid) return;
+  try {
+    if (process.platform !== 'win32') process.kill(-child.pid, signal);
+    else child.kill(signal);
+  } catch {
+    try { child.kill(signal); } catch { /* child already exited */ }
+  }
+};
+
+const requestCancellation = (signal) => {
+  cancellationSignal ||= signal;
+  signalChildGroup(activeChild, signal);
+};
+
+const installCancellationHandlers = () => {
+  const onTerm = () => requestCancellation('SIGTERM');
+  const onInterrupt = () => requestCancellation('SIGINT');
+  process.on('SIGTERM', onTerm);
+  process.on('SIGINT', onInterrupt);
+  return () => {
+    process.off('SIGTERM', onTerm);
+    process.off('SIGINT', onInterrupt);
+  };
+};
+
+const spawnTracked = (bin, args) => {
+  if (cancellationSignal) throw new Error(`Cancelled by ${cancellationSignal}`);
+  // Each expensive child leads its own process group. The detached-job parent
+  // may only be able to signal this wrapper PID on macOS; the handlers above
+  // forward that cancellation to the active child and every descendant it
+  // spawned (mere.run and ffmpeg included).
+  const child = spawn(bin, args, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: process.platform !== 'win32',
+  });
+  activeChild = child;
+  child.once('close', () => {
+    if (activeChild === child) activeChild = null;
+  });
+  return child;
+};
 
 const parseArgs = (argv) => {
   const out = {};
@@ -18,7 +67,13 @@ const parseArgs = (argv) => {
 };
 
 const run = (bin, args, { forwardOutput = false } = {}) => new Promise((resolve, reject) => {
-  const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+  let child;
+  try {
+    child = spawnTracked(bin, args);
+  } catch (err) {
+    reject(err);
+    return;
+  }
   let stderr = '';
   child.stdout.on('data', (chunk) => {
     if (forwardOutput) process.stderr.write(chunk);
@@ -29,7 +84,8 @@ const run = (bin, args, { forwardOutput = false } = {}) => new Promise((resolve,
   });
   child.on('error', reject);
   child.on('close', (code, signal) => {
-    if (code === 0) resolve();
+    if (cancellationSignal) reject(new Error(`Cancelled by ${cancellationSignal}`));
+    else if (code === 0) resolve();
     else reject(new Error(`${bin} ${signal ? `was killed by ${signal}` : `exited ${code}`}: ${stderr.trim()}`));
   });
 });
@@ -37,21 +93,92 @@ const run = (bin, args, { forwardOutput = false } = {}) => new Promise((resolve,
 const probeDuration = (ffprobe, path) => new Promise((resolve, reject) => {
   let stdout = '';
   let stderr = '';
-  const child = spawn(ffprobe, [
-    '-v', 'error', '-show_entries', 'format=duration',
-    '-of', 'default=noprint_wrappers=1:nokey=1', path,
-  ], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let child;
+  try {
+    child = spawnTracked(ffprobe, [
+      '-v', 'error', '-show_entries', 'format=duration',
+      '-of', 'default=noprint_wrappers=1:nokey=1', path,
+    ]);
+  } catch (err) {
+    reject(err);
+    return;
+  }
   child.stdout.on('data', (chunk) => { stdout += chunk; });
   child.stderr.on('data', (chunk) => { stderr = `${stderr}${chunk}`.slice(-4096); });
   child.on('error', reject);
   child.on('close', (code) => {
     const duration = Number(stdout.trim());
-    if (code === 0 && Number.isFinite(duration) && duration > 0) resolve(duration);
+    if (cancellationSignal) reject(new Error(`Cancelled by ${cancellationSignal}`));
+    else if (code === 0 && Number.isFinite(duration) && duration > 0) resolve(duration);
     else reject(new Error(`ffprobe could not read source audio duration: ${stderr.trim()}`));
   });
 });
 
 const decimals = (value) => Number(value).toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
+
+/**
+ * Compose timeline-positioned clips with a bounded fan-in. A single ffmpeg
+ * graph over every Ref2VA window eventually exceeds macOS' descriptor limit;
+ * grouping at most eight inputs per pass makes supported duration independent
+ * of that process limit while re-encoding each frame only O(log n) times.
+ */
+export const composeRef2vaSegments = async ({
+  ffmpeg,
+  workDir,
+  pieces,
+  runCommand = run,
+  maxInputs = MAX_REF2VA_XFADE_INPUTS,
+}) => {
+  if (!Array.isArray(pieces) || pieces.length === 0) {
+    throw new TypeError('pieces must contain at least one video');
+  }
+  if (!Number.isInteger(maxInputs) || maxInputs < 2) {
+    throw new TypeError('maxInputs must be an integer of at least 2');
+  }
+
+  let level = 0;
+  let pending = pieces.map((piece) => ({ ...piece }));
+  while (pending.length > 1) {
+    const next = [];
+    for (let offset = 0; offset < pending.length; offset += maxInputs) {
+      const batch = pending.slice(offset, offset + maxInputs);
+      if (batch.length === 1) {
+        next.push(batch[0]);
+        continue;
+      }
+
+      const outputPath = join(workDir, `joined-${level}-${offset / maxInputs}.mp4`);
+      const origin = batch[0].startSeconds;
+      const filterSteps = batch.map((_, index) => (
+        `[${index}:v]settb=AVTB,setpts=PTS-STARTPTS[piece${index}]`
+      ));
+      let currentLabel = 'piece0';
+      let currentEnd = batch[0].endSeconds;
+      for (let index = 1; index < batch.length; index += 1) {
+        const piece = batch[index];
+        const overlap = currentEnd - piece.startSeconds;
+        if (!(overlap > 0)) throw new Error('Ref2VA video pieces must overlap for continuity');
+        const nextLabel = `joined${index}`;
+        filterSteps.push(
+          `[${currentLabel}][piece${index}]xfade=transition=fade:duration=${decimals(overlap)}:offset=${decimals(piece.startSeconds - origin)}[${nextLabel}]`,
+        );
+        currentLabel = nextLabel;
+        currentEnd = Math.max(currentEnd, piece.endSeconds);
+      }
+      await runCommand(ffmpeg, [
+        '-v', 'error', ...batch.flatMap((piece) => ['-i', piece.path]),
+        '-filter_complex', filterSteps.join(';'), '-map', `[${currentLabel}]`,
+        '-an', '-c:v', 'libx264', '-preset', 'medium', '-crf', '18',
+        '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-y', outputPath,
+      ]);
+      await Promise.all(batch.map((piece) => rm(piece.path, { force: true })));
+      next.push({ path: outputPath, startSeconds: origin, endSeconds: currentEnd });
+    }
+    pending = next;
+    level += 1;
+  }
+  return pending[0].path;
+};
 
 const main = async () => {
   const args = parseArgs(process.argv.slice(2));
@@ -65,7 +192,7 @@ const main = async () => {
   const segments = planRef2vaAudioSegments(sourceDuration, { startSeconds: audioStart });
   const workDir = await mkdtemp(join(tmpdir(), 'portos-h3-ref2va-'));
   let currentImage = args.image;
-  const segmentVideos = [];
+  const segmentPieces = [];
 
   process.stderr.write(`RUNTIME:${JSON.stringify({ runtime: 'minimax_h3_ref2va', versions: { 'mere.run': '0.47.0' } })}\n`);
   process.stderr.write(`STATUS:Planning ${segments.length} continuity-linked audio window${segments.length === 1 ? '' : 's'} for ${decimals(sourceDuration - audioStart)} seconds\n`);
@@ -123,7 +250,14 @@ const main = async () => {
         '-an', '-c:v', 'libx264', '-preset', 'medium', '-crf', '18',
         '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-y', timelineVideoPath,
       ]);
-      segmentVideos.push(timelineVideoPath);
+      const timelineStart = segment.index === 0
+        ? segment.startSeconds
+        : segment.referenceStartSeconds;
+      segmentPieces.push({
+        path: timelineVideoPath,
+        startSeconds: timelineStart,
+        endSeconds: timelineStart + Number(timelineDuration),
+      });
 
       if (displayIndex < segments.length) {
         await run(args.ffmpeg, [
@@ -135,33 +269,11 @@ const main = async () => {
     }
 
     process.stderr.write('STAGE:ref2va-mux\n');
-    const concatenated = join(workDir, 'concatenated.mp4');
-    if (segmentVideos.length === 1) {
-      await run(args.ffmpeg, [
-        '-v', 'error', '-i', segmentVideos[0], '-an', '-c:v', 'copy', '-y', concatenated,
-      ]);
-    } else {
-      const inputArgs = segmentVideos.flatMap((path) => ['-i', path]);
-      const filterSteps = segmentVideos.map((_, index) => (
-        `[${index}:v]settb=AVTB,setpts=PTS-STARTPTS[segment${index}]`
-      ));
-      let currentLabel = 'segment0';
-      for (let index = 1; index < segmentVideos.length; index += 1) {
-        const segment = segments[index];
-        const nextLabel = `joined${index}`;
-        const offset = decimals(segment.referenceStartSeconds - audioStart);
-        filterSteps.push(
-          `[${currentLabel}][segment${index}]xfade=transition=fade:duration=${decimals(segment.trimStartSeconds)}:offset=${offset}[${nextLabel}]`,
-        );
-        currentLabel = nextLabel;
-      }
-      await run(args.ffmpeg, [
-        '-v', 'error', ...inputArgs,
-        '-filter_complex', filterSteps.join(';'), '-map', `[${currentLabel}]`,
-        '-an', '-c:v', 'libx264', '-preset', 'medium', '-crf', '18',
-        '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-y', concatenated,
-      ]);
-    }
+    const concatenated = await composeRef2vaSegments({
+      ffmpeg: args.ffmpeg,
+      workDir,
+      pieces: segmentPieces,
+    });
 
     const finalDuration = decimals(sourceDuration - audioStart);
     await run(args.ffmpeg, [
@@ -178,7 +290,10 @@ const main = async () => {
   }
 };
 
-main().catch((err) => {
-  process.stderr.write(`ERROR:${err.message}\n`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+  const removeCancellationHandlers = installCancellationHandlers();
+  main().catch((err) => {
+    process.stderr.write(`ERROR:${err.message}\n`);
+    process.exitCode = 1;
+  }).finally(removeCancellationHandlers);
+}

@@ -38,4 +38,23 @@ describe('317-minimax-h3-ref2va migration', () => {
     await migration.up({ rootDir });
     expect(readFileSync(join(rootDir, 'data', 'media-models.json'), 'utf-8')).toBe(firstPass);
   });
+
+  it('does not resurrect an intentionally deleted shipped model on ledger replay', async () => {
+    const path = join(rootDir, 'data', 'media-models.json');
+    const initial = {
+      video: { mlx: [{ id: 'ltx23_unified' }], cuda: [] },
+      _shippedDefaults: {
+        video: { mlx: ['ltx23_unified', MINIMAX_H3_REF2VA_ENTRY.id] },
+      },
+    };
+    writeFileSync(path, JSON.stringify(initial));
+    const before = readFileSync(path, 'utf-8');
+
+    await migration.up({ rootDir });
+
+    expect(readFileSync(path, 'utf-8')).toBe(before);
+    expect(JSON.parse(before).video.mlx).not.toContainEqual(
+      expect.objectContaining({ id: MINIMAX_H3_REF2VA_ENTRY.id }),
+    );
+  });
 });

@@ -13,7 +13,10 @@
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
-import { FEDERATED_MEDIA_WIRE_VERSION } from '../../lib/federatedMediaWire.js';
+import {
+  FEDERATED_MEDIA_MAX_VIDEO_FRAMES,
+  FEDERATED_MEDIA_WIRE_VERSION,
+} from '../../lib/federatedMediaWire.js';
 import { federatedMediaVideoJobSubmissionBaseSchema } from '../../lib/validation.js';
 import { inputAssetRejection } from './inputAssets.js';
 
@@ -44,8 +47,13 @@ export function negotiateVideoConstraints(request, capability) {
         console.log(`🌐 Federated render: adjusted fps from ${requestedFps} to ${bestFps} for ${capability.modelName || capability.modelId}`);
         // Rescale frame count to preserve clip duration (matches local reconciler)
         if (negotiated.numFrames !== undefined && Number.isFinite(Number(negotiated.numFrames)) && requestedFps > 0) {
-          const maxNumFrames = capability.maxNumFrames != null ? Number(capability.maxNumFrames) : 600;
-          const maxAllowed = Math.min(600, maxNumFrames > 0 ? maxNumFrames : 600);
+          const maxNumFrames = capability.maxNumFrames != null
+            ? Number(capability.maxNumFrames)
+            : FEDERATED_MEDIA_MAX_VIDEO_FRAMES;
+          const maxAllowed = Math.min(
+            FEDERATED_MEDIA_MAX_VIDEO_FRAMES,
+            maxNumFrames > 0 ? maxNumFrames : FEDERATED_MEDIA_MAX_VIDEO_FRAMES,
+          );
           const rescaledFrames = Math.min(maxAllowed, Math.max(1, Math.round((Number(negotiated.numFrames) / requestedFps) * bestFps)));
           negotiated = { ...negotiated, numFrames: rescaledFrames };
         }
@@ -68,7 +76,10 @@ export function negotiateVideoConstraints(request, capability) {
       const maxNumFrames = capability.maxNumFrames != null ? Number(capability.maxNumFrames) : null;
       const validOptions = capability.frameOptions
         .map(Number)
-        .filter((opt) => Number.isInteger(opt) && opt >= 1 && opt <= 600 && (maxNumFrames === null || opt <= maxNumFrames))
+        .filter((opt) => Number.isInteger(opt)
+          && opt >= 1
+          && opt <= FEDERATED_MEDIA_MAX_VIDEO_FRAMES
+          && (maxNumFrames === null || opt <= maxNumFrames))
         .sort((a, b) => a - b);
       if (validOptions.length === 0) {
         throw new ServerError(

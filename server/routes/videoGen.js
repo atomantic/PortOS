@@ -65,7 +65,10 @@ import { saveUploadedGalleryVideo } from '../services/videoUpload.js';
 import { JSON_BODY_LIMIT_BYTES } from '../lib/uploadLimits.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';
 import { collectRemoteInputAssets } from '../services/federatedMedia/inputAssets.js';
-import { effectiveJobPrompt } from '../lib/federatedMediaWire.js';
+import {
+  FEDERATED_MEDIA_MAX_VIDEO_FRAMES,
+  effectiveJobPrompt,
+} from '../lib/federatedMediaWire.js';
 import { isRemoteMediaJob } from '../services/mediaJobQueue/remoteMediaJob.js';
 import { buildFederatedMediaRequest } from '../lib/federatedMediaRequest.js';
 import {
@@ -179,7 +182,7 @@ const listPreprocess = (v) => {
 // together so Grok eligibility and request validation cannot drift when a new
 // local-only knob is added.
 export const LOCAL_ONLY_VIDEO_PARAMS = Object.freeze({
-  numFrames: optionalInt(1, 1024, 'numFrames'),
+  numFrames: optionalInt(1, FEDERATED_MEDIA_MAX_VIDEO_FRAMES, 'numFrames'),
   fps: optionalNum(1, 60, 'fps'),
   steps: optionalNum(1, 200, 'steps'),
   guidanceScale: optionalNum(0, 30, 'guidanceScale'),

@@ -75,6 +75,16 @@ venv_python() {
 # shared with venv_python so the two probes can't drift apart.
 venv_exists() { [[ -x "$1/bin/python3" || -x "$1/Scripts/python.exe" ]]; }
 
+# mere.run is a signed native binary and is the one setup path that does not
+# need Python. Keep the bare-script default and every mixed install strict: only
+# an explicit INSTALL_MERERUN=1 request with no other runtime selected may run
+# on a machine without Python.
+python_required() {
+  local non_mere_requests
+  non_mere_requests="${INSTALL_MFLUX:-0}${INSTALL_VIDEO:-0}${INSTALL_LTX2:-0}${INSTALL_LTX25:-0}${INSTALL_FASTVIDEO:-0}${INSTALL_WAN22:-0}${INSTALL_MINIMAX_H3:-0}${INSTALL_MINIMAX_H3_CUDA:-0}${INSTALL_MUSICGEN:-0}${INSTALL_AUDIOLDM2:-0}${INSTALL_ACESTEP:-0}${INSTALL_ACESTEP15:-0}${INSTALL_MINIMAX_MUSIC3:-0}${INSTALL_MINIMAX_MUSIC3_MLX:-0}${INSTALL_MUSCRIPTOR:-0}${INSTALL_FLUX2:-0}"
+  [[ "${INSTALL_MERERUN:-0}" != "1" || "$non_mere_requests" == *[!0]* ]]
+}
+
 # Check out a pin (a commit SHA, tag, or branch name) in an already-fetched
 # clone. A bare `git checkout <branch>` lands on the *local* branch created at
 # clone time, which `git fetch origin` never advances — so re-running with a
@@ -91,7 +101,7 @@ git_checkout_pin() {
   fi
 }
 
-if ! have "$PYTHON_BIN"; then
+if python_required && ! have "$PYTHON_BIN"; then
   echo "❌ $PYTHON_BIN not found. Install Python 3.10+ first." >&2
   exit 1
 fi
@@ -986,8 +996,9 @@ if [[ "$INSTALL_FLUX2" == "1" ]]; then
   fi
 fi
 
-# ffmpeg — required for thumbnails, last-frame extraction, and stitch.
-if ! have ffmpeg; then
+# ffmpeg — required for thumbnails, last-frame extraction, stitch, and the
+# Ref2VA continuity wrapper. Its distribution also provides ffprobe.
+if ! have ffmpeg || ! have ffprobe; then
   if is_macos && have brew; then
     echo "📦 brew install ffmpeg"
     brew install ffmpeg
@@ -996,10 +1007,26 @@ if ! have ffmpeg; then
   fi
 fi
 
-PYTHON_PATH="$(command -v "$PYTHON_BIN")"
+if [[ "$INSTALL_MERERUN" == "1" ]]; then
+  MISSING_REF2VA_TOOLS=()
+  for command_name in ffmpeg ffprobe; do
+    if ! have "$command_name"; then MISSING_REF2VA_TOOLS+=("$command_name"); fi
+  done
+  if (( ${#MISSING_REF2VA_TOOLS[@]} > 0 )); then
+    echo "❌ MiniMax H3 Ref2VA requires both ffmpeg and ffprobe; missing: ${MISSING_REF2VA_TOOLS[*]}." >&2
+    echo "   Install ffmpeg (for example, 'brew install ffmpeg') and retry from the Video Gen runtime panel." >&2
+    exit 1
+  fi
+fi
+
 echo ""
 echo "✅ Image/video stack ready."
-echo "   Python:    $PYTHON_PATH"
+if python_required; then
+  PYTHON_PATH="$(command -v "$PYTHON_BIN")"
+  echo "   Python:    $PYTHON_PATH"
+else
+  echo "   Python:    not required for this mere.run-only install"
+fi
 echo "   HF cache:  ~/.cache/huggingface (HF default)"
 echo "   LoRAs:     ${PORTOS_DATA}/loras"
 echo "   Videos:    ${PORTOS_DATA}/videos"

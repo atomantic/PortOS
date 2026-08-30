@@ -88,7 +88,9 @@ export default function AudioPanel({
         {audioDurationDriven
           ? (arbitraryLengthAudio
             ? `Video duration follows the audio. PortOS renders continuity-linked windows of up to ${maxReferenceAudioSeconds}s, then preserves the full source audio on the final video.`
-            : `Video duration follows the selected audio and snaps up to ${numFrames} frames on the model's temporal grid${maxDurationSeconds != null ? ` (up to ${maxDurationSeconds.toFixed(1)}s)` : ''}.`)
+            : (durationError
+              ? `Video duration follows the selected audio and snaps to the model's temporal grid${maxDurationSeconds != null ? `, with up to ${maxDurationSeconds.toFixed(1)}s supported per render` : ''}.`
+              : `Video duration follows the selected audio and snaps up to ${numFrames} frames on the model's temporal grid${maxDurationSeconds != null ? ` (up to ${maxDurationSeconds.toFixed(1)}s)` : ''}.`))
           : `Audio length should match ${(numFrames / fps).toFixed(1)}s (frames ÷ fps). Longer clips are trimmed to fit; shorter clips fail.`}
       </p>
       {durationError && <p className="text-[11px] text-port-error leading-snug">{durationError}</p>}

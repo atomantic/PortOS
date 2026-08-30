@@ -1,10 +1,14 @@
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { promisify } from 'util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
+import {
+  composeRef2vaSegments,
+  MAX_REF2VA_XFADE_INPUTS,
+} from '../../../scripts/generate_minimax_h3_ref2va.js';
 
 const execFileAsync = promisify(execFile);
 const WRAPPER = join(process.cwd(), '..', 'scripts', 'generate_minimax_h3_ref2va.js');
@@ -13,6 +17,7 @@ describe('MiniMax H3 Ref2VA arbitrary-length wrapper', () => {
   let root;
   let ffmpeg;
   let ffprobe;
+  let wrapperProcess;
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'portos-ref2va-wrapper-test-'));
@@ -21,8 +26,85 @@ describe('MiniMax H3 Ref2VA arbitrary-length wrapper', () => {
   });
 
   afterEach(async () => {
+    if (wrapperProcess && wrapperProcess.exitCode == null && wrapperProcess.signalCode == null) {
+      wrapperProcess.kill('SIGKILL');
+    }
     await rm(root, { recursive: true, force: true });
   });
+
+  it('keeps each xfade pass below a bounded input count for long timelines', async () => {
+    const calls = [];
+    const pieces = Array.from({ length: 65 }, (_, index) => ({
+      path: join(root, `segment-${index}.mp4`),
+      startSeconds: index === 0 ? 0 : index * 12,
+      endSeconds: (index === 0 ? 0 : index * 12) + 15,
+    }));
+
+    await composeRef2vaSegments({
+      ffmpeg: '/mock/ffmpeg',
+      workDir: root,
+      pieces,
+      runCommand: async (_bin, args) => { calls.push(args); },
+    });
+
+    expect(calls.length).toBeGreaterThan(1);
+    expect(Math.max(...calls.map((args) => args.filter((arg) => arg === '-i').length)))
+      .toBe(MAX_REF2VA_XFADE_INPUTS);
+  });
+
+  it.skipIf(process.platform === 'win32')('forwards wrapper cancellation to the active runtime process group', async () => {
+    const audio = join(root, 'source.wav');
+    const image = join(root, 'source.png');
+    const output = join(root, 'output.mp4');
+    const runtimePidFile = join(root, 'runtime.pid');
+    const fakeFfmpeg = join(root, 'fake-ffmpeg');
+    const fakeFfprobe = join(root, 'fake-ffprobe');
+    const fakeRuntime = join(root, 'fake-mere-run');
+
+    await Promise.all([
+      writeFile(audio, ''),
+      writeFile(image, ''),
+      writeFile(fakeFfmpeg, '#!/bin/sh\nfor last do :; done\n: > "$last"\n'),
+      writeFile(fakeFfprobe, '#!/bin/sh\nprintf "5\\n"\n'),
+      writeFile(fakeRuntime, '#!/bin/sh\nprintf "%s" "$$" > "$FAKE_RUNTIME_PID_FILE"\ntrap \'exit 143\' TERM INT\nwhile :; do sleep 1; done\n'),
+    ]);
+    await Promise.all([fakeFfmpeg, fakeFfprobe, fakeRuntime].map((path) => chmod(path, 0o755)));
+
+    wrapperProcess = spawn(process.execPath, [
+      WRAPPER,
+      '--runtime-bin', fakeRuntime,
+      '--model-root', root,
+      '--prompt', 'one continuous awakening',
+      '--image', image,
+      '--audio', audio,
+      '--width', '64',
+      '--height', '64',
+      '--fps', '24',
+      '--seed', '17',
+      '--steps', '9',
+      '--ffmpeg', fakeFfmpeg,
+      '--ffprobe', fakeFfprobe,
+      '--output', output,
+    ], {
+      env: { ...process.env, FAKE_RUNTIME_PID_FILE: runtimePidFile },
+      stdio: 'ignore',
+    });
+
+    await vi.waitFor(async () => {
+      expect(Number(await readFile(runtimePidFile, 'utf8'))).toBeGreaterThan(0);
+    }, { timeout: 5000, interval: 25 });
+    const runtimePid = Number(await readFile(runtimePidFile, 'utf8'));
+
+    wrapperProcess.kill('SIGTERM');
+    await vi.waitFor(() => {
+      expect(wrapperProcess.exitCode != null || wrapperProcess.signalCode != null).toBe(true);
+    }, { timeout: 5000, interval: 25 });
+    await vi.waitFor(() => {
+      let alive = true;
+      try { process.kill(runtimePid, 0); } catch { alive = false; }
+      expect(alive).toBe(false);
+    }, { timeout: 5000, interval: 25 });
+  }, 15000);
 
   it('renders and crossfades every <=15s window, carries its last frame, and restores the full source audio', async () => {
     if (!ffmpeg || !ffprobe) return;

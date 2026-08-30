@@ -27,7 +27,7 @@ import { ServerError } from './errorHandler.js';
 
 // Every shipped disclosure was checked against its upstream source on this
 // date. Bump it (and re-check) whenever an entry below changes.
-export const VIDEO_DISCLOSURE_REVIEWED_AT = '2026-08-09';
+export const VIDEO_DISCLOSURE_REVIEWED_AT = '2026-08-30';
 
 // License descriptors reused across entries. `url` points at the primary text
 // of the license, or at the model card when the card declares a custom license
