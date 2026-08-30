@@ -725,6 +725,26 @@ describe('taskSchedule', () => {
       expect(result.promptSource).toBe('user')
     })
 
+    // The prompt editor prefills from the stored body, so "open, click Save" sends
+    // back the CURRENT default verbatim. That must not pin — a pin is checked by
+    // the self-heal only when its provenance is inferred, so a 'user' stamp here
+    // would freeze the type off every future prompt upgrade with no way back.
+    it('should not pin a prompt that is byte-identical to the current default', async () => {
+      const result = await updateTaskInterval('security', {
+        prompt: DEFAULT_TASK_PROMPTS['security']
+      })
+      expect(result.promptCustomized).toBe(false)
+      expect(result.promptSource).toBeNull()
+    })
+
+    // A RETIRED shipped body IS a deliberate choice — the #5432 case.
+    it('should pin a retired shipped default written by the user', async () => {
+      const retired = PREVIOUS_DEFAULT_PROMPTS['security'][0]
+      const result = await updateTaskInterval('security', { prompt: retired })
+      expect(result.promptCustomized).toBe(true)
+      expect(result.promptSource).toBe('user')
+    })
+
     it('should clear promptSource when the prompt is set to null', async () => {
       const result = await updateTaskInterval('security', {
         prompt: null

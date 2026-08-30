@@ -177,9 +177,11 @@ describe('CoS Schedule Routes', () => {
       expect(taskSchedule.updateTaskInterval).not.toHaveBeenCalled();
     });
 
-    // promptSource carries the stored prompt's provenance (#5432). It must reach
-    // updateTaskInterval, or a PUT that round-trips a task config would strip a
-    // user's pin and hand the prompt back to the auto-upgrade.
+    // promptSource carries the stored prompt's provenance (#5432). An explicit
+    // prompt write stamps it server-side, so the allowlist entry exists for the
+    // writes that carry provenance WITHOUT a prompt — restoring a saved config,
+    // or releasing a pin back to the auto-upgrade path without clearing the body.
+    // The enum is validated here so neither can persist an unrecognized value.
     it('forwards a valid promptSource', async () => {
       taskSchedule.updateTaskInterval.mockResolvedValue({ type: 'weekly' });
 
