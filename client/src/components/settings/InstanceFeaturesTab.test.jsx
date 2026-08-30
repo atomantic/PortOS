@@ -143,6 +143,19 @@ describe('InstanceFeaturesTab', () => {
     expect(mock.installEidoverseFeature).not.toHaveBeenCalled();
   });
 
+  it('explains that the Worlds repository is required when the field is cleared', async () => {
+    mock.getInstanceFeatures.mockResolvedValue({ features: [EIDOVERSE_FEATURE] });
+    render(<MemoryRouter><InstanceFeaturesTab /></MemoryRouter>);
+
+    const repoInput = await screen.findByRole('textbox', { name: 'Worlds GitHub repository' });
+    fireEvent.change(repoInput, { target: { value: '' } });
+
+    expect(repoInput).toHaveAttribute('aria-invalid', 'true');
+    expect(repoInput).toHaveAttribute('aria-describedby', 'eidoverse-worlds-repo-error');
+    expect(screen.getByRole('alert')).toHaveTextContent('Enter a GitHub repository URL');
+    expect(screen.getByRole('button', { name: 'Install & enable' })).toBeDisabled();
+  });
+
   it('explains the Bun prerequisite before installation', async () => {
     mock.getInstanceFeatures.mockResolvedValue({
       features: [{ ...EIDOVERSE_FEATURE, setup: { ...EIDOVERSE_FEATURE.setup, bunAvailable: false } }],

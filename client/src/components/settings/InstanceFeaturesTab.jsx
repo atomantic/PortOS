@@ -135,15 +135,17 @@ export function InstanceFeaturesTab() {
                         value={selectedRepoUrl}
                         onChange={(event) => setEidoverseRepoUrl(event.target.value)}
                         disabled={savingId !== null}
-                        aria-invalid={selectedRepoUrl !== '' && !repoIsValid}
+                        aria-invalid={!repoIsValid}
                         aria-describedby={!repoIsValid ? 'eidoverse-worlds-repo-error' : undefined}
                         className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden disabled:opacity-50"
                         placeholder="https://github.com/your-account/eidoverse-worlds"
                       />
                     </label>
-                    {selectedRepoUrl !== '' && !repoIsValid && (
+                    {!repoIsValid && (
                       <p id="eidoverse-worlds-repo-error" role="alert" className="text-port-error">
-                        Enter a valid GitHub repository URL.
+                        {selectedRepoUrl === ''
+                          ? 'Enter a GitHub repository URL.'
+                          : 'Enter a valid GitHub repository URL.'}
                       </p>
                     )}
                     <p>Use your own fork if you want PortOS agents to prepare changes and PRs against it.</p>
