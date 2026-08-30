@@ -53,7 +53,7 @@ import {
   isStockTextEncoder,
 } from '../lib/videoTextEncoders.js';
 import { isDefaultSpeedProfile } from '../lib/videoSpeedProfiles.js';
-import { DRAFT_DECODE_IDS, isFullDecode } from '../lib/videoDraftDecoders.js';
+import { DRAFT_DECODE_IDS, isFullDecode, downloadableVideoDraftDecoders } from '../lib/videoDraftDecoders.js';
 import {
   inspectModelCache, verifyModelCache, repairModelCache, repairCachedFile,
   verifyCachedRepoFiles, repairCachedRepoFiles, summarizeVerify, aggregateVerifies,
@@ -566,6 +566,18 @@ const modelDownloadTargets = (model) => {
     if (typeof dep?.repo !== 'string') continue;
     const only = safeOnlyList(videoModelLabel(model), dep.files, 'required-weight');
     if (only.length > 0) targets.push({ repo: dep.repo, revision: dep.revision || null, only });
+  }
+  // The model's preview-fidelity decoder (#5423), when it declares one. Scoped
+  // to its pinned file for the same reason every other entry here is — and
+  // listed under the MODEL rather than as a standalone target, because it is
+  // useless without the checkpoint it decodes for, so the download badge that
+  // offers it belongs beside that model's own.
+  for (const decoder of downloadableVideoDraftDecoders([model])) {
+    targets.push({
+      repo: decoder.repo,
+      revision: decoder.revision || null,
+      only: safeOnlyList(`Draft decoder "${decoder.id}"`, decoder.files, 'weight-file'),
+    });
   }
   return targets;
 };

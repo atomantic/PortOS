@@ -804,10 +804,11 @@ describe('videoGen routes', () => {
     // A closed enum, unlike textEncoderId/speedProfileId — there is at most one
     // draft decoder per model, so an unknown value is a client bug, not a
     // per-model option the route can't enumerate.
-    it('rejects an unknown draftDecode value', async () => {
-      const r = await request(app).post('/api/video-gen/').send({ prompt: 'a fox', draftDecode: 'turbo' });
+    it.each(['turbo', 'DRAFT', ''])('rejects the draftDecode value %p', async (draftDecode) => {
+      const r = await request(app).post('/api/video-gen/').send({ prompt: 'a fox', draftDecode });
       expect(r.status).toBe(400);
     });
+
 
     it('keeps textEncoderId on the local path under a grok pin, without persisting the stock value', async () => {
       const { getSettings } = await import('../services/settings.js');
