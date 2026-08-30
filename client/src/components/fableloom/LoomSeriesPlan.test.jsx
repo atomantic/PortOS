@@ -17,6 +17,9 @@ vi.mock('../../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn() },
 }));
 vi.mock('../ProviderModelSelector', () => ({ default: () => <div>AI route picker</div> }));
+vi.mock('./LoomEditorialAutomation', () => ({
+  default: () => <div>Editorial automation</div>,
+}));
 
 import * as api from '../../services/api';
 import LoomSeriesPlan from './LoomSeriesPlan';

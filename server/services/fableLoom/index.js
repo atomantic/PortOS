@@ -46,6 +46,21 @@ export {
   validateEpisodeOutline,
 } from './weave.js';
 export {
+  applyFableLoomEditorialPatch,
+  collectFableLoomEditorialDiagnostics,
+  evaluateAndRemediateFableLoom,
+  reviewFableLoomPlaythroughs,
+} from './editorial.js';
+export {
+  FABLELOOM_EDITORIAL_AUTOPILOT_LIMITS,
+  _resetFableLoomEditorialAutopilots,
+  cancelFableLoomEditorialAutopilot,
+  getFableLoomEditorialAutopilot,
+  getLatestFableLoomEditorialAutopilot,
+  publicFableLoomEditorialAutopilot,
+  startFableLoomEditorialAutopilot,
+} from './editorialAutopilot.js';
+export {
   _resetFableLoomBackend,
   isValidLoomId,
   verifySchemaVersion,

@@ -38,6 +38,9 @@ import {
   productionPlanSchema,
   productionBatchCreateSchema,
   continuityReviewSchema,
+  editorialAutopilotStartSchema,
+  editorialRemediateSchema,
+  playthroughReviewSchema,
 } from '../lib/fableLoomValidation.js';
 import { analyzeEpisodeGraph } from '../lib/fableLoomGraph.js';
 import { analyzeSeriesStoryOutlines } from '../lib/fableLoomOutline.js';
@@ -85,6 +88,13 @@ import {
   updateNodeTransition,
   validateEpisodeOutline,
   weaveEpisode,
+  cancelFableLoomEditorialAutopilot,
+  evaluateAndRemediateFableLoom,
+  getFableLoomEditorialAutopilot,
+  getLatestFableLoomEditorialAutopilot,
+  publicFableLoomEditorialAutopilot,
+  reviewFableLoomPlaythroughs,
+  startFableLoomEditorialAutopilot,
 } from '../services/fableLoom/index.js';
 
 const router = Router();
@@ -142,6 +152,47 @@ router.post('/:id/review-teleplay', asyncHandler(async (req, res) => {
 router.post('/:id/plan/feedback', asyncHandler(async (req, res) => {
   const input = validateRequest(seriesPlanFeedbackSchema, req.body);
   res.json(await feedbackSeriesPlan(req.params.id, input));
+}));
+
+// --- Whole-series editorial automation -------------------------------------
+
+router.post('/:id/editorial/remediate', asyncHandler(async (req, res) => {
+  const input = validateRequest(editorialRemediateSchema, req.body ?? {});
+  res.json(await evaluateAndRemediateFableLoom(req.params.id, input));
+}));
+
+router.post('/:id/playtest', asyncHandler(async (req, res) => {
+  const input = validateRequest(playthroughReviewSchema, req.body ?? {});
+  res.json(await reviewFableLoomPlaythroughs(req.params.id, input));
+}));
+
+router.post('/:id/editorial/autopilot/start', asyncHandler(async (req, res) => {
+  const input = validateRequest(editorialAutopilotStartSchema, req.body ?? {});
+  const run = await startFableLoomEditorialAutopilot(req.params.id, input);
+  res.status(run.alreadyRunning ? 200 : 202).json(publicFableLoomEditorialAutopilot(run));
+}));
+
+router.get('/:id/editorial/autopilot/status', asyncHandler(async (req, res) => {
+  const loom = await getLoom(req.params.id);
+  if (!loom) throw new ServerError('Loom not found', { status: 404, code: 'NOT_FOUND' });
+  const run = getLatestFableLoomEditorialAutopilot(req.params.id);
+  res.json({ run: publicFableLoomEditorialAutopilot(run) });
+}));
+
+router.get('/:id/editorial/autopilot/:runId', asyncHandler(async (req, res) => {
+  const run = getFableLoomEditorialAutopilot(req.params.runId);
+  if (!run || run.loomId !== req.params.id) {
+    throw new ServerError('Editorial autopilot run not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(publicFableLoomEditorialAutopilot(run));
+}));
+
+router.post('/:id/editorial/autopilot/:runId/cancel', asyncHandler(async (req, res) => {
+  const run = getFableLoomEditorialAutopilot(req.params.runId);
+  if (!run || run.loomId !== req.params.id) {
+    throw new ServerError('Editorial autopilot run not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(publicFableLoomEditorialAutopilot(cancelFableLoomEditorialAutopilot(req.params.runId)));
 }));
 
 // --- Episodes ---------------------------------------------------------------

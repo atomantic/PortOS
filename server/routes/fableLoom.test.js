@@ -8,6 +8,7 @@ vi.mock('../services/fableLoom/index.js', () => ({
   addNode: vi.fn(),
   addNodeTransition: vi.fn(),
   branchNode: vi.fn(),
+  cancelFableLoomEditorialAutopilot: vi.fn(),
   createLoom: vi.fn(),
   deleteEpisode: vi.fn(),
   deleteLoom: vi.fn(),
@@ -17,14 +18,20 @@ vi.mock('../services/fableLoom/index.js', () => ({
   feedbackSeriesPlan: vi.fn(),
   generateEpisodeOutline: vi.fn(),
   generateSeriesPlan: vi.fn(),
+  getFableLoomEditorialAutopilot: vi.fn(),
+  getLatestFableLoomEditorialAutopilot: vi.fn(),
   getLoom: vi.fn(),
   listLoomSummaries: vi.fn(async () => []),
   playTurn: vi.fn(),
+  publicFableLoomEditorialAutopilot: vi.fn((run) => run),
   reformatEpisodeScenes: vi.fn(),
   reviewEpisode: vi.fn(),
   reviewEpisodeOutline: vi.fn(),
+  reviewFableLoomPlaythroughs: vi.fn(),
   reviewSeriesPlan: vi.fn(),
   reviewSeriesTeleplay: vi.fn(),
+  evaluateAndRemediateFableLoom: vi.fn(),
+  startFableLoomEditorialAutopilot: vi.fn(),
   updateEpisode: vi.fn(),
   updateLoom: vi.fn(),
   updateNode: vi.fn(),
@@ -151,6 +158,77 @@ describe('FableLoom routes', () => {
     expect(fableLoom.reviewSeriesTeleplay).toHaveBeenCalledWith('loom-1', {
       providerId: 'writer', effort: 'high',
     });
+  });
+
+  it('runs validated whole-series remediation and branching playthrough review', async () => {
+    fableLoom.evaluateAndRemediateFableLoom.mockResolvedValueOnce({
+      loom: { id: 'loom-1' }, changed: true,
+    });
+    const remediated = await request(makeApp())
+      .post('/api/fableloom/loom-1/editorial/remediate')
+      .send({
+        guidance: 'Preserve the quiet ending.', providerId: 'writer', effort: 'high',
+        operationId: '00000000-0000-4000-8000-000000000001',
+      });
+    expect(remediated.status).toBe(200);
+    expect(fableLoom.evaluateAndRemediateFableLoom).toHaveBeenCalledWith('loom-1', {
+      guidance: 'Preserve the quiet ending.', providerId: 'writer', effort: 'high',
+      operationId: '00000000-0000-4000-8000-000000000001',
+    });
+
+    fableLoom.reviewFableLoomPlaythroughs.mockResolvedValueOnce({ passed: true });
+    const reviewed = await request(makeApp())
+      .post('/api/fableloom/loom-1/playtest')
+      .send({ aiReview: true, maxPaths: 128, model: 'large' });
+    expect(reviewed.status).toBe(200);
+    expect(fableLoom.reviewFableLoomPlaythroughs).toHaveBeenCalledWith('loom-1', {
+      aiReview: true, maxPaths: 128, model: 'large',
+    });
+
+    const invalid = await request(makeApp())
+      .post('/api/fableloom/loom-1/playtest')
+      .send({ maxPaths: 257 });
+    expect(invalid.status).toBe(400);
+    expect(fableLoom.reviewFableLoomPlaythroughs).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts, reads, and cooperatively cancels a loom-scoped editorial autopilot', async () => {
+    const running = {
+      id: 'editorial-run-1', loomId: 'loom-1', status: 'running', round: 1, maxRounds: 3,
+    };
+    fableLoom.startFableLoomEditorialAutopilot.mockResolvedValueOnce(running);
+    const started = await request(makeApp())
+      .post('/api/fableloom/loom-1/editorial/autopilot/start')
+      .send({ maxRounds: 3, maxPaths: 128, providerId: 'writer' });
+    expect(started.status).toBe(202);
+    expect(fableLoom.startFableLoomEditorialAutopilot).toHaveBeenCalledWith('loom-1', {
+      maxRounds: 3, maxPaths: 128, providerId: 'writer',
+    });
+
+    fableLoom.getLoom.mockResolvedValueOnce({ id: 'loom-1' });
+    fableLoom.getLatestFableLoomEditorialAutopilot.mockReturnValueOnce(running);
+    const status = await request(makeApp())
+      .get('/api/fableloom/loom-1/editorial/autopilot/status');
+    expect(status.status).toBe(200);
+    expect(status.body.run).toMatchObject({ id: 'editorial-run-1', status: 'running' });
+
+    fableLoom.getFableLoomEditorialAutopilot.mockReturnValueOnce(running);
+    const fetched = await request(makeApp())
+      .get('/api/fableloom/loom-1/editorial/autopilot/editorial-run-1');
+    expect(fetched.status).toBe(200);
+
+    fableLoom.getFableLoomEditorialAutopilot.mockReturnValueOnce(running);
+    fableLoom.cancelFableLoomEditorialAutopilot.mockReturnValueOnce({ ...running, status: 'canceling' });
+    const canceled = await request(makeApp())
+      .post('/api/fableloom/loom-1/editorial/autopilot/editorial-run-1/cancel')
+      .send({});
+    expect(canceled.status).toBe(200);
+    expect(canceled.body.status).toBe('canceling');
+
+    fableLoom.getFableLoomEditorialAutopilot.mockReturnValueOnce({ ...running, loomId: 'loom-other' });
+    const wrongLoom = await request(makeApp())
+      .get('/api/fableloom/loom-1/editorial/autopilot/editorial-run-1');
+    expect(wrongLoom.status).toBe(404);
   });
 
   it('validates and forwards structured series-plan patches', async () => {

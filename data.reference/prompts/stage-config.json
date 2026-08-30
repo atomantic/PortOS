@@ -1072,6 +1072,20 @@
       "model": "heavy",
       "returnsJson": true,
       "variables": []
+    },
+    "fableloom-editorial-remediate": {
+      "name": "FableLoom — Evaluate and Remediate Series",
+      "description": "Evaluates a complete interactive series and returns one safe sparse patch for missing outlines, scene craft, branch labeling, and explicit convergence continuity while preserving all existing graph membership and ids.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
+    "fableloom-review-playthroughs": {
+      "name": "FableLoom — Review Playthrough Variations",
+      "description": "Reviews deterministically enumerated playthrough variations for mechanics, causal branch coherence, audience agency, continuity, pacing, ending payoff, canon, and ship-quality storytelling.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
     }
   }
 }

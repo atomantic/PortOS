@@ -22,6 +22,7 @@ import {
   FABLELOOM_ASSET_TYPES,
   FABLELOOM_PRODUCTION_MODES,
 } from './fableLoomProduction.js';
+import { FABLELOOM_PLAYTEST_LIMITS } from './fableLoomPlaytest.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 import { llmRoutePinSchema } from './llmRoutePin.js';
@@ -341,6 +342,23 @@ export const seriesPlanGenerateSchema = z.object({ ...aiRunFields });
 export const seriesPlanFeedbackSchema = z.object({
   feedback: z.string().trim().min(1).max(LOOM_LIMITS.FEEDBACK_MAX),
   ...aiRunFields,
+});
+
+export const editorialRemediateSchema = z.object({
+  guidance: z.string().max(LOOM_LIMITS.FEEDBACK_MAX).optional(),
+  ...aiRunFields,
+});
+
+export const playthroughReviewSchema = z.object({
+  aiReview: z.boolean().optional().default(true),
+  maxPaths: z.number().int().min(1).max(FABLELOOM_PLAYTEST_LIMITS.MAX_PATHS).optional(),
+  ...aiRunFields,
+});
+
+export const editorialAutopilotStartSchema = z.object({
+  maxRounds: z.number().int().min(1).max(LOOM_LIMITS.EDITORIAL_AUTOPILOT_ROUNDS_MAX).optional(),
+  maxPaths: z.number().int().min(1).max(FABLELOOM_PLAYTEST_LIMITS.MAX_PATHS).optional(),
+  ...llmPickFields,
 });
 
 export const hostedSessionCreateSchema = z.object({

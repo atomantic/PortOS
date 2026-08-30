@@ -4,7 +4,7 @@
  * and editing its copy cannot race as independent PATCH requests.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { BrainCircuit, CheckCircle2, ChevronDown, ChevronUp, Loader2, Plus, Save, Sparkles, Trash2 } from 'lucide-react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
@@ -25,6 +25,7 @@ import { uuidv4 } from '../../lib/uuid.js';
 import { effectiveModelFor, effortAwareModelOptions } from '../../utils/providers';
 import { fieldClass, labelClass } from './fieldStyles';
 import LoomAiRunStatus from './LoomAiRunStatus';
+import LoomEditorialAutomation from './LoomEditorialAutomation';
 
 const newItemId = (prefix) => `${prefix}-${uuidv4()}`;
 
@@ -125,11 +126,11 @@ export default function LoomSeriesPlan({ loom, onLoomUpdate }) {
   // result. Make that response authoritative over any typing that happened
   // while the provider call was in flight; otherwise the revision guard would
   // keep the stale local plan on screen and a later Save would undo the AI run.
-  const adoptServerPlan = (updated) => {
+  const adoptServerPlan = useCallback((updated) => {
     revisionRef.current = 0;
     savedRevisionRef.current = 0;
     onLoomUpdate(updated);
-  };
+  }, [onLoomUpdate]);
 
   const episodeOptions = loom.episodes.map((episode) => ({
     id: episode.id,
@@ -178,6 +179,8 @@ export default function LoomSeriesPlan({ loom, onLoomUpdate }) {
             </div>
 
             <EpisodeBeatReadiness loom={loom} />
+
+            <LoomEditorialAutomation loom={loom} dirty={dirty} onLoomUpdate={adoptServerPlan} />
 
             <PlanCollection
               title="Plot points"

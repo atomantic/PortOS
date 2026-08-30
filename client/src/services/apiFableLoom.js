@@ -36,6 +36,24 @@ export const feedbackLoomSeriesPlan = (id, body, options = {}) => request(loomPa
 export const reviewLoomTeleplay = (id, body = {}, options = {}) => request(loomPath(id, '/review-teleplay'), {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
+export const remediateLoomEditorial = (id, body = {}, options = {}) => request(loomPath(id, '/editorial/remediate'), {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+export const reviewLoomPlaythroughs = (id, body = {}, options = {}) => request(loomPath(id, '/playtest'), {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+export const startLoomEditorialAutopilot = (id, body = {}, options = {}) =>
+  request(loomPath(id, '/editorial/autopilot/start'), {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
+export const getLoomEditorialAutopilotStatus = (id, options = {}) =>
+  request(loomPath(id, '/editorial/autopilot/status'), options);
+export const getLoomEditorialAutopilotRun = (id, runId, options = {}) =>
+  request(loomPath(id, `/editorial/autopilot/${encodeURIComponent(runId)}`), options);
+export const cancelLoomEditorialAutopilot = (id, runId, options = {}) =>
+  request(loomPath(id, `/editorial/autopilot/${encodeURIComponent(runId)}/cancel`), {
+    method: 'POST', body: JSON.stringify({}), ...options,
+  });
 
 export const addLoomEpisode = (id, body, options = {}) => request(loomPath(id, '/episodes'), {
   method: 'POST', body: JSON.stringify(body), ...options,
