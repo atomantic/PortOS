@@ -101,7 +101,7 @@ describe('Eidoverse managed-app installer', () => {
     expect(mock.spawn).toHaveBeenCalledWith('bun', ['install', '--frozen-lockfile'], expect.objectContaining({ cwd: join(selectedPaths.worlds, 'client') }));
     expect(mock.atomicWrite).toHaveBeenCalledWith(
       selectedPaths.envFile,
-      expect.stringContaining(`EIDOVERSE_DIR="${selectedPaths.video}"`),
+      expect.stringContaining(`EIDOVERSE_DIR=${JSON.stringify(selectedPaths.video)}`),
     );
     expect(mock.createApp).toHaveBeenCalledWith(expect.objectContaining({
       name: 'Eidoverse Worlds',
