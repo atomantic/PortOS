@@ -40,6 +40,7 @@ import {
   MINIMAX_H3_REPO_DIR,
   MINIMAX_H3_ENCODER_SHIM_DIR,
   MINIMAX_H3_DRAFT_DECODER_SHIM_DIR,
+  MINIMAX_H3_PROMPT_EMBEDDING_CACHE_DIR,
   MINIMAX_H3_EXPECTED_REVISION,
   MINIMAX_H3_CUDA_VENV_PYTHON,
   MINIMAX_H3_CUDA_HELPER_SCRIPT,
@@ -706,6 +707,12 @@ const buildMiniMaxH3Args = ({ model, prompt, negativePrompt, width, height, numF
     '--seed', String(seed),
     '--output', outputPath,
     ...miniMaxH3HostMemoryArgs(model),
+    // Reusable prompt embeddings (#5443). The runner keys entries on the prompt
+    // plus the content digest of each conditioning image, so a re-render of the
+    // same request skips the Qwen3-VL conditioning pass while a different image
+    // under the same prompt still gets its own. Always passed: an unwritable or
+    // corrupt cache degrades to a plain recompute inside the runner.
+    '--prompt-embedding-cache-dir', MINIMAX_H3_PROMPT_EMBEDDING_CACHE_DIR,
   ];
   // The MLX lane's placement is unified-memory only, so the server picks the
   // profile and the runner enforces its limit against the machine's own RAM.

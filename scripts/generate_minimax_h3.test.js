@@ -32,6 +32,29 @@ const hasMlx = (() => {
   }
 })();
 
+// The served-embedding cases below round-trip real tensors AND describe them
+// through numpy, so an interpreter carrying mlx but not numpy would fail them
+// rather than skip. Probed together for that reason — hasMlx alone gates the
+// final-norm case above, which genuinely needs only mlx.
+const hasEmbeddingStack = (() => {
+  try {
+    execFileSync(pyBin, ['-c', 'import mlx.core, numpy'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+// A stand-in for the decoded PIL keyframe `encode` receives: the cache reads
+// only the three attributes the digest is taken from, so the suite can exercise
+// keying without Pillow (which CI's bare python3 does not have either).
+const stubImage = [
+  'class StubImage:',
+  '    def __init__(self, mode, size, data):',
+  '        self.mode, self.size, self._data = mode, size, data',
+  '    def tobytes(self): return self._data',
+].join('\n');
+
 // The pin facts these corrections guard against moved to `_minimax_h3_mlx_pins.py`
 // so the install-time probe and these render-time guards read one copy. Reach the
 // module the RUNNER imported rather than loading a second one by spec: a private
@@ -70,6 +93,11 @@ const VALIDATE_ARGS_DEFAULTS = {
   draft_decoder_id: null,
   draft_decoder_file: [],
   draft_decoder_shim_root: null,
+  // Not read by validate_args — prompt_embedding_identity (#5443) reads these
+  // off the same Namespace, and one builder keeps both from drifting.
+  runtime_revision: "runtime-revision",
+  checkpoint_repo: "example/checkpoint",
+  checkpoint_revision: "checkpoint-revision",
 };
 const argsExpr = (overrides = {}) => {
   const fields = Object.entries({ ...VALIDATE_ARGS_DEFAULTS, ...overrides })
@@ -863,5 +891,324 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
       '    raise SystemExit("a drifted pin was accepted")',
     ].join('\n')}`);
     expect(output).toMatch(expected);
+  });
+
+  // --- Prompt-embedding cache (#5443) ---------------------------------------
+
+  it('parses the optional prompt-embedding cache directory', () => {
+    const output = runPython(`${importRunner}\n${[
+      'import sys',
+      'sys.argv = ["generate_minimax_h3.py", "--model-repo", "example/model", "--model-revision", "revision",',
+      '    "--runtime-dir", "/tmp/runtime", "--runtime-revision", "revision",',
+      '    "--checkpoint-repo", "example/checkpoint", "--checkpoint-revision", "revision",',
+      '    "--prompt", "a test prompt", "--width", "1344", "--height", "768", "--num-frames", "124",',
+      '    "--output", "test.mp4", "--prompt-embedding-cache-dir", "/tmp/embeddings"]',
+      'print(runner.parse_args().prompt_embedding_cache_dir)',
+    ].join('\n')}`);
+    expect(output.trim()).toBe('/tmp/embeddings');
+  });
+
+  // The whole point of the key: an embedding is only reusable against the exact
+  // request that produced it. Two renders sharing a prompt but conditioned on
+  // different keyframes must not share an entry — and because the keyframes are
+  // identified by their PIXELS, the same frame decoded again from another
+  // job-scoped scratch path still hits.
+  it('keys an embedding on the prompt, the conditioner and each keyframe content digest', () => {
+    const output = runPython(`${importRunner}\n${stubImage}\n${[
+      'import json',
+      'first = StubImage("RGB", (2, 2), b"IMAGE-A")',
+      '# A second decode of the same source frame — what a re-render actually',
+      '# hands `encode` once the scratch copy has moved.',
+      'replayed = StubImage("RGB", (2, 2), b"IMAGE-A")',
+      '# Different pixels at the SAME byte length, which a size-based identity',
+      '# could not tell apart from the pair above.',
+      'other = StubImage("RGB", (2, 2), b"IMAGE-B")',
+      '# Same buffer, different geometry: the vision tower sees another request.',
+      'reshaped = StubImage("RGB", (4, 1), b"IMAGE-A")',
+      'identity = {"runtime_revision": "rev", "checkpoint": "example/checkpoint@rev",',
+      '            "text_encoder_id": "", "text_encoder_files": [],',
+      '            "text_encoder_key_prefix": [], "text_encoder_final_norm_key": ""}',
+      'digest = runner.hash_conditioning_image',
+      'key = runner.prompt_embedding_key',
+      'print(json.dumps({',
+      '    "textOnly": key(identity, "a prompt", []),',
+      '    "imageA": key(identity, "a prompt", [digest(first)]),',
+      '    "imageAReplayed": key(identity, "a prompt", [digest(replayed)]),',
+      '    "imageB": key(identity, "a prompt", [digest(other)]),',
+      '    "imageAReshaped": key(identity, "a prompt", [digest(reshaped)]),',
+      '    "bothFrames": key(identity, "a prompt", [digest(first), digest(other)]),',
+      '    "bothFramesSwapped": key(identity, "a prompt", [digest(other), digest(first)]),',
+      '    "otherPrompt": key(identity, "another prompt", [digest(first)]),',
+      '    "substitutedEncoder": key({**identity, "text_encoder_id": "example-abliterated"},',
+      '                              "a prompt", [digest(first)]),',
+      '}))',
+    ].join('\n')}`);
+    const keys = JSON.parse(output);
+    // The same frame decoded again is the SAME request.
+    expect(keys.imageAReplayed).toBe(keys.imageA);
+    // Everything else names a different one, text-to-video included.
+    const distinct = Object.entries(keys).filter(([name]) => name !== 'imageAReplayed');
+    expect(new Set(distinct.map(([, value]) => value)).size).toBe(distinct.length);
+    for (const value of Object.values(keys)) expect(value).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  // The identity is what makes an entry unreadable by a DIFFERENT stack: a pin
+  // bump, another checkpoint or a swapped conditioner all produce different
+  // embeddings for one prompt, and serving the previous one would be a silently
+  // wrong render rather than an error.
+  it('folds the pinned runtime, the checkpoint and any substituted conditioner into the identity', () => {
+    const output = runPython(`${importRunner}\n${[
+      'import json',
+      'from types import SimpleNamespace',
+      argsExpr({
+        runtime_revision: 'runtime-revision',
+        checkpoint_repo: 'example/checkpoint',
+        checkpoint_revision: 'checkpoint-revision',
+        text_encoder_id: 'example-abliterated',
+        text_encoder_file: [
+          '/hf/models--example--encoder/snapshots/encoder-revision/shard-2.safetensors',
+          '/hf/models--example--encoder/snapshots/encoder-revision/shard-1.safetensors',
+        ],
+        text_encoder_key_prefix: ['visual.=model.visual.', 'model.layers.=model.language_model.layers.'],
+        text_encoder_final_norm_key: 'model.norm.weight',
+      }),
+      'print(json.dumps(runner.prompt_embedding_identity(args)))',
+    ].join('\n')}`);
+    expect(JSON.parse(output)).toEqual({
+      runtime_revision: 'runtime-revision',
+      checkpoint: 'example/checkpoint@checkpoint-revision',
+      text_encoder_id: 'example-abliterated',
+      // The snapshot segment, not just the basename: a release that repins an
+      // existing catalog id onto new weights keeps the id and the shard names,
+      // so dropping the revision would serve the old weights' embeddings.
+      // Sorted, so the order PortOS happened to pass the shards in cannot split
+      // one conditioner across two entries.
+      text_encoder_files: ['encoder-revision/shard-1.safetensors', 'encoder-revision/shard-2.safetensors'],
+      text_encoder_key_prefix: ['model.layers.=model.language_model.layers.', 'visual.=model.visual.'],
+      text_encoder_final_norm_key: 'model.norm.weight',
+    });
+  });
+
+  // Retention: a render session that keeps changing prompt would otherwise grow
+  // the directory without bound, and each entry is tens of megabytes.
+  it('evicts least-recently-used entries, and everything below the first that does not fit', () => {
+    const output = runPython(`${importRunner}\n${[
+      'import json, os, tempfile',
+      'with tempfile.TemporaryDirectory() as temp:',
+      '    root = Path(temp)',
+      '    for name, size, mtime in (("a" * 64, 300, 3000), ("b" * 64, 500, 2000), ("c" * 64, 100, 1000)):',
+      '        entry = root / f"{name}.safetensors"',
+      '        entry.write_bytes(b"x" * size)',
+      '        os.utime(entry, (mtime, mtime))',
+      '    evicted = runner.prune_prompt_embedding_cache(root, 700)',
+      '    print(json.dumps({"evicted": [name[0] for name in evicted],',
+      '                      "left": sorted(path.name[0] for path in root.iterdir())}))',
+    ].join('\n')}`);
+    // "a" fits (300), "b" does not (800 > 700) — and "c" goes with it even
+    // though 400 bytes were free, because retention ranks on use, not on size.
+    expect(JSON.parse(output)).toEqual({ evicted: ['b', 'c'], left: ['a'] });
+  });
+
+  // mtime has coarse enough resolution that two entries written in one render
+  // can share a tick; without the name tiebreak the survivor would be whichever
+  // one the filesystem happened to list first.
+  it('breaks an eviction tie on the key digest rather than on directory order', () => {
+    const output = runPython(`${importRunner}\n${[
+      'import json, os, tempfile',
+      'with tempfile.TemporaryDirectory() as temp:',
+      '    root = Path(temp)',
+      '    for name in ("a" * 64, "b" * 64, "c" * 64):',
+      '        entry = root / f"{name}.safetensors"',
+      '        entry.write_bytes(b"x" * 300)',
+      '        os.utime(entry, (2000, 2000))',
+      '    print(json.dumps([name[0] for name in runner.prune_prompt_embedding_cache(root, 700)]))',
+    ].join('\n')}`);
+    expect(JSON.parse(output)).toEqual(['a']);
+  });
+
+  // A temp only outlives its own render when that render was killed between the
+  // save and the rename. It is never a readable entry, so it is swept — but on a
+  // TTL, so a sibling render's in-flight write is not pulled out from under it.
+  it('sweeps a stranded partial write past its TTL and leaves a fresh one alone', () => {
+    const output = runPython(`${importRunner}\n${[
+      'import json, os, tempfile, time',
+      'with tempfile.TemporaryDirectory() as temp:',
+      '    root = Path(temp)',
+      '    stale = root / f\'{"a" * 64}.partial-101.safetensors\'',
+      '    stale.write_bytes(b"x" * 4000)',
+      '    old = time.time() - runner.PROMPT_EMBEDDING_PARTIAL_TTL_SECONDS - 60',
+      '    os.utime(stale, (old, old))',
+      '    fresh = root / f\'{"b" * 64}.partial-102.safetensors\'',
+      '    fresh.write_bytes(b"x" * 4000)',
+      '    entry = root / f\'{"c" * 64}.safetensors\'',
+      '    entry.write_bytes(b"x" * 100)',
+      '    evicted = runner.prune_prompt_embedding_cache(root, 200)',
+      '    print(json.dumps({"evicted": evicted, "left": sorted(path.name for path in root.iterdir())}))',
+    ].join('\n')}`);
+    const result = JSON.parse(output);
+    // Neither partial counts against the ceiling — 8000 bytes of them would
+    // otherwise have evicted the one real 100-byte entry.
+    expect(result.evicted).toEqual([]);
+    expect(result.left).toEqual([`${'b'.repeat(64)}.partial-102.safetensors`, `${'c'.repeat(64)}.safetensors`]);
+  });
+
+  // An unusable cache directory is not a render failure: the runner recomputes,
+  // which is exactly what it did before the cache existed.
+  it('disables the cache when its directory cannot be created', () => {
+    const output = runPython(`${importRunner}\n${[
+      'import sys, tempfile',
+      'sys.stderr = sys.stdout',
+      'with tempfile.TemporaryDirectory() as temp:',
+      '    blocker = Path(temp) / "embeddings"',
+      '    blocker.write_bytes(b"not a directory")',
+      '    print(repr(runner.prepare_prompt_embedding_cache(blocker)))',
+    ].join('\n')}`);
+    expect(output).toMatch(/prompt-embedding cache disabled, recomputing every embedding/);
+    expect(output.trim().split(/\r?\n/).pop()).toBe('None');
+  });
+
+  // The directory already exists and only the WRITE fails — a read-only mount,
+  // a sandbox, a full disk. `os.access` reports the permission bits rather than
+  // what the filesystem will do, so readiness is proven by an actual write.
+  // POSIX-only: `os.chmod` on Windows toggles a file's read-only bit and cannot
+  // make a directory unwritable.
+  it.skipIf(process.platform === 'win32')('disables the cache when its existing directory refuses a write', () => {
+    const output = runPython(`${importRunner}\n${[
+      'import os, sys, tempfile',
+      'sys.stderr = sys.stdout',
+      'with tempfile.TemporaryDirectory() as temp:',
+      '    readonly = Path(temp) / "embeddings"',
+      '    readonly.mkdir()',
+      '    os.chmod(readonly, 0o500)',
+      '    try:',
+      '        print(repr(runner.prepare_prompt_embedding_cache(readonly)))',
+      '    finally:',
+      '        os.chmod(readonly, 0o700)',
+    ].join('\n')}`);
+    expect(output).toMatch(/prompt-embedding cache disabled, recomputing every embedding/);
+    expect(output.trim().split(/\r?\n/).pop()).toBe('None');
+  });
+
+  // Everything above is key and retention arithmetic, which needs neither mlx
+  // nor numpy. These last cases round-trip real tensors and describe them
+  // through numpy, so they run only where both import (CI's bare python3 is
+  // Linux, which has no mlx wheel).
+  describe.skipIf(!hasEmbeddingStack)('served embeddings', () => {
+    // The stand-in encoder returns the same shape the pinned `encode` does —
+    // `(mx.array, np.ndarray[int64])` — and records every call, which is how a
+    // hit is told from a recompute.
+    const stubEncoder = stubPin([
+      '    calls = []',
+      '    def encode(self, prompt, images=None):',
+      '        MiniMaxH3TextEncoder.calls.append((prompt, len(images or [])))',
+      '        return (mx.arange(12).reshape(1, 3, 4).astype(mx.bfloat16),',
+      '                np.array([0, 1, 0], dtype=np.int64))',
+    ], ['import mlx.core as mx', 'import numpy as np']);
+
+    // Reported as a float32 view: bfloat16 widens to it losslessly, so equal
+    // float32 bytes mean bit-identical bfloat16 — and numpy has no bfloat16 of
+    // its own to hash directly.
+    const describeResult = [
+      'def describe(pair):',
+      '    hidden, tags = pair',
+      '    return {"dtype": str(hidden.dtype), "shape": list(hidden.shape),',
+      '            "bytes": hashlib.sha256(np.asarray(hidden.astype(mx.float32)).tobytes()).hexdigest(),',
+      '            "tagsDtype": str(tags.dtype), "tags": tags.tolist()}',
+    ];
+
+    it('serves a second render of the same request byte-identically, without re-encoding', () => {
+      const output = runPython(`${importRunner}\n${stubEncoder}\n${stubImage}\n${[
+        'import hashlib, json, mlx.core as mx, numpy as np, tempfile',
+        'sys.stderr = sys.stdout',
+        ...describeResult,
+        'with tempfile.TemporaryDirectory() as temp:',
+        '    cache = runner.prepare_prompt_embedding_cache(Path(temp) / "embeddings")',
+        '    runner.install_prompt_embedding_cache(cache, {"runtime_revision": "rev"})',
+        '    encoder = MiniMaxH3TextEncoder()',
+        '    keyframe = StubImage("RGB", (2, 2), b"IMAGE-A")',
+        '    cold = describe(encoder.encode("a prompt", [keyframe]))',
+        '    # A second decode of the same frame, as a re-render would hand it over.',
+        '    hit = describe(encoder.encode("a prompt", [StubImage("RGB", (2, 2), b"IMAGE-A")]))',
+        '    print(json.dumps({"cold": cold, "hit": hit, "calls": MiniMaxH3TextEncoder.calls,',
+        '                      "entries": [path.name for path in cache.iterdir()]}))',
+      ].join('\n')}`);
+      const result = JSON.parse(output.trim().split(/\r?\n/).pop());
+      expect(result.hit).toEqual(result.cold);
+      expect(result.hit.dtype).toBe('mlx.core.bfloat16');
+      // The DiT reads `token_tags` as a numpy ndarray, so a hit has to hand back
+      // one rather than the mx.array the entry stores.
+      expect(result.hit.tagsDtype).toBe('int64');
+      // One encode for two renders.
+      expect(result.calls).toEqual([['a prompt', 1]]);
+      expect(result.entries).toEqual([expect.stringMatching(/^[0-9a-f]{64}\.safetensors$/)]);
+    });
+
+    // The same prompt against a different keyframe is a different request, and
+    // serving the first one's embedding would be a silently wrong render.
+    it('re-encodes the same prompt when the keyframe changes', () => {
+      const output = runPython(`${importRunner}\n${stubEncoder}\n${stubImage}\n${[
+        'import json, mlx.core as mx, numpy as np, tempfile',
+        'sys.stderr = sys.stdout',
+        'with tempfile.TemporaryDirectory() as temp:',
+        '    cache = runner.prepare_prompt_embedding_cache(Path(temp) / "embeddings")',
+        '    runner.install_prompt_embedding_cache(cache, {"runtime_revision": "rev"})',
+        '    encoder = MiniMaxH3TextEncoder()',
+        '    encoder.encode("a prompt", [StubImage("RGB", (2, 2), b"IMAGE-A")])',
+        '    encoder.encode("a prompt", [StubImage("RGB", (2, 2), b"IMAGE-B")])',
+        '    # And text-to-video, which shares neither entry.',
+        '    encoder.encode("a prompt")',
+        '    print(json.dumps({"calls": len(MiniMaxH3TextEncoder.calls),',
+        '                      "entries": len(list(cache.iterdir()))}))',
+      ].join('\n')}`);
+      expect(JSON.parse(output.trim().split(/\r?\n/).pop())).toEqual({ calls: 3, entries: 3 });
+    });
+
+    it('discards a truncated entry and recomputes instead of failing the render', () => {
+      const output = runPython(`${importRunner}\n${stubEncoder}\n${[
+        'import hashlib, json, mlx.core as mx, numpy as np, tempfile',
+        'sys.stderr = sys.stdout',
+        ...describeResult,
+        'with tempfile.TemporaryDirectory() as temp:',
+        '    cache = runner.prepare_prompt_embedding_cache(Path(temp) / "embeddings")',
+        '    runner.install_prompt_embedding_cache(cache, {"runtime_revision": "rev"})',
+        '    encoder = MiniMaxH3TextEncoder()',
+        '    cold = describe(encoder.encode("a prompt"))',
+        '    entry = next(cache.iterdir())',
+        '    entry.write_bytes(entry.read_bytes()[:16])',
+        '    recovered = describe(encoder.encode("a prompt"))',
+        '    print(json.dumps({"cold": cold, "recovered": recovered,',
+        '                      "calls": MiniMaxH3TextEncoder.calls,',
+        '                      "rewritten": entry.stat().st_size > 16}))',
+      ].join('\n')}`);
+      expect(output).toMatch(/Discarding an unreadable MiniMax H3 prompt-embedding cache entry/);
+      const result = JSON.parse(output.trim().split(/\r?\n/).pop());
+      expect(result.recovered).toEqual(result.cold);
+      expect(result.calls).toHaveLength(2);
+      // The bad entry is replaced, not merely skipped, so the next render hits.
+      expect(result.rewritten).toBe(true);
+    });
+
+    // A cache that stops being writable mid-render still must not cost the
+    // render — the embedding is already computed by the time the store fails.
+    it.skipIf(process.platform === 'win32')('returns the freshly-encoded embedding when the entry cannot be stored', () => {
+      const output = runPython(`${importRunner}\n${stubEncoder}\n${[
+        'import hashlib, json, mlx.core as mx, numpy as np, os, tempfile',
+        'sys.stderr = sys.stdout',
+        ...describeResult,
+        'with tempfile.TemporaryDirectory() as temp:',
+        '    cache = runner.prepare_prompt_embedding_cache(Path(temp) / "embeddings")',
+        '    runner.install_prompt_embedding_cache(cache, {"runtime_revision": "rev"})',
+        '    os.chmod(cache, 0o500)',
+        '    try:',
+        '        result = describe(MiniMaxH3TextEncoder().encode("a prompt"))',
+        '    finally:',
+        '        os.chmod(cache, 0o700)',
+        '    print(json.dumps({"result": result, "entries": [path.name for path in cache.iterdir()]}))',
+      ].join('\n')}`);
+      expect(output).toMatch(/prompt embedding not cached/);
+      const result = JSON.parse(output.trim().split(/\r?\n/).pop());
+      expect(result.result.tags).toEqual([0, 1, 0]);
+      expect(result.entries).toEqual([]);
+    });
   });
 });

@@ -71,6 +71,14 @@ export const MINIMAX_H3_ENCODER_SHIM_DIR = join(homedir(), '.portos', 'minimax-h
 // directory so removing one substitution never disturbs the other.
 export const MINIMAX_H3_DRAFT_DECODER_SHIM_DIR = join(homedir(), '.portos', 'minimax-h3-decoder-shims');
 
+// Reusable Qwen3-VL prompt embeddings (#5443). The MLX runner keys each entry
+// on the prompt text plus the CONTENT digest of every conditioning image and
+// holds the directory under its own byte ceiling, so this is a plain cache the
+// user can delete at any time. Outside MINIMAX_H3_REPO_DIR for the same reason
+// the shim roots are: a file written inside the checkout reads as untracked in
+// the pin verification /status and the render helper both run.
+export const MINIMAX_H3_PROMPT_EMBEDDING_CACHE_DIR = join(homedir(), '.portos', 'minimax-h3-prompt-embeddings');
+
 // MiniMax H3 on CUDA — the diffusers `MiniMaxH3ModularPipeline` rather than a
 // pinned source checkout, so this runtime is a plain pip venv with no revision
 // to verify and no source package to keep clean.

@@ -10,6 +10,14 @@ Conditioning is H3's own `fl2va` keyframe path: zero images is text-to-video,
 one `--image first` is image-to-video, and a `first` + `last` pair is FFLF.
 Each `--image` needs its own `--anchor`, in the same order.
 
+Prompt embeddings: the Qwen3-VL conditioning pass is deterministic in the
+prompt, the keyframes and the conditioner, so `--prompt-embedding-cache-dir`
+lets a re-render of the same request reuse it. Entries are keyed on the prompt
+plus the CONTENT digest of each conditioning image, held under a byte ceiling
+with least-recently-used eviction, and every failure — a corrupt entry, an
+unwritable directory — falls back to recomputing rather than to a failed
+render.
+
 Memory: unified memory means this render and the rest of the machine draw on one
 pool. PortOS passes the host floor its declared placement profile needs
 (`--min-system-memory-gb`) and the reserve it holds back for the operating
@@ -22,12 +30,15 @@ render that overruns fails as a job instead of wedging the machine.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import time
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
@@ -85,6 +96,9 @@ def parse_args() -> argparse.Namespace:
                         help="cache-resolved weight file for the draft decoder (repeatable)")
     parser.add_argument("--draft-decoder-shim-root",
                         help="directory the composed draft-decoder checkpoint root is built under")
+    parser.add_argument("--prompt-embedding-cache-dir",
+                        help="directory holding reusable prompt embeddings, keyed by prompt text and "
+                             "conditioning-image content (omit to recompute on every render)")
     return parser.parse_args()
 
 
@@ -389,6 +403,274 @@ def install_vision_embed_merge() -> None:
             deepstack_visual_embeds=deepstack_embeds,
         )
         mx.eval(hidden_states)
+        return hidden_states, token_tags
+
+    encoder.encode = encode
+
+
+# --- Prompt-embedding cache (PortOS #5443) -----------------------------------
+
+# A byte ceiling rather than an entry cap: one H3 embedding is
+# `(1, tokens, 5120)` bfloat16, and an image-conditioned request carries
+# hundreds of extra vision rows on top of the prompt's, so entries differ in
+# size by more than an order of magnitude and a count cap would bound the wrong
+# quantity. 2 GB holds dozens of typical entries and is a rounding error beside
+# the tens of GB of weights every render already reads.
+PROMPT_EMBEDDING_CACHE_BYTES = 2 * 1024 ** 3
+
+# A half-written entry only exists when a render was killed between the save and
+# the rename. Swept on a TTL rather than on sight, and one comfortably longer
+# than any encode, so a sibling render's in-flight temp is never pulled out from
+# under it.
+PROMPT_EMBEDDING_PARTIAL_TTL_SECONDS = 3600.0
+
+# Entries are named for their key digest. Anything else in the directory — an
+# in-flight `<key>.partial-<pid>.safetensors`, a stray file — is not one, which
+# is what keeps a partial from ever being read as a complete entry.
+PROMPT_EMBEDDING_ENTRY_RE = re.compile(r"^[0-9a-f]{64}\.safetensors$")
+
+
+def hash_conditioning_image(image) -> str:
+    """Identify a conditioning keyframe by the PIXELS the vision tower will see.
+
+    A content digest rather than path plus size and mtime, because PortOS writes
+    ffmpeg-normalized keyframes into job-scoped scratch directories: the same
+    source frame reaches two renders under two paths with two mtimes, so a path
+    identity would essentially never hit — which is the whole point of the cache
+    — and because those scratch paths are REUSED across jobs it can also ALIAS,
+    serving another image's embedding for a rewritten file whose size and mtime
+    happen to match. That failure is a silently wrong render rather than an
+    error.
+
+    Taken off the decoded image rather than the file, so the digest describes
+    exactly what `encode` is about to consume: `load_keyframes` has already
+    converted to RGB and applied the EXIF rotation, and the same pixels
+    delivered as a JPEG and as a PNG condition the DiT identically. Hashing the
+    pixel buffer of a keyframe costs milliseconds against a render's minutes.
+    """
+    digest = hashlib.sha256(f"{image.mode}:{image.size[0]}x{image.size[1]}:".encode("utf-8"))
+    digest.update(image.tobytes())
+    return digest.hexdigest()
+
+
+def prompt_embedding_identity(args: argparse.Namespace) -> dict:
+    """Everything BUT the prompt and keyframes that changes what `encode` returns.
+
+    The conditioner is the pin plus whatever PortOS substituted for it, so a
+    runtime bump, a different checkpoint or a swapped text encoder must not read
+    the previous one's entries — an embedding is only reusable against the exact
+    stack that produced it.
+
+    The substitute is named by its declared id and its shards' SNAPSHOT paths
+    rather than by hashing multi-GB weights, which would cost more than the
+    encode the cache exists to skip. The snapshot segment is what carries the
+    revision — PortOS resolves these out of the Hugging Face cache as
+    `…/snapshots/<revision>/<shard>` — so a release that repins an existing
+    catalog id onto new weights writes a new identity instead of silently
+    serving the previous revision's embeddings.
+    """
+    return {
+        "runtime_revision": args.runtime_revision,
+        "checkpoint": f"{args.checkpoint_repo}@{args.checkpoint_revision}",
+        "text_encoder_id": args.text_encoder_id or "",
+        "text_encoder_files": sorted(
+            f"{Path(f).parent.name}/{Path(f).name}" for f in args.text_encoder_file
+        ),
+        "text_encoder_key_prefix": sorted(args.text_encoder_key_prefix),
+        "text_encoder_final_norm_key": args.text_encoder_final_norm_key or "",
+    }
+
+
+def prompt_embedding_key(identity: dict, prompt: str, image_digests: list[str]) -> str:
+    """Digest one encode request: the conditioner, the prompt AND the keyframes.
+
+    `image_digests` is an ordered list and it is EMPTY for a text-to-video
+    request, so text-only, first-frame and first+last requests over one prompt
+    each land on their own entry, and swapping the two keyframes of an FFLF
+    render lands on another again (the order here is anchor order).
+    """
+    payload = {**identity, "prompt": prompt, "images": list(image_digests)}
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+
+def prepare_prompt_embedding_cache(cache_dir: Path) -> Path | None:
+    """Return the cache directory once it is proven writable, else None.
+
+    Proven by an actual write rather than by `os.access`, which reports the
+    permission bits and not what the filesystem will do (a read-only mount, a
+    full disk, a sandbox). A cache that cannot be written to is not a render
+    failure — the runner recomputes, which is exactly what it did before this
+    existed — so every failure here degrades and says so instead of raising.
+    """
+    probe = cache_dir / f".portos-write-probe-{os.getpid()}"
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        probe.write_bytes(b"")
+        probe.unlink()
+    except OSError as exc:
+        print(
+            f"⚠️ MiniMax H3 prompt-embedding cache disabled, recomputing every embedding "
+            f"({cache_dir}): {type(exc).__name__}: {exc}",
+            file=sys.stderr, flush=True,
+        )
+        return None
+    return cache_dir
+
+
+def read_prompt_embedding(entry: Path):
+    """Load one cached embedding, discarding an entry that cannot be read.
+
+    A truncated, corrupt or half-keyed entry is a cache MISS, never a render
+    failure: it is unlinked so the next render does not pay for it again, and
+    the caller recomputes. That is also the only recovery path for an entry left
+    behind by a render killed between the save and the rename.
+    """
+    if not entry.is_file():
+        return None
+
+    import mlx.core as mx
+    import numpy as np
+
+    try:
+        cached = mx.load(str(entry))
+        hidden_states = cached["hidden_states"]
+        # Forced here rather than at the call site: a lazily-materialized load
+        # would otherwise raise deep inside the DiT instead of being caught as
+        # the bad entry it is.
+        mx.eval(hidden_states)
+        # Back to the exact numpy int64 the pinned `encode` returns — the DiT
+        # layout reads `token_tags` as an ndarray, not an mx.array.
+        token_tags = np.asarray(cached["token_tags"]).astype(np.int64, copy=False)
+    except Exception as exc:  # noqa: BLE001 — a bad entry is a miss, not a failure
+        print(
+            f"⚠️ Discarding an unreadable MiniMax H3 prompt-embedding cache entry "
+            f"({entry.name}): {type(exc).__name__}: {exc}",
+            file=sys.stderr, flush=True,
+        )
+        _unlink_quietly(entry)
+        return None
+    return hidden_states, token_tags
+
+
+def write_prompt_embedding(entry: Path, hidden_states, token_tags) -> bool:
+    """Publish one entry atomically, or report that the cache took nothing.
+
+    `mx.save_safetensors` appends `.safetensors` when the name lacks it, so the
+    temp already carries the suffix and the rename moves the file that was
+    actually written. The `.partial-<pid>` infix keeps that temp outside
+    PROMPT_EMBEDDING_ENTRY_RE, so a reader can never pick up a half-written file
+    as a complete entry.
+    """
+    import mlx.core as mx
+
+    temp = entry.with_name(f"{entry.stem}.partial-{os.getpid()}.safetensors")
+    try:
+        mx.save_safetensors(
+            str(temp),
+            {"hidden_states": hidden_states, "token_tags": mx.array(token_tags)},
+        )
+        os.replace(temp, entry)
+    except Exception as exc:  # noqa: BLE001 — a cache that cannot be written still renders
+        print(
+            f"⚠️ MiniMax H3 prompt embedding not cached ({entry.name}): "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr, flush=True,
+        )
+        _unlink_quietly(temp)
+        return False
+    return True
+
+
+def prune_prompt_embedding_cache(
+    cache_dir: Path,
+    ceiling_bytes: int = PROMPT_EMBEDDING_CACHE_BYTES,
+) -> list[str]:
+    """Hold the cache under its byte ceiling, evicting least-recently-used first.
+
+    Recency is the entry's mtime, which every hit stamps, and the tiebreak is
+    the file NAME — the key digest — so two entries written inside one mtime
+    tick still evict in one fixed order rather than in whatever order the
+    directory happens to list. Once an entry does not fit, every entry after it
+    in that order goes too: keeping a small older entry over a large newer one
+    would make retention depend on size instead of on use.
+
+    Returns the names it removed, in eviction order, so a caller can report the
+    decision rather than infer it from the directory.
+    """
+    try:
+        listing = list(cache_dir.iterdir())
+    except OSError:
+        return []
+
+    entries = []
+    now = time.time()
+    for path in listing:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        if PROMPT_EMBEDDING_ENTRY_RE.match(path.name):
+            entries.append((stat.st_mtime_ns, path.name, stat.st_size, path))
+        elif (
+            path.name.endswith(".safetensors")
+            and now - stat.st_mtime > PROMPT_EMBEDDING_PARTIAL_TTL_SECONDS
+        ):
+            _unlink_quietly(path)
+
+    entries.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
+    kept = 0
+    evicted: list[str] = []
+    for _, name, size, path in entries:
+        if not evicted and kept + size <= ceiling_bytes:
+            kept += size
+            continue
+        _unlink_quietly(path)
+        evicted.append(name)
+    return evicted
+
+
+def _unlink_quietly(path: Path) -> None:
+    """Remove a cache file, treating a failure to as nothing worth reporting."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def install_prompt_embedding_cache(cache_dir: Path, identity: dict) -> None:
+    """Serve `encode` from disk when this prompt already met these keyframes.
+
+    Installed LAST of the encoder patches so it WRAPS the keyframe corrections
+    rather than being wrapped by them: `install_vision_embed_merge` verifies the
+    digest of the implementation it copies, and it has to see the pinned
+    `encode`, not this one.
+
+    The keyframes are digested from the images this call actually receives, not
+    from the paths PortOS passed on the command line — so the key describes the
+    request being encoded rather than what those paths held some minutes and
+    several load stages earlier, and a call the runner did not anticipate keys
+    itself correctly instead of needing to be recognized and bypassed.
+    """
+    encoder, original = pinned_encoder_hook("encode")
+
+    def encode(self, prompt: str, images: list | None = None):
+        digests = [hash_conditioning_image(image) for image in images or []]
+        entry = cache_dir / f"{prompt_embedding_key(identity, prompt, digests)}.safetensors"
+        cached = read_prompt_embedding(entry)
+        if cached is not None:
+            # The sweep below ranks on mtime, so a hit has to stamp it or a
+            # constantly-reused prompt evicts ahead of one nobody renders.
+            try:
+                os.utime(entry)
+            except OSError:
+                pass
+            print("STATUS:Reusing the cached MiniMax H3 prompt embedding", file=sys.stderr, flush=True)
+            return cached
+        hidden_states, token_tags = original(self, prompt, images)
+        if write_prompt_embedding(entry, hidden_states, token_tags):
+            prune_prompt_embedding_cache(cache_dir)
         return hidden_states, token_tags
 
     encoder.encode = encode
@@ -849,6 +1131,15 @@ def main() -> int:
             )
         except Exception as exc:  # noqa: BLE001 — degrade, never fail the render
             fall_back_to_full_decoder(exc)
+
+    # Prompt-embedding cache (PortOS #5443). Installed last of the encoder
+    # patches so it wraps the keyframe corrections above, and only once the
+    # directory has proven writable — an unusable cache degrades to the plain
+    # recompute this runner did before it existed, never to a failed render.
+    if args.prompt_embedding_cache_dir:
+        prompt_cache_dir = prepare_prompt_embedding_cache(Path(args.prompt_embedding_cache_dir))
+        if prompt_cache_dir is not None:
+            install_prompt_embedding_cache(prompt_cache_dir, prompt_embedding_identity(args))
 
     print("STAGE:load-pipeline", file=sys.stderr, flush=True)
 

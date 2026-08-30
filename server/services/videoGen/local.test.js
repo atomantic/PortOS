@@ -3051,6 +3051,40 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     else expect(args).not.toContain('--memory-profile');
   });
 
+  // Reusable prompt embeddings (#5443). The keying, retention and every
+  // degradation path are unit-tested against the runner in
+  // scripts/generate_minimax_h3.test.js; what this pins is that the render
+  // boundary WIRES the cache at all, and that it stays on the MLX lane — the
+  // diffusers CUDA runner has no such flag and would exit on an unknown one.
+  it.each([
+    ['minimax_h3_8bit', 'generate_minimax_h3.py', true],
+    ['minimax_h3_cuda', 'generate_minimax_h3_cuda.py', false],
+  ])('gives %s a prompt-embedding cache only where the runner has one', async (modelId, helper, cached) => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    // Imported here rather than at the top of the file: this module is vi.mocked
+    // above, and a static import would read it before the mock is installed.
+    const { MINIMAX_H3_PROMPT_EMBEDDING_CACHE_DIR } = await import('./runtimes.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+
+    await generateVideo({
+      jobId: `h3-embed-cache-${modelId}`,
+      modelId,
+      prompt: 'a fox watches the rain',
+      width: 1344, height: 768, numFrames: 124, fps: 24, mode: 'text',
+    });
+
+    const [, args] = spawnMock.mock.calls.find(([, childArgs]) => (
+      Array.isArray(childArgs) && childArgs.some((arg) => basename(String(arg)) === helper)
+    ));
+    if (cached) {
+      expect(args[args.indexOf('--prompt-embedding-cache-dir') + 1])
+        .toBe(MINIMAX_H3_PROMPT_EMBEDDING_CACHE_DIR);
+    } else {
+      expect(args).not.toContain('--prompt-embedding-cache-dir');
+    }
+  });
+
   it('refuses a render this machine cannot hold, before any child is spawned', async () => {
     const mediaModels = await import('../../lib/mediaModels.js');
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
