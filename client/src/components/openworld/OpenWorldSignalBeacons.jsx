@@ -168,8 +168,8 @@ function WarpPad({ region, active, detailed, dayMix, onTravel }) {
         </group>
       )}
       <OpenWorldLabel
-        position={[0, detailed ? 6.45 : 2, 0]}
-        fontSize={detailed ? 0.3 : 0.22}
+        position={[0, active ? 3.7 : 1.55, 0]}
+        fontSize={active ? 0.28 : 0.17}
         color={color}
         dayMix={dayMix}
         anchorX="center"
@@ -180,7 +180,7 @@ function WarpPad({ region, active, detailed, dayMix, onTravel }) {
       </OpenWorldLabel>
       {detailed && active && (
         <OpenWorldLabel
-          position={[0, 5.98, 0]}
+          position={[0, 3.25, 0]}
           fontSize={0.16}
           color="#d8e5ea"
           dayMix={dayMix}

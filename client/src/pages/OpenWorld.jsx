@@ -549,7 +549,10 @@ function OpenWorldInner() {
 
   return (
     <OpenWorldPaletteProvider palette={openWorldPalette}>
-    <div className="relative w-full h-full openworld-themed" style={{ background: sceneBackground, isolation: 'isolate' }}>
+    <div
+      className={`${settings?.explorationMode ? 'fixed inset-0 z-[90]' : 'relative w-full h-full'} openworld-themed`}
+      style={{ background: sceneBackground, isolation: 'isolate' }}
+    >
       <OpenWorldScene
         // A theme switch recolors the live scene in place — NO full-scene remount.
         // Every themed surface either reads the palette fresh each render (declarative
@@ -656,8 +659,6 @@ function OpenWorldInner() {
         <OpenWorldMobileControls
           mobileInputRef={mobileInputRef}
           playerActionRef={playerActionRef}
-          onToggleCameraView={handleToggleCameraView}
-          onToggleExploration={handleToggleExploration}
         />
       )}
       <OpenWorldPhotoOverlay

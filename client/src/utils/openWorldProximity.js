@@ -15,16 +15,18 @@ export const PROXIMITY_DISTANCES = {
 
 // Curated list of recognizable world landmarks derived from the master town plan
 export const WORLD_LANDMARKS = [
-  { id: 'ai-core', regionId: 'ai-core', parcel: 'aiCore', label: 'AI Core Plaza', eyebrow: 'LANDMARK REACTOR', action: 'INSPECT AI RUNS' },
-  { id: 'backup-vault', regionId: 'backup-vault', parcel: 'backupVault', label: 'Backup Vault', eyebrow: 'LANDMARK VAULT', action: 'INSPECT BACKUPS' },
-  { id: 'task-queue', regionId: 'task-queue', parcel: 'taskQueue', label: 'Task Queue Depot', eyebrow: 'LANDMARK DEPOT', action: 'VIEW TASKS' },
-  { id: 'wellness', regionId: 'wellness', parcel: 'health', label: 'Wellness Tower', eyebrow: 'LANDMARK TOWER', action: 'VIEW VITALS' },
-  { id: 'memory', regionId: 'memory', parcel: 'memory', label: 'Memory Quarter', eyebrow: 'LANDMARK DISTRICT', action: 'VIEW MEMORY GRAPH' },
-  { id: 'sprint-yard', regionId: 'sprint-yard', parcel: 'jira', feature: 'jira', label: 'Sprint Yard', eyebrow: 'LANDMARK SPRINT', action: 'VIEW SPRINT TICKETS' },
-  { id: 'goals', regionId: 'goals', parcel: 'goals', label: 'Goal Monuments', eyebrow: 'LANDMARK MONUMENT', action: 'VIEW LIFE GOALS' },
-  { id: 'artifacts', regionId: 'artifacts', parcel: 'artifacts', label: 'Hall of Achievements', eyebrow: 'LANDMARK HALL', action: 'VIEW ACHIEVEMENTS' },
-  { id: 'voice', regionId: 'voice', parcel: 'voice', label: 'Voice Beacon', eyebrow: 'LANDMARK BEACON', action: 'VIEW VOICE AGENT' },
-  { id: 'data-harbor', regionId: 'data-harbor', parcel: 'dataHarbor', label: 'Data Harbor Piers', eyebrow: 'LANDMARK HARBOR', action: 'VIEW DATA HARBOR' },
+  { id: 'ai-core', regionId: 'ai-core', parcel: 'aiCore', label: 'PortOS Common', eyebrow: 'VILLAGE COMMON', action: 'VISIT THE AI CORE' },
+  { id: 'backup-vault', regionId: 'backup-vault', parcel: 'backupVault', label: 'Backup Cottage', eyebrow: 'VILLAGE HOUSE', action: 'CHECK THE BACKUPS' },
+  { id: 'task-queue', regionId: 'task-queue', parcel: 'taskQueue', label: 'Task Workshop', eyebrow: 'VILLAGE HOUSE', action: 'VISIT THE TASKS' },
+  { id: 'archive', regionId: 'archive', parcel: 'warehouse', label: 'Archive Lodge', eyebrow: 'VILLAGE HOUSE', action: 'VISIT THE ARCHIVE' },
+  { id: 'wellness', regionId: 'wellness', parcel: 'health', label: 'Wellness Greenhouse', eyebrow: 'VILLAGE GARDEN', action: 'CHECK THE VITALS' },
+  { id: 'memory', regionId: 'memory', parcel: 'memory', label: 'Memory House', eyebrow: 'VILLAGE HOUSE', action: 'VISIT MEMORY' },
+  { id: 'sprint-yard', regionId: 'sprint-yard', parcel: 'jira', feature: 'jira', label: 'Sprint Yard', eyebrow: 'VILLAGE YARD', action: 'VISIT THE SPRINT' },
+  { id: 'quiet-corner', regionId: 'quiet-corner', parcel: 'easterEggs', label: 'Quiet Cottage', eyebrow: 'VILLAGE SECRET', action: 'VISIT THE QUIET CORNER' },
+  { id: 'goals', regionId: 'goals', parcel: 'goals', label: 'Goals Lodge', eyebrow: 'VILLAGE HOUSE', action: 'VISIT THE GOALS' },
+  { id: 'artifacts', regionId: 'artifacts', parcel: 'artifacts', label: 'Trophy House', eyebrow: 'VILLAGE HOUSE', action: 'SEE THE TROPHIES' },
+  { id: 'voice', regionId: 'voice', parcel: 'voice', label: 'Voice Radio', eyebrow: 'VILLAGE RADIO', action: 'VISIT VOICE' },
+  { id: 'data-harbor', regionId: 'data-harbor', parcel: 'dataHarbor', label: 'Data Pier', eyebrow: 'VILLAGE HARBOR', action: 'VISIT THE PIER' },
 ];
 
 export function getResolvedLandmarks(isFeatureEnabled) {

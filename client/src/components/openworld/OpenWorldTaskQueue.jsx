@@ -45,7 +45,7 @@ export default function OpenWorldTaskQueue({ cosTasks, settings }) {
   });
 
   const { position, color, crates, overflow, pending, inProgress, blocked } = queue;
-  const { crateSize, warehouseWidth, warehouseHeight } = TASK_QUEUE;
+  const { crateSize, warehouseWidth } = TASK_QUEUE;
   // Where the overflow marker (and label) sits: just above the visible crate stack.
   const stackTop = crates.length ? crates[crates.length - 1].y + crateSize : crateSize;
 
@@ -59,19 +59,19 @@ export default function OpenWorldTaskQueue({ cosTasks, settings }) {
 
   return (
     <group position={position}>
-      {/* Warehouse base — a wide low dock the crates sit on */}
-      <mesh position={[0, warehouseHeight / 2, 0]}>
-        <boxGeometry args={[warehouseWidth, warehouseHeight, warehouseWidth * 0.9]} />
-        <meshStandardMaterial color={tintStructure('#0c1620')} emissive={color} emissiveIntensity={0.1} metalness={0.4} roughness={0.6} />
+      {/* Queueworks is an open hexagonal maker dais, not another opaque warehouse. */}
+      <mesh position={[0, 0.32, 0]}>
+        <cylinderGeometry args={[warehouseWidth * 0.62, warehouseWidth * 0.76, 0.64, 8]} />
+        <meshStandardMaterial color={tintStructure('#27373c')} emissive={color} emissiveIntensity={0.16} metalness={0.12} roughness={0.84} flatShading />
       </mesh>
       {/* Roof light bar — the live queue-state indicator */}
-      <mesh ref={roofRef} position={[0, warehouseHeight + 0.2, 0]}>
-        <boxGeometry args={[warehouseWidth * 1.05, 0.4, warehouseWidth * 0.95]} />
+      <mesh ref={roofRef} position={[0, 0.7, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[warehouseWidth * 0.44, 0.12, 8, 8]} />
         <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.6} toneMapped={false} />
       </mesh>
 
       {/* Crate stack rises from the dock roof; height ∝ pending backlog */}
-      <group position={[0, warehouseHeight + 0.4, 0]}>
+      <group position={[0, 0.8, 0]}>
         {crates.map((crate, i) => (
           <Crate
             key={crate.index}
@@ -90,10 +90,10 @@ export default function OpenWorldTaskQueue({ cosTasks, settings }) {
         )}
 
         {/* Label + count sublabel above the stack */}
-        <OpenWorldLabel position={[0, stackTop + crateSize * (overflow ? 1.2 : 0.9), 0]} fontSize={1.1} color={color} dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={20}>
-          COS QUEUE
+        <OpenWorldLabel position={[0, stackTop + crateSize * (overflow ? 1.05 : 0.78), 0]} fontSize={0.58} color={color} dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={20}>
+          QUEUEWORKS
         </OpenWorldLabel>
-        <OpenWorldLabel position={[0, stackTop + crateSize * (overflow ? 0.6 : 0.3), 0]} fontSize={0.8} color="#94a3b8" dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={20}>
+        <OpenWorldLabel position={[0, stackTop + crateSize * (overflow ? 0.62 : 0.32), 0]} fontSize={0.36} color="#94a3b8" dayMix={dayMix} anchorX="center" anchorY="middle" font={PIXEL_FONT_URL} maxWidth={20}>
           {sublabel}
         </OpenWorldLabel>
       </group>

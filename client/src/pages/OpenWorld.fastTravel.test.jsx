@@ -131,7 +131,7 @@ describe('OpenWorld — fast travel wiring', () => {
     renderAt('/openworld');
     act(() => { fireEvent.keyDown(window, { key: 'm' }); });
 
-    fireEvent.click(screen.getByLabelText('Teleport to Memory Quarter'));
+    fireEvent.click(screen.getByLabelText('Teleport to Memory House'));
 
     expect(screen.getByTestId('path')).toHaveTextContent('/openworld/region/memory');
     expect(sceneProps.current.focusedRegion.id).toBe('memory');
@@ -140,16 +140,16 @@ describe('OpenWorld — fast travel wiring', () => {
   it('opens fast travel from the HUD button too', () => {
     renderAt('/openworld');
     fireEvent.click(screen.getByText('hud-fast-travel'));
-    expect(screen.getByLabelText('Teleport to Memory Quarter')).toBeInTheDocument();
+    expect(screen.getByLabelText('Teleport to Memory House')).toBeInTheDocument();
   });
 
   it('closes fast travel with Escape', () => {
     renderAt('/openworld');
     act(() => { fireEvent.keyDown(window, { key: 'm' }); });
-    expect(screen.getByLabelText('Search regions')).toBeInTheDocument();
+    expect(screen.getByLabelText('Search village places')).toBeInTheDocument();
 
     act(() => { fireEvent.keyDown(window, { key: 'Escape' }); });
-    expect(screen.queryByLabelText('Search regions')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Search village places')).not.toBeInTheDocument();
   });
 
   it('arms no arrival point until something is actually warped to', () => {
@@ -163,7 +163,7 @@ describe('OpenWorld — fast travel wiring', () => {
     // land at the region rather than the old spawn.
     renderAt('/openworld');
     act(() => { fireEvent.keyDown(window, { key: 'm' }); });
-    fireEvent.click(screen.getByLabelText('Teleport to Memory Quarter'));
+    fireEvent.click(screen.getByLabelText('Teleport to Memory House'));
 
     const teleport = sceneProps.current.playerTeleport;
     expect(teleport).toMatchObject({ x: expect.any(Number), z: expect.any(Number) });
@@ -174,7 +174,7 @@ describe('OpenWorld — fast travel wiring', () => {
     localStorage.setItem('portos-city-settings', JSON.stringify({ explorationMode: true }));
     renderAt('/openworld');
     act(() => { fireEvent.keyDown(window, { key: 'm' }); });
-    fireEvent.click(screen.getByLabelText('Teleport to Memory Quarter'));
+    fireEvent.click(screen.getByLabelText('Teleport to Memory House'));
 
     const teleport = sceneProps.current.playerTeleport;
     expect(teleport).toMatchObject({ x: expect.any(Number), z: expect.any(Number) });
@@ -185,11 +185,11 @@ describe('OpenWorld — fast travel wiring', () => {
     renderAt('/openworld');
 
     act(() => { fireEvent.keyDown(window, { key: 'm' }); });
-    fireEvent.click(screen.getByLabelText('Teleport to Memory Quarter'));
+    fireEvent.click(screen.getByLabelText('Teleport to Memory House'));
     expect(sceneProps.current.playerTeleport.token).toBe(1);
 
     act(() => { fireEvent.keyDown(window, { key: 'm' }); });
-    fireEvent.click(screen.getByLabelText('Teleport to Memory Quarter'));
+    fireEvent.click(screen.getByLabelText('Teleport to Memory House'));
     // Same destination, new warp — a plain {x,z} identity check would have swallowed this.
     expect(sceneProps.current.playerTeleport.token).toBe(2);
   });
@@ -200,11 +200,11 @@ describe('OpenWorld — fast travel wiring', () => {
     renderAt('/openworld');
     fireEvent.click(screen.getByText('hud-photo'));
     act(() => { fireEvent.keyDown(window, { key: 'm' }); });
-    expect(screen.queryByLabelText('Search regions')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Search village places')).not.toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: 'Escape' }); // leave photo mode
     act(() => {});
-    expect(screen.queryByLabelText('Search regions')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Search village places')).not.toBeInTheDocument();
   });
 
   it('tells the HUD which region is active', () => {

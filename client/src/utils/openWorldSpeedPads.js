@@ -1,5 +1,5 @@
-// Pure deterministic helpers for OpenWorld speed boost pads.
-// Boost pads are luminous road markings with animated forward chevron arrows.
+// Pure deterministic helpers for OpenWorld boost markings.
+// They are painted lane flourishes in the village rather than sci-fi metal plates.
 // Driving onto a boost pad gives an instant surge of acceleration and plays a turbo SFX.
 // No three.js / React imports — pure, testable in node.
 
@@ -7,89 +7,49 @@ export const DEFAULT_PAD_BOOST_SPEED = 48; // Peak surge velocity in units/s
 export const PAD_TRIGGER_RADIUS = 2.4;
 
 export const SPEED_PADS = [
-  // Harbor Grand Avenue (accelerating north toward the water)
   {
-    id: 'pad-avenue-north',
-    label: 'Harbor Sprint (North)',
+    id: 'pad-harbor-lane',
+    label: 'Harbor Lane',
     x: 0,
-    z: -20,
-    angle: -Math.PI / 2, // Facing north (-Z)
-    width: 3.8,
-    length: 5.5,
+    z: -41,
+    angle: -Math.PI / 2,
+    width: 3.7,
+    length: 5.2,
     boostSpeed: DEFAULT_PAD_BOOST_SPEED,
-    color: '#06b6d4',
+    color: '#7cc9be',
   },
-  // Harbor Grand Avenue (accelerating south back toward downtown)
   {
-    id: 'pad-avenue-south',
-    label: 'Plaza Approach (South)',
+    id: 'pad-arrival-lane',
+    label: 'Village Welcome',
     x: 0,
-    z: -42,
-    angle: Math.PI / 2, // Facing south (+Z)
-    width: 3.8,
-    length: 5.5,
+    z: 34,
+    angle: -Math.PI / 2,
+    width: 3.7,
+    length: 5.2,
     boostSpeed: DEFAULT_PAD_BOOST_SPEED,
-    color: '#06b6d4',
+    color: '#f3b856',
   },
-  // Southern Arrival Lane (heading into downtown)
   {
-    id: 'pad-arrival-north',
-    label: 'Downtown Gateway',
-    x: 0,
-    z: 42,
-    angle: -Math.PI / 2, // Facing north (-Z)
-    width: 3.8,
-    length: 5.5,
-    boostSpeed: DEFAULT_PAD_BOOST_SPEED,
-    color: '#38bdf8',
-  },
-  // Western Avenue to Memory Quarter & Backup Vault
-  {
-    id: 'pad-west-spoke',
-    label: 'Memory Quarter Express',
-    x: -24,
-    z: -14,
-    angle: Math.PI * 0.85,
-    width: 3.0,
-    length: 4.8,
-    boostSpeed: DEFAULT_PAD_BOOST_SPEED,
-    color: '#a855f7',
-  },
-  // Eastern Avenue to Goal Monuments & Artifacts Hall
-  {
-    id: 'pad-east-spoke',
-    label: 'Achievements Boulevard',
-    x: 24,
-    z: -14,
-    angle: -Math.PI * 0.85,
-    width: 3.0,
-    length: 4.8,
-    boostSpeed: DEFAULT_PAD_BOOST_SPEED,
-    color: '#facc15',
-  },
-  // South-West Spoke to Productivity District
-  {
-    id: 'pad-sw-spoke',
-    label: 'Productivity Turnpike',
+    id: 'pad-west-loop',
+    label: 'Orchard Bend',
     x: -28,
-    z: 20,
-    angle: Math.PI * 0.35,
-    width: 3.0,
+    z: 8,
+    angle: -Math.PI / 2,
+    width: 3.6,
     length: 4.8,
     boostSpeed: DEFAULT_PAD_BOOST_SPEED,
-    color: '#22c55e',
+    color: '#ec8265',
   },
-  // South-East Spoke to Wellness District
   {
-    id: 'pad-se-spoke',
-    label: 'Wellness Expressway',
+    id: 'pad-east-loop',
+    label: 'Pond Bend',
     x: 28,
-    z: 20,
-    angle: -Math.PI * 0.35,
-    width: 3.0,
+    z: 6,
+    angle: Math.PI / 2,
+    width: 3.6,
     length: 4.8,
     boostSpeed: DEFAULT_PAD_BOOST_SPEED,
-    color: '#10b981',
+    color: '#8ccf9e',
   },
 ];
 

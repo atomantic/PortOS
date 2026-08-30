@@ -8,6 +8,7 @@ import {
   SHARD_COLLECTION_RADIUS,
   isCollectibleVisible,
 } from './openWorldCollectibles';
+import { isWalkable } from './openWorldPlan';
 
 describe('openWorldCollectibles', () => {
   it('defines a non-empty array of valid collectible shards with unique ids', () => {
@@ -23,6 +24,7 @@ describe('openWorldCollectibles', () => {
       expect(typeof shard.z).toBe('number');
       expect(typeof shard.color).toBe('string');
       expect(typeof shard.value).toBe('number');
+      expect(isWalkable(shard.x, shard.z), shard.id).toBe(true);
       expect(ids.has(shard.id)).toBe(false);
       ids.add(shard.id);
     });

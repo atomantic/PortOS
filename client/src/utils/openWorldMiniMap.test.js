@@ -11,7 +11,7 @@ import {
   projectLandmarks,
   spreadProjectedPoints,
 } from './openWorldMiniMap';
-import { WORLD, PARCELS } from './openWorldPlan';
+import { ARCHIPELAGO_ISLANDS, ARCHIPELAGO_LINKS } from './openWorldPlan';
 
 const pos = (x, z, district = 'downtown') => ({ x, z, district });
 
@@ -206,52 +206,61 @@ describe('computeMiniMap', () => {
     expect(vm.geography).toBeNull();
   });
 
-  it('keeps geography null for an empty city even when requested', () => {
+  it('keeps the playable archipelago visible for an install with no app buildings', () => {
     const vm = computeMiniMap([], new Map(), { geography: true });
-    expect(vm.geography).toBeNull();
+    expect(vm.geography).not.toBeNull();
+    expect(vm.geography.islands).toHaveLength(ARCHIPELAGO_ISLANDS.length);
+    expect(vm.bounds).not.toBeNull();
     expect(vm.empty).toBe(true);
   });
 
-  it('folds the waterfront into the bounds when geography is enabled', () => {
+  it('folds the whole archipelago into the bounds when geography is enabled', () => {
     const apps = [{ id: 'a', overallStatus: 'online' }];
     const land = computeMiniMap(apps, positions([['a', 0, 0]]));
     const sea = computeMiniMap(apps, positions([['a', 0, 0]]), { geography: true });
-    // The bay (z < shorelineZ, well north of a single downtown building) must push the
-    // box's minZ above the shoreline so the water is on-frame.
-    expect(sea.bounds.minZ).toBeLessThanOrEqual(WORLD.shorelineZ);
     expect(sea.bounds.minZ).toBeLessThan(land.bounds.minZ);
+    expect(sea.bounds.maxZ).toBeGreaterThan(land.bounds.maxZ);
+    expect(sea.bounds.minX).toBeLessThan(land.bounds.minX);
+    expect(sea.bounds.maxX).toBeGreaterThan(land.bounds.maxX);
     expect(sea.geography).not.toBeNull();
-    expect(sea.geography.harbor.label).toBe(PARCELS.dataHarbor.label);
+    expect(sea.geography.links).toHaveLength(ARCHIPELAGO_LINKS.length);
   });
 
-  it('projects the shoreline above the harbor marker (water reads north / top)', () => {
+  it('projects every island and every link inside the normalized map', () => {
     const apps = [
       { id: 'a', overallStatus: 'online' },
       { id: 'b', overallStatus: 'online' },
     ];
     const vm = computeMiniMap(apps, positions([['a', -20, 20], ['b', 20, 40]]), { geography: true });
-    const { shorelineY, harbor } = vm.geography;
-    // The harbor sits out in the bay (z = -64, beyond the shoreline at z = -56), so it
-    // projects above the shoreline line — a smaller ny (north reads as the top of the map).
-    expect(harbor.ny).toBeLessThan(shorelineY);
-    for (const v of [shorelineY, harbor.nx, harbor.ny]) {
-      expect(v).toBeGreaterThanOrEqual(0);
-      expect(v).toBeLessThanOrEqual(1);
+    for (const island of vm.geography.islands) {
+      for (const value of [island.nx, island.ny, island.radiusX, island.radiusY]) {
+        expect(value).toBeGreaterThanOrEqual(0);
+        expect(value).toBeLessThanOrEqual(1);
+      }
+    }
+    for (const link of vm.geography.links) {
+      expect(link.points.length).toBeGreaterThanOrEqual(2);
+      link.points.forEach((point) => {
+        expect(point.nx).toBeGreaterThanOrEqual(0);
+        expect(point.nx).toBeLessThanOrEqual(1);
+        expect(point.ny).toBeGreaterThanOrEqual(0);
+        expect(point.ny).toBeLessThanOrEqual(1);
+      });
     }
   });
 });
 
 describe('geographyWorldPoints', () => {
-  it('returns shoreline + harbor anchors from the master plan', () => {
+  it('returns four extrema for every island in the master plan', () => {
     const pts = geographyWorldPoints();
-    expect(pts).toHaveLength(4);
-    // Shoreline endpoints span the paved land width at the waterline.
-    expect(pts[0]).toEqual({ x: -WORLD.landHalf, z: WORLD.shorelineZ });
-    expect(pts[1]).toEqual({ x: WORLD.landHalf, z: WORLD.shorelineZ });
-    // Harbor footprint corners straddle the parcel anchor out over the bay.
-    const harbor = PARCELS.dataHarbor;
-    expect(pts[2].z).toBeLessThan(WORLD.shorelineZ);
-    expect(pts[3].x).toBeCloseTo(harbor.anchor[0] + harbor.w / 2);
+    expect(pts).toHaveLength(ARCHIPELAGO_ISLANDS.length * 4);
+    ARCHIPELAGO_ISLANDS.forEach((island, index) => {
+      const offset = index * 4;
+      expect(pts[offset]).toEqual({ x: island.center[0] - island.radiusX, z: island.center[1] });
+      expect(pts[offset + 1]).toEqual({ x: island.center[0] + island.radiusX, z: island.center[1] });
+      expect(pts[offset + 2]).toEqual({ x: island.center[0], z: island.center[1] - island.radiusZ });
+      expect(pts[offset + 3]).toEqual({ x: island.center[0], z: island.center[1] + island.radiusZ });
+    });
   });
 });
 
@@ -260,13 +269,12 @@ describe('projectGeography', () => {
     expect(projectGeography(null)).toBeNull();
   });
 
-  it('projects shoreline + harbor into normalized coordinates', () => {
+  it('projects islands and links into normalized coordinates', () => {
     const bounds = { minX: -60, maxX: 60, minZ: -70, maxZ: 60 };
     const geo = projectGeography(bounds);
-    expect(geo.shorelineY).toBeGreaterThanOrEqual(0);
-    expect(geo.shorelineY).toBeLessThanOrEqual(1);
-    expect(geo.harbor.label).toBe(PARCELS.dataHarbor.label);
-    expect(geo.harbor.ny).toBeLessThan(geo.shorelineY);
+    expect(geo.islands).toHaveLength(ARCHIPELAGO_ISLANDS.length);
+    expect(geo.links).toHaveLength(ARCHIPELAGO_LINKS.length);
+    expect(geo.islands.find((island) => island.id === 'harbor')?.label).toBe('Data Harbor');
   });
 });
 

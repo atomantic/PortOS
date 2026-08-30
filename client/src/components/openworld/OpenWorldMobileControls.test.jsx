@@ -21,8 +21,6 @@ function renderControls(overrides = {}) {
   const props = {
     mobileInputRef,
     playerActionRef,
-    onToggleCameraView: vi.fn(),
-    onToggleExploration: vi.fn(),
     ...overrides,
   };
 
@@ -30,7 +28,7 @@ function renderControls(overrides = {}) {
 }
 
 describe('OpenWorldMobileControls', () => {
-  it('exposes the complete touch action set', () => {
+  it('exposes a focused touch action set', () => {
     renderControls();
 
     expect(screen.getByRole('group', { name: 'Movement joystick' })).toBeInTheDocument();
@@ -38,8 +36,8 @@ describe('OpenWorldMobileControls', () => {
     expect(screen.getByRole('button', { name: 'BOOST' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'JUMP' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Interact with nearby building or warp pad' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Switch camera view' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Fly out to orbital view' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Switch camera view' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Fly out to orbital view' })).not.toBeInTheDocument();
   });
 
   it('maps hold actions to the game input refs and clears them on release', () => {
@@ -151,18 +149,12 @@ describe('OpenWorldMobileControls', () => {
     expect(mobileInputRef.current.lookDeltaY).toBe(-6);
   });
 
-  it('routes action buttons to their game callbacks', () => {
-    const onToggleCameraView = vi.fn();
-    const onToggleExploration = vi.fn();
-    const { playerActionRef } = renderControls({ onToggleCameraView, onToggleExploration });
+  it('routes the action button to the interaction callback', () => {
+    const { playerActionRef } = renderControls();
 
     fireEvent.click(screen.getByRole('button', { name: 'Interact with nearby building or warp pad' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Switch camera view' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Fly out to orbital view' }));
 
     expect(playerActionRef.current.interact).toHaveBeenCalledTimes(1);
-    expect(onToggleCameraView).toHaveBeenCalledTimes(1);
-    expect(onToggleExploration).toHaveBeenCalledTimes(1);
   });
 
   it('clears active touch state when the controls unmount', () => {

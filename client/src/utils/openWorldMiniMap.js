@@ -6,13 +6,17 @@
 // fixed-size map box — plus bounds and empty/degenerate handling. No React / three.js
 // imports so the topology stays unit-testable (mirrors openWorldTaskQueue.js).
 //
-// Geography awareness: the bay, shoreline, and Data Harbor are read from the SAME master
-// town plan (`openWorldPlan.js`) the 3D scene uses, so the map's waterfront can't drift from the
-// real city either. `geographyWorldPoints()` feeds those anchors into the map bounds so the
-// bay is visible, and `projectGeography()` returns normalized shoreline/harbor coordinates
-// for the overlay to draw.
+// Geography awareness: every island and Signal Trail causeway is read from the SAME
+// archipelago plan (`openWorldPlan.js`) the 3D scene uses. `geographyWorldPoints()` feeds
+// the island extents into the map bounds and `projectGeography()` projects the actual
+// island/link geometry, so the HUD map cannot drift back into the old rectangular city.
 
-import { WORLD, PARCELS } from './openWorldPlan';
+import {
+  ARCHIPELAGO_ISLANDS,
+  ARCHIPELAGO_LINKS,
+  PARCELS,
+  archipelagoLinkPoints,
+} from './openWorldPlan';
 
 // Padding (as a fraction of the box) so dots never sit exactly on the frame edge.
 export const MINI_MAP_PADDING = 0.08;
@@ -106,37 +110,43 @@ function clamp01(v) {
   return v;
 }
 
-// World-space anchor points for the city's waterfront, read from the master town plan. These
-// are folded into the map bounds (when geography is enabled) so the bay north of the shoreline
-// and the Data Harbor's piers are actually inside the visible box — building positions alone
-// only span the land, so the water would otherwise sit off-frame.
+// World-space extrema for every island. These are folded into the map bounds so the
+// complete playable world remains visible even when the install has few or no app buildings.
 export function geographyWorldPoints() {
-  const harbor = PARCELS.dataHarbor;
-  const [hx, , hz] = harbor.anchor;
-  const halfW = harbor.w / 2;
-  const halfD = harbor.d / 2;
-  return [
-    // Shoreline span across the paved land width, at the waterline.
-    { x: -WORLD.landHalf, z: WORLD.shorelineZ },
-    { x: WORLD.landHalf, z: WORLD.shorelineZ },
-    // Data Harbor footprint (out over the bay, z < shoreline).
-    { x: hx - halfW, z: hz - halfD },
-    { x: hx + halfW, z: hz + halfD },
-  ];
+  return ARCHIPELAGO_ISLANDS.flatMap((island) => {
+    const [x, z] = island.center;
+    return [
+      { x: x - island.radiusX, z },
+      { x: x + island.radiusX, z },
+      { x, z: z - island.radiusZ },
+      { x, z: z + island.radiusZ },
+    ];
+  });
 }
 
-// Normalized (0..1) projection of the waterfront for the overlay to draw, given the SAME
-// bounds the dots use. `shorelineY` is the vertical position of the waterline (water is above
-// it on the map — smaller z projects to smaller ny); `harbor` is the harbor marker's point.
-// Returns null when bounds are null (empty city) so the overlay skips the water layer.
+// Normalized (0..1) projection of the authored islands and their Signal Trail links.
 export function projectGeography(bounds, padding = MINI_MAP_PADDING) {
   if (!bounds) return null;
-  const harbor = PARCELS.dataHarbor;
-  const { ny: shorelineY } = projectPoint({ x: 0, z: WORLD.shorelineZ }, bounds, padding);
-  const harborPoint = projectPoint({ x: harbor.anchor[0], z: harbor.anchor[2] }, bounds, padding);
   return {
-    shorelineY,
-    harbor: { nx: harborPoint.nx, ny: harborPoint.ny, label: harbor.label },
+    islands: ARCHIPELAGO_ISLANDS.map((island) => {
+      const [x, z] = island.center;
+      const center = projectPoint({ x, z }, bounds, padding);
+      const edgeX = projectPoint({ x: x + island.radiusX, z }, bounds, padding);
+      const edgeZ = projectPoint({ x, z: z + island.radiusZ }, bounds, padding);
+      return {
+        id: island.id,
+        label: island.label,
+        biome: island.biome,
+        nx: center.nx,
+        ny: center.ny,
+        radiusX: Math.abs(edgeX.nx - center.nx),
+        radiusY: Math.abs(edgeZ.ny - center.ny),
+      };
+    }),
+    links: ARCHIPELAGO_LINKS.map((link) => ({
+      id: link.id,
+      points: archipelagoLinkPoints(link).map(([x, z]) => projectPoint({ x, z }, bounds, padding)),
+    })),
   };
 }
 
@@ -190,9 +200,8 @@ export function projectLandmarks(bounds, padding = MINI_MAP_PADDING) {
 // (defensive — every active/archived app should have one). Handles empty/non-array inputs by
 // returning an empty, bounds-null view.
 //
-// `opts.geography` (default false) folds the bay/shoreline/harbor anchors into the bounds and
-// returns a `geography` view-model (shoreline + harbor in normalized coords). It's opt-in so
-// the pure projection tests keep building-only bounds; the live overlay passes `true`.
+// `opts.geography` (default false) folds the whole archipelago into the bounds and returns
+// its projected island/link view-model. The live overlay passes `true`.
 export function computeMiniMap(apps, positions, opts = {}) {
   const padding = opts.padding ?? MINI_MAP_PADDING;
   const includeGeography = opts.geography === true;
@@ -207,9 +216,9 @@ export function computeMiniMap(apps, positions, opts = {}) {
     placed.push({ app, pos });
   }
 
-  // Geography anchors expand the box so the waterfront is on-frame, but never become dots.
+  // Geography anchors expand the box to the complete playable world, but never become dots.
   const boundsPoints = placed.map(({ pos }) => pos);
-  if (includeGeography && boundsPoints.length > 0) boundsPoints.push(...geographyWorldPoints());
+  if (includeGeography) boundsPoints.push(...geographyWorldPoints());
   const bounds = computeBounds(boundsPoints);
 
   const dots = placed.map(({ app, pos }) => {

@@ -54,4 +54,20 @@ describe('OpenWorldHud', () => {
     expect(within(metrics).getByText('DISK')).toBeInTheDocument();
     expect(within(metrics).getByText('91%')).toBeInTheDocument();
   });
+
+  it('gives exploration a quiet village hierarchy instead of dashboard telemetry', () => {
+    renderHud({
+      explorationMode: true,
+      activeRegion: { id: 'memory', label: 'Memory Wilds' },
+      collectedCount: 3,
+      totalShards: 17,
+    });
+
+    expect(screen.queryByLabelText('System resource usage')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Memory Wilds').length).toBeGreaterThan(0);
+    expect(screen.getByText('PORTOS VILLAGE')).toBeInTheDocument();
+    expect(screen.getByText('WELCOME TO THE VILLAGE')).toBeInTheDocument();
+    expect(screen.getAllByText(/3\/17/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Take the long way/i)).toBeInTheDocument();
+  });
 });

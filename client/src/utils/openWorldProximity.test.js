@@ -36,7 +36,7 @@ describe('openWorldProximity', () => {
     expect(target).toBeDefined();
     expect(target?.type).toBe('landmark');
     expect(target?.id).toBe('ai-core');
-    expect(target?.action).toBe('INSPECT AI RUNS');
+    expect(target?.action).toBe('VISIT THE AI CORE');
   });
 
   it('detects warp pad with higher priority when close to warp pad', () => {
@@ -99,6 +99,7 @@ describe('openWorldProximity', () => {
       playerPos: { x: -45.5, y: 1.6, z: 40.5 },
       easterEggs: { eggs: [], total: 0, hasData: false },
       warpPads: { warpPadList: [] },
+      landmarks: [],
     });
     expect(target).toBeNull();
   });
