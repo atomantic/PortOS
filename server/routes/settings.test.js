@@ -44,6 +44,9 @@ vi.mock('../services/datadog.js', () => ({
 vi.mock('../services/jira.js', () => ({
   hasConfiguredInstances: vi.fn(async () => false),
 }));
+vi.mock('../lib/gitRemote.js', () => ({
+  getOriginInfo: vi.fn(async () => ({ isGithub: true, owner: 'example-owner' })),
+}));
 vi.mock('../services/eidoverse.js', () => ({
   DEFAULT_EIDOVERSE_WORLDS_REPO: 'https://github.com/anima-research/eidoverse-worlds',
   normalizeEidoverseWorldsRepo: vi.fn((url) => url),
@@ -195,7 +198,7 @@ describe('Settings routes — instance feature participation', () => {
   });
 
   it('updates the installed Eidoverse source without changing feature participation', async () => {
-    const worldsRepoUrl = 'https://github.com/example-owner/eidoverse-worlds';
+    const worldsRepoUrl = 'git@github.com:example-owner/eidoverse-worlds.git';
     store = { instanceFeatures: { eidoverse: { enabled: true } } };
 
     const res = await request(buildApp())

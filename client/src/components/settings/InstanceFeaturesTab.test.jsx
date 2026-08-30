@@ -47,6 +47,7 @@ const EIDOVERSE_FEATURE = {
     uiPort: 8940,
     runtimeStatus: 'not_registered',
     worldsRepoUrl: 'https://github.com/anima-research/eidoverse-worlds',
+    sourceOwners: { self: 'example-owner', upstream: 'anima-research' },
   },
 };
 
@@ -143,6 +144,40 @@ describe('InstanceFeaturesTab', () => {
       'https://github.com/example-owner/eidoverse-worlds',
       { silent: true },
     ));
+  });
+
+  it('builds Self and Upstream sources with the selected Git transport', async () => {
+    mock.getInstanceFeatures.mockResolvedValue({ features: [EIDOVERSE_FEATURE] });
+    render(<MemoryRouter><InstanceFeaturesTab /></MemoryRouter>);
+
+    const ownerGroup = await screen.findByRole('group', { name: 'Worlds repository owner' });
+    const protocolGroup = screen.getByRole('group', { name: 'Worlds repository protocol' });
+    expect(ownerGroup.querySelector('[aria-pressed="true"]')).toHaveTextContent('Upstream');
+    expect(protocolGroup.querySelector('[aria-pressed="true"]')).toHaveTextContent('HTTP');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Self' }));
+    fireEvent.click(screen.getByRole('button', { name: 'SSH' }));
+
+    expect(screen.getByRole('textbox', { name: 'Worlds GitHub repository' }))
+      .toHaveValue('git@github.com:example-owner/eidoverse-worlds.git');
+    fireEvent.click(screen.getByRole('button', { name: 'Install & enable' }));
+    await waitFor(() => expect(mock.installEidoverseFeature).toHaveBeenCalledWith(
+      'git@github.com:example-owner/eidoverse-worlds.git',
+      { silent: true },
+    ));
+  });
+
+  it('disables Self when the PortOS origin is not a GitHub repository', async () => {
+    mock.getInstanceFeatures.mockResolvedValue({
+      features: [{
+        ...EIDOVERSE_FEATURE,
+        setup: { ...EIDOVERSE_FEATURE.setup, sourceOwners: { self: null, upstream: 'anima-research' } },
+      }],
+    });
+    render(<MemoryRouter><InstanceFeaturesTab /></MemoryRouter>);
+
+    expect(await screen.findByRole('button', { name: 'Self' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Upstream' })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('updates the origin of an installed Worlds checkout in place', async () => {

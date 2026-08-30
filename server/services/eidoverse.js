@@ -58,7 +58,9 @@ export function normalizeEidoverseWorldsRepo(worldsRepoUrl) {
       code: 'EIDOVERSE_REPO_INVALID',
     });
   }
-  return `https://github.com/${parsed.owner}/${parsed.repo}`;
+  return /^git@github\.com:/i.test(String(worldsRepoUrl).trim())
+    ? `git@github.com:${parsed.owner}/${parsed.repo}.git`
+    : `https://github.com/${parsed.owner}/${parsed.repo}`;
 }
 
 export function getEidoversePaths(worldsRepoUrl = DEFAULT_EIDOVERSE_WORLDS_REPO) {
@@ -200,6 +202,7 @@ async function performInstall(worldsRepoUrl) {
     paths.worlds === configuredPaths.worlds ? cloneRepo(worldsRepoUrl) : Promise.resolve(),
     cloneRepo(EIDOVERSE_VIDEO_REPO),
   ]);
+  await updateOriginAtPath(paths.worlds, worldsRepoUrl);
 
   await Promise.all([
     installDependencies(paths.worlds, bun),
@@ -293,6 +296,27 @@ export async function getEidoverseStatus({ worldsRepoUrl = DEFAULT_EIDOVERSE_WOR
   };
 }
 
+async function updateOriginAtPath(repoPath, worldsRepoUrl) {
+  const result = await execGit(
+    ['remote', 'set-url', 'origin', worldsRepoUrl],
+    repoPath,
+    { ignoreExitCode: true },
+  );
+  if (result.exitCode === 0) return;
+
+  const added = await execGit(
+    ['remote', 'add', 'origin', worldsRepoUrl],
+    repoPath,
+    { ignoreExitCode: true },
+  );
+  if (added.exitCode !== 0) {
+    throw new ServerError('The Eidoverse Worlds checkout has no usable Git origin.', {
+      status: 422,
+      code: 'EIDOVERSE_ORIGIN_UPDATE_FAILED',
+    });
+  }
+}
+
 /**
  * Change the Worlds checkout's fetch origin without moving the checkout or
  * touching its working tree. This is intentionally separate from installation:
@@ -319,24 +343,7 @@ export async function setEidoverseWorldsOrigin(worldsRepoUrl) {
     });
   }
 
-  const result = await execGit(
-    ['remote', 'set-url', 'origin', normalizedRepoUrl],
-    repoPath,
-    { ignoreExitCode: true },
-  );
-  if (result.exitCode !== 0) {
-    const added = await execGit(
-      ['remote', 'add', 'origin', normalizedRepoUrl],
-      repoPath,
-      { ignoreExitCode: true },
-    );
-    if (added.exitCode !== 0) {
-      throw new ServerError('The Eidoverse Worlds checkout has no usable Git origin.', {
-        status: 422,
-        code: 'EIDOVERSE_ORIGIN_UPDATE_FAILED',
-      });
-    }
-  }
+  await updateOriginAtPath(repoPath, normalizedRepoUrl);
 
   notifyAppsChanged('update', app.id);
   return { appId: app.id, worldsRepoUrl: normalizedRepoUrl };

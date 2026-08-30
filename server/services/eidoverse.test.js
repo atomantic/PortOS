@@ -70,6 +70,7 @@ import {
 } from './eidoverse.js';
 
 const SELECTED_WORLDS_REPO = 'https://github.com/example-owner/eidoverse-worlds';
+const SELECTED_WORLDS_REPO_SSH = 'git@github.com:example-owner/eidoverse-worlds.git';
 const selectedPaths = getEidoversePaths(SELECTED_WORLDS_REPO);
 
 describe('Eidoverse managed-app installer', () => {
@@ -84,9 +85,9 @@ describe('Eidoverse managed-app installer', () => {
     __resetEidoverseInstallForTests();
 
     mock.cloneRepo.mockImplementation(async (url) => {
-      mock.existing.add(url === SELECTED_WORLDS_REPO
-        ? join(selectedPaths.worlds, '.git')
-        : join(selectedPaths.video, '.git'));
+      mock.existing.add(url === EIDOVERSE_VIDEO_REPO
+        ? join(selectedPaths.video, '.git')
+        : join(selectedPaths.worlds, '.git'));
     });
     mock.spawn.mockImplementation(async (command, _args, options = {}) => {
       if (command === 'powershell' || command === 'bash') {
@@ -119,6 +120,11 @@ describe('Eidoverse managed-app installer', () => {
 
     expect(mock.cloneRepo).toHaveBeenCalledWith(SELECTED_WORLDS_REPO);
     expect(mock.cloneRepo).toHaveBeenCalledWith(EIDOVERSE_VIDEO_REPO);
+    expect(mock.execGit).toHaveBeenCalledWith(
+      ['remote', 'set-url', 'origin', SELECTED_WORLDS_REPO],
+      selectedPaths.worlds,
+      { ignoreExitCode: true },
+    );
     expect(mock.spawn).toHaveBeenCalledWith('bun', ['install', '--frozen-lockfile'], expect.objectContaining({ cwd: selectedPaths.worlds }));
     expect(mock.spawn).toHaveBeenCalledWith('bun', ['install', '--frozen-lockfile'], expect.objectContaining({ cwd: join(selectedPaths.worlds, 'client') }));
     expect(mock.atomicWrite).toHaveBeenCalledWith(
@@ -161,11 +167,25 @@ describe('Eidoverse managed-app installer', () => {
     expect(status).toMatchObject({ installed: true, appId: 'app-eidoverse' });
   });
 
-  it('uses the canonical upstream by default and normalizes a selected fork URL', () => {
+  it('configures a fresh checkout with the selected SSH origin', async () => {
+    const status = await installEidoverse({ worldsRepoUrl: SELECTED_WORLDS_REPO_SSH });
+
+    expect(mock.cloneRepo).toHaveBeenCalledWith(SELECTED_WORLDS_REPO_SSH);
+    expect(mock.execGit).toHaveBeenCalledWith(
+      ['remote', 'set-url', 'origin', SELECTED_WORLDS_REPO_SSH],
+      selectedPaths.worlds,
+      { ignoreExitCode: true },
+    );
+    expect(status).toMatchObject({ installed: true, worldsRepoUrl: SELECTED_WORLDS_REPO_SSH });
+  });
+
+  it('uses the canonical upstream by default and preserves the selected Git transport', () => {
     expect(getEidoversePaths().worlds).toBe(join('/example/data/repos', 'anima-research', 'eidoverse-worlds'));
     expect(DEFAULT_EIDOVERSE_WORLDS_REPO).toBe('https://github.com/anima-research/eidoverse-worlds');
-    expect(normalizeEidoverseWorldsRepo('git@github.com:example-owner/eidoverse-worlds.git'))
+    expect(normalizeEidoverseWorldsRepo('https://github.com/example-owner/eidoverse-worlds.git'))
       .toBe(SELECTED_WORLDS_REPO);
+    expect(normalizeEidoverseWorldsRepo('git@github.com:example-owner/eidoverse-worlds.git'))
+      .toBe('git@github.com:example-owner/eidoverse-worlds.git');
   });
 
   it('selects the official unattended Bun installer for each supported platform', () => {

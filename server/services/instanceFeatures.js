@@ -1,4 +1,5 @@
 import { ServerError } from '../lib/errorHandler.js';
+import { getOriginInfo } from '../lib/gitRemote.js';
 import { parseGitHubUrl } from '../lib/githubRepoUrl.js';
 import { INSTANCE_FEATURES, INSTANCE_FEATURE_IDS } from '../lib/instanceFeatureRegistry.js';
 import { isPlainObject } from '../lib/objects.js';
@@ -123,7 +124,7 @@ const configuredEidoverseRepo = (settings) => {
   if (typeof configured !== 'string') return DEFAULT_EIDOVERSE_WORLDS_REPO;
   const parsed = parseGitHubUrl(configured);
   return parsed
-    ? `https://github.com/${parsed.owner}/${parsed.repo}`
+    ? normalizeEidoverseWorldsRepo(configured)
     : DEFAULT_EIDOVERSE_WORLDS_REPO;
 };
 
@@ -133,9 +134,20 @@ export async function assertConfiguredEidoverseInstalled() {
 }
 
 const attachSetupStatus = async (features, settings) => {
-  const eidoverse = await getEidoverseStatus({ worldsRepoUrl: configuredEidoverseRepo(settings) });
+  const [eidoverse, portosOrigin] = await Promise.all([
+    getEidoverseStatus({ worldsRepoUrl: configuredEidoverseRepo(settings) }),
+    getOriginInfo(),
+  ]);
+  const upstream = parseGitHubUrl(DEFAULT_EIDOVERSE_WORLDS_REPO)?.owner || null;
+  const sourceOwners = {
+    // A stock clone points at atomantic/PortOS, which identifies the project
+    // owner rather than the current user's GitHub account. Only a non-upstream
+    // GitHub origin gives us a defensible owner for the "Self" shortcut.
+    self: portosOrigin.isGithub && !portosOrigin.isUpstream ? portosOrigin.owner : null,
+    upstream,
+  };
   return features.map((feature) => (
-    feature.id === 'eidoverse' ? { ...feature, setup: eidoverse } : feature
+    feature.id === 'eidoverse' ? { ...feature, setup: { ...eidoverse, sourceOwners } } : feature
   ));
 };
 

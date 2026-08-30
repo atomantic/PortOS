@@ -8,6 +8,7 @@ const mock = vi.hoisted(() => ({
   jiraConfigured: false,
   datadogThrows: false,
   eidoverseInstalled: false,
+  portosOrigin: { isGithub: true, isUpstream: false, owner: 'example-owner' },
   assertEidoverseInstalled: vi.fn(),
   setEidoverseWorldsOrigin: vi.fn(),
 }));
@@ -27,6 +28,10 @@ vi.mock('./datadog.js', () => ({
 
 vi.mock('./jira.js', () => ({
   hasConfiguredInstances: vi.fn(async () => mock.jiraConfigured),
+}));
+
+vi.mock('../lib/gitRemote.js', () => ({
+  getOriginInfo: vi.fn(async () => mock.portosOrigin),
 }));
 
 vi.mock('./eidoverse.js', () => ({
@@ -61,6 +66,7 @@ describe('instance features', () => {
     mock.jiraConfigured = false;
     mock.datadogThrows = false;
     mock.eidoverseInstalled = false;
+    mock.portosOrigin = { isGithub: true, isUpstream: false, owner: 'example-owner' };
     mock.assertEidoverseInstalled.mockReset().mockResolvedValue({ installed: true });
     mock.setEidoverseWorldsOrigin.mockReset().mockResolvedValue({ appId: 'app-eidoverse' });
     mock.updateSettingsWith.mockReset();
@@ -83,6 +89,29 @@ describe('instance features', () => {
         installed: false,
         bunAvailable: true,
         worldsRepoUrl: 'https://github.com/anima-research/eidoverse-worlds',
+        sourceOwners: { self: 'example-owner', upstream: 'anima-research' },
+      },
+    });
+  });
+
+  it('preserves an SSH source and omits Self when the PortOS origin is not GitHub', async () => {
+    mock.settings = { instanceFeatures: { eidoverse: { worldsRepoUrl: 'git@github.com:example-owner/eidoverse-worlds.git' } } };
+    mock.portosOrigin = { isGithub: false, isUpstream: false, owner: 'example-owner' };
+
+    expect(byId((await getInstanceFeatures()).features, 'eidoverse')).toMatchObject({
+      setup: {
+        worldsRepoUrl: 'git@github.com:example-owner/eidoverse-worlds.git',
+        sourceOwners: { self: null, upstream: 'anima-research' },
+      },
+    });
+  });
+
+  it('omits Self when this install tracks the canonical upstream', async () => {
+    mock.portosOrigin = { isGithub: true, isUpstream: true, owner: 'atomantic' };
+
+    expect(byId((await getInstanceFeatures()).features, 'eidoverse')).toMatchObject({
+      setup: {
+        sourceOwners: { self: null, upstream: 'anima-research' },
       },
     });
   });

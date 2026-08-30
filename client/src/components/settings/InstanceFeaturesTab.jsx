@@ -20,8 +20,38 @@ const sourceHint = (feature) => {
 
 const normalizeGitHubRepo = (url) => {
   const parsed = parseGitHubUrl(url);
+  if (!parsed) return null;
+  return /^git@github\.com:/i.test(String(url).trim())
+    ? `git@github.com:${parsed.owner}/${parsed.repo}.git`
+    : `https://github.com/${parsed.owner}/${parsed.repo}`;
+};
+
+const buildEidoverseRepoUrl = (owner, transport) => (
+  transport === 'ssh'
+    ? `git@github.com:${owner}/eidoverse-worlds.git`
+    : `https://github.com/${owner}/eidoverse-worlds`
+);
+
+const eidoverseTransport = (url) => (/^git@github\.com:/i.test(String(url).trim()) ? 'ssh' : 'http');
+
+const githubBrowseUrl = (url) => {
+  const parsed = parseGitHubUrl(url);
   return parsed ? `https://github.com/${parsed.owner}/${parsed.repo}` : null;
 };
+
+const SourceChoiceButton = ({ active, children, disabled = false, onClick }) => (
+  <button
+    type="button"
+    aria-pressed={active}
+    disabled={disabled}
+    onClick={onClick}
+    className={`min-h-[36px] px-3 py-1.5 text-xs rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${active
+      ? 'bg-port-accent text-white'
+      : 'text-gray-400 hover:text-white hover:bg-port-border/70'}`}
+  >
+    {children}
+  </button>
+);
 
 export function InstanceFeaturesTab() {
   const { features, error, reload } = useInstanceFeatures();
@@ -126,6 +156,11 @@ export function InstanceFeaturesTab() {
           const needsInstall = isEidoverse && setup?.installed !== true;
           const installing = savingId === feature.id;
           const selectedRepoUrl = eidoverseRepoUrl ?? setup?.worldsRepoUrl ?? '';
+          const selectedRepo = parseGitHubUrl(selectedRepoUrl);
+          const selectedTransport = eidoverseTransport(selectedRepoUrl);
+          const selfOwner = setup?.sourceOwners?.self || null;
+          const upstreamOwner = setup?.sourceOwners?.upstream || 'anima-research';
+          const worldsBrowseUrl = githubBrowseUrl(setup?.worldsRepoUrl);
           const repoIsValid = isGitHubRepoUrl(selectedRepoUrl);
           const canInstall = repoIsValid && setup?.registryAvailable !== false;
           const canUpdateSource = repoIsValid
@@ -155,11 +190,47 @@ export function InstanceFeaturesTab() {
                     {needsInstall && <p>
                       PortOS will install Bun if needed, clone your selected Worlds repository and the upstream video runtime as separate AGPL-3.0 repositories, install their dependencies, and register Worlds under Apps. It will not start the server automatically.
                     </p>}
-                    <label className="block pt-2" htmlFor="eidoverse-worlds-repo">
-                      <span className="block text-gray-300 mb-1">Worlds GitHub repository</span>
+                    <div className="pt-2">
+                      <label className="block text-gray-300 mb-1" htmlFor="eidoverse-worlds-repo">
+                        Worlds GitHub repository
+                      </label>
+                      <span className="flex flex-wrap gap-2 mb-2">
+                        <span role="group" aria-label="Worlds repository owner" className="inline-flex gap-1 rounded-lg border border-port-border p-1">
+                          <SourceChoiceButton
+                            active={Boolean(selfOwner) && selectedRepo?.owner?.toLowerCase() === selfOwner.toLowerCase()}
+                            disabled={savingId !== null || !selfOwner}
+                            onClick={() => setEidoverseRepoUrl(buildEidoverseRepoUrl(selfOwner, selectedTransport))}
+                          >
+                            Self
+                          </SourceChoiceButton>
+                          <SourceChoiceButton
+                            active={selectedRepo?.owner?.toLowerCase() === upstreamOwner.toLowerCase()}
+                            disabled={savingId !== null}
+                            onClick={() => setEidoverseRepoUrl(buildEidoverseRepoUrl(upstreamOwner, selectedTransport))}
+                          >
+                            Upstream
+                          </SourceChoiceButton>
+                        </span>
+                        <span role="group" aria-label="Worlds repository protocol" className="inline-flex gap-1 rounded-lg border border-port-border p-1">
+                          <SourceChoiceButton
+                            active={selectedTransport === 'http'}
+                            disabled={savingId !== null || !selectedRepo}
+                            onClick={() => setEidoverseRepoUrl(buildEidoverseRepoUrl(selectedRepo.owner, 'http'))}
+                          >
+                            HTTP
+                          </SourceChoiceButton>
+                          <SourceChoiceButton
+                            active={selectedTransport === 'ssh'}
+                            disabled={savingId !== null || !selectedRepo}
+                            onClick={() => setEidoverseRepoUrl(buildEidoverseRepoUrl(selectedRepo.owner, 'ssh'))}
+                          >
+                            SSH
+                          </SourceChoiceButton>
+                        </span>
+                      </span>
                       <input
                         id="eidoverse-worlds-repo"
-                        type="url"
+                        type="text"
                         required
                         value={selectedRepoUrl}
                         onChange={(event) => setEidoverseRepoUrl(event.target.value)}
@@ -167,9 +238,9 @@ export function InstanceFeaturesTab() {
                         aria-invalid={!repoIsValid}
                         aria-describedby={!repoIsValid ? 'eidoverse-worlds-repo-error' : undefined}
                         className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden disabled:opacity-50"
-                        placeholder="https://github.com/your-account/eidoverse-worlds"
+                        placeholder="https://github.com/example-owner/eidoverse-worlds"
                       />
-                    </label>
+                    </div>
                     {!repoIsValid && (
                       <p id="eidoverse-worlds-repo-error" role="alert" className="text-port-error">
                         {selectedRepoUrl === ''
@@ -216,8 +287,8 @@ export function InstanceFeaturesTab() {
                 )}
                 {setup?.installed && (
                   <div className="flex flex-wrap items-center gap-3 mt-3 text-xs">
-                    {setup.worldsRepoUrl && (
-                      <a className="text-port-accent hover:text-white transition-colors" href={setup.worldsRepoUrl} target="_blank" rel="noreferrer">
+                    {worldsBrowseUrl && (
+                      <a className="text-port-accent hover:text-white transition-colors" href={worldsBrowseUrl} target="_blank" rel="noreferrer">
                         Worlds repository
                       </a>
                     )}
