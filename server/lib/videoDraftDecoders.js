@@ -186,8 +186,9 @@ export const applyVideoDraftDecoders = (list) => {
  * Checked, in the order a hand-edit is most likely to break it:
  *   - `draftDecoder` is an object (or absent/null)
  *   - the runtime is one whose builder actually emits the flags
- *   - `id`, `label`, `repo`, `revision` and `runtimeRevision` are non-empty
- *     strings — every one of them reaches argv or an HF cache lookup
+ *   - `label`, `repo`, `revision` and `runtimeRevision` are non-empty strings —
+ *     every one of them reaches argv or an HF cache lookup — and `id` is
+ *     exactly `DRAFT_DECODE_DRAFT`, the only value the request enum accepts
  *   - `files` names exactly one non-empty relative path, with no traversal (it is
  *     joined against a cache snapshot root and handed to a child process)
  */
@@ -213,8 +214,8 @@ export const validateDraftDecoderTable = (list) => {
       fail(entry.id, `draftDecoder is missing required string field(s): ${missing.join(', ')}`);
       continue;
     }
-    if (decoder.id === DRAFT_DECODE_FULL) {
-      fail(entry.id, `"${DRAFT_DECODE_FULL}" is the reserved full-decode id`);
+    if (decoder.id !== DRAFT_DECODE_DRAFT) {
+      fail(entry.id, `draftDecoder.id must be "${DRAFT_DECODE_DRAFT}" — the request field is a closed enum, so any other id would reach the picker and then be rejected by the route; got "${decoder.id}"`);
       continue;
     }
     const files = decoder.files;
@@ -269,17 +270,29 @@ export const sanitizeDraftDecoders = (list) => {
  *
  * @param {object}  args.model            resolved video model entry
  * @param {string}  args.decodeId         what the request asked for
+ * Every gate FAILS CLOSED on a missing argument. This is a public export, and
+ * a caller that omits the model list or the cache verdict has not proved the
+ * render may decode at preview fidelity — it has only failed to ask. Defaulting
+ * either to "fine" would turn an omission into a silent fidelity downgrade.
+ *
  * @param {Array}   args.models           the platform's video list, so a model
  *                                        that IS somebody's declared Finish
- *                                        target counts as a delivery model
+ *                                        target counts as a delivery model.
+ *                                        REQUIRED — a non-array declines.
  * @param {string}  args.runtimeRevision  the INSTALLED runner checkout revision,
  *                                        or null when it could not be read
  * @param {boolean} args.assetCached      the pinned files resolved in the HF cache
  */
 export const draftDecodeDeclineReason = ({
-  model, decodeId, models = null, runtimeRevision = null, assetCached = true,
+  model, decodeId, models = null, runtimeRevision = null, assetCached = false,
 }) => {
   if (isFullDecode(decodeId)) return null;
+  if (!Array.isArray(models)) {
+    return {
+      code: 'DRAFT_DECODE_DELIVERY_UNVERIFIABLE',
+      message: `${modelLabel(model)} — the model list needed to check delivery intent was not supplied, so this render decodes on the full decoder.`,
+    };
+  }
   // Delivery intent outranks everything, including a model that declares no
   // decoder at all: the answer to "may this clip be decoded at preview
   // fidelity?" is no before the question of "with what?" is even asked. The

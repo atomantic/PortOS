@@ -454,7 +454,7 @@ describe('stitchVideos — history provenance', () => {
     'renderInputsVersion',
   ];
 
-  const stitchHistory = async (firstChunkFields = {}) => {
+  const stitchHistory = async (firstChunkFields = {}, secondChunkFields = {}) => {
     const { readJSONFile } = await import('../../lib/fileUtils.js');
     const chunkIds = ['chunk-a', 'chunk-b'];
     vi.mocked(readJSONFile).mockResolvedValue([
@@ -466,7 +466,7 @@ describe('stitchVideos — history provenance', () => {
       {
         id: chunkIds[1], filename: 'chunk-b.mp4', prompt: 'second beat',
         modelId: 'ltx2_unified', seed: 43, width: 768, height: 512,
-        numFrames: 49, fps: 24,
+        numFrames: 49, fps: 24, ...secondChunkFields,
       },
     ]);
     return stitchVideos(chunkIds, {
@@ -499,6 +499,47 @@ describe('stitchVideos — history provenance', () => {
     const stitched = await stitchHistory();
 
     for (const field of renderFields) expect(stitched).not.toHaveProperty(field);
+  });
+
+  // Draft decode (#5423). The REQUEST is chain-wide — every chunk is submitted
+  // with the same value — but the OUTCOME is decided per child process, because
+  // the runner falls back to the full decoder on any load failure. Claiming
+  // chunk 0's verdict over a clip whose later chunks decoded differently is
+  // exactly the false fidelity claim the field exists to prevent.
+  describe('draft-decode outcome', () => {
+    const applied = (value) => ({ draftDecode: 'draft', draftDecodeApplied: { id: 'draft', applied: value } });
+
+    it('inherits the request and a unanimous outcome', async () => {
+      const stitched = await stitchHistory(applied(true), applied(true));
+
+      expect(stitched.draftDecode).toBe('draft');
+      expect(stitched.draftDecodeApplied).toEqual({ id: 'draft', applied: true });
+    });
+
+    it('inherits a unanimous fallback outcome', async () => {
+      const stitched = await stitchHistory(
+        { ...applied(false), draftDecodeApplied: { id: 'draft', applied: false, reason: 'KeyError: a' } },
+        { ...applied(false), draftDecodeApplied: { id: 'draft', applied: false, reason: 'KeyError: b' } },
+      );
+
+      // Unanimity is on the verdict, not deep equality: two chunks that both
+      // fell back agree about the clip's fidelity whatever their reasons were.
+      expect(stitched.draftDecodeApplied.applied).toBe(false);
+    });
+
+    it('keeps the request but omits the outcome when the chunks disagree', async () => {
+      const stitched = await stitchHistory(applied(true), applied(false));
+
+      expect(stitched.draftDecode).toBe('draft');
+      expect(stitched).not.toHaveProperty('draftDecodeApplied');
+    });
+
+    it('stamps no outcome on a chain that never reported one', async () => {
+      const stitched = await stitchHistory({ draftDecode: 'draft' }, { draftDecode: 'draft' });
+
+      expect(stitched.draftDecode).toBe('draft');
+      expect(stitched).not.toHaveProperty('draftDecodeApplied');
+    });
   });
 });
 

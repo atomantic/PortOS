@@ -41,6 +41,7 @@ const model = (over = {}) => ({
 
 const applies = (over = {}) => ({
   model: model(),
+  models: [model()],
   decodeId: DRAFT_DECODE_DRAFT,
   runtimeRevision: RUNTIME_REV,
   assetCached: true,
@@ -133,8 +134,10 @@ describe('validateDraftDecoderTable', () => {
     expect(problem(model({ draftDecoder: decoder({ [key]: undefined }) }))).toMatch(new RegExp(key));
   });
 
-  it('refuses the reserved full-decode id', () => {
-    expect(problem(model({ draftDecoder: decoder({ id: DRAFT_DECODE_FULL }) }))).toMatch(/reserved/);
+  // The request field is a closed enum, so any other id would surface an option
+  // in the picker that the route then 400s.
+  it.each([DRAFT_DECODE_FULL, 'turbo'])('refuses the decoder id %p', (id) => {
+    expect(problem(model({ draftDecoder: decoder({ id }) }))).toMatch(/must be "draft"/);
   });
 
   it.each([
@@ -181,6 +184,17 @@ describe('draftDecodeDeclineReason', () => {
 
   it('never declines a full decode, even on a model with no decoder', () => {
     expect(draftDecodeDeclineReason({ model: model({ draftDecoder: undefined }), decodeId: DRAFT_DECODE_FULL })).toBeNull();
+  });
+
+  // Fail-closed defaults. A caller that omits an argument has not PROVED the
+  // render may decode at preview fidelity — it has only failed to ask, and
+  // reading that as consent would turn an omission into a silent downgrade.
+  it.each([
+    ['the model list is missing', { models: undefined }, 'DRAFT_DECODE_DELIVERY_UNVERIFIABLE'],
+    ['the cache verdict is missing', { assetCached: undefined }, 'DRAFT_DECODE_ASSET_NOT_CACHED'],
+    ['the runtime revision is missing', { runtimeRevision: undefined }, 'DRAFT_DECODE_RUNTIME_UNSUPPORTED'],
+  ])('declines when %s', (_label, over, code) => {
+    expect(draftDecodeDeclineReason(applies(over)).code).toBe(code);
   });
 
   // The issue's central safety property: a preview-fidelity asset must never
@@ -272,11 +286,10 @@ describe('publicVideoDraftDecodeOptions', () => {
     expect(supportsDraftDecode(model({ draftDecoder: undefined }))).toBe(false);
   });
 
-  it('offers full first, then the declared decoder, without leaking the file list', () => {
+  it('offers full first, then the declared decoder with its download size', () => {
     const options = publicVideoDraftDecodeOptions(model());
     expect(options.map((o) => o.id)).toEqual([DRAFT_DECODE_FULL, DRAFT_DECODE_DRAFT]);
     expect(options[1]).toMatchObject({ repo: 'example/draft-decoder', sizeLabel: '~1 GB' });
-    expect(options[1].files).toBeUndefined();
   });
 });
 

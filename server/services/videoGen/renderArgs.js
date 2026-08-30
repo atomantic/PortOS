@@ -748,9 +748,10 @@ const buildMiniMaxH3Args = ({ model, prompt, negativePrompt, width, height, numF
   // byte-identical to what it was before this feature existed. `paths` were
   // already resolved against the HF cache by generateVideo — the helper never
   // downloads — and generateVideo has already refused the substitution for a
-  // final/Finish render, so nothing here can put a draft decode on a delivery
-  // clip. One --draft-decoder-file per pinned file; the helper links them into
-  // a shim `source/` beside the model's own decoder config.
+  // model the finish graph names as a delivery target, so nothing here can put
+  // a draft decode on a delivery clip. One --draft-decoder-file per pinned
+  // file; the helper links it into a shim `source/` beside the model's own
+  // decoder config.
   if (draftDecoder) {
     args.push('--draft-decoder-id', draftDecoder.id);
     for (const path of draftDecoder.paths) args.push('--draft-decoder-file', path);

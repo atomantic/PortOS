@@ -15,6 +15,17 @@ import {
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { loadHistory, mutateVideoHistory } from './history.js';
 
+// Fold the per-chunk DRAFTDECODE: reports into one claim, or none. Unanimity is
+// on the `applied` verdict rather than deep equality: two chunks that both fell
+// back agree about the clip's fidelity even if their failure reasons differ.
+const unanimousDraftDecodeOutcome = (videos) => {
+  const first = videos[0]?.draftDecodeApplied;
+  if (first === undefined) return {};
+  return videos.every((v) => v?.draftDecodeApplied?.applied === first.applied)
+    ? { draftDecodeApplied: first }
+    : {};
+};
+
 export async function stitchVideos(videoIds, opts = {}) {
   const {
     id = randomUUID(),
@@ -216,13 +227,22 @@ export async function stitchVideos(videoIds, opts = {}) {
       // none (resolveVideoSpeedProfileForModes), so videos[0] speaks for all.
       'speedProfileId',
       'speedProfileApplied',
-      // Draft decode (#5423) — inherited for the same reason as the speed
-      // profile above: a chain's chunk entries are hidden, so without these the
-      // stitched record would never say the clip was decoded at preview
-      // fidelity. Every chunk of one chain resolves the same decoder.
+      // Draft decode REQUEST (#5423) — chain-wide by construction: every chunk
+      // is submitted with the same `draftDecode`, and the gate that resolves it
+      // is mode-independent, so videos[0] speaks for all. Inherited for the same
+      // reason as the speed profile above — the chunks are hidden, so without it
+      // the stitched record could never say the clip was decoded at preview
+      // fidelity, and a Remix would quietly revert to Full.
       'draftDecode',
-      'draftDecodeApplied',
     ].flatMap((key) => videos[0][key] === undefined ? [] : [[key, videos[0][key]]])),
+    // The draft-decode OUTCOME is decided per child process — the runner falls
+    // back to the full decoder on any load failure — so unlike the request
+    // above, videos[0] does NOT speak for the chain. Inherited only when every
+    // chunk agrees; on a mixed chain the field is omitted, which the lightbox
+    // already renders as "outcome not reported". Asserting chunk 0's verdict
+    // over a clip whose later chunks decoded differently would be exactly the
+    // false fidelity claim this field exists to prevent.
+    ...unanimousDraftDecodeOutcome(videos),
     // Inherit applied LoRAs from the first constituent clip (a chunk chain
     // shares one LoRA set across all chunks), so the visible stitched entry
     // round-trips LoRAs on Remix the same way a single render does — mirrors

@@ -1092,10 +1092,11 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
     setSteps('');
     setGuidanceScale('');
     // Finish is the delivery render, so it always decodes on the full decoder.
-    // The server enforces this too (`draftDecodeDeclineReason` declines a
-    // `finalRender`, and a delivery model is final on its own), but forcing it
-    // in the form means the user SEES the control agree with what will happen
-    // rather than reading Draft on a render that will ignore it.
+    // The server enforces the same thing from the other side — a model the
+    // finish graph names as a delivery target is declined by
+    // `draftDecodeDeclineReason`, and a Finish target is one by definition —
+    // but forcing it here means the user SEES the control agree with what will
+    // happen rather than reading Draft on a render that will ignore it.
     setDraftDecode(DEFAULT_DRAFT_DECODE_ID);
   };
 
