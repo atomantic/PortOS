@@ -310,7 +310,10 @@ describe('brain service', () => {
         isGitHubRepo: true,
         cloneStatus: 'pending'
       }));
-      expect(storage.updateLink).toHaveBeenCalledWith('link-001', { cloneStatus: 'cloning' });
+      expect(storage.updateLink).toHaveBeenCalledWith('link-001', {
+        cloneStatus: 'cloning',
+        cloneInstanceId: 'local-instance'
+      });
     });
 
     it('files a URL to Links even when the creative flag is set', async () => {
@@ -974,7 +977,8 @@ describe('brain service', () => {
     it('marks only interrupted clones as failed so they can be retried', async () => {
       storage.getLinks.mockResolvedValue([
         { id: 'pending', cloneStatus: 'pending' },
-        { id: 'cloning', cloneStatus: 'cloning' },
+        { id: 'cloning', cloneStatus: 'cloning', cloneInstanceId: 'local-instance' },
+        { id: 'peer-cloning', cloneStatus: 'cloning', cloneInstanceId: 'peer-x' },
         { id: 'cloned', cloneStatus: 'cloned' },
         { id: 'failed', cloneStatus: 'failed' },
         { id: 'none', cloneStatus: 'none' },
@@ -989,6 +993,7 @@ describe('brain service', () => {
         cloneStatus: 'failed',
         cloneError: 'Clone interrupted by a server restart. Retry to clone the repository again.',
       });
+      expect(storage.updateLink).not.toHaveBeenCalledWith('peer-cloning', expect.anything());
     });
   });
 

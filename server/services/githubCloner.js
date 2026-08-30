@@ -7,6 +7,7 @@
 
 import { spawn } from '../lib/childProcess.js';
 import { existsSync } from 'fs';
+import { mkdtemp, rename, rm } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { parseGitHubUrl, isGitHubRepoUrl } from '../lib/githubRepoUrl.js';
@@ -69,6 +70,12 @@ export async function cloneRepo(url, options = {}) {
     await ensureDir(ownerDir);
   }
 
+  // Clone into attempt-specific staging, then publish it only after git exits.
+  // An abruptly orphaned git child can keep writing its private directory, but
+  // a retry gets a different directory and cannot race the live checkout.
+  const stagingRoot = await mkdtemp(join(ownerDir, `.${repo}-cloning-`));
+  const stagingPath = join(stagingRoot, repo);
+
   // Build clone command with shallow clone for space efficiency
   const httpsUrl = `https://github.com/${owner}/${repo}.git`;
   const args = [
@@ -76,12 +83,12 @@ export async function cloneRepo(url, options = {}) {
     '--depth', '1',
     '--single-branch',
     httpsUrl,
-    localPath
+    stagingPath
   ];
 
   console.log(`📥 Cloning ${owner}/${repo}...`);
 
-  return new Promise((resolve, reject) => {
+  const clone = new Promise((resolve, reject) => {
     const child = spawn('git', args, {
       env: process.env,
       shell: false
@@ -93,15 +100,15 @@ export async function cloneRepo(url, options = {}) {
       stderr += data.toString();
     });
 
+    const timeout = setTimeout(() => {
+      child.kill();
+      reject(new Error('Clone timed out after 5 minutes'));
+    }, 300000);
+
     child.on('close', (code) => {
+      clearTimeout(timeout);
       if (code === 0) {
-        console.log(`✅ Cloned ${owner}/${repo} to ${localPath}`);
-        resolve({
-          localPath,
-          owner,
-          repo,
-          alreadyCloned: false
-        });
+        resolve();
       } else {
         console.error(`❌ Failed to clone ${owner}/${repo}: ${stderr}`);
         reject(new Error(`Git clone failed: ${stderr || `exit code ${code}`}`));
@@ -109,15 +116,29 @@ export async function cloneRepo(url, options = {}) {
     });
 
     child.on('error', (err) => {
+      clearTimeout(timeout);
       console.error(`❌ Git clone error: ${err.message}`);
       reject(err);
     });
+  });
 
-    // Timeout after 5 minutes
-    setTimeout(() => {
-      child.kill();
-      reject(new Error('Clone timed out after 5 minutes'));
-    }, 300000);
+  const cleanupStaging = () => rm(stagingRoot, { recursive: true, force: true })
+    .catch(err => console.error(`❌ Failed to clean clone staging directory: ${err.message}`));
+
+  return clone.then(async () => {
+    // A concurrent attempt may have won while this one was cloning. Keep the
+    // completed checkout and discard only this attempt's private staging dir.
+    if (existsSync(join(localPath, '.git'))) {
+      await cleanupStaging();
+      return { localPath, owner, repo, alreadyCloned: true };
+    }
+    await rename(stagingPath, localPath);
+    await cleanupStaging();
+    console.log(`✅ Cloned ${owner}/${repo} to ${localPath}`);
+    return { localPath, owner, repo, alreadyCloned: false };
+  }).catch(async (err) => {
+    await cleanupStaging();
+    throw err;
   });
 }
 

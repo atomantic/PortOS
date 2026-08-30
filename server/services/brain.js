@@ -840,16 +840,21 @@ export async function recoverStuckClassifications() {
 
 /**
  * Recover repository clones interrupted by a previous server shutdown.
- * A clone process cannot survive the PortOS process that started it, so every
- * persisted `cloning` state observed during boot is orphaned and retryable.
+ * Clone work is published only after git exits successfully; an orphaned child
+ * can keep writing its private staging directory without racing a retry.
  */
 export async function recoverInterruptedRepoClones() {
+  const instanceId = await getInstanceId();
   const links = await storage.getLinks({ cloneStatus: 'cloning' });
   let recovered = 0;
   for (const link of links) {
     // Keep the state guard even though storage applies the filter so a future
     // storage implementation cannot broaden this boot-time mutation by accident.
     if (link.cloneStatus !== 'cloning') continue;
+    // New records name the instance that started this attempt. For older
+    // records, originInstanceId is the safest compatibility fallback.
+    const cloneOwner = link.cloneInstanceId ?? link.originInstanceId;
+    if (cloneOwner && cloneOwner !== instanceId) continue;
     await storage.updateLink(link.id, {
       cloneStatus: 'failed',
       cloneError: 'Clone interrupted by a server restart. Retry to clone the repository again.'
@@ -984,7 +989,8 @@ function hostnameFromUrl(url) {
  * queue an agent against a path that doesn't exist.
  */
 export async function cloneRepoInBackground(linkId, url) {
-  await storage.updateLink(linkId, { cloneStatus: 'cloning' });
+  const cloneInstanceId = await getInstanceId();
+  await storage.updateLink(linkId, { cloneStatus: 'cloning', cloneInstanceId });
 
   githubCloner.cloneRepo(url)
     .then(async (result) => {

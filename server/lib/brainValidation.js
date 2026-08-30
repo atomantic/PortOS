@@ -443,6 +443,9 @@ export const linkRecordSchema = z.object({
   localPath: z.string().max(500).optional(),
   cloneStatus: z.enum(['pending', 'cloning', 'cloned', 'failed', 'none']).default('none'),
   cloneError: z.string().max(500).optional(),
+  // The instance currently responsible for an in-flight clone. This differs
+  // from immutable originInstanceId when a peer retries a shared link.
+  cloneInstanceId: z.string().optional(),
   malwareScan: z.object({
     reportId: z.string().uuid(),
     taskId: z.string().optional(),
