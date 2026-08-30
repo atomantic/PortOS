@@ -94,7 +94,7 @@ describe('Eidoverse hosted page', () => {
     expect(api.startApp).not.toHaveBeenCalled();
     expect(api.startEidoverseHost).toHaveBeenCalledWith({ silent: true });
     expect(api.getEidoverseWorldStatus).toHaveBeenCalledWith({ silent: true });
-    expect(api.projectEidoverseWorld).toHaveBeenCalledWith({ silent: true });
+    await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledWith({ silent: true }));
     expect(screen.getByRole('link', { name: 'Manage app' })).toHaveAttribute('href', '/apps/app-eidoverse/overview');
   });
 
