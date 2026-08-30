@@ -37,7 +37,7 @@ export default function AdvancedParamsPanel({
   steps, onStepsChange,
   guidanceScale, onGuidanceScaleChange,
   speedProfileId = DEFAULT_SPEED_PROFILE_ID, onSpeedProfileChange,
-  draftDecode = DEFAULT_DRAFT_DECODE_ID, onDraftDecodeChange,
+  draftDecode = DEFAULT_DRAFT_DECODE_ID, onDraftDecodeChange, draftDecodeLocked = false,
   imageStrength, onImageStrengthChange,
   i2vReferenceMode = DEFAULT_I2V_REFERENCE_MODE, onI2vReferenceModeChange,
   effectiveImageStrength = null,
@@ -110,8 +110,14 @@ export default function AdvancedParamsPanel({
   // Preview-fidelity decode (#5423). The option list is server-declared and
   // rides on the model entry, so a model with no draft decoder yields [] and
   // renders NO control rather than a select with one real choice.
+  // A model the finish graph names as a DELIVERY target always decodes on its
+  // own decoder — `draftDecodeDeclineReason` refuses a draft request there
+  // before it even asks which decoder was meant. The caller reads that off the
+  // model list (`isDeliveryVideoModel`) and passes it down, so the control shows
+  // Full and says why rather than offering a choice the server would decline.
   const draftDecodeOptions = draftDecodeOptionsForModel(currentModel);
-  const activeDraftDecode = draftDecodeOptions.find((o) => o.id === draftDecode) || null;
+  const effectiveDraftDecode = draftDecodeLocked ? DEFAULT_DRAFT_DECODE_ID : draftDecode;
+  const activeDraftDecode = draftDecodeOptions.find((o) => o.id === effectiveDraftDecode) || null;
   const speedProfiles = speedProfilesForMode(currentModel, speedProfileModes);
   const showSpeedProfiles = !samplerLocked && speedProfiles.length > 0;
   // Resolved against the SAME set the picker offers, so a model with two
@@ -272,7 +278,8 @@ export default function AdvancedParamsPanel({
           {draftDecodeOptions.length > 0 && (
             <FormField label="Decode" labelClassName="block text-xs font-medium text-gray-400 mb-1">
               <select
-                value={activeDraftDecode ? draftDecode : DEFAULT_DRAFT_DECODE_ID}
+                value={activeDraftDecode ? effectiveDraftDecode : DEFAULT_DRAFT_DECODE_ID}
+                disabled={draftDecodeLocked}
                 onChange={(e) => onDraftDecodeChange?.(e.target.value)}
                 className={inputCls}
               >
@@ -283,10 +290,16 @@ export default function AdvancedParamsPanel({
                 ))}
               </select>
               <p className="mt-1 text-xs text-gray-500">
-                {activeDraftDecode?.description || ''}
-                {activeDraftDecode && activeDraftDecode.id !== DEFAULT_DRAFT_DECODE_ID
-                  ? ' Finish and delivery renders always use the full decoder.'
-                  : ''}
+                {draftDecodeLocked
+                  ? `${currentModel?.name || 'This model'} is a delivery model — final and Finish renders always decode on the full decoder.`
+                  : (
+                    <>
+                      {activeDraftDecode?.description || ''}
+                      {activeDraftDecode && activeDraftDecode.id !== DEFAULT_DRAFT_DECODE_ID
+                        ? ' Finish and delivery renders always use the full decoder.'
+                        : ''}
+                    </>
+                  )}
               </p>
             </FormField>
           )}

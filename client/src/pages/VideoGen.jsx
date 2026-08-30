@@ -97,7 +97,7 @@ import { VIDEO_RESOLUTIONS, resolutionOptionsForModel } from '../lib/videoGenRes
 import { GROK_VIDEO_DURATIONS, GROK_VIDEO_DEFAULT_DURATION } from '../lib/grokVideoClip.js';
 import ResolutionField from '../components/media/ResolutionField';
 import { VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, IC_LORA_MODES } from '../lib/videoGenParams.js';
-import { finishTargetForRecord } from '../lib/videoFinish.js';
+import { finishTargetForRecord, isDeliveryVideoModel } from '../lib/videoFinish.js';
 import { peerModelRequiresInput } from '../lib/federatedMediaReadiness.js';
 const MODES = [
   { id: 'text',   label: 'Text',   icon: Type,       desc: 'Text-to-video' },
@@ -347,6 +347,13 @@ export default function VideoGen() {
   // model the draft's registry entry declares. Prefill only — the user presses
   // Generate themselves.
   const resolveFinishTarget = useCallback((raw) => finishTargetForRecord(raw, models), [models]);
+  // A model the finish graph names as a DELIVERY target always decodes on its
+  // own decoder — the server declines a draft request there outright (#5423) —
+  // so the decode picker shows Full and says why instead of offering a choice
+  // that would be silently dropped. `applyFinish` already resets the value when
+  // Finish switches models; this keeps the control honest when the user picks
+  // the delivery model by hand.
+  const deliveryModelSelected = isDeliveryVideoModel(currentModel, models);
   const handleFinishVideo = useCallback((raw, target) => {
     if (!raw || !target) return;
     applyFinish(raw, target.id);
@@ -1361,6 +1368,7 @@ export default function VideoGen() {
               guidanceScale={guidanceScale} onGuidanceScaleChange={setGuidanceScale}
               speedProfileId={speedProfileId} onSpeedProfileChange={setSpeedProfileId}
               draftDecode={draftDecode} onDraftDecodeChange={setDraftDecode}
+              draftDecodeLocked={deliveryModelSelected}
               imageStrength={imageStrength} onImageStrengthChange={setImageStrength}
               i2vReferenceMode={i2vReferenceMode} onI2vReferenceModeChange={setI2vReferenceMode}
               effectiveImageStrength={effectiveImageStrength}

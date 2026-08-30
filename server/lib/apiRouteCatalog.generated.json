@@ -13971,7 +13971,7 @@
       "sources": [
         {
           "source": "server/routes/mediaJobs.js",
-          "line": 102
+          "line": 103
         }
       ]
     },
@@ -13982,7 +13982,7 @@
       "sources": [
         {
           "source": "server/routes/mediaJobs.js",
-          "line": 358
+          "line": 371
         }
       ]
     },
@@ -13993,7 +13993,7 @@
       "sources": [
         {
           "source": "server/routes/mediaJobs.js",
-          "line": 131
+          "line": 132
         }
       ]
     },
@@ -14004,7 +14004,7 @@
       "sources": [
         {
           "source": "server/routes/mediaJobs.js",
-          "line": 144
+          "line": 145
         }
       ]
     },
@@ -14015,7 +14015,7 @@
       "sources": [
         {
           "source": "server/routes/mediaJobs.js",
-          "line": 256
+          "line": 269
         }
       ]
     },
@@ -14026,7 +14026,7 @@
       "sources": [
         {
           "source": "server/routes/mediaJobs.js",
-          "line": 374
+          "line": 387
         }
       ]
     },
@@ -14037,7 +14037,7 @@
       "sources": [
         {
           "source": "server/routes/mediaJobs.js",
-          "line": 386
+          "line": 399
         }
       ]
     },
@@ -14048,7 +14048,7 @@
       "sources": [
         {
           "source": "server/routes/mediaJobs.js",
-          "line": 126
+          "line": 127
         }
       ]
     },
@@ -14059,7 +14059,7 @@
       "sources": [
         {
           "source": "server/routes/mediaJobs.js",
-          "line": 121
+          "line": 122
         }
       ]
     },

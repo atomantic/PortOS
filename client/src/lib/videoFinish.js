@@ -65,3 +65,22 @@ export const finishTargetForRecord = (record, models) => {
   if (typeof targetId !== 'string' || targetId.length === 0) return null;
   return models.find((m) => m?.id === targetId) || null;
 };
+
+/**
+ * True when `model` sits at the DELIVERY end of the finish graph — i.e. some
+ * other entry in `models` names it as its `finishModelId`.
+ *
+ * Mirror of `isDeliveryVideoModel` in `server/lib/videoFinishProfiles.js`, which
+ * is what `draftDecodeDeclineReason` consults: a delivery model always decodes
+ * on its own decoder, whatever a request asked for. The client needs the same
+ * reading so the decode picker SHOWS what the render will do instead of
+ * offering a draft decode the server will silently decline.
+ *
+ * @param {object|null|undefined} model
+ * @param {Array<object>} models - video model entries from the status payload
+ */
+export const isDeliveryVideoModel = (model, models) => {
+  const id = model?.id;
+  if (typeof id !== 'string' || id.length === 0 || !Array.isArray(models)) return false;
+  return models.some((entry) => entry?.finishModelId === id);
+};

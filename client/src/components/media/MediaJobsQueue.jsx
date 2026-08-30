@@ -27,7 +27,9 @@ import {
   videoEdgeBoundsForModel, textEncoderOptionsForModel, STOCK_TEXT_ENCODER_ID,
   normalizeTextEncoderForModel,
   DEFAULT_SPEED_PROFILE_ID, normalizeSpeedProfileForModel, speedProfileIdFromRecord,
+  DEFAULT_DRAFT_DECODE_ID, isFullDecodeId, normalizeDraftDecodeForModel, draftDecodeFromRecord,
 } from '../../lib/videoGenParams';
+import { isDeliveryVideoModel } from '../../lib/videoFinish';
 import { loraFamilyOf, videoLoraFamily } from '../../lib/runnerFamilies';
 import LoraPicker from '../imageGen/LoraPicker';
 
@@ -715,6 +717,10 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
   // picker reports what the render actually used rather than always reading
   // "Quality", and so an unchanged retry re-submits the same schedule.
   const [speedProfileId, setSpeedProfileId] = useState(speedProfileIdFromRecord(p.speedProfileId));
+  // The decode the job was submitted with (#5423, #5449). Seeded from its params
+  // for the same reason the schedule above is: an untouched requeue must
+  // re-submit what the original render asked for, not snap silently back to Full.
+  const [draftDecode, setDraftDecode] = useState(draftDecodeFromRecord(p.draftDecode));
   const [availableLoras, setAvailableLoras] = useState([]);
   const [selectedLoras, setSelectedLoras] = useState(Array.isArray(p.loras) ? p.loras : []);
 
@@ -749,6 +755,20 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
   const encoderOptions = textEncoderOptionsForModel(currentModel);
   const originalEncoder = normalizeTextEncoderForModel(p.textEncoderId || STOCK_TEXT_ENCODER_ID, currentModel);
   const originalSpeedProfileForModel = normalizeSpeedProfileForModel(speedProfileIdFromRecord(p.speedProfileId), currentModel);
+  // Preview-fidelity decode (#5449). A model the finish graph names as a
+  // DELIVERY target always decodes on its own decoder, so the picker is locked
+  // to Full there rather than offering a draft the server would decline — the
+  // same reset the Video Gen form makes when Finish switches models.
+  const deliveryModel = isDeliveryVideoModel(currentModel, models);
+  const snapDraftDecode = useCallback((id) => (
+    deliveryModel ? DEFAULT_DRAFT_DECODE_ID : normalizeDraftDecodeForModel(id, currentModel)
+  ), [currentModel, deliveryModel]);
+  // Until `models` resolves, an unknown model means "not known yet", never "no
+  // draft decoder" — so the baseline stays the RECORDED value and an untouched
+  // requeue submitted mid-load still sends no decode override at all.
+  const originalDraftDecode = currentModel
+    ? snapDraftDecode(draftDecodeFromRecord(p.draftDecode))
+    : draftDecodeFromRecord(p.draftDecode);
   // Models arrive asynchronously, so the recorded profile can only be validated
   // once the entry resolves. Until then state holds the raw recorded id; this
   // snaps it to what the model actually declares, so an untouched form can't
@@ -757,6 +777,13 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
     if (!currentModel) return;
     setSpeedProfileId((current) => normalizeSpeedProfileForModel(current, currentModel));
   }, [currentModel]);
+  // Same deferral for the decode: snap the recorded request onto what the
+  // resolved model declares (and onto Full for a delivery model) once the entry
+  // is known, so the <select> can never hold a value it has no <option> for.
+  useEffect(() => {
+    if (!currentModel) return;
+    setDraftDecode((current) => snapDraftDecode(current));
+  }, [currentModel, snapDraftDecode]);
   // Multi-keyframe inputs are not exposed in the sanitized queue projection,
   // but FFLF is their persisted semantic mode. IC/a2v conditioning also pins
   // a single render, so keep the shared chaining controls consistent with the
@@ -826,6 +853,16 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
     if (modelId !== p.modelId || speedProfileId !== originalSpeedProfileForModel) {
       overrides.speedProfileId = speedProfileId === DEFAULT_SPEED_PROFILE_ID ? null : speedProfileId;
     }
+    // Same model-switch clause as its two siblings above, and the same clear:
+    // `null` resets the inherited request to Full, because an explicit 'full'
+    // and an absent field are the same request — sending the sentinel would
+    // leave the requeued job carrying a knob that changed nothing.
+    // `textChanged` rather than the siblings' raw `!==`: a job stored without a
+    // modelId leaves state at '' against an undefined param, which compares
+    // unequal and would make an UNTOUCHED requeue send a decode override.
+    if (textChanged(modelId, p.modelId) || draftDecode !== originalDraftDecode) {
+      overrides.draftDecode = isFullDecodeId(draftDecode) ? null : draftDecode;
+    }
     if (JSON.stringify(selectedLoras) !== JSON.stringify(p.loras || [])) overrides.loras = selectedLoras;
     onSubmit(Object.keys(overrides).length ? overrides : null);
   };
@@ -875,6 +912,7 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
           fps={displayedFps} onFpsChange={setFps} seed={seed} onSeedChange={setSeed} onRandomSeed={() => setSeed(Math.floor(Math.random() * 2147483647))}
           steps={steps} onStepsChange={setSteps} guidanceScale={guidanceScale} onGuidanceScaleChange={setGuidanceScale}
           speedProfileId={speedProfileId} onSpeedProfileChange={setSpeedProfileId}
+          draftDecode={draftDecode} onDraftDecodeChange={setDraftDecode} draftDecodeLocked={deliveryModel}
           imageStrength={imageStrength} onImageStrengthChange={setImageStrength} tiling={tiling} onTilingChange={setTiling}
           i2vReferenceMode={i2vReferenceMode} onI2vReferenceModeChange={setI2vReferenceMode}
           effectiveImageStrength={resolveI2vReferenceStrength(i2vReferenceMode, imageStrength)}

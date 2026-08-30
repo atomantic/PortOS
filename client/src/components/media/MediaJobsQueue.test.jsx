@@ -418,3 +418,131 @@ describe('MediaJobsQueue — video retry reference mode (#4874)', () => {
     expect(overrides.i2vReferenceMode).toBeNull();
   });
 });
+
+// Preview-fidelity decode (#5423) as an editable requeue override (#5449). The
+// shipped VIDEO_DRAFT_DECODERS table is EMPTY, so these use a fixture decoder
+// entry — the option list is server-declared and rides on the model entry as
+// `draftDecodeOptions`, which is exactly what the picker reads.
+describe('MediaJobsQueue — video retry decode override (#5449)', () => {
+  const DECODE_OPTIONS = [
+    { id: 'full', label: 'Full decode', description: "The model's own decoder." },
+    { id: 'draft', label: 'Example draft decoder', description: 'Preview fidelity only.', sizeLabel: '120 MB' },
+  ];
+  // Declares a draft decoder AND is somebody's Finish target — so the picker
+  // must lock to Full on it, the way `draftDecodeDeclineReason` does server-side.
+  const DELIVERY = {
+    id: 'example-delivery', name: 'Example Delivery', runtime: 'minimax_h3',
+    supportedModes: ['text', 'image'], draftDecodeOptions: DECODE_OPTIONS,
+  };
+  const DECODER_MODEL = {
+    id: 'example-h3', name: 'Example H3', runtime: 'minimax_h3',
+    supportedModes: ['text', 'image'], finishModelId: 'example-delivery',
+    draftDecodeOptions: DECODE_OPTIONS,
+  };
+  const NO_DECODER_MODEL = {
+    id: 'example-plain', name: 'Example Plain', runtime: 'ltx2',
+    supportedModes: ['text', 'image'],
+  };
+  const MODELS = [DECODER_MODEL, DELIVERY, NO_DECODER_MODEL];
+
+  const failedJob = (params = {}) => ({
+    id: 'decodefail000dead',
+    kind: 'video',
+    status: 'failed',
+    error: 'boom',
+    queuedAt: '2026-06-19T10:00:00Z',
+    params: {
+      prompt: 'a fox', mode: 'text', modelId: 'example-h3', width: 704, height: 448, ...params,
+    },
+  });
+
+  const openRetryEditor = async (user, job) => {
+    listMediaJobs.mockResolvedValue([job]);
+    render(<MediaJobsQueue kind="video" />);
+    await expandReel(user);
+    await user.click(await screen.findByLabelText('Edit and retry'));
+  };
+
+  it('renders no decode control for a model that declares no draft decoder', async () => {
+    const user = userEvent.setup();
+    getVideoGenStatus.mockResolvedValue({ models: MODELS });
+    await openRetryEditor(user, failedJob({ modelId: 'example-plain' }));
+    await screen.findByLabelText('Model');
+    expect(screen.queryByLabelText('Decode')).not.toBeInTheDocument();
+  });
+
+  it('pre-fills the decode the job was submitted with', async () => {
+    const user = userEvent.setup();
+    getVideoGenStatus.mockResolvedValue({ models: MODELS });
+    await openRetryEditor(user, failedJob({ draftDecode: 'draft' }));
+    const select = await screen.findByLabelText('Decode');
+    await waitFor(() => expect(select.value).toBe('draft'));
+  });
+
+  it('sends no override at all when the decode is left untouched', async () => {
+    const user = userEvent.setup();
+    getVideoGenStatus.mockResolvedValue({ models: MODELS });
+    await openRetryEditor(user, failedJob({ draftDecode: 'draft' }));
+    await waitFor(() => expect(screen.getByLabelText('Decode').value).toBe('draft'));
+
+    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
+    expect(retryMediaJob).toHaveBeenCalledWith('decodefail000dead', null, { silent: true });
+  });
+
+  it('requeues a full-decode job at draft fidelity when the user switches it', async () => {
+    const user = userEvent.setup();
+    getVideoGenStatus.mockResolvedValue({ models: MODELS });
+    await openRetryEditor(user, failedJob());
+    const select = await screen.findByLabelText('Decode');
+    await waitFor(() => expect(select.value).toBe('full'));
+
+    await user.selectOptions(select, 'draft');
+    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
+    expect(retryMediaJob).toHaveBeenCalledWith(
+      'decodefail000dead', { draftDecode: 'draft' }, { silent: true },
+    );
+  });
+
+  it('clears an inherited draft decode with null rather than submitting the full sentinel', async () => {
+    const user = userEvent.setup();
+    getVideoGenStatus.mockResolvedValue({ models: MODELS });
+    await openRetryEditor(user, failedJob({ draftDecode: 'draft' }));
+    const select = await screen.findByLabelText('Decode');
+    await waitFor(() => expect(select.value).toBe('draft'));
+
+    await user.selectOptions(select, 'full');
+    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
+    expect(retryMediaJob).toHaveBeenCalledWith(
+      'decodefail000dead', { draftDecode: null }, { silent: true },
+    );
+  });
+
+  it('locks the picker to Full on a delivery model and still sends no override', async () => {
+    const user = userEvent.setup();
+    getVideoGenStatus.mockResolvedValue({ models: MODELS });
+    await openRetryEditor(user, failedJob({ modelId: 'example-delivery', draftDecode: 'draft' }));
+    const select = await screen.findByLabelText('Decode');
+    await waitFor(() => expect(select.value).toBe('full'));
+    expect(select).toBeDisabled();
+    expect(screen.getByText(/Example Delivery is a delivery model/)).toBeInTheDocument();
+
+    // The baseline snaps with the value, so an untouched requeue of a delivery
+    // job stays byte-identical to today rather than growing a no-op override.
+    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
+    expect(retryMediaJob).toHaveBeenCalledWith('decodefail000dead', null, { silent: true });
+  });
+
+  it('resets the decode to Full when the retry is retargeted at a delivery model', async () => {
+    const user = userEvent.setup();
+    getVideoGenStatus.mockResolvedValue({ models: MODELS });
+    await openRetryEditor(user, failedJob({ draftDecode: 'draft' }));
+    await waitFor(() => expect(screen.getByLabelText('Decode').value).toBe('draft'));
+
+    await user.selectOptions(screen.getByLabelText('Model'), 'example-delivery');
+    await waitFor(() => expect(screen.getByLabelText('Decode').value).toBe('full'));
+
+    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
+    const [, overrides] = retryMediaJob.mock.calls.at(-1);
+    expect(overrides.draftDecode).toBeNull();
+  });
+});

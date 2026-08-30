@@ -496,4 +496,19 @@ describe('AdvancedParamsPanel — draft decode', () => {
     renderPanel({ currentModel: h3(), draftDecode: 'draft' });
     expect(screen.getByText(/Finish and delivery renders always use the full decoder/)).toBeTruthy();
   });
+
+  // #5449 — on a model the finish graph names as a DELIVERY target the server
+  // declines a draft request outright, so the control must show Full and say
+  // why rather than offering a choice that is silently dropped.
+  it('locks the picker to full on a delivery model and explains why', () => {
+    renderPanel({
+      currentModel: h3({ name: 'Example Delivery' }),
+      draftDecode: 'draft',
+      draftDecodeLocked: true,
+    });
+    const select = screen.getByLabelText('Decode');
+    expect(select.value).toBe('full');
+    expect(select.disabled).toBe(true);
+    expect(screen.getByText(/Example Delivery is a delivery model/)).toBeTruthy();
+  });
 });
