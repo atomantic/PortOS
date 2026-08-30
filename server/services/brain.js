@@ -844,6 +844,8 @@ export async function recoverStuckClassifications() {
  * can keep writing its private staging directory without racing a retry.
  */
 export async function recoverInterruptedRepoClones() {
+  await githubCloner.reapStaleCloneStaging()
+    .catch(err => console.error(`❌ Clone staging recovery failed: ${err.message}`));
   const instanceId = await getInstanceId();
   const links = await storage.getLinks({ cloneStatus: 'cloning' });
   let recovered = 0;
@@ -853,11 +855,19 @@ export async function recoverInterruptedRepoClones() {
     if (link.cloneStatus !== 'cloning') continue;
     // New records name the instance that started this attempt. For older
     // records, originInstanceId is the safest compatibility fallback.
-    const cloneOwner = link.cloneInstanceId ?? link.originInstanceId;
-    if (cloneOwner && cloneOwner !== instanceId) continue;
+    if (link.cloneInstanceId && link.cloneInstanceId !== instanceId) continue;
+    // Old peers did not stamp cloneInstanceId. Preserve a recent peer-origin
+    // attempt, but recover it once it is older than the client stall window so
+    // a mixed-version crash cannot strand the link forever.
+    if (!link.cloneInstanceId && link.originInstanceId && link.originInstanceId !== instanceId) {
+      const updatedAt = Date.parse(link.updatedAt);
+      if (!Number.isFinite(updatedAt) || Date.now() - updatedAt < 10 * 60 * 1000) continue;
+    }
     await storage.updateLink(link.id, {
       cloneStatus: 'failed',
-      cloneError: 'Clone interrupted by a server restart. Retry to clone the repository again.'
+      cloneError: 'Clone interrupted by a server restart. Retry to clone the repository again.',
+      cloneInstanceId: null,
+      cloneInterrupted: true
     });
     recovered++;
   }
@@ -989,15 +999,22 @@ function hostnameFromUrl(url) {
  * queue an agent against a path that doesn't exist.
  */
 export async function cloneRepoInBackground(linkId, url) {
+  const previous = await storage.getLinkById(linkId);
   const cloneInstanceId = await getInstanceId();
-  await storage.updateLink(linkId, { cloneStatus: 'cloning', cloneInstanceId });
+  await storage.updateLink(linkId, {
+    cloneStatus: 'cloning',
+    cloneInstanceId,
+    cloneInterrupted: false
+  });
 
-  githubCloner.cloneRepo(url)
+  githubCloner.cloneRepo(url, { replaceIncomplete: previous?.cloneInterrupted === true })
     .then(async (result) => {
       const link = await storage.updateLink(linkId, {
         localPath: result.localPath,
         cloneStatus: 'cloned',
-        cloneError: null
+        cloneError: null,
+        cloneInstanceId: null,
+        cloneInterrupted: false
       });
       console.log(`✅ Background clone complete: ${linkId}`);
       // `link` is null when the user deleted the bookmark mid-clone — nothing
@@ -1019,7 +1036,9 @@ export async function cloneRepoInBackground(linkId, url) {
     .catch(async (err) => {
       await storage.updateLink(linkId, {
         cloneStatus: 'failed',
-        cloneError: err.message
+        cloneError: err.message,
+        cloneInstanceId: null,
+        cloneInterrupted: false
       });
       console.error(`❌ Background clone failed: ${linkId} - ${err.message}`);
     });

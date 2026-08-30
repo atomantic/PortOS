@@ -68,7 +68,8 @@ vi.mock('./brainStorage.js', () => {
 // kick off a background clone; stub it so no test ever shells out to git.
 vi.mock('./githubCloner.js', () => ({
   parseGitHubUrl: vi.fn(() => null),
-  cloneRepo: vi.fn()
+  cloneRepo: vi.fn(),
+  reapStaleCloneStaging: vi.fn(() => Promise.resolve(0))
 }));
 
 // Mock chatgptImport — brain.js's deleteMemoryEntry wrapper delegates the
@@ -312,7 +313,8 @@ describe('brain service', () => {
       }));
       expect(storage.updateLink).toHaveBeenCalledWith('link-001', {
         cloneStatus: 'cloning',
-        cloneInstanceId: 'local-instance'
+        cloneInstanceId: 'local-instance',
+        cloneInterrupted: false
       });
     });
 
@@ -979,6 +981,9 @@ describe('brain service', () => {
         { id: 'pending', cloneStatus: 'pending' },
         { id: 'cloning', cloneStatus: 'cloning', cloneInstanceId: 'local-instance' },
         { id: 'peer-cloning', cloneStatus: 'cloning', cloneInstanceId: 'peer-x' },
+        { id: 'old-peer-recent', cloneStatus: 'cloning', originInstanceId: 'peer-x', updatedAt: new Date().toISOString() },
+        { id: 'old-peer-stale', cloneStatus: 'cloning', originInstanceId: 'peer-x', updatedAt: '2020-01-01T00:00:00.000Z' },
+        { id: 'legacy-local', cloneStatus: 'cloning' },
         { id: 'cloned', cloneStatus: 'cloned' },
         { id: 'failed', cloneStatus: 'failed' },
         { id: 'none', cloneStatus: 'none' },
@@ -988,12 +993,23 @@ describe('brain service', () => {
       await recoverInterruptedRepoClones();
 
       expect(storage.getLinks).toHaveBeenCalledWith({ cloneStatus: 'cloning' });
-      expect(storage.updateLink).toHaveBeenCalledTimes(1);
+      expect(storage.updateLink).toHaveBeenCalledTimes(3);
       expect(storage.updateLink).toHaveBeenCalledWith('cloning', {
         cloneStatus: 'failed',
         cloneError: 'Clone interrupted by a server restart. Retry to clone the repository again.',
+        cloneInstanceId: null,
+        cloneInterrupted: true,
       });
       expect(storage.updateLink).not.toHaveBeenCalledWith('peer-cloning', expect.anything());
+      expect(storage.updateLink).not.toHaveBeenCalledWith('old-peer-recent', expect.anything());
+      expect(storage.updateLink).toHaveBeenCalledWith('old-peer-stale', expect.objectContaining({
+        cloneStatus: 'failed',
+        cloneInstanceId: null,
+      }));
+      expect(storage.updateLink).toHaveBeenCalledWith('legacy-local', expect.objectContaining({
+        cloneStatus: 'failed',
+        cloneInstanceId: null,
+      }));
     });
   });
 

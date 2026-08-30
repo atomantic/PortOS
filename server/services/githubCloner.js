@@ -7,13 +7,16 @@
 
 import { spawn } from '../lib/childProcess.js';
 import { existsSync } from 'fs';
-import { mkdtemp, rename, rm } from 'fs/promises';
+import { mkdtemp, readdir, rename, rm } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { parseGitHubUrl, isGitHubRepoUrl } from '../lib/githubRepoUrl.js';
 
 // Default directory for cloned repos (can be configured in settings)
 const DEFAULT_CLONE_DIR = PATHS.repos;
+const CLONE_STAGING_PREFIX = '.portos-clone-';
+const CLONE_STAGING_MAX_AGE_MS = 10 * 60 * 1000;
+const CLONE_STAGING_RE = /^\.portos-clone-(\d{13})-[A-Za-z0-9]+$/;
 
 // The owner/repo parse rule lives in lib/ so the client can mirror it — the
 // Brain capture boxes have to predict "this URL will be cloned" before submit.
@@ -53,6 +56,13 @@ export async function cloneRepo(url, options = {}) {
   const cloneDir = await ensureCloneDir(options.cloneDir);
   const localPath = join(cloneDir, owner, repo);
 
+  // Boot recovery marks only a known interrupted attempt. Old PortOS versions
+  // cloned straight into localPath, so their partial checkout must be replaced
+  // before the normal already-cloned compatibility check can trust `.git`.
+  if (options.replaceIncomplete === true) {
+    await rm(localPath, { recursive: true, force: true });
+  }
+
   // Check if already cloned
   if (existsSync(join(localPath, '.git'))) {
     console.log(`📦 Repo already cloned: ${owner}/${repo}`);
@@ -73,7 +83,7 @@ export async function cloneRepo(url, options = {}) {
   // Clone into attempt-specific staging, then publish it only after git exits.
   // An abruptly orphaned git child can keep writing its private directory, but
   // a retry gets a different directory and cannot race the live checkout.
-  const stagingRoot = await mkdtemp(join(ownerDir, `.${repo}-cloning-`));
+  const stagingRoot = await mkdtemp(join(ownerDir, `${CLONE_STAGING_PREFIX}${Date.now()}-`));
   const stagingPath = join(stagingRoot, repo);
 
   // Build clone command with shallow clone for space efficiency
@@ -140,6 +150,31 @@ export async function cloneRepo(url, options = {}) {
     await cleanupStaging();
     throw err;
   });
+}
+
+/**
+ * Remove only PortOS-owned clone staging directories older than twice the git
+ * timeout. A freshly orphaned child may still be writing; the age gate leaves
+ * it alone while bounding disk retained across repeated interrupted attempts.
+ */
+export async function reapStaleCloneStaging({ cloneDir = DEFAULT_CLONE_DIR, now = Date.now() } = {}) {
+  const owners = await readdir(cloneDir, { withFileTypes: true })
+    .catch(err => err.code === 'ENOENT' ? [] : Promise.reject(err));
+  let reaped = 0;
+  for (const owner of owners) {
+    if (!owner.isDirectory()) continue;
+    const ownerDir = join(cloneDir, owner.name);
+    const entries = await readdir(ownerDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const match = entry.name.match(CLONE_STAGING_RE);
+      if (!match || now - Number(match[1]) < CLONE_STAGING_MAX_AGE_MS) continue;
+      await rm(join(ownerDir, entry.name), { recursive: true, force: true });
+      reaped++;
+    }
+  }
+  if (reaped > 0) console.log(`🧹 Reaped ${reaped} stale repository clone staging director${reaped === 1 ? 'y' : 'ies'}`);
+  return reaped;
 }
 
 /**

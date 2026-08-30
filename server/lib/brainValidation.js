@@ -445,7 +445,10 @@ export const linkRecordSchema = z.object({
   cloneError: z.string().max(500).optional(),
   // The instance currently responsible for an in-flight clone. This differs
   // from immutable originInstanceId when a peer retries a shared link.
-  cloneInstanceId: z.string().optional(),
+  cloneInstanceId: z.string().nullable().optional(),
+  // True only when boot recovery observed an interrupted attempt. Retry uses
+  // this to replace a legacy direct-to-destination partial checkout safely.
+  cloneInterrupted: z.boolean().optional().default(false),
   malwareScan: z.object({
     reportId: z.string().uuid(),
     taskId: z.string().optional(),

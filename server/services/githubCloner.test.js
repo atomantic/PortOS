@@ -4,6 +4,7 @@ import EventEmitter from 'node:events';
 vi.mock('fs', () => ({ existsSync: vi.fn() }));
 vi.mock('fs/promises', () => ({
   mkdtemp: vi.fn(),
+  readdir: vi.fn(),
   rename: vi.fn(),
   rm: vi.fn(),
 }));
@@ -14,9 +15,9 @@ vi.mock('../lib/fileUtils.js', () => ({
 }));
 
 import { existsSync } from 'fs';
-import { mkdtemp, rename, rm } from 'fs/promises';
+import { mkdtemp, readdir, rename, rm } from 'fs/promises';
 import { spawn } from '../lib/childProcess.js';
-import { cloneRepo } from './githubCloner.js';
+import { cloneRepo, reapStaleCloneStaging } from './githubCloner.js';
 
 const createChild = () => {
   const child = new EventEmitter();
@@ -30,6 +31,7 @@ describe('cloneRepo', () => {
     vi.clearAllMocks();
     existsSync.mockImplementation(path => !String(path).endsWith('.git'));
     mkdtemp.mockResolvedValue('/repos/acme/.widgets-cloning-attempt');
+    readdir.mockResolvedValue([]);
     rename.mockResolvedValue();
     rm.mockResolvedValue();
   });
@@ -60,6 +62,40 @@ describe('cloneRepo', () => {
     );
     expect(rm).toHaveBeenCalledWith(
       '/repos/acme/.widgets-cloning-attempt',
+      { recursive: true, force: true }
+    );
+  });
+
+  it('removes a legacy partial destination only for a recovered attempt', async () => {
+    const child = createChild();
+    spawn.mockReturnValue(child);
+
+    const resultPromise = cloneRepo('https://github.com/acme/widgets', { replaceIncomplete: true });
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+
+    expect(rm).toHaveBeenCalledWith('/repos/acme/widgets', { recursive: true, force: true });
+    child.emit('close', 0);
+    await resultPromise;
+  });
+
+  it('reaps only expired PortOS clone staging directories', async () => {
+    const directory = name => ({ name, isDirectory: () => true });
+    readdir
+      .mockResolvedValueOnce([directory('acme')])
+      .mockResolvedValueOnce([
+        directory('.portos-clone-1000000000000-old123'),
+        directory('.portos-clone-1999999999999-new123'),
+        directory('.unrelated'),
+      ]);
+
+    await expect(reapStaleCloneStaging({
+      cloneDir: '/repos',
+      now: 2000000000000
+    })).resolves.toBe(1);
+
+    expect(rm).toHaveBeenCalledTimes(1);
+    expect(rm).toHaveBeenCalledWith(
+      '/repos/acme/.portos-clone-1000000000000-old123',
       { recursive: true, force: true }
     );
   });
