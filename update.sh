@@ -174,14 +174,10 @@ log ""
 
 # Remove ONLY PortOS's apps from the shared PM2 daemon — never `pm2 kill`, which
 # tears down the daemon and stops EVERY other project's apps on this machine.
-# `pm2 update` then reloads the daemon in place from our local node_modules,
-# refreshing its cached ProcessContainerFork.js path (a stale path from a daemon
-# originally launched by another project — e.g. a Yarn PnP zip cache — makes all
-# subsequent fork() calls crash with MODULE_NOT_FOUND) while resurrecting other
-# projects' apps instead of killing them.
+# The daemon itself is left alone here; whether it also needs an in-place reload
+# is decided in the restart step below, against the freshly installed pm2.
 step "pm2-stop" "running" "Stopping PortOS apps..."
 run node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent || true
-run node ./node_modules/pm2/bin/pm2 update || true
 step "pm2-stop" "done" "Apps stopped"
 log ""
 
@@ -333,6 +329,16 @@ TAG="$TAG" ROOT_DIR="$ROOT_DIR" node -e '
 # state doesn't make `start` a no-op, then `save` so the apps come back on
 # reboot. Remove the completion marker if start fails so it isn't misread on boot.
 step "restart" "running" "Starting PortOS..."
+# `pm2 update` reloads the daemon in place, refreshing its cached
+# ProcessContainerFork.js path (a stale path from a daemon originally launched by
+# another project — e.g. a Yarn PnP zip cache — makes all subsequent fork() calls
+# crash with MODULE_NOT_FOUND). It also RESTARTS every co-located app on the
+# shared daemon, so run it only when the daemon isn't already the one this
+# checkout's node_modules would launch. The probe runs here, after npm install,
+# so a pm2 version bump in the pulled update is part of the comparison.
+if run node scripts/pm2-daemon-refresh.js; then
+  run node ./node_modules/pm2/bin/pm2 update || true
+fi
 run node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent || true
 if ! run node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs; then
   rm -f "$ROOT_DIR/data/update-complete.json"

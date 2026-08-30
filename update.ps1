@@ -247,15 +247,10 @@ Write-SafeHost ""
 
 # Remove ONLY PortOS's apps from the shared PM2 daemon — never `pm2 kill`, which
 # tears down the daemon and stops EVERY other project's apps on this machine.
-# `pm2 update` then reloads the daemon in place from this checkout's node_modules,
-# refreshing its cached ProcessContainerFork.js path (a stale path from a daemon
-# originally launched by another project — e.g. a Yarn PnP zip cache — makes
-# future fork() calls crash with MODULE_NOT_FOUND) while leaving other projects'
-# apps running instead of killing them.
+# The daemon itself is left alone here; whether it also needs an in-place reload
+# is decided in the restart step below, against the freshly installed pm2.
 Step "pm2-stop" "running" "Stopping PortOS apps..."
 Invoke-Logged node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent
-$global:LASTEXITCODE = 0
-Invoke-Logged node ./node_modules/pm2/bin/pm2 update
 $global:LASTEXITCODE = 0
 Step "pm2-stop" "done" "Apps stopped"
 Write-SafeHost ""
@@ -357,6 +352,18 @@ Move-Item -Force "$RootDir\data\update-complete.json.tmp" "$RootDir\data\update-
 # state doesn't make `start` a no-op, then `save` so the apps come back on
 # reboot. Remove the completion marker if start fails so it isn't misread on boot.
 Step "restart" "running" "Starting PortOS..."
+# `pm2 update` reloads the daemon in place, refreshing its cached
+# ProcessContainerFork.js path (a stale path from a daemon originally launched by
+# another project — e.g. a Yarn PnP zip cache — makes future fork() calls crash
+# with MODULE_NOT_FOUND). It also RESTARTS every co-located app on the shared
+# daemon, so run it only when the daemon isn't already the one this checkout's
+# node_modules would launch. The probe runs here, after npm install, so a pm2
+# version bump in the pulled update is part of the comparison.
+Invoke-Logged node scripts/pm2-daemon-refresh.js
+if ($LASTEXITCODE -eq 0) {
+    Invoke-Logged node ./node_modules/pm2/bin/pm2 update
+}
+$global:LASTEXITCODE = 0
 Invoke-Logged node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent
 $global:LASTEXITCODE = 0
 Invoke-Logged node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs
