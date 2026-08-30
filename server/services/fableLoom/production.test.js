@@ -71,24 +71,15 @@ describe('fableLoom production service', () => {
         startNodeId: 'node-1',
         storyOutline: {
           version: 1,
-          startKey: 's1',
+          startKey: 'node-1',
           scenes: [
             {
-              key: 's1', title: 'Opening', summary: 'The hero reaches the threshold.',
+              key: 'node-1', title: 'Node 1', summary: 'The hero reaches the threshold.',
               playbackMode: 'cut', audienceConnection: 'disconnected', protagonistPresence: 'onscreen',
-              isEnding: false, transitions: [{ targetKey: 's2', intent: 'Continue' }],
+              isEnding: false, transitions: [{ targetKey: 'node-2', intent: 'Go forward' }],
             },
             {
-              key: 's2', title: 'Choice', summary: 'The hero chooses a direction.',
-              playbackMode: 'decision', audienceConnection: 'connected', protagonistPresence: 'onscreen',
-              isEnding: false,
-              transitions: [
-                { targetKey: 's3', intent: 'Take the left path' },
-                { targetKey: 's3', intent: 'Take the right path' },
-              ],
-            },
-            {
-              key: 's3', title: 'Arrival', summary: 'The choice opens a way forward.',
+              key: 'node-2', title: 'Node 2', summary: 'The choice opens a way forward.',
               playbackMode: 'cut', audienceConnection: 'disconnected', protagonistPresence: 'onscreen',
               isEnding: true, endingLabel: 'Forward', transitions: [],
             },
@@ -102,6 +93,10 @@ describe('fableLoom production service', () => {
             prose: 'Opening scene prose.',
             imagePrompt: 'Visual prompt 1',
             videoPrompt: 'Video prompt 1',
+            playbackMode: 'cut',
+            audienceConnection: 'disconnected',
+            protagonistPresence: 'onscreen',
+            isEnding: false,
             transitions: [{ id: 'tr-1', targetNodeId: 'node-2', intent: 'Go forward' }],
           },
           {
@@ -110,7 +105,11 @@ describe('fableLoom production service', () => {
             prose: 'Second scene prose.',
             imagePrompt: 'Visual prompt 2',
             videoPrompt: 'Video prompt 2',
+            playbackMode: 'cut',
+            audienceConnection: 'disconnected',
+            protagonistPresence: 'onscreen',
             isEnding: true,
+            endingLabel: 'Forward',
             transitions: [],
           },
         ],

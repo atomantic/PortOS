@@ -8,8 +8,16 @@
  * failure, and it names the shadowed-global-npm case that makes the version
  * skew hard to spot.
  */
-import { describe, it, expect, vi } from 'vitest';
-import { existsSync, readFileSync } from 'fs';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'fs';
+import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -23,6 +31,11 @@ import {
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const readJson = (rel) => JSON.parse(readFileSync(join(REPO_ROOT, rel), 'utf8'));
+const tempRoots = [];
+
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
 
 describe('MIN_NPM', () => {
   it('is the npm major whose lockfile writer records `libc`', () => {
@@ -70,10 +83,21 @@ describe('readBundledNpmVersion', () => {
     expect(readBundledNpmVersion(join(REPO_ROOT, 'no', 'such', 'node'))).toBeNull();
   });
 
-  it('reads the running Node’s own bundled npm', () => {
-    // Every supported Node ships an npm; a null here means the layout probe
-    // stopped matching reality, which would silently drop the shadowing hint.
-    expect(readBundledNpmVersion()).toMatch(/^\d+\.\d+\.\d+/);
+  it('reads bundled npm from both supported Node install layouts', () => {
+    const root = mkdtempSync(join(tmpdir(), 'portos-npm-version-'));
+    tempRoots.push(root);
+
+    const adjacentBin = join(root, 'adjacent', 'bin');
+    const adjacentManifest = join(adjacentBin, 'node_modules', 'npm', 'package.json');
+    mkdirSync(dirname(adjacentManifest), { recursive: true });
+    writeFileSync(adjacentManifest, JSON.stringify({ version: '11.17.0' }));
+    expect(readBundledNpmVersion(join(adjacentBin, 'node'))).toBe('11.17.0');
+
+    const prefixBin = join(root, 'prefix', 'bin');
+    const prefixManifest = join(root, 'prefix', 'lib', 'node_modules', 'npm', 'package.json');
+    mkdirSync(dirname(prefixManifest), { recursive: true });
+    writeFileSync(prefixManifest, JSON.stringify({ version: '12.0.1' }));
+    expect(readBundledNpmVersion(join(prefixBin, 'node'))).toBe('12.0.1');
   });
 });
 
