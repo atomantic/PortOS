@@ -45,6 +45,7 @@ const EIDOVERSE_FEATURE = {
     appId: null,
     uiPort: 8940,
     runtimeStatus: 'not_registered',
+    worldsRepoUrl: 'https://github.com/anima-research/eidoverse-worlds',
   },
 };
 
@@ -107,9 +108,26 @@ describe('InstanceFeaturesTab', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Install & enable' }));
 
-    await waitFor(() => expect(mock.installEidoverseFeature).toHaveBeenCalledWith({ silent: true }));
+    await waitFor(() => expect(mock.installEidoverseFeature).toHaveBeenCalledWith(
+      'https://github.com/anima-research/eidoverse-worlds',
+      { silent: true },
+    ));
     expect(await screen.findByRole('link', { name: 'Manage app' })).toHaveAttribute('href', '/apps/app-eidoverse');
     expect(screen.getByText(/start it from the managed app/i)).toBeInTheDocument();
+  });
+
+  it('installs a user-selected Worlds fork', async () => {
+    mock.getInstanceFeatures.mockResolvedValue({ features: [EIDOVERSE_FEATURE] });
+    render(<MemoryRouter><InstanceFeaturesTab /></MemoryRouter>);
+
+    const repoInput = await screen.findByRole('textbox', { name: 'Worlds GitHub repository' });
+    fireEvent.change(repoInput, { target: { value: 'https://github.com/example-owner/eidoverse-worlds' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Install & enable' }));
+
+    await waitFor(() => expect(mock.installEidoverseFeature).toHaveBeenCalledWith(
+      'https://github.com/example-owner/eidoverse-worlds',
+      { silent: true },
+    ));
   });
 
   it('explains the Bun prerequisite before installation', async () => {

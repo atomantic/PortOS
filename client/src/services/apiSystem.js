@@ -73,9 +73,9 @@ export const updateInstanceFeature = (featureId, enabled, options = {}) => reque
   body: JSON.stringify({ enabled }),
   ...options,
 });
-export const installEidoverseFeature = (options = {}) => request('/settings/features/eidoverse/install', {
+export const installEidoverseFeature = (worldsRepoUrl, options = {}) => request('/settings/features/eidoverse/install', {
   method: 'POST',
-  body: JSON.stringify({}),
+  body: JSON.stringify({ worldsRepoUrl }),
   ...options,
 });
 export const updateSettings = (data, options) => request('/settings', {

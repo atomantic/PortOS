@@ -1,7 +1,13 @@
 import { ServerError } from '../lib/errorHandler.js';
+import { parseGitHubUrl } from '../lib/githubRepoUrl.js';
 import { INSTANCE_FEATURES, INSTANCE_FEATURE_IDS } from '../lib/instanceFeatureRegistry.js';
 import { isPlainObject } from '../lib/objects.js';
-import { assertEidoverseInstalled, getEidoverseStatus } from './eidoverse.js';
+import {
+  assertEidoverseInstalled,
+  DEFAULT_EIDOVERSE_WORLDS_REPO,
+  getEidoverseStatus,
+  normalizeEidoverseWorldsRepo,
+} from './eidoverse.js';
 import { getSettingsWithStatus, updateSettingsWith } from './settings.js';
 
 // Runtime resolution for the feature registry in
@@ -111,8 +117,17 @@ export const resolveInstanceFeatures = (settings = {}, { corrupt = false, detect
   })
 );
 
-const attachSetupStatus = async (features) => {
-  const eidoverse = await getEidoverseStatus();
+const configuredEidoverseRepo = (settings) => {
+  const configured = settings?.instanceFeatures?.eidoverse?.worldsRepoUrl;
+  if (typeof configured !== 'string') return DEFAULT_EIDOVERSE_WORLDS_REPO;
+  const parsed = parseGitHubUrl(configured);
+  return parsed
+    ? `https://github.com/${parsed.owner}/${parsed.repo}`
+    : DEFAULT_EIDOVERSE_WORLDS_REPO;
+};
+
+const attachSetupStatus = async (features, settings) => {
+  const eidoverse = await getEidoverseStatus({ worldsRepoUrl: configuredEidoverseRepo(settings) });
   return features.map((feature) => (
     feature.id === 'eidoverse' ? { ...feature, setup: eidoverse } : feature
   ));
@@ -123,7 +138,23 @@ export async function getInstanceFeatures() {
     getSettingsWithStatus(),
     detectFeatureConfiguration(),
   ]);
-  return { features: await attachSetupStatus(resolveInstanceFeatures(settings, { corrupt, detected })) };
+  return { features: await attachSetupStatus(resolveInstanceFeatures(settings, { corrupt, detected }), settings) };
+}
+
+export async function updateEidoverseWorldsRepo(worldsRepoUrl) {
+  const normalizedRepoUrl = normalizeEidoverseWorldsRepo(worldsRepoUrl);
+  await updateSettingsWith((current) => {
+    const instanceFeatures = isPlainObject(current.instanceFeatures) ? current.instanceFeatures : {};
+    const eidoverse = isPlainObject(instanceFeatures.eidoverse) ? instanceFeatures.eidoverse : {};
+    return {
+      ...current,
+      instanceFeatures: {
+        ...instanceFeatures,
+        eidoverse: { ...eidoverse, worldsRepoUrl: normalizedRepoUrl },
+      },
+    };
+  });
+  return normalizedRepoUrl;
 }
 
 // The same precedence ladder as `resolveInstanceFeatures`, but probing only this
@@ -145,7 +176,8 @@ export async function updateInstanceFeature(featureId, enabled) {
     throw new ServerError(`Unknown instance feature: ${featureId}`, { status: 404, code: 'NOT_FOUND' });
   }
   if (featureId === 'eidoverse' && enabled) {
-    await assertEidoverseInstalled();
+    const { settings } = await getSettingsWithStatus();
+    await assertEidoverseInstalled({ worldsRepoUrl: configuredEidoverseRepo(settings) });
   }
 
   const settings = await updateSettingsWith((current) => {
@@ -161,5 +193,5 @@ export async function updateInstanceFeature(featureId, enabled) {
   });
 
   const detected = await detectFeatureConfiguration();
-  return { features: await attachSetupStatus(resolveInstanceFeatures(settings, { detected })) };
+  return { features: await attachSetupStatus(resolveInstanceFeatures(settings, { detected }), settings) };
 }

@@ -29,8 +29,11 @@ vi.mock('./jira.js', () => ({
 }));
 
 vi.mock('./eidoverse.js', () => ({
-  getEidoverseStatus: vi.fn(async () => ({
+  DEFAULT_EIDOVERSE_WORLDS_REPO: 'https://github.com/anima-research/eidoverse-worlds',
+  normalizeEidoverseWorldsRepo: vi.fn((url) => url),
+  getEidoverseStatus: vi.fn(async ({ worldsRepoUrl } = {}) => ({
     installed: mock.eidoverseInstalled,
+    worldsRepoUrl,
     bunAvailable: true,
     registryAvailable: true,
   })),
@@ -72,8 +75,20 @@ describe('instance features', () => {
     expect(byId((await getInstanceFeatures()).features, 'eidoverse')).toMatchObject({
       enabled: false,
       source: 'default',
-      setup: { installed: false, bunAvailable: true },
+      setup: {
+        installed: false,
+        bunAvailable: true,
+        worldsRepoUrl: 'https://github.com/anima-research/eidoverse-worlds',
+      },
     });
+  });
+
+  it('persists a normalized Worlds fork without enabling the feature', async () => {
+    const selected = 'https://github.com/example-owner/eidoverse-worlds';
+    const { updateEidoverseWorldsRepo } = await import('./instanceFeatures.js');
+
+    await expect(updateEidoverseWorldsRepo(selected)).resolves.toBe(selected);
+    expect(mock.settings).toEqual({ instanceFeatures: { eidoverse: { worldsRepoUrl: selected } } });
   });
 
   it('requires a completed Eidoverse install before enabling it', async () => {

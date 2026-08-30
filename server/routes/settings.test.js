@@ -45,6 +45,8 @@ vi.mock('../services/jira.js', () => ({
   hasConfiguredInstances: vi.fn(async () => false),
 }));
 vi.mock('../services/eidoverse.js', () => ({
+  DEFAULT_EIDOVERSE_WORLDS_REPO: 'https://github.com/anima-research/eidoverse-worlds',
+  normalizeEidoverseWorldsRepo: vi.fn((url) => url),
   getEidoverseStatus: vi.fn(async () => ({ installed: false, bunAvailable: true, registryAvailable: true })),
   assertEidoverseInstalled: vi.fn(async () => ({ installed: true })),
   installEidoverse: vi.fn(async () => ({ installed: true })),
@@ -175,20 +177,34 @@ describe('Settings routes — instance feature participation', () => {
   });
 
   it('installs and explicitly enables Eidoverse from its consent endpoint', async () => {
+    const worldsRepoUrl = 'https://github.com/example-owner/eidoverse-worlds';
     const res = await request(buildApp())
       .post('/api/settings/features/eidoverse/install')
-      .send({});
+      .send({ worldsRepoUrl });
 
     expect(res.status).toBe(201);
-    expect(installEidoverse).toHaveBeenCalledOnce();
+    expect(installEidoverse).toHaveBeenCalledWith({ worldsRepoUrl });
     expect(store.instanceFeatures.eidoverse.enabled).toBe(true);
+    expect(store.instanceFeatures.eidoverse.worldsRepoUrl).toBe(worldsRepoUrl);
     expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'eidoverse', enabled: true }));
+  });
+
+  it('rejects a non-GitHub Worlds repository', async () => {
+    const res = await request(buildApp())
+      .post('/api/settings/features/eidoverse/install')
+      .send({ worldsRepoUrl: 'https://example.com/untrusted.git' });
+
+    expect(res.status).toBe(400);
+    expect(installEidoverse).not.toHaveBeenCalled();
   });
 
   it('rejects unexpected install payload fields', async () => {
     const res = await request(buildApp())
       .post('/api/settings/features/eidoverse/install')
-      .send({ repository: 'https://example.com/untrusted.git' });
+      .send({
+        worldsRepoUrl: 'https://github.com/example-owner/eidoverse-worlds',
+        repository: 'unexpected',
+      });
 
     expect(res.status).toBe(400);
     expect(installEidoverse).not.toHaveBeenCalled();

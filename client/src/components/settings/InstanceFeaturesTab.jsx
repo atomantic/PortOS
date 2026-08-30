@@ -20,6 +20,7 @@ const sourceHint = (feature) => {
 export function InstanceFeaturesTab() {
   const { features, error, reload } = useInstanceFeatures();
   const [savingId, setSavingId] = useState(null);
+  const [eidoverseRepoUrl, setEidoverseRepoUrl] = useState(null);
 
   // The toggle is announced on the shared INSTANCE_FEATURES_CHANGED channel, so
   // the sidebar, the ⌘K palette, and the dashboard widgets that already listen
@@ -40,8 +41,10 @@ export function InstanceFeaturesTab() {
 
   const handleEidoverseInstall = async (feature) => {
     if (savingId) return;
+    const worldsRepoUrl = eidoverseRepoUrl ?? feature?.setup?.worldsRepoUrl;
+    if (!worldsRepoUrl) return;
     setSavingId(feature.id);
-    const result = await installEidoverseFeature({ silent: true }).catch((err) => {
+    const result = await installEidoverseFeature(worldsRepoUrl, { silent: true }).catch((err) => {
       toast.error(err.message || 'Could not install Eidoverse Worlds');
       return null;
     });
@@ -86,7 +89,8 @@ export function InstanceFeaturesTab() {
           const setup = isEidoverse ? feature.setup : null;
           const needsInstall = isEidoverse && setup?.installed !== true;
           const installing = savingId === feature.id;
-          const canInstall = setup?.bunAvailable === true && setup?.registryAvailable !== false;
+          const selectedRepoUrl = eidoverseRepoUrl ?? setup?.worldsRepoUrl ?? '';
+          const canInstall = Boolean(selectedRepoUrl) && setup?.bunAvailable === true && setup?.registryAvailable !== false;
           const launchUrl = setup?.appId && setup?.uiPort
             ? getPrimaryLaunchUrl({ id: setup.appId, uiPort: setup.uiPort })
             : null;
@@ -109,8 +113,22 @@ export function InstanceFeaturesTab() {
                 {needsInstall && (
                   <div className="mt-3 space-y-1 text-xs text-gray-400">
                     <p>
-                      PortOS will clone the Worlds fork and the upstream video runtime as separate AGPL-3.0 repositories, install their Bun dependencies, and register Worlds under Apps. It will not start the server automatically.
+                      PortOS will clone your selected Worlds repository and the upstream video runtime as separate AGPL-3.0 repositories, install their Bun dependencies, and register Worlds under Apps. It will not start the server automatically.
                     </p>
+                    <label className="block pt-2" htmlFor="eidoverse-worlds-repo">
+                      <span className="block text-gray-300 mb-1">Worlds GitHub repository</span>
+                      <input
+                        id="eidoverse-worlds-repo"
+                        type="url"
+                        required
+                        value={selectedRepoUrl}
+                        onChange={(event) => setEidoverseRepoUrl(event.target.value)}
+                        disabled={savingId !== null}
+                        className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden disabled:opacity-50"
+                        placeholder="https://github.com/your-account/eidoverse-worlds"
+                      />
+                    </label>
+                    <p>Use your own fork if you want PortOS agents to prepare changes and PRs against it.</p>
                     {setup?.bunAvailable === false && (
                       <p className="text-port-warning">
                         Bun is required. <a className="underline hover:text-white" href="https://bun.sh" target="_blank" rel="noreferrer">Install Bun</a>, then retry.
@@ -123,6 +141,11 @@ export function InstanceFeaturesTab() {
                 )}
                 {setup?.installed && (
                   <div className="flex flex-wrap items-center gap-3 mt-3 text-xs">
+                    {setup.worldsRepoUrl && (
+                      <a className="text-port-accent hover:text-white transition-colors" href={setup.worldsRepoUrl} target="_blank" rel="noreferrer">
+                        Worlds repository
+                      </a>
+                    )}
                     {setup.appId && (
                       <Link className="text-port-accent hover:text-white transition-colors" to={`/apps/${setup.appId}`}>
                         Manage app

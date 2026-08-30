@@ -7,10 +7,12 @@ runtime.
 
 ## What PortOS installs
 
-The installer keeps the two AGPL-3.0 projects as independent git checkouts:
+The installer keeps the two AGPL-3.0 projects as independent git checkouts. The
+Worlds repository is selected per PortOS instance; the canonical upstream is
+the default, while an instance owner can enter their own fork before installing:
 
-- `data/repos/atomantic/eidoverse-worlds` — the user-owned Worlds fork and the
-  repository PortOS registers under **Apps**.
+- `data/repos/{owner}/eidoverse-worlds` — the selected Worlds repository and the
+  checkout PortOS registers under **Apps**.
 - `data/repos/anima-research/eidoverse-video` — the upstream video/runtime
   checkout used by Worlds. A fork is not required unless changes to that
   repository itself become necessary.
