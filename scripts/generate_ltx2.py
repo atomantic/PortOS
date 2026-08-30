@@ -1200,6 +1200,177 @@ def _image_conditioning_kwargs(generate_and_save, image: str | None,
     return {"image": image}
 
 
+# --- I2V anchor preservation across an ancestral (SDE) denoise -----------------
+#
+# LTX-2.5 samples distilled stage 1 with the ancestral (SDE) Euler loop, which
+# renoises the WHOLE latent after every step. The conditioned tokens — the
+# frame-0 rows an image-to-video render pins to the supplied picture — live in
+# that same latent, so a loop that does not re-apply the conditioning mask AFTER
+# the renoise leaves the anchor clean only on the terminal step. The clip that
+# comes out is plausible and coherent; it just isn't the picture the user handed
+# in, and nothing in the output says so.
+#
+# PortOS does not own the pin, so the invariant is enforced rather than assumed:
+#
+#   1. a pin whose own ancestral loop re-applies the mask after the renoise is
+#      used as-is ("native");
+#   2. a pin that does not gets a clean-room hook at the sampler seam — the same
+#      re-application, expressed through the pin's OWN `apply_denoise_mask`, and
+#      idempotent, so it cannot fight a loop that already does it ("hook"); and
+#   3. a pin that exposes neither is REFUSED before any weights load, because
+#      the alternative is silently shipping an unanchored clip.
+#
+# Scoped to `--mode image`: that is the only mode whose whole promise is "the
+# reference IS frame one" (lib/videoReferenceModes.js). T2V has a uniform mask
+# and nothing to preserve, and the FFLF/extend/a2v pipelines are left byte-
+# identical — this seam is not on their path unless they route through the same
+# ancestral loop, which they do not on any pin PortOS ships.
+
+
+def _import_ancestral_sampler():
+    """The installed pin's sampler module, or None when it has no ancestral loop.
+
+    A pin without `ancestral_euler_step` / `ancestral_denoise_loop` never injects
+    noise mid-denoise (plain Euler), so the anchor holds by construction and
+    there is nothing here to enforce — that is the LTX-2.3 pin, and why this
+    returns a sentinel rather than raising.
+    """
+    try:
+        from ltx_pipelines_mlx.utils import samplers
+    except ImportError:
+        return None
+    if not all(hasattr(samplers, name)
+               for name in ("ancestral_euler_step", "ancestral_denoise_loop")):
+        return None
+    return samplers
+
+
+def _sampler_preserves_conditioned_tokens(samplers) -> bool:
+    """Does the pin's own ancestral loop re-apply the mask AFTER the ancestral step?
+
+    Read off the loop's source rather than inferred from a version string,
+    because the whole problem is that PortOS does not control which commit is
+    checked out. The window starts at the LAST `ancestral_euler_step(` call, so
+    the `apply_denoise_mask` every pin runs on x0 *before* the step cannot be
+    mistaken for the post-renoise one the invariant needs. A source-less
+    sampler (a C extension, a pin shipped as a .pyc) reads as "not proven",
+    which routes to the hook rather than to trust.
+    """
+    try:
+        source = inspect.getsource(samplers.ancestral_denoise_loop)
+    except (OSError, TypeError):
+        return False
+    _, marker, tail = source.rpartition("ancestral_euler_step(")
+    return bool(marker) and "apply_denoise_mask" in tail
+
+
+def _install_ancestral_anchor_hook(samplers) -> bool:
+    """Clean-room compatibility hook at the sampler seam. True when installed.
+
+    Two module-global wrappers, both inside the pin's own `samplers` module, so
+    they take effect no matter which module imported the loop by name:
+
+      - `apply_denoise_mask` — the loop already calls it once per latent per step
+        to pin x0 to the clean tokens. Wrapping it RECORDS the (clean, mask) pair
+        for each latent; the return value is the pin's own, untouched.
+      - `ancestral_euler_step` — after the pin's step (Euler + renoise) returns,
+        the recorded pair for that latent is applied again, which is exactly the
+        reference `post_process_latent` the broken pins are missing.
+
+    Pairs are keyed by latent SHAPE rather than by call order, so an extra model
+    call, a reordered loop, or a pipeline that denoises video only still lands on
+    the right mask. Two latents sharing a shape WITHIN one step (video and audio
+    of equal token count) is the one case a shape cannot disambiguate, so that
+    key is dropped and those steps keep the pin's own behavior — never a wrong
+    mask. Restating the same shape in a LATER step is the ordinary case (stage 2
+    of a two-stage render rebuilds its latent state) and simply replaces the
+    record.
+    """
+    try:
+        from ltx_core_mlx.conditioning.types.latent_cond import apply_denoise_mask
+    except ImportError:
+        return False
+    if getattr(samplers.ancestral_euler_step, "_portos_anchor_hook", False):
+        return True
+
+    original_apply = samplers.apply_denoise_mask
+    original_step = samplers.ancestral_euler_step
+    conditioning: dict = {}
+    ambiguous: set = set()
+    steps_taken = [0]
+
+    def _key(latent):
+        shape = getattr(latent, "shape", None)
+        return None if shape is None else tuple(shape)
+
+    @functools.wraps(original_apply)
+    def recording_apply_denoise_mask(x0, clean_latent, denoise_mask):
+        key = _key(clean_latent)
+        if key is not None:
+            prior = conditioning.get(key)
+            same_step = prior is not None and prior[2] == steps_taken[0]
+            if same_step and (prior[0] is not clean_latent or prior[1] is not denoise_mask):
+                ambiguous.add(key)
+            conditioning[key] = (clean_latent, denoise_mask, steps_taken[0])
+        return original_apply(x0, clean_latent, denoise_mask)
+
+    @functools.wraps(original_step)
+    def anchor_preserving_ancestral_euler_step(sample, denoised, *args, **kwargs):
+        result = original_step(sample, denoised, *args, **kwargs)
+        key = _key(sample)
+        steps_taken[0] += 1
+        if key is None or key in ambiguous:
+            return result
+        pair = conditioning.get(key)
+        if pair is None:
+            return result
+        clean_latent, denoise_mask = pair[0], pair[1]
+        # The step returns float32 while the latent state is held in the model
+        # dtype; match the result so the blend does not silently upcast the
+        # whole latent. A pin (or a test double) whose arrays carry no dtype
+        # skips the cast rather than guessing one.
+        dtype = getattr(result, "dtype", None)
+        if dtype is not None:
+            clean_latent = clean_latent.astype(dtype)
+            denoise_mask = denoise_mask.astype(dtype)
+        return apply_denoise_mask(result, clean_latent, denoise_mask)
+
+    anchor_preserving_ancestral_euler_step._portos_anchor_hook = True
+    samplers.apply_denoise_mask = recording_apply_denoise_mask
+    samplers.ancestral_euler_step = anchor_preserving_ancestral_euler_step
+    return True
+
+
+def enforce_i2v_anchor_invariant(args) -> str:
+    """Guarantee the frame-0 anchor survives every denoise step, or refuse to render.
+
+    Returns which mechanism is carrying the invariant — "not-required" (no
+    ancestral sampler on this pin, or not an anchored I2V render), "native" (the
+    pin's own loop), or "hook" (the compatibility hook above). Raises SystemExit
+    when the installed pin has the ancestral sampler but can supply neither.
+
+    Called from main() BEFORE any pipeline is constructed, so a refusal costs the
+    user a second rather than a full model load.
+    """
+    if args.mode != "image" or not args.image:
+        return "not-required"
+    samplers = _import_ancestral_sampler()
+    if samplers is None:
+        return "not-required"
+    if _sampler_preserves_conditioned_tokens(samplers):
+        return "native"
+    if _install_ancestral_anchor_hook(samplers):
+        emit_status("Preserving the frame-one anchor across the ancestral denoise")
+        return "hook"
+    raise SystemExit(
+        "This ltx runtime samples image-to-video with the ancestral (SDE) Euler "
+        "loop but neither preserves the conditioned frame across its steps nor "
+        "exposes ltx_core_mlx's apply_denoise_mask for PortOS to preserve it — "
+        "the render would drift off the supplied image. Re-run "
+        "scripts/setup-image-video.sh to restore the pinned LTX-2.5 checkout."
+    )
+
+
 def _one_stage_kwargs(args: argparse.Namespace, **extra) -> dict:
     """Shared generate_and_save kwargs for the one-stage text/image runners.
 
@@ -1882,6 +2053,10 @@ def main() -> NoReturn:
     configure_gemma_max_length(args.gemma_max_length)
     install_prompt_encode_markers()
     configure_mlx_cache(args)
+    # Frame-one anchor contract (#5422). Runs before any pipeline is built so a
+    # pin that cannot hold the anchor through an ancestral denoise refuses in a
+    # second rather than after a full model load.
+    enforce_i2v_anchor_invariant(args)
 
     runners = {
         "text": run_text,

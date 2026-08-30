@@ -222,6 +222,15 @@ export const BYOV_RUNTIME_INFO = Object.freeze({
     pinEnvVar: 'LTX25_PIN',
     importProbe: 'import ltx_pipelines_mlx',
     fingerprintPackages: ['ltx_pipelines_mlx', 'ltx_core_mlx', 'mlx', 'mlx_metal'],
+    // The revision whose ancestral (SDE) Euler loop was READ and confirmed to
+    // re-apply the conditioning mask after its renoise — the invariant an
+    // image-to-video render depends on to keep frame one equal to the supplied
+    // picture at every step, not only the last (#5422). This is deliberately a
+    // literal rather than a reference to LTX25_EXPECTED_REVISION: bumping the
+    // pin without re-reading that loop turns runtimes.test.js red, which is the
+    // whole point. scripts/generate_ltx2.py enforces the invariant against the
+    // LIVE pin regardless, and refuses the render when it cannot.
+    i2vAnchorVerifiedRevision: '57952288076766abe27dda3a774b2c24f7346977',
   },
   fastvideo: {
     id: 'fastvideo',

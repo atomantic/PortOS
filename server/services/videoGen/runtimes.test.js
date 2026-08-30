@@ -24,7 +24,7 @@ import {
   byovRuntimeLoraCapable, invalidateByovLoraCapabilityCache, invalidateByovReadyCache,
   isByovRuntimeReady, isPinnedSourceStatusClean, modelAnchorsLastFrame,
   resolveByovRuntimeLoraCapable, runtimeIsCacheOnly, runtimeNeedsProcessGroupKill,
-  routesToWindowsHelper,
+  routesToWindowsHelper, LTX25_EXPECTED_REVISION,
 } from './runtimes.js';
 
 const REVISION = 'fcd9e9b79a1d6018d91ac477c0968de1fa067e49';
@@ -426,5 +426,25 @@ describe('runtime execution flags', () => {
     expect(runtimeNeedsProcessGroupKill('minimax_h3_cuda')).toBe(true);
     expect(runtimeNeedsProcessGroupKill('ltx2')).toBe(false);
     expect(runtimeNeedsProcessGroupKill('nope')).toBe(false);
+  });
+});
+
+// A pin bump is where the frame-one anchor silently breaks: the LTX-2.5 fork
+// samples image-to-video with the ancestral (SDE) Euler loop, and a revision
+// whose loop does not re-apply the conditioning mask after its renoise renders a
+// coherent clip that has nothing to do with the supplied image (#5422). The
+// helper enforces the invariant against the live pin at render time; this is the
+// tripwire that makes a reviewer look BEFORE that reaches a user machine.
+describe('LTX-2.5 i2v anchor pin verification', () => {
+  it('pins a revision whose ancestral sampler was read for anchor preservation', () => {
+    expect(BYOV_RUNTIME_INFO.ltx25.i2vAnchorVerifiedRevision).toBe(LTX25_EXPECTED_REVISION);
+  });
+
+  // Nothing else declares it, so the field never reads as "verified" for a
+  // runtime whose sampler was never inspected.
+  it('claims verification for no other runtime', () => {
+    const claimed = Object.values(BYOV_RUNTIME_INFO)
+      .filter((info) => info.i2vAnchorVerifiedRevision).map((info) => info.id);
+    expect(claimed).toEqual(['ltx25']);
   });
 });

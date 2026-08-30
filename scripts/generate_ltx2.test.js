@@ -1028,4 +1028,268 @@ describe.skipIf(!pyBin)('generate_ltx2.py MLX allocator-cache policy', () => {
     ].join('\n')}`);
     expect(out.trim().split(/\r?\n/).map((l) => l.trimEnd())).toEqual(['None', '2048']);
   });
+
+  // ── Frame-one anchor across an ancestral (SDE) denoise (#5422) ─────────────
+  // LTX-2.5 samples distilled stage 1 with the ancestral Euler loop, which
+  // renoises the whole latent every step. A pin that does not re-apply the
+  // conditioning mask AFTER that renoise leaves the anchor clean only on the
+  // terminal step, so the clip is plausible but unrelated to the supplied
+  // image. These cases run a REAL miniature ancestral loop — a pure-Python
+  // stand-in for the pinned sampler, imported from a temp package rather than
+  // planted in sys.modules, because the native-preservation probe reads the
+  // loop's source and source only exists for a module loaded from a file.
+  describe('i2v anchor invariant', () => {
+    // 4 video tokens, token 0 conditioned on the supplied image (mask 0 =
+    // preserve) and held at 7.0; 3 audio tokens, fully generated (uniform
+    // mask) — the T2V-shaped control that must come out byte-identical.
+    const LATENT_COND_PY = [
+      'class Vec(list):',
+      '    """A latent with a shape, so the hook can key conditioning by it."""',
+      '    @property',
+      '    def shape(self):',
+      '        return (len(self),)',
+      '',
+      '',
+      'class LatentState:',
+      '    def __init__(self, latent, clean_latent, denoise_mask):',
+      '        self.latent = latent',
+      '        self.clean_latent = clean_latent',
+      '        self.denoise_mask = denoise_mask',
+      '',
+      '',
+      'def apply_denoise_mask(x0, clean_latent, denoise_mask):',
+      '    return Vec(v * m + c * (1.0 - m) for v, c, m in zip(x0, clean_latent, denoise_mask))',
+      '',
+    ].join('\n');
+
+    const samplersPy = ({ ancestral = true, nativeReapply = false } = {}) => {
+      const lines = [
+        'from ltx_core_mlx.conditioning.types.latent_cond import LatentState, Vec, apply_denoise_mask',
+        '',
+        '',
+        'def euler_step(sample, denoised, sigma, sigma_next):',
+        '    ratio = sigma_next / sigma',
+        '    return Vec(ratio * s + (1.0 - ratio) * d for s, d in zip(sample, denoised))',
+        '',
+      ];
+      if (!ancestral) return lines.join('\n');
+      return lines.concat([
+        '',
+        'def ancestral_euler_step(sample, denoised, sigma, sigma_next, noise=None, eta=1.0):',
+        '    if sigma_next == 0:',
+        '        return Vec(denoised)',
+        '    ratio = sigma_next / sigma',
+        '    stepped = [ratio * s + (1.0 - ratio) * d for s, d in zip(sample, denoised)]',
+        '    if eta > 0 and noise is not None:',
+        '        stepped = [v + eta * sigma_next * n for v, n in zip(stepped, noise)]',
+        '    return Vec(stepped)',
+        '',
+        '',
+        'def ancestral_denoise_loop(model, video_state, audio_state, sigmas, observer=None):',
+        '    video_x, audio_x = video_state.latent, audio_state.latent',
+        '    for step, (sigma, sigma_next) in enumerate(zip(sigmas[:-1], sigmas[1:])):',
+        '        video_x0, audio_x0 = model(video_x, audio_x, sigma)',
+        '        video_x0 = apply_denoise_mask(video_x0, video_state.clean_latent, video_state.denoise_mask)',
+        '        audio_x0 = apply_denoise_mask(audio_x0, audio_state.clean_latent, audio_state.denoise_mask)',
+        '        if sigma_next == 0:',
+        '            video_x, audio_x = video_x0, audio_x0',
+        '            break',
+        '        noise_v = Vec((step + 1) * 0.5 for _ in video_x)',
+        '        noise_a = Vec((step + 1) * 0.25 for _ in audio_x)',
+        '        video_x = ancestral_euler_step(video_x, video_x0, sigma, sigma_next, noise_v)',
+        '        audio_x = ancestral_euler_step(audio_x, audio_x0, sigma, sigma_next, noise_a)',
+        ...(nativeReapply ? [
+          '        video_x = apply_denoise_mask(video_x, video_state.clean_latent, video_state.denoise_mask)',
+          '        audio_x = apply_denoise_mask(audio_x, audio_state.clean_latent, audio_state.denoise_mask)',
+        ] : []),
+        '        if observer is not None:',
+        '            observer(step, video_x, audio_x)',
+        '    return video_x, audio_x',
+        '',
+      ]).join('\n');
+    };
+
+    const installFakePin = (opts = {}) => [
+      'import sys, tempfile',
+      'from pathlib import Path',
+      'root = Path(tempfile.mkdtemp())',
+      'for pkg in ("ltx_core_mlx", "ltx_core_mlx/conditioning", "ltx_core_mlx/conditioning/types",',
+      '            "ltx_pipelines_mlx", "ltx_pipelines_mlx/utils"):',
+      '    (root / pkg).mkdir(parents=True, exist_ok=True)',
+      '    (root / pkg / "__init__.py").write_text("")',
+      `(root / "ltx_core_mlx/conditioning/types/latent_cond.py").write_text(${JSON.stringify(LATENT_COND_PY)})`,
+      `(root / "ltx_pipelines_mlx/utils/samplers.py").write_text(${JSON.stringify(samplersPy(opts))})`,
+      'sys.path.insert(0, str(root))',
+      'for name in [m for m in sys.modules if m.startswith(("ltx_core_mlx", "ltx_pipelines_mlx"))]:',
+      '    sys.modules.pop(name, None)',
+    ];
+
+    // The render the invariant is about: --mode image with a source image.
+    const IMAGE_ARGS = 'args = SimpleNamespace(mode="image", image="/tmp/frame-one.png")';
+
+    // A model that predicts 0.0 everywhere, so any token the mask does NOT pin
+    // moves and any token it DOES pin can only move via the renoise — which is
+    // exactly the drift under test.
+    const RUN_LOOP = [
+      'from ltx_pipelines_mlx.utils import samplers',
+      'from ltx_core_mlx.conditioning.types.latent_cond import LatentState, Vec',
+      'video = LatentState(Vec([7.0, 1.0, 1.0, 1.0]), Vec([7.0, 0.0, 0.0, 0.0]), Vec([0.0, 1.0, 1.0, 1.0]))',
+      'audio = LatentState(Vec([0.2, 0.2, 0.2]), Vec([0.0, 0.0, 0.0]), Vec([1.0, 1.0, 1.0]))',
+      'def model(v, a, sigma):',
+      '    return (Vec(0.0 for _ in v), Vec(0.0 for _ in a))',
+      'anchors, audio_trace = [], []',
+      'def observer(step, video_x, audio_x):',
+      '    anchors.append(round(video_x[0], 6))',
+      '    audio_trace.append([round(t, 6) for t in audio_x])',
+      'samplers.ancestral_denoise_loop(model, video, audio, [1.0, 0.6, 0.3, 0.0], observer=observer)',
+    ];
+
+    const runAnchor = (body) => JSON.parse(runPython(`${importRunner}\n${[
+      'from types import SimpleNamespace',
+      ...body,
+    ].join('\n')}`));
+
+    it('keeps the anchor exactly clean at every step on a pin that renoises it away', () => {
+      const result = runAnchor([
+        ...installFakePin(),
+        IMAGE_ARGS,
+        'import contextlib, io, json',
+        'err = io.StringIO()',
+        'with contextlib.redirect_stderr(err):',
+        '    mechanism = runner.enforce_i2v_anchor_invariant(args)',
+        ...RUN_LOOP,
+        'print(json.dumps({"mechanism": mechanism, "anchors": anchors, "audio": audio_trace,',
+        '                  "status": err.getvalue().strip()}))',
+      ]);
+      expect(result.mechanism).toBe('hook');
+      // Two nonterminal steps; the terminal one is not observed because the
+      // loop breaks on it — and a terminal-only match is precisely the bug.
+      expect(result.anchors).toEqual([7, 7]);
+      expect(result.status).toMatch(/STATUS:.*frame-one anchor/i);
+    });
+
+    // main() calls this once, but a second install must not nest the wrappers:
+    // a nested recorder would keep re-recording its own wrapper output and the
+    // seam would drift from the one function the invariant is proven against.
+    it('installs the hook at most once', () => {
+      const result = runAnchor([
+        ...installFakePin(),
+        IMAGE_ARGS,
+        "import contextlib, io, json",
+        "with contextlib.redirect_stderr(io.StringIO()):",
+        "    first = runner.enforce_i2v_anchor_invariant(args)",
+        "    second = runner.enforce_i2v_anchor_invariant(args)",
+        "from ltx_pipelines_mlx.utils import samplers",
+        "nested = getattr(samplers.ancestral_euler_step.__wrapped__, \"__wrapped__\", None) is not None",
+        ...RUN_LOOP,
+        'print(json.dumps({"first": first, "second": second, "nested": nested, "anchors": anchors}))',
+      ]);
+      expect([result.first, result.second]).toEqual(['hook', 'hook']);
+      expect(result.nested).toBe(false);
+      expect(result.anchors).toEqual([7, 7]);
+    });
+
+    // Without the hook the same loop drifts — otherwise the case above would
+    // pass against a sampler that never had the defect.
+    it('drifts off the anchor when nothing enforces the invariant', () => {
+      const result = runAnchor([
+        ...installFakePin(),
+        'import json',
+        ...RUN_LOOP,
+        'print(json.dumps({"anchors": anchors, "audio": audio_trace}))',
+      ]);
+      expect(result.anchors[0]).not.toBe(7);
+      expect(result.anchors[1]).not.toBe(7);
+    });
+
+    // The generated (uniform-mask) latent is what a T2V render is made of
+    // end to end: the hook must not perturb a single token of it.
+    it('leaves a fully generated latent byte-identical', () => {
+      const [hooked, plain] = [true, false].map((enforce) => runAnchor([
+        ...installFakePin(),
+        IMAGE_ARGS,
+        'import contextlib, io, json',
+        ...(enforce ? [
+          'with contextlib.redirect_stderr(io.StringIO()):',
+          '    runner.enforce_i2v_anchor_invariant(args)',
+        ] : []),
+        ...RUN_LOOP,
+        'print(json.dumps({"audio": audio_trace}))',
+      ]));
+      expect(hooked.audio).toEqual(plain.audio);
+    });
+
+    // A pin that already re-applies the mask after its own renoise is used as
+    // it ships — no wrapper, so nothing PortOS wrote can drift from upstream.
+    it('uses a pin that already preserves conditioned tokens, unpatched', () => {
+      const result = runAnchor([
+        ...installFakePin({ nativeReapply: true }),
+        IMAGE_ARGS,
+        'import json',
+        'mechanism = runner.enforce_i2v_anchor_invariant(args)',
+        'from ltx_pipelines_mlx.utils import samplers',
+        'patched = [f.__name__ for f in (samplers.ancestral_euler_step, samplers.apply_denoise_mask)',
+        '           if getattr(f, "__wrapped__", None) is not None]',
+        ...RUN_LOOP,
+        'print(json.dumps({"mechanism": mechanism, "patched": patched, "anchors": anchors}))',
+      ]);
+      expect(result.mechanism).toBe('native');
+      expect(result.patched).toEqual([]);
+      expect(result.anchors).toEqual([7, 7]);
+    });
+
+    // The LTX-2.3 pin: plain Euler, no mid-denoise renoise, so the anchor holds
+    // by construction and its sampler must be left exactly as it was.
+    it('is not required on a pin with no ancestral sampler', () => {
+      const result = runAnchor([
+        ...installFakePin({ ancestral: false }),
+        IMAGE_ARGS,
+        'import json',
+        'from ltx_pipelines_mlx.utils import samplers',
+        'before = samplers.euler_step',
+        'mechanism = runner.enforce_i2v_anchor_invariant(args)',
+        'print(json.dumps({"mechanism": mechanism, "untouched": samplers.euler_step is before}))',
+      ]);
+      expect(result.mechanism).toBe('not-required');
+      expect(result.untouched).toBe(true);
+    });
+
+    // Every other mode keeps the argv-for-argv behavior it had before this
+    // contract existed — the seam is not even probed.
+    it.each(['text', 'fflf', 'extend', 'a2v', 'ic'])('leaves --mode %s alone', (mode) => {
+      const result = runAnchor([
+        ...installFakePin(),
+        `args = SimpleNamespace(mode=${JSON.stringify(mode)}, image="/tmp/frame-one.png")`,
+        'import json',
+        'from ltx_pipelines_mlx.utils import samplers',
+        'before = (samplers.ancestral_euler_step, samplers.apply_denoise_mask)',
+        'mechanism = runner.enforce_i2v_anchor_invariant(args)',
+        'after = (samplers.ancestral_euler_step, samplers.apply_denoise_mask)',
+        'print(json.dumps({"mechanism": mechanism, "untouched": before == after}))',
+      ]);
+      expect(result.mechanism).toBe('not-required');
+      expect(result.untouched).toBe(true);
+    });
+
+    // Fail closed: a pin that renoises the anchor away and gives PortOS no way
+    // to put it back must refuse, not render something that looks fine.
+    it('refuses an anchored render the pin cannot hold', () => {
+      const output = runPython(`${importRunner}\n${[
+        'from types import SimpleNamespace',
+        ...installFakePin(),
+        'import sys',
+        'from ltx_pipelines_mlx.utils import samplers  # noqa: F401 — import before hiding the core',
+        'sys.modules["ltx_core_mlx.conditioning.types.latent_cond"] = None',
+        IMAGE_ARGS,
+        'try:',
+        '    runner.enforce_i2v_anchor_invariant(args)',
+        'except SystemExit as exc:',
+        '    print(str(exc))',
+        'else:',
+        '    raise AssertionError("an unpreservable pin was accepted")',
+      ].join('\n')}`);
+      expect(output).toMatch(/ancestral \(SDE\) Euler/);
+      expect(output).toMatch(/setup-image-video\.sh/);
+    });
+  });
 });
