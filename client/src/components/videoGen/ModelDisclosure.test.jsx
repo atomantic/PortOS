@@ -108,14 +108,22 @@ describe('ModelDisclosure', () => {
       ],
     };
 
-    it('names the best profile the usable memory can hold', () => {
+    it('names the best profile the machine can hold, and the budget after the reserve', () => {
       renderDisclosure({ backend: 'local', model: PROFILED_MODEL, systemMemoryGb: 128 });
       expect(screen.getByText(/Rich placement/)).toBeInTheDocument();
-      expect(screen.getByText(/this system has 112 GB/)).toBeInTheDocument();
+      expect(screen.getByText(/may claim 112 GB/)).toBeInTheDocument();
     });
 
-    it('steps down to a leaner profile once the reserve puts the richer one out of reach', () => {
+    it('agrees with the headline requirement on a box sitting exactly on the floor', () => {
+      // The two facts gate on the same total-RAM comparison, so a 96 GB box on a
+      // 96 GB requirement can never read as a fit above and a refusal below.
       renderDisclosure({ backend: 'local', model: PROFILED_MODEL, systemMemoryGb: 96 });
+      expect(screen.queryByText(/below the stated minimum/)).not.toBeInTheDocument();
+      expect(screen.getByText(/Rich placement/)).toBeInTheDocument();
+    });
+
+    it('steps down to a leaner profile when the richer one is out of reach', () => {
+      renderDisclosure({ backend: 'local', model: PROFILED_MODEL, systemMemoryGb: 64 });
       expect(screen.getByText(/Lean placement/)).toBeInTheDocument();
     });
 
@@ -126,7 +134,7 @@ describe('ModelDisclosure', () => {
 
     it('says Unknown rather than "too small" when the system memory is unmeasured', () => {
       render(<ModelDisclosure backendDisclosures={BACKENDS} backend="local" model={PROFILED_MODEL} />);
-      expect(screen.getByText(/Needs 48 GB usable/)).toBeInTheDocument();
+      expect(screen.getByText(/Smallest profile needs 48 GB/)).toBeInTheDocument();
       expect(screen.queryByText(/Renders are refused/)).not.toBeInTheDocument();
     });
 

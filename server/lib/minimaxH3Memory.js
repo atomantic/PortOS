@@ -50,13 +50,20 @@
  */
 
 /**
- * Host RAM held back from the model, in GB.
+ * Host RAM held back from the model's allocator, in GB.
  *
  * A render is not the only thing on the machine: PortOS itself, Postgres, the
  * client build and the OS all need to stay resident, and an H3 render that
  * consumes the last gigabyte takes the install down with it rather than
  * failing. This is a deliberate policy reserve — the only number in this module
  * that is not lifted from an existing runner-proven constant.
+ *
+ * It caps the ALLOCATOR (`apply_memory_limit` in scripts/generate_minimax_h3.py)
+ * and is reported beside the requirement; it is deliberately NOT subtracted
+ * before comparing against `minMemoryGb`. Those floors were hoisted from the
+ * entries' `memoryGb`, which has always been a claim about TOTAL system memory,
+ * so netting the reserve off first would silently move the 128 GB model onto a
+ * 144 GB machine — refusing every box the entry was written for.
  */
 export const MINIMAX_H3_HOST_RESERVE_GB = 16;
 
@@ -74,10 +81,11 @@ export const MINIMAX_H3_AUTO_PROFILE_ID = 'auto';
  *
  *   id           stable key. On the CUDA lane this IS the `--offload-profile`
  *                value the runner takes, so the two cannot name a recipe
- *                differently (pinned by runtimes.test.js).
+ *                differently (pinned by minimaxH3Memory.test.js).
  *   name         label for the UI
  *   description  one line stating what the recipe actually does
- *   minMemoryGb  host-RAM floor, EXCLUSIVE of MINIMAX_H3_HOST_RESERVE_GB
+ *   minMemoryGb  TOTAL host-RAM floor — the same quantity the entry's
+ *                `memoryGb` has always stated, not a post-reserve figure
  *   minVramGb    device-VRAM floor, or null when the device memory IS the host
  *                memory (Apple unified memory)
  *   unified      true when host and device memory are the same pool
@@ -186,7 +194,9 @@ export const miniMaxH3MemoryProfiles = (model) => (
 );
 
 /**
- * Usable host RAM after the reserve, or `null` when capacity wasn't measured.
+ * Host RAM left for the model's allocator after the reserve, or `null` when
+ * capacity wasn't measured. Reported and used to cap the allocator — NOT the
+ * quantity profile floors are compared against (see the reserve's docblock).
  *
  * `null` is the sentinel for "not measured" and is deliberately distinct from
  * a measured small number — a capacity probe that returned nothing must not
@@ -198,13 +208,13 @@ export const miniMaxH3UsableMemoryGb = (totalMemoryGb) => {
 };
 
 /**
- * The best profile this box's HOST memory can hold, plus what it was measured
- * against. VRAM is deliberately not considered here: the server has no
+ * The best profile this box's total host memory can hold, plus what it was
+ * measured against. VRAM is deliberately not considered here: the server has no
  * synchronous view of the device, and the runner — which does — re-selects on
  * the same table before it loads anything.
  *
  * @returns {{ profile, usableMemoryGb, totalMemoryGb }} with `profile: null`
- *   when the model declares none or nothing fits. `usableMemoryGb: null` means
+ *   when the model declares none or nothing fits. `totalMemoryGb: null` means
  *   the host was not measured, in which case the best declared profile is
  *   returned unjudged for the runner to confirm.
  */
@@ -213,10 +223,10 @@ export const selectMiniMaxH3MemoryProfile = ({ model, totalMemoryGb } = {}) => {
   const usableMemoryGb = miniMaxH3UsableMemoryGb(totalMemoryGb);
   const total = positiveNumber(totalMemoryGb);
   if (profiles.length === 0) return { profile: null, usableMemoryGb, totalMemoryGb: total };
-  if (usableMemoryGb === null) return { profile: profiles[0], usableMemoryGb, totalMemoryGb: total };
+  if (total === null) return { profile: profiles[0], usableMemoryGb, totalMemoryGb: total };
   const profile = profiles.find((candidate) => {
     const floor = positiveNumber(candidate.minMemoryGb);
-    return floor === null || usableMemoryGb >= floor;
+    return floor === null || total >= floor;
   }) || null;
   return { profile, usableMemoryGb, totalMemoryGb: total };
 };
@@ -241,15 +251,14 @@ const smallestHostFloorGb = (profiles) => profiles.reduce((smallest, profile) =>
 export const miniMaxH3MemoryDeclineReason = ({ model, modelId, totalMemoryGb } = {}) => {
   const profiles = miniMaxH3MemoryProfiles(model);
   if (profiles.length === 0) return null;
-  const { profile, usableMemoryGb } = selectMiniMaxH3MemoryProfile({ model, totalMemoryGb });
-  if (usableMemoryGb === null || profile) return null;
+  const { profile, totalMemoryGb: measured } = selectMiniMaxH3MemoryProfile({ model, totalMemoryGb });
+  if (measured === null || profile) return null;
   const floor = smallestHostFloorGb(profiles);
   const name = model?.name || modelId || model?.id || 'This model';
   return {
     code: 'MINIMAX_H3_MEMORY_INSUFFICIENT',
     message: `${name} needs at least ${floor} GB of memory for its smallest weight-placement profile. `
-      + `This machine has ${Math.round(Number(totalMemoryGb))} GB, of which ${Math.round(usableMemoryGb)} GB is usable `
-      + `after the ${MINIMAX_H3_HOST_RESERVE_GB} GB reserve PortOS keeps for the operating system. `
+      + `This machine has ${Math.round(measured)} GB. `
       + `Render on a peer with more memory, or pick a smaller model.`,
   };
 };

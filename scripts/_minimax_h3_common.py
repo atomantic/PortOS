@@ -72,9 +72,10 @@ def add_h3_common_args(
     parser.add_argument("--memory-profile", default=None,
                         help="id of the weight-placement profile PortOS selected (reported back, not re-derived)")
     parser.add_argument("--min-system-memory-gb", type=float, default=None,
-                        help="host RAM below which NO declared placement profile can run")
+                        help="TOTAL host RAM below which NO declared placement profile can run")
     parser.add_argument("--memory-headroom-gb", type=float, default=0.0,
-                        help="host RAM held back for the operating system and PortOS itself")
+                        help="host RAM held back from the model's ALLOCATOR for the OS and PortOS itself; "
+                             "never netted off before the --min-system-memory-gb comparison")
     return parser
 
 
@@ -124,7 +125,7 @@ def total_system_memory_gb() -> float | None:
 
 
 def enforce_system_memory(args) -> float | None:
-    """Refuse a render this machine cannot hold, and return the usable RAM.
+    """Refuse a render this machine cannot hold, and return the measured RAM.
 
     H3's components fit nowhere unassisted, so loading them takes minutes to
     hours before an out-of-memory kill would land — long after the job has taken
@@ -132,23 +133,27 @@ def enforce_system_memory(args) -> float | None:
     half, which catches a render that reached the helper by any other route
     (a persisted-queue replay, a retry, a peer submission, a direct call).
 
+    Compared against TOTAL memory, deliberately: the floor PortOS passes was
+    hoisted from the registry entry's `memoryGb`, which has always been a claim
+    about the whole machine. `--memory-headroom-gb` caps the ALLOCATOR further
+    down; netting it off here as well would move the 128 GB model onto a 144 GB
+    box and refuse every machine the entry was written for.
+
     Fails closed only on a MEASURED shortfall: an unmeasurable host returns None
     and the render proceeds, because "the probe returned nothing" is not the
-    same fact as "this box has no memory".
+    same fact as "this box has no memory". Returning the measured total means a
+    caller that also needs it does not probe the machine twice.
     """
     total_gb = total_system_memory_gb()
     if total_gb is None:
         return None
-    headroom_gb = max(0.0, args.memory_headroom_gb or 0.0)
-    usable_gb = max(0.0, total_gb - headroom_gb)
     minimum = args.min_system_memory_gb
-    if minimum is not None and usable_gb < minimum:
+    if minimum is not None and total_gb < minimum:
         raise SystemExit(
             f"MiniMax H3 needs at least {minimum:.0f} GB of memory for its smallest weight-placement "
-            f"profile. This machine has {total_gb:.0f} GB, of which {usable_gb:.0f} GB is usable after "
-            f"the {headroom_gb:.0f} GB reserve PortOS keeps for the operating system."
+            f"profile; this machine has {total_gb:.0f} GB."
         )
-    return usable_gb
+    return total_gb
 
 
 def snapshot_root(resolved_file: str | Path, repo_filename: str) -> Path:

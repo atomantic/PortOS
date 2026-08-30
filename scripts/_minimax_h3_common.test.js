@@ -112,14 +112,15 @@ describe.skipIf(!pyBin)('_minimax_h3_common.py — checkpoint facts shared by bo
       '    print(f"REJECTED:{exc}")',
     ].join('\n')}`).trim();
 
-    it('refuses a measured box below the floor once the reserve is taken out', () => {
-      // 128 GB nameplate against a 128 GB floor used to read as a fit; it is
-      // 112 GB usable, which is the number the render actually gets.
-      expect(enforce({ total: 128, minimum: 128 })).toMatch(/^REJECTED:.*at least 128 GB.*112 GB is usable/);
+    it('refuses a measured box below the floor', () => {
+      expect(enforce({ total: 96, minimum: 128 })).toMatch(/^REJECTED:.*at least 128 GB.*has 96 GB/);
     });
 
-    it('accepts a box with the floor still free after the reserve', () => {
-      expect(enforce({ total: 144, minimum: 128 })).toBe('OK:128.0');
+    it('accepts the machine the floor was written for, reserve NOT netted off first', () => {
+      // The floor is a total-RAM claim hoisted from the entry's `memoryGb`.
+      // Subtracting the allocator reserve here as well would move the 128 GB
+      // model onto a 144 GB box and refuse every Mac the entry describes.
+      expect(enforce({ total: 128, minimum: 128 })).toBe('OK:128.0');
     });
 
     it('proceeds, rather than refusing, when the host could not be measured', () => {
@@ -127,7 +128,7 @@ describe.skipIf(!pyBin)('_minimax_h3_common.py — checkpoint facts shared by bo
     });
 
     it('is a no-op when PortOS passed no floor', () => {
-      expect(enforce({ total: 8, minimum: null })).toBe('OK:0.0');
+      expect(enforce({ total: 8, minimum: null })).toBe('OK:8.0');
     });
   });
 

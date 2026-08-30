@@ -233,23 +233,26 @@ export const videoModelMemoryGb = (model) => {
   return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
 };
 
-// Host RAM PortOS holds back for the operating system and itself before a
-// MiniMax H3 render may claim the rest. Mirrors MINIMAX_H3_HOST_RESERVE_GB in
-// server/lib/minimaxH3Memory.js — the only number mirrored here, because the
-// per-profile floors ride on the model entry the client already fetches.
+// Host RAM PortOS holds back from a MiniMax H3 render's ALLOCATOR for the OS and
+// itself. Mirrors MINIMAX_H3_HOST_RESERVE_GB in server/lib/minimaxH3Memory.js —
+// the only number mirrored here, because the per-profile floors ride on the
+// model entry the client already fetches — and pinned by
+// server/lib/minimaxH3Memory.test.js. It is reported, never subtracted before
+// comparing against a profile's floor: those floors are total-RAM claims, so
+// netting it off first would put the 128 GB model out of reach of a 128 GB box.
 export const VIDEO_MEMORY_RESERVE_GB = 16;
 
 // The weight-placement profile this machine can hold, out of the ones the model
 // declares (#5420). Entries carry `memoryProfiles` best-first, each with an
-// honest `minMemoryGb` host floor, so the picker and the disclosure can state
-// the capacity a render will REALLY need instead of the single headline
-// `memoryGb` that never accounted for what the OS keeps.
+// honest `minMemoryGb` total-RAM floor, so the disclosure can name the recipe a
+// render will really get rather than only the headline `memoryGb`.
 //
 // Returns `{ profile, usableGb, floorGb }`:
 //   profile  the best profile that fits, or `null` when none does
-//   usableGb system memory minus the reserve, or `null` when unmeasured — the
-//            "not measured" sentinel, deliberately distinct from a small number
-//            so an absent /status field never renders as "this box is too small"
+//   usableGb system memory minus the reserve — what the allocator is actually
+//            capped at — or `null` when unmeasured. That null is the "not
+//            measured" sentinel, deliberately distinct from a small number so an
+//            absent /status field never renders as "this box is too small".
 //   floorGb  the smallest floor any declared profile has, so a UI that has to
 //            say what it would take has the number
 export const selectVideoMemoryProfile = (model, systemMemoryGb) => {
@@ -261,14 +264,13 @@ export const selectVideoMemoryProfile = (model, systemMemoryGb) => {
     .filter((floor) => Number.isFinite(floor) && floor > 0);
   const floorGb = floors.length > 0 ? Math.min(...floors) : null;
   const system = Number(systemMemoryGb);
-  const usableGb = Number.isFinite(system) && system > 0
-    ? Math.max(0, system - VIDEO_MEMORY_RESERVE_GB)
-    : null;
+  const measured = Number.isFinite(system) && system > 0 ? system : null;
+  const usableGb = measured === null ? null : Math.max(0, measured - VIDEO_MEMORY_RESERVE_GB);
   if (profiles.length === 0) return { profile: null, usableGb, floorGb };
-  if (usableGb === null) return { profile: profiles[0], usableGb, floorGb };
+  if (measured === null) return { profile: profiles[0], usableGb, floorGb };
   const profile = profiles.find((candidate) => {
     const floor = Number(candidate.minMemoryGb);
-    return !Number.isFinite(floor) || floor <= 0 || usableGb >= floor;
+    return !Number.isFinite(floor) || floor <= 0 || measured >= floor;
   }) || null;
   return { profile, usableGb, floorGb };
 };

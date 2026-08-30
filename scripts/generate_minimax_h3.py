@@ -14,9 +14,9 @@ Memory: unified memory means this render and the rest of the machine draw on one
 pool. PortOS passes the host floor its declared placement profile needs
 (`--min-system-memory-gb`) and the reserve it holds back for the operating
 system (`--memory-headroom-gb`); `enforce_system_memory` refuses a box below the
-floor before any weight is read, and `apply_memory_limit` caps MLX's allocator
-at the rest so a render that overruns fails as a job instead of wedging the
-machine.
+floor before any weight is read (against TOTAL RAM — the reserve is not netted
+off first), and `apply_memory_limit` caps MLX's allocator at the rest so a
+render that overruns fails as a job instead of wedging the machine.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ from _runner_common import (  # noqa: E402
 )
 from _minimax_h3_common import (  # noqa: E402
     FPS, add_h3_common_args, emit_result, enforce_system_memory, load_keyframes,
-    resolve_cached_snapshot, total_system_memory_gb, validate_h3_output_args,
+    resolve_cached_snapshot, validate_h3_output_args,
 )
 from _minimax_h3_mlx_pins import (  # noqa: E402
     pinned_encoder_hook, verify_pinned_encode_source,
@@ -82,7 +82,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def apply_memory_limit(args: argparse.Namespace, vision_loaded: bool) -> None:
+def apply_memory_limit(args: argparse.Namespace, total_gb: float | None, vision_loaded: bool) -> None:
     """Cap MLX's allocator at the machine's RAM minus PortOS's reserve.
 
     Unified memory means an H3 render and the rest of the machine draw on the
@@ -92,44 +92,45 @@ def apply_memory_limit(args: argparse.Namespace, vision_loaded: bool) -> None:
     rather than a failed job. An explicit limit converts that into an
     out-of-memory error the runner reports normally.
 
-    Best-effort by design: the limit setters have moved between `mx` and
-    `mx.metal` across MLX releases and the wired limit is Metal-only, so each is
-    probed rather than assumed. A pin without them still renders — it just keeps
-    the old unbounded behaviour, which is what it had before this existed.
+    Only the ALLOCATOR limit is set. The wired limit is a different lever with a
+    much lower safe ceiling — MLX raises when it is set above the recommended
+    max working set, which on a 128 GB Mac is well under RAM-minus-reserve — so
+    driving it from this number would kill the runner outright. It stays at the
+    pin's own default until someone measures a value for it.
+
+    Best-effort by design: the setter has moved between `mx` and `mx.metal`
+    across MLX releases and can reject a limit this build dislikes, so both the
+    lookup and the call are guarded. An MLX without it still renders — it just
+    keeps the unbounded behaviour it had before this existed, which is why a
+    failure here is reported rather than raised.
     """
-    total_gb = total_system_memory_gb()
+    profile = args.memory_profile or 'unified'
+    tower = 'loaded' if vision_loaded else 'skipped'
     headroom_gb = max(0.0, args.memory_headroom_gb or 0.0)
     if total_gb is None:
         print(
-            f"STATUS:MiniMax H3 placement: {args.memory_profile or 'unified'} "
-            f"· host memory unknown, allocator left unbounded "
-            f"· vision tower {'loaded' if vision_loaded else 'skipped'}",
+            f"STATUS:MiniMax H3 placement: {profile} "
+            f"· host memory unknown, allocator left unbounded · vision tower {tower}",
             file=sys.stderr, flush=True,
         )
         return
     limit_gb = max(1.0, total_gb - headroom_gb)
-    limit_bytes = int(limit_gb * 1e9)
 
     import mlx.core as mx
 
-    applied = []
-    for module, name in ((mx, "set_memory_limit"), (getattr(mx, "metal", None), "set_memory_limit")):
-        setter = getattr(module, name, None)
-        if setter is not None:
-            setter(limit_bytes)
-            applied.append("allocator")
-            break
-    for module, name in ((mx, "set_wired_limit"), (getattr(mx, "metal", None), "set_wired_limit")):
-        setter = getattr(module, name, None)
-        if setter is not None:
-            setter(limit_bytes)
-            applied.append("wired")
-            break
-    placement = ", ".join(applied) if applied else "no limit lever on this MLX build"
+    setter = getattr(mx, "set_memory_limit", None) or getattr(getattr(mx, "metal", None), "set_memory_limit", None)
+    if setter is None:
+        applied = "no allocator limit on this MLX build"
+    else:
+        try:
+            setter(int(limit_gb * 1e9))
+            applied = f"allocator capped at {limit_gb:.0f} GB"
+        except Exception as exc:  # a pin that rejects the limit must not lose the render
+            applied = f"allocator cap rejected by MLX ({type(exc).__name__}: {exc})"
     print(
-        f"STATUS:MiniMax H3 placement: {args.memory_profile or 'unified'} "
-        f"· {limit_gb:.0f} GB of {total_gb:.0f} GB (reserve {headroom_gb:.0f} GB) [{placement}] "
-        f"· vision tower {'loaded' if vision_loaded else 'skipped'}",
+        f"STATUS:MiniMax H3 placement: {profile} "
+        f"· {total_gb:.0f} GB RAM, reserve {headroom_gb:.0f} GB [{applied}] "
+        f"· vision tower {tower}",
         file=sys.stderr, flush=True,
     )
 
@@ -655,11 +656,11 @@ def main() -> int:
     # Capacity before anything is loaded. PortOS gates this at submit time too;
     # this is the runner-side half, which also catches a render that reached the
     # helper by another route (a persisted-queue replay, a retry, a direct call).
-    enforce_system_memory(args)
+    total_memory_gb = enforce_system_memory(args)
     # `images` decides whether the Qwen3-VL vision tower loads at all, so the
     # placement report can state what is actually resident rather than what the
     # entry could hold in the worst case.
-    apply_memory_limit(args, vision_loaded=bool(images))
+    apply_memory_limit(args, total_memory_gb, vision_loaded=bool(images))
 
     runtime_dir = Path(args.runtime_dir).resolve()
     verify_runtime_checkout(runtime_dir, args.runtime_revision)

@@ -58,24 +58,20 @@ describe('applyMiniMaxH3MemoryProfiles', () => {
 });
 
 describe('selectMiniMaxH3MemoryProfile', () => {
-  it('picks the richest CUDA profile the usable host memory can hold', () => {
+  it('picks the richest CUDA profile this host can hold, and reports the allocator budget', () => {
     const model = decorated(cudaEntry());
-    const { profile, usableMemoryGb } = selectMiniMaxH3MemoryProfile({
-      model,
-      totalMemoryGb: 96 + MINIMAX_H3_HOST_RESERVE_GB,
-    });
+    const { profile, usableMemoryGb } = selectMiniMaxH3MemoryProfile({ model, totalMemoryGb: 96 });
     expect(profile.id).toBe('bf16');
-    expect(usableMemoryGb).toBe(96);
+    expect(usableMemoryGb).toBe(96 - MINIMAX_H3_HOST_RESERVE_GB);
   });
 
-  it('subtracts the reserve, so a box sitting exactly on the headline floor does NOT fit', () => {
-    // The whole point of the reserve: 128 GB nameplate against a 128 GB floor
-    // used to read as a fit while a render would have claimed the whole machine.
+  it('gates on TOTAL memory, so the machine the entry was written for still qualifies', () => {
+    // The floors were hoisted from `memoryGb`, which has always been a total-RAM
+    // claim. Netting the reserve off before the comparison would silently move
+    // the 128 GB model onto a 144 GB box and 400 every render on a 128 GB Mac.
     const model = decorated(mlxEntry());
-    expect(selectMiniMaxH3MemoryProfile({ model, totalMemoryGb: 128 }).profile).toBeNull();
-    expect(
-      selectMiniMaxH3MemoryProfile({ model, totalMemoryGb: 128 + MINIMAX_H3_HOST_RESERVE_GB }).profile.id,
-    ).toBe('unified-8bit');
+    expect(selectMiniMaxH3MemoryProfile({ model, totalMemoryGb: 128 }).profile.id).toBe('unified-8bit');
+    expect(selectMiniMaxH3MemoryProfile({ model, totalMemoryGb: 127 }).profile).toBeNull();
   });
 
   it('defers to the runner when the host was not measured', () => {
@@ -97,7 +93,6 @@ describe('miniMaxH3MemoryDeclineReason', () => {
     expect(reason.code).toBe('MINIMAX_H3_MEMORY_INSUFFICIENT');
     expect(reason.message).toContain('128 GB');
     expect(reason.message).toContain('64 GB');
-    expect(reason.message).toContain(`${MINIMAX_H3_HOST_RESERVE_GB} GB reserve`);
   });
 
   it('stays null for a box that fits, an unmeasured host, and a model with no table', () => {
@@ -141,20 +136,35 @@ describe('validateMiniMaxH3MemoryProfileTable / sanitize', () => {
   });
 });
 
-// The CUDA runner re-selects a recipe from the device's VRAM, which the server
-// cannot see. That only stays honest while its floors agree with the ones this
-// module declares and the UI renders — hand-synced across a language boundary,
-// the same shape MINIMAX_H3_CUDA_OFFLOAD_PROFILES already has.
-describe('CUDA VRAM floors', () => {
-  it('match PROFILE_MIN_VRAM_GB in the Python runner', () => {
-    const runner = readFileSync(
-      join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'generate_minimax_h3_cuda.py'),
-      'utf8',
-    );
-    const declared = runner.match(/^PROFILE_MIN_VRAM_GB = \((.*)\)$/m);
+const repoFile = (...parts) => readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), '..', '..', ...parts),
+  'utf8',
+);
+
+// Two constants are hand-synced out of this module — one across a language
+// boundary, one across the client boundary. Both are read as TEXT rather than
+// imported: the Python one cannot be imported at all, and importing the client
+// module into a server suite drags client-only deps into CI (they are separate
+// workspaces). This is the same shape MINIMAX_H3_CUDA_OFFLOAD_PROFILES already
+// has in runtimes.test.js.
+describe('hand-synced mirrors', () => {
+  it('CUDA VRAM floors match PROFILE_MIN_VRAM_GB in the Python runner', () => {
+    // The runner re-selects a recipe from the device's VRAM, which the server
+    // cannot see; that only stays honest while the two tables agree.
+    const declared = repoFile('scripts', 'generate_minimax_h3_cuda.py')
+      .match(/^PROFILE_MIN_VRAM_GB = \((.*)\)$/m);
     expect(declared).not.toBeNull();
     const fromPython = [...declared[1].matchAll(/\("([^"]+)",\s*(\d+)\)/g)]
       .map(([, id, floor]) => ({ id, minVramGb: Number(floor) }));
     expect(fromPython).toEqual(CUDA_SPEC.profiles.map(({ id, minVramGb }) => ({ id, minVramGb })));
+  });
+
+  it('the host reserve matches VIDEO_MEMORY_RESERVE_GB in the client', () => {
+    // The client states how much of the box a render may claim. A drift here
+    // would have the disclosure promise a budget the runner never applies.
+    const declared = repoFile('client', 'src', 'lib', 'videoGenParams.js')
+      .match(/^export const VIDEO_MEMORY_RESERVE_GB = (\d+);$/m);
+    expect(declared).not.toBeNull();
+    expect(Number(declared[1])).toBe(MINIMAX_H3_HOST_RESERVE_GB);
   });
 });

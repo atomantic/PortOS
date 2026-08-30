@@ -50,8 +50,8 @@ MAX_FRAMES = 345  # last 17n+5 grid point at or below 15 seconds
 OFFLOAD_PROFILES = ("auto", "bf16", "int8-stream", "int8-lean")
 
 # Device-VRAM floor per recipe, richest first. This is the same table PortOS
-# declares in server/lib/minimaxH3Memory.js (pinned by runtimes.test.js), and it
-# is now a FLOOR rather than a one-way ladder: a card below the leanest entry
+# declares in server/lib/minimaxH3Memory.js (pinned by its own test suite), and
+# it is now a FLOOR rather than a one-way ladder: a card below the leanest entry
 # gets a clean error naming what it would take, instead of the leanest recipe
 # and an out-of-memory kill an hour into the load. An explicitly pinned profile
 # is checked against it too — the registry entry syncs between peers and can
@@ -273,14 +273,13 @@ def main() -> int:
     # Both halves of the capacity gate, before the multi-GB load rather than
     # after it: the host floor (which is where the int8 recipes keep ~75 GB of
     # weights resident for the whole render) and the device floor.
-    usable_host_gb = enforce_system_memory(args)
+    total_host_gb = enforce_system_memory(args)
     profile, vram_gb = resolve_offload_profile(args.offload_profile)
-    host_report = "host memory unknown" if usable_host_gb is None else f"{usable_host_gb:.0f} GB usable host memory"
+    host_report = "host memory unknown" if total_host_gb is None else f"{total_host_gb:.0f} GB host RAM"
     log(
         f"STATUS:MiniMax H3 CUDA placement: {profile} "
         f"({'pinned' if args.offload_profile != 'auto' else 'auto'}) "
-        f"· {vram_gb:.0f} GB VRAM · {host_report} "
-        f"(reserve {max(0.0, args.memory_headroom_gb or 0.0):.0f} GB)"
+        f"· {vram_gb:.0f} GB VRAM · {host_report}"
     )
 
     log("STAGE:load-pipeline")
