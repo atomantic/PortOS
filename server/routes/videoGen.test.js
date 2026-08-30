@@ -8,6 +8,11 @@ import { DEFAULT_CONTEXT_FRAMES, MAX_CONTEXT_FRAMES } from '../lib/videoContinui
 const compiledVisual = vi.hoisted(() => ({
   version: 1, compilerVersion: '1.0.0', status: 'locked', assets: [], adapters: [], omitted: [], warnings: [],
 }));
+const probeVideoDuration = vi.hoisted(() => vi.fn(async () => 41.041281));
+vi.mock('../lib/ffmpeg.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  probeVideoDuration,
+}));
 const compileFableLoomVisualRequest = vi.hoisted(() => vi.fn(async ({ authoredPrompt, authoredNegativePrompt, sourceImagePath }) => ({
   prompt: authoredPrompt,
   negativePrompt: authoredNegativePrompt || '',
@@ -92,7 +97,7 @@ vi.mock('../lib/pythonSetup.js', () => ({
 
 vi.mock('../services/videoGen/local.js', () => ({
   // The route checks `runtime` on the default model when validating a2v —
-  // include it so the a2v happy-path tests don't trip the A2V_REQUIRES_LTX2
+  // include it so the a2v happy-path tests don't trip the runtime capability
   // guard. Tests that need to exercise the legacy runtime override the mock
   // per-test via mockReturnValueOnce.
   listVideoModels: vi.fn(() => [{
@@ -119,7 +124,7 @@ vi.mock('../services/videoGen/local.js', () => ({
   // bring their own venv). Mirror the real export so the
   // "accepts BYOV-runtime when pythonPath missing" case passes and the
   // negative case (legacy mlx_video model) still 400s.
-  BYOV_VIDEO_RUNTIMES: new Set(['ltx2', 'wan22', 'minimax_h3']),
+  BYOV_VIDEO_RUNTIMES: new Set(['ltx2', 'ltx25', 'wan22', 'minimax_h3', 'minimax_h3_ref2va']),
   // The route's /status response now surfaces the BYOV runtime list so the
   // client can drop its hardcoded copy. Mirror the real shape — only the
   // `id` and a couple of UI-display fields are read by /status.
@@ -136,6 +141,13 @@ vi.mock('../services/videoGen/local.js', () => ({
       id: 'minimax_h3_cuda', label: 'MiniMax H3 CUDA', venvPython: '/tmp/minimax-h3-cuda.py',
       installEnvVar: 'INSTALL_MINIMAX_H3_CUDA', repoUrl: 'x', repoDir: '/tmp',
       installSourceLabel: 'pinned PyPI wheels',
+    },
+    minimax_h3_ref2va: {
+      id: 'minimax_h3_ref2va', label: 'MiniMax H3 Ref2VA via mere.run',
+      executable: '/tmp/mere.run', expectedVersion: '0.47.0',
+      installEnvVar: 'INSTALL_MERERUN', repoUrl: 'https://github.com/sawfwair/mere-run',
+      repoDir: '/tmp/mere-run', installSourceLabel: 'signed mere.run release',
+      hfDownloadPython: false,
     },
     ltx2: { id: 'ltx2', label: 'LTX-2 MLX', venvPython: '/tmp/ltx2.py', installEnvVar: 'INSTALL_LTX2', repoUrl: 'x', repoDir: '/tmp' },
     wan22: {
@@ -330,6 +342,7 @@ describe('videoGen routes', () => {
     runtimeProbes.isByovRuntimeInstalled.mockReturnValue(false);
     runtimeProbes.isByovRuntimeReady.mockResolvedValue(false);
     runtimeProbes.isByovRuntimeCurrent.mockResolvedValue(false);
+    probeVideoDuration.mockResolvedValue(41.041281);
   });
 
   describe('GET /status', () => {
@@ -564,6 +577,32 @@ describe('videoGen routes', () => {
           },
         ],
       }));
+    });
+
+    it('downloads Ref2VA through PortOS with the pinned snapshot and saved HF token path', async () => {
+      const ref2va = {
+        id: 'minimax_h3_ref2va_8bit',
+        name: 'MiniMax H3 Ref2VA MLX 8-bit',
+        runtime: 'minimax_h3_ref2va',
+        repo: 'Sawfwair/MiniMax-H3-Ref2VA-MLX-8bit',
+        revision: '61dc387ef1a7166425cdacd63c2340598dcc364f',
+        supportedModes: ['a2v'],
+      };
+      videoGenService.listVideoModels.mockReturnValueOnce([ref2va]);
+
+      const accepted = await request(app).get(`/api/video-gen/models/${ref2va.id}/download`);
+
+      expect(accepted.status).toBe(200);
+      expect(sseDownload.start).toHaveBeenCalledWith(expect.objectContaining({
+        repos: [{
+          repo: ref2va.repo,
+          revision: ref2va.revision,
+          only: [],
+        }],
+        pythonPath: null,
+        force: false,
+      }));
+      expect(videoGenService.isByovRuntimeReady).not.toHaveBeenCalled();
     });
 
     it('queues an H3 render without a recorded acknowledgement', async () => {
@@ -1571,6 +1610,118 @@ describe('videoGen routes', () => {
       }));
     });
 
+    it('queues LTX-2.5 image plus audio at the server-probed full duration', async () => {
+      const ltx25 = {
+        id: 'ltx25_mlx_q8',
+        name: 'LTX-2.5 MLX Q8',
+        runtime: 'ltx25',
+        supportedModes: ['text', 'image', 'fflf', 'extend', 'a2v'],
+        audioDurationDriven: true,
+        frameStride: 8,
+        maxNumFrames: 1017,
+      };
+      videoGenService.listVideoModels.mockReturnValueOnce([ltx25]);
+      setPendingUpload({
+        fieldname: 'audioFile',
+        path: '/tmp/upload-forty-one-seconds.wav',
+        originalname: 'forty-one-seconds.wav',
+        mimetype: 'audio/wav',
+        size: 4_000_000,
+      });
+
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'the tones awaken a dormant chamber',
+        modelId: ltx25.id,
+        mode: 'a2v',
+        sourceImageFile: 'awakening-reference.png',
+        fps: 24,
+        numFrames: 121,
+      });
+
+      expect(r.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'video',
+        params: expect.objectContaining({
+          modelId: ltx25.id,
+          mode: 'a2v',
+          sourceImagePath: '/mock/images/awakening-reference.png',
+          numFrames: 985,
+          audioFilePath: expect.stringMatching(/[\\/]mock[\\/]uploads[\\/]video-audio-.*\.wav$/),
+        }),
+      }));
+    });
+
+    it('queues MiniMax H3 Ref2VA only when image and audio conditioning are both present', async () => {
+      const ref2va = {
+        id: 'minimax_h3_ref2va_8bit',
+        name: 'MiniMax H3 Ref2VA MLX 8-bit',
+        runtime: 'minimax_h3_ref2va',
+        supportedModes: ['a2v'],
+        defaultFrames: 124,
+        frameOptions: [107, 124, 141, 158],
+        fpsOptions: [24],
+        defaultWidth: 512,
+        defaultHeight: 320,
+        resolutionStep: 32,
+        steps: 9,
+        guidance: 0,
+        samplerLocked: true,
+      };
+      videoGenService.listVideoModels.mockReturnValueOnce([ref2va]);
+      setPendingUpload({
+        fieldname: 'audioFile',
+        path: '/tmp/upload-awakening.wav',
+        originalname: 'awakening.wav',
+        mimetype: 'audio/wav',
+        size: 5_000_000,
+      });
+
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'the supplied tones release the chamber restraints',
+        modelId: ref2va.id,
+        mode: 'a2v',
+        sourceImageFile: 'awakening-reference.png',
+      });
+
+      expect(r.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'video',
+        params: expect.objectContaining({
+          modelId: ref2va.id,
+          mode: 'a2v',
+          sourceImagePath: '/mock/images/awakening-reference.png',
+          audioFilePath: expect.stringMatching(/[\\/]mock[\\/]uploads[\\/]video-audio-.*\.wav$/),
+        }),
+      }));
+    });
+
+    it('rejects MiniMax H3 Ref2VA audio without a reference image', async () => {
+      const ref2va = {
+        id: 'minimax_h3_ref2va_8bit',
+        name: 'MiniMax H3 Ref2VA MLX 8-bit',
+        runtime: 'minimax_h3_ref2va',
+        supportedModes: ['a2v'],
+      };
+      videoGenService.listVideoModels.mockReturnValueOnce([ref2va]);
+      setPendingUpload({
+        fieldname: 'audioFile',
+        path: '/tmp/upload-awakening.wav',
+        originalname: 'awakening.wav',
+        mimetype: 'audio/wav',
+        size: 5_000_000,
+      });
+
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'the supplied tones release the chamber restraints',
+        modelId: ref2va.id,
+        mode: 'a2v',
+      });
+
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe('MINIMAX_H3_REF2VA_A2V_REQUIRES_IMAGE');
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
     it('stages project audio and forwards the scene song offset for music-video a2v', async () => {
       getMusicVideoProject.mockResolvedValue({
         id: 'mv-example',
@@ -1605,11 +1756,11 @@ describe('videoGen routes', () => {
       }));
     });
 
-    // a2v on a non-ltx2 model would fail later inside the worker
-    // (buildArgs throws A2V_REQUIRES_LTX2). The route catches it up front so
+    // a2v on a runtime without audio conditioning would fail inside the worker.
+    // The route catches it up front so
     // a typo / stale UI state doesn't pollute the persisted queue with a
     // doomed entry.
-    it('rejects mode=a2v paired with a non-ltx2 modelId (A2V_REQUIRES_LTX2)', async () => {
+    it('rejects mode=a2v paired with a model that lacks audio conditioning', async () => {
       // Override the default ltx2-runtime model with a legacy mlx_video entry
       // for this single request.
       videoGenService.listVideoModels.mockReturnValueOnce([
@@ -1628,8 +1779,8 @@ describe('videoGen routes', () => {
         modelId: 'ltx_legacy',
       });
       expect(r.status).toBe(400);
-      expect(r.body.error).toMatch(/ltx2-runtime/i);
-      expect(r.body.code).toBe('A2V_REQUIRES_LTX2');
+      expect(r.body.error).toMatch(/audio-to-video runtime/i);
+      expect(r.body.code).toBe('A2V_RUNTIME_UNSUPPORTED');
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
 

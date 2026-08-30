@@ -148,6 +148,7 @@ export * from './videoDraftDecoders.js';
 export * from './videoFinishProfiles.js';
 export * from './videoSpeedProfiles.js';
 export * from './videoModeProfiles.js';
+export * from './videoDurationProfiles.js';
 export * from './videoReferenceModes.js';
 export * from './videoTextEncoders.js';
 export * from './promptPartials.js';

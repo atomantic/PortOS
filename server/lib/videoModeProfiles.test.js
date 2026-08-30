@@ -7,10 +7,11 @@ import {
 } from './videoModeProfiles.js';
 
 describe('VIDEO_RUNTIME_MODES', () => {
-  it('only enumerates base semantic modes', () => {
+  it('only enumerates known semantic modes', () => {
+    const knownModes = [...VIDEO_BASE_MODES, 'a2v'];
     for (const [runtime, modes] of Object.entries(VIDEO_RUNTIME_MODES)) {
       expect(modes.length, runtime).toBeGreaterThan(0);
-      for (const mode of modes) expect(VIDEO_BASE_MODES, `${runtime}/${mode}`).toContain(mode);
+      for (const mode of modes) expect(knownModes, `${runtime}/${mode}`).toContain(mode);
     }
   });
 
@@ -26,6 +27,15 @@ describe('VIDEO_RUNTIME_MODES', () => {
     expect(VIDEO_RUNTIME_MODES.ltx25).toEqual(VIDEO_RUNTIME_MODES.ltx2);
     expect(VIDEO_RUNTIME_MODES.minimax_h3).toContain('fflf');
     expect(VIDEO_RUNTIME_MODES.wan22).not.toContain('fflf');
+  });
+
+  it('declares audio-only semantics for MiniMax H3 Ref2VA', () => {
+    expect(VIDEO_RUNTIME_MODES.minimax_h3_ref2va).toEqual(['a2v']);
+  });
+
+  it('declares A2V on both pinned LTX runtime generations', () => {
+    expect(VIDEO_RUNTIME_MODES.ltx2).toContain('a2v');
+    expect(VIDEO_RUNTIME_MODES.ltx25).toContain('a2v');
   });
 });
 
@@ -57,7 +67,7 @@ describe('applyVideoSupportedModes', () => {
     expect(out.map((e) => e.supportedModes)).toEqual([
       ['text', 'image', 'fflf', 'extend'],
       ['image'],
-      ['text', 'image', 'fflf', 'extend'],
+      ['text', 'image', 'fflf', 'extend', 'a2v'],
     ]);
     expect(entries[0].supportedModes).toBeUndefined();
   });

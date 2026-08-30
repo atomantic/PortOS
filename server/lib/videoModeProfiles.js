@@ -20,10 +20,9 @@
 // narrow it, and narrowing to text-only would drop a user's own model out of
 // every picker.
 //
-// `a2v` and the IC-LoRA remix ids are deliberately absent: they're ltx2
-// *pipeline* capabilities, gated by runtime at both boundaries
-// (A2V_REQUIRES_LTX2 / IC_LORA_REQUIRES_LTX2), and the remix ids are enumerated
-// from the IC-LoRA weight registry rather than per model entry.
+// `a2v` and the IC-LoRA remix ids are deliberately absent from the generic
+// fallback. Audio-to-video is declared only by runtimes with an actual audio
+// conditioning path; IC-LoRA remains an LTX-only pipeline capability.
 export const VIDEO_BASE_MODES = Object.freeze(['text', 'image', 'fflf', 'extend']);
 
 /**
@@ -45,6 +44,9 @@ export const VIDEO_BASE_MODES = Object.freeze(['text', 'image', 'fflf', 'extend'
  *     MLX port and the diffusers CUDA path expose the same three, because the
  *     capability is the checkpoint partition's, not the runner's. Doubles as
  *     the mode ceiling in videoGen/modeContract.js.
+ *   - `minimax_h3_ref2va` — mere.run's Ref2VA path requires one image and one
+ *     audio reference. PortOS windows long audio internally but exposes one
+ *     duration-driven a2v job to callers.
  *   - `hunyuan` — compatibility-only shape for user-repointed or peer-synced
  *     historical entries. The runtime is retired and renderArgs rejects it,
  *     but retaining text-only prevents those records advertising modes the old
@@ -58,12 +60,13 @@ const MINIMAX_H3_MODE_SET = Object.freeze(['text', 'image', 'fflf']);
 export const VIDEO_RUNTIME_MODES = Object.freeze({
   cuda_video: Object.freeze(['text', 'image']),
   mlx_video: Object.freeze(['text', 'image', 'fflf', 'extend']),
-  ltx2: Object.freeze(['text', 'image', 'fflf', 'extend']),
-  ltx25: Object.freeze(['text', 'image', 'fflf', 'extend']),
+  ltx2: Object.freeze(['text', 'image', 'fflf', 'extend', 'a2v']),
+  ltx25: Object.freeze(['text', 'image', 'fflf', 'extend', 'a2v']),
   wan22: Object.freeze(['text', 'image']),
   fastvideo: Object.freeze(['text', 'image']),
   minimax_h3: MINIMAX_H3_MODE_SET,
   minimax_h3_cuda: MINIMAX_H3_MODE_SET,
+  minimax_h3_ref2va: Object.freeze(['a2v']),
   hunyuan: Object.freeze(['text']),
 });
 

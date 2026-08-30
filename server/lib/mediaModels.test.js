@@ -65,6 +65,9 @@ describe('mediaModels registry', () => {
       runtime: 'ltx25',
       repo: 'MrMofer/ltx-2.5-mlx-q8',
       revision: 'f1b56e7dc89f71a9af2cddac787b89ed22a8b7fc',
+      audioDurationDriven: true,
+      frameStride: 8,
+      maxNumFrames: 1017,
       steps: 8,
     });
     expect(ltx25.disclosure.weightsLicense.name).toBe('LTX-2.x Community License');

@@ -57,6 +57,9 @@ export function useVideoGenFieldState({
   const [extendFromVideoId, setExtendFromVideoId] = useState('');
   const [extendingFrame, setExtendingFrame] = useState(false);
   const [audioFile, setAudioFile] = useState(null);
+  // Null means metadata has not loaded (or is unreadable), which is distinct
+  // from a real numeric duration for validation and frame derivation.
+  const [audioDurationSec, setAudioDurationSec] = useState(null);
   const audioHandoffRef = useRef(null);
   const [icReferenceFile, setIcReferenceFile] = useState(null);
   const [icReferenceVideoId, setIcReferenceVideoId] = useState('');
@@ -67,6 +70,7 @@ export function useVideoGenFieldState({
   const staleModelToastRef = useRef(null);
 
   return {
+    audioDurationSec, setAudioDurationSec,
     audioFile, setAudioFile, audioHandoffRef,
     backend, setBackend,
     chunks, setChunks,

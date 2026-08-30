@@ -84,6 +84,9 @@
         "repo": "MrMofer/ltx-2.5-mlx-q8",
         "revision": "f1b56e7dc89f71a9af2cddac787b89ed22a8b7fc",
         "runtime": "ltx25",
+        "audioDurationDriven": true,
+        "frameStride": 8,
+        "maxNumFrames": 1017,
         "steps": 8,
         "guidance": 3,
         "disclosure": {
@@ -271,6 +274,101 @@
             "unified": true
           }
         ]
+      },
+      {
+        "id": "minimax_h3_ref2va_8bit",
+        "name": "MiniMax H3 Ref2VA MLX 8-bit (image + arbitrary-length audio, ~71 GB, 128 GB RAM)",
+        "repo": "Sawfwair/MiniMax-H3-Ref2VA-MLX-8bit",
+        "revision": "61dc387ef1a7166425cdacd63c2340598dcc364f",
+        "runtime": "minimax_h3_ref2va",
+        "supportedModes": [
+          "a2v"
+        ],
+        "requiresSourceImageForA2v": true,
+        "audioDurationDriven": true,
+        "arbitraryLengthAudio": true,
+        "maxReferenceAudioSeconds": 15,
+        "defaultFrames": 124,
+        "frameOptions": [
+          107,
+          124,
+          141,
+          158,
+          175,
+          192,
+          209,
+          226,
+          243,
+          260,
+          277,
+          294,
+          311,
+          328,
+          345,
+          362
+        ],
+        "fpsOptions": [
+          24
+        ],
+        "defaultWidth": 512,
+        "defaultHeight": 320,
+        "resolutionStep": 32,
+        "resolutionOptions": [
+          {
+            "label": "512x320 (draft)",
+            "w": 512,
+            "h": 320
+          },
+          {
+            "label": "768x480",
+            "w": 768,
+            "h": 480
+          },
+          {
+            "label": "1024x640",
+            "w": 1024,
+            "h": 640
+          },
+          {
+            "label": "768x768 (1:1)",
+            "w": 768,
+            "h": 768
+          }
+        ],
+        "memoryGb": 128,
+        "steps": 9,
+        "guidance": 0,
+        "samplerLocked": true,
+        "samplerNote": "MiniMax H3 Ref2VA is CFG-distilled. PortOS renders audio in up-to-15-second continuity-linked windows, then restores the exact source audio over the final video.",
+        "supportsNegativePrompt": false,
+        "supportsTiling": false,
+        "supportsDisableAudio": false,
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/Sawfwair/MiniMax-H3-Ref2VA-MLX-8bit",
+          "weightsLicense": {
+            "name": "MiniMax H3 Community License",
+            "url": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/6818f6c32d12b210915e44ad56a4228c2608f160/LICENSE"
+          },
+          "runtimeLicense": {
+            "name": "Apache-2.0",
+            "url": "https://github.com/sawfwair/mere-run/blob/v0.47.0/LICENSE"
+          },
+          "estimatedDownloadGb": 70.9,
+          "reviewedAt": "2026-08-09"
+        },
+        "termsGate": {
+          "id": "minimax-h3-community-license-2026-08-02",
+          "title": "MiniMax H3 eligibility and terms",
+          "summary": "MiniMax grants use only in its Applicable Territory. The license excludes the European Union, United Kingdom, Republic of Korea, and United States of America.",
+          "acknowledgement": "I confirm I am in the Applicable Territory and agree to the MiniMax H3 Community License and its Acceptable Use Policy.",
+          "licenseUrl": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/6818f6c32d12b210915e44ad56a4228c2608f160/LICENSE",
+          "excludedTerritories": [
+            "European Union",
+            "United Kingdom",
+            "Republic of Korea",
+            "United States of America"
+          ]
+        }
       },
       {
         "id": "wan22_ti2v_5b",

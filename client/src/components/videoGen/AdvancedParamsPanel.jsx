@@ -53,6 +53,7 @@ export default function AdvancedParamsPanel({
   const showDisableAudio = showAudioFlags && supportsVideoAudioControls(currentModel);
   const showPromptAudioControls = showAudioFlags && noMusic != null && supportsVideoAudioPromptControls(currentModel);
   const audioDisabled = showDisableAudio && disableAudio;
+  const showFrames = !(mode === 'a2v' && currentModel?.audioDurationDriven === true);
   // Chunk chaining seeds chunk N+1 from chunk N's last frame, so it needs i2v —
   // the same predicate the picker uses, not a second reading of supportedModes.
   const showChunks = mode !== 'a2v' && isModelAllowedForMode(currentModel, 'image');
@@ -139,7 +140,7 @@ export default function AdvancedParamsPanel({
     <div className="border-t border-port-border pt-3 space-y-3">
       <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wide">Advanced</h2>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          <FormField label="Frames" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+          {showFrames && <FormField label="Frames" labelClassName="block text-xs font-medium text-gray-400 mb-1">
             <select
               value={numFrames}
               onChange={(e) => onNumFramesChange(Number(e.target.value))}
@@ -156,7 +157,7 @@ export default function AdvancedParamsPanel({
                 Past 241 frames a single-pass render may swap or OOM at 48 GB. For reliable longer clips, render up to ~10s and then use <strong>Extend</strong> on the result — it conditions on the source&apos;s full latent rather than a single last frame.
               </p>
             )}
-          </FormField>
+          </FormField>}
 
           {showChunks && (
             <div>

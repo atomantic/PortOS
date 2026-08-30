@@ -6,6 +6,12 @@ import { resolve as resolvePath } from 'path';
 // on Windows, so compare against a separator-normalized copy.
 const posix = (p) => String(p).split('\\').join('/');
 
+const probeVideoDuration = vi.hoisted(() => vi.fn(async () => 41.041281));
+vi.mock('../../lib/ffmpeg.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  probeVideoDuration,
+}));
+
 vi.mock('../settings.js', () => ({
   getSettings: vi.fn(async () => ({
     imageGen: { local: { pythonPath: '/usr/bin/python3' }, grok: { enabled: true, grokPath: '/usr/bin/grok', aspectRatio: '16:9' } },
@@ -19,7 +25,7 @@ vi.mock('./local.js', () => ({
   listVideoModels: vi.fn(() => [{ id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'ltx2' }]),
   defaultVideoModelId: vi.fn(() => 'ltx2_unified'),
   loadHistory: vi.fn(async () => []),
-  BYOV_VIDEO_RUNTIMES: new Set(['ltx2', 'wan22', 'minimax_h3']),
+  BYOV_VIDEO_RUNTIMES: new Set(['ltx2', 'ltx25', 'wan22', 'minimax_h3']),
   DEFAULT_NUM_FRAMES: 121,
 }));
 
@@ -134,6 +140,7 @@ describe('cleanupMultipartTemp', () => {
 describe('prepareVideoGenParams', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    probeVideoDuration.mockResolvedValue(41.041281);
     listVideoModels.mockReturnValue([{
       id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'ltx2', supportedModes: ['text', 'image', 'fflf'],
     }]);
@@ -157,6 +164,51 @@ describe('prepareVideoGenParams', () => {
       await prepared.discardSourceImage();
       expect(unlinkedDurablePaths()).toEqual([posix(prepared.uploadedTempPath)]);
       expect(unlink).toHaveBeenCalledWith('/tmp/multipart-sourceImage-frame.png');
+    });
+
+    it('probes LTX-2.5 audio and derives a full-duration 8n+1 frame canvas', async () => {
+      const ltx25 = {
+        id: 'ltx25_mlx_q8',
+        name: 'LTX-2.5 MLX Q8',
+        runtime: 'ltx25',
+        supportedModes: ['text', 'image', 'fflf', 'extend', 'a2v'],
+        audioDurationDriven: true,
+        frameStride: 8,
+        maxNumFrames: 1017,
+      };
+      listVideoModels.mockReturnValue([ltx25]);
+
+      const prepared = await prepare(
+        { modelId: ltx25.id, mode: 'a2v', fps: 24, numFrames: 121 },
+        { sourceImage: upload('sourceImage'), audioFile: upload('audioFile', 'awakening.wav') },
+      );
+
+      expect(probeVideoDuration).toHaveBeenCalledWith(prepared.audioFilePath);
+      expect(prepared.effectiveNumFrames).toBe(985);
+      expect(posix(prepared.sourceImagePath)).toMatch(/^\/mock\/uploads\/video-source-.*\.png$/);
+      expect(posix(prepared.audioFilePath)).toMatch(/^\/mock\/uploads\/video-audio-.*\.wav$/);
+    });
+
+    it('rejects and cleans up LTX-2.5 audio beyond the single-pass boundary', async () => {
+      const ltx25 = {
+        id: 'ltx25_mlx_q8',
+        name: 'LTX-2.5 MLX Q8',
+        runtime: 'ltx25',
+        supportedModes: ['a2v'],
+        audioDurationDriven: true,
+        frameStride: 8,
+        maxNumFrames: 1017,
+      };
+      listVideoModels.mockReturnValue([ltx25]);
+      probeVideoDuration.mockResolvedValue(60);
+
+      await expect(prepare(
+        { modelId: ltx25.id, mode: 'a2v', fps: 24, numFrames: 121 },
+        { audioFile: upload('audioFile', 'one-minute.wav') },
+      )).rejects.toMatchObject({ status: 400, code: 'VIDEO_GEN_AUDIO_TOO_LONG' });
+      expect([...new Set(unlinkedDurablePaths())]).toEqual([
+        expect.stringMatching(/^\/mock\/uploads\/video-audio-.*\.wav$/),
+      ]);
     });
 
     it('short-circuits for grok without staging local-only inputs', async () => {

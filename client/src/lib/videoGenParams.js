@@ -4,16 +4,21 @@
 // predicate. Kept in lib/ (not hooks/) because none touch React state; the
 // page and any future consumer import them directly.
 
-import { isLtx2FamilyRuntime } from './runnerFamilies';
+import { isAudioToVideoRuntime, isLtx2FamilyRuntime } from './runnerFamilies';
 import { isDeliveryVideoModel } from './videoFinish.js';
 
 // Values follow LTX-2's 8k+1 latent boundary so the model doesn't silently
 // snap. 241 = 10s @ 24fps is the comfortable single-pass ceiling on 48 GB
-// at standard widths; the higher options (265–481) push past that and may
-// swap or OOM at 1280×704. For reliable clips longer than ~10s, use Extend
-// mode (renders past a source video, conditioning on its full latent) —
-// see the hint under the Frames dropdown.
-export const FRAME_OPTIONS = [25, 49, 73, 97, 121, 145, 169, 193, 217, 241, 265, 313, 361, 481];
+// at standard widths; the higher options push past that and may swap or OOM at
+// 1280×704. 481 used to be the final picker entry even though neither the LTX
+// runtime nor PortOS' 1024-frame request boundary stopped there. Keep useful
+// 25/30/35/40-second choices plus the highest legal 8k+1 value under that API
+// boundary so a proven long render is reproducible from the UI. For reliable
+// clips longer than ~10s, Extend is still the lower-memory path.
+export const FRAME_OPTIONS = [
+  25, 49, 73, 97, 121, 145, 169, 193, 217, 241, 265, 313, 361, 481,
+  601, 721, 841, 961, 1017,
+];
 export const FPS_OPTIONS = [16, 24, 30];
 // Chain ceiling — mirrors the route's own 1..8 cap on `chunks` (and on the
 // per-chunk prompt list), which bounds worst-case wall time at 8 × ~5min.
@@ -71,6 +76,22 @@ export const normalizeFramesForModel = (value, model) => isValidFrameCountForMod
   ? Number(value)
   : nearestOption(value, frameOptionsForModel(model));
 export const normalizeFpsForModel = (value, model) => nearestOption(value, fpsOptionsForModel(model));
+
+// Duration-driven LTX A2V needs enough pixel frames to cover the whole source
+// audio, rounded UP to its causal-VAE grid. This is mirrored by
+// server/services/videoGen/audioDuration.js; the server probes the staged file
+// and remains authoritative, while this copy keeps the form's displayed frame
+// count honest before submit.
+export const audioDurationToFrames = (durationSeconds, fps, frameStride) => {
+  const duration = Number(durationSeconds);
+  const rate = Number(fps);
+  const stride = Number(frameStride);
+  if (!Number.isFinite(duration) || duration <= 0
+    || !Number.isFinite(rate) || rate <= 0
+    || !Number.isInteger(stride) || stride <= 0) return null;
+  const targetFrames = duration * rate;
+  return Math.max(1, Math.ceil((targetFrames - 1) / stride) * stride + 1);
+};
 
 // Muting and prompt-audio steering are separate capabilities. Hidden mute state
 // from a prior model must never alter a model (such as MiniMax H3) whose joint
@@ -408,15 +429,14 @@ export const icResolutionIssue = (spec, width, height) => {
 };
 
 // The one mode-compatibility predicate — used by the Model dropdown and by
-// every "can this model do i2v?" gate on the page. a2v and the IC-LoRA remix
-// modes stay runtime-gated because they're ltx2 pipeline capabilities rather
-// than per-entry facts (the remix ids come from the IC-LoRA weight registry);
-// the server enforces the same rules in routes/videoGen.js (A2V_REQUIRES_LTX2 /
-// IC_LORA_REQUIRES_LTX2). Every other mode is answered by `supportedModes`,
+// every "can this model do i2v?" gate on the page. a2v is limited to declared
+// audio-conditioning runtimes; IC-LoRA remains an LTX pipeline capability.
+// Every other mode is answered by `supportedModes`,
 // which the server resolves for EVERY entry (server/lib/videoModeProfiles.js,
 // #3737), so an absent list means the payload didn't come from the registry.
 export const isModelAllowedForMode = (model, mode) => {
   if (!model) return false;
-  if (mode === 'a2v' || isIcLoraMode(mode)) return isLtx2FamilyRuntime(model.runtime);
+  if (mode === 'a2v') return isAudioToVideoRuntime(model.runtime);
+  if (isIcLoraMode(mode)) return isLtx2FamilyRuntime(model.runtime);
   return Array.isArray(model.supportedModes) && model.supportedModes.includes(mode);
 };

@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
-import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, MINIMAX_H3_RUNTIMES, LTX2_FAMILY_RUNTIMES, videoLoraFamily, isMiniMaxH3Runtime, isLtx2FamilyRuntime, isMlxVideoLtxLoraCapable, loraFamilyOf, isMflux, isFlux2, isZImage, isErnie, isHiDream, isQwen, flux2VariantFromModel, loraCompatKey, composeCompatKey } from './runners.js';
+import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, MINIMAX_H3_RUNTIMES, LTX2_FAMILY_RUNTIMES, AUDIO_TO_VIDEO_RUNTIMES, videoLoraFamily, isMiniMaxH3Runtime, isLtx2FamilyRuntime, isAudioToVideoRuntime, isMlxVideoLtxLoraCapable, loraFamilyOf, isMflux, isFlux2, isZImage, isErnie, isHiDream, isQwen, flux2VariantFromModel, loraCompatKey, composeCompatKey } from './runners.js';
 
 const __dirname_self = dirname(fileURLToPath(import.meta.url));
 const CLIENT_MIRROR_PATH = join(__dirname_self, '..', '..', 'client', 'src', 'lib', 'runnerFamilies.js');
@@ -129,7 +129,7 @@ describe('VIDEO_LORA_FAMILIES / videoLoraFamily', () => {
     expect(text).toMatch(/export const isMlxVideoLtxLoraCapable/);
     expect(text).toMatch(/export const loraFamilyOf/);
     expect(text).toMatch(/export const isMiniMaxH3Runtime/);
-    expect(text).toMatch(/'minimax_h3', 'minimax_h3_cuda'/);
+    expect(text).toMatch(/MINIMAX_H3_REF2VA_RUNTIME = 'minimax_h3_ref2va'/);
     expect(text).toMatch(/export const isLtx2FamilyRuntime/);
     expect(text).toMatch(/'ltx2', 'ltx25'/);
   });
@@ -205,14 +205,15 @@ describe('composeCompatKey', () => {
 });
 
 // H3's controls (24 fps, joint A/V, no CFG, the 17n+5 grid) are facts about the
-// checkpoint, so the gates that assert them must cover BOTH runtimes. Naming
+// checkpoint, so the gates that assert them must cover every H3 runtime. Naming
 // one runtime in a gate is precisely how the CUDA path would silently escape
 // a rule the MLX path enforces.
 describe('isMiniMaxH3Runtime', () => {
-  it('covers both H3 runtimes and nothing else', () => {
-    expect(MINIMAX_H3_RUNTIMES).toEqual(['minimax_h3', 'minimax_h3_cuda']);
+  it('covers all H3 runtimes and nothing else', () => {
+    expect(MINIMAX_H3_RUNTIMES).toEqual(['minimax_h3', 'minimax_h3_cuda', 'minimax_h3_ref2va']);
     expect(isMiniMaxH3Runtime('minimax_h3')).toBe(true);
     expect(isMiniMaxH3Runtime('minimax_h3_cuda')).toBe(true);
+    expect(isMiniMaxH3Runtime('minimax_h3_ref2va')).toBe(true);
   });
 
   it.each(['mlx_video', 'ltx2', 'wan22', 'fastvideo', 'minimax', '', undefined, null])(
@@ -224,6 +225,15 @@ describe('isMiniMaxH3Runtime', () => {
     expect(videoLoraFamily({ runtime: 'minimax_h3_cuda' })).toBe(null);
     // Not even when a stale/synced payload claims the MLX port's probe verdict.
     expect(videoLoraFamily({ runtime: 'minimax_h3_cuda', runtimeLoraCapable: true })).toBe(null);
+  });
+});
+
+describe('isAudioToVideoRuntime', () => {
+  it('covers both LTX pins plus MiniMax H3 Ref2VA', () => {
+    expect(AUDIO_TO_VIDEO_RUNTIMES).toEqual(['ltx2', 'ltx25', 'minimax_h3_ref2va']);
+    for (const runtime of AUDIO_TO_VIDEO_RUNTIMES) expect(isAudioToVideoRuntime(runtime)).toBe(true);
+    expect(isAudioToVideoRuntime('minimax_h3')).toBe(false);
+    expect(isAudioToVideoRuntime('mlx_video')).toBe(false);
   });
 });
 

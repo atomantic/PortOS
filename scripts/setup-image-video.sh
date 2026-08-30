@@ -13,6 +13,7 @@
 #   INSTALL_LTX25  '1' to clone + uv-sync MrMofer's ltx-2.5 fork at ~/.portos/ltx-2.5-mlx (Apple Silicon). The 2.3 pin cannot load LTX-2.5 weights. Default: 0.
 #   INSTALL_FASTVIDEO '1' to clone hao-ai-lab/FastVideo at ~/.portos/fastvideo and build an MLX venv for native Apple Silicon video generation (FastMetal models). Default: 0; opt in with INSTALL_FASTVIDEO=1.
 #   INSTALL_MINIMAX_H3 '1' to install the pinned MiniMax H3 MLX runtime at ~/.portos/minimax-h3-mlx (Apple Silicon). Weights remain a separate explicit Video Gen download. Default: 0.
+#   INSTALL_MERERUN '1' to install the signed mere.run v0.47.0 runtime at ~/.portos/mere-run for MiniMax H3 Ref2VA image+audio generation (Apple Silicon). Weights remain a separate explicit Video Gen download. Default: 0.
 #   INSTALL_MINIMAX_H3_CUDA '1' to install the MiniMax H3 CUDA runtime at ~/.portos/minimax-h3-cuda (Windows + NVIDIA), via diffusers' MiniMaxH3ModularPipeline. Weights remain a separate explicit Video Gen download (~144 GB). Default: 0.
 #   INSTALL_FLUX2  '1' to also bootstrap a separate venv at ~/.portos/venv-flux2 for FLUX.2-klein (default: 1 on macOS, 0 elsewhere)
 #   INSTALL_MUSICGEN '1' to bootstrap a venv at ~/.portos/venv-musicgen + clone ml-explore/mlx-examples to ~/.portos/mlx-examples for local MusicGen (MLX) background-music generation (pipeline audio stage). Default: 0; opt in with INSTALL_MUSICGEN=1 (macOS / Apple Silicon only).
@@ -100,7 +101,7 @@ mkdir -p "${PORTOS_DATA}/videos"
 mkdir -p "${PORTOS_DATA}/video-thumbnails"
 
 # When the user only wants a specific BYOV runtime (set via INSTALL_LTX2 /
-# INSTALL_WAN22 / INSTALL_MINIMAX_H3 / INSTALL_MINIMAX_H3_CUDA — or one of the self-contained MUSIC venvs
+# INSTALL_WAN22 / INSTALL_MINIMAX_H3 / INSTALL_MERERUN / INSTALL_MINIMAX_H3_CUDA — or one of the self-contained MUSIC venvs
 # INSTALL_MUSICGEN / INSTALL_AUDIOLDM2 / INSTALL_ACESTEP / INSTALL_ACESTEP15 / INSTALL_MINIMAX_MUSIC3_MLX — typically from the
 # in-app installer), skip the mflux + legacy mlx_video preamble. Those
 # bring-your-own-venv runtimes are self-contained and don't depend on mflux;
@@ -109,7 +110,7 @@ mkdir -p "${PORTOS_DATA}/video-thumbnails"
 # install ever starts — which on Linux/CPU/CUDA blocks the advertised
 # `INSTALL_ACESTEP=1 bash …` path. A bare `bash setup-image-video.sh` still
 # installs mflux as before.
-ANY_BYOV="${INSTALL_LTX2:-0}${INSTALL_LTX25:-0}${INSTALL_FASTVIDEO:-0}${INSTALL_WAN22:-0}${INSTALL_MINIMAX_H3:-0}${INSTALL_MINIMAX_H3_CUDA:-0}${INSTALL_MUSICGEN:-0}${INSTALL_AUDIOLDM2:-0}${INSTALL_ACESTEP:-0}${INSTALL_ACESTEP15:-0}${INSTALL_MINIMAX_MUSIC3:-0}${INSTALL_MINIMAX_MUSIC3_MLX:-0}${INSTALL_MUSCRIPTOR:-0}"
+ANY_BYOV="${INSTALL_LTX2:-0}${INSTALL_LTX25:-0}${INSTALL_FASTVIDEO:-0}${INSTALL_WAN22:-0}${INSTALL_MINIMAX_H3:-0}${INSTALL_MERERUN:-0}${INSTALL_MINIMAX_H3_CUDA:-0}${INSTALL_MUSICGEN:-0}${INSTALL_AUDIOLDM2:-0}${INSTALL_ACESTEP:-0}${INSTALL_ACESTEP15:-0}${INSTALL_MINIMAX_MUSIC3:-0}${INSTALL_MINIMAX_MUSIC3_MLX:-0}${INSTALL_MUSCRIPTOR:-0}"
 # "no BYOV runtime was requested" = the concatenation contains no non-zero
 # character. Matching a literal string of zeros instead made this a counting
 # exercise that the string and the variable list had to agree on — and they had
@@ -525,6 +526,50 @@ if [[ "$INSTALL_MINIMAX_H3" == "1" ]]; then
     "Use Repair / Upgrade from the Video Gen runtime panel to retry." \
     "$MINIMAX_H3_PY" "${SCRIPT_DIR}/minimax_h3_runtime_probe.py" "$MINIMAX_H3_DIR" --verify-seams
   echo "✅ MiniMax H3 MLX runtime ready: ${MINIMAX_H3_PY}"
+  echo "   Weights remain uninstalled until you accept the model terms and choose Download in Video Gen."
+fi
+
+INSTALL_MERERUN="${INSTALL_MERERUN:-0}"
+if [[ "$INSTALL_MERERUN" == "1" ]]; then
+  if ! is_macos || [[ "$(uname -m)" != "arm64" ]]; then
+    echo "❌ MiniMax H3 Ref2VA through mere.run requires an Apple-Silicon Mac." >&2
+    exit 1
+  fi
+  for command_name in curl hdiutil shasum; do
+    if ! have "$command_name"; then
+      echo "❌ INSTALL_MERERUN=1 requires ${command_name}." >&2
+      exit 1
+    fi
+  done
+
+  MERE_RUN_VERSION="0.47.0"
+  MERE_RUN_DMG_SHA256="91833e45c5c4eda019eafbbc4a634ca7399c3bfb431822aaaa994fb404e603e2"
+  MERE_RUN_URL="https://github.com/sawfwair/mere-run/releases/download/v${MERE_RUN_VERSION}/MereRun-${MERE_RUN_VERSION}.dmg"
+  MERE_RUN_DIR="${HOME}/.portos/mere-run"
+  MERE_RUN_BIN="${MERE_RUN_DIR}/mere.run"
+  MERE_RUN_TMP="$(mktemp -d "${TMPDIR:-/tmp}/portos-mere-run.XXXXXX")"
+  MERE_RUN_DMG="${MERE_RUN_TMP}/MereRun-${MERE_RUN_VERSION}.dmg"
+  MERE_RUN_MOUNT="${MERE_RUN_TMP}/mount"
+  mkdir -p "$MERE_RUN_MOUNT"
+  mere_run_cleanup() {
+    hdiutil detach "$MERE_RUN_MOUNT" -quiet >/dev/null 2>&1 || true
+    rm -rf -- "$MERE_RUN_TMP"
+  }
+  trap mere_run_cleanup EXIT
+
+  echo "📦 Downloading signed mere.run v${MERE_RUN_VERSION} release..."
+  curl --fail --location --progress-bar "$MERE_RUN_URL" --output "$MERE_RUN_DMG"
+  echo "${MERE_RUN_DMG_SHA256}  ${MERE_RUN_DMG}" | shasum -a 256 --check
+  hdiutil attach "$MERE_RUN_DMG" -nobrowse -readonly -mountpoint "$MERE_RUN_MOUNT" -quiet
+  MERERUN_INSTALL_BIN_DEST="$MERE_RUN_BIN" bash "$MERE_RUN_MOUNT/.mere-run/install.sh"
+  if [[ "$($MERE_RUN_BIN --version 2>/dev/null || true)" != "$MERE_RUN_VERSION" ]]; then
+    echo "❌ mere.run installed, but its version does not match ${MERE_RUN_VERSION}." >&2
+    exit 1
+  fi
+  hdiutil detach "$MERE_RUN_MOUNT" -quiet
+  trap - EXIT
+  rm -rf -- "$MERE_RUN_TMP"
+  echo "✅ mere.run v${MERE_RUN_VERSION} ready: ${MERE_RUN_BIN}"
   echo "   Weights remain uninstalled until you accept the model terms and choose Download in Video Gen."
 fi
 
@@ -974,6 +1019,10 @@ fi
 if [[ "$INSTALL_MINIMAX_H3" == "1" ]]; then
   echo "   MiniMax H3: ${HOME}/.portos/minimax-h3-mlx/.venv/bin/python3 (MLX port @ ${MINIMAX_H3_PIN:0:12})"
   echo "                Weights remain uninstalled until accepted and downloaded in Video Gen."
+fi
+if [[ "$INSTALL_MERERUN" == "1" ]]; then
+  echo "   MiniMax H3 Ref2VA: ${HOME}/.portos/mere-run/mere.run (mere.run v${MERE_RUN_VERSION})"
+  echo "                       Weights remain uninstalled until accepted and downloaded in Video Gen."
 fi
 if [[ "$INSTALL_MUSICGEN" == "1" ]] && is_macos; then
   echo "   MusicGen:  ${HOME}/.portos/venv-musicgen/bin/python3 (separate venv, MLX runtime @ ${HOME}/.portos/mlx-examples/musicgen)"

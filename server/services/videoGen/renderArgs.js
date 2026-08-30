@@ -42,6 +42,8 @@ import {
   MINIMAX_H3_DRAFT_DECODER_SHIM_DIR,
   MINIMAX_H3_PROMPT_EMBEDDING_CACHE_DIR,
   MINIMAX_H3_EXPECTED_REVISION,
+  MERE_RUN_BIN,
+  MINIMAX_H3_REF2VA_HELPER_SCRIPT,
   MINIMAX_H3_CUDA_VENV_PYTHON,
   MINIMAX_H3_CUDA_HELPER_SCRIPT,
   MINIMAX_H3_CUDA_OFFLOAD_PROFILES,
@@ -834,7 +836,58 @@ const buildMiniMaxH3CudaArgs = ({ model, prompt, negativePrompt, width, height, 
   return { bin: MINIMAX_H3_CUDA_VENV_PYTHON, args };
 };
 
-export const buildArgs = ({ pythonPath, modelId, model, wanModelPath, wanRequiredWeights, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, textEncoderRepo, textEncoder, outputPath, previewDir, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile, draftDecoder }) => {
+export const buildMiniMaxH3Ref2vaArgs = ({
+  model, ref2vaModelPath, prompt, negativePrompt, width, height, numFrames, fps,
+  steps, seed, sourceImagePath, audioFilePath, audioStartSec, mode, tiling,
+  disableAudio, outputPath, ffmpegPath, ffprobePath,
+}) => {
+  assertMiniMaxH3Preflight({
+    runtimeId: 'minimax_h3_ref2va',
+    repoLabel: 'repo or revision',
+    model,
+    mode,
+    sourceImagePath,
+    audioFilePath,
+    audioStartSec,
+    negativePrompt,
+    disableAudio,
+    tiling,
+    numFrames,
+    fps,
+  });
+  if (!ref2vaModelPath) {
+    throw new ServerError(
+      `${model.name} is not fully cached. Download or repair it in Video Gen before rendering.`,
+      { status: 400, code: 'MINIMAX_H3_REF2VA_MODEL_NOT_CACHED' },
+    );
+  }
+  if (!ffmpegPath || !ffprobePath) {
+    throw new ServerError(
+      'ffmpeg and ffprobe are required for arbitrary-length MiniMax H3 Ref2VA rendering.',
+      { status: 400, code: 'MINIMAX_H3_REF2VA_FFMPEG_REQUIRED' },
+    );
+  }
+  const args = [
+    MINIMAX_H3_REF2VA_HELPER_SCRIPT,
+    '--runtime-bin', MERE_RUN_BIN,
+    '--model-root', ref2vaModelPath,
+    '--prompt', prompt,
+    '--image', sourceImagePath,
+    '--audio', audioFilePath,
+    '--width', String(width),
+    '--height', String(height),
+    '--fps', String(fps),
+    '--seed', String(seed),
+    '--steps', String(steps),
+    '--ffmpeg', ffmpegPath,
+    '--ffprobe', ffprobePath,
+    '--output', outputPath,
+  ];
+  if (audioStartSec != null) args.push('--audio-start', String(audioStartSec));
+  return { bin: process.execPath, args };
+};
+
+export const buildArgs = ({ pythonPath, modelId, model, wanModelPath, wanRequiredWeights, ltxModelPath, ref2vaModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, textEncoderRepo, textEncoder, outputPath, previewDir, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile, draftDecoder, ffmpegPath, ffprobePath }) => {
   // Reference-mode promise (#4874) — checked HERE rather than inside
   // buildLtx2Args because every runtime reaches this function and only one can
   // honor a loose reference. A wan22/mlx_video/H3 render that fell through to its
@@ -900,6 +953,13 @@ export const buildArgs = ({ pythonPath, modelId, model, wanModelPath, wanRequire
   if (model.runtime === 'minimax_h3_cuda') {
     return buildMiniMaxH3CudaArgs({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath });
   }
+  if (model.runtime === 'minimax_h3_ref2va') {
+    return buildMiniMaxH3Ref2vaArgs({
+      model, ref2vaModelPath, prompt, negativePrompt, width, height, numFrames,
+      fps, steps, seed, sourceImagePath, audioFilePath, audioStartSec, mode,
+      tiling, disableAudio, outputPath, ffmpegPath, ffprobePath,
+    });
+  }
   // Migration 315 removes the shipped Hunyuan profile, but a user-repointed
   // or peer-synced historical entry may still declare its retired runtime.
   // Fail closed instead of falling through to a legacy MLX/CUDA helper that
@@ -918,8 +978,8 @@ export const buildArgs = ({ pythonPath, modelId, model, wanModelPath, wanRequire
   }
   if (mode === 'a2v') {
     throw new ServerError(
-      'a2v mode is only supported on the ltx2 runtime. Pick a model with runtime: "ltx2" in data/media-models.json.',
-      { status: 400, code: 'A2V_REQUIRES_LTX2' },
+      'a2v mode requires an audio-to-video runtime.',
+      { status: 400, code: 'A2V_RUNTIME_UNSUPPORTED' },
     );
   }
   // Every BYOV runtime has declined above; the remaining declared CUDA runtime

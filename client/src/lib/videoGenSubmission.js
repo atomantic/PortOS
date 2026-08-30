@@ -118,10 +118,10 @@ export function buildVideoGenSubmission({
     keyframes: keyframesActive ? JSON.stringify(keyframes) : '',
     loraFilenames: (loraFamily && selectedLoras.length) ? selectedLoras.map((lora) => lora.filename) : undefined,
     loraScales: (loraFamily && selectedLoras.length) ? selectedLoras.map((lora) => lora.scale) : undefined,
-    sourceImageFile: (mode === 'image' || legacyFflf
+    sourceImageFile: (mode === 'image' || mode === 'a2v' || legacyFflf
       || (mode === 'extend' && !isLtx2FamilyRuntime(currentModel?.runtime)))
       ? (sourceImageFile || '') : '',
-    sourceImage: (mode === 'image' || legacyFflf) ? (sourceImageUpload || '') : '',
+    sourceImage: (mode === 'image' || mode === 'a2v' || legacyFflf) ? (sourceImageUpload || '') : '',
     lastImageFile: legacyFflf ? (lastImageFile || '') : '',
     lastImage: legacyFflf ? (lastImageUpload || '') : '',
     extendFromVideoId: (mode === 'extend' && isLtx2FamilyRuntime(currentModel?.runtime))

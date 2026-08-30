@@ -31,9 +31,14 @@ import { randomUUID } from 'crypto';
 import { join, extname } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, ensureDir, resolveGalleryImage } from '../../lib/fileUtils.js';
-import { safeUnder } from '../../lib/ffmpeg.js';
+import { probeVideoDuration, safeUnder } from '../../lib/ffmpeg.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
-import { videoLoraFamily, isMiniMaxH3Runtime, isLtx2FamilyRuntime } from '../../lib/runners.js';
+import {
+  videoLoraFamily,
+  isMiniMaxH3Runtime,
+  isLtx2FamilyRuntime,
+  isAudioToVideoRuntime,
+} from '../../lib/runners.js';
 import {
   isStockTextEncoder, supportsVideoTextEncoder, videoTextEncoderUnsupportedError,
 } from '../../lib/videoTextEncoders.js';
@@ -65,6 +70,7 @@ import {
 // module mock local.js wholesale, and a mocked rule table would assert nothing.
 import { videoModeContractError, videoChainUnsupportedError, videoReferenceModeError } from './modeContract.js';
 import { resolveByovRuntimeLoraCapable, videoLoraUnsupportedError } from './runtimes.js';
+import { audioDurationToFrames } from './audioDuration.js';
 
 // Retries reuse persisted worker parameters instead of passing through the
 // multipart preparation path. Keep the model/mode gates here so a model edit
@@ -136,10 +142,13 @@ export async function validateVideoRetryParams(params = {}) {
       );
     }
   }
-  if ((mode === 'a2v' || icLoraSpecForMode(mode)) && !isLtx2FamilyRuntime(model.runtime)) {
+  if ((mode === 'a2v' && !isAudioToVideoRuntime(model.runtime))
+    || (icLoraSpecForMode(mode) && !isLtx2FamilyRuntime(model.runtime))) {
     throw new ServerError(
-      `${mode} mode requires an ltx2-runtime model. Model "${modelId}" runs on "${model.runtime || 'mlx_video'}".`,
-      { status: 400, code: mode === 'a2v' ? 'A2V_REQUIRES_LTX2' : 'IC_LORA_REQUIRES_LTX2' },
+      mode === 'a2v'
+        ? `a2v mode requires an audio-to-video runtime. Model "${modelId}" runs on "${model.runtime || 'mlx_video'}".`
+        : `${mode} mode requires an ltx2-runtime model. Model "${modelId}" runs on "${model.runtime || 'mlx_video'}".`,
+      { status: 400, code: mode === 'a2v' ? 'A2V_RUNTIME_UNSUPPORTED' : 'IC_LORA_REQUIRES_LTX2' },
     );
   }
   if (Array.isArray(params.loras) && params.loras.length > 0 && !videoLoraFamily(model)) {
@@ -547,16 +556,15 @@ async function resolvePreparedParams({
       { status: 400, code: 'IC_LORA_MODE_MISMATCH' },
     );
   }
-  // a2v needs the dgrauet runtime — the legacy mlx_video pipeline has no
-  // audio-conditioned mode. The worker also catches this in buildArgs (with
-  // A2V_REQUIRES_LTX2), but checking here keeps the route's "fail fast
+  // a2v needs a runtime with an audio-conditioning path. The worker also
+  // catches this in buildArgs, but checking here keeps the route's "fail fast
   // before enqueue" contract so a bad modelId can't pollute the persisted
   // queue with a doomed entry.
-  if (body.mode === 'a2v' && effectiveModel && !isLtx2FamilyRuntime(effectiveModel.runtime)) {
+  if (body.mode === 'a2v' && effectiveModel && !isAudioToVideoRuntime(effectiveModel.runtime)) {
     await cleanupStaged();
     throw new ServerError(
-      `a2v mode requires an ltx2-runtime model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
-      { status: 400, code: 'A2V_REQUIRES_LTX2' },
+      `a2v mode requires an audio-to-video runtime. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
+      { status: 400, code: 'A2V_RUNTIME_UNSUPPORTED' },
     );
   }
   // Chunk chaining needs image-to-video on any runtime — the same rule
@@ -586,6 +594,7 @@ async function resolvePreparedParams({
     hasLastImage: hasDeclaredLastImage,
     keyframes: body.keyframes,
     extendFromVideo: body.extendFromVideoId,
+    audioFile: uploads.audioFile || body.musicVideo,
   });
   if (modeContractError) {
     await cleanupStaged();
@@ -644,6 +653,7 @@ async function resolvePreparedParams({
   let sourceImagePath = null;
   let lastImagePath = null;
   let audioFilePath = null;
+  let effectiveNumFrames = body.numFrames;
   let icReferenceUploadPath = null;
   let uploadedTempPath = null;
   const extraUploadedTempPaths = [];
@@ -676,6 +686,7 @@ async function resolvePreparedParams({
     hasFirstImage: Boolean(sourceImagePath),
     hasLastImage: hasDeclaredLastImage,
     sourceResolved: true,
+    audioFile: uploads.audioFile || body.musicVideo,
     keyframes: body.keyframes,
     extendFromVideo: body.extendFromVideoId,
   });
@@ -773,6 +784,45 @@ async function resolvePreparedParams({
     }
     audioFilePath = await stageExistingAudioDurable(sourceAudioPath);
     extraUploadedTempPaths.push(audioFilePath);
+  }
+  // A direct-upload LTX-2.5 A2V request follows the whole audio file. The MLX
+  // pipeline still requires an explicit 8n+1 frame canvas, so derive that canvas
+  // from the durable upload rather than trusting browser metadata (or forcing an
+  // API caller to probe the file itself). MiniMax Ref2VA is deliberately excluded:
+  // its wrapper windows arbitrary-length audio and owns its duration internally.
+  // Music-video jobs also keep their explicit scene canvas because they select a
+  // slice of a longer song with audioStartSec.
+  if (body.mode === 'a2v' && audioFilePath
+    && effectiveModel?.audioDurationDriven === true
+    && effectiveModel?.arbitraryLengthAudio !== true
+    && !body.musicVideo) {
+    const durationSeconds = await probeVideoDuration(audioFilePath);
+    if (durationSeconds == null) {
+      await cleanupStaged();
+      throw new ServerError(
+        'Could not read the uploaded audio duration. Upload a valid WAV, MP3, M4A, AAC, FLAC, or OGG file.',
+        { status: 400, code: 'VIDEO_GEN_AUDIO_DURATION_UNREADABLE' },
+      );
+    }
+    const frameStride = Number(effectiveModel.frameStride);
+    const fps = Number(body.fps ?? 24);
+    const maxNumFrames = Number(effectiveModel.maxNumFrames);
+    if (!Number.isInteger(frameStride) || frameStride <= 0
+      || !Number.isInteger(maxNumFrames) || maxNumFrames <= 0) {
+      await cleanupStaged();
+      throw new ServerError(
+        `${effectiveModel.name} is missing its duration-driven frameStride/maxNumFrames contract.`,
+        { status: 500, code: 'VIDEO_MODEL_MISCONFIGURED' },
+      );
+    }
+    effectiveNumFrames = audioDurationToFrames(durationSeconds, fps, frameStride);
+    if (effectiveNumFrames > maxNumFrames) {
+      await cleanupStaged();
+      throw new ServerError(
+        `${effectiveModel.name} supports up to ${(maxNumFrames / fps).toFixed(1)}s in one audio-to-video render; this file is ${durationSeconds.toFixed(1)}s. Use MiniMax H3 Ref2VA for longer audio, or trim the file.`,
+        { status: 400, code: 'VIDEO_GEN_AUDIO_TOO_LONG' },
+      );
+    }
   }
   if (uploads.icReference) {
     // IC-LoRA reference clip — same durable staging + cleanup tracking as the
@@ -1032,6 +1082,7 @@ async function resolvePreparedParams({
     pythonPath,
     effectiveModel,
     effectiveModelId,
+    effectiveNumFrames,
     mode: body.mode,
     sourceImagePath,
     lastImagePath,

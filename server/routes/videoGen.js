@@ -110,12 +110,12 @@ export const isAudioMime = (mime, filename) => {
   return false;
 };
 
-// FFLF accepts up to two image uploads (start and end frame); a2v takes
-// one audio upload (audioFile); the IC-LoRA remix modes take one reference
-// video upload (icReference). 100MB covers audio cases too (LTX-2's a2v
-// expects only seconds of audio in practice). Per-fieldname mime filter
-// rejects mismatched parts up-front so a stray .mp4 drag-drop can't get
-// staged under any of these fields.
+// FFLF accepts up to two image uploads (start and end frame); a2v takes one
+// audio upload (audioFile); the IC-LoRA remix modes take one reference video
+// upload (icReference). Audio duration is not capped: the 100MB transport cap
+// is a file-size safety bound, so compressed inputs may be much longer than
+// lossless PCM inputs. Per-fieldname mime filtering rejects mismatched parts
+// up-front so a stray .mp4 drag-drop can't get staged under these fields.
 const frameImageUpload = uploadFields(['sourceImage', 'lastImage', 'audioFile', 'icReference'], {
   limits: { fileSize: 100 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
@@ -780,7 +780,10 @@ router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
   const repos = modelDownloadTargets(model);
   if (repos.length === 0) throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file.`, { status: 400, code: 'NO_REPO_FOR_MODEL' });
   const runtimeInfo = BYOV_RUNTIME_INFO[model.runtime];
-  const pythonPath = runtimeInfo && await isByovRuntimeReady(model.runtime) ? runtimeInfo.venvPython : null;
+  const pythonPath = runtimeInfo?.hfDownloadPython !== false
+    && await isByovRuntimeReady(model.runtime)
+    ? runtimeInfo.venvPython
+    : null;
   await startHfDownloadStream({ req, res, repos, pythonPath, force: req.query.force === '1' });
 }));
 
@@ -1116,7 +1119,7 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
   }
 
   const {
-    pythonPath, effectiveModelId, mode,
+    pythonPath, effectiveModelId, effectiveNumFrames, mode,
     sourceImagePath, lastImagePath, audioFilePath, icReferencePaths,
     resolvedKeyframes, extendFromVideoPath,
     uploadedTempPath, uploadedTempPaths, loras, effectiveChunks, effectiveChunkPrompts, effectiveContextFrames,
@@ -1131,7 +1134,9 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
     modelId: body.modelId,
     width: body.width,
     height: body.height,
-    numFrames: body.numFrames,
+    // Duration-driven A2V models derive this from ffprobe over the staged audio;
+    // every other request passes the caller's value through unchanged.
+    numFrames: effectiveNumFrames,
     fps: body.fps,
     steps: body.steps,
     guidanceScale: body.guidanceScale,

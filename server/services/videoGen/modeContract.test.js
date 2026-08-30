@@ -10,10 +10,11 @@ import {
 const wan = (supportedModes) => ({ runtime: 'wan22', name: 'Example Wan Profile', supportedModes });
 const fv = (supportedModes) => ({ runtime: 'fastvideo', name: 'Example FastVideo Model', supportedModes });
 const h3 = (supportedModes) => ({ runtime: 'minimax_h3', name: 'Example H3', supportedModes });
+const ref2va = (supportedModes = ['a2v']) => ({ runtime: 'minimax_h3_ref2va', name: 'Example H3 Ref2VA', supportedModes });
 
 describe('videoModeContractError — shared gate', () => {
   it('gates exactly the runtimes that declare a contract row', () => {
-    expect([...VIDEO_MODE_GATED_RUNTIMES].sort()).toEqual(['fastvideo', 'minimax_h3', 'minimax_h3_cuda', 'wan22']);
+    expect([...VIDEO_MODE_GATED_RUNTIMES].sort()).toEqual(['fastvideo', 'minimax_h3', 'minimax_h3_cuda', 'minimax_h3_ref2va', 'wan22']);
   });
 
   it.each(['ltx2', 'mlx_video', undefined])('leaves the %s runtime ungated', (runtime) => {
@@ -31,6 +32,24 @@ describe('videoModeContractError — shared gate', () => {
     expect(videoModeContractError({ model: wan(['text']), hasFirstImage: true }))
       .toMatchObject({ status: 400, code: 'WAN22_MODE_UNSUPPORTED' });
     expect(videoModeContractError({ model: wan(['text']), hasFirstImage: false })).toBeNull();
+  });
+});
+
+describe('videoModeContractError — minimax_h3_ref2va', () => {
+  it('requires both a source image and an audio file', () => {
+    expect(videoModeContractError({ model: ref2va(), mode: 'a2v', audioFile: '/mock/audio.wav' }))
+      .toMatchObject({ code: 'MINIMAX_H3_REF2VA_A2V_REQUIRES_IMAGE' });
+    expect(videoModeContractError({ model: ref2va(), mode: 'a2v', hasFirstImage: true }))
+      .toMatchObject({ code: 'MINIMAX_H3_REF2VA_A2V_REQUIRES_AUDIO' });
+    expect(videoModeContractError({
+      model: ref2va(), mode: 'a2v', hasFirstImage: true, audioFile: '/mock/audio.wav',
+    })).toBeNull();
+  });
+
+  it('rejects non-a2v modes even when a registry was hand-widened', () => {
+    expect(videoModeContractError({
+      model: ref2va(['a2v', 'image']), mode: 'image', hasFirstImage: true,
+    })).toMatchObject({ code: 'MINIMAX_H3_REF2VA_MODE_UNSUPPORTED' });
   });
 });
 

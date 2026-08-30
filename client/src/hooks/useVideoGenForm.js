@@ -16,7 +16,7 @@ import { VIDEO_TILING_ENUM_SET } from '../lib/videoTilingOptions';
 import {
   MAX_CHUNKS,
   videoModelMemoryGb, isModelAllowedForMode,
-  normalizeFramesForModel, normalizeFpsForModel,
+  normalizeFramesForModel, normalizeFpsForModel, audioDurationToFrames,
   icLoraSpecForMode,
   textEncoderOptionsForModel, normalizeTextEncoderForModel,
   textEncoderIdFromRecord,
@@ -79,6 +79,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
   const incomingHeight = searchParams.get('h');
 
   const {
+    audioDurationSec, setAudioDurationSec,
     audioFile, setAudioFile, audioHandoffRef,
     backend, setBackend,
     chunks, setChunks,
@@ -416,6 +417,19 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
 
   const currentModel = models.find((m) => m.id === modelId);
 
+  // LTX-2.5's A2V runner needs an explicit frame canvas even though the user
+  // thinks in audio duration. Snap the browser-probed duration UP to the
+  // model's causal-VAE grid for an honest preview. The server repeats this from
+  // ffprobe on the staged upload, so direct API callers get the same contract.
+  // MiniMax Ref2VA is excluded: its wrapper windows arbitrary audio internally.
+  useEffect(() => {
+    if (mode !== 'a2v' || currentModel?.audioDurationDriven !== true
+      || currentModel?.arbitraryLengthAudio === true) return;
+    const frames = audioDurationToFrames(audioDurationSec, fps, currentModel?.frameStride);
+    if (frames == null || frames > Number(currentModel?.maxNumFrames)) return;
+    setNumFrames(frames);
+  }, [audioDurationSec, currentModel, fps, mode]);
+
   // A source model can reach this hook either through a URL handoff before
   // /status has populated `models`, or from the in-page gallery after it has.
   // Resolve both cases here. The fallback is deliberately limited to models
@@ -666,6 +680,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
   };
 
   const {
+    a2vDurationError,
     a2vModeBlocked,
     chainingActive,
     extendModeBlocked,
@@ -674,11 +689,13 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
     keyframesError,
     maxSafeFrames,
   } = useVideoGenValidation({
+    audioDurationSec,
     audioFile,
     chunks,
     currentModel,
     extendFromVideoId,
     extendingFrame,
+    fps,
     height,
     icImageKind,
     icModeActive,
@@ -692,6 +709,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
     numFrames,
     pixelBudget: status?.fflfLtx2PixelBudget,
     sourceImageFile,
+    sourceImageUpload,
     width,
   });
 
@@ -821,14 +839,8 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
       // an empty extendFromVideoId.
       clearSourceImage();
     } else if (next === 'a2v') {
-      // a2v takes audio only — buildGeneratePayload omits sourceImageFile +
-      // sourceImage in this mode, so dropping them here keeps state honest
-      // (no stale image survives in the form to imply it's being used).
-      // The python helper supports an optional first-frame image, but the
-      // UI doesn't expose it yet (see PR description "Out of scope"). Once
-      // we add a gallery-pick path for the first frame, restore the source-
-      // image state pass-through here.
-      clearSourceImage();
+      // Audio-to-video may also condition on a reference image (required by
+      // MiniMax H3 Ref2VA, optional on LTX), so preserve the source picker.
       clearLastImage();
       setExtendFromVideoId('');
       // disableAudio strips the output audio track — in a2v mode that would
@@ -838,7 +850,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
       setDisableAudio(false);
       setNoMusic(false);
       setChunks(1);
-      // Auto-select to a compatible ltx2-runtime model is handled by the
+      // Auto-select to a compatible audio-to-video runtime is handled by the
       // modelId-validation effect, which re-runs on every mode change.
     }
   };
@@ -1268,7 +1280,8 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
     // Extend
     extendFromVideoId, extendingFrame, handleExtendPick, extendModeBlocked,
     // Audio-to-video
-    audioFile, setAudioFile, a2vModeBlocked,
+    audioDurationSec, setAudioDurationSec,
+    audioFile, setAudioFile, a2vDurationError, a2vModeBlocked,
     // IC-LoRA remix
     icSpec, icModeActive, icImageKind, icLoraModeBlocked,
     icReferenceFile, icReferenceVideoId, icReferenceNames, icReferenceImageFiles,

@@ -55,9 +55,11 @@ const DEFAULT_MESSAGES = Object.freeze({
   imageRequiresFirst: ({ model }) => `${model.name} image-to-video requires a source image — choose an existing gallery image or upload one.`,
   imageLastConflict: ({ model }) => `${model.name} image-to-video takes a single first-frame image — switch to FFLF mode to use a last frame.`,
   fflfRequiresImage: ({ model }) => `${model.name} FFLF requires a first and/or last frame image.`,
+  a2vRequiresFirst: ({ model }) => `${model.name} audio-to-video requires a reference image.`,
+  a2vRequiresAudio: ({ model }) => `${model.name} audio-to-video requires an audio file.`,
 });
 
-// H3's two runtimes share ONE row: the mode rules come from the fl2va
+// H3's text/image runtimes share ONE row: the mode rules come from the fl2va
 // checkpoint partition, not from the MLX / diffusers runner in front of it, and
 // the error codes are the same `MINIMAX_H3_*` contract on both — so both keys
 // below reference this object rather than each carrying a copy, which is
@@ -74,6 +76,19 @@ const MINIMAX_H3_CONTRACT = Object.freeze({
     imageRequiresFirst: () => 'MiniMax H3 image-to-video requires a source image — choose an existing gallery image or upload one.',
     imageLastConflict: () => 'MiniMax H3 image-to-video takes a single first-frame image — switch to FFLF mode to use a last frame.',
     fflfRequiresImage: () => 'MiniMax H3 FFLF requires a first and/or last frame image.',
+  }),
+});
+
+const MINIMAX_H3_REF2VA_CONTRACT = Object.freeze({
+  codePrefix: 'MINIMAX_H3_REF2VA',
+  modeCeiling: VIDEO_RUNTIME_MODES.minimax_h3_ref2va,
+  extraConditioningUnsupported: false,
+  a2vRequiresFirst: true,
+  a2vRequiresAudio: true,
+  messages: Object.freeze({
+    modeUnsupported: ({ model }) => `${model.name} supports image-and-audio to video only.`,
+    a2vRequiresFirst: () => 'MiniMax H3 Ref2VA audio-to-video requires a reference image — choose an existing gallery image or upload one.',
+    a2vRequiresAudio: () => 'MiniMax H3 Ref2VA audio-to-video requires an audio file.',
   }),
 });
 
@@ -94,8 +109,7 @@ const VIDEO_MODE_CONTRACTS = Object.freeze({
     // wan22 row (text + image) rather than leaving it unconstrained.
     modeCeiling: null,
     // The wan22 lane rejects multi-keyframe / extend / audio / IC inputs by
-    // runtime elsewhere (KEYFRAMES_REQUIRE_LTX2, A2V_REQUIRES_LTX2,
-    // IC_LORA_REQUIRES_LTX2), so folding them in here would double-report.
+    // runtime elsewhere, so folding them in here would double-report.
     extraConditioningUnsupported: false,
     messages: {
       modeUnsupported: ({ model, requestedMode }) => `${model.name} does not support ${requestedMode}-to-video. Choose a compatible Wan model.`,
@@ -123,6 +137,7 @@ const VIDEO_MODE_CONTRACTS = Object.freeze({
   },
   minimax_h3: MINIMAX_H3_CONTRACT,
   minimax_h3_cuda: MINIMAX_H3_CONTRACT,
+  minimax_h3_ref2va: MINIMAX_H3_REF2VA_CONTRACT,
 });
 
 // An empty array is "no references", not "references present" — and an empty
@@ -172,7 +187,13 @@ export const videoModeContractError = ({
 }) => {
   const contract = VIDEO_MODE_CONTRACTS[model?.runtime];
   if (!contract) return null;
-  const { codePrefix, modeCeiling, extraConditioningUnsupported } = contract;
+  const {
+    codePrefix,
+    modeCeiling,
+    extraConditioningUnsupported,
+    a2vRequiresFirst,
+    a2vRequiresAudio,
+  } = contract;
   const messages = { ...DEFAULT_MESSAGES, ...contract.messages };
   const requestedMode = mode || (hasFirstImage ? 'image' : 'text');
   const declaredModes = resolveVideoSupportedModes(model);
@@ -196,6 +217,12 @@ export const videoModeContractError = ({
   }
   if (requestedMode === 'image' && !hasFirstImage) {
     return fail('imageRequiresFirst', `${codePrefix}_I2V_REQUIRES_IMAGE`);
+  }
+  if (requestedMode === 'a2v' && a2vRequiresFirst && !hasFirstImage) {
+    return fail('a2vRequiresFirst', `${codePrefix}_A2V_REQUIRES_IMAGE`);
+  }
+  if (requestedMode === 'a2v' && a2vRequiresAudio && !isPresent(audioFile)) {
+    return fail('a2vRequiresAudio', `${codePrefix}_A2V_REQUIRES_AUDIO`);
   }
   // The last-frame pair rules only mean something on a runtime that can anchor
   // one, so they key off the resolved mode set rather than the runtime name — a

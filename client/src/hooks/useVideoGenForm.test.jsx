@@ -19,7 +19,17 @@ const { useVideoGenForm } = await import('./useVideoGenForm.js');
 // (server/lib/videoModeProfiles.js, #3737), so a model that reaches the client
 // without one is not a shape the picker has to handle.
 const RUNTIME_MODES = ['text', 'image', 'fflf', 'extend'];
-const LTX2 = { id: 'ltx2-model', name: 'LTX-2.3', runtime: 'ltx2', lastFrameAnchored: true, supportedModes: RUNTIME_MODES };
+const LTX2 = { id: 'ltx2-model', name: 'LTX-2.3', runtime: 'ltx2', lastFrameAnchored: true, supportedModes: [...RUNTIME_MODES, 'a2v'] };
+const LTX25 = {
+  id: 'ltx25-model',
+  name: 'LTX-2.5',
+  runtime: 'ltx25',
+  lastFrameAnchored: true,
+  supportedModes: [...RUNTIME_MODES, 'a2v'],
+  audioDurationDriven: true,
+  frameStride: 8,
+  maxNumFrames: 1017,
+};
 const MLX = { id: 'mlx-model', name: 'LTX distilled', runtime: 'mlx_video', lastFrameAnchored: false, supportedModes: RUNTIME_MODES };
 const WAN_T2V = { id: 'wan-t2v', name: 'Wan T2V', runtime: 'wan22', supportedModes: ['text'], frameStride: 4 };
 const WAN_TI2V = { id: 'wan-ti2v', name: 'Wan TI2V', runtime: 'wan22', supportedModes: ['text', 'image'], frameStride: 4 };
@@ -42,6 +52,19 @@ const H3 = {
     { id: 'stock', label: 'Stock', description: 'Ships with the model.', builtIn: true },
     { id: 'heretic-bf16', label: 'Ultra-Heretic', description: 'Uncensored.', builtIn: false, sizeBytes: 51506295440 },
   ],
+};
+const H3_REF2VA = {
+  id: 'minimax-h3-ref2va',
+  name: 'MiniMax H3 Ref2VA',
+  runtime: 'minimax_h3_ref2va',
+  supportedModes: ['a2v'],
+  requiresSourceImageForA2v: true,
+  audioDurationDriven: true,
+  arbitraryLengthAudio: true,
+  maxReferenceAudioSeconds: 15,
+  frameOptions: [107, 124, 141],
+  fpsOptions: [24],
+  defaultFrames: 124,
 };
 const MODELS = [MLX, LTX2];
 const STATUS = { connected: true, defaultModel: MLX.id };
@@ -241,6 +264,61 @@ describe('useVideoGenForm', () => {
     act(() => result.current.setAudioFile(wav));
     expect(result.current.a2vModeBlocked).toBe(false);
     expect(result.current.buildGeneratePayload().audioFile).toBe(wav);
+  });
+
+  it('requires and submits both image and audio for MiniMax H3 Ref2VA', async () => {
+    const { result } = render({ models: [MLX, H3_REF2VA] });
+    await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
+    act(() => result.current.handleModeChange('a2v'));
+    await waitFor(() => expect(result.current.modelId).toBe(H3_REF2VA.id));
+
+    const wav = new File(['audio'], 'awakening.wav', { type: 'audio/wav' });
+    act(() => result.current.setAudioFile(wav));
+    expect(result.current.a2vModeBlocked).toBe(true);
+
+    act(() => result.current.pickSourceImage('awakening-reference.png'));
+    expect(result.current.a2vModeBlocked).toBe(false);
+    expect(result.current.buildGeneratePayload()).toMatchObject({
+      mode: 'a2v',
+      modelId: H3_REF2VA.id,
+      audioFile: wav,
+      sourceImageFile: 'awakening-reference.png',
+    });
+  });
+
+  it('derives an LTX-2.5 frame canvas from the full uploaded audio duration', async () => {
+    const { result } = render({ models: [MLX, LTX25] });
+    await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
+    act(() => result.current.handleModeChange('a2v'));
+    await waitFor(() => expect(result.current.modelId).toBe(LTX25.id));
+
+    const wav = new File(['audio'], 'forty-one-seconds.wav', { type: 'audio/wav' });
+    act(() => {
+      result.current.setAudioFile(wav);
+      result.current.setAudioDurationSec(41.041281);
+    });
+    await waitFor(() => expect(result.current.numFrames).toBe(985));
+    expect(result.current.a2vModeBlocked).toBe(false);
+    expect(result.current.buildGeneratePayload()).toMatchObject({
+      mode: 'a2v',
+      modelId: LTX25.id,
+      audioFile: wav,
+      sourceImageFile: '',
+      numFrames: 985,
+    });
+  });
+
+  it('blocks an LTX-2.5 A2V file that exceeds its single-pass frame boundary', async () => {
+    const { result } = render({ models: [MLX, LTX25] });
+    await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
+    act(() => result.current.handleModeChange('a2v'));
+    await waitFor(() => expect(result.current.modelId).toBe(LTX25.id));
+    act(() => {
+      result.current.setAudioFile(new File(['audio'], 'one-minute.wav', { type: 'audio/wav' }));
+      result.current.setAudioDurationSec(60);
+    });
+    expect(result.current.a2vModeBlocked).toBe(true);
+    expect(result.current.a2vDurationError).toMatch(/supports up to 42\.4s/i);
   });
 
   it('clears sampler overrides on an automatic mode-compatible model fallback', async () => {

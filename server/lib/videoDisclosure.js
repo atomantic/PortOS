@@ -68,6 +68,10 @@ const RUNTIME_LICENSE = {
     name: 'Apache-2.0',
     url: 'https://github.com/PipeNetwork/minimax-h3-mlx/blob/fcd9e9b79a1d6018d91ac477c0968de1fa067e49/LICENSE',
   },
+  minimax_h3_ref2va: {
+    name: 'Apache-2.0',
+    url: 'https://github.com/sawfwair/mere-run/blob/v0.47.0/LICENSE',
+  },
   // The diffusers CUDA path executes no vendored source — the license that
   // governs the inference code is diffusers' own.
   cuda_video: { name: 'Apache-2.0', url: 'https://github.com/huggingface/diffusers/blob/main/LICENSE' },
@@ -135,6 +139,17 @@ const customLicense = (repo) => ({ name: 'Custom — see model card', url: hfMod
  * Lightning entries include their `requiredWeights` LoRA files.
  */
 export const VIDEO_MODEL_DISCLOSURES = Object.freeze({
+  minimax_h3_ref2va_8bit: {
+    shippedRepo: 'Sawfwair/MiniMax-H3-Ref2VA-MLX-8bit',
+    disclosure: {
+      modelCardUrl: hfModelCard('Sawfwair/MiniMax-H3-Ref2VA-MLX-8bit'),
+      weightsLicense: MINIMAX_H3_WEIGHTS,
+      runtimeLicense: RUNTIME_LICENSE.minimax_h3_ref2va,
+      estimatedDownloadGb: 70.9,
+      reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
+    },
+    termsGate: MINIMAX_H3_TERMS_GATE,
+  },
   minimax_h3_8bit: {
     shippedRepo: 'pipenetwork/MiniMax-H3-MLX-8bit',
     disclosure: {

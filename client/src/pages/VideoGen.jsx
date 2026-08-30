@@ -15,7 +15,7 @@
  *   - extend: pick a previous render → its last frame becomes the source
  *             image for a new image-to-video generation
  *   - a2v:    audio-to-video (uploaded WAV/MP3 drives the video's motion +
- *             audio track) — dgrauet/ltx2 runtime only
+ *             audio track) — LTX, or MiniMax H3 Ref2VA with an image
  *   - ic-*:   IC-LoRA remix modes (issue #3100) — a reference clip drives the
  *             render through ICLoraPipeline with a per-mode IC-LoRA fused into
  *             Stage 1. Today: `ic-control` (structure/motion from a depth/pose/
@@ -37,7 +37,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
-import { isMiniMaxH3Runtime, isLtx2FamilyRuntime } from '../lib/runnerFamilies';
+import { isAudioToVideoRuntime, isMiniMaxH3Runtime } from '../lib/runnerFamilies';
 import { appendTriggerWords } from '../lib/loraTriggers';
 import Drawer from '../components/Drawer';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
@@ -175,7 +175,8 @@ export default function VideoGen() {
     keyframesMode, keyframes, keyframesSupported, keyframesActive, keyframesError, keyframesBlocked,
     toggleKeyframesMode, addKeyframe, updateKeyframe, removeKeyframe,
     extendFromVideoId, extendingFrame, handleExtendPick, extendModeBlocked,
-    audioFile, setAudioFile, a2vModeBlocked,
+    setAudioDurationSec,
+    audioFile, setAudioFile, a2vDurationError, a2vModeBlocked,
     icSpec, icModeActive, icLoraModeBlocked,
     icReferenceFile, icReferenceVideoId, icReferenceNames, icReferenceImageFiles,
     pickIcReferenceFile, pickIcReferenceVideoId,
@@ -1125,14 +1126,42 @@ export default function VideoGen() {
           )}
 
           {mode === 'a2v' && (
-            <AudioPanel
-              audioFile={audioFile}
-              numFrames={numFrames}
-              fps={fps}
-              hasCompatibleModel={visibleModels.length > 0}
-              onPick={setAudioFile}
-              onClear={() => setAudioFile(null)}
-            />
+            <div className="grid gap-3 lg:grid-cols-2">
+              <FramePanel
+                label={currentModel?.requiresSourceImageForA2v ? 'Reference image (required)' : 'Reference image (optional)'}
+                file={sourceImageFile}
+                upload={sourceImageUpload}
+                uploadUrl={sourceUploadUrl}
+                onBrowseGallery={() => setGalleryPicker({ kind: 'source' })}
+                onUpload={uploadSourceImage}
+                onClear={clearSourceImage}
+                alt="Audio-to-video reference"
+                hint={{
+                  text: 'This image establishes the subject, composition, and opening geometry.',
+                  title: currentModel?.arbitraryLengthAudio === true
+                    ? 'MiniMax H3 Ref2VA combines the image with each audio window. PortOS carries the prior window\'s last frame forward to keep long renders continuous.'
+                    : 'LTX-2.5 conditions frame one on this image while the uploaded audio drives motion and synchronization.',
+                }}
+              />
+              <AudioPanel
+                audioFile={audioFile}
+                numFrames={numFrames}
+                fps={fps}
+                hasCompatibleModel={visibleModels.length > 0}
+                audioDurationDriven={currentModel?.audioDurationDriven === true}
+                arbitraryLengthAudio={currentModel?.arbitraryLengthAudio === true}
+                maxReferenceAudioSeconds={currentModel?.maxReferenceAudioSeconds}
+                maxDurationSeconds={currentModel?.audioDurationDriven === true
+                  && currentModel?.arbitraryLengthAudio !== true
+                  && Number(currentModel?.maxNumFrames) > 0
+                  ? Number(currentModel.maxNumFrames) / Number(fps)
+                  : null}
+                durationError={a2vDurationError}
+                onDurationChange={setAudioDurationSec}
+                onPick={setAudioFile}
+                onClear={() => setAudioFile(null)}
+              />
+            </div>
           )}
 
           {mode === 'extend' && (
@@ -1403,9 +1432,10 @@ export default function VideoGen() {
                     : textEncoderOptionBlocked ? `Download the ${selectedTextEncoder?.label || 'selected'} text encoder before generating`
                     : icWeightsBlocked ? `Download the ${icSpec?.label || 'IC-LoRA'} weight before generating`
                     : extendModeBlocked ? 'Pick a prior render and wait for the last frame to extract before generating'
-                    : a2vModeBlocked ? (!isLtx2FamilyRuntime(currentModel?.runtime)
-                      ? 'a2v mode requires an ltx2-runtime model — pick one from the Model dropdown'
-                      : 'Pick an audio file before generating')
+                    : a2vModeBlocked ? (a2vDurationError || (!isAudioToVideoRuntime(currentModel?.runtime)
+                      ? 'a2v mode requires an audio-to-video model — pick one from the Model dropdown'
+                      : !audioFile ? 'Pick an audio file before generating'
+                        : 'Pick a reference image before generating with this model'))
                     : keyframesBlocked ? keyframesError
                     : undefined
                 }

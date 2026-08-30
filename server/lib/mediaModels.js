@@ -81,6 +81,7 @@ import { applyVideoSpeedProfiles, sanitizeSpeedProfiles } from './videoSpeedProf
 import { applyVideoDraftDecoders, sanitizeDraftDecoders } from './videoDraftDecoders.js';
 import { applyMiniMaxH3MemoryProfiles, sanitizeMiniMaxH3MemoryProfiles } from './minimaxH3Memory.js';
 import { applyVideoSupportedModes } from './videoModeProfiles.js';
+import { LTX25_AUDIO_PROFILE } from './videoDurationProfiles.js';
 import {
   captureSystemCapabilities,
   hardwareRequirementsForMediaModel,
@@ -268,6 +269,27 @@ export const upgradeMiniMaxH3OutputControls = (list) => {
   return upgradeMiniMaxH3DenoisingCount(withGeometry);
 };
 
+// Existing installs already persisted the shipped LTX-2.5 row before its A2V
+// duration contract was declared. Backfill only the untouched pinned model and
+// only absent keys: a user-repointed fork or an explicit local override remains
+// authoritative. Migration 318 persists the same fields, while this load-time
+// twin matters on the boot that runs the migration because the registry cache is
+// populated before migrations execute.
+export const upgradeLtx25AudioControls = (list) => {
+  if (!Array.isArray(list)) return list;
+  return list.map((entry) => {
+    if (!isPlainObject(entry)
+      || entry.id !== LTX25_AUDIO_PROFILE.id
+      || entry.repo !== LTX25_AUDIO_PROFILE.repo
+      || entry.revision !== LTX25_AUDIO_PROFILE.revision) return entry;
+    const missing = ['audioDurationDriven', 'frameStride', 'maxNumFrames']
+      .filter((key) => !Object.hasOwn(entry, key));
+    return missing.length === 0
+      ? entry
+      : { ...entry, ...Object.fromEntries(missing.map((key) => [key, LTX25_AUDIO_PROFILE[key]])) };
+  });
+};
+
 const DEFAULT_REGISTRY = {
   _doc: 'PortOS media model registry. Edit to add models, tune defaults, or switch the text encoder. Restart the server to apply changes.',
   video: {
@@ -301,7 +323,21 @@ const DEFAULT_REGISTRY = {
       { id: 'ltx23_dgrauet_q8',   name: 'LTX-2.3 dgrauet Q8 (~25 GB, true keyframes)', repo: 'dgrauet/ltx-2.3-mlx-q8', runtime: 'ltx2', steps: 8, guidance: 3.0 },
       // LTX-2.5 Q8 on MrMofer's ltx25 fork of dgrauet/ltx-2-mlx. The 2.3 pin
       // cannot load these weights; INSTALL_LTX25 provisions a sibling venv.
-      { id: 'ltx25_mlx_q8', name: 'LTX-2.5 MLX Q8 (~68 GB, Apple Silicon)', repo: 'MrMofer/ltx-2.5-mlx-q8', revision: 'f1b56e7dc89f71a9af2cddac787b89ed22a8b7fc', runtime: 'ltx25', steps: 8, guidance: 3.0 },
+      {
+        id: 'ltx25_mlx_q8',
+        name: 'LTX-2.5 MLX Q8 (~68 GB, Apple Silicon)',
+        repo: 'MrMofer/ltx-2.5-mlx-q8',
+        revision: 'f1b56e7dc89f71a9af2cddac787b89ed22a8b7fc',
+        runtime: 'ltx25',
+        // A2V accepts an optional frame-one image. PortOS probes a direct audio
+        // upload and rounds its full duration up to the LTX 8n+1 grid. 1017 is
+        // the highest legal count under the route's 1024-frame single-pass cap.
+        audioDurationDriven: true,
+        frameStride: 8,
+        maxNumFrames: 1017,
+        steps: 8,
+        guidance: 3.0,
+      },
       // MiniMax H3 joint video+audio through PipeNetwork's pinned MLX port.
       // The quantized DiT is one HF snapshot; the released conditioner + VAEs
       // are an exact selective file set from MiniMax's upstream snapshot. Both
@@ -384,6 +420,42 @@ const DEFAULT_REGISTRY = {
             'FL2VA/video_vae/source/model.safetensors',
           ],
         }],
+      },
+      // MiniMax H3 Ref2VA through the signed mere.run native runtime. The
+      // checkpoint accepts at most 15 seconds of reference audio per call;
+      // PortOS chains those windows and remuxes the exact source audio so the
+      // user-facing mode has no arbitrary duration cap.
+      {
+        id: 'minimax_h3_ref2va_8bit',
+        name: 'MiniMax H3 Ref2VA MLX 8-bit (image + arbitrary-length audio, ~71 GB, 128 GB RAM)',
+        repo: 'Sawfwair/MiniMax-H3-Ref2VA-MLX-8bit',
+        revision: '61dc387ef1a7166425cdacd63c2340598dcc364f',
+        runtime: 'minimax_h3_ref2va',
+        supportedModes: ['a2v'],
+        requiresSourceImageForA2v: true,
+        audioDurationDriven: true,
+        arbitraryLengthAudio: true,
+        maxReferenceAudioSeconds: 15,
+        defaultFrames: 124,
+        frameOptions: [...MINIMAX_H3_OUTPUT_PROFILE.frameOptions],
+        fpsOptions: [24],
+        defaultWidth: 512,
+        defaultHeight: 320,
+        resolutionStep: 32,
+        resolutionOptions: [
+          { label: '512x320 (draft)', w: 512, h: 320 },
+          { label: '768x480', w: 768, h: 480 },
+          { label: '1024x640', w: 1024, h: 640 },
+          { label: '768x768 (1:1)', w: 768, h: 768 },
+        ],
+        memoryGb: 128,
+        steps: 9,
+        guidance: 0,
+        samplerLocked: true,
+        samplerNote: 'MiniMax H3 Ref2VA is CFG-distilled. PortOS renders audio in up-to-15-second continuity-linked windows, then restores the exact source audio over the final video.',
+        supportsNegativePrompt: false,
+        supportsTiling: false,
+        supportsDisableAudio: false,
       },
       // Wan 2.2 through pinned MLX-Gen. Generation is cache-only: PortOS owns
       // the explicit base/adaptor downloads and uses the saved HF token.
@@ -1116,7 +1188,9 @@ const normalizeRegistry = (parsed) => {
   // model this install deleted — or a hand-edited typo — is dropped with a
   // warning instead of surfacing a Finish button targeting nothing.
   const videoEntries = (entries, { upgradeLegacyCudaLtx = false } = {}) => {
-    const normalized = backfillRuntime(upgradeMiniMaxH3OutputControls(dropRetiredEntries(entries)));
+    const normalized = backfillRuntime(upgradeLtx25AudioControls(
+      upgradeMiniMaxH3OutputControls(dropRetiredEntries(entries)),
+    ));
     const upgraded = upgradeLegacyCudaLtx ? upgradeLegacyCudaLtxRuntime(normalized) : normalized;
     const decorated = sanitizeFinishProfiles(applyVideoFinishProfiles(applyVideoDisclosures(upgraded)));
     // applyVideoSpeedProfiles is the load-time twin of migration 295, and

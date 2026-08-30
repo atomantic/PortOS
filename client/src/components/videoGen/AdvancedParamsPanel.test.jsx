@@ -69,6 +69,26 @@ describe('AdvancedParamsPanel', () => {
     expect(screen.getByLabelText('Frames')).toBeTruthy();
   });
 
+  it('hides the manual frame picker when A2V follows the uploaded audio duration', () => {
+    renderPanel({
+      mode: 'a2v',
+      currentModel: {
+        runtime: 'ltx25',
+        supportedModes: [...MLX_MODES, 'a2v'],
+        audioDurationDriven: true,
+        frameStride: 8,
+        maxNumFrames: 1017,
+      },
+    });
+    expect(screen.queryByLabelText('Frames')).toBeNull();
+  });
+
+  it('offers the full 1017-frame LTX single-pass boundary outside duration-driven A2V', () => {
+    renderPanel({ currentModel: { runtime: 'ltx25', supportedModes: [...MLX_MODES, 'a2v'] } });
+    expect(screen.getByLabelText('Frames')).toHaveDisplayValue(/121/);
+    expect([...screen.getByLabelText('Frames').options].map((option) => option.value)).toContain('1017');
+  });
+
   it('hides chunks for a Wan profile that cannot continue via image mode', () => {
     renderPanel({
       currentModel: { runtime: 'wan22', supportedModes: ['text'], frameStride: 4 },

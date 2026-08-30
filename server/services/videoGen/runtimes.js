@@ -79,6 +79,14 @@ export const MINIMAX_H3_DRAFT_DECODER_SHIM_DIR = join(homedir(), '.portos', 'min
 // the pin verification /status and the render helper both run.
 export const MINIMAX_H3_PROMPT_EMBEDDING_CACHE_DIR = join(homedir(), '.portos', 'minimax-h3-prompt-embeddings');
 
+// MiniMax H3 Ref2VA runtime — the signed mere.run release provides the native
+// MLX implementation and stays separate from model weights. PortOS installs it
+// into a user-owned directory so the in-app flow never needs sudo.
+export const MERE_RUN_VERSION = '0.47.0';
+export const MERE_RUN_DIR = join(homedir(), '.portos', 'mere-run');
+export const MERE_RUN_BIN = join(MERE_RUN_DIR, 'mere.run');
+export const MINIMAX_H3_REF2VA_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_minimax_h3_ref2va.js');
+
 // MiniMax H3 on CUDA — the diffusers `MiniMaxH3ModularPipeline` rather than a
 // pinned source checkout, so this runtime is a plain pip venv with no revision
 // to verify and no source package to keep clean.
@@ -125,6 +133,24 @@ const RUNTIME_FINGERPRINT_SCRIPT = join(PATHS.root, 'scripts', 'runtime_fingerpr
 // this probe the UI would hide the install banner and renders would fail
 // with a deep ImportError inside the runner script.
 export const BYOV_RUNTIME_INFO = Object.freeze({
+  minimax_h3_ref2va: {
+    id: 'minimax_h3_ref2va',
+    label: 'MiniMax H3 Ref2VA MLX',
+    venvPython: MERE_RUN_BIN,
+    repoDir: MERE_RUN_DIR,
+    installEnvVar: 'INSTALL_MERERUN',
+    cacheOnly: true,
+    killProcessGroup: true,
+    repoUrl: `https://github.com/sawfwair/mere-run/releases/tag/v${MERE_RUN_VERSION}`,
+    installSourceLabel: `signed mere.run v${MERE_RUN_VERSION} release`,
+    expectedVersion: MERE_RUN_VERSION,
+    probeArgs: ['--version'],
+    fingerprintProbeArgs: ['--version'],
+    fingerprintVersionKey: 'mere.run',
+    // The PortOS Hugging Face downloader must use its own Python helper and
+    // saved token; mere.run is an executable, not a Python interpreter.
+    hfDownloadPython: false,
+  },
   minimax_h3: {
     id: 'minimax_h3',
     label: 'MiniMax H3 MLX',
@@ -330,7 +356,7 @@ export async function isByovRuntimeReady(runtimeId) {
   // executable package have passed the clean-status check. Keep this ahead of
   // the positive readiness cache too: a checkout can be edited after an
   // earlier successful probe.
-  if (info.expectedRevision && !await isByovRuntimeCurrent(runtimeId)) return false;
+  if ((info.expectedRevision || info.expectedVersion) && !await isByovRuntimeCurrent(runtimeId)) return false;
   if (readyCache.get(runtimeId) === true) return true;
   const probeOk = await runVenvProbe(
     info.venvPython, info.probeArgs || ['-c', info.importProbe], `${runtimeId} readiness`,
@@ -507,6 +533,22 @@ export function byovRuntimeExpectedRevision(runtimeId) {
 
 export async function isByovRuntimeCurrent(runtimeId) {
   const info = BYOV_RUNTIME_INFO[runtimeId];
+  if (info?.expectedVersion) {
+    if (!existsSync(info.venvPython)) return false;
+    return new Promise((resolve) => {
+      let stdout = '';
+      const child = spawn(info.venvPython, ['--version'], safeChildProcessOptions({
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }));
+      const timer = setTimeout(() => { if (!child.killed) child.kill('SIGKILL'); resolve(false); }, 10000);
+      child.stdout.on('data', (chunk) => { if (stdout.length < 128) stdout += chunk.toString(); });
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        resolve(code === 0 && stdout.trim() === info.expectedVersion);
+      });
+      child.on('error', () => { clearTimeout(timer); resolve(false); });
+    });
+  }
   if (!info?.expectedRevision) return true;
   if (!existsSync(join(info.repoDir, '.git'))) return false;
   return new Promise((resolve) => {
@@ -576,7 +618,8 @@ async function probeRuntimeFingerprint(runtimeId) {
       let out = '';
       const child = spawn(
         info.venvPython,
-        [RUNTIME_FINGERPRINT_SCRIPT, runtimeId, ...(info.fingerprintPackages || [])],
+        info.fingerprintProbeArgs
+          || [RUNTIME_FINGERPRINT_SCRIPT, runtimeId, ...(info.fingerprintPackages || [])],
         safeChildProcessOptions({ stdio: ['ignore', 'pipe', 'ignore'] }),
       );
       const timer = setTimeout(() => { if (!child.killed) child.kill('SIGKILL'); resolve({ error: 'timeout' }); }, 15000);
@@ -584,9 +627,16 @@ async function probeRuntimeFingerprint(runtimeId) {
       child.on('close', (code) => {
         clearTimeout(timer);
         if (code !== 0) return resolve({ error: `exit ${code}` });
-        // The probe prints exactly one JSON line; take the last non-empty line
-        // defensively in case a venv import prints a stray warning to stdout.
         const lastLine = out.trim().split('\n').filter(Boolean).pop() || '';
+        if (info.fingerprintProbeArgs) {
+          return resolve({
+            runtime: runtimeId,
+            versions: { [info.fingerprintVersionKey || runtimeId]: lastLine },
+            ...hostRuntimeFingerprint(),
+          });
+        }
+        // The Python probe prints exactly one JSON line; take the last non-empty
+        // line defensively in case a venv import prints a stray warning.
         try { resolve(JSON.parse(lastLine)); } catch { resolve({ error: 'unparseable' }); }
       });
       child.on('error', () => { clearTimeout(timer); resolve({ error: 'spawn-failed' }); });

@@ -22,7 +22,7 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => ({
 import {
   BYOV_RUNTIME_INFO, BYOV_VIDEO_RUNTIMES, MINIMAX_H3_CUDA_OFFLOAD_PROFILES,
   byovRuntimeLoraCapable, invalidateByovLoraCapabilityCache, invalidateByovReadyCache,
-  isByovRuntimeReady, isPinnedSourceStatusClean, modelAnchorsLastFrame,
+  isByovRuntimeCurrent, isByovRuntimeReady, isPinnedSourceStatusClean, modelAnchorsLastFrame,
   resolveByovRuntimeLoraCapable, runtimeIsCacheOnly, runtimeNeedsProcessGroupKill,
   routesToWindowsHelper, LTX25_EXPECTED_REVISION,
 } from './runtimes.js';
@@ -75,6 +75,32 @@ describe('retired runtime filtering', () => {
   it('does not advertise legacy Hunyuan support to the video UI', () => {
     expect(BYOV_RUNTIME_INFO).not.toHaveProperty('hunyuan');
     expect(BYOV_VIDEO_RUNTIMES.has('hunyuan')).toBe(false);
+  });
+});
+
+describe('MiniMax H3 Ref2VA runtime', () => {
+  it('uses the signed user-local mere.run install and PortOS HF downloader', () => {
+    expect(BYOV_RUNTIME_INFO.minimax_h3_ref2va).toMatchObject({
+      installEnvVar: 'INSTALL_MERERUN',
+      expectedVersion: '0.47.0',
+      probeArgs: ['--version'],
+      cacheOnly: true,
+      killProcessGroup: true,
+      hfDownloadPython: false,
+    });
+  });
+
+  it('accepts only the pinned mere.run version as current', async () => {
+    runtimeMocks.spawn.mockImplementationOnce(() => statusChild('0.47.0\n'));
+    await expect(isByovRuntimeCurrent('minimax_h3_ref2va')).resolves.toBe(true);
+    expect(runtimeMocks.spawn).toHaveBeenCalledWith(
+      BYOV_RUNTIME_INFO.minimax_h3_ref2va.venvPython,
+      ['--version'],
+      expect.objectContaining({ stdio: ['ignore', 'pipe', 'ignore'] }),
+    );
+
+    runtimeMocks.spawn.mockImplementationOnce(() => statusChild('0.46.1\n'));
+    await expect(isByovRuntimeCurrent('minimax_h3_ref2va')).resolves.toBe(false);
   });
 });
 

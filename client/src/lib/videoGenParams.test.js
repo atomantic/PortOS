@@ -3,7 +3,7 @@ import {
   videoModelMemoryGb, computeFflfSafeFrames, isModelAllowedForMode,
   VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, FRAME_OPTIONS, FPS_OPTIONS,
   WAN_FRAME_OPTIONS, frameOptionsForModel, fpsOptionsForModel,
-  normalizeFramesForModel, normalizeFpsForModel,
+  normalizeFramesForModel, normalizeFpsForModel, audioDurationToFrames,
   supportsVideoAudioControls, supportsVideoAudioPromptControls,
   IC_LORA_MODES, IC_LORA_MODE_VALUES, isIcLoraMode, icLoraSpecForMode,
   icResolutionIssue,
@@ -87,8 +87,10 @@ describe('isModelAllowedForMode', () => {
     expect(isModelAllowedForMode(h3, 'image')).toBe(false);
     expect(isModelAllowedForMode(h3, 'fflf')).toBe(false);
   });
-  it('requires the ltx2 runtime for a2v', () => {
+  it('requires a declared audio-to-video runtime for a2v', () => {
     expect(isModelAllowedForMode({ runtime: 'ltx2' }, 'a2v')).toBe(true);
+    expect(isModelAllowedForMode({ runtime: 'ltx25' }, 'a2v')).toBe(true);
+    expect(isModelAllowedForMode({ runtime: 'minimax_h3_ref2va' }, 'a2v')).toBe(true);
     expect(isModelAllowedForMode({ runtime: 'mlx_video' }, 'a2v')).toBe(false);
   });
 });
@@ -101,9 +103,17 @@ describe('constants', () => {
   });
   it('frame/fps option lists are on the expected boundaries', () => {
     expect(FRAME_OPTIONS[0]).toBe(25);
+    expect(FRAME_OPTIONS.at(-1)).toBe(1017);
     expect(FRAME_OPTIONS.every((f) => (f - 1) % 8 === 0)).toBe(true);
     expect(FPS_OPTIONS).toEqual([16, 24, 30]);
     expect(WAN_FRAME_OPTIONS.every((f) => (f - 1) % 4 === 0)).toBe(true);
+  });
+  it('derives the full audio canvas by rounding up to the temporal grid', () => {
+    expect(audioDurationToFrames(41.041281, 24, 8)).toBe(985);
+    expect(audioDurationToFrames(20, 24, 8)).toBe(481);
+    expect(audioDurationToFrames(20.01, 24, 8)).toBe(481);
+    expect(audioDurationToFrames(20.05, 24, 8)).toBe(489);
+    expect(audioDurationToFrames(null, 24, 8)).toBeNull();
   });
   it('selects and normalizes model-aware Wan frame/fps values', () => {
     const wan = { frameStride: 4, fpsOptions: [16, 20, 24] };

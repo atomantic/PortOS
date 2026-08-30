@@ -54,7 +54,12 @@ export const isVideoLoraFamily = (family) => VIDEO_LORA_FAMILY_SET.has(family);
 // Gates asserting one of those facts ask this predicate instead of naming a
 // single runtime, which is what would silently exempt the other one.
 // Mirrored to client/src/lib/runnerFamilies.js.
-export const MINIMAX_H3_RUNTIMES = Object.freeze(['minimax_h3', 'minimax_h3_cuda']);
+export const MINIMAX_H3_REF2VA_RUNTIME = 'minimax_h3_ref2va';
+export const MINIMAX_H3_RUNTIMES = Object.freeze([
+  'minimax_h3',
+  'minimax_h3_cuda',
+  MINIMAX_H3_REF2VA_RUNTIME,
+]);
 const MINIMAX_H3_RUNTIME_SET = new Set(MINIMAX_H3_RUNTIMES);
 export const isMiniMaxH3Runtime = (runtime) => MINIMAX_H3_RUNTIME_SET.has(runtime);
 // dgrauet's LTX-2.3 pin (`ltx2`) and the LTX-2.5 fork (`ltx25`) share the
@@ -64,6 +69,12 @@ export const isMiniMaxH3Runtime = (runtime) => MINIMAX_H3_RUNTIME_SET.has(runtim
 export const LTX2_FAMILY_RUNTIMES = Object.freeze(['ltx2', 'ltx25']);
 const LTX2_FAMILY_RUNTIME_SET = new Set(LTX2_FAMILY_RUNTIMES);
 export const isLtx2FamilyRuntime = (runtime) => LTX2_FAMILY_RUNTIME_SET.has(runtime);
+export const AUDIO_TO_VIDEO_RUNTIMES = Object.freeze([
+  ...LTX2_FAMILY_RUNTIMES,
+  MINIMAX_H3_REF2VA_RUNTIME,
+]);
+const AUDIO_TO_VIDEO_RUNTIME_SET = new Set(AUDIO_TO_VIDEO_RUNTIMES);
+export const isAudioToVideoRuntime = (runtime) => AUDIO_TO_VIDEO_RUNTIME_SET.has(runtime);
 
 // The family an INSTALLED LoRA belongs to. `loraCompatKey` is the refined key
 // (e.g. flux2-9b) written by the importer; `runnerFamily` is the coarse legacy

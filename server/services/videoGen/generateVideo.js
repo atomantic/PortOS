@@ -30,7 +30,7 @@ import {
   isHardwareCompatible,
   withHardwareCompatibility,
 } from '../../lib/systemCapabilities.js';
-import { findFfmpeg } from '../../lib/ffmpeg.js';
+import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
 import { inspectModelCache, findCachedRepoFile, findCachedRepoFiles } from '../../lib/hfCache.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { describeRenderConditioning, RENDER_INPUTS_VERSION } from './generateVideoHelpers.js';
@@ -280,6 +280,23 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       );
     }
     ltxModelPath = cache.snapshotPath;
+  }
+  let ref2vaModelPath = null;
+  if (model.runtime === 'minimax_h3_ref2va') {
+    if (typeof model.revision !== 'string' || !model.revision) {
+      throw new ServerError(
+        `MiniMax H3 Ref2VA model "${modelId}" is missing an immutable Hugging Face revision.`,
+        { status: 500, code: 'VIDEO_MODEL_MISCONFIGURED' },
+      );
+    }
+    const cache = await inspectModelCache(model.repo, { revision: model.revision });
+    if (!cache.cached || !cache.snapshotPath) {
+      throw new ServerError(
+        `${model.name} revision ${model.revision.slice(0, 8)} is not fully cached. Download or repair it in Video Gen before rendering.`,
+        { status: 400, code: 'MINIMAX_H3_REF2VA_MODEL_NOT_CACHED' },
+      );
+    }
+    ref2vaModelPath = cache.snapshotPath;
   }
   // Substituted prompt conditioner (#4081). `resolveVideoTextEncoder` returns
   // null for the stock choice — the whole override path stays dormant then —
@@ -542,6 +559,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   }
   const hasMultiKeyframes = Array.isArray(keyframes) && keyframes.length >= 2;
   const ffmpeg = (sourceImagePath || lastImageWillBeUsed || hasMultiKeyframes) ? await findFfmpeg() : null;
+  const ffprobe = model.runtime === 'minimax_h3_ref2va' ? await findFfprobe() : null;
   const resizeImage = async (srcPath, tag) => {
     if (!srcPath || !ffmpeg) return { resolved: srcPath, tempPath: null };
     const resizedPath = join(tmpdir(), `resized-${tag}-${jobId}.png`);
@@ -801,7 +819,50 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // logic of the spawn-error handler so failure modes converge.
   let bin, args;
   try {
-    ({ bin, args } = buildArgs({ pythonPath, modelId, model: loraCapableModel, wanModelPath, wanRequiredWeights, ltxModelPath, prompt: renderPrompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, stage2Steps: actualStage2Steps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, keyframes: resolvedKeyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength: actualImageStrength, i2vReferenceMode: effectiveReferenceMode, textEncoderRepo: actualTextEncoderRepo, textEncoder: resolvedTextEncoder, outputPath, previewDir: stepwiseDir, loras: resolvedLoras, icReferencePaths: resolvedIcReferencePaths, icLoraWeightPath, icStrength: actualIcStrength, icAttentionStrength: actualIcAttentionStrength, icSkipStage2, speedProfile, draftDecoder }));
+    ({ bin, args } = buildArgs({
+      pythonPath,
+      modelId,
+      model: loraCapableModel,
+      wanModelPath,
+      wanRequiredWeights,
+      ltxModelPath,
+      ref2vaModelPath,
+      prompt: renderPrompt,
+      negativePrompt,
+      width: w,
+      height: h,
+      numFrames: parsedNumFrames,
+      fps: parsedFps,
+      steps: actualSteps,
+      stage2Steps: actualStage2Steps,
+      guidance: actualGuidance,
+      seed: actualSeed,
+      tiling,
+      disableAudio,
+      sourceImagePath: resolvedSourceImage,
+      lastImagePath: resolvedLastImage,
+      keyframes: resolvedKeyframes,
+      extendFromVideoPath,
+      audioFilePath,
+      audioStartSec,
+      mode,
+      imageStrength: actualImageStrength,
+      i2vReferenceMode: effectiveReferenceMode,
+      textEncoderRepo: actualTextEncoderRepo,
+      textEncoder: resolvedTextEncoder,
+      outputPath,
+      previewDir: stepwiseDir,
+      loras: resolvedLoras,
+      icReferencePaths: resolvedIcReferencePaths,
+      icLoraWeightPath,
+      icStrength: actualIcStrength,
+      icAttentionStrength: actualIcAttentionStrength,
+      icSkipStage2,
+      speedProfile,
+      draftDecoder,
+      ffmpegPath: ffmpeg,
+      ffprobePath: ffprobe,
+    }));
   } catch (err) {
     job.status = 'error';
     const reason = err.message || 'Failed to build video gen args';
