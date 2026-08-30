@@ -131,20 +131,23 @@ describe('missing-source detection', () => {
 describe('header layout — mobile overflow regression (#5425)', () => {
   it('header container carries flex-wrap so it can reflow on narrow viewports', async () => {
     await renderEditor();
-    // The outermost header div must have flex-wrap so the right-side buttons
-    // can drop below the title row at 375 px rather than crushing the input.
-    const headerDiv = screen
-      .getByRole('textbox', { name: 'Project name' })
-      .closest('[class*="flex-wrap"]');
-    expect(headerDiv).not.toBeNull();
+    // The header must be able to reflow the right-side buttons at narrow widths
+    // without allowing the project-name input to preserve its min-content width.
+    const titleInput = screen.getByRole('textbox', { name: 'Project name' });
+    const titleRow = titleInput.parentElement;
+    const headerDiv = titleRow?.parentElement;
+    expect(headerDiv).toHaveClass('flex', 'flex-wrap');
+    expect(headerDiv).toContainElement(screen.getByRole('button', { name: 'Hide library' }));
+    expect(headerDiv).toContainElement(screen.getByRole('button', { name: 'Render' }));
+    expect(titleRow).toHaveClass('flex-1', 'min-w-[120px]');
+    expect(titleInput).toHaveClass('flex-1', 'min-w-0');
   });
 
   it('summary span is hidden on small screens (carries hidden sm:inline)', async () => {
     api.project = project({ segments: [clipSegment], overlays: [overlayEntry], audio: { clipVolume: 1, tracks: [bedEntry] } });
     await renderEditor();
     const summarySpan = screen.getByText(/1 segments · 1 overlays · 1 beds/);
-    expect(summarySpan.className).toMatch(/\bhidden\b/);
-    expect(summarySpan.className).toMatch(/\bsm:inline\b/);
+    expect(summarySpan).toHaveClass('hidden', 'sm:inline');
   });
 });
 

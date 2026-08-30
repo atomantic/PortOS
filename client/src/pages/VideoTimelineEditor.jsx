@@ -726,7 +726,7 @@ export default function VideoTimelineEditor() {
                 }
               });
             }}
-            className="bg-transparent text-white font-medium text-lg focus:outline-none focus:bg-port-card focus:px-2 rounded transition-all"
+            className="flex-1 min-w-0 bg-transparent text-white font-medium text-lg focus:outline-none focus:bg-port-card focus:px-2 rounded transition-all"
           />
           <span className="text-xs text-gray-500 hidden sm:inline truncate">
             {segments.length} segments · {overlays.length} overlays · {audio.tracks.length} beds · {formatTimecode(total)}
