@@ -1666,8 +1666,13 @@ describe('spawnTuiAgent runtime', () => {
     runSpawn({ prompt: 'evaluate our animation prompts and generate drafts' });
     await flushMicrotasks();
 
-    // Codex prints its MCP-boot banner during startup → latches the boot tracker.
-    await capturedOnData(Buffer.from('>_ OpenAI Codex (v0.144.1)\nStarting MCP servers (0/3): codex_apps, node_repl, playwright\n'));
+    // Codex prints its MCP-boot banner during a whole-screen repaint. The
+    // composer/footer after the status line exceeds the tracker's 256-char
+    // cross-chunk tail in real transcripts; the tracker must search the full
+    // new repaint before truncating that tail, or it misses the banner and
+    // kills the run at the ordinary three-attempt cap.
+    const footer = `\n\n› Ask Codex to do anything\n\n  gpt-5.6-sol high · ${'workspace footer '.repeat(24)}`;
+    await capturedOnData(Buffer.from(`>_ OpenAI Codex (v0.148.0)\nStarting MCP servers (1/2): codex_apps (0s • esc to interrupt)${footer}`));
     await flushMicrotasks();
     // Fire the paste (past prompt-delay floor + readiness idle threshold).
     await vi.advanceTimersByTimeAsync(2000);

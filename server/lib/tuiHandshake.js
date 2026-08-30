@@ -837,8 +837,15 @@ export function createMcpBootTracker() {
     observe(strippedText) {
       if (active) return true;
       if (typeof strippedText !== 'string' || !strippedText) return active;
-      tail = (tail + strippedText).slice(-MCP_BOOT_TAIL_CAP);
-      if (isMcpBootSignal(tail)) active = true;
+      // Search BEFORE truncating. Codex commonly sends a whole-screen repaint
+      // in one PTY chunk: the MCP status sits above the composer/footer, and
+      // that suffix alone can exceed MCP_BOOT_TAIL_CAP. Truncating first drops
+      // a perfectly visible `Starting MCP servers` banner and falls back to the
+      // ordinary three-paste budget while Codex is still booting. The retained
+      // tail exists only to join a marker split across consecutive chunks.
+      const combined = tail + strippedText;
+      if (isMcpBootSignal(combined)) active = true;
+      tail = combined.slice(-MCP_BOOT_TAIL_CAP);
       return active;
     },
     get active() { return active; },
