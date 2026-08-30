@@ -715,6 +715,11 @@ def parse_args() -> argparse.Namespace:
                         "relaunch after the macOS Metal command-buffer watchdog aborts "
                         "the prompt encoder. An explicit value always wins over the "
                         "ambient environment.")
+    p.add_argument("--mlx-cache-limit-mb", default=None,
+                   help="Cap the MLX allocator cache at this many MB for the whole run, "
+                        "reasserted before every render. Omit to derive a conservative "
+                        "ceiling from physical memory. PORTOS_MLX_CACHE_LIMIT_MB sets the "
+                        "same knob ambiently; this flag wins over it.")
     return p.parse_args()
 
 
@@ -1082,6 +1087,10 @@ def _install_ltx_stepwise_preview(pipe, args: argparse.Namespace):
 
 
 def _run_with_ltx_stepwise_preview(pipe, args: argparse.Namespace, render):
+    # Every mode routes its render through here, so this is where the allocator
+    # cache ceiling is reasserted: loading weights resets it, and a two-stage or
+    # chained job renders more than once inside one process.
+    apply_mlx_cache_policy(_MLX_CACHE_POLICY)
     restore = _install_ltx_stepwise_preview(pipe, args)
     try:
         return render()
@@ -1667,6 +1676,165 @@ def maybe_strip_audio(output_path: str) -> None:
         emit_status(f"ffmpeg audio-strip skipped: {e}")
 
 
+# MLX keeps freed Metal buffers in an allocator cache so the next allocation of
+# that size is free. Left uncapped, that cache competes with the LIVE tensors of
+# a long video render: a 22B DiT plus a decode pass can push the machine into
+# swap (or a Metal OOM abort) purely because the allocator is still holding
+# buffers this render no longer needs. Capping it costs a little allocation
+# throughput and buys headroom, so PortOS derives a conservative ceiling from
+# physical memory and reasserts it before every render.
+#
+# The ceiling is a fixed fraction of physical memory clamped at both ends: the
+# floor keeps a small machine from thrashing against a near-zero cache, the cap
+# keeps a very large machine from parking tens of GB in the allocator "just in
+# case". 1/8 of RAM lands at 2 GB on a 16 GB box, 8 GB on a 64 GB box, and hits
+# the cap at 96 GB.
+MLX_CACHE_FRACTION = 0.125
+MLX_CACHE_FLOOR_MB = 1024
+MLX_CACHE_CEILING_MB = 12288
+MLX_CACHE_LIMIT_ENV = "PORTOS_MLX_CACHE_LIMIT_MB"
+
+_MLX_CACHE_POLICY: dict = {}
+
+
+def derive_mlx_cache_limit_mb(physical_bytes) -> int | None:
+    """Conservative allocator-cache ceiling in MB for a machine that size.
+
+    Pure — no MLX, no environment, no I/O. Returns None when the caller could
+    not determine physical memory; resolve_mlx_cache_policy turns that into "no
+    policy" rather than a guess.
+    """
+    if isinstance(physical_bytes, bool) or not isinstance(physical_bytes, (int, float)):
+        return None
+    if physical_bytes <= 0:
+        return None
+    derived = int(physical_bytes * MLX_CACHE_FRACTION) // (1024 * 1024)
+    return max(MLX_CACHE_FLOOR_MB, min(MLX_CACHE_CEILING_MB, derived))
+
+
+def validate_mlx_cache_limit_mb(raw, source: str) -> int | None:
+    """Parse an explicit cache-limit override in MB; None when unset.
+
+    An override REPLACES the derived ceiling rather than being clamped into it —
+    a caller naming a number knows this machine better than a blanket fraction
+    does — so validation only rejects values that cannot mean anything. A bad
+    value is fatal rather than ignored: falling back to the derived ceiling
+    would report a policy the caller never asked for.
+    """
+    if raw is None or raw == "":
+        return None
+    try:
+        limit = int(str(raw).strip())
+    except ValueError:
+        limit = 0
+    if limit < 1:
+        raise SystemExit(f"{source} must be a positive whole number of MB; got {raw!r}.")
+    return limit
+
+
+def physical_memory_bytes() -> int | None:
+    """Total physical RAM in bytes, or None where the platform will not say.
+
+    Windows has no ``os.sysconf``; the helper is import-safe there and simply
+    reports "unknown", which is also what the LTX runtime itself is on that OS.
+    """
+    sysconf = getattr(os, "sysconf", None)
+    names = getattr(os, "sysconf_names", {})
+    if sysconf is None or "SC_PHYS_PAGES" not in names or "SC_PAGE_SIZE" not in names:
+        return None
+    try:
+        total = sysconf("SC_PHYS_PAGES") * sysconf("SC_PAGE_SIZE")
+    except (OSError, ValueError):  # pragma: no cover - platform dependent
+        return None
+    return total if total > 0 else None
+
+
+def resolve_mlx_cache_policy(physical_bytes, override_raw=None, env_raw=None) -> dict:
+    """Effective cache policy as ``{"limitMb": int | None, "source": str}``.
+
+    Precedence mirrors --gemma-max-length: an explicit flag beats the ambient
+    environment, which beats the ceiling derived from physical memory. A machine
+    whose memory could not be read gets ``limitMb: None`` and MLX's own default
+    stands — a blind floor would throttle a large box exactly as readily as it
+    would protect a small one.
+    """
+    override = validate_mlx_cache_limit_mb(override_raw, "--mlx-cache-limit-mb")
+    if override is not None:
+        return {"limitMb": override, "source": "flag"}
+    ambient = validate_mlx_cache_limit_mb(env_raw, MLX_CACHE_LIMIT_ENV)
+    if ambient is not None:
+        return {"limitMb": ambient, "source": "env"}
+    derived = derive_mlx_cache_limit_mb(physical_bytes)
+    if derived is None:
+        return {"limitMb": None, "source": "unknown-memory"}
+    return {"limitMb": derived, "source": "derived"}
+
+
+def _mlx_cache_limit_setter():
+    """The installed MLX's cache-limit entry point, or None when it has none.
+
+    Probed rather than assumed, the same shape as _resolve_pipeline: the API
+    moved from ``mx.metal.set_cache_limit`` to ``mx.set_cache_limit`` and the
+    legacy spelling is deprecated on new wheels, while installs upgrade on their
+    own schedule. New name first, legacy second.
+    """
+    try:
+        import mlx.core as mx
+    except Exception:
+        return None
+    setter = getattr(mx, "set_cache_limit", None)
+    if callable(setter):
+        return setter
+    setter = getattr(getattr(mx, "metal", None), "set_cache_limit", None)
+    return setter if callable(setter) else None
+
+
+def apply_mlx_cache_policy(policy: dict, announce: bool = False) -> bool:
+    """Push `policy` at the installed MLX. True when the limit actually took.
+
+    Called before pipeline construction and again before every render: loading
+    weights (and some pins' own setup) resets the allocator limit, so a
+    once-at-startup cap quietly stops holding partway through a long job. Only
+    the startup call announces — a per-render status line would be noise.
+    """
+    limit_mb = (policy or {}).get("limitMb")
+    if limit_mb is None:
+        if announce:
+            emit_status("MLX allocator cache left at its default — physical memory unknown")
+        return False
+    setter = _mlx_cache_limit_setter()
+    if setter is None:
+        if announce:
+            emit_status("Installed MLX exposes no cache-limit API — allocator cache left at its default")
+        return False
+    try:
+        setter(limit_mb * 1024 * 1024)
+    except Exception as err:
+        if announce:
+            emit_status(f"MLX allocator cache could not be capped ({err}) — left at its default")
+        return False
+    if announce:
+        emit_status(f"MLX allocator cache capped at {limit_mb} MB ({policy.get('source')})")
+    return True
+
+
+def configure_mlx_cache(args: argparse.Namespace) -> dict:
+    """Resolve this run's allocator-cache ceiling and install it. Returns the policy.
+
+    Called once before any pipeline is constructed — the first weight load is
+    already large enough to strand buffers in the cache for the rest of the run.
+    _run_with_ltx_stepwise_preview reasserts the same policy per render.
+    """
+    global _MLX_CACHE_POLICY
+    _MLX_CACHE_POLICY = resolve_mlx_cache_policy(
+        physical_memory_bytes(),
+        args.mlx_cache_limit_mb,
+        os.environ.get(MLX_CACHE_LIMIT_ENV),
+    )
+    apply_mlx_cache_policy(_MLX_CACHE_POLICY, announce=True)
+    return _MLX_CACHE_POLICY
+
+
 def main() -> NoReturn:
     args = parse_args()
     validate_text_encoder_args(args)
@@ -1696,6 +1864,7 @@ def main() -> NoReturn:
     configure_negative_prompt(args.negative_prompt)
     configure_gemma_max_length(args.gemma_max_length)
     install_prompt_encode_markers()
+    configure_mlx_cache(args)
 
     runners = {
         "text": run_text,

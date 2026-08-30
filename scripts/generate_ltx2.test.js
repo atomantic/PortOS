@@ -803,3 +803,228 @@ describe.skipIf(!pyBin)('generate_ltx2.py speed-profile reporting', () => {
     expect(outLines(out)).toEqual(expected);
   });
 });
+
+// The allocator-cache ceiling is what keeps MLX's freed-buffer cache from
+// competing with a long render's live tensors. Every case here runs against the
+// module's own helpers rather than a real MLX: the policy has to be right on a
+// machine size the test host does not have, and the "installed MLX has no such
+// API" branch cannot be produced by an install that does.
+describe.skipIf(!pyBin)('generate_ltx2.py MLX allocator-cache policy', () => {
+  const GB = 1024 * 1024 * 1024;
+  const runJson = (body) => JSON.parse(runPython(`${importRunner}\n${body.join('\n')}`));
+
+  // A fake mlx.core planted in sys.modules, so the probe sees exactly the API
+  // surface each case is about — and never the host's real wheel.
+  const fakeMlx = (attrs) => [
+    'import sys, types',
+    'CALLS = []',
+    'core = types.ModuleType("mlx.core")',
+    ...attrs,
+    'pkg = types.ModuleType("mlx")',
+    'pkg.core = core',
+    'sys.modules["mlx"] = pkg',
+    'sys.modules["mlx.core"] = core',
+  ];
+  const MODERN_MLX = fakeMlx(['core.set_cache_limit = lambda n: CALLS.append(("modern", n))']);
+  const LEGACY_MLX = fakeMlx([
+    'core.metal = types.SimpleNamespace(set_cache_limit=lambda n: CALLS.append(("legacy", n)))',
+  ]);
+  const NO_CACHE_API = fakeMlx(['core.metal = types.SimpleNamespace()']);
+  // A venv with no MLX at all reaches the same branch through the import.
+  const NO_MLX = ['import sys', 'sys.modules["mlx"] = None', 'sys.modules.pop("mlx.core", None)'];
+
+  it.each([
+    // Under the floor a proportional cap would leave the allocator thrashing,
+    // so a small machine still gets the 1 GB floor rather than 512 MB.
+    ['a machine below the floor', 4 * GB, 1024],
+    ['a 16 GB machine', 16 * GB, 2048],
+    ['a 64 GB machine', 64 * GB, 8192],
+    // 1/8 hits the ceiling exactly at 96 GB; past it the cap holds, so a very
+    // large box does not park tens of GB in the cache "just in case".
+    ['the machine where the ceiling starts biting', 96 * GB, 12288],
+    ['a 512 GB machine', 512 * GB, 12288],
+  ])('derives a bounded ceiling for %s', (_label, bytes, expected) => {
+    const result = runJson([
+      'import json',
+      `print(json.dumps(runner.derive_mlx_cache_limit_mb(${bytes})))`,
+    ]);
+    expect(result).toBe(expected);
+  });
+
+  // An unreadable machine gets NO policy rather than the floor: a blind 1 GB
+  // cap would throttle a large box exactly as readily as it protects a small
+  // one, and MLX's own default is the known-safe behavior.
+  it.each([['unknown', 'None'], ['zero', '0'], ['negative', '-1'], ['non-numeric', '"lots"']])(
+    'derives no ceiling from %s physical memory',
+    (_label, expr) => {
+      const result = runJson(['import json', `print(json.dumps(runner.derive_mlx_cache_limit_mb(${expr})))`]);
+      expect(result).toBeNull();
+    },
+  );
+
+  it('prefers an explicit flag over the environment, and both over the derived ceiling', () => {
+    const result = runJson([
+      'import json',
+      'physical = 64 * 1024 ** 3',
+      'print(json.dumps({',
+      '    "flag": runner.resolve_mlx_cache_policy(physical, "2048", "3072"),',
+      '    "env": runner.resolve_mlx_cache_policy(physical, None, "3072"),',
+      '    "derived": runner.resolve_mlx_cache_policy(physical, None, None),',
+      '    "unknown": runner.resolve_mlx_cache_policy(None, None, None),',
+      '}))',
+    ]);
+    // An override REPLACES the derived ceiling — 2048 is below what a 64 GB box
+    // would derive, and it still wins.
+    expect(result.flag).toEqual({ limitMb: 2048, source: 'flag' });
+    expect(result.env).toEqual({ limitMb: 3072, source: 'env' });
+    expect(result.derived).toEqual({ limitMb: 8192, source: 'derived' });
+    expect(result.unknown).toEqual({ limitMb: null, source: 'unknown-memory' });
+  });
+
+  // Silently ignoring a bad override would report a ceiling the caller never
+  // asked for, which is worse than refusing the run.
+  it.each([
+    ['a word', '"lots"', /--mlx-cache-limit-mb must be a positive whole number/],
+    ['zero', '"0"', /--mlx-cache-limit-mb must be a positive whole number/],
+    ['a negative count', '"-512"', /--mlx-cache-limit-mb must be a positive whole number/],
+    ['a fraction', '"2048.5"', /--mlx-cache-limit-mb must be a positive whole number/],
+  ])('rejects %s as an override', (_label, expr, pattern) => {
+    const output = runPython(`${importRunner}\n${[
+      'try:',
+      `    runner.resolve_mlx_cache_policy(64 * 1024 ** 3, ${expr}, None)`,
+      'except SystemExit as exc:',
+      '    print(str(exc))',
+      'else:',
+      '    raise SystemExit("a bad cache-limit override was accepted")',
+    ].join('\n')}`);
+    expect(output).toMatch(pattern);
+  });
+
+  it('rejects a bad ambient override by its environment-variable name', () => {
+    const output = runPython(`${importRunner}\n${[
+      'try:',
+      '    runner.resolve_mlx_cache_policy(64 * 1024 ** 3, None, "not-a-number")',
+      'except SystemExit as exc:',
+      '    print(str(exc))',
+      'else:',
+      '    raise SystemExit("a bad ambient cache limit was accepted")',
+    ].join('\n')}`);
+    expect(output).toMatch(/PORTOS_MLX_CACHE_LIMIT_MB must be a positive whole number/);
+  });
+
+  it.each([
+    ['the modern spelling', MODERN_MLX, 'modern'],
+    // A pin predating the move still has to be capped, so the legacy spelling
+    // is probed rather than assumed gone.
+    ['the legacy mx.metal spelling', LEGACY_MLX, 'legacy'],
+  ])('applies the limit through %s', (_label, mlx, expectedSpelling) => {
+    const result = runJson([
+      ...mlx,
+      'import json',
+      'applied = runner.apply_mlx_cache_policy({"limitMb": 2048, "source": "flag"})',
+      'print(json.dumps({"applied": applied, "calls": CALLS}))',
+    ]);
+    expect(result.applied).toBe(true);
+    // MB in the policy, BYTES at the MLX boundary.
+    expect(result.calls).toEqual([[expectedSpelling, 2048 * 1024 * 1024]]);
+  });
+
+  it.each([
+    ['exposes no cache-limit API', NO_CACHE_API],
+    ['is not installed at all', NO_MLX],
+  ])('degrades with a status line when the MLX %s', (_label, mlx) => {
+    const result = runJson([
+      ...mlx,
+      'import contextlib, io, json',
+      'err = io.StringIO()',
+      'with contextlib.redirect_stderr(err):',
+      '    applied = runner.apply_mlx_cache_policy({"limitMb": 2048, "source": "flag"}, announce=True)',
+      'print(json.dumps({"applied": applied, "stderr": err.getvalue()}))',
+    ]);
+    expect(result.applied).toBe(false);
+    expect(result.stderr).toMatch(/^STATUS:Installed MLX exposes no cache-limit API/);
+  });
+
+  it('reports the effective policy on the existing STATUS channel', () => {
+    const result = runJson([
+      ...MODERN_MLX,
+      'import contextlib, io, json',
+      'err = io.StringIO()',
+      'with contextlib.redirect_stderr(err):',
+      '    runner.apply_mlx_cache_policy({"limitMb": 8192, "source": "derived"}, announce=True)',
+      '    runner.apply_mlx_cache_policy({"limitMb": None, "source": "unknown-memory"}, announce=True)',
+      'print(json.dumps({"stderr": err.getvalue()}))',
+    ]);
+    expect(result.stderr.split(/\r?\n/).filter(Boolean)).toEqual([
+      'STATUS:MLX allocator cache capped at 8192 MB (derived)',
+      'STATUS:MLX allocator cache left at its default — physical memory unknown',
+    ]);
+  });
+
+  // Loading weights resets the allocator limit, and a two-stage or chained job
+  // renders more than once inside one process — so the cap has to be reasserted
+  // per render, not just at startup.
+  it('reasserts the ceiling before every render', () => {
+    const result = runJson([
+      ...MODERN_MLX,
+      'import json',
+      'from types import SimpleNamespace',
+      'runner._MLX_CACHE_POLICY = {"limitMb": 4096, "source": "flag"}',
+      'runner._install_ltx_stepwise_preview = lambda pipe, args: (lambda: None)',
+      'rendered = []',
+      'for _ in range(3):',
+      '    runner._run_with_ltx_stepwise_preview(object(), SimpleNamespace(), lambda: rendered.append(1))',
+      'print(json.dumps({"renders": len(rendered), "calls": CALLS}))',
+    ]);
+    expect(result.renders).toBe(3);
+    expect(result.calls).toEqual(Array.from({ length: 3 }, () => ['modern', 4096 * 1024 * 1024]));
+  });
+
+  // The reassertion must never be what fails a render: an MLX that raises from
+  // the setter still lets the render proceed uncapped.
+  it('lets the render proceed when the MLX setter raises', () => {
+    const result = runJson([
+      ...fakeMlx(['def boom(_n): raise RuntimeError("metal is busy")', 'core.set_cache_limit = boom']),
+      'import contextlib, io, json',
+      'err = io.StringIO()',
+      'with contextlib.redirect_stderr(err):',
+      '    applied = runner.apply_mlx_cache_policy({"limitMb": 2048, "source": "flag"}, announce=True)',
+      'print(json.dumps({"applied": applied, "stderr": err.getvalue()}))',
+    ]);
+    expect(result.applied).toBe(false);
+    expect(result.stderr).toMatch(/metal is busy/);
+  });
+
+  // The startup call and the per-render reassertion have to read the SAME
+  // policy, so the one main() installs is the one the render path picks up.
+  it('installs the run policy the render path then reasserts', () => {
+    const result = runJson([
+      ...MODERN_MLX,
+      'import json',
+      'from types import SimpleNamespace',
+      'policy = runner.configure_mlx_cache(SimpleNamespace(mlx_cache_limit_mb="2048"))',
+      'runner._install_ltx_stepwise_preview = lambda pipe, args: (lambda: None)',
+      'runner._run_with_ltx_stepwise_preview(object(), SimpleNamespace(), lambda: None)',
+      'print(json.dumps({"policy": policy, "stored": runner._MLX_CACHE_POLICY, "calls": CALLS}))',
+    ]);
+    expect(result.policy).toEqual({ limitMb: 2048, source: 'flag' });
+    expect(result.stored).toEqual(result.policy);
+    // Once at startup, once more for the render.
+    expect(result.calls).toEqual([
+      ['modern', 2048 * 1024 * 1024],
+      ['modern', 2048 * 1024 * 1024],
+    ]);
+  });
+
+  it('parses the override flag and defaults it to absent', () => {
+    const out = runPython(`${importRunner}\n${[
+      'import sys',
+      'base = ["generate_ltx2.py", "--mode", "text", "--prompt", "p", "--output", "/tmp/o.mp4", "--model", "m"]',
+      'sys.argv = base',
+      'print(runner.parse_args().mlx_cache_limit_mb)',
+      'sys.argv = base + ["--mlx-cache-limit-mb", "2048"]',
+      'print(runner.parse_args().mlx_cache_limit_mb)',
+    ].join('\n')}`);
+    expect(out.trim().split(/\r?\n/).map((l) => l.trimEnd())).toEqual(['None', '2048']);
+  });
+});
