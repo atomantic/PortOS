@@ -79,10 +79,9 @@ describe('fineTuning', () => {
       status: 'running',
     });
 
-    for (let i = 0; i < 50; i++) {
-      if (getFineTuningJobStatus(startRes.jobId).status === 'completed') break;
-      await new Promise((r) => setTimeout(r, 20));
-    }
+    await vi.waitFor(() => {
+      expect(getFineTuningJobStatus(startRes.jobId).status).toBe('completed');
+    }, { timeout: 5_000, interval: 20 });
 
     const status = getFineTuningJobStatus(startRes.jobId);
     expect(status.status).toBe('completed');

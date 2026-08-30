@@ -208,9 +208,8 @@ describe('sharing/subscriptions', () => {
     expect((await subs.listSubscriptions({ recordId: u.id }))).toHaveLength(1);
 
     await universeBuilder.deleteUniverse(u.id);
-    // Listener fans out async (readState → unsubscribe → unlink → writeState);
-    // wait one event-loop tick + a small slack for the I/O chain to settle.
-    await new Promise((r) => setTimeout(r, 50));
-    expect(await subs.listSubscriptions({ recordId: u.id })).toEqual([]);
+    await vi.waitFor(async () => {
+      expect(await subs.listSubscriptions({ recordId: u.id })).toEqual([]);
+    }, { timeout: 2_000, interval: 20 });
   });
 });
