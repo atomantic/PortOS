@@ -1062,7 +1062,7 @@ describe.skipIf(!pyBin)('generate_ltx2.py MLX allocator-cache policy', () => {
       '',
     ].join('\n');
 
-    const samplersPy = ({ ancestral = true, nativeReapply = false } = {}) => {
+    const samplersPy = ({ ancestral = true, nativeReapply = false, inlineBlend = false } = {}) => {
       const lines = [
         'from ltx_core_mlx.conditioning.types.latent_cond import LatentState, Vec, apply_denoise_mask',
         '',
@@ -1085,12 +1085,24 @@ describe.skipIf(!pyBin)('generate_ltx2.py MLX allocator-cache policy', () => {
         '    return Vec(stepped)',
         '',
         '',
+        ...(inlineBlend ? [
+          'def _blend(x0, state):',
+          '    return Vec(v * m + c * (1.0 - m) for v, c, m in',
+          '               zip(x0, state.clean_latent, state.denoise_mask))',
+          '',
+          '',
+        ] : []),
         'def ancestral_denoise_loop(model, video_state, audio_state, sigmas, observer=None):',
         '    video_x, audio_x = video_state.latent, audio_state.latent',
         '    for step, (sigma, sigma_next) in enumerate(zip(sigmas[:-1], sigmas[1:])):',
         '        video_x0, audio_x0 = model(video_x, audio_x, sigma)',
-        '        video_x0 = apply_denoise_mask(video_x0, video_state.clean_latent, video_state.denoise_mask)',
-        '        audio_x0 = apply_denoise_mask(audio_x0, audio_state.clean_latent, audio_state.denoise_mask)',
+        ...(inlineBlend ? [
+          '        video_x0 = _blend(video_x0, video_state)',
+          '        audio_x0 = _blend(audio_x0, audio_state)',
+        ] : [
+          '        video_x0 = apply_denoise_mask(video_x0, video_state.clean_latent, video_state.denoise_mask)',
+          '        audio_x0 = apply_denoise_mask(audio_x0, audio_state.clean_latent, audio_state.denoise_mask)',
+        ]),
         '        if sigma_next == 0:',
         '            video_x, audio_x = video_x0, audio_x0',
         '            break',
@@ -1269,6 +1281,25 @@ describe.skipIf(!pyBin)('generate_ltx2.py MLX allocator-cache policy', () => {
       ]);
       expect(result.mechanism).toBe('not-required');
       expect(result.untouched).toBe(true);
+    });
+
+    // The hook learns each latent's conditioning by wrapping the loop's own
+    // apply_denoise_mask call. A fork that inlines that blend never trips the
+    // recorder, so installing would report success and preserve nothing —
+    // worse than refusing, because the status line reads as a guarantee.
+    it('refuses a pin whose loop never crosses the seam the hook wraps', () => {
+      const output = runPython(`${importRunner}\n${[
+        'from types import SimpleNamespace',
+        ...installFakePin({ inlineBlend: true }),
+        IMAGE_ARGS,
+        'try:',
+        '    runner.enforce_i2v_anchor_invariant(args)',
+        'except SystemExit as exc:',
+        '    print(str(exc))',
+        'else:',
+        '    raise AssertionError("a pin the hook cannot reach was accepted")',
+      ].join('\n')}`);
+      expect(output).toMatch(/ancestral \(SDE\) Euler/);
     });
 
     // Fail closed: a pin that renoises the anchor away and gives PortOS no way

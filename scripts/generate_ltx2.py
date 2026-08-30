@@ -1245,23 +1245,42 @@ def _import_ancestral_sampler():
     return samplers
 
 
-def _sampler_preserves_conditioned_tokens(samplers) -> bool:
-    """Does the pin's own ancestral loop re-apply the mask AFTER the ancestral step?
+def _ancestral_loop_source(samplers) -> str | None:
+    """The pin's ancestral loop as source text, or None when it cannot be read.
 
-    Read off the loop's source rather than inferred from a version string,
-    because the whole problem is that PortOS does not control which commit is
-    checked out. The window starts at the LAST `ancestral_euler_step(` call, so
-    the `apply_denoise_mask` every pin runs on x0 *before* the step cannot be
-    mistaken for the post-renoise one the invariant needs. A source-less
-    sampler (a C extension, a pin shipped as a .pyc) reads as "not proven",
-    which routes to the hook rather than to trust.
+    Every verdict below is read off this rather than inferred from a version
+    string, because the whole problem is that PortOS does not control which
+    commit is checked out. A source-less sampler (a C extension, a pin shipped
+    as a .pyc) yields None and is REFUSED — the invariant cannot be proven, and
+    the hook below cannot be proven to reach the loop either.
     """
     try:
-        source = inspect.getsource(samplers.ancestral_denoise_loop)
+        return inspect.getsource(samplers.ancestral_denoise_loop)
     except (OSError, TypeError):
-        return False
-    _, marker, tail = source.rpartition("ancestral_euler_step(")
+        return None
+
+
+def _sampler_preserves_conditioned_tokens(loop_source: str) -> bool:
+    """Does the pin's own ancestral loop re-apply the mask AFTER the ancestral step?
+
+    The window starts at the LAST `ancestral_euler_step(` call, so the
+    `apply_denoise_mask` every pin runs on x0 *before* the step cannot be
+    mistaken for the post-renoise one the invariant needs.
+    """
+    _, marker, tail = loop_source.rpartition("ancestral_euler_step(")
     return bool(marker) and "apply_denoise_mask" in tail
+
+
+def _hook_can_reach_loop(loop_source: str) -> bool:
+    """Does the loop route its conditioning through the seam the hook wraps?
+
+    The hook learns each latent's (clean, mask) pair by wrapping the module-level
+    `apply_denoise_mask` the loop calls on x0. A fork that inlines that blend, or
+    reaches it through a module reference, never trips the recorder — the hook
+    would install, report success, and preserve nothing. So the call has to be
+    visible in the loop before the hook is allowed to claim the invariant.
+    """
+    return "apply_denoise_mask" in loop_source
 
 
 def _install_ancestral_anchor_hook(samplers) -> bool:
@@ -1280,11 +1299,9 @@ def _install_ancestral_anchor_hook(samplers) -> bool:
     Pairs are keyed by latent SHAPE rather than by call order, so an extra model
     call, a reordered loop, or a pipeline that denoises video only still lands on
     the right mask. Two latents sharing a shape WITHIN one step (video and audio
-    of equal token count) is the one case a shape cannot disambiguate, so that
-    key is dropped and those steps keep the pin's own behavior — never a wrong
-    mask. Restating the same shape in a LATER step is the ordinary case (stage 2
-    of a two-stage render rebuilds its latent state) and simply replaces the
-    record.
+    of equal token count) is the one case a shape cannot disambiguate, so those
+    steps keep the pin's own behavior — never a wrong mask — and only for as long
+    as the collision lasts.
     """
     try:
         from ltx_core_mlx.conditioning.types.latent_cond import apply_denoise_mask
@@ -1293,10 +1310,11 @@ def _install_ancestral_anchor_hook(samplers) -> bool:
     if getattr(samplers.ancestral_euler_step, "_portos_anchor_hook", False):
         return True
 
-    original_apply = samplers.apply_denoise_mask
+    original_apply = getattr(samplers, "apply_denoise_mask", None)
+    if original_apply is None:
+        return False
     original_step = samplers.ancestral_euler_step
     conditioning: dict = {}
-    ambiguous: set = set()
     steps_taken = [0]
 
     def _key(latent):
@@ -1308,10 +1326,19 @@ def _install_ancestral_anchor_hook(samplers) -> bool:
         key = _key(clean_latent)
         if key is not None:
             prior = conditioning.get(key)
-            same_step = prior is not None and prior[2] == steps_taken[0]
-            if same_step and (prior[0] is not clean_latent or prior[1] is not denoise_mask):
-                ambiguous.add(key)
-            conditioning[key] = (clean_latent, denoise_mask, steps_taken[0])
+            # Ambiguity is a property of THIS batch of records, not of the shape
+            # forever: two latents of equal token count inside one step cannot be
+            # told apart, but the same shape restated in a later step (stage 2
+            # rebuilding its latent state) is an ordinary replacement.
+            same_batch = prior is not None and prior["batch"] == steps_taken[0]
+            collides = same_batch and (
+                prior["clean"] is not clean_latent or prior["mask"] is not denoise_mask
+                or prior["ambiguous"]
+            )
+            conditioning[key] = {
+                "clean": clean_latent, "mask": denoise_mask,
+                "batch": steps_taken[0], "ambiguous": collides,
+            }
         return original_apply(x0, clean_latent, denoise_mask)
 
     @functools.wraps(original_step)
@@ -1319,12 +1346,10 @@ def _install_ancestral_anchor_hook(samplers) -> bool:
         result = original_step(sample, denoised, *args, **kwargs)
         key = _key(sample)
         steps_taken[0] += 1
-        if key is None or key in ambiguous:
+        record = conditioning.get(key) if key is not None else None
+        if record is None or record["ambiguous"]:
             return result
-        pair = conditioning.get(key)
-        if pair is None:
-            return result
-        clean_latent, denoise_mask = pair[0], pair[1]
+        clean_latent, denoise_mask = record["clean"], record["mask"]
         # The step returns float32 while the latent state is held in the model
         # dtype; match the result so the blend does not silently upcast the
         # whole latent. A pin (or a test double) whose arrays carry no dtype
@@ -1357,15 +1382,17 @@ def enforce_i2v_anchor_invariant(args) -> str:
     samplers = _import_ancestral_sampler()
     if samplers is None:
         return "not-required"
-    if _sampler_preserves_conditioned_tokens(samplers):
-        return "native"
-    if _install_ancestral_anchor_hook(samplers):
-        emit_status("Preserving the frame-one anchor across the ancestral denoise")
-        return "hook"
+    loop_source = _ancestral_loop_source(samplers)
+    if loop_source is not None:
+        if _sampler_preserves_conditioned_tokens(loop_source):
+            return "native"
+        if _hook_can_reach_loop(loop_source) and _install_ancestral_anchor_hook(samplers):
+            emit_status("Preserving the frame-one anchor across the ancestral denoise")
+            return "hook"
     raise SystemExit(
         "This ltx runtime samples image-to-video with the ancestral (SDE) Euler "
         "loop but neither preserves the conditioned frame across its steps nor "
-        "exposes ltx_core_mlx's apply_denoise_mask for PortOS to preserve it — "
+        "routes its conditioning through a seam PortOS can preserve it at — "
         "the render would drift off the supplied image. Re-run "
         "scripts/setup-image-video.sh to restore the pinned LTX-2.5 checkout."
     )
