@@ -689,8 +689,8 @@ export default function VideoTimelineEditor() {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0">
+      <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-port-border">
+        <div className="flex items-center gap-2 flex-1 min-w-[120px]">
           <button
             type="button"
             onClick={() => navigate('/media/timeline')}
@@ -728,7 +728,7 @@ export default function VideoTimelineEditor() {
             }}
             className="bg-transparent text-white font-medium text-lg focus:outline-none focus:bg-port-card focus:px-2 rounded transition-all"
           />
-          <span className="text-xs text-gray-500">
+          <span className="text-xs text-gray-500 hidden sm:inline truncate">
             {segments.length} segments · {overlays.length} overlays · {audio.tracks.length} beds · {formatTimecode(total)}
           </span>
         </div>
