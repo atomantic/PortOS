@@ -1,12 +1,21 @@
-import { describe, expect, it } from 'vitest';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import { afterAll, describe, expect, it } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { daemonEntryFromArgv, daemonNeedsRefresh } from './pm2-daemon-refresh.js';
 
-// A path that really exists in this checkout, so realpath resolution in the
-// comparison exercises the same branch it takes during an update.
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const OURS = join(ROOT, 'node_modules', 'pm2', 'lib', 'Daemon.js');
+// A real file on disk, because the path comparison realpath()s both sides — a
+// fixture that doesn't exist would silently take the literal-spelling fallback
+// and stop exercising the normalization. Deliberately NOT the repo's own
+// node_modules/pm2: CI installs only the server workspace (`npm ci --prefix
+// server`), so root node_modules is absent there.
+const FIXTURE_DIR = mkdtempSync(join(tmpdir(), 'pm2-daemon-refresh-'));
+const OURS = join(FIXTURE_DIR, 'lib', 'Daemon.js');
+mkdirSync(join(FIXTURE_DIR, 'lib'), { recursive: true });
+writeFileSync(OURS, '// fixture\n');
+
+afterAll(() => rmSync(FIXTURE_DIR, { recursive: true, force: true }));
+
 const VERSION = '7.0.4';
 
 const report = (overrides = {}) => ({
@@ -27,8 +36,10 @@ describe('daemonEntryFromArgv', () => {
     expect(daemonEntryFromArgv(['/usr/bin/node', OURS])).toBe(OURS);
   });
 
-  it('accepts the comma-joined string an older daemon may report', () => {
-    expect(daemonEntryFromArgv(`/usr/bin/node,${OURS}`)).toBe(OURS);
+  it('strips the whitespace a comma-joined argv leaves on later parts', () => {
+    // realpath() rejects ' /path/Daemon.js', so an untrimmed return would compare
+    // as a mismatch and force the daemon reload this whole probe exists to avoid.
+    expect(daemonEntryFromArgv(`/usr/bin/node, ${OURS}`)).toBe(OURS);
   });
 
   it('returns null when argv carries no Daemon.js entry', () => {
@@ -43,7 +54,7 @@ describe('daemonNeedsRefresh', () => {
     expect(check()).toEqual({ needed: false, reason: expect.any(String) });
   });
 
-  it('reloads when the daemon runs from another project\'s pm2 install', () => {
+  it("reloads when the daemon runs from another project's pm2 install", () => {
     // The MODULE_NOT_FOUND case — a stale ProcessContainerFork.js path.
     expect(check({ argv: ['/usr/bin/node', '/other/project/node_modules/pm2/lib/Daemon.js'] }).needed).toBe(true);
   });
@@ -59,7 +70,7 @@ describe('daemonNeedsRefresh', () => {
   });
 
   it('treats a differently-spelled path to the same file as a match', () => {
-    const spelled = join(ROOT, 'node_modules', 'pm2', 'lib', '..', 'lib', 'Daemon.js');
+    const spelled = join(FIXTURE_DIR, 'lib', '..', 'lib', 'Daemon.js');
     expect(check({ argv: ['/usr/bin/node', spelled] }).needed).toBe(false);
   });
 });

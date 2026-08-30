@@ -56,7 +56,10 @@ const normalizePath = (path) => {
  */
 export function daemonEntryFromArgv(argv) {
   const parts = Array.isArray(argv) ? argv : typeof argv === 'string' ? argv.split(',') : [];
-  return parts.find((part) => /Daemon\.js$/.test(String(part).trim())) ?? null;
+  // Trim before matching AND return the trimmed value — a comma-joined argv leaves
+  // a leading space on every part after the first, and realpath() rejects ' /path',
+  // which would compare as a mismatch and force a needless daemon reload.
+  return parts.map((part) => String(part).trim()).find((part) => /Daemon\.js$/.test(part)) ?? null;
 }
 
 /**
@@ -88,14 +91,37 @@ export function daemonNeedsRefresh({ report, expectedEntry, expectedVersion }) {
   return { needed: false, reason: 'daemon already runs this checkout of pm2' };
 }
 
+// A wedged daemon must not hang the self-update: update.sh runs this inline with
+// no timeout of its own, so an RPC that never answers would stall the whole
+// update indefinitely. Bound it and let the caller's catch fail open instead.
+const PROBE_TIMEOUT_MS = 15000;
+
+const withTimeout = (promise, ms, label) => {
+  let timer;
+  return Promise.race([
+    promise.finally(() => clearTimeout(timer)),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    }),
+  ]);
+};
+
 async function fetchReport(pm2) {
-  await new Promise((resolve, reject) => {
-    pm2.connect((err) => (err ? reject(err) : resolve()));
-  });
+  await withTimeout(
+    new Promise((resolve, reject) => {
+      pm2.connect((err) => (err ? reject(err) : resolve()));
+    }),
+    PROBE_TIMEOUT_MS,
+    'pm2 connect',
+  );
   try {
-    return await new Promise((resolve, reject) => {
-      pm2.Client.executeRemote('getReport', {}, (err, report) => (err ? reject(err) : resolve(report)));
-    });
+    return await withTimeout(
+      new Promise((resolve, reject) => {
+        pm2.Client.executeRemote('getReport', {}, (err, report) => (err ? reject(err) : resolve(report)));
+      }),
+      PROBE_TIMEOUT_MS,
+      'pm2 getReport',
+    );
   } finally {
     pm2.disconnect();
   }
