@@ -30,7 +30,15 @@ vi.mock('fs', async () => {
   return { ...actual, createReadStream: vi.fn(actual.createReadStream) };
 });
 
+// appendFile is spied (not stubbed) so the one-write-per-batch contract stays
+// assertable while the bytes still land on disk for the offset assertions.
+vi.mock('fs/promises', async () => {
+  const actual = await vi.importActual('fs/promises');
+  return { ...actual, appendFile: vi.fn(actual.appendFile) };
+});
+
 import { createReadStream } from 'fs';
+import { appendFile } from 'fs/promises';
 import {
   initSyncLog,
   getCurrentSeq,
@@ -42,10 +50,16 @@ import {
 
 const syncLogPath = () => join(getTempRoot(), 'brain', 'sync_log.jsonl');
 
-/** Byte offset of the (1-based) nth line of the on-disk log. */
+/**
+ * Byte offset at which line n+1 starts, found by locating newlines in the raw
+ * bytes. Deliberately NOT `Buffer.byteLength(line) + 1` summing: that is the
+ * production arithmetic, so it could not catch a shared miscount.
+ */
 const lineOffset = (n) => {
-  const lines = readFileSync(syncLogPath(), 'utf8').split('\n').slice(0, n);
-  return lines.reduce((sum, line) => sum + Buffer.byteLength(line, 'utf8') + 1, 0);
+  const buf = readFileSync(syncLogPath());
+  let at = -1;
+  for (let i = 0; i < n; i++) at = buf.indexOf(0x0a, at + 1);
+  return at + 1;
 };
 
 /** `start` passed to the most recent createReadStream call. */
@@ -124,6 +138,15 @@ describe('brainSyncLog', () => {
       const result = await getChangesSince(1);
       expect(result.changes.map(c => c.seq)).toEqual([2]);
       expect(result.changes[0].record).toEqual({ name: 'Alice' });
+
+      // …and the entry must survive a restart. If the append had been
+      // concatenated onto the fragment, the merged line would not parse and
+      // seq 2 would be re-minted for a different record on the next write.
+      await initSyncLog();
+      expect(getCurrentSeq()).toBe(2);
+      const afterRestart = await getChangesSince(1);
+      expect(afterRestart.changes.map(c => c.seq)).toEqual([2]);
+      expect(afterRestart.changes[0].record).toEqual({ name: 'Alice' });
     });
   });
 
@@ -175,6 +198,15 @@ describe('brainSyncLog', () => {
       expect(getCurrentSeq()).toBe(3);
     });
 
+    it('makes a single appendFile call for the entire batch', async () => {
+      await appendChanges([
+        { op: 'create', type: 'people', id: 'p1', record: { name: 'A' }, originInstanceId: 'inst-1' },
+        { op: 'update', type: 'people', id: 'p2', record: { name: 'B' }, originInstanceId: 'inst-1' }
+      ]);
+
+      expect(appendFile).toHaveBeenCalledTimes(1);
+    });
+
     it('writes newline-separated JSON entries ending with newline', async () => {
       await appendChanges([
         { op: 'create', type: 'people', id: 'p1', record: { name: 'A' }, originInstanceId: 'inst-1' },
@@ -194,6 +226,7 @@ describe('brainSyncLog', () => {
 
       expect(entries).toEqual([]);
       expect(getCurrentSeq()).toBe(0);
+      expect(appendFile).not.toHaveBeenCalled();
     });
 
     it('returns entries with correct shape', async () => {
@@ -374,6 +407,19 @@ describe('brainSyncLog', () => {
       const fromThree = await getChangesSince(3);
       expect(fromThree.changes.map(c => c.seq)).toEqual([4, 5]);
       expect(lastReadStart()).toBe(lineOffset(1));
+    });
+
+    it('keeps a retained line with no seq out of the index', async () => {
+      // A seq-less line is retained in the file (it is not below minSeq), but
+      // indexing it would put a non-number into the ascending seq array and
+      // break the binary search — hiding every earlier entry from peers.
+      writeLog('{"seq":1,"op":"create"}\n{"note":"no seq"}\n{"seq":3,"op":"delete"}\n');
+      await initSyncLog();
+
+      expect(await compactLog(0)).toBe(0);
+
+      expect((await getChangesSince(0)).changes.map(c => c.seq)).toEqual([1, 3]);
+      expect((await getChangesSince(1)).changes.map(c => c.seq)).toEqual([3]);
     });
 
     it('keeps appending at the right offset after compaction', async () => {

@@ -29,6 +29,9 @@ let offsets = [];
 // Byte length of the file as this module last observed it — the offset the next
 // appended line will land at.
 let fileSize = 0;
+// The file ends mid-line (a crash during a previous append). The next append
+// must terminate that fragment first, or it would swallow the new entry.
+let pendingNewline = false;
 let indexLoaded = false;
 
 async function ensureBrainDir() {
@@ -69,10 +72,13 @@ async function loadIndex() {
   offsets = [];
   fileSize = 0;
   currentSeq = 0;
+  pendingNewline = false;
   indexLoaded = true;
   if (!existsSync(SYNC_LOG_FILE)) return;
 
-  for await (const { text, offset } of streamLines(SYNC_LOG_FILE)) {
+  let terminatedBytes = 0;
+  for await (const { text, offset, byteLength } of streamLines(SYNC_LOG_FILE)) {
+    terminatedBytes = offset + byteLength;
     const entry = safeJSONParse(text, null);
     if (typeof entry?.seq !== 'number') continue;
     offsets.push({ seq: entry.seq, offset });
@@ -81,10 +87,37 @@ async function loadIndex() {
   // Real byte size, not the offset past the last complete line: an unterminated
   // tail still occupies bytes, so the next append lands after it.
   fileSize = (await stat(SYNC_LOG_FILE)).size;
+  pendingNewline = fileSize > terminatedBytes;
 }
 
 async function ensureIndex() {
   if (!indexLoaded) await loadIndex();
+}
+
+/**
+ * Write `lines` to the log and index them at the offsets they landed on.
+ *
+ * A crash fragment left by a previous append is terminated first, so the new
+ * entries stay on lines of their own — otherwise the fragment would swallow the
+ * first one and a later boot would re-mint its seq for a different record.
+ *
+ * On a failed (possibly partial) write the index is marked stale rather than
+ * advanced: `fileSize` can no longer be trusted, so the next call rescans.
+ */
+async function writeIndexedLines(lines) {
+  const payload = (pendingNewline ? '\n' : '') + lines.map(({ text }) => text).join('\n') + '\n';
+  await appendFile(SYNC_LOG_FILE, payload).catch((err) => {
+    indexLoaded = false;
+    throw err;
+  });
+  if (pendingNewline) {
+    fileSize += 1;
+    pendingNewline = false;
+  }
+  for (const { seq, text } of lines) {
+    offsets.push({ seq, offset: fileSize });
+    fileSize += Buffer.byteLength(text, 'utf8') + 1;
+  }
 }
 
 /**
@@ -136,11 +169,7 @@ export async function appendChange(op, type, id, record, originInstanceId) {
       originInstanceId,
       ts: new Date().toISOString()
     };
-    const line = JSON.stringify(entry) + '\n';
-    await appendFile(SYNC_LOG_FILE, line);
-    // Index after the write so a failed append can't skew every later offset.
-    offsets.push({ seq: entry.seq, offset: fileSize });
-    fileSize += Buffer.byteLength(line, 'utf8');
+    await writeIndexedLines([{ seq: entry.seq, text: JSON.stringify(entry) }]);
     return entry;
   });
 }
@@ -160,17 +189,13 @@ export async function appendChanges(entries) {
     for (const { op, type, id, record, originInstanceId } of entries) {
       nextSeq++;
       const entry = { seq: nextSeq, op, type, id, record, originInstanceId, ts: new Date().toISOString() };
-      lines.push(JSON.stringify(entry));
+      lines.push({ seq: nextSeq, text: JSON.stringify(entry) });
       results.push(entry);
     }
     // Reserve sequence numbers before write to avoid reuse on partial failure
     // (matches appendChange semantics where currentSeq advances pre-write)
     currentSeq = nextSeq;
-    await appendFile(SYNC_LOG_FILE, lines.join('\n') + '\n');
-    for (const [i, line] of lines.entries()) {
-      offsets.push({ seq: results[i].seq, offset: fileSize });
-      fileSize += Buffer.byteLength(line, 'utf8') + 1;
-    }
+    await writeIndexedLines(lines);
     return results;
   });
 }
@@ -197,7 +222,9 @@ export async function getChangesSince(sinceSeq, limit = 100) {
     const changes = [];
     for await (const { text } of streamLines(SYNC_LOG_FILE, offsets[start].offset)) {
       const entry = safeJSONParse(text, null);
-      if (!entry || entry.seq <= sinceSeq) continue;
+      // A line without a numeric seq is unsequenceable — shipping it would set
+      // the peer's cursor to undefined on the next maxSeq.
+      if (typeof entry?.seq !== 'number' || entry.seq <= sinceSeq) continue;
       changes.push(entry);
       if (changes.length >= limit) break;
     }
@@ -237,14 +264,18 @@ export async function compactLog(minSeq) {
     const newContent = kept.length > 0 ? kept.map(k => k.line).join('\n') + '\n' : '';
     await atomicWrite(SYNC_LOG_FILE, newContent);
 
-    // Rebuild the index from what we just wrote — the offsets all moved.
+    // Rebuild the index from what we just wrote — the offsets all moved. A kept
+    // line without a numeric seq keeps its bytes but stays OUT of the index:
+    // a non-numeric seq in the array would break firstIndexAfter's binary
+    // search and hide every entry before it from peers.
     offsets = [];
     let offset = 0;
     for (const { line, seq } of kept) {
-      offsets.push({ seq, offset });
+      if (typeof seq === 'number') offsets.push({ seq, offset });
       offset += Buffer.byteLength(line, 'utf8') + 1;
     }
     fileSize = offset;
+    pendingNewline = false;
     indexLoaded = true;
 
     console.log(`🔄 Compacted sync log: dropped ${dropped}, kept ${kept.length}`);
