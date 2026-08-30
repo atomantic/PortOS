@@ -28,6 +28,7 @@ import {
 import {
   analyzeSeriesStoryOutlines,
   analyzeStoryOutline,
+  analyzeStoryOutlineTeleplaySync,
   describeStoryOutlineForPrompt,
   sanitizeStoryOutline,
 } from '../../lib/fableLoomOutline.js';
@@ -318,8 +319,21 @@ export function mapGeneratedGraph(parsed) {
   }));
   if (!nodes.some((n) => n.isEnding)) throw aiShapeError('The model returned a graph with no endings');
   const startNodeId = idByKey.get(parsed?.startKey) ?? nodes[0].id;
-  return { nodes, startNodeId };
+  return { nodes, startNodeId, idByKey };
 }
+
+const remapOutlineToExpandedNodeIds = (outline, idByKey) => ({
+  ...outline,
+  startKey: idByKey.get(outline.startKey) || outline.startKey,
+  scenes: outline.scenes.map((scene) => ({
+    ...scene,
+    key: idByKey.get(scene.key) || scene.key,
+    transitions: (scene.transitions || []).map((transition) => ({
+      ...transition,
+      targetKey: idByKey.get(transition.targetKey) || transition.targetKey,
+    })),
+  })),
+});
 
 const episodeOutlineFingerprint = (loom, episode) => JSON.stringify({
   loom: {
@@ -340,10 +354,22 @@ const episodeOutlineFingerprint = (loom, episode) => JSON.stringify({
   episodeId: episode.id,
 });
 
-const outlineStructuralAnalysis = (loom, episode) => analyzeStoryOutline(episode.storyOutline, {
-  participationMode: loom.participationMode,
-  requireAudienceIntroduction: requiresAudienceIntroduction(loom, episode),
-});
+const outlineStructuralAnalysis = (loom, episode) => {
+  const structural = analyzeStoryOutline(episode.storyOutline, {
+    participationMode: loom.participationMode,
+    requireAudienceIntroduction: requiresAudienceIntroduction(loom, episode),
+  });
+  const teleplaySync = analyzeStoryOutlineTeleplaySync(episode, episode.storyOutline, {
+    participationMode: loom.participationMode,
+  });
+  return {
+    issues: [...structural.issues, ...teleplaySync.issues],
+    stats: {
+      ...structural.stats,
+      errorCount: structural.stats.errorCount + teleplaySync.stats.errorCount,
+    },
+  };
+};
 
 const outlineInvalidError = (analysis, message = 'The episode outline must be valid before teleplay expansion') => {
   const firstIssue = analysis?.issues?.find((issue) => issue.severity === 'error');
@@ -451,7 +477,7 @@ export async function weaveEpisode(loomId, episodeId, {
   const loom = await requireLoom(loomId);
   const episode = findEpisode(loom, episodeId);
   const outlineValidation = expandFromOutline ? outlineStructuralAnalysis(loom, episode) : null;
-  if (expandFromOutline && (!episode.storyOutline || episode.storyOutline.validation?.status !== 'valid')) {
+  if (expandFromOutline && episode.storyOutline?.validation?.status !== 'valid') {
     throw outlineInvalidError(outlineValidation);
   }
   if (expandFromOutline && outlineValidation.stats.errorCount) {
@@ -470,6 +496,7 @@ export async function weaveEpisode(loomId, episodeId, {
   if (episode.nodes.length && !replace) {
     throw new ServerError('Episode already has scenes — pass replace to regenerate', { status: 409, code: 'EPISODE_NOT_EMPTY' });
   }
+  const sourceFingerprint = episodeOutlineFingerprint(loom, episode);
   const canonDigest = await buildCanonDigest(loom);
   const { content, runId } = await runLoomAi('fableloom-weave-episode', {
     storyContext: storyContext(loom, episode),
@@ -488,7 +515,20 @@ export async function weaveEpisode(loomId, episodeId, {
     action: 'weave-episode', label: 'Weaving episode', source: 'fableloom-weave',
   });
 
-  const { nodes, startNodeId } = mapGeneratedGraph(content);
+  const { nodes, startNodeId, idByKey } = mapGeneratedGraph(content);
+  const expandedOutline = expandFromOutline
+    ? remapOutlineToExpandedNodeIds(episode.storyOutline, idByKey)
+    : null;
+  if (expandedOutline) {
+    const sync = analyzeStoryOutlineTeleplaySync(
+      { ...episode, nodes, startNodeId },
+      expandedOutline,
+      { participationMode: loom.participationMode },
+    );
+    if (!sync.stats.matches) {
+      throw aiShapeError(`The expanded teleplay changed its validated beat contract: ${sync.issues[0].message}`);
+    }
+  }
   const generatedAnalysis = analyzeEpisodeGraph(
     { ...episode, nodes, startNodeId },
     {
@@ -517,10 +557,21 @@ export async function weaveEpisode(loomId, episodeId, {
   }
   const updated = await mutateLoom(loomId, (current) => {
     const ep = findEpisode(current, episodeId);
+    if (episodeOutlineFingerprint(current, ep) !== sourceFingerprint) {
+      throw new ServerError('The episode changed while its teleplay was being woven', {
+        status: 409,
+        code: 'LOOM_CHANGED_DURING_GENERATION',
+      });
+    }
     // Stamped with the format they were generated in, so a later reformat can
     // tell them apart from scenes already in the target format.
     ep.nodes = nodes.map((n) => ({ ...n, format: asLoomFormat(loom.format) }));
     ep.startNodeId = startNodeId;
+    if (expandedOutline) {
+      ep.storyOutline = expandedOutline;
+    } else if (ep.storyOutline) {
+      ep.storyOutline.validation = { status: 'draft', issues: [] };
+    }
     ep.updatedAt = new Date().toISOString();
     return current;
   });
@@ -644,7 +695,7 @@ const FEEDBACK_NODE_FIELDS = [
 const FEEDBACK_TRANSITION_FIELDS = ['targetNodeId', 'intent', 'triggers', 'description'];
 const FEEDBACK_STRING_NODE_FIELDS = new Set(['title', 'prose', 'imagePrompt', 'videoPrompt', 'endingLabel']);
 
-const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+const hasOwn = (value, key) => Object.hasOwn(value, key);
 
 /**
  * Keep feedback edits sparse and graph-safe. The model may revise metadata,

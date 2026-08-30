@@ -517,7 +517,9 @@ export async function runStagedLLM(stageName, variables, options = {}) {
  * user-defined editorial checks (#1346) whose prompt is authored from the UI.
  *
  * Same options as runStagedLLM (providerOverride / modelOverride /
- * timeoutOverride / returnsJson / source).
+ * timeoutOverride / returnsJson / source / allowFallback). Set
+ * `allowFallback: false` when the caller budgeted an already-rendered prompt
+ * against the resolved provider and a smaller fallback could not accept it.
  */
 export async function runInlineLLM(prompt, options = {}) {
   if (typeof prompt !== 'string' || !prompt.trim()) {
@@ -600,6 +602,7 @@ async function executeStagePrompt({ stage, label, prompt, options }) {
     prompt,
     source: options.source || 'staged-llm',
     effort: effectiveEffort,
+    allowFallback: options.allowFallback !== false,
     // createRun.timeout is returned but not persisted into metadata.json
     // by the toolkit (only providerId/model/source/etc. are written at
     // creation time). We always patch below to record the effective
@@ -653,6 +656,7 @@ async function executeStagePrompt({ stage, label, prompt, options }) {
     // provider's ladder and omits the flag entirely for a provider with no
     // effort control, so no capability check is needed here.
     effort: effectiveEffort,
+    allowFallback: options.allowFallback !== false,
     onRunCreated: options.onRunCreated,
     onRunReady: options.onRunReady,
     onRunSettled: options.onRunSettled,

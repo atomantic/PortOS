@@ -28,7 +28,7 @@ When an existing graph is present, this is a reweave: preserve its story events,
 
 {{outlineDigest}}
 
-When a validated beat outline is present, it is the authoritative story plan for this expansion. Expand every outline beat into one corresponding camera-cut node in the same dramatic order, preserve its path meanings and ending outcomes, and add only the scene-level prose and production directions needed to make those beats playable. Do not replace the established protagonist, world, or episode handoff.
+When a validated beat outline is present, it is the authoritative story plan for this expansion. Reuse every supplied outline beat `key` exactly, including `startKey` and transition `targetKey` values; return one node for every beat with no additions or omissions. Preserve each beat's title, playback mode, audience connection, protagonist presence, ending contract, path targets, and path intents exactly. Add only the scene-level prose and production directions needed to make those beats playable. Do not replace the established protagonist, world, or episode handoff.
 
 ## Design contract
 

@@ -63,6 +63,7 @@ const compactDeterministic = (deterministic) => ({
 });
 
 const residualFindings = (playtest) => [
+  ...(playtest.diagnostics?.findings || []),
   ...playtest.deterministic.episodes.flatMap((episode) => episode.issues.map((issue) => ({
     severity: issue.severity === 'error' ? 'high' : 'medium',
     category: 'structure',
@@ -149,6 +150,7 @@ async function runRound(run, guidance) {
     before: remediation.before,
     after: remediation.after,
     evaluation: remediation.evaluation,
+    diagnostics: playtest.diagnostics,
     deterministic: compactDeterministic(playtest.deterministic),
     review: playtest.review,
     passed: playtest.passed,

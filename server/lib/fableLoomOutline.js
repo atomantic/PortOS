@@ -36,6 +36,9 @@ export const OUTLINE_ISSUE_CODES = Object.freeze({
   LATE_AUDIENCE_CONNECTION: 'LATE_AUDIENCE_CONNECTION',
   MISSING_EPISODE_OUTLINE: 'MISSING_EPISODE_OUTLINE',
   EPISODE_OUTLINE_NOT_VALIDATED: 'EPISODE_OUTLINE_NOT_VALIDATED',
+  TELEPLAY_SCENE_MEMBERSHIP_MISMATCH: 'TELEPLAY_SCENE_MEMBERSHIP_MISMATCH',
+  TELEPLAY_START_MISMATCH: 'TELEPLAY_START_MISMATCH',
+  TELEPLAY_SCENE_CONTRACT_MISMATCH: 'TELEPLAY_SCENE_CONTRACT_MISMATCH',
   MISSING_OVERNIGHT_VOICEMAIL: 'MISSING_OVERNIGHT_VOICEMAIL',
   EMPTY_OVERNIGHT_VOICEMAIL: 'EMPTY_OVERNIGHT_VOICEMAIL',
   MISSING_NEXT_SEASON_TEASER: 'MISSING_NEXT_SEASON_TEASER',
@@ -298,6 +301,69 @@ export function analyzeStoryOutline(outline, {
   return { issues, stats };
 }
 
+const sortedTransitionContract = (transitions, targetKey) => asArray(transitions)
+  .map((transition) => `${transition?.[targetKey] || ''}\u0000${transition?.intent || ''}`)
+  .sort();
+
+/** Validate that a persisted beat outline still mirrors an expanded teleplay. */
+export function analyzeStoryOutlineTeleplaySync(episode, outline, {
+  participationMode = 'protagonist',
+} = {}) {
+  const nodes = asArray(episode?.nodes);
+  if (!nodes.length) return { issues: [], stats: { errorCount: 0, matches: true } };
+  const scenes = asArray(outline?.scenes);
+  const byKey = new Map(scenes.map((scene) => [scene.key, scene]));
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const issues = [];
+  const push = (code, message, extra = {}) => outlineIssue(issues, code, 'error', message, extra);
+
+  if (scenes.length !== nodes.length
+    || byKey.size !== nodes.length
+    || scenes.some((scene) => !nodeIds.has(scene.key))) {
+    push(
+      OUTLINE_ISSUE_CODES.TELEPLAY_SCENE_MEMBERSHIP_MISMATCH,
+      'The beat outline does not cover every expanded teleplay scene exactly once.',
+    );
+  }
+  if (outline?.startKey !== episode?.startNodeId) {
+    push(
+      OUTLINE_ISSUE_CODES.TELEPLAY_START_MISMATCH,
+      'The beat outline opening does not match the expanded teleplay opening scene.',
+      { sceneKey: outline?.startKey || undefined },
+    );
+  }
+  for (const node of nodes) {
+    const scene = byKey.get(node.id);
+    if (!scene) continue;
+    const expectedProtagonistPresence = node.protagonistPresence
+      || (participationMode === 'helper'
+        && node.audienceConnection === 'connected'
+        && node.playbackMode !== 'cut'
+        ? 'offscreen'
+        : 'onscreen');
+    const semanticFieldsMatch = scene.title === node.title
+      && scene.playbackMode === node.playbackMode
+      && scene.audienceConnection === node.audienceConnection
+      && scene.protagonistPresence === expectedProtagonistPresence
+      && scene.isEnding === node.isEnding
+      && (scene.endingLabel || '') === (node.endingLabel || '');
+    const outlineTransitions = sortedTransitionContract(scene.transitions, 'targetKey');
+    const nodeTransitions = sortedTransitionContract(node.transitions, 'targetNodeId');
+    if (!semanticFieldsMatch || JSON.stringify(outlineTransitions) !== JSON.stringify(nodeTransitions)) {
+      push(
+        OUTLINE_ISSUE_CODES.TELEPLAY_SCENE_CONTRACT_MISMATCH,
+        `Beat "${scene.title || scene.key}" no longer matches its expanded teleplay scene contract.`,
+        { sceneKey: node.id },
+      );
+    }
+  }
+
+  return {
+    issues,
+    stats: { errorCount: issues.length, matches: issues.length === 0 },
+  };
+}
+
 /**
  * Validate outline coverage for the complete series. This is the hard gate
  * used by teleplay expansion: authors can draft episodes in order, but no
@@ -307,6 +373,7 @@ export function analyzeStoryOutline(outline, {
 export function analyzeSeriesStoryOutlines(loom) {
   const episodes = asArray(loom?.episodes);
   const issues = [];
+  const readyEpisodeIds = new Set();
   const push = (code, severity, message, extra = {}) => outlineIssue(issues, code, severity, message, extra);
   const validVoicemails = new Map(asArray(loom?.seriesPlan?.interEpisodeVoicemails)
     .filter((item) => item?.fromEpisodeId && item?.toEpisodeId)
@@ -326,11 +393,27 @@ export function analyzeSeriesStoryOutlines(loom) {
       participationMode: loom?.participationMode,
       requireAudienceIntroduction: index === 0,
     });
-    validation.issues.forEach((issue) => push(issue.code, issue.severity, `Episode ${episode.number || index + 1}: ${issue.message}`, {
-      episodeId: episode.id,
-      ...(issue.sceneKey ? { sceneKey: issue.sceneKey } : {}),
-      ...(Number.isInteger(issue.transitionIndex) ? { transitionIndex: issue.transitionIndex } : {}),
-    }));
+    validation.issues.forEach((issue) => {
+      push(issue.code, issue.severity, `Episode ${episode.number || index + 1}: ${issue.message}`, {
+        episodeId: episode.id,
+        ...(issue.sceneKey ? { sceneKey: issue.sceneKey } : {}),
+        ...(Number.isInteger(issue.transitionIndex) ? { transitionIndex: issue.transitionIndex } : {}),
+      });
+    });
+    const teleplaySync = analyzeStoryOutlineTeleplaySync(episode, episode.storyOutline, {
+      participationMode: loom?.participationMode,
+    });
+    teleplaySync.issues.forEach((issue) => {
+      push(
+        issue.code,
+        issue.severity,
+        `Episode ${episode.number || index + 1}: ${issue.message}`,
+        {
+          episodeId: episode.id,
+          ...(issue.sceneKey ? { sceneKey: issue.sceneKey } : {}),
+        },
+      );
+    });
     if (episode.storyOutline.validation?.status !== 'valid') {
       push(
         OUTLINE_ISSUE_CODES.EPISODE_OUTLINE_NOT_VALIDATED,
@@ -338,6 +421,8 @@ export function analyzeSeriesStoryOutlines(loom) {
         `Episode ${episode.number || index + 1}'s beat outline must be validated before teleplay expansion.`,
         { episodeId: episode.id },
       );
+    } else if (validation.stats.errorCount === 0 && teleplaySync.stats.matches) {
+      readyEpisodeIds.add(episode.id);
     }
   });
 
@@ -373,7 +458,7 @@ export function analyzeSeriesStoryOutlines(loom) {
     );
   }
 
-  const readyEpisodeCount = episodes.filter((episode) => episode.storyOutline?.validation?.status === 'valid').length;
+  const readyEpisodeCount = readyEpisodeIds.size;
   return {
     issues,
     stats: {

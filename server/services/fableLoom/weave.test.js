@@ -73,6 +73,35 @@ const generatedOutline = () => ({
   ],
 });
 
+const generatedGraphFromOutline = () => ({
+  startKey: 's1',
+  nodes: [
+    {
+      key: 's1', title: 'Signal', prose: 'The signal breaks through the static.',
+      playbackMode: 'cut', audienceConnection: 'disconnected', protagonistPresence: 'onscreen',
+      transitions: [{ targetKey: 's2', intent: 'follow the signal' }],
+    },
+    {
+      key: 's2', title: 'The choice', prose: 'Two routes demand different costs.',
+      playbackMode: 'decision', audienceConnection: 'disconnected', protagonistPresence: 'onscreen',
+      transitions: [
+        { targetKey: 's3', intent: 'protect the survivors' },
+        { targetKey: 's4', intent: 'take the shortcut' },
+      ],
+    },
+    {
+      key: 's3', title: 'Rescue', prose: 'The survivors escape.',
+      playbackMode: 'decision', audienceConnection: 'disconnected', protagonistPresence: 'onscreen',
+      isEnding: true, endingLabel: 'The long way home', transitions: [],
+    },
+    {
+      key: 's4', title: 'Shortcut', prose: 'The door opens.',
+      playbackMode: 'decision', audienceConnection: 'disconnected', protagonistPresence: 'onscreen',
+      isEnding: true, endingLabel: 'The open door', transitions: [],
+    },
+  ],
+});
+
 describe('mapGeneratedGraph', () => {
   it('mints server ids, remaps targets, and drops unknown-target transitions', () => {
     const { nodes, startNodeId } = mapGeneratedGraph(generatedGraph());
@@ -185,12 +214,16 @@ describe('weaveEpisode', () => {
     expect(checked.validation.issues).toEqual([]);
     expect(checked.outline.validation.status).toBe('valid');
 
-    runStagedLLM.mockResolvedValueOnce({ content: generatedGraph(), runId: 'expand-run' });
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraphFromOutline(), runId: 'expand-run' });
     const expanded = await weaveEpisode(loomId, episodeId, {
       guidance: 'Write the full teleplay now.', replace: false, expandFromOutline: true,
     });
     expect(expanded.runId).toBe('expand-run');
-    expect(expanded.loom.episodes[0].nodes).toHaveLength(3);
+    expect(expanded.loom.episodes[0].nodes).toHaveLength(4);
+    expect(expanded.loom.episodes[0].storyOutline.scenes.map((scene) => scene.key))
+      .toEqual(expanded.loom.episodes[0].nodes.map((node) => node.id));
+    expect(expanded.loom.episodes[0].storyOutline.startKey)
+      .toBe(expanded.loom.episodes[0].startNodeId);
     expect(runStagedLLM.mock.calls[1][0]).toBe('fableloom-weave-episode');
     expect(runStagedLLM.mock.calls[1][1].outlineDigest).toContain('[s1] Signal');
   });
@@ -221,6 +254,47 @@ describe('weaveEpisode', () => {
       .rejects.toMatchObject({ code: 'SERIES_OUTLINE_INVALID' });
     expect(withSecond.episodes).toHaveLength(2);
     expect(runStagedLLM).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps remapped outlines ready while expanding episodes in series order', async () => {
+    const { loomId, episodeId } = await setup();
+    const withSecond = await addEpisode(loomId, { title: 'Second', synopsis: 'The consequence.' });
+    const secondEpisodeId = withSecond.episodes[1].id;
+
+    runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-1' });
+    await generateEpisodeOutline(loomId, episodeId, {});
+    await validateEpisodeOutline(loomId, episodeId);
+    runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-2' });
+    await generateEpisodeOutline(loomId, secondEpisodeId, {});
+    await validateEpisodeOutline(loomId, secondEpisodeId);
+
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraphFromOutline(), runId: 'expand-1' });
+    const firstExpanded = await weaveEpisode(loomId, episodeId, { expandFromOutline: true });
+    expect(firstExpanded.loom.episodes[0].storyOutline.validation.status).toBe('valid');
+
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraphFromOutline(), runId: 'expand-2' });
+    const secondExpanded = await weaveEpisode(loomId, secondEpisodeId, { expandFromOutline: true });
+    expect(secondExpanded.loom.episodes.every((item) => (
+      item.storyOutline.validation.status === 'valid'
+    ))).toBe(true);
+  });
+
+  it('marks validation invalid when an expanded teleplay has drifted from its outline', async () => {
+    const { loomId, episodeId } = await setup();
+    runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-run' });
+    await generateEpisodeOutline(loomId, episodeId, {});
+    await validateEpisodeOutline(loomId, episodeId);
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraphFromOutline(), runId: 'expand-run' });
+    await weaveEpisode(loomId, episodeId, { expandFromOutline: true });
+    await updateNode(loomId, episodeId, (await getLoom(loomId)).episodes[0].nodes[0].id, {
+      title: 'Changed after expansion',
+    });
+
+    const checked = await validateEpisodeOutline(loomId, episodeId);
+    expect(checked.outline.validation.status).toBe('invalid');
+    expect(checked.validation.issues).toContainEqual(expect.objectContaining({
+      code: 'TELEPLAY_SCENE_CONTRACT_MISMATCH',
+    }));
   });
 });
 
@@ -614,7 +688,7 @@ describe('reformatEpisodeScenes', () => {
 
   it('rewrites every returned scene, pins the format, and leaves the graph alone', async () => {
     const { loomId, episodeId, gateId, insideId } = await proseSetup();
-    runStagedLLM.mockImplementation(async (stage, variables) => ({
+    runStagedLLM.mockImplementation(async (_stage, variables) => ({
       content: {
         scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: `INT. GATE - NIGHT\n\n${sc.prose}` })),
       },
@@ -668,7 +742,7 @@ describe('reformatEpisodeScenes', () => {
       await addNode(loomId, episodeId, { title: `Scene ${i}`, prose: `Prose ${i}.` });
     }
     let call = 0;
-    runStagedLLM.mockImplementation(async (stage, variables) => {
+    runStagedLLM.mockImplementation(async (_stage, variables) => {
       call += 1;
       if (call > 1) throw new Error('provider died mid-run');
       return { content: { scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: `INT. ${sc.prose}` })) } };
@@ -684,7 +758,7 @@ describe('reformatEpisodeScenes', () => {
     const { loomId, episodeId } = await setup();
     await addNode(loomId, episodeId, { title: 'Written', prose: 'You stand before it.' });
     await addNode(loomId, episodeId, { title: 'Placeholder with no prose yet' });
-    runStagedLLM.mockImplementation(async (stage, variables) => ({
+    runStagedLLM.mockImplementation(async (_stage, variables) => ({
       content: { scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: 'INT. SOMEWHERE' })) },
     }));
 
@@ -706,7 +780,7 @@ describe('reformatEpisodeScenes', () => {
       }));
       return current;
     });
-    runStagedLLM.mockImplementation(async (stage, variables) => ({
+    runStagedLLM.mockImplementation(async (_stage, variables) => ({
       content: { scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: `INT. ${sc.prose}` })) },
     }));
 
@@ -741,7 +815,7 @@ describe('reformatEpisodeScenes', () => {
     const withEp2 = await addEpisode(loomId, { title: 'Two' });
     const episode2Id = withEp2.episodes[1].id;
     await addNode(loomId, episode2Id, { title: 'Elsewhere', prose: 'Rain on the roof.' });
-    runStagedLLM.mockImplementation(async (stage, variables) => ({
+    runStagedLLM.mockImplementation(async (_stage, variables) => ({
       content: { scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: `INT. ${sc.prose}` })) },
     }));
 
@@ -759,7 +833,7 @@ describe('reformatEpisodeScenes', () => {
 
   it('is a no-op on an episode with nothing left to convert, and still pins the loom', async () => {
     const { loomId, episodeId } = await proseSetup();
-    runStagedLLM.mockImplementation(async (stage, variables) => ({
+    runStagedLLM.mockImplementation(async (_stage, variables) => ({
       content: { scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: `INT. ${sc.prose}` })) },
     }));
     await reformatEpisodeScenes(loomId, episodeId, { format: 'teleplay' });
@@ -802,7 +876,7 @@ describe('reformatEpisodeScenes', () => {
 
   it('asks the model for the TARGET format, not the one the loom still holds', async () => {
     const { loomId, episodeId } = await proseSetup();
-    runStagedLLM.mockImplementation(async (stage, variables) => ({
+    runStagedLLM.mockImplementation(async (_stage, variables) => ({
       content: { scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: 'INT. GATE' })) },
     }));
     await reformatEpisodeScenes(loomId, episodeId, { format: 'teleplay' });

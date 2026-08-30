@@ -529,6 +529,20 @@ describe('stageRunner — runStagedLLM dispatch', () => {
     expect(runner.createRun).toHaveBeenCalledWith(expect.objectContaining({ source: 'pipeline-text-stage' }));
   });
 
+  it('disables proactive and runtime fallback for provider-budgeted prompts', async () => {
+    prompts.getStage.mockReturnValue(null);
+    providers.getActiveProvider.mockResolvedValue(apiProvider({ contextWindow: 1_000_000 }));
+    runner.executeApiRun.mockImplementation(async ({ onComplete }) => {
+      onComplete({ error: 'primary failed' });
+    });
+
+    await expect(runStagedLLM('s', {}, { allowFallback: false }))
+      .rejects.toThrow(/primary failed/);
+
+    expect(runner.createRun).toHaveBeenCalledWith(expect.objectContaining({ allowFallback: false }));
+    expect(runner.executeApiRun).toHaveBeenCalledTimes(1);
+  });
+
   it('passes stage.timeout to executeCliRun when set', async () => {
     prompts.getStage.mockReturnValue({ timeout: 900000 });
     providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));

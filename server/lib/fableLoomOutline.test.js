@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   analyzeSeriesStoryOutlines,
   analyzeStoryOutline,
+  analyzeStoryOutlineTeleplaySync,
   describeStoryOutlineForPrompt,
   sanitizeStoryOutline,
 } from './fableLoomOutline.js';
@@ -126,5 +127,47 @@ describe('FableLoom story beat outlines', () => {
       'MISSING_EPISODE_OUTLINE', 'EMPTY_OVERNIGHT_VOICEMAIL', 'MISSING_NEXT_SEASON_TEASER',
     ]));
     expect(result.stats.ready).toBe(false);
+  });
+
+  it('does not count a claimed-valid outline as ready when the expanded teleplay has drifted', () => {
+    const storyOutline = {
+      ...sanitizeStoryOutline(validOutline),
+      validation: { status: 'valid', issues: [] },
+    };
+    const episode = {
+      id: 'ep-1',
+      number: 1,
+      startNodeId: 's1',
+      storyOutline,
+      nodes: storyOutline.scenes.map((scene) => ({
+        id: scene.key,
+        title: scene.title,
+        playbackMode: scene.playbackMode,
+        audienceConnection: scene.audienceConnection,
+        protagonistPresence: scene.protagonistPresence,
+        isEnding: scene.isEnding,
+        endingLabel: scene.endingLabel,
+        transitions: scene.transitions.map((item) => ({
+          targetNodeId: item.targetKey,
+          intent: item.intent,
+        })),
+      })),
+    };
+    episode.nodes.push({
+      id: 'new-scene', title: 'New scene', playbackMode: 'decision',
+      audienceConnection: 'connected', protagonistPresence: 'onscreen',
+      isEnding: true, endingLabel: 'New ending', transitions: [],
+    });
+
+    const sync = analyzeStoryOutlineTeleplaySync(episode, storyOutline);
+    const series = analyzeSeriesStoryOutlines({
+      participationMode: 'protagonist', episodes: [episode], seriesPlan: {},
+    });
+
+    expect(sync.stats.matches).toBe(false);
+    expect(sync.issues).toContainEqual(expect.objectContaining({
+      code: 'TELEPLAY_SCENE_MEMBERSHIP_MISMATCH',
+    }));
+    expect(series.stats).toMatchObject({ ready: false, readyEpisodeCount: 0 });
   });
 });

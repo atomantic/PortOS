@@ -26,13 +26,18 @@ const remediation = (changed = true) => ({
   evaluation: { summary: 'Focused editorial pass.', strengths: [], findings: [] },
 });
 
-const playtest = ({ passed, findings = [] }) => ({
+const playtest = ({ passed, findings = [], diagnosticFindings = [] }) => ({
   passed,
   deterministic: {
     passed: true,
     complete: true,
     stats: { variationCount: 2, visitedTransitionCount: 4, transitionCount: 4 },
     episodes: [{ episodeId: 'episode-example', issues: [] }],
+  },
+  diagnostics: {
+    passed: diagnosticFindings.length === 0,
+    stats: { outlineErrors: diagnosticFindings.length },
+    findings: diagnosticFindings,
   },
   review: {
     passed,
@@ -109,6 +114,33 @@ describe('FableLoom editorial autopilot', () => {
     const finished = await waitForTerminal(started.id);
 
     expect(finished).toMatchObject({ status: 'paused', pauseReason: 'round-limit', round: 1 });
+  });
+
+  it('keeps diagnostics-only blockers actionable in the residual findings', async () => {
+    const diagnosticFinding = {
+      severity: 'high',
+      category: 'structure',
+      episodeId: 'episode-example',
+      nodeId: null,
+      pathId: null,
+      problem: 'The beat outline must be revalidated.',
+      suggestion: 'Repair and revalidate the complete episode beat outline.',
+    };
+    remediateMock.mockResolvedValueOnce(remediation(false));
+    playtestMock.mockResolvedValueOnce(playtest({
+      passed: false,
+      diagnosticFindings: [diagnosticFinding],
+    }));
+
+    const started = await startFableLoomEditorialAutopilot('loom-example', { maxRounds: 1 });
+    const finished = await waitForTerminal(started.id);
+
+    expect(finished).toMatchObject({
+      status: 'paused',
+      pauseReason: 'round-limit',
+      residualFindings: [expect.objectContaining({ problem: diagnosticFinding.problem })],
+    });
+    expect(finished.rounds[0].diagnostics.findings).toHaveLength(1);
   });
 
   it('reattaches duplicate starts and cooperatively cancels after the active AI step', async () => {

@@ -56,7 +56,10 @@ import {
   asFableLoomParticipationMode,
 } from '../../lib/fableLoomParticipation.js';
 import { normalizeFableLoomCameraMovement } from '../../lib/fableLoomCameraMovements.js';
-import { sanitizeStoryOutline } from '../../lib/fableLoomOutline.js';
+import {
+  analyzeStoryOutlineTeleplaySync,
+  sanitizeStoryOutline,
+} from '../../lib/fableLoomOutline.js';
 
 export { LOOM_LIMITS };
 
@@ -258,6 +261,15 @@ export function sanitizeLoom(raw) {
     .filter(Boolean)
     .slice(0, LOOM_LIMITS.EPISODES_MAX)
     .sort((a, b) => a.number - b.number || a.createdAt.localeCompare(b.createdAt));
+  for (const episode of episodes) {
+    if (episode.storyOutline?.validation?.status !== 'valid') continue;
+    const sync = analyzeStoryOutlineTeleplaySync(episode, episode.storyOutline, {
+      participationMode,
+    });
+    if (!sync.stats.matches) {
+      episode.storyOutline.validation = { status: 'draft', issues: sync.issues };
+    }
+  }
   const protagonistCharacterId = nullableRef(raw.protagonistCharacterId);
   const protagonistWardrobeId = nullableRef(raw.protagonistWardrobeId);
   return {

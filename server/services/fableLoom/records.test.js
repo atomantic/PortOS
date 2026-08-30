@@ -26,10 +26,10 @@ vi.mock('../pipeline/series.js', () => ({ getSeries: getSeriesMock }));
 const {
   LOOM_LIMITS, addEpisode, addNode, addNodeTransition, attachNodeImage,
   attachNodePlaybackAsset, attachNodeVideo, createLoom,
-  deleteEpisode, deleteLoom, deleteNode, deleteNodeTransition, getLoom,
+  deleteEpisode, deleteLoom, deleteNode, deleteNodeTransition, findEpisode, getLoom,
   listLooms, listLoomSummaries, mergeLoomsFromSync, pruneTombstonedLooms,
   restoreLoom, sanitizeLoom, updateEpisode, updateLoom,
-  updateNode, updateNodeTransition,
+  mutateLoom, updateNode, updateNodeTransition,
 } = await import('./records.js');
 const { _resetFableLoomBackend } = await import('./store.js');
 const conflictJournal = await import('../../lib/conflictJournal.js');
@@ -586,6 +586,59 @@ describe('nodes and transitions', () => {
     expect(aNow.prose).toBe('New prose');
     expect(aNow.transitions[0]).toMatchObject({ targetNodeId: b.id, intent: 'press on', triggers: ['keep going'] });
     expect(aNow.transitions[0].id).toMatch(/^tr-/);
+  });
+
+  it('demotes a validated outline when a scene contract changes, but not for prose', async () => {
+    const { loomId, episodeId } = await setup();
+    let updated = await addNode(loomId, episodeId, { title: 'Opening' });
+    updated = await addNode(loomId, episodeId, { title: 'Ending', isEnding: true });
+    const [opening, ending] = updated.episodes[0].nodes;
+    const withPath = await addNodeTransition(loomId, episodeId, opening.id, {
+      targetNodeId: ending.id,
+      intent: 'Answer the signal',
+    });
+    updated = await mutateLoom(loomId, (record) => {
+      const episode = findEpisode(record, episodeId);
+      const [currentOpening, currentEnding] = episode.nodes;
+      episode.storyOutline = {
+        startKey: currentOpening.id,
+        scenes: [
+          {
+            key: currentOpening.id,
+            title: currentOpening.title,
+            summary: 'The signal asks for an answer.',
+            playbackMode: currentOpening.playbackMode,
+            audienceConnection: currentOpening.audienceConnection,
+            protagonistPresence: currentOpening.protagonistPresence || 'onscreen',
+            transitions: [{ targetKey: currentEnding.id, intent: 'Answer the signal' }],
+          },
+          {
+            key: currentEnding.id,
+            title: currentEnding.title,
+            summary: 'The answer opens a door.',
+            playbackMode: currentEnding.playbackMode,
+            audienceConnection: currentEnding.audienceConnection,
+            protagonistPresence: currentEnding.protagonistPresence || 'onscreen',
+            isEnding: true,
+            endingLabel: currentEnding.endingLabel,
+            transitions: [],
+          },
+        ],
+        validation: { status: 'valid', issues: [] },
+      };
+      return record;
+    });
+    expect(updated.episodes[0].storyOutline.validation.status).toBe('valid');
+
+    updated = await updateNode(loomId, episodeId, opening.id, { prose: 'The signal hums.' });
+    expect(updated.episodes[0].storyOutline.validation.status).toBe('valid');
+
+    updated = await updateNode(loomId, episodeId, opening.id, { title: 'A Changed Opening' });
+    expect(updated.episodes[0].storyOutline.validation.status).toBe('draft');
+    expect(updated.episodes[0].storyOutline.validation.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'TELEPLAY_SCENE_CONTRACT_MISMATCH' })]),
+    );
+    expect(withPath.transition.targetNodeId).toBe(ending.id);
   });
 
   it('deleting a node strips inbound transitions and repoints the start', async () => {
