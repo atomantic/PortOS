@@ -1,8 +1,8 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
+import { homedir, tmpdir } from 'os';
 import { join } from 'path';
-import { daemonEntryFromArgv, daemonNeedsRefresh } from './pm2-daemon-refresh.js';
+import { daemonEntryFromArgv, daemonNeedsRefresh, redactPaths } from './pm2-daemon-refresh.js';
 
 // A real file on disk, because the path comparison realpath()s both sides — a
 // fixture that doesn't exist would silently take the literal-spelling fallback
@@ -72,5 +72,24 @@ describe('daemonNeedsRefresh', () => {
   it('treats a differently-spelled path to the same file as a match', () => {
     const spelled = join(FIXTURE_DIR, 'lib', '..', 'lib', 'Daemon.js');
     expect(check({ argv: ['/usr/bin/node', spelled] }).needed).toBe(false);
+  });
+});
+
+describe('redactPaths', () => {
+  it('strips the home directory so the OS username never reaches update.log', () => {
+    // update.sh appends this to data/update.log, which backup snapshots sweep up.
+    const message = `ENOENT: no such file, open '${join(homedir(), 'somewhere', 'package.json')}'`;
+    const redacted = redactPaths(message);
+    expect(redacted).not.toContain(homedir());
+    // join(), not a forward-slash literal — the separator is a backslash on Windows.
+    expect(redacted).toContain(join('~', 'somewhere', 'package.json'));
+  });
+
+  it('keeps the diagnostic parts of the message intact', () => {
+    expect(redactPaths('pm2 getReport timed out after 15000ms')).toBe('pm2 getReport timed out after 15000ms');
+  });
+
+  it('survives a missing message', () => {
+    expect(redactPaths(undefined)).toBe('');
   });
 });

@@ -28,6 +28,7 @@
  */
 
 import { readFileSync, realpathSync } from 'fs';
+import { homedir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
@@ -127,6 +128,25 @@ async function fetchReport(pm2) {
   }
 }
 
+/**
+ * Replace this install's own paths in a probe error before it is logged.
+ *
+ * A pm2 socket or package-read failure names absolute paths, and update.sh
+ * appends everything here to data/update.log — which backups sweep up. The
+ * repo-root and home substitutions keep the message diagnostic (which file,
+ * which errno) without carrying the OS username off the machine.
+ * @param {string} message
+ */
+export function redactPaths(message) {
+  const home = homedir();
+  return String(message ?? '')
+    // Repo root first — it lives under home, so the broader rule would eat it.
+    .split(ROOT_DIR)
+    .join('<repo>')
+    .split(home)
+    .join('~');
+}
+
 async function runCli() {
   let verdict = { needed: true, reason: 'could not inspect the running daemon' };
   try {
@@ -138,7 +158,7 @@ async function runCli() {
       expectedVersion: JSON.parse(readFileSync(join(pm2Dir, 'package.json'), 'utf8')).version,
     });
   } catch (err) {
-    verdict = { needed: true, reason: `daemon probe failed: ${err.message}` };
+    verdict = { needed: true, reason: `daemon probe failed: ${redactPaths(err.message)}` };
   }
   console.log(`${verdict.needed ? '🔄' : '✅'} PM2 daemon refresh ${verdict.needed ? 'needed' : 'skipped'}: ${verdict.reason}`);
   return verdict.needed ? 0 : 1;
