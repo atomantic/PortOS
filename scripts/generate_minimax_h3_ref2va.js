@@ -2,10 +2,10 @@
 
 import { spawn } from 'child_process';
 import { mkdtemp, rm } from 'fs/promises';
-import { join, resolve } from 'path';
+import { join } from 'path';
 import { tmpdir } from 'os';
-import { fileURLToPath } from 'url';
 import { planRef2vaAudioSegments } from '../server/services/videoGen/ref2vaPlan.js';
+import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 export const MAX_REF2VA_XFADE_INPUTS = 8;
 
@@ -290,7 +290,7 @@ const main = async () => {
   }
 };
 
-if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+if (isDirectlyInvoked(import.meta.url)) {
   const removeCancellationHandlers = installCancellationHandlers();
   main().catch((err) => {
     process.stderr.write(`ERROR:${err.message}\n`);
