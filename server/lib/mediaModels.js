@@ -32,6 +32,12 @@
  *       absent on the shipped entry deliberately: the registry syncs between
  *       peers and cannot know what GPU is on the other end. Validated in
  *       services/videoGen/local.js against MINIMAX_H3_CUDA_OFFLOAD_PROFILES.
+ *       `memoryProfiles` (issue #5420) is the declared, capability-checked
+ *       weight-placement table for the two MiniMax H3 entries — each profile's
+ *       honest host-RAM and device-VRAM floor, best-first. Declared in
+ *       lib/minimaxH3Memory.js and backfilled at load like `disclosure` and
+ *       `speedProfiles`; the render path fails closed when no profile fits the
+ *       measured machine, and the runners re-select on the same table.
  *       `disclosure` is optional provenance/licensing metadata (issue #3674):
  *       { modelCardUrl?, weightsLicense?: { name, url }, runtimeLicense?: { name, url },
  *         estimatedDownloadGb?, reviewedAt? }. Every key is optional and an
@@ -72,6 +78,7 @@ import { ServerError } from './errorHandler.js';
 import { applyVideoDisclosures } from './videoDisclosure.js';
 import { applyVideoFinishProfiles, sanitizeFinishProfiles } from './videoFinishProfiles.js';
 import { applyVideoSpeedProfiles, sanitizeSpeedProfiles } from './videoSpeedProfiles.js';
+import { applyMiniMaxH3MemoryProfiles, sanitizeMiniMaxH3MemoryProfiles } from './minimaxH3Memory.js';
 import { applyVideoSupportedModes } from './videoModeProfiles.js';
 import {
   captureSystemCapabilities,
@@ -274,7 +281,7 @@ const DEFAULT_REGISTRY = {
     // decorator: it attaches the shipped `speedProfiles` a model offers, pin-
     // guarded on repo AND revision so a re-pointed entry keeps no schedule
     // claim we can't back.
-    mlx: applyVideoSpeedProfiles(applyVideoFinishProfiles(applyVideoDisclosures([
+    mlx: applyMiniMaxH3MemoryProfiles(applyVideoSpeedProfiles(applyVideoFinishProfiles(applyVideoDisclosures([
       // notapalindrome's mlx-video-with-audio runtime — single PyPI package,
       // T2V/I2V only, FFLF degrades to last-frame conditioning (one --image arg).
       // LTX-2 Unified (the older 42 GB model) was retired in favour of 2.3 —
@@ -523,8 +530,8 @@ const DEFAULT_REGISTRY = {
         samplerLocked: true,
         samplerNote: 'FastMetal models are DMD2-distilled 3-step models with affine INT8 quantization.',
       },
-    ]))),
-    cuda: applyVideoSpeedProfiles(applyVideoFinishProfiles(applyVideoDisclosures([
+    ])))),
+    cuda: applyMiniMaxH3MemoryProfiles(applyVideoSpeedProfiles(applyVideoFinishProfiles(applyVideoDisclosures([
       { id: 'ltx_video', name: 'LTX-Video 0.9.5 — T2V + I2V (~9.5 GB, auto-downloads)', runtime: 'cuda_video', steps: 25, guidance: 3.0 },
       // MiniMax H3 on NVIDIA, through diffusers' MiniMaxH3ModularPipeline —
       // the same joint video+audio model the MLX list runs on Apple Silicon, so it
@@ -560,7 +567,7 @@ const DEFAULT_REGISTRY = {
         supportsTiling: false,
         supportsDisableAudio: false,
       },
-    ]))),
+    ])))),
     defaultMlx: 'ltx23_distilled_q4',
     defaultCuda: 'ltx_video',
   },
@@ -1113,7 +1120,13 @@ const normalizeRegistry = (parsed) => {
     // sanitizeSpeedProfiles is its sibling of sanitizeFinishProfiles: a
     // hand-edited profile with a NaN step count would otherwise reach the
     // picker and spawn a broken render, so it is warned about and stripped.
-    return sanitizeSpeedProfiles(applyVideoSpeedProfiles(decorated));
+    const withSpeed = sanitizeSpeedProfiles(applyVideoSpeedProfiles(decorated));
+    // applyMiniMaxH3MemoryProfiles is the load-time twin of migration 317, and
+    // its sanitizer the sibling of the two above: a hand-edited profile with a
+    // NaN memory floor would otherwise make every capacity comparison false and
+    // refuse H3 renders on a machine that can run them, so it is warned about
+    // and stripped.
+    return sanitizeMiniMaxH3MemoryProfiles(applyMiniMaxH3MemoryProfiles(withSpeed));
   };
   const normalizedBuckets = Object.fromEntries(
     VIDEO_BUCKETS.map((bucket) => [bucket, videoEntries(bucketResults[bucket].entries, {

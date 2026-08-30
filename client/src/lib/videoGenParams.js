@@ -233,6 +233,46 @@ export const videoModelMemoryGb = (model) => {
   return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
 };
 
+// Host RAM PortOS holds back for the operating system and itself before a
+// MiniMax H3 render may claim the rest. Mirrors MINIMAX_H3_HOST_RESERVE_GB in
+// server/lib/minimaxH3Memory.js — the only number mirrored here, because the
+// per-profile floors ride on the model entry the client already fetches.
+export const VIDEO_MEMORY_RESERVE_GB = 16;
+
+// The weight-placement profile this machine can hold, out of the ones the model
+// declares (#5420). Entries carry `memoryProfiles` best-first, each with an
+// honest `minMemoryGb` host floor, so the picker and the disclosure can state
+// the capacity a render will REALLY need instead of the single headline
+// `memoryGb` that never accounted for what the OS keeps.
+//
+// Returns `{ profile, usableGb, floorGb }`:
+//   profile  the best profile that fits, or `null` when none does
+//   usableGb system memory minus the reserve, or `null` when unmeasured — the
+//            "not measured" sentinel, deliberately distinct from a small number
+//            so an absent /status field never renders as "this box is too small"
+//   floorGb  the smallest floor any declared profile has, so a UI that has to
+//            say what it would take has the number
+export const selectVideoMemoryProfile = (model, systemMemoryGb) => {
+  const profiles = Array.isArray(model?.memoryProfiles)
+    ? model.memoryProfiles.filter((profile) => typeof profile?.id === 'string' && profile.id)
+    : [];
+  const floors = profiles
+    .map((profile) => Number(profile.minMemoryGb))
+    .filter((floor) => Number.isFinite(floor) && floor > 0);
+  const floorGb = floors.length > 0 ? Math.min(...floors) : null;
+  const system = Number(systemMemoryGb);
+  const usableGb = Number.isFinite(system) && system > 0
+    ? Math.max(0, system - VIDEO_MEMORY_RESERVE_GB)
+    : null;
+  if (profiles.length === 0) return { profile: null, usableGb, floorGb };
+  if (usableGb === null) return { profile: profiles[0], usableGb, floorGb };
+  const profile = profiles.find((candidate) => {
+    const floor = Number(candidate.minMemoryGb);
+    return !Number.isFinite(floor) || floor <= 0 || usableGb >= floor;
+  }) || null;
+  return { profile, usableGb, floorGb };
+};
+
 // Mirror of server computeFflfSafeFrames (server/services/videoGen/local.js):
 // the largest numFrames that fits the FFLF/ltx2 stage-2 pixel-frame budget at
 // this resolution, rounded down to the LTX 8k+1 latent boundary. The budget

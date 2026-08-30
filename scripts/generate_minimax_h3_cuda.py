@@ -19,8 +19,11 @@ Each `--image` needs its own `--anchor`, in the same order.
 
 Memory: the bf16 components are 66.3 GB (transformer) + 66.7 GB (Qwen3-VL
 conditioner), so nothing fits on a consumer card unquantized. The offload
-profiles below are the recipes upstream documents, chosen from the card's own
-VRAM unless `--offload-profile` pins one.
+profiles below are the recipes upstream documents, sized from the card's own
+VRAM unless `--offload-profile` pins one — and every recipe, pinned or not, is
+checked against `PROFILE_MIN_VRAM_GB` plus the host floor PortOS passes on
+`--min-system-memory-gb`. Both gates run BEFORE the multi-GB load, so a box that
+cannot hold this model says so in seconds rather than being killed an hour in.
 """
 
 from __future__ import annotations
@@ -32,8 +35,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _runner_common import emit_runtime_fingerprint, establish_process_group, heartbeat  # noqa: E402
 from _minimax_h3_common import (  # noqa: E402
-    FPS, add_h3_common_args, emit_result, load_keyframes, resolve_cached_snapshot,
-    validate_h3_output_args,
+    FPS, add_h3_common_args, emit_result, enforce_system_memory, load_keyframes,
+    resolve_cached_snapshot, validate_h3_output_args,
 )
 
 
@@ -45,6 +48,27 @@ from _minimax_h3_common import (  # noqa: E402
 MIN_FRAMES = 124  # first 17n+5 grid point at or above 5 seconds
 MAX_FRAMES = 345  # last 17n+5 grid point at or below 15 seconds
 OFFLOAD_PROFILES = ("auto", "bf16", "int8-stream", "int8-lean")
+
+# Device-VRAM floor per recipe, richest first. This is the same table PortOS
+# declares in server/lib/minimaxH3Memory.js (pinned by runtimes.test.js), and it
+# is now a FLOOR rather than a one-way ladder: a card below the leanest entry
+# gets a clean error naming what it would take, instead of the leanest recipe
+# and an out-of-memory kill an hour into the load. An explicitly pinned profile
+# is checked against it too — the registry entry syncs between peers and can
+# name a recipe the card on this end cannot run.
+#
+#   bf16         60 — the floor for holding one bf16 component resident while
+#                     the components manager swaps the other
+#   int8-stream  20 — below this a streamed transformer block plus its
+#                     activations stops fitting beside the video VAE
+#   int8-lean    12 — the documented 12-16 GB card path, and the last recipe
+#                     there is
+PROFILE_MIN_VRAM_GB = (("bf16", 60), ("int8-stream", 20), ("int8-lean", 12))
+
+# Device memory the bf16 recipe leaves free for activations while the components
+# manager swaps a component in. Paired with the 60 GB floor above — the floor is
+# what makes this reserve affordable, so the two move together.
+BF16_DEVICE_RESERVE = "12GB"
 
 # int8 weight-only quantization must skip the projection / embedding / norm
 # layers on each component — they are small, numerically sensitive, and
@@ -93,13 +117,18 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("MiniMax H3 needs its pinned component file list (--repo-file).")
 
 
-def resolve_offload_profile(requested: str) -> str:
-    """Pick a weight-placement recipe from the visible CUDA device's VRAM.
+def resolve_offload_profile(requested: str) -> tuple[str, float]:
+    """Pick a weight-placement recipe the visible CUDA device can actually run.
 
-    An explicit request always wins — the registry entry can pin one, and a user
-    who knows their box better than a capacity heuristic does should not be
-    overridden. 'auto' is the default because the entry is shared across every
-    install that syncs it and cannot know what GPU is on the other end.
+    Returns the effective profile and the device's total VRAM, so the caller can
+    report the placement it really got rather than only the name it asked for.
+
+    An explicit request still expresses intent — a user who knows their box
+    better than a capacity heuristic does should not be silently overridden —
+    but it no longer bypasses the check: the registry entry carrying it syncs
+    between peers and cannot know what GPU is on this end, so a pin the card
+    cannot hold is refused up front instead of OOMing after the load. 'auto'
+    remains the shipped default for exactly that reason.
     """
     import torch
 
@@ -107,16 +136,29 @@ def resolve_offload_profile(requested: str) -> str:
         raise RuntimeError(
             "MiniMax H3 CUDA needs a visible NVIDIA device. Repair the MiniMax H3 CUDA runtime from Video Gen."
         )
-    if requested != "auto":
-        return requested
     total_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
-    # 60 GB is the floor for holding one bf16 component resident while the
-    # manager swaps the other; below it, int8 is the only thing that fits.
-    # 20 GB is where streamed block-level offload stops fitting a block plus
-    # its activations, and the leaner leaf-level recipe takes over.
-    if total_gb >= 60:
-        return "bf16"
-    return "int8-stream" if total_gb >= 20 else "int8-lean"
+    affordable = [name for name, floor in PROFILE_MIN_VRAM_GB if total_gb >= floor]
+    if requested != "auto":
+        floor = dict(PROFILE_MIN_VRAM_GB).get(requested)
+        if floor is not None and total_gb < floor:
+            alternative = (
+                f"This card can run the {affordable[0]} profile."
+                if affordable
+                else f"No MiniMax H3 profile runs on under {PROFILE_MIN_VRAM_GB[-1][1]} GB of VRAM."
+            )
+            raise RuntimeError(
+                f"MiniMax H3 offload profile '{requested}' needs {floor} GB of VRAM; this device has "
+                f"{total_gb:.0f} GB. {alternative} Change offloadProfile on the model entry, or remove it "
+                f"to let PortOS size a recipe from the card."
+            )
+        return requested, total_gb
+    if not affordable:
+        raise RuntimeError(
+            f"MiniMax H3 needs at least {PROFILE_MIN_VRAM_GB[-1][1]} GB of VRAM for its leanest weight "
+            f"placement; this device has {total_gb:.0f} GB. Render on a peer with a larger card, or pick a "
+            f"smaller model."
+        )
+    return affordable[0], total_gb
 
 
 def load_pipeline(snapshot: Path, profile: str):
@@ -134,7 +176,7 @@ def load_pipeline(snapshot: Path, profile: str):
         manager = ComponentsManager()
         pipe = ModularPipeline.from_pretrained(str(snapshot), components_manager=manager)
         pipe.load_components(workflow="fl2va", dtype=torch.bfloat16)
-        manager.enable_auto_cpu_offload(device="cuda", memory_reserve_margin="12GB")
+        manager.enable_auto_cpu_offload(device="cuda", memory_reserve_margin=BF16_DEVICE_RESERVE)
         return pipe
 
     from diffusers import MiniMaxH3Transformer3DModel, TorchAoConfig
@@ -228,8 +270,18 @@ def main() -> int:
         extra_versions={"cuda": getattr(torch.version, "cuda", None)},
     )
 
-    profile = resolve_offload_profile(args.offload_profile)
-    log(f"STATUS:MiniMax H3 CUDA offload profile: {profile}")
+    # Both halves of the capacity gate, before the multi-GB load rather than
+    # after it: the host floor (which is where the int8 recipes keep ~75 GB of
+    # weights resident for the whole render) and the device floor.
+    usable_host_gb = enforce_system_memory(args)
+    profile, vram_gb = resolve_offload_profile(args.offload_profile)
+    host_report = "host memory unknown" if usable_host_gb is None else f"{usable_host_gb:.0f} GB usable host memory"
+    log(
+        f"STATUS:MiniMax H3 CUDA placement: {profile} "
+        f"({'pinned' if args.offload_profile != 'auto' else 'auto'}) "
+        f"· {vram_gb:.0f} GB VRAM · {host_report} "
+        f"(reserve {max(0.0, args.memory_headroom_gb or 0.0):.0f} GB)"
+    )
 
     log("STAGE:load-pipeline")
     with heartbeat("minimax-h3-cuda-load"):

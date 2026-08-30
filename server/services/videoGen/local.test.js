@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { basename, join } from 'path';
 import { tmpdir, totalmem } from 'os';
+import { MINIMAX_H3_HOST_RESERVE_GB } from '../../lib/minimaxH3Memory.js';
 import { randomUUID } from 'crypto';
 // Pure table, no mocking involved — a static import survives vi.resetModules().
 import { INSPIRE_DEFAULT_IMAGE_STRENGTH } from '../../lib/videoReferenceModes.js';
@@ -127,6 +128,11 @@ vi.mock('../../lib/mediaModels.js', async () => {
         revision: '6818f6c32d12b210915e44ad56a4228c2608f160',
         files: ['LICENSE', 'FL2VA/vae/video/config.json'],
       }],
+      // Deliberately a 1 GB floor rather than the shipped 128 GB: these suites
+      // must assert the same thing on every machine and in CI, and a real floor
+      // would make the capacity gate pass or fail with the runner's own RAM.
+      // The shipped table's numbers are pinned in lib/minimaxH3Memory.test.js.
+      memoryProfiles: [{ id: 'unified-8bit', name: 'Unified 8-bit', minMemoryGb: 1, minVramGb: null, unified: true }],
     },
     {
       id: 'minimax_h3_cuda', name: 'MiniMax H3 CUDA int8', runtime: 'minimax_h3_cuda',
@@ -141,6 +147,7 @@ vi.mock('../../lib/mediaModels.js', async () => {
       defaultWidth: 1344, defaultHeight: 768, resolutionStep: 32,
       steps: 8, guidance: 0, samplerLocked: true,
       termsGate: { id: 'minimax-h3-community-license-2026-08-02' },
+      memoryProfiles: [{ id: 'int8-lean', name: 'int8, leaf-level', minMemoryGb: 1, minVramGb: 12, unified: false }],
     },
     {
       id: 'wan22_ti2v_5b', name: 'Wan TI2V', runtime: 'wan22',
@@ -2950,6 +2957,64 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     ));
     expect(args[args.indexOf('--width') + 1]).toBe('768');
     expect(args[args.indexOf('--height') + 1]).toBe('512');
+  });
+
+  // Capacity bounding (#5420). The floors live in lib/minimaxH3Memory.js and are
+  // unit-tested there; what these two pin is that the render boundary is WIRED
+  // to them — that the contract reaches the helper's argv, and that a box below
+  // every profile is refused before a child exists rather than after an hour of
+  // loading weights it can never hold.
+  it.each([
+    ['minimax_h3_8bit', 'generate_minimax_h3.py', 'unified-8bit'],
+    ['minimax_h3_cuda', 'generate_minimax_h3_cuda.py', null],
+  ])('hands %s its host-memory contract', async (modelId, helper, expectedProfile) => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+
+    await generateVideo({
+      jobId: `h3-memory-${modelId}`,
+      modelId,
+      prompt: 'a fox watches the rain',
+      width: 1344, height: 768, numFrames: 124, fps: 24, mode: 'text',
+    });
+
+    const [, args] = spawnMock.mock.calls.find(([, childArgs]) => (
+      Array.isArray(childArgs) && childArgs.some((arg) => basename(String(arg)) === helper)
+    ));
+    expect(args[args.indexOf('--min-system-memory-gb') + 1]).toBe('1');
+    expect(args[args.indexOf('--memory-headroom-gb') + 1]).toBe(String(MINIMAX_H3_HOST_RESERVE_GB));
+    // Only the MLX lane takes a server-selected profile: on CUDA the tier is
+    // VRAM-driven, so it stays the runner's call on --offload-profile.
+    if (expectedProfile) expect(args[args.indexOf('--memory-profile') + 1]).toBe(expectedProfile);
+    else expect(args).not.toContain('--memory-profile');
+  });
+
+  it('refuses a render this machine cannot hold, before any child is spawned', async () => {
+    const mediaModels = await import('../../lib/mediaModels.js');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const getVideoModelsMock = vi.mocked(mediaModels.getVideoModels);
+    const catalog = getVideoModelsMock();
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+    getVideoModelsMock.mockReturnValue(catalog.map((model) => (
+      model.id === 'minimax_h3_8bit'
+        ? { ...model, memoryProfiles: [{ ...model.memoryProfiles[0], minMemoryGb: 1e6 }] }
+        : model
+    )));
+
+    try {
+      await expect(generateVideo({
+        jobId: 'h3-memory-refused',
+        modelId: 'minimax_h3_8bit',
+        prompt: 'a fox watches the rain',
+        width: 1344, height: 768, numFrames: 124, fps: 24, mode: 'text',
+      })).rejects.toMatchObject({ code: 'MINIMAX_H3_MEMORY_INSUFFICIENT', status: 400 });
+    } finally {
+      getVideoModelsMock.mockReturnValue(catalog);
+    }
+
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 });
 

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -68,7 +69,86 @@ def add_h3_common_args(
     parser.add_argument("--anchor", action="append", default=[], choices=["first", "last"],
                         help="latent anchor for each --image, in the same order")
     parser.add_argument("--output", required=True)
+    parser.add_argument("--memory-profile", default=None,
+                        help="id of the weight-placement profile PortOS selected (reported back, not re-derived)")
+    parser.add_argument("--min-system-memory-gb", type=float, default=None,
+                        help="host RAM below which NO declared placement profile can run")
+    parser.add_argument("--memory-headroom-gb", type=float, default=0.0,
+                        help="host RAM held back for the operating system and PortOS itself")
     return parser
+
+
+def total_system_memory_gb() -> float | None:
+    """Total physical RAM in GB, or None when it could not be measured.
+
+    None is the "not measured" sentinel and is deliberately distinct from a
+    small measured number: a probe that fails on an unusual host must not read
+    as a box with no memory and refuse a render that would have worked.
+    """
+    page_size = None
+    page_count = None
+    if hasattr(os, "sysconf"):
+        names = getattr(os, "sysconf_names", {})
+        if "SC_PAGE_SIZE" in names and "SC_PHYS_PAGES" in names:
+            try:
+                page_size = os.sysconf("SC_PAGE_SIZE")
+                page_count = os.sysconf("SC_PHYS_PAGES")
+            except (OSError, ValueError):
+                page_size = page_count = None
+    if page_size and page_count and page_size > 0 and page_count > 0:
+        return page_size * page_count / 1e9
+    if sys.platform == "win32":
+        # GlobalMemoryStatusEx is the only stdlib-reachable total on Windows —
+        # os.sysconf does not exist there, and the CUDA runner is the lane that
+        # actually runs on it.
+        import ctypes
+
+        class _MemoryStatusEx(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        status = _MemoryStatusEx()
+        status.dwLength = ctypes.sizeof(_MemoryStatusEx)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return status.ullTotalPhys / 1e9
+    return None
+
+
+def enforce_system_memory(args) -> float | None:
+    """Refuse a render this machine cannot hold, and return the usable RAM.
+
+    H3's components fit nowhere unassisted, so loading them takes minutes to
+    hours before an out-of-memory kill would land — long after the job has taken
+    the queue. PortOS gates this at submit time too; this is the runner-side
+    half, which catches a render that reached the helper by any other route
+    (a persisted-queue replay, a retry, a peer submission, a direct call).
+
+    Fails closed only on a MEASURED shortfall: an unmeasurable host returns None
+    and the render proceeds, because "the probe returned nothing" is not the
+    same fact as "this box has no memory".
+    """
+    total_gb = total_system_memory_gb()
+    if total_gb is None:
+        return None
+    headroom_gb = max(0.0, args.memory_headroom_gb or 0.0)
+    usable_gb = max(0.0, total_gb - headroom_gb)
+    minimum = args.min_system_memory_gb
+    if minimum is not None and usable_gb < minimum:
+        raise SystemExit(
+            f"MiniMax H3 needs at least {minimum:.0f} GB of memory for its smallest weight-placement "
+            f"profile. This machine has {total_gb:.0f} GB, of which {usable_gb:.0f} GB is usable after "
+            f"the {headroom_gb:.0f} GB reserve PortOS keeps for the operating system."
+        )
+    return usable_gb
 
 
 def snapshot_root(resolved_file: str | Path, repo_filename: str) -> Path:
@@ -181,6 +261,8 @@ __all__ = [
     "FPS",
     "add_h3_common_args",
     "emit_result",
+    "enforce_system_memory",
+    "total_system_memory_gb",
     "load_keyframes",
     "resolve_cached_snapshot",
     "validate_h3_output_args",

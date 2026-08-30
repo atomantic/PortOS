@@ -25,6 +25,12 @@ import {
 import { videoModeContractError, videoReferenceModeError } from './modeContract.js';
 import { minimaxH3ControlError } from './minimaxH3Controls.js';
 import {
+  MINIMAX_H3_HOST_RESERVE_GB,
+  miniMaxH3MemoryDeclineReason,
+  miniMaxH3MemoryProfiles,
+  selectMiniMaxH3MemoryProfile,
+} from '../../lib/minimaxH3Memory.js';
+import {
   LTX2_HELPER_SCRIPT,
   LTX25_ENCODER_SHIM_DIR,
   WAN22_VENV_PYTHON,
@@ -630,6 +636,37 @@ const assertMiniMaxH3Preflight = ({
       { status: 500, code: 'VIDEO_MODEL_MISCONFIGURED' },
     );
   }
+  // Capacity, before anything is spawned (issue #5420). H3's components fit
+  // nowhere unassisted, so a box below every declared placement profile is not
+  // a slow render — it is a multi-hour load that OOMs at the far end, after the
+  // job has already taken the queue. A 400 here names the shortfall while the
+  // user is still looking at the form. `null` when the host was not measured,
+  // which defers to the runner's own check rather than blocking.
+  const memoryDecline = miniMaxH3MemoryDeclineReason({
+    model,
+    modelId: model.id,
+    totalMemoryGb: totalmem() / 1024 ** 3,
+  });
+  if (memoryDecline) throw new ServerError(memoryDecline.message, { status: 400, code: memoryDecline.code });
+};
+
+// The capacity contract both H3 runners are handed: the host floor below which
+// NO declared placement profile can run, and the reserve PortOS holds back for
+// the OS. Sent as argv rather than left to each runner's own constants so the
+// server-side gate above and the runner-side enforcement cannot state different
+// numbers. The floor is the SMALLEST across the entry's profiles, not the one
+// the host-side selection landed on: on the CUDA lane the runner picks the tier
+// from VRAM (the only side that can see the device), so a floor taken from a
+// richer tier would reject a box that can in fact run a leaner one.
+const miniMaxH3HostMemoryArgs = (model) => {
+  const floors = miniMaxH3MemoryProfiles(model)
+    .map((profile) => Number(profile.minMemoryGb))
+    .filter((floor) => Number.isFinite(floor) && floor > 0);
+  if (floors.length === 0) return [];
+  return [
+    '--min-system-memory-gb', String(Math.min(...floors)),
+    '--memory-headroom-gb', String(MINIMAX_H3_HOST_RESERVE_GB),
+  ];
 };
 
 // Build args for PipeNetwork's pinned MiniMax H3 MLX port. The helper resolves
@@ -667,7 +704,14 @@ const buildMiniMaxH3Args = ({ model, prompt, negativePrompt, width, height, numF
     '--steps', String(steps),
     '--seed', String(seed),
     '--output', outputPath,
+    ...miniMaxH3HostMemoryArgs(model),
   ];
+  // The MLX lane's placement is unified-memory only, so the server picks the
+  // profile and the runner enforces its limit against the machine's own RAM.
+  // (The CUDA lane is the opposite: the tier is VRAM-driven, so it stays the
+  // runner's call and rides on --offload-profile instead.)
+  const mlxProfile = selectMiniMaxH3MemoryProfile({ model, totalMemoryGb: totalmem() / 1024 ** 3 }).profile;
+  if (mlxProfile) args.push('--memory-profile', mlxProfile.id);
   if (previewDir) args.push('--preview-dir', previewDir);
   for (const file of files) args.push('--checkpoint-file', file);
   // Anchor order is packed order: the helper stretches the FIRST keyframe onto
@@ -741,6 +785,7 @@ const buildMiniMaxH3CudaArgs = ({ model, prompt, negativePrompt, width, height, 
     '--steps', String(steps),
     '--seed', String(seed),
     '--output', outputPath,
+    ...miniMaxH3HostMemoryArgs(model),
   ];
   for (const file of files) args.push('--repo-file', file);
   // A user-pinned offload recipe from data/media-models.json. Omitted, the

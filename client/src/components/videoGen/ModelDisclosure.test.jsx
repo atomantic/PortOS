@@ -95,6 +95,47 @@ describe('ModelDisclosure', () => {
     expect(screen.getByText(/below the stated minimum/)).toBeInTheDocument();
   });
 
+  // The headline `memoryGb` never accounted for the reserve PortOS holds back,
+  // so a machine sitting exactly on it read as a fit while the render would have
+  // claimed the whole box. The profile fact is the honest number beside it.
+  describe('memory profile (#5420)', () => {
+    const PROFILED_MODEL = {
+      ...SHIPPED_MODEL,
+      memoryGb: 96,
+      memoryProfiles: [
+        { id: 'rich', name: 'Rich placement', minMemoryGb: 96, minVramGb: 60, unified: false },
+        { id: 'lean', name: 'Lean placement', minMemoryGb: 48, minVramGb: 12, unified: false },
+      ],
+    };
+
+    it('names the best profile the usable memory can hold', () => {
+      renderDisclosure({ backend: 'local', model: PROFILED_MODEL, systemMemoryGb: 128 });
+      expect(screen.getByText(/Rich placement/)).toBeInTheDocument();
+      expect(screen.getByText(/this system has 112 GB/)).toBeInTheDocument();
+    });
+
+    it('steps down to a leaner profile once the reserve puts the richer one out of reach', () => {
+      renderDisclosure({ backend: 'local', model: PROFILED_MODEL, systemMemoryGb: 96 });
+      expect(screen.getByText(/Lean placement/)).toBeInTheDocument();
+    });
+
+    it('says renders are refused when nothing fits', () => {
+      renderDisclosure({ backend: 'local', model: PROFILED_MODEL, systemMemoryGb: 32 });
+      expect(screen.getByText(/Renders are refused rather than started/)).toBeInTheDocument();
+    });
+
+    it('says Unknown rather than "too small" when the system memory is unmeasured', () => {
+      render(<ModelDisclosure backendDisclosures={BACKENDS} backend="local" model={PROFILED_MODEL} />);
+      expect(screen.getByText(/Needs 48 GB usable/)).toBeInTheDocument();
+      expect(screen.queryByText(/Renders are refused/)).not.toBeInTheDocument();
+    });
+
+    it('renders no profile row at all for a model that declares none', () => {
+      renderDisclosure({ backend: 'local', model: SHIPPED_MODEL, systemMemoryGb: 128 });
+      expect(screen.queryByText('Memory profile')).not.toBeInTheDocument();
+    });
+  });
+
   it('renders Unknown for every fact a custom model does not carry', () => {
     const custom = { id: 'mine', name: 'My Model', source: 'user' };
     renderDisclosure({ backend: 'local', model: custom });

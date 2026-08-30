@@ -19,6 +19,7 @@
 import { Server, Cloud } from 'lucide-react';
 import FactLink from './FactLink.jsx';
 import { formatDownloadGb } from '../../utils/formatters';
+import { VIDEO_MEMORY_RESERVE_GB, selectVideoMemoryProfile } from '../../lib/videoGenParams';
 
 const UNKNOWN = 'Unknown';
 
@@ -57,6 +58,36 @@ function MemoryFact({ model, systemMemoryGb }) {
       ) : (
         <span className={fits ? ' text-port-success' : ' text-port-warning'}>
           {' '}· this system has {system} GB{fits ? '' : ' — below the stated minimum'}
+        </span>
+      )}
+    </Fact>
+  );
+}
+
+// Which weight-placement profile this machine will actually get, for a model
+// that declares them (#5420 — MiniMax H3 today). This is the HONEST capacity
+// fact next to the headline `memoryGb`: that number never accounted for the
+// reserve PortOS keeps for the OS, so a machine sitting exactly on it read as a
+// fit while a render would have taken the whole box. Renders nothing at all for
+// a model with no declared profiles, so no other entry gains a row.
+function MemoryProfileFact({ model, systemMemoryGb }) {
+  const { profile, usableGb, floorGb } = selectVideoMemoryProfile(model, systemMemoryGb);
+  if (floorGb === null) return null;
+  return (
+    <Fact label="Memory profile">
+      {usableGb === null ? (
+        <>
+          Needs {floorGb} GB usable · <span className="text-gray-500">this system: {UNKNOWN}</span>
+        </>
+      ) : profile ? (
+        <span className="text-port-success">
+          {profile.name || profile.id} · needs {profile.minMemoryGb} GB usable, this system has {Math.round(usableGb)} GB
+          {' '}after the {VIDEO_MEMORY_RESERVE_GB} GB reserve
+        </span>
+      ) : (
+        <span className="text-port-warning">
+          None — the smallest profile needs {floorGb} GB usable and this system has {Math.round(usableGb)} GB
+          {' '}after the {VIDEO_MEMORY_RESERVE_GB} GB reserve. Renders are refused rather than started.
         </span>
       )}
     </Fact>
@@ -140,6 +171,7 @@ export default function ModelDisclosure({
               )}
               <Fact label="Estimated download">{formatDownloadGb(disclosure?.estimatedDownloadGb)}</Fact>
               <MemoryFact model={model} systemMemoryGb={systemMemoryGb} />
+              <MemoryProfileFact model={model} systemMemoryGb={systemMemoryGb} />
               <Fact label="Supported modes">{modes}</Fact>
               <Fact label="Runtime">{model?.runtime || null}</Fact>
             </dl>
