@@ -100,7 +100,7 @@ import { startImageCleanTmpGc } from './imageCleanTmpGc.js';
 import { initBridge as initBrainMemoryBridge } from './brainMemoryBridge.js';
 import { initDrillCache } from './meatspacePostDrillCache.js';
 import { registerPostReminderSchedule } from './meatspacePostReminder.js';
-import { recoverStuckClassifications } from './brain.js';
+import { recoverInterruptedRepoClones, recoverStuckClassifications } from './brain.js';
 import { recoverStuckAnalyses } from './writersRoom/evaluator.js';
 import { recoverStuckAutoRuns } from './pipeline/autoRunner.js';
 import { recoverStuckAutopilots } from './pipeline/seriesAutopilot.js';
@@ -740,11 +740,12 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
     ensureSelf,
     initSyncLog,
 
-    // Recover inbox entries stuck in 'classifying' from a previous crash. Must
-    // run AFTER initSyncLog() because updateInboxLog() appends to the brain sync
-    // log — running it before currentSeq is loaded would mint colliding seqs and
-    // corrupt peer cursors.
+    // Recover inbox classifications and repository clones interrupted by a
+    // previous crash. Must run AFTER initSyncLog() because both recovery paths
+    // append to the brain sync log — running them before currentSeq is loaded
+    // would mint colliding seqs and corrupt peer cursors.
     recoverStuckClassifications,
+    recoverInterruptedRepoClones,
 
     // Awaited by the sequence so data/ exists and the worker loop is running
     // before /api/video-gen or /api/image-gen can enqueue (otherwise persist()

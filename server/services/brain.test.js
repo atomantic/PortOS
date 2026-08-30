@@ -147,6 +147,7 @@ import {
   deleteInboxEntry,
   deleteMemoryEntry,
   recoverStuckClassifications,
+  recoverInterruptedRepoClones,
   createLinkFromUrl
 } from './brain.js';
 
@@ -962,6 +963,32 @@ describe('brain service', () => {
       expect(storage.updateInboxLog).toHaveBeenCalledWith('legacy', { status: 'needs_review' });
       expect(storage.updateInboxLog).not.toHaveBeenCalledWith('peers', expect.anything());
       expect(storage.updateInboxLog).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // ===========================================================================
+  // recoverInterruptedRepoClones
+  // ===========================================================================
+
+  describe('recoverInterruptedRepoClones', () => {
+    it('marks only interrupted clones as failed so they can be retried', async () => {
+      storage.getLinks.mockResolvedValue([
+        { id: 'pending', cloneStatus: 'pending' },
+        { id: 'cloning', cloneStatus: 'cloning' },
+        { id: 'cloned', cloneStatus: 'cloned' },
+        { id: 'failed', cloneStatus: 'failed' },
+        { id: 'none', cloneStatus: 'none' },
+      ]);
+      storage.updateLink.mockResolvedValue({});
+
+      await recoverInterruptedRepoClones();
+
+      expect(storage.getLinks).toHaveBeenCalledWith({ cloneStatus: 'cloning' });
+      expect(storage.updateLink).toHaveBeenCalledTimes(1);
+      expect(storage.updateLink).toHaveBeenCalledWith('cloning', {
+        cloneStatus: 'failed',
+        cloneError: 'Clone interrupted by a server restart. Retry to clone the repository again.',
+      });
     });
   });
 

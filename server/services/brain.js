@@ -838,6 +838,29 @@ export async function recoverStuckClassifications() {
   }
 }
 
+/**
+ * Recover repository clones interrupted by a previous server shutdown.
+ * A clone process cannot survive the PortOS process that started it, so every
+ * persisted `cloning` state observed during boot is orphaned and retryable.
+ */
+export async function recoverInterruptedRepoClones() {
+  const links = await storage.getLinks({ cloneStatus: 'cloning' });
+  let recovered = 0;
+  for (const link of links) {
+    // Keep the state guard even though storage applies the filter so a future
+    // storage implementation cannot broaden this boot-time mutation by accident.
+    if (link.cloneStatus !== 'cloning') continue;
+    await storage.updateLink(link.id, {
+      cloneStatus: 'failed',
+      cloneError: 'Clone interrupted by a server restart. Retry to clone the repository again.'
+    });
+    recovered++;
+  }
+  if (recovered > 0) {
+    console.log(`🧠 Recovered ${recovered} interrupted repository clone(s)`);
+  }
+}
+
 // Re-export storage functions for convenience
 export const loadMeta = storage.loadMeta;
 export const updateMeta = storage.updateMeta;

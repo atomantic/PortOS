@@ -160,3 +160,22 @@ describe('POST /api/brain/links/reorder', () => {
     expect(brainService.reorderLinks).not.toHaveBeenCalled();
   });
 });
+
+describe('POST /api/brain/links/:id/clone', () => {
+  it('starts a new clone for a link recovered to failed', async () => {
+    brainService.getLinkById.mockResolvedValue({
+      id: 'repo-link',
+      url: 'https://github.com/acme/widgets',
+      isGitHubRepo: true,
+      cloneStatus: 'failed',
+    });
+
+    const res = await request(app).post('/api/brain/links/repo-link/clone');
+
+    expect(res.status).toBe(200);
+    expect(brainService.cloneRepoInBackground).toHaveBeenCalledWith(
+      'repo-link',
+      'https://github.com/acme/widgets',
+    );
+  });
+});

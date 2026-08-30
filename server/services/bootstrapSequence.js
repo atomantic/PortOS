@@ -280,9 +280,11 @@ export const runDatabasePhase = async ({ gate, migrate, warmStores, reconcileSta
  *      is armed, never fired, so nothing below depends on it.
  *   2. `ensureSelf` → `initSyncLog` awaited before anything can mutate brain
  *      records, so sync sequence numbers are loaded before the first append.
- *   3. `recoverStuckClassifications` AFTER `initSyncLog` (it appends to the sync
- *      log; running it earlier mints colliding seqs and corrupts peer cursors)
- *      but fire-and-forget, since nothing below reads its result.
+ *   3. Brain record recovery AFTER `initSyncLog` (updates append to the sync
+ *      log; running earlier mints colliding seqs and corrupts peer cursors).
+ *      Interrupted clone recovery is awaited so the first links request cannot
+ *      observe an orphaned `cloning` state; inbox recovery remains best-effort
+ *      in the background because nothing below reads its result.
  *   4. `initMediaJobQueue` awaited before `initMediaJobDependentHooks` — the
  *      hooks must be listening before the queue replays `completed` events for
  *      reloaded jobs, and before a route can enqueue against a half-init queue.
@@ -300,6 +302,7 @@ export const runPostRouteSequence = ({
   ensureSelf,
   initSyncLog,
   recoverStuckClassifications,
+  recoverInterruptedRepoClones,
   initMediaJobQueue,
   initMediaJobDependentHooks,
   initSharing,
@@ -316,6 +319,7 @@ export const runPostRouteSequence = ({
     .then(() => initSyncLog())
     .then(() => {
       bestEffort(recoverStuckClassifications(), logFailure('Brain recovery failed'));
+      return bestEffort(recoverInterruptedRepoClones(), logFailure('Brain clone recovery failed'));
     })
     .then(() => initMediaJobQueue())
     .then(() => initMediaJobDependentHooks())
