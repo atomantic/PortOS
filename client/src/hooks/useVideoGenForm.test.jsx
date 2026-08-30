@@ -786,6 +786,26 @@ describe('useVideoGenForm', () => {
     expect(result.current.mode).toBe('text');
   });
 
+  // #5449 — applyFinish resets the decode, but a user can also reach a delivery
+  // model by hand from the Model dropdown. Without the same clamp there the
+  // form would submit a draft decode the server declines, and persist a knob
+  // that changed nothing on the render.
+  it('clamps a draft decode to full when a delivery model is picked by hand', async () => {
+    const DECODE_OPTIONS = [
+      { id: 'full', label: 'Full decode' },
+      { id: 'draft', label: 'Example draft decoder' },
+    ];
+    const draft = { ...MLX, finishModelId: LTX2.id, draftDecodeOptions: DECODE_OPTIONS };
+    const delivery = { ...LTX2, draftDecodeOptions: DECODE_OPTIONS };
+    const { result } = render({ models: [draft, delivery] });
+    await waitFor(() => expect(result.current.modelId).toBe(draft.id));
+
+    act(() => result.current.setDraftDecode('draft'));
+    await waitFor(() => expect(result.current.draftDecode).toBe('draft'));
+
+    act(() => result.current.handleModelChange(delivery.id));
+    await waitFor(() => expect(result.current.draftDecode).toBe('full'));
+  });
   it('applyFinish switches off the grok backend so the delivery model is what actually renders', async () => {
     const { result } = render({ grokEnabled: true });
     act(() => result.current.handleBackendChange('grok'));

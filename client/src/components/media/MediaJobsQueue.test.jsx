@@ -526,12 +526,23 @@ describe('MediaJobsQueue — video retry decode override (#5449)', () => {
     expect(select).toBeDisabled();
     expect(screen.getByText(/Example Delivery is a delivery model/)).toBeInTheDocument();
 
-    // The baseline snaps with the value, so an untouched requeue of a delivery
-    // job stays byte-identical to today rather than growing a no-op override.
+    // The lock is a real reset, not just a display: it clears the inherited
+    // request so the requeued job stops carrying a decode it can never perform.
+    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
+    expect(retryMediaJob).toHaveBeenCalledWith(
+      'decodefail000dead', { draftDecode: null }, { silent: true },
+    );
+  });
+
+  it('sends no override for a delivery-model job that never carried a decode', async () => {
+    const user = userEvent.setup();
+    getVideoGenStatus.mockResolvedValue({ models: MODELS });
+    await openRetryEditor(user, failedJob({ modelId: 'example-delivery' }));
+    await waitFor(() => expect(screen.getByLabelText('Decode').value).toBe('full'));
+
     await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
     expect(retryMediaJob).toHaveBeenCalledWith('decodefail000dead', null, { silent: true });
   });
-
   it('resets the decode to Full when the retry is retargeted at a delivery model', async () => {
     const user = userEvent.setup();
     getVideoGenStatus.mockResolvedValue({ models: MODELS });

@@ -22,7 +22,7 @@ import {
   textEncoderIdFromRecord,
   normalizeSpeedProfileForModel, speedProfileIdFromRecord,
   DEFAULT_DRAFT_DECODE_ID, draftDecodeOptionsForModel,
-  normalizeDraftDecodeForModel, draftDecodeFromRecord,
+  resolveDraftDecodeForModel, draftDecodeFromRecord,
 } from '../lib/videoGenParams.js';
 import { useVideoGenFieldState } from './useVideoGenFieldState.js';
 import { useVideoGenSubmitFlow } from './useVideoGenSubmitFlow.js';
@@ -472,9 +472,11 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
     setSpeedProfileId((current) => normalizeSpeedProfileForModel(current, currentModel));
     // And the same for the decode: only some models declare a draft decoder, so
     // a switch away from one must not leave "Draft" selected on a model whose
-    // renders would silently be full decodes.
-    setDraftDecode((current) => normalizeDraftDecodeForModel(current, currentModel));
-  }, [currentModel]);
+    // renders would silently be full decodes. `resolveDraftDecodeForModel` also
+    // clamps a DELIVERY model to Full — applyFinish covers the Finish button,
+    // but a model picked by hand (or restored from history) reaches here instead.
+    setDraftDecode((current) => resolveDraftDecodeForModel(current, currentModel, models));
+  }, [currentModel, models]);
 
   // Substitutable prompt conditioners the selected model can load, straight off
   // the server-decorated entry. Empty for every runtime without substitutions,
@@ -1208,7 +1210,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
     prompt, negativePrompt, stylePreset,
     width, height, mode, sourceImageFile, sourceImageUpload,
     numFrames, fps, steps, guidanceScale, seed,
-    currentModel, modelId, tiling, textEncoderId, speedProfileId, draftDecode,
+    currentModel, models, modelId, tiling, textEncoderId, speedProfileId, draftDecode,
     disableAudio, noMusic, imageStrength, i2vReferenceMode,
     keyframesActive, keyframes, loraFamily, selectedLoras,
     lastImageFile, lastImageUpload, extendFromVideoId, audioFile,

@@ -27,7 +27,7 @@ import {
   videoEdgeBoundsForModel, textEncoderOptionsForModel, STOCK_TEXT_ENCODER_ID,
   normalizeTextEncoderForModel,
   DEFAULT_SPEED_PROFILE_ID, normalizeSpeedProfileForModel, speedProfileIdFromRecord,
-  DEFAULT_DRAFT_DECODE_ID, isFullDecodeId, normalizeDraftDecodeForModel, draftDecodeFromRecord,
+  isFullDecodeId, resolveDraftDecodeForModel, draftDecodeFromRecord,
 } from '../../lib/videoGenParams';
 import { isDeliveryVideoModel } from '../../lib/videoFinish';
 import { loraFamilyOf, videoLoraFamily } from '../../lib/runnerFamilies';
@@ -760,15 +760,17 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
   // to Full there rather than offering a draft the server would decline — the
   // same reset the Video Gen form makes when Finish switches models.
   const deliveryModel = isDeliveryVideoModel(currentModel, models);
-  const snapDraftDecode = useCallback((id) => (
-    deliveryModel ? DEFAULT_DRAFT_DECODE_ID : normalizeDraftDecodeForModel(id, currentModel)
-  ), [currentModel, deliveryModel]);
-  // Until `models` resolves, an unknown model means "not known yet", never "no
-  // draft decoder" — so the baseline stays the RECORDED value and an untouched
-  // requeue submitted mid-load still sends no decode override at all.
-  const originalDraftDecode = currentModel
-    ? snapDraftDecode(draftDecodeFromRecord(p.draftDecode))
-    : draftDecodeFromRecord(p.draftDecode);
+  const recordedDraftDecode = draftDecodeFromRecord(p.draftDecode);
+  // What an UNTOUCHED requeue would re-submit. Two deliberate readings:
+  //   - until `models` resolves, an unknown model means "not known yet", never
+  //     "no draft decoder", so the baseline stays the recorded value and a
+  //     requeue submitted mid-load still sends no decode override at all;
+  //   - on a delivery model it ALSO stays the recorded value, so the lock's
+  //     reset to Full counts as a change and clears the stale request rather
+  //     than silently re-inheriting a decode the render can never perform.
+  const originalDraftDecode = (currentModel && !deliveryModel)
+    ? resolveDraftDecodeForModel(recordedDraftDecode, currentModel, models)
+    : recordedDraftDecode;
   // Models arrive asynchronously, so the recorded profile can only be validated
   // once the entry resolves. Until then state holds the raw recorded id; this
   // snaps it to what the model actually declares, so an untouched form can't
@@ -782,8 +784,8 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
   // is known, so the <select> can never hold a value it has no <option> for.
   useEffect(() => {
     if (!currentModel) return;
-    setDraftDecode((current) => snapDraftDecode(current));
-  }, [currentModel, snapDraftDecode]);
+    setDraftDecode((current) => resolveDraftDecodeForModel(current, currentModel, models));
+  }, [currentModel, models]);
   // Multi-keyframe inputs are not exposed in the sanitized queue projection,
   // but FFLF is their persisted semantic mode. IC/a2v conditioning also pins
   // a single render, so keep the shared chaining controls consistent with the

@@ -12,6 +12,7 @@ import {
   speedProfileIdFromRecord, selectedSpeedProfile, videoChainChunkModes,
   DEFAULT_DRAFT_DECODE_ID, isFullDecodeId, draftDecodeOptionsForModel,
   supportsDraftDecode, normalizeDraftDecodeForModel, draftDecodeFromRecord,
+  resolveDraftDecodeForModel,
 } from './videoGenParams.js';
 
 describe('videoModelMemoryGb', () => {
@@ -395,6 +396,30 @@ describe('draft decode helpers', () => {
     ['draft', 'draft'],
   ])('reads %p out of a record as %p', (stored, expected) => {
     expect(draftDecodeFromRecord(stored)).toBe(expected);
+  });
+
+  // Delivery intent outranks declaration (#5449), the same order
+  // `draftDecodeDeclineReason` gates it server-side: a model another entry
+  // names as its Finish target always decodes on its own decoder, even when it
+  // declares a draft decoder of its own.
+  describe('resolveDraftDecodeForModel', () => {
+    const DELIVERY = { id: 'delivery_model', draftDecodeOptions: OPTIONS };
+    const DRAFT = { id: 'draft_model', finishModelId: 'delivery_model', draftDecodeOptions: OPTIONS };
+    const MODELS = [DRAFT, DELIVERY];
+
+    it('keeps a declared decode on a model at the draft end of the graph', () => {
+      expect(resolveDraftDecodeForModel('draft', DRAFT, MODELS)).toBe('draft');
+    });
+
+    it('snaps to full on a delivery model even though it declares a decoder', () => {
+      expect(resolveDraftDecodeForModel('draft', DELIVERY, MODELS)).toBe(DEFAULT_DRAFT_DECODE_ID);
+    });
+
+    // Without the list nothing can be read as a delivery target, so this must
+    // fall through to the plain declaration check rather than locking to full.
+    it('falls back to the declaration check when the model list is absent', () => {
+      expect(resolveDraftDecodeForModel('draft', DELIVERY, null)).toBe('draft');
+    });
   });
 });
 

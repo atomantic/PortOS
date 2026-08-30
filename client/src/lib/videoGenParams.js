@@ -5,6 +5,7 @@
 // page and any future consumer import them directly.
 
 import { isLtx2FamilyRuntime } from './runnerFamilies';
+import { isDeliveryVideoModel } from './videoFinish.js';
 
 // Values follow LTX-2's 8k+1 latent boundary so the model doesn't silently
 // snap. 241 = 10s @ 24fps is the comfortable single-pass ceiling on 48 GB
@@ -235,6 +236,19 @@ export const normalizeDraftDecodeForModel = (id, model) => (
 // user asked to reproduce.
 export const draftDecodeFromRecord = (value) => (
   typeof value === 'string' && value ? value : DEFAULT_DRAFT_DECODE_ID
+);
+// The decode a request on THIS model actually resolves to. Delivery intent
+// OUTRANKS declaration, in the same order `draftDecodeDeclineReason` gates it
+// server-side: a model the finish graph names as a delivery target always
+// decodes on its own decoder, so the request snaps to Full there before the
+// question of "with which decoder?" is even asked. Every client path that
+// reconciles a decode against a model — the Video Gen form's model-switch
+// snap-back, its submit payload, and the requeue editor — goes through this, so
+// none of them can offer or POST a draft the server would decline.
+export const resolveDraftDecodeForModel = (id, model, models) => (
+  isDeliveryVideoModel(model, models)
+    ? DEFAULT_DRAFT_DECODE_ID
+    : normalizeDraftDecodeForModel(id, model)
 );
 
 // Per-edge bounds for video: mirrors the videoGen route (64..2048). The base
