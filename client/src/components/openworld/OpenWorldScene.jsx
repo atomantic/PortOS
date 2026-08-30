@@ -114,7 +114,6 @@ function OpenWorldScene({
 }) {
   const [positions, setPositions] = useState(null);
   const [proximityApp, setProximityApp] = useState(null);
-  const [proximityWarpPad, setProximityWarpPad] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
   const [webglLost, setWebglLost] = useState(false);
   const [canvasRevision, setCanvasRevision] = useState(0);
@@ -238,27 +237,11 @@ function OpenWorldScene({
     setProximityApp(app);
   }, []);
 
-  const handleWarpPadProximity = useCallback((region) => {
-    setProximityWarpPad(region);
-  }, []);
-
   useEffect(() => {
     if (explorationMode) return;
     setProximityApp(null);
-    setProximityWarpPad(null);
-  }, [explorationMode]);
-
-  useEffect(() => {
-    if (!explorationMode) {
-      onProximityChange?.(null);
-      return;
-    }
-    if (proximityWarpPad) {
-      onProximityChange?.({ type: 'warpPad', id: proximityWarpPad.id, label: proximityWarpPad.label });
-      return;
-    }
-    onProximityChange?.(proximityApp ? { type: 'building', id: proximityApp.id, label: proximityApp.name } : null);
-  }, [explorationMode, onProximityChange, proximityApp, proximityWarpPad]);
+    onProximityChange?.(null);
+  }, [explorationMode, onProximityChange]);
 
   const handleTransitionComplete = useCallback(() => {
     setTransitioning(false);
@@ -397,6 +380,7 @@ function OpenWorldScene({
         memoryGraph={memoryGraph}
         inboxDepth={inboxDepth}
         jiraTickets={jiraTickets}
+        jiraEnabled={jiraFeatureEnabled}
         introspection={introspection}
         voiceState={voiceState}
         onBuildingClick={onBuildingClick}
@@ -478,7 +462,6 @@ function OpenWorldScene({
           keysRef={keysRef}
           positions={villageAppPositions}
           onBuildingProximity={handleBuildingProximity}
-          onWarpPadProximity={handleWarpPadProximity}
           onProximityChange={onProximityChange}
           onBuildingClick={onBuildingClick}
           onToggleCameraView={onToggleCameraView}

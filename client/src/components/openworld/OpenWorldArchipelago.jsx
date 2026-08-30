@@ -520,8 +520,8 @@ function CorePavilion({ site, dayMix }) {
   );
 }
 
-function VillageSites({ dayMix, metrics }) {
-  return VILLAGE_SITES.map((site) => (
+function VillageSites({ dayMix, metrics, jiraEnabled }) {
+  return VILLAGE_SITES.filter((site) => site.id !== 'sprint' || jiraEnabled).map((site) => (
     site.special === 'core'
       ? <CorePavilion key={site.id} site={site} dayMix={dayMix} />
       : <Cottage key={site.id} site={site} dayMix={dayMix} metric={metrics?.[site.id]} />
@@ -601,9 +601,10 @@ function AppKiosk({ app, position, agentMap, dayMix, onBuildingClick }) {
 }
 
 function VillageAppMarket({ apps, appPositions, agentMap, dayMix, onBuildingClick }) {
-  const visibleApps = (Array.isArray(apps) ? apps : []).filter((app) => app?.id && !app.archived && appPositions?.has?.(app.id));
-  const activeCount = visibleApps.filter((app) => app.overallStatus === 'online').length;
-  const totalManaged = (Array.isArray(apps) ? apps : []).filter((app) => app && !app.archived).length;
+  const managedApps = (Array.isArray(apps) ? apps : []).filter((app) => app?.id && !app.archived);
+  const visibleApps = managedApps.filter((app) => appPositions?.has?.(app.id));
+  const activeCount = managedApps.filter((app) => app.overallStatus === 'online').length;
+  const totalManaged = managedApps.length;
   const overflow = Math.max(0, totalManaged - visibleApps.length);
   const banner = totalManaged === 0
     ? 'MANAGED APPS · READY FOR ARRIVALS'
@@ -740,6 +741,7 @@ function VillagePortosLife({
   memoryGraph,
   inboxDepth,
   jiraTickets,
+  jiraEnabled,
   introspection,
   voiceState,
   dayMix,
@@ -773,7 +775,7 @@ function VillagePortosLife({
 
   return (
     <group>
-      <VillageSites dayMix={dayMix} metrics={metrics} />
+      <VillageSites dayMix={dayMix} metrics={metrics} jiraEnabled={jiraEnabled} />
       <VillageAppMarket apps={apps} appPositions={appPositions} agentMap={agentMap} dayMix={dayMix} onBuildingClick={onBuildingClick} />
       <MemoryGrove district={memory} inboxDepth={inboxDepth} dayMix={dayMix} />
       <TaskYard queue={queue} dayMix={dayMix} />
@@ -869,6 +871,7 @@ export default function OpenWorldArchipelago({
   memoryGraph = null,
   inboxDepth = 0,
   jiraTickets = [],
+  jiraEnabled = true,
   introspection = null,
   voiceState = null,
   onBuildingClick,
@@ -905,6 +908,7 @@ export default function OpenWorldArchipelago({
             memoryGraph={memoryGraph}
             inboxDepth={inboxDepth}
             jiraTickets={jiraTickets}
+            jiraEnabled={jiraEnabled}
             introspection={introspection}
             voiceState={voiceState}
             dayMix={dayMix}

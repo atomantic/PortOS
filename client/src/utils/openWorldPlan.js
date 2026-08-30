@@ -92,6 +92,17 @@ export const isOnArchipelagoIsland = (x, z, inset = 0) => ARCHIPELAGO_ISLANDS.so
   return nx * nx + nz * nz <= 1;
 });
 
+// Street-level rendering uses one continuous valley shelf rather than the orbital
+// archipelago plates. Keep its collision outline beside the authored ground descriptor so
+// the rover never hits an invisible island boundary while still visibly on village grass.
+export const isOnVillageGround = (x, z, inset = 0) => {
+  const safeX = Math.max(0.5, VILLAGE_GROUND.radiusX - inset);
+  const safeZ = Math.max(0.5, VILLAGE_GROUND.radiusZ - inset);
+  const nx = (x - VILLAGE_GROUND.center[0]) / safeX;
+  const nz = (z - VILLAGE_GROUND.center[1]) / safeZ;
+  return nx * nx + nz * nz <= 1;
+};
+
 export const isOnArchipelagoLink = (x, z, padding = 0) => ARCHIPELAGO_LINKS.some((link) => {
   const points = archipelagoLinkPoints(link);
   const radius = link.width / 2 + padding;
@@ -296,13 +307,13 @@ export const TRANSIT = {
 // players on land). `margin` extends the water zone toward land (positive = stricter).
 export const isInWater = (_x, z, margin = 0) => z < WORLD.shorelineZ + margin;
 
-// True where a ground-level player may stand: inside an island shelf or on a causeway.
-// Flying players (above rooftop height) ignore this entirely.
+// True where a ground-level player may stand: inside the continuous village shelf or on
+// an authored causeway. Flying players (above rooftop height) ignore this entirely.
 export const isWalkable = (x, z) => {
-  // Pull the collision boundary slightly inside the decorative island rim so the
+  // Pull the collision boundary slightly inside the decorative village rim so the
   // rover cannot balance over open water on its outside wheels. Causeways get a
   // small forgiving shoulder for analog controls and high-speed boost entries.
-  return isOnArchipelagoIsland(x, z, 0.75) || isOnArchipelagoLink(x, z, 0.45);
+  return isOnVillageGround(x, z, 0.75) || isOnArchipelagoLink(x, z, 0.45);
 };
 
 // ---------------------------------------------------------------------------

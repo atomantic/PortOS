@@ -11,6 +11,7 @@ import {
   computeVillageAppLayout,
   isInWater,
   isOnArchipelagoIsland,
+  isOnVillageGround,
   isWalkable,
   computeStreets,
   computeStreetProps,
@@ -79,7 +80,7 @@ describe('isInWater', () => {
 });
 
 describe('isWalkable', () => {
-  it('allows island shelves and connected causeways while blocking open water', () => {
+  it('allows the continuous village shelf and connected causeways while blocking open water', () => {
     ARCHIPELAGO_ISLANDS.forEach((island) => {
       expect(isWalkable(island.center[0], island.center[1]), island.id).toBe(true);
       expect(isOnArchipelagoIsland(island.center[0], island.center[1]), island.id).toBe(true);
@@ -92,6 +93,11 @@ describe('isWalkable', () => {
         expect(isWalkable((x1 + x2) / 2, (z1 + z2) / 2), link.id).toBe(true);
       }
     });
+    // The close game renders one valley outline, including grass between the named
+    // orbital islands. That visible shelf must not contain an invisible collision wall.
+    expect(isOnArchipelagoIsland(68, 0, 0.75)).toBe(false);
+    expect(isOnVillageGround(68, 0, 0.75)).toBe(true);
+    expect(isWalkable(68, 0)).toBe(true);
     expect(isWalkable(78, -58)).toBe(false);
     expect(isWalkable(-75, 0)).toBe(false);
   });

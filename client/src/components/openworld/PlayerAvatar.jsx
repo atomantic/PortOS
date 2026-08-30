@@ -90,7 +90,7 @@ export default function PlayerAvatar({ rigRef }) {
       // them on one Euler made the cylinder's roll axis precess as the front wheels turned,
       // which read as a wobble even on flat ground.
       steerPivot.rotation.y = index >= 2 ? (rig.wheelAngle || 0) : 0;
-      const wheelOffset = hovering || rig.jumping ? -0.08 : suspension.wheelOffsets[index] - suspension.translation.y;
+      const wheelOffset = hovering || rig.jumping ? -0.08 : suspension.wheelTravel[index];
       steerPivot.position.y += ((WHEEL_RADIUS + wheelOffset) - steerPivot.position.y) * dampFactor(15, delta);
       const rollPivot = wheelRollRefs.current[index];
       if (rollPivot) rollPivot.rotation.y -= wheelSpeed * delta;

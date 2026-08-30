@@ -168,7 +168,16 @@ export function solveVehicleSuspensionPose({
     return heightAt(worldX, worldZ) - centerHeight;
   });
   const target = reference.map((mount, index) => ({ ...mount, y: wheelOffsets[index] }));
-  return { ...solveKabschTransform(reference, target), wheelOffsets };
+  const pose = solveKabschTransform(reference, target);
+  // The rigid chassis pose already accounts for the shared slope under all four mounts.
+  // Per-wheel travel is only the vertical residual that the best-fit plane could not
+  // explain. Applying the full wheel offset again would double the slope: uphill tires
+  // float while downhill tires sink even though the chassis is already tilted correctly.
+  const wheelTravel = reference.map((mount, index) => {
+    const fitted = rotateByQuaternion(mount, pose.rotation);
+    return wheelOffsets[index] - (fitted.y + pose.translation.y);
+  });
+  return { ...pose, wheelOffsets, wheelTravel };
 }
 
 export const clampPitch = (pitch) =>

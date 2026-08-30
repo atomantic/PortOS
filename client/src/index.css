@@ -1837,6 +1837,14 @@ html[data-port-theme] .openworld-themed [class~="hover:bg-cyan-500/5"]:hover { b
   .openworld-hud-action-copy { display: inline; }
 }
 
+/* The village toolbar shares the top edge with a status card, so its four long labels
+   need more room than the general HUD actions. Keep the tablet layout icon-only. */
+.openworld-village-actions .openworld-hud-action-copy { display: none; }
+
+@media (min-width: 1280px) {
+  .openworld-village-actions .openworld-hud-action-copy { display: inline; }
+}
+
 @media (max-width: 767px) {
   .openworld-hud-panel { border-radius: 16px; }
   .openworld-hud-dock { border-radius: 16px; overflow-x: auto; scrollbar-width: none; }

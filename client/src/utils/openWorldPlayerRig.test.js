@@ -47,6 +47,21 @@ describe('terrain suspension', () => {
     expect(Math.hypot(pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w)).toBeCloseTo(1, 6);
     expect(pose.residual).toBeLessThan(0.02);
   });
+
+  it('uses only the small fit residual for per-wheel travel on a planar slope', () => {
+    const pose = solveVehicleSuspensionPose({
+      x: 0,
+      z: 0,
+      heading: 0,
+      centerHeight: 0,
+      halfWidth: 0.8,
+      halfLength: 1.1,
+      heightAt: (_x, z) => z * 0.25,
+    });
+
+    expect(Math.max(...pose.wheelOffsets.map(Math.abs))).toBeGreaterThan(0.2);
+    expect(Math.max(...pose.wheelTravel.map(Math.abs))).toBeLessThan(0.01);
+  });
 });
 
 describe('nextBoomZoom', () => {
