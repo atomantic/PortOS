@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../../services/api', () => ({
@@ -39,20 +40,23 @@ const renderEditor = (transitions = [existingPath]) => {
   const onGenerateImage = vi.fn().mockResolvedValue({ jobId: 'image-1' });
   const onGenerateVideo = vi.fn().mockResolvedValue({ jobId: 'video-1' });
   render(
-    <LoomNodeEditor
-      loom={loom}
-      episode={episode}
-      node={nodes[0]}
-      universe={{
-        characters: [{ id: 'char-1', name: 'Aria', wardrobes: [{ id: 'coat', name: 'Travel coat' }] }],
-        places: [{ id: 'place-1', name: 'Atrium' }],
-        objects: [{ id: 'object-1', name: 'Compass' }],
-      }}
-      onLoomUpdate={onLoomUpdate}
-      onClearSelection={() => {}}
-      onGenerateImage={onGenerateImage}
-      onGenerateVideo={onGenerateVideo}
-    />,
+    <MemoryRouter>
+      <LoomNodeEditor
+        loom={loom}
+        episode={episode}
+        node={nodes[0]}
+        universe={{
+          id: 'universe-1',
+          characters: [{ id: 'char-1', name: 'Aria', wardrobes: [{ id: 'coat', name: 'Travel coat' }] }],
+          places: [{ id: 'place-1', name: 'Atrium' }],
+          objects: [{ id: 'object-1', name: 'Compass' }],
+        }}
+        onLoomUpdate={onLoomUpdate}
+        onClearSelection={() => {}}
+        onGenerateImage={onGenerateImage}
+        onGenerateVideo={onGenerateVideo}
+      />
+    </MemoryRouter>,
   );
   return { onLoomUpdate, onGenerateImage, onGenerateVideo };
 };
@@ -73,6 +77,45 @@ const renderHelperEditor = () => {
       onLoomUpdate={vi.fn()}
       onClearSelection={() => {}}
     />,
+  );
+};
+
+const renderCanonicalEditor = (presence = 'onscreen') => {
+  const nodes = makeNodes([]);
+  nodes[0].protagonistPresence = presence;
+  nodes[0].visualCanon = {
+    mode: 'locked',
+    characterAppearances: presence === 'offscreen' ? [{ characterId: 'char-1', wardrobeId: 'coat' }] : [],
+    placeId: null,
+    objectIds: [],
+    continuitySourceNodeId: null,
+    shotNotes: '',
+    storyboardImageApproved: false,
+  };
+  const canonicalLoom = {
+    ...loom,
+    protagonistCharacterId: 'char-1',
+    protagonistWardrobeId: 'coat',
+    protagonistWardrobeLocked: true,
+  };
+  render(
+    <MemoryRouter>
+      <LoomNodeEditor
+        loom={canonicalLoom}
+        episode={{ id: 'ep-1', startNodeId: 'n1', nodes }}
+        node={nodes[0]}
+        universe={{
+          id: 'universe-1',
+          characters: [{ id: 'char-1', name: 'Aria', wardrobes: [{ id: 'coat', name: 'Travel coat' }] }],
+          places: [],
+          objects: [],
+        }}
+        onLoomUpdate={vi.fn()}
+        onClearSelection={() => {}}
+        onGenerateImage={vi.fn()}
+        onGenerateVideo={vi.fn()}
+      />
+    </MemoryRouter>,
   );
 };
 
@@ -167,6 +210,28 @@ describe('LoomNodeEditor paths', () => {
 });
 
 describe('LoomNodeEditor scene media', () => {
+  it('selects a protagonist from the linked Universe and surfaces reference readiness', async () => {
+    const user = userEvent.setup();
+    updateLoomNode.mockResolvedValue({ id: 'loom-1' });
+    renderEditor();
+
+    await user.click(screen.getByLabelText('Live conversation window (off-screen voice)'));
+    await user.selectOptions(screen.getByLabelText('Protagonist character'), 'char-1');
+
+    await waitFor(() => expect(updateLoomNode).toHaveBeenLastCalledWith(
+      'loom-1', 'ep-1', 'n1', {
+        interactionWindow: expect.objectContaining({
+          enabled: true,
+          protagonistCharacterId: 'char-1',
+        }),
+      }, { silent: true },
+    ));
+    expect(screen.getByRole('status')).toHaveTextContent('Needs character sheet');
+    expect(screen.getByRole('link', { name: 'Open Universe character sheets' })).toHaveAttribute(
+      'href', '/universes/universe-1?tab=cast',
+    );
+  });
+
   it('persists structured canon bindings and explicit storyboard approval', async () => {
     const user = userEvent.setup();
     updateLoomNode.mockResolvedValue({ id: 'loom-1' });
@@ -188,6 +253,40 @@ describe('LoomNodeEditor scene media', () => {
       }) },
       { silent: true },
     ));
+  });
+
+  it('offers the canonical protagonist as a one-click visual-cast binding', async () => {
+    const user = userEvent.setup();
+    updateLoomNode.mockResolvedValue({ id: 'loom-1' });
+    renderCanonicalEditor();
+
+    await user.click(screen.getByRole('button', { name: 'Add canonical protagonist to visual cast' }));
+
+    await waitFor(() => expect(updateLoomNode).toHaveBeenCalledWith(
+      'loom-1', 'ep-1', 'n1', {
+        visualCanon: expect.objectContaining({
+          characterAppearances: [{
+            characterId: 'char-1', wardrobeId: 'coat', expression: '', continuityNotes: '',
+          }],
+        }),
+      }, { silent: true },
+    ));
+  });
+
+  it('removes the protagonist visual binding when a scene becomes off-screen', async () => {
+    const user = userEvent.setup();
+    updateLoomNode.mockResolvedValue({ id: 'loom-1' });
+    renderCanonicalEditor('offscreen');
+
+    await user.selectOptions(screen.getByLabelText('Visual protagonist presence'), 'offscreen');
+
+    await waitFor(() => expect(updateLoomNode).toHaveBeenCalledWith(
+      'loom-1', 'ep-1', 'n1', {
+        protagonistPresence: 'offscreen',
+        visualCanon: expect.objectContaining({ characterAppearances: [] }),
+      }, { silent: true },
+    ));
+    expect(screen.getByText(/Side-device conversation/)).toBeInTheDocument();
   });
 
   it('queues a local video from the teleplay scene and rendered still', async () => {
@@ -312,7 +411,7 @@ describe('LoomNodeEditor scene media', () => {
       { silent: true },
     ));
 
-    expect(screen.getByLabelText('Protagonist Character ID')).toBeInTheDocument();
+    expect(screen.getByLabelText('Protagonist character')).toBeInTheDocument();
     expect(screen.getByLabelText('Protagonist presence')).toBeInTheDocument();
   });
 

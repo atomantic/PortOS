@@ -260,7 +260,17 @@
             "Republic of Korea",
             "United States of America"
           ]
-        }
+        },
+        "memoryProfiles": [
+          {
+            "id": "unified-8bit",
+            "name": "Unified 8-bit",
+            "description": "8-bit quantized DiT with the bf16 Qwen3-VL conditioner, resident in unified memory.",
+            "minMemoryGb": 128,
+            "minVramGb": null,
+            "unified": true
+          }
+        ]
       },
       {
         "id": "wan22_ti2v_5b",
@@ -736,7 +746,33 @@
             "Republic of Korea",
             "United States of America"
           ]
-        }
+        },
+        "memoryProfiles": [
+          {
+            "id": "bf16",
+            "name": "bf16 with CPU offload",
+            "description": "Unquantized components swapped by the components manager, with a 12 GB device reserve.",
+            "minMemoryGb": 96,
+            "minVramGb": 60,
+            "unified": false
+          },
+          {
+            "id": "int8-stream",
+            "name": "int8, streamed blocks",
+            "description": "int8 weight-only quantization with block-level transformer offload streamed onto the card.",
+            "minMemoryGb": 96,
+            "minVramGb": 20,
+            "unified": false
+          },
+          {
+            "id": "int8-lean",
+            "name": "int8, leaf-level",
+            "description": "int8 weight-only quantization with leaf-level offload for the transformer, conditioner and video VAE.",
+            "minMemoryGb": 96,
+            "minVramGb": 12,
+            "unified": false
+          }
+        ]
       }
     ],
     "defaultMlx": "ltx23_distilled_q4",

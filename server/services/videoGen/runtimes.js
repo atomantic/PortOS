@@ -64,6 +64,21 @@ export const MINIMAX_H3_EXPECTED_REVISION = 'fcd9e9b79a1d6018d91ac477c0968de1fa0
 // untracked in the pin verification that both /status and the render helper run.
 export const MINIMAX_H3_ENCODER_SHIM_DIR = join(homedir(), '.portos', 'minimax-h3-encoder-shims');
 
+// Composed checkpoint roots for a preview-fidelity video decode
+// (lib/videoDraftDecoders.js, #5423). Same shape and the same reason as the
+// encoder shims above — a tree of symlinks into the upstream FL2VA snapshot
+// with only `video_vae/source/model.safetensors` replaced — kept in its own
+// directory so removing one substitution never disturbs the other.
+export const MINIMAX_H3_DRAFT_DECODER_SHIM_DIR = join(homedir(), '.portos', 'minimax-h3-decoder-shims');
+
+// Reusable Qwen3-VL prompt embeddings (#5443). The MLX runner keys each entry
+// on the prompt text plus the CONTENT digest of every conditioning image and
+// holds the directory under its own byte ceiling, so this is a plain cache the
+// user can delete at any time. Outside MINIMAX_H3_REPO_DIR for the same reason
+// the shim roots are: a file written inside the checkout reads as untracked in
+// the pin verification /status and the render helper both run.
+export const MINIMAX_H3_PROMPT_EMBEDDING_CACHE_DIR = join(homedir(), '.portos', 'minimax-h3-prompt-embeddings');
+
 // MiniMax H3 on CUDA — the diffusers `MiniMaxH3ModularPipeline` rather than a
 // pinned source checkout, so this runtime is a plain pip venv with no revision
 // to verify and no source package to keep clean.
@@ -222,6 +237,15 @@ export const BYOV_RUNTIME_INFO = Object.freeze({
     pinEnvVar: 'LTX25_PIN',
     importProbe: 'import ltx_pipelines_mlx',
     fingerprintPackages: ['ltx_pipelines_mlx', 'ltx_core_mlx', 'mlx', 'mlx_metal'],
+    // The revision whose ancestral (SDE) Euler loop was READ and confirmed to
+    // re-apply the conditioning mask after its renoise — the invariant an
+    // image-to-video render depends on to keep frame one equal to the supplied
+    // picture at every step, not only the last (#5422). This is deliberately a
+    // literal rather than a reference to LTX25_EXPECTED_REVISION: bumping the
+    // pin without re-reading that loop turns runtimes.test.js red, which is the
+    // whole point. scripts/generate_ltx2.py enforces the invariant against the
+    // LIVE pin regardless, and refuses the render when it cannot.
+    i2vAnchorVerifiedRevision: '57952288076766abe27dda3a774b2c24f7346977',
   },
   fastvideo: {
     id: 'fastvideo',
@@ -469,6 +493,16 @@ export function isPinnedSourceStatusClean(stdout, expectedRevision) {
   const lines = String(stdout).split(/\r?\n/).filter(Boolean);
   const oid = lines.find((line) => line.startsWith('# branch.oid '))?.slice('# branch.oid '.length);
   return oid === expectedRevision && lines.every((line) => line.startsWith('# '));
+}
+
+// The revision a BYOV runtime's checkout is pinned to, or null for a runtime
+// that has no source pin (a plain pip venv). Paired with
+// `isByovRuntimeCurrent` by callers that need to know WHICH revision is
+// installed rather than just whether it is current — a capability gate on a
+// separately verified asset (lib/videoDraftDecoders.js) has to name the
+// checkout the asset was validated against, not just assert cleanliness.
+export function byovRuntimeExpectedRevision(runtimeId) {
+  return BYOV_RUNTIME_INFO[runtimeId]?.expectedRevision || null;
 }
 
 export async function isByovRuntimeCurrent(runtimeId) {

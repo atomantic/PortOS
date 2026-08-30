@@ -3,6 +3,7 @@ import { GROK_VIDEO_DEFAULT_DURATION } from '../lib/grokVideoClip.js';
 import { DEFAULT_I2V_REFERENCE_MODE } from '../lib/videoReferenceModes.js';
 import {
   DEFAULT_CONTEXT_FRAMES,
+  DEFAULT_DRAFT_DECODE_ID,
   DEFAULT_SPEED_PROFILE_ID,
   STOCK_TEXT_ENCODER_ID,
 } from '../lib/videoGenParams.js';
@@ -43,6 +44,7 @@ export function useVideoGenFieldState({
   const [tiling, setTiling] = useState('auto');
   const [textEncoderId, setTextEncoderId] = useState(STOCK_TEXT_ENCODER_ID);
   const [speedProfileId, setSpeedProfileId] = useState(DEFAULT_SPEED_PROFILE_ID);
+  const [draftDecode, setDraftDecode] = useState(DEFAULT_DRAFT_DECODE_ID);
   const [disableAudio, setDisableAudio] = useState(false);
   const [selectedLoras, setSelectedLoras] = useState([]);
   const [noMusic, setNoMusic] = useState(false);
@@ -101,6 +103,7 @@ export function useVideoGenFieldState({
     selectedLoras, setSelectedLoras,
     sizeManuallySetRef,
     speedProfileId, setSpeedProfileId,
+    draftDecode, setDraftDecode,
     staleModelToastRef,
     steps, setSteps,
     stylePreset, setStylePreset,

@@ -168,3 +168,22 @@ export const finishTargetForModel = (model, availableModels) => {
   if (!Array.isArray(availableModels)) return null;
   return availableModels.find((m) => m?.id === targetId) || null;
 };
+
+/**
+ * True when `model` exists in the graph as somebody's DELIVERY target — i.e.
+ * another entry names it as its `finishModelId`.
+ *
+ * That is a stronger statement than "this model is slow": a delivery model is
+ * declared as the place a composition is taken once it is settled, so anything
+ * that trades fidelity for speed (issue #5423's draft decode) has no business
+ * on it, however the request was phrased. Kept here rather than in the consumer
+ * so the finish graph stays the single authority on which end of a pair a model
+ * sits on.
+ *
+ * @param {object|null|undefined} model
+ * @param {Array<object>} list - the platform's video model entries
+ */
+export const isDeliveryVideoModel = (model, list) => {
+  if (!isEntry(model) || !Array.isArray(list)) return false;
+  return list.some((entry) => isEntry(entry) && entry.finishModelId === model.id);
+};

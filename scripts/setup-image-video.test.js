@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { BYOV_RUNTIME_INFO } from '../server/services/videoGen/runtimes.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SETUP_SCRIPT = join(REPO_ROOT, 'scripts', 'setup-image-video.sh');
@@ -157,4 +158,27 @@ describe('setup-image-video clone/fetch progress reporting', () => {
 
     expect(silentFetches).toEqual([]);
   });
+});
+
+// The pin the installer checks out and the revision the server verifies a
+// checkout against are the SAME fact written in two languages. When they drift,
+// every install silently provisions a runtime the server then reports as stale —
+// and for LTX-2.5 the drifted revision is also the one whose sampler nobody read
+// for the i2v frame-one anchor (#5422).
+describe('pinned runtime revisions', () => {
+  const pinned = Object.values(BYOV_RUNTIME_INFO)
+    .filter((info) => info.pinEnvVar && info.expectedRevision);
+
+  it('covers every runtime the registry pins', () => {
+    expect(pinned.map((info) => info.id).sort()).toEqual(
+      expect.arrayContaining(['ltx25', 'minimax_h3', 'wan22']));
+  });
+
+  it.each(pinned.map((info) => [info.id, info]))(
+    'installs %s at the revision the registry verifies', (_id, info) => {
+      const shellDefault = source.match(
+        new RegExp(`^\\s*${info.pinEnvVar}="\\$\\{${info.pinEnvVar}:-([^}"]+)\\}"`, 'm'),
+      )?.[1];
+      expect(shellDefault).toBe(info.expectedRevision);
+    });
 });

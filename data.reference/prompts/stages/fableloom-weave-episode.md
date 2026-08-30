@@ -24,6 +24,12 @@ You are a story writer and creative director. Build ONE complete episode of an i
 
 When an existing graph is present, this is a reweave: preserve its story events, dialogue, branch meanings, and ending outcomes while expanding or recomposing nodes as needed to satisfy the one-camera-cut-per-node contract.
 
+## Validated episode beat outline
+
+{{outlineDigest}}
+
+When a validated beat outline is present, it is the authoritative story plan for this expansion. Expand every outline beat into one corresponding camera-cut node in the same dramatic order, preserve its path meanings and ending outcomes, and add only the scene-level prose and production directions needed to make those beats playable. Do not replace the established protagonist, world, or episode handoff.
+
 ## Design contract
 
 - Choose the node count and ending count yourself from the story's pacing, dramatic coverage, and branching needs. Never compress multiple camera cuts into one node to hit an arbitrary count.
@@ -31,6 +37,7 @@ When an existing graph is present, this is a reweave: preserve its story events,
 - Set `playbackMode: "cut"` on setup/action nodes that play once and automatically feed the next camera cut. They must have exactly one `Continue` transition.
 - Set `playbackMode: "decision"` on choice or feedback nodes. Their video is designed to loop seamlessly while the experience waits for the viewer; give them 1–4 distinct intent paths. The loop must show an ongoing, repeatable situation rather than irreversible action (for example, a guard pacing a hallway while the viewer decides when to move).
 - Set `audienceConnection` on every node. In helper mode, the opening is passive until the configured communication medium is visibly activated close to the beginning; that first connected scene must invite the audience into the story as themselves. Only `connected` scenes may use `playbackMode: "decision"`. Every `disconnected` scene uses `playbackMode: "cut"` with exactly one canon continuation, including scenes after the medium is lost, stolen, broken, or jammed. A later scene may restore it. In protagonist mode use `connected` on decision scenes and `disconnected` on automatic cuts.
+- Set `protagonistPresence` on every node. A helper-mode connected decision beat that is the protagonist's direct communicator conversation with the audience should be `"offscreen"`: the scene image must omit the protagonist so the host can keep the decision scene looping while the audience speaks on a second device. Use `"onscreen"` for a visible protagonist beat. When a canonical protagonist wardrobe is supplied in the story context, keep that wardrobe unchanged in every on-screen scene unless the story explicitly records a wardrobe change.
 - Reserve multiple paths for genuine viewer decisions. Endings must differ meaningfully in outcome and tone.
 - Exactly one scene is the opening (`startKey`). Every scene must be reachable from it.
 - Every non-ending node needs either one `Continue` path for consecutive coverage or 2–4 outgoing paths at a genuine decision. Each path gets: an `intent` (a short imperative label, ≤10 words), 2–4 `triggers` (example free-text phrasings a reader might type), and a one-sentence `description` of where it leads (spoiler-safe).
@@ -64,6 +71,7 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
       "cameraMovement": "slow-dolly-in",
       "playbackMode": "cut",
       "audienceConnection": "disconnected",
+      "protagonistPresence": "onscreen",
       "isEnding": false,
       "transitions": [
         { "targetKey": "s2", "intent": "string", "triggers": ["string"], "description": "string" }

@@ -54,6 +54,27 @@ describe('LoomEpisodeOutline', () => {
     expect(onSelectNode).toHaveBeenCalledWith('node-2');
   });
 
+  it('surfaces on-screen versus side-device protagonist beats in the teleplay review', () => {
+    const reviewedEpisode = {
+      ...episode,
+      nodes: episode.nodes.map((node, index) => ({
+        ...node,
+        protagonistPresence: index === 0 ? 'onscreen' : 'offscreen',
+      })),
+      storyOutline: {
+        validation: { status: 'valid' },
+        scenes: [{
+          key: 's1', title: 'The choice', summary: 'The viewer speaks through the communicator.',
+          protagonistPresence: 'offscreen',
+        }],
+      },
+    };
+    render(<LoomEpisodeOutline loom={{ name: 'Example Loom', format: 'prose' }} episode={reviewedEpisode} />);
+
+    expect(screen.getAllByText('Protagonist on-screen')).toHaveLength(1);
+    expect(screen.getAllByText('Protagonist off-screen · side-device')).toHaveLength(3);
+  });
+
   it('explains when an episode has no scenes', () => {
     render(<LoomEpisodeOutline loom={{ name: 'Example Loom', format: 'prose' }} episode={{ ...episode, nodes: [], startNodeId: null }} />);
 

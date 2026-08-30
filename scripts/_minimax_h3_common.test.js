@@ -87,7 +87,49 @@ describe.skipIf(!pyBin)('_minimax_h3_common.py — checkpoint facts shared by bo
       'image:False:[]',
       'anchor:False:[]',
       'output:True:None',
+      // The capacity contract PortOS passes down (#5420). Shared rather than
+      // per-runner because both lanes enforce the same host floor before they
+      // load anything; only the VRAM half is the CUDA runner's own.
+      'memory_profile:False:None',
+      'min_system_memory_gb:False:None',
+      'memory_headroom_gb:False:0.0',
     ]);
+  });
+
+  // The runner-side half of the capacity gate (#5420). H3's components fit
+  // nowhere unassisted, so this has to refuse BEFORE the multi-GB load — and it
+  // has to distinguish "measured and short" from "could not measure", because
+  // an unreadable capacity probe must not read as a box with no memory.
+  describe('enforce_system_memory', () => {
+    const enforce = ({ total, minimum, headroom = 16 }) => runPython(`${importShared}\n${[
+      'import argparse',
+      `shared.total_system_memory_gb = lambda: ${total === null ? 'None' : `float(${total})`}`,
+      `args = argparse.Namespace(min_system_memory_gb=${minimum === null ? 'None' : minimum},`
+        + ` memory_headroom_gb=${headroom})`,
+      'try:',
+      '    print(f"OK:{shared.enforce_system_memory(args)}")',
+      'except SystemExit as exc:',
+      '    print(f"REJECTED:{exc}")',
+    ].join('\n')}`).trim();
+
+    it('refuses a measured box below the floor', () => {
+      expect(enforce({ total: 96, minimum: 128 })).toMatch(/^REJECTED:.*at least 128 GB.*has 96 GB/);
+    });
+
+    it('accepts the machine the floor was written for, reserve NOT netted off first', () => {
+      // The floor is a total-RAM claim hoisted from the entry's `memoryGb`.
+      // Subtracting the allocator reserve here as well would move the 128 GB
+      // model onto a 144 GB box and refuse every Mac the entry describes.
+      expect(enforce({ total: 128, minimum: 128 })).toBe('OK:128.0');
+    });
+
+    it('proceeds, rather than refusing, when the host could not be measured', () => {
+      expect(enforce({ total: null, minimum: 128 })).toBe('OK:None');
+    });
+
+    it('is a no-op when PortOS passed no floor', () => {
+      expect(enforce({ total: 8, minimum: null })).toBe('OK:8.0');
+    });
   });
 
   it('states the fixed fps and frame grid once', () => {

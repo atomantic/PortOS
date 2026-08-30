@@ -304,6 +304,60 @@ describe('mediaJobs routes', () => {
     expect(stubs.enqueueJob.mock.calls[0][0].params.speedProfileId).toBe('fast');
   });
 
+  // #5449 — the requeue editor now offers the preview-fidelity decode (#5423)
+  // as an editable override, so the field has to be in the RETRY allowlist too.
+  // Unknown keys are STRIPPED by the schema, so without this a changed decode
+  // would be silently dropped rather than rejected.
+  it('POST /:id/retry applies a draft-decode override the requeue editor sends', async () => {
+    jobStore.set('j-video-decode', {
+      id: 'j-video-decode', kind: 'video', owner: null, status: 'failed',
+      params: { prompt: 'old', modelId: 'ltx25_mlx_q8' },
+    });
+    const r = await request(makeApp())
+      .post('/api/media-jobs/j-video-decode/retry')
+      .send({ params: { draftDecode: 'draft' } });
+    expect(r.status).toBe(200);
+    expect(stubs.enqueueJob.mock.calls[0][0].params)
+      .toEqual({ prompt: 'old', modelId: 'ltx25_mlx_q8', draftDecode: 'draft' });
+  });
+
+  it('POST /:id/retry inherits the decode when untouched, and clears it on null or the full sentinel', async () => {
+    const seed = () => jobStore.set('j-video-decode-clear', {
+      id: 'j-video-decode-clear', kind: 'video', owner: null, status: 'failed',
+      params: { prompt: 'old', draftDecode: 'draft' },
+    });
+    seed();
+    const untouched = await request(makeApp())
+      .post('/api/media-jobs/j-video-decode-clear/retry')
+      .send({ params: { prompt: 'new' } });
+    expect(untouched.status).toBe(200);
+    expect(stubs.enqueueJob.mock.calls[0][0].params.draftDecode).toBe('draft');
+
+    // Both spellings of "back to Full" drop the key entirely — absence and
+    // 'full' are the same request (lib/videoDraftDecoders.js), so persisting the
+    // sentinel would leave the requeued job wearing a knob that changed nothing.
+    for (const value of [null, 'full']) {
+      stubs.enqueueJob.mockClear();
+      seed();
+      const r = await request(makeApp())
+        .post('/api/media-jobs/j-video-decode-clear/retry')
+        .send({ params: { draftDecode: value } });
+      expect(r.status).toBe(200);
+      expect(stubs.enqueueJob.mock.calls[0][0].params).toEqual({ prompt: 'old' });
+    }
+  });
+
+  it('POST /:id/retry rejects a decode id outside the closed enum', async () => {
+    jobStore.set('j-video-decode-bad', {
+      id: 'j-video-decode-bad', kind: 'video', owner: null, status: 'failed',
+      params: { prompt: 'old' },
+    });
+    const r = await request(makeApp())
+      .post('/api/media-jobs/j-video-decode-bad/retry')
+      .send({ params: { draftDecode: 'turbo' } });
+    expect(r.status).toBe(400);
+  });
+
   it('POST /:id/retry clears resettable numeric video controls with null', async () => {
     jobStore.set('j-video-clear', {
       id: 'j-video-clear', kind: 'video', owner: null, status: 'failed',

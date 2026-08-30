@@ -10,6 +10,9 @@ import {
   DEFAULT_SPEED_PROFILE_ID, isDefaultSpeedProfileId, speedProfilesForModel,
   speedProfilesForMode, normalizeSpeedProfileForModel,
   speedProfileIdFromRecord, selectedSpeedProfile, videoChainChunkModes,
+  DEFAULT_DRAFT_DECODE_ID, isFullDecodeId, draftDecodeOptionsForModel,
+  supportsDraftDecode, normalizeDraftDecodeForModel, draftDecodeFromRecord,
+  resolveDraftDecodeForModel,
 } from './videoGenParams.js';
 
 describe('videoModelMemoryGb', () => {
@@ -336,6 +339,87 @@ describe('speed profiles', () => {
     expect(selectedSpeedProfile('fast', model, 'text')).toBe(FAST);
     expect(selectedSpeedProfile(DEFAULT_SPEED_PROFILE_ID, model, 'text')).toBeNull();
     expect(selectedSpeedProfile('fast', {}, 'text')).toBeNull();
+  });
+});
+
+// Draft decode (#5423). The decoder table itself is server-side — only these
+// sentinel rules live here, and each one exists to stop the form POSTing a knob
+// the server would decline (or dropping one the user chose).
+describe('draft decode helpers', () => {
+  const OPTIONS = [
+    { id: 'full', label: 'Full decode' },
+    { id: 'draft', label: 'Draft decode' },
+  ];
+
+  // Absence, '' and 'full' are ONE request, mirroring `isFullDecode` on the
+  // server. If they diverged, an omitted field would start sending a decode
+  // override and a pre-feature payload would stop being byte-identical.
+  it.each([undefined, null, '', DEFAULT_DRAFT_DECODE_ID])('reads %p as a full decode', (id) => {
+    expect(isFullDecodeId(id)).toBe(true);
+  });
+
+  it('does not read a declared decoder id as full', () => {
+    expect(isFullDecodeId('draft')).toBe(false);
+  });
+
+  // Empty is the signal to render NO control — a model with no draft decoder
+  // must not be given a one-entry select implying a choice it doesn't have.
+  it.each([
+    ['a model with no options field', {}],
+    ['an empty option list', { draftDecodeOptions: [] }],
+    ['options with no ids', { draftDecodeOptions: [{ label: 'broken' }] }],
+  ])('offers nothing for %s', (_label, model) => {
+    expect(draftDecodeOptionsForModel(model)).toEqual([]);
+    expect(supportsDraftDecode(model)).toBe(false);
+  });
+
+  it('passes through a declared option list', () => {
+    expect(draftDecodeOptionsForModel({ draftDecodeOptions: OPTIONS })).toEqual(OPTIONS);
+  });
+
+  // A model switch must not leave "Draft" selected on a model whose renders
+  // would then silently be full decodes.
+  it.each([
+    ['an id this model offers', 'draft', { draftDecodeOptions: OPTIONS }, 'draft'],
+    ['an id it does not', 'draft', { draftDecodeOptions: [] }, DEFAULT_DRAFT_DECODE_ID],
+    ['an unknown id', 'turbo', { draftDecodeOptions: OPTIONS }, DEFAULT_DRAFT_DECODE_ID],
+  ])('normalizes %s', (_label, id, model, expected) => {
+    expect(normalizeDraftDecodeForModel(id, model)).toBe(expected);
+  });
+
+  // Records store only a NON-default decode, so a missing field must CLEAR a
+  // leftover selection rather than carry it into a faithful re-render.
+  it.each([
+    [undefined, DEFAULT_DRAFT_DECODE_ID],
+    [null, DEFAULT_DRAFT_DECODE_ID],
+    ['', DEFAULT_DRAFT_DECODE_ID],
+    ['draft', 'draft'],
+  ])('reads %p out of a record as %p', (stored, expected) => {
+    expect(draftDecodeFromRecord(stored)).toBe(expected);
+  });
+
+  // Delivery intent outranks declaration (#5449), the same order
+  // `draftDecodeDeclineReason` gates it server-side: a model another entry
+  // names as its Finish target always decodes on its own decoder, even when it
+  // declares a draft decoder of its own.
+  describe('resolveDraftDecodeForModel', () => {
+    const DELIVERY = { id: 'delivery_model', draftDecodeOptions: OPTIONS };
+    const DRAFT = { id: 'draft_model', finishModelId: 'delivery_model', draftDecodeOptions: OPTIONS };
+    const MODELS = [DRAFT, DELIVERY];
+
+    it('keeps a declared decode on a model at the draft end of the graph', () => {
+      expect(resolveDraftDecodeForModel('draft', DRAFT, MODELS)).toBe('draft');
+    });
+
+    it('snaps to full on a delivery model even though it declares a decoder', () => {
+      expect(resolveDraftDecodeForModel('draft', DELIVERY, MODELS)).toBe(DEFAULT_DRAFT_DECODE_ID);
+    });
+
+    // Without the list nothing can be read as a delivery target, so this must
+    // fall through to the plain declaration check rather than locking to full.
+    it('falls back to the declaration check when the model list is absent', () => {
+      expect(resolveDraftDecodeForModel('draft', DELIVERY, null)).toBe('draft');
+    });
   });
 });
 

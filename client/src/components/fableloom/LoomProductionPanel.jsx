@@ -33,6 +33,7 @@ import {
   resumeLoomEpisodeProductionBatch,
   startLoomEpisodeProductionBatch,
 } from '../../services/api';
+import { fableLoomStoryReadiness } from '../../lib/fableLoomReadiness';
 
 const IMAGE_BACKENDS = [
   { id: 'auto', label: 'Auto', icon: Layers },
@@ -52,6 +53,14 @@ const modelOptions = (models) => (Array.isArray(models) ? models : [])
   .filter((model) => model?.id)
   .map((model) => ({ id: model.id, label: model.name || model.id }));
 
+const productionAssetsForScope = (plan, scope) => {
+  if (!Array.isArray(plan?.plannedAssets)) return [];
+  if (scope === 'images') return plan.plannedAssets.filter((asset) => asset.type === 'image');
+  return plan.plannedAssets;
+};
+
+const assetIsReady = (asset) => asset.status !== 'blocked' && asset.readiness?.ready !== false;
+
 const severityIcon = (severity) => {
   if (severity === 'error' || severity === 'high') {
     return <CircleAlert size={14} className="text-port-error shrink-0 mt-0.5" />;
@@ -64,6 +73,7 @@ const severityIcon = (severity) => {
 
 export default function LoomProductionPanel({ loom, episode, onSelectNode }) {
   const [mode, setMode] = useState('current_canon');
+  const [assetScope, setAssetScope] = useState('images');
   const [plan, setPlan] = useState(null);
   const [activeBatchRun, setActiveBatchRun] = useState(null);
   const [continuityReview, setContinuityReview] = useState(null);
@@ -127,7 +137,10 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode }) {
   }, [activeBatchRun, loom.id, episode.id, mode]);
 
   const [startBatch, startingBatch] = useAsyncAction(async () => {
-    const res = await startLoomEpisodeProductionBatch(loom.id, episode.id, renderOptions(), { silent: true });
+    const res = await startLoomEpisodeProductionBatch(loom.id, episode.id, {
+      ...renderOptions(),
+      ...(selectedAssetTypes ? { assetTypes: selectedAssetTypes } : {}),
+    }, { silent: true });
     setActiveBatchRun(res);
   }, { errorMessage: 'Starting production batch failed' });
 
@@ -148,15 +161,35 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode }) {
     setContinuityReview(res);
   }, { errorMessage: 'Continuity review failed' });
 
+  const scopedAssets = productionAssetsForScope(plan, assetScope);
+  const hasAssetList = Array.isArray(plan?.plannedAssets);
+  const plannedCount = hasAssetList
+    ? scopedAssets.length
+    : assetScope === 'images' ? plan?.assetsByType?.image || 0 : plan?.totalAssets || 0;
+  const readyCount = hasAssetList
+    ? scopedAssets.filter(assetIsReady).length
+    : assetScope === 'images' ? plan?.assetsByType?.image || 0 : plan?.readyAssetsCount || 0;
+  const renderedCount = hasAssetList
+    ? scopedAssets.filter((asset) => asset.status === 'already_rendered' || asset.status === 'skipped').length
+    : plan?.alreadyRenderedCount || 0;
+  const blockedCount = hasAssetList
+    ? scopedAssets.filter((asset) => !assetIsReady(asset)).length
+    : assetScope === 'images' ? 0 : plan?.blockedAssetsCount || 0;
+  const selectedAssetTypes = assetScope === 'images' ? ['image'] : null;
+  const storyReadiness = fableLoomStoryReadiness(loom);
+
   const filteredFindings = (continuityReview?.findings || []).filter((f) => {
     if (categoryFilter === 'all') return true;
     return f.category === categoryFilter;
   });
 
   const readinessBlockers = [
+    ...(episode?.nodes?.length && !storyReadiness.ready
+      ? [{ message: storyReadiness.reason, nodeId: null }]
+      : []),
     ...(plan?.planningIssues || []).map((message) => ({ message, nodeId: null })),
-    ...(plan?.plannedAssets || [])
-      .filter((asset) => asset.status === 'blocked' || asset.readiness?.ready === false)
+    ...scopedAssets
+      .filter((asset) => !assetIsReady(asset))
       .flatMap((asset) => (asset.readiness?.reasons || []).map((message) => ({
         message,
         nodeId: asset.nodeId,
@@ -164,6 +197,8 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode }) {
   ].filter((item, index, items) => items.findIndex((candidate) => (
     candidate.message === item.message && candidate.nodeId === item.nodeId
   )) === index);
+  const canStart = readinessBlockers.length === 0
+    && (mode !== 'exact_inputs' || !plan?.exactInputIssues?.length);
 
   return (
     <div className="p-4 space-y-6">
@@ -200,6 +235,22 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode }) {
           </select>
         </div>
 
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <label htmlFor="fableloom-production-scope" className="text-xs text-port-text-muted">Production target:</label>
+          <select
+            id="fableloom-production-scope"
+            value={assetScope}
+            onChange={(event) => setAssetScope(event.target.value)}
+            className="text-xs bg-port-card border border-port-border rounded px-2 py-1 text-port-text focus:outline-none focus:border-port-accent"
+          >
+            <option value="images">Storyboard images only</option>
+            <option value="all">Images + video assets</option>
+          </select>
+          <span className="text-[10px] text-port-text-muted">
+            {assetScope === 'images' ? 'Video stays unqueued until you opt in.' : 'Queues the complete audiovisual plan.'}
+          </span>
+        </div>
+
         {planning && !plan && (
           <div className="flex items-center gap-2 text-xs text-port-text-muted py-2">
             <Loader2 size={12} className="animate-spin" />
@@ -212,19 +263,21 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode }) {
             <div className="grid grid-cols-3 gap-2 text-xs">
               <div className="p-2 rounded bg-port-card border border-port-border">
                 <div className="text-port-text-muted text-[10px] uppercase font-semibold">Planned Assets</div>
-                <div className="text-sm font-bold mt-0.5">{plan.totalAssets}</div>
+                <div className="text-sm font-bold mt-0.5">{plannedCount}</div>
                 <div className="text-[10px] text-port-text-muted mt-0.5">
-                  {plan.assetsByType?.image || 0} stills · {plan.assetsByType?.video || 0} clips
+                  {assetScope === 'images'
+                    ? `${plannedCount} stills · video not queued`
+                    : `${plan.assetsByType?.image || 0} stills · ${plan.assetsByType?.video || 0} clips`}
                 </div>
               </div>
 
               <div className="p-2 rounded bg-port-card border border-port-border">
                 <div className="text-port-text-muted text-[10px] uppercase font-semibold">Ready / Rendered</div>
                 <div className="text-sm font-bold text-port-success mt-0.5">
-                  {plan.readyAssetsCount} / {plan.alreadyRenderedCount}
+                  {readyCount} / {renderedCount}
                 </div>
                 <div className="text-[10px] text-port-text-muted mt-0.5">
-                  {plan.blockedAssetsCount} blocked
+                  {blockedCount} blocked
                 </div>
               </div>
 
@@ -238,6 +291,27 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode }) {
                 </div>
               </div>
             </div>
+
+            {plan.episodeOrderReadiness && (
+              <div className={`rounded border p-2.5 text-xs ${plan.episodeOrderReadiness.ready
+                ? 'border-port-success/30 bg-port-success/10'
+                : 'border-port-warning/30 bg-port-warning/10'}`}>
+                <div className="font-semibold flex items-center gap-1">
+                  {plan.episodeOrderReadiness.ready
+                    ? <CheckCircle2 size={12} className="text-port-success" />
+                    : <AlertTriangle size={12} className="text-port-warning" />}
+                  Ordered storyboard sequence
+                </div>
+                <div className="text-[11px] text-port-text-muted mt-1">
+                  {plan.episodeOrderReadiness.reason}
+                </div>
+                {!plan.episodeOrderReadiness.ready && plan.episodeOrderReadiness.missingScenes?.length > 0 && (
+                  <div className="text-[11px] text-port-text-muted mt-1">
+                    {plan.episodeOrderReadiness.missingScenes.length} prior scene image(s) still need to be rendered.
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="rounded bg-port-card border border-port-border p-2.5 space-y-2">
               <div className="text-[10px] uppercase font-semibold text-port-text-muted">Render settings</div>
@@ -268,32 +342,34 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode }) {
                     </select>
                   )}
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[11px] text-port-text-muted w-14">Video</span>
-                  <BackendChipStrip
-                    availableBackends={VIDEO_BACKENDS}
-                    value={videoMode || 'auto'}
-                    onChange={(value) => setVideoMode(value === 'auto' ? null : value)}
-                    size="sm"
-                    ariaLabel="Video provider"
-                  />
-                  {(videoMode === 'local' || !videoMode) && (
-                    <label htmlFor="fableloom-video-model" className="sr-only">Video model</label>
-                  )}
-                  {(videoMode === 'local' || !videoMode) && (
-                    <select
-                      id="fableloom-video-model"
-                      value={videoModel || ''}
-                      onChange={(event) => setVideoModel(event.target.value || null)}
-                      className="text-[11px] bg-port-bg border border-port-border rounded px-1.5 py-1 text-port-text"
-                    >
-                      <option value="">Saved video model</option>
-                      {modelOptions(videoModels).map((modelOption) => (
-                        <option key={modelOption.id} value={modelOption.id}>{modelOption.label}</option>
-                      ))}
-                    </select>
-                  )}
-                </div>
+                {assetScope === 'all' && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[11px] text-port-text-muted w-14">Video</span>
+                    <BackendChipStrip
+                      availableBackends={VIDEO_BACKENDS}
+                      value={videoMode || 'auto'}
+                      onChange={(value) => setVideoMode(value === 'auto' ? null : value)}
+                      size="sm"
+                      ariaLabel="Video provider"
+                    />
+                    {(videoMode === 'local' || !videoMode) && (
+                      <label htmlFor="fableloom-video-model" className="sr-only">Video model</label>
+                    )}
+                    {(videoMode === 'local' || !videoMode) && (
+                      <select
+                        id="fableloom-video-model"
+                        value={videoModel || ''}
+                        onChange={(event) => setVideoModel(event.target.value || null)}
+                        className="text-[11px] bg-port-bg border border-port-border rounded px-1.5 py-1 text-port-text"
+                      >
+                        <option value="">Saved video model</option>
+                        {modelOptions(videoModels).map((modelOption) => (
+                          <option key={modelOption.id} value={modelOption.id}>{modelOption.label}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                )}
                 <div className="flex items-center gap-2">
                   <label htmlFor="fableloom-render-effort" className="text-[11px] text-port-text-muted w-14">Effort</label>
                   <select
@@ -364,11 +440,13 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode }) {
               </div>
             )}
 
-            {plan.plannedAssets?.length > 0 && (
+            {scopedAssets.length > 0 && (
               <div className="rounded bg-port-card border border-port-border p-2.5 space-y-2">
-                <div className="text-[10px] uppercase font-semibold text-port-text-muted">Asset execution order</div>
+                <div className="text-[10px] uppercase font-semibold text-port-text-muted">
+                  {assetScope === 'images' ? 'Storyboard image execution order' : 'Asset execution order'}
+                </div>
                 <div className="max-h-52 overflow-y-auto space-y-1">
-                  {plan.plannedAssets.map((asset) => (
+                  {scopedAssets.map((asset) => (
                     <div key={asset.id} className="flex items-center gap-2 text-[11px] py-1 border-b border-port-border/50 last:border-0">
                       <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${asset.status === 'blocked' ? 'bg-port-error' : asset.status === 'already_rendered' || asset.status === 'skipped' ? 'bg-port-success' : 'bg-port-accent'}`} />
                       <button
@@ -403,11 +481,11 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode }) {
                 <button
                   type="button"
                   onClick={startBatch}
-                  disabled={startingBatch || plan.isFullyReady === false}
+                  disabled={startingBatch || !canStart}
                   className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded bg-port-accent text-white hover:bg-port-accent/90 disabled:opacity-50"
                 >
                   {startingBatch ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
-                  Start Batch Production
+                  {assetScope === 'images' ? 'Generate Storyboard Images' : 'Start Batch Production'}
                 </button>
               ) : (
                 <button

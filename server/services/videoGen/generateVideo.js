@@ -49,6 +49,8 @@ import {
   resolveByovRuntimeLoraCapable,
   modelAnchorsLastFrame,
   routesToWindowsHelper,
+  byovRuntimeExpectedRevision,
+  isByovRuntimeCurrent,
 } from './runtimes.js';
 import { loadHistory, saveHistory, mutateVideoHistory, getHistoryItem } from './history.js';
 import { VIDEO_MODE_GATED_RUNTIMES } from './modeContract.js';
@@ -67,6 +69,12 @@ import {
   resolveVideoSpeedProfile, speedProfileDeclineReason, resolveVideoSampler,
   inferEffectiveVideoMode,
 } from '../../lib/videoSpeedProfiles.js';
+import {
+  isFullDecode,
+  publicVideoDraftDecodeOptions,
+  draftDecodeDeclineReason,
+  resolveVideoDraftDecoder,
+} from '../../lib/videoDraftDecoders.js';
 // Re-export the extracted runtime + history surface so existing deep imports
 // (`from '../videoGen/local.js'`) keep resolving every symbol they used to.
 export * from './runtimes.js';
@@ -119,6 +127,10 @@ const decorateVideoModel = (m) => (m ? {
   lastFrameAnchored: modelAnchorsLastFrame(m),
   runtimeLoraCapable: byovRuntimeLoraCapable(m.runtime),
   textEncoderOptions: publicVideoTextEncoderOptions(m),
+  // The preview-fidelity decode choices this entry offers
+  // (lib/videoDraftDecoders.js). Empty for every model that declares no draft
+  // decoder, so the client renders no control instead of a one-entry select.
+  draftDecodeOptions: publicVideoDraftDecodeOptions(m),
 } : m);
 
 export const resolveVideoModel = (modelId) =>
@@ -128,7 +140,7 @@ export const listVideoModels = () => getVideoModels().map(decorateVideoModel);
 
 export const defaultVideoModelId = (capabilities) => getDefaultVideoModelId(capabilities);
 
-export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, mode = null, imageStrength = null, i2vReferenceMode = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, visualConditioning = null, hidden = false, jobId: providedJobId = null }) {
+export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, mode = null, imageStrength = null, i2vReferenceMode = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, visualConditioning = null, hidden = false, jobId: providedJobId = null }) {
   uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   // Single-flight is now enforced by the mediaJobQueue worker upstream — only
@@ -411,6 +423,48 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   if (speedProfileDeclined) {
     console.log(`⚠️ Speed profile declined [${jobId.slice(0, 8)}] ${speedProfileDeclined.code}: ${speedProfileDeclined.message}`);
   }
+  // Preview-fidelity video decode (#5423). Every gate lives in
+  // lib/videoDraftDecoders.js and RETURNS its reason; the render always
+  // proceeds, on the full decoder, because a decode substitution only ever
+  // makes a render cheaper. Resolved here rather than in the arg builder for
+  // the same reason the substituted conditioner is: a missing download has to
+  // be discovered before any GPU work, and the decision has to be recorded on
+  // the history row.
+  //
+  // Two gates need I/O and so cannot live in the pure module: whether the
+  // installed runner checkout is the revision the asset was verified against
+  // (an older one ignores the flags, which would let a full decode report
+  // itself as a draft), and whether the pinned files are actually in the HF
+  // cache. Both are only probed when a draft decode was requested AND the model
+  // declares one, so a full-decode render costs nothing extra.
+  let draftDecoder = null;
+  if (!isFullDecode(draftDecode)) {
+    const declared = model.draftDecoder;
+    const runtimeRevision = (declared && await isByovRuntimeCurrent(model.runtime))
+      ? byovRuntimeExpectedRevision(model.runtime)
+      : null;
+    // Only probed once the cheaper gates have passed — a model with no
+    // declaration, or a checkout at the wrong revision, never touches the cache.
+    const decoderPaths = (declared && runtimeRevision === declared.runtimeRevision)
+      ? await findCachedRepoFiles(declared.repo, declared.files, { revision: declared.revision })
+      : null;
+    const gateArgs = {
+      model,
+      models: getVideoModels(),
+      decodeId: draftDecode,
+      runtimeRevision,
+      assetCached: Array.isArray(decoderPaths) && decoderPaths.length > 0,
+    };
+    const resolved = resolveVideoDraftDecoder(gateArgs);
+    if (resolved) {
+      draftDecoder = { ...resolved, paths: decoderPaths };
+      console.log(`🩻 Draft decode "${resolved.id}" [${jobId.slice(0, 8)}] via ${resolved.label}`);
+    } else {
+      const declined = draftDecodeDeclineReason(gateArgs);
+      console.log(`⚠️ Draft decode declined [${jobId.slice(0, 8)}] ${declined?.code || 'UNKNOWN'}: ${declined?.message || 'rendering on the full decoder'}`);
+    }
+  }
+
   const sampler = resolveVideoSampler({ model, steps, guidanceScale, speedProfile });
   let actualSteps = sampler.steps;
   let actualGuidance = sampler.guidance;
@@ -695,6 +749,13 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // What the runner ACTUALLY managed to apply is stamped separately by
     // finalizeGeneratedVideo from the child's SPEEDPROFILE: report.
     ...(speedProfile ? { speedProfileId: speedProfile.id, stage2Steps: actualStage2Steps } : {}),
+    // Preview-fidelity decode (#5423). Recorded as the REQUESTED id, so a Remix
+    // round-trips the decode the user picked, and so the lightbox can say which
+    // decoder produced the pixels being judged. Absent on a full decode, which
+    // keeps every pre-feature history row byte-identical — and, because a
+    // declined request never sets it, a record can never claim a draft decode
+    // the render did not perform.
+    ...(draftDecoder ? { draftDecode: draftDecoder.id } : {}),
     // IC-LoRA remix settings, stamped so the lightbox Remix flow can round-trip
     // them. The reference clip is recorded by BASENAME (not the absolute
     // staging path) — history is user-facing and a durable upload path is both
@@ -740,7 +801,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // logic of the spawn-error handler so failure modes converge.
   let bin, args;
   try {
-    ({ bin, args } = buildArgs({ pythonPath, modelId, model: loraCapableModel, wanModelPath, wanRequiredWeights, ltxModelPath, prompt: renderPrompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, stage2Steps: actualStage2Steps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, keyframes: resolvedKeyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength: actualImageStrength, i2vReferenceMode: effectiveReferenceMode, textEncoderRepo: actualTextEncoderRepo, textEncoder: resolvedTextEncoder, outputPath, previewDir: stepwiseDir, loras: resolvedLoras, icReferencePaths: resolvedIcReferencePaths, icLoraWeightPath, icStrength: actualIcStrength, icAttentionStrength: actualIcAttentionStrength, icSkipStage2, speedProfile }));
+    ({ bin, args } = buildArgs({ pythonPath, modelId, model: loraCapableModel, wanModelPath, wanRequiredWeights, ltxModelPath, prompt: renderPrompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, stage2Steps: actualStage2Steps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, keyframes: resolvedKeyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength: actualImageStrength, i2vReferenceMode: effectiveReferenceMode, textEncoderRepo: actualTextEncoderRepo, textEncoder: resolvedTextEncoder, outputPath, previewDir: stepwiseDir, loras: resolvedLoras, icReferencePaths: resolvedIcReferencePaths, icLoraWeightPath, icStrength: actualIcStrength, icAttentionStrength: actualIcAttentionStrength, icSkipStage2, speedProfile, draftDecoder }));
   } catch (err) {
     job.status = 'error';
     const reason = err.message || 'Failed to build video gen args';

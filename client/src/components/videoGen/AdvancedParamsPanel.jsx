@@ -14,6 +14,7 @@ import {
   CONTEXT_FRAME_OPTIONS, supportsContextWindow,
   DEFAULT_SPEED_PROFILE_ID, speedProfilesForMode, selectedSpeedProfile,
   videoChainChunkModes,
+  DEFAULT_DRAFT_DECODE_ID, draftDecodeOptionsForModel,
 } from '../../lib/videoGenParams.js';
 import { VIDEO_TILING_OPTIONS } from '../../lib/videoTilingOptions';
 import { isLtx2FamilyRuntime } from '../../lib/runnerFamilies';
@@ -36,6 +37,7 @@ export default function AdvancedParamsPanel({
   steps, onStepsChange,
   guidanceScale, onGuidanceScaleChange,
   speedProfileId = DEFAULT_SPEED_PROFILE_ID, onSpeedProfileChange,
+  draftDecode = DEFAULT_DRAFT_DECODE_ID, onDraftDecodeChange, draftDecodeLocked = false,
   imageStrength, onImageStrengthChange,
   i2vReferenceMode = DEFAULT_I2V_REFERENCE_MODE, onI2vReferenceModeChange,
   effectiveImageStrength = null,
@@ -105,6 +107,17 @@ export default function AdvancedParamsPanel({
   const speedProfileModes = videoChainChunkModes({
     model: currentModel, mode, chaining: chainingActive, contextFrames,
   });
+  // Preview-fidelity decode (#5423). The option list is server-declared and
+  // rides on the model entry, so a model with no draft decoder yields [] and
+  // renders NO control rather than a select with one real choice.
+  // A model the finish graph names as a DELIVERY target always decodes on its
+  // own decoder — `draftDecodeDeclineReason` refuses a draft request there
+  // before it even asks which decoder was meant. The caller reads that off the
+  // model list (`isDeliveryVideoModel`) and passes it down, so the control shows
+  // Full and says why rather than offering a choice the server would decline.
+  const draftDecodeOptions = draftDecodeOptionsForModel(currentModel);
+  const effectiveDraftDecode = draftDecodeLocked ? DEFAULT_DRAFT_DECODE_ID : draftDecode;
+  const activeDraftDecode = draftDecodeOptions.find((o) => o.id === effectiveDraftDecode) || null;
   const speedProfiles = speedProfilesForMode(currentModel, speedProfileModes);
   const showSpeedProfiles = !samplerLocked && speedProfiles.length > 0;
   // Resolved against the SAME set the picker offers, so a model with two
@@ -261,6 +274,35 @@ export default function AdvancedParamsPanel({
               </button>
             </div>
           </div>
+
+          {draftDecodeOptions.length > 0 && (
+            <FormField label="Decode" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+              <select
+                value={activeDraftDecode ? effectiveDraftDecode : DEFAULT_DRAFT_DECODE_ID}
+                disabled={draftDecodeLocked}
+                onChange={(e) => onDraftDecodeChange?.(e.target.value)}
+                className={inputCls}
+              >
+                {draftDecodeOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}{option.sizeLabel ? ` · ${option.sizeLabel}` : ''}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-gray-500">
+                {draftDecodeLocked
+                  ? `${currentModel?.name || 'This model'} is a delivery model — final and Finish renders always decode on the full decoder.`
+                  : (
+                    <>
+                      {activeDraftDecode?.description || ''}
+                      {activeDraftDecode && activeDraftDecode.id !== DEFAULT_DRAFT_DECODE_ID
+                        ? ' Finish and delivery renders always use the full decoder.'
+                        : ''}
+                    </>
+                  )}
+              </p>
+            </FormField>
+          )}
 
           {showSpeedProfiles && (
             <FormField label="Speed" labelClassName="block text-xs font-medium text-gray-400 mb-1">

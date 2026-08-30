@@ -176,6 +176,46 @@ describe('CoS Schedule Routes', () => {
       expect(response.status).toBe(400);
       expect(taskSchedule.updateTaskInterval).not.toHaveBeenCalled();
     });
+
+    // promptSource carries the stored prompt's provenance (#5432). An explicit
+    // prompt write stamps it server-side, so the allowlist entry exists for the
+    // writes that carry provenance WITHOUT a prompt — restoring a saved config,
+    // or releasing a pin back to the auto-upgrade path without clearing the body.
+    // The enum is validated here so neither can persist an unrecognized value.
+    it('forwards a valid promptSource', async () => {
+      taskSchedule.updateTaskInterval.mockResolvedValue({ type: 'weekly' });
+
+      const response = await request(app)
+        .put('/api/cos/schedule/task/documentation')
+        .send({ promptSource: 'user' });
+
+      expect(response.status).toBe(200);
+      expect(taskSchedule.updateTaskInterval).toHaveBeenCalledWith('documentation', expect.objectContaining({
+        promptSource: 'user'
+      }));
+    });
+
+    it('normalizes an empty promptSource to null', async () => {
+      taskSchedule.updateTaskInterval.mockResolvedValue({ type: 'weekly' });
+
+      const response = await request(app)
+        .put('/api/cos/schedule/task/documentation')
+        .send({ promptSource: '' });
+
+      expect(response.status).toBe(200);
+      expect(taskSchedule.updateTaskInterval).toHaveBeenCalledWith('documentation', expect.objectContaining({
+        promptSource: null
+      }));
+    });
+
+    it('rejects an unknown promptSource', async () => {
+      const response = await request(app)
+        .put('/api/cos/schedule/task/documentation')
+        .send({ promptSource: 'made-up' });
+
+      expect(response.status).toBe(400);
+      expect(taskSchedule.updateTaskInterval).not.toHaveBeenCalled();
+    });
   });
 
   describe('GET /api/cos/schedule/due', () => {

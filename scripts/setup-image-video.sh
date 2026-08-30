@@ -330,6 +330,17 @@ if [[ "$INSTALL_LTX25" == "1" ]]; then
     echo "❌ INSTALL_LTX25=1 requires git." >&2
     exit 1
   fi
+  # VERIFIED PIN — image-to-video frame-one anchor (#5422). This fork samples
+  # distilled stage 1 with the ancestral (SDE) Euler loop, which renoises the
+  # whole latent every step. This revision's `ancestral_denoise_loop`
+  # (packages/ltx-pipelines-mlx/.../utils/samplers.py) re-applies the
+  # conditioning mask AFTER that renoise, so the frame-0 tokens stay equal to
+  # the supplied image at every step rather than only the last. A revision that
+  # does not renders a coherent clip unrelated to the picture the user handed
+  # in. Moving this pin means re-reading that loop and moving
+  # `i2vAnchorVerifiedRevision` in server/services/videoGen/runtimes.js with it
+  # (runtimes.test.js fails until both agree); scripts/generate_ltx2.py also
+  # checks the LIVE checkout at render time and refuses rather than drifting.
   LTX25_PIN="${LTX25_PIN:-57952288076766abe27dda3a774b2c24f7346977}"
   LTX25_DIR="${HOME}/.portos/ltx-2.5-mlx"
   LTX25_PY="${LTX25_DIR}/.venv/bin/python3"

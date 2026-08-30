@@ -7,6 +7,7 @@ import { z } from 'zod';
 import * as taskSchedule from '../services/taskSchedule.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination } from '../lib/validation.js';
+import { promptSourceSchema, PROMPT_SOURCES } from '../lib/cosValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 
 const templateTaskSchema = z.object({
@@ -24,7 +25,11 @@ const SCHEDULE_FIELDS = ['type', 'enabled', 'intervalMs', 'cronExpression', 'pro
   // Perpetual (drain-until-done) recheck cadence: after a perpetual task drains
   // its backlog and parks, it re-probes its work-detector on this cadence.
   // `recheckCron` (5-field) takes precedence over `recheckIntervalMs`.
-  'recheckCron', 'recheckIntervalMs'];
+  'recheckCron', 'recheckIntervalMs',
+  // Provenance of the stored prompt ('user' | 'legacy-inferred' | null). An
+  // explicit prompt write re-stamps it below in updateTaskInterval, so a body
+  // carrying it only matters when the prompt itself is not being changed.
+  'promptSource'];
 
 /**
  * Pick only defined values from body for schedule settings updates
@@ -73,6 +78,13 @@ function pickScheduleSettings(body) {
       throw new ServerError('dataInputs must contain only registered task data input ids', { status: 400, code: 'VALIDATION_ERROR' });
     }
     settings.dataInputs = parsed.data;
+  }
+  if (settings.promptSource !== undefined) {
+    const parsed = promptSourceSchema.safeParse(settings.promptSource);
+    if (!parsed.success) {
+      throw new ServerError(`promptSource must be one of ${PROMPT_SOURCES.join(', ')} or null`, { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    settings.promptSource = parsed.data ?? null;
   }
   if (settings.effort !== undefined && settings.effort !== null && !EFFORT_LEVELS.includes(settings.effort)) {
     throw new ServerError(`effort must be one of ${EFFORT_LEVELS.join(', ')} or null`, { status: 400, code: 'VALIDATION_ERROR' });

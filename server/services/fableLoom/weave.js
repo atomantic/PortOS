@@ -25,7 +25,16 @@ import {
   fableLoomCameraMovementCatalogForPrompt,
   normalizeFableLoomCameraMovement,
 } from '../../lib/fableLoomCameraMovements.js';
-import { isFableLoomPlaybackMode } from '../../lib/fableLoomPlayback.js';
+import {
+  analyzeSeriesStoryOutlines,
+  analyzeStoryOutline,
+  describeStoryOutlineForPrompt,
+  sanitizeStoryOutline,
+} from '../../lib/fableLoomOutline.js';
+import {
+  isFableLoomPlaybackMode,
+  resolveFableLoomProtagonistPresence,
+} from '../../lib/fableLoomPlayback.js';
 import {
   asFableLoomAudienceConnection,
   audienceCanParticipate,
@@ -154,10 +163,27 @@ const seriesPlanContext = (loom, episode) => {
       const end = item.endEpisodeId ? episodeLabels.get(item.endEpisodeId) || item.endEpisodeId : 'unassigned';
       return `Side quest (${item.status}; starts ${start}; ends ${end}): ${item.title || 'Untitled'}${item.description ? ` — ${trimTo(item.description, 300)}` : ''}`;
     });
+  const delivery = plan.deliveryOptions || {};
+  const deliveryLines = [];
+  if (delivery.overnightVoicemails === true) {
+    deliveryLines.push('Series delivery: include an authored overnight voicemail between every adjacent episode; it should carry the protagonist\'s emotional handoff and a reason to watch the next episode.');
+    for (const voicemail of plan.interEpisodeVoicemails || []) {
+      if (voicemail.transcript) {
+        deliveryLines.push(`Overnight voicemail ${voicemail.fromEpisodeId || '?'} -> ${voicemail.toEpisodeId || '?'}: ${trimTo(voicemail.transcript, 500)}`);
+      }
+    }
+  }
+  if (delivery.nextSeasonTeaser === true) {
+    deliveryLines.push('Series delivery: the final episode must leave a next-season teaser or unresolved cliffhanger after its ending.');
+    if (plan.nextSeasonTeaser?.transcript) {
+      deliveryLines.push(`Next-season teaser: ${trimTo(plan.nextSeasonTeaser.transcript, 500)}`);
+    }
+  }
   return [
     plan.storyArc ? `Series arc: ${trimTo(plan.storyArc, 4000)}` : '',
     ...plotPoints,
     ...sideQuests,
+    ...deliveryLines,
   ].filter(Boolean);
 };
 
@@ -169,10 +195,21 @@ const audienceContract = (loom, episode) => participationContractForPrompt(loom,
   requiresIntroduction: requiresAudienceIntroduction(loom, episode),
 });
 
+const protagonistContinuityContext = (loom) => [
+  loom.protagonistCharacterId
+    ? `Canonical protagonist binding: ${loom.protagonistCharacterId}. Every visible protagonist beat must use this Universe character.`
+    : 'Canonical protagonist binding: (not configured — choose and bind the protagonist before visual production).',
+  loom.protagonistWardrobeId
+    ? `Canonical protagonist wardrobe: ${loom.protagonistWardrobeId}${loom.protagonistWardrobeLocked ? ' (locked across every on-screen scene)' : ' (default; an intentional scene change must be explicit).'}`
+    : 'Canonical protagonist wardrobe: (not configured — do not invent a new outfit per scene).',
+  'Every scene must declare protagonist presence. Off-screen protagonist scenes are valid: use them for direct communicator conversations with the audience and keep the protagonist out of the storyboard image. For an off-screen helper scene, frame the obstacle or space the protagonist cannot see — around a corner, beyond a bend, at a distance, or otherwise outside their sightline. The communicator stays on the protagonist\'s person and out of frame; never make a standalone comms device the subject of the storyboard image.',
+];
+
 const storyContext = (loom, episode) => [
   `Story: ${loom.name}`,
   `Scene format: ${loomFormatLabel(loom.format)}`,
   `Audience participation: ${audienceContract(loom, episode)}`,
+  ...protagonistContinuityContext(loom),
   loom.logline ? `Logline: ${loom.logline}` : '',
   loom.premise ? `Premise: ${loom.premise}` : '',
   ...seriesPlanContext(loom, episode),
@@ -188,10 +225,33 @@ const seriesPlanDigest = (loom) => JSON.stringify({
   sideQuests: (loom.seriesPlan?.sideQuests || []).map((item) => ({
     ...item, description: trimTo(item.description, 400),
   })),
-  episodes: loom.episodes.map(({ id, number, title, synopsis }) => ({
-    id, number, title, synopsis: trimTo(synopsis, 300),
+  deliveryOptions: loom.seriesPlan?.deliveryOptions || null,
+  interEpisodeVoicemails: (loom.seriesPlan?.interEpisodeVoicemails || []).map((item) => ({
+    ...item, transcript: trimTo(item.transcript, 500),
+  })),
+  nextSeasonTeaser: loom.seriesPlan?.nextSeasonTeaser
+    ? { ...loom.seriesPlan.nextSeasonTeaser, transcript: trimTo(loom.seriesPlan.nextSeasonTeaser.transcript, 500) }
+    : null,
+  protagonistCharacterId: loom.protagonistCharacterId || null,
+  protagonistWardrobeId: loom.protagonistWardrobeId || null,
+  protagonistWardrobeLocked: loom.protagonistWardrobeLocked === true,
+  episodes: loom.episodes.map(({ id, number, title, synopsis, storyOutline }) => ({
+    id,
+    number,
+    title,
+    synopsis: trimTo(synopsis, 300),
+    beatOutline: storyOutline ? describeStoryOutlineForPrompt(storyOutline) : '(missing)',
   })),
 }, null, 2);
+
+const seriesTeleplayDigest = (loom) => loom.episodes.map((episode) => [
+  `## Episode ${episode.number}: ${episode.title || 'Untitled'}`,
+  episode.synopsis ? `Synopsis: ${trimTo(episode.synopsis, 500)}` : '',
+  episode.storyOutline ? `Beat outline:\n${describeStoryOutlineForPrompt(episode.storyOutline)}` : 'Beat outline: (missing)',
+  episode.nodes.length
+    ? describeGraphForPrompt(episode, { proseLimit: 800, participationMode: loom.participationMode })
+    : '(no expanded teleplay scenes)',
+].filter(Boolean).join('\n')).join('\n\n');
 
 // A full-plan draft replaces the whole scaffold after a potentially slow
 // provider call. Capture every authored input the stage read so a save made
@@ -202,8 +262,13 @@ const seriesPlanGenerationFingerprint = (loom) => JSON.stringify({
   premise: loom.premise,
   format: loom.format,
   universeId: loom.universeId,
+  protagonistCharacterId: loom.protagonistCharacterId,
+  protagonistWardrobeId: loom.protagonistWardrobeId,
+  protagonistWardrobeLocked: loom.protagonistWardrobeLocked,
   seriesPlan: loom.seriesPlan,
-  episodes: loom.episodes.map(({ id, number, title, synopsis }) => ({ id, number, title, synopsis })),
+  episodes: loom.episodes.map(({ id, number, title, synopsis, storyOutline }) => ({
+    id, number, title, synopsis, storyOutline,
+  })),
 });
 
 // --- Weave: generate a full episode graph -----------------------------------
@@ -218,6 +283,7 @@ const generatedNodeFields = (raw) => ({
   visualCanon: raw.visualCanon,
   playbackMode: raw.playbackMode,
   audienceConnection: raw.audienceConnection,
+  protagonistPresence: raw.protagonistPresence,
   isEnding: raw.isEnding === true,
   endingLabel: raw.endingLabel,
 });
@@ -255,11 +321,152 @@ export function mapGeneratedGraph(parsed) {
   return { nodes, startNodeId };
 }
 
-export async function weaveEpisode(loomId, episodeId, {
-  guidance = '', replace = false, providerId, model, effort, operationId,
+const episodeOutlineFingerprint = (loom, episode) => JSON.stringify({
+  loom: {
+    name: loom.name,
+    logline: loom.logline,
+    premise: loom.premise,
+    format: loom.format,
+    universeId: loom.universeId,
+    seriesId: loom.seriesId,
+    protagonistCharacterId: loom.protagonistCharacterId,
+    protagonistWardrobeId: loom.protagonistWardrobeId,
+    protagonistWardrobeLocked: loom.protagonistWardrobeLocked,
+    seriesPlan: loom.seriesPlan,
+  },
+  episodes: loom.episodes.map(({ id, number, title, synopsis, startNodeId, nodes, storyOutline }) => ({
+    id, number, title, synopsis, startNodeId, nodes, storyOutline,
+  })),
+  episodeId: episode.id,
+});
+
+const outlineStructuralAnalysis = (loom, episode) => analyzeStoryOutline(episode.storyOutline, {
+  participationMode: loom.participationMode,
+  requireAudienceIntroduction: requiresAudienceIntroduction(loom, episode),
+});
+
+const outlineInvalidError = (analysis, message = 'The episode outline must be valid before teleplay expansion') => {
+  const firstIssue = analysis?.issues?.find((issue) => issue.severity === 'error');
+  return new ServerError(firstIssue ? `${message}: ${firstIssue.message}` : message, {
+    status: 409,
+    code: 'OUTLINE_INVALID',
+  });
+};
+
+const episodeSequenceDigest = (loom, currentEpisodeId) => loom.episodes.map((episode) => (
+  `Episode ${episode.number}: ${episode.title || 'Untitled'}${episode.id === currentEpisodeId ? ' [CURRENT]' : ''}`
+  + (episode.synopsis ? ` — ${trimTo(episode.synopsis, 500)}` : '')
+)).join('\n');
+
+/** Draft one episode's camera-cut beats without writing scene prose. */
+export async function generateEpisodeOutline(loomId, episodeId, {
+  guidance = '', providerId, model, effort, operationId,
 } = {}) {
   const loom = await requireLoom(loomId);
   const episode = findEpisode(loom, episodeId);
+  const sourceFingerprint = episodeOutlineFingerprint(loom, episode);
+  const canonDigest = await buildCanonDigest(loom);
+  const { content, runId } = await runLoomAi('fableloom-outline-episode', {
+    storyContext: storyContext(loom, episode),
+    canonDigest: canonDigest || '(none — invent only what the premise needs)',
+    episodeSequence: episodeSequenceDigest(loom, episode.id),
+    currentGraph: episode.nodes.length
+      ? describeGraphForPrompt(episode, { proseLimit: 300, participationMode: loom.participationMode })
+      : '(none — this episode has not been expanded yet)',
+    currentOutline: episode.storyOutline
+      ? describeStoryOutlineForPrompt(episode.storyOutline)
+      : '(none — draft the first beat outline)',
+    guidance: guidance || '(none)',
+    participationContract: audienceContract(loom, episode),
+  }, { providerId, model, effort, operationId }, {
+    action: 'outline-episode', label: 'Drafting episode outline', source: 'fableloom-outline-episode',
+  });
+
+  const outline = sanitizeStoryOutline(content, { participationMode: loom.participationMode });
+  if (!outline?.scenes?.length) throw aiShapeError('The model returned no usable episode outline beats');
+  const validation = analyzeStoryOutline(outline, {
+    participationMode: loom.participationMode,
+    requireAudienceIntroduction: requiresAudienceIntroduction(loom, episode),
+  });
+  const draft = {
+    ...outline,
+    validation: {
+      status: 'draft',
+      issues: validation.issues,
+    },
+  };
+  const updated = await mutateLoom(loomId, (current) => {
+    if (episodeOutlineFingerprint(current, findEpisode(current, episodeId)) !== sourceFingerprint) {
+      throw new ServerError('The episode changed while its outline was being drafted', {
+        status: 409,
+        code: 'LOOM_CHANGED_DURING_GENERATION',
+      });
+    }
+    const currentEpisode = findEpisode(current, episodeId);
+    currentEpisode.storyOutline = draft;
+    currentEpisode.updatedAt = new Date().toISOString();
+    return current;
+  });
+  return {
+    loom: updated,
+    episodeId,
+    outline: findEpisode(updated, episodeId).storyOutline,
+    validation,
+    runId,
+  };
+}
+
+/** Validate and persist the deterministic status of an episode beat outline. */
+export async function validateEpisodeOutline(loomId, episodeId) {
+  const loom = await requireLoom(loomId);
+  const episode = findEpisode(loom, episodeId);
+  const validation = outlineStructuralAnalysis(loom, episode);
+  if (!episode.storyOutline) return { loom, episodeId, outline: null, validation };
+  const updated = await mutateLoom(loomId, (current) => {
+    const currentEpisode = findEpisode(current, episodeId);
+    const currentValidation = outlineStructuralAnalysis(current, currentEpisode);
+    currentEpisode.storyOutline = {
+      ...currentEpisode.storyOutline,
+      validation: {
+        status: currentValidation.stats.errorCount ? 'invalid' : 'valid',
+        issues: currentValidation.issues,
+        validatedAt: new Date().toISOString(),
+      },
+    };
+    currentEpisode.updatedAt = new Date().toISOString();
+    return current;
+  });
+  const updatedEpisode = findEpisode(updated, episodeId);
+  return {
+    loom: updated,
+    episodeId,
+    outline: updatedEpisode.storyOutline,
+    validation,
+  };
+}
+
+export async function weaveEpisode(loomId, episodeId, {
+  guidance = '', replace = false, expandFromOutline = false, providerId, model, effort, operationId,
+} = {}) {
+  const loom = await requireLoom(loomId);
+  const episode = findEpisode(loom, episodeId);
+  const outlineValidation = expandFromOutline ? outlineStructuralAnalysis(loom, episode) : null;
+  if (expandFromOutline && (!episode.storyOutline || episode.storyOutline.validation?.status !== 'valid')) {
+    throw outlineInvalidError(outlineValidation);
+  }
+  if (expandFromOutline && outlineValidation.stats.errorCount) {
+    throw outlineInvalidError(outlineValidation);
+  }
+  if (expandFromOutline) {
+    const seriesOutlineValidation = analyzeSeriesStoryOutlines(loom);
+    if (seriesOutlineValidation.stats.errorCount) {
+      const firstIssue = seriesOutlineValidation.issues.find((issue) => issue.severity === 'error');
+      throw new ServerError(`Complete the series beat outlines before expansion: ${firstIssue.message}`, {
+        status: 409,
+        code: 'SERIES_OUTLINE_INVALID',
+      });
+    }
+  }
   if (episode.nodes.length && !replace) {
     throw new ServerError('Episode already has scenes — pass replace to regenerate', { status: 409, code: 'EPISODE_NOT_EMPTY' });
   }
@@ -271,6 +478,9 @@ export async function weaveEpisode(loomId, episodeId, {
     existingGraph: episode.nodes.length
       ? describeGraphForPrompt(episode, { proseLimit: 1200, participationMode: loom.participationMode })
       : '(none — create the episode from the story context)',
+    outlineDigest: expandFromOutline
+      ? describeStoryOutlineForPrompt(episode.storyOutline)
+      : '(none — use the story context directly)',
     cameraMovementCatalog: fableLoomCameraMovementCatalogForPrompt(),
     sceneFormatContract: sceneFormatContract(loom.format),
     participationContract: audienceContract(loom, episode),
@@ -279,6 +489,16 @@ export async function weaveEpisode(loomId, episodeId, {
   });
 
   const { nodes, startNodeId } = mapGeneratedGraph(content);
+  const generatedAnalysis = analyzeEpisodeGraph(
+    { ...episode, nodes, startNodeId },
+    {
+      participationMode: loom.participationMode,
+      requireAudienceIntroduction: requiresAudienceIntroduction(loom, episode),
+    },
+  );
+  if (expandFromOutline && generatedAnalysis.issues.some((issue) => issue.severity === 'error')) {
+    throw aiShapeError(`The expanded teleplay has structural issues: ${generatedAnalysis.issues.find((issue) => issue.severity === 'error').message}`);
+  }
   if (loom.participationMode === 'helper') {
     const audienceErrors = analyzeEpisodeGraph(
       { ...episode, nodes, startNodeId },
@@ -559,6 +779,38 @@ const analysisStrings = (value) => (Array.isArray(value) ? value : [])
   .filter(Boolean)
   .slice(0, 12);
 
+/** Read-only story-editor pass over one episode's beat outline. */
+export async function reviewEpisodeOutline(loomId, episodeId, { providerId, model, effort, operationId } = {}) {
+  const loom = await requireLoom(loomId);
+  const episode = findEpisode(loom, episodeId);
+  if (!episode.storyOutline) {
+    throw new ServerError('Draft an episode outline before reviewing it', { status: 409, code: 'OUTLINE_REQUIRED' });
+  }
+  const structural = outlineStructuralAnalysis(loom, episode);
+  const canonDigest = await buildCanonDigest(loom);
+  const { content, runId } = await runLoomAi('fableloom-review-episode-outline', {
+    storyContext: storyContext(loom, episode),
+    canonDigest: canonDigest || '(none)',
+    episodeSequence: episodeSequenceDigest(loom, episode.id),
+    outlineDigest: describeStoryOutlineForPrompt(episode.storyOutline),
+    structuralDigest: structural.issues.length
+      ? structural.issues.map((issue) => `- [${issue.severity}] ${issue.message}`).join('\n')
+      : '(no structural issues)',
+  }, { providerId, model, effort, operationId }, {
+    action: 'review-episode-outline', label: 'Reviewing episode outline', source: 'fableloom-review-episode-outline',
+  });
+  const analysis = {
+    summary: trimTo(content?.summary, 2000),
+    strengths: analysisStrings(content?.strengths),
+    risks: analysisStrings(content?.risks),
+    recommendations: analysisStrings(content?.recommendations),
+  };
+  if (!analysis.summary && !analysis.strengths.length && !analysis.risks.length && !analysis.recommendations.length) {
+    throw aiShapeError('The model returned no usable episode-outline analysis');
+  }
+  return { structural, analysis, runId };
+}
+
 /**
  * Draft the complete series-level scaffold from the story metadata, linked
  * universe canon, current episode outline, and any useful ideas already in the
@@ -595,7 +847,7 @@ export async function generateSeriesPlan(loomId, { providerId, model, effort, op
         code: 'LOOM_CHANGED_DURING_GENERATION',
       });
     }
-    current.seriesPlan = { storyArc, plotPoints, sideQuests };
+    current.seriesPlan = { ...current.seriesPlan, storyArc, plotPoints, sideQuests };
     return current;
   });
   return { loom: updated, runId };
@@ -625,6 +877,51 @@ export async function reviewSeriesPlan(loomId, { providerId, model, effort, oper
     analysis,
     runId,
   };
+}
+
+/** Read-only story-editor pass over every expanded episode as one teleplay series. */
+export async function reviewSeriesTeleplay(loomId, { providerId, model, effort, operationId } = {}) {
+  const loom = await requireLoom(loomId);
+  if (!loom.episodes.length || loom.episodes.some((episode) => !episode.nodes.length)) {
+    throw new ServerError('Expand every episode before reviewing the full teleplay series', {
+      status: 409,
+      code: 'TELEPLAY_INCOMPLETE',
+    });
+  }
+  const canonDigest = await buildCanonDigest(loom);
+  const structural = loom.episodes.map((episode) => ({
+    episodeId: episode.id,
+    episodeNumber: episode.number,
+    ...analyzeEpisodeGraph(episode, {
+      participationMode: loom.participationMode,
+      requireAudienceIntroduction: episode.id === loom.episodes[0]?.id,
+    }),
+  }));
+  const structuralDigest = structural.map((episode) => {
+    const issues = episode.issues.length
+      ? episode.issues.map((issue) => `- [${issue.severity}] ${issue.message}`).join('\n')
+      : '(no structural issues)';
+    return `Episode ${episode.episodeNumber}:\n${issues}`;
+  }).join('\n');
+  const { content, runId } = await runLoomAi('fableloom-review-series-teleplay', {
+    storyContext: storyContext(loom),
+    canonDigest: canonDigest || '(none)',
+    seriesPlanJson: seriesPlanDigest(loom),
+    teleplayDigest: seriesTeleplayDigest(loom),
+    structuralDigest,
+  }, { providerId, model, effort, operationId }, {
+    action: 'review-series-teleplay', label: 'Reviewing full teleplay series', source: 'fableloom-review-series-teleplay',
+  });
+  const analysis = {
+    summary: trimTo(content?.summary, 2000),
+    strengths: analysisStrings(content?.strengths),
+    risks: analysisStrings(content?.risks),
+    recommendations: analysisStrings(content?.recommendations),
+  };
+  if (!analysis.summary && !analysis.strengths.length && !analysis.risks.length && !analysis.recommendations.length) {
+    throw aiShapeError('The model returned no usable full-teleplay analysis');
+  }
+  return { structural, analysis, runId };
 }
 
 /** Apply one author instruction to the series-level plan without touching episode scene graphs. */
@@ -709,7 +1006,7 @@ function applyPlanItemEdits(currentItems = [], rawEdits, rawOrder, { prefix, fie
 // --- Play: resolve a reader's free-text intent ------------------------------
 
 /** Reader-facing scene shape — trigger phrases stay server-side. */
-export const publicNode = (node) => ({
+export const publicNode = (node, loom = null) => ({
   id: node.id,
   title: node.title,
   prose: node.prose,
@@ -717,6 +1014,7 @@ export const publicNode = (node) => ({
   videoHistoryId: node.videoHistoryId,
   playbackAssets: node.playbackAssets || null,
   interactionWindow: node.interactionWindow || null,
+  protagonistPresence: resolveFableLoomProtagonistPresence(node, loom),
   playbackMode: node.playbackMode,
   audienceConnection: asFableLoomAudienceConnection(node.audienceConnection),
   isEnding: node.isEnding,
@@ -746,7 +1044,7 @@ export async function playTurn(loomId, episodeId, {
   const episode = findEpisode(loom, episodeId);
   const node = findNode(episode, nodeId);
   if (node.isEnding || !(node.transitions || []).length) {
-    return { action: 'stay', narration: '', node: publicNode(node), ended: true, resolvedBy: 'graph' };
+    return { action: 'stay', narration: '', node: publicNode(node, loom), ended: true, resolvedBy: 'graph' };
   }
 
   if (transitionId) {
@@ -760,6 +1058,7 @@ export async function playTurn(loomId, episodeId, {
     return moveResult(episode, node, taken, {
       narration: '',
       resolvedBy: interactive ? 'choice' : 'graph',
+      loom,
     });
   }
 
@@ -793,9 +1092,9 @@ export async function playTurn(loomId, episodeId, {
   // No usable choice — including a dangling edge whose target was deleted —
   // stays in place rather than crashing the read.
   if (!chosen) {
-    return { action: 'stay', narration, node: publicNode(node), ended: false, resolvedBy: 'llm', runId };
+    return { action: 'stay', narration, node: publicNode(node, loom), ended: false, resolvedBy: 'llm', runId };
   }
-  return moveResult(episode, node, chosen, { narration, resolvedBy: 'llm', runId });
+  return moveResult(episode, node, chosen, { narration, resolvedBy: 'llm', runId, loom });
 }
 
 /**
@@ -803,12 +1102,12 @@ export async function playTurn(loomId, episodeId, {
  * deleted since the graph was woven) keeps the reader where they are rather
  * than ending the read-through on a crash.
  */
-function moveResult(episode, node, transition, { narration = '', resolvedBy, runId } = {}) {
+function moveResult(episode, node, transition, { narration = '', resolvedBy, runId, loom = null } = {}) {
   const next = episode.nodes.find((n) => n.id === transition.targetNodeId);
   const common = { narration, resolvedBy, ...(runId ? { runId } : {}) };
   return next
-    ? { action: 'move', transitionId: transition.id, node: publicNode(next), ended: next.isEnding === true, ...common }
-    : { action: 'stay', node: publicNode(node), ended: false, ...common };
+    ? { action: 'move', transitionId: transition.id, node: publicNode(next, loom), ended: next.isEnding === true, ...common }
+    : { action: 'stay', node: publicNode(node, loom), ended: false, ...common };
 }
 
 // --- Reformat: rewrite existing scenes into another format ------------------

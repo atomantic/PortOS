@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isReproducibleTextToVideo, finishTargetForRecord, MIN_RENDER_INPUTS_VERSION } from './videoFinish.js';
+import { isReproducibleTextToVideo, finishTargetForRecord, isDeliveryVideoModel, MIN_RENDER_INPUTS_VERSION } from './videoFinish.js';
 
 const DRAFT_MODEL = { id: 'draft_model', name: 'Draft (4-step)', finishModelId: 'delivery_model' };
 const DELIVERY_MODEL = { id: 'delivery_model', name: 'Delivery (20-step)' };
@@ -110,3 +110,26 @@ describe('finishTargetForRecord', () => {
   });
 });
 // @vitest-environment node
+
+// The other end of the same graph (#5449). A delivery model always decodes on
+// its own decoder, so the client reads delivery intent the same way
+// `draftDecodeDeclineReason` does server-side.
+describe('isDeliveryVideoModel', () => {
+  it('is true for a model another entry names as its finish target', () => {
+    expect(isDeliveryVideoModel(DELIVERY_MODEL, MODELS)).toBe(true);
+  });
+
+  it('is false for the draft end of the pair, and for a model in no pair', () => {
+    expect(isDeliveryVideoModel(DRAFT_MODEL, MODELS)).toBe(false);
+    expect(isDeliveryVideoModel({ id: 'unrelated_model' }, MODELS)).toBe(false);
+  });
+
+  // Fails closed on an unresolved model / unloaded catalog: a locked picker
+  // would claim 'this is a delivery model' about a model nobody has seen yet.
+  it('is false when the model or the list is not resolved', () => {
+    expect(isDeliveryVideoModel(null, MODELS)).toBe(false);
+    expect(isDeliveryVideoModel({}, MODELS)).toBe(false);
+    expect(isDeliveryVideoModel(DELIVERY_MODEL, null)).toBe(false);
+    expect(isDeliveryVideoModel(DELIVERY_MODEL, [])).toBe(false);
+  });
+});

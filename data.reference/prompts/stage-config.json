@@ -996,6 +996,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "fableloom-outline-episode": {
+      "name": "FableLoom — Draft Episode Beat Outline",
+      "description": "Plans one episode as concise log-line beats, transitions, audience-connection states, and distinct endings before any teleplay prose or scene media is generated.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
     "fableloom-branch-node": {
       "name": "FableLoom — Branch a Scene",
       "description": "Turns one camera-cut node into an interactive decision and grows new intent paths from it. Each branch is a new single-shot node with playback, image, video, and camera-movement direction. Returns { branches[] }.",
@@ -1045,9 +1052,23 @@
       "returnsJson": true,
       "variables": []
     },
+    "fableloom-review-episode-outline": {
+      "name": "FableLoom — Review Episode Beat Outline",
+      "description": "Story-editor review of one episode's pre-teleplay log-line arc, branch consequences, continuity, audience contract, endings, and handoff to adjacent episodes.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
     "fableloom-review-series-plan": {
       "name": "FableLoom — Review Series Plan",
       "description": "Holistic story-editor analysis of the series arc, ordered plot points, side-quest lifecycle, and episode outline. Returns a summary, strengths, risks, and actionable recommendations without modifying the loom.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
+    "fableloom-review-series-teleplay": {
+      "name": "FableLoom — Review Full Teleplay Series",
+      "description": "Reviews every expanded episode scene as one interactive teleplay series for continuity, escalation, choice clarity, endings, visual beats, and configured delivery handoffs.",
       "model": "heavy",
       "returnsJson": true,
       "variables": []

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { useState } from 'react';
 
@@ -7,7 +8,9 @@ vi.mock('../../services/api', () => ({
   feedbackLoomSeriesPlan: vi.fn(),
   generateLoomSeriesPlan: vi.fn(),
   reviewLoomSeriesPlan: vi.fn(),
+  reviewLoomTeleplay: vi.fn(),
   updateLoom: vi.fn(),
+  validateLoomSeriesOutlines: vi.fn(),
 }));
 vi.mock('../../hooks/useProviderModels', () => ({ default: () => ({ providers: [], loading: false }) }));
 vi.mock('../../services/socket', () => ({
@@ -177,5 +180,82 @@ describe('LoomSeriesPlan', () => {
     expect(rightRail).toContainElement(screen.getByRole('button', { name: /save plan/i }));
     expect(rightRail).toContainElement(screen.getByRole('button', { name: /analyze series/i }));
     expect(rightRail).toContainElement(screen.getByRole('button', { name: /(draft|regenerate) full plan/i }));
+  });
+
+  it('reviews the complete expanded teleplay only when every episode has scenes', async () => {
+    api.reviewLoomTeleplay.mockResolvedValue({
+      analysis: {
+        summary: 'The full teleplay escalates cleanly.',
+        strengths: ['The handoff is earned.'],
+        risks: [],
+        recommendations: [],
+      },
+    });
+    const fullLoom = loom({
+      episodes: [
+        { id: 'ep-1', number: 1, title: 'Pilot', nodes: [{ id: 'node-1' }] },
+        { id: 'ep-2', number: 2, title: 'Finale', nodes: [{ id: 'node-2' }] },
+      ],
+    });
+    renderPlan({ loom: fullLoom, onLoomUpdate: () => {} });
+
+    expect(screen.getByRole('button', { name: 'Review full teleplay' })).toBeEnabled();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Review full teleplay' }));
+    expect(await screen.findByText('The full teleplay escalates cleanly.')).toBeInTheDocument();
+    expect(api.reviewLoomTeleplay).toHaveBeenCalledWith('loom-1', { operationId: expect.any(String) }, { silent: true });
+  });
+
+  it('validates the complete ordered beat arc and links blocking issues to episodes', async () => {
+    api.validateLoomSeriesOutlines.mockResolvedValue({
+      stats: { ready: false, errorCount: 1 },
+      issues: [{ code: 'MISSING_EPISODE_OUTLINE', episodeId: 'ep-1', message: 'Draft Episode 1 first.' }],
+    });
+    const user = userEvent.setup();
+    renderPlan({ loom: loom(), onLoomUpdate: () => {} });
+
+    await user.click(screen.getByRole('button', { name: 'Validate full beat arc' }));
+
+    expect(await screen.findByText(/Draft Episode 1 first\./)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Episode 1' })).toHaveAttribute('href', '/fableloom/loom-1/ep-1');
+    expect(api.validateLoomSeriesOutlines).toHaveBeenCalledWith('loom-1', { silent: true });
+  });
+
+  it('authors configured overnight handoffs and a finale teaser in the series plan', async () => {
+    const user = userEvent.setup();
+    const threeEpisodeLoom = loom({
+      episodes: [
+        { id: 'ep-1', number: 1, title: 'Pilot' },
+        { id: 'ep-2', number: 2, title: 'The Turn' },
+        { id: 'ep-3', number: 3, title: 'Finale' },
+      ],
+    });
+    const onLoomUpdate = vi.fn();
+    renderPlan({ loom: threeEpisodeLoom, onLoomUpdate });
+
+    await user.click(screen.getByLabelText(/overnight voicemail between episodes/i));
+    expect(screen.getAllByRole('textbox', { name: 'Voicemail transcript' })).toHaveLength(2);
+    await user.type(screen.getAllByRole('textbox', { name: 'Voicemail transcript' })[0], 'Stay awake. The beacon is listening.');
+    await user.click(screen.getByLabelText(/next-season teaser after the finale/i));
+    await user.type(screen.getByRole('textbox', { name: 'Teaser / cliffhanger' }), 'Something answers from beyond the relay.');
+    await user.click(screen.getByRole('button', { name: /save plan/i }));
+
+    await waitFor(() => expect(api.updateLoom).toHaveBeenCalledWith(
+      'loom-1',
+      expect.objectContaining({
+        seriesPlan: expect.objectContaining({
+          deliveryOptions: { overnightVoicemails: true, nextSeasonTeaser: true },
+          interEpisodeVoicemails: expect.arrayContaining([
+            expect.objectContaining({
+              fromEpisodeId: 'ep-1', toEpisodeId: 'ep-2',
+              transcript: 'Stay awake. The beacon is listening.',
+            }),
+          ]),
+          nextSeasonTeaser: expect.objectContaining({
+            transcript: 'Something answers from beyond the relay.',
+          }),
+        }),
+      }),
+      { silent: true },
+    ));
   });
 });

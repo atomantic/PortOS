@@ -95,7 +95,7 @@ describe.skipIf(!pyBin)('generate_minimax_h3_cuda.py', () => {
     expect(output[2]).toBe('{}');
   });
 
-  it('sizes the offload recipe from VRAM, and lets an explicit profile win', () => {
+  it('sizes the offload recipe from VRAM, and honors an affordable pin', () => {
     const output = lines(runPython(`${importRunner}\n${[
       'import types',
       'fake = types.ModuleType("torch")',
@@ -105,9 +105,9 @@ describe.skipIf(!pyBin)('generate_minimax_h3_cuda.py', () => {
       ')',
       'sys.modules["torch"] = fake',
       'for TOTAL_GB in (80, 32, 24, 16, 12):',
-      '    print(f"{TOTAL_GB}:{runner.resolve_offload_profile(\'auto\')}")',
-      'TOTAL_GB = 12',
-      "print('pinned:' + runner.resolve_offload_profile('bf16'))",
+      '    print(f"{TOTAL_GB}:{runner.resolve_offload_profile(\'auto\')[0]}")',
+      'TOTAL_GB = 80',
+      "print('pinned:' + runner.resolve_offload_profile('int8-lean')[0])",
     ].join('\n')}`));
     expect(output).toEqual([
       '80:bf16',
@@ -115,11 +115,35 @@ describe.skipIf(!pyBin)('generate_minimax_h3_cuda.py', () => {
       '24:int8-stream',
       '16:int8-lean',
       '12:int8-lean',
-      // An explicit request always wins: the registry entry is shared across
-      // every install that syncs it and can't know the GPU on the other end,
-      // but a user who pins one knows their box better than the heuristic.
-      'pinned:bf16',
+      // A pin the card can afford still wins over the heuristic: a user who
+      // sets one knows their box better than a capacity table does, and a
+      // leaner recipe on a big card is a legitimate choice.
+      'pinned:int8-lean',
     ]);
+  });
+
+  // Both of these used to succeed and then die out of memory an hour into the
+  // load — the leanest recipe was returned for any card, and a pin was returned
+  // without ever being checked against the device (#5420).
+  it('refuses a card below every recipe, and a pin the card cannot hold', () => {
+    const output = lines(runPython(`${importRunner}\n${[
+      'import types',
+      'fake = types.ModuleType("torch")',
+      'fake.cuda = types.SimpleNamespace(',
+      '    is_available=lambda: True,',
+      '    get_device_properties=lambda i: types.SimpleNamespace(total_memory=int(TOTAL_GB * 1e9)),',
+      ')',
+      'sys.modules["torch"] = fake',
+      'for TOTAL_GB, requested in ((8, "auto"), (12, "bf16")):',
+      '    try:',
+      '        runner.resolve_offload_profile(requested)',
+      '        print("ACCEPTED")',
+      '    except RuntimeError as exc:',
+      '        print(f"REFUSED:{exc}")',
+    ].join('\n')}`));
+    expect(output[0]).toMatch(/^REFUSED:.*at least 12 GB of VRAM/);
+    // The message names the recipe this card CAN run, so the fix is obvious.
+    expect(output[1]).toMatch(/^REFUSED:.*needs 60 GB of VRAM.*can run the int8-lean profile/);
   });
 
   it('refuses to run when no CUDA device is visible', () => {

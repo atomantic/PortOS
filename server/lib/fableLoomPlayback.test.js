@@ -14,6 +14,7 @@ import {
   isFableLoomPlaybackMode,
   muxAudioTracks,
   resolvePlaybackPhaseAsset,
+  resolveFableLoomProtagonistPresence,
   sanitizeAudioInterval,
   sanitizeAudioOccupancy,
   sanitizeInteractionWindow,
@@ -37,6 +38,19 @@ describe('FableLoom playback modes and vocabulary', () => {
     expect(FABLELOOM_PROTAGONIST_PRESENCE).toEqual(['offscreen', 'onscreen']);
     expect(FABLELOOM_AUDIO_TARGETS).toEqual(['host', 'audience']);
     expect(FABLELOOM_HOLD_ROTATION_MODES).toEqual(['deterministic', 'shuffle', 'sequential']);
+  });
+
+  it('defaults helper connected decisions off-screen while keeping other canonical scenes visible', () => {
+    const loom = { participationMode: 'helper', protagonistCharacterId: 'char-elena' };
+    expect(resolveFableLoomProtagonistPresence({
+      playbackMode: 'decision', audienceConnection: 'connected',
+    }, loom)).toBe('offscreen');
+    expect(resolveFableLoomProtagonistPresence({
+      playbackMode: 'cut', audienceConnection: 'disconnected',
+    }, loom)).toBe('onscreen');
+    expect(resolveFableLoomProtagonistPresence({
+      playbackMode: 'decision', audienceConnection: 'connected', protagonistPresence: 'onscreen',
+    }, loom)).toBe('onscreen');
   });
 });
 

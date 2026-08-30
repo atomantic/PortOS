@@ -803,3 +803,524 @@ describe.skipIf(!pyBin)('generate_ltx2.py speed-profile reporting', () => {
     expect(outLines(out)).toEqual(expected);
   });
 });
+
+// The allocator-cache ceiling is what keeps MLX's freed-buffer cache from
+// competing with a long render's live tensors. Every case here runs against the
+// module's own helpers rather than a real MLX: the policy has to be right on a
+// machine size the test host does not have, and the "installed MLX has no such
+// API" branch cannot be produced by an install that does.
+describe.skipIf(!pyBin)('generate_ltx2.py MLX allocator-cache policy', () => {
+  const GB = 1024 * 1024 * 1024;
+  const runJson = (body) => JSON.parse(runPython(`${importRunner}\n${body.join('\n')}`));
+
+  // A fake mlx.core planted in sys.modules, so the probe sees exactly the API
+  // surface each case is about — and never the host's real wheel.
+  const fakeMlx = (attrs) => [
+    'import sys, types',
+    'CALLS = []',
+    'core = types.ModuleType("mlx.core")',
+    ...attrs,
+    'pkg = types.ModuleType("mlx")',
+    'pkg.core = core',
+    'sys.modules["mlx"] = pkg',
+    'sys.modules["mlx.core"] = core',
+  ];
+  const MODERN_MLX = fakeMlx(['core.set_cache_limit = lambda n: CALLS.append(("modern", n))']);
+  const LEGACY_MLX = fakeMlx([
+    'core.metal = types.SimpleNamespace(set_cache_limit=lambda n: CALLS.append(("legacy", n)))',
+  ]);
+  const NO_CACHE_API = fakeMlx(['core.metal = types.SimpleNamespace()']);
+  // A venv with no MLX at all reaches the same branch through the import.
+  const NO_MLX = ['import sys', 'sys.modules["mlx"] = None', 'sys.modules.pop("mlx.core", None)'];
+
+  it.each([
+    // Under the floor a proportional cap would leave the allocator thrashing,
+    // so a small machine still gets the 1 GB floor rather than 512 MB.
+    ['a machine below the floor', 4 * GB, 1024],
+    ['a 16 GB machine', 16 * GB, 2048],
+    ['a 64 GB machine', 64 * GB, 8192],
+    // 1/8 hits the ceiling exactly at 96 GB; past it the cap holds, so a very
+    // large box does not park tens of GB in the cache "just in case".
+    ['the machine where the ceiling starts biting', 96 * GB, 12288],
+    ['a 512 GB machine', 512 * GB, 12288],
+  ])('derives a bounded ceiling for %s', (_label, bytes, expected) => {
+    const result = runJson([
+      'import json',
+      `print(json.dumps(runner.derive_mlx_cache_limit_mb(${bytes})))`,
+    ]);
+    expect(result).toBe(expected);
+  });
+
+  // An unreadable machine gets NO policy rather than the floor: a blind 1 GB
+  // cap would throttle a large box exactly as readily as it protects a small
+  // one, and MLX's own default is the known-safe behavior.
+  it.each([['unknown', 'None'], ['zero', '0'], ['negative', '-1'], ['non-numeric', '"lots"']])(
+    'derives no ceiling from %s physical memory',
+    (_label, expr) => {
+      const result = runJson(['import json', `print(json.dumps(runner.derive_mlx_cache_limit_mb(${expr})))`]);
+      expect(result).toBeNull();
+    },
+  );
+
+  it('prefers an explicit flag over the environment, and both over the derived ceiling', () => {
+    const result = runJson([
+      'import json',
+      'physical = 64 * 1024 ** 3',
+      'print(json.dumps({',
+      '    "flag": runner.resolve_mlx_cache_policy(physical, "2048", "3072"),',
+      '    "env": runner.resolve_mlx_cache_policy(physical, None, "3072"),',
+      '    "derived": runner.resolve_mlx_cache_policy(physical, None, None),',
+      '    "unknown": runner.resolve_mlx_cache_policy(None, None, None),',
+      '}))',
+    ]);
+    // An override REPLACES the derived ceiling — 2048 is below what a 64 GB box
+    // would derive, and it still wins.
+    expect(result.flag).toEqual({ limitMb: 2048, source: 'flag' });
+    expect(result.env).toEqual({ limitMb: 3072, source: 'env' });
+    expect(result.derived).toEqual({ limitMb: 8192, source: 'derived' });
+    expect(result.unknown).toEqual({ limitMb: null, source: 'unknown-memory' });
+  });
+
+  // Silently ignoring a bad override would report a ceiling the caller never
+  // asked for, which is worse than refusing the run.
+  it.each([
+    ['a word', '"lots"', /--mlx-cache-limit-mb must be a positive whole number/],
+    ['zero', '"0"', /--mlx-cache-limit-mb must be a positive whole number/],
+    ['a negative count', '"-512"', /--mlx-cache-limit-mb must be a positive whole number/],
+    ['a fraction', '"2048.5"', /--mlx-cache-limit-mb must be a positive whole number/],
+  ])('rejects %s as an override', (_label, expr, pattern) => {
+    const output = runPython(`${importRunner}\n${[
+      'try:',
+      `    runner.resolve_mlx_cache_policy(64 * 1024 ** 3, ${expr}, None)`,
+      'except SystemExit as exc:',
+      '    print(str(exc))',
+      'else:',
+      '    raise SystemExit("a bad cache-limit override was accepted")',
+    ].join('\n')}`);
+    expect(output).toMatch(pattern);
+  });
+
+  it('rejects a bad ambient override by its environment-variable name', () => {
+    const output = runPython(`${importRunner}\n${[
+      'try:',
+      '    runner.resolve_mlx_cache_policy(64 * 1024 ** 3, None, "not-a-number")',
+      'except SystemExit as exc:',
+      '    print(str(exc))',
+      'else:',
+      '    raise SystemExit("a bad ambient cache limit was accepted")',
+    ].join('\n')}`);
+    expect(output).toMatch(/PORTOS_MLX_CACHE_LIMIT_MB must be a positive whole number/);
+  });
+
+  it.each([
+    ['the modern spelling', MODERN_MLX, 'modern'],
+    // A pin predating the move still has to be capped, so the legacy spelling
+    // is probed rather than assumed gone.
+    ['the legacy mx.metal spelling', LEGACY_MLX, 'legacy'],
+  ])('applies the limit through %s', (_label, mlx, expectedSpelling) => {
+    const result = runJson([
+      ...mlx,
+      'import json',
+      'applied = runner.apply_mlx_cache_policy({"limitMb": 2048, "source": "flag"})',
+      'print(json.dumps({"applied": applied, "calls": CALLS}))',
+    ]);
+    expect(result.applied).toBe(true);
+    // MB in the policy, BYTES at the MLX boundary.
+    expect(result.calls).toEqual([[expectedSpelling, 2048 * 1024 * 1024]]);
+  });
+
+  it.each([
+    ['exposes no cache-limit API', NO_CACHE_API],
+    ['is not installed at all', NO_MLX],
+  ])('degrades with a status line when the MLX %s', (_label, mlx) => {
+    const result = runJson([
+      ...mlx,
+      'import contextlib, io, json',
+      'err = io.StringIO()',
+      'with contextlib.redirect_stderr(err):',
+      '    applied = runner.apply_mlx_cache_policy({"limitMb": 2048, "source": "flag"}, announce=True)',
+      'print(json.dumps({"applied": applied, "stderr": err.getvalue()}))',
+    ]);
+    expect(result.applied).toBe(false);
+    expect(result.stderr).toMatch(/^STATUS:Installed MLX exposes no cache-limit API/);
+  });
+
+  it('reports the effective policy on the existing STATUS channel', () => {
+    const result = runJson([
+      ...MODERN_MLX,
+      'import contextlib, io, json',
+      'err = io.StringIO()',
+      'with contextlib.redirect_stderr(err):',
+      '    runner.apply_mlx_cache_policy({"limitMb": 8192, "source": "derived"}, announce=True)',
+      '    runner.apply_mlx_cache_policy({"limitMb": None, "source": "unknown-memory"}, announce=True)',
+      'print(json.dumps({"stderr": err.getvalue()}))',
+    ]);
+    expect(result.stderr.split(/\r?\n/).filter(Boolean)).toEqual([
+      'STATUS:MLX allocator cache capped at 8192 MB (derived)',
+      'STATUS:MLX allocator cache left at its default — physical memory unknown',
+    ]);
+  });
+
+  // Loading weights resets the allocator limit, and a two-stage or chained job
+  // renders more than once inside one process — so the cap has to be reasserted
+  // per render, not just at startup.
+  it('reasserts the ceiling before every render', () => {
+    const result = runJson([
+      ...MODERN_MLX,
+      'import json',
+      'from types import SimpleNamespace',
+      'runner._MLX_CACHE_POLICY = {"limitMb": 4096, "source": "flag"}',
+      'runner._install_ltx_stepwise_preview = lambda pipe, args: (lambda: None)',
+      'rendered = []',
+      'for _ in range(3):',
+      '    runner._run_with_ltx_stepwise_preview(object(), SimpleNamespace(), lambda: rendered.append(1))',
+      'print(json.dumps({"renders": len(rendered), "calls": CALLS}))',
+    ]);
+    expect(result.renders).toBe(3);
+    expect(result.calls).toEqual(Array.from({ length: 3 }, () => ['modern', 4096 * 1024 * 1024]));
+  });
+
+  // The reassertion must never be what fails a render: an MLX that raises from
+  // the setter still lets the render proceed uncapped.
+  it('lets the render proceed when the MLX setter raises', () => {
+    const result = runJson([
+      ...fakeMlx(['def boom(_n): raise RuntimeError("metal is busy")', 'core.set_cache_limit = boom']),
+      'import contextlib, io, json',
+      'err = io.StringIO()',
+      'with contextlib.redirect_stderr(err):',
+      '    applied = runner.apply_mlx_cache_policy({"limitMb": 2048, "source": "flag"}, announce=True)',
+      'print(json.dumps({"applied": applied, "stderr": err.getvalue()}))',
+    ]);
+    expect(result.applied).toBe(false);
+    expect(result.stderr).toMatch(/metal is busy/);
+  });
+
+  // The startup call and the per-render reassertion have to read the SAME
+  // policy, so the one main() installs is the one the render path picks up.
+  it('installs the run policy the render path then reasserts', () => {
+    const result = runJson([
+      ...MODERN_MLX,
+      'import contextlib, io, json',
+      'from types import SimpleNamespace',
+      'with contextlib.redirect_stderr(io.StringIO()):',
+      '    policy = runner.configure_mlx_cache(SimpleNamespace(mlx_cache_limit_mb="2048"))',
+      'runner._install_ltx_stepwise_preview = lambda pipe, args: (lambda: None)',
+      'runner._run_with_ltx_stepwise_preview(object(), SimpleNamespace(), lambda: None)',
+      'print(json.dumps({"policy": policy, "stored": runner._MLX_CACHE_POLICY, "calls": CALLS}))',
+    ]);
+    expect(result.policy).toEqual({ limitMb: 2048, source: 'flag' });
+    expect(result.stored).toEqual(result.policy);
+    // Once at startup, once more for the render.
+    expect(result.calls).toEqual([
+      ['modern', 2048 * 1024 * 1024],
+      ['modern', 2048 * 1024 * 1024],
+    ]);
+  });
+
+  it('parses the override flag and defaults it to absent', () => {
+    const out = runPython(`${importRunner}\n${[
+      'import sys',
+      'base = ["generate_ltx2.py", "--mode", "text", "--prompt", "p", "--output", "/tmp/o.mp4", "--model", "m"]',
+      'sys.argv = base',
+      'print(runner.parse_args().mlx_cache_limit_mb)',
+      'sys.argv = base + ["--mlx-cache-limit-mb", "2048"]',
+      'print(runner.parse_args().mlx_cache_limit_mb)',
+    ].join('\n')}`);
+    expect(out.trim().split(/\r?\n/).map((l) => l.trimEnd())).toEqual(['None', '2048']);
+  });
+
+  // ── Frame-one anchor across an ancestral (SDE) denoise (#5422) ─────────────
+  // LTX-2.5 samples distilled stage 1 with the ancestral Euler loop, which
+  // renoises the whole latent every step. A pin that does not re-apply the
+  // conditioning mask AFTER that renoise leaves the anchor clean only on the
+  // terminal step, so the clip is plausible but unrelated to the supplied
+  // image. These cases run a REAL miniature ancestral loop — a pure-Python
+  // stand-in for the pinned sampler, imported from a temp package rather than
+  // planted in sys.modules, because the native-preservation probe reads the
+  // loop's source and source only exists for a module loaded from a file.
+  describe('i2v anchor invariant', () => {
+    // 4 video tokens, token 0 conditioned on the supplied image (mask 0 =
+    // preserve) and held at 7.0; 3 audio tokens, fully generated (uniform
+    // mask) — the T2V-shaped control that must come out byte-identical.
+    const LATENT_COND_PY = [
+      'class Vec(list):',
+      '    """A latent with a shape, so the hook can key conditioning by it."""',
+      '    @property',
+      '    def shape(self):',
+      '        return (len(self),)',
+      '',
+      '',
+      'class LatentState:',
+      '    def __init__(self, latent, clean_latent, denoise_mask):',
+      '        self.latent = latent',
+      '        self.clean_latent = clean_latent',
+      '        self.denoise_mask = denoise_mask',
+      '',
+      '',
+      'def apply_denoise_mask(x0, clean_latent, denoise_mask):',
+      '    return Vec(v * m + c * (1.0 - m) for v, c, m in zip(x0, clean_latent, denoise_mask))',
+      '',
+    ].join('\n');
+
+    const samplersPy = ({ ancestral = true, nativeReapply = false, inlineBlend = false } = {}) => {
+      const lines = [
+        'from ltx_core_mlx.conditioning.types.latent_cond import LatentState, Vec, apply_denoise_mask',
+        '',
+        '',
+        'def euler_step(sample, denoised, sigma, sigma_next):',
+        '    ratio = sigma_next / sigma',
+        '    return Vec(ratio * s + (1.0 - ratio) * d for s, d in zip(sample, denoised))',
+        '',
+      ];
+      if (!ancestral) return lines.join('\n');
+      return lines.concat([
+        '',
+        'def ancestral_euler_step(sample, denoised, sigma, sigma_next, noise=None, eta=1.0):',
+        '    if sigma_next == 0:',
+        '        return Vec(denoised)',
+        '    ratio = sigma_next / sigma',
+        '    stepped = [ratio * s + (1.0 - ratio) * d for s, d in zip(sample, denoised)]',
+        '    if eta > 0 and noise is not None:',
+        '        stepped = [v + eta * sigma_next * n for v, n in zip(stepped, noise)]',
+        '    return Vec(stepped)',
+        '',
+        '',
+        ...(inlineBlend ? [
+          'def _blend(x0, state):',
+          '    return Vec(v * m + c * (1.0 - m) for v, c, m in',
+          '               zip(x0, state.clean_latent, state.denoise_mask))',
+          '',
+          '',
+        ] : []),
+        'def ancestral_denoise_loop(model, video_state, audio_state, sigmas, observer=None):',
+        '    video_x, audio_x = video_state.latent, audio_state.latent',
+        '    for step, (sigma, sigma_next) in enumerate(zip(sigmas[:-1], sigmas[1:])):',
+        '        video_x0, audio_x0 = model(video_x, audio_x, sigma)',
+        ...(inlineBlend ? [
+          '        video_x0 = _blend(video_x0, video_state)',
+          '        audio_x0 = _blend(audio_x0, audio_state)',
+        ] : [
+          '        video_x0 = apply_denoise_mask(video_x0, video_state.clean_latent, video_state.denoise_mask)',
+          '        audio_x0 = apply_denoise_mask(audio_x0, audio_state.clean_latent, audio_state.denoise_mask)',
+        ]),
+        '        if sigma_next == 0:',
+        '            video_x, audio_x = video_x0, audio_x0',
+        '            break',
+        '        noise_v = Vec((step + 1) * 0.5 for _ in video_x)',
+        '        noise_a = Vec((step + 1) * 0.25 for _ in audio_x)',
+        '        video_x = ancestral_euler_step(video_x, video_x0, sigma, sigma_next, noise_v)',
+        '        audio_x = ancestral_euler_step(audio_x, audio_x0, sigma, sigma_next, noise_a)',
+        ...(nativeReapply ? [
+          '        video_x = apply_denoise_mask(video_x, video_state.clean_latent, video_state.denoise_mask)',
+          '        audio_x = apply_denoise_mask(audio_x, audio_state.clean_latent, audio_state.denoise_mask)',
+        ] : []),
+        '        if observer is not None:',
+        '            observer(step, video_x, audio_x)',
+        '    return video_x, audio_x',
+        '',
+      ]).join('\n');
+    };
+
+    const installFakePin = (opts = {}) => [
+      'import sys, tempfile',
+      'from pathlib import Path',
+      'root = Path(tempfile.mkdtemp())',
+      'for pkg in ("ltx_core_mlx", "ltx_core_mlx/conditioning", "ltx_core_mlx/conditioning/types",',
+      '            "ltx_pipelines_mlx", "ltx_pipelines_mlx/utils"):',
+      '    (root / pkg).mkdir(parents=True, exist_ok=True)',
+      '    (root / pkg / "__init__.py").write_text("")',
+      `(root / "ltx_core_mlx/conditioning/types/latent_cond.py").write_text(${JSON.stringify(LATENT_COND_PY)})`,
+      `(root / "ltx_pipelines_mlx/utils/samplers.py").write_text(${JSON.stringify(samplersPy(opts))})`,
+      'sys.path.insert(0, str(root))',
+      'for name in [m for m in sys.modules if m.startswith(("ltx_core_mlx", "ltx_pipelines_mlx"))]:',
+      '    sys.modules.pop(name, None)',
+    ];
+
+    // The render the invariant is about: --mode image with a source image.
+    const IMAGE_ARGS = 'args = SimpleNamespace(mode="image", image="/tmp/frame-one.png")';
+
+    // A model that predicts 0.0 everywhere, so any token the mask does NOT pin
+    // moves and any token it DOES pin can only move via the renoise — which is
+    // exactly the drift under test.
+    const RUN_LOOP = [
+      'from ltx_pipelines_mlx.utils import samplers',
+      'from ltx_core_mlx.conditioning.types.latent_cond import LatentState, Vec',
+      'video = LatentState(Vec([7.0, 1.0, 1.0, 1.0]), Vec([7.0, 0.0, 0.0, 0.0]), Vec([0.0, 1.0, 1.0, 1.0]))',
+      'audio = LatentState(Vec([0.2, 0.2, 0.2]), Vec([0.0, 0.0, 0.0]), Vec([1.0, 1.0, 1.0]))',
+      'def model(v, a, sigma):',
+      '    return (Vec(0.0 for _ in v), Vec(0.0 for _ in a))',
+      'anchors, audio_trace = [], []',
+      'def observer(step, video_x, audio_x):',
+      '    anchors.append(round(video_x[0], 6))',
+      '    audio_trace.append([round(t, 6) for t in audio_x])',
+      'samplers.ancestral_denoise_loop(model, video, audio, [1.0, 0.6, 0.3, 0.0], observer=observer)',
+    ];
+
+    const runAnchor = (body) => JSON.parse(runPython(`${importRunner}\n${[
+      'from types import SimpleNamespace',
+      ...body,
+    ].join('\n')}`));
+
+    it('keeps the anchor exactly clean at every step on a pin that renoises it away', () => {
+      const result = runAnchor([
+        ...installFakePin(),
+        IMAGE_ARGS,
+        'import contextlib, io, json',
+        'err = io.StringIO()',
+        'with contextlib.redirect_stderr(err):',
+        '    mechanism = runner.enforce_i2v_anchor_invariant(args)',
+        ...RUN_LOOP,
+        'print(json.dumps({"mechanism": mechanism, "anchors": anchors, "audio": audio_trace,',
+        '                  "status": err.getvalue().strip()}))',
+      ]);
+      expect(result.mechanism).toBe('hook');
+      // Two nonterminal steps; the terminal one is not observed because the
+      // loop breaks on it — and a terminal-only match is precisely the bug.
+      expect(result.anchors).toEqual([7, 7]);
+      expect(result.status).toMatch(/STATUS:.*frame-one anchor/i);
+    });
+
+    // main() calls this once, but a second install must not nest the wrappers:
+    // a nested recorder would keep re-recording its own wrapper output and the
+    // seam would drift from the one function the invariant is proven against.
+    it('installs the hook at most once', () => {
+      const result = runAnchor([
+        ...installFakePin(),
+        IMAGE_ARGS,
+        "import contextlib, io, json",
+        "with contextlib.redirect_stderr(io.StringIO()):",
+        "    first = runner.enforce_i2v_anchor_invariant(args)",
+        "    second = runner.enforce_i2v_anchor_invariant(args)",
+        "from ltx_pipelines_mlx.utils import samplers",
+        "nested = getattr(samplers.ancestral_euler_step.__wrapped__, \"__wrapped__\", None) is not None",
+        ...RUN_LOOP,
+        'print(json.dumps({"first": first, "second": second, "nested": nested, "anchors": anchors}))',
+      ]);
+      expect([result.first, result.second]).toEqual(['hook', 'hook']);
+      expect(result.nested).toBe(false);
+      expect(result.anchors).toEqual([7, 7]);
+    });
+
+    // Without the hook the same loop drifts — otherwise the case above would
+    // pass against a sampler that never had the defect.
+    it('drifts off the anchor when nothing enforces the invariant', () => {
+      const result = runAnchor([
+        ...installFakePin(),
+        'import json',
+        ...RUN_LOOP,
+        'print(json.dumps({"anchors": anchors, "audio": audio_trace}))',
+      ]);
+      expect(result.anchors[0]).not.toBe(7);
+      expect(result.anchors[1]).not.toBe(7);
+    });
+
+    // The generated (uniform-mask) latent is what a T2V render is made of
+    // end to end: the hook must not perturb a single token of it.
+    it('leaves a fully generated latent byte-identical', () => {
+      const [hooked, plain] = [true, false].map((enforce) => runAnchor([
+        ...installFakePin(),
+        IMAGE_ARGS,
+        'import contextlib, io, json',
+        ...(enforce ? [
+          'with contextlib.redirect_stderr(io.StringIO()):',
+          '    runner.enforce_i2v_anchor_invariant(args)',
+        ] : []),
+        ...RUN_LOOP,
+        'print(json.dumps({"audio": audio_trace}))',
+      ]));
+      expect(hooked.audio).toEqual(plain.audio);
+    });
+
+    // A pin that already re-applies the mask after its own renoise is used as
+    // it ships — no wrapper, so nothing PortOS wrote can drift from upstream.
+    it('uses a pin that already preserves conditioned tokens, unpatched', () => {
+      const result = runAnchor([
+        ...installFakePin({ nativeReapply: true }),
+        IMAGE_ARGS,
+        'import json',
+        'mechanism = runner.enforce_i2v_anchor_invariant(args)',
+        'from ltx_pipelines_mlx.utils import samplers',
+        'patched = [f.__name__ for f in (samplers.ancestral_euler_step, samplers.apply_denoise_mask)',
+        '           if getattr(f, "__wrapped__", None) is not None]',
+        ...RUN_LOOP,
+        'print(json.dumps({"mechanism": mechanism, "patched": patched, "anchors": anchors}))',
+      ]);
+      expect(result.mechanism).toBe('native');
+      expect(result.patched).toEqual([]);
+      expect(result.anchors).toEqual([7, 7]);
+    });
+
+    // The LTX-2.3 pin: plain Euler, no mid-denoise renoise, so the anchor holds
+    // by construction and its sampler must be left exactly as it was.
+    it('is not required on a pin with no ancestral sampler', () => {
+      const result = runAnchor([
+        ...installFakePin({ ancestral: false }),
+        IMAGE_ARGS,
+        'import json',
+        'from ltx_pipelines_mlx.utils import samplers',
+        'before = samplers.euler_step',
+        'mechanism = runner.enforce_i2v_anchor_invariant(args)',
+        'print(json.dumps({"mechanism": mechanism, "untouched": samplers.euler_step is before}))',
+      ]);
+      expect(result.mechanism).toBe('not-required');
+      expect(result.untouched).toBe(true);
+    });
+
+    // Every other mode keeps the argv-for-argv behavior it had before this
+    // contract existed — the seam is not even probed.
+    it.each(['text', 'fflf', 'extend', 'a2v', 'ic'])('leaves --mode %s alone', (mode) => {
+      const result = runAnchor([
+        ...installFakePin(),
+        `args = SimpleNamespace(mode=${JSON.stringify(mode)}, image="/tmp/frame-one.png")`,
+        'import json',
+        'from ltx_pipelines_mlx.utils import samplers',
+        'before = (samplers.ancestral_euler_step, samplers.apply_denoise_mask)',
+        'mechanism = runner.enforce_i2v_anchor_invariant(args)',
+        'after = (samplers.ancestral_euler_step, samplers.apply_denoise_mask)',
+        'print(json.dumps({"mechanism": mechanism, "untouched": before == after}))',
+      ]);
+      expect(result.mechanism).toBe('not-required');
+      expect(result.untouched).toBe(true);
+    });
+
+    // The hook learns each latent's conditioning by wrapping the loop's own
+    // apply_denoise_mask call. A fork that inlines that blend never trips the
+    // recorder, so installing would report success and preserve nothing —
+    // worse than refusing, because the status line reads as a guarantee.
+    it('refuses a pin whose loop never crosses the seam the hook wraps', () => {
+      const output = runPython(`${importRunner}\n${[
+        'from types import SimpleNamespace',
+        ...installFakePin({ inlineBlend: true }),
+        IMAGE_ARGS,
+        'try:',
+        '    runner.enforce_i2v_anchor_invariant(args)',
+        'except SystemExit as exc:',
+        '    print(str(exc))',
+        'else:',
+        '    raise AssertionError("a pin the hook cannot reach was accepted")',
+      ].join('\n')}`);
+      expect(output).toMatch(/ancestral \(SDE\) Euler/);
+    });
+
+    // Fail closed: a pin that renoises the anchor away and gives PortOS no way
+    // to put it back must refuse, not render something that looks fine.
+    it('refuses an anchored render the pin cannot hold', () => {
+      const output = runPython(`${importRunner}\n${[
+        'from types import SimpleNamespace',
+        ...installFakePin(),
+        'import sys',
+        'from ltx_pipelines_mlx.utils import samplers  # noqa: F401 — import before hiding the core',
+        'sys.modules["ltx_core_mlx.conditioning.types.latent_cond"] = None',
+        IMAGE_ARGS,
+        'try:',
+        '    runner.enforce_i2v_anchor_invariant(args)',
+        'except SystemExit as exc:',
+        '    print(str(exc))',
+        'else:',
+        '    raise AssertionError("an unpreservable pin was accepted")',
+      ].join('\n')}`);
+      expect(output).toMatch(/ancestral \(SDE\) Euler/);
+      expect(output).toMatch(/setup-image-video\.sh/);
+    });
+  });
+});

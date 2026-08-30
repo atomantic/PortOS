@@ -22,7 +22,10 @@ import { playLoomTurn } from '../../services/api';
 import { sceneProseClass } from './fieldStyles';
 import LoomHostedSessionModal from './LoomHostedSessionModal';
 import { audienceCanParticipate } from '../../../../server/lib/fableLoomParticipation.js';
-import { resolvePlaybackPhaseAsset } from '../../../../server/lib/fableLoomPlayback.js';
+import {
+  resolveFableLoomProtagonistPresence,
+  resolvePlaybackPhaseAsset,
+} from '../../../../server/lib/fableLoomPlayback.js';
 
 const findNode = (episode, id) => episode?.nodes.find((n) => n.id === id) || null;
 const hasPlayableStart = (episode) => !!findNode(episode, episode?.startNodeId);
@@ -30,7 +33,7 @@ const hasPlayableStart = (episode) => !!findNode(episode, episode?.startNodeId);
 // Reader-facing projection of an authored node — the OPENING scene only, which
 // the panel shows before any turn has been taken. Every later scene arrives
 // from the play endpoint already in this shape (the server's `publicNode`).
-const asPublic = (node) => (node ? {
+const asPublic = (node, loom) => (node ? {
   id: node.id,
   title: node.title,
   prose: node.prose,
@@ -38,6 +41,7 @@ const asPublic = (node) => (node ? {
   videoHistoryId: node.videoHistoryId,
   playbackAssets: node.playbackAssets || null,
   interactionWindow: node.interactionWindow || null,
+  protagonistPresence: resolveFableLoomProtagonistPresence(node, loom),
   playbackMode: node.playbackMode || 'decision',
   audienceConnection: node.audienceConnection || 'disconnected',
   isEnding: !!node.isEnding,
@@ -64,13 +68,22 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode }) {
     ? (loom.episodes || []).findIndex((item, index) => index > episodeIndex && hasPlayableStart(item))
     : -1;
   const nextEpisode = nextEpisodeIndex >= 0 ? loom.episodes[nextEpisodeIndex] : null;
+  const deliveryOptions = loom.seriesPlan?.deliveryOptions || {};
+  const overnightVoicemail = nextEpisode && deliveryOptions.overnightVoicemails === true
+    ? (loom.seriesPlan?.interEpisodeVoicemails || []).find((item) => (
+      item.fromEpisodeId === episode.id && item.toEpisodeId === nextEpisode.id
+    )) || { title: 'A message left overnight', transcript: '' }
+    : null;
+  const nextSeasonTeaser = !nextEpisode && deliveryOptions.nextSeasonTeaser === true
+    ? loom.seriesPlan?.nextSeasonTeaser || { title: 'A signal beyond the ending', transcript: '' }
+    : null;
   // Anchored on scalars so an authoring echo elsewhere in the loom (a node
   // PATCH, a drag) doesn't mint a new `start` identity and wipe an
   // in-progress read-through. The trade: mid-session edits to the opening
   // scene's text don't reach an open drawer until restart.
   const start = useMemo(
-    () => asPublic(findNode(episode, episode?.startNodeId)),
-    [episode.id, episode.startNodeId],
+    () => asPublic(findNode(episode, episode?.startNodeId), loom),
+    [episode.id, episode.startNodeId, loom.participationMode, loom.protagonistCharacterId],
   );
   const [scene, setScene] = useState(start);
   const [playbackPhase, setPlaybackPhase] = useState(() => initialPhaseForNode(start));
@@ -418,6 +431,11 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode }) {
               <span>Presence: {scene.interactionWindow.protagonistPresence || 'offscreen'}</span>
             </div>
           )}
+          {scene.protagonistPresence && !scene.interactionWindow?.enabled && (
+            <div className="text-[10px] text-port-text-muted">
+              Visual protagonist: {scene.protagonistPresence === 'offscreen' ? 'off-screen — side-device conversation' : 'on-screen'}
+            </div>
+          )}
         </div>
       )}
 
@@ -483,6 +501,22 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode }) {
             <Flag size={14} />
             {scene?.endingLabel ? `Ending: ${scene.endingLabel}` : 'The End'}
           </div>
+        )}
+        {ended && overnightVoicemail && (
+          <SeriesDeliveryCard
+            label={`Overnight voicemail · Episode ${episode.number || episodeIndex + 1} → Episode ${nextEpisode.number || nextEpisodeIndex + 1}`}
+            title={overnightVoicemail.title || 'A message left overnight'}
+            transcript={overnightVoicemail.transcript}
+            emptyMessage="This episode boundary is configured for a voicemail, but its transcript is still waiting to be authored."
+          />
+        )}
+        {ended && nextSeasonTeaser && (
+          <SeriesDeliveryCard
+            label="Next-season teaser"
+            title={nextSeasonTeaser.title || 'A signal beyond the ending'}
+            transcript={nextSeasonTeaser.transcript}
+            emptyMessage="The next-season teaser is enabled, but its cliffhanger is still waiting to be authored."
+          />
         )}
       </div>
       <div className="border-t border-port-border p-3 space-y-2">
@@ -566,6 +600,18 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode }) {
   );
 }
 
+function SeriesDeliveryCard({ label, title, transcript, emptyMessage }) {
+  return (
+    <div className="border border-port-accent/40 rounded-lg bg-port-accent/5 p-3" role="region" aria-label={label}>
+      <div className="text-[10px] uppercase tracking-wide text-port-accent mb-1">{label}</div>
+      <div className="text-sm font-medium mb-1">{title}</div>
+      <p className="text-sm whitespace-pre-wrap">
+        {transcript?.trim() || emptyMessage}
+      </p>
+    </div>
+  );
+}
+
 function SceneCard({
   node, isOpening = false, format, previewMode, onCutEnded, automaticCut,
   playbackPhase = 'hold', activeAsset = null,
@@ -605,6 +651,16 @@ function SceneCard({
           {isOpening ? 'Opening' : node.isEnding ? (node.endingLabel || 'Ending') : node.title || 'Scene'}
         </div>
         {previewMode === 'text' && <p className={sceneProseClass(format)}>{node.prose}</p>}
+        {previewMode === 'image' && (
+          <div className="mt-2 rounded border border-port-border/70 bg-port-bg/40 p-2.5">
+            <div className="text-[10px] uppercase tracking-wide text-port-text-muted mb-1">
+              Scene description &amp; dialogue
+            </div>
+            <p className={sceneProseClass(format)}>
+              {node.prose || 'No scene description has been authored yet.'}
+            </p>
+          </div>
+        )}
         {previewMode === 'image' && !node.image && <p className="text-sm text-port-text-muted">No storyboard image rendered for this cut yet.</p>}
         {previewMode === 'video' && (!videoId || videoFailed) && (
           <p className="text-sm text-port-text-muted">
@@ -622,8 +678,12 @@ function SceneCard({
                   : 'Decision loop — waits for viewer input'}
           </p>
         )}
+        {!node.isEnding && node.protagonistPresence === 'offscreen' && (
+          <p className="mt-1 text-xs text-port-accent">
+            Protagonist off-screen — keep this decision loop running while the audience conversation happens on the side device.
+          </p>
+        )}
       </div>
     </div>
   );
 }
-

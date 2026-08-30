@@ -62,7 +62,56 @@ const seriesPlan = z.object({
     startEpisodeId: planEpisodeId,
     endEpisodeId: planEpisodeId,
   })).max(LOOM_LIMITS.PLAN_ITEMS_MAX),
+  deliveryOptions: z.object({
+    overnightVoicemails: z.boolean().optional(),
+    nextSeasonTeaser: z.boolean().optional(),
+  }).optional(),
+  interEpisodeVoicemails: z.array(z.object({
+    id: planItemId,
+    fromEpisodeId: planEpisodeId,
+    toEpisodeId: planEpisodeId,
+    title: z.string().max(LOOM_LIMITS.PLAN_ITEM_TITLE_MAX),
+    transcript: z.string().max(LOOM_LIMITS.DELIVERY_MESSAGE_MAX),
+  })).max(LOOM_LIMITS.EPISODES_MAX).optional(),
+  nextSeasonTeaser: z.object({
+    title: z.string().max(LOOM_LIMITS.PLAN_ITEM_TITLE_MAX),
+    transcript: z.string().max(LOOM_LIMITS.DELIVERY_MESSAGE_MAX),
+  }).nullable().optional(),
 });
+
+const outlineTransitionSchema = z.object({
+  targetKey: z.string().max(LOOM_LIMITS.OUTLINE_KEY_MAX),
+  intent: z.string().max(LOOM_LIMITS.INTENT_MAX),
+});
+
+const outlineValidationSchema = z.object({
+  status: z.enum(['draft', 'valid', 'invalid']).optional(),
+  issues: z.array(z.object({
+    code: z.string().max(80).optional(),
+    severity: z.enum(['error', 'warning']).optional(),
+    message: z.string().max(LOOM_LIMITS.OUTLINE_ISSUE_MESSAGE_MAX),
+    sceneKey: z.string().max(LOOM_LIMITS.OUTLINE_KEY_MAX).optional(),
+    transitionIndex: z.number().int().min(0).optional(),
+  })).max(LOOM_LIMITS.OUTLINE_ISSUES_MAX).optional(),
+  validatedAt: z.string().max(80).optional(),
+}).optional();
+
+const storyOutline = z.object({
+  version: z.number().int().min(1).max(1).optional(),
+  startKey: z.string().max(LOOM_LIMITS.OUTLINE_KEY_MAX).nullable().optional(),
+  scenes: z.array(z.object({
+    key: z.string().max(LOOM_LIMITS.OUTLINE_KEY_MAX),
+    title: z.string().max(LOOM_LIMITS.NODE_TITLE_MAX).optional(),
+    summary: z.string().max(LOOM_LIMITS.OUTLINE_SUMMARY_MAX).optional(),
+    playbackMode: z.enum(['cut', 'decision']).optional(),
+    audienceConnection: z.enum(['connected', 'disconnected']).optional(),
+    protagonistPresence: z.enum(FABLELOOM_PROTAGONIST_PRESENCE).optional(),
+    isEnding: z.boolean().optional(),
+    endingLabel: z.string().max(LOOM_LIMITS.ENDING_LABEL_MAX).optional(),
+    transitions: z.array(outlineTransitionSchema).max(LOOM_LIMITS.OUTLINE_TRANSITIONS_MAX).optional(),
+  })).max(LOOM_LIMITS.OUTLINE_SCENES_MAX),
+  validation: outlineValidationSchema,
+}).nullable().optional();
 
 // Index filter. `?seriesId=` scopes the list to the looms soft-linked to one
 // pipeline series (the series detail page's "Branching narratives" card). An
@@ -82,6 +131,9 @@ export const loomCreateSchema = z.object({
   format: format.optional(),
   playSettings: playSettings.optional(),
   seriesPlan: seriesPlan.optional(),
+  protagonistCharacterId: refId.optional(),
+  protagonistWardrobeId: refId.optional(),
+  protagonistWardrobeLocked: z.boolean().optional(),
   universeId: refId.optional(),
   seriesId: refId.optional(),
 });
@@ -96,6 +148,9 @@ export const loomPatchSchema = z.object({
   format: format.optional(),
   playSettings: playSettings.optional(),
   seriesPlan: seriesPlan.optional(),
+  protagonistCharacterId: refId.optional(),
+  protagonistWardrobeId: refId.optional(),
+  protagonistWardrobeLocked: z.boolean().optional(),
   universeId: refId.optional(),
   seriesId: refId.optional(),
 });
@@ -110,6 +165,7 @@ export const episodePatchSchema = z.object({
   synopsis: synopsis.optional(),
   number: z.number().int().min(1).max(9999).optional(),
   startNodeId: nodeIdStr.nullable().optional(),
+  storyOutline,
 });
 
 const transitionFields = {
@@ -204,6 +260,7 @@ const nodeFields = {
   visualCanon: visualCanonSchema.optional(),
   playbackMode: z.enum(FABLELOOM_PLAYBACK_MODES).optional(),
   audienceConnection: z.enum(FABLELOOM_AUDIENCE_CONNECTION_STATES).optional(),
+  protagonistPresence: z.enum(FABLELOOM_PROTAGONIST_PRESENCE).nullable().optional(),
   videoHistoryId: z.string().max(200).nullable().optional(),
   playbackAssets: playbackAssetsSchema.optional(),
   interactionWindow: interactionWindowSchema.optional(),
@@ -229,8 +286,18 @@ const aiRunFields = { ...llmPickFields, operationId: z.string().uuid().optional(
 export const weaveSchema = z.object({
   guidance: z.string().max(4000).optional(),
   replace: z.boolean().optional(),
+  expandFromOutline: z.boolean().optional(),
   ...aiRunFields,
 });
+
+export const outlineGenerateSchema = z.object({
+  guidance: z.string().max(4000).optional(),
+  ...aiRunFields,
+});
+
+export const outlineReviewSchema = z.object({ ...aiRunFields });
+
+export const outlineValidateSchema = z.object({});
 
 export const branchSchema = z.object({
   guidance: z.string().max(4000).optional(),

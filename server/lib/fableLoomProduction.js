@@ -92,6 +92,80 @@ export function computeTopologicalNodeOrder(episode) {
 }
 
 /**
+ * Keep episodic storyboard production in narrative order. A later episode may
+ * be planned at any time, but it cannot start rendering until every reachable
+ * scene in the preceding episodes has a still that can serve as the visual
+ * continuity baseline for the next production pass.
+ *
+ * The check intentionally follows the loom's episode array (the same ordered
+ * sequence used by the player and series plan), not numeric labels that an
+ * author may have edited independently.
+ */
+export function inspectEpisodeProductionOrder(loom, episode) {
+  const episodes = Array.isArray(loom?.episodes) ? loom.episodes : [];
+  const currentIndex = episodes.findIndex((candidate) => candidate?.id === episode?.id);
+  if (currentIndex < 0) {
+    return {
+      ready: false,
+      currentEpisodeId: episode?.id || null,
+      currentEpisodeNumber: episode?.number || null,
+      previousEpisodeCount: 0,
+      blockedBy: [],
+      missingScenes: [],
+      reason: 'The selected episode is not present in the loom episode order.',
+    };
+  }
+
+  const missingScenes = [];
+  const blockedBy = [];
+  for (const [index, priorEpisode] of episodes.slice(0, currentIndex).entries()) {
+    const { orderedNodes } = computeTopologicalNodeOrder(priorEpisode);
+    if (!orderedNodes.length) {
+      blockedBy.push({
+        episodeId: priorEpisode.id,
+        episodeNumber: priorEpisode.number || index + 1,
+        episodeTitle: priorEpisode.title || `Episode ${priorEpisode.number || index + 1}`,
+        reason: 'no-reachable-scenes',
+      });
+      continue;
+    }
+    for (const node of orderedNodes) {
+      if (isStr(node.image)) continue;
+      const missing = {
+        episodeId: priorEpisode.id,
+        episodeNumber: priorEpisode.number || index + 1,
+        episodeTitle: priorEpisode.title || `Episode ${priorEpisode.number || index + 1}`,
+        nodeId: node.id,
+        nodeTitle: node.title || node.id,
+      };
+      missingScenes.push(missing);
+      if (!blockedBy.some((item) => item.episodeId === priorEpisode.id)) {
+        blockedBy.push({
+          episodeId: priorEpisode.id,
+          episodeNumber: missing.episodeNumber,
+          episodeTitle: missing.episodeTitle,
+          reason: 'missing-storyboard-images',
+        });
+      }
+    }
+  }
+
+  const currentEpisodeNumber = episode.number || currentIndex + 1;
+  const firstBlocker = blockedBy[0];
+  return {
+    ready: blockedBy.length === 0,
+    currentEpisodeId: episode.id,
+    currentEpisodeNumber,
+    previousEpisodeCount: currentIndex,
+    blockedBy,
+    missingScenes,
+    reason: firstBlocker
+      ? `Finish storyboard images for Episode ${firstBlocker.episodeNumber} before generating Episode ${currentEpisodeNumber}.`
+      : `Episode ${currentEpisodeNumber} is next in the ordered storyboard production sequence.`,
+  };
+}
+
+/**
  * Verify recorded asset provenance against the current local environment.
  * For `exact_inputs` mode: refuses when a recorded revision/hash/model is missing
  * or mismatched, preventing silent substitution.
@@ -376,9 +450,23 @@ export function buildEpisodeProductionPlan({
     const lockedCanon = isLockedCanon(node);
     const universeCharacters = Array.isArray(universe?.characters) ? universe.characters : [];
     const characterById = new Map(universeCharacters.map((character) => [character.id, character]));
+    const canonicalProtagonistId = isStr(loom?.protagonistCharacterId)
+      ? loom.protagonistCharacterId
+      : null;
+    const canonicalProtagonist = canonicalProtagonistId
+      ? characterById.get(canonicalProtagonistId)
+      : null;
 
     if (lockedCanon && !universe) {
       nodeBlockers.push('Locked visual canon cannot be resolved because its Universe is unavailable.');
+    }
+    if (canonicalProtagonistId && !universe) {
+      nodeBlockers.push('The canonical protagonist cannot be resolved because the linked Universe is unavailable.');
+    } else if (canonicalProtagonistId && !canonicalProtagonist) {
+      nodeBlockers.push(`Canonical protagonist "${canonicalProtagonistId}" is not present in the linked Universe.`);
+    } else if (canonicalProtagonist?.id && loom.protagonistWardrobeId
+      && !canonicalProtagonist.wardrobes?.some((wardrobe) => wardrobe.id === loom.protagonistWardrobeId)) {
+      nodeBlockers.push(`Canonical wardrobe "${loom.protagonistWardrobeId}" is not present on protagonist "${canonicalProtagonistId}".`);
     }
     if (visualCanon && universe) {
       for (const appearance of (Array.isArray(visualCanon.characterAppearances)
@@ -484,6 +572,9 @@ export function buildEpisodeProductionPlan({
         nodeBlockers.push('Live interaction is enabled without a protagonist character binding.');
       } else if (!universe || !interactionCharacter) {
         nodeBlockers.push(`Live interaction protagonist "${interactionCharacterId}" is not present in the linked Universe.`);
+      }
+      if (canonicalProtagonistId && interactionCharacterId && interactionCharacterId !== canonicalProtagonistId) {
+        nodeBlockers.push(`Live interaction protagonist "${interactionCharacterId}" differs from the loom's canonical protagonist "${canonicalProtagonistId}".`);
       }
 
       const approvedProfile = localVoiceProfiles?.find((profile) => (

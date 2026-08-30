@@ -37,6 +37,16 @@ describe('LoomPlayPanel', () => {
     expect(screen.getByRole('button', { name: 'Take path: enter the gate' })).toBeInTheDocument();
   });
 
+  it('keeps the scene description and dialogue visible in storyboard image mode', async () => {
+    const user = userEvent.setup();
+    render(<LoomPlayPanel loom={loom} episode={episode} />);
+
+    await user.selectOptions(screen.getByLabelText('Preview stage'), 'image');
+
+    expect(screen.getByText('Scene description & dialogue')).toBeInTheDocument();
+    expect(screen.getByText('You stand before it.')).toBeInTheDocument();
+  });
+
   it('keeps a helper audience passive and follows the first canon path until the channel connects', async () => {
     const user = userEvent.setup();
     const helperEpisode = {
@@ -261,6 +271,60 @@ describe('LoomPlayPanel', () => {
     expect(screen.queryByText('Episode one ends.')).not.toBeInTheDocument();
   });
 
+  it('shows an authored overnight voicemail at an episode boundary', async () => {
+    const first = {
+      id: 'ep-1', number: 1, title: 'One', startNodeId: 'end-1',
+      nodes: [{ id: 'end-1', title: 'First ending', prose: 'Episode one ends.', isEnding: true, transitions: [] }],
+    };
+    const second = {
+      id: 'ep-2', number: 2, title: 'Two', startNodeId: 'start-2',
+      nodes: [{ id: 'start-2', title: 'Second opening', prose: 'Episode two begins.', transitions: [] }],
+    };
+    render(<LoomPlayPanel
+      loom={{
+        ...loom,
+        episodes: [first, second],
+        seriesPlan: {
+          deliveryOptions: { overnightVoicemails: true, nextSeasonTeaser: false },
+          interEpisodeVoicemails: [{
+            id: 'vm-1', fromEpisodeId: 'ep-1', toEpisodeId: 'ep-2',
+            title: 'A voice in the dark', transcript: 'Don’t let the signal go cold.',
+          }],
+        },
+      }}
+      episode={first}
+    />);
+
+    expect(screen.getByRole('region', { name: 'Overnight voicemail · Episode 1 → Episode 2' })).toHaveTextContent(
+      'Don’t let the signal go cold.',
+    );
+  });
+
+  it('shows a configured next-season teaser after the final ending', () => {
+    const finale = {
+      id: 'ep-final', number: 3, title: 'Finale', startNodeId: 'end-final',
+      nodes: [{ id: 'end-final', title: 'Final ending', prose: 'The season closes.', isEnding: true, transitions: [] }],
+    };
+    render(<LoomPlayPanel
+      loom={{
+        ...loom,
+        episodes: [finale],
+        seriesPlan: {
+          deliveryOptions: { overnightVoicemails: false, nextSeasonTeaser: true },
+          nextSeasonTeaser: {
+            title: 'The answer beyond the relay',
+            transcript: 'A second voice answers in her own voice.',
+          },
+        },
+      }}
+      episode={finale}
+    />);
+
+    expect(screen.getByRole('region', { name: 'Next-season teaser' })).toHaveTextContent(
+      'A second voice answers in her own voice.',
+    );
+  });
+
   it('does not offer an unplayable empty episode', () => {
     const first = {
       id: 'ep-1', number: 1, startNodeId: 'end-1',
@@ -383,4 +447,3 @@ describe('LoomPlayPanel', () => {
     expect(screen.getByText(/Asset: vid-entry-hall/)).toBeInTheDocument();
   });
 });
-

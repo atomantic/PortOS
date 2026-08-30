@@ -8,9 +8,12 @@ const PARAM_ALLOWLIST = new Set([
   'width', 'height', 'numFrames', 'fps', 'steps', 'guidanceScale',
   'seed', 'tiling', 'disableAudio', 'mode', 'imageStrength',
   'i2vReferenceMode',
-  'textEncoderId', 'chunks', 'chunkPrompts', 'contextFrames', 'loras',
-
-  'textEncoderId', 'speedProfileId', 'chunks', 'chunkPrompts', 'contextFrames', 'loras',
+  // Sampler/decoder knobs the retry editor re-offers. 'draftDecode' (#5423) is
+  // the preview-fidelity decode REQUEST the job was submitted with — projected
+  // so the requeue editor can seed its picker from what the job actually asked
+  // for instead of snapping every requeue back to Full.
+  'textEncoderId', 'speedProfileId', 'draftDecode',
+  'chunks', 'chunkPrompts', 'contextFrames', 'loras',
   'cfgScale', 'guidance', 'quantize',
   'runId', 'runtime', 'datasetId', 'characterId', 'characterName',
   'triggerWord', 'rank', 'baseModelId', 'spriteRef', 'spriteWalk',

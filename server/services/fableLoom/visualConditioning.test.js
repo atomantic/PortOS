@@ -95,6 +95,65 @@ describe('FableLoom visual conditioning compiler', () => {
     expect(JSON.stringify(result.visualConditioning)).not.toContain('/approved/');
   });
 
+  it('injects the loom canonical protagonist and locked wardrobe into an on-screen canon shot', async () => {
+    const loom = loomWith({ ...lockedBinding, characterAppearances: [] });
+    loom.protagonistCharacterId = 'char-a';
+    loom.protagonistWardrobeId = 'wardrobe-red';
+    loom.protagonistWardrobeLocked = true;
+
+    const result = await compileFableLoomVisualRequest({
+      tag: { loomId: loom.id, episodeId: 'episode-1', nodeId: 'shot' },
+      kind: 'image',
+      capability: fableLoomImageCapabilities({
+        mode: 'local', model: { id: 'flux2-klein', runner: 'flux2' }, inputBudget: 6,
+      }),
+      ...deps(loom),
+    });
+
+    expect(result.prompt).toContain('Character: Aria');
+    expect(result.prompt).toContain('Wardrobe: Red coat');
+    expect(result.visualConditioning.bindings).toMatchObject({
+      protagonist: { characterId: 'char-a', wardrobeId: 'wardrobe-red', presence: 'onscreen' },
+      characterAppearances: [{ characterId: 'char-a', wardrobeId: 'wardrobe-red' }],
+    });
+  });
+
+  it('omits the protagonist from an off-screen communicator scene while preserving the side-device manifest', async () => {
+    const loom = loomWith({ ...lockedBinding });
+    loom.protagonistCharacterId = 'char-a';
+    loom.protagonistWardrobeId = 'wardrobe-red';
+    loom.protagonistWardrobeLocked = true;
+    loom.participationMode = 'helper';
+    loom.episodes[0].nodes.at(-1).interactionWindow = {
+      enabled: true,
+      protagonistCharacterId: 'char-a',
+      protagonistPresence: 'offscreen',
+    };
+
+    const result = await compileFableLoomVisualRequest({
+      tag: { loomId: loom.id, episodeId: 'episode-1', nodeId: 'shot' },
+      kind: 'image',
+      capability: fableLoomImageCapabilities({
+        mode: 'local', model: { id: 'flux2-klein', runner: 'flux2' }, inputBudget: 6,
+      }),
+      ...deps(loom),
+    });
+
+    expect(result.prompt).not.toContain('Character: Aria');
+    expect(result.prompt).toContain('canonical protagonist is speaking through the communicator off-screen');
+    expect(result.prompt).toContain('show the obstacle or environment the protagonist cannot see');
+    expect(result.prompt).toContain('never use a standalone comms device as the subject');
+    expect(result.negativePrompt).toContain('visible canonical protagonist');
+    expect(result.negativePrompt).toContain('standalone communicator');
+    expect(result.visualConditioning.bindings).toMatchObject({
+      protagonist: { characterId: 'char-a', wardrobeId: 'wardrobe-red', presence: 'offscreen' },
+      characterAppearances: [],
+    });
+    expect(result.visualConditioning.omitted).toContainEqual({
+      role: 'character', bindingId: 'char-a', reason: 'protagonist-offscreen',
+    });
+  });
+
   it('fails a locked render when a backend cannot preserve the bound cast', async () => {
     const loom = loomWith({
       ...lockedBinding,

@@ -73,6 +73,11 @@ function SceneBlock({ node, number, episode, format, byId, onSelectNode }) {
                 {!node.isEnding && (
                   <span>{node.playbackMode === 'cut' ? 'Automatic cut' : 'Decision loop'}</span>
                 )}
+                {node.protagonistPresence && (
+                  <span className={node.protagonistPresence === 'offscreen' ? 'text-port-accent' : ''}>
+                    Protagonist {node.protagonistPresence === 'offscreen' ? 'off-screen · side-device' : 'on-screen'}
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -127,6 +132,40 @@ function SceneBlock({ node, number, episode, format, byId, onSelectNode }) {
   );
 }
 
+function BeatOutline({ outline }) {
+  const scenes = asArray(outline?.scenes);
+  if (!scenes.length) return null;
+  return (
+    <section className="rounded-lg border border-port-accent/30 bg-port-accent/5 p-4" aria-label="Story beat outline">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="font-semibold">Story beat outline</h3>
+          <p className="mt-1 text-xs text-port-text-muted">The validated log-line arc that this teleplay expands.</p>
+        </div>
+        <span className={`shrink-0 text-xs ${outline.validation?.status === 'valid' ? 'text-port-success' : 'text-port-warning'}`}>
+          {outline.validation?.status || 'draft'}
+        </span>
+      </div>
+      <ol className="mt-3 space-y-2">
+        {scenes.map((scene, index) => (
+          <li key={scene.key || index} className="flex items-start gap-2 text-sm">
+            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-port-accent/15 text-[10px] font-semibold text-port-accent">{index + 1}</span>
+            <span className="min-w-0">
+              <span className="font-medium">{scene.title || 'Untitled beat'}</span>
+              <span className="block whitespace-pre-wrap text-xs text-port-text-muted">{scene.summary || 'No log-line yet.'}</span>
+              {scene.protagonistPresence && (
+                <span className="mt-1 block text-[11px] text-port-accent">
+                  Protagonist {scene.protagonistPresence === 'offscreen' ? 'off-screen · side-device' : 'on-screen'}
+                </span>
+              )}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
 export default function LoomEpisodeOutline({ loom, episode, onSelectNode }) {
   const { reachable, unreachable, byId } = useMemo(() => orderEpisodeNodes(episode), [episode]);
   const nodes = asArray(episode?.nodes);
@@ -142,7 +181,7 @@ export default function LoomEpisodeOutline({ loom, episode, onSelectNode }) {
     [byId, numberedNodes],
   );
 
-  if (!reachable.length && !unreachable.length) {
+  if (!reachable.length && !unreachable.length && !episode.storyOutline?.scenes?.length) {
     return (
       <section className="flex-1 overflow-y-auto p-4 md:p-6" aria-label="Episode outline">
         <div className="mx-auto grid min-h-full max-w-4xl place-items-center text-center">
@@ -172,19 +211,28 @@ export default function LoomEpisodeOutline({ loom, episode, onSelectNode }) {
           {episode.synopsis && <p className="mt-2 max-w-3xl text-sm text-port-text-muted">{episode.synopsis}</p>}
         </header>
 
-        <ol className="space-y-4 border-l border-port-border pl-0">
-          {reachable.map((node) => (
-            <SceneBlock
-              key={node.id}
-              node={node}
-              number={numberedNodes.get(node.id)}
-              episode={episode}
-              format={loom.format}
-              byId={numberedById}
-              onSelectNode={onSelectNode}
-            />
-          ))}
-        </ol>
+        {episode.storyOutline?.scenes?.length ? <BeatOutline outline={episode.storyOutline} /> : null}
+
+        {reachable.length || unreachable.length ? (
+          <>
+            <p className="text-xs uppercase tracking-wide text-port-text-muted">Expanded teleplay scenes</p>
+            <ol className="space-y-4 border-l border-port-border pl-0">
+              {reachable.map((node) => (
+                <SceneBlock
+                  key={node.id}
+                  node={node}
+                  number={numberedNodes.get(node.id)}
+                  episode={episode}
+                  format={loom.format}
+                  byId={numberedById}
+                  onSelectNode={onSelectNode}
+                />
+              ))}
+            </ol>
+          </>
+        ) : (
+          <p className="rounded border border-port-border p-4 text-sm text-port-text-muted">No teleplay scenes yet. Expand the validated beat outline from Episode setup.</p>
+        )}
 
         {unreachable.length > 0 && (
           <section className="rounded-lg border border-port-warning/40 bg-port-warning/5 p-4" aria-label="Unreachable scenes">

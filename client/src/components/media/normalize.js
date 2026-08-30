@@ -190,6 +190,11 @@ export function getRenderConfigForItem(item) {
       // presented as a re-run of the same one. Absent on a Quality record, so
       // the payload stays byte-identical to a pre-feature requeue.
       speedProfileId: raw.speedProfileId,
+      // The decode the record was rendered with (#5423), for the same reason:
+      // a requeue that dropped it would silently re-render at full fidelity and
+      // full cost. Absent on a full-decode record, so the payload stays
+      // byte-identical to a pre-feature requeue.
+      draftDecode: raw.draftDecode,
       loraFilenames: pickLoraFilenames(raw),
       loraScales: raw.loraScales ?? raw.lora_scales,
     };

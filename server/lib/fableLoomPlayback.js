@@ -17,6 +17,29 @@ export const FABLELOOM_PLAYBACK_PHASES = Object.freeze(['entry', 'hold', 'exit',
 export const FABLELOOM_PROTAGONIST_PRESENCE = Object.freeze(['offscreen', 'onscreen']);
 export const FABLELOOM_PROTAGONIST_PRESENCE_DEFAULT = 'offscreen';
 
+/**
+ * Resolve the visual presence contract for one scene. Explicit live-window
+ * presence wins because hosted playback must obey that safety setting. Helper
+ * decision scenes default to an off-screen audience conversation; a loom with
+ * a canonical protagonist defaults other scenes to on-screen until the author
+ * marks them otherwise.
+ */
+export const resolveFableLoomProtagonistPresence = (node, loom = null) => {
+  if (node?.interactionWindow?.enabled
+    && FABLELOOM_PROTAGONIST_PRESENCE.includes(node.interactionWindow.protagonistPresence)) {
+    return node.interactionWindow.protagonistPresence;
+  }
+  if (FABLELOOM_PROTAGONIST_PRESENCE.includes(node?.protagonistPresence)) {
+    return node.protagonistPresence;
+  }
+  if (loom?.participationMode === 'helper'
+    && node?.playbackMode === 'decision'
+    && node?.audienceConnection === 'connected') {
+    return 'offscreen';
+  }
+  return loom?.protagonistCharacterId ? 'onscreen' : null;
+};
+
 export const FABLELOOM_AUDIO_TARGETS = Object.freeze(['host', 'audience']);
 export const FABLELOOM_AUDIO_TARGET_DEFAULT = 'host';
 
@@ -133,6 +156,16 @@ export function sanitizeVisualConditioning(raw) {
   const nullableRef = (value) => (isStr(value) ? trimTo(value, LOOM_LIMITS.REF_ID_MAX) : null);
   const capability = raw.capability && typeof raw.capability === 'object' ? raw.capability : {};
   const bindings = raw.bindings && typeof raw.bindings === 'object' ? raw.bindings : {};
+  const protagonistBinding = bindings.protagonist && typeof bindings.protagonist === 'object'
+    && nullableRef(bindings.protagonist.characterId)
+    ? {
+      characterId: nullableRef(bindings.protagonist.characterId),
+      wardrobeId: nullableRef(bindings.protagonist.wardrobeId),
+      presence: FABLELOOM_PROTAGONIST_PRESENCE.includes(bindings.protagonist.presence)
+        ? bindings.protagonist.presence
+        : null,
+    }
+    : null;
   const productionParameters = raw.render?.parameters && typeof raw.render.parameters === 'object'
     ? Object.fromEntries(Object.entries(raw.render.parameters).flatMap(([key, value]) => {
       if (!SAFE_PRODUCTION_PARAMETER_KEYS.has(key)) return [];
@@ -181,6 +214,7 @@ export function sanitizeVisualConditioning(raw) {
       placeId: nullableRef(bindings.placeId),
       objectIds: list(bindings.objectIds, LOOM_LIMITS.VISUAL_BINDINGS_MAX)
         .map(nullableRef).filter(Boolean),
+      ...(protagonistBinding ? { protagonist: protagonistBinding } : {}),
     },
     assets: list(raw.assets, LOOM_LIMITS.VISUAL_PROVENANCE_ASSETS_MAX)
       .filter((item) => item && typeof item === 'object')

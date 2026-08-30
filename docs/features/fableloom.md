@@ -12,9 +12,9 @@ rehearse the same experience at any of those three production stages.
 
 | Term | Meaning |
 |---|---|
-| **Loom** | A branching-narrative story (`loom-*`): name/logline/premise, scene `format`, audience `participationMode`, helper `audienceCommunicationMedium`, optional `playSettings` pin, optional `universeId` + `seriesId` links, episodes. |
-| **Episode** | One playable graph (`ep-*`): title, synopsis (feeds generation), `startNodeId`, nodes. |
-| **Scene node** | One camera cut (`node-*`): teleplay/prose, image prompt/render, single-clip video prompt/render, camera movement, `playbackMode`, `audienceConnection`, ending state, transitions. |
+| **Loom** | A branching-narrative story (`loom-*`): name/logline/premise, scene `format`, audience `participationMode`, helper `audienceCommunicationMedium`, optional canonical Universe protagonist/wardrobe pin, optional `playSettings` pin, optional `universeId` + `seriesId` links, episodes. |
+| **Episode** | One playable graph (`ep-*`): title, synopsis (feeds generation), an optional validated `storyOutline` of log-line beats, `startNodeId`, nodes. |
+| **Scene node** | One camera cut (`node-*`): teleplay/prose, image prompt/render, single-clip video prompt/render, camera movement, `playbackMode`, `audienceConnection`, `protagonistPresence`, ending state, transitions. |
 | **Transition** | An intent-labeled edge (`tr-*`): `intent`, `triggers` (example phrasings), spoiler-safe `description`, `targetNodeId`. |
 
 ## Playback contract
@@ -57,6 +57,16 @@ their single automatic canon path until a later scene restores the connection.
 The graph validator flags helper episodes that never connect, connect too late,
 or expose a decision while disconnected.
 
+Story settings also pin the canonical protagonist to one Universe character and
+optionally one locked wardrobe. The scene editor shows the character's sheet
+and approved identity-pack readiness, offers a one-click visual-cast binding,
+and lets each scene choose on-screen or off-screen presence. An off-screen
+connected decision is the side-device conversation: its decision image omits
+the protagonist while the loop remains visible to the host. The server-side
+visual compiler applies the canonical wardrobe to every on-screen protagonist
+binding and records the presence decision in render provenance, so stale
+scene-local clothes cannot silently reappear between episodes.
+
 ## Surfaces
 
 - **`/fableloom`** — index: create/delete looms, link a universe (canon +
@@ -70,9 +80,16 @@ or expose a decision while disconnected.
   below it on small ones, with a path strip for inbound/outbound intents
   when the graph is stacked. `?play=1` opens the reader drawer.
 - **`/fableloom/:loomId/:episodeId/outline`** — a text-first episode outline:
-  reachable scenes appear in story order with their authored prose, endings,
-  and reader paths. Unreachable scenes remain visible in a separate section,
-  and path destinations return to the matching scene in the visual editor.
+  the saved beat outline appears first, followed by reachable teleplay scenes in
+  story order with their authored prose, endings, and reader paths. Unreachable
+  scenes remain visible in a separate section, and path destinations return to
+  the matching scene in the visual editor.
+- **Episode setup → Story beats → teleplay** — the production gate: draft one
+  concise log-line per eventual camera cut, edit paths and audience-channel
+  states, run the deterministic validator, and optionally ask the AI story
+  editor to review the arc. Teleplay expansion is blocked until every episode
+  in the series has a valid beat outline and any configured voicemail/finale
+  teaser handoffs have authored text.
 - **Play drawer** — an interactive production preview with **Text**,
   **Storyboard images**, and **Rendered video** modes. All three traverse the
   same graph. Rendered automatic cuts advance on the video's `ended` event;
@@ -158,10 +175,13 @@ in the request body beats both.
 | Stage | What it does |
 |---|---|
 | `fableloom-generate-series-plan` | Drafts the full series arc, ordered plot points, and side quests from the loom metadata, linked-universe canon, and episode outline. |
+| `fableloom-outline-episode` | Drafts one episode as concise camera-cut log-lines, viewer paths, audience-channel states, and distinct endings without writing teleplay or media prompts. |
 | `fableloom-weave-episode` | Generates or reweaves a full episode as single-camera-cut nodes. The story writer/creative director chooses node and ending counts, establishes the configured audience role/medium near the opening, tracks connection availability, marks automatic cuts vs decision loops, and assigns camera/video direction. A reweave sees and preserves the existing story graph while splitting multi-cut scenes. |
 | `fableloom-branch-node` | Grows N new intent-labeled single-cut branches with playback and camera direction. |
 | `fableloom-play-turn` | Resolves one reader message: `move` through a matched transition or `stay` with in-world narration. |
 | `fableloom-review` | Story-editor critique (intent clarity, branch coherence, ending payoff) layered over the deterministic checks. |
+| `fableloom-review-episode-outline` | Story-editor review of one episode's pre-teleplay arc, branch consequences, canon continuity, audience contract, endings, and handoff. |
+| `fableloom-review-series-teleplay` | Story-editor review of every expanded episode as one complete interactive teleplay series, including continuity, escalation, endings, visual beats, and delivery handoffs. |
 | `fableloom-reformat-scenes` | Rewrites existing scenes into the loom's other format (prose ⇄ teleplay), preserving every beat and decision point. |
 
 Deterministic graph validation (no LLM) lives in
@@ -170,6 +190,15 @@ ends, dangling transitions, unreachable endings, duplicate/empty intents,
 audience-connection availability, and the exactly-one-next-path contract for automatic cuts —
 and renders in the editor's Structure panel via
 `GET /api/fableloom/:id/episodes/:episodeId/validate`.
+
+Beat-outline validation is a separate deterministic gate. The per-episode
+result is persisted on `episode.storyOutline.validation`; the series result is
+available at `GET /api/fableloom/:id/outlines/validate`. Expansion rechecks
+both results server-side, so a stale client cannot bypass the story-first
+workflow. Scene-level and batch media controls mirror that readiness state in
+the UI: storyboard generation stays disabled until the ordered beat arc and
+any configured delivery handoffs are ready, preventing image spend on an
+unreviewed or out-of-order teleplay.
 
 Reweaving preserves story events and path meanings, but it replaces node ids;
 existing rendered stills and clips are therefore dropped. The setup drawer
@@ -200,6 +229,11 @@ stores a versioned `visualConditioning` manifest with bindings, backend
 capabilities, selected asset basenames, adapter SHA-256/scales, compiler
 version, temporal source, and omissions; machine-local paths never enter the
 loom or Universe record.
+
+The compiler treats an off-screen protagonist as an intentional omission, not
+as a missing reference: any stale protagonist binding is listed as omitted with
+reason `protagonist-offscreen`, and the manifest still records the canonical
+character, wardrobe, and presence for auditability.
 
 **Generate video** prefers the node's dedicated single-clip `videoPrompt`, adds
 the selected movement's production direction from the shared camera registry,

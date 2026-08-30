@@ -17,6 +17,7 @@ import { sanitizeJob } from '../services/mediaJobQueue/sanitizeJob.js';
 import { isRemoteMediaJob } from '../services/mediaJobQueue/remoteMediaJob.js';
 import { validateVideoRetryParams } from '../services/videoGen/prepareParams.js';
 import { I2V_REFERENCE_MODES, isDefaultI2vReferenceMode } from '../lib/videoReferenceModes.js';
+import { DRAFT_DECODE_IDS, isFullDecode } from '../lib/videoDraftDecoders.js';
 
 const router = Router();
 
@@ -226,6 +227,18 @@ const RETRY_OVERRIDE_SCHEMA = z.object({
   // (resolveVideoSampler), so a retry that edits Steps on a profiled job would
   // otherwise be silently ignored. `null` clears it back to the default sampler.
   speedProfileId: z.string().max(64).nullable().optional().transform((v) => (v === '' ? null : v)),
+  // Preview-fidelity decode (#5423). Nullable for the same reason speedProfileId
+  // is: `null` clears the inherited request back to Full, which an absent key
+  // cannot express (the drop-undefined merge below would retain the old value).
+  // A closed enum, and never rejected downstream — the four gates in
+  // lib/videoDraftDecoders.js degrade a draft request to a full decode rather
+  // than failing the retry.
+  // An explicit 'full' is folded to the same clear, because absence and
+  // DRAFT_DECODE_FULL are the same request (lib/videoDraftDecoders.js) — merging
+  // it as a value would leave the requeued job carrying a knob that changed
+  // nothing, which the queue would then echo back into the next editor.
+  draftDecode: z.enum(DRAFT_DECODE_IDS).nullable().optional()
+    .transform((v) => (v === undefined ? undefined : (isFullDecode(v) ? null : v))),
   chunks: z.number().int().min(1).max(8).optional(),
   chunkPrompts: z.array(z.string().max(8000)).max(8).optional(),
   contextFrames: z.number().int().min(0).max(64).optional(),
@@ -292,7 +305,7 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
     const bounds = VIDEO_RETRY_BOUNDS_SCHEMA.safeParse(rawOverrides);
     if (!bounds.success) throw new ServerError('Video retry settings are outside the supported range', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  for (const key of ['seed', 'steps', 'guidanceScale', 'imageStrength', 'i2vReferenceMode', 'speedProfileId']) {
+  for (const key of ['seed', 'steps', 'guidanceScale', 'imageStrength', 'i2vReferenceMode', 'speedProfileId', 'draftDecode']) {
     if (rawOverrides[key] === null) delete params[key];
   }
   if (rawOverrides.chunks === 1) delete params.chunkPrompts;

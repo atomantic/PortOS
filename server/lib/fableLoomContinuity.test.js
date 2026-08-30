@@ -204,4 +204,77 @@ describe('fableLoomContinuity', () => {
     expect(codes).toContain(CONTINUITY_CODES.VOICE_MODEL_REVISION_DRIFT);
     expect(codes).toContain(CONTINUITY_CODES.PRONUNCIATION_REVISION_DRIFT);
   });
+
+  it('checks canonical protagonist wardrobe and off-screen visual bindings', () => {
+    const review = analyzeEpisodeContinuity({
+      loom: {
+        participationMode: 'helper',
+        protagonistCharacterId: 'char-elena',
+        protagonistWardrobeId: 'wardrobe-explorer',
+        protagonistWardrobeLocked: true,
+      },
+      episode: {
+        id: 'ep-1',
+        startNodeId: 'node-1',
+        nodes: [
+          {
+            id: 'node-1',
+            title: 'Visible approach',
+            protagonistPresence: 'onscreen',
+            visualCanon: {
+              mode: 'locked',
+              characterAppearances: [{ characterId: 'char-elena', wardrobeId: 'wardrobe-gala' }],
+            },
+            transitions: [{ id: 'tr-1', targetNodeId: 'node-2', intent: 'Talk' }],
+          },
+          {
+            id: 'node-2',
+            title: 'Communicator decision',
+            playbackMode: 'decision',
+            audienceConnection: 'connected',
+            protagonistPresence: 'offscreen',
+            visualCanon: {
+              mode: 'locked',
+              characterAppearances: [{ characterId: 'char-elena', wardrobeId: 'wardrobe-explorer' }],
+            },
+            transitions: [],
+          },
+        ],
+      },
+      universe: sampleUniverse,
+    });
+
+    const codes = review.findings.map((finding) => finding.code);
+    expect(codes).toContain(CONTINUITY_CODES.CANONICAL_WARDROBE_DRIFT);
+    expect(codes).toContain(CONTINUITY_CODES.PROTAGONIST_VISUAL_BINDING_WHILE_OFFSCREEN);
+  });
+
+  it('flags live interaction that binds a different protagonist than the loom canon', () => {
+    const review = analyzeEpisodeContinuity({
+      loom: {
+        participationMode: 'helper',
+        protagonistCharacterId: 'char-elena',
+      },
+      episode: {
+        id: 'ep-1',
+        startNodeId: 'node-1',
+        nodes: [{
+          id: 'node-1',
+          title: 'Wrong communicator binding',
+          playbackMode: 'decision',
+          audienceConnection: 'connected',
+          interactionWindow: {
+            enabled: true,
+            protagonistCharacterId: 'char-other',
+            protagonistPresence: 'offscreen',
+          },
+          transitions: [],
+        }],
+      },
+      universe: sampleUniverse,
+    });
+
+    expect(review.findings.map((finding) => finding.code))
+      .toContain(CONTINUITY_CODES.PROTAGONIST_BINDING_MISMATCH);
+  });
 });
