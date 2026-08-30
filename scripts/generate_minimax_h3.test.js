@@ -45,6 +45,17 @@ const hasEmbeddingStack = (() => {
   }
 })();
 
+// Route the runner's warnings into stdout so a case can assert on them, with
+// the same reconfigure the runnable script tests use: Windows CI's python
+// writes cp1252, and PortOS's ⚠️-prefixed log lines are unencodable there — the
+// print would abort the case before its assertion rather than fail it.
+const captureWarnings = [
+  'import sys',
+  'if hasattr(sys.stdout, "reconfigure"):',
+  '    sys.stdout.reconfigure(encoding="utf-8", errors="replace")',
+  'sys.stderr = sys.stdout',
+].join('\n');
+
 // A stand-in for the decoded PIL keyframe `encode` receives: the cache reads
 // only the three attributes the digest is taken from, so the suite can exercise
 // keying without Pillow (which CI's bare python3 does not have either).
@@ -1057,7 +1068,7 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
   it('disables the cache when its directory cannot be created', () => {
     const output = runPython(`${importRunner}\n${[
       'import sys, tempfile',
-      'sys.stderr = sys.stdout',
+      captureWarnings,
       'with tempfile.TemporaryDirectory() as temp:',
       '    blocker = Path(temp) / "embeddings"',
       '    blocker.write_bytes(b"not a directory")',
@@ -1075,7 +1086,7 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
   it.skipIf(process.platform === 'win32')('disables the cache when its existing directory refuses a write', () => {
     const output = runPython(`${importRunner}\n${[
       'import os, sys, tempfile',
-      'sys.stderr = sys.stdout',
+      captureWarnings,
       'with tempfile.TemporaryDirectory() as temp:',
       '    readonly = Path(temp) / "embeddings"',
       '    readonly.mkdir()',
@@ -1119,7 +1130,7 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
     it('serves a second render of the same request byte-identically, without re-encoding', () => {
       const output = runPython(`${importRunner}\n${stubEncoder}\n${stubImage}\n${[
         'import hashlib, json, mlx.core as mx, numpy as np, tempfile',
-        'sys.stderr = sys.stdout',
+        captureWarnings,
         ...describeResult,
         'with tempfile.TemporaryDirectory() as temp:',
         '    cache = runner.prepare_prompt_embedding_cache(Path(temp) / "embeddings")',
@@ -1148,7 +1159,7 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
     it('re-encodes the same prompt when the keyframe changes', () => {
       const output = runPython(`${importRunner}\n${stubEncoder}\n${stubImage}\n${[
         'import json, mlx.core as mx, numpy as np, tempfile',
-        'sys.stderr = sys.stdout',
+        captureWarnings,
         'with tempfile.TemporaryDirectory() as temp:',
         '    cache = runner.prepare_prompt_embedding_cache(Path(temp) / "embeddings")',
         '    runner.install_prompt_embedding_cache(cache, {"runtime_revision": "rev"})',
@@ -1166,7 +1177,7 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
     it('discards a truncated entry and recomputes instead of failing the render', () => {
       const output = runPython(`${importRunner}\n${stubEncoder}\n${[
         'import hashlib, json, mlx.core as mx, numpy as np, tempfile',
-        'sys.stderr = sys.stdout',
+        captureWarnings,
         ...describeResult,
         'with tempfile.TemporaryDirectory() as temp:',
         '    cache = runner.prepare_prompt_embedding_cache(Path(temp) / "embeddings")',
@@ -1193,7 +1204,7 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
     it.skipIf(process.platform === 'win32')('returns the freshly-encoded embedding when the entry cannot be stored', () => {
       const output = runPython(`${importRunner}\n${stubEncoder}\n${[
         'import hashlib, json, mlx.core as mx, numpy as np, os, tempfile',
-        'sys.stderr = sys.stdout',
+        captureWarnings,
         ...describeResult,
         'with tempfile.TemporaryDirectory() as temp:',
         '    cache = runner.prepare_prompt_embedding_cache(Path(temp) / "embeddings")',
