@@ -79,6 +79,12 @@ def parse_args() -> argparse.Namespace:
                         help="rewrite this checkpoint-key prefix before the loader matches it (repeatable)")
     parser.add_argument("--text-encoder-final-norm-key",
                         help="synthesize a ones-filled final norm under this key (for a conditioner published without one)")
+    parser.add_argument("--draft-decoder-id",
+                        help="preview-fidelity video decoder to substitute for this render (PortOS #5423)")
+    parser.add_argument("--draft-decoder-file", action="append", default=[],
+                        help="cache-resolved weight file for the draft decoder (repeatable)")
+    parser.add_argument("--draft-decoder-shim-root",
+                        help="directory the composed draft-decoder checkpoint root is built under")
     return parser.parse_args()
 
 
@@ -467,6 +473,88 @@ def build_encoder_shim(
     return root
 
 
+def emit_draft_decode(decoder_id: str, applied: bool, reason: str | None = None) -> None:
+    """Report what this render ACTUALLY decoded with, on one DRAFTDECODE: line.
+
+    PortOS gates the substitution declaratively — model declaration, runner
+    revision, asset readiness, delivery intent — but only the child can see
+    whether the pinned decoder module tree accepts the asset's tensors. So the
+    server records the REQUEST and this line records the OUTCOME, and the
+    history row carries both. Without it a decoder that failed to load would
+    read back as a draft decode that never happened.
+    """
+    payload = {"id": decoder_id, "applied": applied}
+    if reason:
+        payload["reason"] = reason
+    print(f"DRAFTDECODE:{json.dumps(payload)}", file=sys.stderr, flush=True)
+
+
+def build_draft_decoder_shim(
+    checkpoint_dir: Path,
+    shim_root: Path,
+    decoder_id: str,
+    decoder_files: list[Path],
+) -> Path:
+    """Compose a checkpoint root whose `video_vae/source/` is the substitute.
+
+    Same shape, and the same reasoning, as `build_encoder_shim` above:
+    everything but the one swapped component is symlinked straight through from
+    the upstream snapshot, so the pinned `from_pretrained` loads this directory
+    with no argument it doesn't already take and no knowledge that anything was
+    swapped.
+
+    The wrapper `video_vae/config.json` and `source/config.json` come from
+    UPSTREAM, not the substitute: the draft decoder is a re-trained or
+    re-quantized decoder over the SAME latent contract, so its channel counts,
+    `latents_mean`/`latents_std` and compression ratios must stay upstream's. A
+    candidate that needs its own config is decoding a different latent space and
+    does not belong in the table at all (see the checklist in
+    server/lib/videoDraftDecoders.js).
+
+    Rebuilt from scratch on every render, for the same reason the encoder shim
+    is: the links are free, and a stale shim pointing at a blob the user has
+    since re-downloaded would load silently-wrong weights.
+    """
+    for decoder_file in decoder_files:
+        if not decoder_file.is_file():
+            raise RuntimeError(f"Draft decoder weight is missing: {decoder_file}")
+    # The pinned `load_video_vae` reads exactly `source/model.safetensors` — it
+    # does not glob the way the text-encoder loader does — so a multi-file
+    # substitute has nowhere to go. Refusing it here is the honest failure: the
+    # alternative is linking one shard and silently decoding with a partial
+    # decoder over upstream's config.
+    if len(decoder_files) != 1:
+        raise RuntimeError(
+            f"The pinned H3 video VAE loads one source weight file; got {len(decoder_files)}."
+        )
+
+    stock_vae = checkpoint_dir / "video_vae"
+    stock_source_config = stock_vae / "source" / "config.json"
+    if not stock_source_config.is_file():
+        raise RuntimeError(f"Upstream video-VAE config is missing: {stock_source_config}")
+
+    root = shim_root / decoder_id
+    shutil.rmtree(root, ignore_errors=True)
+    (root / "video_vae" / "source").mkdir(parents=True, exist_ok=True)
+
+    for entry in checkpoint_dir.iterdir():
+        if entry.name == "video_vae":
+            continue
+        # target_is_directory is a no-op on POSIX and load-bearing on Windows,
+        # exactly as in build_encoder_shim.
+        (root / entry.name).symlink_to(entry, target_is_directory=entry.is_dir())
+    for entry in stock_vae.iterdir():
+        if entry.name == "source":
+            continue
+        (root / "video_vae" / entry.name).symlink_to(entry, target_is_directory=entry.is_dir())
+    (root / "video_vae" / "source" / "config.json").symlink_to(stock_source_config)
+    # Linked under the name the pinned loader opens, NOT the substitute's own
+    # filename, which is whatever its publisher chose.
+    (root / "video_vae" / "source" / "model.safetensors").symlink_to(decoder_files[0])
+
+    return root
+
+
 def verify_runtime_checkout(runtime_dir: Path, expected_revision: str) -> None:
     """Require the exact commit and a clean executable source package."""
     try:
@@ -637,6 +725,17 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit(f"--text-encoder-id must be a bare directory-safe name; got {args.text_encoder_id!r}.")
     if not args.text_encoder_file and (args.text_encoder_key_prefix or args.text_encoder_final_norm_key):
         raise SystemExit("--text-encoder-key-prefix / --text-encoder-final-norm-key need --text-encoder-file.")
+    # Same all-or-nothing rule as the conditioner above, and for the same
+    # reason: a partial set would silently decode on the full decoder while
+    # PortOS recorded a draft decode, which is the exact false claim the whole
+    # gate chain in lib/videoDraftDecoders.js exists to prevent.
+    decoder_flags = (args.draft_decoder_id, args.draft_decoder_file, args.draft_decoder_shim_root)
+    if any(decoder_flags) and not all(decoder_flags):
+        raise SystemExit(
+            "--draft-decoder-id, --draft-decoder-file and --draft-decoder-shim-root must be given together."
+        )
+    if args.draft_decoder_id and not re.fullmatch(r"[A-Za-z0-9._-]+", args.draft_decoder_id):
+        raise SystemExit(f"--draft-decoder-id must be a bare directory-safe name; got {args.draft_decoder_id!r}.")
 
 
 def main() -> int:
@@ -717,15 +816,61 @@ def main() -> int:
             args.text_encoder_final_norm_key,
         )
 
-    print("STAGE:load-pipeline", file=sys.stderr, flush=True)
-    with heartbeat("minimax-h3-load"):
-        pipe = MiniMaxH3Pipeline.from_pretrained(
-            checkpoint_dir,
-            transformer_dir=transformer_dir,
-            # The Qwen3-VL vision tower is only loaded when a keyframe needs
-            # encoding — a text-only run keeps skipping it.
-            load_vision=bool(images),
+    # Preview-fidelity video decode (PortOS #5423). PortOS has already cleared
+    # every gate it can see — the model declares this decoder, the checkout is
+    # the revision the asset was verified against, the weights are in the HF
+    # cache, and this is not a delivery render — so reaching here means only the
+    # LOAD is still unproven, and only the pinned VAE loader's own STRICT
+    # parameter check can prove it. So the swap is attempted, and a failure
+    # RETRIES on the model's own decoder rather than aborting: a preview that
+    # renders slowly is a better outcome than a render that dies at load, and
+    # the DRAFTDECODE: line keeps the history record honest about which one
+    # produced the pixels.
+    def fall_back_to_full_decoder(exc: Exception) -> None:
+        """Report the substitution as NOT applied and say why, once."""
+        emit_draft_decode(args.draft_decoder_id, False, f"{type(exc).__name__}: {exc}")
+        print(
+            f"⚠️ Draft decoder unavailable, decoding on the full decoder: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+            flush=True,
         )
+        print("STATUS:Draft decoder unavailable — decoding on the full decoder", file=sys.stderr, flush=True)
+
+    decoder_shim = None
+    if args.draft_decoder_file:
+        print("STAGE:swap-video-decoder", file=sys.stderr, flush=True)
+        print(f"STATUS:Decoding with the {args.draft_decoder_id} draft decoder", file=sys.stderr, flush=True)
+        try:
+            decoder_shim = build_draft_decoder_shim(
+                checkpoint_dir,
+                Path(args.draft_decoder_shim_root),
+                args.draft_decoder_id,
+                [Path(f) for f in args.draft_decoder_file],
+            )
+        except Exception as exc:  # noqa: BLE001 — degrade, never fail the render
+            fall_back_to_full_decoder(exc)
+
+    print("STAGE:load-pipeline", file=sys.stderr, flush=True)
+
+    def load_pipeline(root: Path):
+        with heartbeat("minimax-h3-load"):
+            return MiniMaxH3Pipeline.from_pretrained(
+                root,
+                transformer_dir=transformer_dir,
+                # The Qwen3-VL vision tower is only loaded when a keyframe needs
+                # encoding — a text-only run keeps skipping it.
+                load_vision=bool(images),
+            )
+
+    if decoder_shim is None:
+        pipe = load_pipeline(checkpoint_dir)
+    else:
+        try:
+            pipe = load_pipeline(decoder_shim)
+            emit_draft_decode(args.draft_decoder_id, True)
+        except Exception as exc:  # noqa: BLE001 — degrade to the full decoder
+            fall_back_to_full_decoder(exc)
+            pipe = load_pipeline(checkpoint_dir)
 
     # Runtime LoRA application — never a fuse. The DiT is quantized, so the
     # applicator has to take each layer's logical dims from the quantization

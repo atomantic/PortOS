@@ -64,6 +64,13 @@ export const MINIMAX_H3_EXPECTED_REVISION = 'fcd9e9b79a1d6018d91ac477c0968de1fa0
 // untracked in the pin verification that both /status and the render helper run.
 export const MINIMAX_H3_ENCODER_SHIM_DIR = join(homedir(), '.portos', 'minimax-h3-encoder-shims');
 
+// Composed checkpoint roots for a preview-fidelity video decode
+// (lib/videoDraftDecoders.js, #5423). Same shape and the same reason as the
+// encoder shims above — a tree of symlinks into the upstream FL2VA snapshot
+// with only `video_vae/source/model.safetensors` replaced — kept in its own
+// directory so removing one substitution never disturbs the other.
+export const MINIMAX_H3_DRAFT_DECODER_SHIM_DIR = join(homedir(), '.portos', 'minimax-h3-decoder-shims');
+
 // MiniMax H3 on CUDA — the diffusers `MiniMaxH3ModularPipeline` rather than a
 // pinned source checkout, so this runtime is a plain pip venv with no revision
 // to verify and no source package to keep clean.
@@ -469,6 +476,16 @@ export function isPinnedSourceStatusClean(stdout, expectedRevision) {
   const lines = String(stdout).split(/\r?\n/).filter(Boolean);
   const oid = lines.find((line) => line.startsWith('# branch.oid '))?.slice('# branch.oid '.length);
   return oid === expectedRevision && lines.every((line) => line.startsWith('# '));
+}
+
+// The revision a BYOV runtime's checkout is pinned to, or null for a runtime
+// that has no source pin (a plain pip venv). Paired with
+// `isByovRuntimeCurrent` by callers that need to know WHICH revision is
+// installed rather than just whether it is current — a capability gate on a
+// separately verified asset (lib/videoDraftDecoders.js) has to name the
+// checkout the asset was validated against, not just assert cleanliness.
+export function byovRuntimeExpectedRevision(runtimeId) {
+  return BYOV_RUNTIME_INFO[runtimeId]?.expectedRevision || null;
 }
 
 export async function isByovRuntimeCurrent(runtimeId) {

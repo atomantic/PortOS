@@ -300,12 +300,30 @@ vi.mock('../../lib/frameQuality.js', async (importOriginal) => ({
 // `capable` is the settled probe verdict. They are separate so a test can pin
 // the cold-cache case, where the two legitimately disagree.
 const h3LoraState = vi.hoisted(() => ({ capable: false, cached: null }));
-vi.mock('./runtimes.js', async (importOriginal) => ({
-  ...await importOriginal(),
-  byovRuntimeLoraCapable: vi.fn((runtime) => runtime === 'minimax_h3'
-    && (h3LoraState.cached ?? h3LoraState.capable)),
-  resolveByovRuntimeLoraCapable: vi.fn(async (runtime) => runtime === 'minimax_h3' && h3LoraState.capable),
-}));
+// Which revision the installed BYOV checkout is at. Really a spawned `git`
+// probe; stubbed here so the draft-decode capability gate (#5423) can be driven
+// to both verdicts. `current: null` means "leave the real probe alone", which
+// is what every pre-existing test in this file wants.
+const byovRevisionState = vi.hoisted(() => ({ current: null, expectedRevision: null }));
+vi.mock('./runtimes.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    byovRuntimeLoraCapable: vi.fn((runtime) => runtime === 'minimax_h3'
+      && (h3LoraState.cached ?? h3LoraState.capable)),
+    resolveByovRuntimeLoraCapable: vi.fn(async (runtime) => runtime === 'minimax_h3' && h3LoraState.capable),
+    isByovRuntimeCurrent: vi.fn(async (runtime) => (
+      byovRevisionState.current === null
+        ? actual.isByovRuntimeCurrent(runtime)
+        : byovRevisionState.current
+    )),
+    byovRuntimeExpectedRevision: vi.fn((runtime) => (
+      byovRevisionState.expectedRevision === null
+        ? actual.byovRuntimeExpectedRevision(runtime)
+        : byovRevisionState.expectedRevision
+    )),
+  };
+});
 
 // LoRA key-layout gate (resolveVideoLoras). `null` = undetermined, which is
 // the permissive default so the pre-existing LoRA-threading tests below still
@@ -412,6 +430,8 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  byovRevisionState.current = null;
+  byovRevisionState.expectedRevision = null;
   settingsState.acceptedModelTerms = [];
   fsState.missOnce = [];
   fsState.candidateCount = null;
@@ -5237,5 +5257,154 @@ describe('generateVideo — i2v reference mode (#4874)', () => {
     await expect(renderWithReference({
       jobId: 'ref-bogus', i2vReferenceMode: 'inspiration',
     })).rejects.toMatchObject({ status: 400, code: 'I2V_REFERENCE_MODE_UNKNOWN' });
+  });
+});
+
+// Preview-fidelity decode (#5423). The whole point of the feature is that a
+// draft decoder can only ever REDUCE the cost of judging a composition — so
+// every gate that fails has to fall back to the model's own decoder silently,
+// and the history record must never claim a decode that did not happen.
+describe('generateVideo — MiniMax H3 draft decode (#5423)', () => {
+  const DECODER_RUNTIME_REV = 'fcd9e9b79a1d6018d91ac477c0968de1fa067e49';
+  const DECODER = Object.freeze({
+    id: 'draft',
+    label: 'Draft decoder',
+    description: 'Preview fidelity.',
+    repo: 'example/h3-draft-decoder',
+    revision: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+    files: ['decoder.safetensors'],
+    runtimeRevision: DECODER_RUNTIME_REV,
+  });
+
+  let baseCatalog = null;
+
+  // The shipped table is deliberately EMPTY (no asset has passed the
+  // verification checklist), so every gate below is exercised against a
+  // declaration injected onto the H3 entry for one test at a time.
+  const declareDecoder = async () => {
+    const { getVideoModels } = await import('../../lib/mediaModels.js');
+    const mock = vi.mocked(getVideoModels);
+    baseCatalog = baseCatalog || mock.getMockImplementation();
+    mock.mockImplementation(() => baseCatalog().map((model) => (
+      model.id === 'minimax_h3_8bit' ? { ...model, draftDecoder: DECODER } : model
+    )));
+  };
+
+  afterEach(async () => {
+    if (!baseCatalog) return;
+    const { getVideoModels } = await import('../../lib/mediaModels.js');
+    vi.mocked(getVideoModels).mockImplementation(baseCatalog);
+    mockFindCachedRepoFile.mockImplementation(async (_repo, filename) => join('/mock/hf/snap', filename));
+  });
+
+  const renderH3 = async (over = {}) => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+    const jobId = `h3-draft-${Math.random().toString(36).slice(2, 10)}`;
+    let startedMeta = null;
+    const capture = (e) => { if (e.generationId === jobId) startedMeta = e; };
+    videoGenEvents.on('started', capture);
+    await generateVideo({
+      jobId,
+      modelId: 'minimax_h3_8bit',
+      prompt: 'a fox watches the rain',
+      width: 1344, height: 768, numFrames: 124, fps: 24, mode: 'text',
+      ...over,
+    });
+    videoGenEvents.off('started', capture);
+    const [, args] = spawnMock.mock.calls.find(([, a]) => (
+      Array.isArray(a) && a.some((arg) => basename(String(arg)) === 'generate_minimax_h3.py')
+    ));
+    return { args, meta: startedMeta };
+  };
+
+  const hasDecoderFlag = (args) => args.some((arg) => String(arg).startsWith('--draft-decoder'));
+
+  it('emits the decoder flags and records the decode when every gate passes', async () => {
+    await declareDecoder();
+    byovRevisionState.current = true;
+    byovRevisionState.expectedRevision = DECODER_RUNTIME_REV;
+
+    const { args, meta } = await renderH3({ draftDecode: 'draft' });
+
+    expect(args[args.indexOf('--draft-decoder-id') + 1]).toBe('draft');
+    expect(args[args.indexOf('--draft-decoder-file') + 1]).toBe(join('/mock/hf/snap', 'decoder.safetensors'));
+    expect(args).toContain('--draft-decoder-shim-root');
+    expect(meta).toMatchObject({ draftDecode: 'draft' });
+  });
+
+  // Byte-identical argv on the default path is what keeps this feature from
+  // changing any render nobody opted into.
+  it.each([
+    ['an omitted decode', {}],
+    ['an explicit full decode', { draftDecode: 'full' }],
+  ])('emits no decoder flag for %s', async (_label, over) => {
+    await declareDecoder();
+    byovRevisionState.current = true;
+    byovRevisionState.expectedRevision = DECODER_RUNTIME_REV;
+
+    const { args, meta } = await renderH3(over);
+
+    expect(hasDecoderFlag(args)).toBe(false);
+    expect(meta.draftDecode).toBeUndefined();
+  });
+
+  // The fallback paths the issue calls out. Each one must reach the runner
+  // WITHOUT the flags rather than 400 a submitted job — and must leave the
+  // history record making no claim about a draft decode.
+  it.each([
+    [
+      'the model declares no decoder',
+      async () => {
+        byovRevisionState.current = true;
+        byovRevisionState.expectedRevision = DECODER_RUNTIME_REV;
+      },
+    ],
+    [
+      'the installed runner checkout is not the verified revision',
+      async () => {
+        await declareDecoder();
+        byovRevisionState.current = false;
+      },
+    ],
+    [
+      'the asset is not downloaded',
+      async () => {
+        await declareDecoder();
+        byovRevisionState.current = true;
+        byovRevisionState.expectedRevision = DECODER_RUNTIME_REV;
+        mockFindCachedRepoFile.mockImplementation(async (repo, filename) => (
+          repo === DECODER.repo ? null : join('/mock/hf/snap', filename)
+        ));
+      },
+    ],
+    [
+      'the model is another entry\'s declared Finish target',
+      async () => {
+        await declareDecoder();
+        byovRevisionState.current = true;
+        byovRevisionState.expectedRevision = DECODER_RUNTIME_REV;
+        // The finish graph is what makes H3 a delivery model here: a draft
+        // entry naming it is the whole declaration, and a preview-grade decode
+        // must refuse to run on it however the request was phrased.
+        const { getVideoModels } = await import('../../lib/mediaModels.js');
+        const mock = vi.mocked(getVideoModels);
+        const declared = mock.getMockImplementation();
+        mock.mockImplementation(() => [
+          ...declared(),
+          { id: 'pretend_draft', runtime: 'minimax_h3', finishModelId: 'minimax_h3_8bit' },
+        ]);
+      },
+    ],
+  ])('falls back to the full decoder when %s', async (_label, setup) => {
+    await setup();
+
+    const { args, meta } = await renderH3({ draftDecode: 'draft' });
+
+    expect(hasDecoderFlag(args)).toBe(false);
+    // Still a real H3 render, just on the model's own decoder.
+    expect(args).toContain('--model-repo');
+    expect(meta.draftDecode).toBeUndefined();
   });
 });

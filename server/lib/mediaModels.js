@@ -78,6 +78,7 @@ import { ServerError } from './errorHandler.js';
 import { applyVideoDisclosures } from './videoDisclosure.js';
 import { applyVideoFinishProfiles, sanitizeFinishProfiles } from './videoFinishProfiles.js';
 import { applyVideoSpeedProfiles, sanitizeSpeedProfiles } from './videoSpeedProfiles.js';
+import { applyVideoDraftDecoders, sanitizeDraftDecoders } from './videoDraftDecoders.js';
 import { applyMiniMaxH3MemoryProfiles, sanitizeMiniMaxH3MemoryProfiles } from './minimaxH3Memory.js';
 import { applyVideoSupportedModes } from './videoModeProfiles.js';
 import {
@@ -280,8 +281,10 @@ const DEFAULT_REGISTRY = {
     // `applyVideoSpeedProfiles` (lib/videoSpeedProfiles.js) is the third such
     // decorator: it attaches the shipped `speedProfiles` a model offers, pin-
     // guarded on repo AND revision so a re-pointed entry keeps no schedule
-    // claim we can't back.
-    mlx: applyMiniMaxH3MemoryProfiles(applyVideoSpeedProfiles(applyVideoFinishProfiles(applyVideoDisclosures([
+    // claim we can't back. `applyVideoDraftDecoders`
+    // (lib/videoDraftDecoders.js) is the fourth, attaching the separately
+    // downloaded preview-fidelity decoder a model can render drafts on.
+    mlx: applyMiniMaxH3MemoryProfiles(applyVideoDraftDecoders(applyVideoSpeedProfiles(applyVideoFinishProfiles(applyVideoDisclosures([
       // notapalindrome's mlx-video-with-audio runtime — single PyPI package,
       // T2V/I2V only, FFLF degrades to last-frame conditioning (one --image arg).
       // LTX-2 Unified (the older 42 GB model) was retired in favour of 2.3 —
@@ -530,8 +533,8 @@ const DEFAULT_REGISTRY = {
         samplerLocked: true,
         samplerNote: 'FastMetal models are DMD2-distilled 3-step models with affine INT8 quantization.',
       },
-    ])))),
-    cuda: applyMiniMaxH3MemoryProfiles(applyVideoSpeedProfiles(applyVideoFinishProfiles(applyVideoDisclosures([
+    ]))))),
+    cuda: applyMiniMaxH3MemoryProfiles(applyVideoDraftDecoders(applyVideoSpeedProfiles(applyVideoFinishProfiles(applyVideoDisclosures([
       { id: 'ltx_video', name: 'LTX-Video 0.9.5 — T2V + I2V (~9.5 GB, auto-downloads)', runtime: 'cuda_video', steps: 25, guidance: 3.0 },
       // MiniMax H3 on NVIDIA, through diffusers' MiniMaxH3ModularPipeline —
       // the same joint video+audio model the MLX list runs on Apple Silicon, so it
@@ -567,7 +570,7 @@ const DEFAULT_REGISTRY = {
         supportsTiling: false,
         supportsDisableAudio: false,
       },
-    ])))),
+    ]))))),
     defaultMlx: 'ltx23_distilled_q4',
     defaultCuda: 'ltx_video',
   },
@@ -1121,12 +1124,19 @@ const normalizeRegistry = (parsed) => {
     // hand-edited profile with a NaN step count would otherwise reach the
     // picker and spawn a broken render, so it is warned about and stripped.
     const withSpeed = sanitizeSpeedProfiles(applyVideoSpeedProfiles(decorated));
+    // applyVideoDraftDecoders + sanitizeDraftDecoders (lib/videoDraftDecoders.js)
+    // are the same arrangement for the preview-fidelity decode (#5423). The
+    // sanitizer matters more here than elsewhere: a hand-edited decoder pointed
+    // at a runtime whose builder emits no draft flags would render on the FULL
+    // decoder while the history record claimed a draft one, so it is warned
+    // about and stripped rather than allowed to make a false claim.
+    const withDraftDecode = sanitizeDraftDecoders(applyVideoDraftDecoders(withSpeed));
     // applyMiniMaxH3MemoryProfiles is the load-time twin of migration 317, and
     // its sanitizer the sibling of the two above: a hand-edited profile with a
     // NaN memory floor would otherwise make every capacity comparison false and
     // refuse H3 renders on a machine that can run them, so it is warned about
     // and stripped.
-    return sanitizeMiniMaxH3MemoryProfiles(applyMiniMaxH3MemoryProfiles(withSpeed));
+    return sanitizeMiniMaxH3MemoryProfiles(applyMiniMaxH3MemoryProfiles(withDraftDecode));
   };
   const normalizedBuckets = Object.fromEntries(
     VIDEO_BUCKETS.map((bucket) => [bucket, videoEntries(bucketResults[bucket].entries, {

@@ -155,6 +155,25 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
         return false;
       }
     }
+    // What the runner ACTUALLY decoded with (DRAFTDECODE:<json> — see
+    // scripts/generate_minimax_h3.py). PortOS gates the substitution
+    // declaratively, but only the child can see whether the pinned decoder
+    // module tree accepts the asset's tensors; a load that fails there falls
+    // back to the model's own decoder and reports `applied: false` with a
+    // reason. Stamped on the job so finalizeGeneratedVideo persists it, which is
+    // what keeps a full decode from reading back as a draft one.
+    if (line.startsWith('DRAFTDECODE:')) {
+      try {
+        const applied = JSON.parse(line.slice('DRAFTDECODE:'.length));
+        job.draftDecode = applied;
+        console.log(`🩻 draft decode [${jobId.slice(0, 8)}] ${applied?.id || '?'} — ${applied?.applied ? 'applied' : `fell back to the full decoder (${applied?.reason || 'unknown'})`}`);
+        return true;
+      } catch {
+        // Malformed payload — fall through to raw-logging so the broken line
+        // is visible rather than silently swallowed (same as RUNTIME: above).
+        return false;
+      }
+    }
     // Heartbeat for the queue's idle watchdog (see imageGen/local.js).
     videoGenEvents.emit('activity', { generationId: jobId });
     if (line.startsWith('STATUS:')) {
@@ -569,6 +588,12 @@ export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename,
       // as degraded instead of as a full speed claim. Absent on every quality
       // render and on runners that don't report one.
       ...(job.speedProfile ? { speedProfileApplied: job.speedProfile } : {}),
+      // Whether the draft decoder actually decoded this clip (#5423).
+      // `meta.draftDecode` above is the REQUEST that survived every server-side
+      // gate; this is the outcome, so a render whose decoder failed to load
+      // reads back as a full decode instead of claiming a draft one. Absent on
+      // every full-decode render and on runners that don't report one.
+      ...(job.draftDecode ? { draftDecodeApplied: job.draftDecode } : {}),
     });
     return history;
   });

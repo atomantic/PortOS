@@ -762,6 +762,7 @@ describe('videoGen routes', () => {
         // assertion can't cover either. Their own cases are below.
         'textEncoderId',
         'speedProfileId',
+        'draftDecode',
       ]);
       const { getSettings } = await import('../services/settings.js');
       getSettings.mockResolvedValueOnce({ imageGen: grokReady, videoGen: { mode: 'grok' } });
@@ -777,6 +778,37 @@ describe('videoGen routes', () => {
     // (an unswapped render's job params stay byte-identical to a request that
     // never sent the field). Both halves matter: keeping it local without
     // dropping it would persist a knob that never applied.
+    // Same contract for the decode knob (#5423): grok has no decoder choice, so
+    // naming one keeps the render local — and the default value is dropped from
+    // persisted params so a full-decode render's job params stay byte-identical
+    // to a request that never sent the field.
+    it('keeps draftDecode on the local path under a grok pin, without persisting the full value', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ imageGen: grokReady, videoGen: { mode: 'grok' } });
+      const r = await request(app).post('/api/video-gen/').send({ prompt: 'a fox', draftDecode: 'full' });
+      expect(r.status).toBe(200);
+      const [call] = mediaJobQueue.enqueueJob.mock.calls;
+      expect(call[0].params.mode).not.toBe('grok');
+      expect(call[0].params.draftDecode).toBeUndefined();
+    });
+
+    it('persists a non-default draftDecode on the local path', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ imageGen: grokReady, videoGen: { mode: 'grok' } });
+      const r = await request(app).post('/api/video-gen/').send({ prompt: 'a fox', draftDecode: 'draft' });
+      expect(r.status).toBe(200);
+      const [call] = mediaJobQueue.enqueueJob.mock.calls;
+      expect(call[0].params.draftDecode).toBe('draft');
+    });
+
+    // A closed enum, unlike textEncoderId/speedProfileId — there is at most one
+    // draft decoder per model, so an unknown value is a client bug, not a
+    // per-model option the route can't enumerate.
+    it('rejects an unknown draftDecode value', async () => {
+      const r = await request(app).post('/api/video-gen/').send({ prompt: 'a fox', draftDecode: 'turbo' });
+      expect(r.status).toBe(400);
+    });
+
     it('keeps textEncoderId on the local path under a grok pin, without persisting the stock value', async () => {
       const { getSettings } = await import('../services/settings.js');
       getSettings.mockResolvedValueOnce({ imageGen: grokReady, videoGen: { mode: 'grok' } });

@@ -216,6 +216,12 @@ export async function stitchVideos(videoIds, opts = {}) {
       // none (resolveVideoSpeedProfileForModes), so videos[0] speaks for all.
       'speedProfileId',
       'speedProfileApplied',
+      // Draft decode (#5423) — inherited for the same reason as the speed
+      // profile above: a chain's chunk entries are hidden, so without these the
+      // stitched record would never say the clip was decoded at preview
+      // fidelity. Every chunk of one chain resolves the same decoder.
+      'draftDecode',
+      'draftDecodeApplied',
     ].flatMap((key) => videos[0][key] === undefined ? [] : [[key, videos[0][key]]])),
     // Inherit applied LoRAs from the first constituent clip (a chunk chain
     // shares one LoRA set across all chunks), so the visible stitched entry

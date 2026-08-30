@@ -11,6 +11,8 @@ import {
   STOCK_TEXT_ENCODER_ID,
   selectedSpeedProfile,
   videoChainChunkModes,
+  DEFAULT_DRAFT_DECODE_ID,
+  normalizeDraftDecodeForModel,
 } from './videoGenParams.js';
 
 // The form owns state transitions and validation. This module owns the three
@@ -30,7 +32,7 @@ export function buildVideoGenSubmission({
   prompt, negativePrompt, stylePreset,
   width, height, mode, sourceImageFile, sourceImageUpload,
   numFrames, fps, steps, guidanceScale, seed,
-  currentModel, modelId, tiling, textEncoderId, speedProfileId,
+  currentModel, modelId, tiling, textEncoderId, speedProfileId, draftDecode,
   disableAudio, noMusic, imageStrength, i2vReferenceMode,
   keyframesActive, keyframes, loraFamily, selectedLoras,
   lastImageFile, lastImageUpload, extendFromVideoId, audioFile,
@@ -101,6 +103,13 @@ export function buildVideoGenSubmission({
     speedProfileId: selectedSpeedProfile(speedProfileId, currentModel, videoChainChunkModes({
       model: currentModel, mode, chaining: chainingActive, contextFrames,
     }))?.id,
+    // Preview-fidelity decode (#5423). Sent only when it is a real, still-valid
+    // choice on THIS model — a stale selection carried across a model switch
+    // would otherwise POST a knob the server declines and logs. Absence is a
+    // full decode, so an unswapped render's payload is unchanged.
+    draftDecode: normalizeDraftDecodeForModel(draftDecode, currentModel) === DEFAULT_DRAFT_DECODE_ID
+      ? undefined
+      : draftDecode,
     disableAudio: effectiveDisableAudio ? 'true' : 'false',
     mode,
     imageStrength: imageStrength || '',

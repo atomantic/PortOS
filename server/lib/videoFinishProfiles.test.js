@@ -5,6 +5,7 @@ import {
   validateFinishProfileGraph,
   sanitizeFinishProfiles,
   finishTargetForModel,
+  isDeliveryVideoModel,
 } from './videoFinishProfiles.js';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
@@ -142,5 +143,33 @@ describe('finishTargetForModel', () => {
   it('returns null for a model with no declared target', () => {
     expect(finishTargetForModel(full(), [draft(), full()])).toBeNull();
     expect(finishTargetForModel(null, [full()])).toBeNull();
+  });
+});
+
+// Which END of a pair a model sits on (#5423). A delivery model is declared as
+// the place a settled composition is taken, so anything that trades fidelity
+// for speed must refuse to run on it — the finish graph is the only authority
+// that can answer that, which is why the predicate lives here.
+describe('isDeliveryVideoModel', () => {
+  const list = [draft(), full()];
+
+  it('is true for a model another entry names as its Finish target', () => {
+    expect(isDeliveryVideoModel(full(), list)).toBe(true);
+  });
+
+  it('is false for the draft that names it', () => {
+    expect(isDeliveryVideoModel(draft(), list)).toBe(false);
+  });
+
+  it('is false for a model nobody finishes into', () => {
+    expect(isDeliveryVideoModel({ id: 'standalone' }, list)).toBe(false);
+  });
+
+  it.each([
+    ['a missing model', null, list],
+    ['a model with no id', { runtime: 'wan22' }, list],
+    ['a missing list', full(), null],
+  ])('is false for %s', (_label, model, entries) => {
+    expect(isDeliveryVideoModel(model, entries)).toBe(false);
   });
 });

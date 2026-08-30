@@ -21,6 +21,8 @@ import {
   textEncoderOptionsForModel, normalizeTextEncoderForModel,
   textEncoderIdFromRecord,
   normalizeSpeedProfileForModel, speedProfileIdFromRecord,
+  DEFAULT_DRAFT_DECODE_ID, draftDecodeOptionsForModel,
+  normalizeDraftDecodeForModel, draftDecodeFromRecord,
 } from '../lib/videoGenParams.js';
 import { useVideoGenFieldState } from './useVideoGenFieldState.js';
 import { useVideoGenSubmitFlow } from './useVideoGenSubmitFlow.js';
@@ -113,6 +115,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
     selectedLoras, setSelectedLoras,
     sizeManuallySetRef,
     speedProfileId, setSpeedProfileId,
+    draftDecode, setDraftDecode,
     staleModelToastRef,
     steps, setSteps,
     stylePreset, setStylePreset,
@@ -467,6 +470,10 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
     // profile selected that the new entry never declared, or submit would send
     // a schedule the server declines and the picker would show a phantom.
     setSpeedProfileId((current) => normalizeSpeedProfileForModel(current, currentModel));
+    // And the same for the decode: only some models declare a draft decoder, so
+    // a switch away from one must not leave "Draft" selected on a model whose
+    // renders would silently be full decodes.
+    setDraftDecode((current) => normalizeDraftDecodeForModel(current, currentModel));
   }, [currentModel]);
 
   // Substitutable prompt conditioners the selected model can load, straight off
@@ -474,6 +481,13 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
   // which is what hides the picker — the page never re-derives that from a
   // runtime name.
   const textEncoderOptions = textEncoderOptionsForModel(currentModel);
+
+  // Decode choices the selected model declares, straight off the
+  // server-decorated entry (lib/videoDraftDecoders.js
+  // `publicVideoDraftDecodeOptions`). Empty for every model with no draft
+  // decoder, which is what hides the control — the page never re-derives that
+  // from a runtime name.
+  const draftDecodeOptions = draftDecodeOptionsForModel(currentModel);
 
   // Video-LoRA family for the selected model — 'ltx-video' on ltx2, else null.
   // When null the picker is hidden and no LoRAs ride along on submit (the
@@ -994,6 +1008,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
     // snaps an id this model can't load back to stock.
     setTextEncoderId(textEncoderIdFromRecord(item.textEncoderId));
     setSpeedProfileId(speedProfileIdFromRecord(item.speedProfileId));
+    setDraftDecode(draftDecodeFromRecord(item.draftDecode));
     // disableAudio: always set explicitly (true/false) so the toggle reliably
     // matches the remixed render. Skipping the false branch would leave the
     // toggle stuck ON when the user remixes a clip that had audio enabled.
@@ -1076,6 +1091,12 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
     setRemixModelFallback(null);
     setSteps('');
     setGuidanceScale('');
+    // Finish is the delivery render, so it always decodes on the full decoder.
+    // The server enforces this too (`draftDecodeDeclineReason` declines a
+    // `finalRender`, and a delivery model is final on its own), but forcing it
+    // in the form means the user SEES the control agree with what will happen
+    // rather than reading Draft on a render that will ignore it.
+    setDraftDecode(DEFAULT_DRAFT_DECODE_ID);
   };
 
   // Repopulate the form from an in-flight (or queued) render restored via
@@ -1102,6 +1123,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
     // Resume echoes the field only for a non-stock render, so absence is 'stock'.
     setTextEncoderId(textEncoderIdFromRecord(p.textEncoderId));
     setSpeedProfileId(speedProfileIdFromRecord(p.speedProfileId));
+    setDraftDecode(draftDecodeFromRecord(p.draftDecode));
     if (typeof p.disableAudio === 'boolean') setDisableAudio(p.disableAudio);
     if (p.mode === 'grok') {
       // Grok job: 'grok' is the queue discriminator, not a semantic video
@@ -1185,7 +1207,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
     prompt, negativePrompt, stylePreset,
     width, height, mode, sourceImageFile, sourceImageUpload,
     numFrames, fps, steps, guidanceScale, seed,
-    currentModel, modelId, tiling, textEncoderId, speedProfileId,
+    currentModel, modelId, tiling, textEncoderId, speedProfileId, draftDecode,
     disableAudio, noMusic, imageStrength, i2vReferenceMode,
     keyframesActive, keyframes, loraFamily, selectedLoras,
     lastImageFile, lastImageUpload, extendFromVideoId, audioFile,
@@ -1229,6 +1251,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
     tiling, setTiling,
     textEncoderId, setTextEncoderId, textEncoderOptions,
     speedProfileId, setSpeedProfileId,
+    draftDecode, setDraftDecode, draftDecodeOptions,
     disableAudio, setDisableAudio,
     noMusic, setNoMusic,
     // Frames

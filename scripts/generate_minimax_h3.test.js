@@ -67,6 +67,9 @@ const VALIDATE_ARGS_DEFAULTS = {
   text_encoder_shim_root: null,
   text_encoder_key_prefix: [],
   text_encoder_final_norm_key: null,
+  draft_decoder_id: null,
+  draft_decoder_file: [],
+  draft_decoder_shim_root: null,
 };
 const argsExpr = (overrides = {}) => {
   const fields = Object.entries({ ...VALIDATE_ARGS_DEFAULTS, ...overrides })
@@ -306,6 +309,51 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
       '    raise SystemExit("incoherent text-encoder args were accepted")',
     ].join('\n')}`);
     expect(output).toMatch(pattern);
+  });
+
+  // Draft decode (#5423). Same all-or-nothing rule as the conditioner above, and
+  // for the same reason: a partial set would decode on the FULL decoder while
+  // PortOS's history record claimed a draft one.
+  it.each([
+    [{ draft_decoder_id: 'draft' }, /must be given together/i],
+    [{ draft_decoder_file: ['/tmp/d.safetensors'] }, /must be given together/i],
+    [{ draft_decoder_shim_root: '/tmp/decoder-shims' }, /must be given together/i],
+    // The id names a directory under the shim root, so a traversing value is a
+    // real escape rather than a cosmetic problem.
+    [
+      {
+        draft_decoder_id: '../escape',
+        draft_decoder_file: ['/tmp/d.safetensors'],
+        draft_decoder_shim_root: '/tmp/decoder-shims',
+      },
+      /bare directory-safe name/i,
+    ],
+  ])('rejects an incoherent draft-decoder argument set (%j)', (overrides, pattern) => {
+    const output = runPython(`${importRunner}\n${[
+      'from types import SimpleNamespace',
+      argsExpr(overrides),
+      'try:',
+      '    runner.validate_args(args)',
+      'except SystemExit as exc:',
+      '    print(str(exc))',
+      'else:',
+      '    raise SystemExit("incoherent draft-decoder args were accepted")',
+    ].join('\n')}`);
+    expect(output).toMatch(pattern);
+  });
+
+  it('accepts a complete draft-decoder argument set', () => {
+    const output = runPython(`${importRunner}\n${[
+      'from types import SimpleNamespace',
+      argsExpr({
+        draft_decoder_id: 'draft',
+        draft_decoder_file: ['/tmp/d.safetensors'],
+        draft_decoder_shim_root: '/tmp/decoder-shims',
+      }),
+      'runner.validate_args(args)',
+      'print("ok")',
+    ].join('\n')}`);
+    expect(output.trim()).toBe('ok');
   });
 
   it('accepts a complete text-encoder argument set', () => {

@@ -53,6 +53,7 @@ import {
   isStockTextEncoder,
 } from '../lib/videoTextEncoders.js';
 import { isDefaultSpeedProfile } from '../lib/videoSpeedProfiles.js';
+import { DRAFT_DECODE_IDS, isFullDecode } from '../lib/videoDraftDecoders.js';
 import {
   inspectModelCache, verifyModelCache, repairModelCache, repairCachedFile,
   verifyCachedRepoFiles, repairCachedRepoFiles, summarizeVerify, aggregateVerifies,
@@ -207,6 +208,14 @@ export const LOCAL_ONLY_VIDEO_PARAMS = Object.freeze({
   // model's own sampler with the reason logged, because a knob that only makes
   // a render faster must degrade rather than 400 a submitted job.
   speedProfileId: z.string().min(1).max(64).optional(),
+  // Decode this render's latents on the model's own decoder or on its declared
+  // preview-fidelity one (lib/videoDraftDecoders.js). A closed enum, unlike the
+  // two ids above, because there is at most ONE draft decoder per model — the
+  // request selects between "the model's decoder" and "the draft decoder this
+  // model declares", not from a per-model list. Never rejected downstream
+  // either: an unsupported model, an old runner checkout, a missing download or
+  // a delivery render all fall back to the full decoder with the reason logged.
+  draftDecode: z.enum(DRAFT_DECODE_IDS).optional(),
 });
 
 const generateBodySchema = z.object({
@@ -1126,6 +1135,10 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
     // it would leave a resumed/remixed render carrying a knob that never
     // applied and differing from what the service records in history.
     ...(isDefaultSpeedProfile(body.speedProfileId) ? {} : { speedProfileId: body.speedProfileId }),
+    // Same "absence IS the default" rule again: an explicit 'full' decode is
+    // identical to omitting the field, so persisting it would leave a
+    // resumed/remixed render carrying a knob that never applied.
+    ...(isFullDecode(body.draftDecode) ? {} : { draftDecode: body.draftDecode }),
     disableAudio: body.disableAudio === true || body.disableAudio === 'true',
     sourceImagePath,
     audioFilePath,
@@ -1199,6 +1212,10 @@ const ACTIVE_JOB_PARAM_FIELDS = [
   // Likewise a registry id — the sampler schedule the in-flight render picked,
   // so a reloading page restores the picker instead of snapping back to Quality.
   'speedProfileId',
+  // Likewise a closed enum with no path — the decode the in-flight render
+  // picked, so a reloading page restores the control instead of snapping back
+  // to Full.
+  'draftDecode',
   'audioStartSec',
   // Grok jobs (#2859 phase 2): the semantic t2v/i2v mode ('mode' holds the
   // 'grok' discriminator for them) and the clip duration — both plain

@@ -449,3 +449,51 @@ describe('AdvancedParamsPanel — speed profiles', () => {
     expect(screen.getByText(/8\+3 steps, CFG 1/)).toBeTruthy();
   });
 });
+
+// Draft decode (#5423). The control exists so a user can trade decode fidelity
+// for a faster look at prompt and composition — but it must never appear for a
+// model that has no draft decoder, or it would offer a choice the server
+// declines and the render silently ignores.
+describe('AdvancedParamsPanel — draft decode', () => {
+  const DRAFT_OPTIONS = [
+    { id: 'full', label: 'Full decode', description: "The model's own decoder." },
+    { id: 'draft', label: 'Draft decode', description: 'Preview fidelity.', sizeLabel: '~1 GB' },
+  ];
+  const h3 = (over = {}) => ({
+    steps: 8, guidance: 0, runtime: 'minimax_h3', supportedModes: ['text', 'image', 'fflf'],
+    samplerLocked: true, draftDecodeOptions: DRAFT_OPTIONS, ...over,
+  });
+
+  it('renders no control for a model that declares no draft decoder', () => {
+    renderPanel({ currentModel: h3({ draftDecodeOptions: [] }) });
+    expect(screen.queryByLabelText('Decode')).toBeNull();
+  });
+
+  it('offers full first, then the declared decoder with its size', () => {
+    renderPanel({ currentModel: h3() });
+    const select = screen.getByLabelText('Decode');
+    expect([...select.options].map((o) => o.value)).toEqual(['full', 'draft']);
+    expect([...select.options].map((o) => o.text)).toEqual(['Full decode', 'Draft decode · ~1 GB']);
+  });
+
+  it('reports a selection to the parent', () => {
+    const onDraftDecodeChange = vi.fn();
+    renderPanel({ currentModel: h3(), onDraftDecodeChange });
+    fireEvent.change(screen.getByLabelText('Decode'), { target: { value: 'draft' } });
+    expect(onDraftDecodeChange).toHaveBeenCalledWith('draft');
+  });
+
+  // A stale selection carried in from a model that DID declare a decoder must
+  // not leave the select on a value with no matching option.
+  it('falls back to full for a selection this model does not offer', () => {
+    renderPanel({ currentModel: h3(), draftDecode: 'turbo' });
+    expect(screen.getByLabelText('Decode').value).toBe('full');
+  });
+
+  // The one thing a user picking Draft most needs to know, and the property the
+  // server enforces regardless of what the form says.
+  it('says that delivery renders always use the full decoder', () => {
+    renderPanel({ currentModel: h3(), draftDecode: 'draft' });
+    expect(screen.getByText(/Finish and delivery renders always use the full decoder/)).toBeTruthy();
+  });
+});

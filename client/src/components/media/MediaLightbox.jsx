@@ -238,6 +238,22 @@ export default function MediaLightbox({
       : id;
   })();
 
+  // Which decoder produced these pixels (#5423). Same "the request is not the
+  // outcome" rule as the speed profile above: the record carries the decode
+  // that survived every server-side gate, and the runner's own report says
+  // whether the decoder actually loaded. A draft record with no report — or a
+  // report saying it fell back — must never read as a draft decode, because the
+  // whole point of the row is that a preview-fidelity clip is labelled as one.
+  const draftDecodeLabel = (() => {
+    const id = item.raw?.draftDecode;
+    if (!id) return null;
+    const applied = item.raw?.draftDecodeApplied;
+    if (!applied) return `${id} — outcome not reported`;
+    return applied.applied
+      ? `${id} — preview fidelity`
+      : `full decoder (${id} unavailable${applied.reason ? `: ${applied.reason}` : ''})`;
+  })();
+
   const meta = [
     // Universe Builder context — placed first so "this is Ash from MyVerse"
     // reads before the technical render params. Sidecars without a universe
@@ -249,6 +265,7 @@ export default function MediaLightbox({
     ['Model', item.modelId],
     ['Resolution', item.width && item.height ? `${item.width}×${item.height}` : null],
     ['Speed profile', speedProfileLabel],
+    ['Decode', draftDecodeLabel],
     ['Steps', item.steps],
     ['Guidance', item.guidance],
     ['CFG', item.raw?.cfgScale ?? item.raw?.cfg_scale],

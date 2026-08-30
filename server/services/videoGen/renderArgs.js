@@ -39,6 +39,7 @@ import {
   MINIMAX_H3_HELPER_SCRIPT,
   MINIMAX_H3_REPO_DIR,
   MINIMAX_H3_ENCODER_SHIM_DIR,
+  MINIMAX_H3_DRAFT_DECODER_SHIM_DIR,
   MINIMAX_H3_EXPECTED_REVISION,
   MINIMAX_H3_CUDA_VENV_PYTHON,
   MINIMAX_H3_CUDA_HELPER_SCRIPT,
@@ -672,7 +673,7 @@ const miniMaxH3HostMemoryArgs = (model) => {
 // Build args for PipeNetwork's pinned MiniMax H3 MLX port. The helper resolves
 // only exact, already-cached HF revisions; every network download remains an
 // explicit Video Gen UI action guarded by the model's terms acknowledgement.
-const buildMiniMaxH3Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, previewDir, loras, textEncoder }) => {
+const buildMiniMaxH3Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, previewDir, loras, textEncoder, draftDecoder }) => {
   assertMiniMaxH3Preflight({
     runtimeId: 'minimax_h3',
     repoLabel: 'transformer repo or revision',
@@ -741,6 +742,19 @@ const buildMiniMaxH3Args = ({ model, prompt, negativePrompt, width, height, numF
     // hidden state before it, but the pinned loader builds the full module tree
     // and refuses to load with any parameter missing.
     if (textEncoder.finalNormKey) args.push('--text-encoder-final-norm-key', textEncoder.finalNormKey);
+  }
+  // Preview-fidelity video decode (lib/videoDraftDecoders.js, #5423). Absent
+  // for every full-decode render, so the argv of a delivery render is
+  // byte-identical to what it was before this feature existed. `paths` were
+  // already resolved against the HF cache by generateVideo — the helper never
+  // downloads — and generateVideo has already refused the substitution for a
+  // final/Finish render, so nothing here can put a draft decode on a delivery
+  // clip. One --draft-decoder-file per pinned file; the helper links them into
+  // a shim `source/` beside the model's own decoder config.
+  if (draftDecoder) {
+    args.push('--draft-decoder-id', draftDecoder.id);
+    for (const path of draftDecoder.paths) args.push('--draft-decoder-file', path);
+    args.push('--draft-decoder-shim-root', MINIMAX_H3_DRAFT_DECODER_SHIM_DIR);
   }
   return { bin: MINIMAX_H3_VENV_PYTHON, args };
 };
@@ -812,7 +826,7 @@ const buildMiniMaxH3CudaArgs = ({ model, prompt, negativePrompt, width, height, 
   return { bin: MINIMAX_H3_CUDA_VENV_PYTHON, args };
 };
 
-export const buildArgs = ({ pythonPath, modelId, model, wanModelPath, wanRequiredWeights, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, textEncoderRepo, textEncoder, outputPath, previewDir, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile }) => {
+export const buildArgs = ({ pythonPath, modelId, model, wanModelPath, wanRequiredWeights, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, textEncoderRepo, textEncoder, outputPath, previewDir, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile, draftDecoder }) => {
   // Reference-mode promise (#4874) — checked HERE rather than inside
   // buildLtx2Args because every runtime reaches this function and only one can
   // honor a loose reference. A wan22/mlx_video/H3 render that fell through to its
@@ -873,7 +887,7 @@ export const buildArgs = ({ pythonPath, modelId, model, wanModelPath, wanRequire
     return buildWan22Args({ model, wanModelPath, wanRequiredWeights, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, mode, outputPath });
   }
   if (model.runtime === 'minimax_h3') {
-    return buildMiniMaxH3Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, previewDir, loras, textEncoder });
+    return buildMiniMaxH3Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, previewDir, loras, textEncoder, draftDecoder });
   }
   if (model.runtime === 'minimax_h3_cuda') {
     return buildMiniMaxH3CudaArgs({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath });
