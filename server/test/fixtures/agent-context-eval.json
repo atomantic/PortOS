@@ -89,7 +89,7 @@
         "advertisedToolsCovered": true,
         "readOnlyTools": true,
         "equals": [
-          { "path": "manifest.schemaVersion", "value": 3 },
+          { "path": "manifest.schemaVersion", "value": 4 },
           { "path": "manifest.limits.maxApproxTokens", "value": 5000 },
           { "path": "manifest.tools.length", "value": 5 }
         ],
