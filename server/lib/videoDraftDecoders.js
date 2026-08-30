@@ -49,11 +49,23 @@
  *
  * ## Why `VIDEO_DRAFT_DECODERS` currently ships no entry
  *
- * The mechanism is declared and wired; the ASSET is not, because none of the
- * published candidates clears this repo's own bar for a pinned weight (see the
- * table below for the checklist a candidate must pass). Shipping the gates
- * first is deliberate: the day an asset is verified, it is one table row plus a
- * migration, and every fallback path it depends on is already covered by tests.
+ * The mechanism is declared and wired; the ASSET is not — and as of 2026-08-30
+ * that is a decision, not a gap. The survey is in ADR
+ * docs/decisions/2026-08-30-h3-draft-decoder-asset.md.
+ *
+ * The short version: the shape this shim can host and the shape that makes a
+ * decode cheap are mutually exclusive. Everything published that would actually
+ * be light — a tiny autoencoder, a quantized repack, a decoder-only head —
+ * cannot load through the pinned strict loader, and everything that CAN load is
+ * a full-size VAE that saves nothing. Phosphene, the reference install that
+ * prompted issue #5423, gets its ~23 MB TAE only by pinning its OWN runner fork
+ * that implements a TAE decoder module and takes `--draft-decode tae`. PortOS
+ * pins upstream instead, so an asset here would not be a table row — it would
+ * be a fork of a multi-hour render path, which is its own decision.
+ *
+ * Shipping the gates first is still the right call: the day a qualifying asset
+ * appears it is one table row plus a migration, and every fallback path it
+ * depends on is already covered by tests.
  *
  * Pure module: no I/O, and the one import is a sibling lib predicate.
  */
@@ -116,10 +128,14 @@ export const DRAFT_DECODE_RUNTIMES = Object.freeze(['minimax_h3']);
  * decoder that fails any of them produces plausible-looking pixels that are
  * wrong in a way no test can catch:
  *
- *   - **Key contract.** Its tensor names load into the pinned runner's decoder
- *     module tree under that loader's STRICT check. A quantized repack whose
- *     keys carry `.scales`/`.biases` needs loader support first; it is not a
- *     drop-in.
+ *   - **Key contract — check this one FIRST, it disqualifies most candidates.**
+ *     `build_draft_decoder_shim` swaps exactly ONE file into upstream's
+ *     checkpoint root, and the pinned `load_video_vae` STRICT-matches it
+ *     against the WHOLE `VideoVAE` parameter tree. A candidate therefore has
+ *     to be a COMPLETE, UNQUANTIZED, full-`VideoVAE`-shaped checkpoint
+ *     carrying upstream's exact key set. A tiny autoencoder is a different
+ *     module tree; a quantized repack's `.scales`/`.biases` read as unexpected
+ *     keys; a decoder-only head is missing every encoder key.
  *   - **Latent contract.** It decodes the SAME latent space — channel count,
  *     `latents_mean`/`latents_std`, and spatial/temporal compression ratios
  *     identical to the model's own decoder.

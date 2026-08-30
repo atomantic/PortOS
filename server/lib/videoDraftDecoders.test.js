@@ -51,9 +51,11 @@ const applies = (over = {}) => ({
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('the shipped table', () => {
-  // Guards the module header's own claim: no asset has cleared the
-  // verification checklist yet, so a row added without updating that header
-  // (and without a migration) fails here rather than shipping an unverified pin.
+  // Guards the module header's own claim, which is a DECISION and not a
+  // placeholder: docs/decisions/2026-08-30-h3-draft-decoder-asset.md records
+  // why every published candidate fails, and the shape a future one must have.
+  // A row added without revisiting that ADR (and without a migration) fails
+  // here rather than shipping an unverified pin.
   it('declares no decoder until an asset passes the checklist', () => {
     expect(Object.keys(VIDEO_DRAFT_DECODERS)).toEqual([]);
   });
