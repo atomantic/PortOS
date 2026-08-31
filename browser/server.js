@@ -106,20 +106,32 @@ async function applyDownloadDirPreference(profileDir, downloadDir) {
   const prefsPath = join(profileDir, 'Default', 'Preferences');
   const raw = await tryReadJson(prefsPath);
   // A profile that has never launched has no Preferences file yet; Chrome
-  // merges our partial object with its defaults on first run.
-  const prefs = raw || {};
+  // merges our partial object with its defaults on first run. A hand-edited or
+  // truncated file can also parse into a non-object root (a string, an array),
+  // and assigning a property to a string primitive throws under ESM's strict
+  // mode — uncaught out of launchBrowser()→main() into a PM2 restart-loop. So
+  // normalize the root and every branch we spread, the same way loadConfig
+  // above refuses to trust the config file.
+  const prefs = asObject(raw);
   if (prefs.download?.default_directory === downloadDir
     && prefs.savefile?.default_directory === downloadDir) {
     return false;
   }
-  prefs.download = { ...prefs.download, default_directory: downloadDir };
-  prefs.savefile = { ...prefs.savefile, default_directory: downloadDir };
+  prefs.download = { ...asObject(prefs.download), default_directory: downloadDir };
+  prefs.savefile = { ...asObject(prefs.savefile), default_directory: downloadDir };
   // `prompt_for_download: false` keeps downloads non-interactive, matching the
   // previous behavior of the CDP `allow` behavior.
   prefs.download.prompt_for_download = false;
   await mkdir(dirname(prefsPath), { recursive: true });
   await writeFile(prefsPath, JSON.stringify(prefs));
   return true;
+}
+
+// Arrays and `null` are typeof 'object' but are not safe spread/assign targets
+// for a key-value pref branch, so both are rejected alongside primitives.
+function asObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return value;
 }
 
 async function tryReadJson(path) {
@@ -264,7 +276,7 @@ async function launchBrowser() {
     chromeProcess.on('exit', () => {
       // `open` returns ~immediately once Chrome is handed off to launchd; that
       // exit is not Chrome's death. Chrome-exit detection happens via the
-      // download keep-alive WS close event + reconnect loop instead.
+      // liveness keep-alive WS close event + reconnect loop instead.
       chromeProcess = null;
     });
     // A bad macAppBundle (user-editable via the Browser settings UI) emits
