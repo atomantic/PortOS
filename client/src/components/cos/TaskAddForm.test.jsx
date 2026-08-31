@@ -333,6 +333,11 @@ describe('TaskAddForm quick templates', () => {
     await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
       'Template applied locally, but usage could not be recorded'
     ));
+    // Reported ONCE: `silent: true` keeps the shared API helper quiet, so the
+    // component's warning is the only notice — no paired red error toast, and
+    // no success claim about a write that did not happen.
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+    expect(toast.error).not.toHaveBeenCalled();
     expect(toast.success).not.toHaveBeenCalled();
   });
 });

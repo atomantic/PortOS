@@ -373,9 +373,16 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       setWorktreeChangesExpected(false);
     }
     descriptionRef.current?.focus();
+    // The popularity counter is best-effort: the template has already been
+    // applied to local form state above, so a failed write must not read as a
+    // failed application — but it must not read as a successful one either
+    // (#5494). `silent: true` suppresses the shared helper's error toast so the
+    // failure is reported once, here, with the underlying reason logged for
+    // diagnosis (the helper's toast was the only place it used to surface).
     const usageRecorded = await api.applyCosTaskTemplate(template.id, { silent: true })
       .then(() => true)
-      .catch(() => {
+      .catch((err) => {
+        console.warn(`⚠️ Template usage not recorded for ${template.id}: ${err?.message || err}`);
         toast.warning('Template applied locally, but usage could not be recorded');
         return false;
       });
