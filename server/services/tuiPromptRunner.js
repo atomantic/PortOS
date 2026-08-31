@@ -273,6 +273,24 @@ ${prompt}`;
     throw new Error(`Failed to spawn TUI '${command}': ${err.message}`);
   }
 
+  // Subscribe to exit IMMEDIATELY after spawn. A CLI can fail before its first
+  // paint (bad local config, an early runtime crash, etc.); the rest of this
+  // function registers the run, Shell view, and completion machinery before it
+  // used to attach onExit. node-pty does not replay an already-delivered exit,
+  // so that small window stranded the run until its hard timeout. Queue the
+  // one exit event until finish() and the timers below are ready, then replay it
+  // through the ordinary exit path. This is a startup/lifecycle guard, not an
+  // output-idle timeout: a live but quiet model remains untouched.
+  let dispatchPtyExit = null;
+  let pendingPtyExit = null;
+  ptyProcess.onExit((event) => {
+    if (dispatchPtyExit) {
+      dispatchPtyExit(event);
+      return;
+    }
+    pendingPtyExit = pendingPtyExit || event;
+  });
+
   // Register in the same active-runs map the patched stopRun/isRunActive
   // consult, so /runs UI can stop a hung TUI run. Without this, stopRun is a
   // no-op for TUI and isRunActive returns false — the PTY keeps spending
@@ -671,7 +689,7 @@ ${prompt}`;
       }
     });
 
-    ptyProcess.onExit(({ exitCode, signal }) => {
+    const handlePtyExit = ({ exitCode, signal }) => {
       const killed = !!signal;
       // pm2 tree-kills descendants during a PortOS restart, while /runs Stop
       // kills this registered PTY through runner.stopRun. Both are intentional
@@ -722,7 +740,7 @@ ${prompt}`;
         reason: hostInterrupted ? 'host-shutdown' : (stopRequested ? 'canceled' : (killed ? 'killed' : 'exit')),
         canceled,
       });
-    });
+    };
 
     const sendPrompt = (reason) => {
       if (finalized || promptSentAt) return;
@@ -966,6 +984,17 @@ ${prompt}`;
         reason: 'timeout'
       });
     }, totalTimeoutMs);
+
+    // The exit bridge was attached immediately after spawn. Hand it the fully
+    // initialized lifecycle only after every cleanup-owned timer exists, then
+    // replay an exit that arrived during setup. Assign before reading the
+    // pending slot so an exit racing this handoff is delivered exactly once.
+    dispatchPtyExit = handlePtyExit;
+    if (pendingPtyExit) {
+      const earlyExit = pendingPtyExit;
+      pendingPtyExit = null;
+      handlePtyExit(earlyExit);
+    }
   });
 }
 

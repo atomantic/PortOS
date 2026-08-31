@@ -66,6 +66,32 @@ describe('LoomSeriesPlan', () => {
     expect(onLoomUpdate).toHaveBeenCalledWith(updated);
   });
 
+  it('adds a playable challenge as an episode-mapped plot-point contract', async () => {
+    const user = userEvent.setup();
+    api.updateLoom.mockResolvedValue(loom());
+    renderPlan({ loom: loom(), onLoomUpdate: vi.fn() });
+
+    await user.click(screen.getByRole('button', { name: 'Challenge' }));
+    const challengeTitle = screen.getByRole('textbox', { name: 'Plot points 2 title' });
+    expect(challengeTitle).toHaveValue('Challenge — ');
+    expect(screen.getByRole('textbox', { name: 'Plot points 2 description' }).value)
+      .toContain('VIEWER DECISION LOOP');
+    expect(screen.getByText('0/1 playable challenges mapped to episodes')).toBeInTheDocument();
+    await user.selectOptions(screen.getAllByRole('combobox', { name: 'Episode' })[1], 'ep-1');
+    expect(screen.getByText('1/1 playable challenges mapped to episodes')).toBeInTheDocument();
+  });
+
+  it('presents challenge planning before outline readiness and editorial automation', () => {
+    renderPlan({ loom: loom(), onLoomUpdate: vi.fn() });
+
+    const plotPoints = screen.getByRole('heading', { name: 'Plot points' });
+    const outlines = screen.getByRole('heading', { name: 'Episode beat outlines' });
+    const editorial = screen.getByText('Editorial automation');
+
+    expect(plotPoints.compareDocumentPosition(outlines) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(outlines.compareDocumentPosition(editorial) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('shows AI series analysis and recommendations for the outline', async () => {
     api.reviewLoomSeriesPlan.mockResolvedValue({
       analysis: {

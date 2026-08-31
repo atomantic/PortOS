@@ -29,6 +29,7 @@ describe('LoomProductionPanel', () => {
     ],
     convergenceIssues: [],
     exactInputIssues: [],
+    formatMismatches: [],
   };
 
   beforeEach(() => {
@@ -39,21 +40,37 @@ describe('LoomProductionPanel', () => {
       status: 'in_progress',
       summary: { total: 6, completed: 2 },
     });
-    api.reviewLoomEpisodeContinuity.mockResolvedValue({
-      passed: false,
-      nodesEvaluated: 3,
-      summary: { errors: 1, warnings: 0, info: 0 },
-      findings: [
-        {
-          id: 'f-1',
-          category: 'visual',
-          severity: 'error',
-          code: 'MISSING_UNIVERSE_CHARACTER',
-          message: 'Character missing in Universe',
-          remediation: 'Rebind character',
-          nodeId: 'node-1',
-        },
-      ],
+    api.updateLoom.mockResolvedValue({
+      ...sampleLoom,
+      renderSettings: { formatId: 'portrait-9-16' },
+    });
+  });
+
+  it('defaults media to 16:9 and persists one shared image/video output format', async () => {
+    const onLoomUpdate = vi.fn();
+    render(
+      <LoomProductionPanel
+        loom={sampleLoom}
+        episode={sampleEpisode}
+        onSelectNode={vi.fn()}
+        onLoomUpdate={onLoomUpdate}
+      />,
+    );
+
+    expect(await screen.findByLabelText('Output')).toHaveValue('landscape-16-9');
+    expect(screen.getByRole('option', { name: '16:9 landscape · 1024×576' })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Output'), { target: { value: 'portrait-9-16' } });
+
+    await waitFor(() => {
+      expect(api.updateLoom).toHaveBeenCalledWith(
+        'loom-1',
+        { renderSettings: { formatId: 'portrait-9-16' } },
+        { silent: true },
+      );
+      expect(onLoomUpdate).toHaveBeenCalledWith(expect.objectContaining({
+        renderSettings: { formatId: 'portrait-9-16' },
+      }));
     });
   });
 
@@ -128,24 +145,25 @@ describe('LoomProductionPanel', () => {
     expect(api.startLoomEpisodeProductionBatch).not.toHaveBeenCalled();
   });
 
-  it('runs continuity review and displays findings with node selection', async () => {
-    const onSelectNode = vi.fn();
-    render(<LoomProductionPanel loom={sampleLoom} episode={sampleEpisode} onSelectNode={onSelectNode} />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Run Continuity Review')).toBeInTheDocument();
+  it('explains which portrait assets will be regenerated in the selected format', async () => {
+    api.planLoomEpisodeProduction.mockResolvedValueOnce({
+      ...samplePlan,
+      formatMismatches: [{
+        nodeId: 'node-1',
+        nodeTitle: 'Door challenge',
+        actualWidth: 576,
+        actualHeight: 1024,
+        expectedWidth: 1024,
+        expectedHeight: 576,
+        expectedAspectRatio: '16:9',
+      }],
     });
 
-    fireEvent.click(screen.getByText('Run Continuity Review'));
+    render(<LoomProductionPanel loom={sampleLoom} episode={sampleEpisode} onSelectNode={vi.fn()} />);
 
-    await waitFor(() => {
-      expect(api.reviewLoomEpisodeContinuity).toHaveBeenCalledWith('loom-1', 'ep-1', {}, { silent: true });
-      expect(screen.getByText('Character missing in Universe')).toBeInTheDocument();
-      expect(screen.getByText('Remediation: Rebind character')).toBeInTheDocument();
-    });
-
-    const findingButton = screen.getByText('Character missing in Universe').closest('button');
-    fireEvent.click(findingButton);
-    expect(onSelectNode).toHaveBeenCalledWith('node-1');
+    expect(await screen.findByText('Existing media uses another aspect ratio')).toBeInTheDocument();
+    expect(screen.getByText(/1 storyboard image\(s\).*16:9 \(1024×576\)/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Door challenge: 576×1024 → 16:9/i })).toBeInTheDocument();
   });
+
 });

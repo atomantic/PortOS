@@ -149,6 +149,16 @@ const completeOutline = () => ({
   ],
 });
 
+describe('editorial prompt graph contract', () => {
+  it('gives the editor exact transition, source, and target ids for safe patches', () => {
+    const digest = __testing.teleplayDigest(makeLoom());
+
+    expect(digest).toContain('Exact graph ids for patches (copy verbatim):');
+    expect(digest).toContain('transition=take-left sourceNode=opening targetNode=left');
+    expect(digest).toContain('transition=right-end sourceNode=right targetNode=ending');
+  });
+});
+
 describe('applyFableLoomEditorialPatch', () => {
   it('repairs a missing outline and selects a valid convergence source without changing membership', () => {
     const loom = makeLoom();

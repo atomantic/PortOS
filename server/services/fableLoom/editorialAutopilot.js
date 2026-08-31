@@ -25,6 +25,7 @@ import {
 export const FABLELOOM_EDITORIAL_AUTOPILOT_LIMITS = Object.freeze({
   DEFAULT_ROUNDS: 3,
   MAX_ROUNDS: LOOM_LIMITS.EDITORIAL_AUTOPILOT_ROUNDS_MAX,
+  MAX_RESPONSE_CORRECTIONS: 2,
   RUN_MAX_AGE_MS: 2 * 60 * 60 * 1000,
   MAX_CONCURRENT_RUNS: 10,
 });
@@ -107,9 +108,50 @@ const routeOptions = (run) => ({
   ...(run.route.effort ? { effort: run.route.effort } : {}),
 });
 
+const responseCorrectionGuidance = (guidance, error, attempt) => trimTo([
+  guidance,
+  'The previous editor response was rejected before any story changes were saved.',
+  `Validator feedback: ${errorMessage(error)}`,
+  `Correction attempt ${attempt} of ${FABLELOOM_EDITORIAL_AUTOPILOT_LIMITS.MAX_RESPONSE_CORRECTIONS}. Re-read the exact episode, scene, and transition ids in the teleplay digest. Return a corrected, graph-safe patch using only those ids; do not omit the original editorial work.`,
+].filter(Boolean).join('\n\n'), 5000);
+
+const invalidResponseExhaustedError = () => new ServerError(
+  `Editorial autopilot could not obtain a graph-safe editor patch after ${FABLELOOM_EDITORIAL_AUTOPILOT_LIMITS.MAX_RESPONSE_CORRECTIONS + 1} attempts. Retry with a different model or repair the affected path manually, then restart autopilot.`,
+  { status: 502, code: 'FABLELOOM_AUTOPILOT_INVALID_RESPONSE' },
+);
+
+const runRemediationStep = (run, round, guidance, correctionAttempt = 0) => (
+  evaluateAndRemediateFableLoom(run.loomId, {
+    ...routeOptions(run),
+    guidance,
+  }).catch((error) => {
+    if (run.cancelRequested || error?.code !== 'AI_RESPONSE_INVALID') throw error;
+    touch(run, { invalidResponses: (run.invalidResponses || 0) + 1 });
+    if (correctionAttempt >= FABLELOOM_EDITORIAL_AUTOPILOT_LIMITS.MAX_RESPONSE_CORRECTIONS) {
+      throw invalidResponseExhaustedError();
+    }
+    const nextCorrectionAttempt = correctionAttempt + 1;
+    const nextEditorAttempt = nextCorrectionAttempt + 1;
+    touch(run, {
+      currentStep: 'response-correction',
+      stepLabel: 'Correct editor response',
+      correctionAttempt: nextCorrectionAttempt,
+      responseCorrections: (run.responseCorrections || 0) + 1,
+      message: `Step ${run.stepIndex} of up to ${run.stepCount} · round ${round}: correcting a rejected editor patch (attempt ${nextEditorAttempt} of ${FABLELOOM_EDITORIAL_AUTOPILOT_LIMITS.MAX_RESPONSE_CORRECTIONS + 1})…`,
+    });
+    return runRemediationStep(
+      run,
+      round,
+      responseCorrectionGuidance(guidance, error, nextCorrectionAttempt),
+      nextCorrectionAttempt,
+    );
+  })
+);
+
 const finishCanceled = (run, terminalFacts = {}) => touch(run, {
   status: 'canceled',
   currentStep: null,
+  stepLabel: null,
   message: 'Editorial autopilot canceled after the active AI step finished.',
   completedAt: nowIso(),
   ...terminalFacts,
@@ -140,6 +182,7 @@ const finishPaused = async (run, pauseReason, message) => {
     status: 'paused',
     pauseReason,
     currentStep: null,
+    stepLabel: null,
     message,
     selfImprove,
     completedAt: nowIso(),
@@ -156,6 +199,7 @@ const finishFailed = async (run, error) => {
   return touch(run, {
     status: 'failed',
     currentStep: null,
+    stepLabel: null,
     message: errorMessage(error),
     error: errorMessage(error),
     selfImprove,
@@ -165,20 +209,25 @@ const finishFailed = async (run, error) => {
 
 async function runRound(run, guidance) {
   const round = run.round + 1;
+  const remediationStep = ((round - 1) * 2) + 1;
   touch(run, {
     round,
     currentStep: 'evaluate-remediate',
-    message: `Round ${round}: evaluating and remediating the complete series…`,
+    stepIndex: remediationStep,
+    stepLabel: 'Evaluate and remediate',
+    correctionAttempt: 0,
+    message: `Step ${remediationStep} of up to ${run.stepCount} · round ${round}: evaluating and remediating the complete series…`,
   });
-  const remediation = await evaluateAndRemediateFableLoom(run.loomId, {
-    ...routeOptions(run),
-    guidance,
-  });
+  const remediation = await runRemediationStep(run, round, guidance);
   if (run.cancelRequested) return finishCanceled(run);
 
+  const reviewStep = remediationStep + 1;
   touch(run, {
     currentStep: 'playthrough-review',
-    message: `Round ${round}: exercising and reviewing branching playthroughs…`,
+    stepIndex: reviewStep,
+    stepLabel: 'Review every playthrough',
+    correctionAttempt: 0,
+    message: `Step ${reviewStep} of up to ${run.stepCount} · round ${round}: exercising and reviewing branching playthroughs…`,
   });
   const playtest = await reviewFableLoomPlaythroughs(run.loomId, {
     ...routeOptions(run),
@@ -210,6 +259,7 @@ async function runRound(run, guidance) {
     return touch(run, {
       status: 'completed',
       currentStep: null,
+      stepLabel: null,
       message: `Editorial autopilot completed after ${round} round${round === 1 ? '' : 's'}.`,
       completedAt: nowIso(),
     });
@@ -266,6 +316,13 @@ export async function startFableLoomEditorialAutopilot(loomId, {
     currentStep: 'starting',
     round: 0,
     maxRounds: boundedRounds(maxRounds),
+    stepIndex: 0,
+    stepCount: boundedRounds(maxRounds) * 2,
+    stepLabel: 'Starting',
+    correctionAttempt: 0,
+    responseCorrections: 0,
+    invalidResponses: 0,
+    maxResponseCorrections: FABLELOOM_EDITORIAL_AUTOPILOT_LIMITS.MAX_RESPONSE_CORRECTIONS,
     maxPaths: Number.isInteger(maxPaths) ? maxPaths : null,
     route: {
       providerId: providerId || null,
@@ -297,6 +354,7 @@ export async function startFableLoomEditorialAutopilot(loomId, {
       touch(run, {
         status: 'failed',
         currentStep: null,
+        stepLabel: null,
         message: errorMessage(error),
         error: errorMessage(error),
         completedAt: nowIso(),
@@ -350,6 +408,7 @@ export const __testing = {
   compactDeterministic,
   findingSignature,
   guidanceFromFindings,
+  responseCorrectionGuidance,
   residualFindings,
   runs,
 };

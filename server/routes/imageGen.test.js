@@ -251,6 +251,11 @@ describe('Image Gen Routes', () => {
     });
 
     it('durably attaches a synchronous FableLoom scene render', async () => {
+      getLoom.mockResolvedValueOnce({
+        id: 'loom-1',
+        renderSettings: { formatId: 'landscape-16-9' },
+        episodes: [{ id: 'ep-1', number: 1, startNodeId: 'node-1', nodes: [{ id: 'node-1', transitions: [] }] }],
+      });
       imageGen.generateImage.mockResolvedValue({
         generationId: 'gen-scene-001',
         filename: 'scene.png',
@@ -269,8 +274,19 @@ describe('Image Gen Routes', () => {
         'loom-1',
         'ep-1',
         'node-1',
-        { filename: 'scene.png', jobId: 'gen-scene-001', visualConditioning: compiledVisual },
+        {
+          filename: 'scene.png',
+          jobId: 'gen-scene-001',
+          visualConditioning: expect.objectContaining({
+            render: expect.objectContaining({
+              parameters: { width: 1024, height: 576, aspectRatio: '16:9' },
+            }),
+          }),
+        },
       );
+      expect(imageGen.generateImage).toHaveBeenCalledWith(expect.objectContaining({
+        width: 1024, height: 576, aspectRatio: '16:9',
+      }));
       expect(compileFableLoomVisualRequest).toHaveBeenCalledWith(expect.objectContaining({
         tag: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' }, kind: 'image',
       }));

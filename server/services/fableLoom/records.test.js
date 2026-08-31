@@ -363,6 +363,28 @@ describe('loom CRUD', () => {
     expect(merged.episodes[0].nodes[0].protagonistPresence).toBe('offscreen');
   });
 
+  it('preserves the render format when a v4 peer wins an unrelated LWW edit', async () => {
+    const loom = await makeLoom({
+      name: 'Local production',
+      renderSettings: { formatId: 'portrait-9-16' },
+    });
+    const remoteV4 = {
+      ...loom,
+      name: 'Renamed by v4 peer',
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      renderSettings: undefined,
+    };
+
+    await mergeLoomsFromSync([remoteV4], { senderSchemaVersions: { fableLoom: 4 } });
+
+    expect(await getLoom(loom.id)).toMatchObject({
+      name: 'Renamed by v4 peer',
+      renderSettings: {
+        formatId: 'portrait-9-16', aspectRatio: '9:16', width: 576, height: 1024,
+      },
+    });
+  });
+
   it('journals divergent story edits and can restore the authored snapshot', async () => {
     const local = await makeLoom({ name: 'Local story', premise: 'Local premise' });
     const base = { ...local, name: 'Shared story', premise: 'Shared premise' };
@@ -433,21 +455,37 @@ describe('loom CRUD', () => {
   });
 });
 
-describe('format and play settings round-trip', () => {
+describe('format, render, and play settings round-trip', () => {
   it('keeps them across an unrelated patch, and accepts them at create', async () => {
-    const loom = await makeLoom({ format: 'teleplay', playSettings: { providerId: 'claude', model: 'opus', effort: null } });
+    const loom = await makeLoom({
+      format: 'teleplay',
+      playSettings: { providerId: 'claude', model: 'opus', effort: null },
+      renderSettings: { formatId: 'portrait-9-16' },
+    });
     expect(loom.format).toBe('teleplay');
     expect(loom.playSettings).toEqual({ providerId: 'claude', model: 'opus', effort: null });
+    expect(loom.renderSettings).toEqual({
+      formatId: 'portrait-9-16', aspectRatio: '9:16', width: 576, height: 1024,
+    });
 
     // A rename must not silently reset the pin or the format — the exact drift
     // a PATCH_FIELDS / schema mismatch would produce.
     const renamed = await updateLoom(loom.id, { name: 'Renamed' });
     expect(renamed.format).toBe('teleplay');
     expect(renamed.playSettings).toEqual({ providerId: 'claude', model: 'opus', effort: null });
+    expect(renamed.renderSettings).toEqual(loom.renderSettings);
 
     const cleared = await updateLoom(loom.id, { playSettings: null });
     expect(cleared.playSettings).toBeNull();
     expect(cleared.format).toBe('teleplay');
+    expect(cleared.renderSettings).toEqual(loom.renderSettings);
+  });
+
+  it('backfills an explicit 16:9 default for existing records', async () => {
+    const loom = await makeLoom();
+    expect(loom.renderSettings).toEqual({
+      formatId: 'landscape-16-9', aspectRatio: '16:9', width: 1024, height: 576,
+    });
   });
 });
 

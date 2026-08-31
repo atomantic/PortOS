@@ -74,4 +74,42 @@ describe('LoomEpisodeOutlinePlanner', () => {
     expect(api.validateLoomEpisodeOutline).toHaveBeenCalledWith('loom-1', 'ep-1', { silent: true });
     expect(await screen.findByText('Outline is structurally valid')).toBeInTheDocument();
   });
+
+  it('offers to replace an older teleplay when only outline-to-scene sync is invalid', async () => {
+    const user = userEvent.setup();
+    const onExpand = vi.fn();
+    const replacementOutline = {
+      ...outline,
+      validation: {
+        status: 'invalid',
+        issues: [{
+          code: 'TELEPLAY_SCENE_CONTRACT_MISMATCH',
+          severity: 'error',
+          message: 'The revised beat no longer matches the old teleplay scene contract.',
+          sceneKey: 's1',
+        }],
+      },
+    };
+    const expandedEpisode = {
+      ...episode,
+      nodes: [{ id: 's1', title: 'Old scene' }],
+      storyOutline: replacementOutline,
+    };
+
+    render(
+      <LoomEpisodeOutlinePlanner
+        open
+        loom={loom}
+        episode={expandedEpisode}
+        onLoomUpdate={vi.fn()}
+        onExpand={onExpand}
+      />,
+    );
+
+    expect(screen.getByText('Outline is ready to replace the old teleplay')).toBeInTheDocument();
+    const replace = screen.getByRole('button', { name: 'Replace old teleplay from this outline' });
+    expect(replace).toBeEnabled();
+    await user.click(replace);
+    expect(onExpand).toHaveBeenCalledTimes(1);
+  });
 });

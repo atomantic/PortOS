@@ -45,7 +45,7 @@ import { getSettings } from '../services/settings.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';
 import { collectRemoteInputAssets } from '../services/federatedMedia/inputAssets.js';
 import { buildFederatedMediaRequest } from '../lib/federatedMediaRequest.js';
-import { inspectEpisodeProductionOrder } from '../lib/fableLoomProduction.js';
+import { asFableLoomRenderSettings, inspectEpisodeProductionOrder } from '../lib/fableLoomProduction.js';
 import { attachNodeImage, getLoom } from '../services/fableLoom/records.js';
 import {
   compileFableLoomVisualRequest, fableLoomImageCapabilities,
@@ -402,6 +402,12 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   if (params.fableLoom) {
     const taggedLoom = await getLoom(params.fableLoom.loomId);
     const taggedEpisode = taggedLoom?.episodes?.find((episode) => episode.id === params.fableLoom.episodeId);
+    const renderSettings = taggedLoom ? asFableLoomRenderSettings(taggedLoom.renderSettings) : null;
+    if (renderSettings) {
+      params.width = renderSettings.width;
+      params.height = renderSettings.height;
+      params.aspectRatio = renderSettings.aspectRatio;
+    }
     if (taggedLoom && taggedEpisode) {
       const episodeOrder = inspectEpisodeProductionOrder(taggedLoom, taggedEpisode);
       if (!episodeOrder.ready) {
@@ -440,7 +446,19 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
       params.loraFilenames = compiled.loraFilenames;
       params.loraPaths = [];
       params.loraScales = compiled.loraScales;
-      params.visualConditioning = compiled.visualConditioning;
+      params.visualConditioning = compiled.visualConditioning ? {
+        ...compiled.visualConditioning,
+        render: {
+          provider: providerMode,
+          modelId: model?.id || null,
+          modelRevision: model?.revision || null,
+          parameters: {
+            width: params.width,
+            height: params.height,
+            ...(params.aspectRatio ? { aspectRatio: params.aspectRatio } : {}),
+          },
+        },
+      } : null;
     }
   }
 

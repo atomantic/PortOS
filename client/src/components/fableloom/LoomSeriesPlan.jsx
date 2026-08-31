@@ -28,6 +28,7 @@ import LoomAiRunStatus from './LoomAiRunStatus';
 import LoomEditorialAutomation from './LoomEditorialAutomation';
 
 const newItemId = (prefix) => `${prefix}-${uuidv4()}`;
+const CHALLENGE_DESCRIPTION_TEMPLATE = 'SETUP: Establish the blockade and plant the clue. VIEWER DECISION LOOP: Offer 2–4 actionable options with escalating feedback. SUCCESS: Advance with an earned advantage. FAILURE: Continue with a visible cost. RECOVERY / PAYOFF: Converge without erasing the choice.';
 
 const normalizeDeliveryOptions = (options) => ({
   overnightVoicemails: options?.overnightVoicemails === true,
@@ -178,19 +179,18 @@ export default function LoomSeriesPlan({ loom, onLoomUpdate }) {
               </FormField>
             </div>
 
-            <EpisodeBeatReadiness loom={loom} />
-
-            <LoomEditorialAutomation loom={loom} dirty={dirty} onLoomUpdate={adoptServerPlan} />
-
             <PlanCollection
               title="Plot points"
-              description="Order the tentpole beats and connect each one to the episode where it should land."
+              description="Order tentpoles and playable challenges, then assign each one to the episode where it must appear."
               items={plan.plotPoints}
               episodes={episodeOptions}
               onAdd={() => changePlan((current) => ({ ...current, plotPoints: [...current.plotPoints, {
                 id: newItemId('plot'), title: '', description: '', episodeId: null,
               }] }))}
               onUpdate={(id, patch) => updateItem('plotPoints', id, patch)}
+              onAddChallenge={() => changePlan((current) => ({ ...current, plotPoints: [...current.plotPoints, {
+                id: newItemId('plot'), title: 'Challenge — ', description: CHALLENGE_DESCRIPTION_TEMPLATE, episodeId: null,
+              }] }))}
               onRemove={(id) => removeItem('plotPoints', id)}
               onMove={(index, direction) => moveItem('plotPoints', index, direction)}
             />
@@ -208,6 +208,10 @@ export default function LoomSeriesPlan({ loom, onLoomUpdate }) {
               onRemove={(id) => removeItem('sideQuests', id)}
               onMove={(index, direction) => moveItem('sideQuests', index, direction)}
             />
+
+            <EpisodeBeatReadiness loom={loom} />
+
+            <LoomEditorialAutomation loom={loom} dirty={dirty} onLoomUpdate={adoptServerPlan} />
 
             <SeriesDeliveryPlan
               plan={plan}
@@ -690,7 +694,12 @@ function SeriesDeliveryPlan({ plan, episodes, onChange }) {
   );
 }
 
-function PlanCollection({ title, description, items, episodes, sideQuests = false, onAdd, onUpdate, onRemove, onMove }) {
+function PlanCollection({
+  title, description, items, episodes, sideQuests = false,
+  onAdd, onAddChallenge, onUpdate, onRemove, onMove,
+}) {
+  const challenges = sideQuests ? [] : items.filter((item) => /^challenge\s*(?:[-—:]|$)/i.test(item.title?.trim() || ''));
+  const assignedChallenges = challenges.filter((item) => item.episodeId);
   return (
     <div className="rounded-lg border border-port-border bg-port-card p-4 space-y-4">
       <div className="flex items-start justify-between gap-3">
@@ -698,10 +707,23 @@ function PlanCollection({ title, description, items, episodes, sideQuests = fals
           <h3 className="font-semibold">{title}</h3>
           <p className="text-xs text-port-text-muted mt-1">{description}</p>
         </div>
-        <button type="button" onClick={onAdd} className="flex items-center gap-1 px-2.5 py-1.5 rounded border border-port-border text-xs hover:border-port-accent">
-          <Plus size={13} /> Add
-        </button>
+        <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
+          {onAddChallenge ? (
+            <button type="button" onClick={onAddChallenge} className="flex items-center gap-1 rounded border border-port-accent px-2.5 py-1.5 text-xs text-port-accent hover:bg-port-accent/10">
+              <Plus size={13} /> Challenge
+            </button>
+          ) : null}
+          <button type="button" onClick={onAdd} className="flex items-center gap-1 rounded border border-port-border px-2.5 py-1.5 text-xs hover:border-port-accent">
+            <Plus size={13} /> Add
+          </button>
+        </div>
       </div>
+
+      {onAddChallenge && challenges.length ? (
+        <p className={`text-xs ${assignedChallenges.length === challenges.length ? 'text-port-success' : 'text-port-warning'}`} role="status">
+          {assignedChallenges.length}/{challenges.length} playable challenges mapped to episodes
+        </p>
+      ) : null}
 
       {!items.length ? (
         <button type="button" onClick={onAdd} className="w-full rounded border border-dashed border-port-border p-5 text-sm text-port-text-muted hover:border-port-accent hover:text-port-accent">
@@ -709,6 +731,11 @@ function PlanCollection({ title, description, items, episodes, sideQuests = fals
         </button>
       ) : items.map((item, index) => (
         <div key={item.id} className="rounded border border-port-border p-3 space-y-3">
+          {!sideQuests && /^challenge\s*(?:[-—:]|$)/i.test(item.title?.trim() || '') ? (
+            <span className="inline-flex rounded bg-port-accent/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-port-accent">
+              Playable challenge
+            </span>
+          ) : null}
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium text-port-text-muted w-6">{index + 1}.</span>
             <input

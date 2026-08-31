@@ -39,10 +39,23 @@ export const OUTLINE_ISSUE_CODES = Object.freeze({
   TELEPLAY_SCENE_MEMBERSHIP_MISMATCH: 'TELEPLAY_SCENE_MEMBERSHIP_MISMATCH',
   TELEPLAY_START_MISMATCH: 'TELEPLAY_START_MISMATCH',
   TELEPLAY_SCENE_CONTRACT_MISMATCH: 'TELEPLAY_SCENE_CONTRACT_MISMATCH',
+  TELEPLAY_REPLACEMENT_PENDING: 'TELEPLAY_REPLACEMENT_PENDING',
   MISSING_OVERNIGHT_VOICEMAIL: 'MISSING_OVERNIGHT_VOICEMAIL',
   EMPTY_OVERNIGHT_VOICEMAIL: 'EMPTY_OVERNIGHT_VOICEMAIL',
   MISSING_NEXT_SEASON_TEASER: 'MISSING_NEXT_SEASON_TEASER',
 });
+
+export const STORY_OUTLINE_TELEPLAY_SYNC_CODES = Object.freeze([
+  OUTLINE_ISSUE_CODES.TELEPLAY_SCENE_MEMBERSHIP_MISMATCH,
+  OUTLINE_ISSUE_CODES.TELEPLAY_START_MISMATCH,
+  OUTLINE_ISSUE_CODES.TELEPLAY_SCENE_CONTRACT_MISMATCH,
+]);
+
+const storyOutlineTeleplaySyncCodeSet = new Set(STORY_OUTLINE_TELEPLAY_SYNC_CODES);
+
+export const isStoryOutlineTeleplaySyncIssue = (issue) => (
+  storyOutlineTeleplaySyncCodeSet.has(issue?.code)
+);
 
 const OUTLINE_STATUSES = new Set(['draft', 'valid', 'invalid']);
 
@@ -370,7 +383,7 @@ export function analyzeStoryOutlineTeleplaySync(episode, outline, {
  * episode is expanded until the whole series has a validated beat arc and its
  * optional delivery handoffs are authored.
  */
-export function analyzeSeriesStoryOutlines(loom) {
+export function analyzeSeriesStoryOutlines(loom, { replacingEpisodeId = null } = {}) {
   const episodes = asArray(loom?.episodes);
   const issues = [];
   const readyEpisodeIds = new Set();
@@ -403,25 +416,38 @@ export function analyzeSeriesStoryOutlines(loom) {
     const teleplaySync = analyzeStoryOutlineTeleplaySync(episode, episode.storyOutline, {
       participationMode: loom?.participationMode,
     });
-    teleplaySync.issues.forEach((issue) => {
+    const replacingThisEpisode = episode.id === replacingEpisodeId
+      && validation.stats.errorCount === 0
+      && !teleplaySync.stats.matches;
+    if (replacingThisEpisode) {
       push(
-        issue.code,
-        issue.severity,
-        `Episode ${episode.number || index + 1}: ${issue.message}`,
-        {
-          episodeId: episode.id,
-          ...(issue.sceneKey ? { sceneKey: issue.sceneKey } : {}),
-        },
+        OUTLINE_ISSUE_CODES.TELEPLAY_REPLACEMENT_PENDING,
+        'warning',
+        `Episode ${episode.number || index + 1}'s validated beat outline will replace its older teleplay scenes.`,
+        { episodeId: episode.id },
       );
-    });
-    if (episode.storyOutline.validation?.status !== 'valid') {
+    } else {
+      teleplaySync.issues.forEach((issue) => {
+        push(
+          issue.code,
+          issue.severity,
+          `Episode ${episode.number || index + 1}: ${issue.message}`,
+          {
+            episodeId: episode.id,
+            ...(issue.sceneKey ? { sceneKey: issue.sceneKey } : {}),
+          },
+        );
+      });
+    }
+    if (episode.storyOutline.validation?.status !== 'valid' && !replacingThisEpisode) {
       push(
         OUTLINE_ISSUE_CODES.EPISODE_OUTLINE_NOT_VALIDATED,
         'error',
         `Episode ${episode.number || index + 1}'s beat outline must be validated before teleplay expansion.`,
         { episodeId: episode.id },
       );
-    } else if (validation.stats.errorCount === 0 && teleplaySync.stats.matches) {
+    } else if (validation.stats.errorCount === 0
+      && (teleplaySync.stats.matches || replacingThisEpisode)) {
       readyEpisodeIds.add(episode.id);
     }
   });

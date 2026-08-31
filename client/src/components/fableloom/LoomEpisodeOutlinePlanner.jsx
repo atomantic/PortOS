@@ -17,6 +17,12 @@ import { fieldClass, labelClass } from './fieldStyles';
 import LoomAiRunStatus from './LoomAiRunStatus';
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
+const TELEPLAY_SYNC_ISSUE_CODES = new Set([
+  'TELEPLAY_SCENE_MEMBERSHIP_MISMATCH',
+  'TELEPLAY_START_MISMATCH',
+  'TELEPLAY_SCENE_CONTRACT_MISMATCH',
+]);
+const isTeleplaySyncIssue = (issue) => TELEPLAY_SYNC_ISSUE_CODES.has(issue?.code);
 
 const cloneOutline = (outline) => (outline ? {
   ...outline,
@@ -31,14 +37,21 @@ const cloneOutline = (outline) => (outline ? {
 
 const draftValidation = { status: 'draft', issues: [] };
 
-function ValidationResult({ validation }) {
+function ValidationResult({ validation, teleplayReplacementReady = false }) {
   if (!validation) return null;
   const issues = asArray(validation.issues);
-  const hasErrors = issues.some((issue) => issue.severity !== 'warning');
+  const hasErrors = !teleplayReplacementReady
+    && issues.some((issue) => issue.severity !== 'warning');
   const status = validation.stats
     ? (validation.stats.errorCount ? 'invalid' : 'valid')
     : validation.status || 'draft';
-  const label = status === 'valid' ? 'Outline is structurally valid' : status === 'invalid' ? 'Outline needs edits' : 'Outline is a draft';
+  const label = teleplayReplacementReady
+    ? 'Outline is ready to replace the old teleplay'
+    : status === 'valid'
+      ? 'Outline is structurally valid'
+      : status === 'invalid'
+        ? 'Outline needs edits'
+        : 'Outline is a draft';
   return (
     <div className={`rounded border p-3 space-y-2 ${status === 'valid' ? 'border-port-success/40 bg-port-success/5' : hasErrors ? 'border-port-error/40 bg-port-error/5' : 'border-port-warning/40 bg-port-warning/5'}`} aria-live="polite">
       <div className="flex items-center gap-2 text-sm font-semibold">
@@ -51,7 +64,7 @@ function ValidationResult({ validation }) {
       {issues.length ? (
         <ul className="space-y-1 text-xs text-port-text-muted">
           {issues.map((issue, index) => <li key={`${issue.code || 'issue'}-${issue.sceneKey || 'outline'}-${index}`} className="flex items-start gap-1.5">
-            {issue.severity === 'warning' ? <AlertTriangle size={12} className="mt-0.5 shrink-0 text-port-warning" /> : <CircleAlert size={12} className="mt-0.5 shrink-0 text-port-error" />}
+            {issue.severity === 'warning' || teleplayReplacementReady ? <AlertTriangle size={12} className="mt-0.5 shrink-0 text-port-warning" /> : <CircleAlert size={12} className="mt-0.5 shrink-0 text-port-error" />}
             <span>{issue.message}</span>
           </li>)}
         </ul>
@@ -203,6 +216,15 @@ export default function LoomEpisodeOutlinePlanner({
     : outline?.validation?.status || 'draft';
   const busy = disabled || providersLoading || generateRun.run?.phase === 'running' || reviewRun.run?.phase === 'running';
   const hasScenes = episode.nodes.length > 0;
+  const activeValidation = validation || outline?.validation;
+  const activeValidationIssues = asArray(activeValidation?.issues);
+  const replacementBlockingIssues = activeValidationIssues
+    .filter((issue) => issue.severity !== 'warning');
+  const teleplayReplacementReady = hasScenes
+    && outlineStatus === 'invalid'
+    && replacementBlockingIssues.length > 0
+    && replacementBlockingIssues.every(isTeleplaySyncIssue);
+  const canExpand = outlineStatus === 'valid' || teleplayReplacementReady;
 
   const updateOutline = (updater) => {
     setOutline((current) => {
@@ -355,16 +377,23 @@ export default function LoomEpisodeOutlinePlanner({
             </button>
           </div>
           {dirty ? <p className="text-xs text-port-warning">Save the edited log-lines before asking the AI to review them.</p> : null}
-          <ValidationResult validation={validation || outline.validation} />
+          <ValidationResult
+            validation={activeValidation}
+            teleplayReplacementReady={teleplayReplacementReady}
+          />
           {onExpand ? (
             <button
               type="button"
               onClick={onExpand}
-              disabled={busy || dirty || outlineStatus !== 'valid' || saving || generating || validating || reviewing || expanding}
+              disabled={busy || dirty || !canExpand || saving || generating || validating || reviewing || expanding}
               className="flex w-full items-center justify-center gap-2 rounded bg-port-accent px-3 py-2 text-sm text-white disabled:opacity-50"
             >
               {expanding ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-              {expanding ? 'Expanding validated outline…' : 'Expand validated outline to teleplay'}
+              {expanding
+                ? 'Expanding validated outline…'
+                : teleplayReplacementReady
+                  ? 'Replace old teleplay from this outline'
+                  : 'Expand validated outline to teleplay'}
             </button>
           ) : null}
           {review ? (

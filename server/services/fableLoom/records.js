@@ -60,6 +60,7 @@ import {
   analyzeStoryOutlineTeleplaySync,
   sanitizeStoryOutline,
 } from '../../lib/fableLoomOutline.js';
+import { asFableLoomRenderSettings } from '../../lib/fableLoomProduction.js';
 
 export { LOOM_LIMITS };
 
@@ -274,7 +275,7 @@ export function sanitizeLoom(raw) {
   const protagonistWardrobeId = nullableRef(raw.protagonistWardrobeId);
   return {
     id: raw.id,
-    schemaVersion: 2,
+    schemaVersion: 3,
     name,
     logline: trimTo(raw.logline, LOOM_LIMITS.LOGLINE_MAX),
     premise: trimTo(raw.premise, LOOM_LIMITS.PREMISE_MAX),
@@ -289,6 +290,7 @@ export function sanitizeLoom(raw) {
     // turns a reader's free text into a path. An unset dimension stays null
     // ('fall through to the stage pin / active provider').
     playSettings: sanitizeLlmRoutePin(raw.playSettings),
+    renderSettings: asFableLoomRenderSettings(raw.renderSettings),
     protagonistCharacterId,
     protagonistWardrobeId,
     protagonistWardrobeLocked: Boolean(protagonistWardrobeId && raw.protagonistWardrobeLocked !== false),
@@ -385,7 +387,7 @@ const assertParticipationConfigured = ({ participationMode, audienceCommunicatio
 };
 
 export async function createLoom({
-  name, logline, premise, styleNotes, format, playSettings, seriesPlan,
+  name, logline, premise, styleNotes, format, playSettings, renderSettings, seriesPlan,
   protagonistCharacterId, protagonistWardrobeId, protagonistWardrobeLocked,
   participationMode = FABLELOOM_LEGACY_PARTICIPATION_MODE,
   audienceCommunicationMedium, universeId, seriesId,
@@ -403,6 +405,7 @@ export async function createLoom({
     audienceCommunicationMedium,
     format,
     playSettings,
+    renderSettings,
     protagonistCharacterId,
     protagonistWardrobeId,
     protagonistWardrobeLocked,
@@ -441,13 +444,13 @@ export async function mutateLoom(id, mutator) {
 }
 
 const PATCH_FIELDS = [
-  'name', 'logline', 'premise', 'styleNotes', 'format', 'playSettings', 'seriesPlan',
+  'name', 'logline', 'premise', 'styleNotes', 'format', 'playSettings', 'renderSettings', 'seriesPlan',
   'protagonistCharacterId', 'protagonistWardrobeId', 'protagonistWardrobeLocked',
   'participationMode', 'audienceCommunicationMedium', 'universeId', 'seriesId',
 ];
 
 const RESTORABLE_FIELDS = [
-  'name', 'logline', 'premise', 'styleNotes', 'format', 'playSettings', 'seriesPlan',
+  'name', 'logline', 'premise', 'styleNotes', 'format', 'playSettings', 'renderSettings', 'seriesPlan',
   'protagonistCharacterId', 'protagonistWardrobeId', 'protagonistWardrobeLocked',
   'participationMode', 'audienceCommunicationMedium', 'episodes',
 ];
@@ -500,10 +503,11 @@ export async function deleteLoom(id) {
 // them. A sender at the current schema version's present null remains an
 // intentional clear.
 const preserveLegacyVisualProduction = (remote, local, senderVersion) => {
-  if (!local || senderVersion >= 4) return remote;
+  if (!local || senderVersion >= 5) return remote;
   const localEpisodes = new Map(local.episodes.map((episode) => [episode.id, episode]));
   return {
     ...remote,
+    ...(senderVersion < 5 ? { renderSettings: local.renderSettings } : {}),
     ...(senderVersion < 4 ? {
       protagonistCharacterId: local.protagonistCharacterId,
       protagonistWardrobeId: local.protagonistWardrobeId,
@@ -544,7 +548,7 @@ export async function mergeLoomsFromSync(
   remoteLooms,
   {
     source = { via: 'sync', peerId: null },
-    senderSchemaVersions = { fableLoom: 4 },
+    senderSchemaVersions = { fableLoom: 5 },
   } = {},
 ) {
   if (!Array.isArray(remoteLooms)) return { applied: false, count: 0 };

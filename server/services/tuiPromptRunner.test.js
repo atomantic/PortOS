@@ -508,6 +508,37 @@ describe('executeTuiRun', () => {
       await promise;
     });
 
+    it('finalizes when the PTY exits during startup before the lifecycle is ready', async () => {
+      const earlyExitPty = makeFakePty();
+      earlyExitPty.onExit.mockImplementation((handler) => {
+        earlyExitPty._exitHandler = handler;
+        handler({ exitCode: 1, signal: null });
+      });
+      ptySpawnMock.mockReturnValueOnce(earlyExitPty);
+      const onComplete = vi.fn();
+      const provider = { id: 'codex', type: 'tui', command: 'codex' };
+
+      await expect(executeTuiRun({
+        runId: 'run-early-exit',
+        provider,
+        prompt: 'return a response long enough for the prompt guard',
+        workspacePath: TEST_WORKSPACE,
+        onComplete,
+        timeout: 60000,
+      })).resolves.toBeUndefined();
+
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        runId: 'run-early-exit',
+        success: false,
+        exitCode: 1,
+        error: 'TUI exited with code 1',
+        extras: expect.objectContaining({ completionReason: 'exit' }),
+      }));
+      expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ success: false, exitCode: 1 }));
+      expect(runnerMocks.unregisterActiveRun).toHaveBeenCalledWith('run-early-exit');
+      expect(shellMocks.unregisterExternalSession).toHaveBeenCalledWith('run-early-exit', { exitCode: 1 });
+    });
+
     it('registers a read-only Shell view (labelled by source) and tears it down on finish', async () => {
       const provider = { id: 'claude', type: 'tui', command: 'claude', defaultModel: 'claude-fable-5' };
       const onReady = vi.fn();

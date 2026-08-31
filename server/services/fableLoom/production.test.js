@@ -36,6 +36,9 @@ const imagePrepareMocks = vi.hoisted(() => ({
   selectLocalImageModel: vi.fn(),
   resolveLocalImageModel: vi.fn(),
 }));
+const imageSidecarMocks = vi.hoisted(() => ({
+  readImageSidecar: vi.fn(async () => ({ metadata: {} })),
+}));
 const videoModelMocks = vi.hoisted(() => ({
   DEFAULT_NUM_FRAMES: 16,
   defaultVideoModelId: vi.fn(),
@@ -55,6 +58,7 @@ vi.mock('../loras.js');
 vi.mock('../settings.js', () => settingsMocks);
 vi.mock('../../lib/mediaModels.js', () => mediaModelMocks);
 vi.mock('../imageGen/prepareParams.js', () => imagePrepareMocks);
+vi.mock('../imageGen/local.js', () => imageSidecarMocks);
 vi.mock('../videoGen/local.js', () => videoModelMocks);
 vi.mock('../mediaJobQueue/index.js', () => queueMocks);
 vi.mock('./visualConditioning.js', () => visualConditioningMocks);
@@ -155,6 +159,8 @@ describe('fableLoom production service', () => {
     visualConditioningMocks.fableLoomVideoCapabilities.mockReturnValue({
       kind: 'video', backend: 'local', modelId: 'video-model', referenceRoles: [], referenceBudget: 0,
     });
+    imageSidecarMocks.readImageSidecar.mockReset();
+    imageSidecarMocks.readImageSidecar.mockResolvedValue({ metadata: {} });
     let nextJobId = 1;
     queueMocks.enqueueJob.mockImplementation(() => ({ jobId: `job-${nextJobId++}`, position: 1, status: 'queued' }));
     queueMocks.cancelJob.mockResolvedValue({ ok: true, status: 'canceled' });
@@ -168,6 +174,36 @@ describe('fableLoom production service', () => {
     expect(plan.plannedAssets.some((a) => a.id === 'asset-node-1-still')).toBe(true);
     expect(plan.plannedAssets.some((a) => a.id === 'asset-node-2-still')).toBe(true);
     expect(plan.seriesStoryReadiness.stats.ready).toBe(true);
+    expect(plan.renderOptions).toMatchObject({
+      formatId: 'landscape-16-9', aspectRatio: '16:9', width: 1024, height: 576,
+    });
+  });
+
+  it('flags an existing portrait storyboard and its clips for landscape regeneration', async () => {
+    const portraitLoom = structuredClone(sampleLoom);
+    portraitLoom.episodes[0].nodes[0].image = 'portrait.png';
+    portraitLoom.episodes[0].nodes[0].videoHistoryId = 'portrait-video';
+    records.getLoom.mockResolvedValueOnce(portraitLoom);
+    imageSidecarMocks.readImageSidecar.mockResolvedValueOnce({
+      metadata: { width: 576, height: 1024 },
+    });
+
+    const plan = await planEpisodeProduction('loom-1', 'ep-1', { mode: 'current_canon' });
+
+    expect(plan.formatMismatches).toEqual([expect.objectContaining({
+      nodeId: 'node-1',
+      actualWidth: 576,
+      actualHeight: 1024,
+      expectedAspectRatio: '16:9',
+    })]);
+    expect(plan.plannedAssets.find((asset) => asset.id === 'asset-node-1-still')).toMatchObject({
+      status: 'ready',
+      formatMismatch: expect.objectContaining({ expectedWidth: 1024, expectedHeight: 576 }),
+    });
+    expect(plan.plannedAssets.find((asset) => asset.id === 'asset-node-1-video-entry')).toMatchObject({
+      status: 'ready',
+      formatMismatch: expect.objectContaining({ expectedAspectRatio: '16:9' }),
+    });
   });
 
   it('blocks production planning until the complete series beat arc is validated', async () => {
@@ -208,6 +244,12 @@ describe('fableLoom production service', () => {
     expect(run.assets.length).toBeGreaterThan(0);
     expect(run.plan.executionStages.length).toBeGreaterThan(0);
     expect(run.assets[0]).toHaveProperty('dependencies');
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(queueMocks.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'image',
+      params: expect.objectContaining({ width: 1024, height: 576, aspectRatio: '16:9' }),
+    }));
 
     const fetched = getEpisodeProductionBatch(run.id);
     expect(fetched).toEqual(run);

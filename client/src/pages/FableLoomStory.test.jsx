@@ -233,6 +233,28 @@ describe('FableLoomStory episode expansion safety', () => {
     expect(screen.getByLabelText('Synopsis (feeds the weave)')).toHaveValue('A choice waits in the dark.');
   });
 
+  it('clears outline guidance when the editor switches episodes', async () => {
+    const user = userEvent.setup();
+    api.getLoom.mockResolvedValue(loom({
+      episodes: [
+        episode(),
+        episode({ id: 'ep-2', number: 2, title: 'The Second Door', synopsis: 'A different blockade.' }),
+      ],
+    }));
+    renderEditor('/fableloom/loom-1/ep-1');
+
+    await user.click(await screen.findByRole('button', { name: 'Edit episode' }));
+    const guidance = screen.getByLabelText('Guidance (optional)');
+    await user.type(guidance, 'Use the first episode lock code.');
+
+    await user.click(screen.getByRole('button', { name: 'Close settings' }));
+    await user.click(screen.getByRole('tab', { name: '2. The Second Door' }));
+    await user.click(screen.getByRole('button', { name: 'Edit episode' }));
+
+    expect(screen.getByLabelText('Title')).toHaveValue('The Second Door');
+    expect(screen.getByLabelText('Guidance (optional)')).toHaveValue('');
+  });
+
   it('confirms before replacing an existing episode scene graph', async () => {
     const user = userEvent.setup();
     const existingEpisode = episode({ nodes: [
@@ -363,6 +385,8 @@ describe('FableLoomStory scene media lifecycle', () => {
     expect(api.generateImage).toHaveBeenCalledWith({
       prompt: 'painted ink. an ancient gate in alien grass\n\nStyle: blue dusk lighting',
       negativePrompt: 'photorealism',
+      width: 1024,
+      height: 576,
       fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' },
     }, { silent: true });
     expect(screen.getByTestId('canvas-image-status')).toHaveTextContent('queued');
@@ -430,6 +454,8 @@ describe('FableLoomStory scene media lifecycle', () => {
 
     await waitFor(() => expect(api.generateImage).toHaveBeenCalledWith({
       prompt: 'the same scout crosses into the observatory',
+      width: 1024,
+      height: 576,
       fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-2' },
     }, { silent: true }));
   });
@@ -462,6 +488,8 @@ describe('FableLoomStory scene media lifecycle', () => {
     await waitFor(() => expect(api.generateImage).toHaveBeenCalledTimes(1));
     expect(api.generateImage.mock.calls[0]).toEqual([{
       prompt: 'the scout enters the observatory',
+      width: 1024,
+      height: 576,
       fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-2' },
     }, { silent: true }]);
     expect(toastMocks.error).toHaveBeenCalledWith(

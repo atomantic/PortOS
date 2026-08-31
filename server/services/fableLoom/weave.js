@@ -30,6 +30,7 @@ import {
   analyzeStoryOutline,
   analyzeStoryOutlineTeleplaySync,
   describeStoryOutlineForPrompt,
+  isStoryOutlineTeleplaySyncIssue,
   sanitizeStoryOutline,
 } from '../../lib/fableLoomOutline.js';
 import {
@@ -155,7 +156,13 @@ const seriesPlanContext = (loom, episode) => {
     .slice(0, 12)
     .map((item, index) => {
       const assignment = item.episodeId ? ` [planned for ${episodeLabels.get(item.episodeId) || item.episodeId}]` : ' [unassigned]';
-      return `Plot point ${index + 1}${assignment}: ${item.title || 'Untitled'}${item.description ? ` — ${trimTo(item.description, 300)}` : ''}`;
+      const challenge = /^challenge\s*(?:[-—:]|$)/i.test(item.title?.trim() || '');
+      return [
+        `Plot point ${index + 1}${assignment}: ${item.title || 'Untitled'}${item.description ? ` — ${trimTo(item.description, 700)}` : ''}`,
+        challenge
+          ? 'PLAYABLE CHALLENGE CONTRACT: expand this plot point into multiple camera-cut beats covering clue/setup, a connected audience decision loop, distinct success and failure consequences, a costly recovery path, and a payoff; failure must continue rather than reset or dead-end.'
+          : '',
+      ].filter(Boolean).join('\n');
     });
   const sideQuests = relevantFirst(plan.sideQuests || [], (item, id) => item.startEpisodeId === id || item.endEpisodeId === id)
     .slice(0, 12)
@@ -477,14 +484,36 @@ export async function weaveEpisode(loomId, episodeId, {
   const loom = await requireLoom(loomId);
   const episode = findEpisode(loom, episodeId);
   const outlineValidation = expandFromOutline ? outlineStructuralAnalysis(loom, episode) : null;
-  if (expandFromOutline && episode.storyOutline?.validation?.status !== 'valid') {
+  const outlineStoryValidation = expandFromOutline
+    ? analyzeStoryOutline(episode.storyOutline, {
+      participationMode: loom.participationMode,
+      requireAudienceIntroduction: requiresAudienceIntroduction(loom, episode),
+    })
+    : null;
+  const currentOutlineErrors = expandFromOutline
+    ? outlineValidation.issues.filter((issue) => issue.severity !== 'warning')
+    : [];
+  const replacingChangedTeleplay = Boolean(
+    expandFromOutline
+    && replace
+    && episode.nodes.length
+    && episode.storyOutline?.validation?.status === 'invalid'
+    && outlineStoryValidation?.stats?.errorCount === 0
+    && currentOutlineErrors.length
+    && currentOutlineErrors.every(isStoryOutlineTeleplaySyncIssue),
+  );
+  if (expandFromOutline
+    && episode.storyOutline?.validation?.status !== 'valid'
+    && !replacingChangedTeleplay) {
     throw outlineInvalidError(outlineValidation);
   }
-  if (expandFromOutline && outlineValidation.stats.errorCount) {
+  if (expandFromOutline && outlineValidation.stats.errorCount && !replacingChangedTeleplay) {
     throw outlineInvalidError(outlineValidation);
   }
   if (expandFromOutline) {
-    const seriesOutlineValidation = analyzeSeriesStoryOutlines(loom);
+    const seriesOutlineValidation = analyzeSeriesStoryOutlines(loom, {
+      ...(replacingChangedTeleplay ? { replacingEpisodeId: episode.id } : {}),
+    });
     if (seriesOutlineValidation.stats.errorCount) {
       const firstIssue = seriesOutlineValidation.issues.find((issue) => issue.severity === 'error');
       throw new ServerError(`Complete the series beat outlines before expansion: ${firstIssue.message}`, {
@@ -517,7 +546,14 @@ export async function weaveEpisode(loomId, episodeId, {
 
   const { nodes, startNodeId, idByKey } = mapGeneratedGraph(content);
   const expandedOutline = expandFromOutline
-    ? remapOutlineToExpandedNodeIds(episode.storyOutline, idByKey)
+    ? {
+      ...remapOutlineToExpandedNodeIds(episode.storyOutline, idByKey),
+      validation: {
+        status: 'valid',
+        issues: [],
+        validatedAt: new Date().toISOString(),
+      },
+    }
     : null;
   if (expandedOutline) {
     const sync = analyzeStoryOutlineTeleplaySync(

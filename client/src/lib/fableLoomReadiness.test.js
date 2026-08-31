@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  fableLoomEpisodeOrderReadiness, fableLoomMediaReadiness, fableLoomStoryReadiness,
+  fableLoomEpisodeOrderReadiness, fableLoomMediaReadiness,
+  fableLoomProductionWorkflow, fableLoomStoryReadiness,
 } from './fableLoomReadiness.js';
 
 const outline = { validation: { status: 'valid' } };
@@ -61,5 +62,79 @@ describe('FableLoom story-first readiness', () => {
       blockedBy: { missingScenes: 1 },
     });
     expect(fableLoomMediaReadiness(loom, loom.episodes[1]).ready).toBe(false);
+  });
+
+  it('orders manual and AI work into one twelve-stage production sequence', () => {
+    const loom = {
+      name: 'Example Story', premise: 'A courier follows a dangerous signal.',
+      seriesPlan: {
+        storyArc: 'Suspicion becomes trust.',
+        plotPoints: [{
+          id: 'plot-1', title: 'Challenge — Locked gate', description: 'Setup and costly outcomes.', episodeId: 'ep-1',
+        }],
+      },
+      episodes: [{ id: 'ep-1', number: 1, storyOutline: outline, nodes: [] }],
+    };
+
+    const workflow = fableLoomProductionWorkflow(loom, loom.episodes[0]);
+
+    expect(workflow).toMatchObject({ currentStep: 5, totalSteps: 12, completedCount: 4 });
+    expect(workflow.stages[2]).toMatchObject({
+      id: 'challenges', status: 'complete', detail: expect.stringContaining('1 playable challenge'),
+    });
+    expect(workflow.stages[4]).toMatchObject({ id: 'teleplays', status: 'current' });
+    expect(workflow.stages[5]).toMatchObject({ id: 'structure', status: 'blocked' });
+  });
+
+  it('keeps challenge planning current until the story names a playable challenge', () => {
+    const episode = { id: 'ep-1', number: 1, storyOutline: outline, nodes: [] };
+    const workflow = fableLoomProductionWorkflow({
+      name: 'Example Story', premise: 'A courier follows a dangerous signal.',
+      seriesPlan: {
+        storyArc: 'Suspicion becomes trust.',
+        plotPoints: [{ id: 'plot-1', title: 'Arrival', description: 'The courier lands.', episodeId: 'ep-1' }],
+      },
+      episodes: [episode],
+    }, episode);
+
+    expect(workflow.currentStep).toBe(3);
+    expect(workflow.stages[2]).toMatchObject({
+      id: 'challenges', status: 'current', detail: expect.stringContaining('Add at least one playable challenge'),
+    });
+  });
+
+  it('advances through review and media stages from saved production evidence', () => {
+    const motion = {
+      entryVideoHistoryId: 'video-entry',
+      holdLoopVideoHistoryIds: ['video-hold'],
+      exitByTransition: { 'path-1': 'video-exit' },
+    };
+    const episode = {
+      id: 'ep-1', number: 1, startNodeId: 'scene-1', storyOutline: outline,
+      nodes: [{
+        id: 'scene-1', image: 'scene.png', playbackMode: 'decision', isEnding: false,
+        transitions: [{ id: 'path-1', targetNodeId: 'ending' }], playbackAssets: motion,
+      }, {
+        id: 'ending', image: 'ending.png', videoHistoryId: 'video-ending', isEnding: true, transitions: [],
+      }],
+    };
+    const loom = {
+      name: 'Example Story', logline: 'A choice opens the way.',
+      seriesPlan: {
+        storyArc: 'The way opens.',
+        plotPoints: [{ id: 'plot-1', title: 'Challenge — The gate', description: 'A costly choice.', episodeId: 'ep-1' }],
+      },
+      episodes: [episode],
+    };
+
+    const workflow = fableLoomProductionWorkflow(loom, episode, {
+      structural: { stats: { errorCount: 0 }, productionReadiness: { ready: true } },
+      editorialRun: { status: 'completed' },
+      continuityReview: { passed: true, summary: { errors: 0, warnings: 0 } },
+    });
+
+    expect(workflow.currentStep).toBe(12);
+    expect(workflow.stages.slice(0, 11).every((stage) => stage.status === 'complete')).toBe(true);
+    expect(workflow.stages[11]).toMatchObject({ id: 'delivery', status: 'current' });
   });
 });

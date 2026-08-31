@@ -12,6 +12,35 @@ import { validateAudioOccupancy } from './fableLoomPlayback.js';
 export const FABLELOOM_PRODUCTION_MODES = Object.freeze(['current_canon', 'exact_inputs']);
 export const FABLELOOM_PRODUCTION_MODE_DEFAULT = 'current_canon';
 
+// One format owns both storyboard stills and motion renders so an episode
+// cannot accidentally mix a portrait image with a landscape clip. These are
+// deliberately concrete render sizes, not ratio labels alone: every provider
+// receives an explicit width/height instead of falling through to its own
+// (often square or portrait) default. 16:9 is the FableLoom default because the
+// hosted experience is composed as a cinematic screen.
+export const FABLELOOM_RENDER_FORMATS = Object.freeze([
+  Object.freeze({ formatId: 'landscape-16-9', label: '16:9 landscape', aspectRatio: '16:9', width: 1024, height: 576 }),
+  Object.freeze({ formatId: 'portrait-9-16', label: '9:16 portrait', aspectRatio: '9:16', width: 576, height: 1024 }),
+  Object.freeze({ formatId: 'square-1-1', label: '1:1 square', aspectRatio: '1:1', width: 1024, height: 1024 }),
+  Object.freeze({ formatId: 'classic-4-3', label: '4:3 landscape', aspectRatio: '4:3', width: 1024, height: 768 }),
+]);
+export const FABLELOOM_RENDER_FORMAT_IDS = Object.freeze(
+  FABLELOOM_RENDER_FORMATS.map((format) => format.formatId),
+);
+export const FABLELOOM_DEFAULT_RENDER_FORMAT_ID = 'landscape-16-9';
+
+export function asFableLoomRenderSettings(raw) {
+  const requestedId = typeof raw === 'string' ? raw : raw?.formatId;
+  const selected = FABLELOOM_RENDER_FORMATS.find((format) => format.formatId === requestedId)
+    || FABLELOOM_RENDER_FORMATS.find((format) => format.formatId === FABLELOOM_DEFAULT_RENDER_FORMAT_ID);
+  return {
+    formatId: selected.formatId,
+    aspectRatio: selected.aspectRatio,
+    width: selected.width,
+    height: selected.height,
+  };
+}
+
 export const FABLELOOM_ASSET_TYPES = Object.freeze([
   'image',
   'video_entry',

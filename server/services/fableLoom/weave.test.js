@@ -22,7 +22,9 @@ vi.mock('../universeBuilder.js', () => ({ getUniverse: getUniverseMock }));
 const getSeriesMock = vi.hoisted(() => vi.fn(async () => null));
 vi.mock('../pipeline/series.js', () => ({ getSeries: getSeriesMock }));
 
-const { createLoom, addEpisode, addNode, mutateLoom, updateLoom, updateNode, getLoom } = await import('./records.js');
+const {
+  createLoom, addEpisode, addNode, mutateLoom, updateEpisode, updateLoom, updateNode, getLoom,
+} = await import('./records.js');
 const { _resetFableLoomBackend } = await import('./store.js');
 const { aiStatusEvents } = await import('../aiStatusEvents.js');
 const {
@@ -226,6 +228,63 @@ describe('weaveEpisode', () => {
       .toBe(expanded.loom.episodes[0].startNodeId);
     expect(runStagedLLM.mock.calls[1][0]).toBe('fableloom-weave-episode');
     expect(runStagedLLM.mock.calls[1][1].outlineDigest).toContain('[s1] Signal');
+  });
+
+  it('replaces an old teleplay after a structurally valid outline rewrite', async () => {
+    const { loomId, episodeId } = await setup();
+    runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-run' });
+    await generateEpisodeOutline(loomId, episodeId, {});
+    await validateEpisodeOutline(loomId, episodeId);
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraphFromOutline(), runId: 'first-expand' });
+    await weaveEpisode(loomId, episodeId, { expandFromOutline: true });
+
+    const expanded = await getLoom(loomId);
+    const expandedEpisode = expanded.episodes[0];
+    const revisedOutline = {
+      ...expandedEpisode.storyOutline,
+      scenes: expandedEpisode.storyOutline.scenes.map((scene, index) => (
+        index === 0 ? { ...scene, title: 'Revised signal' } : scene
+      )),
+    };
+    await updateEpisode(loomId, episodeId, { storyOutline: revisedOutline });
+    const checked = await validateEpisodeOutline(loomId, episodeId);
+
+    expect(checked.outline.validation.status).toBe('invalid');
+    expect(checked.validation.issues.every((issue) => (
+      issue.code.startsWith('TELEPLAY_')
+    ))).toBe(true);
+
+    const replacementOutline = checked.outline;
+    const replacementGraph = {
+      startKey: replacementOutline.startKey,
+      nodes: replacementOutline.scenes.map((scene) => ({
+        key: scene.key,
+        title: scene.title,
+        prose: `${scene.title} in full teleplay form.`,
+        playbackMode: scene.playbackMode,
+        audienceConnection: scene.audienceConnection,
+        protagonistPresence: scene.protagonistPresence,
+        isEnding: scene.isEnding,
+        endingLabel: scene.endingLabel,
+        transitions: scene.transitions.map((transition) => ({
+          targetKey: transition.targetKey,
+          intent: transition.intent,
+        })),
+      })),
+    };
+    runStagedLLM.mockResolvedValueOnce({ content: replacementGraph, runId: 'replacement-expand' });
+
+    const replaced = await weaveEpisode(loomId, episodeId, {
+      replace: true,
+      expandFromOutline: true,
+    });
+
+    expect(replaced.runId).toBe('replacement-expand');
+    expect(replaced.loom.episodes[0].nodes[0].title).toBe('Revised signal');
+    expect(replaced.loom.episodes[0].storyOutline.validation).toMatchObject({
+      status: 'valid',
+      issues: [],
+    });
   });
 
   it('uses the loom participation mode when normalizing helper outline beats', async () => {
@@ -1056,6 +1115,28 @@ describe('series plan AI', () => {
     expect(runStagedLLM).toHaveBeenCalledWith('fableloom-weave-episode', expect.objectContaining({
       storyContext: expect.stringContaining('Plot point 1 [planned for Episode 1: Pilot]: Episode turn'),
     }), expect.anything());
+  });
+
+  it('expands explicitly-authored challenges into a multi-scene interactive contract', async () => {
+    const { loomId, episodeId } = await setup();
+    await updateLoom(loomId, { seriesPlan: {
+      storyArc: 'A courier earns a dangerous passage.',
+      plotPoints: [{
+        id: 'plot-challenge',
+        title: 'Challenge — Recall the gate code',
+        description: 'SETUP: Plant the code. VIEWER DECISION LOOP: Recall it. FAILURE: Trigger pursuit.',
+        episodeId,
+      }],
+      sideQuests: [],
+    } });
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraph(), runId: 'run-challenge' });
+
+    await weaveEpisode(loomId, episodeId, { replace: true });
+
+    expect(runStagedLLM).toHaveBeenCalledWith('fableloom-weave-episode', expect.objectContaining({
+      storyContext: expect.stringContaining('PLAYABLE CHALLENGE CONTRACT'),
+    }), expect.anything());
+    expect(runStagedLLM.mock.calls.at(-1)[1].storyContext).toContain('costly recovery path');
   });
 
   it('carries enabled series delivery beats into episode context and preserves them during plan drafting', async () => {

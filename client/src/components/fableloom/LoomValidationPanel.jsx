@@ -7,20 +7,36 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CircleAlert, Layers, Loader2, Sparkles, Waypoints } from 'lucide-react';
+import {
+  AlertTriangle, CircleAlert, Film, Layers, ListChecks, Loader2, Sparkles, Waypoints,
+} from 'lucide-react';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { reviewLoomEpisode, validateLoomEpisode } from '../../services/api';
+import TabPills from '../ui/TabPills';
+import LoomContinuityPanel from './LoomContinuityPanel';
 import LoomProductionPanel from './LoomProductionPanel';
+import LoomWorkflowPanel from './LoomWorkflowPanel';
 
 
 const severityIcon = (severity) => (severity === 'error' || severity === 'high'
   ? <CircleAlert size={13} className="text-port-error shrink-0 mt-0.5" />
   : <AlertTriangle size={13} className="text-port-warning shrink-0 mt-0.5" />);
 
-export default function LoomValidationPanel({ loom, episode, onSelectNode }) {
-  const [activeTab, setActiveTab] = useState('structure');
+export default function LoomValidationPanel({
+  loom,
+  episode,
+  onSelectNode,
+  onOpenSettings,
+  onOpenSeriesPlan,
+  onOpenOutline,
+  onOpenEpisodeSetup,
+  onOpenPlay,
+  onLoomUpdate,
+}) {
+  const [activeTab, setActiveTab] = useState('workflow');
   const [structural, setStructural] = useState(null);
   const [review, setReview] = useState(null);
+  const [continuityReview, setContinuityReview] = useState(null);
 
 
   // Re-validate only when the graph STRUCTURE changes — a prose edit or a
@@ -41,6 +57,21 @@ export default function LoomValidationPanel({ loom, episode, onSelectNode }) {
       .then(setStructural)
       .catch(() => setStructural(null));
   }, [loom.id, episode.id, structureKey]);
+
+  useEffect(() => {
+    setContinuityReview(null);
+  }, [episode.id, episode.updatedAt]);
+
+  const handleWorkflowAction = (action) => {
+    if (action === 'settings') onOpenSettings?.();
+    if (action === 'series-plan') onOpenSeriesPlan?.();
+    if (action === 'outline') onOpenOutline?.();
+    if (action === 'episode-setup') onOpenEpisodeSetup?.();
+    if (action === 'story-review') setActiveTab('story');
+    if (action === 'continuity') setActiveTab('continuity');
+    if (action === 'render') setActiveTab('render');
+    if (action === 'play') onOpenPlay?.();
+  };
 
   const [runReview, reviewing] = useAsyncAction(async () => {
     const result = await reviewLoomEpisode(loom.id, episode.id, {}, { silent: true });
@@ -68,36 +99,46 @@ export default function LoomValidationPanel({ loom, episode, onSelectNode }) {
 
   return (
     <div className="p-3 sm:p-4 space-y-3 sm:space-y-4">
-      {/* Panel Tab Navigation */}
-      <div className="flex border-b border-port-border mb-3 text-xs overflow-x-auto scrollbar-hide touch-pan-x">
-        <button
-          type="button"
-          onClick={() => setActiveTab('structure')}
-          className={`shrink-0 whitespace-nowrap px-2.5 sm:px-3 py-2 font-medium border-b-2 flex items-center gap-1.5 ${
-            activeTab === 'structure'
-              ? 'border-port-accent text-port-accent'
-              : 'border-transparent text-port-text-muted hover:text-port-text'
-          }`}
-        >
-          <Waypoints size={13} />
-          Structure & Story
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('production')}
-          className={`shrink-0 whitespace-nowrap px-2.5 sm:px-3 py-2 font-medium border-b-2 flex items-center gap-1.5 ${
-            activeTab === 'production'
-              ? 'border-port-accent text-port-accent'
-              : 'border-transparent text-port-text-muted hover:text-port-text'
-          }`}
-        >
-          <Layers size={13} />
-          Production & Continuity
-        </button>
-      </div>
+      <TabPills
+        tabs={[
+          { id: 'workflow', label: 'Workflow', icon: ListChecks },
+          { id: 'story', label: 'Story', icon: Waypoints },
+          { id: 'continuity', label: 'Continuity', icon: Film },
+          { id: 'render', label: 'Render', icon: Layers },
+        ]}
+        activeTab={activeTab}
+        onChange={setActiveTab}
+        variant="underline"
+        size="xs"
+        stretch
+        mobileDropdown
+        mobileSelectId="fableloom-workflow-section"
+        ariaLabel="Episode production sections"
+      />
 
-      {activeTab === 'production' ? (
-        <LoomProductionPanel loom={loom} episode={episode} onSelectNode={onSelectNode} />
+      {activeTab === 'workflow' ? (
+        <LoomWorkflowPanel
+          loom={loom}
+          episode={episode}
+          structural={structural}
+          continuityReview={continuityReview}
+          onAction={handleWorkflowAction}
+        />
+      ) : activeTab === 'render' ? (
+        <LoomProductionPanel
+          loom={loom}
+          episode={episode}
+          onSelectNode={onSelectNode}
+          onLoomUpdate={onLoomUpdate}
+        />
+      ) : activeTab === 'continuity' ? (
+        <LoomContinuityPanel
+          loom={loom}
+          episode={episode}
+          review={continuityReview}
+          onReviewChange={setContinuityReview}
+          onSelectNode={onSelectNode}
+        />
       ) : (
         <>
           <div>

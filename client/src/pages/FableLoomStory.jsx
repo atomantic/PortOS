@@ -697,6 +697,12 @@ export default function FableLoomStory({ view = 'graph' }) {
                   loom={loom}
                   episode={episode}
                   onSelectNode={selectNode}
+                  onOpenSettings={() => setSettingsOpen(true)}
+                  onOpenSeriesPlan={() => navigate(episodePath('plan'))}
+                  onOpenOutline={() => navigate(`${episodePath(episode.id)}/outline`)}
+                  onOpenEpisodeSetup={() => setSetupOpen(true)}
+                  onOpenPlay={() => setPlayOpen(true)}
+                  onLoomUpdate={setLoom}
                 />
               )}
             </div>
@@ -706,6 +712,7 @@ export default function FableLoomStory({ view = 'graph' }) {
 
       {episode && (
         <EpisodeSetupDrawer
+          key={episode.id}
           open={setupOpen}
           onClose={() => setSetupOpen(false)}
           loom={loom}
@@ -769,9 +776,11 @@ function EpisodeSetupDrawer({ open, onClose, loom, episode, onLoomUpdate, onFeed
 
   // Sync from the record on episode switch ONLY — re-syncing on every server
   // echo would clobber typing in a sibling field while a blur-save
-  // round-trips (same rule as the scene editor).
+  // round-trips (same rule as the scene editor). Guidance is intentionally
+  // episode-local scratch input; carrying it into the next episode can make an
+  // otherwise valid outline request contradict that episode's graph.
   useEffect(() => {
-    setForm((prev) => ({ ...prev, title: episode.title || '', synopsis: episode.synopsis || '' }));
+    setForm({ title: episode.title || '', synopsis: episode.synopsis || '', guidance: '' });
   }, [episode.id]);
 
   const saveMeta = async (key) => {

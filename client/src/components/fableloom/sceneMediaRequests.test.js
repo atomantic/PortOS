@@ -13,6 +13,8 @@ describe('FableLoom scene media request composition', () => {
     })).toEqual({
       prompt: 'painted graphic novel. a scout wakes in alien grass\n\nStyle: cool rim light',
       negativePrompt: 'photorealism',
+      width: 1024,
+      height: 576,
       fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' },
     });
   });
@@ -73,7 +75,19 @@ describe('FableLoom scene media request composition', () => {
       mode: 'image',
       sourceImageFile: 'scene.png',
       disableAudio: true,
+      width: 1024,
+      height: 576,
       fableLoom: JSON.stringify({ loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' }),
     });
+  });
+
+  it('uses one selected format for both storyboard stills and motion', () => {
+    const portraitLoom = { ...loom, renderSettings: { formatId: 'portrait-9-16' } };
+    const node = { id: 'node-1', imagePrompt: 'a portrait frame', videoPrompt: 'a portrait clip' };
+
+    expect(buildFableLoomImageRequest({ loom: portraitLoom, episodeId: 'ep-1', node }))
+      .toMatchObject({ width: 576, height: 1024 });
+    expect(buildFableLoomVideoRequest({ loom: portraitLoom, episodeId: 'ep-1', node }))
+      .toMatchObject({ width: 576, height: 1024 });
   });
 });

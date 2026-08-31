@@ -170,4 +170,48 @@ describe('FableLoom story beat outlines', () => {
     }));
     expect(series.stats).toMatchObject({ ready: false, readyEpisodeCount: 0 });
   });
+
+  it('allows one structurally sound outline to replace its older teleplay explicitly', () => {
+    const storyOutline = {
+      ...sanitizeStoryOutline(validOutline),
+      validation: {
+        status: 'invalid',
+        issues: [{
+          code: 'TELEPLAY_SCENE_CONTRACT_MISMATCH',
+          severity: 'error',
+          message: 'The edited beat differs from the old scene.',
+          sceneKey: 's1',
+        }],
+      },
+    };
+    const episode = {
+      id: 'ep-1',
+      number: 1,
+      startNodeId: 's1',
+      storyOutline,
+      nodes: storyOutline.scenes.map((scene) => ({
+        id: scene.key,
+        title: scene.key === 's1' ? 'Old signal' : scene.title,
+        playbackMode: scene.playbackMode,
+        audienceConnection: scene.audienceConnection,
+        protagonistPresence: scene.protagonistPresence,
+        isEnding: scene.isEnding,
+        endingLabel: scene.endingLabel,
+        transitions: scene.transitions.map((item) => ({
+          targetNodeId: item.targetKey,
+          intent: item.intent,
+        })),
+      })),
+    };
+    const loom = { participationMode: 'protagonist', episodes: [episode], seriesPlan: {} };
+
+    expect(analyzeSeriesStoryOutlines(loom).stats.ready).toBe(false);
+    const replacement = analyzeSeriesStoryOutlines(loom, { replacingEpisodeId: episode.id });
+
+    expect(replacement.stats).toMatchObject({ ready: true, readyEpisodeCount: 1, errorCount: 0 });
+    expect(replacement.issues).toContainEqual(expect.objectContaining({
+      code: 'TELEPLAY_REPLACEMENT_PENDING',
+      severity: 'warning',
+    }));
+  });
 });

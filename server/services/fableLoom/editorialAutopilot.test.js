@@ -85,7 +85,9 @@ describe('FableLoom editorial autopilot', () => {
     });
     const finished = await waitForTerminal(started.id);
 
-    expect(finished).toMatchObject({ status: 'completed', round: 1, maxRounds: 3 });
+    expect(finished).toMatchObject({
+      status: 'completed', round: 1, maxRounds: 3, stepIndex: 2, stepCount: 6,
+    });
     expect(finished.rounds).toHaveLength(1);
     expect(remediateMock).toHaveBeenCalledWith('loom-example', {
       providerId: 'writer', model: 'large', effort: 'high', guidance: '',
@@ -94,6 +96,45 @@ describe('FableLoom editorial autopilot', () => {
       providerId: 'writer', model: 'large', effort: 'high', aiReview: true,
     });
     expect(selfImproveMock).not.toHaveBeenCalled();
+  });
+
+  it('corrects a rejected graph patch and continues the same editorial step', async () => {
+    const rejectedPatch = Object.assign(new Error('The model returned an invalid transition target'), {
+      code: 'AI_RESPONSE_INVALID',
+    });
+    remediateMock
+      .mockRejectedValueOnce(rejectedPatch)
+      .mockResolvedValueOnce(remediation(true));
+    playtestMock.mockResolvedValueOnce(playtest({ passed: true }));
+
+    const started = await startFableLoomEditorialAutopilot('loom-example', { maxRounds: 3 });
+    const finished = await waitForTerminal(started.id);
+
+    expect(finished).toMatchObject({
+      status: 'completed', round: 1, stepIndex: 2, responseCorrections: 1, invalidResponses: 1,
+    });
+    expect(remediateMock).toHaveBeenCalledTimes(2);
+    expect(remediateMock.mock.calls[1][1].guidance).toContain('Validator feedback');
+    expect(remediateMock.mock.calls[1][1].guidance).toContain(rejectedPatch.message);
+    expect(playtestMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails with useful remediation after exhausting invalid-response correction attempts', async () => {
+    remediateMock.mockRejectedValue(Object.assign(
+      new Error('The model returned an invalid transition target for a private record id'),
+      { code: 'AI_RESPONSE_INVALID' },
+    ));
+
+    const started = await startFableLoomEditorialAutopilot('loom-example', { maxRounds: 3 });
+    const finished = await waitForTerminal(started.id);
+
+    expect(remediateMock).toHaveBeenCalledTimes(3);
+    expect(finished).toMatchObject({
+      status: 'failed', round: 1, stepIndex: 1, responseCorrections: 2, invalidResponses: 3,
+    });
+    expect(finished.error).toContain('graph-safe editor patch after 3 attempts');
+    expect(finished.error).not.toContain('private record id');
+    expect(playtestMock).not.toHaveBeenCalled();
   });
 
   it('pauses on a plateau after the same finding survives a no-change pass', async () => {
@@ -143,9 +184,9 @@ describe('FableLoom editorial autopilot', () => {
     });
   });
 
-  it('keeps provider failures terminal while best-effort self-improvement diagnoses the failed step', async () => {
+  it('keeps non-correctable provider failures terminal while best-effort self-improvement diagnoses the failed step', async () => {
     const providerError = Object.assign(new Error('Provider returned an unusable patch'), {
-      code: 'AI_RESPONSE_INVALID',
+      code: 'PROVIDER_UNAVAILABLE',
     });
     remediateMock.mockRejectedValueOnce(providerError);
 
@@ -161,7 +202,7 @@ describe('FableLoom editorial autopilot', () => {
       outcome: 'failed',
       reason: 'run-error',
       sourceStep: 'evaluate-remediate',
-      errorCode: 'AI_RESPONSE_INVALID',
+      errorCode: 'PROVIDER_UNAVAILABLE',
     });
   });
 
@@ -171,7 +212,7 @@ describe('FableLoom editorial autopilot', () => {
       finishDiagnosis = resolve;
     }));
     const providerError = Object.assign(new Error('Provider returned an unusable patch'), {
-      code: 'AI_RESPONSE_INVALID',
+      code: 'PROVIDER_UNAVAILABLE',
     });
     remediateMock.mockRejectedValueOnce(providerError);
 

@@ -200,6 +200,16 @@ export default function LoomEditorialAutomation({ loom, dirty, onLoomUpdate }) {
   const passed = result?.type === 'playtest'
     ? response?.passed
     : shownRun?.status === 'completed' || diagnostics?.passed;
+  const resultHeading = passed
+    ? 'Series clears the current editorial gates'
+    : shownRun?.status === 'failed'
+      ? 'Editorial automation needs attention'
+      : shownRun?.status === 'canceled'
+        ? 'Editorial autopilot stopped'
+        : 'Editorial work remains';
+  const restartLabel = ['failed', 'paused', 'canceled'].includes(shownRun?.status)
+    ? 'Retry editor autopilot'
+    : 'Start editor autopilot';
 
   return (
     <section
@@ -212,12 +222,14 @@ export default function LoomEditorialAutomation({ loom, dirty, onLoomUpdate }) {
             <BrainCircuit size={16} className="text-port-accent" /> AI editor, reviewer & playtest
           </h3>
           <p className="mt-1 text-xs text-port-text-muted max-w-3xl">
-            One editor can evaluate and safely repair the complete series. Autopilot alternates that editor with an independent review of every enumerated gameplay path until the story passes or reaches its bounded round limit.
+            One editor can evaluate and safely repair the complete series. Autopilot alternates that editor with an independent review of every enumerated gameplay path until the story passes or reaches its bounded round limit. Rejected graph patches are corrected with validator feedback before a run can fail.
           </p>
         </div>
         {shownRun ? (
           <span className={`shrink-0 rounded border px-2 py-1 text-xs ${statusClass(shownRun.status)}`}>
-            {shownRun.status} · round {shownRun.round}/{shownRun.maxRounds}
+            {shownRun.status}
+            {shownRun.stepIndex ? ` · step ${shownRun.stepIndex}/${shownRun.stepCount}` : ''}
+            {` · round ${shownRun.round}/${shownRun.maxRounds}`}
           </span>
         ) : null}
       </div>
@@ -320,7 +332,7 @@ export default function LoomEditorialAutomation({ loom, dirty, onLoomUpdate }) {
             className="flex min-h-11 items-center justify-center gap-2 rounded border border-port-accent px-3 py-2 text-sm text-port-accent hover:bg-port-accent/10 disabled:opacity-50"
           >
             {startingAutopilot ? <Loader2 size={14} className="animate-spin" /> : <BrainCircuit size={14} />}
-            {startingAutopilot ? 'Starting…' : 'Start editor autopilot'}
+            {startingAutopilot ? 'Starting…' : restartLabel}
           </button>
         )}
       </div>
@@ -349,7 +361,7 @@ export default function LoomEditorialAutomation({ loom, dirty, onLoomUpdate }) {
             )}
             <div>
               <p className="text-sm font-medium">
-                {passed ? 'Series clears the current editorial gates' : 'Editorial work remains'}
+                {resultHeading}
               </p>
               {summary ? <p className="mt-1 text-xs text-port-text-muted">{summary}</p> : null}
             </div>
@@ -396,6 +408,13 @@ export default function LoomEditorialAutomation({ loom, dirty, onLoomUpdate }) {
           {shownRun?.rounds?.length ? (
             <p className="text-[11px] text-port-text-muted">
               {shownRun.rounds.length} bounded editorial round{shownRun.rounds.length === 1 ? '' : 's'} recorded. The run stops on success, plateau, cancellation, provider failure, or the selected round limit.
+            </p>
+          ) : null}
+          {shownRun?.invalidResponses ? (
+            <p className="text-[11px] text-port-text-muted">
+              {shownRun.status === 'failed'
+                ? `Autopilot safely rejected ${shownRun.invalidResponses} invalid editor responses; no invalid changes were applied.`
+                : `Autopilot safely rejected and retried ${shownRun.invalidResponses} invalid editor response${shownRun.invalidResponses === 1 ? '' : 's'} before continuing.`}
             </p>
           ) : null}
           {shownRun?.selfImprove?.verdict === 'pipeline' ? (

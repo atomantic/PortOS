@@ -21,6 +21,7 @@ import {
 import {
   FABLELOOM_ASSET_TYPES,
   FABLELOOM_PRODUCTION_MODES,
+  FABLELOOM_RENDER_FORMAT_IDS,
 } from './fableLoomProduction.js';
 import { FABLELOOM_PLAYTEST_LIMITS } from './fableLoomPlaytest.js';
 import { EFFORT_LEVELS } from './providerModels.js';
@@ -44,6 +45,9 @@ const format = z.enum(LOOM_FORMATS);
 // the runner would clamp an unknown level silently, and the door check is
 // where a typo should surface.
 const playSettings = llmRoutePinSchema.nullable();
+const renderSettings = z.object({
+  formatId: z.enum(FABLELOOM_RENDER_FORMAT_IDS),
+});
 const planItemId = z.string().min(1).max(80).optional();
 const planEpisodeId = z.string().min(1).max(80).nullable().optional();
 const planItemFields = {
@@ -131,6 +135,7 @@ export const loomCreateSchema = z.object({
   audienceCommunicationMedium: audienceCommunicationMedium.optional(),
   format: format.optional(),
   playSettings: playSettings.optional(),
+  renderSettings: renderSettings.optional(),
   seriesPlan: seriesPlan.optional(),
   protagonistCharacterId: refId.optional(),
   protagonistWardrobeId: refId.optional(),
@@ -148,6 +153,7 @@ export const loomPatchSchema = z.object({
   audienceCommunicationMedium: audienceCommunicationMedium.optional(),
   format: format.optional(),
   playSettings: playSettings.optional(),
+  renderSettings: renderSettings.optional(),
   seriesPlan: seriesPlan.optional(),
   protagonistCharacterId: refId.optional(),
   protagonistWardrobeId: refId.optional(),

@@ -37,7 +37,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `fableLoomPlayback.js` | FableLoom node playback modes (`cut` auto-advances; `decision` loops while awaiting input), with the backward-compatible default. |
 | `fableLoomParticipation.js` | FableLoom audience roles (helper vs protagonist), per-scene connection availability, prompt contracts, and backward-compatible defaults. |
 | `fableLoomFormats.js` | FableLoom scene formats (`LOOM_FORMATS`, `asLoomFormat`, `sceneFormatContract`, …) — how a loom writes scene text, read by validation, the sanitizer, and every generative stage. |
-| `fableLoomProduction.js` | FableLoom production batch planning and topological orchestration: ordered episode storyboard gates, DAG resolution, asset enumeration, execution stages, and exact-input provenance verification. |
+| `fableLoomProduction.js` | FableLoom production batch planning and topological orchestration: explicit shared still/video render-format presets (16:9 default), ordered episode storyboard gates, DAG resolution, asset enumeration, execution stages, and exact-input provenance verification. |
 | `fableLoomContinuity.js` | FableLoom episodic continuity review: multi-vector deterministic checks for visual entity bindings, convergence clarity, voice profile consistency/drift, pronunciation anchors, and playback safety. |
 | `fableLoomOutline.js` | FableLoom story-first episode beat outlines: bounded log-lines, deterministic arc validation, and compact prompt rendering before teleplay expansion. |
 | `fableLoomPlaytest.js` | FableLoom branching-playthrough harness: bounded exhaustive path enumeration, ending/loop/coverage diagnostics, aggregate loom reports, and compact traces for narrative-quality review. |

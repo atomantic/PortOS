@@ -113,7 +113,8 @@ describe('LoomEditorialAutomation', () => {
     const user = userEvent.setup();
     api.startLoomEditorialAutopilot.mockResolvedValue({
       id: 'editorial-run-1', loomId: 'loom-1', status: 'running', round: 1, maxRounds: 3,
-      message: 'Round 1: evaluating and remediating the complete series…', rounds: [],
+      stepIndex: 1, stepCount: 6,
+      message: 'Step 1 of up to 6 · round 1: evaluating and remediating the complete series…', rounds: [],
       residualFindings: [],
     });
     renderPanel();
@@ -124,7 +125,25 @@ describe('LoomEditorialAutomation', () => {
       'loom-1', { maxRounds: 3 }, { silent: true },
     ));
     expect(screen.getByRole('button', { name: 'Stop editor autopilot' })).toBeInTheDocument();
-    expect(screen.getAllByText(/Round 1: evaluating and remediating/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/step 1 of up to 6/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/running · step 1\/6 · round 1\/3/i)).toBeInTheDocument();
+  });
+
+  it('explains a failed automation as a retryable system outcome', async () => {
+    api.getLoom.mockResolvedValue(loom);
+    api.getLoomEditorialAutopilotStatus.mockResolvedValue({
+      run: {
+        id: 'editorial-run-1', loomId: 'loom-1', status: 'failed', round: 1, maxRounds: 3,
+        stepIndex: 1, stepCount: 6, responseCorrections: 2, invalidResponses: 3,
+        message: 'Editorial autopilot could not obtain a graph-safe editor patch after 3 attempts.',
+        rounds: [], residualFindings: [],
+      },
+    });
+    renderPanel();
+
+    expect(await screen.findByText('Editorial automation needs attention')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry editor autopilot' })).toBeInTheDocument();
+    expect(screen.getByText(/safely rejected 3 invalid editor responses; no invalid changes were applied/i)).toBeInTheDocument();
   });
 
   it('opts a run into approval-gated FableLoom workflow diagnosis', async () => {

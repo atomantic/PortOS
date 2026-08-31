@@ -24,10 +24,12 @@ const compileFableLoomVisualRequest = vi.hoisted(() => vi.fn(async ({ authoredPr
   visualConditioning: compiledVisual,
 })));
 const fableLoomVideoCapabilities = vi.hoisted(() => vi.fn(() => ({ version: 1, kind: 'video' })));
+const getLoom = vi.hoisted(() => vi.fn(async () => null));
 vi.mock('../services/fableLoom/visualConditioning.js', () => ({
   compileFableLoomVisualRequest,
   fableLoomVideoCapabilities,
 }));
+vi.mock('../services/fableLoom/records.js', () => ({ getLoom }));
 
 const installProcess = vi.hoisted(() => {
   const spawn = vi.fn();
@@ -1093,6 +1095,10 @@ describe('videoGen routes', () => {
     });
 
     it('forwards a fableLoom i2v tag into job.params alongside the resolved frame', async () => {
+      getLoom.mockResolvedValueOnce({
+        id: 'loom-1',
+        renderSettings: { formatId: 'portrait-9-16' },
+      });
       const r = await request(app).post('/api/video-gen/').send({
         prompt: 'the gate slowly opens',
         mode: 'image',
@@ -1104,8 +1110,15 @@ describe('videoGen routes', () => {
         kind: 'video',
         params: expect.objectContaining({
           sourceImagePath: '/mock/images/scene-image.png',
+          width: 576,
+          height: 1024,
+          aspectRatio: '9:16',
           fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' },
-          visualConditioning: compiledVisual,
+          visualConditioning: expect.objectContaining({
+            render: expect.objectContaining({
+              parameters: { width: 576, height: 1024, aspectRatio: '9:16' },
+            }),
+          }),
         }),
       }));
       expect(compileFableLoomVisualRequest).toHaveBeenCalledWith(expect.objectContaining({

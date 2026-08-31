@@ -365,7 +365,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // side-device off-screen. A v3 peer would silently strip those fields on a
   // whole-record round trip and could restore wardrobe drift or put a removed
   // protagonist back into a scene.
-  fableLoom: 4,
+  // v5 = one loom-level render format pins the aspect ratio and concrete
+  // dimensions shared by storyboard stills and motion clips. A v4 peer would
+  // strip that choice and let provider defaults reintroduce mixed geometry.
+  fableLoom: 5,
   // v1 = Creative Director projects (PostgreSQL `creative_director_projects`)
   // federated via the per-record peer-sync push pipeline (record kind
   // `creativeDirectorProject`, sync category `creativeDirectorProjects`, #1564).
