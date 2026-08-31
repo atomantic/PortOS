@@ -113,6 +113,8 @@ tryReadFile: vi.fn().mockResolvedValue(null),
 // entries; stub it to a stable id.
 vi.mock('./instances.js', () => ({
   getInstanceId: () => Promise.resolve('local-instance'),
+  ensureInstanceId: () => Promise.resolve('local-instance'),
+  UNKNOWN_INSTANCE_ID: 'unknown',
 }));
 
 // Mock the central LLM handler — brain.js used to spawn child_process
@@ -313,6 +315,9 @@ describe('brain service', () => {
       }));
       expect(storage.updateLink).toHaveBeenCalledWith('link-001', {
         cloneStatus: 'cloning',
+        // Cleared, so a recovered link's "interrupted by a server restart"
+        // message doesn't sit beside the retry's spinner.
+        cloneError: null,
         cloneInstanceId: 'local-instance',
         cloneInterrupted: false
       });
@@ -1010,6 +1015,37 @@ describe('brain service', () => {
         cloneStatus: 'failed',
         cloneInstanceId: null,
       }));
+    });
+
+    it('ages a stale peer-owned attempt out so a dead peer cannot strand the link', async () => {
+      // The peer that owned this clone crashed and never came back. Skipping it
+      // forever on ownership alone is the original #5463 bug, one hop removed.
+      storage.getLinks.mockResolvedValue([
+        { id: 'peer-dead', cloneStatus: 'cloning', cloneInstanceId: 'peer-x', updatedAt: '2020-01-01T00:00:00.000Z' },
+      ]);
+      storage.updateLink.mockResolvedValue({});
+
+      await recoverInterruptedRepoClones();
+
+      expect(storage.updateLink).toHaveBeenCalledWith('peer-dead', expect.objectContaining({
+        cloneStatus: 'failed',
+        cloneInterrupted: true,
+      }));
+    });
+
+    it('does not block on the staging sweep', async () => {
+      // Boot awaits this function before it starts listening, so an `rm -rf` of
+      // abandoned partial checkouts must not gate the server accepting requests.
+      // `Once`, so the never-settling promise can't leak into a later test —
+      // mockReturnValue survives clearAllMocks.
+      let released;
+      githubCloner.reapStaleCloneStaging.mockReturnValueOnce(new Promise(resolve => { released = resolve; }));
+      storage.getLinks.mockResolvedValue([]);
+
+      await recoverInterruptedRepoClones();
+
+      expect(githubCloner.reapStaleCloneStaging).toHaveBeenCalled();
+      released(0);
     });
   });
 

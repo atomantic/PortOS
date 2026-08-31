@@ -162,13 +162,16 @@ describe('POST /api/brain/links/reorder', () => {
 });
 
 describe('POST /api/brain/links/:id/clone', () => {
-  it('starts a new clone for a link recovered to failed', async () => {
-    brainService.getLinkById.mockResolvedValue({
-      id: 'repo-link',
-      url: 'https://github.com/acme/widgets',
-      isGitHubRepo: true,
-      cloneStatus: 'failed',
-    });
+  const repoLink = (cloneStatus) => ({
+    id: 'repo-link',
+    url: 'https://github.com/acme/widgets',
+    isGitHubRepo: true,
+    cloneStatus,
+  });
+
+  it('starts a new clone for a link boot recovery reset to failed', async () => {
+    brainService.getLinkById.mockResolvedValue(repoLink('failed'));
+    brainService.cloneRepoInBackground.mockResolvedValue();
 
     const res = await request(app).post('/api/brain/links/repo-link/clone');
 
@@ -177,5 +180,20 @@ describe('POST /api/brain/links/:id/clone', () => {
       'repo-link',
       'https://github.com/acme/widgets',
     );
+  });
+
+  it('logs rather than crashing when the un-awaited clone kickoff rejects', async () => {
+    // The kickoff runs outside the request lifecycle, so its pre-clone steps
+    // (identity resolve, the `cloning` stamp) have no `next(err)` to bubble to.
+    brainService.getLinkById.mockResolvedValue(repoLink('none'));
+    brainService.cloneRepoInBackground.mockRejectedValue(new Error('identity unavailable'));
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = await request(app).post('/api/brain/links/repo-link/clone');
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(res.status).toBe(200);
+    expect(logged).toHaveBeenCalledWith(expect.stringContaining('identity unavailable'));
+    logged.mockRestore();
   });
 });

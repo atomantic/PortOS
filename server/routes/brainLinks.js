@@ -182,8 +182,13 @@ router.post('/links/:id/clone', asyncHandler(async (req, res) => {
     });
   }
 
-  // Start clone in background
-  brainService.cloneRepoInBackground(link.id, link.url);
+  // Start clone in background. Deliberately not awaited, so it needs its own
+  // catch: the setup steps before the clone's own handlers are armed (identity
+  // resolve, the `cloning` stamp) run outside the request lifecycle, and an
+  // unhandled rejection there would crash the process instead of logging.
+  brainService.cloneRepoInBackground(link.id, link.url).catch(err => {
+    console.error(`❌ Background clone setup failed for ${link.id}: ${err.message}`);
+  });
 
   res.json({ message: 'Clone started', linkId: link.id });
 }));

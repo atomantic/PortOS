@@ -78,8 +78,67 @@ describe('cloneRepo', () => {
     await resultPromise;
   });
 
+  it('never removes the destination for an ordinary clone', async () => {
+    // `replaceIncomplete` is the ONLY thing licensed to delete a checkout the
+    // user may already be using; a plain clone must stage and rename instead.
+    const child = createChild();
+    spawn.mockReturnValue(child);
+
+    const resultPromise = cloneRepo('https://github.com/acme/widgets');
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+    child.emit('close', 0);
+    await resultPromise;
+
+    expect(rm).not.toHaveBeenCalledWith('/repos/acme/widgets', expect.anything());
+  });
+
+  it('discards staging and surfaces the git error when the clone fails', async () => {
+    const child = createChild();
+    spawn.mockReturnValue(child);
+
+    const resultPromise = cloneRepo('https://github.com/acme/widgets');
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+    child.stderr.emit('data', Buffer.from('fatal: repository not found'));
+    child.emit('close', 128);
+
+    await expect(resultPromise).rejects.toThrow('fatal: repository not found');
+    // Nothing published, and the abandoned partial checkout is gone rather than
+    // left for the boot-time reaper.
+    expect(rename).not.toHaveBeenCalled();
+    expect(rm).toHaveBeenCalledWith(
+      '/repos/acme/.widgets-cloning-attempt',
+      { recursive: true, force: true }
+    );
+  });
+
+  it('keeps a checkout a concurrent attempt already published', async () => {
+    const child = createChild();
+    spawn.mockReturnValue(child);
+
+    const resultPromise = cloneRepo('https://github.com/acme/widgets');
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+    // The rival attempt won while git was running.
+    existsSync.mockReturnValue(true);
+    child.emit('close', 0);
+
+    await expect(resultPromise).resolves.toMatchObject({
+      localPath: '/repos/acme/widgets',
+      alreadyCloned: true
+    });
+    expect(rename).not.toHaveBeenCalled();
+  });
+});
+
+describe('reapStaleCloneStaging', () => {
+  const directory = name => ({ name, isDirectory: () => true });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rm.mockResolvedValue();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
   it('reaps only expired PortOS clone staging directories', async () => {
-    const directory = name => ({ name, isDirectory: () => true });
     readdir
       .mockResolvedValueOnce([directory('acme')])
       .mockResolvedValueOnce([
@@ -94,6 +153,30 @@ describe('cloneRepo', () => {
     })).resolves.toBe(1);
 
     expect(rm).toHaveBeenCalledTimes(1);
+    expect(rm).toHaveBeenCalledWith(
+      '/repos/acme/.portos-clone-1000000000000-old123',
+      { recursive: true, force: true }
+    );
+  });
+
+  it('reports an empty repos directory rather than throwing', async () => {
+    readdir.mockRejectedValueOnce(Object.assign(new Error('nope'), { code: 'ENOENT' }));
+
+    await expect(reapStaleCloneStaging({ cloneDir: '/repos' })).resolves.toBe(0);
+    expect(rm).not.toHaveBeenCalled();
+  });
+
+  it('keeps sweeping after an unreadable owner directory', async () => {
+    readdir
+      .mockResolvedValueOnce([directory('locked'), directory('acme')])
+      .mockRejectedValueOnce(Object.assign(new Error('permission denied'), { code: 'EACCES' }))
+      .mockResolvedValueOnce([directory('.portos-clone-1000000000000-old123')]);
+
+    await expect(reapStaleCloneStaging({
+      cloneDir: '/repos',
+      now: 2000000000000
+    })).resolves.toBe(1);
+
     expect(rm).toHaveBeenCalledWith(
       '/repos/acme/.portos-clone-1000000000000-old123',
       { recursive: true, force: true }

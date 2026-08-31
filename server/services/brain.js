@@ -10,7 +10,7 @@
 
 import * as storage from './brainStorage.js';
 import { brainEvents } from './brainStorage.js';
-import { getInstanceId } from './instances.js';
+import { getInstanceId, ensureInstanceId, UNKNOWN_INSTANCE_ID } from './instances.js';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { buildPrompt } from './promptService.js';
 import { validate } from '../lib/validation.js';
@@ -838,31 +838,44 @@ export async function recoverStuckClassifications() {
   }
 }
 
+// Matches the client's clone stall window (#5442). Past it, a `cloning` record
+// this install cannot attribute to itself is treated as orphaned rather than
+// left in place — see `shouldRecoverInterruptedClone`.
+const CLONE_STALE_MS = 10 * 60 * 1000;
+
+/**
+ * Whether THIS install should reset `link` out of `cloning` at boot.
+ *
+ * Ours, or unattributed (pre-#5463 records carry no `cloneInstanceId`) — always,
+ * because no in-process clone survives a restart. A clone another instance owns
+ * is left alone while it could still be running, but ages out of that
+ * protection: a peer that crashed mid-clone and never comes back must not
+ * strand the link at `cloning` forever, which is the whole bug (#5463).
+ */
+const shouldRecoverInterruptedClone = (link, instanceId) => {
+  const owner = link.cloneInstanceId ?? link.originInstanceId ?? null;
+  if (!owner || owner === instanceId) return true;
+  const updatedAt = Date.parse(link.updatedAt);
+  return Number.isFinite(updatedAt) && Date.now() - updatedAt >= CLONE_STALE_MS;
+};
+
 /**
  * Recover repository clones interrupted by a previous server shutdown.
  * Clone work is published only after git exits successfully; an orphaned child
  * can keep writing its private staging directory without racing a retry.
  */
 export async function recoverInterruptedRepoClones() {
-  await githubCloner.reapStaleCloneStaging()
-    .catch(err => console.error(`❌ Clone staging recovery failed: ${err.message}`));
-  const instanceId = await getInstanceId();
+  // `ensureInstanceId`, not `getInstanceId`: this comparison decides a durable
+  // record mutation, and the sentinel would match every other uninitialized
+  // install's records while missing our own.
+  const instanceId = await ensureInstanceId();
   const links = await storage.getLinks({ cloneStatus: 'cloning' });
   let recovered = 0;
   for (const link of links) {
     // Keep the state guard even though storage applies the filter so a future
     // storage implementation cannot broaden this boot-time mutation by accident.
     if (link.cloneStatus !== 'cloning') continue;
-    // New records name the instance that started this attempt. For older
-    // records, originInstanceId is the safest compatibility fallback.
-    if (link.cloneInstanceId && link.cloneInstanceId !== instanceId) continue;
-    // Old peers did not stamp cloneInstanceId. Preserve a recent peer-origin
-    // attempt, but recover it once it is older than the client stall window so
-    // a mixed-version crash cannot strand the link forever.
-    if (!link.cloneInstanceId && link.originInstanceId && link.originInstanceId !== instanceId) {
-      const updatedAt = Date.parse(link.updatedAt);
-      if (!Number.isFinite(updatedAt) || Date.now() - updatedAt < 10 * 60 * 1000) continue;
-    }
+    if (!shouldRecoverInterruptedClone(link, instanceId)) continue;
     await storage.updateLink(link.id, {
       cloneStatus: 'failed',
       cloneError: 'Clone interrupted by a server restart. Retry to clone the repository again.',
@@ -874,6 +887,11 @@ export async function recoverInterruptedRepoClones() {
   if (recovered > 0) {
     console.log(`🧠 Recovered ${recovered} interrupted repository clone(s)`);
   }
+  // Detached on purpose: boot AWAITS this function so the first links request
+  // can't see an orphaned `cloning` badge, and a recursive scan plus `rm -rf` of
+  // abandoned partial checkouts must not sit in front of `startListening()`.
+  githubCloner.reapStaleCloneStaging()
+    .catch(err => console.error(`❌ Clone staging recovery failed: ${err.message}`));
 }
 
 // Re-export storage functions for convenience
@@ -1000,9 +1018,18 @@ function hostnameFromUrl(url) {
  */
 export async function cloneRepoInBackground(linkId, url) {
   const previous = await storage.getLinkById(linkId);
-  const cloneInstanceId = await getInstanceId();
+  // `ensureInstanceId`, and null rather than the sentinel: `cloneInstanceId`
+  // lands on a durable, federated record, and a stamped 'unknown' would read as
+  // "some other install owns this" at boot on every machine — re-stranding the
+  // exact record this recovery exists to free.
+  const resolvedInstanceId = await ensureInstanceId();
+  const cloneInstanceId = resolvedInstanceId === UNKNOWN_INSTANCE_ID ? null : resolvedInstanceId;
   await storage.updateLink(linkId, {
     cloneStatus: 'cloning',
+    // The Links tab renders `cloneError` whenever it is set, independent of
+    // status — leaving the previous attempt's message would show the failure
+    // text beside the new attempt's spinner.
+    cloneError: null,
     cloneInstanceId,
     cloneInterrupted: false
   });

@@ -164,7 +164,13 @@ export async function reapStaleCloneStaging({ cloneDir = DEFAULT_CLONE_DIR, now 
   for (const owner of owners) {
     if (!owner.isDirectory()) continue;
     const ownerDir = join(cloneDir, owner.name);
-    const entries = await readdir(ownerDir, { withFileTypes: true });
+    // One unreadable owner directory (removed mid-sweep, or not ours to read)
+    // must not abort the sweep and leave every later owner's staging behind.
+    const entries = await readdir(ownerDir, { withFileTypes: true })
+      .catch(err => {
+        console.error(`⚠️ Skipped clone staging sweep for ${owner.name}: ${err.message}`);
+        return [];
+      });
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       const match = entry.name.match(CLONE_STAGING_RE);
