@@ -360,9 +360,13 @@ export function flushBaseHashes() {
  * stamps + flushes per iteration: each flush lands on the previous one's settled
  * `_flushTail`, so an N-iteration loop rewrites `sync_base_hashes.json` N times.
  * Wrapping the loop in this scope defers every interior flush; the single
- * terminal write captures all N stamps. (Caller in the tree today: the
- * `peer:online` convergence walk `retryPendingPushesForPeer`, which pushes —
- * and stamps — every subscribed record in sequence.)
+ * terminal write captures all N stamps.
+ *
+ * Two caller shapes use it: the `peer:online` convergence walk
+ * `retryPendingPushesForPeer` (pushes — and stamps — every subscribed record in
+ * sequence), and every `pruneTombstoned*` hard-prune loop, which EVICTS a base
+ * hash per hard-deleted record. Eviction only marks `_baseDirty` for a key the
+ * map actually held, so a prune that removed nothing still costs zero writes.
  *
  * Re-entrant (depth-counted) so nested scopes collapse to the outermost batch,
  * and the terminal flush runs in `finally` so a thrown/rejected `fn` still
@@ -373,7 +377,14 @@ export function flushBaseHashes() {
  *
  * Contract note: stamps performed inside the scope must have settled (the
  * in-memory `setSyncBaseHash` awaited) before `fn` returns, or the terminal
- * flush won't see `_baseDirty` for them. The current caller awaits its stamps.
+ * flush won't see `_baseDirty` for them. Every caller awaits its stamps/evictions.
+ *
+ * Depth is module-level, not per-async-context, so CONCURRENT batches merge
+ * rather than nest. The tombstone GC fans its `pruneTombstoned*` calls out
+ * through one `Promise.all`, so the batched ones overlap: the last scope to
+ * close flushes every eviction they accumulated, and an unbatched sibling's
+ * flush that landed while depth was still >0 rides along in that same write.
+ * Nothing is dropped either way — a deferred flush leaves `_baseDirty` set.
  */
 export async function withBaseHashFlushBatch(fn) {
   _flushBatchDepth += 1;
