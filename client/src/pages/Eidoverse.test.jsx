@@ -30,7 +30,7 @@ const includes = {
   productivity: true, activity: true, goals: true, memory: true, storage: true, jira: true, operations: true,
 };
 const limits = {
-  apps: 8, agents: 6, tasks: 6, features: 0, peers: 4, health: 1,
+  apps: 8, agents: 6, tasks: 6, features: 4, peers: 4, health: 1,
   productivity: 1, activity: 3, goals: 4, memory: 3, storage: 4, jira: 3, operations: 1,
 };
 const scale = Object.fromEntries([

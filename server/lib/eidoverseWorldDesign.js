@@ -199,7 +199,7 @@ export const EIDOVERSE_WORLD_DESIGN_V2 = Object.freeze({
   maxEntities: EIDOVERSE_MAX_LIVE_ENTITIES,
   includes: Object.fromEntries(EIDOVERSE_SOURCE_KEYS.map((key) => [key, true])),
   limits: {
-    apps: 8, agents: 6, tasks: 6, features: 0, peers: 4,
+    apps: 8, agents: 6, tasks: 6, features: 4, peers: 4,
     health: 1, productivity: 1, activity: 3, goals: 4,
     memory: 3, storage: 4, jira: 3, operations: 1,
   },
@@ -267,7 +267,7 @@ freezeWorldContract(EIDOVERSE_WORLD_DESIGNS);
 
 const isObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const clone = (value) => structuredClone(value);
-const equal = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+const equal = (left, right) => canonicalStringify(left) === canonicalStringify(right);
 
 const mergeDesign = (base, patch) => clone(deepMerge(clone(base), clone(patch)));
 

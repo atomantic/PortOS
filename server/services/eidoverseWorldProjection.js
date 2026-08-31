@@ -103,6 +103,16 @@ function projectionEntityId(kind, sourceId) {
   return `${PROJECTION_ID_PREFIX}${kind}-${shortHash(`${kind}:${sourceId}`)}`;
 }
 
+function signalKindFromEntityId(id) {
+  if (id.startsWith(PROJECTION_ID_PREFIX)) {
+    return id.slice(PROJECTION_ID_PREFIX.length).split('-')[0];
+  }
+  if (id.startsWith(LEGACY_PROJECTION_ID_PREFIX)) {
+    return id.slice(LEGACY_PROJECTION_ID_PREFIX.length).split('-')[0];
+  }
+  return null;
+}
+
 function districtForSource(districts, sourceKey) {
   return districts.find(({ sources }) => sources.includes(sourceKey))
     || districts[0]
@@ -291,7 +301,6 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
     : {};
   const operations = [];
   const desiredIds = new Set();
-  const removableKinds = new Set();
   const sourceAvailability = {};
   let created = 0;
   let updated = 0;
@@ -336,20 +345,25 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
   for (const district of districts) {
     const id = `${EIDOVERSE_MANAGED_PREFIX}infra-${district.id}`;
     const enabledSources = district.sources.filter((key) => effectiveRecipe.includes[key]);
-    const activeFeatureIds = Array.isArray(source.features)
-      ? source.features.filter((feature) => feature.enabled).map((feature) => feature.id)
-      : null;
+    const featureLimit = effectiveRecipe.limits.features ?? Number.POSITIVE_INFINITY;
+    const priorAffordances = stateEntities[id]?.comp?.[COMPONENT_TYPE]?.affordances || [];
+    const activeFeatureIds = effectiveRecipe.includes.features !== true
+      ? []
+      : (Array.isArray(source.features)
+          ? source.features
+            .filter((feature) => feature.enabled)
+            .slice(0, featureLimit)
+            .map((feature) => feature.id)
+          : priorAffordances.slice(0, featureLimit));
     const featureDistricts = {
       jira: ['goals'],
       post: ['activity'],
       datadog: ['apps', 'nexus'],
       eidoverse: ['nexus'],
     };
-    const affordances = activeFeatureIds
-      ? activeFeatureIds.filter((featureId) => (
-          featureDistricts[featureId]?.includes(district.id) || district.id === 'nexus'
-        ))
-      : (stateEntities[id]?.comp?.[COMPONENT_TYPE]?.affordances || []);
+    const affordances = activeFeatureIds.filter((featureId) => (
+      featureDistricts[featureId]?.includes(district.id) || district.id === 'nexus'
+    ));
     const component = {
       schemaVersion: 1,
       managedBy: 'portos',
@@ -431,18 +445,44 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
     });
   }
 
-  let liveEntityCount = 0;
+  const liveEntityLimit = Math.min(
+    effectiveRecipe.maxEntities ?? EIDOVERSE_MAX_LIVE_ENTITIES,
+    EIDOVERSE_MAX_LIVE_ENTITIES,
+  );
+  const unavailableKinds = new Set(EIDOVERSE_PROJECTION_KINDS
+    .filter(({ source: sourceKey }) => (
+      effectiveRecipe.includes[sourceKey] && !sourceAvailable(source, sourceKey)
+    ))
+    .map(({ kind }) => kind));
+  const staleCandidates = Object.keys(stateEntities)
+    .map((id) => ({ id, kind: signalKindFromEntityId(id) }))
+    .filter(({ kind }) => kind && unavailableKinds.has(kind))
+    .sort((left, right) => {
+      const legacyOrder = Number(left.id.startsWith(LEGACY_PROJECTION_ID_PREFIX))
+        - Number(right.id.startsWith(LEGACY_PROJECTION_ID_PREFIX));
+      return legacyOrder || left.id.localeCompare(right.id);
+    });
+  const retainedStaleCandidates = staleCandidates.slice(0, liveEntityLimit);
+  const retainedStaleIds = new Set(retainedStaleCandidates.map(({ id }) => id));
+  const overBudgetStaleIds = new Set(staleCandidates.slice(liveEntityLimit).map(({ id }) => id));
+  let liveEntityCount = retainedStaleIds.size;
   const districtCounts = Object.fromEntries(districts.map(({ id }) => [id, 0]));
+  for (const { kind } of retainedStaleCandidates) {
+    const sourceKey = EIDOVERSE_PROJECTION_KINDS.find((entry) => entry.kind === kind)?.source;
+    if (!sourceKey) continue;
+    const district = districtForSource(districts, sourceKey);
+    districtCounts[district.id] = (districtCounts[district.id] || 0) + 1;
+  }
   for (const { kind, source: sourceKey, slot } of EIDOVERSE_PROJECTION_KINDS) {
     const available = sourceAvailable(source, sourceKey);
     sourceAvailability[sourceKey] = available;
     if (!effectiveRecipe.includes[`${sourceKey}`]) {
-      removableKinds.add(kind);
       continue;
     }
     if (!available) {
       for (const [id, existing] of Object.entries(stateEntities)) {
         if (!id.startsWith(`${PROJECTION_ID_PREFIX}${kind}-`)) continue;
+        if (!retainedStaleIds.has(id)) continue;
         desiredIds.add(id);
         const priorComponent = existing?.comp?.[COMPONENT_TYPE] || {};
         const priorMetrics = priorComponent.metrics || {};
@@ -488,7 +528,6 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
       }
       continue;
     }
-    removableKinds.add(kind);
     if (!slot) continue;
     const values = kind === 'health' ? [source.health] : source[sourceKey];
     const normalized = values
@@ -498,7 +537,7 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
       .slice(0, effectiveRecipe.limits[sourceKey] ?? normalized.length)
       .sort((left, right) => left.id.localeCompare(right.id));
     for (const signal of limited) {
-      if (liveEntityCount >= Math.min(effectiveRecipe.maxEntities || EIDOVERSE_MAX_LIVE_ENTITIES, EIDOVERSE_MAX_LIVE_ENTITIES)) break;
+      if (liveEntityCount >= liveEntityLimit) break;
       const id = projectionEntityId(kind, signal.id);
       const pos = entityPosition(signal.id, sourceKey, districts);
       if (kind === 'goal' && typeof signal.metrics.progress === 'number') {
@@ -539,10 +578,8 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
     const isCurrentManaged = id.startsWith(EIDOVERSE_MANAGED_PREFIX);
     const isLegacyManaged = id.startsWith(LEGACY_PROJECTION_ID_PREFIX);
     if ((!isCurrentManaged && !isLegacyManaged) || desiredIds.has(id)) continue;
-    const kind = isLegacyManaged
-      ? id.slice(LEGACY_PROJECTION_ID_PREFIX.length).split('-')[0]
-      : (id.startsWith(PROJECTION_ID_PREFIX) ? id.slice(PROJECTION_ID_PREFIX.length).split('-')[0] : null);
-    if (kind && !removableKinds.has(kind)) continue;
+    const kind = signalKindFromEntityId(id);
+    if (kind && unavailableKinds.has(kind) && !overBudgetStaleIds.has(id)) continue;
     operations.push({ layer: 'reconciliation', verb: 'remove', args: { id } });
     removed += 1;
   }

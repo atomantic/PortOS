@@ -310,4 +310,19 @@ describe('Eidoverse World Design V2', () => {
       assets: { app: 'eidoverse/assets/models/example_app.glb' },
     })).toEqual({});
   });
+
+  it('does not pin key-reordered recipe arrays as user overrides', () => {
+    const recipe = structuredClone(EIDOVERSE_WORLD_DESIGN_V2);
+    recipe.districts = recipe.districts.map(({
+      accent, sources, anchor, landmark, direction, label, id,
+    }) => ({ accent, sources, anchor, landmark, direction, label, id }));
+    recipe.paths = recipe.paths.map(({ nodes, toDistrictId, label, id }) => ({
+      nodes, toDistrictId, label, id,
+    }));
+    recipe.environment.lights = recipe.environment.lights.map(({
+      day, keep, range, intensity, color, pos, id,
+    }) => ({ day, keep, range, intensity, color, pos, id }));
+
+    expect(extractEidoverseDesignOverrides(recipe)).toEqual({});
+  });
 });

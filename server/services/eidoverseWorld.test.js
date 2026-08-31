@@ -375,6 +375,40 @@ describe('Eidoverse PortOS projection plan', () => {
     }));
   });
 
+  it('reserves the live-entity budget for stale signals before projecting available sources', () => {
+    const recipe = structuredClone(DEFAULT_EIDOVERSE_PROJECTION_RECIPE);
+    recipe.limits.apps = 48;
+    recipe.limits.peers = 8;
+    const peers = Array.from({ length: 8 }, (_, index) => ({
+      id: `peer-${index}`,
+      status: 'online',
+    }));
+    const initial = buildProjectionPlan({
+      source: { ...emptySources(), peers },
+      recipe,
+    });
+    const apps = Array.from({ length: 48 }, (_, index) => ({
+      id: `app-${index}`,
+      status: 'online',
+    }));
+    const mixed = buildProjectionPlan({
+      source: { ...emptySources(), apps, peers: null },
+      recipe,
+      currentState: snapshotFromPlan(initial),
+    });
+    const appSpawns = mixed.operations.filter(({ verb, args }) => (
+      verb === 'spawn' && args.id.startsWith('portos-design-v2-signal-app-')
+    ));
+
+    expect(mixed.summary.liveEntityCount).toBe(48);
+    expect(mixed.summary.districtCounts).toMatchObject({ apps: 40, federation: 8 });
+    expect(appSpawns).toHaveLength(40);
+    expect(mixed.operations).not.toContainEqual(expect.objectContaining({
+      verb: 'remove',
+      args: expect.objectContaining({ id: expect.stringContaining('signal-peer-') }),
+    }));
+  });
+
   it('removes signals after a confirmed empty source read', () => {
     const created = buildProjectionPlan({ source: appSource(), currentState: currentEnvironment() });
     const appSpawn = signalSpawn(created, 'app');
@@ -515,6 +549,34 @@ describe('Eidoverse PortOS projection plan', () => {
     expect(districtComponents.get('goals').affordances).toEqual(['jira']);
     expect(districtComponents.get('nexus').affordances).toEqual(['datadog', 'jira']);
     expect(plan.summary.liveEntityCount).toBe(0);
+  });
+
+  it('honors feature inclusion and caps in district affordances and landmark scale', () => {
+    const source = {
+      ...emptySources(),
+      features: [
+        { id: 'datadog', enabled: true },
+        { id: 'jira', enabled: true },
+      ],
+    };
+    const excludedRecipe = structuredClone(DEFAULT_EIDOVERSE_PROJECTION_RECIPE);
+    excludedRecipe.includes.features = false;
+    const cappedRecipe = structuredClone(DEFAULT_EIDOVERSE_PROJECTION_RECIPE);
+    cappedRecipe.limits.features = 0;
+    const excluded = buildProjectionPlan({ source, recipe: excludedRecipe });
+    const capped = buildProjectionPlan({ source, recipe: cappedRecipe });
+    const empty = buildProjectionPlan({ source: { ...source, features: [] } });
+    const districtComponents = (plan) => plan.operations
+      .filter(({ verb, args }) => verb === 'comp' && args.data?.kind === 'district')
+      .map(({ args }) => args.data);
+    const appsLandmark = (plan) => plan.operations.find(({ verb, args }) => (
+      verb === 'spawn' && args.id === 'portos-design-v2-infra-apps'
+    ));
+
+    expect(districtComponents(excluded).every(({ affordances }) => affordances.length === 0)).toBe(true);
+    expect(districtComponents(capped).every(({ affordances }) => affordances.length === 0)).toBe(true);
+    expect(appsLandmark(excluded).args.scale).toBe(appsLandmark(empty).args.scale);
+    expect(appsLandmark(capped).args.scale).toBe(appsLandmark(empty).args.scale);
   });
 
   it('keeps authored architecture identical across installs while local signals differ', () => {
