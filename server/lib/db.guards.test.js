@@ -419,11 +419,10 @@ describe('DB-backed test files are covered by vitest.config.db.js', () => {
     const REPO_SCRIPTS = join(SERVER, '..', 'scripts');
 
     const hasDbGlob = DB_TEST_INCLUDE.includes('**/db.test.js');
-    // Match by basename — robust to the `../scripts/` relative-path prefix. The
-    // explicit include entries all have distinct basenames, so this can't
-    // false-match.
-    const explicitBasenames = new Set(
-      DB_TEST_INCLUDE.filter((p) => p !== '**/db.test.js').map((p) => p.split('/').pop()),
+    // Match normalized paths so two suites with the same basename in different
+    // directories remain independently covered by the explicit include list.
+    const explicitIncludes = new Set(
+      DB_TEST_INCLUDE.filter((p) => p !== '**/db.test.js').map((p) => p.split('/').join(sep)),
     );
 
     // The checkHealth + dbReady gating always sits in a suite's first ~40 lines,
@@ -472,7 +471,8 @@ describe('DB-backed test files are covered by vitest.config.db.js', () => {
         const head = readHead(join(root, rel));
         // A real DB-backed suite both gates on checkHealth() and exposes dbReady.
         if (!(/\bcheckHealth\b/.test(head) && /\bdbReady\b/.test(head))) continue;
-        const covered = (hasDbGlob && base === 'db.test.js') || explicitBasenames.has(base);
+        const relativePath = prefix ? join('..', 'scripts', rel) : rel;
+        const covered = (hasDbGlob && base === 'db.test.js') || explicitIncludes.has(relativePath);
         if (!covered) offenders.push(prefix + rel.split(sep).join('/'));
       }
     }
