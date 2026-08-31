@@ -307,6 +307,17 @@ export function extractEidoverseDesignOverrides(recipe) {
   return diffLeaves(mergeDesign(EIDOVERSE_WORLD_DESIGN_V2, candidate), EIDOVERSE_WORLD_DESIGN_V2) || {};
 }
 
+const validLibraryPath = (path) => typeof path === 'string'
+  && path.startsWith(EIDOVERSE_LIBRARY_MODEL_ROOT)
+  && !path.includes('..')
+  && path.toLowerCase().endsWith('.glb');
+
+export const isValidEidoverseAssetOverridePath = (path) => validLibraryPath(path) || (
+  typeof path === 'string'
+  && /^store\/[A-Za-z0-9._/-]+$/.test(path)
+  && !path.includes('..')
+);
+
 function v1OverridesForV2(legacyRecipe) {
   const legacy = mergeDesign(EIDOVERSE_WORLD_DESIGN_V1, legacyRecipe || {});
   const v1Diff = diffLeaves(legacy, EIDOVERSE_WORLD_DESIGN_V1) || {};
@@ -315,13 +326,27 @@ function v1OverridesForV2(legacyRecipe) {
     if (v1Diff[section]) overrides[section] = clone(v1Diff[section]);
   }
   if (v1Diff.terrain) overrides.environment = { terrain: clone(v1Diff.terrain) };
-  if (v1Diff.assets) overrides.assets = clone(v1Diff.assets);
+  let unportableAssets;
+  if (isObject(v1Diff.assets)) {
+    const entries = Object.entries(v1Diff.assets);
+    const portable = entries.filter(([, path]) => isValidEidoverseAssetOverridePath(path));
+    if (portable.length) {
+      overrides.assets = Object.fromEntries(portable.map(([key, path]) => [key, clone(path)]));
+    }
+    const rejected = entries.filter(([, path]) => !isValidEidoverseAssetOverridePath(path));
+    if (rejected.length) {
+      unportableAssets = Object.fromEntries(rejected.map(([key, path]) => [key, clone(path)]));
+    }
+  } else if (v1Diff.assets !== undefined) {
+    unportableAssets = clone(v1Diff.assets);
+  }
   // V1's lane geometry and any unknown legacy extension have no safe semantic
   // translation to districts. Preserve their exact values in the report
   // instead of silently distorting the V2 garden or losing customization.
   const unsupportedOverrides = Object.fromEntries(Object.entries(v1Diff)
     .filter(([section]) => !['includes', 'limits', 'scale', 'terrain', 'assets'].includes(section))
     .map(([section, value]) => [section, clone(value)]));
+  if (unportableAssets !== undefined) unsupportedOverrides.assets = unportableAssets;
   return { overrides, unsupportedOverrides };
 }
 
@@ -524,17 +549,6 @@ const tokenized = (value) => String(value || '')
   .replace(/\.[a-z0-9]+$/i, '')
   .split(/[^a-z0-9]+/)
   .filter(Boolean);
-
-const validLibraryPath = (path) => typeof path === 'string'
-  && path.startsWith(EIDOVERSE_LIBRARY_MODEL_ROOT)
-  && !path.includes('..')
-  && path.toLowerCase().endsWith('.glb');
-
-export const isValidEidoverseAssetOverridePath = (path) => validLibraryPath(path) || (
-  typeof path === 'string'
-  && /^store\/[A-Za-z0-9._/-]+$/.test(path)
-  && !path.includes('..')
-);
 
 const contractFingerprint = (value) => createHash('sha256')
   .update(canonicalStringify(value))

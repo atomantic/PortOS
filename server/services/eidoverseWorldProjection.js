@@ -480,9 +480,10 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
     const values = kind === 'health' ? [source.health] : source[sourceKey];
     const normalized = values
       .filter(Boolean)
-      .map((item) => worldSignal(kind, sourceKey, item))
+      .map((item) => worldSignal(kind, sourceKey, item));
+    const limited = normalized
+      .slice(0, effectiveRecipe.limits[sourceKey] ?? normalized.length)
       .sort((left, right) => left.id.localeCompare(right.id));
-    const limited = normalized.slice(0, effectiveRecipe.limits[sourceKey] ?? normalized.length);
     for (const signal of limited) {
       if (liveEntityCount >= Math.min(effectiveRecipe.maxEntities || EIDOVERSE_MAX_LIVE_ENTITIES, EIDOVERSE_MAX_LIVE_ENTITIES)) break;
       const id = projectionEntityId(kind, signal.id);

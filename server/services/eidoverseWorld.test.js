@@ -295,20 +295,56 @@ describe('Eidoverse PortOS projection plan', () => {
     expect(JSON.stringify({ storage, jira })).not.toMatch(/private_table|private-domain|PRIVATE-|customer work|private item/i);
   });
 
-  it('caps live signals at 48 and keeps placement stable when source order changes', () => {
-    const apps = Array.from({ length: 80 }, (_, index) => ({ id: `app-${index}`, label: `Example app ${index}` }));
+  it('caps live signals at 48 and keeps uncapped placement stable when source order changes', () => {
+    const cappedApps = Array.from({ length: 80 }, (_, index) => ({ id: `app-${index}`, label: `Example app ${index}` }));
+    const stableApps = cappedApps.slice(0, 40);
     const recipe = {
       ...DEFAULT_EIDOVERSE_PROJECTION_RECIPE,
       limits: { ...DEFAULT_EIDOVERSE_PROJECTION_RECIPE.limits, apps: 100 },
     };
-    const first = buildProjectionPlan({ source: { ...emptySources(), apps }, recipe });
-    const second = buildProjectionPlan({ source: { ...emptySources(), apps: [...apps].reverse() }, recipe });
+    const capped = buildProjectionPlan({ source: { ...emptySources(), apps: cappedApps }, recipe });
+    const first = buildProjectionPlan({ source: { ...emptySources(), apps: stableApps }, recipe });
+    const second = buildProjectionPlan({ source: { ...emptySources(), apps: [...stableApps].reverse() }, recipe });
     const appPlaces = (plan) => plan.operations
       .filter((operation) => operation.verb === 'spawn' && operation.args.id.includes('signal-app-'))
       .map(({ args }) => [args.id, args.pos]);
 
-    expect(first.summary.liveEntityCount).toBe(48);
+    expect(capped.summary.liveEntityCount).toBe(48);
     expect(appPlaces(second)).toEqual(appPlaces(first));
+  });
+
+  it('keeps source-adapter priority before applying per-source caps', () => {
+    const plan = buildProjectionPlan({
+      source: {
+        ...emptySources(),
+        activity: [
+          { id: 'summary', activeDays: 7 },
+          { id: 'day-latest', tasks: 5 },
+          { id: 'day-second', tasks: 4 },
+          { id: 'day-third', tasks: 3 },
+        ],
+        memory: [
+          { id: 'largest', count: 10 },
+          { id: 'second-largest', count: 9 },
+          { id: 'third-largest', count: 8 },
+          { id: 'smallest', count: 1 },
+        ],
+      },
+      currentState: currentEnvironment(),
+    });
+    const components = plan.operations
+      .filter(({ verb, args }) => verb === 'comp' && args.type === 'portos')
+      .map(({ args }) => args.data);
+    const activity = components.filter(({ kind }) => kind === 'activity');
+    const memory = components.filter(({ kind }) => kind === 'memory');
+
+    expect(activity).toHaveLength(3);
+    expect(activity).toEqual(expect.arrayContaining([
+      expect.objectContaining({ metrics: expect.objectContaining({ activeDays: 7 }) }),
+      expect.objectContaining({ metrics: expect.objectContaining({ tasks: 5 }) }),
+      expect.objectContaining({ metrics: expect.objectContaining({ tasks: 4 }) }),
+    ]));
+    expect(memory.map(({ metrics }) => metrics.count).sort((left, right) => left - right)).toEqual([8, 9, 10]);
   });
 
   it('turns goal progress into observable constellation height', () => {

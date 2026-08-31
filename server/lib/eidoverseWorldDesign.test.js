@@ -82,6 +82,27 @@ describe('Eidoverse World Design V2', () => {
     });
   });
 
+  it('reports unportable V1 asset paths without activating a blocking V2 override', () => {
+    const portable = 'eidoverse/assets/models/example-custom.glb';
+    const unportable = 'eidoverse/assets/legacy/example-custom.obj';
+    const migrated = migrateEidoverseWorldState({
+      schemaVersion: 1,
+      recipe: {
+        ...EIDOVERSE_WORLD_DESIGN_V1,
+        assets: {
+          ...EIDOVERSE_WORLD_DESIGN_V1.assets,
+          app: portable,
+          feature: unportable,
+        },
+      },
+    });
+
+    expect(migrated.state.userOverrides.assets).toEqual({ app: portable });
+    expect(migrated.state.recipe.assets).toEqual({ app: portable });
+    expect(migrated.report.unsupportedOverrides.assets).toEqual({ feature: unportable });
+    expect(migrated.report.preservedOverrides).toContain('assets.app');
+  });
+
   it('retires only an automatic machine-derived V1 identity during migration', () => {
     const migrated = migrateEidoverseWorldState({
       schemaVersion: 1,
