@@ -146,6 +146,9 @@ describe('Eidoverse hosted page', () => {
     expect(frame).toHaveAttribute('src', `http://${window.location.hostname}:8940/?world=portos&name=example-portos-user`);
     const overlayHeading = await screen.findByText('Your PortOS, made spatial');
     expect(overlayHeading.closest('section')).toHaveClass('port-media-overlay');
+    expect(screen.getByText(/The Nexus is system health/)).toHaveClass('text-port-text-muted');
+    expect(screen.getByText('Design V2').parentElement).toHaveClass('text-port-text-muted');
+    expect(screen.getByText(/Steady = current/)).toHaveClass('text-port-text-muted');
     expect(screen.getByRole('button', { name: 'Refresh world' }))
       .toHaveClass('port-media-overlay-strong', 'port-media-overlay-item');
     expect(screen.getByRole('button', { name: 'Refresh world' }))
@@ -387,7 +390,7 @@ describe('Eidoverse hosted page', () => {
     await screen.findByTitle('Eidoverse Worlds');
     await user.click(screen.getByRole('button', { name: 'World controls' }));
     await user.click(screen.getByRole('tab', { name: 'Districts & Data' }));
-    await user.click(screen.getAllByRole('button', { name: 'Reset district' })[1]);
+    await user.click(screen.getByRole('button', { name: 'Reset App Terraces' }));
 
     await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledWith(
       { reset: { scope: 'district', districtId: 'apps' } },
@@ -403,7 +406,7 @@ describe('Eidoverse hosted page', () => {
     await screen.findByTitle('Eidoverse Worlds');
     await user.click(screen.getByRole('button', { name: 'World controls' }));
     await user.click(screen.getByRole('tab', { name: 'Districts & Data' }));
-    await user.click(screen.getAllByRole('button', { name: 'Reset district' })[1]);
+    await user.click(screen.getByRole('button', { name: 'Reset App Terraces' }));
     await user.click(screen.getByRole('tab', { name: 'Experience' }));
 
     const nameInput = screen.getByLabelText('My Eidoverse name');
@@ -430,7 +433,7 @@ describe('Eidoverse hosted page', () => {
     const appsLimit = within(appsSection).getByRole('spinbutton', { name: 'Cap' });
     await user.clear(appsLimit);
     await user.type(appsLimit, '5');
-    await user.click(within(appsSection).getByRole('button', { name: 'Reset district' }));
+    await user.click(within(appsSection).getByRole('button', { name: 'Reset App Terraces' }));
 
     await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledWith(
       { reset: { scope: 'district', districtId: 'apps' } },

@@ -497,10 +497,10 @@ export default function Eidoverse() {
                 </span>
               </div>
               <h2 className="mt-3 text-base font-semibold sm:text-lg">Your PortOS, made spatial</h2>
-              <p className="mt-1 hidden text-xs leading-5 text-slate-300 sm:block">
+              <p className="mt-1 hidden text-xs leading-5 text-port-text-muted sm:block">
                 The Nexus is system health. Eight districts turn bounded app signals into places, motion, and light—without copying raw records into the world.
               </p>
-              <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-400">
+              <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-port-text-muted">
                 <span>Design V{design.selectedVersion || recipeDraft?.version}</span>
                 <span>{summary.liveEntityCount ?? 0}/{design.maxEntities || 48} live signals</span>
                 <span>{worldState?.presence?.connected ? 'CoS connected' : 'CoS ready'}</span>
@@ -542,7 +542,7 @@ export default function Eidoverse() {
           )}
 
           <section className="pointer-events-auto absolute inset-x-0 bottom-0 overflow-x-auto p-3 sm:p-4" aria-label="PortOS district legend">
-            <div className="port-media-overlay mb-2 ml-auto w-fit rounded-full border border-port-border px-3 py-1 text-[10px] text-gray-300">
+            <div className="port-media-overlay mb-2 ml-auto w-fit rounded-full border border-port-border px-3 py-1 text-[10px] text-port-text-muted">
               Steady = current · slow bob = stale · raised pulse = attention · high fast pulse = error
             </div>
             <div className="port-media-overlay flex min-w-max gap-2 rounded-2xl border border-port-border p-2 shadow-2xl sm:grid sm:min-w-0 sm:grid-cols-4 lg:grid-cols-8">

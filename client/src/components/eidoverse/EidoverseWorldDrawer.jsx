@@ -160,7 +160,13 @@ export default function EidoverseWorldDrawer({
               </div>
               <p className="mt-1 text-xs text-gray-500">{district.direction} · {district.landmark}</p>
             </div>
-            <button type="button" className={secondaryButton} disabled={busy} onClick={() => onReset('district', district.id)}>
+            <button
+              type="button"
+              className={secondaryButton}
+              aria-label={`Reset ${district.label}`}
+              disabled={busy}
+              onClick={() => onReset('district', district.id)}
+            >
               Reset district
             </button>
           </div>

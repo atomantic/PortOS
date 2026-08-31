@@ -468,18 +468,47 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
       effectiveRecipe.includes[sourceKey] && !sourceAvailable(source, sourceKey)
     ))
     .map(({ kind }) => kind));
+  for (const { source: sourceKey } of EIDOVERSE_PROJECTION_KINDS) {
+    sourceAvailability[sourceKey] = sourceAvailable(source, sourceKey);
+  }
   const staleCandidates = Object.keys(stateEntities)
     .map((id) => ({ id, kind: signalKindFromEntityId(id) }))
     .filter(({ kind }) => kind && unavailableKinds.has(kind))
     .sort((left, right) => left.id.localeCompare(right.id));
   const staleBuckets = EIDOVERSE_PROJECTION_KINDS
-    .filter(({ kind }) => unavailableKinds.has(kind))
-    .map(({ kind }) => ({
+    .filter(({ kind, slot }) => unavailableKinds.has(kind) && slot)
+    .map(({ kind, source: sourceKey }) => ({
       key: kind,
-      values: staleCandidates.filter((candidate) => candidate.kind === kind),
+      kind,
+      sourceKey,
+      values: staleCandidates
+        .filter((candidate) => candidate.kind === kind)
+        .slice(0, effectiveRecipe.limits[sourceKey] ?? staleCandidates.length),
     }));
-  const selectedStale = allocateRoundRobin(staleBuckets, liveEntityLimit);
-  const retainedStaleCandidates = staleBuckets.flatMap(({ key }) => selectedStale.get(key) || []);
+
+  const liveBuckets = [];
+  for (const { kind, source: sourceKey, slot } of EIDOVERSE_PROJECTION_KINDS) {
+    const available = sourceAvailable(source, sourceKey);
+    if (!effectiveRecipe.includes[sourceKey] || !available || !slot) continue;
+    const values = kind === 'health' ? [source.health] : source[sourceKey];
+    const normalized = values
+      .filter(Boolean)
+      .map((item) => worldSignal(kind, sourceKey, item, districts));
+    liveBuckets.push({
+      key: kind,
+      kind,
+      sourceKey,
+      values: normalized
+        .slice(0, effectiveRecipe.limits[sourceKey] ?? normalized.length)
+        .sort((left, right) => left.id.localeCompare(right.id)),
+    });
+  }
+  const bucketsByKind = new Map([...staleBuckets, ...liveBuckets].map((bucket) => [bucket.kind, bucket]));
+  const signalBuckets = EIDOVERSE_PROJECTION_KINDS
+    .map(({ kind }) => bucketsByKind.get(kind))
+    .filter(Boolean);
+  const selectedSignals = allocateRoundRobin(signalBuckets, liveEntityLimit);
+  const retainedStaleCandidates = staleBuckets.flatMap(({ key }) => selectedSignals.get(key) || []);
   const retainedStaleIds = new Set(retainedStaleCandidates.map(({ id }) => id));
   const overBudgetStaleIds = new Set(staleCandidates
     .filter(({ id }) => !retainedStaleIds.has(id))
@@ -493,33 +522,8 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
     const district = districtForSource(districts, sourceKey);
     districtCounts[district.id] = (districtCounts[district.id] || 0) + 1;
   }
-  for (const { kind, source: sourceKey } of EIDOVERSE_PROJECTION_KINDS) {
-    const dropped = staleCandidates.filter((candidate) => candidate.kind === kind && overBudgetStaleIds.has(candidate.id)).length;
-    if (dropped > 0) droppedBySource[sourceKey] = dropped;
-  }
-
-  const liveBuckets = [];
-  for (const { kind, source: sourceKey, slot } of EIDOVERSE_PROJECTION_KINDS) {
-    const available = sourceAvailable(source, sourceKey);
-    sourceAvailability[sourceKey] = available;
-    if (!effectiveRecipe.includes[sourceKey] || !available || !slot) continue;
-    const values = kind === 'health' ? [source.health] : source[sourceKey];
-    const normalized = values
-      .filter(Boolean)
-      .map((item) => worldSignal(kind, sourceKey, item, districts));
-    liveBuckets.push({
-      key: kind,
-      kind,
-      sourceKey,
-      slot,
-      values: normalized
-        .slice(0, effectiveRecipe.limits[sourceKey] ?? normalized.length)
-        .sort((left, right) => left.id.localeCompare(right.id)),
-    });
-  }
-  const selectedLive = allocateRoundRobin(liveBuckets, Math.max(0, liveEntityLimit - liveEntityCount));
-  for (const { key, sourceKey, values } of liveBuckets) {
-    const dropped = values.length - (selectedLive.get(key)?.length || 0);
+  for (const { key, sourceKey, values } of signalBuckets) {
+    const dropped = values.length - (selectedSignals.get(key)?.length || 0);
     if (dropped > 0) droppedBySource[sourceKey] = (droppedBySource[sourceKey] || 0) + dropped;
   }
 
@@ -578,7 +582,7 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
       continue;
     }
     if (!slot) continue;
-    for (const signal of selectedLive.get(kind) || []) {
+    for (const signal of selectedSignals.get(kind) || []) {
       const id = projectionEntityId(kind, signal.id);
       const pos = entityPosition(signal.id, sourceKey, districts);
       if (kind === 'goal' && typeof signal.metrics.progress === 'number') {

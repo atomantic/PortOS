@@ -141,9 +141,9 @@ titles, machine/peer identities, or federation records in the Eidoverse log.
 The default per-family caps sum below the hard global ceiling, and a user-edited
 recipe still cannot materialize more than 48 live PortOS signals.
 When authored caps would exceed that ceiling, PortOS allocates one signal per
-available source before filling additional slots in deterministic rounds. The
-drawer reports the exact per-source omissions instead of showing a populated
-source count beside an unexplained empty district.
+included current-or-stale source before filling additional slots in
+deterministic rounds. The drawer reports the exact per-source omissions instead
+of showing a populated source count beside an unexplained empty district.
 
 Only ids under `portos-design-v2-*` and the retired V1
 `portos-projection-*` namespace are reconciled. Unrelated Eidoverse entities are

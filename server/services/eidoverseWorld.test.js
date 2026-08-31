@@ -402,7 +402,7 @@ describe('Eidoverse PortOS projection plan', () => {
     }));
   });
 
-  it('reserves the live-entity budget for stale signals before projecting available sources', () => {
+  it('keeps stale signals inside the shared live-entity budget', () => {
     const recipe = structuredClone(DEFAULT_EIDOVERSE_PROJECTION_RECIPE);
     recipe.limits.apps = 48;
     recipe.limits.peers = 8;
@@ -434,6 +434,44 @@ describe('Eidoverse PortOS projection plan', () => {
       verb: 'remove',
       args: expect.objectContaining({ id: expect.stringContaining('signal-peer-') }),
     }));
+  });
+
+  it('shares the budget between unavailable stale sources and current sources', () => {
+    const recipe = structuredClone(DEFAULT_EIDOVERSE_PROJECTION_RECIPE);
+    recipe.limits.apps = 48;
+    for (const sourceKey of Object.keys(recipe.limits)) recipe.limits[sourceKey] = Math.max(3, recipe.limits[sourceKey]);
+    const apps = Array.from({ length: 48 }, (_, index) => ({ id: `app-${index}`, status: 'online' }));
+    const initial = buildProjectionPlan({ source: { ...emptySources(), apps }, recipe });
+    const rows = (prefix) => Array.from({ length: 3 }, (_, index) => ({ id: `${prefix}-${index}`, status: 'active' }));
+    const mixed = buildProjectionPlan({
+      recipe,
+      source: {
+        ...emptySources(),
+        apps: null,
+        agents: rows('agent'),
+        tasks: rows('task'),
+        peers: rows('peer'),
+        health: { id: 'overview', status: 'healthy' },
+        productivity: rows('productivity'),
+        activity: rows('activity'),
+        goals: rows('goal'),
+        memory: rows('memory'),
+        storage: rows('storage'),
+        jira: rows('jira'),
+        operations: rows('operations'),
+      },
+      currentState: snapshotFromPlan(initial),
+    });
+
+    expect(mixed.summary.liveEntityCount).toBe(48);
+    expect(mixed.summary.districtCounts.apps).toBeGreaterThan(0);
+    expect(Object.entries(mixed.summary.districtCounts)
+      .filter(([district]) => district !== 'apps')
+      .every(([, count]) => count > 0)).toBe(true);
+    expect(mixed.summary.droppedBySource.apps).toBeGreaterThan(0);
+    expect(mixed.operations.some(({ verb, args }) => (
+      verb === 'spawn' && args.id.startsWith('portos-design-v2-signal-goal-')
+    ))).toBe(true);
   });
 
   it('shares a saturated live budget across every available semantic source', () => {
