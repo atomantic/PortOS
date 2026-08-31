@@ -256,7 +256,7 @@ jobs:
         run: npm run smoke
 
       - name: Cancel sibling CI jobs after failure
-        if: failure()
+        if: failure() && github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/cancel-current-ci-run.js
@@ -321,7 +321,7 @@ jobs:
         run: npm run build --prefix client
 
       - name: Cancel sibling CI jobs after failure
-        if: failure()
+        if: failure() && github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/cancel-current-ci-run.js
@@ -464,7 +464,7 @@ jobs:
           PGDATABASE: portos_test
 
       - name: Cancel sibling CI jobs after failure
-        if: failure()
+        if: failure() && github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/cancel-current-ci-run.js
@@ -591,7 +591,7 @@ jobs:
         run: node scripts/run-ci-tests.js server
 
       - name: Cancel sibling CI jobs after failure
-        if: failure()
+        if: failure() && github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/cancel-current-ci-run.js

@@ -38,8 +38,11 @@ const PRE_INSTALL_ENTRYPOINTS = ['scripts/ci-base-sha.js', 'scripts/ci-test-plan
  * module-resolution stack trace instead. Its `pg` import is a dynamic
  * `import()` inside the database probe for the same reason, which is why it
  * does not show up in this static walk.
+ *
+ * `cancel-current-ci-run.js` is here because it runs from an `if: failure()`
+ * workflow step that may fire before or during a failed dependency install.
  */
-const BARE_CHECKOUT_SCRIPTS = ['scripts/doctor.js'];
+const BARE_CHECKOUT_SCRIPTS = ['scripts/cancel-current-ci-run.js', 'scripts/doctor.js'];
 
 const BUILTINS = new Set(builtinModules);
 const isBuiltin = (specifier) => BUILTINS.has(specifier.replace(/^node:/, ''));

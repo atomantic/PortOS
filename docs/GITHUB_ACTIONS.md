@@ -263,8 +263,12 @@ Changes to CI/test configuration also force the full suite on their own PR.
 ### Fail-fast sibling cancellation
 
 Each selected leaf job (`server`, `client`, `database`, and
-`windows-server`) ends with an `if: failure()` step that asks GitHub to cancel
-the current workflow run. The request uses the repository-owned
+`windows-server`) ends with an `if: failure() && github.event_name ==
+'pull_request'` step that asks GitHub to cancel the current pull-request
+workflow run. The event guard is important because the same workflow is reused
+by the release workflow: a failing reusable `full-ci` job must not cancel its
+parent release run before that workflow can report the release failure. The
+request uses the repository-owned
 `scripts/cancel-current-ci-run.js` helper and the standard workflow-run cancel
 endpoint. The helper accepts no repository or run arguments: it validates and
 uses only `GITHUB_REPOSITORY` and `GITHUB_RUN_ID` supplied by Actions, with the
@@ -281,11 +285,17 @@ Cancellation is deliberately best-effort. Fork pull requests and other
 read-only-token runs may receive a permission failure, and transient API or
 network failures are also possible. The helper logs the unavailable
 cancellation and exits normally, preserving the original failed step and its
-failed job result. `CI Gate` still allows only `success` or `skipped` results;
-failed or canceled leaf jobs therefore cannot satisfy the required aggregate
-context. The target is for siblings to become canceled within 30 seconds of
-the first failing job completing, while the existing workflow-level
-concurrency cancellation continues to handle newer runs independently.
+failed job result when the API is unavailable. When cancellation succeeds, the
+run-wide cancellation can mark the requesting job and `CI Gate` as canceled;
+the failed step's log and annotations remain the diagnostic evidence, and a
+canceled result is still non-mergeable. `CI Gate` allows only `success` or
+`skipped` results; failed or canceled leaf jobs therefore cannot satisfy the
+required aggregate context. The target is for siblings to become canceled
+within 30 seconds of the first failing job completing, while the existing
+workflow-level concurrency cancellation continues to handle newer runs
+independently. Scheduled, manually dispatched, and release-called runs skip
+this sibling cancellation so their aggregate diagnostics and cache post-steps
+can complete normally.
 
 ### Impact-planner safety rules
 

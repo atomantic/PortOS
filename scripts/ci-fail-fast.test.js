@@ -10,7 +10,7 @@ const LEAF_JOBS = ['server', 'client', 'database', 'windows-server'];
 const NON_LEAF_JOBS = ['impact', 'gate', 'full-gate'];
 const FAIL_FAST_STEP = [
   '      - name: Cancel sibling CI jobs after failure',
-  '        if: failure()',
+  "        if: failure() && github.event_name == 'pull_request'",
   '        env:',
   '          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}',
   '        run: node scripts/cancel-current-ci-run.js',
