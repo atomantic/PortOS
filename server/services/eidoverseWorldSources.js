@@ -156,7 +156,10 @@ function projectedActivity(calendar) {
     .flatMap((week) => Array.isArray(week) ? week : [])
     .filter((day) => day && typeof day === 'object' && day.isFuture !== true);
   const today = days.find((day) => day.isToday === true);
-  const activeDays = days.filter((day) => (nonNegativeOrNull(day.tasks) || 0) > 0).slice(-99);
+  const activeDays = days
+    .filter((day) => (nonNegativeOrNull(day.tasks) || 0) > 0)
+    .slice(-99)
+    .reverse();
   const summary = calendar.summary || {};
   return [
     {

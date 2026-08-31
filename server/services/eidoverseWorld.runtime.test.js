@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   rejectedVerb: false,
   appStatuses: [],
   appStatusReads: 0,
+  featureEnabled: true,
   eidoverseStatus: {
     installed: true,
     runtimeStatus: 'online',
@@ -57,6 +58,12 @@ vi.mock('./apps.js', () => ({
 vi.mock('./eidoverse.js', () => ({
   EIDOVERSE_PORT: 8940,
   getEidoverseStatus: vi.fn(async () => structuredClone(mocks.eidoverseStatus)),
+}));
+
+vi.mock('./instanceFeatures.js', () => ({
+  getInstanceFeatures: vi.fn(async () => ({
+    features: [{ id: 'eidoverse', enabled: mocks.featureEnabled }],
+  })),
 }));
 
 vi.mock('ws', () => {
@@ -121,6 +128,7 @@ vi.mock('ws', () => {
           actor: this.identity,
           verb: message.verb,
           args: structuredClone(message.args),
+          sentAt: Date.now(),
         });
         queueMicrotask(() => callback?.(null));
         if (message.verb === mocks.rejectVerb && !mocks.rejectedVerb) {
@@ -176,6 +184,7 @@ beforeEach(async () => {
   mocks.rejectedVerb = false;
   mocks.appStatuses = [];
   mocks.appStatusReads = 0;
+  mocks.featureEnabled = true;
   mocks.eidoverseStatus = {
     installed: true,
     runtimeStatus: 'online',
@@ -216,6 +225,25 @@ describe('Eidoverse private-world lifecycle', () => {
     await expect(world.reconcilePendingEidoverseWorld()).resolves.toEqual({
       reconciled: false,
       reason: 'current',
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(mocks.sent).toEqual([]);
+    expect(mocks.persistedState.pendingDesignVersion).toBe(2);
+  });
+
+  it('leaves a pending upgrade untouched when the Eidoverse feature is disabled', async () => {
+    await world.ensureEidoverseWorldConfig();
+    mocks.persistedState.lastAppliedDesignVersion = 1;
+    mocks.persistedState.migrationReport = {
+      status: 'ready',
+      fromDesignVersion: 1,
+      toDesignVersion: 2,
+    };
+    mocks.featureEnabled = false;
+
+    await expect(world.reconcilePendingEidoverseWorld()).resolves.toEqual({
+      reconciled: false,
+      reason: 'feature-disabled',
     });
     expect(fetch).not.toHaveBeenCalled();
     expect(mocks.sent).toEqual([]);
@@ -303,6 +331,29 @@ describe('Eidoverse private-world lifecycle', () => {
         },
       },
     });
+  });
+
+  it('persists every writable field accepted in a V2 recipe submission', async () => {
+    const recipe = structuredClone(world.DEFAULT_EIDOVERSE_PROJECTION_RECIPE);
+    recipe.name = 'Example Systems Garden';
+    recipe.maxEntities = 12;
+    recipe.districts[0].label = 'Example Nexus';
+    recipe.paths[0].label = 'Example Route';
+
+    const updated = await world.updateEidoverseWorldConfig({ recipe });
+
+    expect(updated.design.userOverrides).toMatchObject({
+      name: 'Example Systems Garden',
+      maxEntities: 12,
+    });
+    expect(updated.design.userOverrides.districts[0].label).toBe('Example Nexus');
+    expect(updated.design.userOverrides.paths[0].label).toBe('Example Route');
+    expect(updated.recipe).toMatchObject({
+      name: 'Example Systems Garden',
+      maxEntities: 12,
+    });
+    expect(updated.recipe.districts[0].label).toBe('Example Nexus');
+    expect(updated.recipe.paths[0].label).toBe('Example Route');
   });
 
   it('retires the prior human owner when the world and human identity change together', async () => {
@@ -447,6 +498,7 @@ describe('Eidoverse private-world lifecycle', () => {
     const firstEnvironment = authoredVerbs.findIndex(({ verb }) => verb === 'terrain');
     expect(firstInfrastructure).toBeGreaterThanOrEqual(0);
     expect(firstEnvironment).toBeGreaterThan(firstInfrastructure);
+    expect(authoredVerbs[firstEnvironment].sentAt - authoredVerbs[firstEnvironment - 1].sentAt).toBeGreaterThanOrEqual(4);
   });
 
   it('excludes a catalog-listed asset whose bytes disappeared and locks a verified fallback', async () => {

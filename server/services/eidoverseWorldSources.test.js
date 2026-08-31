@@ -158,6 +158,23 @@ describe('Eidoverse world source aggregation', () => {
     expect(JSON.stringify(result.apps)).not.toContain('Example Secret');
   });
 
+  it('orders recent active days first after the activity summary', async () => {
+    sources.activityCalendar = {
+      weeks: [[
+        { date: '2026-01-01', tasks: 1, successes: 1 },
+        { date: '2026-01-02', tasks: 0, successes: 0 },
+        { date: '2026-01-03', tasks: 3, successes: 2, isToday: true },
+      ]],
+      summary: { activeDays: 2, totalTasks: 4, totalSuccesses: 3 },
+      maxTasks: 3,
+    };
+
+    const result = await collectEidoverseWorldSources();
+
+    expect(result.activity[0]).toMatchObject({ id: 'summary', activeDays: 2 });
+    expect(result.activity.slice(1).map(({ tasks }) => tasks)).toEqual([3, 1]);
+  });
+
   it('emits a bounded productivity aggregate rather than task records', async () => {
     sources.todayActivity = {
       stats: { completed: 3, succeeded: 2, failed: 1, successRate: 67 },

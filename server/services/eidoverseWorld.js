@@ -16,6 +16,7 @@ import { createMutex } from '../lib/asyncMutex.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { canonicalStringify } from '../lib/objects.js';
 import { getSelf, ensureSelf } from './instances.js';
+import { getInstanceFeatures } from './instanceFeatures.js';
 import { getEidoverseStatus, EIDOVERSE_PORT } from './eidoverse.js';
 import {
   EIDOVERSE_ASSET_SLOTS_BY_DISTRICT,
@@ -1210,12 +1211,19 @@ async function resolveAndLockAssets(config, { signal } = {}) {
   return persistAssetLock(result.resolutions, runtimeVersion);
 }
 
-async function sendOperations(connection, operations, { signal, onApplied } = {}) {
-  for (let index = 0; index < operations.length; index += 1) {
+async function sendOperations(connection, operations, {
+  signal,
+  onApplied,
+  pacing = { lastVerbSentAt: null },
+} = {}) {
+  for (const operation of operations) {
     throwIfAborted(signal);
-    if (index > 0) await abortableDelay(PROJECTION_VERB_INTERVAL_MS, signal);
-    const operation = operations[index];
+    if (pacing.lastVerbSentAt !== null) {
+      const wait = PROJECTION_VERB_INTERVAL_MS - (Date.now() - pacing.lastVerbSentAt);
+      if (wait > 0) await abortableDelay(wait, signal);
+    }
     await connection.sendVerb(operation.verb, operation.args, { signal });
+    pacing.lastVerbSentAt = Date.now();
     onApplied?.(operation);
   }
 }
@@ -1348,11 +1356,13 @@ async function applyProjectionPlan(presence, plan, { signal, freshInstall = fals
     stage,
     plan.operations.filter((operation) => operation.layer === stage),
   ]);
+  const pacing = { lastVerbSentAt: null };
   const execution = stages.reduce((promise, [stage, operations]) => promise.then(async () => {
     if (operations.length === 0) return;
     await recordReconciliationCheckpoint({ checkpoint: `applying-${stage}` });
     await sendOperations(presence.connection, operations, {
       signal,
+      pacing,
       onApplied: (operation) => applied.push(operation),
     });
     await recordReconciliationCheckpoint({
@@ -1502,6 +1512,10 @@ export async function projectEidoverseWorld({ signal } = {}) {
  * the pending checkpoint remains visible for the page to remediate later.
  */
 export async function reconcilePendingEidoverseWorld() {
+  const { features } = await getInstanceFeatures();
+  if (features.find(({ id }) => id === 'eidoverse')?.enabled !== true) {
+    return { reconciled: false, reason: 'feature-disabled' };
+  }
   const [setup, state] = await Promise.all([getEidoverseStatus(), loadState()]);
   if (state.pendingDesignVersion !== EIDOVERSE_WORLD_DESIGN_VERSION
     || (state.lastAppliedDesignVersion === null && !state.migrationReport)) {

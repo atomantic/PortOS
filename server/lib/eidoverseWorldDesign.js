@@ -301,7 +301,7 @@ export function extractEidoverseDesignOverrides(recipe) {
   // status responses. It is not a user override merely because the client
   // round-tripped the effective recipe; explicit overrides use the dedicated
   // `assetOverrides` config field.
-  for (const section of ['includes', 'limits', 'scale', 'environment']) {
+  for (const section of ['name', 'maxEntities', 'includes', 'limits', 'scale', 'districts', 'paths', 'environment']) {
     if (recipe[section] !== undefined) candidate[section] = clone(recipe[section]);
   }
   return diffLeaves(mergeDesign(EIDOVERSE_WORLD_DESIGN_V2, candidate), EIDOVERSE_WORLD_DESIGN_V2) || {};
