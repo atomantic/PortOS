@@ -17,6 +17,7 @@ import {
 import {
   augmentEidoverseWorld,
   ensureEidoverseWorldPresence,
+  getEidoverseWorldProjectionStatus,
   getEidoverseWorldStatus,
   projectEidoverseWorld,
   sayInEidoverseWorld,
@@ -29,6 +30,13 @@ const router = Router();
 // runtime/presence state for the hosted world page.
 router.get('/status', asyncHandler(async (_req, res) => {
   res.json(await getEidoverseWorldStatus());
+}));
+
+// GET /api/eidoverse/world/projection/status — lightweight persisted
+// reconciliation progress for the in-flight projection poller. This avoids
+// runtime, app-registry, filesystem, and PM2 probes on every progress tick.
+router.get('/projection/status', asyncHandler(async (_req, res) => {
+  res.json(await getEidoverseWorldProjectionStatus());
 }));
 
 // PUT /api/eidoverse/world/config — persist the human/CoS identity and

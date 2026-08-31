@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router';
 
 vi.mock('../services/api', () => ({
   getApp: vi.fn(),
+  getEidoverseWorldProjectionStatus: vi.fn(),
   getEidoverseWorldStatus: vi.fn(),
   getInstanceFeatures: vi.fn(),
   projectEidoverseWorld: vi.fn(),
@@ -120,6 +121,14 @@ describe('Eidoverse hosted page', () => {
     api.startApp.mockResolvedValue({ success: true, results: {} });
     api.startEidoverseHost.mockResolvedValue({ running: true, protocol: 'http', port: 5563 });
     api.getEidoverseWorldStatus.mockResolvedValue(worldResponse);
+    api.getEidoverseWorldProjectionStatus.mockResolvedValue({
+      design: {
+        lastAppliedVersion: design.lastAppliedVersion,
+        pendingVersion: design.pendingVersion,
+        reconciliation: design.reconciliation,
+      },
+      projection: worldResponse.projection,
+    });
     api.projectEidoverseWorld.mockResolvedValue({
       success: true,
       projection: { lastSuccessAt: '2026-01-01T00:00:00.000Z', lastSummary: worldResponse.projection.lastSummary },
@@ -314,10 +323,9 @@ describe('Eidoverse hosted page', () => {
     fireEvent.load(frame);
 
     expect(screen.getByText(/Preparing the PortOS systems garden/)).toBeInTheDocument();
-    api.getEidoverseWorldStatus.mockResolvedValue({
-      ...worldResponse,
+    api.getEidoverseWorldProjectionStatus.mockResolvedValue({
+      projection: worldResponse.projection,
       design: {
-        ...design,
         lastAppliedVersion: null,
         reconciliation: { status: 'applying', checkpoint: 'environment-complete' },
       },
@@ -326,6 +334,8 @@ describe('Eidoverse hosted page', () => {
       () => expect(screen.queryByText(/Preparing the PortOS systems garden/)).not.toBeInTheDocument(),
       { timeout: 2500 },
     );
+    expect(api.getEidoverseWorldStatus).toHaveBeenCalledOnce();
+    expect(api.getEidoverseWorldProjectionStatus).toHaveBeenCalled();
 
     await act(async () => {
       resolveProjection({

@@ -18,6 +18,7 @@ import {
 } from '../lib/eidoverseWorldReset';
 import {
   getApp,
+  getEidoverseWorldProjectionStatus,
   getEidoverseWorldStatus,
   getInstanceFeatures,
   projectEidoverseWorld,
@@ -267,9 +268,13 @@ export default function Eidoverse() {
     const pollGeneration = ++projectionPollGeneration.current;
     const poll = () => {
       if (projectionPollGeneration.current !== pollGeneration) return;
-      getEidoverseWorldStatus(silent).then((status) => {
+      getEidoverseWorldProjectionStatus(silent).then((status) => {
         if (projectionPollGeneration.current !== pollGeneration) return;
-        applyWorldResponse(status, { replaceDraft: false });
+        setWorldState((current) => current ? {
+          ...current,
+          projection: status.projection || current.projection,
+          design: status.design ? { ...current.design, ...status.design } : current.design,
+        } : current);
       }).catch(() => {}).finally(() => {
         if (projectionPollGeneration.current === pollGeneration) {
           projectionPollTimer.current = setTimeout(poll, 750);

@@ -88,6 +88,7 @@ export const startEidoverseHost = (options = {}) => request('/settings/features/
   ...options,
 });
 export const getEidoverseWorldStatus = (options) => request('/eidoverse/world/status', options);
+export const getEidoverseWorldProjectionStatus = (options) => request('/eidoverse/world/projection/status', options);
 export const updateEidoverseWorldConfig = (payload, options = {}) => request('/eidoverse/world/config', {
   method: 'PUT',
   body: JSON.stringify(payload),

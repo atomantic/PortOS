@@ -231,6 +231,47 @@ describe('Eidoverse private-world lifecycle', () => {
     expect(mocks.persistedState.pendingDesignVersion).toBe(2);
   });
 
+  it('reconciles a migrated V1 world through the normal online boot path', async () => {
+    mocks.persistedState = {
+      schemaVersion: 1,
+      world: 'portos',
+      recipe: EIDOVERSE_WORLD_DESIGN_V1,
+    };
+
+    const result = await world.reconcilePendingEidoverseWorld();
+
+    expect(result.reconciled).toBe(true);
+    expect(mocks.sent).toEqual(expect.arrayContaining([
+      expect.objectContaining({ verb: 'terrain' }),
+      expect.objectContaining({
+        verb: 'spawn',
+        args: expect.objectContaining({ id: expect.stringMatching(/^portos-design-v2-/) }),
+      }),
+    ]));
+    expect(mocks.persistedState).toMatchObject({
+      schemaVersion: 2,
+      lastAppliedDesignVersion: 2,
+      pendingDesignVersion: null,
+      migrationReport: { status: 'applied' },
+      reconciliation: { status: 'complete', checkpoint: 'projection-committed' },
+    });
+  });
+
+  it('reads projection progress without runtime, app-registry, or library probes', async () => {
+    await world.ensureEidoverseWorldConfig();
+    fetch.mockClear();
+    mocks.appStatusReads = 0;
+
+    const progress = await world.getEidoverseWorldProjectionStatus();
+
+    expect(progress).toMatchObject({
+      design: { selectedVersion: 2, pendingVersion: 2 },
+      projection: { lastRunAt: null },
+    });
+    expect(mocks.appStatusReads).toBe(0);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('leaves a pending upgrade untouched when the Eidoverse feature is disabled', async () => {
     await world.ensureEidoverseWorldConfig();
     mocks.persistedState.lastAppliedDesignVersion = 1;
@@ -570,6 +611,24 @@ describe('Eidoverse private-world lifecycle', () => {
       lastAppliedDesignVersion: null,
       pendingDesignVersion: 2,
       reconciliation: { status: 'failed' },
+    });
+  });
+
+  it('reports a transiently unreachable runtime without false update remediation', async () => {
+    fetch.mockRejectedValueOnce(new Error('Example startup race'));
+
+    await expect(world.projectEidoverseWorld()).rejects.toMatchObject({
+      status: 503,
+      code: 'EIDOVERSE_WORLD_UNAVAILABLE',
+    });
+    expect(mocks.sent.some(({ type }) => type === 'verb')).toBe(false);
+    expect(mocks.persistedState).toMatchObject({
+      pendingDesignVersion: 2,
+      reconciliation: {
+        status: 'failed',
+        errorCode: 'EIDOVERSE_WORLD_UNAVAILABLE',
+        errorContext: null,
+      },
     });
   });
 

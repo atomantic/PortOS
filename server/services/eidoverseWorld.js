@@ -1052,8 +1052,19 @@ async function fetchLibraryJson(path, query, { signal } = {}) {
 }
 
 async function preflightEidoverseProtocol({ signal } = {}) {
-  const response = await waitWithSignal(fetch(libraryUrl('/version'), { signal }), signal).catch(() => null);
-  if (!response?.ok) {
+  const response = await waitWithSignal(fetch(libraryUrl('/version'), { signal }), signal).catch((error) => {
+    throw new ServerError(`Eidoverse Worlds is not reachable yet: ${error.message}`, {
+      status: 503,
+      code: 'EIDOVERSE_WORLD_UNAVAILABLE',
+    });
+  });
+  if (response.status >= 500) {
+    throw new ServerError(`Eidoverse Worlds is temporarily unavailable (HTTP ${response.status}). Retry after its managed runtime finishes starting.`, {
+      status: 503,
+      code: 'EIDOVERSE_WORLD_UNAVAILABLE',
+    });
+  }
+  if (!response.ok) {
     throw new ServerError('This Eidoverse Worlds runtime is too old for PortOS World Design V2. Update its managed app from Apps, then retry.', {
       status: 409,
       code: 'EIDOVERSE_PROTOCOL_INCOMPATIBLE',
@@ -1721,6 +1732,19 @@ export async function getEidoverseWorldStatus() {
       federation: 'machine-local',
       externalRuntime: 'private Eidoverse checkout state',
     },
+  };
+}
+
+export async function getEidoverseWorldProjectionStatus() {
+  const state = await loadState();
+  return {
+    design: {
+      selectedVersion: state.selectedDesignVersion,
+      lastAppliedVersion: state.lastAppliedDesignVersion,
+      pendingVersion: state.pendingDesignVersion,
+      reconciliation: clone(state.reconciliation),
+    },
+    projection: clone(state.projection),
   };
 }
 

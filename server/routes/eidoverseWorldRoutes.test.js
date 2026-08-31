@@ -6,6 +6,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 const mocks = vi.hoisted(() => ({
   augment: vi.fn(),
   ensurePresence: vi.fn(),
+  getProjectionStatus: vi.fn(),
   getStatus: vi.fn(),
   project: vi.fn(),
   say: vi.fn(),
@@ -15,6 +16,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../services/eidoverseWorld.js', () => ({
   augmentEidoverseWorld: mocks.augment,
   ensureEidoverseWorldPresence: mocks.ensurePresence,
+  getEidoverseWorldProjectionStatus: mocks.getProjectionStatus,
   getEidoverseWorldStatus: mocks.getStatus,
   projectEidoverseWorld: mocks.project,
   sayInEidoverseWorld: mocks.say,
@@ -35,6 +37,10 @@ describe('Eidoverse world routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getStatus.mockResolvedValue({ world: 'portos', identity: { name: 'example-user' } });
+    mocks.getProjectionStatus.mockResolvedValue({
+      design: { reconciliation: { status: 'applying', checkpoint: 'applying-live' } },
+      projection: { lastRunAt: '2026-01-01T00:00:00.000Z' },
+    });
     mocks.updateConfig.mockResolvedValue({ world: 'portos', human: { name: 'example-user' } });
     mocks.ensurePresence.mockResolvedValue({ connected: true, role: 'owner' });
     mocks.project.mockResolvedValue({ success: true, summary: { operationCount: 0 } });
@@ -47,6 +53,17 @@ describe('Eidoverse world routes', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ world: 'portos', identity: { name: 'example-user' } });
     expect(mocks.getStatus).toHaveBeenCalledOnce();
+  });
+
+  it('returns lightweight persisted projection progress', async () => {
+    const res = await request(makeApp()).get('/api/eidoverse/world/projection/status');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      design: { reconciliation: { checkpoint: 'applying-live' } },
+    });
+    expect(mocks.getProjectionStatus).toHaveBeenCalledOnce();
+    expect(mocks.getStatus).not.toHaveBeenCalled();
   });
 
   it('validates and persists a configuration patch', async () => {
