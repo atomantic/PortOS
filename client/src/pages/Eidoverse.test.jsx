@@ -281,6 +281,35 @@ describe('Eidoverse hosted page', () => {
     expect(screen.getByRole('button', { name: 'Apply world update' })).toBeInTheDocument();
   });
 
+  it('surfaces per-source omissions when the shared live-signal cap is saturated', async () => {
+    const user = userEvent.setup();
+    const truncatedSummary = {
+      ...worldResponse.projection.lastSummary,
+      liveEntityCount: 48,
+      maxLiveEntities: 48,
+      truncated: true,
+      droppedBySource: { apps: 2, agents: 1 },
+    };
+    api.getEidoverseWorldStatus.mockResolvedValueOnce({
+      ...worldResponse,
+      projection: { lastSummary: truncatedSummary },
+    });
+    api.projectEidoverseWorld.mockResolvedValueOnce({
+      success: true,
+      projection: { lastSummary: truncatedSummary },
+      presence: { connected: true, role: 'owner' },
+      design: { ...design, lastAppliedVersion: 2, pendingVersion: null },
+      recipe,
+    });
+    renderPage();
+    await screen.findByTitle('Eidoverse Worlds');
+    await user.click(screen.getByRole('button', { name: 'World controls' }));
+    await user.click(screen.getByRole('tab', { name: 'Districts & Data' }));
+
+    expect(screen.getByText(/shared world cap omitted 2 Apps, 1 Agents signal/i)).toBeInTheDocument();
+    expect(screen.getByText(/2 omitted by cap/)).toBeInTheDocument();
+  });
+
   it('shows exact staged reconciliation progress while a projection is running', async () => {
     const user = userEvent.setup();
     let resolveProjection;

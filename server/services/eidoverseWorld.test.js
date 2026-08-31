@@ -436,6 +436,50 @@ describe('Eidoverse PortOS projection plan', () => {
     }));
   });
 
+  it('shares a saturated live budget across every available semantic source', () => {
+    const recipe = structuredClone(DEFAULT_EIDOVERSE_PROJECTION_RECIPE);
+    recipe.maxEntities = 12;
+    for (const sourceKey of Object.keys(recipe.limits)) recipe.limits[sourceKey] = 48;
+    const rows = (prefix) => Array.from({ length: 3 }, (_, index) => ({
+      id: `${prefix}-${index}`,
+      status: 'active',
+    }));
+    const plan = buildProjectionPlan({
+      recipe,
+      source: {
+        ...emptySources(),
+        apps: rows('app'),
+        agents: rows('agent'),
+        tasks: rows('task'),
+        peers: rows('peer'),
+        health: { id: 'overview', status: 'healthy' },
+        productivity: rows('productivity'),
+        activity: rows('activity'),
+        goals: rows('goal'),
+        memory: rows('memory'),
+        storage: rows('storage'),
+        jira: rows('jira'),
+        operations: rows('operations'),
+      },
+    });
+
+    expect(plan.summary).toMatchObject({
+      liveEntityCount: 12,
+      maxLiveEntities: 12,
+      truncated: true,
+    });
+    expect(Object.values(plan.summary.districtCounts).every((count) => count > 0)).toBe(true);
+    expect(plan.summary.droppedBySource).toMatchObject({
+      apps: 2,
+      agents: 2,
+      tasks: 2,
+      goals: 2,
+      memory: 2,
+      storage: 2,
+      peers: 2,
+    });
+  });
+
   it('retires unsanitized V1 signals without charging them to the V2 live budget', () => {
     const recipe = structuredClone(DEFAULT_EIDOVERSE_PROJECTION_RECIPE);
     recipe.limits.apps = 48;

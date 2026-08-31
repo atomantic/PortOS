@@ -322,8 +322,23 @@ function v1OverridesForV2(legacyRecipe) {
   const legacy = mergeDesign(EIDOVERSE_WORLD_DESIGN_V1, legacyRecipe || {});
   const v1Diff = diffLeaves(legacy, EIDOVERSE_WORLD_DESIGN_V1) || {};
   const overrides = {};
-  for (const section of ['includes', 'limits', 'scale']) {
+  for (const section of ['includes', 'scale']) {
     if (v1Diff[section]) overrides[section] = clone(v1Diff[section]);
+  }
+  const unsupportedLimits = {};
+  if (isObject(v1Diff.limits)) {
+    const preservedLimits = {};
+    for (const [source, value] of Object.entries(v1Diff.limits)) {
+      const v2Limit = EIDOVERSE_WORLD_DESIGN_V2.limits[source];
+      if (!Number.isInteger(value) || value < 0 || !Number.isInteger(v2Limit) || value > v2Limit) {
+        unsupportedLimits[source] = clone(value);
+        continue;
+      }
+      preservedLimits[source] = value;
+    }
+    if (Object.keys(preservedLimits).length) overrides.limits = preservedLimits;
+  } else if (v1Diff.limits !== undefined) {
+    unsupportedLimits.value = clone(v1Diff.limits);
   }
   if (v1Diff.terrain) overrides.environment = { terrain: clone(v1Diff.terrain) };
   let unportableAssets;
@@ -346,6 +361,7 @@ function v1OverridesForV2(legacyRecipe) {
   const unsupportedOverrides = Object.fromEntries(Object.entries(v1Diff)
     .filter(([section]) => !['includes', 'limits', 'scale', 'terrain', 'assets'].includes(section))
     .map(([section, value]) => [section, clone(value)]));
+  if (Object.keys(unsupportedLimits).length) unsupportedOverrides.limits = unsupportedLimits;
   if (unportableAssets !== undefined) unsupportedOverrides.assets = unportableAssets;
   return { overrides, unsupportedOverrides };
 }
@@ -555,23 +571,44 @@ const contractFingerprint = (value) => createHash('sha256')
   .digest('hex')
   .slice(0, 16);
 
-function candidateScore(candidate, slot, preferredIndex, searchRank) {
+function candidateScore(candidate, slot, preferredIndex, searchRank, allowCatalogFallback) {
   const tokens = tokenized(candidate.path);
-  const hasToken = (needle) => tokens.some((token) => token === needle || token.includes(needle));
-  if (slot.excludedTokens.some(hasToken)) return null;
-  if (slot.requiredTokens.length && !slot.requiredTokens.every(hasToken)) return null;
-  if (Number(candidate.size) > slot.maxBytes) return null;
+  const hasSemanticToken = (needle) => tokens.some((token) => token === needle || token.includes(needle));
+  if (slot.excludedTokens.some((needle) => tokens.includes(needle))) return null;
+  if (candidate.size !== null && candidate.size > slot.maxBytes) return null;
   const preferred = preferredIndex.get(candidate.path);
   const searched = searchRank.get(candidate.path);
-  if (preferred === undefined && searched === undefined) return null;
+  const fallback = candidate.path === slot.fallback;
+  if (preferred === undefined && searched === undefined && !allowCatalogFallback) return null;
   const queryTokens = slot.fallbackQueries.flatMap(tokenized);
   const queryMatches = queryTokens.filter((token) => tokens.some((candidateToken) => (
     candidateToken === token || candidateToken.includes(token)
   ))).length;
+  const requiredMatches = slot.requiredTokens.filter(hasSemanticToken).length;
   return (preferred === undefined ? 0 : 1_000_000 - preferred * 10_000)
-    + (searched === undefined ? 0 : 100_000 - searched * 100)
+    + (searched === undefined ? 0 : 200_000 - searched * 100)
+    + (fallback ? 100_000 : 0)
+    + requiredMatches * 1_000
     + queryMatches * 10
+    - (candidate.size === null ? 10_000 : 0)
     - Number(candidate.size || 0) / 1_000_000;
+}
+
+function addCatalogCandidate(catalog, candidate) {
+  const path = typeof candidate === 'string' ? candidate : candidate?.path;
+  if (!validLibraryPath(path)) return;
+  const rawSize = typeof candidate === 'string' ? null : candidate?.size;
+  const numericSize = Number(rawSize);
+  const size = rawSize !== null && rawSize !== undefined && rawSize !== ''
+    && Number.isFinite(numericSize) && numericSize >= 0
+    ? numericSize
+    : null;
+  const prior = catalog.get(path);
+  if (!prior
+    || (prior.size === null && size !== null)
+    || (prior.size !== null && size !== null && size < prior.size)) {
+    catalog.set(path, { path, size });
+  }
 }
 
 /**
@@ -617,25 +654,13 @@ export function resolveEidoverseAssetRecipe({
   resolvedAt = null,
 } = {}) {
   const catalog = new Map();
-  for (const candidate of files) {
-    const path = typeof candidate === 'string' ? candidate : candidate?.path;
-    if (!validLibraryPath(path)) continue;
-    const size = Number(typeof candidate === 'string' ? NaN : candidate.size);
-    if (!Number.isFinite(size) || size < 0) continue;
-    const prior = catalog.get(path);
-    if (!prior || size < prior.size) catalog.set(path, { path, size });
-  }
+  for (const candidate of files) addCatalogCandidate(catalog, candidate);
   for (const values of Object.values(searchResults || {})) {
-    for (const candidate of Array.isArray(values) ? values : []) {
-      const size = Number(candidate?.size);
-      if (validLibraryPath(candidate?.path) && Number.isFinite(size) && size >= 0 && !catalog.has(candidate.path)) {
-        catalog.set(candidate.path, { path: candidate.path, size });
-      }
-    }
+    for (const candidate of Array.isArray(values) ? values : []) addCatalogCandidate(catalog, candidate);
   }
 
   const fingerprint = createHash('sha256')
-    .update([...catalog.values()].sort((a, b) => a.path.localeCompare(b.path)).map(({ path, size }) => `${path}:${size}`).join('\n'))
+    .update([...catalog.values()].sort((a, b) => a.path.localeCompare(b.path)).map(({ path, size }) => `${path}:${size ?? 'unknown'}`).join('\n'))
     .digest('hex').slice(0, 16);
   const resolutions = {};
   const missing = [];
@@ -684,23 +709,27 @@ export function resolveEidoverseAssetRecipe({
     slot.fallbackQueries.forEach((query, queryIndex) => {
       const candidates = Array.isArray(searchResults[query]) ? searchResults[query] : [];
       candidates.forEach((candidate, resultIndex) => {
-        if (!validLibraryPath(candidate?.path)) return;
+        const path = typeof candidate === 'string' ? candidate : candidate?.path;
+        if (!validLibraryPath(path)) return;
         const rank = queryIndex * 1000 + resultIndex;
-        if (!searchRank.has(candidate.path) || rank < searchRank.get(candidate.path)) {
-          searchRank.set(candidate.path, rank);
+        if (!searchRank.has(path) || rank < searchRank.get(path)) {
+          searchRank.set(path, rank);
         }
       });
     });
+    const searchWasAttempted = slot.fallbackQueries.some((query) => Object.hasOwn(searchResults, query));
     const ranked = [...catalog.values()]
-      .map((candidate) => ({ candidate, score: candidateScore(candidate, slot, preferredIndex, searchRank) }))
+      .map((candidate) => ({
+        candidate,
+        score: candidateScore(candidate, slot, preferredIndex, searchRank, searchWasAttempted),
+      }))
       .filter(({ score }) => score !== null)
       .sort((a, b) => b.score - a.score || a.candidate.path.localeCompare(b.candidate.path));
     const fallbackCandidate = catalog.get(slot.fallback);
     const fallbackTokens = fallbackCandidate ? tokenized(fallbackCandidate.path) : [];
     const fallbackAllowed = fallbackCandidate
-      && fallbackCandidate.size <= slot.maxBytes
-      && !slot.excludedTokens.some((needle) => fallbackTokens.some((token) => token === needle || token.includes(needle)));
-    const searchWasAttempted = slot.fallbackQueries.some((query) => Object.hasOwn(searchResults, query));
+      && (fallbackCandidate.size === null || fallbackCandidate.size <= slot.maxBytes)
+      && !slot.excludedTokens.some((needle) => fallbackTokens.includes(needle));
     const chosen = ranked[0]?.candidate || (searchWasAttempted && fallbackAllowed ? fallbackCandidate : null);
     if (!chosen) {
       missing.push(slotName);
@@ -708,7 +737,9 @@ export function resolveEidoverseAssetRecipe({
     }
     const strategy = preferredIndex.has(chosen.path)
       ? 'preferred'
-      : (chosen.path === slot.fallback ? 'fallback' : 'query');
+      : (searchRank.has(chosen.path)
+          ? 'query'
+          : (chosen.path === slot.fallback ? 'fallback' : 'catalog-fallback'));
     resolutions[slotName] = baseResolution(chosen.path, strategy, false, null, chosen.size);
   }
   return { resolutions, missing, catalogFingerprint: fingerprint };

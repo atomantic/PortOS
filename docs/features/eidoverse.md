@@ -140,6 +140,10 @@ places raw journal/memory bodies, database or file names, task prompts, ticket
 titles, machine/peer identities, or federation records in the Eidoverse log.
 The default per-family caps sum below the hard global ceiling, and a user-edited
 recipe still cannot materialize more than 48 live PortOS signals.
+When authored caps would exceed that ceiling, PortOS allocates one signal per
+available source before filling additional slots in deterministic rounds. The
+drawer reports the exact per-source omissions instead of showing a populated
+source count beside an unexplained empty district.
 
 Only ids under `portos-design-v2-*` and the retired V1
 `portos-projection-*` namespace are reconciled. Unrelated Eidoverse entities are
@@ -156,7 +160,7 @@ declares:
 
 - preferred Eidoverse library paths;
 - fallback search queries;
-- required and excluded filename tokens;
+- semantic filename tokens used as ranking hints and whole-token exclusions;
 - maximum bytes, GLB/animation expectations, and `library-only` source policy;
 - a final known-library fallback.
 
@@ -172,6 +176,10 @@ slots whose recipe fingerprint changed; unchanged paths and local overrides
 remain pinned. Eidoverse owns and caches the bytes. A user may retain an
 explicit install-local `store/...` model override, but that path is recorded as
 an override and never becomes a shipped PortOS default.
+Search results remain eligible when a library rename removes an old filename
+token, and a safe catalog GLB is the final deterministic fallback after searches
+are exhausted. Catalog entries without byte metadata remain usable with
+`bytes: null`; a known over-budget size is still rejected.
 
 ## Versioning, updates, and recovery
 
@@ -185,6 +193,9 @@ Migration `323-eidoverse-world-design-v2.js` runs in the normal PortOS migration
 pass used by `update.sh`, `update.ps1`, and ordinary server boot. It compares
 every stored V1 leaf against the immutable V1 default: a default-matching leaf
 inherits V2, while a genuinely customized leaf becomes a V2 user override.
+Customized V1 source caps above the corresponding V2 cap are reset to the V2
+default and their original values stay visible under unsupported overrides,
+preventing an old lane-scale cap from starving the semantic districts.
 V1's lane coordinates have no safe district translation, so a custom layout is
 reported rather than silently applied. Missing state is a fresh V2 install;
 invalid or newer schema state fails closed and remains pending for repair or a
@@ -202,6 +213,12 @@ in reverse order, retains the old `lastAppliedDesignVersion`, and leaves a
 resumable checkpoint. If Eidoverse is stopped or incompatible, PortOS leaves
 the update pending and the page links directly to the managed app instead of
 claiming the world is current.
+A process restart during an applying or compensating stage marks that persisted
+run as interrupted before boot reconciliation; the drawer then offers the same
+explicit retry path as other failures. Retired owner-role cleanup is
+best-effort and never blocks the current world: failed demotions retry up to
+three projections, then age out with a generic manual-review warning. A later
+clean run clears that warning, and a full reset clears all recovery state.
 
 On a genuinely fresh world there is no previous atmosphere to protect, so the
 dawn environment is applied first and the user does not wait in darkness while
@@ -264,6 +281,12 @@ session, the embedded page lazily opens a PortOS-owned HTTPS/WebSocket bridge on
 external repositories unchanged. The bridge starts only when the page is
 opened, waits for the managed app to answer before mounting the iframe, and
 returns an explicit unavailable state when the runtime does not become ready.
+
+Projection protocol and asset preflight target the same runtime. The default
+HTTP library origin is derived from `EIDOVERSE_WS_URL` by mapping `ws`/`wss` to
+`http`/`https` on the same host and port. Deployments whose one Eidoverse runtime
+publishes separate WebSocket and HTTP endpoints may set `EIDOVERSE_HTTP_URL`
+explicitly; both values must identify that same runtime.
 
 ## PortOS bridge boundary
 

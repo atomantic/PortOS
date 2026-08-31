@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   persistedState: null,
   writes: 0,
   worlds: new Map(),
+  socketUrls: [],
   sent: [],
   deferredVerbAcks: [],
   deferVerbAcks: 0,
@@ -71,11 +72,12 @@ vi.mock('ws', () => {
     static OPEN = 1;
     static CLOSED = 3;
 
-    constructor() {
+    constructor(url) {
       this.readyState = 0;
       this.listeners = new Map();
       this.identity = null;
       this.world = null;
+      mocks.socketUrls.push(String(url));
       queueMicrotask(() => {
         this.readyState = FakeWebSocket.OPEN;
         this.emit('open');
@@ -173,10 +175,12 @@ const world = await import('./eidoverseWorld.js');
 const { EIDOVERSE_WORLD_DESIGN_V1 } = await import('../lib/eidoverseWorldDesign.js');
 
 beforeEach(async () => {
+  vi.unstubAllEnvs();
   await world.__resetEidoverseWorldForTests();
   mocks.persistedState = null;
   mocks.writes = 0;
   mocks.worlds.clear();
+  mocks.socketUrls.length = 0;
   mocks.sent.length = 0;
   mocks.deferredVerbAcks.length = 0;
   mocks.deferVerbAcks = 0;
@@ -310,6 +314,33 @@ describe('Eidoverse private-world lifecycle', () => {
     expect(mocks.persistedState.pendingDesignVersion).toBe(2);
   });
 
+  it('marks a persisted in-flight projection as interrupted before boot reconciliation', async () => {
+    await world.ensureEidoverseWorldConfig();
+    mocks.persistedState.reconciliation = {
+      ...mocks.persistedState.reconciliation,
+      status: 'applying',
+      checkpoint: 'applying-live',
+      operationCount: 20,
+      appliedOperations: 5,
+    };
+    fetch.mockClear();
+
+    await expect(world.reconcilePendingEidoverseWorld()).resolves.toEqual({
+      reconciled: false,
+      reason: 'interrupted',
+    });
+    expect(mocks.persistedState.reconciliation).toMatchObject({
+      status: 'failed',
+      checkpoint: 'interrupted',
+      errorCode: 'EIDOVERSE_PROJECTION_INTERRUPTED',
+      operationCount: 20,
+      appliedOperations: 5,
+    });
+    expect(mocks.persistedState.pendingDesignVersion).toBe(2);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(mocks.sent).toEqual([]);
+  });
+
   it('gives the human and persistent CoS owner roles and hands ownership to a renamed human', async () => {
     const first = await world.ensureEidoverseWorldPresence();
 
@@ -437,16 +468,71 @@ describe('Eidoverse private-world lifecycle', () => {
     const result = await world.projectEidoverseWorld();
 
     expect(result.success).toBe(true);
-    expect(mocks.persistedState.ownership.retired).toEqual([]);
+    expect(mocks.persistedState.ownership.retired).toEqual([expect.objectContaining({
+      world: 'example-prior-world',
+      id: 'Example Retired Owner',
+      attempts: 1,
+    })]);
     expect(mocks.persistedState.reconciliation).toMatchObject({
       status: 'complete',
       retiredOwnerCleanup: {
         status: 'partial',
         failedCount: 1,
+        retryingCount: 1,
+        droppedCount: 0,
         codes: ['EIDOVERSE_OWNER_HANDOFF_FAILED'],
       },
     });
     expect(mocks.sent).toContainEqual(expect.objectContaining({ verb: 'terrain' }));
+
+    await world.projectEidoverseWorld();
+    expect(mocks.persistedState.ownership.retired[0]).toMatchObject({ attempts: 2 });
+
+    await world.projectEidoverseWorld();
+    expect(mocks.persistedState.ownership.retired).toEqual([]);
+    expect(mocks.persistedState.reconciliation.retiredOwnerCleanup).toMatchObject({
+      failedCount: 1,
+      retryingCount: 0,
+      droppedCount: 1,
+    });
+
+    await world.projectEidoverseWorld();
+    expect(mocks.persistedState.reconciliation.retiredOwnerCleanup).toBeUndefined();
+  });
+
+  it('retries only a retired owner whose demotion verb failed', async () => {
+    await world.ensureEidoverseWorldConfig();
+    mocks.persistedState.ownership.retired = [
+      { world: 'portos', id: 'Example Failed Owner' },
+      { world: 'portos', id: 'Example Successful Owner' },
+    ];
+    mocks.worlds.set('portos', {
+      roles: {
+        [DEFAULT_HUMAN_NAME]: { role: 'owner' },
+        'portos-cos': { role: 'owner' },
+        'Example Failed Owner': { role: 'owner' },
+        'Example Successful Owner': { role: 'owner' },
+      },
+    });
+    mocks.rejectVerb = 'grant';
+
+    await expect(world.projectEidoverseWorld()).resolves.toMatchObject({ success: true });
+
+    expect(mocks.persistedState.ownership.retired).toEqual([expect.objectContaining({
+      world: 'portos',
+      id: 'Example Failed Owner',
+      attempts: 1,
+    })]);
+    expect(mocks.persistedState.reconciliation.retiredOwnerCleanup).toMatchObject({
+      failedCount: 1,
+      retryingCount: 1,
+      droppedCount: 0,
+      codes: ['EIDOVERSE_WORLD_VERB_REJECTED'],
+    });
+
+    await expect(world.projectEidoverseWorld()).resolves.toMatchObject({ success: true });
+    expect(mocks.persistedState.ownership.retired).toEqual([]);
+    expect(mocks.persistedState.reconciliation.retiredOwnerCleanup).toBeUndefined();
   });
 
   it('makes the full reset a recovery for retired ownership and cached roles', async () => {
@@ -590,6 +676,19 @@ describe('Eidoverse private-world lifecycle', () => {
     expect(fetch.mock.calls.filter(([input]) => String(input).includes('/library/eidoverse/'))).toHaveLength(10);
 
     await expect(world.reconcilePendingEidoverseWorld()).resolves.toEqual({ reconciled: false, reason: 'current' });
+  });
+
+  it('uses one configured runtime origin for WebSocket projection and HTTP asset preflight', async () => {
+    vi.stubEnv('EIDOVERSE_WS_URL', 'wss://example-eidoverse.test:9443/custom/ws');
+
+    await world.projectEidoverseWorld();
+
+    expect(mocks.socketUrls.length).toBeGreaterThan(0);
+    expect(mocks.socketUrls.every((url) => url === 'wss://example-eidoverse.test:9443/custom/ws')).toBe(true);
+    expect(fetch.mock.calls.length).toBeGreaterThan(0);
+    expect(fetch.mock.calls.every(([input]) => (
+      new URL(String(input)).origin === 'https://example-eidoverse.test:9443'
+    ))).toBe(true);
   });
 
   it('keeps the previous atmosphere authoritative until V2 infrastructure exists during an upgrade', async () => {

@@ -62,6 +62,27 @@ describe('Eidoverse World Design V2', () => {
     expect(migrated.report.preservedOverrides).toEqual(expect.arrayContaining(['limits.apps', 'assets.app']));
   });
 
+  it('clamps oversized V1 source caps to the V2 design budget and reports the original values', () => {
+    const migrated = migrateEidoverseWorldState({
+      schemaVersion: 1,
+      recipe: {
+        ...EIDOVERSE_WORLD_DESIGN_V1,
+        limits: {
+          ...EIDOVERSE_WORLD_DESIGN_V1.limits,
+          apps: 20,
+          agents: 2,
+        },
+      },
+    });
+
+    expect(migrated.state.userOverrides.limits).toEqual({ agents: 2 });
+    expect(migrated.state.recipe.limits).toMatchObject({
+      apps: EIDOVERSE_WORLD_DESIGN_V2.limits.apps,
+      agents: 2,
+    });
+    expect(migrated.report.unsupportedOverrides.limits).toEqual({ apps: 20 });
+  });
+
   it('preserves only a customized V1 terrain leaf while adopting V2 terrain defaults', () => {
     const migrated = migrateEidoverseWorldState({
       schemaVersion: 1,
@@ -289,6 +310,48 @@ describe('Eidoverse World Design V2', () => {
     });
 
     expect(result.resolutions.app).toMatchObject({ path: searchedPath, source: 'query' });
+  });
+
+  it('accepts renamed search hits without substring-matching excluded whole tokens', () => {
+    const taskSlot = EIDOVERSE_ASSET_RECIPE_V2.slots.task;
+    const renamedPath = 'eidoverse/assets/models/example_cargo_pod_blue.glb';
+    const withoutTask = catalog().filter(({ path }) => (
+      path !== taskSlot.preferredPaths[0] && path !== taskSlot.fallback
+    ));
+    const result = resolveEidoverseAssetRecipe({
+      files: withoutTask,
+      searchResults: { 'scifi crate': [{ path: renamedPath, size: 2_000_000 }] },
+    });
+
+    expect(result.resolutions.task).toMatchObject({ path: renamedPath, strategy: 'query' });
+  });
+
+  it('keeps catalog entries with unknown sizes and records nullable lock bytes', () => {
+    const appPath = EIDOVERSE_ASSET_RECIPE_V2.slots.app.preferredPaths[0];
+    const files = catalog().map((candidate) => (
+      candidate.path === appPath ? { path: candidate.path } : candidate
+    ));
+    const result = resolveEidoverseAssetRecipe({ files });
+
+    expect(result.resolutions.app).toMatchObject({
+      path: appPath,
+      strategy: 'preferred',
+      bytes: null,
+    });
+  });
+
+  it('uses a safe catalog GLB as a last resort after semantic searches are exhausted', () => {
+    const taskSlot = EIDOVERSE_ASSET_RECIPE_V2.slots.task;
+    const files = catalog().filter(({ path }) => (
+      path !== taskSlot.preferredPaths[0] && path !== taskSlot.fallback
+    ));
+    const result = resolveEidoverseAssetRecipe({
+      files,
+      searchResults: Object.fromEntries(taskSlot.fallbackQueries.map((query) => [query, []])),
+    });
+
+    expect(result.missing).not.toContain('task');
+    expect(result.resolutions.task).toMatchObject({ strategy: 'catalog-fallback' });
   });
 
   it('searches before accepting an explicit fallback asset', () => {

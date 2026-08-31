@@ -130,7 +130,7 @@ export default function EidoverseWorldDrawer({
         </div>
         <div className="rounded-lg border border-port-border bg-port-bg p-3">
           <p className="text-xs text-gray-500">Live signal budget</p>
-          <p className="mt-1 text-sm text-white">{design.maxEntities || recipeDraft?.maxEntities || 48} maximum</p>
+          <p className="mt-1 text-sm text-white">{design.maxEntities ?? recipeDraft?.maxEntities ?? 48} maximum</p>
         </div>
       </div>
     </div>
@@ -141,6 +141,15 @@ export default function EidoverseWorldDrawer({
       <p className="text-sm leading-6 text-gray-400">
         PortOS projects bounded summaries, never raw records. Stable IDs keep each signal in its district across refreshes.
       </p>
+      {projectionSummary.truncated && (
+        <p className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-2 text-xs leading-5 text-port-warning" role="status">
+          The shared world cap omitted {' '}
+          {Object.entries(projectionSummary.droppedBySource || {})
+            .filter(([, count]) => count > 0)
+            .map(([source, count]) => `${count} ${titleCase(source)}`)
+            .join(', ')} signal(s). PortOS distributes available space across sources before adding extra signals.
+        </p>
+      )}
       {(recipeDraft?.districts || []).map((district) => (
         <section key={district.id} className="rounded-xl border border-port-border bg-port-bg p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
@@ -174,7 +183,10 @@ export default function EidoverseWorldDrawer({
                   <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[10px] text-gray-500">
                     <span>{projectionSummary.sourceAvailability?.[source] === false
                       ? 'Stale · last good held'
-                      : (projectionSummary.sourceCounts?.[source] ?? 'Not projected')}</span>
+                      : (projectionSummary.sourceCounts?.[source] ?? 'Not projected')}
+                    {projectionSummary.droppedBySource?.[source] > 0
+                      ? ` · ${projectionSummary.droppedBySource[source]} omitted by cap`
+                      : ''}</span>
                     {SOURCE_ROUTES[source] && <Link className="text-port-accent hover:underline" to={SOURCE_ROUTES[source]}>Open in PortOS</Link>}
                   </div>
                 </div>
@@ -357,7 +369,13 @@ export default function EidoverseWorldDrawer({
         )}
         {reconciliation.retiredOwnerCleanup?.failedCount > 0 && (
           <p className="mt-2 text-xs text-port-warning" role="status">
-            PortOS skipped {reconciliation.retiredOwnerCleanup.failedCount} retired owner cleanup operation(s) so this world could continue. Review prior worlds manually if their old owner roles matter.
+            PortOS could not retire {reconciliation.retiredOwnerCleanup.failedCount} previous owner role(s), so this world continued.
+            {reconciliation.retiredOwnerCleanup.retryingCount > 0
+              ? ` ${reconciliation.retiredOwnerCleanup.retryingCount} will retry on the next projection.`
+              : ''}
+            {reconciliation.retiredOwnerCleanup.droppedCount > 0
+              ? ` ${reconciliation.retiredOwnerCleanup.droppedCount} reached the retry limit; review prior worlds manually if those roles matter.`
+              : ''}
           </p>
         )}
         {reconciliation.operationCount > 0 && (

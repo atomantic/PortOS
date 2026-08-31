@@ -99,6 +99,23 @@ function sourceAvailable(source, key) {
   return Array.isArray(source[key]);
 }
 
+function allocateRoundRobin(buckets, limit) {
+  const selected = new Map(buckets.map(({ key }) => [key, []]));
+  let count = 0;
+  for (let offset = 0; count < limit; offset += 1) {
+    let progressed = false;
+    for (const { key, values } of buckets) {
+      if (count >= limit) break;
+      if (offset >= values.length) continue;
+      selected.get(key).push(values[offset]);
+      count += 1;
+      progressed = true;
+    }
+    if (!progressed) break;
+  }
+  return selected;
+}
+
 function projectionEntityId(kind, sourceId) {
   return `${PROJECTION_ID_PREFIX}${kind}-${shortHash(`${kind}:${sourceId}`)}`;
 }
@@ -455,20 +472,59 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
     .map((id) => ({ id, kind: signalKindFromEntityId(id) }))
     .filter(({ kind }) => kind && unavailableKinds.has(kind))
     .sort((left, right) => left.id.localeCompare(right.id));
-  const retainedStaleCandidates = staleCandidates.slice(0, liveEntityLimit);
+  const staleBuckets = EIDOVERSE_PROJECTION_KINDS
+    .filter(({ kind }) => unavailableKinds.has(kind))
+    .map(({ kind }) => ({
+      key: kind,
+      values: staleCandidates.filter((candidate) => candidate.kind === kind),
+    }));
+  const selectedStale = allocateRoundRobin(staleBuckets, liveEntityLimit);
+  const retainedStaleCandidates = staleBuckets.flatMap(({ key }) => selectedStale.get(key) || []);
   const retainedStaleIds = new Set(retainedStaleCandidates.map(({ id }) => id));
-  const overBudgetStaleIds = new Set(staleCandidates.slice(liveEntityLimit).map(({ id }) => id));
+  const overBudgetStaleIds = new Set(staleCandidates
+    .filter(({ id }) => !retainedStaleIds.has(id))
+    .map(({ id }) => id));
   let liveEntityCount = retainedStaleIds.size;
   const districtCounts = Object.fromEntries(districts.map(({ id }) => [id, 0]));
+  const droppedBySource = {};
   for (const { kind } of retainedStaleCandidates) {
     const sourceKey = EIDOVERSE_PROJECTION_KINDS.find((entry) => entry.kind === kind)?.source;
     if (!sourceKey) continue;
     const district = districtForSource(districts, sourceKey);
     districtCounts[district.id] = (districtCounts[district.id] || 0) + 1;
   }
+  for (const { kind, source: sourceKey } of EIDOVERSE_PROJECTION_KINDS) {
+    const dropped = staleCandidates.filter((candidate) => candidate.kind === kind && overBudgetStaleIds.has(candidate.id)).length;
+    if (dropped > 0) droppedBySource[sourceKey] = dropped;
+  }
+
+  const liveBuckets = [];
   for (const { kind, source: sourceKey, slot } of EIDOVERSE_PROJECTION_KINDS) {
     const available = sourceAvailable(source, sourceKey);
     sourceAvailability[sourceKey] = available;
+    if (!effectiveRecipe.includes[sourceKey] || !available || !slot) continue;
+    const values = kind === 'health' ? [source.health] : source[sourceKey];
+    const normalized = values
+      .filter(Boolean)
+      .map((item) => worldSignal(kind, sourceKey, item, districts));
+    liveBuckets.push({
+      key: kind,
+      kind,
+      sourceKey,
+      slot,
+      values: normalized
+        .slice(0, effectiveRecipe.limits[sourceKey] ?? normalized.length)
+        .sort((left, right) => left.id.localeCompare(right.id)),
+    });
+  }
+  const selectedLive = allocateRoundRobin(liveBuckets, Math.max(0, liveEntityLimit - liveEntityCount));
+  for (const { key, sourceKey, values } of liveBuckets) {
+    const dropped = values.length - (selectedLive.get(key)?.length || 0);
+    if (dropped > 0) droppedBySource[sourceKey] = (droppedBySource[sourceKey] || 0) + dropped;
+  }
+
+  for (const { kind, source: sourceKey, slot } of EIDOVERSE_PROJECTION_KINDS) {
+    const available = sourceAvailable(source, sourceKey);
     if (!effectiveRecipe.includes[`${sourceKey}`]) {
       continue;
     }
@@ -522,15 +578,7 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
       continue;
     }
     if (!slot) continue;
-    const values = kind === 'health' ? [source.health] : source[sourceKey];
-    const normalized = values
-      .filter(Boolean)
-      .map((item) => worldSignal(kind, sourceKey, item, districts));
-    const limited = normalized
-      .slice(0, effectiveRecipe.limits[sourceKey] ?? normalized.length)
-      .sort((left, right) => left.id.localeCompare(right.id));
-    for (const signal of limited) {
-      if (liveEntityCount >= liveEntityLimit) break;
+    for (const signal of selectedLive.get(kind) || []) {
       const id = projectionEntityId(kind, signal.id);
       const pos = entityPosition(signal.id, sourceKey, districts);
       if (kind === 'goal' && typeof signal.metrics.progress === 'number') {
@@ -586,10 +634,12 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
       operationCount: operations.length,
       designVersion: EIDOVERSE_WORLD_DESIGN_VERSION,
       liveEntityCount,
-      maxLiveEntities: EIDOVERSE_MAX_LIVE_ENTITIES,
+      maxLiveEntities: liveEntityLimit,
       infrastructureCount: districts.length + pathNodeCount,
       districtCounts,
       sourceAvailability,
+      truncated: Object.keys(droppedBySource).length > 0,
+      droppedBySource,
       sourceCounts: Object.fromEntries(EIDOVERSE_PROJECTION_KINDS.map(({ kind, source: sourceKey }) => [
         sourceKey,
         sourceAvailable(source, sourceKey)

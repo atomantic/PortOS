@@ -57,6 +57,7 @@ const DEFAULT_COS_AVATAR = 'eidoverse/assets/vrms/claude_suit.vrm';
 // Eidoverse admits 12 authored verbs per four seconds. Stay just below that
 // public protocol limit so large first-run reconciliations remain reliable.
 const PROJECTION_VERB_INTERVAL_MS = process.env.NODE_ENV === 'test' ? 5 : 350;
+const RETIRED_OWNER_MAX_ATTEMPTS = 3;
 const WORLD_ROLES = new Set(['owner', 'builder', 'visitor']);
 
 const DEFAULT_STATE = {
@@ -244,6 +245,9 @@ function normalizeRetiredOwners(value) {
     const key = `${world}\0${id}`;
     const actorId = validIdentity(candidate?.actorId, '');
     const normalizedAvatar = safeText(candidate?.actorAvatar, '').replaceAll('\\', '/');
+    const attempts = Number.isInteger(candidate?.attempts)
+      ? Math.max(0, Math.min(RETIRED_OWNER_MAX_ATTEMPTS - 1, candidate.attempts))
+      : 0;
     entries.set(key, {
       world,
       id,
@@ -251,6 +255,7 @@ function normalizeRetiredOwners(value) {
         actorId,
         actorAvatar: isSafeAssetPath(normalizedAvatar) ? normalizedAvatar : DEFAULT_COS_AVATAR,
       } : {}),
+      ...(attempts > 0 ? { attempts } : {}),
     });
   }
   return [...entries.values()];
@@ -584,6 +589,17 @@ function resolveWorldWsUrl() {
   return configured || `ws://127.0.0.1:${EIDOVERSE_PORT}/ws`;
 }
 
+function resolveWorldHttpUrl() {
+  const configured = typeof process.env.EIDOVERSE_HTTP_URL === 'string' ? process.env.EIDOVERSE_HTTP_URL.trim() : '';
+  if (configured) return configured;
+  const url = new URL(resolveWorldWsUrl());
+  url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
+  url.pathname = '/';
+  url.search = '';
+  url.hash = '';
+  return url.toString();
+}
+
 function asConnectionError(error, fallback = 'Eidoverse Worlds is unavailable.') {
   if (error instanceof ServerError) return error;
   return new ServerError(`${fallback} ${error?.message || ''}`.trim(), {
@@ -878,19 +894,50 @@ async function forgetRetiredOwners(targets) {
 }
 
 async function recordRetiredOwnerCleanupFailures(failures) {
-  if (!failures.length) return;
-  const report = {
-    status: 'partial',
-    failedCount: failures.length,
-    codes: [...new Set(failures.map((error) => safeText(error?.code, 'EIDOVERSE_OWNER_HANDOFF_FAILED', 80)))].slice(0, 8),
-    at: new Date().toISOString(),
-  };
-  console.warn(`⚠️ Eidoverse skipped ${report.failedCount} retired-owner cleanup operation(s); projection will continue`);
-  await mutateState((state) => {
-    state.reconciliation.retiredOwnerCleanup = report;
-    if (state.migrationReport) state.migrationReport.retiredOwnerCleanup = clone(report);
-    return state;
+  if (!failures.length) {
+    const state = await loadState();
+    if (!state.reconciliation.retiredOwnerCleanup && !state.migrationReport?.retiredOwnerCleanup) return;
+    await mutateState((current) => {
+      delete current.reconciliation.retiredOwnerCleanup;
+      if (current.migrationReport) delete current.migrationReport.retiredOwnerCleanup;
+      return current;
+    });
+    return;
+  }
+  const failuresByOwner = new Map(failures.map(({ target, error }) => [
+    `${target.world}\0${target.id}`,
+    { target, error },
+  ]));
+  const report = await mutateState((state) => {
+    let retryingCount = 0;
+    let droppedCount = 0;
+    state.ownership.retired = state.ownership.retired.flatMap((entry) => {
+      const failure = failuresByOwner.get(`${entry.world}\0${entry.id}`);
+      if (!failure) return [entry];
+      const attempts = (entry.attempts || failure.target.attempts || 0) + 1;
+      if (attempts >= RETIRED_OWNER_MAX_ATTEMPTS) {
+        droppedCount += 1;
+        return [];
+      }
+      retryingCount += 1;
+      return [{ ...entry, attempts }];
+    });
+    const nextReport = {
+      status: 'partial',
+      failedCount: failuresByOwner.size,
+      retryingCount,
+      droppedCount,
+      maxAttempts: RETIRED_OWNER_MAX_ATTEMPTS,
+      codes: [...new Set([...failuresByOwner.values()].map(({ error }) => (
+        safeText(error?.code, 'EIDOVERSE_OWNER_HANDOFF_FAILED', 80)
+      )))].slice(0, 8),
+      at: new Date().toISOString(),
+    };
+    state.reconciliation.retiredOwnerCleanup = nextReport;
+    if (state.migrationReport) state.migrationReport.retiredOwnerCleanup = clone(nextReport);
+    return nextReport;
   });
+  console.warn(`⚠️ Eidoverse skipped ${report.failedCount} retired-owner cleanup operation(s); projection will continue`);
 }
 
 async function demoteRetiredOwners(connection, targets, {
@@ -901,16 +948,17 @@ async function demoteRetiredOwners(connection, targets, {
     Number(left.id === connection.id) - Number(right.id === connection.id)
   ));
   const failures = [];
+  const succeeded = [];
   for (const target of ordered) {
     await sendPacedVerb(connection, 'grant', { id: target.id, role: 'visitor' }, { signal, pacing }).then(
-      () => {},
+      () => succeeded.push(target),
       (error) => {
         if (signal?.aborted) throw error;
-        failures.push(error);
+        failures.push({ target, error });
       },
     );
   }
-  await forgetRetiredOwners(targets);
+  await forgetRetiredOwners(succeeded);
   return failures;
 }
 
@@ -923,7 +971,10 @@ async function revokeRetiredOwners(connection, config, {
     entry.world !== config.world
     || (entry.id !== config.human.id && entry.id !== config.cos.id)
   ));
-  if (!targets.length) return [];
+  if (!targets.length) {
+    await recordRetiredOwnerCleanupFailures([]);
+    return [];
+  }
   const failures = [];
 
   const currentWorldTargets = targets.filter((entry) => entry.world === config.world);
@@ -957,18 +1008,18 @@ async function revokeRetiredOwners(connection, config, {
     await priorConnection.waitForSnapshot({ signal }).then(async (snapshot) => {
       const actorRole = snapshot?.yourRights?.role || roleFromSnapshot(snapshot, group.actorId);
       if (actorRole !== 'owner') {
-        failures.push(new ServerError('PortOS could not retire a previous Eidoverse owner identity.', {
+        const error = new ServerError('PortOS could not retire a previous Eidoverse owner identity.', {
           status: 409,
           code: 'EIDOVERSE_OWNER_HANDOFF_FAILED',
-        }));
-        await forgetRetiredOwners(group.targets);
+        });
+        failures.push(...group.targets.map((target) => ({ target, error })));
         return;
       }
       failures.push(...await demoteRetiredOwners(priorConnection, group.targets, { signal }));
     }, async (error) => {
       if (signal?.aborted) throw error;
-      failures.push(asConnectionError(error, 'PortOS could not inspect a previous Eidoverse world.'));
-      await forgetRetiredOwners(group.targets);
+      const connectionError = asConnectionError(error, 'PortOS could not inspect a previous Eidoverse world.');
+      failures.push(...group.targets.map((target) => ({ target, error: connectionError })));
     }).finally(() => priorConnection.close());
   }
 
@@ -1068,7 +1119,7 @@ export async function ensureEidoverseWorldPresence() {
 }
 
 const libraryUrl = (path, query = null) => {
-  const url = new URL(path, `http://127.0.0.1:${EIDOVERSE_PORT}`);
+  const url = new URL(path, resolveWorldHttpUrl());
   for (const [key, value] of Object.entries(query || {})) url.searchParams.set(key, value);
   return url;
 };
@@ -1592,12 +1643,38 @@ export async function projectEidoverseWorld({ signal } = {}) {
  * starts or installs the external runtime: if Eidoverse is not already online,
  * the pending checkpoint remains visible for the page to remediate later.
  */
+async function recoverInterruptedProjection() {
+  const state = await loadState();
+  if (!['applying', 'compensating'].includes(state.reconciliation.status)) {
+    return { recovered: false, state };
+  }
+  const interruptedStatus = state.reconciliation.status;
+  const recoveredState = await mutateState((current) => {
+    current.pendingDesignVersion = EIDOVERSE_WORLD_DESIGN_VERSION;
+    current.reconciliation = {
+      ...current.reconciliation,
+      status: 'failed',
+      checkpoint: 'interrupted',
+      error: 'The previous Eidoverse projection stopped before it completed. Retry the world update.',
+      errorCode: 'EIDOVERSE_PROJECTION_INTERRUPTED',
+      errorContext: null,
+      completedAt: new Date().toISOString(),
+      ...(interruptedStatus === 'compensating' ? { compensationStatus: 'interrupted' } : {}),
+    };
+    return clone(current);
+  });
+  return { recovered: true, state: recoveredState };
+}
+
 export async function reconcilePendingEidoverseWorld() {
+  const recovery = await recoverInterruptedProjection();
+  if (recovery.recovered) return { reconciled: false, reason: 'interrupted' };
   const { features } = await getInstanceFeatures();
   if (features.find(({ id }) => id === 'eidoverse')?.enabled !== true) {
     return { reconciled: false, reason: 'feature-disabled' };
   }
-  const [setup, state] = await Promise.all([getEidoverseStatus(), loadState()]);
+  const setup = await getEidoverseStatus();
+  const state = recovery.state;
   if (state.pendingDesignVersion !== EIDOVERSE_WORLD_DESIGN_VERSION
     || (state.lastAppliedDesignVersion === null && !state.migrationReport)) {
     return { reconciled: false, reason: 'current' };
