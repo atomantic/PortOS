@@ -10364,7 +10364,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 808
+          "line": 826
         }
       ]
     },
@@ -10375,7 +10375,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 832
+          "line": 850
         }
       ]
     },
@@ -10386,7 +10386,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 827
+          "line": 845
         }
       ]
     },
@@ -10397,7 +10397,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 861
+          "line": 879
         }
       ]
     },
@@ -10408,7 +10408,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 846
+          "line": 864
         }
       ]
     },
@@ -10419,7 +10419,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 823
+          "line": 841
         }
       ]
     },
@@ -10430,7 +10430,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 751
+          "line": 769
         }
       ]
     },
@@ -10463,7 +10463,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 619
+          "line": 637
         }
       ]
     },
@@ -10474,7 +10474,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 757
+          "line": 775
         }
       ]
     },
@@ -10485,7 +10485,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 742
+          "line": 760
         }
       ]
     },
@@ -10507,7 +10507,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 738
+          "line": 756
         }
       ]
     },
@@ -10518,7 +10518,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 641
+          "line": 659
         }
       ]
     },
@@ -10529,7 +10529,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 719
+          "line": 737
         }
       ]
     },
@@ -10540,7 +10540,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 700
+          "line": 718
         }
       ]
     },
@@ -10551,7 +10551,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 652
+          "line": 670
         }
       ]
     },
@@ -10562,7 +10562,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 680
+          "line": 698
         }
       ]
     },
@@ -10705,7 +10705,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 635
+          "line": 653
         }
       ]
     },
@@ -22151,7 +22151,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 938
+          "line": 940
         }
       ]
     },
@@ -22162,7 +22162,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1327
+          "line": 1358
         }
       ]
     },
@@ -22173,7 +22173,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1303
+          "line": 1334
         }
       ]
     },
@@ -22184,7 +22184,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1332
+          "line": 1363
         }
       ]
     },
@@ -22195,7 +22195,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1361
+          "line": 1392
         }
       ]
     },
@@ -22206,7 +22206,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1409
+          "line": 1440
         }
       ]
     },
@@ -22217,7 +22217,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1381
+          "line": 1412
         }
       ]
     },
@@ -22228,7 +22228,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1417
+          "line": 1448
         }
       ]
     },
@@ -22239,7 +22239,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1413
+          "line": 1444
         }
       ]
     },
@@ -22250,7 +22250,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 817
+          "line": 819
         }
       ]
     },
@@ -22261,7 +22261,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 836
+          "line": 838
         }
       ]
     },
@@ -22272,7 +22272,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1434
+          "line": 1465
         }
       ]
     },
@@ -22283,7 +22283,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 455
+          "line": 457
         }
       ]
     },
@@ -22294,7 +22294,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 459
+          "line": 461
         }
       ]
     },
@@ -22305,7 +22305,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 527
+          "line": 529
         }
       ]
     },
@@ -22316,7 +22316,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 780
+          "line": 782
         }
       ]
     },
@@ -22327,7 +22327,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 765
+          "line": 767
         }
       ]
     },
@@ -22338,7 +22338,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 668
+          "line": 670
         }
       ]
     },
@@ -22349,23 +22349,12 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 748
+          "line": 750
         }
       ]
     },
     {
       "method": "GET",
-      "path": "/api/video-gen/setup/runtime-install",
-      "mountPath": "/api/video-gen",
-      "sources": [
-        {
-          "source": "server/routes/videoGen.js",
-          "line": 497
-        }
-      ]
-    },
-    {
-      "method": "POST",
       "path": "/api/video-gen/setup/runtime-install",
       "mountPath": "/api/video-gen",
       "sources": [
@@ -22376,13 +22365,24 @@
       ]
     },
     {
+      "method": "POST",
+      "path": "/api/video-gen/setup/runtime-install",
+      "mountPath": "/api/video-gen",
+      "sources": [
+        {
+          "source": "server/routes/videoGen.js",
+          "line": 501
+        }
+      ]
+    },
+    {
       "method": "GET",
       "path": "/api/video-gen/setup/runtime-status",
       "mountPath": "/api/video-gen",
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 493
+          "line": 495
         }
       ]
     },
@@ -22393,7 +22393,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 405
+          "line": 407
         }
       ]
     },
@@ -22404,7 +22404,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1451
+          "line": 1482
         }
       ]
     },
@@ -22415,7 +22415,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 925
+          "line": 927
         }
       ]
     },
@@ -22426,7 +22426,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 911
+          "line": 913
         }
       ]
     },
@@ -22437,7 +22437,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 881
+          "line": 883
         }
       ]
     },
@@ -22448,7 +22448,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 891
+          "line": 893
         }
       ]
     },
@@ -22459,7 +22459,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1402
+          "line": 1433
         }
       ]
     },
@@ -22470,7 +22470,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1440
+          "line": 1471
         }
       ]
     },
