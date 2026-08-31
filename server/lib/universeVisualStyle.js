@@ -27,11 +27,20 @@ const tokenList = (values) => (Array.isArray(values) ? values : [])
   .map((token) => (typeof token === 'string' ? token.trim() : ''))
   .filter(Boolean);
 
-const normalize = (token) => token.toLowerCase().replace(/\s+/g, ' ');
+// Trailing trim is load-bearing: the dedupe below splits a composed prompt on
+// its separators, so every part after the first arrives with a leading space.
+const normalize = (token) => token.toLowerCase().replace(/\s+/g, ' ').trim();
 
 /** Split a comma-joined prompt/negative string back into trimmed tokens. */
 export const splitPromptTokens = (text) => (typeof text === 'string' ? text : '')
   .split(',').map((token) => token.trim()).filter(Boolean);
+
+// Every separator a composed prompt can put between two style tokens: the
+// comma inside a joined token list, and the '. ' / newline that
+// `composeStyledPrompt` and the compiler use to butt the style clause against
+// the scene sentence. Splitting on all of them is what lets the dedupe below
+// compare whole tokens instead of substrings.
+const PROMPT_TOKEN_SEPARATORS = /[,.;\n]+/;
 
 /** Curated visual token lists for a universe (`[]` for a missing universe). */
 export function universeVisualStyleTokens(universe) {
@@ -68,9 +77,14 @@ export function buildVisualStyleClause(universe, { override = '', mode = 'prepen
  * pure budget with no effect on the image.
  */
 export function dropTokensPresentIn(tokens, authoredText) {
-  const haystack = normalize(typeof authoredText === 'string' ? authoredText : '');
-  if (!haystack) return tokenList(tokens);
-  return tokenList(tokens).filter((token) => !haystack.includes(normalize(token)));
+  const text = typeof authoredText === 'string' ? authoredText : '';
+  if (!text.trim()) return tokenList(tokens);
+  // Compare WHOLE tokens, never substrings: a plain `includes` would drop
+  // `flat colors` because the scene sentence happens to say "flat colors of
+  // dusk", silently stripping a style token the render still needed.
+  const present = new Set(text.split(PROMPT_TOKEN_SEPARATORS)
+    .map((part) => normalize(part)).filter(Boolean));
+  return tokenList(tokens).filter((token) => !present.has(normalize(token)));
 }
 
 /**

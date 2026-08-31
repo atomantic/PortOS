@@ -17,8 +17,7 @@ import {
 } from '../../lib/scenePrompt.js';
 import { resolveFableLoomProtagonistPresence } from '../../lib/fableLoomPlayback.js';
 import {
-  buildVisualStyleClause, dropTokensPresentIn, mergeNegativePromptTokens, splitPromptTokens,
-  universeVisualStyleTokens,
+  dropTokensPresentIn, mergeNegativePromptTokens, universeVisualStyleTokens,
 } from '../../lib/universeVisualStyle.js';
 import { getUniverse } from '../universeBuilder.js';
 import { resolveCharacterLoras } from '../characterLoraResolver.js';
@@ -354,7 +353,7 @@ export async function compileFableLoomVisualRequest({
   // preset onto the scene prompt before POSTing, so drop whatever it already
   // sent rather than emitting the token list a second time.
   const universeStyle = dropTokensPresentIn(
-    splitPromptTokens(buildVisualStyleClause(universe)),
+    universeVisualStyleTokens(universe).embrace,
     authoredPrompt,
   );
   const protagonistFraming = bindings.protagonistPresence === 'offscreen'

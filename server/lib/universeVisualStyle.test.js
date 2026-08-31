@@ -43,6 +43,17 @@ describe('universeVisualStyle', () => {
     expect(dropTokensPresentIn(['ligne claire'], '')).toEqual(['ligne claire']);
   });
 
+  it('matches whole tokens, so scene prose that merely contains one keeps it', () => {
+    // A substring test would drop 'flat colors' here and quietly weaken the render.
+    const prose = 'Tala watches the flat colors of dusk bleed over the ridge.';
+    expect(dropTokensPresentIn(['flat colors', 'ligne claire'], prose))
+      .toEqual(['flat colors', 'ligne claire']);
+    // A token the composed prompt genuinely carries is still dropped, whether the
+    // separator before it is a comma or the '. ' that butts style against scene.
+    expect(dropTokensPresentIn(['flat colors'], 'ligne claire, flat colors. Tala kneels.'))
+      .toEqual([]);
+  });
+
   it('unions negatives at token level so a joined authored negative does not repeat the list', () => {
     expect(mergeNegativePromptTokens([
       'photoreal, gore, blurry',
