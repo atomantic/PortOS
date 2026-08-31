@@ -39,6 +39,7 @@ import {
 } from './logic.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
+  withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
 
 // `data` JSONB is the whole record; name/created_at/updated_at mirror into
@@ -214,7 +215,9 @@ export async function pruneTombstonedBoards(olderThanMs) {
      RETURNING id`,
     [cutoffIso],
   );
-  for (const r of rows) await deleteSyncBaseHash('moodBoard', r.id);
+  await withBaseHashFlushBatch(async () => {
+    for (const r of rows) await deleteSyncBaseHash('moodBoard', r.id);
+  });
   return { pruned: rows.length };
 }
 

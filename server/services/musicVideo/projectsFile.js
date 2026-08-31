@@ -26,6 +26,7 @@ import {
 } from './projectsLogic.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
+  withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
 
 const PROJECTS_FILE = join(PATHS.data, 'music-video-projects.json');
@@ -155,7 +156,9 @@ export async function pruneTombstonedProjects(olderThanMs) {
   }
   if (pruned.length === 0) return { pruned: 0 };
   await saveAll(survivors);
-  for (const id of pruned) await deleteSyncBaseHash('musicVideoProject', id);
+  await withBaseHashFlushBatch(async () => {
+    for (const id of pruned) await deleteSyncBaseHash('musicVideoProject', id);
+  });
   return { pruned: pruned.length };
 }
 

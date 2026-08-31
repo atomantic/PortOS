@@ -33,6 +33,7 @@ import {
   setSyncBaseHash,
   deleteSyncBaseHash,
   flushBaseHashes,
+  withBaseHashFlushBatch,
   maybeJournalBeforeOverwrite,
 } from '../../lib/conflictJournal.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
@@ -311,7 +312,9 @@ export async function mergeCommissionFeedbackFromSync(remoteRecords, { source = 
 /** Hard-remove tombstoned feedback older than the cutoff; evicts each pruned id's base hash. */
 export async function pruneTombstonedCommissionFeedback(olderThanMs) {
   const result = await feedbackStore().pruneTombstoned(olderThanMs);
-  for (const id of result.ids || []) await deleteSyncBaseHash(COMMISSION_FEEDBACK_KIND, id).catch(() => {});
+  await withBaseHashFlushBatch(async () => {
+    for (const id of result.ids || []) await deleteSyncBaseHash(COMMISSION_FEEDBACK_KIND, id).catch(() => {});
+  });
   return result;
 }
 

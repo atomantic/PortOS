@@ -10,18 +10,27 @@
  */
 
 import { describe, it, expect, afterAll, beforeAll, vi } from 'vitest';
+import { rmSync } from 'fs';
+import { join } from 'path';
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
+import { getSyncBaseHash, __resetBaseHashCacheForTests } from '../../lib/conflictJournal.js';
 
-// Stub the conflict-journal so mergeBoardsFromSync exercises its DB persist + LWW
-// decision WITHOUT writing real base-hash / journal files under data/ during the
-// test:db run (the pure LWW decision itself is pinned in logic.test.js).
-vi.mock('../../lib/conflictJournal.js', () => ({
-  maybeJournalBeforeOverwrite: vi.fn().mockResolvedValue(undefined),
-  setSyncBaseHash: vi.fn().mockResolvedValue(undefined),
-  contentHashForRecord: vi.fn(() => 'test-hash'),
-  flushBaseHashes: vi.fn().mockResolvedValue(undefined),
-  deleteSyncBaseHash: vi.fn().mockResolvedValue(undefined),
-}));
+const testState = vi.hoisted(() => ({ dataRoot: null, writeCounter: { baseHash: 0 } }));
+
+vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  testState.dataRoot ??= mkdtempSync(join(tmpdir(), 'mood-board-db-test-'));
+  return {
+    ...actual,
+    PATHS: { ...actual.PATHS, data: testState.dataRoot },
+    atomicWrite: async (path, data) => {
+      if (typeof path === 'string' && path.endsWith('sync_base_hashes.json')) testState.writeCounter.baseHash += 1;
+      return actual.atomicWrite(path, data);
+    },
+  };
+});
 
 let dbReady = false;
 let skipReason = '';
@@ -40,6 +49,8 @@ let skipReason = '';
 }
 
 if (!dbReady) console.log(`⏭️  moodBoard/db.test.js skipped: ${skipReason}`);
+
+afterAll(() => rmSync(testState.dataRoot, { recursive: true, force: true }));
 
 describe.skipIf(!dbReady)('mood board DB round-trip', () => {
   let db;
@@ -179,12 +190,27 @@ describe.skipIf(!dbReady)('mood board federation (#1564)', () => {
     expect((await db.getBoard(board.id)).description).toBe('d');
   });
 
-  it('pruneTombstonedBoards hard-removes tombstones older than the cutoff', async () => {
-    const id = `mb-fed-prune-${Date.now()}`;
-    created.push(id);
-    await db.mergeBoardsFromSync([remote(id, { updatedAt: '2026-06-23T00:00:00.000Z', deleted: true, deletedAt: '2026-06-23T00:00:00.000Z' })]);
-    const res = await db.pruneTombstonedBoards(Date.parse('2030-01-01T00:00:00.000Z'));
-    expect(res.pruned).toBeGreaterThanOrEqual(1);
-    expect(await db.getBoard(id, { includeDeleted: true })).toBeNull();
+  it('pruneTombstonedBoards batches base-hash eviction for multiple tombstones', async () => {
+    await query(`DELETE FROM mood_boards WHERE id LIKE $1`, ['mb-fed-prune-%']);
+    const oldId = `mb-fed-prune-old-${Date.now()}`;
+    const oldIdTwo = `mb-fed-prune-old-two-${Date.now()}`;
+    const newId = `mb-fed-prune-new-${Date.now()}`;
+    created.push(oldId, oldIdTwo, newId);
+    await db.mergeBoardsFromSync([
+      remote(oldId, { updatedAt: '2000-01-02T00:00:00.000Z', deleted: true, deletedAt: '2000-01-01T00:00:00.000Z' }),
+      remote(oldIdTwo, { updatedAt: '2000-01-03T00:00:00.000Z', deleted: true, deletedAt: '2000-01-02T00:00:00.000Z' }),
+      remote(newId, { updatedAt: '2099-01-02T00:00:00.000Z', deleted: true, deletedAt: '2099-01-01T00:00:00.000Z' }),
+    ]);
+    expect(await getSyncBaseHash('moodBoard', oldId)).not.toBeNull();
+    expect(await getSyncBaseHash('moodBoard', oldIdTwo)).not.toBeNull();
+
+    testState.writeCounter.baseHash = 0;
+    const res = await db.pruneTombstonedBoards(Date.parse('2025-01-01T00:00:00.000Z'));
+    expect(res).toEqual({ pruned: 2 });
+    expect(testState.writeCounter.baseHash).toBe(1);
+    expect(await getSyncBaseHash('moodBoard', oldId)).toBeNull();
+    expect(await getSyncBaseHash('moodBoard', oldIdTwo)).toBeNull();
+    expect(await db.getBoard(newId, { includeDeleted: true })).not.toBeNull();
+    expect(await db.getBoard(oldId, { includeDeleted: true })).toBeNull();
   });
 });

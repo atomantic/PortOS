@@ -1,4 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+
+const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'commission-feedback-test-'));
+const writeCounter = vi.hoisted(() => ({ baseHash: 0 }));
 
 // In-memory collectionStore (same posture as store.test.js) so CRUD + merge are
 // exercised without the filesystem or Postgres.
@@ -14,20 +20,22 @@ const makeMemStore = () => ({
   verifySchemaVersion: async () => ({ ok: true }),
 });
 vi.mock('../../lib/collectionStore.js', () => ({ createCollectionStore: () => makeMemStore() }));
-vi.mock('../../lib/fileUtils.js', () => ({ PATHS: { data: '/tmp/portos-test-feedback' } }));
+vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    PATHS: { ...actual.PATHS, data: TEST_DATA_ROOT },
+    atomicWrite: async (path, data) => {
+      if (typeof path === 'string' && path.endsWith('sync_base_hashes.json')) writeCounter.baseHash += 1;
+      return actual.atomicWrite(path, data);
+    },
+  };
+});
 // Keep federation side-effects inert in this store-level unit test.
 const emitRecordUpdated = vi.fn();
 const emitRecordDeleted = vi.fn();
 const autoSubscribeRecordToAllPeers = vi.fn(() => Promise.resolve());
 vi.mock('../sharing/recordEvents.js', () => ({ emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers }));
-vi.mock('../../lib/conflictJournal.js', () => ({
-  contentHashForRecord: vi.fn(() => 'hash'),
-  setSyncBaseHash: vi.fn(() => Promise.resolve()),
-  deleteSyncBaseHash: vi.fn(() => Promise.resolve()),
-  flushBaseHashes: vi.fn(() => Promise.resolve()),
-  maybeJournalBeforeOverwrite: vi.fn(() => Promise.resolve()),
-}));
-
 const {
   recordFeedback,
   listFeedbackForCommission,
@@ -41,8 +49,17 @@ const {
   deleteCommissionFeedback,
   backfillInlineFeedback,
 } = await import('./feedbackStore.js');
+const cj = await import('../../lib/conflictJournal.js');
 
-beforeEach(() => { feedbackRecords.clear(); vi.clearAllMocks(); });
+beforeEach(() => {
+  feedbackRecords.clear();
+  rmSync(join(TEST_DATA_ROOT, 'sharing'), { recursive: true, force: true });
+  rmSync(join(TEST_DATA_ROOT, 'conflict-journal'), { recursive: true, force: true });
+  cj.__resetBaseHashCacheForTests();
+  writeCounter.baseHash = 0;
+  vi.clearAllMocks();
+});
+afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
 
 describe('recordFeedback + hydration', () => {
   it('writes one federated record per reaction (deterministic id per run) and subscribes peers', async () => {
@@ -139,6 +156,35 @@ describe('federation facades', () => {
     const pruned = await pruneTombstonedCommissionFeedback(Date.parse('2021-01-01T00:00:00.000Z'));
     expect(pruned.pruned).toBe(1);
     expect(feedbackRecords.has('cfeedback-run-A')).toBe(false);
+  });
+
+  it('prunes multiple tombstoned reactions with one base-hash write', async () => {
+    const oldOne = {
+      id: 'cfeedback-run-old-1', commissionId: 'c1', runId: 'run-old-1', rating: 'up',
+      note: '', tags: [], at: '2020-01-01T00:00:00.000Z', updatedAt: '2020-01-01T00:00:00.000Z',
+      deleted: true, deletedAt: '2020-01-01T00:00:00.000Z',
+    };
+    const oldTwo = {
+      ...oldOne, id: 'cfeedback-run-old-2', runId: 'run-old-2',
+      at: '2020-01-02T00:00:00.000Z', updatedAt: '2020-01-02T00:00:00.000Z',
+      deletedAt: '2020-01-02T00:00:00.000Z',
+    };
+    const newer = {
+      ...oldOne, id: 'cfeedback-run-new', runId: 'run-new',
+      at: '2099-01-01T00:00:00.000Z', updatedAt: '2099-01-01T00:00:00.000Z',
+      deletedAt: '2099-01-01T00:00:00.000Z',
+    };
+    await mergeCommissionFeedbackFromSync([oldOne, oldTwo, newer]);
+    expect(await cj.getSyncBaseHash('commissionFeedback', oldOne.id)).not.toBeNull();
+    expect(await cj.getSyncBaseHash('commissionFeedback', oldTwo.id)).not.toBeNull();
+
+    writeCounter.baseHash = 0;
+    const result = await pruneTombstonedCommissionFeedback(Date.parse('2030-01-01T00:00:00.000Z'));
+    expect(result).toEqual({ pruned: 2, ids: [oldOne.id, oldTwo.id] });
+    expect(writeCounter.baseHash).toBe(1);
+    expect(await cj.getSyncBaseHash('commissionFeedback', oldOne.id)).toBeNull();
+    expect(await cj.getSyncBaseHash('commissionFeedback', oldTwo.id)).toBeNull();
+    expect(feedbackRecords.has(newer.id)).toBe(true);
   });
 
   it('restores a tombstoned reaction from a snapshot, un-deleting it', async () => {

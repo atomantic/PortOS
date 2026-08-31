@@ -30,6 +30,7 @@ export const DB_TEST_INCLUDE = [
   'services/catalogCanonProjection.test.js',
   'services/catalogRefResolver.test.js',
   'services/creativeDirector/projectsDB.test.js',
+  'services/musicVideo/projectsDB.test.js',
   'routes/catalog.test.js',
   'scripts/run-db-migrations.test.js',
 ];

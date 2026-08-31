@@ -12,16 +12,29 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'mv-projects-file-test-'));
+const writeCounter = vi.hoisted(() => ({ baseHash: 0 }));
 
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, PATHS: { ...actual.PATHS, data: TEST_DATA_ROOT } };
+  return {
+    ...actual,
+    PATHS: { ...actual.PATHS, data: TEST_DATA_ROOT },
+    atomicWrite: async (path, data) => {
+      if (typeof path === 'string' && path.endsWith('sync_base_hashes.json')) writeCounter.baseHash += 1;
+      return actual.atomicWrite(path, data);
+    },
+  };
 });
 
 const file = await import('./projectsFile.js');
+const cj = await import('../../lib/conflictJournal.js');
 
 function reset() {
   rmSync(join(TEST_DATA_ROOT, 'music-video-projects.json'), { force: true });
+  rmSync(join(TEST_DATA_ROOT, 'sharing'), { recursive: true, force: true });
+  rmSync(join(TEST_DATA_ROOT, 'conflict-journal'), { recursive: true, force: true });
+  cj.__resetBaseHashCacheForTests();
+  writeCounter.baseHash = 0;
 }
 beforeEach(reset);
 afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
@@ -119,20 +132,37 @@ describe('projectsFile federation (#1770)', () => {
     expect(await file.getProject(p.id, { includeDeleted: true })).toMatchObject({ deleted: true });
   });
 
-  it('pruneTombstonedProjects hard-removes only old-enough tombstones', async () => {
+  it('pruneTombstonedProjects batches base-hash eviction for multiple tombstones', async () => {
     const keep = await file.createProject({ name: 'Live' });
-    // Insert an already-old tombstone via the sync insert path (insert applies
-    // regardless of LWW), so its deletedAt sits far enough in the past to prune.
+    // Insert already-old tombstones via the sync insert path (insert applies
+    // regardless of LWW), so their deletedAt values sit far enough in the past
+    // to prune. The newer tombstone verifies the existing eligibility predicate.
     await file.mergeProjectsFromSync([{
-      id: 'mv-old-tomb', name: 'Old', status: 'draft', scenes: [],
+      id: 'mv-old-tomb-1', name: 'Old 1', status: 'draft', scenes: [],
       createdAt: '2000-01-01T00:00:00Z', updatedAt: '2000-01-02T00:00:00Z',
       deleted: true, deletedAt: '2000-01-01T00:00:00Z',
+    }, {
+      id: 'mv-old-tomb-2', name: 'Old 2', status: 'draft', scenes: [],
+      createdAt: '2000-01-02T00:00:00Z', updatedAt: '2000-01-03T00:00:00Z',
+      deleted: true, deletedAt: '2000-01-02T00:00:00Z',
+    }, {
+      id: 'mv-new-tomb', name: 'New', status: 'draft', scenes: [],
+      createdAt: '2099-01-01T00:00:00Z', updatedAt: '2099-01-02T00:00:00Z',
+      deleted: true, deletedAt: '2099-01-01T00:00:00Z',
     }]);
 
+    expect(await cj.getSyncBaseHash('musicVideoProject', 'mv-old-tomb-1')).not.toBeNull();
+    expect(await cj.getSyncBaseHash('musicVideoProject', 'mv-old-tomb-2')).not.toBeNull();
+
+    writeCounter.baseHash = 0;
     // A future cutoff prunes the old tombstone; a pre-tombstone cutoff would not.
     expect((await file.pruneTombstonedProjects(Date.parse('1990-01-01T00:00:00Z'))).pruned).toBe(0);
+    expect(writeCounter.baseHash).toBe(0);
     const res = await file.pruneTombstonedProjects(Date.parse('2010-01-01T00:00:00Z'));
-    expect(res.pruned).toBe(1);
-    expect(await file.listProjectIds({ includeDeleted: true })).toEqual([keep.id]);
+    expect(res).toEqual({ pruned: 2 });
+    expect(writeCounter.baseHash).toBe(1);
+    expect(await cj.getSyncBaseHash('musicVideoProject', 'mv-old-tomb-1')).toBeNull();
+    expect(await cj.getSyncBaseHash('musicVideoProject', 'mv-old-tomb-2')).toBeNull();
+    expect((await file.listProjectIds({ includeDeleted: true })).sort()).toEqual([keep.id, 'mv-new-tomb'].sort());
   });
 });
