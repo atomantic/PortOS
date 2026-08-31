@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildVisualStyleClause,
-  dropTokensPresentIn,
   mergeNegativePromptTokens,
+  stripStyleClause,
   universeAestheticLine,
   universeVisualStyleTokens,
 } from './universeVisualStyle.js';
@@ -36,22 +36,27 @@ describe('universeVisualStyle', () => {
     expect(buildVisualStyleClause(universe, { ...override, mode: 'override' })).toBe('washed sepia');
   });
 
-  it('drops style tokens the authored prompt already carries', () => {
+  it('strips the style clause the browser already prefixed, leaving the scene', () => {
     const authored = 'Ligne Claire, flat matte color fields. Tala kneels in silver grass.';
-    expect(dropTokensPresentIn(universeVisualStyleTokens(universe).embrace, authored)).toEqual([]);
-    expect(dropTokensPresentIn(['ligne claire', 'screenprint grain'], authored)).toEqual(['screenprint grain']);
-    expect(dropTokensPresentIn(['ligne claire'], '')).toEqual(['ligne claire']);
+    expect(stripStyleClause(authored, 'ligne claire, flat matte color fields'))
+      .toBe('Tala kneels in silver grass.');
   });
 
-  it('matches whole tokens, so scene prose that merely contains one keeps it', () => {
-    // A substring test would drop 'flat colors' here and quietly weaken the render.
-    const prose = 'Tala watches the flat colors of dusk bleed over the ridge.';
-    expect(dropTokensPresentIn(['flat colors', 'ligne claire'], prose))
-      .toEqual(['flat colors', 'ligne claire']);
-    // A token the composed prompt genuinely carries is still dropped, whether the
-    // separator before it is a comma or the '. ' that butts style against scene.
-    expect(dropTokensPresentIn(['flat colors'], 'ligne claire, flat colors. Tala kneels.'))
-      .toEqual([]);
+  it('leaves a prompt that never carried the clause untouched', () => {
+    expect(stripStyleClause('A cautious arrival', 'ligne claire')).toBe('A cautious arrival');
+    expect(stripStyleClause('A cautious arrival', '')).toBe('A cautious arrival');
+    // Only a LEADING copy is the browser's duplicate; style words occurring in
+    // the scene sentence itself are the author's and must survive.
+    expect(stripStyleClause('Dusk in flat matte color fields', 'flat matte color fields'))
+      .toBe('Dusk in flat matte color fields');
+  });
+
+  it('matches a token carrying its own punctuation instead of emitting it twice', () => {
+    // A per-token split on '.' would never match `M.C. Escher`, so the compiler
+    // would prepend the whole clause again on top of the browser's copy.
+    const clause = 'ligne claire, M.C. Escher';
+    expect(stripStyleClause(`${clause}. Stairs fold back on themselves.`, clause))
+      .toBe('Stairs fold back on themselves.');
   });
 
   it('unions negatives at token level so a joined authored negative does not repeat the list', () => {

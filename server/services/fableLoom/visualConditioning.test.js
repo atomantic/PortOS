@@ -113,8 +113,13 @@ describe('FableLoom visual conditioning compiler', () => {
 
     expect(result.prompt).not.toContain('Aruun');
     expect(result.prompt).not.toContain('PG-13');
-    expect(result.prompt).not.toContain('Universe style:');
+    // The tokens appear exactly once, and in FRONT of the canon context — a
+    // diffusion model weights early tokens heaviest, so a surviving copy
+    // stranded after the place/character blocks is not equivalent.
     expect(result.prompt.match(/ligne claire/g)).toHaveLength(1);
+    expect(result.prompt.startsWith('Universe style: ligne claire, flat matte color fields')).toBe(true);
+    expect(result.prompt.indexOf('Universe style:')).toBeLessThan(result.prompt.indexOf('Environment:'));
+    expect(result.prompt).toContain('A cautious arrival');
     expect(result.negativePrompt.match(/photoreal/g)).toHaveLength(1);
     expect(result.negativePrompt.match(/gore/g)).toHaveLength(1);
   });

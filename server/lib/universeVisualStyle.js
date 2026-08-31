@@ -27,20 +27,11 @@ const tokenList = (values) => (Array.isArray(values) ? values : [])
   .map((token) => (typeof token === 'string' ? token.trim() : ''))
   .filter(Boolean);
 
-// Trailing trim is load-bearing: the dedupe below splits a composed prompt on
-// its separators, so every part after the first arrives with a leading space.
 const normalize = (token) => token.toLowerCase().replace(/\s+/g, ' ').trim();
 
 /** Split a comma-joined prompt/negative string back into trimmed tokens. */
 export const splitPromptTokens = (text) => (typeof text === 'string' ? text : '')
   .split(',').map((token) => token.trim()).filter(Boolean);
-
-// Every separator a composed prompt can put between two style tokens: the
-// comma inside a joined token list, and the '. ' / newline that
-// `composeStyledPrompt` and the compiler use to butt the style clause against
-// the scene sentence. Splitting on all of them is what lets the dedupe below
-// compare whole tokens instead of substrings.
-const PROMPT_TOKEN_SEPARATORS = /[,.;\n]+/;
 
 /** Curated visual token lists for a universe (`[]` for a missing universe). */
 export function universeVisualStyleTokens(universe) {
@@ -67,24 +58,30 @@ export function buildVisualStyleClause(universe, { override = '', mode = 'prepen
   return parts.filter(Boolean).join('. ');
 }
 
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /**
- * Drop style tokens the authored prompt already carries.
+ * Remove a style clause the authored prompt already leads with.
  *
  * The browser composes the same universe preset onto a scene prompt before
- * POSTing it, and the server-side compiler then prepends the canonical style
- * clause. Without a token-level pass the entire embrace list lands twice in
- * every render prompt (and the avoid list twice in every negative), which is
- * pure budget with no effect on the image.
+ * POSTing it (`composeStyledPrompt`), and the compiler prepends the canonical
+ * clause too — so without this the whole token list lands twice in every
+ * render. Strip the browser's copy rather than the compiler's: diffusion models
+ * weight earlier tokens heaviest, and only the compiler's copy sits in front of
+ * the canon context where that conditioning is worth anything.
+ *
+ * Matching is on the JOINED clause, not token by token, which is what keeps a
+ * token carrying its own punctuation (`M.C. Escher`) intact — a per-token
+ * split on '.' would never match it and would emit it a second time.
  */
-export function dropTokensPresentIn(tokens, authoredText) {
-  const text = typeof authoredText === 'string' ? authoredText : '';
-  if (!text.trim()) return tokenList(tokens);
-  // Compare WHOLE tokens, never substrings: a plain `includes` would drop
-  // `flat colors` because the scene sentence happens to say "flat colors of
-  // dusk", silently stripping a style token the render still needed.
-  const present = new Set(text.split(PROMPT_TOKEN_SEPARATORS)
-    .map((part) => normalize(part)).filter(Boolean));
-  return tokenList(tokens).filter((token) => !present.has(normalize(token)));
+export function stripStyleClause(text, clause) {
+  const source = typeof text === 'string' ? text : '';
+  const trimmed = typeof clause === 'string' ? clause.trim() : '';
+  if (!trimmed || !source) return source;
+  // Whitespace in the composed prompt need not match the stored token spacing,
+  // and the clause is followed by the separator composeStyledPrompt inserted.
+  const pattern = new RegExp(`^\\s*${escapeRegExp(trimmed).replace(/\s+/g, '\\s+')}\\s*[.,;]?\\s*`, 'i');
+  return source.replace(pattern, '').trim();
 }
 
 /**

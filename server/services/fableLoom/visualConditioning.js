@@ -17,7 +17,7 @@ import {
 } from '../../lib/scenePrompt.js';
 import { resolveFableLoomProtagonistPresence } from '../../lib/fableLoomPlayback.js';
 import {
-  dropTokensPresentIn, mergeNegativePromptTokens, universeVisualStyleTokens,
+  mergeNegativePromptTokens, stripStyleClause, universeVisualStyleTokens,
 } from '../../lib/universeVisualStyle.js';
 import { getUniverse } from '../universeBuilder.js';
 import { resolveCharacterLoras } from '../characterLoraResolver.js';
@@ -350,20 +350,19 @@ export async function compileFableLoomVisualRequest({
   ]).join('. '));
   // Curated visual tokens only — `universe.styleNotes` is writing-stage
   // direction (see lib/universeVisualStyle.js). The browser composes this same
-  // preset onto the scene prompt before POSTing, so drop whatever it already
-  // sent rather than emitting the token list a second time.
-  const universeStyle = dropTokensPresentIn(
-    universeVisualStyleTokens(universe).embrace,
-    authoredPrompt,
-  );
+  // preset onto the scene prompt before POSTing, so strip ITS copy and keep
+  // ours: the clause below leads the prompt, and only a leading copy gets the
+  // early-token weighting a diffusion model gives style.
+  const universeStyle = universeVisualStyleTokens(universe).embrace.join(', ');
+  const authoredBody = stripStyleClause(authoredPrompt, universeStyle);
   const protagonistFraming = bindings.protagonistPresence === 'offscreen'
     ? 'Framing constraint: the canonical protagonist is speaking through the communicator off-screen. The camera is the remote witness: show the obstacle or environment the protagonist cannot see around a corner, beyond a bend, at a distance, or otherwise outside their sightline. The communicator stays on the protagonist\'s person and completely out of frame; never use a standalone comms device as the subject. Do not show their face, body, silhouette, or duplicate presence in this storyboard image.'
     : '';
   const positive = compact([
-    universeStyle.length && `Universe style: ${universeStyle.join(', ')}`,
+    universeStyle && `Universe style: ${universeStyle}`,
     placePrompt, ...characterPrompts, ...objectPrompts,
     protagonistFraming,
-    authoredPrompt || (kind === 'video' ? node.videoPrompt || node.prose : node.imagePrompt),
+    authoredBody || (kind === 'video' ? node.videoPrompt || node.prose : node.imagePrompt),
     node.visualCanon?.shotNotes && `Shot continuity: ${node.visualCanon.shotNotes}`,
   ]).join('\n\n').slice(0, 8000);
   const identityAvoid = bindings.boundCharacters.flatMap(({ character }) => character.identityPack?.avoid || []);
