@@ -58,6 +58,17 @@ describe('pipeline issues store facade — file backend', () => {
     expect(await s.loadAllForSeries('ser-missing')).toEqual([]);
   });
 
+  it('loadAllForSeriesIds returns several requested series in one scan', async () => {
+    const s = getIssuesStore(passthroughSanitize);
+    await s.saveOneNow('iss-1', { id: 'iss-1', seriesId: 'ser-1', title: 'One' });
+    await s.saveOneNow('iss-2', { id: 'iss-2', seriesId: 'ser-2', title: 'Two' });
+    await s.saveOneNow('iss-3', { id: 'iss-3', seriesId: 'ser-3', title: 'Three' });
+    const selected = await s.loadAllForSeriesIds(['ser-1', 'ser-3']);
+    expect(selected.map((r) => r.id).sort()).toEqual(['iss-1', 'iss-3']);
+    expect(selected.every((r) => r._sanitized === true)).toBe(true);
+    expect(await s.loadAllForSeriesIds([])).toEqual([]);
+  });
+
   it('listIds({ includeDeleted: false }) drops tombstones; default keeps them (#2540)', async () => {
     const s = getIssuesStore(passthroughSanitize);
     await s.saveOneNow('iss-live', { id: 'iss-live', seriesId: 'ser-1', title: 'Live' });

@@ -89,8 +89,8 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiX.js` | X account diagnostics, public post metrics, review-gated drafts, and manual browser handoffs. |
 | `apiContacts.js` | macOS Contacts sync + identity resolve + Tribe enrich (#2415). |
 | `apiSignal.js` | Signal Desktop ingestion status / setup-check / sync. |
-| `apiSpotify.js` | Spotify OAuth + listening-history sync. |
-| `apiYoutube.js` | YouTube watch-history scrape sync + setup check. |
+| `apiSpotify.js` | Spotify OAuth + listening-history and playlist-library sync. |
+| `apiYoutube.js` | YouTube watch-history scrape, playlist/video library sync, and setup check. |
 | `apiPersonalities.js` | Agent personality profiles. |
 
 ## Media / creative
@@ -103,7 +103,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiMediaJobs.js` | Media generation job tracking + `refineMediaPrompt` / `promptFromMedia` (vision reverse-prompt). |
 | `apiCreativeDirector.js` | Creative Director (video production). |
 | `apiCreativeCommission.js` | Creative Commissions (Autonomous Creation Engine — standing recurring briefs). |
-| `apiFableLoom.js` | FableLoom branching narratives — loom/episode/scene-node/transition CRUD, deterministic graph validation, and the AI lanes (weave, branch, review, play turns, per-episode scene reformat). |
+| `apiFableLoom.js` | FableLoom branching narratives — loom/episode/scene-node/transition CRUD, deterministic graph validation, AI authoring lanes, and the bounded editorial/playthrough autopilot lifecycle. |
 | `apiGames.js` | Game studio records, managed-app binding, reusable sprite/music bindings, deterministic asset-bundle compilation/integrity preflight, and AI feedback history. |
 | `apiMusicVideo.js` | Music Video projects + scene board + audio analysis. |
 | `apiSprites.js` | Sprite Manager records, asset library, production-set import (#2895), reference workflow: create/generate/lock (#2896), directional walk and per-track generation/approval, animation-type definition CRUD (#3153), trim/postprocess, and per-run source-frame listing for the Loop Trimmer's re-derive (#2980), and animation render-provider readiness (#4876). |

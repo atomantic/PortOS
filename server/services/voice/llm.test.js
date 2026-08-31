@@ -8,6 +8,7 @@ import { getProviderById } from '../providers.js';
 import {
   extractInlineToolCalls, isToolCapable, isReasoningModel,
   TOOL_CAPABLE_PATTERNS, REASONING_PATTERNS, resolveLlmEndpoint,
+  streamChat, VOICE_LLM_TIMEOUT_MS, VOICE_LLM_TIMEOUT_MESSAGE,
 } from './llm.js';
 
 describe('extractInlineToolCalls', () => {
@@ -265,5 +266,202 @@ describe('resolveLlmEndpoint', () => {
     const ep = await resolveLlmEndpoint();
     expect(getProviderById).toHaveBeenCalledWith('lmstudio');
     expect(ep.apiBase).toBe('http://localhost:1234/v1');
+  });
+});
+
+describe('streamChat request lifecycle', () => {
+  let fetchMock;
+  let chatSignal;
+
+  const provider = {
+    id: 'test-provider',
+    type: 'api',
+    endpoint: 'https://example.com/v1',
+    apiKey: '',
+    defaultModel: 'test-model',
+    name: 'Test Provider',
+  };
+
+  const modelResponse = () => Promise.resolve({
+    ok: true,
+    json: async () => ({ data: [{ id: 'test-model' }] }),
+  });
+
+  const pendingUntilAbort = (signal) => new Promise((_, reject) => {
+    const abort = () => reject(signal.reason);
+    if (signal.aborted) abort();
+    else signal.addEventListener('abort', abort, { once: true });
+  });
+
+  const installFetch = (chatFetch) => {
+    fetchMock.mockImplementation((url, options = {}) => {
+      if (url.endsWith('/models')) return modelResponse();
+      chatSignal = options.signal;
+      return chatFetch(options);
+    });
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    getProviderById.mockReset();
+    getProviderById.mockResolvedValue(provider);
+    fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('aborts a provider request that never returns headers', async () => {
+    installFetch(({ signal }) => pendingUntilAbort(signal));
+    const onTimeout = vi.fn();
+
+    const result = streamChat([], {
+      provider: 'test-provider', model: 'test-model', onTimeout,
+    });
+    const rejection = expect(result).rejects.toThrow(VOICE_LLM_TIMEOUT_MESSAGE);
+    await vi.advanceTimersByTimeAsync(VOICE_LLM_TIMEOUT_MS);
+
+    await rejection;
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+    expect(chatSignal.aborted).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('aborts a provider stream that stops yielding SSE data', async () => {
+    let releaseRead;
+    const reader = {
+      read: vi.fn(() => new Promise((resolve) => { releaseRead = resolve; })),
+      cancel: vi.fn(() => {
+        releaseRead?.({ value: undefined, done: true });
+        return Promise.resolve();
+      }),
+    };
+    installFetch(({ signal }) => Promise.resolve({
+      ok: true,
+      status: 200,
+      body: { getReader: () => reader },
+    }));
+
+    const result = streamChat([], { provider: 'test-provider', model: 'test-model' });
+    await vi.waitFor(() => expect(reader.read).toHaveBeenCalledTimes(1));
+    const rejection = expect(result).rejects.toThrow(VOICE_LLM_TIMEOUT_MESSAGE);
+    await vi.advanceTimersByTimeAsync(VOICE_LLM_TIMEOUT_MS);
+
+    await rejection;
+    expect(chatSignal.aborted).toBe(true);
+    expect(reader.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds a stream that keeps yielding without completing', async () => {
+    let releaseRead;
+    let reads = 0;
+    const reader = {
+      read: vi.fn(() => {
+        reads++;
+        if (reads === 1) {
+          return Promise.resolve({
+            value: new TextEncoder().encode('data: {"choices":[{"delta":{"content":"Still working"}}]}\n\n'),
+            done: false,
+          });
+        }
+        return new Promise((resolve) => { releaseRead = resolve; });
+      }),
+      cancel: vi.fn(() => {
+        releaseRead?.({ value: undefined, done: true });
+        return Promise.resolve();
+      }),
+    };
+    installFetch(() => Promise.resolve({
+      ok: true,
+      status: 200,
+      body: { getReader: () => reader },
+    }));
+
+    const result = streamChat([], { provider: 'test-provider', model: 'test-model' });
+    await vi.waitFor(() => expect(reader.read).toHaveBeenCalledTimes(2));
+    const rejection = expect(result).rejects.toThrow(VOICE_LLM_TIMEOUT_MESSAGE);
+    await vi.advanceTimersByTimeAsync(VOICE_LLM_TIMEOUT_MS);
+
+    await rejection;
+    expect(chatSignal.aborted).toBe(true);
+    expect(reader.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves explicit cancellation when an active reader closes as done', async () => {
+    let releaseRead;
+    const reader = {
+      read: vi.fn(() => new Promise((resolve) => { releaseRead = resolve; })),
+      cancel: vi.fn(() => {
+        releaseRead?.({ value: undefined, done: true });
+        return Promise.resolve();
+      }),
+    };
+    installFetch(() => Promise.resolve({
+      ok: true,
+      status: 200,
+      body: { getReader: () => reader },
+    }));
+
+    const external = new AbortController();
+    const result = streamChat([], {
+      provider: 'test-provider', model: 'test-model', signal: external.signal,
+    });
+    await vi.waitFor(() => expect(reader.read).toHaveBeenCalledTimes(1));
+    const rejection = expect(result).rejects.toMatchObject({ name: 'AbortError' });
+    external.abort();
+
+    await rejection;
+    expect(chatSignal.aborted).toBe(true);
+    expect(reader.cancel).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(VOICE_LLM_TIMEOUT_MS);
+  });
+
+  it('clears the deadline and external abort listener after a successful stream', async () => {
+    const external = new AbortController();
+    const chunks = [
+      { value: new TextEncoder().encode('data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n'), done: false },
+      { value: new TextEncoder().encode('data: [DONE]\n\n'), done: false },
+    ];
+    const reader = { read: vi.fn(async () => chunks.shift() || { value: undefined, done: true }) };
+    installFetch(() => Promise.resolve({ ok: true, status: 200, body: { getReader: () => reader } }));
+
+    await expect(streamChat([], {
+      provider: 'test-provider', model: 'test-model', signal: external.signal,
+    })).resolves.toMatchObject({ text: 'Hello', model: 'test-model' });
+
+    expect(chatSignal.aborted).toBe(false);
+    external.abort();
+    await vi.advanceTimersByTimeAsync(VOICE_LLM_TIMEOUT_MS);
+    expect(chatSignal.aborted).toBe(false);
+  });
+
+  it('clears the deadline after a provider failure', async () => {
+    const providerError = new Error('provider unavailable');
+    installFetch(() => Promise.reject(providerError));
+
+    await expect(streamChat([], { provider: 'test-provider', model: 'test-model' }))
+      .rejects.toBe(providerError);
+
+    expect(chatSignal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(VOICE_LLM_TIMEOUT_MS);
+    expect(chatSignal.aborted).toBe(false);
+  });
+
+  it('preserves an explicit caller cancellation instead of reporting a timeout', async () => {
+    const external = new AbortController();
+    installFetch(({ signal }) => pendingUntilAbort(signal));
+
+    const result = streamChat([], {
+      provider: 'test-provider', model: 'test-model', signal: external.signal,
+    });
+    await vi.waitFor(() => expect(chatSignal).toBeInstanceOf(AbortSignal));
+    external.abort();
+
+    await expect(result).rejects.toMatchObject({ name: 'AbortError' });
+    expect(chatSignal.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(VOICE_LLM_TIMEOUT_MS);
   });
 });

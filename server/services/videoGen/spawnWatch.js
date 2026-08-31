@@ -43,11 +43,6 @@ const COMPLETION_WATCHDOG_GRACE_MS = (() => {
   return Number.isFinite(raw) && raw > 0 ? raw : 40000;
 })();
 
-const IDLE_STALL_DEADLINE_MS = (() => {
-  const raw = parseInt(process.env.VIDEOGEN_IDLE_STALL_MS || '', 10);
-  return Number.isFinite(raw) && raw > 0 ? raw : 600000;
-})();
-
 const MUXING_DONE_RE = /\[Decoding video \+ audio \+ muxing\]\s+done in/i;
 
 export async function spawnAndWatchVideo({
@@ -140,7 +135,7 @@ export async function spawnAndWatchVideo({
   } catch { /* preview is best-effort; the final video remains authoritative */ }
 
   // ── one render child, fully wired ──────────────────────────────────────────
-  // Everything per-CHILD lives in here — the process handle, both watchdogs, the
+  // Everything per-CHILD lives in here — the process handle, the completion watchdog, the
   // line readers, the close handler — so the same job can be relaunched once
   // without minting a new one. Everything job-level (jobId, args, seed, meta,
   // history entry, heavy claim, staged temp files) is closed over and survives
@@ -190,55 +185,6 @@ export async function spawnAndWatchVideo({
       if (typeof completionWatchdog.unref === 'function') completionWatchdog.unref();
     };
 
-    // Pre-output idle-stall deadline. Armed at spawn and reset on every child
-    // output line (stdout OR stderr — a render loading weights logs to stderr via
-    // loguru/tqdm well before any stdout progress). If it fires, the render has
-    // produced NO output for the whole generous window — treat it as wedged,
-    // SIGKILL it, and let the 'close' handler surface a failed job so the
-    // serialized GPU lane frees. Cleared in every terminal path alongside the
-    // completion watchdog so it can't fire against a recycled PID.
-    let idleStallTimer = null;
-    // Set when THIS timer fires the SIGKILL so the 'close' handler reports a
-    // clear "stalled — no output" reason instead of the generic "killed, likely
-    // OOM" message a bare SIGKILL would otherwise produce.
-    let idleStallFired = false;
-    const clearIdleStallTimer = () => {
-      if (idleStallTimer) {
-        clearTimeout(idleStallTimer);
-        idleStallTimer = null;
-      }
-    };
-    const armIdleStallTimer = () => {
-      idleStallTimer = setTimeout(() => {
-        // Outside the Express request lifecycle — guard so an uncaught throw
-        // can't crash the Node process.
-        try {
-          idleStallTimer = null;
-          // Also bail if the child is already being torn down by a manual
-          // cancel: killWithEscalation() sends SIGTERM and sets `proc.killed`
-          // BEFORE exitCode/signalCode populate on close. Without this check the
-          // idle timer could still fire, set idleStallFired, and SIGKILL — and
-          // the close handler would then finalize a user-canceled render (whose
-          // partial .mp4 is on disk) as a SUCCESS instead of canceled/failed.
-          if (videoJobState.activeProcess !== proc || proc.killed || proc.exitCode !== null || proc.signalCode !== null) return;
-          console.log(`⚠️ video child produced no output for ${IDLE_STALL_DEADLINE_MS}ms — stalled, SIGKILL [${jobId.slice(0, 8)}]`);
-          idleStallFired = true;
-          proc.kill('SIGKILL');
-        } catch (err) {
-          console.error(`❌ idle-stall watchdog failed [${jobId.slice(0, 8)}]: ${err.message}`);
-        }
-      }, IDLE_STALL_DEADLINE_MS);
-      if (typeof idleStallTimer.unref === 'function') idleStallTimer.unref();
-    };
-    // Every output line means the render is alive — restart the countdown.
-    const resetIdleStallTimer = () => {
-      clearIdleStallTimer();
-      armIdleStallTimer();
-    };
-    // Arm immediately: the highest-risk stall is a job that never emits its FIRST
-    // line (weights load / kernel compile hangs), so the clock starts at spawn.
-    armIdleStallTimer();
-
     // Hold a sleep-prevention lock for the lifetime of the python child, so a
     // 90s+ render doesn't get aborted by sleep on a laptop. `-s` blocks system
     // sleep (lid-close / low-power), `-i` blocks idle sleep, `-d` blocks display
@@ -263,7 +209,6 @@ export async function spawnAndWatchVideo({
       if (closeHandled) return;
       closeHandled = true;
       clearCompletionWatchdog();
-      clearIdleStallTimer();
       job.status = 'error';
       const reason = `Failed to spawn ${bin}: ${err.message}`;
       console.log(`❌ Video generation spawn error [${jobId.slice(0, 8)}]: ${reason}`);
@@ -335,16 +280,10 @@ export async function spawnAndWatchVideo({
     }, { splitRe: /[\n\r]+/ });
 
     proc.stdout.on('data', (chunk) => {
-      // Any output proves the render is progressing — restart the idle-stall
-      // countdown before parsing so a slow-but-alive render is never killed.
-      resetIdleStallTimer();
       stdoutReader.push(chunk);
     });
 
     proc.stderr.on('data', (chunk) => {
-      // Weight-load / kernel-compile progress often streams to stderr (loguru,
-      // tqdm) long before the first stdout line — count it as liveness too.
-      resetIdleStallTimer();
       stderrReader.push(chunk);
     });
 
@@ -359,7 +298,6 @@ export async function spawnAndWatchVideo({
       stdoutReader.flush();
       stderrReader.flush();
       clearCompletionWatchdog();
-      clearIdleStallTimer();
       // The relaunch window opens the instant the shared active process is cleared: until a
       // replacement child is tracked, cancel() has nothing to kill and silently
       // reports false. Snapshot the epoch at exactly that boundary so the
@@ -391,14 +329,11 @@ export async function spawnAndWatchVideo({
         // uploads, and direct-call audio through the same ownership-aware helper.
         await cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true });
 
-        // A PortOS-fired SIGKILL (completion-teardown watchdog OR idle-stall
-        // deadline) is a SUCCESS when the output file is already on disk and
-        // non-empty — e.g. a runtime that wrote its .mp4 but never printed a
-        // recognized completion marker, then hung: the idle timer kills it, but
-        // the finished video must be kept, not discarded as "no output". A kill
-        // with no output on disk (a genuine pre-output stall, or a marker from a
-        // malformed runtime that wrote nothing) still fails loudly below.
-        const watchdogSuccess = isWatchdogSuccess({ completionWatchdogFired, idleStallFired, signal, outputPath });
+        // A PortOS-fired completion-watchdog SIGKILL is a SUCCESS when the
+        // output file is already on disk and non-empty: the render wrote its
+        // result, but the child hung during teardown. A kill with no output on
+        // disk still fails loudly below.
+        const watchdogSuccess = isWatchdogSuccess({ completionWatchdogFired, signal, outputPath });
 
         if (code !== 0 && !watchdogSuccess) {
           job.status = 'error';
@@ -414,11 +349,6 @@ export async function spawnAndWatchVideo({
             } else {
               reason = `Python module '${missingPyModule}' is missing. Install it into the configured Python environment and retry.`;
             }
-          } else if (idleStallFired) {
-            // Distinguish a stall-kill from a real OOM kill — both arrive as
-            // SIGKILL, but this one means the render produced NO output for the
-            // whole idle window and we terminated it to free the GPU lane.
-            reason = `Render stalled — no output for ${Math.round(IDLE_STALL_DEADLINE_MS / 1000)}s; terminated to free the GPU queue (raise VIDEOGEN_IDLE_STALL_MS if this was a legitimately slow render)`;
           } else if (signal) {
             // Signal → actionable cause (SIGABRT = the macOS Metal command-buffer
             // watchdog, SIGBUS/SIGSEGV = a native MLX/Metal crash, SIGKILL = OOM),
@@ -435,8 +365,7 @@ export async function spawnAndWatchVideo({
           videoGenEvents.emit('failed', { generationId: jobId, error: reason });
         } else {
           if (watchdogSuccess) {
-            const killCause = idleStallFired ? 'idle-stall deadline' : 'completion teardown hang';
-            console.log(`⚠️ video child force-killed (${killCause}) — output is intact [${jobId.slice(0, 8)}]`);
+            console.log(`⚠️ video child force-killed (completion teardown hang) — output is intact [${jobId.slice(0, 8)}]`);
           }
           await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory: mutateVideoHistory });
         }
@@ -668,8 +597,8 @@ export async function spawnAndWatchVideo({
     // of the parent shell's PYTHONPATH. Setting to `undefined` in a spread does
     // NOT unset the var — Node coerces it to the literal string "undefined" —
     // so build the env explicitly and `delete`.
-    // Build the complete HF child env so the Wan 2.2 / HunyuanVideo
-    // python helpers can authenticate snapshot_download() against gated repos
+    // Build the complete HF child env so BYOV Python helpers can authenticate
+    // snapshot_download() against gated repos
     // (mirrors the imageGen child-spawn pattern). LTX-2 doesn't currently use
     // a gated repo, but the merge is harmless when no token is configured.
     childEnv = runtimeIsCacheOnly(model.runtime)

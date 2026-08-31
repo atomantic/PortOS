@@ -1,5 +1,9 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { spawnSync } from 'child_process';
 import { describe, expect, it } from 'vitest';
-import { CALL_AUDIO_DEVICE_RATE, FACETIME_COMMANDS, checkAudioDevice, checkSetup, facetimeControlResultSchema } from './facetimeBridge.js';
+import { CALL_AUDIO_DEVICE_RATE, FACETIME_COMMANDS, blockingSetupFailure, checkAudioDevice, checkSetup, facetimeControlResultSchema } from './facetimeBridge.js';
 
 const device = (overrides = {}) => ({
   name: 'BlackHole 16ch',
@@ -10,6 +14,45 @@ const device = (overrides = {}) => ({
 });
 
 describe('FaceTime Audio control protocol', () => {
+  it.runIf(process.platform === 'darwin')('compiles the native helper and preserves its strict JSON boundary', () => {
+    const sourceDir = join(import.meta.dirname, '..', '..', 'native', 'facetime-ax');
+    const tempDir = mkdtempSync(join(process.env.PORTOS_TEST_TMPDIR || tmpdir(), 'portos-facetime-ax-'));
+    const helper = join(tempDir, 'facetime-ax');
+    try {
+      const compiled = spawnSync('swiftc', ['-warnings-as-errors', join(sourceDir, 'identityMatcher.swift'), join(sourceDir, 'main.swift'), '-o', helper], { encoding: 'utf8' });
+      expect(compiled.status, compiled.stderr).toBe(0);
+
+      const probe = spawnSync(helper, ['probe', '+15551234567', 'Example Caller'], { encoding: 'utf8' });
+      const parsed = JSON.parse(probe.stdout);
+      expect(Object.hasOwn(parsed, 'errorCode')).toBe(true);
+      expect(facetimeControlResultSchema.safeParse(parsed).success).toBe(true);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(process.platform === 'darwin')('matches only the configured semantic identity', () => {
+    const sourceDir = join(import.meta.dirname, '..', '..', 'native', 'facetime-ax');
+    const tempDir = mkdtempSync(join(process.env.PORTOS_TEST_TMPDIR || tmpdir(), 'portos-facetime-identity-'));
+    const runner = join(tempDir, 'main.swift');
+    const binary = join(tempDir, 'identity-test');
+    try {
+      writeFileSync(runner, `import Foundation
+let matcher = IdentityMatcher(handle: "+15551234567", identity: "Example Caller")
+guard matcher.matches(["Incoming call from Example Caller"]) else { exit(1) }
+guard matcher.matches(["Incoming call from +1 (555) 123-4567"]) else { exit(2) }
+guard !matcher.matches(["Incoming call from Example Callers"]) else { exit(3) }
+guard !matcher.matches(["Incoming call from +44 1555 123 4567"]) else { exit(4) }
+`);
+      const compiled = spawnSync('swiftc', ['-warnings-as-errors', join(sourceDir, 'identityMatcher.swift'), runner, '-o', binary], { encoding: 'utf8' });
+      expect(compiled.status, compiled.stderr).toBe(0);
+      const result = spawnSync(binary, [], { encoding: 'utf8' });
+      expect(result.status, result.stderr).toBe(0);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('accepts only the strict helper result contract', () => {
     const result = facetimeControlResultSchema.safeParse({
       ok: true, command: 'probe', state: 'idle', authorized: true,
@@ -64,6 +107,18 @@ describe('FaceTime Audio control protocol', () => {
       .rejects.toThrow();
   });
 
+  it('leaves Accessibility enforcement to the explicitly invoked helper', () => {
+    expect(blockingSetupFailure({
+      helper: { ok: 'ok' },
+      identity: { ok: 'ok' },
+      accessibility: { ok: 'missing' },
+    })).toBeNull();
+    expect(blockingSetupFailure({
+      helper: { ok: 'missing' },
+      accessibility: { ok: 'missing' },
+    })).toBe('helper');
+  });
+
   describe('answer command (phase 4 — inbound)', () => {
     it('is one of the commands the strict helper contract accepts', () => {
       expect(FACETIME_COMMANDS).toContain('answer');
@@ -98,4 +153,3 @@ describe('FaceTime Audio control protocol', () => {
     });
   });
 });
-

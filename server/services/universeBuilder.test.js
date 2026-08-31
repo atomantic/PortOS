@@ -1299,6 +1299,26 @@ describe("universeBuilder service", () => {
         const after = await svc.getUniverse(w.id);
         expect(after.moodBoardId).toBe("mb-remote");
       });
+
+      it('preserves production canon when a pre-v10 sender wins an unrelated edit (#5378)', async () => {
+        const w = await seedWorld();
+        await svc.updateUniverse(w.id, {
+          characters: [{
+            id: 'chr-1', name: 'A', imageRefs: ['neutral.png', 'profile.png', 'body.png'],
+            voiceCanon: { version: 1, description: 'warm low alto', approved: true },
+            identityPack: { assets: [{ role: 'neutral', imageRef: 'neutral.png', approved: true }] },
+          }],
+        });
+        const local = await svc.getUniverse(w.id);
+        const r = await svc.mergeUniversesFromSync(
+          [{ ...local, name: 'Old peer rename', characters: [{ id: 'chr-1', name: 'A', imageRefs: ['neutral.png', 'profile.png', 'body.png'] }], updatedAt: new Date(Date.now() + 60_000).toISOString() }],
+          { senderSchemaVersions: { universes: 9 } },
+        );
+        expect(r.applied).toBe(true);
+        const after = await svc.getUniverse(w.id);
+        expect(after.characters[0].voiceCanon).toMatchObject({ description: 'warm low alto', approved: true });
+        expect(after.characters[0].identityPack.assets).toEqual([{ role: 'neutral', imageRef: 'neutral.png', approved: true }]);
+      });
     });
 
     describe("pruneTombstonedUniverses", () => {

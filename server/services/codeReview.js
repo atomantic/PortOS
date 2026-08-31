@@ -244,13 +244,12 @@ export async function getReviewerCliInstalled() {
   return cachedInstalled
 }
 
-const CODE_REVIEW_SYSTEM_PROMPT = `You are a careful senior code reviewer. The user will paste a unified PR diff. Review only what the diff changes (not the whole repo). Produce findings as a markdown list grouped by severity:
+const CODE_REVIEW_SYSTEM_PROMPT = `You are a careful senior code reviewer. The user will paste a unified PR diff. Review only the changed lines and directly affected behavior (not the whole repo). Report only actionable issues that could cause incorrect behavior, a security or privacy problem, data loss, a broken compatibility or producer/consumer contract, a resource leak, or a materially missing regression test. Do not report style, naming, formatting, refactoring preferences, speculative edge cases, or minor nits. Keep the list to the highest-impact findings (at most five), grouped by severity:
 
 ## Blocking
 ## Recommended
-## Nits
 
-For each finding, name the file:line (when known) and explain the issue + suggested fix in one or two sentences. If you find nothing in a section, omit it. If the diff is clean across all severities, reply with exactly: \`No findings.\``
+For each finding, name the file:line (when known) and explain the concrete wrong outcome + suggested fix in one or two sentences. Omit a severity heading when it has no findings. If you find nothing actionable, reply with exactly: \`No findings.\``
 
 /**
  * Run a single code-review request against the configured local-LLM backend.

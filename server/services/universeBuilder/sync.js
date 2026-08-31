@@ -8,7 +8,7 @@
  * re-exports this module so existing import paths keep working.
  */
 
-import { isStr } from '../../lib/storyBible.js';
+import { isStr, preserveLegacyCharacterProductionPackages } from '../../lib/storyBible.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes,
   deleteSyncBaseHash,
@@ -57,6 +57,7 @@ export async function mergeUniversesFromSync(remoteUniverses, { source = { via: 
   // The version gate only rejects AHEAD senders — a behind/no-meta sender's
   // record flows through this merge, and its sanitized form omits the field.
   const senderKnowsMoodBoardId = (Number(senderSchemaVersions?.universes) || 0) >= 9;
+  const senderUniversesVersion = Number(senderSchemaVersions?.universes) || 0;
   if (!Array.isArray(remoteUniverses)) return { applied: false, count: 0 };
   // Records that transitioned to deleted via this merge get their orphan
   // cascade fired after the write queue releases — matches the side-effect
@@ -149,6 +150,11 @@ export async function mergeUniversesFromSync(remoteUniverses, { source = { via: 
         if (!sanitized.moodBoardId && local.moodBoardId && !senderKnowsMoodBoardId) {
           sanitized.moodBoardId = local.moodBoardId;
         }
+        sanitized.characters = preserveLegacyCharacterProductionPackages(
+          sanitized.characters,
+          local.characters,
+          senderUniversesVersion,
+        );
         // Non-blocking conflict journal: archive the about-to-be-lost local
         // version when BOTH sides diverged from the last synced base. Always
         // advances the base hash (clean or conflict) so the next snapshot

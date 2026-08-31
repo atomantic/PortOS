@@ -11,7 +11,25 @@ import { tmpdir } from 'os';
 import { join as pathJoin } from 'path';
 
 const attachNodeImage = vi.hoisted(() => vi.fn(async () => ({})));
-vi.mock('../services/fableLoom/records.js', () => ({ attachNodeImage }));
+const getLoom = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('../services/fableLoom/records.js', () => ({ attachNodeImage, getLoom }));
+
+const compiledVisual = vi.hoisted(() => ({
+  version: 1, compilerVersion: '1.0.0', status: 'locked', assets: [], adapters: [], omitted: [], warnings: [],
+}));
+const compileFableLoomVisualRequest = vi.hoisted(() => vi.fn(async ({ authoredPrompt, authoredNegativePrompt }) => ({
+  prompt: authoredPrompt,
+  negativePrompt: authoredNegativePrompt || '',
+  referenceImagePaths: [],
+  referenceImageStrengths: [],
+  loraFilenames: [],
+  loraScales: [],
+  visualConditioning: compiledVisual,
+})));
+vi.mock('../services/fableLoom/visualConditioning.js', () => ({
+  compileFableLoomVisualRequest,
+  fableLoomImageCapabilities: vi.fn(() => ({ version: 1, kind: 'image' })),
+}));
 
 vi.mock('../services/imageGen/index.js', () => ({
   checkConnection: vi.fn(),
@@ -233,6 +251,11 @@ describe('Image Gen Routes', () => {
     });
 
     it('durably attaches a synchronous FableLoom scene render', async () => {
+      getLoom.mockResolvedValueOnce({
+        id: 'loom-1',
+        renderSettings: { formatId: 'landscape-16-9' },
+        episodes: [{ id: 'ep-1', number: 1, startNodeId: 'node-1', nodes: [{ id: 'node-1', transitions: [] }] }],
+      });
       imageGen.generateImage.mockResolvedValue({
         generationId: 'gen-scene-001',
         filename: 'scene.png',
@@ -251,8 +274,55 @@ describe('Image Gen Routes', () => {
         'loom-1',
         'ep-1',
         'node-1',
-        { filename: 'scene.png', jobId: 'gen-scene-001' },
+        {
+          filename: 'scene.png',
+          jobId: 'gen-scene-001',
+          visualConditioning: expect.objectContaining({
+            render: expect.objectContaining({
+              parameters: { width: 1024, height: 576, aspectRatio: '16:9' },
+            }),
+          }),
+        },
       );
+      expect(imageGen.generateImage).toHaveBeenCalledWith(expect.objectContaining({
+        width: 1024, height: 576, aspectRatio: '16:9',
+      }));
+      expect(compileFableLoomVisualRequest).toHaveBeenCalledWith(expect.objectContaining({
+        tag: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' }, kind: 'image',
+      }));
+    });
+
+    it('refuses a scene image in a later episode until prior storyboard images exist', async () => {
+      getLoom.mockResolvedValueOnce({
+        id: 'loom-1',
+        episodes: [
+          {
+            id: 'ep-1',
+            number: 1,
+            startNodeId: 'scene-1',
+            nodes: [{ id: 'scene-1', title: 'Prior scene', image: null, transitions: [] }],
+          },
+          {
+            id: 'ep-2',
+            number: 2,
+            startNodeId: 'scene-2',
+            nodes: [{ id: 'scene-2', title: 'Later scene', transitions: [] }],
+          },
+        ],
+      });
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({
+          prompt: 'a later episode scene',
+          fableLoom: { loomId: 'loom-1', episodeId: 'ep-2', nodeId: 'scene-2' },
+        });
+
+      expect(response.status).toBe(409);
+      expect(response.body.code).toBe('FABLELOOM_EPISODE_ORDER_BLOCKED');
+      expect(response.body.error).toContain('Finish storyboard images for Episode 1');
+      expect(imageGen.generateImage).not.toHaveBeenCalled();
+      expect(compileFableLoomVisualRequest).not.toHaveBeenCalled();
     });
 
     it('accepts a missing/empty prompt (i2i / edit / unconditional), defaulting it to empty', async () => {

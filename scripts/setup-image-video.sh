@@ -11,8 +11,12 @@
 #   INSTALL_VIDEO  '1' to also install mlx_video for LTX video generation (default: 1 on macOS, 0 on Windows)
 #   INSTALL_LTX2   '1' to also clone + uv-sync dgrauet/ltx-2-mlx at ~/.portos/ltx-2-mlx for the second-gen LTX-2.3 pipeline (proper keyframe interpolation, true video extend, audio-to-video). Default: 0; opt in with INSTALL_LTX2=1.
 #   INSTALL_LTX25  '1' to clone + uv-sync MrMofer's ltx-2.5 fork at ~/.portos/ltx-2.5-mlx (Apple Silicon). The 2.3 pin cannot load LTX-2.5 weights. Default: 0.
+#   INSTALL_FASTVIDEO '1' to clone hao-ai-lab/FastVideo at ~/.portos/fastvideo and build an MLX venv for native Apple Silicon video generation (FastMetal models). Default: 0; opt in with INSTALL_FASTVIDEO=1.
 #   INSTALL_MINIMAX_H3 '1' to install the pinned MiniMax H3 MLX runtime at ~/.portos/minimax-h3-mlx (Apple Silicon). Weights remain a separate explicit Video Gen download. Default: 0.
+#   INSTALL_MERERUN '1' to install the signed mere.run v0.47.0 runtime at ~/.portos/mere-run for MiniMax H3 Ref2VA image+audio generation (Apple Silicon). Weights remain a separate explicit Video Gen download. Default: 0.
 #   INSTALL_MINIMAX_H3_CUDA '1' to install the MiniMax H3 CUDA runtime at ~/.portos/minimax-h3-cuda (Windows + NVIDIA), via diffusers' MiniMaxH3ModularPipeline. Weights remain a separate explicit Video Gen download (~144 GB). Default: 0.
+#   INSTALL_LTX25_CUDA '1' to install the official LTX-2.5 CUDA runtime at ~/.portos/ltx-2.5-cuda (Windows/Linux + NVIDIA). Weights remain a separate explicit Video Gen download. Default: 0.
+#   INSTALL_WAN22_CUDA '1' to install the official Wan 2.2 Diffusers runtime at ~/.portos/wan2.2-cuda (Windows/Linux + NVIDIA). Weights remain a separate explicit Video Gen download. Default: 0.
 #   INSTALL_FLUX2  '1' to also bootstrap a separate venv at ~/.portos/venv-flux2 for FLUX.2-klein (default: 1 on macOS, 0 elsewhere)
 #   INSTALL_MUSICGEN '1' to bootstrap a venv at ~/.portos/venv-musicgen + clone ml-explore/mlx-examples to ~/.portos/mlx-examples for local MusicGen (MLX) background-music generation (pipeline audio stage). Default: 0; opt in with INSTALL_MUSICGEN=1 (macOS / Apple Silicon only).
 #   MLX_EXAMPLES_PIN  commit SHA of ml-explore/mlx-examples to check out for MusicGen (default: main).
@@ -73,6 +77,16 @@ venv_python() {
 # shared with venv_python so the two probes can't drift apart.
 venv_exists() { [[ -x "$1/bin/python3" || -x "$1/Scripts/python.exe" ]]; }
 
+# mere.run is a signed native binary and is the one setup path that does not
+# need Python. Keep the bare-script default and every mixed install strict: only
+# an explicit INSTALL_MERERUN=1 request with no other runtime selected may run
+# on a machine without Python.
+python_required() {
+  local non_mere_requests
+  non_mere_requests="${INSTALL_MFLUX:-0}${INSTALL_VIDEO:-0}${INSTALL_LTX2:-0}${INSTALL_LTX25:-0}${INSTALL_LTX25_CUDA:-0}${INSTALL_FASTVIDEO:-0}${INSTALL_WAN22:-0}${INSTALL_WAN22_CUDA:-0}${INSTALL_MINIMAX_H3:-0}${INSTALL_MINIMAX_H3_CUDA:-0}${INSTALL_MUSICGEN:-0}${INSTALL_AUDIOLDM2:-0}${INSTALL_ACESTEP:-0}${INSTALL_ACESTEP15:-0}${INSTALL_MINIMAX_MUSIC3:-0}${INSTALL_MINIMAX_MUSIC3_MLX:-0}${INSTALL_MUSCRIPTOR:-0}${INSTALL_FLUX2:-0}"
+  [[ "${INSTALL_MERERUN:-0}" != "1" || "$non_mere_requests" == *[!0]* ]]
+}
+
 # Check out a pin (a commit SHA, tag, or branch name) in an already-fetched
 # clone. A bare `git checkout <branch>` lands on the *local* branch created at
 # clone time, which `git fetch origin` never advances — so re-running with a
@@ -89,7 +103,7 @@ git_checkout_pin() {
   fi
 }
 
-if ! have "$PYTHON_BIN"; then
+if python_required && ! have "$PYTHON_BIN"; then
   echo "❌ $PYTHON_BIN not found. Install Python 3.10+ first." >&2
   exit 1
 fi
@@ -99,7 +113,7 @@ mkdir -p "${PORTOS_DATA}/videos"
 mkdir -p "${PORTOS_DATA}/video-thumbnails"
 
 # When the user only wants a specific BYOV runtime (set via INSTALL_LTX2 /
-# INSTALL_WAN22 / INSTALL_HUNYUAN / INSTALL_MINIMAX_H3 / INSTALL_MINIMAX_H3_CUDA — or one of the self-contained MUSIC venvs
+# INSTALL_WAN22 / INSTALL_MINIMAX_H3 / INSTALL_MERERUN / INSTALL_MINIMAX_H3_CUDA — or one of the self-contained MUSIC venvs
 # INSTALL_MUSICGEN / INSTALL_AUDIOLDM2 / INSTALL_ACESTEP / INSTALL_ACESTEP15 / INSTALL_MINIMAX_MUSIC3_MLX — typically from the
 # in-app installer), skip the mflux + legacy mlx_video preamble. Those
 # bring-your-own-venv runtimes are self-contained and don't depend on mflux;
@@ -108,7 +122,7 @@ mkdir -p "${PORTOS_DATA}/video-thumbnails"
 # install ever starts — which on Linux/CPU/CUDA blocks the advertised
 # `INSTALL_ACESTEP=1 bash …` path. A bare `bash setup-image-video.sh` still
 # installs mflux as before.
-ANY_BYOV="${INSTALL_LTX2:-0}${INSTALL_LTX25:-0}${INSTALL_WAN22:-0}${INSTALL_HUNYUAN:-0}${INSTALL_MINIMAX_H3:-0}${INSTALL_MINIMAX_H3_CUDA:-0}${INSTALL_MUSICGEN:-0}${INSTALL_AUDIOLDM2:-0}${INSTALL_ACESTEP:-0}${INSTALL_ACESTEP15:-0}${INSTALL_MINIMAX_MUSIC3:-0}${INSTALL_MINIMAX_MUSIC3_MLX:-0}${INSTALL_MUSCRIPTOR:-0}"
+ANY_BYOV="${INSTALL_LTX2:-0}${INSTALL_LTX25:-0}${INSTALL_LTX25_CUDA:-0}${INSTALL_FASTVIDEO:-0}${INSTALL_WAN22:-0}${INSTALL_WAN22_CUDA:-0}${INSTALL_MINIMAX_H3:-0}${INSTALL_MERERUN:-0}${INSTALL_MINIMAX_H3_CUDA:-0}${INSTALL_MUSICGEN:-0}${INSTALL_AUDIOLDM2:-0}${INSTALL_ACESTEP:-0}${INSTALL_ACESTEP15:-0}${INSTALL_MINIMAX_MUSIC3:-0}${INSTALL_MINIMAX_MUSIC3_MLX:-0}${INSTALL_MUSCRIPTOR:-0}"
 # "no BYOV runtime was requested" = the concatenation contains no non-zero
 # character. Matching a literal string of zeros instead made this a counting
 # exercise that the string and the variable list had to agree on — and they had
@@ -286,10 +300,10 @@ if [[ "$INSTALL_LTX2" == "1" ]]; then
   mkdir -p "${HOME}/.portos"
   if [[ ! -d "${LTX2_DIR}/.git" ]]; then
     echo "📦 Cloning dgrauet/ltx-2-mlx (pinned to ${LTX2_PIN:0:12})..."
-    git clone https://github.com/dgrauet/ltx-2-mlx.git "${LTX2_DIR}"
+    git clone --progress https://github.com/dgrauet/ltx-2-mlx.git "${LTX2_DIR}"
   else
     echo "📦 Fetching ltx-2-mlx updates..."
-    (cd "${LTX2_DIR}" && git fetch origin)
+    (cd "${LTX2_DIR}" && git fetch --progress origin)
   fi
   echo "📦 Checking out pinned commit ${LTX2_PIN:0:12}..."
   git_checkout_pin "${LTX2_DIR}" "${LTX2_PIN}"
@@ -329,16 +343,27 @@ if [[ "$INSTALL_LTX25" == "1" ]]; then
     echo "❌ INSTALL_LTX25=1 requires git." >&2
     exit 1
   fi
+  # VERIFIED PIN — image-to-video frame-one anchor (#5422). This fork samples
+  # distilled stage 1 with the ancestral (SDE) Euler loop, which renoises the
+  # whole latent every step. This revision's `ancestral_denoise_loop`
+  # (packages/ltx-pipelines-mlx/.../utils/samplers.py) re-applies the
+  # conditioning mask AFTER that renoise, so the frame-0 tokens stay equal to
+  # the supplied image at every step rather than only the last. A revision that
+  # does not renders a coherent clip unrelated to the picture the user handed
+  # in. Moving this pin means re-reading that loop and moving
+  # `i2vAnchorVerifiedRevision` in server/services/videoGen/runtimes.js with it
+  # (runtimes.test.js fails until both agree); scripts/generate_ltx2.py also
+  # checks the LIVE checkout at render time and refuses rather than drifting.
   LTX25_PIN="${LTX25_PIN:-57952288076766abe27dda3a774b2c24f7346977}"
   LTX25_DIR="${HOME}/.portos/ltx-2.5-mlx"
   LTX25_PY="${LTX25_DIR}/.venv/bin/python3"
   mkdir -p "${HOME}/.portos"
   if [[ ! -d "${LTX25_DIR}/.git" ]]; then
     echo "📦 Cloning MrMoferFRAN/ltx-2-mlx (pinned to ${LTX25_PIN:0:12})..."
-    git clone https://github.com/MrMoferFRAN/ltx-2-mlx.git "${LTX25_DIR}"
+    git clone --progress https://github.com/MrMoferFRAN/ltx-2-mlx.git "${LTX25_DIR}"
   else
     echo "📦 Fetching ltx-2.5-mlx updates..."
-    (cd "${LTX25_DIR}" && git fetch origin)
+    (cd "${LTX25_DIR}" && git fetch --progress origin)
   fi
   echo "📦 Checking out pinned commit ${LTX25_PIN:0:12}..."
   git_checkout_pin "${LTX25_DIR}" "${LTX25_PIN}"
@@ -353,6 +378,52 @@ if [[ "$INSTALL_LTX25" == "1" ]]; then
     "Re-run with: rm -rf ${LTX25_DIR}/.venv && bash $0" \
     "${LTX25_PY}" -c "import ltx_pipelines_mlx"
   echo "✅ ltx-2.5-mlx venv ready: ${LTX25_PY}"
+fi
+
+INSTALL_FASTVIDEO="${INSTALL_FASTVIDEO:-0}"
+if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
+  # FastVideo provides native Apple Silicon inference for Wan and FastMetal models
+  # via MLX/Metal. Reached only when the user chooses Install/Repair in Video Gen.
+  if ! is_macos || [[ "$(uname -m)" != "arm64" ]]; then
+    echo "❌ FastVideo MLX requires an Apple-Silicon Mac." >&2
+    exit 1
+  fi
+  if ! have git; then
+    echo "❌ INSTALL_FASTVIDEO=1 requires git." >&2
+    exit 1
+  fi
+
+  FASTVIDEO_UV_TOOL_DIR="${HOME}/.portos/tools/uv-0.8.14"
+  FASTVIDEO_UV="${FASTVIDEO_UV_TOOL_DIR}/bin/uv"
+  if [[ ! -x "$FASTVIDEO_UV" ]] || [[ "$("$FASTVIDEO_UV" --version 2>/dev/null || true)" != "uv 0.8.14" ]]; then
+    echo "📦 Bootstrapping pinned uv 0.8.14 for FastVideo..."
+    "$PYTHON_BIN" -m venv --clear "$FASTVIDEO_UV_TOOL_DIR"
+    "${FASTVIDEO_UV_TOOL_DIR}/bin/python3" -m pip install --disable-pip-version-check "uv==0.8.14"
+  fi
+
+  FASTVIDEO_PIN="${FASTVIDEO_PIN:-main}"
+  FASTVIDEO_DIR="${HOME}/.portos/fastvideo"
+  FASTVIDEO_PY="${FASTVIDEO_DIR}/.venv/bin/python3"
+  mkdir -p "${HOME}/.portos"
+  if [[ ! -d "${FASTVIDEO_DIR}/.git" ]]; then
+    echo "📦 Cloning hao-ai-lab/FastVideo..."
+    git clone --progress https://github.com/hao-ai-lab/FastVideo.git "${FASTVIDEO_DIR}"
+  else
+    echo "📦 Fetching FastVideo updates..."
+    (cd "${FASTVIDEO_DIR}" && git fetch --progress origin)
+  fi
+  git_checkout_pin "${FASTVIDEO_DIR}" "${FASTVIDEO_PIN}"
+  if [[ ! -x "${FASTVIDEO_PY}" ]]; then
+    echo "📦 Creating FastVideo venv with Python 3.11..."
+    (cd "${FASTVIDEO_DIR}" && "$FASTVIDEO_UV" venv --python 3.11)
+  fi
+  echo "📦 Installing FastVideo MLX packages (uv pip install -e '.[mlx]')..."
+  (cd "${FASTVIDEO_DIR}" && "$FASTVIDEO_UV" pip install -e '.[mlx]')
+  probe_or_fail \
+    "FastVideo synced but the runtime import failed." \
+    "Use Repair / Upgrade from the Video Gen runtime panel to retry." \
+    "${FASTVIDEO_PY}" -c "import fastvideo; import mlx.core"
+  echo "✅ FastVideo MLX runtime ready: ${FASTVIDEO_PY}"
 fi
 
 INSTALL_WAN22="${INSTALL_WAN22:-0}"
@@ -387,10 +458,10 @@ if [[ "$INSTALL_WAN22" == "1" ]]; then
   mkdir -p "${HOME}/.portos"
   if [[ ! -d "${WAN22_DIR}/.git" ]]; then
     echo "📦 Cloning MLX-Gen..."
-    git clone https://github.com/lpalbou/mlx-gen.git "${WAN22_DIR}"
+    git clone --progress https://github.com/lpalbou/mlx-gen.git "${WAN22_DIR}"
   else
     echo "📦 Fetching MLX-Gen updates..."
-    (cd "${WAN22_DIR}" && git fetch origin)
+    (cd "${WAN22_DIR}" && git fetch --progress origin)
   fi
   git_checkout_pin "${WAN22_DIR}" "${WAN22_PIN}"
   if [[ ! -x "${WAN22_PY}" ]]; then
@@ -437,10 +508,10 @@ if [[ "$INSTALL_MINIMAX_H3" == "1" ]]; then
   mkdir -p "${HOME}/.portos"
   if [[ ! -d "${MINIMAX_H3_DIR}/.git" ]]; then
     echo "📦 Cloning MiniMax H3 MLX..."
-    git clone https://github.com/PipeNetwork/minimax-h3-mlx.git "$MINIMAX_H3_DIR"
+    git clone --progress https://github.com/PipeNetwork/minimax-h3-mlx.git "$MINIMAX_H3_DIR"
   else
     echo "📦 Fetching MiniMax H3 MLX updates..."
-    git -C "$MINIMAX_H3_DIR" fetch origin
+    git -C "$MINIMAX_H3_DIR" fetch --progress origin
   fi
   git_checkout_pin "$MINIMAX_H3_DIR" "$MINIMAX_H3_PIN"
   # This runtime imports directly from the checkout, so HEAD alone is not an
@@ -467,6 +538,50 @@ if [[ "$INSTALL_MINIMAX_H3" == "1" ]]; then
     "Use Repair / Upgrade from the Video Gen runtime panel to retry." \
     "$MINIMAX_H3_PY" "${SCRIPT_DIR}/minimax_h3_runtime_probe.py" "$MINIMAX_H3_DIR" --verify-seams
   echo "✅ MiniMax H3 MLX runtime ready: ${MINIMAX_H3_PY}"
+  echo "   Weights remain uninstalled until you accept the model terms and choose Download in Video Gen."
+fi
+
+INSTALL_MERERUN="${INSTALL_MERERUN:-0}"
+if [[ "$INSTALL_MERERUN" == "1" ]]; then
+  if ! is_macos || [[ "$(uname -m)" != "arm64" ]]; then
+    echo "❌ MiniMax H3 Ref2VA through mere.run requires an Apple-Silicon Mac." >&2
+    exit 1
+  fi
+  for command_name in curl hdiutil shasum; do
+    if ! have "$command_name"; then
+      echo "❌ INSTALL_MERERUN=1 requires ${command_name}." >&2
+      exit 1
+    fi
+  done
+
+  MERE_RUN_VERSION="0.47.0"
+  MERE_RUN_DMG_SHA256="91833e45c5c4eda019eafbbc4a634ca7399c3bfb431822aaaa994fb404e603e2"
+  MERE_RUN_URL="https://github.com/sawfwair/mere-run/releases/download/v${MERE_RUN_VERSION}/MereRun-${MERE_RUN_VERSION}.dmg"
+  MERE_RUN_DIR="${HOME}/.portos/mere-run"
+  MERE_RUN_BIN="${MERE_RUN_DIR}/mere.run"
+  MERE_RUN_TMP="$(mktemp -d "${TMPDIR:-/tmp}/portos-mere-run.XXXXXX")"
+  MERE_RUN_DMG="${MERE_RUN_TMP}/MereRun-${MERE_RUN_VERSION}.dmg"
+  MERE_RUN_MOUNT="${MERE_RUN_TMP}/mount"
+  mkdir -p "$MERE_RUN_MOUNT"
+  mere_run_cleanup() {
+    hdiutil detach "$MERE_RUN_MOUNT" -quiet >/dev/null 2>&1 || true
+    rm -rf -- "$MERE_RUN_TMP"
+  }
+  trap mere_run_cleanup EXIT
+
+  echo "📦 Downloading signed mere.run v${MERE_RUN_VERSION} release..."
+  curl --fail --location --progress-bar "$MERE_RUN_URL" --output "$MERE_RUN_DMG"
+  echo "${MERE_RUN_DMG_SHA256}  ${MERE_RUN_DMG}" | shasum -a 256 --check
+  hdiutil attach "$MERE_RUN_DMG" -nobrowse -readonly -mountpoint "$MERE_RUN_MOUNT" -quiet
+  MERERUN_INSTALL_BIN_DEST="$MERE_RUN_BIN" bash "$MERE_RUN_MOUNT/.mere-run/install.sh"
+  if [[ "$($MERE_RUN_BIN --version 2>/dev/null || true)" != "$MERE_RUN_VERSION" ]]; then
+    echo "❌ mere.run installed, but its version does not match ${MERE_RUN_VERSION}." >&2
+    exit 1
+  fi
+  hdiutil detach "$MERE_RUN_MOUNT" -quiet
+  trap - EXIT
+  rm -rf -- "$MERE_RUN_TMP"
+  echo "✅ mere.run v${MERE_RUN_VERSION} ready: ${MERE_RUN_BIN}"
   echo "   Weights remain uninstalled until you accept the model terms and choose Download in Video Gen."
 fi
 
@@ -528,62 +643,67 @@ if [[ "$INSTALL_MINIMAX_H3_CUDA" == "1" ]]; then
   echo "   That download is ~144 GB, and rendering needs ~24 GB VRAM plus ~75 GB of system RAM for offloaded weights."
 fi
 
-INSTALL_HUNYUAN="${INSTALL_HUNYUAN:-0}"
-if [[ "$INSTALL_HUNYUAN" == "1" ]]; then
-  # gaurav-nelson/HunyuanVideo_MLX — community MLX port of Tencent's
-  # HunyuanVideo (13B). ~60 GB resident at bf16. Practical only with the
-  # 4-bit Gemma text encoder + everything else evicted (see the Memory
-  # Management panel under Settings → Local LLMs).
-  #
-  # EXPERIMENTAL — same caveat as Wan 2.2: the clone is pinned (HUNYUAN_PIN
-  # below) for reproducible installs, but bumping that pin can still drift
-  # sample_video.py args. If it does, flip `hunyuan_video` broken in
-  # data/media-models.json and update scripts/generate_hunyuan.py.
-  if ! have uv; then
-    echo "❌ INSTALL_HUNYUAN=1 requires the 'uv' Python installer." >&2
+INSTALL_LTX25_CUDA="${INSTALL_LTX25_CUDA:-0}"
+if [[ "$INSTALL_LTX25_CUDA" == "1" ]]; then
+  if is_macos; then
+    echo "❌ LTX-2.5 CUDA needs an NVIDIA GPU. On Apple Silicon use the LTX-2.5 MLX runtime instead." >&2
     exit 1
   fi
-  if ! have git; then
-    echo "❌ INSTALL_HUNYUAN=1 requires git." >&2
+  LTX25_CUDA_DIR="${HOME}/.portos/ltx-2.5-cuda"
+  LTX25_CUDA_VENV="${LTX25_CUDA_DIR}/.venv"
+  LTX25_CUDA_REQS="${SCRIPT_DIR}/requirements-ltx25-cuda.txt"
+  LTX25_CUDA_TORCH_INDEX="${PORTOS_LTX25_CUDA_TORCH_INDEX:-https://download.pytorch.org/whl/cu128}"
+  mkdir -p "$LTX25_CUDA_DIR"
+  if ! venv_exists "$LTX25_CUDA_VENV"; then
+    echo "📦 Creating LTX-2.5 CUDA venv..."
+    "$PYTHON_BIN" -m venv "$LTX25_CUDA_VENV"
+  fi
+  LTX25_CUDA_PY="$(venv_python "$LTX25_CUDA_VENV")"
+  "$LTX25_CUDA_PY" -m pip install --disable-pip-version-check --upgrade pip wheel setuptools
+  if is_windows; then
+    echo "📦 Installing LTX-validated CUDA torch 2.10 stack from ${LTX25_CUDA_TORCH_INDEX}..."
+    "$LTX25_CUDA_PY" -m pip install --upgrade --index-url "$LTX25_CUDA_TORCH_INDEX" "torch==2.10.0" "torchaudio==2.10.0" "torchvision==0.25.0"
+  else
+    "$LTX25_CUDA_PY" -m pip install --upgrade torch torchaudio torchvision
+  fi
+  echo "📦 Installing official LTX-2.5 CUDA packages..."
+  "$LTX25_CUDA_PY" -m pip install --upgrade --progress-bar on -r "$LTX25_CUDA_REQS"
+  probe_or_fail \
+    "LTX-2.5 CUDA installed but its runtime probe failed." \
+    "Check the CUDA torch and LTX package errors above, then use Repair in Video Gen." \
+    "$LTX25_CUDA_PY" -c "import torch; import ltx_core, ltx_pipelines; from ltx_pipelines.distilled import DistilledPipeline; assert torch.cuda.is_available(), 'no CUDA device'"
+  echo "✅ LTX-2.5 CUDA runtime ready: ${LTX25_CUDA_PY}"
+  echo "   Weights remain uninstalled until you accept the LTX license and choose Download in Video Gen."
+fi
+
+INSTALL_WAN22_CUDA="${INSTALL_WAN22_CUDA:-0}"
+if [[ "$INSTALL_WAN22_CUDA" == "1" ]]; then
+  if is_macos; then
+    echo "❌ Wan 2.2 CUDA needs an NVIDIA GPU. Use the Wan 2.2 MLX runtime on Apple Silicon." >&2
     exit 1
   fi
-  # Pinned to a known-good commit (the repo's HEAD as of 2026-06-02). Floating
-  # `main` on a community-maintained port means every new install gets whatever
-  # HEAD is that day — a pin keeps installs reproducible. To upgrade: bump this
-  # SHA and verify with PortOS's video gen smoke tests. Set HUNYUAN_PIN=main to
-  # bypass the pin and track upstream HEAD for development.
-  HUNYUAN_PIN="${HUNYUAN_PIN:-d5ec346aac3322066c1f1cb149830d1246dbe6dd}"
-  HUNYUAN_DIR="${HOME}/.portos/hunyuan-video-mlx"
-  HUNYUAN_PY="${HUNYUAN_DIR}/.venv/bin/python3"
-  mkdir -p "${HOME}/.portos"
-  if [[ ! -d "${HUNYUAN_DIR}/.git" ]]; then
-    echo "📦 Cloning gaurav-nelson/HunyuanVideo_MLX..."
-    git clone https://github.com/gaurav-nelson/HunyuanVideo_MLX.git "${HUNYUAN_DIR}"
+  WAN22_CUDA_DIR="${HOME}/.portos/wan2.2-cuda"
+  WAN22_CUDA_VENV="${WAN22_CUDA_DIR}/.venv"
+  WAN22_CUDA_REQS="${SCRIPT_DIR}/requirements-wan22-cuda.txt"
+  mkdir -p "$WAN22_CUDA_DIR"
+  if ! venv_exists "$WAN22_CUDA_VENV"; then
+    echo "📦 Creating Wan 2.2 CUDA venv..."
+    "$PYTHON_BIN" -m venv "$WAN22_CUDA_VENV"
+  fi
+  WAN22_CUDA_PY="$(venv_python "$WAN22_CUDA_VENV")"
+  "$WAN22_CUDA_PY" -m pip install --disable-pip-version-check --upgrade pip wheel setuptools
+  if is_windows; then
+    "$WAN22_CUDA_PY" -m pip install --upgrade --index-url "$TORCH_CUDA_INDEX" torch torchvision
   else
-    echo "📦 Fetching HunyuanVideo_MLX updates..."
-    (cd "${HUNYUAN_DIR}" && git fetch origin)
+    "$WAN22_CUDA_PY" -m pip install --upgrade torch torchvision
   fi
-  git_checkout_pin "${HUNYUAN_DIR}" "${HUNYUAN_PIN}"
-  if [[ ! -x "${HUNYUAN_PY}" ]]; then
-    echo "📦 Creating HunyuanVideo_MLX venv with Python 3.11..."
-    (cd "${HUNYUAN_DIR}" && uv venv --python 3.11)
-  fi
-  # Upstream gaurav-nelson ships requirements as `requirements_mps.txt` (the
-  # MPS-specific variant — there's no plain `requirements.txt`). Prefer the
-  # MPS one when present, then plain `requirements.txt`, then fall back to
-  # `uv sync` for repos that use pyproject + lockfile instead.
-  HUNYUAN_REQS=""
-  for cand in requirements_mps.txt requirements.txt; do
-    if [[ -f "${HUNYUAN_DIR}/${cand}" ]]; then HUNYUAN_REQS="$cand"; break; fi
-  done
-  if [[ -n "$HUNYUAN_REQS" ]]; then
-    echo "📦 Installing HunyuanVideo_MLX requirements from ${HUNYUAN_REQS}..."
-    (cd "${HUNYUAN_DIR}" && uv pip install -r "$HUNYUAN_REQS")
-  else
-    echo "📦 Syncing HunyuanVideo_MLX packages..."
-    (cd "${HUNYUAN_DIR}" && uv sync)
-  fi
-  echo "✅ HunyuanVideo_MLX venv ready: ${HUNYUAN_PY}"
+  "$WAN22_CUDA_PY" -m pip install --upgrade --progress-bar on -r "$WAN22_CUDA_REQS"
+  probe_or_fail \
+    "Wan 2.2 CUDA installed but its runtime probe failed." \
+    "Check the CUDA torch errors above, then use Repair in Video Gen." \
+    "$WAN22_CUDA_PY" -c "import torch, hf_xet; from diffusers import AutoencoderKLWan, WanPipeline; assert torch.cuda.is_available(), 'no CUDA device'"
+  echo "✅ Wan 2.2 CUDA runtime ready: ${WAN22_CUDA_PY}"
+  echo "   Weights remain uninstalled until Download is chosen in Video Gen."
 fi
 
 INSTALL_MUSICGEN="${INSTALL_MUSICGEN:-0}"
@@ -609,7 +729,7 @@ if [[ "$INSTALL_MUSICGEN" == "1" ]]; then
 
     if [[ ! -d "${MLX_EXAMPLES_DIR}/.git" ]]; then
       echo "📦 Cloning ml-explore/mlx-examples → ${MLX_EXAMPLES_DIR}..."
-      git clone https://github.com/ml-explore/mlx-examples.git "${MLX_EXAMPLES_DIR}"
+      git clone --progress https://github.com/ml-explore/mlx-examples.git "${MLX_EXAMPLES_DIR}"
     fi
     # Pin to a known commit when MLX_EXAMPLES_PIN is set to a SHA; default
     # 'main' tracks HEAD (the musicgen example is stable, but a pin keeps new
@@ -941,8 +1061,9 @@ if [[ "$INSTALL_FLUX2" == "1" ]]; then
   fi
 fi
 
-# ffmpeg — required for thumbnails, last-frame extraction, and stitch.
-if ! have ffmpeg; then
+# ffmpeg — required for thumbnails, last-frame extraction, stitch, and the
+# Ref2VA continuity wrapper. Its distribution also provides ffprobe.
+if ! have ffmpeg || ! have ffprobe; then
   if is_macos && have brew; then
     echo "📦 brew install ffmpeg"
     brew install ffmpeg
@@ -951,10 +1072,26 @@ if ! have ffmpeg; then
   fi
 fi
 
-PYTHON_PATH="$(command -v "$PYTHON_BIN")"
+if [[ "$INSTALL_MERERUN" == "1" ]]; then
+  MISSING_REF2VA_TOOLS=()
+  for command_name in ffmpeg ffprobe; do
+    if ! have "$command_name"; then MISSING_REF2VA_TOOLS+=("$command_name"); fi
+  done
+  if (( ${#MISSING_REF2VA_TOOLS[@]} > 0 )); then
+    echo "❌ MiniMax H3 Ref2VA requires both ffmpeg and ffprobe; missing: ${MISSING_REF2VA_TOOLS[*]}." >&2
+    echo "   Install ffmpeg (for example, 'brew install ffmpeg') and retry from the Video Gen runtime panel." >&2
+    exit 1
+  fi
+fi
+
 echo ""
 echo "✅ Image/video stack ready."
-echo "   Python:    $PYTHON_PATH"
+if python_required; then
+  PYTHON_PATH="$(command -v "$PYTHON_BIN")"
+  echo "   Python:    $PYTHON_PATH"
+else
+  echo "   Python:    not required for this mere.run-only install"
+fi
 echo "   HF cache:  ~/.cache/huggingface (HF default)"
 echo "   LoRAs:     ${PORTOS_DATA}/loras"
 echo "   Videos:    ${PORTOS_DATA}/videos"
@@ -964,6 +1101,15 @@ fi
 if [[ "$INSTALL_LTX25" == "1" ]]; then
   echo "   LTX-2.5:   ${HOME}/.portos/ltx-2.5-mlx/.venv/bin/python3 (MrMofer ltx25 fork @ ${LTX25_PIN:0:12})"
 fi
+if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
+  echo "   FastVideo MLX: ${HOME}/.portos/fastvideo/.venv/bin/python3 (FastVideo @ ${FASTVIDEO_PIN:0:12})"
+fi
+if [[ "$INSTALL_LTX25_CUDA" == "1" ]]; then
+  echo "   LTX-2.5 CUDA: ${HOME}/.portos/ltx-2.5-cuda/.venv (official streamed PyTorch runtime)"
+fi
+if [[ "$INSTALL_WAN22_CUDA" == "1" ]]; then
+  echo "   Wan 2.2 CUDA: ${HOME}/.portos/wan2.2-cuda/.venv (official Diffusers runtime)"
+fi
 if [[ "$INSTALL_WAN22" == "1" ]]; then
   echo "   Wan 2.2:  ${HOME}/.portos/mlx-gen/.venv/bin/python3 (MLX-Gen @ ${WAN22_PIN:0:12})"
   echo "              Weights remain uninstalled until Download is chosen in Video Gen."
@@ -971,6 +1117,10 @@ fi
 if [[ "$INSTALL_MINIMAX_H3" == "1" ]]; then
   echo "   MiniMax H3: ${HOME}/.portos/minimax-h3-mlx/.venv/bin/python3 (MLX port @ ${MINIMAX_H3_PIN:0:12})"
   echo "                Weights remain uninstalled until accepted and downloaded in Video Gen."
+fi
+if [[ "$INSTALL_MERERUN" == "1" ]]; then
+  echo "   MiniMax H3 Ref2VA: ${HOME}/.portos/mere-run/mere.run (mere.run v${MERE_RUN_VERSION})"
+  echo "                       Weights remain uninstalled until accepted and downloaded in Video Gen."
 fi
 if [[ "$INSTALL_MUSICGEN" == "1" ]] && is_macos; then
   echo "   MusicGen:  ${HOME}/.portos/venv-musicgen/bin/python3 (separate venv, MLX runtime @ ${HOME}/.portos/mlx-examples/musicgen)"
@@ -1000,4 +1150,8 @@ if [[ "$INSTALL_FLUX2" == "1" ]]; then
   echo "    then save the Hugging Face token in PortOS Media Generation Settings."
 fi
 echo ""
-echo "Set this Python path in PortOS Settings → Image Gen → Local."
+if [[ "$ANY_BYOV" == *[!0]* ]]; then
+  echo "PortOS auto-discovers the requested runtime; no Python path or other manual configuration is needed."
+else
+  echo "Set this Python path in PortOS Settings → Image Gen → Local."
+fi

@@ -349,7 +349,7 @@ describe('federated media provider capacity and idempotency', () => {
     expect(status.capabilities[0].lyrics).toBe(false);
   });
 
-  it('renders lyrics on a lyric-capable model and advertises that its wire accepts them', async () => {
+  it('renders lyrics on a lyric-capable model and advertises the lyrics feature', async () => {
     await submitFederatedMediaJob({
       callerId: 'peer-example', config: config(),
       input: { ...input(), lyrics: '[verse]\nwords' }, idempotencyKey: 'commission-lyrics',
@@ -359,7 +359,8 @@ describe('federated media provider capacity and idempotency', () => {
     }));
 
     const status = await getFederatedMediaProviderStatus(config());
-    expect(status.capabilities[0]).toMatchObject({ lyrics: true, acceptsLyrics: true });
+    expect(status.capabilities[0]).toMatchObject({ lyrics: true });
+    expect(status.capabilities[0]).not.toHaveProperty('acceptsLyrics');
   });
 
   it('refuses lyrics for an instrumental-only model rather than dropping them', async () => {
@@ -371,7 +372,8 @@ describe('federated media provider capacity and idempotency', () => {
     expect(enqueueJob).not.toHaveBeenCalled();
 
     const status = await getFederatedMediaProviderStatus(config());
-    expect(status.capabilities[0]).toMatchObject({ lyrics: false, acceptsLyrics: false });
+    expect(status.capabilities[0]).toMatchObject({ lyrics: false });
+    expect(status.capabilities[0]).not.toHaveProperty('acceptsLyrics');
   });
 
   // An instrumental take on a lyrical engine sends `lyrics: ''`. Gating on
@@ -881,6 +883,7 @@ describe('federated media provider — prompt-free status and projection payload
       repo: 'example/wan22',
       supportedModes: ['text'],
       frameStride: 4,
+      maxNumFrames: 1017,
       frameOptions: [25, 49, 73, 97, 121],
       resolutionOptions: [{ label: '1344x768 (16:9)', w: 1344, h: 768 }],
     }];
@@ -907,7 +910,7 @@ describe('federated media provider — prompt-free status and projection payload
     });
     expect(videoCap).toMatchObject({
       frameStride: 4,
-      maxNumFrames: 121,
+      maxNumFrames: 1017,
       frameOptions: [25, 49, 73, 97, 121],
       resolutionOptions: [{ label: '1344x768 (16:9)', w: 1344, h: 768 }],
     });

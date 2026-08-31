@@ -103,6 +103,32 @@ describe('prepareAgentWorkspace — Creative Director scratch cwd (#4650)', () =
 });
 
 describe('prepareAgentWorkspace', () => {
+  it('normalizes legacy investigations into isolated PR delivery', async () => {
+    ensureLatest.mockResolvedValue({ success: true, upToDate: true });
+    createWorktree.mockResolvedValue({
+      worktreePath: '/mock/worktrees/agent-investigation',
+      branchName: 'cos/sys-investigation/agent-investigation',
+      baseBranch: 'main',
+    });
+    const task = {
+      id: 'sys-investigation',
+      taskType: 'internal',
+      description: '[Auto] Investigate agent failure: legacy task',
+      metadata: {},
+    };
+
+    const r = await prepareAgentWorkspace({ agentId: 'agent-investigation', task });
+
+    expect(task.metadata).toMatchObject({
+      useWorktree: true,
+      openPR: true,
+      prCompletion: 'merge-on-green',
+    });
+    expect(r.outcome).toBe('ready');
+    expect(r.explicitWorktree).toBe(true);
+    expect(createWorktree).toHaveBeenCalled();
+  });
+
   it('read-only task: returns ready with the shared workspace and skips the git pull', async () => {
     const task = { id: 't-ro', taskType: 'user', metadata: { readOnly: true } };
     const r = await prepareAgentWorkspace({ agentId: 'agent-ro', task });

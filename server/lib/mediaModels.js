@@ -32,6 +32,12 @@
  *       absent on the shipped entry deliberately: the registry syncs between
  *       peers and cannot know what GPU is on the other end. Validated in
  *       services/videoGen/local.js against MINIMAX_H3_CUDA_OFFLOAD_PROFILES.
+ *       `memoryProfiles` (issue #5420) is the declared, capability-checked
+ *       weight-placement table for the two MiniMax H3 entries — each profile's
+ *       honest host-RAM and device-VRAM floor, best-first. Declared in
+ *       lib/minimaxH3Memory.js and backfilled at load like `disclosure` and
+ *       `speedProfiles`; the render path fails closed when no profile fits the
+ *       measured machine, and the runners re-select on the same table.
  *       `disclosure` is optional provenance/licensing metadata (issue #3674):
  *       { modelCardUrl?, weightsLicense?: { name, url }, runtimeLicense?: { name, url },
  *         estimatedDownloadGb?, reviewedAt? }. Every key is optional and an
@@ -72,7 +78,10 @@ import { ServerError } from './errorHandler.js';
 import { applyVideoDisclosures } from './videoDisclosure.js';
 import { applyVideoFinishProfiles, sanitizeFinishProfiles } from './videoFinishProfiles.js';
 import { applyVideoSpeedProfiles, sanitizeSpeedProfiles } from './videoSpeedProfiles.js';
+import { applyVideoDraftDecoders, sanitizeDraftDecoders } from './videoDraftDecoders.js';
+import { applyMiniMaxH3MemoryProfiles, sanitizeMiniMaxH3MemoryProfiles } from './minimaxH3Memory.js';
 import { applyVideoSupportedModes } from './videoModeProfiles.js';
+import { LTX25_AUDIO_PROFILE } from './videoDurationProfiles.js';
 import {
   captureSystemCapabilities,
   hardwareRequirementsForMediaModel,
@@ -199,6 +208,15 @@ const MINIMAX_H3_CUDA_REPO_FILES = Object.freeze([
   'audio_scheduler/scheduler_config.json',
 ]);
 
+const LTX25_CUDA_REPO_FILES = Object.freeze([
+  'diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors',
+  'text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors',
+  'vae/ltx-2.5-video-vae-bf16.safetensors',
+  'vae/ltx-2.5-audio-vae-bf16.safetensors',
+  'model_patches/ltx-2.5-duration-head-bf16.safetensors',
+  'latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors',
+]);
+
 // The diffusers integration's duration window, which is NARROWER than the MLX
 // port's at both ends: frames are snapped up to the next 17n+5 and the RESULTING
 // duration must land in 5-15 s, so 107 (4.46 s) is under the floor and 362
@@ -260,6 +278,27 @@ export const upgradeMiniMaxH3OutputControls = (list) => {
   return upgradeMiniMaxH3DenoisingCount(withGeometry);
 };
 
+// Existing installs already persisted the shipped LTX-2.5 row before its A2V
+// duration contract was declared. Backfill only the untouched pinned model and
+// only absent keys: a user-repointed fork or an explicit local override remains
+// authoritative. Migration 318 persists the same fields, while this load-time
+// twin matters on the boot that runs the migration because the registry cache is
+// populated before migrations execute.
+export const upgradeLtx25AudioControls = (list) => {
+  if (!Array.isArray(list)) return list;
+  return list.map((entry) => {
+    if (!isPlainObject(entry)
+      || entry.id !== LTX25_AUDIO_PROFILE.id
+      || entry.repo !== LTX25_AUDIO_PROFILE.repo
+      || entry.revision !== LTX25_AUDIO_PROFILE.revision) return entry;
+    const missing = ['audioDurationDriven', 'frameStride', 'maxNumFrames']
+      .filter((key) => !Object.hasOwn(entry, key));
+    return missing.length === 0
+      ? entry
+      : { ...entry, ...Object.fromEntries(missing.map((key) => [key, LTX25_AUDIO_PROFILE[key]])) };
+  });
+};
+
 const DEFAULT_REGISTRY = {
   _doc: 'PortOS media model registry. Edit to add models, tune defaults, or switch the text encoder. Restart the server to apply changes.',
   video: {
@@ -273,8 +312,10 @@ const DEFAULT_REGISTRY = {
     // `applyVideoSpeedProfiles` (lib/videoSpeedProfiles.js) is the third such
     // decorator: it attaches the shipped `speedProfiles` a model offers, pin-
     // guarded on repo AND revision so a re-pointed entry keeps no schedule
-    // claim we can't back.
-    mlx: applyVideoSpeedProfiles(applyVideoFinishProfiles(applyVideoDisclosures([
+    // claim we can't back. `applyVideoDraftDecoders`
+    // (lib/videoDraftDecoders.js) is the fourth, attaching the separately
+    // downloaded preview-fidelity decoder a model can render drafts on.
+    mlx: applyMiniMaxH3MemoryProfiles(applyVideoDraftDecoders(applyVideoSpeedProfiles(applyVideoFinishProfiles(applyVideoDisclosures([
       // notapalindrome's mlx-video-with-audio runtime — single PyPI package,
       // T2V/I2V only, FFLF degrades to last-frame conditioning (one --image arg).
       // LTX-2 Unified (the older 42 GB model) was retired in favour of 2.3 —
@@ -291,7 +332,21 @@ const DEFAULT_REGISTRY = {
       { id: 'ltx23_dgrauet_q8',   name: 'LTX-2.3 dgrauet Q8 (~25 GB, true keyframes)', repo: 'dgrauet/ltx-2.3-mlx-q8', runtime: 'ltx2', steps: 8, guidance: 3.0 },
       // LTX-2.5 Q8 on MrMofer's ltx25 fork of dgrauet/ltx-2-mlx. The 2.3 pin
       // cannot load these weights; INSTALL_LTX25 provisions a sibling venv.
-      { id: 'ltx25_mlx_q8', name: 'LTX-2.5 MLX Q8 (~68 GB, Apple Silicon)', repo: 'MrMofer/ltx-2.5-mlx-q8', revision: 'f1b56e7dc89f71a9af2cddac787b89ed22a8b7fc', runtime: 'ltx25', steps: 8, guidance: 3.0 },
+      {
+        id: 'ltx25_mlx_q8',
+        name: 'LTX-2.5 MLX Q8 (~68 GB, Apple Silicon)',
+        repo: 'MrMofer/ltx-2.5-mlx-q8',
+        revision: 'f1b56e7dc89f71a9af2cddac787b89ed22a8b7fc',
+        runtime: 'ltx25',
+        // A2V accepts an optional frame-one image. PortOS probes a direct audio
+        // upload and rounds its full duration up to the LTX 8n+1 grid. 1017 is
+        // the highest legal count under the route's 1024-frame single-pass cap.
+        audioDurationDriven: true,
+        frameStride: 8,
+        maxNumFrames: 1017,
+        steps: 8,
+        guidance: 3.0,
+      },
       // MiniMax H3 joint video+audio through PipeNetwork's pinned MLX port.
       // The quantized DiT is one HF snapshot; the released conditioner + VAEs
       // are an exact selective file set from MiniMax's upstream snapshot. Both
@@ -374,6 +429,42 @@ const DEFAULT_REGISTRY = {
             'FL2VA/video_vae/source/model.safetensors',
           ],
         }],
+      },
+      // MiniMax H3 Ref2VA through the signed mere.run native runtime. The
+      // checkpoint accepts at most 15 seconds of reference audio per call;
+      // PortOS chains those windows and remuxes the exact source audio so the
+      // user-facing mode has no arbitrary duration cap.
+      {
+        id: 'minimax_h3_ref2va_8bit',
+        name: 'MiniMax H3 Ref2VA MLX 8-bit (image + arbitrary-length audio, ~71 GB, 128 GB RAM)',
+        repo: 'Sawfwair/MiniMax-H3-Ref2VA-MLX-8bit',
+        revision: '61dc387ef1a7166425cdacd63c2340598dcc364f',
+        runtime: 'minimax_h3_ref2va',
+        supportedModes: ['a2v'],
+        requiresSourceImageForA2v: true,
+        audioDurationDriven: true,
+        arbitraryLengthAudio: true,
+        maxReferenceAudioSeconds: 15,
+        defaultFrames: 124,
+        frameOptions: [...MINIMAX_H3_OUTPUT_PROFILE.frameOptions],
+        fpsOptions: [24],
+        defaultWidth: 512,
+        defaultHeight: 320,
+        resolutionStep: 32,
+        resolutionOptions: [
+          { label: '512x320 (draft)', w: 512, h: 320 },
+          { label: '768x480', w: 768, h: 480 },
+          { label: '1024x640', w: 1024, h: 640 },
+          { label: '768x768 (1:1)', w: 768, h: 768 },
+        ],
+        memoryGb: 128,
+        steps: 9,
+        guidance: 0,
+        samplerLocked: true,
+        samplerNote: 'MiniMax H3 Ref2VA is CFG-distilled. PortOS renders audio in up-to-15-second continuity-linked windows, then restores the exact source audio over the final video.',
+        supportsNegativePrompt: false,
+        supportsTiling: false,
+        supportsDisableAudio: false,
       },
       // Wan 2.2 through pinned MLX-Gen. Generation is cache-only: PortOS owns
       // the explicit base/adaptor downloads and uses the saved HF token.
@@ -476,29 +567,96 @@ const DEFAULT_REGISTRY = {
           targetRoles: ['high_noise_transformer', 'low_noise_transformer'],
         }],
       },
-      // HunyuanVideo (Tencent) — MLX port at gaurav-nelson/HunyuanVideo_MLX,
-      // weights at tencent/HunyuanVideo. 13B params, ~60 GB resident at bf16.
-      // Practical only with Gemma 4-bit text encoder (not bf16) + nothing else
-      // in unified memory. Provisioned via `INSTALL_HUNYUAN=1 bash
-      // scripts/setup-image-video.sh`.
+      // FastVideo FastMetal models — Hao AI Lab's distilled DMD2 Wan models
+      // with affine INT8 quantization on Apple Silicon MLX.
       {
-        id: 'hunyuan_video',
-        // fp32-only on MPS: fp16/bf16 trip an MPS matmul accumulator-dtype
-        // assertion within ~2s of the first forward pass. At 576×1024×121
-        // frames × 30 steps that's a 4-8 hr render — marked `deprecated`
-        // so it lands in the "Legacy" optgroup. Migration 044 patches
-        // existing installs that still have the pre-fix shape.
-        name: 'HunyuanVideo (13B — fp32-only on MPS, ~4-8 hr per render)',
-        repo: 'tencent/HunyuanVideo',
-        runtime: 'hunyuan',
-        steps: 30,
-        guidance: 6.0,
-        precision: 'fp32',
-        deprecated: true,
+        id: 'fastmetal_1_3b_qad',
+        name: 'FastMetal 1.3B QAD (~3.5 GB download, 8+ GB RAM, 3-step)',
+        repo: 'FastVideo/FastMetal-1.3B-QAD',
+        runtime: 'fastvideo',
+        supportedModes: ['text'],
+        defaultWidth: 832,
+        defaultHeight: 480,
+        defaultFrames: 81,
+        memoryGb: 8,
+        steps: 3,
+        guidance: 1.0,
+        samplerLocked: true,
+        samplerNote: 'FastMetal models are DMD2-distilled 3-step models with affine INT8 quantization.',
       },
-    ]))),
-    cuda: applyVideoSpeedProfiles(applyVideoFinishProfiles(applyVideoDisclosures([
+      {
+        id: 'fastmetal_5b_qad',
+        name: 'FastMetal 5B QAD (~10 GB download, 16+ GB RAM, 3-step)',
+        repo: 'FastVideo/FastMetal-5B-QAD',
+        runtime: 'fastvideo',
+        supportedModes: ['text'],
+        defaultWidth: 1280,
+        defaultHeight: 720,
+        defaultFrames: 81,
+        memoryGb: 16,
+        steps: 3,
+        guidance: 1.0,
+        samplerLocked: true,
+        samplerNote: 'FastMetal models are DMD2-distilled 3-step models with affine INT8 quantization.',
+      },
+      {
+        id: 'fastmetal_14b_qad',
+        name: 'FastMetal 14B QAD (~25 GB download, 36+ GB RAM, 3-step)',
+        repo: 'FastVideo/FastMetal-14B-QAD',
+        runtime: 'fastvideo',
+        supportedModes: ['text'],
+        defaultWidth: 1280,
+        defaultHeight: 720,
+        defaultFrames: 81,
+        memoryGb: 36,
+        steps: 3,
+        guidance: 1.0,
+        samplerLocked: true,
+        samplerNote: 'FastMetal models are DMD2-distilled 3-step models with affine INT8 quantization.',
+      },
+    ]))))),
+    cuda: applyMiniMaxH3MemoryProfiles(applyVideoDraftDecoders(applyVideoSpeedProfiles(applyVideoFinishProfiles(applyVideoDisclosures([
       { id: 'ltx_video', name: 'LTX-Video 0.9.5 — T2V + I2V (~9.5 GB, auto-downloads)', runtime: 'cuda_video', steps: 25, guidance: 3.0 },
+      {
+        id: 'ltx25_cuda_distilled',
+        name: 'LTX-2.5 CUDA Distilled (joint video + audio, ~72 GB download, streamed)',
+        repo: 'Lightricks/LTX-2.5',
+        revision: 'bf86adedf518142442575d1ce2e767b7d01c8c76',
+        repoFiles: [...LTX25_CUDA_REPO_FILES],
+        runtime: 'ltx25_cuda',
+        supportedModes: ['text', 'image'],
+        defaultFrames: 121,
+        resolutionStep: 64,
+        fpsOptions: [24],
+        steps: 8,
+        guidance: 1.0,
+        samplerLocked: true,
+        samplerNote: 'LTX-2.5 Distilled uses the official fixed 8-step, CFG-free schedule.',
+        supportsNegativePrompt: false,
+        supportsTiling: false,
+        supportsDisableAudio: true,
+        requiresHfToken: true,
+        hardwareRequirements: { minMemoryGb: 64, minVramGb: 16, minCudaComputeCapability: 8 },
+      },
+      {
+        id: 'wan22_cuda_ti2v_5b',
+        name: 'Wan 2.2 TI2V 5B CUDA (high quality, ~34 GB download, text-to-video)',
+        repo: 'Wan-AI/Wan2.2-TI2V-5B-Diffusers',
+        revision: 'b8fff7315c768468a5333511427288870b2e9635',
+        runtime: 'wan22_cuda',
+        supportedModes: ['text'],
+        defaultWidth: 1280,
+        defaultHeight: 704,
+        resolutionStep: 16,
+        defaultFrames: 121,
+        frameStride: 4,
+        fpsOptions: [24],
+        steps: 50,
+        guidance: 5,
+        supportsNegativePrompt: true,
+        supportsTiling: false,
+        hardwareRequirements: { minMemoryGb: 32, minVramGb: 24, minCudaComputeCapability: 8 },
+      },
       // MiniMax H3 on NVIDIA, through diffusers' MiniMaxH3ModularPipeline —
       // the same joint video+audio model the MLX list runs on Apple Silicon, so it
       // shares H3's canvas grid, its fixed 24 fps, its locked CFG-distilled
@@ -533,7 +691,7 @@ const DEFAULT_REGISTRY = {
         supportsTiling: false,
         supportsDisableAudio: false,
       },
-    ]))),
+    ]))))),
     defaultMlx: 'ltx23_distilled_q4',
     defaultCuda: 'ltx_video',
   },
@@ -921,12 +1079,25 @@ const upgradeLegacyCudaLtxRuntime = (list) => {
   ));
 };
 
+export const upgradeLtx25CudaMemoryFloor = (list) => {
+  if (!Array.isArray(list)) return list;
+  return list.map((entry) => (
+    isPlainObject(entry)
+      && entry.id === 'ltx25_cuda_distilled'
+      && entry.repo === 'Lightricks/LTX-2.5'
+      && entry.hardwareRequirements?.minMemoryGb === 32
+      ? { ...entry, hardwareRequirements: { ...entry.hardwareRequirements, minMemoryGb: 64 } }
+      : entry
+  ));
+};
+
 // Built-in video models that were delivered to installs and have since been
 // withdrawn. Dropping an id from DEFAULT_REGISTRY is NOT enough on its own: the
 // user's persisted list is what the pickers read, and appendNewlyShippedEntries
-// only ever adds. This is the load-time twin of the retirement migration (247
-// for ltx2_unified) — and it is the load-bearing half, because the registry is
-// cached at import time, BEFORE bootstrapServices() runs migrations, and
+// only ever adds. This is the load-time twin of the retirement migrations (247
+// for ltx2_unified, 315 for hunyuan_video) — and it is the load-bearing half,
+// because the registry is cached at import time, BEFORE bootstrapServices()
+// runs migrations, and
 // persistRegistry writes the whole cached object back on the next registry
 // edit. Without this the migration's deletion is undone by the same boot that
 // applied it.
@@ -947,6 +1118,10 @@ export const RETIRED_VIDEO_MODELS = Object.freeze({
   ltx2_unified: Object.freeze({
     shippedRepo: 'notapalindrome/ltx2-mlx-av',
     replacement: 'ltx23_distilled_q4',
+  }),
+  hunyuan_video: Object.freeze({
+    shippedRepo: 'tencent/HunyuanVideo',
+    replacement: 'fastmetal_1_3b_qad',
   }),
 });
 
@@ -1066,21 +1241,39 @@ const normalizeRegistry = (parsed) => {
   // that persisted their registry before `disclosure` existed pick it up
   // here without waiting for the migration, and both paths share the same
   // preservation guards (user value wins, forked repo keeps Unknown).
-  // dropRetiredEntries is the same arrangement for migration 247, and runs
+  // dropRetiredEntries is the same arrangement for the retirement migrations,
+  // and runs
   // FIRST so a withdrawn model isn't handed a disclosure or a Finish edge on
   // its way out. sanitizeFinishProfiles runs LAST (after the backfill and
   // after the user's own entries are merged in) so an edge that points at a
   // model this install deleted — or a hand-edited typo — is dropped with a
   // warning instead of surfacing a Finish button targeting nothing.
   const videoEntries = (entries, { upgradeLegacyCudaLtx = false } = {}) => {
-    const normalized = backfillRuntime(upgradeMiniMaxH3OutputControls(dropRetiredEntries(entries)));
-    const upgraded = upgradeLegacyCudaLtx ? upgradeLegacyCudaLtxRuntime(normalized) : normalized;
+    const normalized = backfillRuntime(upgradeLtx25AudioControls(
+      upgradeMiniMaxH3OutputControls(dropRetiredEntries(entries)),
+    ));
+    const upgraded = upgradeLegacyCudaLtx
+      ? upgradeLtx25CudaMemoryFloor(upgradeLegacyCudaLtxRuntime(normalized))
+      : normalized;
     const decorated = sanitizeFinishProfiles(applyVideoFinishProfiles(applyVideoDisclosures(upgraded)));
     // applyVideoSpeedProfiles is the load-time twin of migration 295, and
     // sanitizeSpeedProfiles is its sibling of sanitizeFinishProfiles: a
     // hand-edited profile with a NaN step count would otherwise reach the
     // picker and spawn a broken render, so it is warned about and stripped.
-    return sanitizeSpeedProfiles(applyVideoSpeedProfiles(decorated));
+    const withSpeed = sanitizeSpeedProfiles(applyVideoSpeedProfiles(decorated));
+    // applyVideoDraftDecoders + sanitizeDraftDecoders (lib/videoDraftDecoders.js)
+    // are the same arrangement for the preview-fidelity decode (#5423). The
+    // sanitizer matters more here than elsewhere: a hand-edited decoder pointed
+    // at a runtime whose builder emits no draft flags would render on the FULL
+    // decoder while the history record claimed a draft one, so it is warned
+    // about and stripped rather than allowed to make a false claim.
+    const withDraftDecode = sanitizeDraftDecoders(applyVideoDraftDecoders(withSpeed));
+    // applyMiniMaxH3MemoryProfiles is the load-time twin of migration 317, and
+    // its sanitizer the sibling of the two above: a hand-edited profile with a
+    // NaN memory floor would otherwise make every capacity comparison false and
+    // refuse H3 renders on a machine that can run them, so it is warned about
+    // and stripped.
+    return sanitizeMiniMaxH3MemoryProfiles(applyMiniMaxH3MemoryProfiles(withDraftDecode));
   };
   const normalizedBuckets = Object.fromEntries(
     VIDEO_BUCKETS.map((bucket) => [bucket, videoEntries(bucketResults[bucket].entries, {

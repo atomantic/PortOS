@@ -90,7 +90,12 @@ vi.mock('./settings.js', async (importOriginal) => ({
   ...(await importOriginal()),
   reloadSettings: vi.fn(async () => {}),
 }));
+vi.mock('./brainStorage.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  invalidateAllCaches: vi.fn(),
+}));
 import { reloadSettings } from './settings.js';
+import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
 import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, openSnapshotStream, restoreSnapshot } from './backup.js';
 
 // fs.access is mocked file-wide because backup.js probes the .in-progress marker
@@ -1218,6 +1223,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
   beforeEach(() => {
     spawn.mockReset();
     reloadSettings.mockClear();
+    invalidateBrainCaches.mockClear();
   });
 
   // Drive a mocked rsync to a clean exit so restoreSnapshot resolves.
@@ -1297,14 +1303,28 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       await runRestore('/dest', 'snap-1', { dryRun: false });
 
       expect(reloadSettings).toHaveBeenCalledTimes(1);
+      expect(invalidateBrainCaches).toHaveBeenCalledTimes(1);
       // A live restore must not pass --dry-run to rsync.
       expect(spawn.mock.calls[0][1]).not.toContain('--dry-run');
+    });
+
+    it('invalidates Brain projections after a nested selective live Brain restore', async () => {
+      await runRestore('/dest', 'snap-1', { dryRun: false, subdirFilter: 'brain/inbox' });
+
+      expect(invalidateBrainCaches).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps Brain projections after a selective live restore outside Brain', async () => {
+      await runRestore('/dest', 'snap-1', { dryRun: false, subdirFilter: 'images' });
+
+      expect(invalidateBrainCaches).not.toHaveBeenCalled();
     });
 
     it('does not reload settings for a dry run', async () => {
       await runRestore('/dest', 'snap-1', { dryRun: true });
 
       expect(reloadSettings).not.toHaveBeenCalled();
+      expect(invalidateBrainCaches).not.toHaveBeenCalled();
       expect(spawn.mock.calls[0][1]).toContain('--dry-run');
     });
 

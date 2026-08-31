@@ -16,7 +16,7 @@
             "url": "https://pypi.org/project/mlx-video-with-audio/"
           },
           "estimatedDownloadGb": 53.5,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         }
       },
       {
@@ -33,7 +33,7 @@
             "url": "https://pypi.org/project/mlx-video-with-audio/"
           },
           "estimatedDownloadGb": 22.8,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         }
       },
       {
@@ -54,7 +54,7 @@
             "url": "https://github.com/dgrauet/ltx-2-mlx/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 59.7,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         }
       },
       {
@@ -75,7 +75,7 @@
             "url": "https://github.com/dgrauet/ltx-2-mlx/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 87.5,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         }
       },
       {
@@ -84,6 +84,9 @@
         "repo": "MrMofer/ltx-2.5-mlx-q8",
         "revision": "f1b56e7dc89f71a9af2cddac787b89ed22a8b7fc",
         "runtime": "ltx25",
+        "audioDurationDriven": true,
+        "frameStride": 8,
+        "maxNumFrames": 1017,
         "steps": 8,
         "guidance": 3,
         "disclosure": {
@@ -97,7 +100,7 @@
             "url": "https://github.com/MrMoferFRAN/ltx-2-mlx/blob/57952288076766abe27dda3a774b2c24f7346977/LICENSE"
           },
           "estimatedDownloadGb": 67.7,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         },
         "speedProfiles": [
           {
@@ -246,7 +249,7 @@
             "url": "https://github.com/PipeNetwork/minimax-h3-mlx/blob/fcd9e9b79a1d6018d91ac477c0968de1fa067e49/LICENSE"
           },
           "estimatedDownloadGb": 103.3,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         },
         "termsGate": {
           "id": "minimax-h3-community-license-2026-08-02",
@@ -260,7 +263,122 @@
             "Republic of Korea",
             "United States of America"
           ]
-        }
+        },
+        "memoryProfiles": [
+          {
+            "id": "unified-8bit",
+            "name": "Unified 8-bit",
+            "description": "8-bit quantized DiT with the bf16 Qwen3-VL conditioner, resident in unified memory.",
+            "minMemoryGb": 128,
+            "minVramGb": null,
+            "unified": true
+          }
+        ]
+      },
+      {
+        "id": "minimax_h3_ref2va_8bit",
+        "name": "MiniMax H3 Ref2VA MLX 8-bit (image + arbitrary-length audio, ~71 GB, 128 GB RAM)",
+        "repo": "Sawfwair/MiniMax-H3-Ref2VA-MLX-8bit",
+        "revision": "61dc387ef1a7166425cdacd63c2340598dcc364f",
+        "runtime": "minimax_h3_ref2va",
+        "supportedModes": [
+          "a2v"
+        ],
+        "requiresSourceImageForA2v": true,
+        "audioDurationDriven": true,
+        "arbitraryLengthAudio": true,
+        "maxReferenceAudioSeconds": 15,
+        "defaultFrames": 124,
+        "frameOptions": [
+          107,
+          124,
+          141,
+          158,
+          175,
+          192,
+          209,
+          226,
+          243,
+          260,
+          277,
+          294,
+          311,
+          328,
+          345,
+          362
+        ],
+        "fpsOptions": [
+          24
+        ],
+        "defaultWidth": 512,
+        "defaultHeight": 320,
+        "resolutionStep": 32,
+        "resolutionOptions": [
+          {
+            "label": "512x320 (draft)",
+            "w": 512,
+            "h": 320
+          },
+          {
+            "label": "768x480",
+            "w": 768,
+            "h": 480
+          },
+          {
+            "label": "1024x640",
+            "w": 1024,
+            "h": 640
+          },
+          {
+            "label": "768x768 (1:1)",
+            "w": 768,
+            "h": 768
+          }
+        ],
+        "memoryGb": 128,
+        "steps": 9,
+        "guidance": 0,
+        "samplerLocked": true,
+        "samplerNote": "MiniMax H3 Ref2VA is CFG-distilled. PortOS renders audio in up-to-15-second continuity-linked windows, then restores the exact source audio over the final video.",
+        "supportsNegativePrompt": false,
+        "supportsTiling": false,
+        "supportsDisableAudio": false,
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/Sawfwair/MiniMax-H3-Ref2VA-MLX-8bit",
+          "weightsLicense": {
+            "name": "MiniMax H3 Community License",
+            "url": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/6818f6c32d12b210915e44ad56a4228c2608f160/LICENSE"
+          },
+          "runtimeLicense": {
+            "name": "Apache-2.0",
+            "url": "https://github.com/sawfwair/mere-run/blob/v0.47.0/LICENSE"
+          },
+          "estimatedDownloadGb": 70.9,
+          "reviewedAt": "2026-08-30"
+        },
+        "termsGate": {
+          "id": "minimax-h3-community-license-2026-08-02",
+          "title": "MiniMax H3 eligibility and terms",
+          "summary": "MiniMax grants use only in its Applicable Territory. The license excludes the European Union, United Kingdom, Republic of Korea, and United States of America.",
+          "acknowledgement": "I confirm I am in the Applicable Territory and agree to the MiniMax H3 Community License and its Acceptable Use Policy.",
+          "licenseUrl": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/6818f6c32d12b210915e44ad56a4228c2608f160/LICENSE",
+          "excludedTerritories": [
+            "European Union",
+            "United Kingdom",
+            "Republic of Korea",
+            "United States of America"
+          ]
+        },
+        "memoryProfiles": [
+          {
+            "id": "unified-8bit",
+            "name": "Unified 8-bit Ref2VA",
+            "description": "8-bit Ref2VA weights and conditioning components resident in Apple unified memory.",
+            "minMemoryGb": 128,
+            "minVramGb": null,
+            "unified": true
+          }
+        ]
       },
       {
         "id": "wan22_ti2v_5b",
@@ -294,7 +412,7 @@
             "url": "https://github.com/lpalbou/mlx-gen/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 18.2,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         }
       },
       {
@@ -329,7 +447,7 @@
             "url": "https://github.com/lpalbou/mlx-gen/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 42.4,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         }
       },
       {
@@ -364,7 +482,7 @@
             "url": "https://github.com/lpalbou/mlx-gen/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 42.4,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         }
       },
       {
@@ -414,7 +532,7 @@
             "url": "https://github.com/lpalbou/mlx-gen/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 44.9,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         },
         "finishModelId": "wan22_t2v_a14b"
       },
@@ -465,30 +583,97 @@
             "url": "https://github.com/lpalbou/mlx-gen/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 44.9,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         }
       },
       {
-        "id": "hunyuan_video",
-        "name": "HunyuanVideo (13B — fp32-only on MPS, ~4-8 hr per render)",
-        "repo": "tencent/HunyuanVideo",
-        "runtime": "hunyuan",
-        "steps": 30,
-        "guidance": 6,
-        "precision": "fp32",
-        "deprecated": true,
+        "id": "fastmetal_1_3b_qad",
+        "name": "FastMetal 1.3B QAD (~3.5 GB download, 8+ GB RAM, 3-step)",
+        "repo": "FastVideo/FastMetal-1.3B-QAD",
+        "runtime": "fastvideo",
+        "supportedModes": [
+          "text"
+        ],
+        "defaultWidth": 832,
+        "defaultHeight": 480,
+        "defaultFrames": 81,
+        "memoryGb": 8,
+        "steps": 3,
+        "guidance": 1,
+        "samplerLocked": true,
+        "samplerNote": "FastMetal models are DMD2-distilled 3-step models with affine INT8 quantization.",
         "disclosure": {
-          "modelCardUrl": "https://huggingface.co/tencent/HunyuanVideo",
+          "modelCardUrl": "https://huggingface.co/FastVideo/FastMetal-1.3B-QAD",
           "weightsLicense": {
-            "name": "Tencent Hunyuan Community License",
-            "url": "https://huggingface.co/tencent/HunyuanVideo/blob/main/LICENSE"
+            "name": "Apache-2.0",
+            "url": "https://www.apache.org/licenses/LICENSE-2.0"
           },
           "runtimeLicense": {
-            "name": "Tencent Hunyuan Community License",
-            "url": "https://github.com/gaurav-nelson/HunyuanVideo_MLX/blob/main/LICENSE.txt"
+            "name": "Apache-2.0",
+            "url": "https://github.com/hao-ai-lab/FastVideo/blob/main/LICENSE"
           },
-          "estimatedDownloadGb": 39.8,
-          "reviewedAt": "2026-08-09"
+          "estimatedDownloadGb": 3.5,
+          "reviewedAt": "2026-08-30"
+        }
+      },
+      {
+        "id": "fastmetal_5b_qad",
+        "name": "FastMetal 5B QAD (~10 GB download, 16+ GB RAM, 3-step)",
+        "repo": "FastVideo/FastMetal-5B-QAD",
+        "runtime": "fastvideo",
+        "supportedModes": [
+          "text"
+        ],
+        "defaultWidth": 1280,
+        "defaultHeight": 720,
+        "defaultFrames": 81,
+        "memoryGb": 16,
+        "steps": 3,
+        "guidance": 1,
+        "samplerLocked": true,
+        "samplerNote": "FastMetal models are DMD2-distilled 3-step models with affine INT8 quantization.",
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/FastVideo/FastMetal-5B-QAD",
+          "weightsLicense": {
+            "name": "Apache-2.0",
+            "url": "https://www.apache.org/licenses/LICENSE-2.0"
+          },
+          "runtimeLicense": {
+            "name": "Apache-2.0",
+            "url": "https://github.com/hao-ai-lab/FastVideo/blob/main/LICENSE"
+          },
+          "estimatedDownloadGb": 10.2,
+          "reviewedAt": "2026-08-30"
+        }
+      },
+      {
+        "id": "fastmetal_14b_qad",
+        "name": "FastMetal 14B QAD (~25 GB download, 36+ GB RAM, 3-step)",
+        "repo": "FastVideo/FastMetal-14B-QAD",
+        "runtime": "fastvideo",
+        "supportedModes": [
+          "text"
+        ],
+        "defaultWidth": 1280,
+        "defaultHeight": 720,
+        "defaultFrames": 81,
+        "memoryGb": 36,
+        "steps": 3,
+        "guidance": 1,
+        "samplerLocked": true,
+        "samplerNote": "FastMetal models are DMD2-distilled 3-step models with affine INT8 quantization.",
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/FastVideo/FastMetal-14B-QAD",
+          "weightsLicense": {
+            "name": "Apache-2.0",
+            "url": "https://www.apache.org/licenses/LICENSE-2.0"
+          },
+          "runtimeLicense": {
+            "name": "Apache-2.0",
+            "url": "https://github.com/hao-ai-lab/FastVideo/blob/main/LICENSE"
+          },
+          "estimatedDownloadGb": 25.4,
+          "reviewedAt": "2026-08-30"
         }
       }
     ],
@@ -504,7 +689,88 @@
             "name": "Apache-2.0",
             "url": "https://github.com/huggingface/diffusers/blob/main/LICENSE"
           },
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
+        }
+      },
+      {
+        "id": "ltx25_cuda_distilled",
+        "name": "LTX-2.5 CUDA Distilled (joint video + audio, ~72 GB download, streamed)",
+        "repo": "Lightricks/LTX-2.5",
+        "revision": "bf86adedf518142442575d1ce2e767b7d01c8c76",
+        "repoFiles": [
+          "diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors",
+          "text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors",
+          "vae/ltx-2.5-video-vae-bf16.safetensors",
+          "vae/ltx-2.5-audio-vae-bf16.safetensors",
+          "model_patches/ltx-2.5-duration-head-bf16.safetensors",
+          "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"
+        ],
+        "runtime": "ltx25_cuda",
+        "supportedModes": ["text", "image"],
+        "defaultFrames": 121,
+        "resolutionStep": 64,
+        "fpsOptions": [24],
+        "steps": 8,
+        "guidance": 1,
+        "samplerLocked": true,
+        "samplerNote": "LTX-2.5 Distilled uses the official fixed 8-step, CFG-free schedule.",
+        "supportsNegativePrompt": false,
+        "supportsTiling": false,
+        "supportsDisableAudio": true,
+        "requiresHfToken": true,
+        "hardwareRequirements": {
+          "minMemoryGb": 64,
+          "minVramGb": 16,
+          "minCudaComputeCapability": 8
+        },
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/Lightricks/LTX-2.5",
+          "weightsLicense": {
+            "name": "LTX-2.x Community License",
+            "url": "https://github.com/Lightricks/LTX-2/blob/main/LICENSE.md"
+          },
+          "runtimeLicense": {
+            "name": "Apache-2.0",
+            "url": "https://github.com/Lightricks/LTX-2/blob/v1.2.0/LICENSE"
+          },
+          "estimatedDownloadGb": 72.1,
+          "reviewedAt": "2026-08-30"
+        }
+      },
+      {
+        "id": "wan22_cuda_ti2v_5b",
+        "name": "Wan 2.2 TI2V 5B CUDA (high quality, ~34 GB download, text-to-video)",
+        "repo": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+        "revision": "b8fff7315c768468a5333511427288870b2e9635",
+        "runtime": "wan22_cuda",
+        "supportedModes": ["text"],
+        "defaultWidth": 1280,
+        "defaultHeight": 704,
+        "resolutionStep": 16,
+        "defaultFrames": 121,
+        "frameStride": 4,
+        "fpsOptions": [24],
+        "steps": 50,
+        "guidance": 5,
+        "supportsNegativePrompt": true,
+        "supportsTiling": false,
+        "hardwareRequirements": {
+          "minMemoryGb": 32,
+          "minVramGb": 24,
+          "minCudaComputeCapability": 8
+        },
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+          "weightsLicense": {
+            "name": "Apache-2.0",
+            "url": "https://www.apache.org/licenses/LICENSE-2.0"
+          },
+          "runtimeLicense": {
+            "name": "Apache-2.0",
+            "url": "https://github.com/huggingface/diffusers/blob/main/LICENSE"
+          },
+          "estimatedDownloadGb": 34.2,
+          "reviewedAt": "2026-08-30"
         }
       },
       {
@@ -655,7 +921,7 @@
             "url": "https://github.com/huggingface/diffusers/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 144.1,
-          "reviewedAt": "2026-08-09"
+          "reviewedAt": "2026-08-30"
         },
         "termsGate": {
           "id": "minimax-h3-community-license-2026-08-02",
@@ -669,7 +935,33 @@
             "Republic of Korea",
             "United States of America"
           ]
-        }
+        },
+        "memoryProfiles": [
+          {
+            "id": "bf16",
+            "name": "bf16 with CPU offload",
+            "description": "Unquantized components swapped by the components manager, with a 12 GB device reserve.",
+            "minMemoryGb": 96,
+            "minVramGb": 60,
+            "unified": false
+          },
+          {
+            "id": "int8-stream",
+            "name": "int8, streamed blocks",
+            "description": "int8 weight-only quantization with block-level transformer offload streamed onto the card.",
+            "minMemoryGb": 96,
+            "minVramGb": 20,
+            "unified": false
+          },
+          {
+            "id": "int8-lean",
+            "name": "int8, leaf-level",
+            "description": "int8 weight-only quantization with leaf-level offload for the transformer, conditioner and video VAE.",
+            "minMemoryGb": 96,
+            "minVramGb": 12,
+            "unified": false
+          }
+        ]
       }
     ],
     "defaultMlx": "ltx23_distilled_q4",

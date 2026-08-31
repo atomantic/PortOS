@@ -65,21 +65,34 @@ Track administrative tasks:
 ```
 ./data/brain/
 ├── meta.json               # Settings and scheduler state
-├── inbox.json              # All captured thoughts with classifications
-├── people.json             # People records
-├── projects.json           # Projects with status tracking
-├── ideas.json              # Ideas and concepts
-├── admin.json              # Administrative tasks
-├── buckets.json            # Custom bucket definitions
-├── links.json              # Cross-record links
-├── memories.json           # Brain memories
-├── journals.json           # Daily Log entries
+├── admin/                  # Admin tasks (collectionStore: <id>/index.json)
+├── buckets/                # Custom bucket definitions (collectionStore: <id>/index.json)
+├── ideas/                  # Ideas and concepts (collectionStore: <id>/index.json)
+├── inbox/                  # Captured thoughts (collectionStore: <id>/index.json)
+├── journals/               # Daily Log entries (collectionStore: <id>/index.json)
+├── links/                  # Saved bookmarks (collectionStore: <id>/index.json)
+├── memories/               # Brain memories (collectionStore: <id>/index.json)
+├── people/                 # People records (collectionStore: <id>/index.json)
+├── projects/               # Projects with status tracking (collectionStore: <id>/index.json)
+├── songs/                  # SongBook songs (collectionStore: <id>/index.json)
+├── idealoom-lists/         # Machine-local IdeaLoom lists (collectionStore: <id>/index.json)
+├── imports/                # Imported conversation archives
+├── scans/                  # Repository malware scan reports
+├── songbook/               # Machine-local SongBook attachment files
+├── youtube/                # YouTube transcripts, audio, and ingest index
+├── activity-digest-settings.json # Activity digest configuration
+├── journal-settings.json   # Daily Log and Obsidian mirror settings
+├── journal-obsidian-locations.json # Machine-local journal mirror paths
 ├── memory-bridge-map.json  # Brain↔CoS memory bridge mapping
 ├── obsidian-vaults.json    # Obsidian vault sync config
-├── sync_log.jsonl          # Obsidian sync history
+├── youtube-ingest-settings.json # YouTube ingest defaults
+├── sync_log.jsonl          # Brain peer-sync mutation history
 ├── digests.jsonl           # Daily digest history
 └── reviews.jsonl           # Weekly review history
 ```
+
+Each `collectionStore` directory contains a schema-versioned `index.json` and
+stores every record at `<id>/index.json`.
 
 ## AI Classification
 
@@ -281,14 +294,14 @@ not export itself back.
 |------|---------|
 | `server/lib/brainValidation.js` | Zod schemas for all Brain entities |
 | `server/services/brain.js` | Core business logic |
-| `server/services/brainStorage.js` | JSONL/JSON file operations |
+| `server/services/brainStorage.js` | Per-record collectionStore persistence plus JSON/JSONL sidecars |
 | `server/services/idealoomLists.js` | Machine-local ordered IdeaLoom list records and sync metadata |
 | `server/services/idealoomObsidian.js` | Validated IdeaLoom Markdown import/export with base-hash conflict and deletion handling |
 | `server/services/idealoomAutoSync.js` | Opt-in debounced automatic export (never deletes or recreates a note) |
 | `server/services/brainScheduler.js` | Daily/weekly job scheduler |
 | `server/services/youtubeIngest.js` | YouTube ingest orchestration (transcript / video / audio → brain + Obsidian + CoS task) |
 | `server/lib/vttTranscript.js` | WebVTT/SRT → readable prose (collapses auto-caption repetition) |
-| `server/routes/brain.js` | Aggregator router mounting brainCapture, brainCrud, brainDigest, brainSettings, brainLinks, brainGraph, brainSync, brainDailyLog, brainSongbook, and brainYoutube |
+| `server/routes/brain.js` | Aggregator router mounting brainCapture, brainIdeaLoom, brainCrud, brainDigest, brainSettings, brainLinks, brainGraph, brainSync, brainDailyLog, brainSongbook, and brainYoutube |
 | `client/src/pages/Brain.jsx` | Main page with tabs |
 | `client/src/components/brain/tabs/*.jsx` | Tab components |
 | `data/prompts/stages/brain-*.md` | Prompt templates |

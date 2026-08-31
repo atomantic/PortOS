@@ -121,7 +121,7 @@ export function buildChallengeResolutionPatch({ outcome, note, resolvedBy, now =
  *
  * When a challenge is resolved by re-running a reviewer against the current diff
  * (rather than a human verdict), the merge-gating signal is the reviewer's
- * `## Blocking` section — nits/recommended never block a merge, so only a
+ * `## Blocking` section — a `## Recommended` finding never blocks a merge, so only a
  * surviving blocking finding sustains the original rejection. The local-LLM
  * reviewer emits the exact `No findings.` sentinel for a fully clean diff
  * (see codeReview.js CODE_REVIEW_SYSTEM_PROMPT) and a `## Blocking` header only

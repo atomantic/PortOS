@@ -25,7 +25,14 @@ import toast from '../ui/Toast';
 
 const VIDEO_ACCEPT = 'video/mp4,video/webm,video/quicktime,video/x-m4v,.mp4,.webm,.mov,.m4v';
 
-export default function GalleryVideoPicker({ open, onClose, onSelect, allowUpload = false, uploadToGallery = false }) {
+export default function GalleryVideoPicker({
+  open,
+  onClose,
+  onSelect,
+  allowUpload = false,
+  uploadToGallery = false,
+  accept = VIDEO_ACCEPT,
+}) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -87,7 +94,7 @@ export default function GalleryVideoPicker({ open, onClose, onSelect, allowUploa
       if (sessionRef.current !== session) return;
       setUploading(false);
       if (!entry?.filename) return;
-      onSelect?.(normalizeVideo(entry));
+      onSelect?.(normalizeVideo(entry), { origin: 'upload' });
       onClose?.();
       return;
     }
@@ -122,7 +129,7 @@ export default function GalleryVideoPicker({ open, onClose, onSelect, allowUploa
           <div className="flex items-center gap-2 shrink-0">
             {allowUpload && (
               <FilePickerButton
-                accept={VIDEO_ACCEPT}
+                accept={accept}
                 onChange={handleUpload}
                 disabled={uploading}
                 title="Upload a video from your device"

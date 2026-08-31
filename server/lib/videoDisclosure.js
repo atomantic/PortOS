@@ -27,7 +27,7 @@ import { ServerError } from './errorHandler.js';
 
 // Every shipped disclosure was checked against its upstream source on this
 // date. Bump it (and re-check) whenever an entry below changes.
-export const VIDEO_DISCLOSURE_REVIEWED_AT = '2026-08-09';
+export const VIDEO_DISCLOSURE_REVIEWED_AT = '2026-08-30';
 
 // License descriptors reused across entries. `url` points at the primary text
 // of the license, or at the model card when the card declares a custom license
@@ -41,6 +41,9 @@ export const APACHE_2 = { name: 'Apache-2.0', url: 'https://www.apache.org/licen
 // something it cannot, so the ltx25 conditioners in lib/videoTextEncoders.js
 // disclose THIS rather than whatever their card happens to say.
 export const GEMMA_TERMS = { name: 'Gemma Terms of Use', url: 'https://ai.google.dev/gemma/terms' };
+// Compatibility-only disclosure facts retained for migration 237. The model
+// and runtime are no longer shipped, but deleting these would break upgrades
+// whose pending migration still imports the historical disclosure table.
 const TENCENT_HUNYUAN_WEIGHTS = {
   name: 'Tencent Hunyuan Community License',
   url: 'https://huggingface.co/tencent/HunyuanVideo/blob/main/LICENSE',
@@ -60,18 +63,29 @@ const RUNTIME_LICENSE = {
   mlx_video: { name: 'MIT', url: 'https://pypi.org/project/mlx-video-with-audio/' },
   ltx2: { name: 'MIT', url: 'https://github.com/dgrauet/ltx-2-mlx/blob/main/LICENSE' },
   ltx25: { name: 'MIT', url: 'https://github.com/MrMoferFRAN/ltx-2-mlx/blob/57952288076766abe27dda3a774b2c24f7346977/LICENSE' },
+  ltx25_cuda: { name: 'Apache-2.0', url: 'https://github.com/Lightricks/LTX-2/blob/v1.2.0/LICENSE' },
+  wan22_cuda: { name: 'Apache-2.0', url: 'https://github.com/huggingface/diffusers/blob/main/LICENSE' },
   wan22: { name: 'MIT', url: 'https://github.com/lpalbou/mlx-gen/blob/main/LICENSE' },
   minimax_h3: {
     name: 'Apache-2.0',
     url: 'https://github.com/PipeNetwork/minimax-h3-mlx/blob/fcd9e9b79a1d6018d91ac477c0968de1fa067e49/LICENSE',
   },
+  minimax_h3_ref2va: {
+    name: 'Apache-2.0',
+    url: 'https://github.com/sawfwair/mere-run/blob/v0.47.0/LICENSE',
+  },
   // The diffusers CUDA path executes no vendored source — the license that
   // governs the inference code is diffusers' own.
   cuda_video: { name: 'Apache-2.0', url: 'https://github.com/huggingface/diffusers/blob/main/LICENSE' },
   minimax_h3_cuda: { name: 'Apache-2.0', url: 'https://github.com/huggingface/diffusers/blob/main/LICENSE' },
+  // Historical runtime license consumed only by the retired model disclosure.
   hunyuan: {
     name: 'Tencent Hunyuan Community License',
     url: 'https://github.com/gaurav-nelson/HunyuanVideo_MLX/blob/main/LICENSE.txt',
+  },
+  fastvideo: {
+    name: 'Apache-2.0',
+    url: 'https://github.com/hao-ai-lab/FastVideo/blob/main/LICENSE',
   },
 };
 
@@ -127,6 +141,17 @@ const customLicense = (repo) => ({ name: 'Custom — see model card', url: hfMod
  * Lightning entries include their `requiredWeights` LoRA files.
  */
 export const VIDEO_MODEL_DISCLOSURES = Object.freeze({
+  minimax_h3_ref2va_8bit: {
+    shippedRepo: 'Sawfwair/MiniMax-H3-Ref2VA-MLX-8bit',
+    disclosure: {
+      modelCardUrl: hfModelCard('Sawfwair/MiniMax-H3-Ref2VA-MLX-8bit'),
+      weightsLicense: MINIMAX_H3_WEIGHTS,
+      runtimeLicense: RUNTIME_LICENSE.minimax_h3_ref2va,
+      estimatedDownloadGb: 70.9,
+      reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
+    },
+    termsGate: MINIMAX_H3_TERMS_GATE,
+  },
   minimax_h3_8bit: {
     shippedRepo: 'pipenetwork/MiniMax-H3-MLX-8bit',
     disclosure: {
@@ -209,6 +234,26 @@ export const VIDEO_MODEL_DISCLOSURES = Object.freeze({
       reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
     },
   },
+  ltx25_cuda_distilled: {
+    shippedRepo: 'Lightricks/LTX-2.5',
+    disclosure: {
+      modelCardUrl: hfModelCard('Lightricks/LTX-2.5'),
+      weightsLicense: LTX_2X_WEIGHTS,
+      runtimeLicense: RUNTIME_LICENSE.ltx25_cuda,
+      estimatedDownloadGb: 72.1,
+      reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
+    },
+  },
+  wan22_cuda_ti2v_5b: {
+    shippedRepo: 'Wan-AI/Wan2.2-TI2V-5B-Diffusers',
+    disclosure: {
+      modelCardUrl: hfModelCard('Wan-AI/Wan2.2-TI2V-5B-Diffusers'),
+      weightsLicense: APACHE_2,
+      runtimeLicense: RUNTIME_LICENSE.wan22_cuda,
+      estimatedDownloadGb: 34.2,
+      reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
+    },
+  },
   wan22_ti2v_5b: {
     shippedRepo: 'AbstractFramework/wan2.2-ti2v-5b-diffusers-8bit',
     disclosure: {
@@ -261,6 +306,7 @@ export const VIDEO_MODEL_DISCLOSURES = Object.freeze({
       reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
     },
   },
+  // Historical entry retained for migration 237; not present in the catalog.
   hunyuan_video: {
     shippedRepo: 'tencent/HunyuanVideo',
     disclosure: {
@@ -268,6 +314,36 @@ export const VIDEO_MODEL_DISCLOSURES = Object.freeze({
       weightsLicense: TENCENT_HUNYUAN_WEIGHTS,
       runtimeLicense: RUNTIME_LICENSE.hunyuan,
       estimatedDownloadGb: 39.8,
+      reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
+    },
+  },
+  fastmetal_1_3b_qad: {
+    shippedRepo: 'FastVideo/FastMetal-1.3B-QAD',
+    disclosure: {
+      modelCardUrl: hfModelCard('FastVideo/FastMetal-1.3B-QAD'),
+      weightsLicense: APACHE_2,
+      runtimeLicense: RUNTIME_LICENSE.fastvideo,
+      estimatedDownloadGb: 3.5,
+      reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
+    },
+  },
+  fastmetal_5b_qad: {
+    shippedRepo: 'FastVideo/FastMetal-5B-QAD',
+    disclosure: {
+      modelCardUrl: hfModelCard('FastVideo/FastMetal-5B-QAD'),
+      weightsLicense: APACHE_2,
+      runtimeLicense: RUNTIME_LICENSE.fastvideo,
+      estimatedDownloadGb: 10.2,
+      reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
+    },
+  },
+  fastmetal_14b_qad: {
+    shippedRepo: 'FastVideo/FastMetal-14B-QAD',
+    disclosure: {
+      modelCardUrl: hfModelCard('FastVideo/FastMetal-14B-QAD'),
+      weightsLicense: APACHE_2,
+      runtimeLicense: RUNTIME_LICENSE.fastvideo,
+      estimatedDownloadGb: 25.4,
       reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
     },
   },

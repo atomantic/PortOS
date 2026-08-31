@@ -14,22 +14,22 @@ export const EYE_HEIGHT = 1.6;
 // facade. Player movement uses the shape-aware colliders below instead of this radius.
 export const BUILDING_COLLISION_RADIUS = 3.5;
 export const PLAYER_COLLISION_RADIUS = 0.55;
-export const DEFAULT_SPAWN_Z = 52;
+export const DEFAULT_SPAWN_Z = 48;
 
 export const THIRD_PERSON = {
-  boom: 16.5, // camera distance behind the character
-  shoulder: 0.95, // lateral over-the-shoulder offset (positive = right)
-  height: 3.6, // camera rise above the character's feet at pitch 0
-  isometricYaw: Math.PI / 12, // slight diagonal framing keeps the downtown avenue in view
-  isometricPitch: 0.62, // about 36° above the landscape, keeping landmarks in the frame
-  fov: 42, // broader perspective gives the rover room to move through the landscape
+  boom: 10.5, // intimate chase framing: the rover is a character, not a map cursor
+  shoulder: 0.72, // slight lateral offset keeps the next cottage visible past the cab
+  height: 3.1, // low enough for fences and trees to create useful occlusion
+  isometricYaw: Math.PI / 18, // nearly aligned with the arrival lane and village gate
+  isometricPitch: 0.36, // cozy diorama angle without flattening the street into a map
+  fov: 42, // restrained perspective keeps nearby props substantial
   minPitch: -0.45, // looking up from under the character — floor-limited
   maxPitch: 1.15, // looking down over the character
   minCamY: 0.6, // the camera never dips into the pavement
-  lookAhead: 2.4, // compose the rover against the road and landmarks ahead
-  lookHeight: 0.85, // aim just above the rover so the landscape owns the frame
-  camDampRate: 8, // camera position smoothing (lower = floatier)
-  lookDampRate: 12, // aim smoothing (tighter than position so aim stays crisp)
+  lookAhead: 3.2, // compose the rover against the next bend and doorway
+  lookHeight: 1.05, // aim just over the roof so village silhouettes fill the frame
+  camDampRate: 10, // close camera needs a little less float through tight paths
+  lookDampRate: 14, // aim smoothing stays tighter than position
 };
 
 // Scroll-wheel boom zoom: a multiplier over THIRD_PERSON.boom. Steps are multiplicative
@@ -49,8 +49,8 @@ export const nextBoomZoom = (current, deltaY) =>
 // dashboard canvas, while still borrowing the important reference-game cues — ramped
 // acceleration, a real brake, reverse, speed-weighted steering, and a little drift.
 export const VEHICLE = {
-  bodyLength: 1.85,
-  bodyWidth: 1.06,
+  bodyLength: 2.5,
+  bodyWidth: 1.46,
   maxSpeed: 24,
   boostMaxSpeed: 38,
   reverseMaxSpeed: 10,
@@ -67,9 +67,118 @@ export const VEHICLE = {
 // one place so the rover cannot visually overlap a wall without bringing back the old
 // multi-unit empty cushion around every building.
 export const VEHICLE_COLLISION = {
-  halfWidth: 0.7,
-  halfLength: 0.98,
+  halfWidth: 0.92,
+  halfLength: 1.36,
 };
+
+const centroid = (points) => {
+  const total = points.reduce((sum, point) => ({
+    x: sum.x + point.x,
+    y: sum.y + point.y,
+    z: sum.z + point.z,
+  }), { x: 0, y: 0, z: 0 });
+  const count = Math.max(1, points.length);
+  return { x: total.x / count, y: total.y / count, z: total.z / count };
+};
+
+const rotateByQuaternion = (point, quaternion) => {
+  const { x, y, z, w } = quaternion;
+  const ix = w * point.x + y * point.z - z * point.y;
+  const iy = w * point.y + z * point.x - x * point.z;
+  const iz = w * point.z + x * point.y - y * point.x;
+  const iw = -x * point.x - y * point.y - z * point.z;
+  return {
+    x: ix * w + iw * -x + iy * -z - iz * -y,
+    y: iy * w + iw * -y + iz * -x - ix * -z,
+    z: iz * w + iw * -z + ix * -y - iy * -x,
+  };
+};
+
+// Horn's quaternion form of the Kabsch fit. Given matching point clouds, return the
+// one rigid transform that best maps `reference` onto `target`. The suspension uses it
+// to let four contradictory wheel heights agree on one rigid chassis pose—roll, pitch,
+// and ride-height emerge from the fit instead of being faked from steering input.
+export function solveKabschTransform(reference, target) {
+  if (!Array.isArray(reference) || !Array.isArray(target) || reference.length !== target.length || reference.length < 3) {
+    return { rotation: { x: 0, y: 0, z: 0, w: 1 }, translation: { x: 0, y: 0, z: 0 }, residual: 0 };
+  }
+  const fromCenter = centroid(reference);
+  const toCenter = centroid(target);
+  const covariance = Array.from({ length: 3 }, () => [0, 0, 0]);
+  reference.forEach((point, index) => {
+    const p = [point.x - fromCenter.x, point.y - fromCenter.y, point.z - fromCenter.z];
+    const q = [target[index].x - toCenter.x, target[index].y - toCenter.y, target[index].z - toCenter.z];
+    for (let row = 0; row < 3; row += 1) {
+      for (let column = 0; column < 3; column += 1) covariance[row][column] += p[row] * q[column];
+    }
+  });
+  const [[sxx, sxy, sxz], [syx, syy, syz], [szx, szy, szz]] = covariance;
+  const horn = [
+    [sxx + syy + szz, syz - szy, szx - sxz, sxy - syx],
+    [syz - szy, sxx - syy - szz, sxy + syx, szx + sxz],
+    [szx - sxz, sxy + syx, -sxx + syy - szz, syz + szy],
+    [sxy - syx, szx + sxz, syz + szy, -sxx - syy + szz],
+  ];
+  // Shift the symmetric matrix above zero so power iteration finds its greatest
+  // algebraic eigenvalue rather than whichever signed eigenvalue has greatest magnitude.
+  const shift = Math.max(...horn.map((row) => row.reduce((sum, value) => sum + Math.abs(value), 0))) + 1e-9;
+  let vector = [1, 0, 0, 0];
+  for (let iteration = 0; iteration < 18; iteration += 1) {
+    const next = horn.map((row, rowIndex) => row.reduce((sum, value, column) => sum + value * vector[column], shift * vector[rowIndex]));
+    const length = Math.hypot(...next) || 1;
+    vector = next.map((value) => value / length);
+  }
+  const rotation = { w: vector[0], x: vector[1], y: vector[2], z: vector[3] };
+  const rotatedCenter = rotateByQuaternion(fromCenter, rotation);
+  const translation = {
+    x: toCenter.x - rotatedCenter.x,
+    y: toCenter.y - rotatedCenter.y,
+    z: toCenter.z - rotatedCenter.z,
+  };
+  const residual = Math.sqrt(reference.reduce((sum, point, index) => {
+    const rotated = rotateByQuaternion(point, rotation);
+    const dx = rotated.x + translation.x - target[index].x;
+    const dy = rotated.y + translation.y - target[index].y;
+    const dz = rotated.z + translation.z - target[index].z;
+    return sum + dx * dx + dy * dy + dz * dz;
+  }, 0) / reference.length);
+  return { rotation, translation, residual };
+}
+
+export function solveVehicleSuspensionPose({
+  x = 0,
+  z = 0,
+  heading = 0,
+  centerHeight = 0,
+  halfWidth = VEHICLE.bodyWidth * 0.57,
+  halfLength = VEHICLE.bodyLength * 0.31,
+  heightAt = () => centerHeight,
+} = {}) {
+  const reference = [
+    { x: -halfWidth, y: 0, z: halfLength },
+    { x: halfWidth, y: 0, z: halfLength },
+    { x: -halfWidth, y: 0, z: -halfLength },
+    { x: halfWidth, y: 0, z: -halfLength },
+  ];
+  const cosine = Math.cos(heading);
+  const sine = Math.sin(heading);
+  const wheelOffsets = reference.map((mount) => {
+    const worldX = x + mount.x * cosine + mount.z * sine;
+    const worldZ = z - mount.x * sine + mount.z * cosine;
+    return heightAt(worldX, worldZ) - centerHeight;
+  });
+  const target = reference.map((mount, index) => ({ ...mount, y: wheelOffsets[index] }));
+  const pose = solveKabschTransform(reference, target);
+  // The rigid chassis pose already accounts for the shared slope under all four mounts.
+  // Per-wheel travel is only the vertical residual that the best-fit plane could not
+  // explain. Applying the full wheel offset again would double the slope: uphill tires
+  // float while downhill tires sink even though the chassis is already tilted correctly.
+  const wheelTravel = reference.map((mount, index) => {
+    const fitted = rotateByQuaternion(mount, pose.rotation);
+    return wheelOffsets[index] - (fitted.y + pose.translation.y);
+  });
+  return { ...pose, wheelOffsets, wheelTravel };
+}
 
 export const clampPitch = (pitch) =>
   Math.min(THIRD_PERSON.maxPitch, Math.max(THIRD_PERSON.minPitch, pitch));

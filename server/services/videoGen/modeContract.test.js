@@ -8,14 +8,18 @@ import {
 
 // Fake registry entries — never a real install's media-models.json.
 const wan = (supportedModes) => ({ runtime: 'wan22', name: 'Example Wan Profile', supportedModes });
+const wanCuda = (supportedModes) => ({ runtime: 'wan22_cuda', name: 'Example Wan CUDA Profile', supportedModes });
+const ltx25Cuda = (supportedModes) => ({ runtime: 'ltx25_cuda', name: 'Example LTX-2.5 CUDA Profile', supportedModes });
+const fv = (supportedModes) => ({ runtime: 'fastvideo', name: 'Example FastVideo Model', supportedModes });
 const h3 = (supportedModes) => ({ runtime: 'minimax_h3', name: 'Example H3', supportedModes });
+const ref2va = (supportedModes = ['a2v']) => ({ runtime: 'minimax_h3_ref2va', name: 'Example H3 Ref2VA', supportedModes });
 
 describe('videoModeContractError — shared gate', () => {
   it('gates exactly the runtimes that declare a contract row', () => {
-    expect([...VIDEO_MODE_GATED_RUNTIMES].sort()).toEqual(['minimax_h3', 'minimax_h3_cuda', 'wan22']);
+    expect([...VIDEO_MODE_GATED_RUNTIMES].sort()).toEqual(['fastvideo', 'ltx25_cuda', 'minimax_h3', 'minimax_h3_cuda', 'minimax_h3_ref2va', 'wan22', 'wan22_cuda']);
   });
 
-  it.each(['ltx2', 'mlx_video', 'hunyuan', undefined])('leaves the %s runtime ungated', (runtime) => {
+  it.each(['ltx2', 'mlx_video', undefined])('leaves the %s runtime ungated', (runtime) => {
     expect(videoModeContractError({
       model: { runtime, name: 'Example Model' }, mode: 'extend', hasFirstImage: true,
     })).toBeNull();
@@ -30,6 +34,40 @@ describe('videoModeContractError — shared gate', () => {
     expect(videoModeContractError({ model: wan(['text']), hasFirstImage: true }))
       .toMatchObject({ status: 400, code: 'WAN22_MODE_UNSUPPORTED' });
     expect(videoModeContractError({ model: wan(['text']), hasFirstImage: false })).toBeNull();
+  });
+});
+
+describe('videoModeContractError — CUDA runtime ceilings', () => {
+  it('enforces LTX-2.5 CUDA image/source pairing', () => {
+    expect(videoModeContractError({ model: ltx25Cuda(['text', 'image']), mode: 'image' }))
+      .toMatchObject({ code: 'LTX25_CUDA_I2V_REQUIRES_IMAGE' });
+    expect(videoModeContractError({
+      model: ltx25Cuda(['text', 'image']), mode: 'text', hasFirstImage: true,
+    })).toMatchObject({ code: 'LTX25_CUDA_TEXT_MODE_SOURCE_CONFLICT' });
+  });
+
+  it('caps a hand-widened Wan CUDA entry at text mode', () => {
+    expect(videoModeContractError({
+      model: wanCuda(['text', 'image']), mode: 'image', hasFirstImage: true,
+    })).toMatchObject({ code: 'WAN22_MODE_UNSUPPORTED' });
+  });
+});
+
+describe('videoModeContractError — minimax_h3_ref2va', () => {
+  it('requires both a source image and an audio file', () => {
+    expect(videoModeContractError({ model: ref2va(), mode: 'a2v', audioFile: '/mock/audio.wav' }))
+      .toMatchObject({ code: 'MINIMAX_H3_REF2VA_A2V_REQUIRES_IMAGE' });
+    expect(videoModeContractError({ model: ref2va(), mode: 'a2v', hasFirstImage: true }))
+      .toMatchObject({ code: 'MINIMAX_H3_REF2VA_A2V_REQUIRES_AUDIO' });
+    expect(videoModeContractError({
+      model: ref2va(), mode: 'a2v', hasFirstImage: true, audioFile: '/mock/audio.wav',
+    })).toBeNull();
+  });
+
+  it('rejects non-a2v modes even when a registry was hand-widened', () => {
+    expect(videoModeContractError({
+      model: ref2va(['a2v', 'image']), mode: 'image', hasFirstImage: true,
+    })).toMatchObject({ code: 'MINIMAX_H3_REF2VA_MODE_UNSUPPORTED' });
   });
 });
 
@@ -76,6 +114,35 @@ describe('videoModeContractError — wan22 codes and messages', () => {
       model: wan(['image']), mode: 'image', hasFirstImage: true,
       keyframes: [{ path: '/mock/a.png', index: 0 }], audioFile: '/mock/a.wav',
     })).toBeNull();
+  });
+});
+
+describe('videoModeContractError — fastvideo codes and messages', () => {
+  it('rejects a mode the profile does not declare', () => {
+    const err = videoModeContractError({ model: fv(['text']), mode: 'image', hasFirstImage: true });
+    expect(err).toMatchObject({ status: 400, code: 'FASTVIDEO_MODE_UNSUPPORTED' });
+    expect(err.message).toContain('Example FastVideo Model does not support image-to-video');
+  });
+
+  it('resolves an entry with no declared supportedModes from its runtime', () => {
+    expect(videoModeContractError({ model: fv(undefined), mode: 'text' })).toBeNull();
+    expect(videoModeContractError({ model: fv(undefined), mode: 'fflf' }))
+      .toMatchObject({ code: 'FASTVIDEO_MODE_UNSUPPORTED' });
+  });
+
+  it('rejects text mode carrying a source image', () => {
+    expect(videoModeContractError({ model: fv(['text', 'image']), mode: 'text', hasFirstImage: true }))
+      .toMatchObject({ code: 'FASTVIDEO_TEXT_MODE_SOURCE_CONFLICT' });
+  });
+
+  it('phrases the missing-source message for the boundary that asked', () => {
+    const staged = videoModeContractError({ model: fv(['image']), mode: 'image' });
+    expect(staged).toMatchObject({ code: 'FASTVIDEO_I2V_REQUIRES_IMAGE' });
+    expect(staged.message).toContain('upload one before running this model');
+
+    const resolved = videoModeContractError({ model: fv(['image']), mode: 'image', sourceResolved: true });
+    expect(resolved).toMatchObject({ code: 'FASTVIDEO_I2V_REQUIRES_IMAGE' });
+    expect(resolved.message).toContain('choose an existing gallery image or upload one');
   });
 });
 

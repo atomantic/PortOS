@@ -337,6 +337,22 @@ describe('cosTaskStore.addTask', () => {
     expect(reloaded === true || reloaded === 'true').toBe(true);
   });
 
+  it('preserves a trusted metadata seed for replacement task contracts', async () => {
+    const issueWatcher = {
+      repoFullName: 'example/example',
+      issueComments: [],
+      pullRequests: [{ number: 7, headSha: 'a'.repeat(40) }],
+    };
+    const created = await addTask({
+      id: 'task-metadata-seed',
+      description: 'resume issue watcher',
+      metadata: { analysisType: 'issue-watcher', issueWatcher },
+    }, 'internal');
+
+    expect(created.metadata).toMatchObject({ analysisType: 'issue-watcher', issueWatcher });
+    expect((await getTaskById(created.id)).metadata).toMatchObject({ analysisType: 'issue-watcher', issueWatcher });
+  });
+
   it('marks explicitly dispatched tasks so the scheduler does not race their spawn', async () => {
     const task = await addTask({ description: 'run this now' }, 'internal', { suppressDequeue: true });
     const change = mock.events.find(e => e.name === 'tasks:changed' && e.payload.task?.id === task.id);

@@ -6,10 +6,12 @@ import toast from '../components/ui/Toast';
 
 // Connect to Socket.IO using relative path (works with Tailscale)
 // The connection will use the same host the page was loaded from
+const isHostedAudienceRoute = typeof window !== 'undefined' &&
+  window.location.pathname.replace(/\/+$/, '') === '/fableloom/join';
 const socket = io({
   path: '/socket.io',
   transports: ['websocket', 'polling'],
-  autoConnect: true,
+  autoConnect: !isHostedAudienceRoute,
   reconnection: true,
   reconnectionAttempts: 10,
   reconnectionDelay: 1000
@@ -27,7 +29,7 @@ socket.on('connect_error', (err) => {
   // Auth gate rejected the handshake (server: services/authGate.js socketAuthGate).
   // Bounce to /login so the user can sign back in; skip if already there.
   if (err?.data?.code === 'AUTH_REQUIRED' && typeof window !== 'undefined') {
-    if (!window.location.pathname.startsWith('/login')) {
+    if (!window.location.pathname.startsWith('/login') && !isHostedAudienceRoute) {
       const next = encodeURIComponent(window.location.pathname + window.location.search);
       window.location.replace(`/login?next=${next}`);
     }

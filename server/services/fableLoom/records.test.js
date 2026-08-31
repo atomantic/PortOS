@@ -24,11 +24,12 @@ const getSeriesMock = vi.hoisted(() => vi.fn(async (id) => ({ id })));
 vi.mock('../pipeline/series.js', () => ({ getSeries: getSeriesMock }));
 
 const {
-  LOOM_LIMITS, addEpisode, addNode, addNodeTransition, attachNodeImage, attachNodeVideo, createLoom,
-  deleteEpisode, deleteLoom, deleteNode, deleteNodeTransition, getLoom,
+  LOOM_LIMITS, addEpisode, addNode, addNodeTransition, attachNodeImage,
+  attachNodePlaybackAsset, attachNodeVideo, createLoom,
+  deleteEpisode, deleteLoom, deleteNode, deleteNodeTransition, findEpisode, getLoom,
   listLooms, listLoomSummaries, mergeLoomsFromSync, pruneTombstonedLooms,
   restoreLoom, sanitizeLoom, updateEpisode, updateLoom,
-  updateNode, updateNodeTransition,
+  mutateLoom, updateNode, updateNodeTransition,
 } = await import('./records.js');
 const { _resetFableLoomBackend } = await import('./store.js');
 const conflictJournal = await import('../../lib/conflictJournal.js');
@@ -131,6 +132,27 @@ describe('sanitizeLoom', () => {
     expect(loom.episodes[0].nodes[0].audienceConnection).toBe('disconnected');
   });
 
+  it('round-trips the canonical protagonist wardrobe pin and per-scene presence', () => {
+    const loom = sanitizeLoom({
+      id: 'loom-1',
+      name: 'X',
+      protagonistCharacterId: 'char-1',
+      protagonistWardrobeId: 'wardrobe-field',
+      protagonistWardrobeLocked: true,
+      episodes: [{
+        id: 'ep-1',
+        nodes: [{ id: 'n1', protagonistPresence: 'offscreen' }],
+      }],
+    });
+
+    expect(loom).toMatchObject({
+      protagonistCharacterId: 'char-1',
+      protagonistWardrobeId: 'wardrobe-field',
+      protagonistWardrobeLocked: true,
+    });
+    expect(loom.episodes[0].nodes[0].protagonistPresence).toBe('offscreen');
+  });
+
   it('keeps a partial play pin but collapses an all-empty one to null', () => {
     const pinned = sanitizeLoom({
       id: 'loom-1', name: 'X', playSettings: { providerId: '  claude  ', model: '', effort: null },
@@ -165,6 +187,51 @@ describe('sanitizeLoom', () => {
     expect(loom.seriesPlan.plotPoints[0]).toMatchObject({ title: 'Midpoint', episodeId: 'ep-1' });
     expect(loom.seriesPlan.plotPoints[0].id).toMatch(/^plot-/);
     expect(loom.seriesPlan.sideQuests[0]).toMatchObject({ status: 'idea', startEpisodeId: null, endEpisodeId: 'ep-1' });
+  });
+
+  it('sanitizes optional series delivery beats without accepting dangling episode ids', () => {
+    const loom = sanitizeLoom({
+      id: 'loom-1',
+      name: 'X',
+      episodes: [{ id: 'ep-1', number: 1 }, { id: 'ep-2', number: 2 }],
+      seriesPlan: {
+        storyArc: '', plotPoints: [], sideQuests: [],
+        deliveryOptions: { overnightVoicemails: true, nextSeasonTeaser: true },
+        interEpisodeVoicemails: [{
+          id: 'vm-1', fromEpisodeId: 'ep-1', toEpisodeId: 'gone',
+          title: 'Night call', transcript: 'The signal is still there.',
+        }],
+        nextSeasonTeaser: { title: 'Beyond', transcript: 'Something answers.' },
+      },
+    });
+
+    expect(loom.seriesPlan.deliveryOptions).toEqual({ overnightVoicemails: true, nextSeasonTeaser: true });
+    expect(loom.seriesPlan.interEpisodeVoicemails[0]).toMatchObject({
+      id: 'vm-1', fromEpisodeId: 'ep-1', toEpisodeId: null, transcript: 'The signal is still there.',
+    });
+    expect(loom.seriesPlan.nextSeasonTeaser).toEqual({ title: 'Beyond', transcript: 'Something answers.' });
+  });
+
+  it('round-trips an episode beat outline and invalidates it when the synopsis changes', async () => {
+    let loom = await makeLoom();
+    loom = await addEpisode(loom.id, { title: 'Pilot', synopsis: 'A signal appears.' });
+    const episodeId = loom.episodes[0].id;
+    const storyOutline = {
+      startKey: 's1',
+      scenes: [
+        { key: 's1', title: 'Signal', summary: 'A signal appears.', playbackMode: 'cut', transitions: [{ targetKey: 's2', intent: 'follow it' }] },
+        { key: 's2', title: 'Choice', summary: 'The signal asks for a sacrifice.', playbackMode: 'decision', transitions: [{ targetKey: 's3', intent: 'answer' }, { targetKey: 's4', intent: 'wait' }] },
+        { key: 's3', title: 'Answer', summary: 'The answer opens a door.', isEnding: true },
+        { key: 's4', title: 'Wait', summary: 'The silence closes in.', isEnding: true },
+      ],
+      validation: { status: 'valid', issues: [] },
+    };
+    const saved = await updateEpisode(loom.id, episodeId, { storyOutline });
+    expect(saved.episodes[0].storyOutline).toMatchObject({ version: 1, startKey: 's1' });
+    expect(saved.episodes[0].storyOutline.validation.status).toBe('draft');
+
+    const revised = await updateEpisode(loom.id, episodeId, { synopsis: 'The signal moves.' });
+    expect(revised.episodes[0].storyOutline.validation).toEqual({ status: 'draft', issues: [] });
   });
 
   it('re-mints duplicate planning ids so each editable row remains addressable', () => {
@@ -230,6 +297,166 @@ describe('loom CRUD', () => {
     };
     expect(await mergeLoomsFromSync([tombstone])).toEqual({ applied: true, count: 1 });
     expect(await getLoom(local.id)).toBeNull();
+  });
+
+  it('preserves v2 visual production fields when a v1 peer wins an unrelated LWW edit', async () => {
+    let loom = await makeLoom({ name: 'Local production' });
+    loom = await addEpisode(loom.id, { title: 'Pilot' });
+    loom = await addNode(loom.id, loom.episodes[0].id, {
+      title: 'Bound shot',
+      visualCanon: { mode: 'locked', characterAppearances: [{ characterId: 'char-a' }] },
+    });
+    const node = loom.episodes[0].nodes[0];
+    await attachNodeImage(loom.id, loom.episodes[0].id, node.id, {
+      filename: 'bound-shot.png',
+      jobId: 'job-visual',
+      visualConditioning: {
+        version: 1, compilerVersion: '1.0.0', status: 'locked', universeId: 'uni-1',
+      },
+    });
+    loom = await getLoom(loom.id);
+    const remoteV1 = {
+      ...loom,
+      name: 'Renamed by v1 peer',
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      episodes: loom.episodes.map((episode) => ({
+        ...episode,
+        nodes: episode.nodes.map(({ visualCanon: _canon, visualConditioning: _conditioning, ...rest }) => rest),
+      })),
+    };
+
+    await mergeLoomsFromSync([remoteV1], { senderSchemaVersions: { fableLoom: 1 } });
+    const mergedNode = (await getLoom(loom.id)).episodes[0].nodes[0];
+    expect(mergedNode.visualCanon).toMatchObject({ mode: 'locked', characterAppearances: [{ characterId: 'char-a' }] });
+    expect(mergedNode.visualConditioning).toMatchObject({ version: 1, compilerVersion: '1.0.0' });
+  });
+
+  it('preserves canonical protagonist continuity fields when a v3 peer wins an unrelated LWW edit', async () => {
+    let loom = await makeLoom({
+      name: 'Local production',
+      protagonistCharacterId: 'char-1',
+      protagonistWardrobeId: 'wardrobe-field',
+      protagonistWardrobeLocked: true,
+    });
+    loom = await addEpisode(loom.id, { title: 'Pilot' });
+    loom = await addNode(loom.id, loom.episodes[0].id, { protagonistPresence: 'offscreen' });
+    const remoteV3 = {
+      ...loom,
+      name: 'Renamed by v3 peer',
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      protagonistCharacterId: undefined,
+      protagonistWardrobeId: undefined,
+      protagonistWardrobeLocked: undefined,
+      episodes: loom.episodes.map((episode) => ({
+        ...episode,
+        nodes: episode.nodes.map(({ protagonistPresence: _presence, ...rest }) => rest),
+      })),
+    };
+
+    await mergeLoomsFromSync([remoteV3], { senderSchemaVersions: { fableLoom: 3 } });
+    const merged = await getLoom(loom.id);
+    expect(merged).toMatchObject({
+      protagonistCharacterId: 'char-1',
+      protagonistWardrobeId: 'wardrobe-field',
+      protagonistWardrobeLocked: true,
+    });
+    expect(merged.episodes[0].nodes[0].protagonistPresence).toBe('offscreen');
+  });
+
+  it('preserves the render format when a v4 peer wins an unrelated LWW edit', async () => {
+    let loom = await makeLoom({
+      name: 'Local production',
+      renderSettings: { formatId: 'portrait-9-16' },
+    });
+    loom = await updateLoom(loom.id, {
+      productionStatus: {
+        editorialApprovedAt: '2026-08-30T12:00:00.000Z',
+        editorialApprovalSource: 'manual',
+        deliveryApprovedAt: '2026-08-30T13:00:00.000Z',
+      },
+    });
+    const remoteV4 = {
+      ...loom,
+      name: 'Renamed by v4 peer',
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      renderSettings: undefined,
+      productionStatus: undefined,
+    };
+
+    await mergeLoomsFromSync([remoteV4], { senderSchemaVersions: { fableLoom: 4 } });
+
+    expect(await getLoom(loom.id)).toMatchObject({
+      name: 'Renamed by v4 peer',
+      renderSettings: {
+        formatId: 'portrait-9-16', aspectRatio: '9:16', width: 576, height: 1024,
+      },
+      productionStatus: {
+        editorialApprovedAt: '2026-08-30T12:00:00.000Z',
+        editorialApprovalSource: 'manual',
+        deliveryApprovedAt: '2026-08-30T13:00:00.000Z',
+      },
+    });
+  });
+
+  it('preserves playable challenge mappings when a v4 peer wins an unrelated edit', async () => {
+    let loom = await makeLoom({ name: 'Local challenge plan' });
+    loom = await addEpisode(loom.id, { title: 'Pilot' });
+    const episodeId = loom.episodes[0].id;
+    loom = await addNode(loom.id, episodeId, {
+      title: 'The keypad', plotPointId: 'plot-lock', challengePhase: 'setup',
+    });
+    const nodeId = loom.episodes[0].nodes[0].id;
+    loom = await updateLoom(loom.id, {
+      seriesPlan: {
+        storyArc: 'The courier crosses the first blockade.',
+        plotPoints: [{
+          id: 'plot-lock', kind: 'challenge', title: 'Open the sealed door',
+          description: 'Recall the planted code.', episodeId,
+        }],
+        sideQuests: [],
+      },
+    });
+    loom = await updateEpisode(loom.id, episodeId, {
+      storyOutline: {
+        startKey: nodeId,
+        scenes: [{
+          key: nodeId, title: 'The keypad', summary: 'The planted code becomes actionable.',
+          plotPointId: 'plot-lock', challengePhase: 'setup', isEnding: true, transitions: [],
+        }],
+        validation: { status: 'draft', issues: [] },
+      },
+    });
+    const remoteV4 = {
+      ...loom,
+      name: 'Renamed by v4 peer',
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      seriesPlan: {
+        ...loom.seriesPlan,
+        plotPoints: loom.seriesPlan.plotPoints.map(({ kind: _kind, ...item }) => item),
+      },
+      episodes: loom.episodes.map((episode) => ({
+        ...episode,
+        storyOutline: {
+          ...episode.storyOutline,
+          scenes: episode.storyOutline.scenes.map(({
+            plotPointId: _plotPointId, challengePhase: _challengePhase, ...scene
+          }) => scene),
+        },
+        nodes: episode.nodes.map(({
+          plotPointId: _plotPointId, challengePhase: _challengePhase, ...node
+        }) => node),
+      })),
+    };
+
+    await mergeLoomsFromSync([remoteV4], { senderSchemaVersions: { fableLoom: 4 } });
+    const merged = await getLoom(loom.id);
+    expect(merged.seriesPlan.plotPoints[0].kind).toBe('challenge');
+    expect(merged.episodes[0].nodes[0]).toMatchObject({
+      plotPointId: 'plot-lock', challengePhase: 'setup',
+    });
+    expect(merged.episodes[0].storyOutline.scenes[0]).toMatchObject({
+      plotPointId: 'plot-lock', challengePhase: 'setup',
+    });
   });
 
   it('journals divergent story edits and can restore the authored snapshot', async () => {
@@ -302,21 +529,67 @@ describe('loom CRUD', () => {
   });
 });
 
-describe('format and play settings round-trip', () => {
+describe('format, render, and play settings round-trip', () => {
   it('keeps them across an unrelated patch, and accepts them at create', async () => {
-    const loom = await makeLoom({ format: 'teleplay', playSettings: { providerId: 'claude', model: 'opus', effort: null } });
+    const loom = await makeLoom({
+      format: 'teleplay',
+      playSettings: { providerId: 'claude', model: 'opus', effort: null },
+      renderSettings: { formatId: 'portrait-9-16' },
+    });
     expect(loom.format).toBe('teleplay');
     expect(loom.playSettings).toEqual({ providerId: 'claude', model: 'opus', effort: null });
+    expect(loom.renderSettings).toEqual({
+      formatId: 'portrait-9-16', aspectRatio: '9:16', width: 576, height: 1024,
+    });
 
     // A rename must not silently reset the pin or the format — the exact drift
     // a PATCH_FIELDS / schema mismatch would produce.
     const renamed = await updateLoom(loom.id, { name: 'Renamed' });
     expect(renamed.format).toBe('teleplay');
     expect(renamed.playSettings).toEqual({ providerId: 'claude', model: 'opus', effort: null });
+    expect(renamed.renderSettings).toEqual(loom.renderSettings);
 
     const cleared = await updateLoom(loom.id, { playSettings: null });
     expect(cleared.playSettings).toBeNull();
     expect(cleared.format).toBe('teleplay');
+    expect(cleared.renderSettings).toEqual(loom.renderSettings);
+  });
+
+  it('backfills an explicit 16:9 default for existing records', async () => {
+    const loom = await makeLoom();
+    expect(loom.renderSettings).toEqual({
+      formatId: 'landscape-16-9', aspectRatio: '16:9', width: 1024, height: 576,
+    });
+  });
+
+  it('reopens only the production approvals affected by a later change', async () => {
+    let loom = await makeLoom({ premise: 'A courier must cross the city.' });
+    loom = await addEpisode(loom.id, { title: 'Pilot' });
+    loom = await addNode(loom.id, loom.episodes[0].id, { title: 'Opening' });
+    loom = await updateLoom(loom.id, {
+      productionStatus: {
+        editorialApprovedAt: '2026-08-30T12:00:00.000Z',
+        editorialApprovalSource: 'manual',
+        deliveryApprovedAt: '2026-08-30T13:00:00.000Z',
+      },
+    });
+
+    await attachNodeImage(loom.id, loom.episodes[0].id, loom.episodes[0].nodes[0].id, {
+      filename: 'new-storyboard.png', jobId: 'job-storyboard',
+    });
+    let updated = await getLoom(loom.id);
+    expect(updated.productionStatus).toMatchObject({
+      editorialApprovedAt: '2026-08-30T12:00:00.000Z',
+      editorialApprovalSource: 'manual',
+      deliveryApprovedAt: null,
+    });
+
+    updated = await updateLoom(loom.id, { premise: 'A courier must cross a flooded city.' });
+    expect(updated.productionStatus).toEqual({
+      editorialApprovedAt: null,
+      editorialApprovalSource: null,
+      deliveryApprovedAt: null,
+    });
   });
 });
 
@@ -354,7 +627,7 @@ describe('series plan round-trip', () => {
     const episodeId = loom.episodes[0].id;
     const seriesPlan = {
       storyArc: 'The courier learns to lead.',
-      plotPoints: [{ id: 'plot-1', title: 'Refusal', description: 'She turns away.', episodeId }],
+      plotPoints: [{ id: 'plot-1', kind: 'beat', title: 'Refusal', description: 'She turns away.', episodeId }],
       sideQuests: [{ id: 'quest-1', title: 'The map', description: 'A hidden route.', status: 'planned', startEpisodeId: episodeId, endEpisodeId: null }],
     };
     const planned = await updateLoom(loom.id, { seriesPlan });
@@ -455,6 +728,59 @@ describe('nodes and transitions', () => {
     expect(aNow.prose).toBe('New prose');
     expect(aNow.transitions[0]).toMatchObject({ targetNodeId: b.id, intent: 'press on', triggers: ['keep going'] });
     expect(aNow.transitions[0].id).toMatch(/^tr-/);
+  });
+
+  it('demotes a validated outline when a scene contract changes, but not for prose', async () => {
+    const { loomId, episodeId } = await setup();
+    let updated = await addNode(loomId, episodeId, { title: 'Opening', playbackMode: 'cut' });
+    updated = await addNode(loomId, episodeId, { title: 'Ending', isEnding: true });
+    const [opening, ending] = updated.episodes[0].nodes;
+    const withPath = await addNodeTransition(loomId, episodeId, opening.id, {
+      targetNodeId: ending.id,
+      intent: 'Answer the signal',
+    });
+    updated = await mutateLoom(loomId, (record) => {
+      const episode = findEpisode(record, episodeId);
+      const [currentOpening, currentEnding] = episode.nodes;
+      episode.storyOutline = {
+        startKey: currentOpening.id,
+        scenes: [
+          {
+            key: currentOpening.id,
+            title: currentOpening.title,
+            summary: 'The signal asks for an answer.',
+            playbackMode: currentOpening.playbackMode,
+            audienceConnection: currentOpening.audienceConnection,
+            protagonistPresence: currentOpening.protagonistPresence || 'onscreen',
+            transitions: [{ targetKey: currentEnding.id, intent: 'Answer the signal' }],
+          },
+          {
+            key: currentEnding.id,
+            title: currentEnding.title,
+            summary: 'The answer opens a door.',
+            playbackMode: currentEnding.playbackMode,
+            audienceConnection: currentEnding.audienceConnection,
+            protagonistPresence: currentEnding.protagonistPresence || 'onscreen',
+            isEnding: true,
+            endingLabel: currentEnding.endingLabel,
+            transitions: [],
+          },
+        ],
+        validation: { status: 'valid', issues: [] },
+      };
+      return record;
+    });
+    expect(updated.episodes[0].storyOutline.validation.status).toBe('valid');
+
+    updated = await updateNode(loomId, episodeId, opening.id, { prose: 'The signal hums.' });
+    expect(updated.episodes[0].storyOutline.validation.status).toBe('valid');
+
+    updated = await updateNode(loomId, episodeId, opening.id, { title: 'A Changed Opening' });
+    expect(updated.episodes[0].storyOutline.validation.status).toBe('draft');
+    expect(updated.episodes[0].storyOutline.validation.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'TELEPLAY_SCENE_CONTRACT_MISMATCH' })]),
+    );
+    expect(withPath.transition.targetNodeId).toBe(ending.id);
   });
 
   it('deleting a node strips inbound transitions and repoints the start', async () => {
@@ -559,6 +885,68 @@ describe('attachNodeImage', () => {
     expect((await getLoom(loom.id)).episodes[0].nodes[0].image).toBe('job-1.png');
   });
 
+  it('stores render provenance and clears storyboard approval when a new image lands', async () => {
+    const loom = await makeLoom();
+    let updated = await addEpisode(loom.id, {});
+    const episodeId = updated.episodes[0].id;
+    updated = await addNode(loom.id, episodeId, {
+      title: 'A', visualCanon: { mode: 'locked', storyboardImageApproved: true },
+    });
+    const node = updated.episodes[0].nodes[0];
+    const visualConditioning = {
+      version: 1, compilerVersion: '1.0.0', status: 'locked',
+      assetId: 'asset-node-still',
+      capability: { kind: 'image', backend: 'local', referenceRoles: ['character-neutral'], injected: 'x'.repeat(1000) },
+      bindings: { inferred: false, characterAppearances: [{ characterId: 'char-a' }], injected: 'x'.repeat(1000) },
+      assets: [{ role: 'character-neutral', bindingId: 'char-a', filename: 'identity.png', path: '/private/identity.png' }],
+      adapters: [], omitted: [], warnings: [],
+    };
+    const attached = await attachNodeImage(loom.id, episodeId, node.id, {
+      filename: 'job-2.png', jobId: 'job-2', visualConditioning,
+    });
+    expect(attached.visualCanon.storyboardImageApproved).toBe(false);
+    expect(attached.visualConditioning).toMatchObject({ version: 1, status: 'locked' });
+    expect(attached.playbackAssets.visualConditioningByAsset['asset-node-still'])
+      .toMatchObject({ version: 1, status: 'locked' });
+    expect(JSON.stringify(attached.visualConditioning)).not.toContain('/private/');
+    expect(attached.visualConditioning.capability.injected).toBeUndefined();
+    expect(attached.visualConditioning.bindings.injected).toBeUndefined();
+  });
+
+  it('drops stale image provenance while retaining video provenance on replacement', async () => {
+    const loom = await makeLoom();
+    let updated = await addEpisode(loom.id, {});
+    const episodeId = updated.episodes[0].id;
+    updated = await addNode(loom.id, episodeId, {
+      title: 'A',
+      playbackAssets: {
+        visualConditioningByAsset: {
+          'old-still': {
+            version: 1, compilerVersion: 'visual-v1', status: 'locked', assetId: 'old-still',
+            capability: { kind: 'image', backend: 'local' },
+          },
+          'entry-video': {
+            version: 1, compilerVersion: 'visual-v1', status: 'locked', assetId: 'entry-video',
+            capability: { kind: 'video', backend: 'local' },
+          },
+        },
+      },
+    });
+
+    const attached = await attachNodeImage(loom.id, episodeId, updated.episodes[0].nodes[0].id, {
+      filename: 'replacement.png',
+      jobId: 'job-replacement',
+      visualConditioning: {
+        version: 1, compilerVersion: 'visual-v1', status: 'locked', assetId: 'new-still',
+        capability: { kind: 'image', backend: 'local' },
+      },
+    });
+
+    expect(attached.playbackAssets.visualConditioningByAsset).not.toHaveProperty('old-still');
+    expect(attached.playbackAssets.visualConditioningByAsset).toHaveProperty('entry-video');
+    expect(attached.playbackAssets.visualConditioningByAsset).toHaveProperty('new-still');
+  });
+
   it('returns null (no throw) when the target is gone or the filename is unsafe', async () => {
     const loom = await makeLoom();
     const updated = await addEpisode(loom.id, {});
@@ -588,5 +976,118 @@ describe('attachNodeVideo', () => {
     const episodeId = updated.episodes[0].id;
     expect(await attachNodeVideo(loom.id, episodeId, 'node-gone', { videoHistoryId: '../video' })).toBeNull();
     expect(await attachNodeVideo(loom.id, episodeId, 'node-gone', { videoHistoryId: 'video-1' })).toBeNull();
+  });
+});
+
+describe('attachNodePlaybackAsset and node playback fields', () => {
+  it('attaches entry, hold loops, exit transitions, and audio occupancy', async () => {
+    const loom = await makeLoom();
+    let updated = await addEpisode(loom.id, {});
+    const episodeId = updated.episodes[0].id;
+    updated = await addNode(loom.id, episodeId, {
+      title: 'Courtyard',
+      interactionWindow: {
+        enabled: true,
+        protagonistCharacterId: 'char-1',
+        protagonistPresence: 'offscreen',
+        ambientDuckDb: -10,
+      },
+    });
+    const node = updated.episodes[0].nodes[0];
+
+    // Attach entry
+    let attached = await attachNodePlaybackAsset(loom.id, episodeId, node.id, {
+      role: 'entry',
+      videoHistoryId: 'video-entry-1',
+      visualConditioning: {
+        version: 1,
+        compilerVersion: 'visual-v1',
+        status: 'locked',
+        capability: { kind: 'video', backend: 'local', modelId: 'video-model', modelRevision: 'revision-1' },
+        bindings: { inferred: false, characterAppearances: [] },
+        assets: [],
+        adapters: [],
+        omitted: [],
+        warnings: [],
+      },
+    });
+    expect(attached.playbackAssets.entryVideoHistoryId).toBe('video-entry-1');
+    expect(attached.videoHistoryId).toBe('video-entry-1'); // back-compat
+    expect(attached.playbackAssets.visualConditioningByAsset['video-entry-1'])
+      .toMatchObject({ capability: { modelRevision: 'revision-1' } });
+
+    // Attach hold loop with occupancy manifest
+    attached = await attachNodePlaybackAsset(loom.id, episodeId, node.id, {
+      role: 'hold',
+      videoHistoryId: 'video-hold-1',
+      visualConditioning: {
+        version: 1,
+        compilerVersion: 'visual-v1',
+        status: 'locked',
+        capability: { kind: 'video', backend: 'local', modelId: 'video-model', modelRevision: 'revision-2' },
+        bindings: { inferred: false, characterAppearances: [] },
+        assets: [],
+        adapters: [],
+        omitted: [],
+        warnings: [],
+      },
+      audioOccupancy: {
+        durationMs: 5000,
+        music: [{ startMs: 0, endMs: 5000 }],
+      },
+    });
+    expect(attached.playbackAssets.holdLoopVideoHistoryIds).toEqual(['video-hold-1']);
+    expect(attached.playbackAssets.audioOccupancy['video-hold-1'].safeForLiveVoice).toBe(true);
+
+    // Attach exit transition
+    attached = await attachNodePlaybackAsset(loom.id, episodeId, node.id, {
+      role: 'exit',
+      transitionId: 'tr-escape',
+      videoHistoryId: 'video-exit-1',
+    });
+    expect(attached.playbackAssets.exitByTransition['tr-escape']).toBe('video-exit-1');
+
+    const reloaded = await getLoom(loom.id);
+    const reloadedNode = reloaded.episodes[0].nodes[0];
+    expect(reloadedNode.interactionWindow).toMatchObject({
+      enabled: true,
+      protagonistCharacterId: 'char-1',
+      protagonistPresence: 'offscreen',
+      ambientDuckDb: -10,
+    });
+    expect(reloadedNode.playbackAssets).toMatchObject({
+      entryVideoHistoryId: 'video-entry-1',
+      holdLoopVideoHistoryIds: ['video-hold-1'],
+      exitByTransition: { 'tr-escape': 'video-exit-1' },
+      visualConditioningByAsset: {
+        'video-entry-1': { capability: { modelRevision: 'revision-1' } },
+        'video-hold-1': { capability: { modelRevision: 'revision-2' } },
+      },
+    });
+  });
+
+  it('updates interactionWindow and playbackAssets through updateNode', async () => {
+    const loom = await makeLoom();
+    let updated = await addEpisode(loom.id, {});
+    const episodeId = updated.episodes[0].id;
+    updated = await addNode(loom.id, episodeId, { title: 'Tavern' });
+    const nodeId = updated.episodes[0].nodes[0].id;
+
+    const patchedLoom = await updateNode(loom.id, episodeId, nodeId, {
+      interactionWindow: {
+        enabled: true,
+        protagonistCharacterId: 'char-2',
+        ambientDuckDb: -6,
+      },
+      playbackAssets: {
+        entryVideoHistoryId: 'vid-e',
+        holdLoopVideoHistoryIds: ['vid-h1', 'vid-h2'],
+      },
+    });
+
+    const targetNode = patchedLoom.episodes[0].nodes.find((n) => n.id === nodeId);
+    expect(targetNode.interactionWindow.enabled).toBe(true);
+    expect(targetNode.interactionWindow.ambientDuckDb).toBe(-6);
+    expect(targetNode.playbackAssets.holdLoopVideoHistoryIds).toEqual(['vid-h1', 'vid-h2']);
   });
 });

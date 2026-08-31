@@ -7,3 +7,5 @@ import { request } from './apiCore.js';
 export const getYoutubeStatus = (options = {}) => request('/youtube/status', options);
 export const getYoutubeSetupCheck = (options = {}) => request('/youtube/setup-check', options);
 export const syncYoutube = (options = {}) => request('/youtube/sync', { method: 'POST', ...options });
+export const getYoutubePlaylists = (options = {}) => request('/youtube/playlists', options);
+export const syncYoutubePlaylists = (options = {}) => request('/youtube/playlists/sync', { method: 'POST', ...options });

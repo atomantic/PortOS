@@ -111,7 +111,7 @@ function codexCliArgs(baseArgs, { model, effort, provider }) {
   if (model) {
     args.push('--model', model);
   }
-  args.push(...buildEffortArgs(effort, provider, args));
+  args.push(...buildEffortArgs(effort, provider, args, model));
   args.push('-'); // stdin marker
   return args;
 }
@@ -129,7 +129,7 @@ function codexSpawnArgs(provider, { effectiveModel, effort, maxConcurrentThreads
   if (effectiveModel) {
     args.push('--model', effectiveModel);
   }
-  args.push(...buildEffortArgs(effort, provider, args));
+  args.push(...buildEffortArgs(effort, provider, args, effectiveModel));
   return { command: provider?.command || CODEX_COMMAND, args, stdinMode: 'prompt' };
 }
 
@@ -427,7 +427,12 @@ export function injectTuiModelAndEffort(command, baseArgs, provider, model, effo
   const withModel = shouldInject
     ? [...baseArgs, '--model', resolveInjectedTuiModel(effectiveModel, provider, command)]
     : baseArgs;
-  return [...withModel, ...buildEffortArgs(effort, { id: provider?.id, command }, withModel)];
+  return [...withModel, ...buildEffortArgs(
+    effort,
+    { id: provider?.id, command },
+    withModel,
+    effectiveModel,
+  )];
 }
 
 // Every command a shipped vendor row resolves to, PLUS legacy/custom commands

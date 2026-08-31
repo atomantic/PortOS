@@ -899,4 +899,267 @@ describe('threejsModelPhysicalAudit attachment anchors', () => {
     const feedback = buildThreejsPhysicalAuditFeedback(res);
     expect(feedback).toContain('could not be checked against "group"');
   });
+
+  // Bilateral chirality is invisible to every bounds check above: a hand spun
+  // 180° about the vertical axis fills exactly the same box as a reflected one,
+  // so these cases pin the transform relationship rather than the geometry.
+  describe('bilateral chirality', () => {
+    // A swept profile, not a box: a box maps onto itself under a 180° yaw, so
+    // nothing distinguishes a reflected one from a turned-around one.
+    const hand = { type: 'tube', path: [[0, 0, -0.25], [0, 0, 0.25]], radius: 0.15 };
+    const bilateralSpec = (left, right) => ({
+      name: 'Bilateral Figure',
+      parts: [
+        {
+          id: 'torso',
+          name: 'Torso',
+          geometry: { type: 'box', width: 1, height: 2, depth: 0.6 },
+          position: [0, 1, 0],
+          children: [
+            { id: 'hand-l', name: 'Hand Left', geometry: hand, position: [0.6, 0, 0.2], ...left },
+            { id: 'hand-r', name: 'Hand Right', geometry: hand, position: [-0.6, 0, 0.2], ...right },
+          ],
+        },
+      ],
+    });
+    const codes = (spec) => evaluateThreejsPhysicalAudit(spec).findings
+      .filter((finding) => finding.code.startsWith('bilateral-'))
+      .map((finding) => finding.code);
+
+    it('accepts a pair reflected across the lateral plane', () => {
+      const spec = bilateralSpec(
+        { rotationDegrees: [10, 20, 30] },
+        { rotationDegrees: [10, -20, -30] },
+      );
+      expect(codes(spec)).toEqual([]);
+      expect(buildThreejsPhysicalAuditFeedback(evaluateThreejsPhysicalAudit(spec))).toBe('');
+    });
+
+    it('flags a pair mirrored by a 180 degree yaw instead of a reflection', () => {
+      const res = evaluateThreejsPhysicalAudit(bilateralSpec({}, { rotationDegrees: [0, 180, 0] }));
+      const finding = res.findings.find((f) => f.code === 'bilateral-chirality');
+      expect(finding.severity).toBe('warning');
+      expect(finding.partIds).toEqual(['hand-l', 'hand-r']);
+      expect(finding.message).toContain('carries the orientation of "Hand Left" turned around');
+      expect(finding.message).toContain('[rx, -ry, -rz]');
+    });
+
+    // A figure mid-stride has one hand forward and one back. Depth alone is a
+    // pose, and reporting it would ask the next pass to flatten every pose.
+    it('ignores a staggered pose that only differs in depth', () => {
+      expect(codes(bilateralSpec({}, { position: [-0.6, 0, -0.2] }))).toEqual([]);
+    });
+
+    // Depth is reported once the orientation already says the limb is turned
+    // around, because it says where the reflected limb should have gone.
+    it('names the reflected placement alongside a yawed orientation', () => {
+      const res = evaluateThreejsPhysicalAudit(bilateralSpec(
+        {},
+        { position: [-0.6, 0, -0.2], rotationDegrees: [0, 180, 0] },
+      ));
+      const finding = res.findings.find((finding) => finding.code === 'bilateral-chirality');
+      expect(finding.message).toContain('where a reflection would place it at [-0.6, 0, 0.2]');
+    });
+
+    it('flags a pair mirrored by negating a scale component', () => {
+      const res = evaluateThreejsPhysicalAudit(bilateralSpec({}, { scale: [-1, 1, 1] }));
+      const finding = res.findings.find((f) => f.code === 'bilateral-mirror-scale');
+      expect(finding.message).toContain('negating a scale component on "Hand Right"');
+      // The negated half is the one named, not whichever side happens to be first.
+      expect(finding.message).toContain('relative to "Hand Left"');
+    });
+
+    it('flags a pair that never crosses the lateral plane', () => {
+      const res = evaluateThreejsPhysicalAudit(bilateralSpec({}, { position: [0.6, 0, -1.2] }));
+      const finding = res.findings.find((f) => f.code === 'bilateral-pair-same-side');
+      expect(finding.message).toContain('sits entirely on one side of the lateral plane');
+    });
+
+    // A merely asymmetric pose is legitimate — only a positively identified yaw
+    // is a defect, or the gate would report every raised arm.
+    it('ignores a pair posed differently without a chirality flip', () => {
+      expect(codes(bilateralSpec({}, { rotationDegrees: [25, -20, -30] }))).toEqual([]);
+    });
+
+    it('pairs across naming conventions and camelCase', () => {
+      const spec = bilateralSpec({}, { rotationDegrees: [0, 180, 0] });
+      spec.parts[0].children[0].name = 'leftFoot';
+      spec.parts[0].children[1].name = 'foot_R';
+      expect(codes(spec)).toEqual(['bilateral-chirality']);
+    });
+
+    // Which counterpart a third same-side part is meant to mirror is unknowable,
+    // and guessing would report chirality against the wrong limb.
+    it('skips a group that cannot be paired one to one', () => {
+      const spec = bilateralSpec({}, { rotationDegrees: [0, 180, 0] });
+      spec.parts[0].children.push({
+        id: 'hand-l-spare', name: 'Hand Left', geometry: hand, position: [0.6, 0.8, 0.2],
+      });
+      expect(codes(spec)).toEqual([]);
+    });
+
+    // A box reads the same either way round, so the yaw is not a defect and
+    // reporting it would bury the real findings under every blocky limb.
+    it('ignores a yaw on a lone geometry that maps onto itself', () => {
+      const spec = bilateralSpec({}, { rotationDegrees: [0, 180, 0] });
+      spec.parts[0].children[0].geometry = { type: 'box', width: 0.3, height: 0.3, depth: 0.5 };
+      spec.parts[0].children[1].geometry = { type: 'box', width: 0.3, height: 0.3, depth: 0.5 };
+      expect(codes(spec)).toEqual([]);
+    });
+
+    it('ignores a name whose only token is a side word', () => {
+      const spec = bilateralSpec({}, { rotationDegrees: [0, 180, 0] });
+      spec.parts[0].children[0].name = 'Left';
+      spec.parts[0].children[0].id = 'left';
+      spec.parts[0].children[1].name = 'Right';
+      spec.parts[0].children[1].id = 'right';
+      expect(codes(spec)).toEqual([]);
+    });
+
+    // The lateral plane a pair mirrors across is the one their shared parent
+    // defines, never world x = 0 — a subject modelled off the origin or facing
+    // anywhere but down +Z is symmetric about its own axis and no world plane.
+    it('measures a pair against its parent rather than world x = 0', () => {
+      const spec = bilateralSpec({}, {});
+      spec.parts[0].position = [3, 1, 0];
+      expect(codes(spec)).toEqual([]);
+    });
+
+    it('measures a pair inside a yawed parent in the parent frame', () => {
+      const spec = bilateralSpec(
+        { rotationDegrees: [0, 90, 0] },
+        { rotationDegrees: [0, -90, 0] },
+      );
+      spec.parts[0].rotationDegrees = [0, 35, 0];
+      expect(codes(spec)).toEqual([]);
+    });
+
+    // Both id and name, or the pair resolves through the id fallback and never
+    // exercises the upper-upper-lower camel split this case exists for.
+    it('pairs a single-letter side prefix run onto the name', () => {
+      const spec = bilateralSpec({}, { rotationDegrees: [0, 180, 0] });
+      spec.parts[0].children[0].id = 'LHand';
+      spec.parts[0].children[0].name = 'LHand';
+      spec.parts[0].children[1].id = 'RHand';
+      spec.parts[0].children[1].name = 'RHand';
+      expect(codes(spec)).toEqual(['bilateral-chirality']);
+    });
+
+    it('feeds bilateral findings back with the reflection recipe', () => {
+      const feedback = buildThreejsPhysicalAuditFeedback(
+        evaluateThreejsPhysicalAudit(bilateralSpec({}, { rotationDegrees: [0, 180, 0] })),
+      );
+      expect(feedback).toContain('For bilateral pair findings');
+      expect(feedback).toContain('position [-x, y, z] and rotation [rx, -ry, -rz]');
+    });
+  });
 });
+
+// A straight horn is invisible to every check above — its bounding box is a
+// perfectly reasonable box, it penetrates nothing, and it touches its parent.
+// Only what the spec CALLS the part makes the straight sweep a defect.
+describe('swept-path curvature', () => {
+  const arcPath = (spanDegrees, count = 8) => Array.from({ length: count }, (_, index) => {
+    const angle = (index / (count - 1)) * spanDegrees * (Math.PI / 180);
+    return [Math.cos(angle) - 1, Math.sin(angle), 0];
+  });
+  const hornSpec = (horn, detailInventory) => ({
+    name: 'Horned Figure',
+    parts: [
+      {
+        id: 'skull',
+        name: 'Skull',
+        geometry: { type: 'box', width: 1, height: 1, depth: 1 },
+        position: [0, 0.5, 0],
+        children: [{ id: 'horn', name: 'Horn', position: [0, 0.5, 0], ...horn }],
+      },
+    ],
+    ...(detailInventory ? { detailInventory } : {}),
+  });
+  const sweptFindings = (spec) => evaluateThreejsPhysicalAudit(spec).findings
+    .filter((finding) => finding.code === 'straight-swept-path');
+
+  it('flags a horn swept along collinear control points', () => {
+    const findings = sweptFindings(hornSpec({
+      geometry: { type: 'tube', path: [[0, 0, 0], [0, 0.5, 0], [0, 1, 0]], radius: 0.1 },
+    }));
+    expect(findings).toHaveLength(1);
+    expect(findings[0].severity).toBe('warning');
+    expect(findings[0].partIds).toEqual(['horn']);
+    expect(findings[0].message).toContain('collinear control points');
+  });
+
+  it('reports the measured span for a horn that bends too little', () => {
+    const findings = sweptFindings(hornSpec({
+      geometry: { type: 'tube', path: arcPath(12), radius: 0.1 },
+    }));
+    expect(findings).toHaveLength(1);
+    expect(findings[0].message).toContain('only turns through 12°');
+  });
+
+  it('accepts a horn that actually curves', () => {
+    expect(sweptFindings(hornSpec({
+      geometry: { type: 'tube', path: arcPath(80), radius: 0.1 },
+    }))).toEqual([]);
+  });
+
+  // `tube` is the right answer for plenty of straight parts, so a straight
+  // sweep is evidence of nothing until the spec says the part was meant to bend.
+  it('leaves an undeclared straight tube alone', () => {
+    const spec = hornSpec({
+      geometry: { type: 'tube', path: [[0, 0, 0], [0, 0.5, 0], [0, 1, 0]], radius: 0.1 },
+    });
+    spec.parts[0].children[0].name = 'Antenna Mast';
+    expect(sweptFindings(spec)).toEqual([]);
+  });
+
+  it('names the detail feature when the part name does not declare the curve', () => {
+    const spec = hornSpec(
+      { geometry: { type: 'tube', path: [[0, 0, 0], [0, 0.5, 0], [0, 1, 0]], radius: 0.1 } },
+      [{ feature: 'coiled brass conduit', evidence: 'reference photo', implementationPartIds: ['horn'], priority: 'identity' }],
+    );
+    spec.parts[0].children[0].name = 'Conduit';
+    const findings = sweptFindings(spec);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].message).toContain('declared by the feature "coiled brass conduit"');
+  });
+
+  // An extrude sweeps along a straight axis, so its outline is the only place
+  // a curve can live — and a convex outline has no curve in it at all.
+  it('flags a curved feature built from a convex extrude outline', () => {
+    const findings = sweptFindings(hornSpec({
+      geometry: {
+        type: 'extrude',
+        outline: [[0, 0], [0.2, 0], [0.1, 1]],
+        depth: 0.2,
+        bevelEnabled: true,
+        bevelThickness: 0.05,
+      },
+    }));
+    expect(findings).toHaveLength(1);
+    expect(findings[0].message).toContain('0° of sustained concave turning');
+  });
+
+  it('accepts a crescent extrude outline', () => {
+    const outer = Array.from({ length: 12 }, (_, index) => {
+      const angle = (index / 11) * Math.PI * 0.8;
+      return [Math.cos(angle), Math.sin(angle)];
+    });
+    const inner = Array.from({ length: 12 }, (_, index) => {
+      const angle = (Math.PI * 0.8) - ((index / 11) * Math.PI * 0.8);
+      return [0.75 * Math.cos(angle), 0.75 * Math.sin(angle)];
+    });
+    expect(sweptFindings(hornSpec({
+      geometry: { type: 'extrude', outline: [...outer, ...inner], depth: 0.2 },
+    }))).toEqual([]);
+  });
+
+  it('feeds the finding back with the recipe for putting the curve in the geometry', () => {
+    const feedback = buildThreejsPhysicalAuditFeedback(evaluateThreejsPhysicalAudit(hornSpec({
+      geometry: { type: 'tube', path: [[0, 0, 0], [0, 0.5, 0], [0, 1, 0]], radius: 0.1 },
+    })));
+    expect(feedback).toContain('For straight swept-path findings');
+    expect(feedback).toContain('outline itself has a concave side');
+  });
+});
+

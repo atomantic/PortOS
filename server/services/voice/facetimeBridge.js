@@ -97,7 +97,11 @@ export async function checkSetup(config) {
   };
 }
 
-const setupFailure = (report) => Object.entries(report).find(([, value]) => value.ok !== 'ok')?.[0] || null;
+// Accessibility is enforced by the helper on every explicitly-triggered
+// command. The status endpoint deliberately never spawns the helper, so its
+// informational Accessibility row cannot be used as a command precondition.
+export const blockingSetupFailure = (report) => Object.entries(report)
+  .find(([key, value]) => key !== 'accessibility' && value.ok !== 'ok')?.[0] || null;
 
 async function assertAvailable(config) {
   if (!await isInstanceFeatureEnabled('facetime')) {
@@ -113,7 +117,7 @@ export async function run(command, config) {
   if (!FACETIME_COMMANDS.includes(command)) throw new ServerError('Unknown FaceTime command', { status: 400, code: 'VALIDATION_ERROR' });
   await assertAvailable(voiceConfig);
   const report = await checkSetup(voiceConfig);
-  const missing = setupFailure(report);
+  const missing = blockingSetupFailure(report);
   if (missing) throw new ServerError(`FaceTime setup incomplete: ${missing}`, { status: 409, code: missing });
   const result = await bufferedSpawn(facetimeHelperPath(), [command, voiceConfig.facetime.targetHandle, voiceConfig.facetime.targetName], { timeoutMs: FACETIME_TIMEOUT_MS });
   if (result.timedOut) throw new ServerError('FaceTime helper timed out', { status: 504, code: 'timeout' });

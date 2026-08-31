@@ -1,0 +1,1 @@
+- [x] [models-contextual-backend-install] Install a missing Ollama or LM Studio backend directly from the model catalog blocker instead of sending the user to a terminal command.

@@ -78,6 +78,16 @@ describe('migration 170 — branch reconciler → per-app CoS task', () => {
     expect(meta).toMatchObject({ cleanupMerged: true, openPr: true, resolveConflicts: true, autoMerge: true });
   });
 
+  it('preserves the legacy automatic drain when the new task entry is absent', async () => {
+    writeJson(settingsPath, { branchReconcile: { enabled: true } });
+    writeJson(schedulePath, { tasks: {} });
+
+    await migration.up({ rootDir });
+
+    expect(readJson(schedulePath).tasks['branch-reconcile'].type).toBe('perpetual');
+    expect(readJson(schedulePath).tasks['branch-reconcile'].enabled).toBe(true);
+  });
+
   it('preserves PortOS-only scope by disabling the task on other managed apps', async () => {
     writeJson(settingsPath, { branchReconcile: { enabled: true } });
     writeJson(schedulePath, { tasks: { 'branch-reconcile': {} } });

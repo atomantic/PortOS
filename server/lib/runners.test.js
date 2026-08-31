@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
-import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, MINIMAX_H3_RUNTIMES, LTX2_FAMILY_RUNTIMES, videoLoraFamily, isMiniMaxH3Runtime, isLtx2FamilyRuntime, isMlxVideoLtxLoraCapable, loraFamilyOf, isMflux, isFlux2, isZImage, isErnie, isHiDream, isQwen, flux2VariantFromModel, loraCompatKey, composeCompatKey } from './runners.js';
+import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, MINIMAX_H3_RUNTIMES, LTX2_FAMILY_RUNTIMES, AUDIO_TO_VIDEO_RUNTIMES, videoLoraFamily, isMiniMaxH3Runtime, isLtx2FamilyRuntime, isAudioToVideoRuntime, isMlxVideoLtxLoraCapable, loraFamilyOf, isMflux, isFlux2, isZImage, isErnie, isHiDream, isQwen, flux2VariantFromModel, loraCompatKey, composeCompatKey } from './runners.js';
 
 const __dirname_self = dirname(fileURLToPath(import.meta.url));
 const CLIENT_MIRROR_PATH = join(__dirname_self, '..', '..', 'client', 'src', 'lib', 'runnerFamilies.js');
@@ -81,7 +81,7 @@ describe('VIDEO_LORA_FAMILIES / videoLoraFamily', () => {
     // quantized variants are out of scope → null
     expect(videoLoraFamily({ runtime: 'mlx_video', id: 'ltx23_distilled_q4', repo: 'notapalindrome/ltx23-mlx-av-q4', name: 'LTX-2.3 Distilled Q4' })).toBe(null);
     expect(videoLoraFamily({ runtime: 'wan22' })).toBe(null);
-    expect(videoLoraFamily({ runtime: 'hunyuan' })).toBe(null);
+    expect(videoLoraFamily({ runtime: 'fastvideo' })).toBe(null);
     expect(videoLoraFamily({})).toBe(null);
     expect(videoLoraFamily(null)).toBe(null);
   });
@@ -129,7 +129,7 @@ describe('VIDEO_LORA_FAMILIES / videoLoraFamily', () => {
     expect(text).toMatch(/export const isMlxVideoLtxLoraCapable/);
     expect(text).toMatch(/export const loraFamilyOf/);
     expect(text).toMatch(/export const isMiniMaxH3Runtime/);
-    expect(text).toMatch(/'minimax_h3', 'minimax_h3_cuda'/);
+    expect(text).toMatch(/MINIMAX_H3_REF2VA_RUNTIME = 'minimax_h3_ref2va'/);
     expect(text).toMatch(/export const isLtx2FamilyRuntime/);
     expect(text).toMatch(/'ltx2', 'ltx25'/);
   });
@@ -205,17 +205,18 @@ describe('composeCompatKey', () => {
 });
 
 // H3's controls (24 fps, joint A/V, no CFG, the 17n+5 grid) are facts about the
-// checkpoint, so the gates that assert them must cover BOTH runtimes. Naming
+// checkpoint, so the gates that assert them must cover every H3 runtime. Naming
 // one runtime in a gate is precisely how the CUDA path would silently escape
 // a rule the MLX path enforces.
 describe('isMiniMaxH3Runtime', () => {
-  it('covers both H3 runtimes and nothing else', () => {
-    expect(MINIMAX_H3_RUNTIMES).toEqual(['minimax_h3', 'minimax_h3_cuda']);
+  it('covers all H3 runtimes and nothing else', () => {
+    expect(MINIMAX_H3_RUNTIMES).toEqual(['minimax_h3', 'minimax_h3_cuda', 'minimax_h3_ref2va']);
     expect(isMiniMaxH3Runtime('minimax_h3')).toBe(true);
     expect(isMiniMaxH3Runtime('minimax_h3_cuda')).toBe(true);
+    expect(isMiniMaxH3Runtime('minimax_h3_ref2va')).toBe(true);
   });
 
-  it.each(['mlx_video', 'ltx2', 'wan22', 'hunyuan', 'minimax', '', undefined, null])(
+  it.each(['mlx_video', 'ltx2', 'wan22', 'fastvideo', 'minimax', '', undefined, null])(
     'reports %s as not an H3 runtime',
     (runtime) => { expect(isMiniMaxH3Runtime(runtime)).toBe(false); },
   );
@@ -227,6 +228,15 @@ describe('isMiniMaxH3Runtime', () => {
   });
 });
 
+describe('isAudioToVideoRuntime', () => {
+  it('covers both LTX pins plus MiniMax H3 Ref2VA', () => {
+    expect(AUDIO_TO_VIDEO_RUNTIMES).toEqual(['ltx2', 'ltx25', 'minimax_h3_ref2va']);
+    for (const runtime of AUDIO_TO_VIDEO_RUNTIMES) expect(isAudioToVideoRuntime(runtime)).toBe(true);
+    expect(isAudioToVideoRuntime('minimax_h3')).toBe(false);
+    expect(isAudioToVideoRuntime('mlx_video')).toBe(false);
+  });
+});
+
 describe('isLtx2FamilyRuntime', () => {
   it('covers the 2.3 pin and the 2.5 fork, and nothing else', () => {
     expect(LTX2_FAMILY_RUNTIMES).toEqual(['ltx2', 'ltx25']);
@@ -235,7 +245,7 @@ describe('isLtx2FamilyRuntime', () => {
     expect(videoLoraFamily({ runtime: 'ltx25' })).toBe(VIDEO_LORA_FAMILIES.LTX_VIDEO);
   });
 
-  it.each(['mlx_video', 'wan22', 'hunyuan', 'minimax_h3', 'ltx', '', undefined, null])(
+  it.each(['mlx_video', 'wan22', 'fastvideo', 'minimax_h3', 'ltx', '', undefined, null])(
     'reports %s as not an LTX-2 family runtime',
     (runtime) => { expect(isLtx2FamilyRuntime(runtime)).toBe(false); },
   );

@@ -144,6 +144,22 @@ describe('synthesizeToFile', () => {
     expect(passed).not.toHaveProperty('voice');
   });
 
+  it('passes a resolved profile through and preserves its render provenance', async () => {
+    synthesizeMock.mockResolvedValue({
+      wav: Buffer.from('w'), latencyMs: 1, engine: 'kokoro',
+      profileId: 'voice-profile-1', profileRevision: 2,
+      provenance: { profileId: 'voice-profile-1', profileRevision: 2, engine: 'kokoro' },
+    });
+    const result = await synthesizeToFile({
+      text: 'hi', voiceId: 'kokoro:af_heart', profileId: 'voice-profile-1', route: 'studio',
+    });
+    expect(synthesizeMock).toHaveBeenCalledWith('hi', expect.objectContaining({
+      profileId: 'voice-profile-1', route: 'studio',
+    }));
+    expect(result).toMatchObject({ profileId: 'voice-profile-1', profileRevision: 2 });
+    expect(result.provenance).toMatchObject({ profileId: 'voice-profile-1' });
+  });
+
   it('returns the measured WAV duration (ms) for the narration timeline', async () => {
     // 24000 samples of 16-bit mono @ 24kHz = exactly 1 second.
     synthesizeMock.mockResolvedValue({ wav: makeWav({ dataBytes: 24000 * 2 }), latencyMs: 5, engine: 'kokoro' });

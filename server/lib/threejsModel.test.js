@@ -3,10 +3,14 @@ import {
   buildThreejsFactorySource,
   buildThreejsFlatnessFeedback,
   buildThreejsMaterialFeedback,
+  collectDeclaredCurvedParts,
   DEFAULT_ATTACHMENT_MAX_OFFSET,
+  evaluateSweptArcCurvature,
+  evaluateSweptGeometryCurvature,
   evaluateThreejsFlatness,
   evaluateThreejsMaterialPlausibility,
   isThreejsAttachmentAnchored,
+  measureOutlineConcaveTurn,
   resolveThreejsAttachments,
   storedThreejsSculptSpecSchema,
   threejsGeometrySchema,
@@ -1415,5 +1419,210 @@ describe('buildThreejsFactorySource animation', () => {
     const source = buildThreejsFactorySource(validSpec());
     expect(source).toContain('animation: spec.animation || null,');
     expect(source).not.toContain('"sequences"');
+  });
+});
+
+// A generated horn that never bends passes every bounds check in the audit — its
+// box is a reasonable box — so the input matrix here is the whole gate. Each
+// case names a different way a path can fail to be an arc.
+describe('evaluateSweptArcCurvature', () => {
+  const arcPath = (spanDegrees, { count = 8, radius = 1 } = {}) => Array.from({ length: count }, (_, index) => {
+    const angle = (index / (count - 1)) * spanDegrees * (Math.PI / 180);
+    return [radius * Math.cos(angle), radius * Math.sin(angle), 0];
+  });
+
+  it('reports a collinear path as straight without fitting anything', () => {
+    const curvature = evaluateSweptArcCurvature([[0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]]);
+    expect(curvature.collinear).toBe(true);
+    expect(curvature.straight).toBe(true);
+    expect(curvature.radius).toBeNull();
+  });
+
+  it('reports a two-point path as straight', () => {
+    expect(evaluateSweptArcCurvature([[0, 0, 0], [0, 2, 0]]).straight).toBe(true);
+  });
+
+  it('measures the span of a genuine arc and passes it', () => {
+    const curvature = evaluateSweptArcCurvature(arcPath(90));
+    expect(curvature.straight).toBe(false);
+    expect(curvature.arcSpanDegrees).toBeCloseTo(90, 4);
+    expect(curvature.radius).toBeCloseTo(1, 4);
+  });
+
+  // The measurement has to be a property of the shape, not of the axes it was
+  // authored against, or a horn tilted off the world planes reads as straight.
+  it('fits the path plane rather than a world plane', () => {
+    const tilted = arcPath(90).map(([x, y]) => [x, y * Math.SQRT1_2, y * Math.SQRT1_2]);
+    const curvature = evaluateSweptArcCurvature(tilted);
+    expect(curvature.straight).toBe(false);
+    expect(curvature.arcSpanDegrees).toBeCloseTo(90, 3);
+  });
+
+  it('reports a shallow arc below the span threshold as straight', () => {
+    const curvature = evaluateSweptArcCurvature(arcPath(15));
+    expect(curvature.arcSpanDegrees).toBeCloseTo(15, 4);
+    expect(curvature.straight).toBe(true);
+  });
+
+  // Angular travel is accumulated unsigned, so alternating authoring noise adds
+  // up to a span the path never swept. Only the radial fit error says the points
+  // are nowhere near the circle that produced it.
+  it('does not credit a jittered straight run with the span its noise accumulates', () => {
+    const jittered = Array.from({ length: 12 }, (_, index) => [index * 0.2, (index % 2 ? 1 : -1) * 0.002, 0]);
+    const curvature = evaluateSweptArcCurvature(jittered);
+    expect(curvature.arcSpanDegrees).toBeGreaterThan(25);
+    expect(curvature.radialErrorRatio).toBeGreaterThan(0.05);
+    expect(curvature.straight).toBe(true);
+  });
+
+  // The other side of that trade: an S-curve rides no single circle either, and
+  // rejecting it on fit alone would report a bent tail as a straight one.
+  it('accepts an S-curve that rides no single circle', () => {
+    const sCurve = Array.from({ length: 16 }, (_, index) => {
+      const t = (index / 15) * 2 * Math.PI;
+      return [t * 0.3, Math.sin(t) * 0.4, 0];
+    });
+    const curvature = evaluateSweptArcCurvature(sCurve);
+    expect(curvature.radialErrorRatio).toBeGreaterThan(0.05);
+    expect(curvature.straight).toBe(false);
+  });
+
+  it('ignores non-finite and malformed points', () => {
+    expect(evaluateSweptArcCurvature([[0, 0, 0], [1, Number.NaN, 0], [2, 0]]).straight).toBe(true);
+    expect(evaluateSweptArcCurvature(null).straight).toBe(true);
+  });
+});
+
+describe('measureOutlineConcaveTurn', () => {
+  const crescent = () => {
+    const outer = Array.from({ length: 14 }, (_, index) => {
+      const angle = (index / 13) * Math.PI * 0.75;
+      return [Math.cos(angle), Math.sin(angle)];
+    });
+    const inner = Array.from({ length: 14 }, (_, index) => {
+      const angle = (Math.PI * 0.75) - ((index / 13) * Math.PI * 0.75);
+      return [0.8 * Math.cos(angle), 0.8 * Math.sin(angle)];
+    });
+    return [...outer, ...inner];
+  };
+
+  it('reports no concave turning for a convex outline', () => {
+    expect(measureOutlineConcaveTurn([[0, 0], [1, 0], [1, 1], [0, 1]])).toBeCloseTo(0, 6);
+  });
+
+  it('reports the inner sweep of a crescent', () => {
+    expect(measureOutlineConcaveTurn(crescent())).toBeGreaterThan(100);
+  });
+
+  // Winding is read off the turning itself, so an outline authored clockwise is
+  // not reported as concave along its whole boundary.
+  it('measures the same crescent whichever way it winds', () => {
+    expect(measureOutlineConcaveTurn([...crescent()].reverse()))
+      .toBeCloseTo(measureOutlineConcaveTurn(crescent()), 6);
+  });
+
+  // Summed over the whole ring, one deep notch buys hundreds of degrees and lets
+  // a straight spike through the gate that exists to catch it. Only a SUSTAINED
+  // run — one governing a real stretch of boundary — counts.
+  it('ignores a notch cut into an otherwise straight silhouette', () => {
+    const notchedSpike = [[0, 0], [0.45, 0], [0.5, 0.3], [0.55, 0], [1, 0], [0.5, 6]];
+    expect(measureOutlineConcaveTurn(notchedSpike)).toBeCloseTo(0, 6);
+  });
+
+  // The same rule must not throw away the crescent: its inner boundary is one
+  // long run, not a nick.
+  it('still reports a crescent whose concavity is one sustained run', () => {
+    expect(measureOutlineConcaveTurn(crescent())).toBeGreaterThan(100);
+  });
+});
+
+describe('evaluateSweptGeometryCurvature', () => {
+  it('measures a tube path and an extrude outline, and nothing else', () => {
+    expect(evaluateSweptGeometryCurvature({ type: 'tube', path: [[0, 0, 0], [0, 1, 0], [0, 2, 0]] }))
+      .toMatchObject({ kind: 'tube', straight: true });
+    expect(evaluateSweptGeometryCurvature({ type: 'extrude', outline: [[0, 0], [1, 0], [1, 1], [0, 1]] }))
+      .toMatchObject({ kind: 'extrude', straight: true });
+    expect(evaluateSweptGeometryCurvature({ type: 'box', width: 1, height: 1, depth: 1 })).toBeNull();
+    expect(evaluateSweptGeometryCurvature(null)).toBeNull();
+  });
+
+  // A closed tube is a loop with no endpoints, and the schema already refuses a
+  // collinear one, so there is no arc span for this gate to mean anything about.
+  it('declines to measure a closed tube', () => {
+    expect(evaluateSweptGeometryCurvature({
+      type: 'tube',
+      closed: true,
+      path: [[0, 0, 0], [1, 0, 0], [1, 1, 0]],
+    })).toBeNull();
+  });
+
+  // An arch, a ring, and a slotted plate all put the curve in the HOLE and leave
+  // the outline convex, so measuring the outline would report the canonical
+  // build as the defect.
+  it('declines to measure an extrude whose curve can live in a hole', () => {
+    expect(evaluateSweptGeometryCurvature({
+      type: 'extrude',
+      outline: [[-1, 0], [1, 0], [1, 2], [-1, 2]],
+      holes: [Array.from({ length: 12 }, (_, index) => {
+        const angle = Math.PI * (index / 11);
+        return [0.8 * Math.cos(angle), 0.8 * Math.sin(angle)];
+      })],
+      depth: 0.3,
+    })).toBeNull();
+  });
+});
+
+describe('collectDeclaredCurvedParts', () => {
+  const tube = { type: 'tube', path: [[0, 0, 0], [0, 1, 0], [0, 2, 0]] };
+
+  it('declares a part by its own name and by a detail feature that names it', () => {
+    const declared = collectDeclaredCurvedParts({
+      parts: [
+        { id: 'horn', name: 'Left Horn', geometry: tube },
+        { id: 'part_17', name: 'part_17', geometry: tube },
+        { id: 'rail', name: 'Support Rail', geometry: tube },
+      ],
+      detailInventory: [{ feature: 'curved brass conduit', implementationPartIds: ['part_17'] }],
+    });
+    expect([...declared.entries()]).toEqual([['horn', 'Left Horn'], ['part_17', 'curved brass conduit']]);
+  });
+
+  // A horn of five straight segments arranged along an arc is the CORRECT build,
+  // and every segment of it is straight — so an assembly is never measured piece
+  // by piece, from either declaration source, and not through its parent either
+  // even when the parent carries a sweep of its own.
+  it('skips an assembly that can curve by arrangement', () => {
+    const declared = collectDeclaredCurvedParts({
+      parts: [
+        {
+          id: 'horn',
+          name: 'Horn',
+          geometry: tube,
+          children: [
+            { id: 'horn-a', name: 'Horn Segment A', geometry: tube },
+            { id: 'horn-b', name: 'Horn Segment B', geometry: tube },
+          ],
+        },
+      ],
+      detailInventory: [{ feature: 'curved horn', implementationPartIds: ['horn-a', 'horn-b'] }],
+    });
+    expect([...declared.keys()]).toEqual([]);
+  });
+
+  // These read as curved about as often as they read as straight — a tail boom
+  // runs down a fuselage, a whisker is a bristle — and the finding text steers
+  // the next refinement pass, so a bare noun must not tell it to bend them.
+  it('needs a curve modifier before an ambiguous noun declares anything', () => {
+    const bare = collectDeclaredCurvedParts({
+      parts: [
+        { id: 'boom', name: 'Tail Boom', geometry: tube },
+        { id: 'bristle', name: 'whiskerLeft', geometry: tube },
+      ],
+    });
+    expect([...bare.keys()]).toEqual([]);
+    const modified = collectDeclaredCurvedParts({
+      parts: [{ id: 'boom', name: 'Curled Tail', geometry: tube }],
+    });
+    expect([...modified.keys()]).toEqual(['boom']);
   });
 });

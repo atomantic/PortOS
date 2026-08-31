@@ -3,7 +3,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const attachNodeVideo = vi.fn(async (loomId, episodeId, nodeId, { videoHistoryId }) => ({
   id: nodeId, videoHistoryId,
 }));
-vi.mock('./fableLoom/records.js', () => ({ attachNodeVideo }));
+const attachNodePlaybackAsset = vi.fn(async (loomId, episodeId, nodeId, fields) => ({
+  id: nodeId, ...fields,
+}));
+vi.mock('./fableLoom/records.js', () => ({ attachNodePlaybackAsset, attachNodeVideo }));
 
 const { mediaJobEvents } = await import('./mediaJobQueue/index.js');
 const hook = await import('./fableLoomSceneVideoHook.js');
@@ -29,6 +32,7 @@ describe('fableLoomSceneVideoHook', () => {
     hook.__testing.reset();
     hook.initFableLoomSceneVideoHook();
     attachNodeVideo.mockClear();
+    attachNodePlaybackAsset.mockClear();
   });
 
   afterEach(() => hook.__testing.reset());
@@ -45,6 +49,23 @@ describe('fableLoomSceneVideoHook', () => {
     });
     await waitFor(() => attachNodeVideo.mock.calls.length > 0);
     expect(attachNodeVideo.mock.calls[0][3]).toEqual({ videoHistoryId: 'video-2' });
+  });
+
+  it('files typed playback assets with their transition identity and conditioning', async () => {
+    mediaJobEvents.emit('completed', completedVideoJob({
+      id: 'video-exit',
+      params: {
+        fableLoom: tag({ role: 'exit', transitionId: 'tr-1' }),
+        visualConditioning: { version: 1, status: 'locked' },
+      },
+    }));
+    await waitFor(() => attachNodePlaybackAsset.mock.calls.length > 0);
+    expect(attachNodePlaybackAsset).toHaveBeenCalledWith('loom-1', 'ep-1', 'node-1', {
+      role: 'exit',
+      videoHistoryId: 'video-exit',
+      transitionId: 'tr-1',
+      visualConditioning: { version: 1, status: 'locked' },
+    });
   });
 
   it('ignores image jobs and videos without a complete destination tag', async () => {

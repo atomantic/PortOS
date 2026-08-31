@@ -867,14 +867,19 @@ export async function syncAllPeers() {
   // runs (vs. the old skip-when-empty) so a 0 floor is an explicit "keep all",
   // and the anti-entropy reconcile (Part 1) re-converges anyone genuinely behind.
   const brainPeers = peers.filter(p => p.enabled && p.instanceId && getEffectiveCategories(p).brain);
+  let minSeq = 0;
   if (brainPeers.length > 0) {
     const consumedSeqs = brainPeers.map(p => {
       const consumed = p.remoteSyncSeqs?.cursorForYou?.brainSeq;
       return typeof consumed === 'number' && Number.isFinite(consumed) && consumed >= 0 ? consumed : 0;
     });
-    const minSeq = Math.min(...consumedSeqs);
-    await brainSyncLog.compactLog(minSeq);
+    minSeq = Math.min(...consumedSeqs);
   }
+  // When brain peers exist, minSeq preserves unconsumed deltas above the floor.
+  // When no brain peers are enabled (or on standalone installs, #5439), floor 0
+  // runs compatibility-preserving compaction: pruning intermediate update churn
+  // while retaining terminal state for inbound, asymmetric, or pre-#1077 consumers.
+  await brainSyncLog.compactLog(minSeq);
 }
 
 /**

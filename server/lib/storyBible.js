@@ -151,6 +151,24 @@ export const BIBLE_LIMITS = Object.freeze({
   // `piper:en_GB-northern_english_male`). Caps generously since 3rd-party
   // providers (ElevenLabs) use uuid-shaped voice ids.
   VOICE_ID_MAX: 200,
+  // Versioned, portable voice-production intent (#5378). This records only
+  // creative direction and an approval decision; local profiles, providers,
+  // recordings, and training artifacts deliberately have no slot here.
+  VOICE_CANON_VERSION_MAX: 100000,
+  VOICE_CANON_DESCRIPTION_MAX: 1200,
+  VOICE_CANON_DELIVERY_MAX: 1200,
+  VOICE_CANON_RANGE_ITEM_MAX: 240,
+  VOICE_CANON_RANGE_MAX: 12,
+  VOICE_CANON_AVOID_ITEM_MAX: 240,
+  VOICE_CANON_AVOID_MAX: 12,
+  VOICE_CANON_PRONUNCIATION_TERM_MAX: 160,
+  VOICE_CANON_PRONUNCIATION_VALUE_MAX: 240,
+  VOICE_CANON_PRONUNCIATIONS_MAX: 24,
+  // Approved identity-pack assets are a curated view over imageRefs[], not a
+  // second image store. Only an existing managed reference can be assigned.
+  IDENTITY_PACK_ASSETS_MAX: 24,
+  IDENTITY_PACK_AVOID_ITEM_MAX: 240,
+  IDENTITY_PACK_AVOID_MAX: 12,
   // Reveal-gated canon (#2178): `surfaceDescriptor` is the pre-reveal
   // stand-in — what the world looks like BEFORE the spoiler is due ("the
   // locked east wing" vs "the wing where the heir is imprisoned"). Roomy
@@ -161,6 +179,26 @@ export const BIBLE_LIMITS = Object.freeze({
   // a hallucinated/overflowed integer.
   REVEAL_ISSUE_MAX: 100000,
 });
+
+// Portable production posture only. Performer identity, contracts, source
+// recordings, provider ids, and local artifact paths must never enter a
+// Universe record or its federated payload.
+export const VOICE_CANON_SOURCE_POLICIES = Object.freeze([
+  'designed', 'consented-performance', 'licensed',
+]);
+const VOICE_CANON_SOURCE_POLICY_SET = new Set(VOICE_CANON_SOURCE_POLICIES);
+
+// Ordered both for the editor and for readiness output. `neutral`, `profile`,
+// and `full-body` are the minimum visual identity anchors; the other roles
+// enrich continuity without making a newly-curated character unusable.
+export const IDENTITY_ASSET_ROLES = Object.freeze([
+  'neutral', 'profile', 'full-body', 'expression-gesture', 'wardrobe',
+  'prop-scale', 'negative-identity',
+]);
+const IDENTITY_ASSET_ROLE_SET = new Set(IDENTITY_ASSET_ROLES);
+export const IDENTITY_PACK_REQUIRED_ROLES = Object.freeze([
+  'neutral', 'profile', 'full-body',
+]);
 
 // Canonical provenance vocabulary. `BIBLE_SOURCE.SERIES_EXTRACT` is the
 // default for new bible-extracted entries; `UNIVERSE_EXPAND` is stamped on
@@ -494,6 +532,100 @@ function deriveReferenceSheetImageRef(raw) {
   if (trimmed.includes('/') || trimmed.includes('\\')) return null;
   if (trimmed.startsWith('.')) return null;
   return trimmed;
+}
+
+function sanitizeVoiceCanon(raw) {
+  if (!isPlainObject(raw)) return null;
+  const version = Number.isInteger(raw.version) && raw.version > 0
+    ? Math.min(raw.version, BIBLE_LIMITS.VOICE_CANON_VERSION_MAX)
+    : 1;
+  const pronunciations = sanitizeListWith(raw.pronunciations, (item) => {
+    if (!isPlainObject(item)) return null;
+    const term = trimTo(item.term, BIBLE_LIMITS.VOICE_CANON_PRONUNCIATION_TERM_MAX);
+    const pronunciation = trimTo(item.pronunciation, BIBLE_LIMITS.VOICE_CANON_PRONUNCIATION_VALUE_MAX);
+    return term && pronunciation ? { term, pronunciation } : null;
+  }, BIBLE_LIMITS.VOICE_CANON_PRONUNCIATIONS_MAX);
+  const sourcePolicy = trimTo(raw.sourcePolicy, 64);
+  return {
+    version,
+    description: trimTo(raw.description, BIBLE_LIMITS.VOICE_CANON_DESCRIPTION_MAX),
+    defaultDelivery: trimTo(raw.defaultDelivery, BIBLE_LIMITS.VOICE_CANON_DELIVERY_MAX),
+    emotionalRange: cleanStringArray(raw.emotionalRange, BIBLE_LIMITS.VOICE_CANON_RANGE_ITEM_MAX, BIBLE_LIMITS.VOICE_CANON_RANGE_MAX),
+    avoid: cleanStringArray(raw.avoid, BIBLE_LIMITS.VOICE_CANON_AVOID_ITEM_MAX, BIBLE_LIMITS.VOICE_CANON_AVOID_MAX),
+    pronunciations,
+    sourcePolicy: VOICE_CANON_SOURCE_POLICY_SET.has(sourcePolicy) ? sourcePolicy : null,
+    approved: raw.approved === true,
+  };
+}
+
+function sanitizeIdentityPack(raw, imageRefs) {
+  if (!isPlainObject(raw)) return null;
+  const seen = new Set();
+  const assets = [];
+  for (const item of Array.isArray(raw.assets) ? raw.assets : []) {
+    if (!isPlainObject(item)) continue;
+    const role = trimTo(item.role, 64);
+    const imageRef = trimTo(item.imageRef, BIBLE_LIMITS.IMAGE_REF_MAX);
+    // The pack may only curate an image the character already owns. This
+    // prevents arbitrary filesystem/provider pointers from becoming canon.
+    if (!IDENTITY_ASSET_ROLE_SET.has(role) || !imageRefs.includes(imageRef)) continue;
+    const key = `${role}:${imageRef}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    assets.push({ role, imageRef, approved: item.approved === true });
+    if (assets.length >= BIBLE_LIMITS.IDENTITY_PACK_ASSETS_MAX) break;
+  }
+  const avoid = cleanStringArray(raw.avoid, BIBLE_LIMITS.IDENTITY_PACK_AVOID_ITEM_MAX, BIBLE_LIMITS.IDENTITY_PACK_AVOID_MAX);
+  return assets.length || avoid.length ? { assets, avoid } : null;
+}
+
+/**
+ * Resolve a portable identity-pack status for canon-locked production.
+ * Consumers must refuse (or visibly degrade) a locked render unless status is
+ * `ready`; an empty candidate pack is deliberately `missing`, never ready.
+ */
+export function characterIdentityPackReadiness(character) {
+  const approved = Array.isArray(character?.identityPack?.assets)
+    ? character.identityPack.assets.filter((asset) => asset?.approved === true)
+    : [];
+  const byRole = new Map();
+  for (const asset of approved) {
+    if (!IDENTITY_ASSET_ROLE_SET.has(asset?.role)) continue;
+    const rows = byRole.get(asset.role) || [];
+    rows.push(asset);
+    byRole.set(asset.role, rows);
+  }
+  const missing = IDENTITY_PACK_REQUIRED_ROLES.filter((role) => !(byRole.get(role)?.length));
+  const ambiguous = IDENTITY_PACK_REQUIRED_ROLES.filter((role) => (byRole.get(role)?.length || 0) > 1);
+  return {
+    status: ambiguous.length ? 'ambiguous' : missing.length ? 'missing' : 'ready',
+    missing,
+    ambiguous,
+    assets: approved,
+  };
+}
+
+/**
+ * Preserve v10 character production fields when an older peer wins LWW with
+ * a character shape that could not represent them. A v10-aware sender's
+ * omission is an intentional clear and must pass through unchanged.
+ */
+export function preserveLegacyCharacterProductionPackages(remoteCharacters, localCharacters, senderUniversesVersion) {
+  if ((Number(senderUniversesVersion) || 0) >= 10
+    || !Array.isArray(remoteCharacters)
+    || !Array.isArray(localCharacters)) return remoteCharacters;
+  const localById = new Map(
+    localCharacters.filter((character) => character?.id).map((character) => [character.id, character]),
+  );
+  return remoteCharacters.map((character) => {
+    const localCharacter = localById.get(character?.id);
+    if (!localCharacter) return character;
+    return {
+      ...character,
+      ...(!character.voiceCanon && localCharacter.voiceCanon ? { voiceCanon: localCharacter.voiceCanon } : {}),
+      ...(!character.identityPack && localCharacter.identityPack ? { identityPack: localCharacter.identityPack } : {}),
+    };
+  });
 }
 
 // The legacy 'standard' variant lives in `character.referenceSheetImageRef`;
@@ -949,6 +1081,8 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
   );
   const created = preserveTimestamps && isStr(raw.createdAt) ? raw.createdAt : nowIso();
   const imageRefs = cleanStringArray(raw.imageRefs, BIBLE_LIMITS.IMAGE_REF_MAX, BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX);
+  const voiceCanon = sanitizeVoiceCanon(raw.voiceCanon);
+  const identityPack = sanitizeIdentityPack(raw.identityPack, imageRefs);
   return {
     id: ensureId(raw.id, idPrefix),
     name,
@@ -1027,10 +1161,16 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
     // Voice binding for VO synthesis (kokoro/piper local OSS, ElevenLabs
     // when configured). null = use the project default at synth time.
     voiceId: trimTo(raw.voiceId, BIBLE_LIMITS.VOICE_ID_MAX) || null,
+    // Optional portable production direction. Its allowlisted sanitizer keeps
+    // local profile ids, recordings, provider ids, and model revisions out.
+    ...(voiceCanon ? { voiceCanon } : {}),
     imageRefs,
     // Pinned visual anchor (A3). One of imageRefs marked canonical so
     // downstream renders + the UI know which to lean on.
     primaryImageRef: derivePrimaryImageRef(raw.primaryImageRef, imageRefs),
+    // Curated role assignments over existing imageRefs[]. Candidates remain
+    // unapproved until the editor explicitly approves them.
+    ...(identityPack ? { identityPack } : {}),
     // Generated character reference sheet filename (lives in data/image-refs/,
     // not in imageRefs[] — the sheet is operational metadata, not a candidate
     // for arbitrary panel reference). Basename-validated so an LLM-extracted

@@ -117,6 +117,37 @@ describe('VoiceCallHost', () => {
     expect(screen.getByText('Detach call host')).toBeTruthy();
   });
 
+  it('pauses call audio when the server cancels a timed-out voice turn', async () => {
+    const makeElement = () => ({
+      addEventListener: vi.fn(),
+      play: vi.fn(() => Promise.resolve()),
+      pause: vi.fn(),
+      setSinkId: vi.fn(() => Promise.resolve()),
+      src: '',
+    });
+    const [first, second] = [makeElement(), makeElement()];
+    const elements = [first, second];
+    vi.stubGlobal('Audio', function FakeAudio() { return elements.shift(); });
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal('URL', {
+      createObjectURL: vi.fn(() => 'blob:call-audio'),
+      revokeObjectURL,
+    });
+    render(<VoiceCallHost />, { wrapper: MemoryRouter });
+
+    act(() => {
+      socket.__fire('voice:call:tts', { wav: new ArrayBuffer(8) });
+      socket.__fire('voice:call:tts', { wav: new ArrayBuffer(8) });
+    });
+    await waitFor(() => expect(first.play).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(second.play).toHaveBeenCalledTimes(1));
+    act(() => socket.__fire('voice:tts:cancel'));
+
+    expect(first.pause).toHaveBeenCalledTimes(1);
+    expect(second.pause).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURL).toHaveBeenCalledTimes(2);
+  });
+
   it('detaches on unmount so a closed tab does not leave a phantom host', () => {
     const { unmount } = render(<VoiceCallHost />, { wrapper: MemoryRouter });
     unmount();

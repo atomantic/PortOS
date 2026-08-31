@@ -7,16 +7,25 @@ const getPaletteManifest = vi.fn();
 const getInstanceFeatures = vi.fn();
 const getDashboardLayouts = vi.fn();
 const search = vi.fn(() => Promise.resolve({ sources: [] }));
+const runPaletteAction = vi.fn(() => Promise.resolve({ ok: true }));
+const toast = vi.hoisted(() => {
+  const mock = vi.fn();
+  mock.success = vi.fn();
+  mock.error = vi.fn();
+  return mock;
+});
 
 vi.mock('../services/api', () => ({
   search: (...args) => search(...args),
   getPaletteManifest: (...args) => getPaletteManifest(...args),
   getInstanceFeatures: (...args) => getInstanceFeatures(...args),
-  runPaletteAction: vi.fn(() => Promise.resolve({ ok: true })),
+  runPaletteAction: (...args) => runPaletteAction(...args),
   getDashboardLayouts: (...args) => getDashboardLayouts(...args),
   setActiveDashboardLayout: vi.fn(() => Promise.resolve()),
   listCatalogIngredients: vi.fn(() => Promise.resolve({ items: [] })),
 }));
+
+vi.mock('./ui/Toast', () => ({ default: toast }));
 
 import { __resetInstanceFeatureCache } from '../hooks/useInstanceFeatures.js';
 import CmdKSearch from './CmdKSearch.jsx';
@@ -48,7 +57,200 @@ beforeEach(() => {
   getDashboardLayouts.mockResolvedValue({ layouts: [] });
   search.mockReset();
   search.mockResolvedValue({ sources: [] });
+  runPaletteAction.mockReset();
+  runPaletteAction.mockResolvedValue({ ok: true });
+  toast.mockReset();
+  toast.success.mockReset();
+  toast.error.mockReset();
   HTMLElement.prototype.scrollIntoView = vi.fn();
+});
+
+const BRAIN_CAPTURE = {
+  id: 'brain_capture',
+  label: 'Capture to Brain',
+  section: 'Brain',
+  description: 'Capture a thought',
+  aliases: [],
+  keywords: [],
+  parameters: {
+    type: 'object',
+    required: ['text'],
+    properties: { text: { type: 'string' } },
+  },
+};
+
+const renderBrainCapturePalette = async () => {
+  getPaletteManifest.mockResolvedValue({ nav: [], actions: [BRAIN_CAPTURE] });
+  render(
+    <MemoryRouter>
+      <CmdKSearch />
+    </MemoryRouter>,
+  );
+  fireEvent.keyDown(document, { key: 'k', metaKey: true });
+  return screen.findByRole('dialog', { name: 'Command palette' });
+};
+
+describe('CmdKSearch inline Brain capture', () => {
+  it('enters capture mode by mouse with a focused dedicated input', async () => {
+    await renderBrainCapturePalette();
+
+    fireEvent.click(await screen.findByRole('option', { name: /Capture to Brain/ }));
+
+    const input = screen.getByRole('textbox', { name: 'Capture to Brain' });
+    expect(input).toHaveFocus();
+    expect(input).toHaveAttribute('placeholder', 'Thought or URL…');
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it('does not submit while Enter is committing an IME composition', async () => {
+    await renderBrainCapturePalette();
+    fireEvent.click(await screen.findByRole('option', { name: /Capture to Brain/ }));
+    const input = screen.getByRole('textbox', { name: 'Capture to Brain' });
+    fireEvent.change(input, { target: { value: '候補' } });
+
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true, keyCode: 229 });
+
+    expect(runPaletteAction).not.toHaveBeenCalled();
+    expect(input).toHaveValue('候補');
+  });
+
+  it('enters capture mode from the keyboard', async () => {
+    await renderBrainCapturePalette();
+    const input = screen.getByRole('textbox', { name: 'Command palette' });
+
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    expect(screen.getByRole('textbox', { name: 'Capture to Brain' })).toHaveFocus();
+  });
+
+  it('blocks blank drafts and submits trimmed text before closing on success', async () => {
+    runPaletteAction.mockResolvedValue({ ok: true, result: { summary: 'Thought captured.' } });
+    await renderBrainCapturePalette();
+    fireEvent.click(await screen.findByRole('option', { name: /Capture to Brain/ }));
+    const input = screen.getByRole('textbox', { name: 'Capture to Brain' });
+
+    fireEvent.change(input, { target: { value: '   ' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('button', { name: 'Capture thought' }));
+    expect(runPaletteAction).not.toHaveBeenCalled();
+
+    fireEvent.change(input, { target: { value: '  Remember this idea  ' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(runPaletteAction).toHaveBeenCalledWith('brain_capture', { text: 'Remember this idea' }));
+    expect(runPaletteAction).toHaveBeenCalledTimes(1);
+    expect(toast.success).toHaveBeenCalledWith('Thought captured.');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    fireEvent.keyDown(document, { key: 'k', metaKey: true });
+    fireEvent.click(await screen.findByRole('option', { name: /Capture to Brain/ }));
+    expect(screen.getByRole('textbox', { name: 'Capture to Brain' })).toHaveValue('');
+  });
+
+  it('prevents duplicate submissions while capture is pending', async () => {
+    let resolveCapture;
+    runPaletteAction.mockImplementation(() => new Promise((resolve) => { resolveCapture = resolve; }));
+    await renderBrainCapturePalette();
+    fireEvent.click(await screen.findByRole('option', { name: /Capture to Brain/ }));
+    const input = screen.getByRole('textbox', { name: 'Capture to Brain' });
+    fireEvent.change(input, { target: { value: 'One thought' } });
+
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('button', { name: 'Capture thought' }));
+
+    expect(runPaletteAction).toHaveBeenCalledTimes(1);
+    await act(async () => { resolveCapture({ ok: true, result: { summary: 'Captured.' } }); });
+  });
+
+  it('keeps focus inside the dialog during a pending mouse submission', async () => {
+    let resolveCapture;
+    runPaletteAction.mockImplementation(() => new Promise((resolve) => { resolveCapture = resolve; }));
+    await renderBrainCapturePalette();
+    fireEvent.click(await screen.findByRole('option', { name: /Capture to Brain/ }));
+    const input = screen.getByRole('textbox', { name: 'Capture to Brain' });
+    fireEvent.change(input, { target: { value: 'Mouse thought' } });
+    const button = screen.getByRole('button', { name: 'Capture thought' });
+    button.focus();
+
+    fireEvent.click(button);
+
+    expect(input).toHaveFocus();
+    expect(input).toHaveAttribute('readonly');
+    await act(async () => { resolveCapture({ ok: true, result: { summary: 'Captured.' } }); });
+  });
+
+  it('keeps the full draft open after a failed request without a second error toast', async () => {
+    runPaletteAction.mockRejectedValue(new Error('Capture failed'));
+    await renderBrainCapturePalette();
+    fireEvent.click(await screen.findByRole('option', { name: /Capture to Brain/ }));
+    const input = screen.getByRole('textbox', { name: 'Capture to Brain' });
+    fireEvent.change(input, { target: { value: '  Keep my spacing  ' } });
+
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(runPaletteAction).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument();
+    expect(input).toHaveValue('  Keep my spacing  ');
+    expect(input).toHaveFocus();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('uses Escape to return to the prior query before closing the palette', async () => {
+    await renderBrainCapturePalette();
+    const searchInput = screen.getByRole('textbox', { name: 'Command palette' });
+    fireEvent.change(searchInput, { target: { value: 'capture' } });
+    fireEvent.keyDown(searchInput, { key: 'Enter' });
+    const captureInput = screen.getByRole('textbox', { name: 'Capture to Brain' });
+    fireEvent.change(captureInput, { target: { value: 'Draft thought' } });
+    const leakedEscape = vi.fn();
+    window.addEventListener('keydown', leakedEscape);
+
+    fireEvent.keyDown(captureInput, { key: 'Escape' });
+    window.removeEventListener('keydown', leakedEscape);
+
+    expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument();
+    const restoredSearch = screen.getByRole('textbox', { name: 'Command palette' });
+    expect(restoredSearch).toHaveValue('capture');
+    expect(restoredSearch).toHaveFocus();
+    expect(leakedEscape).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(restoredSearch, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('ignores a pending capture result after Escape returns to search', async () => {
+    let resolveCapture;
+    runPaletteAction.mockImplementation(() => new Promise((resolve) => { resolveCapture = resolve; }));
+    await renderBrainCapturePalette();
+    fireEvent.click(await screen.findByRole('option', { name: /Capture to Brain/ }));
+    const captureInput = screen.getByRole('textbox', { name: 'Capture to Brain' });
+    fireEvent.change(captureInput, { target: { value: 'Pending thought' } });
+    fireEvent.keyDown(captureInput, { key: 'Enter' });
+
+    fireEvent.keyDown(captureInput, { key: 'Escape' });
+    const searchInput = screen.getByRole('textbox', { name: 'Command palette' });
+    fireEvent.change(searchInput, { target: { value: 'keep searching' } });
+    await act(async () => { resolveCapture({ ok: true, result: { summary: 'Captured.' } }); });
+
+    expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument();
+    expect(searchInput).toHaveValue('keep searching');
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('resets capture state when dismissed through the backdrop', async () => {
+    const dialog = await renderBrainCapturePalette();
+    fireEvent.click(await screen.findByRole('option', { name: /Capture to Brain/ }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Capture to Brain' }), { target: { value: 'Discard me' } });
+
+    fireEvent.click(dialog.parentElement.querySelector('[aria-hidden="true"]'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    fireEvent.keyDown(document, { key: 'k', metaKey: true });
+    expect(await screen.findByRole('textbox', { name: 'Command palette' })).toHaveValue('');
+    fireEvent.click(await screen.findByRole('option', { name: /Capture to Brain/ }));
+    expect(screen.getByRole('textbox', { name: 'Capture to Brain' })).toHaveValue('');
+  });
 });
 
 describe('CmdKSearch dialog accessibility', () => {

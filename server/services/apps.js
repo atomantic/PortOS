@@ -399,6 +399,7 @@ export async function createApp(appData) {
     name: appData.name,
     description: appData.description || '',
     repoPath: appData.repoPath,
+    companionRepoPaths: Array.isArray(appData.companionRepoPaths) ? [...appData.companionRepoPaths] : [],
     type: appData.type || 'unknown',
     uiPort: appData.uiPort || null,
     devUiPort: appData.devUiPort || null,
@@ -692,7 +693,11 @@ export async function updateAppTaskTypeOverride(id, taskType, { enabled, interva
   // cosTaskGenerator.js.
   if (taskType === 'pr-watcher' && enabled === false) {
     delete data.apps[id].prWatcherState;
-    await resetPrWatcherCooldown(id);
+    await resetWatcherCooldown('pr-watcher', id);
+  }
+  if (taskType === 'issue-watcher' && enabled === false) {
+    delete data.apps[id].issueWatcherState;
+    await resetWatcherCooldown('issue-watcher', id);
   }
 
   data.apps[id].taskTypeOverrides = overrides;
@@ -713,16 +718,16 @@ export async function updateAppTaskTypeOverride(id, taskType, { enabled, interva
  * storage failure must not block the primary app-disable write, but it is logged
  * with app context instead of disappearing.
  */
-async function resetPrWatcherCooldown(appId) {
+async function resetWatcherCooldown(taskType, appId) {
   try {
     const { resetExecutionHistory } = await import('./taskSchedule.js');
-    const result = await resetExecutionHistory('pr-watcher', appId);
+    const result = await resetExecutionHistory(taskType, appId);
     if (result?.error && result.error !== 'No execution history found') {
-      console.error(`❌ Failed to reset pr-watcher cooldown for app ${appId}: ${result.error}`);
+      console.error(`❌ Failed to reset ${taskType} cooldown for app ${appId}: ${result.error}`);
     }
     return result;
   } catch (err) {
-    console.error(`❌ Failed to reset pr-watcher cooldown for app ${appId}: ${err.message}`);
+    console.error(`❌ Failed to reset ${taskType} cooldown for app ${appId}: ${err.message}`);
     return { error: err.message };
   }
 }
@@ -740,6 +745,20 @@ export async function clearAllPrWatcherState() {
   for (const app of Object.values(data.apps)) {
     if (app.prWatcherState) {
       delete app.prWatcherState;
+      changed = true;
+    }
+  }
+  if (changed) await saveApps(data);
+  return { changed };
+}
+
+/** Clear issue-watcher cursors/pending approvals on global disable. */
+export async function clearAllIssueWatcherState() {
+  const data = await loadApps();
+  let changed = false;
+  for (const app of Object.values(data.apps)) {
+    if (app.issueWatcherState) {
+      delete app.issueWatcherState;
       changed = true;
     }
   }
@@ -770,7 +789,11 @@ export async function bulkUpdateAppTaskTypeOverride(taskType, { enabled } = {}) 
     // See updateAppTaskTypeOverride: clear pr-watcher's mark + cooldown on disable.
     if (taskType === 'pr-watcher' && enabled === false) {
       delete data.apps[id].prWatcherState;
-      await resetPrWatcherCooldown(id);
+      await resetWatcherCooldown('pr-watcher', id);
+    }
+    if (taskType === 'issue-watcher' && enabled === false) {
+      delete data.apps[id].issueWatcherState;
+      await resetWatcherCooldown('issue-watcher', id);
     }
 
     data.apps[id].taskTypeOverrides = overrides;
@@ -803,7 +826,9 @@ export async function toggleAllAppTaskTypes(id, enabled) {
   // a later re-enable baselines promptly. See updateAppTaskTypeOverride.
   if (enabled === false) {
     delete data.apps[id].prWatcherState;
-    await resetPrWatcherCooldown(id);
+    delete data.apps[id].issueWatcherState;
+    await resetWatcherCooldown('pr-watcher', id);
+    await resetWatcherCooldown('issue-watcher', id);
   }
 
   data.apps[id].taskTypeOverrides = overrides;

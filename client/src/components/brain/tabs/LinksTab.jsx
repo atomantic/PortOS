@@ -72,6 +72,47 @@ const CLONE_STATUS_STYLES = {
   failed: 'text-port-error'
 };
 
+/** A clone the server is still working on — the only reason this tab polls. */
+const isCloneInFlight = (link) => link.cloneStatus === 'cloning' || link.cloneStatus === 'pending';
+
+const CLONE_POLL_INTERVAL_MS = 3000;
+
+// Give up polling a clone that has shown no progress for roughly this long. A
+// server restart mid-clone strands the record at `cloning` forever (only the
+// promise callbacks in `cloneRepoInBackground` reset it), and without this
+// bound the poll below becomes the permanent steady state of the Links tab.
+// Any status change restarts the count; once it expires the badge says so
+// (#5463 tracks giving the stranded record itself a way back).
+const CLONE_POLL_STALL_MS = 10 * 60 * 1000;
+
+// Counted in TICKS, not wall-clock: `useAutoRefetch` pauses while the tab is
+// hidden, so a wall-clock deadline would be tripped by the resume tick alone
+// after the user left the tab backgrounded — abandoning a clone that may well
+// have finished. Ticks only accrue while we are actually looking.
+const CLONE_POLL_STALL_TICKS = Math.ceil(CLONE_POLL_STALL_MS / CLONE_POLL_INTERVAL_MS);
+
+// The fields the background clone and its post-clone intake write. The poll
+// merges ONLY these onto the record it already has, so a response that was
+// already in flight when the user renamed a link or dragged its chip cannot
+// revert that edit with a pre-edit snapshot of the whole record. All five are
+// server-owned; nothing in this tab edits them locally.
+const CLONE_PROGRESS_FIELDS = ['cloneStatus', 'cloneError', 'localPath', 'malwareScan', 'repoStudy'];
+
+// `malwareScan` / `repoStudy` arrive as fresh objects on every fetch, so they
+// need a value comparison — otherwise every tick would look like a change and
+// re-render the whole list. A false "changed" costs one render; there is no
+// false "same" for equal content the server serializes consistently.
+const sameFieldValue = (a, b) => a === b || JSON.stringify(a) === JSON.stringify(b);
+
+/** The clone-progress fields that actually moved, or null when none did. */
+function cloneProgressPatch(fresh, current) {
+  const patch = {};
+  for (const field of CLONE_PROGRESS_FIELDS) {
+    if (!sameFieldValue(fresh[field], current[field])) patch[field] = fresh[field];
+  }
+  return Object.keys(patch).length > 0 ? patch : null;
+}
+
 export default function LinksTab({ onRefresh }) {
   const [inputUrl, setInputUrl] = useState('');
   const [inputTitle, setInputTitle] = useState('');
@@ -107,9 +148,74 @@ export default function LinksTab({ onRefresh }) {
       .catch(() => setBuckets([]));
   }, [fetchLinks]);
 
-  // Poll for clone status updates while at least one link is in flight.
-  const hasInFlightClone = links.some(l => l.cloneStatus === 'cloning' || l.cloneStatus === 'pending');
-  useAutoRefetch(fetchLinks, 3000, { enabled: hasInFlightClone, pollOnly: true });
+  // Poll ONLY the links whose clone is in flight, patching each fresh record
+  // into local state. Re-running `fetchLinks` here re-read and re-parsed every
+  // link record server-side (one file read per link, up to 5000) and replaced
+  // the whole array — re-rendering every bucket board, chip, and search result
+  // — every 3s just to move one status badge (#5442).
+  const inFlight = links.filter(isCloneInFlight);
+  const inFlightIds = inFlight.map(l => l.id);
+  // Identity of the in-flight SET and its statuses. A change here is progress,
+  // so it restarts the no-progress tick count; an unrelated `links` update (an
+  // edit, a bucket drag) leaves both the count and the poll callback alone.
+  const inFlightKey = inFlight.map(l => `${l.id}:${l.cloneStatus}`).join('|');
+
+  const [stalledPollKey, setStalledPollKey] = useState(null);
+  // Ticks since the in-flight set last moved, and a monotonic id so a slow
+  // response can't land on top of a newer one.
+  const noProgressTicksRef = useRef(0);
+  const pollGenerationRef = useRef(0);
+  useEffect(() => {
+    noProgressTicksRef.current = 0;
+  }, [inFlightKey]);
+
+  // Depends on `inFlightKey` alone: the same key means the same ids, so the
+  // closure over `inFlightIds` can never go stale.
+  const pollInFlightClones = useCallback(async () => {
+    if (noProgressTicksRef.current >= CLONE_POLL_STALL_TICKS) {
+      setStalledPollKey(inFlightKey);
+      return;
+    }
+    noProgressTicksRef.current += 1;
+    const generation = ++pollGenerationRef.current;
+    // A 404 means the user deleted the bookmark mid-clone: drop it, or its id
+    // stays in the in-flight set and is polled until the stall bound. Any other
+    // failure is transient and leaves that link exactly as it is.
+    const settled = await Promise.all(inFlightIds.map(id => api.getBrainLink(id, { silent: true })
+      .then(fresh => ({ id, fresh }))
+      .catch(err => ({ id, gone: err?.status === 404 }))));
+    // A response slower than the interval would otherwise patch a finished
+    // clone back to `cloning`, restarting the poll and the stall count.
+    if (generation !== pollGenerationRef.current) return;
+    const byId = new Map(settled.map(r => [r.id, r]));
+    setLinks(prev => {
+      let changed = false;
+      const next = [];
+      for (const link of prev) {
+        const result = byId.get(link.id);
+        if (result?.gone) { changed = true; continue; }
+        const patch = result?.fresh ? cloneProgressPatch(result.fresh, link) : null;
+        if (!patch) { next.push(link); continue; }
+        changed = true;
+        next.push({ ...link, ...patch });
+      }
+      // Unchanged records keep their identity — and an all-quiet tick keeps the
+      // array itself — so the boards, chips, and search don't re-render.
+      return changed ? next : prev;
+    });
+  }, [inFlightKey]);
+
+  // True once the poll gave up: the badges below say so rather than showing a
+  // spinner for a status nothing is watching any more.
+  const cloneWatchStalled = inFlightIds.length > 0 && stalledPollKey === inFlightKey;
+
+  useAutoRefetch(pollInFlightClones, CLONE_POLL_INTERVAL_MS, {
+    enabled: inFlightIds.length > 0 && !cloneWatchStalled,
+    // The initial `fetchLinks` already delivered current statuses, so the first
+    // tick belongs one interval out, not immediately on enable.
+    immediate: false,
+    pollOnly: true
+  });
 
   // Client-side filter (type / bucket membership) then keyword search.
   const matchesFilter = (link) => {
@@ -694,6 +800,14 @@ export default function LinksTab({ onRefresh }) {
                       {link.cloneStatus === 'cloning' && 'Cloning...'}
                       {link.cloneStatus === 'pending' && 'Pending clone'}
                       {link.cloneStatus === 'failed' && 'Clone failed'}
+                      {cloneWatchStalled && isCloneInFlight(link) && (
+                        <span
+                          className="text-gray-500"
+                          title="No change for 10 minutes — this tab stopped checking. Reload the page to resume."
+                        >
+                          (stalled)
+                        </span>
+                      )}
                     </span>
 
                     {/* Clone error */}

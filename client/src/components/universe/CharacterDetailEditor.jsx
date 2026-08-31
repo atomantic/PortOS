@@ -10,15 +10,28 @@
  * only knows the field shape.
  */
 
+import { useEffect, useRef, useState } from 'react';
 import {
   Plus, Trash2, WandSparkles, Loader2,
   Palette, Hand, Smile, Package, BookOpen, Eye, Activity, Users, Swords,
-  Drama, KeyRound,
+  Drama, KeyRound, Mic, Images, BadgeCheck, Play,
 } from 'lucide-react';
 import { BIBLE_LIMITS as L } from '../../lib/bibleLimits';
 import useFieldDraft from '../../hooks/useFieldDraft';
 import useRowDraft from '../../hooks/useRowDraft';
 import usePendingListRows from '../../hooks/usePendingListRows';
+import useAsyncAction from '../../hooks/useAsyncAction';
+import {
+  listVoiceEngines,
+  listVoiceProfiles,
+  promoteVoicePreset,
+  renderVoiceProfileBenchmark,
+  createVoiceDesignCandidate,
+  createClonedVoiceCandidate,
+  promoteVoiceProfile,
+  benchmarkProfileInteractive,
+  startFineTuningJob,
+} from '../../services/apiVoice';
 import VoicePicker from '../voice/VoicePicker';
 import CollapsibleSection from '../ui/CollapsibleSection';
 
@@ -82,6 +95,12 @@ const RELATIONSHIP_OPPOSITION_AXES = Object.freeze([
 // the field. `''` = unset.
 const CHARACTER_ARC_TYPES = Object.freeze(['positive', 'negative', 'flat']);
 const SLIDER_AXES = Object.freeze(['proactivity', 'likability', 'competence']);
+const VOICE_SOURCE_POLICIES = Object.freeze(['designed', 'consented-performance', 'licensed']);
+const IDENTITY_ASSET_ROLES = Object.freeze([
+  'neutral', 'profile', 'full-body', 'expression-gesture', 'wardrobe',
+  'prop-scale', 'negative-identity',
+]);
+const REQUIRED_IDENTITY_ROLES = Object.freeze(['neutral', 'profile', 'full-body']);
 
 const LIST_SECTIONS = Object.freeze([
   {
@@ -593,7 +612,631 @@ function ArcFrameworkControls({ entry, onPatch, disabled, idPrefix }) {
   );
 }
 
-export default function CharacterDetailEditor({ entry, onPatch, onExpand, expanding = false, disabled = false, characters = [] }) {
+const splitProductionTerms = (value, max, itemMax) => value
+  .split(',')
+  .map((item) => item.trim().slice(0, itemMax))
+  .filter(Boolean)
+  .slice(0, max);
+
+function VoiceCanonPronunciationRow({ row, idx, onChange, onRemove, disabled }) {
+  const term = useFieldDraft(row.term || '', (value) => onChange({ term: value }));
+  const pronunciation = useFieldDraft(row.pronunciation || '', (value) => onChange({ pronunciation: value }));
+  return (
+    <div className="flex items-start gap-1.5">
+      <input
+        type="text" value={term.value} onChange={term.onChange} onBlur={term.onBlur}
+        maxLength={L.VOICE_CANON_PRONUNCIATION_TERM_MAX} placeholder="term"
+        disabled={disabled} aria-label={`pronunciation ${idx + 1} term`}
+        className={REL_SELECT_CLASS}
+      />
+      <input
+        type="text" value={pronunciation.value} onChange={pronunciation.onChange} onBlur={pronunciation.onBlur}
+        maxLength={L.VOICE_CANON_PRONUNCIATION_VALUE_MAX} placeholder="how it is said"
+        disabled={disabled} aria-label={`pronunciation ${idx + 1} pronunciation`}
+        className={REL_SELECT_CLASS}
+      />
+      <button
+        type="button" onClick={onRemove} disabled={disabled}
+        title="Remove pronunciation" aria-label={`remove pronunciation ${idx + 1}`}
+        className="shrink-0 text-gray-500 hover:text-port-error disabled:opacity-30"
+      >
+        <Trash2 size={12} />
+      </button>
+    </div>
+  );
+}
+
+function VoiceCanonSection({ entry, onPatch, disabled }) {
+  const canon = entry.voiceCanon || {};
+  const [newPronunciation, setNewPronunciation] = useState({ term: '', pronunciation: '' });
+  const commit = (patch) => {
+    const approvalPatch = Object.hasOwn(patch, 'approved') ? {} : { approved: false };
+    onPatch?.({
+      voiceCanon: { version: 1, ...canon, ...patch, ...approvalPatch },
+    });
+  };
+  const description = useFieldDraft(canon.description || '', (value) => commit({ description: value }));
+  const delivery = useFieldDraft(canon.defaultDelivery || '', (value) => commit({ defaultDelivery: value }));
+  const emotionalRange = useFieldDraft((canon.emotionalRange || []).join(', '), (value) => commit({
+    emotionalRange: splitProductionTerms(value, L.VOICE_CANON_RANGE_MAX, L.VOICE_CANON_RANGE_ITEM_MAX),
+  }));
+  const avoid = useFieldDraft((canon.avoid || []).join(', '), (value) => commit({
+    avoid: splitProductionTerms(value, L.VOICE_CANON_AVOID_MAX, L.VOICE_CANON_AVOID_ITEM_MAX),
+  }));
+  const pronunciations = Array.isArray(canon.pronunciations) ? canon.pronunciations : [];
+  const newTerm = newPronunciation.term.trim();
+  const newValue = newPronunciation.pronunciation.trim();
+  const addPronunciation = () => {
+    if (!newTerm || !newValue) return;
+    commit({ pronunciations: [...pronunciations, { term: newTerm, pronunciation: newValue }] });
+    setNewPronunciation({ term: '', pronunciation: '' });
+  };
+  const approved = canon.approved === true;
+  return (
+    <BoxedSection icon={Mic} label="Voice canon" summary={approved ? `v${canon.version || 1} approved` : 'candidate'}>
+      <p className="text-[10px] leading-snug text-gray-500">
+        Portable performance direction only. Local profiles, recordings, providers, and model artifacts stay machine-local.
+      </p>
+      <div className="grid grid-cols-2 gap-1.5">
+        <div>
+          <label htmlFor={`voice-canon-version-${entry.id}`} className="block text-[10px] uppercase tracking-wider text-gray-500">Revision</label>
+          <input
+            id={`voice-canon-version-${entry.id}`} type="number" min="1" max={L.VOICE_CANON_VERSION_MAX}
+            value={canon.version || 1} onChange={(e) => commit({ version: Number(e.target.value) || 1 })}
+            disabled={disabled} className={REL_INPUT_CLASS}
+          />
+        </div>
+        <div>
+          <label htmlFor={`voice-canon-source-${entry.id}`} className="block text-[10px] uppercase tracking-wider text-gray-500">Source policy</label>
+          <select
+            id={`voice-canon-source-${entry.id}`} value={canon.sourcePolicy || ''}
+            onChange={(e) => commit({ sourcePolicy: e.target.value || null })} disabled={disabled}
+            className={REL_INPUT_CLASS}
+          >
+            <option value="">— unset —</option>
+            {VOICE_SOURCE_POLICIES.map((policy) => <option key={policy} value={policy}>{policy}</option>)}
+          </select>
+        </div>
+      </div>
+      <label className="flex items-center gap-1.5 text-[11px] text-gray-300">
+        <input type="checkbox" checked={approved} onChange={(e) => commit({ approved: e.target.checked })} disabled={disabled} />
+        <BadgeCheck size={12} className={approved ? 'text-port-success' : 'text-gray-500'} />
+        {approved ? 'Approved revision' : 'Candidate revision'}
+      </label>
+      <textarea
+        value={description.value} onChange={description.onChange} onBlur={description.onBlur}
+        placeholder="Voice description: timbre, texture, breath, and register"
+        maxLength={L.VOICE_CANON_DESCRIPTION_MAX} disabled={disabled} rows={2}
+        aria-label="voice canon description" className={REL_INPUT_CLASS}
+      />
+      <textarea
+        value={delivery.value} onChange={delivery.onChange} onBlur={delivery.onBlur}
+        placeholder="Default delivery: pacing, pauses, energy, and distance"
+        maxLength={L.VOICE_CANON_DELIVERY_MAX} disabled={disabled} rows={2}
+        aria-label="voice canon default delivery" className={REL_INPUT_CLASS}
+      />
+      <input
+        type="text" value={emotionalRange.value} onChange={emotionalRange.onChange} onBlur={emotionalRange.onBlur}
+        placeholder="Emotional range, comma-separated" maxLength={L.VOICE_CANON_RANGE_MAX * L.VOICE_CANON_RANGE_ITEM_MAX}
+        disabled={disabled} aria-label="voice canon emotional range" className={REL_INPUT_CLASS}
+      />
+      <input
+        type="text" value={avoid.value} onChange={avoid.onChange} onBlur={avoid.onBlur}
+        placeholder="Avoid in delivery, comma-separated" maxLength={L.VOICE_CANON_AVOID_MAX * L.VOICE_CANON_AVOID_ITEM_MAX}
+        disabled={disabled} aria-label="voice canon avoid" className={REL_INPUT_CLASS}
+      />
+      <div className="space-y-1">
+        <span className="block text-[10px] uppercase tracking-wider text-gray-500">Pronunciations</span>
+        {pronunciations.map((row, idx) => (
+          <VoiceCanonPronunciationRow
+            key={idx} row={row} idx={idx} disabled={disabled}
+            onChange={(patch) => commit({ pronunciations: pronunciations.map((item, i) => i === idx ? { ...item, ...patch } : item) })}
+            onRemove={() => commit({ pronunciations: pronunciations.filter((_, i) => i !== idx) })}
+          />
+        ))}
+        <div className="flex items-start gap-1.5">
+          <input
+            type="text" value={newPronunciation.term}
+            onChange={(e) => setNewPronunciation((current) => ({ ...current, term: e.target.value }))}
+            maxLength={L.VOICE_CANON_PRONUNCIATION_TERM_MAX} placeholder="new term"
+            disabled={disabled} aria-label="new pronunciation term" className={REL_SELECT_CLASS}
+          />
+          <input
+            type="text" value={newPronunciation.pronunciation}
+            onChange={(e) => setNewPronunciation((current) => ({ ...current, pronunciation: e.target.value }))}
+            maxLength={L.VOICE_CANON_PRONUNCIATION_VALUE_MAX} placeholder="how it is said"
+            disabled={disabled} aria-label="new pronunciation value" className={REL_SELECT_CLASS}
+          />
+        </div>
+        <button
+          type="button" disabled={disabled || !newTerm || !newValue || pronunciations.length >= L.VOICE_CANON_PRONUNCIATIONS_MAX}
+          onClick={addPronunciation}
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+        >
+          <Plus size={10} /> Add pronunciation
+        </button>
+      </div>
+    </BoxedSection>
+  );
+}
+
+function VoiceProfileSection({ universeId, entry, disabled }) {
+  const [profile, setProfile] = useState(null);
+  const [profiles, setProfiles] = useState([]);
+  const [loading, setLoading] = useState(Boolean(universeId));
+  const [loadError, setLoadError] = useState(null);
+  const [_engineCapability, setEngineCapability] = useState(null);
+  const [activeTab, setActiveTab] = useState('overview');
+
+  // Voice Design form state
+  const [designInstructions, setDesignInstructions] = useState('');
+  const [designSeed, setDesignSeed] = useState(42);
+  const [designRate, setDesignRate] = useState(1.0);
+
+  // Consented Cloning form state
+  const [cloneFile, setCloneFile] = useState(null);
+  const [cloneFileName, setCloneFileName] = useState('');
+  const [cloneTranscript, setCloneTranscript] = useState('');
+  const [cloneConsentConfirmed, setCloneConsentConfirmed] = useState(false);
+  const [cloneLicensePosture, _setCloneLicensePosture] = useState('consented-performance');
+
+  // Fine-tuning state
+  const [fineTuneEpochs, setFineTuneEpochs] = useState(5);
+  const [fineTuneJob, setFineTuneJob] = useState(null);
+
+  const loadGeneration = useRef(0);
+
+  const refreshProfiles = async () => {
+    if (!universeId || !entry?.id) return;
+    const result = await listVoiceProfiles({ universeId, characterId: entry.id }, { silent: true });
+    const list = Array.isArray(result?.profiles) ? result.profiles : [];
+    setProfiles(list);
+    const active = list.find((p) => p.approval?.status === 'approved') || list[0] || null;
+    if (active) setProfile(active);
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const generation = ++loadGeneration.current;
+    if (!universeId || !entry?.id) {
+      setProfile(null);
+      setProfiles([]);
+      setLoading(false);
+      return () => { cancelled = true; };
+    }
+    setLoading(true);
+    listVoiceProfiles({ universeId, characterId: entry.id }, { silent: true })
+      .then((result) => {
+        if (cancelled || generation !== loadGeneration.current) return;
+        const list = Array.isArray(result?.profiles) ? result.profiles : [];
+        setProfiles(list);
+        const active = list.find((p) => p.approval?.status === 'approved') || list[0] || null;
+        setProfile(active);
+        setLoadError(null);
+      })
+      .catch((err) => {
+        if (!cancelled && generation === loadGeneration.current) {
+          setLoadError(err?.message || 'Failed to load voice profiles');
+        }
+      })
+      .finally(() => {
+        if (!cancelled && generation === loadGeneration.current) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [universeId, entry?.id]);
+
+  useEffect(() => {
+    if (!universeId) return undefined;
+    let cancelled = false;
+    listVoiceEngines({ silent: true })
+      .then((result) => {
+        if (cancelled) return;
+        const engine = entry?.voiceId?.split(':')[0] || 'qwen3-tts';
+        setEngineCapability((result?.engines || []).find((item) => item.id === engine) || null);
+      })
+      .catch(() => {
+        if (!cancelled) setEngineCapability(null);
+      });
+    return () => { cancelled = true; };
+  }, [universeId, entry?.voiceId]);
+
+  const [promotePreset, promotingPreset] = useAsyncAction(async () => {
+    loadGeneration.current += 1;
+    const result = await promoteVoicePreset({
+      universeId,
+      characterId: entry.id,
+      characterName: entry.name || '',
+      voiceId: entry.voiceId,
+    }, { silent: true });
+    setProfile(result?.profile || null);
+    await refreshProfiles();
+    return result;
+  }, { errorMessage: 'Could not promote preset' });
+
+  const [designVoice, designingVoice] = useAsyncAction(async () => {
+    const result = await createVoiceDesignCandidate({
+      universeId,
+      characterId: entry.id,
+      characterName: entry.name || '',
+      instructions: designInstructions,
+      seed: designSeed,
+      rate: designRate,
+    }, { silent: true });
+    await refreshProfiles();
+    return result;
+  }, { errorMessage: 'Voice design candidate generation failed' });
+
+  const [cloneVoice, cloningVoice] = useAsyncAction(async () => {
+    if (!cloneFile || !cloneConsentConfirmed) return null;
+    const arrayBuffer = await cloneFile.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    const audioBase64 = btoa(binary);
+
+    const result = await createClonedVoiceCandidate({
+      universeId,
+      characterId: entry.id,
+      characterName: entry.name || '',
+      filename: cloneFileName || cloneFile.name || 'reference.wav',
+      audioBase64,
+      transcript: cloneTranscript,
+      performerConsentConfirmed: cloneConsentConfirmed,
+      licensePosture: cloneLicensePosture,
+    }, { silent: true });
+    await refreshProfiles();
+    return result;
+  }, { errorMessage: 'Consented cloning candidate creation failed' });
+
+  const [renderBenchmark, renderingBenchmark] = useAsyncAction(async () => {
+    if (!profile?.id) return null;
+    const result = await renderVoiceProfileBenchmark(profile.id, { silent: true });
+    await refreshProfiles();
+    return result;
+  }, { errorMessage: 'Could not render voice benchmark' });
+
+  const [qualifyInteractive, qualifyingInteractive] = useAsyncAction(async () => {
+    if (!profile?.id) return null;
+    const result = await benchmarkProfileInteractive(profile.id, { maxFirstAudioMs: 900 }, { silent: true });
+    await refreshProfiles();
+    return result;
+  }, { errorMessage: 'Interactive benchmark qualification failed' });
+
+  const [promoteSelected, promotingSelected] = useAsyncAction(async (targetProfileId) => {
+    const result = await promoteVoiceProfile(targetProfileId, {}, { silent: true });
+    await refreshProfiles();
+    return result;
+  }, { errorMessage: 'Could not promote candidate profile' });
+
+  const [startFineTune, startingFineTune] = useAsyncAction(async () => {
+    if (!profile?.id) return null;
+    const result = await startFineTuningJob(profile.id, { epochs: fineTuneEpochs }, { silent: true });
+    setFineTuneJob(result);
+    return result;
+  }, { errorMessage: 'Failed to start fine-tuning' });
+
+  if (!universeId) return null;
+  const approved = profile?.approval?.status === 'approved';
+  const _benchmarkCount = profile?.benchmark?.lines?.length || 0;
+  const profileState = approved ? `approved v${profile.version} (${profile.kind})` : profile?.approval?.status || 'not promoted';
+
+  return (
+    <BoxedSection icon={Mic} label="Local voice profile & Voice Lab" summary={loading ? 'loading' : profileState}>
+      <p className="text-[10px] leading-snug text-gray-500">
+        Machine-local voice design, consented cloning, and optional fine-tuning. Candidate profiles never mutate approved character voice until explicitly promoted.
+      </p>
+      {loadError ? <p className="text-[10px] text-port-error">{loadError}</p> : null}
+
+      {/* Sub-tab navigation */}
+      <div className="flex gap-1 border-b border-port-border/40 pb-1 text-[11px]">
+        {['overview', 'design', 'clone', 'finetune'].map((tab) => (
+          <button
+            key={tab}
+            type="button"
+            onClick={() => setActiveTab(tab)}
+            className={`px-2 py-0.5 rounded capitalize ${activeTab === tab ? 'bg-port-accent text-white font-medium' : 'text-gray-400 hover:text-white'}`}
+          >
+            {tab === 'finetune' ? 'Fine-Tuning' : tab}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'overview' && (
+        <div className="space-y-2">
+          {approved ? (
+            <div className="rounded border border-port-border/40 bg-port-bg/40 p-2 space-y-1">
+              <p className="text-[11px] text-gray-300 font-medium">
+                Active Approved Voice: <span className="text-port-accent">{profile.voiceId}</span> ({profile.kind})
+              </p>
+              <p className="text-[10px] text-gray-400">
+                Model: {profile.modelRevision} · Rate: {profile.delivery?.rate ?? 1} · Studio: {profile.routes?.studio?.enabled ? 'Yes' : 'No'} · Interactive: {profile.routes?.interactive?.enabled ? 'Qualified' : 'Pending qualification'}
+              </p>
+              {profile.benchmark?.interactiveLatencyMs ? (
+                <p className="text-[10px] text-port-success">
+                  Interactive Latency Benchmark: {profile.benchmark.interactiveLatencyMs}ms (threshold: {profile.routes?.interactive?.maxFirstAudioMs || 900}ms)
+                </p>
+              ) : null}
+            </div>
+          ) : (
+            <p className="text-[10px] text-gray-500">Promote the selected Kokoro or Piper preset to give this character a stable local voice.</p>
+          )}
+
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              type="button" onClick={promotePreset} disabled={disabled || promotingPreset || !entry.voiceId}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+            >
+              <BadgeCheck size={10} /> {approved ? 'Re-promote selected preset' : 'Promote selected preset'}
+            </button>
+            <button
+              type="button" onClick={renderBenchmark} disabled={disabled || renderingBenchmark || !approved}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+            >
+              {renderingBenchmark ? <Loader2 size={10} className="animate-spin" /> : <Play size={10} />} Render fixed benchmark
+            </button>
+            <button
+              type="button" onClick={qualifyInteractive} disabled={disabled || qualifyingInteractive || !approved}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+            >
+              {qualifyingInteractive ? <Loader2 size={10} className="animate-spin" /> : <Activity size={10} />} Qualify interactive route
+            </button>
+          </div>
+
+          {profile?.benchmark?.lines?.length ? (
+            <div className="space-y-1.5">
+              <p className="text-[10px] text-gray-500">Fixed benchmark renders</p>
+              {profile.benchmark.lines.map((line, index) => (
+                <div key={line.filename} className="flex items-center gap-2">
+                  <span className="w-4 shrink-0 text-[10px] text-gray-600">{index + 1}</span>
+                  <span className="w-20 shrink-0 text-[10px] text-gray-400 truncate">{line.key}</span>
+                  <audio
+                    controls
+                    preload="none"
+                    src={`/data/${line.filename.split('/').map(encodeURIComponent).join('/')}`}
+                    aria-label={`Voice benchmark ${line.key || index + 1}`}
+                    className="h-7 min-w-0 flex-1"
+                  >
+                    <track kind="captions" />
+                  </audio>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {/* Candidate & Historical Profiles */}
+          {profiles.length > 1 && (
+            <div className="space-y-1 pt-2 border-t border-port-border/40">
+              <p className="text-[10px] text-gray-500 font-medium">Candidate & Previous Profiles</p>
+              {profiles.map((p) => (
+                <div key={p.id} className="flex items-center justify-between gap-2 p-1 text-[10px] border border-port-border/30 rounded">
+                  <div className="min-w-0 truncate">
+                    <span className="font-semibold text-gray-300">{p.voiceId}</span> ({p.kind}, v{p.version}, {p.approval?.status})
+                  </div>
+                  {p.approval?.status !== 'approved' ? (
+                    <button
+                      type="button"
+                      onClick={() => promoteSelected(p.id)}
+                      disabled={disabled || promotingSelected}
+                      className="px-1.5 py-0.5 rounded bg-port-accent/20 text-port-accent hover:bg-port-accent hover:text-white"
+                    >
+                      Promote
+                    </button>
+                  ) : (
+                    <span className="text-port-success font-medium">Active</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'design' && (
+        <div className="space-y-2">
+          <p className="text-[10px] text-gray-400">Design an original character voice via natural language instructions and seed controls (Qwen3-TTS 1.7B Voice Design).</p>
+          <div className="space-y-1.5">
+            <label className="block text-[10px] text-gray-400">
+              Voice Description & Delivery Instructions
+              <input
+                type="text"
+                value={designInstructions}
+                onChange={(e) => setDesignInstructions(e.target.value)}
+                placeholder="e.g. warm low alto; dry texture; controlled breath; intimate"
+                className="w-full mt-0.5 px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white"
+              />
+            </label>
+            <div className="flex gap-2">
+              <label className="block text-[10px] text-gray-400 flex-1">
+                Seed
+                <input
+                  type="number"
+                  value={designSeed}
+                  onChange={(e) => setDesignSeed(parseInt(e.target.value, 10) || 42)}
+                  className="w-full mt-0.5 px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white"
+                />
+              </label>
+              <label className="block text-[10px] text-gray-400 flex-1">
+                Rate Multiplier ({designRate}x)
+                <input
+                  type="range"
+                  min="0.5"
+                  max="2.0"
+                  step="0.05"
+                  value={designRate}
+                  onChange={(e) => setDesignRate(parseFloat(e.target.value))}
+                  className="w-full mt-0.5"
+                />
+              </label>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={designVoice}
+            disabled={disabled || designingVoice}
+            className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-40"
+          >
+            {designingVoice ? <Loader2 size={12} className="animate-spin" /> : <WandSparkles size={12} />}
+            Design Candidate Voice
+          </button>
+        </div>
+      )}
+
+      {activeTab === 'clone' && (
+        <div className="space-y-2">
+          <p className="text-[10px] text-gray-400">Rapid single-speaker cloning with documented consent. Audio remains strictly machine-local.</p>
+          <div className="space-y-1.5">
+            <label className="block text-[10px] text-gray-400">
+              Reference Audio File (WAV/MP3)
+              <input
+                type="file"
+                accept="audio/*"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  setCloneFile(f || null);
+                  setCloneFileName(f?.name || '');
+                }}
+                className="w-full mt-0.5 text-xs text-gray-300"
+              />
+            </label>
+            <label className="block text-[10px] text-gray-400">
+              Audio Transcription
+              <textarea
+                value={cloneTranscript}
+                onChange={(e) => setCloneTranscript(e.target.value)}
+                placeholder="Exact spoken words in the recording for conditioning alignment..."
+                rows={2}
+                className="w-full mt-0.5 px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white"
+              />
+            </label>
+            <label className="flex items-center gap-1.5 text-[10px] text-gray-300">
+              <input
+                type="checkbox"
+                checked={cloneConsentConfirmed}
+                onChange={(e) => setCloneConsentConfirmed(e.target.checked)}
+              />
+              <span>I confirm the performer consented to this voice clone and PortOS keeps this audio machine-local.</span>
+            </label>
+          </div>
+          <button
+            type="button"
+            onClick={cloneVoice}
+            disabled={disabled || cloningVoice || !cloneFile || !cloneConsentConfirmed}
+            className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-40"
+          >
+            {cloningVoice ? <Loader2 size={12} className="animate-spin" /> : <Mic size={12} />}
+            Create Cloned Candidate
+          </button>
+        </div>
+      )}
+
+      {activeTab === 'finetune' && (
+        <div className="space-y-2">
+          <p className="text-[10px] text-gray-400">Optional character voice fine-tuning. Checkpointed and cancellable; never assumes the last checkpoint is best.</p>
+          <div className="flex gap-2">
+            <label className="block text-[10px] text-gray-400 flex-1">
+              Epochs
+              <input
+                type="number"
+                value={fineTuneEpochs}
+                onChange={(e) => setFineTuneEpochs(parseInt(e.target.value, 10) || 5)}
+                min="1"
+                max="20"
+                className="w-full mt-0.5 px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white"
+              />
+            </label>
+          </div>
+          <button
+            type="button"
+            onClick={startFineTune}
+            disabled={disabled || startingFineTune || !profile?.id}
+            className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-40"
+          >
+            {startingFineTune ? <Loader2 size={12} className="animate-spin" /> : <Activity size={12} />}
+            Start Fine-Tuning Job
+          </button>
+          {fineTuneJob ? (
+            <div className="p-2 border border-port-border/40 rounded bg-port-bg/40 text-[10px] space-y-1">
+              <p>Job ID: {fineTuneJob.jobId} · Status: {fineTuneJob.status}</p>
+            </div>
+          ) : null}
+        </div>
+      )}
+    </BoxedSection>
+  );
+}
+
+function IdentityPackSection({ entry, onPatch, disabled }) {
+  const pack = entry.identityPack || {};
+  const assets = Array.isArray(pack.assets) ? pack.assets : [];
+  const approved = assets.filter((asset) => asset?.approved === true);
+  const counts = new Map();
+  for (const asset of approved) counts.set(asset.role, (counts.get(asset.role) || 0) + 1);
+  const missing = REQUIRED_IDENTITY_ROLES.filter((role) => !counts.get(role));
+  const ambiguous = REQUIRED_IDENTITY_ROLES.filter((role) => (counts.get(role) || 0) > 1);
+  const status = ambiguous.length ? 'ambiguous' : missing.length ? 'missing' : 'ready';
+  const commit = (patch) => onPatch?.({ identityPack: { ...pack, ...patch } });
+  const add = () => {
+    const imageRef = entry.imageRefs?.[0];
+    if (!imageRef) return;
+    commit({ assets: [...assets, { imageRef, role: 'neutral', approved: false }] });
+  };
+  return (
+    <BoxedSection icon={Images} label="Identity pack" summary={status}>
+      <p className="text-[10px] leading-snug text-gray-500">
+        Curate existing character references. Canon-locked production requires one approved neutral, profile, and full-body reference; duplicate approved roles are ambiguous.
+      </p>
+      {assets.length ? (
+        <div className="space-y-1.5">
+          {assets.map((asset, idx) => (
+            <div key={`${asset.role}-${asset.imageRef}-${idx}`} className="flex items-center gap-1.5">
+              <select
+                value={asset.imageRef} disabled={disabled} aria-label={`identity asset ${idx + 1} image`}
+                onChange={(e) => commit({ assets: assets.map((item, i) => i === idx ? { ...item, imageRef: e.target.value, approved: false } : item) })}
+                className={REL_SELECT_CLASS}
+              >
+                {(entry.imageRefs || []).map((ref) => <option key={ref} value={ref}>{ref}</option>)}
+              </select>
+              <select
+                value={asset.role} disabled={disabled} aria-label={`identity asset ${idx + 1} role`}
+                onChange={(e) => commit({ assets: assets.map((item, i) => i === idx ? { ...item, role: e.target.value, approved: false } : item) })}
+                className="w-32 shrink-0 px-1.5 py-0.5 text-xs bg-port-bg border border-port-border rounded text-white disabled:opacity-50"
+              >
+                {IDENTITY_ASSET_ROLES.map((role) => <option key={role} value={role}>{role}</option>)}
+              </select>
+              <label className="inline-flex items-center gap-1 text-[10px] text-gray-300 whitespace-nowrap">
+                <input
+                  type="checkbox" checked={asset.approved === true} disabled={disabled}
+                  aria-label={`approve identity asset ${idx + 1} ${asset.role}`}
+                  onChange={(e) => commit({ assets: assets.map((item, i) => i === idx ? { ...item, approved: e.target.checked } : item) })}
+                /> Approve
+              </label>
+              <button
+                type="button" disabled={disabled} onClick={() => commit({ assets: assets.filter((_, i) => i !== idx) })}
+                title="Remove identity asset" aria-label={`remove identity asset ${idx + 1}`}
+                className="shrink-0 text-gray-500 hover:text-port-error disabled:opacity-30"
+              >
+                <Trash2 size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : <p className="text-[11px] text-gray-500 italic">No identity assets curated yet.</p>}
+      {entry.imageRefs?.length ? (
+        <button
+          type="button" onClick={add} disabled={disabled || assets.length >= L.IDENTITY_PACK_ASSETS_MAX}
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+        >
+          <Plus size={10} /> Add reference
+        </button>
+      ) : <p className="text-[11px] text-gray-500 italic">Generate or attach a character reference before curating this pack.</p>}
+      {status !== 'ready' ? <p className="text-[10px] text-port-warning">{ambiguous.length ? `Ambiguous: ${ambiguous.join(', ')}` : `Missing: ${missing.join(', ')}`}</p> : null}
+    </BoxedSection>
+  );
+}
+
+export default function CharacterDetailEditor({ entry, universeId = null, onPatch, onExpand, expanding = false, disabled = false, characters = [] }) {
   if (!entry) return null;
 
   const patchField = (name, value) => onPatch?.({ [name]: value });
@@ -655,6 +1298,12 @@ export default function CharacterDetailEditor({ entry, onPatch, onExpand, expand
         disabled={disabled}
         idPrefix={entry.id}
       />
+
+      <VoiceCanonSection entry={entry} onPatch={onPatch} disabled={disabled} />
+
+      <VoiceProfileSection universeId={universeId} entry={entry} disabled={disabled} />
+
+      <IdentityPackSection entry={entry} onPatch={onPatch} disabled={disabled} />
 
       <RelationshipsSection
         entry={entry}

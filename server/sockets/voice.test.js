@@ -226,6 +226,30 @@ describe('voice:text validation', () => {
   });
 });
 
+describe('voice:text turn recovery', () => {
+  afterEach(() => runTurn.mockClear());
+
+  it('emits voice:error and voice:idle when the LLM deadline expires', async () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    runTurn.mockImplementationOnce(async () => {
+      throw new Error('Voice LLM request timed out');
+    });
+
+    socket.fire('voice:text', { text: 'hello' });
+    await vi.waitFor(() => expect(socket.emitted.filter((e) => e.event === 'voice:idle')).toHaveLength(1));
+
+    expect(socket.emitted.filter((e) => e.event === 'voice:error')).toEqual([{
+      event: 'voice:error',
+      payload: { stage: 'text', message: 'Voice LLM request timed out' },
+    }]);
+    expect(socket.emitted.filter((e) => e.event === 'voice:idle')).toEqual([{
+      event: 'voice:idle',
+      payload: { reason: 'error' },
+    }]);
+  });
+});
+
 describe('voice:output single-recipient wiring', () => {
   beforeEach(() => __resetVoiceOutput());
 

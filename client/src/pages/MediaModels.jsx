@@ -536,7 +536,7 @@ export default function MediaModels() {
             </p>
           )}
           <p className="text-[11px] text-gray-600">
-            GGUF-only, Wan, and HunyuanVideo repos are refused — no PortOS runtime can load them. For a GGUF LTX build, use the native MLX Q4 model instead.
+            GGUF-only, arbitrary Wan, and HunyuanVideo repos are refused because this flow cannot register a compatible runtime. For a GGUF LTX build, use the native MLX Q4 model instead.
           </p>
         </form>
       </div>

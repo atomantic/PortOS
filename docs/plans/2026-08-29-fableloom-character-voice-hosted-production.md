@@ -601,6 +601,12 @@ If the phone is the target, reuse `voiceClient`'s playback queue and echo memory
 
 ## Future investigation — diegetic FaceTime calls
 
+The investigation is complete. ADR
+[`2026-08-30-diegetic-facetime-transport.md`](../decisions/2026-08-30-diegetic-facetime-transport.md)
+accepts this as a later, explicitly triggered macOS transport experiment, with
+browser-hosted play retained as the canonical fallback and no simultaneous
+story-audio ownership.
+
 A later game mechanic could let an in-story character place or receive a real
 FaceTime Audio call while the computer continues an authored hold loop or
 related pre-rendered sequence. The audience would speak through the call and

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router';
-import { Brain, Cpu, Package, History, HeartPulse, Search, Loader2, Navigation, Play, LayoutGrid, BookMarked } from 'lucide-react';
+import { Brain, Cpu, Package, History, HeartPulse, Search, Loader2, Navigation, Play, LayoutGrid, BookMarked, Send } from 'lucide-react';
 import { useCmdKSearch } from '../hooks/useCmdKSearch';
 import useFocusTrap from '../hooks/useFocusTrap.js';
 import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
@@ -80,6 +80,11 @@ export default function CmdKSearch() {
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [expandedSources, setExpandedSources] = useState(new Set());
   const [recentPaths, setRecentPaths] = useState([]);
+  const [captureMode, setCaptureMode] = useState(false);
+  const [captureDraft, setCaptureDraft] = useState('');
+  const [captureSubmitting, setCaptureSubmitting] = useState(false);
+  const captureSubmittingRef = useRef(false);
+  const captureAttemptRef = useRef(0);
   const resultRefs = useRef([]);
 
   useFocusTrap(open, modalRef, { initialFocusRef: inputRef });
@@ -95,6 +100,11 @@ export default function CmdKSearch() {
   useEffect(() => {
     if (!open) {
       setQuery('');
+      setCaptureMode(false);
+      setCaptureDraft('');
+      setCaptureSubmitting(false);
+      captureSubmittingRef.current = false;
+      captureAttemptRef.current += 1;
       setSearchResults([]);
       setCatalogResults([]);
       setFocusedIndex(0);
@@ -269,7 +279,59 @@ export default function CmdKSearch() {
     if (el) el.scrollIntoView({ block: 'nearest' });
   }, [focusedIndex]);
 
-  const close = useCallback(() => setOpen(false), [setOpen]);
+  useEffect(() => {
+    if (open) inputRef.current?.focus();
+  }, [open, captureMode]);
+
+  const resetCapture = useCallback(() => {
+    captureAttemptRef.current += 1;
+    captureSubmittingRef.current = false;
+    setCaptureMode(false);
+    setCaptureDraft('');
+    setCaptureSubmitting(false);
+  }, []);
+
+  const close = useCallback(() => {
+    resetCapture();
+    setOpen(false);
+  }, [resetCapture, setOpen]);
+
+  const enterCaptureMode = useCallback(() => {
+    setCaptureMode(true);
+  }, []);
+
+  const submitCapture = useCallback(async () => {
+    const text = captureDraft.trim();
+    if (!text || captureSubmittingRef.current) return;
+
+    captureSubmittingRef.current = true;
+    inputRef.current?.focus();
+    setCaptureSubmitting(true);
+    const attempt = ++captureAttemptRef.current;
+    const res = await runPaletteAction('brain_capture', { text }).then(
+      (result) => result,
+      () => null,
+    );
+    if (attempt !== captureAttemptRef.current) return;
+
+    captureSubmittingRef.current = false;
+    setCaptureSubmitting(false);
+    if (!res) {
+      inputRef.current?.focus();
+      return;
+    }
+
+    const summary = res?.result?.summary || 'Captured to Brain.';
+    if (res?.ok === false) {
+      toast.error(summary);
+      inputRef.current?.focus();
+      return;
+    }
+
+    toast.success(summary);
+    setCaptureDraft('');
+    close();
+  }, [captureDraft, close]);
 
   const DISPATCH = useMemo(() => ({
     nav: (item) => { navigate(item.path); close(); },
@@ -291,6 +353,10 @@ export default function CmdKSearch() {
       close();
     },
     action: async (item) => {
+      if (item.id === 'brain_capture') {
+        enterCaptureMode();
+        return;
+      }
       const required = item.parameters?.required || [];
       if (required.length > 0) {
         // Keep palette open so the user can pick another command.
@@ -303,11 +369,24 @@ export default function CmdKSearch() {
       else toast.success(summary);
       close();
     },
-  }), [navigate, close]);
+  }), [navigate, close, enterCaptureMode]);
 
   const dispatchCommand = useCallback((item) => DISPATCH[item.kind]?.(item), [DISPATCH]);
 
   const handleKeyDown = (e) => {
+    if (captureMode) {
+      if (e.key === 'Enter') {
+        if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+        e.preventDefault();
+        submitCapture();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        resetCapture();
+      }
+      return;
+    }
+
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       if (focusable.length > 0) setFocusedIndex((i) => Math.min(i + 1, focusable.length - 1));
@@ -385,22 +464,55 @@ export default function CmdKSearch() {
         className="relative w-full max-w-3xl mx-4 bg-port-card rounded-xl border border-port-border shadow-2xl overflow-hidden"
       >
         <div className="flex items-center gap-3 px-4 py-4 border-b border-port-border">
-          <Search size={18} className="text-gray-400 shrink-0" />
-          <input
-            ref={inputRef}
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Go to page, run an action, or search Brain / Memory / Apps…"
-            className="flex-1 bg-transparent text-white placeholder-gray-500 outline-hidden text-sm"
-            aria-label="Command palette"
-          />
-          <span className="text-xs text-gray-500 border border-port-border rounded px-1.5 py-0.5 shrink-0">
-            {`${modKey}+K`}
-          </span>
+          {captureMode ? <Brain size={18} className="text-port-accent shrink-0" /> : <Search size={18} className="text-gray-400 shrink-0" />}
+          <div className="flex-1 min-w-0">
+            {captureMode ? (
+              <>
+                <label htmlFor="command-palette-capture" className="block text-xs font-medium text-port-accent mb-1">
+                  Capture to Brain
+                </label>
+                <input
+                  id="command-palette-capture"
+                  ref={inputRef}
+                  type="text"
+                  value={captureDraft}
+                  onChange={(e) => setCaptureDraft(e.target.value)}
+                  placeholder="Thought or URL…"
+                  className="w-full bg-transparent text-white placeholder-gray-500 outline-hidden text-sm"
+                  readOnly={captureSubmitting}
+                />
+              </>
+            ) : (
+              <input
+                ref={inputRef}
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Go to page, run an action, or search Brain / Memory / Apps…"
+                className="w-full bg-transparent text-white placeholder-gray-500 outline-hidden text-sm"
+                aria-label="Command palette"
+              />
+            )}
+          </div>
+          {captureMode ? (
+            <button
+              type="button"
+              onClick={submitCapture}
+              disabled={!captureDraft.trim() || captureSubmitting}
+              aria-label="Capture thought"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-port-accent/20 text-port-accent hover:bg-port-accent/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-sm"
+            >
+              {captureSubmitting ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+              Capture
+            </button>
+          ) : (
+            <span className="text-xs text-gray-500 border border-port-border rounded px-1.5 py-0.5 shrink-0">
+              {`${modKey}+K`}
+            </span>
+          )}
         </div>
 
-        <div className="max-h-96 overflow-y-auto p-2">
+        {!captureMode && <div className="max-h-96 overflow-y-auto p-2">
           {renderGroup(
             <History size={14} />,
             'Recent destinations',
@@ -490,10 +602,16 @@ export default function CmdKSearch() {
               </div>
             );
           })}
-        </div>
+        </div>}
+
+        {captureMode && (
+          <div className="px-4 py-5 text-sm text-gray-400">
+            Capture one unstructured thought or URL without leaving the command palette.
+          </div>
+        )}
 
         <div className="flex items-center justify-between gap-2 px-4 py-2 border-t border-port-border text-[11px] text-gray-500">
-          <span>↑↓ navigate · ↵ run · Esc close</span>
+          <span>{captureMode ? '↵ capture · Esc back' : '↑↓ navigate · ↵ run · Esc close'}</span>
           <span>Shared backbone with voice agent</span>
         </div>
       </div>

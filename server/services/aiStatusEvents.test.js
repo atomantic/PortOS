@@ -33,6 +33,22 @@ describe('startAIOp building-association fields', () => {
     expect(events.map(e => e.phase)).toEqual(['start', 'model:loading', 'complete']);
   });
 
+  it('propagates an operation id and local-only marker onto every phase event', () => {
+    const events = captureEvents(() => {
+      const op = startAIOp({
+        op: 'fableloom-feedback-episode',
+        label: 'Updating episode',
+        operationId: 'op-42',
+        localOnly: true,
+      });
+      op.update('running', 'Working…');
+      op.complete('Ready');
+    });
+
+    expect(events).toHaveLength(3);
+    expect(events.every((event) => event.operationId === 'op-42' && event.localOnly)).toBe(true);
+  });
+
   it('leaves appId/workspacePath undefined for unassociated internal ops', () => {
     const [start] = captureEvents(() => {
       startAIOp({ op: 'taste-summary', label: 'Summarizing taste' });

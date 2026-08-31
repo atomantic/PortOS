@@ -67,7 +67,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // same rationale as v6/v7/v8: additive + gracefully degrading, but an older
   // peer that re-sanitizes a universe through its moodBoardId-unaware
   // `sanitizeTemplate` would silently strip the link and LWW the loss back.
-  universes: 9,
+  // v10 = character `voiceCanon` and `identityPack` added (#5378). These are
+  // portable, federated production-canon fields; a ≤v9 peer would sanitize
+  // them away and LWW the loss back after an unrelated Universe edit.
+  universes: 10,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode
@@ -351,7 +354,24 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // (record kind/category `fableLoom`). A pre-feature receiver has no merge
   // path for the whole-record story graph, so only this category pauses until
   // both peers upgrade; unrelated categories continue syncing.
-  fableLoom: 1,
+  // v2 = scene nodes gained portable `visualCanon` bindings plus the latest
+  // render's path-free `visualConditioning` provenance. A v1 peer would strip
+  // both during whole-record LWW, so newer sends must pause until it upgrades.
+  // v3 = typed playback assets retain one visual-conditioning manifest per
+  // rendered clip, so entry/hold/exit provenance cannot overwrite each other.
+  // A v2 peer would strip that map during whole-record LWW.
+  // v4 = the loom pins one canonical protagonist and wardrobe, while each
+  // scene records whether that protagonist is on-screen or speaking through a
+  // side-device off-screen. A v3 peer would silently strip those fields on a
+  // whole-record round trip and could restore wardrobe drift or put a removed
+  // protagonist back into a scene.
+  // v5 = one loom-level render format pins the aspect ratio and concrete
+  // dimensions shared by storyboard stills and motion clips; plot points and
+  // scenes gained durable playable-challenge kinds/phase mappings; and durable
+  // editorial/final-delivery sign-offs let the ordered workflow survive a
+  // reload. A v4 peer would strip those choices and silently reopen completed
+  // gates, erase challenge-to-scene mapping, or reintroduce mixed geometry.
+  fableLoom: 5,
   // v1 = Creative Director projects (PostgreSQL `creative_director_projects`)
   // federated via the per-record peer-sync push pipeline (record kind
   // `creativeDirectorProject`, sync category `creativeDirectorProjects`, #1564).

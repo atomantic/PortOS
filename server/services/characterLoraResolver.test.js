@@ -68,6 +68,19 @@ describe('resolveCharacterLoras', () => {
     expect(out).toHaveLength(3);
   });
 
+  it('returns every compatible local adapter per bound character when requested', async () => {
+    listLoras.mockResolvedValue([
+      trainedLora({ filename: 'a.safetensors', loraCompatKey: 'flux2-4b' }),
+      trainedLora({ filename: 'b.safetensors', loraCompatKey: 'flux2-4b' }),
+      trainedLora({ filename: 'wrong.safetensors', loraCompatKey: 'mflux' }),
+    ]);
+    const out = await resolveCharacterLoras(
+      [{ id: 'char-1' }],
+      { compatKey: 'flux2-4b', allPerCharacter: true, max: 8 },
+    );
+    expect(out.map((item) => item.filename)).toEqual(['a.safetensors', 'b.safetensors']);
+  });
+
   it('returns [] for empty matches without touching the lora list', async () => {
     expect(await resolveCharacterLoras([])).toEqual([]);
     expect(listLoras).not.toHaveBeenCalled();

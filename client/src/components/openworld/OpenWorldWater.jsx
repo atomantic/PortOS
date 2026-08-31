@@ -5,11 +5,10 @@ import { openWorldDayMix, mixHex } from './openWorldConstants';
 import { useOpenWorldPalette } from './OpenWorldPaletteContext';
 import { WORLD } from '../../utils/openWorldPlan';
 
-// The bay: a water plane filling everything north of the master plan's shoreline
-// (see openWorldPlan.js — the Data Harbor's piers stand over it, the federation peers
-// read as cities across it). Deliberately cheap: one textured plane + one additive
-// shimmer strip at the shoreline — no reflection/refraction passes, matching the
-// city's no-postprocessing rule. Day/night follows openWorldDayMix like every surface.
+// The world-sea below the PortOS archipelago. Deliberately cheap: one tiled wave
+// texture and a soft second swell layer, no reflection/refraction pass. The raised
+// islands provide the shoreline, so the water can continue beneath every causeway
+// and through every inlet without geometry seams.
 
 const NIGHT_WATER = '#050d1c'; // near-black ink so neon reflections read
 const DAY_WATER = '#2e4f6e'; // steel-blue daytime bay
@@ -22,12 +21,12 @@ const makeWaveTexture = () => {
   canvas.height = 256;
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, 256, 256);
-  ctx.lineWidth = 1.2;
-  for (let row = 0; row < 10; row++) {
-    const y = (row + 0.5) * 25.6;
+  ctx.lineWidth = 0.8;
+  for (let row = 0; row < 8; row++) {
+    const y = (row + 0.5) * 32;
     const amp = 2 + (row % 3) * 1.5;
     const phase = row * 1.7;
-    ctx.strokeStyle = `rgba(255, 255, 255, ${0.16 + (row % 4) * 0.05})`;
+    ctx.strokeStyle = `rgba(255, 255, 255, ${0.07 + (row % 4) * 0.025})`;
     ctx.beginPath();
     for (let x = 0; x <= 256; x += 4) {
       const wy = y + Math.sin(x / 28 + phase) * amp;
@@ -39,74 +38,60 @@ const makeWaveTexture = () => {
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(26, 14);
+  tex.repeat.set(18, 10);
   return tex;
 };
 
 export default function OpenWorldWater({ settings }) {
   const { accent } = useOpenWorldPalette();
-  const dayMix = openWorldDayMix(settings);
+  const naturalDayMix = openWorldDayMix(settings);
+  const dayMix = settings?.explorationMode ? Math.max(0.68, naturalDayMix) : naturalDayMix;
   const waveTex = useMemo(() => makeWaveTexture(), []);
   useEffect(() => () => waveTex.dispose(), [waveTex]);
 
-  const shimmerRef = useRef();
+  const swellRef = useRef();
 
   const waterColor = mixHex(NIGHT_WATER, DAY_WATER, dayMix);
   // Night: the swell glows faint accent neon. Day: barely-there white glints.
   const emissiveColor = mixHex(accent, '#dfeaf2', dayMix);
-  const emissiveIntensity = 0.4 * (1 - dayMix) + 0.1 * dayMix;
+  const emissiveIntensity = 0.28 * (1 - dayMix) + 0.07 * dayMix;
 
   useFrame(({ clock }, delta) => {
-    // Slow drift toward shore with a gentle cross-current wobble.
+    // Two motions at different scales keep the sea from reading as a scrolling decal.
     waveTex.offset.y -= delta * 0.012;
     waveTex.offset.x = Math.sin(clock.getElapsedTime() * 0.05) * 0.03;
-    if (shimmerRef.current) {
+    if (swellRef.current) {
       const t = clock.getElapsedTime();
-      shimmerRef.current.material.opacity =
-        (0.14 + Math.sin(t * 0.9) * 0.05) * (1 - dayMix) + 0.05 * dayMix;
+      swellRef.current.rotation.z = Math.sin(t * 0.035) * 0.025;
+      swellRef.current.material.opacity = 0.04 + Math.sin(t * 0.22) * 0.012;
     }
   });
 
   const span = WORLD.waterSpan;
-  const centerZ = WORLD.shorelineZ - span / 2;
 
   return (
     <group>
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, WORLD.waterY, centerZ]}>
-        <planeGeometry args={[span * 2, span]} />
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, WORLD.waterY, 0]}>
+        <planeGeometry args={[span * 2, span * 2]} />
         <meshStandardMaterial
           color={waterColor}
-          roughness={0.18}
-          metalness={0.55}
+          roughness={0.4}
+          metalness={0.28}
           emissive={emissiveColor}
           emissiveIntensity={emissiveIntensity}
           emissiveMap={waveTex}
         />
       </mesh>
-      {/* Shoreline shimmer — dual additive surf lines where land meets the bay. */}
       <mesh
-        ref={shimmerRef}
+        ref={swellRef}
         rotation={[-Math.PI / 2, 0, 0]}
-        position={[0, WORLD.waterY + 0.015, WORLD.shorelineZ - 0.9]}
+        position={[0, WORLD.waterY + 0.018, 0]}
       >
-        <planeGeometry args={[320, 1.8]} />
+        <ringGeometry args={[34, 185, 96]} />
         <meshBasicMaterial
-          color={accent}
+          color={mixHex(accent, '#dff7ff', dayMix * 0.7)}
           transparent
-          opacity={0.14}
-          blending={THREE.AdditiveBlending}
-          depthWrite={false}
-        />
-      </mesh>
-      <mesh
-        rotation={[-Math.PI / 2, 0, 0]}
-        position={[0, WORLD.waterY + 0.012, WORLD.shorelineZ - 2.4]}
-      >
-        <planeGeometry args={[320, 1.2]} />
-        <meshBasicMaterial
-          color={mixHex(accent, '#ffffff', 0.4)}
-          transparent
-          opacity={0.08 * (1 - dayMix) + 0.04 * dayMix}
+          opacity={0.04}
           blending={THREE.AdditiveBlending}
           depthWrite={false}
         />

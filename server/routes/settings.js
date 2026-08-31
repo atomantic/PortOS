@@ -10,7 +10,10 @@ import {
   CODEX_PARALLEL_DEFAULT,
 } from '../services/mediaJobQueue/index.js';
 import { assertMediaRoutingConfig } from '../services/federatedMedia/routingPolicy.js';
-import { getInstanceFeatures, updateInstanceFeature } from '../services/instanceFeatures.js';
+import { assertConfiguredEidoverseInstalled, getInstanceFeatures, updateEidoverseWorldsRepo, updateEidoverseWorldsSource, updateInstanceFeature } from '../services/instanceFeatures.js';
+import { installEidoverse } from '../services/eidoverse.js';
+import { ensureEidoverseHost } from '../services/eidoverseHost.js';
+import { isGitHubRepoUrl } from '../lib/githubRepoUrl.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { isPlainObject } from '../lib/objects.js';
 import { agentContextSettingsSchema } from '../lib/agentContextValidation.js';
@@ -23,6 +26,10 @@ const aiAssignmentUpdateSchema = z.object({
   providerId: z.string().trim().max(128).nullable().optional(),
   model: z.string().trim().max(300).nullable().optional(),
   effort: z.enum(EFFORT_LEVELS).nullable().optional(),
+}).strict();
+
+const eidoverseRepoSchema = z.object({
+  worldsRepoUrl: z.string().trim().max(500).refine(isGitHubRepoUrl, 'Must be a GitHub repository URL'),
 }).strict();
 
 // Server-authoritative bounds the client UI can render directly so the form
@@ -159,6 +166,35 @@ router.get('/ai-assignments', asyncHandler(async (_req, res) => {
 // GET /api/settings/features
 router.get('/features', asyncHandler(async (_req, res) => {
   res.json(await getInstanceFeatures());
+}));
+
+// POST /api/settings/features/eidoverse/install
+// Explicit consent boundary: no Eidoverse checkout or dependency install occurs
+// until the user presses Install in Settings > Features.
+router.post('/features/eidoverse/install', asyncHandler(async (req, res) => {
+  const { worldsRepoUrl } = validateRequest(eidoverseRepoSchema, req.body || {});
+  const normalizedRepoUrl = await updateEidoverseWorldsRepo(worldsRepoUrl);
+  await installEidoverse({ worldsRepoUrl: normalizedRepoUrl });
+  res.status(201).json(await updateInstanceFeature('eidoverse', true));
+}));
+
+// PUT /api/settings/features/eidoverse/source
+// Update the origin of the existing Worlds checkout in place. The working tree,
+// managed-app path, and world data remain untouched; future app updates pull
+// from the newly selected repository.
+router.put('/features/eidoverse/source', asyncHandler(async (req, res) => {
+  const { worldsRepoUrl } = validateRequest(eidoverseRepoSchema, req.body || {});
+  await updateEidoverseWorldsSource(worldsRepoUrl);
+  res.json(await getInstanceFeatures());
+}));
+
+// POST /api/settings/features/eidoverse/host
+// Lazily opens PortOS's TLS/WebSocket bridge. The external runtime stays a
+// separately managed app; this listener only makes its existing web UI safe to
+// embed when PortOS itself was opened over HTTPS.
+router.post('/features/eidoverse/host', asyncHandler(async (_req, res) => {
+  await assertConfiguredEidoverseInstalled();
+  res.json(await ensureEidoverseHost());
 }));
 
 // PUT /api/settings/features/:featureId

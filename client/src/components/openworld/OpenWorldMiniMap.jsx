@@ -3,8 +3,8 @@ import { computeOpenWorldLayout } from './openWorldLayout';
 import { useOpenWorldPalette } from './OpenWorldPaletteContext';
 import { computeMiniMap } from '../../utils/openWorldMiniMap';
 
-// OpenWorld mini-map overlay (roadmap 2.8). A compact top-down map in a HUD corner showing
-// every building as a dot at its REAL layout position, colored by status. The layout comes
+// OpenWorld's compact top-down Signal Map. It shows the authored archipelago and every
+// building at its real layout position, colored by status. The layout comes
 // from `computeOpenWorldLayout(apps)` — the same function OpenWorldScene uses to place buildings — so
 // the map can't drift from the actual city. Status colors reuse `getBuildingColor`, so a dot
 // matches its building's color exactly.
@@ -37,45 +37,61 @@ export default function OpenWorldMiniMap({
     });
   }, [apps, positions, playerPose]);
 
-  if (view.empty) return null;
+  if (view.empty && !view.geography) return null;
 
   return (
     <div className={`${alwaysShow ? 'block' : 'hidden md:block'} mb-2 w-fit pointer-events-auto`}>
       <div className="openworld-hud-panel openworld-hud-map relative w-fit p-2">
         <div className="flex items-center justify-between mb-1.5 px-0.5">
-          <span className="font-pixel text-[8px] text-cyan-500/60 tracking-wider">MAP</span>
-          <span className="font-pixel text-[8px] text-cyan-400/80 tracking-wider">{view.count}</span>
+          <span className="font-pixel text-[8px] text-cyan-500/60 tracking-wider">SIGNAL MAP</span>
+          <span className="font-pixel text-[8px] text-cyan-400/80 tracking-wider">{view.count} LIVE</span>
         </div>
 
         <div
-          className="relative rounded-sm border border-cyan-500/20 bg-cyan-500/[0.03] overflow-hidden"
+          className="relative rounded-sm border border-cyan-500/20 bg-[#061520]/90 overflow-hidden"
           style={{ width: MAP_SIZE, height: MAP_SIZE }}
         >
-          {/* The bay: everything above the shoreline reads as water, matching the city's
-              real geography (the bay sits north / -Z, projected to the top of the map). */}
+          {/* The same island/link graph that drives the 3D terrain. SVG keeps the shape
+              legible at this compact size without creating dozens of positioned divs. */}
           {view.geography && (
-            <div className="absolute inset-0 pointer-events-none" aria-hidden="true">
-              <div
-                className="absolute left-0 right-0 top-0 bg-cyan-400/10 border-b border-cyan-400/25"
-                style={{ height: `${(view.geography.shorelineY * 100).toFixed(2)}%` }}
-              />
-              {/* Data Harbor pier marker. */}
-              <div
-                className="absolute w-1.5 h-1.5 rounded-[1px] bg-cyan-300/70 -translate-x-1/2 -translate-y-1/2 rotate-45"
-                style={{
-                  left: `${(view.geography.harbor.nx * 100).toFixed(2)}%`,
-                  top: `${(view.geography.harbor.ny * 100).toFixed(2)}%`,
-                  boxShadow: '0 0 4px rgba(103, 232, 249, 0.8)',
-                }}
-                title={view.geography.harbor.label}
-              />
-            </div>
+            <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 100 100" aria-hidden="true">
+              <defs>
+                <filter id="signal-map-glow" x="-50%" y="-50%" width="200%" height="200%">
+                  <feGaussianBlur stdDeviation="1.1" result="blur" />
+                  <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+                </filter>
+              </defs>
+              {view.geography.links.map((link) => (
+                <polyline
+                  key={link.id}
+                  points={link.points.map((point) => `${point.nx * 100},${point.ny * 100}`).join(' ')}
+                  fill="none"
+                  stroke="rgba(103,232,249,0.78)"
+                  strokeWidth="1.7"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  filter="url(#signal-map-glow)"
+                />
+              ))}
+              {view.geography.islands.map((island) => (
+                <ellipse
+                  key={island.id}
+                  cx={island.nx * 100}
+                  cy={island.ny * 100}
+                  rx={island.radiusX * 100}
+                  ry={island.radiusY * 100}
+                  fill={island.id === 'core' ? 'rgba(74,138,112,0.74)' : 'rgba(51,104,93,0.78)'}
+                  stroke="rgba(165,243,224,0.52)"
+                  strokeWidth="0.7"
+                />
+              ))}
+            </svg>
           )}
 
-          {/* Faint grid lines for orientation */}
+          {/* Cardinal ticks replace the old city-block grid. */}
           <div className="absolute inset-0 pointer-events-none" aria-hidden="true">
-            <div className="absolute top-1/2 left-0 right-0 h-px bg-cyan-500/10" />
-            <div className="absolute left-1/2 top-0 bottom-0 w-px bg-cyan-500/10" />
+            <span className="absolute top-1 left-1/2 -translate-x-1/2 font-pixel text-[6px] text-cyan-200/45">N</span>
+            <span className="absolute bottom-1 left-1/2 -translate-x-1/2 font-pixel text-[6px] text-cyan-200/35">S</span>
           </div>
 
           {/* District landmark indicators */}

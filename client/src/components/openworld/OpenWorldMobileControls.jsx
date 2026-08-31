@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowUp, Eye, Hand, LogOut, Zap } from 'lucide-react';
+import { ArrowUp, Hand, Zap } from 'lucide-react';
 
 const STICK_TRAVEL = 32;
 
@@ -44,8 +44,6 @@ function HoldButton({ label, hint, icon: Icon, onStart, onEnd, wide = false }) {
 export default function OpenWorldMobileControls({
   mobileInputRef,
   playerActionRef,
-  onToggleCameraView,
-  onToggleExploration,
 }) {
   const joystickRef = useRef(null);
   const joystickPointerRef = useRef(null);
@@ -177,24 +175,6 @@ export default function OpenWorldMobileControls({
         >
           <Hand size={18} strokeWidth={1.9} aria-hidden="true" />
           <span>ACTION</span>
-        </button>
-        <button
-          type="button"
-          aria-label="Switch camera view"
-          className="openworld-mobile-action"
-          onClick={onToggleCameraView}
-        >
-          <Eye size={18} strokeWidth={1.9} aria-hidden="true" />
-          <span>VIEW</span>
-        </button>
-        <button
-          type="button"
-          aria-label="Fly out to orbital view"
-          className="openworld-mobile-action openworld-mobile-action--exit"
-          onClick={onToggleExploration}
-        >
-          <LogOut size={17} strokeWidth={1.9} aria-hidden="true" />
-          <span>EXIT</span>
         </button>
       </div>
     </div>

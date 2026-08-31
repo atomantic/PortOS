@@ -411,12 +411,14 @@ describe('buildCliSpawnConfig', () => {
       expect(config.args).toContain('model_reasoning_effort=xhigh');
     });
 
-    it('passes max to codex and resolves legacy ultra to max', () => {
+    it('passes Ultra to supported Codex models and clamps it elsewhere', () => {
       const codex = { id: 'codex', command: 'codex' };
       const maxConfig = buildCliSpawnConfig(codex, 'gpt-5.4', {}, { effort: 'max' });
       expect(maxConfig.args).toContain('model_reasoning_effort=max');
-      const legacyConfig = buildCliSpawnConfig(codex, 'gpt-5.4', {}, { effort: 'ultra' });
-      expect(legacyConfig.args).toContain('model_reasoning_effort=max');
+      const ultraConfig = buildCliSpawnConfig(codex, 'gpt-5.6-sol', {}, { effort: 'ultra' });
+      expect(ultraConfig.args).toContain('model_reasoning_effort=ultra');
+      const clampedConfig = buildCliSpawnConfig(codex, 'gpt-5.4', {}, { effort: 'ultra' });
+      expect(clampedConfig.args).toContain('model_reasoning_effort=max');
     });
 
     it('adds --effort for claude', () => {

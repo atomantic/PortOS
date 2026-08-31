@@ -86,12 +86,15 @@ export async function getUniverseCanonUsage(universeId) {
   // Per (kind, entryId) → Map(seriesId → { seriesName, issueIds: Set })
   const tally = { characters: new Map(), places: new Map(), objects: new Map() };
 
-  // Pre-load ALL issues once and group by seriesId to avoid an N+1 query
-  // (one listIssues call per series previously). listAllIssues is UNCAPPED —
-  // listIssues({}) slices at 1000 total and would silently drop the tail on
-  // large installs. Filter to only the series linked to this universe.
+  // Pre-load linked-series issues in one indexed, uncapped query. This avoids
+  // both the old N+1 shape (one listIssues call per series) and loading every
+  // unrelated issue in the install. Run history is irrelevant to the prose
+  // matcher, so strip it before the aggregation retains these records.
   const linkedSeriesIds = new Set(linkedSeries.map((s) => s.id));
-  const allIssues = await listAllIssues();
+  const allIssues = await listAllIssues({
+    seriesIds: [...linkedSeriesIds],
+    withHistory: false,
+  });
   const issuesBySeriesId = new Map();
   for (const issue of allIssues) {
     if (!linkedSeriesIds.has(issue.seriesId)) continue;

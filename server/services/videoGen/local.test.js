@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { basename, join } from 'path';
 import { tmpdir, totalmem } from 'os';
+import { MINIMAX_H3_HOST_RESERVE_GB } from '../../lib/minimaxH3Memory.js';
 import { randomUUID } from 'crypto';
 // Pure table, no mocking involved — a static import survives vi.resetModules().
 import { INSPIRE_DEFAULT_IMAGE_STRENGTH } from '../../lib/videoReferenceModes.js';
@@ -109,6 +110,10 @@ vi.mock('../../lib/mediaModels.js', async () => {
     { id: 'ltx23_unified', name: 'LTX-2.3 Unified Beta', runtime: 'mlx_video', repo: 'notapalindrome/ltx23-mlx-av', steps: 25, guidance: 3.0 },
     // quantized mlx_video model — NOT LoRA-capable (out of scope).
     { id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4', runtime: 'mlx_video', repo: 'notapalindrome/ltx23-mlx-av-q4', steps: 25, guidance: 3.0 },
+    // Compatibility fixture: the shipped profile is gone, but a user-repointed
+    // or peer-synced historical entry must fail closed instead of falling into
+    // the generic MLX/CUDA runner.
+    { id: 'custom_hunyuan', name: 'Custom historical Hunyuan', runtime: 'hunyuan', repo: 'example-org/custom-video-runtime', supportedModes: ['text'], steps: 30, guidance: 6 },
     {
       id: 'minimax_h3_8bit', name: 'MiniMax H3 MLX 8-bit', runtime: 'minimax_h3',
       repo: 'pipenetwork/MiniMax-H3-MLX-8bit',
@@ -123,6 +128,11 @@ vi.mock('../../lib/mediaModels.js', async () => {
         revision: '6818f6c32d12b210915e44ad56a4228c2608f160',
         files: ['LICENSE', 'FL2VA/vae/video/config.json'],
       }],
+      // Deliberately a 1 GB floor rather than the shipped 128 GB: these suites
+      // must assert the same thing on every machine and in CI, and a real floor
+      // would make the capacity gate pass or fail with the runner's own RAM.
+      // The shipped table's numbers are pinned in lib/minimaxH3Memory.test.js.
+      memoryProfiles: [{ id: 'unified-8bit', name: 'Unified 8-bit', minMemoryGb: 1, minVramGb: null, unified: true }],
     },
     {
       id: 'minimax_h3_cuda', name: 'MiniMax H3 CUDA int8', runtime: 'minimax_h3_cuda',
@@ -137,6 +147,19 @@ vi.mock('../../lib/mediaModels.js', async () => {
       defaultWidth: 1344, defaultHeight: 768, resolutionStep: 32,
       steps: 8, guidance: 0, samplerLocked: true,
       termsGate: { id: 'minimax-h3-community-license-2026-08-02' },
+      memoryProfiles: [{ id: 'int8-lean', name: 'int8, leaf-level', minMemoryGb: 1, minVramGb: 12, unified: false }],
+    },
+    {
+      id: 'ltx25_cuda_distilled', name: 'LTX-2.5 CUDA Distilled', runtime: 'ltx25_cuda',
+      repo: 'Lightricks/LTX-2.5',
+      revision: 'bf86adedf518142442575d1ce2e767b7d01c8c76',
+      repoFiles: [
+        'diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors',
+        'text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors',
+      ],
+      supportedModes: ['text', 'image'], defaultFrames: 121, fpsOptions: [24],
+      steps: 8, guidance: 1, samplerLocked: true,
+      supportsNegativePrompt: false, supportsDisableAudio: true,
     },
     {
       id: 'wan22_ti2v_5b', name: 'Wan TI2V', runtime: 'wan22',
@@ -144,6 +167,14 @@ vi.mock('../../lib/mediaModels.js', async () => {
       revision: '6875952a110b6bdbcfc00d72b1d89a8e02ab0fc3',
       supportedModes: ['text', 'image'], frameStride: 4, steps: 25, guidance: 5,
       guidance2: null, flowShift: 3, solver: 'unipc',
+    },
+    {
+      id: 'wan22_cuda_ti2v_5b', name: 'Wan TI2V CUDA', runtime: 'wan22_cuda',
+      repo: 'Wan-AI/Wan2.2-TI2V-5B-Diffusers',
+      revision: 'b8fff7315c768468a5333511427288870b2e9635',
+      supportedModes: ['text'], frameStride: 4, defaultFrames: 81,
+      defaultWidth: 1280, defaultHeight: 704, resolutionStep: 16,
+      defaultFrames: 121, steps: 50, guidance: 5,
     },
     {
       id: 'wan22_t2v_a14b_lightning', name: 'Wan T2V Lightning', runtime: 'wan22',
@@ -289,12 +320,30 @@ vi.mock('../../lib/frameQuality.js', async (importOriginal) => ({
 // `capable` is the settled probe verdict. They are separate so a test can pin
 // the cold-cache case, where the two legitimately disagree.
 const h3LoraState = vi.hoisted(() => ({ capable: false, cached: null }));
-vi.mock('./runtimes.js', async (importOriginal) => ({
-  ...await importOriginal(),
-  byovRuntimeLoraCapable: vi.fn((runtime) => runtime === 'minimax_h3'
-    && (h3LoraState.cached ?? h3LoraState.capable)),
-  resolveByovRuntimeLoraCapable: vi.fn(async (runtime) => runtime === 'minimax_h3' && h3LoraState.capable),
-}));
+// Which revision the installed BYOV checkout is at. Really a spawned `git`
+// probe; stubbed here so the draft-decode capability gate (#5423) can be driven
+// to both verdicts. `current: null` means "leave the real probe alone", which
+// is what every pre-existing test in this file wants.
+const byovRevisionState = vi.hoisted(() => ({ current: null, expectedRevision: null }));
+vi.mock('./runtimes.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    byovRuntimeLoraCapable: vi.fn((runtime) => runtime === 'minimax_h3'
+      && (h3LoraState.cached ?? h3LoraState.capable)),
+    resolveByovRuntimeLoraCapable: vi.fn(async (runtime) => runtime === 'minimax_h3' && h3LoraState.capable),
+    isByovRuntimeCurrent: vi.fn(async (runtime) => (
+      byovRevisionState.current === null
+        ? actual.isByovRuntimeCurrent(runtime)
+        : byovRevisionState.current
+    )),
+    byovRuntimeExpectedRevision: vi.fn((runtime) => (
+      byovRevisionState.expectedRevision === null
+        ? actual.byovRuntimeExpectedRevision(runtime)
+        : byovRevisionState.expectedRevision
+    )),
+  };
+});
 
 // LoRA key-layout gate (resolveVideoLoras). `null` = undetermined, which is
 // the permissive default so the pre-existing LoRA-threading tests below still
@@ -401,6 +450,8 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  byovRevisionState.current = null;
+  byovRevisionState.expectedRevision = null;
   settingsState.acceptedModelTerms = [];
   fsState.missOnce = [];
   fsState.candidateCount = null;
@@ -423,7 +474,7 @@ describe('stitchVideos — history provenance', () => {
     'renderInputsVersion',
   ];
 
-  const stitchHistory = async (firstChunkFields = {}) => {
+  const stitchHistory = async (firstChunkFields = {}, secondChunkFields = {}) => {
     const { readJSONFile } = await import('../../lib/fileUtils.js');
     const chunkIds = ['chunk-a', 'chunk-b'];
     vi.mocked(readJSONFile).mockResolvedValue([
@@ -435,7 +486,7 @@ describe('stitchVideos — history provenance', () => {
       {
         id: chunkIds[1], filename: 'chunk-b.mp4', prompt: 'second beat',
         modelId: 'ltx2_unified', seed: 43, width: 768, height: 512,
-        numFrames: 49, fps: 24,
+        numFrames: 49, fps: 24, ...secondChunkFields,
       },
     ]);
     return stitchVideos(chunkIds, {
@@ -468,6 +519,47 @@ describe('stitchVideos — history provenance', () => {
     const stitched = await stitchHistory();
 
     for (const field of renderFields) expect(stitched).not.toHaveProperty(field);
+  });
+
+  // Draft decode (#5423). The REQUEST is chain-wide — every chunk is submitted
+  // with the same value — but the OUTCOME is decided per child process, because
+  // the runner falls back to the full decoder on any load failure. Claiming
+  // chunk 0's verdict over a clip whose later chunks decoded differently is
+  // exactly the false fidelity claim the field exists to prevent.
+  describe('draft-decode outcome', () => {
+    const applied = (value) => ({ draftDecode: 'draft', draftDecodeApplied: { id: 'draft', applied: value } });
+
+    it('inherits the request and a unanimous outcome', async () => {
+      const stitched = await stitchHistory(applied(true), applied(true));
+
+      expect(stitched.draftDecode).toBe('draft');
+      expect(stitched.draftDecodeApplied).toEqual({ id: 'draft', applied: true });
+    });
+
+    it('inherits a unanimous fallback outcome', async () => {
+      const stitched = await stitchHistory(
+        { ...applied(false), draftDecodeApplied: { id: 'draft', applied: false, reason: 'KeyError: a' } },
+        { ...applied(false), draftDecodeApplied: { id: 'draft', applied: false, reason: 'KeyError: b' } },
+      );
+
+      // Unanimity is on the verdict, not deep equality: two chunks that both
+      // fell back agree about the clip's fidelity whatever their reasons were.
+      expect(stitched.draftDecodeApplied.applied).toBe(false);
+    });
+
+    it('keeps the request but omits the outcome when the chunks disagree', async () => {
+      const stitched = await stitchHistory(applied(true), applied(false));
+
+      expect(stitched.draftDecode).toBe('draft');
+      expect(stitched).not.toHaveProperty('draftDecodeApplied');
+    });
+
+    it('stamps no outcome on a chain that never reported one', async () => {
+      const stitched = await stitchHistory({ draftDecode: 'draft' }, { draftDecode: 'draft' });
+
+      expect(stitched.draftDecode).toBe('draft');
+      expect(stitched).not.toHaveProperty('draftDecodeApplied');
+    });
   });
 });
 
@@ -1501,6 +1593,22 @@ describe('generateVideo — LTX audio-reactive conditioning', () => {
   });
 });
 
+describe('generateVideo — retired runtime guard', () => {
+  it('refuses a preserved Hunyuan entry before choosing a fallback runner', async () => {
+    await expect(generateVideo({
+      jobId: 'retired-hunyuan-runtime',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'custom_hunyuan',
+      prompt: 'a quiet street at dusk',
+      width: 512,
+      height: 512,
+      numFrames: 25,
+      fps: 24,
+      mode: 'text',
+    })).rejects.toMatchObject({ status: 400, code: 'VIDEO_RUNTIME_RETIRED' });
+  });
+});
+
 describe('generateVideo — PORTOS_T2V_TWO_STAGE arg threading', () => {
   afterEach(() => { delete process.env.PORTOS_T2V_TWO_STAGE; });
 
@@ -2078,7 +2186,7 @@ describe('generateVideo — panel-side completion watchdog', () => {
     expect(hang.proc.kill).not.toHaveBeenCalled();
   });
 
-  it('never arms the watchdog when no completion marker is seen', async () => {
+  it('allows a render to continue without a completion marker', async () => {
     process.env.VIDEOGEN_COMPLETION_WATCHDOG_MS = '40000';
     vi.resetModules();
     ({ generateVideo } = await import('./local.js'));
@@ -2097,343 +2205,11 @@ describe('generateVideo — panel-side completion watchdog', () => {
     });
     await vi.advanceTimersByTimeAsync(0);
 
-    // Ordinary progress lines must not arm the watchdog.
-    hang.emitStdout('STAGE:render:step:5:30:rendering\n');
-    hang.emitStdout('60%|██████    | 6/10\n');
+    // A render may be silent for an extended period before it exits. The
+    // completion watchdog is not armed until a completion marker is seen, and
+    // there is no separate idle timeout that can terminate this render.
     await vi.advanceTimersByTimeAsync(120000);
     expect(hang.proc.kill).not.toHaveBeenCalled();
-  });
-});
-
-describe('generateVideo — pre-output idle-stall deadline', () => {
-  // Same hanging-proc harness as the completion-watchdog suite, but here the
-  // render never emits its completion marker — it wedges before (or between)
-  // output, which the completion watchdog does NOT cover.
-  function makeHangingProc() {
-    const listeners = {};
-    let stdoutData = null;
-    let stderrData = null;
-    const proc = {
-      pid: 7373,
-      exitCode: null,
-      signalCode: null,
-      killed: false,
-      stdout: { on: vi.fn((event, fn) => { if (event === 'data') stdoutData = fn; }) },
-      stderr: { on: vi.fn((event, fn) => { if (event === 'data') stderrData = fn; }) },
-      on(event, fn) { listeners[event] = fn; return proc; },
-      off(event, fn) { if (listeners[event] === fn) delete listeners[event]; return proc; },
-      kill: vi.fn((signal) => { proc.killed = true; proc.signalCode = signal; }),
-    };
-    return {
-      proc,
-      emitStdout: (text) => stdoutData?.(Buffer.from(text)),
-      emitStderr: (text) => stderrData?.(Buffer.from(text)),
-      fireClose: (code, signal) => listeners.close?.(code, signal),
-    };
-  }
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    delete process.env.VIDEOGEN_IDLE_STALL_MS;
-  });
-
-  it('SIGKILLs a render that never produces any output within the idle window', async () => {
-    process.env.VIDEOGEN_IDLE_STALL_MS = '60000';
-    vi.resetModules();
-    ({ generateVideo } = await import('./local.js'));
-
-    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
-    const hang = makeHangingProc();
-    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
-
-    generateVideo({
-      jobId: 'idle-stall-no-output',
-      pythonPath: '/usr/bin/python3',
-      modelId: 'ltx2_unified',
-      prompt: 'wedge before any output',
-      width: 512, height: 512, numFrames: 25, fps: 24,
-      mode: 'text',
-    });
-    await vi.advanceTimersByTimeAsync(0);
-
-    // Just before the deadline: still alive.
-    await vi.advanceTimersByTimeAsync(59999);
-    expect(hang.proc.kill).not.toHaveBeenCalled();
-
-    // Past the deadline with zero output: the idle-stall timer SIGKILLs it.
-    await vi.advanceTimersByTimeAsync(2);
-    expect(hang.proc.kill).toHaveBeenCalledWith('SIGKILL');
-  });
-
-  it('resets the idle timer on each output line so a slow-but-alive render is not killed', async () => {
-    process.env.VIDEOGEN_IDLE_STALL_MS = '60000';
-    vi.resetModules();
-    ({ generateVideo } = await import('./local.js'));
-
-    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
-    const hang = makeHangingProc();
-    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
-
-    generateVideo({
-      jobId: 'idle-stall-slow-alive',
-      pythonPath: '/usr/bin/python3',
-      modelId: 'ltx2_unified',
-      prompt: 'slow but steady',
-      width: 512, height: 512, numFrames: 25, fps: 24,
-      mode: 'text',
-    });
-    await vi.advanceTimersByTimeAsync(0);
-
-    // Emit an output line every 40s (well inside the 60s window) five times —
-    // each resets the countdown, so the render is never killed even though the
-    // total elapsed time (200s) far exceeds one window.
-    for (let i = 0; i < 5; i++) {
-      // eslint-disable-next-line no-await-in-loop
-      await vi.advanceTimersByTimeAsync(40000);
-      hang.emitStdout(`STAGE:render:step:${i}:30:rendering\n`);
-      expect(hang.proc.kill).not.toHaveBeenCalled();
-    }
-    // …but once output stops, the window elapses and it IS killed.
-    await vi.advanceTimersByTimeAsync(60001);
-    expect(hang.proc.kill).toHaveBeenCalledWith('SIGKILL');
-  });
-
-  it('counts a stderr line (weight-load/kernel-compile progress) as liveness', async () => {
-    process.env.VIDEOGEN_IDLE_STALL_MS = '60000';
-    vi.resetModules();
-    ({ generateVideo } = await import('./local.js'));
-
-    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
-    const hang = makeHangingProc();
-    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
-
-    generateVideo({
-      jobId: 'idle-stall-stderr-liveness',
-      pythonPath: '/usr/bin/python3',
-      modelId: 'ltx2_unified',
-      prompt: 'stderr keeps it alive',
-      width: 512, height: 512, numFrames: 25, fps: 24,
-      mode: 'text',
-    });
-    await vi.advanceTimersByTimeAsync(0);
-
-    await vi.advanceTimersByTimeAsync(40000);
-    hang.emitStderr('Fetching 12 files: 40%|████      | 5/12\n');
-    // The stderr line reset the timer, so 40s later (80s total) it's still alive.
-    await vi.advanceTimersByTimeAsync(40000);
-    expect(hang.proc.kill).not.toHaveBeenCalled();
-  });
-
-  it('surfaces a stall-kill as a FAILED job (frees the GPU lane) with a stall-specific reason', async () => {
-    process.env.VIDEOGEN_IDLE_STALL_MS = '60000';
-    vi.resetModules();
-    ({ generateVideo } = await import('./local.js'));
-    ({ videoGenEvents } = await import('./events.js'));
-
-    // A genuine pre-output stall wrote no real output — a 0-byte (or absent)
-    // file. Keep existsSync true (the runtime venv check at build time needs
-    // it) but report size 0 so isWatchdogSuccess correctly declines to treat
-    // the kill as success; the failure path must report it as a stall.
-    const { existsSync, statSync } = await import('fs');
-    vi.mocked(existsSync).mockReturnValue(true);
-    vi.mocked(statSync).mockReturnValue({ size: 0 });
-
-    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
-    const hang = makeHangingProc();
-    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
-
-    const events = [];
-    const onCompleted = (e) => events.push(['completed', e]);
-    const onFailed = (e) => events.push(['failed', e]);
-    videoGenEvents.on('completed', onCompleted);
-    videoGenEvents.on('failed', onFailed);
-
-    generateVideo({
-      jobId: 'idle-stall-fails-job',
-      pythonPath: '/usr/bin/python3',
-      modelId: 'ltx2_unified',
-      prompt: 'stall then fail',
-      width: 512, height: 512, numFrames: 25, fps: 24,
-      mode: 'text',
-    });
-    await vi.advanceTimersByTimeAsync(0);
-
-    // Deadline elapses with no output → SIGKILL.
-    await vi.advanceTimersByTimeAsync(60001);
-    expect(hang.proc.kill).toHaveBeenCalledWith('SIGKILL');
-    // The OS delivers the kill → 'close' fires with signal SIGKILL.
-    hang.fireClose(null, 'SIGKILL');
-    await vi.advanceTimersByTimeAsync(0);
-
-    videoGenEvents.off('completed', onCompleted);
-    videoGenEvents.off('failed', onFailed);
-
-    const failed = events.find(([k]) => k === 'failed');
-    expect(failed).toBeTruthy();
-    expect(events.map(([k]) => k)).not.toContain('completed');
-    expect(failed[1].error).toMatch(/stalled/i);
-    expect(failed[1].error).toMatch(/VIDEOGEN_IDLE_STALL_MS/);
-  });
-
-  it('treats an idle-stall kill as SUCCESS when a real output file is on disk (runtime wrote its .mp4 but never printed a completion marker, then hung)', async () => {
-    process.env.VIDEOGEN_IDLE_STALL_MS = '60000';
-    vi.resetModules();
-    ({ generateVideo } = await import('./local.js'));
-    ({ videoGenEvents } = await import('./events.js'));
-
-    // The output file exists + is non-empty — the render finished its real work
-    // and wrote the video, but emitted no recognized completion marker, so the
-    // completion watchdog never armed and the idle timer is what killed the
-    // teardown hang. The finished output must be kept, not discarded.
-    const { existsSync, statSync } = await import('fs');
-    vi.mocked(existsSync).mockReturnValue(true);
-    vi.mocked(statSync).mockReturnValue({ size: 1000 });
-
-    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
-    const hang = makeHangingProc();
-    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
-
-    const events = [];
-    const onCompleted = (e) => events.push(['completed', e]);
-    const onFailed = (e) => events.push(['failed', e]);
-    videoGenEvents.on('completed', onCompleted);
-    videoGenEvents.on('failed', onFailed);
-
-    generateVideo({
-      jobId: 'idle-stall-output-intact',
-      pythonPath: '/usr/bin/python3',
-      modelId: 'ltx2_unified',
-      prompt: 'wrote output but hung silently',
-      width: 512, height: 512, numFrames: 25, fps: 24,
-      mode: 'text',
-    });
-    await vi.advanceTimersByTimeAsync(0);
-
-    // No completion marker ever printed; the render goes silent after writing.
-    await vi.advanceTimersByTimeAsync(60001);
-    expect(hang.proc.kill).toHaveBeenCalledWith('SIGKILL');
-    hang.fireClose(null, 'SIGKILL');
-    await vi.advanceTimersByTimeAsync(0);
-
-    videoGenEvents.off('completed', onCompleted);
-    videoGenEvents.off('failed', onFailed);
-
-    const kinds = events.map(([k]) => k);
-    expect(kinds).toContain('completed');
-    expect(kinds).not.toContain('failed');
-  });
-
-  it('does NOT SIGKILL/finalize when a manual cancel is already tearing the child down (proc.killed race)', async () => {
-    process.env.VIDEOGEN_IDLE_STALL_MS = '60000';
-    vi.resetModules();
-    ({ generateVideo } = await import('./local.js'));
-    ({ videoGenEvents } = await import('./events.js'));
-
-    // Output file exists + non-empty — so IF the idle timer wrongly fired and
-    // set idleStallFired, the close path would misfinalize the canceled render
-    // as a SUCCESS. The proc.killed guard must prevent the timer from firing.
-    const { existsSync, statSync } = await import('fs');
-    vi.mocked(existsSync).mockReturnValue(true);
-    vi.mocked(statSync).mockReturnValue({ size: 1000 });
-
-    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
-    const hang = makeHangingProc();
-    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
-
-    const events = [];
-    const onCompleted = (e) => events.push(['completed', e]);
-    videoGenEvents.on('completed', onCompleted);
-
-    generateVideo({
-      jobId: 'idle-stall-cancel-race',
-      pythonPath: '/usr/bin/python3',
-      modelId: 'ltx2_unified',
-      prompt: 'canceled near the idle deadline',
-      width: 512, height: 512, numFrames: 25, fps: 24,
-      mode: 'text',
-    });
-    await vi.advanceTimersByTimeAsync(0);
-
-    // Simulate cancel(): killWithEscalation SIGTERMs and sets proc.killed
-    // before exitCode/signalCode populate (they only settle on close).
-    await vi.advanceTimersByTimeAsync(59000);
-    hang.proc.killed = true;
-    hang.proc.kill.mockClear();
-
-    // Deadline elapses — the guard must see proc.killed and bail, NOT SIGKILL.
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(hang.proc.kill).not.toHaveBeenCalled();
-
-    videoGenEvents.off('completed', onCompleted);
-    // The idle timer never fired, so nothing finalized this as a success.
-    expect(events.map(([k]) => k)).not.toContain('completed');
-  });
-
-  it('does NOT fire the idle timer when the child exits cleanly (timer cleared on close)', async () => {
-    process.env.VIDEOGEN_IDLE_STALL_MS = '60000';
-    vi.resetModules();
-    ({ generateVideo } = await import('./local.js'));
-
-    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
-    const hang = makeHangingProc();
-    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
-
-    generateVideo({
-      jobId: 'idle-stall-clean-exit',
-      pythonPath: '/usr/bin/python3',
-      modelId: 'ltx2_unified',
-      prompt: 'render and exit',
-      width: 512, height: 512, numFrames: 25, fps: 24,
-      mode: 'text',
-    });
-    await vi.advanceTimersByTimeAsync(0);
-
-    // Child emits its result and exits cleanly well within the window.
-    hang.emitStdout('{"video_path": "/data/videos/out.mp4"}\n');
-    hang.proc.exitCode = 0;
-    hang.fireClose(0, null);
-    await vi.advanceTimersByTimeAsync(0);
-
-    // Advancing past the idle window must NOT trigger a SIGKILL — close cleared it.
-    await vi.advanceTimersByTimeAsync(120000);
-    expect(hang.proc.kill).not.toHaveBeenCalled();
-  });
-
-  it('falls back to the default window on a missing/invalid VIDEOGEN_IDLE_STALL_MS', async () => {
-    // Invalid values must not collapse the guard to 0/NaN (which would kill
-    // every render instantly) — they fall back to the generous default.
-    for (const bad of ['', '0', '-5', 'lots']) {
-      // eslint-disable-next-line no-await-in-loop
-      await (async () => {
-        if (bad === '') delete process.env.VIDEOGEN_IDLE_STALL_MS;
-        else process.env.VIDEOGEN_IDLE_STALL_MS = bad;
-        vi.resetModules();
-        ({ generateVideo } = await import('./local.js'));
-
-        const { spawnDetached } = await import('../../lib/detachedSpawn.js');
-        const hang = makeHangingProc();
-        vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
-
-        generateVideo({
-          jobId: `idle-stall-default-${bad || 'unset'}`,
-          pythonPath: '/usr/bin/python3',
-          modelId: 'ltx2_unified',
-          prompt: 'default window',
-          width: 512, height: 512, numFrames: 25, fps: 24,
-          mode: 'text',
-        });
-        await vi.advanceTimersByTimeAsync(0);
-        // A minute in — far past 0/NaN but well short of the 10-min default —
-        // the render must still be alive.
-        await vi.advanceTimersByTimeAsync(60000);
-        expect(hang.proc.kill).not.toHaveBeenCalled();
-      })();
-    }
-    delete process.env.VIDEOGEN_IDLE_STALL_MS;
   });
 });
 
@@ -3263,6 +3039,98 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     expect(args[args.indexOf('--width') + 1]).toBe('768');
     expect(args[args.indexOf('--height') + 1]).toBe('512');
   });
+
+  // Capacity bounding (#5420). The floors live in lib/minimaxH3Memory.js and are
+  // unit-tested there; what these two pin is that the render boundary is WIRED
+  // to them — that the contract reaches the helper's argv, and that a box below
+  // every profile is refused before a child exists rather than after an hour of
+  // loading weights it can never hold.
+  it.each([
+    ['minimax_h3_8bit', 'generate_minimax_h3.py', 'unified-8bit'],
+    ['minimax_h3_cuda', 'generate_minimax_h3_cuda.py', null],
+  ])('hands %s its host-memory contract', async (modelId, helper, expectedProfile) => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+
+    await generateVideo({
+      jobId: `h3-memory-${modelId}`,
+      modelId,
+      prompt: 'a fox watches the rain',
+      width: 1344, height: 768, numFrames: 124, fps: 24, mode: 'text',
+    });
+
+    const [, args] = spawnMock.mock.calls.find(([, childArgs]) => (
+      Array.isArray(childArgs) && childArgs.some((arg) => basename(String(arg)) === helper)
+    ));
+    expect(args[args.indexOf('--min-system-memory-gb') + 1]).toBe('1');
+    expect(args[args.indexOf('--memory-headroom-gb') + 1]).toBe(String(MINIMAX_H3_HOST_RESERVE_GB));
+    // Only the MLX lane takes a server-selected profile: on CUDA the tier is
+    // VRAM-driven, so it stays the runner's call on --offload-profile.
+    if (expectedProfile) expect(args[args.indexOf('--memory-profile') + 1]).toBe(expectedProfile);
+    else expect(args).not.toContain('--memory-profile');
+  });
+
+  // Reusable prompt embeddings (#5443). The keying, retention and every
+  // degradation path are unit-tested against the runner in
+  // scripts/generate_minimax_h3.test.js; what this pins is that the render
+  // boundary WIRES the cache at all, and that it stays on the MLX lane — the
+  // diffusers CUDA runner has no such flag and would exit on an unknown one.
+  it.each([
+    ['minimax_h3_8bit', 'generate_minimax_h3.py', true],
+    ['minimax_h3_cuda', 'generate_minimax_h3_cuda.py', false],
+  ])('gives %s a prompt-embedding cache only where the runner has one', async (modelId, helper, cached) => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    // Imported here rather than at the top of the file: this module is vi.mocked
+    // above, and a static import would read it before the mock is installed.
+    const { MINIMAX_H3_PROMPT_EMBEDDING_CACHE_DIR } = await import('./runtimes.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+
+    await generateVideo({
+      jobId: `h3-embed-cache-${modelId}`,
+      modelId,
+      prompt: 'a fox watches the rain',
+      width: 1344, height: 768, numFrames: 124, fps: 24, mode: 'text',
+    });
+
+    const [, args] = spawnMock.mock.calls.find(([, childArgs]) => (
+      Array.isArray(childArgs) && childArgs.some((arg) => basename(String(arg)) === helper)
+    ));
+    if (cached) {
+      expect(args[args.indexOf('--prompt-embedding-cache-dir') + 1])
+        .toBe(MINIMAX_H3_PROMPT_EMBEDDING_CACHE_DIR);
+    } else {
+      expect(args).not.toContain('--prompt-embedding-cache-dir');
+    }
+  });
+
+  it('refuses a render this machine cannot hold, before any child is spawned', async () => {
+    const mediaModels = await import('../../lib/mediaModels.js');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const getVideoModelsMock = vi.mocked(mediaModels.getVideoModels);
+    const catalog = getVideoModelsMock();
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+    getVideoModelsMock.mockReturnValue(catalog.map((model) => (
+      model.id === 'minimax_h3_8bit'
+        ? { ...model, memoryProfiles: [{ ...model.memoryProfiles[0], minMemoryGb: 1e6 }] }
+        : model
+    )));
+
+    try {
+      await expect(generateVideo({
+        jobId: 'h3-memory-refused',
+        modelId: 'minimax_h3_8bit',
+        prompt: 'a fox watches the rain',
+        width: 1344, height: 768, numFrames: 124, fps: 24, mode: 'text',
+      })).rejects.toMatchObject({ code: 'MINIMAX_H3_MEMORY_INSUFFICIENT', status: 400 });
+    } finally {
+      getVideoModelsMock.mockReturnValue(catalog);
+    }
+
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
 });
 
 // H3's DiT is quantized, so LoRAs ride along only if the installed runner
@@ -3583,7 +3451,7 @@ describe('generateVideo — signal-death diagnosis (#3101)', () => {
   // command-buffer watchdog, which arrives as SIGABRT. Before #3101 every signal
   // except SIGKILL fell through to a bare `Killed by signal SIGABRT` with no
   // cause and no next step. These assert the close handler's signal→message map
-  // AND that the precedence above it (missingPyModule → idleStallFired → signal)
+  // AND that the precedence above it (missingPyModule → signal)
   // is preserved.
   function makeSignalProc() {
     const listeners = {};
@@ -4621,6 +4489,123 @@ describe('generateVideo — MiniMax H3 CUDA contract', () => {
   });
 });
 
+describe('generateVideo — LTX-2.5 CUDA contract', () => {
+  const ltx25Call = (spawnMock) => spawnMock.mock.calls.find(([, args]) => (
+    Array.isArray(args) && args.some((arg) => basename(String(arg)) === 'generate_ltx25_cuda.py')
+  ));
+
+  it('dispatches a cache-only first-frame render through the dedicated streamed runtime', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+
+    await generateVideo({
+      jobId: 'ltx25-cuda-args',
+      modelId: 'ltx25_cuda_distilled',
+      prompt: 'a fox watches the rain',
+      width: 768, height: 512, numFrames: 121, fps: 24,
+      steps: 99, guidanceScale: 12, mode: 'image',
+      sourceImagePath: '/mock/source.png', imageStrength: 0.7,
+      disableAudio: true,
+    });
+
+    const call = ltx25Call(spawnMock);
+    expect(call).toBeDefined();
+    const [bin, args, options] = call;
+    expect(String(bin)).toContain(join('.portos', 'ltx-2.5-cuda'));
+    expect(args[args.indexOf('--model-repo') + 1]).toBe('Lightricks/LTX-2.5');
+    expect(args[args.indexOf('--model-revision') + 1])
+      .toBe('bf86adedf518142442575d1ce2e767b7d01c8c76');
+    expect(args[args.indexOf('--steps') + 1]).toBe('8');
+    expect(args).not.toContain('--guidance');
+    expect(basename(args[args.indexOf('--image') + 1]))
+      .toBe('resized-src-ltx25-cuda-args.png');
+    expect(args[args.indexOf('--image-strength') + 1]).toBe('0.7');
+    expect(args).toContain('--disable-audio');
+    expect(args.flatMap((arg, i) => (arg === '--repo-file' ? [args[i + 1]] : []))).toEqual([
+      'diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors',
+      'text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors',
+    ]);
+    expect(options.env).toMatchObject({
+      HF_HUB_DISABLE_IMPLICIT_TOKEN: '1',
+      HF_HUB_OFFLINE: '1',
+      TRANSFORMERS_OFFLINE: '1',
+    });
+    expect(options.killProcessGroup).toBe(true);
+  });
+
+  it('rejects image mode without a source at the render boundary', async () => {
+    await expect(generateVideo({
+      jobId: 'ltx25-cuda-missing-image',
+      modelId: 'ltx25_cuda_distilled',
+      prompt: 'a fox watches the rain',
+      mode: 'image',
+    })).rejects.toMatchObject({ code: 'LTX25_CUDA_I2V_REQUIRES_IMAGE' });
+  });
+
+  it('promotes a staged upload before enforcing the image contract', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+
+    await generateVideo({
+      jobId: 'ltx25-cuda-staged-image',
+      modelId: 'ltx25_cuda_distilled',
+      prompt: 'a fox watches the rain',
+      mode: 'image', uploadedTempPath: '/mock/upload.png',
+    });
+
+    const [, args] = ltx25Call(spawnMock);
+    expect(basename(args[args.indexOf('--image') + 1]))
+      .toBe('resized-src-ltx25-cuda-staged-image.png');
+  });
+});
+
+describe('generateVideo — Wan 2.2 CUDA contract', () => {
+  it('dispatches a pinned, cache-only text render through the dedicated CUDA runtime', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+
+    await generateVideo({
+      jobId: 'wan22-cuda-args',
+      modelId: 'wan22_cuda_ti2v_5b',
+      prompt: 'a fox watches the rain',
+      negativePrompt: 'text, watermark',
+      width: 832, height: 480, numFrames: 81, fps: 24,
+      steps: 12, guidanceScale: 4.5, mode: 'text',
+    });
+
+    const call = spawnMock.mock.calls.find(([, args]) => (
+      Array.isArray(args) && args.some((arg) => basename(String(arg)) === 'generate_wan22_cuda.py')
+    ));
+    expect(call).toBeDefined();
+    const [bin, args, options] = call;
+    expect(String(bin)).toContain(join('.portos', 'wan2.2-cuda'));
+    expect(args[args.indexOf('--model-repo') + 1]).toBe('Wan-AI/Wan2.2-TI2V-5B-Diffusers');
+    expect(args[args.indexOf('--model-revision') + 1])
+      .toBe('b8fff7315c768468a5333511427288870b2e9635');
+    expect(args[args.indexOf('--steps') + 1]).toBe('12');
+    expect(args[args.indexOf('--guidance') + 1]).toBe('4.5');
+    expect(args[args.indexOf('--negative-prompt') + 1]).toBe('text, watermark');
+    expect(options.env).toMatchObject({
+      HF_HUB_DISABLE_IMPLICIT_TOKEN: '1',
+      HF_HUB_OFFLINE: '1',
+      TRANSFORMERS_OFFLINE: '1',
+    });
+    expect(options.killProcessGroup).toBe(true);
+  });
+
+  it('rejects image mode even when a source is supplied', async () => {
+    await expect(generateVideo({
+      jobId: 'wan22-cuda-image',
+      modelId: 'wan22_cuda_ti2v_5b',
+      prompt: 'a fox watches the rain',
+      mode: 'image', sourceImagePath: '/mock/source.png',
+    })).rejects.toMatchObject({ code: 'WAN22_MODE_UNSUPPORTED' });
+  });
+});
+
 // ── one-shot prompt-encode relaunch after a Metal watchdog abort (#4589) ─────
 // A real Metal abort can't be produced here, so the child is driven directly:
 // the marker lines and the abort banner are pushed onto its stderr, then it is
@@ -5484,5 +5469,154 @@ describe('generateVideo — i2v reference mode (#4874)', () => {
     await expect(renderWithReference({
       jobId: 'ref-bogus', i2vReferenceMode: 'inspiration',
     })).rejects.toMatchObject({ status: 400, code: 'I2V_REFERENCE_MODE_UNKNOWN' });
+  });
+});
+
+// Preview-fidelity decode (#5423). The whole point of the feature is that a
+// draft decoder can only ever REDUCE the cost of judging a composition — so
+// every gate that fails has to fall back to the model's own decoder silently,
+// and the history record must never claim a decode that did not happen.
+describe('generateVideo — MiniMax H3 draft decode (#5423)', () => {
+  const DECODER_RUNTIME_REV = 'fcd9e9b79a1d6018d91ac477c0968de1fa067e49';
+  const DECODER = Object.freeze({
+    id: 'draft',
+    label: 'Draft decoder',
+    description: 'Preview fidelity.',
+    repo: 'example/h3-draft-decoder',
+    revision: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+    files: ['decoder.safetensors'],
+    runtimeRevision: DECODER_RUNTIME_REV,
+  });
+
+  let baseCatalog = null;
+
+  // The shipped table is deliberately EMPTY (no asset has passed the
+  // verification checklist), so every gate below is exercised against a
+  // declaration injected onto the H3 entry for one test at a time.
+  const declareDecoder = async () => {
+    const { getVideoModels } = await import('../../lib/mediaModels.js');
+    const mock = vi.mocked(getVideoModels);
+    baseCatalog = baseCatalog || mock.getMockImplementation();
+    mock.mockImplementation(() => baseCatalog().map((model) => (
+      model.id === 'minimax_h3_8bit' ? { ...model, draftDecoder: DECODER } : model
+    )));
+  };
+
+  afterEach(async () => {
+    if (!baseCatalog) return;
+    const { getVideoModels } = await import('../../lib/mediaModels.js');
+    vi.mocked(getVideoModels).mockImplementation(baseCatalog);
+    mockFindCachedRepoFile.mockImplementation(async (_repo, filename) => join('/mock/hf/snap', filename));
+  });
+
+  const renderH3 = async (over = {}) => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+    const jobId = `h3-draft-${Math.random().toString(36).slice(2, 10)}`;
+    let startedMeta = null;
+    const capture = (e) => { if (e.generationId === jobId) startedMeta = e; };
+    videoGenEvents.on('started', capture);
+    await generateVideo({
+      jobId,
+      modelId: 'minimax_h3_8bit',
+      prompt: 'a fox watches the rain',
+      width: 1344, height: 768, numFrames: 124, fps: 24, mode: 'text',
+      ...over,
+    });
+    videoGenEvents.off('started', capture);
+    const [, args] = spawnMock.mock.calls.find(([, a]) => (
+      Array.isArray(a) && a.some((arg) => basename(String(arg)) === 'generate_minimax_h3.py')
+    ));
+    return { args, meta: startedMeta };
+  };
+
+  const hasDecoderFlag = (args) => args.some((arg) => String(arg).startsWith('--draft-decoder'));
+
+  it('emits the decoder flags and records the decode when every gate passes', async () => {
+    await declareDecoder();
+    byovRevisionState.current = true;
+    byovRevisionState.expectedRevision = DECODER_RUNTIME_REV;
+
+    const { args, meta } = await renderH3({ draftDecode: 'draft' });
+
+    expect(args[args.indexOf('--draft-decoder-id') + 1]).toBe('draft');
+    expect(args[args.indexOf('--draft-decoder-file') + 1]).toBe(join('/mock/hf/snap', 'decoder.safetensors'));
+    expect(args).toContain('--draft-decoder-shim-root');
+    expect(meta).toMatchObject({ draftDecode: 'draft' });
+  });
+
+  // Byte-identical argv on the default path is what keeps this feature from
+  // changing any render nobody opted into.
+  it.each([
+    ['an omitted decode', {}],
+    ['an explicit full decode', { draftDecode: 'full' }],
+  ])('emits no decoder flag for %s', async (_label, over) => {
+    await declareDecoder();
+    byovRevisionState.current = true;
+    byovRevisionState.expectedRevision = DECODER_RUNTIME_REV;
+
+    const { args, meta } = await renderH3(over);
+
+    expect(hasDecoderFlag(args)).toBe(false);
+    expect(meta.draftDecode).toBeUndefined();
+  });
+
+  // The fallback paths the issue calls out. Each one must reach the runner
+  // WITHOUT the flags rather than 400 a submitted job — and must leave the
+  // history record making no claim about a draft decode.
+  it.each([
+    [
+      'the model declares no decoder',
+      async () => {
+        byovRevisionState.current = true;
+        byovRevisionState.expectedRevision = DECODER_RUNTIME_REV;
+      },
+    ],
+    [
+      'the installed runner checkout is not the verified revision',
+      async () => {
+        await declareDecoder();
+        byovRevisionState.current = false;
+      },
+    ],
+    [
+      'the asset is not downloaded',
+      async () => {
+        await declareDecoder();
+        byovRevisionState.current = true;
+        byovRevisionState.expectedRevision = DECODER_RUNTIME_REV;
+        mockFindCachedRepoFile.mockImplementation(async (repo, filename) => (
+          repo === DECODER.repo ? null : join('/mock/hf/snap', filename)
+        ));
+      },
+    ],
+    [
+      'the model is another entry\'s declared Finish target',
+      async () => {
+        await declareDecoder();
+        byovRevisionState.current = true;
+        byovRevisionState.expectedRevision = DECODER_RUNTIME_REV;
+        // The finish graph is what makes H3 a delivery model here: a draft
+        // entry naming it is the whole declaration, and a preview-grade decode
+        // must refuse to run on it however the request was phrased.
+        const { getVideoModels } = await import('../../lib/mediaModels.js');
+        const mock = vi.mocked(getVideoModels);
+        const declared = mock.getMockImplementation();
+        mock.mockImplementation(() => [
+          ...declared(),
+          { id: 'pretend_draft', runtime: 'minimax_h3', finishModelId: 'minimax_h3_8bit' },
+        ]);
+      },
+    ],
+  ])('falls back to the full decoder when %s', async (_label, setup) => {
+    await setup();
+
+    const { args, meta } = await renderH3({ draftDecode: 'draft' });
+
+    expect(hasDecoderFlag(args)).toBe(false);
+    // Still a real H3 render, just on the model's own decoder.
+    expect(args).toContain('--model-repo');
+    expect(meta.draftDecode).toBeUndefined();
   });
 });

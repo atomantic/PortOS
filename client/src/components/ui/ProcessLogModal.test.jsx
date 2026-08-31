@@ -6,7 +6,10 @@ vi.mock('../../services/api', () => ({
   getProcessLogs: vi.fn(),
 }));
 
+vi.mock('../../lib/clipboard', () => ({ copyToClipboard: vi.fn() }));
+
 import { getProcessesList, getProcessLogs } from '../../services/api';
+import { copyToClipboard } from '../../lib/clipboard';
 import ProcessLogModal from './ProcessLogModal';
 
 describe('ProcessLogModal', () => {
@@ -28,6 +31,23 @@ describe('ProcessLogModal', () => {
     expect(await screen.findByText(/error: boom/)).toBeInTheDocument();
   });
 
+  it('copies the latest displayed logs exactly as returned', async () => {
+    render(<ProcessLogModal open onClose={() => {}} processName="portos-server" />);
+    await screen.findByText(/error: boom/);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy logs' }));
+
+    expect(copyToClipboard).toHaveBeenCalledWith('boot ok\nerror: boom', 'Logs copied');
+  });
+
+  it('disables copying when logs are empty', async () => {
+    getProcessLogs.mockResolvedValueOnce({ logs: '' });
+    render(<ProcessLogModal open onClose={() => {}} processName="portos-server" />);
+
+    await waitFor(() => expect(getProcessLogs).toHaveBeenCalledWith('portos-server', 200));
+    expect(screen.getByRole('button', { name: 'Copy logs' })).toBeDisabled();
+  });
+
   it('refetches with the new tail length when changed', async () => {
     render(<ProcessLogModal open onClose={() => {}} processName="portos-server" />);
     await waitFor(() => expect(getProcessLogs).toHaveBeenCalledWith('portos-server', 200));
@@ -47,6 +67,7 @@ describe('ProcessLogModal', () => {
     await waitFor(() => expect(getProcessLogs).toHaveBeenLastCalledWith('portos-cos', 200));
     // The stale portos-server logs must be gone while portos-cos is still loading.
     expect(screen.queryByText('server logs here')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy logs' })).toBeDisabled();
 
     resolveSecond({ logs: 'cos logs here' });
     expect(await screen.findByText('cos logs here')).toBeInTheDocument();

@@ -10,6 +10,7 @@
  */
 
 import { NON_AUTO_RETRY_BLOCK_CATEGORIES } from './taskBlockCategories.js';
+import { PR_COMPLETIONS } from './prDisposition.js';
 
 export { NON_AUTO_RETRY_BLOCK_CATEGORIES };
 
@@ -19,6 +20,17 @@ export { NON_AUTO_RETRY_BLOCK_CATEGORIES };
 // synced from a not-yet-upgraded federated peer, which a local migration can't
 // reach).
 export const INVESTIGATION_HEADLINE_PREFIX = '[Auto] Investigate agent failure';
+
+// Investigation tasks are unattended code-repair work. Keep them out of the
+// checkout that spawned them and send every change through the normal PR gate;
+// otherwise the generic commit handoff writes directly to the current branch.
+// This is top-level task data (rather than nested metadata) because both the
+// shared producer and the agent-failure producer pass it to addTask().
+export const INVESTIGATION_TASK_DELIVERY = Object.freeze({
+  useWorktree: true,
+  openPR: true,
+  prCompletion: PR_COMPLETIONS.MERGE_ON_GREEN,
+});
 
 // Task metadata survives a markdown round-trip, so booleans come back as the
 // strings 'true'/'false'. Local to keep this module import-free of the services

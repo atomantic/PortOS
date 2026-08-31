@@ -121,6 +121,30 @@ describe('ollamaManager residency status', () => {
   })
 })
 
+describe('ollamaManager startup failures', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('reports a missing CLI immediately instead of waiting for the startup probe timeout', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('ECONNREFUSED') }))
+    const { spawn } = await import('../lib/childProcess.js')
+    spawn.mockReset().mockImplementation(() => ({
+      pid: null,
+      stderr: { on: () => {} },
+      on: (event, handler) => {
+        if (event === 'error') queueMicrotask(() => handler(Object.assign(new Error('spawn ollama ENOENT'), { code: 'ENOENT' })))
+      },
+      unref: () => {},
+    }))
+    const { startServer } = await loadManager()
+
+    await expect(startServer()).resolves.toEqual({
+      success: false,
+      running: false,
+      error: 'Ollama did not become reachable: Ollama CLI is not installed or is not on PortOS\'s PATH. Install Ollama from https://ollama.com/download, then restart PortOS.'
+    })
+  })
+})
+
 describe('ollamaManager model capability sentinel', () => {
   afterEach(() => vi.unstubAllGlobals())
 

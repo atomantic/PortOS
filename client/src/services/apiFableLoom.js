@@ -33,6 +33,27 @@ export const reviewLoomSeriesPlan = (id, body = {}, options = {}) => request(loo
 export const feedbackLoomSeriesPlan = (id, body, options = {}) => request(loomPath(id, '/plan/feedback'), {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
+export const reviewLoomTeleplay = (id, body = {}, options = {}) => request(loomPath(id, '/review-teleplay'), {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+export const remediateLoomEditorial = (id, body = {}, options = {}) => request(loomPath(id, '/editorial/remediate'), {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+export const reviewLoomPlaythroughs = (id, body = {}, options = {}) => request(loomPath(id, '/playtest'), {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+export const startLoomEditorialAutopilot = (id, body = {}, options = {}) =>
+  request(loomPath(id, '/editorial/autopilot/start'), {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
+export const getLoomEditorialAutopilotStatus = (id, options = {}) =>
+  request(loomPath(id, '/editorial/autopilot/status'), options);
+export const getLoomEditorialAutopilotRun = (id, runId, options = {}) =>
+  request(loomPath(id, `/editorial/autopilot/${encodeURIComponent(runId)}`), options);
+export const cancelLoomEditorialAutopilot = (id, runId, options = {}) =>
+  request(loomPath(id, `/editorial/autopilot/${encodeURIComponent(runId)}/cancel`), {
+    method: 'POST', body: JSON.stringify({}), ...options,
+  });
 
 export const addLoomEpisode = (id, body, options = {}) => request(loomPath(id, '/episodes'), {
   method: 'POST', body: JSON.stringify(body), ...options,
@@ -45,6 +66,20 @@ export const deleteLoomEpisode = (id, episodeId, options = {}) => request(episod
 });
 export const validateLoomEpisode = (id, episodeId, options = {}) =>
   request(episodePath(id, episodeId, '/validate'), options);
+export const generateLoomEpisodeOutline = (id, episodeId, body = {}, options = {}) =>
+  request(episodePath(id, episodeId, '/outline/generate'), {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
+export const validateLoomEpisodeOutline = (id, episodeId, options = {}) =>
+  request(episodePath(id, episodeId, '/outline/validate'), {
+    method: 'POST', body: JSON.stringify({}), ...options,
+  });
+export const reviewLoomEpisodeOutline = (id, episodeId, body = {}, options = {}) =>
+  request(episodePath(id, episodeId, '/outline/review'), {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
+export const validateLoomSeriesOutlines = (id, options = {}) =>
+  request(loomPath(id, '/outlines/validate'), options);
 
 export const addLoomNode = (id, episodeId, body, options = {}) => request(episodePath(id, episodeId, '/nodes'), {
   method: 'POST', body: JSON.stringify(body), ...options,
@@ -94,5 +129,56 @@ export const playLoomTurn = (id, episodeId, body, options = {}) => request(episo
 // interrupted walk never leaves the loom claiming a format its scenes are not in.
 export const reformatLoomEpisode = (id, episodeId, body, options = {}) =>
   request(episodePath(id, episodeId, '/reformat'), {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
+
+export const preflightHostedLoomSession = (id, episodeId, options = {}) =>
+  request(episodePath(id, episodeId, '/sessions/preflight'), {
+    method: 'POST', body: JSON.stringify({}), ...options,
+  });
+
+export const createHostedLoomSession = (id, episodeId, body = {}, options = {}) =>
+  request(episodePath(id, episodeId, '/sessions/host'), {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
+
+export const getHostedLoomSession = (sessionId, options = {}) =>
+  request(`/fableloom/sessions/${encodeURIComponent(sessionId)}`, options);
+
+export const updateHostedLoomSession = (sessionId, patch = {}, options = {}) =>
+  request(`/fableloom/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'PATCH', body: JSON.stringify(patch), ...options,
+  });
+
+export const endHostedLoomSession = (sessionId, options = {}) =>
+  request(`/fableloom/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'DELETE', ...options,
+  });
+
+export const planLoomEpisodeProduction = (id, episodeId, body = {}, options = {}) =>
+  request(episodePath(id, episodeId, '/production/plan'), {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
+
+export const startLoomEpisodeProductionBatch = (id, episodeId, body = {}, options = {}) =>
+  request(episodePath(id, episodeId, '/production/batch'), {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
+
+export const getLoomEpisodeProductionBatch = (id, episodeId, runId, options = {}) =>
+  request(episodePath(id, episodeId, `/production/batch/${encodeURIComponent(runId)}`), options);
+
+export const cancelLoomEpisodeProductionBatch = (id, episodeId, runId, options = {}) =>
+  request(episodePath(id, episodeId, `/production/batch/${encodeURIComponent(runId)}/cancel`), {
+    method: 'POST', body: JSON.stringify({}), ...options,
+  });
+
+export const resumeLoomEpisodeProductionBatch = (id, episodeId, runId, options = {}) =>
+  request(episodePath(id, episodeId, `/production/batch/${encodeURIComponent(runId)}/resume`), {
+    method: 'POST', body: JSON.stringify({}), ...options,
+  });
+
+export const reviewLoomEpisodeContinuity = (id, episodeId, body = {}, options = {}) =>
+  request(episodePath(id, episodeId, '/continuity/review'), {
     method: 'POST', body: JSON.stringify(body), ...options,
   });

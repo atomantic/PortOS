@@ -70,6 +70,23 @@ describe('writers room — characters CRUD', () => {
     expect(updated.source).toBe('user');
   });
 
+  it('persists portable character production metadata accepted by the route schema', async () => {
+    const id = await newWork();
+    const c = await createCharacter(id, {
+      name: 'Mila',
+      voiceCanon: { version: 1, description: 'warm alto', approved: true },
+      identityPack: { avoid: ['different eye color'] },
+    });
+    expect(c.voiceCanon).toMatchObject({ version: 1, description: 'warm alto', approved: true });
+    expect(c.identityPack).toEqual({ assets: [], avoid: ['different eye color'] });
+
+    const updated = await updateCharacter(id, c.id, {
+      voiceCanon: { version: 2, description: 'urgent alto', approved: false },
+    });
+    expect(updated.voiceCanon).toMatchObject({ version: 2, description: 'urgent alto', approved: false });
+    expect(updated.identityPack).toEqual(c.identityPack);
+  });
+
   it('deletes a profile', async () => {
     const id = await newWork();
     const c = await createCharacter(id, { name: 'Vox' });

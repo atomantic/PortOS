@@ -461,6 +461,7 @@ export const sanitizeLineOffset = (raw) => {
   if (!Number.isFinite(n) || n < 0) return null;
   return Math.min(n, AUDIO_LINE_OFFSET_MAX_SEC);
 };
+
 const sanitizeAudioLine = (raw, i) => {
   if (!raw || typeof raw !== 'object') return null;
   const text = trimTo(raw.text, AUDIO_LINE_TEXT_MAX);

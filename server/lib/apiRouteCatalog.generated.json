@@ -52,6 +52,7 @@
     "/api/digital-twin/autobiography",
     "/api/digital-twin/identity",
     "/api/digital-twin/social-accounts",
+    "/api/eidoverse/world",
     "/api/fableloom",
     "/api/feature-agents",
     "/api/federation/media/v1",
@@ -1266,7 +1267,7 @@
       "sources": [
         {
           "source": "server/routes/apps/lifecycle.js",
-          "line": 251
+          "line": 262
         }
       ]
     },
@@ -1376,7 +1377,7 @@
       "sources": [
         {
           "source": "server/routes/apps/lifecycle.js",
-          "line": 299
+          "line": 310
         }
       ]
     },
@@ -1475,7 +1476,7 @@
       "sources": [
         {
           "source": "server/routes/apps/lifecycle.js",
-          "line": 315
+          "line": 326
         }
       ]
     },
@@ -1486,7 +1487,7 @@
       "sources": [
         {
           "source": "server/routes/apps/lifecycle.js",
-          "line": 190
+          "line": 201
         }
       ]
     },
@@ -1519,7 +1520,7 @@
       "sources": [
         {
           "source": "server/routes/apps/lifecycle.js",
-          "line": 280
+          "line": 291
         }
       ]
     },
@@ -1530,7 +1531,7 @@
       "sources": [
         {
           "source": "server/routes/apps/lifecycle.js",
-          "line": 167
+          "line": 178
         }
       ]
     },
@@ -1585,7 +1586,7 @@
       "sources": [
         {
           "source": "server/routes/apps/lifecycle.js",
-          "line": 228
+          "line": 239
         }
       ]
     },
@@ -6018,7 +6019,7 @@
       "sources": [
         {
           "source": "server/routes/cosScheduleRoutes.js",
-          "line": 95
+          "line": 107
         }
       ]
     },
@@ -6029,7 +6030,7 @@
       "sources": [
         {
           "source": "server/routes/cosScheduleRoutes.js",
-          "line": 129
+          "line": 141
         }
       ]
     },
@@ -6040,7 +6041,7 @@
       "sources": [
         {
           "source": "server/routes/cosScheduleRoutes.js",
-          "line": 135
+          "line": 147
         }
       ]
     },
@@ -6051,7 +6052,7 @@
       "sources": [
         {
           "source": "server/routes/cosScheduleRoutes.js",
-          "line": 219
+          "line": 231
         }
       ]
     },
@@ -6062,7 +6063,7 @@
       "sources": [
         {
           "source": "server/routes/cosScheduleRoutes.js",
-          "line": 157
+          "line": 169
         }
       ]
     },
@@ -6073,7 +6074,7 @@
       "sources": [
         {
           "source": "server/routes/cosScheduleRoutes.js",
-          "line": 163
+          "line": 175
         }
       ]
     },
@@ -6084,7 +6085,7 @@
       "sources": [
         {
           "source": "server/routes/cosScheduleRoutes.js",
-          "line": 173
+          "line": 185
         }
       ]
     },
@@ -6095,7 +6096,7 @@
       "sources": [
         {
           "source": "server/routes/cosScheduleRoutes.js",
-          "line": 108
+          "line": 120
         }
       ]
     },
@@ -6106,7 +6107,7 @@
       "sources": [
         {
           "source": "server/routes/cosScheduleRoutes.js",
-          "line": 116
+          "line": 128
         }
       ]
     },
@@ -6117,7 +6118,7 @@
       "sources": [
         {
           "source": "server/routes/cosScheduleRoutes.js",
-          "line": 188
+          "line": 200
         }
       ]
     },
@@ -6128,7 +6129,7 @@
       "sources": [
         {
           "source": "server/routes/cosScheduleRoutes.js",
-          "line": 194
+          "line": 206
         }
       ]
     },
@@ -6139,7 +6140,7 @@
       "sources": [
         {
           "source": "server/routes/cosScheduleRoutes.js",
-          "line": 209
+          "line": 221
         }
       ]
     },
@@ -6150,7 +6151,7 @@
       "sources": [
         {
           "source": "server/routes/cosScheduleRoutes.js",
-          "line": 142
+          "line": 154
         }
       ]
     },
@@ -6491,7 +6492,7 @@
       "sources": [
         {
           "source": "server/routes/cosScheduleRoutes.js",
-          "line": 101
+          "line": 113
         }
       ]
     },
@@ -8718,13 +8719,90 @@
       ]
     },
     {
+      "method": "POST",
+      "path": "/api/eidoverse/world/augment",
+      "mountPath": "/api/eidoverse/world",
+      "sources": [
+        {
+          "source": "server/routes/eidoverseWorldRoutes.js",
+          "line": 64
+        }
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/api/eidoverse/world/config",
+      "mountPath": "/api/eidoverse/world",
+      "sources": [
+        {
+          "source": "server/routes/eidoverseWorldRoutes.js",
+          "line": 44
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/eidoverse/world/presence",
+      "mountPath": "/api/eidoverse/world",
+      "sources": [
+        {
+          "source": "server/routes/eidoverseWorldRoutes.js",
+          "line": 51
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/eidoverse/world/project",
+      "mountPath": "/api/eidoverse/world",
+      "sources": [
+        {
+          "source": "server/routes/eidoverseWorldRoutes.js",
+          "line": 58
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/eidoverse/world/projection/status",
+      "mountPath": "/api/eidoverse/world",
+      "sources": [
+        {
+          "source": "server/routes/eidoverseWorldRoutes.js",
+          "line": 38
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/eidoverse/world/say",
+      "mountPath": "/api/eidoverse/world",
+      "sources": [
+        {
+          "source": "server/routes/eidoverseWorldRoutes.js",
+          "line": 71
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/eidoverse/world/status",
+      "mountPath": "/api/eidoverse/world",
+      "sources": [
+        {
+          "source": "server/routes/eidoverseWorldRoutes.js",
+          "line": 31
+        }
+      ]
+    },
+    {
       "method": "GET",
       "path": "/api/fableloom",
       "mountPath": "/api/fableloom",
       "sources": [
         {
           "source": "server/routes/fableLoom.js",
-          "line": 68
+          "line": 107
         }
       ]
     },
@@ -8735,7 +8813,7 @@
       "sources": [
         {
           "source": "server/routes/fableLoom.js",
-          "line": 75
+          "line": 114
         }
       ]
     },
@@ -8746,7 +8824,7 @@
       "sources": [
         {
           "source": "server/routes/fableLoom.js",
-          "line": 91
+          "line": 130
         }
       ]
     },
@@ -8757,35 +8835,13 @@
       "sources": [
         {
           "source": "server/routes/fableLoom.js",
-          "line": 80
+          "line": 119
         }
       ]
     },
     {
       "method": "PATCH",
       "path": "/api/fableloom/:id",
-      "mountPath": "/api/fableloom",
-      "sources": [
-        {
-          "source": "server/routes/fableLoom.js",
-          "line": 86
-        }
-      ]
-    },
-    {
-      "method": "POST",
-      "path": "/api/fableloom/:id/episodes",
-      "mountPath": "/api/fableloom",
-      "sources": [
-        {
-          "source": "server/routes/fableLoom.js",
-          "line": 115
-        }
-      ]
-    },
-    {
-      "method": "DELETE",
-      "path": "/api/fableloom/:id/episodes/:episodeId",
       "mountPath": "/api/fableloom",
       "sources": [
         {
@@ -8795,63 +8851,19 @@
       ]
     },
     {
-      "method": "PATCH",
-      "path": "/api/fableloom/:id/episodes/:episodeId",
+      "method": "GET",
+      "path": "/api/fableloom/:id/editorial/autopilot/:runId",
       "mountPath": "/api/fableloom",
       "sources": [
         {
           "source": "server/routes/fableLoom.js",
-          "line": 120
+          "line": 182
         }
       ]
     },
     {
       "method": "POST",
-      "path": "/api/fableloom/:id/episodes/:episodeId/feedback",
-      "mountPath": "/api/fableloom",
-      "sources": [
-        {
-          "source": "server/routes/fableLoom.js",
-          "line": 203
-        }
-      ]
-    },
-    {
-      "method": "POST",
-      "path": "/api/fableloom/:id/episodes/:episodeId/nodes",
-      "mountPath": "/api/fableloom",
-      "sources": [
-        {
-          "source": "server/routes/fableLoom.js",
-          "line": 142
-        }
-      ]
-    },
-    {
-      "method": "DELETE",
-      "path": "/api/fableloom/:id/episodes/:episodeId/nodes/:nodeId",
-      "mountPath": "/api/fableloom",
-      "sources": [
-        {
-          "source": "server/routes/fableLoom.js",
-          "line": 152
-        }
-      ]
-    },
-    {
-      "method": "PATCH",
-      "path": "/api/fableloom/:id/episodes/:episodeId/nodes/:nodeId",
-      "mountPath": "/api/fableloom",
-      "sources": [
-        {
-          "source": "server/routes/fableLoom.js",
-          "line": 147
-        }
-      ]
-    },
-    {
-      "method": "POST",
-      "path": "/api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/branch",
+      "path": "/api/fableloom/:id/editorial/autopilot/:runId/cancel",
       "mountPath": "/api/fableloom",
       "sources": [
         {
@@ -8862,12 +8874,155 @@
     },
     {
       "method": "POST",
+      "path": "/api/fableloom/:id/editorial/autopilot/start",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 169
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/fableloom/:id/editorial/autopilot/status",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 175
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/fableloom/:id/editorial/remediate",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 159
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/fableloom/:id/episodes",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 200
+        }
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/fableloom/:id/episodes/:episodeId",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 210
+        }
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/fableloom/:id/episodes/:episodeId",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 205
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/fableloom/:id/episodes/:episodeId/continuity/review",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 410
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/fableloom/:id/episodes/:episodeId/feedback",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 327
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/fableloom/:id/episodes/:episodeId/nodes",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 248
+        }
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/fableloom/:id/episodes/:episodeId/nodes/:nodeId",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 258
+        }
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/fableloom/:id/episodes/:episodeId/nodes/:nodeId",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 253
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/branch",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 314
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/readiness",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 237
+        }
+      ]
+    },
+    {
+      "method": "POST",
       "path": "/api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/transitions",
       "mountPath": "/api/fableloom",
       "sources": [
         {
           "source": "server/routes/fableLoom.js",
-          "line": 165
+          "line": 271
         }
       ]
     },
@@ -8878,7 +9033,7 @@
       "sources": [
         {
           "source": "server/routes/fableLoom.js",
-          "line": 177
+          "line": 283
         }
       ]
     },
@@ -8889,7 +9044,40 @@
       "sources": [
         {
           "source": "server/routes/fableLoom.js",
-          "line": 170
+          "line": 276
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/fableloom/:id/episodes/:episodeId/outline/generate",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 299
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/fableloom/:id/episodes/:episodeId/outline/review",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 309
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/fableloom/:id/episodes/:episodeId/outline/validate",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 304
         }
       ]
     },
@@ -8900,7 +9088,62 @@
       "sources": [
         {
           "source": "server/routes/fableLoom.js",
-          "line": 208
+          "line": 332
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/fableloom/:id/episodes/:episodeId/production/batch",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 381
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/fableloom/:id/episodes/:episodeId/production/batch/:runId",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 386
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/fableloom/:id/episodes/:episodeId/production/batch/:runId/cancel",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 394
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/fableloom/:id/episodes/:episodeId/production/batch/:runId/resume",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 402
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/fableloom/:id/episodes/:episodeId/production/plan",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 376
         }
       ]
     },
@@ -8911,7 +9154,7 @@
       "sources": [
         {
           "source": "server/routes/fableLoom.js",
-          "line": 219
+          "line": 343
         }
       ]
     },
@@ -8922,7 +9165,29 @@
       "sources": [
         {
           "source": "server/routes/fableLoom.js",
-          "line": 195
+          "line": 319
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/fableloom/:id/episodes/:episodeId/sessions/host",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 354
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/fableloom/:id/episodes/:episodeId/sessions/preflight",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 350
         }
       ]
     },
@@ -8933,7 +9198,7 @@
       "sources": [
         {
           "source": "server/routes/fableLoom.js",
-          "line": 130
+          "line": 221
         }
       ]
     },
@@ -8944,7 +9209,18 @@
       "sources": [
         {
           "source": "server/routes/fableLoom.js",
-          "line": 185
+          "line": 291
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/fableloom/:id/outlines/validate",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 215
         }
       ]
     },
@@ -8955,7 +9231,7 @@
       "sources": [
         {
           "source": "server/routes/fableLoom.js",
-          "line": 108
+          "line": 152
         }
       ]
     },
@@ -8966,7 +9242,7 @@
       "sources": [
         {
           "source": "server/routes/fableLoom.js",
-          "line": 98
+          "line": 137
         }
       ]
     },
@@ -8977,7 +9253,62 @@
       "sources": [
         {
           "source": "server/routes/fableLoom.js",
-          "line": 103
+          "line": 142
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/fableloom/:id/playtest",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 164
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/fableloom/:id/review-teleplay",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 147
+        }
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/fableloom/sessions/:sessionId",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 370
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/fableloom/sessions/:sessionId",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 359
+        }
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/fableloom/sessions/:sessionId",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        {
+          "source": "server/routes/fableLoom.js",
+          "line": 365
         }
       ]
     },
@@ -10033,7 +10364,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 750
+          "line": 826
         }
       ]
     },
@@ -10044,7 +10375,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 774
+          "line": 850
         }
       ]
     },
@@ -10055,7 +10386,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 769
+          "line": 845
         }
       ]
     },
@@ -10066,7 +10397,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 803
+          "line": 879
         }
       ]
     },
@@ -10077,7 +10408,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 788
+          "line": 864
         }
       ]
     },
@@ -10088,7 +10419,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 765
+          "line": 841
         }
       ]
     },
@@ -10099,7 +10430,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 693
+          "line": 769
         }
       ]
     },
@@ -10110,7 +10441,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 335
+          "line": 341
         }
       ]
     },
@@ -10121,7 +10452,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 339
+          "line": 345
         }
       ]
     },
@@ -10132,7 +10463,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 561
+          "line": 637
         }
       ]
     },
@@ -10143,7 +10474,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 699
+          "line": 775
         }
       ]
     },
@@ -10154,7 +10485,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 684
+          "line": 760
         }
       ]
     },
@@ -10165,7 +10496,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 385
+          "line": 391
         }
       ]
     },
@@ -10176,7 +10507,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 680
+          "line": 756
         }
       ]
     },
@@ -10187,7 +10518,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 583
+          "line": 659
         }
       ]
     },
@@ -10198,7 +10529,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 661
+          "line": 737
         }
       ]
     },
@@ -10209,7 +10540,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 642
+          "line": 718
         }
       ]
     },
@@ -10220,7 +10551,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 594
+          "line": 670
         }
       ]
     },
@@ -10231,7 +10562,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 622
+          "line": 698
         }
       ]
     },
@@ -10242,7 +10573,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 352
+          "line": 358
         }
       ]
     },
@@ -10352,7 +10683,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 321
+          "line": 327
         }
       ]
     },
@@ -10363,7 +10694,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 62
+          "line": 67
         }
       ]
     },
@@ -10374,7 +10705,7 @@
       "sources": [
         {
           "source": "server/routes/imageGen.js",
-          "line": 577
+          "line": 653
         }
       ]
     },
@@ -13784,7 +14115,7 @@
       "sources": [
         {
           "source": "server/routes/mediaJobs.js",
-          "line": 102
+          "line": 103
         }
       ]
     },
@@ -13795,7 +14126,7 @@
       "sources": [
         {
           "source": "server/routes/mediaJobs.js",
-          "line": 358
+          "line": 371
         }
       ]
     },
@@ -13806,7 +14137,7 @@
       "sources": [
         {
           "source": "server/routes/mediaJobs.js",
-          "line": 131
+          "line": 132
         }
       ]
     },
@@ -13817,7 +14148,7 @@
       "sources": [
         {
           "source": "server/routes/mediaJobs.js",
-          "line": 144
+          "line": 145
         }
       ]
     },
@@ -13828,7 +14159,7 @@
       "sources": [
         {
           "source": "server/routes/mediaJobs.js",
-          "line": 256
+          "line": 269
         }
       ]
     },
@@ -13839,7 +14170,7 @@
       "sources": [
         {
           "source": "server/routes/mediaJobs.js",
-          "line": 374
+          "line": 387
         }
       ]
     },
@@ -13850,7 +14181,7 @@
       "sources": [
         {
           "source": "server/routes/mediaJobs.js",
-          "line": 386
+          "line": 399
         }
       ]
     },
@@ -13861,7 +14192,7 @@
       "sources": [
         {
           "source": "server/routes/mediaJobs.js",
-          "line": 126
+          "line": 127
         }
       ]
     },
@@ -13872,7 +14203,7 @@
       "sources": [
         {
           "source": "server/routes/mediaJobs.js",
-          "line": 121
+          "line": 122
         }
       ]
     },
@@ -14345,7 +14676,7 @@
       "sources": [
         {
           "source": "server/routes/messages.js",
-          "line": 500
+          "line": 495
         }
       ]
     },
@@ -14356,7 +14687,7 @@
       "sources": [
         {
           "source": "server/routes/messages.js",
-          "line": 435
+          "line": 430
         }
       ]
     },
@@ -14422,7 +14753,7 @@
       "sources": [
         {
           "source": "server/routes/messages.js",
-          "line": 425
+          "line": 420
         }
       ]
     },
@@ -14433,7 +14764,7 @@
       "sources": [
         {
           "source": "server/routes/messages.js",
-          "line": 492
+          "line": 487
         }
       ]
     },
@@ -14444,7 +14775,7 @@
       "sources": [
         {
           "source": "server/routes/messages.js",
-          "line": 456
+          "line": 451
         }
       ]
     },
@@ -14455,7 +14786,7 @@
       "sources": [
         {
           "source": "server/routes/messages.js",
-          "line": 451
+          "line": 446
         }
       ]
     },
@@ -15753,7 +16084,7 @@
       "sources": [
         {
           "source": "server/routes/pipeline/audio.js",
-          "line": 285
+          "line": 321
         }
       ]
     },
@@ -15764,7 +16095,7 @@
       "sources": [
         {
           "source": "server/routes/pipeline/audio.js",
-          "line": 577
+          "line": 613
         }
       ]
     },
@@ -15775,7 +16106,7 @@
       "sources": [
         {
           "source": "server/routes/pipeline/audio.js",
-          "line": 294
+          "line": 330
         }
       ]
     },
@@ -16116,7 +16447,7 @@
       "sources": [
         {
           "source": "server/routes/pipeline/audio.js",
-          "line": 507
+          "line": 543
         }
       ]
     },
@@ -16127,7 +16458,7 @@
       "sources": [
         {
           "source": "server/routes/pipeline/audio.js",
-          "line": 453
+          "line": 489
         }
       ]
     },
@@ -16138,7 +16469,7 @@
       "sources": [
         {
           "source": "server/routes/pipeline/audio.js",
-          "line": 117
+          "line": 122
         }
       ]
     },
@@ -16149,7 +16480,7 @@
       "sources": [
         {
           "source": "server/routes/pipeline/audio.js",
-          "line": 159
+          "line": 164
         }
       ]
     },
@@ -16160,7 +16491,7 @@
       "sources": [
         {
           "source": "server/routes/pipeline/audio.js",
-          "line": 197
+          "line": 202
         }
       ]
     },
@@ -16171,7 +16502,7 @@
       "sources": [
         {
           "source": "server/routes/pipeline/audio.js",
-          "line": 423
+          "line": 459
         }
       ]
     },
@@ -16182,7 +16513,7 @@
       "sources": [
         {
           "source": "server/routes/pipeline/audio.js",
-          "line": 397
+          "line": 433
         }
       ]
     },
@@ -16193,7 +16524,7 @@
       "sources": [
         {
           "source": "server/routes/pipeline/audio.js",
-          "line": 341
+          "line": 377
         }
       ]
     },
@@ -16204,7 +16535,7 @@
       "sources": [
         {
           "source": "server/routes/pipeline/audio.js",
-          "line": 367
+          "line": 403
         }
       ]
     },
@@ -17447,7 +17778,7 @@
       "sources": [
         {
           "source": "server/routes/pipeline/audio.js",
-          "line": 105
+          "line": 110
         }
       ]
     },
@@ -17458,7 +17789,7 @@
       "sources": [
         {
           "source": "server/routes/pipeline/audio.js",
-          "line": 54
+          "line": 59
         }
       ]
     },
@@ -17469,7 +17800,7 @@
       "sources": [
         {
           "source": "server/routes/pipeline/audio.js",
-          "line": 86
+          "line": 91
         }
       ]
     },
@@ -17480,7 +17811,7 @@
       "sources": [
         {
           "source": "server/routes/pipeline/audio.js",
-          "line": 42
+          "line": 47
         }
       ]
     },
@@ -19059,7 +19390,7 @@
       "sources": [
         {
           "source": "server/routes/settings.js",
-          "line": 136
+          "line": 143
         }
       ]
     },
@@ -19070,7 +19401,7 @@
       "sources": [
         {
           "source": "server/routes/settings.js",
-          "line": 178
+          "line": 214
         }
       ]
     },
@@ -19081,7 +19412,7 @@
       "sources": [
         {
           "source": "server/routes/settings.js",
-          "line": 155
+          "line": 162
         }
       ]
     },
@@ -19092,7 +19423,7 @@
       "sources": [
         {
           "source": "server/routes/settings.js",
-          "line": 172
+          "line": 208
         }
       ]
     },
@@ -19103,7 +19434,7 @@
       "sources": [
         {
           "source": "server/routes/settings.js",
-          "line": 160
+          "line": 167
         }
       ]
     },
@@ -19114,7 +19445,40 @@
       "sources": [
         {
           "source": "server/routes/settings.js",
-          "line": 165
+          "line": 201
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/features/eidoverse/host",
+      "mountPath": "/api/settings",
+      "sources": [
+        {
+          "source": "server/routes/settings.js",
+          "line": 195
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/features/eidoverse/install",
+      "mountPath": "/api/settings",
+      "sources": [
+        {
+          "source": "server/routes/settings.js",
+          "line": 174
+        }
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/api/settings/features/eidoverse/source",
+      "mountPath": "/api/settings",
+      "sources": [
+        {
+          "source": "server/routes/settings.js",
+          "line": 185
         }
       ]
     },
@@ -19125,7 +19489,7 @@
       "sources": [
         {
           "source": "server/routes/settings.js",
-          "line": 149
+          "line": 156
         }
       ]
     },
@@ -19323,7 +19687,7 @@
       "sources": [
         {
           "source": "server/routes/spotify.js",
-          "line": 71
+          "line": 87
         }
       ]
     },
@@ -19334,7 +19698,7 @@
       "sources": [
         {
           "source": "server/routes/spotify.js",
-          "line": 34
+          "line": 46
         }
       ]
     },
@@ -19345,7 +19709,7 @@
       "sources": [
         {
           "source": "server/routes/spotify.js",
-          "line": 45
+          "line": 57
         }
       ]
     },
@@ -19356,7 +19720,29 @@
       "sources": [
         {
           "source": "server/routes/spotify.js",
-          "line": 53
+          "line": 65
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/spotify/playlists",
+      "mountPath": "/api/spotify",
+      "sources": [
+        {
+          "source": "server/routes/spotify.js",
+          "line": 35
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/spotify/playlists/sync",
+      "mountPath": "/api/spotify",
+      "sources": [
+        {
+          "source": "server/routes/spotify.js",
+          "line": 41
         }
       ]
     },
@@ -19367,7 +19753,7 @@
       "sources": [
         {
           "source": "server/routes/spotify.js",
-          "line": 28
+          "line": 29
         }
       ]
     },
@@ -19378,7 +19764,7 @@
       "sources": [
         {
           "source": "server/routes/spotify.js",
-          "line": 78
+          "line": 94
         }
       ]
     },
@@ -21765,7 +22151,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 906
+          "line": 940
         }
       ]
     },
@@ -21776,7 +22162,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1256
+          "line": 1358
         }
       ]
     },
@@ -21787,7 +22173,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1232
+          "line": 1334
         }
       ]
     },
@@ -21798,7 +22184,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1261
+          "line": 1363
         }
       ]
     },
@@ -21809,7 +22195,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1290
+          "line": 1392
         }
       ]
     },
@@ -21820,7 +22206,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1338
+          "line": 1440
         }
       ]
     },
@@ -21831,7 +22217,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1310
+          "line": 1412
         }
       ]
     },
@@ -21842,7 +22228,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1346
+          "line": 1448
         }
       ]
     },
@@ -21853,7 +22239,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1342
+          "line": 1444
         }
       ]
     },
@@ -21864,7 +22250,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 785
+          "line": 819
         }
       ]
     },
@@ -21875,7 +22261,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 804
+          "line": 838
         }
       ]
     },
@@ -21886,7 +22272,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1363
+          "line": 1465
         }
       ]
     },
@@ -21897,7 +22283,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 438
+          "line": 457
         }
       ]
     },
@@ -21908,7 +22294,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 442
+          "line": 461
         }
       ]
     },
@@ -21919,7 +22305,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 510
+          "line": 529
         }
       ]
     },
@@ -21930,7 +22316,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 751
+          "line": 782
         }
       ]
     },
@@ -21941,7 +22327,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 736
+          "line": 767
         }
       ]
     },
@@ -21952,7 +22338,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 639
+          "line": 670
         }
       ]
     },
@@ -21963,7 +22349,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 719
+          "line": 750
         }
       ]
     },
@@ -21974,7 +22360,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 480
+          "line": 499
         }
       ]
     },
@@ -21985,7 +22371,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 482
+          "line": 501
         }
       ]
     },
@@ -21996,7 +22382,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 476
+          "line": 495
         }
       ]
     },
@@ -22007,7 +22393,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 388
+          "line": 407
         }
       ]
     },
@@ -22018,7 +22404,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1380
+          "line": 1482
         }
       ]
     },
@@ -22029,7 +22415,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 893
+          "line": 927
         }
       ]
     },
@@ -22040,7 +22426,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 879
+          "line": 913
         }
       ]
     },
@@ -22051,7 +22437,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 849
+          "line": 883
         }
       ]
     },
@@ -22062,7 +22448,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 859
+          "line": 893
         }
       ]
     },
@@ -22073,7 +22459,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1331
+          "line": 1433
         }
       ]
     },
@@ -22084,7 +22470,7 @@
       "sources": [
         {
           "source": "server/routes/videoGen.js",
-          "line": 1369
+          "line": 1471
         }
       ]
     },
@@ -22200,12 +22586,23 @@
     },
     {
       "method": "GET",
+      "path": "/api/voice/engines",
+      "mountPath": "/api/voice",
+      "sources": [
+        {
+          "source": "server/routes/voice.js",
+          "line": 266
+        }
+      ]
+    },
+    {
+      "method": "GET",
       "path": "/api/voice/facetime/status",
       "mountPath": "/api/voice",
       "sources": [
         {
           "source": "server/routes/voice.js",
-          "line": 185
+          "line": 178
         }
       ]
     },
@@ -22216,7 +22613,128 @@
       "sources": [
         {
           "source": "server/routes/voice.js",
-          "line": 205
+          "line": 377
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/voice/profiles",
+      "mountPath": "/api/voice",
+      "sources": [
+        {
+          "source": "server/routes/voice.js",
+          "line": 271
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/voice/profiles/:id/benchmark",
+      "mountPath": "/api/voice",
+      "sources": [
+        {
+          "source": "server/routes/voice.js",
+          "line": 320
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/voice/profiles/:id/benchmark-interactive",
+      "mountPath": "/api/voice",
+      "sources": [
+        {
+          "source": "server/routes/voice.js",
+          "line": 327
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/voice/profiles/:id/fine-tune/:jobId",
+      "mountPath": "/api/voice",
+      "sources": [
+        {
+          "source": "server/routes/voice.js",
+          "line": 342
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/voice/profiles/:id/fine-tune/:jobId/cancel",
+      "mountPath": "/api/voice",
+      "sources": [
+        {
+          "source": "server/routes/voice.js",
+          "line": 348
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/voice/profiles/:id/fine-tune/:jobId/promote",
+      "mountPath": "/api/voice",
+      "sources": [
+        {
+          "source": "server/routes/voice.js",
+          "line": 354
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/voice/profiles/:id/fine-tune/start",
+      "mountPath": "/api/voice",
+      "sources": [
+        {
+          "source": "server/routes/voice.js",
+          "line": 335
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/voice/profiles/:id/promote",
+      "mountPath": "/api/voice",
+      "sources": [
+        {
+          "source": "server/routes/voice.js",
+          "line": 312
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/voice/profiles/clone",
+      "mountPath": "/api/voice",
+      "sources": [
+        {
+          "source": "server/routes/voice.js",
+          "line": 298
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/voice/profiles/design",
+      "mountPath": "/api/voice",
+      "sources": [
+        {
+          "source": "server/routes/voice.js",
+          "line": 291
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/voice/profiles/preset",
+      "mountPath": "/api/voice",
+      "sources": [
+        {
+          "source": "server/routes/voice.js",
+          "line": 277
         }
       ]
     },
@@ -22255,12 +22773,34 @@
     },
     {
       "method": "POST",
+      "path": "/api/voice/qwen3/download-model",
+      "mountPath": "/api/voice",
+      "sources": [
+        {
+          "source": "server/routes/voice.js",
+          "line": 370
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/voice/qwen3/status",
+      "mountPath": "/api/voice",
+      "sources": [
+        {
+          "source": "server/routes/voice.js",
+          "line": 366
+        }
+      ]
+    },
+    {
+      "method": "POST",
       "path": "/api/voice/speak",
       "mountPath": "/api/voice",
       "sources": [
         {
           "source": "server/routes/voice.js",
-          "line": 257
+          "line": 411
         }
       ]
     },
@@ -22271,7 +22811,7 @@
       "sources": [
         {
           "source": "server/routes/voice.js",
-          "line": 168
+          "line": 164
         }
       ]
     },
@@ -22282,7 +22822,7 @@
       "sources": [
         {
           "source": "server/routes/voice.js",
-          "line": 218
+          "line": 388
         }
       ]
     },
@@ -22293,7 +22833,7 @@
       "sources": [
         {
           "source": "server/routes/voice.js",
-          "line": 283
+          "line": 431
         }
       ]
     },
@@ -22304,7 +22844,7 @@
       "sources": [
         {
           "source": "server/routes/voice.js",
-          "line": 295
+          "line": 441
         }
       ]
     },
@@ -22315,7 +22855,7 @@
       "sources": [
         {
           "source": "server/routes/voice.js",
-          "line": 199
+          "line": 189
         }
       ]
     },
@@ -22326,7 +22866,7 @@
       "sources": [
         {
           "source": "server/routes/voice.js",
-          "line": 307
+          "line": 448
         }
       ]
     },
@@ -23036,12 +23576,34 @@
     },
     {
       "method": "GET",
+      "path": "/api/youtube/playlists",
+      "mountPath": "/api/youtube",
+      "sources": [
+        {
+          "source": "server/routes/youtube.js",
+          "line": 26
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/youtube/playlists/sync",
+      "mountPath": "/api/youtube",
+      "sources": [
+        {
+          "source": "server/routes/youtube.js",
+          "line": 33
+        }
+      ]
+    },
+    {
+      "method": "GET",
       "path": "/api/youtube/setup-check",
       "mountPath": "/api/youtube",
       "sources": [
         {
           "source": "server/routes/youtube.js",
-          "line": 11
+          "line": 12
         }
       ]
     },
@@ -23052,7 +23614,7 @@
       "sources": [
         {
           "source": "server/routes/youtube.js",
-          "line": 18
+          "line": 19
         }
       ]
     },
@@ -23063,7 +23625,7 @@
       "sources": [
         {
           "source": "server/routes/youtube.js",
-          "line": 25
+          "line": 39
         }
       ]
     },
@@ -23146,9 +23708,9 @@
     }
   ],
   "stats": {
-    "mounts": 145,
-    "operations": 2088,
-    "declarations": 2091,
-    "sourceFiles": 225
+    "mounts": 146,
+    "operations": 2139,
+    "declarations": 2142,
+    "sourceFiles": 226
   }
 }

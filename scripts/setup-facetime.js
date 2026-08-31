@@ -10,10 +10,11 @@ if (process.platform !== 'darwin') {
 }
 
 const source = join(import.meta.dirname, '..', 'server', 'native', 'facetime-ax', 'main.swift');
+const identitySource = join(import.meta.dirname, '..', 'server', 'native', 'facetime-ax', 'identityMatcher.swift');
 const output = join(homedir(), '.portos', 'voice', 'facetime-ax');
-if (!existsSync(source)) throw new Error('FaceTime helper source is missing');
+if (!existsSync(source) || !existsSync(identitySource)) throw new Error('FaceTime helper source is missing');
 mkdirSync(dirname(output), { recursive: true });
-execFileSync('swiftc', ['-O', source, '-o', output], { stdio: 'inherit' });
+execFileSync('swiftc', ['-O', identitySource, source, '-o', output], { stdio: 'inherit' });
 console.log('✅ FaceTime Audio helper installed. Grant it Accessibility access before use.');
 
 // BlackHole is GPLv3 and is deliberately NOT bundled: PortOS asks, the user

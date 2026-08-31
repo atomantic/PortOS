@@ -33,8 +33,8 @@ from pathlib import Path
 # Lazy heavy-import note: `torch` and `PIL` are deferred into the functions
 # that actually need them (pick_device, make_generator, make_stepwise_callback).
 # Lightweight helpers — heartbeat, install_hf_error_handler, write_sidecar —
-# stay usable from venvs that haven't pip-installed torch yet (e.g. the
-# Hunyuan venv during a partial bootstrap).
+# stay usable from venvs that haven't pip-installed torch yet during a partial
+# runtime bootstrap.
 
 
 def register_source_namespace(package_name: str, package_dir: "str | Path"):

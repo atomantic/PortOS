@@ -26,7 +26,7 @@ import { getImageModels, requiredReposForModel } from '../lib/mediaModels.js';
 import { inspectModelCache, verifyModelCache, repairModelCache, aggregateVerifies } from '../lib/hfCache.js';
 import { startHfDownloadStream } from '../services/hfDownloadStream.js';
 import { PATHS, ensureDir, resolveGalleryImage } from '../lib/fileUtils.js';
-import { prepareGenerateParams, resolveLocalImageModel } from '../services/imageGen/prepareParams.js';
+import { prepareGenerateParams, resolveLocalImageModel, selectLocalImageModel } from '../services/imageGen/prepareParams.js';
 import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '../services/imageGen/variants.js';
 import { join, basename } from 'node:path';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
@@ -45,7 +45,12 @@ import { getSettings } from '../services/settings.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';
 import { collectRemoteInputAssets } from '../services/federatedMedia/inputAssets.js';
 import { buildFederatedMediaRequest } from '../lib/federatedMediaRequest.js';
-import { attachNodeImage } from '../services/fableLoom/records.js';
+import { asFableLoomRenderSettings, inspectEpisodeProductionOrder } from '../lib/fableLoomProduction.js';
+import { attachNodeImage, getLoom } from '../services/fableLoom/records.js';
+import {
+  compileFableLoomVisualRequest, fableLoomImageCapabilities,
+} from '../services/fableLoom/visualConditioning.js';
+import { loraCompatKey } from '../lib/runners.js';
 
 const router = Router();
 
@@ -173,6 +178,7 @@ const generateSchema = z.object({
     loomId: z.string().min(1).max(200),
     episodeId: z.string().min(1).max(200),
     nodeId: z.string().min(1).max(200),
+    role: z.literal('image').optional(),
   }).optional(),
   // Music Video scene reference-frame render (#1760 Phase 1b). When present, the
   // mediaJobQueue completion hook (`musicVideoSceneImageHook`) files the finished
@@ -390,6 +396,72 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     referenceImageFields: REFERENCE_IMAGE_FIELDS,
   });
 
+  // FableLoom is compiled server-side after the backend pin resolves. The
+  // browser's prompt/reference fields are hints only: stable scene bindings,
+  // approved assets and deterministic graph continuity own the final request.
+  if (params.fableLoom) {
+    const taggedLoom = await getLoom(params.fableLoom.loomId);
+    const taggedEpisode = taggedLoom?.episodes?.find((episode) => episode.id === params.fableLoom.episodeId);
+    const renderSettings = taggedLoom ? asFableLoomRenderSettings(taggedLoom.renderSettings) : null;
+    if (renderSettings) {
+      params.width = renderSettings.width;
+      params.height = renderSettings.height;
+      params.aspectRatio = renderSettings.aspectRatio;
+    }
+    if (taggedLoom && taggedEpisode) {
+      const episodeOrder = inspectEpisodeProductionOrder(taggedLoom, taggedEpisode);
+      if (!episodeOrder.ready) {
+        throw new ServerError(
+          `FableLoom storyboard production is out of order: ${episodeOrder.reason}`,
+          {
+            status: 409,
+            code: 'FABLELOOM_EPISODE_ORDER_BLOCKED',
+            context: { details: { episodeOrder } },
+          },
+        );
+      }
+    }
+    const selected = mode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModel(params.modelId) : null;
+    const cloud = selected ? null : resolveCloudProviderConfig(settings, mode, { model: params.cloudModel });
+    const model = selected
+      ? { ...selected, loraCompatKey: loraCompatKey(selected) }
+      : (cloud ? { id: cloud.modelId } : null);
+    const providerMode = params.mediaProviderPeerId ? 'federated' : mode;
+    const compiled = await compileFableLoomVisualRequest({
+      tag: params.fableLoom,
+      kind: 'image',
+      capability: fableLoomImageCapabilities({
+        mode: providerMode,
+        model,
+        inputBudget: mode === IMAGE_GEN_MODE.AGY ? 3 : MAX_REFERENCE_IMAGES,
+      }),
+      authoredPrompt: params.prompt,
+      authoredNegativePrompt: params.negativePrompt,
+    });
+    if (compiled) {
+      params.prompt = compiled.prompt;
+      params.negativePrompt = compiled.negativePrompt;
+      params.referenceImagePaths = compiled.referenceImagePaths;
+      params.referenceImageStrengths = compiled.referenceImageStrengths;
+      params.loraFilenames = compiled.loraFilenames;
+      params.loraPaths = [];
+      params.loraScales = compiled.loraScales;
+      params.visualConditioning = compiled.visualConditioning ? {
+        ...compiled.visualConditioning,
+        render: {
+          provider: providerMode,
+          modelId: model?.id || null,
+          modelRevision: model?.revision || null,
+          parameters: {
+            width: params.width,
+            height: params.height,
+            ...(params.aspectRatio ? { aspectRatio: params.aspectRatio } : {}),
+          },
+        },
+      } : null;
+    }
+  }
+
   // Resolve an optional universe-collection target into a job tag the
   // completion hook understands. Done server-side so a base-style probe lands
   // in the same "Universe: <name>" bucket as batch renders without the
@@ -552,7 +624,11 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
       params.fableLoom.loomId,
       params.fableLoom.episodeId,
       params.fableLoom.nodeId,
-      { filename: result.filename, jobId: result.generationId },
+      {
+        filename: result.filename,
+        jobId: result.generationId,
+        visualConditioning: params.visualConditioning,
+      },
     );
   }
   res.json(result);

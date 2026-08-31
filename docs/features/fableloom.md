@@ -12,9 +12,9 @@ rehearse the same experience at any of those three production stages.
 
 | Term | Meaning |
 |---|---|
-| **Loom** | A branching-narrative story (`loom-*`): name/logline/premise, scene `format`, audience `participationMode`, helper `audienceCommunicationMedium`, optional `playSettings` pin, optional `universeId` + `seriesId` links, episodes. |
-| **Episode** | One playable graph (`ep-*`): title, synopsis (feeds generation), `startNodeId`, nodes. |
-| **Scene node** | One camera cut (`node-*`): teleplay/prose, image prompt/render, single-clip video prompt/render, camera movement, `playbackMode`, `audienceConnection`, ending state, transitions. |
+| **Loom** | A branching-narrative story (`loom-*`): name/logline/premise, scene `format`, audience `participationMode`, helper `audienceCommunicationMedium`, optional canonical Universe protagonist/wardrobe pin, optional `playSettings` pin, optional `universeId` + `seriesId` links, episodes. |
+| **Episode** | One playable graph (`ep-*`): title, synopsis (feeds generation), an optional validated `storyOutline` of log-line beats, `startNodeId`, nodes. |
+| **Scene node** | One camera cut (`node-*`): teleplay/prose, image prompt/render, single-clip video prompt/render, camera movement, `playbackMode`, `audienceConnection`, `protagonistPresence`, ending state, transitions. |
 | **Transition** | An intent-labeled edge (`tr-*`): `intent`, `triggers` (example phrasings), spoiler-safe `description`, `targetNodeId`. |
 
 ## Playback contract
@@ -57,6 +57,16 @@ their single automatic canon path until a later scene restores the connection.
 The graph validator flags helper episodes that never connect, connect too late,
 or expose a decision while disconnected.
 
+Story settings also pin the canonical protagonist to one Universe character and
+optionally one locked wardrobe. The scene editor shows the character's sheet
+and approved identity-pack readiness, offers a one-click visual-cast binding,
+and lets each scene choose on-screen or off-screen presence. An off-screen
+connected decision is the side-device conversation: its decision image omits
+the protagonist while the loop remains visible to the host. The server-side
+visual compiler applies the canonical wardrobe to every on-screen protagonist
+binding and records the presence decision in render provenance, so stale
+scene-local clothes cannot silently reappear between episodes.
+
 ## Surfaces
 
 - **`/fableloom`** — index: create/delete looms, link a universe (canon +
@@ -70,9 +80,16 @@ or expose a decision while disconnected.
   below it on small ones, with a path strip for inbound/outbound intents
   when the graph is stacked. `?play=1` opens the reader drawer.
 - **`/fableloom/:loomId/:episodeId/outline`** — a text-first episode outline:
-  reachable scenes appear in story order with their authored prose, endings,
-  and reader paths. Unreachable scenes remain visible in a separate section,
-  and path destinations return to the matching scene in the visual editor.
+  the saved beat outline appears first, followed by reachable teleplay scenes in
+  story order with their authored prose, endings, and reader paths. Unreachable
+  scenes remain visible in a separate section, and path destinations return to
+  the matching scene in the visual editor.
+- **Episode setup → Story beats → teleplay** — the production gate: draft one
+  concise log-line per eventual camera cut, edit paths and audience-channel
+  states, run the deterministic validator, and optionally ask the AI story
+  editor to review the arc. Teleplay expansion is blocked until every episode
+  in the series has a valid beat outline and any configured voicemail/finale
+  teaser handoffs have authored text.
 - **Play drawer** — an interactive production preview with **Text**,
   **Storyboard images**, and **Rendered video** modes. All three traverse the
   same graph. Rendered automatic cuts advance on the video's `ended` event;
@@ -81,6 +98,13 @@ or expose a decision while disconnected.
   are client-side state (restart is free; nothing persists server-side).
 - **Story settings drawer** — audience role and communication medium, scene
   format (plus the rewrite pass), and the narrator's provider/model/effort pin.
+- **AI editor, reviewer & playtest** — a whole-series remediation pass and a
+  bounded autopilot that alternates safe edits with deterministic + narrative
+  path review. Its optional **Improve FableLoom itself** post-mortem runs only
+  after a pause or failure, sends content-free counters (never story records)
+  through one budget-gated diagnosis, and queues a deduplicated PortOS CoS task
+  when the workflow rather than the story is at fault. The task remains in the
+  approval queue; the per-run checkbox does not grant unattended source edits.
 - **Series detail page** (`/pipeline/series/:seriesId`) — a "Branching
   narratives" card lists the looms linked to that series (counts + a link into
   the editor) and spawns a new one pre-linked to the series and its universe.
@@ -158,10 +182,13 @@ in the request body beats both.
 | Stage | What it does |
 |---|---|
 | `fableloom-generate-series-plan` | Drafts the full series arc, ordered plot points, and side quests from the loom metadata, linked-universe canon, and episode outline. |
+| `fableloom-outline-episode` | Drafts one episode as concise camera-cut log-lines, viewer paths, audience-channel states, and distinct endings without writing teleplay or media prompts. |
 | `fableloom-weave-episode` | Generates or reweaves a full episode as single-camera-cut nodes. The story writer/creative director chooses node and ending counts, establishes the configured audience role/medium near the opening, tracks connection availability, marks automatic cuts vs decision loops, and assigns camera/video direction. A reweave sees and preserves the existing story graph while splitting multi-cut scenes. |
 | `fableloom-branch-node` | Grows N new intent-labeled single-cut branches with playback and camera direction. |
 | `fableloom-play-turn` | Resolves one reader message: `move` through a matched transition or `stay` with in-world narration. |
 | `fableloom-review` | Story-editor critique (intent clarity, branch coherence, ending payoff) layered over the deterministic checks. |
+| `fableloom-review-episode-outline` | Story-editor review of one episode's pre-teleplay arc, branch consequences, canon continuity, audience contract, endings, and handoff. |
+| `fableloom-review-series-teleplay` | Story-editor review of every expanded episode as one complete interactive teleplay series, including continuity, escalation, endings, visual beats, and delivery handoffs. |
 | `fableloom-reformat-scenes` | Rewrites existing scenes into the loom's other format (prose ⇄ teleplay), preserving every beat and decision point. |
 
 Deterministic graph validation (no LLM) lives in
@@ -170,6 +197,15 @@ ends, dangling transitions, unreachable endings, duplicate/empty intents,
 audience-connection availability, and the exactly-one-next-path contract for automatic cuts —
 and renders in the editor's Structure panel via
 `GET /api/fableloom/:id/episodes/:episodeId/validate`.
+
+Beat-outline validation is a separate deterministic gate. The per-episode
+result is persisted on `episode.storyOutline.validation`; the series result is
+available at `GET /api/fableloom/:id/outlines/validate`. Expansion rechecks
+both results server-side, so a stale client cannot bypass the story-first
+workflow. Scene-level and batch media controls mirror that readiness state in
+the UI: storyboard generation stays disabled until the ordered beat arc and
+any configured delivery handoffs are ready, preventing image spend on an
+unreviewed or out-of-order teleplay.
 
 Reweaving preserves story events and path meanings, but it replaces node ids;
 existing rendered stills and clips are therefore dropped. The setup drawer
@@ -183,35 +219,68 @@ nodeId }` destination tag. The completion hook
 (`server/services/fableLoomSceneImageHook.js`) files the finished render onto
 the node durably — even if the editor unmounted mid-render — with
 newest-render-wins per node. The loom's `styleNotes` are appended to the
-prompt for a consistent look. When a direct incoming scene already has a
-rendered still, its gallery filename is also sent as the next scene's init
-image at `0.4` strength. Graph edges, not node-array adjacency, define which
-shot is prior; at a convergence the first rendered incoming scene in stable
-episode order is the deterministic authoring-time source because there is no
-active reader path yet. Opening scenes and scenes without a rendered incoming
-neighbor remain text-to-image.
+prompt for a consistent look. The browser sends no untyped continuity images:
+`visualConditioning.js` resolves the current node, linked Universe, stable
+character/wardrobe/location/object ids, approved identity assets, compatible
+local character LoRAs, and graph predecessor on the server after the effective
+backend/model is known. A locked convergence uses an explicitly selected
+incoming node; without one it reports the ambiguity instead of guessing.
+Openings never inherit a loop-back shot.
 
-Continuity conditioning is best-effort for the current stopgap: if the active
-backend is text-to-image-only, or the predecessor's gallery file has since been
-removed, the editor warns and retries the scene without the init image rather
-than blocking production. Canon-locked generation will replace that fallback
-with an explicit capability gate in the planned typed-reference workflow.
+The scene editor's **Universe canon** section chooses locked or explicitly
+degraded-draft behavior. Locked image renders fail before enqueue if an
+identity package is incomplete, a required reference is unavailable or over
+budget, or the backend does not declare multi-character preservation. Draft
+renders remain usable but record every omitted input and warning. Each render
+stores a versioned `visualConditioning` manifest with bindings, backend
+capabilities, selected asset basenames, adapter SHA-256/scales, compiler
+version, temporal source, and omissions; machine-local paths never enter the
+loom or Universe record.
+
+The compiler treats an off-screen protagonist as an intentional omission, not
+as a missing reference: any stale protagonist binding is listed as omitted with
+reason `protagonist-offscreen`, and the manifest still records the canonical
+character, wardrobe, and presence for auditability.
 
 **Generate video** prefers the node's dedicated single-clip `videoPrompt`, adds
 the selected movement's production direction from the shared camera registry,
 and falls back to scene text for legacy nodes. The registry includes dolly,
 truck, pan/tilt, crane, orbit, tracking, handheld, drone, focus, roll, parallax,
 body-mounted, bullet-time, hyperlapse, and locked-off setups. If the node has a
-rendered image, it becomes the video's first-frame conditioning image;
-otherwise the render is text-to-video. The completion hook
+rendered image, a locked scene also requires the author to approve that exact
+storyboard as the first-frame contract; replacing the still clears approval.
+Text-to-video and stale/unapproved first frames can render only as explicit
+draft/degraded work. The completion hook
 (`server/services/fableLoomSceneVideoHook.js`) files the finished
 `videoHistoryId` onto the node durably, with newest-render-wins per node.
 Decision videos are authored as seamless loops; automatic-cut videos land on
 a final beat that hands cleanly to the next node.
 
-The broader character/environment canon-reference design, including structured
-scene bindings, provider input budgets, prompt compilation, provenance, and
-branch convergence, is specified in
+### Episodic production and continuity
+
+The **Production & Continuity** panel plans a whole episode before it queues
+provider work. It enumerates reachable scenes and typed assets (still,
+entry/hold/exit clips, and live-dialogue readiness), orders them by their
+dependencies, and exposes the selected image/video provider, model, and effort
+controls. Starting a batch is an explicit author action; it can be canceled,
+polled, and resumed after a failed or canceled asset. Dialogue is kept as a
+hosted interaction route rather than silently generating an offline audio
+batch.
+
+Each queued render records its effective provider, model/revision, parameters,
+canon bindings, references, adapters, omissions, warnings, and temporal source
+alongside the scene asset. **Repeat exact inputs** checks those recorded
+manifests and refuses missing assets, local model revisions, or changed
+compiled conditioning instead of falling back to a newer local default.
+
+**Run Continuity Review** is also explicit and deterministic. It reports
+wrong or missing character/wardrobe/place/object bindings, ambiguous graph
+convergence, voice/profile and pronunciation drift, unsafe hold-loop audio,
+clipping, and hosted-interaction readiness. Findings include scene links and
+remediation text; the review never mutates canon or promotes a replacement
+asset.
+
+The character/environment canon-reference design and rationale is specified in
 [`docs/plans/2026-08-29-fableloom-visual-continuity.md`](../plans/2026-08-29-fableloom-visual-continuity.md).
 The character voice, production provenance, playback-asset, QR join, and
 two-device hosted-mode contracts are specified in

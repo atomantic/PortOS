@@ -47,7 +47,7 @@ import {
   SquareTerminal,
   Globe,
   Newspaper,
-  Globe2,
+  Orbit,
   Ticket,
   Network,
   Flame,
@@ -166,7 +166,7 @@ import * as api from '../services/api';
 export const NAV_PRESENTATION = {
   '/': { icon: Home, single: true },
   '/review': { icon: ClipboardList, single: true },
-  '/openworld': { icon: Globe2, single: true },
+  '/eidoverse': { icon: Orbit, single: true },
   '/apps': { icon: Package, dynamic: 'apps' },
   '/brain/config': { icon: Settings },
   '/brain/daily-log': { icon: NotebookPen },
@@ -400,7 +400,7 @@ const sectionNavItem = (section) => {
   return { label: section, feature: sharedFeature, children, ...SECTION_PRESENTATION[section] };
 };
 
-const mainRows = ['/', '/review', '/openworld'].map(navRowForPath);
+const mainRows = ['/', '/review', '/eidoverse'].map(navRowForPath);
 const appsCommand = navRowForPath('/apps');
 const goalsRow = navRowForPath('/goals/list');
 const sectionRows = Object.fromEntries(SECTION_ORDER.map((section) => [section, sectionNavItem(section)]));
@@ -464,7 +464,7 @@ function WorkingSetRow({ entry, pinned, onTogglePin, onNavigate, isActive }) {
   );
 }
 
-// A top-level *single* nav row (Dashboard / Review Hub / OpenWorld / Goals). Unlike a
+// A top-level *single* nav row (Dashboard / Review Hub / Eidoverse / Goals). Unlike a
 // section, it links straight to one destination — and unlike WorkingSetRow it
 // carries the heavier top-level row weight plus the optional badge (Chief of
 // Staff unread count) and the collapsed-rail layout (icon-only, centered, badge
@@ -527,6 +527,7 @@ export function SingleNavRow({ item, collapsed, active, badgeCount, pinned, onTo
 // regex — see `isFullWidthRoute` below.
 const EXACT_FULL_WIDTH_PATHS = [
   '/character',
+  '/eidoverse',
   '/ai',
   // Data Manager is a bordered title bar over a `flex-1 overflow-auto` body,
   // so it owns its own scroll. EXACT, not a prefix — a `/data` prefix would
@@ -614,7 +615,6 @@ const FULL_WIDTH_PATH_PREFIXES = [
   '/writers-room',
   '/agents',
   '/shell/',
-  '/openworld',
   '/timeline/',
   // Every SongBook route — index (/songbook), import (/songbook/import),
   // and viewer (/songbook/:id) — is full-bleed and owns its own scroll

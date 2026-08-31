@@ -83,12 +83,22 @@ const router = createBrowserRouter([
   },
 ]);
 
+// The QR audience route is intentionally a no-bootstrap guest surface. Avoid
+// the theme settings request on a password-gated install: its 401 redirect
+// would otherwise replace the URL and discard the fragment credentials.
+const isHostedAudienceRoute = window.location.pathname.replace(/\/+$/, '') === '/fableloom/join';
+const app = isHostedAudienceRoute
+  ? <RouterProvider router={router} />
+  : (
+    <ThemeProvider>
+      <RouterProvider router={router} />
+    </ThemeProvider>
+  );
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <ThemeProvider>
-        <RouterProvider router={router} />
-      </ThemeProvider>
+      {app}
     </ErrorBoundary>
   </React.StrictMode>
 );

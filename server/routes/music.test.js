@@ -656,9 +656,7 @@ describe('music routes', () => {
   // Lyrics reach an allowlisted peer since ADR
   // docs/decisions/2026-08-22-federated-media-input-assets.md rule 2 — but only
   // when the resolved capability advertises BOTH that the model sings and that
-  // the peer's build carries the words. The three cases below are the whole
-  // contract: a peer too old to say so, a model that cannot sing, and the one
-  // combination that ships.
+  // the peer's build carries the words.
   const remoteLyricRequest = (peer, overrides = {}) => ({
     prompt: 'private concept',
     lyrics: '[verse]\nCall alice@example.com',
@@ -679,15 +677,31 @@ describe('music routes', () => {
     ...overrides,
   });
 
-  it('POST /generate refuses lyrics when the peer build cannot carry them, rather than rendering instrumental', async () => {
+  it('POST /generate refuses lyrics when the peer does not advertise them, rather than rendering instrumental', async () => {
     const peer = { id: '00000000-0000-4000-8000-000000000001', enabled: true };
     remoteProvider.peers = [peer];
-    // A provider predating lyrical federation: the MODEL sings, so `lyrics` is
-    // true, but it publishes neither the `lyrics` feature nor the legacy
-    // `acceptsLyrics`, and rejects the field on submit. Absent must read as
-    // false or every such render is a hard 400 the user cannot act on.
+    // A peer that does not publish a feature list cannot establish that its
+    // build accepts lyrics. Absent must read as false or every such render is a
+    // hard 400 the user cannot act on.
     remoteProvider.resolve.mockResolvedValueOnce({
       peer, capability: remoteLyricCapability({ lyrics: true }),
+    });
+
+    const r = await request(app).post('/api/music/generate').send(remoteLyricRequest(peer));
+
+    expect(r.status).toBe(400);
+    expect(r.body.code).toBe('MEDIA_PROVIDER_LYRICS_UNSUPPORTED');
+    expect(r.body.error).toContain('not reporting');
+    expect(mediaQueue.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('POST /generate identifies a peer build that omits the lyrics feature', async () => {
+    const peer = { id: '00000000-0000-4000-8000-000000000001', enabled: true };
+    remoteProvider.peers = [peer];
+    remoteProvider.resolve.mockResolvedValueOnce({
+      peer,
+      capability: remoteLyricCapability({ lyrics: true }),
+      status: { features: ['inputAssets'] },
     });
 
     const r = await request(app).post('/api/music/generate').send(remoteLyricRequest(peer));
@@ -698,27 +712,10 @@ describe('music routes', () => {
     expect(mediaQueue.enqueue).not.toHaveBeenCalled();
   });
 
-  it('POST /generate refuses lyrics for a remote model that renders instrumental only', async () => {
-    const peer = { id: '00000000-0000-4000-8000-000000000001', enabled: true };
-    remoteProvider.peers = [peer];
-    remoteProvider.resolve.mockResolvedValueOnce({
-      peer, capability: remoteLyricCapability({ lyrics: false, acceptsLyrics: false }),
-    });
-
-    const r = await request(app).post('/api/music/generate').send(remoteLyricRequest(peer));
-
-    expect(r.status).toBe(400);
-    expect(r.body.code).toBe('MEDIA_PROVIDER_LYRICS_UNSUPPORTED');
-    expect(r.body.error).toContain('instrumental audio only');
-    expect(mediaQueue.enqueue).not.toHaveBeenCalled();
-  });
-
   it('POST /generate accepts lyrics from a peer that advertises only the status-root feature', async () => {
     const peer = { id: '00000000-0000-4000-8000-000000000001', enabled: true };
     remoteProvider.peers = [peer];
-    // The post-migration provider: `features` at the status root and no
-    // `acceptsLyrics` on the capability at all. A consumer that had kept
-    // reading the per-capability field would refuse this peer outright.
+    // The provider advertises the build-level feature at the status root.
     remoteProvider.resolve.mockResolvedValueOnce({
       peer,
       capability: remoteLyricCapability({ lyrics: true }),
@@ -756,7 +753,9 @@ describe('music routes', () => {
     const peer = { id: '00000000-0000-4000-8000-000000000001', enabled: true };
     remoteProvider.peers = [peer];
     remoteProvider.resolve.mockResolvedValueOnce({
-      peer, capability: remoteLyricCapability({ lyrics: true, acceptsLyrics: true }),
+      peer,
+      capability: remoteLyricCapability({ lyrics: true }),
+      status: { features: ['lyrics', 'inputAssets'] },
     });
 
     const r = await request(app).post('/api/music/generate').send(remoteLyricRequest(peer));
@@ -778,7 +777,9 @@ describe('music routes', () => {
     const peer = { id: '00000000-0000-4000-8000-000000000001', enabled: true };
     remoteProvider.peers = [peer];
     remoteProvider.resolve.mockResolvedValueOnce({
-      peer, capability: remoteLyricCapability({ lyrics: true, acceptsLyrics: true }),
+      peer,
+      capability: remoteLyricCapability({ lyrics: true }),
+      status: { features: ['lyrics', 'inputAssets'] },
     });
 
     const r = await request(app).post('/api/music/generate')

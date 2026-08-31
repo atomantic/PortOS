@@ -118,7 +118,10 @@ describe('AI Toolkit runner service', () => {
       endpoint: 'http://localhost:11434/v1',
       defaultModel: 'llama3'
     };
-    const ensureProviderReady = vi.fn(async () => ({ success: false, error: 'service offline' }));
+    const ensureProviderReady = vi.fn(async () => ({
+      success: false,
+      error: "Ollama CLI is not installed or is not on PortOS's PATH. Install Ollama from https://ollama.com/download, then restart PortOS."
+    }));
     const onComplete = vi.fn();
     const onRunFailed = vi.fn();
     const fetch = vi.fn();
@@ -153,8 +156,8 @@ describe('AI Toolkit runner service', () => {
     );
     expect(metadata).toMatchObject({
       success: false,
-      error: 'service offline',
-      errorCategory: 'unknown'
+      error: "Ollama CLI is not installed or is not on PortOS's PATH. Install Ollama from https://ollama.com/download, then restart PortOS.",
+      errorCategory: 'spawn-error'
     });
   });
 

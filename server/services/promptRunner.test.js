@@ -176,6 +176,37 @@ describe('promptRunner — happy paths', () => {
     expect(events).toEqual(['created:run-xyz', 'execute:run-xyz', 'settled:run-xyz']);
   });
 
+  it('forwards the attachable-shell readiness callback for TUI providers', async () => {
+    const onRunReady = vi.fn();
+    tuiRunner.executeTuiRun.mockImplementation(async ({ runId, provider, onReady, onComplete }) => {
+      onReady?.({
+        runId,
+        providerId: provider.id,
+        providerName: provider.name || provider.id,
+        model: provider.defaultModel,
+        providerType: provider.type,
+        shellReady: true,
+      });
+      onComplete({ success: true });
+    });
+
+    await runPromptThroughProvider({
+      provider: tuiProvider({ name: 'Codex TUI' }),
+      prompt: 'p',
+      source: 'test',
+      onRunReady,
+    });
+
+    expect(onRunReady).toHaveBeenCalledWith({
+      runId: 'run-xyz',
+      providerId: 'claude-code-tui',
+      providerName: 'Codex TUI',
+      model: 'm-default',
+      providerType: 'tui',
+      shellReady: true,
+    });
+  });
+
   it('forwards screenshots to executeApiRun for a vision/multimodal call', async () => {
     runner.executeApiRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true }));
 

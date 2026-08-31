@@ -1689,7 +1689,22 @@ describe('buildPrompt', () => {
 
   it('frames the mission around the app\'s own goals and performance', () => {
     const out = buildPrompt({ app, isPortos: false, config: { allowedScopes: ['app-improvement'], rules: '' } });
-    expect(out).toContain('its OWN goals and purpose');
+    expect(out).toContain('its OWN goals');
+  });
+
+  it('uses read-only app context to distinguish healthy metrics from a visibility gap', () => {
+    const out = buildPrompt({
+      app,
+      isPortos: false,
+      config: { allowedScopes: ['app-improvement', 'app-data-gap'], rules: '' },
+      sources: { appMetrics: 'Activation: unavailable' }
+    });
+    expect(out).toContain('inspect this repository READ-ONLY');
+    expect(out).toContain('Do not edit files');
+    expect(out).toContain('SPECIFIC visibility gap');
+    expect(out).toContain('never file a generic "add more telemetry" issue');
+    expect(out).toContain('Inconclusive metrics alone are not evidence that the app is healthy');
+    expect(out).toContain('AT MOST ONE decision-complete tracker issue');
   });
 
   it('always injects the static proposal playbook block (#2763)', () => {

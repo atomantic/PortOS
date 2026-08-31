@@ -325,8 +325,11 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     // callers and for older clients that only send the plan-task command.
     const planOnly = taskData.planOnly === true || taskData.slashdoCommand === 'plan-task';
 
-    // Build metadata object
-    const metadata = {};
+    // Build metadata object. Internal producers such as resume replacement and
+    // GSD may provide a prebuilt metadata seed; copy it first so task-specific
+    // contracts survive a normal (non-raw) queue write. The explicit top-level
+    // fields below remain authoritative and overwrite any matching seed keys.
+    const metadata = isPlainObject(taskData.metadata) ? { ...taskData.metadata } : {};
     if (taskData.context) metadata.context = taskData.context;
     // The full agent-facing payload, when the producer names it explicitly
     // (#4153). Producers that still pass a multi-line `context` are classified

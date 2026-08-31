@@ -10,3 +10,5 @@ export const saveSpotifyCredentials = (data, options = {}) =>
 export const clearSpotifyAuth = (options = {}) =>
   request('/spotify/auth/clear', { method: 'POST', ...options });
 export const syncSpotify = (options = {}) => request('/spotify/sync', { method: 'POST', ...options });
+export const getSpotifyPlaylists = (options = {}) => request('/spotify/playlists', options);
+export const syncSpotifyPlaylists = (options = {}) => request('/spotify/playlists/sync', { method: 'POST', ...options });

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../../services/api', () => ({
@@ -35,14 +36,16 @@ const renderDrawer = (loom, props = {}) => {
   const onLoomUpdate = vi.fn();
   const onRewritten = vi.fn();
   render(
-    <LoomSettingsDrawer
-      open
-      onClose={() => {}}
-      loom={loom}
-      onLoomUpdate={onLoomUpdate}
-      onRewritten={onRewritten}
-      {...props}
-    />,
+    <MemoryRouter>
+      <LoomSettingsDrawer
+        open
+        onClose={() => {}}
+        loom={loom}
+        onLoomUpdate={onLoomUpdate}
+        onRewritten={onRewritten}
+        {...props}
+      />
+    </MemoryRouter>,
   );
   return { onLoomUpdate, onRewritten };
 };
@@ -198,5 +201,41 @@ describe('LoomSettingsDrawer audience participation', () => {
     rerender(<LoomSettingsDrawer open {...props} />);
 
     expect(screen.getByLabelText('Audience role')).toHaveValue('protagonist');
+  });
+});
+
+describe('LoomSettingsDrawer character continuity', () => {
+  it('associates the canonical protagonist with a Universe wardrobe and locks it by default', async () => {
+    const user = userEvent.setup();
+    const loom = makeLoom([]);
+    updateLoom.mockResolvedValue({
+      ...loom,
+      protagonistCharacterId: 'char-1',
+      protagonistWardrobeId: 'coat',
+      protagonistWardrobeLocked: true,
+    });
+    renderDrawer(loom, {
+      universe: {
+        id: 'universe-1',
+        characters: [{
+          id: 'char-1',
+          name: 'Aria',
+          referenceSheetImageRef: 'aria-sheet.png',
+          wardrobes: [{ id: 'coat', name: 'Travel coat' }],
+          identityPack: { assets: [] },
+        }],
+      },
+    });
+
+    await user.selectOptions(screen.getByLabelText('Canonical protagonist'), 'char-1');
+    await user.selectOptions(screen.getByLabelText('Canonical protagonist wardrobe'), 'coat');
+
+    await waitFor(() => expect(updateLoom).toHaveBeenLastCalledWith('loom-1', {
+      protagonistWardrobeId: 'coat',
+      protagonistWardrobeLocked: true,
+    }, { silent: true }));
+    expect(screen.getByRole('status')).toHaveTextContent('1 character sheet');
+    expect(screen.getByRole('status')).toHaveTextContent('Identity pack missing neutral, profile, full-body');
+    expect(screen.getByRole('checkbox', { name: /Lock this wardrobe across on-screen scenes/ })).toBeChecked();
   });
 });

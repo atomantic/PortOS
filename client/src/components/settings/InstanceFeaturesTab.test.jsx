@@ -1,9 +1,12 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 
 const mock = vi.hoisted(() => ({
   getInstanceFeatures: vi.fn(),
   updateInstanceFeature: vi.fn(),
+  installEidoverseFeature: vi.fn(),
+  updateEidoverseWorldsSource: vi.fn(),
 }));
 
 vi.mock('../../services/api', () => mock);
@@ -29,6 +32,25 @@ const JIRA_FEATURE = {
   configured: true,
 };
 
+const EIDOVERSE_FEATURE = {
+  id: 'eidoverse',
+  label: 'Eidoverse Worlds',
+  description: 'An optional shared 3D world for you and your agents.',
+  enabled: false,
+  source: 'default',
+  setup: {
+    installed: false,
+    partial: false,
+    bunAvailable: true,
+    registryAvailable: true,
+    appId: null,
+    uiPort: 8940,
+    runtimeStatus: 'not_registered',
+    worldsRepoUrl: 'https://github.com/anima-research/eidoverse-worlds',
+    sourceOwners: { self: 'example-owner', upstream: 'anima-research' },
+  },
+};
+
 describe('InstanceFeaturesTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -37,6 +59,28 @@ describe('InstanceFeaturesTab', () => {
     __resetInstanceFeatureCache();
     mock.getInstanceFeatures.mockResolvedValue({ features: [POST_FEATURE] });
     mock.updateInstanceFeature.mockResolvedValue({ features: [{ ...POST_FEATURE, enabled: false, source: 'explicit' }] });
+    mock.installEidoverseFeature.mockResolvedValue({
+      features: [{
+        ...EIDOVERSE_FEATURE,
+        enabled: true,
+        source: 'explicit',
+        setup: { ...EIDOVERSE_FEATURE.setup, installed: true, appId: 'app-eidoverse', runtimeStatus: 'not_started' },
+      }],
+    });
+    mock.updateEidoverseWorldsSource.mockResolvedValue({
+      features: [{
+        ...EIDOVERSE_FEATURE,
+        enabled: true,
+        source: 'explicit',
+        setup: {
+          ...EIDOVERSE_FEATURE.setup,
+          installed: true,
+          appId: 'app-eidoverse',
+          worldsRepoUrl: 'https://github.com/example-owner/eidoverse-worlds',
+          runtimeStatus: 'not_started',
+        },
+      }],
+    });
   });
 
   it('shows the instance-local feature switch', async () => {
@@ -72,6 +116,157 @@ describe('InstanceFeaturesTab', () => {
     render(<InstanceFeaturesTab />);
 
     expect(await screen.findByText(/no JIRA instance is configured yet/i)).toBeInTheDocument();
+  });
+
+  it('makes Eidoverse installation an explicit opt-in action', async () => {
+    mock.getInstanceFeatures.mockResolvedValue({ features: [EIDOVERSE_FEATURE] });
+    render(<MemoryRouter><InstanceFeaturesTab /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Install & enable' }));
+
+    await waitFor(() => expect(mock.installEidoverseFeature).toHaveBeenCalledWith(
+      'https://github.com/anima-research/eidoverse-worlds',
+      { silent: true },
+    ));
+    expect(await screen.findByRole('link', { name: 'Manage app' })).toHaveAttribute('href', '/apps/app-eidoverse');
+    expect(screen.getByText(/start it from the managed app/i)).toBeInTheDocument();
+  });
+
+  it('installs a user-selected Worlds fork', async () => {
+    mock.getInstanceFeatures.mockResolvedValue({ features: [EIDOVERSE_FEATURE] });
+    render(<MemoryRouter><InstanceFeaturesTab /></MemoryRouter>);
+
+    const repoInput = await screen.findByRole('textbox', { name: 'Worlds GitHub repository' });
+    fireEvent.change(repoInput, { target: { value: 'https://github.com/example-owner/eidoverse-worlds' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Install & enable' }));
+
+    await waitFor(() => expect(mock.installEidoverseFeature).toHaveBeenCalledWith(
+      'https://github.com/example-owner/eidoverse-worlds',
+      { silent: true },
+    ));
+  });
+
+  it('builds Self and Upstream sources with the selected Git transport', async () => {
+    mock.getInstanceFeatures.mockResolvedValue({ features: [EIDOVERSE_FEATURE] });
+    render(<MemoryRouter><InstanceFeaturesTab /></MemoryRouter>);
+
+    const ownerGroup = await screen.findByRole('group', { name: 'Worlds repository owner' });
+    const protocolGroup = screen.getByRole('group', { name: 'Worlds repository protocol' });
+    expect(ownerGroup.querySelector('[aria-pressed="true"]')).toHaveTextContent('Upstream');
+    expect(protocolGroup.querySelector('[aria-pressed="true"]')).toHaveTextContent('HTTP');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Self' }));
+    fireEvent.click(screen.getByRole('button', { name: 'SSH' }));
+
+    expect(screen.getByRole('textbox', { name: 'Worlds GitHub repository' }))
+      .toHaveValue('git@github.com:example-owner/eidoverse-worlds.git');
+    fireEvent.click(screen.getByRole('button', { name: 'Install & enable' }));
+    await waitFor(() => expect(mock.installEidoverseFeature).toHaveBeenCalledWith(
+      'git@github.com:example-owner/eidoverse-worlds.git',
+      { silent: true },
+    ));
+  });
+
+  it('disables Self when the PortOS origin is not a GitHub repository', async () => {
+    mock.getInstanceFeatures.mockResolvedValue({
+      features: [{
+        ...EIDOVERSE_FEATURE,
+        setup: { ...EIDOVERSE_FEATURE.setup, sourceOwners: { self: null, upstream: 'anima-research' } },
+      }],
+    });
+    render(<MemoryRouter><InstanceFeaturesTab /></MemoryRouter>);
+
+    expect(await screen.findByRole('button', { name: 'Self' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Upstream' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('updates the origin of an installed Worlds checkout in place', async () => {
+    const installed = {
+      ...EIDOVERSE_FEATURE,
+      enabled: true,
+      source: 'explicit',
+      setup: {
+        ...EIDOVERSE_FEATURE.setup,
+        installed: true,
+        appId: 'app-eidoverse',
+        runtimeStatus: 'not_started',
+      },
+    };
+    mock.getInstanceFeatures.mockResolvedValue({ features: [installed] });
+    render(<MemoryRouter><InstanceFeaturesTab /></MemoryRouter>);
+
+    const repoInput = await screen.findByRole('textbox', { name: 'Worlds GitHub repository' });
+    fireEvent.change(repoInput, { target: { value: 'https://github.com/example-owner/eidoverse-worlds' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update source' }));
+
+    await waitFor(() => expect(mock.updateEidoverseWorldsSource).toHaveBeenCalledWith(
+      'https://github.com/example-owner/eidoverse-worlds',
+      { silent: true },
+    ));
+    expect(await screen.findByDisplayValue('https://github.com/example-owner/eidoverse-worlds')).toBeInTheDocument();
+  });
+
+  it('does not offer a source update for an equivalent repository URL', async () => {
+    const installed = {
+      ...EIDOVERSE_FEATURE,
+      enabled: true,
+      setup: {
+        ...EIDOVERSE_FEATURE.setup,
+        installed: true,
+        appId: 'app-eidoverse',
+      },
+    };
+    mock.getInstanceFeatures.mockResolvedValue({ features: [installed] });
+    render(<MemoryRouter><InstanceFeaturesTab /></MemoryRouter>);
+
+    fireEvent.change(
+      await screen.findByRole('textbox', { name: 'Worlds GitHub repository' }),
+      { target: { value: 'https://github.com/anima-research/eidoverse-worlds.git' } },
+    );
+
+    expect(screen.getByRole('button', { name: 'Update source' })).toBeDisabled();
+    expect(mock.updateEidoverseWorldsSource).not.toHaveBeenCalled();
+  });
+
+  it('keeps installation disabled for an invalid repository URL', async () => {
+    mock.getInstanceFeatures.mockResolvedValue({ features: [EIDOVERSE_FEATURE] });
+    render(<MemoryRouter><InstanceFeaturesTab /></MemoryRouter>);
+
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Worlds GitHub repository' }), {
+      target: { value: 'https://example.com/not-github' },
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Enter a valid GitHub repository URL');
+    expect(screen.getByRole('button', { name: 'Install & enable' })).toBeDisabled();
+    expect(mock.installEidoverseFeature).not.toHaveBeenCalled();
+  });
+
+  it('explains that the Worlds repository is required when the field is cleared', async () => {
+    mock.getInstanceFeatures.mockResolvedValue({ features: [EIDOVERSE_FEATURE] });
+    render(<MemoryRouter><InstanceFeaturesTab /></MemoryRouter>);
+
+    const repoInput = await screen.findByRole('textbox', { name: 'Worlds GitHub repository' });
+    fireEvent.change(repoInput, { target: { value: '' } });
+
+    expect(repoInput).toHaveAttribute('aria-invalid', 'true');
+    expect(repoInput).toHaveAttribute('aria-describedby', 'eidoverse-worlds-repo-error');
+    expect(screen.getByRole('alert')).toHaveTextContent('Enter a GitHub repository URL');
+    expect(screen.getByRole('button', { name: 'Install & enable' })).toBeDisabled();
+  });
+
+  it('offers to install Bun automatically as part of Eidoverse setup', async () => {
+    mock.getInstanceFeatures.mockResolvedValue({
+      features: [{ ...EIDOVERSE_FEATURE, setup: { ...EIDOVERSE_FEATURE.setup, bunAvailable: false } }],
+    });
+    render(<MemoryRouter><InstanceFeaturesTab /></MemoryRouter>);
+
+    const install = await screen.findByRole('button', { name: 'Install & enable' });
+    expect(install).toBeEnabled();
+    expect(screen.getByText(/PortOS will install it automatically/i)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Install Bun' })).toBeNull();
+
+    fireEvent.click(install);
+    await waitFor(() => expect(mock.installEidoverseFeature).toHaveBeenCalledOnce());
   });
 
   // The sidebar and ⌘K read the same module cache; a retry that updated only

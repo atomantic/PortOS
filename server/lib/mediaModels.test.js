@@ -38,6 +38,24 @@ describe('data.reference seed file', () => {
   });
 });
 
+describe('LTX-2.5 CUDA compatibility upgrade', () => {
+  it('raises only the untouched official 32 GB row to the validated 64 GB floor', async () => {
+    const { upgradeLtx25CudaMemoryFloor } = await import('./mediaModels.js');
+    const official = {
+      id: 'ltx25_cuda_distilled',
+      repo: 'Lightricks/LTX-2.5',
+      hardwareRequirements: { minMemoryGb: 32, minVramGb: 16 },
+    };
+    const fork = { ...official, repo: 'example/LTX-fork' };
+    const overridden = { ...official, hardwareRequirements: { minMemoryGb: 48, minVramGb: 16 } };
+    expect(upgradeLtx25CudaMemoryFloor([official, fork, overridden])).toEqual([
+      { ...official, hardwareRequirements: { minMemoryGb: 64, minVramGb: 16 } },
+      fork,
+      overridden,
+    ]);
+  });
+});
+
 describe('mediaModels registry', () => {
   it('seeds the registry file on first load', async () => {
     expect(existsSync(registryFile)).toBe(false);
@@ -65,10 +83,64 @@ describe('mediaModels registry', () => {
       runtime: 'ltx25',
       repo: 'MrMofer/ltx-2.5-mlx-q8',
       revision: 'f1b56e7dc89f71a9af2cddac787b89ed22a8b7fc',
+      audioDurationDriven: true,
+      frameStride: 8,
+      maxNumFrames: 1017,
       steps: 8,
     });
     expect(ltx25.disclosure.weightsLicense.name).toBe('LTX-2.x Community License');
     expect(ltx25.disclosure.estimatedDownloadGb).toBe(67.7);
+  });
+
+  it('ships official LTX-2.5 CUDA as a pinned, streamed 3090-class profile', async () => {
+    const { loadMediaModels } = await import('./mediaModels.js');
+    const ltx25 = loadMediaModels().video.cuda.find((model) => model.id === 'ltx25_cuda_distilled');
+    expect(ltx25).toMatchObject({
+      runtime: 'ltx25_cuda',
+      repo: 'Lightricks/LTX-2.5',
+      revision: 'bf86adedf518142442575d1ce2e767b7d01c8c76',
+      supportedModes: ['text', 'image'],
+      defaultFrames: 121,
+      resolutionStep: 64,
+      fpsOptions: [24],
+      steps: 8,
+      guidance: 1,
+      samplerLocked: true,
+      supportsNegativePrompt: false,
+      supportsDisableAudio: true,
+      requiresHfToken: true,
+      hardwareRequirements: {
+        minMemoryGb: 64,
+        minVramGb: 16,
+        minCudaComputeCapability: 8,
+      },
+    });
+    const wan = loadMediaModels().video.cuda.find((model) => model.id === 'wan22_cuda_ti2v_5b');
+    expect(wan).toMatchObject({
+      repo: 'Wan-AI/Wan2.2-TI2V-5B-Diffusers',
+      revision: 'b8fff7315c768468a5333511427288870b2e9635',
+      runtime: 'wan22_cuda',
+      supportedModes: ['text'],
+      defaultWidth: 1280,
+      defaultHeight: 704,
+      defaultFrames: 121,
+      frameStride: 4,
+      hardwareRequirements: {
+        minMemoryGb: 32,
+        minVramGb: 24,
+        minCudaComputeCapability: 8,
+      },
+    });
+    expect(ltx25.repoFiles).toContain(
+      'diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors',
+    );
+    expect(ltx25.repoFiles).toContain(
+      'text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors',
+    );
+    expect(ltx25.disclosure).toMatchObject({
+      estimatedDownloadGb: 72.1,
+      reviewedAt: '2026-08-30',
+    });
   });
 
   it('ships MiniMax H3 as a pinned, keyframe-capable 128 GB BYOV profile', async () => {
@@ -225,14 +297,6 @@ describe('mediaModels registry', () => {
       for (const entry of [...video.mlx, ...video.cuda]) {
         expect(Object.keys(VIDEO_RUNTIME_MODES), entry.id).toContain(entry.runtime);
       }
-    });
-
-    it('retires the hunyuan legacy `mode: t2v` field for a text-only contract', async () => {
-      const { loadMediaModels, getVideoModels } = await import('./mediaModels.js');
-      expect(loadMediaModels().video.mlx.find((m) => m.id === 'hunyuan_video').mode).toBeUndefined();
-      const hunyuan = getVideoModels().find((m) => m.id === 'hunyuan_video');
-      // The CUDA bucket ships no hunyuan entry, so only assert where it's runnable.
-      if (hunyuan) expect(hunyuan.supportedModes).toEqual(['text']);
     });
 
     it('is derived on read — never persisted back into the registry file', async () => {

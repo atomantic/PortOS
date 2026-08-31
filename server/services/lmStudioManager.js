@@ -26,6 +26,7 @@ const AVAILABILITY_PROBE_TIMEOUT_MS = 5_000
 // `lms server start|stop` only asks the already-installed app to flip its
 // listener — it never downloads anything, so a minute is generous.
 const LMS_CONTROL_TIMEOUT_MS = 60_000
+const LMS_UNLOAD_TIMEOUT_MS = 60_000
 // `lms load` reads a multi-gigabyte GGUF off disk and allocates its KV cache;
 // on a cold page cache that is minutes, not seconds.
 const LMS_LOAD_TIMEOUT_MS = 300_000
@@ -412,11 +413,21 @@ async function unloadModel(modelId) {
     return { success: false, error: 'LM Studio not available' }
   }
 
-  const response = await lmStudioRequest('/api/v1/models/unload', {
+  let response = await lmStudioRequest('/api/v1/models/unload', {
     method: 'POST',
     body: JSON.stringify({ model: modelId }),
     timeout: 15000
   }).catch(err => ({ _err: err.message }))
+
+  // LM Studio releases have changed the native unload payload contract. A
+  // 400/404/405 means the server is reachable but this endpoint shape is not;
+  // fall back to the app's own non-interactive CLI, which accepts the stable
+  // model identifier returned by /api/v0/models. Do not bypass a 5xx "busy"
+  // response: that is a real runtime refusal, not API drift.
+  if (response._err && /\b(?:400|404|405)\b/.test(response._err)) {
+    const cli = await runLms(['unload', modelId], { timeoutMs: LMS_UNLOAD_TIMEOUT_MS })
+    response = cli.success ? {} : { _err: `${response._err}; ${cli.error}` }
+  }
 
   if (response._err) {
     console.error(`⚠️ Failed to unload model ${modelId}: ${response._err}`)

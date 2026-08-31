@@ -101,6 +101,10 @@ export const PATHS = {
   // LoRA training run artifacts (checkpoints/samples/cache per run). Run
   // RECORDS live in Postgres (lora_training_runs); only artifacts live here.
   trainingRuns: join(INSTALL_ROOT, 'data/training-runs'),
+  // Character voice-profile metadata lives in PostgreSQL; this directory holds
+  // the local benchmark WAVs and future engine artifacts referenced by it.
+  // It deliberately stays machine-local and is included in normal data backups.
+  voiceProfiles: join(INSTALL_ROOT, 'data/voice-profiles'),
   videos: join(INSTALL_ROOT, 'data/videos'),
   videoThumbnails: join(INSTALL_ROOT, 'data/video-thumbnails'),
   // Sprite Manager (issue #2895): per-record asset trees

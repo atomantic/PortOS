@@ -42,7 +42,11 @@ const semanticTools = {
   }],
 };
 const agentSemanticTools = { stats: { total: 0, read: 0, write: 0, granted: 0 }, tools: [] };
-const agentContext = { enabled: false, tools: [], actions: { readPortos: false, writePortos: false } };
+const agentContext = {
+  enabled: false,
+  tools: [],
+  actions: { readPortos: false, writePortos: false, manageEidoverse: false },
+};
 const socketEvents = {
   stats: { events: 229, sourceFiles: 73, clientToServer: 41, serverToClient: 189, modeled: 13, generated: 216 },
   domains: [{ id: 'cos', label: 'Cos', events: 1 }],

@@ -75,4 +75,25 @@ describe('ModelsPanel live residency', () => {
     expect(screen.getByText('status unknown')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Remove Example model' })).not.toBeInTheDocument();
   });
+
+  it('hides unavailable sources the user intentionally disabled', () => {
+    render(
+      <MemoryRouter>
+        <ModelsPanel
+          report={{
+            ...report,
+            sourceErrors: ['lmstudio-backend', 'ollama-backend'],
+            disabledSources: ['lmstudio'],
+          }}
+          loading={false}
+          onRunReport={vi.fn()}
+          cleanup={cleanup}
+        />
+      </MemoryRouter>,
+    );
+
+    const warning = screen.getByText(/Some model sources are unavailable:/);
+    expect(warning.textContent).toContain('ollama-backend');
+    expect(warning.textContent).not.toContain('lmstudio-backend');
+  });
 });

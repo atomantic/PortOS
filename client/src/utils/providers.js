@@ -230,11 +230,13 @@ export const filterHardwareCompatibleProviderModels = (models, provider) =>
  * `-c model_reasoning_effort=<level>`.
  *
  * Codex's config enum includes `max` alongside
- * `none|minimal|low|medium|high|xhigh`. `ultra` is retained only as a legacy
- * stored value and resolves to `max` when sent to codex.
+ * `none|minimal|low|medium|high|xhigh`. Sol and Terra additionally advertise
+ * `ultra`, which adds automatic task delegation; older models and Luna top out
+ * at `max`.
  */
 export const CLAUDE_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 export const CODEX_EFFORT_LEVELS = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+export const CODEX_ULTRA_EFFORT_LEVELS = Object.freeze([...CODEX_EFFORT_LEVELS, 'ultra']);
 export const ANTIGRAVITY_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high']);
 // OpenCode passes this through as `reasoningEffort` to its configured local
 // provider. The OpenAI-compatible local backends accept this narrow ladder for
@@ -245,6 +247,12 @@ export const OPENCODE_LOCAL_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'hig
 // syntax (`gpt-5[effort=max]`) — but the level is still user-pickable, so this
 // ladder drives the same selects as every other CLI's.
 export const CURSOR_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
+
+const CODEX_ULTRA_MODELS = new Set(['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra']);
+
+const codexEffortLevelsForModel = (model) => CODEX_ULTRA_MODELS.has(String(model || '').trim().toLowerCase())
+  ? CODEX_ULTRA_EFFORT_LEVELS
+  : CODEX_EFFORT_LEVELS;
 
 /**
  * True when an OpenCode process provider runs against one of the local
@@ -440,7 +448,7 @@ export const seedModelEffort = (provider, model, effort) => {
 export const effortLevelsForProvider = (provider, model = null) => {
   if (!provider) return null;
   if (isOpencodeLocalProvider(provider)) return OPENCODE_LOCAL_EFFORT_LEVELS;
-  if (isCodexProvider(provider)) return CODEX_EFFORT_LEVELS;
+  if (isCodexProvider(provider)) return codexEffortLevelsForModel(model);
   if (isAntigravityProvider(provider)) {
     const perModel = model ? antigravityModelEffortLevels(model, provider.models) : null;
     if (perModel === null) return ANTIGRAVITY_EFFORT_LEVELS;

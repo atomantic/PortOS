@@ -847,6 +847,29 @@ describe('syncOrchestrator', () => {
 
       expect(compactLog).toHaveBeenCalledWith(0);
     });
+
+    it('calls compactLog(0) for compatibility-preserving compaction when peers are configured but none is brain-enabled (#5439)', async () => {
+      const memoryOnlyPeer = {
+        ...mockPeer,
+        instanceId: 'A',
+        syncCategories: { brain: false, memory: true }
+      };
+      getPeers.mockResolvedValue([memoryOnlyPeer]);
+      readJSONFile.mockImplementation(async () => ({}));
+
+      await syncAllPeers();
+
+      expect(compactLog).toHaveBeenCalledWith(0);
+    });
+
+    it('calls compactLog(0) for compatibility-preserving compaction when no peers are configured (#5439)', async () => {
+      getPeers.mockResolvedValue([]);
+      readJSONFile.mockImplementation(async () => ({}));
+
+      await syncAllPeers();
+
+      expect(compactLog).toHaveBeenCalledWith(0);
+    });
   });
 
   describe('initSyncOrchestrator', () => {

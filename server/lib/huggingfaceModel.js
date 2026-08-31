@@ -10,9 +10,9 @@
  * can load must never land in the registry, because a broken entry wedges the
  * model picker (a 400/"Unknown model" the first time the UI tries to use it).
  * So GGUF-only repos (llama.cpp/ggml — read nowhere in the image/video
- * pipeline), Wan/HunyuanVideo (BYO-venv runtimes provisioned only via
- * scripts/setup-image-video.sh, not self-service), and anything unclassifiable
- * are refused up front with a typed ServerError the UI can surface.
+ * pipeline), Wan (a BYO-venv runtime not provisioned by this flow),
+ * HunyuanVideo (no supported PortOS runtime), and anything unclassifiable are
+ * refused up front with a typed ServerError the UI can surface.
  *
  * No try/catch — errors bubble to centralized middleware; domain errors throw
  * ServerError.
@@ -70,17 +70,22 @@ export const ADDABLE_VIDEO_RUNTIMES = Object.freeze(['mlx_video', 'ltx2', 'ltx25
 
 // Detect the underlying video runtime family from the classification blob, so
 // the allowlist above can refuse the rest symmetrically with the image path.
-// Wan / HunyuanVideo resolve to their (non-addable) runtime ids + the install
-// hint the refusal surfaces; LTX resolves to mlx_video (the safetensors/MLX
-// default). Returns `{ runtime, installHint? }` or null when no video marker
-// matches. A NEW BYO-venv runtime added upstream automatically falls through to
-// "not addable" instead of silently registering as a broken mlx_video entry.
+// Unsupported families still resolve to a non-addable runtime id so they can
+// never be override-laundered into another runner. A provisionable runtime may
+// also carry the install hint the refusal surfaces; Hunyuan deliberately does
+// not because its legacy PortOS runtime has been retired. LTX resolves to
+// mlx_video (the safetensors/MLX default). A NEW BYO-venv runtime added upstream
+// automatically falls through to "not addable" instead of silently registering
+// as a broken mlx_video entry.
 const detectVideoRuntime = (blob) => {
   if (/\bwan[\s._-]?2|wan-ai\b/.test(blob) || /\bwan2\.\d/.test(blob)) {
     return { runtime: 'wan22', installHint: 'INSTALL_WAN22=1 bash scripts/setup-image-video.sh' };
   }
+  if (/fastvideo|fastmetal/i.test(blob)) {
+    return { runtime: 'fastvideo', installHint: 'INSTALL_FASTVIDEO=1 bash scripts/setup-image-video.sh' };
+  }
   if (/hunyuan/.test(blob)) {
-    return { runtime: 'hunyuan', installHint: 'INSTALL_HUNYUAN=1 bash scripts/setup-image-video.sh' };
+    return { runtime: 'hunyuan' };
   }
   if (looksLikeLtxVideo(blob)) {
     // dgrauet's LTX-2 repos run on the `ltx2` BYO-venv runtime (true keyframe
@@ -284,15 +289,19 @@ export const classifyHfMediaModel = ({ repo, model, kind, runtime, runner, isWin
     );
   }
 
-  // Refuse a repo whose DETECTED runtime isn't addable (wan22 / hunyuan need a
-  // BYO venv) UNCONDITIONALLY — before kind resolution and before any override.
+  // Refuse a repo whose DETECTED runtime isn't addable (wan22 needs a BYO venv;
+  // hunyuan has no supported PortOS runtime) UNCONDITIONALLY — before kind
+  // resolution and before any override.
   // The "a bad add can't wedge the picker" guarantee must hold even when the
   // caller forces `runtime: 'mlx_video'` on a Hunyuan repo OR `kind: 'image'`
   // (which would otherwise route it into the image branch and skip this check
   // entirely, persisting a Wan/Hunyuan repo as a bogus image model).
   if (detectedVideo && !ADDABLE_VIDEO_RUNTIMES.includes(detectedVideo.runtime)) {
+    const runtimeReason = detectedVideo.installHint
+      ? `needs a dedicated venv (${detectedVideo.installHint}) and can't be added self-service — set it up via the script, then edit data/media-models.json`
+      : 'is not supported by PortOS';
     throw new ServerError(
-      `HuggingFace repo "${repo}" targets the "${detectedVideo.runtime}" runtime, which needs a dedicated venv (${detectedVideo.installHint}) and can't be added self-service — set it up via the script, then edit data/media-models.json.`,
+      `HuggingFace repo "${repo}" targets the "${detectedVideo.runtime}" runtime, which ${runtimeReason}.`,
       { status: 422, code: 'HF_UNSUPPORTED_RUNTIME' },
     );
   }

@@ -1,0 +1,13 @@
+# LTX-2.5 CUDA runtime for ~/.portos/ltx-2.5-cuda/.venv.
+# Torch, torchaudio and torchvision are installed separately as a matched stack
+# from the host-appropriate CUDA index.
+
+ltx-core @ git+https://github.com/Lightricks/LTX-2.git@v1.2.0#subdirectory=packages/ltx-core
+ltx-pipelines @ git+https://github.com/Lightricks/LTX-2.git@v1.2.0#subdirectory=packages/ltx-pipelines
+transformers>=5.14.1,<5.15
+accelerate>=1.14.0
+huggingface_hub>=1.27.0
+imageio>=2.37.2
+imageio-ffmpeg>=0.6.0
+pillow>=12.3.0
+av>=18.1.0

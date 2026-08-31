@@ -16,6 +16,7 @@ import { RefreshCw, X } from 'lucide-react';
 import Modal from './Modal';
 import BrailleSpinner from '../BrailleSpinner';
 import * as api from '../../services/api';
+import { copyToClipboard } from '../../lib/clipboard';
 
 // Keep the default tailLines (200) present here so the controlled <select>
 // renders a matching option on open rather than a mismatched first entry.
@@ -118,11 +119,18 @@ export default function ProcessLogModal({ open, onClose, processName, title = 'S
             <button
               onClick={loadLogs}
               disabled={loading || !selected}
-              className="p-1.5 text-gray-400 hover:text-white transition-colors disabled:opacity-50"
+              className="p-1.5 text-gray-400 hover:text-white transition-colors disabled:opacity-50 min-h-[44px] min-w-[44px] flex items-center justify-center"
               title="Refresh logs"
               aria-label="Refresh logs"
             >
               <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            </button>
+            <button
+              onClick={() => copyToClipboard(logs, 'Logs copied')}
+              disabled={loading || !logs}
+              className="px-2 text-xs text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:hover:text-gray-400 min-h-[44px]"
+            >
+              Copy logs
             </button>
             <button
               onClick={onClose}

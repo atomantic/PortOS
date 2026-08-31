@@ -16,6 +16,7 @@ import { retryHoldMetadata } from '../lib/taskRetryHold.js';
 import {
   INVESTIGATION_CIRCUIT_MAX_CREATIONS,
   INVESTIGATION_HEADLINE_PREFIX,
+  INVESTIGATION_TASK_DELIVERY,
   LOOP_REASON_PROSE,
   MAX_AUTO_RETRIES_PER_TASK,
   buildInvestigationFingerprint,
@@ -1254,6 +1255,7 @@ ${actionBlock}
 ${unblocks}`;
 
   const investigationTask = await addTask({
+    ...INVESTIGATION_TASK_DELIVERY,
     description,
     priority: 'HIGH',
     context: `Auto-generated from agent ${agentId} failure`,

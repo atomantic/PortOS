@@ -2145,6 +2145,7 @@ describe('isPerpetualRefillCandidate — perpetual drain on completion', () => {
     tasks: {
       'claim-issue': { type: 'perpetual', enabled: true },
       'claim-issue-disabled': { type: 'perpetual', enabled: false },
+      'branch-reconcile': { type: 'on-demand', enabled: true },
       'plan-task': { type: 'daily', enabled: true },
     },
   };
@@ -2162,6 +2163,10 @@ describe('isPerpetualRefillCandidate — perpetual drain on completion', () => {
 
   it('is false for a non-perpetual schedule type', () => {
     expect(isPerpetualRefillCandidate(agentFor('plan-task'), schedule)).toBe(false);
+  });
+
+  it('is true for an enabled on-demand reconciliation drain', () => {
+    expect(isPerpetualRefillCandidate(agentFor('branch-reconcile'), schedule)).toBe(true);
   });
 
   it('is false for an unknown / unscheduled type', () => {
@@ -2193,6 +2198,7 @@ describe('perpetualRefillPlan — manual vs scheduled drain lane', () => {
     tasks: {
       'claim-issue': { type: 'perpetual', enabled: true },
       'claim-issue-disabled': { type: 'perpetual', enabled: false },
+      'branch-reconcile': { type: 'on-demand', enabled: true },
       'plan-task': { type: 'daily', enabled: true },
     },
   };
@@ -2208,6 +2214,13 @@ describe('perpetualRefillPlan — manual vs scheduled drain lane', () => {
       agent({ taskAnalysisType: 'claim-issue', taskOnDemand: true, taskApp: 'app-42' }),
       schedule,
     )).toEqual({ lane: 'onDemand', taskType: 'claim-issue', appId: 'app-42' });
+  });
+
+  it('routes an on-demand reconciliation drain to the on-demand lane', () => {
+    expect(perpetualRefillPlan(
+      agent({ taskAnalysisType: 'branch-reconcile', taskOnDemand: true, taskApp: 'app-1' }),
+      schedule,
+    )).toEqual({ lane: 'onDemand', taskType: 'branch-reconcile', appId: 'app-1' });
   });
 
   it('a manual run with no app resolves appId to null (global on-demand re-issue)', () => {

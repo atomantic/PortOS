@@ -21,6 +21,7 @@ import { join } from 'path';
 import { getActiveProvider } from './providers.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
 import { isAutoApprovableInvestigation } from '../lib/investigationTasks.js';
+import { INTERVAL_TYPES, isReconcileDrainTaskType } from './taskScheduleConstants.js';
 import { isRetryHeld, isStaleRetryHold } from '../lib/taskRetryHold.js';
 import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, clearStaleActiveAgents } from './appActivity.js';
 import { getActiveApps } from './apps.js';
@@ -1425,17 +1426,18 @@ async function dequeueNextTask({ ignoreTaskId = null } = {}) {
 }
 
 /**
- * Pure gate: did the just-completed agent belong to an *enabled perpetual*
- * schedule (e.g. claim-issue)? Perpetual tasks are documented as "drain
- * actionable work back-to-back (re-queue on completion)" (taskSchedule.js), but
- * `dequeueNextTask` above only drains already-queued tasks — it never
- * regenerates perpetual work. Without an explicit refill on completion the next
- * run waits for the ~hourly `cos-improvement-check` timer (a "ready" perpetual
- * task doesn't even shorten that timer — cosJobScheduler gates the delay on
- * `status:'scheduled'` tasks only). This gate lets the completion handler decide
- * whether to refill the perpetual queue immediately instead of idling. Reads
- * the analysis type the same way `queueEligibleImprovementTasks` /
- * `isDisabledAnalysisType` do, and never throws on partial inputs.
+ * Pure gate: did the just-completed agent belong to an enabled drain schedule
+ * (e.g. claim-issue)? Perpetual tasks and the detector-driven
+ * reconciliation tasks are documented as draining actionable work back-to-back
+ * (re-queue on completion) (taskSchedule.js), but `dequeueNextTask` above only
+ * drains already-queued tasks — it never regenerates work. Without an explicit
+ * refill on completion the next run waits for the ~hourly
+ * `cos-improvement-check` timer (a "ready" task doesn't even shorten that timer
+ * — cosJobScheduler gates the delay on `status:'scheduled'` tasks only). This
+ * gate lets the completion handler decide whether to refill the drain immediately
+ * instead of idling. Reads the analysis type the same way
+ * `queueEligibleImprovementTasks` / `isDisabledAnalysisType` do, and never throws
+ * on partial inputs.
  */
 /**
  * The scheduled task type a completed agent belongs to, if any — the key
@@ -1453,14 +1455,19 @@ export function isPerpetualRefillCandidate(agent, schedule) {
   const analysisType = agentScheduledType(agent);
   if (!analysisType) return false;
   const taskDef = schedule?.tasks?.[analysisType];
-  return Boolean(taskDef?.enabled) && taskDef.type === 'perpetual';
+  const isPerpetual = taskDef?.type === INTERVAL_TYPES.PERPETUAL;
+  const isOnDemandReconcile = taskDef?.type === INTERVAL_TYPES.ON_DEMAND
+    && isReconcileDrainTaskType(analysisType);
+  // Reconciliation keeps its drain semantics even though its fresh-install
+  // interval is on-demand; all other on-demand tasks remain single-run actions.
+  return Boolean(taskDef?.enabled) && (isPerpetual || isOnDemandReconcile);
 }
 
 /**
- * Decide which "lane" a completed perpetual run's drain must continue in. Pure,
- * so the branch is unit-testable without a live daemon.
+ * Decide which "lane" a completed drain run must continue in. Pure, so the
+ * branch is unit-testable without a live daemon.
  *
- *   - `'skip'`     — not a perpetual refill candidate (disabled/non-perpetual/no
+ *   - `'skip'`     — not a drain refill candidate (disabled/non-draining/no
  *                    analysis type); nothing to refill.
  *   - `'onDemand'` — the completed run was a MANUAL "Run Now" drain, marked by
  *                    the on-demand spawn engines (`metadata.onDemand`, projected

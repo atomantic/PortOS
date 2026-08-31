@@ -73,6 +73,45 @@ export const updateInstanceFeature = (featureId, enabled, options = {}) => reque
   body: JSON.stringify({ enabled }),
   ...options,
 });
+export const installEidoverseFeature = (worldsRepoUrl, options = {}) => request('/settings/features/eidoverse/install', {
+  method: 'POST',
+  body: JSON.stringify({ worldsRepoUrl }),
+  ...options,
+});
+export const updateEidoverseWorldsSource = (worldsRepoUrl, options = {}) => request('/settings/features/eidoverse/source', {
+  method: 'PUT',
+  body: JSON.stringify({ worldsRepoUrl }),
+  ...options,
+});
+export const startEidoverseHost = (options = {}) => request('/settings/features/eidoverse/host', {
+  method: 'POST',
+  ...options,
+});
+export const getEidoverseWorldStatus = (options) => request('/eidoverse/world/status', options);
+export const getEidoverseWorldProjectionStatus = (options) => request('/eidoverse/world/projection/status', options);
+export const updateEidoverseWorldConfig = (payload, options = {}) => request('/eidoverse/world/config', {
+  method: 'PUT',
+  body: JSON.stringify(payload),
+  ...options,
+});
+export const ensureEidoverseWorldPresence = (options = {}) => request('/eidoverse/world/presence', {
+  method: 'POST',
+  ...options,
+});
+export const projectEidoverseWorld = (options = {}) => request('/eidoverse/world/project', {
+  method: 'POST',
+  ...options,
+});
+export const augmentEidoverseWorld = (operations, options = {}) => request('/eidoverse/world/augment', {
+  method: 'POST',
+  body: JSON.stringify({ operations }),
+  ...options,
+});
+export const sayInEidoverseWorld = (text, options = {}) => request('/eidoverse/world/say', {
+  method: 'POST',
+  body: JSON.stringify({ text }),
+  ...options,
+});
 export const updateSettings = (data, options) => request('/settings', {
   method: 'PUT',
   body: JSON.stringify(data),

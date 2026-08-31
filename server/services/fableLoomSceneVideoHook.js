@@ -7,7 +7,7 @@
  */
 
 import { createMediaJobImageHook } from './mediaJobImageHook.js';
-import { attachNodeVideo } from './fableLoom/records.js';
+import { attachNodePlaybackAsset, attachNodeVideo } from './fableLoom/records.js';
 
 const hook = createMediaJobImageHook({
   label: 'fableloom scene-video',
@@ -20,13 +20,32 @@ const hook = createMediaJobImageHook({
     return videoHistoryId ? { videoHistoryId } : null;
   },
   identify: (tag) => (tag?.loomId && tag.episodeId && tag.nodeId
-    ? { loomId: tag.loomId, episodeId: tag.episodeId, nodeId: tag.nodeId }
+    ? {
+      loomId: tag.loomId,
+      episodeId: tag.episodeId,
+      nodeId: tag.nodeId,
+      role: tag.role || null,
+      transitionId: tag.transitionId || null,
+    }
     : null),
   serializeKey: ({ loomId }) => loomId,
   sceneKey: ({ loomId, episodeId, nodeId }) => `${loomId}:${episodeId}:${nodeId}`,
   describe: ({ loomId, nodeId }) => `${loomId.slice(0, 13)}/${nodeId.slice(0, 13)}`,
-  attach: ({ loomId, episodeId, nodeId, videoHistoryId }) =>
-    attachNodeVideo(loomId, episodeId, nodeId, { videoHistoryId }),
+  attach: ({ loomId, episodeId, nodeId, role, transitionId, videoHistoryId, job }) => {
+    const visualConditioning = job.params?.visualConditioning || null;
+    if (!role) {
+      return attachNodeVideo(loomId, episodeId, nodeId, {
+        videoHistoryId,
+        ...(visualConditioning ? { visualConditioning } : {}),
+      });
+    }
+    return attachNodePlaybackAsset(loomId, episodeId, nodeId, {
+      role,
+      videoHistoryId,
+      transitionId,
+      ...(visualConditioning ? { visualConditioning } : {}),
+    });
+  },
   onAttached: ({ loomId, nodeId, videoHistoryId }, result) => {
     if (!result) return;
     console.log(`🎬 fableloom scene video ${loomId.slice(0, 13)}/${nodeId.slice(0, 13)} ← ${videoHistoryId}`);

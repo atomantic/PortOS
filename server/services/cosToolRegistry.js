@@ -18,6 +18,10 @@ import {
   persistentMindCleanupRequestSchema,
   persistentMindTaskRequestSchema,
 } from '../lib/persistentMindCapabilities.js';
+import {
+  eidoverseWorldAugmentSchema,
+  eidoverseWorldSaySchema,
+} from '../lib/validation.js';
 import { dispatchTool, getToolSpecs, getToolSpecsForIntent } from './voice/tools.js';
 import { executePersistentMindTaskRequests } from './persistentMindTaskCapability.js';
 import { cleanupPersistentMind } from './persistentMindMaintenance.js';
@@ -135,7 +139,88 @@ const mindCleanupTool = Object.freeze({
   adapter: { kind: 'persistent-mind-maintenance' },
 });
 
-const toolCatalog = (intent) => [taskTool, mindCleanupTool, ...voiceTools(intent)];
+const eidoverseStatusTool = Object.freeze({
+  type: 'portos_tool',
+  name: 'eidoverse.status',
+  version: COS_TOOL_SCHEMA_VERSION,
+  providerName: 'eidoverse_status',
+  aliases: ['eidoverse_status'],
+  description: 'Read the private PortOS Eidoverse world identity, projection recipe, CoS presence, and setup state.',
+  input_schema: zodToOpenApiSchema(z.object({}).strict()),
+  output_schema: objectOutputSchema,
+  policy: {
+    scopes: ['agent', 'mind', 'ui', 'voice'],
+    requiredCapabilities: ['readPortos'],
+    sideEffect: 'read',
+    idempotent: true,
+    async: false,
+    confirmation: 'none',
+  },
+  adapter: { kind: 'eidoverse-world', operation: 'status' },
+});
+
+const eidoverseProjectTool = Object.freeze({
+  type: 'portos_tool',
+  name: 'eidoverse.project',
+  version: COS_TOOL_SCHEMA_VERSION,
+  providerName: 'eidoverse_project',
+  aliases: ['eidoverse_project'],
+  description: 'Synchronize current PortOS apps, agents, tasks, features, peers, productivity, goals, memory summaries, storage, Jira, operations, and health into the private Eidoverse world using its saved deterministic recipe.',
+  input_schema: zodToOpenApiSchema(z.object({}).strict()),
+  output_schema: objectOutputSchema,
+  policy: {
+    scopes: ['agent', 'mind', 'ui'],
+    requiredCapabilities: ['readPortos', 'manageEidoverse'],
+    sideEffect: 'write',
+    idempotent: true,
+    async: false,
+    confirmation: 'capability-grant',
+  },
+  adapter: { kind: 'eidoverse-world', operation: 'project' },
+});
+
+const eidoverseAugmentTool = Object.freeze({
+  type: 'portos_tool',
+  name: 'eidoverse.augment',
+  version: COS_TOOL_SCHEMA_VERSION,
+  providerName: 'eidoverse_augment',
+  aliases: ['eidoverse_augment'],
+  description: 'Apply bounded, allowlisted construction or role operations to the private Eidoverse world.',
+  input_schema: zodToOpenApiSchema(eidoverseWorldAugmentSchema),
+  output_schema: objectOutputSchema,
+  policy: {
+    scopes: ['agent', 'mind', 'ui'],
+    requiredCapabilities: ['manageEidoverse'],
+    sideEffect: 'write',
+    idempotent: false,
+    async: false,
+    confirmation: 'capability-grant',
+  },
+  adapter: { kind: 'eidoverse-world', operation: 'augment' },
+});
+
+const eidoverseSayTool = Object.freeze({
+  type: 'portos_tool',
+  name: 'eidoverse.say',
+  version: COS_TOOL_SCHEMA_VERSION,
+  providerName: 'eidoverse_say',
+  aliases: ['eidoverse_say'],
+  description: 'Send a message into the private Eidoverse world as the persistent PortOS CoS presence.',
+  input_schema: zodToOpenApiSchema(eidoverseWorldSaySchema),
+  output_schema: objectOutputSchema,
+  policy: {
+    scopes: ['agent', 'mind', 'ui'],
+    requiredCapabilities: ['manageEidoverse'],
+    sideEffect: 'write',
+    idempotent: false,
+    async: false,
+    confirmation: 'capability-grant',
+  },
+  adapter: { kind: 'eidoverse-world', operation: 'say' },
+});
+
+const eidoverseTools = [eidoverseStatusTool, eidoverseProjectTool, eidoverseAugmentTool, eidoverseSayTool];
+const toolCatalog = (intent) => [taskTool, mindCleanupTool, ...eidoverseTools, ...voiceTools(intent)];
 const toolCalls = new Map();
 const toolCallFingerprints = new Map();
 
@@ -270,6 +355,13 @@ const executeAdapter = async (tool, args, context) => {
       preserveTurnId: context.turnId || null,
       preserveMessageId: context.wake?.kind === 'message' ? context.wake.message?.id || null : null,
     });
+  }
+  if (tool.adapter.kind === 'eidoverse-world') {
+    const world = await import('./eidoverseWorld.js');
+    if (tool.adapter.operation === 'status') return world.getEidoverseWorldStatus();
+    if (tool.adapter.operation === 'project') return world.projectEidoverseWorld({ signal: context.signal });
+    if (tool.adapter.operation === 'augment') return world.augmentEidoverseWorld(args.operations, { signal: context.signal });
+    return world.sayInEidoverseWorld(args.text, { signal: context.signal });
   }
   const [outcome] = await executePersistentMindTaskRequests({
     taskRequests: [args],

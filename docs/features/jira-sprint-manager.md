@@ -1,10 +1,10 @@
 # JIRA Sprint Manager Job
 
-Scheduled task that triages and implements JIRA tickets for apps with JIRA integration enabled. Combines triage (reviewing, commenting, prioritizing) with implementation (worktree, PR, JIRA transition) in a single daily run.
+Task that triages and implements JIRA tickets for apps with JIRA integration enabled. It is installed as an on-demand action so the user can explicitly start a run; choosing a cadence schedules the combined triage and implementation workflow.
 
 ## Overview
 
-The JIRA Sprint Manager is a daily task in the Schedule system (defined in `server/services/taskSchedule.js`), disabled by default. When enabled, it first triages all sprint tickets across JIRA-enabled apps, then implements the highest-priority ready ticket.
+The JIRA Sprint Manager is an on-demand task in the Schedule system (defined in `server/services/taskScheduleRegistry.js`). A manual run first triages all sprint tickets across JIRA-enabled apps, then implements the highest-priority ready ticket. Users can select a daily schedule when they want unattended runs.
 
 ## How It Works
 
@@ -38,10 +38,10 @@ The JIRA Sprint Manager is a daily task in the Schedule system (defined in `serv
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| Interval | Daily at 09:00 | Weekdays only |
+| Interval | On demand | Manual Run by default; a cadence can be selected |
 | Priority | HIGH | Job priority |
 | Autonomy Level | yolo | Fully autonomous |
-| Enabled | false | Disabled by default |
+| Enabled | true | Available for an explicit manual run; scheduling remains opt-in |
 
 ### App-Level JIRA Configuration
 

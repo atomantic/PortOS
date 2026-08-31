@@ -67,6 +67,10 @@ const LIBRARY_TABS = [
   { id: 'audio', label: 'Audio', Icon: Music },
 ];
 
+const desktopTimelineLayout = () => (
+  typeof window === 'undefined' || window.matchMedia('(min-width: 64rem)').matches
+);
+
 // One accessor per lane, so adding a lane doesn't mean a fourth branch in
 // every ternary chain that needs "the entries for this lane".
 const laneEntries = (lanes, lane) => {
@@ -109,7 +113,7 @@ export default function VideoTimelineEditor() {
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
   const [renderJobId, setRenderJobId] = useState(null);
-  const [showLibrary, setShowLibrary] = useState(true);
+  const [showLibrary, setShowLibrary] = useState(desktopTimelineLayout);
   const [libraryTab, setLibraryTab] = useState('clips');
   // Local input draft. Editing the canonical state on every keystroke makes the
   // rename onBlur-vs-canonical comparison always-equal.
@@ -686,11 +690,68 @@ export default function VideoTimelineEditor() {
 
   const laneWidth = Math.max(240, total * pxPerSec);
   const playheadSec = Math.min(t, total);
+  const libraryPanel = showLibrary ? (
+    <div
+      id="timeline-library"
+      className="order-2 lg:order-1 bg-port-card/50 border border-port-border rounded-lg p-2 max-h-[600px] overflow-y-auto"
+    >
+      <div className="flex gap-1 mb-2" role="tablist" aria-label="Clip library">
+        {LIBRARY_TABS.map(({ id, label, Icon }) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={libraryTab === id}
+            onClick={() => setLibraryTab(id)}
+            className={`flex-1 flex items-center justify-center gap-1 px-1.5 py-1 text-[10px] rounded ${
+              libraryTab === id
+                ? 'bg-port-accent/20 text-port-accent'
+                : 'text-gray-400 hover:text-white border border-port-border'
+            }`}
+          >
+            <Icon className="w-3 h-3" aria-hidden="true" /> {label}
+          </button>
+        ))}
+      </div>
+
+      {libraryTab === 'clips' && (libraryClips.length === 0 ? (
+        <div className="text-xs text-gray-500 px-1 py-4">No clips. Generate some on the Video page.</div>
+      ) : (
+        <div className="grid grid-cols-1 gap-2">
+          {libraryClips.map((clip) => (
+            <div key={clip.id} className={usedClipIds.has(clip.id) ? 'ring-1 ring-port-accent/40 rounded-md' : ''}>
+              <LibraryTile clip={clip} onAdd={addClip} />
+            </div>
+          ))}
+        </div>
+      ))}
+
+      {libraryTab === 'stills' && (images.length === 0 ? (
+        <div className="text-xs text-gray-500 px-1 py-4">No images. Generate some on the Image page.</div>
+      ) : (
+        <div className="grid grid-cols-1 gap-2">
+          {images.map((image) => (
+            <StillTile key={image.filename} image={image} onAddStill={addStill} onAddOverlay={addOverlay} />
+          ))}
+        </div>
+      ))}
+
+      {libraryTab === 'audio' && (musicTracks.length === 0 ? (
+        <div className="text-xs text-gray-500 px-1 py-4">No audio in the shared music library.</div>
+      ) : (
+        <div className="grid grid-cols-1 gap-1.5">
+          {musicTracks.map((track) => (
+            <AudioRow key={track.filename} track={track} onAdd={addBed} />
+          ))}
+        </div>
+      ))}
+    </div>
+  ) : null;
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0">
+      <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-port-border">
+        <div className="flex items-center gap-2 flex-1 min-w-[120px]">
           <button
             type="button"
             onClick={() => navigate('/media/timeline')}
@@ -726,9 +787,9 @@ export default function VideoTimelineEditor() {
                 }
               });
             }}
-            className="bg-transparent text-white font-medium text-lg focus:outline-none focus:bg-port-card focus:px-2 rounded transition-all"
+            className="flex-1 min-w-0 bg-transparent text-white font-medium text-lg focus:outline-none focus:bg-port-card focus:px-2 rounded transition-all"
           />
-          <span className="text-xs text-gray-500">
+          <span className="text-xs text-gray-500 hidden sm:inline truncate">
             {segments.length} segments · {overlays.length} overlays · {audio.tracks.length} beds · {formatTimecode(total)}
           </span>
         </div>
@@ -736,6 +797,8 @@ export default function VideoTimelineEditor() {
           <button
             type="button"
             onClick={() => setShowLibrary((v) => !v)}
+            aria-expanded={showLibrary}
+            aria-controls="timeline-library"
             className="px-2 py-1.5 text-xs text-gray-400 hover:text-white border border-port-border rounded-md"
           >
             {showLibrary ? 'Hide library' : 'Show library'}
@@ -752,65 +815,11 @@ export default function VideoTimelineEditor() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr_240px] gap-3 min-h-[400px]">
-        {/* Left rail — library */}
-        {showLibrary && (
-          <div className="bg-port-card/50 border border-port-border rounded-lg p-2 max-h-[600px] overflow-y-auto">
-            <div className="flex gap-1 mb-2" role="tablist" aria-label="Clip library">
-              {LIBRARY_TABS.map(({ id, label, Icon }) => (
-                <button
-                  key={id}
-                  type="button"
-                  role="tab"
-                  aria-selected={libraryTab === id}
-                  onClick={() => setLibraryTab(id)}
-                  className={`flex-1 flex items-center justify-center gap-1 px-1.5 py-1 text-[10px] rounded ${
-                    libraryTab === id
-                      ? 'bg-port-accent/20 text-port-accent'
-                      : 'text-gray-400 hover:text-white border border-port-border'
-                  }`}
-                >
-                  <Icon className="w-3 h-3" aria-hidden="true" /> {label}
-                </button>
-              ))}
-            </div>
-
-            {libraryTab === 'clips' && (libraryClips.length === 0 ? (
-              <div className="text-xs text-gray-500 px-1 py-4">No clips. Generate some on the Video page.</div>
-            ) : (
-              <div className="grid grid-cols-1 gap-2">
-                {libraryClips.map((clip) => (
-                  <div key={clip.id} className={usedClipIds.has(clip.id) ? 'ring-1 ring-port-accent/40 rounded-md' : ''}>
-                    <LibraryTile clip={clip} onAdd={addClip} />
-                  </div>
-                ))}
-              </div>
-            ))}
-
-            {libraryTab === 'stills' && (images.length === 0 ? (
-              <div className="text-xs text-gray-500 px-1 py-4">No images. Generate some on the Image page.</div>
-            ) : (
-              <div className="grid grid-cols-1 gap-2">
-                {images.map((image) => (
-                  <StillTile key={image.filename} image={image} onAddStill={addStill} onAddOverlay={addOverlay} />
-                ))}
-              </div>
-            ))}
-
-            {libraryTab === 'audio' && (musicTracks.length === 0 ? (
-              <div className="text-xs text-gray-500 px-1 py-4">No audio in the shared music library.</div>
-            ) : (
-              <div className="grid grid-cols-1 gap-1.5">
-                {musicTracks.map((track) => (
-                  <AudioRow key={track.filename} track={track} onAdd={addBed} />
-                ))}
-              </div>
-            ))}
-          </div>
-        )}
-
+      <div className={`grid grid-cols-1 ${
+        showLibrary ? 'lg:grid-cols-[260px_1fr_240px]' : 'lg:grid-cols-[1fr_240px]'
+      } gap-3 min-h-[400px]`}>
         {/* Center — preview + tracks */}
-        <div className="space-y-3 min-w-0">
+        <div className="order-1 lg:order-2 space-y-3 min-w-0">
           {/* The preview adopts the CANONICAL render canvas, not a fixed 16:9
               box — overlay x/y/width are normalized against that canvas, so a
               portrait or square project would otherwise place them somewhere
@@ -984,8 +993,12 @@ export default function VideoTimelineEditor() {
           </div>
         </div>
 
+        {/* The library follows the workspace in DOM/focus order on mobile, then
+            moves into the desktop grid's left rail without remounting. */}
+        {libraryPanel}
+
         {/* Right rail — inspector */}
-        <div className="bg-port-card/50 border border-port-border rounded-lg p-3 space-y-3">
+        <div className="order-3 bg-port-card/50 border border-port-border rounded-lg p-3 space-y-3">
           <div className="text-xs uppercase text-gray-500 tracking-wide">Inspector</div>
 
           {!selected && (

@@ -11,8 +11,8 @@ and where those numbers live*.
 ## Why it exists
 
 PortOS's [Layered Intelligence loop](./plans/2026-07-07-layered-intelligence-loop.md)
-perpetually reviews each managed app and files one high-value improvement proposal
-per run. To reason well it needs to evaluate the app against **its own**
+perpetually reviews each managed app and files at most one high-value improvement
+proposal per run. To reason well it needs to evaluate the app against **its own**
 performance — user success, product KPIs, production telemetry — not against how
 reliably PortOS's coding agents happen to change it.
 
@@ -20,6 +20,30 @@ Most of that data lives outside the repo: a production database, an external
 telemetry/analytics service, a metrics dashboard, an events pipeline. An agent has
 no way to discover those unless the repo tells it where they are and how to read
 them. `METRICS.md` is that map.
+
+## Layered Intelligence decision contract
+
+Layered Intelligence uses a metrics-first decision path:
+
+1. When a metric shows a meaningful gap, it proposes the single highest-value
+   app change that can plausibly move that metric.
+2. When the metrics are missing, unavailable, stale, or inconclusive, its
+   reasoning agent may inspect the repository read-only to understand the
+   relevant product flow and existing instrumentation. This is context discovery,
+   not permission to turn the run into a generic code-quality audit.
+3. When that inspection identifies a specific missing signal or context that
+   blocks evaluation against a named goal, it files an `app-data-gap` issue for
+   the minimum visibility needed. The issue must identify the unanswered product
+   question, the expected data source, and acceptance criteria; “add more
+   telemetry” is not decision-complete.
+4. It files nothing only when the available evidence is sufficient and healthy,
+   the needed visibility already exists, or no decision-complete proposal fits
+   the configured scopes (subject to the loop's filing safety and delivery
+   gates). Inconclusive metrics alone do not prove the app is healthy.
+
+The reasoning agent never edits code in this task. A deterministic output hook
+validates and deduplicates its structured proposal before filing it to the app's
+configured tracker.
 
 ## Who reads it
 

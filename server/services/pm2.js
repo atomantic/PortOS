@@ -550,16 +550,20 @@ export async function getLogs(name, lines = 100, pm2Home = null) {
  *   CLI (like deleteApp/getAppStatus) instead of the default-daemon Node API —
  *   otherwise the process would launch under PortOS's own PM2 daemon and be
  *   invisible to every subsequent status/log/delete call that targets pm2Home.
+ * @param {number} [options.port=null] The app's own port, pinned as PORT in the
+ *   child's environment so PortOS's inherited PORT cannot reach it. Pass null
+ *   when no single port applies (a portless app, or several processes sharing
+ *   one start call) — see the EADDRINUSE note at the env assignment below.
  */
 export async function startWithCommand(name, cwd, command, options = {}) {
-  const { autorestart = true, maxRestarts = 10, pm2Home = null } = options;
+  const { autorestart = true, maxRestarts = 10, pm2Home = null, port = null } = options;
   // Parse with quote-awareness so `node --opt "arg with spaces"` survives;
   // a bare split(' ') would shred quoted segments. PM2 accepts `args` as an
   // array, which avoids re-joining and re-splitting on the way through.
   const [script, ...args] = parseCommandArgs(command);
 
   if (pm2Home) {
-    return spawnPm2StartCommand(name, cwd, script, args, { autorestart, maxRestarts, pm2Home });
+    return spawnPm2StartCommand(name, cwd, script, args, { autorestart, maxRestarts, pm2Home, port });
   }
 
   return connectAndRun((pm2) => {
@@ -580,6 +584,17 @@ export async function startWithCommand(name, cwd, command, options = {}) {
         ...(autorestart
           ? { max_restarts: maxRestarts, min_uptime: '10s', restart_delay: 5000, max_memory_restart: '500M' }
           : {}),
+        // PM2 snapshots the launching process's environment into the child, so
+        // PortOS's own PORT would otherwise reach a managed app and win: both
+        // Bun's `--env-file` and dotenv yield to an already-set variable, so the
+        // app's env file cannot rescue it. The app then binds PortOS's port and
+        // whichever process loses the boot race crashloops on EADDRINUSE.
+        // buildEnv() strips PORT/HOST on the CLI path below; the Node API has no
+        // way to *unset* an inherited key (it merges `env` over process.env), so
+        // pin the app's own recorded port instead. Last writer wins, so this
+        // also overrides the app's env file — they agree by construction, since
+        // PortOS generates that file from the same port it records.
+        ...(port ? { env: { PORT: String(port) } } : {}),
         windowsHide: IS_WIN
       };
 
@@ -603,7 +618,7 @@ export async function startWithCommand(name, cwd, command, options = {}) {
  * tunes the autorestart=true nursing behavior, which no current caller uses
  * together with a custom pm2Home.
  */
-function spawnPm2StartCommand(name, cwd, script, args, { autorestart, maxRestarts, pm2Home }) {
+function spawnPm2StartCommand(name, cwd, script, args, { autorestart, maxRestarts, pm2Home, port = null }) {
   return new Promise((resolve, reject) => {
     const cliArgs = ['start', script, '--name', name, '--cwd', cwd];
     if (!isJsScript(script)) cliArgs.push('--interpreter', 'none');
@@ -614,7 +629,12 @@ function spawnPm2StartCommand(name, cwd, script, args, { autorestart, maxRestart
     }
     if (args.length > 0) cliArgs.push('--', ...args);
 
-    const child = spawnPm2(cliArgs, { env: buildEnv(pm2Home) });
+    // buildEnv drops the inherited PortOS PORT/HOST; put the app's own port
+    // back so this path pins the same value the Node API path above does.
+    const env = buildEnv(pm2Home);
+    if (port) env.PORT = String(port);
+
+    const child = spawnPm2(cliArgs, { env });
     let stderr = '';
     child.stderr.on('data', (data) => { stderr += data.toString(); });
     child.on('close', (code) => {

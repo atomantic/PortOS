@@ -74,12 +74,13 @@ export const resolveCliModel = (model) => isConfiguredDefaultModel(model) ? null
 // (`--effort <level>`) and Codex (`-c model_reasoning_effort=<level>`) all
 // accept a per-invocation override of how hard the model thinks. Value sets
 // verified against claude CLI v2.1.x (`--help`), current Codex CLI config
-// values (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) and agy
+// values (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, plus
+// model-gated `ultra`) and agy
 // (`--help`: "Reasoning effort for the current CLI session (low|medium|high)"). Mirrored in
 // client/src/utils/providers.js — keep in sync.
 //
-// `ultra` remains accepted as a legacy stored value and resolves to the
-// strongest supported level, `max`, when sent to Codex.
+// Codex Ultra adds automatic task delegation on the models that advertise it.
+// Keep it model-gated: older Codex models and Luna top out at `max`.
 //
 // `none` is a real codex variant but is deliberately NOT offered: it means "do
 // not reason at all", which no PortOS effort control should be able to select.
@@ -87,6 +88,7 @@ export const resolveCliModel = (model) => isConfiguredDefaultModel(model) ? null
 
 export const CLAUDE_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 export const CODEX_EFFORT_LEVELS = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+export const CODEX_ULTRA_EFFORT_LEVELS = Object.freeze([...CODEX_EFFORT_LEVELS, 'ultra']);
 export const ANTIGRAVITY_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high']);
 // OpenCode forwards this narrow OpenAI-compatible ladder as `reasoningEffort`
 // to whichever local backend it is wired to (Ollama, llama.cpp, MTPLX,
@@ -102,21 +104,19 @@ export const OPENCODE_LOCAL_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'hig
 // through slashdo.
 export const CURSOR_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 
-// Effort values no CLI ladder accepts any more, kept ACCEPTED as stored/API
-// input so records saved under an older ladder still validate after an install
-// updates (see the distribution model in AGENTS.md — installs update
-// independently). `resolveCliEffort` clamps them to a level the target CLI
-// really takes, so none of these ever reaches a CLI verbatim.
-const LEGACY_EFFORT_LEVELS = Object.freeze(['ultra']);
-
 /** Union of every accepted effort value across effort-capable CLIs, low→high. */
 export const EFFORT_LEVELS = Object.freeze([...new Set([
-  ...CODEX_EFFORT_LEVELS,
+  ...CODEX_ULTRA_EFFORT_LEVELS,
   ...CLAUDE_EFFORT_LEVELS,
   ...ANTIGRAVITY_EFFORT_LEVELS,
   ...CURSOR_EFFORT_LEVELS,
-  ...LEGACY_EFFORT_LEVELS,
 ])]);
+
+const CODEX_ULTRA_MODELS = new Set(['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra']);
+
+const codexEffortLevelsForModel = (model) => CODEX_ULTRA_MODELS.has(String(model || '').trim().toLowerCase())
+  ? CODEX_ULTRA_EFFORT_LEVELS
+  : CODEX_EFFORT_LEVELS;
 
 // ---------------------------------------------------------------------------
 // Antigravity base-model ↔ effort-suffix split.
@@ -355,7 +355,7 @@ export function foldCursorEffortIntoModel(model, effort) {
 export function effortLevelsForProvider(provider, model = null) {
   if (!provider) return null;
   if (isOpencodeProvider(provider) && getOpencodeLocalProviderNamespace(provider)) return OPENCODE_LOCAL_EFFORT_LEVELS;
-  if (isCodexProvider(provider)) return CODEX_EFFORT_LEVELS;
+  if (isCodexProvider(provider)) return codexEffortLevelsForModel(model);
   if (isAntigravityProvider(provider)) {
     const perModel = model ? antigravityModelEffortLevels(model, provider.models) : null;
     if (perModel === null) return ANTIGRAVITY_EFFORT_LEVELS;
@@ -377,7 +377,7 @@ const EFFORT_RANK = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 
  * accepts, or null when the flag should be omitted entirely (no override set,
  * provider has no effort control, or the value isn't a known effort at all).
  * An out-of-range value is clamped to the nearest supported level at or below
- * it (`ultra`→`max` on claude/codex,
+ * it (`ultra`→`max` on claude and Codex models without Ultra,
  * `xhigh`/`max`/`ultra`→`high` on agy), falling back to the provider's weakest
  * level when nothing sits below it (`minimal`→`low`) — rather than being
  * dropped.

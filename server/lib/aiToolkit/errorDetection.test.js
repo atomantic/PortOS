@@ -94,6 +94,13 @@ describe('Error Detection', () => {
       expect(result.requiresFallback).toBe(true);
     });
 
+    it('should detect Claude Code rolling session limits reported as monthly spend', () => {
+      const result = analyzeError("You've hit your monthly spend limit · raise it at claude.ai/settings/usage?from=cc_cli_limit_message · your session limit resets 7:15am (UTC)", 1);
+      expect(result.hasError).toBe(true);
+      expect(result.category).toBe(ERROR_CATEGORIES.USAGE_LIMIT);
+      expect(result.requiresFallback).toBe(true);
+    });
+
     it('should detect Claude extra-usage status as a usage limit', () => {
       const result = analyzeError('Now using extra usage');
       expect(result.hasError).toBe(true);

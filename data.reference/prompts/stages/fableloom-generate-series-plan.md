@@ -17,7 +17,8 @@ You are the series architect for an interactive branching story. Draft the compl
 ## Planning contract
 
 - Write a clear beginning-to-end `storyArc`: protagonist pressure, escalation, irreversible midpoint, climax, resolution, and thematic movement. Account for meaningful local branches while keeping the series-level promises and payoffs legible.
-- Draft 6–12 ordered `plotPoints`. Each is a tentpole beat with a concise title and a description of what happens, why it matters, and what changes.
+- Draft 6–12 ordered `plotPoints`. Give each a durable `kind`: `"beat"` for a fixed tentpole or `"challenge"` for a blockade the viewer helps solve. Include several concrete playable challenges when the premise supports them. Each item needs a concise title and a description of what happens, why it matters, and what changes.
+- A `kind: "challenge"` description must name the planted clue or capability, the viewer decision loop, distinct success and failure consequences, and the recovery/payoff that lets failure continue with a visible cost.
 - Draft 2–5 `sideQuests`. Each supporting thread needs a purpose, escalation, and payoff that strengthens the main arc rather than distracting from it.
 - Episode references must use an exact episode id from the supplied outline. Use `null` when no fitting episode exists yet; never invent an episode id.
 - Side-quest status is one of `idea`, `planned`, `active`, or `resolved`. A new scaffold normally uses `planned`.
@@ -29,7 +30,7 @@ Return ONLY valid JSON matching this shape:
 {
   "storyArc": "complete dramatic arc",
   "plotPoints": [
-    { "title": "tentpole beat", "description": "what happens, why it matters, and what changes", "episodeId": "episode id or null" }
+    { "kind": "beat or challenge", "title": "tentpole beat", "description": "what happens, why it matters, and what changes", "episodeId": "episode id or null" }
   ],
   "sideQuests": [
     { "title": "supporting thread", "description": "purpose, escalation, and payoff", "status": "planned", "startEpisodeId": "episode id or null", "endEpisodeId": "episode id or null" }

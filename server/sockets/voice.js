@@ -3,7 +3,7 @@
 //           | voice:dictation:set | voice:ui:index | voice:screenshot:result
 //           | voice:ui:read-response | voice:output:available | voice:output:claim
 // Outbound: voice:transcript | voice:llm:delta | voice:llm:done | voice:tts:audio
-//           | voice:tool | voice:dictation | voice:navigate
+//           | voice:tts:cancel | voice:tool | voice:dictation | voice:navigate
 //           | voice:ui:click | voice:ui:fill | voice:ui:select | voice:ui:check
 //           | voice:ui:read-request
 //           | voice:dailyLog:appended | voice:error | voice:idle

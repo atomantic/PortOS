@@ -524,9 +524,11 @@ export function assertVisionRunUsedImages(result, requestedProvider) {
  *   `text` value — callers receive the full buffered text either way.
  *   For TUI providers the stripped chunks are emitted; the final `text`
  *   is the cleaned response with the prompt-echo elided.
- * @param {(runId:string)=>void} [args.onRunCreated] — called immediately after
+ * @param {(runId:string,meta:object)=>void} [args.onRunCreated] — called immediately after
  *   each concrete primary/correction/fallback run id is known. Observational;
  *   callback errors are logged and ignored.
+ * @param {(meta:object)=>void} [args.onRunReady] — called when an interactive
+ *   TUI run has been registered as an attachable shell session.
  * @param {(runId:string)=>void} [args.onRunSettled] — called when that concrete
  *   attempt resolves or rejects. Observational; callback errors are ignored.
  * @param {string[]} [args.screenshots] — image paths for a vision/multimodal
@@ -1148,6 +1150,7 @@ async function executeProviderRunOnce({
   runId: callerRunId,
   onData: onDataCallback,
   onRunCreated,
+  onRunReady,
   onRunSettled,
   timeout: timeoutOverride,
   cwd: cwdOverride,
@@ -1229,7 +1232,15 @@ async function executeProviderRunOnce({
   // caller-supplied primary run AND for every fresh correction/fallback run.
   // Hook failures are observational only and must not break provider work.
   if (typeof onRunCreated === 'function') {
-    try { onRunCreated(runId); } catch (err) {
+    try {
+      onRunCreated(runId, {
+        runId,
+        providerId: effectiveProvider.id,
+        providerName: effectiveProvider.name || effectiveProvider.id,
+        model: effectiveModel,
+        providerType: effectiveProvider.type,
+      });
+    } catch (err) {
       console.error(`❌ run lifecycle start hook failed: ${err.message}`);
     }
   }
@@ -1389,7 +1400,7 @@ async function executeProviderRunOnce({
     } else if (effectiveProvider.type === PROVIDER_TYPES.TUI) {
       // `source` (e.g. 'pipeline-manuscript-completeness') labels the live,
       // interactive view this TUI run surfaces in the Shell page.
-      executeTuiRun({ runId, provider: providerForRun, prompt, workspacePath: effectiveCwd, onData, onComplete, timeout: effectiveTimeout, label: source }).catch(safeReject);
+      executeTuiRun({ runId, provider: providerForRun, prompt, workspacePath: effectiveCwd, onData, onComplete, onReady: onRunReady, timeout: effectiveTimeout, label: source }).catch(safeReject);
     } else {
       safeReject(new Error(`Unsupported provider type: ${effectiveProvider.type}`));
     }

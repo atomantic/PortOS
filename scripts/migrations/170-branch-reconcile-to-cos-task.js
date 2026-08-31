@@ -5,9 +5,10 @@
  * The old feature was a bespoke daily cron gated by `settings.branchReconcile`
  * (enabled/cron/actions), hardwired to the PortOS checkout. Its scheduler,
  * `/api/branch-reconcile` route, and settings schema were removed when the
- * feature became the per-app `branch-reconcile` task type — which is disabled by
- * default. Without this migration, an install that had `branchReconcile.enabled:
- * true` would silently STOP reconciling after the upgrade.
+ * feature became the per-app `branch-reconcile` task type — installed as an
+ * enabled on-demand action by default, with scheduled cadence requiring an
+ * explicit choice. Without this migration, an install that had
+ * `branchReconcile.enabled: true` would silently STOP reconciling after the upgrade.
  *
  * This migration:
  *   1. If the old reconciler was ENABLED, enables the new `branch-reconcile`
@@ -68,6 +69,10 @@ export default {
       if (isObject(schedule) && isObject(schedule.tasks)) {
         const task = isObject(schedule.tasks['branch-reconcile']) ? schedule.tasks['branch-reconcile'] : {};
         task.enabled = true;
+        // The legacy enabled flag was explicit consent to an automatic drain.
+        // A missing/new default is now on-demand, so retain that old behavior
+        // when the migration has no previously selected cadence to preserve.
+        if (!task.type || task.type === 'on-demand') task.type = 'perpetual';
         if (typeof old.cron === 'string' && old.cron.trim().split(/\s+/).length === 5) {
           task.recheckCron = old.cron;
         }
@@ -85,7 +90,7 @@ export default {
         await writeFile(schedulePath, `${JSON.stringify(schedule, null, 2)}\n`);
         console.log('📝 branch-reconcile: carried the enabled PortOS reconciler into the new per-app CoS task');
       } else {
-        console.log('⚠️ branch-reconcile: no task-schedule.json to enable — loadSchedule will backfill the disabled default; enable it under Chief of Staff');
+        console.log('⚠️ branch-reconcile: no task-schedule.json to configure — loadSchedule will install the on-demand default; manual Run is available under Chief of Staff');
       }
 
       // 1b. Preserve PortOS-only scope: disable the task on every non-PortOS app.

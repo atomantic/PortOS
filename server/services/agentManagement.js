@@ -16,7 +16,7 @@ import { emitLog } from './cosEvents.js';
 // live", which is the thing this sequencing keeps removing.
 import { completeAgent, updateAgent, getAgents, getAgentRecord } from './cosAgentLifecycle.js';
 import { updateTask, addTask, getTaskById, reviveBlockedTask, evaluateTasks } from './cos.js';
-import { AGENT_PAUSED_CATEGORY, pauseMetadata, isAgentPausedTask, isResumablePausedTask, registerPauseReleaseAdapter } from '../lib/taskPauseHold.js';
+import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, pauseMetadata, isAgentPausedTask, isResumablePausedTask, registerPauseReleaseAdapter } from '../lib/taskPauseHold.js';
 import { terminateAgentViaRunner, killAgentViaRunner, pauseAgentViaRunner, getAgentStatsFromRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
@@ -26,7 +26,9 @@ import { activeAgents, runnerAgents, userTerminatedAgents, pausedAgents, useRunn
 // for handleOrphanedTask. Importing them from their own leaf modules is what
 // lets that edge be a plain static import instead of a dynamic-import dodge.
 import { cleanupAgentWorktree, resolveTaskResumePatch } from './agentWorktreeCleanup.js';
-import { isRetryHeld, clearedRetryHoldMetadata } from '../lib/taskRetryHold.js';
+import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY, isRetryHeld, clearedRetryHoldMetadata } from '../lib/taskRetryHold.js';
+import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
+import { REQUEUED_AT_KEY, LAST_SPAWNED_AT_KEY } from '../lib/taskRequeue.js';
 import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { syncRunnerAgents } from './agentRunnerSync.js';
 import { flushRunnerOutputBatcher } from './agentRunnerOutputBatchers.js';
@@ -481,6 +483,22 @@ async function requeuePausedTask({ task, taskType, overrides }) {
   return { taskId: task.id, mode: 'requeued', branchName: resolveTaskTargetBranch(result?.metadata) };
 }
 
+// A replacement is a fresh task, but its task-type payload/configuration still
+// defines what the run must do. Preserve that durable contract while dropping
+// state owned by the spent task/run so the replacement gets a new retry budget,
+// lease, workspace pointer, and output-hook dispatch.
+const REPLACEMENT_RUNTIME_METADATA_KEYS = new Set([
+  'blockedReason', 'blockedCategory', 'blockedAt', 'blocker', 'failureCount',
+  'lastErrorCategory', 'lastFailureAt', 'cooldownUntil', 'totalSpawnCount',
+  'orphanRetryCount', 'lastOrphanedAt', 'lastOrphanedAgentId', 'worktreeBusyAttempts',
+  LAST_SPAWNED_AT_KEY, 'interruptedByRestart', 'lastInterruptedAt', 'lastInterruptedAgentId',
+  'outputHookDispatchedAt', 'existingBranch', 'resumedFromAgentId', 'resumeWorktreePath',
+  'autoRetryCount', 'autoRetriedByInvestigation', 'autoRetriedAt', 'autoRetryExhaustedAt',
+  'resolution', 'autoExpiredReason', 'autoExpiredAt',
+  REQUEUED_AT_KEY, RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY,
+  ...PAUSE_METADATA_KEYS, ...CLAIM_METADATA_KEYS,
+]);
+
 /**
  * The fallback: the paused run's task is gone or completed, so queue the fresh task
  * the caller described instead. Same outcome the pre-fix client always took, kept
@@ -502,9 +520,12 @@ async function replacePausedTask({ agentId, task, taskType, overrides }) {
   // code the agent-facing payload lives there, and a replacement queued without
   // it would run with nothing but the one-line description.
   const { context, prompt, provider, model, effort, app } = task?.metadata || {};
+  const inheritedMetadata = { ...(task?.metadata || {}) };
+  for (const key of REPLACEMENT_RUNTIME_METADATA_KEYS) delete inheritedMetadata[key];
   const created = await addTask({
     description,
     context, prompt, provider, model, effort, app,
+    metadata: inheritedMetadata,
     ...resumeOverrideMetadata(overrides, context)
   }, taskType);
   if (created?.error) {

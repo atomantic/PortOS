@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   apps: [{ id: 'portos', name: 'PortOS', repoPath: '/example/portos' }],
   providers: [{
     id: 'codex', name: 'Codex', type: 'cli', enabled: true, command: 'codex',
-    defaultModel: 'gpt-5', models: ['gpt-5', 'gpt-5-mini'],
+    defaultModel: 'gpt-5', models: ['gpt-5', 'gpt-5-mini', 'gpt-5.6-sol', 'gpt-5.6-luna'],
   }],
   existing: null,
   addTask: vi.fn(),
@@ -62,7 +62,7 @@ beforeEach(() => {
   mocks.apps = [{ id: 'portos', name: 'PortOS', repoPath: '/example/portos' }];
   mocks.providers = [{
     id: 'codex', name: 'Codex', type: 'cli', enabled: true, command: 'codex',
-    defaultModel: 'gpt-5', models: ['gpt-5', 'gpt-5-mini'],
+    defaultModel: 'gpt-5', models: ['gpt-5', 'gpt-5-mini', 'gpt-5.6-sol', 'gpt-5.6-luna'],
   }];
   mocks.existing = null;
   mocks.getAppWorkTracker.mockResolvedValue({ resolved: 'plan' });
@@ -93,6 +93,8 @@ describe('persistent mind CoS-task capability', () => {
         models: [
           { id: 'gpt-5', efforts: expect.arrayContaining(['high']) },
           { id: 'gpt-5-mini', efforts: expect.arrayContaining(['high']) },
+          { id: 'gpt-5.6-sol', efforts: expect.arrayContaining(['high', 'ultra']) },
+          { id: 'gpt-5.6-luna', efforts: expect.not.arrayContaining(['ultra']) },
         ],
       }],
       providerReadiness: {
@@ -307,9 +309,20 @@ describe('persistent mind CoS-task capability', () => {
     expect(queued.effort).toBeUndefined();
   });
 
-  it('rejects invented models and unsupported effort before queueing', async () => {
+  it('queues Ultra for Sol and rejects it for a Codex model without Ultra', async () => {
+    const [supported] = await executePersistentMindTaskRequests({
+      taskRequests: [taskRequest({ model: 'gpt-5.6-sol', effort: 'ultra' })],
+      turnId: 'turn-ultra',
+      wake: { kind: 'message', message: { id: 'message-ultra' } },
+    });
+    expect(supported).toMatchObject({ success: true });
+    expect(mocks.addTask).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'gpt-5.6-sol', effort: 'ultra',
+    }), 'internal');
+
+    mocks.addTask.mockClear();
     const results = await executePersistentMindTaskRequests({
-      taskRequests: [taskRequest({ model: 'invented' }), taskRequest({ effort: 'ultra' })],
+      taskRequests: [taskRequest({ model: 'invented' }), taskRequest({ model: 'gpt-5.6-luna', effort: 'ultra' })],
       turnId: 'turn-3',
       wake: { kind: 'message', message: { id: 'message-3' } },
     });

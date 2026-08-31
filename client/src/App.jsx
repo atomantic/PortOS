@@ -23,7 +23,7 @@ const AgentsPage = lazyWithReload(() => import('./pages/DevTools').then(m => ({ 
 const DataDog = lazyWithReload(() => import('./pages/DataDog'));
 const FlowsDoc = lazyWithReload(() => import('./pages/FlowsDoc'));
 const GitHub = lazyWithReload(() => import('./pages/GitHub'));
-const OpenWorld = lazyWithReload(() => import('./pages/OpenWorld'));
+const Eidoverse = lazyWithReload(() => import('./pages/Eidoverse'));
 const AppDetail = lazyWithReload(() => import('./pages/AppDetail'));
 const FeatureAgents = lazyWithReload(() => import('./pages/FeatureAgents'));
 const FeatureAgentDetail = lazyWithReload(() => import('./pages/FeatureAgentDetail'));
@@ -117,6 +117,7 @@ const Sharing = lazyWithReload(() => import('./pages/Sharing'));
 const Importer = lazyWithReload(() => import('./pages/Importer'));
 const FableLoom = lazyWithReload(() => import('./pages/FableLoom'));
 const FableLoomStory = lazyWithReload(() => import('./pages/FableLoomStory'));
+const FableLoomHostedJoin = lazyWithReload(() => import('./pages/FableLoomHostedJoin'));
 const StartStory = lazyWithReload(() => import('./pages/StartStory'));
 const StoryBuilder = lazyWithReload(() => import('./pages/StoryBuilder'));
 const PipelineSeries = lazyWithReload(() => import('./pages/PipelineSeries'));
@@ -196,11 +197,6 @@ const MEDIA_TRAINING_PREFIX = /^\/media\/training/;
 // is what a bookmark, a typed URL, or a half-remembered path lands on — alias it
 // rather than letting the catch-all swallow it (issue #3793).
 const ANNOTATE_PREFIX = /^\/annotate/;
-// The old city page became OpenWorld. Bookmarks, pinned sidebar entries, stored palette
-// history, and peers' deep links all still say /city — alias the whole prefix
-// (including /city/settings and /city/apps/:appId) rather than 404ing them.
-const LEGACY_CITY_PREFIX = /^\/city/;
-
 // Normalize a tab-less /creative-director/:id URL to its overview tab while
 // preserving any query string + hash. A bare `<Navigate to="overview">` would
 // drop them; building the relative target from useLocation keeps deep-link
@@ -221,38 +217,45 @@ if (import.meta.hot) {
 // date-scoped features (daily log, schedulers) land on the wrong day. Push
 // the browser's IANA zone once so remote/VPN clients don't need to visit
 // Settings before their first entry is correct.
-function useTimezoneBootstrap() {
+function useTimezoneBootstrap(enabled = true) {
   useEffect(() => {
+    if (!enabled) return;
     getSettings().then((s) => {
       if (s?.timezone) return;
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       if (!tz || tz === 'UTC') return;
       return updateSettings({ timezone: tz });
     }).catch(() => null);
-  }, []);
+  }, [enabled]);
 }
 
 // Stamp the machine's instance name into the browser tab so multiple federated
 // installs are distinguishable at a glance — "PortOS: {name}". Falls back to the
 // static "PortOS" title (set in index.html) when the name is missing/unfetchable.
-function useDocumentTitle() {
+function useDocumentTitle(enabled = true) {
   useEffect(() => {
+    if (!enabled) return;
     getSelfInstance({ silent: true }).then((self) => {
       const name = self?.name?.trim();
       if (name) document.title = `PortOS: ${name}`;
     }).catch(() => null);
-  }, []);
+  }, [enabled]);
 }
 
 export default function App() {
-  useTimezoneBootstrap();
-  useDocumentTitle();
-  return (
-    <CatalogTypesProvider>
+  const { pathname } = useLocation();
+  const isHostedAudienceRoute = pathname.replace(/\/+$/, '') === '/fableloom/join';
+  useTimezoneBootstrap(!isHostedAudienceRoute);
+  useDocumentTitle(!isHostedAudienceRoute);
+
+  const routeContent = (
     <Suspense fallback={<PageLoader />}>
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/ambient" element={<Ambient />} />
+        {/* Hosted audience devices need the full dynamic viewport, without the
+            app chrome consuming part of the height or clipping the controls. */}
+        <Route path="/fableloom/join" element={<FableLoomHostedJoin />} />
         <Route path="/" element={<Layout />}>
           <Route index element={<Dashboard />} />
           <Route path="apps" element={<Apps />} />
@@ -275,6 +278,7 @@ export default function App() {
           <Route path="devtools/video-download" element={<VideoDownloaderPage />} />
           <Route path="devtools/processes" element={<ProcessesPage />} />
           <Route path="devtools/agents" element={<AgentsPage />} />
+          <Route path="eidoverse" element={<Eidoverse />} />
           <Route path="ai" element={<AIProviders />} />
           {/* The provider editor is a deep-linkable slide-in over the same page:
               /ai/new creates, /ai/edit/:providerId edits. The id sits under its
@@ -390,12 +394,12 @@ export default function App() {
           <Route path="jira" element={<Navigate to="/devtools/jira" replace />} />
           <Route path="devtools/jira" element={<Jira />} />
           <Route path="devtools/jira/reports" element={<JiraReports />} />
-          <Route path="openworld" element={<OpenWorld />} />
-          <Route path="openworld/settings" element={<OpenWorld />} />
-          <Route path="openworld/apps/:appId" element={<OpenWorld />} />
-          <Route path="openworld/region/:regionId" element={<OpenWorld />} />
-          <Route path="city" element={<PrefixRedirect from={LEGACY_CITY_PREFIX} to="/openworld" />} />
-          <Route path="city/*" element={<PrefixRedirect from={LEGACY_CITY_PREFIX} to="/openworld" />} />
+          {/* OpenWorld is retired: preserve old bookmarks by landing in the
+              persistent private Eidoverse world, including query/hash state. */}
+          <Route path="openworld" element={<RedirectWithSearch to="/eidoverse" />} />
+          <Route path="openworld/*" element={<RedirectWithSearch to="/eidoverse" />} />
+          <Route path="city" element={<RedirectWithSearch to="/eidoverse" />} />
+          <Route path="city/*" element={<RedirectWithSearch to="/eidoverse" />} />
           <Route path="data" element={<DataManager />} />
           <Route path="character" element={<CharacterSheet />} />
           <Route path="ask" element={<Ask />} />
@@ -566,6 +570,8 @@ export default function App() {
         </Route>
       </Routes>
     </Suspense>
-    </CatalogTypesProvider>
   );
+  return isHostedAudienceRoute
+    ? routeContent
+    : <CatalogTypesProvider>{routeContent}</CatalogTypesProvider>;
 }

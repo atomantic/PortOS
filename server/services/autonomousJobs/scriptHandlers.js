@@ -18,6 +18,14 @@ import { getActiveAgentIds } from '../agentState.js'
 import { runSelfDiagnostics } from './selfDiagnostics.js'
 import { runBrainParitySweep } from './brainParitySweep.js'
 
+// Loaded lazily to keep the built-in handler registry free of an import cycle:
+// the projection reads CoS state, while this registry is loaded by the CoS job
+// store itself. The job remains deterministic and makes no provider call.
+async function eidoverseProjection() {
+  const { projectEidoverseWorld } = await import('../eidoverseWorld.js')
+  return projectEidoverseWorld()
+}
+
 /**
  * Run the moltworld-explore.mjs script as a child process (no AI agent needed).
  * Returns a summary object when the script exits.
@@ -148,11 +156,12 @@ const SCRIPT_HANDLERS = {
   // Federation brain-parity sweep (#4519): audits every federating peer for
   // record-level divergence the cursor-based sync cycle cannot see. Default
   // job ships disabled — deterministic, no LLM calls.
-  'brain-parity-sweep': runBrainParitySweep
+  'brain-parity-sweep': runBrainParitySweep,
+  'eidoverse-projection': eidoverseProjection
   // 'layered-intelligence' retired here (#2322): LI is now a per-app scheduled
   // task, not a global autonomous-job sweep. It runs as a normal reasoning agent
   // with programmatic-I/O hooks — see taskTypeHooks.js +
   // autonomousJobs/layeredIntelligenceHooks.js.
 }
 
-export { runMoltworldExploration, agentDataCleanup, SCRIPT_HANDLERS }
+export { runMoltworldExploration, agentDataCleanup, eidoverseProjection, SCRIPT_HANDLERS }

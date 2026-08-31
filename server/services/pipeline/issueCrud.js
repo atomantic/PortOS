@@ -89,9 +89,15 @@ export async function listIssueIds({ includeDeleted = false } = {}) {
  * @param {object} [options]
  * @param {boolean} [options.includeDeleted=false]
  * @param {boolean} [options.withHistory=true] - false strips per-stage run history
+ * @param {string[]} [options.seriesIds] - scopes the uncapped read to these series
  */
-export async function listAllIssues({ includeDeleted = false, withHistory = true } = {}) {
-  const { issues } = await readState();
+export async function listAllIssues({ includeDeleted = false, withHistory = true, seriesIds = null } = {}) {
+  const scopedSeriesIds = Array.isArray(seriesIds)
+    ? [...new Set(seriesIds.filter((id) => typeof id === 'string' && id))]
+    : null;
+  const issues = scopedSeriesIds
+    ? await store().loadAllForSeriesIds(scopedSeriesIds)
+    : (await readState()).issues;
   const live = includeDeleted ? issues : issues.filter((i) => !i.deleted);
   return withHistory ? live : live.map(stripRunHistoryFromIssue);
 }

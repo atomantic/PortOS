@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { smoothstep } from '../../utils/easing';
 import { DEFAULT_SPAWN_Z, EYE_HEIGHT, THIRD_PERSON, thirdPersonCamera } from '../../utils/openWorldPlayerRig';
 
-const ORBITAL_POS = new THREE.Vector3(0, 25, 45);
+const ORBITAL_POS = new THREE.Vector3(0, 95, 125);
 const ORBITAL_TARGET = new THREE.Vector3(0, 0, 0);
 const DEFAULT_EXPLORATION_RIG = { x: 0, y: EYE_HEIGHT, z: DEFAULT_SPAWN_Z };
 const DEFAULT_EXPLORATION_FRAME = thirdPersonCamera({

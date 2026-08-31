@@ -38,30 +38,31 @@ git submodule update --init --recursive
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host ""
 
-# Install dependencies — use Push-Location instead of --prefix so npm doesn't
-# create a directory symlink (root package into sub-package node_modules), which
-# requires Developer Mode or admin rights on Windows.
+# Install dependencies — --no-save honors each committed lockfile without
+# rewriting it through the local npm's lockfile schema. Use Push-Location instead
+# of --prefix so npm doesn't create a directory symlink (root package into
+# sub-package node_modules), which requires Developer Mode or admin rights on Windows.
 Write-Host "Installing dependencies..." -ForegroundColor Yellow
 
 Write-Host "  Installing root dependencies..."
-npm install
+npm install --no-save
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "  Installing client dependencies..."
 Push-Location client
-npm install
+npm install --no-save
 if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
 Pop-Location
 
 Write-Host "  Installing server dependencies..."
 Push-Location server
-npm install
+npm install --no-save
 if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
 Pop-Location
 
 Write-Host "  Installing autofixer dependencies..."
 Push-Location autofixer
-npm install
+npm install --no-save
 if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
 Pop-Location
 

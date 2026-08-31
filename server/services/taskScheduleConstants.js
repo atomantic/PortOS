@@ -21,3 +21,5 @@ export const FAILURE_BACKOFF_CAP_MS = DAY_MS;
 export const FAILURE_PARK_THRESHOLD = 5;
 export const ON_DEMAND_ORIGINS = { USER: 'user', REFILL: 'refill' };
 export const isRefillRequest = (request) => request?.origin === ON_DEMAND_ORIGINS.REFILL;
+const RECONCILE_DRAIN_TASK_TYPES = new Set(['branch-reconcile', 'issue-reconcile']);
+export const isReconcileDrainTaskType = (taskType) => RECONCILE_DRAIN_TASK_TYPES.has(taskType);

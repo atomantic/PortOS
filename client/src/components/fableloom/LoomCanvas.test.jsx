@@ -72,6 +72,7 @@ describe('LoomCanvas', () => {
   it('keeps media controls in each visual node and gives a finished video preview precedence', () => {
     const onGenerateImage = vi.fn();
     const onGenerateVideo = vi.fn();
+    const onOpenFalVideo = vi.fn();
     const withMedia = episode();
     withMedia.nodes[0] = {
       ...withMedia.nodes[0], image: 'scene.png', videoHistoryId: 'video-1',
@@ -83,6 +84,7 @@ describe('LoomCanvas', () => {
         onSelectNode={() => {}}
         onGenerateImage={onGenerateImage}
         onGenerateVideo={onGenerateVideo}
+        onOpenFalVideo={onOpenFalVideo}
       />,
     );
 
@@ -90,8 +92,10 @@ describe('LoomCanvas', () => {
     expect(screen.queryByAltText('The Gate image preview')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Regenerate image' }));
     fireEvent.click(screen.getByRole('button', { name: 'Regenerate video' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'fal.ai free' })[0]);
     expect(onGenerateImage).toHaveBeenCalledWith(withMedia.nodes[0]);
     expect(onGenerateVideo).toHaveBeenCalledWith(withMedia.nodes[0]);
+    expect(onOpenFalVideo).toHaveBeenCalledWith(withMedia.nodes[0]);
   });
 
   it('shows live image progress and retains an actionable failed indicator', () => {
@@ -121,6 +125,47 @@ describe('LoomCanvas', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Image failed');
     expect(screen.getByRole('alert')).toHaveAttribute('title', 'Synthetic failure');
     expect(screen.getAllByRole('button', { name: 'Generate image' })[0]).toBeEnabled();
+  });
+
+  it('uses absolute SVG coordinates for compact media so WebKit keeps it inside the card', () => {
+    const { rerender } = render(
+      <LoomCanvas
+        episode={episode()}
+        selectedNodeId={null}
+        onSelectNode={() => {}}
+        onGenerateImage={() => {}}
+        onGenerateVideo={() => {}}
+        mediaJobs={{ n1: { image: { jobId: 'image-1', status: 'running', progress: 0.42, currentImage: 'AAAA' } } }}
+      />,
+    );
+
+    const preview = screen.getByAltText('The Gate image generation preview').parentElement;
+    const sceneCard = screen.getByLabelText('Scene: The Gate');
+    const mediaSurface = document.querySelector('[data-node-media-id="n1"]');
+    const mediaHost = mediaSurface.querySelector('div');
+    const [, cardX, cardY] = /translate\(([^,]+), ([^)]+)\)/.exec(sceneCard.getAttribute('transform'));
+    expect(sceneCard).not.toContainElement(mediaSurface);
+    expect(mediaSurface).toHaveAttribute('x', String(Number(cardX) + 8));
+    expect(mediaSurface).toHaveAttribute('y', String(Number(cardY) + 24));
+    expect(mediaHost).toHaveClass('h-full', 'w-full', 'min-w-0', 'overflow-hidden');
+    expect(preview).toHaveClass('grid');
+    expect(preview).toHaveClass('min-w-0');
+    expect(preview).not.toHaveClass('relative');
+    expect(screen.getByAltText('The Gate image generation preview')).toHaveClass('block', 'min-w-0');
+    expect(screen.getByText('Generating image 42%')).not.toHaveClass('absolute');
+
+    rerender(
+      <LoomCanvas
+        episode={episode()}
+        selectedNodeId={null}
+        onSelectNode={() => {}}
+        onGenerateImage={() => {}}
+        onGenerateVideo={() => {}}
+        mediaJobs={{ n1: { image: { jobId: 'image-1', status: 'failed', error: 'Synthetic failure' } } }}
+      />,
+    );
+    expect(screen.getByRole('alert')).not.toHaveClass('absolute');
+    expect(screen.getByRole('alert')).toHaveClass('self-end');
   });
 
   it('selects a node on keyboard activation', () => {

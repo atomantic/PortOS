@@ -2,8 +2,10 @@ import { useState, useEffect, useMemo } from 'react';
 import { Save } from 'lucide-react';
 import toast from '../ui/Toast';
 import FormField from '../ui/FormField';
+import UnsavedChangesConfirm from '../ui/UnsavedChangesConfirm';
 import BrailleSpinner from '../BrailleSpinner';
 import ThemePickerPanel from '../ThemePickerPanel';
+import useUnsavedChangesGuard from '../../hooks/useUnsavedChangesGuard';
 import { getSettings, updateSettings } from '../../services/api';
 
 // Coordinate inputs are free text so a partially-typed "-" or "37." isn't
@@ -20,25 +22,54 @@ const parseCoord = (v) => {
 export function GeneralTab() {
   const [loading, setLoading] = useState(true);
   const [timezone, setTimezone] = useState('');
+  const [savedTimezone, setSavedTimezone] = useState(null);
   const [saving, setSaving] = useState(false);
   const [lat, setLat] = useState('');
   const [lon, setLon] = useState('');
+  const [savedLocation, setSavedLocation] = useState(null);
   const [savingLocation, setSavingLocation] = useState(false);
   const detectedTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const allTimezones = useMemo(() => Intl.supportedValuesOf?.('timeZone') ?? [], []);
+  const timezoneDirty = savedTimezone !== null && timezone !== savedTimezone;
+  const locationDirty = savedLocation !== null
+    && (lat !== savedLocation.lat || lon !== savedLocation.lon);
+  const dirty = timezoneDirty || locationDirty;
+  const hasDiscardableChanges = (timezoneDirty && !saving)
+    || (locationDirty && !savingLocation);
+  const routeGuard = useUnsavedChangesGuard(dirty);
 
   useEffect(() => {
+    let current = true;
     getSettings({ silent: true })
       .then(settings => {
-        setTimezone(settings?.timezone || '');
-        setLat(settings?.location?.lat != null ? String(settings.location.lat) : '');
-        setLon(settings?.location?.lon != null ? String(settings.location.lon) : '');
+        if (!current) return;
+        const nextTimezone = settings?.timezone || '';
+        const nextLat = settings?.location?.lat != null ? String(settings.location.lat) : '';
+        const nextLon = settings?.location?.lon != null ? String(settings.location.lon) : '';
+        setTimezone(nextTimezone);
+        setSavedTimezone(nextTimezone);
+        setLat(nextLat);
+        setLon(nextLon);
+        setSavedLocation({ lat: nextLat, lon: nextLon });
       })
-      .catch(() => toast.error('Failed to load settings'))
-      .finally(() => setLoading(false));
+      .catch(() => {
+        if (!current) return;
+        // The empty fields remain usable after a failed load, so treat the
+        // displayed fallback as the baseline instead of leaving edits outside
+        // dirty tracking.
+        setSavedTimezone('');
+        setSavedLocation({ lat: '', lon: '' });
+        toast.error('Failed to load settings');
+      })
+      .finally(() => {
+        if (current) setLoading(false);
+      });
+    return () => { current = false; };
   }, []);
 
   const handleSaveLocation = async () => {
+    const submittedLat = lat;
+    const submittedLon = lon;
     // Both-or-neither: weather needs a full pair, and a half-set pair would
     // silently mix a custom value with the tool's default coordinate.
     if (isBlank(lat) !== isBlank(lon)) {
@@ -62,6 +93,11 @@ export function GeneralTab() {
     setSavingLocation(true);
     try {
       await updateSettings({ location: { lat: parsedLat, lon: parsedLon } }, { silent: true });
+      const nextLat = parsedLat === null ? '' : String(parsedLat);
+      const nextLon = parsedLon === null ? '' : String(parsedLon);
+      setSavedLocation({ lat: nextLat, lon: nextLon });
+      setLat(current => current === submittedLat ? nextLat : current);
+      setLon(current => current === submittedLon ? nextLon : current);
       toast.success(parsedLat === null ? 'Location cleared' : `Location set to ${parsedLat}, ${parsedLon}`);
     } catch (err) {
       toast.error(err.message || 'Failed to save location');
@@ -71,6 +107,7 @@ export function GeneralTab() {
   };
 
   const handleSave = async (tz) => {
+    const submittedTimezone = timezone;
     const tzToSave = tz || detectedTz;
     if (!tzToSave) {
       toast.error('Timezone is required.');
@@ -95,7 +132,8 @@ export function GeneralTab() {
     setSaving(true);
     try {
       await updateSettings({ timezone: tzToSave }, { silent: true });
-      setTimezone(tzToSave);
+      setSavedTimezone(tzToSave);
+      setTimezone(current => current === submittedTimezone ? tzToSave : current);
       toast.success(`Timezone set to ${tzToSave}`);
     } catch (err) {
       toast.error(err.message || 'Failed to save timezone');
@@ -104,10 +142,29 @@ export function GeneralTab() {
     }
   };
 
+  const discardAndExit = () => {
+    // A stale /settings/:tab URL can fall back to General on both sides of the
+    // navigation, preserving this component instance. Reset the sections that
+    // are not actively being persisted before releasing the parked route.
+    if (!saving) setTimezone(savedTimezone ?? '');
+    if (!savingLocation) {
+      setLat(savedLocation?.lat ?? '');
+      setLon(savedLocation?.lon ?? '');
+    }
+    routeGuard.proceed();
+  };
+
   if (loading) return <BrailleSpinner />;
 
   return (
     <div className="space-y-6">
+      <UnsavedChangesConfirm
+        guard={routeGuard}
+        when={hasDiscardableChanges}
+        question="Discard your unsaved General settings changes?"
+        label="Discard unsaved General settings changes"
+        onDiscard={discardAndExit}
+      />
       <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6">
         <h3 className="text-lg font-semibold text-white mb-4">Interface Theme</h3>
         <ThemePickerPanel />
@@ -128,8 +185,9 @@ export function GeneralTab() {
             type="text"
             value={timezone}
             onChange={e => setTimezone(e.target.value)}
+            disabled={saving}
             placeholder={detectedTz}
-            className="w-full sm:flex-1 sm:max-w-xs min-w-0 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+            className="w-full sm:flex-1 sm:max-w-xs min-w-0 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm disabled:opacity-50"
             list="tz-list"
           />
           <button
@@ -140,6 +198,15 @@ export function GeneralTab() {
             <Save size={14} className="inline mr-1" />
             {saving ? 'Saving...' : 'Save'}
           </button>
+          {timezoneDirty && (
+            <span
+              className="text-xs text-port-warning"
+              role="status"
+              aria-label="Timezone has unsaved changes"
+            >
+              Unsaved changes
+            </span>
+          )}
           {!timezone && (
             <button
               onClick={() => handleSave(detectedTz)}
@@ -181,8 +248,9 @@ export function GeneralTab() {
               inputMode="decimal"
               value={lat}
               onChange={e => setLat(e.target.value)}
+              disabled={savingLocation}
               placeholder="37.7749"
-              className="w-full min-w-0 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+              className="w-full min-w-0 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm disabled:opacity-50"
             />
           </FormField>
           <FormField
@@ -196,8 +264,9 @@ export function GeneralTab() {
               inputMode="decimal"
               value={lon}
               onChange={e => setLon(e.target.value)}
+              disabled={savingLocation}
               placeholder="-122.4194"
-              className="w-full min-w-0 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+              className="w-full min-w-0 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm disabled:opacity-50"
             />
           </FormField>
           <button
@@ -208,6 +277,15 @@ export function GeneralTab() {
             <Save size={14} className="inline mr-1" />
             {savingLocation ? 'Saving...' : 'Save'}
           </button>
+          {locationDirty && (
+            <span
+              className="text-xs text-port-warning"
+              role="status"
+              aria-label="Location has unsaved changes"
+            >
+              Unsaved changes
+            </span>
+          )}
         </div>
       </div>
     </div>

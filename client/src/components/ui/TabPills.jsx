@@ -8,8 +8,12 @@
 // app's other toggle filters use — while sharing this component's styling.
 // Knobs cover the call-site quirks: `runningKind` swaps a per-tab icon for a
 // spinner; `stretch` makes each tab `flex-1` (StoryboardPanel); `mobileDropdown`
-// collapses to a `<select>` below `sm` (UniverseBuilder); `controlsIdPrefix`
-// wires `aria-controls` (and `id="tab-<id>"`) to matching tabpanels — pass
+// collapses to a `<select>` below `sm` (UniverseBuilder), whose wrapper is
+// `sm:hidden` unless `mobileSelectClassName` replaces it wholesale — a caller
+// passes that to make the select a flex sibling sharing one row with other
+// controls (`sm:hidden min-w-0 flex-1` in FableLoomStory's episode row), and the
+// replacement must carry its own `sm:hidden` or the select shows on desktop;
+// `controlsIdPrefix` wires `aria-controls` (and `id="tab-<id>"`) to matching tabpanels — pass
 // `'tabpanel'` to mirror ChiefOfStaff's wiring. `t.trailing` is an optional
 // ReactNode rendered after the count (e.g. PipelineIssue's per-stage status dot).
 import { Loader2 } from 'lucide-react';
@@ -30,6 +34,7 @@ export default function TabPills({
   runningKind = null,
   mobileDropdown = false,
   mobileSelectId,
+  mobileSelectClassName = '',
   ariaLabel,
   controlsIdPrefix,
   hideLabelOnMobile = false,
@@ -43,7 +48,7 @@ export default function TabPills({
   // Mobile `<select>` collapse, shared by both variants so `mobileDropdown` works
   // regardless of `variant` (the underline tab bar just overflow-scrolls without it).
   const mobileSelect = mobileDropdown ? (
-    <div className="sm:hidden">
+    <div className={mobileSelectClassName || 'sm:hidden'}>
       {mobileSelectId && <label htmlFor={mobileSelectId} className="sr-only">{ariaLabel || 'Section'}</label>}
       <select
         id={mobileSelectId}

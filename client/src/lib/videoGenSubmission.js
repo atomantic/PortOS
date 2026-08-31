@@ -11,6 +11,8 @@ import {
   STOCK_TEXT_ENCODER_ID,
   selectedSpeedProfile,
   videoChainChunkModes,
+  DEFAULT_DRAFT_DECODE_ID,
+  resolveDraftDecodeForModel,
 } from './videoGenParams.js';
 
 // The form owns state transitions and validation. This module owns the three
@@ -30,7 +32,7 @@ export function buildVideoGenSubmission({
   prompt, negativePrompt, stylePreset,
   width, height, mode, sourceImageFile, sourceImageUpload,
   numFrames, fps, steps, guidanceScale, seed,
-  currentModel, modelId, tiling, textEncoderId, speedProfileId,
+  currentModel, models, modelId, tiling, textEncoderId, speedProfileId, draftDecode,
   disableAudio, noMusic, imageStrength, i2vReferenceMode,
   keyframesActive, keyframes, loraFamily, selectedLoras,
   lastImageFile, lastImageUpload, extendFromVideoId, audioFile,
@@ -101,6 +103,14 @@ export function buildVideoGenSubmission({
     speedProfileId: selectedSpeedProfile(speedProfileId, currentModel, videoChainChunkModes({
       model: currentModel, mode, chaining: chainingActive, contextFrames,
     }))?.id,
+    // Preview-fidelity decode (#5423). Sent only when it is a real, still-valid
+    // choice on THIS model — a stale selection carried across a model switch, or
+    // one aimed at a DELIVERY model, would otherwise POST a knob the server
+    // declines and logs. Absence is a full decode, so an unswapped render's
+    // payload is unchanged.
+    draftDecode: resolveDraftDecodeForModel(draftDecode, currentModel, models) === DEFAULT_DRAFT_DECODE_ID
+      ? undefined
+      : draftDecode,
     disableAudio: effectiveDisableAudio ? 'true' : 'false',
     mode,
     imageStrength: imageStrength || '',
@@ -108,10 +118,10 @@ export function buildVideoGenSubmission({
     keyframes: keyframesActive ? JSON.stringify(keyframes) : '',
     loraFilenames: (loraFamily && selectedLoras.length) ? selectedLoras.map((lora) => lora.filename) : undefined,
     loraScales: (loraFamily && selectedLoras.length) ? selectedLoras.map((lora) => lora.scale) : undefined,
-    sourceImageFile: (mode === 'image' || legacyFflf
+    sourceImageFile: (mode === 'image' || mode === 'a2v' || legacyFflf
       || (mode === 'extend' && !isLtx2FamilyRuntime(currentModel?.runtime)))
       ? (sourceImageFile || '') : '',
-    sourceImage: (mode === 'image' || legacyFflf) ? (sourceImageUpload || '') : '',
+    sourceImage: (mode === 'image' || mode === 'a2v' || legacyFflf) ? (sourceImageUpload || '') : '',
     lastImageFile: legacyFflf ? (lastImageFile || '') : '',
     lastImage: legacyFflf ? (lastImageUpload || '') : '',
     extendFromVideoId: (mode === 'extend' && isLtx2FamilyRuntime(currentModel?.runtime))

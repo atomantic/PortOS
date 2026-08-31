@@ -108,6 +108,60 @@ describe('PM2 command launch interpreters', () => {
     });
   });
 
+  // Sibling of the leak above, on the app-facing side: PM2 copies the launching
+  // process's environment into the child, so portos-server's own PORT reached
+  // every managed app it started. An app's env file cannot undo that — neither
+  // Bun's `--env-file` nor dotenv overrides an already-set variable — so the app
+  // bound PortOS's port and whichever process lost the boot race crashlooped on
+  // EADDRINUSE.
+  describe('inherited PORT in the environment', () => {
+    it('pins the app\'s own port over the inherited one on the Node API path', async () => {
+      vi.stubEnv('PORT', '5555');
+
+      await startWithCommand('worlds', '/repo/worlds', 'bun server/server.ts', { port: 8940 });
+
+      const [options] = mockPm2.start.mock.calls[0];
+      expect(options.env).toEqual({ PORT: '8940' });
+      vi.unstubAllEnvs();
+    });
+
+    it('pins the app\'s own port over the inherited one on the CLI path', async () => {
+      vi.stubEnv('PORT', '5555');
+
+      await startWithCommand('worlds', '/repo/worlds', 'bun server/server.ts', {
+        port: 8940,
+        pm2Home: '/tmp/example-pm2'
+      });
+
+      const [, , spawnOpts] = mockSpawn.mock.calls[0];
+      expect(spawnOpts.env.PORT).toBe('8940');
+      vi.unstubAllEnvs();
+    });
+
+    // No recorded port means no correct value to pin, so the Node API path must
+    // not invent one — PM2 merges `env` over process.env and cannot unset a key.
+    it('sets no env override when the caller gives no port', async () => {
+      await startWithCommand('worlds', '/repo/worlds', 'bun server/server.ts');
+
+      const [options] = mockPm2.start.mock.calls[0];
+      expect(options).not.toHaveProperty('env');
+    });
+
+    // buildEnv drops the inherited PORT/HOST on this path, so a port-less app
+    // gets a clean environment rather than PortOS's.
+    it('leaves no inherited PORT behind on the CLI path when given no port', async () => {
+      vi.stubEnv('PORT', '5555');
+
+      await startWithCommand('worlds', '/repo/worlds', 'bun server/server.ts', {
+        pm2Home: '/tmp/example-pm2'
+      });
+
+      const [, , spawnOpts] = mockSpawn.mock.calls[0];
+      expect(spawnOpts.env).not.toHaveProperty('PORT');
+      vi.unstubAllEnvs();
+    });
+  });
+
   describe('with a custom pm2Home', () => {
     it('starts via the PM2 CLI (not the default-daemon Node API) so the process is visible to CLI-based status/log/delete calls targeting the same home', async () => {
       const result = await startWithCommand(

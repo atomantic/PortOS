@@ -1486,10 +1486,31 @@ export function LocalLlmTab() {
         {selectedData && !selectedData.available && !selectedData.disabled && (
           <div className="flex items-center gap-2 flex-wrap text-xs text-port-warning">
             <span>
-              {labelFor(selected)} isn't running — {selectedData.installed
-                ? (selected === 'ollama' ? 'use the controls to start it or keep it running at login.' : 'launch the app and enable the local server.')
-                : 'install it first (Models → LLMs prompts at setup, or run `npm run setup:llm`).'}
+              {selectedData.installed
+                ? `${labelFor(selected)} isn't running — ${selected === 'ollama' ? 'use the controls to start it or keep it running at login.' : 'launch the app and enable the local server.'}`
+                : `${labelFor(selected)} isn't installed yet.`}
             </span>
+            {!selectedData.installed && selectedData.canAutoInstall && (
+              <button
+                onClick={() => installRuntimeBackend(selected)}
+                disabled={busy}
+                className={`${btnClass} bg-port-accent/20 hover:bg-port-accent/30 text-port-accent`}
+              >
+                {actionInProgress === `runtime-install-${selected}` ? <BrailleSpinner /> : <Download size={12} />}
+                Install {labelFor(selected)}
+              </button>
+            )}
+            {!selectedData.installed && !selectedData.canAutoInstall && selectedData.downloadUrl && (
+              <a
+                href={selectedData.downloadUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`${btnClass} bg-port-border hover:bg-port-border/70 text-white no-underline`}
+              >
+                <ExternalLink size={12} />
+                Download {labelFor(selected)}
+              </a>
+            )}
             {selected === 'ollama' && selectedData.installed && selectedData.canControl && (
               <button
                 onClick={() => runAction(

@@ -10,7 +10,9 @@ import {
   dampFactor, dampAngle, moveFacing, avatarState, bankAngle, stepVehicle,
   moveWithCollisions, PLAYER_COLLISION_RADIUS, VEHICLE_COLLISION,
 } from '../../utils/openWorldPlayerRig';
-import { isWalkable, WORLD } from '../../utils/openWorldPlan';
+import {
+  isWalkable, openWorldTerrainHeight, VILLAGE_COLLIDERS, WORLD,
+} from '../../utils/openWorldPlan';
 import { BOROUGH_PARAMS, BUILDING_PARAMS, PROCESS_BUILDING_PARAMS } from './openWorldConstants';
 import { regionWarpPadPosition, getRegion } from '../../utils/openWorldRegions';
 import { checkSpeedPadOverlap } from '../../utils/openWorldSpeedPads';
@@ -24,7 +26,7 @@ const JUMP_SPEED = 10;  // initial upward velocity of a Space jump (units/s)
 const GRAVITY = -26;    // downward acceleration applied through the jump arc (units/s²)
 const MAX_CAMERA_HEIGHT = 160;
 const BUILDING_FLYOVER_HEIGHT = 12; // above this the player clears rooftops, so skip collision
-const AIRBORNE_HEIGHT = EYE_HEIGHT + 0.6; // above this the avatar reads as flying (hover state)
+const AIRBORNE_CLEARANCE = 0.6; // above the local terrain eye-line the avatar reads as flying
 const MOUSE_SENSITIVITY = 0.002;
 const PITCH_LIMIT = Math.PI / 2 - 0.02;
 const POSE_REPORT_INTERVAL_SECONDS = 0.1;
@@ -88,25 +90,27 @@ export default function PlayerController({
   });
   // Stable array view of the positions Map for the per-frame boom collision test —
   // re-collected only when the layout itself changes, never per frame.
-  const buildingList = useMemo(() => (positions ? [...positions.values()] : []), [positions]);
+  const buildingList = useMemo(() => [
+    ...VILLAGE_COLLIDERS.map(({ x, z, height }) => ({ x, z, height })),
+    ...(positions ? [...positions.values()] : []),
+  ], [positions]);
   // Movement colliders mirror the rendered footprint: app buildings are boxes and
   // process pylons are round. The boom keeps its own larger camera-only padding above.
   const collisionShapes = useMemo(() => {
-    if (!positions) return [];
     const appById = new Map((apps || []).map((app) => [app.id, app]));
-    const shapes = [];
+    const shapes = [...VILLAGE_COLLIDERS];
 
-    positions.forEach((pos, appId) => {
+    positions?.forEach((pos, appId) => {
       shapes.push({
         shape: 'box',
         x: pos.x,
         z: pos.z,
-        halfWidth: BUILDING_PARAMS.width / 2,
-        halfDepth: BUILDING_PARAMS.depth / 2,
+        halfWidth: pos.halfWidth ?? BUILDING_PARAMS.width / 2,
+        halfDepth: pos.halfDepth ?? BUILDING_PARAMS.depth / 2,
       });
 
       const app = appById.get(appId);
-      const processCount = app?.archived || !Array.isArray(app?.processes) ? 0 : app.processes.length;
+      const processCount = pos.compact || app?.archived || !Array.isArray(app?.processes) ? 0 : app.processes.length;
       const processRadius = Math.max(PROCESS_BUILDING_PARAMS.width, PROCESS_BUILDING_PARAMS.depth) * 0.58;
       for (let index = 0; index < processCount; index += 1) {
         const angle = (index / processCount) * Math.PI * 2;
@@ -175,16 +179,9 @@ export default function PlayerController({
     if (lastSpawnRef.current) {
       rig.position.copy(lastSpawnRef.current);
     } else {
-      // Spawn behind front row, facing downtown
-      let maxZ = 0;
-      positions?.forEach((pos) => {
-        if (pos.z > maxZ) maxZ = pos.z;
-      });
-      // With an empty or single-app install, `maxZ + 8` places the rover inside the
-      // central plaza's sightline and the AI Core fills the entire mobile viewport.
-      // Keep the same city-facing drop-in, but start far enough back to reveal the
-      // playable streets and landmarks before the player drives toward downtown.
-      rig.position.set(0, EYE_HEIGHT, Math.max(maxZ + 8, DEFAULT_SPAWN_Z));
+      // Every install enters at the authored Port overlook. App count must not move the
+      // player's starting line onto Archive Rise or behind a data-driven building row.
+      rig.position.set(0, EYE_HEIGHT + openWorldTerrainHeight(0, DEFAULT_SPAWN_Z), DEFAULT_SPAWN_Z);
       rig.yaw = THIRD_PERSON.isometricYaw;
       rig.heading = THIRD_PERSON.isometricYaw;
       rig.pitch = 0;
@@ -208,7 +205,7 @@ export default function PlayerController({
   useEffect(() => {
     if (!active || teleportToken === null || !teleport) return;
     const rig = rigRef.current;
-    rig.position.set(teleport.x, EYE_HEIGHT, teleport.z);
+    rig.position.set(teleport.x, EYE_HEIGHT + openWorldTerrainHeight(teleport.x, teleport.z), teleport.z);
     // Face the destination from the same diagonal heading as the default isometric view.
     rig.yaw = THIRD_PERSON.isometricYaw;
     rig.heading = THIRD_PERSON.isometricYaw;
@@ -418,7 +415,8 @@ export default function PlayerController({
     // holds altitude when released (no gravity). Gravity applies ONLY during an active
     // Space jump arc.
     const flyDir = (keys.has('e') ? 1 : 0) - (keys.has('q') ? 1 : 0);
-    const grounded = rig.position.y <= EYE_HEIGHT + 1e-3;
+    const currentGroundY = EYE_HEIGHT + openWorldTerrainHeight(rig.position.x, rig.position.z);
+    const grounded = rig.position.y <= currentGroundY + 1e-3;
     let dy = 0;
     if (flyDir !== 0) {
       rig.jumping = false;
@@ -466,17 +464,20 @@ export default function PlayerController({
         }
       }
 
+      const nextGroundY = EYE_HEIGHT + openWorldTerrainHeight(nextPos.x, nextPos.z);
+      if (!rig.jumping && flyDir === 0) nextPos.y = nextGroundY;
+
       if (blocked) {
         if (isVehicle) rig.speed = 0;
       }
       // World bounds
       nextPos.x = Math.max(-WORLD.bound, Math.min(WORLD.bound, nextPos.x));
-      nextPos.y = Math.max(EYE_HEIGHT, Math.min(MAX_CAMERA_HEIGHT, nextPos.y));
+      nextPos.y = Math.max(nextGroundY, Math.min(MAX_CAMERA_HEIGHT, nextPos.y));
       nextPos.z = Math.max(-WORLD.bound, Math.min(WORLD.bound, nextPos.z));
 
       // Landed
-      if (nextPos.y <= EYE_HEIGHT + 1e-3 || nextPos.y >= MAX_CAMERA_HEIGHT) {
-        if (rig.jumping && nextPos.y <= EYE_HEIGHT + 1e-3) {
+      if (nextPos.y <= nextGroundY + 1e-3 || nextPos.y >= MAX_CAMERA_HEIGHT) {
+        if (rig.jumping && nextPos.y <= nextGroundY + 1e-3) {
           playSfx?.('land');
         }
         rig.vy = 0;
@@ -518,7 +519,7 @@ export default function PlayerController({
     rig.state = avatarState({
       moving,
       sprinting: isVehicle ? Math.abs(rig.speed) > 16 || (isSprinting && moving) : isSprinting && moving,
-      airborne: rig.position.y > AIRBORNE_HEIGHT,
+      airborne: rig.position.y > EYE_HEIGHT + openWorldTerrainHeight(rig.position.x, rig.position.z) + AIRBORNE_CLEARANCE,
     });
     if (isVehicle) {
       const prevFacing = rig.facing;
@@ -571,7 +572,7 @@ export default function PlayerController({
         skid: rig.skid,
         state: rig.state,
         jumping: rig.jumping,
-        airborne: rig.position.y > AIRBORNE_HEIGHT,
+        airborne: rig.position.y > EYE_HEIGHT + openWorldTerrainHeight(rig.position.x, rig.position.z) + AIRBORNE_CLEARANCE,
         boosting: isSprinting,
       });
     }

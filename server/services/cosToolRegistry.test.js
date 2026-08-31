@@ -4,6 +4,10 @@ const mocks = vi.hoisted(() => ({
   dispatch: vi.fn(),
   executeTasks: vi.fn(),
   cleanupMind: vi.fn(),
+  worldStatus: vi.fn(),
+  worldProject: vi.fn(),
+  worldAugment: vi.fn(),
+  worldSay: vi.fn(),
 }));
 
 const specs = [
@@ -44,6 +48,12 @@ vi.mock('./persistentMindTaskCapability.js', () => ({
 vi.mock('./persistentMindMaintenance.js', () => ({
   cleanupPersistentMind: (...args) => mocks.cleanupMind(...args),
 }));
+vi.mock('./eidoverseWorld.js', () => ({
+  getEidoverseWorldStatus: (...args) => mocks.worldStatus(...args),
+  projectEidoverseWorld: (...args) => mocks.worldProject(...args),
+  augmentEidoverseWorld: (...args) => mocks.worldAugment(...args),
+  sayInEidoverseWorld: (...args) => mocks.worldSay(...args),
+}));
 
 import {
   __testing,
@@ -60,16 +70,30 @@ beforeEach(() => {
   mocks.dispatch.mockResolvedValue({ ok: true });
   mocks.executeTasks.mockResolvedValue([{ success: true, task: { id: 'task-1' }, duplicate: false }]);
   mocks.cleanupMind.mockResolvedValue({ ok: true, success: true, state: 'completed', historyEventsCleared: 8 });
+  mocks.worldStatus.mockResolvedValue({ world: 'portos', presence: { connected: true } });
+  mocks.worldProject.mockResolvedValue({ success: true, summary: { operationCount: 2 } });
+  mocks.worldAugment.mockResolvedValue({ success: true, applied: 1 });
+  mocks.worldSay.mockResolvedValue({ success: true, world: 'portos' });
 });
 
 describe('cosToolRegistry', () => {
   it('exports a compact canonical catalog and provider translations', () => {
     const catalog = getCosToolCatalog({ scope: 'mind', capabilities: { readPortos: true } });
-    expect(catalog.tools.map((tool) => tool.name)).toEqual(['cos.create-task', 'mind.cleanup', 'brain.search', 'brain.capture']);
+    expect(catalog.tools.map((tool) => tool.name)).toEqual([
+      'cos.create-task',
+      'mind.cleanup',
+      'eidoverse.status',
+      'eidoverse.project',
+      'eidoverse.augment',
+      'eidoverse.say',
+      'brain.search',
+      'brain.capture',
+    ]);
     expect(catalog.tools.find((tool) => tool.name === 'brain.search').granted).toBe(true);
     expect(catalog.tools.find((tool) => tool.name === 'brain.capture').granted).toBe(false);
     const openai = formatCosToolCatalog(catalog, 'openai');
     expect(openai.tools).toEqual([
+      expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'eidoverse_status' }) }),
       expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'brain_search' }) }),
     ]);
     const mcp = formatCosToolCatalog(catalog, 'mcp');
@@ -102,6 +126,62 @@ describe('cosToolRegistry', () => {
       call: { requestId: 'write-2', name: 'brain.capture', arguments: { text: 'example' } },
       authority: { scope: 'mind', capabilities: { writePortos: false } },
     })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+  });
+
+  it('keeps private-world management separate from generic PortOS writes and propagates cancellation', async () => {
+    const signal = new AbortController().signal;
+    await expect(executeCosToolCall({
+      call: { requestId: 'world-status-denied', name: 'eidoverse.status', arguments: {} },
+      authority: { scope: 'mind', capabilities: { manageEidoverse: true } },
+    })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+    await expect(executeCosToolCall({
+      call: { requestId: 'world-project-write-only', name: 'eidoverse.project', arguments: {} },
+      authority: { scope: 'mind', capabilities: { readPortos: true, writePortos: true } },
+    })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+
+    const status = await executeCosToolCall({
+      call: { requestId: 'world-status', name: 'eidoverse.status', arguments: {} },
+      authority: { scope: 'mind', capabilities: { readPortos: true } },
+      context: { signal },
+    });
+    const project = await executeCosToolCall({
+      call: { requestId: 'world-project', name: 'eidoverse.project', arguments: {} },
+      authority: { scope: 'mind', capabilities: { readPortos: true, manageEidoverse: true } },
+      context: { signal },
+    });
+    const augment = await executeCosToolCall({
+      call: {
+        requestId: 'world-augment',
+        name: 'eidoverse.augment',
+        arguments: { operations: [{ verb: 'spawn', args: { id: 'example', lib: 'eidoverse/assets/example.glb' } }] },
+      },
+      authority: { scope: 'mind', capabilities: { manageEidoverse: true } },
+      context: { signal },
+    });
+    const say = await executeCosToolCall({
+      call: { requestId: 'world-say', name: 'eidoverse.say', arguments: { text: 'Example message' } },
+      authority: { scope: 'mind', capabilities: { manageEidoverse: true } },
+      context: { signal },
+    });
+    const agentAugment = await executeCosToolCall({
+      call: {
+        requestId: 'agent-world-augment',
+        name: 'eidoverse.augment',
+        arguments: { operations: [{ verb: 'remove', args: { id: 'example' } }] },
+      },
+      authority: { scope: 'agent', capabilities: { manageEidoverse: true } },
+      context: { signal },
+    });
+
+    expect([status.state, project.state, augment.state, say.state, agentAugment.state])
+      .toEqual(['completed', 'completed', 'completed', 'completed', 'completed']);
+    expect(mocks.worldStatus).toHaveBeenCalledWith();
+    expect(mocks.worldProject).toHaveBeenCalledWith({ signal });
+    expect(mocks.worldAugment).toHaveBeenCalledWith(
+      [{ verb: 'spawn', args: { id: 'example', lib: 'eidoverse/assets/example.glb' } }],
+      { signal },
+    );
+    expect(mocks.worldSay).toHaveBeenCalledWith('Example message', { signal });
   });
 
   it('executes cleanup only with the dedicated mind capability and preserves current provenance', async () => {

@@ -406,12 +406,8 @@ describe('federatedMediaSupports / peerMediaProviderSnapshot', () => {
     expect(federatedMediaSupports({ features: 'lyrics' }, 'lyrics')).toBe(false);
   });
 
-  it('reads the status-root list, and falls back to the legacy per-capability field', () => {
+  it('reads the status-root list and keeps the input-assets capability fallback', () => {
     expect(federatedMediaSupports({ features: ['lyrics'] }, 'lyrics')).toBe(true);
-    expect(federatedMediaSupports({}, 'lyrics', { ...capability, acceptsLyrics: true })).toBe(true);
-    // List wins: a published vocabulary that omits the feature overrules the
-    // legacy field rather than being OR'd with it.
-    expect(federatedMediaSupports({ features: [] }, 'lyrics', { ...capability, acceptsLyrics: true })).toBe(false);
     expect(federatedMediaSupports({}, 'inputAssets', { inputAssets: { roles: [] } })).toBe(true);
     expect(federatedMediaSupports({}, 'inputAssets', { inputAssets: null })).toBe(false);
     // Pinned identically in server/lib/federatedMediaWire.test.js: an array is

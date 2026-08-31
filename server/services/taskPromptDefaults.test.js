@@ -35,6 +35,19 @@ const SNAPSHOT = JSON.parse(readFileSync(
 ));
 
 describe('taskPromptDefaults integrity snapshot', () => {
+  it('code-quality v3 inventories structural drift while preserving v2', () => {
+    const current = DEFAULT_TASK_PROMPTS['code-quality'];
+    const previous = PREVIOUS_DEFAULT_PROMPTS['code-quality'][0];
+
+    expect(PROMPT_VERSIONS['code-quality']).toBe(3);
+    expect(current).toContain('Derived artifacts committed as a second source of truth');
+    expect(current).toContain('volatile line/column/offset');
+    expect(current).toContain('regeneration-only churn');
+    expect(current).toContain('Incidental-layout coupling');
+    expect(previous).toContain('Find DRY violations');
+    expect(previous).not.toBe(current);
+  });
+
   it('claim workflows avoid Copilot and require verified remote merge state before cleanup', () => {
     for (const key of ['plan-task', 'claim-issue']) {
       const prompt = DEFAULT_TASK_PROMPTS[key];
@@ -132,22 +145,28 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(actual).toEqual(SNAPSHOT.PREVIOUS_DEFAULT_PROMPTS);
   });
 
-  // feature-ideas v10: rejected-ideas ledger consultation (issue #2621).
-  // Pins the version-bump pairing — the prompt change ships WITH its version
-  // bump and the outgoing v9 default preserved for cross-install auto-upgrade.
-  it('feature-ideas v10 consults REJECTED.md and closed-unmerged PRs, preserving the v9 default', () => {
+  // feature-ideas v11: product-source precedence (PRD.md → GOALS.md → docs),
+  // on top of v10's rejected-ideas ledger consultation (issue #2621). Pins the
+  // version-bump pairing — the prompt change ships WITH its version bump and
+  // the outgoing v10 default preserved for cross-install auto-upgrade.
+  it('feature-ideas v11 reads PRD.md before GOALS.md, preserving the v10 default', () => {
     const current = DEFAULT_TASK_PROMPTS['feature-ideas'];
     expect(current).toContain('REJECTED.md');
     expect(current).toContain('is:unmerged');
-    expect(PROMPT_VERSIONS['feature-ideas']).toBe(10);
+    expect(current).toContain('`PRD.md`');
+    expect(current).toContain('`GOALS.md`');
+    // Precedence, not just presence: the PRD instruction must come first.
+    expect(current.indexOf('`PRD.md`')).toBeLessThan(current.indexOf('`GOALS.md`'));
+    expect(current).toContain('follow the PRD\'s concrete requirements');
+    expect(PROMPT_VERSIONS['feature-ideas']).toBe(11);
 
     const previous = PREVIOUS_DEFAULT_PROMPTS['feature-ideas'];
-    const v9 = previous[previous.length - 1];
-    // The outgoing v9 default lacked the rejected-ideas consultation and is
-    // preserved verbatim so installs holding it are recognized and upgraded.
-    expect(v9).not.toContain('REJECTED.md');
-    expect(v9).toContain('.changelog/');
-    expect(v9).not.toBe(current);
+    const v10 = previous[previous.length - 1];
+    // The outgoing v10 default read GOALS.md only and is preserved verbatim so
+    // installs holding it are recognized and upgraded.
+    expect(v10).toContain('REJECTED.md');
+    expect(v10).not.toContain('PRD.md');
+    expect(v10).not.toBe(current);
   });
 
   // plan-feature v5: omitted optional preloads fall back to direct inventory,
@@ -282,6 +301,34 @@ describe('taskPromptDefaults integrity snapshot', () => {
     }
   });
 
+  // The other direction, and the one that actually bites: taskScheduleStore's
+  // auto-upgrade block is gated on `PROMPT_VERSIONS[taskType] && …`, so a
+  // prompt with no entry is silently exempt from upgrade forever — a body
+  // change ships and no install ever receives it. console-errors,
+  // error-handling and typing were frozen exactly that way.
+  //
+  // The exemptions are an explicit ALLOWLIST, not a derived predicate. Keying
+  // off "absent from DEFAULT_TASK_INTERVALS" would exempt any future body that
+  // merely isn't a schedule key yet — the exact regression this guards — so a
+  // new unversioned prompt has to be justified by naming it here.
+  const UNPERSISTED_PROMPT_KEYS = [
+    // Pipeline stage bodies: getStagePrompt reads them live from this catalog
+    // and never persists them, so an edit reaches every install on the next
+    // dispatch (their pipeline's SCHEDULE key carries the version instead).
+    'pr-reviewer-security',
+    'pr-reviewer-review',
+    'code-reviewer-review',
+    'code-reviewer-implement',
+    'branch-cleanup',
+  ];
+
+  it('every persisted default prompt is versioned, so none is silently exempt from auto-upgrade', () => {
+    for (const key of Object.keys(DEFAULT_TASK_PROMPTS)) {
+      if (UNPERSISTED_PROMPT_KEYS.includes(key)) continue;
+      expect(PROMPT_VERSIONS[key], `PROMPT_VERSIONS['${key}']`).toBeTypeOf('number');
+    }
+  });
+
   // Claim worktrees are created under PortOS's shared worktrees dir
   // ({worktreesRoot} → data/cos/worktrees, resolved in taskPromptService) rather
   // than inside the managed app repo, so an agent's checkout no longer pollutes
@@ -331,8 +378,8 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(current).toContain('`antigravity` (CLI binary: `agy`)');
     // …and a reviewer whose binary is missing must not be replaced by the
     // agent's own self-review, which is what actually merged the bad PR.
-    expect(current).toContain('is UNSATISFIED, not clean');
-    expect(current).toContain('Do NOT substitute your own self-review');
+    expect(current).toContain('is unavailable, not clean');
+    expect(current).toContain('do NOT substitute your own self-review');
 
     // The pre-`agy` default named only the slug; preserved verbatim so installs
     // holding it are recognized and auto-upgraded. Located by CONTENT, not array
@@ -668,6 +715,25 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(PREVIOUS_DEFAULT_PROMPTS['claim-issue-gitlab'].some((prompt) => prompt.includes('It has NO assignees'))).toBe(true);
   });
 
+  it('publishes claim work when a required local review is unavailable, but leaves it unmerged', () => {
+    const cases = [
+      ['claim-issue', 23, 'gh pr comment "$PR_URL"'],
+      ['claim-issue-gitlab', 21, 'glab mr note "$MR_IID"'],
+      ['claim-issue-jira', 16, 'This MR/PR is intentionally left open and will not be merged'],
+    ];
+
+    for (const [key, version, publicationCommand] of cases) {
+      const current = DEFAULT_TASK_PROMPTS[key];
+      expect(PROMPT_VERSIONS[key]).toBe(version);
+      expect(current).toContain('review-blocked');
+      expect(current).toContain('continue to push and open the PR/MR');
+      expect(current).toContain('intentionally left open and will not be merged until the required review completes');
+      expect(current).toContain(publicationCommand);
+      expect(PREVIOUS_DEFAULT_PROMPTS[key]).toHaveLength(version - 1);
+      expect(PREVIOUS_DEFAULT_PROMPTS[key].at(-1)).not.toBe(current);
+    }
+  });
+
   // Epic decomposition. Every claim flow used to skip an epic outright ("leave
   // it for a human to split"), so a tracker whose remaining work was all epics
   // ended each run with nothing done and reported an empty queue. Phase 1b makes
@@ -758,12 +824,18 @@ describe('taskPromptDefaults integrity snapshot', () => {
       // instead of being flagged promptCustomized and pinned to the old flow.
       const previous = PREVIOUS_DEFAULT_PROMPTS[key];
       expect(previous).toHaveLength(PROMPT_VERSIONS[key] - 1);
-      expect(previous.at(-1)).not.toBe(current);
-      for (const command of releases[key]) expect(previous.at(-1)).not.toContain(command);
+      // A later review revision now follows this contributor-label revision, so
+      // locate the outgoing body by the property this revision introduced rather
+      // than assuming it remains the final historical entry.
+      const outgoing = previous.findLast((prompt) => prompt.includes('Phase 1b')
+        && releases[key].every((command) => !prompt.includes(command)));
+      expect(outgoing).toBeDefined();
+      expect(outgoing).not.toBe(current);
       // …and it is the body that ONLY lacks the release: everything else the
       // outgoing version shipped (Phase 1b) is still there, which is what makes it
       // the immediately-previous body rather than some older one.
-      expect(previous.at(-1)).toContain('Phase 1b');
+      expect(outgoing).toContain('Phase 1b');
+      for (const command of releases[key]) expect(outgoing).not.toContain(command);
     }
   });
 

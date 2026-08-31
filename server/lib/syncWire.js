@@ -1,4 +1,30 @@
+import {
+  BIBLE_LIMITS,
+  IDENTITY_ASSET_ROLES,
+  VOICE_CANON_SOURCE_POLICIES,
+} from './storyBible.js';
+
 const isNonEmptyStr = (v) => typeof v === 'string' && v.trim().length > 0;
+const IDENTITY_ASSET_ROLE_SET = new Set(IDENTITY_ASSET_ROLES);
+const VOICE_CANON_SOURCE_POLICY_SET = new Set(VOICE_CANON_SOURCE_POLICIES);
+
+const boundedWireString = (value, max) => (
+  typeof value === 'string' ? value.trim().slice(0, max) : ''
+);
+
+const portableStringArray = (value, itemMax, listMax) => {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const result = [];
+  for (const item of value) {
+    const text = boundedWireString(item, itemMax);
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    result.push(text);
+    if (result.length >= listMax) break;
+  }
+  return result;
+};
 
 /**
  * Normalize the `deleted` + `deletedAt` tombstone fields on a raw record.
@@ -33,6 +59,89 @@ export function stripMusicVideoLocalRenderPins(record, { stripVideoBackend = tru
     shared.videoSettings = sharedVideoSettings;
   }
   return shared;
+}
+
+// Defense in depth for Universe character production packages (#5378). The
+// record sanitizer already allowlists these nested fields on normal reads and
+// writes, but peer sync is a privacy boundary: old/corrupt persisted records
+// must not send local profile ids, provider ids, artifact paths, recordings, or
+// performer/source material merely because they bypassed a normal PATCH.
+function stripUniverseCharacterLocalProductionFields(record) {
+  if (!Array.isArray(record.characters)) return record;
+  return {
+    ...record,
+    characters: record.characters.map((character) => {
+      if (!character || typeof character !== 'object' || Array.isArray(character)) return character;
+      const { voiceCanon, identityPack, ...characterRest } = character;
+      const portableVoiceCanon = voiceCanon && typeof voiceCanon === 'object' && !Array.isArray(voiceCanon) ? {
+        version: Number.isInteger(voiceCanon.version) && voiceCanon.version > 0
+          ? Math.min(voiceCanon.version, BIBLE_LIMITS.VOICE_CANON_VERSION_MAX)
+          : 1,
+        description: boundedWireString(voiceCanon.description, BIBLE_LIMITS.VOICE_CANON_DESCRIPTION_MAX),
+        defaultDelivery: boundedWireString(voiceCanon.defaultDelivery, BIBLE_LIMITS.VOICE_CANON_DELIVERY_MAX),
+        emotionalRange: portableStringArray(
+          voiceCanon.emotionalRange,
+          BIBLE_LIMITS.VOICE_CANON_RANGE_ITEM_MAX,
+          BIBLE_LIMITS.VOICE_CANON_RANGE_MAX,
+        ),
+        avoid: portableStringArray(
+          voiceCanon.avoid,
+          BIBLE_LIMITS.VOICE_CANON_AVOID_ITEM_MAX,
+          BIBLE_LIMITS.VOICE_CANON_AVOID_MAX,
+        ),
+        pronunciations: (Array.isArray(voiceCanon.pronunciations) ? voiceCanon.pronunciations : [])
+          .flatMap((item) => {
+            if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+            const term = boundedWireString(item.term, BIBLE_LIMITS.VOICE_CANON_PRONUNCIATION_TERM_MAX);
+            const pronunciation = boundedWireString(
+              item.pronunciation,
+              BIBLE_LIMITS.VOICE_CANON_PRONUNCIATION_VALUE_MAX,
+            );
+            return term && pronunciation ? [{ term, pronunciation }] : [];
+          })
+          .slice(0, BIBLE_LIMITS.VOICE_CANON_PRONUNCIATIONS_MAX),
+        sourcePolicy: VOICE_CANON_SOURCE_POLICY_SET.has(voiceCanon.sourcePolicy)
+          ? voiceCanon.sourcePolicy
+          : null,
+        approved: voiceCanon.approved === true,
+      } : null;
+      const imageRefs = Array.isArray(characterRest.imageRefs) ? characterRest.imageRefs : [];
+      const seenAssets = new Set();
+      const portableAssets = (Array.isArray(identityPack?.assets) ? identityPack.assets : [])
+        .flatMap((asset) => {
+          if (!asset || typeof asset !== 'object' || Array.isArray(asset)
+            || !IDENTITY_ASSET_ROLE_SET.has(asset.role)
+            || typeof asset.imageRef !== 'string'
+            || !imageRefs.includes(asset.imageRef)) return [];
+          const assetKey = `${asset.role}:${asset.imageRef}`;
+          if (seenAssets.has(assetKey)) return [];
+          seenAssets.add(assetKey);
+          return [{
+            role: asset.role,
+            imageRef: asset.imageRef,
+            approved: asset.approved === true,
+          }];
+        })
+        .slice(0, BIBLE_LIMITS.IDENTITY_PACK_ASSETS_MAX);
+      const portableIdentityPack = identityPack && typeof identityPack === 'object' && !Array.isArray(identityPack)
+        ? {
+          ...(Array.isArray(identityPack.assets) ? { assets: portableAssets } : {}),
+          ...(Array.isArray(identityPack.avoid) ? {
+            avoid: portableStringArray(
+              identityPack.avoid,
+              BIBLE_LIMITS.IDENTITY_PACK_AVOID_ITEM_MAX,
+              BIBLE_LIMITS.IDENTITY_PACK_AVOID_MAX,
+            ),
+          } : {}),
+        }
+        : null;
+      return {
+        ...characterRest,
+        ...(portableVoiceCanon ? { voiceCanon: portableVoiceCanon } : {}),
+        ...(portableIdentityPack ? { identityPack: portableIdentityPack } : {}),
+      };
+    }),
+  };
 }
 
 // Single source of truth for what fields cross the federated-peer wire.
@@ -171,7 +280,8 @@ export function sanitizeRecordForWire(kind, record) {
       if (kind === 'universe' || kind === 'series') {
         const { imageMode: _imageMode, imageModelId: _imageModelId, ...noPinRest } = rest;
         if (kind === 'universe') {
-          const { styleImageRefs: _styleImageRefs, ...universeRest } = noPinRest;
+          const portableUniverse = stripUniverseCharacterLocalProductionFields(noPinRest);
+          const { styleImageRefs: _styleImageRefs, ...universeRest } = portableUniverse;
           return { ...universeRest, ...sanitizeSoftDeleteFields(record) };
         }
         return { ...noPinRest, ...sanitizeSoftDeleteFields(record) };

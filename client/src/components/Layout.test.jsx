@@ -7,7 +7,7 @@ import { INSTANCE_FEATURES_CHANGED } from '../constants/events.js';
 
 // This suite locks the *integration* path that SingleNavRow.test.jsx can't reach:
 // pinning a top-level `single: true` row (Dashboard `/`, Review Hub `/review`,
-// OpenWorld `/openworld`, Goals `/goals/list`) must make it render in the sidebar Pinned
+// Eidoverse `/eidoverse`, Goals `/goals/list`) must make it render in the sidebar Pinned
 // section. That resolution lives in Layout itself — `navEntryByPath` indexes
 // `item.single` leaves, `resolveNavEntry` maps a stored path to a row, and
 // `useNavWorkingSet` feeds the Pinned-section render. We exercise the real
@@ -60,6 +60,7 @@ const allFeaturesOn = () => [
   { id: 'post', label: 'POST', enabled: true },
   { id: 'datadog', label: 'DataDog', enabled: true },
   { id: 'jira', label: 'JIRA', enabled: true },
+  { id: 'eidoverse', label: 'Eidoverse Worlds', enabled: true },
   { id: 'gsd', label: 'GSD', enabled: true },
   { id: 'openclaw', label: 'OpenClaw', enabled: true },
   { id: 'health', label: 'Health tracking', enabled: true },
@@ -70,7 +71,14 @@ vi.mock('../services/api', () => ({
   getApps: vi.fn(() => Promise.resolve([])),
   listPipelineSeries: vi.fn(() => Promise.resolve([])),
   listUniverses: vi.fn(() => Promise.resolve([])),
-  getPaletteManifest: vi.fn(() => Promise.resolve({ nav: [] })),
+  getPaletteManifest: vi.fn(() => Promise.resolve({
+    nav: [{
+      path: '/eidoverse',
+      label: 'Eidoverse Worlds',
+      feature: 'eidoverse',
+      previousPaths: ['/openworld', '/city'],
+    }],
+  })),
   getDailyActions: vi.fn(() => Promise.resolve({ actions: [] })),
   getInstanceFeatures: vi.fn(() => Promise.resolve({ features: featureMock.features })),
 }));
@@ -180,7 +188,7 @@ describe('Layout — pinned single nav rows', () => {
     const pinned = pinnedSection();
     expect(within(pinned).getByRole('link', { name: /Dashboard/i })).toHaveAttribute('href', '/');
     expect(within(pinned).getByRole('link', { name: /Review Hub/i })).toHaveAttribute('href', '/review');
-    expect(within(pinned).getByRole('link', { name: /OpenWorld/i })).toHaveAttribute('href', '/openworld');
+    expect(within(pinned).getByRole('link', { name: /Eidoverse/i })).toHaveAttribute('href', '/eidoverse');
     expect(within(pinned).getByRole('link', { name: /Goals/i })).toHaveAttribute('href', '/goals/list');
   });
 
@@ -199,7 +207,7 @@ describe('Layout — pinned single nav rows', () => {
 
     const pinned = pinnedSection();
     expect(pinned).toBeTruthy();
-    expect(within(pinned).getByRole('link', { name: /OpenWorld/i })).toHaveAttribute('href', '/openworld');
+    expect(within(pinned).getByRole('link', { name: /Eidoverse/i })).toHaveAttribute('href', '/eidoverse');
     // The unknown path contributes no row.
     expect(within(pinned).getAllByRole('link')).toHaveLength(1);
   });
@@ -243,6 +251,18 @@ describe('Layout — instance feature gating', () => {
     await renderLayout('/settings/features');
 
     expect(screen.getByRole('link', { name: 'Features' })).toHaveAttribute('href', '/settings/features');
+  });
+
+  it('shows and hides Eidoverse with its instance feature flag', async () => {
+    await renderLayout('/eidoverse');
+    expect(screen.getByRole('link', { name: 'Eidoverse' })).toHaveAttribute('href', '/eidoverse');
+
+    featureMock.features = allFeaturesOn()
+      .map((feature) => feature.id === 'eidoverse' ? { ...feature, enabled: false } : feature);
+    act(() => window.dispatchEvent(new CustomEvent(INSTANCE_FEATURES_CHANGED, {
+      detail: { features: featureMock.features },
+    })));
+    expect(screen.queryByRole('link', { name: 'Eidoverse' })).toBeNull();
   });
 
   it('shows and hides OpenClaw with its instance feature flag', async () => {
@@ -418,6 +438,7 @@ describe('Layout — isFullWidthRoute classification', () => {
     ['/ask', true], ['/ask/1', true], ['/asking', false],
     ['/timeline', true], ['/timeline/2026-08-12', true],
     ['/tribe', true], ['/rapid-reader', true], ['/openclaw', true],
+    ['/eidoverse', true], ['/eidoverse/world', false],
     // Index page stays padded+scrolling; only the DETAIL route is full-width.
     ['/catalog', false], ['/catalog/book/1', true],
     ['/universes', false], ['/universes/u1', true],

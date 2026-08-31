@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Box, Check, Code2, Download, Info, LoaderCircle, RefreshCw, Trash2, X } from 'lucide-react';
 import { Link, useNavigate, useParams } from 'react-router';
 import MediaImage from '../components/MediaImage';
@@ -7,6 +7,7 @@ import SubjectFamilySelect from '../components/threejsModels/SubjectFamilySelect
 import ThreejsModelPreview from '../components/threejsModels/ThreejsModelPreview';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
+import useMounted from '../hooks/useMounted';
 import useProviderModels from '../hooks/useProviderModels';
 import useThreejsModelFamilies, { GENERAL_FAMILY_ID, resolveFamilyId } from '../hooks/useThreejsModelFamilies';
 import {
@@ -25,6 +26,9 @@ import { seedModelEffort } from '../utils/providers';
 
 const providerFilter = (provider) =>
   provider.enabled !== false && ['api', 'cli', 'tui'].includes(provider.type);
+
+const MAX_IN_FLIGHT_POLLS = 2;
+const POLL_TIMEOUT_MS = 30_000;
 
 const SEVERITY_STYLE = {
   error: 'border-port-error/40 bg-port-error/10 text-port-error',
@@ -284,38 +288,85 @@ export default function ThreejsModelDetail() {
     // server, so Antigravity lists base models with effort picked separately.
   } = useProviderModels({ filter: providerFilter, silent: true, withEffort: true });
 
-  const load = async ({ initial = false } = {}) => {
-    const next = await getThreejsModel(id, { silent: true }).catch((error) => {
-      if (error.status === 404) setNotFound(true);
-      else if (initial) toast.error(error.message || 'Failed to load model');
+  const mountedRef = useMounted();
+  const lifecycleGenerationRef = useRef(0);
+  const requestSequenceRef = useRef(0);
+  const pollSequenceRef = useRef(0);
+  const lastAppliedRequestRef = useRef(0);
+  const inFlightPollsRef = useRef(new Map());
+  const load = useCallback(async ({ initial = false, signal } = {}) => {
+    const lifecycleGeneration = lifecycleGenerationRef.current;
+    const requestSequence = ++requestSequenceRef.current;
+    const isCurrent = () => mountedRef.current && lifecycleGeneration === lifecycleGenerationRef.current;
+    const isAuthoritative = () => isCurrent() && requestSequence >= lastAppliedRequestRef.current;
+    if (initial && isCurrent()) {
+      setLoading(true);
+      setNotFound(false);
+      setRecord(null);
+    }
+    const next = await getThreejsModel(id, {
+      silent: true,
+      ...(signal ? { signal } : {}),
+    }).catch((error) => {
+      if (!isAuthoritative()) return null;
+      if (error.status === 404) {
+        lastAppliedRequestRef.current = requestSequence;
+        setNotFound(true);
+      } else if (initial) toast.error(error.message || 'Failed to load model');
       return null;
     });
+    if (!isAuthoritative()) return null;
     if (next) {
+      lastAppliedRequestRef.current = requestSequence;
       setRecord(next);
       setNotFound(false);
     }
     if (initial) setLoading(false);
     return next;
-  };
+  }, [id, mountedRef]);
 
   useEffect(() => {
-    let cancelled = false;
-    getThreejsModel(id, { silent: true })
-      .then((next) => { if (!cancelled) setRecord(next); })
-      .catch((error) => {
-        if (cancelled) return;
-        if (error.status === 404) setNotFound(true);
-        else toast.error(error.message || 'Failed to load model');
-      })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [id]);
+    lifecycleGenerationRef.current += 1;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), POLL_TIMEOUT_MS);
+    void load({ initial: true, signal: controller.signal }).finally(() => clearTimeout(timeoutId));
+    return () => {
+      clearTimeout(timeoutId);
+      controller.abort();
+      lifecycleGenerationRef.current += 1;
+    };
+  }, [id, load]);
 
   useEffect(() => {
-    if (record?.status !== 'generating') return undefined;
-    const handle = setInterval(() => { void load(); }, 2_000);
-    return () => clearInterval(handle);
-  }, [record?.status, id]);
+    if (loading || notFound || record?.id !== id || record?.status !== 'generating') return undefined;
+    const handle = setInterval(() => {
+      if (inFlightPollsRef.current.size >= MAX_IN_FLIGHT_POLLS) return;
+      const pollSequence = ++pollSequenceRef.current;
+      const controller = new AbortController();
+      const poll = { controller, timeoutId: null };
+      inFlightPollsRef.current.set(pollSequence, poll);
+      poll.timeoutId = setTimeout(() => {
+        if (inFlightPollsRef.current.get(pollSequence)?.controller !== controller) return;
+        inFlightPollsRef.current.delete(pollSequence);
+        controller.abort();
+      }, POLL_TIMEOUT_MS);
+      void load({ signal: controller.signal }).finally(() => {
+        const activePoll = inFlightPollsRef.current.get(pollSequence);
+        if (activePoll?.controller !== controller) return;
+        clearTimeout(activePoll.timeoutId);
+        inFlightPollsRef.current.delete(pollSequence);
+      });
+    }, 2_000);
+    return () => {
+      clearInterval(handle);
+      for (const { controller, timeoutId } of inFlightPollsRef.current.values()) {
+        clearTimeout(timeoutId);
+        controller.abort();
+      }
+      inFlightPollsRef.current.clear();
+      lifecycleGenerationRef.current += 1;
+    };
+  }, [loading, notFound, record?.id, record?.status, id, load]);
 
   useEffect(() => {
     if (!record || providers.length === 0) return;

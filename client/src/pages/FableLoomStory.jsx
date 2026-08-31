@@ -4,28 +4,37 @@
  * URL is the source of truth: /fableloom/:loomId/plan is the series workspace;
  * /fableloom/:loomId/:episodeId selects an episode, /outline switches that
  * episode to its text outline, and /:nodeId selects a scene in the graph. The
- * play drawer rides ?play=1.
+ * full-screen player rides ?play=1.
  * Left: the scene-graph canvas (stacks top-to-bottom under the `lg` rail
  * breakpoint). Right rail: the selected scene's editor, or the
- * structure/review panel when nothing is selected. On small screens the
- * rail sits under the canvas and is height-capped so the graph stays the
- * thing you scroll.
+ * structure/review panel when nothing is selected. On small screens a
+ * selected scene slides up over the graph as a dismissible details sheet.
+ * The page never scrolls (the app `<main>` is `overflow-hidden` for this
+ * route), so the stacked graph/rail split is sized in percentages of the pane
+ * left under the header, and the header demotes its actions into an
+ * `OverflowMenu` on phones — `vh` sizing here silently pushes the rail's
+ * content off-screen.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router';
-import { ArrowLeft, BookOpenText, ListTree, Loader2, Plus, Settings, Sparkles, Trash2, Waypoints, Workflow as WorkflowIcon } from 'lucide-react';
+import { ArrowLeft, BookOpenText, ListTree, PencilLine, Plus, Settings, Sparkles, Trash2, Waypoints, Workflow as WorkflowIcon, X } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Drawer from '../components/Drawer';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { FormField } from '../components/ui/FormField.jsx';
+import Modal from '../components/ui/Modal';
+import OverflowMenu from '../components/ui/OverflowMenu';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import TabPills from '../components/ui/TabPills';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
+import useFableLoomAiRun from '../hooks/useFableLoomAiRun';
 import useContainerWidth from '../hooks/useContainerWidth';
+import { useScrollLock } from '../hooks/useScrollLock';
 import LoomCanvas from '../components/fableloom/LoomCanvas';
 import LoomEpisodeOutline from '../components/fableloom/LoomEpisodeOutline';
+import LoomEpisodeOutlinePlanner from '../components/fableloom/LoomEpisodeOutlinePlanner';
 import LoomEpisodeFeedback from '../components/fableloom/LoomEpisodeFeedback';
 import LoomMediaJobWatchers from '../components/fableloom/LoomMediaJobWatchers';
 import LoomNodeEditor from '../components/fableloom/LoomNodeEditor';
@@ -33,11 +42,15 @@ import LoomPlayPanel from '../components/fableloom/LoomPlayPanel';
 import LoomSettingsDrawer from '../components/fableloom/LoomSettingsDrawer';
 import LoomSeriesPlan from '../components/fableloom/LoomSeriesPlan';
 import LoomValidationPanel from '../components/fableloom/LoomValidationPanel';
+import LoomAiRunStatus from '../components/fableloom/LoomAiRunStatus';
+import FalH3MaxPromptFallback from '../components/videoGen/FalH3MaxPromptFallback';
 import { fieldClass, labelClass } from '../components/fableloom/fieldStyles';
 import {
   buildFableLoomImageRequest, buildFableLoomVideoRequest,
 } from '../components/fableloom/sceneMediaRequests';
 import { universeStylePreset } from '../lib/universeStylePreset';
+import { fableLoomMediaReadiness } from '../lib/fableLoomReadiness';
+import { openFalH3MaxFreeTool } from '../lib/falVideoHandoff';
 import { LOOM_ORIENTATION, LOOM_STACK_WIDTH } from '../lib/loomLayout';
 import {
   addLoomEpisode, addLoomNode, deleteLoomEpisode, generateImage, generateVideo,
@@ -45,11 +58,13 @@ import {
   weaveLoomEpisode,
 } from '../services/api';
 
-const CONTINUITY_FALLBACK_CODES = new Set([
-  'IMAGE_EDIT_UNSUPPORTED_MODE',
-  'REFERENCE_IMAGE_NOT_FOUND',
-  'REFERENCE_IMAGES_FLUX2_ONLY',
-]);
+// Phone-first sizing: a 44px touch target next to the overflow trigger, then
+// the denser desktop row from `sm` up. Base and variants never both set the
+// same utility — with no tailwind-merge, two border colors resolve by
+// stylesheet order, not by class-string order.
+const headerActionBase = 'flex min-h-[44px] items-center gap-1 rounded border px-2.5 py-2 text-xs sm:min-h-[36px] sm:py-1.5';
+const headerActionClass = `${headerActionBase} border-port-border hover:border-port-accent`;
+const headerPlayClass = `${headerActionBase} border-port-accent bg-port-accent text-white`;
 
 export default function FableLoomStory({ view = 'graph' }) {
   const { loomId, episodeId, nodeId } = useParams();
@@ -70,7 +85,9 @@ export default function FableLoomStory({ view = 'graph' }) {
   const [notFound, setNotFound] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [falManualPrompt, setFalManualPrompt] = useState('');
   const playOpen = searchParams.get('play') === '1';
+  useScrollLock(playOpen);
   const seriesPlanOpen = episodeId === 'plan';
   const outlineOpen = view === 'outline';
   // Orientation keys off the PAGE, not the canvas. The canvas is the leftover
@@ -157,6 +174,14 @@ export default function FableLoomStory({ view = 'graph' }) {
 
   const episode = seriesPlanOpen ? null : loom?.episodes.find((e) => e.id === episodeId) || null;
   const node = episode?.nodes.find((n) => n.id === nodeId) || null;
+  const mediaReadiness = useMemo(
+    () => fableLoomMediaReadiness(loom, episode),
+    [loom, episode],
+  );
+  const mediaWorkflowBlocked = Boolean(episode?.nodes?.length && !mediaReadiness.ready);
+  const mediaGenerationDisabledReason = mediaWorkflowBlocked
+    ? mediaReadiness.reason
+    : generationDisabledReason;
 
   const setSceneMediaJob = useCallback((targetNodeId, kind, nextJob) => {
     setMediaJobs((prev) => {
@@ -192,7 +217,13 @@ export default function FableLoomStory({ view = 'graph' }) {
       ...prev,
       episodes: prev.episodes.map((item) => ({
         ...item,
-        nodes: item.nodes.map((scene) => (scene.id === targetNodeId ? { ...scene, ...patch } : scene)),
+        nodes: item.nodes.map((scene) => (scene.id === targetNodeId ? {
+          ...scene,
+          ...patch,
+          ...(patch.image && scene.visualCanon ? {
+            visualCanon: { ...scene.visualCanon, storyboardImageApproved: false },
+          } : {}),
+        } : scene)),
       })),
     } : prev));
   }, []);
@@ -221,26 +252,23 @@ export default function FableLoomStory({ view = 'graph' }) {
       toast.error('Write an image prompt first');
       return null;
     }
+    if (mediaWorkflowBlocked) {
+      toast.error(mediaReadiness.reason);
+      return null;
+    }
     if (styleContextLoading || styleContextUnavailable) {
       toast.error(generationDisabledReason || 'Scene style is not ready');
       return null;
     }
 
     setSceneMediaJob(targetNode.id, 'image', { jobId: null, status: 'submitting', progress: 0 });
-    const imageRequest = (includeContinuity) => buildFableLoomImageRequest({
+    const imageRequest = buildFableLoomImageRequest({
       loom,
-      episode: includeContinuity ? episode : null,
       episodeId,
       node: targetNode,
       stylePreset: sceneStylePreset,
     });
-    let continuityFallbackCode = null;
-    const queued = await generateImage(imageRequest(true), { silent: true })
-      .catch((err) => {
-        if (!CONTINUITY_FALLBACK_CODES.has(err.code)) throw err;
-        continuityFallbackCode = err.code;
-        return generateImage(imageRequest(false), { silent: true });
-      })
+    const queued = await generateImage(imageRequest, { silent: true })
       .catch((err) => {
         setSceneMediaJob(targetNode.id, 'image', {
           jobId: null, status: 'failed', progress: 0, error: err.message || 'Could not start the render',
@@ -249,11 +277,6 @@ export default function FableLoomStory({ view = 'graph' }) {
         return null;
       });
     if (!queued) return null;
-    if (continuityFallbackCode) {
-      toast.warning(continuityFallbackCode === 'REFERENCE_IMAGE_NOT_FOUND'
-        ? 'The prior shot image is missing — rendering this scene without continuity conditioning'
-        : 'The current image backend cannot use the prior shot — rendering this scene without continuity conditioning');
-    }
     // External SD-API renders synchronously: its generationId identifies the
     // completed request, not a media-job record. The server has already filed
     // the image onto the scene, so swap the preview immediately and do not
@@ -282,12 +305,16 @@ export default function FableLoomStory({ view = 'graph' }) {
     });
     toast.success('Scene image queued');
     return queued;
-  }, [applySceneMedia, episode, episodeId, generationDisabledReason, loom, sceneStylePreset, setSceneMediaJob, styleContextLoading, styleContextUnavailable]);
+  }, [applySceneMedia, episode, episodeId, generationDisabledReason, loom, mediaReadiness.reason, mediaWorkflowBlocked, sceneStylePreset, setSceneMediaJob, styleContextLoading, styleContextUnavailable]);
 
   const queueSceneVideo = useCallback(async (targetNode) => {
     const prompt = (targetNode?.videoPrompt || '').trim() || (targetNode?.prose || '').trim();
     if (!prompt) {
       toast.error('Write the scene first');
+      return null;
+    }
+    if (mediaWorkflowBlocked) {
+      toast.error(mediaReadiness.reason);
       return null;
     }
     if (styleContextLoading || styleContextUnavailable) {
@@ -318,7 +345,30 @@ export default function FableLoomStory({ view = 'graph' }) {
     });
     toast.success('Scene video queued');
     return queued;
-  }, [episodeId, generationDisabledReason, loom, sceneStylePreset, setSceneMediaJob, styleContextLoading, styleContextUnavailable]);
+  }, [episodeId, generationDisabledReason, loom, mediaReadiness.reason, mediaWorkflowBlocked, sceneStylePreset, setSceneMediaJob, styleContextLoading, styleContextUnavailable]);
+
+  const openFalSceneVideo = useCallback((targetNode) => {
+    const prompt = (targetNode?.videoPrompt || '').trim() || (targetNode?.prose || '').trim();
+    if (!prompt) {
+      toast.error('Write the scene first');
+      return false;
+    }
+    if (mediaWorkflowBlocked) {
+      toast.error(mediaReadiness.reason);
+      return false;
+    }
+    if (styleContextLoading || styleContextUnavailable) {
+      toast.error(generationDisabledReason || 'Scene style is not ready');
+      return false;
+    }
+    const request = buildFableLoomVideoRequest({
+      loom, episodeId, node: targetNode, stylePreset: sceneStylePreset,
+    });
+    return openFalH3MaxFreeTool({
+      ...request,
+      onCopyFailure: setFalManualPrompt,
+    });
+  }, [episodeId, generationDisabledReason, loom, mediaReadiness.reason, mediaWorkflowBlocked, sceneStylePreset, styleContextLoading, styleContextUnavailable]);
 
   const basePath = `/fableloom/${loomId}`;
   const episodePath = useCallback(
@@ -329,6 +379,9 @@ export default function FableLoomStory({ view = 'graph' }) {
   // drawer's ?play=1 across the move.
   const selectNode = (id) => {
     navigate(episodePath(episodeId, id) + (playOpen ? '?play=1' : ''));
+  };
+  const clearNodeSelection = () => {
+    navigate(episodePath(episodeId) + (playOpen ? '?play=1' : ''));
   };
 
   const setPlayOpen = (open) => {
@@ -371,6 +424,18 @@ export default function FableLoomStory({ view = 'graph' }) {
       if (added) navigate(episodePath(episode.id, added.id));
     }
   };
+
+  // One list drives both header shapes: labelled buttons from `sm` up, and the
+  // same actions inside the overflow menu on phones, where five buttons plus
+  // the loom title ran off the right edge of the screen.
+  const headerActions = [
+    { id: 'settings', label: 'Story settings', short: 'Settings', icon: Settings, onSelect: () => setSettingsOpen(true) },
+    ...(episode ? [
+      { id: 'add-scene', label: 'Add scene', short: 'Scene', icon: Plus, onSelect: handleAddNode },
+      { id: 'edit-episode', label: 'Edit episode', hint: 'Edit episode title and synopsis', icon: PencilLine, onSelect: () => setSetupOpen(true) },
+      { id: 'weave', label: 'Weave', hint: 'Weave this episode with AI', icon: Sparkles, onSelect: () => setSetupOpen(true) },
+    ] : []),
+  ];
 
   const handleMoveNode = (movedNodeId, pos) => {
     // Optimistic: fold the new position into local state, persist silently.
@@ -418,67 +483,61 @@ export default function FableLoomStory({ view = 'graph' }) {
         onUpdate={handleMediaJobUpdate}
         onTerminal={handleMediaJobTerminal}
       />
-      <header className="border-b border-port-border px-4 py-2.5 space-y-2">
-        <div className="flex items-center gap-3 flex-wrap">
-          <Link to="/fableloom" className="text-port-text-muted hover:text-port-text" aria-label="Back to FableLoom">
+      <header className="border-b border-port-border px-3 py-2 sm:px-4 sm:py-2.5 space-y-1.5 sm:space-y-2">
+        <div className="flex items-center gap-2 sm:gap-3">
+          <Link to="/fableloom" className="shrink-0 text-port-text-muted hover:text-port-text" aria-label="Back to FableLoom">
             <ArrowLeft size={18} />
           </Link>
-          <h1 className="font-semibold flex items-center gap-2 min-w-0">
+          <h1 className="font-semibold flex items-center gap-2 min-w-0 flex-1">
             <Waypoints size={16} className="text-port-accent shrink-0" />
             <span className="truncate">{loom.name}</span>
           </h1>
           {linkedSeries ? (
             <Link
               to={`/pipeline/series/${encodeURIComponent(linkedSeries.id)}`}
-              className="flex items-center gap-1 px-2 py-1 rounded border border-port-border text-xs text-port-text-muted hover:text-port-text hover:border-port-accent min-w-0"
+              className="flex min-w-0 shrink items-center gap-1 rounded border border-port-border px-2 py-1 text-xs text-port-text-muted hover:border-port-accent hover:text-port-text"
               title="Open the series this branching narrative is linked to"
             >
               <WorkflowIcon size={12} className="shrink-0" />
-              <span className="truncate max-w-[12rem]">{linkedSeries.name || 'Untitled series'}</span>
+              <span className="truncate max-w-[5rem] sm:max-w-[12rem]">{linkedSeries.name || 'Untitled series'}</span>
             </Link>
           ) : null}
-          <div className="flex items-center gap-2 ml-auto">
-            <button
-              type="button"
-              onClick={() => setSettingsOpen(true)}
-              aria-label="Story settings"
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded border border-port-border text-xs hover:border-port-accent"
-            >
-              <Settings size={13} /> Settings
-            </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <div className="hidden items-center gap-2 sm:flex">
+              {headerActions.map((action) => (
+                <button
+                  key={action.id}
+                  type="button"
+                  onClick={action.onSelect}
+                  aria-label={action.label}
+                  title={action.hint || action.label}
+                  className={headerActionClass}
+                >
+                  <action.icon size={13} /> {action.short || action.label}
+                </button>
+              ))}
+            </div>
+            <OverflowMenu label="Story actions" items={headerActions} className="sm:hidden" />
             {episode && (
-              <>
-              <button
-                type="button"
-                onClick={handleAddNode}
-                className="flex items-center gap-1 px-2.5 py-1.5 rounded border border-port-border text-xs hover:border-port-accent"
-              >
-                <Plus size={13} /> Scene
-              </button>
-              <button
-                type="button"
-                onClick={() => setSetupOpen(true)}
-                className="flex items-center gap-1 px-2.5 py-1.5 rounded border border-port-border text-xs hover:border-port-accent"
-              >
-                <Sparkles size={13} /> Weave
-              </button>
               <button
                 type="button"
                 onClick={() => setPlayOpen(true)}
-                className="flex items-center gap-1 px-2.5 py-1.5 rounded bg-port-accent text-white text-xs"
+                aria-label="Play"
+                title="Play this episode"
+                className={headerPlayClass}
               >
                 <BookOpenText size={13} /> Play
               </button>
-              </>
             )}
           </div>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
           <TabPills
             variant="pills"
             size="sm"
             ariaLabel="Series and episodes"
             mobileDropdown
+            mobileSelectClassName="sm:hidden min-w-0 flex-1"
             tabs={[
               { id: 'plan', label: 'Series plan' },
               ...loom.episodes.map((e) => ({ id: e.id, label: `${e.number}. ${e.title || 'Untitled'}` })),
@@ -489,9 +548,11 @@ export default function FableLoomStory({ view = 'graph' }) {
           <button
             type="button"
             onClick={handleAddEpisode}
-            className="px-2.5 py-1 rounded-full text-xs border border-dashed border-port-border text-port-text-muted hover:border-port-accent hover:text-port-accent"
+            aria-label="Add episode"
+            title="Add episode"
+            className="flex min-h-[36px] shrink-0 items-center rounded-full border border-dashed border-port-border px-3 text-xs text-port-text-muted hover:border-port-accent hover:text-port-accent"
           >
-            + Episode
+            + <span className="hidden sm:inline">Episode</span>
           </button>
           {episode && (
             <TabPills
@@ -534,8 +595,13 @@ export default function FableLoomStory({ view = 'graph' }) {
           onSelectNode={(id) => navigate(episodePath(episode.id, id))}
         />
       ) : (
-        <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
-          <section className="flex-1 min-h-[55vh] lg:min-h-0 min-w-0 relative">
+        // Stacked (phone) split: the graph takes whatever the validation rail
+        // doesn't. The rail is capped as a PERCENTAGE OF THIS PANE, never in
+        // `vh` — the page is `overflow-hidden` under the app chrome, so viewport
+        // units ignored the header and pushed the rail's content off-screen
+        // (the graph claimed 55vh while only ~70vh was left to split).
+        <div className="relative flex-1 min-h-0 flex flex-col lg:flex-row">
+          <section className="relative min-h-0 min-w-0 flex-1">
             {episode.nodes.length ? (
               <LoomCanvas
                 episode={episode}
@@ -546,8 +612,9 @@ export default function FableLoomStory({ view = 'graph' }) {
                 mediaJobs={mediaJobs}
                 onGenerateImage={queueSceneImage}
                 onGenerateVideo={queueSceneVideo}
-                generationDisabled={styleContextLoading || styleContextUnavailable}
-                generationDisabledReason={generationDisabledReason}
+                onOpenFalVideo={openFalSceneVideo}
+                generationDisabled={styleContextLoading || styleContextUnavailable || mediaWorkflowBlocked}
+                generationDisabledReason={mediaGenerationDisabledReason}
               />
             ) : (
               <div className="h-full grid place-items-center p-8 text-center">
@@ -575,42 +642,78 @@ export default function FableLoomStory({ view = 'graph' }) {
               </div>
             )}
           </section>
+          {node && (
+            <button
+              type="button"
+              aria-label="Return to graph"
+              onClick={clearNodeSelection}
+              className="absolute inset-0 z-10 bg-black/45 lg:hidden"
+            />
+          )}
           <aside
-            className="lg:w-[380px] lg:shrink-0 max-h-dvh-cap lg:max-h-none border-t lg:border-t-0 lg:border-l border-port-border overflow-y-auto"
-            style={{ '--dvh-cap': '45vh', '--dvh-cap-dynamic': '45dvh' }}
+            data-testid={node ? 'scene-details-sheet' : 'loom-validation-rail'}
+            aria-label={node ? `${node.title || 'Scene'} details` : 'Episode validation'}
+            className={node
+              ? 'absolute inset-x-0 bottom-0 z-20 flex h-[calc(100%_-_0.75rem)] flex-col overflow-hidden rounded-t-2xl border border-b-0 border-port-border bg-port-card shadow-2xl motion-safe:animate-in motion-safe:slide-in-from-bottom-4 motion-safe:duration-200 lg:static lg:h-auto lg:w-[380px] lg:shrink-0 lg:rounded-none lg:border-y-0 lg:border-r-0 lg:border-l'
+              : 'flex max-h-[45%] flex-col overflow-hidden border-t border-port-border lg:max-h-none lg:w-[380px] lg:shrink-0 lg:border-t-0 lg:border-l'}
           >
-            {node ? (
-              <LoomNodeEditor
-                key={node.id}
-                loom={loom}
-                episode={episode}
-                node={node}
-                onLoomUpdate={setLoom}
-                onClearSelection={() => navigate(episodePath(episode.id))}
-                mediaJobs={mediaJobs[node.id]}
-                onGenerateImage={queueSceneImage}
-                onGenerateVideo={queueSceneVideo}
-                generationDisabled={styleContextLoading || styleContextUnavailable}
-                generationDisabledReason={generationDisabledReason}
-                onMakeStart={node.id !== episode.startNodeId ? async () => {
-                  const updated = await updateLoomEpisode(loomId, episode.id, { startNodeId: node.id })
-                    .catch(() => null);
-                  if (updated) setLoom(updated);
-                } : null}
-              />
-            ) : (
-              <LoomValidationPanel
-                loom={loom}
-                episode={episode}
-                onSelectNode={selectNode}
-              />
+            {node && (
+              <div className="relative flex min-h-[4.5rem] shrink-0 items-center justify-center border-b border-port-border px-4 py-3 lg:hidden">
+                <span className="h-1 w-10 rounded-full bg-port-border" aria-hidden="true" />
+                <button
+                  type="button"
+                  onClick={clearNodeSelection}
+                  aria-label="Close scene details"
+                  className="absolute right-3 top-1/2 flex min-h-[56px] min-w-[56px] -translate-y-1/2 items-center justify-center rounded-xl text-port-text-muted hover:bg-port-border/50 hover:text-port-text"
+                >
+                  <X size={24} />
+                </button>
+              </div>
             )}
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              {node ? (
+                <LoomNodeEditor
+                  key={node.id}
+                  loom={loom}
+                  episode={episode}
+                  node={node}
+                  universe={linkedUniverse}
+                  onLoomUpdate={setLoom}
+                  onClearSelection={clearNodeSelection}
+                  mediaJobs={mediaJobs[node.id]}
+                  onGenerateImage={queueSceneImage}
+                  onGenerateVideo={queueSceneVideo}
+                  onOpenFalVideo={openFalSceneVideo}
+                  generationDisabled={styleContextLoading || styleContextUnavailable || mediaWorkflowBlocked}
+                  generationDisabledReason={mediaGenerationDisabledReason}
+                  onMakeStart={node.id !== episode.startNodeId ? async () => {
+                    const updated = await updateLoomEpisode(loomId, episode.id, { startNodeId: node.id })
+                      .catch(() => null);
+                    if (updated) setLoom(updated);
+                  } : null}
+                />
+              ) : (
+                <LoomValidationPanel
+                  loom={loom}
+                  episode={episode}
+                  onSelectNode={selectNode}
+                  onOpenSettings={() => setSettingsOpen(true)}
+                  onOpenSeriesPlan={(section) => navigate(
+                    `${episodePath('plan')}${section ? `?section=${encodeURIComponent(section)}` : ''}`,
+                  )}
+                  onOpenEpisodeSetup={() => setSetupOpen(true)}
+                  onOpenPlay={() => setPlayOpen(true)}
+                  onLoomUpdate={setLoom}
+                />
+              )}
+            </div>
           </aside>
         </div>
       )}
 
       {episode && (
         <EpisodeSetupDrawer
+          key={episode.id}
           open={setupOpen}
           onClose={() => setSetupOpen(false)}
           loom={loom}
@@ -628,15 +731,31 @@ export default function FableLoomStory({ view = 'graph' }) {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         loom={loom}
+        universe={linkedUniverse}
         onLoomUpdate={setLoom}
         onRewritten={handleRewritten}
       />
 
       {episode && (
-        <Drawer open={playOpen} onClose={() => setPlayOpen(false)} title="Play" subtitle={loom.name} size="md" bodyClassName="p-0">
-          <LoomPlayPanel loom={loom} episode={episode} />
-        </Drawer>
+        <Modal
+          open={playOpen}
+          onClose={() => setPlayOpen(false)}
+          size="none"
+          align="none"
+          usePortal
+          zIndexClassName="z-[100]"
+          backdropClassName="bg-black"
+          panelClassName="h-[100dvh] w-full overflow-hidden bg-black"
+          ariaLabel={`${loom.name} player`}
+        >
+          <LoomPlayPanel loom={loom} episode={episode} onClose={() => setPlayOpen(false)} />
+        </Modal>
       )}
+
+      <FalH3MaxPromptFallback
+        prompt={falManualPrompt}
+        onClose={() => setFalManualPrompt('')}
+      />
     </div>
   );
 }
@@ -651,14 +770,18 @@ function EpisodeSetupDrawer({ open, onClose, loom, episode, onLoomUpdate, onFeed
   // in-flight meta saves per the client save-gating convention.
   const [metaSaving, setMetaSaving] = useState(0);
   const [feedbackRunning, setFeedbackRunning] = useState(false);
+  const { run: aiRun, begin: beginAiRun, fail: failAiRun } = useFableLoomAiRun();
   const del = useConfirmDelete();
+  const expansionConfirm = useConfirmDelete();
   const hasScenes = episode.nodes.length > 0;
 
   // Sync from the record on episode switch ONLY — re-syncing on every server
   // echo would clobber typing in a sibling field while a blur-save
-  // round-trips (same rule as the scene editor).
+  // round-trips (same rule as the scene editor). Guidance is intentionally
+  // episode-local scratch input; carrying it into the next episode can make an
+  // otherwise valid outline request contradict that episode's graph.
   useEffect(() => {
-    setForm((prev) => ({ ...prev, title: episode.title || '', synopsis: episode.synopsis || '' }));
+    setForm({ title: episode.title || '', synopsis: episode.synopsis || '', guidance: '' });
   }, [episode.id]);
 
   const saveMeta = async (key) => {
@@ -671,14 +794,28 @@ function EpisodeSetupDrawer({ open, onClose, loom, episode, onLoomUpdate, onFeed
   };
 
   const [runWeave, weaving] = useAsyncAction(async () => {
+    const operationId = beginAiRun();
     const result = await weaveLoomEpisode(loom.id, episode.id, {
       guidance: form.guidance,
       replace: hasScenes,
-    }, { silent: true });
+      expandFromOutline: true,
+      operationId,
+    }, { silent: true }).catch((error) => {
+      failAiRun(error.message);
+      throw error;
+    });
     onLoomUpdate(result.loom);
     toast.success('Episode woven');
     onClose();
   }, { errorMessage: 'Weave failed' });
+
+  const requestWeave = () => {
+    if (hasScenes) {
+      expansionConfirm.requestDelete(episode.id);
+      return;
+    }
+    runWeave();
+  };
 
   const handleDelete = async () => {
     const updated = await deleteLoomEpisode(loom.id, episode.id).catch(() => null);
@@ -712,7 +849,7 @@ function EpisodeSetupDrawer({ open, onClose, loom, episode, onLoomUpdate, onFeed
 
         <div className="border-t border-port-border pt-4 space-y-3">
           <h4 className="text-sm font-semibold flex items-center gap-1.5">
-            <Sparkles size={14} className="text-port-accent" /> Weave the scene graph
+            <Sparkles size={14} className="text-port-accent" /> Expand the episode
           </h4>
           <FormField label="Guidance (optional)" labelClassName={labelClass}>
             <textarea
@@ -724,22 +861,35 @@ function EpisodeSetupDrawer({ open, onClose, loom, episode, onLoomUpdate, onFeed
             />
           </FormField>
           <p className="text-xs text-port-text-muted">
-            The story writer and creative director choose the number of camera-cut scenes and endings from the episode.
+            Start with the beat outline below, review the whole arc, then expand it into one-camera-cut teleplay scenes.
           </p>
+          <LoomEpisodeOutlinePlanner
+            open={open}
+            loom={loom}
+            episode={episode}
+            guidance={form.guidance}
+            disabled={metaSaving > 0 || feedbackRunning || weaving}
+            onLoomUpdate={onLoomUpdate}
+            onExpand={requestWeave}
+            expanding={weaving}
+          />
+          {expansionConfirm.isConfirming(episode.id) && (
+            <ConfirmButtonPair
+              prompt={`Replace ${episode.nodes.length} existing scene${episode.nodes.length === 1 ? '' : 's'} and remove their rendered stills and video clips?`}
+              confirmText="Replace scenes"
+              tone="error"
+              ariaLabel="Confirm replacing episode scenes"
+              onConfirm={() => expansionConfirm.confirmDelete(runWeave)}
+              onCancel={expansionConfirm.cancelDelete}
+              largeTouchTargets
+            />
+          )}
           {hasScenes && (
             <p className="text-xs text-port-warning">
-              Weaving replaces this episode's {episode.nodes.length} existing scene{episode.nodes.length === 1 ? '' : 's'} and drops their rendered stills and video clips.
+              Expansion replaces this episode's {episode.nodes.length} existing scene{episode.nodes.length === 1 ? '' : 's'} and drops their rendered stills and video clips.
             </p>
           )}
-          <button
-            type="button"
-            onClick={runWeave}
-            disabled={weaving || feedbackRunning || metaSaving > 0}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded bg-port-accent text-white text-sm disabled:opacity-60"
-          >
-            {weaving ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-            {weaving ? 'Weaving…' : hasScenes ? 'Reweave episode' : 'Weave episode'}
-          </button>
+          <LoomAiRunStatus run={aiRun} />
         </div>
 
         <LoomEpisodeFeedback

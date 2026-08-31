@@ -52,9 +52,9 @@ These tools develop PortOS, and PortOS in turn uses them to manage projects, its
 |:-:|:-:|:-:|
 | ![App Wizard](./docs/media/portos_4.png) | ![PM2 Processes](./docs/media/portos_5.png) | ![Chief of Staff Tasks](./docs/media/portos_6.png) |
 
-| Login | OpenWorld |
+| Login | Historical OpenWorld |
 |:-:|:-:|
-| ![Login](./docs/media/portos_0.png) | ![OpenWorld](./docs/media/portos_7.png) |
+| ![Login](./docs/media/portos_0.png) | ![Historical OpenWorld](./docs/media/portos_7.png) |
 
 ---
 
@@ -229,7 +229,7 @@ Everything you need to manage your dev environment without leaving the browser.
 - **Action History** — Searchable log of all executed actions with filtering and statistics
 - **Usage** — Token spend and cost tracking across all configured AI providers
 - **Quota Burn** — Automated spending of subscription-backed CLI quota before expiry (`/devtools/quota-burn`) ([Quota Burn docs](./docs/QUOTA-BURN.md))
-- **OpenWorld** — 3D voxel visualization of your apps and agents in real-time ([OpenWorld docs](./docs/features/openworld.md))
+- **Eidoverse Worlds** — private, install-local 3D world for you and your agents, with durable identity and deterministic PortOS resource projection ([Eidoverse docs](./docs/features/eidoverse.md))
 - **Browser Control** — Remote Chrome DevTools Protocol integration for headless browser management ([Browser docs](./docs/features/browser.md))
 - **Code Runner** — In-app code execution with syntax highlighting
 - **Reference Repos** — Cross-app index of reference repositories (libraries you read but don't own) for grounding agents
@@ -291,7 +291,7 @@ Track your biological self alongside your digital one.
 ### Requirements
 
 - Node.js 22.12 or later (24 is what CI and `.nvmrc` use; Vite 8 requires ≥20.19). `npm run setup`, `npm start` and `npm run dev` check this first and stop immediately on an older Node — a bare `npm install` only warns, so use the commands below.
-- npm 12 or later (`npm install -g npm@latest`). Older npm installs fine, but its lockfile writer omits the `libc` fields npm 12 records, so every `npm install` rewrites `client/package-lock.json` and `server/package-lock.json` — and the next Dependabot PR puts those fields back. Every workspace declares `engines.npm`, so npm warns on any install path; `npm run setup`/`start`/`dev` also print what to do about it. These are warnings, never failures. No Node release bundles npm 12 yet (Node 24.10 ships 11.6.1), so this is a deliberate global upgrade — and worth checking `npm -v` matches, since an old global npm earlier on `PATH` shadows the one Node ships.
+- npm 12 or later (`npm install -g npm@latest`) for dependency authoring. Older npm installs dependencies correctly, but its lockfile writer omits the `libc` fields npm 12 records, so a direct `npm install` can rewrite `client/package-lock.json` and `server/package-lock.json` — and the next Dependabot PR puts those fields back. PortOS-managed setup, update, and dependency-repair installs preserve the committed lockfiles with `--no-save`; do not commit metadata-only churn from an older npm. Every workspace declares `engines.npm`, so npm warns on any install path; `npm run setup`/`start`/`dev` also print what to do about it. These are warnings, never failures. No Node release bundles npm 12 yet (Node 24.10 ships 11.6.1), so this is a deliberate global upgrade — and worth checking `npm -v` matches, since an old global npm earlier on `PATH` shadows the one Node ships.
 - Git
 - PostgreSQL, either installed locally or available through Docker. PortOS requires a healthy database; the setup command provisions the supported local or Docker-backed instance.
 
@@ -444,7 +444,8 @@ Full catalog (including design plans, ADRs, and research notes): [docs/README.md
 - [App Wizard](./docs/features/app-wizard.md) — App registration and scaffolding
 - [Autofixer](./docs/features/autofixer.md) — Autonomous crash detection and repair
 - [Browser](./docs/features/browser.md) — Headless browser automation
-- [OpenWorld](./docs/features/openworld.md) — 3D systems visualization
+- [Eidoverse Worlds](./docs/features/eidoverse.md) — private 3D systems world and PortOS resource projection
+- [OpenWorld historical reference](./docs/features/openworld.md) — retired compatibility surface
 - [Prompt Manager](./docs/features/prompt-manager.md) — Customizable AI prompt templates
 - [JIRA Sprint Manager](./docs/features/jira-sprint-manager.md) — Autonomous JIRA triage and implementation
 - [Writers Room](./docs/features/writers-room.md) — Prose-to-media writing environment with explicit AI passes

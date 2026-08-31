@@ -131,6 +131,9 @@ describe('claim reviewer resolution', () => {
     expect(pinned).toContain('run-local-code-review.mjs');
     expect(pinned).not.toContain('localhost:5555');
     expect(pinned).toContain('missing/empty findings is INCONCLUSIVE');
+    expect(pinned).toContain('REVIEW_STATUS=review-blocked');
+    expect(pinned).toContain('continue to publish the MR/PR');
+    expect(pinned).toContain('leave it open and do not merge until the required review completes');
 
     const bare = buildLocalReviewerInstructions(['lmstudio']);
     expect(bare).toContain('git diff "origin/$DEFAULT_BRANCH...HEAD"');
@@ -1110,7 +1113,7 @@ describe('emitOnDemandEmpty', () => {
   // and the INTERVAL_TYPES enum the perpetual check reads.
   const stubMod = {
     getPerpetualParkInfo: async () => null,
-    INTERVAL_TYPES: { PERPETUAL: 'perpetual' }
+    INTERVAL_TYPES: { ON_DEMAND: 'on-demand', PERPETUAL: 'perpetual' }
   };
 
   it("emits an 'idle' event with reason null for a non-LI task type", async () => {
@@ -1159,6 +1162,24 @@ describe('emitOnDemandEmpty', () => {
     // Nothing recorded ⇒ we cannot name the fault, so the client keeps the
     // generic "try again shortly" copy rather than guessing at a CLI.
     expect(await emitTransient('claim-issue')).toMatchObject({ outcome: 'transient', forge: null });
+  });
+
+  it('treats on-demand reconciliation as detector-driven for transient feedback', async () => {
+    recordPerpetualTransient('branch-reconcile', 'app-1', { cli: null, reason: 'probe-failed' });
+    const events = [];
+    const handler = (data) => events.push(data);
+    cosEvents.on('schedule:on-demand-empty', handler);
+    try {
+      await emitOnDemandEmpty({
+        taskScheduleMod: stubMod,
+        request: { id: 'req-reconcile', taskType: 'branch-reconcile' },
+        targetApp: { id: 'app-1', name: 'App One' },
+        taskConfig: { type: 'on-demand' }
+      });
+    } finally {
+      cosEvents.off('schedule:on-demand-empty', handler);
+    }
+    expect(events[0]).toMatchObject({ taskType: 'branch-reconcile', outcome: 'transient' });
   });
 
   it('skips the gh probe for a non-gh transient verdict, so a glab/git fault never toasts a gh remedy', async () => {
@@ -1555,7 +1576,7 @@ describe('resolveReconcileDrainGate', () => {
  */
 describe('applyPerpetualDrainCap', () => {
   const fakeSchedule = (dispatchCount = 0) => ({
-    INTERVAL_TYPES: { PERPETUAL: 'perpetual' },
+    INTERVAL_TYPES: { ON_DEMAND: 'on-demand', PERPETUAL: 'perpetual' },
     getPerpetualDrainState: vi.fn(async () => ({ signature: null, dispatchCount })),
     parkPerpetual: vi.fn(async () => {})
   });
@@ -1597,8 +1618,13 @@ describe('applyPerpetualDrainCap', () => {
 
   it('ignores non-perpetual intervals entirely', async () => {
     const ts = fakeSchedule(500);
-    expect(await applyPerpetualDrainCap(app, 'branch-reconcile', { type: 'daily', drainDispatchCap: 5 }, ts)).toEqual({ skip: false });
+    expect(await applyPerpetualDrainCap(app, 'security', { type: 'daily', drainDispatchCap: 5 }, ts)).toEqual({ skip: false });
     expect(ts.getPerpetualDrainState).not.toHaveBeenCalled();
+  });
+
+  it('applies the cap to the on-demand reconciliation drain', async () => {
+    const ts = fakeSchedule(5);
+    expect(await applyPerpetualDrainCap(app, 'branch-reconcile', { type: 'on-demand', drainDispatchCap: 5 }, ts)).toEqual({ skip: true });
   });
 });
 

@@ -22,6 +22,7 @@ import * as ollamaManager from './ollamaManager.js';
 import * as lmStudioManager from './lmStudioManager.js';
 import { listJobs } from './mediaJobQueue/index.js';
 import * as cos from './cos.js';
+import { getSettings } from './settings.js';
 
 export const REPORT_CACHE_TTL_MS = 30_000;
 
@@ -366,6 +367,7 @@ export async function buildSystemResourceReport() {
     lmStudioStored,
     lmStudioLoaded,
     lmStudioBytes,
+    settings,
     npmCacheBytes,
     dependencySizes,
     browserDownloadsBytes,
@@ -388,6 +390,7 @@ export async function buildSystemResourceReport() {
     lmStudioManager.listStoredModels().catch(() => null),
     lmStudioManager.getLoadedModels(true).catch(() => null),
     lmStudioManager.getModelsDir().then((path) => dirSize(path, { strict: true })).catch(() => null),
+    getSettings().catch(() => null),
     dirSize(npmCachePath, { strict: true }).catch(() => null),
     Promise.all(dependencyPaths.map((path) => dirSize(path, { strict: true }).catch(() => null))),
     dirSize(PATHS.browserDownloads, { strict: true }).catch(() => null),
@@ -407,6 +410,10 @@ export async function buildSystemResourceReport() {
   const lmStudioListError = lmStudioModels == null
     ? 'LM Studio model inventory failed'
     : lmStudioManager.getLastListError();
+  const disabledSources = [
+    ...(settings?.localLlm?.ollama?.disabled ? ['ollama'] : []),
+    ...(settings?.localLlm?.lmstudio?.disabled ? ['lmstudio'] : []),
+  ];
   const downloadedModels = downloadedModelInventory({
     hf,
     loraStorage,
@@ -542,6 +549,7 @@ export async function buildSystemResourceReport() {
     queues: { media: mediaQueue, agents: agentQueue },
     cleanupCandidates,
     sourceErrors,
+    disabledSources,
   };
 }
 

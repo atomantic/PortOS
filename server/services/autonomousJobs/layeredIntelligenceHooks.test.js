@@ -306,6 +306,7 @@ describe('buildTaskInput', () => {
     // this hook cannot know) — by the SHARED heading constant, so the pointer
     // can't drift from the section agentPromptBuilder emits.
     expect(res.prompt).toContain('completion sentinel');
+    expect(res.prompt).toContain('inspect repository files and run read-only commands');
     expect(res.prompt).toContain(PROGRAMMATIC_OUTPUT_COMPLETION_HEADING);
     // ...and it must NOT name any other filename. A prompt that says 'not a bare
     // `.agent-done`' is the only place the agent would learn that wrong

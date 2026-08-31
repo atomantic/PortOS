@@ -22,6 +22,7 @@ import {
   FEDERATED_MEDIA_ASSET_MAX_COUNT,
   FEDERATED_MEDIA_ASSET_MIME_TYPES,
   FEDERATED_MEDIA_FEATURES,
+  FEDERATED_MEDIA_MAX_VIDEO_FRAMES,
   FEDERATED_MEDIA_RESULT_EXTENSION,
   FEDERATED_MEDIA_STALE_AFTER_MS,
   FEDERATED_MEDIA_WIRE_VERSION,
@@ -401,10 +402,6 @@ async function configuredAudioCapabilities(config) {
       maxDurationSec: engine?.maxDurationSec ?? null,
       defaultDurationSec: engine?.defaultDurationSec ?? null,
       lyrics: engine?.lyrics === true,
-      // Overlap-release duplicate of the status-root `lyrics` feature (#4826).
-      // Always equal to `lyrics` because it never carried a per-model fact;
-      // drop it once no supported peer reads the legacy field.
-      acceptsLyrics: engine?.lyrics === true,
       inputAssets: null,
       autoDuration: engine?.autoDuration === true,
       frameStride: null,
@@ -458,15 +455,21 @@ async function localGeneratorCapabilities(kind, pythonPath, { models, configured
       ? Number(model.frameStride)
       : null;
     const validFrameOptions = Array.isArray(model?.frameOptions)
-      ? model.frameOptions.filter((f) => Number.isInteger(f) && f >= 1 && f <= 600).slice(0, 100)
+      ? model.frameOptions
+        .filter((f) => Number.isInteger(f) && f >= 1 && f <= FEDERATED_MEDIA_MAX_VIDEO_FRAMES)
+        .slice(0, 100)
       : [];
     const validFpsOptions = Array.isArray(model?.fpsOptions)
       ? model.fpsOptions.filter((f) => Number.isInteger(f) && f >= 1 && f <= 60).slice(0, 20)
       : [];
-    const rawMaxNumFrames = Number.isInteger(Number(model?.maxNumFrames)) && Number(model.maxNumFrames) >= 1 && Number(model.maxNumFrames) <= 600
+    const rawMaxNumFrames = Number.isInteger(Number(model?.maxNumFrames))
+      && Number(model.maxNumFrames) >= 1
+      && Number(model.maxNumFrames) <= FEDERATED_MEDIA_MAX_VIDEO_FRAMES
       ? Number(model.maxNumFrames)
       : (validFrameOptions.length > 0 ? Math.max(...validFrameOptions) : null);
-    const maxNumFrames = rawMaxNumFrames && rawMaxNumFrames <= 600 ? rawMaxNumFrames : null;
+    const maxNumFrames = rawMaxNumFrames && rawMaxNumFrames <= FEDERATED_MEDIA_MAX_VIDEO_FRAMES
+      ? rawMaxNumFrames
+      : null;
     const validResolutions = Array.isArray(model?.resolutionOptions)
       ? model.resolutionOptions
         .filter((opt) => Number.isInteger(Number(opt?.w)) && Number.isInteger(Number(opt?.h))
@@ -495,7 +498,6 @@ async function localGeneratorCapabilities(kind, pythonPath, { models, configured
       maxDurationSec: null,
       defaultDurationSec: null,
       lyrics: false,
-      acceptsLyrics: false,
       inputAssets: federatedInputAssetsBlock(kind, model),
       autoDuration: false,
       frameStride,

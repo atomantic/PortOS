@@ -16,6 +16,16 @@ const APPS = [
   },
 ];
 
+const launchUrlMock = vi.hoisted(() => ({
+  getLaunchUrls: vi.fn((app) => ({
+    https: null,
+    http: app.uiPort ? `http://host-alpha.example-tailnet.ts.net:${app.uiPort}` : null,
+    dev: app.devUiPort ? `http://host-alpha.example-tailnet.ts.net:${app.devUiPort}` : null,
+  })),
+}));
+
+vi.mock('../services/appUrls', () => launchUrlMock);
+
 vi.mock('../services/api', () => ({
   PORTOS_APP_ID: 'portos-default',
   getApps: vi.fn(() => Promise.resolve(APPS)),
@@ -186,6 +196,19 @@ describe('Apps row action hierarchy', () => {
 
     await act(async () => { resolveBuild({ success: true }); });
     await waitFor(() => expect(screen.getByRole('button', { name: 'Build production UI: npm run build' })).toBeEnabled());
+  });
+
+  it('opens a plain-HTTP managed app without inheriting PortOS HTTPS', async () => {
+    api.getApps.mockResolvedValue([{ ...APPS[0], uiPort: 8940 }]);
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const user = userEvent.setup();
+
+    await renderApps();
+    await user.click(screen.getByRole('button', { name: 'Launch Example App UI' }));
+
+    expect(open).toHaveBeenCalledWith('http://host-alpha.example-tailnet.ts.net:8940', '_blank');
+    expect(launchUrlMock.getLaunchUrls).toHaveBeenCalledWith(expect.objectContaining({ id: 'app-alpha', uiPort: 8940 }));
+    open.mockRestore();
   });
 });
 

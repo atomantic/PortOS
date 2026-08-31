@@ -108,7 +108,7 @@ describe('resolveCliEffort (server mirror)', () => {
     ['codex-only minimal clamps on claude', 'minimal', CLAUDE, 'low'],
     ['codex accepts its whole ladder', 'minimal', CODEX, 'minimal'],
     ['codex accepts max', 'max', CODEX, 'max'],
-    ['legacy ultra resolves to codex max', 'ultra', CODEX, 'max'],
+    ['ultra resolves to codex max without a supported model', 'ultra', CODEX, 'max'],
     ['unknown value yields no flag', 'bogus', AGY, null],
     ['effort-less provider yields no flag', 'high', GROK, null],
     ['unset yields no flag', '', AGY, null],
@@ -116,6 +116,15 @@ describe('resolveCliEffort (server mirror)', () => {
   ])('%s', (_label, effort, provider, expected) => {
     expect(resolveCliEffort(effort, provider)).toBe(expected);
     expect(serverResolveCliEffort(effort, provider)).toBe(expected);
+  });
+
+  it('passes Ultra through for Sol and Terra but clamps it for Luna', () => {
+    for (const model of ['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra']) {
+      expect(resolveCliEffort('ultra', CODEX, model)).toBe('ultra');
+      expect(serverResolveCliEffort('ultra', CODEX, model)).toBe('ultra');
+    }
+    expect(resolveCliEffort('ultra', CODEX, 'gpt-5.6-luna')).toBe('max');
+    expect(serverResolveCliEffort('ultra', CODEX, 'gpt-5.6-luna')).toBe('max');
   });
 });
 

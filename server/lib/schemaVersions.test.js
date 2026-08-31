@@ -20,9 +20,10 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     // deliberate two-file edit.
     // v6 = canon characters gained relationshipLinks[] (#1287); v7 = canon
     // objects gained attachments[] (#1288); v8 adds styleReferences[]; v9 adds
-    // moodBoardId (#4188). These are additive + version-gated so an older peer
+    // moodBoardId (#4188); v10 adds character production packages (#5378).
+    // These are additive + version-gated so an older peer
     // cannot strip-then-LWW them.
-    expect(PORTOS_SCHEMA_VERSIONS.universes).toBe(9);
+    expect(PORTOS_SCHEMA_VERSIONS.universes).toBe(10);
   });
 
   it('declares pipeline collection layout versions', () => {
@@ -41,6 +42,12 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     expect(PORTOS_SCHEMA_VERSIONS.mediaCollections).toBe(1);
   });
 
+  it('version-gates the persisted FableLoom render-format shape', () => {
+    // v5 adds renderSettings. Older peers stay on the v4 protagonist-
+    // continuity shape until they advertise support for the render contract.
+    expect(PORTOS_SCHEMA_VERSIONS.fableLoom).toBe(5);
+  });
+
   it('version-gates the additive Creative Commission taste brief shape', () => {
     expect(PORTOS_SCHEMA_VERSIONS.creativeCommissions).toBe(4);
   });
@@ -50,14 +57,14 @@ describe('buildPortosMeta', () => {
   it('returns { portosVersion, schemaVersions } with the live registry', async () => {
     const meta = await buildPortosMeta();
     expect(meta.portosVersion).toMatch(/^\d+\.\d+\.\d+/);
-    expect(meta.schemaVersions.universes).toBe(9);
+    expect(meta.schemaVersions.universes).toBe(10);
     expect(meta.schemaVersions.pipelineIssues).toBe(3);
     expect(meta.schemaVersions.pipelineSeries).toBe(12);
   });
 
   it('overrides merge into schemaVersions', async () => {
     const meta = await buildPortosMeta({ schemaVersions: { future: 1 } });
-    expect(meta.schemaVersions.universes).toBe(9);
+    expect(meta.schemaVersions.universes).toBe(10);
     expect(meta.schemaVersions.future).toBe(1);
   });
 });
@@ -205,7 +212,12 @@ describe('scopeVersionDiff', () => {
     // Sender is ahead on mediaCollections only; a universe transfer scopes to
     // ['universes'] and stays compatible even though the union diff is not.
     const union = compareSchemaVersions(
-      { universes: 9, pipelineSeries: 2, pipelineIssues: 3, mediaCollections: 2 },
+      {
+        universes: PORTOS_SCHEMA_VERSIONS.universes,
+        pipelineSeries: 2,
+        pipelineIssues: 3,
+        mediaCollections: 2,
+      },
       PORTOS_SCHEMA_VERSIONS,
     );
     expect(union.compatible).toBe(false); // mediaCollections 2 > 1

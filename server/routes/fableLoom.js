@@ -21,6 +21,9 @@ import {
   loomPatchSchema,
   nodeCreateSchema,
   nodePatchSchema,
+  outlineGenerateSchema,
+  outlineReviewSchema,
+  outlineValidateSchema,
   playTurnSchema,
   reformatSchema,
   reviewSchema,
@@ -30,32 +33,68 @@ import {
   transitionCreateSchema,
   transitionPatchSchema,
   weaveSchema,
+  hostedSessionCreateSchema,
+  hostedSessionPatchSchema,
+  productionPlanSchema,
+  productionBatchCreateSchema,
+  continuityReviewSchema,
+  editorialAutopilotStartSchema,
+  editorialRemediateSchema,
+  playthroughReviewSchema,
 } from '../lib/fableLoomValidation.js';
 import { analyzeEpisodeGraph } from '../lib/fableLoomGraph.js';
+import { analyzeSeriesStoryOutlines } from '../lib/fableLoomOutline.js';
+import {
+  inspectEpisodeProductionReadiness,
+  inspectNodeProductionReadiness,
+} from '../lib/fableLoomPlayback.js';
+import { getUniverse } from '../services/universeBuilder.js';
 import {
   addEpisode,
   addNode,
   addNodeTransition,
   branchNode,
+  cancelEpisodeProductionBatch,
+  checkHostedSessionReadiness,
+  createHostedSession,
   createLoom,
   deleteEpisode,
   deleteLoom,
   deleteNode,
   deleteNodeTransition,
+  endHostedSession,
   feedbackEpisode,
   feedbackSeriesPlan,
+  generateEpisodeOutline,
   generateSeriesPlan,
+  getEpisodeProductionBatch,
+  getHostedSession,
   getLoom,
   listLoomSummaries,
+  planEpisodeProduction,
   playTurn,
   reformatEpisodeScenes,
   reviewEpisode,
+  reviewEpisodeOutline,
+  reviewEpisodeContinuity,
+  resumeEpisodeProductionBatch,
   reviewSeriesPlan,
+  reviewSeriesTeleplay,
+  startEpisodeProductionBatch,
   updateEpisode,
+  updateHostedSession,
   updateLoom,
   updateNode,
   updateNodeTransition,
+  validateEpisodeOutline,
   weaveEpisode,
+  cancelFableLoomEditorialAutopilot,
+  evaluateAndRemediateFableLoom,
+  getFableLoomEditorialAutopilot,
+  getLatestFableLoomEditorialAutopilot,
+  publicFableLoomEditorialAutopilot,
+  reviewFableLoomPlaythroughs,
+  startFableLoomEditorialAutopilot,
 } from '../services/fableLoom/index.js';
 
 const router = Router();
@@ -105,9 +144,55 @@ router.post('/:id/plan/review', asyncHandler(async (req, res) => {
   res.json(await reviewSeriesPlan(req.params.id, input));
 }));
 
+router.post('/:id/review-teleplay', asyncHandler(async (req, res) => {
+  const input = validateRequest(reviewSchema, req.body);
+  res.json(await reviewSeriesTeleplay(req.params.id, input));
+}));
+
 router.post('/:id/plan/feedback', asyncHandler(async (req, res) => {
   const input = validateRequest(seriesPlanFeedbackSchema, req.body);
   res.json(await feedbackSeriesPlan(req.params.id, input));
+}));
+
+// --- Whole-series editorial automation -------------------------------------
+
+router.post('/:id/editorial/remediate', asyncHandler(async (req, res) => {
+  const input = validateRequest(editorialRemediateSchema, req.body ?? {});
+  res.json(await evaluateAndRemediateFableLoom(req.params.id, input));
+}));
+
+router.post('/:id/playtest', asyncHandler(async (req, res) => {
+  const input = validateRequest(playthroughReviewSchema, req.body ?? {});
+  res.json(await reviewFableLoomPlaythroughs(req.params.id, input));
+}));
+
+router.post('/:id/editorial/autopilot/start', asyncHandler(async (req, res) => {
+  const input = validateRequest(editorialAutopilotStartSchema, req.body ?? {});
+  const run = await startFableLoomEditorialAutopilot(req.params.id, input);
+  res.status(run.alreadyRunning ? 200 : 202).json(publicFableLoomEditorialAutopilot(run));
+}));
+
+router.get('/:id/editorial/autopilot/status', asyncHandler(async (req, res) => {
+  const loom = await getLoom(req.params.id);
+  if (!loom) throw new ServerError('Loom not found', { status: 404, code: 'NOT_FOUND' });
+  const run = getLatestFableLoomEditorialAutopilot(req.params.id);
+  res.json({ run: publicFableLoomEditorialAutopilot(run) });
+}));
+
+router.get('/:id/editorial/autopilot/:runId', asyncHandler(async (req, res) => {
+  const run = getFableLoomEditorialAutopilot(req.params.runId);
+  if (!run || run.loomId !== req.params.id) {
+    throw new ServerError('Editorial autopilot run not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(publicFableLoomEditorialAutopilot(run));
+}));
+
+router.post('/:id/editorial/autopilot/:runId/cancel', asyncHandler(async (req, res) => {
+  const run = getFableLoomEditorialAutopilot(req.params.runId);
+  if (!run || run.loomId !== req.params.id) {
+    throw new ServerError('Editorial autopilot run not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(publicFableLoomEditorialAutopilot(cancelFableLoomEditorialAutopilot(req.params.runId)));
 }));
 
 // --- Episodes ---------------------------------------------------------------
@@ -126,15 +211,36 @@ router.delete('/:id/episodes/:episodeId', asyncHandler(async (req, res) => {
   res.json(await deleteEpisode(req.params.id, req.params.episodeId));
 }));
 
-// Deterministic graph validation — no LLM.
+// Deterministic graph validation and production readiness — no LLM.
+router.get('/:id/outlines/validate', asyncHandler(async (req, res) => {
+  const loom = await getLoom(req.params.id);
+  if (!loom) throw new ServerError('Loom not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(analyzeSeriesStoryOutlines(loom));
+}));
+
 router.get('/:id/episodes/:episodeId/validate', asyncHandler(async (req, res) => {
   const loom = await getLoom(req.params.id);
   const episode = loom?.episodes.find((e) => e.id === req.params.episodeId);
   if (!episode) throw new ServerError('Episode not found', { status: 404, code: 'NOT_FOUND' });
-  res.json(analyzeEpisodeGraph(episode, {
+  const universe = loom.universeId ? await getUniverse(loom.universeId).catch(() => null) : null;
+  const graphAnalysis = analyzeEpisodeGraph(episode, {
     participationMode: loom.participationMode,
     requireAudienceIntroduction: episode.id === loom.episodes[0]?.id,
-  }));
+  });
+  const productionReadiness = inspectEpisodeProductionReadiness(episode, { universe, loom });
+  res.json({
+    ...graphAnalysis,
+    productionReadiness,
+  });
+}));
+
+router.get('/:id/episodes/:episodeId/nodes/:nodeId/readiness', asyncHandler(async (req, res) => {
+  const loom = await getLoom(req.params.id);
+  const episode = loom?.episodes.find((e) => e.id === req.params.episodeId);
+  const node = episode?.nodes.find((n) => n.id === req.params.nodeId);
+  if (!loom || !episode || !node) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
+  const universe = loom.universeId ? await getUniverse(loom.universeId).catch(() => null) : null;
+  res.json(inspectNodeProductionReadiness(node, { universe, loom }));
 }));
 
 // --- Nodes ------------------------------------------------------------------
@@ -187,6 +293,24 @@ router.post('/:id/episodes/:episodeId/weave', asyncHandler(async (req, res) => {
   res.json(await weaveEpisode(req.params.id, req.params.episodeId, input));
 }));
 
+// Story-first authoring: draft and review the small beat outline before the
+// full teleplay graph is expanded. Validation is deterministic and persisted
+// so the expansion button can enforce the same gate from every client.
+router.post('/:id/episodes/:episodeId/outline/generate', asyncHandler(async (req, res) => {
+  const input = validateRequest(outlineGenerateSchema, req.body);
+  res.json(await generateEpisodeOutline(req.params.id, req.params.episodeId, input));
+}));
+
+router.post('/:id/episodes/:episodeId/outline/validate', asyncHandler(async (req, res) => {
+  validateRequest(outlineValidateSchema, req.body ?? {});
+  res.json(await validateEpisodeOutline(req.params.id, req.params.episodeId));
+}));
+
+router.post('/:id/episodes/:episodeId/outline/review', asyncHandler(async (req, res) => {
+  const input = validateRequest(outlineReviewSchema, req.body);
+  res.json(await reviewEpisodeOutline(req.params.id, req.params.episodeId, input));
+}));
+
 router.post('/:id/episodes/:episodeId/nodes/:nodeId/branch', asyncHandler(async (req, res) => {
   const input = validateRequest(branchSchema, req.body);
   res.json(await branchNode(req.params.id, req.params.episodeId, req.params.nodeId, input));
@@ -219,6 +343,73 @@ router.post('/:id/episodes/:episodeId/play', asyncHandler(async (req, res) => {
 router.post('/:id/episodes/:episodeId/reformat', asyncHandler(async (req, res) => {
   const input = validateRequest(reformatSchema, req.body);
   res.json(await reformatEpisodeScenes(req.params.id, req.params.episodeId, input));
+}));
+
+// --- QR-Hosted Sessions -----------------------------------------------------
+
+router.post('/:id/episodes/:episodeId/sessions/preflight', asyncHandler(async (req, res) => {
+  res.json(await checkHostedSessionReadiness({ loomId: req.params.id, episodeId: req.params.episodeId }));
+}));
+
+router.post('/:id/episodes/:episodeId/sessions/host', asyncHandler(async (req, res) => {
+  const input = validateRequest(hostedSessionCreateSchema, req.body);
+  res.status(201).json(await createHostedSession(req.params.id, req.params.episodeId, input));
+}));
+
+router.get('/sessions/:sessionId', asyncHandler(async (req, res) => {
+  const session = getHostedSession(req.params.sessionId);
+  if (!session) throw new ServerError('Session not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(session);
+}));
+
+router.patch('/sessions/:sessionId', asyncHandler(async (req, res) => {
+  const patch = validateRequest(hostedSessionPatchSchema, req.body);
+  res.json(updateHostedSession(req.params.sessionId, patch));
+}));
+
+router.delete('/sessions/:sessionId', asyncHandler(async (req, res) => {
+  res.json(endHostedSession(req.params.sessionId, { reason: 'api_deleted' }));
+}));
+
+// --- Production Orchestration & Continuity Review ---------------------------
+
+router.post('/:id/episodes/:episodeId/production/plan', asyncHandler(async (req, res) => {
+  const input = validateRequest(productionPlanSchema, req.body ?? {});
+  res.json(await planEpisodeProduction(req.params.id, req.params.episodeId, input));
+}));
+
+router.post('/:id/episodes/:episodeId/production/batch', asyncHandler(async (req, res) => {
+  const input = validateRequest(productionBatchCreateSchema, req.body ?? {});
+  res.status(201).json(await startEpisodeProductionBatch(req.params.id, req.params.episodeId, input));
+}));
+
+router.get('/:id/episodes/:episodeId/production/batch/:runId', asyncHandler(async (req, res) => {
+  const run = getEpisodeProductionBatch(req.params.runId);
+  if (!run || run.loomId !== req.params.id || run.episodeId !== req.params.episodeId) {
+    throw new ServerError('Batch production run not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(run);
+}));
+
+router.post('/:id/episodes/:episodeId/production/batch/:runId/cancel', asyncHandler(async (req, res) => {
+  const run = getEpisodeProductionBatch(req.params.runId);
+  if (!run || run.loomId !== req.params.id || run.episodeId !== req.params.episodeId) {
+    throw new ServerError('Batch production run not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(await cancelEpisodeProductionBatch(req.params.runId));
+}));
+
+router.post('/:id/episodes/:episodeId/production/batch/:runId/resume', asyncHandler(async (req, res) => {
+  const run = getEpisodeProductionBatch(req.params.runId);
+  if (!run || run.loomId !== req.params.id || run.episodeId !== req.params.episodeId) {
+    throw new ServerError('Batch production run not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(resumeEpisodeProductionBatch(req.params.runId));
+}));
+
+router.post('/:id/episodes/:episodeId/continuity/review', asyncHandler(async (req, res) => {
+  validateRequest(continuityReviewSchema, req.body ?? {});
+  res.json(await reviewEpisodeContinuity(req.params.id, req.params.episodeId));
 }));
 
 export default router;

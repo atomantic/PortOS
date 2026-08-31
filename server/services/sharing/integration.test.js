@@ -2312,7 +2312,43 @@ describe('sharing round-trip', () => {
       const exp = await exporter.exportSeries(s.id, bucket.id);
       const manifest = JSON.parse(readFileSync(join(tempBucket, 'manifests', exp.filename), 'utf-8'));
       expect(manifest.portosSchemaVersions).toBeDefined();
-      expect(manifest.portosSchemaVersions.universes).toBe(9);
+      expect(manifest.portosSchemaVersions.universes).toBe(10);
+    });
+
+    it('preserves character production packages when an older peer wins universe LWW', async () => {
+      const bucket = await buckets.createBucket({ name: 'LegacyUniverseBucket', path: tempBucket, mode: 'auto-merge' });
+      const u = await universeSvc.createUniverse({
+        name: 'Legacy Compatible Universe',
+        characters: [{
+          id: 'char-voice',
+          name: 'Aster',
+          imageRefs: ['fakeasset.png'],
+          voiceCanon: { version: 1, description: 'measured alto', approved: true },
+          identityPack: { assets: [{ role: 'neutral', imageRef: 'fakeasset.png', approved: true }] },
+        }],
+      });
+      const exp = await exporter.exportUniverse(u.id, bucket.id);
+      const recordPath = join(tempBucket, 'records', 'universes', `${u.id}.json`);
+      const remote = JSON.parse(readFileSync(recordPath, 'utf-8'));
+      remote.name = 'Older Peer Rename';
+      remote.updatedAt = new Date(Date.now() + 60_000).toISOString();
+      remote.characters = remote.characters.map(({ voiceCanon, identityPack, ...character }) => character);
+      writeFileSync(recordPath, JSON.stringify(remote, null, 2));
+
+      const manifestPath = join(tempBucket, 'manifests', exp.filename);
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+      manifest.portosSchemaVersions.universes = 9;
+      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+      simulateRemoteSender(tempBucket, exp.filename);
+
+      const result = await importer.processManifest(bucket.id, exp.filename);
+      expect(result.processed).toBe(true);
+      const merged = await universeSvc.getUniverse(u.id);
+      expect(merged.name).toBe('Older Peer Rename');
+      expect(merged.characters[0].voiceCanon).toMatchObject({ description: 'measured alto', approved: true });
+      expect(merged.characters[0].identityPack.assets).toEqual([
+        { role: 'neutral', imageRef: 'fakeasset.png', approved: true },
+      ]);
     });
 
     it('importer rejects a manifest when the sender is AHEAD on a category the manifest CARRIES', async () => {

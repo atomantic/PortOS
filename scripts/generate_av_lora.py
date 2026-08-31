@@ -36,7 +36,7 @@ from pathlib import Path
 # Sibling import: parse_user_loras is shared with generate_ltx2.py so the
 # strict --user-loras validation contract lives in one place. sys.path[0] is
 # already this dir when run as `python /abs/scripts/generate_av_lora.py`, but
-# insert defensively (mirrors generate_hunyuan.py). _runner_common is
+# insert defensively. _runner_common is
 # stdlib-only at import time, so this is safe from the MLX venv.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _runner_common import emit_runtime_fingerprint, parse_user_loras  # noqa: E402

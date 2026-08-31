@@ -23,7 +23,7 @@ import { cosEvents, emitLog } from './cosEvents.js';
 import { DAY, safeDate } from '../lib/fileUtils.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js';
-import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getAppTaskTypeIntervalMs, getActiveApps, getAppTaskTypeOverrides, clearAllPrWatcherState } from './apps.js';
+import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getAppTaskTypeIntervalMs, getActiveApps, getAppTaskTypeOverrides, clearAllPrWatcherState, clearAllIssueWatcherState } from './apps.js';
 import { loadState, isImprovementEnabled } from './cosState.js';
 import { getLocalParts } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
@@ -46,6 +46,7 @@ import {
   enforceManagedAgentOptions
 } from './taskScheduleRegistry.js';
 import { loadSchedule, updateSchedule } from './taskScheduleStore.js';
+import { isInstanceFeatureEnabled } from './instanceFeatures.js';
 import { getTaskDataInputCatalog } from '../lib/taskDataInputCatalog.js';
 import {
   clearFailureLedgerFields,
@@ -70,6 +71,18 @@ export {
   recordTaskTypeSuccess
 } from './taskScheduleBackoff.js';
 export { addTemplateTask, deleteTemplateTask, getTemplateTasks } from './taskScheduleTemplates.js';
+
+const createFeatureGate = () => {
+  const enabledByFeature = new Map();
+  return async (interval) => {
+    const featureId = interval?.feature;
+    if (!featureId) return true;
+    if (!enabledByFeature.has(featureId)) {
+      enabledByFeature.set(featureId, isInstanceFeatureEnabled(featureId));
+    }
+    return enabledByFeature.get(featureId);
+  };
+};
 
 /**
  * Get learning-adjusted interval for a task type
@@ -161,8 +174,22 @@ export async function updateTaskInterval(taskType, settings) {
     }
     // If user is setting a custom prompt, mark it so auto-upgrade won't overwrite it.
     // If user clears the prompt (null), remove the customized flag to resume defaults.
+    //
+    // `promptSource: 'user'` records that this write was an EXPLICIT user action,
+    // which is what the store's self-heal reads to leave the pin alone (#5432).
+    // Without it, pasting an older SHIPPED body into Settings → Scheduled Tasks was
+    // un-pinnable: the self-heal saw a body matching a retired default, cleared the
+    // flag on the next load, and the next PROMPT_VERSIONS bump overwrote the text.
+    //
+    // A body identical to the CURRENT default is not a pin. The editor prefills its
+    // textarea from the stored prompt, so re-saving an untouched default would
+    // otherwise stamp a permanent pin and freeze that type off every future prompt
+    // upgrade — which is exactly the mis-flag the self-heal existed to undo, now
+    // beyond its reach. Retired shipped bodies still pin: that is the #5432 case.
     if ('prompt' in settings) {
-      settings.promptCustomized = settings.prompt != null;
+      settings.promptCustomized = settings.prompt != null
+        && settings.prompt !== DEFAULT_TASK_PROMPTS[taskType];
+      settings.promptSource = settings.promptCustomized ? 'user' : null;
     }
 
     schedule.tasks[taskType] = {
@@ -197,8 +224,8 @@ export async function updateTaskInterval(taskType, settings) {
     // 30-min interval — otherwise PRs opened in that delayed window slip past the
     // firstRun baseline and are never dispatched. Paired with clearAllPrWatcherState
     // below (the per-app disable paths in apps.js do the same via resetExecutionHistory).
-    if (taskType === 'pr-watcher' && settings.enabled === false) {
-      delete schedule.executions['task:pr-watcher'];
+    if (['pr-watcher', 'issue-watcher'].includes(taskType) && settings.enabled === false) {
+      delete schedule.executions[`task:${taskType}`];
     }
 
     // When the recheck cadence of a perpetual task changes, re-derive the
@@ -238,6 +265,11 @@ export async function updateTaskInterval(taskType, settings) {
   if (taskType === 'pr-watcher' && settings.enabled === false) {
     await clearAllPrWatcherState().catch((err) => {
       emitLog('warn', `pr-watcher global-disable state clear failed: ${err.message}`, {}, '📅 TaskSchedule');
+    });
+  }
+  if (taskType === 'issue-watcher' && settings.enabled === false) {
+    await clearAllIssueWatcherState().catch((err) => {
+      emitLog('warn', `issue-watcher global-disable state clear failed: ${err.message}`, {}, '📅 TaskSchedule');
     });
   }
 
@@ -694,10 +726,11 @@ export async function applyOnDemandRunResets(request, appId = null) {
  * Returns { satisfied, pending } where pending lists unfinished dependency task types.
  *
  * Dependencies that are disabled — either globally (missing from the schedule or
- * `enabled: false`) or disabled for the requesting app — are skipped, since they
- * will never run and would otherwise block the dependent task indefinitely.
+ * `enabled: false`) — or use an on-demand interval are skipped, since they will
+ * not run automatically and would otherwise block the dependent task indefinitely.
+ * A scheduled per-app override keeps its dependency gate active.
  */
-async function checkRunAfterDeps(schedule, taskType, appId = null) {
+async function checkRunAfterDeps(schedule, taskType, appId = null, featureEnabled = createFeatureGate()) {
   const interval = schedule.tasks[taskType];
   const deps = interval?.runAfter;
   if (!deps || deps.length === 0) return { satisfied: true, pending: [] };
@@ -710,7 +743,10 @@ async function checkRunAfterDeps(schedule, taskType, appId = null) {
   for (const dep of deps) {
     const depConfig = schedule.tasks[dep];
     if (!depConfig || !depConfig.enabled) continue;
+    if (!(await featureEnabled(depConfig))) continue;
     if (appId && !(await isTaskTypeEnabledForApp(appId, dep))) continue;
+    const depPerAppInterval = appId ? await getAppTaskTypeInterval(appId, dep) : null;
+    if ((depPerAppInterval || depConfig.type) === INTERVAL_TYPES.ON_DEMAND) continue;
 
     const depKey = `task:${dep}`;
     const depExec = schedule.executions[depKey] || { lastRun: null, perApp: {} };
@@ -748,12 +784,15 @@ async function evaluateFixedInterval(taskType, baseIntervalMs, label, timeSinceL
 /**
  * Check if a task type should run for a specific app (or globally)
  */
-export async function shouldRunTask(taskType, appId = null) {
+export async function shouldRunTask(taskType, appId = null, { featureEnabled = createFeatureGate() } = {}) {
   const schedule = await loadSchedule();
   const interval = schedule.tasks[taskType];
 
   if (!interval || !interval.enabled) {
     return { shouldRun: false, reason: 'disabled' };
+  }
+  if (!(await featureEnabled(interval))) {
+    return { shouldRun: false, reason: 'feature-disabled', feature: interval.feature };
   }
 
   // Fetch timezone once for reuse across weekday and cron checks
@@ -973,7 +1012,7 @@ export async function shouldRunTask(taskType, appId = null) {
   // If the task would run, check runAfter dependencies — blocked until all enabled deps have run since our last run.
   // Disabled deps (globally or for this app) are skipped, since they'll never run.
   if (result.shouldRun && interval.runAfter?.length > 0) {
-    const depCheck = await checkRunAfterDeps(schedule, taskType, appId);
+    const depCheck = await checkRunAfterDeps(schedule, taskType, appId, featureEnabled);
     if (!depCheck.satisfied) {
       return { shouldRun: false, reason: 'waiting-on-dependencies', pendingDeps: depCheck.pending };
     }
@@ -988,11 +1027,12 @@ export async function shouldRunTask(taskType, appId = null) {
 export async function getDueTasks(appId = null) {
   const schedule = await loadSchedule();
   const due = [];
+  const featureEnabled = createFeatureGate();
 
   for (const [taskType, interval] of Object.entries(schedule.tasks)) {
     if (!interval.enabled) continue;
 
-    const check = await shouldRunTask(taskType, appId);
+    const check = await shouldRunTask(taskType, appId, { featureEnabled });
     if (check.shouldRun) {
       due.push({ taskType, reason: check.reason, interval });
     }
@@ -1006,8 +1046,6 @@ export async function getDueTasks(appId = null) {
  */
 export async function getNextTaskType(appId = null, lastType = '', { perpetualOnly = false } = {}) {
   const schedule = await loadSchedule();
-  const taskTypes = Object.keys(schedule.tasks);
-
   const dueTasks = await getDueTasks(appId);
 
   // `perpetualOnly` constrains the pick to a due perpetual (drain-until-done)
@@ -1060,10 +1098,13 @@ export async function getNextTaskType(appId = null, lastType = '', { perpetualOn
   }
 
   // Fall back to rotation among enabled rotation tasks
-  const rotationTasks = taskTypes.filter(t =>
-    schedule.tasks[t].enabled &&
-    schedule.tasks[t].type === INTERVAL_TYPES.ROTATION
-  );
+  const featureEnabled = createFeatureGate();
+  const rotationTasks = [];
+  for (const [taskType, interval] of Object.entries(schedule.tasks)) {
+    if (interval.enabled && interval.type === INTERVAL_TYPES.ROTATION && await featureEnabled(interval)) {
+      rotationTasks.push(taskType);
+    }
+  }
 
   if (rotationTasks.length === 0) {
     return null;
@@ -1096,6 +1137,9 @@ export async function triggerOnDemandTask(taskType, appId = null, { emit = true,
     }
     if (!tasks[taskType].enabled) {
       return { result: { error: `Task type '${taskType}' is disabled` }, changed: false };
+    }
+    if (!(await createFeatureGate()(tasks[taskType]))) {
+      return { result: { error: `Task type '${taskType}' requires the '${tasks[taskType].feature}' feature` }, changed: false };
     }
 
     // Reject if the master Improve toggle is off — request would be silently dropped downstream
@@ -1137,7 +1181,16 @@ export async function triggerOnDemandTask(taskType, appId = null, { emit = true,
 
 export async function getOnDemandRequests() {
   const schedule = await loadSchedule();
-  return schedule.onDemandRequests || [];
+  const featureEnabled = createFeatureGate();
+  return getAvailableOnDemandRequests(schedule, featureEnabled);
+}
+
+async function getAvailableOnDemandRequests(schedule, featureEnabled) {
+  const requests = schedule.onDemandRequests || [];
+  const availability = await Promise.all(requests.map((request) => (
+    featureEnabled(schedule.tasks?.[request.taskType])
+  )));
+  return requests.filter((_request, index) => availability[index]);
 }
 
 export async function clearOnDemandRequest(requestId) {
@@ -1159,13 +1212,15 @@ export async function clearOnDemandRequest(requestId) {
 export async function getScheduleStatus() {
   // Surface the master Improve toggle so the UI can disable Run Now affordances
   const [schedule, state] = await Promise.all([loadSchedule(), loadState()]);
+  const featureEnabled = createFeatureGate();
+  const onDemandRequests = await getAvailableOnDemandRequests(schedule, featureEnabled);
 
   const status = {
     lastUpdated: schedule.lastUpdated,
     improvementEnabled: isImprovementEnabled(state),
     tasks: {},
     templates: schedule.templates,
-    onDemandRequests: schedule.onDemandRequests || [],
+    onDemandRequests,
     learningAdjustmentsActive: 0,
     dataInputCatalog: getTaskDataInputCatalog()
   };
@@ -1175,6 +1230,7 @@ export async function getScheduleStatus() {
   const totalAppCount = activeApps.length;
 
   for (const [taskType, interval] of Object.entries(schedule.tasks)) {
+    if (!(await featureEnabled(interval))) continue;
     const execution = schedule.executions[`task:${taskType}`] || { lastRun: null, count: 0, perApp: {} };
 
     // Get learning adjustment info
@@ -1182,7 +1238,7 @@ export async function getScheduleStatus() {
     const learningInfo = await getPerformanceAdjustedInterval(taskType, baseInterval);
 
     // Check global shouldRun status
-    const check = await shouldRunTask(taskType);
+    const check = await shouldRunTask(taskType, null, { featureEnabled });
 
     const isEnabledForApp = (override) => override?.enabled === true;
     const appOverrides = {};
@@ -1343,12 +1399,14 @@ export async function getUpcomingTasks(limit = 10) {
   const schedule = await loadSchedule();
   const now = Date.now();
   const upcoming = [];
+  const featureEnabled = createFeatureGate();
 
   for (const [taskType, interval] of Object.entries(schedule.tasks)) {
     if (!interval.enabled) continue;
+    if (!(await featureEnabled(interval))) continue;
     if (interval.type === INTERVAL_TYPES.ON_DEMAND) continue;
 
-    const check = await shouldRunTask(taskType);
+    const check = await shouldRunTask(taskType, null, { featureEnabled });
     const execution = schedule.executions[`task:${taskType}`] || { lastRun: null, count: 0 };
 
     let eligibleAt = now;

@@ -43,16 +43,16 @@ describe('OpenWorldFastTravel', () => {
 
   it('filters the list by the search box', () => {
     renderPanel();
-    fireEvent.change(screen.getByLabelText('Search regions'), { target: { value: 'memory' } });
+    fireEvent.change(screen.getByLabelText('Search village places'), { target: { value: 'memory house' } });
 
     const list = screen.getByRole('list');
-    expect(within(list).getByText('Memory Quarter')).toBeInTheDocument();
-    expect(within(list).queryByText('Data Harbor')).not.toBeInTheDocument();
+    expect(within(list).getByText('Memory House')).toBeInTheDocument();
+    expect(within(list).queryByText('Data Pier')).not.toBeInTheDocument();
   });
 
   it('reports an empty result rather than an empty panel', () => {
     renderPanel();
-    fireEvent.change(screen.getByLabelText('Search regions'), { target: { value: 'zzzz' } });
+    fireEvent.change(screen.getByLabelText('Search village places'), { target: { value: 'zzzz' } });
     expect(screen.getByText(/NO REGION MATCHES/)).toBeInTheDocument();
   });
 
@@ -65,7 +65,7 @@ describe('OpenWorldFastTravel', () => {
 
   it('omits the OPEN affordance for a region with no page behind it', () => {
     renderPanel();
-    fireEvent.change(screen.getByLabelText('Search regions'), { target: { value: 'quiet corner' } });
+    fireEvent.change(screen.getByLabelText('Search village places'), { target: { value: 'quiet corner' } });
     const list = screen.getByRole('list');
     expect(within(list).getByText('Quiet Corner')).toBeInTheDocument();
     expect(within(list).queryByText('OPEN')).not.toBeInTheDocument();
@@ -99,7 +99,7 @@ describe('OpenWorldFastTravel', () => {
 
     const dialog = screen.getByRole('dialog');
     expect(dialog).toHaveAttribute('aria-modal', 'true');
-    expect(dialog).toHaveAttribute('aria-label', 'World map');
+    expect(dialog).toHaveAttribute('aria-label', 'Village map');
 
     fireEvent.click(dialog.parentElement);
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -114,7 +114,7 @@ describe('OpenWorldFastTravel', () => {
     for (const region of OPEN_WORLD_REGIONS) {
       expect(screen.getByLabelText(`Teleport to ${region.label}`)).toBeInTheDocument();
     }
-    fireEvent.click(screen.getByLabelText('Teleport to Data Harbor'));
+    fireEvent.click(screen.getByLabelText('Teleport to Data Pier'));
     expect(onTravel.mock.calls[0][0].id).toBe('data-harbor');
   });
 });

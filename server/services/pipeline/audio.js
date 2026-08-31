@@ -227,17 +227,24 @@ export function wavDurationMs(buffer) {
   return Math.round((dataSize / byteRate) * 1000);
 }
 
-export async function synthesizeToFile({ text, voiceId, signal } = {}) {
+export async function synthesizeToFile({ text, voiceId, profileId, route = 'studio', signal } = {}) {
   const trimmed = (text || '').trim();
   if (!trimmed) {
     throw new ServerError('text is required', { status: 400, code: 'PIPELINE_AUDIO_EMPTY_TEXT' });
   }
   const { engine, voice } = parseVoiceId(voiceId);
   const opts = { signal };
+  if (profileId) {
+    opts.profileId = profileId;
+    opts.route = route;
+  }
   if (engine) opts.engine = engine;
   if (voice) opts.voice = voice;
 
-  const { wav, latencyMs, engine: usedEngine } = await synthesize(trimmed, opts);
+  const {
+    wav, latencyMs, engine: usedEngine,
+    profileId: usedProfileId, profileRevision, provenance,
+  } = await synthesize(trimmed, opts);
   await ensureDir(PATHS.audio);
   // UUID filename keeps two simultaneous renders from colliding; the line's
   // audioJobId-or-audioFilename binding lives in stages.audio.lines[].
@@ -249,5 +256,8 @@ export async function synthesizeToFile({ text, voiceId, signal } = {}) {
     durationMs: wavDurationMs(wav),
     engine: usedEngine,
     voiceId: voice ? `${usedEngine}:${voice}` : null,
+    profileId: usedProfileId || null,
+    profileRevision: profileRevision || null,
+    provenance: provenance || null,
   };
 }

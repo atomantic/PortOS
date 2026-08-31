@@ -1890,6 +1890,34 @@ describe('validation.js', () => {
     });
   });
 
+  describe('writersRoomCharacterUpdateSchema — production package (#5378)', () => {
+    it('accepts portable voice canon and approved identity assets', () => {
+      const result = writersRoomCharacterUpdateSchema.safeParse({
+        voiceCanon: {
+          version: 2,
+          description: 'warm low alto',
+          pronunciations: [{ term: 'Aster Vale', pronunciation: 'AS-ter vayl' }],
+          sourcePolicy: 'designed',
+          approved: true,
+        },
+        identityPack: {
+          assets: [{ role: 'neutral', imageRef: 'neutral.png', approved: true }],
+          avoid: ['different eye color'],
+        },
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects local-artifact keys and invalid asset roles', () => {
+      expect(writersRoomCharacterUpdateSchema.safeParse({
+        voiceCanon: { description: 'warm', providerId: 'local-profile' },
+      }).success).toBe(false);
+      expect(writersRoomCharacterUpdateSchema.safeParse({
+        identityPack: { assets: [{ role: 'arbitrary', imageRef: 'ref.png' }] },
+      }).success).toBe(false);
+    });
+  });
+
   describe('writersRoomObjectUpdateSchema — attachments (#1288)', () => {
     it('accepts a well-formed attachment', () => {
       const result = writersRoomObjectUpdateSchema.safeParse({

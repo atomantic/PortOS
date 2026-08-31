@@ -1,70 +1,155 @@
-// TTS façade — dispatches on cfg.tts.engine ('kokoro' default | 'piper').
+// TTS façade — dispatches on cfg.tts.engine ('kokoro' default | 'piper' | 'qwen3-tts').
 
+import { join } from 'node:path';
 import { getVoiceConfig, piperVoiceTildePath } from './config.js';
 import { synthesizeKokoro, listKokoroVoices } from './tts-kokoro.js';
 import { synthesizePiper, listPiperVoices } from './tts-piper.js';
+import { synthesizeQwen3, listQwen3Voices } from './tts-qwen3.js';
 import { findPiperVoice } from './piper-voices.js';
 import { isKokoroVoice } from './kokoro-voices.js';
+import { getProfileForSynthesis, profileArtifactDirectory } from './profiles.js';
+import { whichFirst } from '../../lib/processEnv.js';
 import { ServerError } from '../../lib/errorHandler.js';
 
-// Single source of truth for the supported TTS engine names. Imported by
-// routes/voice.js, routes/pipeline/audio.js, and services/pipeline/audio.js so a
-// new engine (e.g. ElevenLabs) shows up in every consumer with one edit.
-export const VALID_ENGINES = new Set(['kokoro', 'piper']);
+// Single source of truth for the supported TTS engine names.
+export const VALID_ENGINES = new Set(['kokoro', 'piper', 'qwen3-tts']);
+
+let voiceTransformProbe = null;
+
+const probeVoiceTransforms = () => {
+  if (!voiceTransformProbe) {
+    voiceTransformProbe = whichFirst('rubberband').then((rubberband) => ({
+      rubberband: Boolean(rubberband),
+    }));
+  }
+  return voiceTransformProbe;
+};
+
+export const listVoiceEngines = async () => {
+  const transforms = await probeVoiceTransforms();
+  const unavailableControls = transforms.rubberband
+    ? 'Rubber Band is installed, but PortOS has no approved formant-preserving adapter yet. Pitch and formant controls remain disabled until that adapter is enabled.'
+    : 'Install Rubber Band to enable a future formant-preserving transform. Pitch and formant controls remain disabled rather than approximated by sample-rate changes.';
+  return [
+    {
+      id: 'kokoro',
+      capabilities: {
+        preset: true, voiceDesign: false, instantClone: false, fineTune: false,
+        streaming: false, instructionControl: false, emotionControl: false,
+        seed: false, wordTimings: false, rate: true, pitch: false, formant: false,
+      },
+      unavailableControls,
+      transformProbe: transforms,
+    },
+    {
+      id: 'piper',
+      capabilities: {
+        preset: true, voiceDesign: false, instantClone: false, fineTune: false,
+        streaming: false, instructionControl: false, emotionControl: false,
+        seed: false, wordTimings: false, rate: true, pitch: false, formant: false,
+      },
+      unavailableControls,
+      transformProbe: transforms,
+    },
+    {
+      id: 'qwen3-tts',
+      capabilities: {
+        preset: true, voiceDesign: true, instantClone: true, fineTune: true,
+        streaming: true, instructionControl: true, emotionControl: true,
+        seed: true, wordTimings: true, rate: true, pitch: false, formant: false,
+      },
+      unavailableControls,
+      transformProbe: transforms,
+    },
+  ];
+};
 
 // Normalize `engine` against the allowlist so an invalid value can't silently
 // produce Kokoro audio while the response reports `engine: 'elevenlabs'`.
-const resolveEngine = (engine) => VALID_ENGINES.has(engine) ? engine : 'kokoro';
+const resolveEngine = (engine) => {
+  const norm = engine === 'qwen3' ? 'qwen3-tts' : engine;
+  return VALID_ENGINES.has(norm) ? norm : 'kokoro';
+};
 
 const backend = (engine) => {
   if (engine === 'piper') return { synth: synthesizePiper, list: listPiperVoices };
+  if (engine === 'qwen3-tts') return { synth: synthesizeQwen3, list: listQwen3Voices };
   return { synth: synthesizeKokoro, list: listKokoroVoices };
 };
 
 /**
- * Synthesize text with the active TTS engine. `opts.voice` and `opts.engine`
- * override the configured voice/engine just for this call — used by the
- * voice-picker preview so users can audition before saving.
+ * Synthesize text with the active TTS engine or profile binding.
  * @param {string} text
  * @param {object} [opts]
  * @param {AbortSignal} [opts.signal]
  * @param {string} [opts.voice]  transient voice override
- * @param {string} [opts.engine] transient engine override ('kokoro'|'piper')
+ * @param {string} [opts.engine] transient engine override ('kokoro'|'piper'|'qwen3-tts')
  * @param {number} [opts.rate]   transient speech-rate override (0.25–4)
+ * @param {string} [opts.profileId] profile ID to synthesize against
+ * @param {string} [opts.route] 'studio' | 'interactive'
  * @returns {Promise<{ wav: Buffer, latencyMs: number, engine: string }>}
  */
 export const synthesize = async (text, opts = {}) => {
   const cfg = await getVoiceConfig();
-  const engine = resolveEngine(opts.engine || cfg.tts.engine);
+  const profile = opts.profileId
+    ? await getProfileForSynthesis(opts.profileId, opts.route || 'studio')
+    : null;
+  const profileVoice = profile?.voiceId?.split(':')[1] || null;
+  const engine = profile ? profile.engine : resolveEngine(opts.engine || cfg.tts.engine);
   const { synth } = backend(engine);
-  let ttsCfg = cfg.tts;
-  // Transient rate override (external public API lets a caller set speed per
-  // request without persisting it). Clamp defensively even though the route
-  // schema already bounds it — direct in-process callers bypass the route.
+
+  let ttsCfg = profile ? { ...cfg.tts, rate: profile.delivery.rate } : cfg.tts;
   if (typeof opts.rate === 'number' && Number.isFinite(opts.rate)) {
     ttsCfg = { ...ttsCfg, rate: Math.min(4, Math.max(0.25, opts.rate)) };
   }
-  if (opts.voice) {
-    // Spread from `ttsCfg` (not `cfg.tts`) so a transient rate override applied
-    // above is preserved alongside the voice override.
+
+  let synthOpts = { ...opts, rate: ttsCfg.rate };
+
+  if (profile) {
+    if (profile.kind === 'designed') {
+      synthOpts = {
+        ...synthOpts,
+        mode: 'design',
+        instructions: profile.inference?.instructions,
+        seed: profile.inference?.seed,
+        modelId: profile.inference?.modelId || profile.modelRevision,
+      };
+    } else if (profile.kind === 'cloned') {
+      const sourceAsset = profile.sourceAssets?.[0];
+      const sourcePath = sourceAsset?.filename
+        ? join(profileArtifactDirectory(profile.id), 'source', sourceAsset.filename)
+        : null;
+      synthOpts = {
+        ...synthOpts,
+        mode: 'clone',
+        referenceAudio: sourcePath,
+        referenceTranscript: sourceAsset?.transcript,
+        modelId: profile.inference?.modelId || profile.modelRevision,
+      };
+    } else if (profile.kind === 'fine-tuned') {
+      synthOpts = {
+        ...synthOpts,
+        mode: 'fine-tuned',
+        checkpointPath: profile.inference?.checkpointPath,
+        modelId: profile.modelRevision,
+      };
+    }
+  }
+
+  const voice = profileVoice || opts.voice;
+  if (voice) {
     if (engine === 'kokoro') {
-      // Reject unknown Kokoro voice overrides (symmetric with the Piper branch
-      // below) so the public synth API returns the documented 400 UNKNOWN_VOICE
-      // instead of forwarding a bogus id to the model and erroring/wrong-voicing.
-      if (!isKokoroVoice(opts.voice)) {
-        throw new ServerError(`unknown kokoro voice: ${opts.voice}`, {
+      if (!isKokoroVoice(voice)) {
+        throw new ServerError(`unknown kokoro voice: ${voice}`, {
           status: 400,
           code: 'UNKNOWN_VOICE',
         });
       }
-      ttsCfg = { ...ttsCfg, kokoro: { ...ttsCfg.kokoro, voice: opts.voice } };
-    } else {
-      // Reject Piper voice overrides that aren't in the curated catalog —
-      // otherwise `voice` would change but `voicePath` would remain the
-      // previous config value, silently synthesizing the wrong voice.
-      const catalog = findPiperVoice(opts.voice);
+      ttsCfg = { ...ttsCfg, kokoro: { ...ttsCfg.kokoro, voice } };
+    } else if (engine === 'piper') {
+      const catalog = findPiperVoice(voice);
       if (!catalog) {
-        throw new ServerError(`unknown piper voice: ${opts.voice}`, {
+        throw new ServerError(`unknown piper voice: ${voice}`, {
           status: 400,
           code: 'UNKNOWN_VOICE',
         });
@@ -73,21 +158,43 @@ export const synthesize = async (text, opts = {}) => {
         ...ttsCfg,
         piper: {
           ...ttsCfg.piper,
-          voice: opts.voice,
-          voicePath: piperVoiceTildePath(opts.voice),
+          voice,
+          voicePath: piperVoiceTildePath(voice),
           speakerId: null,
         },
       };
     }
   }
-  const result = await synth(text, ttsCfg, opts.signal);
-  return { ...result, engine };
+
+  const result = engine === 'qwen3-tts'
+    ? await synth(text, synthOpts, opts.signal)
+    : await synth(text, ttsCfg, opts.signal);
+
+  const modelRevision = engine === 'kokoro'
+    ? `${ttsCfg.kokoro?.modelId || 'kokoro-v0_19'}:${ttsCfg.kokoro?.dtype || 'fp32'}`
+    : (engine === 'piper' ? `piper:${ttsCfg.piper?.voice || 'default'}` : (profile?.modelRevision || result.modelRevision));
+
+  return {
+    ...result,
+    engine,
+    ...(profile ? {
+      profileId: profile.id,
+      profileRevision: profile.version,
+      provenance: {
+        profileId: profile.id,
+        profileRevision: profile.version,
+        engine,
+        modelRevision,
+        effectiveControls: { rate: ttsCfg.rate },
+        mastering: profile.mastering,
+      },
+    } : {}),
+  };
 };
 
 /**
  * Enumerate voices available for the given engine (or the configured one).
- * @param {string} [engineOverride] 'kokoro' | 'piper' to preview voices for
- *   an engine without saving it as active.
+ * @param {string} [engineOverride] 'kokoro' | 'piper' | 'qwen3-tts'
  * @returns {Promise<{ engine: string, voices: Array }>}
  */
 export const listVoices = async (engineOverride) => {

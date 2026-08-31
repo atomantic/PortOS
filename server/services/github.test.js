@@ -13,6 +13,8 @@ const makeChild = () => {
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
+  child.stdin = new EventEmitter();
+  child.stdin.end = vi.fn();
   child.kill = vi.fn();
   return child;
 };
@@ -45,6 +47,31 @@ describe('execGh', () => {
     child.stdout.emit('data', Buffer.from('  {"ok":true}  \n'));
     child.emit('close', 0);
     await expect(promise).resolves.toBe('{"ok":true}');
+  });
+
+  it('writes a supplied JSON body to stdin for gh api --input calls', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const promise = execGh(['api', '--input', '-', 'repos/o/r/pulls/1/reviews'], 5000, {
+      input: '{"event":"APPROVE"}'
+    });
+    expect(child.stdin.end).toHaveBeenCalledWith('{"event":"APPROVE"}');
+    child.emit('close', 0);
+    await expect(promise).resolves.toBe('');
+  });
+
+  it('preserves gh stderr when an input write ends with EPIPE', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const promise = execGh(['api', '--input', '-', 'repos/o/r/pulls/1/reviews'], 5000, {
+      input: '{"event":"APPROVE"}'
+    });
+    child.stderr.emit('data', Buffer.from('HTTP 422: validation failed'));
+    const error = new Error('write EPIPE');
+    error.code = 'EPIPE';
+    child.stdin.emit('error', error);
+    child.emit('close', 1);
+    await expect(promise).rejects.toThrow('HTTP 422: validation failed');
   });
 
   it('rejects with stderr on a non-zero close', async () => {

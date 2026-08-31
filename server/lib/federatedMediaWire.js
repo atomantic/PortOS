@@ -5,6 +5,10 @@ import { isPlainObject } from './objects.js';
 export const FEDERATED_MEDIA_WIRE_VERSION = 1;
 export const FEDERATED_MEDIA_STALE_AFTER_MS = 60_000;
 export const FEDERATED_MEDIA_MAX_CLOCK_SKEW_MS = 30_000;
+// The shared API/federation ceiling for one video render. Keep this above the
+// largest shipped model contract (LTX-2.5 currently tops out at 1017 frames)
+// so provider capability projection never erases a locally-valid request.
+export const FEDERATED_MEDIA_MAX_VIDEO_FRAMES = 1024;
 
 const FEDERATED_AUDIO_STYLES = [
   'ambient', 'cinematic', 'classical', 'electronic', 'folk', 'hip-hop',
@@ -288,20 +292,10 @@ export const federatedMediaCapabilitySchema = z.object({
   // predate lyrical federation entirely — which is why it cannot double as the
   // consumer's permission to send words.
   lyrics: z.boolean(),
-  // SUPERSEDED by the status-root `features` list (#4826), and kept on the
-  // wire for one overlap release so a consumer on the previous build still
-  // reads this provider correctly. Emitted per-capability but never per-model:
-  // it always equalled `lyrics`, because the fact it carried was "does this
-  // BUILD carry lyrics on the wire", which is a property of the payload's
-  // sender rather than of any one engine. Read it only through
-  // `federatedMediaSupports`, never directly. Do not add a second field in
-  // this shape — a new per-field wire capability belongs in `features`.
-  // Retirement tracked in #4850.
-  acceptsLyrics: z.boolean().optional(),
   autoDuration: z.boolean(),
   frameStride: z.number().int().min(1).max(64).nullable().optional(),
-  maxNumFrames: z.number().int().min(1).max(600).nullable().optional(),
-  frameOptions: z.array(z.number().int().min(1).max(600)).max(100).nullable().optional(),
+  maxNumFrames: z.number().int().min(1).max(FEDERATED_MEDIA_MAX_VIDEO_FRAMES).nullable().optional(),
+  frameOptions: z.array(z.number().int().min(1).max(FEDERATED_MEDIA_MAX_VIDEO_FRAMES)).max(100).nullable().optional(),
   fpsOptions: z.array(z.number().int().min(1).max(60)).max(20).nullable().optional(),
   resolutionOptions: z.array(z.object({
     w: z.number().int().min(64).max(2048),
@@ -399,23 +393,13 @@ const federatedMediaFeaturesSchema = z.array(z.unknown()).max(256)
 // every such render into a hard 400 the user cannot act on. Fail closed and the
 // consumer degrades to something it can explain instead.
 //
-// `capability` is the OVERLAP path only: for one release a provider on the
-// previous build advertises the same build-level fact per-capability. A
-// published list WINS over it outright rather than being OR'd with it — a peer
-// that told us its whole vocabulary and left this feature out has positively
-// denied it, and honoring a stale or contradictory per-capability field against
-// that would resurrect the very ambiguity the list replaced. The legacy tell is
-// consulted only when there is no list to read.
-// `decisive` records whether a FAILING legacy tell proves the peer's build is
-// old, and it differs per feature — which is why it belongs in the table rather
-// than in a comment at each call site (whoever adds the third feature would
-// otherwise inherit whichever policy they happened to read first):
-//
-//   lyrics      — the previous build stamped `acceptsLyrics` on EVERY audio
-//                 capability, so its absence can only mean an older build.
-//   inputAssets — the block is genuinely per-model, so its absence is ambiguous:
-//                 mid-overlap the peer may speak conditioning and simply have a
-//                 text-only model configured.
+// `capability` is the overlap path for `inputAssets`: a provider on the
+// previous build advertises that genuinely per-model fact in the capability
+// block. A published list WINS over it outright rather than being OR'd with it
+// — a peer that told us its whole vocabulary and left this feature out has
+// positively denied it. The input-assets block cannot prove that the peer's
+// build is old because a healthy peer may simply have a text-only model
+// configured.
 //
 // Both gate identically; only a message that blames the BUILD may distinguish
 // them. See federatedMediaDeniesFeature.
@@ -425,14 +409,13 @@ const federatedMediaFeaturesSchema = z.array(z.unknown()).max(256)
 // on `.tell`. A null prototype makes an unknown name simply absent, which is
 // also what keeps this end and the client mirror answering alike.
 const FEDERATED_MEDIA_LEGACY_FEATURE_TELL = Object.freeze(Object.assign(Object.create(null), {
-  lyrics: { tell: (capability) => capability?.acceptsLyrics === true, decisive: true },
   // A build that predates conditioning omits the block entirely; one that
   // speaks it advertises the block (possibly with no roles for this model).
   // `isPlainObject`, not a bare `typeof === 'object'`: the client mirror uses
   // its own array-excluding record guard, and a malformed `inputAssets: []`
   // reading true here and false there is exactly the provider/consumer
   // disagreement this helper exists to prevent.
-  inputAssets: { tell: (capability) => isPlainObject(capability?.inputAssets), decisive: false },
+  inputAssets: { tell: (capability) => isPlainObject(capability?.inputAssets) },
 }));
 
 /**
@@ -441,7 +424,7 @@ const FEDERATED_MEDIA_LEGACY_FEATURE_TELL = Object.freeze(Object.assign(Object.c
  * @param {object|null} status - a validated provider status payload
  * @param {string} feature - a FEDERATED_MEDIA_FEATURES member
  * @param {object|null} [capability] - the capability being acted on, for the
- *   overlap fallback against a provider that has not migrated yet
+ *   input-assets overlap fallback against a provider that has not migrated yet
  * @returns {boolean} false whenever the answer cannot be established
  */
 export function federatedMediaSupports(status, feature, capability = null) {
@@ -466,19 +449,19 @@ export function federatedMediaDeclaresFeatures(status) {
  * `federatedMediaSupports` flattens two different "no"s, because both must gate
  * the same way: a peer that published a list and left the feature out has
  * POSITIVELY denied it, while a peer that published no list may simply predate
- * the list — or, for an ambiguous feature, speak it and have nothing configured
- * that uses it. Only a MESSAGE may distinguish them, and telling a healthy peer
- * to update itself is worse than giving the generic remedy.
+ * the list. A present status with no list proves that a peer predates the
+ * status-root feature vocabulary for `lyrics`; an absent status does not.
  *
  * @param {object|null} status - a validated provider status payload
  * @param {string} feature - a FEDERATED_MEDIA_FEATURES member
- * @param {object|null} [capability] - the capability being acted on
+ * @param {object|null} [capability] - the capability being acted on, for the
+ *   input-assets overlap fallback
  * @returns {boolean} true only when the peer's build is provably the reason
  */
 export function federatedMediaDeniesFeature(status, feature, capability = null) {
   if (federatedMediaSupports(status, feature, capability)) return false;
   return federatedMediaDeclaresFeatures(status)
-    || FEDERATED_MEDIA_LEGACY_FEATURE_TELL[feature]?.decisive === true;
+    || (feature === 'lyrics' && isPlainObject(status));
 }
 
 // Strip unknown fields from peer responses before persisting or exposing them

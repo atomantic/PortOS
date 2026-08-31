@@ -40,6 +40,8 @@ const ICONS = {
  * @param {string} [init.model]
  * @param {string} [init.appId]         — managed-app id this call works on behalf of
  * @param {string} [init.workspacePath] — CoS-agent workspace this call works on behalf of
+ * @param {string} [init.operationId]   — caller-owned id for correlating a UI operation
+ * @param {boolean} [init.localOnly]   — keep the event off the global AI toast surface
  * @param {boolean} [init.background]    — this call is part of an UNATTENDED job (a
  *   scheduled/autopilot task the user isn't watching), NOT merely display-silent.
  *   Distinct from `silent` (which only suppresses the start toast — user-triggered
@@ -62,6 +64,8 @@ export function startAIOp(init) {
     model: init.model,
     appId: init.appId,
     workspacePath: init.workspacePath,
+    operationId: init.operationId,
+    localOnly: !!init.localOnly,
     silent: !!init.silent,
     background: !!init.background
   };

@@ -5,6 +5,8 @@ import { readFileSync, existsSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { resolve } from 'path';
 
+import { resolveBundleNodeEnv } from './vite.buildEnv.js';
+
 const ANALYZE_BUNDLE = process.env.ANALYZE === 'true';
 const CONFIG_DIR = import.meta.dirname;
 
@@ -85,7 +87,16 @@ function buildStamp() {
 const CERT_PATH = resolve(CONFIG_DIR, '..', 'data', 'certs', 'cert.pem');
 const API_SCHEME = existsSync(CERT_PATH) ? 'https' : 'http';
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ command, mode }) => {
+  // Pin the build's NODE_ENV before Vite reads it. resolveConfig() only defaults
+  // it to 'production' when it is UNSET, and PortOS reaches this build from
+  // inside a PM2 tree carrying NODE_ENV=development — which Vite would then
+  // inline, shipping the DEVELOPMENT react/react-dom to every user. The config
+  // file is loaded BEFORE Vite derives `isProduction`, its
+  // `process.env.NODE_ENV` define, and the plugin JSX runtime, so all three
+  // agree on the value set here. See client/vite.buildEnv.js.
+  process.env.NODE_ENV = resolveBundleNodeEnv(command, process.env.NODE_ENV);
+
   const env = loadEnv(mode, process.cwd(), 'VITE_');
   const API_HOST = env.VITE_API_HOST || 'localhost';
   const API_TARGET = `${API_SCHEME}://${API_HOST}:5555`;

@@ -57,6 +57,20 @@ export async function listRawBySeries(seriesId) {
 }
 
 /**
+ * Raw `data` JSONB for several series in one indexed query. Callers that need
+ * an uncapped cross-series scan use this instead of loading the whole table or
+ * issuing one query per series.
+ */
+export async function listRawBySeriesIds(seriesIds) {
+  if (seriesIds.length === 0) return [];
+  const { rows } = await query(
+    `SELECT data FROM pipeline_issues WHERE series_id = ANY($1::text[])`,
+    [seriesIds],
+  );
+  return rows.map((r) => r.data);
+}
+
+/**
  * Upsert one record. `data` is written verbatim (lossless); the typed mirror
  * columns are bind-sanitized so a hand-edited/legacy record can't make the
  * write throw. `created_at` preserved on conflict.

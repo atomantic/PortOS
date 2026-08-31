@@ -293,8 +293,8 @@ describe('MusicGenPanel', () => {
 
   // One end of the mixed-version window: this peer's MODEL sings
   // (`lyrics: true`) but its build predates lyrical federation, so it publishes
-  // neither the `lyrics` feature nor the legacy `acceptsLyrics`. Absent must
-  // read as false, or the panel offers a render the peer answers with a 400.
+  // The peer does not advertise the `lyrics` feature. Absent must read as
+  // false, or the panel offers a render the peer answers with a 400.
   it('falls back to an instrumental remote render when the peer build cannot carry lyrics', async () => {
     api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
     api.getInstances.mockResolvedValue({ peers: [lyricCapablePeer()] });
@@ -319,34 +319,9 @@ describe('MusicGenPanel', () => {
     expect(requestBody).not.toHaveProperty('lyrics');
   });
 
-  // ADR docs/decisions/2026-08-22-federated-media-input-assets.md rule 2: the
-  // words the model sings cross. The free-form style prompt still does not, but
-  // that is the SERVER's doing — it blanks params.prompt and renders the wire
-  // prompt from the profile — so this body legitimately carries it for the
-  // track record. federatedMediaProvider.test.js guards the wire side.
-  it('sends lyrics to a peer that advertises it accepts them', async () => {
-    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
-    api.getInstances.mockResolvedValue({ peers: [lyricCapablePeer({ acceptsLyrics: true })] });
-    api.generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
-
-    render(<MusicGenPanel track={{ id: 'track-1' }} prompt="private prompt" lyrics="private lyrics" />);
-
-    fireEvent.change(await screen.findByRole('combobox', { name: /generation target/i }), { target: { value: 'peer-example' } });
-    // Instrumental is an ordinary choice again once the peer can sing.
-    expect(screen.getByLabelText(/instrumental only/i)).not.toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: /^generate$/i }));
-
-    await waitFor(() => expect(api.generateMusic).toHaveBeenCalledWith(expect.objectContaining({
-      mediaProviderPeerId: 'peer-example',
-      instrumentalOnly: false,
-      lyrics: 'private lyrics',
-    }), { silent: true }));
-  });
-
   // The other end of the same mixed-version window (#4826): a peer on the NEW
-  // build advertises the `lyrics` feature at the status root and stops stamping
-  // `acceptsLyrics` on every capability. A panel still reading the per-capability
-  // field would pin this peer to Instrumental only for no reason.
+  // build advertises the `lyrics` feature at the status root. A panel that did
+  // not read the status-root feature would pin this peer to Instrumental only.
   it('sends lyrics to a peer that advertises the lyrics feature and no per-capability flag', async () => {
     api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
     api.getInstances.mockResolvedValue({ peers: [lyricCapablePeer({}, ['lyrics', 'inputAssets'])] });
@@ -380,7 +355,7 @@ describe('MusicGenPanel', () => {
 
   it('drops lyrics from a lyric-capable remote render when instrumental-only is chosen', async () => {
     api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
-    api.getInstances.mockResolvedValue({ peers: [lyricCapablePeer({ acceptsLyrics: true })] });
+    api.getInstances.mockResolvedValue({ peers: [lyricCapablePeer({}, ['lyrics', 'inputAssets'])] });
     api.generateMusic.mockResolvedValue({ track: { id: 'track-1' } });
 
     render(<MusicGenPanel track={{ id: 'track-1' }} prompt="private prompt" lyrics="private lyrics" />);

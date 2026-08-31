@@ -61,7 +61,12 @@ vi.mock('./apps.js', () => ({
   getAppTaskTypeIntervalMs: vi.fn().mockResolvedValue(null),
   getActiveApps: vi.fn().mockResolvedValue([]),
   getAppTaskTypeOverrides: vi.fn().mockResolvedValue({}),
-  clearAllPrWatcherState: vi.fn().mockResolvedValue({ changed: false })
+  clearAllPrWatcherState: vi.fn().mockResolvedValue({ changed: false }),
+  clearAllIssueWatcherState: vi.fn().mockResolvedValue({ changed: false })
+}))
+
+vi.mock('./instanceFeatures.js', () => ({
+  isInstanceFeatureEnabled: vi.fn().mockResolvedValue(true),
 }))
 
 vi.mock('../lib/ports.js', () => ({
@@ -120,6 +125,7 @@ import {
   deleteTemplateTask,
   resetExecutionHistory,
   triggerOnDemandTask,
+  getOnDemandRequests,
   getScheduleStatus,
   computePerpetualRecheckAt,
   parkPerpetual,
@@ -160,19 +166,21 @@ import { DEFAULT_TASK_PROMPTS, PREVIOUS_DEFAULT_PROMPTS } from './taskPromptDefa
 // The source of truth for "this type's deliverable is a side effect, not a commit"
 // — the posture guard below iterates it so the two can't drift apart.
 import { NON_COMMITTING_COORDINATOR_TASK_TYPES } from './taskTypeHooks.js'
+import { enforceManagedAgentOptions } from './taskScheduleRegistry.js'
 
 import { loadState } from './cosState.js'
 
 import { readJSONFile } from '../lib/fileUtils.js'
 import { writeFile } from 'fs/promises'
-import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, clearAllPrWatcherState } from './apps.js'
+import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, clearAllPrWatcherState, clearAllIssueWatcherState } from './apps.js'
 import { getLocalParts } from '../lib/timezone.js'
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js'
 import { parseCronToNextRun, parseCronToPrevRun } from './eventScheduler.js'
 import { addNotification, exists as notificationExists, removeByMetadata } from './notifications.js'
+import { isInstanceFeatureEnabled } from './instanceFeatures.js'
 
-const mockSchedule = ({ tasks = {}, executions = {}, templates = [] } = {}) => {
-  readJSONFile.mockResolvedValue({ version: 2, tasks, executions, templates })
+const mockSchedule = ({ tasks = {}, executions = {}, templates = [], onDemandRequests = [] } = {}) => {
+  readJSONFile.mockResolvedValue({ version: 2, tasks, executions, templates, onDemandRequests })
 }
 
 // Resolve "the most recent 9 AM in the past, local time." Bare
@@ -191,6 +199,7 @@ const recentNineAm = () => {
 describe('taskSchedule', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    isInstanceFeatureEnabled.mockResolvedValue(true)
     // Default: no saved schedule → use defaults
     readJSONFile.mockResolvedValue(null)
   })
@@ -230,6 +239,25 @@ describe('taskSchedule', () => {
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('performance')
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('dependency-updates')
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('do-replan')
+    })
+  })
+
+  describe('feature-gated shipped tasks', () => {
+    it('associates both shipped JIRA tasks with the JIRA instance feature', () => {
+      expect(DEFAULT_TASK_INTERVALS['jira-sprint-manager'].feature).toBe('jira')
+      expect(DEFAULT_TASK_INTERVALS['jira-status-report'].feature).toBe('jira')
+    })
+
+    it('keeps the shipped feature association authoritative over persisted state', async () => {
+      mockSchedule({ tasks: {
+        'jira-sprint-manager': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, feature: 'post' },
+        security: { type: INTERVAL_TYPES.WEEKLY, enabled: true, feature: 'jira' },
+      } })
+
+      const schedule = await loadSchedule()
+
+      expect(schedule.tasks['jira-sprint-manager'].feature).toBe('jira')
+      expect(schedule.tasks.security).not.toHaveProperty('feature')
     })
   })
 
@@ -273,10 +301,11 @@ describe('taskSchedule', () => {
   })
 
   describe('layered-intelligence (programmatic-I/O agent task)', () => {
-    it('is registered as a self-improvement task with a description and a daily default', () => {
+    it('is registered as a self-improvement task with a description and an on-demand default', () => {
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('layered-intelligence');
-      expect(TASK_TYPE_DESCRIPTIONS['layered-intelligence']).toBeTruthy();
-      expect(DEFAULT_TASK_INTERVALS['layered-intelligence']).toMatchObject({ type: 'daily', enabled: false });
+      expect(TASK_TYPE_DESCRIPTIONS['layered-intelligence']).toContain('performance metrics');
+      expect(TASK_TYPE_DESCRIPTIONS['layered-intelligence']).toContain('visibility gap');
+      expect(DEFAULT_TASK_INTERVALS['layered-intelligence']).toMatchObject({ type: INTERVAL_TYPES.ON_DEMAND, enabled: true });
     });
 
     it('has NO default prompt — the buildTaskInput hook renders it', () => {
@@ -308,11 +337,28 @@ describe('taskSchedule', () => {
     });
   });
 
+  describe('issue-watcher (programmatic-I/O agent task)', () => {
+    it('ships as an enabled on-demand task with a 30-minute fallback and no persisted prompt', () => {
+      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('issue-watcher');
+      expect(DEFAULT_TASK_INTERVALS['issue-watcher']).toMatchObject({
+        type: INTERVAL_TYPES.ON_DEMAND, intervalMs: 30 * 60 * 1000, enabled: true, prompt: null
+      });
+      expect(DEFAULT_TASK_PROMPTS['issue-watcher']).toBeUndefined();
+    });
+
+    it('locks the reasoning-only throwaway-worktree posture', () => {
+      expect(MANAGED_AGENT_OPTIONS['issue-watcher']).toEqual(['useWorktree', 'openPR', 'discardWorktree']);
+      const config = { taskMetadata: { useWorktree: false, openPR: true, discardWorktree: false } };
+      expect(enforceManagedAgentOptions('issue-watcher', config)).toBe(true);
+      expect(config.taskMetadata).toMatchObject({ useWorktree: true, openPR: false, discardWorktree: true });
+    });
+  });
+
   describe('do-replan task type', () => {
-    it('should default to weekly, disabled, with worktree+PR metadata', async () => {
+    it('should default to on-demand and enabled, with worktree+PR metadata', async () => {
       const interval = await getTaskInterval('do-replan')
-      expect(interval.type).toBe('weekly')
-      expect(interval.enabled).toBe(false)
+      expect(interval.type).toBe(INTERVAL_TYPES.ON_DEMAND)
+      expect(interval.enabled).toBe(true)
       expect(interval.taskMetadata?.useWorktree).toBe(true)
       expect(interval.taskMetadata?.openPR).toBe(true)
     })
@@ -340,6 +386,17 @@ describe('taskSchedule', () => {
       expect(schedule.executions).toBeDefined()
     })
 
+    it('installs every registered task as an enabled on-demand action', async () => {
+      const schedule = await loadSchedule()
+
+      for (const taskType of SELF_IMPROVEMENT_TASK_TYPES) {
+        expect(schedule.tasks[taskType], taskType).toMatchObject({
+          type: INTERVAL_TYPES.ON_DEMAND,
+          enabled: true
+        })
+      }
+    })
+
     it('should load and return existing v2 schedule', async () => {
       mockSchedule({
         tasks: { 'security': { type: 'weekly', enabled: true, providerId: 'p1', model: 'm1', prompt: null } }
@@ -349,6 +406,16 @@ describe('taskSchedule', () => {
       expect(schedule.version).toBe(2)
       expect(schedule.tasks['security'].enabled).toBe(true)
       expect(schedule.tasks['security'].providerId).toBe('p1')
+    })
+
+    it('preserves an existing paused cadence when loading new defaults', async () => {
+      mockSchedule({
+        tasks: { security: { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null } }
+      })
+
+      const schedule = await loadSchedule()
+
+      expect(schedule.tasks.security).toMatchObject({ type: INTERVAL_TYPES.WEEKLY, enabled: false })
     })
 
     it('should merge defaults for missing task types', async () => {
@@ -427,6 +494,171 @@ describe('taskSchedule', () => {
     })
   })
 
+  describe('promptSource provenance (issue #5432)', () => {
+    // The self-heal above clears promptCustomized whenever the stored prompt
+    // byte-matches ANY shipped default (current or retired). That is right for a
+    // flag the legacy migration guessed at, but it cannot tell that apart from a
+    // user who deliberately pasted an older SHIPPED body into Settings →
+    // Scheduled Tasks — that pin was cleared on the next load and the next
+    // PROMPT_VERSIONS bump silently overwrote their chosen text. promptSource
+    // records which of the two wrote the flag.
+    const portosDocPrompt = PREVIOUS_DEFAULT_PROMPTS['documentation'].find((p) => p.includes('PortOS'))
+
+    const loadDocumentation = async (config) => {
+      mockSchedule({
+        tasks: { 'documentation': { type: 'once', enabled: false, providerId: null, model: null, ...config } }
+      })
+      return (await loadSchedule()).tasks['documentation']
+    }
+
+    it('keeps a user-pinned retired default pinned instead of self-healing it', async () => {
+      const task = await loadDocumentation({
+        prompt: portosDocPrompt,
+        promptVersion: 1,
+        promptCustomized: true,
+        promptSource: 'user'
+      })
+      expect(task.promptCustomized).toBe(true)
+      expect(task.prompt).toBe(portosDocPrompt)
+    })
+
+    it('still self-heals a legacy-inferred flag on a retired default', async () => {
+      const task = await loadDocumentation({
+        prompt: portosDocPrompt,
+        promptVersion: 1,
+        promptCustomized: true,
+        promptSource: 'legacy-inferred'
+      })
+      expect(task.promptCustomized).toBe(false)
+      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['documentation'])
+    })
+
+    // Every install that upgrades into this field carries no promptSource at all.
+    // Absent must keep behaving exactly as it does today, or the upgrade itself
+    // would freeze thousands of mis-flagged prompts on their retired bodies.
+    it('treats an absent promptSource as legacy-inferred (self-heals, as today)', async () => {
+      const task = await loadDocumentation({
+        prompt: portosDocPrompt,
+        promptVersion: 1,
+        promptCustomized: true
+      })
+      expect(task.promptSource).toBeUndefined()
+      expect(task.promptCustomized).toBe(false)
+      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['documentation'])
+    })
+
+    it('stamps legacy-inferred when the legacy migration flags an unrecognized body', async () => {
+      const custom = 'A documentation prompt that matches no shipped default at all.'
+      // No promptVersion → the legacy-migration branch runs.
+      const task = await loadDocumentation({ prompt: custom })
+      expect(task.promptCustomized).toBe(true)
+      expect(task.promptSource).toBe('legacy-inferred')
+    })
+
+    it('drops a stale promptSource when the config has no prompt to pin', async () => {
+      const task = await loadDocumentation({ prompt: null, promptSource: 'user' })
+      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['documentation'])
+      expect(task.promptSource).toBeNull()
+    })
+
+    it('survives a PROMPT_VERSIONS bump when the pin is user-sourced', async () => {
+      const original = PROMPT_VERSIONS['documentation']
+      PROMPT_VERSIONS['documentation'] = original + 1
+      try {
+        const task = await loadDocumentation({
+          prompt: portosDocPrompt,
+          promptVersion: original,
+          promptCustomized: true,
+          promptSource: 'user'
+        })
+        expect(task.prompt).toBe(portosDocPrompt)
+        expect(task.promptVersion).toBe(original)
+      } finally {
+        PROMPT_VERSIONS['documentation'] = original
+      }
+    })
+
+    it('upgrades the same body across a bump when the pin is legacy-inferred', async () => {
+      const original = PROMPT_VERSIONS['documentation']
+      PROMPT_VERSIONS['documentation'] = original + 1
+      try {
+        const task = await loadDocumentation({
+          prompt: portosDocPrompt,
+          promptVersion: original,
+          promptCustomized: true,
+          promptSource: 'legacy-inferred'
+        })
+        expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['documentation'])
+        expect(task.promptVersion).toBe(original + 1)
+      } finally {
+        PROMPT_VERSIONS['documentation'] = original
+      }
+    })
+  })
+
+  describe('pre-unification prompt generations (self- + app-improvement split)', () => {
+    // Before the two improvement schedules were unified, every basic task
+    // shipped up to two bodies with different headers — `[Self-Improvement] …`
+    // and `[App Improvement: {appName}] …`. Unification replaced both with a
+    // single `[Improvement: {appName}] …` body but preserved neither, so an
+    // install carrying either generation stopped matching any shipped default,
+    // was stamped promptCustomized by the legacy migration, and has been frozen
+    // out of every prompt upgrade since — nine task types on a real install.
+    const fromEra = (taskType, header) =>
+      PREVIOUS_DEFAULT_PROMPTS[taskType].find((p) => p.startsWith(header))
+
+    const loadOne = async (taskType, prompt, promptVersion) => {
+      mockSchedule({
+        tasks: { [taskType]: { type: 'once', enabled: false, providerId: null, model: null, prompt, promptVersion, promptCustomized: true } }
+      })
+      return (await loadSchedule()).tasks[taskType]
+    }
+
+    // One case per shape the freeze took: header-only drift, a body that also
+    // changed, a type whose ONLY revision was the split (so it had no
+    // PROMPT_VERSIONS entry at all), and the older self-improvement generation.
+    //
+    // Each runs under BOTH version stamps a frozen install can carry. The
+    // legacy migration wrote `promptVersion = PROMPT_VERSIONS[taskType]`
+    // alongside the customized flag, so an install flagged after its type was
+    // versioned holds the CURRENT version with a RETIRED body — and clearing
+    // the flag alone leaves `storedVersion < current` false, so the upgrade
+    // never fires. Testing only the version-1 stamp misses that entirely.
+    const ERAS = [
+      ['console-errors', '[App Improvement: '],
+      ['security', '[App Improvement: '],
+      ['typing', '[App Improvement: '],
+      ['console-errors', '[Self-Improvement] '],
+      ['feature-ideas', '[Self-Improvement] '],
+    ]
+    it.each(ERAS.flatMap(([taskType, header]) => [
+      [taskType, header, 'pre-versioning', 1],
+      [taskType, header, 'current-version', PROMPT_VERSIONS[taskType]],
+    ]))('self-heals and upgrades a stored %s prompt from the %s generation (%s stamp)', async (taskType, header, _label, storedVersion) => {
+      const prompt = fromEra(taskType, header)
+      expect(prompt, `no ${header} body registered for ${taskType}`).toBeDefined()
+      const task = await loadOne(taskType, prompt, storedVersion)
+      expect(task.promptCustomized).toBe(false)
+      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS[taskType])
+      expect(task.promptVersion).toBe(PROMPT_VERSIONS[taskType])
+    })
+
+    it('preserves a genuine user customization that merely mimics a retired header', async () => {
+      const custom = '[App Improvement: {appName}] My own audit that matches no shipped default.'
+      const task = await loadOne('console-errors', custom, 1)
+      expect(task.prompt).toBe(custom)
+      expect(task.promptCustomized).toBe(true)
+    })
+
+    // Pins the provenance of the frozen feature-ideas body: it is the one that
+    // sent every run to `data/COS-GOALS.md`, a file the same unification folded
+    // into the root GOALS.md. The upgrade itself is covered above.
+    it('pins the frozen feature-ideas body as the COS-GOALS.md-era default', () => {
+      expect(fromEra('feature-ideas', '[Self-Improvement] ')).toContain('data/COS-GOALS.md')
+      expect(DEFAULT_TASK_PROMPTS['feature-ideas']).not.toContain('COS-GOALS.md')
+    })
+  })
+
   describe('changelog-fragment prompt revision (issue #3998)', () => {
     // Pins that each task type touched by this revision actually participates in
     // the auto-upgrade path: it is in PROMPT_VERSIONS, loadSchedule walks it, and
@@ -476,7 +708,8 @@ describe('taskSchedule', () => {
   describe('getTaskInterval', () => {
     it('should return interval for known task type', async () => {
       const interval = await getTaskInterval('security')
-      expect(interval.type).toBe('weekly')
+      expect(interval.type).toBe(INTERVAL_TYPES.ON_DEMAND)
+      expect(interval.enabled).toBe(true)
     })
 
     it('should return disabled defaults for unknown task type', async () => {
@@ -551,6 +784,57 @@ describe('taskSchedule', () => {
       expect(result.promptCustomized).toBe(false)
     })
 
+    // An explicit prompt write is the ONE source of a 'user' pin (#5432) — it is
+    // what makes the store's self-heal leave a retired-but-deliberate body alone.
+    it('should stamp promptSource "user" when a custom prompt is written', async () => {
+      const result = await updateTaskInterval('security', {
+        prompt: 'Custom security audit prompt'
+      })
+      expect(result.promptSource).toBe('user')
+    })
+
+    // The prompt editor prefills from the stored body, so "open, click Save" sends
+    // back the CURRENT default verbatim. That must not pin — a pin is checked by
+    // the self-heal only when its provenance is inferred, so a 'user' stamp here
+    // would freeze the type off every future prompt upgrade with no way back.
+    it('should not pin a prompt that is byte-identical to the current default', async () => {
+      const result = await updateTaskInterval('security', {
+        prompt: DEFAULT_TASK_PROMPTS['security']
+      })
+      expect(result.promptCustomized).toBe(false)
+      expect(result.promptSource).toBeNull()
+    })
+
+    // A RETIRED shipped body IS a deliberate choice — the #5432 case.
+    it('should pin a retired shipped default written by the user', async () => {
+      const retired = PREVIOUS_DEFAULT_PROMPTS['security'][0]
+      const result = await updateTaskInterval('security', { prompt: retired })
+      expect(result.promptCustomized).toBe(true)
+      expect(result.promptSource).toBe('user')
+    })
+
+    it('should clear promptSource when the prompt is set to null', async () => {
+      const result = await updateTaskInterval('security', {
+        prompt: null
+      })
+      expect(result.promptSource).toBeNull()
+    })
+
+    it('should preserve an existing pin when the write does not touch the prompt', async () => {
+      mockSchedule({
+        tasks: {
+          'security': {
+            type: 'weekly', enabled: false, providerId: null, model: null,
+            prompt: 'A pinned body that matches no shipped default.',
+            promptVersion: 2, promptCustomized: true, promptSource: 'user'
+          }
+        }
+      })
+      const result = await updateTaskInterval('security', { enabled: true })
+      expect(result.promptSource).toBe('user')
+      expect(result.promptCustomized).toBe(true)
+    })
+
     it('should create new task entry for unknown type', async () => {
       const result = await updateTaskInterval('custom-type', {
         type: 'daily',
@@ -571,6 +855,12 @@ describe('taskSchedule', () => {
       await updateTaskInterval('pr-watcher', { enabled: true })
       await updateTaskInterval('security', { enabled: false })
       expect(clearAllPrWatcherState).not.toHaveBeenCalled()
+    })
+
+    it('clears all issue-watcher state when issue-watcher is globally disabled', async () => {
+      clearAllIssueWatcherState.mockClear()
+      await updateTaskInterval('issue-watcher', { enabled: false })
+      expect(clearAllIssueWatcherState).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -682,6 +972,15 @@ describe('taskSchedule', () => {
   })
 
   describe('shouldRunTask', () => {
+    it('does not run a task whose required instance feature is disabled', async () => {
+      isInstanceFeatureEnabled.mockResolvedValue(false)
+      mockSchedule({ tasks: { 'jira-sprint-manager': { type: 'rotation', enabled: true } } })
+
+      const result = await shouldRunTask('jira-sprint-manager')
+
+      expect(result).toEqual({ shouldRun: false, reason: 'feature-disabled', feature: 'jira' })
+    })
+
     it('should not run disabled task', async () => {
       mockSchedule({
         tasks: { 'disabled-task': { type: 'weekly', enabled: false, providerId: null, model: null, prompt: null } }
@@ -849,6 +1148,22 @@ describe('taskSchedule', () => {
           isTaskTypeEnabledForApp.mockReset()
         }
       }
+    })
+
+    it('feature-ideas ignores an enabled on-demand do-replan dependency', async () => {
+      const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
+
+      mockSchedule({
+        tasks: {
+          'feature-ideas': { type: 'daily', enabled: true, providerId: null, model: null, prompt: null },
+          'do-replan': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null }
+        },
+        executions: { 'task:feature-ideas': { lastRun: twoDaysAgo, count: 1, perApp: {} } }
+      })
+
+      const result = await shouldRunTask('feature-ideas')
+      expect(result.shouldRun).toBe(true)
+      expect(result.reason).toContain('daily-due')
     })
 
     it('feature-ideas runs when do-replan has run since its last run', async () => {
@@ -1020,6 +1335,15 @@ describe('taskSchedule', () => {
 
       const result = await getNextTaskType(null, 'code-quality')
       expect(result.taskType).toBe('error-handling')
+    })
+
+    it('does not select a feature-disabled rotation task', async () => {
+      isInstanceFeatureEnabled.mockResolvedValue(false)
+      mockSchedule({ tasks: {
+        'jira-sprint-manager': { type: INTERVAL_TYPES.ROTATION, enabled: true },
+      } })
+
+      expect(await getNextTaskType()).toBeNull()
     })
 
     it('prefers a due cron task over a perpetually-ready weekly task', async () => {
@@ -1299,8 +1623,8 @@ describe('taskSchedule', () => {
 
     it('defaults to self-filed issues with worktree/PR managed by the agent', () => {
       const cfg = DEFAULT_TASK_INTERVALS['claim-issue']
-      expect(cfg.type).toBe(INTERVAL_TYPES.DAILY)
-      expect(cfg.enabled).toBe(false)
+      expect(cfg.type).toBe(INTERVAL_TYPES.ON_DEMAND)
+      expect(cfg.enabled).toBe(true)
       // Default is the slashdo /do:next --self security boundary.
       expect(cfg.taskMetadata.issueAuthorFilter).toBe('self')
       // Mirrors plan-task: the agent creates its own worktree + opens the PR,
@@ -1327,11 +1651,11 @@ describe('taskSchedule', () => {
       expect(TASK_TYPE_DESCRIPTIONS['ux']).toBe('UX/design audit — file issues (default) or implement fixes')
     })
 
-    it('defaults to weekly + disabled with file-issues on (worktree/PR off)', () => {
+    it('defaults to on-demand + enabled with file-issues on (worktree/PR off)', () => {
       const cfg = DEFAULT_TASK_INTERVALS['ux']
-      expect(cfg.type).toBe(INTERVAL_TYPES.WEEKLY)
-      // Off by default — enabling it is the user's consent to a weekly LLM run.
-      expect(cfg.enabled).toBe(false)
+      expect(cfg.type).toBe(INTERVAL_TYPES.ON_DEMAND)
+      // Manual Run is explicit consent; choosing a cadence opts into scheduling.
+      expect(cfg.enabled).toBe(true)
       expect(cfg.taskMetadata.fileIssues).toBe(true)
       expect(cfg.taskMetadata.useWorktree).toBe(false)
       expect(cfg.taskMetadata.openPR).toBe(false)
@@ -1365,11 +1689,11 @@ describe('taskSchedule', () => {
       expect(TASK_TYPE_DESCRIPTIONS['plan-feature']).toBeTruthy()
     })
 
-    it('defaults to weekly + disabled, grounded on do-replan, with no worktree/PR', () => {
+    it('defaults to on-demand + enabled, grounded on do-replan, with no worktree/PR', () => {
       const cfg = DEFAULT_TASK_INTERVALS['plan-feature']
-      expect(cfg.type).toBe(INTERVAL_TYPES.WEEKLY)
-      // Off by default — enabling it is the user's consent to scheduled LLM runs.
-      expect(cfg.enabled).toBe(false)
+      expect(cfg.type).toBe(INTERVAL_TYPES.ON_DEMAND)
+      // Manual Run is explicit consent; choosing a cadence opts into scheduling.
+      expect(cfg.enabled).toBe(true)
       // Refresh the configured work tracker before filing a new proposal.
       expect(cfg.runAfter).toEqual(['do-replan'])
       expect(cfg.dataInputs).toEqual([
@@ -1419,13 +1743,13 @@ describe('taskSchedule', () => {
   })
 
   describe('audit file-issues types', () => {
-    it('registers data-safety and simplify as disabled weekly file-issues audits', () => {
+    it('registers data-safety and simplify as enabled on-demand file-issues audits', () => {
       for (const taskType of ['data-safety', 'simplify']) {
         expect(SELF_IMPROVEMENT_TASK_TYPES).toContain(taskType)
         expect(TASK_TYPE_DESCRIPTIONS[taskType]).toBeTruthy()
         const cfg = DEFAULT_TASK_INTERVALS[taskType]
-        expect(cfg.type).toBe(INTERVAL_TYPES.WEEKLY)
-        expect(cfg.enabled).toBe(false)
+        expect(cfg.type).toBe(INTERVAL_TYPES.ON_DEMAND)
+        expect(cfg.enabled).toBe(true)
         expect(cfg.taskMetadata.fileIssues).toBe(true)
         expect(cfg.taskMetadata.useWorktree).toBe(false)
         expect(cfg.taskMetadata.openPR).toBe(false)
@@ -1524,6 +1848,39 @@ describe('taskSchedule', () => {
       expect(result.error).toMatch(/'feature-ideas' is disabled/i)
       // loadState should not have been called — task-type check short-circuits before loadState.
       expect(loadState).not.toHaveBeenCalled()
+    })
+
+    it('rejects a manual run when the task feature is disabled', async () => {
+      isInstanceFeatureEnabled.mockResolvedValue(false)
+      mockSchedule({ tasks: { 'jira-sprint-manager': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true } } })
+
+      const result = await triggerOnDemandTask('jira-sprint-manager', 'app-1')
+
+      expect(result.error).toMatch(/requires the 'jira' feature/i)
+      expect(loadState).not.toHaveBeenCalled()
+    })
+
+    it('does not dispatch a queued request after its task feature is disabled', async () => {
+      isInstanceFeatureEnabled.mockResolvedValue(false)
+      mockSchedule({
+        tasks: { 'jira-sprint-manager': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true } },
+        onDemandRequests: [{ id: 'demand-existing', taskType: 'jira-sprint-manager', appId: 'app-1' }],
+      })
+
+      expect(await getOnDemandRequests()).toEqual([])
+    })
+
+    it('should accept a manual run for an enabled on-demand task', async () => {
+      mockSchedule({
+        tasks: { 'security': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true } }
+      })
+
+      const result = await triggerOnDemandTask('security', 'app-1')
+
+      expect(result.error).toBeUndefined()
+      expect(result.taskType).toBe('security')
+      expect(result.appId).toBe('app-1')
+      expect(result.origin).toBe(ON_DEMAND_ORIGINS.USER)
     })
 
     it('should reject unknown task types instead of silently queuing them', async () => {
@@ -1642,6 +1999,16 @@ describe('taskSchedule', () => {
       const status = await getScheduleStatus()
 
       expect(status.improvementEnabled).toBe(false)
+    })
+
+    it('hides shipped tasks whose required instance feature is disabled', async () => {
+      isInstanceFeatureEnabled.mockResolvedValue(false)
+      mockSchedule({ tasks: { 'jira-sprint-manager': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true } } })
+
+      const status = await getScheduleStatus()
+
+      expect(status.tasks).not.toHaveProperty('jira-sprint-manager')
+      expect(status.tasks).not.toHaveProperty('jira-status-report')
     })
   })
 

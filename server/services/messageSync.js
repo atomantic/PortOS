@@ -15,7 +15,7 @@ const syncLocks = new Map();
 
 // Per-account cache write tail. EVERY load→mutate→saveCache region for an account
 // routes through this single tail so it serializes against the account's sync and
-// against every other mutator (#2537): `syncAccount`, `refreshMessage`, and
+// against every other mutator (#2537): `syncAccount`, `refreshMessages`, and
 // `updateMessageEvaluations` all share the one `${accountId}.json` cache file, so
 // two that interleave their load/save would clobber each other's writes. The tail
 // makes each one await the previous and re-read the freshest persisted state
@@ -343,46 +343,17 @@ export async function syncAccount(accountId, io, options = {}) {
   return result;
 }
 
-export async function refreshMessage(accountId, messageId) {
-  // Serialize the whole load→extract→mutate→save region through the per-account
-  // tail (#2537) so a concurrent sync or evaluation update can't clobber the
-  // refreshed body (and vice versa). The cache is (re)loaded inside the tail so
-  // it merges against the freshest persisted state.
-  return queueAccountWrite(accountId, async () => {
-  const cache = await loadCache(accountId);
-  const message = cache.messages.find(m => m.id === messageId);
-  if (!message) {
-    console.log(`📧 Refresh: message ${messageId} not found in cache`);
-    return null;
-  }
-
-  const account = await getAccount(accountId);
-  if (!account) {
-    console.log(`📧 Refresh: account ${accountId} not found`);
-    return null;
-  }
-
-  console.log(`📧 Refreshing "${message.subject}" via ${account.type}`);
-  const { refreshMessageDetail } = await import('./messagePlaywrightSync.js');
-  const detail = await refreshMessageDetail(account, message);
-  // Structured error from refreshMessageDetail
-  if (detail && detail.error) return detail;
-  if (!detail || !Array.isArray(detail) || detail.length === 0) {
-    console.log(`📧 Refresh: no detail returned`);
-    return { error: 'extraction-failed', message: 'Could not extract message content — the message may not be visible in the Outlook inbox' };
-  }
-
+function mergeRefreshedMessage(cache, existingByExternalId, accountId, source, message, detail) {
   function makeExternalId(date, sender, subject) {
     return 'pw-' + createHash('md5').update(`${date}|${sender}|${subject}`).digest('hex').slice(0, 12);
   }
 
-  const threadKey = message.threadId || `thread-${message.externalId || messageId}`;
-  const existingMap = new Map(cache.messages.filter(m => m.externalId).map(m => [m.externalId, m]));
+  const threadKey = message.threadId || `thread-${message.externalId || message.id}`;
   const updatedMessages = [];
 
   for (const threadMsg of detail) {
     const extId = makeExternalId(threadMsg.date || message.date || '', threadMsg.from || message.from?.name || '', message.subject || '');
-    const existing = existingMap.get(extId);
+    const existing = existingByExternalId.get(extId);
     if (existing) {
       // Use ?? not ||: a genuinely empty-body message (body === '') is a valid
       // full extraction and must overwrite the old text, not collapse back to it
@@ -413,10 +384,11 @@ export async function refreshMessage(accountId, messageId) {
         isReplied: message.isReplied ?? false,
         hasMeetingInvite: message.hasMeetingInvite ?? false,
         labels: [],
-        source: account.type,
+        source,
         syncedAt: new Date().toISOString()
       };
       cache.messages.push(newMsg);
+      existingByExternalId.set(extId, newMsg);
       updatedMessages.push(newMsg);
     }
   }
@@ -431,9 +403,62 @@ export async function refreshMessage(accountId, messageId) {
     updatedMessages.push(message);
   }
 
-  await saveCache(accountId, cache);
   return updatedMessages.map(m => ({ ...m, accountId }));
+}
+
+export async function refreshMessages(accountId, messageIds) {
+  if (messageIds.length === 0) return { results: [], updated: 0 };
+
+  // A full-body refresh can touch hundreds of messages. Keep the whole batch in
+  // the existing per-account write queue so it loads and saves the shared cache
+  // once instead of rewriting the complete JSON file for every message.
+  return queueAccountWrite(accountId, async () => {
+    const cache = await loadCache(accountId);
+    const account = await getAccount(accountId);
+    if (!account) {
+      console.log(`📧 Refresh: account ${accountId} not found`);
+      return { results: messageIds.map(() => null), updated: 0 };
+    }
+
+    const { refreshMessageDetail } = await import('./messagePlaywrightSync.js');
+    const messagesById = new Map(cache.messages.map(message => [message.id, message]));
+    const existingByExternalId = new Map(cache.messages.filter(message => message.externalId).map(message => [message.externalId, message]));
+    const results = [];
+    let updated = 0;
+
+    for (const messageId of messageIds) {
+      const message = messagesById.get(messageId);
+      if (!message) {
+        console.log(`📧 Refresh: message ${messageId} not found in cache`);
+        results.push(null);
+        continue;
+      }
+
+      console.log(`📧 Refreshing "${message.subject}" via ${account.type}`);
+      const detail = await refreshMessageDetail(account, message);
+      // Structured error from refreshMessageDetail
+      if (detail && detail.error) {
+        results.push(detail);
+        continue;
+      }
+      if (!detail || !Array.isArray(detail) || detail.length === 0) {
+        console.log(`📧 Refresh: no detail returned`);
+        results.push({ error: 'extraction-failed', message: 'Could not extract message content — the message may not be visible in the Outlook inbox' });
+        continue;
+      }
+
+      results.push(mergeRefreshedMessage(cache, existingByExternalId, accountId, account.type, message, detail));
+      updated++;
+    }
+
+    if (updated > 0) await saveCache(accountId, cache);
+    return { results, updated };
   });
+}
+
+export async function refreshMessage(accountId, messageId) {
+  const { results } = await refreshMessages(accountId, [messageId]);
+  return results[0] ?? null;
 }
 
 export async function updateMessageEvaluations(evaluations) {

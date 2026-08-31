@@ -8,8 +8,16 @@
  * failure, and it names the shadowed-global-npm case that makes the version
  * skew hard to spot.
  */
-import { describe, it, expect, vi } from 'vitest';
-import { existsSync, readFileSync } from 'fs';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'fs';
+import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -23,6 +31,11 @@ import {
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const readJson = (rel) => JSON.parse(readFileSync(join(REPO_ROOT, rel), 'utf8'));
+const tempRoots = [];
+
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
 
 describe('MIN_NPM', () => {
   it('is the npm major whose lockfile writer records `libc`', () => {
@@ -70,10 +83,21 @@ describe('readBundledNpmVersion', () => {
     expect(readBundledNpmVersion(join(REPO_ROOT, 'no', 'such', 'node'))).toBeNull();
   });
 
-  it('reads the running Node’s own bundled npm', () => {
-    // Every supported Node ships an npm; a null here means the layout probe
-    // stopped matching reality, which would silently drop the shadowing hint.
-    expect(readBundledNpmVersion()).toMatch(/^\d+\.\d+\.\d+/);
+  it('reads bundled npm from both supported Node install layouts', () => {
+    const root = mkdtempSync(join(tmpdir(), 'portos-npm-version-'));
+    tempRoots.push(root);
+
+    const adjacentBin = join(root, 'adjacent', 'bin');
+    const adjacentManifest = join(adjacentBin, 'node_modules', 'npm', 'package.json');
+    mkdirSync(dirname(adjacentManifest), { recursive: true });
+    writeFileSync(adjacentManifest, JSON.stringify({ version: '11.17.0' }));
+    expect(readBundledNpmVersion(join(adjacentBin, 'node'))).toBe('11.17.0');
+
+    const prefixBin = join(root, 'prefix', 'bin');
+    const prefixManifest = join(root, 'prefix', 'lib', 'node_modules', 'npm', 'package.json');
+    mkdirSync(dirname(prefixManifest), { recursive: true });
+    writeFileSync(prefixManifest, JSON.stringify({ version: '12.0.1' }));
+    expect(readBundledNpmVersion(join(prefixBin, 'node'))).toBe('12.0.1');
   });
 });
 
@@ -154,10 +178,32 @@ describe('the advisory is actually reachable', () => {
   });
 });
 
+describe('PortOS-managed installs preserve committed lockfiles', () => {
+  it('passes --no-save through every setup, update, and dependency-repair install', () => {
+    const managedEntrypoints = [
+      ['package.json', /npm install(?: --prefix \w+)?/g],
+      ['setup.ps1', /^npm install/gm],
+      ['update.ps1', /Invoke-Logged npm install/g],
+      ['update.sh', /run npm install/g],
+      ['scripts/ensure-deps.js', /npmSpawn\(\['install'/g],
+    ];
+
+    for (const [rel, installPattern] of managedEntrypoints) {
+      const body = readFileSync(join(REPO_ROOT, rel), 'utf8');
+      const installs = [...body.matchAll(installPattern)];
+      expect(installs.length, `${rel} has no managed npm installs to verify`).toBeGreaterThan(0);
+      for (const install of installs) {
+        const command = body.slice(install.index, install.index + 80);
+        expect(command, `${rel}: ${install[0]} must preserve package-lock.json`).toContain('--no-save');
+      }
+    }
+  });
+});
+
 describe('the floor is declared where npm itself reads it', () => {
   // The three scripts above cover `npm run setup|start|dev` and nothing else.
-  // `cd client && npm install`, `npm i <pkg>` and `npm ci` are how the lockfile
-  // churn actually gets introduced, and only `engines.npm` reaches those.
+  // Direct `cd client && npm install` and `npm i <pkg>` are how lockfile churn
+  // still gets introduced; only `engines.npm` reaches those authoring paths.
   const MANIFESTS = ['package.json', 'client/package.json', 'server/package.json', 'autofixer/package.json'];
 
   it.each(MANIFESTS)('%s declares engines.npm = the floor', (rel) => {

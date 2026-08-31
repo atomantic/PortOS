@@ -394,6 +394,10 @@ export default function UpdateTab() {
     const n = installState.pendingMigrations.count;
     installIssues.push(`${n} pending data migration${n === 1 ? '' : 's'} not yet applied.`);
   }
+  if (installState?.submodules?.stale) {
+    const n = installState.submodules.paths?.length || 0;
+    installIssues.push(`${n || 'One or more'} submodule checkout${n === 1 ? ' is' : 's are'} out of sync with the revisions pinned by PortOS.`);
+  }
 
   return (
     <div className="space-y-6">
@@ -471,7 +475,7 @@ export default function UpdateTab() {
               <div className="text-xs text-gray-400 mt-1">
                 Your checked-out code is ahead of what’s running or installed — this happens after a
                 manual <span className="font-mono">git pull</span> without <span className="font-mono">./update.sh</span>.
-                Reconcile to finish the update (install dependencies, rebuild, run migrations, restart).
+                Reconcile to finish the update (sync submodules, install dependencies, rebuild, run migrations, restart).
               </div>
               <ul className="text-xs text-gray-300 mt-2 space-y-1 list-disc list-inside">
                 {installIssues.map((msg, i) => (
@@ -485,7 +489,7 @@ export default function UpdateTab() {
                       onClick={handleSyncForkAndReconcile}
                       disabled={updating || polling || syncingFork}
                       className="px-4 py-2 bg-port-warning text-black rounded-lg text-sm flex items-center gap-2 hover:bg-port-warning/80 disabled:opacity-50"
-                      title={`Fast-forwards ${remote?.fullName} main from ${upstreamName}, then runs update.sh to reconcile the install.`}
+                      title={`Fast-forwards ${remote?.fullName} main from ${upstreamName}, then runs update.sh to sync pinned submodules and reconcile the install.`}
                     >
                       <GitFork size={14} className={syncingFork ? 'animate-pulse' : ''} />
                       {syncingFork ? 'Syncing fork...' : updating ? 'Reconciling...' : polling ? 'Restarting...' : 'Sync Fork & Reconcile'}
@@ -505,7 +509,7 @@ export default function UpdateTab() {
                     onClick={handleReconcile}
                     disabled={updating || polling || syncingFork}
                     className="px-4 py-2 bg-port-warning text-black rounded-lg text-sm flex items-center gap-2 hover:bg-port-warning/80 disabled:opacity-50"
-                    title="Run update.sh to install dependencies, rebuild the client, run migrations, and restart."
+                    title="Run update.sh to sync pinned submodules, install dependencies, rebuild the client, run migrations, and restart."
                   >
                     <RefreshCw size={14} className={updating ? 'animate-spin' : ''} />
                     {updating ? 'Reconciling...' : polling ? 'Restarting...' : 'Reconcile Now'}
@@ -568,7 +572,7 @@ export default function UpdateTab() {
                   onClick={handleSyncForkAndUpdate}
                   disabled={updating || polling || syncingFork}
                   className="px-4 py-2 bg-port-accent text-white rounded-lg text-sm flex items-center gap-2 hover:bg-port-accent/80 disabled:opacity-50"
-                  title={`Fast-forwards ${remote?.fullName} main from ${upstreamName} via gh repo sync, then runs the local update. Refuses to overwrite divergent fork commits.`}
+                  title={`Fast-forwards ${remote?.fullName} main from ${upstreamName} via gh repo sync, then runs the local update including pinned submodules. Refuses to overwrite divergent fork commits.`}
                 >
                   <GitFork size={14} className={syncingFork ? 'animate-pulse' : ''} />
                   {syncingFork ? 'Syncing fork...' : updating ? 'Updating...' : polling ? 'Restarting...' : 'Sync Fork & Update'}
@@ -588,7 +592,7 @@ export default function UpdateTab() {
                   onClick={handleUpdateFromForkAsIs}
                   disabled={updating || polling || syncingFork}
                   className="px-4 py-2 bg-port-border text-gray-400 rounded-lg text-sm flex items-center gap-2 hover:bg-port-border/80 hover:text-white disabled:opacity-50"
-                  title="Skip the fork sync and pull from your fork's origin as-is. Use this if you already merged upstream into your fork via your own workflow."
+                  title="Skip the fork sync and pull from your fork's origin as-is, then sync pinned submodules. Use this if you already merged upstream into your fork via your own workflow."
                 >
                   <Download size={14} className={updating ? 'animate-bounce' : ''} />
                   Update from Fork As-Is
@@ -601,6 +605,7 @@ export default function UpdateTab() {
                 onClick={handleUpdate}
                 disabled={updating || polling}
                 className="px-4 py-2 bg-port-accent text-white rounded-lg text-sm flex items-center gap-2 hover:bg-port-accent/80 disabled:opacity-50"
+                title="Pull PortOS, sync pinned submodules, install dependencies, rebuild, run migrations, and restart."
               >
                 <Download size={14} className={updating ? 'animate-bounce' : ''} />
                 {updating ? 'Updating...' : polling ? 'Restarting...' : 'Update Now'}

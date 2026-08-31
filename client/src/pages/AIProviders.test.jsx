@@ -651,7 +651,7 @@ describe('provider reasoning defaults', () => {
     renderPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
-    await openEditorTab('Generation');
+    await openEditorTab('Models');
 
     const effort = await screen.findByLabelText('Default Effort');
     expect(effort).toHaveValue('');
@@ -690,11 +690,12 @@ describe('provider reasoning defaults', () => {
     renderPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
-    await openEditorTab('Generation');
+    await openEditorTab('Models');
 
     const effort = await screen.findByLabelText('Default Effort');
     fireEvent.change(effort, { target: { value: 'high' } });
 
+    await openEditorTab('Generation');
     const thinking = screen.getByLabelText('Thinking mode');
     expect(thinking).toHaveValue('true');
     fireEvent.change(thinking, { target: { value: 'false' } });
@@ -731,9 +732,10 @@ describe('provider reasoning defaults', () => {
     renderPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
-    await openEditorTab('Generation');
+    await openEditorTab('Models');
 
     fireEvent.change(await screen.findByLabelText('Default Effort'), { target: { value: 'high' } });
+    await openEditorTab('Generation');
     fireEvent.change(screen.getByLabelText('Temperature'), { target: { value: '0.2' } });
     fireEvent.change(screen.getByLabelText('Top-P'), { target: { value: '0.9' } });
     expect(screen.getByLabelText('Thinking mode')).toHaveValue('true');

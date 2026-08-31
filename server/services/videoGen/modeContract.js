@@ -55,9 +55,11 @@ const DEFAULT_MESSAGES = Object.freeze({
   imageRequiresFirst: ({ model }) => `${model.name} image-to-video requires a source image — choose an existing gallery image or upload one.`,
   imageLastConflict: ({ model }) => `${model.name} image-to-video takes a single first-frame image — switch to FFLF mode to use a last frame.`,
   fflfRequiresImage: ({ model }) => `${model.name} FFLF requires a first and/or last frame image.`,
+  a2vRequiresFirst: ({ model }) => `${model.name} audio-to-video requires a reference image.`,
+  a2vRequiresAudio: ({ model }) => `${model.name} audio-to-video requires an audio file.`,
 });
 
-// H3's two runtimes share ONE row: the mode rules come from the fl2va
+// H3's text/image runtimes share ONE row: the mode rules come from the fl2va
 // checkpoint partition, not from the MLX / diffusers runner in front of it, and
 // the error codes are the same `MINIMAX_H3_*` contract on both — so both keys
 // below reference this object rather than each carrying a copy, which is
@@ -77,6 +79,55 @@ const MINIMAX_H3_CONTRACT = Object.freeze({
   }),
 });
 
+const MINIMAX_H3_REF2VA_CONTRACT = Object.freeze({
+  codePrefix: 'MINIMAX_H3_REF2VA',
+  modeCeiling: VIDEO_RUNTIME_MODES.minimax_h3_ref2va,
+  extraConditioningUnsupported: false,
+  a2vRequiresFirst: true,
+  a2vRequiresAudio: true,
+  messages: Object.freeze({
+    modeUnsupported: ({ model }) => `${model.name} supports image-and-audio to video only.`,
+    a2vRequiresFirst: () => 'MiniMax H3 Ref2VA audio-to-video requires a reference image — choose an existing gallery image or upload one.',
+    a2vRequiresAudio: () => 'MiniMax H3 Ref2VA audio-to-video requires an audio file.',
+  }),
+});
+
+const WAN22_CONTRACT = Object.freeze({
+  codePrefix: 'WAN22',
+  chainCode: 'WAN22_CHAIN_REQUIRES_IMAGE_MODE',
+  // No ceiling: MLX-Gen's Wan CLI takes whatever the profile declares, and
+  // resolveVideoSupportedModes narrows an entry that declares nothing to the
+  // wan22 row (text + image) rather than leaving it unconstrained.
+  modeCeiling: null,
+  // The wan22 lane rejects multi-keyframe / extend / audio / IC inputs by
+  // runtime elsewhere, so folding them in here would double-report.
+  extraConditioningUnsupported: false,
+  messages: {
+    modeUnsupported: ({ model, requestedMode }) => `${model.name} does not support ${requestedMode}-to-video. Choose a compatible Wan model.`,
+    textSourceConflict: () => 'Wan 2.2 text-to-video cannot consume a source image — switch to image mode or remove the source.',
+    // Two phrasings, one rule: before staging, the caller can still supply an
+    // upload; after resolution, the gallery pick they *did* supply didn't
+    // resolve, and "upload one" would be misleading advice.
+    imageRequiresFirst: ({ sourceResolved }) => (sourceResolved
+      ? 'Wan 2.2 image-to-video requires a resolvable source image — choose an existing gallery image or upload one.'
+      : 'Wan 2.2 image-to-video requires a source image — upload one before running this model.'),
+  },
+});
+
+// The CUDA helper currently exposes text generation only. Keep the existing
+// Wan error contract, but cap hand-edited or peer-synced registry entries at
+// the modes the helper can actually represent on its command line.
+const WAN22_CUDA_CONTRACT = Object.freeze({
+  ...WAN22_CONTRACT,
+  modeCeiling: VIDEO_RUNTIME_MODES.wan22_cuda,
+});
+
+const LTX25_CUDA_CONTRACT = Object.freeze({
+  codePrefix: 'LTX25_CUDA',
+  modeCeiling: VIDEO_RUNTIME_MODES.ltx25_cuda,
+  extraConditioningUnsupported: false,
+});
+
 /**
  * The per-runtime rows. `modeCeiling` is the set of modes the *helper* has
  * arguments for — a `null` ceiling means the registry entry's `supportedModes`
@@ -86,30 +137,25 @@ const MINIMAX_H3_CONTRACT = Object.freeze({
  * them.
  */
 const VIDEO_MODE_CONTRACTS = Object.freeze({
-  wan22: {
-    codePrefix: 'WAN22',
-    chainCode: 'WAN22_CHAIN_REQUIRES_IMAGE_MODE',
-    // No ceiling: MLX-Gen's Wan CLI takes whatever the profile declares, and
-    // resolveVideoSupportedModes narrows an entry that declares nothing to the
-    // wan22 row (text + image) rather than leaving it unconstrained.
+  wan22: WAN22_CONTRACT,
+  wan22_cuda: WAN22_CUDA_CONTRACT,
+  ltx25_cuda: LTX25_CUDA_CONTRACT,
+  fastvideo: {
+    codePrefix: 'FASTVIDEO',
+    chainCode: 'FASTVIDEO_CHAIN_REQUIRES_IMAGE_MODE',
     modeCeiling: null,
-    // The wan22 lane rejects multi-keyframe / extend / audio / IC inputs by
-    // runtime elsewhere (KEYFRAMES_REQUIRE_LTX2, A2V_REQUIRES_LTX2,
-    // IC_LORA_REQUIRES_LTX2), so folding them in here would double-report.
     extraConditioningUnsupported: false,
     messages: {
-      modeUnsupported: ({ model, requestedMode }) => `${model.name} does not support ${requestedMode}-to-video. Choose a compatible Wan model.`,
-      textSourceConflict: () => 'Wan 2.2 text-to-video cannot consume a source image — switch to image mode or remove the source.',
-      // Two phrasings, one rule: before staging, the caller can still supply an
-      // upload; after resolution, the gallery pick they *did* supply didn't
-      // resolve, and "upload one" would be misleading advice.
+      modeUnsupported: ({ model, requestedMode }) => `${model.name} does not support ${requestedMode}-to-video. Choose a compatible FastVideo model.`,
+      textSourceConflict: () => 'FastVideo text-to-video cannot consume a source image — switch to image mode or remove the source.',
       imageRequiresFirst: ({ sourceResolved }) => (sourceResolved
-        ? 'Wan 2.2 image-to-video requires a resolvable source image — choose an existing gallery image or upload one.'
-        : 'Wan 2.2 image-to-video requires a source image — upload one before running this model.'),
+        ? 'FastVideo image-to-video requires a resolvable source image — choose an existing gallery image or upload one.'
+        : 'FastVideo image-to-video requires a source image — upload one before running this model.'),
     },
   },
   minimax_h3: MINIMAX_H3_CONTRACT,
   minimax_h3_cuda: MINIMAX_H3_CONTRACT,
+  minimax_h3_ref2va: MINIMAX_H3_REF2VA_CONTRACT,
 });
 
 // An empty array is "no references", not "references present" — and an empty
@@ -126,8 +172,8 @@ const isPresent = (value) => (Array.isArray(value) ? value.length > 0 : Boolean(
 /**
  * The one video mode/source contract, driven by `model.supportedModes`. Returns
  * a ServerError to throw, or null when the request is legal (including for a
- * runtime that declares no row — ltx2, mlx_video and hunyuan gate their modes
- * through their own helpers).
+ * runtime that declares no row — ltx2 and mlx_video gate their modes through
+ * their own helpers).
  *
  * `supportedModes` comes off the registry entry (resolved from the runtime table
  * when the entry declares none) so the picker and the API agree even on an
@@ -159,7 +205,13 @@ export const videoModeContractError = ({
 }) => {
   const contract = VIDEO_MODE_CONTRACTS[model?.runtime];
   if (!contract) return null;
-  const { codePrefix, modeCeiling, extraConditioningUnsupported } = contract;
+  const {
+    codePrefix,
+    modeCeiling,
+    extraConditioningUnsupported,
+    a2vRequiresFirst,
+    a2vRequiresAudio,
+  } = contract;
   const messages = { ...DEFAULT_MESSAGES, ...contract.messages };
   const requestedMode = mode || (hasFirstImage ? 'image' : 'text');
   const declaredModes = resolveVideoSupportedModes(model);
@@ -183,6 +235,12 @@ export const videoModeContractError = ({
   }
   if (requestedMode === 'image' && !hasFirstImage) {
     return fail('imageRequiresFirst', `${codePrefix}_I2V_REQUIRES_IMAGE`);
+  }
+  if (requestedMode === 'a2v' && a2vRequiresFirst && !hasFirstImage) {
+    return fail('a2vRequiresFirst', `${codePrefix}_A2V_REQUIRES_IMAGE`);
+  }
+  if (requestedMode === 'a2v' && a2vRequiresAudio && !isPresent(audioFile)) {
+    return fail('a2vRequiresAudio', `${codePrefix}_A2V_REQUIRES_AUDIO`);
   }
   // The last-frame pair rules only mean something on a runtime that can anchor
   // one, so they key off the resolved mode set rather than the runtime name — a

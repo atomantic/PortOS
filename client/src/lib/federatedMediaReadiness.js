@@ -134,14 +134,14 @@ function verifiedState(status, now) {
   return state;
 }
 
-// Overlap-release fallbacks, mirroring FEDERATED_MEDIA_LEGACY_FEATURE_TELL in
-// server/lib/federatedMediaWire.js. A provider on the previous build advertises
-// the same build-level fact per-capability instead of at the status root.
+// The input-assets overlap fallback mirrors FEDERATED_MEDIA_LEGACY_FEATURE_TELL
+// in server/lib/federatedMediaWire.js. A provider on the previous build
+// advertises this genuinely per-model fact in the capability block instead of
+// at the status root.
 // `Object.create(null)` for the same reason the server table uses it: the key
 // is a feature name off the wire, and on a normal object `'constructor'` and
 // friends resolve to inherited values rather than being absent.
 const LEGACY_FEATURE_TELL = Object.freeze(Object.assign(Object.create(null), {
-  lyrics: (capability) => capability?.acceptsLyrics === true,
   inputAssets: (capability) => isRecord(capability?.inputAssets),
 }));
 
@@ -155,15 +155,15 @@ const LEGACY_FEATURE_TELL = Object.freeze(Object.assign(Object.create(null), {
  * would offer a render the peer answers with a 400. Display only — the route
  * re-checks and the provider re-checks again at admission.
  *
- * A published list WINS over the legacy per-capability field rather than being
+ * A published list WINS over the input-assets legacy tell rather than being
  * OR'd with it: a peer that told us its whole vocabulary and left this feature
  * out has positively denied it, so the legacy tell is consulted only when there
  * is no list to read. Mirrors the server rule exactly.
  *
  * @param {object|null} status - a peer's `mediaProviderStatus.snapshot`
  * @param {string} feature - 'lyrics' | 'inputAssets'
- * @param {object|null} [capability] - for the overlap fallback against a peer
- *   that has not migrated yet
+ * @param {object|null} [capability] - for the input-assets overlap fallback
+ *   against a peer that has not migrated yet
  * @returns {boolean} false whenever the answer cannot be established
  */
 export function federatedMediaSupports(status, feature, capability = null) {

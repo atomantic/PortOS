@@ -40,6 +40,8 @@ const {
   isCanonEntryGatedForIssue,
   canonHasRevealGated,
   revealGatedCanonRows,
+  characterIdentityPackReadiness,
+  preserveLegacyCharacterProductionPackages,
 } = storyBible;
 
 const WORK_ID = 'wr-work-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
@@ -298,6 +300,93 @@ describe('storyBible — sanitizeCharacter', () => {
         primaryImageRef: 'watch2.png',
       });
       expect(o.primaryImageRef).toBe('watch2.png');
+    });
+  });
+
+  describe('portable production package (#5378)', () => {
+    it('keeps voice canon bounded and strips local artifact pointers', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        voiceCanon: {
+          version: 2,
+          description: 'warm low alto',
+          defaultDelivery: 'measured',
+          emotionalRange: ['guarded', 'wry'],
+          avoid: ['announcer projection'],
+          pronunciations: [{ term: 'Aster Vale', pronunciation: 'AS-ter vayl', profileId: 'local-only' }],
+          sourcePolicy: 'designed',
+          approved: true,
+          providerId: 'not-portable',
+          artifactPath: '/machine-local/voice.wav',
+        },
+      });
+      expect(out.voiceCanon).toEqual({
+        version: 2,
+        description: 'warm low alto',
+        defaultDelivery: 'measured',
+        emotionalRange: ['guarded', 'wry'],
+        avoid: ['announcer projection'],
+        pronunciations: [{ term: 'Aster Vale', pronunciation: 'AS-ter vayl' }],
+        sourcePolicy: 'designed',
+        approved: true,
+      });
+      expect(out.voiceCanon).not.toHaveProperty('providerId');
+      expect(out.voiceCanon).not.toHaveProperty('artifactPath');
+    });
+
+    it('keeps identity assets as unapproved candidates until explicit approval', () => {
+      const out = sanitizeCharacter({
+        name: 'A', imageRefs: ['neutral.png', 'profile.png', 'body.png'],
+        identityPack: {
+          assets: [
+            { role: 'neutral', imageRef: 'neutral.png' },
+            { role: 'profile', imageRef: 'profile.png', approved: true },
+            { role: 'full-body', imageRef: 'body.png', approved: true },
+            { role: 'neutral', imageRef: '/local/escape.png', approved: true },
+          ],
+          avoid: ['different eye color'],
+        },
+      });
+      expect(out.identityPack).toEqual({
+        assets: [
+          { role: 'neutral', imageRef: 'neutral.png', approved: false },
+          { role: 'profile', imageRef: 'profile.png', approved: true },
+          { role: 'full-body', imageRef: 'body.png', approved: true },
+        ],
+        avoid: ['different eye color'],
+      });
+      expect(characterIdentityPackReadiness(out)).toMatchObject({
+        status: 'missing', missing: ['neutral'], ambiguous: [],
+      });
+    });
+
+    it('reports ready, missing, and ambiguous required identity roles', () => {
+      const ready = { identityPack: { assets: [
+        { role: 'neutral', imageRef: 'n.png', approved: true },
+        { role: 'profile', imageRef: 'p.png', approved: true },
+        { role: 'full-body', imageRef: 'b.png', approved: true },
+      ] } };
+      expect(characterIdentityPackReadiness(ready)).toMatchObject({ status: 'ready', missing: [], ambiguous: [] });
+      const ambiguous = { identityPack: { assets: [
+        ...ready.identityPack.assets,
+        { role: 'profile', imageRef: 'p2.png', approved: true },
+      ] } };
+      expect(characterIdentityPackReadiness(ambiguous)).toMatchObject({ status: 'ambiguous', ambiguous: ['profile'] });
+    });
+
+    it('preserves packages from a pre-v10 peer but honors a v10 clear', () => {
+      const local = [{
+        id: 'chr-1', name: 'A',
+        voiceCanon: { version: 2, approved: true },
+        identityPack: { assets: [{ role: 'neutral', imageRef: 'n.png', approved: true }] },
+      }];
+      const remote = [{ id: 'chr-1', name: 'A from peer' }];
+      expect(preserveLegacyCharacterProductionPackages(remote, local, 9)[0]).toMatchObject({
+        name: 'A from peer',
+        voiceCanon: local[0].voiceCanon,
+        identityPack: local[0].identityPack,
+      });
+      expect(preserveLegacyCharacterProductionPackages(remote, local, 10)).toEqual(remote);
     });
   });
 

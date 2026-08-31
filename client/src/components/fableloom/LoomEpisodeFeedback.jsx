@@ -4,10 +4,12 @@ import ProviderModelSelector from '../ProviderModelSelector';
 import { FormField } from '../ui/FormField.jsx';
 import toast from '../ui/Toast';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
+import useFableLoomAiRun from '../../hooks/useFableLoomAiRun';
 import useProviderModels from '../../hooks/useProviderModels';
 import { feedbackLoomEpisode } from '../../services/api';
 import { effectiveModelFor, effortAwareModelOptions } from '../../utils/providers';
 import { fieldClass, labelClass } from './fieldStyles';
+import LoomAiRunStatus from './LoomAiRunStatus';
 
 /**
  * Conversational editor for one episode. The route selection is deliberately
@@ -26,6 +28,7 @@ export default function LoomEpisodeFeedback({
 }) {
   const [feedback, setFeedback] = useState('');
   const [route, setRoute] = useState({ providerId: '', model: '', effort: '' });
+  const { run: aiRun, begin: beginAiRun, fail: failAiRun } = useFableLoomAiRun();
   const { providers, loading: providersLoading } = useProviderModels({
     allowDefault: true,
     silent: true,
@@ -41,13 +44,18 @@ export default function LoomEpisodeFeedback({
   }, [episode.id]);
 
   const [runFeedback, submitting] = useAsyncAction(async () => {
+    const operationId = beginAiRun();
     onFeedbackStarted?.();
     const result = await feedbackLoomEpisode(loom.id, episode.id, {
       feedback: feedback.trim(),
+      operationId,
       ...(route.providerId ? { providerId: route.providerId } : {}),
       ...(route.model ? { model: route.model } : {}),
       ...(route.effort ? { effort: route.effort } : {}),
-    }, { silent: true });
+    }, { silent: true }).catch((error) => {
+      failAiRun(error.message);
+      throw error;
+    });
     onLoomUpdate(result.loom);
     setFeedback('');
     toast.success(result.changedScenes
@@ -115,6 +123,7 @@ export default function LoomEpisodeFeedback({
         {submitting ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
         {submitting ? 'Updating episode…' : 'Apply AI feedback'}
       </button>
+      <LoomAiRunStatus run={aiRun} />
     </section>
   );
 }

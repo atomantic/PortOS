@@ -41,11 +41,6 @@ const TABBED_PAGES = [
   { prefix: '/music', file: 'client/src/pages/Music.jsx', kind: 'ids', constName: 'TABS', allowBasePrefix: true },
   { prefix: '/sharing', file: 'client/src/pages/Sharing.jsx', kind: 'links', constName: 'SECTIONS' },
   { prefix: '/system-resources', file: 'client/src/pages/SystemHealthPage.jsx', kind: 'ids', constName: 'RESOURCE_TABS', allowBasePrefix: true },
-  // OpenWorld's fast-travel destinations aren't page tabs, but they follow the same
-  // contract: one `/openworld/region/<id>` nav command per region in the client's
-  // registry, so every warp target is reachable from ⌘K and voice — and a region
-  // added without a command (or a command left behind by a deleted region) fails here.
-  { prefix: '/openworld/region', file: 'client/src/utils/openWorldRegions.js', kind: 'ids', constName: 'OPEN_WORLD_REGIONS' },
   // POST's morse tab has routed `:mode` sub-pages (/post/morse/copy|send) and the
   // memory tab has the Elements study sub-page (/post/memory/elements) plus its
   // own routed practice modes — none are top-level switch cases, so declare their
@@ -190,6 +185,11 @@ describe('nav contract — instance-feature gating', () => {
     expect(byId['nav.devtools.jira']).toBe('jira');
     expect(byId['nav.devtools.jira-reports']).toBe('jira');
     expect(byId['nav.cos.gsd']).toBe('gsd');
+  });
+
+  it('gates the Eidoverse host page on its installed feature', () => {
+    const command = NAV_COMMANDS.find((entry) => entry.id === 'nav.eidoverse');
+    expect(command).toMatchObject({ path: '/eidoverse', feature: 'eidoverse' });
   });
 
   it('gates the complete Health section and MortalLoom settings', () => {
@@ -340,94 +340,6 @@ describe('nav contract — tabbed pages match their tab constants', () => {
   }
 });
 
-// The `ids` guard above pins the region PATHS, but a region's user-visible label and its
-// spoken/typed aliases live in the client registry too — and those are what ⌘K and voice
-// actually match on. Without this, the two lists can pass the path guard while the alias
-// sets silently diverge, so "take me to the memory quarter" resolves in the panel's search
-// box but not in the palette. Read straight out of the registry source so there is one
-// source of truth for what a region is called.
-describe('nav contract — OpenWorld regions match the registry labels and aliases', () => {
-  const REGIONS_FILE = 'client/src/utils/openWorldRegions.js';
-
-  // Each registry entry is one `{ … }` object literal on its own line; pull the fields the
-  // nav manifest also declares. Read inside it() bodies so a moved file fails focused.
-  const readRegistry = () => {
-    const src = fs.readFileSync(path.join(REPO_ROOT, REGIONS_FILE), 'utf8');
-    const block = src.match(/export const OPEN_WORLD_REGIONS\s*=\s*\[([\s\S]*?)^\];/m);
-    if (!block) throw new Error('No exported OPEN_WORLD_REGIONS array found');
-    return [...block[1].matchAll(/\{[^{}]*\}/g)].map((m) => {
-      const entry = m[0];
-      const field = (name) => entry.match(new RegExp(`${name}:\\s*'([^']*)'`))?.[1];
-      const aliases = entry.match(/aliases:\s*\[([^\]]*)\]/)?.[1] || '';
-      return {
-        id: field('id'),
-        label: field('label'),
-        feature: field('feature'),
-        aliases: [...aliases.matchAll(/'([^']*)'/g)].map((a) => a[1]),
-      };
-    });
-  };
-
-  const navByPath = new Map(NAV_COMMANDS.map((c) => [c.path, c]));
-
-  it('reads a non-empty registry (the extractor still matches the file shape)', () => {
-    const regions = readRegistry();
-    expect(regions.length).toBeGreaterThan(0);
-    expect(regions.every((r) => r.id && r.label)).toBe(true);
-  });
-
-  it('every region command carries the registry label', () => {
-    const wrong = readRegistry()
-      .map((r) => ({ r, cmd: navByPath.get(`/openworld/region/${r.id}`) }))
-      .filter(({ r, cmd }) => cmd && cmd.label !== r.label)
-      .map(({ r, cmd }) => `${r.id}: nav "${cmd.label}" ≠ registry "${r.label}"`);
-    expect(wrong).toEqual([]);
-  });
-
-  it('keeps each region feature gate mirrored between the registry and nav command', () => {
-    const wrong = readRegistry()
-      .map((r) => ({ r, cmd: navByPath.get(`/openworld/region/${r.id}`) }))
-      .filter(({ r, cmd }) => (cmd?.feature || null) !== (r.feature || null))
-      .map(({ r, cmd }) => `${r.id}: nav "${cmd?.feature || 'none'}" ≠ registry "${r.feature || 'none'}"`);
-    expect(wrong).toEqual([]);
-  });
-
-  it('every registry alias is addressable as a nav alias', () => {
-    // The registry authors aliases in human phrasing ("memory quarter"); the manifest
-    // registers them kebab-cased, because that is the form resolveNavCommand matches on.
-    const kebab = (a) => a.replace(/\s+/g, '-');
-    const missing = readRegistry().flatMap((r) => {
-      const cmd = navByPath.get(`/openworld/region/${r.id}`);
-      if (!cmd) return [];
-      const navAliases = new Set(cmd.aliases || []);
-      return r.aliases.filter((a) => !navAliases.has(kebab(a))).map((a) => `${r.id}: "${a}"`);
-    });
-    expect(missing).toEqual([]);
-  });
-
-  it('every region alias actually RESOLVES to its own region', () => {
-    // Parity with the registry is not enough on its own: resolveNavCommand normalizes its
-    // input to kebab-case, so a space-separated alias never matches exactly and instead
-    // falls through to the substring tiers — which is how "memory quarter" resolved to
-    // /brain/memory and "voice beacon" to /settings/voice while every parity check passed.
-    // Assert the behavior users actually get, phrased the way they'd say it.
-    const wrong = readRegistry().flatMap((r) => {
-      const want = `/openworld/region/${r.id}`;
-      return r.aliases
-        .map((alias) => ({ alias, got: resolveNavCommand(alias)?.path ?? null }))
-        .filter(({ got }) => got !== want)
-        .map(({ alias, got }) => `${r.id}: "${alias}" → ${got ?? 'NULL'} (want ${want})`);
-    });
-    expect(wrong).toEqual([]);
-  });
-
-  it('resolves a region by its label as spoken', () => {
-    for (const r of readRegistry()) {
-      expect(resolveNavCommand(r.label)?.path).toBe(`/openworld/region/${r.id}`);
-    }
-  });
-});
-
 // Settings is the one tabbed page whose tab bar (SettingsTabsHeader.jsx `TABS`,
 // the nav guard's source of truth for /settings) and render dispatch live in
 // separate files: `Settings.jsx`'s `switch (activeTab)`. They're hand-kept in
@@ -504,6 +416,8 @@ describe('getNavAliasMap — voice-agent compatibility', () => {
 // a second test fails if an opt-out entry goes stale (route deleted, or the path
 // gained a manifest entry) so the allow-list can't quietly rot.
 const APP_JSX = path.join(REPO_ROOT, 'client/src/App.jsx');
+const MAIN_JSX = path.join(REPO_ROOT, 'client/src/main.jsx');
+const SOCKET_JS = path.join(REPO_ROOT, 'client/src/services/socket.js');
 
 // Concrete leaf routes that render a real page but are deliberately absent from
 // the nav manifest — reached via an in-page button or as a create-mode sentinel,
@@ -514,6 +428,7 @@ const NAV_COVERAGE_OPT_OUT = new Map([
   ['/apps/create', 'create-app form, reached via the "New App" button on /apps'],
   ['/creative-commission/new', 'create-commission drawer, reached via the "New Commission" button on /creative-commission'],
   ['/feature-agents/create', 'create-agent form, reached via the "New Agent" button'],
+  ['/fableloom/join', 'scoped QR mobile join view, reached via scanned QR code with fragment credentials'],
   ['/login', 'auth gate — surfaced only when settings.secrets.auth is enabled, reached via 401 redirect'],
   ['/songbook/import', 'import-song form, reached via the "Import" button on /songbook'],
   ['/universes/new', 'create-mode sentinel for the Universe Builder editor'],
@@ -541,6 +456,8 @@ function joinRoutePath(segments) {
 // containers. Returns:
 //  - required: absolute paths of every concrete, non-redirect, non-param leaf
 //    route — the set that must each have a NAV_COMMANDS entry (or an opt-out)
+//  - topLevel: absolute paths of concrete leaves directly under <Routes>, rather
+//    than inside a layout/container route
 //  - malformed: <Route>-opening lines whose tag doesn't close on the same line
 //  - stackDepth: open containers left unclosed at EOF
 // The scanner assumes each <Route> is a single line (true in App.jsx today). A
@@ -553,6 +470,7 @@ function joinRoutePath(segments) {
 function scanRoutes(appSrc) {
   const stack = []; // parent path segments of currently-open <Route> containers
   const required = [];
+  const topLevel = [];
   const redirects = []; // { from, to } for every forwarding leaf route
   const malformed = [];
   for (const rawLine of appSrc.split('\n')) {
@@ -580,6 +498,7 @@ function scanRoutes(appSrc) {
     const absolute = routePath === null
       ? joinRoutePath(stack)
       : joinRoutePath([...stack, routePath]);
+    if (stack.length === 0) topLevel.push(absolute);
 
     // Redirects are recorded rather than dropped: a moved page's old path has to
     // keep landing somewhere, and that is only assertable if the scanner reports
@@ -599,7 +518,7 @@ function scanRoutes(appSrc) {
     if (absolute.split('/').some((s) => s.startsWith(':'))) continue; // param route
     required.push(absolute);
   }
-  return { required: [...new Set(required)], redirects, malformed, stackDepth: stack.length };
+  return { required: [...new Set(required)], topLevel: [...new Set(topLevel)], redirects, malformed, stackDepth: stack.length };
 }
 
 // Settings owns a small declarative redirect map for retired tabs, while App.jsx
@@ -634,6 +553,25 @@ describe('nav coverage — every navigable App.jsx route has a manifest entry', 
     const uncovered = [...routePaths]
       .filter((p) => !navPaths.has(p) && !NAV_COVERAGE_OPT_OUT.has(p));
     expect(uncovered).toEqual([]);
+  });
+
+  it('keeps the hosted audience join route outside the chrome layout', () => {
+    // The hosted audience shell owns a full dynamic viewport and must not be
+    // nested under Layout's shorter overflow-hidden main (#5499).
+    expect(scan.topLevel).toContain('/fableloom/join');
+  });
+
+  it('keeps hosted audience joins free of authenticated app bootstraps', () => {
+    // A password-gated install must not redirect a QR audience device before
+    // the fragment token reaches FableLoomHostedJoin (#5499).
+    const appSrc = fs.readFileSync(APP_JSX, 'utf8');
+    const mainSrc = fs.readFileSync(MAIN_JSX, 'utf8');
+    const socketSrc = fs.readFileSync(SOCKET_JS, 'utf8');
+    expect(appSrc).toMatch(/useTimezoneBootstrap\(!isHostedAudienceRoute\)/);
+    expect(appSrc).toMatch(/useDocumentTitle\(!isHostedAudienceRoute\)/);
+    expect(appSrc).toMatch(/isHostedAudienceRoute\s*\?\s*routeContent/);
+    expect(mainSrc).toContain("const isHostedAudienceRoute = window.location.pathname.replace(/\\/+$/, '')");
+    expect(socketSrc).toMatch(/autoConnect: !isHostedAudienceRoute/);
   });
 
   // Every page that has ever moved leaves its old path behind in bookmarks, in
@@ -688,7 +626,7 @@ describe('nav coverage — every navigable App.jsx route has a manifest entry', 
       // A pinned sidebar row is a STORED route path, so an undeclared move made
       // the pin stop resolving and vanish on the next update — the client reads
       // these to map a stored path onto where its page lives now.
-      '/city',                            // OpenWorld's rename (whole subtree)
+      '/openworld', '/city',              // retired OpenWorld routes
       '/devtools/submodules',
       '/devtools/runs',
       '/settings/contacts',

@@ -66,6 +66,7 @@ export const CATEGORIES = {
   'creative-commissions': { label: 'Creative Commissions', description: 'Commission records (file mirror of the Postgres store)', archivable: true, deletable: false },
   'db-dumps': { label: 'DB Dumps', description: 'PostgreSQL database backups', archivable: true, deletable: true, purgeScope: 'category' },
   'digital-twin': { label: 'Digital Twin', description: 'Identity, goals, character data', archivable: true, deletable: false },
+  'eidoverse': { label: 'Eidoverse Worlds', description: 'Machine-local world history owned by the optional Eidoverse runtime — backed up and not federated', archivable: true, deletable: false },
   'fableloom': { label: 'FableLoom', description: 'Branching-narrative records (file mirror of the Postgres store)', archivable: true, deletable: false },
   // Another machine's conditioning images, staged for one federated render and
   // swept on a TTL (#4348). Not archivable for the same reason it is excluded
@@ -131,6 +132,7 @@ export const CATEGORIES = {
   'uploads': { label: 'Uploads', description: 'Files uploaded through the UI and referenced by records', archivable: true, deletable: false },
   'video-thumbnails': { label: 'Video Thumbnails', description: 'JPEG thumbnails for generated videos', archivable: false, deletable: true, purgeScope: 'category' },
   'videos': { label: 'Videos', description: 'Locally generated videos — delete individually; the render is the only copy and re-rendering costs provider spend', archivable: true, deletable: true, purgeScope: 'items' },
+  'voice-profiles': { label: 'Voice Profiles', description: 'Machine-local voice profile source recordings, benchmarks, and local engine artifacts', archivable: true, deletable: false },
   'writers-room': { label: 'Writers Room', description: 'Writers Room works and story bibles', archivable: true, deletable: false },
   'youtube': { label: 'YouTube Sync', description: 'Machine-local YouTube sync state — purging resets the cursor and can leave a gap in imported history', archivable: true, deletable: false }
 };

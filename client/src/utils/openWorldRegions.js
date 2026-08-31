@@ -13,7 +13,7 @@
 // scrapes the `id:` values out of this array and fails if a region has no ⌘K / voice command
 // (or vice versa), so a new region can't ship unreachable.
 
-import { PARCELS } from './openWorldPlan';
+import { ARCHIPELAGO_ISLANDS, PARCELS, isWalkable } from './openWorldPlan';
 
 // Ordered for the fast-travel list: the two places you look at most first, then a clockwise
 // sweep of the outer districts, then the far shore. `parcel` keys into PARCELS for geography;
@@ -26,20 +26,20 @@ import { PARCELS } from './openWorldPlan';
 // buildings actually on the ground instead of framing a fixed rectangle and clipping the
 // outer towers.
 export const OPEN_WORLD_REGIONS = [
-  { id: 'downtown', parcel: 'downtown', district: 'downtown', label: 'Downtown', blurb: 'Every managed app, one tower each.', appPath: '/apps', aliases: ['downtown', 'apps district', 'app towers'] },
-  { id: 'ai-core', parcel: 'aiCore', label: 'AI Core Plaza', blurb: 'The reactor at the center — live AI provider activity.', appPath: '/ai', aliases: ['ai core', 'core plaza', 'the core', 'reactor'] },
-  { id: 'task-queue', parcel: 'taskQueue', label: 'Task Queue', blurb: 'Chief of Staff work stacked up and moving.', appPath: '/cos/tasks', aliases: ['task queue', 'queue', 'cos queue'] },
-  { id: 'wellness', parcel: 'health', label: 'Wellness Tower', blurb: 'System vitals — CPU, memory, disk.', appPath: '/system-resources/overview', aliases: ['wellness tower', 'health tower', 'vitals tower'] },
-  { id: 'archive', parcel: 'warehouse', district: 'warehouse', label: 'Archive District', blurb: 'Cold storage for archived apps.', appPath: '/apps', aliases: ['archive district', 'warehouse', 'cold storage'] },
+  { id: 'downtown', parcel: 'downtown', district: 'downtown', label: 'Village Green', blurb: 'The sunny crossroads where every PortOS lane meets.', appPath: '/apps', aliases: ['downtown', 'apps district', 'app towers', 'village green'] },
+  { id: 'ai-core', parcel: 'aiCore', label: 'PortOS Common', blurb: 'A gathering circle around the bright AI pavilion.', appPath: '/ai', aliases: ['ai core', 'core plaza', 'the core', 'reactor', 'common'] },
+  { id: 'task-queue', parcel: 'taskQueue', label: 'Task Workshop', blurb: 'Chief of Staff work stacked, sorted, and ready to go.', appPath: '/cos/tasks', aliases: ['task queue', 'queue', 'cos queue', 'task workshop'] },
+  { id: 'wellness', parcel: 'health', label: 'Wellness Greenhouse', blurb: 'A glass garden for CPU, memory, disk, and personal vitals.', appPath: '/system-resources/overview', aliases: ['wellness tower', 'health tower', 'vitals tower', 'greenhouse'] },
+  { id: 'archive', parcel: 'warehouse', district: 'warehouse', label: 'Archive Lodge', blurb: 'A quiet lodge for archived apps and older work.', appPath: '/apps', aliases: ['archive district', 'warehouse', 'cold storage', 'archive lodge'] },
   { id: 'quiet-corner', parcel: 'easterEggs', label: 'Quiet Corner', blurb: 'The odd little things the world keeps to itself.', appPath: null, aliases: ['quiet corner', 'easter eggs'] },
-  { id: 'productivity', parcel: 'productivity', label: 'Productivity Terrace', blurb: 'Throughput, pace, and the activity heatmap.', appPath: '/insights/overview', aliases: ['productivity terrace', 'productivity', 'throughput district', 'streak district'] },
-  { id: 'backup-vault', parcel: 'backupVault', label: 'Backup Vault', blurb: 'The sealed door — last backup and its health.', appPath: '/settings/backup', aliases: ['backup vault', 'the vault'] },
-  { id: 'memory', parcel: 'memory', label: 'Memory Quarter', blurb: 'Crystal clusters of long-term memory and the inbox well.', appPath: '/brain/inbox', aliases: ['memory quarter', 'memory district', 'knowledge district'] },
-  { id: 'sprint-yard', parcel: 'jira', label: 'Sprint Yard', blurb: 'The current sprint, laid out as a yard of tickets.', appPath: '/devtools/jira', feature: 'jira', aliases: ['sprint yard', 'jira yard', 'sprint district'] },
-  { id: 'voice', parcel: 'voice', label: 'Voice Beacon', blurb: 'Lights up while the voice agent is listening.', appPath: '/digital-twin/voice', aliases: ['voice beacon', 'the beacon'] },
-  { id: 'goals', parcel: 'goals', label: 'Goal Monuments', blurb: 'One monument per life goal, height by progress.', appPath: '/goals/tree', aliases: ['goal monuments', 'monuments', 'goals district'] },
-  { id: 'artifacts', parcel: 'artifacts', label: 'Hall of Achievements', blurb: 'Earned artifacts on display.', appPath: '/character', aliases: ['hall of achievements', 'artifact hall', 'achievements hall'] },
-  { id: 'data-harbor', parcel: 'dataHarbor', label: 'Data Harbor', blurb: 'Piers over the bay — database tables and data domains.', appPath: '/data', aliases: ['data harbor', 'the harbor', 'piers'] },
+  { id: 'productivity', parcel: 'productivity', label: 'Focus Farm', blurb: 'Crops, throughput, pace, and the activity calendar.', appPath: '/insights/overview', aliases: ['productivity terrace', 'productivity', 'throughput district', 'streak district', 'focus farm'] },
+  { id: 'backup-vault', parcel: 'backupVault', label: 'Backup Cottage', blurb: 'The snug house that watches over the latest backup.', appPath: '/settings/backup', aliases: ['backup vault', 'the vault', 'backup cottage'] },
+  { id: 'memory', parcel: 'memory', label: 'Memory House', blurb: 'A wooded home for long-term memory and the inbox well.', appPath: '/brain/inbox', aliases: ['memory quarter', 'memory district', 'knowledge district', 'memory house'] },
+  { id: 'sprint-yard', parcel: 'jira', label: 'Sprint Studio', blurb: 'The current sprint laid out as a little maker yard.', appPath: '/devtools/jira', feature: 'jira', aliases: ['sprint yard', 'jira yard', 'sprint district', 'sprint studio'] },
+  { id: 'voice', parcel: 'voice', label: 'Voice Radio', blurb: 'A tiny radio house that wakes when the voice agent listens.', appPath: '/digital-twin/voice', aliases: ['voice beacon', 'the beacon', 'voice radio'] },
+  { id: 'goals', parcel: 'goals', label: 'Goals Lodge', blurb: 'A lodge for life goals and the paths toward them.', appPath: '/goals/tree', aliases: ['goal monuments', 'monuments', 'goals district', 'goals lodge'] },
+  { id: 'artifacts', parcel: 'artifacts', label: 'Trophy House', blurb: 'Earned artifacts on cheerful display.', appPath: '/character', aliases: ['hall of achievements', 'artifact hall', 'achievements hall', 'trophy house'] },
+  { id: 'data-harbor', parcel: 'dataHarbor', label: 'Data Pier', blurb: 'A cottage over the bay for tables and data domains.', appPath: '/data', aliases: ['data harbor', 'the harbor', 'piers', 'data pier'] },
 ];
 
 // Route prefix the fast-travel deep links live under. Exported so callers build the URL from
@@ -99,15 +99,34 @@ export function searchRegions(query, isFeatureEnabled) {
     || (r.aliases || []).some((a) => a.includes(q)));
 }
 
-// Where a walking player lands when they warp in. Ground level at the parcel's near (+Z)
+// Where a walking player lands when they warp in. Start from the parcel's near (+Z)
 // edge, pulled back far enough to see the district rather than spawning inside a monument.
-// Regions over the water (the harbor) land on the pier itself, which `isWalkable` allows.
+// If that point falls beyond its island's authored shoreline, pull it toward the nearest
+// island interior. This keeps every gate on visible ground without teaching the region
+// registry a second, drifting set of hard-coded arrival coordinates.
 export const REGION_ARRIVAL_SETBACK = 6;
 
 export function regionArrivalPoint(region) {
   if (!region) return null;
   const [x, , z] = region.anchor;
-  return { x, z: z + region.d / 2 + REGION_ARRIVAL_SETBACK };
+  const proposed = { x, z: z + region.d / 2 + REGION_ARRIVAL_SETBACK };
+  if (isWalkable(proposed.x, proposed.z)) return proposed;
+
+  const island = ARCHIPELAGO_ISLANDS.reduce((nearest, candidate) => {
+    const normalized = ((x - candidate.center[0]) / candidate.radiusX) ** 2
+      + ((z - candidate.center[1]) / candidate.radiusZ) ** 2;
+    return !nearest || normalized < nearest.normalized ? { island: candidate, normalized } : nearest;
+  }, null)?.island;
+  if (!island) return proposed;
+
+  const dx = proposed.x - island.center[0];
+  const dz = proposed.z - island.center[1];
+  const normalizedRadius = Math.hypot(dx / island.radiusX, dz / island.radiusZ);
+  const scale = normalizedRadius > 0.72 ? 0.72 / normalizedRadius : 1;
+  return {
+    x: island.center[0] + dx * scale,
+    z: island.center[1] + dz * scale,
+  };
 }
 
 // The arrival point is also the physical location of a region's warp pad. Keeping the

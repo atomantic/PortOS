@@ -68,11 +68,14 @@ describe('GalleryVideoPicker', () => {
     const fileInput = document.querySelector('input[type="file"]');
     fireEvent.change(fileInput, { target: { files: [new File(['x'], 'clip.mp4', { type: 'video/mp4' })] } });
     await waitFor(() => expect(uploadGalleryVideo).toHaveBeenCalledWith('ZmFrZQ==', 'clip.mp4', { silent: true }));
-    await waitFor(() => expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'video',
-      filename: 'upload-ab12cd34.mp4',
-      previewUrl: '/data/video-thumbnails/upload-ab12cd34.jpg',
-    })));
+    await waitFor(() => expect(onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'video',
+        filename: 'upload-ab12cd34.mp4',
+        previewUrl: '/data/video-thumbnails/upload-ab12cd34.jpg',
+      }),
+      { origin: 'upload' },
+    ));
     expect(onClose).toHaveBeenCalled();
   });
 

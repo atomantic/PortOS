@@ -387,10 +387,14 @@ describe('providerModels', () => {
         .toEqual(['-c', 'model_reasoning_effort=xhigh']);
     });
 
-    it('emits max for codex and resolves legacy ultra to max', () => {
+    it('emits Ultra for supported Codex models and clamps it elsewhere', () => {
       const codex = { id: 'codex', command: 'codex' };
       expect(buildEffortArgs('max', codex)).toEqual(['-c', 'model_reasoning_effort=max']);
       expect(buildEffortArgs('ultra', codex)).toEqual(['-c', 'model_reasoning_effort=max']);
+      expect(buildEffortArgs('ultra', codex, [], 'gpt-5.6-sol'))
+        .toEqual(['-c', 'model_reasoning_effort=ultra']);
+      expect(buildEffortArgs('ultra', codex, [], 'gpt-5.6-luna'))
+        .toEqual(['-c', 'model_reasoning_effort=max']);
     });
 
     it('returns [] when unset, unsupported, or already baked into existing args', () => {

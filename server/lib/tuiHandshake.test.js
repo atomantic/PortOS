@@ -1031,12 +1031,15 @@ describe('createInputReadyTracker', () => {
 
   it('latches needsTrust on every vendor trust-gate wording', () => {
     const claude = createInputReadyTracker();
-    claude.observe('', 'Is this a project you trust?');
+    claude.observe('', 'Is this a project you trust?\n❯ 1. Yes, I trust this folder\n2. No, exit\n');
     expect(claude.needsTrust).toBe(true);
+    expect(claude.trustChoiceReady).toBe(true);
+    expect(claude.trustSelectionKey).toBe('');
 
     const agy = createInputReadyTracker();
     agy.observe('', 'Do you trust the contents of this project?\n> Yes, I trust this folder\n');
     expect(agy.needsTrust).toBe(true);
+    expect(agy.trustChoiceReady).toBe(true);
 
     // Codex says "directory", and its options are "Yes, continue / No, quit" —
     // neither of the two older alternatives appears anywhere in the dialog, so it
@@ -1046,6 +1049,50 @@ describe('createInputReadyTracker', () => {
       + ' Working with untrusted contents comes with higher risk of prompt injection.\n'
       + '› 1. Yes, continue\n2. No, quit\nPress enter to continue\n');
     expect(codex.needsTrust).toBe(true);
+    expect(codex.trustChoiceReady).toBe(true);
+    expect(codex.trustSelectionKey).toBe('');
+  });
+
+  it('detects when Claude highlights the decline choice before trust acceptance', () => {
+    const tracker = createInputReadyTracker({ directLaunch: true });
+    tracker.observe('', 'Quick safety check: Is this a project you created or one you trust?\n'
+      + '❯ No, exit\n'
+      + '  Yes, I trust this folder\n'
+      + 'Enter to confirm · Esc to cancel\n');
+
+    expect(tracker.needsTrust).toBe(true);
+    expect(tracker.trustChoiceReady).toBe(true);
+    expect(tracker.trustSelectionKey).toBe('\x1b[B');
+  });
+
+  it('uses option ordering when trust-choice highlight chrome is absent', () => {
+    const declineFirst = createInputReadyTracker();
+    declineFirst.observe('', 'Is this a project you trust?\nNo, exit\nYes, I trust this folder\n');
+    expect(declineFirst.trustChoiceReady).toBe(true);
+    expect(declineFirst.trustSelectionKey).toBe('\x1b[B');
+
+    const acceptFirst = createInputReadyTracker();
+    acceptFirst.observe('', 'Is this a project you trust?\nYes, I trust this folder\nNo, exit\n');
+    expect(acceptFirst.trustChoiceReady).toBe(true);
+    expect(acceptFirst.trustSelectionKey).toBe('');
+  });
+
+  it('moves upward when the highlighted decline choice follows the accept choice', () => {
+    const tracker = createInputReadyTracker();
+    tracker.observe('', 'Is this a project you trust?\nYes, I trust this folder\n❯ No, exit\n');
+    expect(tracker.trustSelectionKey).toBe('\x1b[A');
+  });
+
+  it('suppresses readiness until the trust choice is identified and acknowledged', () => {
+    const tracker = createInputReadyTracker({ directLaunch: true });
+    tracker.observe(PASTE_ON, 'Is this a project you trust?');
+    expect(tracker.needsTrust).toBe(true);
+    expect(tracker.trustChoiceReady).toBe(false);
+    expect(tracker.ready).toBe(false);
+
+    tracker.observe('', 'Yes, I trust this folder\nNo, exit\n');
+    tracker.ackTrustChoice();
+    expect(tracker.ready).toBe(true);
   });
 
   // Claude Code v2.1.233's auto-mode offer. Unlike the trust gate it paints with
@@ -1167,6 +1214,7 @@ describe('createInputReadyTracker', () => {
     tracker.observe('', 'Do you trust the contents of this project?\n> Yes, I trust this folder\n');
     expect(tracker.needsTrust).toBe(true);
     expect(tracker.ready).toBe(false); // still not ready while the trust menu is up
+    tracker.ackTrustChoice();
 
     tracker.observe('', '>\n? for shortcutsGemini 3.6 Flash · medium');
     expect(tracker.ready).toBe(true);

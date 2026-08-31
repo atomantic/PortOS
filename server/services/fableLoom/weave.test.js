@@ -22,11 +22,15 @@ vi.mock('../universeBuilder.js', () => ({ getUniverse: getUniverseMock }));
 const getSeriesMock = vi.hoisted(() => vi.fn(async () => null));
 vi.mock('../pipeline/series.js', () => ({ getSeries: getSeriesMock }));
 
-const { createLoom, addEpisode, addNode, mutateLoom, updateLoom, updateNode, getLoom } = await import('./records.js');
-const { _resetFableLoomBackend } = await import('./store.js');
 const {
-  branchNode, buildCanonDigest, feedbackEpisode, feedbackSeriesPlan, generateSeriesPlan, mapGeneratedGraph, playTurn,
-  reformatEpisodeScenes, reviewEpisode, reviewSeriesPlan, weaveEpisode,
+  createLoom, addEpisode, addNode, mutateLoom, updateEpisode, updateLoom, updateNode, getLoom,
+} = await import('./records.js');
+const { _resetFableLoomBackend } = await import('./store.js');
+const { aiStatusEvents } = await import('../aiStatusEvents.js');
+const {
+  branchNode, buildCanonDigest, feedbackEpisode, feedbackSeriesPlan, generateEpisodeOutline, generateSeriesPlan,
+  mapGeneratedGraph, playTurn, reformatEpisodeScenes, reviewEpisode, reviewEpisodeOutline, reviewSeriesPlan,
+  validateEpisodeOutline, reviewSeriesTeleplay, weaveEpisode,
 } = await import('./weave.js');
 
 beforeEach(() => {
@@ -59,6 +63,98 @@ const generatedGraph = () => ({
     { key: 's2', title: 'Inside', prose: 'Torchlight.', transitions: [{ targetKey: 's3', intent: 'give up' }] },
     { key: 's3', title: 'The Road Home', isEnding: true, endingLabel: 'Turned back', transitions: [] },
   ],
+});
+
+const generatedOutline = () => ({
+  startKey: 's1',
+  scenes: [
+    { key: 's1', title: 'Signal', summary: 'A signal proves the missing ship is alive.', playbackMode: 'cut', transitions: [{ targetKey: 's2', intent: 'follow the signal' }] },
+    { key: 's2', title: 'The choice', summary: 'The signal offers two routes with different costs.', playbackMode: 'decision', transitions: [{ targetKey: 's3', intent: 'protect the survivors' }, { targetKey: 's4', intent: 'take the shortcut' }] },
+    { key: 's3', title: 'Rescue', summary: 'The rescue succeeds but strands the protagonist.', isEnding: true, endingLabel: 'The long way home' },
+    { key: 's4', title: 'Shortcut', summary: 'The shortcut opens a door and leaves a voice behind.', isEnding: true, endingLabel: 'The open door' },
+  ],
+});
+
+const generatedGraphFromOutline = () => ({
+  startKey: 's1',
+  nodes: [
+    {
+      key: 's1', title: 'Signal', prose: 'The signal breaks through the static.',
+      playbackMode: 'cut', audienceConnection: 'disconnected', protagonistPresence: 'onscreen',
+      transitions: [{ targetKey: 's2', intent: 'follow the signal' }],
+    },
+    {
+      key: 's2', title: 'The choice', prose: 'Two routes demand different costs.',
+      playbackMode: 'decision', audienceConnection: 'disconnected', protagonistPresence: 'onscreen',
+      transitions: [
+        { targetKey: 's3', intent: 'protect the survivors' },
+        { targetKey: 's4', intent: 'take the shortcut' },
+      ],
+    },
+    {
+      key: 's3', title: 'Rescue', prose: 'The survivors escape.',
+      playbackMode: 'decision', audienceConnection: 'disconnected', protagonistPresence: 'onscreen',
+      isEnding: true, endingLabel: 'The long way home', transitions: [],
+    },
+    {
+      key: 's4', title: 'Shortcut', prose: 'The door opens.',
+      playbackMode: 'decision', audienceConnection: 'disconnected', protagonistPresence: 'onscreen',
+      isEnding: true, endingLabel: 'The open door', transitions: [],
+    },
+  ],
+});
+
+const generatedChallengeOutline = () => ({
+  startKey: 'setup',
+  scenes: [
+    {
+      key: 'setup', title: 'The keypad', summary: 'A prior scene planted the code now needed at the sealed door.',
+      plotPointId: 'plot-challenge', challengePhase: 'setup', playbackMode: 'cut',
+      transitions: [{ targetKey: 'decision', intent: 'try the lock' }],
+    },
+    {
+      key: 'decision', title: 'Recall the code', summary: 'The viewer chooses which remembered code the courier enters.',
+      plotPointId: 'plot-challenge', challengePhase: 'decision', playbackMode: 'decision',
+      transitions: [
+        { targetKey: 'success', intent: 'enter the remembered code' },
+        { targetKey: 'failure', intent: 'guess before the guard returns' },
+      ],
+    },
+    {
+      key: 'success', title: 'Quiet entry', summary: 'The right code opens the door without alerting the guard.',
+      plotPointId: 'plot-challenge', challengePhase: 'success', playbackMode: 'cut',
+      transitions: [{ targetKey: 'recovery', intent: 'slip inside' }],
+    },
+    {
+      key: 'failure', title: 'Alarm chirp', summary: 'The wrong code alerts the guard but leaves a costly escape.',
+      plotPointId: 'plot-challenge', challengePhase: 'failure', playbackMode: 'cut',
+      transitions: [{ targetKey: 'recovery', intent: 'create a distraction' }],
+    },
+    {
+      key: 'recovery', title: 'Past the blockade', summary: 'Both outcomes continue inside with their different costs intact.',
+      plotPointId: 'plot-challenge', challengePhase: 'recovery', playbackMode: 'cut',
+      transitions: [{ targetKey: 'ending', intent: 'move deeper inside' }],
+    },
+    {
+      key: 'ending', title: 'Inside', summary: 'The courier reaches the next obstacle.',
+      isEnding: true, endingLabel: 'Through the door', transitions: [],
+    },
+  ],
+});
+
+const generatedChallengeGraph = () => ({
+  startKey: 'setup',
+  nodes: generatedChallengeOutline().scenes.map((scene) => ({
+    key: scene.key,
+    title: scene.title,
+    prose: `Teleplay for ${scene.title}.`,
+    playbackMode: scene.playbackMode || 'decision',
+    audienceConnection: 'disconnected',
+    protagonistPresence: 'onscreen',
+    isEnding: scene.isEnding === true,
+    endingLabel: scene.endingLabel || '',
+    transitions: scene.transitions || [],
+  })),
 });
 
 describe('mapGeneratedGraph', () => {
@@ -153,6 +249,216 @@ describe('weaveEpisode', () => {
     expect(result.loom.episodes[0].nodes.map((node) => node.audienceConnection))
       .toEqual(['disconnected', 'connected', 'disconnected']);
   });
+
+  it('requires a validated beat outline before expansion', async () => {
+    const { loomId, episodeId } = await setup();
+    await expect(weaveEpisode(loomId, episodeId, { expandFromOutline: true }))
+      .rejects.toMatchObject({ code: 'OUTLINE_INVALID' });
+    expect(runStagedLLM).not.toHaveBeenCalled();
+  });
+
+  it('drafts, validates, and expands an outline without losing its story contract', async () => {
+    const { loomId, episodeId } = await setup();
+    runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-run' });
+    const drafted = await generateEpisodeOutline(loomId, episodeId, { guidance: 'Make the choice costly.' });
+    expect(drafted.runId).toBe('outline-run');
+    expect(drafted.outline.scenes).toHaveLength(4);
+    expect(drafted.outline.validation.status).toBe('draft');
+
+    const checked = await validateEpisodeOutline(loomId, episodeId);
+    expect(checked.validation.issues).toEqual([]);
+    expect(checked.outline.validation.status).toBe('valid');
+
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraphFromOutline(), runId: 'expand-run' });
+    const expanded = await weaveEpisode(loomId, episodeId, {
+      guidance: 'Write the full teleplay now.', replace: false, expandFromOutline: true,
+    });
+    expect(expanded.runId).toBe('expand-run');
+    expect(expanded.loom.episodes[0].nodes).toHaveLength(4);
+    expect(expanded.loom.episodes[0].storyOutline.scenes.map((scene) => scene.key))
+      .toEqual(expanded.loom.episodes[0].nodes.map((node) => node.id));
+    expect(expanded.loom.episodes[0].storyOutline.startKey)
+      .toBe(expanded.loom.episodes[0].startNodeId);
+    expect(runStagedLLM.mock.calls[1][0]).toBe('fableloom-weave-episode');
+    expect(runStagedLLM.mock.calls[1][1].outlineDigest).toContain('[s1] Signal');
+  });
+
+  it('replaces an old teleplay after a structurally valid outline rewrite', async () => {
+    const { loomId, episodeId } = await setup();
+    runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-run' });
+    await generateEpisodeOutline(loomId, episodeId, {});
+    await validateEpisodeOutline(loomId, episodeId);
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraphFromOutline(), runId: 'first-expand' });
+    await weaveEpisode(loomId, episodeId, { expandFromOutline: true });
+
+    const expanded = await getLoom(loomId);
+    const expandedEpisode = expanded.episodes[0];
+    const revisedOutline = {
+      ...expandedEpisode.storyOutline,
+      scenes: expandedEpisode.storyOutline.scenes.map((scene, index) => (
+        index === 0 ? { ...scene, title: 'Revised signal' } : scene
+      )),
+    };
+    await updateEpisode(loomId, episodeId, { storyOutline: revisedOutline });
+    const checked = await validateEpisodeOutline(loomId, episodeId);
+
+    expect(checked.outline.validation.status).toBe('invalid');
+    expect(checked.validation.issues.every((issue) => (
+      issue.code.startsWith('TELEPLAY_')
+    ))).toBe(true);
+
+    const replacementOutline = checked.outline;
+    const replacementGraph = {
+      startKey: replacementOutline.startKey,
+      nodes: replacementOutline.scenes.map((scene) => ({
+        key: scene.key,
+        title: scene.title,
+        prose: `${scene.title} in full teleplay form.`,
+        playbackMode: scene.playbackMode,
+        audienceConnection: scene.audienceConnection,
+        protagonistPresence: scene.protagonistPresence,
+        isEnding: scene.isEnding,
+        endingLabel: scene.endingLabel,
+        transitions: scene.transitions.map((transition) => ({
+          targetKey: transition.targetKey,
+          intent: transition.intent,
+        })),
+      })),
+    };
+    runStagedLLM.mockResolvedValueOnce({ content: replacementGraph, runId: 'replacement-expand' });
+
+    const replaced = await weaveEpisode(loomId, episodeId, {
+      replace: true,
+      expandFromOutline: true,
+    });
+
+    expect(replaced.runId).toBe('replacement-expand');
+    expect(replaced.loom.episodes[0].nodes[0].title).toBe('Revised signal');
+    expect(replaced.loom.episodes[0].storyOutline.validation).toMatchObject({
+      status: 'valid',
+      issues: [],
+    });
+  });
+
+  it('uses the loom participation mode when normalizing helper outline beats', async () => {
+    const { loomId, episodeId } = await setup();
+    await updateLoom(loomId, {
+      participationMode: 'helper',
+      audienceCommunicationMedium: 'A pocket radio.',
+    });
+    const outline = generatedOutline();
+    outline.scenes[1].audienceConnection = 'connected';
+    runStagedLLM.mockResolvedValueOnce({ content: outline, runId: 'helper-outline-run' });
+
+    const drafted = await generateEpisodeOutline(loomId, episodeId, {});
+
+    expect(drafted.outline.scenes[1].protagonistPresence).toBe('offscreen');
+  });
+
+  it('does not expand one episode until every episode in the series has a validated outline', async () => {
+    const { loomId, episodeId } = await setup();
+    const withSecond = await addEpisode(loomId, { title: 'Second', synopsis: 'The consequence.' });
+    runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-run' });
+    await generateEpisodeOutline(loomId, episodeId, {});
+    await validateEpisodeOutline(loomId, episodeId);
+
+    await expect(weaveEpisode(loomId, episodeId, { expandFromOutline: true }))
+      .rejects.toMatchObject({ code: 'SERIES_OUTLINE_INVALID' });
+    expect(withSecond.episodes).toHaveLength(2);
+    expect(runStagedLLM).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps remapped outlines ready while expanding episodes in series order', async () => {
+    const { loomId, episodeId } = await setup();
+    const withSecond = await addEpisode(loomId, { title: 'Second', synopsis: 'The consequence.' });
+    const secondEpisodeId = withSecond.episodes[1].id;
+
+    runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-1' });
+    await generateEpisodeOutline(loomId, episodeId, {});
+    await validateEpisodeOutline(loomId, episodeId);
+    runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-2' });
+    await generateEpisodeOutline(loomId, secondEpisodeId, {});
+    await validateEpisodeOutline(loomId, secondEpisodeId);
+
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraphFromOutline(), runId: 'expand-1' });
+    const firstExpanded = await weaveEpisode(loomId, episodeId, { expandFromOutline: true });
+    expect(firstExpanded.loom.episodes[0].storyOutline.validation.status).toBe('valid');
+
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraphFromOutline(), runId: 'expand-2' });
+    const secondExpanded = await weaveEpisode(loomId, secondEpisodeId, { expandFromOutline: true });
+    expect(secondExpanded.loom.episodes.every((item) => (
+      item.storyOutline.validation.status === 'valid'
+    ))).toBe(true);
+  });
+
+  it('marks validation invalid when an expanded teleplay has drifted from its outline', async () => {
+    const { loomId, episodeId } = await setup();
+    runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-run' });
+    await generateEpisodeOutline(loomId, episodeId, {});
+    await validateEpisodeOutline(loomId, episodeId);
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraphFromOutline(), runId: 'expand-run' });
+    await weaveEpisode(loomId, episodeId, { expandFromOutline: true });
+    await updateNode(loomId, episodeId, (await getLoom(loomId)).episodes[0].nodes[0].id, {
+      title: 'Changed after expansion',
+    });
+
+    const checked = await validateEpisodeOutline(loomId, episodeId);
+    expect(checked.outline.validation.status).toBe('invalid');
+    expect(checked.validation.issues).toContainEqual(expect.objectContaining({
+      code: 'TELEPLAY_SCENE_CONTRACT_MISMATCH',
+    }));
+  });
+});
+
+describe('episode outline AI review', () => {
+  it('returns deterministic findings alongside editorial analysis', async () => {
+    const { loomId, episodeId } = await setup();
+    runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-run' });
+    await generateEpisodeOutline(loomId, episodeId, {});
+    runStagedLLM.mockResolvedValueOnce({
+      content: { summary: 'The turn lands.', strengths: ['The endings diverge.'], risks: ['The handoff needs a sharper hook.'], recommendations: ['Make the final beat reveal the next threat.'] },
+      runId: 'outline-review-run',
+    });
+    const result = await reviewEpisodeOutline(loomId, episodeId, {});
+    expect(result).toMatchObject({
+      runId: 'outline-review-run',
+      structural: { stats: { errorCount: 0 } },
+      analysis: { summary: 'The turn lands.' },
+    });
+  });
+});
+
+describe('reviewSeriesTeleplay', () => {
+  it('reviews all expanded episodes together and returns per-episode structure', async () => {
+    const { loomId, episodeId } = await setup();
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraph(), runId: 'expand-1' });
+    await weaveEpisode(loomId, episodeId, {});
+    const second = await addEpisode(loomId, { title: 'Second', synopsis: 'The consequence.' });
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraph(), runId: 'expand-2' });
+    await weaveEpisode(loomId, second.episodes[1].id, {});
+    runStagedLLM.mockResolvedValueOnce({
+      content: { summary: 'The series escalates.', strengths: ['The protagonist changes.'], risks: [], recommendations: [] },
+      runId: 'teleplay-review-run',
+    });
+
+    const result = await reviewSeriesTeleplay(loomId, {});
+    expect(result).toMatchObject({
+      runId: 'teleplay-review-run',
+      structural: [
+        { episodeId, episodeNumber: 1 },
+        { episodeNumber: 2 },
+      ],
+      analysis: { summary: 'The series escalates.' },
+    });
+    expect(runStagedLLM.mock.calls[2][0]).toBe('fableloom-review-series-teleplay');
+    expect(runStagedLLM.mock.calls[2][1].teleplayDigest).toContain('## Episode 1: Pilot');
+  });
+
+  it('refuses a full-series review while an episode has not expanded', async () => {
+    const { loomId } = await setup();
+    await expect(reviewSeriesTeleplay(loomId, {})).rejects.toMatchObject({ code: 'TELEPLAY_INCOMPLETE' });
+    expect(runStagedLLM).not.toHaveBeenCalled();
+  });
 });
 
 describe('branchNode', () => {
@@ -233,6 +539,34 @@ describe('reviewEpisode', () => {
 });
 
 describe('feedbackEpisode', () => {
+  it('reports the provider and shell lifecycle for an in-page operation', async () => {
+    const { loomId, episodeId } = await setup();
+    const events = [];
+    const handle = (event) => events.push(event);
+    aiStatusEvents.on('status', handle);
+    runStagedLLM.mockImplementation(async (_stage, _variables, options) => {
+      options.onRunCreated('run-feedback', {
+        providerId: 'codex-tui', providerName: 'Codex TUI', model: 'gpt-test', providerType: 'tui',
+      });
+      options.onRunReady({
+        runId: 'run-feedback', providerId: 'codex-tui', providerName: 'Codex TUI',
+        model: 'gpt-test', providerType: 'tui', shellReady: true,
+      });
+      options.onRunSettled('run-feedback');
+      return { content: { title: 'Revised' }, runId: 'run-feedback' };
+    });
+
+    await feedbackEpisode(loomId, episodeId, {
+      feedback: 'Revise the title.', operationId: '00000000-0000-4000-8000-000000000042',
+    });
+    aiStatusEvents.off('status', handle);
+
+    expect(events.map((event) => event.phase)).toEqual(['start', 'running', 'ready', 'applying', 'complete']);
+    expect(events.find((event) => event.phase === 'ready')).toMatchObject({
+      runId: 'run-feedback', shellReady: true, operationId: '00000000-0000-4000-8000-000000000042',
+    });
+  });
+
   it('applies sparse metadata, scene, and existing-path edits without changing ids', async () => {
     const { loomId, episodeId } = await setup();
     let updated = await addNode(loomId, episodeId, { title: 'The Gate', prose: 'You wait.' });
@@ -466,7 +800,7 @@ describe('reformatEpisodeScenes', () => {
 
   it('rewrites every returned scene, pins the format, and leaves the graph alone', async () => {
     const { loomId, episodeId, gateId, insideId } = await proseSetup();
-    runStagedLLM.mockImplementation(async (stage, variables) => ({
+    runStagedLLM.mockImplementation(async (_stage, variables) => ({
       content: {
         scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: `INT. GATE - NIGHT\n\n${sc.prose}` })),
       },
@@ -520,7 +854,7 @@ describe('reformatEpisodeScenes', () => {
       await addNode(loomId, episodeId, { title: `Scene ${i}`, prose: `Prose ${i}.` });
     }
     let call = 0;
-    runStagedLLM.mockImplementation(async (stage, variables) => {
+    runStagedLLM.mockImplementation(async (_stage, variables) => {
       call += 1;
       if (call > 1) throw new Error('provider died mid-run');
       return { content: { scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: `INT. ${sc.prose}` })) } };
@@ -536,7 +870,7 @@ describe('reformatEpisodeScenes', () => {
     const { loomId, episodeId } = await setup();
     await addNode(loomId, episodeId, { title: 'Written', prose: 'You stand before it.' });
     await addNode(loomId, episodeId, { title: 'Placeholder with no prose yet' });
-    runStagedLLM.mockImplementation(async (stage, variables) => ({
+    runStagedLLM.mockImplementation(async (_stage, variables) => ({
       content: { scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: 'INT. SOMEWHERE' })) },
     }));
 
@@ -558,7 +892,7 @@ describe('reformatEpisodeScenes', () => {
       }));
       return current;
     });
-    runStagedLLM.mockImplementation(async (stage, variables) => ({
+    runStagedLLM.mockImplementation(async (_stage, variables) => ({
       content: { scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: `INT. ${sc.prose}` })) },
     }));
 
@@ -593,7 +927,7 @@ describe('reformatEpisodeScenes', () => {
     const withEp2 = await addEpisode(loomId, { title: 'Two' });
     const episode2Id = withEp2.episodes[1].id;
     await addNode(loomId, episode2Id, { title: 'Elsewhere', prose: 'Rain on the roof.' });
-    runStagedLLM.mockImplementation(async (stage, variables) => ({
+    runStagedLLM.mockImplementation(async (_stage, variables) => ({
       content: { scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: `INT. ${sc.prose}` })) },
     }));
 
@@ -611,7 +945,7 @@ describe('reformatEpisodeScenes', () => {
 
   it('is a no-op on an episode with nothing left to convert, and still pins the loom', async () => {
     const { loomId, episodeId } = await proseSetup();
-    runStagedLLM.mockImplementation(async (stage, variables) => ({
+    runStagedLLM.mockImplementation(async (_stage, variables) => ({
       content: { scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: `INT. ${sc.prose}` })) },
     }));
     await reformatEpisodeScenes(loomId, episodeId, { format: 'teleplay' });
@@ -654,7 +988,7 @@ describe('reformatEpisodeScenes', () => {
 
   it('asks the model for the TARGET format, not the one the loom still holds', async () => {
     const { loomId, episodeId } = await proseSetup();
-    runStagedLLM.mockImplementation(async (stage, variables) => ({
+    runStagedLLM.mockImplementation(async (_stage, variables) => ({
       content: { scenes: JSON.parse(variables.scenesJson).map((sc) => ({ id: sc.id, prose: 'INT. GATE' })) },
     }));
     await reformatEpisodeScenes(loomId, episodeId, { format: 'teleplay' });
@@ -832,7 +1166,71 @@ describe('series plan AI', () => {
     runStagedLLM.mockResolvedValueOnce({ content: generatedGraph(), runId: 'run-weave' });
     await weaveEpisode(loomId, episodeId, { replace: true });
     expect(runStagedLLM).toHaveBeenCalledWith('fableloom-weave-episode', expect.objectContaining({
-      storyContext: expect.stringContaining('Plot point 1 [planned for Episode 1: Pilot]: Episode turn'),
+      storyContext: expect.stringContaining('Plot point 1 id=plot-relevant kind=beat [planned for Episode 1: Pilot]: Episode turn'),
     }), expect.anything());
+  });
+
+  it('expands explicitly-authored challenges into a multi-scene interactive contract', async () => {
+    const { loomId, episodeId } = await setup();
+    await updateLoom(loomId, { seriesPlan: {
+      storyArc: 'A courier earns a dangerous passage.',
+      plotPoints: [{
+        id: 'plot-challenge',
+        kind: 'challenge',
+        title: 'Recall the gate code',
+        description: 'SETUP: Plant the code. VIEWER DECISION LOOP: Recall it. FAILURE: Trigger pursuit.',
+        episodeId,
+      }],
+      sideQuests: [],
+    } });
+    runStagedLLM.mockResolvedValueOnce({ content: generatedChallengeOutline(), runId: 'outline-challenge' });
+    await generateEpisodeOutline(loomId, episodeId, {});
+
+    expect(runStagedLLM).toHaveBeenCalledWith('fableloom-outline-episode', expect.objectContaining({
+      storyContext: expect.stringContaining('PLAYABLE CHALLENGE CONTRACT'),
+    }), expect.anything());
+    expect(runStagedLLM.mock.calls[0][1].storyContext).toContain('Failure continues with a visible cost');
+    expect((await validateEpisodeOutline(loomId, episodeId)).outline.validation.status).toBe('valid');
+
+    runStagedLLM.mockResolvedValueOnce({ content: generatedChallengeGraph(), runId: 'expand-challenge' });
+    const expanded = await weaveEpisode(loomId, episodeId, { expandFromOutline: true });
+    const challengeNodes = expanded.loom.episodes[0].nodes.filter((node) => (
+      node.plotPointId === 'plot-challenge'
+    ));
+    expect(challengeNodes.map((node) => node.challengePhase).sort()).toEqual([
+      'decision', 'failure', 'recovery', 'setup', 'success',
+    ]);
+    expect(expanded.loom.episodes[0].storyOutline.validation.status).toBe('valid');
+  });
+
+  it('carries enabled series delivery beats into episode context and preserves them during plan drafting', async () => {
+    const { loomId, episodeId } = await setup();
+    const delivery = {
+      deliveryOptions: { overnightVoicemails: true, nextSeasonTeaser: true },
+      interEpisodeVoicemails: [{
+        id: 'vm-1', fromEpisodeId: episodeId, toEpisodeId: null,
+        title: 'Night call', transcript: 'Keep the receiver warm.',
+      }],
+      nextSeasonTeaser: { title: 'Beyond', transcript: 'Something answers.' },
+    };
+    await updateLoom(loomId, { seriesPlan: {
+      storyArc: 'A courier learns to listen.', plotPoints: [], sideQuests: [], ...delivery,
+    } });
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraph(), runId: 'run-weave-delivery' });
+    await weaveEpisode(loomId, episodeId, {});
+    expect(runStagedLLM.mock.calls[0][1].storyContext).toContain('authored overnight voicemail');
+    expect(runStagedLLM.mock.calls[0][1].storyContext).toContain('Keep the receiver warm.');
+  });
+
+  it('tells episode expansion to frame unseen obstacles for off-screen helper scenes', async () => {
+    const { loomId, episodeId } = await setup();
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraph(), runId: 'run-offscreen-framing' });
+
+    await weaveEpisode(loomId, episodeId, {});
+
+    expect(runStagedLLM.mock.calls[0][1].storyContext)
+      .toContain('frame the obstacle or space the protagonist cannot see');
+    expect(runStagedLLM.mock.calls[0][1].storyContext)
+      .toContain('never make a standalone comms device the subject');
   });
 });

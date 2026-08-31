@@ -218,8 +218,59 @@ describe('Apps Lifecycle Routes', () => {
 
       expect(response.status).toBe(200);
       expect(pm2Service.startWithCommand).toHaveBeenCalledWith(
-        'test-app', '/path/to/repo', 'npm run dev', { pm2Home: join(REAL_DIR, 'example-pm2') }
+        'test-app', '/path/to/repo', 'npm run dev', { pm2Home: join(REAL_DIR, 'example-pm2'), port: null }
       );
+    });
+
+    // PM2 copies the launching process's env into the child, so PortOS's own
+    // PORT reached managed apps and won over their env file (neither Bun's
+    // --env-file nor dotenv overrides an already-set variable). A managed app
+    // then bound PortOS's port and crashlooped the server on EADDRINUSE.
+    it('pins a single-process app to its own recorded port, not PortOS\'s', async () => {
+      const mockApp = {
+        id: 'app-001',
+        name: 'Worlds',
+        repoPath: '/path/to/repo',
+        uiPort: 8940,
+        apiPort: 8940,
+        pm2ProcessNames: ['worlds'],
+        startCommands: ['bun --env-file=.env.portos server/server.ts']
+      };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      pm2Service.startWithCommand.mockResolvedValue({ success: true });
+      history.logAction.mockResolvedValue();
+
+      const response = await request(app).post('/api/apps/app-001/start');
+
+      expect(response.status).toBe(200);
+      expect(pm2Service.startWithCommand).toHaveBeenCalledWith(
+        'worlds', '/path/to/repo', 'bun --env-file=.env.portos server/server.ts',
+        expect.objectContaining({ port: 8940 })
+      );
+    });
+
+    // Multi-process apps have no port-to-process mapping here, so handing every
+    // process the same PORT would collide them against each other.
+    it('does not pin a port when starting several processes', async () => {
+      const mockApp = {
+        id: 'app-001',
+        name: 'Two Part App',
+        repoPath: '/path/to/repo',
+        uiPort: 8940,
+        apiPort: 8941,
+        pm2ProcessNames: ['two-part-server', 'two-part-ui'],
+        startCommands: ['npm run server', 'npm run ui']
+      };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      pm2Service.startWithCommand.mockResolvedValue({ success: true });
+      history.logAction.mockResolvedValue();
+
+      const response = await request(app).post('/api/apps/app-001/start');
+
+      expect(response.status).toBe(200);
+      for (const call of pm2Service.startWithCommand.mock.calls) {
+        expect(call[3].port).toBeNull();
+      }
     });
 
     it('launches a desktop app from its startCommands with autorestart OFF (#2991)', async () => {

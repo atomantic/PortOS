@@ -44,14 +44,14 @@ Identity & self: [digital-twin](./features/digital-twin.md) · [identity-system]
 
 Knowledge: [brain-system](./features/brain-system.md) · [messages-security](./features/messages-security.md)
 
-Create: [writers-room](./features/writers-room.md) · [fableloom](./features/fableloom.md) · [openworld](./features/openworld.md) · [sprite-export-contract](./features/sprite-export-contract.md) · [video-text-encoders](./features/video-text-encoders.md) · [video-speed-profiles](./features/video-speed-profiles.md)
+Create: [writers-room](./features/writers-room.md) · [fableloom](./features/fableloom.md) · [Eidoverse Worlds integration](./features/eidoverse.md) · [OpenWorld historical reference](./features/openworld.md) · [sprite-export-contract](./features/sprite-export-contract.md) · [video-text-encoders](./features/video-text-encoders.md) · [video-speed-profiles](./features/video-speed-profiles.md)
 
 Comms & voice: [openclaw-operator-chat](./features/openclaw-operator-chat.md) ([pre-build audit](./research/2026-03-31-openclaw-operator-chat-audit.md)) · [stacker-news](./features/stacker-news.md) · [voice](./features/voice.md)
 
 ## Point-in-time records
 
 - **[plans/](./plans/README.md)** — dated design plans (`YYYY-MM-DD-<slug>.md`), archived on approval before implementation. Historical records, not living docs.
-- **decisions/** — ADRs (`YYYY-MM-DD-<slug>.md`), e.g. the [Postgres-as-primary-datastore decision](./decisions/2026-06-07-postgres-as-primary-datastore.md) and what may cross the federation layer ([privacy records machine-local](./decisions/2026-08-08-privacy-records-machine-local.md), [federated visual prompts](./decisions/2026-08-20-federated-visual-prompts.md), [conditioning crosses to an allowlisted peer](./decisions/2026-08-22-federated-media-input-assets.md)).
+- **decisions/** — ADRs (`YYYY-MM-DD-<slug>.md`), e.g. the [Postgres-as-primary-datastore decision](./decisions/2026-06-07-postgres-as-primary-datastore.md) and what may cross the federation layer ([privacy records machine-local](./decisions/2026-08-08-privacy-records-machine-local.md), [federated visual prompts](./decisions/2026-08-20-federated-visual-prompts.md), [conditioning crosses to an allowlisted peer](./decisions/2026-08-22-federated-media-input-assets.md)), and why H3 [ships the draft-decode gates without an asset](./decisions/2026-08-30-h3-draft-decoder-asset.md).
 - **research/** — dated investigation and incident write-ups (e.g. the [mflux GPU-watchdog panic](./research/2026-06-13-mflux-training-watchdog-panic.md) and the [local LLM performance audit](./research/2026-08-22-local-llm-performance-audit.md)).
 - **superpowers/** — plan/spec pairs from superpowers-driven builds: `specs/<date>-<slug>-design.md` (design) + `plans/<date>-<slug>.md` (implementation plan).
 

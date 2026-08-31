@@ -3,7 +3,7 @@
  * actually running / installed?" so the UI can tell a user who did a bare
  * `git pull` (without ./update.sh) that their install is half-updated.
  *
- * Four independent signals (issue #1779):
+ * Five independent signals (issue #1779):
  *   1. running-stale-code   — the server process booted at an older commit than
  *      what's now on disk (a `git pull` advanced HEAD but nothing restarted).
  *   2. stale-deps           — a workspace's package.json/lockfile is newer than
@@ -15,8 +15,10 @@
  *   4. pending-migrations   — migration files exist on disk that aren't in the
  *      applied-list. (Boot normally applies these, so a non-zero count means a
  *      pull landed new migrations and the server hasn't restarted yet.)
+ *   5. stale-submodules     — an initialized checkout differs from the commit
+ *      pinned by the parent, or a declared submodule has not been initialized.
  *
- * All four self-clear after a proper `update.sh` cycle (install bumps the npm
+ * All five self-clear after a proper `update.sh` cycle (install bumps the npm
  * receipt mtime, build bumps the dist mtime, boot applies migrations and
  * captures the new commit) — so no new on-disk marker format is introduced and
  * existing installs get accurate detection immediately, with no migration.
@@ -30,6 +32,7 @@ import { join } from 'path';
 import { stat, readdir } from 'fs/promises';
 import { PATHS } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
+import { parseSubmoduleStatusLine } from '../lib/gitOutputParsers.js';
 import { listPendingMigrations } from '../../scripts/run-migrations.js';
 import { isWorktreeRoot } from '../lib/dataRoot.js';
 
@@ -179,6 +182,63 @@ async function detectStaleDeps(rootDir, { statMtime = statMtimeMs } = {}) {
 }
 
 /**
+ * Compare every recursive submodule checkout with the gitlink pinned by the
+ * parent repository. Git prefixes an in-sync checkout with a space, while
+ * `+`, `-`, and `U` mean a different commit, uninitialized, and conflicted.
+ *
+ * `stale: null` is intentionally distinct from a successful empty/in-sync
+ * result: an unavailable git checkout must not be reported as authoritative.
+ */
+async function detectSubmodules(rootDir, {
+  getStatus = () => execGit(
+    ['submodule', 'status', '--recursive'],
+    rootDir,
+    { ignoreExitCode: true }
+  ),
+  isAheadOfPin = async ({ commit, path }) => {
+    const pinned = await execGit(
+      ['rev-parse', `HEAD:${path}`],
+      rootDir,
+      { ignoreExitCode: true }
+    );
+    const pinnedSha = pinned.exitCode === 0 ? pinned.stdout.trim() : '';
+    if (!pinnedSha) return false;
+    const ancestor = await execGit(
+      ['merge-base', '--is-ancestor', pinnedSha, commit],
+      join(rootDir, path),
+      { ignoreExitCode: true }
+    );
+    return ancestor.exitCode === 0;
+  }
+} = {}) {
+  const result = await getStatus();
+  if (result?.exitCode !== 0 || typeof result?.stdout !== 'string') {
+    return { stale: null, paths: null };
+  }
+
+  // Split before trimming: the leading space is the authoritative in-sync
+  // status character. A successful empty result means there are no submodules.
+  const lines = result.stdout.split('\n').filter(line => line.trimEnd());
+  const parsed = lines.map(parseSubmoduleStatusLine);
+  if (parsed.some(entry => entry === null)) {
+    return { stale: null, paths: null };
+  }
+
+  const paths = [];
+  for (const entry of parsed) {
+    if (entry.statusChar === ' ') continue;
+    // The Submodules tab intentionally supports checking out the latest remote
+    // commit without committing the parent pointer. Git reports that as `+`,
+    // but it is not a half-finished update when the checkout descends from the
+    // pin. A behind/divergent `+`, `-` (uninitialized), or `U` (conflicted)
+    // still needs Reconcile. Comparison failures stay conservative (stale).
+    if (entry.statusChar === '+' && await isAheadOfPin(entry).catch(() => false)) continue;
+    paths.push(entry.path);
+  }
+  return { stale: paths.length > 0, paths };
+}
+
+/**
  * Compute the full install-sync picture. Every external dependency is
  * injectable so the detection logic is unit-testable without touching real
  * git/fs. Returns a plain object safe to splice into /api/update/status.
@@ -206,6 +266,12 @@ export async function getInstallState({
   listPending = () => isWorktreeRoot(migrationRootDir)
     ? Promise.resolve([])
     : listPendingMigrations({ rootDir: migrationRootDir }),
+  // A CoS worktree cannot switch to its own main branch, and intentionally
+  // leaves submodules uninitialized. Offering Reconcile there would be a
+  // permanent false action, so preserve unknown rather than reporting stale.
+  getSubmoduleState = () => isWorktreeRoot(rootDir)
+    ? Promise.resolve({ stale: null, paths: null })
+    : detectSubmodules(rootDir),
 } = {}) {
   const currentCommit = await getCurrentCommit().catch(() => null);
 
@@ -229,11 +295,15 @@ export async function getInstallState({
   const pendingFiles = await listPending().catch(() => []);
   const pendingMigrations = { count: pendingFiles.length, files: pendingFiles };
 
+  const submodules = await getSubmoduleState()
+    .catch(() => ({ stale: null, paths: null }));
+
   const outOfSync =
     runningStaleCode ||
     staleDeps.stale ||
     staleBuild === true ||
-    pendingMigrations.count > 0;
+    pendingMigrations.count > 0 ||
+    submodules.stale === true;
 
   return {
     bootCommit: boot || null,
@@ -242,9 +312,10 @@ export async function getInstallState({
     staleDeps,
     staleBuild,
     pendingMigrations,
+    submodules,
     outOfSync
   };
 }
 
 // Exported for unit tests of the individual detectors.
-export const __internal = { detectStaleDeps, isClientSourceNewer, gitRevParseHead, gitIsAncestor };
+export const __internal = { detectStaleDeps, detectSubmodules, isClientSourceNewer, gitRevParseHead, gitIsAncestor };

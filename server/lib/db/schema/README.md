@@ -25,7 +25,7 @@ Parity with `server/scripts/init-db.sql` (the fresh-install path) is locked by
 | `commissions.js` | `commissionsDdl` | Creative Commissions + feedback (machine-local) |
 | `catalog.js` | `catalogDdl`, `catalogUserTypesDdl` | Catalog scraps/ingredients/tags/media + user-defined types |
 | `media.js` | `mediaDdl` | Creative-director / music-video projects, mood boards, media assets |
-| `universes.js` | `universesDdl` | Universes + universe run history |
+| `universes.js` | `universesDdl` | Universes, machine-local character voice profiles/renders, + universe run history |
 | `library.js` | `libraryDdl` | Authors, artists, albums, tracks |
 | `pipeline.js` | `pipelineDdl` | Pipeline series, issues, story-builder sessions |
 | `writersRoom.js` | `writersRoomDdl` | Writers-Room folders, works, draft versions, exercises |

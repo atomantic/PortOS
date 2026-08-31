@@ -528,6 +528,7 @@ export default function CanonCard({
         <CharacterDetailsToggle>
           <CharacterDetailEditor
             entry={entry}
+            universeId={characterExtensions.universeId}
             characters={characterExtensions.castList || []}
             onPatch={(patch) => onPatchEntry(entry.id, patch)}
             onExpand={characterExtensions.onExpandCharacter ? () => characterExtensions.onExpandCharacter(entry.id) : null}

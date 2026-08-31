@@ -34,7 +34,8 @@ import {
   DEFAULT_TASK_PROMPTS,
   PROMPT_VERSIONS,
   REFERENCE_WATCH_AUDITED_VERSION,
-  PREVIOUS_DEFAULT_PROMPTS
+  PREVIOUS_DEFAULT_PROMPTS,
+  promptMatchesShippedDefault
 } from './taskPromptDefaults.js';
 
 // Re-export the prompt data/compat constants so existing importers of this
@@ -53,12 +54,6 @@ export {
 const CLAIM_FLOW_DEFAULT_PROMPTS = Object.freeze({
   'plan-task': PREVIOUS_DEFAULT_PROMPTS['plan-task'].at(-1)
 });
-
-function isShippedDefaultPrompt(prompt, taskType) {
-  if (!prompt || !DEFAULT_TASK_PROMPTS[taskType]) return false;
-  return prompt === DEFAULT_TASK_PROMPTS[taskType]
-    || (PREVIOUS_DEFAULT_PROMPTS[taskType] || []).includes(prompt);
-}
 
 // ============================================================
 // Prompt getters
@@ -100,7 +95,7 @@ async function resolvePromptPlaceholders(prompt) {
 
 export async function getTaskPrompt(taskType, { claimFlow = false } = {}) {
   const interval = await getTaskInterval(taskType);
-  const storedDefault = claimFlow && isShippedDefaultPrompt(interval.prompt, taskType);
+  const storedDefault = claimFlow && promptMatchesShippedDefault(interval.prompt, taskType);
   let prompt = (interval.prompt && !storedDefault ? interval.prompt : null)
     || (claimFlow ? CLAIM_FLOW_DEFAULT_PROMPTS[taskType] : null)
     || DEFAULT_TASK_PROMPTS[taskType]

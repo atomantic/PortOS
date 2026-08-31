@@ -410,12 +410,7 @@ router.post('/fetch-full/:accountId', asyncHandler(async (req, res) => {
   const allResult = await messageSync.getMessages({ accountId, limit: FULL_BODY_REFRESH_LIMIT });
   const truncated = allResult.messages.length >= FULL_BODY_REFRESH_LIMIT;
   const toRefresh = force ? allResult.messages : allResult.messages.filter(m => m.bodyFull === false);
-  let updated = 0;
-
-  for (const msg of toRefresh) {
-    const result = await messageSync.refreshMessage(accountId, msg.id);
-    if (result) updated++;
-  }
+  const { updated } = await messageSync.refreshMessages(accountId, toRefresh.map(msg => msg.id));
 
   if (updated > 0) req.app.get('io')?.emit('messages:changed', {});
   res.json({ updated, total: toRefresh.length, truncated });

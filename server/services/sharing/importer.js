@@ -41,7 +41,7 @@ import { findOrCreateUniverseCollection, findOrCreateSeriesCollection, addItem a
 import { adoptImportedSubscription, withReexportSuppressed } from './subscriptions.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instances.js';
 import { mergePeerAnnotations } from '../mediaAnnotations.js';
-import { isStr } from '../../lib/storyBible.js';
+import { isStr, preserveLegacyCharacterProductionPackages } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { maybeJournalBeforeOverwrite, flushBaseHashes, setSyncBaseHash, contentHashForRecord } from '../../lib/conflictJournal.js';
 
@@ -495,6 +495,7 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
   let applied = 0;
   const overridden = [];
   const senderCannotRepresentClimax = (Number(manifest?.portosSchemaVersions?.pipelineIssues) || 0) < 3;
+  const senderUniversesVersion = Number(manifest?.portosSchemaVersions?.universes) || 0;
   // Records whose insert threw an UNEXPECTED (non-duplicate) error — they did
   // NOT land. Surfaced as a pending condition (like legacyCanonPendingFailures)
   // so processManifest leaves the cursor un-advanced and the watcher retries,
@@ -561,6 +562,16 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
       if (kind === 'issue' && senderCannotRepresentClimax
         && existing.arcRole === 'climax' && record.arcRole !== 'climax') {
         record = { ...record, arcRole: 'climax' };
+      }
+      if (kind === 'universe') {
+        record = {
+          ...record,
+          characters: preserveLegacyCharacterProductionPackages(
+            record.characters,
+            existing.characters,
+            senderUniversesVersion,
+          ),
+        };
       }
       // Non-blocking conflict journal for every synced record kind — a
       // share-bucket import that LWW-overwrites a locally-diverged record

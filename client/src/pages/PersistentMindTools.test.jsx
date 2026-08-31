@@ -75,7 +75,7 @@ describe('PersistentMindTools', () => {
     await user.click(toggle);
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      { persistentMindCapabilities: { schemaVersion: 4, createTasks: true, manageMind: false, callUser: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
+      { persistentMindCapabilities: { schemaVersion: 5, createTasks: true, manageMind: false, manageEidoverse: false, callUser: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
       { silent: true },
     ));
     expect(await screen.findByText(/persistent-mind capabilities granted/)).toHaveTextContent('1 of 1');
@@ -95,9 +95,10 @@ describe('PersistentMindTools', () => {
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
       { persistentMindCapabilities: {
-        schemaVersion: 4,
+        schemaVersion: 5,
         createTasks: false,
         manageMind: true,
+        manageEidoverse: false,
         callUser: false,
         readPortos: false,
         writePortos: false,
@@ -129,9 +130,10 @@ describe('PersistentMindTools', () => {
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
       { persistentMindCapabilities: {
-        schemaVersion: 4,
+        schemaVersion: 5,
         createTasks: true,
         manageMind: false,
+        manageEidoverse: false,
         callUser: false,
         readPortos: false,
         writePortos: false,
@@ -192,9 +194,10 @@ describe('PersistentMindTools', () => {
     await user.click(callToggle);
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
       { persistentMindCapabilities: {
-        schemaVersion: 4,
+        schemaVersion: 5,
         createTasks: false,
         manageMind: false,
+        manageEidoverse: false,
         callUser: true,
         readPortos: false,
         writePortos: false,

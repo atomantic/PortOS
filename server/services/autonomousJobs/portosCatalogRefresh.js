@@ -7,7 +7,7 @@
  */
 
 import { PORTOS_APP_ID } from '../../lib/appIdentity.js'
-import { DEFAULT_TASK_PROMPTS, PREVIOUS_DEFAULT_PROMPTS } from '../taskPromptDefaults.js'
+import { DEFAULT_TASK_PROMPTS, promptMatchesShippedDefault } from '../taskPromptDefaults.js'
 import { isValidCron } from '../eventScheduler.js'
 import { DAY, WEEK } from './constants.js'
 
@@ -93,8 +93,7 @@ export function buildMigratedCatalogRefreshJob({ task = {}, appOverride = {}, ex
   const globalMetadata = isObject(task.taskMetadata) ? task.taskMetadata : {}
   const appMetadata = isObject(appOverride.taskMetadata) ? appOverride.taskMetadata : {}
   const storedPrompt = task.prompt || DEFAULT_TASK_PROMPTS[PORTOS_CATALOG_REFRESH_TASK_TYPE]
-  const promptWasShipped = storedPrompt === DEFAULT_TASK_PROMPTS[PORTOS_CATALOG_REFRESH_TASK_TYPE]
-    || (PREVIOUS_DEFAULT_PROMPTS[PORTOS_CATALOG_REFRESH_TASK_TYPE] || []).includes(storedPrompt)
+  const promptWasShipped = promptMatchesShippedDefault(storedPrompt, PORTOS_CATALOG_REFRESH_TASK_TYPE)
   const prompt = promptWasShipped ? DEFAULT_TASK_PROMPTS[PORTOS_CATALOG_REFRESH_TASK_TYPE] : storedPrompt
 
   return {

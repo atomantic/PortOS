@@ -45,6 +45,7 @@ import {
   deleteLocalLlmModel,
   getLocalLlmStatus,
   getLocalLlmCatalog,
+  installLocalLlmBackend,
   patchSettingsSlice,
   installLocalLlmModel,
 } from '../../services/api';
@@ -96,6 +97,7 @@ beforeEach(() => {
     lmstudio: { installed: false, available: false, modelCount: 0, models: [] },
   });
   getLocalLlmCatalog.mockResolvedValue({ models: [] });
+  installLocalLlmBackend.mockResolvedValue({ success: true });
   patchSettingsSlice.mockResolvedValue({});
   deleteLocalLlmModel.mockResolvedValue({ success: true });
 });
@@ -126,6 +128,51 @@ describe('LocalLlmTab backend disable state', () => {
 });
 
 describe('LocalLlmTab runtime servers', () => {
+  it('installs a missing catalog backend at the blocker without sending the user to a terminal', async () => {
+    getLocalLlmStatus.mockResolvedValue({
+      backend: 'ollama',
+      ollama: {
+        installed: false,
+        available: false,
+        canAutoInstall: true,
+        modelCount: 0,
+        models: [],
+      },
+      lmstudio: { installed: true, available: true, modelCount: 0, models: [] },
+    });
+
+    await renderTab();
+
+    const blocker = screen.getByText("Ollama isn't installed yet.").closest('div');
+    expect(within(blocker).queryByText(/npm run setup:llm/)).toBeNull();
+
+    fireEvent.click(within(blocker).getByRole('button', { name: 'Install Ollama' }));
+
+    await waitFor(() => expect(installLocalLlmBackend).toHaveBeenCalledWith('ollama'));
+  });
+
+  it('offers the vendor download when PortOS cannot auto-install the backend', async () => {
+    getLocalLlmStatus.mockResolvedValue({
+      backend: 'lmstudio',
+      ollama: { installed: true, available: true, modelCount: 0, models: [] },
+      lmstudio: {
+        installed: false,
+        available: false,
+        canAutoInstall: false,
+        downloadUrl: 'https://lmstudio.ai/download',
+        modelCount: 0,
+        models: [],
+      },
+    });
+
+    await renderTab();
+
+    const blocker = screen.getByText("LM Studio isn't installed yet.").closest('div');
+    expect(within(blocker).queryByRole('button', { name: 'Install LM Studio' })).toBeNull();
+    expect(within(blocker).getByRole('link', { name: 'Download LM Studio' }))
+      .toHaveAttribute('href', 'https://lmstudio.ai/download');
+  });
+
   it('mounts one control surface covering every local runtime, not just the catalog backends', async () => {
     await renderTab();
     const card = screen.getByRole('heading', { name: 'Local Runtime Servers' }).closest('div.bg-port-card');

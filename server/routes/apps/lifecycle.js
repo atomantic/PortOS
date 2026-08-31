@@ -143,6 +143,14 @@ router.post('/:id/start', loadApp, asyncHandler(async (req, res) => {
   } else {
     // Fallback to command-based start for apps without ecosystem config
     const commands = app.startCommands || ['npm run dev'];
+    // Pin the app's own port so PortOS's PORT can't leak in through the
+    // inherited environment (see startWithCommand). Only a single-process app
+    // has an unambiguous port — for a multi-process app the recorded ports
+    // can't be mapped to process names here, and handing every process the
+    // same PORT would collide them against each other.
+    const singleProcessPort = processNames.length === 1
+      ? (app.apiPort || app.uiPort || null)
+      : null;
     for (let i = 0; i < processNames.length; i++) {
       const name = processNames[i];
       const command = commands[i] || commands[0];
@@ -150,7 +158,10 @@ router.post('/:id/start', loadApp, asyncHandler(async (req, res) => {
         results[name] = await launchDesktopProcess(app, name, command);
         continue;
       }
-      const result = await pm2Service.startWithCommand(name, app.repoPath, command, { pm2Home: app.pm2Home })
+      const result = await pm2Service.startWithCommand(name, app.repoPath, command, {
+        pm2Home: app.pm2Home,
+        port: singleProcessPort
+      })
         .catch(err => ({ success: false, error: err.message }));
       results[name] = result;
     }

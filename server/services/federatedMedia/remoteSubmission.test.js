@@ -113,7 +113,7 @@ describe('negotiateVideoConstraints', () => {
     expect(snappedWidth.height).toBe(1344);
   });
 
-  it('clamps rescaled frame count to maxNumFrames and 600', () => {
+  it('clamps rescaled frame count to the capability maximum', () => {
     const capability = {
       modelId: 'wan22',
       frameStride: 4,
@@ -125,6 +125,20 @@ describe('negotiateVideoConstraints', () => {
     const result = negotiateVideoConstraints({ numFrames: 250, fps: 16 }, capability);
     expect(result.fps).toBe(24);
     expect(result.numFrames).toBe(297);
+  });
+
+  it('preserves the 1017-frame LTX-2.5 capability through fps negotiation', () => {
+    const capability = {
+      modelId: 'ltx25_mlx_q8',
+      frameStride: 8,
+      fpsOptions: [24],
+      maxNumFrames: 1017,
+    };
+
+    expect(negotiateVideoConstraints({ numFrames: 1017, fps: 24 }, capability).numFrames).toBe(1017);
+    // 800 frames at 16 fps would rescale past the provider ceiling; clamp to
+    // 1017, which is already legal on the 8n+1 grid.
+    expect(negotiateVideoConstraints({ numFrames: 800, fps: 16 }, capability).numFrames).toBe(1017);
   });
 
   it('tie-breaks equal aspect ratios by closest area and ignores out-of-bounds options', () => {

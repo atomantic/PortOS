@@ -10,9 +10,10 @@
  *
  * The content lives in ./taskPromptDefaults/ — prompts.js (current defaults),
  * versions.js (PROMPT_VERSIONS + audit anchor), previousDefaults.js (prior
- * shipped defaults) — and this barrel re-exports it so existing imports keep
- * working. taskPromptDefaults.test.js pins the exported values against a hash
- * snapshot so a split/refactor can't silently alter the upgrade contract.
+ * shipped defaults), shippedPrompts.js (the shared "is this a shipped default?"
+ * check) — and this barrel re-exports it so existing imports keep working.
+ * taskPromptDefaults.test.js pins the exported values against a hash snapshot
+ * so a split/refactor can't silently alter the upgrade contract.
  *
  * Distribution-model machinery (see AGENTS.md "Distribution model"):
  * - PROMPT_VERSIONS — bumped when a default prompt changes so existing installs auto-upgrade.
@@ -25,3 +26,4 @@
 export { DEFAULT_TASK_PROMPTS } from './taskPromptDefaults/prompts.js';
 export { PROMPT_VERSIONS, REFERENCE_WATCH_AUDITED_VERSION } from './taskPromptDefaults/versions.js';
 export { PREVIOUS_DEFAULT_PROMPTS } from './taskPromptDefaults/previousDefaults.js';
+export { promptMatchesShippedDefault } from './taskPromptDefaults/shippedPrompts.js';

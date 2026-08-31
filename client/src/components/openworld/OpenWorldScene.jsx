@@ -2,7 +2,6 @@ import { memo, useState, useCallback, useRef, useEffect, useMemo, Suspense } fro
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
-import WorldGround from './WorldGround';
 import OpenWorldLights from './OpenWorldLights';
 import OpenWorldParticles from './OpenWorldParticles';
 import OpenWorldStarfield from './OpenWorldStarfield';
@@ -14,7 +13,6 @@ import OpenWorldWeather from './OpenWorldWeather';
 import OpenWorldBillboards from './OpenWorldBillboards';
 import OpenWorldShootingStars from './OpenWorldShootingStars';
 import OpenWorldVolumetricLights from './OpenWorldVolumetricLights';
-import OpenWorldSkyline from './OpenWorldSkyline';
 import OpenWorldFederationHorizon from './OpenWorldFederationHorizon';
 import OpenWorldBackupVault from './OpenWorldBackupVault';
 import OpenWorldTaskQueue from './OpenWorldTaskQueue';
@@ -36,14 +34,9 @@ import OpenWorldEmbers from './OpenWorldEmbers';
 import OpenWorldSignalBeacons from './OpenWorldSignalBeacons';
 import OpenWorldSky from './OpenWorldSky';
 import OpenWorldGalaxySky from './OpenWorldGalaxySky';
-import OpenWorldLandscape from './OpenWorldLandscape';
 import OpenWorldClouds from './OpenWorldClouds';
-import OpenWorldNature from './OpenWorldNature';
-import OpenWorldGrass from './OpenWorldGrass';
 import OpenWorldWater from './OpenWorldWater';
-import OpenWorldStreets from './OpenWorldStreets';
-import OpenWorldStreetProps from './OpenWorldStreetProps';
-import OpenWorldTransitLoop from './OpenWorldTransitLoop';
+import OpenWorldArchipelago from './OpenWorldArchipelago';
 import OpenWorldEnergyOverlay from './OpenWorldEnergyOverlay';
 import OpenWorldSpeedPads from './OpenWorldSpeedPads';
 import OpenWorldCollectibles from './OpenWorldCollectibles';
@@ -60,6 +53,7 @@ import { listRegions } from '../../utils/openWorldRegions';
 import { getResolvedLandmarks } from '../../utils/openWorldProximity';
 import { getCollectiblesList } from '../../utils/openWorldCollectibles';
 import { computeEasterEggs } from '../../utils/openWorldEasterEggs';
+import { computeVillageAppLayout } from '../../utils/openWorldPlan';
 import { OpenWorldPaletteProvider } from './OpenWorldPaletteContext';
 import ErrorBoundary from '../ErrorBoundary';
 import { useVisibilityEvent } from '../../hooks/useVisibilityEvent';
@@ -120,7 +114,6 @@ function OpenWorldScene({
 }) {
   const [positions, setPositions] = useState(null);
   const [proximityApp, setProximityApp] = useState(null);
-  const [proximityWarpPad, setProximityWarpPad] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
   const [webglLost, setWebglLost] = useState(false);
   const [canvasRevision, setCanvasRevision] = useState(0);
@@ -145,6 +138,7 @@ function OpenWorldScene({
   const prevExplorationRef = useRef(null);
   const orbitRef = useRef(null);
   const contextCleanupRef = useRef(null);
+  const villageAppPositions = useMemo(() => computeVillageAppLayout(apps), [apps]);
   const contextLostTimerRef = useRef(null);
   const activeCanvasRef = useRef(null);
   const contextRecoveryRef = useRef(0);
@@ -243,27 +237,11 @@ function OpenWorldScene({
     setProximityApp(app);
   }, []);
 
-  const handleWarpPadProximity = useCallback((region) => {
-    setProximityWarpPad(region);
-  }, []);
-
   useEffect(() => {
     if (explorationMode) return;
     setProximityApp(null);
-    setProximityWarpPad(null);
-  }, [explorationMode]);
-
-  useEffect(() => {
-    if (!explorationMode) {
-      onProximityChange?.(null);
-      return;
-    }
-    if (proximityWarpPad) {
-      onProximityChange?.({ type: 'warpPad', id: proximityWarpPad.id, label: proximityWarpPad.label });
-      return;
-    }
-    onProximityChange?.(proximityApp ? { type: 'building', id: proximityApp.id, label: proximityApp.name } : null);
-  }, [explorationMode, onProximityChange, proximityApp, proximityWarpPad]);
+    onProximityChange?.(null);
+  }, [explorationMode, onProximityChange]);
 
   const handleTransitionComplete = useCallback(() => {
     setTransitioning(false);
@@ -340,9 +318,9 @@ function OpenWorldScene({
     <div className="absolute inset-0" style={{ background: fallbackBackground }}>
       <Canvas
         key={`${photoMode ? 'photo' : 'live'}-${canvasRevision}`}
-        camera={{ position: [0, 25, 45], fov: THIRD_PERSON.fov }}
+        camera={{ position: [0, 95, 125], fov: THIRD_PERSON.fov }}
         dpr={dpr}
-        shadows={false}
+        shadows={explorationMode && settings?.effectiveTier !== 'low'}
         // Photo mode freezes the scene for a clean still (roadmap 3.6): "demand" stops the
         // frameloop once the camera-fly settles, so particles/streams/weather/pulses pause for a
         // deliberate shot. OpenWorldPhotoCamera pumps invalidate() during the fly; capture renders
@@ -351,7 +329,7 @@ function OpenWorldScene({
         // Photo mode always keeps its own demand loop so capture still works in a hidden tab.
         frameloop={photoMode ? 'demand' : (documentHidden ? 'never' : 'always')}
         onCreated={handleCanvasCreated}
-        style={{ background: sceneClearColor, cursor: explorationMode ? 'crosshair' : 'auto', opacity: webglLost ? 0 : 1 }}
+        style={{ background: sceneClearColor, cursor: explorationMode ? 'grab' : 'auto', opacity: webglLost ? 0 : 1 }}
         // preserveDrawingBuffer is only needed while taking postcards. Keeping it
         // always-on makes Chromium's WebGL context much easier to lose in the live
         // dashboard, which reads as a blank white scene.
@@ -379,40 +357,58 @@ function OpenWorldScene({
       ) : (
         <color attach="background" args={[sceneClearColor]} />
       )}
+      {explorationMode && <fog attach="fog" args={[sceneClearColor, 72, 190]} />}
       <OpenWorldSky settings={renderSettings} />
       {/* `lightingTier` is the SETTLED tier, deliberately not the warm-up-clamped
           one: the accent-light gate changes the scene's light COUNT, which is part
           of three.js's shader program cache key, so letting the clamp toggle it
           would recompile every lit material 1.2s into each load. */}
       <OpenWorldLights settings={renderSettings} lightingTier={settings?.effectiveTier} />
-      <OpenWorldLandscape settings={renderSettings} />
-      {palette?.lowPoly && <OpenWorldClouds settings={renderSettings} />}
-      <OpenWorldNature settings={renderSettings} />
-      <OpenWorldGrass settings={renderSettings} />
       <OpenWorldWater settings={renderSettings} />
-      <OpenWorldEnergyOverlay chronotype={chronotype} settings={renderSettings} />
+      <OpenWorldArchipelago
+        settings={renderSettings}
+        explorationMode={explorationMode}
+        apps={apps}
+        appPositions={villageAppPositions}
+        agentMap={agentMap}
+        backupStatus={backupStatus}
+        cosTasks={cosTasks}
+        healthMetrics={healthMetrics}
+        productivityData={productivityData}
+        goals={goals}
+        character={character}
+        memoryGraph={memoryGraph}
+        inboxDepth={inboxDepth}
+        jiraTickets={jiraTickets}
+        jiraEnabled={jiraFeatureEnabled}
+        introspection={introspection}
+        voiceState={voiceState}
+        onBuildingClick={onBuildingClick}
+      />
+      {palette?.lowPoly && <OpenWorldClouds settings={renderSettings} />}
+      {!explorationMode && <OpenWorldEnergyOverlay chronotype={chronotype} settings={renderSettings} />}
       {neonLayers && <OpenWorldStarfield settings={renderSettings} />}
       {neonLayers && <OpenWorldShootingStars playSfx={playSfx} settings={renderSettings} />}
       {!explorationMode && !palette?.lowPoly && <OpenWorldCelestial settings={renderSettings} />}
-      <OpenWorldSkyline settings={renderSettings} />
-      <OpenWorldFederationHorizon instances={instances} settings={renderSettings} />
-      <OpenWorldBackupVault backupStatus={backupStatus} settings={renderSettings} />
-      <OpenWorldTaskQueue cosTasks={cosTasks} settings={renderSettings} />
-      <OpenWorldHealthTower healthMetrics={healthMetrics} settings={renderSettings} />
-      <OpenWorldProductivityDistrict productivityData={productivityData} settings={renderSettings} />
-      <OpenWorldActivityHeatmap calendarData={activityCalendar} settings={renderSettings} />
-      <OpenWorldTaskFlowRiver cosTasks={cosTasks} productivityData={productivityData} calendarData={activityCalendar} settings={renderSettings} />
-      <OpenWorldGoalMonuments goals={goals} settings={renderSettings} />
-      <OpenWorldArtifacts character={character} goals={goals} settings={renderSettings} />
-      <OpenWorldEasterEggs character={character} goals={goals} settings={renderSettings} />
-      <OpenWorldVoiceMarker voiceState={voiceState} settings={renderSettings} />
-      <OpenWorldMemoryDistrict memoryGraph={memoryGraph} inboxDepth={inboxDepth} settings={renderSettings} />
-      <OpenWorldDataHarbor introspection={introspection} settings={renderSettings} />
-      {jiraFeatureEnabled && <OpenWorldJiraDistrict jiraTickets={jiraTickets} settings={renderSettings} />}
-      <OpenWorldAiCore aiActivity={aiActivity} positions={positions} apps={apps} settings={renderSettings} />
-      <WorldGround settings={renderSettings} />
-      <OpenWorldStreets settings={renderSettings} />
-      <OpenWorldStreetProps settings={renderSettings} />
+      {!explorationMode && (
+        <>
+          <OpenWorldFederationHorizon instances={instances} settings={renderSettings} />
+          <OpenWorldBackupVault backupStatus={backupStatus} settings={renderSettings} />
+          <OpenWorldTaskQueue cosTasks={cosTasks} settings={renderSettings} />
+          <OpenWorldHealthTower healthMetrics={healthMetrics} settings={renderSettings} />
+          <OpenWorldProductivityDistrict productivityData={productivityData} settings={renderSettings} />
+          <OpenWorldActivityHeatmap calendarData={activityCalendar} settings={renderSettings} />
+          <OpenWorldTaskFlowRiver cosTasks={cosTasks} productivityData={productivityData} calendarData={activityCalendar} settings={renderSettings} />
+          <OpenWorldGoalMonuments goals={goals} settings={renderSettings} />
+          <OpenWorldArtifacts character={character} goals={goals} settings={renderSettings} />
+          <OpenWorldEasterEggs character={character} goals={goals} settings={renderSettings} />
+          <OpenWorldVoiceMarker voiceState={voiceState} settings={renderSettings} />
+          <OpenWorldMemoryDistrict memoryGraph={memoryGraph} inboxDepth={inboxDepth} settings={renderSettings} />
+          <OpenWorldDataHarbor introspection={introspection} settings={renderSettings} />
+          {jiraFeatureEnabled && <OpenWorldJiraDistrict jiraTickets={jiraTickets} settings={renderSettings} />}
+          <OpenWorldAiCore aiActivity={aiActivity} positions={positions} apps={apps} settings={renderSettings} />
+        </>
+      )}
       <OpenWorldSpeedPads settings={renderSettings} />
       <OpenWorldCollectibles
         collectedShardIds={collectedShardIds}
@@ -420,39 +416,41 @@ function OpenWorldScene({
         settings={renderSettings}
         shards={collectibles}
       />
-      <OpenWorldTransitLoop settings={renderSettings} />
-
-      <BuildingCluster
-        apps={apps}
-        agentMap={agentMap}
-        onBuildingClick={onBuildingClick}
-        onPositionsReady={handlePositionsReady}
-        playSfx={playSfx}
-        settings={renderSettings}
-        proximityAppId={proximityApp?.id}
-        dimmedAppIds={dimmedAppIds}
-        focusedAppId={focusedAppId}
-        playback={playback}
-      />
-      <OpenWorldDataStreams positions={positions} apps={apps} agentMap={agentMap} />
-      <OpenWorldTraffic positions={positions} />
-      <OpenWorldBillboards
-        positions={positions}
-        apps={apps}
-        cosStatus={cosStatus}
-        reviewCounts={reviewCounts}
-        instances={instances}
-        productivityData={productivityData}
-      />
-      <OpenWorldSignalBeacons
-        positions={positions}
-        reviewCounts={reviewCounts}
-        instances={instances}
-        settings={renderSettings}
-        activeRegionId={focusedRegion?.id}
-        onTravelToRegion={onTravelToRegion}
-        regions={warpRegions}
-      />
+      {!explorationMode && (
+        <>
+          <BuildingCluster
+            apps={apps}
+            agentMap={agentMap}
+            onBuildingClick={onBuildingClick}
+            onPositionsReady={handlePositionsReady}
+            playSfx={playSfx}
+            settings={renderSettings}
+            proximityAppId={proximityApp?.id}
+            dimmedAppIds={dimmedAppIds}
+            focusedAppId={focusedAppId}
+            playback={playback}
+          />
+          <OpenWorldDataStreams positions={positions} apps={apps} agentMap={agentMap} />
+          <OpenWorldTraffic positions={positions} />
+          <OpenWorldBillboards
+            positions={positions}
+            apps={apps}
+            cosStatus={cosStatus}
+            reviewCounts={reviewCounts}
+            instances={instances}
+            productivityData={productivityData}
+          />
+          <OpenWorldSignalBeacons
+            positions={positions}
+            reviewCounts={reviewCounts}
+            instances={instances}
+            settings={renderSettings}
+            activeRegionId={focusedRegion?.id}
+            onTravelToRegion={onTravelToRegion}
+            regions={warpRegions}
+          />
+        </>
+      )}
       {neonLayers && <OpenWorldVolumetricLights positions={positions} settings={renderSettings} />}
       {neonLayers && <OpenWorldNeonSigns positions={positions} />}
       <OpenWorldWeather stoppedCount={stoppedCount} totalCount={totalCount} playSfx={playSfx} />
@@ -462,9 +460,8 @@ function OpenWorldScene({
       {explorationMode && (
         <PlayerController
           keysRef={keysRef}
-          positions={positions}
+          positions={villageAppPositions}
           onBuildingProximity={handleBuildingProximity}
-          onWarpPadProximity={handleWarpPadProximity}
           onProximityChange={onProximityChange}
           onBuildingClick={onBuildingClick}
           onToggleCameraView={onToggleCameraView}
@@ -473,7 +470,9 @@ function OpenWorldScene({
           transitioning={transitioning}
           cameraView={settings?.cameraView ?? 'third'}
           teleport={playerTeleport}
-          warpPads={warpRegions}
+          // Street-level travel is attached to visible cottages and landmarks. The old
+          // invisible region pads produced prompts in the middle of otherwise empty roads.
+          warpPads={[]}
           landmarks={landmarks}
           onWarpPadInteract={onTravelToRegion}
           easterEggs={easterEggsList.eggs}

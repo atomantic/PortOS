@@ -53,7 +53,7 @@ describe('classifyHfMediaModel — strict refusal', () => {
     })).toThrow(/Hunyuan/);
   });
 
-  it('refuses a wan/hunyuan repo even when an addable runtime is forced (no override-laundering)', () => {
+  it('refuses an unsupported Hunyuan repo even when an addable runtime is forced', () => {
     // The "a bad add can't wedge the picker" guarantee must hold even under an
     // explicit runtime override — forcing mlx_video on a Hunyuan repo would
     // register an entry no runtime can load.
@@ -62,7 +62,7 @@ describe('classifyHfMediaModel — strict refusal', () => {
       model: hf({ files: ['model.safetensors'], tags: ['hunyuan'] }),
       kind: 'video',
       runtime: 'mlx_video',
-    })).toThrow(/needs a dedicated venv/);
+    })).toThrow(/not supported by PortOS/);
   });
 
   it('refuses a wan/hunyuan repo even when kind:image is forced (override cannot skip the video guard)', () => {

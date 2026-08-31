@@ -44,9 +44,10 @@ const DEFAULT_EXEC_GH_TIMEOUT_MS = 60000;
  * the returned promise pending forever and wedge scheduled jobs (prWatcher,
  * issueReconcile, branchReconcile, updateChecker) while orphaning the child
  * process. `timeoutMs` kills the child and rejects with a clear error; it's
- * cleared on normal exit so it never fires for a completed run.
+ * cleared on normal exit so it never fires for a completed run. `input`, when
+ * supplied, is written to stdin (used by structured `gh api --input -` calls).
  */
-export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = null, env = null } = {}) {
+export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = null, env = null, input = null } = {}) {
   return new Promise((resolve, reject) => {
     const baseEnv = env || process.env;
     const child = spawn('gh', args, {
@@ -79,6 +80,14 @@ export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = nul
       clearTimeout(timer);
       reject(err);
     });
+    if (input !== null && input !== undefined) {
+      child.stdin.on('error', (err) => {
+        if (timedOut || err.code === 'EPIPE') return;
+        clearTimeout(timer);
+        reject(err);
+      });
+      child.stdin.end(String(input));
+    }
   });
 }
 

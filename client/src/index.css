@@ -1632,6 +1632,113 @@ html[data-port-theme] .openworld-themed [class~="hover:bg-cyan-500/5"]:hover { b
   background: rgb(var(--port-accent) / 0.14);
 }
 
+/* Street-level OpenWorld uses one quiet, toy-like interface shared by desktop and
+   touch. Operational dashboards stay in orbital mode; the village only names the
+   current place, the errand progress, and four reversible exits/tools. */
+.openworld-village-status {
+  position: absolute;
+  top: 1rem;
+  left: 1rem;
+  display: flex;
+  min-height: 3.2rem;
+  max-width: min(23rem, calc(100vw - 15rem));
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid rgb(var(--port-accent) / 0.26);
+  border-radius: 1.05rem;
+  background: linear-gradient(145deg, rgb(var(--port-card) / 0.82), rgb(var(--port-bg) / 0.64));
+  box-shadow: 0 12px 34px rgb(0 0 0 / 0.14), inset 0 1px 0 rgb(255 255 255 / 0.12);
+  backdrop-filter: blur(14px) saturate(1.08);
+}
+
+.openworld-village-status__dot {
+  width: 0.58rem;
+  height: 0.58rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  box-shadow: 0 0 10px currentColor;
+}
+
+.openworld-village-status small,
+.openworld-village-status strong {
+  display: block;
+  overflow: hidden;
+  max-width: 10rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.openworld-village-status small {
+  margin-bottom: 0.12rem;
+  color: var(--ow-muted);
+  font-family: var(--ow-micro-font);
+  font-size: 0.5rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+}
+
+.openworld-village-status strong {
+  color: var(--ow-ink);
+  font-size: 0.86rem;
+  font-weight: 720;
+  letter-spacing: 0.015em;
+}
+
+.openworld-village-status__echo {
+  position: relative;
+  min-width: 4.6rem;
+  margin-left: auto;
+  overflow: hidden;
+  padding: 0.34rem 0.45rem;
+  border-radius: 0.65rem;
+  background: rgb(var(--port-accent) / 0.08);
+  color: var(--ow-accent);
+  font-family: var(--ow-micro-font);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-align: center;
+}
+
+.openworld-village-status__echo i {
+  position: absolute;
+  inset: auto auto 0 0;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--ow-accent);
+  transition: width 240ms ease;
+}
+
+.openworld-village-actions {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  display: flex;
+  gap: 0.28rem;
+  padding: 0.28rem;
+  border: 1px solid rgb(var(--port-accent) / 0.22);
+  border-radius: 1rem;
+  background: rgb(var(--port-card) / 0.72);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.13), inset 0 1px 0 rgb(255 255 255 / 0.1);
+  backdrop-filter: blur(14px) saturate(1.08);
+}
+
+.openworld-village-speed {
+  position: absolute;
+  bottom: 1rem;
+  left: 1rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.28rem;
+  color: rgb(255 255 255 / 0.88);
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 2px 12px rgb(0 0 0 / 0.55);
+}
+
+.openworld-village-speed strong { font-size: 1.4rem; font-weight: 760; }
+.openworld-village-speed span { font-family: var(--ow-micro-font); font-size: 0.55rem; letter-spacing: 0.08em; text-transform: uppercase; }
+
 .openworld-hud-crosshair {
   position: relative;
   width: 1.75rem;
@@ -1730,11 +1837,37 @@ html[data-port-theme] .openworld-themed [class~="hover:bg-cyan-500/5"]:hover { b
   .openworld-hud-action-copy { display: inline; }
 }
 
+/* The village toolbar shares the top edge with a status card, so its four long labels
+   need more room than the general HUD actions. Keep the tablet layout icon-only. */
+.openworld-village-actions .openworld-hud-action-copy { display: none; }
+
+@media (min-width: 1280px) {
+  .openworld-village-actions .openworld-hud-action-copy { display: inline; }
+}
+
 @media (max-width: 767px) {
   .openworld-hud-panel { border-radius: 16px; }
   .openworld-hud-dock { border-radius: 16px; overflow-x: auto; scrollbar-width: none; }
   .openworld-hud-dock::-webkit-scrollbar { display: none; }
   .openworld-hud-action { min-height: 2.75rem; min-width: 2.75rem; }
+  .openworld-village-status {
+    top: 0.65rem;
+    left: 0.65rem;
+    min-height: 2.85rem;
+    max-width: calc(100vw - 13.25rem);
+    gap: 0.5rem;
+    padding: 0.45rem 0.55rem;
+  }
+  .openworld-village-status__dot { width: 0.5rem; height: 0.5rem; }
+  .openworld-village-status small { font-size: 0.42rem; }
+  .openworld-village-status strong { font-size: 0.72rem; }
+  .openworld-village-status__echo { min-width: 3.7rem; padding-inline: 0.28rem; font-size: 0.52rem; }
+  .openworld-village-actions { top: 0.65rem; right: 0.65rem; }
+  .openworld-village-actions .openworld-hud-action { min-width: 2.45rem; min-height: 2.45rem; padding: 0.32rem; }
+  .openworld-village-speed { top: 4.15rem; bottom: auto; left: 0.85rem; }
+  .openworld-village-speed strong { font-size: 1.05rem; }
+  .openworld-village-speed span { font-size: 0.46rem; }
+  .openworld-interaction-prompt--compact { bottom: calc(5.4rem + env(safe-area-inset-bottom)); }
 }
 
 /* === OpenWorld mobile game controls ===
@@ -1748,7 +1881,7 @@ html[data-port-theme] .openworld-themed [class~="hover:bg-cyan-500/5"]:hover { b
 .openworld-mobile-look-zone {
   position: absolute;
   right: 0.4rem;
-  bottom: calc(6.3rem + env(safe-area-inset-bottom));
+  bottom: calc(0.8rem + env(safe-area-inset-bottom));
   width: 48%;
   height: 46%;
   pointer-events: auto;
@@ -1776,9 +1909,9 @@ html[data-port-theme] .openworld-themed [class~="hover:bg-cyan-500/5"]:hover { b
 .openworld-mobile-joystick {
   position: absolute;
   left: 1rem;
-  bottom: calc(5.8rem + env(safe-area-inset-bottom));
-  width: 7rem;
-  height: 7rem;
+  bottom: calc(1rem + env(safe-area-inset-bottom));
+  width: 6.4rem;
+  height: 6.4rem;
   border: 1px solid rgb(var(--port-accent) / 0.34);
   border-radius: 50%;
   background: radial-gradient(circle, rgb(var(--port-accent) / 0.14), rgb(var(--port-bg) / 0.42));
@@ -1839,7 +1972,7 @@ html[data-port-theme] .openworld-themed [class~="hover:bg-cyan-500/5"]:hover { b
 .openworld-mobile-actions {
   position: absolute;
   right: 0.5rem;
-  bottom: calc(5.8rem + env(safe-area-inset-bottom));
+  bottom: calc(1rem + env(safe-area-inset-bottom));
   display: flex;
   align-items: flex-end;
   gap: 0.2rem;

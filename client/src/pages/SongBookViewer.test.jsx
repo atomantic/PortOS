@@ -62,6 +62,20 @@ const renderPage = (path = '/songbook/abc', { history = [] } = {}) => {
   return { ...render(<RouterProvider router={router} />), router };
 };
 
+// SongLinksEditor starts its picker loads when edit mode mounts. Wait for the
+// edit form, then drain those mount promises inside act so a late picker commit
+// cannot spill into the current or following test (#5517).
+const settleSongLinksEditor = () => act(async () => {});
+const waitForEditMode = async () => {
+  await screen.findByLabelText('Content');
+  await settleSongLinksEditor();
+};
+const renderEditPage = async (path = '/songbook/abc?mode=edit', options) => {
+  const page = renderPage(path, options);
+  await waitForEditMode();
+  return page;
+};
+
 describe('SongBookViewer', () => {
   beforeEach(() => {
     api.getSong.mockReset().mockResolvedValue(song());
@@ -72,6 +86,27 @@ describe('SongBookViewer', () => {
     api.listRounds.mockReset().mockResolvedValue({ rounds: [{ id: 'r1', title: 'Example Round' }] });
     api.listTracks.mockReset().mockResolvedValue([{ id: 't1', title: 'Example Track' }]);
     globalThis.localStorage?.clear?.();
+  });
+
+  describe('edit-mode picker settling (#5517)', () => {
+    it('drains delayed Round and Track picker updates before returning control', async () => {
+      api.listRounds.mockImplementation(() => Promise.resolve().then(() => ({
+        rounds: [{ id: 'r1', title: 'Example Round' }],
+      })));
+      api.listTracks.mockImplementation(() => Promise.resolve().then(() => [
+        { id: 't1', title: 'Example Track' },
+      ]));
+
+      renderPage('/songbook/abc?mode=edit');
+      await settleSongLinksEditor();
+      const type = screen.getByLabelText('Link type');
+      const target = screen.getByLabelText('Record to link');
+      expect(target).toBeEnabled();
+      expect(within(target).getByRole('option', { name: 'Example Round' })).toBeTruthy();
+
+      fireEvent.change(type, { target: { value: 'track' } });
+      expect(within(screen.getByLabelText('Record to link')).getByRole('option', { name: 'Example Track' })).toBeTruthy();
+    });
   });
 
   it('renders the parsed sheet in play mode', async () => {
@@ -514,7 +549,7 @@ K:  o - - - - - o -`;
 
     it('previews the kit sheet in edit mode and defaults Drums to the drum format', async () => {
       api.getSong.mockResolvedValue(drumSong());
-      renderPage('/songbook/abc?mode=edit');
+      await renderEditPage();
       expect(await screen.findByLabelText('Title')).toBeTruthy();
       expect(screen.getByLabelText('Format').value).toBe('drum');
       expect(screen.getByLabelText(/^Drum chart —/)).toBeTruthy();
@@ -523,7 +558,7 @@ K:  o - - - - - o -`;
 
     it('keeps the idle edit preview synchronized before Play', async () => {
       api.getSong.mockResolvedValue(drumSong());
-      renderPage('/songbook/abc?mode=edit');
+      await renderEditPage();
       const editor = await screen.findByLabelText('Content');
       fireEvent.change(editor, { target: { value: `${DRUM_CHART}\nC: x - x -` } });
 
@@ -533,7 +568,7 @@ K:  o - - - - - o -`;
 
     it('keeps edit-preview practice settings when returning to play mode', async () => {
       api.getSong.mockResolvedValue(drumSong());
-      renderPage('/songbook/abc?mode=edit');
+      await renderEditPage();
       const bpm = await screen.findByLabelText('Practice tempo (BPM)');
       fireEvent.change(bpm, { target: { value: '72' } });
       fireEvent.click(screen.getByRole('button', { name: 'View' }));
@@ -549,6 +584,7 @@ K:  o - - - - - o -`;
       fireEvent.click(screen.getByLabelText('Enable loop'));
       fireEvent.change(screen.getByLabelText('Loop from bar'), { target: { value: '2' } });
       fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+      await waitForEditMode();
 
       await waitFor(() => expect(screen.getByLabelText('Count-in').value).toBe('2'));
       expect(screen.getByLabelText('Disable loop')).toBeTruthy();
@@ -562,7 +598,7 @@ K:  o - - - - - o -`;
         content: { format: 'futureformat', text: 'anything' },
       }));
       api.updateSong.mockImplementation((_sid, patch) => Promise.resolve(song({ ...patch })));
-      renderPage('/songbook/abc?mode=edit');
+      await renderEditPage();
       const instrument = await screen.findByLabelText('Instrument');
       expect(instrument.value).toBe('hurdy-gurdy');
       expect(screen.getByLabelText('Format').value).toBe('futureformat');
@@ -575,7 +611,7 @@ K:  o - - - - - o -`;
 
     it('switching a blank song to Drums defaults its format to drum', async () => {
       api.getSong.mockResolvedValue(song({ instrument: 'guitar', content: { format: 'tab', text: '' } }));
-      renderPage('/songbook/abc?mode=edit');
+      await renderEditPage();
       const instrument = await screen.findByLabelText('Instrument');
       fireEvent.change(instrument, { target: { value: 'drums' } });
       await waitFor(() => expect(screen.getByLabelText('Format').value).toBe('drum'));
@@ -583,7 +619,7 @@ K:  o - - - - - o -`;
 
     it('does NOT re-format a song that already has sheet text', async () => {
       api.getSong.mockResolvedValue(song());
-      renderPage('/songbook/abc?mode=edit');
+      await renderEditPage();
       const instrument = await screen.findByLabelText('Instrument');
       fireEvent.change(instrument, { target: { value: 'drums' } });
       await waitFor(() => expect(screen.getByLabelText('Instrument').value).toBe('drums'));
@@ -593,7 +629,7 @@ K:  o - - - - - o -`;
 
   it('renders the edit form in ?mode=edit and saves the whole content object', async () => {
     api.updateSong.mockImplementation((_id, patch) => Promise.resolve(song({ ...patch })));
-    renderPage('/songbook/abc?mode=edit');
+    await renderEditPage();
     const titleInput = await screen.findByLabelText('Title');
     expect(titleInput.value).toBe('Example Song');
     fireEvent.change(titleInput, { target: { value: 'Renamed Song' } });
@@ -633,7 +669,7 @@ K:  o - - - - - o -`;
 
     it('adds a link from the picker and sends it on save with the target title', async () => {
       api.updateSong.mockImplementation((_id, patch) => Promise.resolve(song({ ...patch })));
-      renderPage('/songbook/abc?mode=edit');
+      await renderEditPage();
       const target = await screen.findByLabelText('Record to link');
       await waitFor(() => expect(within(target).getAllByRole('option').length).toBe(2));
       fireEvent.change(target, { target: { value: 'r1' } });
@@ -650,7 +686,7 @@ K:  o - - - - - o -`;
     it('sends an explicit empty array when the last link is removed', async () => {
       api.getSong.mockResolvedValue(song({ links: [{ type: 'round', id: 'r1', label: 'Example Round' }] }));
       api.updateSong.mockImplementation((_id, patch) => Promise.resolve(song({ ...patch })));
-      renderPage('/songbook/abc?mode=edit');
+      await renderEditPage();
       fireEvent.click(await screen.findByRole('button', { name: 'Remove link to Example Round' }));
       fireEvent.click(screen.getByRole('button', { name: 'Save' }));
       await waitFor(() => expect(api.updateSong).toHaveBeenCalled());
@@ -664,7 +700,7 @@ K:  o - - - - - o -`;
     it('omits links from the PATCH when the user edited something else', async () => {
       api.getSong.mockResolvedValue(song({ links: [{ type: 'round', id: 'r1', label: 'Example Round' }] }));
       api.updateSong.mockImplementation((_id, patch) => Promise.resolve(song({ ...patch })));
-      renderPage('/songbook/abc?mode=edit');
+      await renderEditPage();
       const titleInput = await screen.findByLabelText('Title');
       fireEvent.change(titleInput, { target: { value: 'Renamed Song' } });
       fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -690,7 +726,7 @@ K:  o - - - - - o -`;
       api.listRounds.mockResolvedValue({
         rounds: [{ id: 'r1', title: 'A\nround:r2|B' }, { id: 'r2', title: 'B' }],
       });
-      const { router } = renderPage('/songbook/abc?mode=edit', { history: ['/songbook'] });
+      const { router } = await renderEditPage('/songbook/abc?mode=edit', { history: ['/songbook'] });
 
       // Drop both links, then re-add the renamed one → a single link whose label
       // is the two old rows run together.
@@ -710,7 +746,7 @@ K:  o - - - - - o -`;
     it('keeps editing usable when the picker lists fail to load', async () => {
       api.listRounds.mockRejectedValue(new Error('boom'));
       api.listTracks.mockRejectedValue(new Error('boom'));
-      renderPage('/songbook/abc?mode=edit');
+      await renderEditPage();
       const target = await screen.findByLabelText('Record to link');
       await waitFor(() => expect(target.disabled).toBe(true));
       expect(screen.getByLabelText('Title').value).toBe('Example Song');
@@ -720,8 +756,7 @@ K:  o - - - - - o -`;
     // a by-reference compare would flag every open (#3902 guard).
     it('does not treat an untouched links array as an unsaved edit', async () => {
       api.getSong.mockResolvedValue(song({ links: [{ type: 'round', id: 'r1', label: 'Example Round' }] }));
-      const { router } = renderPage('/songbook/abc?mode=edit', { history: ['/songbook'] });
-      await screen.findByLabelText('Title');
+      const { router } = await renderEditPage('/songbook/abc?mode=edit', { history: ['/songbook'] });
       await navigate(router, '/songbook');
       expect(await screen.findByText('All songs index')).toBeTruthy();
     });
@@ -787,7 +822,7 @@ K:  o - - - - - o -`;
 
     it('saves a typed scroll time and clears it with an explicit null', async () => {
       api.updateSong.mockImplementation((_id, patch) => Promise.resolve(song({ ...patch })));
-      renderPage('/songbook/abc?mode=edit');
+      await renderEditPage();
       const input = await screen.findByLabelText('Scroll time (seconds)');
       expect(input.value).toBe(''); // no target on the fixture
 
@@ -808,7 +843,7 @@ K:  o - - - - - o -`;
 
     it('treats a retyped scroll time as clean (unsaved-changes guard)', async () => {
       api.getSong.mockResolvedValue(song({ scrollDurationSec: 210 }));
-      renderPage('/songbook/abc?mode=edit');
+      await renderEditPage();
       const input = await screen.findByLabelText('Scroll time (seconds)');
       expect(input.value).toBe('210');
       fireEvent.change(input, { target: { value: '120' } });
@@ -819,7 +854,7 @@ K:  o - - - - - o -`;
     });
 
     it('prompts before dropping an edited scroll time', async () => {
-      renderPage('/songbook/abc?mode=edit');
+      await renderEditPage();
       fireEvent.change(await screen.findByLabelText('Scroll time (seconds)'), { target: { value: '210' } });
       fireEvent.click(screen.getByRole('button', { name: 'View' }));
       expect(await screen.findByText('Discard your unsaved changes to this song?')).toBeTruthy();
@@ -827,18 +862,6 @@ K:  o - - - - - o -`;
   });
 
   describe('unsaved-edit guard (#3902)', () => {
-    const settleSongLinksEditor = () => act(async () => {});
-
-    // SongLinksEditor starts its picker loads when edit mode mounts. Drain its
-    // mount promises inside act so their state updates cannot spill into a
-    // later guard case on a slower CI runner (#4226).
-    const renderEditPage = async (path = '/songbook/abc?mode=edit', options) => {
-      const page = renderPage(path, options);
-      await screen.findByLabelText('Content');
-      await settleSongLinksEditor();
-      return page;
-    };
-
     // Model the picker results arriving after the edit form has rendered, as
     // they can on a slower CI runner. The helper above must settle both loads.
     beforeEach(() => {
@@ -884,8 +907,8 @@ K:  o - - - - - o -`;
       fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
       await waitFor(() => expect(screen.queryByLabelText('Content')).toBeNull());
       fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
-      expect((await screen.findByLabelText('Content')).value).toBe(SHEET);
-      await settleSongLinksEditor();
+      await waitForEditMode();
+      expect(screen.getByLabelText('Content').value).toBe(SHEET);
       expect(api.updateSong).not.toHaveBeenCalled();
     });
 

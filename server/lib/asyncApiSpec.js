@@ -1,4 +1,4 @@
-/** AsyncAPI 3 document for PortOS's generated Socket.IO event catalog. */
+/** AsyncAPI 3 document for PortOS's source-derived Socket.IO event catalog. */
 
 import { buildSocketEventCatalog } from './socketEventCatalog.js';
 
@@ -30,8 +30,8 @@ const channelParameters = (address) => Object.fromEntries(
   ]),
 );
 
-export const buildAsyncApiSpec = ({ baseUrl, version = '0.0.0' } = {}) => {
-  const catalog = buildSocketEventCatalog();
+export const buildAsyncApiSpec = async ({ baseUrl, version = '0.0.0' } = {}) => {
+  const catalog = await buildSocketEventCatalog();
   const channels = {};
   const operations = {};
   const messages = {};
@@ -48,7 +48,6 @@ export const buildAsyncApiSpec = ({ baseUrl, version = '0.0.0' } = {}) => {
         summary: `${direction} payload for ${event.event}.`,
         payload: schema,
         'x-portos-contract-status': event.modeledDirections.includes(direction) ? 'modeled' : 'generated',
-        'x-portos-source': event.sources.filter((source) => source.direction === direction),
       };
       channelMessages[messageId] = { $ref: `#/components/messages/${messageId}` };
       const operationId = identifier(`${direction}_${event.event}`);
@@ -75,7 +74,7 @@ export const buildAsyncApiSpec = ({ baseUrl, version = '0.0.0' } = {}) => {
     info: {
       title: 'PortOS Socket.IO API',
       version,
-      description: 'Generated event inventory for the PortOS Socket.IO transport. Generated payloads remain explicitly marked until backed by a runtime schema.',
+      description: 'Source-derived event inventory for the PortOS Socket.IO transport. Inferred payloads remain explicitly marked until backed by a runtime schema.',
     },
     defaultContentType: 'application/json',
     servers: { local: serverDefinition(baseUrl) },

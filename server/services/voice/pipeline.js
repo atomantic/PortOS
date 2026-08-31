@@ -14,6 +14,7 @@ import { getToolSpecsForIntent, classifyIntent, dispatchTool, getAllToolNames, U
 import { isEchoOfRecentTts, rememberTtsSentence } from './echo.js';
 import { appendJournal, getToday } from '../brainJournal.js';
 import { resolvePending, isExpired } from './confirmGate.js';
+import { anyAbortSignal } from '../../lib/requestAbort.js';
 // getRelevantMemories is imported lazily inside buildMemoryContext — it only
 // runs for retrieval-shaped turns, so keep its memory-backend + embeddings
 // dependency graph out of voice startup / non-retrieval turns (same rationale
@@ -610,13 +611,18 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
   let pending = '';
   const ttsTimings = [];
   let ttsIdx = 0;
+  // Keep TTS cancellation coupled to the turn, while retaining a separate
+  // deadline path so a timed-out LLM can stop queued audio without making the
+  // socket mistake the timeout for a user cancellation.
+  const ttsController = new AbortController();
+  const ttsSignal = anyAbortSignal([signal, ttsController.signal]);
   const speak = async (sentence) => {
-    if (signal?.aborted || !sentence) return;
+    if (ttsSignal?.aborted || !sentence) return;
     const i = ++ttsIdx;
     const t0 = Date.now();
     tlog(`tts.start #${i} chars=${sentence.length}`);
-    const { wav, latencyMs } = await synthesize(sentence, { signal });
-    if (signal?.aborted) return;
+    const { wav, latencyMs } = await synthesize(sentence, { signal: ttsSignal });
+    if (ttsSignal?.aborted) return;
     ttsTimings.push(latencyMs);
     tlog(`tts.done  #${i} ${latencyMs}ms synth+queue=${Date.now() - t0}ms`);
     // Track what we just said so the next inbound transcript can be checked
@@ -636,7 +642,7 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
         // Barge-in aborts the turn mid-synthesis — Kokoro throws Error('aborted')
         // and Piper rejects 'piper synthesis aborted'. That's expected, not a
         // real failure, so don't surface it as voice:error.
-        if (signal?.aborted || /aborted/i.test(err?.message || '')) return;
+        if (ttsSignal?.aborted || /aborted/i.test(err?.message || '')) return;
         emit('voice:error', { stage: 'tts', message: err.message });
       });
     }
@@ -663,6 +669,10 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
       provider: cfg.llm.provider,
       model: cfg.llm.model,
       signal,
+      onTimeout: () => {
+        ttsController.abort();
+        emit('voice:tts:cancel', { reason: 'timeout' });
+      },
       tools: toolSpecs,
       tag: turnId,
       onDelta: (delta) => {

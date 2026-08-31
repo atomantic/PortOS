@@ -79,7 +79,7 @@ vi.mock('./userTimezone.js', () => ({
 
 import { readdir, unlink } from 'fs/promises';
 import { tryReadFile as readFile, atomicWrite } from '../lib/fileUtils.js';
-import { getMessages, getMessage, syncAccount, deleteCache, getSyncStatus, refreshMessage, updateMessageEvaluations, logMessageTouchpoints, aggregatePagedMessages } from './messageSync.js';
+import { getMessages, getMessage, syncAccount, deleteCache, getSyncStatus, refreshMessage, refreshMessages, updateMessageEvaluations, logMessageTouchpoints, aggregatePagedMessages } from './messageSync.js';
 import { autoLogTouchpoints } from './tribe.js';
 import { getAccount, updateSyncStatus } from './messageAccounts.js';
 import { syncGmail } from './messageGmailSync.js';
@@ -669,6 +669,31 @@ describe('refreshMessage', () => {
 
     const original = result.find(m => m.id === 'msg-1');
     expect(original.bodyText).toBe('');
+  });
+
+  it('loads and saves the cache once when refreshing multiple messages', async () => {
+    readFile.mockResolvedValue(JSON.stringify({
+      syncCursor: null,
+      messages: [
+        { id: 'msg-1', bodyText: 'preview 1', from: { name: 'Alice' }, subject: 'One', date: '2026-01-01' },
+        { id: 'msg-2', bodyText: 'preview 2', from: { name: 'Bob' }, subject: 'Two', date: '2026-01-02' },
+      ]
+    }));
+    getAccount.mockResolvedValue({ id: VALID_UUID, type: 'outlook' });
+    refreshMessageDetail
+      .mockResolvedValueOnce([{ from: 'Alice', date: '2026-01-01', body: 'full 1' }])
+      .mockResolvedValueOnce([{ from: 'Bob', date: '2026-01-02', body: 'full 2' }]);
+
+    const result = await refreshMessages(VALID_UUID, ['msg-1', 'msg-2']);
+
+    expect(result.updated).toBe(2);
+    expect(readFile).toHaveBeenCalledTimes(1);
+    expect(getAccount).toHaveBeenCalledTimes(1);
+    expect(refreshMessageDetail).toHaveBeenCalledTimes(2);
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
+    const savedMessages = atomicWrite.mock.calls[0][1].messages;
+    expect(savedMessages.find(message => message.id === 'msg-1').bodyText).toBe('full 1');
+    expect(savedMessages.find(message => message.id === 'msg-2').bodyText).toBe('full 2');
   });
 });
 

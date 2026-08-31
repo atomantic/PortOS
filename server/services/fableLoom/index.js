@@ -4,6 +4,7 @@ export {
   addNode,
   addNodeTransition,
   attachNodeImage,
+  attachNodePlaybackAsset,
   attachNodeVideo,
   createLoom,
   deleteEpisode,
@@ -29,6 +30,7 @@ export {
 export {
   branchNode,
   buildCanonDigest,
+  generateEpisodeOutline,
   feedbackEpisode,
   feedbackSeriesPlan,
   generateSeriesPlan,
@@ -37,9 +39,35 @@ export {
   publicNode,
   reformatEpisodeScenes,
   reviewEpisode,
+  reviewEpisodeOutline,
   reviewSeriesPlan,
+  reviewSeriesTeleplay,
   weaveEpisode,
+  validateEpisodeOutline,
 } from './weave.js';
+export {
+  applyFableLoomEditorialPatch,
+  collectFableLoomEditorialDiagnostics,
+  evaluateAndRemediateFableLoom,
+  reviewFableLoomPlaythroughs,
+} from './editorial.js';
+export {
+  FABLELOOM_EDITORIAL_AUTOPILOT_LIMITS,
+  _resetFableLoomEditorialAutopilots,
+  cancelFableLoomEditorialAutopilot,
+  getFableLoomEditorialAutopilot,
+  getLatestFableLoomEditorialAutopilot,
+  publicFableLoomEditorialAutopilot,
+  startFableLoomEditorialAutopilot,
+} from './editorialAutopilot.js';
+export {
+  FABLELOOM_EDITORIAL_SELF_IMPROVE_AREAS,
+  FABLELOOM_EDITORIAL_SELF_IMPROVE_MIN_CONFIDENCE,
+  buildFableLoomEditorialSelfImproveTask,
+  buildFableLoomEditorialTelemetry,
+  runFableLoomEditorialSelfImprove,
+  shouldDiagnoseFableLoomEditorial,
+} from './editorialSelfImprove.js';
 export {
   _resetFableLoomBackend,
   isValidLoomId,
@@ -51,3 +79,35 @@ export {
   asLoomFormat,
   isLoomFormat,
 } from './formats.js';
+export {
+  FABLELOOM_VISUAL_COMPILER_VERSION,
+  compileFableLoomVisualRequest,
+  fableLoomImageCapabilities,
+  fableLoomVideoCapabilities,
+} from './visualConditioning.js';
+export {
+  DEFAULT_SESSION_TTL_MINUTES,
+  MAX_SESSION_TTL_MINUTES,
+  _getInternalSession,
+  _resetHostedSessions,
+  abortHostedTurn,
+  checkHostedSessionReadiness,
+  createHostedSession,
+  endHostedSession,
+  getHostedSession,
+  initialPhaseForNode,
+  processHostedUtterance,
+  revalidateLiveConversationGate,
+  sanitizeHostedSession,
+  startHostedListening,
+  updateHostedSession,
+  verifyHostedToken,
+} from './hostedSession.js';
+export {
+  cancelEpisodeProductionBatch,
+  getEpisodeProductionBatch,
+  planEpisodeProduction,
+  reviewEpisodeContinuity,
+  resumeEpisodeProductionBatch,
+  startEpisodeProductionBatch,
+} from './production.js';

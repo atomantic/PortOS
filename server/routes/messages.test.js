@@ -19,6 +19,8 @@ vi.mock('../services/messageSync.js', () => ({
   getMessages: vi.fn(),
   getMessage: vi.fn(),
   getThread: vi.fn(),
+  refreshMessage: vi.fn(),
+  refreshMessages: vi.fn(),
   deleteCache: vi.fn()
 }));
 
@@ -546,6 +548,28 @@ describe('Messages Routes', () => {
 
       expect(response.status).toBe(404);
       expect(response.body.error).toBe('Message not found');
+    });
+  });
+
+  describe('POST /api/messages/fetch-full/:accountId', () => {
+    it('refreshes preview-only messages in one batch', async () => {
+      messageAccounts.getAccount.mockResolvedValue({ id: VALID_UUID, type: 'outlook' });
+      messageSync.getMessages.mockResolvedValue({
+        messages: [
+          { id: 'msg-1', bodyFull: false },
+          { id: 'msg-2', bodyFull: true },
+          { id: 'msg-3', bodyFull: false },
+        ],
+        total: 3,
+      });
+      messageSync.refreshMessages.mockResolvedValue({ updated: 2, results: [[], []] });
+
+      const response = await request(app).post(`/api/messages/fetch-full/${VALID_UUID}`);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ updated: 2, total: 2, truncated: false });
+      expect(messageSync.refreshMessages).toHaveBeenCalledTimes(1);
+      expect(messageSync.refreshMessages).toHaveBeenCalledWith(VALID_UUID, ['msg-1', 'msg-3']);
     });
   });
 

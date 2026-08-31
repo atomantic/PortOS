@@ -28,7 +28,7 @@ vi.mock('../lib/httpsState.js', () => ({
   getHttpsEnabledAtBoot: (...args) => mocks.getHttpsEnabledAtBoot(...args),
 }));
 
-import { isTokenExpired, withExpiry, getRedirectUri, getAuthStatus, getAccessToken } from './spotifyAuth.js';
+import { isTokenExpired, withExpiry, getRedirectUri, getAuthStatus, getAccessToken, handleCallback, SPOTIFY_SCOPES } from './spotifyAuth.js';
 
 describe('spotifyAuth pure helpers', () => {
   describe('withExpiry', () => {
@@ -212,5 +212,34 @@ describe('getAccessToken', () => {
     // Guard released in finally → the next call issues a fresh request.
     await expect(getAccessToken()).resolves.toBe('fresh');
     expect(mocks.fetchWithTimeout).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('handleCallback', () => {
+  it('requests playlist scopes for the expanded Brain integration', () => {
+    expect(SPOTIFY_SCOPES).toEqual([
+      'user-read-recently-played',
+      'playlist-read-private',
+      'playlist-read-collaborative',
+    ]);
+  });
+
+  it('single-flights and replays a successful callback without reusing the code', async () => {
+    mocks.tryReadFile.mockImplementation(async (path) => (
+      String(path).endsWith('credentials.json')
+        ? JSON.stringify({ clientId: 'cid', clientSecret: 'secret' })
+        : null
+    ));
+    let resolveFetch;
+    mocks.fetchWithTimeout.mockReturnValue(new Promise((resolve) => { resolveFetch = resolve; }));
+
+    const first = handleCallback('one-time-code');
+    const second = handleCallback('one-time-code');
+    while (mocks.fetchWithTimeout.mock.calls.length === 0) await new Promise((resolve) => setTimeout(resolve, 0));
+    resolveFetch({ ok: true, json: async () => ({ access_token: 'fresh', refresh_token: 'refresh', expires_in: 3600 }) });
+
+    await expect(Promise.all([first, second])).resolves.toEqual([{ success: true }, { success: true, duplicate: true }]);
+    await expect(handleCallback('one-time-code')).resolves.toMatchObject({ success: true, duplicate: true });
+    expect(mocks.fetchWithTimeout).toHaveBeenCalledTimes(1);
   });
 });

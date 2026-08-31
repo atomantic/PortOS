@@ -1,11 +1,68 @@
 import { describe, it, expect } from 'vitest';
 import {
-  THIRD_PERSON, BOOM_ZOOM, clampPitch, thirdPersonCamera, nextBoomZoom, resolveBoom,
+  DEFAULT_SPAWN_Z, THIRD_PERSON, BOOM_ZOOM, clampPitch, thirdPersonCamera, nextBoomZoom, resolveBoom,
   dampFactor, dampAngle, moveFacing, avatarState, bankAngle, stepVehicle,
-  moveWithCollisions, VEHICLE_COLLISION,
+  moveWithCollisions, solveKabschTransform, solveVehicleSuspensionPose, VEHICLE_COLLISION,
 } from './openWorldPlayerRig';
+import { isWalkable } from './openWorldPlan';
 
 const pos = { x: 0, y: 1.6, z: 0 };
+
+describe('authored arrival', () => {
+  it('starts the rover on The Port rather than deriving spawn from app layout', () => {
+    expect(DEFAULT_SPAWN_Z).toBeGreaterThan(0);
+    expect(DEFAULT_SPAWN_Z).toBeGreaterThan(40);
+    expect(DEFAULT_SPAWN_Z).toBeLessThan(55);
+    expect(isWalkable(0, DEFAULT_SPAWN_Z)).toBe(true);
+  });
+});
+
+describe('terrain suspension', () => {
+  it('preserves an identity point cloud with no residual', () => {
+    const points = [
+      { x: -1, y: 0, z: 1 },
+      { x: 1, y: 0, z: 1 },
+      { x: -1, y: 0, z: -1 },
+      { x: 1, y: 0, z: -1 },
+    ];
+    const pose = solveKabschTransform(points, points);
+    expect(pose.rotation.w).toBeCloseTo(1, 6);
+    expect(pose.rotation.x).toBeCloseTo(0, 6);
+    expect(pose.rotation.z).toBeCloseTo(0, 6);
+    expect(pose.residual).toBeCloseTo(0, 6);
+  });
+
+  it('fits the chassis to four independently sampled wheel contacts', () => {
+    const pose = solveVehicleSuspensionPose({
+      x: 4,
+      z: -7,
+      heading: 0.4,
+      centerHeight: 0,
+      halfWidth: 0.8,
+      halfLength: 1.1,
+      heightAt: (x, z) => x * 0.1 + z * 0.06,
+    });
+    expect(new Set(pose.wheelOffsets.map((value) => value.toFixed(4))).size).toBeGreaterThan(2);
+    expect(Math.hypot(pose.rotation.x, pose.rotation.z)).toBeGreaterThan(0.02);
+    expect(Math.hypot(pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w)).toBeCloseTo(1, 6);
+    expect(pose.residual).toBeLessThan(0.02);
+  });
+
+  it('uses only the small fit residual for per-wheel travel on a planar slope', () => {
+    const pose = solveVehicleSuspensionPose({
+      x: 0,
+      z: 0,
+      heading: 0,
+      centerHeight: 0,
+      halfWidth: 0.8,
+      halfLength: 1.1,
+      heightAt: (_x, z) => z * 0.25,
+    });
+
+    expect(Math.max(...pose.wheelOffsets.map(Math.abs))).toBeGreaterThan(0.2);
+    expect(Math.max(...pose.wheelTravel.map(Math.abs))).toBeLessThan(0.01);
+  });
+});
 
 describe('nextBoomZoom', () => {
   it('zooms in for an upward wheel scroll and out for a downward one', () => {

@@ -77,6 +77,15 @@ describe.skipIf(!dbReady)('pipeline issues DB adapter round-trip', () => {
     expect(ordered.map((r) => r.id)).toEqual(['iss-a', 'iss-b']);
   });
 
+  it('listRawBySeriesIds returns only the requested series', async () => {
+    await db.writeRaw('iss-1', I('iss-1', { seriesId: 'ser-1' }));
+    await db.writeRaw('iss-2', I('iss-2', { seriesId: 'ser-2' }));
+    await db.writeRaw('iss-3', I('iss-3', { seriesId: 'ser-3' }));
+    expect((await db.listRawBySeriesIds(['ser-1', 'ser-3'])).map((r) => r.id).sort())
+      .toEqual(['iss-1', 'iss-3']);
+    expect(await db.listRawBySeriesIds([])).toEqual([]);
+  });
+
   it('listIds returns live, tombstoned, and ephemeral ids alike', async () => {
     await db.writeRaw('iss-live', I('iss-live'));
     await db.writeRaw('iss-dead', I('iss-dead', { deleted: true, deletedAt: '2026-02-02T00:00:00.000Z' }));

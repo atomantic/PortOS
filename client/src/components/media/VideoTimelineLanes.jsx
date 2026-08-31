@@ -110,36 +110,40 @@ export const LaneBlock = memo(function LaneBlock({
   entry, label, tone, isSelected, isMissing, pxPerSec, onSelect, onRemove,
 }) {
   const dur = Math.max(0.05, entry.durationSec || 0);
+  const width = Math.max(28, dur * pxPerSec);
+  const showRemove = width >= 56;
   const style = {
     left: `${(entry.startSec || 0) * pxPerSec}px`,
-    width: `${Math.max(28, dur * pxPerSec)}px`,
+    width: `${width}px`,
   };
   return (
     <div
       style={style}
-      className={`absolute top-1 bottom-1 rounded border cursor-pointer overflow-hidden ${
+      className={`absolute top-1 bottom-1 rounded border cursor-pointer ${
         isMissing
           ? 'bg-port-error/20 border-port-error'
           : isSelected
-            ? 'border-port-accent bg-port-accent/20'
+            ? 'z-10 border-port-accent bg-port-accent/20'
             : `${tone} hover:border-port-accent/50`
       }`}
       onClick={() => onSelect(entry._key)}
       {...clickableProps(() => onSelect(entry._key))}
     >
-      <span className="absolute inset-x-1 top-0.5 text-[9px] text-white truncate pointer-events-none">
+      <span className={`absolute top-0.5 text-[9px] text-white truncate pointer-events-none ${showRemove ? 'left-1 right-7' : 'inset-x-1'}`}>
         {isMissing ? '(missing)' : label}
       </span>
-      <button
-        type="button"
-        onClick={(e) => { e.stopPropagation(); onRemove(entry._key); }}
-        onPointerDown={(e) => e.stopPropagation()}
-        className="absolute bottom-0 right-0 p-0.5 text-white/70 hover:text-port-error"
-        title="Remove"
-        aria-label={`Remove ${label} from timeline`}
-      >
-        <X className="w-3 h-3" aria-hidden="true" />
-      </button>
+      {showRemove && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onRemove(entry._key); }}
+          onPointerDown={(e) => e.stopPropagation()}
+          className="absolute top-1/2 right-0 -translate-y-1/2 inline-flex min-w-[28px] min-h-[28px] items-center justify-center p-1 text-white/70 hover:text-port-error"
+          title="Remove"
+          aria-label={`Remove ${label} from timeline`}
+        >
+          <X className="w-3 h-3" aria-hidden="true" />
+        </button>
+      )}
     </div>
   );
 });

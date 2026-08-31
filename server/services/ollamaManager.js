@@ -310,13 +310,13 @@ function resetAvailabilityCache() {
   lastLoadedModelsError = null
 }
 
-async function waitForAvailability(expected, timeoutMs) {
+async function waitForAvailability(expected, timeoutMs, shouldAbort = () => false) {
   const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
+  while (Date.now() < deadline && !shouldAbort()) {
     if ((await checkOllamaAvailable(true)) === expected) return true
-    await sleep(400)
+    if (!shouldAbort()) await sleep(400)
   }
-  return (await checkOllamaAvailable(true)) === expected
+  return !shouldAbort() && (await checkOllamaAvailable(true)) === expected
 }
 
 function rememberManagedProcess(child) {
@@ -363,6 +363,13 @@ async function startServer({ env = null } = {}) {
 
   const contextLength = resolveOllamaContextLength(null, env || {})
   let spawnError = null
+  let notifySpawnFailure = null
+  // `spawn()` reports a missing executable asynchronously. Waiting only for the
+  // HTTP probe in that case turns an immediate ENOENT into a 12-second startup
+  // timeout, obscuring the one useful diagnosis and needlessly delaying a
+  // fallback. Keep the probe for a real daemon startup, but let a spawn failure
+  // settle this attempt as soon as Node reports it.
+  const spawnFailed = new Promise((resolve) => { notifySpawnFailure = resolve })
   const stderr = []
   const child = spawn('ollama', ['serve'], {
     detached: true,
@@ -374,10 +381,17 @@ async function startServer({ env = null } = {}) {
     stderr.push(chunk.toString())
     if (stderr.join('').length > 2000) stderr.shift()
   })
-  child.on('error', (err) => { spawnError = err })
+  child.on('error', (err) => {
+    spawnError = err
+    notifySpawnFailure(err)
+  })
   child.unref()
 
-  const running = await waitForAvailability(true, START_TIMEOUT_MS)
+  const startup = await Promise.race([
+    waitForAvailability(true, START_TIMEOUT_MS, () => spawnError !== null).then((running) => ({ running, error: null })),
+    spawnFailed.then((error) => ({ running: false, error })),
+  ])
+  const running = startup.running
   if (running) {
     // A daemon PortOS just started carries exactly `env` and nothing else, so
     // there is no earlier tuning left to undo. `restartWithEnv` re-asserts its
@@ -390,7 +404,9 @@ async function startServer({ env = null } = {}) {
     return { success: true, running: true, pid: child.pid }
   }
 
-  const detail = spawnError?.message || stderr.join('').trim()
+  const detail = startup.error?.code === 'ENOENT'
+    ? 'Ollama CLI is not installed or is not on PortOS\'s PATH. Install Ollama from https://ollama.com/download, then restart PortOS.'
+    : spawnError?.message || stderr.join('').trim()
   return {
     success: false,
     running: false,

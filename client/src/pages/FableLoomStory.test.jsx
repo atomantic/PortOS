@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import userEvent from '@testing-library/user-event';
 
@@ -66,11 +66,19 @@ vi.mock('../components/fableloom/LoomMediaJobWatchers', () => ({
   },
 }));
 vi.mock('../components/fableloom/LoomEpisodeOutline', () => ({ default: ({ episode }) => <div data-testid="episode-outline">{episode.title}</div> }));
-vi.mock('../components/fableloom/LoomNodeEditor', () => ({ default: () => <div /> }));
+vi.mock('../components/fableloom/LoomEpisodeOutlinePlanner', () => ({
+  default: ({ onExpand }) => (
+    <button type="button" onClick={onExpand}>Expand validated outline to teleplay</button>
+  ),
+}));
+vi.mock('../components/fableloom/LoomEpisodeFeedback', () => ({ default: () => null }));
+vi.mock('../components/fableloom/LoomNodeEditor', () => ({
+  default: ({ node }) => <div>Editing scene: {node.title}</div>,
+}));
 vi.mock('../components/fableloom/LoomPlayPanel', () => ({ default: () => <div /> }));
 vi.mock('../components/fableloom/LoomSettingsDrawer', () => ({ default: () => <div /> }));
 vi.mock('../components/fableloom/LoomSeriesPlan', () => ({ default: () => <div>Series planning workspace</div> }));
-vi.mock('../components/fableloom/LoomValidationPanel', () => ({ default: () => <div /> }));
+vi.mock('../components/fableloom/LoomValidationPanel', () => ({ default: () => <div>Episode validation</div> }));
 
 import * as api from '../services/api';
 import FableLoomStory from './FableLoomStory';
@@ -91,17 +99,19 @@ const episode = (fields = {}) => ({
   title: 'The First Door',
   synopsis: 'A choice waits in the dark.',
   startNodeId: 'node-1',
+  storyOutline: { validation: { status: 'valid' } },
   nodes: [
     { id: 'node-1', title: 'Threshold', prose: 'You stand before the first door.', transitions: [] },
   ],
   ...fields,
 });
 
-const renderEditor = () => render(
-  <MemoryRouter initialEntries={['/fableloom/loom-1']}>
+const renderEditor = (initialEntry = '/fableloom/loom-1') => render(
+  <MemoryRouter initialEntries={[initialEntry]}>
     <Routes>
       <Route path="/fableloom/:loomId" element={<FableLoomStory />} />
       <Route path="/fableloom/:loomId/:episodeId" element={<FableLoomStory />} />
+      <Route path="/fableloom/:loomId/:episodeId/:nodeId" element={<FableLoomStory />} />
     </Routes>
   </MemoryRouter>,
 );
@@ -113,6 +123,22 @@ beforeEach(() => {
 });
 
 describe('FableLoomStory navigation and series backlink', () => {
+  it('opens Play as a viewport-filling movie player', async () => {
+    const user = userEvent.setup();
+    api.getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
+    renderEditor('/fableloom/loom-1/ep-1');
+
+    await user.click(await screen.findByRole('button', { name: 'Play' }));
+
+    const player = screen.getByRole('dialog', { name: 'Example Loom player' });
+    expect(player).toHaveClass('h-[100dvh]', 'w-full', 'overflow-hidden', 'bg-black');
+    expect(document.body.style.overflow).toBe('hidden');
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Example Loom player' })).not.toBeInTheDocument());
+    expect(document.body.style.overflow).toBe('');
+  });
+
   it('opens an empty loom in the series plan before asking for episodes', async () => {
     renderEditor();
 
@@ -194,7 +220,141 @@ describe('FableLoomStory episode outline route', () => {
   });
 });
 
+describe('FableLoomStory episode expansion safety', () => {
+  it('exposes an explicit episode editor for changing the title and synopsis', async () => {
+    const user = userEvent.setup();
+    api.getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
+    renderEditor('/fableloom/loom-1/ep-1');
+
+    await user.click(await screen.findByRole('button', { name: 'Edit episode' }));
+
+    expect(screen.getByRole('heading', { name: 'Episode setup' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Title')).toHaveValue('The First Door');
+    expect(screen.getByLabelText('Synopsis (feeds the weave)')).toHaveValue('A choice waits in the dark.');
+  });
+
+  it('clears outline guidance when the editor switches episodes', async () => {
+    const user = userEvent.setup();
+    api.getLoom.mockResolvedValue(loom({
+      episodes: [
+        episode(),
+        episode({ id: 'ep-2', number: 2, title: 'The Second Door', synopsis: 'A different blockade.' }),
+      ],
+    }));
+    renderEditor('/fableloom/loom-1/ep-1');
+
+    await user.click(await screen.findByRole('button', { name: 'Edit episode' }));
+    const guidance = screen.getByLabelText('Guidance (optional)');
+    await user.type(guidance, 'Use the first episode lock code.');
+
+    await user.click(screen.getByRole('button', { name: 'Close settings' }));
+    await user.click(screen.getByRole('tab', { name: '2. The Second Door' }));
+    await user.click(screen.getByRole('button', { name: 'Edit episode' }));
+
+    expect(screen.getByLabelText('Title')).toHaveValue('The Second Door');
+    expect(screen.getByLabelText('Guidance (optional)')).toHaveValue('');
+  });
+
+  it('confirms before replacing an existing episode scene graph', async () => {
+    const user = userEvent.setup();
+    const existingEpisode = episode({ nodes: [
+      { id: 'node-1', title: 'Existing scene', prose: 'Existing text.', transitions: [] },
+      { id: 'node-2', title: 'Existing ending', prose: 'Existing ending text.', transitions: [] },
+    ] });
+    api.getLoom.mockResolvedValue(loom({ episodes: [existingEpisode] }));
+    api.weaveLoomEpisode.mockResolvedValue({ loom: loom({ episodes: [existingEpisode] }) });
+    renderEditor('/fableloom/loom-1/ep-1');
+
+    await user.click(await screen.findByRole('button', { name: 'Weave' }));
+    await user.click(screen.getByRole('button', { name: 'Expand validated outline to teleplay' }));
+
+    expect(api.weaveLoomEpisode).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Replace scenes' })).toBeInTheDocument();
+    expect(screen.getByText(/Replace 2 existing scenes and remove their rendered stills and video clips/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Replace scenes' }));
+    await waitFor(() => expect(api.weaveLoomEpisode).toHaveBeenCalledWith(
+      'loom-1',
+      'ep-1',
+      expect.objectContaining({ replace: true, expandFromOutline: true }),
+      { silent: true },
+    ));
+  });
+});
+
+describe('FableLoomStory episode rail layout', () => {
+  it('keeps the episode rail content independently scrollable when no scene is selected', async () => {
+    api.getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
+    renderEditor('/fableloom/loom-1/ep-1');
+
+    const rail = await screen.findByTestId('loom-validation-rail');
+    expect(rail).toHaveClass('flex', 'flex-col', 'overflow-hidden');
+    expect(rail.firstElementChild).toHaveClass('min-h-0', 'flex-1', 'overflow-y-auto');
+  });
+
+  it('sizes the stacked graph/rail split against the pane, never the viewport', async () => {
+    api.getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
+    renderEditor('/fableloom/loom-1/ep-1');
+
+    const rail = await screen.findByTestId('loom-validation-rail');
+    expect(rail).toHaveClass('max-h-[45%]', 'lg:max-h-none');
+    // A `vh` cap ignores the page header the pane sits under, so the rail's
+    // content was clipped below the fold of an `overflow-hidden` page.
+    expect(rail.getAttribute('style') || '').not.toMatch(/vh/);
+    // The graph takes what's left rather than claiming a `vh` floor of its own.
+    expect(rail.previousElementSibling).toHaveClass('flex-1', 'min-h-0');
+  });
+});
+
+describe('FableLoomStory mobile header', () => {
+  it('offers every header action from the phone overflow menu', async () => {
+    const user = userEvent.setup();
+    api.getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
+    renderEditor('/fableloom/loom-1/ep-1');
+
+    // The labelled row is desktop-only; on a phone the same actions live behind
+    // the overflow trigger, because five buttons ran off the right edge.
+    await user.click(await screen.findByRole('button', { name: 'Story actions' }));
+    const menu = screen.getByRole('menu', { name: 'Story actions' });
+    for (const name of ['Story settings', 'Add scene', 'Edit episode', 'Weave']) {
+      expect(within(menu).getByRole('menuitem', { name })).toBeInTheDocument();
+    }
+
+    await user.click(within(menu).getByRole('menuitem', { name: 'Edit episode' }));
+    expect(screen.getByRole('heading', { name: 'Episode setup' })).toBeInTheDocument();
+  });
+});
+
+describe('FableLoomStory mobile scene details', () => {
+  it('opens the selected scene in a slide-up sheet and closes back to the graph', async () => {
+    const user = userEvent.setup();
+    api.getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
+    renderEditor('/fableloom/loom-1/ep-1/node-1');
+
+    const sheet = await screen.findByTestId('scene-details-sheet');
+    expect(sheet).toHaveClass('absolute', 'bottom-0', 'rounded-t-2xl', 'lg:static');
+    expect(screen.getByText('Editing scene: Threshold')).toBeInTheDocument();
+
+    const close = screen.getByRole('button', { name: 'Close scene details' });
+    expect(close).toHaveClass('min-h-[56px]', 'min-w-[56px]');
+    await user.click(close);
+
+    await waitFor(() => expect(screen.queryByTestId('scene-details-sheet')).not.toBeInTheDocument());
+    expect(screen.getByTestId('loom-validation-rail')).toBeInTheDocument();
+    expect(screen.getByText('Episode validation')).toBeInTheDocument();
+  });
+});
+
 describe('FableLoomStory scene media lifecycle', () => {
+  it('keeps scene media disabled until the ordered beat arc is validated', async () => {
+    api.getLoom.mockResolvedValue(loom({
+      episodes: [episode({ storyOutline: null })],
+    }));
+    renderEditor();
+
+    expect(await screen.findByRole('button', { name: 'Canvas generate image' })).toBeDisabled();
+  });
+
   it('queues with canonical universe style and notifies when the render later fails', async () => {
     const user = userEvent.setup();
     api.getLoom.mockResolvedValue(loom({
@@ -225,6 +385,8 @@ describe('FableLoomStory scene media lifecycle', () => {
     expect(api.generateImage).toHaveBeenCalledWith({
       prompt: 'painted ink. an ancient gate in alien grass\n\nStyle: blue dusk lighting',
       negativePrompt: 'photorealism',
+      width: 1024,
+      height: 576,
       fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' },
     }, { silent: true });
     expect(screen.getByTestId('canvas-image-status')).toHaveTextContent('queued');
@@ -264,7 +426,7 @@ describe('FableLoomStory scene media lifecycle', () => {
     expect(toastMocks.success).toHaveBeenCalledWith('Scene image ready');
   });
 
-  it('passes the rendered incoming shot into the next scene image request', async () => {
+  it('sends only the scene tag so the server resolves typed graph continuity', async () => {
     const user = userEvent.setup();
     api.getLoom.mockResolvedValue(loom({
       episodes: [episode({
@@ -292,13 +454,13 @@ describe('FableLoomStory scene media lifecycle', () => {
 
     await waitFor(() => expect(api.generateImage).toHaveBeenCalledWith({
       prompt: 'the same scout crosses into the observatory',
-      referenceImageFiles: ['threshold.png'],
-      referenceStrengths: [0.4],
+      width: 1024,
+      height: 576,
       fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-2' },
     }, { silent: true }));
   });
 
-  it('retries without continuity when the configured backend cannot accept the prior shot', async () => {
+  it('does not silently retry a rejected canon request without its conditioning', async () => {
     const user = userEvent.setup();
     api.getLoom.mockResolvedValue(loom({
       episodes: [episode({
@@ -316,23 +478,22 @@ describe('FableLoomStory scene media lifecycle', () => {
         ],
       })],
     }));
-    api.generateImage
-      .mockRejectedValueOnce(Object.assign(new Error('Text-to-image only'), {
-        code: 'IMAGE_EDIT_UNSUPPORTED_MODE',
-      }))
-      .mockResolvedValueOnce({ jobId: 'image-job-fallback', status: 'queued' });
+    api.generateImage.mockRejectedValueOnce(Object.assign(new Error('Canon conditioning unavailable'), {
+      code: 'FABLELOOM_CANON_CONDITIONING_UNAVAILABLE',
+    }));
     renderEditor();
 
     await user.click(await screen.findByRole('button', { name: 'Canvas generate second image' }));
 
-    await waitFor(() => expect(api.generateImage).toHaveBeenCalledTimes(2));
-    expect(api.generateImage.mock.calls[0][0]).toMatchObject({ referenceImageFiles: ['threshold.png'] });
-    expect(api.generateImage.mock.calls[1]).toEqual([{
+    await waitFor(() => expect(api.generateImage).toHaveBeenCalledTimes(1));
+    expect(api.generateImage.mock.calls[0]).toEqual([{
       prompt: 'the scout enters the observatory',
+      width: 1024,
+      height: 576,
       fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-2' },
     }, { silent: true }]);
-    expect(toastMocks.warning).toHaveBeenCalledWith(
-      'The current image backend cannot use the prior shot — rendering this scene without continuity conditioning',
+    expect(toastMocks.error).toHaveBeenCalledWith(
+      'Could not start scene image: Canon conditioning unavailable',
     );
   });
 });

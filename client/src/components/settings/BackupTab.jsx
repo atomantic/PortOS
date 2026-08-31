@@ -180,13 +180,19 @@ export function BackupTab() {
     || !sameSet(excludePaths, savedExcludePaths)
     || !sameSet(disabledDefaultExcludes, savedDisabledDefaultExcludes);
   const canRun = !!savedDestPath && !running && !saving && !dirty;
-  const runTitle = !savedDestPath
-    ? 'Configure and save a destination path first'
-    : saving
-      ? 'Waiting for save to finish…'
+  const runDisabledReason = running
+    ? null
+    : saving && (destPath || savedDestPath)
+      ? 'Waiting for save to finish — Run Backup Now will use the saved settings.'
+      : !savedDestPath && destPath
+        ? 'Save this destination before running — Run Backup Now uses saved settings.'
+      : !savedDestPath
+        ? 'Configure and save a destination path first'
       : dirty
-        ? 'Save your changes before running — the backup uses saved settings.'
-        : 'Run a backup snapshot now using saved settings';
+        ? 'Unsaved changes. Save your changes before running — Run Backup Now uses saved settings.'
+        : null;
+  const runTitle = runDisabledReason || 'Run a backup snapshot now using saved settings';
+  const formStatus = saving ? 'Saving…' : dirty ? 'Unsaved changes' : '';
 
   // Per-default row state, derived once so the collapsed summary count and the
   // expanded rows can never disagree about what is actually being excluded.
@@ -449,13 +455,18 @@ export function BackupTab() {
           onClick={handleRunNow}
           disabled={!canRun}
           title={runTitle}
+          aria-describedby={runDisabledReason ? 'backup-run-disabled-reason' : undefined}
           className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-border hover:bg-port-border/70 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {running ? <BrailleSpinner /> : <Play size={16} />}
           {running ? 'Running…' : 'Run Backup Now'}
         </button>
-        <span className="text-xs text-gray-500" aria-live="polite">
-          {saving ? 'Saving…' : dirty ? 'Unsaved changes' : ''}
+        <span
+          id="backup-run-disabled-reason"
+          className="text-xs text-gray-500"
+          aria-live="polite"
+        >
+          {runDisabledReason || formStatus}
         </span>
       </div>
     </div>

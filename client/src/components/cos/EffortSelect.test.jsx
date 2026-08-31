@@ -20,10 +20,10 @@ describe('EffortSelect', () => {
       .toEqual(['Default effort', 'low', 'medium', 'high']);
   });
 
-  it('offers codex its full ladder', () => {
-    render(<EffortSelect provider={CODEX} value="" onChange={() => {}} />);
+  it('offers Ultra when Codex runs a model that supports automatic delegation', () => {
+    render(<EffortSelect provider={CODEX} model="gpt-5.6-sol" value="" onChange={() => {}} />);
     expect(screen.getAllByRole('option').map(o => o.textContent))
-      .toEqual(['Default effort', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+      .toEqual(['Default effort', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
   });
 
   it('uses a server-published ladder for a renamed custom CLI', () => {

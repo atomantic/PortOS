@@ -26,7 +26,29 @@ vi.mock('../services/voice/bootstrap.js', () => ({
 vi.mock('../services/voice/tts.js', () => ({
   synthesize: vi.fn(),
   listVoices: vi.fn(),
-  VALID_ENGINES: new Set(['kokoro', 'piper']),
+  listVoiceEngines: vi.fn(),
+  VALID_ENGINES: new Set(['kokoro', 'piper', 'qwen3-tts']),
+}));
+vi.mock('../services/voice/profiles.js', () => ({
+  listVoiceProfiles: vi.fn(),
+  promotePresetProfile: vi.fn(),
+  createVoiceDesignCandidate: vi.fn(),
+  createClonedVoiceCandidate: vi.fn(),
+  promoteVoiceProfile: vi.fn(),
+}));
+vi.mock('../services/voice/profileBenchmarks.js', () => ({
+  renderProfileBenchmark: vi.fn(),
+  benchmarkProfileInteractive: vi.fn(),
+}));
+vi.mock('../services/voice/qwen3TtsRuntime.js', () => ({
+  getQwen3RuntimeStatus: vi.fn(),
+  downloadQwen3Model: vi.fn(),
+}));
+vi.mock('../services/voice/fineTuning.js', () => ({
+  startFineTuningJob: vi.fn(),
+  getFineTuningJobStatus: vi.fn(),
+  cancelFineTuningJob: vi.fn(),
+  promoteCheckpoint: vi.fn(),
 }));
 // GET /api/voice/tts/status + POST /api/voice/tts/unload destructure these at
 // module load — mock them so the route resolves without spinning up Kokoro.
@@ -56,6 +78,10 @@ import * as config from '../services/voice/config.js';
 import * as health from '../services/voice/health.js';
 import * as bootstrap from '../services/voice/bootstrap.js';
 import * as tts from '../services/voice/tts.js';
+import * as voiceProfiles from '../services/voice/profiles.js';
+import * as profileBenchmarks from '../services/voice/profileBenchmarks.js';
+import * as qwen3TtsRuntime from '../services/voice/qwen3TtsRuntime.js';
+import * as fineTuning from '../services/voice/fineTuning.js';
 import { ServerError } from '../lib/errorHandler.js';
 import * as piperVoices from '../services/voice/piper-voices.js';
 import * as proactiveSpeech from '../services/voice/proactiveSpeech.js';
@@ -72,7 +98,7 @@ errorEvents.on('error', () => {});
 const DEFAULT_CFG = {
   enabled: false,
   stt: { engine: 'web-speech', endpoint: 'http://127.0.0.1:5562' },
-  tts: { engine: 'kokoro' },
+  tts: { engine: 'kokoro', rate: 1, kokoro: { modelId: 'kokoro-test', dtype: 'q8' } },
 };
 
 const buildApp = ({ io = { emit: () => {} } } = {}) => {
@@ -91,6 +117,126 @@ describe('Voice Routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     config.getVoiceConfig.mockResolvedValue(DEFAULT_CFG);
+  });
+
+  describe('machine-local voice profiles & Voice Lab', () => {
+    it('reports the preset engine capability contract', async () => {
+      tts.listVoiceEngines.mockResolvedValue([{ id: 'kokoro', capabilities: { preset: true, formant: false } }]);
+      const res = await request(buildApp()).get('/api/voice/engines');
+      expect(res.status).toBe(200);
+      expect(res.body.engines).toEqual([{ id: 'kokoro', capabilities: { preset: true, formant: false } }]);
+    });
+
+    it('lists only the requested machine-local character binding', async () => {
+      voiceProfiles.listVoiceProfiles.mockResolvedValue([{ id: 'voice-profile-1' }]);
+      const res = await request(buildApp()).get('/api/voice/profiles?universeId=uni-1&characterId=char-1');
+      expect(res.status).toBe(200);
+      expect(voiceProfiles.listVoiceProfiles).toHaveBeenCalledWith({ universeId: 'uni-1', characterId: 'char-1' });
+      expect(res.body.profiles).toEqual([{ id: 'voice-profile-1' }]);
+    });
+
+    it('promotes a preset with the current local model and delivery provenance', async () => {
+      voiceProfiles.promotePresetProfile.mockResolvedValue({ id: 'voice-profile-1' });
+      const res = await request(buildApp()).post('/api/voice/profiles/preset').send({
+        universeId: 'uni-1', characterId: 'char-1', voiceId: 'kokoro:af_heart',
+      });
+      expect(res.status).toBe(201);
+      expect(voiceProfiles.promotePresetProfile).toHaveBeenCalledWith(expect.objectContaining({
+        modelRevision: 'kokoro-test:q8', delivery: { rate: 1 },
+      }));
+      expect(res.body).toEqual({ profile: { id: 'voice-profile-1' } });
+    });
+
+    it('creates a candidate voice design profile without altering approved binding', async () => {
+      voiceProfiles.createVoiceDesignCandidate.mockResolvedValue({ id: 'voice-design-1', kind: 'designed', approval: { status: 'draft' } });
+      const res = await request(buildApp()).post('/api/voice/profiles/design').send({
+        universeId: 'uni-1', characterId: 'char-1', instructions: 'warm low alto', seed: 42,
+      });
+      expect(res.status).toBe(201);
+      expect(voiceProfiles.createVoiceDesignCandidate).toHaveBeenCalledWith(expect.objectContaining({
+        instructions: 'warm low alto', seed: 42,
+      }));
+      expect(res.body.profile.kind).toBe('designed');
+    });
+
+    it('creates a consented clone candidate profile with verified performer consent', async () => {
+      voiceProfiles.createClonedVoiceCandidate.mockResolvedValue({ id: 'voice-clone-1', kind: 'cloned', approval: { status: 'draft' } });
+      const res = await request(buildApp()).post('/api/voice/profiles/clone').send({
+        universeId: 'uni-1',
+        characterId: 'char-1',
+        filename: 'reference.wav',
+        audioBase64: Buffer.from('mockwav').toString('base64'),
+        transcript: 'sample transcript',
+        performerConsentConfirmed: true,
+      });
+      expect(res.status).toBe(201);
+      expect(voiceProfiles.createClonedVoiceCandidate).toHaveBeenCalledWith(expect.objectContaining({
+        filename: 'reference.wav',
+        transcript: 'sample transcript',
+        performerConsentConfirmed: true,
+      }));
+    });
+
+    it('promotes candidate profile and sets routes', async () => {
+      voiceProfiles.promoteVoiceProfile.mockResolvedValue({ id: 'voice-profile-1', approval: { status: 'approved' } });
+      const res = await request(buildApp()).post('/api/voice/profiles/voice-profile-1/promote').send({
+        routes: { studio: { enabled: true }, interactive: { enabled: true } },
+      });
+      expect(res.status).toBe(200);
+      expect(voiceProfiles.promoteVoiceProfile).toHaveBeenCalledWith('voice-profile-1', expect.any(Object));
+    });
+
+    it('runs interactive latency qualification benchmark', async () => {
+      profileBenchmarks.benchmarkProfileInteractive.mockResolvedValue({ id: 'voice-profile-1' });
+      const res = await request(buildApp()).post('/api/voice/profiles/voice-profile-1/benchmark-interactive').send({
+        maxFirstAudioMs: 800,
+      });
+      expect(res.status).toBe(200);
+      expect(profileBenchmarks.benchmarkProfileInteractive).toHaveBeenCalledWith('voice-profile-1', { maxFirstAudioMs: 800 });
+    });
+
+    it('runs fixed benchmarks only for a valid profile id', async () => {
+      profileBenchmarks.renderProfileBenchmark.mockResolvedValue({ id: 'voice-profile-1' });
+      const res = await request(buildApp()).post('/api/voice/profiles/voice-profile-1/benchmark').send({});
+      expect(res.status).toBe(200);
+      expect(profileBenchmarks.renderProfileBenchmark).toHaveBeenCalledWith('voice-profile-1');
+    });
+
+    it('manages fine-tuning lifecycle: start, status, cancel, promote', async () => {
+      fineTuning.startFineTuningJob.mockResolvedValue({ jobId: 'job-1', status: 'running' });
+      fineTuning.getFineTuningJobStatus.mockReturnValue({ jobId: 'job-1', status: 'completed', checkpoints: [{ id: 'ckpt-1' }] });
+      fineTuning.cancelFineTuningJob.mockReturnValue({ ok: true, jobId: 'job-1', status: 'cancelled' });
+      fineTuning.promoteCheckpoint.mockResolvedValue({ id: 'voice-profile-1', kind: 'fine-tuned' });
+
+      const startRes = await request(buildApp()).post('/api/voice/profiles/voice-profile-1/fine-tune/start').send({ epochs: 5 });
+      expect(startRes.status).toBe(202);
+
+      const statusRes = await request(buildApp()).get('/api/voice/profiles/voice-profile-1/fine-tune/job-1');
+      expect(statusRes.status).toBe(200);
+      expect(statusRes.body.status).toBe('completed');
+
+      const cancelRes = await request(buildApp()).post('/api/voice/profiles/voice-profile-1/fine-tune/job-1/cancel').send({});
+      expect(cancelRes.status).toBe(200);
+
+      const promoteRes = await request(buildApp()).post('/api/voice/profiles/voice-profile-1/fine-tune/job-1/promote').send({ checkpointId: 'ckpt-1' });
+      expect(promoteRes.status).toBe(200);
+      expect(promoteRes.body.profile.kind).toBe('fine-tuned');
+    });
+
+    it('probes Qwen3 runtime status and downloads model on demand', async () => {
+      qwen3TtsRuntime.getQwen3RuntimeStatus.mockResolvedValue({ ok: true, installed: true });
+      qwen3TtsRuntime.downloadQwen3Model.mockResolvedValue({ ok: true, modelId: 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign' });
+
+      const statusRes = await request(buildApp()).get('/api/voice/qwen3/status');
+      expect(statusRes.status).toBe(200);
+      expect(statusRes.body.ok).toBe(true);
+
+      const downloadRes = await request(buildApp()).post('/api/voice/qwen3/download-model').send({
+        modelId: 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
+      });
+      expect(downloadRes.status).toBe(200);
+      expect(downloadRes.body.modelId).toBe('Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign');
+    });
   });
 
   describe('GET /api/voice/config', () => {

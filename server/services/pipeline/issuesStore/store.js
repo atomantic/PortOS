@@ -73,6 +73,15 @@ function makeFileBackend(dir, sanitizeRecord) {
       const records = await Promise.all(ids.map((id) => cs.loadOneRaw(id)));
       return records.filter((r) => r != null && r.seriesId === seriesId);
     },
+    // One full scan for a set of series. This is the dev/test-only backend;
+    // production uses the indexed multi-series PostgreSQL query below.
+    listRawBySeriesIds: async (seriesIds) => {
+      if (seriesIds.length === 0) return [];
+      const wanted = new Set(seriesIds);
+      const ids = await cs.listIds();
+      const records = await Promise.all(ids.map((id) => cs.loadOneRaw(id)));
+      return records.filter((r) => r != null && wanted.has(r.seriesId));
+    },
     writeRaw: (id, record) => cs.saveOneNow(id, record),
     deleteRaw: (id) => cs.deleteOneNow(id),
     verify: () => cs.verifySchemaVersion(),
@@ -89,6 +98,7 @@ function makePgBackend(db, sanitizeRecord) {
     listIds: db.listIds,
     listRaw: db.listRaw,
     listRawBySeries: db.listRawBySeries,
+    listRawBySeriesIds: db.listRawBySeriesIds,
     writeRaw: db.writeRaw,
     deleteRaw: db.deleteRaw,
     verify: async () => ({ ok: true, type: 'pipelineIssues', onDisk: null, expected: null,
@@ -149,6 +159,10 @@ function createFacade({ dir, sanitizeRecord }) {
     },
     loadAllForSeries: async (seriesId) => {
       const raw = await (await getBackend()).listRawBySeries(seriesId);
+      return raw.map((r) => sanitizer(r)).filter((r) => r != null);
+    },
+    loadAllForSeriesIds: async (seriesIds) => {
+      const raw = await (await getBackend()).listRawBySeriesIds(seriesIds);
       return raw.map((r) => sanitizer(r)).filter((r) => r != null);
     },
 

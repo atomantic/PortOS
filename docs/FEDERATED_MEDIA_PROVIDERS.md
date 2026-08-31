@@ -99,11 +99,10 @@ Sending them needs **two** signals to agree, and they live at different levels o
 |---|---|---|---|
 | `lyrics` | on the capability | the **model** sings | — (always present) |
 | the `lyrics` feature | `features` at the status root | **this provider's build** carries lyrics on the wire | reads as `false` |
-| `acceptsLyrics` | on the capability | superseded duplicate of the feature, kept for one overlap release | reads as `false` |
 
 A provider predating lyrical federation advertises `lyrics: true` for MiniMax Music 3 and then rejects the field at submission, so absence must fail closed or every remote lyrical render becomes a 400 the user cannot act on. When either half is missing, `POST /api/music/generate` refuses with `400 MEDIA_PROVIDER_LYRICS_UNSUPPORTED` naming which one, and Music Studio pins Instrumental only with the reason — it never silently renders a wordless take of a song the user wrote words for.
 
-Consumers ask through `federatedMediaSupports(status, feature, capability)` (`server/lib/federatedMediaWire.js`, mirrored in `client/src/lib/federatedMediaReadiness.js`) rather than reading either field directly, so the fail-closed reasoning lives in one place and the overlap fallback retires from one place.
+Consumers ask through `federatedMediaSupports(status, feature, capability)` (`server/lib/federatedMediaWire.js`, mirrored in `client/src/lib/federatedMediaReadiness.js`) rather than reading either field directly, so the fail-closed reasoning lives in one place. The `inputAssets` capability block remains the only legacy overlap tell because it is genuinely per-model.
 
 
 ### Remote image and video renders
@@ -442,9 +441,9 @@ empty list is a peer positively denying every feature, which is a stronger claim
 than a malformed field has earned.
 
 Consumers ask `federatedMediaSupports(status, feature, capability)` rather than
-testing the list inline, which is also where the overlap fallback to the legacy
-per-capability `acceptsLyrics` lives — one place to retire it from once no
-supported peer sends it (#4850).
+testing the list inline, which keeps the fail-closed feature check in one place.
+The `inputAssets` capability block remains the only legacy overlap tell because
+it is genuinely per-model.
 
 CUDA has three states: `available`, `absent`, and `unknown`. A CUDA model is ready only when the state is positively `available`; a failed or ambiguous probe blocks admission. Runtime, host-platform, exact fixed-checkpoint readiness, and queue capacity are similarly fail-closed.
 

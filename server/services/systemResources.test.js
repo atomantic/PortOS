@@ -84,6 +84,9 @@ vi.mock('./cos.js', () => ({
   })),
   getStatus: vi.fn(async () => ({ running: true, paused: false, activeAgents: 0, pausedAgents: 0 })),
 }));
+vi.mock('./settings.js', () => ({
+  getSettings: vi.fn(async () => ({})),
+}));
 
 const promptRunner = await import('./promptRunner.js');
 const fsPromises = await import('fs/promises');
@@ -94,6 +97,7 @@ const mediaModelStorage = await import('./mediaModelStorage.js');
 const ollamaManager = await import('./ollamaManager.js');
 const lmStudioManager = await import('./lmStudioManager.js');
 const cos = await import('./cos.js');
+const settings = await import('./settings.js');
 const {
   buildCleanupCandidates,
   buildSystemResourceReport,
@@ -120,6 +124,7 @@ describe('system resource reporting', () => {
     lmStudioManager.getLoadedModels.mockResolvedValue([]);
     lmStudioManager.getLastLoadedModelsError.mockReturnValue(null);
     lmStudioManager.getLastListError.mockReturnValue(null);
+    settings.getSettings.mockResolvedValue({});
   });
 
   it('combines storage, model residency, and live queue summaries', async () => {
@@ -172,6 +177,26 @@ describe('system resource reporting', () => {
     expect(model).toMatchObject({ name: 'Example', residencyUnknown: true });
     expect(candidate).toMatchObject({ busy: true, manualOnly: true, action: null });
     expect(report.sourceErrors).toEqual(expect.arrayContaining(['ollama-backend', 'ollama-residency']));
+  });
+
+  it('exposes disabled local backends separately from the full source error list', async () => {
+    settings.getSettings.mockResolvedValue({ localLlm: { lmstudio: { disabled: true } } });
+    lmStudioManager.checkLMStudioAvailable.mockResolvedValue(false);
+    lmStudioManager.getAvailableModels.mockRejectedValueOnce(new Error('backend unavailable'));
+    lmStudioManager.listStoredModels.mockRejectedValueOnce(new Error('inventory unavailable'));
+    lmStudioManager.getLoadedModels.mockRejectedValueOnce(new Error('residency unavailable'));
+    lmStudioManager.getLastLoadedModelsError.mockReturnValue('residency unavailable');
+    lmStudioManager.getLastListError.mockReturnValue('inventory unavailable');
+
+    const report = await buildSystemResourceReport();
+
+    expect(report.disabledSources).toEqual(['lmstudio']);
+    expect(report.sourceErrors).toEqual(expect.arrayContaining([
+      'lmstudio-backend',
+      'lmstudio-inventory',
+      'lmstudio-catalog',
+      'lmstudio-residency',
+    ]));
   });
 
   it('aggregates LM Studio quantizations into one folder-scoped cleanup row', async () => {

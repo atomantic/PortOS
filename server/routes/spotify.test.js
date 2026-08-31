@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => ({
   saveCredentials: vi.fn(async (_data, options) => ({ redirectUri: mocks.getRedirectUri(options) })),
   handleCallback: vi.fn(async () => ({ success: true })),
   clearAuth: vi.fn(async () => ({ cleared: true })),
+  getStoredPlaylists: vi.fn(async () => ({ playlists: [] })),
+  playlistSnapshotSummary: vi.fn(() => ({ playlistCount: 0, trackCount: 0 })),
+  syncSpotifyPlaylists: vi.fn(async () => ({ ok: true, playlistCount: 1, trackCount: 2 })),
 }));
 
 vi.mock('../services/spotifyAuth.js', () => ({
@@ -23,6 +26,12 @@ vi.mock('../services/spotifyAuth.js', () => ({
 vi.mock('../services/spotifySync.js', () => ({
   getStatus: (...args) => mocks.getStatus(...args),
   runSync: vi.fn(),
+}));
+
+vi.mock('../services/spotifyPlaylists.js', () => ({
+  getStoredPlaylists: (...args) => mocks.getStoredPlaylists(...args),
+  playlistSnapshotSummary: (...args) => mocks.playlistSnapshotSummary(...args),
+  syncSpotifyPlaylists: (...args) => mocks.syncSpotifyPlaylists(...args),
 }));
 
 import spotifyRoutes from './spotify.js';
@@ -57,5 +66,17 @@ describe('Spotify routes', () => {
       .set('X-Forwarded-Host', 'host-example.ts.net:5555');
 
     expect(mocks.getAuthUrl).toHaveBeenCalledWith({ origin: 'https://host-example.ts.net:5555' });
+  });
+
+  it('serves the stored playlist snapshot and starts an explicit playlist sync', async () => {
+    const app = makeApp();
+    const snapshot = await request(app).get('/api/spotify/playlists');
+    expect(snapshot.status).toBe(200);
+    expect(snapshot.body).toMatchObject({ snapshot: { playlists: [] }, summary: { playlistCount: 0 } });
+
+    const sync = await request(app).post('/api/spotify/playlists/sync');
+    expect(sync.status).toBe(200);
+    expect(sync.body).toMatchObject({ ok: true, playlistCount: 1, trackCount: 2 });
+    expect(mocks.syncSpotifyPlaylists).toHaveBeenCalledTimes(1);
   });
 });

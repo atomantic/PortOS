@@ -14,7 +14,6 @@ beforeEach(async () => {
   request.mockReset();
   request.mockResolvedValue({});
 });
-
 describe('apiFableLoom', () => {
   it('lists every loom when no series scope is given', async () => {
     await api.listLooms({ silent: true });
@@ -57,6 +56,34 @@ describe('apiFableLoom', () => {
     await api.feedbackLoomSeriesPlan('loom-1', { feedback: 'Raise the stakes.' });
     expect(request).toHaveBeenCalledWith('/fableloom/loom-1/plan/feedback', {
       method: 'POST', body: JSON.stringify({ feedback: 'Raise the stakes.' }),
+    });
+  });
+
+  it('routes editorial remediation, playthrough review, and bounded autopilot operations', async () => {
+    await api.remediateLoomEditorial('loom/1', { providerId: 'writer' }, { silent: true });
+    expect(request).toHaveBeenCalledWith('/fableloom/loom%2F1/editorial/remediate', {
+      method: 'POST', body: JSON.stringify({ providerId: 'writer' }), silent: true,
+    });
+
+    await api.reviewLoomPlaythroughs('loom-1', { aiReview: true });
+    expect(request).toHaveBeenCalledWith('/fableloom/loom-1/playtest', {
+      method: 'POST', body: JSON.stringify({ aiReview: true }),
+    });
+
+    await api.startLoomEditorialAutopilot('loom-1', { maxRounds: 3, selfImprove: true });
+    expect(request).toHaveBeenCalledWith('/fableloom/loom-1/editorial/autopilot/start', {
+      method: 'POST', body: JSON.stringify({ maxRounds: 3, selfImprove: true }),
+    });
+
+    await api.getLoomEditorialAutopilotStatus('loom-1', { silent: true });
+    expect(request).toHaveBeenCalledWith('/fableloom/loom-1/editorial/autopilot/status', { silent: true });
+
+    await api.getLoomEditorialAutopilotRun('loom-1', 'run/1', { silent: true });
+    expect(request).toHaveBeenCalledWith('/fableloom/loom-1/editorial/autopilot/run%2F1', { silent: true });
+
+    await api.cancelLoomEditorialAutopilot('loom-1', 'run-1');
+    expect(request).toHaveBeenCalledWith('/fableloom/loom-1/editorial/autopilot/run-1/cancel', {
+      method: 'POST', body: JSON.stringify({}),
     });
   });
 
@@ -111,5 +138,43 @@ describe('apiFableLoom', () => {
   it('deletes nodes with DELETE', async () => {
     await api.deleteLoomNode('loom-1', 'ep-1', 'node-1');
     expect(request).toHaveBeenCalledWith('/fableloom/loom-1/episodes/ep-1/nodes/node-1', { method: 'DELETE' });
+  });
+
+  it('posts production planning and batch operations', async () => {
+    await api.planLoomEpisodeProduction('loom-1', 'ep-1', { mode: 'current_canon' });
+    expect(request).toHaveBeenCalledWith('/fableloom/loom-1/episodes/ep-1/production/plan', {
+      method: 'POST',
+      body: JSON.stringify({ mode: 'current_canon' }),
+    });
+
+    await api.startLoomEpisodeProductionBatch('loom-1', 'ep-1', { mode: 'exact_inputs' });
+    expect(request).toHaveBeenCalledWith('/fableloom/loom-1/episodes/ep-1/production/batch', {
+      method: 'POST',
+      body: JSON.stringify({ mode: 'exact_inputs' }),
+    });
+
+    await api.getLoomEpisodeProductionBatch('loom-1', 'ep-1', 'batch-1', { silent: true });
+    expect(request).toHaveBeenCalledWith('/fableloom/loom-1/episodes/ep-1/production/batch/batch-1', { silent: true });
+
+    await api.cancelLoomEpisodeProductionBatch('loom-1', 'ep-1', 'batch-1');
+    expect(request).toHaveBeenCalledWith('/fableloom/loom-1/episodes/ep-1/production/batch/batch-1/cancel', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+
+    await api.resumeLoomEpisodeProductionBatch('loom-1', 'ep-1', 'batch/1', { silent: true });
+    expect(request).toHaveBeenCalledWith('/fableloom/loom-1/episodes/ep-1/production/batch/batch%2F1/resume', {
+      method: 'POST',
+      body: JSON.stringify({}),
+      silent: true,
+    });
+  });
+
+  it('posts episodic continuity review', async () => {
+    await api.reviewLoomEpisodeContinuity('loom-1', 'ep-1');
+    expect(request).toHaveBeenCalledWith('/fableloom/loom-1/episodes/ep-1/continuity/review', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
   });
 });

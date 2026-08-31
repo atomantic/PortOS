@@ -1000,6 +1000,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
       reviewerApplies: lightReviewerApplies,
       localPhaseReviewers: localReviewers,
       localPhaseCanShortCircuit,
+      localPhaseReviewRequired: localReviewSection ? localReviewRequired : false,
       reviewerPositions,
       forgeCli: resolvedForgeCli,
       workflowStep: localReviewSection ? 5 : 4,

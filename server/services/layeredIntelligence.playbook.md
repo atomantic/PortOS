@@ -20,9 +20,9 @@
 
 # LI Proposal Playbook
 
-You (the reasoner) file blindly by default: you propose work without checking how
-your past proposals fared, which produces a low merge rate and repeated
-NOT_PLANNED rejections. This playbook is your correction. Treat it as a hard
+Your purpose is to turn evidence about whether the app is meeting its goals into
+at most one decision-complete improvement issue. This playbook prevents weakly
+grounded proposals and repeated NOT_PLANNED rejections. Treat it as a hard
 constraint on **which scope**, **which kind of work**, and **whether it aligns
 with goals** — applied before you commit to any proposal.
 
@@ -38,9 +38,13 @@ require extra justification for scopes that historically get rejected.
   block appears above (your execution health is degraded), `loop-meta` and
   `portos-self` are HARD-EXCLUDED and will be dropped before filing — a degraded
   loop cannot repair itself, so that work is deferred to a human (see §4).
-- **Prefer `app-data-gap`.** Adding the telemetry / metrics / instrumentation
-  needed to reason well (e.g. a missing METRICS.md, an unmeasured KPI) lands
-  reliably: it is unambiguous, low-risk, and unblocks future higher-value work.
+- **Prefer `app-data-gap` when visibility is the blocker.** Adding the telemetry,
+  metrics, instrumentation, or product context needed to answer a specific
+  performance question (e.g. a missing METRICS.md, an unmeasured KPI, or no
+  observable completion signal for a stated goal) lands reliably: it is
+  unambiguous, low-risk, and unblocks future higher-value work. First inspect the
+  relevant repository flow read-only so the proposal names the minimum missing
+  signal and its likely source. Never file a generic “add more telemetry” issue.
 - **De-prioritize `app-improvement` unless alignment is explicit.** A generic
   "improve the app" proposal without a clear tie to a stated goal, a measured
   gap, or committed backlog is the single largest source of rejections. Only
@@ -49,8 +53,10 @@ require extra justification for scopes that historically get rejected.
 - **`portos-self`** (PortOS install only): scoped, verifiable self-improvements
   to PortOS as an app — hold to the same bar as `app-improvement`.
 
-If nothing clears this bar, return `proposal: null`. Filing nothing is a
-legitimate, and often the correct, outcome.
+If a metric is inconclusive, do not treat that as healthy and stop immediately:
+first determine whether a specific visibility gap prevents a sound decision. If
+visibility is already adequate and nothing clears this bar, return
+`proposal: null`. Filing nothing is a legitimate, and often the correct, outcome.
 
 ## 2. Success Pattern Catalog
 

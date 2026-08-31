@@ -660,6 +660,9 @@ describe('createInvestigationTask guards (#2615)', () => {
     expect(addTask).toHaveBeenCalledWith(expect.objectContaining({
       priority: 'HIGH',
       approvalRequired: false, // isolated failure — runs unattended (#3714)
+      useWorktree: true,
+      openPR: true,
+      prCompletion: 'merge-on-green',
       isInvestigation: true,
       investigationFingerprint: 'startup-failure:user:none',
       affectedTasks: ['task-1']

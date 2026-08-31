@@ -5,6 +5,7 @@ import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import * as spotifyAuth from '../services/spotifyAuth.js';
 import * as spotifySync from '../services/spotifySync.js';
+import * as spotifyPlaylists from '../services/spotifyPlaylists.js';
 
 const router = Router();
 
@@ -28,6 +29,17 @@ function requestRedirectOptions(req) {
 router.get('/status', asyncHandler(async (req, res) => {
   const status = await spotifySync.getStatus(requestRedirectOptions(req));
   res.json(status);
+}));
+
+// Read the last machine-local playlist snapshot without contacting Spotify.
+router.get('/playlists', asyncHandler(async (_req, res) => {
+  const snapshot = await spotifyPlaylists.getStoredPlaylists();
+  res.json({ snapshot, summary: spotifyPlaylists.playlistSnapshotSummary(snapshot) });
+}));
+
+// Explicit user action — fetch current playlists and their track metadata.
+router.post('/playlists/sync', asyncHandler(async (_req, res) => {
+  res.json(await spotifyPlaylists.syncSpotifyPlaylists());
 }));
 
 // Save the user-created Spotify developer app credentials (client id/secret).
@@ -57,14 +69,18 @@ router.get('/oauth/callback', asyncHandler(async (req, res) => {
   const { code, error: authError } = req.query;
   if (authError) return res.redirect(settingsUrl(String(authError)));
   if (!code) return res.redirect(settingsUrl('Missing authorization code'));
-  const error = await spotifyAuth.handleCallback(String(code), requestRedirectOptions(req)).then(() => null)
+  const callback = await spotifyAuth.handleCallback(String(code), requestRedirectOptions(req)).then((result) => ({ result }))
     .catch((err) => {
       // This catch replaces asyncHandler's logging (the redirect swallows the
       // throw), so keep the failure visible in server logs.
       console.error(`❌ Spotify OAuth callback failed: ${err.message}`);
-      return err.message || 'Spotify OAuth callback failed';
+      return { error: err.message || 'Spotify OAuth callback failed' };
     });
-  res.redirect(settingsUrl(error));
+  if (callback.error) return res.redirect(settingsUrl(callback.error));
+  console.log(callback.result?.duplicate
+    ? '🎧 Spotify OAuth callback replay ignored; tokens already stored'
+    : '🎧 Spotify OAuth callback processed, tokens stored');
+  res.redirect(settingsUrl());
 }));
 
 // Disconnect — clear stored tokens (leaves the client id/secret in place).

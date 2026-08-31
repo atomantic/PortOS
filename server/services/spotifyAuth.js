@@ -35,10 +35,14 @@ const AUTH_DIR = dataPath('spotify');
 const CREDENTIALS_FILE = dataPath('spotify', 'credentials.json');
 const TOKENS_FILE = dataPath('spotify', 'tokens.json');
 
-// Only the read-recently-played scope is required for history ingestion.
-// (`user-read-playback-state` would enable a future live "now playing" — out of
-// scope here, so we keep the grant minimal.)
-export const SPOTIFY_SCOPES = ['user-read-recently-played'];
+// These are the minimal read-only scopes for history ingestion plus the
+// playlist reference library. (`user-read-playback-state` would enable a
+// future live "now playing" feature, so it remains out of scope.)
+export const SPOTIFY_SCOPES = [
+  'user-read-recently-played',
+  'playlist-read-private',
+  'playlist-read-collaborative',
+];
 
 const ACCOUNTS_BASE = 'https://accounts.spotify.com';
 
@@ -178,7 +182,7 @@ export async function getAuthUrl(options = {}) {
   return { url: `${ACCOUNTS_BASE}/authorize?${params.toString()}` };
 }
 
-export async function handleCallback(code, options = {}) {
+async function processCallback(code, options = {}) {
   const tokens = await requestToken({
     grant_type: 'authorization_code',
     code,
@@ -187,6 +191,34 @@ export async function handleCallback(code, options = {}) {
   await saveTokens(withExpiry(tokens));
   console.log('🎧 Spotify OAuth callback processed, tokens stored');
   return { success: true };
+}
+
+// Spotify authorization codes are single-use. Browsers and reverse proxies can
+// replay a redirect while the first callback is still settling, and Spotify
+// then reports the second request as "Invalid authorization code" even though
+// the first request successfully stored the tokens. Remember successful codes
+// briefly so an immediate replay is a harmless success.
+const completedCallbacks = new Map();
+const callbackInFlight = new Map();
+const CALLBACK_REPLAY_WINDOW_MS = 120000;
+
+export async function handleCallback(code, options = {}) {
+  const key = `${code}\u0000${getRedirectUri(options)}`;
+  const prior = completedCallbacks.get(key);
+  if (prior && Date.now() - prior.completedAt < CALLBACK_REPLAY_WINDOW_MS) {
+    return { ...prior.result, duplicate: true };
+  }
+  const active = callbackInFlight.get(key);
+  if (active) return active.then((result) => ({ ...result, duplicate: true }));
+  const promise = processCallback(code, options).then((result) => {
+    completedCallbacks.set(key, { completedAt: Date.now(), result });
+    for (const [cachedKey, cached] of completedCallbacks) {
+      if (Date.now() - cached.completedAt >= CALLBACK_REPLAY_WINDOW_MS) completedCallbacks.delete(cachedKey);
+    }
+    return result;
+  }).finally(() => callbackInFlight.delete(key));
+  callbackInFlight.set(key, promise);
+  return promise;
 }
 
 // Single-flight guard: while one refresh is in flight, concurrent callers await

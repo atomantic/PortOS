@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   FEDERATED_MEDIA_FEATURES,
+  FEDERATED_MEDIA_MAX_VIDEO_FRAMES,
   federatedMediaAudioProfileSchema,
   federatedMediaDeclaresFeatures,
   federatedMediaDeniesFeature,
@@ -136,7 +137,7 @@ describe('federated media status kind projection', () => {
       lyrics: false,
       autoDuration: false,
       frameStride: 4,
-      maxNumFrames: 121,
+      maxNumFrames: 1017,
       frameOptions: [25, 49, 73, 97, 121],
       fpsOptions: [16, 20, 24],
       resolutionOptions: [{ w: 1344, h: 768, label: '16:9 H3 default' }],
@@ -147,6 +148,10 @@ describe('federated media status kind projection', () => {
       kinds: ['video'],
       capabilities: [capability],
     })).success).toBe(true);
+    expect(federatedMediaCapabilitySchema.safeParse({
+      ...capability,
+      maxNumFrames: FEDERATED_MEDIA_MAX_VIDEO_FRAMES + 1,
+    }).success).toBe(false);
   });
 
   it('validates an older provider payload omitting the frame and canvas constraint fields', () => {
@@ -374,16 +379,7 @@ describe('federatedMediaSupports', () => {
     expect(federatedMediaSupports({ features: ['lyrics'] }, 'inputAssets')).toBe(false);
   });
 
-  // The overlap release: a peer on the previous build sends the per-capability
-  // field and no root list, and must keep working unchanged.
-  it('falls back to the legacy per-capability field only when no list was published', () => {
-    expect(federatedMediaSupports({}, 'lyrics', capability({ acceptsLyrics: true }))).toBe(true);
-    // A peer that published its vocabulary and left the feature out has
-    // positively denied it; a stale or contradictory legacy field on the
-    // capability does not get to overrule that.
-    expect(federatedMediaSupports({ features: [] }, 'lyrics', capability({ acceptsLyrics: true }))).toBe(false);
-    expect(federatedMediaSupports({ features: ['inputAssets'] }, 'lyrics', capability({ acceptsLyrics: true }))).toBe(false);
-    expect(federatedMediaSupports({}, 'lyrics', capability({ acceptsLyrics: false }))).toBe(false);
+  it('keeps the input-assets capability fallback when no list was published', () => {
     expect(federatedMediaSupports({}, 'inputAssets', capability({ inputAssets: { roles: ['initImage'] } }))).toBe(true);
     expect(federatedMediaSupports({}, 'inputAssets', capability({ inputAssets: null }))).toBe(false);
     // An array is not a block. The client mirror's record guard excludes
@@ -402,16 +398,18 @@ describe('federatedMediaSupports', () => {
     expect(federatedMediaDeclaresFeatures({ features: 'lyrics' })).toBe(false);
   });
 
-  // Gating is identical for both "no"s; only a MESSAGE may distinguish them,
-  // and which missing signal indicts the peer's build differs per feature.
+  // Gating is identical for both "no"s; only a MESSAGE may distinguish them.
+  // A present status without a list proves a lyrics peer predates the status-root
+  // vocabulary, but not input-assets support because that signal is per-model.
   it('attributes a denial to the build only where the missing signal proves it', () => {
     const withBlock = capability({ inputAssets: { roles: ['initImage'] } });
     // A published list that omits the feature is a positive denial either way.
     expect(federatedMediaDeniesFeature({ features: [] }, 'lyrics', capability())).toBe(true);
     expect(federatedMediaDeniesFeature({ features: ['lyrics'] }, 'inputAssets', withBlock)).toBe(true);
-    // No list: the previous build stamped acceptsLyrics on EVERY audio
-    // capability, so its absence can only mean an older build...
+    // A present status without a list is an old-build denial for lyrics now that
+    // every supported lyrics peer publishes the status-root vocabulary.
     expect(federatedMediaDeniesFeature({}, 'lyrics', capability())).toBe(true);
+    expect(federatedMediaDeniesFeature(null, 'lyrics', capability())).toBe(false);
     // ...while an absent inputAssets block is ambiguous — a healthy peer may
     // speak conditioning and simply have a text-only model configured, so it
     // must not be told to update itself.
@@ -429,11 +427,11 @@ describe('federatedMediaSupports', () => {
   });
 
   // The feature name is a string off the wire, so it can collide with an
-  // Object.prototype key. These MUST take the legacy-tell path (no `features`
-  // list) — with a list present every case short-circuits before the lookup and
-  // the guard would be vacuous. On a normal object literal `'constructor'`
-  // resolves to an inherited value, truthy enough to defeat `?.` and then throw
-  // on the property access after it.
+  // Object.prototype key. These MUST take the input-assets legacy-tell path
+  // (no `features` list) — with a list present every case short-circuits before
+  // the lookup and the guard would be vacuous. On a normal object literal
+  // `'constructor'` resolves to an inherited value, truthy enough to defeat
+  // `?.` and then throw on the property access after it.
   it.each(['constructor', 'toString', 'hasOwnProperty', 'valueOf', '__proto__'])(
     'answers false for the inherited key %s instead of throwing',
     (feature) => {

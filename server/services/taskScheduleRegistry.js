@@ -20,6 +20,10 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // pr-watcher prompt) for each one. `taskMetadata.prAuthorFilter` gates on
   // PR authorship (self / others / any). See server/services/prWatcher.js.
   'pr-watcher',
+  // Programmatically scans new external issue comments and unreviewed external
+  // PRs. Only replies and code-review judgments consume an agent; assignment,
+  // review submission, rebase/CI policy enforcement, and merging are hooks.
+  'issue-watcher',
   // Watches `referenceRepos` configured on the app — fetches each upstream
   // repo, finds commits since lastReviewedSha, and appends slug-tagged
   // `[ref-watch-…]` checklist items to the app's PLAN.md for `/claim` /
@@ -139,7 +143,7 @@ const LEGACY_MANAGED_TASK_METADATA = {
 };
 
 // Shared config for code-reviewer-a and code-reviewer-b (two instances for independent provider/model configuration)
-const CODE_REVIEWER_INTERVAL = { type: INTERVAL_TYPES.WEEKLY, enabled: false, weekdaysOnly: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, simplify: true, pipeline: { stages: [{ name: 'Codebase Review', promptKey: 'code-reviewer-review', readOnly: true, providerId: null, model: null, precondition: { fileNotExists: 'REVIEW.md' } }, { name: 'Triage & Implement', promptKey: 'code-reviewer-implement', readOnly: false, providerId: null, model: null, precondition: { fileExists: 'REVIEW.md' } }] } } };
+const CODE_REVIEWER_INTERVAL = { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, weekdaysOnly: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, simplify: true, pipeline: { stages: [{ name: 'Codebase Review', promptKey: 'code-reviewer-review', readOnly: true, providerId: null, model: null, precondition: { fileNotExists: 'REVIEW.md' } }, { name: 'Triage & Implement', promptKey: 'code-reviewer-implement', readOnly: false, providerId: null, model: null, precondition: { fileExists: 'REVIEW.md' } }] } } };
 
 /**
  * Default `drainDispatchCap` for the reconcile drains: how many times a perpetual
@@ -183,19 +187,27 @@ export const DEFAULT_BRANCHES_PER_AGENT = 3;
  */
 export const INSTALL_WIDE_TASK_TYPES = new Set(['repo-sync']);
 
+// Fresh installs expose every task as an enabled manual action. The on-demand
+// type keeps provider work silent until the user explicitly runs a task, while
+// retaining timing metadata such as custom intervals and recheck settings if
+// they later choose a scheduled interval. Existing persisted settings still
+// win when a schedule is loaded. A `feature` association is the exception: it
+// is code-owned and makes the task invisible and non-runnable while that
+// install-wide feature is disabled.
 export const DEFAULT_TASK_INTERVALS = {
-  'security':            { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
-  'code-quality':        { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
-  'test-coverage':       { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
-  'performance':         { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
-  'accessibility':       { type: INTERVAL_TYPES.ONCE, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
+  'security':            { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
+  'code-quality':        { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
+  'test-coverage':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
+  'performance':         { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
+  'accessibility':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
   // branch-reconcile first removes fully-merged, clean orphaned worktrees and
   // branches, then finishes THIS machine's remaining in-flight LOCAL branches
   // per app (open a PR for pushed-but-unopened work, resolve merge conflicts,
-  // drive the review loop, auto-merge when green). PERPETUAL (drain-until-done):
-  // the generator runs the deterministic reconcile every dispatch, and dispatches
-  // the coordinator agent only while actionable in-flight branches remain — then
-  // PARKS on the daily recheckCron. The action toggles (cleanupMerged / openPr /
+  // drive the review loop, auto-merge when green). Detector-driven drain behavior:
+  // the generator runs the deterministic reconcile every manual/on-demand
+  // dispatch (or selected perpetual dispatch), and dispatches the coordinator
+  // agent only while actionable in-flight branches remain — then PARKS on the
+  // daily recheckCron. The action toggles (cleanupMerged / openPr /
   // resolveConflicts / autoMerge / finishAbandoned) are per-app taskMetadata
   // booleans (each ON unless explicitly false); `finishAbandoned` covers the work
   // a dead agent left UNCOMMITTED in its worktree — commit + ship it, or report it
@@ -207,33 +219,34 @@ export const DEFAULT_TASK_INTERVALS = {
   // sibling worktrees; a CoS-managed worktree would hide the branches and could
   // trigger cleanupAgentWorktree's auto-merge. Its edits likewise land in those
   // SIBLING worktrees, never in its own cwd — hence the shared non-committing
-  // -coordinator posture above. Off by default — enabling it is the user's
-  // explicit consent to let it drive PRs on a schedule.
-  'branch-reconcile':    { type: INTERVAL_TYPES.PERPETUAL, enabled: false, providerId: null, model: null, prompt: null, recheckCron: '0 3 * * *', drainDispatchCap: PERPETUAL_DRAIN_DISPATCH_CAP, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA, cleanupMerged: true, openPr: true, resolveConflicts: true, autoMerge: true, finishAbandoned: true, branchesPerAgent: DEFAULT_BRANCHES_PER_AGENT } },
+  // -coordinator posture above. On-demand by default — a manual Run is the
+  // explicit consent to drive PRs; choosing a cadence enables scheduled runs.
+  'branch-reconcile':    { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, recheckCron: '0 3 * * *', drainDispatchCap: PERPETUAL_DRAIN_DISPATCH_CAP, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA, cleanupMerged: true, openPr: true, resolveConflicts: true, autoMerge: true, finishAbandoned: true, branchesPerAgent: DEFAULT_BRANCHES_PER_AGENT } },
   // issue-reconcile heals ZOMBIE issues: open + `in-progress` (claimed) yet with
   // their PR already MERGED and no live claim anywhere — a partial ship left the
   // claim marker on, so the queue (which skips `in-progress`) never re-picks the
-  // remaining scope. PERPETUAL (drain-until-done): the generator runs the
-  // deterministic gh/git scan every dispatch and dispatches the coordinator agent
-  // only while zombies remain — then PARKS on the daily recheckCron (offset an
-  // hour after branch-reconcile so merged-branch cleanup lands first). The
+  // remaining scope. Detector-driven drain behavior: the generator runs the
+  // deterministic gh/git scan every manual/on-demand dispatch (or selected
+  // perpetual dispatch) and dispatches the coordinator agent only while zombies
+  // remain — then PARKS on the daily recheckCron (offset an hour after
+  // branch-reconcile so merged-branch cleanup lands first). The
   // coordinator applies the partial-ship hybrid per zombie (close + file a scoped
   // follow-up when the remainder is separable, else comment "done/remaining" +
   // release the claim). `autoClose` (ON unless explicitly false) is the only
   // per-app toggle: OFF forbids closing/filing — comment + unlabel only.
   // The coordinator works purely over `gh` — no code changes, no worktree, and
   // issue-state mutation is its whole deliverable — hence the shared
-  // non-committing-coordinator posture above. Off by default — enabling it is the
-  // user's explicit consent to let it mutate issue state on a schedule.
-  'issue-reconcile':     { type: INTERVAL_TYPES.PERPETUAL, enabled: false, providerId: null, model: null, prompt: null, recheckCron: '0 4 * * *', drainDispatchCap: PERPETUAL_DRAIN_DISPATCH_CAP, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA, autoClose: true } },
-  'console-errors':      { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
-  'dependency-updates':  { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null },
-  'documentation':       { type: INTERVAL_TYPES.ONCE, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
-  'ui-bugs':             { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
-  'mobile-responsive':   { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
+  // non-committing-coordinator posture above. On-demand by default — a manual
+  // Run is the explicit consent to mutate issue state; a cadence is opt-in.
+  'issue-reconcile':     { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, recheckCron: '0 4 * * *', drainDispatchCap: PERPETUAL_DRAIN_DISPATCH_CAP, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA, autoClose: true } },
+  'console-errors':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
+  'dependency-updates':  { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null },
+  'documentation':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
+  'ui-bugs':             { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
+  'mobile-responsive':   { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
   // feature-ideas waits for do-replan so new work is grounded in a fresh PLAN.md
   // that already accounts for any in-flight or unmerged work.
-  'feature-ideas':       { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, runAfter: ['do-replan'], taskMetadata: { useWorktree: true, openPR: true, simplify: true } },
+  'feature-ideas':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, runAfter: ['do-replan'], taskMetadata: { useWorktree: true, openPR: true, simplify: true } },
   // plan-task is a strict executor of PLAN.md items — no brainstorm fallback, no
   // runAfter deps. Picks the next unchecked item, implements it, and removes it
   // from PLAN.md in the same commit (changelog + git log are the audit trail).
@@ -249,7 +262,7 @@ export const DEFAULT_TASK_INTERVALS = {
   // it should provision and publish a managed worktree. Conflating them sent
   // claim agents into the generic commit-only handoff (#4153).
   // The agent runs in the source repo's working directory; `git worktree add` doesn't touch that working tree, so it's safe even with uncommitted user changes.
-  'plan-task':           { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, claimFlow: true, simplify: true } },
+  'plan-task':           { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, claimFlow: true, simplify: true } },
   // claim-issue drives the /claim --issues flow — the agent creates its OWN
   // claim/issue-<num> worktree, opens the PR (Closes #<num>), merges via
   // `gh pr merge`, and cleans up. Both `useWorktree` and `openPR` are OFF on the
@@ -267,7 +280,7 @@ export const DEFAULT_TASK_INTERVALS = {
   // (perpetualWork.js) — e.g. `good first issue`, to leave those open for human
   // contributors. Per-app override supported via taskTypeOverrides, like
   // `issueAuthorFilter`.
-  'claim-issue':         { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, claimFlow: true, simplify: true, issueAuthorFilter: 'self', issueExcludeLabels: [] } },
+  'claim-issue':         { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, claimFlow: true, simplify: true, issueAuthorFilter: 'self', issueExcludeLabels: [] } },
   // claim-work is the SINGLE-SOURCE router: one toggle per app that ships the
   // next work item from whatever tracker the app is configured for
   // (app.workTracker, default 'auto' → resolved from the git origin host). At
@@ -281,14 +294,14 @@ export const DEFAULT_TASK_INTERVALS = {
   // hide the claim slug and trigger cleanupAgentWorktree's auto-merge).
   // `issueAuthorFilter` / `issueExcludeLabels` apply only when the resolved
   // tracker is a forge (github/gitlab); both are inert for plan/jira.
-  'claim-work':          { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, claimFlow: true, simplify: true, issueAuthorFilter: 'self', issueExcludeLabels: [] } },
-  'error-handling':      { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
-  'typing':              { type: INTERVAL_TYPES.ONCE, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
+  'claim-work':          { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, claimFlow: true, simplify: true, issueAuthorFilter: 'self', issueExcludeLabels: [] } },
+  'error-handling':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
+  'typing':              { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
   // Release-check inspects and mutates release state (for example, the main →
   // release PR) rather than producing source commits. It must run from the app's
   // live main checkout so its branch/ref checks describe the real release flow;
   // a CoS worktree hides that checkout and creates an irrelevant task branch.
-  'release-check':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { ...RELEASE_CHECK_METADATA } },
+  'release-check':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { ...RELEASE_CHECK_METADATA } },
   // stash-cleanup triages `git stash list` and drops what's superseded/stale,
   // leaving real unlanded work in place for the user to recover by hand. It
   // runs in the app's live checkout (never a CoS worktree — a stash is a
@@ -296,7 +309,7 @@ export const DEFAULT_TASK_INTERVALS = {
   // ships no code of its own. On-demand only: unlike branch/issue reconcile,
   // there's no useful cadence for a stash a user hasn't necessarily touched
   // since the last run — they trigger it when they notice stash clutter.
-  'stash-cleanup':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA } },
+  'stash-cleanup':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA } },
   // repo-sync sweeps EVERY managed app's checkout in one run (see the type list
   // above). Like stash-cleanup it runs in the live checkouts — a branch, a stash,
   // and a worktree are all properties of the checkout they live in, so a CoS
@@ -305,20 +318,20 @@ export const DEFAULT_TASK_INTERVALS = {
   // switch branches under a checkout they may be sitting in. Every action toggle
   // is ON except `reapRemotes`, which DELETES branches on origin and so stays
   // opt-in even though the reconciler only ever reaps already-merged ones.
-  'repo-sync':           { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA, syncPush: true, syncPull: true, switchDefault: true, cleanupMerged: true, dropStashes: true, reapRemotes: false, verifyMode: DEFAULT_REPO_SYNC_VERIFY_MODE } },
-  'pr-reviewer':         { type: INTERVAL_TYPES.CUSTOM, intervalMs: 7200000, enabled: false, weekdaysOnly: true, providerId: null, model: null, prompt: null, taskMetadata: { readOnly: true, pipeline: { stages: [{ name: 'Security Scan', promptKey: 'pr-reviewer-security', readOnly: true }, { name: 'Code Review & Merge', promptKey: 'pr-reviewer-review', readOnly: false }] } } },
+  'repo-sync':           { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA, syncPush: true, syncPull: true, switchDefault: true, cleanupMerged: true, dropStashes: true, reapRemotes: false, verifyMode: DEFAULT_REPO_SYNC_VERIFY_MODE } },
+  'pr-reviewer':         { type: INTERVAL_TYPES.ON_DEMAND, intervalMs: 7200000, enabled: true, weekdaysOnly: true, providerId: null, model: null, prompt: null, taskMetadata: { readOnly: true, pipeline: { stages: [{ name: 'Security Scan', promptKey: 'pr-reviewer-security', readOnly: true }, { name: 'Code Review & Merge', promptKey: 'pr-reviewer-review', readOnly: false }] } } },
   'code-reviewer-a':     { ...CODE_REVIEWER_INTERVAL },
   'code-reviewer-b':     { ...CODE_REVIEWER_INTERVAL },
-  'jira-sprint-manager': { type: INTERVAL_TYPES.DAILY, enabled: false, weekdaysOnly: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, simplify: true } },
+  'jira-sprint-manager': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, weekdaysOnly: true, feature: 'jira', providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, simplify: true } },
   // jira-status-report posts its report to JIRA and edits nothing in the repo, so it
   // takes the shared non-committing-coordinator posture above. `readOnly: true` alone
   // was NOT enough: it skips worktree creation but leaves `openPR` free to be filled
   // from the app's `defaultOpenPR`, and the finalize-time PR-claim check reads
   // `metadata.openPR` directly — scoring a posted report as `pr-missing`.
-  'jira-status-report':  { type: INTERVAL_TYPES.WEEKLY, enabled: false, weekdaysOnly: true, providerId: null, model: null, prompt: null, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA, readOnly: true } },
+  'jira-status-report':  { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, weekdaysOnly: true, feature: 'jira', providerId: null, model: null, prompt: null, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA, readOnly: true } },
   // do-replan audits PLAN.md after open PRs and stale branches have been cleaned up,
   // so the plan reflects what actually merged.
-  'do-replan':           { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, runAfter: ['pr-reviewer', 'branch-reconcile'], taskMetadata: { useWorktree: true, openPR: true } },
+  'do-replan':           { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, runAfter: ['pr-reviewer', 'branch-reconcile'], taskMetadata: { useWorktree: true, openPR: true } },
   // Writable — the v2 reference-watch prompt (PROMPT_VERSIONS['reference-watch'] = 2)
   // instructs the agent to APPEND slug-tagged `[ref-watch-…]` checklist items to
   // PLAN.md and commit them. `readOnly: true` would inject the "do not modify or
@@ -331,22 +344,23 @@ export const DEFAULT_TASK_INTERVALS = {
   // `readOnly` is coupled to PROMPT_VERSIONS['reference-watch'] — see
   // REFERENCE_WATCH_AUDITED_VERSION above; bumping the prompt version requires
   // re-auditing this default (a guard test in taskSchedule.test.js enforces it).
-  'reference-watch':     { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { readOnly: false } },
+  'reference-watch':     { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { readOnly: false } },
   // ux audits the RUNNING app UI. Defaults to filing tracker issues
   // (`fileIssues: true`); flip that off to implement. `readOnly: false` so the
   // PLAN.md path can commit checklist items / forge paths can `gh issue create`.
-  // Off by default (AI Provider Usage Policy — enabling it is the user's consent
-  // to a weekly browser-driving LLM run).
-  'ux':                  { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false, readOnly: false } },
+  // On-demand by default (AI Provider Usage Policy — a manual Run is the user's
+  // consent to a browser-driving LLM run; choosing a cadence opts into scheduling).
+  'ux':                  { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false, readOnly: false } },
   // data-safety / simplify are the scheduled counterparts of the quota-burn
   // `data-safety-audit` and `simplify-audit` presets. New types default to
-  // file-issues so an unattended enable doesn't land code. Off by default.
-  'data-safety':         { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'simplify':            { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'api-contract':      { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'react-lifecycle':   { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'observability':     { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'copy':                { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  // file-issues so an unattended scheduled run doesn't land code. On-demand
+  // defaults keep manual filing available without opting into scheduling.
+  'data-safety':         { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  'simplify':            { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  'api-contract':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  'react-lifecycle':   { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  'observability':     { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  'copy':                { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
   // pr-watcher polls for newly-opened PRs, so it runs on a short custom
   // interval rather than the loose rotation/daily cadence. 30 min keeps the
   // gh polling cheap while still reacting to a PR within one cycle. Default
@@ -354,15 +368,19 @@ export const DEFAULT_TASK_INTERVALS = {
   // it to 'self' or 'others' in the schedule UI. `readOnly: false` so a
   // customized prompt can make changes if the operator wants — the shipped
   // default prompt only reviews + comments.
-  'pr-watcher':          { type: INTERVAL_TYPES.CUSTOM, intervalMs: 1800000, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { prAuthorFilter: 'any', readOnly: false } },
+  'pr-watcher':          { type: INTERVAL_TYPES.ON_DEMAND, intervalMs: 1800000, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { prAuthorFilter: 'any', readOnly: false } },
+  // issue-watcher uses deterministic GitHub reads/mutations around a bounded
+  // reasoning-only review pass. On-demand by default: a manual Run is explicit
+  // consent to replies, assignments, reviews, branch updates, and merges.
+  'issue-watcher':       { type: INTERVAL_TYPES.ON_DEMAND, intervalMs: 1800000, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: false, discardWorktree: true } },
   // plan-feature files a plan, not code — tracker-filing posture mirrors
   // reference-watch: writable (a file-based tracker commits checklist items), no
-  // managed worktree, no PR. Weekly (not daily like feature-ideas) so an
-  // enabled run doesn't flood the tracker with plans — one filed plan per run.
+  // managed worktree, no PR. On-demand by default; when scheduled, weekly (not
+  // daily like feature-ideas) so it doesn't flood the tracker with plans.
   // runAfter do-replan so proposals are checked against the freshest available
   // work tracker before a new feature plan is filed.
-  'plan-feature':         { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, dataInputs: ['product-requirements', 'project-goals', 'open-issues', 'open-pull-requests', 'closed-unmerged-pull-requests'], runAfter: ['do-replan'], taskMetadata: { useWorktree: false, openPR: false, readOnly: false } },
-  // layered-intelligence is a programmatic-I/O task (agent-backed, hooked). Daily
+  'plan-feature':         { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['product-requirements', 'project-goals', 'open-issues', 'open-pull-requests', 'closed-unmerged-pull-requests'], runAfter: ['do-replan'], taskMetadata: { useWorktree: false, openPR: false, readOnly: false } },
+  // layered-intelligence is a programmatic-I/O task (agent-backed, hooked). On-demand
   // by default; per-app scheduling (enabled/interval/provider/model) is set in the
   // Intelligence tab and stored on the app's taskTypeOverrides['layered-intelligence'].
   // No `prompt` field — the buildTaskInput hook renders the prompt (no
@@ -371,7 +389,7 @@ export const DEFAULT_TASK_INTERVALS = {
   // agent runs in a worktree that is discarded without a commit/merge/PR
   // (discardWorktree), so it can't land code — its `.agent-done` payload is the
   // only sanctioned output (consumed by the processTaskOutput hook).
-  'layered-intelligence': { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: false, discardWorktree: true } }
+  'layered-intelligence': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: false, discardWorktree: true } }
 };
 
 // Agent-options that a task manages internally — UI locks the toggle, and
@@ -381,6 +399,10 @@ export const DEFAULT_TASK_INTERVALS = {
 // CoS-managed worktree would clobber it).
 export const MANAGED_AGENT_OPTIONS = {
   'plan-task': ['useWorktree', 'openPR', 'claimFlow'],
+  // Programmatic-I/O review task: the model only returns structured judgment;
+  // deterministic hooks own every GitHub mutation. Keep its worktree throwaway
+  // even when a global/per-app metadata override tries to make it writable.
+  'issue-watcher': ['useWorktree', 'openPR', 'discardWorktree'],
   // The non-committing coordinators (NON_COMMITTING_COORDINATOR_METADATA above) all
   // run in the app's LIVE checkout and ship no code, so a CoS-managed worktree is at
   // best unused and at worst harmful — branch-reconcile needs to see the sibling
@@ -490,6 +512,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'typing': 'TypeScript types — file issues or implement fixes',
   'pr-reviewer': 'Review open PRs from contributors',
   'pr-watcher': 'Run a custom prompt on PRs newly opened against the default branch',
+  'issue-watcher': 'Assign issue volunteers and review external PRs with deterministic GitHub actions around one reasoning pass',
   'code-reviewer-a': 'Review the codebase and triage/implement findings (independent provider/model instance A)',
   'code-reviewer-b': 'Review the codebase and triage/implement findings (independent provider/model instance B)',
   'do-replan': 'Audit and prune PLAN.md after merges and branch cleanup so it reflects what actually shipped',
@@ -506,7 +529,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'stash-cleanup': 'Triage git stash list — drop entries superseded by or stale relative to main, leave real unlanded work in place',
   'repo-sync': 'Sync every managed app with origin — back on the default branch, pushed and pulled, merged branches/worktrees and redundant stashes cleared',
   'plan-feature': "Brainstorm one feature and file its decision-complete plan to the app's work tracker (no code)",
-  'layered-intelligence': "Read this app's goals + telemetry, ask a reasoning model for one improvement, and file one deduplicated tracker issue — no code, no agent"
+  'layered-intelligence': "Use app goals + performance metrics to file at most one deduplicated improvement issue; inspect read-only context and file a visibility gap when evidence is insufficient — no code"
 };
 
 export function getTaskTypeDescription(taskType) {

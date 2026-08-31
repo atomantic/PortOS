@@ -1502,6 +1502,17 @@ function ProviderForm({ provider, onClose, onSave, onEditProvider, allProviders 
                 </p>
               </FormField>
 
+              <EffortSelect
+                provider={isProcessProvider(capabilityProvider) ? capabilityProvider : null}
+                model={formData.defaultModel}
+                value={formData.effort}
+                onChange={(effort) => setFormData(prev => ({ ...prev, effort }))}
+                label="Default Effort"
+                hint={generationControls
+                  ? 'Reasoning effort used when a run does not specify one — passed to the local model as reasoningEffort.'
+                  : 'Reasoning effort used when a run does not specify one.'}
+              />
+
               {/* Model Tiers */}
               <div className="border-t border-port-border pt-4 mt-4">
                 <h4 className="text-sm font-medium text-gray-300 mb-3">Model Tiers</h4>
@@ -1645,17 +1656,6 @@ function ProviderForm({ provider, onClose, onSave, onEditProvider, allProviders 
 
           {activeTab === 'generation' && (
             <div className="space-y-4">
-              <EffortSelect
-                provider={isProcessProvider(capabilityProvider) ? capabilityProvider : null}
-                model={formData.defaultModel}
-                value={formData.effort}
-                onChange={(effort) => setFormData(prev => ({ ...prev, effort }))}
-                label="Default Effort"
-                hint={generationControls
-                  ? 'Reasoning effort used when a run does not specify one — passed to the local model as reasoningEffort.'
-                  : 'Reasoning effort used when a run does not specify one.'}
-              />
-
               <FormField label="Timeout (ms)">
                 <input
                   type="number"

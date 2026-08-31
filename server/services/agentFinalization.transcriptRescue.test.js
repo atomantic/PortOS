@@ -158,6 +158,15 @@ describe('printed-payload transcript rescue (#3640)', () => {
     expect(hook).toHaveBeenCalledWith(expect.objectContaining({ payload: null }));
   });
 
+  it('accepts a legacy bare payload written to the sentinel when the hook predicate matches', async () => {
+    const bare = JSON.stringify({ analysis: 'quiet sentinel', proposal: null, pause: null });
+    const hook = await runDispatch({ transcript: printedTranscript(), sentinel: bare });
+
+    expect(hook).toHaveBeenCalledWith(expect.objectContaining({
+      payload: { analysis: 'quiet sentinel', proposal: null, pause: null },
+    }));
+  });
+
   it('accepts the documented envelope form when that is what was printed', async () => {
     const envelope = '{"summary": "no proposal", "payload": {"analysis": "quiet", "proposal": null}}';
     const hook = await runDispatch({ transcript: printedTranscript(envelope) });

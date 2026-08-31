@@ -1070,6 +1070,32 @@ async function rescueTranscriptPayload({ agentId, taskType }) {
 }
 
 /**
+ * Accept a legacy hook payload written directly to the sentinel. The generic
+ * sentinel parser intentionally treats an object without `payload` as a plain
+ * summary, but older programmatic-I/O prompts (including issue-watcher's first
+ * version) told agents to write the hook payload at the top level. Only accept
+ * that shape when the task's own predicate confirms it, and never reinterpret a
+ * structured envelope or a plain-text summary as a bare payload.
+ */
+async function recoverBareSentinelPayload(contents, taskType) {
+  if (typeof contents !== 'string' || !isProgrammaticIoTaskType(taskType)) return null;
+  try {
+    const { safeJSONParse } = await import('../lib/fileUtils.js');
+    const candidate = safeJSONParse(contents, null, { allowArray: false, logError: false });
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)
+      || Object.hasOwn(candidate, 'summary') || Object.hasOwn(candidate, 'payload')) return null;
+    const isPayload = await getTaskOutputPayloadPredicate(taskType);
+    return typeof isPayload === 'function' && isPayload(candidate) ? candidate : null;
+  } catch (err) {
+    // This is a completion boundary, outside the Express request lifecycle. A
+    // malformed legacy payload must leave the normal missing-payload verdict
+    // intact rather than aborting finalization.
+    emitLog('warn', `⚠️ Bare sentinel payload recovery failed for ${taskType}: ${err.message}`, { taskType });
+    return null;
+  }
+}
+
+/**
  * Read the finished agent's `.agent-done` payload and run the task type's
  * `processTaskOutput` hook, if it registers one. No-op for the vast majority of
  * task types (no hook). The hook receives `{ appId, success, payload, ... }` and
@@ -1103,6 +1129,15 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, r
       if (salvaged.payload != null) {
         payload = salvaged.payload;
         emitLog('info', `Recovered structured .agent-done payload for ${agentId} (${taskType}) via lenient JSON extraction`, { agentId });
+      }
+    }
+    // Compatibility for programmatic-I/O prompts that predate the structured
+    // `{ summary, payload }` envelope and wrote the hook payload directly.
+    if (payload == null && contents != null) {
+      const bare = await recoverBareSentinelPayload(contents, taskType);
+      if (bare != null) {
+        payload = bare;
+        emitLog('info', `Recovered legacy bare .agent-done payload for ${agentId} (${taskType})`, { agentId });
       }
     }
     // No sentinel at all: the model may have PRINTED its deliverable into the

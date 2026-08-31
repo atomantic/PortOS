@@ -18,17 +18,24 @@ vi.mock('../../../hooks/useProcessLogs', () => ({
   useProcessLogs: vi.fn(() => ({ logs: [], subscribed: false, clear: vi.fn() })),
 }));
 
+vi.mock('../../../lib/clipboard', () => ({ copyToClipboard: vi.fn() }));
 vi.mock('../../BrailleSpinner', () => ({ default: () => null }));
 vi.mock('../../ui/FormField', () => ({ FormField: ({ children }) => children }));
 vi.mock('../../ui/ProcessLogLines', () => ({ default: () => null }));
-vi.mock('../../../utils/formatters', () => ({ formatBytes: vi.fn(() => '0 B'), formatDurationMs: vi.fn() }));
+vi.mock('../../../utils/formatters', () => ({
+  formatBytes: vi.fn(() => '0 B'),
+  formatDurationMs: vi.fn(),
+  formatTimeOfDaySeconds: vi.fn((timestamp) => `time-${timestamp}`),
+}));
 
 import { useProcessLogs } from '../../../hooks/useProcessLogs';
+import { copyToClipboard } from '../../../lib/clipboard';
 import ProcessesTab from './ProcessesTab';
 
 describe('ProcessesTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useProcessLogs.mockReturnValue({ logs: [], subscribed: false, clear: vi.fn() });
   });
 
   it('passes its app id to the expanded process log subscription', () => {
@@ -37,6 +44,43 @@ describe('ProcessesTab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Expand details for example-api' }));
 
     expect(useProcessLogs).toHaveBeenLastCalledWith('example-api', { lines: 500, appId: 'app-1' });
+  });
+
+  it('copies the current live log snapshot from both viewers in display order', () => {
+    useProcessLogs.mockReturnValue({
+      logs: [
+        { line: 'boot ok', type: 'stdout', timestamp: 100 },
+        { line: 'failed once', type: 'stderr', timestamp: 200 },
+      ],
+      subscribed: true,
+      clear: vi.fn(),
+    });
+    render(<ProcessesTab appId="app-1" pm2ProcessNames={['example-api']} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand details for example-api' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Copy logs' }));
+
+    const expected = '[time-100] [stdout] boot ok\n[time-200] [stderr] failed once';
+    expect(copyToClipboard).toHaveBeenLastCalledWith(expected, 'Logs copied');
+
+    fireEvent.click(screen.getByTitle('Fullscreen'));
+    const copyButtons = screen.getAllByRole('button', { name: 'Copy logs' });
+    fireEvent.click(copyButtons[1]);
+    expect(copyToClipboard).toHaveBeenLastCalledWith(expected, 'Logs copied');
+    expect(copyToClipboard).toHaveBeenCalledTimes(2);
+  });
+
+  it('disables copy actions when the live log snapshot is empty', () => {
+    render(<ProcessesTab appId="app-1" pm2ProcessNames={['example-api']} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand details for example-api' }));
+    expect(screen.getByRole('button', { name: 'Copy logs' })).toBeDisabled();
+
+    fireEvent.click(screen.getByTitle('Fullscreen'));
+    expect(screen.getAllByRole('button', { name: 'Copy logs' })).toEqual([
+      expect.objectContaining({ disabled: true }),
+      expect.objectContaining({ disabled: true }),
+    ]);
   });
 
   // On "glass" themes a bordered/rounded `.bg-port-card` gets a backdrop-filter,
@@ -55,6 +99,7 @@ describe('ProcessesTab', () => {
     expect(container.contains(overlay)).toBe(false);
     expect(overlay.parentElement).toBe(document.body);
     expect(screen.getByText('Logs: example-api')).toBeTruthy();
+    expect(screen.getByTestId('fullscreen-log-controls')).toHaveClass('flex-wrap');
 
     // Exiting fullscreen tears the portaled overlay back down.
     fireEvent.click(screen.getByRole('button', { name: 'Exit fullscreen' }));

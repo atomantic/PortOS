@@ -214,6 +214,39 @@ describe('syncWire', () => {
       expect(JSON.stringify(withPin)).toBe(JSON.stringify(without));
     });
 
+    it('keeps only portable character production canon on the universe wire (#5378)', () => {
+      const wire = sanitizeRecordForWire('universe', {
+        id: 'u1', name: 'U',
+        characters: [{
+          id: 'chr-1', name: 'A', imageRefs: ['neutral.png'],
+          voiceCanon: {
+            version: 2, description: 'warm low alto', sourcePolicy: 'designed', approved: true,
+            emotionalRange: ['guarded', { recordingPath: '/private/range.wav' }],
+            avoid: ['announcer', { providerId: 'private-provider' }],
+            pronunciations: [{
+              term: 'Aster', pronunciation: 'AS-ter', recordingPath: '/private/pronunciation.wav',
+            }],
+            profileId: 'machine-local-profile', artifactPath: '/private/voice.wav', performerName: 'private',
+          },
+          identityPack: {
+            assets: [{ role: 'neutral', imageRef: 'neutral.png', approved: true, localPath: '/private/image.png' }],
+            avoid: ['different eye color', { trainingDataset: 'private' }], trainingDataset: 'private',
+          },
+        }],
+      });
+      expect(wire.characters[0].voiceCanon).toEqual({
+        version: 2, description: 'warm low alto', defaultDelivery: '',
+        emotionalRange: ['guarded'], avoid: ['announcer'],
+        pronunciations: [{ term: 'Aster', pronunciation: 'AS-ter' }],
+        sourcePolicy: 'designed', approved: true,
+      });
+      expect(wire.characters[0].identityPack).toEqual({
+        assets: [{ role: 'neutral', imageRef: 'neutral.png', approved: true }],
+        avoid: ['different eye color'],
+      });
+      expect(JSON.stringify(wire)).not.toMatch(/machine-local|private/);
+    });
+
     it('does NOT strip styleImageRefs from series/issue wire form (universe-only field)', () => {
       // The strip is scoped to `kind === 'universe'` — series/issue records
       // never carry styleImageRefs, but a stray value (hand-edit, corrupted

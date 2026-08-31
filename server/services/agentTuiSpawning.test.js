@@ -450,6 +450,15 @@ describe('agent TUI spawning', () => {
     expect(codex.args).not.toContain('--effort');
   });
 
+  it('passes Ultra through when a Codex TUI runs Sol', () => {
+    const codex = buildTuiSpawnConfig(
+      { id: 'codex-tui', command: 'codex', type: 'tui', args: [] },
+      'gpt-5.6-sol',
+      { effort: 'ultra' },
+    );
+    expect(codex.args).toContain('model_reasoning_effort=ultra');
+  });
+
   it('gives a cloud Codex swarm enough threads for its root plus every worker', () => {
     const config = buildTuiSpawnConfig(
       { id: 'codex-tui', command: 'codex', type: 'tui', args: [] },
@@ -1075,6 +1084,25 @@ describe('spawnTuiAgent runtime', () => {
     expect(pasteCount()).toBe(1);
   });
 
+  it('claude trust gate: moves from a highlighted No choice before confirming', async () => {
+    runSpawn({ tuiConfig: claudeTuiConfig, useDurableRunner: true });
+    await flushMicrotasks();
+
+    await capturedOnData(Buffer.from(
+      'Quick safety check: Is this a project you created or one you trust?\n'
+      + '❯ No, exit\n'
+      + '  Yes, I trust this folder\n'
+      + 'Enter to confirm · Esc to cancel\n',
+    ));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(400);
+    await flushMicrotasks();
+
+    expect(vi.mocked(shellService.writeToSession).mock.calls.map(([, data]) => data))
+      .toContain('\x1b[B\r');
+    expect(pasteCount()).toBe(0);
+  });
+
   // Claude Code v2.1.233's auto-mode offer. The trust gate above paints BEFORE
   // the composer; this one paints after, with paste mode already on — so the old
   // gate said "ready" and the prompt went into a modal that ignored it. All four
@@ -1657,8 +1685,13 @@ describe('spawnTuiAgent runtime', () => {
     runSpawn({ prompt: 'evaluate our animation prompts and generate drafts' });
     await flushMicrotasks();
 
-    // Codex prints its MCP-boot banner during startup → latches the boot tracker.
-    await capturedOnData(Buffer.from('>_ OpenAI Codex (v0.144.1)\nStarting MCP servers (0/3): codex_apps, node_repl, playwright\n'));
+    // Codex prints its MCP-boot banner during a whole-screen repaint. The
+    // composer/footer after the status line exceeds the tracker's 256-char
+    // cross-chunk tail in real transcripts; the tracker must search the full
+    // new repaint before truncating that tail, or it misses the banner and
+    // kills the run at the ordinary three-attempt cap.
+    const footer = `\n\n› Ask Codex to do anything\n\n  gpt-5.6-sol high · ${'workspace footer '.repeat(24)}`;
+    await capturedOnData(Buffer.from(`>_ OpenAI Codex (v0.148.0)\nStarting MCP servers (1/2): codex_apps (0s • esc to interrupt)${footer}`));
     await flushMicrotasks();
     // Fire the paste (past prompt-delay floor + readiness idle threshold).
     await vi.advanceTimersByTimeAsync(2000);

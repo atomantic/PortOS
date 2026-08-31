@@ -877,6 +877,10 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toContain('PR_HEAD="$PUSH_OWNER:$BRANCH"');
       expect(prompt).toContain('portos-local-review-baseline');
       expect(prompt).toContain('refusing to overwrite them');
+      expect(prompt).toContain('LOCAL_OVERALL_STATUS=review-blocked');
+      expect(prompt).toContain('case "$LOCAL_OVERALL_STATUS" in clean|partial|review-blocked)');
+      expect(prompt).toContain('gh pr comment "$PR_URL" --body "$REVIEW_BLOCKED_COMMENT"');
+      expect(prompt).toContain('Required code review was not completed before publication. This PR/MR is intentionally left open and will not be merged until the required review completes.');
       expect(prompt).toMatch(/PR_URL=\$\(gh pr create --base main --head "\$PR_HEAD"/);
       expect(prompt).toMatch(/## Review Loop/);
       expect(prompt).toMatch(/gh pr merge "\$PR_URL" --merge --delete-branch/);
@@ -885,6 +889,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toContain('`all` always runs the PR-side reviewers.');
       expect(prompt.indexOf('### Local Review Before Opening the PR/MR')).toBeLessThan(prompt.indexOf('publish_reviewed_branch -u "$PUSH_REMOTE" "$BRANCH"'));
       expect(prompt.indexOf('publish_reviewed_branch -u "$PUSH_REMOTE" "$BRANCH"')).toBeLessThan(prompt.indexOf('## Review Loop'));
+      expect(prompt.indexOf('Required local-review merge gate')).toBeLessThan(prompt.indexOf('gh pr merge "$PR_URL" --merge --delete-branch'));
       // The post-PR section receives only Copilot, never the local codex reviewer.
       expect(prompt.slice(prompt.indexOf('## Review Loop'))).not.toMatch(/CLI Reviewer Procedure/);
       // PortOS no longer promises to do any of it.
@@ -1029,6 +1034,9 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/git diff origin\/main\.\.\.HEAD/);
       expect(prompt).toMatch(/PR_URL=\$\(glab mr create --source-branch claim\/issue-4363 --target-branch main/);
       expect(prompt).toMatch(/PR_NUMBER=\$\(glab mr view "\$PR_URL" --output json \| jq -r \.iid\)/);
+      expect(prompt).toContain('LOCAL_OVERALL_STATUS=review-blocked');
+      expect(prompt).toContain('glab mr note "$PR_NUMBER" --message "$REVIEW_BLOCKED_COMMENT"');
+      expect(prompt).toContain('Required code review was not completed before publication. This PR/MR is intentionally left open and will not be merged until the required review completes.');
       expect(prompt).toMatch(/## Review Loop/);
       expect(prompt).toMatch(/request `@alice` as MR reviewer/);
       expect(prompt).toMatch(/glab mr merge "\$PR_NUMBER" --yes --remove-source-branch/);
@@ -1171,6 +1179,8 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/You are done — exit/);
       expect(prompt).toContain('repeat the pre-PR local review phase');
       expect(prompt).toContain('the pre-PR local review is the only configured review');
+      expect(prompt).toContain('Required local-review merge gate');
+      expect(prompt).toContain('review-blocked');
       expect(prompt).not.toContain('No code review was requested for this task');
       expect(prompt).not.toMatch(/write the completion sentinel — the run is not done/);
     });
@@ -1211,7 +1221,9 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/READ THAT FILE/);
       expect(prompt).toMatch(/\/data\/slashdo-resolved\/local-agent-review-loop\.md/);
       expect(prompt).not.toMatch(/RECIPE HEADER/);
-      expect(prompt.length).toBeLessThan(21_000);
+      // The fixed review-blocked publication/merge contract adds prose to the
+      // prompt, but the 40KB recipe itself must still stay in the staged file.
+      expect(prompt.length).toBeLessThan(25_000);
     });
 
     it('quotes a hostile branch ref inert in the PR-create command line', () => {
@@ -2810,6 +2822,22 @@ describe('buildReviewLoopFollowUpSection — CLI reviewer procedure inlining', (
     expect(out).toMatch(/STATUS=no-verdict[^]*exit 1/);
   });
 
+  it('keeps an inline merge gate closed when the pre-PR required review is unavailable', () => {
+    const out = buildReviewLoopFollowUpSection(
+      { ...baseMeta, reviewLoopReviewers: ['copilot'] },
+      {
+        verbose: false,
+        inlineExitStep: 'write the completion sentinel and stop',
+        localPhaseReviewers: ['codex'],
+        localPhaseReviewRequired: true,
+      }
+    );
+    expect(out).toContain('Required local-review merge gate');
+    expect(out).toContain('LOCAL_OVERALL_STATUS=review-blocked');
+    expect(out).toContain('leave it open');
+    expect(out.indexOf('Required local-review merge gate')).toBeLessThan(out.indexOf('gh pr merge'));
+  });
+
   it('does NOT inline the procedure for a copilot-only loop', () => {
     const out = buildReviewLoopFollowUpSection(
       { ...baseMeta, reviewLoopReviewers: ['copilot'] },
@@ -2827,6 +2855,18 @@ describe('buildReviewLoopFollowUpSection — CLI reviewer procedure inlining', (
     expect(out).not.toContain('CLI Reviewer Procedure');
     // Still emits the base invocation step so the loop is not broken.
     expect(out).toMatch(/codex/);
+  });
+
+  it('keeps review rounds focused on material findings and diminishing returns', () => {
+    const out = buildReviewLoopFollowUpSection(
+      { ...baseMeta, reviewLoopReviewers: ['claude'] },
+      { verbose: false, localAgentLoopBody: null }
+    );
+    expect(out).toContain('directly affected contracts only');
+    expect(out).toContain('concrete wrong outcome');
+    expect(out).toContain('only substantive fixes do');
+    expect(out).toContain('skip repository-wide audits');
+    expect(out).toContain('This affects looping only, not clean/partial verdicts');
   });
 });
 

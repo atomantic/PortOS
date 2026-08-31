@@ -37,6 +37,12 @@ export const INSTANCE_FEATURES = Object.freeze([
     defaultEnabled: false,
   }),
   Object.freeze({
+    id: 'eidoverse',
+    label: 'Eidoverse Worlds',
+    description: 'An optional shared 3D world for you and your agents, installed as a separately managed app.',
+    defaultEnabled: false,
+  }),
+  Object.freeze({
     id: 'gsd',
     label: 'GSD',
     description: 'Get Stuff Done project planning and progress tracking for managed apps.',

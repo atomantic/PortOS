@@ -8,6 +8,7 @@ vi.mock('../services/fableLoom/index.js', () => ({
   addNode: vi.fn(),
   addNodeTransition: vi.fn(),
   branchNode: vi.fn(),
+  cancelFableLoomEditorialAutopilot: vi.fn(),
   createLoom: vi.fn(),
   deleteEpisode: vi.fn(),
   deleteLoom: vi.fn(),
@@ -15,18 +16,39 @@ vi.mock('../services/fableLoom/index.js', () => ({
   deleteNodeTransition: vi.fn(),
   feedbackEpisode: vi.fn(),
   feedbackSeriesPlan: vi.fn(),
+  generateEpisodeOutline: vi.fn(),
   generateSeriesPlan: vi.fn(),
+  getFableLoomEditorialAutopilot: vi.fn(),
+  getLatestFableLoomEditorialAutopilot: vi.fn(),
   getLoom: vi.fn(),
   listLoomSummaries: vi.fn(async () => []),
   playTurn: vi.fn(),
+  publicFableLoomEditorialAutopilot: vi.fn((run) => run),
   reformatEpisodeScenes: vi.fn(),
   reviewEpisode: vi.fn(),
+  reviewEpisodeOutline: vi.fn(),
+  reviewFableLoomPlaythroughs: vi.fn(),
   reviewSeriesPlan: vi.fn(),
+  reviewSeriesTeleplay: vi.fn(),
+  evaluateAndRemediateFableLoom: vi.fn(),
+  startFableLoomEditorialAutopilot: vi.fn(),
   updateEpisode: vi.fn(),
   updateLoom: vi.fn(),
   updateNode: vi.fn(),
   updateNodeTransition: vi.fn(),
+  validateEpisodeOutline: vi.fn(),
   weaveEpisode: vi.fn(),
+  checkHostedSessionReadiness: vi.fn(),
+  createHostedSession: vi.fn(),
+  getHostedSession: vi.fn(),
+  updateHostedSession: vi.fn(),
+  endHostedSession: vi.fn(),
+  planEpisodeProduction: vi.fn(),
+  startEpisodeProductionBatch: vi.fn(),
+  getEpisodeProductionBatch: vi.fn(),
+  cancelEpisodeProductionBatch: vi.fn(),
+  resumeEpisodeProductionBatch: vi.fn(),
+  reviewEpisodeContinuity: vi.fn(),
 }));
 
 import * as fableLoom from '../services/fableLoom/index.js';
@@ -127,6 +149,94 @@ describe('FableLoom routes', () => {
     expect(fableLoom.feedbackSeriesPlan).toHaveBeenCalledTimes(1);
   });
 
+  it('reviews the complete expanded teleplay through the series route', async () => {
+    fableLoom.reviewSeriesTeleplay.mockResolvedValueOnce({ analysis: { summary: 'The season holds together.' } });
+    const response = await request(makeApp())
+      .post('/api/fableloom/loom-1/review-teleplay')
+      .send({ providerId: 'writer', effort: 'high' });
+    expect(response.status).toBe(200);
+    expect(fableLoom.reviewSeriesTeleplay).toHaveBeenCalledWith('loom-1', {
+      providerId: 'writer', effort: 'high',
+    });
+  });
+
+  it('runs validated whole-series remediation and branching playthrough review', async () => {
+    fableLoom.evaluateAndRemediateFableLoom.mockResolvedValueOnce({
+      loom: { id: 'loom-1' }, changed: true,
+    });
+    const remediated = await request(makeApp())
+      .post('/api/fableloom/loom-1/editorial/remediate')
+      .send({
+        guidance: 'Preserve the quiet ending.', providerId: 'writer', effort: 'high',
+        operationId: '00000000-0000-4000-8000-000000000001',
+      });
+    expect(remediated.status).toBe(200);
+    expect(fableLoom.evaluateAndRemediateFableLoom).toHaveBeenCalledWith('loom-1', {
+      guidance: 'Preserve the quiet ending.', providerId: 'writer', effort: 'high',
+      operationId: '00000000-0000-4000-8000-000000000001',
+    });
+
+    fableLoom.reviewFableLoomPlaythroughs.mockResolvedValueOnce({ passed: true });
+    const reviewed = await request(makeApp())
+      .post('/api/fableloom/loom-1/playtest')
+      .send({ aiReview: true, maxPaths: 128, model: 'large' });
+    expect(reviewed.status).toBe(200);
+    expect(fableLoom.reviewFableLoomPlaythroughs).toHaveBeenCalledWith('loom-1', {
+      aiReview: true, maxPaths: 128, model: 'large',
+    });
+
+    const invalid = await request(makeApp())
+      .post('/api/fableloom/loom-1/playtest')
+      .send({ maxPaths: 257 });
+    expect(invalid.status).toBe(400);
+    expect(fableLoom.reviewFableLoomPlaythroughs).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts, reads, and cooperatively cancels a loom-scoped editorial autopilot', async () => {
+    const running = {
+      id: 'editorial-run-1', loomId: 'loom-1', status: 'running', round: 1, maxRounds: 3,
+    };
+    fableLoom.startFableLoomEditorialAutopilot.mockResolvedValueOnce(running);
+    const started = await request(makeApp())
+      .post('/api/fableloom/loom-1/editorial/autopilot/start')
+      .send({ maxRounds: 3, maxPaths: 128, providerId: 'writer', selfImprove: true });
+    expect(started.status).toBe(202);
+    expect(fableLoom.startFableLoomEditorialAutopilot).toHaveBeenCalledWith('loom-1', {
+      maxRounds: 3, maxPaths: 128, providerId: 'writer', selfImprove: true,
+    });
+
+    const invalid = await request(makeApp())
+      .post('/api/fableloom/loom-1/editorial/autopilot/start')
+      .send({ selfImprove: 'yes' });
+    expect(invalid.status).toBe(400);
+    expect(fableLoom.startFableLoomEditorialAutopilot).toHaveBeenCalledTimes(1);
+
+    fableLoom.getLoom.mockResolvedValueOnce({ id: 'loom-1' });
+    fableLoom.getLatestFableLoomEditorialAutopilot.mockReturnValueOnce(running);
+    const status = await request(makeApp())
+      .get('/api/fableloom/loom-1/editorial/autopilot/status');
+    expect(status.status).toBe(200);
+    expect(status.body.run).toMatchObject({ id: 'editorial-run-1', status: 'running' });
+
+    fableLoom.getFableLoomEditorialAutopilot.mockReturnValueOnce(running);
+    const fetched = await request(makeApp())
+      .get('/api/fableloom/loom-1/editorial/autopilot/editorial-run-1');
+    expect(fetched.status).toBe(200);
+
+    fableLoom.getFableLoomEditorialAutopilot.mockReturnValueOnce(running);
+    fableLoom.cancelFableLoomEditorialAutopilot.mockReturnValueOnce({ ...running, status: 'canceling' });
+    const canceled = await request(makeApp())
+      .post('/api/fableloom/loom-1/editorial/autopilot/editorial-run-1/cancel')
+      .send({});
+    expect(canceled.status).toBe(200);
+    expect(canceled.body.status).toBe('canceling');
+
+    fableLoom.getFableLoomEditorialAutopilot.mockReturnValueOnce({ ...running, loomId: 'loom-other' });
+    const wrongLoom = await request(makeApp())
+      .get('/api/fableloom/loom-1/editorial/autopilot/editorial-run-1');
+    expect(wrongLoom.status).toBe(404);
+  });
+
   it('validates and forwards structured series-plan patches', async () => {
     const seriesPlan = {
       storyArc: 'A courier becomes a leader.',
@@ -221,6 +331,13 @@ describe('FableLoom routes', () => {
     expect(response.body.issues).toEqual([]);
   });
 
+  it('GET /outlines/validate reports whether the complete series beat arc is ready', async () => {
+    fableLoom.getLoom.mockResolvedValueOnce({ id: 'loom-1', episodes: [] });
+    const response = await request(makeApp()).get('/api/fableloom/loom-1/outlines/validate');
+    expect(response.status).toBe(200);
+    expect(response.body.stats.ready).toBe(false);
+  });
+
   it('POST weave ignores legacy count hints and forwards current options', async () => {
     fableLoom.weaveEpisode.mockResolvedValueOnce({ loom: { id: 'loom-1' }, runId: 'r' });
     const ok = await request(makeApp())
@@ -228,6 +345,31 @@ describe('FableLoom routes', () => {
       .send({ guidance: 'darker', replace: true, nodeTarget: 999, endingTarget: 999 });
     expect(ok.status).toBe(200);
     expect(fableLoom.weaveEpisode).toHaveBeenCalledWith('loom-1', 'ep-1', { guidance: 'darker', replace: true });
+  });
+
+  it('plans, validates, and reviews an episode outline before expansion', async () => {
+    fableLoom.generateEpisodeOutline.mockResolvedValueOnce({ outline: { scenes: [] }, runId: 'outline-run' });
+    const generated = await request(makeApp())
+      .post('/api/fableloom/loom-1/episodes/ep-1/outline/generate')
+      .send({ guidance: 'Keep the turn costly.', providerId: 'writer', model: 'large' });
+    expect(generated.status).toBe(200);
+    expect(fableLoom.generateEpisodeOutline).toHaveBeenCalledWith('loom-1', 'ep-1', {
+      guidance: 'Keep the turn costly.', providerId: 'writer', model: 'large',
+    });
+
+    fableLoom.validateEpisodeOutline.mockResolvedValueOnce({ validation: { stats: { errorCount: 0 } } });
+    const validated = await request(makeApp())
+      .post('/api/fableloom/loom-1/episodes/ep-1/outline/validate')
+      .send({});
+    expect(validated.status).toBe(200);
+    expect(fableLoom.validateEpisodeOutline).toHaveBeenCalledWith('loom-1', 'ep-1');
+
+    fableLoom.reviewEpisodeOutline.mockResolvedValueOnce({ analysis: { summary: 'Sound.' } });
+    const reviewed = await request(makeApp())
+      .post('/api/fableloom/loom-1/episodes/ep-1/outline/review')
+      .send({ effort: 'high' });
+    expect(reviewed.status).toBe(200);
+    expect(fableLoom.reviewEpisodeOutline).toHaveBeenCalledWith('loom-1', 'ep-1', { effort: 'high' });
   });
 
   it('POST feedback requires an instruction and forwards the route selection', async () => {
@@ -299,6 +441,114 @@ describe('FableLoom routes', () => {
     expect(ok.status).toBe(200);
     expect(fableLoom.playTurn).toHaveBeenCalledWith('loom-1', 'ep-1', {
       nodeId: 'node-1', message: 'open the gate', transcript: [{ role: 'reader', text: 'hi' }],
+    });
+  });
+
+  describe('QR-Hosted Sessions API', () => {
+    it('POST preflight checks readiness', async () => {
+      fableLoom.checkHostedSessionReadiness.mockResolvedValueOnce({ ready: true, checks: { https: { ok: true } } });
+      const res = await request(makeApp()).post('/api/fableloom/loom-1/episodes/ep-1/sessions/preflight');
+      expect(res.status).toBe(200);
+      expect(res.body.ready).toBe(true);
+      expect(fableLoom.checkHostedSessionReadiness).toHaveBeenCalledWith({ loomId: 'loom-1', episodeId: 'ep-1' });
+    });
+
+    it('POST host creates hosted session', async () => {
+      fableLoom.createHostedSession.mockResolvedValueOnce({ session: { id: 'sess-1' }, token: 'abc' });
+      const res = await request(makeApp())
+        .post('/api/fableloom/loom-1/episodes/ep-1/sessions/host')
+        .send({ audioTarget: 'host' });
+      expect(res.status).toBe(201);
+      expect(res.body.session.id).toBe('sess-1');
+      expect(fableLoom.createHostedSession).toHaveBeenCalledWith('loom-1', 'ep-1', { audioTarget: 'host' });
+    });
+
+    it('GET sessions/:sessionId retrieves session or 404s', async () => {
+      fableLoom.getHostedSession.mockReturnValueOnce({ id: 'sess-1', status: 'active' });
+      const res = await request(makeApp()).get('/api/fableloom/sessions/sess-1');
+      expect(res.status).toBe(200);
+      expect(res.body.id).toBe('sess-1');
+
+      fableLoom.getHostedSession.mockReturnValueOnce(null);
+      const notFound = await request(makeApp()).get('/api/fableloom/sessions/sess-2');
+      expect(notFound.status).toBe(404);
+    });
+
+    it('PATCH sessions/:sessionId updates session', async () => {
+      fableLoom.updateHostedSession.mockReturnValueOnce({ id: 'sess-1', audioTarget: 'audience' });
+      const res = await request(makeApp())
+        .patch('/api/fableloom/sessions/sess-1')
+        .send({ audioTarget: 'audience' });
+      expect(res.status).toBe(200);
+      expect(res.body.audioTarget).toBe('audience');
+    });
+
+    it('DELETE sessions/:sessionId ends session', async () => {
+      fableLoom.endHostedSession.mockReturnValueOnce({ ok: true });
+      const res = await request(makeApp()).delete('/api/fableloom/sessions/sess-1');
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(fableLoom.endHostedSession).toHaveBeenCalledWith('sess-1', { reason: 'api_deleted' });
+    });
+  });
+
+  describe('production orchestration & continuity review', () => {
+    it('POST /:id/episodes/:episodeId/production/plan returns production plan', async () => {
+      fableLoom.planEpisodeProduction.mockResolvedValueOnce({ mode: 'current_canon', plannedAssets: [] });
+      const res = await request(makeApp())
+        .post('/api/fableloom/loom-1/episodes/ep-1/production/plan')
+        .send({ mode: 'current_canon' });
+      expect(res.status).toBe(200);
+      expect(res.body.mode).toBe('current_canon');
+      expect(fableLoom.planEpisodeProduction).toHaveBeenCalledWith('loom-1', 'ep-1', { mode: 'current_canon' });
+    });
+
+    it('POST /:id/episodes/:episodeId/production/batch starts a batch run', async () => {
+      fableLoom.startEpisodeProductionBatch.mockResolvedValueOnce({ id: 'batch-1', status: 'in_progress' });
+      const res = await request(makeApp())
+        .post('/api/fableloom/loom-1/episodes/ep-1/production/batch')
+        .send({ mode: 'current_canon' });
+      expect(res.status).toBe(201);
+      expect(res.body.id).toBe('batch-1');
+      expect(fableLoom.startEpisodeProductionBatch).toHaveBeenCalledWith('loom-1', 'ep-1', { mode: 'current_canon' });
+    });
+
+    it('GET /:id/episodes/:episodeId/production/batch/:runId retrieves batch run or 404s', async () => {
+      fableLoom.getEpisodeProductionBatch.mockReturnValueOnce({ id: 'batch-1', loomId: 'loom-1', episodeId: 'ep-1', status: 'in_progress' });
+      const res = await request(makeApp()).get('/api/fableloom/loom-1/episodes/ep-1/production/batch/batch-1');
+      expect(res.status).toBe(200);
+      expect(res.body.id).toBe('batch-1');
+
+      fableLoom.getEpisodeProductionBatch.mockReturnValueOnce(null);
+      const notFound = await request(makeApp()).get('/api/fableloom/loom-1/episodes/ep-1/production/batch/batch-none');
+      expect(notFound.status).toBe(404);
+    });
+
+    it('POST /:id/episodes/:episodeId/production/batch/:runId/cancel cancels run', async () => {
+      fableLoom.getEpisodeProductionBatch.mockReturnValueOnce({ id: 'batch-1', loomId: 'loom-1', episodeId: 'ep-1', status: 'in_progress' });
+      fableLoom.cancelEpisodeProductionBatch.mockReturnValueOnce({ id: 'batch-1', status: 'canceled' });
+      const res = await request(makeApp()).post('/api/fableloom/loom-1/episodes/ep-1/production/batch/batch-1/cancel');
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('canceled');
+    });
+
+    it('POST /:id/episodes/:episodeId/production/batch/:runId/resume resumes a run', async () => {
+      fableLoom.getEpisodeProductionBatch.mockReturnValueOnce({ id: 'batch-1', loomId: 'loom-1', episodeId: 'ep-1', status: 'failed' });
+      fableLoom.resumeEpisodeProductionBatch.mockReturnValueOnce({ id: 'batch-1', status: 'in_progress' });
+      const res = await request(makeApp()).post('/api/fableloom/loom-1/episodes/ep-1/production/batch/batch-1/resume');
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('in_progress');
+      expect(fableLoom.resumeEpisodeProductionBatch).toHaveBeenCalledWith('batch-1');
+    });
+
+    it('POST /:id/episodes/:episodeId/continuity/review performs continuity review', async () => {
+      fableLoom.reviewEpisodeContinuity.mockResolvedValueOnce({ passed: true, findings: [] });
+      const res = await request(makeApp())
+        .post('/api/fableloom/loom-1/episodes/ep-1/continuity/review')
+        .send({});
+      expect(res.status).toBe(200);
+      expect(res.body.passed).toBe(true);
+      expect(fableLoom.reviewEpisodeContinuity).toHaveBeenCalledWith('loom-1', 'ep-1');
     });
   });
 });

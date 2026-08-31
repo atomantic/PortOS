@@ -36,6 +36,7 @@ export const ASSET_ROUTE_PREFIXES = [
   '/data/sprites',
   '/data/image-to-3d',
   '/data/audio',
+  '/data/voice-profiles',
   '/data/music',
   '/data/brain-imports',
   '/data/writers-room/works',

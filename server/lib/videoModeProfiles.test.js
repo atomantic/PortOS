@@ -7,14 +7,15 @@ import {
 } from './videoModeProfiles.js';
 
 describe('VIDEO_RUNTIME_MODES', () => {
-  it('only enumerates base semantic modes', () => {
+  it('only enumerates known semantic modes', () => {
+    const knownModes = [...VIDEO_BASE_MODES, 'a2v'];
     for (const [runtime, modes] of Object.entries(VIDEO_RUNTIME_MODES)) {
       expect(modes.length, runtime).toBeGreaterThan(0);
-      for (const mode of modes) expect(VIDEO_BASE_MODES, `${runtime}/${mode}`).toContain(mode);
+      for (const mode of modes) expect(knownModes, `${runtime}/${mode}`).toContain(mode);
     }
   });
 
-  it('keeps hunyuan text-only (the retired `mode: t2v` fact)', () => {
+  it('keeps preserved Hunyuan records text-only even though the runtime is retired', () => {
     expect(VIDEO_RUNTIME_MODES.hunyuan).toEqual(['text']);
   });
 
@@ -27,6 +28,15 @@ describe('VIDEO_RUNTIME_MODES', () => {
     expect(VIDEO_RUNTIME_MODES.minimax_h3).toContain('fflf');
     expect(VIDEO_RUNTIME_MODES.wan22).not.toContain('fflf');
   });
+
+  it('declares audio-only semantics for MiniMax H3 Ref2VA', () => {
+    expect(VIDEO_RUNTIME_MODES.minimax_h3_ref2va).toEqual(['a2v']);
+  });
+
+  it('declares A2V on both pinned LTX runtime generations', () => {
+    expect(VIDEO_RUNTIME_MODES.ltx2).toContain('a2v');
+    expect(VIDEO_RUNTIME_MODES.ltx25).toContain('a2v');
+  });
 });
 
 describe('resolveVideoSupportedModes', () => {
@@ -36,7 +46,7 @@ describe('resolveVideoSupportedModes', () => {
 
   it('treats an absent, non-array or empty list as "not declared"', () => {
     for (const supportedModes of [undefined, null, [], 'text']) {
-      expect(resolveVideoSupportedModes({ runtime: 'hunyuan', supportedModes })).toEqual(['text']);
+      expect(resolveVideoSupportedModes({ runtime: 'wan22', supportedModes })).toEqual(['text', 'image']);
     }
   });
 
@@ -49,22 +59,22 @@ describe('resolveVideoSupportedModes', () => {
 describe('applyVideoSupportedModes', () => {
   it('resolves a list for every entry without mutating the inputs', () => {
     const entries = [
-      { id: 'a', runtime: 'hunyuan' },
+      { id: 'a', runtime: 'some-future-runtime' },
       { id: 'b', runtime: 'wan22', supportedModes: ['image'] },
       { id: 'c', runtime: 'ltx2' },
     ];
     const out = applyVideoSupportedModes(entries);
     expect(out.map((e) => e.supportedModes)).toEqual([
-      ['text'],
-      ['image'],
       ['text', 'image', 'fflf', 'extend'],
+      ['image'],
+      ['text', 'image', 'fflf', 'extend', 'a2v'],
     ]);
     expect(entries[0].supportedModes).toBeUndefined();
   });
 
   it('hands back a copy, never the frozen shared table', () => {
-    const [entry] = applyVideoSupportedModes([{ id: 'a', runtime: 'hunyuan' }]);
-    expect(entry.supportedModes).not.toBe(VIDEO_RUNTIME_MODES.hunyuan);
+    const [entry] = applyVideoSupportedModes([{ id: 'a', runtime: 'wan22' }]);
+    expect(entry.supportedModes).not.toBe(VIDEO_RUNTIME_MODES.wan22);
   });
 
   it('passes through non-entries and a non-array list', () => {

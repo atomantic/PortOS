@@ -42,20 +42,34 @@ import {
 } from './store.js';
 import { LOOM_LIMITS } from './limits.js';
 import { asLoomFormat, isLoomFormat } from './formats.js';
-import { asFableLoomPlaybackMode } from '../../lib/fableLoomPlayback.js';
+import {
+  asFableLoomPlaybackMode,
+  FABLELOOM_PROTAGONIST_PRESENCE,
+  isSafeVideoHistoryId,
+  sanitizeInteractionWindow,
+  sanitizePlaybackAssets,
+  sanitizeVisualConditioning,
+} from '../../lib/fableLoomPlayback.js';
 import {
   FABLELOOM_LEGACY_PARTICIPATION_MODE,
   asFableLoomAudienceConnection,
   asFableLoomParticipationMode,
 } from '../../lib/fableLoomParticipation.js';
 import { normalizeFableLoomCameraMovement } from '../../lib/fableLoomCameraMovements.js';
+import {
+  analyzeStoryOutline,
+  analyzeStoryOutlineTeleplaySync,
+  FABLELOOM_CHALLENGE_PHASES,
+  fableLoomEpisodeChallenges,
+  fableLoomPlotPointKind,
+  sanitizeStoryOutline,
+} from '../../lib/fableLoomOutline.js';
+import { asFableLoomRenderSettings } from '../../lib/fableLoomProduction.js';
 
 export { LOOM_LIMITS };
 
 const isSafeImageFilename = (value) =>
   typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]*\.(png|jpg|jpeg|webp)$/i.test(value);
-const isSafeVideoHistoryId = (value) =>
-  typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(value);
 
 const nullableRef = (value) => (isStr(value) && value.trim() ? value.trim().slice(0, LOOM_LIMITS.REF_ID_MAX) : null);
 
@@ -63,6 +77,29 @@ const sanitizePos = (raw) => (raw && typeof raw === 'object'
   && Number.isFinite(raw.x) && Number.isFinite(raw.y)
   ? { x: Math.round(raw.x), y: Math.round(raw.y) }
   : null);
+
+const sanitizeVisualCanon = (raw) => {
+  if (!raw || typeof raw !== 'object') return null;
+  const appearances = (Array.isArray(raw.characterAppearances) ? raw.characterAppearances : [])
+    .filter((item) => item && typeof item === 'object' && nullableRef(item.characterId))
+    .slice(0, LOOM_LIMITS.VISUAL_BINDINGS_MAX)
+    .map((item) => ({
+      characterId: nullableRef(item.characterId),
+      wardrobeId: nullableRef(item.wardrobeId),
+      expression: trimTo(item.expression, LOOM_LIMITS.VISUAL_NOTE_MAX),
+      continuityNotes: trimTo(item.continuityNotes, LOOM_LIMITS.VISUAL_NOTE_MAX),
+    }));
+  return {
+    mode: raw.mode === 'draft' ? 'draft' : 'locked',
+    characterAppearances: appearances,
+    placeId: nullableRef(raw.placeId),
+    objectIds: (Array.isArray(raw.objectIds) ? raw.objectIds : [])
+      .map(nullableRef).filter(Boolean).slice(0, LOOM_LIMITS.VISUAL_BINDINGS_MAX),
+    continuitySourceNodeId: nullableRef(raw.continuitySourceNodeId),
+    shotNotes: trimTo(raw.shotNotes, LOOM_LIMITS.VISUAL_NOTE_MAX),
+    storyboardImageApproved: raw.storyboardImageApproved === true,
+  };
+};
 
 function sanitizeTransition(raw) {
   if (!raw || typeof raw !== 'object') return null;
@@ -87,14 +124,27 @@ function sanitizeNode(raw) {
     id: raw.id,
     title: trimTo(raw.title, LOOM_LIMITS.NODE_TITLE_MAX),
     prose: trimTo(raw.prose, LOOM_LIMITS.PROSE_MAX),
+    plotPointId: isStr(raw.plotPointId)
+      ? raw.plotPointId.trim().slice(0, LOOM_LIMITS.OUTLINE_KEY_MAX)
+      : null,
+    challengePhase: FABLELOOM_CHALLENGE_PHASES.includes(raw.challengePhase)
+      ? raw.challengePhase
+      : null,
     imagePrompt: trimTo(raw.imagePrompt, LOOM_LIMITS.IMAGE_PROMPT_MAX),
     image: isSafeImageFilename(raw.image) ? raw.image : null,
     imageJobId: isStr(raw.imageJobId) && raw.imageJobId ? raw.imageJobId.slice(0, 200) : null,
     videoPrompt: trimTo(raw.videoPrompt, LOOM_LIMITS.VIDEO_PROMPT_MAX),
     cameraMovement: trimTo(normalizeFableLoomCameraMovement(raw.cameraMovement), LOOM_LIMITS.CAMERA_MOVEMENT_MAX),
+    visualCanon: sanitizeVisualCanon(raw.visualCanon),
+    visualConditioning: sanitizeVisualConditioning(raw.visualConditioning),
     playbackMode: asFableLoomPlaybackMode(raw.playbackMode),
     audienceConnection: asFableLoomAudienceConnection(raw.audienceConnection),
+    protagonistPresence: FABLELOOM_PROTAGONIST_PRESENCE.includes(raw.protagonistPresence)
+      ? raw.protagonistPresence
+      : null,
     videoHistoryId: isSafeVideoHistoryId(raw.videoHistoryId) ? raw.videoHistoryId : null,
+    playbackAssets: sanitizePlaybackAssets(raw.playbackAssets),
+    interactionWindow: sanitizeInteractionWindow(raw.interactionWindow),
     isEnding: raw.isEnding === true,
     // The format this scene's text is actually WRITTEN in — server-set, not
     // patchable. `null` means unknown (authored before the field existed, or
@@ -111,7 +161,7 @@ function sanitizeNode(raw) {
   };
 }
 
-function sanitizeEpisode(raw) {
+function sanitizeEpisode(raw, participationMode = 'protagonist') {
   if (!raw || typeof raw !== 'object' || !isStr(raw.id) || !raw.id) return null;
   const nodes = (Array.isArray(raw.nodes) ? raw.nodes : [])
     .map(sanitizeNode)
@@ -122,6 +172,7 @@ function sanitizeEpisode(raw) {
   // since-deleted id) are deliberately KEPT — the graph validation surfaces
   // them as errors the author resolves, rather than silently rewriting edges.
   const now = new Date().toISOString();
+  const storyOutline = sanitizeStoryOutline(raw.storyOutline, { participationMode });
   return {
     id: raw.id,
     number: Number.isFinite(raw.number) ? Math.max(1, Math.round(raw.number)) : 1,
@@ -129,6 +180,7 @@ function sanitizeEpisode(raw) {
     synopsis: trimTo(raw.synopsis, LOOM_LIMITS.SYNOPSIS_MAX),
     startNodeId: isStr(raw.startNodeId) && nodeIds.has(raw.startNodeId) ? raw.startNodeId : (nodes[0]?.id ?? null),
     nodes,
+    ...(storyOutline ? { storyOutline } : {}),
     createdAt: isStr(raw.createdAt) && raw.createdAt ? raw.createdAt : now,
     updatedAt: isStr(raw.updatedAt) && raw.updatedAt ? raw.updatedAt : now,
   };
@@ -150,6 +202,33 @@ function sanitizeSeriesPlan(raw, episodes) {
   const episodeIds = new Set(episodes.map((episode) => episode.id));
   const plotIds = new Set();
   const questIds = new Set();
+  const hasDeliveryPlan = source.deliveryOptions && typeof source.deliveryOptions === 'object'
+    || Array.isArray(source.interEpisodeVoicemails)
+    || source.nextSeasonTeaser !== undefined;
+  const deliveryOptions = source.deliveryOptions && typeof source.deliveryOptions === 'object'
+    ? {
+      overnightVoicemails: source.deliveryOptions.overnightVoicemails === true,
+      nextSeasonTeaser: source.deliveryOptions.nextSeasonTeaser === true,
+    }
+    : { overnightVoicemails: false, nextSeasonTeaser: false };
+  const voicemailIds = new Set();
+  const interEpisodeVoicemails = (Array.isArray(source.interEpisodeVoicemails)
+    ? source.interEpisodeVoicemails : [])
+    .slice(0, LOOM_LIMITS.EPISODES_MAX)
+    .filter((item) => item && typeof item === 'object')
+    .map((item) => ({
+      id: planItemId('voicemail', item.id, voicemailIds),
+      fromEpisodeId: planEpisodeRef(item.fromEpisodeId, episodeIds),
+      toEpisodeId: planEpisodeRef(item.toEpisodeId, episodeIds),
+      title: trimTo(item.title, LOOM_LIMITS.PLAN_ITEM_TITLE_MAX),
+      transcript: trimTo(item.transcript, LOOM_LIMITS.DELIVERY_MESSAGE_MAX),
+    }));
+  const teaser = source.nextSeasonTeaser && typeof source.nextSeasonTeaser === 'object'
+    ? {
+      title: trimTo(source.nextSeasonTeaser.title, LOOM_LIMITS.PLAN_ITEM_TITLE_MAX),
+      transcript: trimTo(source.nextSeasonTeaser.transcript, LOOM_LIMITS.DELIVERY_MESSAGE_MAX),
+    }
+    : null;
   return {
     storyArc: trimTo(source.storyArc, LOOM_LIMITS.STORY_ARC_MAX),
     plotPoints: (Array.isArray(source.plotPoints) ? source.plotPoints : [])
@@ -157,6 +236,7 @@ function sanitizeSeriesPlan(raw, episodes) {
       .slice(0, LOOM_LIMITS.PLAN_ITEMS_MAX)
       .map((item) => ({
         id: planItemId('plot', item.id, plotIds),
+        kind: fableLoomPlotPointKind(item),
         title: trimTo(item.title, LOOM_LIMITS.PLAN_ITEM_TITLE_MAX),
         description: trimTo(item.description, LOOM_LIMITS.PLAN_ITEM_DESCRIPTION_MAX),
         episodeId: planEpisodeRef(item.episodeId, episodeIds),
@@ -172,6 +252,11 @@ function sanitizeSeriesPlan(raw, episodes) {
         startEpisodeId: planEpisodeRef(item.startEpisodeId, episodeIds),
         endEpisodeId: planEpisodeRef(item.endEpisodeId, episodeIds),
       })),
+    ...(hasDeliveryPlan ? {
+      deliveryOptions,
+      interEpisodeVoicemails,
+      nextSeasonTeaser: teaser,
+    } : {}),
   };
 }
 
@@ -182,19 +267,58 @@ export function sanitizeLoom(raw) {
   if (!name) return null;
   const now = new Date().toISOString();
   const { deleted, deletedAt } = sanitizeSoftDeleteFields(raw);
+  const participationMode = asFableLoomParticipationMode(raw.participationMode);
   const episodes = (Array.isArray(raw.episodes) ? raw.episodes : [])
-    .map(sanitizeEpisode)
+    .map((episode) => sanitizeEpisode(episode, participationMode))
     .filter(Boolean)
     .slice(0, LOOM_LIMITS.EPISODES_MAX)
     .sort((a, b) => a.number - b.number || a.createdAt.localeCompare(b.createdAt));
+  const seriesPlan = sanitizeSeriesPlan(raw.seriesPlan, episodes);
+  for (const episode of episodes) {
+    if (episode.storyOutline?.validation?.status !== 'valid') continue;
+    const outline = analyzeStoryOutline(episode.storyOutline, {
+      participationMode,
+      requireAudienceIntroduction: episode === episodes[0],
+      challenges: fableLoomEpisodeChallenges({ seriesPlan }, episode.id),
+    });
+    if (outline.stats.errorCount > 0) {
+      episode.storyOutline.validation = { status: 'invalid', issues: outline.issues };
+      continue;
+    }
+    const sync = analyzeStoryOutlineTeleplaySync(episode, episode.storyOutline, {
+      participationMode,
+    });
+    if (!sync.stats.matches) {
+      episode.storyOutline.validation = { status: 'draft', issues: sync.issues };
+    }
+  }
+  const protagonistCharacterId = nullableRef(raw.protagonistCharacterId);
+  const protagonistWardrobeId = nullableRef(raw.protagonistWardrobeId);
+  const productionStatus = raw.productionStatus && typeof raw.productionStatus === 'object'
+    ? {
+      editorialApprovedAt: isStr(raw.productionStatus.editorialApprovedAt)
+        ? raw.productionStatus.editorialApprovedAt.slice(0, 80)
+        : null,
+      editorialApprovalSource: ['manual', 'autopilot'].includes(raw.productionStatus.editorialApprovalSource)
+        ? raw.productionStatus.editorialApprovalSource
+        : null,
+      deliveryApprovedAt: isStr(raw.productionStatus.deliveryApprovedAt)
+        ? raw.productionStatus.deliveryApprovedAt.slice(0, 80)
+        : null,
+    }
+    : {
+      editorialApprovedAt: null,
+      editorialApprovalSource: null,
+      deliveryApprovedAt: null,
+    };
   return {
     id: raw.id,
-    schemaVersion: 1,
+    schemaVersion: 3,
     name,
     logline: trimTo(raw.logline, LOOM_LIMITS.LOGLINE_MAX),
     premise: trimTo(raw.premise, LOOM_LIMITS.PREMISE_MAX),
     styleNotes: trimTo(raw.styleNotes, LOOM_LIMITS.STYLE_NOTES_MAX),
-    participationMode: asFableLoomParticipationMode(raw.participationMode),
+    participationMode,
     audienceCommunicationMedium: trimTo(
       raw.audienceCommunicationMedium,
       LOOM_LIMITS.AUDIENCE_COMMUNICATION_MEDIUM_MAX,
@@ -204,9 +328,14 @@ export function sanitizeLoom(raw) {
     // turns a reader's free text into a path. An unset dimension stays null
     // ('fall through to the stage pin / active provider').
     playSettings: sanitizeLlmRoutePin(raw.playSettings),
+    renderSettings: asFableLoomRenderSettings(raw.renderSettings),
+    protagonistCharacterId,
+    protagonistWardrobeId,
+    protagonistWardrobeLocked: Boolean(protagonistWardrobeId && raw.protagonistWardrobeLocked !== false),
     universeId: nullableRef(raw.universeId),
     seriesId: nullableRef(raw.seriesId),
-    seriesPlan: sanitizeSeriesPlan(raw.seriesPlan, episodes),
+    seriesPlan,
+    productionStatus,
     episodes,
     createdAt: isStr(raw.createdAt) && raw.createdAt ? raw.createdAt : now,
     updatedAt: isStr(raw.updatedAt) && raw.updatedAt ? raw.updatedAt : now,
@@ -214,6 +343,78 @@ export function sanitizeLoom(raw) {
     deletedAt,
   };
 }
+
+const editorialVisualCanon = (visualCanon) => {
+  if (!visualCanon) return null;
+  const { storyboardImageApproved: _storyboardImageApproved, ...storyCanon } = visualCanon;
+  return storyCanon;
+};
+
+// Approval invalidation is content-aware: authoring edits reopen editorial and
+// final delivery, while a completed render only reopens delivery. This avoids
+// using loom.updatedAt as a proxy, because media completion also updates it.
+const editorialContentSignature = (loom) => JSON.stringify({
+  name: loom.name,
+  logline: loom.logline,
+  premise: loom.premise,
+  styleNotes: loom.styleNotes,
+  participationMode: loom.participationMode,
+  audienceCommunicationMedium: loom.audienceCommunicationMedium,
+  format: loom.format,
+  protagonistCharacterId: loom.protagonistCharacterId,
+  protagonistWardrobeId: loom.protagonistWardrobeId,
+  protagonistWardrobeLocked: loom.protagonistWardrobeLocked,
+  universeId: loom.universeId,
+  seriesId: loom.seriesId,
+  seriesPlan: loom.seriesPlan,
+  episodes: loom.episodes.map((episode) => ({
+    id: episode.id,
+    number: episode.number,
+    title: episode.title,
+    synopsis: episode.synopsis,
+    startNodeId: episode.startNodeId,
+    storyOutline: episode.storyOutline ? {
+      version: episode.storyOutline.version,
+      startKey: episode.storyOutline.startKey,
+      scenes: episode.storyOutline.scenes,
+    } : null,
+    nodes: episode.nodes.map((node) => ({
+      id: node.id,
+      title: node.title,
+      prose: node.prose,
+      plotPointId: node.plotPointId,
+      challengePhase: node.challengePhase,
+      imagePrompt: node.imagePrompt,
+      videoPrompt: node.videoPrompt,
+      cameraMovement: node.cameraMovement,
+      visualCanon: editorialVisualCanon(node.visualCanon),
+      playbackMode: node.playbackMode,
+      audienceConnection: node.audienceConnection,
+      protagonistPresence: node.protagonistPresence,
+      interactionWindow: node.interactionWindow,
+      isEnding: node.isEnding,
+      format: node.format,
+      endingLabel: node.endingLabel,
+      transitions: node.transitions,
+    })),
+  })),
+});
+
+const deliveryContentSignature = (loom) => JSON.stringify({
+  renderSettings: loom.renderSettings,
+  episodes: loom.episodes.map((episode) => ({
+    id: episode.id,
+    nodes: episode.nodes.map((node) => ({
+      id: node.id,
+      image: node.image,
+      imageJobId: node.imageJobId,
+      videoHistoryId: node.videoHistoryId,
+      playbackAssets: node.playbackAssets,
+      visualConditioning: node.visualConditioning,
+      storyboardImageApproved: node.visualCanon?.storyboardImageApproved === true,
+    })),
+  })),
+});
 
 const notFound = (what = 'Loom') => new ServerError(`${what} not found`, { status: 404, code: 'NOT_FOUND' });
 
@@ -297,7 +498,8 @@ const assertParticipationConfigured = ({ participationMode, audienceCommunicatio
 };
 
 export async function createLoom({
-  name, logline, premise, styleNotes, format, playSettings, seriesPlan,
+  name, logline, premise, styleNotes, format, playSettings, renderSettings, seriesPlan,
+  protagonistCharacterId, protagonistWardrobeId, protagonistWardrobeLocked,
   participationMode = FABLELOOM_LEGACY_PARTICIPATION_MODE,
   audienceCommunicationMedium, universeId, seriesId,
 } = {}) {
@@ -314,6 +516,10 @@ export async function createLoom({
     audienceCommunicationMedium,
     format,
     playSettings,
+    renderSettings,
+    protagonistCharacterId,
+    protagonistWardrobeId,
+    protagonistWardrobeLocked,
     seriesPlan,
     universeId,
     seriesId,
@@ -337,10 +543,21 @@ export async function mutateLoom(id, mutator) {
   if (!isValidLoomId(id)) throw notFound();
   const result = await queueLoomWrite(id, async () => {
     const current = await requireLoomRaw(id);
+    const currentEditorialSignature = editorialContentSignature(current);
+    const currentDeliverySignature = deliveryContentSignature(current);
     const changed = await mutator(current);
     if (!changed) return { loom: current, changed: false };
     const next = sanitizeLoom({ ...changed, id, updatedAt: new Date().toISOString() });
     if (!next) throw new ServerError('Invalid loom record', { status: 400, code: 'VALIDATION_ERROR' });
+    const editorialChanged = editorialContentSignature(next) !== currentEditorialSignature;
+    const deliveryChanged = deliveryContentSignature(next) !== currentDeliverySignature;
+    if (editorialChanged) {
+      next.productionStatus.editorialApprovedAt = null;
+      next.productionStatus.editorialApprovalSource = null;
+      next.productionStatus.deliveryApprovedAt = null;
+    } else if (deliveryChanged) {
+      next.productionStatus.deliveryApprovedAt = null;
+    }
     await writeRaw(id, next);
     return { loom: next, changed: true };
   });
@@ -349,12 +566,16 @@ export async function mutateLoom(id, mutator) {
 }
 
 const PATCH_FIELDS = [
-  'name', 'logline', 'premise', 'styleNotes', 'format', 'playSettings', 'seriesPlan',
+  'name', 'logline', 'premise', 'styleNotes', 'format', 'playSettings', 'renderSettings', 'seriesPlan',
+  'productionStatus',
+  'protagonistCharacterId', 'protagonistWardrobeId', 'protagonistWardrobeLocked',
   'participationMode', 'audienceCommunicationMedium', 'universeId', 'seriesId',
 ];
 
 const RESTORABLE_FIELDS = [
-  'name', 'logline', 'premise', 'styleNotes', 'format', 'playSettings', 'seriesPlan',
+  'name', 'logline', 'premise', 'styleNotes', 'format', 'playSettings', 'renderSettings', 'seriesPlan',
+  'productionStatus',
+  'protagonistCharacterId', 'protagonistWardrobeId', 'protagonistWardrobeLocked',
   'participationMode', 'audienceCommunicationMedium', 'episodes',
 ];
 
@@ -400,6 +621,78 @@ export async function deleteLoom(id) {
   emitRecordDeleted('fableLoom', id);
 }
 
+// An older peer cannot represent newer scene production fields. When that
+// peer wins whole-record LWW after an unrelated edit, retain the local fields
+// on nodes that still exist instead of letting its unaware sanitizer clear
+// them. A sender at the current schema version's present null remains an
+// intentional clear.
+const preserveLegacyVisualProduction = (remote, local, senderVersion) => {
+  if (!local || senderVersion >= 5) return remote;
+  const localEpisodes = new Map(local.episodes.map((episode) => [episode.id, episode]));
+  const localPlotPoints = new Map((local.seriesPlan?.plotPoints || []).map((item) => [item.id, item]));
+  return {
+    ...remote,
+    ...(senderVersion < 5 ? {
+      renderSettings: local.renderSettings,
+      productionStatus: local.productionStatus,
+    } : {}),
+    seriesPlan: senderVersion < 5 ? {
+      ...remote.seriesPlan,
+      plotPoints: (remote.seriesPlan?.plotPoints || []).map((item) => ({
+        ...item,
+        ...(localPlotPoints.has(item.id) ? { kind: localPlotPoints.get(item.id).kind } : {}),
+      })),
+    } : remote.seriesPlan,
+    ...(senderVersion < 4 ? {
+      protagonistCharacterId: local.protagonistCharacterId,
+      protagonistWardrobeId: local.protagonistWardrobeId,
+      protagonistWardrobeLocked: local.protagonistWardrobeLocked,
+    } : {}),
+    episodes: remote.episodes.map((episode) => {
+      const localEpisode = localEpisodes.get(episode.id);
+      const localNodes = new Map((localEpisode?.nodes || []).map((node) => [node.id, node]));
+      const localOutlineScenes = new Map((localEpisode?.storyOutline?.scenes || [])
+        .map((scene) => [scene.key, scene]));
+      return {
+        ...episode,
+        ...(senderVersion < 5 && episode.storyOutline ? {
+          storyOutline: {
+            ...episode.storyOutline,
+            scenes: episode.storyOutline.scenes.map((scene) => ({
+              ...scene,
+              ...(localOutlineScenes.has(scene.key) ? {
+                plotPointId: localOutlineScenes.get(scene.key).plotPointId,
+                challengePhase: localOutlineScenes.get(scene.key).challengePhase,
+              } : {}),
+            })),
+          },
+        } : {}),
+        nodes: episode.nodes.map((node) => {
+          const localNode = localNodes.get(node.id);
+          return localNode ? {
+            ...node,
+            ...(senderVersion < 5 ? {
+              plotPointId: localNode.plotPointId,
+              challengePhase: localNode.challengePhase,
+            } : {}),
+            ...(senderVersion < 4 ? { protagonistPresence: localNode.protagonistPresence } : {}),
+            ...(senderVersion < 3 ? {
+              visualCanon: localNode.visualCanon,
+              visualConditioning: localNode.visualConditioning,
+              playbackAssets: {
+                ...node.playbackAssets,
+                ...(localNode.playbackAssets?.visualConditioningByAsset
+                  ? { visualConditioningByAsset: localNode.playbackAssets.visualConditioningByAsset }
+                  : {}),
+              },
+            } : {}),
+          } : node;
+        }),
+      };
+    }),
+  };
+};
+
 /**
  * Merge FableLoom records received from a federated peer. Records are
  * sanitized before persistence, unioned by id, and resolved by whole-record
@@ -407,7 +700,10 @@ export async function deleteLoom(id) {
  */
 export async function mergeLoomsFromSync(
   remoteLooms,
-  { source = { via: 'sync', peerId: null } } = {},
+  {
+    source = { via: 'sync', peerId: null },
+    senderSchemaVersions = { fableLoom: 5 },
+  } = {},
 ) {
   if (!Array.isArray(remoteLooms)) return { applied: false, count: 0 };
   const byId = new Map();
@@ -421,18 +717,23 @@ export async function mergeLoomsFromSync(
     const applied = await queueLoomWrite(remote.id, async () => {
       const local = sanitizeLoom(await readRaw(remote.id));
       if (local && !compareNewerWins(remote.updatedAt, local.updatedAt)) return false;
+      const merged = preserveLegacyVisualProduction(
+        remote,
+        local,
+        Number(senderSchemaVersions?.fableLoom) || 0,
+      );
       if (local) {
         await maybeJournalBeforeOverwrite({
-          kind: 'fableLoom', id: remote.id, local, remote, source,
+          kind: 'fableLoom', id: remote.id, local, remote: merged, source,
         });
       } else {
         await setSyncBaseHash(
           'fableLoom',
-          remote.id,
-          contentHashForRecord('fableLoom', remote),
+          merged.id,
+          contentHashForRecord('fableLoom', merged),
         );
       }
-      await writeRaw(remote.id, remote);
+      await writeRaw(merged.id, merged);
       return true;
     });
     if (applied) changed += 1;
@@ -512,6 +813,16 @@ export function updateEpisode(loomId, episodeId, patch = {}) {
     for (const key of ['title', 'synopsis', 'number', 'startNodeId']) {
       if (key in patch) episode[key] = patch[key];
     }
+    if ('storyOutline' in patch) {
+      episode.storyOutline = patch.storyOutline
+        ? { ...patch.storyOutline, validation: { status: 'draft', issues: [] } }
+        : null;
+    } else if (('title' in patch || 'synopsis' in patch) && episode.storyOutline) {
+      // A changed synopsis or title can change the dramatic contract the
+      // outline was validated against, so expansion must pass through the
+      // outline validation step again.
+      episode.storyOutline.validation = { status: 'draft', issues: [] };
+    }
     episode.updatedAt = new Date().toISOString();
     return loom;
   });
@@ -528,8 +839,9 @@ export function deleteEpisode(loomId, episodeId) {
 // --- Nodes & transitions ----------------------------------------------------
 
 const NODE_PATCH_FIELDS = [
-  'title', 'prose', 'imagePrompt', 'videoPrompt', 'cameraMovement', 'playbackMode',
-  'audienceConnection', 'isEnding', 'endingLabel', 'pos', 'transitions',
+  'title', 'prose', 'plotPointId', 'challengePhase', 'imagePrompt', 'videoPrompt', 'cameraMovement', 'playbackMode',
+  'audienceConnection', 'protagonistPresence', 'visualCanon', 'videoHistoryId', 'playbackAssets', 'interactionWindow',
+  'isEnding', 'endingLabel', 'pos', 'transitions',
 ];
 
 export function addNode(loomId, episodeId, fields = {}) {
@@ -654,7 +966,7 @@ export function deleteNodeTransition(loomId, episodeId, nodeId, transitionId) {
  * updated node (or null when the loom/episode/node has since been deleted —
  * the hook logs and moves on rather than erroring).
  */
-export async function attachNodeImage(loomId, episodeId, nodeId, { filename, jobId }) {
+export async function attachNodeImage(loomId, episodeId, nodeId, { filename, jobId, visualConditioning = null }) {
   if (!isValidLoomId(loomId) || !isSafeImageFilename(filename)) return null;
   const updated = await mutateLoom(loomId, (loom) => {
     const episode = loom.episodes.find((e) => e.id === episodeId);
@@ -662,6 +974,29 @@ export async function attachNodeImage(loomId, episodeId, nodeId, { filename, job
     if (!node) return null;
     node.image = filename;
     node.imageJobId = isStr(jobId) ? jobId : null;
+    node.visualConditioning = visualConditioning;
+    const retainedConditioning = Object.fromEntries(Object.entries(
+      node.playbackAssets?.visualConditioningByAsset || {},
+    ).filter(([, manifest]) => manifest?.capability?.kind !== 'image'));
+    if (node.playbackAssets) {
+      node.playbackAssets = {
+        ...node.playbackAssets,
+        ...(Object.keys(retainedConditioning).length
+          ? { visualConditioningByAsset: retainedConditioning }
+          : {}),
+      };
+      if (!Object.keys(retainedConditioning).length) delete node.playbackAssets.visualConditioningByAsset;
+    }
+    if (visualConditioning && isSafeVideoHistoryId(visualConditioning.assetId)) {
+      node.playbackAssets = {
+        ...(node.playbackAssets || {}),
+        visualConditioningByAsset: {
+          ...(node.playbackAssets?.visualConditioningByAsset || {}),
+          [visualConditioning.assetId]: visualConditioning,
+        },
+      };
+    }
+    if (node.visualCanon) node.visualCanon.storyboardImageApproved = false;
     episode.updatedAt = new Date().toISOString();
     return loom;
   }).catch(() => null);
@@ -673,15 +1008,80 @@ export async function attachNodeImage(loomId, episodeId, nodeId, { filename, job
  * are also the generated filenames under data/videos, but are kept as ids so
  * the node can use the same history/media conventions as other video surfaces.
  */
-export async function attachNodeVideo(loomId, episodeId, nodeId, { videoHistoryId }) {
+export async function attachNodeVideo(loomId, episodeId, nodeId, { videoHistoryId, visualConditioning = null }) {
   if (!isValidLoomId(loomId) || !isSafeVideoHistoryId(videoHistoryId)) return null;
   const updated = await mutateLoom(loomId, (loom) => {
     const episode = loom.episodes.find((e) => e.id === episodeId);
     const node = episode?.nodes.find((n) => n.id === nodeId);
     if (!node) return null;
     node.videoHistoryId = videoHistoryId;
+    node.visualConditioning = visualConditioning;
     episode.updatedAt = new Date().toISOString();
     return loom;
   }).catch(() => null);
+  return updated?.episodes.find((e) => e.id === episodeId)?.nodes.find((n) => n.id === nodeId) ?? null;
+}
+
+/**
+ * Attach a typed playback asset (entry clip, hold loop, or transition exit) onto
+ * a node with optional audio occupancy manifest and provenance.
+ */
+export async function attachNodePlaybackAsset(loomId, episodeId, nodeId, {
+  role = 'entry',
+  videoHistoryId,
+  transitionId = null,
+  audioOccupancy = null,
+  provenance = null,
+  visualConditioning = null,
+} = {}) {
+  if (!isValidLoomId(loomId) || !isSafeVideoHistoryId(videoHistoryId)) return null;
+  const updated = await mutateLoom(loomId, (loom) => {
+    const episode = loom.episodes.find((e) => e.id === episodeId);
+    const node = episode?.nodes.find((n) => n.id === nodeId);
+    if (!node) return null;
+
+    const currentAssets = node.playbackAssets || {
+      entryVideoHistoryId: null,
+      holdLoopVideoHistoryIds: [],
+      exitByTransition: {},
+      audioOccupancy: {},
+    };
+
+    const nextAssets = {
+      ...currentAssets,
+      exitByTransition: { ...(currentAssets.exitByTransition || {}) },
+      audioOccupancy: { ...(currentAssets.audioOccupancy || {}) },
+      holdLoopVideoHistoryIds: [...(currentAssets.holdLoopVideoHistoryIds || [])],
+      visualConditioningByAsset: { ...(currentAssets.visualConditioningByAsset || {}) },
+    };
+
+    if (role === 'entry') {
+      nextAssets.entryVideoHistoryId = videoHistoryId;
+      node.videoHistoryId = videoHistoryId;
+    } else if (role === 'hold') {
+      if (!nextAssets.holdLoopVideoHistoryIds.includes(videoHistoryId)) {
+        nextAssets.holdLoopVideoHistoryIds.push(videoHistoryId);
+      }
+      if (!node.videoHistoryId) node.videoHistoryId = videoHistoryId;
+    } else if (role === 'exit' && isStr(transitionId)) {
+      nextAssets.exitByTransition[transitionId] = videoHistoryId;
+    }
+
+    if (audioOccupancy) {
+      nextAssets.audioOccupancy[videoHistoryId] = audioOccupancy;
+    }
+    if (provenance) {
+      nextAssets.provenance = provenance;
+    }
+    if (visualConditioning) {
+      nextAssets.visualConditioningByAsset[videoHistoryId] = visualConditioning;
+      node.visualConditioning = visualConditioning;
+    }
+
+    node.playbackAssets = nextAssets;
+    episode.updatedAt = new Date().toISOString();
+    return loom;
+  }).catch(() => null);
+
   return updated?.episodes.find((e) => e.id === episodeId)?.nodes.find((n) => n.id === nodeId) ?? null;
 }

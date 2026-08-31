@@ -44,10 +44,26 @@ vi.mock('../services/datadog.js', () => ({
 vi.mock('../services/jira.js', () => ({
   hasConfiguredInstances: vi.fn(async () => false),
 }));
+vi.mock('../lib/gitRemote.js', () => ({
+  getOriginInfo: vi.fn(async () => ({ isGithub: true, owner: 'example-owner' })),
+}));
+vi.mock('../services/eidoverse.js', () => ({
+  DEFAULT_EIDOVERSE_WORLDS_REPO: 'https://github.com/anima-research/eidoverse-worlds',
+  normalizeEidoverseWorldsRepo: vi.fn((url) => url),
+  getEidoverseStatus: vi.fn(async () => ({ installed: false, bunAvailable: true, registryAvailable: true })),
+  assertEidoverseInstalled: vi.fn(async () => ({ installed: true })),
+  setEidoverseWorldsOrigin: vi.fn(async () => ({ appId: 'app-eidoverse' })),
+  installEidoverse: vi.fn(async () => ({ installed: true })),
+}));
+vi.mock('../services/eidoverseHost.js', () => ({
+  ensureEidoverseHost: vi.fn(async () => ({ running: true, protocol: 'https', port: 5563 })),
+}));
 
 import settingsRoutes from './settings.js';
 import { hasConfiguredInstances as hasConfiguredDatadogInstances } from '../services/datadog.js';
 import { hasConfiguredInstances as hasConfiguredJiraInstances } from '../services/jira.js';
+import { assertEidoverseInstalled, installEidoverse, setEidoverseWorldsOrigin } from '../services/eidoverse.js';
+import { ensureEidoverseHost } from '../services/eidoverseHost.js';
 
 const buildApp = () => {
   const app = express();
@@ -115,6 +131,11 @@ describe('Settings routes — instance feature participation', () => {
     // detector responses so this default is independent of this host's setup.
     expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'datadog', enabled: false, source: 'auto' }));
     expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'jira', enabled: false, source: 'auto' }));
+    expect(res.body.features).toContainEqual(expect.objectContaining({
+      id: 'eidoverse',
+      enabled: false,
+      setup: expect.objectContaining({ installed: false }),
+    }));
     // GSD remains enabled by default so existing app planning tabs stay
     // available unless the install explicitly opts out.
     expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'gsd', enabled: true }));
@@ -161,6 +182,71 @@ describe('Settings routes — instance feature participation', () => {
     expect(res.status).toBe(200);
     expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'post', enabled: false }));
     expect(store).toEqual({ theme: 'dark', instanceFeatures: { post: { enabled: false } } });
+  });
+
+  it('installs and explicitly enables Eidoverse from its consent endpoint', async () => {
+    const worldsRepoUrl = 'https://github.com/example-owner/eidoverse-worlds';
+    const res = await request(buildApp())
+      .post('/api/settings/features/eidoverse/install')
+      .send({ worldsRepoUrl });
+
+    expect(res.status).toBe(201);
+    expect(installEidoverse).toHaveBeenCalledWith({ worldsRepoUrl });
+    expect(store.instanceFeatures.eidoverse.enabled).toBe(true);
+    expect(store.instanceFeatures.eidoverse.worldsRepoUrl).toBe(worldsRepoUrl);
+    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'eidoverse', enabled: true }));
+  });
+
+  it('updates the installed Eidoverse source without changing feature participation', async () => {
+    const worldsRepoUrl = 'git@github.com:example-owner/eidoverse-worlds.git';
+    store = { instanceFeatures: { eidoverse: { enabled: true } } };
+
+    const res = await request(buildApp())
+      .put('/api/settings/features/eidoverse/source')
+      .send({ worldsRepoUrl });
+
+    expect(res.status).toBe(200);
+    expect(setEidoverseWorldsOrigin).toHaveBeenCalledWith(worldsRepoUrl);
+    expect(store.instanceFeatures.eidoverse).toMatchObject({ enabled: true, worldsRepoUrl });
+  });
+
+  it('rejects an invalid Eidoverse source update before mutating the checkout', async () => {
+    const res = await request(buildApp())
+      .put('/api/settings/features/eidoverse/source')
+      .send({ worldsRepoUrl: 'https://example.com/not-github' });
+
+    expect(res.status).toBe(400);
+    expect(setEidoverseWorldsOrigin).not.toHaveBeenCalled();
+  });
+
+  it('opens the Eidoverse host bridge only after verifying the managed app installation', async () => {
+    const res = await request(buildApp()).post('/api/settings/features/eidoverse/host');
+
+    expect(res.status).toBe(200);
+    expect(assertEidoverseInstalled).toHaveBeenCalledOnce();
+    expect(ensureEidoverseHost).toHaveBeenCalledOnce();
+    expect(res.body).toEqual({ running: true, protocol: 'https', port: 5563 });
+  });
+
+  it('rejects a non-GitHub Worlds repository', async () => {
+    const res = await request(buildApp())
+      .post('/api/settings/features/eidoverse/install')
+      .send({ worldsRepoUrl: 'https://example.com/untrusted.git' });
+
+    expect(res.status).toBe(400);
+    expect(installEidoverse).not.toHaveBeenCalled();
+  });
+
+  it('rejects unexpected install payload fields', async () => {
+    const res = await request(buildApp())
+      .post('/api/settings/features/eidoverse/install')
+      .send({
+        worldsRepoUrl: 'https://github.com/example-owner/eidoverse-worlds',
+        repository: 'unexpected',
+      });
+
+    expect(res.status).toBe(400);
+    expect(installEidoverse).not.toHaveBeenCalled();
   });
 
   it('rejects unknown feature ids and malformed enabled values', async () => {

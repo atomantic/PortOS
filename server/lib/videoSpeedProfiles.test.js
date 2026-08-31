@@ -255,7 +255,7 @@ describe('validateSpeedProfileTable / sanitizeSpeedProfiles', () => {
   // SPEEDPROFILE: report would come back — so history would read as a full
   // speed-up that never happened.
   it('rejects profiles declared on a runtime whose builder cannot emit their flags', () => {
-    for (const runtime of ['mlx_video', 'wan22', 'minimax_h3', 'hunyuan', undefined]) {
+    for (const runtime of ['mlx_video', 'wan22', 'minimax_h3', 'fastvideo', undefined]) {
       const problems = validateSpeedProfileTable(withProfile(base, { runtime }));
       expect(problems).toHaveLength(1);
       expect(problems[0].reason).toMatch(/LTX-2-family runtime/);

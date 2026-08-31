@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../../services/api', () => ({
@@ -11,8 +12,23 @@ vi.mock('../../services/api', () => ({
   updateLoomTransition: vi.fn(),
 }));
 
+const pickerMocks = vi.hoisted(() => ({
+  item: { id: 'upload-example', filename: 'upload-example.mp4' },
+  props: vi.fn(),
+}));
+vi.mock('../videoGen/GalleryVideoPicker', () => ({
+  default: (props) => {
+    pickerMocks.props(props);
+    return props.open ? (
+      <button type="button" onClick={() => props.onSelect(pickerMocks.item)}>
+        Pick gallery video
+      </button>
+    ) : null;
+  },
+}));
+
 import {
-  addLoomTransition, branchLoomNode, deleteLoomTransition, updateLoomNode, updateLoomTransition,
+  addLoomTransition, branchLoomNode, deleteLoomNode, deleteLoomTransition, updateLoomNode, updateLoomTransition,
 } from '../../services/api';
 import LoomNodeEditor from './LoomNodeEditor';
 
@@ -38,18 +54,28 @@ const renderEditor = (transitions = [existingPath]) => {
   const onLoomUpdate = vi.fn();
   const onGenerateImage = vi.fn().mockResolvedValue({ jobId: 'image-1' });
   const onGenerateVideo = vi.fn().mockResolvedValue({ jobId: 'video-1' });
+  const onOpenFalVideo = vi.fn();
   render(
-    <LoomNodeEditor
-      loom={loom}
-      episode={episode}
-      node={nodes[0]}
-      onLoomUpdate={onLoomUpdate}
-      onClearSelection={() => {}}
-      onGenerateImage={onGenerateImage}
-      onGenerateVideo={onGenerateVideo}
-    />,
+    <MemoryRouter>
+      <LoomNodeEditor
+        loom={loom}
+        episode={episode}
+        node={nodes[0]}
+        universe={{
+          id: 'universe-1',
+          characters: [{ id: 'char-1', name: 'Aria', wardrobes: [{ id: 'coat', name: 'Travel coat' }] }],
+          places: [{ id: 'place-1', name: 'Atrium' }],
+          objects: [{ id: 'object-1', name: 'Compass' }],
+        }}
+        onLoomUpdate={onLoomUpdate}
+        onClearSelection={() => {}}
+        onGenerateImage={onGenerateImage}
+        onGenerateVideo={onGenerateVideo}
+        onOpenFalVideo={onOpenFalVideo}
+      />
+    </MemoryRouter>,
   );
-  return { onLoomUpdate, onGenerateImage, onGenerateVideo };
+  return { onLoomUpdate, onGenerateImage, onGenerateVideo, onOpenFalVideo };
 };
 
 const renderHelperEditor = () => {
@@ -71,9 +97,79 @@ const renderHelperEditor = () => {
   );
 };
 
-beforeEach(() => vi.clearAllMocks());
+const renderCanonicalEditor = (presence = 'onscreen') => {
+  const nodes = makeNodes([]);
+  nodes[0].protagonistPresence = presence;
+  nodes[0].visualCanon = {
+    mode: 'locked',
+    characterAppearances: presence === 'offscreen' ? [{ characterId: 'char-1', wardrobeId: 'coat' }] : [],
+    placeId: null,
+    objectIds: [],
+    continuitySourceNodeId: null,
+    shotNotes: '',
+    storyboardImageApproved: false,
+  };
+  const canonicalLoom = {
+    ...loom,
+    protagonistCharacterId: 'char-1',
+    protagonistWardrobeId: 'coat',
+    protagonistWardrobeLocked: true,
+  };
+  render(
+    <MemoryRouter>
+      <LoomNodeEditor
+        loom={canonicalLoom}
+        episode={{ id: 'ep-1', startNodeId: 'n1', nodes }}
+        node={nodes[0]}
+        universe={{
+          id: 'universe-1',
+          characters: [{ id: 'char-1', name: 'Aria', wardrobes: [{ id: 'coat', name: 'Travel coat' }] }],
+          places: [],
+          objects: [],
+        }}
+        onLoomUpdate={vi.fn()}
+        onClearSelection={() => {}}
+        onGenerateImage={vi.fn()}
+        onGenerateVideo={vi.fn()}
+      />
+    </MemoryRouter>,
+  );
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  pickerMocks.item = { id: 'upload-example', filename: 'upload-example.mp4' };
+});
 
 describe('LoomNodeEditor paths', () => {
+  it('requires confirmation before deleting a scene', async () => {
+    const user = userEvent.setup();
+    const onClearSelection = vi.fn();
+    const nodes = makeNodes([]);
+    deleteLoomNode.mockResolvedValue({ id: 'loom-1' });
+    render(
+      <LoomNodeEditor
+        loom={loom}
+        episode={{ id: 'ep-1', startNodeId: 'n1', nodes }}
+        node={nodes[0]}
+        onLoomUpdate={vi.fn()}
+        onClearSelection={onClearSelection}
+      />,
+    );
+
+    const trash = screen.getByRole('button', { name: 'Delete scene' });
+    expect(trash).toHaveClass('min-h-[44px]', 'min-w-[44px]');
+    await user.click(trash);
+
+    expect(deleteLoomNode).not.toHaveBeenCalled();
+    expect(screen.getByRole('group')).toHaveTextContent('Delete scene?');
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(deleteLoomNode).toHaveBeenCalledWith('loom-1', 'ep-1', 'n1'));
+    expect(onClearSelection).toHaveBeenCalledTimes(1);
+  });
+
   it('creates a path server-side first, so the new row already carries its id', async () => {
     const user = userEvent.setup();
     const minted = { id: 'tr-9', targetNodeId: 'n2', intent: '', triggers: [], description: '' };
@@ -134,6 +230,85 @@ describe('LoomNodeEditor paths', () => {
 });
 
 describe('LoomNodeEditor scene media', () => {
+  it('selects a protagonist from the linked Universe and surfaces reference readiness', async () => {
+    const user = userEvent.setup();
+    updateLoomNode.mockResolvedValue({ id: 'loom-1' });
+    renderEditor();
+
+    await user.click(screen.getByLabelText('Live conversation window (off-screen voice)'));
+    await user.selectOptions(screen.getByLabelText('Protagonist character'), 'char-1');
+
+    await waitFor(() => expect(updateLoomNode).toHaveBeenLastCalledWith(
+      'loom-1', 'ep-1', 'n1', {
+        interactionWindow: expect.objectContaining({
+          enabled: true,
+          protagonistCharacterId: 'char-1',
+        }),
+      }, { silent: true },
+    ));
+    expect(screen.getByRole('status')).toHaveTextContent('Needs character sheet');
+    expect(screen.getByRole('link', { name: 'Open Universe character sheets' })).toHaveAttribute(
+      'href', '/universes/universe-1?tab=cast',
+    );
+  });
+
+  it('persists structured canon bindings and explicit storyboard approval', async () => {
+    const user = userEvent.setup();
+    updateLoomNode.mockResolvedValue({ id: 'loom-1' });
+    renderEditor();
+
+    await user.click(screen.getByLabelText('Bind this shot to Universe canon'));
+    await user.click(screen.getByLabelText('Aria'));
+    await user.selectOptions(screen.getByLabelText('Aria wardrobe'), 'coat');
+    await user.selectOptions(screen.getByLabelText('Location'), 'place-1');
+    await user.click(screen.getByLabelText('Compass'));
+    await user.click(screen.getByLabelText("Approve the current storyboard image as this shot's video first frame"));
+
+    await waitFor(() => expect(updateLoomNode).toHaveBeenLastCalledWith(
+      'loom-1', 'ep-1', 'n1',
+      { visualCanon: expect.objectContaining({
+        mode: 'locked',
+        characterAppearances: [expect.objectContaining({ characterId: 'char-1', wardrobeId: 'coat' })],
+        placeId: 'place-1', objectIds: ['object-1'], storyboardImageApproved: true,
+      }) },
+      { silent: true },
+    ));
+  });
+
+  it('offers the canonical protagonist as a one-click visual-cast binding', async () => {
+    const user = userEvent.setup();
+    updateLoomNode.mockResolvedValue({ id: 'loom-1' });
+    renderCanonicalEditor();
+
+    await user.click(screen.getByRole('button', { name: 'Add canonical protagonist to visual cast' }));
+
+    await waitFor(() => expect(updateLoomNode).toHaveBeenCalledWith(
+      'loom-1', 'ep-1', 'n1', {
+        visualCanon: expect.objectContaining({
+          characterAppearances: [{
+            characterId: 'char-1', wardrobeId: 'coat', expression: '', continuityNotes: '',
+          }],
+        }),
+      }, { silent: true },
+    ));
+  });
+
+  it('removes the protagonist visual binding when a scene becomes off-screen', async () => {
+    const user = userEvent.setup();
+    updateLoomNode.mockResolvedValue({ id: 'loom-1' });
+    renderCanonicalEditor('offscreen');
+
+    await user.selectOptions(screen.getByLabelText('Visual protagonist presence'), 'offscreen');
+
+    await waitFor(() => expect(updateLoomNode).toHaveBeenCalledWith(
+      'loom-1', 'ep-1', 'n1', {
+        protagonistPresence: 'offscreen',
+        visualCanon: expect.objectContaining({ characterAppearances: [] }),
+      }, { silent: true },
+    ));
+    expect(screen.getByText(/Side-device conversation/)).toBeInTheDocument();
+  });
+
   it('queues a local video from the teleplay scene and rendered still', async () => {
     const user = userEvent.setup();
     const { onGenerateVideo } = renderEditor();
@@ -147,6 +322,48 @@ describe('LoomNodeEditor scene media', () => {
       id: 'n1', prose: scene, image: 'scene.png',
       videoPrompt: 'The gate opens in one continuous shot.', cameraMovement: 'slow-dolly-in',
     }));
+  });
+
+  it('hands the current scene direction to the fal free tool without waiting on a save', async () => {
+    const user = userEvent.setup();
+    const { onOpenFalVideo } = renderEditor();
+
+    await user.clear(screen.getByLabelText('Video prompt'));
+    await user.type(screen.getByLabelText('Video prompt'), 'A fast practical-effects reveal.');
+    await user.click(screen.getByRole('button', { name: 'fal.ai free' }));
+
+    expect(onOpenFalVideo).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'n1',
+      videoPrompt: 'A fast practical-effects reveal.',
+      cameraMovement: 'slow-dolly-in',
+    }));
+  });
+
+  it('attaches an uploaded fal MP4 through the durable gallery history id', async () => {
+    const user = userEvent.setup();
+    updateLoomNode.mockResolvedValue({ id: 'loom-1' });
+    renderEditor();
+
+    await user.click(screen.getByRole('button', { name: 'Attach video' }));
+    expect(pickerMocks.props).toHaveBeenLastCalledWith(expect.objectContaining({
+      accept: 'video/mp4,.mp4',
+    }));
+    await user.click(screen.getByRole('button', { name: 'Pick gallery video' }));
+
+    await waitFor(() => expect(updateLoomNode).toHaveBeenCalledWith(
+      'loom-1', 'ep-1', 'n1', { videoHistoryId: 'upload-example' }, { silent: true },
+    ));
+  });
+
+  it('refuses a non-MP4 history record that scene playback cannot address', async () => {
+    const user = userEvent.setup();
+    pickerMocks.item = { id: 'upload-example', filename: 'upload-example.mov' };
+    renderEditor();
+
+    await user.click(screen.getByRole('button', { name: 'Attach video' }));
+    await user.click(screen.getByRole('button', { name: 'Pick gallery video' }));
+
+    expect(updateLoomNode).not.toHaveBeenCalled();
   });
 
   it('uses the scene for text-to-video when no rendered still exists', async () => {
@@ -234,5 +451,55 @@ describe('LoomNodeEditor scene media', () => {
     await user.click(screen.getByRole('button', { name: 'Branch with AI' }));
 
     await waitFor(() => expect(screen.getByLabelText('Playback behavior')).toHaveValue('decision'));
+  });
+
+  it('toggles live interaction window and patches node', async () => {
+    const user = userEvent.setup();
+    updateLoomNode.mockResolvedValue({ id: 'loom-1' });
+    renderEditor();
+
+    const checkbox = screen.getByLabelText('Live conversation window (off-screen voice)');
+    expect(checkbox).not.toBeChecked();
+
+    await user.click(checkbox);
+
+    await waitFor(() => expect(updateLoomNode).toHaveBeenCalledWith(
+      'loom-1', 'ep-1', 'n1',
+      {
+        interactionWindow: expect.objectContaining({
+          enabled: true,
+        }),
+      },
+      { silent: true },
+    ));
+
+    expect(screen.getByLabelText('Protagonist character')).toBeInTheDocument();
+    expect(screen.getByLabelText('Protagonist presence')).toBeInTheDocument();
+  });
+
+  it('displays production readiness findings for unsafe hold loop dialogue', () => {
+    const nodes = makeNodes([existingPath]);
+    nodes[0].interactionWindow = { enabled: true, protagonistCharacterId: 'char-1' };
+    nodes[0].playbackAssets = {
+      holdLoopVideoHistoryIds: ['vid-hold-1'],
+      audioOccupancy: {
+        'vid-hold-1': {
+          characterDialogue: [{ startMs: 0, endMs: 2000 }],
+        },
+      },
+    };
+
+    render(
+      <LoomNodeEditor
+        loom={loom}
+        episode={{ id: 'ep-1', nodes }}
+        node={nodes[0]}
+        onLoomUpdate={vi.fn()}
+        onClearSelection={() => {}}
+      />,
+    );
+
+    expect(screen.getByText(/contains rendered character dialogue/)).toBeInTheDocument();
+    expect(screen.getByText(/Tip: Render dialogue separately/)).toBeInTheDocument();
   });
 });

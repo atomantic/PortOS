@@ -3,7 +3,7 @@ import { request, API_BASE } from './apiCore.js';
 
 // Apps
 export const getApps = (options) => request('/apps', options);
-export const getApp = (id) => request(`/apps/${id}`);
+export const getApp = (id, options) => request(`/apps/${id}`, options);
 // Reverse lookup (#2991): sprite records whose publishBinding.appId targets this
 // app. Read-only; the caller owns a .catch fallback, so default to silent.
 export const getAppSpriteBindings = (id, options) =>

@@ -72,8 +72,8 @@ export const LATENT_FRAME_STRIDE = 8;
 /**
  * Runtimes whose helper can condition on a source *video* rather than a still.
  * `ltx2` / `ltx25` route to ExtendPipeline.extend_from_video; the `minimax_h3`
- * runtimes, `wan22`,
- * `hunyuan` and `mlx_video` have no equivalent and take the 'frame' path.
+ * runtimes, `wan22`, `fastvideo` and `mlx_video` have no equivalent and take
+ * the 'frame' path.
  *
  * Kept here rather than in `videoGen/modeContract.js` — that module's "declare
  * every runtime gate in one table" rule is about mode/source pairings that

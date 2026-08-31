@@ -83,7 +83,7 @@ os.environ.setdefault("LTX2_GEMMA_EVAL_EVERY", "1")
 # Sibling import: parse_user_loras is shared with generate_av_lora.py (the
 # mlx_video LoRA runtime) so the strict --user-loras validation lives in one
 # place. sys.path[0] is already this dir when run as a script; insert defensively
-# (mirrors generate_hunyuan.py). _runner_common is stdlib-only at import time, so
+# for direct and imported execution. _runner_common is stdlib-only at import time, so
 # this is safe from the ltx-2-mlx venv (no torch pulled in).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _runner_common import emit_runtime_fingerprint, parse_user_loras, write_stepwise_preview  # noqa: E402
@@ -715,6 +715,11 @@ def parse_args() -> argparse.Namespace:
                         "relaunch after the macOS Metal command-buffer watchdog aborts "
                         "the prompt encoder. An explicit value always wins over the "
                         "ambient environment.")
+    p.add_argument("--mlx-cache-limit-mb", default=None,
+                   help="Cap the MLX allocator cache at this many MB for the whole run, "
+                        "reasserted before every render. Omit to derive a conservative "
+                        "ceiling from physical memory. PORTOS_MLX_CACHE_LIMIT_MB sets the "
+                        "same knob ambiently; this flag wins over it.")
     return p.parse_args()
 
 
@@ -1082,6 +1087,10 @@ def _install_ltx_stepwise_preview(pipe, args: argparse.Namespace):
 
 
 def _run_with_ltx_stepwise_preview(pipe, args: argparse.Namespace, render):
+    # Every mode routes its render through here, so this is where the allocator
+    # cache ceiling is reasserted: loading weights resets it, and a two-stage or
+    # chained job renders more than once inside one process.
+    reassert_mlx_cache_policy()
     restore = _install_ltx_stepwise_preview(pipe, args)
     try:
         return render()
@@ -1189,6 +1198,204 @@ def _image_conditioning_kwargs(generate_and_save, image: str | None,
             "(reworked image conditioning) — using pipeline default"
         )
     return {"image": image}
+
+
+# --- I2V anchor preservation across an ancestral (SDE) denoise -----------------
+#
+# LTX-2.5 samples distilled stage 1 with the ancestral (SDE) Euler loop, which
+# renoises the WHOLE latent after every step. The conditioned tokens — the
+# frame-0 rows an image-to-video render pins to the supplied picture — live in
+# that same latent, so a loop that does not re-apply the conditioning mask AFTER
+# the renoise leaves the anchor clean only on the terminal step. The clip that
+# comes out is plausible and coherent; it just isn't the picture the user handed
+# in, and nothing in the output says so.
+#
+# PortOS does not own the pin, so the invariant is enforced rather than assumed:
+#
+#   1. a pin whose own ancestral loop re-applies the mask after the renoise is
+#      used as-is ("native");
+#   2. a pin that does not gets a clean-room hook at the sampler seam — the same
+#      re-application, expressed through the pin's OWN `apply_denoise_mask`, and
+#      idempotent, so it cannot fight a loop that already does it ("hook"); and
+#   3. a pin that exposes neither is REFUSED before any weights load, because
+#      the alternative is silently shipping an unanchored clip.
+#
+# Scoped to `--mode image`: that is the only mode whose whole promise is "the
+# reference IS frame one" (lib/videoReferenceModes.js). T2V has a uniform mask
+# and nothing to preserve, and the FFLF/extend/a2v pipelines are left byte-
+# identical — this seam is not on their path unless they route through the same
+# ancestral loop, which they do not on any pin PortOS ships.
+
+
+def _import_ancestral_sampler():
+    """The installed pin's sampler module, or None when it has no ancestral loop.
+
+    A pin without `ancestral_euler_step` / `ancestral_denoise_loop` never injects
+    noise mid-denoise (plain Euler), so the anchor holds by construction and
+    there is nothing here to enforce — that is the LTX-2.3 pin, and why this
+    returns a sentinel rather than raising.
+    """
+    try:
+        from ltx_pipelines_mlx.utils import samplers
+    except ImportError:
+        return None
+    if not all(hasattr(samplers, name)
+               for name in ("ancestral_euler_step", "ancestral_denoise_loop")):
+        return None
+    return samplers
+
+
+def _ancestral_loop_source(samplers) -> str | None:
+    """The pin's ancestral loop as source text, or None when it cannot be read.
+
+    Every verdict below is read off this rather than inferred from a version
+    string, because the whole problem is that PortOS does not control which
+    commit is checked out. A source-less sampler (a C extension, a pin shipped
+    as a .pyc) yields None and is REFUSED — the invariant cannot be proven, and
+    the hook below cannot be proven to reach the loop either.
+    """
+    try:
+        return inspect.getsource(samplers.ancestral_denoise_loop)
+    except (OSError, TypeError):
+        return None
+
+
+def _sampler_preserves_conditioned_tokens(loop_source: str) -> bool:
+    """Does the pin's own ancestral loop re-apply the mask AFTER the ancestral step?
+
+    The window starts at the LAST `ancestral_euler_step(` call, so the
+    `apply_denoise_mask` every pin runs on x0 *before* the step cannot be
+    mistaken for the post-renoise one the invariant needs.
+    """
+    _, marker, tail = loop_source.rpartition("ancestral_euler_step(")
+    return bool(marker) and "apply_denoise_mask" in tail
+
+
+def _hook_can_reach_loop(loop_source: str) -> bool:
+    """Does the loop route its conditioning through the seam the hook wraps?
+
+    The hook learns each latent's (clean, mask) pair by wrapping the module-level
+    `apply_denoise_mask` the loop calls on x0. A fork that inlines that blend, or
+    reaches it through a module reference, never trips the recorder — the hook
+    would install, report success, and preserve nothing. So the call has to be
+    visible in the loop before the hook is allowed to claim the invariant.
+    """
+    return "apply_denoise_mask" in loop_source
+
+
+def _install_ancestral_anchor_hook(samplers) -> bool:
+    """Clean-room compatibility hook at the sampler seam. True when installed.
+
+    Two module-global wrappers, both inside the pin's own `samplers` module, so
+    they take effect no matter which module imported the loop by name:
+
+      - `apply_denoise_mask` — the loop already calls it once per latent per step
+        to pin x0 to the clean tokens. Wrapping it RECORDS the (clean, mask) pair
+        for each latent; the return value is the pin's own, untouched.
+      - `ancestral_euler_step` — after the pin's step (Euler + renoise) returns,
+        the recorded pair for that latent is applied again, which is exactly the
+        reference `post_process_latent` the broken pins are missing.
+
+    Pairs are keyed by latent SHAPE rather than by call order, so an extra model
+    call, a reordered loop, or a pipeline that denoises video only still lands on
+    the right mask. Two latents sharing a shape WITHIN one step (video and audio
+    of equal token count) is the one case a shape cannot disambiguate, so those
+    steps keep the pin's own behavior — never a wrong mask — and only for as long
+    as the collision lasts.
+    """
+    try:
+        from ltx_core_mlx.conditioning.types.latent_cond import apply_denoise_mask
+    except ImportError:
+        return False
+    if getattr(samplers.ancestral_euler_step, "_portos_anchor_hook", False):
+        return True
+
+    original_apply = getattr(samplers, "apply_denoise_mask", None)
+    if original_apply is None:
+        return False
+    original_step = samplers.ancestral_euler_step
+    conditioning: dict = {}
+    steps_taken = [0]
+
+    def _key(latent):
+        shape = getattr(latent, "shape", None)
+        return None if shape is None else tuple(shape)
+
+    @functools.wraps(original_apply)
+    def recording_apply_denoise_mask(x0, clean_latent, denoise_mask):
+        key = _key(clean_latent)
+        if key is not None:
+            prior = conditioning.get(key)
+            # Ambiguity is a property of THIS batch of records, not of the shape
+            # forever: two latents of equal token count inside one step cannot be
+            # told apart, but the same shape restated in a later step (stage 2
+            # rebuilding its latent state) is an ordinary replacement.
+            same_batch = prior is not None and prior["batch"] == steps_taken[0]
+            collides = same_batch and (
+                prior["clean"] is not clean_latent or prior["mask"] is not denoise_mask
+                or prior["ambiguous"]
+            )
+            conditioning[key] = {
+                "clean": clean_latent, "mask": denoise_mask,
+                "batch": steps_taken[0], "ambiguous": collides,
+            }
+        return original_apply(x0, clean_latent, denoise_mask)
+
+    @functools.wraps(original_step)
+    def anchor_preserving_ancestral_euler_step(sample, denoised, *args, **kwargs):
+        result = original_step(sample, denoised, *args, **kwargs)
+        key = _key(sample)
+        steps_taken[0] += 1
+        record = conditioning.get(key) if key is not None else None
+        if record is None or record["ambiguous"]:
+            return result
+        clean_latent, denoise_mask = record["clean"], record["mask"]
+        # The step returns float32 while the latent state is held in the model
+        # dtype; match the result so the blend does not silently upcast the
+        # whole latent. A pin (or a test double) whose arrays carry no dtype
+        # skips the cast rather than guessing one.
+        dtype = getattr(result, "dtype", None)
+        if dtype is not None:
+            clean_latent = clean_latent.astype(dtype)
+            denoise_mask = denoise_mask.astype(dtype)
+        return apply_denoise_mask(result, clean_latent, denoise_mask)
+
+    anchor_preserving_ancestral_euler_step._portos_anchor_hook = True
+    samplers.apply_denoise_mask = recording_apply_denoise_mask
+    samplers.ancestral_euler_step = anchor_preserving_ancestral_euler_step
+    return True
+
+
+def enforce_i2v_anchor_invariant(args) -> str:
+    """Guarantee the frame-0 anchor survives every denoise step, or refuse to render.
+
+    Returns which mechanism is carrying the invariant — "not-required" (no
+    ancestral sampler on this pin, or not an anchored I2V render), "native" (the
+    pin's own loop), or "hook" (the compatibility hook above). Raises SystemExit
+    when the installed pin has the ancestral sampler but can supply neither.
+
+    Called from main() BEFORE any pipeline is constructed, so a refusal costs the
+    user a second rather than a full model load.
+    """
+    if args.mode != "image" or not args.image:
+        return "not-required"
+    samplers = _import_ancestral_sampler()
+    if samplers is None:
+        return "not-required"
+    loop_source = _ancestral_loop_source(samplers)
+    if loop_source is not None:
+        if _sampler_preserves_conditioned_tokens(loop_source):
+            return "native"
+        if _hook_can_reach_loop(loop_source) and _install_ancestral_anchor_hook(samplers):
+            emit_status("Preserving the frame-one anchor across the ancestral denoise")
+            return "hook"
+    raise SystemExit(
+        "This ltx runtime samples image-to-video with the ancestral (SDE) Euler "
+        "loop but neither preserves the conditioned frame across its steps nor "
+        "routes its conditioning through a seam PortOS can preserve it at — "
+        "the render would drift off the supplied image. Re-run "
+        "scripts/setup-image-video.sh to restore the pinned LTX-2.5 checkout."
+    )
 
 
 def _one_stage_kwargs(args: argparse.Namespace, **extra) -> dict:
@@ -1482,6 +1689,10 @@ def run_extend(args: argparse.Namespace) -> str:
         pipe.feature_extractor = None
         pipe._loaded = False
         aggressive_cleanup()
+    # The full-res VAE decode below is this mode's largest allocation, and the
+    # cleanup above releases the allocator limit along with the buffers when it
+    # runs — so reassert the ceiling before the decoders come back in.
+    reassert_mlx_cache_policy()
     pipe._load_decoders()
     bind_output_fps(pipe, args.fps)
     return pipe._decode_and_save_video(video_latent, audio_latent, args.output)
@@ -1667,6 +1878,178 @@ def maybe_strip_audio(output_path: str) -> None:
         emit_status(f"ffmpeg audio-strip skipped: {e}")
 
 
+# MLX keeps freed Metal buffers in an allocator cache so the next allocation of
+# that size is free. Left uncapped, that cache competes with the LIVE tensors of
+# a long video render: a 22B DiT plus a decode pass can push the machine into
+# swap (or a Metal OOM abort) purely because the allocator is still holding
+# buffers this render no longer needs. Capping it costs a little allocation
+# throughput and buys headroom, so PortOS derives a conservative ceiling from
+# physical memory and reasserts it before every render.
+#
+# The ceiling is a fixed fraction of physical memory clamped at both ends: the
+# floor keeps a small machine from thrashing against a near-zero cache, the cap
+# keeps a very large machine from parking tens of GB in the allocator "just in
+# case". 1/8 of RAM lands at 2 GB on a 16 GB box, 8 GB on a 64 GB box, and hits
+# the cap at 96 GB.
+MLX_CACHE_FRACTION = 0.125
+MLX_CACHE_FLOOR_MB = 1024
+MLX_CACHE_CEILING_MB = 12288
+MLX_CACHE_LIMIT_ENV = "PORTOS_MLX_CACHE_LIMIT_MB"
+
+_MLX_CACHE_POLICY: dict = {}
+
+
+def derive_mlx_cache_limit_mb(physical_bytes) -> int | None:
+    """Conservative allocator-cache ceiling in MB for a machine that size.
+
+    Pure — no MLX, no environment, no I/O. Returns None when the caller could
+    not determine physical memory; resolve_mlx_cache_policy turns that into "no
+    policy" rather than a guess.
+    """
+    if isinstance(physical_bytes, bool) or not isinstance(physical_bytes, (int, float)):
+        return None
+    if physical_bytes <= 0:
+        return None
+    derived = int(physical_bytes * MLX_CACHE_FRACTION) // (1024 * 1024)
+    return max(MLX_CACHE_FLOOR_MB, min(MLX_CACHE_CEILING_MB, derived))
+
+
+def validate_mlx_cache_limit_mb(raw, source: str) -> int | None:
+    """Parse an explicit cache-limit override in MB; None when unset.
+
+    An override REPLACES the derived ceiling rather than being clamped into it —
+    a caller naming a number knows this machine better than a blanket fraction
+    does — so validation only rejects values that cannot mean anything. A bad
+    value is fatal rather than ignored: falling back to the derived ceiling
+    would report a policy the caller never asked for.
+    """
+    if raw is None or raw == "":
+        return None
+    try:
+        limit = int(str(raw).strip())
+    except ValueError:
+        limit = 0
+    if limit < 1:
+        raise SystemExit(f"{source} must be a positive whole number of MB; got {raw!r}.")
+    return limit
+
+
+def physical_memory_bytes() -> int | None:
+    """Total physical RAM in bytes, or None where the platform will not say.
+
+    Windows has no ``os.sysconf``; the helper is import-safe there and simply
+    reports "unknown", which is also what the LTX runtime itself is on that OS.
+    """
+    sysconf = getattr(os, "sysconf", None)
+    names = getattr(os, "sysconf_names", {})
+    if sysconf is None or "SC_PHYS_PAGES" not in names or "SC_PAGE_SIZE" not in names:
+        return None
+    try:
+        total = sysconf("SC_PHYS_PAGES") * sysconf("SC_PAGE_SIZE")
+    except (OSError, ValueError):  # pragma: no cover - platform dependent
+        return None
+    return total if total > 0 else None
+
+
+def resolve_mlx_cache_policy(physical_bytes, override_raw=None, env_raw=None) -> dict:
+    """Effective cache policy as ``{"limitMb": int | None, "source": str}``.
+
+    Precedence mirrors --gemma-max-length: an explicit flag beats the ambient
+    environment, which beats the ceiling derived from physical memory. A machine
+    whose memory could not be read gets ``limitMb: None`` and MLX's own default
+    stands — a blind floor would throttle a large box exactly as readily as it
+    would protect a small one.
+    """
+    override = validate_mlx_cache_limit_mb(override_raw, "--mlx-cache-limit-mb")
+    if override is not None:
+        return {"limitMb": override, "source": "flag"}
+    ambient = validate_mlx_cache_limit_mb(env_raw, MLX_CACHE_LIMIT_ENV)
+    if ambient is not None:
+        return {"limitMb": ambient, "source": "env"}
+    derived = derive_mlx_cache_limit_mb(physical_bytes)
+    if derived is None:
+        return {"limitMb": None, "source": "unknown-memory"}
+    return {"limitMb": derived, "source": "derived"}
+
+
+def _mlx_cache_limit_setter():
+    """The installed MLX's cache-limit entry point, or None when it has none.
+
+    Probed rather than assumed, the same shape as _resolve_pipeline: the API
+    moved from ``mx.metal.set_cache_limit`` to ``mx.set_cache_limit`` and the
+    legacy spelling is deprecated on new wheels, while installs upgrade on their
+    own schedule. New name first, legacy second.
+    """
+    try:
+        import mlx.core as mx
+    except Exception:
+        return None
+    setter = getattr(mx, "set_cache_limit", None)
+    if callable(setter):
+        return setter
+    setter = getattr(getattr(mx, "metal", None), "set_cache_limit", None)
+    return setter if callable(setter) else None
+
+
+def apply_mlx_cache_policy(policy: dict, announce: bool = False) -> bool:
+    """Push `policy` at the installed MLX. True when the limit actually took.
+
+    Called before pipeline construction and again before every render: loading
+    weights (and some pins' own setup) resets the allocator limit, so a
+    once-at-startup cap quietly stops holding partway through a long job. Only
+    the startup call announces — a per-render status line would be noise.
+    """
+    limit_mb = (policy or {}).get("limitMb")
+    if limit_mb is None:
+        if announce:
+            emit_status("MLX allocator cache left at its default — physical memory unknown")
+        return False
+    setter = _mlx_cache_limit_setter()
+    if setter is None:
+        if announce:
+            emit_status("Installed MLX exposes no cache-limit API — allocator cache left at its default")
+        return False
+    try:
+        setter(limit_mb * 1024 * 1024)
+    except Exception as err:
+        if announce:
+            emit_status(f"MLX allocator cache could not be capped ({err}) — left at its default")
+        return False
+    if announce:
+        emit_status(f"MLX allocator cache capped at {limit_mb} MB ({policy.get('source')})")
+    return True
+
+
+def reassert_mlx_cache_policy() -> bool:
+    """Re-apply this run's cache ceiling. Silent — startup already announced it.
+
+    Called at every boundary where the allocator limit can have been reset since
+    it was installed: before each render, and before the extend decode (which
+    frees the DiT behind an aggressive_cleanup() and pulls the VAE back in, the
+    single largest allocation of that mode). What a pipeline does INSIDE one call
+    — a stage-2 transformer reload — is out of this wrapper's reach; the cap
+    simply resumes at the next boundary.
+    """
+    return apply_mlx_cache_policy(_MLX_CACHE_POLICY)
+
+
+def configure_mlx_cache(args: argparse.Namespace) -> dict:
+    """Resolve this run's allocator-cache ceiling and install it. Returns the policy.
+
+    Called once before any pipeline is constructed — the first weight load is
+    already large enough to strand buffers in the cache for the rest of the run.
+    _run_with_ltx_stepwise_preview reasserts the same policy per render.
+    """
+    global _MLX_CACHE_POLICY
+    _MLX_CACHE_POLICY = resolve_mlx_cache_policy(
+        physical_memory_bytes(),
+        args.mlx_cache_limit_mb,
+        os.environ.get(MLX_CACHE_LIMIT_ENV),
+    )
+    apply_mlx_cache_policy(_MLX_CACHE_POLICY, announce=True)
+    return _MLX_CACHE_POLICY
+
+
 def main() -> NoReturn:
     args = parse_args()
     validate_text_encoder_args(args)
@@ -1696,6 +2079,11 @@ def main() -> NoReturn:
     configure_negative_prompt(args.negative_prompt)
     configure_gemma_max_length(args.gemma_max_length)
     install_prompt_encode_markers()
+    configure_mlx_cache(args)
+    # Frame-one anchor contract (#5422). Runs before any pipeline is built so a
+    # pin that cannot hold the anchor through an ancestral denoise refuses in a
+    # second rather than after a full model load.
+    enforce_i2v_anchor_invariant(args)
 
     runners = {
         "text": run_text,

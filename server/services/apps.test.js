@@ -81,6 +81,28 @@ describe('pr-watcher cooldown reset', () => {
   });
 });
 
+describe('issue-watcher cooldown reset', () => {
+  beforeEach(() => {
+    invalidateCache();
+    vi.clearAllMocks();
+    readJSONFile.mockResolvedValue({
+      apps: {
+        'app-1': {
+          name: 'App One',
+          issueWatcherState: { cursor: '2026-01-01T00:00:00.000Z' },
+          taskTypeOverrides: { 'issue-watcher': { enabled: true } },
+        },
+      },
+    });
+  });
+
+  it('clears its cursor and cooldown when disabled', async () => {
+    const updated = await updateAppTaskTypeOverride('app-1', 'issue-watcher', { enabled: false });
+    expect(updated.issueWatcherState).toBeUndefined();
+    expect(resetExecutionHistory).toHaveBeenCalledWith('issue-watcher', 'app-1');
+  });
+});
+
 describe('getReservedPorts', () => {
   beforeEach(() => {
     invalidateCache();

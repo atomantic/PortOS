@@ -83,7 +83,6 @@ import { startPrivacyRecheckScheduler } from './privacyRecheckScheduler.js';
 import { startQuotaBurnScheduler } from './quotaBurnRunner.js';
 import { startSeriesAutopilotScheduler } from './seriesAutopilotScheduler.js';
 import { startCommissionScheduler } from './creativeCommissions/scheduler.js';
-import { startOpenWorldSnapshotScheduler } from './openWorldSnapshotScheduler.js';
 import { startImessageScheduler } from './imessageScheduler.js';
 import { startSignalScheduler } from './signalScheduler.js';
 import { startSpotifyScheduler } from './spotifyScheduler.js';
@@ -320,6 +319,17 @@ const startBackgroundServices = ({ spawnerReady }) => {
   // in bootstrapSequence.js.
   initCosAfterSpawner({ spawnerReady, initCos: () => cos.init() });
 
+  // World Design migrations are offline and leave a pending checkpoint. If the
+  // separately-managed Eidoverse process is already online, reconcile it now;
+  // otherwise leave the checkpoint for direct remediation in the Eidoverse UI.
+  // This is deterministic local projection only — never an AI provider call.
+  import('./eidoverseWorld.js')
+    .then(({ reconcilePendingEidoverseWorld }) => reconcilePendingEidoverseWorld())
+    .then((result) => {
+      if (result.reconciled) console.log('🌐 Reconciled pending Eidoverse World Design update');
+    })
+    .catch(err => console.error(`⚠️ Eidoverse World Design reconciliation deferred: ${err.message}`));
+
   // Initialize agent automation scheduler and action executor
   automationScheduler.init().catch(err => console.error(`❌ Agent scheduler init failed: ${err.message}`));
   // agentActionExecutor.init() is synchronous — guard with try/catch so a thrown
@@ -400,9 +410,9 @@ const startBackgroundServices = ({ spawnerReady }) => {
     backfillProjectCommissionIds,
     startCommissionScheduler
   });
-  // Initialize OpenWorld snapshot scheduler — records periodic city-state frames
-  // for the historical timeline scrubber (issue #877).
-  startOpenWorldSnapshotScheduler().catch(err => console.error(`❌ OpenWorld snapshot scheduler init failed: ${err.message}`));
+  // OpenWorld's historical snapshot scheduler is retired with its UI. The
+  // legacy read/capture routes remain available for old clients, but Eidoverse
+  // is now the only automatic world projection path.
   // Initialize iMessage sync scheduler — OFF by default; only polls chat.db when
   // the user opts in from the iMessage Settings drawer on Comms → Messages → iMessage
   // (needs macOS Full Disk Access) (#2151).

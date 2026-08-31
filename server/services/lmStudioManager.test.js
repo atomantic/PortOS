@@ -136,6 +136,36 @@ describe('lmStudioManager residency status', () => {
     await expect(getLoadedModels(true)).resolves.toEqual([]);
     expect(getLastLoadedModelsError()).toMatch(/offline|unavailable/i);
   });
+
+  it('falls back to the LM Studio CLI when the native unload contract returns 400', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (String(url).includes('/models/unload')) {
+        return {
+          ok: false,
+          status: 400,
+          statusText: 'Bad Request',
+          json: async () => ({}),
+          text: async () => 'Bad Request',
+        };
+      }
+      const data = [{ id: 'example/model', state: 'loaded', type: 'llm' }];
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({ data }),
+        text: async () => JSON.stringify({ data }),
+      };
+    }));
+    const { unloadModel } = await import('./lmStudioManager.js');
+
+    await expect(unloadModel('example/model')).resolves.toMatchObject({ success: true });
+    expect(lmsSpawn).toHaveBeenCalledWith(
+      '/usr/local/bin/lms',
+      ['unload', 'example/model'],
+      expect.objectContaining({ shell: false }),
+    );
+  });
 });
 
 describe('lmStudioManager deleteModel', () => {

@@ -19,12 +19,12 @@ describe('agentContextValidation', () => {
       enabled: true,
       profile: 'metadata',
       scopes: ['navigation', 'brain'],
-      actions: { readPortos: true, writePortos: false },
+      actions: { readPortos: true, writePortos: false, manageEidoverse: true },
     })).toEqual({
       enabled: true,
       profile: 'metadata',
       scopes: ['navigation', 'brain'],
-      actions: { readPortos: true, writePortos: false },
+      actions: { readPortos: true, writePortos: false, manageEidoverse: true },
     });
     expect(agentContextSettingsSchema.safeParse({ scopes: ['brain', 'brain'] }).success).toBe(false);
     expect(agentContextSettingsSchema.safeParse({ scopes: ['privacy-vault'] }).success).toBe(false);

@@ -3,22 +3,76 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
-vi.mock('../services/notifications.js', () => ({
-  getNotifications: vi.fn(),
+const fileUtils = vi.hoisted(() => ({
+  ensureDir: vi.fn().mockResolvedValue(),
+  readJSONFile: vi.fn(),
+  atomicWrite: vi.fn().mockResolvedValue()
+}));
+
+const notificationMocks = vi.hoisted(() => ({
   getUnreadCount: vi.fn(),
   getCountsByType: vi.fn(),
   markAsRead: vi.fn(),
   markAllAsRead: vi.fn(),
   removeNotification: vi.fn(),
-  clearAll: vi.fn(),
-  NOTIFICATION_TYPES: {
-    MEMORY_APPROVAL: 'memory_approval',
-    TASK_APPROVAL: 'task_approval'
-  }
+  clearAll: vi.fn()
+}));
+
+vi.mock('../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    PATHS: { ...actual.PATHS, data: '/mock/data' },
+    ensureDir: fileUtils.ensureDir,
+    readJSONFile: fileUtils.readJSONFile,
+    atomicWrite: fileUtils.atomicWrite
+  };
+});
+
+// Keep the route's mutation/count endpoints isolated, but retain the real list
+// service so this boundary test cannot document a response shape the service
+// does not return.
+vi.mock('../services/notifications.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  ...notificationMocks
 }));
 
 import * as notifications from '../services/notifications.js';
 import notificationsRoutes from './notifications.js';
+
+const NOTIFICATION_FIXTURE = {
+  version: 1,
+  notifications: [
+    {
+      id: 'n1',
+      type: 'memory_approval',
+      title: 'Memory review',
+      read: false,
+      timestamp: '2025-01-01T00:00:00.000Z'
+    },
+    {
+      id: 'n2',
+      type: 'memory_approval',
+      title: 'Older memory review',
+      read: true,
+      timestamp: '2025-01-02T00:00:00.000Z'
+    },
+    {
+      id: 'n3',
+      type: 'task_approval',
+      title: 'Task review',
+      read: false,
+      timestamp: '2025-01-03T00:00:00.000Z'
+    },
+    {
+      id: 'n4',
+      type: 'memory_approval',
+      title: 'Newest memory review',
+      read: false,
+      timestamp: '2025-01-04T00:00:00.000Z'
+    }
+  ]
+};
 
 const buildApp = () => {
   const app = express();
@@ -31,30 +85,32 @@ const buildApp = () => {
 describe('notifications routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    fileUtils.readJSONFile.mockResolvedValue(JSON.parse(JSON.stringify(NOTIFICATION_FIXTURE)));
+    notifications.invalidateCache();
   });
 
   describe('GET /api/notifications', () => {
-    it('returns the notifications list with default options', async () => {
-      notifications.getNotifications.mockResolvedValue({ items: [{ id: 'n1' }], total: 1 });
+    it('returns the real service list as a bare array with default options', async () => {
       const res = await request(buildApp()).get('/api/notifications');
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ items: [{ id: 'n1' }], total: 1 });
-      expect(notifications.getNotifications).toHaveBeenCalledWith({
-        type: undefined,
-        unreadOnly: false,
-        limit: undefined
-      });
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body.map(({ id }) => id)).toEqual(['n4', 'n3', 'n2', 'n1']);
     });
 
-    it('parses query string options into the service call', async () => {
-      notifications.getNotifications.mockResolvedValue({ items: [], total: 0 });
+    it('applies type and unreadOnly filters through the real service', async () => {
       const type = notifications.NOTIFICATION_TYPES.MEMORY_APPROVAL;
-      await request(buildApp()).get(`/api/notifications?type=${type}&unreadOnly=true&limit=25`);
-      expect(notifications.getNotifications).toHaveBeenCalledWith({
-        type,
-        unreadOnly: true,
-        limit: 25
-      });
+      const res = await request(buildApp()).get(`/api/notifications?type=${type}&unreadOnly=true`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.map(({ id }) => id)).toEqual(['n4', 'n1']);
+    });
+
+    it('applies limit after the type and unreadOnly filters', async () => {
+      const type = notifications.NOTIFICATION_TYPES.MEMORY_APPROVAL;
+      const res = await request(buildApp()).get(`/api/notifications?type=${type}&unreadOnly=true&limit=1`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.map(({ id }) => id)).toEqual(['n4']);
     });
   });
 

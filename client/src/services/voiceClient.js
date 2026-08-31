@@ -28,6 +28,7 @@ let audioCtx = null;
 let playQueue = Promise.resolve();
 let currentSource = null;
 let ttsQueueDepth = 0;
+let playbackGeneration = 0;
 // Timestamp after which the post-TTS echo-tail window ends. See VAD.ttsTailMs.
 let ttsCooldownUntil = 0;
 // Raised when a turn is cancelled (barge-in, explicit interrupt, reset, new
@@ -61,6 +62,7 @@ const ensureCtx = () => {
 };
 
 const stopPlayback = () => {
+  playbackGeneration += 1;
   if (currentSource) {
     try { currentSource.stop(); } catch { /* already stopped */ }
     currentSource = null;
@@ -141,12 +143,18 @@ const blobToWav16k = async (blob) => {
 };
 
 const enqueuePlay = async (bytes) => {
+  const generation = playbackGeneration;
   const ctx = ensureCtx();
   // decodeAudioData consumes its buffer — clone so we don't mutate the socket frame
   const copy = bytes.slice(0);
   const buffer = await ctx.decodeAudioData(copy);
+  if (generation !== playbackGeneration) return;
   ttsQueueDepth += 1;
   playQueue = playQueue.then(() => new Promise((resolve) => {
+    if (generation !== playbackGeneration) {
+      resolve();
+      return;
+    }
     const src = ctx.createBufferSource();
     src.buffer = buffer;
     src.connect(ctx.destination);
@@ -347,6 +355,11 @@ socket.on('voice:tts:audio', ({ sentence, wav }) => {
   if (!ab) return;
   enqueuePlay(ab).catch((err) => console.warn('[voice] playback failed:', err));
 });
+
+// A provider timeout can happen after earlier sentences were already emitted.
+// Clear those browser-side frames too, so recovery does not leave the stale
+// reply speaking over the next turn.
+socket.on('voice:tts:cancel', () => stopPlayback());
 
 // Proactive CoS speech. Server-pushed lines (alerts/briefings/reminders) come
 // in on a separate channel so the client can render a distinct visual cue;

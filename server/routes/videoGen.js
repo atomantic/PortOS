@@ -53,6 +53,7 @@ import {
   isStockTextEncoder,
 } from '../lib/videoTextEncoders.js';
 import { isDefaultSpeedProfile } from '../lib/videoSpeedProfiles.js';
+import { DRAFT_DECODE_IDS, isFullDecode, downloadableVideoDraftDecoders } from '../lib/videoDraftDecoders.js';
 import {
   inspectModelCache, verifyModelCache, repairModelCache, repairCachedFile,
   verifyCachedRepoFiles, repairCachedRepoFiles, summarizeVerify, aggregateVerifies,
@@ -64,7 +65,10 @@ import { saveUploadedGalleryVideo } from '../services/videoUpload.js';
 import { JSON_BODY_LIMIT_BYTES } from '../lib/uploadLimits.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';
 import { collectRemoteInputAssets } from '../services/federatedMedia/inputAssets.js';
-import { effectiveJobPrompt } from '../lib/federatedMediaWire.js';
+import {
+  FEDERATED_MEDIA_MAX_VIDEO_FRAMES,
+  effectiveJobPrompt,
+} from '../lib/federatedMediaWire.js';
 import { isRemoteMediaJob } from '../services/mediaJobQueue/remoteMediaJob.js';
 import { buildFederatedMediaRequest } from '../lib/federatedMediaRequest.js';
 import {
@@ -72,6 +76,11 @@ import {
   streamVideoRuntimeInstall,
 } from '../services/videoGen/runtimeInstaller.js';
 import { detectSystemCapabilities, withHardwareCompatibility } from '../lib/systemCapabilities.js';
+import {
+  compileFableLoomVisualRequest, fableLoomVideoCapabilities,
+} from '../services/fableLoom/visualConditioning.js';
+import { getLoom } from '../services/fableLoom/records.js';
+import { asFableLoomRenderSettings } from '../lib/fableLoomProduction.js';
 
 const router = Router();
 
@@ -106,12 +115,12 @@ export const isAudioMime = (mime, filename) => {
   return false;
 };
 
-// FFLF accepts up to two image uploads (start and end frame); a2v takes
-// one audio upload (audioFile); the IC-LoRA remix modes take one reference
-// video upload (icReference). 100MB covers audio cases too (LTX-2's a2v
-// expects only seconds of audio in practice). Per-fieldname mime filter
-// rejects mismatched parts up-front so a stray .mp4 drag-drop can't get
-// staged under any of these fields.
+// FFLF accepts up to two image uploads (start and end frame); a2v takes one
+// audio upload (audioFile); the IC-LoRA remix modes take one reference video
+// upload (icReference). Audio duration is not capped: the 100MB transport cap
+// is a file-size safety bound, so compressed inputs may be much longer than
+// lossless PCM inputs. Per-fieldname mime filtering rejects mismatched parts
+// up-front so a stray .mp4 drag-drop can't get staged under these fields.
 const frameImageUpload = uploadFields(['sourceImage', 'lastImage', 'audioFile', 'icReference'], {
   limits: { fileSize: 100 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
@@ -175,7 +184,7 @@ const listPreprocess = (v) => {
 // together so Grok eligibility and request validation cannot drift when a new
 // local-only knob is added.
 export const LOCAL_ONLY_VIDEO_PARAMS = Object.freeze({
-  numFrames: optionalInt(1, 1024, 'numFrames'),
+  numFrames: optionalInt(1, FEDERATED_MEDIA_MAX_VIDEO_FRAMES, 'numFrames'),
   fps: optionalNum(1, 60, 'fps'),
   steps: optionalNum(1, 200, 'steps'),
   guidanceScale: optionalNum(0, 30, 'guidanceScale'),
@@ -204,6 +213,14 @@ export const LOCAL_ONLY_VIDEO_PARAMS = Object.freeze({
   // model's own sampler with the reason logged, because a knob that only makes
   // a render faster must degrade rather than 400 a submitted job.
   speedProfileId: z.string().min(1).max(64).optional(),
+  // Decode this render's latents on the model's own decoder or on its declared
+  // preview-fidelity one (lib/videoDraftDecoders.js). A closed enum, unlike the
+  // two ids above, because there is at most ONE draft decoder per model — the
+  // request selects between "the model's decoder" and "the draft decoder this
+  // model declares", not from a per-model list. Never rejected downstream
+  // either: an unsupported model, an old runner checkout, a missing download or
+  // a delivery render all fall back to the full decoder with the reason logged.
+  draftDecode: z.enum(DRAFT_DECODE_IDS).optional(),
 });
 
 const generateBodySchema = z.object({
@@ -369,6 +386,8 @@ const generateBodySchema = z.object({
       loomId: z.string().min(1).max(200),
       episodeId: z.string().min(1).max(200),
       nodeId: z.string().min(1).max(200),
+      role: z.enum(['entry', 'hold', 'exit']).optional(),
+      transitionId: z.string().min(1).max(200).optional(),
     }).optional(),
   ),
   // Federated media provider (#4348). When set, the render is submitted to
@@ -552,6 +571,18 @@ const modelDownloadTargets = (model) => {
     if (typeof dep?.repo !== 'string') continue;
     const only = safeOnlyList(videoModelLabel(model), dep.files, 'required-weight');
     if (only.length > 0) targets.push({ repo: dep.repo, revision: dep.revision || null, only });
+  }
+  // The model's preview-fidelity decoder (#5423), when it declares one. Scoped
+  // to its pinned file for the same reason every other entry here is — and
+  // listed under the MODEL rather than as a standalone target, because it is
+  // useless without the checkpoint it decodes for, so the download badge that
+  // offers it belongs beside that model's own.
+  for (const decoder of downloadableVideoDraftDecoders([model])) {
+    targets.push({
+      repo: decoder.repo,
+      revision: decoder.revision || null,
+      only: safeOnlyList(`Draft decoder "${decoder.id}"`, decoder.files, 'weight-file'),
+    });
   }
   return targets;
 };
@@ -754,7 +785,10 @@ router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
   const repos = modelDownloadTargets(model);
   if (repos.length === 0) throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file.`, { status: 400, code: 'NO_REPO_FOR_MODEL' });
   const runtimeInfo = BYOV_RUNTIME_INFO[model.runtime];
-  const pythonPath = runtimeInfo && await isByovRuntimeReady(model.runtime) ? runtimeInfo.venvPython : null;
+  const pythonPath = runtimeInfo?.hfDownloadPython !== false
+    && await isByovRuntimeReady(model.runtime)
+    ? runtimeInfo.venvPython
+    : null;
   await startHfDownloadStream({ req, res, repos, pythonPath, force: req.query.force === '1' });
 }));
 
@@ -915,6 +949,18 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
     failValidation(parsed);
   }
   const body = parsed.data;
+  let fableLoomRenderSettings = null;
+  if (body.fableLoom) {
+    const taggedLoom = await getLoom(body.fableLoom.loomId).catch(async (error) => {
+      await cleanupMultipartTemp(uploads);
+      throw error;
+    });
+    if (taggedLoom) {
+      fableLoomRenderSettings = asFableLoomRenderSettings(taggedLoom.renderSettings);
+      body.width = fableLoomRenderSettings.width;
+      body.height = fableLoomRenderSettings.height;
+    }
+  }
   // Federated render (#4348): submit to the selected peer instead of running
   // locally. Handled BEFORE prepareVideoGenParams, which resolves this
   // machine's backend and stages uploads a remote render can never use.
@@ -1029,6 +1075,47 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
   });
   const { backend, cleanupStaged } = prepared;
 
+  if (body.fableLoom) {
+    const conditioningModel = backend === IMAGE_GEN_MODE.GROK
+      ? { id: 'grok-video', supportedModes: ['image'] }
+      : prepared.effectiveModel;
+    const compiled = await compileFableLoomVisualRequest({
+      tag: body.fableLoom,
+      kind: 'video',
+      capability: fableLoomVideoCapabilities({ backend, model: conditioningModel }),
+      authoredPrompt: body.prompt,
+      authoredNegativePrompt: body.negativePrompt,
+      sourceImagePath: prepared.sourceImagePath,
+    }).catch(async (error) => {
+      await cleanupStaged();
+      throw error;
+    });
+    if (compiled) {
+      body.prompt = compiled.prompt;
+      body.negativePrompt = compiled.negativePrompt;
+      if (prepared.sourceImagePath && !compiled.sourceImagePath) {
+        await prepared.discardSourceImage();
+        prepared.uploadedTempPath = null;
+        prepared.mode = 'text';
+      }
+      prepared.sourceImagePath = compiled.sourceImagePath;
+      const renderSettings = fableLoomRenderSettings || asFableLoomRenderSettings();
+      body.visualConditioning = compiled.visualConditioning ? {
+        ...compiled.visualConditioning,
+        render: {
+          provider: backend,
+          modelId: conditioningModel?.id || null,
+          modelRevision: conditioningModel?.revision || null,
+          parameters: {
+            width: body.width,
+            height: body.height,
+            aspectRatio: renderSettings.aspectRatio,
+          },
+        },
+      } : null;
+    }
+  }
+
   // #3326 — `enqueueJob` is the last place a throw can strand the durable
   // copies the service staged (the job never exists, so the worker's cleanup
   // never runs). Release them, then rethrow untouched for the error middleware.
@@ -1047,7 +1134,7 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
       // into its mode selector.
       videoMode: sourceImagePath ? 'image' : 'text',
       grokPath: g.grokPath,
-      aspectRatio: g.aspectRatio,
+      aspectRatio: body.visualConditioning?.render?.parameters?.aspectRatio || g.aspectRatio,
       prompt: body.prompt,
       negativePrompt: body.negativePrompt || '',
       width: body.width,
@@ -1057,12 +1144,13 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
       uploadedTempPath,
       ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
       ...(body.fableLoom ? { fableLoom: body.fableLoom } : {}),
+      ...(body.visualConditioning ? { visualConditioning: body.visualConditioning } : {}),
     });
     return res.json({ jobId, generationId: jobId, filename: `${jobId}.mp4`, model: 'grok', mode: 'grok', status, position });
   }
 
   const {
-    pythonPath, effectiveModelId, mode,
+    pythonPath, effectiveModelId, effectiveNumFrames, mode,
     sourceImagePath, lastImagePath, audioFilePath, icReferencePaths,
     resolvedKeyframes, extendFromVideoPath,
     uploadedTempPath, uploadedTempPaths, loras, effectiveChunks, effectiveChunkPrompts, effectiveContextFrames,
@@ -1077,7 +1165,12 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
     modelId: body.modelId,
     width: body.width,
     height: body.height,
-    numFrames: body.numFrames,
+    ...(body.visualConditioning?.render?.parameters?.aspectRatio
+      ? { aspectRatio: body.visualConditioning.render.parameters.aspectRatio }
+      : {}),
+    // Duration-driven A2V models derive this from ffprobe over the staged audio;
+    // every other request passes the caller's value through unchanged.
+    numFrames: effectiveNumFrames,
     fps: body.fps,
     steps: body.steps,
     guidanceScale: body.guidanceScale,
@@ -1093,6 +1186,10 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
     // it would leave a resumed/remixed render carrying a knob that never
     // applied and differing from what the service records in history.
     ...(isDefaultSpeedProfile(body.speedProfileId) ? {} : { speedProfileId: body.speedProfileId }),
+    // Same "absence IS the default" rule again: an explicit 'full' decode is
+    // identical to omitting the field, so persisting it would leave a
+    // resumed/remixed render carrying a knob that never applied.
+    ...(isFullDecode(body.draftDecode) ? {} : { draftDecode: body.draftDecode }),
     disableAudio: body.disableAudio === true || body.disableAudio === 'true',
     sourceImagePath,
     audioFilePath,
@@ -1130,6 +1227,7 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
     // FableLoom scene attach tag. Rides into persisted job.params so the
     // completion hook can file the clip even if the editor unmounted.
     ...(body.fableLoom ? { fableLoom: body.fableLoom } : {}),
+    ...(body.visualConditioning ? { visualConditioning: body.visualConditioning } : {}),
   });
   // Match the legacy response shape (jobId, generationId, filename, model,
   // mode) so existing client code keeps working; add status+position for
@@ -1165,6 +1263,10 @@ const ACTIVE_JOB_PARAM_FIELDS = [
   // Likewise a registry id — the sampler schedule the in-flight render picked,
   // so a reloading page restores the picker instead of snapping back to Quality.
   'speedProfileId',
+  // Likewise a closed enum with no path — the decode the in-flight render
+  // picked, so a reloading page restores the control instead of snapping back
+  // to Full.
+  'draftDecode',
   'audioStartSec',
   // Grok jobs (#2859 phase 2): the semantic t2v/i2v mode ('mode' holds the
   // 'grok' discriminator for them) and the clip duration — both plain

@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Lock, ShieldCheck, ShieldOff } from 'lucide-react';
 import toast from '../ui/Toast';
+import Banner from '../ui/Banner';
 import FormField from '../ui/FormField';
 import BrailleSpinner from '../BrailleSpinner';
 import { getAuthStatus, setAuthPassword, clearAuthPassword } from '../../services/api';
@@ -12,7 +13,8 @@ import { getAuthStatus, setAuthPassword, clearAuthPassword } from '../../service
 // session cookie obtained by /api/auth/login.
 export function SecurityTab() {
   const [loading, setLoading] = useState(true);
-  const [enabled, setEnabled] = useState(false);
+  const [enabled, setEnabled] = useState(null);
+  const [loadError, setLoadError] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -20,13 +22,33 @@ export function SecurityTab() {
   const [showDisable, setShowDisable] = useState(false);
   const [disablePassword, setDisablePassword] = useState('');
   const [disabling, setDisabling] = useState(false);
+  const statusRequestRef = useRef(0);
+
+  const loadAuthStatus = useCallback(() => {
+    const requestId = ++statusRequestRef.current;
+    setLoading(true);
+    setLoadError(false);
+    setEnabled(null);
+    getAuthStatus({ silent: true })
+      .then((status) => {
+        if (requestId !== statusRequestRef.current) return;
+        if (typeof status?.enabled !== 'boolean') {
+          setLoadError(true);
+          return;
+        }
+        setEnabled(status.enabled);
+      })
+      .catch(() => {
+        if (requestId === statusRequestRef.current) setLoadError(true);
+      })
+      .finally(() => {
+        if (requestId === statusRequestRef.current) setLoading(false);
+      });
+  }, []);
 
   useEffect(() => {
-    getAuthStatus({ silent: true })
-      .then((s) => setEnabled(!!s?.enabled))
-      .catch(() => null)
-      .finally(() => setLoading(false));
-  }, []);
+    loadAuthStatus();
+  }, [loadAuthStatus]);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -83,6 +105,28 @@ export function SecurityTab() {
       <div className="flex items-center justify-center py-16">
         <BrailleSpinner text="Loading" />
       </div>
+    );
+  }
+
+  if (loadError || enabled === null) {
+    return (
+      <Banner
+        tone="error"
+        size="md"
+        title="Authentication status unknown"
+        role="alert"
+        actions={
+          <button
+            type="button"
+            onClick={loadAuthStatus}
+            className="min-h-11 px-4 py-2 text-sm font-medium bg-port-error/20 hover:bg-port-error/30 text-port-error rounded transition-colors"
+          >
+            Retry
+          </button>
+        }
+      >
+        PortOS could not confirm whether login protection is enabled. Retry before changing security settings.
+      </Banner>
     );
   }
 

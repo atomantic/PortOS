@@ -117,7 +117,9 @@ function cleanWorkspaceDeps(dir) {
 
 function install(dir, label) {
   try {
-    npmSpawn(['install'], { cwd: dir, stdio: 'inherit', windowsHide: true });
+    // This repairs an installed tree; it never authors dependencies. Keep the
+    // committed lockfile byte-stable even when the local npm writer is older.
+    npmSpawn(['install', '--no-save'], { cwd: dir, stdio: 'inherit', windowsHide: true });
     return rebuildTrusted(dir, label);
   } catch (err) {
     console.error(`⚠️  npm install failed for ${label}: ${err.message ?? err}`);
@@ -129,7 +131,7 @@ function install(dir, label) {
       return false;
     }
     try {
-      npmSpawn(['install'], { cwd: dir, stdio: 'inherit', windowsHide: true });
+      npmSpawn(['install', '--no-save'], { cwd: dir, stdio: 'inherit', windowsHide: true });
       return rebuildTrusted(dir, label);
     } catch (retryErr) {
       console.error(`❌ npm install failed for ${label} after retry: ${retryErr.message ?? retryErr}`);

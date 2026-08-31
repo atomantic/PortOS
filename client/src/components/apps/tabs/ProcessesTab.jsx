@@ -8,7 +8,8 @@ import { FormField } from '../../ui/FormField';
 import ProcessLogLines from '../../ui/ProcessLogLines';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 import { useProcessLogs } from '../../../hooks/useProcessLogs';
-import { formatBytes, formatDurationMs } from '../../../utils/formatters';
+import { copyToClipboard } from '../../../lib/clipboard';
+import { formatBytes, formatDurationMs, formatTimeOfDaySeconds } from '../../../utils/formatters';
 
 const getStatusClasses = (status) => {
   switch (status) {
@@ -61,6 +62,14 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
   // processName changes, so the new process never shows the old one's tail.
   const toggleExpand = (name) => {
     setExpandedProcess(prev => prev === name ? null : name);
+  };
+
+  const copyLogs = () => {
+    if (logs.length === 0) return;
+    const text = logs
+      .map(({ line, type, timestamp }) => `[${formatTimeOfDaySeconds(timestamp)}] [${type}] ${line}`)
+      .join('\n');
+    copyToClipboard(text, 'Logs copied');
   };
 
   const filteredProcesses = filterFn
@@ -190,13 +199,20 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
                               <span className="text-xs text-gray-600">{logs.length} lines</span>
                               <button
                                 onClick={clearLogs}
-                                className="text-xs text-gray-500 hover:text-white"
+                                className="min-h-[44px] min-w-[44px] px-1 text-xs text-gray-500 hover:text-white"
                               >
                                 Clear
                               </button>
                               <button
+                                onClick={copyLogs}
+                                disabled={logs.length === 0}
+                                className="min-h-[44px] min-w-[44px] px-1 text-xs text-gray-500 hover:text-white disabled:opacity-50 disabled:hover:text-gray-500"
+                              >
+                                Copy logs
+                              </button>
+                              <button
                                 onClick={() => setFullscreen(true)}
-                                className="text-xs text-gray-500 hover:text-white flex items-center gap-1"
+                                className="min-h-[44px] px-1 text-xs text-gray-500 hover:text-white flex items-center gap-1"
                                 title="Fullscreen"
                               >
                                 <Maximize2 size={12} />
@@ -242,14 +258,14 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
       */}
       {fullscreen && expandedProcess && createPortal(
         <div className="fixed inset-0 bg-port-bg z-50 flex flex-col">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-port-border bg-port-card">
-            <div className="flex items-center gap-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-4 sm:px-6 py-3 sm:py-4 border-b border-port-border bg-port-card">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-4">
               <span className="text-lg font-medium text-white">Logs: {expandedProcess}</span>
               {subscribed && (
                 <span className="text-sm text-port-success">● streaming</span>
               )}
             </div>
-            <div className="flex items-center gap-4">
+            <div data-testid="fullscreen-log-controls" className="flex flex-wrap items-center gap-2 sm:gap-4">
               <FormField className="flex items-center gap-2" label="Tail lines:" labelClassName="text-sm text-gray-500">
                 <select
                   value={tailLines}
@@ -266,13 +282,20 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
               <span className="text-sm text-gray-600">{logs.length} lines</span>
               <button
                 onClick={clearLogs}
-                className="text-sm text-gray-500 hover:text-white"
+                className="min-h-[44px] min-w-[44px] px-1 text-sm text-gray-500 hover:text-white"
               >
                 Clear
               </button>
               <button
+                onClick={copyLogs}
+                disabled={logs.length === 0}
+                className="min-h-[44px] min-w-[44px] px-1 text-sm text-gray-500 hover:text-white disabled:opacity-50 disabled:hover:text-gray-500"
+              >
+                Copy logs
+              </button>
+              <button
                 onClick={() => setFullscreen(false)}
-                className="p-2 text-gray-400 hover:text-white"
+                className="min-h-[44px] min-w-[44px] p-2 text-gray-400 hover:text-white flex items-center justify-center"
                 title="Exit fullscreen" aria-label="Exit fullscreen"
               >
                 <X size={20} />

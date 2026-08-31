@@ -22,6 +22,7 @@ import { emitErrorEvent, ServerError } from '../lib/errorHandler.js';
 import { isSafeSubdirFilter } from '../lib/sharedSchemas.js';
 import { getIo } from './socket.js';
 import { reloadSettings } from './settings.js';
+import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
 
 // Module-level state
 let isRunning = false;
@@ -669,10 +670,17 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   }
 
   const changedFiles = await runRsync(srcDir, PATHS.data, flags);
-  // A live restore rsyncs settings.json into place outside the save() path, so
-  // getSettings()'s read-cache (and other settings:updated-driven caches) would
-  // keep serving pre-restore values until the next save/restart. Re-sync them.
-  if (!dryRun) await reloadSettings();
+  if (!dryRun) {
+    // A live restore writes outside normal service mutation paths. Re-sync the
+    // caches whose backing files may have changed instead of serving the
+    // pre-restore projection until each record is next mutated or the process
+    // restarts. Selective restores may target either `brain` itself or a nested
+    // path such as `brain/inbox`.
+    if (!subdirFilter || subdirFilter === 'brain' || subdirFilter.startsWith('brain/')) {
+      invalidateBrainCaches();
+    }
+    await reloadSettings();
+  }
   return { dryRun, snapshotId, subdirFilter, changedFiles };
 }
 

@@ -2,22 +2,26 @@ import { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useOpenWorldPalette } from './OpenWorldPaletteContext';
-import { dampFactor, EYE_HEIGHT, VEHICLE } from '../../utils/openWorldPlayerRig';
+import { dampFactor, EYE_HEIGHT, solveVehicleSuspensionPose, VEHICLE } from '../../utils/openWorldPlayerRig';
+import { openWorldTerrainHeight } from '../../utils/openWorldPlan';
 import { mixHex } from './openWorldConstants';
 
-// A small, procedural low-poly rover keeps the third-person actor local to OpenWorld.
-// It is intentionally made from primitives instead of another downloaded GLB: the car
-// inherits the active theme, loads instantly, and stays readable while sprinting, jumping,
-// or flying above the city.
+// A small procedural utility cart keeps the player local to OpenWorld. Its orchard-orange
+// body, canvas roof, timber cargo bed, and chunky suspension belong to the village instead
+// of reading like a generic sports car dropped into it.
 const CAR_LENGTH = VEHICLE.bodyLength;
 const CAR_WIDTH = VEHICLE.bodyWidth;
-const WHEEL_RADIUS = 0.24;
+const WHEEL_RADIUS = 0.34;
 const WHEEL_X = CAR_WIDTH * 0.57;
 const WHEEL_Z = CAR_LENGTH * 0.31;
 const _rootTarget = new THREE.Vector3();
+const _suspensionTarget = new THREE.Quaternion();
+const _bankTarget = new THREE.Quaternion();
+const _identityTarget = new THREE.Quaternion();
+const _bankAxis = new THREE.Vector3(0, 0, 1);
 
 export default function PlayerAvatar({ rigRef }) {
-  const { accent, surface, isDay } = useOpenWorldPalette();
+  const { accent, surface } = useOpenWorldPalette();
   const rootRef = useRef();
   const bodyRef = useRef();
   const hoverRingRef = useRef();
@@ -25,17 +29,13 @@ export default function PlayerAvatar({ rigRef }) {
   const thrusterRef = useRef();
   const brakeLightRef = useRef();
   const skidSmokeRef = useRef();
-  const wheelRefs = useRef([]);
+  const wheelSteerRefs = useRef([]);
+  const wheelRollRefs = useRef([]);
 
-  const bodyColor = mixHex('#ee8f68', accent, 0.16);
-  const bodyShadow = mixHex('#263447', accent, 0.16);
-  const glassColor = mixHex('#294765', accent, 0.22);
+  const bodyColor = mixHex('#e98b55', accent, 0.1);
+  const bodyShadow = mixHex('#36544f', accent, 0.12);
+  const glassColor = mixHex('#6ca7aa', accent, 0.14);
   const wheelColor = '#17212d';
-  // Night driving readability: additive light cones project from the headlamps after
-  // dark (the palette's day flag doubles as the world's local time of day). Visual-only
-  // beams — no real light — keeps the rig free of per-frame shadow/light cost.
-  const headlightsOn = !isDay;
-
   useFrame(({ clock }, delta) => {
     const root = rootRef.current;
     const body = bodyRef.current;
@@ -55,22 +55,45 @@ export default function PlayerAvatar({ rigRef }) {
 
     root.position.lerp(_rootTarget.set(rig.position.x, targetY, rig.position.z), follow);
     root.rotation.y = rig.facing;
-    root.rotation.z = rig.bank * 0.58;
+    root.rotation.z = 0;
+
+    const terrainHeight = openWorldTerrainHeight(rig.position.x, rig.position.z);
+    const suspension = solveVehicleSuspensionPose({
+      x: rig.position.x,
+      z: rig.position.z,
+      heading: rig.facing,
+      centerHeight: terrainHeight,
+      halfWidth: WHEEL_X,
+      halfLength: WHEEL_Z,
+      heightAt: openWorldTerrainHeight,
+    });
+    _suspensionTarget.set(
+      suspension.rotation.x,
+      suspension.rotation.y,
+      suspension.rotation.z,
+      suspension.rotation.w,
+    );
+    _bankTarget.setFromAxisAngle(_bankAxis, rig.bank * 0.24);
+    _suspensionTarget.multiply(_bankTarget);
 
     const bob = hovering
       ? 0.2 + Math.sin(t * 2.4) * 0.07
       : Math.sin(t * (7 + speedRatio * 8)) * 0.018 * speedRatio;
-    body.position.y += (bob - body.position.y) * follow;
-    body.rotation.x = hovering ? Math.sin(t * 2.1) * 0.045 : -speedRatio * 0.018;
-    body.rotation.z = rig.bank * 0.34;
+    const rideOffset = hovering || rig.jumping ? 0 : suspension.translation.y;
+    body.position.y += (rideOffset + bob - body.position.y) * follow;
+    body.quaternion.slerp(hovering || rig.jumping ? _identityTarget : _suspensionTarget, dampFactor(12, delta));
 
     const wheelSpeed = speed !== 0 ? speed / WHEEL_RADIUS : running ? 15 : moving ? 8 : 0;
-    wheelRefs.current.forEach((wheel, index) => {
-      if (!wheel) return;
-      wheel.rotation.x -= wheelSpeed * delta;
-      // The front axle follows the damped steering angle. Rear wheels stay planted while
-      // the whole rover banks, which makes steering readable even at low speed.
-      wheel.rotation.y = index >= 2 ? (rig.wheelAngle || 0) : 0;
+    wheelSteerRefs.current.forEach((steerPivot, index) => {
+      if (!steerPivot) return;
+      // Steering, suspension travel, and rolling live on separate nested pivots. Combining
+      // them on one Euler made the cylinder's roll axis precess as the front wheels turned,
+      // which read as a wobble even on flat ground.
+      steerPivot.rotation.y = index >= 2 ? (rig.wheelAngle || 0) : 0;
+      const wheelOffset = hovering || rig.jumping ? -0.08 : suspension.wheelTravel[index];
+      steerPivot.position.y += ((WHEEL_RADIUS + wheelOffset) - steerPivot.position.y) * dampFactor(15, delta);
+      const rollPivot = wheelRollRefs.current[index];
+      if (rollPivot) rollPivot.rotation.y -= wheelSpeed * delta;
     });
 
     if (hoverRingRef.current) {
@@ -102,54 +125,78 @@ export default function PlayerAvatar({ rigRef }) {
     }
   });
 
-  const setWheelRef = (index) => (node) => {
-    wheelRefs.current[index] = node;
+  const setWheelSteerRef = (index) => (node) => {
+    wheelSteerRefs.current[index] = node;
+  };
+
+  const setWheelRollRef = (index) => (node) => {
+    wheelRollRefs.current[index] = node;
   };
 
   return (
     <group ref={rootRef}>
       <group ref={bodyRef}>
-        {/* Low-poly body and cabin */}
-        <mesh position={[0, 0.48, 0]}>
+        {/* Low, friendly utility-cart body. */}
+        <mesh position={[0, 0.48, 0]} castShadow receiveShadow>
           <boxGeometry args={[CAR_WIDTH, 0.42, CAR_LENGTH]} />
           <meshStandardMaterial {...surface} color={bodyColor} roughness={0.58} metalness={0.22} />
         </mesh>
-        <mesh position={[0, 0.74, 0.08]}>
-          <boxGeometry args={[CAR_WIDTH * 0.72, 0.26, CAR_LENGTH * 0.46]} />
+        <mesh position={[0, 0.76, -CAR_LENGTH * 0.12]} castShadow receiveShadow>
+          <boxGeometry args={[CAR_WIDTH * 0.72, 0.3, CAR_LENGTH * 0.38]} />
           <meshStandardMaterial {...surface} color={glassColor} roughness={0.24} metalness={0.36} transparent opacity={0.92} />
         </mesh>
-        {/* Hood scoop breaks up the flat hood line and reads at speed. */}
-        <mesh position={[0, 0.72, -CAR_LENGTH * 0.16]}>
-          <boxGeometry args={[CAR_WIDTH * 0.26, 0.06, CAR_LENGTH * 0.16]} />
+        <mesh position={[0, 0.7, -CAR_LENGTH * 0.38]} castShadow receiveShadow>
+          <boxGeometry args={[CAR_WIDTH * 0.62, 0.08, CAR_LENGTH * 0.2]} />
           <meshStandardMaterial {...surface} color={bodyShadow} roughness={0.5} metalness={0.3} />
         </mesh>
-        {/* Aero: front splitter + side skirts ground the body visually. */}
-        <mesh position={[0, 0.2, -CAR_LENGTH * 0.48]}>
-          <boxGeometry args={[CAR_WIDTH * 0.94, 0.05, 0.18]} />
-          <meshStandardMaterial color={wheelColor} roughness={0.85} metalness={0.1} />
-        </mesh>
+
+        {/* Canvas sun roof and roll bars give the cart a memorable toy-like profile. */}
         {[-1, 1].map((side) => (
-          <mesh key={`skirt-${side}`} position={[side * (CAR_WIDTH / 2), 0.24, 0]}>
-            <boxGeometry args={[0.06, 0.13, CAR_LENGTH * 0.66]} />
-            <meshStandardMaterial color={wheelColor} roughness={0.85} metalness={0.1} />
+          <mesh key={`rollbar-${side}`} position={[side * CAR_WIDTH * 0.31, 1.03, -CAR_LENGTH * 0.08]} castShadow>
+            <boxGeometry args={[0.07, 0.56, 0.07]} />
+            <meshStandardMaterial color="#584b3d" roughness={0.82} metalness={0.12} />
           </mesh>
         ))}
-        {/* Rear wing on two struts — the silhouette cue that says "rover" from far away. */}
+        <mesh position={[0, 1.3, -CAR_LENGTH * 0.08]} castShadow receiveShadow>
+          <boxGeometry args={[CAR_WIDTH * 0.82, 0.08, CAR_LENGTH * 0.5]} />
+          <meshStandardMaterial color="#f4d8a8" roughness={0.94} metalness={0} />
+        </mesh>
+        <mesh position={[0, 1.345, -CAR_LENGTH * 0.08]}>
+          <boxGeometry args={[CAR_WIDTH * 0.55, 0.012, CAR_LENGTH * 0.34]} />
+          <meshStandardMaterial color={accent} roughness={0.7} metalness={0} />
+        </mesh>
+
+        {/* Timber cargo bed makes this a working village runabout. */}
+        <mesh position={[0, 0.75, CAR_LENGTH * 0.3]} castShadow receiveShadow>
+          <boxGeometry args={[CAR_WIDTH * 0.74, 0.13, CAR_LENGTH * 0.3]} />
+          <meshStandardMaterial color="#8b5e3c" roughness={0.9} metalness={0} />
+        </mesh>
         {[-1, 1].map((side) => (
-          <mesh key={`strut-${side}`} position={[side * CAR_WIDTH * 0.28, 0.76, CAR_LENGTH * 0.38]}>
-            <boxGeometry args={[0.05, 0.14, 0.07]} />
-            <meshStandardMaterial {...surface} color={bodyShadow} roughness={0.5} metalness={0.35} />
+          <mesh key={`cargo-rail-${side}`} position={[side * CAR_WIDTH * 0.33, 0.91, CAR_LENGTH * 0.31]} castShadow>
+            <boxGeometry args={[0.07, 0.24, CAR_LENGTH * 0.34]} />
+            <meshStandardMaterial color="#5c402f" roughness={0.92} metalness={0} />
           </mesh>
         ))}
-        <mesh position={[0, 0.85, CAR_LENGTH * 0.4]}>
-          <boxGeometry args={[CAR_WIDTH * 1.04, 0.05, CAR_LENGTH * 0.13]} />
-          <meshStandardMaterial {...surface} color={bodyShadow} roughness={0.45} metalness={0.4} />
+        <mesh position={[0.18, 0.93, CAR_LENGTH * 0.31]} rotation={[0.08, 0.18, 0]} castShadow>
+          <boxGeometry args={[0.42, 0.28, 0.48]} />
+          <meshStandardMaterial color="#d6a64d" roughness={0.92} metalness={0} />
         </mesh>
-        {/* Trailing accent strip along the wing's back edge. */}
-        <mesh position={[0, 0.85, CAR_LENGTH * 0.5]}>
-          <boxGeometry args={[CAR_WIDTH * 1.02, 0.03, 0.02]} />
-          <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={0.5} />
+        <mesh position={[-0.25, 0.92, CAR_LENGTH * 0.31]} rotation={[0, 0, Math.PI / 2]} castShadow>
+          <cylinderGeometry args={[0.13, 0.13, 0.42, 12]} />
+          <meshStandardMaterial color="#7ea89a" roughness={0.95} metalness={0} />
         </mesh>
+
+        {/* Sturdy bumpers and running boards ground the silhouette. */}
+        <mesh position={[0, 0.24, -CAR_LENGTH * 0.52]} castShadow>
+          <boxGeometry args={[CAR_WIDTH * 0.94, 0.09, 0.16]} />
+          <meshStandardMaterial color="#584b3d" roughness={0.84} metalness={0.1} />
+        </mesh>
+        {[-1, 1].map((side) => (
+          <mesh key={`step-${side}`} position={[side * (CAR_WIDTH * 0.54), 0.27, 0]} castShadow>
+            <boxGeometry args={[0.12, 0.08, CAR_LENGTH * 0.5]} />
+            <meshStandardMaterial color="#584b3d" roughness={0.84} metalness={0.1} />
+          </mesh>
+        ))}
         <mesh position={[0, 0.39, -CAR_LENGTH * 0.53]}>
           <boxGeometry args={[CAR_WIDTH * 0.88, 0.08, 0.1]} />
           <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={0.45} />
@@ -158,52 +205,10 @@ export default function PlayerAvatar({ rigRef }) {
           <boxGeometry args={[CAR_WIDTH * 0.82, 0.07, 0.08]} />
           <meshStandardMaterial color="#ef5252" emissive="#ef5252" emissiveIntensity={0.28} />
         </mesh>
-        {/* Twin exhaust tips below the rear light bar. */}
-        {[-1, 1].map((side) => (
-          <mesh key={`exhaust-${side}`} position={[side * CAR_WIDTH * 0.18, 0.3, CAR_LENGTH * 0.54]} rotation={[Math.PI / 2, 0, 0]}>
-            <cylinderGeometry args={[0.045, 0.05, 0.09, 8]} />
-            <meshStandardMaterial color={bodyShadow} roughness={0.35} metalness={0.65} />
-          </mesh>
-        ))}
-
-        {/* Headlight beams after dark: apex at the lamp, cone spreading forward and a
-            touch down so the road ahead reads while driving at night. */}
-        {headlightsOn && [-1, 1].map((side) => (
-          <group key={`beam-${side}`}>
-            {/* Volumetric angled cone extending down-forward from the lamp */}
-            <group position={[side * CAR_WIDTH * 0.3, 0.55, -CAR_LENGTH * 0.55]} rotation={[-0.09, 0, 0]}>
-              {/* Cone axis is +Y by default; rotating +90° about X aims apex to +Z and base to -Z.
-                  With offset [0, 0, -2.7], apex is on the lamp (z=0) and wide base spreads forward (z=-5.4). */}
-              <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, 0, -2.7]}>
-                <coneGeometry args={[1.15, 5.4, 10, 1, true]} />
-                <meshBasicMaterial
-                  color="#ffe9b8"
-                  transparent
-                  opacity={0.14}
-                  blending={THREE.AdditiveBlending}
-                  depthWrite={false}
-                  side={THREE.DoubleSide}
-                  toneMapped={false}
-                />
-              </mesh>
-            </group>
-            {/* Soft projected illumination spot flat on the road surface ahead */}
-            <mesh
-              position={[side * CAR_WIDTH * 0.3, 0.04, -CAR_LENGTH * 0.55 - 4.2]}
-              rotation={[-Math.PI / 2, 0, 0]}
-            >
-              <circleGeometry args={[1.25, 16]} />
-              <meshBasicMaterial
-                color="#ffe9b8"
-                transparent
-                opacity={0.09}
-                blending={THREE.AdditiveBlending}
-                depthWrite={false}
-                side={THREE.DoubleSide}
-              />
-            </mesh>
-          </group>
-        ))}
+        <mesh position={[0, 0.3, CAR_LENGTH * 0.55]} castShadow>
+          <boxGeometry args={[CAR_WIDTH * 0.9, 0.08, 0.12]} />
+          <meshStandardMaterial color="#584b3d" roughness={0.84} metalness={0.1} />
+        </mesh>
 
         <group ref={thrusterRef} position={[0, 0.38, CAR_LENGTH * 0.58]} visible={false}>
           {[-CAR_WIDTH * 0.24, CAR_WIDTH * 0.24].map((offsetX, i) => (
@@ -214,16 +219,20 @@ export default function PlayerAvatar({ rigRef }) {
           ))}
         </group>
 
-        {/* Front lamps and the small roof beacon make the vehicle readable in both views. */}
+        {/* Front lamps and a little village pennant make the cart readable in both views. */}
         {[-1, 1].map((side) => (
           <mesh key={`lamp-${side}`} position={[side * CAR_WIDTH * 0.3, 0.55, -CAR_LENGTH * 0.53]}>
             <boxGeometry args={[0.13, 0.08, 0.035]} />
             <meshBasicMaterial color="#fff5cf" toneMapped={false} />
           </mesh>
         ))}
-        <mesh position={[0, 0.96, 0.08]}>
-          <sphereGeometry args={[0.055, 8, 6]} />
-          <meshBasicMaterial color={accent} toneMapped={false} />
+        <mesh position={[0, 1.56, -CAR_LENGTH * 0.08]} castShadow>
+          <cylinderGeometry args={[0.018, 0.018, 0.44, 6]} />
+          <meshStandardMaterial color="#584b3d" roughness={0.8} />
+        </mesh>
+        <mesh position={[0.13, 1.69, -CAR_LENGTH * 0.08]} rotation={[0, 0, -0.18]} castShadow>
+          <coneGeometry args={[0.16, 0.3, 3]} />
+          <meshStandardMaterial color={accent} emissive={accent} emissiveIntensity={0.12} roughness={0.8} />
         </mesh>
 
         {/* Wheels are deliberately chunky: the actor should read as a vehicle at a glance. */}
@@ -233,15 +242,19 @@ export default function PlayerAvatar({ rigRef }) {
           [-WHEEL_X, -WHEEL_Z],
           [WHEEL_X, -WHEEL_Z],
         ].map(([x, z], index) => (
-          <group key={`wheel-${index}`} ref={setWheelRef(index)} position={[x, WHEEL_RADIUS, z]} rotation={[0, 0, Math.PI / 2]}>
-            <mesh>
-              <cylinderGeometry args={[WHEEL_RADIUS, WHEEL_RADIUS, 0.16, 12]} />
-              <meshStandardMaterial color={wheelColor} roughness={0.88} metalness={0.08} />
-            </mesh>
-            <mesh rotation={[0, Math.PI / 2, 0]}>
-              <cylinderGeometry args={[WHEEL_RADIUS * 0.44, WHEEL_RADIUS * 0.44, 0.17, 10]} />
-              <meshStandardMaterial color={bodyShadow} roughness={0.48} metalness={0.4} />
-            </mesh>
+          <group key={`wheel-${index}`} ref={setWheelSteerRef(index)} position={[x, WHEEL_RADIUS, z]}>
+            <group rotation={[0, 0, Math.PI / 2]}>
+              <group ref={setWheelRollRef(index)}>
+                <mesh castShadow receiveShadow>
+                  <cylinderGeometry args={[WHEEL_RADIUS, WHEEL_RADIUS, 0.16, 12]} />
+                  <meshStandardMaterial color={wheelColor} roughness={0.88} metalness={0.08} />
+                </mesh>
+                <mesh>
+                  <cylinderGeometry args={[WHEEL_RADIUS * 0.44, WHEEL_RADIUS * 0.44, 0.17, 10]} />
+                  <meshStandardMaterial color={bodyShadow} roughness={0.48} metalness={0.4} />
+                </mesh>
+              </group>
+            </group>
           </group>
         ))}
       </group>

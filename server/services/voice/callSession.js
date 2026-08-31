@@ -382,10 +382,9 @@ export async function pollIncoming() {
     return { checked: false, reason: 'probe-failed' };
   }
 
-  // The helper reports nothing distinguishing "no call" from "a caller who is
-  // not the configured identity" — fail-closed at the helper boundary. Reused
-  // here: `authorized` on an idle-session probe means "the ringing caller
-  // matches the configured identity", never "no call at all".
+  // The helper reports `dialing` only for a ringing notification whose caller
+  // matches the configured identity. An unmatched caller is indistinguishable
+  // from idle; `authorized` continues to mean the helper has AX permission.
   const ringing = Boolean(observed?.authorized) && observed?.state === 'dialing';
   if (!ringing) {
     incomingRingActive = false;

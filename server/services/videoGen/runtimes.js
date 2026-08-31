@@ -64,6 +64,29 @@ export const MINIMAX_H3_EXPECTED_REVISION = 'fcd9e9b79a1d6018d91ac477c0968de1fa0
 // untracked in the pin verification that both /status and the render helper run.
 export const MINIMAX_H3_ENCODER_SHIM_DIR = join(homedir(), '.portos', 'minimax-h3-encoder-shims');
 
+// Composed checkpoint roots for a preview-fidelity video decode
+// (lib/videoDraftDecoders.js, #5423). Same shape and the same reason as the
+// encoder shims above — a tree of symlinks into the upstream FL2VA snapshot
+// with only `video_vae/source/model.safetensors` replaced — kept in its own
+// directory so removing one substitution never disturbs the other.
+export const MINIMAX_H3_DRAFT_DECODER_SHIM_DIR = join(homedir(), '.portos', 'minimax-h3-decoder-shims');
+
+// Reusable Qwen3-VL prompt embeddings (#5443). The MLX runner keys each entry
+// on the prompt text plus the CONTENT digest of every conditioning image and
+// holds the directory under its own byte ceiling, so this is a plain cache the
+// user can delete at any time. Outside MINIMAX_H3_REPO_DIR for the same reason
+// the shim roots are: a file written inside the checkout reads as untracked in
+// the pin verification /status and the render helper both run.
+export const MINIMAX_H3_PROMPT_EMBEDDING_CACHE_DIR = join(homedir(), '.portos', 'minimax-h3-prompt-embeddings');
+
+// MiniMax H3 Ref2VA runtime — the signed mere.run release provides the native
+// MLX implementation and stays separate from model weights. PortOS installs it
+// into a user-owned directory so the in-app flow never needs sudo.
+export const MERE_RUN_VERSION = '0.47.0';
+export const MERE_RUN_DIR = join(homedir(), '.portos', 'mere-run');
+export const MERE_RUN_BIN = join(MERE_RUN_DIR, 'mere.run');
+export const MINIMAX_H3_REF2VA_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_minimax_h3_ref2va.js');
+
 // MiniMax H3 on CUDA — the diffusers `MiniMaxH3ModularPipeline` rather than a
 // pinned source checkout, so this runtime is a plain pip venv with no revision
 // to verify and no source package to keep clean.
@@ -85,13 +108,24 @@ export const MINIMAX_H3_CUDA_OFFLOAD_PROFILES = Object.freeze([
   'auto', 'bf16', 'int8-stream', 'int8-lean',
 ]);
 
-// HunyuanVideo MLX runtime — gaurav-nelson/HunyuanVideo_MLX cloned at
-// ~/.portos/hunyuan-video-mlx/. ~60 GB resident at bf16 so practical only
-// with the 4-bit Gemma text encoder + everything else evicted. Provisioned
-// via `INSTALL_HUNYUAN=1 bash scripts/setup-image-video.sh`.
-export const HUNYUAN_VENV_PYTHON = join(homedir(), '.portos', 'hunyuan-video-mlx', '.venv', 'bin', 'python3');
-export const HUNYUAN_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_hunyuan.py');
-export const HUNYUAN_REPO_DIR = join(homedir(), '.portos', 'hunyuan-video-mlx');
+// FastVideo MLX runtime — Hao AI Lab's FastVideo / FastMetal Apple Silicon framework.
+export const FASTVIDEO_VENV_PYTHON = join(homedir(), '.portos', 'fastvideo', '.venv', 'bin', 'python3');
+export const FASTVIDEO_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_fastvideo.py');
+export const FASTVIDEO_REPO_DIR = join(homedir(), '.portos', 'fastvideo');
+
+// LTX-2.5 on CUDA — the official Lightricks ltx-core / ltx-pipelines runtime.
+export const LTX25_CUDA_REPO_DIR = join(homedir(), '.portos', 'ltx-2.5-cuda');
+export const LTX25_CUDA_VENV_PYTHON = process.platform === 'win32'
+  ? join(LTX25_CUDA_REPO_DIR, '.venv', 'Scripts', 'python.exe')
+  : join(LTX25_CUDA_REPO_DIR, '.venv', 'bin', 'python3');
+export const LTX25_CUDA_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_ltx25_cuda.py');
+
+// Wan 2.2 TI2V 5B on CUDA — official Diffusers checkpoint.
+export const WAN22_CUDA_REPO_DIR = join(homedir(), '.portos', 'wan2.2-cuda');
+export const WAN22_CUDA_VENV_PYTHON = process.platform === 'win32'
+  ? join(WAN22_CUDA_REPO_DIR, '.venv', 'Scripts', 'python.exe')
+  : join(WAN22_CUDA_REPO_DIR, '.venv', 'bin', 'python3');
+export const WAN22_CUDA_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_wan22_cuda.py');
 
 // Standalone runtime-fingerprint probe (scripts/runtime_fingerprint.py). Run in
 // each installed BYOV venv by resolveRuntimeFingerprint() to surface resolved
@@ -113,6 +147,24 @@ const RUNTIME_FINGERPRINT_SCRIPT = join(PATHS.root, 'scripts', 'runtime_fingerpr
 // this probe the UI would hide the install banner and renders would fail
 // with a deep ImportError inside the runner script.
 export const BYOV_RUNTIME_INFO = Object.freeze({
+  minimax_h3_ref2va: {
+    id: 'minimax_h3_ref2va',
+    label: 'MiniMax H3 Ref2VA MLX',
+    venvPython: MERE_RUN_BIN,
+    repoDir: MERE_RUN_DIR,
+    installEnvVar: 'INSTALL_MERERUN',
+    cacheOnly: true,
+    killProcessGroup: true,
+    repoUrl: `https://github.com/sawfwair/mere-run/releases/tag/v${MERE_RUN_VERSION}`,
+    installSourceLabel: `signed mere.run v${MERE_RUN_VERSION} release`,
+    expectedVersion: MERE_RUN_VERSION,
+    probeArgs: ['--version'],
+    fingerprintProbeArgs: ['--version'],
+    fingerprintVersionKey: 'mere.run',
+    // The PortOS Hugging Face downloader must use its own Python helper and
+    // saved token; mere.run is an executable, not a Python interpreter.
+    hfDownloadPython: false,
+  },
   minimax_h3: {
     id: 'minimax_h3',
     label: 'MiniMax H3 MLX',
@@ -149,7 +201,7 @@ export const BYOV_RUNTIME_INFO = Object.freeze({
     // and add deltas in the forward pass (fusing into packed-uint32 weights is
     // not possible). The probe exercises the local adapter against the pinned
     // runtime without loading the model. Absence of this key means "runtime can
-    // never take LoRAs", which is the correct answer for wan22 / hunyuan.
+    // never take LoRAs", which is the correct answer for wan22.
     loraProbeArgs: [MINIMAX_H3_LORA_PROBE_SCRIPT, MINIMAX_H3_REPO_DIR],
     fingerprintPackages: ['mlx', 'mlx-metal', 'mlx-vlm', 'transformers', 'huggingface-hub'],
   },
@@ -186,19 +238,31 @@ export const BYOV_RUNTIME_INFO = Object.freeze({
     // Mirror scripts/generate_minimax_h3_cuda.py's emit_runtime_fingerprint list.
     fingerprintPackages: ['torch', 'diffusers', 'transformers', 'torchao', 'accelerate', 'huggingface-hub'],
   },
-  hunyuan: {
-    id: 'hunyuan',
-    label: 'HunyuanVideo MLX',
-    venvPython: HUNYUAN_VENV_PYTHON,
-    repoDir: HUNYUAN_REPO_DIR,
-    installEnvVar: 'INSTALL_HUNYUAN',
-    repoUrl: 'https://github.com/gaurav-nelson/HunyuanVideo_MLX',
-    // `hyvideo` isn't pip-installed — mirror the runner's sys.path prepend so
-    // the probe walks the same transitive import chain (loguru, diffusers, …).
-    importProbe: `import sys; sys.path.insert(0, ${JSON.stringify(HUNYUAN_REPO_DIR)}); import hyvideo.inference`,
-    // Distributions the /status runtime-fingerprint probe resolves versions for
-    // (must match scripts/generate_hunyuan.py's emit_runtime_fingerprint call).
-    fingerprintPackages: ['torch', 'diffusers', 'transformers', 'mlx'],
+  ltx25_cuda: {
+    id: 'ltx25_cuda',
+    label: 'LTX-2.5 CUDA',
+    venvPython: LTX25_CUDA_VENV_PYTHON,
+    repoDir: LTX25_CUDA_REPO_DIR,
+    installEnvVar: 'INSTALL_LTX25_CUDA',
+    cacheOnly: true,
+    killProcessGroup: true,
+    repoUrl: 'https://github.com/Lightricks/LTX-2',
+    installSourceLabel: 'official Lightricks ltx-core / ltx-pipelines packages',
+    importProbe: 'import sys, torch; import ltx_core, ltx_pipelines; from ltx_pipelines.distilled import DistilledPipeline; assert torch.cuda.is_available(), "no CUDA device"; assert sys.platform != "win32" or torch.__version__ == "2.10.0+cu128", f"expected torch 2.10.0+cu128 on Windows, got {torch.__version__}"',
+    fingerprintPackages: ['torch', 'ltx-core', 'ltx-pipelines', 'transformers', 'accelerate', 'huggingface-hub'],
+  },
+  wan22_cuda: {
+    id: 'wan22_cuda',
+    label: 'Wan 2.2 CUDA',
+    venvPython: WAN22_CUDA_VENV_PYTHON,
+    repoDir: WAN22_CUDA_REPO_DIR,
+    installEnvVar: 'INSTALL_WAN22_CUDA',
+    cacheOnly: true,
+    killProcessGroup: true,
+    repoUrl: 'https://huggingface.co/docs/diffusers/main/api/pipelines/wan',
+    installSourceLabel: 'pinned Diffusers and CUDA PyTorch packages',
+    importProbe: 'import torch, hf_xet; from diffusers import AutoencoderKLWan, WanPipeline; assert torch.cuda.is_available(), "no CUDA device"',
+    fingerprintPackages: ['torch', 'diffusers', 'transformers', 'accelerate', 'huggingface-hub', 'hf-xet'],
   },
   wan22: {
     id: 'wan22',
@@ -239,6 +303,27 @@ export const BYOV_RUNTIME_INFO = Object.freeze({
     pinEnvVar: 'LTX25_PIN',
     importProbe: 'import ltx_pipelines_mlx',
     fingerprintPackages: ['ltx_pipelines_mlx', 'ltx_core_mlx', 'mlx', 'mlx_metal'],
+    // The revision whose ancestral (SDE) Euler loop was READ and confirmed to
+    // re-apply the conditioning mask after its renoise — the invariant an
+    // image-to-video render depends on to keep frame one equal to the supplied
+    // picture at every step, not only the last (#5422). This is deliberately a
+    // literal rather than a reference to LTX25_EXPECTED_REVISION: bumping the
+    // pin without re-reading that loop turns runtimes.test.js red, which is the
+    // whole point. scripts/generate_ltx2.py enforces the invariant against the
+    // LIVE pin regardless, and refuses the render when it cannot.
+    i2vAnchorVerifiedRevision: '57952288076766abe27dda3a774b2c24f7346977',
+  },
+  fastvideo: {
+    id: 'fastvideo',
+    label: 'FastVideo MLX',
+    venvPython: FASTVIDEO_VENV_PYTHON,
+    repoDir: FASTVIDEO_REPO_DIR,
+    installEnvVar: 'INSTALL_FASTVIDEO',
+    killProcessGroup: true,
+    repoUrl: 'https://github.com/hao-ai-lab/FastVideo',
+    pinEnvVar: 'FASTVIDEO_PIN',
+    importProbe: 'import fastvideo; import mlx.core',
+    fingerprintPackages: ['fastvideo', 'mlx', 'mlx_metal', 'torch', 'transformers', 'huggingface-hub'],
   },
 });
 
@@ -311,7 +396,7 @@ export async function isByovRuntimeReady(runtimeId) {
   // executable package have passed the clean-status check. Keep this ahead of
   // the positive readiness cache too: a checkout can be edited after an
   // earlier successful probe.
-  if (info.expectedRevision && !await isByovRuntimeCurrent(runtimeId)) return false;
+  if ((info.expectedRevision || info.expectedVersion) && !await isByovRuntimeCurrent(runtimeId)) return false;
   if (readyCache.get(runtimeId) === true) return true;
   const probeOk = await runVenvProbe(
     info.venvPython, info.probeArgs || ['-c', info.importProbe], `${runtimeId} readiness`,
@@ -476,8 +561,34 @@ export function isPinnedSourceStatusClean(stdout, expectedRevision) {
   return oid === expectedRevision && lines.every((line) => line.startsWith('# '));
 }
 
+// The revision a BYOV runtime's checkout is pinned to, or null for a runtime
+// that has no source pin (a plain pip venv). Paired with
+// `isByovRuntimeCurrent` by callers that need to know WHICH revision is
+// installed rather than just whether it is current — a capability gate on a
+// separately verified asset (lib/videoDraftDecoders.js) has to name the
+// checkout the asset was validated against, not just assert cleanliness.
+export function byovRuntimeExpectedRevision(runtimeId) {
+  return BYOV_RUNTIME_INFO[runtimeId]?.expectedRevision || null;
+}
+
 export async function isByovRuntimeCurrent(runtimeId) {
   const info = BYOV_RUNTIME_INFO[runtimeId];
+  if (info?.expectedVersion) {
+    if (!existsSync(info.venvPython)) return false;
+    return new Promise((resolve) => {
+      let stdout = '';
+      const child = spawn(info.venvPython, ['--version'], safeChildProcessOptions({
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }));
+      const timer = setTimeout(() => { if (!child.killed) child.kill('SIGKILL'); resolve(false); }, 10000);
+      child.stdout.on('data', (chunk) => { if (stdout.length < 128) stdout += chunk.toString(); });
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        resolve(code === 0 && stdout.trim() === info.expectedVersion);
+      });
+      child.on('error', () => { clearTimeout(timer); resolve(false); });
+    });
+  }
   if (!info?.expectedRevision) return true;
   if (!existsSync(join(info.repoDir, '.git'))) return false;
   return new Promise((resolve) => {
@@ -503,8 +614,8 @@ export async function isByovRuntimeCurrent(runtimeId) {
 
 // Throws the same shape the per-runtime buildArgs used to throw inline — a
 // 500 with a stable runtime-specific code the route layer and tests already
-// match against. The error codes are LTX2_VENV_MISSING / WAN22_VENV_MISSING
-// / HUNYUAN_VENV_MISSING; keep `runtimeId.toUpperCase()` to preserve them.
+// match against. Keep `runtimeId.toUpperCase()` so every runtime retains its
+// stable, specific error code.
 export function assertByovRuntimeInstalled(runtimeId) {
   const info = BYOV_RUNTIME_INFO[runtimeId];
   if (!info) return;
@@ -547,7 +658,8 @@ async function probeRuntimeFingerprint(runtimeId) {
       let out = '';
       const child = spawn(
         info.venvPython,
-        [RUNTIME_FINGERPRINT_SCRIPT, runtimeId, ...(info.fingerprintPackages || [])],
+        info.fingerprintProbeArgs
+          || [RUNTIME_FINGERPRINT_SCRIPT, runtimeId, ...(info.fingerprintPackages || [])],
         safeChildProcessOptions({ stdio: ['ignore', 'pipe', 'ignore'] }),
       );
       const timer = setTimeout(() => { if (!child.killed) child.kill('SIGKILL'); resolve({ error: 'timeout' }); }, 15000);
@@ -555,9 +667,16 @@ async function probeRuntimeFingerprint(runtimeId) {
       child.on('close', (code) => {
         clearTimeout(timer);
         if (code !== 0) return resolve({ error: `exit ${code}` });
-        // The probe prints exactly one JSON line; take the last non-empty line
-        // defensively in case a venv import prints a stray warning to stdout.
         const lastLine = out.trim().split('\n').filter(Boolean).pop() || '';
+        if (info.fingerprintProbeArgs) {
+          return resolve({
+            runtime: runtimeId,
+            versions: { [info.fingerprintVersionKey || runtimeId]: lastLine },
+            ...hostRuntimeFingerprint(),
+          });
+        }
+        // The Python probe prints exactly one JSON line; take the last non-empty
+        // line defensively in case a venv import prints a stray warning.
         try { resolve(JSON.parse(lastLine)); } catch { resolve({ error: 'unparseable' }); }
       });
       child.on('error', () => { clearTimeout(timer); resolve({ error: 'spawn-failed' }); });

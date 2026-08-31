@@ -39,7 +39,7 @@ describe('resolveContextFrames', () => {
 describe('supportsContextWindow / resolveContinuityStrategy', () => {
   it('only ltx2 has an extend pipeline to feed a window to', () => {
     expect(supportsContextWindow({ runtime: 'ltx2' })).toBe(true);
-    for (const runtime of ['mlx_video', 'minimax_h3', 'wan22', 'hunyuan']) {
+    for (const runtime of ['mlx_video', 'minimax_h3', 'wan22', 'fastvideo']) {
       expect(supportsContextWindow({ runtime })).toBe(false);
     }
     expect(supportsContextWindow(null)).toBe(false);

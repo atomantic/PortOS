@@ -39,6 +39,7 @@ import { resolveSpawnCwd, usesCreativeDirectorScratchCwd, creativeDirectorScratc
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { getAppWorkspace, getAppDataForTask, createJiraTicketForTask } from './agentPromptBuilder.js';
+import { INVESTIGATION_TASK_DELIVERY, isInvestigationTask } from '../lib/investigationTasks.js';
 
 const ROOT_DIR = PATHS.root;
 
@@ -172,6 +173,13 @@ export async function prepareAgentWorkspace({ agentId, task }) {
       jiraBranchName: null,
       explicitWorktree: false,
     };
+  }
+
+  // Pre-change investigation tasks may already be persisted without delivery
+  // flags. Normalize them at the last common spawn boundary so an old queued
+  // investigation cannot fall back to committing in the shared checkout.
+  if (isInvestigationTask(task)) {
+    task.metadata = { ...(task.metadata || {}), ...INVESTIGATION_TASK_DELIVERY };
   }
 
   // Determine workspace path and resolve app name

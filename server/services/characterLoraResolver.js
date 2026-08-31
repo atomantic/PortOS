@@ -44,7 +44,7 @@ const isCompat = (lora, compatKey) => {
  * user's style LoRAs. Returns
  * `[{ filename, scale, triggerWord, character }]`.
  */
-export async function resolveCharacterLoras(matchedCharacters, { compatKey = null, max = 3 } = {}) {
+export async function resolveCharacterLoras(matchedCharacters, { compatKey = null, max = 3, allPerCharacter = false } = {}) {
   const characters = (matchedCharacters || []).filter(Boolean);
   if (!characters.length) return [];
   const loras = await listLoras();
@@ -53,18 +53,21 @@ export async function resolveCharacterLoras(matchedCharacters, { compatKey = nul
   const usedFilenames = new Set();
   for (const character of characters) {
     if (out.length >= max) break;
-    const match = trained.find((l) =>
+    const matches = trained.filter((l) =>
       !usedFilenames.has(l.filename)
       && matchesCharacter(l.character, { entryId: character.id, ingredientId: character.ingredientId })
       && isCompat(l, compatKey));
-    if (!match) continue;
-    usedFilenames.add(match.filename);
-    out.push({
-      filename: match.filename,
-      scale: Number.isFinite(match.recommendedScale) ? match.recommendedScale : 1.0,
-      triggerWord: match.triggerWords?.[0] || null,
-      character: match.character,
-    });
+    for (const match of matches) {
+      if (out.length >= max) break;
+      usedFilenames.add(match.filename);
+      out.push({
+        filename: match.filename,
+        scale: Number.isFinite(match.recommendedScale) ? match.recommendedScale : 1.0,
+        triggerWord: match.triggerWords?.[0] || null,
+        character: match.character,
+      });
+      if (!allPerCharacter) break;
+    }
   }
   return out;
 }

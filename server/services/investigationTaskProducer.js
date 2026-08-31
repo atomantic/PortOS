@@ -29,6 +29,7 @@ import { addTask, getAllTasks } from './cos.js';
 import {
   INVESTIGATION_CIRCUIT_MAX_CREATIONS,
   INVESTIGATION_CIRCUIT_WINDOW_MS,
+  INVESTIGATION_TASK_DELIVERY,
   UNATTENDED_APPROVAL_VERDICT,
   resolveInvestigationApproval,
 } from '../lib/investigationTasks.js';
@@ -130,6 +131,7 @@ export async function fileInvestigationTask({ fingerprint, description, affected
 
   const task = await addTask({
     ...extra,
+    ...INVESTIGATION_TASK_DELIVERY,
     description: body,
     approvalRequired: verdict.approvalRequired,
     approvalReason: verdict.approvalReason,

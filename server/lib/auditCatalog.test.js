@@ -67,6 +67,8 @@ describe('mode contracts + wrapper', () => {
     expect(FILE_ISSUES_MODE_CONTRACT).toContain('{trackerInstructions}');
     expect(FILE_ISSUES_MODE_CONTRACT).toContain('OVERRIDES');
     expect(FILE_ISSUES_MODE_CONTRACT).toContain('same `git status`');
+    expect(FILE_ISSUES_MODE_CONTRACT).toContain('CI or release failure');
+    expect(FILE_ISSUES_MODE_CONTRACT).toContain('recurring manual churn');
     expect(modeContractFor(true)).toBe(FILE_ISSUES_MODE_CONTRACT);
   });
 

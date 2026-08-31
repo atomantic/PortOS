@@ -409,7 +409,7 @@ describe('FaceTime incoming-call watcher', () => {
     // The helper reports nothing distinguishing "no call" from "an
     // unauthorized caller" — fail-closed at the helper boundary. This is the
     // only shape an unmatched caller can produce.
-    probe.mockResolvedValue({ state: 'idle', authorized: false });
+    probe.mockResolvedValue({ state: 'idle', authorized: true });
     attachHost(socket());
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 

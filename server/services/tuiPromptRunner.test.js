@@ -508,11 +508,43 @@ describe('executeTuiRun', () => {
       await promise;
     });
 
+    it('finalizes when the PTY exits during startup before the lifecycle is ready', async () => {
+      const earlyExitPty = makeFakePty();
+      earlyExitPty.onExit.mockImplementation((handler) => {
+        earlyExitPty._exitHandler = handler;
+        handler({ exitCode: 1, signal: null });
+      });
+      ptySpawnMock.mockReturnValueOnce(earlyExitPty);
+      const onComplete = vi.fn();
+      const provider = { id: 'codex', type: 'tui', command: 'codex' };
+
+      await expect(executeTuiRun({
+        runId: 'run-early-exit',
+        provider,
+        prompt: 'return a response long enough for the prompt guard',
+        workspacePath: TEST_WORKSPACE,
+        onComplete,
+        timeout: 60000,
+      })).resolves.toBeUndefined();
+
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        runId: 'run-early-exit',
+        success: false,
+        exitCode: 1,
+        error: 'TUI exited with code 1',
+        extras: expect.objectContaining({ completionReason: 'exit' }),
+      }));
+      expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ success: false, exitCode: 1 }));
+      expect(runnerMocks.unregisterActiveRun).toHaveBeenCalledWith('run-early-exit');
+      expect(shellMocks.unregisterExternalSession).toHaveBeenCalledWith('run-early-exit', { exitCode: 1 });
+    });
+
     it('registers a read-only Shell view (labelled by source) and tears it down on finish', async () => {
       const provider = { id: 'claude', type: 'tui', command: 'claude', defaultModel: 'claude-fable-5' };
+      const onReady = vi.fn();
       const promise = executeTuiRun({
         runId: 'run-view', provider, prompt: 'review this manuscript', workspacePath: TEST_WORKSPACE,
-        label: 'pipeline-manuscript-completeness',
+        label: 'pipeline-manuscript-completeness', onReady,
       });
       await flushAsync();
 
@@ -525,6 +557,14 @@ describe('executeTuiRun', () => {
           cwd: TEST_WORKSPACE,
         }),
       );
+      expect(onReady).toHaveBeenCalledWith({
+        runId: 'run-view',
+        providerId: 'claude',
+        providerName: 'claude',
+        model: 'claude-fable-5',
+        providerType: 'tui',
+        shellReady: true,
+      });
       expect(shellMocks.unregisterExternalSession).not.toHaveBeenCalled();
 
       ptyInstances[0].emitExit({ exitCode: 0 });
@@ -603,6 +643,31 @@ describe('executeTuiRun', () => {
       pty.emitData('h');
       await vi.advanceTimersByTimeAsync(400);
       expect(pty.write).toHaveBeenCalledWith(expect.stringContaining('\x1b[200~'));
+
+      pty.emitExit({ exitCode: 0 });
+      await promise;
+    });
+
+    it('moves off Claude\'s highlighted decline choice before accepting trust', async () => {
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+      });
+      const provider = { id: 'claude', type: 'tui', command: 'claude', tuiPromptDelayMs: 50 };
+      const promise = executeTuiRun({
+        runId: 'run-claude-decline-default', provider, prompt: 'return one structured response',
+        workspacePath: TEST_WORKSPACE, timeout: 60000,
+      });
+      await flushAsync();
+
+      const pty = ptyInstances[0];
+      pty.emitData('Quick safety check: Is this a project you created or one you trust?\n'
+        + '❯ No, exit\n'
+        + '  Yes, I trust this folder\n'
+        + 'Enter to confirm · Esc to cancel\n');
+      await vi.advanceTimersByTimeAsync(400);
+
+      expect(pty.write).toHaveBeenCalledWith('\x1b[B\r');
+      expect(pty.write).not.toHaveBeenCalledWith(expect.stringContaining('\x1b[200~'));
 
       pty.emitExit({ exitCode: 0 });
       await promise;

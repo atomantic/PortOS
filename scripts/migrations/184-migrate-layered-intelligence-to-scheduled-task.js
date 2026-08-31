@@ -131,6 +131,8 @@ export default {
 
     // 3. Preserve effective enablement: if the old global job was on, enable the
     //    task TYPE globally (the master switch every per-app override is gated on).
+    //    A missing schedule gets the enabled on-demand default; the migrated
+    //    per-app cadence still controls scheduled runs where it was configured.
     if (globalEnabled) {
       const schedulePath = join(rootDir, SCHEDULE_REL);
       const schedule = await readJson(schedulePath);
@@ -143,7 +145,7 @@ export default {
           console.log('📝 layered-intelligence: enabled the scheduled task type (the global job was on)');
         }
       } else {
-        console.log('⚠️ layered-intelligence: no task-schedule.json to enable — loadSchedule backfills the disabled default; enable it under Chief of Staff → Schedule');
+        console.log('⚠️ layered-intelligence: no task-schedule.json to configure — loadSchedule installs the enabled on-demand default; manual Run is available under Chief of Staff → Schedule');
       }
     }
 

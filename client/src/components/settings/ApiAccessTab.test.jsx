@@ -169,6 +169,7 @@ describe('ApiAccessTab', () => {
     expect(screen.getByLabelText('Disclosure profile').value).toBe('metadata');
     expect(screen.getByLabelText('Allow semantic PortOS reads').checked).toBe(false);
     expect(screen.getByLabelText('Allow semantic PortOS updates').checked).toBe(false);
+    expect(screen.getByLabelText('Allow private Eidoverse world management').checked).toBe(false);
   });
 
   it('persists the complete agent-context opt-in configuration', async () => {
@@ -180,14 +181,19 @@ describe('ApiAccessTab', () => {
         enabled: true,
         profile: 'metadata',
         scopes: ['navigation', 'workspaces'],
-        actions: { readPortos: false, writePortos: false },
+        actions: { readPortos: false, writePortos: false, manageEidoverse: false },
       },
     }, { silent: true }));
   });
 
   it('persists semantic MCP grants independently of context scopes', async () => {
     getSettings.mockResolvedValue({
-      agentContext: { enabled: true, profile: 'metadata', scopes: ['navigation'], actions: { readPortos: false, writePortos: false } },
+      agentContext: {
+        enabled: true,
+        profile: 'metadata',
+        scopes: ['navigation'],
+        actions: { readPortos: false, writePortos: false, manageEidoverse: false },
+      },
     });
     await renderTab();
     fireEvent.click(screen.getByLabelText('Allow semantic PortOS reads'));
@@ -196,7 +202,21 @@ describe('ApiAccessTab', () => {
         enabled: true,
         profile: 'metadata',
         scopes: ['navigation'],
-        actions: { readPortos: true, writePortos: false },
+        actions: { readPortos: true, writePortos: false, manageEidoverse: false },
+      },
+    }, { silent: true }));
+  });
+
+  it('persists the dedicated Eidoverse MCP grant independently', async () => {
+    getSettings.mockResolvedValue({});
+    await renderTab();
+    fireEvent.click(screen.getByLabelText('Allow private Eidoverse world management'));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({
+      agentContext: {
+        enabled: false,
+        profile: 'metadata',
+        scopes: ['navigation', 'workspaces'],
+        actions: { readPortos: false, writePortos: false, manageEidoverse: true },
       },
     }, { silent: true }));
   });

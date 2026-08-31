@@ -52,14 +52,14 @@ router.get('/catalog.json', asyncHandler(async (_req, res) => {
 }));
 
 // GET /api/api-docs/events.json — searchable Socket.IO event metadata.
-router.get('/events.json', (_req, res) => {
-  res.json(buildSocketEventCatalog());
-});
+router.get('/events.json', asyncHandler(async (_req, res) => {
+  res.json(await buildSocketEventCatalog());
+}));
 
 // GET /api/api-docs/asyncapi.json — AsyncAPI 3 for the Socket.IO transport.
 router.get('/asyncapi.json', asyncHandler(async (req, res) => {
   const version = await getCurrentVersion();
-  res.json(buildAsyncApiSpec({ baseUrl: baseUrlFromReq(req), version }));
+  res.json(await buildAsyncApiSpec({ baseUrl: baseUrlFromReq(req), version }));
 }));
 
 // GET /api/api-docs/tools.min.json — the minimized semantic tool resource.

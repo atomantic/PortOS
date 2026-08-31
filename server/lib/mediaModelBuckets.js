@@ -4,7 +4,7 @@
  * The video registry has always held exactly two lists of models, and they were
  * originally keyed `macos` and `windows`. That naming was never the real axis:
  * what separates the two lists is the RUNTIME FAMILY each entry needs — Apple's
- * MLX stack (`mlx_video`, `ltx2`, `ltx25`, `wan22`, `hunyuan`, `minimax_h3`) on
+ * MLX stack (`mlx_video`, `ltx2`, `ltx25`, `wan22`, `fastvideo`, `minimax_h3`) on
  * one side, plain torch + CUDA (`ltx_video` via scripts/generate_win.py,
  * `minimax_h3_cuda` via diffusers) on the other. Reading the OS off the key
  * meant a Linux install was served the MLX list, every entry of which is

@@ -12,31 +12,33 @@ job and confirmation extensions retained in the [unified design spec](./superpow
 
 The current source contains:
 
-- 145 mounted HTTP prefixes, 2,069 deduplicated HTTP operations, and 2,072
+- 146 mounted HTTP prefixes, 2,138 deduplicated HTTP operations, and 2,141
   route declarations in `server/lib/apiRouteCatalog.generated.json`.
-- 103 Socket.IO source files and 253 events in
-  `server/lib/socketEventCatalog.generated.json`.
+- A Socket.IO inventory derived from server and client call sites on first use,
+  then cached for the lifetime of the server process.
 - 22 provider-neutral semantic tools: one `cos.create-task` tool and 21
   semantic adapters inherited from the voice registry.
 - Five read-only context tools on the Agent Tools MCP transport. The MCP
   transport may additionally advertise the 21 semantic adapters when its
   separate read/write grants are enabled.
 
-The generated route catalog and event catalog are the exhaustive maps. The
-in-app API Explorer and the following endpoints expose them at runtime:
+The generated route catalog is the exhaustive HTTP map. Socket.IO events are
+derived directly from their source declarations, so there is no second checked-in
+event manifest to regenerate. The in-app API Explorer and the following endpoints
+expose both inventories at runtime:
 
 | Surface | Endpoint | Contract |
 |---|---|---|
 | HTTP inventory | `GET /api/api-docs/catalog.json` | Searchable route metadata, domains, access classification, side-effect classification, and modeled/generated status. |
 | Internal HTTP spec | `GET /api/api-docs/internal/openapi.json` | OpenAPI 3.0.3 for every mounted HTTP operation. Generated operations have path parameters and a default response; modeled operations add richer contracts. |
 | Public HTTP spec | `GET /api/api-docs/openapi.json` | OpenAPI 3.0.3 for only APIs exposed through Settings → API Access. |
-| Socket.IO inventory | `GET /api/api-docs/events.json` | Searchable event names, direction, source, and payload-contract status. |
+| Socket.IO inventory | `GET /api/api-docs/events.json` | Searchable event names, direction, and payload-contract status. |
 | Socket.IO spec | `GET /api/api-docs/asyncapi.json` | AsyncAPI 3 document for the Socket.IO transport. |
 | HTTP tool resource | `GET /api/api-docs/tools.min.json` | Minimized provider-neutral records for the operations annotated `x-portos-tool`, with an HTTP binding and declared failure codes. Schemas are JSON Schema, sized for an agent to read whole. |
 
-Run `npm run generate:api-docs` after route or event declarations change. The
-generated manifests are source-derived artifacts; they are not a second
-handwritten endpoint list.
+Run `npm run generate:api-docs` after HTTP route declarations change. Socket.IO
+event declarations require no regeneration; the server derives and caches their
+inventory from source.
 
 ## Endpoint map
 
@@ -288,9 +290,9 @@ result path in `server/services/cosToolRegistry.js`, and
 ## Validation
 
 - `node scripts/generate-api-route-catalog.js` — regenerated deterministic
-  HTTP manifest: 2,069 operations / 2,072 declarations / 145 mounts.
-- `node scripts/generate-socket-event-catalog.js` — deterministic 253-event
-  Socket.IO manifest.
+  HTTP manifest: 2,138 operations / 2,141 declarations / 146 mounts.
+- `server/lib/socketEventInventory.test.js` — source-derived Socket.IO inventory,
+  representative-event coverage, direction normalization, and runner-tree exclusion.
 - Focused Vitest execution was attempted but this isolated worktree has no
   installed `server/node_modules` (`vitest: command not found`). No live
   database, provider, MCP client, or personal records were used.

@@ -4,6 +4,7 @@ import { readFile } from 'fs/promises';
 import * as gitService from './git.js';
 import * as pm2Service from './pm2.js';
 import { bufferedSpawnOrThrow } from '../lib/bufferedSpawn.js';
+import { parseCommandArgs } from '../lib/commandSecurity.js';
 
 const CMD_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -22,8 +23,9 @@ const updatingApps = new Set();
 /**
  * Run a full update cycle for an app:
  * 1. git pull --rebase --autostash
- * 2. npm install in each subdir that has package.json (root, client, server)
- * 3. npm run setup if the root package.json has a setup script
+ * 2. install dependencies in each package directory (Bun apps use their
+ *    frozen lockfile; existing apps retain npm install)
+ * 3. run setup with the same package manager when the script exists
  * 4. Restart PM2 processes
  *
  * @param {object} app - The app object (must have repoPath, pm2ProcessNames, pm2Home)
@@ -47,6 +49,12 @@ export async function updateApp(app, emit) {
 async function _doUpdate(app, emit) {
   const dir = app.repoPath;
   const steps = [];
+  const packageManager = app.type === 'bun' ? 'bun' : 'npm';
+  const configuredRuntime = parseCommandArgs(app.startCommands?.[0] || '')[0];
+  const packageManagerCommand = packageManager === 'bun' && configuredRuntime
+    ? configuredRuntime
+    : packageManager;
+  const installArgs = packageManager === 'bun' ? ['install', '--frozen-lockfile'] : ['install'];
 
   emit('git-pull', 'running', 'Pulling latest changes...');
   const pullResult = await gitService.pull(dir);
@@ -54,13 +62,26 @@ async function _doUpdate(app, emit) {
   emit('git-pull', 'done', pullMsg);
   steps.push({ step: 'git-pull', success: true, message: pullMsg });
 
+  const companionRepoPaths = Array.isArray(app.companionRepoPaths)
+    ? [...new Set(app.companionRepoPaths)].filter((path) => path && path !== dir)
+    : [];
+  for (let index = 0; index < companionRepoPaths.length; index += 1) {
+    const companionPath = companionRepoPaths[index];
+    const stepId = `git-pull:companion-${index + 1}`;
+    emit(stepId, 'running', `Pulling companion repository ${index + 1}/${companionRepoPaths.length}...`);
+    const companionPull = await gitService.pull(companionPath);
+    const companionMessage = companionPull.output?.trim() || 'Up to date';
+    emit(stepId, 'done', companionMessage);
+    steps.push({ step: stepId, success: true, message: companionMessage });
+  }
+
   for (const sub of ['', 'client', 'server', 'admin']) {
     const subDir = sub ? join(dir, sub) : dir;
     if (existsSync(join(subDir, 'package.json'))) {
       const label = sub || 'root';
-      const stepId = `npm-install:${label}`;
+      const stepId = `${packageManager}-install:${label}`;
       emit(stepId, 'running', `Installing ${label} dependencies...`);
-      await runCommand('npm', ['install'], subDir);
+      await runCommand(packageManagerCommand, installArgs, subDir);
       emit(stepId, 'done', `${label} dependencies installed`);
       steps.push({ step: stepId, success: true });
     }
@@ -71,7 +92,7 @@ async function _doUpdate(app, emit) {
     const pkg = JSON.parse(await readFile(pkgPath, 'utf-8'));
     if (pkg.scripts?.setup) {
       emit('setup', 'running', 'Running setup...');
-      await runCommand('npm', ['run', 'setup'], dir);
+      await runCommand(packageManagerCommand, ['run', 'setup'], dir);
       emit('setup', 'done', 'Setup complete');
       steps.push({ step: 'setup', success: true });
     }

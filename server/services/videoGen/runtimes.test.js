@@ -22,9 +22,9 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => ({
 import {
   BYOV_RUNTIME_INFO, BYOV_VIDEO_RUNTIMES, MINIMAX_H3_CUDA_OFFLOAD_PROFILES,
   byovRuntimeLoraCapable, invalidateByovLoraCapabilityCache, invalidateByovReadyCache,
-  isByovRuntimeReady, isPinnedSourceStatusClean, modelAnchorsLastFrame,
+  isByovRuntimeCurrent, isByovRuntimeReady, isPinnedSourceStatusClean, modelAnchorsLastFrame,
   resolveByovRuntimeLoraCapable, runtimeIsCacheOnly, runtimeNeedsProcessGroupKill,
-  routesToWindowsHelper,
+  routesToWindowsHelper, LTX25_EXPECTED_REVISION,
 } from './runtimes.js';
 
 const REVISION = 'fcd9e9b79a1d6018d91ac477c0968de1fa067e49';
@@ -69,6 +69,39 @@ beforeEach(() => {
   invalidateByovLoraCapabilityCache();
   runtimeMocks.existsSync.mockReset().mockReturnValue(true);
   runtimeMocks.spawn.mockReset();
+});
+
+describe('retired runtime filtering', () => {
+  it('does not advertise legacy Hunyuan support to the video UI', () => {
+    expect(BYOV_RUNTIME_INFO).not.toHaveProperty('hunyuan');
+    expect(BYOV_VIDEO_RUNTIMES.has('hunyuan')).toBe(false);
+  });
+});
+
+describe('MiniMax H3 Ref2VA runtime', () => {
+  it('uses the signed user-local mere.run install and PortOS HF downloader', () => {
+    expect(BYOV_RUNTIME_INFO.minimax_h3_ref2va).toMatchObject({
+      installEnvVar: 'INSTALL_MERERUN',
+      expectedVersion: '0.47.0',
+      probeArgs: ['--version'],
+      cacheOnly: true,
+      killProcessGroup: true,
+      hfDownloadPython: false,
+    });
+  });
+
+  it('accepts only the pinned mere.run version as current', async () => {
+    runtimeMocks.spawn.mockImplementationOnce(() => statusChild('0.47.0\n'));
+    await expect(isByovRuntimeCurrent('minimax_h3_ref2va')).resolves.toBe(true);
+    expect(runtimeMocks.spawn).toHaveBeenCalledWith(
+      BYOV_RUNTIME_INFO.minimax_h3_ref2va.venvPython,
+      ['--version'],
+      expect.objectContaining({ stdio: ['ignore', 'pipe', 'ignore'] }),
+    );
+
+    runtimeMocks.spawn.mockImplementationOnce(() => statusChild('0.46.1\n'));
+    await expect(isByovRuntimeCurrent('minimax_h3_ref2va')).resolves.toBe(false);
+  });
 });
 
 describe('isPinnedSourceStatusClean', () => {
@@ -250,7 +283,7 @@ describe('MiniMax H3 LoRA capability', () => {
     expect(runtimeMocks.spawn).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['ltx2', 'ltx25', 'wan22', 'hunyuan'])('never probes %s, which has no LoRA runtime path', async (runtime) => {
+  it.each(['ltx2', 'ltx25', 'wan22'])('never probes %s, which has no LoRA runtime path', async (runtime) => {
     await expect(resolveByovRuntimeLoraCapable(runtime)).resolves.toBe(false);
     expect(byovRuntimeLoraCapable(runtime)).toBe(false);
     expect(runtimeMocks.spawn).not.toHaveBeenCalled();
@@ -270,7 +303,7 @@ describe('modelAnchorsLastFrame', () => {
     ['minimax_h3_cuda', true],
     ['mlx_video', false],
     ['wan22', false],
-    ['hunyuan', false],
+    ['fastvideo', false],
   ])('reports %s as %s', (runtime, anchored) => {
     expect(modelAnchorsLastFrame({ runtime })).toBe(anchored);
   });
@@ -346,7 +379,7 @@ describe('minimax_h3_cuda runtime registration', () => {
   it('declares no revision pin or LoRA probe — it runs distributions, not a checkout', () => {
     // `expectedRevision`/`sourcePath` drive the clean-checkout gate, which has
     // nothing to verify here; `loraProbeArgs` absent is the correct "this
-    // runtime can never take LoRAs", matching wan22 / hunyuan.
+    // runtime can never take LoRAs", matching wan22 / fastvideo.
     expect(info.expectedRevision).toBeUndefined();
     expect(info.sourcePath).toBeUndefined();
     expect(info.loraProbeArgs).toBeUndefined();
@@ -360,11 +393,49 @@ describe('minimax_h3_cuda runtime registration', () => {
   });
 });
 
+describe('ltx25_cuda runtime registration', () => {
+  const info = BYOV_RUNTIME_INFO.ltx25_cuda;
+
+  it('registers the official cache-only CUDA pipeline in its own venv', () => {
+    expect(BYOV_VIDEO_RUNTIMES.has('ltx25_cuda')).toBe(true);
+    expect(info.installEnvVar).toBe('INSTALL_LTX25_CUDA');
+    expect(info.repoUrl).toBe('https://github.com/Lightricks/LTX-2');
+    expect(info.venvPython).not.toBe(BYOV_RUNTIME_INFO.ltx25.venvPython);
+    expect(info.importProbe).toContain('DistilledPipeline');
+    expect(info.importProbe).toContain('torch.cuda.is_available()');
+    expect(info.importProbe).toContain('2.10.0+cu128');
+    expect(info.cacheOnly).toBe(true);
+    expect(info.killProcessGroup).toBe(true);
+  });
+
+  it('keeps the cache contract aligned with the Python runner', () => {
+    const runner = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'scripts', 'generate_ltx25_cuda.py'),
+      'utf8',
+    );
+    for (const relative of [
+      'diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors',
+      'text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors',
+      'vae/ltx-2.5-video-vae-bf16.safetensors',
+      'vae/ltx-2.5-audio-vae-bf16.safetensors',
+      'model_patches/ltx-2.5-duration-head-bf16.safetensors',
+      'latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors',
+    ]) {
+      expect(runner).toContain(relative);
+    }
+    expect(runner).toContain('local_files_only=True');
+    expect(runner).toContain('PYTORCH_CUDA_ALLOC_CONF');
+    expect(runner).toContain('OffloadMode.DISK');
+    expect(runner).not.toContain('SafetensorsStateDictLoader.load =');
+    expect(runner).not.toContain('pipe.prompt_encoder =');
+  });
+});
+
 // The JS list exists so the server can reject a bad registry `offloadProfile`
 // with a stable code instead of an opaque non-zero child exit — which only
 // works while it agrees with the argparse `choices=` that actually enforces it.
-// Hand-synced across a language boundary is the established shape here (see
-// VIDEO_PRECISIONS), so pin it rather than leave the two free to drift.
+// Hand-synced across a language boundary is the established shape here, so pin
+// it rather than leave the two free to drift.
 describe('MiniMax H3 CUDA offload profiles', () => {
   it('matches OFFLOAD_PROFILES in the Python runner', () => {
     const runner = readFileSync(
@@ -378,6 +449,27 @@ describe('MiniMax H3 CUDA offload profiles', () => {
   });
 });
 
+describe('fastvideo runtime registration', () => {
+  const info = BYOV_RUNTIME_INFO.fastvideo;
+
+  it('is a BYOV runtime with its own venv', () => {
+    expect(BYOV_VIDEO_RUNTIMES.has('fastvideo')).toBe(true);
+    expect(info.installEnvVar).toBe('INSTALL_FASTVIDEO');
+    for (const part of ['.portos', 'fastvideo', '.venv']) expect(info.venvPython).toContain(part);
+    for (const part of ['.portos', 'fastvideo']) expect(info.repoDir).toContain(part);
+  });
+
+  it('probes for fastvideo and mlx.core', () => {
+    expect(info.importProbe).toContain('fastvideo');
+    expect(info.importProbe).toContain('mlx.core');
+  });
+
+  it('never reports LoRA capability', async () => {
+    expect(byovRuntimeLoraCapable('fastvideo')).toBe(false);
+    await expect(resolveByovRuntimeLoraCapable('fastvideo')).resolves.toBe(false);
+  });
+});
+
 // Execution facts read off the registry rather than re-derived from a runtime id
 // at the spawn site, so a new cache-only runtime is a table line, not an edit to
 // the child-spawn path. Absent means off, as with every other optional key here.
@@ -385,16 +477,42 @@ describe('runtime execution flags', () => {
   it('reports cache-only for exactly the runners that never touch the network', () => {
     expect(runtimeIsCacheOnly('minimax_h3')).toBe(true);
     expect(runtimeIsCacheOnly('minimax_h3_cuda')).toBe(true);
+    expect(runtimeIsCacheOnly('ltx25_cuda')).toBe(true);
+    expect(runtimeIsCacheOnly('wan22_cuda')).toBe(true);
     expect(runtimeIsCacheOnly('ltx2')).toBe(false);
     expect(runtimeIsCacheOnly('wan22')).toBe(false);
+    expect(runtimeIsCacheOnly('fastvideo')).toBe(false);
     expect(runtimeIsCacheOnly(undefined)).toBe(false);
   });
 
   it('reports group-kill for the runners that spawn children of their own', () => {
     expect(runtimeNeedsProcessGroupKill('wan22')).toBe(true);
+    expect(runtimeNeedsProcessGroupKill('fastvideo')).toBe(true);
     expect(runtimeNeedsProcessGroupKill('minimax_h3')).toBe(true);
     expect(runtimeNeedsProcessGroupKill('minimax_h3_cuda')).toBe(true);
+    expect(runtimeNeedsProcessGroupKill('ltx25_cuda')).toBe(true);
+    expect(runtimeNeedsProcessGroupKill('wan22_cuda')).toBe(true);
     expect(runtimeNeedsProcessGroupKill('ltx2')).toBe(false);
     expect(runtimeNeedsProcessGroupKill('nope')).toBe(false);
+  });
+});
+
+// A pin bump is where the frame-one anchor silently breaks: the LTX-2.5 fork
+// samples image-to-video with the ancestral (SDE) Euler loop, and a revision
+// whose loop does not re-apply the conditioning mask after its renoise renders a
+// coherent clip that has nothing to do with the supplied image (#5422). The
+// helper enforces the invariant against the live pin at render time; this is the
+// tripwire that makes a reviewer look BEFORE that reaches a user machine.
+describe('LTX-2.5 i2v anchor pin verification', () => {
+  it('pins a revision whose ancestral sampler was read for anchor preservation', () => {
+    expect(BYOV_RUNTIME_INFO.ltx25.i2vAnchorVerifiedRevision).toBe(LTX25_EXPECTED_REVISION);
+  });
+
+  // Nothing else declares it, so the field never reads as "verified" for a
+  // runtime whose sampler was never inspected.
+  it('claims verification for no other runtime', () => {
+    const claimed = Object.values(BYOV_RUNTIME_INFO)
+      .filter((info) => info.i2vAnchorVerifiedRevision).map((info) => info.id);
+    expect(claimed).toEqual(['ltx25']);
   });
 });

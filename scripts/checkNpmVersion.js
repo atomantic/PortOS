@@ -15,15 +15,17 @@
  * npm versions disagree about the schema, so the file ping-pongs forever. The
  * same skew drops `peer: true` markers that npm 12 records.
  *
- * Why this warns instead of failing: no Node release bundles npm 12 yet (Node
- * 24.10 ships npm 11.6.1), so gating `npm start` on it would break working
- * installs over a file-formatting difference. An install on an older npm is
- * correct — it just churns the lockfile. `npm install -g npm@latest` ends it.
+ * PortOS-managed setup, update, and dependency-repair installs pass `--no-save`
+ * so they honor the committed lockfile without rewriting it. A direct
+ * dependency-authoring `npm install` on an older npm still churns the lockfile.
+ * No Node release bundles npm 12 yet (Node 24.10 ships npm 11.6.1), so gating
+ * installs on it would break working installs over a file-formatting difference.
+ * `npm install -g npm@latest` ends the mismatch for authoring workflows.
  *
  * This advisory is the explainer, not the whole floor. The four `engines.npm`
  * fields are the declarative half, and they are what covers the install paths
- * this script never sees — `cd client && npm install`, `npm i <pkg>`, `npm ci`
- * — because npm checks them itself and prints EBADENGINE. `engine-strict` stays
+ * this script never sees — `cd client && npm install` and `npm i <pkg>` —
+ * because npm checks them itself and prints EBADENGINE. `engine-strict` stays
  * off (see the .npmrc note: it would make one dependency's narrow range break
  * every install), so those stay warnings too.
  *
@@ -102,8 +104,8 @@ export function npmAdvisory({
   if (compareVersions(npmVersion, MIN_NPM) >= 0) return [];
 
   const lines = [
-    `⚠️  npm ${npmVersion} is below ${MIN_NPM} — installs will rewrite package-lock.json`,
-    'ℹ️  Older npm drops the `libc` fields npm 12 records, so the lockfiles churn on every install and ping-pong with Dependabot'
+    `⚠️  npm ${npmVersion} is below ${MIN_NPM} — direct npm installs can rewrite package-lock.json`,
+    'ℹ️  Older npm drops the `libc` fields npm 12 records, so direct installs churn the lockfiles and ping-pong with Dependabot'
   ];
 
   // The confusing case: PATH is resolving an older global npm ahead of the one

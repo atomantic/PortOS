@@ -21,12 +21,13 @@ vi.mock('./pipeline/series.js', () => ({
 }));
 
 vi.mock('./pipeline/issues.js', () => ({
-  // canonUsage calls listAllIssues() once to pre-load every issue (UNCAPPED —
-  // listIssues({}) slices at 1000 total), so flatten the per-series map and
-  // annotate each issue with its seriesId.
-  listAllIssues: vi.fn(async () => {
+  // canonUsage calls listAllIssues() once with all linked series ids (UNCAPPED
+  // and one query), so mirror that filtering over the in-memory fixtures.
+  listAllIssues: vi.fn(async ({ seriesIds } = {}) => {
+    const wanted = Array.isArray(seriesIds) ? new Set(seriesIds) : null;
     const all = [];
     for (const [sid, issues] of mockIssuesBySeries) {
+      if (wanted && !wanted.has(sid)) continue;
       for (const issue of issues) {
         all.push({ ...issue, seriesId: sid });
       }
@@ -124,10 +125,7 @@ describe('canonUsage — getUniverseCanonUsage entry rows', () => {
       .rejects.toMatchObject({ status: 404, code: 'UNIVERSE_NOT_FOUND' });
   });
 
-  it('calls listAllIssues exactly once regardless of how many series are linked (N+1 guard)', async () => {
-    // Three series linked to the universe. The pre-load-all-issues fix means
-    // canonUsage must call listAllIssues() once, not once-per-series. A
-    // regression to the old per-series loop would call it 3 times here.
+  it('loads only linked-series issues in one history-free call (N+1 and scope guard)', async () => {
     mockUniverses.set('uni-1', {
       id: 'uni-1',
       characters: [{ id: 'c1', name: 'Lyra' }],
@@ -142,10 +140,15 @@ describe('canonUsage — getUniverseCanonUsage entry rows', () => {
     mockIssuesBySeries.set('ser-1', [{ id: 'i1', stages: { prose: { output: 'Lyra walks.' } } }]);
     mockIssuesBySeries.set('ser-2', [{ id: 'i2', stages: { prose: { output: 'Lyra runs.' } } }]);
     mockIssuesBySeries.set('ser-3', [{ id: 'i3', stages: { prose: { output: 'Lyra flies.' } } }]);
+    mockIssuesBySeries.set('ser-other', [{ id: 'i4', stages: { prose: { output: 'Lyra hides.' } } }]);
 
     await getUniverseCanonUsage('uni-1');
 
     expect(listAllIssues).toHaveBeenCalledTimes(1);
+    expect(listAllIssues).toHaveBeenCalledWith({
+      seriesIds: ['ser-1', 'ser-2', 'ser-3'],
+      withHistory: false,
+    });
   });
 
   it('sorts per-entry rows by issueCount desc with alpha tiebreaker on seriesName', async () => {

@@ -136,6 +136,7 @@ export function useAIStatusNotifications() {
     };
 
     const handleStatus = (event) => {
+      if (event.localOnly) return;
       const state = opsRef.current.get(event.id) || { silent: !!event.silent, opened: false };
       opsRef.current.set(event.id, state);
 

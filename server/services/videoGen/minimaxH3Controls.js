@@ -15,7 +15,7 @@
  * caller with teardown to run (`await cleanupStaged()`) can do it before
  * throwing. Same convention as `videoModeContractError`.
  *
- * Covers BOTH H3 runtimes. The controls are facts about the checkpoint — 24
+ * Covers every H3 runtime. The controls are facts about the checkpoint — 24
  * fps, joint video+audio, CFG-distilled, a 17n+5 frame grid — so the MLX port
  * and the diffusers CUDA path enforce the identical set. The one thing that
  * genuinely differs is the legal frame WINDOW (diffusers requires the snapped

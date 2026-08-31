@@ -53,6 +53,12 @@ export const resolveLlmEndpoint = async (providerId = 'lmstudio') => {
 
 export const authHeaders = (apiKey) => (apiKey ? { Authorization: `Bearer ${apiKey}` } : {});
 
+// A voice turn must eventually release its socket state even when an upstream
+// accepts the request but never sends headers or stops its SSE stream. This is
+// a total request-plus-stream budget, rather than an idle-chunk timeout.
+export const VOICE_LLM_TIMEOUT_MS = 30_000;
+export const VOICE_LLM_TIMEOUT_MESSAGE = 'Voice LLM request timed out';
+
 // Approximate parameter count from LM Studio model id so 'auto' avoids a 70B
 // when smaller, faster models are available. Returns Infinity for non-matches
 // and utility models so they sort last rather than silently winning ties.
@@ -345,166 +351,221 @@ export const streamChat = async (messages, opts = {}) => {
     body.tool_choice = opts.toolChoice ?? 'auto';
   }
 
-  const reqStart = Date.now();
-  const res = await fetch(`${apiBase}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders(apiKey) },
-    body: JSON.stringify(body),
-    signal: opts.signal,
-  });
-  console.log(`🤖 ${tag}voice.llm.headers ${res.status} in ${Date.now() - reqStart}ms`);
-  if (!res.ok || !res.body) {
-    const errBody = await res.text().catch(() => '');
-    throw new Error(`${providerName} chat failed: ${res.status} ${errBody.slice(0, 200)}`);
+  const requestController = new AbortController();
+  let timedOut = false;
+  const onExternalAbort = opts.signal
+    ? () => requestController.abort(opts.signal.reason)
+    : null;
+  let reader = null;
+  const cancelReader = () => {
+    if (typeof reader?.cancel !== 'function') return;
+    try {
+      void Promise.resolve(reader.cancel()).catch(() => {});
+    } catch (err) {
+      console.error(`🤖 voice.llm.reader_cancel failed: ${err.message}`);
+    }
+  };
+  requestController.signal.addEventListener('abort', cancelReader, { once: true });
+  if (opts.signal) {
+    if (opts.signal.aborted) onExternalAbort();
+    else opts.signal.addEventListener('abort', onExternalAbort, { once: true });
   }
-
-  const decoder = new TextDecoder();
-  const reader = res.body.getReader();
-  let buffer = '';
-  let text = '';
-  let ttfbMs = null;
-  let finishReason = null;
-  // Tool calls stream as fragments keyed by index; accumulate until [DONE].
-  const toolCallFrags = new Map();
-
-  // Streaming tool-call stripper: when a model emits Granite-style inline
-  // `<tool_call>[...]</tool_call>` or `<tool_request>[...]` in `delta.content`,
-  // we must NOT forward those chunks to onDelta — the pipeline feeds deltas to
-  // TTS and would speak the raw JSON. Reasoning models likewise emit `<think>`
-  // blocks that should be hidden even when our disable directives don't take.
-  // We still accumulate everything into `text` so the post-stream parser can
-  // hoist into structured `toolCalls`. Tail characters that could be a partial
-  // open/close tag are held across chunks. All tag spellings handled in parallel.
-  const STRIP_TAGS = [...TOOL_TAG_SPELLINGS, 'think', 'thinking', 'reasoning'];
-  const OPEN_TAGS = STRIP_TAGS.map((s) => `<${s}>`);
-  const CLOSE_TAGS = STRIP_TAGS.map((s) => `</${s}>`);
-  let activeClose = null; // set when we entered a tool block
-  let tailHold = '';
-  // Find the earliest match of any candidate in `data`, starting at 0.
-  const earliestIndex = (data, candidates) => {
-    let best = -1;
-    let bestLen = 0;
-    for (const c of candidates) {
-      const i = data.indexOf(c);
-      if (i !== -1 && (best === -1 || i < best)) { best = i; bestLen = c.length; }
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    try {
+      opts.onTimeout?.();
+    } catch (err) {
+      console.error(`🤖 voice.llm.timeout_hook failed: ${err.message}`);
     }
-    return best === -1 ? null : [best, bestLen];
-  };
-  // Longest suffix of `data` that is a prefix of any candidate — characters we
-  // must withhold because they might begin a real tag once more data arrives.
-  const longestPrefixHold = (data, candidates) => {
-    const max = Math.max(...candidates.map((c) => c.length - 1));
-    const limit = Math.min(data.length, max);
-    for (let k = limit; k > 0; k--) {
-      const tail = data.slice(data.length - k);
-      if (candidates.some((c) => c.startsWith(tail))) return k;
-    }
-    return 0;
-  };
-  const forwardClean = (chunk) => {
-    let data = tailHold + chunk;
-    tailHold = '';
-    let out = '';
-    while (data.length) {
-      if (!activeClose) {
-        const hit = earliestIndex(data, OPEN_TAGS);
-        if (hit) {
-          out += data.slice(0, hit[0]);
-          const spelling = data.slice(hit[0] + 1, hit[0] + hit[1] - 1); // strip '<' and '>'
-          activeClose = `</${spelling}>`;
-          data = data.slice(hit[0] + hit[1]);
-          continue;
-        }
-        const hold = longestPrefixHold(data, OPEN_TAGS);
-        if (hold) {
-          out += data.slice(0, data.length - hold);
-          tailHold = data.slice(data.length - hold);
-        } else {
-          out += data;
-        }
-        data = '';
-      } else {
-        const i = data.indexOf(activeClose);
-        if (i !== -1) {
-          data = data.slice(i + activeClose.length);
-          activeClose = null;
-          continue;
-        }
-        const hold = longestPrefixHold(data, [activeClose]);
-        if (hold) tailHold = data.slice(data.length - hold);
-        data = '';
-      }
-    }
-    if (out) opts.onDelta?.(out);
-  };
+    requestController.abort();
+  }, VOICE_LLM_TIMEOUT_MS);
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-
-    let idx;
-    while ((idx = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, idx).trim();
-      buffer = buffer.slice(idx + 1);
-      if (!line.startsWith('data:')) continue;
-      const payload = line.slice(5).trim();
-      if (payload === '[DONE]') {
-        return finalizeReturn();
-      }
-      // Malformed SSE frames (proxy keep-alive, truncated write) would otherwise
-      // abort the whole turn; skip the line and keep streaming.
-      let obj;
-      try { obj = JSON.parse(payload); } catch { continue; }
-      const choice = obj?.choices?.[0];
-      if (choice?.finish_reason) finishReason = choice.finish_reason;
-      const delta = choice?.delta || {};
-      if (delta.content) {
-        if (ttfbMs === null) ttfbMs = Date.now() - started;
-        text += delta.content;
-        forwardClean(delta.content);
-      }
-      for (const tc of delta.tool_calls || []) {
-        const frag = toolCallFrags.get(tc.index) || {
-          index: tc.index,
-          id: '',
-          type: 'function',
-          function: { name: '', arguments: '' },
-        };
-        if (tc.id) frag.id = tc.id;
-        if (tc.type) frag.type = tc.type;
-        // `name` is sent once per tool call per the OpenAI spec; set-once
-        // rather than concatenate so a split fragment can't produce garbage.
-        if (tc.function?.name && !frag.function.name) frag.function.name = tc.function.name;
-        if (tc.function?.arguments) frag.function.arguments += tc.function.arguments;
-        toolCallFrags.set(tc.index, frag);
-      }
+  const requestPromise = (async () => {
+    const reqStart = Date.now();
+    const res = await fetch(`${apiBase}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders(apiKey) },
+      body: JSON.stringify(body),
+      signal: requestController.signal,
+    });
+    if (timedOut) throw new Error(VOICE_LLM_TIMEOUT_MESSAGE);
+    console.log(`🤖 ${tag}voice.llm.headers ${res.status} in ${Date.now() - reqStart}ms`);
+    if (!res.ok || !res.body) {
+      const errBody = await res.text().catch(() => '');
+      throw new Error(`${providerName} chat failed: ${res.status} ${errBody.slice(0, 200)}`);
     }
-  }
-  return finalizeReturn();
 
-  function finalizeReturn() {
-    const streamed = [...toolCallFrags.values()].sort((a, b) => a.index - b.index);
-    // Post-stream: if the model emitted no structured tool_calls but wrote
-    // Granite-style `<tool_call>[...]</tool_call>` in content, extract them
-    // and clean the visible text. No-ops when the regex doesn't match.
-    const { text: cleanedText, toolCalls: inlineCalls } = streamed.length
-      ? { text, toolCalls: [] }
-      : extractInlineToolCalls(text);
-    const toolCalls = streamed.length ? streamed : inlineCalls;
-    // Strip any `<think>...`/`<reasoning>...` blocks from the canonical text
-    // too — the streaming stripper kept them out of TTS, but they'd still
-    // pollute conversation history and the assistant.content we persist.
-    const finalText = stripReasoningTags(cleanedText);
-    return {
-      text: finalText,
-      toolCalls,
-      model,
-      ttfbMs,
-      totalMs: Date.now() - started,
-      finishReason,
+    const decoder = new TextDecoder();
+    reader = res.body.getReader();
+    if (requestController.signal.aborted) cancelReader();
+    const throwIfAborted = () => {
+      if (timedOut) throw new Error(VOICE_LLM_TIMEOUT_MESSAGE);
+      if (requestController.signal.aborted) {
+        throw requestController.signal.reason || new Error('The voice LLM request was aborted');
+      }
     };
-  }
+    let buffer = '';
+    let text = '';
+    let ttfbMs = null;
+    let finishReason = null;
+    // Tool calls stream as fragments keyed by index; accumulate until [DONE].
+    const toolCallFrags = new Map();
+
+    // Streaming tool-call stripper: when a model emits Granite-style inline
+    // `<tool_call>[...]</tool_call>` or `<tool_request>[...]` in `delta.content`,
+    // we must NOT forward those chunks to onDelta — the pipeline feeds deltas to
+    // TTS and would speak the raw JSON. Reasoning models likewise emit `<think>`
+    // blocks that should be hidden even when our disable directives don't take.
+    // We still accumulate everything into `text` so the post-stream parser can
+    // hoist into structured `toolCalls`. Tail characters that could be a partial
+    // open/close tag are held across chunks. All tag spellings handled in parallel.
+    const STRIP_TAGS = [...TOOL_TAG_SPELLINGS, 'think', 'thinking', 'reasoning'];
+    const OPEN_TAGS = STRIP_TAGS.map((s) => `<${s}>`);
+    const CLOSE_TAGS = STRIP_TAGS.map((s) => `</${s}>`);
+    let activeClose = null; // set when we entered a tool block
+    let tailHold = '';
+    // Find the earliest match of any candidate in `data`, starting at 0.
+    const earliestIndex = (data, candidates) => {
+      let best = -1;
+      let bestLen = 0;
+      for (const c of candidates) {
+        const i = data.indexOf(c);
+        if (i !== -1 && (best === -1 || i < best)) { best = i; bestLen = c.length; }
+      }
+      return best === -1 ? null : [best, bestLen];
+    };
+    // Longest suffix of `data` that is a prefix of any candidate — characters we
+    // must withhold because they might begin a real tag once more data arrives.
+    const longestPrefixHold = (data, candidates) => {
+      const max = Math.max(...candidates.map((c) => c.length - 1));
+      const limit = Math.min(data.length, max);
+      for (let k = limit; k > 0; k--) {
+        const tail = data.slice(data.length - k);
+        if (candidates.some((c) => c.startsWith(tail))) return k;
+      }
+      return 0;
+    };
+    const forwardClean = (chunk) => {
+      let data = tailHold + chunk;
+      tailHold = '';
+      let out = '';
+      while (data.length) {
+        if (!activeClose) {
+          const hit = earliestIndex(data, OPEN_TAGS);
+          if (hit) {
+            out += data.slice(0, hit[0]);
+            const spelling = data.slice(hit[0] + 1, hit[0] + hit[1] - 1); // strip '<' and '>'
+            activeClose = `</${spelling}>`;
+            data = data.slice(hit[0] + hit[1]);
+            continue;
+          }
+          const hold = longestPrefixHold(data, OPEN_TAGS);
+          if (hold) {
+            out += data.slice(0, data.length - hold);
+            tailHold = data.slice(data.length - hold);
+          } else {
+            out += data;
+          }
+          data = '';
+        } else {
+          const i = data.indexOf(activeClose);
+          if (i !== -1) {
+            data = data.slice(i + activeClose.length);
+            activeClose = null;
+            continue;
+          }
+          const hold = longestPrefixHold(data, [activeClose]);
+          if (hold) tailHold = data.slice(data.length - hold);
+          data = '';
+        }
+      }
+      if (out) opts.onDelta?.(out);
+    };
+
+    while (true) {
+      const { value, done } = await reader.read();
+      throwIfAborted();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let idx;
+      while ((idx = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (payload === '[DONE]') {
+          throwIfAborted();
+          return finalizeReturn();
+        }
+        // Malformed SSE frames (proxy keep-alive, truncated write) would otherwise
+        // abort the whole turn; skip the line and keep streaming.
+        let obj;
+        try { obj = JSON.parse(payload); } catch { continue; }
+        const choice = obj?.choices?.[0];
+        if (choice?.finish_reason) finishReason = choice.finish_reason;
+        const delta = choice?.delta || {};
+        if (delta.content) {
+          if (ttfbMs === null) ttfbMs = Date.now() - started;
+          text += delta.content;
+          forwardClean(delta.content);
+          throwIfAborted();
+        }
+        for (const tc of delta.tool_calls || []) {
+          const frag = toolCallFrags.get(tc.index) || {
+            index: tc.index,
+            id: '',
+            type: 'function',
+            function: { name: '', arguments: '' },
+          };
+          if (tc.id) frag.id = tc.id;
+          if (tc.type) frag.type = tc.type;
+          // `name` is sent once per tool call per the OpenAI spec; set-once
+          // rather than concatenate so a split fragment can't produce garbage.
+          if (tc.function?.name && !frag.function.name) frag.function.name = tc.function.name;
+          if (tc.function?.arguments) frag.function.arguments += tc.function.arguments;
+          toolCallFrags.set(tc.index, frag);
+        }
+      }
+    }
+    return finalizeReturn();
+
+    function finalizeReturn() {
+      const streamed = [...toolCallFrags.values()].sort((a, b) => a.index - b.index);
+      // Post-stream: if the model emitted no structured tool_calls but wrote
+      // Granite-style `<tool_call>[...]</tool_call>` in content, extract them
+      // and clean the visible text. No-ops when the regex doesn't match.
+      const { text: cleanedText, toolCalls: inlineCalls } = streamed.length
+        ? { text, toolCalls: [] }
+        : extractInlineToolCalls(text);
+      const toolCalls = streamed.length ? streamed : inlineCalls;
+      // Strip any `<think>...`/`<reasoning>...` blocks from the canonical text
+      // too — the streaming stripper kept them out of TTS, but they'd still
+      // pollute conversation history and the assistant.content we persist.
+      const finalText = stripReasoningTags(cleanedText);
+      return {
+        text: finalText,
+        toolCalls,
+        model,
+        ttfbMs,
+        totalMs: Date.now() - started,
+        finishReason,
+      };
+    }
+  })();
+
+  return requestPromise
+    .catch((err) => {
+      if (timedOut) throw new Error(VOICE_LLM_TIMEOUT_MESSAGE);
+      throw err;
+    })
+    .finally(() => {
+      clearTimeout(timeoutId);
+      requestController.signal.removeEventListener('abort', cancelReader);
+      if (opts.signal && onExternalAbort) {
+        opts.signal.removeEventListener('abort', onExternalAbort);
+      }
+    });
 };
 
 const REASONING_TAG_RE = /<(think|thinking|reasoning)>[\s\S]*?(?:<\/\1>|$)/gi;

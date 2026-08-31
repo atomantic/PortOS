@@ -49,12 +49,13 @@ export default function ModelsPanel({ report, loading, onRunReport, cleanup }) {
       normalizeLmStudioRepo(model.id),
     ]).filter(Boolean)),
   }), [residency]);
+  const disabledSources = new Set(report?.disabledSources || []);
   const modelSourceErrors = (report?.sourceErrors || []).filter((source) => (
     source.startsWith('ollama')
     || source.startsWith('lmstudio')
     || source === 'huggingface'
     || source === 'loras'
-  ));
+  ) && ![...disabledSources].some((backend) => source === backend || source.startsWith(`${backend}-`)));
 
   return (
     <div className="space-y-4">

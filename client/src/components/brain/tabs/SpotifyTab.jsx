@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { Save, Loader2, Music, Link2, LogOut, RefreshCw, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Save, Loader2, Music, Link2, LogOut, RefreshCw, CheckCircle2, AlertCircle, ExternalLink, Search } from 'lucide-react';
 import toast from '../../ui/Toast';
 import BrailleSpinner from '../../BrailleSpinner';
 import { formatDateTime } from '../../../utils/formatters';
@@ -11,6 +11,8 @@ import {
   saveSpotifyCredentials,
   clearSpotifyAuth,
   syncSpotify,
+  getSpotifyPlaylists,
+  syncSpotifyPlaylists,
 } from '../../../services/api';
 
 // Brain → Spotify (#2152). Opt-in, machine-local ingestion of Spotify
@@ -29,8 +31,25 @@ export function SpotifyTab() {
 
   const [connecting, setConnecting] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [playlists, setPlaylists] = useState(null);
+  const [playlistsLoading, setPlaylistsLoading] = useState(false);
+  const [playlistsSyncing, setPlaylistsSyncing] = useState(false);
+  const [playlistQuery, setPlaylistQuery] = useState('');
+  const auth = status?.auth;
 
   const loadStatus = () => getSpotifyStatus({ silent: true }).catch(() => null).then((st) => { if (st) setStatus(st); return st; });
+
+  const loadPlaylists = () => {
+    setPlaylistsLoading(true);
+    return getSpotifyPlaylists({ silent: true })
+      .then((result) => setPlaylists(result?.snapshot || null))
+      .catch(() => null)
+      .finally(() => setPlaylistsLoading(false));
+  };
+
+  useEffect(() => {
+    if (!loading && auth?.hasTokens) loadPlaylists();
+  }, [loading, auth?.hasTokens]);
 
   // Surface the OAuth callback outcome (the browser redirect lands back here).
   useEffect(() => {
@@ -45,8 +64,6 @@ export function SpotifyTab() {
       setSearchParams(searchParams, { replace: true });
     }
   }, [searchParams, setSearchParams]);
-
-  const auth = status?.auth;
 
   const handleSave = async () => {
     if (!await save()) return;
@@ -103,9 +120,34 @@ export function SpotifyTab() {
     }
   };
 
-  if (loading) return <BrailleSpinner />;
+  const handleSyncPlaylists = async () => {
+    setPlaylistsSyncing(true);
+    const result = await syncSpotifyPlaylists({ silent: true }).catch(() => ({ ok: false, error: 'Playlist sync failed' }));
+    setPlaylistsSyncing(false);
+    if (!result?.ok && result?.error) {
+      toast.error(result.error);
+    } else if (result?.playlistCount !== undefined) {
+      await loadPlaylists();
+      if (result.ok) toast.success(`Synced ${result.playlistCount} playlist(s) and ${result.trackCount} track(s)`);
+      else toast.error(`Playlist sync completed with ${result.failed || 0} warning(s)`);
+    } else {
+      toast.error(result?.needsAuth ? 'Connect Spotify first' : (result?.error || 'Playlist sync failed'));
+    }
+  };
 
   const lastResult = status?.state?.lastResult;
+  const hasPlaylistScope = String(auth?.scope || '').split(/\s+/).includes('playlist-read-private');
+  const storedPlaylists = Array.isArray(playlists?.playlists) ? playlists.playlists : [];
+  const filteredPlaylists = useMemo(() => {
+    const query = playlistQuery.trim().toLowerCase();
+    if (!query) return storedPlaylists;
+    return storedPlaylists.filter((playlist) => String(playlist.name || '').toLowerCase().includes(query)
+      || playlist.tracks?.some((track) => String(track.name || '').toLowerCase().includes(query)
+        || track.artists?.some((artist) => String(artist.name || '').toLowerCase().includes(query))));
+  }, [playlistQuery, storedPlaylists]);
+  const playlistTrackCount = storedPlaylists.reduce((total, playlist) => total + (playlist.tracks?.length || 0), 0);
+
+  if (loading) return <BrailleSpinner />;
 
   return (
     <div className="space-y-6">
@@ -270,7 +312,121 @@ export function SpotifyTab() {
           </dl>
         </div>
       )}
+
+      <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6">
+        <div className="flex flex-wrap items-start justify-between gap-3 mb-2">
+          <div className="flex items-center gap-2">
+            <Music size={16} className="text-port-accent" />
+            <h3 className="text-lg font-semibold text-white">Playlist taste library</h3>
+          </div>
+          <button
+            type="button"
+            onClick={handleSyncPlaylists}
+            disabled={playlistsSyncing || !auth?.hasTokens || !hasPlaylistScope}
+            title={!auth?.hasTokens ? 'Connect Spotify first' : (!hasPlaylistScope ? 'Reconnect Spotify to grant playlist access' : undefined)}
+            className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {playlistsSyncing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            Sync playlists
+          </button>
+        </div>
+        <p className="text-sm text-gray-400 mb-4">
+          A local reference shelf for the music you keep and revisit. PortOS stores playlist and track metadata here
+          so your musical context stays alongside your Brain consumption history. It never sends this library to peers.
+        </p>
+
+        {auth?.hasTokens && !hasPlaylistScope && (
+          <div className="mb-4 flex items-start gap-2 rounded border border-port-warning/30 bg-port-warning/10 p-3 text-sm text-port-warning">
+            <AlertCircle size={16} className="mt-0.5 shrink-0" />
+            <span>Reconnect Spotify above to grant playlist access. Your existing listening-history connection remains usable.</span>
+          </div>
+        )}
+
+        {playlistsLoading ? <BrailleSpinner /> : storedPlaylists.length > 0 ? (
+          <>
+            <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-gray-500">
+              <span>{storedPlaylists.length} playlist(s)</span>
+              <span>{playlistTrackCount} track reference(s)</span>
+              {playlists.syncedAt && <span>Last synced {formatDateTime(playlists.syncedAt)}</span>}
+              {playlists.warnings?.length > 0 && <span className="text-port-warning">{playlists.warnings.length} incomplete</span>}
+            </div>
+            <label htmlFor="spotify-playlist-search" className="sr-only">Search playlists and tracks</label>
+            <div className="relative mb-4 max-w-md">
+              <Search size={15} className="pointer-events-none absolute left-3 top-2.5 text-gray-500" />
+              <input
+                id="spotify-playlist-search"
+                type="search"
+                value={playlistQuery}
+                onChange={(event) => setPlaylistQuery(event.target.value)}
+                placeholder="Search playlists or tracks"
+                className="w-full rounded border border-port-border bg-port-bg py-2 pl-9 pr-3 text-sm text-white placeholder:text-gray-500"
+              />
+            </div>
+            {filteredPlaylists.length > 0 ? (
+              <div className="grid gap-3 xl:grid-cols-2">
+                {filteredPlaylists.map((playlist) => (
+                  <PlaylistCard key={playlist.id} playlist={playlist} query={playlistQuery} />
+                ))}
+              </div>
+            ) : (
+              <p className="rounded border border-dashed border-port-border p-6 text-center text-sm text-gray-500">No playlists or tracks match that search.</p>
+            )}
+            {playlists.warnings?.length > 0 && (
+              <p className="mt-4 text-xs text-port-warning">Some playlists could not be refreshed; retained references are marked by the last successful sync.</p>
+            )}
+          </>
+        ) : (
+          <div className="rounded border border-dashed border-port-border p-6 text-center text-sm text-gray-500">
+            {auth?.hasTokens && hasPlaylistScope
+              ? 'Sync playlists to build your local music reference shelf.'
+              : 'Connect Spotify and grant playlist access to build your local music reference shelf.'}
+          </div>
+        )}
+      </div>
     </div>
+  );
+}
+
+function PlaylistCard({ playlist, query }) {
+  const matchingTracks = playlist.tracks || [];
+  const visibleTracks = query.trim() ? matchingTracks : matchingTracks.slice(0, 8);
+  const remaining = Math.max(0, matchingTracks.length - visibleTracks.length);
+  const image = playlist.images?.[0];
+  return (
+    <section className="min-w-0 rounded border border-port-border bg-port-bg/40 p-3">
+      <div className="flex gap-3">
+        {image && <img src={image.url} alt="" className="h-16 w-16 shrink-0 rounded object-contain" />}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-2">
+            <h4 className="truncate font-semibold text-gray-100">{playlist.name}</h4>
+            <a href={playlist.spotifyUrl} target="_blank" rel="noreferrer" className="shrink-0 text-gray-500 hover:text-port-accent" aria-label={`Open ${playlist.name} in Spotify`}>
+              <ExternalLink size={15} />
+            </a>
+          </div>
+          <div className="mt-1 flex flex-wrap gap-x-2 text-xs text-gray-500">
+            <span>{playlist.trackCount} track(s)</span>
+            {playlist.public === false && <span>Private</span>}
+            {playlist.collaborative && <span>Collaborative</span>}
+          </div>
+          {playlist.description && <p className="mt-1 line-clamp-2 text-xs text-gray-400">{playlist.description}</p>}
+        </div>
+      </div>
+      {visibleTracks.length > 0 && (
+        <div className="mt-3 divide-y divide-port-border/60 border-t border-port-border/60">
+          {visibleTracks.map((track, index) => (
+            <div key={`${track.id}-${track.addedAt || index}`} className="flex min-w-0 items-center gap-2 py-2 text-xs">
+              <span className="w-5 shrink-0 text-right text-gray-600">{index + 1}</span>
+              <div className="min-w-0 flex-1">
+                <a href={track.spotifyUrl} target="_blank" rel="noreferrer" className="block truncate text-gray-200 hover:text-port-accent hover:underline">{track.name}</a>
+                <div className="truncate text-gray-500">{track.artists?.map((artist) => artist.name).join(', ') || 'Unknown artist'}{track.album ? ` · ${track.album}` : ''}</div>
+              </div>
+            </div>
+          ))}
+          {remaining > 0 && <div className="pt-2 text-center text-xs text-gray-500">+ {remaining} more track(s)</div>}
+        </div>
+      )}
+      <div className="mt-3 text-[10px] uppercase tracking-wide text-gray-600">Spotify reference</div>
+    </section>
   );
 }
 

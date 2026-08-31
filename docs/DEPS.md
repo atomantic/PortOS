@@ -45,9 +45,9 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | **Client deps** | | | | |
 | `@dnd-kit/core` | 1 | KEEP | drag/drop | |
 | `@dnd-kit/sortable` | 1 | KEEP | drag/drop | |
-| `@dnd-kit/utilities` | 1 | KEEP | drag/drop helpers | |
 | `@react-three/drei` | 1 | KEEP | CyberCity 3D | Three.js helpers |
 | `@react-three/fiber` | 1 | KEEP | CyberCity 3D | React renderer for Three |
+| `@scalar/api-reference-react` | 1 | KEEP | Dev Tools → API Explorer | Interactive OpenAPI reference UI rendering |
 | `@xterm/xterm` | 1 | KEEP | browser terminal | |
 | `@xterm/addon-fit` | 1 | KEEP | xterm sizing | |
 | `@xterm/addon-web-links` | 1 | KEEP | xterm links | |
@@ -131,7 +131,7 @@ Defined in `package.json` (root + server + client) — kept current to dodge kno
 - `engine.io@6.6.9` (server only)
 - `postcss@8.5.26` (server only)
 - `protobufjs@7.6.5` + `@protobufjs/utf8@1.1.2` (server only)
-- `sharp@0.35.3` (server only, collapses the nested copy `@huggingface/transformers` requests)
+- `sharp@0.35.4` (server only, collapses the nested copy `@huggingface/transformers` requests)
 - `brace-expansion@5.0.9` (client only)
 - `minimatch@3 → brace-expansion@1.1.18` (client only, scoped)
 - `three@0.185.1` (client only, keeps drei/fiber on one three copy)

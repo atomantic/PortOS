@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { isLtx2FamilyRuntime } from '../lib/runnerFamilies.js';
+import { isAudioToVideoRuntime, isLtx2FamilyRuntime } from '../lib/runnerFamilies.js';
 import {
   computeFflfSafeFrames,
   icResolutionIssue,
@@ -34,11 +34,13 @@ export function validateVideoKeyframes({
 
 /** Derives every submit-blocking predicate from the current VideoGen fields. */
 export function useVideoGenValidation({
+  audioDurationSec,
   audioFile,
   chunks,
   currentModel,
   extendFromVideoId,
   extendingFrame,
+  fps,
   height,
   icImageKind,
   icModeActive,
@@ -52,6 +54,7 @@ export function useVideoGenValidation({
   numFrames,
   pixelBudget,
   sourceImageFile,
+  sourceImageUpload,
   width,
 }) {
   const maxSafeFrames = useMemo(
@@ -71,7 +74,28 @@ export function useVideoGenValidation({
   const extendModeBlocked = mode === 'extend' && (
     !extendFromVideoId || (!ltx2Runtime && (extendingFrame || !sourceImageFile))
   );
-  const a2vModeBlocked = mode === 'a2v' && (!audioFile || !ltx2Runtime);
+  const a2vRuntime = isAudioToVideoRuntime(currentModel?.runtime);
+  const a2vNeedsImage = currentModel?.requiresSourceImageForA2v === true;
+  const maxAudioDurationSec = currentModel?.audioDurationDriven === true
+    && currentModel?.arbitraryLengthAudio !== true
+    && Number.isFinite(Number(currentModel?.maxNumFrames))
+    && Number(currentModel.maxNumFrames) > 0
+    && Number.isFinite(Number(fps))
+    && Number(fps) > 0
+    ? Number(currentModel.maxNumFrames) / Number(fps)
+    : null;
+  const a2vDurationError = mode === 'a2v'
+    && maxAudioDurationSec != null
+    && Number.isFinite(Number(audioDurationSec))
+    && Number(audioDurationSec) > maxAudioDurationSec
+    ? `${currentModel.name} supports up to ${maxAudioDurationSec.toFixed(1)}s in one audio-to-video render. Use MiniMax H3 Ref2VA for longer audio, or trim this file.`
+    : null;
+  const a2vModeBlocked = mode === 'a2v' && (
+    !audioFile
+    || !a2vRuntime
+    || (a2vNeedsImage && !sourceImageFile && !sourceImageUpload)
+    || !!a2vDurationError
+  );
   const filledImageRefs = icReferenceImageFiles.filter(Boolean).length;
   const icLoraModeBlocked = icModeActive && (
     (icImageKind
@@ -84,6 +108,7 @@ export function useVideoGenValidation({
     && isModelAllowedForMode(currentModel, 'image') && chunks > 1;
 
   return {
+    a2vDurationError,
     a2vModeBlocked,
     chainingActive,
     extendModeBlocked,

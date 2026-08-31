@@ -14,6 +14,7 @@ import { useAppOperation } from '../hooks/useAppOperation';
 import useUrlParams from '../hooks/useUrlParams';
 import * as api from '../services/api';
 import socket from '../services/socket';
+import { getLaunchUrls } from '../services/appUrls';
 import { NON_PM2_TYPES, isStandardizable, getAppTypeLabel } from '../components/apps/constants';
 import { formatBytes } from '../utils/formatters';
 
@@ -103,6 +104,10 @@ export default function Apps() {
     const result = await api.launchNativeApp(app.id).catch(() => null);
     setNativeLaunchLoading(prev => ({ ...prev, [app.id]: false }));
     if (result?.success) toast.success(`${app.nativeLaunch.label} is running`);
+  };
+
+  const handleWebLaunch = (url) => {
+    if (url) window.open(url, '_blank');
   };
 
   const handleUpdate = (app) => startUpdate(app.id, app.name);
@@ -292,6 +297,8 @@ export default function Apps() {
             const rowOperating = !!rowOperation && !rowOperation.completed && !rowOperation.error;
             const busyElsewhere = isOperating && !rowOperating;
             const busyReason = `${(liveOperation && operationName(liveOperation)) || 'Another app'} is ${liveOperation?.type === 'standardize' ? 'being standardized' : 'updating'}`;
+            const launchUrls = getLaunchUrls(app);
+            const primaryLaunchUrl = launchUrls.https || launchUrls.http;
             return (
             <div
               key={app.id}
@@ -423,11 +430,11 @@ export default function Apps() {
                     )}
 
                     {/* Launch buttons grouped together */}
-                    {(app.nativeLaunch || (app.overallStatus === 'online' && (app.uiPort || app.devUiPort))) && (
+                    {(app.nativeLaunch || (app.overallStatus === 'online' && (primaryLaunchUrl || launchUrls.dev))) && (
                       <div className="inline-flex rounded-lg overflow-hidden border border-port-border divide-x divide-port-border">
-                        {app.overallStatus === 'online' && app.uiPort && (
+                        {app.overallStatus === 'online' && primaryLaunchUrl && (
                           <button
-                            onClick={() => window.open(`${window.location.protocol}//${window.location.hostname}:${app.uiPort}`, '_blank')}
+                            onClick={() => handleWebLaunch(primaryLaunchUrl)}
                             className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 transition-colors flex items-center gap-1"
                             aria-label={`Launch ${app.name} UI`}
                           >
@@ -435,9 +442,9 @@ export default function Apps() {
                             <span className="text-xs">Launch</span>
                           </button>
                         )}
-                        {app.overallStatus === 'online' && app.devUiPort && (
+                        {app.overallStatus === 'online' && launchUrls.dev && (
                           <button
-                            onClick={() => window.open(`${window.location.protocol}//${window.location.hostname}:${app.devUiPort}`, '_blank')}
+                            onClick={() => handleWebLaunch(launchUrls.dev)}
                             className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors flex items-center gap-1"
                             aria-label={`Launch ${app.name} Dev UI`}
                           >

@@ -10,7 +10,7 @@ import useSseJobSlot from './useSseJobSlot.js';
  * caller can prepend it to its list without a full refetch.
  */
 export default function useVideoDownload({ onComplete } = {}) {
-  const { active, percent, stage, start, cancel } = useSseJobSlot({
+  const { active, percent, stage, context, start, cancel } = useSseJobSlot({
     startRequest: (url) => startVideoDownload(url, { silent: true }),
     eventsUrl: videoDownloadEventsUrl,
     cancelRequest: cancelVideoDownload,
@@ -22,5 +22,5 @@ export default function useVideoDownload({ onComplete } = {}) {
     lostConnectionMessage: 'Lost connection to the download — check the list below',
     startErrorFallback: 'Failed to start download',
   });
-  return { active, percent, stage, start, cancel };
+  return { active, percent, stage, context, start, cancel };
 }

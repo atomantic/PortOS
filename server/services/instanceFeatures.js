@@ -1,6 +1,15 @@
 import { ServerError } from '../lib/errorHandler.js';
+import { getOriginInfo } from '../lib/gitRemote.js';
+import { parseGitHubUrl } from '../lib/githubRepoUrl.js';
 import { INSTANCE_FEATURES, INSTANCE_FEATURE_IDS } from '../lib/instanceFeatureRegistry.js';
 import { isPlainObject } from '../lib/objects.js';
+import {
+  assertEidoverseInstalled,
+  DEFAULT_EIDOVERSE_WORLDS_REPO,
+  getEidoverseStatus,
+  normalizeEidoverseWorldsRepo,
+  setEidoverseWorldsOrigin,
+} from './eidoverse.js';
 import { getSettingsWithStatus, updateSettingsWith } from './settings.js';
 
 // Runtime resolution for the feature registry in
@@ -110,12 +119,66 @@ export const resolveInstanceFeatures = (settings = {}, { corrupt = false, detect
   })
 );
 
+const configuredEidoverseRepo = (settings) => {
+  const configured = settings?.instanceFeatures?.eidoverse?.worldsRepoUrl;
+  if (typeof configured !== 'string') return DEFAULT_EIDOVERSE_WORLDS_REPO;
+  const parsed = parseGitHubUrl(configured);
+  return parsed
+    ? normalizeEidoverseWorldsRepo(configured)
+    : DEFAULT_EIDOVERSE_WORLDS_REPO;
+};
+
+export async function assertConfiguredEidoverseInstalled() {
+  const { settings } = await getSettingsWithStatus();
+  return assertEidoverseInstalled({ worldsRepoUrl: configuredEidoverseRepo(settings) });
+}
+
+const attachSetupStatus = async (features, settings) => {
+  const [eidoverse, portosOrigin] = await Promise.all([
+    getEidoverseStatus({ worldsRepoUrl: configuredEidoverseRepo(settings) }),
+    getOriginInfo(),
+  ]);
+  const upstream = parseGitHubUrl(DEFAULT_EIDOVERSE_WORLDS_REPO)?.owner || null;
+  const sourceOwners = {
+    // A stock clone points at atomantic/PortOS, which identifies the project
+    // owner rather than the current user's GitHub account. Only a non-upstream
+    // GitHub origin gives us a defensible owner for the "Self" shortcut.
+    self: portosOrigin.isGithub && !portosOrigin.isUpstream ? portosOrigin.owner : null,
+    upstream,
+  };
+  return features.map((feature) => (
+    feature.id === 'eidoverse' ? { ...feature, setup: { ...eidoverse, sourceOwners } } : feature
+  ));
+};
+
 export async function getInstanceFeatures() {
   const [{ corrupt, settings }, detected] = await Promise.all([
     getSettingsWithStatus(),
     detectFeatureConfiguration(),
   ]);
-  return { features: resolveInstanceFeatures(settings, { corrupt, detected }) };
+  return { features: await attachSetupStatus(resolveInstanceFeatures(settings, { corrupt, detected }), settings) };
+}
+
+export async function updateEidoverseWorldsRepo(worldsRepoUrl) {
+  const normalizedRepoUrl = normalizeEidoverseWorldsRepo(worldsRepoUrl);
+  await updateSettingsWith((current) => {
+    const instanceFeatures = isPlainObject(current.instanceFeatures) ? current.instanceFeatures : {};
+    const eidoverse = isPlainObject(instanceFeatures.eidoverse) ? instanceFeatures.eidoverse : {};
+    return {
+      ...current,
+      instanceFeatures: {
+        ...instanceFeatures,
+        eidoverse: { ...eidoverse, worldsRepoUrl: normalizedRepoUrl },
+      },
+    };
+  });
+  return normalizedRepoUrl;
+}
+
+export async function updateEidoverseWorldsSource(worldsRepoUrl) {
+  const normalizedRepoUrl = normalizeEidoverseWorldsRepo(worldsRepoUrl);
+  await setEidoverseWorldsOrigin(normalizedRepoUrl);
+  return updateEidoverseWorldsRepo(normalizedRepoUrl);
 }
 
 // The same precedence ladder as `resolveInstanceFeatures`, but probing only this
@@ -136,6 +199,9 @@ export async function updateInstanceFeature(featureId, enabled) {
   if (!FEATURE_BY_ID.has(featureId)) {
     throw new ServerError(`Unknown instance feature: ${featureId}`, { status: 404, code: 'NOT_FOUND' });
   }
+  if (featureId === 'eidoverse' && enabled) {
+    await assertConfiguredEidoverseInstalled();
+  }
 
   const settings = await updateSettingsWith((current) => {
     const instanceFeatures = isPlainObject(current.instanceFeatures) ? current.instanceFeatures : {};
@@ -150,5 +216,5 @@ export async function updateInstanceFeature(featureId, enabled) {
   });
 
   const detected = await detectFeatureConfiguration();
-  return { features: resolveInstanceFeatures(settings, { detected }) };
+  return { features: await attachSetupStatus(resolveInstanceFeatures(settings, { detected }), settings) };
 }

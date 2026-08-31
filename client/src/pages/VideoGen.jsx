@@ -15,7 +15,7 @@
  *   - extend: pick a previous render → its last frame becomes the source
  *             image for a new image-to-video generation
  *   - a2v:    audio-to-video (uploaded WAV/MP3 drives the video's motion +
- *             audio track) — dgrauet/ltx2 runtime only
+ *             audio track) — LTX, or MiniMax H3 Ref2VA with an image
  *   - ic-*:   IC-LoRA remix modes (issue #3100) — a reference clip drives the
  *             render through ICLoraPipeline with a per-mode IC-LoRA fused into
  *             Stage 1. Today: `ic-control` (structure/motion from a depth/pose/
@@ -37,7 +37,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
-import { isMiniMaxH3Runtime, isLtx2FamilyRuntime } from '../lib/runnerFamilies';
+import { isAudioToVideoRuntime, isMiniMaxH3Runtime } from '../lib/runnerFamilies';
 import { appendTriggerWords } from '../lib/loraTriggers';
 import Drawer from '../components/Drawer';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
@@ -56,6 +56,8 @@ import LiveVideoStage from '../components/videoGen/LiveVideoStage';
 import { resolveVideoStagePreview, VIDEO_STAGE_KIND } from '../lib/videoStagePreview';
 import VideoGenGallery from '../components/videoGen/VideoGenGallery';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
+import GalleryVideoPicker from '../components/videoGen/GalleryVideoPicker';
+import FalH3MaxPromptFallback from '../components/videoGen/FalH3MaxPromptFallback';
 import MediaPreview from '../components/media/MediaPreview';
 import StylePresetPicker from '../components/media/StylePresetPicker';
 import PromptEnhancer from '../components/media/PromptEnhancer';
@@ -63,7 +65,7 @@ import PromptFromMedia from '../components/media/PromptFromMedia';
 import { normalizeVideo } from '../components/media/normalize';
 import {
   Film, Sparkles, Settings as SettingsIcon, RefreshCw, AlertTriangle,
-  X, Type, Image as ImageIcon, GitBranch, ListPlus, Music, SlidersHorizontal,
+  X, Type, Image as ImageIcon, GitBranch, ListPlus, Music, SlidersHorizontal, ExternalLink,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import BatchQueuePanel from '../components/media/BatchQueuePanel';
@@ -97,8 +99,9 @@ import { VIDEO_RESOLUTIONS, resolutionOptionsForModel } from '../lib/videoGenRes
 import { GROK_VIDEO_DURATIONS, GROK_VIDEO_DEFAULT_DURATION } from '../lib/grokVideoClip.js';
 import ResolutionField from '../components/media/ResolutionField';
 import { VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, IC_LORA_MODES } from '../lib/videoGenParams.js';
-import { finishTargetForRecord } from '../lib/videoFinish.js';
+import { finishTargetForRecord, isDeliveryVideoModel } from '../lib/videoFinish.js';
 import { peerModelRequiresInput } from '../lib/federatedMediaReadiness.js';
+import { openFalH3MaxFreeTool } from '../lib/falVideoHandoff.js';
 const MODES = [
   { id: 'text',   label: 'Text',   icon: Type,       desc: 'Text-to-video' },
   { id: 'image',  label: 'Image',  icon: ImageIcon,  desc: 'Image-to-video (start frame)' },
@@ -112,6 +115,7 @@ const MODES = [
 
 export default function VideoGen() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const [falManualPrompt, setFalManualPrompt] = useState('');
   const settingsOpen = searchParams.get('settings') === '1';
   const openSettings = () => setSearchParams(prev => { const n = new URLSearchParams(prev); n.set('settings', '1'); return n; });
   const closeSettings = () => {
@@ -164,6 +168,7 @@ export default function VideoGen() {
     i2vReferenceMode, setI2vReferenceMode, referenceModeSupported, effectiveImageStrength,
 
     speedProfileId, setSpeedProfileId,
+    draftDecode, setDraftDecode,
     seed, setSeed, handleRandomSeed, tiling, setTiling,
     textEncoderId, setTextEncoderId, textEncoderOptions,
     disableAudio, setDisableAudio, noMusic, setNoMusic,
@@ -174,7 +179,8 @@ export default function VideoGen() {
     keyframesMode, keyframes, keyframesSupported, keyframesActive, keyframesError, keyframesBlocked,
     toggleKeyframesMode, addKeyframe, updateKeyframe, removeKeyframe,
     extendFromVideoId, extendingFrame, handleExtendPick, extendModeBlocked,
-    audioFile, setAudioFile, a2vModeBlocked,
+    setAudioDurationSec,
+    audioFile, setAudioFile, a2vDurationError, a2vModeBlocked,
     icSpec, icModeActive, icLoraModeBlocked,
     icReferenceFile, icReferenceVideoId, icReferenceNames, icReferenceImageFiles,
     pickIcReferenceFile, pickIcReferenceVideoId,
@@ -184,6 +190,17 @@ export default function VideoGen() {
   } = useVideoGenForm({
     models, status, availableLoras, grokEnabled,
     remoteSubmissionFields: remoteTarget.isRemote ? remoteTarget.submissionFields : null,
+  });
+
+  // fal's daily H3 Max allowance is browser-only; its API is a separately
+  // metered product. Keep this as an explicit handoff rather than pretending a
+  // provider POST can spend the free quota. The exact composed prompt (style +
+  // no-music envelope) is what gets copied, matching a normal submission.
+  const falFreeSupported = mode === 'text' || mode === 'image';
+  const openFalFree = () => openFalH3MaxFreeTool({
+    prompt: envelopedPrompt,
+    negativePrompt,
+    onCopyFailure: setFalManualPrompt,
   });
   // Conditioning the selected peer model cannot take. The server refuses a job
   // holding any of it (MEDIA_PROVIDER_INPUT_UNSUPPORTED) rather than silently
@@ -247,6 +264,7 @@ export default function VideoGen() {
   // `null` = closed; otherwise `{ kind, index? }` records which slot the pick
   // lands in, since one modal serves every slot.
   const [galleryPicker, setGalleryPicker] = useState(null);
+  const [falImportOpen, setFalImportOpen] = useState(false);
   const handleGalleryPick = (item) => {
     const filename = item?.filename;
     if (!filename || !galleryPicker) return;
@@ -346,6 +364,13 @@ export default function VideoGen() {
   // model the draft's registry entry declares. Prefill only — the user presses
   // Generate themselves.
   const resolveFinishTarget = useCallback((raw) => finishTargetForRecord(raw, models), [models]);
+  // A model the finish graph names as a DELIVERY target always decodes on its
+  // own decoder — the server declines a draft request there outright (#5423) —
+  // so the decode picker shows Full and says why instead of offering a choice
+  // that would be silently dropped. `applyFinish` already resets the value when
+  // Finish switches models; this keeps the control honest when the user picks
+  // the delivery model by hand.
+  const deliveryModelSelected = isDeliveryVideoModel(currentModel, models);
   const handleFinishVideo = useCallback((raw, target) => {
     if (!raw || !target) return;
     applyFinish(raw, target.id);
@@ -788,7 +813,7 @@ export default function VideoGen() {
   };
 
   // `status.connected` reflects the LEGACY mlx_video pythonPath health. BYOV
-  // runtimes (ltx2/wan22/hunyuan) resolve their own venv inside the service
+  // runtimes resolve their own venv inside the service
   // layer, so a missing legacy pythonPath must NOT block them — gate only on
   // `byovRuntimeMissing` for those models. Without this, a user who installed
   // ONLY a BYOV runtime via the modal would stay stuck behind a "not
@@ -862,6 +887,44 @@ export default function VideoGen() {
       )}
 
       <RuntimeFingerprint runtime={status?.runtime} />
+
+      <div className="flex flex-col gap-3 rounded-xl border border-port-accent/35 bg-port-accent/10 p-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-port-text">MiniMax H3 Max on fal.ai</p>
+          <p className="mt-0.5 text-xs text-port-text-muted">
+            fal offers up to 15 free browser-tool renders per day with an account. PortOS copies this form&rsquo;s composed prompt and opens that tool; download the MP4, then upload it to Media History. fal&rsquo;s app API is separately metered.
+          </p>
+          {!falFreeSupported && (
+            <p className="mt-1 text-xs text-port-warning" role="status">
+              Switch to Text or Image mode for the H3 Max free-tool handoff.
+            </p>
+          )}
+        </div>
+        <div className="flex shrink-0 flex-col gap-2 sm:items-stretch">
+          <button
+            type="button"
+            onClick={openFalFree}
+            disabled={!falFreeSupported || !envelopedPrompt?.trim()}
+            title={!falFreeSupported
+              ? 'fal H3 Max free-tool handoff supports Text and Image modes'
+              : !envelopedPrompt?.trim()
+                ? 'Write a prompt first'
+                : mode === 'image'
+                  ? 'Copies the prompt; add your selected start frame in fal after it opens'
+                  : 'Copies the prompt and opens fal H3 Max'}
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-port-accent px-3 py-2 text-xs font-medium text-white hover:bg-port-accent/80 disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            <ExternalLink size={14} aria-hidden="true" /> Copy prompt &amp; open fal.ai
+          </button>
+          <button
+            type="button"
+            onClick={() => setFalImportOpen(true)}
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-port-border px-3 py-2 text-xs font-medium text-port-text hover:border-port-accent hover:text-port-accent"
+          >
+            Import downloaded video
+          </button>
+        </div>
+      </div>
 
       {status && status.connected === false && (() => {
         const missingCount = status.missingPackages?.length || 0;
@@ -1117,14 +1180,42 @@ export default function VideoGen() {
           )}
 
           {mode === 'a2v' && (
-            <AudioPanel
-              audioFile={audioFile}
-              numFrames={numFrames}
-              fps={fps}
-              hasCompatibleModel={visibleModels.length > 0}
-              onPick={setAudioFile}
-              onClear={() => setAudioFile(null)}
-            />
+            <div className="grid gap-3 lg:grid-cols-2">
+              <FramePanel
+                label={currentModel?.requiresSourceImageForA2v ? 'Reference image (required)' : 'Reference image (optional)'}
+                file={sourceImageFile}
+                upload={sourceImageUpload}
+                uploadUrl={sourceUploadUrl}
+                onBrowseGallery={() => setGalleryPicker({ kind: 'source' })}
+                onUpload={uploadSourceImage}
+                onClear={clearSourceImage}
+                alt="Audio-to-video reference"
+                hint={{
+                  text: 'This image establishes the subject, composition, and opening geometry.',
+                  title: currentModel?.arbitraryLengthAudio === true
+                    ? 'MiniMax H3 Ref2VA combines the image with each audio window. PortOS carries the prior window\'s last frame forward to keep long renders continuous.'
+                    : 'LTX-2.5 conditions frame one on this image while the uploaded audio drives motion and synchronization.',
+                }}
+              />
+              <AudioPanel
+                audioFile={audioFile}
+                numFrames={numFrames}
+                fps={fps}
+                hasCompatibleModel={visibleModels.length > 0}
+                audioDurationDriven={currentModel?.audioDurationDriven === true}
+                arbitraryLengthAudio={currentModel?.arbitraryLengthAudio === true}
+                maxReferenceAudioSeconds={currentModel?.maxReferenceAudioSeconds}
+                maxDurationSeconds={currentModel?.audioDurationDriven === true
+                  && currentModel?.arbitraryLengthAudio !== true
+                  && Number(currentModel?.maxNumFrames) > 0
+                  ? Number(currentModel.maxNumFrames) / Number(fps)
+                  : null}
+                durationError={a2vDurationError}
+                onDurationChange={setAudioDurationSec}
+                onPick={setAudioFile}
+                onClear={() => setAudioFile(null)}
+              />
+            </div>
           )}
 
           {mode === 'extend' && (
@@ -1359,6 +1450,8 @@ export default function VideoGen() {
               steps={steps} onStepsChange={setSteps}
               guidanceScale={guidanceScale} onGuidanceScaleChange={setGuidanceScale}
               speedProfileId={speedProfileId} onSpeedProfileChange={setSpeedProfileId}
+              draftDecode={draftDecode} onDraftDecodeChange={setDraftDecode}
+              draftDecodeLocked={deliveryModelSelected}
               imageStrength={imageStrength} onImageStrengthChange={setImageStrength}
               i2vReferenceMode={i2vReferenceMode} onI2vReferenceModeChange={setI2vReferenceMode}
               effectiveImageStrength={effectiveImageStrength}
@@ -1393,9 +1486,10 @@ export default function VideoGen() {
                     : textEncoderOptionBlocked ? `Download the ${selectedTextEncoder?.label || 'selected'} text encoder before generating`
                     : icWeightsBlocked ? `Download the ${icSpec?.label || 'IC-LoRA'} weight before generating`
                     : extendModeBlocked ? 'Pick a prior render and wait for the last frame to extract before generating'
-                    : a2vModeBlocked ? (!isLtx2FamilyRuntime(currentModel?.runtime)
-                      ? 'a2v mode requires an ltx2-runtime model — pick one from the Model dropdown'
-                      : 'Pick an audio file before generating')
+                    : a2vModeBlocked ? (a2vDurationError || (!isAudioToVideoRuntime(currentModel?.runtime)
+                      ? 'a2v mode requires an audio-to-video model — pick one from the Model dropdown'
+                      : !audioFile ? 'Pick an audio file before generating'
+                        : 'Pick a reference image before generating with this model'))
                     : keyframesBlocked ? keyframesError
                     : undefined
                 }
@@ -1482,6 +1576,26 @@ export default function VideoGen() {
         open={!!galleryPicker}
         onClose={() => setGalleryPicker(null)}
         onSelect={handleGalleryPick}
+      />
+
+      <GalleryVideoPicker
+        open={falImportOpen}
+        onClose={() => setFalImportOpen(false)}
+        onSelect={(_item, context) => {
+          if (context?.origin === 'upload') {
+            refreshHistory();
+            toast.success('Video imported to Media History');
+          } else {
+            toast('That video is already in Media History');
+          }
+        }}
+        allowUpload
+        uploadToGallery
+      />
+
+      <FalH3MaxPromptFallback
+        prompt={falManualPrompt}
+        onClose={() => setFalManualPrompt('')}
       />
 
       <Drawer open={settingsOpen} onClose={closeSettings} title="Media Generation Settings" size="lg">

@@ -1,6 +1,20 @@
 import { describe, it, expect } from 'vitest';
 import {
-  WORLD, PARCELS, PLAZA, TRANSIT, isInWater, isWalkable, computeStreets, computeStreetProps,
+  ARCHIPELAGO_ISLANDS,
+  ARCHIPELAGO_LINKS,
+  WORLD,
+  PARCELS,
+  PLAZA,
+  TRANSIT,
+  VILLAGE_APP_MARKET,
+  archipelagoLinkPoints,
+  computeVillageAppLayout,
+  isInWater,
+  isOnArchipelagoIsland,
+  isOnVillageGround,
+  isWalkable,
+  computeStreets,
+  computeStreetProps,
 } from './openWorldPlan';
 
 const staticParcels = Object.entries(PARCELS).filter(([, p]) => !p.dynamic);
@@ -66,13 +80,66 @@ describe('isInWater', () => {
 });
 
 describe('isWalkable', () => {
-  it('allows all land, blocks open water, but keeps the harbor piers reachable', () => {
-    expect(isWalkable(0, 0)).toBe(true); // downtown
-    expect(isWalkable(50, WORLD.shorelineZ - 5)).toBe(false); // open bay
-    const harbor = PARCELS.dataHarbor;
-    expect(isWalkable(harbor.anchor[0], harbor.anchor[2])).toBe(true); // on the pier
-    expect(isWalkable(0, WORLD.shorelineZ - 2)).toBe(true); // the gangway off the avenue
-    expect(isWalkable(harbor.anchor[0] + harbor.w, harbor.anchor[2])).toBe(false); // beside the pier
+  it('allows the continuous village shelf and connected causeways while blocking open water', () => {
+    ARCHIPELAGO_ISLANDS.forEach((island) => {
+      expect(isWalkable(island.center[0], island.center[1]), island.id).toBe(true);
+      expect(isOnArchipelagoIsland(island.center[0], island.center[1]), island.id).toBe(true);
+    });
+    ARCHIPELAGO_LINKS.forEach((link) => {
+      const points = archipelagoLinkPoints(link);
+      for (let index = 1; index < points.length; index += 1) {
+        const [x1, z1] = points[index - 1];
+        const [x2, z2] = points[index];
+        expect(isWalkable((x1 + x2) / 2, (z1 + z2) / 2), link.id).toBe(true);
+      }
+    });
+    // The close game renders one valley outline, including grass between the named
+    // orbital islands. That visible shelf must not contain an invisible collision wall.
+    expect(isOnArchipelagoIsland(68, 0, 0.75)).toBe(false);
+    expect(isOnVillageGround(68, 0, 0.75)).toBe(true);
+    expect(isWalkable(68, 0)).toBe(true);
+    expect(isWalkable(78, -58)).toBe(false);
+    expect(isWalkable(-75, 0)).toBe(false);
+  });
+
+  it('keeps every island inside the hard world bound', () => {
+    ARCHIPELAGO_ISLANDS.forEach((island) => {
+      expect(Math.abs(island.center[0]) + island.radiusX, island.id).toBeLessThanOrEqual(WORLD.bound);
+      expect(Math.abs(island.center[1]) + island.radiusZ, island.id).toBeLessThanOrEqual(WORLD.bound);
+    });
+  });
+});
+
+describe('computeVillageAppLayout', () => {
+  it('places active apps in compact market rings and leaves archived apps at the lodge', () => {
+    const apps = [
+      { id: 'stopped', name: 'Stopped', overallStatus: 'stopped' },
+      { id: 'online', name: 'Online', overallStatus: 'online' },
+      { id: 'archived', name: 'Archived', archived: true },
+    ];
+    const positions = computeVillageAppLayout(apps);
+
+    expect([...positions.keys()]).toEqual(['online', 'stopped']);
+    expect(positions.has('archived')).toBe(false);
+    for (const position of positions.values()) {
+      expect(position.compact).toBe(true);
+      expect(position.halfWidth).toBe(VILLAGE_APP_MARKET.halfWidth);
+      expect(position.halfDepth).toBe(VILLAGE_APP_MARKET.halfDepth);
+      expect(Math.hypot(position.x, position.z)).toBeCloseTo(VILLAGE_APP_MARKET.innerRadius, 6);
+    }
+  });
+
+  it('caps stalls deterministically for very large installs', () => {
+    const apps = Array.from({ length: VILLAGE_APP_MARKET.maxKiosks + 5 }, (_, index) => ({
+      id: `app-${index}`,
+      name: `App ${index}`,
+      overallStatus: 'online',
+    }));
+    const first = computeVillageAppLayout(apps);
+    const second = computeVillageAppLayout([...apps].reverse());
+
+    expect(first.size).toBe(VILLAGE_APP_MARKET.maxKiosks);
+    expect([...first]).toEqual([...second]);
   });
 });
 

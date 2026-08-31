@@ -10,6 +10,7 @@ export const ERROR_CATEGORIES = {
   RATE_LIMIT: 'rate-limit',
   USAGE_LIMIT: 'usage-limit',
   AUTH_ERROR: 'auth-error',
+  SPAWN_ERROR: 'spawn-error',
   MODEL_NOT_FOUND: 'model-not-found',
   NETWORK_ERROR: 'network-error',
   TIMEOUT: 'timeout',
@@ -125,13 +126,17 @@ const ERROR_PATTERNS = [
   },
   {
     // `upgrade your subscription to increase your limits` is Antigravity's
-    // quota banner (see AGY_QUOTA_BANNER). Included here as well as in the
-    // immediate-fallback signals so the post-hoc output scan a FAILED run runs
-    // through `analyzeError` categorizes it as a usage limit and benches the
-    // provider, rather than falling through to UNKNOWN. Kept as the whole
-    // vendor sentence — a bare "quota reached" is a phrase story text can
-    // legitimately contain, and this scan reads the model's entire screen.
-    pattern: /(?:hit your usage limit|You've hit your limit|usage limit|Upgrade to Pro|upgrade your subscription to increase your limits|(?:^|\n)\s*(?:\[stderr\]\s*)?Now using extra usage\s*(?:\r?\n|$))/i,
+    // quota banner (see AGY_QUOTA_BANNER). Claude Code reports its rolling
+    // subscription exhaustion as `You've hit your monthly spend limit ...
+    // your session limit resets ...`, which is a usage limit too even though it
+    // does not contain the older `usage limit` wording. The existing
+    // usage-limit category is also used by the immediate-fallback signals; the
+    // CLI path needs this post-hoc match to bench the provider and reach a
+    // fallback rather than falling through to UNKNOWN. Kept to vendor/billing
+    // phrasing — a bare
+    // "quota reached" is a phrase story text can legitimately contain, and
+    // this scan reads the model's entire screen.
+    pattern: /(?:hit your usage limit|hit your (?:monthly )?spend limit|your session limit resets?|usage limit|Upgrade to Pro|upgrade your subscription to increase your limits|(?:^|\n)\s*(?:\[stderr\]\s*)?Now using extra usage\s*(?:\r?\n|$))/i,
     category: ERROR_CATEGORIES.USAGE_LIMIT,
     requiresFallback: true,
     actionable: true,
@@ -144,6 +149,17 @@ const ERROR_PATTERNS = [
     requiresFallback: true,
     actionable: true,
     suggestedFix: 'Check API key configuration for this provider'
+  },
+  {
+    // A local CLI cannot be started when its executable is absent from the
+    // server process's PATH. This is a configuration/install problem, not an
+    // unknown provider failure: classifying it as spawn-error routes the
+    // diagnostic to the existing Tier-1 setup guidance.
+    pattern: /spawn\s+\S+\s+ENOENT|CLI is not installed or is not on PortOS's PATH/i,
+    category: ERROR_CATEGORIES.SPAWN_ERROR,
+    requiresFallback: true,
+    actionable: true,
+    suggestedFix: 'Install the local provider CLI and restart PortOS so its PATH includes the command.'
   },
   {
     // "model identifier is invalid" is Bedrock's wording when the runner passes

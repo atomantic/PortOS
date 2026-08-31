@@ -48,6 +48,9 @@ beforeAll(() => {
   // bytes coming back rather than by the absence of a 404.
   mkdirSync(join(tempRoot, 'images'), { recursive: true });
   writeFileSync(join(tempRoot, 'images', 'probe.png'), 'PNGBYTES');
+  const voiceProfiles = join(tempRoot, 'voice-profiles', 'voice-profile-1', 'benchmarks', 'v1');
+  mkdirSync(voiceProfiles, { recursive: true });
+  writeFileSync(join(voiceProfiles, '01-identity.wav'), 'WAVBYTES');
   const drafts = join(tempRoot, 'writers-room', 'works', 'wr-work-1');
   mkdirSync(join(drafts, 'drafts'), { recursive: true });
   writeFileSync(join(drafts, 'drafts', 'd1.md'), '# body');
@@ -120,6 +123,12 @@ describe('the server-owned namespace terminators', () => {
     const res = await request(app).get('/data/images/probe.png');
     expect(res.status).toBe(200);
     expect(res.text).toBe('PNGBYTES');
+  });
+
+  it('serves a local voice-profile benchmark from its dedicated mount', async () => {
+    const res = await request(app).get('/data/voice-profiles/voice-profile-1/benchmarks/v1/01-identity.wav');
+    expect(res.status).toBe(200);
+    expect(res.text).toBe('WAVBYTES');
   });
 });
 

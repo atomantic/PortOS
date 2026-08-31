@@ -148,7 +148,7 @@ const PTY_ROWS = 50;
  *   it reports itself, not a provider incident for the autofixer to escalate.
  * @returns {Promise<void>}
  */
-export async function executeTuiRun({ runId, provider, prompt, workspacePath, onData, onComplete, timeout, idleMs, label, guard = false, reportFailure = true }) {
+export async function executeTuiRun({ runId, provider, prompt, workspacePath, onData, onComplete, onReady, timeout, idleMs, label, guard = false, reportFailure = true }) {
   if (!provider || typeof provider !== 'object') {
     throw new Error('executeTuiRun: provider is required');
   }
@@ -273,6 +273,24 @@ ${prompt}`;
     throw new Error(`Failed to spawn TUI '${command}': ${err.message}`);
   }
 
+  // Subscribe to exit IMMEDIATELY after spawn. A CLI can fail before its first
+  // paint (bad local config, an early runtime crash, etc.); the rest of this
+  // function registers the run, Shell view, and completion machinery before it
+  // used to attach onExit. node-pty does not replay an already-delivered exit,
+  // so that small window stranded the run until its hard timeout. Queue the
+  // one exit event until finish() and the timers below are ready, then replay it
+  // through the ordinary exit path. This is a startup/lifecycle guard, not an
+  // output-idle timeout: a live but quiet model remains untouched.
+  let dispatchPtyExit = null;
+  let pendingPtyExit = null;
+  ptyProcess.onExit((event) => {
+    if (dispatchPtyExit) {
+      dispatchPtyExit(event);
+      return;
+    }
+    pendingPtyExit = pendingPtyExit || event;
+  });
+
   // Register in the same active-runs map the patched stopRun/isRunActive
   // consult, so /runs UI can stop a hung TUI run. Without this, stopRun is a
   // no-op for TUI and isRunActive returns false — the PTY keeps spending
@@ -301,6 +319,18 @@ ${prompt}`;
     cwd: workingDir,
     kind: 'tui-run',
   });
+  try {
+    onReady?.({
+      runId,
+      providerId: provider.id,
+      providerName: provider.name || provider.id,
+      model: provider.defaultModel,
+      providerType: provider.type,
+      shellReady: true,
+    });
+  } catch (err) {
+    console.error(`❌ TUI ready hook failed: ${err.message}`);
+  }
 
   const startTime = Date.now();
   let outputBuffer = '';
@@ -338,10 +368,8 @@ ${prompt}`;
   // retain their existing idle/deadline behavior.
   const inputReady = createInputReadyTracker({ directLaunch: true });
   const requiresInputReady = isClaudeCommand(command);
-  // needsTrust has no self-clearing latch in the tracker, so this flag is
-  // load-bearing to avoid re-sending Enter on every poll tick. needsAutoModeChoice
-  // doesn't need a matching flag below — ackAutoModeChoice() latches it false
-  // permanently on the tracker itself (see autoModeAnswered in tuiHandshake.js).
+  // Keep local one-shot flags alongside the tracker's terminal acknowledgements
+  // so a failed/delayed PTY write cannot cause repeated selector navigation.
   let trustAccepted = false;
   let hookReviewDeclined = false;
 
@@ -661,7 +689,7 @@ ${prompt}`;
       }
     });
 
-    ptyProcess.onExit(({ exitCode, signal }) => {
+    const handlePtyExit = ({ exitCode, signal }) => {
       const killed = !!signal;
       // pm2 tree-kills descendants during a PortOS restart, while /runs Stop
       // kills this registered PTY through runner.stopRun. Both are intentional
@@ -712,7 +740,7 @@ ${prompt}`;
         reason: hostInterrupted ? 'host-shutdown' : (stopRequested ? 'canceled' : (killed ? 'killed' : 'exit')),
         canceled,
       });
-    });
+    };
 
     const sendPrompt = (reason) => {
       if (finalized || promptSentAt) return;
@@ -865,13 +893,29 @@ ${prompt}`;
       // ones: codex takes the idle/deadline path below, and its trust dialog
       // paints and then goes silent — which that path reads as "ready" and
       // pastes into, losing the prompt and every retry with it (agent-671af38f).
-      // Enter takes the highlighted default (claude/agy "Yes, I trust", codex
-      // "Yes, continue"); `trustAccepted` keeps it to one keystroke.
-      if (inputReady.needsTrust && !trustAccepted) {
+      // Wait for the options to paint before acting. Claude Code versions do
+      // not agree on their order: when "No, exit" is highlighted, select the
+      // next option before submitting. `trustAccepted` keeps this to one input.
+      if (inputReady.needsTrust && inputReady.trustChoiceReady && !trustAccepted) {
         trustAccepted = true;
-        dismissStartupDialog('\r', 'folder-trust prompt');
+        const trustInput = `${inputReady.trustSelectionKey}${SUBMIT_KEY}`;
+        if (dismissStartupDialog(trustInput, 'folder-trust prompt')) inputReady.ackTrustChoice();
         lastOutputAt = now;
         firstOutputAt = null;
+        return;
+      }
+      if (inputReady.needsTrust && !inputReady.trustChoiceReady) {
+        const trustDeadlineMs = requiresInputReady ? TUI_INPUT_READY_DEADLINE_MS : PASTE_DEADLINE_MS;
+        if (elapsed >= trustDeadlineMs) {
+          clearInterval(readyTimer);
+          readyTimer = null;
+          finish({
+            success: false,
+            exitCode: 1,
+            error: `${command} presented a folder-trust prompt whose affirmative choice PortOS could not identify, so no prompt was sent.`,
+            reason: 'tui-trust-choice-unrecognized',
+          });
+        }
         return;
       }
       if (requiresInputReady) {
@@ -940,6 +984,17 @@ ${prompt}`;
         reason: 'timeout'
       });
     }, totalTimeoutMs);
+
+    // The exit bridge was attached immediately after spawn. Hand it the fully
+    // initialized lifecycle only after every cleanup-owned timer exists, then
+    // replay an exit that arrived during setup. Assign before reading the
+    // pending slot so an exit racing this handoff is delivered exactly once.
+    dispatchPtyExit = handlePtyExit;
+    if (pendingPtyExit) {
+      const earlyExit = pendingPtyExit;
+      pendingPtyExit = null;
+      handlePtyExit(earlyExit);
+    }
   });
 }
 

@@ -6,6 +6,9 @@ vi.mock('../../services/api', () => ({
   feedbackLoomEpisode: vi.fn(),
   getProviders: vi.fn(),
 }));
+vi.mock('../../services/socket', () => ({
+  default: { on: vi.fn(), off: vi.fn() },
+}));
 
 import * as api from '../../services/api';
 import LoomEpisodeFeedback from './LoomEpisodeFeedback';
@@ -52,7 +55,10 @@ describe('LoomEpisodeFeedback', () => {
     await waitFor(() => expect(api.feedbackLoomEpisode).toHaveBeenCalledWith(
       'loom-1',
       'ep-1',
-      { feedback: 'Make the opening urgent.', providerId: 'codex', model: 'gpt-5', effort: 'high' },
+      expect.objectContaining({
+        feedback: 'Make the opening urgent.', providerId: 'codex', model: 'gpt-5', effort: 'high',
+        operationId: expect.any(String),
+      }),
       { silent: true },
     ));
     expect(onFeedbackStarted).toHaveBeenCalledTimes(1);

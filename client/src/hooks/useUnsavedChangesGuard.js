@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useBlocker } from 'react-router';
 
 // Guards an editor's unsaved draft against BOTH exit doors (#3958):
@@ -49,14 +49,23 @@ export default function useUnsavedChangesGuard(isDirty, { beforeUnload = true, s
   }, [isDirty, scopePath]);
   const blocker = useBlocker(shouldBlock);
   const blocked = blocker.state === 'blocked';
+  // A caller's discard handler and the clean-draft effect below can both run
+  // in one commit. The effect retains the old blocker object, so its state
+  // alone cannot prevent a second proceed() after React Router has moved on.
+  const proceededRef = useRef(null);
+  const proceed = useCallback(() => {
+    if (blocker.state !== 'blocked' || proceededRef.current === blocker) return;
+    proceededRef.current = blocker;
+    blocker.proceed();
+  }, [blocker]);
 
   // Once the draft settles while a navigation is parked — the user hit Save
   // with the confirm up, or typed the value back to what's stored — the
   // navigation they asked for RUNS. Dropping it would swallow the click: the
   // confirm hides and nothing ever navigates.
   useEffect(() => {
-    if (!isDirty && blocker.state === 'blocked') blocker.proceed();
-  }, [isDirty, blocker]);
+    if (!isDirty) proceed();
+  }, [isDirty, proceed]);
 
   // Tab close / reload — the browser owns this prompt; preventDefault arms it.
   // `returnValue` is the legacy signal, still what some browsers actually read,
@@ -70,7 +79,6 @@ export default function useUnsavedChangesGuard(isDirty, { beforeUnload = true, s
 
   // `proceed` / `reset` exist only while blocked — the optional call keeps a
   // stale confirm's button from throwing after the blocker went idle.
-  const proceed = useCallback(() => blocker.proceed?.(), [blocker]);
   const reset = useCallback(() => blocker.reset?.(), [blocker]);
 
   // Memoized: callers pass this object to `<UnsavedChangesConfirm guard>` and

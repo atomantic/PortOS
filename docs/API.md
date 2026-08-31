@@ -24,9 +24,9 @@ and the current-vs-proposed boundary.
 - `GET /api/api-docs/asyncapi.json` — AsyncAPI 3 for the Socket.IO transport.
 - `GET /api/api-docs/tools.min.json` — the minimized semantic tool resource: only the operations annotated `x-portos-tool`, flattened to provider-neutral tool records with an HTTP binding. Sized for an agent to read whole, unlike the full internal document.
 
-Generated entries are explicitly marked `generated` until a runtime-backed payload contract exists; detailed entries are marked `modeled`. Regenerate the checked-in route and event manifests with `npm run generate:api-docs`. Drift tests fail when source declarations and committed manifests diverge.
+Inferred entries are explicitly marked `generated` until a runtime-backed payload contract exists; detailed entries are marked `modeled`. Regenerate the checked-in HTTP route manifest with `npm run generate:api-docs`. Socket.IO events are derived from source on first use and cached for the server process, so event declarations have no checked-in manifest or regeneration step.
 
-When adding an HTTP route, keep its request Zod schema in a reusable server library and register the detailed documentation in `server/lib/apiOperationContracts.js`; the route and OpenAPI should consume the same schema object. Add an `x-portos-tool` annotation to that contract entry to also publish the operation as an agent-callable tool in `tools.min.json`, and declare the codes its error responses really throw in `x-portos-error-codes` — the HTTP status alone does not identify the code, since `errorHandler` prefers an explicit `err.code` over the status map. Socket payload schemas follow the same pattern in `server/lib/socketEventContracts.js`. The generators guarantee inventory coverage, while these small registries make richer contracts incremental without maintaining a second handwritten list of paths or events.
+When adding an HTTP route, keep its request Zod schema in a reusable server library and register the detailed documentation in `server/lib/apiOperationContracts.js`; the route and OpenAPI should consume the same schema object. Add an `x-portos-tool` annotation to that contract entry to also publish the operation as an agent-callable tool in `tools.min.json`, and declare the codes its error responses really throw in `x-portos-error-codes` — the HTTP status alone does not identify the code, since `errorHandler` prefers an explicit `err.code` over the status map. Socket payload schemas follow the same pattern in `server/lib/socketEventContracts.js`. The HTTP generator and live Socket.IO source inventory guarantee coverage, while these small registries make richer contracts incremental without maintaining a second handwritten list of paths or events.
 
 Building a native companion client? See [COMPANION_APP_API.md](./COMPANION_APP_API.md) — the stable, pre-auth-discoverable contract (discovery/identity, HTTP Basic auth, instance management, palette actions, daily-log, POST progress, and the iCloud-sync precedent) that the PortDeck app consumes.
 
@@ -312,7 +312,26 @@ Context tools remain read-only. Semantic reads and writes are independent, defau
 | GET | `/usage/daily` | Get daily activity |
 | GET | `/usage/hourly` | Get hourly activity |
 
-### CyberCity
+### Eidoverse Worlds
+
+The PortOS-owned Eidoverse adapter is private and install-local. It stores its
+identity and projection recipe under `data/eidoverse/`, joins the separately
+installed Eidoverse runtime through its WebSocket protocol, and does not
+federate world records.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/eidoverse/world/status` | Private world identity, CoS presence, projection recipe, setup, and storage boundary |
+| PUT | `/eidoverse/world/config` | Persist the world identity and deterministic resource projection recipe |
+| POST | `/eidoverse/world/presence` | Establish the install's persistent CoS agent presence |
+| POST | `/eidoverse/world/project` | Project current PortOS resources into the world using the saved recipe |
+| POST | `/eidoverse/world/augment` | Apply bounded, allowlisted world construction/role operations |
+| POST | `/eidoverse/world/say` | Send a bounded message as the PortOS CoS presence |
+
+### Legacy OpenWorld / CyberCity
+
+The old UI routes redirect to Eidoverse; these APIs remain available as
+backward-compatible historical snapshot/introspection endpoints.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -488,6 +507,27 @@ Context tools remain read-only. Semantic reads and writes are independent, defau
 | DELETE | `/notifications/:id` | Delete notification |
 | DELETE | `/notifications` | Clear all notifications |
 
+`GET /notifications` returns a bare JSON array of notification objects, newest
+first. It accepts the optional query parameters `type`, `unreadOnly=true`, and
+`limit`; the filters are applied before the result is returned. It does not
+return an `{ items, total }` envelope.
+
+```json
+[
+  {
+    "id": "notification-id",
+    "type": "agent_warning",
+    "title": "Example notification",
+    "description": "Example description",
+    "priority": "medium",
+    "timestamp": "2025-01-01T00:00:00.000Z",
+    "link": "/example",
+    "read": false,
+    "metadata": {}
+  }
+]
+```
+
 ### Media (Audio/Video Capture)
 
 | Method | Endpoint | Description |
@@ -560,6 +600,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/system` | System health metrics |
 | `/api/system/capabilities` | Local hardware capabilities for model/provider selection |
 | `/api/system-resources` | System storage report and AI-assisted cleanup triage |
+| `/api/remote-desktop`, `/remote-desktop` | PortDeck remote desktop session broker and viewer |
 | `/api/capabilities` | Feature capability flags |
 | `/api/agent-context` | Opt-in, loopback-only MCP context plus separately granted semantic PortOS actions |
 | `/api/workspace-contexts` | Workspace context management |
@@ -570,6 +611,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/git` | Git operations for managed apps |
 | `/api/screenshots` | Screenshot capture |
 | `/api/search` | Global search |
+| `/api/rapid-reader` | Rapid reader library and Accelerando source cache |
 | `/api/palette` | ⌘K command palette manifest + actions |
 | `/api/dashboard/layouts` | Dashboard widget layouts |
 | `/api/dashboard/daily-actions` | Dashboard daily action tracking |
@@ -579,7 +621,8 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/legacy-export` | Legacy data export |
 | `/api/database` | Postgres introspection |
 | `/api/image-clean` | Image metadata cleaning |
-| `/api/openworld`, `/api/city` | OpenWorld and CyberCity 3D snapshots/introspection |
+| `/api/eidoverse/world` | Private Eidoverse identity, projection, presence, augmentation, and chat adapter |
+| `/api/openworld`, `/api/city` | Legacy OpenWorld/CyberCity snapshots and introspection |
 | `/api/cos/gsd` | CoS GSD workflow |
 | `/api/feature-agents` | Feature agent runs |
 | `/api/feeds` | RSS/content feeds |
@@ -588,7 +631,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/notes` | Notes |
 | `/api/calendar` | Calendar integration |
 | `/api/messages` | Messages (email) integration |
-| `/api/digital-twin/social-accounts`, `/identity`, `/autobiography` | Digital-twin sub-domains |
+| `/api/digital-twin/social-accounts`, `/api/digital-twin/identity`, `/api/digital-twin/autobiography` | Digital-twin sub-domains |
 | `/api/meatspace` | MeatSpace (health, POST, genome) |
 | `/api/lmstudio`, `/api/local-llm` | Local LLM backends and the local runtime servers PortOS can start/stop (Ollama, LM Studio, `llama-server`, MTPLX — the last two as PM2 processes; `POST /api/local-llm/save-startup` is `pm2 save`), plus MTPLX's checkpoint catalog — `GET /api/local-llm/mtplx/models/search`, `POST .../models/pull` (byte progress on the `mtplx:download` socket event), `POST .../models/remove` |
 | `/api/code-review` | Code review runs |
@@ -596,7 +639,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/api-docs` | Generated HTTP/event catalogs, OpenAPI 3.0.3 documents, AsyncAPI 3 document, and the minimized semantic tool resource |
 | `/api/data` | Data manager/sync |
 | `/api/datadog`, `/api/jira`, `/api/github`, `/api/telegram` | External integrations |
-| `/api/health` | Health check |
+| `/api/health` | Apple Health metrics, ingest, and XML import |
 | `/api/insights` | Cross-domain insights |
 | `/api/instances`, `/api/sync`, `/api/peer-sync`, `/api/sharing` | Federation / peer sync (see [COMPANION_APP_API.md](./COMPANION_APP_API.md)) |
 | `/api/federation/media/v1` | Authenticated queued peer audio provider (see [FEDERATED_MEDIA_PROVIDERS.md](./FEDERATED_MEDIA_PROVIDERS.md)) |
@@ -635,7 +678,6 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/image-to-3d` | Image-to-3D conversion |
 | `/api/privacy` | PII vault / trusted-org / broker opt-out |
 | `/api/shell` | Browser PTY shells |
-| `/api/workspace-contexts` | Per-app workspace save/restore |
 | `/api/ports` | Port scan / allocation |
 | `/api/logs` | PM2 process logs |
 | `/api/detect` | App-repo detection |
@@ -664,7 +706,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 
 Connect to Socket.IO at `http://localhost:5555`.
 
-The complete generated event list is visible in **API Explorer → Event API** and available at `GET /api/api-docs/asyncapi.json` as AsyncAPI 3. The examples below highlight common flows rather than serving as the exhaustive inventory.
+The complete source-derived event list is visible in **API Explorer → Event API** and available at `GET /api/api-docs/asyncapi.json` as AsyncAPI 3. The examples below highlight common flows rather than serving as the exhaustive inventory.
 
 ### Log Streaming
 

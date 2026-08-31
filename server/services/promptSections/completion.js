@@ -287,6 +287,8 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
     '## Claim Workflow Handoff',
     'This is a self-managed claim flow. The claim prompt above owns its claim worktree, branch, PR/MR, review, merge or human-handoff, and cleanup. Follow its phase-specific exit conditions — do NOT stop after a code commit or hand the lifecycle back to PortOS.',
     '',
+    'Required-review publication rule: if a required local reviewer cannot return a verdict because of a missing CLI, quota/provider or transport failure, timeout, malformed/empty response, or no-verdict result, record the local phase as `review-blocked` rather than substituting a self-review. Still push and open the PR/MR, post a comment saying it is intentionally left open and will not be merged until the required review completes, preserve the claim markers and branch, and stop before merge. A substantive rejection, failed build/test, unpushed fix, or state/publication failure still blocks publication.',
+    '',
     'For a successful claim, signal completion only after the prompt\'s prescribed PR/MR and cleanup steps are complete. For a clean no-work, blocked, or review-stuck exit, follow the prompt\'s prescribed leave-open/cleanup path first.'
   ];
   if (isTui && sentinelPath) {
@@ -368,7 +370,7 @@ function buildPostPRMergeSteps(startStep, { prCompletion = PR_COMPLETIONS.REVIEW
     ? '`clean`, `partial` (a stop-mode short-circuit you opted into), or `too-large`'
     : '`clean` (or `too-large`)';
   const lines = [
-    `${startStep}. **Merge the PR immediately when the ${reviewerLabel}review loop reports ${mergeStatuses}** — \`/do:pr\` opens the PR and runs the review loop but does NOT merge. Capture the PR URL printed by \`/do:pr\` and run the exact command below (flags: \`--merge --delete-branch\`, nothing else — a true merge commit keeps the branch tip in main's history so automated worktree cleanup can prove the branch is merged; any merge-deferral flag leaves the PR open after you exit). Skip the merge if the loop ended \`timeout\`, \`error\`, \`inconclusive\`, or \`guardrail\`; leave the PR open for human follow-up.`,
+    `${startStep}. **Merge the PR immediately when the ${reviewerLabel}review loop reports ${mergeStatuses}** — \`/do:pr\` opens the PR and runs the review loop but does NOT merge. Capture the PR URL printed by \`/do:pr\` and run the exact command below (flags: \`--merge --delete-branch\`, nothing else — a true merge commit keeps the branch tip in main's history so automated worktree cleanup can prove the branch is merged; any merge-deferral flag leaves the PR open after you exit). Skip the merge if the loop ended \`timeout\`, \`error\`, \`inconclusive\`, \`review-blocked\`, or \`guardrail\`; leave the PR open for human follow-up.`,
     '   ```bash',
     '   gh pr merge "<PR_URL>" --merge --delete-branch',
     '   ```',
@@ -432,7 +434,7 @@ function localReviewCompletionInstruction(localReviewRequired = true) {
   if (!localReviewRequired) {
     return 'Complete the **Local Review Before Opening the PR/MR** section below. All local reviewers are optional, so missing/inconclusive results (including skipped, timeout, malformed, or no-verdict) may continue. Set aggregate `LOCAL_OVERALL_STATUS=clean` for clean, configured capped, or optional inconclusive; use `partial` only for a qualifying stop, never raw statuses. Hard errors, failed build/test, rejection, or unpushed fixes block. Still run each reviewer and fix its findings.';
   }
-  return 'Complete the **Local Review Before Opening the PR/MR** section below. Commit its fixes. A missing/timed-out/malformed/inconclusive REQUIRED review blocks publication; an OPTIONAL inconclusive result may continue. Set aggregate `LOCAL_OVERALL_STATUS=clean` for clean, configured capped, or optional inconclusive; use `partial` only for a qualifying stop, never raw statuses. Hard errors, failed build/test, rejection, or unpushed fixes block.';
+  return 'Complete the **Local Review Before Opening the PR/MR** section below. Commit its fixes. A missing/timed-out/quota/provider/transport-failed/malformed/inconclusive REQUIRED review blocks merging, not publication: record aggregate `LOCAL_OVERALL_STATUS=review-blocked`, do not self-review, continue to publish the PR/MR, and leave it open with the required pending-review comment. An OPTIONAL inconclusive result may continue. Set aggregate `LOCAL_OVERALL_STATUS=clean` for clean, configured capped, or optional inconclusive; use `partial` only for a qualifying stop, never raw statuses. A substantive rejection, failed build/test, unpushed fix, or state/publication failure blocks publication.';
 }
 
 /**
@@ -468,6 +470,9 @@ export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLE
   const reviewerArg = (reviewArgs ? ` ${reviewArgs}` : '') + mergeArg;
   const copilotOnly = reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER && reviewUsernames.length === 0;
   const reviewerListLabel = [...reviewers, ...reviewUsernames.map(u => `@${u}`)].join(', ');
+  const requiredLocalReviewBlockedNote = willOpenPR && runsReviewLoop && localReviewRequired
+    ? ' If a required local reviewer cannot return a verdict because of a quota/provider or transport failure, timeout, malformed/empty response, or no-verdict result, treat the local phase as `review-blocked`: `/do:pr` must still open the PR, post the pending-review comment, and skip its merge.'
+    : '';
   // Ordering matters to the agent: `/do:pr` partitions the list and runs every
   // local reviewer BEFORE it creates the PR, so the PR opens against an
   // already-review-clean branch and only the cloud-side reviewers (Copilot,
@@ -475,8 +480,8 @@ export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLE
   // agents expecting — and sometimes hand-rolling — a post-PR local pass.
   const reviewSuffix = willOpenPR && runsReviewLoop
     ? (copilotOnly
-        ? ' — `/do:pr` runs the Copilot review loop after the PR opens.'
-        : ` — \`/do:pr\` runs the review loop for ${reviewerListLabel} in order: local reviewers before it opens the PR, then the PR-side reviewers (Copilot / \`@login\`) once it is open.`)
+        ? ` — \`/do:pr\` runs the Copilot review loop after the PR opens.${requiredLocalReviewBlockedNote}`
+        : ` — \`/do:pr\` runs the review loop for ${reviewerListLabel} in order: local reviewers before it opens the PR, then the PR-side reviewers (Copilot / \`@login\`) once it is open.${requiredLocalReviewBlockedNote}`)
     : (willOpenPR ? ' — external review is disabled for this task.' : '');
   // Reached only for a Claude TUI (a non-Claude one took the slashdoFree branch
   // above), so `/simplify` — a Claude Code built-in — is invokable here.
@@ -541,6 +546,7 @@ function buildManualPrCreateStep(step, { branchName, baseBranch, forgeCli = 'gh'
   const hasBaseBranch = typeof baseBranch === 'string' && baseBranch && baseBranch !== '<base-branch>';
   const base = hasBaseBranch ? promptRef(baseBranch, '<base-branch>') : '"$BASE_BRANCH"';
   const gitlab = forgeCli === 'glab';
+  const reviewBlockedComment = 'Required code review was not completed before publication. This PR/MR is intentionally left open and will not be merged until the required review completes.';
   return [
     `${step}. Publish the branch and open the pull request yourself, capturing its URL and number:`,
     '',
@@ -562,7 +568,7 @@ function buildManualPrCreateStep(step, { branchName, baseBranch, forgeCli = 'gh'
       '   LOCAL_PRE_REBASE_REMOTE_SHA=$(grep -m1 "^LOCAL_PRE_REBASE_REMOTE_SHA=" "$LOCAL_REVIEW_BASELINE_FILE" | cut -d= -f2-)',
       '   if [ -z "$LOCAL_PRE_REBASE_REMOTE" ] || [ -z "$LOCAL_PRE_REBASE_HEAD_SHA" ]; then echo "Local review publication baseline is invalid; refusing to publish" >&2; exit 1; fi',
       '   CURRENT_HEAD_SHA=$(git rev-parse HEAD)',
-      '   case "$LOCAL_OVERALL_STATUS" in clean|partial) ;; *) echo "Local review did not finish with an acceptable status; refusing to publish" >&2; exit 1 ;; esac',
+      '   case "$LOCAL_OVERALL_STATUS" in clean|partial|review-blocked) ;; *) echo "Local review did not finish with an acceptable status; refusing to publish" >&2; exit 1 ;; esac',
       '   if [ "$LOCAL_REVIEWED_HEAD_SHA" != "$CURRENT_HEAD_SHA" ]; then echo "Local review covered $LOCAL_REVIEWED_HEAD_SHA, but HEAD is $CURRENT_HEAD_SHA; refusing to publish an unreviewed branch" >&2; exit 1; fi',
     ] : []),
     `   BRANCH=${branch}`,
@@ -605,6 +611,14 @@ function buildManualPrCreateStep(step, { branchName, baseBranch, forgeCli = 'gh'
     gitlab
       ? '   PR_NUMBER=$(glab mr view "$PR_URL" --output json | jq -r .iid)'
       : '   PR_NUMBER=$(gh pr view "$PR_URL" --json number -q .number)',
+    ...(localReviewStateRequired ? [
+      '   if [ "$LOCAL_OVERALL_STATUS" = "review-blocked" ]; then',
+      `     REVIEW_BLOCKED_COMMENT="${reviewBlockedComment}"`,
+      gitlab
+        ? '     if ! glab mr note "$PR_NUMBER" --message "$REVIEW_BLOCKED_COMMENT"; then echo "Unable to post the required review-blocked MR note" >&2; exit 1; fi'
+        : '     if ! gh pr comment "$PR_URL" --body "$REVIEW_BLOCKED_COMMENT"; then echo "Unable to post the required review-blocked PR comment" >&2; exit 1; fi',
+      '   fi',
+    ] : []),
     '   ```',
     // `--fill` on a one-line commit produces an empty description; PortOS used
     // to generate the body server-side, so spell out what it must contain now
@@ -615,6 +629,9 @@ function buildManualPrCreateStep(step, { branchName, baseBranch, forgeCli = 'gh'
     gitlab
       ? '   The GitLab MR URL and IID are captured in `$PR_URL` and `$PR_NUMBER`; use those variables for every review, merge, and verification command below.'
       : `   On a GitLab remote use \`glab mr create --source-branch ${branch} --target-branch ${base} --title "…" --description "…"\` and read the MR URL/IID back with \`glab mr view\`.`,
+    ...(localReviewStateRequired ? [
+      '   If `LOCAL_OVERALL_STATUS=review-blocked`, the comment above is mandatory; the following Merge Gate must leave the PR/MR open and must not merge it.',
+    ] : []),
   ];
 }
 
@@ -671,7 +688,7 @@ function buildManualTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLET
       lines.push('', localReviewSection, '');
     }
     lines.push(...buildManualPrCreateStep(step++, { branchName, baseBranch, forgeCli, localReviewStateRequired: Boolean(localReviewSection) }));
-    lines.push(`${step++}. Work through the **${runsReviewLoop ? 'Review Loop' : 'Merge Gate'}** section below in full — it ends by merging the PR. Come back here when it is done.`);
+    lines.push(`${step++}. Work through the **${runsReviewLoop ? 'Review Loop' : 'Merge Gate'}** section below in full — it merges the PR when eligible, but a review-blocked required review leaves it open. Come back here when it is done.`);
   } else if (willOpenPR) {
     const handoff = policyLeavesOpen
       ? 'PortOS will push the branch, create a pull request with your completion summary as its description, and leave it open for inspection.'
@@ -745,7 +762,7 @@ export function inlinePrLifecycleSection(task, { providerType, providerId, provi
  */
 export function buildInlineReviewLoopSection({
   taskId, branchName, runsReviewLoop, leaveOpen, localAgentLoopBody, localAgentLoopBodyPath = null, writesSentinel = false,
-  reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts, reviewStopMode, reviewerApplies, localPhaseReviewers = [], localPhaseCanShortCircuit = false, reviewerPositions = [], forgeCli = 'gh', workflowStep,
+  reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts, reviewStopMode, reviewerApplies, localPhaseReviewers = [], localPhaseCanShortCircuit = false, localPhaseReviewRequired = false, reviewerPositions = [], forgeCli = 'gh', workflowStep,
 }) {
   // Where control goes after the merge. A TUI run still owes PortOS its
   // `.agent-done` sentinel — telling it to "exit" here is how a finished merge
@@ -770,7 +787,7 @@ export function buildInlineReviewLoopSection({
     // exactly as the merge-only follow-up gets.
     reviewLoopMergeOnly: !runsReviewLoop,
     sourceTaskId: taskId || 'unknown',
-  }, { verbose: false, localAgentLoopBody, localAgentLoopBodyPath, inlineExitStep, forgeCli, inlineWorkflowStep: workflowStep, localPhaseReviewers, localPhaseCanShortCircuit, reviewerPositions });
+  }, { verbose: false, localAgentLoopBody, localAgentLoopBodyPath, inlineExitStep, forgeCli, inlineWorkflowStep: workflowStep, localPhaseReviewers, localPhaseCanShortCircuit, localPhaseReviewRequired, reviewerPositions });
 }
 
 /**
@@ -801,7 +818,11 @@ export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompleti
           ? 'and drives the Copilot review loop until clean.'
           : `and drives the review loop for ${[...reviewers, ...reviewUsernames.map(u => `@${u}`)].join(', ')} in order until clean.`)
       : 'with external review disabled.';
+    const requiredLocalReviewBlockedNote = willOpenPR && runsReviewLoop && localReviewRequired
+      ? ' A required local reviewer that cannot return a verdict is `review-blocked`: still open the PR, post the pending-review comment, and do not merge it.'
+      : '';
     lines.push(`${step++}. \`/do:pr${reviewerArg}\` — commits your changes, pushes the branch, and opens a pull request against the default branch ${completionNote}`);
+    if (requiredLocalReviewBlockedNote) lines.push(`   ${requiredLocalReviewBlockedNote.trim()}`);
     // Empty whenever the emitted `--review-with` already carries `~effort=<level>`
     // (see buildReviewerEffortNote) — this speaks only for an unpinned invocation.
     if (effortNote) lines.push(`   ${effortNote}`);
@@ -847,7 +868,7 @@ export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompleti
       forgeCli,
       localReviewStateRequired: Boolean(localReviewSection),
     }));
-    lines.push(`${step}. Work through the **${runsReviewLoop ? 'Review Loop' : 'Merge Gate'}** section below in full — it ends by merging the PR.`);
+    lines.push(`${step}. Work through the **${runsReviewLoop ? 'Review Loop' : 'Merge Gate'}** section below in full — it merges the PR when eligible, but a review-blocked required review leaves it open.`);
     return lines.join('\n');
   }
   let body;

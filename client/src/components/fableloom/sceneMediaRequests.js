@@ -5,52 +5,29 @@
  * page owner. Keeping request composition here makes their image/video prompts
  * identical: the canonical universe/series style preset leads, the scene owns
  * the subject/action, and loom-local direction remains an explicit suffix.
- * Image generation also conditions on a rendered direct predecessor when one
- * exists, preserving visual continuity across adjacent graph shots.
+ * The server-side visual-canon compiler owns reference allocation and graph
+ * continuity. These builders send authored intent plus the destination tag;
+ * they never pre-flatten canon into an untyped browser reference list.
  */
 
 import { composeStyledPrompt } from '../../lib/composeStyledPrompt';
 import { FABLELOOM_CAMERA_MOVEMENTS } from '../../../../server/lib/fableLoomCameraMovements.js';
+import { asFableLoomRenderSettings } from '../../../../server/lib/fableLoomProduction.js';
 
 const withLoomStyle = (prompt, styleNotes) => {
   const notes = typeof styleNotes === 'string' ? styleNotes.trim() : '';
   return notes ? `${prompt}\n\nStyle: ${notes}` : prompt;
 };
 
-// Keep enough reference influence to carry likeness and environment forward
-// without asking the model to preserve the prior shot's composition.
-export const FABLELOOM_CONTINUITY_STRENGTH = 0.4;
-
-/**
- * Resolve the still from a direct incoming graph neighbor. Storage order is
- * the deterministic tie-break at a convergence because a shared target node
- * has no active reader path while it is being authored. Self-loops never seed
- * themselves, and unrelated adjacent array entries are not "prior" shots.
- */
-export function findFableLoomPriorImage(episode, nodeId) {
-  const nodes = Array.isArray(episode?.nodes) ? episode.nodes : [];
-  if (!nodeId || episode?.startNodeId === nodeId) return null;
-  const predecessor = nodes.find((candidate) => (
-    candidate?.id !== nodeId
-    && typeof candidate?.image === 'string'
-    && candidate.image.trim()
-    && Array.isArray(candidate.transitions)
-    && candidate.transitions.some((transition) => transition?.targetNodeId === nodeId)
-  ));
-  return predecessor?.image.trim() || null;
-}
-
-export function buildFableLoomImageRequest({ loom, episode, episodeId, node, stylePreset = null }) {
+export function buildFableLoomImageRequest({ loom, episodeId, node, stylePreset = null }) {
   const authoredPrompt = withLoomStyle((node?.imagePrompt || '').trim(), loom?.styleNotes);
   const styled = composeStyledPrompt(authoredPrompt, '', stylePreset);
-  const priorImage = findFableLoomPriorImage(episode, node?.id);
+  const render = asFableLoomRenderSettings(loom?.renderSettings);
   return {
     prompt: styled.prompt,
     ...(styled.negativePrompt ? { negativePrompt: styled.negativePrompt } : {}),
-    ...(priorImage ? {
-      referenceImageFiles: [priorImage],
-      referenceStrengths: [FABLELOOM_CONTINUITY_STRENGTH],
-    } : {}),
+    width: render.width,
+    height: render.height,
     fableLoom: { loomId: loom.id, episodeId, nodeId: node.id },
   };
 }
@@ -63,6 +40,7 @@ export function buildFableLoomVideoRequest({ loom, episodeId, node, stylePreset 
     ? `${authoredPrompt}\n\nCamera direction: ${direction}`
     : authoredPrompt;
   const styled = composeStyledPrompt(withLoomStyle(directedPrompt, loom?.styleNotes), '', stylePreset);
+  const render = asFableLoomRenderSettings(loom?.renderSettings);
   return {
     prompt: styled.prompt,
     ...(styled.negativePrompt ? { negativePrompt: styled.negativePrompt } : {}),
@@ -70,6 +48,8 @@ export function buildFableLoomVideoRequest({ loom, episodeId, node, stylePreset 
     mode: node?.image ? 'image' : 'text',
     ...(node?.image ? { sourceImageFile: node.image } : {}),
     disableAudio: true,
+    width: render.width,
+    height: render.height,
     fableLoom: JSON.stringify({ loomId: loom.id, episodeId, nodeId: node.id }),
   };
 }

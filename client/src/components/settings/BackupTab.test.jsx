@@ -195,6 +195,8 @@ describe('BackupTab', () => {
       const runBtn = screen.getByRole('button', { name: /Run Backup Now/i });
       expect(runBtn.disabled).toBe(true);
       expect(runBtn.title).toMatch(/Configure and save a destination path first/i);
+      const reason = screen.getByText(/Configure and save a destination path first/i);
+      expect(runBtn.getAttribute('aria-describedby')).toBe(reason.id);
     });
 
     it('disables Run Backup Now while the destination is edited-but-unsaved (dirty)', async () => {
@@ -211,6 +213,8 @@ describe('BackupTab', () => {
       const runBtn = screen.getByRole('button', { name: /Run Backup Now/i });
       expect(runBtn.disabled).toBe(true);
       expect(runBtn.title).toMatch(/Save your changes before running/i);
+      const reason = screen.getByText(/Run Backup Now uses saved settings/i);
+      expect(runBtn.getAttribute('aria-describedby')).toBe(reason.id);
     });
 
     it('re-enables Run Backup Now once the edited destination is saved', async () => {
@@ -226,7 +230,10 @@ describe('BackupTab', () => {
       });
 
       // Save advances savedDestPath to the new value, clearing dirty → enabled.
-      expect(screen.getByRole('button', { name: /Run Backup Now/i }).disabled).toBe(false);
+      const runBtn = screen.getByRole('button', { name: /Run Backup Now/i });
+      expect(runBtn.disabled).toBe(false);
+      expect(runBtn.hasAttribute('aria-describedby')).toBe(false);
+      expect(screen.queryByText(/Run Backup Now uses saved settings/i)).toBeNull();
     });
 
     it('disables Run Backup Now while a save is in flight (not just when dirty)', async () => {
@@ -249,10 +256,42 @@ describe('BackupTab', () => {
       const runBtn = screen.getByRole('button', { name: /Run Backup Now/i });
       expect(runBtn.disabled).toBe(true);
       expect(runBtn.title).toMatch(/Waiting for save to finish/i);
+      const reason = screen.getByText(/Waiting for save to finish/i);
+      expect(runBtn.getAttribute('aria-describedby')).toBe(reason.id);
 
       // Let the save settle → unlock.
       await act(async () => { resolveSave({}); });
       expect(screen.getByRole('button', { name: /Run Backup Now/i }).disabled).toBe(false);
+      expect(screen.queryByText(/Waiting for save to finish/i)).toBeNull();
+    });
+
+    it('explains that a first destination save is in flight', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [] } });
+      let resolveSave;
+      updateSettings.mockReturnValue(new Promise((resolve) => { resolveSave = resolve; }));
+      await renderTab();
+
+      fireEvent.change(screen.getByLabelText(/Destination Path/i), { target: { value: '/backups' } });
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+
+      const runBtn = screen.getByRole('button', { name: /Run Backup Now/i });
+      const reason = screen.getByText(/Waiting for save to finish/i);
+      expect(runBtn.getAttribute('aria-describedby')).toBe(reason.id);
+
+      await act(async () => { resolveSave({}); });
+    });
+
+    it('explains that clearing a saved destination is in flight', async () => {
+      let resolveSave;
+      updateSettings.mockReturnValue(new Promise((resolve) => { resolveSave = resolve; }));
+      await renderTab();
+
+      fireEvent.change(screen.getByLabelText(/Destination Path/i), { target: { value: '' } });
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+
+      expect(screen.getByText(/Waiting for save to finish/i)).toBeTruthy();
+
+      await act(async () => { resolveSave({}); });
     });
 
     // `enabled` and `cronExpression` are saved by the same PATCH as destPath, so
@@ -349,6 +388,37 @@ describe('BackupTab', () => {
   });
 
   describe('Run Now — backup-already-running skip path', () => {
+    it('uses Running… alone while a backup is in flight', async () => {
+      let resolveRun;
+      triggerBackup.mockReturnValue(new Promise((resolve) => { resolveRun = resolve; }));
+      await renderTab();
+
+      fireEvent.click(screen.getByRole('button', { name: /Run Backup Now/i }));
+
+      const runBtn = await screen.findByRole('button', { name: /Running…/i });
+      expect(runBtn.hasAttribute('aria-describedby')).toBe(false);
+      expect(document.getElementById('backup-run-disabled-reason').textContent).toBe('');
+
+      fireEvent.change(screen.getByLabelText(/Destination Path/i), { target: { value: '/backups/edited' } });
+      expect(screen.getByText('Unsaved changes')).toBeTruthy();
+
+      await act(async () => { resolveRun({ skipped: true }); });
+    });
+
+    it('keeps the configure-first reason during an empty no-op save', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [] } });
+      let resolveSave;
+      updateSettings.mockReturnValue(new Promise((resolve) => { resolveSave = resolve; }));
+      await renderTab();
+
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+
+      expect(screen.getByText(/Configure and save a destination path first/i)).toBeTruthy();
+      expect(screen.queryByText(/Waiting for save to finish/i)).toBeNull();
+
+      await act(async () => { resolveSave({}); });
+    });
+
     it('toasts "Backup already running" and leaves rendered status/snapshots untouched when skipped', async () => {
       getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [] } });
       // Seed real prior state so the test catches a regression that mutates the

@@ -113,13 +113,30 @@ PortOS/
 │   │   └── sessions/          # Per-session prompt, output, metadata
 │   ├── brain/                 # Brain second-brain data (file-primary)
 │   │   ├── meta.json          # Settings
-│   │   ├── inbox.json         # Captured thoughts
-│   │   ├── people.json        # People records
-│   │   ├── projects.json      # Project records
-│   │   ├── ideas.json         # Ideas
-│   │   ├── admin.json         # Admin tasks
-│   │   ├── links.json         # Saved links (+ buckets.json, journals.json, memories.json)
-│   │   └── digests.jsonl      # Daily/weekly digests (+ reviews.jsonl)
+│   │   ├── admin/             # Admin tasks (collectionStore: <id>/index.json)
+│   │   ├── buckets/           # Custom bucket definitions (collectionStore: <id>/index.json)
+│   │   ├── ideas/             # Ideas and concepts (collectionStore: <id>/index.json)
+│   │   ├── inbox/             # Captured thoughts (collectionStore: <id>/index.json)
+│   │   ├── journals/          # Daily Log entries (collectionStore: <id>/index.json)
+│   │   ├── links/             # Saved bookmarks (collectionStore: <id>/index.json)
+│   │   ├── memories/          # Brain memories (collectionStore: <id>/index.json)
+│   │   ├── people/            # People records (collectionStore: <id>/index.json)
+│   │   ├── projects/          # Projects with status tracking (collectionStore: <id>/index.json)
+│   │   ├── songs/             # SongBook songs (collectionStore: <id>/index.json)
+│   │   ├── idealoom-lists/    # Machine-local IdeaLoom lists (collectionStore: <id>/index.json)
+│   │   ├── imports/           # Imported conversation archives
+│   │   ├── scans/             # Repository malware scan reports
+│   │   ├── songbook/          # Machine-local SongBook attachment files
+│   │   ├── youtube/           # YouTube transcripts, audio, and ingest index
+│   │   ├── activity-digest-settings.json # Activity digest configuration
+│   │   ├── journal-settings.json # Daily Log and Obsidian mirror settings
+│   │   ├── journal-obsidian-locations.json # Machine-local journal mirror paths
+│   │   ├── memory-bridge-map.json # Brain↔CoS memory bridge mapping
+│   │   ├── obsidian-vaults.json # Obsidian vault sync config
+│   │   ├── youtube-ingest-settings.json # YouTube ingest defaults
+│   │   ├── sync_log.jsonl     # Brain peer-sync mutation history
+│   │   ├── digests.jsonl      # Daily digest history
+│   │   └── reviews.jsonl      # Weekly review history
 │   ├── digital-twin/          # Digital twin identity documents
 │   │   ├── meta.json          # Settings and state
 │   │   └── documents/         # Markdown identity documents
@@ -131,6 +148,9 @@ PortOS/
 ├── .github/workflows/         # CI/CD
 └── ecosystem.config.cjs       # PM2 configuration
 ```
+
+Each Brain `collectionStore` directory contains a schema-versioned `index.json`
+and stores every record at `<id>/index.json`.
 
 ## Data Flow
 

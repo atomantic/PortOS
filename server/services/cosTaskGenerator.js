@@ -54,6 +54,7 @@ import {
   applyAuditModeWrapper,
 } from '../lib/auditCatalog.js';
 import { TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
+import { isReconcileDrainTaskType } from './taskScheduleConstants.js';
 import {
   appendClaimOverrideContext,
   appendPrefetchedIssueContext,
@@ -883,7 +884,7 @@ async function spawnPriority0OnDemand(ctx) {
 
   const taskSchedule = await import('./taskSchedule.js');
   const liveSchedule = await taskSchedule.loadSchedule();
-  const onDemandRequests = Array.isArray(liveSchedule?.onDemandRequests) ? liveSchedule.onDemandRequests : [];
+  const onDemandRequests = await taskSchedule.getOnDemandRequests();
 
   // Track apps already marked review-started this cycle so multiple on-demand
   // requests for the same app don't each rewrite its activity record.
@@ -2155,9 +2156,9 @@ function takePerpetualTransient(taskType, appId) {
  * Surface WHY a user-initiated on-demand "Run" produced no task, so the trigger
  * isn't a silent no-op the user only discovers in the pm2 logs. Emits
  * `schedule:on-demand-empty` (which the client toasts) with an `outcome`:
- *   - 'parked'    → a perpetual detector re-checked and found no actionable work;
+ *   - 'parked'    → a detector-driven task re-checked and found no actionable work;
  *                   carries the reason + open/in-flight/filtered breakdown.
- *   - 'transient' → a perpetual task that did NOT park — a gh/glab probe
+ *   - 'transient' → a detector-driven task that did NOT park — a gh/glab probe
  *                   failure — so the check didn't actually complete. Carries a
  *                   `forge` block naming the real fault when the CLI is broken
  *                   in a way that will NOT clear on its own.
@@ -2174,8 +2175,9 @@ function takePerpetualTransient(taskType, appId) {
 export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, taskConfig }) {
   const appId = targetApp?.id || null;
   const parkInfo = await taskScheduleMod.getPerpetualParkInfo(request.taskType, appId).catch(() => null);
-  const isPerpetual = taskConfig?.type === taskScheduleMod.INTERVAL_TYPES.PERPETUAL;
-  const outcome = parkInfo ? 'parked' : (isPerpetual ? 'transient' : 'idle');
+  const isDetectorDriven = taskConfig?.type === taskScheduleMod.INTERVAL_TYPES.PERPETUAL
+    || isReconcileDrainTaskType(request.taskType);
+  const outcome = parkInfo ? 'parked' : (isDetectorDriven ? 'transient' : 'idle');
 
   // Layered Intelligence skips (e.g. a provider that can't drive an agent) record
   // an actionable last-run reason. Surface it so a manual "Run" toasts WHY it
@@ -2419,8 +2421,9 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
 }
 
 /**
- * The ONE consecutive-dispatch cap for every perpetual drain, checked at the
- * choke point all four spawn engines funnel through.
+ * The ONE consecutive-dispatch cap for every perpetual or on-demand
+ * reconciliation drain, checked at the choke point all four spawn engines funnel
+ * through.
  *
  * Every perpetual drain re-issues itself the moment its run completes, so
  * "keeps finding work" and "is stuck in a loop" look identical one cycle at a
@@ -2439,7 +2442,10 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
  * @returns {Promise<{skip:boolean}>}
  */
 export async function applyPerpetualDrainCap(app, taskType, interval, taskSchedule) {
-  if (interval.type !== taskSchedule.INTERVAL_TYPES.PERPETUAL) return { skip: false };
+  const isPerpetual = interval.type === taskSchedule.INTERVAL_TYPES.PERPETUAL;
+  const isOnDemandReconcile = interval.type === taskSchedule.INTERVAL_TYPES.ON_DEMAND
+    && isReconcileDrainTaskType(taskType);
+  if (!isPerpetual && !isOnDemandReconcile) return { skip: false };
   // Coerce before validating: this key is not on the schedule route's allowlist, so
   // the only way it arrives non-numeric is a hand-edited schedule.json, where `"5"`
   // is the likeliest shape and reading it as "no cap" would silently unbound the

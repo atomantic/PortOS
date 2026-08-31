@@ -175,6 +175,24 @@ describe('UpdateTab reconcile flow', () => {
     expect(screen.getByRole('button', { name: 'Reconcile Now' })).toBeTruthy();
     expect(mockToast.loading).not.toHaveBeenCalled();
   });
+
+  it('surfaces stale pinned submodules as a reconcile action', async () => {
+    mockGetUpdateStatus.mockResolvedValue({
+      currentVersion: '2.24.0',
+      installState: {
+        outOfSync: true,
+        submodules: { stale: true, paths: ['lib/example'] },
+      },
+    });
+
+    render(<UpdateTab />);
+
+    expect(await screen.findByText(/1 submodule checkout is out of sync with the revisions pinned by PortOS/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Reconcile Now' })).toHaveAttribute(
+      'title',
+      expect.stringMatching(/sync pinned submodules/i),
+    );
+  });
 });
 
 describe('UpdateTab — active CoS agent suppression', () => {

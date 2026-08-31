@@ -9,6 +9,10 @@
  * 5. `nonuniform-parent-scale`: A non-relief child inherits a parent's anisotropic scale and may be distorted.
  * 6. `unanchored-attachment`: A part declared as carried that names nothing it is carried by.
  * 7. `attachment-far-from-anchor`: A declared attachment measured away from the anchor the spec says it hangs from.
+ * 8. `bilateral-mirror-scale`: One half of a named left/right pair mirrored by negating a scale component.
+ * 9. `bilateral-pair-same-side`: A named left/right pair that never crosses the lateral plane.
+ * 10. `bilateral-chirality`: A named left/right pair mirrored by a 180-degree yaw instead of a lateral reflection.
+ * 11. `straight-swept-path`: A part declared as a curved form built from a sweep that never bends.
  *
  * Checks 6 and 7 exist because `floating-part` and `buried-geometry` both miss
  * the same defect: a hat that belongs behind the shoulders but is authored at
@@ -17,9 +21,26 @@
  * relationship to its anchor makes the position wrong — which is why an
  * attachment whose anchor geometry cannot be measured is reported as unmeasured
  * rather than allowed to read as clean.
+ * Checks 8-10 exist because every bounds-based check above is blind to
+ * handedness: a hand spun around the vertical axis, or scaled by -1 in X,
+ * occupies exactly the same box as a correctly reflected one. Only the
+ * transform that placed it says which way round the limb is built.
+ * Check 11 covers the same blind spot in one more dimension: a horn swept along
+ * a straight run of control points has a perfectly reasonable bounding box,
+ * penetrates nothing, and touches its parent, so every check above passes it.
+ * Only the shape of the swept path itself says it never curves.
+
  */
 
-import { isThreejsAttachmentAnchored, listSpecNames, resolveThreejsAttachments } from './threejsModel.js';
+import {
+  CURVED_OUTLINE_MIN_CONCAVE_TURN_DEGREES,
+  SWEPT_ARC_MIN_SPAN_DEGREES,
+  collectDeclaredCurvedParts,
+  evaluateSweptGeometryCurvature,
+  isThreejsAttachmentAnchored,
+  listSpecNames,
+  resolveThreejsAttachments,
+} from './threejsModel.js';
 
 const EPSILON = 1e-4;
 const COPLANAR_TOLERANCE = 1e-3;
@@ -29,6 +50,20 @@ const MAX_AUDIT_POSES = 16;
 // catching the intentional shape-squashing that distorts a child hierarchy.
 const NONUNIFORM_SCALE_TOLERANCE = 0.01;
 const ANISOTROPY_COMPARISON_TOLERANCE = 0.01;
+// A mirrored limb is REFLECTED across the lateral plane (x = 0). Two other
+// transforms land the part in roughly the right place while inverting its
+// handedness: a 180-degree yaw about the vertical axis, and a negated scale
+// component. Both are what turn a right hand into a left hand with the thumb
+// pointing backward, so both are named explicitly rather than measured as a
+// generic bounds defect — the bounding boxes are identical either way.
+const LATERAL_REFLECTION = [-1, 0, 0, 0, 1, 0, 0, 0, 1];
+const VERTICAL_YAW_180 = [-1, 0, 0, 0, 1, 0, 0, 0, -1];
+const CHIRALITY_LINEAR_TOLERANCE = 1e-3;
+const CHIRALITY_POSITION_TOLERANCE = 1e-3;
+// A reflected pair is compared with a tolerance that grows with how far the
+// pair sits from the lateral plane, so a limb two units out is not reported for
+// authoring noise that a limb near the centreline would never produce.
+const CHIRALITY_POSITION_RELATIVE_TOLERANCE = 0.02;
 
 const degreesToRadians = (degrees) => (degrees * Math.PI) / 180;
 
@@ -544,6 +579,268 @@ const collectAnimatedScaleSamples = (part, sequences) => sequences
     { scale: sequence.channels.scale.to, sequenceId: sequence.id },
   ]);
 
+// Side tokens are matched as whole identifier tokens, never as substrings: a
+// substring match pairs "relay" with "lay" and reads the "l" out of "lamp".
+const BILATERAL_SIDE_TOKENS = new Map([
+  ['left', 'left'],
+  ['l', 'left'],
+  ['right', 'right'],
+  ['r', 'right'],
+]);
+
+// Both camel boundaries, not just the common one: "handL" needs lower-upper,
+// and "LHand" needs upper-upper-lower or the whole name reads as one token and
+// the pair is never found.
+const tokenizeIdentifier = (value) => String(value ?? '')
+  .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+  .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+  .split(/[^A-Za-z0-9]+/)
+  .filter(Boolean)
+  .map((token) => token.toLowerCase());
+
+/**
+ * The pairing key for one identifier: its remaining tokens, sorted, so
+ * "leftHand", "hand_L", "LHand" and "Hand Left" all key to the same pair.
+ *
+ * Order is discarded deliberately. A generated spec routinely mixes conventions
+ * between the two halves of one pair — "leftFoot" beside "foot_R" — and an
+ * ordered key would leave exactly those pairs unchecked. Every other token still
+ * has to match as a multiset, so the pairing stays as tight as the names.
+ *
+ * Returns null when there is no side token, when there are several (a name that
+ * says both sides names neither), or when the side token is the whole
+ * identifier — a part simply called "left" has no counterpart to be paired with.
+ */
+const describeBilateralSide = (identifier) => {
+  const tokens = tokenizeIdentifier(identifier);
+  if (tokens.length < 2) return null;
+  const sideIndexes = tokens.reduce((found, token, index) => (
+    BILATERAL_SIDE_TOKENS.has(token) ? [...found, index] : found
+  ), []);
+  if (sideIndexes.length !== 1) return null;
+  const [sideIndex] = sideIndexes;
+  return {
+    key: tokens.filter((_, index) => index !== sideIndex).sort().join('|'),
+    side: BILATERAL_SIDE_TOKENS.get(tokens[sideIndex]),
+  };
+};
+
+/**
+ * Group parts into left/right pairs by name (falling back to id).
+ *
+ * Only an unambiguous one-to-one grouping is returned. Three parts sharing a
+ * key — a spec with two "wing-l" variants — cannot say which counterpart each
+ * one is meant to mirror, and guessing would report chirality against the wrong
+ * limb.
+ */
+const collectBilateralPairs = (parts) => {
+  const groups = new Map();
+  for (const part of parts) {
+    const descriptor = describeBilateralSide(part.name || part.id)
+      || (part.name ? describeBilateralSide(part.id) : null);
+    if (!descriptor) continue;
+    const group = groups.get(descriptor.key) || { left: [], right: [] };
+    group[descriptor.side].push(part);
+    groups.set(descriptor.key, group);
+  }
+  return [...groups.values()]
+    .filter((group) => group.left.length === 1 && group.right.length === 1)
+    .map((group) => ({ left: group.left[0], right: group.right[0] }));
+};
+
+const collectPartChains = (parts) => {
+  const chains = new Map();
+  const walk = (list, ancestors) => {
+    for (const part of list || []) {
+      const chain = [...ancestors, part];
+      chains.set(part.id, chain);
+      walk(part.children, chain);
+    }
+  };
+  walk(parts, []);
+  return chains;
+};
+
+/**
+ * Both halves of a pair placed in the frame of their nearest common ancestor.
+ *
+ * The lateral plane a pair is mirrored across is the one their shared parent
+ * defines, NOT world x = 0. A subject modelled off the origin, or a body yawed
+ * to face somewhere other than down +Z, is mirror-symmetric about its own axis
+ * and about no world plane at all — comparing it against x = 0 reports every
+ * correctly built pair on it. Composing down from the common ancestor cancels
+ * that shared placement, and leaves exactly the authored local transforms the
+ * refinement feedback asks the next pass to change.
+ */
+const transformsRelativeToCommonAncestor = (leftChain, rightChain) => {
+  let shared = 0;
+  while (shared < leftChain.length - 1
+    && shared < rightChain.length - 1
+    && leftChain[shared] === rightChain[shared]) {
+    shared += 1;
+  }
+  const compose = (chain) => chain.slice(shared).reduce(
+    (transform, part) => composeTransform(transform, part.position, part.rotationDegrees, part.scale),
+    IDENTITY_TRANSFORM,
+  );
+  return [compose(leftChain), compose(rightChain)];
+};
+
+const determinant3 = (m) => (
+  (m[0] * ((m[4] * m[8]) - (m[5] * m[7])))
+  - (m[1] * ((m[3] * m[8]) - (m[5] * m[6])))
+  + (m[2] * ((m[3] * m[7]) - (m[4] * m[6])))
+);
+
+const linearClose = (a, b) => a.every((value, index) => Math.abs(value - b[index]) <= CHIRALITY_LINEAR_TOLERANCE);
+
+const vectorClose = (a, b, tolerance) => a.every((value, index) => Math.abs(value - b[index]) <= tolerance);
+
+const formatVector = (vector) => `[${vector.map(formatOffset).join(', ')}]`;
+
+// Every primitive in this set maps onto itself under a 180-degree yaw, so a lone
+// one of them is built identically whether it was reflected or turned around.
+// Reporting those would bury the real defects under every blocky limb in the
+// catalogue. `extrude`, `tube` and `custom` carry an authored profile that a yaw
+// visibly turns around, and any assembly of more than one volume shows the flip
+// in where its pieces land.
+const YAW_SYMMETRIC_GEOMETRY_TYPES = new Set(['box', 'sphere', 'cylinder', 'cone', 'capsule', 'torus', 'lathe']);
+
+const isYawDistinguishable = (volumes, partId) => {
+  const subtree = volumes.filter((volume) => isInSubtree(volume, partId));
+  if (subtree.length !== 1) return subtree.length > 1;
+  return !YAW_SYMMETRIC_GEOMETRY_TYPES.has(subtree[0].geometry?.type);
+};
+
+/**
+ * Chirality and symmetry findings for the resting pose.
+ *
+ * Only the resting pose is audited: which way round a limb is built is authored
+ * into the assembly, and a clip that rotates an arm is not a chirality defect.
+ *
+ * A flipped ORIENTATION is what every finding here turns on. A counterpart
+ * merely placed at a different depth is a staggered pose — a figure mid-stride
+ * has one hand forward and one back — and reporting that as chirality would ask
+ * the next pass to flatten every pose it was asked for. The depth is reported
+ * only as corroboration, once the orientation already says the limb is turned
+ * around.
+ *
+ * @returns {Array} findings, at most one per pair
+ */
+function buildBilateralChiralityFindings({ pairs, chains, volumes }) {
+  const findings = [];
+
+  for (const { left, right } of pairs) {
+    const leftChain = chains.get(left.id);
+    const rightChain = chains.get(right.id);
+    if (!leftChain || !rightChain) continue;
+    const [leftTransform, rightTransform] = transformsRelativeToCommonAncestor(leftChain, rightChain);
+
+    const leftName = left.name || left.id;
+    const rightName = right.name || right.id;
+    const partIds = [left.id, right.id];
+    const leftPosition = leftTransform.translation;
+    const rightPosition = rightTransform.translation;
+
+    // A negated scale component is the one mirror that leaves the bounds
+    // untouched and every normal inside out, so it is reported before the
+    // orientation comparison — which has no meaning across a handedness flip.
+    const leftDeterminant = determinant3(leftTransform.linear);
+    const rightDeterminant = determinant3(rightTransform.linear);
+    if ((leftDeterminant < 0) !== (rightDeterminant < 0)) {
+      const flipped = leftDeterminant < 0 ? leftName : rightName;
+      const intact = leftDeterminant < 0 ? rightName : leftName;
+      findings.push({
+        code: 'bilateral-mirror-scale',
+        severity: 'warning',
+        partIds,
+        message: `Bilateral pair "${leftName}" / "${rightName}" is mirrored by negating a scale component on "${flipped}", which inverts its handedness and face winding relative to "${intact}". Build the pair with positive scale on both sides and reflect the counterpart across the lateral plane instead: position [-x, y, z] with rotation [rx, -ry, -rz].`,
+      });
+      continue;
+    }
+
+    // A pair that never crosses its parent's lateral plane was not mirrored at
+    // all — one limb was copied to the other side's name and left where it was.
+    const sameSide = Math.sign(leftPosition[0]) === Math.sign(rightPosition[0])
+      && Math.min(Math.abs(leftPosition[0]), Math.abs(rightPosition[0])) > TOUCH_TOLERANCE;
+    if (sameSide) {
+      findings.push({
+        code: 'bilateral-pair-same-side',
+        severity: 'warning',
+        partIds,
+        message: `Bilateral pair "${leftName}" / "${rightName}" sits entirely on one side of the lateral plane (both offset from their common parent at x = ${formatOffset(leftPosition[0])} and x = ${formatOffset(rightPosition[0])}), so the pair never straddles the body. Negate the x offset of one of them so each limb sits on its own side.`,
+      });
+      continue;
+    }
+
+    const reflectedLinear = multiplyLinear(multiplyLinear(LATERAL_REFLECTION, leftTransform.linear), LATERAL_REFLECTION);
+    if (linearClose(rightTransform.linear, reflectedLinear)) continue;
+    // Nothing is reported for a pair that is merely posed differently: an arm
+    // raised on one side is legitimate, and only a positively identified yaw is
+    // a chirality defect. Both compositions are tested because the yaw is
+    // authored either way — as a 180-degree turn of the placed limb (world side)
+    // or as a [0, 180, 0] local rotation on the part itself (local side).
+    const orientationYawed = isYawDistinguishable(volumes, right.id) && (
+      linearClose(rightTransform.linear, multiplyLinear(VERTICAL_YAW_180, leftTransform.linear))
+      || linearClose(rightTransform.linear, multiplyLinear(leftTransform.linear, VERTICAL_YAW_180))
+    );
+    if (!orientationYawed) continue;
+
+    const positionTolerance = Math.max(
+      CHIRALITY_POSITION_TOLERANCE,
+      CHIRALITY_POSITION_RELATIVE_TOLERANCE * Math.hypot(...leftPosition),
+    );
+    const reflectedPosition = [-leftPosition[0], leftPosition[1], leftPosition[2]];
+    const yawedPosition = [-leftPosition[0], leftPosition[1], -leftPosition[2]];
+    const placementYawed = !vectorClose(rightPosition, reflectedPosition, positionTolerance)
+      && Math.abs(leftPosition[2]) > positionTolerance
+      && vectorClose(rightPosition, yawedPosition, positionTolerance);
+
+    findings.push({
+      code: 'bilateral-chirality',
+      severity: 'warning',
+      partIds,
+      message: `Bilateral pair "${leftName}" / "${rightName}" is mirrored by a 180° yaw about the vertical axis rather than a reflection across the lateral plane: "${rightName}" carries the orientation of "${leftName}" turned around rather than reflected${placementYawed ? `, and sits at ${formatVector(rightPosition)} where a reflection would place it at ${formatVector(reflectedPosition)}` : ''}. A yaw preserves handedness instead of inverting it, which is what produces backward-facing hands and feet with the big toe on the outer edge. Reflect the counterpart instead: position [-x, y, z] with rotation [rx, -ry, -rz] and positive scale.`,
+    });
+  }
+
+  return findings;
+}
+
+const formatDegrees = (value) => `${Math.round(value)}°`;
+
+/**
+ * Report a part the spec declares as a curved form whose sweep never bends.
+ *
+ * Named or feature-declared curvature is the whole trigger: `tube` and `extrude`
+ * are the right answer for plenty of straight parts — a rail, a plate, a strut —
+ * so a straight sweep is evidence of nothing until the spec says it was meant to
+ * turn.
+ */
+const buildSweptPathCurvatureFindings = (spec, parts) => {
+  const partsById = new Map(parts.map((part) => [part.id, part]));
+  const findings = [];
+  for (const [partId, declaredBy] of collectDeclaredCurvedParts(spec)) {
+    const part = partsById.get(partId);
+    const curvature = evaluateSweptGeometryCurvature(part?.geometry);
+    if (!curvature || !curvature.straight) continue;
+    const name = part.name || part.id;
+    // Only when the declaration came from somewhere else — repeating the part's
+    // own name back at it reads as a stutter.
+    const declaration = declaredBy === name ? '' : ` (declared by the feature "${declaredBy}")`;
+    const message = curvature.kind === 'tube'
+      ? `Part "${name}"${declaration} is a curved form built from a tube whose path ${curvature.arcSpanDegrees > 0 ? `only turns through ${formatDegrees(curvature.arcSpanDegrees)}` : 'runs through collinear control points'}, so it sweeps straight. Sample the intended curve into "path" so consecutive points step around a centre — a horn, tail, hook, or bent conduit needs at least ${formatDegrees(SWEPT_ARC_MIN_SPAN_DEGREES)} of turn — instead of listing points along one line.`
+      : `Part "${name}"${declaration} is a curved form built from an extrude whose outline never turns back on itself (${formatDegrees(curvature.concaveTurnDegrees)} of sustained concave turning). An extrude sweeps its outline along a STRAIGHT axis, so the curve has to be in the outline's own silhouette: give it a concave side of at least ${formatDegrees(CURVED_OUTLINE_MIN_CONCAVE_TURN_DEGREES)}, or build the part as a "tube" whose path follows the curve.`;
+    findings.push({
+      code: 'straight-swept-path',
+      severity: 'warning',
+      partIds: [partId],
+      message,
+    });
+  }
+  return findings;
+};
+
 /**
  * @param {object|null} spec a validated Three.js scene spec
  * @returns {{findings: Array, errorCount: number, warningCount: number, noteCount: number,
@@ -628,6 +925,18 @@ export function evaluateThreejsPhysicalAudit(spec) {
   }
 
   const visibleStaticVolumes = staticVolumes.filter((v) => v.visible && v.opacity > 0);
+
+  for (const finding of buildBilateralChiralityFindings({
+    pairs: collectBilateralPairs(parts),
+    chains: collectPartChains(spec.parts),
+    volumes: visibleStaticVolumes,
+  })) {
+    addFinding(finding);
+  }
+
+  for (const finding of buildSweptPathCurvatureFindings(spec, parts)) {
+    addFinding(finding);
+  }
 
   // Floating check & Buried & Coplanar on resting pose
   for (let i = 0; i < visibleStaticVolumes.length; i += 1) {
@@ -862,6 +1171,12 @@ export function buildThreejsPhysicalAuditFeedback(physicalAudit) {
   const unmeasured = Array.isArray(physicalAudit?.unmeasuredAttachments) ? physicalAudit.unmeasuredAttachments : [];
   if (actionable.length === 0 && unmeasured.length === 0) return '';
   const hasNonuniformParentScale = actionable.some((finding) => finding.code === 'nonuniform-parent-scale');
+  const hasBilateralChirality = actionable.some((finding) => (
+    finding.code === 'bilateral-chirality'
+    || finding.code === 'bilateral-mirror-scale'
+    || finding.code === 'bilateral-pair-same-side'
+  ));
+  const hasStraightSweptPath = actionable.some((finding) => finding.code === 'straight-swept-path');
   const attachmentFindings = actionable.filter((finding) => (
     finding.code === 'unanchored-attachment' || finding.code === 'attachment-far-from-anchor'
   ));
@@ -877,6 +1192,12 @@ export function buildThreejsPhysicalAuditFeedback(physicalAudit) {
     ...unmeasured.map((entry) => `Attachment "${entry.partId}" could not be checked against ${entry.anchorSocket ? `socket "${entry.anchorSocket}"` : `"${entry.anchorPartId}"`} because ${entry.reason} — give both the attachment and its anchor real geometry so the relationship can be verified.`),
     ...(hasNonuniformParentScale ? [
       'For non-uniform parent scale findings, size each part through its own geometry dimensions (for example, box width/height/depth or sphere radius) and keep containers near-uniform instead of squashing a parent that owns other components.',
+    ] : []),
+    ...(hasStraightSweptPath ? [
+      'For straight swept-path findings, put the curve in the geometry rather than in the part name: a "tube" needs enough control points, stepped around a centre, that its path visibly turns, and an "extrude" only curves when its outline itself has a concave side. Rotating or repositioning a straight sweep does not make it a curved one.',
+    ] : []),
+    ...(hasBilateralChirality ? [
+      'For bilateral pair findings, mirror a paired limb across the lateral plane rather than turning it around: give the counterpart position [-x, y, z] and rotation [rx, -ry, -rz] with every scale component positive. A 180° yaw about the vertical axis or a negative scale factor leaves the bounding box correct while pointing thumbs backward and putting big toes on the outer edge.',
     ] : []),
     ...(attachmentFindings.length > 0 ? [
       `For attachment findings, every entry in "articulation.attachments" must name the part or socket it hangs from and be positioned against it${anchorNames.length > 0 ? ` (the anchors named above: ${listSpecNames(anchorNames.map((name) => `"${name}"`))})` : ''}. Anchoring to the model root is not acceptable — name the body part that actually carries the piece.`,

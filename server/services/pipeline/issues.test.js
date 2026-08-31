@@ -1275,6 +1275,18 @@ describe('pipeline issues service', () => {
         const leanRec = lean.find((i) => i.id === a.id);
         expect(leanRec).toBeTruthy();
       });
+
+      it('scopes an uncapped read to several series without including others', async () => {
+        const a = await svc.createIssue({ seriesId: 'ser-scope-a', title: 'A' });
+        const b = await svc.createIssue({ seriesId: 'ser-scope-b', title: 'B' });
+        await svc.createIssue({ seriesId: 'ser-scope-other', title: 'Other' });
+        const scoped = await svc.listAllIssues({
+          seriesIds: ['ser-scope-a', 'ser-scope-b', 'ser-scope-a'],
+          withHistory: false,
+        });
+        expect(scoped.map((i) => i.id).sort()).toEqual([a.id, b.id].sort());
+        expect(await svc.listAllIssues({ seriesIds: [] })).toEqual([]);
+      });
     });
 
     describe('listIssuesForSeries (#1469)', () => {
