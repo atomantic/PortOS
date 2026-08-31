@@ -70,8 +70,12 @@ PortOS-owned integration state is stored in
 display name, the stable Persistent Mind/CoS identity and local role
 observations, the projection recipe, and the last projection checkpoint.
 The human name can be configured explicitly. If it is cleared, PortOS derives a
-stable fallback from the persisted PortOS instance identity (using the instance
-name when available and a non-identifying instance-id-derived label otherwise).
+stable pseudonymous label from the persisted instance id without placing the
+raw id or the machine's display name in the Eidoverse log.
+The V1-to-V2 migration recognizes the old `instance-name` source marker and
+retires only that automatic value; an explicitly configured name is preserved.
+Because Eidoverse history is append-only, PortOS does not rewrite prior log
+entries, but it no longer joins or projects with the retired machine name.
 The browser receives that same identity in the Eidoverse launch URL, so a
 reload or a second trusted machine does not create a new anonymous user.
 The default installation uses Eidoverse's name-based join protocol with the
@@ -96,52 +100,142 @@ local Agent Tools (MCP) controls; generic PortOS write access does not imply it.
 This makes both the human and CoS roles durable in the Eidoverse world rather
 than browser-session conveniences.
 
-## PortOS projection recipe
+## World Design V2: Luminous Systems Garden
 
-The PortOS projection is deterministic and local. It turns current PortOS
-resources into Eidoverse entities without an LLM call. The default lanes are:
+PortOS ships a versioned world-design recipe, not a one-instance scene. World
+Design V2 replaces V1's numbered resource lanes with eight stable semantic
+districts:
 
-- managed apps, active agents, open CoS tasks, enabled features, and federated
-  peer summaries become individual model-backed entities;
-- goals and current-sprint Jira tickets become bounded individual entities;
-- productivity and activity become compact summary/history entities;
-- memory becomes category/graph summaries only (raw memory and journal bodies
-  are not copied into the world component payload);
-- storage becomes bounded PostgreSQL table and `data/` domain summaries;
-- health becomes one aggregate, while operations becomes one compact hub for
-  CoS/AI state, review, backup, inbox, notifications, voice, character,
-  chronotype, health metrics, and disk state;
-- the recipe controls which families are included, per-family caps, layout
-  spacing/scales, model assets, and procedural terrain parameters;
-- stable entity ids make repeated projections update existing buildings,
-  vehicles, crates, drones, and landmarks instead of accumulating duplicates;
-- an unavailable source is preserved as unknown and does not delete its last
-  good entities; a confirmed empty source may remove the generated entities for
-  that family.
+| District | PortOS meaning |
+|---|---|
+| PortOS Nexus | Aggregate health, operations, and feature affordances |
+| App Terraces | Managed apps and their coarse runtime state |
+| Agent Foundry | Active agents and bounded CoS task summaries |
+| Goal Observatory | Goals and current-sprint Jira summaries |
+| Memory Grove | Category and graph aggregates, never memory bodies |
+| Data Vault | Bounded PostgreSQL and file-domain summaries |
+| Federation Harbor | Coarse peer availability summaries |
+| Activity River | Productivity and recent activity aggregates |
 
-The Eidoverse renderer receives the resource label, source id, status, and
-bounded fields as generic `portos` component metadata alongside each model.
-That keeps the world useful even when a source is sparse and leaves the
-Eidoverse scene graph/inspector as the authoritative detail view; the PortOS
-adapter does not pretend that arbitrary metadata is a persistent 3D text label.
+The authored environment is part of the design contract: deep slate/indigo
+terrain, a warm dawn `skymesh`, three deliberate lights, restrained fog, and a
+sparse wind-reactive field. District anchors have distinct silhouettes and
+accent colors. Abstract metrics no longer use generic car meshes. Entity
+position is derived from stable source id plus district anchor, so source array
+reordering does not move the world around. Goal progress lifts its constellation
+beacons, while activity summaries follow a shallow, stable river bend.
 
-The Eidoverse page exposes **Project PortOS now** and a recipe editor. The
-Persistent Mind and explicitly granted local CoS agents can use the governed
-`eidoverse.status`, `eidoverse.project`, `eidoverse.augment`, and
+The central Nexus light follows aggregate health: cyan is healthy, amber needs
+attention, and red is an error. The corresponding health beacon also changes
+shape, elevation, and motion, so the status remains legible without color.
+
+Every projected record is normalized to a bounded `WorldSignal` component. It
+contains a one-way stable resource key, generic safe label, controlled
+status/severity/freshness values, district, PortOS route, disclosure class, and
+a shallow set of numeric/boolean metrics. Nested collections become counts and
+arbitrary strings are discarded. Apps become a few status-count pylons rather
+than one anonymous rack per app; storage becomes two aggregate landmarks plus
+bounded anomaly markers; Jira becomes current-work status counts. PortOS never
+places raw journal/memory bodies, database or file names, task prompts, ticket
+titles, machine/peer identities, or federation records in the Eidoverse log.
+The default per-family caps sum below the hard global ceiling, and a user-edited
+recipe still cannot materialize more than 48 live PortOS signals.
+
+Only ids under `portos-design-v2-*` and the retired V1
+`portos-projection-*` namespace are reconciled. Unrelated Eidoverse entities are
+never moved or removed. A temporarily unavailable PortOS source preserves its
+last-good entities; a confirmed empty source retires that source's managed
+entities. The eight district landmarks, luminous connector nodes, and three
+authored lights are infrastructure rather than live records.
+
+## Assets are a recipe, not a payload
+
+PortOS does not bundle model packs. `server/lib/eidoverseWorldDesign.js` stores
+small semantic slots such as `nexus`, `agent`, `memory`, and `peer`. Each slot
+declares:
+
+- preferred Eidoverse library paths;
+- fallback search queries;
+- required and excluded filename tokens;
+- maximum bytes, GLB/animation expectations, and `library-only` source policy;
+- a final known-library fallback.
+
+On first projection after an install or recipe update, PortOS reads
+`/library-list`, uses `/library-models` only for unresolved slots, rejects
+content-addressed `store/<hash>` paths for portable defaults, verifies each
+chosen `/library/...` asset, and ranks candidates deterministically. It then
+persists the exact path, byte-size metadata, design/recipe/slot versions, per-slot
+recipe fingerprint, strategy, catalog fingerprint, resolution time, and
+default-versus-user source in `assetResolutions`. Normal projections reuse that
+lock and do not repeat model searches. A later design release invalidates only
+slots whose recipe fingerprint changed; unchanged paths and local overrides
+remain pinned. Eidoverse owns and caches the bytes. A user may retain an
+explicit install-local `store/...` model override, but that path is recorded as
+an override and never becomes a shipped PortOS default.
+
+## Versioning, updates, and recovery
+
+`data/eidoverse/portos-world.json` schema V2 records
+`selectedDesignVersion`, `lastAppliedDesignVersion`, `pendingDesignVersion`,
+`userOverrides`, `assetRecipeVersion`, `assetResolutions`, `migrationReport`,
+and the reconciliation checkpoint/error. The immutable V1 and V2 registries are
+both retained in source.
+
+Migration `323-eidoverse-world-design-v2.js` runs in the normal PortOS migration
+pass used by `update.sh`, `update.ps1`, and ordinary server boot. It compares
+every stored V1 leaf against the immutable V1 default: a default-matching leaf
+inherits V2, while a genuinely customized leaf becomes a V2 user override.
+V1's lane coordinates have no safe district translation, so a custom layout is
+reported rather than silently applied. Missing state is a fresh V2 install;
+invalid or newer schema state fails closed and remains pending for repair or a
+PortOS update.
+
+The offline migration never touches an external checkout or calls an AI
+provider. It leaves V2 pending. After restart, a deterministic reconciler runs
+only when the separately managed Eidoverse process is already online. It
+preflights runtime build identity, the catalog, and every selected asset before
+sending world operations. Reconciliation is staged: infrastructure and live
+signals are created first, the managed environment follows, and only then are
+obsolete V1 ids retired. Every acknowledged operation has an inverse derived
+from the pre-update snapshot. A failed stage reconnects, applies those inverses
+in reverse order, retains the old `lastAppliedDesignVersion`, and leaves a
+resumable checkpoint. If Eidoverse is stopped or incompatible, PortOS leaves
+the update pending and the page links directly to the managed app instead of
+claiming the world is current.
+
+On a genuinely fresh world there is no previous atmosphere to protect, so the
+dawn environment is applied first and the user does not wait in darkness while
+the initial landmarks and signals stream in. The stricter order above remains
+mandatory for every upgrade with a previously applied design.
+
+The hosted page retains a loading curtain until the embedded renderer arrives,
+then presents the scene as the primary surface with a district/status legend,
+live-signal budget, and real reconciliation checkpoint progress over the world.
+**World controls** opens the shared tabbed drawer:
+
+- **Experience** — durable identity and high-level design status;
+- **Districts & Data** — source visibility, counts, current/stale state, direct
+  PortOS routes, caps, and district resets;
+- **Appearance & Assets** — dawn environment, selected size/source, local
+  overrides, and the persisted asset recipe;
+- **Updates & Advanced** — migration diff, checkpoints, apply/retry, asset
+  re-resolution, and a two-step full reset.
+
+The Persistent Mind and explicitly granted local CoS agents can use the
+governed `eidoverse.status`, `eidoverse.project`, `eidoverse.augment`, and
 `eidoverse.say` tools. `eidoverse.augment` accepts only bounded world verbs (for
 example `spawn`, `place`, `comp`, `light`, `terrain`, `sky`, and `grant`); it
 cannot execute arbitrary runtime behavior or modify the installed Eidoverse
-source. Status requires bounded PortOS read access; projection additionally
-requires the dedicated Eidoverse-management grant, while augmentation and
-world chat require that dedicated grant without widening generic PortOS
-record-write authority.
+source. Status requires bounded PortOS read access. Projection, augmentation,
+and world chat retain the dedicated Eidoverse-management grant without widening
+generic PortOS record-write authority.
 
 ## Growth and automation
 
-The projection recipe is intentionally separate from the current world log.
-As PortOS gains resources, the deterministic projection runs when the hosted
-page opens and can also be run manually, from a CoS task, or through the
-disabled-by-default autonomous job
+The world-design recipe and per-install asset lock are intentionally separate
+from the current world log. As PortOS gains resources, the deterministic
+projection runs when the hosted page opens and can also be run manually, from a
+CoS task, or through the disabled-by-default autonomous job
 `job-eidoverse-projection`. Enabling that job is an explicit install-local
 choice; it performs no provider calls and only reflects resources that already
 exist. The hosted page starts the managed runtime when it is opened; an

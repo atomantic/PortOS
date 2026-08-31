@@ -46,6 +46,16 @@ The sync step refreshes each checkout's local submodule metadata from the newly 
 
 All restart-triggering UI actions (`Update Now`, `Sync Fork & Update`, both “from Fork As-Is” variants, and the reconcile variants) launch `update.sh` or `update.ps1`, so they inherit this exact sequence. `Sync Fork Only` remains intentionally different: it only fast-forwards the GitHub fork and does not touch the local checkout.
 
+After source update and restart, the normal boot migration pass upgrades
+versioned PortOS-owned data before route initialization. Eidoverse World Design
+updates use this path: the offline migration changes only
+`data/eidoverse/portos-world.json`, preserving V1 custom leaves as explicit V2
+overrides and recording a pending checkpoint. A post-boot, non-AI reconciler
+applies that checkpoint only when the separately managed Eidoverse runtime is
+already online; otherwise the Eidoverse page keeps the update pending with a
+direct managed-app remediation link. Update scripts never mutate the external
+Eidoverse checkouts to apply a PortOS world design.
+
 `GET /api/update/status` also compares recursive submodule checkouts with their pinned revisions. An uninitialized, conflicted, behind, or divergent module marks the install out of sync, making the existing Reconcile control available even when no newer release is waiting. A checkout deliberately advanced through the Submodules tab is not treated as stale, and CoS worktrees report submodule state as unknown because they intentionally leave submodules uninitialized and cannot run the primary-checkout update flow.
 
 To prevent that confusion, `POST /api/update/execute` rejects fork runs with **412 `FORK_SYNC_REQUIRED`** unless either:

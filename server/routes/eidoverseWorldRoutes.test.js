@@ -55,6 +55,37 @@ describe('Eidoverse world routes', () => {
     expect(mocks.updateConfig).toHaveBeenCalledWith({ humanName: 'Example User' });
   });
 
+  it('validates scoped reset and asset-refresh actions', async () => {
+    const district = await request(makeApp()).put('/api/eidoverse/world/config').send({
+      reset: { scope: 'district', districtId: 'apps' },
+    });
+    const assets = await request(makeApp()).put('/api/eidoverse/world/config').send({ refreshAssets: true });
+    const invalid = await request(makeApp()).put('/api/eidoverse/world/config').send({ reset: { scope: 'district' } });
+    const unknown = await request(makeApp()).put('/api/eidoverse/world/config').send({
+      reset: { scope: 'district', districtId: 'example-unknown-district' },
+    });
+
+    expect(district.status).toBe(200);
+    expect(assets.status).toBe(200);
+    expect(mocks.updateConfig).toHaveBeenCalledWith({ reset: { scope: 'district', districtId: 'apps' } });
+    expect(mocks.updateConfig).toHaveBeenCalledWith({ refreshAssets: true });
+    expect(invalid.status).toBe(400);
+    expect(unknown.status).toBe(400);
+  });
+
+  it('accepts explicit install-local asset overrides without making them portable defaults', async () => {
+    const payload = {
+      assetOverrides: {
+        app: 'store/example-local-asset',
+        operations: 'eidoverse/assets/models/example-legacy-operations.glb',
+      },
+    };
+    const response = await request(makeApp()).put('/api/eidoverse/world/config').send(payload);
+
+    expect(response.status).toBe(200);
+    expect(mocks.updateConfig).toHaveBeenCalledWith(payload);
+  });
+
   it('rejects verbs outside the bounded augmentation contract', async () => {
     const res = await request(makeApp()).post('/api/eidoverse/world/augment').send({
       operations: [{ verb: 'behavior', args: {} }],

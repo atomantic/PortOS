@@ -319,6 +319,17 @@ const startBackgroundServices = ({ spawnerReady }) => {
   // in bootstrapSequence.js.
   initCosAfterSpawner({ spawnerReady, initCos: () => cos.init() });
 
+  // World Design migrations are offline and leave a pending checkpoint. If the
+  // separately-managed Eidoverse process is already online, reconcile it now;
+  // otherwise leave the checkpoint for direct remediation in the Eidoverse UI.
+  // This is deterministic local projection only — never an AI provider call.
+  import('./eidoverseWorld.js')
+    .then(({ reconcilePendingEidoverseWorld }) => reconcilePendingEidoverseWorld())
+    .then((result) => {
+      if (result.reconciled) console.log('🌐 Reconciled pending Eidoverse World Design update');
+    })
+    .catch(err => console.error(`⚠️ Eidoverse World Design reconciliation deferred: ${err.message}`));
+
   // Initialize agent automation scheduler and action executor
   automationScheduler.init().catch(err => console.error(`❌ Agent scheduler init failed: ${err.message}`));
   // agentActionExecutor.init() is synchronous — guard with try/catch so a thrown

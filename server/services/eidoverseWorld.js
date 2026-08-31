@@ -9,30 +9,39 @@
  */
 
 import { createHash } from 'node:crypto';
-import { statfs } from 'node:fs/promises';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { atomicWrite, dataPath, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { getAllApps, getAppStatuses } from './apps.js';
-import { getStatus as getCosStatus, getAgents, getCosTasks, getTodayActivity } from './cos.js';
-import { getPendingCounts } from './review.js';
-import { getSelf, getPeers, ensureSelf } from './instances.js';
-import { getInstanceFeatures } from './instanceFeatures.js';
-import * as backup from './backup.js';
-import { getCountsByType } from './notifications.js';
-import { getCharacter } from './character.js';
-import { getLatestMetricValues } from './appleHealthQuery.js';
-import { getVoiceConfig } from './voice/config.js';
-import { getMemoryStats } from '../lib/memoryStats.js';
-import { getGoals, getChronotype } from './identity.js';
-import { getActivityCalendar, getVelocityMetrics } from './productivity.js';
-import { getBrainGraphOverview } from './brainGraph.js';
-import { getInboxLogCounts } from './brainStorage.js';
-import { getOpenWorldIntrospection } from './openWorldIntrospection.js';
-import { fetchMyCurrentSprintTickets } from './jira.js';
+import { canonicalStringify } from '../lib/objects.js';
+import { getSelf, ensureSelf } from './instances.js';
 import { getEidoverseStatus, EIDOVERSE_PORT } from './eidoverse.js';
+import {
+  EIDOVERSE_ASSET_SLOTS_BY_DISTRICT,
+  EIDOVERSE_ASSET_RECIPE_VERSION,
+  EIDOVERSE_DISTRICTS_V2,
+  EIDOVERSE_WORLD_DESIGN_VERSION,
+  EIDOVERSE_WORLD_STATE_SCHEMA_VERSION,
+  extractEidoverseDesignOverrides,
+  inspectEidoverseAssetResolutionLocks,
+  isValidEidoverseAssetOverridePath,
+  migrateEidoverseWorldState,
+  resolveEidoverseAssetRecipe,
+  resolveEidoverseDesign,
+} from '../lib/eidoverseWorldDesign.js';
+import {
+  buildProjectionPlan,
+  DEFAULT_EIDOVERSE_PROJECTION_RECIPE,
+  EIDOVERSE_PROJECTION_KINDS,
+} from './eidoverseWorldProjection.js';
+import {
+  collectEidoverseWorldSources,
+  projectedJiraTickets,
+  projectedStorage,
+} from './eidoverseWorldSources.js';
+
+export { buildProjectionPlan, DEFAULT_EIDOVERSE_PROJECTION_RECIPE, projectedJiraTickets, projectedStorage };
 
 const DATA_DIR = dataPath('eidoverse');
 const STATE_FILE = join(DATA_DIR, 'portos-world.json');
@@ -40,118 +49,18 @@ const WORLD_NAME_RE = /^[a-z0-9_-]{1,64}$/i;
 const ENTITY_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const COMPONENT_TYPE_RE = /^[A-Za-z0-9._:-]{1,32}$/;
 const ASSET_PATH_RE = /^(?:eidoverse|store)\//i;
-const PROJECTION_ID_PREFIX = 'portos-projection-';
 const COMPONENT_TYPE = 'portos';
-const COMPONENT_RESOURCE_BY_KIND = Object.freeze({
-  app: 'apps',
-  agent: 'agents',
-  task: 'tasks',
-  feature: 'features',
-  peer: 'peers',
-  health: 'health',
-  productivity: 'productivity',
-  activity: 'activity',
-  goal: 'goals',
-  memory: 'memory',
-  storage: 'storage',
-  jira: 'jira',
-  operations: 'operations',
-});
 const DEFAULT_WORLD = 'portos';
 const DEFAULT_HUMAN_AVATAR = 'eidoverse/assets/vrms/claude.vrm';
 const DEFAULT_COS_ID = 'portos-cos';
 const DEFAULT_COS_AVATAR = 'eidoverse/assets/vrms/claude_suit.vrm';
-const PROJECTION_VERB_INTERVAL_MS = 350;
+// Eidoverse admits 12 authored verbs per four seconds. Stay just below that
+// public protocol limit so large first-run reconciliations remain reliable.
+const PROJECTION_VERB_INTERVAL_MS = process.env.NODE_ENV === 'test' ? 5 : 350;
 const WORLD_ROLES = new Set(['owner', 'builder', 'visitor']);
 
-const MODEL_ROOT = 'eidoverse/assets/models/';
-const HEALTH_METRIC_KEYS = ['heart_rate', 'step_count', 'active_energy', 'sleep_analysis'];
-
-export const DEFAULT_EIDOVERSE_PROJECTION_RECIPE = Object.freeze({
-  version: 1,
-  includes: {
-    apps: true,
-    agents: true,
-    tasks: true,
-    features: true,
-    peers: true,
-    health: true,
-    productivity: true,
-    activity: true,
-    goals: true,
-    memory: true,
-    storage: true,
-    jira: true,
-    operations: true,
-  },
-  limits: {
-    apps: 48,
-    agents: 24,
-    tasks: 48,
-    features: 32,
-    peers: 16,
-    health: 1,
-    productivity: 1,
-    activity: 24,
-    goals: 32,
-    memory: 16,
-    storage: 48,
-    jira: 48,
-    operations: 1,
-  },
-  layout: {
-    origin: [-24, 0, -24],
-    spacing: 7,
-    // Keep the expanded resource lanes compact enough to stay near the
-    // authored terrain while still leaving a visible gap between families.
-    laneGap: 6,
-    columns: 8,
-  },
-  scale: {
-    app: 1,
-    agent: 1,
-    task: 0.8,
-    feature: 1,
-    peer: 1.2,
-    health: 1.2,
-    productivity: 1.2,
-    activity: 0.55,
-    goal: 1.1,
-    memory: 0.9,
-    storage: 0.8,
-    jira: 0.75,
-    operations: 1.3,
-  },
-  assets: {
-    app: `${MODEL_ROOT}computer_servers_rack_with_fans_on_back_row_of_four_4_columns.glb`,
-    agent: `${MODEL_ROOT}scifi_quad_small_drone_blue.glb`,
-    task: `${MODEL_ROOT}scifi_cyberpunk_intermodal_shipping_container_crate_blue.glb`,
-    feature: `${MODEL_ROOT}inanna_tech_cyber_scifi_sphere_orb.glb`,
-    peer: `${MODEL_ROOT}modern_sedan_car_blue_vehicle_generic.glb`,
-    health: `${MODEL_ROOT}inanna_tech_cyber_scifi_sumerian_retrofuturist_vehicle_car_light.glb`,
-    productivity: `${MODEL_ROOT}inanna_tech_cyber_scifi_sumerian_retrofuturist_vehicle_car_light.glb`,
-    activity: `${MODEL_ROOT}inanna_tech_cyber_scifi_sphere_orb.glb`,
-    goal: `${MODEL_ROOT}inanna_tech_cyber_scifi_sphere_orb.glb`,
-    memory: `${MODEL_ROOT}inanna_tech_cyber_scifi_sphere_orb.glb`,
-    storage: `${MODEL_ROOT}computer_servers_rack_with_fans_on_back_row_of_four_4_columns.glb`,
-    jira: `${MODEL_ROOT}scifi_cyberpunk_intermodal_shipping_container_crate_blue.glb`,
-    operations: `${MODEL_ROOT}inanna_tech_cyber_scifi_sumerian_retrofuturist_vehicle_car_light.glb`,
-  },
-  terrain: {
-    seed: 'portos',
-    size: 128,
-    segments: 64,
-    amplitude: 1.8,
-    flatRadius: 28,
-    layers: [
-      { color: '#142338', repeat: 18 },
-      { color: '#1c3b43', repeat: 10 },
-    ],
-  },
-});
-
 const DEFAULT_STATE = {
-  schemaVersion: 1,
+  schemaVersion: EIDOVERSE_WORLD_STATE_SCHEMA_VERSION,
   world: DEFAULT_WORLD,
   human: {
     name: null,
@@ -167,6 +76,26 @@ const DEFAULT_STATE = {
   },
   ownership: {
     retired: [],
+  },
+  selectedDesignVersion: EIDOVERSE_WORLD_DESIGN_VERSION,
+  lastAppliedDesignVersion: null,
+  pendingDesignVersion: EIDOVERSE_WORLD_DESIGN_VERSION,
+  userOverrides: {},
+  assetRecipeVersion: EIDOVERSE_ASSET_RECIPE_VERSION,
+  assetResolutions: {},
+  migrationReport: null,
+  reconciliation: {
+    status: 'pending',
+    checkpoint: 'new-install',
+    error: null,
+    errorCode: null,
+    errorContext: null,
+    startedAt: null,
+    completedAt: null,
+    planFingerprint: null,
+    operationCount: 0,
+    appliedOperations: 0,
+    compensationStatus: null,
   },
   recipe: DEFAULT_EIDOVERSE_PROJECTION_RECIPE,
   projection: {
@@ -227,14 +156,6 @@ function abortableDelay(ms, signal) {
     }, ms);
     signal.addEventListener('abort', onAbort, { once: true });
   });
-}
-
-function stableStringify(value) {
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
-  }
-  return JSON.stringify(value);
 }
 
 function shortHash(value) {
@@ -313,26 +234,6 @@ function safeNumber(value, field, { min = -Infinity, max = Infinity, fallback = 
   return number;
 }
 
-function mergeRecipe(recipe) {
-  const input = recipe && typeof recipe === 'object' && !Array.isArray(recipe) ? recipe : {};
-  const defaults = DEFAULT_EIDOVERSE_PROJECTION_RECIPE;
-  return {
-    version: 1,
-    includes: { ...defaults.includes, ...(input.includes || {}) },
-    limits: { ...defaults.limits, ...(input.limits || {}) },
-    layout: { ...defaults.layout, ...(input.layout || {}) },
-    scale: { ...defaults.scale, ...(input.scale || {}) },
-    assets: { ...defaults.assets, ...(input.assets || {}) },
-    terrain: {
-      ...defaults.terrain,
-      ...(input.terrain || {}),
-      layers: Array.isArray(input.terrain?.layers)
-        ? input.terrain.layers.map((layer) => ({ ...layer }))
-        : defaults.terrain.layers.map((layer) => ({ ...layer })),
-    },
-  };
-}
-
 function normalizeRetiredOwners(value) {
   if (!Array.isArray(value)) return [];
   const entries = new Map();
@@ -364,9 +265,30 @@ function rememberRetiredOwner(state, world, id, actor) {
 }
 
 function normalizeState(raw) {
-  const input = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const migration = migrateEidoverseWorldState(raw);
+  if (!migration.compatible) {
+    const invalid = String(migration.report?.reason || '').startsWith('invalid-');
+    throw new ServerError(invalid
+      ? 'This Eidoverse world state is invalid. Repair or restore data/eidoverse/portos-world.json before changing it.'
+      : 'This Eidoverse world state was written by a newer PortOS design. Update PortOS before changing it.', {
+      status: 409,
+      code: 'EIDOVERSE_STATE_VERSION_UNSUPPORTED',
+      context: {
+        reason: migration.report?.reason,
+        fromSchemaVersion: migration.report?.fromSchemaVersion,
+        supportedSchemaVersion: EIDOVERSE_WORLD_STATE_SCHEMA_VERSION,
+      },
+    });
+  }
+  const input = migration.state;
+  const userOverrides = input.userOverrides && typeof input.userOverrides === 'object'
+    ? input.userOverrides
+    : {};
+  const assetResolutions = input.assetResolutions && typeof input.assetResolutions === 'object'
+    ? input.assetResolutions
+    : {};
   return {
-    schemaVersion: 1,
+    schemaVersion: EIDOVERSE_WORLD_STATE_SCHEMA_VERSION,
     world: validWorldName(input.world),
     human: {
       ...DEFAULT_STATE.human,
@@ -381,7 +303,24 @@ function normalizeState(raw) {
     ownership: {
       retired: normalizeRetiredOwners(input.ownership?.retired),
     },
-    recipe: mergeRecipe(input.recipe),
+    selectedDesignVersion: EIDOVERSE_WORLD_DESIGN_VERSION,
+    lastAppliedDesignVersion: Number.isInteger(input.lastAppliedDesignVersion)
+      ? input.lastAppliedDesignVersion
+      : null,
+    pendingDesignVersion: input.pendingDesignVersion === null
+      ? null
+      : (Number.isInteger(input.pendingDesignVersion)
+          ? input.pendingDesignVersion
+          : EIDOVERSE_WORLD_DESIGN_VERSION),
+    userOverrides: clone(userOverrides),
+    assetRecipeVersion: EIDOVERSE_ASSET_RECIPE_VERSION,
+    assetResolutions: clone(assetResolutions),
+    migrationReport: input.migrationReport || migration.report || null,
+    reconciliation: {
+      ...DEFAULT_STATE.reconciliation,
+      ...(input.reconciliation && typeof input.reconciliation === 'object' ? input.reconciliation : {}),
+    },
+    recipe: resolveEidoverseDesign(userOverrides, assetResolutions),
     projection: {
       ...DEFAULT_STATE.projection,
       ...(input.projection && typeof input.projection === 'object' ? input.projection : {}),
@@ -405,8 +344,10 @@ async function mutateState(mutator) {
 
 function fallbackIdentity(self) {
   const instanceId = self?.instanceId || 'uninitialized-instance';
-  const instanceName = validIdentity(self?.name, '');
-  if (instanceName) return { name: instanceName, source: 'instance-name' };
+  // An instance display name is machine identity and must never become part of
+  // Eidoverse's append-only world log by default. Keep the embodied fallback
+  // stable without disclosing the raw instance id; users can still opt into an
+  // explicit human name from the World Design drawer.
   return { name: `portos-${shortHash(instanceId)}`, source: 'instance-id' };
 }
 
@@ -435,6 +376,19 @@ function configFromState(state, presence = cosPresence) {
         ? (activePresence.snapshot?.yourRights?.role || roleFromSnapshot(activePresence.snapshot, state.cos.id))
         : validRole(state.cos.role),
       gen: activePresence?.snapshot?.yourRights?.gen === true,
+    },
+    design: {
+      name: state.recipe.name,
+      selectedVersion: state.selectedDesignVersion,
+      lastAppliedVersion: state.lastAppliedDesignVersion,
+      pendingVersion: state.pendingDesignVersion,
+      assetRecipeVersion: state.assetRecipeVersion,
+      assetResolutions: clone(state.assetResolutions),
+      userOverrides: clone(state.userOverrides),
+      migrationReport: clone(state.migrationReport),
+      reconciliation: clone(state.reconciliation),
+      districts: clone(state.recipe.districts),
+      maxEntities: state.recipe.maxEntities,
     },
     recipe: state.recipe,
     projection: state.projection,
@@ -494,6 +448,7 @@ export async function updateEidoverseWorldConfig(patch) {
         cosAvatar: state.cos.avatar,
         cosEnabled: state.cos.enabled,
       };
+      let designChanged = false;
       if (patch.world !== undefined) state.world = validWorldName(patch.world);
       if (Object.hasOwn(patch, 'humanName')) {
         state.human.name = patch.humanName
@@ -505,7 +460,57 @@ export async function updateEidoverseWorldConfig(patch) {
       if (patch.cosId !== undefined) state.cos.id = validIdentity(patch.cosId, DEFAULT_COS_ID);
       if (Object.hasOwn(patch, 'cosAvatar')) state.cos.avatar = patch.cosAvatar || DEFAULT_COS_AVATAR;
       if (patch.cosEnabled !== undefined) state.cos.enabled = patch.cosEnabled;
-      if (patch.recipe !== undefined) state.recipe = mergeRecipe(patch.recipe);
+      if (patch.reset?.scope === 'all') {
+        state.userOverrides = {};
+        state.assetResolutions = {};
+        designChanged = true;
+      } else if (patch.reset?.scope === 'assets') {
+        state.assetResolutions = {};
+        delete state.userOverrides.assets;
+        designChanged = true;
+      } else if (patch.reset?.scope === 'district') {
+        const district = EIDOVERSE_DISTRICTS_V2.find(({ id }) => id === patch.reset.districtId);
+        for (const sourceKey of district?.sources || []) {
+          delete state.userOverrides.includes?.[sourceKey];
+          delete state.userOverrides.limits?.[sourceKey];
+          const kind = EIDOVERSE_PROJECTION_KINDS.find((entry) => entry.source === sourceKey)?.kind;
+          if (kind) delete state.userOverrides.scale?.[kind];
+        }
+        for (const slot of EIDOVERSE_ASSET_SLOTS_BY_DISTRICT[district?.id] || []) {
+          delete state.userOverrides.assets?.[slot];
+          delete state.assetResolutions[slot];
+        }
+        designChanged = true;
+      }
+      if (patch.refreshAssets) {
+        state.assetResolutions = {};
+        designChanged = true;
+      }
+      if (patch.assetOverrides !== undefined) {
+        state.userOverrides.assets = clone(patch.assetOverrides);
+        designChanged = true;
+      }
+      if (patch.recipe !== undefined) {
+        const preservedAssetOverrides = state.userOverrides.assets;
+        state.userOverrides = extractEidoverseDesignOverrides(patch.recipe);
+        if (preservedAssetOverrides && Object.keys(preservedAssetOverrides).length) {
+          state.userOverrides.assets = clone(preservedAssetOverrides);
+        }
+        designChanged = true;
+      }
+      if (designChanged) {
+        state.pendingDesignVersion = EIDOVERSE_WORLD_DESIGN_VERSION;
+        state.reconciliation.status = 'pending';
+        state.reconciliation.checkpoint = 'configuration-saved';
+        state.reconciliation.error = null;
+        state.reconciliation.errorCode = null;
+        state.reconciliation.errorContext = null;
+        state.reconciliation.planFingerprint = null;
+        state.reconciliation.operationCount = 0;
+        state.reconciliation.appliedOperations = 0;
+        state.reconciliation.compensationStatus = null;
+      }
+      state.recipe = resolveEidoverseDesign(state.userOverrides, state.assetResolutions);
       const worldChanged = previousPresenceConfig.world !== state.world;
       const humanChanged = previousPresenceConfig.humanName !== state.human.name;
       const cosChanged = previousPresenceConfig.cosId !== state.cos.id;
@@ -1002,606 +1007,406 @@ export async function ensureEidoverseWorldPresence() {
   });
 }
 
-async function getDiskUsagePercent() {
-  const stats = await statfs('/').catch(() => null);
-  if (!stats) return null;
-  const total = stats.blocks * stats.bsize;
-  if (!(total > 0)) return null;
-  return Math.round(((total - stats.bavail * stats.bsize) / total) * 100);
-}
+const libraryUrl = (path, query = null) => {
+  const url = new URL(path, `http://127.0.0.1:${EIDOVERSE_PORT}`);
+  for (const [key, value] of Object.entries(query || {})) url.searchParams.set(key, value);
+  return url;
+};
 
-function appSummary(apps) {
-  if (!Array.isArray(apps)) return null;
-  return {
-    total: apps.length,
-    online: apps.filter((app) => app.overallStatus === 'online').length,
-    stopped: apps.filter((app) => app.overallStatus === 'stopped').length,
-    notStarted: apps.filter((app) => app.overallStatus === 'not_started').length,
-    unknown: apps.filter((app) => app.overallStatus === 'unknown').length,
-  };
-}
-
-function finiteOrNull(value) {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-function nonNegativeOrNull(value) {
-  const number = finiteOrNull(value);
-  return number === null ? null : Math.max(0, number);
-}
-
-function percentageOrNull(value) {
-  const number = finiteOrNull(value);
-  return number === null ? null : Math.max(0, Math.min(100, number));
-}
-
-function projectedProductivity(todayActivity, velocity, taskState) {
-  if (!todayActivity && !velocity) return null;
-  const stats = todayActivity?.stats || {};
-  const queue = {
-    pendingApprovals: Array.isArray(taskState?.awaitingApproval) ? taskState.awaitingApproval.length : null,
-    pendingTasks: Array.isArray(taskState?.tasks)
-      ? taskState.tasks.filter((task) => !['completed', 'done', 'archived'].includes(String(task?.status || '').toLowerCase())).length
-      : null,
-  };
-  queue.total = [queue.pendingApprovals, queue.pendingTasks].every((value) => value !== null)
-    ? queue.pendingApprovals + queue.pendingTasks
-    : null;
-  return [{
-    id: 'summary',
-    label: 'Productivity',
-    completedToday: nonNegativeOrNull(stats.completed ?? velocity?.today),
-    succeededToday: nonNegativeOrNull(stats.succeeded ?? velocity?.todaySuccesses),
-    failedToday: nonNegativeOrNull(stats.failed ?? velocity?.todayFailures),
-    successRate: percentageOrNull(stats.successRate),
-    velocity: finiteOrNull(velocity?.velocity),
-    velocityLabel: safeText(velocity?.velocityLabel, ''),
-    averagePerDay: nonNegativeOrNull(velocity?.avgPerDay),
-    historicalDays: nonNegativeOrNull(velocity?.historicalDays),
-    queue,
-    running: todayActivity?.isRunning === true,
-    paused: todayActivity?.isPaused === true,
-  }];
-}
-
-function projectedActivity(calendar) {
-  if (!calendar || !Array.isArray(calendar.weeks)) return null;
-  const days = calendar.weeks
-    .flatMap((week) => Array.isArray(week) ? week : [])
-    .filter((day) => day && typeof day === 'object' && day.isFuture !== true);
-  const today = days.find((day) => day.isToday === true);
-  const activeDays = days.filter((day) => (nonNegativeOrNull(day.tasks) || 0) > 0).slice(-99);
-  const summary = calendar.summary || {};
-  return [
-    {
-      id: 'summary',
-      label: 'Activity calendar',
-      weeks: calendar.weeks.length,
-      activeDays: nonNegativeOrNull(summary.activeDays),
-      totalTasks: nonNegativeOrNull(summary.totalTasks),
-      totalSuccesses: nonNegativeOrNull(summary.totalSuccesses),
-      successRate: percentageOrNull(summary.successRate),
-      maxTasks: nonNegativeOrNull(calendar.maxTasks),
-      todayTasks: nonNegativeOrNull(today?.tasks),
-    },
-    ...activeDays.map((day, index) => ({
-      id: safeText(day.date, `day-${index}`),
-      label: safeText(day.date, 'Activity day'),
-      tasks: nonNegativeOrNull(day.tasks) ?? 0,
-      successes: nonNegativeOrNull(day.successes) ?? 0,
-      failures: nonNegativeOrNull(day.failures) ?? 0,
-      successRate: percentageOrNull(day.successRate),
-      isToday: day.isToday === true,
-    })),
-  ];
-}
-
-function projectedGoals(goalsData) {
-  if (!Array.isArray(goalsData?.goals)) return null;
-  const goals = goalsData.goals;
-  const children = new Map(goals.map((goal) => [goal?.id, 0]));
-  goals.forEach((goal) => {
-    if (goal?.parentId && children.has(goal.parentId)) children.set(goal.parentId, children.get(goal.parentId) + 1);
+async function fetchLibraryJson(path, query, { signal } = {}) {
+  const response = await waitWithSignal(fetch(libraryUrl(path, query), { signal }), signal).catch((error) => {
+    throw new ServerError(`Eidoverse asset library is unavailable: ${error.message}`, {
+      status: 503,
+      code: 'EIDOVERSE_ASSET_LIBRARY_UNAVAILABLE',
+    });
   });
-  return goals.map((goal, index) => {
-    const milestones = Array.isArray(goal?.milestones) ? goal.milestones : [];
-    const todos = Array.isArray(goal?.todos) ? goal.todos : [];
-    return {
-      id: safeText(goal?.id, `goal-${index}`),
-      label: safeText(goal?.title, 'Goal'),
-      status: safeText(goal?.status, 'active'),
-      progress: percentageOrNull(goal?.progress) ?? 0,
-      goalType: safeText(goal?.goalType, ''),
-      targetDate: safeText(goal?.targetDate, ''),
-      milestoneTotal: milestones.length,
-      milestoneDone: milestones.filter((milestone) => milestone?.completed === true || Boolean(safeText(milestone?.completedAt, ''))).length,
-      todoTotal: todos.length,
-      todoPending: todos.filter((todo) => !['completed', 'done'].includes(String(todo?.status || '').toLowerCase()) && todo?.completed !== true).length,
-      childCount: children.get(goal?.id) || 0,
+  if (!response.ok) {
+    throw new ServerError(`Eidoverse asset library returned HTTP ${response.status}.`, {
+      status: 503,
+      code: 'EIDOVERSE_ASSET_LIBRARY_UNAVAILABLE',
+    });
+  }
+  return response.json();
+}
+
+async function preflightEidoverseProtocol({ signal } = {}) {
+  const response = await waitWithSignal(fetch(libraryUrl('/version'), { signal }), signal).catch(() => null);
+  if (!response?.ok) {
+    throw new ServerError('This Eidoverse Worlds runtime is too old for PortOS World Design V2. Update its managed app from Apps, then retry.', {
+      status: 409,
+      code: 'EIDOVERSE_PROTOCOL_INCOMPATIBLE',
+      context: { remediation: '/apps', required: 'world-design-v2' },
+    });
+  }
+  const version = await response.json().catch(() => null);
+  if (!version || typeof version.sha !== 'string' || typeof version.commitTime !== 'string') {
+    throw new ServerError('Eidoverse Worlds did not report the protocol build identity required by PortOS World Design V2. Update its managed app from Apps, then retry.', {
+      status: 409,
+      code: 'EIDOVERSE_PROTOCOL_INCOMPATIBLE',
+      context: { remediation: '/apps', required: 'world-design-v2' },
+    });
+  }
+  return {
+    sha: safeText(version.sha, 'unknown', 80),
+    commitTime: safeText(version.commitTime, 'unknown', 80),
+  };
+}
+
+async function verifyLibraryAsset(path, { signal } = {}) {
+  const encoded = path.split('/').map(encodeURIComponent).join('/');
+  const response = await waitWithSignal(fetch(libraryUrl(`/library/${encoded}`), {
+    method: 'HEAD',
+    signal,
+  }), signal).catch((error) => {
+    throw new ServerError(`Eidoverse could not verify ${path}: ${error.message}`, {
+      status: 409,
+      code: 'EIDOVERSE_ASSET_PREFLIGHT_FAILED',
+    });
+  });
+  if (!response.ok) {
+    throw new ServerError(`Eidoverse could not load the resolved library asset ${path}.`, {
+      status: 409,
+      code: 'EIDOVERSE_ASSET_PREFLIGHT_FAILED',
+    });
+  }
+}
+
+async function unavailableLibraryAssets(paths, { signal, verifiedPaths = new Set() } = {}) {
+  const candidates = [...new Set(paths)].filter((path) => path && !verifiedPaths.has(path));
+  const checks = await Promise.all(candidates.map((path) => (
+    verifyLibraryAsset(path, { signal }).then(
+      () => {
+        verifiedPaths.add(path);
+        return null;
+      },
+      () => {
+        throwIfAborted(signal);
+        return path;
+      },
+    )
+  )));
+  return new Set(checks.filter(Boolean));
+}
+
+async function persistAssetLock(resolutions, runtimeVersion) {
+  return mutateState((state) => {
+    state.assetResolutions = resolutions;
+    state.assetRecipeVersion = EIDOVERSE_ASSET_RECIPE_VERSION;
+    state.recipe = resolveEidoverseDesign(state.userOverrides, state.assetResolutions);
+    state.reconciliation = {
+      ...state.reconciliation,
+      status: 'applying',
+      checkpoint: 'asset-preflight-complete',
+      error: null,
+      errorCode: null,
+      errorContext: null,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      planFingerprint: null,
+      operationCount: 0,
+      appliedOperations: 0,
+      compensationStatus: null,
+      runtimeVersion,
     };
+    return configFromState(state);
   });
 }
 
-function projectedMemory(graph) {
-  if (!graph || !Array.isArray(graph.nodes)) return null;
-  const buckets = new Map();
-  const categoryById = new Map();
-  for (const node of graph.nodes) {
-    const category = safeText(node?.category || node?.brainType, 'other').toLowerCase() || 'other';
-    categoryById.set(node?.id, category);
-    const bucket = buckets.get(category) || { count: 0, importance: 0 };
-    bucket.count += 1;
-    bucket.importance += Math.max(0, finiteOrNull(node?.importance) ?? 1);
-    buckets.set(category, bucket);
-  }
-  const bridgeCounts = new Map();
-  for (const edge of Array.isArray(graph.edges) ? graph.edges : []) {
-    const from = categoryById.get(edge?.source);
-    const to = categoryById.get(edge?.target);
-    if (!from || !to || from === to) continue;
-    bridgeCounts.set(from, (bridgeCounts.get(from) || 0) + 1);
-    bridgeCounts.set(to, (bridgeCounts.get(to) || 0) + 1);
-  }
-  return [...buckets.entries()]
-    .sort(([a, left], [b, right]) => right.count - left.count || a.localeCompare(b))
-    .map(([category, bucket]) => ({
-      id: category,
-      label: `Memory ${category}`,
-      category,
-      count: bucket.count,
-      importance: bucket.importance,
-      bridgeCount: bridgeCounts.get(category) || 0,
-      totalMemories: graph.nodes.length,
-      totalEdges: Array.isArray(graph.edges) ? graph.edges.length : 0,
-      hasEmbeddings: graph.hasEmbeddings === true,
-    }));
-}
-
-function projectedStorage(introspection) {
-  if (!introspection || typeof introspection !== 'object') return null;
-  const items = [];
-  const db = introspection.db;
-  const fsSection = introspection.fs;
-  const dbOnline = Array.isArray(db?.tables);
-  items.push({
-    id: 'database',
-    label: 'PostgreSQL',
-    area: 'database',
-    status: db === null ? 'offline' : (dbOnline ? 'online' : 'unknown'),
-    tableCount: dbOnline ? db.tables.length : null,
-    sizeBytes: finiteOrNull(db?.sizeBytes),
-    migrations: db?.migrations?.applied === undefined ? null : nonNegativeOrNull(db.migrations.applied),
-  });
-  if (dbOnline) {
-    db.tables.forEach((table, index) => items.push({
-      id: `db-table-${shortHash(table?.name || index)}`,
-      label: safeText(table?.name, 'Database table'),
-      area: 'database-table',
-      status: 'online',
-      rowEstimate: nonNegativeOrNull(table?.rowEstimate),
-      sizeBytes: nonNegativeOrNull(table?.totalBytes),
-      hasEmbedding: table?.hasEmbedding === true,
-    }));
-  }
-  const fsOnline = Array.isArray(fsSection?.domains);
-  items.push({
-    id: 'filesystem',
-    label: 'PortOS data files',
-    area: 'filesystem',
-    status: fsSection === null ? 'offline' : (fsOnline ? 'online' : 'unknown'),
-    domainCount: fsOnline ? fsSection.domains.length : null,
-    sizeBytes: finiteOrNull(fsSection?.totalBytes),
-    fileCount: nonNegativeOrNull(fsSection?.totalFiles),
-  });
-  if (fsOnline) {
-    fsSection.domains.forEach((domain, index) => items.push({
-      id: `data-domain-${shortHash(domain?.name || index)}`,
-      label: safeText(domain?.name, 'Data domain'),
-      area: 'data-domain',
-      status: 'online',
-      sizeBytes: nonNegativeOrNull(domain?.bytes),
-      fileCount: nonNegativeOrNull(domain?.files),
-    }));
-  }
-  return items;
-}
-
-function projectedOperations({ cosStatus, review, backupState, notifications, character, healthMetrics, voiceConfig, memory, diskPercent, chronotype, inboxCounts }) {
-  const values = [cosStatus, review, backupState, notifications, character, healthMetrics, voiceConfig, memory, diskPercent, chronotype, inboxCounts];
-  if (!values.some((value) => value !== null && value !== undefined)) return null;
-  return [{
-    id: 'overview',
-    label: 'PortOS operations',
-    cos: cosStatus ? {
-      running: cosStatus.running === true,
-      paused: cosStatus.paused === true,
-      activeAgents: nonNegativeOrNull(cosStatus.activeAgents),
-      pausedAgents: nonNegativeOrNull(cosStatus.pausedAgents),
-      provider: safeText(cosStatus.provider?.name, ''),
-    } : null,
-    ai: cosStatus ? {
-      running: cosStatus.running === true,
-      activeAgents: nonNegativeOrNull(cosStatus.activeAgents),
-      provider: safeText(cosStatus.provider?.name, ''),
-    } : null,
-    review: review ? {
-      total: nonNegativeOrNull(review.total),
-      cos: nonNegativeOrNull(review.cos),
-      alerts: nonNegativeOrNull(review.alert),
-    } : null,
-    backup: backupState ? {
-      status: safeText(backupState.status, 'unknown'),
-      lastRun: safeText(backupState.lastRun, ''),
-      filesChanged: nonNegativeOrNull(backupState.filesChanged),
-    } : null,
-    notifications: notifications ? {
-      total: nonNegativeOrNull(notifications.total),
-      unread: nonNegativeOrNull(notifications.unread),
-    } : null,
-    inbox: inboxCounts ? {
-      total: nonNegativeOrNull(inboxCounts.total),
-      needsReview: nonNegativeOrNull(inboxCounts.needs_review),
-      classifying: nonNegativeOrNull(inboxCounts.classifying),
-    } : null,
-    character: character ? {
-      level: nonNegativeOrNull(character.level),
-    } : null,
-    chronotype: chronotype ? {
-      type: safeText(chronotype.type, ''),
-      confidence: percentageOrNull(typeof chronotype.confidence === 'number' ? chronotype.confidence * 100 : chronotype.confidence),
-      peakFocusStart: safeText(chronotype.recommendations?.peakFocusStart, ''),
-      peakFocusEnd: safeText(chronotype.recommendations?.peakFocusEnd, ''),
-      sleepTime: safeText(chronotype.recommendations?.sleepTime, ''),
-    } : null,
-    voice: voiceConfig ? {
-      enabled: voiceConfig.enabled === true,
-      sttEngine: safeText(voiceConfig.stt?.engine, ''),
-      ttsEngine: safeText(voiceConfig.tts?.engine, ''),
-    } : null,
-    memory: memory ? {
-      usedPercent: memory.total > 0 ? Math.round((memory.used / memory.total) * 100) : null,
-      source: safeText(memory.source, 'unknown'),
-    } : null,
-    healthMetrics: healthMetrics ?? null,
-    diskPercent: percentageOrNull(diskPercent),
-  }];
-}
-
-async function projectedJira(appConfig, featuresState) {
-  if (!Array.isArray(featuresState?.features)) return null;
-  const jiraFeature = featuresState.features.find((feature) => feature?.id === 'jira');
-  if (!jiraFeature) return null;
-  if (jiraFeature.enabled !== true) return [];
-  if (!Array.isArray(appConfig)) return null;
-  const specs = [...new Map(appConfig
-    .filter((app) => app?.jira?.enabled && app.jira.instanceId && app.jira.projectKey)
-    .map((app) => [`${app.jira.instanceId}/${app.jira.projectKey}`, {
-      instanceId: app.jira.instanceId,
-      projectKey: app.jira.projectKey,
-    }]))
-    .values()];
-  if (specs.length === 0) return [];
-  const batches = await Promise.all(specs.map((spec) => fetchMyCurrentSprintTickets(spec.instanceId, spec.projectKey)
-    .then((tickets) => Array.isArray(tickets) ? { tickets, failed: false } : { tickets: [], failed: true })
-    .catch(() => ({ tickets: [], failed: true }))));
-  if (batches.some((batch) => batch.failed)) return null;
-  const byKey = new Map();
-  batches.flatMap((batch) => batch.tickets).forEach((ticket, index) => {
-    if (!ticket?.key || byKey.has(ticket.key)) return;
-    byKey.set(ticket.key, {
-      id: safeText(ticket.key, `ticket-${index}`),
-      label: safeText(ticket.summary, ticket.key),
-      status: safeText(ticket.statusCategory || ticket.status, 'todo'),
-      statusCategory: safeText(ticket.statusCategory, ''),
-      priority: safeText(ticket.priority, ''),
-      issueType: safeText(ticket.issueType, ''),
-      storyPoints: nonNegativeOrNull(ticket.storyPoints),
+async function resolveAndLockAssets(config, { signal } = {}) {
+  const runtimeVersion = await preflightEidoverseProtocol({ signal });
+  const existing = config.design?.assetResolutions || {};
+  const overrides = config.design?.userOverrides?.assets || {};
+  const explicitOverrides = Object.values(overrides);
+  if (explicitOverrides.some((path) => !isValidEidoverseAssetOverridePath(path))) {
+    throw new ServerError('A preserved Eidoverse asset override is invalid. Reset the affected asset slot, then retry.', {
+      status: 409,
+      code: 'EIDOVERSE_ASSET_OVERRIDE_INVALID',
     });
+  }
+  const lockInspection = inspectEidoverseAssetResolutionLocks({ existing, overrides });
+  const verifiedPaths = new Set();
+  const unavailablePaths = await unavailableLibraryAssets([
+    ...Object.values(lockInspection.resolutions).map(({ path }) => path),
+    ...explicitOverrides,
+  ], { signal, verifiedPaths });
+  const unavailableOverrideSlots = Object.entries(overrides)
+    .filter(([, path]) => unavailablePaths.has(path))
+    .map(([slot]) => slot);
+  if (unavailableOverrideSlots.length) {
+    throw new ServerError(`Eidoverse could not load the local asset override for: ${unavailableOverrideSlots.join(', ')}. Clear or replace the override, then retry.`, {
+      status: 409,
+      code: 'EIDOVERSE_ASSET_OVERRIDE_UNAVAILABLE',
+      context: { missing: unavailableOverrideSlots },
+    });
+  }
+  if (lockInspection.current && unavailablePaths.size === 0) {
+    return persistAssetLock(lockInspection.resolutions, runtimeVersion);
+  }
+
+  const files = await fetchLibraryJson('/library-list', { dir: 'eidoverse/assets/models' }, { signal });
+  if (!Array.isArray(files)) {
+    throw new ServerError('Eidoverse returned an invalid model-library catalog.', {
+      status: 503,
+      code: 'EIDOVERSE_ASSET_LIBRARY_INVALID',
+    });
+  }
+
+  const recipe = config.recipe.assetRecipe;
+  const resolvedAt = new Date().toISOString();
+  const searchResults = {};
+  const resolveAvailable = () => resolveEidoverseAssetRecipe({
+    files: files.filter((candidate) => !unavailablePaths.has(candidate?.path || candidate)),
+    searchResults: Object.fromEntries(Object.entries(searchResults).map(([query, candidates]) => [
+      query,
+      candidates.filter((candidate) => !unavailablePaths.has(candidate?.path)),
+    ])),
+    existing: Object.fromEntries(Object.entries(existing).filter(([, lock]) => (
+      !unavailablePaths.has(typeof lock === 'string' ? lock : lock?.path)
+    ))),
+    overrides,
+    resolvedAt,
   });
-  return [...byKey.values()].sort((a, b) => a.id.localeCompare(b.id));
-}
-
-function healthSnapshot({ apps, cosStatus, review, backupState, notifications, character, healthMetrics, voiceConfig, memory, diskPercent }) {
-  const health = {
-    apps: appSummary(apps),
-    cos: cosStatus
-      ? {
-        running: cosStatus.running === true,
-        activeAgents: nonNegativeOrNull(cosStatus.activeAgents),
-        pausedAgents: nonNegativeOrNull(cosStatus.pausedAgents),
-      }
-      : null,
-    review: review ? {
-      total: nonNegativeOrNull(review.total),
-      cos: nonNegativeOrNull(review.cos),
-      alerts: nonNegativeOrNull(review.alert),
-    } : null,
-    backup: backupState ? {
-      status: safeText(backupState.status, 'unknown'),
-      lastRun: safeText(backupState.lastRun, ''),
-      filesChanged: nonNegativeOrNull(backupState.filesChanged),
-    } : null,
-    memory: memory ? {
-      usedPercent: memory.total > 0 ? Math.round((memory.used / memory.total) * 100) : null,
-      source: safeText(memory.source, 'unknown'),
-    } : null,
-    notifications: notifications ? {
-      total: nonNegativeOrNull(notifications.total),
-      unread: nonNegativeOrNull(notifications.unread),
-    } : null,
-    character: character ? {
-      level: nonNegativeOrNull(character.level),
-    } : null,
-    metrics: healthMetrics ?? null,
-    voice: voiceConfig ? {
-      enabled: voiceConfig.enabled === true,
-      sttEngine: safeText(voiceConfig.stt?.engine, ''),
-      ttsEngine: safeText(voiceConfig.tts?.engine, ''),
-    } : null,
-    diskPercent: percentageOrNull(diskPercent),
-  };
-  const available = [apps, cosStatus, review, backupState, notifications, character, healthMetrics, voiceConfig, memory, diskPercent]
-    .some((value) => value !== null && value !== undefined);
-  return available ? health : null;
-}
-
-async function collectProjectionSources({ signal } = {}) {
-  throwIfAborted(signal);
-  const [apps, appConfig, agents, taskState, cosStatus, review, featuresState, peers, backupState, notifications, character, healthMetrics, voiceConfig, memory, diskPercent, todayActivity, velocity, activityCalendar, goalsData, chronotype, memoryGraph, inboxCounts, introspection] = await waitWithSignal(Promise.all([
-    getAppStatuses().catch(() => null),
-    getAllApps({ includeArchived: false }).catch(() => null),
-    getAgents().catch(() => null),
-    getCosTasks().catch(() => null),
-    getCosStatus().catch(() => null),
-    getPendingCounts().catch(() => null),
-    getInstanceFeatures().catch(() => null),
-    getPeers().catch(() => null),
-    backup.getState().catch(() => null),
-    getCountsByType().catch(() => null),
-    getCharacter({ withSkills: false, withMetrics: false }).catch(() => null),
-    getLatestMetricValues(HEALTH_METRIC_KEYS).catch(() => null),
-    getVoiceConfig().catch(() => null),
-    getMemoryStats().catch(() => null),
-    getDiskUsagePercent(),
-    getTodayActivity().catch(() => null),
-    getVelocityMetrics().catch(() => null),
-    getActivityCalendar(12).catch(() => null),
-    getGoals().catch(() => null),
-    getChronotype().catch(() => null),
-    getBrainGraphOverview({ limit: 100 }).catch(() => null),
-    getInboxLogCounts().catch(() => null),
-    getOpenWorldIntrospection().catch(() => null),
-  ]), signal);
-
-  const projectedAgents = Array.isArray(agents)
-    ? agents
-      .filter((agent) => ['running', 'paused'].includes(agent?.status))
-      .map((agent) => ({
-        id: safeText(agent.id, 'agent'),
-        status: safeText(agent.status, 'unknown'),
-        taskId: safeText(agent.taskId, ''),
-        phase: safeText(agent.metadata?.phase, ''),
-        appName: safeText(agent.metadata?.taskAppName, ''),
-      }))
-    : null;
-  const projectedTasks = Array.isArray(taskState?.tasks)
-    ? taskState.tasks
-      .filter((task) => !['completed', 'done', 'archived'].includes(String(task?.status || '').toLowerCase()))
-      .map((task) => ({
-        id: safeText(task.id, 'task'),
-        label: safeText(task.title || task.name || task.description, 'CoS task').split('\n')[0].slice(0, 140),
-        status: safeText(task.status, 'pending'),
-        priority: safeText(task.priority, ''),
-        type: safeText(task.type, ''),
-      }))
-    : null;
-  const projectedFeatures = Array.isArray(featuresState?.features)
-    ? featuresState.features.map((feature) => ({
-      id: safeText(feature.id, 'feature'),
-      label: safeText(feature.label || feature.id, 'Feature'),
-      enabled: feature.enabled === true,
-    }))
-    : null;
-  const projectedPeers = Array.isArray(peers)
-    ? peers.map((peer) => ({
-      id: safeText(peer.instanceId || peer.id, 'peer'),
-      label: safeText(peer.name, 'Federated peer'),
-      enabled: peer.enabled !== false,
-      fullSync: peer.fullSync === true,
-      status: safeText(peer.status, ''),
-    }))
-    : null;
-
-  const health = healthSnapshot({ apps, cosStatus, review, backupState, notifications, character, healthMetrics, voiceConfig, memory, diskPercent });
-  const jira = await waitWithSignal(projectedJira(appConfig, featuresState), signal);
-
-  return {
-    apps: Array.isArray(apps)
-      ? apps.map((app) => ({
-        id: safeText(app.id, 'app'),
-        label: safeText(app.name, 'Managed app'),
-        status: safeText(app.overallStatus, 'unknown'),
-        type: safeText(app.type, ''),
-        managed: app.managed === true,
-      }))
-      : null,
-    agents: projectedAgents,
-    tasks: projectedTasks,
-    features: projectedFeatures,
-    peers: projectedPeers,
-    health,
-    productivity: projectedProductivity(todayActivity, velocity, taskState),
-    activity: projectedActivity(activityCalendar),
-    goals: projectedGoals(goalsData),
-    memory: projectedMemory(memoryGraph),
-    storage: projectedStorage(introspection),
-    jira,
-    operations: projectedOperations({ cosStatus, review, backupState, notifications, character, healthMetrics, voiceConfig, memory, diskPercent, chronotype, inboxCounts }),
-  };
-}
-
-const PROJECTION_KINDS = [
-  { kind: 'app', source: 'apps' },
-  { kind: 'agent', source: 'agents' },
-  { kind: 'task', source: 'tasks' },
-  { kind: 'feature', source: 'features' },
-  { kind: 'peer', source: 'peers' },
-  { kind: 'health', source: 'health' },
-  { kind: 'productivity', source: 'productivity' },
-  { kind: 'activity', source: 'activity' },
-  { kind: 'goal', source: 'goals' },
-  { kind: 'memory', source: 'memory' },
-  { kind: 'storage', source: 'storage' },
-  { kind: 'jira', source: 'jira' },
-  { kind: 'operations', source: 'operations' },
-];
-
-function sourceAvailable(source, key) {
-  if (key === 'health') return source.health !== null && source.health !== undefined;
-  return Array.isArray(source[key]);
-}
-
-function projectionEntityId(kind, sourceId, index) {
-  return `${PROJECTION_ID_PREFIX}${kind}-${shortHash(`${kind}:${sourceId || index}`)}`;
-}
-
-function componentFor(kind, item) {
-  if (kind === 'health') return { resource: 'health', label: 'PortOS health', ...item };
-  const component = {
-    resource: COMPONENT_RESOURCE_BY_KIND[kind] || kind,
-    sourceId: safeText(item.id, 'unknown'),
-    label: safeText(item.label, kind),
-  };
-  for (const [key, value] of Object.entries(item)) {
-    if (key === 'id' || key === 'label' || value === undefined) continue;
-    if (typeof value === 'string') component[key] = safeText(value, '', 300);
-    else if (typeof value === 'number' && Number.isFinite(value)) component[key] = value;
-    else if (typeof value === 'boolean') component[key] = value;
-    else if (value !== null && typeof value === 'object') component[key] = clone(value);
-  }
-  return component;
-}
-
-function entityPosition(index, kind, recipe) {
-  const { origin, spacing, laneGap, columns } = recipe.layout;
-  const lane = PROJECTION_KINDS.findIndex((entry) => entry.kind === kind);
-  const column = index % columns;
-  const row = Math.floor(index / columns);
-  return [
-    origin[0] + column * spacing,
-    origin[1],
-    origin[2] + lane * laneGap + row * spacing,
-  ];
-}
-
-function equal(valueA, valueB) {
-  return stableStringify(valueA) === stableStringify(valueB);
-}
-
-/**
- * Build the deterministic world operations without opening a socket. This is
- * intentionally exported so recipe changes can be tested without a live
- * Eidoverse process and so future renderers can reuse the same projection.
- */
-export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PROJECTION_RECIPE, currentState = {} }) {
-  const effectiveRecipe = mergeRecipe(recipe);
-  const stateEntities = currentState?.entities && typeof currentState.entities === 'object'
-    ? currentState.entities
-    : {};
-  const operations = [];
-  const desiredIds = new Set();
-  const removableKinds = new Set();
-  const sourceAvailability = {};
-  let created = 0;
-  let updated = 0;
-  let removed = 0;
-
-  sourceAvailability.terrain = currentState?.terrain !== undefined;
-  if (!equal(currentState?.terrain || null, effectiveRecipe.terrain)) {
-    operations.push({ verb: 'terrain', args: effectiveRecipe.terrain });
-  }
-
-  for (const { kind, source: sourceKey } of PROJECTION_KINDS) {
-    const available = sourceAvailable(source, sourceKey);
-    sourceAvailability[sourceKey] = available;
-    if (!effectiveRecipe.includes[`${sourceKey}`]) {
-      removableKinds.add(kind);
-      continue;
-    }
-    if (!available) continue;
-    removableKinds.add(kind);
-    const values = kind === 'health' ? [source.health] : source[sourceKey];
-    const limited = values.slice(0, effectiveRecipe.limits[sourceKey] ?? values.length);
-    limited.forEach((item, index) => {
-      const sourceId = kind === 'health' ? 'health' : item.id || `${kind}-${index}`;
-      const id = projectionEntityId(kind, sourceId, index);
-      const pos = entityPosition(index, kind, effectiveRecipe);
-      const spawn = {
-        id,
-        lib: effectiveRecipe.assets[kind],
-        pos,
-        yaw: 0,
-        scale: effectiveRecipe.scale[kind],
-        collide: 'box',
-      };
-      const existing = stateEntities[id];
-      desiredIds.add(id);
-      if (!existing || existing.lib !== spawn.lib) {
-        if (existing) {
-          operations.push({ verb: 'remove', args: { id } });
-          removed += 1;
+  const unresolvedError = (missing) => new ServerError(`Eidoverse is missing required PortOS world assets: ${missing.join(', ')}.`, {
+    status: 409,
+    code: 'EIDOVERSE_ASSET_RECIPE_UNRESOLVED',
+    context: { missing, assetRecipeVersion: EIDOVERSE_ASSET_RECIPE_VERSION },
+  });
+  const resolveVerified = async (attempt = 0) => {
+    const result = resolveAvailable();
+    if (result.missing.length) {
+      const unresolvedSlots = result.missing.map((slotName) => recipe.slots[slotName]).filter(Boolean);
+      const queries = [...new Set(unresolvedSlots
+        .flatMap((slot) => slot.fallbackQueries)
+        .filter((query) => query && !Object.hasOwn(searchResults, query)))];
+      if (queries.length === 0) throw unresolvedError(result.missing);
+      const searchPairs = await Promise.all(queries.map(async (query) => {
+        const candidates = await fetchLibraryJson('/library-models', { q: query }, { signal });
+        if (!Array.isArray(candidates)) {
+          throw new ServerError('Eidoverse returned invalid model search results.', {
+            status: 503,
+            code: 'EIDOVERSE_ASSET_LIBRARY_INVALID',
+          });
         }
-        operations.push({ verb: 'spawn', args: spawn });
-        created += 1;
-      } else if (!equal({ pos: existing.pos, yaw: existing.yaw, scale: existing.scale }, {
-        pos: spawn.pos,
-        yaw: spawn.yaw,
-        scale: spawn.scale,
-      })) {
-        operations.push({ verb: 'place', args: { id, pos, yaw: 0, scale: spawn.scale } });
-        updated += 1;
-      }
-      const component = componentFor(kind, item);
-      if (!equal(existing?.comp?.[COMPONENT_TYPE], component)) {
-        operations.push({ verb: 'comp', args: { id, type: COMPONENT_TYPE, data: component } });
-        if (existing) updated += 1;
-      }
-    });
-  }
-
-  for (const id of Object.keys(stateEntities)) {
-    if (!id.startsWith(PROJECTION_ID_PREFIX) || desiredIds.has(id)) continue;
-    const kind = id.slice(PROJECTION_ID_PREFIX.length).split('-')[0];
-    if (!removableKinds.has(kind)) continue;
-    operations.push({ verb: 'remove', args: { id } });
-    removed += 1;
-  }
-
-  return {
-    operations,
-    summary: {
-      created,
-      updated,
-      removed,
-      operationCount: operations.length,
-      sourceAvailability,
-      sourceCounts: Object.fromEntries(PROJECTION_KINDS.map(({ kind, source: sourceKey }) => [
-        sourceKey,
-        sourceAvailable(source, sourceKey)
-          ? (kind === 'health' ? 1 : source[sourceKey].length)
-          : null,
-      ])),
-    },
+        return [query, candidates];
+      }));
+      Object.assign(searchResults, Object.fromEntries(searchPairs));
+      return resolveVerified(attempt + 1);
+    }
+    const failedPaths = await unavailableLibraryAssets(
+      Object.values(result.resolutions).map(({ path }) => path),
+      { signal, verifiedPaths },
+    );
+    if (failedPaths.size === 0) return result;
+    for (const path of failedPaths) unavailablePaths.add(path);
+    if (attempt >= files.length + Object.keys(recipe.slots).length) {
+      throw unresolvedError(Object.keys(recipe.slots));
+    }
+    return resolveVerified(attempt + 1);
   };
+  const result = await resolveVerified();
+
+  return persistAssetLock(result.resolutions, runtimeVersion);
 }
 
-async function sendOperations(connection, operations, { signal } = {}) {
+async function sendOperations(connection, operations, { signal, onApplied } = {}) {
   for (let index = 0; index < operations.length; index += 1) {
     throwIfAborted(signal);
     if (index > 0) await abortableDelay(PROJECTION_VERB_INTERVAL_MS, signal);
     const operation = operations[index];
     await connection.sendVerb(operation.verb, operation.args, { signal });
+    onApplied?.(operation);
   }
+}
+
+async function recordReconciliationCheckpoint(patch) {
+  return mutateState((state) => {
+    state.reconciliation = { ...state.reconciliation, ...patch };
+    return clone(state.reconciliation);
+  });
+}
+
+function restoreEntityOperations(id, entity) {
+  if (!entity) return [];
+  if (entity.kind === 'light') {
+    return [{ layer: 'compensation', verb: 'light', args: {
+      id,
+      pos: entity.pos,
+      color: entity.color,
+      intensity: entity.intensity,
+      range: entity.range,
+      ...(entity.keep ? { keep: true } : {}),
+      ...(entity.day === false ? { day: false } : {}),
+    } }];
+  }
+  if (!entity.lib) return [];
+  const operations = [{ layer: 'compensation', verb: 'spawn', args: {
+    id,
+    lib: entity.lib,
+    pos: entity.pos || [0, 0, 0],
+    yaw: entity.yaw || 0,
+    ...(entity.scale !== undefined ? { scale: entity.scale } : {}),
+    ...(entity.collide ? { collide: entity.collide } : {}),
+  } }];
+  for (const [type, data] of Object.entries(entity.comp || {})) {
+    // Legacy PortOS components may predate the privacy-safe WorldSignal shape.
+    // They are visually inert, so do not duplicate their old contents into a
+    // new append-only log during rollback.
+    if (type === COMPONENT_TYPE && !(
+      data?.managedBy === 'portos'
+      && data?.designVersion === EIDOVERSE_WORLD_DESIGN_VERSION
+      && data?.disclosure === 'aggregate'
+    )) continue;
+    operations.push({ layer: 'compensation', verb: 'comp', args: { id, type, data } });
+  }
+  return operations;
+}
+
+function inverseOperationsFor(operation, currentState) {
+  const id = operation.args?.id;
+  const existing = id ? currentState?.entities?.[id] : null;
+  switch (operation.verb) {
+    case 'spawn':
+      return [{ layer: 'compensation', verb: 'remove', args: { id } }];
+    case 'place':
+      return existing ? [{ layer: 'compensation', verb: 'place', args: {
+        id,
+        pos: existing.pos || [0, 0, 0],
+        yaw: existing.yaw || 0,
+        ...(existing.scale !== undefined ? { scale: existing.scale } : {}),
+      } }] : [];
+    case 'comp':
+      return [{ layer: 'compensation', verb: 'comp', args: {
+        id,
+        type: operation.args.type,
+        data: existing?.comp?.[operation.args.type] ?? null,
+      } }];
+    case 'remove':
+      return restoreEntityOperations(id, existing);
+    case 'light':
+      return existing
+        ? restoreEntityOperations(id, existing)
+        : [{ layer: 'compensation', verb: 'remove', args: { id } }];
+    case 'terrain':
+      return [{
+        layer: 'compensation',
+        verb: 'terrain',
+        args: currentState?.terrain || {
+          seed: 'portos-legacy-neutral', size: 128, segments: 2, amplitude: 0, flatRadius: 128,
+          layers: [{ color: '#142338', repeat: 1 }],
+        },
+      }];
+    case 'sky':
+      return [{
+        layer: 'compensation',
+        verb: 'sky',
+        args: currentState?.sky || {
+          system: 'skymesh', hours: 0, azimuth: 0, sun: 0, ambient: 0.15,
+          fill: 0, exposure: 0.35, fog: 1, clouds: 'none', weather: 'clear',
+        },
+      }];
+    case 'grass':
+      return [{
+        layer: 'compensation',
+        verb: 'grass',
+        args: currentState?.grass || { clear: true },
+      }];
+    default:
+      return [];
+  }
+}
+
+function compensationOperations(applied, currentState) {
+  return [...applied].reverse().flatMap((operation) => inverseOperationsFor(operation, currentState));
+}
+
+// Infrastructure and live signals are proven first so a V2 update cannot make
+// its new atmosphere authoritative without the semantic world beneath it. The
+// ambient layer follows the environment, then reconciliation retires only old
+// PortOS-managed ids.
+const PROJECTION_UPDATE_STAGES = ['infrastructure', 'live', 'environment', 'ambient', 'reconciliation'];
+const PROJECTION_FRESH_STAGES = ['environment', 'infrastructure', 'live', 'ambient', 'reconciliation'];
+
+async function applyProjectionPlan(presence, plan, { signal, freshInstall = false } = {}) {
+  const applied = [];
+  const planFingerprint = shortHash(canonicalStringify({
+    designVersion: EIDOVERSE_WORLD_DESIGN_VERSION,
+    operations: plan.operations,
+  }));
+  await recordReconciliationCheckpoint({
+    status: 'applying',
+    checkpoint: 'plan-ready',
+    planFingerprint,
+    operationCount: plan.operations.length,
+    appliedOperations: 0,
+    compensationStatus: null,
+  });
+
+  const stageOrder = freshInstall ? PROJECTION_FRESH_STAGES : PROJECTION_UPDATE_STAGES;
+  const stages = stageOrder.map((stage) => [
+    stage,
+    plan.operations.filter((operation) => operation.layer === stage),
+  ]);
+  const execution = stages.reduce((promise, [stage, operations]) => promise.then(async () => {
+    if (operations.length === 0) return;
+    await recordReconciliationCheckpoint({ checkpoint: `applying-${stage}` });
+    await sendOperations(presence.connection, operations, {
+      signal,
+      onApplied: (operation) => applied.push(operation),
+    });
+    await recordReconciliationCheckpoint({
+      checkpoint: `${stage}-complete`,
+      appliedOperations: applied.length,
+    });
+  }), Promise.resolve());
+
+  return execution.catch(async (error) => {
+    const rollback = compensationOperations(applied, presence.snapshot?.state || {});
+    await recordReconciliationCheckpoint({
+      status: 'compensating',
+      checkpoint: 'compensation-started',
+      appliedOperations: applied.length,
+      compensationStatus: 'running',
+    });
+    const compensation = ensureCosPresenceInternal({ fresh: true })
+      .then((recoveryPresence) => sendOperations(recoveryPresence.connection, rollback));
+    return compensation.then(
+      async () => {
+        await recordReconciliationCheckpoint({
+          status: 'pending',
+          checkpoint: 'compensation-complete',
+          compensationStatus: 'complete',
+        });
+        error.compensationStatus = 'complete';
+        throw error;
+      },
+      async (compensationError) => {
+        await recordReconciliationCheckpoint({
+          status: 'pending',
+          checkpoint: 'compensation-failed',
+          compensationStatus: 'failed',
+          compensationError: safeText(compensationError?.message, 'Rollback failed', 500),
+        });
+        error.compensationStatus = 'failed';
+        error.compensationError = compensationError;
+        throw error;
+      },
+    );
+  });
+}
+
+function reconciliationErrorContext(error) {
+  if (['EIDOVERSE_ASSET_RECIPE_UNRESOLVED', 'EIDOVERSE_ASSET_OVERRIDE_UNAVAILABLE'].includes(error?.code)) {
+    return {
+      missing: Array.isArray(error.context?.missing)
+        ? error.context.missing.filter((slot) => typeof slot === 'string').slice(0, 16)
+        : [],
+      assetRecipeVersion: EIDOVERSE_ASSET_RECIPE_VERSION,
+    };
+  }
+  if (error?.code === 'EIDOVERSE_PROTOCOL_INCOMPATIBLE') {
+    return { remediation: '/apps', required: 'world-design-v2' };
+  }
+  return null;
 }
 
 async function recordProjection({ success, summary = null, error = null }) {
@@ -1614,6 +1419,34 @@ async function recordProjection({ success, summary = null, error = null }) {
         lastError: safeText(error?.message || error, 'Projection failed', 500),
       }),
     };
+    if (success) {
+      state.lastAppliedDesignVersion = EIDOVERSE_WORLD_DESIGN_VERSION;
+      state.pendingDesignVersion = null;
+      state.reconciliation = {
+        ...state.reconciliation,
+        status: 'complete',
+        checkpoint: 'projection-committed',
+        error: null,
+        errorCode: null,
+        errorContext: null,
+        completedAt: now,
+        appliedOperations: summary?.operationCount ?? state.reconciliation.operationCount,
+        compensationStatus: null,
+        compensationError: null,
+      };
+      if (state.migrationReport?.status === 'ready') state.migrationReport.status = 'applied';
+    } else {
+      state.pendingDesignVersion = EIDOVERSE_WORLD_DESIGN_VERSION;
+      state.reconciliation = {
+        ...state.reconciliation,
+        status: 'failed',
+        checkpoint: state.reconciliation?.checkpoint || 'projection-started',
+        error: safeText(error?.message || error, 'Projection failed', 500),
+        errorCode: safeText(error?.code, '', 80) || null,
+        errorContext: reconciliationErrorContext(error),
+        completedAt: now,
+      };
+    }
     return state.projection;
   });
 }
@@ -1623,26 +1456,35 @@ export async function projectEidoverseWorld({ signal } = {}) {
     throwIfAborted(signal);
     await assertInstalled();
     const config = await ensureEidoverseWorldConfig();
+    const lockedConfig = await resolveAndLockAssets(config, { signal });
     const presence = await ensureCosPresenceInternal({ fresh: true, signal });
-    const source = await collectProjectionSources({ signal });
+    const source = await collectEidoverseWorldSources({ signal });
     throwIfAborted(signal);
     const plan = buildProjectionPlan({
       source,
-      recipe: config.recipe,
+      recipe: lockedConfig.recipe,
       currentState: presence.snapshot?.state || {},
     });
-    await sendOperations(presence.connection, plan.operations, { signal });
+    await applyProjectionPlan(presence, plan, {
+      signal,
+      freshInstall: lockedConfig.design.lastAppliedVersion === null,
+    });
     const summary = {
-      world: config.world,
-      cosId: config.cos.id,
+      world: lockedConfig.world,
+      cosId: lockedConfig.cos.id,
+      assetRecipeVersion: lockedConfig.design.assetRecipeVersion,
+      assetCatalogFingerprint: Object.values(lockedConfig.design.assetResolutions)[0]?.catalogFingerprint || null,
       ...plan.summary,
     };
     const projection = await recordProjection({ success: true, summary });
+    const appliedConfig = configFromState(await loadState());
     return {
       success: true,
       summary,
       projection,
       presence: presenceSummary(presence),
+      design: appliedConfig.design,
+      recipe: appliedConfig.recipe,
     };
   };
 
@@ -1650,6 +1492,22 @@ export async function projectEidoverseWorld({ signal } = {}) {
     await recordProjection({ success: false, error });
     throw error;
   }));
+}
+
+/**
+ * Boot-time, non-AI reconciliation for an update-prepared design. It never
+ * starts or installs the external runtime: if Eidoverse is not already online,
+ * the pending checkpoint remains visible for the page to remediate later.
+ */
+export async function reconcilePendingEidoverseWorld() {
+  const [setup, state] = await Promise.all([getEidoverseStatus(), loadState()]);
+  if (state.pendingDesignVersion !== EIDOVERSE_WORLD_DESIGN_VERSION) {
+    return { reconciled: false, reason: 'current' };
+  }
+  if (!setup.installed) return { reconciled: false, reason: 'not-installed' };
+  if (setup.runtimeStatus !== 'online') return { reconciled: false, reason: 'runtime-offline' };
+  const result = await projectEidoverseWorld();
+  return { reconciled: true, result };
 }
 
 function objectArgs(args) {
