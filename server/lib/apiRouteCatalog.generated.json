@@ -8725,7 +8725,7 @@
       "sources": [
         {
           "source": "server/routes/eidoverseWorldRoutes.js",
-          "line": 56
+          "line": 64
         }
       ]
     },
@@ -8736,7 +8736,7 @@
       "sources": [
         {
           "source": "server/routes/eidoverseWorldRoutes.js",
-          "line": 36
+          "line": 44
         }
       ]
     },
@@ -8747,7 +8747,7 @@
       "sources": [
         {
           "source": "server/routes/eidoverseWorldRoutes.js",
-          "line": 43
+          "line": 51
         }
       ]
     },
@@ -8758,7 +8758,18 @@
       "sources": [
         {
           "source": "server/routes/eidoverseWorldRoutes.js",
-          "line": 50
+          "line": 58
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/eidoverse/world/projection/status",
+      "mountPath": "/api/eidoverse/world",
+      "sources": [
+        {
+          "source": "server/routes/eidoverseWorldRoutes.js",
+          "line": 38
         }
       ]
     },
@@ -8769,7 +8780,7 @@
       "sources": [
         {
           "source": "server/routes/eidoverseWorldRoutes.js",
-          "line": 63
+          "line": 71
         }
       ]
     },
@@ -8780,7 +8791,7 @@
       "sources": [
         {
           "source": "server/routes/eidoverseWorldRoutes.js",
-          "line": 30
+          "line": 31
         }
       ]
     },
@@ -23698,8 +23709,8 @@
   ],
   "stats": {
     "mounts": 146,
-    "operations": 2138,
-    "declarations": 2141,
+    "operations": 2139,
+    "declarations": 2142,
     "sourceFiles": 226
   }
 }
