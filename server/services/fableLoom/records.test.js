@@ -364,15 +364,23 @@ describe('loom CRUD', () => {
   });
 
   it('preserves the render format when a v4 peer wins an unrelated LWW edit', async () => {
-    const loom = await makeLoom({
+    let loom = await makeLoom({
       name: 'Local production',
       renderSettings: { formatId: 'portrait-9-16' },
+    });
+    loom = await updateLoom(loom.id, {
+      productionStatus: {
+        editorialApprovedAt: '2026-08-30T12:00:00.000Z',
+        editorialApprovalSource: 'manual',
+        deliveryApprovedAt: '2026-08-30T13:00:00.000Z',
+      },
     });
     const remoteV4 = {
       ...loom,
       name: 'Renamed by v4 peer',
       updatedAt: '2099-01-01T00:00:00.000Z',
       renderSettings: undefined,
+      productionStatus: undefined,
     };
 
     await mergeLoomsFromSync([remoteV4], { senderSchemaVersions: { fableLoom: 4 } });
@@ -382,6 +390,72 @@ describe('loom CRUD', () => {
       renderSettings: {
         formatId: 'portrait-9-16', aspectRatio: '9:16', width: 576, height: 1024,
       },
+      productionStatus: {
+        editorialApprovedAt: '2026-08-30T12:00:00.000Z',
+        editorialApprovalSource: 'manual',
+        deliveryApprovedAt: '2026-08-30T13:00:00.000Z',
+      },
+    });
+  });
+
+  it('preserves playable challenge mappings when a v4 peer wins an unrelated edit', async () => {
+    let loom = await makeLoom({ name: 'Local challenge plan' });
+    loom = await addEpisode(loom.id, { title: 'Pilot' });
+    const episodeId = loom.episodes[0].id;
+    loom = await addNode(loom.id, episodeId, {
+      title: 'The keypad', plotPointId: 'plot-lock', challengePhase: 'setup',
+    });
+    const nodeId = loom.episodes[0].nodes[0].id;
+    loom = await updateLoom(loom.id, {
+      seriesPlan: {
+        storyArc: 'The courier crosses the first blockade.',
+        plotPoints: [{
+          id: 'plot-lock', kind: 'challenge', title: 'Open the sealed door',
+          description: 'Recall the planted code.', episodeId,
+        }],
+        sideQuests: [],
+      },
+    });
+    loom = await updateEpisode(loom.id, episodeId, {
+      storyOutline: {
+        startKey: nodeId,
+        scenes: [{
+          key: nodeId, title: 'The keypad', summary: 'The planted code becomes actionable.',
+          plotPointId: 'plot-lock', challengePhase: 'setup', isEnding: true, transitions: [],
+        }],
+        validation: { status: 'draft', issues: [] },
+      },
+    });
+    const remoteV4 = {
+      ...loom,
+      name: 'Renamed by v4 peer',
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      seriesPlan: {
+        ...loom.seriesPlan,
+        plotPoints: loom.seriesPlan.plotPoints.map(({ kind: _kind, ...item }) => item),
+      },
+      episodes: loom.episodes.map((episode) => ({
+        ...episode,
+        storyOutline: {
+          ...episode.storyOutline,
+          scenes: episode.storyOutline.scenes.map(({
+            plotPointId: _plotPointId, challengePhase: _challengePhase, ...scene
+          }) => scene),
+        },
+        nodes: episode.nodes.map(({
+          plotPointId: _plotPointId, challengePhase: _challengePhase, ...node
+        }) => node),
+      })),
+    };
+
+    await mergeLoomsFromSync([remoteV4], { senderSchemaVersions: { fableLoom: 4 } });
+    const merged = await getLoom(loom.id);
+    expect(merged.seriesPlan.plotPoints[0].kind).toBe('challenge');
+    expect(merged.episodes[0].nodes[0]).toMatchObject({
+      plotPointId: 'plot-lock', challengePhase: 'setup',
+    });
+    expect(merged.episodes[0].storyOutline.scenes[0]).toMatchObject({
+      plotPointId: 'plot-lock', challengePhase: 'setup',
     });
   });
 
@@ -487,6 +561,36 @@ describe('format, render, and play settings round-trip', () => {
       formatId: 'landscape-16-9', aspectRatio: '16:9', width: 1024, height: 576,
     });
   });
+
+  it('reopens only the production approvals affected by a later change', async () => {
+    let loom = await makeLoom({ premise: 'A courier must cross the city.' });
+    loom = await addEpisode(loom.id, { title: 'Pilot' });
+    loom = await addNode(loom.id, loom.episodes[0].id, { title: 'Opening' });
+    loom = await updateLoom(loom.id, {
+      productionStatus: {
+        editorialApprovedAt: '2026-08-30T12:00:00.000Z',
+        editorialApprovalSource: 'manual',
+        deliveryApprovedAt: '2026-08-30T13:00:00.000Z',
+      },
+    });
+
+    await attachNodeImage(loom.id, loom.episodes[0].id, loom.episodes[0].nodes[0].id, {
+      filename: 'new-storyboard.png', jobId: 'job-storyboard',
+    });
+    let updated = await getLoom(loom.id);
+    expect(updated.productionStatus).toMatchObject({
+      editorialApprovedAt: '2026-08-30T12:00:00.000Z',
+      editorialApprovalSource: 'manual',
+      deliveryApprovedAt: null,
+    });
+
+    updated = await updateLoom(loom.id, { premise: 'A courier must cross a flooded city.' });
+    expect(updated.productionStatus).toEqual({
+      editorialApprovedAt: null,
+      editorialApprovalSource: null,
+      deliveryApprovedAt: null,
+    });
+  });
 });
 
 describe('audience participation round-trip', () => {
@@ -523,7 +627,7 @@ describe('series plan round-trip', () => {
     const episodeId = loom.episodes[0].id;
     const seriesPlan = {
       storyArc: 'The courier learns to lead.',
-      plotPoints: [{ id: 'plot-1', title: 'Refusal', description: 'She turns away.', episodeId }],
+      plotPoints: [{ id: 'plot-1', kind: 'beat', title: 'Refusal', description: 'She turns away.', episodeId }],
       sideQuests: [{ id: 'quest-1', title: 'The map', description: 'A hidden route.', status: 'planned', startEpisodeId: episodeId, endEpisodeId: null }],
     };
     const planned = await updateLoom(loom.id, { seriesPlan });
@@ -628,7 +732,7 @@ describe('nodes and transitions', () => {
 
   it('demotes a validated outline when a scene contract changes, but not for prose', async () => {
     const { loomId, episodeId } = await setup();
-    let updated = await addNode(loomId, episodeId, { title: 'Opening' });
+    let updated = await addNode(loomId, episodeId, { title: 'Opening', playbackMode: 'cut' });
     updated = await addNode(loomId, episodeId, { title: 'Ending', isEnding: true });
     const [opening, ending] = updated.episodes[0].nodes;
     const withPath = await addNodeTransition(loomId, episodeId, opening.id, {
@@ -807,6 +911,40 @@ describe('attachNodeImage', () => {
     expect(JSON.stringify(attached.visualConditioning)).not.toContain('/private/');
     expect(attached.visualConditioning.capability.injected).toBeUndefined();
     expect(attached.visualConditioning.bindings.injected).toBeUndefined();
+  });
+
+  it('drops stale image provenance while retaining video provenance on replacement', async () => {
+    const loom = await makeLoom();
+    let updated = await addEpisode(loom.id, {});
+    const episodeId = updated.episodes[0].id;
+    updated = await addNode(loom.id, episodeId, {
+      title: 'A',
+      playbackAssets: {
+        visualConditioningByAsset: {
+          'old-still': {
+            version: 1, compilerVersion: 'visual-v1', status: 'locked', assetId: 'old-still',
+            capability: { kind: 'image', backend: 'local' },
+          },
+          'entry-video': {
+            version: 1, compilerVersion: 'visual-v1', status: 'locked', assetId: 'entry-video',
+            capability: { kind: 'video', backend: 'local' },
+          },
+        },
+      },
+    });
+
+    const attached = await attachNodeImage(loom.id, episodeId, updated.episodes[0].nodes[0].id, {
+      filename: 'replacement.png',
+      jobId: 'job-replacement',
+      visualConditioning: {
+        version: 1, compilerVersion: 'visual-v1', status: 'locked', assetId: 'new-still',
+        capability: { kind: 'image', backend: 'local' },
+      },
+    });
+
+    expect(attached.playbackAssets.visualConditioningByAsset).not.toHaveProperty('old-still');
+    expect(attached.playbackAssets.visualConditioningByAsset).toHaveProperty('entry-video');
+    expect(attached.playbackAssets.visualConditioningByAsset).toHaveProperty('new-still');
   });
 
   it('returns null (no throw) when the target is gone or the filename is unsafe', async () => {

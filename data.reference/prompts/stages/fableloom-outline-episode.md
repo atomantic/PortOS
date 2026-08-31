@@ -39,6 +39,7 @@ You are the story architect for one episode of an interactive branching series. 
 - Mark `protagonistPresence: "offscreen"` for decision beats where the protagonist speaks directly to the audience through the communicator. Those beats are the side-device conversation: keep the visual beat open-ended and do not put the protagonist in the storyboard. Use `"onscreen"` when the protagonist is visibly present; choose deliberately for every beat.
 - Every beat must be reachable from `startKey`. Every non-ending beat needs a path forward. Endings have no outgoing paths, and their outcomes must differ in consequence or tone rather than only in label.
 - Continue the exact protagonist, character identities, locations, objects, unresolved threads, and emotional consequences established by the preceding episodes. Do not replace the established protagonist with a new one merely to create novelty.
+- The Story section names every assigned plot point with its exact id and kind. Copy the exact id into `plotPointId` on beats that realize it. For every `kind=challenge`, map separate beats for all five `challengePhase` values: `setup`, `decision`, `success`, `failure`, and `recovery`. Setup must lead to the decision loop; the decision must reach both success and failure; both outcomes must continue to recovery/payoff. Do not reset or dead-end failure.
 - The final beat of an episode should make the next episode feel necessary. Series delivery notes may require an overnight voicemail between episodes or a next-season teaser after the final ending; preserve those promises in the beat plan without writing the voicemail itself here.
 
 Return ONLY valid JSON matching this shape — no prose, markdown fence, or commentary:
@@ -51,6 +52,8 @@ Return ONLY valid JSON matching this shape — no prose, markdown fence, or comm
       "key": "s1",
       "title": "short evocative beat title",
       "summary": "one to three sentence log-line",
+      "plotPointId": "exact assigned plot-point id or null",
+      "challengePhase": "setup, decision, success, failure, recovery, or null",
       "playbackMode": "cut",
       "audienceConnection": "disconnected",
       "protagonistPresence": "onscreen",

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router';
 import * as api from '../../services/api';
 import LoomValidationPanel from './LoomValidationPanel';
 
@@ -33,6 +34,7 @@ beforeEach(() => {
     },
     issues: [],
   });
+  api.reviewLoomEpisodeContinuity.mockResolvedValue({ passed: true, findings: [], summary: {} });
 });
 
 describe('LoomValidationPanel', () => {
@@ -40,12 +42,14 @@ describe('LoomValidationPanel', () => {
     const user = userEvent.setup();
     const onLoomUpdate = vi.fn();
     render(
-      <LoomValidationPanel
-        loom={{ id: 'loom-1' }}
-        episode={episode}
-        onSelectNode={vi.fn()}
-        onLoomUpdate={onLoomUpdate}
-      />,
+      <MemoryRouter>
+        <LoomValidationPanel
+          loom={{ id: 'loom-1', episodes: [episode] }}
+          episode={episode}
+          onSelectNode={vi.fn()}
+          onLoomUpdate={onLoomUpdate}
+        />
+      </MemoryRouter>,
     );
 
     expect(screen.getByText('Ordered production workflow')).toBeInTheDocument();
@@ -57,5 +61,24 @@ describe('LoomValidationPanel', () => {
     expect(screen.getByText('Dedicated render workspace')).toBeInTheDocument();
     await user.click(screen.getByText('Dedicated render workspace'));
     expect(onLoomUpdate).toHaveBeenCalledWith({ id: 'loom-updated' });
+  });
+
+  it('restores the selected production workspace from the URL', async () => {
+    render(
+      <MemoryRouter initialEntries={['/?production=render']}>
+        <LoomValidationPanel
+          loom={{ id: 'loom-1', episodes: [episode] }}
+          episode={episode}
+          onSelectNode={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText('Dedicated render workspace')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Render' })).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => {
+      expect(api.validateLoomEpisode).toHaveBeenCalled();
+      expect(api.reviewLoomEpisodeContinuity).toHaveBeenCalled();
+    });
   });
 });

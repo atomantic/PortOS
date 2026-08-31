@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const getLoomMock = vi.hoisted(() => vi.fn(async (id) => ({ id })));
+const mutateLoomMock = vi.hoisted(() => vi.fn(async (id, mutator) => mutator({
+  id,
+  productionStatus: {
+    editorialApprovedAt: null,
+    editorialApprovalSource: null,
+    deliveryApprovedAt: null,
+  },
+})));
 const remediateMock = vi.hoisted(() => vi.fn());
 const playtestMock = vi.hoisted(() => vi.fn());
 const selfImproveMock = vi.hoisted(() => vi.fn(async () => ({
@@ -8,7 +16,7 @@ const selfImproveMock = vi.hoisted(() => vi.fn(async () => ({
   taskId: 'sys-example', filed: true, duplicate: false,
 })));
 
-vi.mock('./records.js', () => ({ getLoom: getLoomMock }));
+vi.mock('./records.js', () => ({ getLoom: getLoomMock, mutateLoom: mutateLoomMock }));
 vi.mock('./editorial.js', () => ({
   evaluateAndRemediateFableLoom: remediateMock,
   reviewFableLoomPlaythroughs: playtestMock,
@@ -70,6 +78,7 @@ const waitForTerminal = async (runId) => {
 beforeEach(() => {
   _resetFableLoomEditorialAutopilots();
   getLoomMock.mockClear().mockImplementation(async (id) => ({ id }));
+  mutateLoomMock.mockClear();
   remediateMock.mockReset();
   playtestMock.mockReset();
   selfImproveMock.mockClear();
@@ -96,6 +105,14 @@ describe('FableLoom editorial autopilot', () => {
       providerId: 'writer', model: 'large', effort: 'high', aiReview: true,
     });
     expect(selfImproveMock).not.toHaveBeenCalled();
+    expect(mutateLoomMock).toHaveBeenCalledWith('loom-example', expect.any(Function));
+    expect(await mutateLoomMock.mock.calls[0][1]({ productionStatus: {} })).toMatchObject({
+      productionStatus: {
+        editorialApprovedAt: expect.any(String),
+        editorialApprovalSource: 'autopilot',
+        deliveryApprovedAt: null,
+      },
+    });
   });
 
   it('corrects a rejected graph patch and continues the same editorial step', async () => {
@@ -117,6 +134,29 @@ describe('FableLoom editorial autopilot', () => {
     expect(remediateMock.mock.calls[1][1].guidance).toContain('Validator feedback');
     expect(remediateMock.mock.calls[1][1].guidance).toContain(rejectedPatch.message);
     expect(playtestMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('feeds the newest validator rejection into each bounded correction attempt', async () => {
+    const first = Object.assign(new Error('Unknown transition target in the opening scene'), {
+      code: 'AI_RESPONSE_INVALID',
+    });
+    const second = Object.assign(new Error('Replacement ending still points at a removed scene'), {
+      code: 'AI_RESPONSE_INVALID',
+    });
+    remediateMock
+      .mockRejectedValueOnce(first)
+      .mockRejectedValueOnce(second)
+      .mockResolvedValueOnce(remediation(true));
+    playtestMock.mockResolvedValueOnce(playtest({ passed: true }));
+
+    const started = await startFableLoomEditorialAutopilot('loom-example', { maxRounds: 3 });
+    const finished = await waitForTerminal(started.id);
+
+    expect(finished).toMatchObject({
+      status: 'completed', responseCorrections: 2, invalidResponses: 2,
+    });
+    expect(remediateMock.mock.calls[2][1].guidance).toContain(second.message);
+    expect(remediateMock.mock.calls[2][1].guidance).not.toContain(first.message);
   });
 
   it('fails with useful remediation after exhausting invalid-response correction attempts', async () => {

@@ -43,6 +43,9 @@ export const OUTLINE_ISSUE_CODES = Object.freeze({
   MISSING_OVERNIGHT_VOICEMAIL: 'MISSING_OVERNIGHT_VOICEMAIL',
   EMPTY_OVERNIGHT_VOICEMAIL: 'EMPTY_OVERNIGHT_VOICEMAIL',
   MISSING_NEXT_SEASON_TEASER: 'MISSING_NEXT_SEASON_TEASER',
+  CHALLENGE_PHASE_MISSING: 'CHALLENGE_PHASE_MISSING',
+  CHALLENGE_PATH_MISSING: 'CHALLENGE_PATH_MISSING',
+  CHALLENGE_DECISION_INVALID: 'CHALLENGE_DECISION_INVALID',
 });
 
 export const STORY_OUTLINE_TELEPLAY_SYNC_CODES = Object.freeze([
@@ -58,6 +61,22 @@ export const isStoryOutlineTeleplaySyncIssue = (issue) => (
 );
 
 const OUTLINE_STATUSES = new Set(['draft', 'valid', 'invalid']);
+
+export const FABLELOOM_PLOT_POINT_KINDS = Object.freeze(['beat', 'challenge']);
+export const FABLELOOM_CHALLENGE_PHASES = Object.freeze([
+  'setup', 'decision', 'success', 'failure', 'recovery',
+]);
+const challengePhaseSet = new Set(FABLELOOM_CHALLENGE_PHASES);
+
+export const fableLoomPlotPointKind = (item) => (
+  item?.kind === 'challenge'
+    || (item?.kind == null && /^challenge\s*(?:[-—:]|$)/i.test(item?.title?.trim() || ''))
+    ? 'challenge'
+    : 'beat'
+);
+
+export const fableLoomEpisodeChallenges = (loom, episodeId) => asArray(loom?.seriesPlan?.plotPoints)
+  .filter((item) => item?.episodeId === episodeId && fableLoomPlotPointKind(item) === 'challenge');
 
 const uniqueKey = (candidate, index, seen) => {
   const base = isText(candidate)
@@ -123,6 +142,10 @@ export function sanitizeStoryOutline(raw, { participationMode = 'protagonist' } 
       key,
       title: trimTo(scene?.title, LOOM_LIMITS.NODE_TITLE_MAX),
       summary: trimTo(scene?.summary, LOOM_LIMITS.OUTLINE_SUMMARY_MAX),
+      plotPointId: isText(scene?.plotPointId)
+        ? scene.plotPointId.trim().slice(0, LOOM_LIMITS.OUTLINE_KEY_MAX)
+        : null,
+      challengePhase: challengePhaseSet.has(scene?.challengePhase) ? scene.challengePhase : null,
       playbackMode: scene?.playbackMode === 'cut' ? 'cut' : 'decision',
       audienceConnection: scene?.audienceConnection === 'connected' ? 'connected' : 'disconnected',
       protagonistPresence: FABLELOOM_PROTAGONIST_PRESENCE.includes(scene?.protagonistPresence)
@@ -153,7 +176,7 @@ const outlineIssue = (issues, code, severity, message, extra = {}) => {
 
 /** Deterministic validation for the log-line graph, independent of an LLM. */
 export function analyzeStoryOutline(outline, {
-  participationMode = 'protagonist', requireAudienceIntroduction = false,
+  participationMode = 'protagonist', requireAudienceIntroduction = false, challenges = [],
 } = {}) {
   const scenes = asArray(outline?.scenes);
   const byKey = new Map(scenes.map((scene) => [scene.key, scene]));
@@ -300,6 +323,72 @@ export function analyzeStoryOutline(outline, {
     });
   }
 
+  const pathExists = (fromScenes, toScenes) => {
+    const targets = new Set(toScenes.map((scene) => scene.key));
+    const queue = fromScenes.map((scene) => scene.key);
+    const seen = new Set();
+    while (queue.length) {
+      const key = queue.shift();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (targets.has(key)) return true;
+      for (const transition of asArray(byKey.get(key)?.transitions)) {
+        if (byKey.has(transition.targetKey) && !seen.has(transition.targetKey)) {
+          queue.push(transition.targetKey);
+        }
+      }
+    }
+    return false;
+  };
+  let readyChallengeCount = 0;
+  for (const challenge of asArray(challenges)) {
+    const label = challenge.title || challenge.id || 'Untitled challenge';
+    const mapped = scenes.filter((scene) => scene.plotPointId === challenge.id);
+    const byPhase = Object.fromEntries(FABLELOOM_CHALLENGE_PHASES.map((phase) => [
+      phase, mapped.filter((scene) => scene.challengePhase === phase),
+    ]));
+    let challengeReady = true;
+    for (const phase of FABLELOOM_CHALLENGE_PHASES) {
+      if (byPhase[phase].length) continue;
+      challengeReady = false;
+      push(
+        OUTLINE_ISSUE_CODES.CHALLENGE_PHASE_MISSING,
+        'error',
+        `Playable challenge "${label}" needs a mapped ${phase} beat.`,
+      );
+    }
+    const invalidDecision = byPhase.decision.find((scene) => scene.playbackMode !== 'decision'
+      || asArray(scene.transitions).length < 2);
+    if (invalidDecision) {
+      challengeReady = false;
+      push(
+        OUTLINE_ISSUE_CODES.CHALLENGE_DECISION_INVALID,
+        'error',
+        `Playable challenge "${label}" needs a decision-loop beat with at least two viewer paths.`,
+        { sceneKey: invalidDecision.key },
+      );
+    }
+    const requiredPaths = [
+      ['setup', 'decision'],
+      ['decision', 'success'],
+      ['decision', 'failure'],
+      ['success', 'recovery'],
+      ['failure', 'recovery'],
+    ];
+    for (const [fromPhase, toPhase] of requiredPaths) {
+      if (!byPhase[fromPhase].length || !byPhase[toPhase].length
+        || pathExists(byPhase[fromPhase], byPhase[toPhase])) continue;
+      challengeReady = false;
+      push(
+        OUTLINE_ISSUE_CODES.CHALLENGE_PATH_MISSING,
+        'error',
+        `Playable challenge "${label}" has no path from its ${fromPhase} beat to its ${toPhase} beat.`,
+        { sceneKey: byPhase[fromPhase][0]?.key },
+      );
+    }
+    if (challengeReady) readyChallengeCount += 1;
+  }
+
   const stats = {
     sceneCount: scenes.length,
     automaticCutCount: scenes.filter((scene) => !scene.isEnding && scene.playbackMode === 'cut').length,
@@ -310,6 +399,8 @@ export function analyzeStoryOutline(outline, {
     maxDepth: depthByKey.size ? Math.max(...depthByKey.values()) : 0,
     errorCount: issues.filter((issue) => issue.severity === 'error').length,
     warningCount: issues.filter((issue) => issue.severity === 'warning').length,
+    challengeCount: asArray(challenges).length,
+    readyChallengeCount,
   };
   return { issues, stats };
 }
@@ -355,6 +446,8 @@ export function analyzeStoryOutlineTeleplaySync(episode, outline, {
         ? 'offscreen'
         : 'onscreen');
     const semanticFieldsMatch = scene.title === node.title
+      && (scene.plotPointId || null) === (node.plotPointId || null)
+      && (scene.challengePhase || null) === (node.challengePhase || null)
       && scene.playbackMode === node.playbackMode
       && scene.audienceConnection === node.audienceConnection
       && scene.protagonistPresence === expectedProtagonistPresence
@@ -405,6 +498,7 @@ export function analyzeSeriesStoryOutlines(loom, { replacingEpisodeId = null } =
     const validation = analyzeStoryOutline(episode.storyOutline, {
       participationMode: loom?.participationMode,
       requireAudienceIntroduction: index === 0,
+      challenges: fableLoomEpisodeChallenges(loom, episode.id),
     });
     validation.issues.forEach((issue) => {
       push(issue.code, issue.severity, `Episode ${episode.number || index + 1}: ${issue.message}`, {
@@ -513,6 +607,8 @@ export function describeStoryOutlineForPrompt(outline) {
       scene.isEnding ? null : scene.playbackMode === 'cut' ? 'AUTO CUT' : 'DECISION',
       scene.audienceConnection === 'connected' ? 'AUDIENCE CONNECTED' : 'AUDIENCE DISCONNECTED',
       scene.protagonistPresence === 'offscreen' ? 'PROTAGONIST OFF-SCREEN' : 'PROTAGONIST ON-SCREEN',
+      scene.plotPointId ? `PLOT POINT: ${scene.plotPointId}` : null,
+      scene.challengePhase ? `CHALLENGE ${scene.challengePhase.toUpperCase()}` : null,
     ].filter(Boolean);
     const paths = asArray(scene.transitions).map((transition) => {
       const target = byKey.get(transition.targetKey);

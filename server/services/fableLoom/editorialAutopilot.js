@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { LOOM_LIMITS } from '../../lib/fableLoomLimits.js';
 import { trimTo } from '../../lib/storyBible.js';
-import { getLoom } from './records.js';
+import { getLoom, mutateLoom } from './records.js';
 import {
   evaluateAndRemediateFableLoom,
   reviewFableLoomPlaythroughs,
@@ -109,10 +109,10 @@ const routeOptions = (run) => ({
 });
 
 const responseCorrectionGuidance = (guidance, error, attempt) => trimTo([
-  guidance,
   'The previous editor response was rejected before any story changes were saved.',
   `Validator feedback: ${errorMessage(error)}`,
   `Correction attempt ${attempt} of ${FABLELOOM_EDITORIAL_AUTOPILOT_LIMITS.MAX_RESPONSE_CORRECTIONS}. Re-read the exact episode, scene, and transition ids in the teleplay digest. Return a corrected, graph-safe patch using only those ids; do not omit the original editorial work.`,
+  guidance,
 ].filter(Boolean).join('\n\n'), 5000);
 
 const invalidResponseExhaustedError = () => new ServerError(
@@ -120,10 +120,16 @@ const invalidResponseExhaustedError = () => new ServerError(
   { status: 502, code: 'FABLELOOM_AUTOPILOT_INVALID_RESPONSE' },
 );
 
-const runRemediationStep = (run, round, guidance, correctionAttempt = 0) => (
+const runRemediationStep = (
+  run,
+  round,
+  baseGuidance,
+  correctionAttempt = 0,
+  attemptGuidance = baseGuidance,
+) => (
   evaluateAndRemediateFableLoom(run.loomId, {
     ...routeOptions(run),
-    guidance,
+    guidance: attemptGuidance,
   }).catch((error) => {
     if (run.cancelRequested || error?.code !== 'AI_RESPONSE_INVALID') throw error;
     touch(run, { invalidResponses: (run.invalidResponses || 0) + 1 });
@@ -142,8 +148,9 @@ const runRemediationStep = (run, round, guidance, correctionAttempt = 0) => (
     return runRemediationStep(
       run,
       round,
-      responseCorrectionGuidance(guidance, error, nextCorrectionAttempt),
+      baseGuidance,
       nextCorrectionAttempt,
+      responseCorrectionGuidance(baseGuidance, error, nextCorrectionAttempt),
     );
   })
 );
@@ -256,12 +263,22 @@ async function runRound(run, guidance) {
   run.lastReview = playtest.review;
 
   if (playtest.passed) {
+    const approvedAt = nowIso();
+    await mutateLoom(run.loomId, (loom) => ({
+      ...loom,
+      productionStatus: {
+        ...loom.productionStatus,
+        editorialApprovedAt: approvedAt,
+        editorialApprovalSource: 'autopilot',
+        deliveryApprovedAt: null,
+      },
+    }));
     return touch(run, {
       status: 'completed',
       currentStep: null,
       stepLabel: null,
       message: `Editorial autopilot completed after ${round} round${round === 1 ? '' : 's'}.`,
-      completedAt: nowIso(),
+      completedAt: approvedAt,
     });
   }
 

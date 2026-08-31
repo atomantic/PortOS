@@ -52,6 +52,56 @@ export const FABLELOOM_ASSET_TYPES = Object.freeze([
 const isStr = (v) => typeof v === 'string' && v.trim().length > 0;
 const isLockedCanon = (node) => Boolean(node?.visualCanon && node.visualCanon.mode !== 'draft');
 
+const EXACT_RENDER_KEYS = Object.freeze({
+  image: Object.freeze({
+    local: Object.freeze(['width', 'height', 'aspectRatio', 'steps', 'guidance', 'quantize', 'seed']),
+    cloud: Object.freeze(['width', 'height', 'aspectRatio', 'mode']),
+  }),
+  video: Object.freeze({
+    local: Object.freeze([
+      'width', 'height', 'aspectRatio', 'numFrames', 'fps', 'steps', 'guidanceScale', 'seed', 'mode',
+      'tiling', 'disableAudio',
+    ]),
+    cloud: Object.freeze(['width', 'height', 'aspectRatio', 'mode', 'videoMode']),
+  }),
+});
+
+const validRenderParameter = (key, value) => {
+  if (['aspectRatio', 'mode', 'videoMode', 'tiling'].includes(key)) return isStr(value);
+  if (key === 'disableAudio') return typeof value === 'boolean';
+  if (key === 'quantize') return isStr(value) || Number.isFinite(value);
+  if (!Number.isFinite(value)) return false;
+  if (['seed', 'guidance', 'guidanceScale'].includes(key)) return value >= 0;
+  return value > 0;
+};
+
+/** Validate the atomic render tuple required for exact-input reproduction. */
+export function exactRenderParameterIssues(recordedProvenance) {
+  const capability = recordedProvenance?.capability || {};
+  const kind = capability.kind;
+  const backendFamily = capability.backend === 'local' ? 'local' : 'cloud';
+  const required = EXACT_RENDER_KEYS[kind]?.[backendFamily];
+  if (!required) return ['Recorded visual conditioning has no supported render capability.'];
+  const parameters = recordedProvenance?.render?.parameters;
+  if (!parameters || typeof parameters !== 'object') {
+    return ['Recorded visual conditioning has no effective render parameters.'];
+  }
+  const issues = required
+    .filter((key) => !validRenderParameter(key, parameters[key]))
+    .map((key) => `Recorded ${kind} render parameter "${key}" is missing or invalid.`);
+  if (issues.length) return issues;
+  const [ratioWidth, ratioHeight] = parameters.aspectRatio.split(':').map(Number);
+  if (!(ratioWidth > 0 && ratioHeight > 0)) {
+    return ['Recorded render aspectRatio is invalid.'];
+  }
+  const recordedRatio = parameters.width / parameters.height;
+  const declaredRatio = ratioWidth / ratioHeight;
+  if (Math.abs(recordedRatio - declaredRatio) / declaredRatio > 0.02) {
+    return ['Recorded render width, height, and aspectRatio do not describe the same format.'];
+  }
+  return [];
+}
+
 /**
  * Compute the topological ordering of reachable nodes in an episode graph,
  * respecting graph convergence and path-specific predecessors.
@@ -276,6 +326,7 @@ export function verifyExactInputProvenance(recordedProvenance, {
         }
       }
     }
+    errors.push(...exactRenderParameterIssues(recordedProvenance));
 
     const bindings = recordedProvenance.bindings;
     if (!bindings || typeof bindings !== 'object') {
@@ -648,7 +699,9 @@ export function buildEpisodeProductionPlan({
       temporalSourceNodeId,
       dependencies: imageDependencies,
       existingAssetId: existingStill,
-      status: existingStill && nodeBlockers.length === 0 ? 'already_rendered' : (imageHasPrompt && nodeBlockers.length === 0 ? 'ready' : 'blocked'),
+      status: existingStill && nodeBlockers.length === 0 && effectiveMode !== 'exact_inputs'
+        ? 'already_rendered'
+        : (imageHasPrompt && nodeBlockers.length === 0 ? 'ready' : 'blocked'),
       readiness: {
         ready: imageReady,
         reasons: imageBlockers,
@@ -678,7 +731,9 @@ export function buildEpisodeProductionPlan({
       cameraMovement: node.cameraMovement || null,
       dependencies: [imageAssetId],
       existingAssetId: existingEntryVideo,
-      status: existingEntryVideo && nodeBlockers.length === 0 ? 'already_rendered' : (videoReady ? 'ready' : 'blocked'),
+      status: existingEntryVideo && nodeBlockers.length === 0 && effectiveMode !== 'exact_inputs'
+        ? 'already_rendered'
+        : (videoReady ? 'ready' : 'blocked'),
       readiness: {
         ready: videoReady,
         reasons: videoBlockers,
@@ -715,7 +770,9 @@ export function buildEpisodeProductionPlan({
         cameraMovement: node.cameraMovement || null,
         dependencies: [imageAssetId],
         existingAssetId: existingHold,
-        status: existingHold && holdBlockers.length === 0 ? 'already_rendered' : (videoHasPrompt && holdBlockers.length === 0 ? 'ready' : 'blocked'),
+        status: existingHold && holdBlockers.length === 0 && effectiveMode !== 'exact_inputs'
+          ? 'already_rendered'
+          : (videoHasPrompt && holdBlockers.length === 0 ? 'ready' : 'blocked'),
         readiness: {
           ready: videoHasPrompt && holdBlockers.length === 0,
           reasons: videoHasPrompt ? holdBlockers : [...holdBlockers, 'Scene has neither videoPrompt nor prose for video.'],
@@ -746,7 +803,9 @@ export function buildEpisodeProductionPlan({
         prompt: tr.description || videoPrompt,
         dependencies: [imageAssetId],
         existingAssetId: existingExit,
-        status: existingExit && exitBlockers.length === 0 ? 'already_rendered' : (exitHasPrompt && exitBlockers.length === 0 ? 'ready' : 'blocked'),
+        status: existingExit && exitBlockers.length === 0 && effectiveMode !== 'exact_inputs'
+          ? 'already_rendered'
+          : (exitHasPrompt && exitBlockers.length === 0 ? 'ready' : 'blocked'),
         readiness: {
           ready: exitHasPrompt && exitBlockers.length === 0,
           reasons: exitBlockers,

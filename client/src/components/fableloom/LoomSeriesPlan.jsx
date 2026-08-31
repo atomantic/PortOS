@@ -5,7 +5,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { BrainCircuit, CheckCircle2, ChevronDown, ChevronUp, Loader2, Plus, Save, Sparkles, Trash2 } from 'lucide-react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import toast from '../ui/Toast';
@@ -26,6 +26,7 @@ import { effectiveModelFor, effortAwareModelOptions } from '../../utils/provider
 import { fieldClass, labelClass } from './fieldStyles';
 import LoomAiRunStatus from './LoomAiRunStatus';
 import LoomEditorialAutomation from './LoomEditorialAutomation';
+import { fableLoomPlotPointKind } from '../../../../server/lib/fableLoomOutline.js';
 
 const newItemId = (prefix) => `${prefix}-${uuidv4()}`;
 const CHALLENGE_DESCRIPTION_TEMPLATE = 'SETUP: Establish the blockade and plant the clue. VIEWER DECISION LOOP: Offer 2–4 actionable options with escalating feedback. SUCCESS: Advance with an earned advantage. FAILURE: Continue with a visible cost. RECOVERY / PAYOFF: Converge without erasing the choice.';
@@ -37,7 +38,9 @@ const normalizeDeliveryOptions = (options) => ({
 
 const normalizePlan = (plan) => ({
   storyArc: plan?.storyArc || '',
-  plotPoints: Array.isArray(plan?.plotPoints) ? plan.plotPoints : [],
+  plotPoints: Array.isArray(plan?.plotPoints)
+    ? plan.plotPoints.map((item) => ({ ...item, kind: fableLoomPlotPointKind(item) }))
+    : [],
   sideQuests: Array.isArray(plan?.sideQuests) ? plan.sideQuests : [],
   deliveryOptions: normalizeDeliveryOptions(plan?.deliveryOptions),
   interEpisodeVoicemails: Array.isArray(plan?.interEpisodeVoicemails)
@@ -64,12 +67,30 @@ const withVoicemailDrafts = (plan, episodes) => {
 };
 
 export default function LoomSeriesPlan({ loom, onLoomUpdate }) {
+  const [searchParams] = useSearchParams();
+  const requestedSection = searchParams.get('section');
   const [plan, setPlan] = useState(() => normalizePlan(loom.seriesPlan));
   const [dirty, setDirty] = useState(false);
   const revisionRef = useRef(0);
   const savedRevisionRef = useRef(0);
   const loomIdRef = useRef(loom.id);
   const routeGuard = useUnsavedChangesGuard(dirty);
+
+  useEffect(() => {
+    const targetId = {
+      arc: 'fableloom-plan-arc',
+      challenges: 'fableloom-plan-challenges',
+      editorial: 'fableloom-plan-editorial',
+      handoffs: 'fableloom-plan-handoffs',
+    }[requestedSection];
+    if (!targetId) return undefined;
+    const frame = requestAnimationFrame(() => {
+      const target = document.getElementById(targetId);
+      target?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+      target?.focus?.({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [loom.id, requestedSection]);
 
   useEffect(() => {
     if (loomIdRef.current !== loom.id) {
@@ -163,7 +184,7 @@ export default function LoomSeriesPlan({ loom, onLoomUpdate }) {
               </p>
             </div>
 
-            <div className="rounded-lg border border-port-border bg-port-card p-4">
+            <div id="fableloom-plan-arc" tabIndex={-1} className="rounded-lg border border-port-border bg-port-card p-4 focus:outline-none">
               <FormField
                 label="Story arc"
                 hint="The beginning-to-end dramatic movement, central conflict, and intended resolution."
@@ -179,21 +200,23 @@ export default function LoomSeriesPlan({ loom, onLoomUpdate }) {
               </FormField>
             </div>
 
-            <PlanCollection
-              title="Plot points"
-              description="Order tentpoles and playable challenges, then assign each one to the episode where it must appear."
-              items={plan.plotPoints}
-              episodes={episodeOptions}
-              onAdd={() => changePlan((current) => ({ ...current, plotPoints: [...current.plotPoints, {
-                id: newItemId('plot'), title: '', description: '', episodeId: null,
-              }] }))}
-              onUpdate={(id, patch) => updateItem('plotPoints', id, patch)}
-              onAddChallenge={() => changePlan((current) => ({ ...current, plotPoints: [...current.plotPoints, {
-                id: newItemId('plot'), title: 'Challenge — ', description: CHALLENGE_DESCRIPTION_TEMPLATE, episodeId: null,
-              }] }))}
-              onRemove={(id) => removeItem('plotPoints', id)}
-              onMove={(index, direction) => moveItem('plotPoints', index, direction)}
-            />
+            <div id="fableloom-plan-challenges" tabIndex={-1} className="focus:outline-none">
+              <PlanCollection
+                title="Plot points"
+                description="Order tentpoles and playable challenges, then assign each one to the episode where it must appear."
+                items={plan.plotPoints}
+                episodes={episodeOptions}
+                onAdd={() => changePlan((current) => ({ ...current, plotPoints: [...current.plotPoints, {
+                  id: newItemId('plot'), kind: 'beat', title: '', description: '', episodeId: null,
+                }] }))}
+                onUpdate={(id, patch) => updateItem('plotPoints', id, patch)}
+                onAddChallenge={() => changePlan((current) => ({ ...current, plotPoints: [...current.plotPoints, {
+                  id: newItemId('plot'), kind: 'challenge', title: '', description: CHALLENGE_DESCRIPTION_TEMPLATE, episodeId: null,
+                }] }))}
+                onRemove={(id) => removeItem('plotPoints', id)}
+                onMove={(index, direction) => moveItem('plotPoints', index, direction)}
+              />
+            </div>
 
             <PlanCollection
               title="Side quests"
@@ -211,13 +234,17 @@ export default function LoomSeriesPlan({ loom, onLoomUpdate }) {
 
             <EpisodeBeatReadiness loom={loom} />
 
-            <LoomEditorialAutomation loom={loom} dirty={dirty} onLoomUpdate={adoptServerPlan} />
+            <div id="fableloom-plan-editorial" tabIndex={-1} className="focus:outline-none">
+              <LoomEditorialAutomation loom={loom} dirty={dirty} onLoomUpdate={adoptServerPlan} />
+            </div>
 
-            <SeriesDeliveryPlan
-              plan={plan}
-              episodes={loom.episodes}
-              onChange={changePlan}
-            />
+            <div id="fableloom-plan-handoffs" tabIndex={-1} className="focus:outline-none">
+              <SeriesDeliveryPlan
+                plan={plan}
+                episodes={loom.episodes}
+                onChange={changePlan}
+              />
+            </div>
           </div>
 
           <aside className="w-full lg:w-[380px] xl:w-[420px] shrink-0 space-y-6 lg:sticky lg:top-0 lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto" aria-label="AI tools and actions">
@@ -698,7 +725,7 @@ function PlanCollection({
   title, description, items, episodes, sideQuests = false,
   onAdd, onAddChallenge, onUpdate, onRemove, onMove,
 }) {
-  const challenges = sideQuests ? [] : items.filter((item) => /^challenge\s*(?:[-—:]|$)/i.test(item.title?.trim() || ''));
+  const challenges = sideQuests ? [] : items.filter((item) => fableLoomPlotPointKind(item) === 'challenge');
   const assignedChallenges = challenges.filter((item) => item.episodeId);
   return (
     <div className="rounded-lg border border-port-border bg-port-card p-4 space-y-4">
@@ -731,7 +758,7 @@ function PlanCollection({
         </button>
       ) : items.map((item, index) => (
         <div key={item.id} className="rounded border border-port-border p-3 space-y-3">
-          {!sideQuests && /^challenge\s*(?:[-—:]|$)/i.test(item.title?.trim() || '') ? (
+          {!sideQuests && fableLoomPlotPointKind(item) === 'challenge' ? (
             <span className="inline-flex rounded bg-port-accent/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-port-accent">
               Playable challenge
             </span>

@@ -137,4 +137,72 @@ describe('FableLoom story-first readiness', () => {
     expect(workflow.stages.slice(0, 11).every((stage) => stage.status === 'complete')).toBe(true);
     expect(workflow.stages[11]).toMatchObject({ id: 'delivery', status: 'current' });
   });
+
+  it('requires series-wide structure and continuity evidence, not only the selected episode', () => {
+    const episodes = [
+      { id: 'ep-1', number: 1, storyOutline: outline, nodes: [{ id: 'one', isEnding: true, transitions: [] }] },
+      { id: 'ep-2', number: 2, storyOutline: outline, nodes: [{ id: 'two', isEnding: true, transitions: [] }] },
+    ];
+    const base = {
+      name: 'Example Story', premise: 'Two routes must both hold.',
+      seriesPlan: {
+        storyArc: 'Both episodes resolve one pursuit.',
+        plotPoints: [{
+          id: 'challenge-1', kind: 'challenge', title: 'Cross the gate',
+          description: 'A setup, decision, outcome, and recovery.', episodeId: 'ep-1',
+        }],
+      },
+      episodes,
+    };
+    const workflow = fableLoomProductionWorkflow(base, episodes[0], {
+      structuralByEpisode: {
+        'ep-1': { stats: { errorCount: 0 } },
+        'ep-2': { stats: { errorCount: 1 } },
+      },
+      continuityByEpisode: {
+        'ep-1': { passed: true },
+        'ep-2': { passed: false },
+      },
+    });
+
+    expect(workflow.stages[5]).toMatchObject({
+      id: 'structure', status: 'current', detail: expect.stringContaining('1/2 episode graphs pass'),
+    });
+    expect(workflow.stages[7]).toMatchObject({
+      id: 'continuity', detail: expect.stringContaining('1/2 episodes pass'),
+    });
+  });
+
+  it('reaches twelve of twelve after durable final-delivery approval', () => {
+    const episode = {
+      id: 'ep-1', number: 1, storyOutline: outline, startNodeId: 'ending',
+      nodes: [{
+        id: 'ending', image: 'ending.png', videoHistoryId: 'ending-video',
+        isEnding: true, transitions: [],
+      }],
+    };
+    const loom = {
+      name: 'Example Story', premise: 'A route reaches its ending.',
+      seriesPlan: {
+        storyArc: 'The route resolves.',
+        plotPoints: [{
+          id: 'challenge-1', kind: 'challenge', title: 'Cross the gate',
+          description: 'A complete playable challenge.', episodeId: 'ep-1',
+        }],
+      },
+      productionStatus: {
+        editorialApprovedAt: '2026-08-30T12:00:00.000Z',
+        editorialApprovalSource: 'manual',
+        deliveryApprovedAt: '2026-08-30T13:00:00.000Z',
+      },
+      episodes: [episode],
+    };
+    const workflow = fableLoomProductionWorkflow(loom, episode, {
+      structuralByEpisode: { 'ep-1': { stats: { errorCount: 0 }, productionReadiness: { ready: true } } },
+      continuityByEpisode: { 'ep-1': { passed: true } },
+    });
+
+    expect(workflow).toMatchObject({ currentIndex: -1, currentStep: 12, completedCount: 12 });
+    expect(workflow.stages.every((stage) => stage.status === 'complete')).toBe(true);
+  });
 });

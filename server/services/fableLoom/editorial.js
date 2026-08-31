@@ -16,6 +16,7 @@ import {
   analyzeStoryOutline,
   analyzeStoryOutlineTeleplaySync,
   describeStoryOutlineForPrompt,
+  fableLoomEpisodeChallenges,
   sanitizeStoryOutline,
 } from '../../lib/fableLoomOutline.js';
 import {
@@ -847,6 +848,7 @@ export function applyFableLoomEditorialPatch(
       const analysis = analyzeStoryOutline(storyOutline, {
         participationMode: candidate.participationMode,
         requireAudienceIntroduction: candidate.episodes[0]?.id === episode.id,
+        challenges: fableLoomEpisodeChallenges(candidate, episode.id),
       });
       if (analysis.stats.errorCount) {
         throw aiShapeError(`The model returned an invalid outline for episode ${episode.id}: ${analysis.issues.find((issue) => issue.severity === 'error')?.message}`);

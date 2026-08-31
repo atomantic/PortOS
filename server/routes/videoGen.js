@@ -951,7 +951,10 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
   const body = parsed.data;
   let fableLoomRenderSettings = null;
   if (body.fableLoom) {
-    const taggedLoom = await getLoom(body.fableLoom.loomId);
+    const taggedLoom = await getLoom(body.fableLoom.loomId).catch(async (error) => {
+      await cleanupMultipartTemp(uploads);
+      throw error;
+    });
     if (taggedLoom) {
       fableLoomRenderSettings = asFableLoomRenderSettings(taggedLoom.renderSettings);
       body.width = fableLoomRenderSettings.width;

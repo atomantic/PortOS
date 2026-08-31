@@ -57,7 +57,11 @@ import {
 } from '../../lib/fableLoomParticipation.js';
 import { normalizeFableLoomCameraMovement } from '../../lib/fableLoomCameraMovements.js';
 import {
+  analyzeStoryOutline,
   analyzeStoryOutlineTeleplaySync,
+  FABLELOOM_CHALLENGE_PHASES,
+  fableLoomEpisodeChallenges,
+  fableLoomPlotPointKind,
   sanitizeStoryOutline,
 } from '../../lib/fableLoomOutline.js';
 import { asFableLoomRenderSettings } from '../../lib/fableLoomProduction.js';
@@ -120,6 +124,12 @@ function sanitizeNode(raw) {
     id: raw.id,
     title: trimTo(raw.title, LOOM_LIMITS.NODE_TITLE_MAX),
     prose: trimTo(raw.prose, LOOM_LIMITS.PROSE_MAX),
+    plotPointId: isStr(raw.plotPointId)
+      ? raw.plotPointId.trim().slice(0, LOOM_LIMITS.OUTLINE_KEY_MAX)
+      : null,
+    challengePhase: FABLELOOM_CHALLENGE_PHASES.includes(raw.challengePhase)
+      ? raw.challengePhase
+      : null,
     imagePrompt: trimTo(raw.imagePrompt, LOOM_LIMITS.IMAGE_PROMPT_MAX),
     image: isSafeImageFilename(raw.image) ? raw.image : null,
     imageJobId: isStr(raw.imageJobId) && raw.imageJobId ? raw.imageJobId.slice(0, 200) : null,
@@ -226,6 +236,7 @@ function sanitizeSeriesPlan(raw, episodes) {
       .slice(0, LOOM_LIMITS.PLAN_ITEMS_MAX)
       .map((item) => ({
         id: planItemId('plot', item.id, plotIds),
+        kind: fableLoomPlotPointKind(item),
         title: trimTo(item.title, LOOM_LIMITS.PLAN_ITEM_TITLE_MAX),
         description: trimTo(item.description, LOOM_LIMITS.PLAN_ITEM_DESCRIPTION_MAX),
         episodeId: planEpisodeRef(item.episodeId, episodeIds),
@@ -262,8 +273,18 @@ export function sanitizeLoom(raw) {
     .filter(Boolean)
     .slice(0, LOOM_LIMITS.EPISODES_MAX)
     .sort((a, b) => a.number - b.number || a.createdAt.localeCompare(b.createdAt));
+  const seriesPlan = sanitizeSeriesPlan(raw.seriesPlan, episodes);
   for (const episode of episodes) {
     if (episode.storyOutline?.validation?.status !== 'valid') continue;
+    const outline = analyzeStoryOutline(episode.storyOutline, {
+      participationMode,
+      requireAudienceIntroduction: episode === episodes[0],
+      challenges: fableLoomEpisodeChallenges({ seriesPlan }, episode.id),
+    });
+    if (outline.stats.errorCount > 0) {
+      episode.storyOutline.validation = { status: 'invalid', issues: outline.issues };
+      continue;
+    }
     const sync = analyzeStoryOutlineTeleplaySync(episode, episode.storyOutline, {
       participationMode,
     });
@@ -273,6 +294,23 @@ export function sanitizeLoom(raw) {
   }
   const protagonistCharacterId = nullableRef(raw.protagonistCharacterId);
   const protagonistWardrobeId = nullableRef(raw.protagonistWardrobeId);
+  const productionStatus = raw.productionStatus && typeof raw.productionStatus === 'object'
+    ? {
+      editorialApprovedAt: isStr(raw.productionStatus.editorialApprovedAt)
+        ? raw.productionStatus.editorialApprovedAt.slice(0, 80)
+        : null,
+      editorialApprovalSource: ['manual', 'autopilot'].includes(raw.productionStatus.editorialApprovalSource)
+        ? raw.productionStatus.editorialApprovalSource
+        : null,
+      deliveryApprovedAt: isStr(raw.productionStatus.deliveryApprovedAt)
+        ? raw.productionStatus.deliveryApprovedAt.slice(0, 80)
+        : null,
+    }
+    : {
+      editorialApprovedAt: null,
+      editorialApprovalSource: null,
+      deliveryApprovedAt: null,
+    };
   return {
     id: raw.id,
     schemaVersion: 3,
@@ -296,7 +334,8 @@ export function sanitizeLoom(raw) {
     protagonistWardrobeLocked: Boolean(protagonistWardrobeId && raw.protagonistWardrobeLocked !== false),
     universeId: nullableRef(raw.universeId),
     seriesId: nullableRef(raw.seriesId),
-    seriesPlan: sanitizeSeriesPlan(raw.seriesPlan, episodes),
+    seriesPlan,
+    productionStatus,
     episodes,
     createdAt: isStr(raw.createdAt) && raw.createdAt ? raw.createdAt : now,
     updatedAt: isStr(raw.updatedAt) && raw.updatedAt ? raw.updatedAt : now,
@@ -304,6 +343,78 @@ export function sanitizeLoom(raw) {
     deletedAt,
   };
 }
+
+const editorialVisualCanon = (visualCanon) => {
+  if (!visualCanon) return null;
+  const { storyboardImageApproved: _storyboardImageApproved, ...storyCanon } = visualCanon;
+  return storyCanon;
+};
+
+// Approval invalidation is content-aware: authoring edits reopen editorial and
+// final delivery, while a completed render only reopens delivery. This avoids
+// using loom.updatedAt as a proxy, because media completion also updates it.
+const editorialContentSignature = (loom) => JSON.stringify({
+  name: loom.name,
+  logline: loom.logline,
+  premise: loom.premise,
+  styleNotes: loom.styleNotes,
+  participationMode: loom.participationMode,
+  audienceCommunicationMedium: loom.audienceCommunicationMedium,
+  format: loom.format,
+  protagonistCharacterId: loom.protagonistCharacterId,
+  protagonistWardrobeId: loom.protagonistWardrobeId,
+  protagonistWardrobeLocked: loom.protagonistWardrobeLocked,
+  universeId: loom.universeId,
+  seriesId: loom.seriesId,
+  seriesPlan: loom.seriesPlan,
+  episodes: loom.episodes.map((episode) => ({
+    id: episode.id,
+    number: episode.number,
+    title: episode.title,
+    synopsis: episode.synopsis,
+    startNodeId: episode.startNodeId,
+    storyOutline: episode.storyOutline ? {
+      version: episode.storyOutline.version,
+      startKey: episode.storyOutline.startKey,
+      scenes: episode.storyOutline.scenes,
+    } : null,
+    nodes: episode.nodes.map((node) => ({
+      id: node.id,
+      title: node.title,
+      prose: node.prose,
+      plotPointId: node.plotPointId,
+      challengePhase: node.challengePhase,
+      imagePrompt: node.imagePrompt,
+      videoPrompt: node.videoPrompt,
+      cameraMovement: node.cameraMovement,
+      visualCanon: editorialVisualCanon(node.visualCanon),
+      playbackMode: node.playbackMode,
+      audienceConnection: node.audienceConnection,
+      protagonistPresence: node.protagonistPresence,
+      interactionWindow: node.interactionWindow,
+      isEnding: node.isEnding,
+      format: node.format,
+      endingLabel: node.endingLabel,
+      transitions: node.transitions,
+    })),
+  })),
+});
+
+const deliveryContentSignature = (loom) => JSON.stringify({
+  renderSettings: loom.renderSettings,
+  episodes: loom.episodes.map((episode) => ({
+    id: episode.id,
+    nodes: episode.nodes.map((node) => ({
+      id: node.id,
+      image: node.image,
+      imageJobId: node.imageJobId,
+      videoHistoryId: node.videoHistoryId,
+      playbackAssets: node.playbackAssets,
+      visualConditioning: node.visualConditioning,
+      storyboardImageApproved: node.visualCanon?.storyboardImageApproved === true,
+    })),
+  })),
+});
 
 const notFound = (what = 'Loom') => new ServerError(`${what} not found`, { status: 404, code: 'NOT_FOUND' });
 
@@ -432,10 +543,21 @@ export async function mutateLoom(id, mutator) {
   if (!isValidLoomId(id)) throw notFound();
   const result = await queueLoomWrite(id, async () => {
     const current = await requireLoomRaw(id);
+    const currentEditorialSignature = editorialContentSignature(current);
+    const currentDeliverySignature = deliveryContentSignature(current);
     const changed = await mutator(current);
     if (!changed) return { loom: current, changed: false };
     const next = sanitizeLoom({ ...changed, id, updatedAt: new Date().toISOString() });
     if (!next) throw new ServerError('Invalid loom record', { status: 400, code: 'VALIDATION_ERROR' });
+    const editorialChanged = editorialContentSignature(next) !== currentEditorialSignature;
+    const deliveryChanged = deliveryContentSignature(next) !== currentDeliverySignature;
+    if (editorialChanged) {
+      next.productionStatus.editorialApprovedAt = null;
+      next.productionStatus.editorialApprovalSource = null;
+      next.productionStatus.deliveryApprovedAt = null;
+    } else if (deliveryChanged) {
+      next.productionStatus.deliveryApprovedAt = null;
+    }
     await writeRaw(id, next);
     return { loom: next, changed: true };
   });
@@ -445,12 +567,14 @@ export async function mutateLoom(id, mutator) {
 
 const PATCH_FIELDS = [
   'name', 'logline', 'premise', 'styleNotes', 'format', 'playSettings', 'renderSettings', 'seriesPlan',
+  'productionStatus',
   'protagonistCharacterId', 'protagonistWardrobeId', 'protagonistWardrobeLocked',
   'participationMode', 'audienceCommunicationMedium', 'universeId', 'seriesId',
 ];
 
 const RESTORABLE_FIELDS = [
   'name', 'logline', 'premise', 'styleNotes', 'format', 'playSettings', 'renderSettings', 'seriesPlan',
+  'productionStatus',
   'protagonistCharacterId', 'protagonistWardrobeId', 'protagonistWardrobeLocked',
   'participationMode', 'audienceCommunicationMedium', 'episodes',
 ];
@@ -505,22 +629,52 @@ export async function deleteLoom(id) {
 const preserveLegacyVisualProduction = (remote, local, senderVersion) => {
   if (!local || senderVersion >= 5) return remote;
   const localEpisodes = new Map(local.episodes.map((episode) => [episode.id, episode]));
+  const localPlotPoints = new Map((local.seriesPlan?.plotPoints || []).map((item) => [item.id, item]));
   return {
     ...remote,
-    ...(senderVersion < 5 ? { renderSettings: local.renderSettings } : {}),
+    ...(senderVersion < 5 ? {
+      renderSettings: local.renderSettings,
+      productionStatus: local.productionStatus,
+    } : {}),
+    seriesPlan: senderVersion < 5 ? {
+      ...remote.seriesPlan,
+      plotPoints: (remote.seriesPlan?.plotPoints || []).map((item) => ({
+        ...item,
+        ...(localPlotPoints.has(item.id) ? { kind: localPlotPoints.get(item.id).kind } : {}),
+      })),
+    } : remote.seriesPlan,
     ...(senderVersion < 4 ? {
       protagonistCharacterId: local.protagonistCharacterId,
       protagonistWardrobeId: local.protagonistWardrobeId,
       protagonistWardrobeLocked: local.protagonistWardrobeLocked,
     } : {}),
     episodes: remote.episodes.map((episode) => {
-      const localNodes = new Map((localEpisodes.get(episode.id)?.nodes || []).map((node) => [node.id, node]));
+      const localEpisode = localEpisodes.get(episode.id);
+      const localNodes = new Map((localEpisode?.nodes || []).map((node) => [node.id, node]));
+      const localOutlineScenes = new Map((localEpisode?.storyOutline?.scenes || [])
+        .map((scene) => [scene.key, scene]));
       return {
         ...episode,
+        ...(senderVersion < 5 && episode.storyOutline ? {
+          storyOutline: {
+            ...episode.storyOutline,
+            scenes: episode.storyOutline.scenes.map((scene) => ({
+              ...scene,
+              ...(localOutlineScenes.has(scene.key) ? {
+                plotPointId: localOutlineScenes.get(scene.key).plotPointId,
+                challengePhase: localOutlineScenes.get(scene.key).challengePhase,
+              } : {}),
+            })),
+          },
+        } : {}),
         nodes: episode.nodes.map((node) => {
           const localNode = localNodes.get(node.id);
           return localNode ? {
             ...node,
+            ...(senderVersion < 5 ? {
+              plotPointId: localNode.plotPointId,
+              challengePhase: localNode.challengePhase,
+            } : {}),
             ...(senderVersion < 4 ? { protagonistPresence: localNode.protagonistPresence } : {}),
             ...(senderVersion < 3 ? {
               visualCanon: localNode.visualCanon,
@@ -685,7 +839,7 @@ export function deleteEpisode(loomId, episodeId) {
 // --- Nodes & transitions ----------------------------------------------------
 
 const NODE_PATCH_FIELDS = [
-  'title', 'prose', 'imagePrompt', 'videoPrompt', 'cameraMovement', 'playbackMode',
+  'title', 'prose', 'plotPointId', 'challengePhase', 'imagePrompt', 'videoPrompt', 'cameraMovement', 'playbackMode',
   'audienceConnection', 'protagonistPresence', 'visualCanon', 'videoHistoryId', 'playbackAssets', 'interactionWindow',
   'isEnding', 'endingLabel', 'pos', 'transitions',
 ];
@@ -821,6 +975,18 @@ export async function attachNodeImage(loomId, episodeId, nodeId, { filename, job
     node.image = filename;
     node.imageJobId = isStr(jobId) ? jobId : null;
     node.visualConditioning = visualConditioning;
+    const retainedConditioning = Object.fromEntries(Object.entries(
+      node.playbackAssets?.visualConditioningByAsset || {},
+    ).filter(([, manifest]) => manifest?.capability?.kind !== 'image'));
+    if (node.playbackAssets) {
+      node.playbackAssets = {
+        ...node.playbackAssets,
+        ...(Object.keys(retainedConditioning).length
+          ? { visualConditioningByAsset: retainedConditioning }
+          : {}),
+      };
+      if (!Object.keys(retainedConditioning).length) delete node.playbackAssets.visualConditioningByAsset;
+    }
     if (visualConditioning && isSafeVideoHistoryId(visualConditioning.assetId)) {
       node.playbackAssets = {
         ...(node.playbackAssets || {}),

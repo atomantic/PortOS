@@ -24,8 +24,9 @@ export default function LoomContinuityPanel({
 }) {
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [runReview, reviewing] = useAsyncAction(async () => {
-    const result = await reviewLoomEpisodeContinuity(loom.id, episode.id, {}, { silent: true });
-    onReviewChange(result);
+    const requestedEpisodeId = episode.id;
+    const result = await reviewLoomEpisodeContinuity(loom.id, requestedEpisodeId, {}, { silent: true });
+    onReviewChange(requestedEpisodeId, result);
   }, { errorMessage: 'Continuity review failed' });
   const findings = (review?.findings || []).filter((finding) => (
     categoryFilter === 'all' || finding.category === categoryFilter

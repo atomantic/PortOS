@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Check, Circle, Loader2, LockKeyhole, MoveRight } from 'lucide-react';
 import { fableLoomProductionWorkflow } from '../../lib/fableLoomReadiness';
-import { getLoomEditorialAutopilotStatus } from '../../services/api';
+import { useAsyncAction } from '../../hooks/useAsyncAction';
+import { getLoomEditorialAutopilotStatus, updateLoom } from '../../services/api';
 
 const ACTIVE_STATUSES = new Set(['running', 'canceling']);
 
 const ACTION_LABELS = {
   settings: 'Open story settings',
-  'series-plan': 'Open series plan',
-  outline: 'Open episode outline',
+  'series-arc': 'Open the series arc',
+  challenges: 'Plan playable challenges',
+  editorial: 'Open editorial tools',
+  handoffs: 'Author viewer handoffs',
   'episode-setup': 'Open episode setup',
   'story-review': 'Review structure',
   continuity: 'Open continuity review',
@@ -26,23 +29,29 @@ export default function LoomWorkflowPanel({
   loom,
   episode,
   structural,
+  structuralByEpisode,
   continuityReview,
+  continuityByEpisode,
   onAction,
+  onLoomUpdate,
 }) {
   const [editorialRun, setEditorialRun] = useState(null);
 
   useEffect(() => {
     let canceled = false;
     let timer;
-    const load = () => getLoomEditorialAutopilotStatus(loom.id, { silent: true })
-      .then(({ run }) => {
-        if (canceled) return;
-        setEditorialRun(run || null);
-        if (ACTIVE_STATUSES.has(run?.status)) timer = setTimeout(load, 2000);
-      })
-      .catch(() => {
-        if (!canceled) setEditorialRun(null);
-      });
+    setEditorialRun(null);
+    const load = async () => {
+      let delay = 5000;
+      await getLoomEditorialAutopilotStatus(loom.id, { silent: true })
+        .then(({ run }) => {
+          if (canceled) return;
+          setEditorialRun(run || null);
+          if (ACTIVE_STATUSES.has(run?.status)) delay = 2000;
+        })
+        .catch(() => {});
+      if (!canceled) timer = setTimeout(load, delay);
+    };
     load();
     return () => {
       canceled = true;
@@ -52,11 +61,35 @@ export default function LoomWorkflowPanel({
 
   const workflow = useMemo(() => fableLoomProductionWorkflow(loom, episode, {
     structural,
+    structuralByEpisode,
     editorialRun,
     continuityReview,
-  }), [continuityReview, editorialRun, episode, loom, structural]);
+    continuityByEpisode,
+  }), [continuityByEpisode, continuityReview, editorialRun, episode, loom, structural, structuralByEpisode]);
   const current = workflow.stages[workflow.currentIndex];
   const progress = Math.round((workflow.completedCount / workflow.totalSteps) * 100);
+
+  const [approveEditorial, approvingEditorial] = useAsyncAction(async () => {
+    const updated = await updateLoom(loom.id, {
+      productionStatus: {
+        ...loom.productionStatus,
+        editorialApprovedAt: new Date().toISOString(),
+        editorialApprovalSource: 'manual',
+        deliveryApprovedAt: null,
+      },
+    }, { silent: true });
+    onLoomUpdate?.(updated);
+  }, { errorMessage: 'Could not record editorial approval' });
+
+  const [approveDelivery, approvingDelivery] = useAsyncAction(async () => {
+    const updated = await updateLoom(loom.id, {
+      productionStatus: {
+        ...loom.productionStatus,
+        deliveryApprovedAt: new Date().toISOString(),
+      },
+    }, { silent: true });
+    onLoomUpdate?.(updated);
+  }, { errorMessage: 'Could not approve final delivery' });
 
   return (
     <section className="space-y-4" aria-label="Production workflow">
@@ -112,15 +145,43 @@ export default function LoomWorkflowPanel({
       </ol>
 
       {current ? (
-        <button
-          type="button"
-          onClick={() => onAction?.(current.action)}
-          className="flex min-h-11 w-full items-center justify-center gap-2 rounded bg-port-accent px-3 py-2 text-sm font-medium text-white hover:bg-port-accent/90"
-        >
-          {ACTION_LABELS[current.action] || 'Open current step'}
-          <MoveRight size={14} />
-        </button>
-      ) : null}
+        <div className="space-y-2">
+          <button
+            type="button"
+            onClick={() => onAction?.(current.action)}
+            className="flex min-h-11 w-full items-center justify-center gap-2 rounded bg-port-accent px-3 py-2 text-sm font-medium text-white hover:bg-port-accent/90"
+          >
+            {ACTION_LABELS[current.action] || 'Open current step'}
+            <MoveRight size={14} />
+          </button>
+          {current.id === 'editorial' ? (
+            <button
+              type="button"
+              onClick={approveEditorial}
+              disabled={approvingEditorial}
+              className="flex min-h-11 w-full items-center justify-center gap-2 rounded border border-port-accent px-3 py-2 text-sm font-medium text-port-accent disabled:opacity-50"
+            >
+              {approvingEditorial ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+              Mark manual editorial review complete
+            </button>
+          ) : null}
+          {current.id === 'delivery' ? (
+            <button
+              type="button"
+              onClick={approveDelivery}
+              disabled={approvingDelivery}
+              className="flex min-h-11 w-full items-center justify-center gap-2 rounded border border-port-accent px-3 py-2 text-sm font-medium text-port-accent disabled:opacity-50"
+            >
+              {approvingDelivery ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+              Approve final delivery
+            </button>
+          ) : null}
+        </div>
+      ) : (
+        <p className="rounded border border-port-success/30 bg-port-success/10 p-3 text-center text-sm font-medium text-port-success">
+          Production complete · 12 of 12 gates cleared
+        </p>
+      )}
     </section>
   );
 }

@@ -30,6 +30,8 @@ import {
   analyzeStoryOutline,
   analyzeStoryOutlineTeleplaySync,
   describeStoryOutlineForPrompt,
+  fableLoomEpisodeChallenges,
+  fableLoomPlotPointKind,
   isStoryOutlineTeleplaySyncIssue,
   sanitizeStoryOutline,
 } from '../../lib/fableLoomOutline.js';
@@ -153,14 +155,13 @@ const seriesPlanContext = (loom, episode) => {
     ? [...items].sort((a, b) => Number(matchesEpisode(b, episode.id)) - Number(matchesEpisode(a, episode.id)))
     : items;
   const plotPoints = relevantFirst(plan.plotPoints || [], (item, id) => item.episodeId === id)
-    .slice(0, 12)
     .map((item, index) => {
       const assignment = item.episodeId ? ` [planned for ${episodeLabels.get(item.episodeId) || item.episodeId}]` : ' [unassigned]';
-      const challenge = /^challenge\s*(?:[-—:]|$)/i.test(item.title?.trim() || '');
+      const challenge = fableLoomPlotPointKind(item) === 'challenge';
       return [
-        `Plot point ${index + 1}${assignment}: ${item.title || 'Untitled'}${item.description ? ` — ${trimTo(item.description, 700)}` : ''}`,
+        `Plot point ${index + 1} id=${item.id} kind=${challenge ? 'challenge' : 'beat'}${assignment}: ${item.title || 'Untitled'}${item.description ? ` — ${trimTo(item.description, 700)}` : ''}`,
         challenge
-          ? 'PLAYABLE CHALLENGE CONTRACT: expand this plot point into multiple camera-cut beats covering clue/setup, a connected audience decision loop, distinct success and failure consequences, a costly recovery path, and a payoff; failure must continue rather than reset or dead-end.'
+          ? 'PLAYABLE CHALLENGE CONTRACT: map this exact plot-point id onto separate outline/teleplay beats with challengePhase values setup, decision, success, failure, and recovery. The setup must lead to the decision loop; the decision must reach both success and failure; both outcomes must continue to recovery/payoff. Failure continues with a visible cost rather than resetting or dead-ending.'
           : '',
       ].filter(Boolean).join('\n');
     });
@@ -285,6 +286,8 @@ const seriesPlanGenerationFingerprint = (loom) => JSON.stringify({
 const generatedNodeFields = (raw) => ({
   title: raw.title,
   prose: raw.prose,
+  plotPointId: raw.plotPointId,
+  challengePhase: raw.challengePhase,
   imagePrompt: raw.imagePrompt,
   videoPrompt: raw.videoPrompt,
   cameraMovement: raw.cameraMovement,
@@ -365,6 +368,7 @@ const outlineStructuralAnalysis = (loom, episode) => {
   const structural = analyzeStoryOutline(episode.storyOutline, {
     participationMode: loom.participationMode,
     requireAudienceIntroduction: requiresAudienceIntroduction(loom, episode),
+    challenges: fableLoomEpisodeChallenges(loom, episode.id),
   });
   const teleplaySync = analyzeStoryOutlineTeleplaySync(episode, episode.storyOutline, {
     participationMode: loom.participationMode,
@@ -420,6 +424,7 @@ export async function generateEpisodeOutline(loomId, episodeId, {
   const validation = analyzeStoryOutline(outline, {
     participationMode: loom.participationMode,
     requireAudienceIntroduction: requiresAudienceIntroduction(loom, episode),
+    challenges: fableLoomEpisodeChallenges(loom, episode.id),
   });
   const draft = {
     ...outline,
@@ -488,6 +493,7 @@ export async function weaveEpisode(loomId, episodeId, {
     ? analyzeStoryOutline(episode.storyOutline, {
       participationMode: loom.participationMode,
       requireAudienceIntroduction: requiresAudienceIntroduction(loom, episode),
+      challenges: fableLoomEpisodeChallenges(loom, episode.id),
     })
     : null;
   const currentOutlineErrors = expandFromOutline
@@ -544,13 +550,33 @@ export async function weaveEpisode(loomId, episodeId, {
     action: 'weave-episode', label: 'Weaving episode', source: 'fableloom-weave',
   });
 
-  const { nodes, startNodeId, idByKey } = mapGeneratedGraph(content);
-  const expandedOutline = expandFromOutline
+  const { nodes: generatedNodes, startNodeId, idByKey } = mapGeneratedGraph(content);
+  const remappedOutline = expandFromOutline
+    ? remapOutlineToExpandedNodeIds(episode.storyOutline, idByKey)
+    : null;
+  const remappedOutlineByNodeId = new Map((remappedOutline?.scenes || [])
+    .map((scene) => [scene.key, scene]));
+  const nodes = generatedNodes.map((node) => {
+    const outlineScene = remappedOutlineByNodeId.get(node.id);
+    return outlineScene ? {
+      ...node,
+      plotPointId: outlineScene.plotPointId || null,
+      challengePhase: outlineScene.challengePhase || null,
+    } : node;
+  });
+  const remappedOutlineValidation = remappedOutline
+    ? analyzeStoryOutline(remappedOutline, {
+      participationMode: loom.participationMode,
+      requireAudienceIntroduction: requiresAudienceIntroduction(loom, episode),
+      challenges: fableLoomEpisodeChallenges(loom, episode.id),
+    })
+    : null;
+  const expandedOutline = remappedOutline
     ? {
-      ...remapOutlineToExpandedNodeIds(episode.storyOutline, idByKey),
+      ...remappedOutline,
       validation: {
-        status: 'valid',
-        issues: [],
+        status: remappedOutlineValidation.stats.errorCount ? 'invalid' : 'valid',
+        issues: remappedOutlineValidation.issues,
         validatedAt: new Date().toISOString(),
       },
     }
@@ -920,7 +946,8 @@ export async function generateSeriesPlan(loomId, { providerId, model, effort, op
   const isUsablePlanItem = (item) => item && typeof item === 'object'
     && ((isStr(item.title) && item.title.trim()) || (isStr(item.description) && item.description.trim()));
   const plotPoints = (Array.isArray(content?.plotPoints) ? content.plotPoints : [])
-    .filter(isUsablePlanItem);
+    .filter(isUsablePlanItem)
+    .map((item) => ({ ...item, kind: fableLoomPlotPointKind(item) }));
   const sideQuests = (Array.isArray(content?.sideQuests) ? content.sideQuests : [])
     .filter(isUsablePlanItem);
   if (!storyArc.trim() || !plotPoints.length || !sideQuests.length) {
@@ -1042,7 +1069,7 @@ export async function feedbackSeriesPlan(loomId, {
     const plan = { ...current.seriesPlan };
     if (hasOwn(content, 'storyArc') && typeof content.storyArc === 'string') plan.storyArc = content.storyArc;
     plan.plotPoints = applyPlanItemEdits(plan.plotPoints, content.plotPointEdits, content.plotPointOrder, {
-      prefix: 'plot', fields: ['title', 'description', 'episodeId'],
+      prefix: 'plot', fields: ['kind', 'title', 'description', 'episodeId'],
     });
     plan.sideQuests = applyPlanItemEdits(plan.sideQuests, content.sideQuestEdits, content.sideQuestOrder, {
       prefix: 'quest', fields: ['title', 'description', 'status', 'startEpisodeId', 'endEpisodeId'],

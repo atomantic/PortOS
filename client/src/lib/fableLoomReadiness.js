@@ -33,7 +33,8 @@ const reachableNodes = (episode) => {
   return ordered;
 };
 
-const playableChallenge = (item) => /^challenge\s*(?:[-—:]|$)/i.test(item?.title?.trim() || '');
+const playableChallenge = (item) => item?.kind === 'challenge'
+  || (item?.kind == null && /^challenge\s*(?:[-—:]|$)/i.test(item?.title?.trim() || ''));
 
 const nodeHasMotionDelivery = (node) => {
   const assets = node?.playbackAssets || {};
@@ -140,8 +141,10 @@ export function fableLoomMediaReadiness(loom, episode) {
  */
 export function fableLoomProductionWorkflow(loom, episode, {
   structural = null,
+  structuralByEpisode = null,
   editorialRun = null,
   continuityReview = null,
+  continuityByEpisode = null,
 } = {}) {
   const episodes = asArray(loom?.episodes);
   const plotPoints = asArray(loom?.seriesPlan?.plotPoints);
@@ -150,7 +153,13 @@ export function fableLoomProductionWorkflow(loom, episode, {
   const outlinesReady = episodes.length > 0
     && episodes.every((item) => item?.storyOutline?.validation?.status === 'valid');
   const teleplaysReady = episodes.length > 0 && episodes.every((item) => asArray(item?.nodes).length > 0);
-  const structureReady = teleplaysReady && structural?.stats?.errorCount === 0;
+  const structuralResults = episodes.map((item) => (
+    structuralByEpisode?.[item.id] || (item.id === episode?.id ? structural : null)
+  ));
+  const structureReviewedCount = structuralResults.filter(Boolean).length;
+  const structurePassedCount = structuralResults.filter((result) => result?.stats?.errorCount === 0).length;
+  const structureReady = teleplaysReady && episodes.length > 0
+    && structurePassedCount === episodes.length;
   const planReady = challenges.length > 0 && plotPoints.every((item) => (
     hasText(item?.title) && hasText(item?.description) && hasText(item?.episodeId)
   ));
@@ -158,13 +167,15 @@ export function fableLoomProductionWorkflow(loom, episode, {
   const motionReady = reachable.length > 0 && reachable.every(nodeHasMotionDelivery)
     && structural?.productionReadiness?.ready !== false;
   const handoffsReady = deliveryHandoffsReady(loom);
-  const selectedEpisodeLabel = episode?.number ? `Episode ${episode.number}` : 'Selected episode';
-  const editorialCompletedAt = Date.parse(editorialRun?.completedAt || '');
-  const storyUpdatedAt = Date.parse(loom?.updatedAt || '');
-  const editorialIsCurrent = editorialRun?.status === 'completed'
-    && (!Number.isFinite(editorialCompletedAt)
-      || !Number.isFinite(storyUpdatedAt)
-      || editorialCompletedAt >= storyUpdatedAt);
+  const continuityResults = episodes.map((item) => (
+    continuityByEpisode?.[item.id] || (item.id === episode?.id ? continuityReview : null)
+  ));
+  const continuityReviewedCount = continuityResults.filter(Boolean).length;
+  const continuityPassedCount = continuityResults.filter((result) => result?.passed === true).length;
+  const continuityReady = episodes.length > 0 && continuityPassedCount === episodes.length;
+  const editorialIsCurrent = hasText(loom?.productionStatus?.editorialApprovedAt)
+    || editorialRun?.status === 'completed';
+  const deliveryApproved = hasText(loom?.productionStatus?.deliveryApprovedAt);
 
   const stages = [
     {
@@ -173,19 +184,19 @@ export function fableLoomProductionWorkflow(loom, episode, {
       detail: 'Lock the format, premise, protagonist, and audience participation mode.',
     },
     {
-      id: 'series-arc', label: 'Series arc', action: 'series-plan',
+      id: 'series-arc', label: 'Series arc', action: 'series-arc',
       complete: hasText(loom?.seriesPlan?.storyArc),
       detail: 'Define the beginning-to-end dramatic movement before expanding episodes.',
     },
     {
-      id: 'challenges', label: 'Plot points & playable challenges', action: 'series-plan',
+      id: 'challenges', label: 'Plot points & playable challenges', action: 'challenges',
       complete: planReady,
       detail: challenges.length
         ? `${challenges.length} playable challenge${challenges.length === 1 ? '' : 's'} mapped to episodes; every plot point needs an assignment.`
         : 'Add at least one playable challenge, then map every tentpole and challenge to an episode; each challenge needs setup, a choice loop, success, failure, and recovery.',
     },
     {
-      id: 'outlines', label: 'Episode beat outlines', action: 'outline',
+      id: 'outlines', label: 'Episode beat outlines', action: 'episode-setup',
       complete: outlinesReady,
       detail: `${episodes.filter((item) => item?.storyOutline?.validation?.status === 'valid').length}/${episodes.length} episode outlines validated.`,
     },
@@ -197,28 +208,26 @@ export function fableLoomProductionWorkflow(loom, episode, {
     {
       id: 'structure', label: 'Structure & path checks', action: 'story-review',
       complete: structureReady,
-      detail: structural?.stats
-        ? `${selectedEpisodeLabel}: ${structural.stats.errorCount} structural blocker${structural.stats.errorCount === 1 ? '' : 's'}.`
-        : `Validate ${selectedEpisodeLabel.toLowerCase()}'s graph, every choice, and every reachable ending.`,
+      detail: structureReviewedCount
+        ? `${structurePassedCount}/${episodes.length} episode graphs pass every path and reachable-ending check.`
+        : 'Validate every episode graph, choice, and reachable ending.',
     },
     {
-      id: 'editorial', label: 'Editorial autopilot', action: 'series-plan',
+      id: 'editorial', label: 'Editorial review', action: 'editorial',
       complete: editorialIsCurrent,
-      detail: editorialRun?.status === 'completed' && !editorialIsCurrent
-        ? 'The story changed after the latest successful run; run editorial autopilot again.'
-        : editorialRun?.status
-          ? `Latest run: ${editorialRun.status}${editorialRun.stepIndex ? ` · step ${editorialRun.stepIndex}/${editorialRun.stepCount}` : ''}.`
-          : 'Repair the series, exercise every path, and repeat until editorial gates pass.',
+      detail: editorialRun?.status
+        ? `Latest autopilot: ${editorialRun.status}${editorialRun.stepIndex ? ` · step ${editorialRun.stepIndex}/${editorialRun.stepCount}` : ''}.`
+        : 'Review manually or let autopilot repair the series and exercise every path until the gates pass.',
     },
     {
       id: 'continuity', label: 'Continuity & canon', action: 'continuity',
-      complete: continuityReview?.passed === true,
-      detail: continuityReview
-        ? `${selectedEpisodeLabel}: ${continuityReview.summary?.errors || 0} errors and ${continuityReview.summary?.warnings || 0} warnings.`
-        : `Check ${selectedEpisodeLabel.toLowerCase()} for character, wardrobe, voice, pronunciation, playback, and convergence continuity.`,
+      complete: continuityReady,
+      detail: continuityReviewedCount
+        ? `${continuityPassedCount}/${episodes.length} episodes pass character, wardrobe, voice, playback, and convergence continuity.`
+        : 'Check every episode for character, wardrobe, voice, pronunciation, playback, and convergence continuity.',
     },
     {
-      id: 'handoffs', label: 'Viewer handoffs', action: 'series-plan',
+      id: 'handoffs', label: 'Viewer handoffs', action: 'handoffs',
       complete: handoffsReady,
       detail: handoffsReady
         ? 'Every enabled between-episode voicemail and finale teaser is authored.'
@@ -236,14 +245,16 @@ export function fableLoomProductionWorkflow(loom, episode, {
     },
     {
       id: 'delivery', label: 'Final playthrough & host', action: 'play',
-      complete: false,
-      detail: 'Run the audience experience end to end, then open the hosted demo when the final route feels right.',
+      complete: deliveryApproved,
+      detail: deliveryApproved
+        ? 'The end-to-end audience experience is approved for the hosted demo.'
+        : 'Run the audience experience end to end, then approve the final route for the hosted demo.',
     },
   ];
   const currentIndex = stages.findIndex((stage) => !stage.complete);
   return {
     currentIndex,
-    currentStep: currentIndex + 1,
+    currentStep: currentIndex < 0 ? stages.length : currentIndex + 1,
     totalSteps: stages.length,
     completedCount: currentIndex < 0 ? stages.length : currentIndex,
     stages: stages.map((stage, index) => ({

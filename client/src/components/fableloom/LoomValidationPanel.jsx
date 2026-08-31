@@ -7,11 +7,14 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router';
 import {
   AlertTriangle, CircleAlert, Film, Layers, ListChecks, Loader2, Sparkles, Waypoints,
 } from 'lucide-react';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
-import { reviewLoomEpisode, validateLoomEpisode } from '../../services/api';
+import {
+  reviewLoomEpisode, reviewLoomEpisodeContinuity, validateLoomEpisode,
+} from '../../services/api';
 import TabPills from '../ui/TabPills';
 import LoomContinuityPanel from './LoomContinuityPanel';
 import LoomProductionPanel from './LoomProductionPanel';
@@ -22,21 +25,34 @@ const severityIcon = (severity) => (severity === 'error' || severity === 'high'
   ? <CircleAlert size={13} className="text-port-error shrink-0 mt-0.5" />
   : <AlertTriangle size={13} className="text-port-warning shrink-0 mt-0.5" />);
 
+const PRODUCTION_TABS = new Set(['workflow', 'story', 'continuity', 'render']);
+
 export default function LoomValidationPanel({
   loom,
   episode,
   onSelectNode,
   onOpenSettings,
   onOpenSeriesPlan,
-  onOpenOutline,
   onOpenEpisodeSetup,
   onOpenPlay,
   onLoomUpdate,
 }) {
-  const [activeTab, setActiveTab] = useState('workflow');
-  const [structural, setStructural] = useState(null);
-  const [review, setReview] = useState(null);
-  const [continuityReview, setContinuityReview] = useState(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedTab = searchParams.get('production');
+  const activeTab = PRODUCTION_TABS.has(requestedTab) ? requestedTab : 'workflow';
+  const [structuralByEpisode, setStructuralByEpisode] = useState({});
+  const [reviewByEpisode, setReviewByEpisode] = useState({});
+  const [continuityByEpisode, setContinuityByEpisode] = useState({});
+  const structural = structuralByEpisode[episode.id] || null;
+  const review = reviewByEpisode[episode.id] || null;
+  const continuityReview = continuityByEpisode[episode.id] || null;
+
+  const setActiveTab = (tab) => setSearchParams((previous) => {
+    const next = new URLSearchParams(previous);
+    if (tab === 'workflow') next.delete('production');
+    else next.set('production', tab);
+    return next;
+  }, { replace: true });
 
 
   // Re-validate only when the graph STRUCTURE changes — a prose edit or a
@@ -44,28 +60,43 @@ export default function LoomValidationPanel({
   // keying on updatedAt would re-run the full-loom server analysis on every
   // blur-save.
   const structureKey = useMemo(
-    () => [
-      episode.startNodeId,
-      ...episode.nodes.map((n) =>
-        `${n.id}|${n.isEnding ? 1 : 0}|${n.playbackMode || 'decision'}|${(n.transitions || []).map((t) => `${t.targetNodeId}:${t.intent}`).join(',')}`),
-    ].join(';'),
-    [episode.startNodeId, episode.nodes],
+    () => (loom.episodes || []).map((item) => [
+      item.id,
+      item.startNodeId,
+      ...(item.nodes || []).map((node) =>
+        `${node.id}|${node.isEnding ? 1 : 0}|${node.playbackMode || 'decision'}|${(node.transitions || []).map((transition) => `${transition.targetNodeId}:${transition.intent}`).join(',')}`),
+    ].join(';')).join('||'),
+    [loom.episodes],
   );
 
   useEffect(() => {
-    validateLoomEpisode(loom.id, episode.id, { silent: true })
-      .then(setStructural)
-      .catch(() => setStructural(null));
-  }, [loom.id, episode.id, structureKey]);
+    let active = true;
+    Promise.all((loom.episodes || []).map(async (item) => [
+      item.id,
+      await validateLoomEpisode(loom.id, item.id, { silent: true }).catch(() => null),
+    ])).then((entries) => {
+      if (active) setStructuralByEpisode(Object.fromEntries(entries));
+    });
+    return () => { active = false; };
+  }, [loom.id, loom.episodes, structureKey]);
 
   useEffect(() => {
-    setContinuityReview(null);
-  }, [episode.id, episode.updatedAt]);
+    let active = true;
+    Promise.all((loom.episodes || []).map(async (item) => [
+      item.id,
+      await reviewLoomEpisodeContinuity(loom.id, item.id, {}, { silent: true }).catch(() => null),
+    ])).then((entries) => {
+      if (active) setContinuityByEpisode(Object.fromEntries(entries));
+    });
+    return () => { active = false; };
+  }, [loom.id, loom.updatedAt]);
 
   const handleWorkflowAction = (action) => {
     if (action === 'settings') onOpenSettings?.();
-    if (action === 'series-plan') onOpenSeriesPlan?.();
-    if (action === 'outline') onOpenOutline?.();
+    if (action === 'series-arc') onOpenSeriesPlan?.('arc');
+    if (action === 'challenges') onOpenSeriesPlan?.('challenges');
+    if (action === 'editorial') onOpenSeriesPlan?.('editorial');
+    if (action === 'handoffs') onOpenSeriesPlan?.('handoffs');
     if (action === 'episode-setup') onOpenEpisodeSetup?.();
     if (action === 'story-review') setActiveTab('story');
     if (action === 'continuity') setActiveTab('continuity');
@@ -74,9 +105,10 @@ export default function LoomValidationPanel({
   };
 
   const [runReview, reviewing] = useAsyncAction(async () => {
-    const result = await reviewLoomEpisode(loom.id, episode.id, {}, { silent: true });
-    setReview(result.review);
-    setStructural(result.structural);
+    const requestedEpisodeId = episode.id;
+    const result = await reviewLoomEpisode(loom.id, requestedEpisodeId, {}, { silent: true });
+    setReviewByEpisode((current) => ({ ...current, [requestedEpisodeId]: result.review }));
+    setStructuralByEpisode((current) => ({ ...current, [requestedEpisodeId]: result.structural }));
   }, { errorMessage: 'Story review failed' });
 
   const findingRow = (item, key, nodeId) => (
@@ -121,8 +153,11 @@ export default function LoomValidationPanel({
           loom={loom}
           episode={episode}
           structural={structural}
+          structuralByEpisode={structuralByEpisode}
           continuityReview={continuityReview}
+          continuityByEpisode={continuityByEpisode}
           onAction={handleWorkflowAction}
+          onLoomUpdate={onLoomUpdate}
         />
       ) : activeTab === 'render' ? (
         <LoomProductionPanel
@@ -136,7 +171,10 @@ export default function LoomValidationPanel({
           loom={loom}
           episode={episode}
           review={continuityReview}
-          onReviewChange={setContinuityReview}
+          onReviewChange={(reviewEpisodeId, result) => setContinuityByEpisode((current) => ({
+            ...current,
+            [reviewEpisodeId]: result,
+          }))}
           onSelectNode={onSelectNode}
         />
       ) : (

@@ -698,8 +698,9 @@ export default function FableLoomStory({ view = 'graph' }) {
                   episode={episode}
                   onSelectNode={selectNode}
                   onOpenSettings={() => setSettingsOpen(true)}
-                  onOpenSeriesPlan={() => navigate(episodePath('plan'))}
-                  onOpenOutline={() => navigate(`${episodePath(episode.id)}/outline`)}
+                  onOpenSeriesPlan={(section) => navigate(
+                    `${episodePath('plan')}${section ? `?section=${encodeURIComponent(section)}` : ''}`,
+                  )}
                   onOpenEpisodeSetup={() => setSetupOpen(true)}
                   onOpenPlay={() => setPlayOpen(true)}
                   onLoomUpdate={setLoom}

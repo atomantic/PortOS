@@ -6,7 +6,7 @@
  * lives in its own workflow tab so a producer never has to hunt below render settings.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -69,6 +69,7 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
   const [mode, setMode] = useState('current_canon');
   const [assetScope, setAssetScope] = useState('images');
   const [plan, setPlan] = useState(null);
+  const [planKey, setPlanKey] = useState(null);
   const [activeBatchRun, setActiveBatchRun] = useState(null);
   const [imageMode, setImageMode] = useState(null);
   const [imageModel, setImageModel] = useState(null);
@@ -78,6 +79,23 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
   const [imageModels, setImageModels] = useState([]);
   const [videoModels, setVideoModels] = useState([]);
   const renderFormat = asFableLoomRenderSettings(loom.renderSettings);
+  const productionIdentity = `${loom.id}:${episode.id}`;
+  const productionIdentityRef = useRef(productionIdentity);
+  productionIdentityRef.current = productionIdentity;
+  const planInputKey = JSON.stringify({
+    loomId: loom.id,
+    episodeId: episode.id,
+    formatId: renderFormat.formatId,
+    mode,
+    imageMode,
+    imageModel,
+    videoMode,
+    videoModel,
+    effort,
+  });
+  const planInputKeyRef = useRef(planInputKey);
+  planInputKeyRef.current = planInputKey;
+  const planRequestRef = useRef(0);
 
   const renderOptions = (targetMode = mode) => ({
     mode: targetMode,
@@ -89,8 +107,28 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
   });
 
   const [fetchPlan, planning] = useAsyncAction(async (targetMode = mode) => {
-    const res = await planLoomEpisodeProduction(loom.id, episode.id, renderOptions(targetMode), { silent: true });
+    const requestId = planRequestRef.current + 1;
+    planRequestRef.current = requestId;
+    const requestKey = JSON.stringify({
+      loomId: loom.id,
+      episodeId: episode.id,
+      formatId: renderFormat.formatId,
+      mode: targetMode,
+      imageMode,
+      imageModel,
+      videoMode,
+      videoModel,
+      effort,
+    });
+    const res = await planLoomEpisodeProduction(
+      loom.id,
+      episode.id,
+      renderOptions(targetMode),
+      { silent: true },
+    );
+    if (planRequestRef.current !== requestId || planInputKeyRef.current !== requestKey) return;
     setPlan(res);
+    setPlanKey(requestKey);
   }, { errorMessage: 'Production planning failed' });
 
   const [saveRenderFormat, savingRenderFormat] = useAsyncAction(async (formatId) => {
@@ -112,16 +150,28 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
   }, []);
 
   useEffect(() => {
+    setPlan(null);
+    setPlanKey(null);
     fetchPlan(mode);
-  }, [loom.id, loom.renderSettings?.formatId, episode.id, mode, imageMode, imageModel, videoMode, videoModel, effort]);
+  }, [planInputKey]);
+
+  useEffect(() => {
+    setActiveBatchRun(null);
+  }, [productionIdentity]);
 
   // Batch run polling
   useEffect(() => {
     if (!activeBatchRun || activeBatchRun.status !== 'in_progress') return undefined;
     const interval = setInterval(() => {
-      getLoomEpisodeProductionBatch(loom.id, episode.id, activeBatchRun.id, { silent: true })
+      getLoomEpisodeProductionBatch(
+        activeBatchRun.loomId,
+        activeBatchRun.episodeId,
+        activeBatchRun.id,
+        { silent: true },
+      )
         .then((updated) => {
           if (!updated) return;
+          if (`${updated.loomId}:${updated.episodeId}` !== productionIdentityRef.current) return;
           setActiveBatchRun(updated);
           if (updated.status === 'completed' || updated.status === 'canceled' || updated.status === 'failed') {
             fetchPlan(mode);
@@ -132,26 +182,37 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
         });
     }, 2000);
     return () => clearInterval(interval);
-  }, [activeBatchRun, loom.id, episode.id, mode]);
+  }, [activeBatchRun, mode]);
 
   const [startBatch, startingBatch] = useAsyncAction(async () => {
+    const requestedIdentity = productionIdentity;
     const res = await startLoomEpisodeProductionBatch(loom.id, episode.id, {
       ...renderOptions(),
       ...(selectedAssetTypes ? { assetTypes: selectedAssetTypes } : {}),
     }, { silent: true });
-    setActiveBatchRun(res);
+    if (productionIdentityRef.current === requestedIdentity) setActiveBatchRun(res);
   }, { errorMessage: 'Starting production batch failed' });
 
   const [cancelBatch, cancelingBatch] = useAsyncAction(async () => {
     if (!activeBatchRun) return;
-    const res = await cancelLoomEpisodeProductionBatch(loom.id, episode.id, activeBatchRun.id, { silent: true });
-    setActiveBatchRun(res);
+    const res = await cancelLoomEpisodeProductionBatch(
+      activeBatchRun.loomId,
+      activeBatchRun.episodeId,
+      activeBatchRun.id,
+      { silent: true },
+    );
+    if (`${res.loomId}:${res.episodeId}` === productionIdentityRef.current) setActiveBatchRun(res);
   }, { errorMessage: 'Canceling batch run failed' });
 
   const [resumeBatch, resumingBatch] = useAsyncAction(async () => {
     if (!activeBatchRun) return;
-    const res = await resumeLoomEpisodeProductionBatch(loom.id, episode.id, activeBatchRun.id, { silent: true });
-    setActiveBatchRun(res);
+    const res = await resumeLoomEpisodeProductionBatch(
+      activeBatchRun.loomId,
+      activeBatchRun.episodeId,
+      activeBatchRun.id,
+      { silent: true },
+    );
+    if (`${res.loomId}:${res.episodeId}` === productionIdentityRef.current) setActiveBatchRun(res);
   }, { errorMessage: 'Resuming batch run failed' });
 
   const scopedAssets = productionAssetsForScope(plan, assetScope);
@@ -187,6 +248,8 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
   )) === index);
   const canStart = readinessBlockers.length === 0
     && (mode !== 'exact_inputs' || !plan?.exactInputIssues?.length)
+    && planKey === planInputKey
+    && !planning
     && !savingRenderFormat;
 
   return (
@@ -406,17 +469,17 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
                   Existing media uses another aspect ratio
                 </div>
                 <p className="text-[11px] text-port-text-muted pl-4">
-                  {plan.formatMismatches.length} storyboard image(s), plus any clips made from them, will be regenerated at{' '}
+                  {plan.formatMismatches.length} media asset(s) will be regenerated at{' '}
                   {renderFormat.aspectRatio} ({renderFormat.width}×{renderFormat.height}).
                 </p>
                 {plan.formatMismatches.map((mismatch) => (
                   <button
-                    key={mismatch.nodeId}
+                    key={mismatch.assetId || `${mismatch.nodeId}-${mismatch.assetType || 'media'}`}
                     type="button"
                     onClick={() => onSelectNode?.(mismatch.nodeId)}
                     className="block w-full text-left text-[11px] text-port-text-muted pl-4 hover:text-port-text"
                   >
-                    {mismatch.nodeTitle || mismatch.nodeId}: {mismatch.actualWidth}×{mismatch.actualHeight} → {mismatch.expectedAspectRatio}
+                    {mismatch.nodeTitle || mismatch.nodeId} · {(mismatch.assetType || 'media').replaceAll('_', ' ')}: {mismatch.actualWidth}×{mismatch.actualHeight} → {mismatch.expectedAspectRatio}
                   </button>
                 ))}
               </div>

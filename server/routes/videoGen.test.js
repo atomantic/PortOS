@@ -2139,6 +2139,22 @@ describe('videoGen routes', () => {
     // "durable survives" assertion below from being satisfied by a temp unlink.
     const durableUnlinks = () => unlinkedPaths().filter((p) => /^[\\/]mock[\\/]uploads[\\/]/.test(p));
 
+    it('drops multipart temp files when FableLoom render settings cannot be loaded', async () => {
+      getLoom.mockRejectedValueOnce(new Error('record store unavailable'));
+      setPendingUpload(sourceUpload);
+
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'the threshold opens',
+        mode: 'image',
+        fableLoom: JSON.stringify({ loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' }),
+      });
+
+      expect(r.status).toBe(500);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      expect(unlinkedPaths()).toContain(sourceUpload.path);
+      expect(durableUnlinks()).toEqual([]);
+    });
+
     it('unlinks the half-written destination AND every earlier staged copy when copyFile rejects', async () => {
       // sourceImage stages fine, audioFile's copy blows up — the failure has
       // to take BOTH the destination it was writing and the already-staged

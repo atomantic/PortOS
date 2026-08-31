@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import LoomProductionPanel from './LoomProductionPanel';
 import * as api from '../../services/api';
 
@@ -149,6 +149,8 @@ describe('LoomProductionPanel', () => {
     api.planLoomEpisodeProduction.mockResolvedValueOnce({
       ...samplePlan,
       formatMismatches: [{
+        assetId: 'node-1:image',
+        assetType: 'image',
         nodeId: 'node-1',
         nodeTitle: 'Door challenge',
         actualWidth: 576,
@@ -162,8 +164,51 @@ describe('LoomProductionPanel', () => {
     render(<LoomProductionPanel loom={sampleLoom} episode={sampleEpisode} onSelectNode={vi.fn()} />);
 
     expect(await screen.findByText('Existing media uses another aspect ratio')).toBeInTheDocument();
-    expect(screen.getByText(/1 storyboard image\(s\).*16:9 \(1024×576\)/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Door challenge: 576×1024 → 16:9/i })).toBeInTheDocument();
+    expect(screen.getByText(/1 media asset\(s\).*16:9 \(1024×576\)/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Door challenge · image: 576×1024 → 16:9/i })).toBeInTheDocument();
+  });
+
+  it('ignores a stale plan response after the producer changes episodes', async () => {
+    let resolveFirst;
+    let resolveSecond;
+    api.planLoomEpisodeProduction
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve; }));
+    const { rerender } = render(
+      <LoomProductionPanel loom={sampleLoom} episode={sampleEpisode} onSelectNode={vi.fn()} />,
+    );
+    await waitFor(() => expect(api.planLoomEpisodeProduction).toHaveBeenCalledWith(
+      'loom-1', 'ep-1', { mode: 'current_canon' }, { silent: true },
+    ));
+
+    rerender(
+      <LoomProductionPanel
+        loom={sampleLoom}
+        episode={{ id: 'ep-2', title: 'Episode 2' }}
+        onSelectNode={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(api.planLoomEpisodeProduction).toHaveBeenCalledWith(
+      'loom-1', 'ep-2', { mode: 'current_canon' }, { silent: true },
+    ));
+    await act(async () => resolveSecond({
+      ...samplePlan,
+      plannedAssets: [{
+        id: 'asset-ep-2', nodeId: 'node-ep-2', nodeTitle: 'Episode 2 asset',
+        type: 'image', status: 'ready', stageIndex: 0,
+      }],
+    }));
+    expect(await screen.findByText('Episode 2 asset')).toBeInTheDocument();
+
+    await act(async () => resolveFirst({
+      ...samplePlan,
+      plannedAssets: [{
+        id: 'asset-ep-1', nodeId: 'node-ep-1', nodeTitle: 'Stale Episode 1 asset',
+        type: 'image', status: 'ready', stageIndex: 0,
+      }],
+    }));
+    expect(screen.queryByText('Stale Episode 1 asset')).not.toBeInTheDocument();
+    expect(screen.getByText('Episode 2 asset')).toBeInTheDocument();
   });
 
 });

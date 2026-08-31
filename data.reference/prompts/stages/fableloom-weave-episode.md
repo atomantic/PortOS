@@ -28,7 +28,7 @@ When an existing graph is present, this is a reweave: preserve its story events,
 
 {{outlineDigest}}
 
-When a validated beat outline is present, it is the authoritative story plan for this expansion. Reuse every supplied outline beat `key` exactly, including `startKey` and transition `targetKey` values; return one node for every beat with no additions or omissions. Preserve each beat's title, playback mode, audience connection, protagonist presence, ending contract, path targets, and path intents exactly. Add only the scene-level prose and production directions needed to make those beats playable. Do not replace the established protagonist, world, or episode handoff.
+When a validated beat outline is present, it is the authoritative story plan for this expansion. Reuse every supplied outline beat `key` exactly, including `startKey` and transition `targetKey` values; return one node for every beat with no additions or omissions. Preserve each beat's title, `plotPointId`, `challengePhase`, playback mode, audience connection, protagonist presence, ending contract, path targets, and path intents exactly. Add only the scene-level prose and production directions needed to make those beats playable. Do not replace the established protagonist, world, or episode handoff.
 
 ## Design contract
 
@@ -66,6 +66,8 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
       "key": "s1",
       "title": "string",
       "prose": "string",
+      "plotPointId": "exact assigned plot-point id or null",
+      "challengePhase": "setup, decision, success, failure, recovery, or null",
       "imagePrompt": "string",
       "videoPrompt": "string",
       "cameraMovement": "slow-dolly-in",

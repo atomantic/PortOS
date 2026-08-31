@@ -15,6 +15,10 @@ import {
 import { effectiveModelFor, effortAwareModelOptions } from '../../utils/providers';
 import { fieldClass, labelClass } from './fieldStyles';
 import LoomAiRunStatus from './LoomAiRunStatus';
+import {
+  FABLELOOM_CHALLENGE_PHASES,
+  fableLoomPlotPointKind,
+} from '../../../../server/lib/fableLoomOutline.js';
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const TELEPLAY_SYNC_ISSUE_CODES = new Set([
@@ -75,8 +79,11 @@ function ValidationResult({ validation, teleplayReplacementReady = false }) {
   );
 }
 
-function OutlineBeat({ scene, index, scenes, onChange, onRemovePath, onAddPath, expanded, onToggle }) {
+function OutlineBeat({
+  scene, index, scenes, plotPoints, onChange, onRemovePath, onAddPath, expanded, onToggle,
+}) {
   const possibleTargets = scenes.filter((candidate) => candidate.key !== scene.key);
+  const selectedPlotPoint = plotPoints.find((item) => item.id === scene.plotPointId) || null;
   return (
     <article className="rounded-lg border border-port-border bg-port-bg/40" data-testid={`outline-beat-${scene.key}`}>
       <button
@@ -90,6 +97,11 @@ function OutlineBeat({ scene, index, scenes, onChange, onRemovePath, onAddPath, 
           <span className="min-w-0">
             <span className="block break-words text-sm font-semibold">{scene.title || 'Untitled beat'}</span>
             <span className="mt-1 block break-words text-xs text-port-text-muted">{scene.summary || 'No log-line yet.'}</span>
+            {scene.challengePhase ? (
+              <span className="mt-1 inline-flex rounded bg-port-accent/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-port-accent">
+                {scene.challengePhase}
+              </span>
+            ) : null}
           </span>
         </span>
         {expanded ? <ChevronUp size={15} className="shrink-0 text-port-text-muted" /> : <ChevronDown size={15} className="shrink-0 text-port-text-muted" />}
@@ -111,6 +123,46 @@ function OutlineBeat({ scene, index, scenes, onChange, onRemovePath, onAddPath, 
               onChange={(event) => onChange({ summary: event.target.value })}
             />
           </FormField>
+          {plotPoints.length ? (
+            <div className="grid gap-2 sm:grid-cols-2">
+              <FormField label="Mapped plot point" labelClassName={labelClass} hint="Connect this beat to the durable series-plan item it realizes.">
+                <select
+                  className={fieldClass}
+                  value={scene.plotPointId || ''}
+                  onChange={(event) => {
+                    const plotPointId = event.target.value || null;
+                    const selected = plotPoints.find((item) => item.id === plotPointId);
+                    onChange({
+                      plotPointId,
+                      challengePhase: fableLoomPlotPointKind(selected) === 'challenge'
+                        ? scene.challengePhase || 'setup'
+                        : null,
+                    });
+                  }}
+                >
+                  <option value="">Not mapped</option>
+                  {plotPoints.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {fableLoomPlotPointKind(item) === 'challenge' ? 'Challenge: ' : ''}{item.title || 'Untitled plot point'}
+                    </option>
+                  ))}
+                </select>
+              </FormField>
+              {fableLoomPlotPointKind(selectedPlotPoint) === 'challenge' ? (
+                <FormField label="Challenge phase" labelClassName={labelClass} hint="Every challenge needs all five phases before validation passes.">
+                  <select
+                    className={fieldClass}
+                    value={scene.challengePhase || 'setup'}
+                    onChange={(event) => onChange({ challengePhase: event.target.value })}
+                  >
+                    {FABLELOOM_CHALLENGE_PHASES.map((phase) => (
+                      <option key={phase} value={phase}>{phase[0].toUpperCase() + phase.slice(1)}</option>
+                    ))}
+                  </select>
+                </FormField>
+              ) : null}
+            </div>
+          ) : null}
           <div className="grid grid-cols-2 gap-2">
             <label className={labelClass}>
               Playback
@@ -211,6 +263,8 @@ export default function LoomEpisodeOutlinePlanner({
   }, [episode.id]);
 
   const scenes = asArray(outline?.scenes);
+  const plotPoints = asArray(loom.seriesPlan?.plotPoints)
+    .filter((item) => item.episodeId === episode.id);
   const outlineStatus = validation?.stats
     ? (validation.stats.errorCount ? 'invalid' : 'valid')
     : outline?.validation?.status || 'draft';
@@ -350,6 +404,7 @@ export default function LoomEpisodeOutlinePlanner({
                 scene={scene}
                 index={index}
                 scenes={scenes}
+                plotPoints={plotPoints}
                 expanded={expandedKey === scene.key}
                 onToggle={() => setExpandedKey((current) => current === scene.key ? null : scene.key)}
                 onChange={(patch) => updateBeat(scene.key, patch)}

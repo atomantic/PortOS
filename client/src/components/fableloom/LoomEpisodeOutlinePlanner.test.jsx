@@ -112,4 +112,44 @@ describe('LoomEpisodeOutlinePlanner', () => {
     await user.click(replace);
     expect(onExpand).toHaveBeenCalledTimes(1);
   });
+
+  it('maps a playable challenge and its production phase onto a concrete beat', async () => {
+    const user = userEvent.setup();
+    const challengeLoom = {
+      ...loom,
+      seriesPlan: {
+        plotPoints: [{
+          id: 'plot-lock', kind: 'challenge', title: 'Open the sealed door',
+          description: 'Recall the planted code.', episodeId: 'ep-1',
+        }],
+      },
+    };
+    api.updateLoomEpisode.mockImplementation(async (_loomId, _episodeId, patch) => ({
+      ...challengeLoom,
+      episodes: [{ ...episode, storyOutline: patch.storyOutline }],
+    }));
+    render(
+      <LoomEpisodeOutlinePlanner
+        open loom={challengeLoom} episode={episode} onLoomUpdate={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByTestId('outline-beat-s1').querySelector('button'));
+    await user.selectOptions(screen.getByLabelText('Mapped plot point'), 'plot-lock');
+    await user.selectOptions(screen.getByLabelText('Challenge phase'), 'failure');
+    await user.click(screen.getByRole('button', { name: 'Save outline' }));
+
+    await waitFor(() => expect(api.updateLoomEpisode).toHaveBeenCalledWith(
+      'loom-1',
+      'ep-1',
+      expect.objectContaining({
+        storyOutline: expect.objectContaining({
+          scenes: expect.arrayContaining([expect.objectContaining({
+            key: 's1', plotPointId: 'plot-lock', challengePhase: 'failure',
+          })]),
+        }),
+      }),
+      { silent: true },
+    ));
+  });
 });

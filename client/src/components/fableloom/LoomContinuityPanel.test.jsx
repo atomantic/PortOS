@@ -35,8 +35,11 @@ describe('LoomContinuityPanel', () => {
     );
 
     await user.click(screen.getByRole('button', { name: 'Run continuity review' }));
-    await waitFor(() => expect(onReviewChange).toHaveBeenCalledWith(expect.objectContaining({ passed: false })));
-    const review = onReviewChange.mock.calls[0][0];
+    await waitFor(() => expect(onReviewChange).toHaveBeenCalledWith(
+      'episode-1',
+      expect.objectContaining({ passed: false }),
+    ));
+    const review = onReviewChange.mock.calls[0][1];
     rerender(
       <LoomContinuityPanel
         loom={{ id: 'loom-1' }}

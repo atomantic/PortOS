@@ -104,6 +104,59 @@ const generatedGraphFromOutline = () => ({
   ],
 });
 
+const generatedChallengeOutline = () => ({
+  startKey: 'setup',
+  scenes: [
+    {
+      key: 'setup', title: 'The keypad', summary: 'A prior scene planted the code now needed at the sealed door.',
+      plotPointId: 'plot-challenge', challengePhase: 'setup', playbackMode: 'cut',
+      transitions: [{ targetKey: 'decision', intent: 'try the lock' }],
+    },
+    {
+      key: 'decision', title: 'Recall the code', summary: 'The viewer chooses which remembered code the courier enters.',
+      plotPointId: 'plot-challenge', challengePhase: 'decision', playbackMode: 'decision',
+      transitions: [
+        { targetKey: 'success', intent: 'enter the remembered code' },
+        { targetKey: 'failure', intent: 'guess before the guard returns' },
+      ],
+    },
+    {
+      key: 'success', title: 'Quiet entry', summary: 'The right code opens the door without alerting the guard.',
+      plotPointId: 'plot-challenge', challengePhase: 'success', playbackMode: 'cut',
+      transitions: [{ targetKey: 'recovery', intent: 'slip inside' }],
+    },
+    {
+      key: 'failure', title: 'Alarm chirp', summary: 'The wrong code alerts the guard but leaves a costly escape.',
+      plotPointId: 'plot-challenge', challengePhase: 'failure', playbackMode: 'cut',
+      transitions: [{ targetKey: 'recovery', intent: 'create a distraction' }],
+    },
+    {
+      key: 'recovery', title: 'Past the blockade', summary: 'Both outcomes continue inside with their different costs intact.',
+      plotPointId: 'plot-challenge', challengePhase: 'recovery', playbackMode: 'cut',
+      transitions: [{ targetKey: 'ending', intent: 'move deeper inside' }],
+    },
+    {
+      key: 'ending', title: 'Inside', summary: 'The courier reaches the next obstacle.',
+      isEnding: true, endingLabel: 'Through the door', transitions: [],
+    },
+  ],
+});
+
+const generatedChallengeGraph = () => ({
+  startKey: 'setup',
+  nodes: generatedChallengeOutline().scenes.map((scene) => ({
+    key: scene.key,
+    title: scene.title,
+    prose: `Teleplay for ${scene.title}.`,
+    playbackMode: scene.playbackMode || 'decision',
+    audienceConnection: 'disconnected',
+    protagonistPresence: 'onscreen',
+    isEnding: scene.isEnding === true,
+    endingLabel: scene.endingLabel || '',
+    transitions: scene.transitions || [],
+  })),
+});
+
 describe('mapGeneratedGraph', () => {
   it('mints server ids, remaps targets, and drops unknown-target transitions', () => {
     const { nodes, startNodeId } = mapGeneratedGraph(generatedGraph());
@@ -1113,7 +1166,7 @@ describe('series plan AI', () => {
     runStagedLLM.mockResolvedValueOnce({ content: generatedGraph(), runId: 'run-weave' });
     await weaveEpisode(loomId, episodeId, { replace: true });
     expect(runStagedLLM).toHaveBeenCalledWith('fableloom-weave-episode', expect.objectContaining({
-      storyContext: expect.stringContaining('Plot point 1 [planned for Episode 1: Pilot]: Episode turn'),
+      storyContext: expect.stringContaining('Plot point 1 id=plot-relevant kind=beat [planned for Episode 1: Pilot]: Episode turn'),
     }), expect.anything());
   });
 
@@ -1123,20 +1176,31 @@ describe('series plan AI', () => {
       storyArc: 'A courier earns a dangerous passage.',
       plotPoints: [{
         id: 'plot-challenge',
-        title: 'Challenge — Recall the gate code',
+        kind: 'challenge',
+        title: 'Recall the gate code',
         description: 'SETUP: Plant the code. VIEWER DECISION LOOP: Recall it. FAILURE: Trigger pursuit.',
         episodeId,
       }],
       sideQuests: [],
     } });
-    runStagedLLM.mockResolvedValueOnce({ content: generatedGraph(), runId: 'run-challenge' });
+    runStagedLLM.mockResolvedValueOnce({ content: generatedChallengeOutline(), runId: 'outline-challenge' });
+    await generateEpisodeOutline(loomId, episodeId, {});
 
-    await weaveEpisode(loomId, episodeId, { replace: true });
-
-    expect(runStagedLLM).toHaveBeenCalledWith('fableloom-weave-episode', expect.objectContaining({
+    expect(runStagedLLM).toHaveBeenCalledWith('fableloom-outline-episode', expect.objectContaining({
       storyContext: expect.stringContaining('PLAYABLE CHALLENGE CONTRACT'),
     }), expect.anything());
-    expect(runStagedLLM.mock.calls.at(-1)[1].storyContext).toContain('costly recovery path');
+    expect(runStagedLLM.mock.calls[0][1].storyContext).toContain('Failure continues with a visible cost');
+    expect((await validateEpisodeOutline(loomId, episodeId)).outline.validation.status).toBe('valid');
+
+    runStagedLLM.mockResolvedValueOnce({ content: generatedChallengeGraph(), runId: 'expand-challenge' });
+    const expanded = await weaveEpisode(loomId, episodeId, { expandFromOutline: true });
+    const challengeNodes = expanded.loom.episodes[0].nodes.filter((node) => (
+      node.plotPointId === 'plot-challenge'
+    ));
+    expect(challengeNodes.map((node) => node.challengePhase).sort()).toEqual([
+      'decision', 'failure', 'recovery', 'setup', 'success',
+    ]);
+    expect(expanded.loom.episodes[0].storyOutline.validation.status).toBe('valid');
   });
 
   it('carries enabled series delivery beats into episode context and preserves them during plan drafting', async () => {

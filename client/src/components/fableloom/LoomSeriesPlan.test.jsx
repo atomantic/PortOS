@@ -73,7 +73,7 @@ describe('LoomSeriesPlan', () => {
 
     await user.click(screen.getByRole('button', { name: 'Challenge' }));
     const challengeTitle = screen.getByRole('textbox', { name: 'Plot points 2 title' });
-    expect(challengeTitle).toHaveValue('Challenge — ');
+    expect(challengeTitle).toHaveValue('');
     expect(screen.getByRole('textbox', { name: 'Plot points 2 description' }).value)
       .toContain('VIEWER DECISION LOOP');
     expect(screen.getByText('0/1 playable challenges mapped to episodes')).toBeInTheDocument();

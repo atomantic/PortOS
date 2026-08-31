@@ -249,6 +249,17 @@ describe('fableLoomProduction', () => {
       adapters: [],
       omitted: [],
       warnings: [],
+      render: {
+        parameters: {
+          width: 1024,
+          height: 576,
+          aspectRatio: '16:9',
+          steps: 28,
+          guidance: 3.5,
+          quantize: '8',
+          seed: 42,
+        },
+      },
     };
     const baseOptions = {
       universe: { id: 'univ-1', characters: [], places: [], objects: [] },
@@ -257,6 +268,10 @@ describe('fableLoomProduction', () => {
     };
 
     expect(verifyExactInputProvenance(visualProvenance, baseOptions).valid).toBe(true);
+    const missingRenderTuple = structuredClone(visualProvenance);
+    delete missingRenderTuple.render.parameters.seed;
+    expect(verifyExactInputProvenance(missingRenderTuple, baseOptions).errors)
+      .toContain('Recorded image render parameter "seed" is missing or invalid.');
     expect(verifyExactInputProvenance(visualProvenance, {
       ...baseOptions,
       availableImageModels: [],
