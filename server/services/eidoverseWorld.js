@@ -1501,7 +1501,8 @@ export async function projectEidoverseWorld({ signal } = {}) {
  */
 export async function reconcilePendingEidoverseWorld() {
   const [setup, state] = await Promise.all([getEidoverseStatus(), loadState()]);
-  if (state.pendingDesignVersion !== EIDOVERSE_WORLD_DESIGN_VERSION) {
+  if (state.pendingDesignVersion !== EIDOVERSE_WORLD_DESIGN_VERSION
+    || (state.lastAppliedDesignVersion === null && !state.migrationReport)) {
     return { reconciled: false, reason: 'current' };
   }
   if (!setup.installed) return { reconciled: false, reason: 'not-installed' };

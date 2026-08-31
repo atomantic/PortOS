@@ -65,7 +65,9 @@ describe('Eidoverse World Design V2', () => {
   it('retires only an automatic machine-derived V1 identity during migration', () => {
     const migrated = migrateEidoverseWorldState({
       schemaVersion: 1,
+      world: 'portos',
       human: { name: 'Example Machine', source: 'instance-name', role: 'owner', avatar: 'eidoverse/assets/vrms/example.vrm' },
+      cos: { id: 'portos-cos', avatar: 'eidoverse/assets/vrms/example-cos.vrm' },
       recipe: EIDOVERSE_WORLD_DESIGN_V1,
     });
     const configured = migrateEidoverseWorldState({
@@ -80,6 +82,12 @@ describe('Eidoverse World Design V2', () => {
       role: null,
       avatar: 'eidoverse/assets/vrms/example.vrm',
     });
+    expect(migrated.state.ownership.retired).toEqual([{
+      world: 'portos',
+      id: 'Example Machine',
+      actorId: 'portos-cos',
+      actorAvatar: 'eidoverse/assets/vrms/example-cos.vrm',
+    }]);
     expect(migrated.report.removedMachineDerivedIdentity).toBe(true);
     expect(configured.state.human).toMatchObject({ name: 'Example User', source: 'configured', role: 'owner' });
     expect(configured.report.removedMachineDerivedIdentity).toBe(false);

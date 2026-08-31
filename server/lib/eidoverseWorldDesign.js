@@ -418,6 +418,32 @@ export function migrateEidoverseWorldState(raw, { now = new Date().toISOString()
 
   const removedMachineDerivedIdentity = input.human?.source === 'instance-name';
   if (removedMachineDerivedIdentity) {
+    const retiredWorld = typeof input.world === 'string' && input.world.trim()
+      ? input.world.trim()
+      : 'portos';
+    const retiredIdentity = typeof input.human?.name === 'string'
+      ? input.human.name.trim()
+      : '';
+    if (retiredIdentity) {
+      const ownership = isObject(input.ownership) ? input.ownership : {};
+      const existingRetired = Array.isArray(ownership.retired) ? ownership.retired : [];
+      input.ownership = {
+        ...ownership,
+        retired: [
+          ...existingRetired.filter((entry) => !(
+            entry?.world === retiredWorld && entry?.id === retiredIdentity
+          )),
+          {
+            world: retiredWorld,
+            id: retiredIdentity,
+            ...(typeof input.cos?.id === 'string' && input.cos.id.trim() ? {
+              actorId: input.cos.id.trim(),
+              ...(typeof input.cos?.avatar === 'string' ? { actorAvatar: input.cos.avatar } : {}),
+            } : {}),
+          },
+        ],
+      };
+    }
     input.human = {
       ...input.human,
       name: null,

@@ -64,6 +64,21 @@ describe('Eidoverse PortOS projection plan', () => {
     }));
   });
 
+  it('uses the install-local materialized asset lock in projection operations', () => {
+    const lockedApp = 'eidoverse/assets/models/example_locked_app.glb';
+    const recipe = {
+      ...DEFAULT_EIDOVERSE_PROJECTION_RECIPE,
+      assets: { ...DEFAULT_EIDOVERSE_PROJECTION_RECIPE.assets, app: lockedApp },
+    };
+    const plan = buildProjectionPlan({
+      source: appSource(),
+      recipe,
+      currentState: currentEnvironment(recipe),
+    });
+
+    expect(signalSpawn(plan, 'app').args.lib).toBe(lockedApp);
+  });
+
   it('recognizes Eidoverse folded light defaults as already applied', () => {
     const entities = Object.fromEntries(DEFAULT_EIDOVERSE_PROJECTION_RECIPE.environment.lights.map((light) => [
       light.id,

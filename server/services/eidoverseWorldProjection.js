@@ -55,7 +55,7 @@ function mergeRecipe(recipe) {
   if (recipe?.version === 1) {
     return migrateEidoverseWorldState({ schemaVersion: 1, recipe }).state.recipe;
   }
-  return resolveEidoverseDesign(extractEidoverseDesignOverrides(recipe));
+  return resolveEidoverseDesign(extractEidoverseDesignOverrides(recipe), recipe?.assets || {});
 }
 
 export const EIDOVERSE_PROJECTION_KINDS = Object.freeze([

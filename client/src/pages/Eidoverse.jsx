@@ -211,9 +211,11 @@ export default function Eidoverse() {
       if (failedStatus) applyWorldResponse(failedStatus, { replaceDraft: false });
       throw reason;
     }).finally(() => {
-      if (projectionPollGeneration.current === pollGeneration) projectionPollGeneration.current += 1;
-      clearTimeout(projectionPollTimer.current);
-      projectionPollTimer.current = null;
+      if (projectionPollGeneration.current === pollGeneration) {
+        projectionPollGeneration.current += 1;
+        clearTimeout(projectionPollTimer.current);
+        projectionPollTimer.current = null;
+      }
     });
   }, [applyWorldResponse]);
 

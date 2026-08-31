@@ -209,8 +209,26 @@ describe('Eidoverse private-world lifecycle', () => {
     expect(mocks.persistedState).toBeNull();
   });
 
-  it('leaves a boot-time design update pending without starting an offline runtime', async () => {
+  it('does not cold-project a fresh install at boot even when the runtime is online', async () => {
     await world.ensureEidoverseWorldConfig();
+
+    await expect(world.reconcilePendingEidoverseWorld()).resolves.toEqual({
+      reconciled: false,
+      reason: 'current',
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(mocks.sent).toEqual([]);
+    expect(mocks.persistedState.pendingDesignVersion).toBe(2);
+  });
+
+  it('leaves a prepared boot-time design update pending without starting an offline runtime', async () => {
+    await world.ensureEidoverseWorldConfig();
+    mocks.persistedState.lastAppliedDesignVersion = 1;
+    mocks.persistedState.migrationReport = {
+      status: 'ready',
+      fromDesignVersion: 1,
+      toDesignVersion: 2,
+    };
     mocks.eidoverseStatus.runtimeStatus = 'stopped';
 
     await expect(world.reconcilePendingEidoverseWorld()).resolves.toEqual({
