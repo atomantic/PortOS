@@ -439,6 +439,7 @@ export async function updateEidoverseWorldConfig(patch) {
   return worldLock(async () => {
     const self = await ensureSelf();
     const fallback = fallbackIdentity(self);
+    const fullReset = patch.reset?.scope === 'all';
     const updated = await mutateState((state) => {
       const previousPresenceConfig = {
         world: state.world,
@@ -460,9 +461,14 @@ export async function updateEidoverseWorldConfig(patch) {
       if (patch.cosId !== undefined) state.cos.id = validIdentity(patch.cosId, DEFAULT_COS_ID);
       if (Object.hasOwn(patch, 'cosAvatar')) state.cos.avatar = patch.cosAvatar || DEFAULT_COS_AVATAR;
       if (patch.cosEnabled !== undefined) state.cos.enabled = patch.cosEnabled;
-      if (patch.reset?.scope === 'all') {
+      if (fullReset) {
         state.userOverrides = {};
         state.assetResolutions = {};
+        state.ownership.retired = [];
+        state.human.role = null;
+        state.cos.role = null;
+        delete state.reconciliation.retiredOwnerCleanup;
+        if (state.migrationReport) delete state.migrationReport.retiredOwnerCleanup;
         designChanged = true;
       } else if (patch.reset?.scope === 'assets') {
         state.assetResolutions = {};
@@ -532,7 +538,7 @@ export async function updateEidoverseWorldConfig(patch) {
         id: previousPresenceConfig.cosId,
         avatar: previousPresenceConfig.cosAvatar,
       };
-      if (humanChanged) {
+      if (!fullReset && humanChanged) {
         rememberRetiredOwner(
           state,
           previousPresenceConfig.world,
@@ -540,7 +546,7 @@ export async function updateEidoverseWorldConfig(patch) {
           previousOwner,
         );
       }
-      if (cosChanged) {
+      if (!fullReset && cosChanged) {
         rememberRetiredOwner(
           state,
           previousPresenceConfig.world,
@@ -564,7 +570,7 @@ export async function updateEidoverseWorldConfig(patch) {
       cosAvatar: updated.config.cos.avatar,
       cosEnabled: updated.config.cos.enabled,
     };
-    if (Object.keys(currentPresenceConfig).some((key) => (
+    if (fullReset || Object.keys(currentPresenceConfig).some((key) => (
       updated.previousPresenceConfig[key] !== currentPresenceConfig[key]
     ))) {
       await closeCosPresenceInternal();
@@ -871,6 +877,22 @@ async function forgetRetiredOwners(targets) {
   });
 }
 
+async function recordRetiredOwnerCleanupFailures(failures) {
+  if (!failures.length) return;
+  const report = {
+    status: 'partial',
+    failedCount: failures.length,
+    codes: [...new Set(failures.map((error) => safeText(error?.code, 'EIDOVERSE_OWNER_HANDOFF_FAILED', 80)))].slice(0, 8),
+    at: new Date().toISOString(),
+  };
+  console.warn(`⚠️ Eidoverse skipped ${report.failedCount} retired-owner cleanup operation(s); projection will continue`);
+  await mutateState((state) => {
+    state.reconciliation.retiredOwnerCleanup = report;
+    if (state.migrationReport) state.migrationReport.retiredOwnerCleanup = clone(report);
+    return state;
+  });
+}
+
 async function demoteRetiredOwners(connection, targets, {
   signal,
   pacing = createVerbPacing(),
@@ -878,10 +900,18 @@ async function demoteRetiredOwners(connection, targets, {
   const ordered = [...targets].sort((left, right) => (
     Number(left.id === connection.id) - Number(right.id === connection.id)
   ));
+  const failures = [];
   for (const target of ordered) {
-    await sendPacedVerb(connection, 'grant', { id: target.id, role: 'visitor' }, { signal, pacing });
+    await sendPacedVerb(connection, 'grant', { id: target.id, role: 'visitor' }, { signal, pacing }).then(
+      () => {},
+      (error) => {
+        if (signal?.aborted) throw error;
+        failures.push(error);
+      },
+    );
   }
   await forgetRetiredOwners(targets);
+  return failures;
 }
 
 async function revokeRetiredOwners(connection, config, {
@@ -894,10 +924,11 @@ async function revokeRetiredOwners(connection, config, {
     || (entry.id !== config.human.id && entry.id !== config.cos.id)
   ));
   if (!targets.length) return [];
+  const failures = [];
 
   const currentWorldTargets = targets.filter((entry) => entry.world === config.world);
   if (currentWorldTargets.length) {
-    await demoteRetiredOwners(connection, currentWorldTargets, { signal, pacing });
+    failures.push(...await demoteRetiredOwners(connection, currentWorldTargets, { signal, pacing }));
   }
 
   const priorWorldGroups = new Map();
@@ -926,15 +957,22 @@ async function revokeRetiredOwners(connection, config, {
     await priorConnection.waitForSnapshot({ signal }).then(async (snapshot) => {
       const actorRole = snapshot?.yourRights?.role || roleFromSnapshot(snapshot, group.actorId);
       if (actorRole !== 'owner') {
-        throw new ServerError('PortOS could not retire a previous Eidoverse owner identity.', {
+        failures.push(new ServerError('PortOS could not retire a previous Eidoverse owner identity.', {
           status: 409,
           code: 'EIDOVERSE_OWNER_HANDOFF_FAILED',
-        });
+        }));
+        await forgetRetiredOwners(group.targets);
+        return;
       }
-      await demoteRetiredOwners(priorConnection, group.targets, { signal });
+      failures.push(...await demoteRetiredOwners(priorConnection, group.targets, { signal }));
+    }, async (error) => {
+      if (signal?.aborted) throw error;
+      failures.push(asConnectionError(error, 'PortOS could not inspect a previous Eidoverse world.'));
+      await forgetRetiredOwners(group.targets);
     }).finally(() => priorConnection.close());
   }
 
+  await recordRetiredOwnerCleanupFailures(failures);
   return targets;
 }
 

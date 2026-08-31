@@ -419,6 +419,71 @@ describe('Eidoverse private-world lifecycle', () => {
     expect(mocks.persistedState.ownership.retired).toEqual([]);
   });
 
+  it('continues projection when a prior-world actor cannot retire an old owner', async () => {
+    await world.ensureEidoverseWorldConfig();
+    mocks.persistedState.ownership.retired = [{
+      world: 'example-prior-world',
+      id: 'Example Retired Owner',
+      actorId: 'example-retired-actor',
+      actorAvatar: 'eidoverse/assets/vrms/example-retired-actor.vrm',
+    }];
+    mocks.worlds.set('example-prior-world', {
+      roles: {
+        'example-existing-owner': { role: 'owner' },
+        'example-retired-actor': { role: 'visitor' },
+      },
+    });
+
+    const result = await world.projectEidoverseWorld();
+
+    expect(result.success).toBe(true);
+    expect(mocks.persistedState.ownership.retired).toEqual([]);
+    expect(mocks.persistedState.reconciliation).toMatchObject({
+      status: 'complete',
+      retiredOwnerCleanup: {
+        status: 'partial',
+        failedCount: 1,
+        codes: ['EIDOVERSE_OWNER_HANDOFF_FAILED'],
+      },
+    });
+    expect(mocks.sent).toContainEqual(expect.objectContaining({ verb: 'terrain' }));
+  });
+
+  it('makes the full reset a recovery for retired ownership and cached roles', async () => {
+    await world.ensureEidoverseWorldPresence();
+    mocks.persistedState.ownership.retired = [{
+      world: 'example-prior-world',
+      id: 'Example Retired Owner',
+    }];
+    mocks.persistedState.human.role = 'owner';
+    mocks.persistedState.cos.role = 'owner';
+    mocks.persistedState.reconciliation.retiredOwnerCleanup = { status: 'partial', failedCount: 1 };
+    mocks.persistedState.migrationReport = {
+      status: 'ready',
+      retiredOwnerCleanup: { status: 'partial', failedCount: 1 },
+    };
+
+    const reset = await world.updateEidoverseWorldConfig({
+      world: 'example-reset-world',
+      humanName: 'Example Reset Human',
+      reset: { scope: 'all' },
+    });
+    const status = await world.getEidoverseWorldStatus();
+
+    expect(reset).toMatchObject({
+      human: { role: null },
+      cos: { role: null },
+      design: {
+        migrationReport: { status: 'ready' },
+        reconciliation: { status: 'pending', checkpoint: 'configuration-saved' },
+      },
+    });
+    expect(status.presence).toMatchObject({ connected: false, role: null });
+    expect(reset.design.migrationReport.retiredOwnerCleanup).toBeUndefined();
+    expect(reset.design.reconciliation.retiredOwnerCleanup).toBeUndefined();
+    expect(mocks.persistedState.ownership.retired).toEqual([]);
+  });
+
   it('closes the persistent connection when the CoS presence is disabled', async () => {
     await world.ensureEidoverseWorldPresence();
     await world.updateEidoverseWorldConfig({ cosEnabled: false });

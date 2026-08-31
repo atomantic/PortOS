@@ -282,6 +282,7 @@ describe('Eidoverse hosted page', () => {
   });
 
   it('shows exact staged reconciliation progress while a projection is running', async () => {
+    const user = userEvent.setup();
     let resolveProjection;
     api.getEidoverseWorldStatus.mockResolvedValueOnce({
       ...worldResponse,
@@ -296,6 +297,9 @@ describe('Eidoverse hosted page', () => {
     renderPage();
 
     expect(await screen.findByText('Projecting 5/20')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'World controls' }));
+    await user.click(screen.getByRole('tab', { name: 'Updates & Advanced' }));
+    expect(screen.getByRole('progressbar', { name: 'World reconciliation progress' })).toHaveAttribute('aria-valuenow', '5');
     resolveProjection({
       success: true,
       projection: worldResponse.projection,

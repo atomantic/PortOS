@@ -355,8 +355,13 @@ export default function EidoverseWorldDrawer({
         {reconciliation.errorContext?.remediation === '/apps' && (
           <Link className="mt-2 inline-block text-xs text-white underline" to="/apps">Update Eidoverse from Managed Apps</Link>
         )}
+        {reconciliation.retiredOwnerCleanup?.failedCount > 0 && (
+          <p className="mt-2 text-xs text-port-warning" role="status">
+            PortOS skipped {reconciliation.retiredOwnerCleanup.failedCount} retired owner cleanup operation(s) so this world could continue. Review prior worlds manually if their old owner roles matter.
+          </p>
+        )}
         {reconciliation.operationCount > 0 && (
-          <div className="mt-3" role="progressbar" aria-valuemin="0" aria-valuemax={reconciliation.operationCount} aria-valuenow={reconciliation.appliedOperations || 0}>
+          <div className="mt-3" role="progressbar" aria-label="World reconciliation progress" aria-valuemin="0" aria-valuemax={reconciliation.operationCount} aria-valuenow={reconciliation.appliedOperations || 0}>
             <div className="flex justify-between text-[11px] text-current/80">
               <span>{titleCase(reconciliation.checkpoint)}</span>
               <span>{Math.min(reconciliation.appliedOperations || 0, reconciliation.operationCount)}/{reconciliation.operationCount}</span>
