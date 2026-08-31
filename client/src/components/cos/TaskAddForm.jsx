@@ -373,8 +373,13 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       setWorktreeChangesExpected(false);
     }
     descriptionRef.current?.focus();
-    await api.applyCosTaskTemplate(template.id).catch(() => {});
-    toast.success(`Template applied: ${template.name}`);
+    const usageRecorded = await api.applyCosTaskTemplate(template.id, { silent: true })
+      .then(() => true)
+      .catch(() => {
+        toast.warning('Template applied locally, but usage could not be recorded');
+        return false;
+      });
+    if (usageRecorded) toast.success(`Template applied: ${template.name}`);
   }, [newTask.app, planOnly, providers, selectedApp]);
 
   // Save current form as template (inline input instead of window.prompt)

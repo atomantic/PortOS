@@ -17,8 +17,16 @@ const api = vi.hoisted(() => ({
 // useAssignableInstances reads the instance registry straight off apiSystem, so
 // the picker (#4520) has to be driven from there rather than the `api` barrel.
 const apiSystem = vi.hoisted(() => ({ getAssignableInstances: vi.fn() }));
+const toast = vi.hoisted(() => {
+  const toastFn = vi.fn();
+  toastFn.success = vi.fn();
+  toastFn.error = vi.fn();
+  toastFn.warning = vi.fn();
+  return toastFn;
+});
 vi.mock('../../services/apiSystem', () => apiSystem);
 vi.mock('../../services/api', () => api);
+vi.mock('../ui/Toast', () => ({ default: toast }));
 
 const worktreeToggle = () => screen.getByTitle(/isolated git worktree/i).closest('label').querySelector('input');
 const openPrToggle = () => screen.getByTitle(/Open a pull request/i).closest('label').querySelector('input');
@@ -287,7 +295,7 @@ describe('TaskAddForm quick templates', () => {
     await waitFor(() => expect(planOnlyToggle()).toBeChecked());
     expect(screen.queryByTitle(/isolated git worktree/i)).toBeNull();
     expect(screen.getByPlaceholderText('Task description *')).toHaveValue('Investigate and file an issue for: ');
-    expect(api.applyCosTaskTemplate).toHaveBeenCalledWith('builtin-do-plan-task');
+    expect(api.applyCosTaskTemplate).toHaveBeenCalledWith('builtin-do-plan-task', { silent: true });
   });
 
   it('leaves the toggles as-is for a template with no settings block', async () => {
@@ -307,6 +315,25 @@ describe('TaskAddForm quick templates', () => {
     // A template that pins no app must not clear the one already selected —
     // clearing it also silently reset the app's worktree/PR defaults.
     expect(screen.getByLabelText(/target application/i)).toHaveValue('example-app');
+  });
+
+  it('keeps the local template application and warns when usage recording fails', async () => {
+    const user = userEvent.setup();
+    api.getCosPopularTemplates.mockResolvedValue({
+      templates: [{ id: 'user-failed', name: 'Offline Template', description: 'Do the thing locally', isBuiltin: false }]
+    });
+    api.applyCosTaskTemplate.mockRejectedValue(new Error('Server unreachable'));
+
+    renderForm();
+    await openTemplates(user);
+    await user.click(screen.getByText('Offline Template'));
+
+    await waitFor(() => expect(api.applyCosTaskTemplate).toHaveBeenCalledWith('user-failed', { silent: true }));
+    expect(screen.getByPlaceholderText('Task description *')).toHaveValue('Do the thing locally');
+    await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
+      'Template applied locally, but usage could not be recorded'
+    ));
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });
 
