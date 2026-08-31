@@ -65,4 +65,20 @@ describe('ci.yml fail-fast cancellation contract', () => {
       expect(body, id).toContain('if: failure()');
     }
   });
+
+  it('does not persist the elevated checkout token into leaf job steps', () => {
+    for (const id of LEAF_JOBS) {
+      const body = jobs[id];
+      const checkoutStart = body.indexOf('      - uses: actions/checkout@v7');
+      const nextStep = body.indexOf('\n      - ', checkoutStart + 1);
+      const checkout = body.slice(checkoutStart, nextStep === -1 ? undefined : nextStep);
+      expect(checkout, id).toContain('persist-credentials: false');
+    }
+  });
+
+  it('grants the reusable release caller the permission leaf jobs require', () => {
+    const releaseWorkflow = readFileSync(join(REPO_ROOT, '.github/workflows/release.yml'), 'utf8');
+    const fullCi = releaseWorkflow.slice(releaseWorkflow.indexOf('\n  full-ci:'));
+    expect(fullCi).toMatch(/\n    permissions:\n      contents: read\n      actions: write\n/);
+  });
 });

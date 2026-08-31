@@ -118,6 +118,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           # See the impact job: depth 2 is the whole PR merge ref, which is all
           # the planner needs to identify changed sources.
           fetch-depth: 2
@@ -271,6 +272,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           # See the impact job: depth 2 is the whole PR merge ref, which is all
           # the planner needs to identify changed sources.
           fetch-depth: 2
@@ -353,6 +355,8 @@ jobs:
       PGPASSWORD: portos
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Use Node.js 24.x
         uses: actions/setup-node@v7
@@ -476,6 +480,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           # See the impact job: depth 2 is the whole PR merge ref, which is all
           # the planner needs to identify changed sources.
           fetch-depth: 2

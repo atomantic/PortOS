@@ -50,6 +50,9 @@ jobs:
   full-ci:
     needs: verify-ci
     if: needs.verify-ci.outputs.verified != 'true'
+    permissions:
+      contents: read
+      actions: write
     uses: ./.github/workflows/ci.yml
     with:
       full: true
