@@ -1589,9 +1589,15 @@ describe('mediaJobQueue unreadable snapshot (#4115)', () => {
 
 async function waitFor(predicate, { timeoutMs = 3000, intervalMs = 30 } = {}) {
   const deadline = Date.now() + timeoutMs;
+  let lastError = null;
   while (Date.now() < deadline) {
-    if (predicate()) return;
+    try {
+      if (predicate()) return;
+      lastError = null;
+    } catch (err) {
+      lastError = err;
+    }
     await new Promise((r) => setTimeout(r, intervalMs));
   }
-  throw new Error('waitFor: predicate never became true within timeout');
+  throw new Error(`waitFor: predicate never became true within timeout${lastError ? `: ${lastError.message}` : ''}`);
 }
