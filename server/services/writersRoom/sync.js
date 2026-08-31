@@ -17,7 +17,7 @@
 import { rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import { sha256File } from '../../lib/fileUtils.js';
-import { deleteSyncBaseHash } from '../../lib/conflictJournal.js';
+import { deleteSyncBaseHash, withBaseHashFlushBatch } from '../../lib/conflictJournal.js';
 import { writersRoomStore } from './store.js';
 import {
   WRITERS_ROOM_WORK_KIND, WRITERS_ROOM_DRAFT_ASSET_KIND, draftAssetEntries,
@@ -65,11 +65,13 @@ export async function mergeWorksFromSync(remoteWorks, options = {}) {
  */
 export async function pruneTombstonedWorks(olderThanMs) {
   const { pruned, ids } = await store().pruneTombstonedWorks(olderThanMs);
-  for (const id of ids) {
-    if (typeof id !== 'string' || !WORK_ID_RE.test(id)) continue;
-    await rm(wrWorkDir(id), { recursive: true, force: true }).catch(() => {});
-    await deleteSyncBaseHash(WRITERS_ROOM_WORK_KIND, id);
-  }
+  await withBaseHashFlushBatch(async () => {
+    for (const id of ids) {
+      if (typeof id !== 'string' || !WORK_ID_RE.test(id)) continue;
+      await rm(wrWorkDir(id), { recursive: true, force: true }).catch(() => {});
+      await deleteSyncBaseHash(WRITERS_ROOM_WORK_KIND, id);
+    }
+  });
   return { pruned };
 }
 
@@ -87,10 +89,12 @@ export async function pruneTombstonedWorks(olderThanMs) {
 // cleanup — no work dir to rm). `idRe` rejects a junk id before the eviction.
 async function pruneTombstonedBodyless(storePruneFn, kind, idRe, olderThanMs) {
   const { pruned, ids } = await storePruneFn(olderThanMs);
-  for (const id of ids) {
-    if (typeof id !== 'string' || !idRe.test(id)) continue;
-    await deleteSyncBaseHash(kind, id);
-  }
+  await withBaseHashFlushBatch(async () => {
+    for (const id of ids) {
+      if (typeof id !== 'string' || !idRe.test(id)) continue;
+      await deleteSyncBaseHash(kind, id);
+    }
+  });
   return { pruned };
 }
 

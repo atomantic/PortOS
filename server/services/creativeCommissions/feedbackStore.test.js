@@ -186,6 +186,7 @@ describe('federation facades', () => {
     const result = await pruneTombstonedCommissionFeedback(Date.parse('2030-01-01T00:00:00.000Z'));
     expect(result).toEqual({ pruned: 2, ids: [oldOne.id, oldTwo.id] });
     expect(writeCounter.baseHash).toBe(1);
+    cj.__resetBaseHashCacheForTests();
     expect(await cj.getSyncBaseHash('commissionFeedback', oldOne.id)).toBeNull();
     expect(await cj.getSyncBaseHash('commissionFeedback', oldTwo.id)).toBeNull();
     expect(feedbackRecords.has(newer.id)).toBe(true);

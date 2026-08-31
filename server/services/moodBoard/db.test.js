@@ -214,6 +214,7 @@ describe.skipIf(!dbReady)('mood board federation (#1564)', () => {
     const res = await db.pruneTombstonedBoards(Date.parse('2025-01-01T00:00:00.000Z'));
     expect(res).toEqual({ pruned: 2 });
     expect(testState.writeCounter.baseHash).toBe(1);
+    __resetBaseHashCacheForTests();
     expect(await getSyncBaseHash('moodBoard', oldId)).toBeNull();
     expect(await getSyncBaseHash('moodBoard', oldIdTwo)).toBeNull();
     expect(await db.getBoard(newId, { includeDeleted: true })).not.toBeNull();

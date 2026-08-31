@@ -485,11 +485,10 @@ describe('DB-backed test files are covered by vitest.config.db.js', () => {
   });
 
   it('every explicit DB_TEST_INCLUDE entry resolves to a real file', () => {
-    // Basename matching above proves a suite IS listed, but not that its include
-    // PATH is correct — a wrong path (e.g. `../scripts/x` for a file under
-    // `scripts/x`) matches no file in vitest yet is "covered" by basename, so the
-    // suite silently never runs. Resolve each non-glob entry against the config
-    // root (server/) and assert it exists.
+    // Path matching above proves a detected suite is covered, but it does not
+    // prove every explicit include path resolves to a file; a stale entry for a
+    // renamed or deleted suite would otherwise be invisible. Resolve each
+    // non-glob entry against the config root (server/) and assert it exists.
     const SERVER = join(dirname(fileURLToPath(import.meta.url)), '..');
     const broken = DB_TEST_INCLUDE
       .filter((p) => !p.includes('*'))

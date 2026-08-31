@@ -23,19 +23,36 @@ const makeMemStore = (type) => {
 };
 vi.mock('../../lib/collectionStore.js', () => ({ createCollectionStore: ({ type }) => makeMemStore(type) }));
 vi.mock('../../lib/fileUtils.js', () => ({ PATHS: { data: '/tmp/portos-test-data' } }));
-// Keep the federation side-effects (peer push, conflict-journal disk I/O) inert
-// so the store unit tests stay deterministic and offline.
+// Keep peer push inert, but model the conflict-journal batch boundary so the
+// prune test can assert that multiple evictions share one terminal flush.
 vi.mock('../sharing/recordEvents.js', () => ({
   emitRecordUpdated: vi.fn(), emitRecordDeleted: vi.fn(),
   autoSubscribeRecordToAllPeers: vi.fn(() => Promise.resolve()),
 }));
-vi.mock('../../lib/conflictJournal.js', () => ({
-  contentHashForRecord: vi.fn(() => 'hash'),
-  setSyncBaseHash: vi.fn(() => Promise.resolve()),
-  deleteSyncBaseHash: vi.fn(() => Promise.resolve()),
-  flushBaseHashes: vi.fn(() => Promise.resolve()),
-  maybeJournalBeforeOverwrite: vi.fn(() => Promise.resolve()),
-}));
+const conflictJournalMock = vi.hoisted(() => {
+  const state = { batchDepth: 0, baseHashWrites: 0 };
+  const flushBaseHashes = vi.fn(async () => {
+    if (state.batchDepth === 0) state.baseHashWrites += 1;
+  });
+  return {
+    state,
+    contentHashForRecord: vi.fn(() => 'hash'),
+    setSyncBaseHash: vi.fn(() => Promise.resolve()),
+    deleteSyncBaseHash: vi.fn(() => flushBaseHashes()),
+    flushBaseHashes,
+    withBaseHashFlushBatch: vi.fn(async (fn) => {
+      state.batchDepth += 1;
+      try {
+        return await fn();
+      } finally {
+        state.batchDepth -= 1;
+        if (state.batchDepth === 0) await flushBaseHashes();
+      }
+    }),
+    maybeJournalBeforeOverwrite: vi.fn(() => Promise.resolve()),
+  };
+});
+vi.mock('../../lib/conflictJournal.js', () => conflictJournalMock);
 
 const {
   sanitizeCommission,
@@ -64,7 +81,13 @@ const {
 } = await import('./store.js');
 const { buildCommissionDirective } = await import('./abilityAdapters.js');
 
-beforeEach(() => { records.clear(); feedbackRecords.clear(); });
+beforeEach(() => {
+  records.clear();
+  feedbackRecords.clear();
+  conflictJournalMock.state.batchDepth = 0;
+  conflictJournalMock.state.baseHashWrites = 0;
+  vi.clearAllMocks();
+});
 
 const validInput = () => ({
   name: 'Nightly Surreal',
@@ -511,6 +534,28 @@ describe('deleteCommission', () => {
 });
 
 describe('pruneTombstonedCommissions', () => {
+  it('batches base-hash eviction for multiple tombstones', async () => {
+    const tombstone = (id, deletedAt) => ({
+      id, name: id, enabled: false, targetAbility: 'video', brief: {}, generation: {},
+      schedule: { kind: 'DAILY', atLocalTime: null, timezone: null }, runs: [], feedback: [],
+      assignment: null, createdAt: deletedAt, updatedAt: deletedAt, briefUpdatedAt: deletedAt,
+      deleted: true, deletedAt,
+    });
+    records.set('commission-prune-old-1', tombstone('commission-prune-old-1', '2020-01-01T00:00:00.000Z'));
+    records.set('commission-prune-old-2', tombstone('commission-prune-old-2', '2020-01-02T00:00:00.000Z'));
+    records.set('commission-prune-new', tombstone('commission-prune-new', '2099-01-01T00:00:00.000Z'));
+
+    const result = await pruneTombstonedCommissions(Date.parse('2030-01-01T00:00:00.000Z'));
+
+    expect(result).toEqual({
+      pruned: 2,
+      ids: ['commission-prune-old-1', 'commission-prune-old-2'],
+    });
+    expect(conflictJournalMock.deleteSyncBaseHash).toHaveBeenCalledTimes(2);
+    expect(conflictJournalMock.state.baseHashWrites).toBe(1);
+    expect(records.has('commission-prune-new')).toBe(true);
+  });
+
   it('tombstones the commission\'s feedback BEFORE the hard-prune so it GCs instead of staying live', async () => {
     const created = await createCommission(validInput());
     await recordCommissionRun(created.id, { id: 'run-A', status: 'completed' });

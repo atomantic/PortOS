@@ -364,10 +364,9 @@ export function flushBaseHashes() {
  *
  * Two caller shapes use it: the `peer:online` convergence walk
  * `retryPendingPushesForPeer` (pushes — and stamps — every subscribed record in
- * sequence), and the direct await-separated eviction loops in the mood-board,
- * music-video-project, and commission-feedback prune paths. Each EVICTS a base
- * hash per hard-deleted record. Eviction only marks `_baseDirty` for a key the
- * map actually held, so a prune that removed nothing still costs zero writes.
+ * sequence), and `pruneTombstoned*` hard-prune loops that evict a base hash per
+ * hard-deleted record. Eviction only marks `_baseDirty` for a key the map
+ * actually held, so a prune that removed nothing still costs zero writes.
  *
  * Re-entrant (depth-counted) so nested scopes collapse to the outermost batch,
  * and the terminal flush runs in `finally` so a thrown/rejected `fn` still

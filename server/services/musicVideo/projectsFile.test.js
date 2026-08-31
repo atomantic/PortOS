@@ -161,6 +161,7 @@ describe('projectsFile federation (#1770)', () => {
     const res = await file.pruneTombstonedProjects(Date.parse('2010-01-01T00:00:00Z'));
     expect(res).toEqual({ pruned: 2 });
     expect(writeCounter.baseHash).toBe(1);
+    cj.__resetBaseHashCacheForTests();
     expect(await cj.getSyncBaseHash('musicVideoProject', 'mv-old-tomb-1')).toBeNull();
     expect(await cj.getSyncBaseHash('musicVideoProject', 'mv-old-tomb-2')).toBeNull();
     expect((await file.listProjectIds({ includeDeleted: true })).sort()).toEqual([keep.id, 'mv-new-tomb'].sort());

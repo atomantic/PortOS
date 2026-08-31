@@ -92,6 +92,7 @@ describe.skipIf(!dbReady)('music video projects DB adapter', () => {
     const result = await db.pruneTombstonedProjects(Date.parse('2030-01-01T00:00:00.000Z'));
     expect(result).toEqual({ pruned: 2 });
     expect(testState.writeCounter.baseHash).toBe(1);
+    __resetBaseHashCacheForTests();
     expect(await getSyncBaseHash('musicVideoProject', oldOne.id)).toBeNull();
     expect(await getSyncBaseHash('musicVideoProject', oldTwo.id)).toBeNull();
     expect(await db.getProject(newer.id, { includeDeleted: true })).not.toBeNull();

@@ -16,19 +16,30 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'wr-sync-test-'));
+const writeCounter = { baseHash: 0 };
 
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, PATHS: { ...actual.PATHS, data: TEST_DATA_ROOT } };
+  return {
+    ...actual,
+    PATHS: { ...actual.PATHS, data: TEST_DATA_ROOT },
+    atomicWrite: async (path, data) => {
+      if (typeof path === 'string' && path.endsWith('sync_base_hashes.json')) writeCounter.baseHash += 1;
+      return actual.atomicWrite(path, data);
+    },
+  };
 });
 
 const sync = await import('./sync.js');
 const { writersRoomStore, _resetWritersRoomStore } = await import('./store.js');
 const cj = await import('../../lib/conflictJournal.js');
+const { WRITERS_ROOM_WORK_KIND, WRITERS_ROOM_FOLDER_KIND } = await import('./syncLogic.js');
 const { wrWorkDir, wrDraftPath } = await import('./_shared.js');
 
 const WR = join(TEST_DATA_ROOT, 'writers-room');
 const WORK = 'wr-work-11111111-1111-1111-1111-111111111111';
+const WORK_TWO = 'wr-work-33333333-3333-3333-3333-333333333333';
+const WORK_NEW = 'wr-work-66666666-6666-6666-6666-666666666666';
 const DRAFT = 'wr-draft-22222222-2222-2222-2222-222222222222';
 
 const work = (extra = {}) => ({
@@ -53,6 +64,7 @@ describe('Writers Room federation facade — file backend', () => {
     rmSync(WR, { recursive: true, force: true });
     _resetWritersRoomStore();
     cj.__resetBaseHashCacheForTests();
+    writeCounter.baseHash = 0;
   });
   afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
 
@@ -96,6 +108,25 @@ describe('Writers Room federation facade — file backend', () => {
     expect(await sync.getWorkForSync(WORK)).toBeNull();
   });
 
+  it('pruneTombstonedWorks batches base-hash eviction for multiple tombstones', async () => {
+    await sync.mergeWorksFromSync([
+      work({ id: WORK, updatedAt: '2000-01-02T00:00:00.000Z', deleted: true, deletedAt: '2000-01-01T00:00:00.000Z' }),
+      work({ id: WORK_TWO, updatedAt: '2000-01-03T00:00:00.000Z', deleted: true, deletedAt: '2000-01-02T00:00:00.000Z' }),
+      work({ id: WORK_NEW, updatedAt: '2099-01-02T00:00:00.000Z', deleted: true, deletedAt: '2099-01-01T00:00:00.000Z' }),
+    ]);
+    expect(await cj.getSyncBaseHash(WRITERS_ROOM_WORK_KIND, WORK)).not.toBeNull();
+    expect(await cj.getSyncBaseHash(WRITERS_ROOM_WORK_KIND, WORK_TWO)).not.toBeNull();
+
+    writeCounter.baseHash = 0;
+    const result = await sync.pruneTombstonedWorks(Date.parse('2025-01-01T00:00:00.000Z'));
+    expect(result).toEqual({ pruned: 2 });
+    expect(writeCounter.baseHash).toBe(1);
+    cj.__resetBaseHashCacheForTests();
+    expect(await cj.getSyncBaseHash(WRITERS_ROOM_WORK_KIND, WORK)).toBeNull();
+    expect(await cj.getSyncBaseHash(WRITERS_ROOM_WORK_KIND, WORK_TWO)).toBeNull();
+    expect(await cj.getSyncBaseHash(WRITERS_ROOM_WORK_KIND, WORK_NEW)).not.toBeNull();
+  });
+
   it('builds a draft-body manifest from the on-disk .md and diffs it against local', async () => {
     writeBody('Once upon a time.');
     const manifest = await sync.buildWorkBodyManifest(work());
@@ -129,6 +160,8 @@ describe('Writers Room federation facade — file backend', () => {
 // ---------- folders + exercises (body-less records, #1645) ----------
 
 const FOLDER = 'wr-folder-44444444-4444-4444-4444-444444444444';
+const FOLDER_TWO = 'wr-folder-77777777-7777-7777-7777-777777777777';
+const FOLDER_NEW = 'wr-folder-88888888-8888-8888-8888-888888888888';
 const EXERCISE = 'wr-ex-55555555-5555-5555-5555-555555555555';
 const folder = (extra = {}) => ({
   id: FOLDER, name: 'Drafts', parentId: null, sortOrder: 0,
@@ -145,6 +178,7 @@ describe('Writers Room folder federation facade — file backend', () => {
     rmSync(WR, { recursive: true, force: true });
     _resetWritersRoomStore();
     cj.__resetBaseHashCacheForTests();
+    writeCounter.baseHash = 0;
   });
   afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
 
@@ -166,6 +200,25 @@ describe('Writers Room folder federation facade — file backend', () => {
     expect(await sync.pruneTombstonedFolders(Date.parse('2026-02-01T00:00:00.000Z'))).toEqual({ pruned: 1 });
     expect(await sync.getFolderForSync(FOLDER)).toBeNull();
   });
+
+  it('pruneTombstonedFolders batches base-hash eviction for multiple tombstones', async () => {
+    await sync.mergeFoldersFromSync([
+      folder({ id: FOLDER, updatedAt: '2000-01-02T00:00:00.000Z', deleted: true, deletedAt: '2000-01-01T00:00:00.000Z' }),
+      folder({ id: FOLDER_TWO, updatedAt: '2000-01-03T00:00:00.000Z', deleted: true, deletedAt: '2000-01-02T00:00:00.000Z' }),
+      folder({ id: FOLDER_NEW, updatedAt: '2099-01-02T00:00:00.000Z', deleted: true, deletedAt: '2099-01-01T00:00:00.000Z' }),
+    ]);
+    expect(await cj.getSyncBaseHash(WRITERS_ROOM_FOLDER_KIND, FOLDER)).not.toBeNull();
+    expect(await cj.getSyncBaseHash(WRITERS_ROOM_FOLDER_KIND, FOLDER_TWO)).not.toBeNull();
+
+    writeCounter.baseHash = 0;
+    const result = await sync.pruneTombstonedFolders(Date.parse('2025-01-01T00:00:00.000Z'));
+    expect(result).toEqual({ pruned: 2 });
+    expect(writeCounter.baseHash).toBe(1);
+    cj.__resetBaseHashCacheForTests();
+    expect(await cj.getSyncBaseHash(WRITERS_ROOM_FOLDER_KIND, FOLDER)).toBeNull();
+    expect(await cj.getSyncBaseHash(WRITERS_ROOM_FOLDER_KIND, FOLDER_TWO)).toBeNull();
+    expect(await cj.getSyncBaseHash(WRITERS_ROOM_FOLDER_KIND, FOLDER_NEW)).not.toBeNull();
+  });
 });
 
 describe('Writers Room exercise federation facade — file backend', () => {
@@ -173,6 +226,7 @@ describe('Writers Room exercise federation facade — file backend', () => {
     rmSync(WR, { recursive: true, force: true });
     _resetWritersRoomStore();
     cj.__resetBaseHashCacheForTests();
+    writeCounter.baseHash = 0;
   });
   afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
 
