@@ -112,6 +112,9 @@ jobs:
     needs: impact
     if: needs.impact.outputs.server_mode != 'skip'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -251,11 +254,20 @@ jobs:
         if: needs.impact.outputs.smoke == 'true'
         run: npm run smoke
 
+      - name: Cancel sibling CI jobs after failure
+        if: failure()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/cancel-current-ci-run.js
+
   client:
     name: Client tests and build
     needs: impact
     if: needs.impact.outputs.client_mode != 'skip' || needs.impact.outputs.build == 'true' || needs.impact.outputs.lint_mode != 'skip'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -306,11 +318,20 @@ jobs:
         if: needs.impact.outputs.build == 'true'
         run: npm run build --prefix client
 
+      - name: Cancel sibling CI jobs after failure
+        if: failure()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/cancel-current-ci-run.js
+
   database:
     name: DB tests
     needs: impact
     if: needs.impact.outputs.db == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     services:
       postgres:
         image: pgvector/pgvector:pg17
@@ -438,11 +459,20 @@ jobs:
         env:
           PGDATABASE: portos_test
 
+      - name: Cancel sibling CI jobs after failure
+        if: failure()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/cancel-current-ci-run.js
+
   windows-server:
     name: Windows server unit tests
     needs: impact
     if: needs.impact.outputs.windows == 'true'
     runs-on: windows-latest
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -554,6 +584,12 @@ jobs:
           PORTOS_TEST_QUIET: 1
           PGPASSWORD: portos
         run: node scripts/run-ci-tests.js server
+
+      - name: Cancel sibling CI jobs after failure
+        if: failure()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/cancel-current-ci-run.js
 
   gate:
     name: CI Gate

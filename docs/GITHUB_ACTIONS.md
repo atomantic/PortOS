@@ -260,6 +260,33 @@ green PRs, and the `main` → `release` PR catches it before a release ships.
 Changes to CI/test configuration also force the full suite on their own PR.
 `[skip ci]` remains honored for push events only; PR CI always runs.
 
+### Fail-fast sibling cancellation
+
+Each selected leaf job (`server`, `client`, `database`, and
+`windows-server`) ends with an `if: failure()` step that asks GitHub to cancel
+the current workflow run. The request uses the repository-owned
+`scripts/cancel-current-ci-run.js` helper and the standard workflow-run cancel
+endpoint. The helper accepts no repository or run arguments: it validates and
+uses only `GITHUB_REPOSITORY` and `GITHUB_RUN_ID` supplied by Actions, with the
+step-scoped `GITHUB_TOKEN`.
+
+The leaf jobs request only `contents: read` and `actions: write`. The token is
+present in the environment only for the cancellation step, and no third-party
+action or long-lived secret is involved. The failing test/build step runs
+before cancellation, so its annotations and logs remain the evidence for the
+failure. A successful cancellation returns `202`; a `409` means the run is
+already terminal and is treated as a no-op.
+
+Cancellation is deliberately best-effort. Fork pull requests and other
+read-only-token runs may receive a permission failure, and transient API or
+network failures are also possible. The helper logs the unavailable
+cancellation and exits normally, preserving the original failed step and its
+failed job result. `CI Gate` still allows only `success` or `skipped` results;
+failed or canceled leaf jobs therefore cannot satisfy the required aggregate
+context. The target is for siblings to become canceled within 30 seconds of
+the first failing job completing, while the existing workflow-level
+concurrency cancellation continues to handle newer runs independently.
+
 ### Impact-planner safety rules
 
 - A directory feature such as `server/services/sprites/` selects tests carrying
