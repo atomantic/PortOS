@@ -9,7 +9,7 @@
  * up its own rows after (only rows it created — no global table mutation).
  */
 
-import { describe, it, expect, afterAll, beforeAll, vi } from 'vitest';
+import { describe, it, expect, afterAll, beforeAll, beforeEach, vi } from 'vitest';
 import { rmSync } from 'fs';
 import { join } from 'path';
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
@@ -145,6 +145,12 @@ describe.skipIf(!dbReady)('mood board federation (#1564)', () => {
     deleted: false, deletedAt: null, ...over,
   });
   beforeAll(async () => { db = await import('./db.js'); });
+  beforeEach(() => {
+    rmSync(join(testState.dataRoot, 'sharing'), { recursive: true, force: true });
+    rmSync(join(testState.dataRoot, 'conflict-journal'), { recursive: true, force: true });
+    __resetBaseHashCacheForTests();
+    testState.writeCounter.baseHash = 0;
+  });
   afterAll(async () => {
     for (const id of created) await query(`DELETE FROM mood_boards WHERE id = $1`, [id]).catch(() => {});
     await close();
