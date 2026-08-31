@@ -61,16 +61,21 @@ describe('Eidoverse world routes', () => {
     });
     const assets = await request(makeApp()).put('/api/eidoverse/world/config').send({ refreshAssets: true });
     const invalid = await request(makeApp()).put('/api/eidoverse/world/config').send({ reset: { scope: 'district' } });
-    const unknown = await request(makeApp()).put('/api/eidoverse/world/config').send({
+    const custom = await request(makeApp()).put('/api/eidoverse/world/config').send({
       reset: { scope: 'district', districtId: 'example-unknown-district' },
+    });
+    const malformed = await request(makeApp()).put('/api/eidoverse/world/config').send({
+      reset: { scope: 'district', districtId: 'Example Unknown District' },
     });
 
     expect(district.status).toBe(200);
     expect(assets.status).toBe(200);
     expect(mocks.updateConfig).toHaveBeenCalledWith({ reset: { scope: 'district', districtId: 'apps' } });
+    expect(mocks.updateConfig).toHaveBeenCalledWith({ reset: { scope: 'district', districtId: 'example-unknown-district' } });
     expect(mocks.updateConfig).toHaveBeenCalledWith({ refreshAssets: true });
     expect(invalid.status).toBe(400);
-    expect(unknown.status).toBe(400);
+    expect(custom.status).toBe(200);
+    expect(malformed.status).toBe(400);
   });
 
   it('accepts explicit install-local asset overrides without making them portable defaults', async () => {

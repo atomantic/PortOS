@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -10,12 +10,14 @@ const statePath = () => join(rootDir, 'data', 'eidoverse', 'portos-world.json');
 const readState = async () => JSON.parse(await readFile(statePath(), 'utf8'));
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   if (rootDir) await rm(rootDir, { recursive: true, force: true });
   rootDir = null;
 });
 
 describe('migration 323 — Eidoverse World Design V2', () => {
   beforeEach(async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
     rootDir = await mkdtemp(join(tmpdir(), 'portos-eidoverse-design-'));
     await mkdir(join(rootDir, 'data', 'eidoverse'), { recursive: true });
   });
@@ -54,22 +56,24 @@ describe('migration 323 — Eidoverse World Design V2', () => {
     });
   });
 
-  it('is idempotent and fails closed for invalid or newer state', async () => {
+  it('is idempotent and fails soft without rewriting invalid or newer state', async () => {
     await writeFile(statePath(), JSON.stringify({ schemaVersion: 1, recipe: EIDOVERSE_WORLD_DESIGN_V1 }));
     await migration.up({ rootDir });
     await expect(migration.up({ rootDir })).resolves.toEqual({ updated: 0, reason: 'already-applied' });
 
     await writeFile(statePath(), '{broken');
-    await expect(migration.up({ rootDir })).rejects.toThrow(/invalid/);
+    await expect(migration.up({ rootDir })).resolves.toEqual({ updated: 0, reason: 'invalid-json' });
+    expect(await readFile(statePath(), 'utf8')).toBe('{broken');
 
     await writeFile(statePath(), JSON.stringify({ schemaVersion: 99 }));
-    await expect(migration.up({ rootDir })).rejects.toThrow(/newer/);
+    await expect(migration.up({ rootDir })).resolves.toEqual({ updated: 0, reason: 'newer-state-schema' });
 
     await writeFile(statePath(), JSON.stringify({ schemaVersion: 2, selectedDesignVersion: 99 }));
-    await expect(migration.up({ rootDir })).rejects.toThrow(/newer/);
+    await expect(migration.up({ rootDir })).resolves.toEqual({ updated: 0, reason: 'newer-design-version' });
 
     await writeFile(statePath(), JSON.stringify({ schemaVersion: 0 }));
-    await expect(migration.up({ rootDir })).rejects.toThrow(/state is invalid.*repair or restore/);
+    await expect(migration.up({ rootDir })).resolves.toEqual({ updated: 0, reason: 'invalid-state-schema' });
+    expect(console.warn).toHaveBeenCalledTimes(4);
   });
 
   it('does nothing on a fresh install without state', async () => {

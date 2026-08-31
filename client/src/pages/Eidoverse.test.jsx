@@ -135,7 +135,12 @@ describe('Eidoverse hosted page', () => {
 
     const frame = await screen.findByTitle('Eidoverse Worlds');
     expect(frame).toHaveAttribute('src', `http://${window.location.hostname}:8940/?world=portos&name=example-portos-user`);
-    expect(await screen.findByText('Your PortOS, made spatial')).toBeInTheDocument();
+    const overlayHeading = await screen.findByText('Your PortOS, made spatial');
+    expect(overlayHeading.closest('section')).toHaveClass('port-media-overlay');
+    expect(screen.getByRole('button', { name: 'Refresh world' }))
+      .toHaveClass('port-media-overlay-strong', 'port-media-overlay-item');
+    expect(screen.getByRole('region', { name: 'PortOS district legend' }).querySelector('.port-media-overlay'))
+      .toBeInTheDocument();
     expect(screen.getByText('App Terraces')).toBeInTheDocument();
     expect(screen.getByText('12/48 live signals')).toBeInTheDocument();
     await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledWith({ silent: true }));
@@ -441,6 +446,24 @@ describe('Eidoverse hosted page', () => {
     const saved = api.updateEidoverseWorldConfig.mock.calls[0][0];
     expect(saved.recipe.environment.sky.exposure).toBe(1.08);
     expect(saved.recipe.environment.grass.density).toBe(0.45);
+  });
+
+  it('does not coerce a temporarily cleared source cap to zero', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTitle('Eidoverse Worlds');
+    await user.click(screen.getByRole('button', { name: 'World controls' }));
+    await user.click(screen.getByRole('tab', { name: 'Districts & Data' }));
+
+    const appsSection = screen.getByRole('heading', { name: 'App Terraces' }).closest('section');
+    const appsLimit = within(appsSection).getByRole('spinbutton', { name: 'Cap' });
+    await user.clear(appsLimit);
+    expect(appsLimit).toHaveValue(null);
+    const save = screen.getByRole('button', { name: 'Save and project' });
+    fireEvent.submit(save.closest('form'));
+
+    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledOnce());
+    expect(api.updateEidoverseWorldConfig.mock.calls[0][0].recipe.limits.apps).toBe(8);
   });
 
   it('surfaces a preserved legacy asset override and lets the user clear it', async () => {

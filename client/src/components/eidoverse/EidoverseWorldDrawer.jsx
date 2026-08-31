@@ -184,12 +184,15 @@ export default function EidoverseWorldDrawer({
                     type="number"
                     min="0"
                     max="48"
-                    value={recipeDraft.limits?.[source] ?? 0}
+                    value={numericValue(`limit.${source}`, recipeDraft.limits?.[source] ?? 0)}
                     disabled={!recipeDraft.includes?.[source]}
-                    onChange={(event) => mutateRecipe((current) => ({
-                      ...current,
-                      limits: { ...current.limits, [source]: Number(event.target.value) },
-                    }))}
+                    onChange={(event) => {
+                      updateNumericDraft(`limit.${source}`, event.target.value, (number) => mutateRecipe((current) => ({
+                        ...current,
+                        limits: { ...current.limits, [source]: number },
+                      })));
+                    }}
+                    onBlur={() => finishNumericDraft(`limit.${source}`)}
                   />
                 </label>
               </div>

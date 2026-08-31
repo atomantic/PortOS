@@ -21,7 +21,6 @@ import { getEidoverseStatus, EIDOVERSE_PORT } from './eidoverse.js';
 import {
   EIDOVERSE_ASSET_SLOTS_BY_DISTRICT,
   EIDOVERSE_ASSET_RECIPE_VERSION,
-  EIDOVERSE_DISTRICTS_V2,
   EIDOVERSE_WORLD_DESIGN_VERSION,
   EIDOVERSE_WORLD_STATE_SCHEMA_VERSION,
   extractEidoverseDesignOverrides,
@@ -470,14 +469,26 @@ export async function updateEidoverseWorldConfig(patch) {
         delete state.userOverrides.assets;
         designChanged = true;
       } else if (patch.reset?.scope === 'district') {
-        const district = EIDOVERSE_DISTRICTS_V2.find(({ id }) => id === patch.reset.districtId);
-        for (const sourceKey of district?.sources || []) {
+        const district = state.recipe.districts.find(({ id }) => id === patch.reset.districtId);
+        if (!district) {
+          throw new ServerError('The selected Eidoverse district no longer exists in this world design.', {
+            status: 400,
+            code: 'EIDOVERSE_DISTRICT_NOT_FOUND',
+          });
+        }
+        const districtKinds = district.sources
+          .map((sourceKey) => EIDOVERSE_PROJECTION_KINDS.find((entry) => entry.source === sourceKey)?.kind)
+          .filter(Boolean);
+        for (const sourceKey of district.sources) {
           delete state.userOverrides.includes?.[sourceKey];
           delete state.userOverrides.limits?.[sourceKey];
-          const kind = EIDOVERSE_PROJECTION_KINDS.find((entry) => entry.source === sourceKey)?.kind;
-          if (kind) delete state.userOverrides.scale?.[kind];
         }
-        for (const slot of EIDOVERSE_ASSET_SLOTS_BY_DISTRICT[district?.id] || []) {
+        for (const kind of districtKinds) delete state.userOverrides.scale?.[kind];
+        const districtAssetSlots = new Set([
+          ...(EIDOVERSE_ASSET_SLOTS_BY_DISTRICT[district.id] || ['district']),
+          ...districtKinds,
+        ]);
+        for (const slot of districtAssetSlots) {
           delete state.userOverrides.assets?.[slot];
           delete state.assetResolutions[slot];
         }

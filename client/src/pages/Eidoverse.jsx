@@ -13,8 +13,8 @@ import PageHeader from '../components/PageHeader';
 import BrailleSpinner from '../components/BrailleSpinner';
 import EidoverseWorldDrawer from '../components/eidoverse/EidoverseWorldDrawer';
 import {
-  EIDOVERSE_RESET_ASSET_SLOTS as RESET_ASSET_SLOTS,
   EIDOVERSE_SOURCE_KIND as SOURCE_KIND,
+  eidoverseResetAssetSlotsForDistrict,
 } from '../lib/eidoverseWorldReset';
 import {
   getApp,
@@ -130,7 +130,7 @@ function reconcileResetRecipe(current, submitted, after, reset) {
   const district = after?.districts?.find(({ id }) => id === reset.districtId);
   const sources = district?.sources || [];
   const kinds = sources.map((source) => SOURCE_KIND[source]).filter(Boolean);
-  const slots = RESET_ASSET_SLOTS[reset.districtId] || [];
+  const slots = eidoverseResetAssetSlotsForDistrict(reset.districtId, sources);
   return {
     ...current,
     includes: mergeSubmittedKeys(current?.includes, submitted?.includes, after?.includes, sources),
@@ -140,7 +140,7 @@ function reconcileResetRecipe(current, submitted, after, reset) {
   };
 }
 
-function reconcileResetAssetOverrides(current, submitted, after, reset) {
+function reconcileResetAssetOverrides(current, submitted, after, reset, sources = []) {
   if (reset.scope === 'all' || reset.scope === 'assets') {
     return reconcileActionDraft(current, submitted, submitted, after);
   }
@@ -148,7 +148,7 @@ function reconcileResetAssetOverrides(current, submitted, after, reset) {
     current,
     submitted,
     after,
-    RESET_ASSET_SLOTS[reset.districtId] || [],
+    eidoverseResetAssetSlotsForDistrict(reset.districtId, sources),
   );
 }
 
@@ -397,6 +397,7 @@ export default function Eidoverse() {
         submittedAssetOverrides,
         updated.design?.userOverrides?.assets || {},
         payload.reset,
+        updated.recipe?.districts?.find(({ id }) => id === payload.reset.districtId)?.sources,
       ));
     } else if (!replaceDraft && payload.refreshAssets) {
       if (updated.recipe) {
@@ -447,7 +448,7 @@ export default function Eidoverse() {
   const showLoadingCurtain = !iframeReady || freshWorldLighting;
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[#050810]">
+    <div className="flex h-full min-h-0 flex-col bg-port-bg">
       <PageHeader
         icon={Orbit}
         title="Eidoverse Worlds"
@@ -457,24 +458,24 @@ export default function Eidoverse() {
       />
 
       {phase === 'ready' && (
-        <main className="relative min-h-0 flex-1 overflow-hidden bg-[radial-gradient(circle_at_50%_0%,#18243d_0%,#050810_55%)]">
+        <main className="relative min-h-0 flex-1 overflow-hidden bg-port-bg">
           <iframe
             src={hostUrl}
             title="Eidoverse Worlds"
-            className="absolute inset-0 h-full w-full border-0 bg-[#050810]"
+            className="absolute inset-0 h-full w-full border-0 bg-port-bg"
             allow="camera; microphone; fullscreen; gamepad; xr-spatial-tracking"
             allowFullScreen
             onLoad={() => setIframeReady(true)}
           />
 
           {showLoadingCurtain && (
-            <div className="absolute inset-0 z-30 flex items-center justify-center bg-[#050810]" role="status">
+            <div className="absolute inset-0 z-30 flex items-center justify-center bg-port-bg" role="status">
               <BrailleSpinner text="Preparing the PortOS systems garden" />
             </div>
           )}
 
           <div className="pointer-events-none absolute inset-x-0 top-0 flex flex-wrap items-start justify-between gap-3 p-3 sm:p-4">
-            <section className="max-w-md rounded-2xl border border-white/10 bg-[#07101d]/85 p-3 text-white shadow-2xl backdrop-blur-md sm:p-4">
+            <section className="port-media-overlay max-w-md rounded-2xl border border-port-border p-3 shadow-2xl sm:p-4">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="inline-flex items-center gap-1.5 rounded-full border border-port-accent/35 bg-port-accent/10 px-2 py-1 text-[11px] font-medium text-port-accent">
                   <Sparkles size={12} aria-hidden="true" />
@@ -502,7 +503,7 @@ export default function Eidoverse() {
                 type="button"
                 onClick={() => { void runProjection().catch(() => {}); }}
                 disabled={projectionStatus === 'running'}
-                className="inline-flex min-h-[42px] items-center gap-2 rounded-xl border border-white/15 bg-[#07101d]/85 px-3 text-sm text-white shadow-xl backdrop-blur-md transition-colors hover:border-port-accent disabled:cursor-wait disabled:opacity-60"
+                className="port-media-overlay-strong port-media-overlay-item inline-flex min-h-[42px] items-center gap-2 rounded-xl border border-port-border px-3 text-sm shadow-xl transition-colors hover:border-port-accent disabled:cursor-wait disabled:opacity-60"
               >
                 <RotateCcw size={15} className={projectionStatus === 'running' ? 'animate-spin' : ''} aria-hidden="true" />
                 <span className="hidden sm:inline">{projectionStatus === 'running' ? 'Projecting…' : 'Refresh world'}</span>
@@ -519,7 +520,7 @@ export default function Eidoverse() {
           </div>
 
           {projectionError && (
-            <div className="pointer-events-auto absolute inset-x-3 top-40 z-10 mx-auto flex max-w-2xl items-start gap-3 rounded-xl border border-port-error/50 bg-[#190b13]/95 p-3 text-sm text-port-error shadow-xl backdrop-blur sm:top-44" role="status">
+            <div className="port-media-overlay-strong pointer-events-auto absolute inset-x-3 top-40 z-10 mx-auto flex max-w-2xl items-start gap-3 rounded-xl border border-port-error/50 p-3 text-sm text-port-error shadow-xl sm:top-44" role="status">
               <AlertTriangle className="mt-0.5 shrink-0" size={17} aria-hidden="true" />
               <div className="min-w-0 flex-1">
                 <p>{projectionError}</p>
@@ -529,17 +530,17 @@ export default function Eidoverse() {
           )}
 
           <section className="pointer-events-auto absolute inset-x-0 bottom-0 overflow-x-auto p-3 sm:p-4" aria-label="PortOS district legend">
-            <div className="mb-2 ml-auto w-fit rounded-full border border-white/10 bg-[#07101d]/80 px-3 py-1 text-[10px] text-slate-300 backdrop-blur-md">
+            <div className="port-media-overlay mb-2 ml-auto w-fit rounded-full border border-port-border px-3 py-1 text-[10px] text-gray-300">
               Steady = current · slow bob = stale · raised pulse = attention · high fast pulse = error
             </div>
-            <div className="flex min-w-max gap-2 rounded-2xl border border-white/10 bg-[#07101d]/80 p-2 shadow-2xl backdrop-blur-md sm:grid sm:min-w-0 sm:grid-cols-4 lg:grid-cols-8">
+            <div className="port-media-overlay flex min-w-max gap-2 rounded-2xl border border-port-border p-2 shadow-2xl sm:grid sm:min-w-0 sm:grid-cols-4 lg:grid-cols-8">
               {(recipeDraft?.districts || []).map((district) => (
-                <div key={district.id} className="w-36 rounded-xl border border-white/5 bg-white/[0.035] px-3 py-2 sm:w-auto">
+                <div key={district.id} className="port-media-overlay-item w-36 rounded-xl border border-port-border/70 px-3 py-2 sm:w-auto">
                   <div className="flex items-center gap-2">
                     <span className="h-2 w-2 rounded-full shadow-[0_0_12px_currentColor]" style={{ backgroundColor: district.accent, color: district.accent }} aria-hidden="true" />
-                    <span className="truncate text-[11px] font-medium text-white">{district.label}</span>
+                    <span className="truncate text-[11px] font-medium">{district.label}</span>
                   </div>
-                  <p className="mt-1 truncate text-[10px] text-slate-400">{district.direction} · {district.landmark}</p>
+                  <p className="mt-1 truncate text-[10px] text-gray-500">{district.direction} · {district.landmark}</p>
                 </div>
               ))}
             </div>

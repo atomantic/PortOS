@@ -23,15 +23,14 @@ export default {
 
     const state = safeJSONParse(raw, null, { logError: false });
     if (!state || typeof state !== 'object' || Array.isArray(state)) {
-      throw new Error('migration 323: data/eidoverse/portos-world.json is invalid; repair or remove it, then reboot to retry');
+      console.warn('⚠️ migration 323: skipped invalid Eidoverse world JSON; the feature will remain unavailable until its state file is repaired or restored');
+      return { updated: 0, reason: 'invalid-json' };
     }
     const migration = migrateEidoverseWorldState(state);
     if (!migration.compatible) {
       const reason = migration.report?.reason || 'unknown';
-      if (reason.startsWith('invalid-')) {
-        throw new Error(`migration 323: Eidoverse state is invalid (${reason}); repair or restore data/eidoverse/portos-world.json before retrying`);
-      }
-      throw new Error(`migration 323: Eidoverse state uses a newer schema or design (${reason}); update PortOS before retrying`);
+      console.warn(`⚠️ migration 323: skipped incompatible Eidoverse world state (${reason}); the feature will surface repair or update guidance when opened`);
+      return { updated: 0, reason };
     }
     if (state.schemaVersion === 2 && state.selectedDesignVersion === 2
       && JSON.stringify(migration.state) === JSON.stringify(state)) {

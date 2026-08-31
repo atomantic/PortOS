@@ -24,3 +24,12 @@ export const EIDOVERSE_RESET_ASSET_SLOTS = Object.freeze({
   federation: Object.freeze(['peer']),
   activity: Object.freeze(['activity', 'productivity']),
 });
+
+const CUSTOM_DISTRICT_ASSET_SLOTS = Object.freeze(['district']);
+
+export function eidoverseResetAssetSlotsForDistrict(districtId, sources = []) {
+  return [...new Set([
+    ...(EIDOVERSE_RESET_ASSET_SLOTS[districtId] || CUSTOM_DISTRICT_ASSET_SLOTS),
+    ...sources.map((source) => EIDOVERSE_SOURCE_KIND[source]).filter(Boolean),
+  ])];
+}

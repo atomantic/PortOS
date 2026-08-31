@@ -616,6 +616,41 @@ describe('Eidoverse private-world lifecycle', () => {
     expect(nexusReset.design.userOverrides.assets?.district).toBeUndefined();
   });
 
+  it('resets the effective sources and semantic assets for a custom district', async () => {
+    const recipe = structuredClone(world.DEFAULT_EIDOVERSE_PROJECTION_RECIPE);
+    recipe.districts = recipe.districts.map((district) => district.id === 'apps'
+      ? { ...district, id: 'example-yard', label: 'Example Yard', sources: ['goals'] }
+      : district);
+    recipe.includes.goals = false;
+    recipe.limits.goals = 1;
+    recipe.scale.goal = 2.5;
+    await world.updateEidoverseWorldConfig({
+      recipe,
+      assetOverrides: {
+        goal: 'store/example-local-goal',
+        district: 'store/example-local-district',
+      },
+    });
+
+    const reset = await world.updateEidoverseWorldConfig({
+      reset: { scope: 'district', districtId: 'example-yard' },
+    });
+
+    expect(reset.recipe.districts).toContainEqual(expect.objectContaining({
+      id: 'example-yard',
+      sources: ['goals'],
+    }));
+    expect(reset.recipe.includes.goals).toBe(world.DEFAULT_EIDOVERSE_PROJECTION_RECIPE.includes.goals);
+    expect(reset.recipe.limits.goals).toBe(world.DEFAULT_EIDOVERSE_PROJECTION_RECIPE.limits.goals);
+    expect(reset.recipe.scale.goal).toBe(world.DEFAULT_EIDOVERSE_PROJECTION_RECIPE.scale.goal);
+    expect(reset.design.userOverrides.assets?.goal).toBeUndefined();
+    expect(reset.design.userOverrides.assets?.district).toBeUndefined();
+
+    await expect(world.updateEidoverseWorldConfig({
+      reset: { scope: 'district', districtId: 'missing-yard' },
+    })).rejects.toMatchObject({ status: 400, code: 'EIDOVERSE_DISTRICT_NOT_FOUND' });
+  });
+
   it('compensates partially applied V2 entities and leaves the prior design authoritative', async () => {
     mocks.rejectVerb = 'comp';
 

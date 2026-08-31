@@ -957,6 +957,8 @@ const eidoverseProjectionScaleSchema = z.object({
   operations: z.number().finite().positive().max(20),
 }).strict();
 
+const eidoverseDistrictIdSchema = z.string().regex(/^[a-z0-9_-]{1,32}$/);
+
 const eidoverseAssetSlotSchema = z.object({
   preferredPaths: z.array(eidoverseAssetPathSchema).max(8),
   fallbackQueries: z.array(z.string().trim().min(1).max(80)).min(1).max(8),
@@ -1027,7 +1029,7 @@ const eidoverseProjectionRecipeV2Schema = z.object({
   limits: eidoverseProjectionLimitsSchema,
   scale: eidoverseProjectionScaleSchema,
   districts: z.array(z.object({
-    id: z.string().regex(/^[a-z0-9_-]{1,32}$/),
+    id: eidoverseDistrictIdSchema,
     label: z.string().trim().min(1).max(80),
     direction: z.string().trim().min(1).max(40),
     landmark: z.string().trim().min(1).max(80),
@@ -1038,7 +1040,7 @@ const eidoverseProjectionRecipeV2Schema = z.object({
   paths: z.array(z.object({
     id: z.string().regex(/^[a-z0-9_-]{1,64}$/),
     label: z.string().trim().min(1).max(100),
-    toDistrictId: z.string().regex(/^[a-z0-9_-]{1,32}$/),
+    toDistrictId: eidoverseDistrictIdSchema,
     nodes: z.array(eidoverseVector3Schema).min(1).max(8),
   }).strict()).max(16),
   environment: eidoverseProjectionEnvironmentSchema,
@@ -1096,7 +1098,7 @@ export const eidoverseWorldConfigPatchSchema = z.object({
   refreshAssets: z.boolean().optional(),
   reset: z.object({
     scope: z.enum(['all', 'assets', 'district']),
-    districtId: z.enum(['nexus', 'apps', 'agents', 'goals', 'memory', 'federation', 'activity', 'data']).optional(),
+    districtId: eidoverseDistrictIdSchema.optional(),
   }).strict().superRefine((value, ctx) => {
     if (value.scope === 'district' && !value.districtId) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['districtId'], message: 'districtId is required for a district reset' });
