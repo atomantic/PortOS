@@ -28,7 +28,7 @@ import { describeImageDataUrlDetailed } from './visionTest.js';
 import { resolveCaptionModel, withCaptionVisionLock } from './loraDatasetCaption.js';
 import { getSettings } from './settings.js';
 import { getUniverse } from './universeBuilder.js';
-import { buildStyleClause } from './universeCanon.js';
+import { universeAestheticLine } from '../lib/universeVisualStyle.js';
 import {
   extractCharacterPromptCommon,
   resolveSheetModelId,
@@ -130,8 +130,7 @@ export function extractSubjectSignaturePhrases(subject, entryKind = 'characters'
  */
 export function buildDatasetImagePrompt(universe, subject, variation = {}, entryKind = 'characters') {
   const kind = normalizeEntryKind(entryKind);
-  const styleClause = buildStyleClause(universe || {});
-  const styleBits = styleClause.startsWith('(none provided') ? '' : styleClause;
+  const styleBits = universeAestheticLine(universe);
   if (kind !== 'characters') {
     const name = trim(subject?.name || subject?.slugline) || 'Unnamed';
     const description = flattenValue(subject?.description || subject?.prompt);

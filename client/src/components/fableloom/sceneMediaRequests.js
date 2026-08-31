@@ -8,6 +8,14 @@
  * The server-side visual-canon compiler owns reference allocation and graph
  * continuity. These builders send authored intent plus the destination tag;
  * they never pre-flatten canon into an untyped browser reference list.
+ *
+ * The preset is applied here as well as server-side on purpose: an unlinked
+ * loom (no universe reachable from the loom or its series) gets no compiled
+ * request back, and the browser preset is the only style it would ever see.
+ * The compiler drops style tokens the authored prompt already carries
+ * (`dropTokensPresentIn` in server/lib/universeVisualStyle.js), so the linked
+ * path does not emit the token list twice — do not fix the overlap by
+ * deleting either side.
  */
 
 import { composeStyledPrompt } from '../../lib/composeStyledPrompt';

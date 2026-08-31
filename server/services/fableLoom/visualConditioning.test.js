@@ -17,7 +17,10 @@ const identityPack = (prefix) => ({
 
 const universe = {
   id: 'universe-1',
-  styleNotes: 'painted cinematic realism',
+  // Free-text direction authored for the WRITING stages: it names canon that
+  // is nowhere near a given shot, so it must never reach a render prompt.
+  styleNotes: 'Stage Aruun as a massive but local physical presence. Keep the tone PG-13.',
+  influences: { embrace: ['ligne claire', 'flat matte color fields'], avoid: ['photoreal', 'gore'] },
   characters: [{
     id: 'char-a', name: 'Aria', physicalDescription: 'silver braid',
     imageRefs: ['aria-neutral.png', 'aria-profile.png', 'aria-body.png'],
@@ -93,6 +96,41 @@ describe('FableLoom visual conditioning compiler', () => {
     expect(result.visualConditioning.assets[0]).toMatchObject({ role: 'temporal-predecessor', filename: 'opening.png' });
     expect(result.referenceImagePaths.every((path) => path.startsWith('/approved/'))).toBe(true);
     expect(JSON.stringify(result.visualConditioning)).not.toContain('/approved/');
+  });
+
+  it('renders curated style tokens once and never the writing-stage styleNotes', async () => {
+    const loom = loomWith(lockedBinding);
+    const result = await compileFableLoomVisualRequest({
+      tag: { loomId: loom.id, episodeId: 'episode-1', nodeId: 'shot' },
+      kind: 'image',
+      capability: fableLoomImageCapabilities({ mode: 'codex', model: { id: 'gpt-image' }, inputBudget: 4 }),
+      // What the browser actually POSTs: it composes the same universe preset
+      // onto the scene prompt before the compiler ever sees it.
+      authoredPrompt: 'ligne claire, flat matte color fields. A cautious arrival',
+      authoredNegativePrompt: 'photoreal, gore',
+      ...deps(loom),
+    });
+
+    expect(result.prompt).not.toContain('Aruun');
+    expect(result.prompt).not.toContain('PG-13');
+    expect(result.prompt).not.toContain('Universe style:');
+    expect(result.prompt.match(/ligne claire/g)).toHaveLength(1);
+    expect(result.negativePrompt.match(/photoreal/g)).toHaveLength(1);
+    expect(result.negativePrompt.match(/gore/g)).toHaveLength(1);
+  });
+
+  it('still contributes the curated style tokens a render prompt has not already named', async () => {
+    const loom = loomWith(lockedBinding);
+    const result = await compileFableLoomVisualRequest({
+      tag: { loomId: loom.id, episodeId: 'episode-1', nodeId: 'shot' },
+      kind: 'image',
+      capability: fableLoomImageCapabilities({ mode: 'codex', model: { id: 'gpt-image' }, inputBudget: 4 }),
+      authoredPrompt: 'A cautious arrival',
+      ...deps(loom),
+    });
+
+    expect(result.prompt).toContain('Universe style: ligne claire, flat matte color fields');
+    expect(result.negativePrompt).toContain('photoreal');
   });
 
   it('injects the loom canonical protagonist and locked wardrobe into an on-screen canon shot', async () => {

@@ -19,7 +19,8 @@ import { PATHS, ensureDir, shortId, assertSafeFilename } from '../lib/fileUtils.
 import { ServerError } from '../lib/errorHandler.js';
 import { getSettings } from './settings.js';
 import { getUniverse, updateUniverse } from './universeBuilder.js';
-import { buildStyleClause, purgeReferenceSheetFromAllUniverses } from './universeCanon.js';
+import { purgeReferenceSheetFromAllUniverses } from './universeCanon.js';
+import { universeAestheticLine } from '../lib/universeVisualStyle.js';
 import { getImageModels } from '../lib/mediaModels.js';
 import { enqueueJob, mediaJobEvents } from './mediaJobQueue/index.js';
 import { buildUniverseRunTag } from './universeRunTag.js';
@@ -132,8 +133,7 @@ export function buildCharacterReferenceSheetPrompt(universe, character) {
     });
   }
 
-  const styleClause = buildStyleClause(universe);
-  const styleBits = styleClause.startsWith('(none provided') ? '' : styleClause;
+  const styleBits = universeAestheticLine(universe);
 
   const {
     name, aliases, role, pronouns, age, personality, speechAccent, speechPattern,
@@ -235,8 +235,7 @@ export function buildCharacterBlueprintSheetPrompt(universe, character) {
     });
   }
 
-  const styleClause = buildStyleClause(universe);
-  const styleBits = styleClause.startsWith('(none provided') ? '' : styleClause;
+  const styleBits = universeAestheticLine(universe);
 
   const {
     name, role, physical, silhouette, special, visualNotes,

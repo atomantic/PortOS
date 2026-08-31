@@ -5,7 +5,8 @@ const baseUniverse = {
   id: 'u-123',
   name: 'Test Universe',
   influences: { embrace: ['neo-noir', 'coastal rain'] },
-  styleNotes: 'painterly, ink-heavy, saturated cool palette',
+  // Writing-stage direction — must NOT reach a render prompt.
+  styleNotes: 'Stage the Signal Runner as a local presence; keep the tone PG-13.',
 };
 
 const richCharacter = {
@@ -57,10 +58,11 @@ describe('universeCharacterSheet — buildCharacterReferenceSheetPrompt', () => 
     expect(out.prompt).toContain('Vale');
     expect(out.prompt).toContain('Signal Runner');
     expect(out.prompt).toContain('she/her');
-    // Universe style tokens flow into the preamble.
+    // Curated visual tokens flow into the preamble; the free-text styleNotes
+    // (writing-stage direction) does not — see lib/universeVisualStyle.js.
     expect(out.prompt).toContain('neo-noir');
     expect(out.prompt).toContain('coastal rain');
-    expect(out.prompt).toContain('painterly');
+    expect(out.prompt).not.toContain('PG-13');
     // Every named zone appears in the prompt.
     expect(out.prompt).toMatch(/FRONT view.*3\/4 view.*SIDE view.*BACK view/s);
     expect(out.prompt).toMatch(/Color palette zone/);

@@ -16,6 +16,10 @@ import {
   matchCharactersInText, matchObjectsInText, matchPlacesInText,
 } from '../../lib/scenePrompt.js';
 import { resolveFableLoomProtagonistPresence } from '../../lib/fableLoomPlayback.js';
+import {
+  buildVisualStyleClause, dropTokensPresentIn, mergeNegativePromptTokens, splitPromptTokens,
+  universeVisualStyleTokens,
+} from '../../lib/universeVisualStyle.js';
 import { getUniverse } from '../universeBuilder.js';
 import { resolveCharacterLoras } from '../characterLoraResolver.js';
 import { getSeries } from '../pipeline/series.js';
@@ -345,26 +349,31 @@ export async function compileFableLoomVisualRequest({
   const objectPrompts = bindings.boundObjects.map((object) => compact([
     `Object: ${object.name}`, object.description, object.significance,
   ]).join('. '));
-  const universeStyle = compact([
-    universe.influences?.embrace?.length && universe.influences.embrace.join(', '),
-    universe.styleNotes,
-  ]);
+  // Curated visual tokens only — `universe.styleNotes` is writing-stage
+  // direction (see lib/universeVisualStyle.js). The browser composes this same
+  // preset onto the scene prompt before POSTing, so drop whatever it already
+  // sent rather than emitting the token list a second time.
+  const universeStyle = dropTokensPresentIn(
+    splitPromptTokens(buildVisualStyleClause(universe)),
+    authoredPrompt,
+  );
   const protagonistFraming = bindings.protagonistPresence === 'offscreen'
     ? 'Framing constraint: the canonical protagonist is speaking through the communicator off-screen. The camera is the remote witness: show the obstacle or environment the protagonist cannot see around a corner, beyond a bend, at a distance, or otherwise outside their sightline. The communicator stays on the protagonist\'s person and completely out of frame; never use a standalone comms device as the subject. Do not show their face, body, silhouette, or duplicate presence in this storyboard image.'
     : '';
   const positive = compact([
-    universeStyle.length && `Universe style: ${universeStyle.join('. ')}`,
+    universeStyle.length && `Universe style: ${universeStyle.join(', ')}`,
     placePrompt, ...characterPrompts, ...objectPrompts,
     protagonistFraming,
     authoredPrompt || (kind === 'video' ? node.videoPrompt || node.prose : node.imagePrompt),
     node.visualCanon?.shotNotes && `Shot continuity: ${node.visualCanon.shotNotes}`,
   ]).join('\n\n').slice(0, 8000);
   const identityAvoid = bindings.boundCharacters.flatMap(({ character }) => character.identityPack?.avoid || []);
-  const negativePrompt = unique(compact([
+  const negativePrompt = mergeNegativePromptTokens([
     authoredNegativePrompt,
-    bindings.protagonistPresence === 'offscreen' && 'visible canonical protagonist, protagonist face, protagonist body, protagonist silhouette, standalone communicator, comms device close-up, radio prop hero shot',
-    ...(universe.influences?.avoid || []), ...identityAvoid,
-  ])).join(', ').slice(0, 8000);
+    bindings.protagonistPresence === 'offscreen' ? 'visible canonical protagonist, protagonist face, protagonist body, protagonist silhouette, standalone communicator, comms device close-up, radio prop hero shot' : '',
+    universeVisualStyleTokens(universe).avoid,
+    identityAvoid,
+  ]).join(', ').slice(0, 8000);
   const manifest = {
     version: 1,
     compilerVersion: FABLELOOM_VISUAL_COMPILER_VERSION,
