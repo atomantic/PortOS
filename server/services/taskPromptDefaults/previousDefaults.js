@@ -9267,7 +9267,7 @@ Analyze PortOS codebase for security vulnerabilities:
 Fix any vulnerabilities and commit with security advisory notes.`,
   ],
   'code-quality': [
-    // Outgoing pre-unification default, app-improvement schedule.
+    // Outgoing v2 default (also the pre-unification app-improvement default).
     `[App Improvement: {appName}] Code Quality Review
 
 Analyze {appName} for maintainability improvements:

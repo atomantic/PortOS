@@ -24,9 +24,9 @@ and the current-vs-proposed boundary.
 - `GET /api/api-docs/asyncapi.json` — AsyncAPI 3 for the Socket.IO transport.
 - `GET /api/api-docs/tools.min.json` — the minimized semantic tool resource: only the operations annotated `x-portos-tool`, flattened to provider-neutral tool records with an HTTP binding. Sized for an agent to read whole, unlike the full internal document.
 
-Generated entries are explicitly marked `generated` until a runtime-backed payload contract exists; detailed entries are marked `modeled`. Regenerate the checked-in route and event manifests with `npm run generate:api-docs`. Drift tests fail when source declarations and committed manifests diverge.
+Inferred entries are explicitly marked `generated` until a runtime-backed payload contract exists; detailed entries are marked `modeled`. Regenerate the checked-in HTTP route manifest with `npm run generate:api-docs`. Socket.IO events are derived from source on first use and cached for the server process, so event declarations have no checked-in manifest or regeneration step.
 
-When adding an HTTP route, keep its request Zod schema in a reusable server library and register the detailed documentation in `server/lib/apiOperationContracts.js`; the route and OpenAPI should consume the same schema object. Add an `x-portos-tool` annotation to that contract entry to also publish the operation as an agent-callable tool in `tools.min.json`, and declare the codes its error responses really throw in `x-portos-error-codes` — the HTTP status alone does not identify the code, since `errorHandler` prefers an explicit `err.code` over the status map. Socket payload schemas follow the same pattern in `server/lib/socketEventContracts.js`. The generators guarantee inventory coverage, while these small registries make richer contracts incremental without maintaining a second handwritten list of paths or events.
+When adding an HTTP route, keep its request Zod schema in a reusable server library and register the detailed documentation in `server/lib/apiOperationContracts.js`; the route and OpenAPI should consume the same schema object. Add an `x-portos-tool` annotation to that contract entry to also publish the operation as an agent-callable tool in `tools.min.json`, and declare the codes its error responses really throw in `x-portos-error-codes` — the HTTP status alone does not identify the code, since `errorHandler` prefers an explicit `err.code` over the status map. Socket payload schemas follow the same pattern in `server/lib/socketEventContracts.js`. The HTTP generator and live Socket.IO source inventory guarantee coverage, while these small registries make richer contracts incremental without maintaining a second handwritten list of paths or events.
 
 Building a native companion client? See [COMPANION_APP_API.md](./COMPANION_APP_API.md) — the stable, pre-auth-discoverable contract (discovery/identity, HTTP Basic auth, instance management, palette actions, daily-log, POST progress, and the iCloud-sync precedent) that the PortDeck app consumes.
 
@@ -685,7 +685,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 
 Connect to Socket.IO at `http://localhost:5555`.
 
-The complete generated event list is visible in **API Explorer → Event API** and available at `GET /api/api-docs/asyncapi.json` as AsyncAPI 3. The examples below highlight common flows rather than serving as the exhaustive inventory.
+The complete source-derived event list is visible in **API Explorer → Event API** and available at `GET /api/api-docs/asyncapi.json` as AsyncAPI 3. The examples below highlight common flows rather than serving as the exhaustive inventory.
 
 ### Log Streaming
 

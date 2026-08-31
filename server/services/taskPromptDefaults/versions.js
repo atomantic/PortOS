@@ -31,7 +31,7 @@ export const PROMPT_VERSIONS = {
   // current {appName} body. See PREVIOUS_DEFAULT_PROMPTS + the self-heal in
   // taskSchedule.js loadSchedule().
   'security': 2, // v2: generic {appName} body (older default hardcoded "PortOS"/"server/routes" paths)
-  'code-quality': 2, // v2: generic {appName} body (older default hardcoded "PortOS")
+  'code-quality': 3, // v3: inventory structural drift, duplicate sources of truth, volatile generated artifacts, and incidental-layout coupling before conventional maintainability checks. v2: generic {appName} body (older default hardcoded "PortOS")
   'test-coverage': 2, // v2: generic {appName} body (older default hardcoded "PortOS")
   'performance': 2, // v2: generic {appName} body (older default hardcoded "PortOS")
   'accessibility': 2, // v2: generic {appName} + the app UI (older default hardcoded "PortOS" + http://localhost:5555)

@@ -85,21 +85,47 @@ Repository: {repoPath}
 
 Fix any vulnerabilities found and commit with security advisory notes.`,
 
-  'code-quality': `[Improvement: {appName}] Code Quality Review
+  'code-quality': `[Improvement: {appName}] Code Quality and Structural Drift Review
 
-Analyze {appName} for maintainability improvements:
+Audit {appName} for maintainability failures that create real operational or
+engineering cost.
 
 Repository: {repoPath}
 
-1. Find DRY violations - similar code in multiple places
-2. Identify functions >50 lines that should be split
-3. Look for missing error handling
-4. Find dead code and unused imports
-5. Check for console.log that should be removed
-6. Look for TODO/FIXME that need addressing
-7. Identify magic numbers that should be constants
+{modeInstructions}
 
-Focus on the main source directories. Refactor issues found and commit improvements.`,
+Start with a cheap repository-wide inventory of candidates, then choose one
+bounded, coherent slice and trace it deeply. Hunt specifically for:
+
+1. **Derived artifacts committed as a second source of truth** — generated
+   catalogs, manifests, snapshots, indexes, or caches that copy facts already
+   available from source. Pay special attention to volatile line/column/offset,
+   timestamp, absolute-path, or ordering metadata that changes when behavior
+   does not. Check history for regeneration-only churn and determine whether the
+   value can instead be derived at build time, startup, or first use and cached.
+2. **Manually synchronized registries** — the same routes, events, commands,
+   schemas, feature flags, or capabilities listed in multiple places, with a
+   drift test merely telling a human to copy one representation into another.
+   Prefer one semantic registry consumed by every projection. When a second
+   registry would only duplicate hundreds of real declarations, derive the
+   projection from those declarations and cache it; use source scans as CI
+   guards for protocols whose call sites already consume a canonical registry.
+3. **Incidental-layout coupling** — tests, manifests, or runtime behavior tied to
+   source line numbers, array positions, object insertion order, filenames, or
+   other coordinates that are not part of the product contract.
+4. **Architecture and ownership leaks** — one concern split across unrelated
+   layers, helpers that reverse dependency direction, ad-hoc conditionals bolted
+   onto a generic flow, or wrappers that add indirection without policy.
+5. **Conventional code-quality defects** — duplicated logic, functions that mix
+   unrelated concerns, dead code, unused imports, stale TODOs, missing boundary
+   error handling, noisy debug logging, and unexplained magic values.
+
+For every candidate, read the producer, all consumers, its tests, and recent
+history before judging it. A checked-in generated artifact can be legitimate
+when distribution lacks the source, derivation is expensive or nondeterministic,
+or reproducible releases require frozen bytes. Do not file or implement a
+subjective rewrite. Keep only findings with a named transformation and proven
+impact: runtime/data failure, CI or release failure, or recurring manual churn.`,
 
   'test-coverage': `[Improvement: {appName}] Improve Test Coverage
 

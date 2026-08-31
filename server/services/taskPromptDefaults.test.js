@@ -35,6 +35,19 @@ const SNAPSHOT = JSON.parse(readFileSync(
 ));
 
 describe('taskPromptDefaults integrity snapshot', () => {
+  it('code-quality v3 inventories structural drift while preserving v2', () => {
+    const current = DEFAULT_TASK_PROMPTS['code-quality'];
+    const previous = PREVIOUS_DEFAULT_PROMPTS['code-quality'][0];
+
+    expect(PROMPT_VERSIONS['code-quality']).toBe(3);
+    expect(current).toContain('Derived artifacts committed as a second source of truth');
+    expect(current).toContain('volatile line/column/offset');
+    expect(current).toContain('regeneration-only churn');
+    expect(current).toContain('Incidental-layout coupling');
+    expect(previous).toContain('Find DRY violations');
+    expect(previous).not.toBe(current);
+  });
+
   it('claim workflows avoid Copilot and require verified remote merge state before cleanup', () => {
     for (const key of ['plan-task', 'claim-issue']) {
       const prompt = DEFAULT_TASK_PROMPTS[key];

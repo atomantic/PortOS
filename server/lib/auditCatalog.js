@@ -13,8 +13,8 @@ const filing = ({ slugPrefix, label, issueLabel, labelDescription, noun }) => Ob
   label,
   issueLabel,
   labelDescription,
-  planItemBody: `From the \`${label}\` audit of <slice> (<today's date>). <What is wrong, 1–2 sentences.> Fix: <files + functions in {appName}>. Scope: <small/medium/large>.`,
-  bodyRequirements: `the slice audited and the date, what is wrong with file:line references, the user-visible impact, a concrete proposed fix naming the files in {appName}, and a \`Scope:\` of small/medium/large`,
+  planItemBody: `From the \`${label}\` audit of <slice> (<today's date>). Problem: <what is wrong, 1–2 sentences>. Impact: <runtime, data, CI/release, or recurring maintenance consequence>. Fix: <files + functions in {appName}>. Scope: <small/medium/large>.`,
+  bodyRequirements: `the slice audited and the date, what is wrong with file:line references, the concrete impact (runtime, data, CI/release, or recurring maintenance), a proposed fix naming the files in {appName}, and a \`Scope:\` of small/medium/large`,
   planCommitMessage: `docs(${issueLabel}): propose <N> ${noun}`,
 });
 
@@ -37,11 +37,11 @@ Your deliverable is tracker items, not code. The run must end with the same \`gi
 ## How to run this audit
 
 1. **Pick a bounded slice and say so first.** Do NOT attempt the whole repository. Choose one coherent area (a feature directory, a route group, a handful of related screens) — prefer one that recent audit issues have not already covered — and open your report by naming the slice in one line.
-2. **Read the actual code.** Every finding must cite \`path/to/file.js:LINE\` and describe a concrete, reproducible failure: what a user does, in what state, and what goes wrong. Delete any finding you cannot state that way.
+2. **Read the actual code.** Every finding must cite \`path/to/file.js:LINE\` and describe a concrete, reproducible impact: a reachable runtime/data failure, a CI or release failure, or recurring manual churn demonstrated by repository history. Delete subjective style preferences and any finding whose consequence you cannot prove.
 3. **De-duplicate before filing.** Follow the Inventory step under "Where to record findings" above. If it is already filed, skip it; comment on the existing item only when you have genuinely new evidence.
 4. **File each surviving finding as its own item.** One problem per item — never a bundle. Cap yourself at 5. Bodies must be decision-complete:
    - **Problem** — what is wrong, with file:line references.
-   - **Impact** — the user-visible consequence, not the code smell.
+   - **Impact** — the observable consequence (runtime, data, CI/release, or recurring maintenance), not a code-smell label.
    - **Fix** — the approach you have DECIDED on, with the files it touches. If the only obstacle was a design choice, make the call and state it. Do not file a question.
    - **Acceptance criteria** — checkboxes another agent can verify cold.
 5. **Redact before you publish.** An issue is world-readable the moment it is filed. Never paste a secret, credential, token, hostname, IP address, absolute path containing a username, or any personal record into a title or body.
@@ -55,7 +55,7 @@ This banner OVERRIDES any later instruction to file issues, leave source unchang
 
 1. **Pick a bounded slice** and say so first.
 2. **Read the actual code** and the project's \`AGENTS.md\` / conventions. Honor documented non-issues.
-3. **Implement the fix** — the smallest change that actually solves the user-visible problem. If the only obstacle was a design choice, make the call and state it.
+3. **Implement the fix** — the smallest change that actually solves the concrete problem. If the only obstacle was a design choice, make the call and state it.
 4. **Verify** with the project's tests (or a focused new test when the path is untested and a silent break would cost data, money, or quota).
 5. **Commit** following the repo's conventions. Do not bundle unrelated cleanup.
 

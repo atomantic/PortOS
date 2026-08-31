@@ -1,12 +1,7 @@
-/** Searchable projection of the generated Socket.IO call-site inventory. */
+/** Searchable projection of the source-derived Socket.IO event inventory. */
 
-import { readFileSync } from 'node:fs';
 import { socketEventContract } from './socketEventContracts.js';
-
-const manifest = JSON.parse(readFileSync(
-  new URL('./socketEventCatalog.generated.json', import.meta.url),
-  'utf8',
-));
+import { getSocketEventInventory } from './socketEventInventory.js';
 
 const titleCase = (value) => value
   .replace(/[-_]+/g, ' ')
@@ -14,8 +9,9 @@ const titleCase = (value) => value
 
 export const socketDomainForEvent = (event) => event.split(':', 1)[0] || 'socket';
 
-export const buildSocketEventCatalog = () => {
-  const events = manifest.events.map((event) => {
+export const buildSocketEventCatalog = async ({ inventory = getSocketEventInventory() } = {}) => {
+  const resolvedInventory = await inventory;
+  const events = resolvedInventory.events.map((event) => {
     const domain = socketDomainForEvent(event.event);
     const contracts = Object.fromEntries(event.directions.flatMap((direction) => {
       const contract = socketEventContract(event.event, direction);
@@ -36,10 +32,9 @@ export const buildSocketEventCatalog = () => {
     .map((id) => ({ id, label: titleCase(id), events: events.filter((event) => event.domain === id).length }));
   const modeled = events.filter((event) => event.contractStatus === 'modeled').length;
   return {
-    schemaVersion: 1,
-    generatedFrom: manifest.generatedFrom,
-    regenerateCommand: 'node scripts/generate-socket-event-catalog.js',
-    stats: { ...manifest.stats, domains: domains.length, modeled, generated: events.length - modeled },
+    schemaVersion: 2,
+    derivedFrom: resolvedInventory.derivedFrom,
+    stats: { ...resolvedInventory.stats, domains: domains.length, modeled, generated: events.length - modeled },
     domains,
     events,
   };

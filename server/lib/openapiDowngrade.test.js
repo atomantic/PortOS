@@ -179,7 +179,7 @@ describe('the published documents are actually 3.0.3', () => {
     // `exclusiveMinimum` a downgrade would introduce reads as a type error
     // there, widening `lines > 0` into `lines >= 0`.
     const { buildAsyncApiSpec } = await import('./asyncApiSpec.js');
-    const serialized = JSON.stringify(buildAsyncApiSpec({ version: '1.0.0' }));
+    const serialized = JSON.stringify(await buildAsyncApiSpec({ version: '1.0.0' }));
     expect(serialized).not.toContain('"exclusiveMinimum":true');
     expect(serialized).not.toContain('"nullable"');
   });

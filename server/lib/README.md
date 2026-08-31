@@ -26,6 +26,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `appDeployFlags.js` | Shared allowlist of flags PortOS may forward to a managed app's `deploy.sh`, consumed by socket validation and deployment orchestration without reversing the lib/services dependency. |
 | `apiContractSchemas.js` | Canonical Zod request contracts for externally callable APIs plus `zodToOpenApiSchema` (plain JSON Schema — the 3.0.3 conversion happens at the OpenAPI document boundary, not here); runtime routes and OpenAPI use the same schema objects. |
 | `socketEventContracts.js` | Runtime-backed payload contracts for modeled inbound Socket.IO events, reusing the same Zod schemas as live validation. |
+| `socketEventInventory.js` | Cached source-derived Socket.IO event inventory: event names and directions only, with no checked-in manifest or positional source metadata. |
 | `agentContextValidation.js` | Shared settings, MCP request/tool input/output schemas, result + approximate-token bounds, source-freshness status, and `advertiseAgentContextTools(scopes)` for the opt-in read-only agent-context surface. |
 | `validation.js` | Catch-all Zod schemas (app/process/provider, social accounts, GitHub, backup/sharing, document/legacy-export) + the `validateRequest` middleware + shared helpers (`optionalBooleanMap`, `isSafeRecordId`, `parseIndexParam`, `parsePagination`). Re-exports the per-domain validation files below so existing deep imports keep working. |
 | `taskDataInputCatalog.js` | Pure catalog and persisted ids for deterministic context sources that scheduled agent tasks can preload before dispatch. |
@@ -420,7 +421,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `apiAccessPolicy.js` | Shared always-public path and gated non-`/api` prefix policy consumed by both `authGate` and API discovery. |
 | `apiCatalog.js` | Searchable projection of the generated Express route manifest: domain, access, side-effect, contract coverage, summaries, and Express-to-OpenAPI path conversion. |
-| `socketEventCatalog.js` | Searchable projection of the generated Socket.IO call-site manifest: direction, domain, source evidence, and runtime-schema coverage. |
+| `socketEventCatalog.js` | Searchable projection of the cached Socket.IO inventory: direction, domain, and runtime-schema coverage. |
 | `apiOperationContracts.js` | Detailed operation metadata for intentionally public APIs. It consumes the canonical route Zod contracts and feeds both public and internal OpenAPI documents. |
 | `apiRegistry.js` | Single source of truth for which PortOS services are externally-callable HTTP APIs (`voice`, `sdapi`). `API_REGISTRY` declares each API's `publicPrefixes` (read/compute-safe surface only) + defaults; `isRegistryPublic(settings, path)` tells `authGate` when an `exposed && !requireAuth` API re-opens its prefix; `resolveApiAccess(settings)` merges persisted `apiAccess` flags for the Settings UI + OpenAPI docs. |
 | `arrayUtils.js` | `shuffle(arr)` — Fisher-Yates shuffle (new array, never mutates). The canonical uniform shuffle — never `arr.sort(() => Math.random() - 0.5)`, which is biased. Shared by `meatspacePostCognitive.js` (Schulte table / mental rotation) and `meatspacePostMemory.js` (memory drill generators). |

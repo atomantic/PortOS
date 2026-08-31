@@ -199,7 +199,7 @@ export default function VoiceCallHost() {
     audio.current = { context, stream, node, source, outputId: output?.deviceId ?? null, pending: [] };
     // Two literal emits, not a computed event name — a computed
     // `socket.emit(x ? 'a' : 'b')` is invisible to the static
-    // socket-event-catalog scan (`scripts/generate-socket-event-catalog.js`),
+    // socket-event inventory scan (`server/lib/socketEventInventory.js`),
     // which greps for `socket.emit('literal')`.
     if (currentMode === 'call') socket.emit('voice:call:attach');
     else socket.emit('voice:capture:start');

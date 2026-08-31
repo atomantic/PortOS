@@ -48,6 +48,7 @@ export * as privacyValidation from './privacyValidation.js';
 export * as roundsValidation from './roundsValidation.js';
 export * as socketValidation from './socketValidation.js';
 export * from './socketEventContracts.js';
+export * from './socketEventInventory.js';
 export * as spriteValidation from './spriteValidation.js';
 export * as storyBuilderValidation from './storyBuilderValidation.js';
 export * as telegramValidation from './telegramValidation.js';

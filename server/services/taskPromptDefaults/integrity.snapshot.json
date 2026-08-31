@@ -1,7 +1,7 @@
 {
   "DEFAULT_TASK_PROMPTS": {
     "security": "8e58c1305a391ac765b0b13ab9615eb3",
-    "code-quality": "5d86db04077cf0b0d190b62db1c5581d",
+    "code-quality": "c34792a374dd9868e6381557da582dc1",
     "test-coverage": "0d8359170529da12cd63356610b2e220",
     "performance": "672bd3958b12afb0f382bcebb6dc3b33",
     "accessibility": "372916803f32b82da38a5b2130a54baf",
@@ -60,7 +60,7 @@
     "refresh-local-llm-catalog": 4,
     "plan-feature": 5,
     "security": 2,
-    "code-quality": 2,
+    "code-quality": 3,
     "test-coverage": 2,
     "performance": 2,
     "accessibility": 2,

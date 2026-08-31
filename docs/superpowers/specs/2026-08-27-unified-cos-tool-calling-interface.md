@@ -13,8 +13,8 @@ Audience: PortOS server, Persistent Mind, voice, palette, and future agent integ
 
 The initial production slice is implemented. This section supersedes proposal language elsewhere in the document when the two differ.
 
-- The generated HTTP inventory contains 2,067 mounted operations and feeds `GET /api/api-docs/catalog.json` plus the complete OpenAPI 3.1 document at `/api/api-docs/internal/openapi.json`.
-- A generated inventory of 253 Socket.IO events feeds `/api/api-docs/events.json` and the AsyncAPI 3 document at `/api/api-docs/asyncapi.json`.
+- The generated HTTP inventory contains 2,138 mounted operations and feeds `GET /api/api-docs/catalog.json` plus the complete OpenAPI 3.0.3 document at `/api/api-docs/internal/openapi.json`.
+- A source-derived Socket.IO inventory feeds `/api/api-docs/events.json` and the AsyncAPI 3 document at `/api/api-docs/asyncapi.json`; it is cached per server process and has no checked-in event manifest.
 - `/api/cos/tools` exposes 22 provider-neutral tools: one Persistent Mind task tool plus 21 semantic voice adapters. The `mind` scope can see all 22 when granted; the `agent`, `ui`, and `voice` scopes can see the 21 semantic adapters. OpenAI, Anthropic, and MCP translations derive from the same entries.
 - `/api/cos/tools/call` and `/api/cos/tools/calls/:requestId` implement server-derived UI authority, schema validation, normalized results, and replay conflict detection. Raw routes are not callable.
 - Persistent Mind has separate default-off read, write, and CoS-task grants and a bounded multi-round tool loop. `cos.create-task` reuses the existing scheduler, worktree, review, CI, and landing-policy path.
