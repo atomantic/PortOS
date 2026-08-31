@@ -871,18 +871,23 @@ async function forgetRetiredOwners(targets) {
   });
 }
 
-async function demoteRetiredOwners(connection, targets, { signal } = {}) {
+async function demoteRetiredOwners(connection, targets, {
+  signal,
+  pacing = createVerbPacing(),
+} = {}) {
   const ordered = [...targets].sort((left, right) => (
     Number(left.id === connection.id) - Number(right.id === connection.id)
   ));
   for (const target of ordered) {
-    throwIfAborted(signal);
-    await connection.sendVerb('grant', { id: target.id, role: 'visitor' }, { signal });
+    await sendPacedVerb(connection, 'grant', { id: target.id, role: 'visitor' }, { signal, pacing });
   }
   await forgetRetiredOwners(targets);
 }
 
-async function revokeRetiredOwners(connection, config, { signal } = {}) {
+async function revokeRetiredOwners(connection, config, {
+  signal,
+  pacing = createVerbPacing(),
+} = {}) {
   const state = await loadState();
   const targets = state.ownership.retired.filter((entry) => (
     entry.world !== config.world
@@ -892,7 +897,7 @@ async function revokeRetiredOwners(connection, config, { signal } = {}) {
 
   const currentWorldTargets = targets.filter((entry) => entry.world === config.world);
   if (currentWorldTargets.length) {
-    await demoteRetiredOwners(connection, currentWorldTargets, { signal });
+    await demoteRetiredOwners(connection, currentWorldTargets, { signal, pacing });
   }
 
   const priorWorldGroups = new Map();
@@ -946,6 +951,7 @@ async function revokeRetiredOwners(connection, config, { signal } = {}) {
  */
 async function seedHumanRoleAndCosGrant(config, { signal } = {}) {
   throwIfAborted(signal);
+  const pacing = createVerbPacing();
   let connection;
   connection = createWorldConnection({
     world: config.world,
@@ -959,7 +965,7 @@ async function seedHumanRoleAndCosGrant(config, { signal } = {}) {
     if (config.human.id !== config.cos.id
       && humanRole === 'owner'
       && cosRole !== 'owner') {
-      await connection.sendVerb('grant', { id: config.cos.id, role: 'owner' }, { signal });
+      await sendPacedVerb(connection, 'grant', { id: config.cos.id, role: 'owner' }, { signal, pacing });
       cosRole = 'owner';
     }
     return { humanRole, cosRole };
@@ -985,6 +991,7 @@ async function ensureCosPresenceInternal({ fresh = false, signal } = {}) {
   await seedHumanRoleAndCosGrant(config, { signal });
 
   let connection;
+  const pacing = createVerbPacing();
   connection = createWorldConnection({
     world: config.world,
     id: config.cos.id,
@@ -998,15 +1005,16 @@ async function ensureCosPresenceInternal({ fresh = false, signal } = {}) {
     const cosRole = snapshot?.yourRights?.role || roleFromSnapshot(snapshot, config.cos.id);
     let humanRole = roleFromSnapshot(snapshot, config.human.id);
     if (config.human.id !== config.cos.id && cosRole === 'owner' && humanRole !== 'owner') {
-      await connection.sendVerb('grant', { id: config.human.id, role: 'owner' }, { signal });
+      await sendPacedVerb(connection, 'grant', { id: config.human.id, role: 'owner' }, { signal, pacing });
       humanRole = 'owner';
     }
-    if (cosRole === 'owner') await revokeRetiredOwners(connection, config, { signal });
+    if (cosRole === 'owner') await revokeRetiredOwners(connection, config, { signal, pacing });
     return rememberObservedRoles({ humanRole, cosRole }).then(() => {
       cosPresence = {
         connection,
         snapshot,
         joinedAt: new Date().toISOString(),
+        pacing,
       };
       return cosPresence;
     });
@@ -1222,19 +1230,30 @@ async function resolveAndLockAssets(config, { signal } = {}) {
   return persistAssetLock(result.resolutions, runtimeVersion);
 }
 
+function createVerbPacing() {
+  return { lastVerbSentAt: null };
+}
+
+async function sendPacedVerb(connection, verb, args, {
+  signal,
+  pacing = createVerbPacing(),
+} = {}) {
+  throwIfAborted(signal);
+  if (pacing.lastVerbSentAt !== null) {
+    const wait = PROJECTION_VERB_INTERVAL_MS - (Date.now() - pacing.lastVerbSentAt);
+    if (wait > 0) await abortableDelay(wait, signal);
+  }
+  await connection.sendVerb(verb, args, { signal });
+  pacing.lastVerbSentAt = Date.now();
+}
+
 async function sendOperations(connection, operations, {
   signal,
   onApplied,
-  pacing = { lastVerbSentAt: null },
+  pacing = createVerbPacing(),
 } = {}) {
   for (const operation of operations) {
-    throwIfAborted(signal);
-    if (pacing.lastVerbSentAt !== null) {
-      const wait = PROJECTION_VERB_INTERVAL_MS - (Date.now() - pacing.lastVerbSentAt);
-      if (wait > 0) await abortableDelay(wait, signal);
-    }
-    await connection.sendVerb(operation.verb, operation.args, { signal });
-    pacing.lastVerbSentAt = Date.now();
+    await sendPacedVerb(connection, operation.verb, operation.args, { signal, pacing });
     onApplied?.(operation);
   }
 }
@@ -1367,7 +1386,7 @@ async function applyProjectionPlan(presence, plan, { signal, freshInstall = fals
     stage,
     plan.operations.filter((operation) => operation.layer === stage),
   ]);
-  const pacing = { lastVerbSentAt: null };
+  const pacing = presence.pacing || createVerbPacing();
   const execution = stages.reduce((promise, [stage, operations]) => promise.then(async () => {
     if (operations.length === 0) return;
     await recordReconciliationCheckpoint({ checkpoint: `applying-${stage}` });
@@ -1391,7 +1410,9 @@ async function applyProjectionPlan(presence, plan, { signal, freshInstall = fals
       compensationStatus: 'running',
     });
     const compensation = ensureCosPresenceInternal({ fresh: true })
-      .then((recoveryPresence) => sendOperations(recoveryPresence.connection, rollback));
+      .then((recoveryPresence) => sendOperations(recoveryPresence.connection, rollback, {
+        pacing: recoveryPresence.pacing,
+      }));
     return compensation.then(
       async () => {
         await recordReconciliationCheckpoint({
@@ -1646,7 +1667,7 @@ export async function augmentEidoverseWorld(operations, { signal } = {}) {
     await assertInstalled();
     const presence = await ensureCosPresenceInternal({ signal });
     const normalized = operations.map(normalizeAugmentOperation);
-    await sendOperations(presence.connection, normalized, { signal });
+    await sendOperations(presence.connection, normalized, { signal, pacing: presence.pacing });
     return {
       success: true,
       world: presence.connection.world,
@@ -1668,7 +1689,10 @@ export async function sayInEidoverseWorld(text, { signal } = {}) {
         code: 'EIDOVERSE_ARGUMENT_INVALID',
       });
     }
-    await presence.connection.sendVerb('say', { text: message }, { signal });
+    await sendPacedVerb(presence.connection, 'say', { text: message }, {
+      signal,
+      pacing: presence.pacing,
+    });
     return { success: true, world: presence.connection.world, id: presence.connection.id };
   });
 }

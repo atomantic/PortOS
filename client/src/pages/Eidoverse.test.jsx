@@ -139,6 +139,8 @@ describe('Eidoverse hosted page', () => {
     expect(overlayHeading.closest('section')).toHaveClass('port-media-overlay');
     expect(screen.getByRole('button', { name: 'Refresh world' }))
       .toHaveClass('port-media-overlay-strong', 'port-media-overlay-item');
+    expect(screen.getByRole('button', { name: 'Refresh world' }))
+      .toHaveAttribute('aria-label', 'Refresh world');
     expect(screen.getByRole('region', { name: 'PortOS district legend' }).querySelector('.port-media-overlay'))
       .toBeInTheDocument();
     expect(screen.getByText('App Terraces')).toBeInTheDocument();

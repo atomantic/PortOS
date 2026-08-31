@@ -409,6 +409,34 @@ describe('Eidoverse PortOS projection plan', () => {
     }));
   });
 
+  it('retires unsanitized V1 signals without charging them to the V2 live budget', () => {
+    const recipe = structuredClone(DEFAULT_EIDOVERSE_PROJECTION_RECIPE);
+    recipe.limits.apps = 48;
+    const apps = Array.from({ length: 48 }, (_, index) => ({
+      id: `app-${index}`,
+      status: 'online',
+    }));
+    const legacyEntities = Object.fromEntries(Array.from({ length: 3 }, (_, index) => [
+      `portos-projection-jira-${index}`,
+      {
+        lib: 'eidoverse/assets/models/example-legacy.glb',
+        comp: { portos: { label: `Private legacy ticket ${index}` } },
+      },
+    ]));
+    const plan = buildProjectionPlan({
+      source: { ...emptySources(), apps, jira: null },
+      recipe,
+      currentState: { ...currentEnvironment(recipe), entities: legacyEntities },
+    });
+    const legacyRemovals = plan.operations.filter(({ verb, args }) => (
+      verb === 'remove' && args.id.startsWith('portos-projection-jira-')
+    ));
+
+    expect(plan.summary.liveEntityCount).toBe(48);
+    expect(legacyRemovals).toHaveLength(3);
+    expect(JSON.stringify(plan.operations)).not.toMatch(/Private legacy ticket/);
+  });
+
   it('removes signals after a confirmed empty source read', () => {
     const created = buildProjectionPlan({ source: appSource(), currentState: currentEnvironment() });
     const appSpawn = signalSpawn(created, 'app');

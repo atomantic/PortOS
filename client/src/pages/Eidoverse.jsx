@@ -501,6 +501,7 @@ export default function Eidoverse() {
             <div className="pointer-events-auto flex gap-2">
               <button
                 type="button"
+                aria-label="Refresh world"
                 onClick={() => { void runProjection().catch(() => {}); }}
                 disabled={projectionStatus === 'running'}
                 className="port-media-overlay-strong port-media-overlay-item inline-flex min-h-[42px] items-center gap-2 rounded-xl border border-port-border px-3 text-sm shadow-xl transition-colors hover:border-port-accent disabled:cursor-wait disabled:opacity-60"

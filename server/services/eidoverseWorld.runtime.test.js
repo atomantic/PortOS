@@ -501,6 +501,23 @@ describe('Eidoverse private-world lifecycle', () => {
     expect(authoredVerbs[firstEnvironment].sentAt - authoredVerbs[firstEnvironment - 1].sentAt).toBeGreaterThanOrEqual(4);
   });
 
+  it('shares verb pacing between ownership retirement and the projection burst', async () => {
+    await world.ensureEidoverseWorldConfig();
+    mocks.persistedState.ownership.retired = [
+      { world: 'portos', id: 'Example Retired Owner A' },
+      { world: 'portos', id: 'Example Retired Owner B' },
+    ];
+
+    await world.projectEidoverseWorld();
+
+    const cosVerbs = mocks.sent.filter(({ type, actor }) => type === 'verb' && actor === 'portos-cos');
+    expect(cosVerbs.slice(0, 2).map(({ verb }) => verb)).toEqual(['grant', 'grant']);
+    expect(cosVerbs.some(({ verb }) => verb !== 'grant')).toBe(true);
+    for (let index = 1; index < cosVerbs.length; index += 1) {
+      expect(cosVerbs[index].sentAt - cosVerbs[index - 1].sentAt).toBeGreaterThanOrEqual(4);
+    }
+  });
+
   it('excludes a catalog-listed asset whose bytes disappeared and locks a verified fallback', async () => {
     const slots = world.DEFAULT_EIDOVERSE_PROJECTION_RECIPE.assetRecipe.slots;
     const appPreferred = slots.app.preferredPaths[0];

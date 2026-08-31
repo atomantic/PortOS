@@ -107,9 +107,6 @@ function signalKindFromEntityId(id) {
   if (id.startsWith(PROJECTION_ID_PREFIX)) {
     return id.slice(PROJECTION_ID_PREFIX.length).split('-')[0];
   }
-  if (id.startsWith(LEGACY_PROJECTION_ID_PREFIX)) {
-    return id.slice(LEGACY_PROJECTION_ID_PREFIX.length).split('-')[0];
-  }
   return null;
 }
 
@@ -457,11 +454,7 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
   const staleCandidates = Object.keys(stateEntities)
     .map((id) => ({ id, kind: signalKindFromEntityId(id) }))
     .filter(({ kind }) => kind && unavailableKinds.has(kind))
-    .sort((left, right) => {
-      const legacyOrder = Number(left.id.startsWith(LEGACY_PROJECTION_ID_PREFIX))
-        - Number(right.id.startsWith(LEGACY_PROJECTION_ID_PREFIX));
-      return legacyOrder || left.id.localeCompare(right.id);
-    });
+    .sort((left, right) => left.id.localeCompare(right.id));
   const retainedStaleCandidates = staleCandidates.slice(0, liveEntityLimit);
   const retainedStaleIds = new Set(retainedStaleCandidates.map(({ id }) => id));
   const overBudgetStaleIds = new Set(staleCandidates.slice(liveEntityLimit).map(({ id }) => id));
