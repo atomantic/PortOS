@@ -62,6 +62,26 @@ describe('Eidoverse World Design V2', () => {
     expect(migrated.report.preservedOverrides).toEqual(expect.arrayContaining(['limits.apps', 'assets.app']));
   });
 
+  it('preserves only a customized V1 terrain leaf while adopting V2 terrain defaults', () => {
+    const migrated = migrateEidoverseWorldState({
+      schemaVersion: 1,
+      recipe: {
+        ...EIDOVERSE_WORLD_DESIGN_V1,
+        terrain: { ...EIDOVERSE_WORLD_DESIGN_V1.terrain, seed: 'example-custom' },
+      },
+    });
+
+    expect(migrated.state.userOverrides).toMatchObject({
+      environment: { terrain: { seed: 'example-custom' } },
+    });
+    expect(migrated.state.recipe.environment.terrain).toMatchObject({
+      seed: 'example-custom',
+      size: EIDOVERSE_WORLD_DESIGN_V2.environment.terrain.size,
+      segments: EIDOVERSE_WORLD_DESIGN_V2.environment.terrain.segments,
+      layers: EIDOVERSE_WORLD_DESIGN_V2.environment.terrain.layers,
+    });
+  });
+
   it('retires only an automatic machine-derived V1 identity during migration', () => {
     const migrated = migrateEidoverseWorldState({
       schemaVersion: 1,

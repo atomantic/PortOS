@@ -162,6 +162,7 @@ vi.mock('ws', () => {
 });
 
 const world = await import('./eidoverseWorld.js');
+const { EIDOVERSE_WORLD_DESIGN_V1 } = await import('../lib/eidoverseWorldDesign.js');
 
 beforeEach(async () => {
   await world.__resetEidoverseWorldForTests();
@@ -282,6 +283,25 @@ describe('Eidoverse private-world lifecycle', () => {
       identity: { role: null },
       cos: { id: 'second-cos', connected: false, role: null },
       presence: { connected: false, role: null },
+    });
+  });
+
+  it('migrates a stale V1 recipe submitted after the update instead of pinning V1 defaults', async () => {
+    const updated = await world.updateEidoverseWorldConfig({ recipe: EIDOVERSE_WORLD_DESIGN_V1 });
+
+    expect(updated.design.userOverrides).toEqual({});
+    expect(updated.recipe).toMatchObject({
+      version: 2,
+      limits: {
+        apps: world.DEFAULT_EIDOVERSE_PROJECTION_RECIPE.limits.apps,
+        tasks: world.DEFAULT_EIDOVERSE_PROJECTION_RECIPE.limits.tasks,
+      },
+      environment: {
+        terrain: {
+          size: world.DEFAULT_EIDOVERSE_PROJECTION_RECIPE.environment.terrain.size,
+          segments: world.DEFAULT_EIDOVERSE_PROJECTION_RECIPE.environment.terrain.segments,
+        },
+      },
     });
   });
 
@@ -528,6 +548,7 @@ describe('Eidoverse private-world lifecycle', () => {
       assetOverrides: {
         app: 'store/example-local-asset',
         operations: 'store/example-legacy-operations',
+        district: 'store/example-path-marker',
       },
     });
 
@@ -540,6 +561,7 @@ describe('Eidoverse private-world lifecycle', () => {
 
     const nexusReset = await world.updateEidoverseWorldConfig({ reset: { scope: 'district', districtId: 'nexus' } });
     expect(nexusReset.design.userOverrides.assets?.operations).toBeUndefined();
+    expect(nexusReset.design.userOverrides.assets?.district).toBeUndefined();
   });
 
   it('compensates partially applied V2 entities and leaves the prior design authoritative', async () => {

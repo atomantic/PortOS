@@ -170,7 +170,7 @@ export const EIDOVERSE_DISTRICTS_V2 = Object.freeze([
 export const EIDOVERSE_ASSET_SLOTS_BY_DISTRICT = Object.freeze({
   // Include retired V1 kind keys as well as V2 semantic slots. A scoped reset
   // must clear hidden preserved overrides that can still win assetPathFor().
-  nexus: ['nexus', 'health', 'operations', 'feature'],
+  nexus: ['nexus', 'health', 'operations', 'feature', 'district'],
   apps: ['app'],
   agents: ['agent', 'task'],
   goals: ['goal', 'jira'],
@@ -314,7 +314,7 @@ function v1OverridesForV2(legacyRecipe) {
   for (const section of ['includes', 'limits', 'scale']) {
     if (v1Diff[section]) overrides[section] = clone(v1Diff[section]);
   }
-  if (v1Diff.terrain) overrides.environment = { terrain: clone(legacy.terrain) };
+  if (v1Diff.terrain) overrides.environment = { terrain: clone(v1Diff.terrain) };
   if (v1Diff.assets) overrides.assets = clone(v1Diff.assets);
   // V1's lane geometry and any unknown legacy extension have no safe semantic
   // translation to districts. Preserve their exact values in the report

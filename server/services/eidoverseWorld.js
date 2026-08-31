@@ -492,7 +492,9 @@ export async function updateEidoverseWorldConfig(patch) {
       }
       if (patch.recipe !== undefined) {
         const preservedAssetOverrides = state.userOverrides.assets;
-        state.userOverrides = extractEidoverseDesignOverrides(patch.recipe);
+        state.userOverrides = patch.recipe.version === 1
+          ? migrateEidoverseWorldState({ schemaVersion: 1, recipe: patch.recipe }).state.userOverrides
+          : extractEidoverseDesignOverrides(patch.recipe);
         if (preservedAssetOverrides && Object.keys(preservedAssetOverrides).length) {
           state.userOverrides.assets = clone(preservedAssetOverrides);
         }

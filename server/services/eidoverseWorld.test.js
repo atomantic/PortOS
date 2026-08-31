@@ -79,6 +79,32 @@ describe('Eidoverse PortOS projection plan', () => {
     expect(signalSpawn(plan, 'app').args.lib).toBe(lockedApp);
   });
 
+  it('uses semantic slots for district landmarks and paths instead of a retired feature asset', () => {
+    const legacyFeature = 'store/example-legacy-feature';
+    const appLandmark = 'store/example-app-landmark';
+    const pathMarker = 'store/example-path-marker';
+    const recipe = {
+      ...DEFAULT_EIDOVERSE_PROJECTION_RECIPE,
+      assets: {
+        ...DEFAULT_EIDOVERSE_PROJECTION_RECIPE.assets,
+        feature: legacyFeature,
+        app: appLandmark,
+        district: pathMarker,
+      },
+    };
+    const plan = buildProjectionPlan({ source: emptySources(), recipe });
+    const appDistrict = plan.operations.find((operation) => (
+      operation.verb === 'spawn' && operation.args.id === 'portos-design-v2-infra-apps'
+    ));
+    const pathNode = plan.operations.find((operation) => (
+      operation.verb === 'spawn' && operation.args.id.startsWith('portos-design-v2-path-')
+    ));
+
+    expect(appDistrict.args.lib).toBe(appLandmark);
+    expect(pathNode.args.lib).toBe(pathMarker);
+    expect(plan.operations.filter(({ verb }) => verb === 'spawn').map(({ args }) => args.lib)).not.toContain(legacyFeature);
+  });
+
   it('restores semantic components after an asset change respawns a model', () => {
     const id = 'portos-design-v2-infra-agents';
     const initial = buildProjectionPlan({ source: emptySources() });
