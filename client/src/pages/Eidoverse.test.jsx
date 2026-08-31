@@ -139,26 +139,50 @@ describe('Eidoverse hosted page', () => {
     api.updateEidoverseWorldConfig.mockResolvedValue({ ...worldResponse, human: worldResponse.identity });
   });
 
-  it('loads the installed managed app and renders the PortOS spatial overlay', async () => {
+  it('loads the installed managed app without covering Eidoverse controls', async () => {
+    const user = userEvent.setup();
     renderPage();
 
     const frame = await screen.findByTitle('Eidoverse Worlds');
     expect(frame).toHaveAttribute('src', `http://${window.location.hostname}:8940/?world=portos&name=example-portos-user`);
-    const overlayHeading = await screen.findByText('Your PortOS, made spatial');
-    expect(overlayHeading.closest('section')).toHaveClass('port-media-overlay');
-    expect(screen.getByText(/The Nexus is system health/)).toHaveClass('text-port-text-muted');
-    expect(screen.getByText('Design V2').parentElement).toHaveClass('text-port-text-muted');
-    expect(screen.getByText(/Steady = current/)).toHaveClass('text-port-text-muted');
-    expect(screen.getByRole('button', { name: 'Refresh world' }))
-      .toHaveClass('port-media-overlay-strong', 'port-media-overlay-item');
     expect(screen.getByRole('button', { name: 'Refresh world' }))
       .toHaveAttribute('aria-label', 'Refresh world');
-    expect(screen.getByRole('region', { name: 'PortOS district legend' }).querySelector('.port-media-overlay'))
-      .toBeInTheDocument();
-    expect(screen.getByText('App Terraces')).toBeInTheDocument();
-    expect(screen.getByText('12/48 live signals')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh world' })).not.toHaveClass('port-media-overlay');
+    expect(screen.queryByText('Your PortOS, made spatial')).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'PortOS district legend' })).not.toBeInTheDocument();
+    expect(screen.queryByText('12/48 live signals')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Eidoverse without PortOS controls' }))
+      .toHaveAttribute('href', `http://${window.location.hostname}:8940/?world=portos&name=example-portos-user`);
     await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledWith({ silent: true }));
-    expect(screen.getByRole('link', { name: 'Manage app' })).toHaveAttribute('href', '/apps/app-eidoverse/overview');
+    expect(screen.getByRole('link', { name: 'Manage Eidoverse app' })).toHaveAttribute('href', '/apps/app-eidoverse/overview');
+
+    await user.click(screen.getByRole('button', { name: 'World controls' }));
+    expect(screen.getByText('12 shown')).toBeInTheDocument();
+    expect(screen.getByText(/Up to 48 can be displayed at once\. This is scene capacity, not a health score\./)).toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: 'Districts & Data' }));
+    expect(screen.getByText(/12 are shown now; the 48-indicator limit keeps the scene legible/)).toBeInTheDocument();
+    expect(screen.getByText('App Terraces')).toBeInTheDocument();
+  });
+
+  it('keeps an unknown indicator count distinct from a projected empty world', async () => {
+    const user = userEvent.setup();
+    api.getEidoverseWorldStatus.mockResolvedValueOnce({
+      ...worldResponse,
+      projection: { lastSummary: null },
+    });
+    api.projectEidoverseWorld.mockResolvedValueOnce({
+      success: true,
+      projection: { lastSummary: null },
+      presence: { connected: true, role: 'owner' },
+      design,
+      recipe,
+    });
+    renderPage();
+
+    await screen.findByTitle('Eidoverse Worlds');
+    await user.click(screen.getByRole('button', { name: 'World controls' }));
+    expect(screen.getByText('Waiting for projection')).toBeInTheDocument();
+    expect(screen.queryByText('0 shown')).not.toBeInTheDocument();
   });
 
   it('starts a stopped managed app before connecting', async () => {
@@ -266,7 +290,7 @@ describe('Eidoverse hosted page', () => {
 
     expect(screen.getByLabelText('World name')).toHaveAttribute('pattern', '[A-Za-z0-9_-]+');
     await user.click(screen.getByRole('tab', { name: 'Districts & Data' }));
-    expect(screen.getByText(/bounded summaries, never raw records/i)).toBeInTheDocument();
+    expect(screen.getByText(/bounded summary indicators, never raw records/i)).toBeInTheDocument();
     expect(screen.getByLabelText('Apps')).toBeChecked();
     expect(screen.getByText('3')).toBeInTheDocument();
     expect(screen.getAllByRole('link', { name: 'Open in PortOS' })
@@ -328,7 +352,8 @@ describe('Eidoverse hosted page', () => {
     api.projectEidoverseWorld.mockReturnValueOnce(new Promise((resolve) => { resolveProjection = resolve; }));
     renderPage();
 
-    expect(await screen.findByText('Projecting 5/20')).toBeInTheDocument();
+    const refresh = await screen.findByRole('button', { name: 'Refresh world' });
+    await waitFor(() => expect(refresh).toBeDisabled());
     await user.click(screen.getByRole('button', { name: 'World controls' }));
     await user.click(screen.getByRole('tab', { name: 'Updates & Advanced' }));
     expect(screen.getByRole('progressbar', { name: 'World reconciliation progress' })).toHaveAttribute('aria-valuenow', '5');
@@ -339,7 +364,7 @@ describe('Eidoverse hosted page', () => {
       design: { ...design, reconciliation: { status: 'complete', checkpoint: 'projection-committed' } },
       recipe,
     });
-    await waitFor(() => expect(screen.queryByText('Projecting 5/20')).not.toBeInTheDocument());
+    await waitFor(() => expect(refresh).toBeEnabled());
   });
 
   it('keeps a fresh-world curtain up until the dawn environment is applied', async () => {

@@ -226,8 +226,10 @@ the initial landmarks and signals stream in. The stricter order above remains
 mandatory for every upgrade with a previously applied design.
 
 The hosted page retains a loading curtain until the embedded renderer arrives,
-then presents the scene as the primary surface with a district/status legend,
-live-signal budget, and real reconciliation checkpoint progress over the world.
+then leaves the scene unobstructed. PortOS refresh, configuration, and standalone
+launch actions live in the page header rather than over the renderer. District,
+indicator-capacity, and reconciliation details stay in the World Design drawer,
+where they remain available without covering Eidoverse's own chat and world tools.
 **World controls** opens the shared tabbed drawer:
 
 - **Experience** — durable identity and high-level design status;
