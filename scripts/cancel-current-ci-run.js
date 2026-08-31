@@ -26,15 +26,33 @@ function targetFromEnv(env) {
     ? env.GITHUB_RUN_ID.trim()
     : '';
   const token = typeof env.GITHUB_TOKEN === 'string' ? env.GITHUB_TOKEN.trim() : '';
+  const configuredApiUrl = typeof env.GITHUB_API_URL === 'string'
+    ? env.GITHUB_API_URL.trim()
+    : '';
 
   if (!/^[^/\s]+\/[^/\s]+$/.test(repository) || !/^\d+$/.test(runId) || !token) {
     return null;
   }
 
+  let apiBase = GITHUB_API_BASE;
+  if (configuredApiUrl) {
+    let parsedApiUrl;
+    try {
+      parsedApiUrl = new URL(configuredApiUrl);
+    } catch {
+      return null;
+    }
+    if (parsedApiUrl.protocol !== 'https:' || parsedApiUrl.username || parsedApiUrl.password
+      || parsedApiUrl.search || parsedApiUrl.hash) {
+      return null;
+    }
+    apiBase = configuredApiUrl.replace(/\/+$/, '');
+  }
+
   const [owner, repo] = repository.split('/');
   return {
     token,
-    url: `${GITHUB_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs/${runId}/cancel`,
+    url: `${apiBase}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs/${runId}/cancel`,
   };
 }
 

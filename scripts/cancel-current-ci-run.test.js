@@ -54,6 +54,48 @@ describe('cancelCurrentCiRun', () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
+  it('uses the Actions API base and falls back to the public API when it is absent', async () => {
+    const { fetchImpl, logger } = setup();
+    fetchImpl.mockResolvedValue(response(202));
+
+    await cancelCurrentCiRun({
+      env: { ...ENV, GITHUB_API_URL: 'https://github.example.test/api/v3/' },
+      fetchImpl,
+      logger,
+    });
+    expect(fetchImpl).toHaveBeenLastCalledWith(
+      'https://github.example.test/api/v3/repos/example/portos/actions/runs/123456789/cancel',
+      expect.any(Object),
+    );
+
+    fetchImpl.mockClear();
+    await cancelCurrentCiRun({ env: ENV, fetchImpl, logger });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://api.github.com/repos/example/portos/actions/runs/123456789/cancel',
+      expect.any(Object),
+    );
+  });
+
+  it('rejects an unsafe API base without making a request', async () => {
+    const { fetchImpl, logger } = setup();
+
+    await expect(cancelCurrentCiRun({
+      env: { ...ENV, GITHUB_API_URL: 'http://example.invalid/api/v3' },
+      fetchImpl,
+      logger,
+    })).resolves.toEqual({ outcome: 'skipped', reason: 'invalid-environment' });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    await expect(cancelCurrentCiRun({
+      env: { ...ENV, GITHUB_API_URL: 'not-a-url' },
+      fetchImpl,
+      logger,
+    })).resolves.toEqual({ outcome: 'skipped', reason: 'invalid-environment' });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('keeps a permission failure best-effort and preserves the original job failure', async () => {
     const { fetchImpl, logger } = setup();
     fetchImpl.mockResolvedValue(response(403));

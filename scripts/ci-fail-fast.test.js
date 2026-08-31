@@ -6,8 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const WORKFLOW = readFileSync(join(REPO_ROOT, '.github/workflows/ci.yml'), 'utf8');
-const LEAF_JOBS = ['server', 'client', 'database', 'windows-server'];
-const NON_LEAF_JOBS = ['impact', 'gate', 'full-gate'];
+const NON_LEAF_JOBS = new Set(['impact', 'gate', 'full-gate']);
 const FAIL_FAST_STEP = [
   '      - name: Cancel sibling CI jobs after failure',
   "        if: failure() && github.event_name == 'pull_request'",
@@ -35,9 +34,16 @@ function workflowJobs(yaml) {
 
 describe('ci.yml fail-fast cancellation contract', () => {
   const jobs = workflowJobs(WORKFLOW);
+  const leafJobs = Object.keys(jobs).filter((id) => (
+    !NON_LEAF_JOBS.has(id) && /^\s*needs:\s*impact\s*$/m.test(jobs[id])
+  ));
+
+  it('discovers every direct impact leaf job for contract checks', () => {
+    expect(leafJobs).not.toHaveLength(0);
+  });
 
   it('adds the cancellation step as the final step of every expensive leaf job', () => {
-    for (const id of LEAF_JOBS) {
+    for (const id of leafJobs) {
       const body = jobs[id];
       expect(body, id).toBeTruthy();
       const step = body.slice(body.lastIndexOf('      - name: Cancel sibling CI jobs after failure')).trimEnd();
@@ -47,7 +53,7 @@ describe('ci.yml fail-fast cancellation contract', () => {
   });
 
   it('grants only the leaf jobs the minimum cancellation permissions', () => {
-    for (const id of LEAF_JOBS) {
+    for (const id of leafJobs) {
       const body = jobs[id];
       expect(body, id).toMatch(/\n    permissions:\n      contents: read\n      actions: write\n/);
     }
@@ -57,7 +63,7 @@ describe('ci.yml fail-fast cancellation contract', () => {
   });
 
   it('does not pass arbitrary repository or run targets to the helper', () => {
-    for (const id of LEAF_JOBS) {
+    for (const id of leafJobs) {
       const body = jobs[id];
       expect(body, id).not.toMatch(/GITHUB_(?:REPOSITORY|RUN_ID):/);
       const step = body.slice(body.lastIndexOf('      - name: Cancel sibling CI jobs after failure'));
@@ -67,7 +73,7 @@ describe('ci.yml fail-fast cancellation contract', () => {
   });
 
   it('does not persist the elevated checkout token into leaf job steps', () => {
-    for (const id of LEAF_JOBS) {
+    for (const id of leafJobs) {
       const body = jobs[id];
       const checkoutStart = body.indexOf('      - uses: actions/checkout@v7');
       const nextStep = body.indexOf('\n      - ', checkoutStart + 1);
