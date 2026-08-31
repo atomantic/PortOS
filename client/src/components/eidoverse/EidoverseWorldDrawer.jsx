@@ -55,6 +55,7 @@ export default function EidoverseWorldDrawer({
 }) {
   const [activeTab, setActiveTab] = useDrawerTab('eidoverseTab', 'experience', TAB_IDS);
   const [resetArmed, setResetArmed] = useState(false);
+  const [numericDrafts, setNumericDrafts] = useState({});
   const design = worldState?.design || {};
   const reconciliation = design.reconciliation || {};
   const projectionSummary = worldState?.projection?.lastSummary || {};
@@ -67,6 +68,22 @@ export default function EidoverseWorldDrawer({
       .sort()
       .map((slot) => ({ slot, recipe: null, legacy: true })),
   ];
+  const numericValue = (key, fallback) => (
+    Object.hasOwn(numericDrafts, key) ? numericDrafts[key] : fallback
+  );
+  const updateNumericDraft = (key, raw, commit) => {
+    setNumericDrafts((current) => ({ ...current, [key]: raw }));
+    if (raw === '') return;
+    const number = Number(raw);
+    if (Number.isFinite(number)) commit(number);
+  };
+  const finishNumericDraft = (key) => {
+    setNumericDrafts((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  };
 
   const identityFields = (
     <div className="space-y-4">
@@ -203,14 +220,17 @@ export default function EidoverseWorldDrawer({
                 min={min}
                 max={max}
                 step={step}
-                value={recipeDraft?.environment?.sky?.[key] ?? ''}
-                onChange={(event) => mutateRecipe((current) => ({
-                  ...current,
-                  environment: {
-                    ...current.environment,
-                    sky: { ...current.environment.sky, [key]: Number(event.target.value) },
-                  },
-                }))}
+                value={numericValue(`sky.${key}`, recipeDraft?.environment?.sky?.[key] ?? '')}
+                onChange={(event) => {
+                  updateNumericDraft(`sky.${key}`, event.target.value, (number) => mutateRecipe((current) => ({
+                    ...current,
+                    environment: {
+                      ...current.environment,
+                      sky: { ...current.environment.sky, [key]: number },
+                    },
+                  })));
+                }}
+                onBlur={() => finishNumericDraft(`sky.${key}`)}
               />
             </label>
           ))}
@@ -223,14 +243,17 @@ export default function EidoverseWorldDrawer({
               min="0.1"
               max="2"
               step="0.05"
-              value={recipeDraft?.environment?.grass?.density ?? ''}
-              onChange={(event) => mutateRecipe((current) => ({
-                ...current,
-                environment: {
-                  ...current.environment,
-                  grass: { ...current.environment.grass, density: Number(event.target.value) },
-                },
-              }))}
+              value={numericValue('grass.density', recipeDraft?.environment?.grass?.density ?? '')}
+              onChange={(event) => {
+                updateNumericDraft('grass.density', event.target.value, (number) => mutateRecipe((current) => ({
+                  ...current,
+                  environment: {
+                    ...current.environment,
+                    grass: { ...current.environment.grass, density: number },
+                  },
+                })));
+              }}
+              onBlur={() => finishNumericDraft('grass.density')}
             />
           </label>
         </div>

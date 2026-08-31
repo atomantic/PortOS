@@ -41,6 +41,26 @@ const COMPONENT_LABEL_BY_KIND = Object.freeze({
   activity: 'Activity pulse', goal: 'Active goal', memory: 'Memory aggregate',
   storage: 'Data landmark', jira: 'Current work summary', operations: 'PortOS operations',
 });
+const DISTRICT_ASSET_SLOT = Object.freeze({
+  nexus: 'nexus',
+  apps: 'app',
+  agents: 'agent',
+  goals: 'goal',
+  memory: 'memory',
+  data: 'storage',
+  federation: 'peer',
+  activity: 'activity',
+});
+const DISTRICT_SCALE = Object.freeze({
+  nexus: 1.15,
+  apps: 1.1,
+  agents: 1.15,
+  goals: 1.35,
+  memory: 0.48,
+  data: 0.55,
+  federation: 0.78,
+  activity: 0.72,
+});
 
 export const DEFAULT_EIDOVERSE_PROJECTION_RECIPE = EIDOVERSE_WORLD_DESIGN_V2;
 
@@ -349,26 +369,8 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
       status: enabledSources.length ? 'active' : 'inactive',
       visualCue: enabledSources.length ? { shape: 'open', motion: 'steady' } : { shape: 'closed', motion: 'still' },
     };
-    const districtSlot = {
-      nexus: 'nexus',
-      apps: 'app',
-      agents: 'agent',
-      goals: 'goal',
-      memory: 'memory',
-      data: 'storage',
-      federation: 'peer',
-      activity: 'activity',
-    }[district.id];
-    const districtScale = {
-      nexus: 1.15,
-      apps: 1.1,
-      agents: 1.15,
-      goals: 1.35,
-      memory: 0.48,
-      data: 0.55,
-      federation: 0.78,
-      activity: 0.72,
-    }[district.id];
+    const districtSlot = DISTRICT_ASSET_SLOT[district.id] ?? 'district';
+    const districtScale = DISTRICT_SCALE[district.id] ?? 1;
     const delta = upsertModel({
       operations,
       stateEntities,

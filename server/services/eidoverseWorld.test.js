@@ -222,6 +222,28 @@ describe('Eidoverse PortOS projection plan', () => {
     expect(Math.abs(signal.args.pos[2] - 50)).toBeLessThanOrEqual(13);
   });
 
+  it('gives a custom district id finite defaults and converges on the next plan', () => {
+    const recipe = structuredClone(DEFAULT_EIDOVERSE_PROJECTION_RECIPE);
+    recipe.districts = [{
+      ...recipe.districts.find(({ id }) => id === 'apps'),
+      id: 'example-custom',
+      label: 'Example Custom District',
+    }];
+    const first = buildProjectionPlan({ source: emptySources(), recipe });
+    const landmark = first.operations.find(({ verb, args }) => (
+      verb === 'spawn' && args.id === 'portos-design-v2-infra-example-custom'
+    ));
+    const second = buildProjectionPlan({
+      source: emptySources(),
+      recipe,
+      currentState: snapshotFromPlan(first, { foldModelDefaults: true }),
+    });
+
+    expect(Number.isFinite(landmark.args.scale)).toBe(true);
+    expect(landmark.args.scale).toBe(1);
+    expect(second.operations).toEqual([]);
+  });
+
   it('rejects and defensively ignores authored light ids outside the managed namespace', () => {
     const manualId = 'example-manual-light';
     const recipe = {

@@ -424,6 +424,25 @@ describe('Eidoverse hosted page', () => {
     expect(sunHour).toHaveValue(8.4);
   });
 
+  it('does not coerce temporarily cleared appearance numbers to invalid zeroes', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTitle('Eidoverse Worlds');
+    await user.click(screen.getByRole('button', { name: 'World controls' }));
+    await user.click(screen.getByRole('tab', { name: 'Appearance & Assets' }));
+
+    await user.clear(screen.getByLabelText('Exposure'));
+    await user.clear(screen.getByLabelText('Grass density'));
+    const save = screen.getByRole('button', { name: 'Save and project' });
+    await waitFor(() => expect(save).toBeEnabled());
+    fireEvent.submit(save.closest('form'));
+
+    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledOnce());
+    const saved = api.updateEidoverseWorldConfig.mock.calls[0][0];
+    expect(saved.recipe.environment.sky.exposure).toBe(1.08);
+    expect(saved.recipe.environment.grass.density).toBe(0.45);
+  });
+
   it('surfaces a preserved legacy asset override and lets the user clear it', async () => {
     const legacyPath = 'store/example-legacy-feature';
     const legacyDesign = {
