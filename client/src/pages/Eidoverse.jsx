@@ -74,6 +74,7 @@ const statusTone = (status) => {
 export default function Eidoverse() {
   const requestGeneration = useRef(0);
   const configDraftRevision = useRef(0);
+  const savedDraftRevision = useRef(0);
   const projectionPollGeneration = useRef(0);
   const projectionPollTimer = useRef(null);
   const [phase, setPhase] = useState('loading');
@@ -102,6 +103,7 @@ export default function Eidoverse() {
       setAssetOverridesDraft(updated?.design?.userOverrides?.assets || {});
       if (updated?.world) setWorldName(updated.world);
       if (updated?.identity?.name || updated?.human?.name) setHumanName(updated.identity?.name || updated.human.name);
+      savedDraftRevision.current = configDraftRevision.current;
     }
   }, []);
 
@@ -123,6 +125,7 @@ export default function Eidoverse() {
     setProjectionError('');
     setConfigStatus('');
     configDraftRevision.current = 0;
+    savedDraftRevision.current = 0;
 
     const load = async () => {
       const featureState = await getInstanceFeatures(silent);
@@ -176,6 +179,7 @@ export default function Eidoverse() {
     setProjectionStatus('running');
     setProjectionError('');
     const submittedRevision = configDraftRevision.current;
+    const submittedDraftWasClean = submittedRevision === savedDraftRevision.current;
     const pollGeneration = ++projectionPollGeneration.current;
     const poll = () => {
       if (projectionPollGeneration.current !== pollGeneration) return;
@@ -190,7 +194,8 @@ export default function Eidoverse() {
     };
     projectionPollTimer.current = setTimeout(poll, 750);
     return projectEidoverseWorld(silent).then((result) => {
-      const replaceDraft = configDraftRevision.current === submittedRevision;
+      const replaceDraft = submittedDraftWasClean
+        && configDraftRevision.current === submittedRevision;
       setWorldState((current) => current ? {
         ...current,
         projection: result.projection || current.projection,
@@ -281,6 +286,7 @@ export default function Eidoverse() {
 
   const runConfigAction = useCallback(async (payload) => {
     const submittedRevision = configDraftRevision.current;
+    const submittedDraftWasClean = submittedRevision === savedDraftRevision.current;
     setConfigStatus('saving');
     const updated = await updateEidoverseWorldConfig(payload, silent).catch((reason) => {
       setConfigStatus(reason?.message || 'Could not update the Eidoverse world configuration.');
@@ -288,9 +294,11 @@ export default function Eidoverse() {
     });
     if (!updated) return;
     const draftIsCurrent = configDraftRevision.current === submittedRevision;
-    if (draftIsCurrent) configDraftRevision.current += 1;
-    applyWorldResponse(updated, { replaceDraft: draftIsCurrent });
-    setConfigStatus(draftIsCurrent ? 'saved' : '');
+    const replaceDraft = draftIsCurrent
+      && (submittedDraftWasClean || payload.reset?.scope === 'all');
+    if (replaceDraft) configDraftRevision.current += 1;
+    applyWorldResponse(updated, { replaceDraft });
+    setConfigStatus(replaceDraft ? 'saved' : '');
     void runProjection().catch(() => {});
   }, [applyWorldResponse, runProjection]);
 

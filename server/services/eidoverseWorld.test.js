@@ -79,6 +79,43 @@ describe('Eidoverse PortOS projection plan', () => {
     expect(signalSpawn(plan, 'app').args.lib).toBe(lockedApp);
   });
 
+  it('restores semantic components after an asset change respawns a model', () => {
+    const id = 'portos-design-v2-infra-agents';
+    const initial = buildProjectionPlan({ source: emptySources() });
+    const spawn = initial.operations.find((operation) => operation.verb === 'spawn' && operation.args.id === id);
+    const portos = initial.operations.find((operation) => (
+      operation.verb === 'comp' && operation.args.id === id && operation.args.type === 'portos'
+    ));
+    const motion = initial.operations.find((operation) => (
+      operation.verb === 'comp' && operation.args.id === id && operation.args.type === 'motion'
+    ));
+    const replacement = 'eidoverse/assets/models/example_locked_agent.glb';
+    const recipe = {
+      ...DEFAULT_EIDOVERSE_PROJECTION_RECIPE,
+      assets: { ...DEFAULT_EIDOVERSE_PROJECTION_RECIPE.assets, agent: replacement },
+    };
+    const plan = buildProjectionPlan({
+      source: emptySources(),
+      recipe,
+      currentState: {
+        ...currentEnvironment(recipe),
+        entities: {
+          [id]: {
+            ...spawn.args,
+            comp: { portos: portos.args.data, motion: motion.args.data },
+          },
+        },
+      },
+    });
+
+    expect(plan.operations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ verb: 'remove', args: { id } }),
+      expect.objectContaining({ verb: 'spawn', args: expect.objectContaining({ id, lib: replacement }) }),
+      expect.objectContaining({ verb: 'comp', args: { id, type: 'portos', data: portos.args.data } }),
+      expect.objectContaining({ verb: 'comp', args: { id, type: 'motion', data: motion.args.data } }),
+    ]));
+  });
+
   it('recognizes Eidoverse folded light defaults as already applied', () => {
     const entities = Object.fromEntries(DEFAULT_EIDOVERSE_PROJECTION_RECIPE.environment.lights.map((light) => [
       light.id,

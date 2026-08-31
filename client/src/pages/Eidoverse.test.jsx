@@ -363,4 +363,25 @@ describe('Eidoverse hosted page', () => {
     await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledTimes(2));
     expect(nameInput).toHaveValue('example-portos-user-edited');
   });
+
+  it('keeps pre-existing unsaved edits through an asset refresh and projection', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTitle('Eidoverse Worlds');
+    await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledOnce());
+    await user.click(screen.getByRole('button', { name: 'World controls' }));
+    await user.click(screen.getByRole('tab', { name: 'Appearance & Assets' }));
+
+    const sunHour = screen.getByLabelText('Sun hour');
+    await user.clear(sunHour);
+    await user.type(sunHour, '8.4');
+    await user.click(screen.getByRole('button', { name: 'Refresh asset matches' }));
+
+    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledWith(
+      { refreshAssets: true },
+      { silent: true },
+    ));
+    await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledTimes(2));
+    expect(sunHour).toHaveValue(8.4);
+  });
 });

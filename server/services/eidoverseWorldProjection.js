@@ -221,7 +221,8 @@ function upsertModel({
   let created = 0;
   let updated = 0;
   let removed = 0;
-  if (!existing || existing.lib !== lib) {
+  const respawned = !existing || existing.lib !== lib;
+  if (respawned) {
     if (existing) {
       operations.push({ layer, verb: 'remove', args: { id } });
       removed += 1;
@@ -235,11 +236,12 @@ function upsertModel({
     operations.push({ layer, verb: 'place', args: { id, pos, yaw, scale } });
     updated += 1;
   }
-  if (!equal(existing?.comp?.[COMPONENT_TYPE], component)) {
+  const priorComponents = respawned ? undefined : existing.comp;
+  if (!equal(priorComponents?.[COMPONENT_TYPE], component)) {
     operations.push({ layer, verb: 'comp', args: { id, type: COMPONENT_TYPE, data: component } });
     if (existing) updated += 1;
   }
-  if (!equal(existing?.comp?.motion ?? null, motion)) {
+  if (!equal(priorComponents?.motion ?? null, motion)) {
     operations.push({ layer: motionLayer, verb: 'comp', args: { id, type: 'motion', data: motion } });
     if (existing) updated += 1;
   }
