@@ -50,6 +50,14 @@ jobs:
   full-ci:
     needs: verify-ci
     if: needs.verify-ci.outputs.verified != 'true'
+    # `actions: write` looks unused from here — the fail-fast cancellation step
+    # in ci.yml's leaf jobs is gated on `github.event_name == 'pull_request'`,
+    # and a called workflow inherits the caller's event, which is this push.
+    # It still has to be granted: a called workflow's jobs cannot hold a
+    # permission the calling job does not, so narrowing this to `contents: read`
+    # strips `actions: write` from leaf jobs that declare it. This block also
+    # scopes full-ci DOWN from the workflow-level `contents: write` the release
+    # job needs; ci.yml only ever checks out. ci-fail-fast.test.js pins it.
     permissions:
       contents: read
       actions: write

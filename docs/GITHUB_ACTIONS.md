@@ -274,28 +274,54 @@ endpoint. The helper accepts no repository or run arguments: it validates and
 uses only `GITHUB_REPOSITORY` and `GITHUB_RUN_ID` supplied by Actions, with the
 step-scoped `GITHUB_TOKEN`.
 
-The leaf jobs request only `contents: read` and `actions: write`. The token is
-present in the environment only for the cancellation step, and no third-party
-action or long-lived secret is involved. The failing test/build step runs
-before cancellation, so its annotations and logs remain the evidence for the
-failure. A successful cancellation returns `202`; a `409` means the run is
-already terminal and is treated as a no-op.
+The leaf jobs request only `contents: read` and `actions: write`, and check
+out with `persist-credentials: false` so a token that can now cancel runs is
+not left in `.git/config` for the test suite's own subprocesses to read. The
+token is present in the environment only for the cancellation step, and no
+third-party action or long-lived secret is involved. The failing test/build
+step runs before cancellation, so its annotations and logs remain the evidence
+for the failure. A successful cancellation returns `202`; a `409` means the run
+is already terminal and is treated as a no-op.
+
+`release.yml`'s `full-ci` job must grant `actions: write` to the workflow it
+calls even though the cancellation step never fires there — a called workflow's
+jobs cannot hold a permission the calling job lacks. See the comment on that
+job; `scripts/ci-fail-fast.test.js` pins it.
 
 Cancellation is deliberately best-effort. Fork pull requests and other
 read-only-token runs may receive a permission failure, and transient API or
 network failures are also possible. The helper logs the unavailable
 cancellation and exits normally, preserving the original failed step and its
-failed job result when the API is unavailable. When cancellation succeeds, the
-run-wide cancellation can mark the requesting job and `CI Gate` as canceled;
-the failed step's log and annotations remain the diagnostic evidence, and a
-canceled result is still non-mergeable. `CI Gate` allows only `success` or
-`skipped` results; failed or canceled leaf jobs therefore cannot satisfy the
-required aggregate context. The target is for siblings to become canceled
-within 30 seconds of the first failing job completing, while the existing
-workflow-level concurrency cancellation continues to handle newer runs
-independently. Scheduled, manually dispatched, and release-called runs skip
-this sibling cancellation so their aggregate diagnostics and cache post-steps
-can complete normally.
+failed job result when the API is unavailable. It imports only Node builtins,
+so it still runs from a job that failed before `npm ci`
+(`scripts/pre-install-entrypoints.test.js` enforces that).
+
+**Canceled is not mergeable.** A run-wide cancellation lands on the requesting
+job and on `CI Gate`, which is usually still waiting on its `needs` and so ends
+`cancelled` rather than running its comparison. Every consumer treats that as a
+non-pass, by allowlisting the green results rather than denylisting the red
+ones:
+
+- Branch protection requires the `CI Gate` context to conclude `success`;
+  `cancelled` does not satisfy it, and a gate that never publishes leaves the
+  required context unreported, which also blocks.
+- If the gate job does run, it accepts only `success` or `skipped` per job, so
+  the failed leaf (or its own `cancelled` result) fails the gate.
+- `scripts/verify-ci-status.js` accepts a `Full CI Gate` only at
+  `conclusion === 'success'`, so a canceled run can never let a release skip
+  the full suite.
+- PortOS's own auto-merge watcher (`server/services/prWatcher.js`) counts only
+  `SUCCESS`/`NEUTRAL`/`SKIPPED` as green.
+
+The consequence to expect in the UI: on a fail-fast run the required check
+reads *canceled*, not *failed*. The failing step's log and annotations are
+still the diagnosis. The target is for siblings to become canceled within 30
+seconds of the first failing job completing, while the existing workflow-level
+`concurrency.cancel-in-progress` continues to handle superseded runs
+independently — the two are orthogonal, one canceling this run by id and the
+other canceling an older run when a newer commit arrives. Scheduled, manually
+dispatched, and release-called runs skip this sibling cancellation so their
+aggregate diagnostics and cache post-steps can complete normally.
 
 ### Impact-planner safety rules
 

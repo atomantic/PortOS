@@ -7,8 +7,20 @@ import { describe, expect, it } from 'vitest';
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const WORKFLOW = readFileSync(join(REPO_ROOT, '.github/workflows/ci.yml'), 'utf8');
 const NON_LEAF_JOBS = new Set(['impact', 'gate', 'full-gate']);
+// The expensive fan-out jobs that exist today. A FLOOR, not a snapshot: a new
+// leaf job has to be discovered on its own and held to the contract below, so
+// nothing here has to be edited to add one. What this list catches is the
+// opposite — discovery silently ceasing to see one of the four while the other
+// three keep every assertion green.
+const EXPECTED_LEAF_JOBS = ['client', 'database', 'server', 'windows-server'];
+const CANCEL_STEP_HEADING = '      - name: Cancel sibling CI jobs after failure';
+// Both spellings of the dependency. Under a scalar-only pattern, a leaf job
+// rewritten to the list form (`needs: [impact]`) dropped out of every assertion
+// below without failing anything — the exact silent coverage loss this contract
+// exists to prevent.
+const NEEDS_IMPACT = /^\s*needs:\s*(?:impact\s*$|\[[^\]]*\bimpact\b)/m;
 const FAIL_FAST_STEP = [
-  '      - name: Cancel sibling CI jobs after failure',
+  CANCEL_STEP_HEADING,
   "        if: failure() && github.event_name == 'pull_request'",
   '        env:',
   '          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}',
@@ -35,18 +47,27 @@ function workflowJobs(yaml) {
 describe('ci.yml fail-fast cancellation contract', () => {
   const jobs = workflowJobs(WORKFLOW);
   const leafJobs = Object.keys(jobs).filter((id) => (
-    !NON_LEAF_JOBS.has(id) && /^\s*needs:\s*impact\s*$/m.test(jobs[id])
+    !NON_LEAF_JOBS.has(id) && NEEDS_IMPACT.test(jobs[id])
   ));
 
   it('discovers every direct impact leaf job for contract checks', () => {
-    expect(leafJobs).not.toHaveLength(0);
+    expect(leafJobs).toEqual(expect.arrayContaining(EXPECTED_LEAF_JOBS));
+  });
+
+  it('covers every cancellation step the workflow actually installs', () => {
+    // The discovery floor from the other side. A cancellation step added to a
+    // job this file does not classify as a leaf would never be checked for the
+    // `actions: write` grant it needs, and a missing grant fails only at
+    // runtime — inside a job that is otherwise passing.
+    const installed = WORKFLOW.split(CANCEL_STEP_HEADING).length - 1;
+    expect(installed).toBe(leafJobs.length);
   });
 
   it('adds the cancellation step as the final step of every expensive leaf job', () => {
     for (const id of leafJobs) {
       const body = jobs[id];
       expect(body, id).toBeTruthy();
-      const step = body.slice(body.lastIndexOf('      - name: Cancel sibling CI jobs after failure')).trimEnd();
+      const step = body.slice(body.lastIndexOf(CANCEL_STEP_HEADING)).trimEnd();
       expect(step, id).toBe(FAIL_FAST_STEP);
       expect(body.match(/GITHUB_TOKEN:/g), id).toHaveLength(1);
     }
@@ -66,7 +87,7 @@ describe('ci.yml fail-fast cancellation contract', () => {
     for (const id of leafJobs) {
       const body = jobs[id];
       expect(body, id).not.toMatch(/GITHUB_(?:REPOSITORY|RUN_ID):/);
-      const step = body.slice(body.lastIndexOf('      - name: Cancel sibling CI jobs after failure'));
+      const step = body.slice(body.lastIndexOf(CANCEL_STEP_HEADING));
       expect(step, id).not.toContain('\n        with:');
       expect(body, id).toContain('if: failure()');
     }
@@ -83,8 +104,11 @@ describe('ci.yml fail-fast cancellation contract', () => {
   });
 
   it('grants the reusable release caller the permission leaf jobs require', () => {
+    // Bounded to the full-ci job: slicing to end of file would let a
+    // permissions block on the later `release` job satisfy this instead.
     const releaseWorkflow = readFileSync(join(REPO_ROOT, '.github/workflows/release.yml'), 'utf8');
-    const fullCi = releaseWorkflow.slice(releaseWorkflow.indexOf('\n  full-ci:'));
+    const fullCi = workflowJobs(releaseWorkflow)['full-ci'];
+    expect(fullCi).toBeTruthy();
     expect(fullCi).toMatch(/\n    permissions:\n      contents: read\n      actions: write\n/);
   });
 });
