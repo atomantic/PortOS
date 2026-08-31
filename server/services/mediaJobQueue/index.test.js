@@ -1587,17 +1587,65 @@ describe('mediaJobQueue unreadable snapshot (#4115)', () => {
   });
 });
 
+// Polling helper for the async settles this suite waits on (a debounced disk
+// write, a worker tick). A predicate that THROWS counts as "not true yet" and
+// keeps polling: several predicates readFileSync the persisted snapshot, which
+// legitimately does not exist until the first write lands in the freshly-made
+// temp dir, so an unguarded throw escaped the loop and failed the test on its
+// FIRST poll instead of waiting for the write (#5512 — flaked on slow Windows
+// CI runners). Swallowing is bounded to the retry window only: the timeout
+// still throws, and names the predicate source plus the last error, so a
+// genuinely broken predicate stays diagnosable instead of becoming an
+// anonymous 3-second stall. No predicate here uses expect(), so a real
+// assertion failure cannot be downgraded into a timeout by the catch.
 async function waitFor(predicate, { timeoutMs = 3000, intervalMs = 30 } = {}) {
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
-  while (Date.now() < deadline) {
+  for (;;) {
     try {
       if (predicate()) return;
       lastError = null;
     } catch (err) {
       lastError = err;
     }
+    // Deadline is checked AFTER a poll so the budget always ends on an
+    // evaluation. Checking first (the `while` this replaced) spent the final
+    // interval asleep and threw without ever re-testing the predicate, losing
+    // up to intervalMs of the window to the same race this helper guards.
+    if (Date.now() >= deadline) break;
     await new Promise((r) => setTimeout(r, intervalMs));
   }
-  throw new Error(`waitFor: predicate never became true within timeout${lastError ? `: ${lastError.message}` : ''}`);
+  const source = String(predicate).replace(/\s+/g, ' ').slice(0, 160);
+  throw new Error(
+    `waitFor: predicate never became true within ${timeoutMs}ms: ${source}${lastError ? ` — last error: ${lastError.message}` : ''}`,
+    lastError ? { cause: lastError } : undefined,
+  );
 }
+
+// Contract test for the helper above. The bug it guards (#5512) only surfaces
+// under timing luck on a slow runner, so it is pinned deterministically here
+// rather than left to the flake that found it. One short real timeout, not a
+// repeated sleep.
+describe('waitFor test helper (#5512)', () => {
+  it('treats a throwing predicate as not-yet-true and keeps polling', async () => {
+    let calls = 0;
+    await waitFor(() => {
+      calls += 1;
+      if (calls < 3) throw new Error('ENOENT: no such file or directory');
+      return true;
+    }, { timeoutMs: 1000, intervalMs: 1 });
+    expect(calls).toBe(3);
+  });
+
+  it('still fails loudly on timeout, naming the predicate and the last error', async () => {
+    await expect(waitFor(
+      () => { throw new Error('ENOENT: no such file or directory'); },
+      { timeoutMs: 20, intervalMs: 5 },
+    )).rejects.toThrow(/never became true within 20ms.*last error: ENOENT/s);
+  });
+
+  it('reports a cleanly-false predicate without inventing an error', async () => {
+    await expect(waitFor(() => false, { timeoutMs: 20, intervalMs: 5 }))
+      .rejects.toThrow(/never became true within 20ms(?!.*last error)/s);
+  });
+});
