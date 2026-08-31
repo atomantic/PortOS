@@ -27,15 +27,16 @@ const DEFAULT_HUMAN_NAME = 'portos-8e9b660b05fb';
 
 vi.mock('../lib/fileUtils.js', async (importActual) => {
   const actual = await importActual();
+  const isWorldStatePath = (path) => String(path).replaceAll('\\', '/') === mocks.worldStatePath;
   return {
     ...actual,
     dataPath: (...segments) => `/mock/data/${segments.join('/')}`,
     ensureDir: vi.fn(async () => {}),
     readJSONFile: vi.fn(async (path, fallback) => structuredClone(
-      path === mocks.worldStatePath ? (mocks.persistedState ?? fallback) : fallback,
+      isWorldStatePath(path) ? (mocks.persistedState ?? fallback) : fallback,
     )),
     atomicWrite: vi.fn(async (path, value) => {
-      if (path !== mocks.worldStatePath) return;
+      if (!isWorldStatePath(path)) return;
       mocks.persistedState = structuredClone(value);
       mocks.writes += 1;
     }),
