@@ -4,8 +4,28 @@
  * Snapshots + restores the `albums` table. Mirrors artists/db.test.js.
  */
 
-import { describe, it, expect, afterAll, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, vi, afterAll, beforeAll, beforeEach } from 'vitest';
+import { rmSync } from 'fs';
+import { join } from 'path';
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
+import { getSyncBaseHash, __resetBaseHashCacheForTests } from '../../lib/conflictJournal.js';
+
+const testState = vi.hoisted(() => ({ dataRoot: null, writeCounter: { baseHash: 0 } }));
+
+vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  testState.dataRoot ??= mkdtempSync(join(tmpdir(), 'albums-db-test-'));
+  return {
+    ...actual,
+    PATHS: { ...actual.PATHS, data: testState.dataRoot },
+    atomicWrite: async (path, data) => {
+      if (typeof path === 'string' && path.endsWith('sync_base_hashes.json')) testState.writeCounter.baseHash += 1;
+      return actual.atomicWrite(path, data);
+    },
+  };
+});
 
 let dbReady = false;
 let skipReason = '';
@@ -25,6 +45,8 @@ let skipReason = '';
 
 if (!dbReady) console.log(`⏭️  services/albums/db.test.js skipped: ${skipReason}`);
 
+afterAll(() => rmSync(testState.dataRoot, { recursive: true, force: true }));
+
 describe.skipIf(!dbReady)('albums DB adapter round-trip', () => {
   let db;
   let snap = [];
@@ -32,7 +54,12 @@ describe.skipIf(!dbReady)('albums DB adapter round-trip', () => {
     db = await import('./db.js');
     snap = (await query(`SELECT * FROM albums`)).rows;
   });
-  beforeEach(async () => { await query(`DELETE FROM albums`); });
+  beforeEach(async () => {
+    await query(`DELETE FROM albums`);
+    rmSync(join(testState.dataRoot, 'sharing'), { recursive: true, force: true });
+    __resetBaseHashCacheForTests();
+    testState.writeCounter.baseHash = 0;
+  });
   afterAll(async () => {
     await query(`DELETE FROM albums`).catch(() => {});
     for (const r of snap) {
@@ -72,11 +99,23 @@ describe.skipIf(!dbReady)('albums DB adapter round-trip', () => {
     expect(await db.getAlbum(a.id)).toBeNull();
   });
 
-  it('pruneTombstonedAlbums removes old tombstones only', async () => {
+  it('pruneTombstonedAlbums batches multiple old tombstone base-hash evictions', async () => {
     const live = await db.createAlbum({ title: 'Live' });
     const dead = await db.createAlbum({ title: 'Dead' });
-    await db.mergeAlbumsFromSync([{ ...dead, deleted: true, deletedAt: '2020-01-01T00:00:00.000Z', updatedAt: '2099-01-01T00:00:00.000Z' }]);
-    expect((await db.pruneTombstonedAlbums(Date.parse('2030-01-01T00:00:00.000Z'))).pruned).toBe(1);
+    const deadTwo = await db.createAlbum({ title: 'DeadTwo' });
+    await db.mergeAlbumsFromSync([
+      { ...dead, deleted: true, deletedAt: '2020-01-01T00:00:00.000Z', updatedAt: '2099-01-01T00:00:00.000Z' },
+      { ...deadTwo, deleted: true, deletedAt: '2020-01-02T00:00:00.000Z', updatedAt: '2099-01-01T00:00:00.000Z' },
+    ]);
+    expect(await getSyncBaseHash('album', dead.id)).not.toBeNull();
+    expect(await getSyncBaseHash('album', deadTwo.id)).not.toBeNull();
+
+    testState.writeCounter.baseHash = 0;
+    expect(await db.pruneTombstonedAlbums(Date.parse('2030-01-01T00:00:00.000Z')))
+      .toEqual({ pruned: 2 });
+    expect(testState.writeCounter.baseHash).toBe(1);
+    expect(await getSyncBaseHash('album', dead.id)).toBeNull();
+    expect(await getSyncBaseHash('album', deadTwo.id)).toBeNull();
     expect((await query(`SELECT id FROM albums`)).rows.map((r) => r.id)).toEqual([live.id]);
   });
 });

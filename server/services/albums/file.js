@@ -14,6 +14,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { sanitizeAlbum, buildAlbumRecord, applyAlbumPatch, mergeAlbumRecord } from './logic.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
+  withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
 
 const ALBUMS_FILE = join(PATHS.data, 'albums.json');
@@ -120,6 +121,8 @@ export async function pruneTombstonedAlbums(olderThanMs) {
   }
   if (pruned.length === 0) return { pruned: 0 };
   await saveAll(survivors);
-  for (const id of pruned) await deleteSyncBaseHash('album', id);
+  await withBaseHashFlushBatch(async () => {
+    for (const id of pruned) await deleteSyncBaseHash('album', id);
+  });
   return { pruned: pruned.length };
 }

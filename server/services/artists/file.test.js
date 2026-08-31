@@ -16,10 +16,18 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'artists-file-test-'));
+const writeCounter = vi.hoisted(() => ({ baseHash: 0 }));
 
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, PATHS: { ...actual.PATHS, data: TEST_DATA_ROOT } };
+  return {
+    ...actual,
+    PATHS: { ...actual.PATHS, data: TEST_DATA_ROOT },
+    atomicWrite: async (path, data) => {
+      if (typeof path === 'string' && path.endsWith('sync_base_hashes.json')) writeCounter.baseHash += 1;
+      return actual.atomicWrite(path, data);
+    },
+  };
 });
 
 const file = await import('./file.js');
@@ -30,6 +38,7 @@ function reset() {
   rmSync(join(TEST_DATA_ROOT, 'sharing'), { recursive: true, force: true });
   rmSync(join(TEST_DATA_ROOT, 'conflict-journal'), { recursive: true, force: true });
   cj.__resetBaseHashCacheForTests();
+  writeCounter.baseHash = 0;
 }
 
 const journalEntries = () => cj.conflictJournalStore().loadAll();
@@ -131,12 +140,19 @@ describe('artists file backend — mergeArtistsFromSync (LWW outcomes)', () => {
       .toBe(cj.contentHashForRecord('artist', remoteWinner));
   });
 
-  it('pruneTombstonedArtists evicts the base hash for a hard-pruned tombstone', async () => {
+  it('pruneTombstonedArtists batches base-hash eviction for multiple tombstones', async () => {
     await file.mergeArtistsFromSync([
-      artist('artist-dead-base', { deleted: true, deletedAt: '2020-01-01T00:00:00.000Z', updatedAt: '2020-01-01T00:00:00.000Z' }),
+      artist('artist-dead-base-1', { deleted: true, deletedAt: '2020-01-01T00:00:00.000Z', updatedAt: '2020-01-01T00:00:00.000Z' }),
+      artist('artist-dead-base-2', { deleted: true, deletedAt: '2020-01-02T00:00:00.000Z', updatedAt: '2020-01-02T00:00:00.000Z' }),
     ]);
-    expect(await cj.getSyncBaseHash('artist', 'artist-dead-base')).not.toBeNull();
-    await file.pruneTombstonedArtists(Date.parse('2030-01-01T00:00:00.000Z'));
-    expect(await cj.getSyncBaseHash('artist', 'artist-dead-base')).toBeNull();
+    expect(await cj.getSyncBaseHash('artist', 'artist-dead-base-1')).not.toBeNull();
+    expect(await cj.getSyncBaseHash('artist', 'artist-dead-base-2')).not.toBeNull();
+
+    writeCounter.baseHash = 0;
+    expect(await file.pruneTombstonedArtists(Date.parse('2030-01-01T00:00:00.000Z')))
+      .toEqual({ pruned: 2 });
+    expect(writeCounter.baseHash).toBe(1);
+    expect(await cj.getSyncBaseHash('artist', 'artist-dead-base-1')).toBeNull();
+    expect(await cj.getSyncBaseHash('artist', 'artist-dead-base-2')).toBeNull();
   });
 });

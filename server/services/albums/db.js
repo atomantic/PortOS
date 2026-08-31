@@ -14,6 +14,7 @@ import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
 import { buildAlbumRecord, applyAlbumPatch, mergeAlbumRecord } from './logic.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
+  withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
 
 function rowToAlbum(row) {
@@ -141,6 +142,8 @@ export async function pruneTombstonedAlbums(olderThanMs) {
      RETURNING id`,
     [cutoffIso],
   );
-  for (const r of rows) await deleteSyncBaseHash('album', r.id);
+  await withBaseHashFlushBatch(async () => {
+    for (const r of rows) await deleteSyncBaseHash('album', r.id);
+  });
   return { pruned: rows.length };
 }

@@ -14,6 +14,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { sanitizeArtist, buildArtistRecord, applyArtistPatch, mergeArtistRecord } from './logic.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
+  withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
 
 const ARTISTS_FILE = join(PATHS.data, 'artists.json');
@@ -120,6 +121,8 @@ export async function pruneTombstonedArtists(olderThanMs) {
   }
   if (pruned.length === 0) return { pruned: 0 };
   await saveAll(survivors);
-  for (const id of pruned) await deleteSyncBaseHash('artist', id);
+  await withBaseHashFlushBatch(async () => {
+    for (const id of pruned) await deleteSyncBaseHash('artist', id);
+  });
   return { pruned: pruned.length };
 }
