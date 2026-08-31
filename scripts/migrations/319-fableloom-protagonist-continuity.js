@@ -12,8 +12,8 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'fableloom-weave-episode.md': 'b4d363db94fd8a9928fa977745c76ff9',
-  'fableloom-outline-episode.md': '513b2b5b8fa98766852cdde7b87198c9',
+  'fableloom-weave-episode.md': 'abea2442af2be2039b70deee4919c00e',
+  'fableloom-outline-episode.md': '820b8c157c1977b34eb317e44236519e',
   'fableloom-review-episode-outline.md': '8154b4c289b10268df8fd3c625bcdac2',
 };
 
