@@ -68,7 +68,7 @@ describe.skipIf(!dbReady)('music video projects DB adapter', () => {
   beforeAll(async () => { db = await import('./projectsDB.js'); });
 
   beforeEach(async () => {
-    await query(`DELETE FROM music_video_projects WHERE id LIKE $1`, [`${PRUNE_PREFIX}%`]);
+    await query(`DELETE FROM music_video_projects`);
     rmSync(join(testState.dataRoot, 'sharing'), { recursive: true, force: true });
     rmSync(join(testState.dataRoot, 'conflict-journal'), { recursive: true, force: true });
     __resetBaseHashCacheForTests();

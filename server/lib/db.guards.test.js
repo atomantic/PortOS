@@ -471,7 +471,7 @@ describe('DB-backed test files are covered by vitest.config.db.js', () => {
         const head = readHead(join(root, rel));
         // A real DB-backed suite both gates on checkHealth() and exposes dbReady.
         if (!(/\bcheckHealth\b/.test(head) && /\bdbReady\b/.test(head))) continue;
-        const relativePath = prefix ? join('..', 'scripts', rel) : rel;
+        const relativePath = join(prefix, rel);
         const covered = (hasDbGlob && base === 'db.test.js') || explicitIncludes.has(relativePath);
         if (!covered) offenders.push(prefix + rel.split(sep).join('/'));
       }

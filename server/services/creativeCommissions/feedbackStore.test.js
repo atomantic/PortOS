@@ -9,17 +9,20 @@ const writeCounter = vi.hoisted(() => ({ baseHash: 0 }));
 // In-memory collectionStore (same posture as store.test.js) so CRUD + merge are
 // exercised without the filesystem or Postgres.
 const feedbackRecords = new Map();
-const makeMemStore = () => ({
-  loadAll: async () => [...feedbackRecords.values()],
-  loadOne: async (id) => feedbackRecords.get(id) || null,
-  saveOne: async (id, rec) => { feedbackRecords.set(id, rec); },
-  saveOneNow: async (id, rec) => { feedbackRecords.set(id, rec); },
-  deleteOne: async (id) => { feedbackRecords.delete(id); },
-  deleteOneNow: async (id) => { feedbackRecords.delete(id); },
+const journalRecords = new Map();
+const makeMemStore = (records) => ({
+  loadAll: async () => [...records.values()],
+  loadOne: async (id) => records.get(id) || null,
+  saveOne: async (id, rec) => { records.set(id, rec); },
+  saveOneNow: async (id, rec) => { records.set(id, rec); },
+  deleteOne: async (id) => { records.delete(id); },
+  deleteOneNow: async (id) => { records.delete(id); },
   saveTypeIndex: async () => {},
   verifySchemaVersion: async () => ({ ok: true }),
 });
-vi.mock('../../lib/collectionStore.js', () => ({ createCollectionStore: () => makeMemStore() }));
+vi.mock('../../lib/collectionStore.js', () => ({
+  createCollectionStore: ({ type }) => makeMemStore(type === 'conflictJournal' ? journalRecords : feedbackRecords),
+}));
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -53,6 +56,7 @@ const cj = await import('../../lib/conflictJournal.js');
 
 beforeEach(() => {
   feedbackRecords.clear();
+  journalRecords.clear();
   rmSync(join(TEST_DATA_ROOT, 'sharing'), { recursive: true, force: true });
   rmSync(join(TEST_DATA_ROOT, 'conflict-journal'), { recursive: true, force: true });
   cj.__resetBaseHashCacheForTests();
