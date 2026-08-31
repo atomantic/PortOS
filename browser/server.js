@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 import { createServer } from 'http';
-import { readFile, mkdir } from 'fs/promises';
+import { readFile, writeFile, mkdir } from 'fs/promises';
 import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { platform, homedir } from 'os';
@@ -24,7 +24,6 @@ let chromeProcess = null;
 let headlessMode = false;
 let downloadWs = null;
 let downloadWsReconnectTimer = null;
-let downloadDirCurrent = null;
 let shuttingDown = false;
 
 const DEFAULT_MAC_CHROME_APP = '/Applications/Google Chrome.app';
@@ -84,17 +83,65 @@ async function checkCdp() {
   return version;
 }
 
-// Chrome's `Browser.setDownloadBehavior` is DevTools-session-scoped — when the
-// WebSocket that issued the command closes, Chrome tears down the BrowserHandler
-// and the setting reverts to default (`~/Downloads`). We must keep a live CDP
-// connection open for the lifetime of this process so downloads keep landing in
-// our managed directory.
-async function configureDownloadBehavior(downloadDir) {
-  downloadDirCurrent = downloadDir;
+// Chrome's download directory is set through the profile's own `Preferences`
+// file, NOT through CDP's `Browser.setDownloadBehavior`.
+//
+// `Browser.setDownloadBehavior` looks like the obvious lever, but setting it
+// swaps Chrome's `ChromeDownloadManagerDelegate` for the automation-only
+// `DevToolsDownloadManagerDelegate`. That delegate routes the bytes to the
+// requested path — downloads land correctly and the download UI lists them —
+// but it leaves `OpenDownload()` / `ShowDownloadInShell()` as no-ops. The
+// result: every shell handoff from the download UI ("Show in Finder", "Open
+// file", clicking a row in chrome://downloads or the download bubble) silently
+// does nothing, with no error anywhere. Verified against Chrome 151 by
+// A/B-ing two otherwise identical browsers: without the CDP call the reveal
+// selects the file in Finder, with it nothing happens at the OS level.
+//
+// Writing `download.default_directory` into the profile keeps the native
+// delegate, so downloads land in the configured directory AND the UI stays
+// clickable. The pref is not one of Chrome's MAC-protected prefs, so writing
+// it directly is safe. It must be written while Chrome is NOT running —
+// Chrome rewrites Preferences from memory on exit.
+async function applyDownloadDirPreference(profileDir, downloadDir) {
+  const prefsPath = join(profileDir, 'Default', 'Preferences');
+  const raw = await tryReadJson(prefsPath);
+  // A profile that has never launched has no Preferences file yet; Chrome
+  // merges our partial object with its defaults on first run.
+  const prefs = raw || {};
+  if (prefs.download?.default_directory === downloadDir
+    && prefs.savefile?.default_directory === downloadDir) {
+    return false;
+  }
+  prefs.download = { ...prefs.download, default_directory: downloadDir };
+  prefs.savefile = { ...prefs.savefile, default_directory: downloadDir };
+  // `prompt_for_download: false` keeps downloads non-interactive, matching the
+  // previous behavior of the CDP `allow` behavior.
+  prefs.download.prompt_for_download = false;
+  await mkdir(dirname(prefsPath), { recursive: true });
+  await writeFile(prefsPath, JSON.stringify(prefs));
+  return true;
+}
 
+async function tryReadJson(path) {
+  const raw = await readFile(path, 'utf-8').catch(() => null);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error(`⚠️ Corrupt Chrome Preferences, rewriting: ${err.message}`);
+    return null;
+  }
+}
+
+// A CDP WebSocket held open for the lifetime of this process, used purely to
+// detect Chrome exiting (the 'close' event). On macOS we launch Chrome via
+// `open` and never hold its PID, so this socket is our only liveness signal.
+// It deliberately sends no commands — see applyDownloadDirPreference above for
+// why `Browser.setDownloadBehavior` must not be used here.
+async function openLivenessKeepAlive() {
   // WebSocket is a global in Node.js 21+ (project targets Node 22+)
   if (typeof WebSocket === 'undefined') {
-    console.log('⚠️ WebSocket not available — download configuration skipped (requires Node.js 21+)');
+    console.log('⚠️ WebSocket not available — Chrome exit detection disabled (requires Node.js 21+)');
     return;
   }
 
@@ -111,7 +158,7 @@ async function configureDownloadBehavior(downloadDir) {
   const version = await checkCdp();
   const wsUrl = version?.webSocketDebuggerUrl;
   if (!wsUrl) {
-    console.log('⚠️ CDP unreachable — cannot configure download behavior');
+    console.log('⚠️ CDP unreachable — cannot open keep-alive');
     scheduleDownloadReconnect();
     return;
   }
@@ -119,40 +166,15 @@ async function configureDownloadBehavior(downloadDir) {
   const ws = new WebSocket(wsUrl);
   downloadWs = ws;
 
-  ws.addEventListener('open', () => {
-    ws.send(JSON.stringify({
-      id: 1,
-      method: 'Browser.setDownloadBehavior',
-      params: { behavior: 'allow', downloadPath: downloadDir }
-    }));
-  });
-
-  ws.addEventListener('message', (event) => {
-    // Chrome should only send JSON on this WS, but guard against truncated
-    // frames / non-JSON noise so a single bad message can't crash the service.
-    let msg;
-    try { msg = JSON.parse(event.data); } catch (err) {
-      console.error(`⚠️ Ignoring non-JSON WS frame: ${err.message}`);
-      return;
-    }
-    if (msg.id === 1) {
-      if (msg.error) {
-        console.error(`❌ Browser.setDownloadBehavior failed: ${msg.error.message || JSON.stringify(msg.error)}`);
-      } else {
-        console.log(`📥 Downloads configured → ${downloadDir} (keep-alive WS open)`);
-      }
-    }
-  });
-
   ws.addEventListener('close', () => {
     if (downloadWs === ws) downloadWs = null;
     if (shuttingDown) return;
-    console.log('⚠️ Download keep-alive WS closed — will reconnect');
+    console.log('⚠️ Keep-alive WS closed — will reconnect');
     scheduleDownloadReconnect();
   });
 
   ws.addEventListener('error', (event) => {
-    console.error(`❌ Download keep-alive WS error: ${event?.message || 'unknown'}`);
+    console.error(`❌ Keep-alive WS error: ${event?.message || 'unknown'}`);
   });
 }
 
@@ -160,17 +182,17 @@ function scheduleDownloadReconnect() {
   if (shuttingDown || downloadWsReconnectTimer) return;
   downloadWsReconnectTimer = setTimeout(async () => {
     downloadWsReconnectTimer = null;
-    if (shuttingDown || !downloadDirCurrent) return;
-    // Contain any rejection from checkCdp/configureDownloadBehavior so an
+    if (shuttingDown) return;
+    // Contain any rejection from checkCdp/openLivenessKeepAlive so an
     // async setTimeout callback can't escape as an unhandledRejection.
     try {
       if (await checkCdp()) {
-        await configureDownloadBehavior(downloadDirCurrent);
+        await openLivenessKeepAlive();
       } else {
         scheduleDownloadReconnect();
       }
     } catch (err) {
-      console.error(`⚠️ Download keep-alive reconnect failed: ${err.message}`);
+      console.error(`⚠️ Keep-alive reconnect failed: ${err.message}`);
       scheduleDownloadReconnect();
     }
   }, 2000);
@@ -185,7 +207,10 @@ async function launchBrowser() {
   if (await checkCdp()) {
     console.log(`♻️ Existing Chrome CDP found at ${CDP_HOST}:${CDP_PORT}, reusing`);
     await mkdir(downloadDir, { recursive: true });
-    await configureDownloadBehavior(downloadDir);
+    // Chrome owns Preferences while it runs and rewrites the file from memory
+    // on exit, so a running instance keeps whatever download dir it launched
+    // with; the pref is applied on the next launch.
+    await openLivenessKeepAlive();
     return;
   }
 
@@ -195,6 +220,11 @@ async function launchBrowser() {
 
   await mkdir(profileDir, { recursive: true });
   await mkdir(downloadDir, { recursive: true });
+
+  // Chrome is not running yet, so Preferences is ours to write.
+  if (await applyDownloadDirPreference(profileDir, downloadDir)) {
+    console.log(`📥 Download directory pref set → ${downloadDir}`);
+  }
 
   const args = [
     `--remote-debugging-port=${CDP_PORT}`,
@@ -272,7 +302,7 @@ async function launchBrowser() {
     await new Promise(r => setTimeout(r, 500));
     if (await checkCdp()) {
       console.log(`✅ Chrome launched, CDP available at ws://${CDP_HOST}:${CDP_PORT}`);
-      await configureDownloadBehavior(downloadDir);
+      await openLivenessKeepAlive();
       return;
     }
   }
