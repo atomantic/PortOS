@@ -83,12 +83,14 @@ function projectionEntityId(kind, sourceId) {
   return `${PROJECTION_ID_PREFIX}${kind}-${shortHash(`${kind}:${sourceId}`)}`;
 }
 
-function districtForSource(sourceKey) {
-  return EIDOVERSE_DISTRICTS_V2.find(({ sources }) => sources.includes(sourceKey)) || EIDOVERSE_DISTRICTS_V2[0];
+function districtForSource(districts, sourceKey) {
+  return districts.find(({ sources }) => sources.includes(sourceKey))
+    || districts[0]
+    || EIDOVERSE_DISTRICTS_V2[0];
 }
 
-function entityPosition(sourceId, sourceKey) {
-  const district = districtForSource(sourceKey);
+function entityPosition(sourceId, sourceKey, districts) {
+  const district = districtForSource(districts, sourceKey);
   if (district.id === 'activity') {
     const along = (stableEidoverseUnit(`${district.id}:${sourceId}:along`) * 2 - 1) * 9;
     const bend = Math.sin(along / 4.5) * 1.8;
@@ -107,8 +109,8 @@ function entityPosition(sourceId, sourceKey) {
   ];
 }
 
-function worldSignal(kind, sourceKey, item) {
-  const district = districtForSource(sourceKey);
+function worldSignal(kind, sourceKey, item, districts) {
+  const district = districtForSource(districts, sourceKey);
   const sourceIdentity = safeText(item?.id, '', 160) || canonicalStringify(item);
   const resourceKey = `${kind}-${shortHash(`${kind}:${sourceIdentity}`)}`;
   const metrics = {};
@@ -233,7 +235,11 @@ function upsertModel({
       ...(collide ? { collide } : {}),
     } });
     created += 1;
-  } else if (!containsConfiguredValue(existing, { pos, yaw, scale })) {
+  } else if (!containsConfiguredValue({
+    ...existing,
+    yaw: existing.yaw ?? 0,
+    scale: existing.scale ?? 1,
+  }, { pos, yaw, scale })) {
     operations.push({ layer, verb: 'place', args: { id, pos, yaw, scale } });
     updated += 1;
   }
@@ -272,6 +278,9 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
   let removed = 0;
 
   const environment = effectiveRecipe.environment;
+  const districts = Array.isArray(effectiveRecipe.districts) && effectiveRecipe.districts.length
+    ? effectiveRecipe.districts
+    : EIDOVERSE_DISTRICTS_V2;
   sourceAvailability.environment = true;
   if (!containsConfiguredValue(currentState?.terrain, environment.terrain)) {
     operations.push({ layer: 'environment', verb: 'terrain', args: environment.terrain });
@@ -284,6 +293,7 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
   }
 
   for (const authoredLight of environment.lights) {
+    if (!authoredLight.id.startsWith(EIDOVERSE_MANAGED_PREFIX)) continue;
     const existing = stateEntities[authoredLight.id];
     const light = authoredLight.id === `${EIDOVERSE_MANAGED_PREFIX}light-nexus`
       ? nexusStatusLight(authoredLight, source, existing)
@@ -303,7 +313,7 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
     }
   }
 
-  for (const district of EIDOVERSE_DISTRICTS_V2) {
+  for (const district of districts) {
     const id = `${EIDOVERSE_MANAGED_PREFIX}infra-${district.id}`;
     const enabledSources = district.sources.filter((key) => effectiveRecipe.includes[key]);
     const activeFeatureIds = Array.isArray(source.features)
@@ -420,7 +430,7 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
   }
 
   let liveEntityCount = 0;
-  const districtCounts = Object.fromEntries(EIDOVERSE_DISTRICTS_V2.map(({ id }) => [id, 0]));
+  const districtCounts = Object.fromEntries(districts.map(({ id }) => [id, 0]));
   for (const { kind, source: sourceKey, slot } of EIDOVERSE_PROJECTION_KINDS) {
     const available = sourceAvailable(source, sourceKey);
     sourceAvailability[sourceKey] = available;
@@ -434,7 +444,7 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
         desiredIds.add(id);
         const priorComponent = existing?.comp?.[COMPONENT_TYPE] || {};
         const priorMetrics = priorComponent.metrics || {};
-        const district = districtForSource(sourceKey);
+        const district = districtForSource(districts, sourceKey);
         const resourceKey = priorComponent.managedBy === 'portos'
           && priorComponent.kind === kind
           && typeof priorComponent.resourceKey === 'string'
@@ -481,14 +491,14 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
     const values = kind === 'health' ? [source.health] : source[sourceKey];
     const normalized = values
       .filter(Boolean)
-      .map((item) => worldSignal(kind, sourceKey, item));
+      .map((item) => worldSignal(kind, sourceKey, item, districts));
     const limited = normalized
       .slice(0, effectiveRecipe.limits[sourceKey] ?? normalized.length)
       .sort((left, right) => left.id.localeCompare(right.id));
     for (const signal of limited) {
       if (liveEntityCount >= Math.min(effectiveRecipe.maxEntities || EIDOVERSE_MAX_LIVE_ENTITIES, EIDOVERSE_MAX_LIVE_ENTITIES)) break;
       const id = projectionEntityId(kind, signal.id);
-      const pos = entityPosition(signal.id, sourceKey);
+      const pos = entityPosition(signal.id, sourceKey, districts);
       if (kind === 'goal' && typeof signal.metrics.progress === 'number') {
         pos[1] += 1.5 + Math.max(0, Math.min(100, signal.metrics.progress)) * 0.055;
       }
@@ -545,7 +555,7 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
       designVersion: EIDOVERSE_WORLD_DESIGN_VERSION,
       liveEntityCount,
       maxLiveEntities: EIDOVERSE_MAX_LIVE_ENTITIES,
-      infrastructureCount: EIDOVERSE_DISTRICTS_V2.length + pathNodeCount,
+      infrastructureCount: districts.length + pathNodeCount,
       districtCounts,
       sourceAvailability,
       sourceCounts: Object.fromEntries(EIDOVERSE_PROJECTION_KINDS.map(({ kind, source: sourceKey }) => [

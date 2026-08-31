@@ -1009,7 +1009,7 @@ const eidoverseProjectionEnvironmentSchema = z.object({
     density: z.number().finite().positive().max(2),
   }).strict(),
   lights: z.array(z.object({
-    id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+    id: z.string().regex(/^portos-design-v2-[A-Za-z0-9_-]{1,47}$/),
     pos: eidoverseVector3Schema,
     color: z.number().int().min(0).max(0xffffff),
     intensity: z.number().finite().positive().max(100),

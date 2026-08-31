@@ -18,6 +18,7 @@ grep -i "what you want to do" client/src/lib/README.md
 ```
 
 | `navFeatures.js` | `filterNavByFeatures(navEntries, isFeatureEnabled)` — drops nav-manifest entries whose optional instance feature (`post`, `datadog`, `jira`, `gsd`) is off. The single gate for BROWSE surfaces (sidebar, ⌘K); routes stay reachable by URL, bookmark, and voice. Pair with `useInstanceFeatures`. |
+| `eidoverseWorldReset.js` | Client reset-reconciliation maps for Eidoverse source kinds and district asset slots; parity-tested against the authoritative server world-design contracts. |
 | `postQuickSession.js` | Pure Quick POST duration presets, local-observation estimator, deterministic budget composer, and preview metadata. |
 | `postRotation.js` | Pure deterministic day-based rotation for POST practice selection — `orderByRecencyRotation` sorts candidates fresh-before-recently-practiced, then by priority, and rotates equivalent ones by local day. Mirrored from `server/lib/postRotation.js`. |
 

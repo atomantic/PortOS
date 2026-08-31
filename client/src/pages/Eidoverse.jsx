@@ -13,6 +13,10 @@ import PageHeader from '../components/PageHeader';
 import BrailleSpinner from '../components/BrailleSpinner';
 import EidoverseWorldDrawer from '../components/eidoverse/EidoverseWorldDrawer';
 import {
+  EIDOVERSE_RESET_ASSET_SLOTS as RESET_ASSET_SLOTS,
+  EIDOVERSE_SOURCE_KIND as SOURCE_KIND,
+} from '../lib/eidoverseWorldReset';
+import {
   getApp,
   getEidoverseWorldStatus,
   getInstanceFeatures,
@@ -75,34 +79,6 @@ const DELETE_DRAFT_VALUE = Symbol('delete-draft-value');
 const isDraftRecord = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const draftValuesEqual = (left, right) => Object.is(left, right)
   || JSON.stringify(left) === JSON.stringify(right);
-const SOURCE_KIND = {
-  apps: 'app',
-  agents: 'agent',
-  tasks: 'task',
-  features: 'feature',
-  peers: 'peer',
-  health: 'health',
-  productivity: 'productivity',
-  activity: 'activity',
-  goals: 'goal',
-  memory: 'memory',
-  storage: 'storage',
-  jira: 'jira',
-  operations: 'operations',
-};
-// Mirrors the server reset contract so an explicit district reset can update
-// only its draft leaves while preserving unrelated or newer local edits.
-const RESET_ASSET_SLOTS = {
-  nexus: ['nexus', 'health', 'operations', 'feature', 'district'],
-  apps: ['app'],
-  agents: ['agent', 'task'],
-  goals: ['goal', 'jira'],
-  memory: ['memory'],
-  data: ['storage'],
-  federation: ['peer'],
-  activity: ['activity', 'productivity'],
-};
-
 function mergeServerDraftChanges(current, submitted, before, after) {
   if (draftValuesEqual(before, after)) return current;
   if (isDraftRecord(current) && isDraftRecord(submitted)

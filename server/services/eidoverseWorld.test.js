@@ -30,6 +30,30 @@ const signalSpawn = (plan, kind) => plan.operations.find((operation) => (
   operation.verb === 'spawn' && operation.args.id.startsWith(`portos-design-v2-signal-${kind}-`)
 ));
 
+const snapshotFromPlan = (plan, { foldModelDefaults = false } = {}) => {
+  const state = { entities: {} };
+  for (const { verb, args } of plan.operations) {
+    if (['terrain', 'sky', 'grass'].includes(verb)) {
+      state[verb] = structuredClone(args);
+    } else if (verb === 'light') {
+      state.entities[args.id] = { kind: 'light', ...structuredClone(args) };
+      if (state.entities[args.id].day === true) delete state.entities[args.id].day;
+    } else if (verb === 'spawn') {
+      state.entities[args.id] = structuredClone(args);
+      if (foldModelDefaults && state.entities[args.id].yaw === 0) delete state.entities[args.id].yaw;
+      if (foldModelDefaults && state.entities[args.id].scale === 1) delete state.entities[args.id].scale;
+    } else if (verb === 'place') {
+      Object.assign(state.entities[args.id], structuredClone(args));
+    } else if (verb === 'comp') {
+      state.entities[args.id].comp ||= {};
+      state.entities[args.id].comp[args.type] = structuredClone(args.data);
+    } else if (verb === 'remove') {
+      delete state.entities[args.id];
+    }
+  }
+  return state;
+};
+
 describe('Eidoverse PortOS projection plan', () => {
   it('keeps the shipped V2 recipe valid at the route schema boundary', () => {
     expect(eidoverseProjectionRecipeSchema.parse(DEFAULT_EIDOVERSE_PROJECTION_RECIPE)).toEqual(
@@ -161,6 +185,71 @@ describe('Eidoverse PortOS projection plan', () => {
     });
 
     expect(plan.operations.filter(({ verb }) => verb === 'light')).toEqual([]);
+  });
+
+  it('converges after the runtime folds default model yaw and light fields', () => {
+    const first = buildProjectionPlan({ source: emptySources() });
+    const currentState = snapshotFromPlan(first, { foldModelDefaults: true });
+    const second = buildProjectionPlan({ source: emptySources(), currentState });
+
+    expect(second.operations).toEqual([]);
+  });
+
+  it('drives landmarks and signal placement from persisted district overrides', () => {
+    const recipe = structuredClone(DEFAULT_EIDOVERSE_PROJECTION_RECIPE);
+    const apps = recipe.districts.find(({ id }) => id === 'apps');
+    apps.label = 'Example App Garden';
+    apps.anchor = [50, 0, 50];
+    const plan = buildProjectionPlan({
+      source: appSource(),
+      recipe,
+      currentState: currentEnvironment(recipe),
+    });
+    const landmark = plan.operations.find(({ verb, args }) => (
+      verb === 'spawn' && args.id === 'portos-design-v2-infra-apps'
+    ));
+    const signal = signalSpawn(plan, 'app');
+    const component = plan.operations.find(({ verb, args }) => (
+      verb === 'comp' && args.id === signal.args.id && args.type === 'portos'
+    ));
+
+    expect(landmark.args.pos).toEqual([50, 0, 50]);
+    expect(component.args.data).toMatchObject({
+      districtId: 'apps',
+      districtLabel: 'Example App Garden',
+    });
+    expect(Math.abs(signal.args.pos[0] - 50)).toBeLessThanOrEqual(13);
+    expect(Math.abs(signal.args.pos[2] - 50)).toBeLessThanOrEqual(13);
+  });
+
+  it('rejects and defensively ignores authored light ids outside the managed namespace', () => {
+    const manualId = 'example-manual-light';
+    const recipe = {
+      ...DEFAULT_EIDOVERSE_PROJECTION_RECIPE,
+      environment: {
+        ...DEFAULT_EIDOVERSE_PROJECTION_RECIPE.environment,
+        lights: [{
+          id: manualId,
+          pos: [0, 4, 0],
+          color: 0xffffff,
+          intensity: 4,
+          range: 12,
+          keep: true,
+          day: true,
+        }],
+      },
+    };
+    const plan = buildProjectionPlan({
+      source: emptySources(),
+      recipe,
+      currentState: {
+        ...currentEnvironment(recipe),
+        entities: { [manualId]: { id: manualId, lib: 'store/example-manual-model' } },
+      },
+    });
+
+    expect(eidoverseProjectionRecipeSchema.safeParse(recipe).success).toBe(false);
+    expect(plan.operations.some(({ args }) => args?.id === manualId)).toBe(false);
   });
 
   it('turns aggregate Nexus health into light plus non-color attention cues', () => {
