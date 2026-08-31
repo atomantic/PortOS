@@ -126,7 +126,8 @@ function worldSignal(kind, sourceKey, item) {
   }
   const rawStatus = String(item?.status || '').toLowerCase();
   const errorStatus = /error|failed|unhealthy|offline|crash|blocked/.test(rawStatus);
-  const attentionStatus = /paused|stopped|pending|unknown|not.started/.test(rawStatus)
+  const attentionStatus = rawStatus === 'attention'
+    || /paused|stopped|pending|unknown|not.started/.test(rawStatus)
     || Object.entries(metrics).some(([key, value]) => (
       /fail|error|alert|pending|unread/i.test(key) && typeof value === 'number' && value > 0
     ));

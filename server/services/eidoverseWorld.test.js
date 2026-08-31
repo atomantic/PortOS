@@ -187,6 +187,35 @@ describe('Eidoverse PortOS projection plan', () => {
     }));
   });
 
+  it('preserves the adapters canonical attention status in spatial warning cues', () => {
+    const plan = buildProjectionPlan({
+      source: {
+        ...emptySources(),
+        apps: [{ id: 'apps-attention', status: 'attention', count: 3 }],
+        health: { id: 'overview', status: 'attention' },
+      },
+      currentState: currentEnvironment(),
+    });
+    const warnings = plan.operations
+      .filter(({ verb, args }) => verb === 'comp' && args.type === 'portos')
+      .map(({ args }) => args.data)
+      .filter(({ kind }) => ['app', 'health'].includes(kind));
+
+    expect(warnings).toHaveLength(2);
+    expect(warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'app',
+        severity: 'attention',
+        visualCue: { shape: 'diamond', motion: 'pulse' },
+      }),
+      expect.objectContaining({
+        kind: 'health',
+        severity: 'attention',
+        visualCue: { shape: 'diamond', motion: 'pulse' },
+      }),
+    ]));
+  });
+
   it('treats a zero limit as intentional', () => {
     const recipe = {
       ...DEFAULT_EIDOVERSE_PROJECTION_RECIPE,
