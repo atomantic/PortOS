@@ -327,6 +327,33 @@ describe('Eidoverse PortOS projection plan', () => {
     ]));
   });
 
+  it('keeps ordinary pending work and unread counts in the steady visual channel', () => {
+    const plan = buildProjectionPlan({
+      source: {
+        ...emptySources(),
+        productivity: [{
+          id: 'summary',
+          queue: { pendingApprovals: 2, pendingTasks: 4 },
+        }],
+        goals: [{ id: 'goal-example', status: 'active', todoPending: 2 }],
+        operations: [{ id: 'overview', status: 'active', notifications: { unread: 3 } }],
+      },
+      currentState: currentEnvironment(),
+    });
+    const components = plan.operations
+      .filter(({ verb, args }) => verb === 'comp' && args.type === 'portos')
+      .map(({ args }) => args.data)
+      .filter(({ kind }) => ['productivity', 'goal', 'operations'].includes(kind));
+
+    expect(components).toHaveLength(3);
+    expect(components).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'productivity', status: 'steady', severity: 'normal' }),
+      expect.objectContaining({ kind: 'goal', status: 'active', severity: 'normal' }),
+      expect.objectContaining({ kind: 'operations', status: 'active', severity: 'normal' }),
+    ]));
+    expect(components.every(({ visualCue }) => visualCue.motion === 'steady')).toBe(true);
+  });
+
   it('treats a zero limit as intentional', () => {
     const recipe = {
       ...DEFAULT_EIDOVERSE_PROJECTION_RECIPE,

@@ -172,6 +172,7 @@ export default function Eidoverse() {
   const [projectionStatus, setProjectionStatus] = useState('idle');
   const [projectionError, setProjectionError] = useState('');
   const [configStatus, setConfigStatus] = useState('');
+  const [draftDirty, setDraftDirty] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [iframeReady, setIframeReady] = useState(false);
 
@@ -185,6 +186,7 @@ export default function Eidoverse() {
       if (updated?.world) setWorldName(updated.world);
       if (updated?.identity?.name || updated?.human?.name) setHumanName(updated.identity?.name || updated.human.name);
       savedDraftRevision.current = configDraftRevision.current;
+      setDraftDirty(false);
     }
   }, []);
 
@@ -205,6 +207,7 @@ export default function Eidoverse() {
     setProjectionStatus('idle');
     setProjectionError('');
     setConfigStatus('');
+    setDraftDirty(false);
     configDraftRevision.current = 0;
     savedDraftRevision.current = 0;
 
@@ -322,6 +325,7 @@ export default function Eidoverse() {
 
   const markConfigDirty = useCallback(() => {
     configDraftRevision.current += 1;
+    setDraftDirty(true);
     setConfigStatus((current) => current === 'saving' ? current : '');
   }, []);
 
@@ -495,6 +499,7 @@ export default function Eidoverse() {
                 <span>Design V{design.selectedVersion || recipeDraft?.version}</span>
                 <span>{summary.liveEntityCount ?? 0}/{design.maxEntities || 48} live signals</span>
                 <span>{worldState?.presence?.connected ? 'CoS connected' : 'CoS ready'}</span>
+                {draftDirty && <span className="text-port-warning">Unsaved world changes</span>}
               </div>
             </section>
 
@@ -503,7 +508,8 @@ export default function Eidoverse() {
                 type="button"
                 aria-label="Refresh world"
                 onClick={() => { void runProjection().catch(() => {}); }}
-                disabled={projectionStatus === 'running'}
+                disabled={projectionStatus === 'running' || draftDirty}
+                title={draftDirty ? 'Save changes in World controls before refreshing' : undefined}
                 className="port-media-overlay-strong port-media-overlay-item inline-flex min-h-[42px] items-center gap-2 rounded-xl border border-port-border px-3 text-sm shadow-xl transition-colors hover:border-port-accent disabled:cursor-wait disabled:opacity-60"
               >
                 <RotateCcw size={15} className={projectionStatus === 'running' ? 'animate-spin' : ''} aria-hidden="true" />
@@ -599,10 +605,11 @@ export default function Eidoverse() {
         markDirty={markConfigDirty}
         configStatus={configStatus}
         projectionStatus={projectionStatus}
+        dirty={draftDirty}
         onSave={saveWorldConfig}
-        onProject={() => { void runProjection().catch(() => {}); }}
+        onProject={() => { if (!draftDirty) void runProjection().catch(() => {}); }}
         onReset={(scope, districtId) => { void runConfigAction({ reset: { scope, ...(districtId ? { districtId } : {}) } }); }}
-        onRefreshAssets={() => { void runConfigAction({ refreshAssets: true }); }}
+        onRefreshAssets={() => { if (!draftDirty) void runConfigAction({ refreshAssets: true }); }}
       />
     </div>
   );

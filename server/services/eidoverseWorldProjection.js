@@ -158,7 +158,7 @@ function worldSignal(kind, sourceKey, item, districts) {
   const attentionStatus = rawStatus === 'attention'
     || /paused|stopped|pending|unknown|not.started/.test(rawStatus)
     || Object.entries(metrics).some(([key, value]) => (
-      /fail|error|alert|pending|unread/i.test(key) && typeof value === 'number' && value > 0
+      /fail|error|alert/i.test(key) && typeof value === 'number' && value > 0
     ));
   const activeStatus = /active|running|online|healthy|success/.test(rawStatus);
   const status = errorStatus ? 'error' : (attentionStatus ? 'attention' : (activeStatus ? 'active' : 'steady'));

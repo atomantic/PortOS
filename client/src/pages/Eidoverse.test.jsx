@@ -410,7 +410,7 @@ describe('Eidoverse hosted page', () => {
     expect(saved.recipe.limits.apps).toBe(8);
   });
 
-  it('keeps pre-existing unsaved edits through an asset refresh and projection', async () => {
+  it('gates projection and asset actions until the visible draft is saved', async () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByTitle('Eidoverse Worlds');
@@ -421,14 +421,28 @@ describe('Eidoverse hosted page', () => {
     const sunHour = screen.getByLabelText('Sun hour');
     await user.clear(sunHour);
     await user.type(sunHour, '8.4');
-    await user.click(screen.getByRole('button', { name: 'Refresh asset matches' }));
+    const appearanceRefresh = screen.getByRole('button', { name: 'Refresh asset matches' });
+    expect(appearanceRefresh).toBeDisabled();
+    expect(screen.getByText('Save changes before refreshing asset matches.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh world' })).toBeDisabled();
 
-    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledWith(
-      { refreshAssets: true },
-      { silent: true },
-    ));
+    await user.click(screen.getByRole('tab', { name: 'Updates & Advanced' }));
+    const apply = screen.getByRole('button', { name: 'Apply world update' });
+    const refresh = screen.getByRole('button', { name: 'Refresh asset matches' });
+    expect(apply).toBeDisabled();
+    expect(refresh).toBeDisabled();
+    expect(screen.getByText(/Save your world changes before applying an update/)).toBeInTheDocument();
+    await user.click(apply);
+    await user.click(refresh);
+    expect(api.updateEidoverseWorldConfig).not.toHaveBeenCalled();
+    expect(api.projectEidoverseWorld).toHaveBeenCalledOnce();
+
+    await user.click(screen.getByRole('button', { name: 'Save and project' }));
+    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledOnce());
     await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledTimes(2));
-    expect(sunHour).toHaveValue(8.4);
+    await waitFor(() => expect(apply).toBeEnabled());
+    expect(refresh).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Refresh world' })).toBeEnabled();
   });
 
   it('does not coerce temporarily cleared appearance numbers to invalid zeroes', async () => {

@@ -48,6 +48,7 @@ export default function EidoverseWorldDrawer({
   markDirty,
   configStatus,
   projectionStatus,
+  dirty,
   onSave,
   onProject,
   onReset,
@@ -60,6 +61,7 @@ export default function EidoverseWorldDrawer({
   const reconciliation = design.reconciliation || {};
   const projectionSummary = worldState?.projection?.lastSummary || {};
   const busy = configStatus === 'saving' || projectionStatus === 'running';
+  const projectionActionBlocked = busy || dirty;
   const assetRecipes = recipeDraft?.assetRecipe?.slots || {};
   const assetRows = [
     ...Object.entries(assetRecipes).map(([slot, recipe]) => ({ slot, recipe, legacy: false })),
@@ -268,10 +270,17 @@ export default function EidoverseWorldDrawer({
             <h3 className="font-medium text-white">Portable asset recipe</h3>
             <p className="mt-1 text-xs text-gray-500">Paths and search terms ship; model bytes stay in Eidoverse.</p>
           </div>
-          <button type="button" className={secondaryButton} disabled={busy} onClick={onRefreshAssets}>
+          <button
+            type="button"
+            className={secondaryButton}
+            disabled={projectionActionBlocked}
+            title={dirty ? 'Save changes before refreshing asset matches' : undefined}
+            onClick={onRefreshAssets}
+          >
             Refresh asset matches
           </button>
         </div>
+        {dirty && <p className="mt-2 text-xs text-port-warning">Save changes before refreshing asset matches.</p>}
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
           {assetRows.map(({ slot, recipe, legacy }) => {
             const resolution = design.assetResolutions?.[slot];
@@ -410,11 +419,16 @@ export default function EidoverseWorldDrawer({
       <section className="rounded-xl border border-port-border bg-port-bg p-4">
         <h3 className="font-medium text-white">Apply and recover</h3>
         <p className="mt-1 text-sm leading-6 text-gray-400">Preflight every asset, build V2 under PortOS-managed IDs, then retire only stale managed entities. A failure remains pending and retryable.</p>
+        {dirty && (
+          <p className="mt-2 text-sm text-port-warning" role="status">
+            Save your world changes before applying an update or refreshing asset matches.
+          </p>
+        )}
         <div className="mt-4 flex flex-wrap gap-2">
-          <button type="button" className={primaryButton} disabled={busy} onClick={onProject}>
+          <button type="button" className={primaryButton} disabled={projectionActionBlocked} onClick={onProject}>
             {projectionStatus === 'running' ? 'Applying update…' : 'Apply world update'}
           </button>
-          <button type="button" className={secondaryButton} disabled={busy} onClick={onRefreshAssets}>
+          <button type="button" className={secondaryButton} disabled={projectionActionBlocked} onClick={onRefreshAssets}>
             Refresh asset matches
           </button>
         </div>
@@ -458,7 +472,7 @@ export default function EidoverseWorldDrawer({
     >
       <form className="space-y-5" onSubmit={(event) => { event.preventDefault(); onSave(); }}>
         {panel}
-        {activeTab !== 'updates' && (
+        {(activeTab !== 'updates' || dirty) && (
           <div className="sticky bottom-0 -mx-4 -mb-4 flex flex-wrap items-center justify-end gap-3 border-t border-port-border bg-port-card/95 p-4 backdrop-blur">
             {configStatus && configStatus !== 'saving' && (
               <p className={configStatus === 'saved' ? 'mr-auto text-sm text-port-success' : 'mr-auto text-sm text-port-error'} role="status">
