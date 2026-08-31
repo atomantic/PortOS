@@ -192,26 +192,4 @@ describe('VideoGen compose-while-busy', () => {
     expect(screen.getByTestId('prompt-from-media')).toHaveAttribute('data-disabled', '0');
     expect(screen.getByRole('button', { name: /Add to queue/ })).toBeEnabled();
   });
-
-  it('copies the composed prompt and opens fal H3 Max without queueing a paid API job', async () => {
-    await act(async () => {
-      render(
-        <MemoryRouter initialEntries={['/media/video']}>
-          <VideoGen />
-        </MemoryRouter>,
-      );
-    });
-
-    expect(screen.getByText(/fal\.ai currently advertises up to 5 free videos per day with an account/))
-      .toBeInTheDocument();
-    fireEvent.change(await screen.findByLabelText('Prompt'), { target: { value: 'A clockwork bird takes flight.' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Copy prompt & open fal.ai' }));
-
-    expect(globalThis.open).toHaveBeenCalledWith(
-      'https://fal.ai/tools/minimax-h3-max', '_blank', 'noopener,noreferrer',
-    );
-    await waitFor(() => expect(globalThis.navigator.clipboard.writeText)
-      .toHaveBeenCalledWith('A clockwork bird takes flight.'));
-    expect(state.generateVideo).not.toHaveBeenCalled();
-  });
 });

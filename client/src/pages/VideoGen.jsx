@@ -56,8 +56,6 @@ import LiveVideoStage from '../components/videoGen/LiveVideoStage';
 import { resolveVideoStagePreview, VIDEO_STAGE_KIND } from '../lib/videoStagePreview';
 import VideoGenGallery from '../components/videoGen/VideoGenGallery';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
-import GalleryVideoPicker from '../components/videoGen/GalleryVideoPicker';
-import FalH3MaxPromptFallback from '../components/videoGen/FalH3MaxPromptFallback';
 import MediaPreview from '../components/media/MediaPreview';
 import StylePresetPicker from '../components/media/StylePresetPicker';
 import PromptEnhancer from '../components/media/PromptEnhancer';
@@ -65,7 +63,7 @@ import PromptFromMedia from '../components/media/PromptFromMedia';
 import { normalizeVideo } from '../components/media/normalize';
 import {
   Film, Sparkles, Settings as SettingsIcon, RefreshCw, AlertTriangle,
-  X, Type, Image as ImageIcon, GitBranch, ListPlus, Music, SlidersHorizontal, ExternalLink,
+  X, Type, Image as ImageIcon, GitBranch, ListPlus, Music, SlidersHorizontal,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import BatchQueuePanel from '../components/media/BatchQueuePanel';
@@ -101,9 +99,6 @@ import ResolutionField from '../components/media/ResolutionField';
 import { VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, IC_LORA_MODES } from '../lib/videoGenParams.js';
 import { finishTargetForRecord, isDeliveryVideoModel } from '../lib/videoFinish.js';
 import { peerModelRequiresInput } from '../lib/federatedMediaReadiness.js';
-import {
-  FAL_H3_MAX_FREE_ALLOWANCE_NOTE, openFalH3MaxFreeTool,
-} from '../lib/falVideoHandoff.js';
 const MODES = [
   { id: 'text',   label: 'Text',   icon: Type,       desc: 'Text-to-video' },
   { id: 'image',  label: 'Image',  icon: ImageIcon,  desc: 'Image-to-video (start frame)' },
@@ -117,7 +112,6 @@ const MODES = [
 
 export default function VideoGen() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [falManualPrompt, setFalManualPrompt] = useState('');
   const settingsOpen = searchParams.get('settings') === '1';
   const openSettings = () => setSearchParams(prev => { const n = new URLSearchParams(prev); n.set('settings', '1'); return n; });
   const closeSettings = () => {
@@ -194,16 +188,6 @@ export default function VideoGen() {
     remoteSubmissionFields: remoteTarget.isRemote ? remoteTarget.submissionFields : null,
   });
 
-  // fal's daily H3 Max allowance is browser-only; its API is a separately
-  // metered product. Keep this as an explicit handoff rather than pretending a
-  // provider POST can spend the free quota. The exact composed prompt (style +
-  // no-music envelope) is what gets copied, matching a normal submission.
-  const falFreeSupported = mode === 'text' || mode === 'image';
-  const openFalFree = () => openFalH3MaxFreeTool({
-    prompt: envelopedPrompt,
-    negativePrompt,
-    onCopyFailure: setFalManualPrompt,
-  });
   // Conditioning the selected peer model cannot take. The server refuses a job
   // holding any of it (MEDIA_PROVIDER_INPUT_UNSUPPORTED) rather than silently
   // rendering something else, so the form says so before the user commits.
@@ -266,7 +250,6 @@ export default function VideoGen() {
   // `null` = closed; otherwise `{ kind, index? }` records which slot the pick
   // lands in, since one modal serves every slot.
   const [galleryPicker, setGalleryPicker] = useState(null);
-  const [falImportOpen, setFalImportOpen] = useState(false);
   const handleGalleryPick = (item) => {
     const filename = item?.filename;
     if (!filename || !galleryPicker) return;
@@ -884,44 +867,6 @@ export default function VideoGen() {
       )}
 
       <RuntimeFingerprint runtime={status?.runtime} />
-
-      <div className="flex flex-col gap-3 rounded-xl border border-port-accent/35 bg-port-accent/10 p-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0">
-          <p className="text-sm font-medium text-port-text">MiniMax H3 Max on fal.ai</p>
-          <p className="mt-0.5 text-xs text-port-text-muted">
-            {FAL_H3_MAX_FREE_ALLOWANCE_NOTE} PortOS copies this form&rsquo;s composed prompt and opens that tool; download the MP4, then upload it to Media History. fal&rsquo;s app API is separately metered.
-          </p>
-          {!falFreeSupported && (
-            <p className="mt-1 text-xs text-port-warning" role="status">
-              Switch to Text or Image mode for the H3 Max free-tool handoff.
-            </p>
-          )}
-        </div>
-        <div className="flex shrink-0 flex-col gap-2 sm:items-stretch">
-          <button
-            type="button"
-            onClick={openFalFree}
-            disabled={!falFreeSupported || !envelopedPrompt?.trim()}
-            title={!falFreeSupported
-              ? 'fal H3 Max free-tool handoff supports Text and Image modes'
-              : !envelopedPrompt?.trim()
-                ? 'Write a prompt first'
-                : mode === 'image'
-                  ? 'Copies the prompt; add your selected start frame in fal after it opens'
-                  : 'Copies the prompt and opens fal H3 Max'}
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-port-accent px-3 py-2 text-xs font-medium text-white hover:bg-port-accent/80 disabled:cursor-not-allowed disabled:opacity-45"
-          >
-            <ExternalLink size={14} aria-hidden="true" /> Copy prompt &amp; open fal.ai
-          </button>
-          <button
-            type="button"
-            onClick={() => setFalImportOpen(true)}
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-port-border px-3 py-2 text-xs font-medium text-port-text hover:border-port-accent hover:text-port-accent"
-          >
-            Import downloaded video
-          </button>
-        </div>
-      </div>
 
       {status && status.connected === false && (() => {
         const missingCount = status.missingPackages?.length || 0;
@@ -1574,26 +1519,6 @@ export default function VideoGen() {
         open={!!galleryPicker}
         onClose={() => setGalleryPicker(null)}
         onSelect={handleGalleryPick}
-      />
-
-      <GalleryVideoPicker
-        open={falImportOpen}
-        onClose={() => setFalImportOpen(false)}
-        onSelect={(_item, context) => {
-          if (context?.origin === 'upload') {
-            refreshHistory();
-            toast.success('Video imported to Media History');
-          } else {
-            toast('That video is already in Media History');
-          }
-        }}
-        allowUpload
-        uploadToGallery
-      />
-
-      <FalH3MaxPromptFallback
-        prompt={falManualPrompt}
-        onClose={() => setFalManualPrompt('')}
       />
 
       <Drawer open={settingsOpen} onClose={closeSettings} title="Media Generation Settings" size="lg">

@@ -1,5 +1,3 @@
-import { copyToClipboard } from './clipboard.js';
-
 export const FAL_H3_MAX_FREE_URL = 'https://fal.ai/tools/minimax-h3-max';
 export const FAL_H3_MAX_FREE_ALLOWANCE_NOTE =
   'fal.ai currently advertises up to 5 free videos per day with an account; this vendor-controlled allowance may change.';
@@ -14,24 +12,4 @@ export function buildFalH3MaxPrompt(prompt, negativePrompt = '') {
   const avoid = typeof negativePrompt === 'string' ? negativePrompt.trim() : '';
   if (!shot) return '';
   return avoid ? `${shot}\n\nAvoid: ${avoid}` : shot;
-}
-
-/**
- * Open the free browser tool while the click still owns user activation, then
- * copy the prepared prompt. Opening first avoids popup blockers caused by
- * awaiting the Clipboard API before window.open().
- */
-export function openFalH3MaxFreeTool({
-  prompt,
-  negativePrompt = '',
-  onCopyFailure,
-} = {}) {
-  const prepared = buildFalH3MaxPrompt(prompt, negativePrompt);
-  if (!prepared) return false;
-  globalThis.open?.(FAL_H3_MAX_FREE_URL, '_blank', 'noopener,noreferrer');
-  void copyToClipboard(prepared, 'fal H3 Max prompt copied — paste it into the free tool')
-    .then((copied) => {
-      if (!copied) onCopyFailure?.(prepared);
-    });
-  return true;
 }
