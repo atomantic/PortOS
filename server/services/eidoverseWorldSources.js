@@ -151,6 +151,7 @@ function projectedProductivity(todayActivity, velocity, taskState) {
 
 function projectedActivity(calendar) {
   if (!calendar || !Array.isArray(calendar.weeks)) return null;
+  if (calendar.weeks.length === 0) return [];
   const days = calendar.weeks
     .flatMap((week) => Array.isArray(week) ? week : [])
     .filter((day) => day && typeof day === 'object' && day.isFuture !== true);

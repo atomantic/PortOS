@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
@@ -364,6 +364,45 @@ describe('Eidoverse hosted page', () => {
     expect(nameInput).toHaveValue('example-portos-user-edited');
   });
 
+  it('merges a scoped reset into the draft without discarding unrelated unsaved edits', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTitle('Eidoverse Worlds');
+    await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledOnce());
+    await user.click(screen.getByRole('button', { name: 'World controls' }));
+    await user.click(screen.getByRole('tab', { name: 'Appearance & Assets' }));
+
+    const sunHour = screen.getByLabelText('Sun hour');
+    await user.clear(sunHour);
+    await user.type(sunHour, '8.4');
+    await user.click(screen.getByRole('tab', { name: 'Districts & Data' }));
+    const appsSection = screen.getByRole('heading', { name: 'App Terraces' }).closest('section');
+    const appsLimit = within(appsSection).getByRole('spinbutton', { name: 'Cap' });
+    await user.clear(appsLimit);
+    await user.type(appsLimit, '5');
+    await user.click(within(appsSection).getByRole('button', { name: 'Reset district' }));
+
+    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledWith(
+      { reset: { scope: 'district', districtId: 'apps' } },
+      { silent: true },
+    ));
+    await waitFor(() => expect(appsLimit).toHaveValue(8));
+    await user.click(screen.getByRole('tab', { name: 'Appearance & Assets' }));
+    expect(screen.getByLabelText('Sun hour')).toHaveValue(8.4);
+
+    const save = screen.getByRole('button', { name: 'Save and project' });
+    await waitFor(() => expect(save).toBeEnabled());
+    expect([...save.closest('form').elements]
+      .filter((element) => typeof element.checkValidity === 'function' && !element.checkValidity())
+      .map((element) => ({ id: element.id, value: element.value, validationMessage: element.validationMessage })))
+      .toEqual([]);
+    await user.click(save);
+    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledTimes(2));
+    const saved = api.updateEidoverseWorldConfig.mock.calls.at(-1)[0];
+    expect(saved.recipe.environment.sky.hours).toBe(8.4);
+    expect(saved.recipe.limits.apps).toBe(8);
+  });
+
   it('keeps pre-existing unsaved edits through an asset refresh and projection', async () => {
     const user = userEvent.setup();
     renderPage();
@@ -383,5 +422,38 @@ describe('Eidoverse hosted page', () => {
     ));
     await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledTimes(2));
     expect(sunHour).toHaveValue(8.4);
+  });
+
+  it('surfaces a preserved legacy asset override and lets the user clear it', async () => {
+    const legacyPath = 'store/example-legacy-feature';
+    const legacyDesign = {
+      ...design,
+      userOverrides: { assets: { feature: legacyPath } },
+    };
+    api.getEidoverseWorldStatus.mockResolvedValue({ ...worldResponse, design: legacyDesign });
+    api.projectEidoverseWorld.mockResolvedValue({
+      success: true,
+      projection: worldResponse.projection,
+      presence: { connected: true },
+      design: legacyDesign,
+      recipe,
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByTitle('Eidoverse Worlds');
+    await user.click(screen.getByRole('button', { name: 'World controls' }));
+    await user.click(screen.getByRole('tab', { name: 'Appearance & Assets' }));
+
+    expect(screen.getByText(legacyPath)).toBeInTheDocument();
+    const clear = screen.getByRole('button', { name: 'Clear legacy Feature override' });
+    await waitFor(() => expect(clear).toBeEnabled());
+    await user.click(clear);
+    expect(screen.queryByRole('button', { name: 'Clear legacy Feature override' })).not.toBeInTheDocument();
+
+    const save = screen.getByRole('button', { name: 'Save and project' });
+    expect(save).toBeEnabled();
+    fireEvent.submit(save.closest('form'));
+    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledOnce());
+    expect(api.updateEidoverseWorldConfig.mock.calls[0][0].assetOverrides).toEqual({});
   });
 });

@@ -59,6 +59,14 @@ export default function EidoverseWorldDrawer({
   const reconciliation = design.reconciliation || {};
   const projectionSummary = worldState?.projection?.lastSummary || {};
   const busy = configStatus === 'saving' || projectionStatus === 'running';
+  const assetRecipes = recipeDraft?.assetRecipe?.slots || {};
+  const assetRows = [
+    ...Object.entries(assetRecipes).map(([slot, recipe]) => ({ slot, recipe, legacy: false })),
+    ...Object.keys(assetOverridesDraft || {})
+      .filter((slot) => !Object.hasOwn(assetRecipes, slot))
+      .sort()
+      .map((slot) => ({ slot, recipe: null, legacy: true })),
+  ];
 
   const identityFields = (
     <div className="space-y-4">
@@ -183,8 +191,8 @@ export default function EidoverseWorldDrawer({
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           {[
             ['hours', 'Sun hour', 0, 24, 0.1],
-            ['exposure', 'Exposure', 0.3, 1.8, 0.05],
-            ['fog', 'Fog', 0, 3, 0.05],
+            ['exposure', 'Exposure', 0.3, 1.8, 0.01],
+            ['fog', 'Fog', 0, 3, 0.01],
           ].map(([key, label, min, max, step]) => (
             <label key={key} className="text-sm text-gray-300" htmlFor={`eidoverse-sky-${key}`}>
               {label}
@@ -239,16 +247,33 @@ export default function EidoverseWorldDrawer({
           </button>
         </div>
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          {Object.entries(recipeDraft?.assetRecipe?.slots || {}).map(([slot, recipe]) => {
+          {assetRows.map(({ slot, recipe, legacy }) => {
             const resolution = design.assetResolutions?.[slot];
             return (
               <article key={slot} className="min-w-0 rounded-lg border border-port-border bg-port-bg p-3">
                 <div className="flex items-center justify-between gap-2">
                   <h4 className="text-sm font-medium text-white">{titleCase(slot)}</h4>
                   <span className="rounded-full border border-port-border px-2 py-0.5 text-[10px] uppercase tracking-wide text-gray-400">
-                    {resolution?.source || 'pending'}
+                    {legacy ? 'legacy V1 override' : (resolution?.source || 'pending')}
                   </span>
                 </div>
+                {legacy ? (
+                  <>
+                    <p className="mt-2 break-all text-xs leading-5 text-port-accent">{assetOverridesDraft[slot]}</p>
+                    <p className="mt-2 text-[11px] leading-4 text-gray-500">
+                      Preserved from World Design V1. Clear it to let the semantic V2 asset recipe choose this model.
+                    </p>
+                    <button
+                      type="button"
+                      className={secondaryButton + ' mt-3 w-full'}
+                      disabled={busy}
+                      onClick={() => mutateAssetOverride(slot, '')}
+                    >
+                      Clear legacy {titleCase(slot)} override
+                    </button>
+                  </>
+                ) : (
+                  <>
                 <p className="mt-2 break-all text-xs leading-5 text-port-accent">{resolution?.path || 'Will resolve on the next projection'}</p>
                 <p className="mt-2 text-[11px] leading-4 text-gray-500">Search: {recipe.fallbackQueries.join(' · ')}</p>
                 <p className="text-[11px] text-gray-500">
@@ -266,6 +291,8 @@ export default function EidoverseWorldDrawer({
                     pattern="(?:eidoverse|store)[\\/](?!.*\.\.).*"
                   />
                 </label>
+                  </>
+                )}
               </article>
             );
           })}

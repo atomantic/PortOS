@@ -71,6 +71,111 @@ const statusTone = (status) => {
   return 'border-port-accent/45 bg-port-accent/10 text-port-accent';
 };
 
+const DELETE_DRAFT_VALUE = Symbol('delete-draft-value');
+const isDraftRecord = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+const draftValuesEqual = (left, right) => Object.is(left, right)
+  || JSON.stringify(left) === JSON.stringify(right);
+const SOURCE_KIND = {
+  apps: 'app',
+  agents: 'agent',
+  tasks: 'task',
+  features: 'feature',
+  peers: 'peer',
+  health: 'health',
+  productivity: 'productivity',
+  activity: 'activity',
+  goals: 'goal',
+  memory: 'memory',
+  storage: 'storage',
+  jira: 'jira',
+  operations: 'operations',
+};
+// Mirrors the server reset contract so an explicit district reset can update
+// only its draft leaves while preserving unrelated or newer local edits.
+const RESET_ASSET_SLOTS = {
+  nexus: ['nexus', 'health', 'operations', 'feature', 'district'],
+  apps: ['app'],
+  agents: ['agent', 'task'],
+  goals: ['goal', 'jira'],
+  memory: ['memory'],
+  data: ['storage'],
+  federation: ['peer'],
+  activity: ['activity', 'productivity'],
+};
+
+function mergeServerDraftChanges(current, submitted, before, after) {
+  if (draftValuesEqual(before, after)) return current;
+  if (isDraftRecord(current) && isDraftRecord(submitted)
+    && isDraftRecord(before) && isDraftRecord(after)) {
+    const merged = { ...current };
+    const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+    for (const key of keys) {
+      if (draftValuesEqual(before[key], after[key])) continue;
+      const value = mergeServerDraftChanges(current[key], submitted[key], before[key], after[key]);
+      if (value === DELETE_DRAFT_VALUE) delete merged[key];
+      else merged[key] = value;
+    }
+    return merged;
+  }
+  if (!draftValuesEqual(current, submitted)) return current;
+  return after === undefined ? DELETE_DRAFT_VALUE : structuredClone(after);
+}
+
+const reconcileActionDraft = (current, submitted, before, after) => {
+  const merged = mergeServerDraftChanges(current, submitted, before, after);
+  return merged === DELETE_DRAFT_VALUE ? {} : merged;
+};
+
+function mergeSubmittedKeys(current = {}, submitted = {}, after = {}, keys = []) {
+  const merged = { ...current };
+  for (const key of keys) {
+    if (!draftValuesEqual(current?.[key], submitted?.[key])) continue;
+    if (Object.hasOwn(after || {}, key)) merged[key] = structuredClone(after[key]);
+    else delete merged[key];
+  }
+  return merged;
+}
+
+function reconcileResetRecipe(current, submitted, after, reset) {
+  if (reset.scope === 'all') {
+    return reconcileActionDraft(current, submitted, submitted, after);
+  }
+  if (reset.scope === 'assets') {
+    const keys = new Set([
+      ...Object.keys(current?.assets || {}),
+      ...Object.keys(submitted?.assets || {}),
+      ...Object.keys(after?.assets || {}),
+    ]);
+    return {
+      ...current,
+      assets: mergeSubmittedKeys(current?.assets, submitted?.assets, after?.assets, keys),
+    };
+  }
+  const district = after?.districts?.find(({ id }) => id === reset.districtId);
+  const sources = district?.sources || [];
+  const kinds = sources.map((source) => SOURCE_KIND[source]).filter(Boolean);
+  const slots = RESET_ASSET_SLOTS[reset.districtId] || [];
+  return {
+    ...current,
+    includes: mergeSubmittedKeys(current?.includes, submitted?.includes, after?.includes, sources),
+    limits: mergeSubmittedKeys(current?.limits, submitted?.limits, after?.limits, sources),
+    scale: mergeSubmittedKeys(current?.scale, submitted?.scale, after?.scale, kinds),
+    assets: mergeSubmittedKeys(current?.assets, submitted?.assets, after?.assets, slots),
+  };
+}
+
+function reconcileResetAssetOverrides(current, submitted, after, reset) {
+  if (reset.scope === 'all' || reset.scope === 'assets') {
+    return reconcileActionDraft(current, submitted, submitted, after);
+  }
+  return mergeSubmittedKeys(
+    current,
+    submitted,
+    after,
+    RESET_ASSET_SLOTS[reset.districtId] || [],
+  );
+}
+
 export default function Eidoverse() {
   const requestGeneration = useRef(0);
   const configDraftRevision = useRef(0);
@@ -287,6 +392,10 @@ export default function Eidoverse() {
   const runConfigAction = useCallback(async (payload) => {
     const submittedRevision = configDraftRevision.current;
     const submittedDraftWasClean = submittedRevision === savedDraftRevision.current;
+    const submittedRecipeDraft = recipeDraft;
+    const submittedAssetOverrides = assetOverridesDraft;
+    const serverRecipeBeforeAction = worldState?.recipe;
+    const serverAssetOverridesBefore = worldState?.design?.userOverrides?.assets || {};
     setConfigStatus('saving');
     const updated = await updateEidoverseWorldConfig(payload, silent).catch((reason) => {
       setConfigStatus(reason?.message || 'Could not update the Eidoverse world configuration.');
@@ -298,9 +407,40 @@ export default function Eidoverse() {
       && (submittedDraftWasClean || payload.reset?.scope === 'all');
     if (replaceDraft) configDraftRevision.current += 1;
     applyWorldResponse(updated, { replaceDraft });
+    if (!replaceDraft && payload.reset) {
+      if (updated.recipe) {
+        setRecipeDraft((current) => reconcileResetRecipe(
+          current,
+          submittedRecipeDraft,
+          updated.recipe,
+          payload.reset,
+        ));
+      }
+      setAssetOverridesDraft((current) => reconcileResetAssetOverrides(
+        current,
+        submittedAssetOverrides,
+        updated.design?.userOverrides?.assets || {},
+        payload.reset,
+      ));
+    } else if (!replaceDraft && payload.refreshAssets) {
+      if (updated.recipe) {
+        setRecipeDraft((current) => reconcileActionDraft(
+          current,
+          submittedRecipeDraft,
+          serverRecipeBeforeAction,
+          updated.recipe,
+        ));
+      }
+      setAssetOverridesDraft((current) => reconcileActionDraft(
+        current,
+        submittedAssetOverrides,
+        serverAssetOverridesBefore,
+        updated.design?.userOverrides?.assets || {},
+      ));
+    }
     setConfigStatus(replaceDraft ? 'saved' : '');
     void runProjection().catch(() => {});
-  }, [applyWorldResponse, runProjection]);
+  }, [applyWorldResponse, assetOverridesDraft, recipeDraft, runProjection, worldState]);
 
   const actions = (
     <>
