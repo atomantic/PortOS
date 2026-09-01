@@ -146,6 +146,10 @@ describe('cos-runner durable TUI ownership (#3202)', () => {
     const onExitIdx = RUNNER_SRC.indexOf('tuiProcess.onExit');
     const exitedIdx = RUNNER_SRC.indexOf('current.exited = true');
     expect(exitedIdx, 'onExit must stamp exited before deleting the handle').toBeGreaterThan(onExitIdx);
+    const deleteIdx = RUNNER_SRC.indexOf('activeAgents.delete(agentId);', exitedIdx);
+    expect(deleteIdx, 'onExit must drop the handle before awaiting completion I/O').toBeGreaterThan(exitedIdx);
+    expect(deleteIdx).toBeLessThan(RUNNER_SRC.indexOf('await withState((state) => {', exitedIdx));
+    expect(RUNNER_SRC).toMatch(/if\s*\(\s*agent\.exited\s*===\s*true\s*\)\s*continue;/);
     expect(RUNNER_SRC).toMatch(/runnerAgentLivenessFields\(agent,\s*stats\)/);
     expect(RUNNER_SRC).toMatch(/inspectAgentProcess\(agent\)/);
   });

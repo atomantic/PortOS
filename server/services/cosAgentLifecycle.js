@@ -665,9 +665,14 @@ export async function cleanupZombieAgents() {
 
   // Also check with the CoS runner for agents it's actively tracking
   const { getActiveAgentsFromRunner } = await import('./cosRunnerClient.js');
-  const runnerAgents = await getActiveAgentsFromRunner().catch(() => []);
+  const runnerProbe = await getActiveAgentsFromRunner().then(
+    (agents) => Array.isArray(agents)
+      ? { available: true, agents }
+      : { available: false, agents: [] },
+    () => ({ available: false, agents: [] }),
+  );
   const runnerById = new Map(
-    (Array.isArray(runnerAgents) ? runnerAgents : [])
+    runnerProbe.agents
       .filter((row) => row?.id)
       .map((row) => [row.id, row]),
   );
@@ -682,6 +687,15 @@ export async function cleanupZombieAgents() {
       // processActive from onExit/pid probe). Leftover runnerAgents ownership
       // from an earlier adopt is not.
       if (activeAgents.has(agent.id)) continue;
+      const executionMode = agent.metadata?.executionMode;
+      const runnerOwned = agent.metadata?.useRunner === true
+        || agent.metadata?.useRunner === 'true'
+        || executionMode === 'runner'
+        || executionMode === 'runner-tui';
+      // Same as the orphan sweep: a failed probe is not evidence the runner
+      // process died. A pid-0 TUI after restart would otherwise be archived
+      // as "never started" the moment the runner is unreachable.
+      if (!runnerProbe.available && runnerOwned) continue;
       if (await runnerEntryShieldsRunningRecord(runnerById.get(agent.id), isPidAlive)) {
         continue;
       }
