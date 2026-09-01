@@ -32,9 +32,10 @@ import { getLocalLlmStatus } from '../services/apiLocalLlm';
  * runtime did not report capabilities; an absent key means that model was not
  * in the local status response.
  *
+ * @param {{enabled?: boolean}} [options]
  * @returns {{ ollama: string[], lmstudio: string[], installed: { ollama: boolean|null, lmstudio: boolean|null }, recommendations: { ollama: object|null, lmstudio: object|null }, ctxById: Record<string, number>, hardwareCompatibilityByBackend: { ollama: Record<string, object>, lmstudio: Record<string, object> }, capabilitiesByBackend: { ollama: Record<string, string[]|null>, lmstudio: Record<string, string[]|null> }, loading: boolean }}
  */
-export default function useLocalModels() {
+export default function useLocalModels({ enabled = true } = {}) {
   const [state, setState] = useState({
     ollama: [],
     lmstudio: [],
@@ -43,11 +44,16 @@ export default function useLocalModels() {
     ctxById: {},
     hardwareCompatibilityByBackend: { ollama: {}, lmstudio: {} },
     capabilitiesByBackend: { ollama: {}, lmstudio: {} },
-    loading: true,
+    loading: enabled,
   });
 
   useEffect(() => {
+    if (!enabled) {
+      setState((current) => ({ ...current, loading: false }));
+      return undefined;
+    }
     let canceled = false;
+    setState((current) => ({ ...current, loading: true }));
     // Secondary control — a failed fetch shouldn't toast over the host page.
     getLocalLlmStatus({ silent: true })
       .then((status) => {
@@ -89,7 +95,7 @@ export default function useLocalModels() {
       })
       .catch(() => { if (!canceled) setState((s) => ({ ...s, loading: false })); });
     return () => { canceled = true; };
-  }, []);
+  }, [enabled]);
 
   return state;
 }

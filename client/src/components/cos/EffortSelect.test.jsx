@@ -58,6 +58,23 @@ describe('EffortSelect', () => {
     expect(screen.getByRole('option', { name: 'bogus (not supported — ignored)' })).toBeInTheDocument();
   });
 
+  it('keeps a policy-disallowed saved effort visible so it can be cleared', () => {
+    render(<EffortSelect
+      provider={CLAUDE}
+      value="max"
+      onChange={() => {}}
+      optionFilter={(level) => level === 'low'}
+    />);
+    const select = screen.getByRole('combobox');
+    expect(select).toHaveValue('max');
+    expect(screen.getByRole('option', { name: 'max (runs as max) (not permitted here)' })).toBeDisabled();
+    expect(screen.getAllByRole('option').map(option => option.textContent)).toEqual([
+      'Default effort',
+      'max (runs as max) (not permitted here)',
+      'low',
+    ]);
+  });
+
   it('does not add the extra option when the stored value is in the ladder', () => {
     render(<EffortSelect provider={CLAUDE} value="xhigh" onChange={() => {}} />);
     const options = screen.getAllByRole('option').map(o => o.textContent);

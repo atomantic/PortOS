@@ -274,7 +274,7 @@ describe('isConfiguredApprovalRequired', () => {
     const selfStart = GEN_SRC.indexOf('export async function generateSelfImprovementTaskForType');
     const appStart = GEN_SRC.indexOf('export async function generateManagedAppImprovementTaskForType');
     expect(GEN_SRC.slice(selfStart, selfStart + 4500)).toContain('stampApprovalReason(metadata, approval)');
-    expect(GEN_SRC.slice(appStart, appStart + 11000)).toContain('stampApprovalReason(metadata, approval)');
+    expect(GEN_SRC.slice(appStart, appStart + 12000)).toContain('stampApprovalReason(metadata, approval)');
   });
 
   it('the PortOS self-improvement lane resolves and appends configured data inputs', () => {
@@ -1742,6 +1742,22 @@ describe('the drain cap has exactly one implementation, at the choke point', () 
     expect(spendIdx, 'the choke point must spend the deferred dispatch').toBeGreaterThan(-1);
     // Every `return null` gate must precede it — planId is the last one.
     expect(body.indexOf('planMeta.skipReason')).toBeLessThan(spendIdx);
+  });
+});
+
+describe('pr-reviewer security preflight wiring', () => {
+  it('runs the direct preflight before stage gates and resolves the next-stage prompt', () => {
+    const start = GEN_SRC.indexOf('export async function generateManagedAppImprovementTaskForType');
+    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('return task;', start));
+    const preflightAt = body.indexOf('runPrReviewerSecurityPreflight(taskType, app, metadata)');
+    const preconditionAt = body.indexOf('shouldSkipForPrecondition(metadata, app, taskType)');
+    const promptAt = body.indexOf('getStagePrompt(taskType, currentStageIndex)');
+
+    expect(preflightAt, 'pr-reviewer must use the direct security preflight').toBeGreaterThan(-1);
+    expect(preconditionAt, 'the ordinary stage gate must remain in the generator').toBeGreaterThan(-1);
+    expect(preflightAt).toBeLessThan(preconditionAt);
+    expect(promptAt, 'a passed preflight must select the current pipeline stage body').toBeGreaterThan(-1);
+    expect(body).toContain('if (securityPreflight.skipped) return null;');
   });
 });
 

@@ -16,6 +16,9 @@ import {
   isVisionCapableCliProvider,
   visionLocalModelFilter,
   isToolUseModel,
+  isToolFreeLocalProvider,
+  isToolFreeLocalModel,
+  toolFreeLocalSelectionPolicy,
   localToolUseHint,
   withToolUseOptionLabel,
   localBackendForProvider,
@@ -891,6 +894,37 @@ describe('localBackendForProvider', () => {
     expect(localBackendForProvider({ endpoint: 'https://api.openai.com/v1', name: 'OpenAI' })).toBeNull();
     expect(localBackendForProvider({})).toBeNull();
     expect(localBackendForProvider(null)).toBeNull();
+  });
+});
+
+describe('toolFreeLocalSelectionPolicy', () => {
+  const ollama = { id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1', enabled: true };
+  const lmstudio = { id: 'lmstudio', type: 'api', endpoint: 'http://localhost:1234/v1', enabled: true };
+
+  it('allows only canonical local API providers', () => {
+    expect(isToolFreeLocalProvider(ollama)).toBe(true);
+    expect(isToolFreeLocalProvider(lmstudio)).toBe(true);
+    expect(isToolFreeLocalProvider({ ...ollama, type: 'tui' })).toBe(false);
+    expect(isToolFreeLocalProvider({ ...ollama, id: 'custom-local' })).toBe(false);
+    expect(isToolFreeLocalProvider({ ...ollama, endpoint: 'http://example.internal:11434/v1' })).toBe(false);
+  });
+
+  it('requires an authoritative capability report and rejects tool-capable models', () => {
+    const capabilities = { ollama: { 'safe-model': ['chat'], 'agent-model': ['chat', 'tools'], 'empty-model': [] } };
+    expect(isToolFreeLocalModel('safe-model', ollama, capabilities)).toBe(true);
+    expect(isToolFreeLocalModel('empty-model', ollama, capabilities)).toBe(true);
+    expect(isToolFreeLocalModel('agent-model', ollama, capabilities)).toBe(false);
+    expect(isToolFreeLocalModel('unknown-model', ollama, capabilities)).toBe(false);
+    expect(isToolFreeLocalModel({ id: 'safe-object', capabilities: ['chat'] }, ollama, {})).toBe(true);
+    expect(isToolFreeLocalModel({ id: 'tool-object', capabilities: ['chat', 'tools'] }, ollama, {})).toBe(false);
+  });
+
+  it('provides one policy object for provider and model filtering', () => {
+    const policy = toolFreeLocalSelectionPolicy({ ollama: { 'safe-model': ['chat'] } });
+    expect(policy.provider(ollama)).toBe(true);
+    expect(policy.provider({ id: 'claude-code', type: 'cli', command: 'claude' })).toBe(false);
+    expect(policy.model('safe-model', ollama)).toBe(true);
+    expect(policy.model('unknown-model', ollama)).toBe(false);
   });
 });
 

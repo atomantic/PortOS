@@ -22,6 +22,9 @@ import { FormField } from '../ui/FormField';
  *   provider-wide ladder.
  * @param {string} props.value - Current effort ('' = provider default).
  * @param {function} props.onChange - Called with the new effort string.
+ * @param {function} [props.optionFilter] - Optional `(effort, provider, model) => boolean`
+ *   policy applied to the effort options. A selected disallowed value remains
+ *   visible as a disabled/stale option so the caller can clear it.
  * @param {string} [props.id] - Id for the <select>, when the caller owns the
  *   `<label htmlFor>`. Defaults to a generated one (used by the FormField mode).
  * @param {string} [props.label] - Field label; enables the FormField wrapper.
@@ -36,6 +39,7 @@ export default function EffortSelect({
   model = null,
   value,
   onChange,
+  optionFilter,
   id: idProp,
   label,
   hint,
@@ -46,8 +50,9 @@ export default function EffortSelect({
 }) {
   const generatedId = useId();
   const id = idProp || generatedId;
-  const levels = effortLevelsForProvider(provider, model);
-  if (!levels) return null;
+  const allLevels = effortLevelsForProvider(provider, model);
+  if (!allLevels) return null;
+  const levels = allLevels?.filter((level) => !optionFilter || optionFilter(level, provider, model));
 
   // A stored effort can sit outside this provider's ladder — a task/stage
   // pinned to claude `max` whose provider was later switched to Antigravity
@@ -58,6 +63,8 @@ export default function EffortSelect({
   // the run uses the clamped level. Mirrors the stale-model option the pipeline
   // stage's Model select already renders.
   const outOfLadder = value && !levels.includes(value) ? value : null;
+  const outOfLadderAllowed = !outOfLadder || !optionFilter || optionFilter(outOfLadder, provider, model);
+  if (!levels.length && !outOfLadder) return null;
   const clamped = outOfLadder ? resolveCliEffort(outOfLadder, provider, model) : null;
 
   const select = (
@@ -72,8 +79,12 @@ export default function EffortSelect({
     >
       <option value="">Default effort</option>
       {outOfLadder && (
-        <option value={outOfLadder}>
+        <option
+          value={outOfLadder}
+          disabled={!outOfLadderAllowed}
+        >
           {clamped ? `${outOfLadder} (runs as ${clamped})` : `${outOfLadder} (not supported — ignored)`}
+          {!outOfLadderAllowed ? ' (not permitted here)' : ''}
         </option>
       )}
       {levels.map(level => (

@@ -1,10 +1,25 @@
-import { effectiveModelFor, effortAwareModelOptions, effortSurvivingModel } from '../../../../utils/providers';
-import { FormField } from '../../../ui/FormField';
-import EffortSelect from '../../EffortSelect';
+import { useMemo } from 'react';
+import {
+  effortAwareModelOptions,
+  effortSurvivingModel,
+  isToolFreeLocalProvider,
+  localBackendForProvider,
+  toolFreeLocalSelectionPolicy,
+} from '../../../../utils/providers';
+import useLocalModels from '../../../../hooks/useLocalModels';
+import ProviderModelSelector from '../../../ProviderModelSelector';
 import { pipelineStages } from './scheduleConstants';
 
 export default function PipelineStageConfig({ taskType, config, providers, onUpdate, updating, setUpdating }) {
   const stages = pipelineStages(config);
+  const needsSecurityModelPolicy = taskType === 'pr-reviewer';
+  const { ollama, lmstudio, capabilitiesByBackend, loading: localModelsLoading } = useLocalModels({
+    enabled: needsSecurityModelPolicy,
+  });
+  const securitySelectionPolicy = useMemo(
+    () => toolFreeLocalSelectionPolicy(capabilitiesByBackend),
+    [capabilitiesByBackend],
+  );
 
   const handleStageUpdate = async (stageIndex, field, value) => {
     setUpdating(true);
@@ -45,11 +60,26 @@ export default function PipelineStageConfig({ taskType, config, providers, onUpd
       <div className="space-y-3">
         {stages.map((stage, i) => {
           const stageProvider = providers?.find(p => p.id === stage.providerId);
-          // Each stage persists its own effort, so Antigravity lists BASE models
-          // with the tier picked beside them. A stage saved before the split
-          // keeps its suffixed id as its own option and still runs (the server
-          // splits it into `--model` + `--effort`).
-          const stageModels = effortAwareModelOptions(stageProvider, stage.model);
+          const isSecurityStage = needsSecurityModelPolicy && i === 0;
+          const localBackend = localBackendForProvider(stageProvider);
+          const localModelIds = localBackend === 'ollama' ? ollama : localBackend === 'lmstudio' ? lmstudio : [];
+          // Keep the richer capability object on each local option so the shared
+          // policy does not need a second lookup. The status hook's ids are the
+          // installed-model source of truth; a provider's stale catalog is never
+          // enough to make a model eligible for a security scan.
+          const stageModels = isSecurityStage && isToolFreeLocalProvider(stageProvider)
+            ? localModelIds.map(id => ({
+              id,
+              name: id,
+              capabilities: capabilitiesByBackend?.[localBackend]?.[id],
+            }))
+            : effortAwareModelOptions(stageProvider, stage.model);
+          const selectionPolicy = isSecurityStage ? securitySelectionPolicy : undefined;
+          const stageProviderId = stage.providerId || '';
+          const stageModel = stage.model || '';
+          const stageEffort = stage.effort || '';
+
+          const updateStage = (field, value) => handleStageUpdate(i, field, value || null);
           return (
             <div key={i} className="bg-port-card border border-port-border rounded-lg p-3">
               <div className="flex items-center gap-2 mb-3">
@@ -62,52 +92,38 @@ export default function PipelineStageConfig({ taskType, config, providers, onUpd
                   <span className="text-gray-500 ml-auto text-xs">→ Stage {i + 2}</span>
                 )}
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <FormField label="Provider" labelClassName="text-xs text-gray-500 block mb-1">
-                  <select
-                    value={stage.providerId || ''}
-                    onChange={(e) => handleStageUpdate(i, 'providerId', e.target.value || null)}
-                    disabled={updating}
-                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs"
-                  >
-                    <option value="">Default (task-level)</option>
-                    {providers?.map(provider => (
-                      <option key={provider.id} value={provider.id}>{provider.name}</option>
-                    ))}
-                  </select>
-                </FormField>
-                <FormField label="Model" labelClassName="text-xs text-gray-500 block mb-1">
-                  <select
-                    value={stage.model || ''}
-                    onChange={(e) => handleStageUpdate(i, 'model', e.target.value || null)}
-                    disabled={updating}
-                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs"
-                  >
-                    <option value="">Default (task-level)</option>
-                    {stage.model && !stageModels.includes(stage.model) && (
-                      <option value={stage.model}>{stage.model}</option>
-                    )}
-                    {stageModels.map(model => (
-                      <option key={model} value={model}>{model}</option>
-                    ))}
-                  </select>
-                </FormField>
-                <EffortSelect
-                  provider={stageProvider}
-                  model={effectiveModelFor(stageProvider, stage.model)}
-                  value={stage.effort}
-                  onChange={(effort) => handleStageUpdate(i, 'effort', effort || null)}
-                  disabled={updating}
-                  label="Thinking Effort"
-                  labelClassName="text-xs text-gray-500 block mb-1"
-                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs"
-                />
-              </div>
+              <ProviderModelSelector
+                providers={providers || []}
+                selectedProviderId={stageProviderId}
+                selectedModel={stageModel}
+                availableModels={stageModels}
+                onProviderChange={(providerId) => updateStage('providerId', providerId)}
+                onModelChange={(model) => updateStage('model', model)}
+                effort={stageEffort}
+                onEffortChange={(effort) => updateStage('effort', effort)}
+                emptyProviderOption={isSecurityStage ? 'Select local provider (required)' : 'Default (task-level)'}
+                emptyModelOption={isSecurityStage ? 'Select verified tool-free model (required)' : 'Default (task-level)'}
+                alwaysShowModel
+                selectionPolicy={selectionPolicy}
+                disabled={updating}
+              />
+              {isSecurityStage && (
+                <p className="text-xs text-gray-500 mt-2">
+                  {localModelsLoading
+                    ? 'Loading local model capability reports…'
+                    : 'Security Scan requires an explicit local model whose runtime reports no tool-calling capability. CLI/TUI agents and unknown capability states are not eligible.'}
+                </p>
+              )}
             </div>
           );
         })}
       </div>
-      <p className="text-xs text-gray-500 mt-2">Each stage runs as a separate agent inside this pipeline; stages are not scheduled independently. Configure different providers per stage (e.g., Codex for review, Claude for implementation).</p>
+      <p className="text-xs text-gray-500 mt-2">
+        {needsSecurityModelPolicy
+          ? 'Security Scan runs as a direct local, tool-free preflight; later stages run as separate agents. Stages are not scheduled independently.'
+          : 'Each stage runs as a separate agent inside this pipeline; stages are not scheduled independently.'}
+        {' Configure different providers per stage (e.g., Codex for review, Claude for implementation).'}
+      </p>
     </div>
   );
 }

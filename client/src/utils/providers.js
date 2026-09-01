@@ -182,6 +182,56 @@ export const AGENT_HARNESS_PROVIDER_TYPES = Object.freeze([
   PROVIDER_TYPES.TUI
 ]);
 
+// Direct local HTTP providers are the only provider class that can be made
+// tool-free by construction. CLI/TUI providers may be pointed at a local model,
+// but the harness still has filesystem/process authority, so they do not belong
+// in a tool-free security-review picker.
+export const TOOL_FREE_LOCAL_PROVIDER_IDS = Object.freeze(['ollama', 'lmstudio']);
+
+/**
+ * True only for PortOS's canonical local HTTP backends on this machine.
+ *
+ * The explicit ids keep a custom provider from inheriting a security-sensitive
+ * policy merely because its endpoint happens to mention Ollama or LM Studio.
+ * `isLocalInstanceProvider` keeps a renamed canonical record pointed at another
+ * machine out of the same policy.
+ */
+export const isToolFreeLocalProvider = (provider) =>
+  isApiProvider(provider)
+  && TOOL_FREE_LOCAL_PROVIDER_IDS.includes(String(provider?.id || '').toLowerCase())
+  && isLocalInstanceProvider(provider);
+
+/**
+ * Whether a local model has an authoritative, explicit capability report that
+ * excludes native tool use. Unknown capability state is unsafe for a security
+ * scan and therefore returns false rather than falling back to model-name
+ * heuristics.
+ *
+ * `capabilitiesByBackend` is the shape returned by `useLocalModels`; object
+ * model entries are accepted too so callers with a richer model catalog can use
+ * the same predicate without rebuilding a map.
+ */
+export const isToolFreeLocalModel = (model, provider, capabilitiesByBackend = {}) => {
+  if (!isToolFreeLocalProvider(provider)) return false;
+  const id = typeof model === 'string' ? model : model?.id || model?.name;
+  if (typeof id !== 'string' || !id.trim()) return false;
+  const reported = Array.isArray(model?.capabilities)
+    ? model.capabilities
+    : capabilitiesByBackend?.[localBackendForProvider(provider)]?.[id];
+  if (!Array.isArray(reported)) return false;
+  return !reported.some((capability) => String(capability).toLowerCase() === 'tools');
+};
+
+/**
+ * Build the shared selection policy used by security-sensitive AI pickers.
+ * ProviderModelSelector owns applying all three predicates consistently; a
+ * caller supplies only the policy-specific capability source.
+ */
+export const toolFreeLocalSelectionPolicy = (capabilitiesByBackend = {}) => ({
+  provider: isToolFreeLocalProvider,
+  model: (model, provider) => isToolFreeLocalModel(model, provider, capabilitiesByBackend),
+});
+
 /**
  * Retain an existing non-runnable pin so a saved job can still be edited and
  * cleared, while limiting new agent-job selections to runnable providers.

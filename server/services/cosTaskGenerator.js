@@ -2022,6 +2022,95 @@ function initializePipelineMetadata(metadata) {
   }
 }
 
+/**
+ * Run pr-reviewer's Security Scan through the direct local, no-tools path and
+ * hand a passing result to the next pipeline stage. A normal stage-0 agent is
+ * intentionally never spawned: `readOnly` is prompt guidance, not an OS
+ * sandbox, and the generic agent resolver rejects API providers anyway.
+ *
+ * External contributor PRs are held for human approval before the stage that
+ * can review, comment, or merge. The preflight itself remains read-only and
+ * does not checkout or execute any contributor branch.
+ */
+async function runPrReviewerSecurityPreflight(taskType, app, metadata) {
+  if (taskType !== 'pr-reviewer') return { skipped: false };
+
+  const stages = metadata.pipeline?.stages;
+  const securityStage = stages?.[0];
+  const nextStage = stages?.[1];
+  if (!securityStage || !nextStage) {
+    emitLog('warn', `Skipping pr-reviewer for ${app.name}: security pipeline requires two stages`, { appId: app.id, analysisType: taskType });
+    return { skipped: true };
+  }
+
+  const { runPrReviewerSecurityScan } = await import('./prReviewerSecurity.js');
+  const scan = await runPrReviewerSecurityScan({
+    app,
+    providerId: securityStage.providerId,
+    model: securityStage.model,
+    effort: securityStage.effort || null,
+  });
+  if (!scan.ok || !scan.passed) {
+    emitLog('warn', `Skipping pr-reviewer for ${app.name}: ${scan.code || 'security-scan-not-passed'}`, { appId: app.id, analysisType: taskType });
+    return { skipped: true };
+  }
+
+  const reviewedPrs = scan.reviewedPrs || [];
+  const requiresApproval = reviewedPrs.length > 0;
+  metadata.pipeline = {
+    ...metadata.pipeline,
+    currentStage: 1,
+    stageResults: [{
+      stage: 0,
+      name: securityStage.name,
+      agentId: null,
+      success: true,
+      completedAt: new Date().toISOString(),
+      summary: { backend: scan.backend, reviewedPrCount: reviewedPrs.length },
+    }],
+    previousStageAgentId: null,
+    previousStageOutput: JSON.stringify({
+      securityScan: 'passed',
+      reviewedPrs: reviewedPrs.map(({ number, passed }) => ({ number, passed })),
+    }),
+    securityScan: {
+      completed: true,
+      backend: scan.backend,
+      reviewedPrCount: reviewedPrs.length,
+      requiresApproval,
+    },
+  };
+
+  // Apply the next stage's provider/model/effort and behavior flags exactly as
+  // the ordinary agent-completion hand-off does. Keeping this in the generator
+  // makes the synthetic stage-0 result indistinguishable from a real one to
+  // the rest of task creation.
+  metadata.readOnly = nextStage.readOnly ?? false;
+  if (nextStage.model) metadata.model = nextStage.model;
+  if (nextStage.providerId) {
+    metadata.provider = nextStage.providerId;
+    metadata.providerId = nextStage.providerId;
+  }
+  if (nextStage.effort) metadata.effort = nextStage.effort;
+  const nextStageReadOnly = nextStage.readOnly ?? false;
+  const taskDefaults = metadata.pipeline.taskDefaults || {};
+  for (const flag of PIPELINE_BEHAVIOR_FLAGS) {
+    if (flag in nextStage) {
+      metadata[flag] = nextStage[flag];
+    } else if (nextStageReadOnly) {
+      metadata[flag] = false;
+    } else if (flag in taskDefaults) {
+      metadata[flag] = taskDefaults[flag];
+    }
+  }
+
+  // applyOnDemandConsent deliberately honors this marker, so a user-triggered
+  // run cannot silently bypass the human gate for external contributor PRs.
+  if (requiresApproval) metadata.requireApproval = true;
+  emitLog('info', `pr-reviewer security scan passed for ${app.name}: ${reviewedPrs.length} external PR(s)`, { appId: app.id, analysisType: taskType });
+  return { skipped: false, scan };
+}
+
 // Apply app-level worktree/PR defaults only when not already set by task-type metadata.
 // openPR is applied first since it implies useWorktree — this prevents defaultUseWorktree: false
 // from blocking defaultOpenPR: true when both are app-level defaults.
@@ -3131,6 +3220,8 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   const metadata = buildImprovementTaskMetadata(taskType, app, interval, taskSchedule, appOverride);
 
   initializePipelineMetadata(metadata);
+  const securityPreflight = await runPrReviewerSecurityPreflight(taskType, app, metadata);
+  if (securityPreflight.skipped) return null;
   if (!skipPreconditions && shouldSkipForPrecondition(metadata, app, taskType)) return null;
 
   // Programmatic-I/O input hook. A task type may register a buildTaskInput hook
@@ -3196,10 +3287,11 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   // A buildTaskInput hook that returned a fully-rendered prompt wins over the
   // template path — the hook owns its prompt (LI has no DEFAULT_TASK_PROMPTS
   // entry). The token-replacement chain below is a no-op on it (no {tokens}).
+  const currentStageIndex = metadata.pipeline?.currentStage ?? 0;
   const promptTemplate = hookPrompt
     ? hookPrompt
     : (metadata.pipeline?.stages
-      ? await getStagePrompt(taskType, 0)
+      ? await getStagePrompt(taskType, currentStageIndex)
       : await getTaskPrompt(promptKeyForBody));
 
   // reference-watch: dynamically inject {referenceData} — a Markdown chunk
