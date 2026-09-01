@@ -327,7 +327,9 @@ const appendText = (acc, text) => {
  * Returns `true` when the turn has reached a terminal state.
  */
 export const applyCodexTurnEvent = (acc, method, params) => {
-  if (!acc || acc.status !== 'inProgress') return acc?.status !== 'inProgress';
+  // Already terminal: report it as such so a late frame cannot settle the turn
+  // a second time, and never fold it into the answer.
+  if (!acc || acc.status !== 'inProgress') return true;
   if (!params || typeof params !== 'object') return false;
   if (acc.turnId && typeof params.turnId === 'string' && params.turnId !== acc.turnId) return false;
 
