@@ -26,6 +26,7 @@ import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { createStreamJsonParser } from './streamJsonParser.js';
 import { loadState, saveState, withState } from './runnerState.js';
 import { getProcessStats, checkProcessRunning } from './processStats.js';
+import { usableAgentPid, runnerAgentLivenessFields } from '../lib/runnerAgentLiveness.js';
 import { ALLOWED_COMMANDS, isAllowedCommand } from './allowedCommands.js';
 import { armForceKill as armForceKillShared } from './forceKill.js';
 import { PORTS } from '../lib/ports.js';
@@ -120,23 +121,30 @@ app.get('/health', (req, res) => {
   });
 });
 
+async function inspectAgentProcess(agent) {
+  const pid = usableAgentPid(agent.pid);
+  const stats = pid ? await getProcessStats(pid) : null;
+  return { stats, ...runnerAgentLivenessFields(agent, stats) };
+}
+
 /**
  * Get list of active agents with process stats
  */
 app.get('/agents', async (req, res) => {
   const agents = [];
   for (const [agentId, agent] of activeAgents) {
-    const stats = await getProcessStats(agent.pid);
+    const inspected = await inspectAgentProcess(agent);
     agents.push({
       id: agentId,
       taskId: agent.taskId,
       pid: agent.pid,
       startedAt: agent.startedAt,
       runningTime: Date.now() - agent.startedAt,
-      processActive: stats.active,
-      cpu: stats.cpu,
-      memoryMb: stats.memoryMb,
-      state: stats.state,
+      processActive: inspected.processActive,
+      cpu: inspected.cpu,
+      memoryMb: inspected.memoryMb,
+      state: inspected.state,
+      liveness: inspected.liveness,
       kind: agent.kind || 'cli',
       sessionId: agent.sessionId || null,
       command: agent.command || null,
@@ -241,6 +249,9 @@ app.post('/spawn-tui', async (req, res) => {
     doneSentinelPath,
     completedBySentinel: false,
     doneWatcher: null,
+    // node-pty reports pid 0 for ConPTY on Windows, so a pid probe is not a
+    // liveness signal. onExit is the runner's authority; GET /agents reads this.
+    exited: false,
   };
   activeAgents.set(agentId, agent);
 
@@ -258,6 +269,7 @@ app.post('/spawn-tui', async (req, res) => {
     try {
       const current = activeAgents.get(agentId);
       if (!current) return;
+      current.exited = true;
       current.doneWatcher?.();
       // Cancel any pending SIGKILL timer — process already exited.
       if (current.killTimer) {
@@ -356,8 +368,17 @@ app.get('/agents/:agentId/stats', async (req, res) => {
     return res.status(404).json({ error: 'Agent not found or not running' });
   }
 
-  const stats = await getProcessStats(agent.pid);
-  res.json({ agentId, pid: agent.pid, ...stats });
+  const inspected = await inspectAgentProcess(agent);
+  res.json({
+    agentId,
+    pid: agent.pid,
+    active: inspected.processActive,
+    cpu: inspected.cpu,
+    memoryKb: inspected.stats?.memoryKb ?? 0,
+    memoryMb: inspected.memoryMb,
+    state: inspected.state,
+    liveness: inspected.liveness,
+  });
 });
 
 /**

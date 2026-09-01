@@ -133,6 +133,23 @@ describe('cos-runner durable TUI ownership (#3202)', () => {
     expect(RUNNER_SRC).toContain('const { command: ptyCommand, args: ptyArgs } = prepareCliSpawn(executable, args, childEnv);');
   });
 
+  it('tracks TUI liveness from onExit bookkeeping rather than a pid probe', () => {
+    // node-pty reports pid 0 for ConPTY on Windows, so getProcessStats(pid)
+    // reads every runner-owned TUI as invalid/dead. GET /agents must use the
+    // runner's own onExit flag, then tag the row so sweeps can tell a real
+    // processActive from that pid-0 artifact.
+    expect(RUNNER_SRC).toMatch(
+      /import\s*\{[^}]*\brunnerAgentLivenessFields\b[^}]*\}\s*from\s*'\.\.\/lib\/runnerAgentLiveness\.js';/
+    );
+    expect(RUNNER_SRC).toMatch(/exited:\s*false/);
+    expect(RUNNER_SRC).toMatch(/current\.exited\s*=\s*true/);
+    const onExitIdx = RUNNER_SRC.indexOf('tuiProcess.onExit');
+    const exitedIdx = RUNNER_SRC.indexOf('current.exited = true');
+    expect(exitedIdx, 'onExit must stamp exited before deleting the handle').toBeGreaterThan(onExitIdx);
+    expect(RUNNER_SRC).toMatch(/runnerAgentLivenessFields\(agent,\s*stats\)/);
+    expect(RUNNER_SRC).toMatch(/inspectAgentProcess\(agent\)/);
+  });
+
   it('spawns the PTY through the shared Windows-safe CLI wrapper', () => {
     expect(RUNNER_SRC).toMatch(/app\.post\('\/spawn-tui'/);
     expect(RUNNER_SRC).toMatch(/prepareCliSpawn\(executable, args, childEnv\)/);

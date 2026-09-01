@@ -18,6 +18,7 @@ import { completeAgent, updateAgent, getAgents, getAgentRecord, AGENT_RECORD_UNR
 import { updateTask, addTask, getTaskById, reviveBlockedTask, evaluateTasks } from './cos.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, pauseMetadata, isAgentPausedTask, isResumablePausedTask, registerPauseReleaseAdapter } from '../lib/taskPauseHold.js';
 import { terminateAgentViaRunner, killAgentViaRunner, pauseAgentViaRunner, getAgentStatsFromRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
+import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
 import { activeAgents, runnerAgents, userTerminatedAgents, pausedAgents, useRunner, isAgentOwnedLocally, unregisterSpawnedAgent } from './agentState.js';
@@ -1018,10 +1019,10 @@ async function runCleanupOrphanedAgents() {
       return { available: false, agents: [] };
     },
   );
-  const runnerActiveIds = new Set();
+  const runnerById = new Map();
   const runnerAgentsList = runnerProbe.agents;
-  for (const agent of runnerAgentsList) {
-    runnerActiveIds.add(agent.id);
+  for (const row of runnerAgentsList) {
+    if (row?.id) runnerById.set(row.id, row);
   }
 
   // Also sync runner agents to our local map for event handling
@@ -1055,7 +1056,10 @@ async function runCleanupOrphanedAgents() {
 
   for (const agent of agents) {
     if (agent.status === 'running') {
-      const inRemoteRunner = runnerActiveIds.has(agent.id);
+      const inRemoteRunner = await runnerEntryShieldsRunningRecord(
+        runnerById.get(agent.id),
+        isPidAlive,
+      );
 
       // A runner-owned agent may still be alive while the runner is booting or
       // reconnecting. Its absence from a failed probe is not evidence that the

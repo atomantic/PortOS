@@ -428,6 +428,7 @@ export * from './repoStateExpectations.js';
 export * from './shellCd.js';
 export * from './shellExit.js';
 export * from './shellLivenessProbe.js';
+export * from './runnerAgentLiveness.js';
 export * from './shellQuote.js';
 export * from './shellReadinessProbe.js';
 export * from './sidecarProcess.js';

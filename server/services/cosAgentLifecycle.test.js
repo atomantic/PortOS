@@ -54,16 +54,25 @@ vi.mock('fs/promises', async (importOriginal) => {
   };
 });
 
-import { getAgent, createAgentOutputBatcher, completeAgent, updateAgent, registerAgent, filterLiveAgentIds, readAgentRecordOrUnreadable, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
+vi.mock('./cosRunnerClient.js', () => ({
+  getActiveAgentsFromRunner: vi.fn().mockResolvedValue([]),
+}));
+
+import { getAgent, createAgentOutputBatcher, completeAgent, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
 import { saveState, loadState, readAgentsStateForSafetyCheck } from './cosState.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
+import { getActiveAgentsFromRunner } from './cosRunnerClient.js';
+import { activeAgents, runnerAgents } from './agentState.js';
 
 describe('cosAgentLifecycle', () => {
   beforeEach(async () => {
     await rm(mockCosState.agentsDir, { recursive: true, force: true });
     await mkdir(mockCosState.agentsDir, { recursive: true });
     mockCosState.state = { agents: {} };
+    vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([]);
+    activeAgents.clear();
+    runnerAgents.clear();
   });
 
   afterEach(async () => {
@@ -638,5 +647,62 @@ describe('createAgentOutputBatcher', () => {
         args[0].startsWith(`❌ agent ${agentId} output batch flush failed:`)
     );
     expect(logged).toBe(true);
+  });
+});
+
+describe('cleanupZombieAgents — runner listing is not proof of life', () => {
+  beforeEach(async () => {
+    await rm(mockCosState.agentsDir, { recursive: true, force: true });
+    await mkdir(mockCosState.agentsDir, { recursive: true });
+    mockCosState.state = { agents: {} };
+    vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([]);
+    activeAgents.clear();
+    runnerAgents.clear();
+  });
+
+  afterEach(async () => {
+    await rm(mockCosState.agentsDir, { recursive: true, force: true });
+  });
+
+  it('leaves a live runner-owned TUI whose onExit liveness is true', async () => {
+    mockCosState.state.agents['agent-tui'] = {
+      id: 'agent-tui',
+      status: 'running',
+      pid: 0,
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+    };
+    vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([{
+      id: 'agent-tui',
+      pid: 0,
+      kind: 'tui',
+      processActive: true,
+      liveness: 'pty',
+    }]);
+
+    const result = await cleanupZombieAgents();
+    expect(result.cleaned).toEqual([]);
+    expect(mockCosState.state.agents['agent-tui'].status).toBe('running');
+  });
+
+  it('retires a durable running record whose runner listing is stale', async () => {
+    await writeFile(join(mockCosState.agentsDir, 'index.json'), '{}');
+    mockCosState.state.agents['agent-stale'] = {
+      id: 'agent-stale',
+      status: 'running',
+      pid: 2147483646,
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+    };
+    vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([{
+      id: 'agent-stale',
+      pid: 2147483646,
+      kind: 'cli',
+      processActive: false,
+      liveness: 'pid',
+    }]);
+
+    const result = await cleanupZombieAgents();
+    expect(result.cleaned).toEqual(['agent-stale']);
+    expect(mockCosState.state.agents['agent-stale'].status).toBe('completed');
+    expect(mockCosState.state.agents['agent-stale'].result.error).toMatch(/terminated unexpectedly/);
   });
 });
