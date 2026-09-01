@@ -30,8 +30,7 @@
  */
 
 import { ERROR_CATEGORIES } from './aiToolkit/errorDetection.js';
-import { commandBasename } from './providerModels.js';
-import { CODEX_APP_SERVER_COMMAND, CODEX_ERROR_CODES } from './codexAccount.js';
+import { CODEX_ERROR_CODES, isCodexSubscriptionProvider } from './codexAccount.js';
 
 /**
  * The value a provider record carries to advertise that it can serve generic
@@ -100,12 +99,12 @@ export const CODEX_TURN_ERROR_CODES = Object.freeze({
  * shipped seed advertises it so the Providers page has something to offer,
  * while the capability stays off until the user turns it on.
  */
-export const providerDeclaresCodexTextTransport = (provider) => {
-  if (provider?.textTransport !== CODEX_TEXT_TRANSPORT) return false;
-  if (provider.type !== 'cli' && provider.type !== 'tui') return false;
-  const command = typeof provider.command === 'string' ? provider.command.trim() : '';
-  return command !== '' && commandBasename(command) === CODEX_APP_SERVER_COMMAND;
-};
+export const providerDeclaresCodexTextTransport = (provider) =>
+  provider?.textTransport === CODEX_TEXT_TRANSPORT
+  // "Which record IS the Codex subscription" is one question with one answer,
+  // keyed on the COMMAND so a renamed clone still resolves. Reused rather than
+  // restated so the account side and the inference side can never drift.
+  && isCodexSubscriptionProvider(provider);
 
 /**
  * May PortOS actually route a text call here?
