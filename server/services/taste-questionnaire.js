@@ -11,7 +11,11 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { atomicWrite, ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
-import { resolveAPIProvider, callProviderAISimple } from './aiProvider.js';
+// `resolveTextProvider`, not `resolveAPIProvider`: every provider resolved here
+// goes straight to `callProviderAISimple`, which is the one path that can run a
+// ChatGPT-subscription record as a bounded text call. Callers that hand their
+// provider to the prompt runner must keep using the API-only resolver (#5590).
+import { resolveTextProvider, callProviderAISimple } from './aiProvider.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { buildPrompt } from './promptService.js';
 import { digitalTwinEvents } from './digital-twin.js';
@@ -646,7 +650,7 @@ export async function generateSectionSummary(sectionId, providerId, model) {
     throw new Error(`No responses to summarize for section: ${sectionId}`);
   }
 
-  const provider = await resolveAPIProvider(providerId);
+  const provider = await resolveTextProvider(providerId);
   if (!provider) throw new Error(NO_API_PROVIDER_HINT);
 
   const modelId = model || provider.defaultModel;
@@ -720,7 +724,7 @@ export async function generateOverallSummary(providerId, model) {
     throw new Error('No taste responses to summarize. Complete at least one section first.');
   }
 
-  const provider = await resolveAPIProvider(providerId);
+  const provider = await resolveTextProvider(providerId);
   if (!provider) throw new Error(NO_API_PROVIDER_HINT);
 
   const modelId = model || provider.defaultModel;
@@ -915,7 +919,7 @@ export async function generatePersonalizedTasteQuestion(sectionId, providerId, m
   const { context, sourcesUsed } = await aggregateIdentityContext(sectionId);
   if (!context) return { question: null, reason: 'no-context' };
 
-  const provider = await resolveAPIProvider(providerId);
+  const provider = await resolveTextProvider(providerId);
   if (!provider) return { question: null, reason: 'no-provider' };
 
   const modelId = model || provider.defaultModel;

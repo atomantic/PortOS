@@ -174,6 +174,29 @@ const OPENAI_API = {
   id: 'openai', name: 'OpenAI', type: 'api', endpoint: 'https://api.example.com/v1',
 };
 
+describe('resolveAPIProvider stays API-only', () => {
+  const withProviders = (providers, activeProvider = null) =>
+    getAllProviders.mockResolvedValue({ activeProvider, providers });
+
+  it('never returns a CLI record, even one whose text transport is enabled', async () => {
+    // Most of its callers hand the result to promptRunner, which dispatches on
+    // `provider.type` — a `codex` record reaching it runs `executeCliRun`: the
+    // file-writing coding harness, in the PortOS checkout, with the network and
+    // the user's MCP servers. Widening this resolver would silently turn a
+    // universe-refine or mood-board call into exactly that.
+    withProviders([CODEX_ENABLED, OPENAI_API], 'codex');
+
+    await expect(resolveAPIProvider('codex')).resolves.toMatchObject({ id: 'openai' });
+    await expect(resolveAPIProvider(null)).resolves.toMatchObject({ id: 'openai' });
+  });
+
+  it('returns null when only the subscription is configured', async () => {
+    withProviders([CODEX_ENABLED], 'codex');
+
+    await expect(resolveAPIProvider('codex')).resolves.toBeNull();
+  });
+});
+
 describe('resolveTextProvider', () => {
   const withProviders = (providers, activeProvider = null) =>
     getAllProviders.mockResolvedValue({ activeProvider, providers });
@@ -200,9 +223,6 @@ describe('resolveTextProvider', () => {
     await expect(resolveTextProvider('codex')).resolves.toMatchObject({ id: 'openai' });
   });
 
-  it('is still reachable under its original name', () => {
-    expect(resolveAPIProvider).toBe(resolveTextProvider);
-  });
 });
 
 describe('callProviderAISimple through the ChatGPT subscription', () => {

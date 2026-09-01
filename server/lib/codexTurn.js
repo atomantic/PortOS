@@ -60,14 +60,23 @@ export const CODEX_TURN_NOTIFICATIONS = Object.freeze({
 /**
  * The safety envelope every generic text turn runs under.
  *
- * `approvalPolicy: 'never'` is FAIL-CLOSED here, not permissive: paired with a
- * read-only sandbox it means an escalation request is refused outright rather
- * than queued for a human who is not watching a Brain summary. `ephemeral`
- * keeps the thread out of the user's Codex history, and the empty `mcp_servers`
- * / disabled web search strip every tool the model could otherwise reach for.
+ * What this GUARANTEES: the turn cannot write anywhere, cannot reach the
+ * network, has no MCP servers and no web search, starts in a fresh empty
+ * directory outside the PortOS checkout, and leaves no thread behind.
+ * `approvalPolicy: 'never'` is FAIL-CLOSED here rather than permissive — paired
+ * with a read-only sandbox it means an escalation request is refused outright
+ * instead of queued for a human who is not watching a Brain summary, and
+ * `sandbox_permissions: []` withholds every opt-in widening (notably Codex's
+ * `disk-full-read-access`).
  *
- * The `cwd` is supplied per call (a fresh empty directory outside the PortOS
- * checkout) because it is a runtime path, not a constant.
+ * What it does NOT guarantee: Codex's read-only sandbox still lets the model's
+ * own shell tool READ files by absolute path. So a prompt carrying injected
+ * instructions could, in principle, quote local file contents back into its
+ * answer. Narrowing that needs a Codex permission profile verified against a
+ * live signed-in account, which is #5628 — do not describe this envelope as
+ * read-confinement until that lands.
+ *
+ * The `cwd` is supplied per call because it is a runtime path, not a constant.
  */
 export const CODEX_TEXT_THREAD_CONFIG = Object.freeze({
   approvalPolicy: 'never',
@@ -77,6 +86,9 @@ export const CODEX_TEXT_THREAD_CONFIG = Object.freeze({
     mcp_servers: {},
     tools: { web_search: false },
     web_search: false,
+    // An explicit empty list, not an omission: Codex's opt-in widenings (e.g.
+    // `disk-full-read-access`) are additive, so declaring none can only narrow.
+    sandbox_permissions: [],
   }),
 });
 
@@ -303,7 +315,8 @@ export const classifyCodexTransportError = (err) => {
 };
 
 /** A fresh accumulator for one turn. */
-export const createTurnAccumulator = (turnId = null) => ({
+export const createTurnAccumulator = ({ threadId = null, turnId = null } = {}) => ({
+  threadId,
   turnId,
   deltas: [],
   finalText: null,
@@ -331,18 +344,30 @@ export const applyCodexTurnEvent = (acc, method, params) => {
   // a second time, and never fold it into the answer.
   if (!acc || acc.status !== 'inProgress') return true;
   if (!params || typeof params !== 'object') return false;
+  // Enforced HERE, not only in the caller that routes by thread: this function's
+  // contract says another thread's frames are ignored, and its own tests drive
+  // it directly.
+  if (acc.threadId && typeof params.threadId === 'string' && params.threadId !== acc.threadId) return false;
   if (acc.turnId && typeof params.turnId === 'string' && params.turnId !== acc.turnId) return false;
+  // Latch the id from the first frame that carries one. `turn/start`'s own
+  // response also sets it, but a delta can arrive first (or that response can be
+  // delayed) — and without an id the caller cannot `turn/interrupt` a cancelled
+  // turn, which would leave it consuming subscription quota until it ends.
+  if (!acc.turnId && typeof params.turnId === 'string' && params.turnId) acc.turnId = params.turnId;
 
   switch (method) {
     case CODEX_TURN_NOTIFICATIONS.agentMessageDelta:
       appendText(acc, params.delta);
       return false;
     case CODEX_TURN_NOTIFICATIONS.itemCompleted:
-      // The completed item is AUTHORITATIVE for its own text; the deltas were a
-      // progress signal. Replacing rather than appending is what keeps a
-      // retried/repaired stream from producing doubled prose.
+      // A turn can emit several agent messages, so completed items CONCATENATE.
+      // Within one message the completed item is authoritative and the deltas
+      // that previewed it are dropped — appending both would double the prose —
+      // while deltas that arrive AFTER it belong to the next message and are
+      // still carried by `finalizeCodexTurn`.
       if (params.item?.type === 'agentMessage' && typeof params.item.text === 'string') {
         acc.finalText = acc.finalText === null ? params.item.text : `${acc.finalText}${params.item.text}`;
+        acc.deltas.length = 0;
       }
       return false;
     case CODEX_TURN_NOTIFICATIONS.tokenUsage:
@@ -358,7 +383,11 @@ export const applyCodexTurnEvent = (acc, method, params) => {
     case CODEX_TURN_NOTIFICATIONS.turnCompleted: {
       const turn = params.turn;
       if (acc.turnId && turn?.id && turn.id !== acc.turnId) return false;
-      acc.status = typeof turn?.status === 'string' ? turn.status : 'completed';
+      // A frame with no status is MALFORMED, and defaulting it to 'completed'
+      // would hand the caller whatever text had streamed so far as a finished
+      // answer. `finalizeCodexTurn` errors on anything that is not 'completed',
+      // so an unrecognizable status fails the turn instead.
+      acc.status = typeof turn?.status === 'string' && turn.status ? turn.status : 'malformed';
       if (acc.status === 'failed') acc.error = classifyCodexTurnError(turn?.error);
       return true;
     }
@@ -387,7 +416,9 @@ export const finalizeCodexTurn = (acc) => {
   if (acc.status !== 'completed') {
     return { error: 'The Codex turn ended without completing', category: ERROR_CATEGORIES.UNKNOWN };
   }
-  const text = acc.finalText !== null ? acc.finalText : acc.deltas.join('');
+  // Completed items plus any deltas streamed after the last one — a trailing
+  // message with no closing `item/completed` must not be silently dropped.
+  const text = `${acc.finalText ?? ''}${acc.deltas.join('')}`;
   if (!text.trim()) {
     return { error: 'Codex returned an empty completion', category: ERROR_CATEGORIES.UNKNOWN };
   }

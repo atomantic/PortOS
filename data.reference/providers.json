@@ -100,6 +100,7 @@
       "heavyModel": "gpt-5.6-sol",
       "timeout": 600000,
       "enabled": false,
+      "textTransport": "codex-app-server",
       "envVars": {},
       "tuiPromptDelayMs": 2500
     },

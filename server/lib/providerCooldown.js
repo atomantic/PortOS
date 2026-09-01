@@ -46,6 +46,11 @@ export const DEFAULT_COOLDOWN_MS = 60 * 1000;
 // A usage limit with no parsed reset window. Matches QUOTA_EXCEEDED's hour:
 // both mean "the plan is spent", and retrying inside the hour is futile.
 export const DEFAULT_USAGE_LIMIT_COOLDOWN_MS = 60 * 60 * 1000;
+// The longest a bench may ever last. A provider-reported reset is trusted over
+// the category table, but not unconditionally: a weekly window, or a value in a
+// unit that merely happens to parse (bare epoch seconds read as a year), would
+// otherwise take a provider offline for days with no path back.
+export const MAX_BENCH_MS = 24 * 60 * 60 * 1000;
 
 // Categories the tiered cascade classifies as schema/type (mirrors
 // autoFixer.CATEGORY_TO_TIER's SCHEMA_TYPE entries; kept out of the CoS stack so
@@ -120,7 +125,8 @@ export function resolveProviderBench(analysis) {
  * reports it on the rate-limit window). It wins over the category table because
  * it is the truth rather than an estimate, but only when it is a real future
  * timestamp: a past or unparseable value would otherwise resolve to "unbench
- * immediately", which is exactly the failure a bench exists to prevent.
+ * immediately", which is exactly the failure a bench exists to prevent. It is
+ * also clamped to {@link MAX_BENCH_MS} at the other end.
  *
  * @param {ReturnType<typeof resolveProviderBench>} bench
  * @param {{ resetsAt?: string|number|Date|null, now?: number }} [options]
@@ -129,7 +135,7 @@ export function resolveProviderBench(analysis) {
 export function resolveBenchWaitMs(bench, { resetsAt = null, now = Date.now() } = {}) {
   if (!bench) return 0;
   const resetMs = resetsAt == null ? NaN : new Date(resetsAt).getTime();
-  if (Number.isFinite(resetMs) && resetMs > now) return resetMs - now;
+  if (Number.isFinite(resetMs) && resetMs > now) return Math.min(resetMs - now, MAX_BENCH_MS);
   if (bench.marker === 'usage-limit') return DEFAULT_USAGE_LIMIT_COOLDOWN_MS;
   return bench.waitTimeMs ?? DEFAULT_COOLDOWN_MS;
 }

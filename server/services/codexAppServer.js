@@ -45,13 +45,13 @@ import {
   CODEX_ERROR_CODES,
   CODEX_NOTIFICATIONS,
   CODEX_RPC,
-  CODEX_ACCOUNT_STATUS,
   deriveCodexAccountStatus,
   describeCodexAccountStatus,
   isCodexAuthError,
   normalizeCodexAccount,
   normalizeCodexLoginStart,
   normalizeCodexRateLimits,
+  redactCodexMessage,
   redactCodexPayload,
 } from '../lib/codexAccount.js';
 import {
@@ -142,12 +142,22 @@ const teardown = (target, error) => {
   const pendingEntries = [...target.pending.values()];
   target.pending.clear();
   target.closed = true;
-  for (const entry of pendingEntries) entry.reject(error);
-  // A turn whose `turn/start` already answered has no pending request to
-  // reject, so losing the child would otherwise leave it waiting on a
-  // notification that can never arrive.
-  failActiveTurns(error);
-  if (connection === target) connection = null;
+  for (const entry of pendingEntries) {
+    // Clearing matters more now that turns exist: a request deadline can be the
+    // full 5-minute turn timeout, and an unfired timer for an already-rejected
+    // request keeps a callback armed for the rest of that window.
+    clearTimeout(entry.timer);
+    entry.reject(error);
+  }
+  // A turn whose `turn/start` already answered has no pending request to reject,
+  // so losing the child would otherwise leave it waiting on a notification that
+  // can never arrive. Scoped to the LIVE connection: a stale target's late
+  // `exit` event must not kill turns running on the replacement that took over.
+  const wasLive = connection === target;
+  if (wasLive) {
+    connection = null;
+    failActiveTurns(error);
+  }
 };
 
 /**
@@ -202,6 +212,9 @@ const handleNotification = (method, params) => {
   // A completion for a login PortOS did not start (another Codex client on this
   // host) still invalidates the cache above, but must not settle ours.
   if (!pendingLogin || (loginId && loginId !== pendingLogin.loginId)) return;
+  // A completed sign-in is a user action that really did change the account, so
+  // unlike a background readiness poll it may clear an auth/quota bench.
+  if (params?.success !== false) clearCodexTextTransportBench();
   settleLogin(params?.success === false ? 'failed' : 'completed');
 };
 
@@ -221,22 +234,33 @@ const routeTurnNotification = (method, params) => {
   // The accumulator is pure; a malformed frame can still throw inside a
   // normalizer, and this runs on a stdout event handler where an uncaught
   // throw would take down the node process.
-  // The caller's progress hook runs in its OWN guard: a throwing `onDelta` must
-  // not skip the accumulator below, or the finished answer would silently lose
-  // that chunk of text.
-  if (turn.onDelta && method === CODEX_TURN_NOTIFICATIONS.agentMessageDelta && typeof params.delta === 'string') {
-    try {
-      turn.onDelta(params.delta);
-    } catch (err) {
-      console.error(`❌ Codex turn progress hook failed: ${err.message}`);
-    }
-  }
+  // Whether the accumulator will accept this frame, computed BEFORE applying it
+  // (which may latch the turn id). The progress hook honours the same filters:
+  // streaming another turn's delta, or one that lands after this turn already
+  // failed, would show a consumer partial text from an answer PortOS is going to
+  // refuse.
+  const accepted = turn.acc.status === 'inProgress'
+    && (!turn.acc.turnId || typeof params.turnId !== 'string' || params.turnId === turn.acc.turnId);
+
   let terminal = false;
   try {
     terminal = applyCodexTurnEvent(turn.acc, method, params);
   } catch (err) {
     console.error(`❌ Codex turn event ${method} could not be applied: ${err.message}`);
     return;
+  }
+  // Fired AFTER the accumulator, and in its own guard: a throwing hook must not
+  // skip the frame (the finished answer would silently lose that text), and an
+  // async hook's rejection is invisible to try/catch — unhandled here would be a
+  // process-level crash, since this runs on a stdout event outside any request.
+  if (accepted && turn.onDelta && method === CODEX_TURN_NOTIFICATIONS.agentMessageDelta
+    && typeof params.delta === 'string') {
+    try {
+      Promise.resolve(turn.onDelta(params.delta))
+        .catch((err) => console.error(`❌ Codex turn progress hook rejected: ${err.message}`));
+    } catch (err) {
+      console.error(`❌ Codex turn progress hook failed: ${err.message}`);
+    }
   }
   if (terminal) turn.settle();
 };
@@ -262,7 +286,10 @@ const handleFrame = (target, line) => {
   target.pending.delete(frame.id);
   clearTimeout(entry.timer);
   if (frame.error) {
-    const message = typeof frame.error?.message === 'string' ? frame.error.message : 'Codex app-server returned an error';
+    // Scrubbed, not raw: this message is logged AND returned to the browser by
+    // the `/codex/*` routes, and an upstream failure can quote the credential
+    // that failed ("access_token=… expired").
+    const message = redactCodexMessage(frame.error?.message) ?? 'Codex app-server returned an error';
     const rpcError = codexError(
       isCodexAuthError(frame.error) ? CODEX_ERROR_CODES.authRevoked : CODEX_ERROR_CODES.protocol,
       message,
@@ -454,14 +481,14 @@ const readReadiness = async () => {
     }
   }
 
-  const readiness = buildReadiness({ runtimeInstalled: true, accountFetched, account, rateLimits, error });
-  // A fresh read that says the subscription is ready is the evidence a bench was
-  // waiting for — the window reset, or the user signed back in — so the text
-  // transport comes back without waiting out the rest of a cooldown. Any other
-  // verdict leaves the bench alone: it must expire on its own, not on a probe
-  // that merely failed to contradict it.
-  if (readiness.status === CODEX_ACCOUNT_STATUS.ready) clearCodexTextTransportBench();
-  return readiness;
+  // Deliberately does NOT clear a bench. `ready` is far weaker evidence than it
+  // looks: a per-session budget can be spent while the account's 5h/weekly
+  // windows sit at 60%, and a quota read that merely FAILED also lands on
+  // `ready` (an unread window is not an exhausted one). Clearing on either would
+  // unbench a still-spent subscription on the Providers page's next 15s poll,
+  // and loop that way for the whole window. The bench expires on the reset time
+  // Codex itself reported; only an explicit sign-in or sign-out clears it early.
+  return buildReadiness({ runtimeInstalled: true, accountFetched, account, rateLimits, error });
 };
 
 /**
@@ -552,6 +579,10 @@ export async function codexLogout() {
   await call(CODEX_RPC.logout);
   settleLogin('ended by sign-out');
   readinessCache = null;
+  modelsCache = null;
+  // Signing out invalidates whatever the bench was waiting on, and signing back
+  // in must not inherit the previous account's cooldown.
+  clearCodexTextTransportBench();
   console.log('🔒 Codex ChatGPT account signed out');
   return getCodexAccountReadiness({ fresh: true });
 }
@@ -571,6 +602,8 @@ export async function codexLogout() {
 const TURN_TIMEOUT_MS = 300_000;
 /** The catalog changes when a plan does. Long enough to not re-list per call. */
 const MODELS_TTL_MS = 10 * 60_000;
+/** A real catalog is tens of models; this only bounds a misbehaving server. */
+const MODEL_LIST_MAX_PAGES = 20;
 
 /**
  * The empty directory every generic text turn runs in.
@@ -646,7 +679,19 @@ export async function listCodexModels({ fresh = false } = {}) {
     return { models: modelsCache.models, fetchedAt: modelsCache.at, error: null };
   }
   try {
-    const { models } = normalizeCodexModels(await call(CODEX_TURN_RPC.modelList, {}));
+    // Follow `nextCursor`. A truncated catalog is not just a short picker: a
+    // model on a later page is absent from `cachedModelEntry`, so its effort is
+    // sent unclamped — the exact failure the clamp exists to prevent. The page
+    // cap bounds a server that never stops handing back a cursor.
+    const models = [];
+    let cursor = null;
+    for (let page = 0; page < MODEL_LIST_MAX_PAGES; page += 1) {
+      const result = normalizeCodexModels(await call(CODEX_TURN_RPC.modelList, cursor ? { cursor } : {}));
+      models.push(...result.models);
+      cursor = result.nextCursor;
+      if (!cursor) break;
+    }
+    if (cursor) console.error(`❌ Codex model/list stopped after ${MODEL_LIST_MAX_PAGES} pages with a cursor still pending`);
     modelsCache = { at: Date.now(), models };
     return { models, fetchedAt: modelsCache.at, error: null };
   } catch (err) {
@@ -728,7 +773,7 @@ export async function runCodexTextTurn({
     throw codexError(CODEX_ERROR_CODES.protocol, 'Codex started a thread with no id.');
   }
 
-  const acc = createTurnAccumulator();
+  const acc = createTurnAccumulator({ threadId });
   let settle = null;
   let fail = null;
   const finished = new Promise((resolve, reject) => { settle = resolve; fail = reject; });

@@ -139,6 +139,27 @@ export const redactCodexPayload = (value, depth = 0) => {
   ]));
 };
 
+/**
+ * A free-text protocol message with any credential-shaped substring masked, or
+ * `null` when there is nothing to say.
+ *
+ * The payload redactor keys on FIELD NAMES; an upstream failure quoted into a
+ * `message` string has no field names to key on ("access_token=… expired",
+ * "Authorization: Bearer …"). These messages are both logged AND returned to the
+ * browser by the `/codex/*` routes, so they need their own scrub.
+ */
+export const redactCodexMessage = (value) => {
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  const masked = value
+    // key=value / key: value, where the key is credential-shaped
+    .replace(/\b([A-Za-z0-9_-]*(?:token|secret|password|credential|api[_-]?key|access[_-]?key|cookie)[A-Za-z0-9_-]*)\s*[=:]\s*\S+/gi, '$1=' + REDACTED)
+    // an inline bearer/basic credential
+    .replace(/\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 ' + REDACTED)
+    // a bare OpenAI-style key, which carries no label at all
+    .replace(/\bsk-[A-Za-z0-9._-]{8,}/g, REDACTED);
+  return masked.length > 400 ? `${masked.slice(0, 400)}…` : masked;
+};
+
 const trimmedString = (value) => (typeof value === 'string' && value.trim() !== '' ? value.trim() : null);
 
 /**

@@ -5,6 +5,7 @@ import {
   COOLDOWN_MS_BY_CATEGORY,
   DEFAULT_COOLDOWN_MS,
   DEFAULT_USAGE_LIMIT_COOLDOWN_MS,
+  MAX_BENCH_MS,
   isRequestSpecificCategory,
   isSchemaTypeCategory,
   resolveBenchWaitMs,
@@ -104,6 +105,13 @@ describe('resolveBenchWaitMs', () => {
 
     const auth = resolveProviderBench({ category: ERROR_CATEGORIES.AUTH_ERROR });
     expect(resolveBenchWaitMs(auth, { now: NOW })).toBe(COOLDOWN_MS_BY_CATEGORY[ERROR_CATEGORIES.AUTH_ERROR]);
+  });
+
+  it('clamps an implausibly distant reset so a bad unit cannot bench for days', () => {
+    const bench = resolveProviderBench({ category: ERROR_CATEGORIES.USAGE_LIMIT });
+    const aWeekOut = new Date(NOW + 7 * 24 * 60 * 60_000).toISOString();
+
+    expect(resolveBenchWaitMs(bench, { resetsAt: aWeekOut, now: NOW })).toBe(MAX_BENCH_MS);
   });
 
   it('is zero for a failure that must not bench anything', () => {

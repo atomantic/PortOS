@@ -140,7 +140,7 @@ describe('turn projection', () => {
     applyCodexTurnEvent(acc, CODEX_TURN_NOTIFICATIONS.turnCompleted, { threadId: 't', turn });
 
   it('joins deltas when no completed item supersedes them', () => {
-    const acc = createTurnAccumulator('turn-1');
+    const acc = createTurnAccumulator({ threadId: 't', turnId: 'turn-1' });
     delta(acc, 'Hello, ');
     delta(acc, 'world');
     expect(complete(acc, { id: 'turn-1', status: 'completed' })).toBe(true);
@@ -149,7 +149,7 @@ describe('turn projection', () => {
   });
 
   it('prefers the completed item text over the deltas that previewed it', () => {
-    const acc = createTurnAccumulator('turn-1');
+    const acc = createTurnAccumulator({ threadId: 't', turnId: 'turn-1' });
     delta(acc, '{"partial"');
     applyCodexTurnEvent(acc, CODEX_TURN_NOTIFICATIONS.itemCompleted, {
       threadId: 't', turnId: 'turn-1', item: { type: 'agentMessage', text: '{"whole":true}' },
@@ -160,7 +160,7 @@ describe('turn projection', () => {
   });
 
   it('ignores frames belonging to another turn on the same connection', () => {
-    const acc = createTurnAccumulator('turn-1');
+    const acc = createTurnAccumulator({ threadId: 't', turnId: 'turn-1' });
     delta(acc, 'mine');
     delta(acc, 'SOMEBODY ELSE', { turnId: 'turn-2' });
     complete(acc, { id: 'turn-1', status: 'completed' });
@@ -169,7 +169,7 @@ describe('turn projection', () => {
   });
 
   it('keeps running through a retryable error', () => {
-    const acc = createTurnAccumulator('turn-1');
+    const acc = createTurnAccumulator({ threadId: 't', turnId: 'turn-1' });
     const terminal = applyCodexTurnEvent(acc, CODEX_TURN_NOTIFICATIONS.error, {
       threadId: 't', turnId: 'turn-1', willRetry: true, error: { message: 'transient' },
     });
@@ -183,7 +183,7 @@ describe('turn projection', () => {
   it('NEVER hands back the partial text of an interrupted turn', () => {
     // A half-streamed JSON object that happened to parse would be silently wrong
     // data — worse than a failed call, which the caller can fall back from.
-    const acc = createTurnAccumulator('turn-1');
+    const acc = createTurnAccumulator({ threadId: 't', turnId: 'turn-1' });
     delta(acc, '{"answer": "half');
     complete(acc, { id: 'turn-1', status: 'interrupted' });
 
@@ -194,7 +194,7 @@ describe('turn projection', () => {
   });
 
   it('NEVER hands back the partial text of a failed turn, and carries its category', () => {
-    const acc = createTurnAccumulator('turn-1');
+    const acc = createTurnAccumulator({ threadId: 't', turnId: 'turn-1' });
     delta(acc, 'as much as I got');
     complete(acc, {
       id: 'turn-1',
@@ -208,15 +208,66 @@ describe('turn projection', () => {
   });
 
   it('treats a completed-but-empty turn as a failure, not a successful blank answer', () => {
-    const acc = createTurnAccumulator('turn-1');
+    const acc = createTurnAccumulator({ threadId: 't', turnId: 'turn-1' });
     delta(acc, '   \n ');
     complete(acc, { id: 'turn-1', status: 'completed' });
 
     expect(finalizeCodexTurn(acc)).toMatchObject({ error: expect.stringMatching(/empty completion/i) });
   });
 
+  it('treats a turn/completed with no status as malformed, not as success', () => {
+    // Defaulting an unrecognizable frame to 'completed' would hand the caller
+    // whatever had streamed so far as a finished answer — and a caller parsing
+    // JSON would get a plausible, wrong object out of half a document.
+    const acc = createTurnAccumulator({ threadId: 't', turnId: 'turn-1' });
+    delta(acc, '{"answer":"hal');
+    expect(complete(acc, { id: 'turn-1' })).toBe(true);
+
+    const result = finalizeCodexTurn(acc);
+    expect(result.text).toBeUndefined();
+    expect(result.error).toMatch(/without completing/i);
+  });
+
+  it('ignores frames belonging to another thread on the same connection', () => {
+    // The routing layer filters by thread too, but this function's contract says
+    // it does — and its own callers drive it directly.
+    const acc = createTurnAccumulator({ threadId: 't', turnId: 'turn-1' });
+    delta(acc, 'mine');
+    applyCodexTurnEvent(acc, CODEX_TURN_NOTIFICATIONS.agentMessageDelta, {
+      threadId: 'another-thread', turnId: 'turn-1', delta: 'NOT MINE',
+    });
+    complete(acc, { id: 'turn-1', status: 'completed' });
+
+    expect(finalizeCodexTurn(acc).text).toBe('mine');
+  });
+
+  it('latches the turn id from the first frame that carries one', () => {
+    // Without this the caller has no id to `turn/interrupt` with when the
+    // `turn/start` response is delayed or lost — and a cancelled turn keeps
+    // consuming subscription quota until it ends on its own.
+    const acc = createTurnAccumulator({ threadId: 't' });
+    delta(acc, 'streaming', { turnId: 'turn-9' });
+
+    expect(acc.turnId).toBe('turn-9');
+  });
+
+  it('keeps deltas that arrive after the last completed item', () => {
+    // A second agent message with no closing `item/completed` used to vanish:
+    // once finalText was set, the delta buffer was ignored entirely.
+    const acc = createTurnAccumulator({ threadId: 't', turnId: 'turn-1' });
+    delta(acc, 'preview of one');
+    applyCodexTurnEvent(acc, CODEX_TURN_NOTIFICATIONS.itemCompleted, {
+      threadId: 't', turnId: 'turn-1', item: { type: 'agentMessage', text: 'message one. ' },
+    });
+    delta(acc, 'message two.');
+    complete(acc, { id: 'turn-1', status: 'completed' });
+
+    // The completed item supersedes its own preview deltas, and does not double.
+    expect(finalizeCodexTurn(acc).text).toBe('message one. message two.');
+  });
+
   it('records token usage under the subscription, with no invented dollar cost', () => {
-    const acc = createTurnAccumulator('turn-1');
+    const acc = createTurnAccumulator({ threadId: 't', turnId: 'turn-1' });
     applyCodexTurnEvent(acc, CODEX_TURN_NOTIFICATIONS.tokenUsage, {
       threadId: 't',
       turnId: 'turn-1',
@@ -269,7 +320,7 @@ describe('classifyCodexTransportError', () => {
     // 'context-length' is a SCHEMA_TYPE category — `isRequestSpecificCategory`
     // returns true for it, so the caller shrinks and retries instead of taking
     // the subscription offline for every other call.
-    const acc = createTurnAccumulator('turn-1');
+    const acc = createTurnAccumulator({ threadId: 't', turnId: 'turn-1' });
     applyCodexTurnEvent(acc, CODEX_TURN_NOTIFICATIONS.turnCompleted, {
       threadId: 't',
       turn: { id: 'turn-1', status: 'failed', error: { message: 'too long', codexErrorInfo: 'contextWindowExceeded' } },

@@ -43,16 +43,22 @@ describe('migration 331 — codex text transport', () => {
     expect(codex).toMatchObject(CODEX);
   });
 
-  it('matches a renamed clone by its command, and leaves other providers alone', async () => {
+  it('stamps every Codex harness record, clones included, and leaves others alone', async () => {
     writeProviders({
       codex: { ...CODEX, command: '/opt/bin/codex', name: 'My Codex' },
+      'codex-review': { id: 'codex-review', type: 'cli', command: 'codex', enabled: true },
+      'codex-tui': { id: 'codex-tui', type: 'tui', command: 'codex', enabled: false },
       openrouter: { id: 'openrouter', type: 'api', endpoint: 'https://example.com/v1', apiKey: 'secret' },
     });
 
-    await migration.up({ rootDir });
+    await expect(migration.up({ rootDir })).resolves.toEqual({ ok: true, reason: 'updated', updated: 3 });
 
     const providers = readProviders();
-    expect(providers.codex.textTransport).toBe('codex-app-server');
+    // Keyed on the COMMAND, so a renamed clone and the disabled TUI record are
+    // covered too — an upgraded install then matches what data.reference seeds.
+    for (const id of ['codex', 'codex-review', 'codex-tui']) {
+      expect(providers[id].textTransport).toBe('codex-app-server');
+    }
     expect(providers.openrouter).toEqual({
       id: 'openrouter', type: 'api', endpoint: 'https://example.com/v1', apiKey: 'secret',
     });

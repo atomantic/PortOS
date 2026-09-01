@@ -41,26 +41,16 @@ const LM_STUDIO_LOAD_TIMEOUT_MS = 120000;
 const DEFAULT_PROVIDER_TIMEOUT_MS = 300000;
 
 /**
- * Resolve a provider for features that need a bounded text call rather than a
- * coding agent.
+ * The shared body of the two resolvers below. `accept` decides which records
+ * count for steps 1 and 2.
  *
- * Resolution order:
- *   1. The requested provider (if it can serve text)
- *   2. The user's active provider (if it can serve text)
- *   3. The first enabled API provider configured
- *
- * Steps 1 and 2 accept the Codex ChatGPT-subscription transport, because both
- * name a provider the user chose. Step 3 stays **API-ONLY on purpose**: it is a
+ * Step 3 is deliberately NOT parameterized — it is always `isAPI`. It is a
  * blind sweep of whatever happens to be configured, and letting it land on a
  * subscription would silently move a background feature's billing from an API
- * key the user is already paying for onto their ChatGPT plan (and, in the other
- * direction, an unavailable subscription must not silently start spending an
- * API key). Switching billing source is a decision, not a fallback.
- *
- * Returns null when nothing is configured — callers should surface a
- * "configure an API provider" hint rather than re-throwing.
+ * key the user already pays for onto their ChatGPT plan. Switching billing
+ * source is a decision, not a fallback.
  */
-export async function resolveTextProvider(requestedProviderId) {
+async function resolveProviderFor(requestedProviderId, accept) {
   // One read of providers.json — getAllProviders returns both the active id
   // and the full list, so we don't need separate getProviderById/getActiveProvider
   // round-trips for each step of the fallback chain.
@@ -71,19 +61,55 @@ export async function resolveTextProvider(requestedProviderId) {
 
   if (requestedProviderId) {
     const requested = providers.find(p => p.id === requestedProviderId);
-    if (isTextCapable(requested)) return requested;
+    if (accept(requested)) return requested;
   }
   if (all?.activeProvider) {
     const active = providers.find(p => p.id === all.activeProvider);
-    if (isTextCapable(active)) return active;
+    if (accept(active)) return active;
   }
   return providers.find(isAPI) || null;
 }
 
-// The name every existing caller imports. Kept as a permanent alias rather than
-// a codemod: other installs and forks call it, and renaming a public export in
-// place would break them on their own upgrade schedule.
-export { resolveTextProvider as resolveAPIProvider };
+/**
+ * Resolve an API-type provider for features that can only run against an API
+ * endpoint (CLI providers don't support the simple chat-completions call path).
+ *
+ * Resolution order:
+ *   1. The requested provider (if API-type)
+ *   2. The user's active provider (if API-type)
+ *   3. The first enabled API provider configured
+ *
+ * **This must stay API-ONLY.** Most of its callers hand the result to
+ * `promptRunner.runPromptThroughProvider`, which dispatches on `provider.type`
+ * and would run a returned `codex` record through `executeCliRun` — the
+ * file-writing coding harness, in the PortOS checkout, with the network and the
+ * user's MCP servers. Widening this function to accept the subscription text
+ * transport therefore does NOT give those callers a bounded text call; it gives
+ * them a coding agent pointed at the repo. New callers that want the transport
+ * ask for it by name via {@link resolveTextProvider}, which is only safe
+ * because they feed `callProviderAISimple`.
+ *
+ * Returns null when no API provider is configured — callers should surface a
+ * "configure an API provider" hint rather than re-throwing.
+ */
+export async function resolveAPIProvider(requestedProviderId) {
+  return resolveProviderFor(requestedProviderId, isAPI);
+}
+
+/**
+ * Resolve a provider for a bounded text call made through
+ * {@link callProviderAISimple} — the one path that knows how to run the
+ * subscription transport safely.
+ *
+ * Same order as {@link resolveAPIProvider}, except that steps 1 and 2 also
+ * accept the Codex ChatGPT subscription, because both name a provider the user
+ * chose. **Only call this when the result goes to `callProviderAISimple`** — a
+ * `type: 'cli'` record reaching the prompt runner is a coding agent, not a
+ * text call.
+ */
+export async function resolveTextProvider(requestedProviderId) {
+  return resolveProviderFor(requestedProviderId, isTextCapable);
+}
 
 // LM Studio's chat-completions endpoint returns this when no model is in
 // memory. The error is identical regardless of which model name the request

@@ -1,6 +1,6 @@
 /**
- * Advertise the ChatGPT-subscription text transport on the installed `codex`
- * provider (#5590).
+ * Advertise the ChatGPT-subscription text transport on every installed Codex
+ * harness record (#5590).
  *
  * Phase 1 (#5589) taught PortOS to read the Codex account; this is the record
  * flag that lets the same `codex` record ALSO serve plain text through the
@@ -66,12 +66,15 @@ export default {
       return { ok: false, reason: doc.reason, updated: 0 };
     }
 
-    const provider = doc.providers.codex;
-    if (!isCodexHarness(provider)) return { ok: true, reason: 'already-current-or-custom', updated: 0 };
+    // Every Codex harness record, not just the `codex` id — that is what "keyed on
+    // the COMMAND" above actually means, and an install that cloned `codex` into
+    // `codex-review` runs the same binary against the same ChatGPT sign-in.
+    const targets = Object.values(doc.providers).filter(isCodexHarness);
+    if (targets.length === 0) return { ok: true, reason: 'already-current-or-custom', updated: 0 };
 
-    provider.textTransport = TRANSPORT;
+    for (const provider of targets) provider.textTransport = TRANSPORT;
     await writeJsonAtomic(doc.path, doc.config);
-    console.log(`📝 ${PROVIDERS_REL_PATH}: the codex provider now advertises the ChatGPT subscription text transport (off until enabled)`);
-    return { ok: true, reason: 'updated', updated: 1 };
+    console.log(`📝 ${PROVIDERS_REL_PATH}: ${targets.length} Codex provider record${targets.length === 1 ? '' : 's'} now advertising the ChatGPT subscription text transport (off until enabled)`);
+    return { ok: true, reason: 'updated', updated: targets.length };
   },
 };

@@ -440,6 +440,7 @@
       "contextWindow": 1000000,
       "timeout": 600000,
       "enabled": false,
+      "textTransport": "codex-app-server",
       "envVars": {},
       "secretEnvVars": [],
       "tuiPromptDelayMs": 2500

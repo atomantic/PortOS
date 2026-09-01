@@ -23,8 +23,10 @@ const { CODEX_TURN_ERROR_CODES } = await import('../lib/codexTurn.js');
 const {
   __resetCodexAppServer,
   benchCodexTextTransport,
+  getCodexAccountReadiness,
   getCodexTextTransportBench,
   listCodexModels,
+  codexLogout,
   peekCodexModels,
   runCodexTextTurn,
   stopCodexAppServer,
@@ -106,7 +108,9 @@ describe('running a text turn', () => {
     expect(start.sandbox).toBe('read-only');
     expect(start.approvalPolicy).toBe('never');
     expect(start.ephemeral).toBe(true);
-    expect(start.config).toEqual({ mcp_servers: {}, tools: { web_search: false }, web_search: false });
+    expect(start.config).toEqual({
+      mcp_servers: {}, tools: { web_search: false }, web_search: false, sandbox_permissions: [],
+    });
     expect(start.cwd).toEqual(expect.stringContaining('portos-codex-text-'));
     expect(start.cwd.includes('PortOS')).toBe(false);
 
@@ -250,6 +254,23 @@ describe('model discovery', () => {
     expect(child.written.filter((f) => f.method === 'model/list')).toHaveLength(1);
   });
 
+  it('follows the catalog cursor so a later page still reaches the picker', async () => {
+    // A truncated catalog is not just a short picker: a model on a later page is
+    // absent from the effort-clamp lookup, so its effort is sent unvalidated.
+    const promise = listCodexModels();
+    await handshake();
+    await awaitRequest(child, 'model/list', {
+      data: [{ id: 'model-alpha', supportedReasoningEfforts: [] }], nextCursor: 'page-2',
+    });
+    await awaitRequest(child, 'model/list', {
+      data: [{ id: 'model-beta', supportedReasoningEfforts: [] }], nextCursor: null,
+    });
+
+    const result = await promise;
+    expect(result.models.map((m) => m.id)).toEqual(['model-alpha', 'model-beta']);
+    expect(child.written.filter((f) => f.method === 'model/list')[1].params).toEqual({ cursor: 'page-2' });
+  });
+
   it('keeps the last-known-good list when a refresh fails', async () => {
     const first = listCodexModels();
     await handshake();
@@ -268,5 +289,64 @@ describe('model discovery', () => {
 
   it('peeks null before anything has ever asked', () => {
     expect(peekCodexModels()).toBeNull();
+  });
+});
+
+describe('bench and readiness are independent', () => {
+  it('does not clear a quota bench just because the account reads ready', async () => {
+    // `ready` is weak evidence: a spent per-session budget, or a quota read that
+    // merely FAILED, both land there. Clearing on it would unbench a still-spent
+    // subscription on the Providers page's next 15s poll, forever.
+    benchCodexTextTransport({ waitMs: 60_000, category: 'usage-limit', message: 'session budget spent' });
+
+    const promise = getCodexAccountReadiness({ fresh: true });
+    await handshake();
+    await awaitRequest(child, 'account/read', { account: { type: 'chatgpt', planType: 'pro' } });
+    await awaitRequest(child, 'account/rateLimits/read', { primary: { usedPercent: 60 } });
+
+    await expect(promise).resolves.toMatchObject({ status: 'ready' });
+    expect(getCodexTextTransportBench()).not.toBeNull();
+  });
+
+  it('clears the bench when the user signs out', async () => {
+    benchCodexTextTransport({ waitMs: 60_000, category: 'auth-error', message: 'signed out' });
+
+    const promise = codexLogout();
+    await handshake();
+    await awaitRequest(child, 'account/logout', {});
+    await awaitRequest(child, 'account/read', null);
+    await promise;
+
+    expect(getCodexTextTransportBench()).toBeNull();
+  });
+});
+
+describe('protocol errors that quote a credential', () => {
+  it('scrubs the RPC message before it reaches a log or the HTTP response', async () => {
+    const promise = listCodexModels();
+    await handshake();
+    await awaitRequest(child, 'model/list', (frame) =>
+      child.replyError(frame, { code: -32000, message: 'refresh failed: access_token=sk-live-ABCDEFGH1234 expired' }));
+
+    const result = await promise;
+    expect(result.error.message).not.toMatch(/sk-live-ABCDEFGH1234/);
+    expect(result.error.message).toContain('[redacted]');
+  });
+});
+
+describe('progress hooks', () => {
+  it('never streams a delta belonging to a different turn', async () => {
+    const seen = [];
+    const promise = runCodexTextTurn({ prompt: 'hi', onDelta: (d) => seen.push(d) });
+    await handshake();
+    await awaitRequest(child, 'thread/start', { thread: { id: 'thread-1' } });
+    await awaitRequest(child, 'turn/start', { turn: { id: 'turn-1', items: [], status: 'inProgress' } });
+
+    child.notify('item/agentMessage/delta', { threadId: 'thread-1', turnId: 'turn-1', delta: 'mine' });
+    child.notify('item/agentMessage/delta', { threadId: 'thread-1', turnId: 'turn-2', delta: 'SOMEBODY ELSE' });
+    child.notify('turn/completed', { threadId: 'thread-1', turn: { id: 'turn-1', items: [], status: 'completed' } });
+
+    await expect(promise).resolves.toMatchObject({ text: 'mine' });
+    expect(seen).toEqual(['mine']);
   });
 });
