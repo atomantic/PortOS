@@ -156,6 +156,7 @@ describe('callProviderAISimple completion classification', () => {
 // ---------------------------------------------------------------------------
 
 const { getAllProviders } = await import('./providers.js');
+const { startAIOp } = await import('./aiStatusEvents.js');
 const { resolveTextProvider, resolveAPIProvider } = await import('./aiProvider.js');
 const { ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');
 const codexAppServer = await import('./codexAppServer.js');
@@ -232,6 +233,7 @@ describe('callProviderAISimple through the ChatGPT subscription', () => {
   const peekAccount = vi.spyOn(codexAppServer, 'peekCodexAccountReadiness');
 
   beforeEach(() => {
+    startAIOp.mockClear();
     statusOp.update.mockClear();
     statusOp.complete.mockClear();
     statusOp.error.mockClear();
@@ -309,6 +311,11 @@ describe('callProviderAISimple through the ChatGPT subscription', () => {
     // raised `max_tokens` for — and only ever on the failure path, where nobody
     // is watching.
     expect(sent).toMatchObject({ max_tokens: 1500, temperature: 0.9 });
+    // ONE op across both legs. `startAIOp` mints a fresh id per call and the
+    // client tracks ops by id, so a fallback that opened its own would leave the
+    // first leg's loading toast spinning forever with nothing to terminate it.
+    expect(startAIOp).toHaveBeenCalledTimes(1);
+    expect(statusOp.complete).toHaveBeenCalledTimes(1);
   });
 
   it('fails closed when the provider named no fallback — never picks an API key on its own', async () => {

@@ -363,9 +363,13 @@ describe('shutdown while a turn is live', () => {
     await awaitRequest(child, 'turn/start', { turn: { id: 'turn-1', items: [], status: 'inProgress' } });
     expect(spawn).toHaveBeenCalledTimes(1);
 
+    // The expectation is attached BEFORE the shutdown, the way a real caller is
+    // already awaiting its turn: shutdown now fails the turn synchronously, and
+    // an unawaited rejection surfacing between here and the assertion would be
+    // reported as unhandled.
+    const rejected = expect(promise).rejects.toMatchObject({ code: CODEX_ERROR_CODES.exited });
     await stopCodexAppServer();
-
-    await expect(promise).rejects.toMatchObject({ code: CODEX_ERROR_CODES.exited });
+    await rejected;
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 });
@@ -385,6 +389,39 @@ describe('a catalog that will not stop paginating', () => {
     const result = await promise;
     expect(result.models).toBeNull();
     expect(result.error.message).toMatch(/paginating/i);
+    expect(peekCodexModels()).toBeNull();
+  });
+});
+
+describe('shutdown racing a connect', () => {
+  it('drops a handshake that lands mid-shutdown instead of leaving a dead handle', async () => {
+    // The published handle would be a CLOSED one, and the next call would see
+    // that and spawn a replacement — a fresh app-server started after the
+    // graceful-shutdown hook already ran.
+    const connecting = getCodexAccountReadiness({ fresh: true });
+    let initialize = null;
+    await vi.waitFor(() => { initialize = child.take('initialize'); expect(initialize).toBeTruthy(); });
+
+    const stopping = stopCodexAppServer();
+    child.reply(initialize, {});
+    await stopping;
+
+    await expect(connecting).resolves.toMatchObject({ status: 'unknown' });
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a new sign-in is a different account', () => {
+  it('drops the cached model catalog when a login completes', async () => {
+    // Otherwise account B is offered account A's models for up to the 10m TTL.
+    const listing = listCodexModels();
+    await handshake();
+    await awaitRequest(child, 'model/list', { data: [{ id: 'model-alpha', supportedReasoningEfforts: [] }] });
+    await listing;
+    expect(peekCodexModels()).not.toBeNull();
+
+    child.notify('account/login/completed', { loginId: 'other-client', success: true });
+
     expect(peekCodexModels()).toBeNull();
   });
 });

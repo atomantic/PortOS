@@ -115,6 +115,8 @@ let textTransportBench = null;
 let textTurnCwd = null;
 /** Coalesces concurrent first-calls so only one scratch directory is created. */
 let creatingTextTurnCwd = null;
+/** Set by `stopCodexAppServer`, so a handshake that lands mid-shutdown is dropped. */
+let stopped = false;
 
 const codexError = (code, message, options = {}) => new ServerError(message, {
   status: options.status ?? 502,
@@ -208,13 +210,20 @@ const handleNotification = (method, params) => {
   }
   if (method !== CODEX_NOTIFICATIONS.loginCompleted) return;
   readinessCache = null;
+  // A sign-in that actually completed changed the ACCOUNT, whoever started it —
+  // so the cached catalog belongs to whoever was signed in before, and an
+  // auth/quota bench was benching a subscription that is no longer the current
+  // one. Both are invalidated ahead of the correlation check below, because a
+  // login another Codex client on this host started switches accounts just as
+  // completely as one PortOS started.
+  if (params?.success !== false) {
+    modelsCache = null;
+    clearCodexTextTransportBench();
+  }
   const loginId = typeof params?.loginId === 'string' ? params.loginId : null;
-  // A completion for a login PortOS did not start (another Codex client on this
-  // host) still invalidates the cache above, but must not settle ours.
+  // A completion for a login PortOS did not start still invalidates the caches
+  // above, but must not settle ours.
   if (!pendingLogin || (loginId && loginId !== pendingLogin.loginId)) return;
-  // A completed sign-in is a user action that really did change the account, so
-  // unlike a background readiness poll it may clear an auth/quota bench.
-  if (params?.success !== false) clearCodexTextTransportBench();
   settleLogin(params?.success === false ? 'failed' : 'completed');
 };
 
@@ -405,7 +414,17 @@ const connect = async () => {
   if (connection && !connection.closed) return connection;
   if (!connecting) {
     connecting = openConnection()
-      .then((target) => { connection = target; return target; })
+      .then((target) => {
+        // Shutdown may have run while this handshake was in flight. Publishing
+        // now would leave a dead handle behind that the next call would replace
+        // with a fresh child — after the graceful-shutdown hook already ran.
+        if (stopped) {
+          stopTarget(target, codexError(CODEX_ERROR_CODES.exited, 'PortOS shut down the Codex app-server.'));
+          throw codexError(CODEX_ERROR_CODES.exited, 'PortOS is shutting down the Codex app-server.');
+        }
+        connection = target;
+        return target;
+      })
       .finally(() => { connecting = null; connectingTarget = null; });
   }
   return connecting;
@@ -864,28 +883,38 @@ export async function runCodexTextTurn({
  * orphaned Codex process behind. Safe to call when nothing is running.
  */
 export async function stopCodexAppServer() {
+  // Set FIRST and never cleared: `connect()` checks it before publishing a
+  // handshake that finished mid-shutdown, so a late resolve cannot leave a live
+  // `connection` behind for the next call to reuse — or, worse, hand it a closed
+  // one and have it spawn a replacement child after the shutdown hook ran.
+  stopped = true;
   settleLogin(null);
   readinessCache = null;
   modelsCache = null;
-  const scratch = textTurnCwd;
+
+  // The child goes down BEFORE any await. `teardown` decides whether to fail
+  // live turns by comparing `connection` to the dying target, so `connection`
+  // must still point at it here; and an await first would let a concurrent
+  // connect publish itself into the gap.
+  const target = connection || connectingTarget;
+  if (target && !target.closed) {
+    stopTarget(target, codexError(CODEX_ERROR_CODES.exited, 'PortOS is shutting down the Codex app-server.'));
+    console.log('🔌 Codex app-server stopped');
+  }
+  connection = null;
+
+  // Drain a scratch directory that is still being created, or its `mkdtemp`
+  // resolves after shutdown and leaves the directory behind for good.
+  const pending = creatingTextTurnCwd
+    ? await creatingTextTurnCwd.catch(() => null)
+    : null;
+  const scratch = textTurnCwd || pending;
   textTurnCwd = null;
   creatingTextTurnCwd = null;
   if (scratch) {
     await rm(scratch, { recursive: true, force: true })
       .catch((err) => console.error(`❌ Failed to remove the Codex text scratch directory: ${err.message}`));
   }
-  const target = connection || connectingTarget;
-  if (!target || target.closed) {
-    connection = null;
-    return;
-  }
-  // `teardown` decides whether to fail live turns by comparing `connection` to
-  // the dying target — so `connection` must still point at it here. Nulling
-  // first left every in-flight turn waiting on a notification that could never
-  // arrive, until its own 5-minute deadline.
-  stopTarget(target, codexError(CODEX_ERROR_CODES.exited, 'PortOS is shutting down the Codex app-server.'));
-  connection = null;
-  console.log('🔌 Codex app-server stopped');
 }
 
 /** Test-only: drop every module-level handle so a suite starts clean. */
@@ -901,4 +930,5 @@ export function __resetCodexAppServer() {
   textTransportBench = null;
   textTurnCwd = null;
   creatingTextTurnCwd = null;
+  stopped = false;
 }

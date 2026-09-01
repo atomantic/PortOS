@@ -50,6 +50,7 @@ export const CODEX_TURN_RPC = Object.freeze({
 
 /** Server notifications a running turn projects into text/usage. */
 export const CODEX_TURN_NOTIFICATIONS = Object.freeze({
+  turnStarted: 'turn/started',
   agentMessageDelta: 'item/agentMessage/delta',
   itemCompleted: 'item/completed',
   turnCompleted: 'turn/completed',
@@ -363,6 +364,12 @@ export const applyCodexTurnEvent = (acc, method, params) => {
   if (!acc.turnId && typeof params.turnId === 'string' && params.turnId) acc.turnId = params.turnId;
 
   switch (method) {
+    case CODEX_TURN_NOTIFICATIONS.turnStarted:
+      // The earliest frame that carries the id, and the only one at all when a
+      // turn produces no deltas. Without it a lost `turn/start` response leaves
+      // the turn un-interruptible, so cancelling it would keep burning quota.
+      if (!acc.turnId && typeof params.turn?.id === 'string') acc.turnId = params.turn.id;
+      return false;
     case CODEX_TURN_NOTIFICATIONS.agentMessageDelta:
       appendText(acc, params.delta);
       return false;
@@ -389,16 +396,12 @@ export const applyCodexTurnEvent = (acc, method, params) => {
       return true;
     case CODEX_TURN_NOTIFICATIONS.turnCompleted: {
       const turn = params.turn;
-      // Once the id is latched, a completion must name it, or it cannot finish
-      // this turn — it would otherwise hand the caller whatever streamed so far
-      // as a success. A frame naming a DIFFERENT turn is somebody else's and is
-      // ignored; one naming NO turn is malformed, and fails this turn now rather
-      // than leaving it to wait out its full deadline.
+      // A completion naming a DIFFERENT turn is somebody else's. One naming no
+      // turn at all is still ours: the frame already reached this accumulator by
+      // thread, and PortOS's threads are ephemeral with exactly one turn — so
+      // rejecting it would discard a finished answer and hang the call until its
+      // deadline over a field the server merely left off the envelope.
       if (acc.turnId && typeof turn?.id === 'string' && turn.id !== acc.turnId) return false;
-      if (acc.turnId && typeof turn?.id !== 'string') {
-        acc.status = 'malformed';
-        return true;
-      }
       // A frame with no status is MALFORMED, and defaulting it to 'completed'
       // would hand the caller whatever text had streamed so far as a finished
       // answer. `finalizeCodexTurn` errors on anything that is not 'completed',

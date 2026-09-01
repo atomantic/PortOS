@@ -266,15 +266,28 @@ describe('turn projection', () => {
     expect(finalizeCodexTurn(acc).text).toBe('message one. message two.');
   });
 
-  it('fails on an anonymous completion once the turn id is latched', () => {
-    // An unnamed `turn/completed` cannot finish this turn — it would hand the
-    // caller the partial text streamed so far as a success. Terminal rather than
-    // ignored, so the call fails now instead of waiting out its full deadline.
+  it('accepts an anonymous completion on its own thread', () => {
+    // The frame already reached this accumulator BY THREAD, and PortOS's threads
+    // are ephemeral with exactly one turn — so rejecting it over an id the
+    // server left off the envelope would discard a finished answer and hang the
+    // call until its deadline.
     const acc = createTurnAccumulator({ threadId: 't', turnId: 'turn-1' });
-    delta(acc, '{"answer":"hal');
+    delta(acc, 'the answer');
     expect(complete(acc, { status: 'completed' })).toBe(true);
 
-    expect(finalizeCodexTurn(acc).text).toBeUndefined();
+    expect(finalizeCodexTurn(acc).text).toBe('the answer');
+  });
+
+  it('latches the turn id from turn/started, the first frame that carries one', () => {
+    // A turn that streams no deltas emits nothing else with an id, so without
+    // this a lost `turn/start` response leaves it un-interruptible — and
+    // cancelling it would keep burning subscription quota.
+    const acc = createTurnAccumulator({ threadId: 't' });
+    applyCodexTurnEvent(acc, CODEX_TURN_NOTIFICATIONS.turnStarted, {
+      threadId: 't', turn: { id: 'turn-7', items: [], status: 'inProgress' },
+    });
+
+    expect(acc.turnId).toBe('turn-7');
   });
 
   it('still ignores a completion that names a different turn', () => {

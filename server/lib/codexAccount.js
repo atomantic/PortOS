@@ -154,13 +154,15 @@ export const redactCodexMessage = (value) => {
   // matter what an upstream error decides to quote at us.
   const clamped = value.length > 400 ? `${value.slice(0, 400)}…` : value;
   return clamped
-    // `key=<value>` / `key: <value>` where the key is credential-shaped AND the
-    // value LOOKS like a credential — long, and not plain prose. Requiring both
-    // is what keeps "The secret: sauce" intact while masking
-    // "refresh_token: eyJhbGciOi…". A short value cannot carry a usable secret.
+    // `key=<value>` / `key: <value>` where the key is credential-shaped and the
+    // value is long enough to BE one. The length floor is what keeps "The secret:
+    // sauce" intact while masking "refresh_token: eyJhbGciOi…" — and it is the
+    // only exemption, because a long all-letters value after such a key is a
+    // passphrase, not a sentence. The value class runs to the next whitespace or
+    // quote so a trailing "!" cannot leave half a secret behind.
     .replace(
-      /\b([A-Za-z0-9_-]*(?:token|secret|password|passwd|credential|api[_-]?key|access[_-]?key|cookie|signature)[A-Za-z0-9_-]*)(\s*[=:]\s*)("?)([A-Za-z0-9._~+/=-]{12,})\3/gi,
-      (match, key, sep, quote, secret) => (/^[A-Za-z]+$/.test(secret) ? match : `${key}${sep}${quote}${REDACTED}${quote}`),
+      /\b([A-Za-z0-9_-]*(?:token|secret|password|passwd|credential|api[_-]?key|access[_-]?key|cookie|signature)[A-Za-z0-9_-]*)(\s*[=:]\s*)("?)([^\s"']{12,})\3?/gi,
+      `$1$2${REDACTED}`,
     )
     // An inline authorization credential under ANY scheme — Bearer, Basic,
     // Token, and whatever a future provider invents. Anchored on the header

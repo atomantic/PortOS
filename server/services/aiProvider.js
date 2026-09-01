@@ -187,7 +187,7 @@ async function ensureLMStudioModelLoaded(provider, statusOp) {
   return target.id;
 }
 
-async function postChatCompletion(provider, model, prompt, { temperature, max_tokens, timeout }) {
+async function postChatCompletion(provider, model, prompt, { temperature, max_tokens, timeout, signal }) {
   const headers = { 'Content-Type': 'application/json' };
   if (provider.apiKey) {
     // Never send the API key to an arbitrary/metadata host (SSRF / key
@@ -203,6 +203,13 @@ async function postChatCompletion(provider, model, prompt, { temperature, max_to
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
+  // The caller's cancellation, folded into the same controller as the deadline.
+  // Without it, pressing Stop leaves the request running to its full timeout —
+  // most visible on the subscription's fallback leg, which is exactly where a
+  // user is waiting and most likely to give up.
+  const onAbort = () => controller.abort();
+  if (signal?.aborted) controller.abort();
+  else signal?.addEventListener('abort', onAbort, { once: true });
 
   let response;
   try {
@@ -214,9 +221,11 @@ async function postChatCompletion(provider, model, prompt, { temperature, max_to
     });
   } catch (err) {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
     return { error: `Provider request failed: ${err.message}` };
   }
   clearTimeout(timer);
+  signal?.removeEventListener('abort', onAbort);
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => 'Unknown error');
@@ -411,6 +420,12 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
     // subscription quota for an answer nobody is waiting for. The HTTP path
     // manages its own AbortController from `timeout`.
     signal = null,
+    // Internal: the status op an outer attempt already opened. `startAIOp` mints
+    // a fresh id per call and the client tracks ops BY ID, so a fallback leg that
+    // opened its own would leave the outer one's loading toast spinning forever
+    // — nothing ever terminates it. Reusing the handle keeps the whole handoff
+    // one op: "falling back to X…" → "done".
+    __statusOp = null,
   } = options;
   if (provider.type !== 'api' && !isSubscriptionText(provider)) {
     return { error: 'This operation requires an API-based provider' };
@@ -421,14 +436,14 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
   // There is no stage name or run `source` here to classify by, so a creative
   // caller declares itself with `creative: true` and the stamp happens here.
   const body = creative ? withCreativeLatitude(prompt) : prompt;
-  const opts = { temperature, max_tokens, timeout: provider.timeout || DEFAULT_PROVIDER_TIMEOUT_MS };
+  const opts = { temperature, max_tokens, timeout: provider.timeout || DEFAULT_PROVIDER_TIMEOUT_MS, signal };
 
   // Always emit status events (server logs + UI toasts) for AI calls. Callers
   // can pass `op` to give the toast a meaningful label; otherwise it's labeled
   // generically by provider+model so the user still sees model loads etc.
   const effectiveOp = op || `ai-call:${provider.id}`;
   const effectiveLabel = opLabel || `Calling ${provider.name || provider.id}…`;
-  const statusOp = startAIOp({
+  const statusOp = __statusOp ?? startAIOp({
     op: effectiveOp,
     label: effectiveLabel,
     providerId: provider.id,
@@ -472,7 +487,9 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
     // gets the same treatment any direct call would — including the creative
     // stamp, which is applied per-transport rather than carried on `body`. The
     // shared `op` groups both attempts under one toast.
-    return callProviderAISimple(attempt.fallback, attempt.fallbackModel, prompt, options);
+    return callProviderAISimple(attempt.fallback, attempt.fallbackModel, prompt, {
+      ...options, __statusOp: statusOp,
+    });
   }
 
   if (isOllamaProvider(provider)) {
