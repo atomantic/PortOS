@@ -35,6 +35,7 @@ import {
 } from '../../services/api';
 import { fableLoomStoryReadiness } from '../../lib/fableLoomReadiness';
 import {
+  asFableLoomRenderPreferences,
   asFableLoomRenderSettings,
   FABLELOOM_RENDER_FORMATS,
 } from '../../../../server/lib/fableLoomProduction.js';
@@ -53,9 +54,15 @@ const VIDEO_BACKENDS = [
   { id: 'grok', label: 'Grok', icon: Cloud },
 ];
 
-const modelOptions = (models) => (Array.isArray(models) ? models : [])
-  .filter((model) => model?.id)
-  .map((model) => ({ id: model.id, label: model.name || model.id }));
+const modelOptions = (models, selected) => {
+  const options = (Array.isArray(models) ? models : [])
+    .filter((model) => model?.id)
+    .map((model) => ({ id: model.id, label: model.name || model.id }));
+  if (selected && !options.some((option) => option.id === selected)) {
+    return [{ id: selected, label: `${selected} (unavailable)` }, ...options];
+  }
+  return options;
+};
 
 const productionAssetsForScope = (plan, scope) => {
   if (!Array.isArray(plan?.plannedAssets)) return [];
@@ -71,11 +78,12 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
   const [plan, setPlan] = useState(null);
   const [planKey, setPlanKey] = useState(null);
   const [activeBatchRun, setActiveBatchRun] = useState(null);
-  const [imageMode, setImageMode] = useState(null);
-  const [imageModel, setImageModel] = useState(null);
-  const [videoMode, setVideoMode] = useState(null);
-  const [videoModel, setVideoModel] = useState(null);
-  const [effort, setEffort] = useState(null);
+  const savedRender = asFableLoomRenderPreferences(loom.renderSettings);
+  const [imageMode, setImageMode] = useState(savedRender.imageMode);
+  const [imageModel, setImageModel] = useState(savedRender.imageModel);
+  const [videoMode, setVideoMode] = useState(savedRender.videoMode);
+  const [videoModel, setVideoModel] = useState(savedRender.videoModel);
+  const [effort, setEffort] = useState(savedRender.effort);
   const [imageModels, setImageModels] = useState([]);
   const [videoModels, setVideoModels] = useState([]);
   const renderFormat = asFableLoomRenderSettings(loom.renderSettings);
@@ -148,6 +156,17 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
     });
     return () => { mounted = false; };
   }, []);
+
+  // Story settings are durable defaults; keep the per-run controls in sync
+  // when those defaults change while this panel remains mounted. A one-off
+  // panel change does not touch the loom, so it remains an intentional override.
+  useEffect(() => {
+    setImageMode(savedRender.imageMode);
+    setImageModel(savedRender.imageModel);
+    setVideoMode(savedRender.videoMode);
+    setVideoModel(savedRender.videoModel);
+    setEffort(savedRender.effort);
+  }, [loom.id, savedRender.imageMode, savedRender.imageModel, savedRender.videoMode, savedRender.videoModel, savedRender.effort]);
 
   useEffect(() => {
     setPlan(null);
@@ -395,7 +414,11 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
                   <BackendChipStrip
                     availableBackends={IMAGE_BACKENDS}
                     value={imageMode || 'auto'}
-                    onChange={(value) => setImageMode(value === 'auto' ? null : value)}
+                    onChange={(value) => {
+                      const nextMode = value === 'auto' ? null : value;
+                      setImageMode(nextMode);
+                      if (nextMode && nextMode !== 'local') setImageModel(null);
+                    }}
                     size="sm"
                     ariaLabel="Image provider"
                   />
@@ -410,7 +433,7 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
                       className="text-[11px] bg-port-bg border border-port-border rounded px-1.5 py-1 text-port-text"
                     >
                       <option value="">Saved image model</option>
-                      {modelOptions(imageModels).map((modelOption) => (
+                      {modelOptions(imageModels, imageModel).map((modelOption) => (
                         <option key={modelOption.id} value={modelOption.id}>{modelOption.label}</option>
                       ))}
                     </select>
@@ -422,7 +445,11 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
                     <BackendChipStrip
                       availableBackends={VIDEO_BACKENDS}
                       value={videoMode || 'auto'}
-                      onChange={(value) => setVideoMode(value === 'auto' ? null : value)}
+                      onChange={(value) => {
+                        const nextMode = value === 'auto' ? null : value;
+                        setVideoMode(nextMode);
+                        if (nextMode && nextMode !== 'local') setVideoModel(null);
+                      }}
                       size="sm"
                       ariaLabel="Video provider"
                     />
@@ -437,7 +464,7 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
                         className="text-[11px] bg-port-bg border border-port-border rounded px-1.5 py-1 text-port-text"
                       >
                         <option value="">Saved video model</option>
-                        {modelOptions(videoModels).map((modelOption) => (
+                        {modelOptions(videoModels, videoModel).map((modelOption) => (
                           <option key={modelOption.id} value={modelOption.id}>{modelOption.label}</option>
                         ))}
                       </select>

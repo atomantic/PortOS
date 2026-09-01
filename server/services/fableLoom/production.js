@@ -38,6 +38,7 @@ import {
 } from './visualConditioning.js';
 import { cancelJob, enqueueJob, mediaJobEvents } from '../mediaJobQueue/index.js';
 import {
+  asFableLoomRenderPreferences,
   asFableLoomRenderSettings,
   buildEpisodeProductionPlan,
   exactRenderParameterIssues,
@@ -124,14 +125,23 @@ function cleanStaleRuns() {
   }
 }
 
-function normalizedRenderOptions({ imageMode, imageModel, videoMode, videoModel, effort } = {}) {
-  return {
-    imageMode: QUEUEABLE_IMAGE_MODES.includes(imageMode) ? imageMode : null,
-    imageModel: text(imageModel) || null,
-    videoMode: VIDEO_GEN_MODES.includes(videoMode) ? videoMode : null,
-    videoModel: text(videoModel) || null,
-    effort: text(effort) || null,
-  };
+const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+
+function normalizedRenderOptions(options = {}) {
+  const normalized = {};
+  if (hasOwn(options, 'imageMode')) {
+    normalized.imageMode = QUEUEABLE_IMAGE_MODES.includes(options.imageMode) ? options.imageMode : null;
+    if (normalized.imageMode && normalized.imageMode !== IMAGE_GEN_MODE.LOCAL) normalized.imageModel = null;
+  }
+  if (hasOwn(options, 'imageModel')) normalized.imageModel = text(options.imageModel) || null;
+  if (hasOwn(options, 'videoMode')) {
+    normalized.videoMode = VIDEO_GEN_MODES.includes(options.videoMode) ? options.videoMode : null;
+  }
+  if (hasOwn(options, 'videoModel')) normalized.videoModel = text(options.videoModel) || null;
+  if (hasOwn(options, 'effort')) normalized.effort = text(options.effort) || null;
+  if (normalized.imageMode && normalized.imageMode !== IMAGE_GEN_MODE.LOCAL) normalized.imageModel = null;
+  if (normalized.videoMode && normalized.videoMode !== VIDEO_GEN_MODE.LOCAL) normalized.videoModel = null;
+  return normalized;
 }
 
 function renderGeometry(run, recordedConditioning = null) {
@@ -838,14 +848,8 @@ for (const event of TERMINAL_JOB_EVENTS) {
 }
 
 /** Plan production assets and topological execution for an episode. */
-export async function planEpisodeProduction(loomId, episodeId, {
-  mode = FABLELOOM_PRODUCTION_MODE_DEFAULT,
-  imageMode,
-  imageModel,
-  videoMode,
-  videoModel,
-  effort,
-} = {}) {
+export async function planEpisodeProduction(loomId, episodeId, options = {}) {
+  const { mode = FABLELOOM_PRODUCTION_MODE_DEFAULT } = options;
   const loom = await getLoom(loomId);
   if (!loom) throw new ServerError('Loom not found', { status: 404, code: 'NOT_FOUND' });
   const episode = findEpisode(loom, episodeId);
@@ -867,7 +871,8 @@ export async function planEpisodeProduction(loomId, episodeId, {
     resolveAsset: resolveImageInputPath,
   });
   const render = {
-    ...normalizedRenderOptions({ imageMode, imageModel, videoMode, videoModel, effort }),
+    ...asFableLoomRenderPreferences(loom.renderSettings),
+    ...normalizedRenderOptions(options),
     ...asFableLoomRenderSettings(loom.renderSettings),
   };
   await flagRenderFormatMismatches(plan, episode, render);
@@ -949,16 +954,12 @@ export async function planEpisodeProduction(loomId, episodeId, {
 }
 
 /** Start a user-triggered batch production run. */
-export async function startEpisodeProductionBatch(loomId, episodeId, {
-  mode = FABLELOOM_PRODUCTION_MODE_DEFAULT,
-  assetTypes = null,
-  nodeIds = null,
-  imageMode,
-  imageModel,
-  videoMode,
-  videoModel,
-  effort,
-} = {}) {
+export async function startEpisodeProductionBatch(loomId, episodeId, options = {}) {
+  const {
+    mode = FABLELOOM_PRODUCTION_MODE_DEFAULT,
+    assetTypes = null,
+    nodeIds = null,
+  } = options;
   cleanStaleRuns();
   const activeRuns = [..._batchRuns.values()].filter((run) => run.status === 'in_progress').length;
   if (activeRuns >= MAX_CONCURRENT_RUNS) {
@@ -968,7 +969,7 @@ export async function startEpisodeProductionBatch(loomId, episodeId, {
     });
   }
 
-  const requestedRender = normalizedRenderOptions({ imageMode, imageModel, videoMode, videoModel, effort });
+  const requestedRender = normalizedRenderOptions(options);
   const plan = await planEpisodeProduction(loomId, episodeId, { mode, ...requestedRender });
   const render = plan.renderOptions;
   const targetAssets = selectAssets(plan, { assetTypes, nodeIds });

@@ -340,23 +340,40 @@ PostgreSQL itself is not PM2-managed — it runs as the system service (`:5432`)
 ## Extension Points
 
 ### Adding a New Page
-1. Create component in `client/src/pages/`
-2. Add route in `client/src/App.jsx`
-3. Add navigation link in `client/src/components/Layout.jsx`
+1. Create component in `client/src/pages/`.
+2. Add `<Route>` in `client/src/App.jsx`.
+3. Add a navigation command entry in `server/lib/navManifest.js` (`NAV_COMMANDS`) with its keywords, section, icon, and title so the `⌘K` command palette and the voice agent's `ui_navigate` tool can discover and navigate to the page.
+4. If the page belongs to an optional feature (e.g. `post`, `datadog`, `jira`, `gsd`), register the feature in `server/lib/instanceFeatureRegistry.js` and tag the nav command with `feature: '<id>'` (or map its section in `SECTION_FEATURE`).
+5. Add the sidebar navigation link in `client/src/components/Layout.jsx` (tagged with `feature` if optional).
 
 ### Adding an API Endpoint
-1. Create route file in `server/routes/`
-2. Register in `server/index.js`
-3. Add Zod schema if needed in `server/lib/validation.js`
+1. Create route file in `server/routes/` and mount it in `server/index.js`.
+2. Validate incoming request parameters and bodies using `validateRequest` with reusable Zod schemas (in `server/lib/validation.js` or domain-specific validation modules).
+3. Register detailed API operation metadata and schemas in `server/lib/apiOperationContracts.js`. Add `x-portos-tool` if the operation should be exposed as an agent-callable tool, and declare thrown error codes in `x-portos-error-codes`.
+4. If the endpoint or domain emits real-time Socket.IO events, declare their payload contracts in `server/lib/socketEventContracts.js`.
 
 ### Adding a Service
-1. Create service file in `server/services/`
-2. Export functions (not classes)
-3. Import in routes as needed
+1. Create service file in `server/services/`.
+2. Export pure or domain functions (favor functional programming over classes).
+3. Import in routes and wrap handlers with `asyncHandler` from `server/lib/errorHandler.js`.
+
+### Adding a Shared Helper, Hook, or Utility
+1. Choose the proper directory by concern:
+   - Pure / side-effect-free server helpers → `server/lib/`
+   - Pure / side-effect-free client helpers → `client/src/lib/`
+   - React state and lifecycle hooks → `client/src/hooks/` (prefix with `use`)
+   - Pure formatting and mathematical helpers → `client/src/utils/`
+   - API / network / WebSocket clients → `client/src/services/` (prefix with `api*`)
+2. **Catalog Parity Rule**: Every new module MUST be re-exported in that directory's `index.js` barrel (or `services/api.js`) AND documented in that directory's `README.md` table. This invariant is enforced by unit tests (e.g., `server/lib/index.test.js`, `client/src/lib/index.test.js`).
+
+### Adding a Data Store
+1. Determine the storage tier according to `docs/STORAGE.md`.
+2. Core application relational records are `db-primary` and must be stored in PostgreSQL with schema migrations in `scripts/migrations/`.
+3. File-backed collections under `data/` should use `createCollectionStore` (`server/lib/collectionStore.js`) for schema-versioned layouts (`data/{type}/{id}/index.json`) with atomic writes and per-record queues.
 
 ### Adding CoS Task Types
-1. Add the task type to `SELF_IMPROVEMENT_TASK_TYPES` and `DEFAULT_TASK_INTERVALS` in `server/services/taskSchedule.js`
-2. Add its prompt template to `DEFAULT_TASK_PROMPTS` in `server/services/taskPromptDefaults/prompts.js` (bump `PROMPT_VERSIONS` + append the outgoing default to `PREVIOUS_DEFAULT_PROMPTS` if you are changing an existing default)
-3. If it is an audit that should be configurable to **file issues** or **do the work**, add it to `AUDIT_DEFINITIONS` in `server/lib/auditCatalog.js` (and map any matching quota-burn preset via `quotaBurnId`)
-4. If it ALWAYS files findings/plans into the app's work tracker (never implements), add a wording preset to `TRACKER_FILING_PRESETS` in `server/lib/workTracker.js` and reference `{trackerInstructions}` in its prompt template — membership is what makes `resolveTrackerFilingBlock` file on every dispatch
-5. Give it a home in `WORKFLOW_STAGES` (`server/services/workflow.js`) so the Workflow tab doesn't render it under Ambient
+1. Add the task type to `SELF_IMPROVEMENT_TASK_TYPES` and `DEFAULT_TASK_INTERVALS` in `server/services/taskSchedule.js`.
+2. Add its prompt template to `DEFAULT_TASK_PROMPTS` in `server/services/taskPromptDefaults/prompts.js` (bump `PROMPT_VERSIONS` + append the outgoing default to `PREVIOUS_DEFAULT_PROMPTS` if you are changing an existing default).
+3. If it is an audit that should be configurable to **file issues** or **do the work**, add it to `AUDIT_DEFINITIONS` in `server/lib/auditCatalog.js` (and map any matching quota-burn preset via `quotaBurnId`).
+4. If it ALWAYS files findings/plans into the app's work tracker (never implements), add a wording preset to `TRACKER_FILING_PRESETS` in `server/lib/workTracker.js` and reference `{trackerInstructions}` in its prompt template — membership is what makes `resolveTrackerFilingBlock` file on every dispatch.
+5. Give it a home in `WORKFLOW_STAGES` (`server/services/workflow.js`) so the Workflow tab doesn't render it under Ambient.

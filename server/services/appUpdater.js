@@ -5,6 +5,7 @@ import * as gitService from './git.js';
 import * as pm2Service from './pm2.js';
 import { bufferedSpawnOrThrow } from '../lib/bufferedSpawn.js';
 import { parseCommandArgs } from '../lib/commandSecurity.js';
+import { syncManagedAppFork } from './managedAppRepositories.js';
 
 const CMD_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -30,9 +31,10 @@ const updatingApps = new Set();
  *
  * @param {object} app - The app object (must have repoPath, pm2ProcessNames, pm2Home)
  * @param {function} emit - Callback (step, status, message) for progress updates
+ * @param {{syncFork?: boolean}} options
  * @returns {Promise<{success: boolean, steps: object[]}>}
  */
-export async function updateApp(app, emit) {
+export async function updateApp(app, emit, { syncFork = false } = {}) {
   const dir = app.repoPath;
   if (updatingApps.has(dir)) {
     return { success: false, steps: [{ step: 'lock', success: false, message: 'Update already in progress' }] };
@@ -40,13 +42,13 @@ export async function updateApp(app, emit) {
   updatingApps.add(dir);
 
   try {
-    return await _doUpdate(app, emit);
+    return await _doUpdate(app, emit, { syncFork });
   } finally {
     updatingApps.delete(dir);
   }
 }
 
-async function _doUpdate(app, emit) {
+async function _doUpdate(app, emit, { syncFork }) {
   const dir = app.repoPath;
   const steps = [];
   const packageManager = app.type === 'bun' ? 'bun' : 'npm';
@@ -55,6 +57,16 @@ async function _doUpdate(app, emit) {
     ? configuredRuntime
     : packageManager;
   const installArgs = packageManager === 'bun' ? ['install', '--frozen-lockfile'] : ['install'];
+
+  if (syncFork) {
+    emit('git-sync-fork', 'running', 'Syncing the origin fork from canonical upstream...');
+    const sync = await syncManagedAppFork(app);
+    const syncMessage = sync.alreadyUpToDate
+      ? `${sync.fullName} is already current`
+      : `Synced ${sync.fullName} from ${sync.source}`;
+    emit('git-sync-fork', 'done', syncMessage);
+    steps.push({ step: 'git-sync-fork', success: true, message: syncMessage });
+  }
 
   emit('git-pull', 'running', 'Pulling latest changes...');
   const pullResult = await gitService.pull(dir);

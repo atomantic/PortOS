@@ -430,7 +430,8 @@ silicon to the full `watchdogd` kernel panic above; and a separate IOGPU
 memory-management panic ([mlx #3186](https://github.com/ml-explore/mlx/issues/3186),
 filed with Apple as FB22091885). The MLX maintainer's confirmed workaround is the
 `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1` env var — **PortOS now sets this automatically**
-for the trainer (`scripts/train_mflux_lora.py`). Note per #3267 the kill is at the
+for the trainer and FastVideo MLX runner (`scripts/train_mflux_lora.py`,
+`scripts/generate_fastvideo.py`). Note per #3267 the kill is at the
 IOGPU layer *above* the process boundary, so process-teardown segmentation alone
 does not prevent it; the env var attacks the actual cause.
 
@@ -462,6 +463,10 @@ to protect and largely stops firing.
   maintainer-confirmed workaround for mlx #3267); the run log shows
   `STATUS:watchdog mitigation · AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1` so a paniclog
   records whether it was active. Set it to `0` in the environment to disable.
+- Video Gen sleeps the display automatically for local MLX runtimes (FastVideo,
+  Wan 2.2, MiniMax H3, and LTX) while keeping the system awake. This is on by
+  default; disable **Sleep display during local MLX video renders** in Settings
+  > Image Gen > Defaults only when another headless workflow manages it.
 - The mlx/mlx-metal backend is pinned to the validated 0.31.2 trio in
   `scripts/setup-image-video.sh` (the original panics were on 0.30.6).
 - Training checkpoints at least every `ceil(totalSteps/4)` steps

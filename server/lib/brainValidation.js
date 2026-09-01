@@ -189,7 +189,7 @@ export const reviewRecordSchema = z.object({
 
 // --- Input schemas for API endpoints ---
 
-// Opt-in post-clone agent actions for a captured GitHub repo URL. Keys derive
+// Opt-in post-clone agent actions for a captured repository URL. Keys derive
 // from REPO_INTAKE_KEYS so the wire contract can't drift from the normalizer
 // that reads it (server/lib/repoIntakeActions.js).
 export const repoIntakeSchema = z.object(optionalBooleanMap(REPO_INTAKE_KEYS)).extend({
@@ -207,16 +207,29 @@ export const repoIntakeSchema = z.object(optionalBooleanMap(REPO_INTAKE_KEYS)).e
 });
 const repoIntakeInputSchema = repoIntakeSchema.optional();
 
+/**
+ * Body of `POST /api/brain/links/:id/study` — an on-demand re-study of an
+ * already-cloned repo. Same study knobs as the capture-time opt-in (that is the
+ * point: the client renders one shared form for both), minus the action
+ * booleans, plus `pull` so the user can refresh the clone in the same click.
+ */
+export const linkStudyInputSchema = repoIntakeSchema
+  .omit(Object.fromEntries(REPO_INTAKE_KEYS.map(key => [key, true])))
+  .extend({ pull: z.boolean().optional().default(true) });
+
 // Capture input schema
 export const captureInputSchema = z.object({
   text: z.string().min(1).max(10000),
   providerOverride: z.string().optional(),
   modelOverride: z.string().optional(),
+  // Optional context for a bare URL capture. It is stored on the link rather
+  // than treated as classifier input, so a saved link keeps why it matters.
+  note: z.string().max(2000).optional(),
   // Opt-in flag: the user marked this note as a creative idea at capture time
   // (vs a todo/reference). Creative notes are later batch-sendable into the
   // creative catalog as ingredients (see catalog brain-bridge ingest).
   creative: z.boolean().optional(),
-  // Post-clone agent actions for a bare GitHub repo URL. `targetAppId` selects
+  // Post-clone agent actions for a bare repository URL. `targetAppId` selects
   // the managed app whose tracker receives repo-study issues; omitted means
   // PortOS for backward compatibility. Ignored for every other capture.
   repoIntake: repoIntakeInputSchema
@@ -425,8 +438,10 @@ export const reviewOutputSchema = z.object({
 // LINKS SCHEMAS
 // =============================================================================
 
-// Link type enum
-export const linkTypeEnum = z.enum(['github', 'article', 'documentation', 'tool', 'reference', 'other']);
+// Link type enum. `github` predates multi-host repo support and is retained so
+// links stored (or federated from a peer) before migration 330 still validate;
+// `repo` is what new links are written with.
+export const linkTypeEnum = z.enum(['repo', 'github', 'article', 'documentation', 'tool', 'reference', 'other']);
 
 // Link Record schema
 export const linkRecordSchema = z.object({
@@ -434,15 +449,28 @@ export const linkRecordSchema = z.object({
   url: z.string().url(),
   title: z.string().min(1).max(500),
   description: z.string().max(2000).optional().default(''),
+  note: z.string().max(2000).optional().default(''),
   linkType: linkTypeEnum.default('other'),
   tags: z.array(z.string().max(50)).optional().default([]),
-  // GitHub-specific fields
+  // Repository fields. `repoOwner` may be a GitLab `group/subgroup` path.
+  isRepo: z.boolean().default(false),
+  repoHost: z.string().max(253).nullable().optional(),
+  repoOwner: z.string().max(200).nullable().optional(),
+  repoName: z.string().max(100).nullable().optional(),
+  // Legacy GitHub-only mirror, still written so a peer on older code keeps
+  // recognising a captured GitHub repo — see lib/repoLinkFields.js.
   isGitHubRepo: z.boolean().default(false),
-  gitHubOwner: z.string().max(100).optional(),
-  gitHubRepo: z.string().max(100).optional(),
+  gitHubOwner: z.string().max(100).nullable().optional(),
+  gitHubRepo: z.string().max(100).nullable().optional(),
   localPath: z.string().max(500).optional(),
   cloneStatus: z.enum(['pending', 'cloning', 'cloned', 'failed', 'none']).default('none'),
   cloneError: z.string().max(500).optional(),
+  // The instance currently responsible for an in-flight clone. This differs
+  // from immutable originInstanceId when a peer retries a shared link.
+  cloneInstanceId: z.string().nullable().optional(),
+  // True only when boot recovery observed an interrupted attempt. Retry uses
+  // this to replace a legacy direct-to-destination partial checkout safely.
+  cloneInterrupted: z.boolean().optional().default(false),
   malwareScan: z.object({
     reportId: z.string().uuid(),
     taskId: z.string().optional(),
@@ -457,7 +485,10 @@ export const linkRecordSchema = z.object({
   // The queued `repo-study` run, once dispatched.
   repoStudy: z.object({
     taskId: z.string().optional(),
-    queuedAt: z.string().datetime().optional()
+    queuedAt: z.string().datetime().optional(),
+    // The brief the last study was dispatched with, so the re-study form opens
+    // pre-filled instead of blank.
+    studyContext: z.string().max(5000).optional()
   }).optional(),
   // Bucket grouping (nullable = ungrouped)
   bucketId: z.string().guid().nullable().optional(),
@@ -472,6 +503,7 @@ export const linkInputSchema = z.object({
   url: z.string().url(),
   title: z.string().min(1).max(500).optional(),
   description: z.string().max(2000).optional(),
+  note: z.string().max(2000).optional(),
   linkType: linkTypeEnum.optional(),
   tags: z.array(z.string().max(50)).optional(),
   bucketId: z.string().guid().nullable().optional(),
@@ -486,6 +518,7 @@ export const linkUpdateInputSchema = z.object({
   url: z.string().url().optional(),
   title: z.string().min(1).max(500).optional(),
   description: z.string().max(2000).optional(),
+  note: z.string().max(2000).optional(),
   linkType: linkTypeEnum.optional(),
   tags: z.array(z.string().max(50)).optional(),
   bucketId: z.string().guid().nullable().optional(),
@@ -497,6 +530,12 @@ export const linksQuerySchema = z.object({
   linkType: linkTypeEnum.optional(),
   // Query params arrive as strings; z.coerce.boolean() treats any non-empty
   // string (including "false") as true, so parse the string value explicitly.
+  isRepo: z.preprocess(
+    v => (typeof v === 'string' ? v === 'true' : v),
+    z.boolean()
+  ).optional(),
+  // Legacy peers and clients still use the GitHub-only name. Keep accepting it
+  // while the route normalizes it to the host-neutral filter above.
   isGitHubRepo: z.preprocess(
     v => (typeof v === 'string' ? v === 'true' : v),
     z.boolean()
@@ -804,6 +843,7 @@ export const youtubeIngestSchema = z.object({
   captureTranscript: z.boolean().optional(),
   downloadVideo: z.boolean().optional(),
   ingestAudio: z.boolean().optional(),
+  note: z.string().max(2000).optional(),
   agentPrompt: z.string().max(10000).optional(),
   tags: z.array(z.string().min(1).max(60)).max(20).optional(),
   priority: z.enum(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']).optional()

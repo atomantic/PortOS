@@ -4,13 +4,14 @@ import { request } from '../lib/testHelper.js';
 import networkExposureRoutes from './networkExposure.js';
 
 vi.mock('../lib/networkExposure.js', () => ({
-  getNetworkExposureStatus: vi.fn().mockReturnValue({
+  getNetworkExposureSetupStatus: vi.fn().mockResolvedValue({
     scheme: 'https',
     httpsEnabled: true,
     httpsStateInitialized: true,
     bind: { host: '0.0.0.0', port: 5555, audience: 'all-interfaces' },
     loopbackMirror: { enabled: true, port: 5553 },
     cert: { mode: 'tailscale', tailscaleHost: 'host-alpha.example-tailnet.ts.net', ips: [] },
+    setup: { complete: true, trustedUrl: 'https://host-alpha.example-tailnet.ts.net:5555' },
     docsUrl: 'https://github.com/atomantic/PortOS/blob/main/docs/PORTS.md',
   }),
 }));
@@ -27,6 +28,7 @@ describe('Network Exposure Routes', () => {
     expect(res.body.bind.port).toBe(5555);
     expect(res.body.loopbackMirror.port).toBe(5553);
     expect(res.body.cert.tailscaleHost).toBe('host-alpha.example-tailnet.ts.net');
+    expect(res.body.setup.complete).toBe(true);
     expect(res.body.docsUrl).toMatch(/PORTS\.md$/);
   });
 });

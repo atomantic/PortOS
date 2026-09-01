@@ -1,7 +1,7 @@
 /**
- * Post-clone intake for a GitHub repo captured into the Brain.
+ * Post-clone intake for a repository captured into the Brain.
  *
- * When a bare GitHub repo URL is captured (Quick Capture / the Inbox capture
+ * When a bare repo URL is captured (Quick Capture / the Inbox capture
  * box), the link is cloned in the background. The user can tick two opt-in boxes
  * at capture time to have a CoS agent pick the clone up once it lands:
  *
@@ -29,13 +29,8 @@ import { prepareScanReportDirectory, reportPathForId } from './malwareScanReport
 import { resolveTrackerFilingBlock } from '../lib/workTracker.js';
 import { GENERIC_REPO_STUDY_LABEL_CONTRACT } from '../lib/dispatchLabels.js';
 import { normalizeRepoIntake } from '../lib/repoIntakeActions.js';
-
-/** `owner/repo` when the link carries GitHub metadata, else its display title. */
-const repoLabel = (link) => (
-  link?.gitHubOwner && link?.gitHubRepo
-    ? `${link.gitHubOwner}/${link.gitHubRepo}`
-    : (link?.title || link?.url || 'unknown repo')
-);
+import { pullRepo } from './repoCloner.js';
+import { repoLinkLabel as repoLabel } from '../lib/repoLinkFields.js';
 
 /**
  * True when the link's recorded clone is readable on disk. Both actions read the
@@ -130,7 +125,7 @@ export function buildRepoStudyContext(link, { appName, repoPath, trackerInstruct
   const featureMapInstruction = featureMapPath
     ? `Read \`${featureMapPath}\` — ${appName}'s user-facing feature inventory — in full before you judge anything.`
     : `${appName} keeps no single feature inventory; build one from its README, \`docs/\`, and navigation/route definitions under \`${repoPath}\` before you judge anything.`;
-  return `A GitHub repository was captured into the Brain and cloned locally. Study it as a PRODUCT — what it lets its users do, how it is designed, and what it does well — and record the feature ideas and enhancements ${appName} should adopt in the work tracker.${requesterContext}
+  return `A repository was captured into the Brain and cloned locally. Study it as a PRODUCT — what it lets its users do, how it is designed, and what it does well — and record the feature ideas and enhancements ${appName} should adopt in the work tracker.${requesterContext}
 
 ## The repository under study
 
@@ -175,11 +170,16 @@ End with: the studied repo, its license, how many proposals you filed (with thei
 }
 
 /**
- * Queue the `repo-study` review of a cloned link against PortOS.
+ * Queue the `repo-study` review of a cloned link.
  *
+ * @param {object} link
+ * @param {object} [study] the study knobs — `targetAppId` (the managed app whose
+ *   tracker receives the issues; PortOS when absent), `studyContext` (the brief),
+ *   and the optional `providerId`/`model`/`effort` pins for this one run. Same
+ *   shape the capture-time intake stores, so both callers pass it straight through.
  * @returns {Promise<{ queued: boolean, reason?: string, taskId?: string, linkPatch?: object }>}
  */
-export async function queueRepoStudy(link, targetAppId = PORTOS_APP_ID, studyContext, { providerId, model, effort } = {}) {
+export async function queueRepoStudy(link, { targetAppId, studyContext, providerId, model, effort } = {}) {
   if (!isCloneReadable(link)) return { queued: false, reason: 'not-cloned' };
 
   const app = await getAppById(targetAppId || PORTOS_APP_ID);
@@ -237,8 +237,47 @@ export async function queueRepoStudy(link, targetAppId = PORTOS_APP_ID, studyCon
   return {
     queued: true,
     taskId: result.id,
-    linkPatch: { repoStudy: { taskId: result.id, queuedAt: new Date().toISOString() } },
+    linkPatch: {
+      repoStudy: {
+        taskId: result.id,
+        queuedAt: new Date().toISOString(),
+        // Kept on the record so the Links tab can pre-fill the re-study form
+        // with the brief the last run was given instead of a blank box.
+        ...(studyContext?.trim() ? { studyContext: studyContext.trim() } : {}),
+      },
+    },
   };
+}
+
+/**
+ * Re-study an already-cloned repo on demand, optionally refreshing the clone
+ * first. This is the Links tab's "Update & study" button: same `repo-study`
+ * dispatch as the capture-time opt-in, with a study brief the user writes at the
+ * moment they ask for it.
+ *
+ * A failed pull does NOT abort the study — the clone on disk is still readable,
+ * and a repo that has been force-pushed or re-tagged upstream would otherwise be
+ * permanently un-studyable. The pull outcome is reported so the caller can say
+ * the study ran against a stale checkout.
+ *
+ * @returns {Promise<{ queued: boolean, reason?: string, taskId?: string,
+ *   linkPatch?: object, pulled: { ok: boolean, error?: string }|null }>}
+ *   `pulled` is null when the caller opted out of the refresh.
+ */
+export async function restudyRepoLink(link, { pull = true, ...study } = {}) {
+  if (!isCloneReadable(link)) return { queued: false, reason: 'not-cloned' };
+
+  const pulled = pull
+    ? await pullRepo(link.localPath).then(
+      () => ({ ok: true }),
+      (err) => {
+        console.error(`⚠️ Pull before repo study failed for link ${link.id}: ${err.message}`);
+        return { ok: false, error: err.message };
+      },
+    )
+    : null;
+
+  return { ...await queueRepoStudy(link, study), pulled };
 }
 
 const INTAKE_QUEUERS = { malwareScan: queueMalwareScan, learn: queueRepoStudy };
@@ -259,9 +298,7 @@ export async function runRepoIntake(link, intake) {
   let patch = {};
   for (const [key, queue] of Object.entries(INTAKE_QUEUERS)) {
     if (!requested[key]) continue;
-    const result = key === 'learn'
-      ? await queue(link, requested.targetAppId, requested.studyContext, requested).catch(err => ({ queued: false, reason: err.message }))
-      : await queue(link).catch(err => ({ queued: false, reason: err.message }));
+    const result = await queue(link, requested).catch(err => ({ queued: false, reason: err.message }));
     if (result.queued) patch = { ...patch, ...result.linkPatch };
     else console.error(`❌ Capture-time ${key} not queued for link ${link.id}: ${result.reason}`);
   }

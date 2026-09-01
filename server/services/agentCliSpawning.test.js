@@ -968,7 +968,7 @@ describe('stream error containment', () => {
     });
   });
 
-  it('threads the ordered reviewers list (not a stale singular `reviewer`) into worktree cleanup', async () => {
+  it('threads the ordered reviewer list while forcing public review into non-applying mode', async () => {
     const cleanupWorktreeFn = vi.fn().mockResolvedValue(undefined);
     const args = {
       ...minimalArgs,
@@ -994,7 +994,7 @@ describe('stream error containment', () => {
     const opts = cleanupWorktreeFn.mock.calls[0][2];
     expect(opts.reviewers).toEqual(['codex', 'antigravity']);
     expect(opts.reviewStopMode).toBe('on-clean');
-    expect(opts.reviewerApplies).toBe(true);
+    expect(opts.reviewerApplies).toBe(false);
     // The removed singular key must NOT be passed.
     expect(opts.reviewer).toBeUndefined();
   });

@@ -21,6 +21,7 @@ import {
   Server
 } from 'lucide-react';
 import toast from '../../ui/Toast';
+import AutoSizeTextarea from '../../ui/AutoSizeTextarea';
 import * as api from '../../../services/api';
 import { effectiveModelFor, effortAwareModelOptions, effortSurvivingModel, seedModelEffort } from '../../../utils/providers';
 import { formatDurationMin, formatBytes } from '../../../utils/formatters';
@@ -432,12 +433,11 @@ export default function TaskItem({ task, isSystem, spawning = false, selected = 
 
           {editing ? (
             <div className="space-y-2" onPointerDown={e => e.stopPropagation()}>
-              <input
-                type="text"
+              <AutoSizeTextarea
                 value={editData.description}
                 aria-label="Task description"
                 onChange={e => setEditData(d => ({ ...d, description: e.target.value }))}
-                className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
+                className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm min-h-[34px]"
               />
               {/* A textarea, not an input: for orchestrator tasks this holds the
                   task's entire multi-line prompt, which is unreadable and

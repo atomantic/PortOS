@@ -290,13 +290,12 @@ export async function deleteSyncBaseHash(kind, id) {
 /**
  * Sweep base-hash entries whose record no longer resolves to a live record.
  *
- * The per-record prune paths (`pruneTombstonedUniverses` / `…Series` / `…Issues`
- * / `…Collections`) already evict a record's base hash when they hard-delete its
- * tombstone. This is the BACKSTOP for keys that escaped those paths: a record
- * hand-deleted on disk, a key left behind by an older version before the prune
- * paths evicted, or any future kind that seeds a base hash without a matching
- * eviction. Without it the side store accumulates dead keys forever on a
- * long-lived federated install.
+ * The per-record prune paths that own base hashes already evict them when they
+ * hard-delete tombstones. This is the BACKSTOP for keys that escaped those
+ * paths: a record hand-deleted on disk, a key left behind by an older version
+ * before the prune paths evicted, or any future kind that seeds a base hash
+ * without a matching eviction. Without it the side store accumulates dead keys
+ * forever on a long-lived federated install.
  *
  * `resolves` is an async predicate `(kind, id) => boolean` — return true if the
  * key still maps to a record we want to keep a base hash for. Keys whose kind
@@ -360,9 +359,13 @@ export function flushBaseHashes() {
  * stamps + flushes per iteration: each flush lands on the previous one's settled
  * `_flushTail`, so an N-iteration loop rewrites `sync_base_hashes.json` N times.
  * Wrapping the loop in this scope defers every interior flush; the single
- * terminal write captures all N stamps. (Caller in the tree today: the
- * `peer:online` convergence walk `retryPendingPushesForPeer`, which pushes —
- * and stamps — every subscribed record in sequence.)
+ * terminal write captures all N stamps.
+ *
+ * Two caller shapes use it: the `peer:online` convergence walk
+ * `retryPendingPushesForPeer` (pushes — and stamps — every subscribed record in
+ * sequence), and every base-hash-evicting `pruneTombstoned*` hard-prune loop.
+ * Eviction only marks `_baseDirty` for a key the map actually held, so a prune
+ * that removed nothing still costs zero writes.
  *
  * Re-entrant (depth-counted) so nested scopes collapse to the outermost batch,
  * and the terminal flush runs in `finally` so a thrown/rejected `fn` still
@@ -373,7 +376,14 @@ export function flushBaseHashes() {
  *
  * Contract note: stamps performed inside the scope must have settled (the
  * in-memory `setSyncBaseHash` awaited) before `fn` returns, or the terminal
- * flush won't see `_baseDirty` for them. The current caller awaits its stamps.
+ * flush won't see `_baseDirty` for them. Every caller awaits its stamps/evictions.
+ *
+ * Depth is module-level, not per-async-context, so CONCURRENT batches merge
+ * rather than nest. The tombstone GC fans its `pruneTombstoned*` calls out
+ * through one `Promise.all`, so their scopes overlap: the last scope to close
+ * flushes every eviction they accumulated. An unbatched concurrent flush that
+ * lands while the depth is still positive rides along in that same write.
+ * Nothing is dropped — a deferred flush leaves `_baseDirty` set.
  */
 export async function withBaseHashFlushBatch(fn) {
   _flushBatchDepth += 1;
@@ -487,9 +497,10 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // machine-local schedule/runs/assignment/enabled are never in a snapshot
   // (stripped from the wire) so they're excluded.
   creativeCommission: ['name', 'targetAbility', 'brief', 'generation', 'feedbackWindow'],
-  // FableLoom restores the authored story graph and playback configuration.
+  // FableLoom restores the authored story graph, playback configuration, and
+  // story-level render preferences.
   // Universe/series ids are structural links and stay on the live record.
-  fableLoom: ['name', 'logline', 'premise', 'styleNotes', 'format', 'playSettings', 'seriesPlan', 'participationMode', 'audienceCommunicationMedium', 'episodes'],
+  fableLoom: ['name', 'logline', 'premise', 'styleNotes', 'format', 'playSettings', 'renderSettings', 'seriesPlan', 'participationMode', 'audienceCommunicationMedium', 'episodes'],
   // Writers Room exercises (#1645): the user-authored sprint fields the merge can
   // restore through `restoreExercise` — the appended prose + the sprint config.
   // Server-owned / structural fields are excluded (`id`/`createdAt`/`startedAt`/

@@ -6,7 +6,6 @@ import {
   RotateCcw,
   Settings,
   SlidersHorizontal,
-  Sparkles,
 } from 'lucide-react';
 import { Link } from 'react-router';
 import PageHeader from '../components/PageHeader';
@@ -69,12 +68,6 @@ const worldIdentityFor = (world) => ({
   name: world?.identity?.name || world?.human?.name,
   avatar: world?.identity?.avatar || world?.human?.avatar,
 });
-
-const statusTone = (status) => {
-  if (status === 'complete') return 'border-port-success/45 bg-port-success/10 text-port-success';
-  if (status === 'failed') return 'border-port-error/45 bg-port-error/10 text-port-error';
-  return 'border-port-accent/45 bg-port-accent/10 text-port-accent';
-};
 
 const DELETE_DRAFT_VALUE = Symbol('delete-draft-value');
 const isDraftRecord = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -430,16 +423,52 @@ export default function Eidoverse() {
 
   const actions = (
     <>
+      {phase === 'ready' && (
+        <>
+          <button
+            type="button"
+            aria-label="Refresh world"
+            onClick={() => { void runProjection().catch(() => {}); }}
+            disabled={projectionStatus === 'running' || draftDirty}
+            title={draftDirty ? 'Save changes in World controls before refreshing' : 'Refresh the PortOS projection'}
+            className="inline-flex min-h-[40px] min-w-[40px] items-center justify-center rounded-lg border border-port-border px-2 text-gray-200 transition-colors hover:border-port-accent hover:text-white disabled:cursor-wait disabled:opacity-60"
+          >
+            <RotateCcw size={16} className={projectionStatus === 'running' ? 'animate-spin' : ''} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            aria-label="World controls"
+            onClick={() => setSettingsOpen(true)}
+            className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg bg-port-accent px-3 py-1.5 text-sm font-semibold text-black transition-opacity hover:opacity-90"
+          >
+            <SlidersHorizontal size={15} aria-hidden="true" />
+            <span aria-hidden="true" className="sm:hidden">Controls</span>
+            <span aria-hidden="true" className="hidden sm:inline">World controls</span>
+          </button>
+        </>
+      )}
       {hostUrl && (
-        <a href={hostUrl} target="_blank" rel="noreferrer" className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-port-border px-3 py-1.5 text-sm text-gray-200 transition-colors hover:border-port-accent hover:text-white">
+        <a
+          href={hostUrl}
+          target="_blank"
+          rel="noreferrer"
+          aria-label="Open Eidoverse without PortOS controls"
+          title="Open Eidoverse in a separate tab without the PortOS page frame"
+          className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-port-border px-3 py-1.5 text-sm text-gray-200 transition-colors hover:border-port-accent hover:text-white"
+        >
           <ExternalLink size={15} aria-hidden="true" />
-          Open full screen
+          <span className="hidden md:inline">Open Eidoverse alone</span>
+          <span className="md:hidden">World only</span>
         </a>
       )}
       {appId && (
-        <Link to={`/apps/${appId}/overview`} className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-port-border px-3 py-1.5 text-sm text-gray-200 transition-colors hover:border-port-accent hover:text-white">
+        <Link
+          to={`/apps/${appId}/overview`}
+          aria-label="Manage Eidoverse app"
+          title="Manage Eidoverse app"
+          className="hidden min-h-[40px] min-w-[40px] items-center justify-center rounded-lg border border-port-border px-2 text-gray-200 transition-colors hover:border-port-accent hover:text-white sm:inline-flex"
+        >
           <Settings size={15} aria-hidden="true" />
-          Manage app
         </Link>
       )}
     </>
@@ -447,10 +476,6 @@ export default function Eidoverse() {
 
   const design = worldState?.design || {};
   const reconciliation = design.reconciliation || {};
-  const summary = worldState?.projection?.lastSummary || {};
-  const projectionProgress = reconciliation.operationCount > 0
-    ? `${Math.min(reconciliation.appliedOperations || 0, reconciliation.operationCount)}/${reconciliation.operationCount}`
-    : null;
   const freshWorldLighting = projectionStatus === 'running'
     && design.lastAppliedVersion == null
     && !FRESH_WORLD_VISIBLE_CHECKPOINTS.has(reconciliation.checkpoint);
@@ -483,56 +508,8 @@ export default function Eidoverse() {
             </div>
           )}
 
-          <div className="pointer-events-none absolute inset-x-0 top-0 flex flex-wrap items-start justify-between gap-3 p-3 sm:p-4">
-            <section className="port-media-overlay max-w-md rounded-2xl border border-port-border p-3 shadow-2xl sm:p-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-port-accent/35 bg-port-accent/10 px-2 py-1 text-[11px] font-medium text-port-accent">
-                  <Sparkles size={12} aria-hidden="true" />
-                  {design.name || recipeDraft?.name || 'PortOS world'}
-                </span>
-                <span className={`rounded-full border px-2 py-1 text-[11px] ${statusTone(reconciliation.status)}`}>
-                  {projectionStatus === 'running'
-                    ? `Projecting${projectionProgress ? ` ${projectionProgress}` : ''}`
-                    : (reconciliation.status || 'Pending')}
-                </span>
-              </div>
-              <h2 className="mt-3 text-base font-semibold sm:text-lg">Your PortOS, made spatial</h2>
-              <p className="mt-1 hidden text-xs leading-5 text-port-text-muted sm:block">
-                The Nexus is system health. Eight districts turn bounded app signals into places, motion, and light—without copying raw records into the world.
-              </p>
-              <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-port-text-muted">
-                <span>Design V{design.selectedVersion || recipeDraft?.version}</span>
-                <span>{summary.liveEntityCount ?? 0}/{design.maxEntities || 48} live signals</span>
-                <span>{worldState?.presence?.connected ? 'CoS connected' : 'CoS ready'}</span>
-                {draftDirty && <span className="text-port-warning">Unsaved world changes</span>}
-              </div>
-            </section>
-
-            <div className="pointer-events-auto flex gap-2">
-              <button
-                type="button"
-                aria-label="Refresh world"
-                onClick={() => { void runProjection().catch(() => {}); }}
-                disabled={projectionStatus === 'running' || draftDirty}
-                title={draftDirty ? 'Save changes in World controls before refreshing' : undefined}
-                className="port-media-overlay-strong port-media-overlay-item inline-flex min-h-[42px] items-center gap-2 rounded-xl border border-port-border px-3 text-sm shadow-xl transition-colors hover:border-port-accent disabled:cursor-wait disabled:opacity-60"
-              >
-                <RotateCcw size={15} className={projectionStatus === 'running' ? 'animate-spin' : ''} aria-hidden="true" />
-                <span className="hidden sm:inline">{projectionStatus === 'running' ? 'Projecting…' : 'Refresh world'}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setSettingsOpen(true)}
-                className="inline-flex min-h-[42px] items-center gap-2 rounded-xl bg-port-accent px-3 text-sm font-semibold text-black shadow-xl transition-opacity hover:opacity-90"
-              >
-                <SlidersHorizontal size={15} aria-hidden="true" />
-                World controls
-              </button>
-            </div>
-          </div>
-
           {projectionError && (
-            <div className="port-media-overlay-strong pointer-events-auto absolute inset-x-3 top-40 z-10 mx-auto flex max-w-2xl items-start gap-3 rounded-xl border border-port-error/50 p-3 text-sm text-port-error shadow-xl sm:top-44" role="status">
+            <div className="port-media-overlay-strong pointer-events-auto absolute inset-x-3 top-3 z-10 mx-auto flex max-w-2xl items-start gap-3 rounded-xl border border-port-error/50 p-3 text-sm text-port-error shadow-xl" role="status">
               <AlertTriangle className="mt-0.5 shrink-0" size={17} aria-hidden="true" />
               <div className="min-w-0 flex-1">
                 <p>{projectionError}</p>
@@ -541,22 +518,6 @@ export default function Eidoverse() {
             </div>
           )}
 
-          <section className="pointer-events-auto absolute inset-x-0 bottom-0 overflow-x-auto p-3 sm:p-4" aria-label="PortOS district legend">
-            <div className="port-media-overlay mb-2 ml-auto w-fit rounded-full border border-port-border px-3 py-1 text-[10px] text-port-text-muted">
-              Steady = current · slow bob = stale · raised pulse = attention · high fast pulse = error
-            </div>
-            <div className="port-media-overlay flex min-w-max gap-2 rounded-2xl border border-port-border p-2 shadow-2xl sm:grid sm:min-w-0 sm:grid-cols-4 lg:grid-cols-8">
-              {(recipeDraft?.districts || []).map((district) => (
-                <div key={district.id} className="port-media-overlay-item w-36 rounded-xl border border-port-border/70 px-3 py-2 sm:w-auto">
-                  <div className="flex items-center gap-2">
-                    <span className="h-2 w-2 rounded-full shadow-[0_0_12px_currentColor]" style={{ backgroundColor: district.accent, color: district.accent }} aria-hidden="true" />
-                    <span className="truncate text-[11px] font-medium">{district.label}</span>
-                  </div>
-                  <p className="mt-1 truncate text-[10px] text-gray-500">{district.direction} · {district.landmark}</p>
-                </div>
-              ))}
-            </div>
-          </section>
         </main>
       )}
 

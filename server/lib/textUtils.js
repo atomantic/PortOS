@@ -26,6 +26,17 @@ export function countWords(text) {
 }
 
 /**
+ * Trim a string and cap it to a maximum number of characters.
+ *
+ * Kept in this dependency-free module so browser-consumed shared helpers do
+ * not have to import a larger server domain module just for string bounding.
+ * Non-string values normalize to the empty string rather than being coerced.
+ */
+export const trimTo = (value, max) => (
+  typeof value === 'string' ? value.trim().slice(0, max) : ''
+);
+
+/**
  * Escape a string for literal use inside a RegExp.
  *
  * Exported because this was hand-rolled privately in seven other modules
@@ -35,4 +46,23 @@ export function countWords(text) {
  */
 export function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Lowercase + kebab-case a string, ASCII-only, collapsing runs of anything else
+ * to a single `-` and trimming leading/trailing hyphens.
+ *
+ * Lives here, beside `escapeRegExp`, for the same reason: it was private to
+ * `planIds.js` (PLAN.md `[slug]` ids) and the next caller that needed the same
+ * transform — `normalizePlannerId`, which slugs a model id into a `planner:`
+ * label — could only re-inline the regex chain. Non-string input returns the
+ * empty string rather than being coerced, so a caller distinguishes "nothing to
+ * slug" from a real slug without a separate guard.
+ */
+export function kebabCase(text) {
+  if (typeof text !== 'string') return '';
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }

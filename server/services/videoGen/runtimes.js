@@ -329,6 +329,14 @@ export const BYOV_RUNTIME_INFO = Object.freeze({
 
 export const BYOV_VIDEO_RUNTIMES = Object.freeze(new Set(Object.keys(BYOV_RUNTIME_INFO)));
 
+// Only these BYOV runtimes drive MLX/Metal on macOS. Keep this execution fact
+// here with the runtime registry, rather than teaching each spawn site which
+// model names need the M5 GPU-watchdog mitigation.
+export const BYOV_MLX_VIDEO_RUNTIMES = Object.freeze(new Set([
+  'wan22', 'ltx2', 'ltx25', 'fastvideo', 'minimax_h3',
+]));
+export const runtimeUsesMlx = (runtime) => BYOV_MLX_VIDEO_RUNTIMES.has(runtime);
+
 // Per-runtime EXECUTION facts, read off the registry rather than re-derived from
 // a runtime id at the spawn site. Both are "key absent means off", the same
 // convention `loraProbeArgs` / `expectedRevision` already use here — so the next

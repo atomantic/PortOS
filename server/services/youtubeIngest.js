@@ -555,6 +555,7 @@ export function cancelYoutubeIngest(jobId) {
  * @param {boolean} [opts.captureTranscript=true]
  * @param {boolean} [opts.downloadVideo=false]
  * @param {boolean} [opts.ingestAudio=false]
+ * @param {string}  [opts.note]  Optional reason for keeping the link.
  * @param {string}  [opts.agentPrompt]  Non-empty → queue a CoS task pointed at the transcript.
  * @param {string[]} [opts.tags]
  * @param {string}  [opts.priority]     CoS task priority (defaults to the setting).
@@ -564,6 +565,7 @@ export async function startYoutubeIngest({
   captureTranscript = true,
   downloadVideo = false,
   ingestAudio = false,
+  note = '',
   agentPrompt = '',
   tags = [],
   priority,
@@ -589,6 +591,7 @@ export async function startYoutubeIngest({
   const job = { id: jobId, clients: [], process: null, canceled: false };
   ingestJobs.set(jobId, job);
   const cleanTags = tags.map((t) => String(t).trim()).filter(Boolean);
+  const linkNote = typeof note === 'string' ? note.trim() : '';
   const prompt = String(agentPrompt || '').trim();
   console.log(`📺 YouTube ingest ${shortId(jobId)} — ${videoId} (transcript=${captureTranscript} video=${downloadVideo} audio=${ingestAudio})`);
 
@@ -761,6 +764,7 @@ export async function startYoutubeIngest({
         linkType: 'reference',
         tags: ['youtube', ...cleanTags],
       };
+      if (linkNote) linkFields.note = linkNote;
       // A reused link still has to pick up THIS ingest's tags and the resolved
       // title/channel — otherwise tags typed on a re-ingest are silently dropped
       // and a link first saved as a bare URL keeps its hostname title forever.

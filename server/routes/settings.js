@@ -13,7 +13,7 @@ import { assertMediaRoutingConfig } from '../services/federatedMedia/routingPoli
 import { assertConfiguredEidoverseInstalled, getInstanceFeatures, updateEidoverseWorldsRepo, updateEidoverseWorldsSource, updateInstanceFeature } from '../services/instanceFeatures.js';
 import { installEidoverse } from '../services/eidoverse.js';
 import { ensureEidoverseHost } from '../services/eidoverseHost.js';
-import { isGitHubRepoUrl } from '../lib/githubRepoUrl.js';
+import { isGitHubRepoUrl } from '../lib/repoUrl.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { isPlainObject } from '../lib/objects.js';
 import { agentContextSettingsSchema } from '../lib/agentContextValidation.js';
@@ -397,13 +397,16 @@ router.put('/', asyncHandler(async (req, res) => {
   // slice merges per sub-key and persisted write-only tokens the incoming patch
   // omits get re-injected — both against the freshest snapshot inside the write
   // queue (see mergeFederationSlice / preserveExternallyOwnedKeys).
+  // `actor: 'user'` is what separates a save made HERE — a human on the Settings
+  // page — from every other `save()` caller (schedulers, sync hooks, feature
+  // writes), which keep the `'system'` default in the operator-action ledger (#5594).
   let merged = await updateSettingsWith((current) =>
     preserveExternallyOwnedKeys(
       mergeFederationSlice({ ...current, ...settingsPatch }, current),
       current,
-    ));
+    ), { actor: 'user' });
   if (subscriptionCostsPatch !== undefined) {
-    const costs = await saveSubscriptionCosts(subscriptionCostsPatch);
+    const costs = await saveSubscriptionCosts(subscriptionCostsPatch, { actor: 'user' });
     merged = { ...merged, subscriptionCosts: costs };
   }
   // The queue caches codex.parallelLimit in-process; sync it from the

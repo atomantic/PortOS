@@ -18,6 +18,7 @@ import { useNavigate, useSearchParams, Link } from 'react-router';
 import { ListMusic, Plus, Trash2, Download, Search, X, AlertTriangle } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import PageHeader from '../components/PageHeader';
+import Modal from '../components/ui/Modal';
 import EmptyState from '../components/EmptyState';
 import Banner from '../components/ui/Banner';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
@@ -59,6 +60,7 @@ export default function SongBook() {
   // Bump to re-run the load effect (the Retry button on the error banner).
   const [retryKey, setRetryKey] = useState(0);
   const [title, setTitle] = useState('');
+  const [createOpen, setCreateOpen] = useState(false);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   useEffect(() => {
@@ -86,7 +88,11 @@ export default function SongBook() {
     if (!name) { toast.error('Give the song a title'); return null; }
     const song = await createSong({ title: name }, { silent: true });
     // A blank new song has nothing to read — open straight into edit mode.
-    if (song?.id) navigate(`/songbook/${song.id}?mode=edit`);
+    if (song?.id) {
+      setCreateOpen(false);
+      setTitle('');
+      navigate(`/songbook/${song.id}?mode=edit`);
+    }
     return song;
   }, { errorMessage: 'Failed to create song' });
 
@@ -132,23 +138,30 @@ export default function SongBook() {
         title="SongBook"
         subtitle="Songs you're learning — tabs, chord sheets, and sheet music"
         actions={(
-          <Link
-            to="/songbook/import"
-            className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50"
-          >
-            <Download size={16} />
-            Import
-          </Link>
+          <>
+            <button
+              type="button"
+              onClick={() => setCreateOpen(true)}
+              className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg bg-port-accent text-white hover:bg-port-accent/90"
+            >
+              <Plus size={16} />
+              New Song
+            </button>
+            <Link
+              to="/songbook/import"
+              className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50"
+            >
+              <Download size={16} />
+              Import
+            </Link>
+          </>
         )}
       />
 
       <div className="flex-1 overflow-auto p-3 sm:p-4">
-      {/* Create row */}
-      <form
-        onSubmit={(e) => { e.preventDefault(); create(); }}
-        className="bg-port-card border border-port-border rounded-lg p-4 mb-4 flex flex-col sm:flex-row gap-3 sm:items-end"
-      >
-        <div className="flex-1">
+      <Modal open={createOpen} onClose={() => setCreateOpen(false)} ariaLabel="Create a new song">
+        <form onSubmit={(e) => { e.preventDefault(); create(); }} className="bg-port-card border border-port-border rounded-lg p-4">
+          <h2 className="text-lg font-semibold text-white mb-4">New Song</h2>
           <label htmlFor="song-title" className={labelClass}>Title</label>
           <input
             id="song-title"
@@ -156,18 +169,18 @@ export default function SongBook() {
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="e.g. Example Song"
-            className={inputClass}
+            className={`${inputClass} mt-1`}
+            autoFocus
           />
-        </div>
-        <button
-          type="submit"
-          disabled={creating}
-          className="flex items-center justify-center gap-2 px-4 py-2 text-sm rounded-lg bg-port-accent text-white hover:bg-port-accent/90 disabled:opacity-50"
-        >
-          <Plus size={16} />
-          New Song
-        </button>
-      </form>
+          <div className="flex justify-end gap-2 mt-4">
+            <button type="button" onClick={() => setCreateOpen(false)} className="px-3 py-2 text-sm rounded-lg border border-port-border text-gray-300 hover:text-white">Cancel</button>
+            <button type="submit" disabled={creating} className="flex items-center gap-2 px-4 py-2 text-sm rounded-lg bg-port-accent text-white hover:bg-port-accent/90 disabled:opacity-50">
+              <Plus size={16} />
+              Create Song
+            </button>
+          </div>
+        </form>
+      </Modal>
 
       {/* Filters (URL-backed) */}
       <div className="flex flex-wrap items-center gap-2 mb-4">

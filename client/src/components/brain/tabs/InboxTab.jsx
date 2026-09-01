@@ -48,6 +48,7 @@ const filedRecordTitle = (filed) => filed.destination === 'links' ? 'View in Lin
 export default function InboxTab({ onRefresh, settings }) {
   const navigate = useNavigate();
   const [inputText, setInputText] = useState('');
+  const [linkNote, setLinkNote] = useState('');
   // Previews the server's filing decision with the mirrored predicate it uses
   // (client/src/lib/bareUrl.js), so the hint and the Creative lockout can't
   // promise a destination the server won't pick.
@@ -56,7 +57,7 @@ export default function InboxTab({ onRefresh, settings }) {
   // when on, captured thoughts are flagged so they can later be batch-sent to the
   // creative catalog (vs todos/refs that stay out).
   const [creative, setCreative] = useLocalStorageBool('brain.captureCreative', false);
-  // A bare GitHub repo URL is cloned on capture, which unlocks the two post-clone
+  // A bare repo URL is cloned on capture, which unlocks the two post-clone
   // agent opt-ins (malware scan / repo study) — shared with Quick Capture.
   const repoIntake = useRepoIntake(inputText);
   const [entries, setEntries] = useState([]);
@@ -110,6 +111,7 @@ export default function InboxTab({ onRefresh, settings }) {
     e.preventDefault();
     const text = inputText.trim();
     if (!text) return;
+    const note = inputIsUrl ? linkNote.trim() : '';
 
     // Guard against rapid double-clicks before React flushes the cleared input
     const lastText = inputRef.current?.dataset.lastSubmit;
@@ -132,10 +134,12 @@ export default function InboxTab({ onRefresh, settings }) {
 
     // `intakeFor` re-derives from the submitted text, so a sticky tick can't ride
     // along on a capture that is no longer a repo URL.
-    const result = await api.captureBrainThought(text, undefined, undefined, {
+    const captureOptions = {
       creative: asCreative,
       repoIntake: repoIntake.intakeFor(text),
-    }, { silent: true }).catch(err => {
+    };
+    if (note) captureOptions.note = note;
+    const result = await api.captureBrainThought(text, undefined, undefined, captureOptions, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to capture thought');
       setEntries(prev => prev.filter(e => e.id !== tempId));
       return null;
@@ -148,6 +152,7 @@ export default function InboxTab({ onRefresh, settings }) {
       // A capture that was just a URL is filed to Links synchronously — no
       // brain:classified event follows, so announce the outcome here.
       if (result.link) toast.success(result.message || 'Saved to Links');
+      setLinkNote('');
       repoIntake.setStudyContext('');
       onRefresh?.();
     }
@@ -322,7 +327,11 @@ export default function InboxTab({ onRefresh, settings }) {
             ref={inputRef}
             type="text"
             value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
+            onChange={(e) => {
+              const value = e.target.value;
+              setInputText(value);
+              if (!parseBareUrl(value)) setLinkNote('');
+            }}
             placeholder="One thought at a time..."
             aria-label="New inbox thought"
             className="flex-1 px-4 py-3 bg-port-card border border-port-border rounded-lg text-white placeholder-gray-500 focus:outline-hidden focus:border-port-accent"
@@ -353,10 +362,26 @@ export default function InboxTab({ onRefresh, settings }) {
             <Send className="w-5 h-5" />
           </button>
         </div>
+        {inputIsUrl && (
+          <div className="mt-3">
+            <label htmlFor="inbox-link-note" className="block text-xs text-gray-400 mb-1">
+              Why are you saving this link? <span className="text-gray-600">(optional)</span>
+            </label>
+            <textarea
+              id="inbox-link-note"
+              rows={2}
+              maxLength={2000}
+              value={linkNote}
+              onChange={(e) => setLinkNote(e.target.value)}
+              placeholder="e.g. Read later, share with the team, or turn into a future task"
+              className="w-full px-3 py-2 bg-port-card border border-port-border rounded-lg text-white text-sm resize-y placeholder-gray-500 focus:outline-hidden focus:border-port-accent"
+            />
+          </div>
+        )}
         <p className="mt-2 text-xs text-gray-500">
           Capture a thought — type or use the mic. AI will classify and route it automatically.
           {inputIsUrl && (repoIntake.repo
-            ? <span className="text-cyan-400"> That&rsquo;s a GitHub repo — it will be saved to Links and cloned.</span>
+            ? <span className="text-cyan-400"> That&rsquo;s a repository — it will be saved to Links and cloned.</span>
             : <span className="text-cyan-400"> That&rsquo;s a URL — it will be saved to Links.</span>)}
           {!inputIsUrl && creative && <span className="text-port-accent-2"> Creative mode on — captures are flagged for the Catalog.</span>}
           {settings?.confidenceThreshold && (
@@ -365,18 +390,7 @@ export default function InboxTab({ onRefresh, settings }) {
         </p>
         <RepoIntakeOptions
           idPrefix="inbox-capture-repo"
-          repo={repoIntake.repo}
-          options={repoIntake.options}
-          managedApps={repoIntake.managedApps}
-          targetAppId={repoIntake.targetAppId}
-          onTargetAppChange={repoIntake.setTargetAppId}
-          studyContext={repoIntake.studyContext}
-          onStudyContextChange={repoIntake.setStudyContext}
-          providerOverride={repoIntake.providerOverride}
-          providers={repoIntake.providers}
-          activeProviderId={repoIntake.activeProviderId}
-          onProviderOverrideChange={repoIntake.setProviderOverride}
-          onToggle={repoIntake.toggle}
+          {...repoIntake}
         />
       </form>
 

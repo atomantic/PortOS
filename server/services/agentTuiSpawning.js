@@ -262,15 +262,17 @@ function createPasteRetryController({
   // Extract a verifiable prefix from the prompt for paste verification (issue #2192).
   // Computed once up front so retry attempts use the same verification target.
   const verifiablePrefix = extractVerifiablePromptPrefix(prompt);
+  const pasteConfirmed = (buffer) =>
+    isPasteConfirmed(buffer, { verifiablePrefix, promptMarkerCount });
 
-  // Bounded post-paste accumulator. Lives only while pasteEnterTimer is
-  // running (a few seconds at most), so the in-memory cost is bounded by
-  // however much the TUI emits during the paste-marker window — typically
-  // a few KB. Set to '' when sendPrompt fires; nulled when paste detection
-  // resolves or the agent finalizes.
+  // Bounded post-paste accumulator. Lives from an attempt through its marker /
+  // verification windows and any bounded retry backoff, so delayed TUI output
+  // can still confirm the paste. Set to '' when an attempt fires; nulled when
+  // paste detection resolves, the next attempt replaces it, or the run ends.
   let postPasteBuffer = null;
   let pasteEnterTimer = null;
   let pasteVerifyTimer = null;
+  let pasteRetryTimer = null;
   let submitEnterTimer = null;
   let pasteAttempt = 0;
   // Wall-clock of the FIRST paste attempt — the anchor for the MCP-boot-aware
@@ -346,6 +348,18 @@ function createPasteRetryController({
     attemptPaste(reason);
   };
 
+  const submitPaste = () => {
+    if (pasteRetryTimer) {
+      clearTimeout(pasteRetryTimer);
+      pasteRetryTimer = null;
+    }
+    markPromptSubmitted();
+    submitEnterTimer = scheduleSubmitEnters(
+      () => shellService.writeToSession(sessionId, SUBMIT_KEY),
+      () => isFinalized()
+    );
+  };
+
   // Actually perform a paste attempt. Separated from sendPrompt so retries don't
   // re-run the liveness guard or re-set promptSentAt. Increments pasteAttempt on
   // each call; clears any pending timers from the previous attempt first.
@@ -355,28 +369,14 @@ function createPasteRetryController({
     if (firstPasteStartedAt === null) firstPasteStartedAt = Date.now();
     if (pasteEnterTimer) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; }
     if (pasteVerifyTimer) { clearInterval(pasteVerifyTimer); pasteVerifyTimer = null; }
+    if (pasteRetryTimer) { clearTimeout(pasteRetryTimer); pasteRetryTimer = null; }
     // Start capturing post-paste output. Set BEFORE writing the paste so
-    // every chunk that arrives in response gets appended. Cleared the moment
-    // detection resolves (marker seen or fallback elapsed) so the accumulator
-    // never lives beyond the paste-marker window.
+    // every chunk that arrives in response gets appended. A failed verification
+    // deliberately keeps it through retry backoff so late output is not lost.
     postPasteBuffer = '';
     shellService.writeToSession(sessionId, `\x1b[200~${prompt}\x1b[201~`);
     const attemptSuffix = attemptNum > 1 ? ` [attempt ${attemptNum}/${PASTE_RETRY_MAX_ATTEMPTS}]` : '';
     appendLine(`📟 Prompt pasted into TUI session ${sessionId.slice(0, 8)} (${reason})${attemptSuffix}`);
-
-    // Submit the pasted prompt with repeated Enters — a single `\r` can be
-    // swallowed while the TUI is still reflowing a large paste, stranding the
-    // prompt unsent (the "I had to hit Enter myself" bug). Tracked in
-    // submitEnterTimer so cancel() can cancel pending retries if the agent ends.
-    const submitEnter = () => {
-      // Record submission once the Enter is written, after the prompt-echo
-      // window (issue #1229 review).
-      markPromptSubmitted();
-      submitEnterTimer = scheduleSubmitEnters(
-        () => shellService.writeToSession(sessionId, SUBMIT_KEY),
-        () => isFinalized()
-      );
-    };
 
     // Confirms the TUI actually received the paste before we submit. The
     // paste-commit marker is authoritative — Claude Code and OpenCode can
@@ -385,9 +385,6 @@ function createPasteRetryController({
     // 2026-07-05: agent-656efa6e et al. failed `paste-not-rendered` despite
     // Claude's marker being present). Literal-text verification is only the
     // fallback for the markerless path — see isPasteConfirmed.
-    const pasteConfirmed = (buffer) =>
-      isPasteConfirmed(buffer, { verifiablePrefix, promptMarkerCount });
-
     // Markerless AND the prompt text never rendered → the paste was swallowed by
     // a still-initializing TUI (issue #2192). Retry, then fail.
     //
@@ -412,8 +409,18 @@ function createPasteRetryController({
           ? ` (waiting for ${tuiConfig.command} MCP servers to finish booting)`
           : '';
         appendLine(`⚠️ Paste verification failed — prompt text not found in buffer, retrying in ${retryDelayMs}ms${bootNote}`);
-        setTimeout(() => {
+        // Keep the failed attempt's buffer live during the backoff. A busy TUI
+        // can paint its authoritative paste marker only after the verification
+        // window closes; dropping output in this gap made Codex stack duplicate
+        // prompt chips, then falsely report that none had rendered.
+        pasteRetryTimer = setTimeout(() => {
+          pasteRetryTimer = null;
           if (isFinalized()) return;
+          if (pasteConfirmed(postPasteBuffer || '')) {
+            postPasteBuffer = null;
+            submitPaste();
+            return;
+          }
           attemptPaste(reason);
         }, retryDelayMs);
         return;
@@ -458,7 +465,7 @@ function createPasteRetryController({
         // paste landed; submit now. Trusting the marker here is what fixes the
         // multi-line-collapse false negative — Claude hides the pasted body text.
         if (pasteConfirmed(commitBuffer)) {
-          submitEnter();
+          submitPaste();
           return;
         }
         // Markerless AND text not visible yet: give the prompt a short window to
@@ -481,20 +488,37 @@ function createPasteRetryController({
           if (confirmed || verifyElapsed >= PASTE_VERIFY_WINDOW_MS) {
             clearInterval(pasteVerifyTimer);
             pasteVerifyTimer = null;
-            postPasteBuffer = null;
-            if (confirmed) submitEnter();
-            else retryOrFailPaste();
+            if (confirmed) {
+              postPasteBuffer = null;
+              submitPaste();
+            } else {
+              // Preserve the buffer through retry backoff so a delayed marker
+              // can still confirm this paste instead of triggering a duplicate.
+              postPasteBuffer = verifyBuffer;
+              retryOrFailPaste();
+            }
           }
         }, PASTE_VERIFY_POLL_MS);
       }
     }, PASTE_MARKER_POLL_MS);
   };
 
-  // handleData's own hook: accumulates PTY output into postPasteBuffer while a
-  // paste attempt is awaiting its marker/verification window (see
-  // postPasteBuffer above). A no-op the rest of the time.
+  // handleData's own hook: accumulates PTY output while a paste attempt is
+  // awaiting its marker, verification, or retry backoff (see postPasteBuffer
+  // above). A no-op the rest of the time.
   const ingestChunk = (stripped) => {
-    if (postPasteBuffer !== null && stripped) postPasteBuffer += stripped;
+    if (postPasteBuffer === null || !stripped) return;
+    postPasteBuffer += stripped;
+    // The retry backoff used to be a blind spot: output was discarded after
+    // verification failed and before the next attempt began. A late marker or
+    // prompt echo still proves the existing paste landed, so submit it now and
+    // cancel the duplicate retry.
+    if (pasteRetryTimer && pasteConfirmed(postPasteBuffer)) {
+      clearTimeout(pasteRetryTimer);
+      pasteRetryTimer = null;
+      postPasteBuffer = null;
+      submitPaste();
+    }
   };
 
   // Stop everything this controller armed. Safe to call unconditionally (a run
@@ -504,6 +528,7 @@ function createPasteRetryController({
   const cancel = () => {
     if (pasteEnterTimer) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; }
     if (pasteVerifyTimer) { clearInterval(pasteVerifyTimer); pasteVerifyTimer = null; }
+    if (pasteRetryTimer) { clearTimeout(pasteRetryTimer); pasteRetryTimer = null; }
     if (submitEnterTimer) { clearInterval(submitEnterTimer); submitEnterTimer = null; }
     postPasteBuffer = null;
   };

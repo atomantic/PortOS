@@ -11,6 +11,7 @@ export const getCalendarEvents = (params = {}) => {
   const str = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null)).toString();
   return request(`/calendar/events${str ? `?${str}` : ''}`);
 };
+export const getCalendarAgenda = (options = {}) => request('/calendar/agenda', options);
 export const getCalendarTokenStatus = () => request('/calendar/debug/token-status');
 export const testCalendarToken = (provider) => request('/calendar/debug/test-token', { method: 'POST', body: JSON.stringify({ provider }) });
 export const clearCalendarToken = (provider) => request('/calendar/debug/clear-token', { method: 'POST', body: JSON.stringify({ provider }) });

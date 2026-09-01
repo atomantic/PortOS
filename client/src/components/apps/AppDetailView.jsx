@@ -272,7 +272,7 @@ export default function AppDetailView() {
       case 'documents':
         return <DocumentsTab appId={appId} repoPath={app.repoPath} />;
       case 'git':
-        return <GitTab appId={appId} appName={app.name} repoPath={app.repoPath} />;
+        return <GitTab appId={appId} app={app} appName={app.name} repoPath={app.repoPath} />;
       case 'gsd':
         return <GsdTab appId={appId} repoPath={app.repoPath} />;
       case 'issues':

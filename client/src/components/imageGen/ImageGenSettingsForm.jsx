@@ -18,6 +18,7 @@ import BackendChipStrip from '../media/BackendChipStrip';
 import ImageGenControls from './ImageGenControls';
 import LoraPicker from './LoraPicker';
 import StylePresetPicker from '../media/StylePresetPicker';
+import AutoSizeTextarea from '../ui/AutoSizeTextarea';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 
 // Labeled card wrapper used only in `grouped` mode. Header is a plain heading
@@ -60,7 +61,7 @@ export default function ImageGenSettingsForm({
   const isAgy = cfg.mode === IMAGE_GEN_MODE.AGY;
   const isLocal = cfg.mode === IMAGE_GEN_MODE.LOCAL;
   const labelCls = 'block text-xs font-medium text-gray-400 mb-1';
-  const textareaCls = 'w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 resize-y';
+  const textareaCls = 'w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[60px]';
 
   const noBackend = availableBackends.length === 0 ? (
     <div className="text-[11px] text-port-warning bg-port-warning/10 border border-port-warning/40 rounded px-2 py-1.5">
@@ -144,9 +145,10 @@ export default function ImageGenSettingsForm({
 
   const styleFields = showStyleFields ? (
     <div className="space-y-3">
-      <label className="block">
+      <label htmlFor="image-gen-extra-style" className="block">
         <span className={labelCls}>Extra style (optional)</span>
-        <textarea
+        <AutoSizeTextarea
+          id="image-gen-extra-style"
           rows={2}
           value={cfg.extraStyle || ''}
           onChange={(e) => merge({ extraStyle: e.target.value })}
@@ -155,9 +157,10 @@ export default function ImageGenSettingsForm({
           disabled={disabled}
         />
       </label>
-      <label className="block">
+      <label htmlFor="image-gen-negative-prompt" className="block">
         <span className={labelCls}>Negative prompt (optional)</span>
-        <textarea
+        <AutoSizeTextarea
+          id="image-gen-negative-prompt"
           rows={2}
           value={cfg.negativePrompt || ''}
           onChange={(e) => merge({ negativePrompt: e.target.value })}

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, within, act, fireEvent, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useLocation } from 'react-router';
 import { PINNED_KEY } from '../utils/navWorkingSet.js';
 import * as api from '../services/api';
 import { INSTANCE_FEATURES_CHANGED } from '../constants/events.js';
@@ -22,6 +22,7 @@ vi.mock('../hooks/useSharingNotifications', () => ({ useSharingNotifications: ()
 vi.mock('../hooks/useAgentFeedbackToast', () => ({ useAgentFeedbackToast: () => {} }));
 vi.mock('../hooks/useAIStatusNotifications', () => ({ useAIStatusNotifications: () => {} }));
 vi.mock('./UpdateBanners', () => ({ default: () => null }));
+vi.mock('./SetupBanner', () => ({ default: () => null }));
 vi.mock('../hooks/useNotifications', () => ({
   useNotifications: () => ({
     notifications: [],
@@ -88,10 +89,16 @@ import { __resetInstanceFeatureCache } from '../hooks/useInstanceFeatures.js';
 import { NAV_COMMANDS } from '../../../server/lib/navManifest.js';
 import Layout, { isFullWidthRoute, NAV_PRESENTATION } from './Layout';
 
+const LocationProbe = () => {
+  const location = useLocation();
+  return <output data-testid="current-path">{location.pathname}</output>;
+};
+
 const renderLayout = async (initialPath = '/brain/inbox') => {
   const utils = render(
     <MemoryRouter initialEntries={[initialPath]}>
       <Layout />
+      <LocationProbe />
     </MemoryRouter>,
   );
   // The sidebar's dynamic sections fire async fetches (all mocked empty here).
@@ -313,6 +320,16 @@ describe('Layout — System Resources location state', () => {
     const link = screen.getByRole('link', { name: 'System Resources' });
     expect(link).toHaveAttribute('href', '/system-resources');
     expect(link.className).toContain('text-port-accent');
+  });
+});
+
+describe('Layout — section destinations', () => {
+  it('opens LLMs when the Models section label is clicked', async () => {
+    await renderLayout();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Models' }));
+
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/models/llms');
   });
 });
 

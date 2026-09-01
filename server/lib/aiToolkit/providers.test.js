@@ -321,7 +321,12 @@ describe('Provider Service', () => {
       });
 
       const codex = await providerService.getProviderById('codex');
-      expect(codex.models).toEqual(['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol']);
+      expect(codex.models).toEqual([
+        'gpt-5.6-luna',
+        'gpt-5.6-terra',
+        'gpt-5.6-sol',
+        'gpt-5.3-codex-spark',
+      ]);
       expect(codex.defaultModel).toBe('gpt-5.6-terra');
       expect(codex.lightModel).toBe('gpt-5.6-luna');
       expect(codex.mediumModel).toBe('gpt-5.6-terra');
@@ -347,11 +352,43 @@ describe('Provider Service', () => {
       });
 
       const codexTui = await providerService.getProviderById('codex-tui');
-      expect(codexTui.models).toEqual(['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol']);
+      expect(codexTui.models).toEqual([
+        'gpt-5.6-luna',
+        'gpt-5.6-terra',
+        'gpt-5.6-sol',
+        'gpt-5.3-codex-spark',
+      ]);
       expect(codexTui.defaultModel).toBe('gpt-5.6-terra');
       expect(codexTui.lightModel).toBe('gpt-5.6-luna');
       expect(codexTui.mediumModel).toBe('gpt-5.6-terra');
       expect(codexTui.heavyModel).toBe('gpt-5.6-sol');
+    });
+
+    it('widens a prior-seeded Codex catalog without changing selected pins', async () => {
+      const priorModels = ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol'];
+      await writeProvidersFile({
+        activeProvider: 'codex',
+        providers: {
+          codex: {
+            id: 'codex',
+            name: 'Codex CLI',
+            type: 'cli',
+            command: 'codex',
+            models: [...priorModels],
+            defaultModel: 'gpt-5.6-luna',
+            lightModel: 'gpt-5.6-sol',
+            mediumModel: 'gpt-5.6-luna',
+            heavyModel: 'gpt-5.6-terra',
+          },
+        },
+      });
+
+      const codex = await providerService.getProviderById('codex');
+      expect(codex.models).toEqual([...priorModels, 'gpt-5.3-codex-spark']);
+      expect(codex.defaultModel).toBe('gpt-5.6-luna');
+      expect(codex.lightModel).toBe('gpt-5.6-sol');
+      expect(codex.mediumModel).toBe('gpt-5.6-luna');
+      expect(codex.heavyModel).toBe('gpt-5.6-terra');
     });
 
     it('does not touch non-codex providers', async () => {

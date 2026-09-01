@@ -244,7 +244,7 @@ describe('ImageGenTab grouped tabs', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
     await waitFor(() => expect(updateSettings).toHaveBeenCalled());
     const patch = updateSettings.mock.calls[0][0];
-    expect(patch.videoGen).toEqual({ mode: 'local', defaultModelId: 'ltx23_distilled_q4' });
+    expect(patch.videoGen).toEqual({ mode: 'local', defaultModelId: 'ltx23_distilled_q4', displaySleep: true });
   });
 });
 

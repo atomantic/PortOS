@@ -20,6 +20,7 @@ import {
   isFederatedMediaAudioPrompt,
 } from './federatedMediaWire.js';
 import { isPlainObject } from './objects.js';
+import { USER_ACTION_ACTORS, USER_ACTION_TYPES } from './userActionTypes.js';
 
 // gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
 // pixels. Mirror the ceiling for every image-gen route. Local mflux can
@@ -353,6 +354,10 @@ export const referenceRepoUpdateSchema = z.object({
 // either — all ref CRUD goes through /api/apps/:appId/reference-repos.
 export const appUpdateSchema = partialWithoutDefaults(appSchema);
 
+export const managedAppUpdateSchema = z.object({
+  syncFork: z.boolean().optional(),
+}).strict();
+
 const standardizePlanFileSchema = z.string().trim().min(1).max(500)
   .refine((file) => {
     const segments = file.split(/[/\\]/);
@@ -548,6 +553,19 @@ export const providerVisionTestSchema = z.object({
     z.array(z.string().trim().min(1).max(128)).max(50),
   ]).optional()),
   model: z.preprocess(emptyToUndefined, z.string().trim().min(1).max(256).optional()),
+});
+
+// POST /api/providers/codex/account/login/cancel. The id is minted by the Codex
+// app-server and only ever echoed back, so this bounds the shape and nothing
+// more — the service still refuses an id that isn't the pending login's.
+export const codexLoginCancelSchema = z.object({
+  loginId: z.string().trim().min(1).max(200),
+});
+
+// POST /api/providers/codex/account/login. `deviceCode` picks the device-code
+// flow (a URL plus a short code) over opening a browser URL directly.
+export const codexLoginStartSchema = z.object({
+  deviceCode: z.boolean().optional().default(false),
 });
 
 // POST /api/providers/:id/vision-suite.
@@ -1613,6 +1631,33 @@ export const shellImageDropSchema = z.object({
 });
 
 // =============================================================================
+// USER ACTION LEDGER
+// =============================================================================
+
+// GET /api/user-actions — read the machine-local operator-action ledger (#5594).
+// Every value arrives as a query string, so numbers are coerced and `success` is
+// the string form of the boolean. Range checking is deliberately loose here and
+// the CLAMP lives in `userActions.normalizeListOptions`: a caller asking for 5000
+// rows wants "as many as you will give me", not a 400.
+const isParseableDate = (value) => !Number.isNaN(new Date(value).getTime());
+const userActionDateFilter = z.string().trim().min(1).max(64)
+  .refine(isParseableDate, 'must be a parseable date');
+const userActionType = z.enum([...USER_ACTION_TYPES]);
+
+export const userActionsListQuerySchema = z.object({
+  type: userActionType.optional(),
+  // Repeated `?types=a&types=b` arrives as an array; a single one as a string.
+  types: z.union([userActionType, z.array(userActionType)]).optional(),
+  actor: z.enum([...USER_ACTION_ACTORS]).optional(),
+  target: z.string().trim().min(1).max(200).optional(),
+  success: z.enum(['true', 'false']).optional(),
+  from: userActionDateFilter.optional(),
+  to: userActionDateFilter.optional(),
+  limit: z.coerce.number().int().optional(),
+  offset: z.coerce.number().int().optional(),
+});
+
+// =============================================================================
 // CLIENT ERROR REPORT
 // =============================================================================
 
@@ -1813,6 +1858,9 @@ export const renderDefaultsSettingsSchema = z.object(
 export const videoGenSettingsSchema = z.object({
   mode: videoModePinSchema,
   defaultModelId: z.preprocess(emptyToNull, z.string().trim().max(64).nullable().optional()),
+  // Default-on macOS GPU-watchdog mitigation for sustained MLX video renders.
+  // Set false for a headless display workflow that manages display power itself.
+  displaySleep: z.boolean().optional(),
   // Install-wide acknowledgement of restricted-model license gates, stored as
   // the exact reviewed-license ids (`termsGate.id`). Written through
   // POST /api/video-gen/model-terms; typed here so a Settings save can't put

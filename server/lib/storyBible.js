@@ -14,10 +14,12 @@ import { normalizeSlugline } from './scenePrompt.js';
 import { PATHS, resolveImageRef } from './fileUtils.js';
 import { isPlainObject } from './objects.js';
 import { shortCanonPrimaryField } from './canonPrompt.js';
+import { trimTo } from './textUtils.js';
 
 // Re-export so callers (writers-room domain files) can import a single
 // canonical normalizer when they need to match places by slugline.
 export { normalizeSlugline };
+export { trimTo };
 
 export const BIBLE_LIMITS = Object.freeze({
   NAME_MAX: 200,
@@ -326,10 +328,10 @@ const DEFAULT_ID_PREFIX = Object.freeze({
   object: 'obj-',
 });
 
-// Tiny string helpers — exported so adjacent server modules (pipeline
-// series.js, issues.js, etc.) stop redefining the same one-liners.
+// Shared string predicate retained here for the story-bible domain. `trimTo`
+// now lives in dependency-free textUtils and is re-exported above so existing
+// story-bible consumers keep the same public contract.
 export const isStr = (v) => typeof v === 'string';
-export const trimTo = (v, max) => (isStr(v) ? v.trim().slice(0, max) : '');
 
 // Smallest share of the budget a sentence-boundary cut may keep. A cut that
 // lands above this wins over a mid-sentence clip; below it, gutting the record

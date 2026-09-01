@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { Plus, Film } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import AutoSizeTextarea from '../components/ui/AutoSizeTextarea';
 import PageHeader from '../components/PageHeader';
 import {
   listMusicVideoProjects,
@@ -512,7 +513,7 @@ export default function MusicVideo() {
               <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <div>
                   <label htmlFor="mv-concept" className="block text-xs text-port-text-muted mb-1">Concept</label>
-                  <textarea
+                  <AutoSizeTextarea
                     id="mv-concept"
                     value={conceptDraft.value}
                     rows={2}
@@ -520,12 +521,12 @@ export default function MusicVideo() {
                     onChange={conceptDraft.onChange}
                     onBlur={conceptDraft.onBlur}
                     placeholder="What is this video about — story, theme, or narrative thread for the AI plan to build on."
-                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
+                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px]"
                   />
                 </div>
                 <div>
                   <label htmlFor="mv-style" className="block text-xs text-port-text-muted mb-1">Visual style</label>
-                  <textarea
+                  <AutoSizeTextarea
                     id="mv-style"
                     value={styleDraft.value}
                     rows={2}
@@ -533,7 +534,7 @@ export default function MusicVideo() {
                     onChange={styleDraft.onChange}
                     onBlur={styleDraft.onBlur}
                     placeholder="Art style, references, palette, mood — appended to every generated frame and shot prompt."
-                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
+                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px]"
                   />
                 </div>
               </div>

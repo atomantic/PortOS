@@ -364,11 +364,27 @@ E|--3-----|`;
       api.getSong.mockResolvedValue(song());
       renderPage();
       expect(await screen.findByText('Chorus')).toBeTruthy();
-      fireEvent.click(screen.getByLabelText('Transpose up'));
-      fireEvent.click(screen.getByLabelText('Transpose up'));
+      fireEvent.click(screen.getByRole('button', { name: /Transpose up \(currently 0/ }));
+      fireEvent.click(screen.getByRole('button', { name: /Transpose up \(currently \+1/ }));
       // C G Am F +2 → D A Bm G; the popover opens for the transposed name.
       fireEvent.click(screen.getAllByRole('button', { name: 'Bm' })[0]);
       expect(screen.getByRole('dialog', { name: 'Bm chord voicing' })).toBeTruthy();
+    });
+
+    it('announces transpose and font-size changes with current values', async () => {
+      renderPage();
+      expect(await screen.findByText('Chorus')).toBeTruthy();
+      const statuses = screen.getAllByRole('status');
+      expect(statuses.some((status) => status.textContent === 'Transpose 0 semitones')).toBe(true);
+      expect(screen.getByRole('button', { name: /Transpose up \(currently 0 semitones\)/ })).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('button', { name: /Transpose up \(currently 0/ }));
+      expect(screen.getAllByRole('status').some((status) => status.textContent === 'Transpose +1 semitones')).toBe(true);
+      expect(screen.getByRole('button', { name: /Transpose down \(currently \+1 semitones\)/ })).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('button', { name: /Larger text/ }));
+      expect(screen.getAllByRole('status').some((status) => status.textContent === 'Font size 1.000 rem')).toBe(true);
+      expect(screen.getByRole('button', { name: /Smaller text \(currently 1.000 rem\)/ })).toBeTruthy();
     });
   });
 

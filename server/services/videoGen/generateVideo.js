@@ -52,6 +52,7 @@ import {
   byovRuntimeExpectedRevision,
   isByovRuntimeCurrent,
 } from './runtimes.js';
+import { getSettings } from '../settings.js';
 import { loadHistory, saveHistory, mutateVideoHistory, getHistoryItem } from './history.js';
 import { VIDEO_MODE_GATED_RUNTIMES } from './modeContract.js';
 import { videoJobState } from './jobState.js';
@@ -895,6 +896,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     height: h,
     numFrames: parsedNumFrames,
     steps: actualSteps,
+    videoGenSettings: (await getSettings())?.videoGen,
   });
 
   return { jobId, generationId: jobId, filename, mode: 'local', model: modelId };

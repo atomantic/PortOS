@@ -54,6 +54,7 @@ import {
   applyAuditModeWrapper,
 } from '../lib/auditCatalog.js';
 import { TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { isReconcileDrainTaskType } from './taskScheduleConstants.js';
 import {
   appendClaimOverrideContext,
@@ -62,6 +63,7 @@ import {
   appendTargetWorkItemBlock,
   buildClaimOverrideContextBlock,
   buildLocalReviewerInstructions,
+  buildIssueReplanPrompt,
   buildPrefetchedIssueContextBlock,
   buildTargetWorkItemBlock,
   normalizeWorkItemRef,
@@ -593,7 +595,9 @@ export async function buildClaimWorkTask(app, {
     + appendPrefetchedIssueContext(promptTaskType, targetRef, issueContext)
     + appendClaimOverrideContext(overrideContext)
     + appendReviewerEffortBlock(reviewersList, promptReviewerEfforts, promptReviewerModels)
-    + buildLocalReviewerInstructions(reviewersList, promptReviewerModels, promptReviewerEfforts);
+    + buildLocalReviewerInstructions(reviewersList, promptReviewerModels, promptReviewerEfforts, {
+      claimCommentGate: promptTaskType === 'claim-issue',
+    });
 
   // Mirror the scheduler: inherit the delegated flow's isolation posture so the
   // JIRA route runs in a CoS-managed worktree rather than the live checkout.
@@ -2961,7 +2965,9 @@ async function buildImprovementTaskDescription({ promptTemplate, app, promptTask
     // and give it two owners to drift apart.
     + (rendersReviewers
         ? appendReviewerEffortBlock(promptReviewers, promptReviewerEfforts, promptReviewerModels)
-          + buildLocalReviewerInstructions(promptReviewers, promptReviewerModels, promptReviewerEfforts)
+          + buildLocalReviewerInstructions(promptReviewers, promptReviewerModels, promptReviewerEfforts, {
+            claimCommentGate: promptTaskType === 'claim-issue',
+          })
         : '');
 }
 
@@ -3282,3 +3288,72 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
 // prompt builder needs the same copilot guard when it re-resolves reviewers off
 // a persisted claim task, and a service-level definition would have meant a
 // second copy there.
+
+/**
+ * Build a one-off "re-plan THIS issue" task — the Replan button beside Claim on
+ * an app's Issues tab. A second model re-derives the plan from today's code and
+ * leaves refinements, redirections, or adjustments on the tracker.
+ *
+ * Scoped to the forge the Issues tab actually listed (`resolveAppForgeTarget`,
+ * the same resolver `listAppIssues` uses), so the comment lands on the repo the
+ * user was reading rather than on whatever the checkout's origin happens to be.
+ *
+ * Not a claim and not `/do:replan`: nothing is implemented, nothing is assigned,
+ * and the whole backlog is not audited. The deliverable is a tracker comment, so
+ * the run is read-only and its clean worktree is the success shape — see
+ * `buildIssueReplanPrompt` for the review contract itself.
+ *
+ * Throws a 400 ServerError when the app's tracker is not a forge issue tracker
+ * (PLAN.md / JIRA have no issue to comment on) or when `target` is not a forge
+ * issue number.
+ *
+ * @returns {Promise<{ tracker, prompt, taskMetadata, target }>}
+ */
+export async function buildIssueReplanTask(app, { target, issueContext, overrideContext } = {}) {
+  const {
+    resolveAppForgeTarget, forgeCliForTracker, workTrackerLabel: trackerLabel, trackerToClaimTaskType,
+  } = await import('../lib/workTracker.js');
+
+  const targetRef = normalizeWorkItemRef(target);
+  if (!targetRef || !/^\d+$/.test(targetRef)) {
+    throw new ServerError('Replan needs the number of the issue to review', { status: 400, code: 'REPLAN_TARGET_REQUIRED' });
+  }
+
+  const { tracker, target: forgeTarget } = await resolveAppForgeTarget(app);
+  if (tracker !== 'github' && tracker !== 'gitlab') {
+    throw new ServerError(
+      `Replan needs a GitHub or GitLab issue tracker (${app.name} resolved to ${trackerLabel(tracker)})`,
+      { status: 400, code: 'UNSUPPORTED_REPLAN_TRACKER' }
+    );
+  }
+  const cli = forgeCliForTracker(tracker) || 'gh';
+
+  const prompt = buildIssueReplanPrompt({
+    appName: app.name,
+    repoPath: app.repoPath,
+    target: targetRef,
+    cli,
+    trackerName: trackerLabel(tracker),
+    // gh takes a host-qualified spec; glab resolves the project from the
+    // checkout, so it gets the plain path and no --repo flag it can't parse.
+    repoFlag: (tracker === 'github' && forgeTarget?.repoSpec) ? forgeTarget.repoSpec : '',
+  })
+    // Reuses the claim flow's prefetched-issue block verbatim: the Issues tab has
+    // already fetched this title/body, and the block's untrusted-data framing is
+    // exactly what a prompt embedding someone else's issue text needs. Keyed on
+    // the tracker's claim task type so its forge gate matches this run's forge.
+    + appendPrefetchedIssueContext(trackerToClaimTaskType(tracker), targetRef, issueContext)
+    + appendClaimOverrideContext(overrideContext);
+
+  return {
+    tracker,
+    prompt,
+    target: targetRef,
+    // No worktree, no PR, and `noCodeOutput` because the deliverable is a forge
+    // comment — that flag is what suppresses the commit/push/PR completion
+    // contract, so the agent is never told to `/do:push` a run that changed
+    // nothing. `worktreeChangesExpected: false` keeps its clean tree from being
+    // scored as a missed deliverable (#3636).
+    taskMetadata: { useWorktree: false, openPR: false, noCodeOutput: true, worktreeChangesExpected: false },
+  };
+}

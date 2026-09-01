@@ -13,10 +13,11 @@ import { getSettings } from '../settings.js';
 import { getSeries, STYLE_PROMPT_OVERRIDE_MODE_DEFAULT } from './series.js';
 import { getIssue } from './issues.js';
 import { resolveGalleryImage } from '../../lib/fileUtils.js';
-import { getUniverse, joinInfluenceList } from '../universeBuilder.js';
+import { getUniverse } from '../universeBuilder.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { buildScenePrompt, buildPlaceByKey, matchScenePlace } from '../../lib/scenePrompt.js';
 import { composeStyledPrompt } from '../../lib/composeStyledPrompt.js';
+import { buildVisualStyleClause, mergeNegativePromptTokens } from '../../lib/universeVisualStyle.js';
 import { getImageModels } from '../../lib/mediaModels.js';
 import { loraCompatKey } from '../../lib/runners.js';
 import { resolveCharacterLoras } from '../characterLoraResolver.js';
@@ -29,24 +30,16 @@ import { resolveImageCleaners } from '../imageGen/index.js';
 const joinStyleParts = (...parts) =>
   parts.map((s) => (s || '').trim()).filter(Boolean).join(', ');
 
-const joinStyleSentences = (...parts) =>
-  parts.map((s) => (s || '').trim()).filter(Boolean).join('. ');
-
 const stackStyle = (series, extraStyle) => joinStyleParts(series?.styleNotes, extraStyle);
 
 // Composes `series.stylePromptOverride` against the universe's embrace
 // influences. The mode (prepend/append/override) is documented next to the
 // `STYLE_PROMPT_OVERRIDE_MODES` constant in series.js — it's the single
 // source of truth.
-const buildStyleClause = (world, series) => {
-  const override = (series?.stylePromptOverride || '').trim();
-  const mode = series?.stylePromptOverrideMode || STYLE_PROMPT_OVERRIDE_MODE_DEFAULT;
-  if (override && mode === 'override') return override;
-  const universeStyle = joinInfluenceList(world?.influences?.embrace);
-  return mode === 'append'
-    ? joinStyleSentences(universeStyle, override)
-    : joinStyleSentences(override, universeStyle);
-};
+const buildStyleClause = (world, series) => buildVisualStyleClause(world, {
+  override: series?.stylePromptOverride,
+  mode: series?.stylePromptOverrideMode || STYLE_PROMPT_OVERRIDE_MODE_DEFAULT,
+});
 
 const applyWorldStyle = (prompt, world, series = null) => {
   const stylePrompt = buildStyleClause(world, series);
@@ -241,11 +234,10 @@ const enqueueImageJob = ({ prompt, world, settings, options, mode, owner, logLin
   // negative handling so the world's global negative-prompt terms stay in
   // effect even when the caller supplies their own additions. Deduplicated
   // by token so a user repeating a world negative doesn't double-weight it.
-  const userNeg = (options.negativePrompt || '').trim();
-  const worldNeg = joinInfluenceList(world?.influences?.avoid);
-  const negativeTokens = [userNeg, worldNeg]
-    .flatMap((s) => s.split(',').map((t) => t.trim()).filter(Boolean));
-  const negativePrompt = [...new Set(negativeTokens)].join(', ') || undefined;
+  const negativePrompt = mergeNegativePromptTokens([
+    options.negativePrompt,
+    world?.influences?.avoid,
+  ]).join(', ') || undefined;
   const baseParams = {
     prompt,
     negativePrompt,

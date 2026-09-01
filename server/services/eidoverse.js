@@ -5,8 +5,8 @@ import { bufferedSpawnOrThrow } from '../lib/bufferedSpawn.js';
 import { commandExists } from '../lib/commandExists.js';
 import { execGit } from '../lib/execGit.js';
 import { atomicWrite, ensureDir, pathExists, PATHS } from '../lib/fileUtils.js';
-import { parseGitHubUrl } from '../lib/githubRepoUrl.js';
-import { cloneRepo } from './githubCloner.js';
+import { parseGitHubUrl } from '../lib/repoUrl.js';
+import { cloneRepo } from './repoCloner.js';
 import { createApp, getAllApps, notifyAppsChanged, updateApp } from './apps.js';
 import { getAppStatusStrict } from './pm2.js';
 

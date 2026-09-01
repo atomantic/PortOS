@@ -191,9 +191,15 @@ describe('TabSheetView', () => {
       expect(screen.queryByText('e|--3--2--|')).toBeNull();
       // The 2-line SAMPLE staff isn't identifiably guitar — generic label.
       expect(screen.getByText(/tablature — switch to Guitar or Ukulele view/)).toBeTruthy();
-      fireEvent.click(screen.getByRole('button', { name: 'show' }));
+      const expand = screen.getByRole('button', { name: 'Show tablature staff (section 4)' });
+      const staffId = expand.getAttribute('aria-controls');
+      expect(expand.getAttribute('aria-expanded')).toBe('false');
+      expect(document.getElementById(staffId)).toBeNull();
+
+      fireEvent.click(expand);
       expect(screen.getByText('e|--3--2--|')).toBeTruthy();
       expect(screen.getByText('B|--0-----|')).toBeTruthy();
+      expect(document.getElementById(staffId)).toBeTruthy();
     });
 
     const SIX_LINE_STAFF = ['e|--0--|', 'B|--1--|', 'G|--0--|', 'D|--2--|', 'A|--3--|', 'E|-----|'].join('\n');
@@ -206,6 +212,21 @@ describe('TabSheetView', () => {
       expect(screen.getByText(/guitar tab — switch to Guitar view/)).toBeTruthy();
       // …while the 4-line (plausibly ukulele) staff renders in place.
       expect(screen.getByText('G|--2--|')).toBeTruthy();
+    });
+
+    it('gives each collapsed staff a unique accessible disclosure name and target', () => {
+      render(
+        <TabSheetView
+          text={`${SIX_LINE_STAFF}\n\n[Solo]\n${SIX_LINE_STAFF}`}
+          instrumentView="piano"
+        />,
+      );
+
+      const expanders = screen.getAllByRole('button', { name: /Show guitar tablature staff \(section \d+\)/ });
+      expect(expanders).toHaveLength(2);
+      expect(expanders[0].getAttribute('aria-label')).not.toBe(expanders[1].getAttribute('aria-label'));
+      expect(expanders.map((button) => button.getAttribute('aria-expanded'))).toEqual(['false', 'false']);
+      expect(new Set(expanders.map((button) => button.getAttribute('aria-controls'))).size).toBe(2);
     });
   });
 });

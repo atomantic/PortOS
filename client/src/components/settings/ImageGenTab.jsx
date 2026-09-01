@@ -110,6 +110,7 @@ export function ImageGenTab() {
   // never rendered, only round-tripped at save time so sibling keys
   // (defaultModelId) survive the settings PUT's wholesale slice replace.
   const [videoGenMode, setVideoGenMode] = useState('');
+  const [videoGenDisplaySleep, setVideoGenDisplaySleep] = useState(true);
   const videoGenSliceRef = useRef({});
   const [sdapiUrl, setSdapiUrl] = useState('');
   const [pythonPath, setPythonPath] = useState('');
@@ -174,6 +175,7 @@ export function ImageGenTab() {
     denoiseByMode: { external: false, local: false, codex: false, grok: false, agy: false },
     renderDefaultsJson: '{}',
     videoGenMode: '',
+    videoGenDisplaySleep: true,
   });
 
   const [status, setStatus] = useState(null);
@@ -245,6 +247,7 @@ export function ImageGenTab() {
         // ('auto'/blank → '', i.e. no pin) for the select.
         const vg = (s?.videoGen && typeof s.videoGen === 'object') ? s.videoGen : {};
         const vgMode = normalizeRenderPinValue(vg.mode) || '';
+        const vgDisplaySleep = vg.displaySleep !== false;
         const m = ig.mode || IMAGE_GEN_MODE.EXTERNAL;
         const url = normalizeUrl(ig.external?.sdapiUrl || ig.sdapiUrl);
         const py = ig.local?.pythonPath || '';
@@ -279,6 +282,7 @@ export function ImageGenTab() {
         setMode(m);
         setRenderDefaults(rd);
         setVideoGenMode(vgMode);
+        setVideoGenDisplaySleep(vgDisplaySleep);
         videoGenSliceRef.current = vg;
         setSdapiUrl(url);
         setPythonPath(py);
@@ -306,6 +310,7 @@ export function ImageGenTab() {
           cleanC2PAByMode: c2, denoiseByMode: dn,
           renderDefaultsJson: JSON.stringify(rd),
           videoGenMode: vgMode,
+          videoGenDisplaySleep: vgDisplaySleep,
         });
         setToolRegistered(tools.some((t) => t.id === SDAPI_TOOL_ID));
         setCodexToolRegistered(tools.some((t) => t.id === CODEX_TOOL_ID));
@@ -396,7 +401,8 @@ export function ImageGenTab() {
     || denoiseByMode.local !== saved.denoiseByMode.local
     || denoiseByMode.external !== saved.denoiseByMode.external
     || JSON.stringify(renderDefaults) !== saved.renderDefaultsJson
-    || videoGenMode !== saved.videoGenMode;
+    || videoGenMode !== saved.videoGenMode
+    || videoGenDisplaySleep !== saved.videoGenDisplaySleep;
 
   const handleSave = async () => {
     setSaving(true);
@@ -441,7 +447,7 @@ export function ImageGenTab() {
       ),
       // Install-wide video pin (#3231 Phase 4). Spread over the loaded slice so
       // sibling keys (defaultModelId) survive the wholesale slice replace.
-      videoGen: { ...videoGenSliceRef.current, mode: videoGenMode || null },
+      videoGen: { ...videoGenSliceRef.current, mode: videoGenMode || null, displaySleep: videoGenDisplaySleep },
     };
     try {
       await updateSettings(patch, { silent: true });
@@ -458,6 +464,7 @@ export function ImageGenTab() {
         cleanC2PAByMode, denoiseByMode,
         renderDefaultsJson: JSON.stringify(patch.renderDefaults),
         videoGenMode,
+        videoGenDisplaySleep,
       });
       // Reflect the pruned no-op entries back into the editor state so the
       // dirty check compares like against like after a save.
@@ -749,6 +756,18 @@ export function ImageGenTab() {
             </select>
           </FormField>
         </div>
+        <label className="flex items-start gap-3 border border-port-border rounded-lg px-3 py-3 text-sm text-gray-300 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={videoGenDisplaySleep}
+            onChange={(e) => setVideoGenDisplaySleep(e.target.checked)}
+            className="mt-0.5 accent-port-accent"
+          />
+          <span>
+            <span className="block font-medium text-white">Sleep display during local MLX video renders</span>
+            <span className="block text-xs text-gray-500 mt-0.5">Keeps the system awake while reducing WindowServer GPU contention on affected Apple silicon. Turn off only when another headless workflow manages display power.</span>
+          </span>
+        </label>
         <div className="space-y-3">
           {RENDER_TARGET_OPTIONS.map(({ id, label, video }) => {
             const entry = renderDefaults[id] || {};

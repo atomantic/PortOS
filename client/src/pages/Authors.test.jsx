@@ -67,7 +67,9 @@ describe('Authors headshot generation', () => {
   const openCreateForm = async () => {
     renderAuthors();
     await screen.findByText(/No authors yet/i);
-    fireEvent.click(screen.getByRole('button', { name: /New Author/i }));
+    // The empty master-detail view now exposes contextual create actions in
+    // addition to the page-level action; all of them intentionally open /new.
+    fireEvent.click(screen.getAllByRole('button', { name: /New Author/i })[0]);
   };
 
   // Re-render the component without changing generation state, so a freshly

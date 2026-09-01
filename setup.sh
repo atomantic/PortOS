@@ -40,7 +40,7 @@ fi
 # deps + the trusted native rebuilds (scripts/trusted-rebuilds.js) + data dir, db, and browser
 # setup. install:all is kept as a backward-compat alias.
 echo "Installing dependencies and running setup..."
-if ! npm run setup; then
+if ! PORTOS_DEFER_SETUP_GUIDE=1 npm run setup; then
     echo ""
     echo "==================================="
     echo "  Setup incomplete"
@@ -76,9 +76,9 @@ if node --input-type=module -e "import('./server/lib/tailscale.js').then(m => pr
         echo "    Without it, the 'Enable HTTPS' button on the Instances page will fail with EPERM."
     fi
     # Re-run cert setup now that the unsandboxed CLI is available. `npm run
-    # setup` already ran setup-cert.js with only the sandboxed CLI, falling
-    # back to self-signed; without this re-run the instance stays on the
-    # fallback cert until the user manually invokes `npm run setup:cert`.
+    # setup` already made a safe attempt with only the sandboxed CLI, but it
+    # deliberately stayed on HTTP rather than silently creating a self-signed
+    # fallback. This second attempt can now write the trusted cert files.
     if [ "$brewInstalled" = "1" ]; then
         echo "Re-running cert provisioning with the freshly-installed Tailscale CLI..."
         npm run setup:cert || echo "⚠️  setup:cert failed — re-run manually if needed."
@@ -211,6 +211,8 @@ if [ "$start_now" = "1" ]; then
     echo "==================================="
     echo ""
     print_access_url
+    echo ""
+    node scripts/setup-guide.js --assume-active
     echo "Logs:      npm run pm2:logs"
     echo "Stop:      npm run pm2:stop"
     echo ""
@@ -226,5 +228,7 @@ else
     echo "  Logs:         npm run pm2:logs"
     echo ""
     print_access_url
+    echo ""
+    node scripts/setup-guide.js
     echo ""
 fi

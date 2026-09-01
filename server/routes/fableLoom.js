@@ -1,11 +1,11 @@
 /**
  * FableLoom REST surface — branching narratives.
  *
- * CRUD for looms/episodes/nodes plus the AI lanes (weave/branch/feedback/review/play)
- * and the deterministic graph validation. Every AI endpoint is a direct
- * user action in the same request (AI Provider Usage Policy). Scene media
- * rides the shared image/video generation queues with a `fableLoom`
- * destination tag — there are no bespoke generation endpoints here.
+ * CRUD for looms/episodes/nodes plus the AI lanes (weave/branch/feedback/review/play),
+ * the deterministic graph validation, and user-triggered fal.ai browser video automation.
+ * Every AI endpoint is a direct user action in the same request (AI Provider Usage Policy).
+ * Standard scene media rides the shared image/video generation queues with a `fableLoom`
+ * destination tag, while fal.ai automation uses a dedicated serialized browser runner.
  */
 
 import { Router } from 'express';
@@ -16,6 +16,7 @@ import {
   episodeCreateSchema,
   episodePatchSchema,
   feedbackSchema,
+  falVideoAutomationSchema,
   loomCreateSchema,
   loomListQuerySchema,
   loomPatchSchema,
@@ -67,6 +68,7 @@ import {
   feedbackSeriesPlan,
   generateEpisodeOutline,
   generateSeriesPlan,
+  getFalVideoAutomation,
   getEpisodeProductionBatch,
   getHostedSession,
   getLoom,
@@ -81,6 +83,7 @@ import {
   reviewSeriesPlan,
   reviewSeriesTeleplay,
   startEpisodeProductionBatch,
+  startFalVideoAutomation,
   updateEpisode,
   updateHostedSession,
   updateLoom,
@@ -257,6 +260,28 @@ router.patch('/:id/episodes/:episodeId/nodes/:nodeId', asyncHandler(async (req, 
 
 router.delete('/:id/episodes/:episodeId/nodes/:nodeId', asyncHandler(async (req, res) => {
   res.json(await deleteNode(req.params.id, req.params.episodeId, req.params.nodeId));
+}));
+
+// The free fal.ai allowance is browser-only. A direct user click starts one
+// serialized Playwright job against PortOS's persistent CDP browser; the job
+// owns the eventual gallery write + scene attachment even if the page closes.
+router.post('/:id/episodes/:episodeId/nodes/:nodeId/fal-video', asyncHandler(async (req, res) => {
+  const input = validateRequest(falVideoAutomationSchema, req.body);
+  res.status(202).json(await startFalVideoAutomation(
+    req.params.id,
+    req.params.episodeId,
+    req.params.nodeId,
+    input,
+  ));
+}));
+
+router.get('/:id/episodes/:episodeId/nodes/:nodeId/fal-video/:jobId', asyncHandler(async (req, res) => {
+  res.json(getFalVideoAutomation(
+    req.params.id,
+    req.params.episodeId,
+    req.params.nodeId,
+    req.params.jobId,
+  ));
 }));
 
 // --- Transitions ------------------------------------------------------------

@@ -150,6 +150,13 @@ export function normalizeResetAt(limit, { now = Date.now(), timeZone } = {}) {
   return epochMs === null ? { epochMs: null, source: 'unknown' } : { epochMs, source: 'parsed' };
 }
 
+/**
+ * Compute fractional hours remaining until quota window reset.
+ *
+ * @param {{ resetsAt?: string, timezone?: string }} limit - Limit object containing resetsAt string
+ * @param {{ now?: number, timeZone?: string }} [opts] - Reference timestamp and optional fallback timeZone
+ * @returns {number|null} Fractional hours until reset (negative if already in the past), or null if indeterminate
+ */
 export function hoursUntilReset(limit, opts = {}) {
   const { epochMs } = normalizeResetAt(limit, opts);
   return epochMs === null ? null : (epochMs - (opts.now ?? Date.now())) / HOUR_MS;

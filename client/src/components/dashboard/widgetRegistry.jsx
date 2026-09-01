@@ -27,6 +27,8 @@ const FeedsWidget           = lazyWithReload(() => import('./builtins/FeedsWidge
 const MeatSpaceStreakWidget = lazyWithReload(() => import('./builtins/MeatSpaceStreakWidget'));
 const AutoFixMetricsWidget  = lazyWithReload(() => import('./builtins/AutoFixMetricsWidget'));
 const DailyDriverWidget     = lazyWithReload(() => import('./builtins/DailyDriverWidget'));
+const TodayAgendaWidget     = lazyWithReload(() => import('./builtins/TodayAgendaWidget'));
+const OnThisDayWidget       = lazyWithReload(() => import('./builtins/OnThisDayWidget'));
 const ActiveProcessingWidget = lazyWithReload(() => import('./ActiveProcessingWidget'));
 const DailyActionsWidget   = lazyWithReload(() => import('../DailyActionsWidget'));
 
@@ -71,6 +73,8 @@ export const WIDGETS = [
   { id: 'hourly-activity',   label: 'Activity by Hour',      Component: HourlyActivityWidget,   width: 'full',    defaultH: 4, gate: (s) => !!s.usage?.hourlyActivity && s.usage.hourlyActivity.some((v) => v > 0) },
   { id: 'feeds',             label: 'Feeds Digest',          Component: FeedsWidget,            width: 'quarter', defaultH: 4, gate: (s) => (s.feeds?.totalFeeds ?? 0) > 0 },
   { id: 'meatspace-streak',  label: 'Health Logging Streak', Component: MeatSpaceStreakWidget,  width: 'third',   defaultH: 4, gate: (s) => (s.meatspaceLogging?.totalLogged ?? 0) > 0 },
+  { id: 'today-agenda',      label: 'Today\'s Agenda',       Component: TodayAgendaWidget,      width: 'third',   defaultH: 4, gate: (s) => (s.calendarAgenda?.accountCount ?? 0) > 0 },
+  { id: 'on-this-day',       label: 'On This Day',           Component: OnThisDayWidget,        width: 'third',   defaultH: 4, gate: (s) => (s.brainOnThisDay?.total ?? 0) > 0 },
   { id: 'autofix-metrics',   label: 'Auto-Fix Telemetry',    Component: AutoFixMetricsWidget,   width: 'quarter', defaultH: 5 },
   { id: 'active-processing', label: 'Active Processing',     Component: ActiveProcessingWidget, width: 'half',    defaultH: 5 },
 ];

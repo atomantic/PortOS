@@ -12,7 +12,7 @@ import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import * as seriesSvc from './series.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord,
-  flushBaseHashes, deleteSyncBaseHash,
+  flushBaseHashes, deleteSyncBaseHash, withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
 import { store, readState, saveIssuesNow, renumberInline, sanitizeIssue } from './issuesShared.js';
 
@@ -185,7 +185,8 @@ export async function pruneTombstonedIssues(beforeMs) {
     // pushRecordToPeer), but no eviction existed — so a pruned issue's key
     // would linger in sync_base_hashes.json forever. Mirrors the universe /
     // series / collection prune paths.
-    await Promise.all(prunable.map((i) => deleteSyncBaseHash('issue', i.id)));
+    await withBaseHashFlushBatch(() =>
+      Promise.all(prunable.map((i) => deleteSyncBaseHash('issue', i.id))));
     return { pruned: prunable.length };
   });
 }

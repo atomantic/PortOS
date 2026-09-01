@@ -19,6 +19,7 @@ import {
   DISPATCH_HINT_GUIDANCE,
   JIRA_DISPATCH_HINT_GUIDANCE,
   REPO_STUDY_LABEL_CONTRACT,
+  formatOptionalIssueLabelFlags,
 } from './dispatchLabels.js';
 import { getOriginInfo, readOriginRemoteUrl } from './gitRemote.js';
 import { getAuditFilingPreset, isAuditTaskType } from './auditCatalog.js';
@@ -249,9 +250,9 @@ export function formatTrackerInstructions(tracker, options = {}) {
     issueLabelContract,
     planItemBody, bodyRequirements, planCommitMessage,
   } = { ...TRACKER_FILING_PRESETS['reference-watch'], ...options };
-  const forgeLabelFlags = issueLabelContract?.forgeFlags
-    ? `${issueLabelContract.forgeFlags} [--label "good first issue"] [--label "help wanted"]`
-    : '[--label model:<tier>] [--label effort:<level>] [--label "good first issue"] [--label "help wanted"]';
+  // Rendered from the shared slot list rather than a literal, so a new label
+  // axis reaches this copy-pasteable example without re-patching it here.
+  const forgeLabelFlags = formatOptionalIssueLabelFlags(issueLabelContract?.forgeFlags);
   const jiraLabelContract = issueLabelContract
     ? `\n  ${issueLabelContract.instructions.split('\n').join('\n  ')}\n  For JIRA, use the equivalent labels ${issueLabelContract.jiraFlags}.`
     : '';

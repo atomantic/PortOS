@@ -94,9 +94,12 @@ function extractColumnNames(body) {
     .filter((p) => p && !/^(PRIMARY|FOREIGN|UNIQUE|CHECK|CONSTRAINT)$/i.test(p));
 }
 
+// Matches both plain and UNIQUE index declarations: a dedupe index is usually
+// the UNIQUE one (idx_user_action_dedupe), and a name captured on only one side
+// of the parity check is exactly the drift this file exists to catch.
 function extractIndexNames(source, prefix = 'idx_catalog_') {
   const out = new Set();
-  const re = new RegExp(`CREATE INDEX IF NOT EXISTS\\s+(${prefix}\\w+)`, 'gi');
+  const re = new RegExp(`CREATE (?:UNIQUE )?INDEX IF NOT EXISTS\\s+(${prefix}\\w+)`, 'gi');
   let m;
   while ((m = re.exec(source)) !== null) out.add(m[1]);
   return out;
@@ -166,6 +169,32 @@ describe('catalog DDL parity (init-db.sql ↔ db.js ensureSchema)', () => {
     const jsIdx = extractIndexNames(DB_JS, 'idx_stacker_news_');
     expect([...sqlIdx].sort()).toEqual([...jsIdx].sort());
     expect(sqlIdx.size).toBeGreaterThan(0);
+  });
+
+  // The operator-action ledger (#5594) is a machine-local db-primary table that
+  // ships in BOTH sources. `human_activity_events` has no dedicated assertion here
+  // and that is a gap, not a precedent — a column or index added to one file only
+  // would leave every EXISTING install without it (init-db.sql runs on fresh
+  // provisioning alone), so pin columns and index names for this one explicitly.
+  it('user_action_events has the same columns and indexes in both files', () => {
+    const sqlBody = extractCreateTable(INIT_SQL, 'user_action_events');
+    const jsBody = extractCreateTable(DB_JS, 'user_action_events');
+    expect(sqlBody, 'init-db.sql missing CREATE TABLE user_action_events').toBeTruthy();
+    expect(jsBody, 'db/schema/userActions.js missing CREATE TABLE user_action_events').toBeTruthy();
+    expect([...new Set(extractColumnNames(sqlBody))].sort())
+      .toEqual([...new Set(extractColumnNames(jsBody))].sort());
+
+    const sqlIdx = extractIndexNames(INIT_SQL, 'idx_user_action_');
+    const jsIdx = extractIndexNames(DB_JS, 'idx_user_action_');
+    expect([...sqlIdx].sort()).toEqual([...jsIdx].sort());
+    // The dedupe index is the idempotency contract (ON CONFLICT (type, dedupe_key)
+    // DO NOTHING) — name it so dropping it can never read as a passing set match.
+    expect([...sqlIdx].sort()).toEqual([
+      'idx_user_action_actor_time',
+      'idx_user_action_dedupe',
+      'idx_user_action_happened',
+      'idx_user_action_type_time',
+    ]);
   });
 
   it('every idx_catalog_* index name appears in both files', () => {

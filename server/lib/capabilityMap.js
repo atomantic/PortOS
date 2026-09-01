@@ -10,6 +10,8 @@
 //   'error'        — configured but broken (red)
 //   'unconfigured' — not set up yet (gray) — the setup-checklist signal
 
+import { localRuntimeForProvider } from './localProviderRuntime.js';
+
 export const CAPABILITY_STATUS = Object.freeze({
   OK: 'ok',
   WARN: 'warn',
@@ -19,7 +21,14 @@ export const CAPABILITY_STATUS = Object.freeze({
 
 const { OK, WARN, ERROR, UNCONFIGURED } = CAPABILITY_STATUS;
 
-const row = (id, label, settingsPath, { status, configured, summary, detail }) => ({
+const row = (id, label, settingsPath, {
+  status,
+  configured,
+  summary,
+  detail,
+  setupRequired = false,
+  setupComplete = status === OK,
+}) => ({
   id,
   label,
   settingsPath,
@@ -27,39 +36,98 @@ const row = (id, label, settingsPath, { status, configured, summary, detail }) =
   configured,
   summary,
   detail: detail ?? null,
+  setupRequired,
+  setupComplete,
 });
 
 const plural = (n, one, many) => (n === 1 ? one : (many ?? `${one}s`));
 
-export function providersRow(providers = [], statuses = {}) {
+export function providersRow(
+  providers = [],
+  statuses = {},
+  prerequisiteReadiness = undefined,
+  localReadiness = undefined,
+) {
   const enabled = (Array.isArray(providers) ? providers : []).filter((p) => p && p.enabled !== false);
   if (enabled.length === 0) {
     return row('providers', 'AI Providers', '/ai', {
       status: UNCONFIGURED,
       configured: false,
       summary: 'No AI providers configured',
+      setupRequired: true,
+      setupComplete: false,
     });
   }
   // getAllProviderStatuses() returns { ...cache, providers: { [id]: status } }.
   // A provider that was never marked unavailable has no entry — treat as available.
   const statusMap = statuses?.providers ?? statuses ?? {};
+  const prerequisiteReadinessRequested = prerequisiteReadiness !== undefined;
+  const hasPrerequisiteReadiness = prerequisiteReadiness
+    && typeof prerequisiteReadiness === 'object'
+    && !Array.isArray(prerequisiteReadiness);
+  const localReadinessRequested = localReadiness !== undefined;
+  const hasLocalReadiness = localReadiness
+    && typeof localReadiness === 'object'
+    && !Array.isArray(localReadiness);
   let available = 0;
   let unavailable = 0;
+  let blocked = 0;
+  let unknown = 0;
+  let standby = 0;
+  let setupReady = 0;
   for (const p of enabled) {
+    const prerequisite = hasPrerequisiteReadiness ? prerequisiteReadiness[p.id] : null;
+    if (prerequisite?.status === 'blocked') {
+      blocked += 1;
+      continue;
+    }
+    if (prerequisite?.status === 'unknown') {
+      unknown += 1;
+      continue;
+    }
+    if (prerequisiteReadinessRequested && prerequisite?.status !== 'ready') {
+      unknown += 1;
+      continue;
+    }
+    if (localReadinessRequested && localRuntimeForProvider(p)) {
+      const local = hasLocalReadiness ? localReadiness[p.id] : null;
+      if (local?.ready !== true && local?.standby === true) {
+        standby += 1;
+        continue;
+      }
+      if (local?.ready === false) {
+        const checks = Array.isArray(local.checks) ? local.checks : [];
+        if (checks.length > 0 && checks.every((check) => check?.ok !== false)) unknown += 1;
+        else blocked += 1;
+        continue;
+      }
+      if (local?.ready !== true) {
+        unknown += 1;
+        continue;
+      }
+    }
+    if (prerequisiteReadinessRequested) setupReady += 1;
     const s = statusMap?.[p.id];
     if (!s || s.available) available += 1;
     else unavailable += 1;
   }
   let status = OK;
-  if (available === 0) status = ERROR;
-  else if (unavailable > 0) status = WARN;
-  const parts = [`${enabled.length} configured`, `${available} available`];
+  if (available === 0) status = unknown > 0 || standby > 0 ? WARN : ERROR;
+  else if (unavailable > 0 || blocked > 0 || unknown > 0) status = WARN;
+  const parts = [`${enabled.length} enabled`, `${available} ready`];
   if (unavailable > 0) parts.push(`${unavailable} unavailable`);
+  if (blocked > 0) parts.push(`${blocked} need setup`);
+  if (unknown > 0) parts.push(`${unknown} still checking`);
+  if (standby > 0) parts.push(`${standby} standby`);
   return row('providers', 'AI Providers', '/ai', {
     status,
     configured: true,
     summary: parts.join(' · '),
-    detail: { configured: enabled.length, available, unavailable },
+    detail: prerequisiteReadinessRequested
+      ? { configured: enabled.length, available, unavailable, blocked, unknown, standby, setupReady }
+      : { configured: enabled.length, available, unavailable },
+    setupRequired: true,
+    setupComplete: prerequisiteReadinessRequested ? setupReady > 0 : available > 0,
   });
 }
 
@@ -145,6 +213,22 @@ export function voiceRow(cfg = {}) {
 }
 
 export function networkRow(net = {}) {
+  if (net?.setup && typeof net.setup === 'object') {
+    const complete = net.setup.complete === true;
+    const started = net?.tailscale?.available === true || net?.cert?.provisioned === true;
+    return row('network', 'Tailscale & HTTPS', '/instances', {
+      status: complete ? OK : started ? WARN : UNCONFIGURED,
+      configured: started,
+      summary: net.setup.summary || 'Tailscale HTTPS setup is incomplete',
+      detail: {
+        https: !!net?.httpsEnabled,
+        tailscaleHost: net.setup.dnsName || net?.cert?.tailscaleHost || null,
+        nextStepId: net.setup.nextStep?.id || null,
+      },
+      setupRequired: true,
+      setupComplete: complete,
+    });
+  }
   const https = !!net?.httpsEnabled;
   const tailscaleHost = net?.cert?.tailscaleHost || null;
   const tailscale = !!tailscaleHost;
@@ -153,6 +237,8 @@ export function networkRow(net = {}) {
       status: UNCONFIGURED,
       configured: false,
       summary: 'HTTP only · Tailscale not detected',
+      setupRequired: true,
+      setupComplete: false,
     });
   }
   return row('network', 'Tailscale & HTTPS', '/instances', {
@@ -163,6 +249,8 @@ export function networkRow(net = {}) {
       tailscale ? `Tailscale: ${tailscaleHost}` : 'Tailscale not detected',
     ].join(' · '),
     detail: { https, tailscaleHost },
+    setupRequired: true,
+    setupComplete: https && tailscale,
   });
 }
 
@@ -256,11 +344,16 @@ export function appsRow(summary = {}) {
  */
 export function buildCapabilityRows(data = {}) {
   return [
-    providersRow(data.providers, data.providerStatuses),
+    networkRow(data.network),
+    providersRow(
+      data.providers,
+      data.providerStatuses,
+      data.providerPrerequisiteReadiness,
+      data.providerLocalReadiness,
+    ),
     calendarRow(data.calendarAccounts),
     brainRow({ memoryCount: data.memoryCount, embeddingProviderConfigured: data.embeddingProviderConfigured }),
     voiceRow(data.voiceConfig),
-    networkRow(data.network),
     genomeRow(data.genome),
     telegramRow(data.telegram),
     messagesRow(data.messageAccounts),
@@ -288,4 +381,16 @@ export function summarizeCapabilities(rows = []) {
   else if (counts.ok > 0) overall = OK;
   else overall = UNCONFIGURED;
   return { ...counts, total: list.length, overall };
+}
+
+/** Roll up only the two first-run contracts (network + one usable AI provider). */
+export function summarizeSetupCapabilities(rows = []) {
+  const setupRows = (Array.isArray(rows) ? rows : []).filter((entry) => entry?.setupRequired === true);
+  const ready = setupRows.filter((entry) => entry.setupComplete === true).length;
+  return {
+    total: setupRows.length,
+    ready,
+    remaining: setupRows.length - ready,
+    complete: setupRows.length > 0 && ready === setupRows.length,
+  };
 }

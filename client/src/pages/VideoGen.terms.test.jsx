@@ -36,7 +36,6 @@ const state = vi.hoisted(() => ({
   generateVideo: vi.fn(),
   startDownload: vi.fn(),
   repairModel: vi.fn(),
-  enqueue: vi.fn(),
   attach: vi.fn(),
   eventSourceRef: { current: null },
   // Stands in for the persisted install-wide acceptance list
@@ -110,15 +109,6 @@ vi.mock('../hooks/useMediaAnnotations', () => ({
   useMediaAnnotations: () => ({ annotations: {}, updateAnnotation: vi.fn(), getCardProps: vi.fn(() => ({})) }),
 }));
 vi.mock('../hooks/usePreviewRoute', () => ({ default: () => [null, vi.fn()] }));
-vi.mock('../hooks/useVideoGenQueue.js', () => ({
-  useVideoGenQueue: () => ({
-    queue: [],
-    enqueue: state.enqueue,
-    removeFromQueue: vi.fn(),
-    clearFinishedQueue: vi.fn(),
-    cancelRunning: vi.fn(),
-  }),
-}));
 vi.mock('../components/ui/Toast', () => ({
   default: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), loading: vi.fn() }),
 }));
@@ -145,7 +135,7 @@ vi.mock('../components/videoGen/RuntimeFingerprint', () => ({ default: () => nul
 vi.mock('../components/videoGen/VideoGenGallery', () => ({ default: () => null }));
 vi.mock('../components/media/MediaPreview', () => ({ default: () => null }));
 vi.mock('../components/media/StylePresetPicker', () => ({ default: () => null }));
-vi.mock('../components/media/BatchQueuePanel', () => ({ default: () => null }));
+vi.mock('../components/media/UniverseStylePicker', () => ({ default: () => null }));
 vi.mock('../components/media/MediaJobsQueue', () => ({ default: () => null }));
 vi.mock('../components/imageGen/LoraPicker', () => ({ default: () => null }));
 vi.mock('../components/media/ResolutionField', () => ({ default: () => null }));
@@ -178,7 +168,6 @@ describe('VideoGen MiniMax H3 orchestration', () => {
     state.generateVideo.mockReset().mockResolvedValue({ jobId: 'job-1' });
     state.startDownload.mockReset();
     state.repairModel.mockReset().mockResolvedValue({ ok: true });
-    state.enqueue.mockReset();
     state.acceptedTerms = [];
     state.setVideoModelTerms.mockReset().mockImplementation(async (termsId, accepted) => {
       state.acceptedTerms = accepted
@@ -213,8 +202,10 @@ describe('VideoGen MiniMax H3 orchestration', () => {
 
     await waitFor(() => expect(enqueue()).toBeEnabled());
     fireEvent.click(enqueue());
-    expect(state.enqueue).toHaveBeenCalledWith(expect.objectContaining({ modelId: H3_ONE.id }));
-    expect(state.enqueue.mock.calls[0][0]).not.toHaveProperty('termsAcceptance');
+    await waitFor(() => expect(state.generateVideo).toHaveBeenCalledWith(expect.objectContaining({
+      modelId: H3_ONE.id,
+    })));
+    expect(state.generateVideo.mock.calls[0][0]).not.toHaveProperty('termsAcceptance');
 
     await act(async () => {
       fireEvent.submit(prompt().closest('form'));

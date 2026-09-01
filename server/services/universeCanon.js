@@ -42,6 +42,13 @@ const targetForPrompt = (entry) => ({
   firstAppearance: entry.firstAppearance || null,
 });
 
+/**
+ * Style context for an LLM TEXT prompt (canon refine / differentiate / expand).
+ * Free-text `styleNotes` belongs here — it is authored for the writing stages.
+ *
+ * IMAGE prompts must NOT use this: see `lib/universeVisualStyle.js`, which
+ * emits the curated `influences.embrace` tokens only.
+ */
 export const buildStyleClause = (universe) => {
   const embraceTokens = joinInfluenceList(universe.influences?.embrace);
   const bits = [

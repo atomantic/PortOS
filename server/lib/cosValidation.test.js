@@ -29,6 +29,7 @@ import {
   buildReviewerPinNote,
   buildReviewersCsv,
   claimSafeReviewers,
+  prioritizeToolFreeReviewers,
   resolveReviewerConfig,
   resolveClaimReviewerConfig,
   reviewerConfigMetadata,
@@ -697,6 +698,13 @@ describe('claim reviewer round-trip (prompt CSV ↔ persisted metadata)', () => 
     expect(claimSafeReviewers(['copilot'])).toEqual(['codex']);
     expect(claimSafeReviewers([])).toEqual(['codex']);
     expect(claimSafeReviewers(undefined)).toEqual(['codex']);
+  });
+
+  it('stably prioritizes tool-free local reviewers ahead of tool-enabled reviewers', () => {
+    expect(prioritizeToolFreeReviewers(['codex', 'ollama', 'copilot', 'lmstudio', 'claude']))
+      .toEqual(['ollama', 'lmstudio', 'codex', 'copilot', 'claude']);
+    expect(resolveReviewerConfig({ reviewers: ['codex', 'ollama'] }, null, null).reviewers)
+      .toEqual(['ollama', 'codex']);
   });
 
   it('resolves through the claim guard from every input shape a claim task can carry', () => {

@@ -11,6 +11,8 @@ import * as googleAuth from '../services/googleAuth.js';
 import * as calendarGoogleApiSync from '../services/calendarGoogleApiSync.js';
 import * as googleOAuthAutoConfig from '../services/googleOAuthAutoConfig.js';
 import { getToken, getTokenStatus, clearTokenCache } from '../services/messageTokenExtractor.js';
+import { getUserTimezone } from '../services/userTimezone.js';
+import { localDayWindowUtc } from '../lib/timezone.js';
 
 const router = express.Router();
 
@@ -136,6 +138,37 @@ router.get('/sync/:accountId/status', asyncHandler(async (req, res) => {
 }));
 
 // === Event Routes ===
+
+// Today's agenda in the user's timezone — the dashboard widget's read. The
+// day window comes from localDayWindowUtc (shared with the voice
+// calendar_today tool) so DST-transition days keep the right bounds.
+router.get('/agenda', asyncHandler(async (req, res) => {
+  const { limit } = parsePagination(req.query, { defaultLimit: 8, maxLimit: 20 });
+  const accounts = await calendarAccounts.listAccounts();
+  const accountCount = accounts.filter((a) => a.enabled !== false).length;
+  if (accountCount === 0) {
+    return res.json({ date: null, timezone: null, accountCount: 0, events: [], total: 0 });
+  }
+  const timezone = await getUserTimezone();
+  const { date, startDate, endDate } = localDayWindowUtc(timezone);
+  const { events = [], total = 0 } = await calendarSync.getEvents({ startDate, endDate, limit });
+  res.json({
+    date,
+    timezone,
+    accountCount,
+    events: events.map((e) => ({
+      id: e.id,
+      accountId: e.accountId,
+      title: e.title || 'Untitled event',
+      startTime: e.startTime,
+      endTime: e.endTime ?? null,
+      isAllDay: !!e.isAllDay,
+      location: e.location || null
+    })),
+    total
+  });
+}));
+
 router.get('/events', asyncHandler(async (req, res) => {
   const { accountId, search, startDate, endDate } = req.query;
   if (accountId && !UUID_RE.test(accountId)) {

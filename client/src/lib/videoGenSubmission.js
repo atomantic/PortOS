@@ -1,4 +1,5 @@
 import { composeStyledPrompt } from './composeStyledPrompt';
+import { universeStylePreset } from './universeStylePreset.js';
 import { isLtx2FamilyRuntime } from './runnerFamilies';
 import { isDefaultI2vReferenceMode } from './videoReferenceModes';
 import { clampImageEdge } from './imageGenResolutions';
@@ -17,10 +18,15 @@ import {
 
 // The form owns state transitions and validation. This module owns the three
 // request contracts the video route accepts: Grok, federated, and local.
+const stylePresetsFor = (selectedUniverse, stylePreset) => [
+  selectedUniverse ? universeStylePreset(selectedUniverse) : null,
+  stylePreset,
+].filter(Boolean);
+
 export function envelopVideoPrompt(text, {
-  currentModel, negativePrompt, stylePreset, noMusic, disableAudio,
+  currentModel, negativePrompt, stylePreset, selectedUniverse, noMusic, disableAudio,
 }) {
-  const composed = composeStyledPrompt(text, negativePrompt, stylePreset);
+  const composed = composeStyledPrompt(text, negativePrompt, stylePresetsFor(selectedUniverse, stylePreset));
   const effectiveDisableAudio = supportsVideoAudioControls(currentModel) && disableAudio;
   return (supportsVideoAudioPromptControls(currentModel) && noMusic && !effectiveDisableAudio && !/no music/i.test(composed.prompt))
     ? `${composed.prompt}\n\nno music, no soundtrack`
@@ -29,7 +35,7 @@ export function envelopVideoPrompt(text, {
 
 export function buildVideoGenSubmission({
   isGrok, grokDuration, remoteSubmissionFields,
-  prompt, negativePrompt, stylePreset,
+  prompt, negativePrompt, stylePreset, selectedUniverse,
   width, height, mode, sourceImageFile, sourceImageUpload,
   numFrames, fps, steps, guidanceScale, seed,
   currentModel, models, modelId, tiling, textEncoderId, speedProfileId, draftDecode,
@@ -40,10 +46,10 @@ export function buildVideoGenSubmission({
   icReferenceImageFiles, icStrength, icSkipStage2,
   chainingActive, chunks, chunkPrompts, contextFrames,
 }) {
-  const composed = composeStyledPrompt(prompt, negativePrompt, stylePreset);
+  const composed = composeStyledPrompt(prompt, negativePrompt, stylePresetsFor(selectedUniverse, stylePreset));
   const effectiveDisableAudio = supportsVideoAudioControls(currentModel) && disableAudio;
   const withEnvelope = (text) => envelopVideoPrompt(text, {
-    currentModel, negativePrompt, stylePreset, noMusic, disableAudio,
+    currentModel, negativePrompt, stylePreset, selectedUniverse, noMusic, disableAudio,
   });
   // The backing array is deliberately not truncated as chunks change. Only
   // slice live chunks at the wire boundary.

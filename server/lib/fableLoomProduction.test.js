@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  asFableLoomRenderPreferences,
   asFableLoomRenderSettings,
   buildEpisodeProductionPlan,
   computeTopologicalNodeOrder,
@@ -73,6 +74,22 @@ describe('fableLoomProduction', () => {
     });
     expect(asFableLoomRenderSettings({ formatId: 'unknown' })).toMatchObject({
       aspectRatio: '16:9', width: 1024, height: 576,
+    });
+  });
+
+  it('normalizes persisted image and video rendering preferences', () => {
+    expect(asFableLoomRenderPreferences({
+      imageMode: 'local',
+      imageModel: '  image-model  ',
+      videoMode: 'grok',
+      videoModel: 'stale-local-model',
+      effort: 'high',
+    })).toEqual({
+      imageMode: 'local',
+      imageModel: 'image-model',
+      videoMode: 'grok',
+      videoModel: null,
+      effort: 'high',
     });
   });
 

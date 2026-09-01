@@ -41,6 +41,7 @@ import { atomicWrite, ensureDir, readJSONFile, safeJSONParse, safeDate, PATHS } 
 import { getInstanceId } from './instances.js';
 import * as brainSyncLog from './brainSyncLog.js';
 import { createCollectionStore } from '../lib/collectionStore.js';
+import { linkIsRepo, normalizeRepoLinkFields } from '../lib/repoLinkFields.js';
 
 const DATA_DIR = PATHS.brain;
 
@@ -1029,13 +1030,22 @@ export const updateMemoryEntry = (id, data) => update('memories', id, data);
 export const deleteMemoryEntry = (id) => remove('memories', id);
 
 // Links
-export const getLinks = (filters) => filters ? query('links', filters) : getAll('links');
-export const getLinkById = (id) => getById('links', id);
-export const createLink = (data) => create('links', data);
-export const updateLink = (id, data) => update('links', id, data);
+//
+// EVERY link leaves this module through `readLink`/`readLinks`, which apply
+// `normalizeRepoLinkFields` so a record written by an older PortOS (or arriving
+// from a peer still on the GitHub-only field names) reads as a repo — see
+// lib/repoLinkFields.js. Route through them when adding an accessor; the
+// persisted payload itself is never rewritten (the derivation belongs to
+// `createLinkFromUrl`, which owns the URL).
+const readLink = async (record) => normalizeRepoLinkFields(await record);
+const readLinks = async (records) => (await records).map(normalizeRepoLinkFields);
+export const getLinks = (filters) => readLinks(filters ? query('links', filters) : getAll('links'));
+export const getLinkById = (id) => readLink(getById('links', id));
+export const createLink = (data) => readLink(create('links', data));
+export const updateLink = (id, data) => readLink(update('links', id, data));
 // Batch reorder: per-id write queues so a multi-chip drag merges each link
 // against its freshest persisted record.
-export const reorderLinks = (updates) => updateMany('links', updates);
+export const reorderLinks = (updates) => readLinks(updateMany('links', updates));
 export const deleteLink = (id) => remove('links', id);
 
 // ─── Link summary index (issue #3509) ───────────────────────────────────────
@@ -1055,11 +1065,12 @@ const projectLinkSummary = (record) => (record && !isTombstone(record)
     // unparseable createdAt, so such a link sorts last deterministically
     // instead of poisoning the comparator with NaN.
     createdAtMs: safeDate(record.createdAt),
-    // Filter keys are stored RAW so the route's strict `===` comparison keeps
-    // its exact semantics (a link with no `isGitHubRepo` field must not match
-    // `?isGitHubRepo=false`, just as the old in-memory filter behaved).
+    // `linkType` is stored RAW so the route's strict `===` comparison keeps its
+    // exact semantics. `isRepo` is resolved through `linkIsRepo` instead, so a
+    // legacy record still carrying only `isGitHubRepo` filters correctly without
+    // the index having to be rebuilt behind the migration.
     linkType: record.linkType,
-    isGitHubRepo: record.isGitHubRepo,
+    isRepo: linkIsRepo(record),
     url: record.url,
   }
   : null);
@@ -1072,7 +1083,6 @@ const linkSummaryIndex = createRecordIndex(projectLinkSummary);
 const projectSummary = (record) => (record && !isTombstone(record)
   ? {
     status: record.status,
-    isGitHubRepo: record.isGitHubRepo,
     capturedAtMs: safeDate(record.capturedAt),
   }
   : null);
@@ -1085,18 +1095,18 @@ const resolveLinkSummaries = () => resolveRecordIndex(linkSummaryIndex, 'links',
  *
  * Filtering, ordering, and the `total` count all come off the cached summary
  * index; only the page's own records are loaded from disk. `linkType` /
- * `isGitHubRepo` are optional and compared strictly, matching the filters the
- * route used to apply in memory.
+ * `isRepo` are optional and compared strictly, matching the filters the route
+ * used to apply in memory.
  */
-export async function getLinksPage({ linkType, isGitHubRepo, limit = 50, offset = 0 } = {}) {
+export async function getLinksPage({ linkType, isRepo, limit = 50, offset = 0 } = {}) {
   const rows = await resolveLinkSummaries();
   // The two filters guard differently ON PURPOSE, mirroring the route code this
   // replaced: `linkType` was a truthiness check (no link type is the empty
-  // string, so `''` means "don't filter"), while `isGitHubRepo` must honour an
+  // string, so `''` means "don't filter"), while `isRepo` must honour an
   // explicit `false` and so can only be skipped when it is genuinely absent.
   const matching = rows.filter(([, summary]) => summary
     && (!linkType || summary.linkType === linkType)
-    && (isGitHubRepo === undefined || summary.isGitHubRepo === isGitHubRepo));
+    && (isRepo === undefined || summary.isRepo === isRepo));
 
   // Newest-first, with the id as a deterministic tiebreak: a bulk import stamps
   // many links with the SAME createdAt, and an unstable order across two page
@@ -1105,7 +1115,7 @@ export async function getLinksPage({ linkType, isGitHubRepo, limit = 50, offset 
 
   const total = matching.length;
   const pageIds = matching.slice(offset, offset + limit).map(([id]) => id);
-  const page = await Promise.all(pageIds.map((id) => getById('links', id)));
+  const page = await readLinks(Promise.all(pageIds.map((id) => getById('links', id))));
   // A record deleted between the index read and the body read comes back null —
   // drop it rather than emitting a hole in the page.
   return { links: page.filter(Boolean), total };
@@ -1127,7 +1137,7 @@ export async function listLinkIds() {
 export async function getLinkByUrl(url) {
   const rows = await resolveLinkSummaries();
   const hit = rows.find(([, summary]) => summary && summary.url === url);
-  return hit ? getById('links', hit[0]) : null;
+  return hit ? readLink(getById('links', hit[0])) : null;
 }
 
 // Buckets (bookmark groups for links)
@@ -1320,7 +1330,7 @@ export async function getSummary() {
     activeProjects: summaries.projects.filter(p => p.status === 'active').length,
     activeIdeas: summaries.ideas.filter(i => !i.status || i.status === 'active').length,
     openAdmin: summaries.admin.filter(a => a.status === 'open').length,
-    gitHubRepos: links.filter(l => l.isGitHubRepo).length,
+    repos: links.filter(l => l.isRepo).length,
     needsReview: inboxCounts.needs_review,
     lastDailyDigest: meta.lastDailyDigest,
     lastWeeklyReview: meta.lastWeeklyReview

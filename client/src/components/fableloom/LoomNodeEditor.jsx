@@ -69,7 +69,7 @@ const characterReferenceInfo = (character) => {
 
 export default function LoomNodeEditor({
   loom, episode, node, universe, onLoomUpdate, onClearSelection, onMakeStart,
-  mediaJobs = {}, onGenerateImage, onGenerateVideo, onOpenFalVideo,
+  mediaJobs = {}, onGenerateImage, onGenerateVideo, onAutomateFalVideo,
   generationDisabled = false, generationDisabledReason = '',
 }) {
   const [form, setForm] = useState(null);
@@ -248,22 +248,19 @@ export default function LoomNodeEditor({
     });
   };
 
-  const runOpenFalVideo = () => {
+  const runAutomateFalVideo = async () => {
     const authoredPrompt = form.videoPrompt.trim() || form.prose.trim();
     if (!authoredPrompt) {
       toast.error('Write the scene first');
       return;
     }
-    // Keep window.open under the originating click. The free-tool handoff does
-    // not read server state, so persisting an unsaved prompt can finish after
-    // the new tab opens without risking a popup blocker.
-    onOpenFalVideo?.({
+    await saveField('videoPrompt', form.videoPrompt);
+    await onAutomateFalVideo?.({
       ...node,
       prose: form.prose,
       videoPrompt: form.videoPrompt,
       cameraMovement: form.cameraMovement,
     });
-    void saveField('videoPrompt', form.videoPrompt);
   };
 
   const attachGalleryVideo = async (_targetNode, item) => {
@@ -703,12 +700,12 @@ export default function LoomNodeEditor({
           jobs={mediaJobs}
           onGenerateImage={runGenerateImage}
           onGenerateVideo={runGenerateVideo}
-          onOpenFalVideo={runOpenFalVideo}
+          onAutomateFalVideo={runAutomateFalVideo}
           onAttachVideo={attachGalleryVideo}
           generationDisabled={aiBlocked || generationDisabled}
           generationDisabledReason={aiBlocked ? 'Wait for scene changes to save' : generationDisabledReason}
-          falDisabled={generationDisabled}
-          falDisabledReason={generationDisabledReason}
+          falDisabled={aiBlocked || generationDisabled}
+          falDisabledReason={aiBlocked ? 'Wait for scene changes to save' : generationDisabledReason}
         />
       </div>
 

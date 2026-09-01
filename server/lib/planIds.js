@@ -24,23 +24,13 @@
 
 import { execGit } from './execGit.js';
 import { stripMarkdownEmphasis } from './markdownText.js';
+import { kebabCase } from './textUtils.js';
 import { spawn } from './childProcess.js';
 
 const SLUG_MAX_LEN = 50;
 const CHECKBOX_RE = /^(?<indent>\s*)-\s+\[(?<box>[ xX])\]\s+(?:\[(?<id>[a-z0-9][a-z0-9-]*)\]\s+)?(?<rest>.*)$/;
 const NEEDS_INPUT_RE = /<!--\s*NEEDS_INPUT\s*-->/;
 const DRIFT_LINE_RE = /^\s*>\s*⚠️\s*DRIFT:/;
-
-/**
- * Lowercase + kebab-case a string, ASCII-only, collapse repeats.
- */
-function kebab(text) {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+|-+$/g, '');
-}
 
 /**
  * Truncate a kebab string at the last `-` boundary at or before `max`.
@@ -60,7 +50,7 @@ function truncateOnBoundary(slug, max) {
  */
 export function slugify(title, takenIds = new Set()) {
   const taken = takenIds instanceof Set ? takenIds : new Set(takenIds);
-  const base = truncateOnBoundary(kebab(stripMarkdownEmphasis(title)), SLUG_MAX_LEN) || 'item';
+  const base = truncateOnBoundary(kebabCase(stripMarkdownEmphasis(title)), SLUG_MAX_LEN) || 'item';
   if (!taken.has(base)) return base;
   // Collision: append -2, -3, ... — keep the suffix inside SLUG_MAX_LEN.
   for (let n = 2; n < 10000; n++) {

@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   VIDEO_STAGE_KIND,
   resolveVideoStagePreview,
-  videoPreviewFrameSrc,
   videoStageAspectRatio,
   videoStageSignature,
 } from './videoStagePreview';
@@ -22,26 +21,6 @@ describe('videoStageAspectRatio', () => {
   });
 });
 
-describe('videoPreviewFrameSrc', () => {
-  it('prefixes a raw base64 body', () => {
-    expect(videoPreviewFrameSrc('iVBORw0KG')).toBe('data:image/png;base64,iVBORw0KG');
-  });
-
-  it('passes an already-usable src through unchanged', () => {
-    expect(videoPreviewFrameSrc('data:image/png;base64,AAA')).toBe('data:image/png;base64,AAA');
-    expect(videoPreviewFrameSrc('/api/lora-training/runs/r1/samples/step_4.png'))
-      .toBe('/api/lora-training/runs/r1/samples/step_4.png');
-    expect(videoPreviewFrameSrc('https://example.com/frame.png')).toBe('https://example.com/frame.png');
-  });
-
-  it('treats absent and empty alike as "no frame" rather than an empty image', () => {
-    expect(videoPreviewFrameSrc(null)).toBeNull();
-    expect(videoPreviewFrameSrc(undefined)).toBeNull();
-    expect(videoPreviewFrameSrc('')).toBeNull();
-    expect(videoPreviewFrameSrc(42)).toBeNull();
-  });
-});
-
 describe('resolveVideoStagePreview', () => {
   const extendSource = { filename: 'clip-a.mp4', thumbnail: 'clip-a.jpg' };
 
@@ -56,18 +35,6 @@ describe('resolveVideoStagePreview', () => {
     const stage = resolveVideoStagePreview({ width: 480, height: 832, sourceImageFile: 'a.png' });
     expect(stage.aspectRatio).toBeCloseTo(480 / 832);
     expect(stage.aspectRatio).toBeLessThan(1);
-  });
-
-  it('prefers a live runner frame over every fallback while rendering', () => {
-    const stage = resolveVideoStagePreview({
-      generating: true,
-      currentImage: 'iVBORw0KG',
-      extendSource,
-      sourceImageFile: 'start.png',
-      result: { filename: 'done.mp4' },
-    });
-    expect(stage.kind).toBe(VIDEO_STAGE_KIND.LIVE);
-    expect(stage.src).toBe('data:image/png;base64,iVBORw0KG');
   });
 
   it('falls back to the animated source clip an extend is continuing', () => {

@@ -10,7 +10,12 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { DISPATCH_HINT_GUIDANCE, JIRA_DISPATCH_HINT_GUIDANCE } from './dispatchLabels.js';
+import {
+  DISPATCH_HINT_GUIDANCE,
+  JIRA_DISPATCH_HINT_GUIDANCE,
+  REPO_STUDY_LABEL_CONTRACT,
+  formatOptionalIssueLabelFlags,
+} from './dispatchLabels.js';
 import { formatTrackerInstructions, TRACKER_FILING_PRESETS } from './workTracker.js';
 
 const REF_WATCH = { slugPrefix: 'ref-watch-', label: 'reference-watch', issueLabel: 'reference-watch' };
@@ -30,7 +35,10 @@ function expectForgeDispatchContract(block, { cli, issueLabel }) {
   expect(block).toContain('model:light|medium|heavy');
   expect(block).toContain('effort:low|medium|high|xhigh|max');
   expect(block).toContain('Omit an axis rather than guessing');
-  expect(block).toContain(`--label ${issueLabel} --label plan [--label model:<tier>] [--label effort:<level>] [--label "good first issue"] [--label "help wanted"]`);
+  expect(block).toContain(`--label ${issueLabel} --label plan ${formatOptionalIssueLabelFlags()}`);
+  // The planner axis is part of that list, so the copy-pasteable command offers
+  // it — not just the guidance prose above it.
+  expect(block).toContain('[--label planner:<model>]');
   expect(block).toContain('good first issue');
   expect(block).toContain('Do not relabel');
   expect(block).toContain('Issue-quality gate');
@@ -108,7 +116,7 @@ describe('formatTrackerInstructions — ux preset (#3273)', () => {
   it('labels filed forge issues `ux` (and `plan`) and searches titles by the slug stem', () => {
     const github = formatTrackerInstructions('github', ux);
     expect(github).toContain('gh label create ux --description "Proposed from a UX/design audit" --force');
-    expect(github).toContain('--label ux --label plan [--label model:<tier>] [--label effort:<level>] [--label "good first issue"] [--label "help wanted"]');
+    expect(github).toContain(`--label ux --label plan ${formatOptionalIssueLabelFlags()}`);
     expect(github).toContain('--search "ux in:title"');
     expect(formatTrackerInstructions('gitlab', ux)).toContain('glab issue list --label ux');
     expect(formatTrackerInstructions('gitlab', ux)).toContain('--label ux --label plan');
@@ -220,13 +228,14 @@ describe('formatTrackerInstructions — repo-study complete labels', () => {
     expect(github).toContain('area:*');
     expect(github).toContain('model:light|medium|heavy');
     expect(github).toContain('effort:low|medium|high|xhigh|max');
-    expect(github).toContain('--label repo-study --label plan --label area:<area> --label model:<tier> --label effort:<level>');
+    expect(github).toContain(`--label repo-study --label plan ${formatOptionalIssueLabelFlags(REPO_STUDY_LABEL_CONTRACT.forgeFlags)}`);
+    expect(github).not.toContain('[--label model:<tier>]');
     expect(github).toContain('gh label list --search area:');
   });
 
   it('uses the same complete-label contract on GitLab and JIRA', () => {
     const gitlab = formatTrackerInstructions('gitlab', repoStudy);
-    expect(gitlab).toContain('--label repo-study --label plan --label area:<area> --label model:<tier> --label effort:<level>');
+    expect(gitlab).toContain(`--label repo-study --label plan ${formatOptionalIssueLabelFlags(REPO_STUDY_LABEL_CONTRACT.forgeFlags)}`);
     expect(gitlab).toContain('glab label list');
 
     const jira = formatTrackerInstructions('jira', repoStudy);

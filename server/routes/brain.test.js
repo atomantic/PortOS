@@ -360,6 +360,19 @@ describe('Brain Routes', () => {
 
       expect(brainService.captureThought).toHaveBeenCalledWith('a sentient city', undefined, undefined, { creative: true });
     });
+
+    it('should forward a URL note to the capture service', async () => {
+      brainService.captureThought.mockResolvedValue({ inboxLog: { id: 'inbox-004' } });
+
+      await request(app)
+        .post('/api/brain/capture')
+        .send({ text: 'https://example.com', note: 'Share this with the team' });
+
+      expect(brainService.captureThought).toHaveBeenCalledWith(
+        'https://example.com', undefined, undefined,
+        { creative: undefined, note: 'Share this with the team' }
+      );
+    });
   });
 
   describe('GET /api/brain/inbox', () => {
@@ -1713,11 +1726,18 @@ describe('Brain Routes', () => {
       brainService.createLinkFromUrl.mockImplementation(async (url, opts) => ({ id: 'l9', url, ...opts }));
       const res = await request(app)
         .post('/api/brain/links')
-        .send({ url: 'https://www.example.com/parks', bucketId: '11111111-1111-4111-8111-111111111111' });
+        .send({
+          url: 'https://www.example.com/parks',
+          note: 'Share this with the team',
+          bucketId: '11111111-1111-4111-8111-111111111111'
+        });
       expect(res.status).toBe(201);
       expect(brainService.createLinkFromUrl).toHaveBeenCalledWith(
         'https://www.example.com/parks',
-        expect.objectContaining({ bucketId: '11111111-1111-4111-8111-111111111111' })
+        expect.objectContaining({
+          note: 'Share this with the team',
+          bucketId: '11111111-1111-4111-8111-111111111111'
+        })
       );
     });
 

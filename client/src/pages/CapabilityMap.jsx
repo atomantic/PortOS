@@ -1,9 +1,10 @@
 import { Link } from 'react-router';
 import {
-  CheckCircle, AlertTriangle, XCircle, Circle, ChevronRight, LayoutGrid,
+  CheckCircle, AlertTriangle, XCircle, Circle, ChevronRight, ListChecks,
 } from 'lucide-react';
 import * as api from '../services/api';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import NetworkSetupGuide from '../components/NetworkSetupGuide.jsx';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 
 // Status presentation. Mirrors the server's CAPABILITY_STATUS tiers.
@@ -68,39 +69,82 @@ export default function CapabilityMap() {
 
   const caps = Array.isArray(data.capabilities) ? data.capabilities : [];
   const summary = data.summary || { ok: 0, warn: 0, error: 0, unconfigured: 0, overall: 'unconfigured' };
-  const overallStyle = STATUS_STYLE[summary.overall] || STATUS_STYLE.unconfigured;
+  const optionalSummary = data.optionalSummary || summary;
+  const setup = data.setup || { total: 0, ready: 0, remaining: 0, complete: false };
+  const providerCapability = caps.find((cap) => cap.id === 'providers');
+  const optionalCapabilities = caps.filter((cap) => cap.setupRequired !== true);
+  const overallStyle = STATUS_STYLE[optionalSummary.overall] || STATUS_STYLE.unconfigured;
   const OverallIcon = overallStyle.icon;
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <h2 className="text-xl font-bold text-white flex items-center gap-2">
-          <LayoutGrid size={20} />
-          Capabilities
+          <ListChecks size={20} />
+          Setup &amp; Capabilities
         </h2>
-        <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${overallStyle.border} ${overallStyle.color} ${overallStyle.bg}`}>
-          <OverallIcon size={16} />
-          <span className="font-semibold">{OVERALL_LABEL[summary.overall] || 'Status'}</span>
+        <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${setup.complete ? STATUS_STYLE.ok.border : STATUS_STYLE.warn.border} ${setup.complete ? STATUS_STYLE.ok.color : STATUS_STYLE.warn.color} ${setup.complete ? STATUS_STYLE.ok.bg : STATUS_STYLE.warn.bg}`}>
+          {setup.complete ? <CheckCircle size={16} /> : <AlertTriangle size={16} />}
+          <span className="font-semibold">
+            {setup.complete ? 'Essential setup complete' : `${setup.remaining} essential ${setup.remaining === 1 ? 'step' : 'steps'} remaining`}
+          </span>
         </div>
       </div>
 
       <p className="text-sm text-gray-500">
-        Each connected system's status at a glance — a setup checklist and a runtime health overview.
-        Select a row to configure it.
+        Finish secure remote access and enable at least one runnable AI provider. Optional integrations stay below as a health overview.
       </p>
 
-      <div className="flex items-center gap-4 text-xs text-gray-400">
-        <span className="flex items-center gap-1"><CheckCircle size={12} className="text-port-success" /> {summary.ok} ready</span>
-        <span className="flex items-center gap-1"><AlertTriangle size={12} className="text-port-warning" /> {summary.warn} degraded</span>
-        <span className="flex items-center gap-1"><XCircle size={12} className="text-port-error" /> {summary.error} error</span>
-        <span className="flex items-center gap-1"><Circle size={12} className="text-gray-500" /> {summary.unconfigured} not set up</span>
-      </div>
+      <section className="space-y-3 rounded-xl border border-port-border bg-port-card p-4 sm:p-5">
+        <div>
+          <h3 className="font-semibold text-white">1. Tailscale, MagicDNS &amp; HTTPS</h3>
+          <p className="mt-1 text-xs text-gray-500">
+            PortOS automates certificate provisioning once Tailscale is connected and HTTPS Certificates are enabled in the tailnet.
+          </p>
+        </div>
+        <NetworkSetupGuide networkExposure={data.network} />
+      </section>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
-        {caps.map((cap) => (
-          <CapabilityRow key={cap.id} cap={cap} />
-        ))}
-      </div>
+      <section className="space-y-3 rounded-xl border border-port-border bg-port-card p-4 sm:p-5">
+        <div>
+          <h3 className="font-semibold text-white">2. AI provider</h3>
+          <p className="mt-1 text-xs text-gray-500">
+            Enable one option you intend to use: an authenticated subscription CLI, a paid API key, or a local runtime with a downloaded model. PortOS never enables a paid provider or starts model work without your action.
+          </p>
+        </div>
+        {providerCapability && <CapabilityRow cap={providerCapability} />}
+        <div className="grid gap-2 text-xs text-gray-400 sm:grid-cols-3">
+          <div className="rounded-lg border border-port-border bg-port-bg/40 p-3"><strong className="text-gray-200">Subscription CLI</strong><br />Claude Code, Codex, or Antigravity after local sign-in.</div>
+          <div className="rounded-lg border border-port-border bg-port-bg/40 p-3"><strong className="text-gray-200">API provider</strong><br />Add a key only for the paid service you chose.</div>
+          <div className="rounded-lg border border-port-border bg-port-bg/40 p-3"><strong className="text-gray-200">Local/private</strong><br />Ollama or LM Studio with a runnable model.</div>
+        </div>
+      </section>
+
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="font-semibold text-white">Optional capabilities</h3>
+            <p className="mt-1 text-xs text-gray-500">Configure these when they are useful; they do not block initial setup.</p>
+          </div>
+          <div className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 ${overallStyle.border} ${overallStyle.color} ${overallStyle.bg}`}>
+            <OverallIcon size={15} />
+            <span className="text-xs font-semibold">{OVERALL_LABEL[optionalSummary.overall] || 'Status'}</span>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-4 text-xs text-gray-400">
+          <span className="flex items-center gap-1"><CheckCircle size={12} className="text-port-success" /> {optionalSummary.ok} ready</span>
+          <span className="flex items-center gap-1"><AlertTriangle size={12} className="text-port-warning" /> {optionalSummary.warn} degraded</span>
+          <span className="flex items-center gap-1"><XCircle size={12} className="text-port-error" /> {optionalSummary.error} error</span>
+          <span className="flex items-center gap-1"><Circle size={12} className="text-gray-500" /> {optionalSummary.unconfigured} not set up</span>
+        </div>
+
+        <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
+          {optionalCapabilities.map((cap) => (
+            <CapabilityRow key={cap.id} cap={cap} />
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

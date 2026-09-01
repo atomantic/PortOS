@@ -18,6 +18,7 @@ const STEP_LABELS = {
   setup: 'Running setup',
   ffmpeg: 'Checking ffmpeg',
   migrations: 'Running migrations',
+  'network-setup': 'Checking secure access',
   build: 'Building client',
   restart: 'Restarting PortOS',
   restarting: 'Restarting PortOS',

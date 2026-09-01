@@ -20,15 +20,23 @@ export default function MediaGen() {
   const activeTab = pathname.split('/')[2] || 'image';
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center gap-3 p-4 border-b border-port-border">
+    <div className="flex min-w-0 flex-col h-full">
+      <div className="flex min-w-0 items-center gap-3 p-3 sm:p-4 border-b border-port-border">
         <Layers className="w-6 h-6 text-port-accent" />
-        <h1 className="text-2xl font-bold text-white">Media Gen</h1>
+        <h1 className="min-w-0 truncate text-2xl font-bold text-white">Media Gen</h1>
       </div>
 
-      <TabPills tabs={TABS} activeTab={activeTab} onChange={(id) => navigate(`/media/${id}`)} ariaLabel="Media Gen sections" />
+      <TabPills
+        tabs={TABS}
+        activeTab={activeTab}
+        onChange={(id) => navigate(`/media/${id}`)}
+        ariaLabel="Media Gen sections"
+        mobileDropdown
+        mobileSelectId="media-gen-section-select"
+        className="w-full min-w-0"
+      />
 
-      <div className="flex-1 overflow-auto p-4">
+      <div className="min-w-0 flex-1 overflow-auto p-3 sm:p-4">
         <Outlet />
       </div>
     </div>

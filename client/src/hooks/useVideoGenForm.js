@@ -114,6 +114,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
     remixSourceModel, setRemixSourceModel,
     seed, setSeed,
     selectedLoras, setSelectedLoras,
+    selectedUniverse, setSelectedUniverse,
     sizeManuallySetRef,
     speedProfileId, setSpeedProfileId,
     draftDecode, setDraftDecode,
@@ -178,11 +179,15 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
   }, [incomingSourceImage]);
   // A prompt handed in through the URL (Continue, Send-to-Video, Remix) is the
   // COMPOSED prompt of an existing render — composeStyledPrompt already prefixed
-  // it with whatever style preset produced it. Drop the picker's selection with
-  // it, or the next submit prefixes a preset onto a prompt that already carries
-  // one (the same double-styling applyRemix clears the preset to avoid).
+  // it with whatever style layers produced it. Drop both pickers' selections
+  // with it, or the next submit prefixes a style onto a prompt that already
+  // carries one (the same double-styling applyRemix clears both pickers).
   useEffect(() => {
-    if (incomingPrompt) { setPrompt(incomingPrompt); setStylePreset(null); }
+    if (incomingPrompt) {
+      setPrompt(incomingPrompt);
+      setStylePreset(null);
+      setSelectedUniverse(null);
+    }
   }, [incomingPrompt]);
   useEffect(() => {
     if (incomingNegativePrompt) setNegativePrompt(incomingNegativePrompt);
@@ -898,9 +903,12 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
     const srcPrompt = (source.prompt === '(no prompt)' ? '' : source.prompt || '').trim();
     const srcNeg = (source.negativePrompt || source.negative_prompt || '').trim();
     // History stores the COMPOSED prompt (composeStyledPrompt prefixes the
-    // preset), so a preset left selected would prefix itself a second time on
-    // the next submit — the same reason applyRemix clears it.
-    if (fillIfUntouched('prompt', srcPrompt, prompt, setPrompt)) setStylePreset(null);
+    // preset), so either picker left selected would compose itself a second time
+    // on the next submit — the same reason applyRemix clears both.
+    if (fillIfUntouched('prompt', srcPrompt, prompt, setPrompt)) {
+      setStylePreset(null);
+      setSelectedUniverse(null);
+    }
     fillIfUntouched('negativePrompt', srcNeg, negativePrompt, setNegativePrompt);
   };
   // `source` is the history record behind `videoId`, supplied by the picker
@@ -960,6 +968,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
     setRemixSourceModel(null);
     setRemixModelFallback(null);
     setStylePreset(null);
+    setSelectedUniverse(null);
     // prompt: always set explicitly. Legacy entries can be missing `prompt`
     // (normalizeVideo surfaces them as '(no prompt)') — clear the form instead
     // of leaving whatever the user previously typed, matching the
@@ -1118,6 +1127,8 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
   // /active, so a page reload doesn't lose what the running job is rendering.
   // The page owns the SSE re-attach; this only replays the params into state.
   const applyResumedParams = (p = {}) => {
+    setStylePreset(null);
+    setSelectedUniverse(null);
     if (p.prompt) setPrompt(p.prompt);
     if (p.negativePrompt) setNegativePrompt(p.negativePrompt);
     if (p.modelId) setModelId(p.modelId);
@@ -1219,7 +1230,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
   // stays pure so all three backend contracts can be tested independently.
   const submissionState = {
     isGrok, grokDuration, remoteSubmissionFields,
-    prompt, negativePrompt, stylePreset,
+    prompt, negativePrompt, stylePreset, selectedUniverse,
     width, height, mode, sourceImageFile, sourceImageUpload,
     numFrames, fps, steps, guidanceScale, seed,
     currentModel, models, modelId, tiling, textEncoderId, speedProfileId, draftDecode,
@@ -1245,6 +1256,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
     envelopedPrompt,
     negativePrompt, setNegativePrompt,
     stylePreset, setStylePreset,
+    selectedUniverse, setSelectedUniverse,
     remixModelFallback,
     // Model
     modelId, handleModelChange, currentModel, visibleModels,

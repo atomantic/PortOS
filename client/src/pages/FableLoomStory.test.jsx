@@ -15,6 +15,7 @@ vi.mock('../services/api', () => ({
   getLoom: vi.fn(),
   getPipelineSeries: vi.fn(),
   getUniverse: vi.fn(),
+  startLoomFalVideo: vi.fn(),
   updateLoomEpisode: vi.fn(),
   updateLoom: vi.fn(),
   updateLoomNode: vi.fn(),
@@ -24,7 +25,7 @@ vi.mock('../services/api', () => ({
 // Keep the graph lightweight while exposing its page-owned scene-media action
 // and state. The canvas component itself covers preview/button rendering.
 vi.mock('../components/fableloom/LoomCanvas', () => ({
-  default: ({ episode, mediaJobs, onGenerateImage, generationDisabled }) => (
+  default: ({ episode, mediaJobs, onGenerateImage, onAutomateFalVideo, generationDisabled }) => (
     <div>
       <button
         type="button"
@@ -44,24 +45,53 @@ vi.mock('../components/fableloom/LoomCanvas', () => ({
       )}
       <span data-testid="canvas-image-status">{mediaJobs[episode.nodes[0].id]?.image?.status || 'idle'}</span>
       <span data-testid="canvas-image-filename">{episode.nodes[0].image || 'none'}</span>
+      <button
+        type="button"
+        disabled={generationDisabled || !episode.nodes[0].image}
+        onClick={() => onAutomateFalVideo(episode.nodes[0])}
+      >
+        Canvas automate fal.ai
+      </button>
+      <span data-testid="canvas-video-status">{mediaJobs[episode.nodes[0].id]?.video?.status || 'idle'}</span>
+      <span data-testid="canvas-video-id">{episode.nodes[0].videoHistoryId || 'none'}</span>
     </div>
   ),
 }));
 vi.mock('../components/fableloom/LoomMediaJobWatchers', () => ({
   default: ({ jobs, onUpdate, onTerminal }) => {
     const image = jobs['node-1']?.image;
-    if (!image?.jobId) return null;
+    const falVideo = jobs['node-1']?.video?.source === 'fal-browser' ? jobs['node-1'].video : null;
     return (
-      <button
-        type="button"
-        onClick={() => {
-          const failed = { ...image, status: 'failed', error: 'Synthetic provider failure' };
-          onUpdate('node-1', 'image', image.jobId, failed);
-          onTerminal('node-1', 'image', image.jobId, failed);
-        }}
-      >
-        Simulate image failure
-      </button>
+      <>
+        {image?.jobId && (
+          <button
+            type="button"
+            onClick={() => {
+              const failed = { ...image, status: 'failed', error: 'Synthetic provider failure' };
+              onUpdate('node-1', 'image', image.jobId, failed);
+              onTerminal('node-1', 'image', image.jobId, failed);
+            }}
+          >
+            Simulate image failure
+          </button>
+        )}
+        {falVideo?.jobId && (
+          <button
+            type="button"
+            onClick={() => {
+              const completed = {
+                ...falVideo,
+                status: 'completed',
+                videoHistoryId: 'upload-ab12cd34',
+              };
+              onUpdate('node-1', 'video', falVideo.jobId, completed);
+              onTerminal('node-1', 'video', falVideo.jobId, completed);
+            }}
+          >
+            Simulate fal.ai completion
+          </button>
+        )}
+      </>
     );
   },
 }));
@@ -495,5 +525,51 @@ describe('FableLoomStory scene media lifecycle', () => {
     expect(toastMocks.error).toHaveBeenCalledWith(
       'Could not start scene image: Canon conditioning unavailable',
     );
+  });
+
+  it('automates fal.ai with the starting image context and attaches the finished browser render', async () => {
+    const user = userEvent.setup();
+    api.getLoom.mockResolvedValue(loom({
+      styleNotes: 'blue dusk lighting',
+      episodes: [episode({
+        nodes: [{
+          id: 'node-1',
+          title: 'Threshold',
+          prose: 'You stand before the first door.',
+          videoPrompt: 'The door opens in one uninterrupted practical-effects reveal.',
+          image: 'threshold.png',
+          transitions: [],
+        }],
+      })],
+    }));
+    api.startLoomFalVideo.mockResolvedValue({
+      id: 'fal-job-1',
+      source: 'fal-browser',
+      loomId: 'loom-1',
+      episodeId: 'ep-1',
+      nodeId: 'node-1',
+      status: 'queued',
+      statusMsg: 'Waiting for the fal.ai browser…',
+    });
+    renderEditor('/fableloom/loom-1/ep-1');
+
+    await user.click(await screen.findByRole('button', { name: 'Canvas automate fal.ai' }));
+
+    await waitFor(() => expect(api.startLoomFalVideo).toHaveBeenCalledWith(
+      'loom-1',
+      'ep-1',
+      'node-1',
+      {
+        prompt: 'The door opens in one uninterrupted practical-effects reveal.\n\nStyle: blue dusk lighting',
+        aspectRatio: '16:9',
+      },
+      { silent: true },
+    ));
+    expect(screen.getByTestId('canvas-video-status')).toHaveTextContent('queued');
+
+    await user.click(screen.getByRole('button', { name: 'Simulate fal.ai completion' }));
+    await waitFor(() => expect(screen.getByTestId('canvas-video-id')).toHaveTextContent('upload-ab12cd34'));
+    expect(screen.getByTestId('canvas-video-status')).toHaveTextContent('idle');
+    expect(toastMocks.success).toHaveBeenCalledWith('Scene video ready from fal.ai');
   });
 });

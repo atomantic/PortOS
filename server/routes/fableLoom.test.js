@@ -18,6 +18,7 @@ vi.mock('../services/fableLoom/index.js', () => ({
   feedbackSeriesPlan: vi.fn(),
   generateEpisodeOutline: vi.fn(),
   generateSeriesPlan: vi.fn(),
+  getFalVideoAutomation: vi.fn(),
   getFableLoomEditorialAutopilot: vi.fn(),
   getLatestFableLoomEditorialAutopilot: vi.fn(),
   getLoom: vi.fn(),
@@ -45,6 +46,7 @@ vi.mock('../services/fableLoom/index.js', () => ({
   endHostedSession: vi.fn(),
   planEpisodeProduction: vi.fn(),
   startEpisodeProductionBatch: vi.fn(),
+  startFalVideoAutomation: vi.fn(),
   getEpisodeProductionBatch: vi.fn(),
   cancelEpisodeProductionBatch: vi.fn(),
   resumeEpisodeProductionBatch: vi.fn(),
@@ -263,6 +265,40 @@ describe('FableLoom routes', () => {
     fableLoom.deleteNode.mockResolvedValueOnce({ id: 'loom-1' });
     await request(makeApp()).delete('/api/fableloom/loom-1/episodes/ep-1/nodes/node-1');
     expect(fableLoom.deleteNode).toHaveBeenCalledWith('loom-1', 'ep-1', 'node-1');
+  });
+
+  it('starts and reads a validated fal.ai browser job for one scene', async () => {
+    const job = {
+      id: 'fal-job-1', source: 'fal-browser', loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1', status: 'queued',
+    };
+    fableLoom.startFalVideoAutomation.mockResolvedValueOnce(job);
+    const created = await request(makeApp())
+      .post('/api/fableloom/loom-1/episodes/ep-1/nodes/node-1/fal-video')
+      .send({ prompt: 'One continuous example shot.', aspectRatio: '9:16' });
+
+    expect(created.status).toBe(202);
+    expect(created.body).toEqual(job);
+    expect(fableLoom.startFalVideoAutomation).toHaveBeenCalledWith('loom-1', 'ep-1', 'node-1', {
+      prompt: 'One continuous example shot.', aspectRatio: '9:16',
+    });
+
+    fableLoom.getFalVideoAutomation.mockReturnValueOnce({ ...job, status: 'running' });
+    const status = await request(makeApp())
+      .get('/api/fableloom/loom-1/episodes/ep-1/nodes/node-1/fal-video/fal-job-1');
+    expect(status.status).toBe(200);
+    expect(status.body.status).toBe('running');
+    expect(fableLoom.getFalVideoAutomation).toHaveBeenCalledWith(
+      'loom-1', 'ep-1', 'node-1', 'fal-job-1',
+    );
+  });
+
+  it('rejects an empty fal.ai scene prompt before browser automation starts', async () => {
+    const response = await request(makeApp())
+      .post('/api/fableloom/loom-1/episodes/ep-1/nodes/node-1/fal-video')
+      .send({ prompt: '   ', aspectRatio: '16:9' });
+
+    expect(response.status).toBe(400);
+    expect(fableLoom.startFalVideoAutomation).not.toHaveBeenCalled();
   });
 
   it('POST transitions mints one path and answers with the loom plus the row', async () => {

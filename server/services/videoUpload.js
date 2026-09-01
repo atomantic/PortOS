@@ -67,8 +67,10 @@ export function buildUploadHistoryEntry({ id, filename, thumbnail, durationSec, 
  * entry (`{ id, filename, thumbnail, source: 'upload', … }`); the served file
  * is `/data/videos/<filename>`.
  */
-export async function saveUploadedGalleryVideo(base64Data, originalName = '') {
-  const buffer = Buffer.from(base64Data, 'base64');
+export async function saveUploadedGalleryVideoBuffer(buffer, originalName = '') {
+  if (!Buffer.isBuffer(buffer)) {
+    throw new ServerError('Invalid video upload', { status: 400, code: 'VALIDATION_ERROR' });
+  }
   if (buffer.length === 0) {
     throw new ServerError('Empty video upload', { status: 400, code: 'VALIDATION_ERROR' });
   }
@@ -108,4 +110,8 @@ export async function saveUploadedGalleryVideo(base64Data, originalName = '') {
     await unlink(outPath).catch(() => {});
     throw err;
   }
+}
+
+export async function saveUploadedGalleryVideo(base64Data, originalName = '') {
+  return saveUploadedGalleryVideoBuffer(Buffer.from(base64Data, 'base64'), originalName);
 }

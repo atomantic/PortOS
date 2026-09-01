@@ -398,6 +398,39 @@ describe('loom CRUD', () => {
     });
   });
 
+  it('preserves render preferences when a v5 peer wins an unrelated LWW edit', async () => {
+    const loom = await makeLoom({
+      name: 'Local production',
+      renderSettings: {
+        formatId: 'portrait-9-16',
+        imageMode: 'local',
+        imageModel: 'image-model',
+        videoMode: 'grok',
+        effort: 'high',
+      },
+    });
+    const remoteV5 = {
+      ...loom,
+      name: 'Renamed by v5 peer',
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      renderSettings: { formatId: 'landscape-16-9' },
+    };
+
+    await mergeLoomsFromSync([remoteV5], { senderSchemaVersions: { fableLoom: 5 } });
+
+    expect(await getLoom(loom.id)).toMatchObject({
+      name: 'Renamed by v5 peer',
+      renderSettings: {
+        formatId: 'landscape-16-9',
+        imageMode: 'local',
+        imageModel: 'image-model',
+        videoMode: 'grok',
+        videoModel: null,
+        effort: 'high',
+      },
+    });
+  });
+
   it('preserves playable challenge mappings when a v4 peer wins an unrelated edit', async () => {
     let loom = await makeLoom({ name: 'Local challenge plan' });
     loom = await addEpisode(loom.id, { title: 'Pilot' });
@@ -559,6 +592,42 @@ describe('format, render, and play settings round-trip', () => {
     const loom = await makeLoom();
     expect(loom.renderSettings).toEqual({
       formatId: 'landscape-16-9', aspectRatio: '16:9', width: 1024, height: 576,
+    });
+  });
+
+  it('round-trips render preferences and keeps them through a format-only patch', async () => {
+    const loom = await makeLoom({
+      renderSettings: {
+        formatId: 'portrait-9-16',
+        imageMode: 'local',
+        imageModel: 'image-model',
+        videoMode: 'grok',
+        effort: 'high',
+      },
+    });
+    expect(loom.renderSettings).toEqual({
+      formatId: 'portrait-9-16',
+      aspectRatio: '9:16',
+      width: 576,
+      height: 1024,
+      imageMode: 'local',
+      imageModel: 'image-model',
+      videoMode: 'grok',
+      videoModel: null,
+      effort: 'high',
+    });
+
+    const updated = await updateLoom(loom.id, { renderSettings: { formatId: 'square-1-1' } });
+    expect(updated.renderSettings).toEqual({
+      formatId: 'square-1-1',
+      aspectRatio: '1:1',
+      width: 1024,
+      height: 1024,
+      imageMode: 'local',
+      imageModel: 'image-model',
+      videoMode: 'grok',
+      videoModel: null,
+      effort: 'high',
     });
   });
 

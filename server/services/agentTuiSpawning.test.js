@@ -1709,6 +1709,45 @@ describe('spawnTuiAgent runtime', () => {
     expect(pasteCount()).toBeGreaterThan(3);
   });
 
+  it('codex MCP boot: submits a paste whose marker arrives during retry backoff', async () => {
+    const {
+      MCP_BOOT_PASTE_RETRY_DELAY_MS,
+      PASTE_TO_ENTER_FALLBACK_MS,
+      PASTE_VERIFY_WINDOW_MS,
+      PASTE_VERIFY_POLL_MS,
+    } = await vi.importActual('../lib/tuiHandshake.js');
+
+    runSpawn({ prompt: 'evaluate our animation prompts and generate drafts' });
+    await flushMicrotasks();
+    await capturedOnData(Buffer.from('Starting MCP servers (1/2): codex_apps (0s • esc to interrupt)\n'));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+
+    expect(pasteCount()).toBe(1);
+
+    // Let the marker and text verification windows expire so the controller is
+    // inside its MCP-aware retry backoff. The production incident delivered the
+    // paste chip in exactly this gap, after output from a busy Codex repaint was
+    // delayed; the old controller discarded it and stacked another full prompt.
+    await vi.advanceTimersByTimeAsync(
+      PASTE_TO_ENTER_FALLBACK_MS + PASTE_VERIFY_WINDOW_MS + PASTE_VERIFY_POLL_MS,
+    );
+    await flushMicrotasks();
+
+    await capturedOnData(Buffer.from('[Pasted Content 12345 chars]\n'));
+    await flushMicrotasks();
+
+    const enterWrites = () => vi.mocked(shellService.writeToSession).mock.calls
+      .filter(([id, data]) => id === SESSION_ID && data === '\r');
+    expect(enterWrites()).toHaveLength(1);
+
+    // The late authoritative marker cancels the pending duplicate paste.
+    await vi.advanceTimersByTimeAsync(MCP_BOOT_PASTE_RETRY_DELAY_MS + 100);
+    await flushMicrotasks();
+    expect(pasteCount()).toBe(1);
+  });
+
   it('codex MCP boot: fails paste-not-rendered only after the extended deadline if boot never completes', async () => {
     let resolveComplete;
     const completeDone = new Promise((r) => { resolveComplete = r; });

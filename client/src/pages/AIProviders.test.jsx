@@ -138,6 +138,33 @@ describe('AIProviders page load error handling', () => {
     expect(screen.queryByRole('button', { name: /Install OpenCode CLI/ })).not.toBeInTheDocument();
   });
 
+  it('does not recommend disabling Grok codebase upload on the card or editor', async () => {
+    api.getProviders.mockResolvedValue({
+      providers: [{
+        id: 'grok-tui',
+        name: 'Grok Build TUI',
+        type: 'tui',
+        command: 'grok',
+        args: [],
+        enabled: true,
+        models: ['grok-configured-default'],
+        defaultModel: 'grok-configured-default',
+      }],
+      activeProvider: 'grok-tui',
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('Grok Build TUI')).toBeInTheDocument();
+    expect(screen.queryByText(/uploads your entire working repo/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/disable_codebase_upload/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(await screen.findByRole('heading', { name: 'Edit Provider' })).toBeInTheDocument();
+    expect(screen.queryByText(/uploads your entire working repo/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/disable_codebase_upload/i)).not.toBeInTheDocument();
+  });
+
   it('explains why the install action is unavailable and links the vendor instructions', async () => {
     api.getProviders.mockResolvedValue({
       providers: [{ id: 'opencode-ollama', name: 'OpenCode Ollama', type: 'cli', command: 'opencode', args: ['run'], enabled: true }],
@@ -1237,6 +1264,114 @@ describe('readiness grouping', () => {
 
     fireEvent.click(header);
     expect(screen.getByText('Switched Off')).toBeInTheDocument();
+  });
+});
+
+describe('hardware-incompatible providers', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getApps.mockResolvedValue([]);
+    api.getProviderStatuses.mockResolvedValue({ providers: {} });
+    api.getProviderRuntimes.mockResolvedValue({ runtimes: {} });
+    api.getProviderReadiness.mockResolvedValue({ readiness: {} });
+    api.getSampleProviders.mockResolvedValue({ providers: [] });
+  });
+
+  // A provider this machine cannot run is not a choice the user can act on, so
+  // it must not sit among the enabled cards adding a HARDWARE MISMATCH badge to
+  // a section that otherwise lists live providers.
+  it('parks an unrunnable provider in a collapsed section instead of Enabled', async () => {
+    api.getProviders.mockResolvedValue({
+      providers: [
+        { id: 'ok', name: 'Runs Here', type: 'cli', command: 'claude', enabled: true },
+        {
+          id: 'huge',
+          name: 'Needs More RAM',
+          type: 'api',
+          enabled: true,
+          endpoint: 'http://localhost:1234',
+          hardwareCompatibility: { state: 'unavailable', reasons: ['needs 128GB of RAM'] },
+        },
+      ],
+      activeProvider: 'ok',
+    });
+
+    renderPage();
+
+    const enabled = await screen.findByRole('button', { name: new RegExp('^Enabled') });
+    expect(enabled).toHaveTextContent('1');
+    expect(screen.getByText('Runs Here')).toBeInTheDocument();
+
+    // Collapsed by default: neither the card nor its badge is on screen.
+    const parked = screen.getByRole('button', { name: /Unavailable on this machine/ });
+    expect(parked).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Needs More RAM')).not.toBeInTheDocument();
+    expect(screen.queryByText('HARDWARE MISMATCH')).not.toBeInTheDocument();
+
+    // Still one click from being edited or deleted.
+    fireEvent.click(parked);
+    expect(screen.getByText('Needs More RAM')).toBeInTheDocument();
+  });
+
+  it('omits the section entirely when every provider runs here', async () => {
+    api.getProviders.mockResolvedValue({
+      providers: [{ id: 'ok', name: 'Runs Here', type: 'cli', command: 'claude', enabled: true }],
+      activeProvider: 'ok',
+    });
+
+    renderPage();
+
+    await screen.findByText('Runs Here');
+    expect(screen.queryByRole('button', { name: /Unavailable on this machine/ })).not.toBeInTheDocument();
+  });
+
+  it('leaves an unrunnable sample out of the sample list', async () => {
+    api.getProviders.mockResolvedValue({ providers: [], activeProvider: null });
+    api.getSampleProviders.mockResolvedValue({
+      providers: [
+        { id: 'sample-ok', name: 'Sample Runs Here', type: 'api', enabled: true, endpoint: 'https://api.example.com', models: ['m1'] },
+        {
+          id: 'sample-huge',
+          name: 'Sample Needs More RAM',
+          type: 'api',
+          enabled: true,
+          endpoint: 'https://api.example.com',
+          models: ['m2'],
+          hardwareCompatibility: { state: 'unavailable', reasons: ['needs 128GB of RAM'] },
+        },
+      ],
+    });
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Load Samples' }));
+
+    expect(await screen.findByText('Sample Runs Here')).toBeInTheDocument();
+    expect(screen.queryByText('Sample Needs More RAM')).not.toBeInTheDocument();
+    // One addable sample, so no Add All button and no dead 'Unavailable' action.
+    expect(screen.queryByRole('button', { name: /^Add All/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Unavailable' })).not.toBeInTheDocument();
+  });
+
+  it('says why the sample list is empty when nothing on offer runs here', async () => {
+    api.getProviders.mockResolvedValue({ providers: [], activeProvider: null });
+    api.getSampleProviders.mockResolvedValue({
+      providers: [{
+        id: 'sample-huge',
+        name: 'Sample Needs More RAM',
+        type: 'api',
+        enabled: true,
+        endpoint: 'https://api.example.com',
+        models: ['m2'],
+        hardwareCompatibility: { state: 'unavailable', reasons: ['needs 128GB of RAM'] },
+      }],
+    });
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Load Samples' }));
+
+    expect(await screen.findByText(/cannot run on this machine/)).toBeInTheDocument();
   });
 });
 

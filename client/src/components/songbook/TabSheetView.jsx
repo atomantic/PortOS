@@ -180,6 +180,7 @@ function TabSheetView({
   const hasTabstaff = lines.some((line) => line.type === 'tabstaff');
   const [legendOpen, setLegendOpen] = useState(false);
   const legendId = useId();
+  const staffIdPrefix = useId();
 
   // Unique chord names in order of first appearance (chords-used strip).
   // Dash-joined quick changes split into their segments FIRST, so "Am-Am7"
@@ -323,6 +324,7 @@ function TabSheetView({
           const collapse = instrumentView === 'piano'
             ? true
             : instrumentView === 'ukulele' && looksGuitar;
+          const staffId = `${staffIdPrefix}-staff-${bi}`;
           if (collapse && !expandedStaffs.has(bi)) {
             return (
               <div key={bi} className="my-1 flex items-center gap-2 text-xs text-gray-500 italic font-sans">
@@ -330,6 +332,9 @@ function TabSheetView({
                 <button
                   type="button"
                   onClick={() => setExpandedStaffs((prev) => new Set(prev).add(bi))}
+                  aria-label={`Show ${looksGuitar ? 'guitar ' : ''}tablature staff (section ${bi + 1})`}
+                  aria-expanded={false}
+                  aria-controls={staffId}
                   className="not-italic text-port-accent hover:underline px-1 py-2 -my-2"
                 >
                   show
@@ -338,7 +343,7 @@ function TabSheetView({
             );
           }
           return (
-            <div key={bi} className="overflow-x-auto whitespace-pre text-gray-300 my-1">
+            <div id={staffId} key={bi} className="overflow-x-auto whitespace-pre text-gray-300 my-1">
               {block.lines.map((line, li) => <div key={li}>{line.text}</div>)}
             </div>
           );

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Plus, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText, Zap, Bookmark, Ticket, GitBranch, GitPullRequest, Wand2 } from 'lucide-react';
 import toast from '../ui/Toast';
+import AutoSizeTextarea from '../ui/AutoSizeTextarea';
 import AppContextPicker from '../AppContextPicker';
 import * as api from '../../services/api';
 import { processScreenshotUploads, processAttachmentUploads } from '../../services/apiMedia';
@@ -57,6 +58,8 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   const [openPR, setOpenPR] = useState(true);
   const [simplify, setSimplify] = useState(true);
   const [planOnly, setPlanOnly] = useState(false);
+  const [issueTarget, setIssueTarget] = useState('upstream');
+  const [issueTargets, setIssueTargets] = useState({ appId: null, value: null });
   // Hidden run-shape state, never a user-facing toggle: the slashdo catalog's
   // deliverable posture (#3636/#3651). `undefined` = the form pins no opinion,
   // so the server keeps its own default. Only a slashdo-backed template sets it.
@@ -225,6 +228,30 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   }, [resolvedWorkTracker, selectedApp]);
   const planOnlySupported = planOnlyTrackerStatus === 'supported';
 
+  // A fork has two legitimate issue destinations. Default to canonical
+  // upstream, but make the origin an explicit per-task choice rather than
+  // silently inheriting whichever remote the checkout calls `origin`.
+  useEffect(() => {
+    const appId = selectedApp?.id || PORTOS_APP_ID;
+    if (!planOnly || !planOnlySupported) {
+      setIssueTargets({ appId, value: null });
+      return undefined;
+    }
+    let cancelled = false;
+    setIssueTargets({ appId, value: null });
+    Promise.resolve(api.getAppRepositorySources(appId, { silent: true }))
+      .then((status) => {
+        if (cancelled) return;
+        const value = status?.issueTargets || null;
+        setIssueTargets({ appId, value });
+        setIssueTarget(value?.default || 'upstream');
+      })
+      .catch(() => {
+        if (!cancelled) setIssueTargets({ appId, value: null });
+      });
+    return () => { cancelled = true; };
+  }, [planOnly, planOnlySupported, selectedApp?.id]);
+
   // Clear a template or an already-selected mode when an app resolves to a
   // tracker that cannot receive the issue-only plan-task workflow.
   useEffect(() => {
@@ -373,8 +400,20 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       setWorktreeChangesExpected(false);
     }
     descriptionRef.current?.focus();
-    await api.applyCosTaskTemplate(template.id).catch(() => {});
-    toast.success(`Template applied: ${template.name}`);
+    // The popularity counter is best-effort: the template has already been
+    // applied to local form state above, so a failed write must not read as a
+    // failed application — but it must not read as a successful one either
+    // (#5494). `silent: true` suppresses the shared helper's error toast so the
+    // failure is reported once, here, with the underlying reason logged for
+    // diagnosis (the helper's toast was the only place it used to surface).
+    const usageRecorded = await api.applyCosTaskTemplate(template.id, { silent: true })
+      .then(() => true)
+      .catch((err) => {
+        console.warn(`⚠️ Template usage not recorded for ${template.id}: ${err?.message || err}`);
+        toast.warning('Template applied locally, but usage could not be recorded');
+        return false;
+      });
+    if (usageRecorded) toast.success(`Template applied: ${template.name}`);
   }, [newTask.app, planOnly, providers, selectedApp]);
 
   // Save current form as template (inline input instead of window.prompt)
@@ -505,6 +544,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       app: newTask.app || undefined,
       targetInstanceId: targetInstanceId || undefined,
       planOnly,
+      issueTarget: planOnly ? issueTarget : undefined,
       slashdoCommand: planOnly ? 'plan-task' : (slashdoCommand || undefined),
       slashdoArgs: planOnly ? '--yes' : undefined,
       createJiraTicket: planOnly ? false : createJiraTicket,
@@ -577,14 +617,18 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       <div className="space-y-3">
         <div className="flex flex-col sm:flex-row gap-2">
           <label htmlFor="compact-task-desc" className="sr-only">Task description (required)</label>
-          <input
+          <AutoSizeTextarea
             id="compact-task-desc"
-            type="text"
             placeholder="Task description *"
             value={newTask.description}
             onChange={e => setNewTask(t => ({ ...t, description: e.target.value }))}
-            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && !isSubmitting && handleAddTask()}
-            className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey && !isSubmitting) {
+                e.preventDefault();
+                handleAddTask();
+              }
+            }}
+            className="w-full sm:flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
             aria-required="true"
           />
           <div className="flex gap-2">
@@ -684,10 +728,9 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       <div className="space-y-2">
         <div>
           <label htmlFor="task-description" className="sr-only">Task description (required)</label>
-          <input
+          <AutoSizeTextarea
             id="task-description"
             ref={descriptionRef}
-            type="text"
             placeholder="Task description *"
             value={newTask.description}
             onChange={e => setNewTask(t => ({ ...t, description: e.target.value }))}
@@ -762,9 +805,26 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
             </p>
           )}
           {planOnly && (
-            <p className="basis-full text-xs text-gray-500">
-              Read-only planning: file the issue without code changes, a worktree, PR, simplify pass, or review.
-            </p>
+            <div className="basis-full space-y-2">
+              <p className="text-xs text-gray-500">
+                Read-only planning: file the issue without code changes, a worktree, PR, simplify pass, or review.
+              </p>
+              {issueTargets.appId === (selectedApp?.id || PORTOS_APP_ID) && issueTargets.value?.canChoose && (
+                <div className="max-w-md">
+                  <label htmlFor="task-issue-target" className="mb-1 block text-xs text-gray-400">File issue on</label>
+                  <select
+                    id="task-issue-target"
+                    value={issueTarget}
+                    onChange={(event) => setIssueTarget(event.target.value)}
+                    className="w-full rounded-lg border border-port-border bg-port-bg px-3 py-2 text-sm text-white"
+                  >
+                    <option value="upstream">Upstream · {issueTargets.value.upstream?.fullName}</option>
+                    <option value="origin">Origin fork · {issueTargets.value.origin?.fullName}</option>
+                  </select>
+                  <p className="mt-1 text-xs text-gray-500">Upstream is the default so project work is not stranded on a personal fork.</p>
+                </div>
+              )}
+            </div>
           )}
           {!planOnly && (
             <>

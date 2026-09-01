@@ -911,7 +911,7 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
     expect(followUp.metadata.reviewLoopFollowUp).toBe(true);
   });
 
-  it('pre-requests Copilot only when it LEADS the list, and threads stop-mode/applies through', async () => {
+  it('pre-requests Copilot only when it LEADS the list and forces public review into non-applying mode', async () => {
     git.push.mockResolvedValue(undefined);
     git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/57' });
     git.requestCopilotReview.mockResolvedValue({ success: true });
@@ -929,7 +929,7 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
     const [followUp] = addTask.mock.calls[0];
     expect(followUp.metadata.reviewLoopReviewers).toEqual(['copilot', 'codex', 'antigravity']);
     expect(followUp.metadata.reviewLoopStopMode).toBe('on-findings');
-    expect(followUp.metadata.reviewLoopReviewerApplies).toBe(true);
+    expect(followUp.metadata.reviewLoopReviewerApplies).toBe(false);
     // Only the codex entry rides along — codex is in the list, claude is not, so
     // the map is narrowed to the reviewers actually running.
     expect(followUp.metadata.reviewLoopReviewerModels).toEqual({ codex: 'gpt-5.6-sol' });

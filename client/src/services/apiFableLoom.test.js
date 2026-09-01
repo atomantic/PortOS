@@ -34,6 +34,20 @@ describe('apiFableLoom', () => {
     });
   });
 
+  it('starts and polls one encoded fal.ai browser job path', async () => {
+    const body = { prompt: 'One continuous example shot.', aspectRatio: '9:16' };
+    await api.startLoomFalVideo('loom/1', 'ep/1', 'node/1', body, { silent: true });
+    expect(request).toHaveBeenCalledWith('/fableloom/loom%2F1/episodes/ep%2F1/nodes/node%2F1/fal-video', {
+      method: 'POST', body: JSON.stringify(body), silent: true,
+    });
+
+    await api.getLoomFalVideo('loom/1', 'ep/1', 'node/1', 'fal/1', { silent: true });
+    expect(request).toHaveBeenCalledWith(
+      '/fableloom/loom%2F1/episodes/ep%2F1/nodes/node%2F1/fal-video/fal%2F1',
+      { silent: true },
+    );
+  });
+
   it('posts weave options to the episode weave lane', async () => {
     await api.weaveLoomEpisode('loom-1', 'ep-1', { guidance: 'darker', replace: true });
     expect(request).toHaveBeenCalledWith('/fableloom/loom-1/episodes/ep-1/weave', {

@@ -33,6 +33,7 @@ import { compareNewerWins, compareEarlierWins } from '../lib/lwwTimestamp.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from './sharing/recordEvents.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
+  withBaseHashFlushBatch,
 } from '../lib/conflictJournal.js';
 
 export const ERR_NOT_FOUND = 'NOT_FOUND';
@@ -979,20 +980,21 @@ export async function pruneTombstonedCollections(olderThanMs) {
   // has settled, preserving the throw-on-failure contract without leaking
   // background writes.
   let firstError = null;
-  const outcomes = await mapWithConcurrency(candidates, COLLECTION_WRITE_CONCURRENCY, (c) =>
-    store().queueRecordWrite(c.id, async () => {
-      // Re-check inside the queue (deleteOneNow spans the load→delete boundary)
-      // so a concurrent re-create at the same id isn't blown away.
-      const cur = await store().loadOne(c.id);
-      if (!cur || cur.deleted !== true) return false;
-      const ms = Date.parse(cur.deletedAt || '');
-      if (!(Number.isFinite(ms) && ms < olderThanMs)) return false;
-      await store().deleteOneNow(c.id);
-      // Evict the conflict-journal base hash so the side store doesn't grow
-      // dead keys (mirrors pruneTombstonedUniverses / pruneTombstonedSeries).
-      await deleteSyncBaseHash('mediaCollection', c.id);
-      return true;
-    }).catch((err) => { if (!firstError) firstError = err; return false; }));
+  const outcomes = await withBaseHashFlushBatch(() =>
+    mapWithConcurrency(candidates, COLLECTION_WRITE_CONCURRENCY, (c) =>
+      store().queueRecordWrite(c.id, async () => {
+        // Re-check inside the queue (deleteOneNow spans the load→delete boundary)
+        // so a concurrent re-create at the same id isn't blown away.
+        const cur = await store().loadOne(c.id);
+        if (!cur || cur.deleted !== true) return false;
+        const ms = Date.parse(cur.deletedAt || '');
+        if (!(Number.isFinite(ms) && ms < olderThanMs)) return false;
+        await store().deleteOneNow(c.id);
+        // Evict the conflict-journal base hash so the side store doesn't grow
+        // dead keys (mirrors pruneTombstonedUniverses / pruneTombstonedSeries).
+        await deleteSyncBaseHash('mediaCollection', c.id);
+        return true;
+      }).catch((err) => { if (!firstError) firstError = err; return false; })));
   if (firstError) throw firstError;
   return { pruned: outcomes.filter(Boolean).length };
 }

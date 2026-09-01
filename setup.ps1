@@ -86,7 +86,13 @@ node scripts/setup-data.js
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 node scripts/setup-db.js
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+node scripts/setup-llm.js
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 node scripts/setup-browser.js
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+node scripts/setup-cert.js
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+node scripts/setup-guide.js
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # Install/update slash-do (project-level slash commands for Claude Code et al.)
@@ -120,5 +126,5 @@ Write-Host "  Production:   " -NoNewline; Write-Host "npm start" -ForegroundColo
 Write-Host "  Stop:         " -NoNewline; Write-Host "npm run pm2:stop" -ForegroundColor Cyan
 Write-Host "  Logs:         " -NoNewline; Write-Host "npm run pm2:logs" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "Access at: " -NoNewline; Write-Host "http://localhost:5555" -ForegroundColor Yellow
+node scripts/print-access-url.js | ForEach-Object { Write-Host $_ -ForegroundColor Yellow }
 Write-Host ""

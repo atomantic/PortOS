@@ -1,7 +1,27 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
+import { rmSync } from 'node:fs';
 import { request } from '../lib/testHelper.js';
 import { ServerError } from '../lib/errorHandler.js';
+
+// The CoS task routes write operator-action rows (#5594) through the ledger's
+// file backend, which resolves under PATHS.data — re-root it so this suite can
+// never write into the developer's live `data/` tree (#3683/#3687). Everything
+// else in fileUtils stays real. `vi.hoisted` because the router below is a
+// STATIC import, so the mock factory runs during module linking.
+const ledgerRoot = await vi.hoisted(async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  return mkdtempSync(join(tmpdir(), 'portos-cos-routes-ledger-'));
+});
+vi.mock('../lib/fileUtils.js', async () => {
+  const actual = await vi.importActual('../lib/fileUtils.js');
+  const { makePathsProxy } = await import('../lib/mockPathsDataRoot.js');
+  return makePathsProxy(actual, { dataRoot: ledgerRoot });
+});
+afterAll(() => rmSync(ledgerRoot, { recursive: true, force: true }));
+
 import cosRoutes from './cos.js';
 
 // Mock the cos service
@@ -19,6 +39,8 @@ vi.mock('../services/cos.js', () => ({
   reorderTasks: vi.fn(),
   addTask: vi.fn(),
   updateTask: vi.fn(),
+  // Read by the DELETE route so the ledger row keeps the task's description.
+  getTaskById: vi.fn(async () => null),
   deleteTask: vi.fn(),
   approveTask: vi.fn(),
   evaluateTasks: vi.fn(),
@@ -97,7 +119,8 @@ vi.mock('../services/subAgentSpawner.js', () => ({
 // which are mocked below, so the route-level assertions stay verbatim.
 vi.mock('../services/cosTaskGenerator.js', async (importActual) => ({
   ...(await importActual()),
-  buildClaimWorkTask: vi.fn()
+  buildClaimWorkTask: vi.fn(),
+  buildIssueReplanTask: vi.fn()
 }));
 vi.mock('../services/apps.js', () => ({
   getAppById: vi.fn(),
@@ -122,7 +145,7 @@ import * as appActivity from '../services/appActivity.js';
 import * as claudeChangelog from '../services/claudeChangelog.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import { loadSlashdoCommand } from '../services/subAgentSpawner.js';
-import { buildClaimWorkTask } from '../services/cosTaskGenerator.js';
+import { buildClaimWorkTask, buildIssueReplanTask } from '../services/cosTaskGenerator.js';
 import { getAppById, getAppWorkTracker } from '../services/apps.js';
 import { getTaskPrompt } from '../services/taskPromptService.js';
 import { getCodeReviewDefaults } from '../services/codeReview.js';
@@ -1122,6 +1145,73 @@ describe('CoS Routes', () => {
         .send({ command: 'push', app: 'ghost-app' });
 
       expect(response.status).toBe(404);
+      expect(cos.addTask).not.toHaveBeenCalled();
+    });
+
+    // The Issues tab's Replan button: `replan` + a pinned issue is a per-issue
+    // second opinion, NOT the bundled backlog audit. The regression this guards
+    // is the targeted run falling through to the plain slashdo branch, which
+    // would append the whole `/do:replan` body and re-point the agent at the
+    // entire backlog.
+    it('routes a targeted replan through the per-issue review builder', async () => {
+      getAppById.mockResolvedValue({ id: 'my-app', name: 'MyApp', type: 'web', repoPath: '/repo' });
+      buildIssueReplanTask.mockResolvedValue({
+        tracker: 'github',
+        cli: 'gh',
+        prompt: 'REPLAN ISSUE PROMPT',
+        target: '42',
+        taskMetadata: { useWorktree: false, openPR: false, noCodeOutput: true, worktreeChangesExpected: false }
+      });
+      cos.addTask.mockResolvedValue({ id: 'task-replan-42', status: 'pending' });
+
+      const response = await request(app)
+        .post('/api/cos/tasks/slashdo')
+        .send({ command: 'replan', app: 'my-app', target: '42', overrideContext: 'focus on the migration' });
+
+      expect(response.status).toBe(200);
+      expect(buildIssueReplanTask).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'my-app' }),
+        expect.objectContaining({ target: '42', overrideContext: 'focus on the migration' })
+      );
+      const [taskData] = cos.addTask.mock.calls.at(-1);
+      expect(taskData.prompt).toBe('REPLAN ISSUE PROMPT');
+      // Same reason `next` carries none: the assembled prompt IS the task prompt.
+      expect(taskData.slashdoCommand).toBeUndefined();
+      // Persisted under its OWN key so a replan's lifecycle events can never
+      // light up the Claim button on the same row.
+      expect(taskData.replanTarget).toBe('42');
+      expect(taskData.claimTarget).toBeUndefined();
+      expect(taskData.noCodeOutput).toBe(true);
+      expect(taskData.worktreeChangesExpected).toBe(false);
+      expect(taskData.description).toContain('MyApp');
+      expect(taskData.description).toContain('42');
+    });
+
+    it('leaves an untargeted replan on the bundled backlog-audit workflow', async () => {
+      getAppById.mockResolvedValue({ id: 'my-app', name: 'MyApp', type: 'web', repoPath: '/repo' });
+      cos.addTask.mockResolvedValue({ id: 'task-replan-all', status: 'pending' });
+
+      const response = await request(app)
+        .post('/api/cos/tasks/slashdo')
+        .send({ command: 'replan', app: 'my-app' });
+
+      expect(response.status).toBe(200);
+      expect(buildIssueReplanTask).not.toHaveBeenCalled();
+      expect(cos.addTask.mock.calls.at(-1)[0].slashdoCommand).toBe('replan');
+    });
+
+    it('surfaces the builder\'s tracker rejection instead of queuing a run with nothing to comment on', async () => {
+      getAppById.mockResolvedValue({ id: 'my-app', name: 'MyApp', type: 'web', repoPath: '/repo' });
+      buildIssueReplanTask.mockRejectedValue(
+        new ServerError('Replan needs a GitHub or GitLab issue tracker', { status: 400, code: 'UNSUPPORTED_REPLAN_TRACKER' })
+      );
+
+      const response = await request(app)
+        .post('/api/cos/tasks/slashdo')
+        .send({ command: 'replan', app: 'my-app', target: '42' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('UNSUPPORTED_REPLAN_TRACKER');
       expect(cos.addTask).not.toHaveBeenCalled();
     });
 

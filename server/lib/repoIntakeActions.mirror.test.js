@@ -5,7 +5,7 @@
  * These are the wire contract. Drift is silent in both directions: a key added
  * server-side is simply never offered in either capture box, and a client-only
  * key is stripped by the Zod schema and ignored by `normalizeRepoIntake` with no
- * error anywhere. Unlike the githubRepoUrl mirror this compares KEYS, not source
+ * error anywhere. Unlike the repoUrl mirror this compares KEYS, not source
  * text — the client half legitimately carries labels, hints, and icons the
  * server has no business knowing about.
  */

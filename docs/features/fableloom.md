@@ -256,6 +256,15 @@ draft/degraded work. The completion hook
 Decision videos are authored as seamless loops; automatic-cut videos land on
 a final beat that hands cleanly to the next node.
 
+### fal.ai H3 Max browser video automation
+
+For scenes utilizing fal.ai's free MiniMax H3 Max web tool, PortOS provides automated, serialized video production (`POST /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/fal-video`):
+
+- **Serialized runner** (`server/services/fableLoom/falVideoAutomation.js`): jobs execute sequentially against PortOS's persistent Chrome CDP browser (`http://localhost:5556`) so concurrent triggers do not overwrite the single web form.
+- **Workflow**: Playwright waits for fal.ai's asynchronously injected privacy choice, prefers the privacy-preserving **Reject All** choice when it is shown, then fills the scene's prompt and camera direction, uploads the scene's current approved storyboard still, triggers generation, monitors progress, and downloads the finished MP4 via authenticated browser context requests.
+- **Durable attachment**: The downloaded clip is saved directly into PortOS Media History and attached to the scene node via `attachNodeVideo`. If the scene image changed while rendering, the video is safely preserved in Media History without overwriting the drifted scene.
+- **Status & polling**: `GET /api/fableloom/:id/episodes/:episodeId/nodes/:nodeId/fal-video/:jobId` provides real-time progress, error diagnostics (such as CAPTCHA challenges or daily allowance limits requiring user action), and completion metadata.
+
 ### Episodic production and continuity
 
 The **Production & Continuity** panel plans a whole episode before it queues

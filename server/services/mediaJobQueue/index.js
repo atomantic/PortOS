@@ -627,7 +627,7 @@ function startLaneJob(job, { lane }) {
   recomputeQueuePositions();
   const label = lane === 'cloud'
     ? (job.params?.mode || 'cloud')
-    : lane === 'remote' ? 'remote audio' : job.kind;
+    : lane === 'remote' ? `remote ${job.kind}` : job.kind;
   persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on ${label} start failed: ${e.message}`));
   broadcastSse(ensureSseEntry(job.id), { type: 'started', kind: job.kind });
   mediaJobEvents.emit('started', job);

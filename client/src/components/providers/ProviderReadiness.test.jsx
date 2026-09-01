@@ -40,6 +40,18 @@ describe('ProviderReadiness', () => {
     expect(screen.queryByText(/setup incomplete/)).toBeNull();
   });
 
+  it('shows installed, stopped llama.cpp as standby instead of incomplete setup', () => {
+    renderWithRouter(<ProviderReadiness readiness={readiness({
+      standby: true,
+      standbyDetail: 'No model server is running, which is a valid idle state. Choose a GGUF preset when needed.',
+    })} />);
+
+    expect(screen.getByText('llama.cpp installed · standby')).toBeTruthy();
+    expect(screen.getByText(/valid idle state/)).toBeTruthy();
+    expect(screen.getByText('Open the LLMs page').closest('a').getAttribute('href')).toBe('/models/llms');
+    expect(screen.queryByText(/setup incomplete/)).toBeNull();
+  });
+
   it('counts only the unmet requirements, and shows each fix', () => {
     renderWithRouter(<ProviderReadiness readiness={readiness()} />);
     // The `server` failure plus the `model` check that could not be evaluated —

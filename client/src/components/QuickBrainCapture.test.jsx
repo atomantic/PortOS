@@ -104,6 +104,20 @@ describe('QuickBrainCapture', () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Saved to Links!'));
   });
 
+  it('sends a trimmed note with a saved URL', async () => {
+    renderWidget();
+    type('https://example.com');
+    fireEvent.change(screen.getByLabelText(/Why are you saving this link/i), {
+      target: { value: '  Read this before planning the next release.  ' },
+    });
+    fireEvent.click(screen.getByLabelText('Capture'));
+
+    await waitFor(() => expect(captureBrainThought).toHaveBeenCalled());
+    expect(captureBrainThought.mock.calls[0][3]).toMatchObject({
+      note: 'Read this before planning the next release.',
+    });
+  });
+
   it('does not flag a URL as creative even when the sticky flag is on', async () => {
     localStorage.setItem('brain.captureCreative', 'true');
     renderWidget();
@@ -305,6 +319,10 @@ describe('QuickBrainCapture', () => {
       type(YT);
       await openAdvanced();
 
+      fireEvent.change(screen.getByLabelText(/Why are you saving this link/i), {
+        target: { value: '  Keep this for the next research session.  ' },
+      });
+
       fireEvent.change(screen.getByLabelText(/what should an agent do/i), {
         target: { value: 'Review for writing-tool improvements.' },
       });
@@ -318,6 +336,7 @@ describe('QuickBrainCapture', () => {
         captureTranscript: true,
         downloadVideo: false,
         ingestAudio: false,
+        note: 'Keep this for the next research session.',
         agentPrompt: 'Review for writing-tool improvements.',
         // Blank entries dropped, surrounding whitespace trimmed.
         tags: ['writing-tools', 'research'],

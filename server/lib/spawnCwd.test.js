@@ -272,7 +272,7 @@ describe('every cwd-passing spawn pins PWD', () => {
     ['services/git.js', 'git/gh resolve from real cwd (and -C), never PWD'],
     ['lib/execGit.js', 'git only'],
     ['lib/planIds.js', 'git only'],
-    ['services/githubCloner.js', 'git clone/fetch only'],
+    ['services/repoCloner.js', 'git clone/fetch only'],
     ['services/gitlab.js', 'glab only'],
     ['services/perpetualWork.js', 'git/gh/glab probes only'],
     ['services/pm2Standardizer.js', 'git + pm2 only'],

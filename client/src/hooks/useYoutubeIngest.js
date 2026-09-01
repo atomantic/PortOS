@@ -8,7 +8,7 @@ import useSseJobSlot from './useSseJobSlot.js';
  * `useSseJobSlot`, like the video-download and track-import hooks.
  *
  * `start(body)` takes the whole ingest payload (`{ url, captureTranscript,
- * downloadVideo, ingestAudio, agentPrompt, tags }`) rather than a bare URL, so
+ * downloadVideo, ingestAudio, note, agentPrompt, tags }`) rather than a bare URL, so
  * `trimStartArg` stays false and the payload passes through untouched.
  *
  * Non-fatal outcomes (no captions, a duplicate review task) ride along on the

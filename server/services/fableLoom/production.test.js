@@ -189,6 +189,32 @@ describe('fableLoom production service', () => {
     });
   });
 
+  it('uses the loom render preferences when a production run has no overrides', async () => {
+    const preferredLoom = structuredClone(sampleLoom);
+    preferredLoom.renderSettings = {
+      formatId: 'square-1-1',
+      imageMode: 'local',
+      imageModel: 'image-model',
+      videoMode: 'grok',
+      effort: 'high',
+    };
+    records.getLoom.mockResolvedValueOnce(preferredLoom);
+
+    const plan = await planEpisodeProduction('loom-1', 'ep-1', { mode: 'current_canon' });
+
+    expect(plan.renderOptions).toMatchObject({
+      formatId: 'square-1-1',
+      aspectRatio: '1:1',
+      width: 1024,
+      height: 1024,
+      imageMode: 'local',
+      imageModel: 'image-model',
+      videoMode: 'grok',
+      videoModel: null,
+      effort: 'high',
+    });
+  });
+
   it('flags an existing portrait storyboard and its clips for landscape regeneration', async () => {
     const portraitLoom = structuredClone(sampleLoom);
     portraitLoom.episodes[0].nodes[0].image = 'portrait.png';

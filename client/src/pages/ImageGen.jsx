@@ -16,6 +16,7 @@ import MediaCard from '../components/media/MediaCard';
 import MediaPreview from '../components/media/MediaPreview';
 import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
 import StylePresetPicker from '../components/media/StylePresetPicker';
+import UniverseStylePicker from '../components/media/UniverseStylePicker';
 import PromptEnhancer from '../components/media/PromptEnhancer';
 import PromptFromMedia from '../components/media/PromptFromMedia';
 import BackendChipStrip from '../components/media/BackendChipStrip';
@@ -32,6 +33,7 @@ import ReferenceImagePicker from '../components/imageGen/ReferenceImagePicker';
 import RemoteMediaTargetPicker from '../components/federatedMedia/RemoteMediaTargetPicker';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
 import { FormField } from '../components/ui/FormField';
+import AutoSizeTextarea from '../components/ui/AutoSizeTextarea';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
@@ -41,6 +43,7 @@ import {
   AlertTriangle, X, Film,
 } from 'lucide-react';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
+import { universeStylePreset } from '../lib/universeStylePreset';
 import { isCloudCliMode, deriveAvailableBackends, AGY_IMAGEGEN_DEFAULT_MODEL, IMAGE_GEN_MODE, cloudPromptRequired, imageGenReadiness, isI2iCapableMode, pickI2iMode, modeLabel, referenceSlotsFor, supportsReferenceStrength } from '../lib/imageGenBackends';
 import { clampImageDimensions, clampImageEdge } from '../lib/imageGenResolutions';
 import { peerModelRequiresInput } from '../lib/federatedMediaReadiness.js';
@@ -153,6 +156,7 @@ export default function ImageGen() {
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState(DEFAULT_NEGATIVE_PROMPT);
   const [stylePreset, setStylePreset] = useState(null);
+  const [selectedUniverse, setSelectedUniverse] = useState(null);
   const [modelId, setModelId] = useState('');
   const [width, setWidth] = useState(1024);
   const [height, setHeight] = useState(1024);
@@ -242,7 +246,11 @@ export default function ImageGen() {
   // CLI, so every local readiness gate below is answered by the peer’s own
   // capacity instead. Its job is queued locally as a proxy, hence the async lane.
   const remoteTarget = useFederatedMediaTarget('image');
-  const isAsyncMode = isLocalMode || isCloudMode || remoteTarget.isRemote;
+  // Grok is a fixed cloud backend; selecting a federated instance does not
+  // apply to it. Keep the target state intact so switching back to another
+  // backend restores the user's previous target selection.
+  const remoteTargetActive = effectiveMode !== IMAGE_GEN_MODE.GROK && remoteTarget.isRemote;
+  const isAsyncMode = isLocalMode || isCloudMode || remoteTargetActive;
   // Only probe `agy models` while Agy is the active backend — it spawns a
   // child process server-side, so an unselected backend must not pay for it.
   const agy = useAgyModels(isAgyMode);
@@ -378,6 +386,10 @@ export default function ImageGen() {
     // come back to the same prompt + settings + live preview frame.
     getActiveImageJob().then(({ activeJob }) => {
       if (!activeJob) return;
+      // Active-job prompt fields are already style-composed. Do not apply a
+      // newly-selected style a second time while restoring the form.
+      setStylePreset(null);
+      setSelectedUniverse(null);
       if (activeJob.prompt) setPrompt(activeJob.prompt);
       if (activeJob.negativePrompt != null) setNegativePrompt(activeJob.negativePrompt);
       if (activeJob.modelId) setModelId(activeJob.modelId);
@@ -464,7 +476,13 @@ export default function ImageGen() {
     const present = remixKeys.filter((k) => searchParams.get(k) != null);
     if (!initFile && present.length === 0) return;
     const get = (k) => searchParams.get(k);
-    if (get('prompt')) setPrompt(get('prompt'));
+    if (get('prompt')) {
+      setPrompt(get('prompt'));
+      // URL handoffs carry the prompt that was submitted, including any style
+      // layers, so the picker must not compose them again.
+      setStylePreset(null);
+      setSelectedUniverse(null);
+    }
     if (get('negativePrompt')) setNegativePrompt(get('negativePrompt'));
     if (get('modelId')) setModelId(get('modelId'));
     if (get('width')) setWidth(Number(get('width')));
@@ -657,9 +675,13 @@ export default function ImageGen() {
   // trigger-word hint and its "+ trigger" append both judge presence against
   // THIS, not the raw textarea, so neither can disagree with the server-side
   // weave when the style preset already supplies a trigger token.
+  const activeStylePresets = useMemo(() => [
+    selectedUniverse ? universeStylePreset(selectedUniverse) : null,
+    stylePreset,
+  ].filter(Boolean), [selectedUniverse, stylePreset]);
   const styledPrompt = useMemo(
-    () => composeStyledPrompt(prompt, negativePrompt, stylePreset).prompt,
-    [prompt, negativePrompt, stylePreset],
+    () => composeStyledPrompt(prompt, negativePrompt, activeStylePresets).prompt,
+    [prompt, negativePrompt, activeStylePresets],
   );
   const activeReferenceImages = useMemo(
     () => referenceImages.slice(0, referenceSlotCount),
@@ -693,7 +715,7 @@ export default function ImageGen() {
   // fails closed on a provider too old to advertise anything. LoRA weights stay
   // refused on every peer — a LoRA is a MODEL, not conditioning (rule 3).
   const remoteUnsupportedInputs = useMemo(() => {
-    if (!remoteTarget.isRemote) return null;
+    if (!remoteTargetActive) return null;
     const model = remoteTarget.model;
     const present = [
       ['an init image', initImage.source != null && !remoteTarget.acceptsInput('initImage')],
@@ -710,9 +732,9 @@ export default function ImageGen() {
       return `${model?.modelName || 'The selected peer model'} renders only from a source image — add an init image, or pick a text-to-image model.`;
     }
     return null;
-  }, [remoteTarget.isRemote, remoteTarget.model, remoteTarget.acceptsInput, initImage.source, populatedRefs.length, selectedLoras.length]);
+  }, [remoteTargetActive, remoteTarget.model, remoteTarget.acceptsInput, initImage.source, populatedRefs.length, selectedLoras.length]);
   // One reading for the submit button and the picker caption alike.
-  const remoteBlocked = remoteTarget.isRemote
+  const remoteBlocked = remoteTargetActive
     ? (remoteTarget.blockedReason || remoteUnsupportedInputs)
     : null;
   // Cloud text-to-image still needs a prompt — mirror the server rule
@@ -822,7 +844,7 @@ export default function ImageGen() {
   // POST — the user keeps watching the active render and the new submission
   // sits in the server queue until the active one finishes.
   const submitGenerationPayload = async () => {
-    const composed = composeStyledPrompt(prompt, negativePrompt, stylePreset);
+    const composed = composeStyledPrompt(prompt, negativePrompt, activeStylePresets);
     // Custom-dimension inputs emit raw values for smooth typing and snap on blur;
     // an Enter-submit (or a field cleared to 0) can bypass that blur, so clamp to
     // the server's per-edge bounds here too — the last line of defense before the
@@ -833,7 +855,7 @@ export default function ImageGen() {
     // selectors (`mode`, `cloudModel`, `quantize`) and the cleaner toggles all
     // describe work on THIS machine, so sending them would either be dropped
     // server-side or, worse, read as a local dispatch.
-    const payload = remoteTarget.isRemote ? {
+    const payload = remoteTargetActive ? {
       prompt: composed.prompt,
       negativePrompt: composed.negativePrompt || undefined,
       width: w, height: h,
@@ -965,7 +987,7 @@ export default function ImageGen() {
     // expires on the clock, so an enabled button can already be pointing at a
     // lapsed peer. Re-derive here and say so, rather than letting the server
     // reject a render the user just committed to.
-    if (remoteTarget.isRemote) {
+    if (remoteTargetActive) {
       if (remoteUnsupportedInputs) { toast.error(remoteUnsupportedInputs); return; }
       const fresh = remoteTarget.verify();
       if (!fresh.ok) { toast.error(fresh.message); return; }
@@ -999,7 +1021,7 @@ export default function ImageGen() {
         await startLocalGeneration();
         await extras;
       } else {
-        const composed = composeStyledPrompt(prompt, negativePrompt, stylePreset);
+        const composed = composeStyledPrompt(prompt, negativePrompt, activeStylePresets);
         const payload = {
           prompt: composed.prompt,
           negativePrompt: composed.negativePrompt || undefined,
@@ -1046,6 +1068,14 @@ export default function ImageGen() {
     if (!filename) return;
     await deleteImage(filename).catch(() => {});
     setGallery((g) => g.filter((img) => img.filename !== filename));
+  }, []);
+
+  const handlePromptSaved = useCallback((item, prompt) => {
+    const filename = item?.filename || item?.raw?.filename;
+    if (!filename) return;
+    setGallery((g) => g.map((img) => img.filename === filename
+      ? { ...img, prompt: prompt === '(no prompt)' ? '' : prompt }
+      : img));
   }, []);
 
   const handleToggleHidden = useCallback(async (item) => {
@@ -1130,6 +1160,7 @@ export default function ImageGen() {
     // Preset was already folded into the recorded prompt at submit time;
     // clear the picker so the user sees what actually produced the image.
     setStylePreset(null);
+    setSelectedUniverse(null);
     if (img.prompt) setPrompt(img.prompt);
     if (img.negativePrompt || img.negative_prompt) setNegativePrompt(img.negativePrompt || img.negative_prompt);
     if (img.seed != null) setSeed(String(img.seed));
@@ -1198,15 +1229,15 @@ export default function ImageGen() {
   const statusUnknown = statusReadiness === 'unknown';
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between gap-2 text-xs">
-        <div className="flex items-center gap-2 flex-wrap">
+    <div className="min-w-0 max-w-full space-y-3">
+      <div className="flex min-w-0 flex-col gap-2 text-xs sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           {statusLoading ? (
             <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full border border-port-border bg-port-card text-gray-400">
               <RefreshCw className="w-3 h-3 animate-spin" /> Checking {effectiveMode}…
             </span>
           ) : status ? (
-            <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full border ${
+            <span className={`inline-flex min-w-0 max-w-full items-start gap-1.5 px-2 py-1 rounded-full border ${
               statusReady
                 ? 'border-port-success/40 bg-port-success/10 text-port-success'
                 : statusUnknown
@@ -1237,7 +1268,7 @@ export default function ImageGen() {
             />
           )}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1 self-start sm:self-auto">
           <button
             onClick={() => refreshStatus(effectiveMode, modelId)}
             disabled={statusLoading}
@@ -1257,8 +1288,13 @@ export default function ImageGen() {
         </div>
       </div>
 
-      <form onSubmit={handleGenerate} className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
-        <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
+      <form onSubmit={handleGenerate} className="grid min-w-0 max-w-full grid-cols-1 gap-4 lg:grid-cols-[3fr_2fr]">
+        <div className="min-w-0 bg-port-card border border-port-border rounded-xl p-3 sm:p-4 space-y-3">
+          <UniverseStylePicker
+            value={selectedUniverse?.id || ''}
+            onChange={setSelectedUniverse}
+            disabled={statusLoading}
+          />
           <StylePresetPicker
             value={stylePreset?.id || ''}
             onChange={setStylePreset}
@@ -1266,22 +1302,22 @@ export default function ImageGen() {
           />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <FormField label="Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-              <textarea
+              <AutoSizeTextarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 rows={3}
                 disabled={statusLoading}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 resize-y"
+                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[80px]"
                 placeholder="Describe the image you want to generate..."
               />
             </FormField>
             <FormField label="Negative Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-              <textarea
+              <AutoSizeTextarea
                 value={negativePrompt}
                 onChange={(e) => setNegativePrompt(e.target.value)}
                 rows={3}
                 disabled={statusLoading}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 resize-y"
+                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[80px]"
                 placeholder="What to avoid..."
               />
             </FormField>
@@ -1336,12 +1372,14 @@ export default function ImageGen() {
             />
           )}
 
-          <RemoteMediaTargetPicker
-            target={remoteTarget}
-            kind="image"
-            disabled={statusLoading}
-            localBlockedReason={remoteUnsupportedInputs}
-          />
+          {effectiveMode !== IMAGE_GEN_MODE.GROK && (
+            <RemoteMediaTargetPicker
+              target={remoteTarget}
+              kind="image"
+              disabled={statusLoading}
+              localBlockedReason={remoteUnsupportedInputs}
+            />
+          )}
 
           <ImageGenControls
             mode={effectiveMode}
@@ -1363,8 +1401,8 @@ export default function ImageGen() {
             // The peer advertises its own models and runs its own quantization;
             // the local dropdowns would name neither. Resolution/steps/guidance/
             // seed do cross the wire, so those stay.
-            showModel={!remoteTarget.isRemote}
-            showQuantize={!remoteTarget.isRemote}
+            showModel={!remoteTargetActive}
+            showQuantize={!remoteTargetActive}
             modelStatus={isLocalMode ? modelDownload.getStatus(modelId) : null}
             onModelDownload={isLocalMode ? modelDownload.start : undefined}
             onModelDownloadCancel={modelDownload.cancel}
@@ -1439,7 +1477,7 @@ export default function ImageGen() {
           <div className="flex items-center gap-2 pt-1 flex-wrap">
             <button
               type="submit"
-              disabled={remoteTarget.isRemote
+              disabled={remoteTargetActive
                 ? remoteBlocked !== null
                 : (notConnected || editImageMissing || cloudNeedsPrompt)}
               title={remoteBlocked || (editImageMissing ? 'This image-edit model needs a source image — upload one below first' : cloudNeedsPrompt ? cloudPromptHint : undefined)}
@@ -1553,7 +1591,7 @@ export default function ImageGen() {
           )}
         </div>
 
-        <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-2">
+        <div className="min-w-0 bg-port-card border border-port-border rounded-xl p-3 sm:p-4 space-y-2">
           <div className="flex items-center justify-between">
             <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wide">Preview</h2>
             {result && !generating && (
@@ -1690,6 +1728,7 @@ export default function ImageGen() {
         items={previewItems}
         annotations={annotations}
         updateAnnotation={updateAnnotation}
+        onPromptSaved={handlePromptSaved}
         onRemix={(item) => item?.raw && handleRemix(item.raw)}
         onSendToImage={(item) => item?.raw?.filename && handleSendToImage(item.raw)}
         onSendToVideo={(item) => item?.raw?.filename && sendToVideo(item.raw)}

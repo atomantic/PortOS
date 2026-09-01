@@ -11,6 +11,7 @@ import {
   detectVideoContainer,
   buildUploadHistoryEntry,
   saveUploadedGalleryVideo,
+  saveUploadedGalleryVideoBuffer,
   MAX_GALLERY_VIDEO_UPLOAD_BYTES,
 } from './videoUpload.js';
 
@@ -59,6 +60,9 @@ describe('buildUploadHistoryEntry', () => {
 });
 
 describe('saveUploadedGalleryVideo validation', () => {
+  it('requires a byte buffer for internal browser downloads', async () => {
+    await expect(saveUploadedGalleryVideoBuffer('not-a-buffer')).rejects.toThrow(/invalid/i);
+  });
   it('rejects an empty upload before touching disk', async () => {
     await expect(saveUploadedGalleryVideo('')).rejects.toThrow(/empty/i);
   });

@@ -123,6 +123,7 @@ import { useOnDemandTaskToast } from '../hooks/useOnDemandTaskToast';
 import { useEngagementReminderToast } from '../hooks/useEngagementReminderToast';
 import { useSharingNotifications } from '../hooks/useSharingNotifications';
 import UpdateBanners from './UpdateBanners';
+import SetupBanner from './SetupBanner';
 import { useAIStatusNotifications } from '../hooks/useAIStatusNotifications';
 import { useNavWorkingSet } from '../hooks/useNavWorkingSet.js';
 import { migrateLegacyNavPath } from '../utils/navWorkingSet.js';
@@ -349,7 +350,7 @@ const SECTION_PRESENTATION = {
   Create: { icon: Sparkles, defaultTo: '/media' },
   'Dev Tools': { icon: Terminal },
   Health: { icon: Heart, defaultTo: '/meatspace/overview' },
-  Models: { icon: Cpu, defaultTo: '/models/performance' },
+  Models: { icon: Cpu, defaultTo: '/models/llms' },
   Settings: { icon: Settings, defaultTo: '/settings/general' },
   Identity: { icon: Fingerprint, defaultTo: '/digital-twin/overview' },
   POST: { icon: Zap, defaultTo: '/post/launcher' },
@@ -1425,9 +1426,10 @@ export default function Layout() {
           </div>
         </header>
 
-        {/* Update / out-of-sync advisories — inline (document flow) so they
+        {/* Update, out-of-sync, and essential-setup advisories — inline (document flow) so they
             push the page instead of covering a bottom-anchored composer (#3786) */}
         <UpdateBanners />
+        <SetupBanner />
 
         {/* Main content */}
         {(() => {

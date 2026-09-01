@@ -126,6 +126,15 @@ def main() -> int:
 
     env = os.environ.copy()
     env["PYTHONPATH"] = f"{str(repo_dir)}:{env.get('PYTHONPATH', '')}".rstrip(":")
+    # Mirrors train_mflux_lora.py's M5 Metal-watchdog mitigation. Preserve an
+    # explicit caller override, but make the validated safe value the default
+    # for the sustained FastMetal denoise child.
+    env.setdefault("AGX_RELAX_CDM_CTXSTORE_TIMEOUT", "1")
+    print(
+        f"STATUS:watchdog mitigation · AGX_RELAX_CDM_CTXSTORE_TIMEOUT={env['AGX_RELAX_CDM_CTXSTORE_TIMEOUT']}",
+        file=sys.stderr,
+        flush=True,
+    )
 
     proc = subprocess.Popen(
         cmd,

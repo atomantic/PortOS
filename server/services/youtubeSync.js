@@ -30,11 +30,11 @@
  * exported and unit-tested against saved DOM-shaped fixtures — no browser or DB.
  */
 import { dataPath, ensureDir, atomicWrite, tryReadFile, safeJSONParse, sleep } from '../lib/fileUtils.js';
-import { todayInTimezone } from '../lib/timezone.js';
+import { todayInTimezone, localDayRangeUtc } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
 import { getSettings } from './settings.js';
 import { findOrOpenPage, listCdpPages, isAuthPage, evaluateOnPage } from './browserService.js';
-import { localDayRangeUtc, shortSummary } from './humanActivity.js';
+import { shortSummary } from './humanActivity.js';
 import { youtubeVideoIdFromUrl } from './youtubeImport.js';
 
 // ---------------------------------------------------------------------------

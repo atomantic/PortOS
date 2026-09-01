@@ -4,7 +4,7 @@ import { AlertTriangle, Gauge } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { filterHardwareCompatibleProviderModels, filterSelectableModels, filterGenerationModels, isEmbeddingModel, isProviderHardwareCompatible, isProviderModelHardwareCompatible, mergeModelLists, configuredDefaultIn, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isGrokBuildCli, isLocalEndpoint, isLocalInstanceProvider, effectiveModelContextWindow, isRunnerAllowedCommand, effortLevelsForProvider, isOllamaBackedProvider, gatewayForProvider, isClaudeCommandProvider, generationControlsFor, providerRuntimeKey, providerCardState, PROVIDER_CARD_STATE } from '../utils/providers';
+import { filterHardwareCompatibleProviderModels, filterSelectableModels, filterGenerationModels, isEmbeddingModel, isProviderHardwareCompatible, isProviderModelHardwareCompatible, mergeModelLists, configuredDefaultIn, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isLocalEndpoint, isLocalInstanceProvider, effectiveModelContextWindow, isRunnerAllowedCommand, effortLevelsForProvider, isOllamaBackedProvider, gatewayForProvider, isClaudeCommandProvider, generationControlsFor, providerRuntimeKey, providerCardState, PROVIDER_CARD_STATE } from '../utils/providers';
 import useLocalModels from '../hooks/useLocalModels';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import BrailleSpinner from '../components/BrailleSpinner';
@@ -25,7 +25,7 @@ import useDrawerTab from '../hooks/useDrawerTab';
 import { FormField } from '../components/ui/FormField';
 import RuntimeInstallModal from '../components/install/RuntimeInstallModal';
 import ProviderCard from '../components/providers/ProviderCard';
-import { GrokUploadWarning, GatewayKeyHint } from '../components/providers/ProviderNotices';
+import { GatewayKeyHint } from '../components/providers/ProviderNotices';
 import CollapsibleSection from '../components/ui/CollapsibleSection';
 
 // The two local apps an API provider can front. Their installer lives on the
@@ -33,9 +33,17 @@ import CollapsibleSection from '../components/ui/CollapsibleSection';
 // links there instead of offering an install of its own.
 const LOCAL_APP_LABELS = { ollama: 'Ollama', lmstudio: 'LM Studio' };
 
-// The three buckets the cards are grouped into, in the order they render.
+// The buckets the cards are grouped into, in the order they render.
 // "Needs setup" sits between them deliberately: a provider missing its CLI or
 // key can't be turned on at all, so it is neither enabled nor merely disabled.
+//
+// The last bucket is the machine's own veto: a provider the server has marked
+// hardware-`unavailable` can never run here no matter what the user toggles, so
+// it is pulled out of the three readiness buckets and parked in a section that
+// stays COLLAPSED. Deleting it outright is not an option — the record is shared
+// across a user's federated machines, and one that is unavailable here may be
+// the workhorse on another — so it stays editable/deletable one click away
+// instead of adding noise to the three sections that describe real choices.
 export const PROVIDER_SECTIONS = [
   {
     key: 'enabled',
@@ -57,6 +65,17 @@ export const PROVIDER_SECTIONS = [
     hint: 'Fully configured, but switched off',
     dot: 'bg-gray-500',
     states: [PROVIDER_CARD_STATE.DISABLED],
+  },
+  {
+    key: 'incompatible',
+    title: 'Unavailable on this machine',
+    hint: 'This hardware cannot run them — kept for your other machines',
+    dot: 'bg-port-error',
+    // Matched by hardware, not by card state: `states` stays empty so the
+    // readiness filter never claims one of these cards back.
+    states: [],
+    hardwareIncompatible: true,
+    defaultOpen: false,
   },
 ];
 
@@ -110,6 +129,13 @@ export default function AIProviders() {
   const [sampleProviders, setSampleProviders] = useState([]);
   const [loadingSamples, setLoadingSamples] = useState(false);
   const [addingSample, setAddingSample] = useState({});
+  // Samples this machine could actually run. One the server marked
+  // hardware-`unavailable` has no path to becoming usable here, so it is not
+  // listed at all rather than listed with a dead "Unavailable" button.
+  const addableSamples = useMemo(
+    () => sampleProviders.filter(isProviderHardwareCompatible),
+    [sampleProviders],
+  );
   // CLI availability per provider card, keyed by `providerRuntimeKey`. An empty
   // map means the endpoint was not reached (for example, an older server during
   // an upgrade) — distinct from a confirmed missing CLI — and simply renders no
@@ -390,13 +416,12 @@ export default function AIProviders() {
   };
 
   const handleAddAllSamples = async () => {
-    const compatibleSamples = sampleProviders.filter(isProviderHardwareCompatible);
-    if (compatibleSamples.length === 0) return;
+    if (addableSamples.length === 0) return;
 
     const succeededIds = [];
     const failedIds = [];
 
-    for (const provider of compatibleSamples) {
+    for (const provider of addableSamples) {
       try {
         await api.createProvider(provider);
         succeededIds.push(provider.id);
@@ -482,13 +507,19 @@ export default function AIProviders() {
       const idx = list.findIndex(p => p.id === activeProviderId);
       return idx <= 0 ? list : [list[idx], ...list.slice(0, idx), ...list.slice(idx + 1)];
     };
+    // The hardware veto is decided first: what this machine cannot run never
+    // reaches the readiness buckets, so a card lands in exactly one section.
+    const runnable = providers.filter(isProviderHardwareCompatible);
+    const unrunnable = providers.filter(p => !isProviderHardwareCompatible(p));
     return {
       providersById: byId,
       runtimeByProviderId: runtimeById,
       cardStateByProviderId: readinessById,
       providersBySection: Object.fromEntries(PROVIDER_SECTIONS.map(section => [
         section.key,
-        defaultFirst(providers.filter(p => section.states.includes(readinessById[p.id].state))),
+        defaultFirst(section.hardwareIncompatible
+          ? unrunnable
+          : runnable.filter(p => section.states.includes(readinessById[p.id].state))),
       ])),
     };
   }, [providers, statuses, activeProviderId, runtimeForProvider]);
@@ -572,12 +603,12 @@ export default function AIProviders() {
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-white">Sample Providers</h2>
             <div className="flex gap-2">
-              {sampleProviders.filter(isProviderHardwareCompatible).length > 1 && (
+              {addableSamples.length > 1 && (
                 <button
                   onClick={handleAddAllSamples}
                   className="px-3 py-1.5 text-sm bg-port-accent hover:bg-port-accent/80 text-white rounded transition-colors"
                 >
-                  Add All ({sampleProviders.filter(isProviderHardwareCompatible).length})
+                  Add All ({addableSamples.length})
                 </button>
               )}
               <button
@@ -591,13 +622,15 @@ export default function AIProviders() {
 
           {loadingSamples ? (
             <div className="text-center py-6 text-gray-400">Loading sample providers...</div>
-          ) : sampleProviders.length === 0 ? (
+          ) : addableSamples.length === 0 ? (
             <div className="text-center py-6 text-gray-500">
-              All sample providers are already in your configuration.
+              {sampleProviders.length === 0
+                ? 'All sample providers are already in your configuration.'
+                : 'The remaining sample providers cannot run on this machine’s hardware.'}
             </div>
           ) : (
             <div className="grid gap-3">
-              {sampleProviders.map(provider => (
+              {addableSamples.map(provider => (
                 <div
                   key={provider.id}
                   className="bg-port-bg border border-port-border rounded-lg p-3 flex flex-col sm:flex-row sm:items-start justify-between gap-3"
@@ -647,11 +680,6 @@ export default function AIProviders() {
                       {filterSelectableModels(provider.models).length > 0 && (
                         <p>Models: {filterSelectableModels(provider.models).slice(0, 3).join(', ')}{filterSelectableModels(provider.models).length > 3 ? ` +${filterSelectableModels(provider.models).length - 3}` : ''}</p>
                       )}
-                      {!isProviderHardwareCompatible(provider) && (
-                        <p className="text-port-warning">
-                          Unavailable on this machine: {provider.hardwareCompatibility?.reasons?.join(' · ') || 'hardware requirements are not met'}
-                        </p>
-                      )}
                       {provider.envVars && Object.keys(provider.envVars).length > 0 && (
                         <div className="mt-0.5">
                           <span>Env:</span>
@@ -668,10 +696,10 @@ export default function AIProviders() {
                   </div>
                   <button
                     onClick={() => handleAddSample(provider)}
-                    disabled={addingSample[provider.id] || !isProviderHardwareCompatible(provider)}
+                    disabled={Boolean(addingSample[provider.id])}
                     className="px-4 py-1.5 text-sm bg-port-success/20 text-port-success hover:bg-port-success/30 rounded transition-colors disabled:opacity-50 shrink-0"
                   >
-                    {addingSample[provider.id] ? 'Adding...' : isProviderHardwareCompatible(provider) ? 'Add' : 'Unavailable'}
+                    {addingSample[provider.id] ? 'Adding...' : 'Add'}
                   </button>
                 </div>
               ))}
@@ -779,7 +807,7 @@ export default function AIProviders() {
                 <CollapsibleSection
                   key={section.key}
                   size="lg"
-                  defaultOpen
+                  defaultOpen={section.defaultOpen !== false}
                   buttonClassName="flex-wrap border-b border-port-border/60 pb-1.5"
                   bodyClassName="grid gap-4 pt-3"
                   label={(
@@ -1440,8 +1468,6 @@ function ProviderForm({ provider, onClose, onSave, onEditProvider, allProviders 
                 />
                 <span className="text-sm text-gray-400">Enabled</span>
               </label>
-
-              {isGrokBuildCli({ type: formData.type, command: formData.command }) && <GrokUploadWarning />}
 
               {gatewayForProvider(provider) && (
                 <GatewayKeyHint

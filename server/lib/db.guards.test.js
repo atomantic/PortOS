@@ -419,11 +419,10 @@ describe('DB-backed test files are covered by vitest.config.db.js', () => {
     const REPO_SCRIPTS = join(SERVER, '..', 'scripts');
 
     const hasDbGlob = DB_TEST_INCLUDE.includes('**/db.test.js');
-    // Match by basename — robust to the `../scripts/` relative-path prefix. The
-    // explicit include entries all have distinct basenames, so this can't
-    // false-match.
-    const explicitBasenames = new Set(
-      DB_TEST_INCLUDE.filter((p) => p !== '**/db.test.js').map((p) => p.split('/').pop()),
+    // Match normalized paths so two suites with the same basename in different
+    // directories remain independently covered by the explicit include list.
+    const explicitIncludes = new Set(
+      DB_TEST_INCLUDE.filter((p) => p !== '**/db.test.js').map((p) => p.split('/').join(sep)),
     );
 
     // The checkHealth + dbReady gating always sits in a suite's first ~40 lines,
@@ -472,7 +471,8 @@ describe('DB-backed test files are covered by vitest.config.db.js', () => {
         const head = readHead(join(root, rel));
         // A real DB-backed suite both gates on checkHealth() and exposes dbReady.
         if (!(/\bcheckHealth\b/.test(head) && /\bdbReady\b/.test(head))) continue;
-        const covered = (hasDbGlob && base === 'db.test.js') || explicitBasenames.has(base);
+        const relativePath = join(prefix, rel);
+        const covered = (hasDbGlob && base === 'db.test.js') || explicitIncludes.has(relativePath);
         if (!covered) offenders.push(prefix + rel.split(sep).join('/'));
       }
     }
@@ -485,11 +485,10 @@ describe('DB-backed test files are covered by vitest.config.db.js', () => {
   });
 
   it('every explicit DB_TEST_INCLUDE entry resolves to a real file', () => {
-    // Basename matching above proves a suite IS listed, but not that its include
-    // PATH is correct — a wrong path (e.g. `../scripts/x` for a file under
-    // `scripts/x`) matches no file in vitest yet is "covered" by basename, so the
-    // suite silently never runs. Resolve each non-glob entry against the config
-    // root (server/) and assert it exists.
+    // Path matching above proves a detected suite is covered, but it does not
+    // prove every explicit include path resolves to a file; a stale entry for a
+    // renamed or deleted suite would otherwise be invisible. Resolve each
+    // non-glob entry against the config root (server/) and assert it exists.
     const SERVER = join(dirname(fileURLToPath(import.meta.url)), '..');
     const broken = DB_TEST_INCLUDE
       .filter((p) => !p.includes('*'))

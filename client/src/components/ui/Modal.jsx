@@ -99,11 +99,26 @@ const ALIGN_CLASSES = {
 // always-mounted shells that the order is consistent. If a future component
 // adds a window keydown handler at module load and runs first, this Modal
 // will still dispatch (because its handler exists), but won't block that
-// earlier listener. The HMR-safe install pattern below (`__portos_modal_esc`
-// globalThis flag + import.meta.hot.dispose) prevents duplicate installs on
-// dev hot-reload.
-const modalStack = [];
-const escHandlers = new Map();
+// earlier listener.
+//
+// Keep the listener guard AND its dispatch state in one global record. Vite
+// HMR and Vitest isolation can both re-evaluate this module while retaining
+// the same DOM globals. A boolean-only install guard leaves the old listener
+// pointing at its module-local stack while the new Modal instances push onto
+// a fresh one, orphaning Escape dispatch. Sharing the stack and handler map
+// makes every module instance register with the one installed listener.
+const MODAL_ESC_STATE_KEY = '__portos_modal_esc_state';
+const modalEscState = globalThis[MODAL_ESC_STATE_KEY] ?? {
+  stack: [],
+  handlers: new Map(),
+  listener: null,
+  windowTarget: null,
+  documentTarget: null,
+};
+globalThis[MODAL_ESC_STATE_KEY] = modalEscState;
+
+const modalStack = modalEscState.stack;
+const escHandlers = modalEscState.handlers;
 
 function handleGlobalEsc(e) {
   if (e.key !== 'Escape' || modalStack.length === 0) return;
@@ -120,7 +135,7 @@ function handleGlobalEsc(e) {
   if (handler) handler();
 }
 
-if (typeof window !== 'undefined') {
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   // Install both window AND document keydown listeners. Bubble-phase event
   // order on the same keystroke is: target → ... → document → window. A
   // document-level handler installed by another component (e.g.
@@ -131,22 +146,36 @@ if (typeof window !== 'undefined') {
   // at both — gives the top-most modal full ownership of the keystroke
   // regardless of where competing listeners are bound.
   //
-  // Guarded against double-install on Vite HMR. The module can re-evaluate
-  // when it (or one of its importers) is edited; without the globalThis
-  // flag the handlers would stack up, with each copy referencing the stale
-  // modalStack from its own module instance.
-  if (!globalThis.__portos_modal_esc_installed) {
+  // Reuse the listener when this module is re-evaluated against the same DOM.
+  // If the DOM targets themselves changed (possible in an isolated test
+  // environment), detach from the old targets and reset their obsolete stack
+  // before installing against the current window/document pair.
+  const sameTargets = modalEscState.windowTarget === window
+    && modalEscState.documentTarget === document;
+  if (!sameTargets && modalEscState.listener) {
+    modalEscState.windowTarget?.removeEventListener('keydown', modalEscState.listener);
+    modalEscState.documentTarget?.removeEventListener('keydown', modalEscState.listener);
+    modalStack.length = 0;
+    escHandlers.clear();
+    modalEscState.listener = null;
+  }
+  if (!modalEscState.listener) {
     window.addEventListener('keydown', handleGlobalEsc);
     document.addEventListener('keydown', handleGlobalEsc);
-    globalThis.__portos_modal_esc_installed = true;
+    modalEscState.listener = handleGlobalEsc;
+    modalEscState.windowTarget = window;
+    modalEscState.documentTarget = document;
   }
   // On HMR dispose, tear down both listeners so the next module instance
-  // can re-install them cleanly against its own modalStack/escHandlers.
+  // can install its current handler while retaining the shared modal state.
   if (import.meta.hot) {
     import.meta.hot.dispose(() => {
-      window.removeEventListener('keydown', handleGlobalEsc);
-      document.removeEventListener('keydown', handleGlobalEsc);
-      delete globalThis.__portos_modal_esc_installed;
+      if (modalEscState.listener !== handleGlobalEsc) return;
+      modalEscState.windowTarget?.removeEventListener('keydown', handleGlobalEsc);
+      modalEscState.documentTarget?.removeEventListener('keydown', handleGlobalEsc);
+      modalEscState.listener = null;
+      modalEscState.windowTarget = null;
+      modalEscState.documentTarget = null;
     });
   }
 }

@@ -3,6 +3,7 @@ import { MemoryRouter, Routes, Route, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const musicGenProps = vi.hoisted(() => ({ current: null }));
+const chiptuneProps = vi.hoisted(() => ({ current: null }));
 
 // Stub the heavy children — this suite pins the MIDI read-through wiring
 // (#2477 follow-up), not the editor/generation internals.
@@ -11,7 +12,10 @@ vi.mock('./MusicGenPanel', () => ({ default: (props) => {
   musicGenProps.current = props;
   return <div data-testid="gen-panel" />;
 } }));
-vi.mock('./ChiptunePanel', () => ({ default: () => <div data-testid="chiptune-panel" /> }));
+vi.mock('./ChiptunePanel', () => ({ default: (props) => {
+  chiptuneProps.current = props;
+  return <div data-testid="chiptune-panel" />;
+} }));
 vi.mock('./TrackRenderCard', () => ({ default: ({ render: item, onRemix, onSendToVideo }) => (
   <>
     <button type="button" data-testid="render-card" onClick={() => onRemix(item)}>Remix {item.id}</button>
@@ -172,6 +176,18 @@ describe('<TracksManager> generator mode toggle', () => {
 
     expect(await screen.findByTestId('gen-panel')).toBeInTheDocument();
     expect(screen.queryByTestId('chiptune-panel')).toBeNull();
+  });
+
+  it('passes the current track brief into chiptune mode', async () => {
+    listTracks.mockResolvedValue([{ ...TRACK, prompt: 'Rainy arcade chase', lyrics: '[verse]\nRun!' }]);
+    renderAt('track-1');
+    await screen.findByTestId('gen-panel');
+    fireEvent.click(modeButton('Chiptune score'));
+
+    expect(chiptuneProps.current).toMatchObject({
+      sourcePrompt: 'Rainy arcade chase',
+      sourceLyrics: '[verse]\nRun!',
+    });
   });
 });
 

@@ -4,7 +4,7 @@ import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import ToggleSwitch from '../ToggleSwitch';
 import { useInstanceFeatures, publishInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
-import { isGitHubRepoUrl, parseGitHubUrl } from '../../lib/githubRepoUrl.js';
+import { isGitHubRepoUrl, parseGitHubUrl } from '../../lib/repoUrl.js';
 import { getPrimaryLaunchUrl } from '../../services/appUrls.js';
 import { installEidoverseFeature, updateEidoverseWorldsSource, updateInstanceFeature } from '../../services/api';
 

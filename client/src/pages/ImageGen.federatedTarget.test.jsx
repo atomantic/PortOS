@@ -42,7 +42,7 @@ vi.mock('../services/api', () => ({
   setImageHidden: vi.fn(async () => ({})),
   cleanGalleryImage: vi.fn(async () => ({})),
   getActiveImageJob: vi.fn(async () => ({ activeJob: null })),
-  getSettings: vi.fn(async () => ({ imageGen: { mode: 'local' } })),
+  getSettings: vi.fn(async () => ({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' }, grok: { enabled: true } } })),
   buildFormData: vi.fn(() => new FormData()),
   listMediaJobs: vi.fn(async () => ({ jobs: [] })),
   regenerateGalleryImage: vi.fn(async () => ({})),
@@ -76,6 +76,19 @@ vi.mock('../components/ui/Toast', () => ({
 }));
 vi.mock('../components/media/PromptEnhancer', () => ({ default: () => null }));
 vi.mock('../components/media/PromptFromMedia', () => ({ default: () => null }));
+vi.mock('../components/media/UniverseStylePicker', () => ({
+  default: ({ onChange }) => (
+    <button
+      type="button"
+      onClick={() => onChange({
+        id: 'u-1', name: 'Example Universe',
+        influences: { embrace: ['inky linework'], avoid: ['glossy'] },
+      })}
+    >
+      Use universe style
+    </button>
+  ),
+}));
 vi.mock('../components/media/StylePresetPicker', () => ({ default: () => null }));
 vi.mock('../components/media/MediaPreview', () => ({ default: () => null }));
 vi.mock('../components/media/MediaJobsQueue', () => ({ default: () => null }));
@@ -128,6 +141,26 @@ describe('ImageGen federated render target', () => {
     for (const field of ['mode', 'quantize', 'cleanC2PA', 'denoise', 'loraFilenames', 'cloudModel']) {
       expect(state.generateImage.mock.calls[0][0]).not.toHaveProperty(field);
     }
+  });
+
+  it('adds the selected universe positive and negative style tokens to the image payload', async () => {
+    await mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Use universe style' }));
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Generate$/ })); });
+
+    await waitFor(() => expect(state.generateImage).toHaveBeenCalled());
+    expect(state.generateImage.mock.calls[0][0]).toMatchObject({
+      prompt: 'inky linework. a lighthouse at dusk',
+      negativePrompt: expect.stringContaining('glossy'),
+    });
+  });
+
+  it('hides the generation target field when Grok is selected', async () => {
+    await mount();
+    fireEvent.click(await screen.findByRole('button', { name: /Grok/i }));
+
+    await waitFor(() => expect(screen.queryByRole('combobox', { name: /generation target/i })).not.toBeInTheDocument());
   });
 
   // A stale snapshot still records `state: 'ready'`; gating on it would leave

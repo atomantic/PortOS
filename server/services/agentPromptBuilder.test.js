@@ -354,7 +354,7 @@ describe('claim-flow completion handoff', () => {
         { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' },
       );
 
-      expect(prompt).toContain('--review-with antigravity[gemini-3.7-flash]~max=1~effort=medium,ollama~opt');
+      expect(prompt).toContain('--review-with ollama~opt,antigravity[gemini-3.7-flash]~max=1~effort=medium');
     });
 
     it('emits the pin on the full API prompt path too', async () => {
@@ -932,7 +932,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt.slice(prompt.indexOf('## Review Loop'))).toContain('copilot');
     });
 
-    it.each(['on-clean', 'on-findings'])('disables cross-phase skipping for an interleaved %s order', (reviewStopMode) => {
+    it.each(['on-clean', 'on-findings'])('moves the tool-free ingress ahead of an interleaved %s order', (reviewStopMode) => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex', 'copilot', 'ollama'], reviewStopMode } }),
         '/r',
@@ -940,10 +940,10 @@ describe('buildLightContextPrompt', () => {
         isTruthyMeta,
         { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode', localAgentLoopBody: 'RECIPE' });
 
-      expect(prompt).toContain('`codex`=0, `copilot`=1, `ollama`=2');
+      expect(prompt).toContain('`ollama`=0, `codex`=1, `copilot`=2');
       expect(prompt).toContain('`LOCAL_STOP_INDEX` to that triggering local reviewer\'s position');
-      expect(prompt).toContain('Cross-phase stop-mode skip disabled');
-      expect(prompt).toContain('run every PR-side reviewer in this phase');
+      expect(prompt).toContain('The original order places every local reviewer before every PR-side reviewer');
+      expect(prompt).not.toContain('Cross-phase stop-mode skip disabled');
     });
 
     it('keeps an optional local reviewer non-blocking when its verdict is inconclusive', () => {
@@ -992,6 +992,60 @@ describe('buildLightContextPrompt', () => {
       const renderedLocalRecipe = localSection.slice(recipeStart, recipeEnd);
       expect(renderedLocalRecipe).not.toMatch(/^\s*(?:git pull --rebase --autostash && )?git push\b/m);
       expect(renderedLocalRecipe).not.toContain('git push origin');
+    });
+
+    it('rewrites public-content CLI review recipes into enforced safe modes', () => {
+      const unsafeRecipe = [
+        'claude -p "$LOCAL_PROMPT" ${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"} ${EFFORT_FLAG[@]+"${EFFORT_FLAG[@]}"} --dangerously-skip-permissions',
+        'codex ${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"} ${EFFORT_FLAG[@]+"${EFFORT_FLAG[@]}"} --sandbox danger-full-access -a never exec "$CODEX_APPLY_PROMPT"',
+        'agy --dangerously-skip-permissions --model "$AGY_REVIEW_MODEL" --print-timeout 30m -p "$LOCAL_PROMPT"',
+        'grok --permission-mode bypassPermissions ${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"} ${EFFORT_FLAG[@]+"${EFFORT_FLAG[@]}"} -p "$LOCAL_PROMPT"',
+        '"$REVIEW_BIN" -p --force --trust --output-format text --sandbox disabled ${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"} "$LOCAL_PROMPT"',
+      ].join('\n');
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['claude', 'antigravity', 'grok'], reviewerApplies: true } }),
+        '/r',
+        { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
+        isTruthyMeta,
+        {
+          isTui: true,
+          providerId: 'opencode-ollama-tui',
+          providerCommand: 'opencode',
+          localAgentLoopBody: unsafeRecipe,
+        },
+      );
+
+      expect(prompt).toContain('--permission-mode plan --tools "" --disallowedTools "Bash,WebFetch,WebSearch,Write,Edit,NotebookEdit"');
+      expect(prompt).toContain('--strict-mcp-config --mcp-config \'{"mcpServers":{}}\' --no-chrome --no-session-persistence');
+      expect(prompt).toContain('< <(git diff "$BASE_BRANCH"...HEAD)');
+      expect(prompt).not.toContain(unsafeRecipe.split('\n')[0]);
+      expect(prompt).not.toContain(unsafeRecipe.split('\n')[1]);
+      expect(prompt).not.toContain(unsafeRecipe.split('\n')[2]);
+      expect(prompt).not.toContain(unsafeRecipe.split('\n')[3]);
+      expect(prompt).not.toContain(unsafeRecipe.split('\n')[4]);
+      expect(prompt.match(/Reviewer unavailable: public-content review requires an enforced read-only mode/g)).toHaveLength(2);
+      expect(prompt).toContain('--sandbox read-only review');
+      expect(prompt).toContain('--mode=ask');
+      expect(prompt).toContain('Reviewer applies (off)');
+      expect(prompt).not.toContain('--reviewer-applies');
+    });
+
+    it('rejects a future reviewer recipe when an unrestricted execution path survives sanitization', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex'] } }),
+        '/r',
+        { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
+        isTruthyMeta,
+        {
+          isTui: true,
+          providerId: 'opencode-ollama-tui',
+          providerCommand: 'opencode',
+          localAgentLoopBody: 'codex --sandbox workspace-write exec "$PUBLIC_DIFF"',
+        },
+      );
+
+      expect(prompt).toContain('entire recipe was rejected');
+      expect(prompt).not.toContain('workspace-write exec');
     });
 
     it('keeps reviewer-applies local fixes off the remote branch', () => {
@@ -1650,7 +1704,8 @@ describe('buildLightContextPrompt', () => {
         isTruthyMeta);
       expect(prompt).toMatch(/--review-with codex,antigravity,copilot/);
       expect(prompt).toMatch(/--review-stop-on-clean/);
-      expect(prompt).toMatch(/--reviewer-applies/);
+      expect(prompt).not.toMatch(/--reviewer-applies/);
+      expect(prompt).toContain('Reviewer applies (off)');
       // Ordered run instruction.
       expect(prompt).toMatch(/For EACH reviewer in order/);
     });
@@ -1659,9 +1714,10 @@ describe('buildLightContextPrompt', () => {
     // LIST default-aware on the inline `/do:pr` path (TUI + PR-owning claude-code
     // agents), leaving its four companions (usernames, optionalReviewers,
     // stopMode, reviewerApplies) resolved from task metadata alone. A task that
-    // pins no reviewer config must inherit ALL FIVE from Code Review Defaults —
-    // matching resolveReviewLoopOptions on the non-PR-owning CLI follow-up path.
-    it('threads ALL FIVE Code Review Default fields into the inline /do:pr (not just reviewers)', () => {
+    // pins no reviewer config inherits the ordered roster, usernames, optional
+    // markers, and stop mode. Public PR review deliberately overrides the fifth
+    // field (reviewerApplies) to false.
+    it('threads Code Review Defaults into inline /do:pr while forcing public review non-applying', () => {
       const codeReviewDefaults = {
         reviewers: ['codex', 'ollama'],
         usernames: ['alice'],
@@ -1676,7 +1732,8 @@ describe('buildLightContextPrompt', () => {
         { branchName: 'b', worktreePath: '/tmp/wt' },
         isTruthyMeta,
         { isTui: true, defaultReviewers: codeReviewDefaults.reviewers, codeReviewDefaults });
-      expect(prompt).toMatch(/--review-with codex,ollama~opt,@alice --review-stop-on-findings --reviewer-applies/);
+      expect(prompt).toMatch(/--review-with ollama~opt,codex,@alice --review-stop-on-findings/);
+      expect(prompt).not.toMatch(/--reviewer-applies/);
     });
 
     it('threads per-reviewer ~max caps from the Code Review Defaults into the inline /do:pr', () => {
@@ -1692,7 +1749,7 @@ describe('buildLightContextPrompt', () => {
         { branchName: 'b', worktreePath: '/tmp/wt' },
         isTruthyMeta,
         { isTui: true, defaultReviewers: codeReviewDefaults.reviewers, codeReviewDefaults });
-      expect(prompt).toMatch(/--review-with codex~max=2,ollama~opt~max=1/);
+      expect(prompt).toMatch(/--review-with ollama~opt~max=1,codex~max=2/);
     });
 
     it('lets a task-level ~max cap map override the defaults', () => {
@@ -1866,7 +1923,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/`codex` → loop until clean/);
       expect(prompt).not.toMatch(/`copilot` →/);
       // And the equivalent flag string carries the same suffixes.
-      expect(prompt).toMatch(/--review-with codex~max=0,ollama~max=1/);
+      expect(prompt).toMatch(/--review-with ollama~max=1,codex~max=0/);
     });
 
     it('omits the round-caps note when no cap is configured', () => {
@@ -1883,7 +1940,7 @@ describe('buildLightContextPrompt', () => {
         { branchName: 'b', worktreePath: '/tmp/wt' },
         isTruthyMeta);
       expect(prompt).not.toMatch(/Round caps \(~max\)/);
-      expect(prompt).toMatch(/--review-with codex,ollama/);
+      expect(prompt).toMatch(/--review-with ollama,codex/);
     });
 
     it('threads a configured claude model (Ollama-backed reviewer) via the map', () => {
@@ -3607,5 +3664,51 @@ describe('TUI reviewLoopFollowUp completion instructions', () => {
     expect(first).not.toContain('/repo/.agent-done-agent-bbb222');
     // No instruction may still point at the shared filename.
     expect(first).not.toMatch(/\.agent-done(?![-\w])/);
+  });
+});
+
+// A filing agent cannot reliably name its own model, so PortOS resolves the
+// planner identity from the provider/model the run was actually dispatched with
+// and hands the agent the finished label. The regression this catches is the
+// prompt shipping WITHOUT that value, which strands the shared dispatch guidance
+// pointing at a section that does not exist and invites a self-identified guess.
+describe('planner attribution', () => {
+  it('gives a light-path run the exact planner label for the model it resolved to', () => {
+    const prompt = buildLightContextPrompt(
+      makeTask({ metadata: { openPR: false } }), '/repo', null, isTruthyMeta,
+      { providerId: 'claude-code-tui', providerCommand: 'claude', providerModel: 'claude-opus-5' },
+    );
+    expect(prompt).toMatch(/## Planner Attribution/);
+    expect(prompt).toMatch(/--label planner:opus-5/);
+    expect(prompt).toMatch(/gh label create planner:opus-5/);
+  });
+
+  it('falls back to the provider id when the run pinned no model', () => {
+    const prompt = buildLightContextPrompt(
+      makeTask({ metadata: { openPR: false } }), '/repo', null, isTruthyMeta,
+      { providerId: 'grok', providerCommand: 'grok' },
+    );
+    expect(prompt).toMatch(/--label planner:grok/);
+  });
+
+  // The full path is a separate render (API providers never take the light
+  // path), and it appends the section rather than filling a template variable —
+  // an install's stored prompt template predates it and would silently drop it.
+  it('reaches an api provider through the full path too', async () => {
+    const prompt = await buildAgentPrompt(
+      makeTask({ metadata: { openPR: false } }), {}, '/repo', null, isTruthyMeta,
+      { providerType: 'api', providerId: 'lmstudio', providerModel: 'claude-opus-5' },
+    );
+    const text = typeof prompt === 'string' ? prompt : prompt.userPrompt;
+    expect(text).toMatch(/## Planner Attribution/);
+    expect(text).toMatch(/--label planner:opus-5/);
+  });
+
+  it('says nothing at all when PortOS cannot attribute the run', () => {
+    const prompt = buildLightContextPrompt(
+      makeTask({ metadata: { openPR: false } }), '/repo', null, isTruthyMeta, {},
+    );
+    expect(prompt).not.toMatch(/## Planner Attribution/);
+    expect(prompt).not.toMatch(/planner:/);
   });
 });

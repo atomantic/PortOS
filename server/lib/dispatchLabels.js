@@ -15,6 +15,7 @@
  */
 
 import { shellQuote } from './shellQuote.js';
+import { kebabCase } from './textUtils.js';
 
 export const DISPATCH_MODEL_TIERS = Object.freeze(['light', 'medium', 'heavy']);
 export const DISPATCH_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
@@ -88,6 +89,161 @@ export const WORKFLOW_LABEL_DESCRIPTIONS = Object.freeze({
   [EPIC_DECOMPOSED_LABEL]: 'Epic already split into per-slice child issues',
   [EPIC_LABEL]: 'Umbrella/tracking issue — shipped as per-slice children, never as one PR',
 });
+
+/**
+ * Planner attribution (`planner:<model>`) — WHICH model produced the plan, so a
+ * backlog can be read by author. Independent of `model:`/`effort:`, which
+ * recommend how a *future* agent should RUN the work; this records who wrote it.
+ *
+ * The value space is open-ended (any provider/model this install can run), so
+ * unlike the dispatch axes there is no enumerable color map — every planner
+ * label shares one color and a generated description. `plannerLabelSpec` matches
+ * on the prefix, which is what lets `dispatchLabelSpec` (and therefore
+ * `formatLabelCreateCommand` / `ensureForgeLabels`) create one lazily.
+ *
+ * Jira gets the hyphen form (`planner-opus-5`) for the same reason the dispatch
+ * axes do — a colon is unsafe on some Jira versions.
+ */
+export const PLANNER_LABEL_PREFIX = 'planner:';
+export const JIRA_PLANNER_LABEL_PREFIX = 'planner-';
+export const PLANNER_LABEL_COLOR = 'C2185B';
+
+/** Longest planner slug kept; both forges allow far more, this keeps chips readable. */
+const PLANNER_ID_MAX_LENGTH = 40;
+
+/** Model families whose vendor prefix is noise once the family name is present. */
+const CLAUDE_FAMILY_RE = /^(?:opus|sonnet|haiku|fable)(?:$|[-.])/;
+
+/** A trailing model snapshot date (`-20251001`, `-202510`) carries no planner identity. */
+const MODEL_DATE_SUFFIX_RE = /-(?:\d{8}|\d{6})$/;
+
+/**
+ * Slugify a provider or model identity into the `planner:` label's value:
+ * lowercased, vendor path prefix dropped, snapshot date dropped, `claude-`
+ * dropped when a family name follows, everything else collapsed to `-`.
+ *
+ *   `claude-opus-5`             → `opus-5`
+ *   `anthropic/claude-haiku-4-5-20251001` → `haiku-4-5`
+ *   `gemini-3.7-flash`          → `gemini-3-7-flash`
+ *   `grok`                      → `grok`
+ *
+ * Returns null for anything that slugs to empty, so a caller omits the label
+ * rather than filing `planner:`.
+ */
+export function normalizePlannerId(value) {
+  if (typeof value !== 'string') return null;
+  let id = value.trim().toLowerCase();
+  if (!id) return null;
+  // Vendor routing prefixes (`anthropic/claude-opus-5`, `x-ai/grok-4`) name the
+  // host, not the planner.
+  id = id.slice(id.lastIndexOf('/') + 1);
+  id = id.replace(MODEL_DATE_SUFFIX_RE, '');
+  // Only strip `claude-` when a FAMILY follows: the provider id `claude-code`
+  // would otherwise slug to a meaningless `code`.
+  if (id.startsWith('claude-') && CLAUDE_FAMILY_RE.test(id.slice(7))) id = id.slice(7);
+  id = kebabCase(id);
+  if (!id) return null;
+  return id.slice(0, PLANNER_ID_MAX_LENGTH).replace(/-+$/, '') || null;
+}
+
+/**
+ * The planner identity for one agent run: the MODEL that did the reasoning,
+ * falling back to the provider id when a run resolved no per-task model (a CLI
+ * whose model is whatever the host session defaults to). Null when neither
+ * yields a usable slug — the caller then omits the axis entirely.
+ */
+export function resolvePlannerId({ providerId, model } = {}) {
+  return normalizePlannerId(model) || normalizePlannerId(providerId);
+}
+
+/** Forge label for a planner identity (`planner:opus-5`), or null. */
+export function forgePlannerLabel(value) {
+  const id = normalizePlannerId(value);
+  return id ? `${PLANNER_LABEL_PREFIX}${id}` : null;
+}
+
+/** Jira-safe planner label (`planner-opus-5`), or null. */
+export function jiraPlannerLabel(value) {
+  const id = normalizePlannerId(value);
+  return id ? `${JIRA_PLANNER_LABEL_PREFIX}${id}` : null;
+}
+
+/** True when `name` is a forge planner label with a non-empty value. */
+export function isPlannerLabel(name) {
+  return typeof name === 'string'
+    && name.startsWith(PLANNER_LABEL_PREFIX)
+    && name.length > PLANNER_LABEL_PREFIX.length;
+}
+
+/**
+ * `{ name, color, description }` for a forge planner label, or null. Prefix-
+ * matched rather than table-driven because the value space is open-ended; the
+ * name is re-derived from the normalized slug so a caller can't smuggle an
+ * unnormalized label past `formatLabelCreateCommand`.
+ */
+export function plannerLabelSpec(name) {
+  if (!isPlannerLabel(name)) return null;
+  const id = normalizePlannerId(name.slice(PLANNER_LABEL_PREFIX.length));
+  if (!id) return null;
+  return {
+    name: `${PLANNER_LABEL_PREFIX}${id}`,
+    color: PLANNER_LABEL_COLOR,
+    description: `Plan authored by the ${id} model`,
+  };
+}
+
+/**
+ * The planner-attribution instruction for one run, ready to paste into an
+ * issue-filing prompt. `plannerId` is this run's own identity (see
+ * `resolvePlannerId`); returns '' when it doesn't resolve, so a run PortOS can't
+ * attribute says nothing rather than inventing an author.
+ *
+ * Forge-only, because injecting this instruction is: a Jira ticket gets its
+ * planner label from `jiraIssueLabels` at create time, not from prose an agent
+ * has to act on. `cli` only picks the `label create` dialect (`gh` / `glab`).
+ */
+export function formatPlannerLabelGuidance(plannerId, { cli = 'gh' } = {}) {
+  const label = forgePlannerLabel(plannerId);
+  if (!label) return '';
+  return [
+    `Planner attribution: add \`--label ${shellQuote(label)}\` to every issue you file, so the backlog records which model planned the work. It is independent of the dispatch axes — never substitute it for \`model:\`/\`effort:\`.`,
+    `Create it first, like the other labels: \`${formatLabelCreateCommand(label, { cli })}\``,
+  ].join('\n');
+}
+
+/**
+ * The optional `--label` slots a filing prompt's copy-pasteable `issue create`
+ * example should offer, in axis order: the two dispatch hints, planner
+ * attribution, then the contributor invitations. Bracketed because every one of
+ * them is conditional — a run that justifies none files with the category and
+ * scope labels alone.
+ *
+ * Lives here rather than as a literal in each prompt template so a NEW axis
+ * reaches every rendered example at once. `planner:` is the case that proved
+ * the need: added to `DISPATCH_HINT_GUIDANCE` in the same change, it would
+ * otherwise have been absent from every command an agent actually copies.
+ */
+export const OPTIONAL_ISSUE_LABEL_FLAG_SLOTS = Object.freeze([
+  '[--label model:<tier>]',
+  '[--label effort:<level>]',
+  `[--label ${PLANNER_LABEL_PREFIX}<model>]`,
+  `[--label "${GOOD_FIRST_ISSUE_LABEL}"]`,
+  `[--label "${HELP_WANTED_LABEL}"]`,
+]);
+
+/**
+ * The optional slots as one line, appended after any flags a contract already
+ * makes REQUIRED. `requiredFlags` (e.g. the repo-study contract's
+ * `--label area:<area> --label model:<tier> …`) suppresses the bracketed slot
+ * for any axis it already spells out, so an example never offers a label twice.
+ */
+export function formatOptionalIssueLabelFlags(requiredFlags = '') {
+  const required = typeof requiredFlags === 'string' ? requiredFlags : '';
+  const slots = OPTIONAL_ISSUE_LABEL_FLAG_SLOTS.filter(
+    (slot) => !required.includes(slot.slice('[--label '.length, -1))
+  );
+  return [required.trim(), ...slots].filter(Boolean).join(' ');
+}
 
 const MODEL_SET = new Set(DISPATCH_MODEL_TIERS);
 const EFFORT_SET = new Set(DISPATCH_EFFORT_LEVELS);
@@ -201,19 +357,21 @@ export function formatContributorLabelReleaseCommands(issueRef, { cli = 'gh' } =
 }
 
 /** Dispatch hints + contributor labels for one GitHub/GitLab issue. */
-export function forgeIssueLabels({ model, effort, goodFirstIssue, helpWanted } = {}) {
+export function forgeIssueLabels({ model, effort, goodFirstIssue, helpWanted, planner } = {}) {
   return [
     ...forgeDispatchLabels({ model, effort }),
     ...forgeContributorLabels({ goodFirstIssue, helpWanted }),
-  ];
+    forgePlannerLabel(planner),
+  ].filter(Boolean);
 }
 
 /** Dispatch hints + contributor labels for one Jira ticket. */
-export function jiraIssueLabels({ model, effort, goodFirstIssue, helpWanted } = {}) {
+export function jiraIssueLabels({ model, effort, goodFirstIssue, helpWanted, planner } = {}) {
   return [
     ...jiraDispatchLabels({ model, effort }),
     ...jiraContributorLabels({ goodFirstIssue, helpWanted }),
-  ];
+    jiraPlannerLabel(planner),
+  ].filter(Boolean);
 }
 
 /** `{ name, color, description }` for a forge dispatch, contributor, or workflow label, or null. */
@@ -240,7 +398,9 @@ export function dispatchLabelSpec(name) {
       description: WORKFLOW_LABEL_DESCRIPTIONS[name],
     };
   }
-  return null;
+  // Prefix-matched last: the planner axis has no enumerable table, so it must
+  // not shadow a fixed label that happens to start with the same characters.
+  return plannerLabelSpec(name);
 }
 
 /** All eight slashdo dispatch-label specs, in axis-then-ramp order. */
@@ -295,6 +455,7 @@ export const DISPATCH_HINT_GUIDANCE = [
   '- `good first issue` (color 7057FF) — self-contained, well-specified, a new contributor can ship it without deep repo context. A `model:light` 40-file sweep is NOT a good first issue.',
   '- `help wanted` (color 008672) — extra hands welcome and the body is scoped enough to pick up cold.',
   'Create those two with the same `gh` / `glab label create` form as the dispatch hints (quote the name; glab still needs `--name` and `#<hex>`).',
+  'Planner attribution: also apply the `planner:<model>` label naming the model that WROTE the plan. Never guess it from what you believe you are — use the exact label your run\'s "Planner attribution" instruction gives you, and omit the axis when your run was given none. It is a third independent axis: it records the AUTHOR, while `model:`/`effort:` recommend how a future agent should RUN the work.',
   'Use repeated `--label` flags (one per label). Preserve existing category/scope labels (`plan`, `ux`, `bug`, `tests`, `layered-intelligence`, …). Never relabel a deduplicated existing issue.',
   ISSUE_QUALITY_GUIDANCE,
 ].join('\n');
@@ -319,6 +480,7 @@ export const MANDATORY_DISPATCH_HINT_GUIDANCE = [
   'Never derive one axis from the other, and do NOT stamp `medium` on both by reflex — where that genuinely is the answer, justify it in one line of the body. Do NOT put `[model:…]` / `[effort:…]` / `[category]` / `[SEVERITY]` in the title; those belong in labels.',
   'Create each label immediately before applying it (`gh label create <name> --color <hex> 2>/dev/null || true`; glab needs `--name` and `#<hex>`). Colors: model:light D4C5F9, model:medium A371F7, model:heavy 6F42C1, effort:low BFE5E5, effort:medium 76C7C7, effort:high 1D7874, effort:xhigh 0E4F4C, effort:max 05403D.',
   'Contributor labels stay OPTIONAL and independent: `good first issue` (color 7057FF) when the work is self-contained enough for a new contributor with no deep repo context — a `model:light` 40-file sweep is NOT one — and `help wanted` (color 008672) when the body is scoped enough to pick up cold. Same `label create` form.',
+  'Planner attribution: also apply the `planner:<model>` label naming the model that WROTE the plan. Never guess it from what you believe you are — use the exact label your run\'s "Planner attribution" instruction gives you, and omit the axis when your run was given none. It is a third independent axis: it records the AUTHOR, while `model:`/`effort:` recommend how a future agent should RUN the work.',
   'Use repeated `--label` flags (one per label). Preserve existing category/scope labels (`plan`, `ux`, `bug`, `tests`, `area:*`, …). After creating each issue, read its labels back (`gh issue view <number> --json labels`) and apply any that did not stick. Never relabel a deduplicated existing issue.',
   ISSUE_QUALITY_GUIDANCE,
 ].join('\n');
@@ -334,6 +496,7 @@ export const JIRA_DISPATCH_HINT_GUIDANCE = [
   '- `effort-low|effort-medium|effort-high|effort-xhigh|effort-max` — reasoning budget per step, independent of model.',
   'Choose each axis only when the work you just inspected justifies it. Omit an axis rather than guessing. Do NOT stamp `medium` on both by reflex, and do NOT put `[model-…]` / `[effort-…]` / `[category]` / `[SEVERITY]` in the summary — those belong in labels.',
   'Also apply contributor labels when the work actually fits them — independently of the dispatch axes: `good-first-issue` (self-contained, a new contributor can ship it) and `help-wanted` (extra hands welcome, scoped enough to pick up cold). A `model-light` 40-file sweep is NOT a good-first-issue.',
+  'Planner attribution: also apply the `planner-<model>` label naming the model that WROTE the plan, taken verbatim from your run\'s "Planner attribution" instruction (omit the axis when your run was given none). It records the AUTHOR, independently of the dispatch axes.',
   'Preserve existing category/scope labels. Never relabel a ticket you skipped as a duplicate.',
   ISSUE_QUALITY_GUIDANCE,
 ].join('\n');

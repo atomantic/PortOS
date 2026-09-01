@@ -12,7 +12,15 @@ describe('ChordDiagram', () => {
     const dots = svg.querySelectorAll('g circle');
     expect(dots.length).toBe(3);
     // First position — no window label.
-    expect(container.textContent).not.toMatch(/fr/);
+    expect(svg.textContent).not.toMatch(/fr/);
+  });
+
+  it('provides an accessible fret description for guitar voicings', () => {
+    const { container } = render(<ChordDiagram name="Am" instrument="guitar" />);
+    const description = container.querySelector('.sr-only');
+    expect(description).toHaveTextContent(
+      'guitar chord voicing. string 6: muted, string 5: open, string 4: fret 2, string 3: fret 2, string 2: fret 1, string 1: open.',
+    );
   });
 
   it('labels the fret window for shapes above the nut', () => {
@@ -28,6 +36,13 @@ describe('ChordDiagram', () => {
     expect(svg).toBeTruthy();
     expect(svg.querySelectorAll('g circle').length).toBe(3);
     expect(container.textContent).not.toContain('×');
+  });
+
+  it('provides an accessible fret description for ukulele voicings', () => {
+    const { container } = render(<ChordDiagram name="G7" instrument="ukulele" />);
+    expect(container.querySelector('.sr-only')).toHaveTextContent(
+      'ukulele chord voicing. string 4: open, string 3: fret 2, string 2: fret 1, string 1: fret 2.',
+    );
   });
 
   it('renders piano voicings as note chips, prepending the slash bass', () => {

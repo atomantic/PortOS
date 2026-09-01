@@ -23,6 +23,9 @@
  */
 
 import { commandExists } from '../lib/commandExists.js';
+import { writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { sleep } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { launchArgs, normalizeTuning, tuningSpecsFor } from '../lib/localModelTuning.js';
@@ -114,6 +117,41 @@ export const MTPLX_UNSUPPORTED_REASON = 'MTPLX runs only on macOS with Apple Sil
  * command (`services/mtplxModelManager.js`).
  */
 const MTPLX_NO_MODEL_ERROR = 'MTPLX has no model weights cached, so its server exits before it binds a port. Use "Download default checkpoint" on the MTPLX card (or search for another MTP model there) to fetch one — a multi-gigabyte download PortOS will not start without you asking — then start MTPLX again.';
+
+const MTPLX_RUNTIME_BOOTSTRAP_ERROR = 'MTPLX\'s own Python runtime failed to bootstrap because Homebrew\'s Python does not provide a working `ensurepip`. Try `brew reinstall python@3.13` (or `brew reinstall --build-from-source youssofal/mtplx/mtplx` to force a rebuild against a working interpreter), then start MTPLX again.';
+
+/**
+ * Keep MTPLX startup logs raw while scoping each diagnosis to the current
+ * launch. PM2 appends to its configured files across process deletion, so
+ * stable, app-specific paths are truncated before every start.
+ */
+const DEFAULT_MTPLX_LOG_FILES = {
+  stdout: join(tmpdir(), 'portos-mtplx-out.log'),
+  stderr: join(tmpdir(), 'portos-mtplx-error.log'),
+};
+
+let mtplxLogFiles = DEFAULT_MTPLX_LOG_FILES;
+
+const resetMtplxLogs = async () => {
+  const results = await Promise.all(
+    Object.entries(mtplxLogFiles).map(([stream, path]) => (
+      writeFile(path, '')
+        .then(() => true)
+        .catch((error) => {
+          console.error(`❌ MTPLX: could not reset ${stream} startup log (${error?.code || 'unknown'}); bootstrap diagnosis disabled for this launch`);
+          return false;
+        })
+    )),
+  );
+  return results.every(Boolean);
+};
+
+const isMtplxRuntimeBootstrapFailure = (output) => {
+  const text = String(output ?? '');
+  return /runtime is not installed|bootstrapping with pip/i.test(text)
+    && /ensurepip/i.test(text)
+    && /returned non-zero exit status|no module named ensurepip|ensurepip is not available|failed to bootstrap/i.test(text);
+};
 
 let currentConfig = null;
 let lastExitError = null;
@@ -449,11 +487,14 @@ export async function startMtplxServer(options = {}) {
   clearJlistCache();
 
   console.log(`🚄 MTPLX starting on ${DEFAULT_HOST}:${port}${model ? ` (model ${model})` : ' (MTPLX default model)'}${tuningArgs.length ? ` with ${tuningArgs.join(' ')}` : ''}`);
+  const logsReset = await resetMtplxLogs();
   await execPm2([
     'start', binaryPath,
     '--name', MTPLX_APP,
     '--interpreter', 'none',
     '--no-autorestart',
+    '--output', mtplxLogFiles.stdout,
+    '--error', mtplxLogFiles.stderr,
     '--',
     ...args,
   ]);
@@ -474,15 +515,19 @@ export async function startMtplxServer(options = {}) {
   if (currentProc && ['errored', 'stopped', 'not_found'].includes(currentProc.status)) {
     const pm2Logs = await execPm2(['logs', MTPLX_APP, '--nostream', '--lines', '15']).catch(() => null);
     const lines = `${pm2Logs?.stderr || pm2Logs?.stdout || ''}`.split('\n').map((l) => l.trimEnd()).filter(Boolean);
-    for (const line of lines) appendLog(line);
-    const tail = (lines.length ? lines : daemon.snapshotLogs()).slice(-4).join(' | ');
-
+    const currentLines = logsReset ? lines : [];
+    for (const line of currentLines) appendLog(line);
+    const tail = (currentLines.length ? currentLines : daemon.snapshotLogs()).slice(-4).join(' | ');
     lastExitError = `PM2 status: ${currentProc.status}`;
+    const message = logsReset && isMtplxRuntimeBootstrapFailure(currentLines.join('\n'))
+      ? `${MTPLX_RUNTIME_BOOTSTRAP_ERROR}${tail ? ` Last output: ${tail}` : ''}`
+      : `MTPLX exited immediately (${lastExitError}).${tail ? ` Last output: ${tail}` : ''}`;
+
     await execPm2(['delete', MTPLX_APP]).catch(() => {});
     clearJlistCache();
     currentConfig = null;
     throw new ServerError(
-      `MTPLX exited immediately (${lastExitError}).${tail ? ` Last output: ${tail}` : ''}`,
+      message,
       { status: 500, code: 'MTPLX_EXITED' }
     );
   }
@@ -709,8 +754,13 @@ export function _resetMtplxServerStateForTests({
   relaunchReadyTimeout,
   relaunchPoll,
   idleMinutes = 0,
+  logFiles,
 } = {}) {
   idleMinutesOverride = idleMinutes;
+  mtplxLogFiles = logFiles ? {
+    stdout: logFiles.stdout || DEFAULT_MTPLX_LOG_FILES.stdout,
+    stderr: logFiles.stderr || DEFAULT_MTPLX_LOG_FILES.stderr,
+  } : DEFAULT_MTPLX_LOG_FILES;
   currentConfig = null;
   daemon.resetLogs();
   lastExitError = null;

@@ -60,6 +60,13 @@ export default function EidoverseWorldDrawer({
   const design = worldState?.design || {};
   const reconciliation = design.reconciliation || {};
   const projectionSummary = worldState?.projection?.lastSummary || {};
+  const projectedIndicatorCount = Number.isFinite(projectionSummary.liveEntityCount)
+    ? projectionSummary.liveEntityCount
+    : null;
+  const projectedIndicatorLimit = projectionSummary.maxLiveEntities
+    ?? design.maxEntities
+    ?? recipeDraft?.maxEntities
+    ?? 48;
   const busy = configStatus === 'saving' || projectionStatus === 'running';
   const projectionActionBlocked = busy || dirty;
   const assetRecipes = recipeDraft?.assetRecipe?.slots || {};
@@ -129,8 +136,13 @@ export default function EidoverseWorldDrawer({
           <p className="mt-1 text-sm text-white">{worldState?.presence?.connected ? 'Connected' : 'Ready to reconnect'}</p>
         </div>
         <div className="rounded-lg border border-port-border bg-port-bg p-3">
-          <p className="text-xs text-gray-500">Live signal budget</p>
-          <p className="mt-1 text-sm text-white">{design.maxEntities ?? recipeDraft?.maxEntities ?? 48} maximum</p>
+          <p className="text-xs text-gray-500">PortOS indicators</p>
+          <p className="mt-1 text-sm text-white">
+            {projectedIndicatorCount === null ? 'Waiting for projection' : `${projectedIndicatorCount} shown`}
+          </p>
+          <p className="mt-1 text-[10px] leading-4 text-gray-500">
+            Up to {projectedIndicatorLimit} can be displayed at once. This is scene capacity, not a health score.
+          </p>
         </div>
       </div>
     </div>
@@ -139,7 +151,10 @@ export default function EidoverseWorldDrawer({
   const districtFields = (
     <div className="space-y-3">
       <p className="text-sm leading-6 text-gray-400">
-        PortOS projects bounded summaries, never raw records. Stable IDs keep each signal in its district across refreshes.
+        PortOS projects bounded summary indicators, never raw records. Stable IDs keep each indicator in its district across refreshes.
+        {projectedIndicatorCount === null
+          ? ' The first projection has not reported a scene count yet.'
+          : ` ${projectedIndicatorCount} are shown now; the ${projectedIndicatorLimit}-indicator limit keeps the scene legible.`}
       </p>
       {projectionSummary.truncated && (
         <p className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-2 text-xs leading-5 text-port-warning" role="status">

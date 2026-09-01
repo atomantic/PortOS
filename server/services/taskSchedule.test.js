@@ -30,6 +30,11 @@ tryReadFile: vi.fn().mockResolvedValue(null),
 // slashdoLoader mock: taskPromptService.js reads the bundled command body
 // through loadSlashdoFile — stub it the same way the prior fileUtils mock did,
 // now that the slashdo loaders live in their own module (#3110's home moved).
+// Operator-action ledger (#5594). Stubbed so the origin gate in
+// triggerOnDemandTask can be asserted directly (recorded vs not recorded)
+// without this suite's minimal fileUtils stub having to grow a data root.
+vi.mock('./userActions.js', () => ({ recordUserAction: vi.fn() }));
+
 vi.mock('../lib/slashdoLoader.js', () => ({
   loadSlashdoFile: vi.fn().mockResolvedValue(''),
 }))
@@ -153,6 +158,7 @@ import {
   boundParkedUntil
 } from './taskSchedule.js'
 import { cosEvents } from './cosEvents.js'
+import { recordUserAction } from './userActions.js'
 
 // Prompt getters moved to taskPromptService.js (issue #744 split, #1083 cycle
 // break). taskSchedule.js re-exports the version constants but not the getters.
@@ -1931,6 +1937,36 @@ describe('taskSchedule', () => {
       mockSchedule({ tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true } } })
       const refill = await triggerOnDemandTask('branch-reconcile', 'app-1', { emit: false, origin: ON_DEMAND_ORIGINS.REFILL })
       expect(refill.origin).toBe(ON_DEMAND_ORIGINS.REFILL)
+    })
+
+    // Operator-action ledger (#5594). Only a human pressing Run Now is an
+    // operator action; the perpetual drain re-issues itself through this same
+    // lane, and logging that would fill the ledger with events nobody performed.
+    it('records a cos.schedule.trigger row for a human Run Now, and none for a refill', async () => {
+      mockSchedule({ tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true } } })
+      const request = await triggerOnDemandTask('branch-reconcile', 'app-1')
+
+      expect(recordUserAction).toHaveBeenCalledTimes(1)
+      expect(recordUserAction).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'cos.schedule.trigger',
+        target: 'branch-reconcile',
+        targetName: 'app-1',
+        dedupeKey: `cos.schedule.trigger:${request.id}`,
+        payload: { taskType: 'branch-reconcile', appId: 'app-1', requestId: request.id },
+      }))
+      // actor defaults to 'user' in the recorder; the hook must not override it.
+      expect(recordUserAction.mock.calls[0][0].actor).toBeUndefined()
+
+      recordUserAction.mockClear()
+      mockSchedule({ tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true } } })
+      await triggerOnDemandTask('branch-reconcile', 'app-1', { emit: false, origin: ON_DEMAND_ORIGINS.REFILL })
+      expect(recordUserAction).not.toHaveBeenCalled()
+    })
+
+    it('records nothing when the trigger is refused', async () => {
+      mockSchedule({ tasks: { 'branch-reconcile': { type: 'perpetual', enabled: false } } })
+      expect((await triggerOnDemandTask('branch-reconcile', 'app-1')).error).toMatch(/disabled/i)
+      expect(recordUserAction).not.toHaveBeenCalled()
     })
 
     // The policy that used to be open-coded in each spawn engine — which is how the

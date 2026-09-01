@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { Cpu, Box, Download, RefreshCw, Search, Plus, ExternalLink, Star, Link2, Copy, Play, Power, PowerOff, AlertTriangle, Zap, ChevronDown, ChevronUp, Terminal } from 'lucide-react';
+import { Cpu, Box, Download, RefreshCw, Search, Plus, ExternalLink, Star, Link2, Copy, Play, Power, PowerOff, AlertTriangle, Zap, ChevronDown, ChevronUp, Terminal, Server } from 'lucide-react';
 import toast from '../ui/Toast';
 import FormField from '../ui/FormField';
 import BrailleSpinner from '../BrailleSpinner';
@@ -22,6 +22,7 @@ import RuntimeServersCard from './RuntimeServersCard.jsx';
 import MtplxServerCard from './MtplxServerCard.jsx';
 import LocalLlmBackendCard from './LocalLlmBackendCard.jsx';
 import LocalLlmInstalledModels from './LocalLlmInstalledModels.jsx';
+import TabPills from '../ui/TabPills.jsx';
 
 const BACKENDS = [
   { id: 'ollama', label: 'Ollama', icon: Cpu },
@@ -56,6 +57,11 @@ const LLAMA_TUNING_FIELDS = ['batchSize', 'ubatchSize', 'threads', 'cacheTypeK',
 const LLAMA_CACHE_TYPES = ['f16', 'q8_0', 'q4_0'];
 
 const btnClass = 'flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors disabled:opacity-50';
+
+const LLM_VIEWS = [
+  { id: 'runtimes', label: 'Runtimes', icon: Server },
+  { id: 'library', label: 'Model Library', icon: Download },
+];
 
 const CATEGORY_LABELS = {
   general: 'General purpose',
@@ -148,8 +154,9 @@ function summarizeMigrate(r) {
   return `${labelFor(r.from)} → ${labelFor(r.to)}: ${parts.join(', ') || 'nothing to move'}`;
 }
 
-export function LocalLlmTab() {
+export function LocalLlmTab({ view }) {
   const navigate = useNavigate();
+  const activeView = LLM_VIEWS.some(({ id }) => id === view) ? view : 'runtimes';
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState('ollama');
@@ -255,8 +262,10 @@ export function LocalLlmTab() {
   const loadStatus = useCallback(() => {
     const requestId = ++statusRequestId.current;
     setLoading(true);
-    loadLlamaStatus();
-    loadMtplxStatus();
+    if (activeView === 'runtimes') {
+      loadLlamaStatus();
+      loadMtplxStatus();
+    }
     return getLocalLlmStatus({ silent: true })
       .then((s) => {
         if (requestId !== statusRequestId.current) return;
@@ -273,7 +282,7 @@ export function LocalLlmTab() {
       .finally(() => {
         if (requestId === statusRequestId.current) setLoading(false);
       });
-  }, [loadLlamaStatus, loadMtplxStatus]);
+  }, [activeView, loadLlamaStatus, loadMtplxStatus]);
 
   // `source` and `category` are required rather than defaulted from state: a
   // state default would put them in the dep list, so `loadCatalog`'s identity
@@ -333,6 +342,7 @@ export function LocalLlmTab() {
   // carry and read as frozen. A terminal frame drops the row back to the
   // server's own view of the file, which the refresh below re-reads.
   useEffect(() => {
+    if (activeView !== 'runtimes') return undefined;
     const handleDownloadProgress = (frame) => {
       if (!frame?.presetId || !frame?.role) return;
       const key = downloadKey(frame.presetId, frame.role);
@@ -353,13 +363,14 @@ export function LocalLlmTab() {
     };
     socket.on('llamaServer:download', handleDownloadProgress);
     return () => socket.off('llamaServer:download', handleDownloadProgress);
-  }, [loadLlamaStatus]);
+  }, [activeView, loadLlamaStatus]);
 
   // MTPLX checkpoint download progress. A pull can run for hours, so the socket
   // — not the still-open HTTP request — is what the UI trusts: a terminal frame
   // clears the bar AND re-reads the cache, so the list is right even if the
   // request itself never comes back.
   useEffect(() => {
+    if (activeView !== 'runtimes') return undefined;
     const handleMtplxDownload = (frame) => {
       if (!frame) return;
       if (frame.event === 'complete' || frame.event === 'error' || frame.event === 'cancelled') {
@@ -378,7 +389,7 @@ export function LocalLlmTab() {
     };
     socket.on('mtplx:download', handleMtplxDownload);
     return () => socket.off('mtplx:download', handleMtplxDownload);
-  }, [loadMtplxStatus]);
+  }, [activeView, loadMtplxStatus]);
   // Debounce so typing in the search box doesn't fire a request per keystroke.
   //
   // `activeCategory` is a trigger for the Hugging Face source ONLY — the live
@@ -390,6 +401,7 @@ export function LocalLlmTab() {
   // constant when it doesn't, which keeps the whole effect one code path.
   const catalogCategoryKey = catalogSource === 'huggingface' ? activeCategory : 'client-filtered';
   useEffect(() => {
+    if (activeView !== 'library') return undefined;
     const t = setTimeout(() => loadCatalog(selected, query, catalogSource, activeCategory), catalogSource === 'huggingface' ? 450 : 250);
     return () => clearTimeout(t);
     // `activeCategory` is intentionally absent: `catalogCategoryKey` IS it
@@ -398,7 +410,7 @@ export function LocalLlmTab() {
     // closure can hold a stale category, which is harmless because that branch
     // of loadCatalog never reads the argument.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, query, catalogSource, catalogCategoryKey, loadCatalog]);
+  }, [activeView, selected, query, catalogSource, catalogCategoryKey, loadCatalog]);
 
   useEffect(() => {
     const handleProgress = (data) => {
@@ -414,7 +426,7 @@ export function LocalLlmTab() {
       if (data.event === 'complete') {
         progressTimer.current = setTimeout(() => setProgressMsg(''), 3000);
         loadStatus();
-        loadCatalog(selected, query, catalogSource, activeCategory);
+        if (activeView === 'library') loadCatalog(selected, query, catalogSource, activeCategory);
       }
       if (data.event === 'error') {
         progressTimer.current = setTimeout(() => setProgressMsg(''), 5000);
@@ -425,7 +437,7 @@ export function LocalLlmTab() {
       socket.off('localLlm:progress', handleProgress);
       clearTimeout(progressTimer.current);
     };
-  }, [loadStatus, loadCatalog, selected, query, catalogSource, activeCategory]);
+  }, [activeView, loadStatus, loadCatalog, selected, query, catalogSource, activeCategory]);
 
   const runAction = useCallback((key, fn, successMsg, options = {}) => {
     const { onError, clearConfirm = true, ollamaService = false } = options;
@@ -450,7 +462,7 @@ export function LocalLlmTab() {
           }) : prev);
         }
         loadStatus();
-        loadCatalog(selected, query, catalogSource, activeCategory);
+        if (activeView === 'library') loadCatalog(selected, query, catalogSource, activeCategory);
         return result;
       })
       .catch((err) => {
@@ -461,7 +473,7 @@ export function LocalLlmTab() {
         if (typeof onError === 'function') onError(err);
       })
       .finally(() => setActionInProgress(null));
-  }, [loadStatus, loadCatalog, selected, query, catalogSource, activeCategory]);
+  }, [activeView, loadStatus, loadCatalog, selected, query, catalogSource, activeCategory]);
 
   const busy = actionInProgress != null;
 
@@ -925,6 +937,27 @@ export function LocalLlmTab() {
 
   return (
     <div className="space-y-4">
+      <div className="space-y-2">
+        <TabPills
+          tabs={LLM_VIEWS}
+          activeTab={activeView}
+          onChange={(nextView) => navigate(`/models/llms/${nextView}`)}
+          variant="pills"
+          size="sm"
+          mobileDropdown
+          mobileSelectId="llm-management-view"
+          ariaLabel="LLM management sections"
+          controlsIdPrefix="llm-management-panel"
+        />
+        <p className="text-xs text-gray-500">
+          {activeView === 'runtimes'
+            ? 'Install, start, stop, and configure the local servers that run language models.'
+            : 'Find, install, compare, and remove the model weights available to Ollama and LM Studio.'}
+        </p>
+      </div>
+
+      {activeView === 'runtimes' && (
+        <section id="llm-management-panel-runtimes" role="tabpanel" aria-labelledby="tab-runtimes" className="space-y-4">
       {/* One start/stop/install surface for every local server PortOS can run */}
       <RuntimeServersCard
         status={status}
@@ -1452,7 +1485,11 @@ export function LocalLlmTab() {
           </div>
         )}
       </div>
+        </section>
+      )}
 
+      {activeView === 'library' && (
+        <section id="llm-management-panel-library" role="tabpanel" aria-labelledby="tab-library">
       {/* Models — backend picker + catalog/install + installed list */}
       <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-4">
         <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -1831,6 +1868,8 @@ export function LocalLlmTab() {
           requestDelete={requestDelete}
         />
       </div>
+        </section>
+      )}
     </div>
   );
 }

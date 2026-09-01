@@ -3,10 +3,10 @@
  *
  * VideoGen used to show nothing but a percentage next to the Generate button
  * until the MP4 landed. This picks what the page's main stage should display at
- * any moment of a render — a live runner frame when one exists, otherwise the
- * conditioning the render is forming FROM (the clip an extend continues, the
- * start/keyframe/end still an i2v or FFLF render is growing out of), and the
- * finished clip once it arrives.
+ * any moment of a render — the conditioning the render is forming FROM (the
+ * clip an extend continues, the start/keyframe/end still an i2v or FFLF render
+ * is growing out of), and the finished clip once it arrives. Transient runner
+ * frames are deliberately omitted because they are not useful video previews.
  *
  * Pure: every input is already in the page's hands, nothing fetches. The
  * component owns the hold/return behaviour; this module owns "what would be
@@ -14,7 +14,6 @@
  */
 
 export const VIDEO_STAGE_KIND = Object.freeze({
-  LIVE: 'live',     // a decoded frame from the in-flight render
   LOOP: 'loop',     // an animated clip (the source an extend continues)
   STILL: 'still',   // a conditioning image (start frame / keyframe / end frame)
   RESULT: 'result', // a finished render
@@ -40,21 +39,6 @@ export function videoStageAspectRatio(width, height) {
   return isPositive(w) && isPositive(h) ? w / h : null;
 }
 
-/**
- * Build an <img> src from a runner's `currentImage` frame.
- *
- * That key is polymorphic across runners: imageGen/local.js emits a raw base64
- * PNG body, loraTraining emits an already-served URL. Both ride the same field,
- * so classify before prefixing — assuming base64 would corrupt the URL form.
- * Returns `null` for absent/empty, which callers must treat as "no live frame"
- * rather than as an empty image.
- */
-export function videoPreviewFrameSrc(currentImage) {
-  const raw = nonEmpty(currentImage);
-  if (!raw) return null;
-  return /^(data:|https?:|\/)/.test(raw) ? raw : `data:image/png;base64,${raw}`;
-}
-
 const videoSrc = (filename) => {
   const name = nonEmpty(filename);
   return name ? `/data/videos/${name}` : null;
@@ -65,11 +49,6 @@ const thumbnailSrc = (thumbnail) => {
 };
 const imageSrc = (uploadUrl, galleryFile) =>
   nonEmpty(uploadUrl) || (nonEmpty(galleryFile) ? `/data/images/${galleryFile}` : null);
-
-const liveCandidate = (currentImage) => {
-  const src = videoPreviewFrameSrc(currentImage);
-  return src ? { kind: VIDEO_STAGE_KIND.LIVE, src, poster: null, label: 'Live frame' } : null;
-};
 
 const resultCandidate = (result) => {
   // `path` is what the completion payload carries; `filename` is the shape the
@@ -109,14 +88,12 @@ const stillCandidate = ({ sourceImageFile, sourceUploadUrl, lastImageFile, lastU
 /**
  * Resolve the stage descriptor: `{ kind, src, poster, label, aspectRatio }`.
  *
- * Precedence differs by phase on purpose. Mid-render the forming clip is the
- * subject, so a live frame wins and the finished clip from the PREVIOUS render
- * is only a last resort; idle, the finished clip is the subject and the
- * conditioning stills are the fallback.
+ * Precedence differs by phase on purpose. Mid-render the conditioning is the
+ * subject and the finished clip from the PREVIOUS render is only a last resort;
+ * idle, the finished clip is the subject and the conditioning is the fallback.
  */
 export function resolveVideoStagePreview({
   generating = false,
-  currentImage = null,
   width = null,
   height = null,
   result = null,
@@ -128,11 +105,10 @@ export function resolveVideoStagePreview({
   keyframes = null,
 } = {}) {
   const aspectRatio = videoStageAspectRatio(width, height);
-  const live = liveCandidate(currentImage);
   const finished = resultCandidate(result);
   const loop = loopCandidate(extendSource);
   const still = stillCandidate({ sourceImageFile, sourceUploadUrl, lastImageFile, lastUploadUrl, keyframes });
-  const ordered = generating ? [live, loop, still, finished] : [live, finished, loop, still];
+  const ordered = generating ? [loop, still, finished] : [finished, loop, still];
   const picked = ordered.find(Boolean)
     || { kind: VIDEO_STAGE_KIND.EMPTY, src: null, poster: null, label: 'Your render will appear here' };
   return { ...picked, aspectRatio };

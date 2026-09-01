@@ -1,4 +1,5 @@
 import { useState, useEffect, memo, useMemo } from 'react';
+import { Link } from 'react-router';
 import {
   Shield,
   ShieldAlert,
@@ -14,6 +15,7 @@ import {
 } from 'lucide-react';
 import * as api from '../services/api';
 import { isLoopbackOrigin, describeMicAvailability } from '../lib/loopbackHost.js';
+import NetworkSetupGuide from './NetworkSetupGuide.jsx';
 
 function CertModeBadge({ mode, host }) {
   if (mode === 'tailscale') {
@@ -110,8 +112,14 @@ const NetworkExposureWidget = memo(function NetworkExposureWidget() {
           <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
           <span>
             Bound on all interfaces over plain HTTP — anyone on this LAN/Tailnet
-            can reach PortOS unencrypted. Run <code className="font-mono">npm run setup:cert</code> to enable HTTPS.
+            can reach PortOS unencrypted. Complete the secure-access step below to enable trusted HTTPS.
           </span>
+        </div>
+      )}
+
+      {!status.setup?.complete && (
+        <div className="mb-4">
+          <NetworkSetupGuide networkExposure={status} compact />
         </div>
       )}
 
@@ -199,15 +207,23 @@ const NetworkExposureWidget = memo(function NetworkExposureWidget() {
       </dl>
 
       <div className="mt-4 pt-3 border-t border-port-border">
-        <a
-          href={docsUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1 text-sm text-port-accent hover:text-port-accent/80"
-        >
-          <span>Port + scheme guide</span>
-          <ExternalLink size={12} />
-        </a>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <Link
+            to="/capabilities"
+            className="inline-flex min-h-[44px] items-center text-sm text-port-accent hover:text-port-accent/80 sm:min-h-0"
+          >
+            Open setup
+          </Link>
+          <a
+            href={docsUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex min-h-[44px] items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 sm:min-h-0"
+          >
+            <span>Port + scheme guide</span>
+            <ExternalLink size={12} />
+          </a>
+        </div>
       </div>
     </div>
   );

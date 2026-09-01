@@ -38,7 +38,7 @@ vi.mock('../lib/bufferedSpawn.js', () => ({
   bufferedSpawnOrThrow: mock.spawn,
 }));
 
-vi.mock('./githubCloner.js', () => ({
+vi.mock('./repoCloner.js', () => ({
   cloneRepo: mock.cloneRepo,
 }));
 

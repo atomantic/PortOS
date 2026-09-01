@@ -551,6 +551,61 @@ export async function writeLayoutsDoc(path, doc) {
   await writeFile(path, JSON.stringify(doc, null, 2));
 }
 
+/**
+ * Factory for the "seed a new dashboard widget into built-in layouts"
+ * migration family (327 seeded today-agenda by hand; 329 onward use this).
+ *
+ * Appends `widgetId` to each targeted built-in layout's `widgets` list and to
+ * the end of its `grid` packing sequence (`{ id, x: 0, w, order: max+1, h }`)
+ * — a gated widget that gates off leaves only harmless trailing space, so
+ * appending is always safe. Custom/user layouts are intentionally untouched:
+ * the layout editor is the user's source of truth for those. Idempotent —
+ * re-running heals whichever of the two arrays is missing the widget and
+ * reports `already-applied` when both carry it.
+ *
+ * @param {object} opts
+ * @param {string} opts.label     Human tag, e.g. `'migration 329'`
+ * @param {string} opts.widgetId  Registry id being seeded
+ * @param {string[]} [opts.layoutIds] Built-in layout ids to seed (defaults to
+ *   the Everything + Morning Review pair every widget seed so far targets)
+ * @param {{ w: number, h: number }} opts.cell Grid cell size for the append
+ * @param {string} opts.logLine   Success log line (count is appended)
+ */
+export function makeWidgetSeedMigration({ label, widgetId, layoutIds = ['default', 'morning-review'], cell, logLine }) {
+  const targets = new Set(layoutIds);
+
+  const applyToLayout = (layout) => {
+    if (!layout || !targets.has(layout.id) || !Array.isArray(layout.widgets)) return false;
+    const hasWidget = layout.widgets.includes(widgetId);
+    const hasGridEntry = Array.isArray(layout.grid) && layout.grid.some((item) => item?.id === widgetId);
+    if (hasWidget && hasGridEntry) return false;
+
+    if (!hasWidget) layout.widgets = [...layout.widgets, widgetId];
+    if (!hasGridEntry) {
+      const grid = Array.isArray(layout.grid) ? layout.grid : [];
+      const maxOrder = grid.reduce((max, item) => Math.max(max, Number.isFinite(item?.order) ? item.order : -1), -1);
+      layout.grid = [...grid, { id: widgetId, x: 0, w: cell.w, order: maxOrder + 1, h: cell.h }];
+    }
+    return true;
+  };
+
+  return {
+    async up({ rootDir }) {
+      const result = await readLayoutsDoc({ rootDir, label });
+      if (!result.ok) return { updated: 0, reason: result.reason };
+      const { doc, path } = result;
+      let updated = 0;
+      for (const layout of doc.layouts) {
+        if (applyToLayout(layout)) updated += 1;
+      }
+      if (updated === 0) return { updated: 0, reason: 'already-applied' };
+      await writeLayoutsDoc(path, doc);
+      console.log(`${logLine} ${updated} built-in dashboard layout(s).`);
+      return { updated };
+    },
+  };
+}
+
 // ---- media-model-registry migration family ----
 
 const MEDIA_MODELS_REL_PATH = 'data/media-models.json';

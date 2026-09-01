@@ -5,6 +5,15 @@ import { promisify } from 'util';
 import { safeJSONParse } from './fileUtils.js';
 
 const execFileAsync = promisify(execFile);
+const STATUS_CACHE_TTL_MS = 10_000;
+
+// Setup, capability, and instance surfaces can poll in the same render cycle.
+// Keep one short-lived local-daemon snapshot so they share a single CLI probe.
+// `null` deliberately means "not fetched"; a valid unavailable status object
+// is still cached instead of re-running the command on every request.
+let statusCacheValue = null;
+let statusCacheAt = 0;
+let statusInFlight = null;
 
 const isWin = () => process.platform === 'win32';
 const tailscaleBin = () => (isWin() ? 'tailscale.exe' : 'tailscale');
@@ -71,22 +80,85 @@ export function isSandboxedTailscale(binPath) {
  * Never throws — execFile failures and non-JSON output degrade to a
  * not-running result so callers can treat this as a plain boolean gate.
  */
-export async function getTailscaleStatus() {
+async function readTailscaleStatus() {
   const bin = findTailscale();
-  if (!bin) return { available: false, running: false, state: null, reason: 'tailscale-not-installed' };
+  const unavailable = (reason, { available = true } = {}) => ({
+    available,
+    running: false,
+    state: null,
+    reason,
+    sandboxed: bin ? isSandboxedTailscale(bin) : false,
+    dnsName: null,
+    magicDnsSuffix: null,
+    peers: [],
+  });
+  if (!bin) return unavailable('tailscale-not-installed', { available: false });
   const { stdout } = await execFileAsync(bin, ['status', '--json'], { timeout: 5000 })
     .catch(() => ({ stdout: null }));
-  if (!stdout) return { available: true, running: false, state: null, reason: 'tailscale-status-failed' };
+  if (!stdout) return unavailable('tailscale-status-failed');
   // Guard against non-JSON output (warnings, partial reads) so we never throw.
   const status = safeJSONParse(stdout, null);
-  if (!status) return { available: true, running: false, state: null, reason: 'tailscale-parse-error' };
-  const state = status.BackendState ?? null;
+  if (!status) return unavailable('tailscale-parse-error');
+  const state = typeof status?.BackendState === 'string' && status.BackendState.trim()
+    ? status.BackendState.trim()
+    : null;
+  const trimDnsName = (value) => typeof value === 'string'
+    ? value.trim().replace(/\.$/, '') || null
+    : null;
+  const peers = Object.values(status?.Peer ?? {}).map((peer) => ({
+    dnsName: trimDnsName(peer?.DNSName),
+    hostName: typeof peer?.HostName === 'string' && peer.HostName.trim()
+      ? peer.HostName.trim()
+      : null,
+    ips: Array.isArray(peer?.TailscaleIPs)
+      ? peer.TailscaleIPs.filter((ip) => typeof ip === 'string')
+      : [],
+  }));
   return {
     available: true,
     running: state === 'Running',
     state,
-    reason: state === 'Running' ? 'running' : `tailscale-${(state || 'unknown').toLowerCase()}`
+    reason: state === 'Running' ? 'running' : `tailscale-${(state || 'unknown').toLowerCase()}`,
+    sandboxed: isSandboxedTailscale(bin),
+    dnsName: trimDnsName(status?.Self?.DNSName),
+    magicDnsSuffix: trimDnsName(
+      status?.CurrentTailnet?.MagicDNSSuffix ?? status?.MagicDNSSuffix,
+    ),
+    peers,
   };
+}
+
+export function __resetTailscaleStatusCache() {
+  statusCacheValue = null;
+  statusCacheAt = 0;
+  statusInFlight = null;
+}
+
+export async function getTailscaleStatus({ force = false } = {}) {
+  if (!force && statusCacheValue !== null && Date.now() - statusCacheAt < STATUS_CACHE_TTL_MS) {
+    return statusCacheValue;
+  }
+  if (!force && statusInFlight) return statusInFlight;
+
+  const request = readTailscaleStatus();
+  const tracked = request.then(
+    (value) => {
+      // A forced refresh may have superseded this probe. Only the newest probe
+      // publishes shared state, while existing callers still receive theirs.
+      if (statusInFlight === tracked) {
+        statusCacheValue = value;
+        statusCacheAt = Date.now();
+        statusInFlight = null;
+      }
+      return value;
+    },
+    (error) => {
+      if (statusInFlight === tracked) statusInFlight = null;
+      throw error;
+    },
+  );
+  statusInFlight = tracked;
+  return tracked;
 }
 
 /**

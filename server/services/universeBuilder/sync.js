@@ -11,7 +11,7 @@
 import { isStr, preserveLegacyCharacterProductionPackages } from '../../lib/storyBible.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes,
-  deleteSyncBaseHash,
+  deleteSyncBaseHash, withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
 import { sanitizeTemplate } from './sanitize.js';
 import { isValidUniverseId } from './store.js';
@@ -216,17 +216,18 @@ export async function pruneTombstonedUniverses(beforeMs) {
   // we'd rm -rf a freshly un-deleted record. Counts only the records we
   // actually pruned (the candidates set minus any rescued by a concurrent
   // un-delete).
-  const results = await Promise.allSettled(candidates.map((id) =>
-    s.queueRecordWrite(id, async () => {
-      const fresh = await s.loadOne(id);
-      if (!fresh?.deleted) return false; // un-deleted between snapshot and queue
-      const t = Date.parse(fresh.deletedAt || '');
-      if (!Number.isFinite(t) || t >= beforeMs) return false;
-      await s.deleteRecord(id);
-      await deleteSyncBaseHash('universe', id);
-      return true;
-    })
-  ));
+  const results = await withBaseHashFlushBatch(() =>
+    Promise.allSettled(candidates.map((id) =>
+      s.queueRecordWrite(id, async () => {
+        const fresh = await s.loadOne(id);
+        if (!fresh?.deleted) return false; // un-deleted between snapshot and queue
+        const t = Date.parse(fresh.deletedAt || '');
+        if (!Number.isFinite(t) || t >= beforeMs) return false;
+        await s.deleteRecord(id);
+        await deleteSyncBaseHash('universe', id);
+        return true;
+      })
+    )));
   let pruned = 0;
   for (const r of results) {
     if (r.status === 'fulfilled' && r.value === true) pruned += 1;

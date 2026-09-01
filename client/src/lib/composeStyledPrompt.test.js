@@ -14,6 +14,17 @@ describe('composeStyledPrompt', () => {
     expect(out.negativePrompt).toBe('lowres, blur');
   });
 
+  it('layers multiple style sources in order', () => {
+    const out = composeStyledPrompt('a hero', 'lowres', [
+      { prompt: 'inky linework', negativePrompt: 'glossy' },
+      { prompt: 'film noir', negativePrompt: 'pastel' },
+    ]);
+    expect(out).toEqual({
+      prompt: 'inky linework. film noir. a hero',
+      negativePrompt: 'lowres, glossy, pastel',
+    });
+  });
+
   it('avoids a trailing ". " when only one part is present', () => {
     expect(composeStyledPrompt('', 'lowres', { prompt: 'noir comic', negativePrompt: '' }).prompt)
       .toBe('noir comic');

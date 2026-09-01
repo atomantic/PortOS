@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import TaskAddForm from './TaskAddForm';
 
@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   getLocalLlmStatus: vi.fn(),
   getProviders: vi.fn(),
   getAppWorkTracker: vi.fn(),
+  getAppRepositorySources: vi.fn(),
   applyCosTaskTemplate: vi.fn(),
   addCosTask: vi.fn()
 }));
@@ -17,8 +18,16 @@ const api = vi.hoisted(() => ({
 // useAssignableInstances reads the instance registry straight off apiSystem, so
 // the picker (#4520) has to be driven from there rather than the `api` barrel.
 const apiSystem = vi.hoisted(() => ({ getAssignableInstances: vi.fn() }));
+const toast = vi.hoisted(() => {
+  const toastFn = vi.fn();
+  toastFn.success = vi.fn();
+  toastFn.error = vi.fn();
+  toastFn.warning = vi.fn();
+  return toastFn;
+});
 vi.mock('../../services/apiSystem', () => apiSystem);
 vi.mock('../../services/api', () => api);
+vi.mock('../ui/Toast', () => ({ default: toast }));
 
 const worktreeToggle = () => screen.getByTitle(/isolated git worktree/i).closest('label').querySelector('input');
 const openPrToggle = () => screen.getByTitle(/Open a pull request/i).closest('label').querySelector('input');
@@ -32,6 +41,14 @@ describe('TaskAddForm responsive layout', () => {
     api.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
     api.getProviders.mockResolvedValue({ providers: [] });
     api.getAppWorkTracker.mockResolvedValue({ resolved: 'github' });
+    api.getAppRepositorySources.mockResolvedValue({
+      issueTargets: {
+        default: 'origin',
+        canChoose: false,
+        origin: { fullName: 'example-org/example-app' },
+        upstream: { fullName: 'example-org/example-app' },
+      },
+    });
     api.applyCosTaskTemplate.mockResolvedValue({ success: true });
     apiSystem.getAssignableInstances.mockResolvedValue({ instances: [] });
   });
@@ -195,6 +212,38 @@ describe('TaskAddForm responsive layout', () => {
     });
   });
 
+  it('defaults a forked app plan to upstream and permits an explicit origin target', async () => {
+    const user = userEvent.setup();
+    api.addCosTask.mockResolvedValue({ success: true });
+    api.getAppRepositorySources.mockResolvedValue({
+      issueTargets: {
+        default: 'upstream',
+        canChoose: true,
+        origin: { fullName: 'example-owner/example-app' },
+        upstream: { fullName: 'example-org/example-app' },
+      },
+    });
+    render(<TaskAddForm
+      providers={[]}
+      apps={[{ id: 'example-app', name: 'Example App', repoPath: '/example/app' }]}
+      defaultApp="example-app"
+      onTaskAdded={vi.fn()}
+    />);
+
+    await user.type(screen.getByPlaceholderText('Task description *'), 'Plan a feature');
+    await user.click(await screen.findByLabelText(/Plan & file issue/i));
+    const target = await screen.findByLabelText('File issue on');
+    expect(target).toHaveValue('upstream');
+    expect(target).toHaveTextContent('Upstream · example-org/example-app');
+    await user.selectOptions(target, 'origin');
+    await user.click(screen.getByRole('button', { name: 'Plan & File Issue' }));
+
+    await waitFor(() => expect(api.addCosTask).toHaveBeenCalledWith(
+      expect.objectContaining({ planOnly: true, issueTarget: 'origin' }),
+      { silent: true },
+    ));
+  });
+
   it('offers and submits the non-worktree completion choice', async () => {
     const user = userEvent.setup();
     api.addCosTask.mockResolvedValue({ success: true });
@@ -287,7 +336,7 @@ describe('TaskAddForm quick templates', () => {
     await waitFor(() => expect(planOnlyToggle()).toBeChecked());
     expect(screen.queryByTitle(/isolated git worktree/i)).toBeNull();
     expect(screen.getByPlaceholderText('Task description *')).toHaveValue('Investigate and file an issue for: ');
-    expect(api.applyCosTaskTemplate).toHaveBeenCalledWith('builtin-do-plan-task');
+    expect(api.applyCosTaskTemplate).toHaveBeenCalledWith('builtin-do-plan-task', { silent: true });
   });
 
   it('leaves the toggles as-is for a template with no settings block', async () => {
@@ -307,6 +356,30 @@ describe('TaskAddForm quick templates', () => {
     // A template that pins no app must not clear the one already selected —
     // clearing it also silently reset the app's worktree/PR defaults.
     expect(screen.getByLabelText(/target application/i)).toHaveValue('example-app');
+  });
+
+  it('keeps the local template application and warns when usage recording fails', async () => {
+    const user = userEvent.setup();
+    api.getCosPopularTemplates.mockResolvedValue({
+      templates: [{ id: 'user-failed', name: 'Offline Template', description: 'Do the thing locally', isBuiltin: false }]
+    });
+    api.applyCosTaskTemplate.mockRejectedValue(new Error('Server unreachable'));
+
+    renderForm();
+    await openTemplates(user);
+    await user.click(screen.getByText('Offline Template'));
+
+    await waitFor(() => expect(api.applyCosTaskTemplate).toHaveBeenCalledWith('user-failed', { silent: true }));
+    expect(screen.getByPlaceholderText('Task description *')).toHaveValue('Do the thing locally');
+    await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(
+      'Template applied locally, but usage could not be recorded'
+    ));
+    // Reported ONCE: `silent: true` keeps the shared API helper quiet, so the
+    // component's warning is the only notice — no paired red error toast, and
+    // no success claim about a write that did not happen.
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });
 
@@ -481,5 +554,46 @@ describe('TaskAddForm worktree/PR defaults', () => {
     await waitFor(() => expect(screen.getByPlaceholderText('Task description *')).toBeInTheDocument());
     expect(worktreeToggle()).not.toBeChecked();
     expect(openPrToggle()).not.toBeChecked();
+  });
+
+  describe('description auto-sizing textarea', () => {
+    it('renders task description as an auto-sizing textarea in full mode', async () => {
+      render(<TaskAddForm providers={[]} apps={[]} onTaskAdded={vi.fn()} />);
+      await act(async () => {});
+      const fullDesc = screen.getByPlaceholderText('Task description *');
+      expect(fullDesc.tagName).toBe('TEXTAREA');
+      expect(fullDesc).toHaveClass('resize-none');
+      expect(fullDesc).toHaveClass('break-words');
+    });
+
+    it('renders task description as an auto-sizing textarea in compact mode', async () => {
+      render(<TaskAddForm providers={[]} apps={[]} onTaskAdded={vi.fn()} compact />);
+      await act(async () => {});
+      const compactDesc = screen.getByPlaceholderText('Task description *');
+      expect(compactDesc.tagName).toBe('TEXTAREA');
+      expect(compactDesc).toHaveClass('resize-none');
+      expect(compactDesc).toHaveClass('break-words');
+    });
+
+    it('submits on Enter without shiftKey, and preserves newlines when typing multi-line description', async () => {
+      const user = userEvent.setup();
+      const onTaskAdded = vi.fn();
+      api.addCosTask.mockResolvedValue({ id: 'task-1', description: 'Line 1\nLine 2', status: 'pending', metadata: {} });
+
+      render(<TaskAddForm providers={[]} apps={[]} onTaskAdded={onTaskAdded} />);
+      await act(async () => {});
+      const desc = screen.getByPlaceholderText('Task description *');
+
+      // Type multi-line text using Shift+Enter
+      await user.type(desc, 'Line 1{Shift>}{Enter}{/Shift}Line 2');
+      expect(desc).toHaveValue('Line 1\nLine 2');
+
+      // Press Enter to submit
+      await user.type(desc, '{Enter}');
+      await waitFor(() => expect(api.addCosTask).toHaveBeenCalledWith(
+        expect.objectContaining({ description: 'Line 1\nLine 2' }),
+        expect.anything()
+      ));
+    });
   });
 });

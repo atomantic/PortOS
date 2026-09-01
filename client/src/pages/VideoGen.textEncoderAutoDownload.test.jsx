@@ -51,7 +51,6 @@ const state = vi.hoisted(() => ({
   activeJob: null,
   generateVideo: vi.fn(),
   attach: vi.fn(),
-  enqueue: vi.fn(),
   eventSourceRef: { current: null },
 }));
 
@@ -123,15 +122,6 @@ vi.mock('../hooks/useMediaAnnotations', () => ({
   useMediaAnnotations: () => ({ annotations: {}, updateAnnotation: vi.fn(), getCardProps: vi.fn(() => ({})) }),
 }));
 vi.mock('../hooks/usePreviewRoute', () => ({ default: () => [null, vi.fn()] }));
-vi.mock('../hooks/useVideoGenQueue.js', () => ({
-  useVideoGenQueue: () => ({
-    queue: [],
-    enqueue: state.enqueue,
-    removeFromQueue: vi.fn(),
-    clearFinishedQueue: vi.fn(),
-    cancelRunning: vi.fn(),
-  }),
-}));
 vi.mock('../components/ui/Toast', () => ({
   default: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), loading: vi.fn() }),
 }));
@@ -161,7 +151,7 @@ vi.mock('../components/videoGen/RuntimeFingerprint', () => ({ default: () => nul
 vi.mock('../components/videoGen/VideoGenGallery', () => ({ default: () => null }));
 vi.mock('../components/media/MediaPreview', () => ({ default: () => null }));
 vi.mock('../components/media/StylePresetPicker', () => ({ default: () => null }));
-vi.mock('../components/media/BatchQueuePanel', () => ({ default: () => null }));
+vi.mock('../components/media/UniverseStylePicker', () => ({ default: () => null }));
 vi.mock('../components/media/MediaJobsQueue', () => ({ default: () => null }));
 vi.mock('../components/imageGen/LoraPicker', () => ({ default: () => null }));
 vi.mock('../components/media/ResolutionField', () => ({ default: () => null }));

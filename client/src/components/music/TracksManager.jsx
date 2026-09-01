@@ -385,7 +385,10 @@ export default function TracksManager() {
           {loading ? (
             <div className="text-sm p-2"><BrailleSpinner text="Loading…" /></div>
           ) : tracks.length === 0 ? (
-            <div className="text-gray-500 text-sm p-2">No tracks yet. Click <span className="text-port-accent">New Track</span>.</div>
+            <div className="text-gray-500 text-sm p-2">
+              No tracks yet.{' '}
+              <button type="button" onClick={startCreate} className="text-port-accent hover:underline">New Track</button>
+            </div>
           ) : (
             <ul className="space-y-1">
               {tracks.map((t) => (
@@ -416,7 +419,12 @@ export default function TracksManager() {
               </button>
             </div>
           ) : !isCreate && !selected ? (
-            <div className="text-gray-500 text-sm">Select a track to edit, or create a new one.</div>
+            <div className="text-gray-500 text-sm">
+              <p>Select a track to edit, or create a new one.</p>
+              <button type="button" onClick={startCreate} className="mt-3 inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 text-white text-sm font-medium">
+                <Plus size={16} aria-hidden="true" /> New Track
+              </button>
+            </div>
           ) : (
             <div className="space-y-3">
               <div className="flex flex-col gap-3 rounded-lg border border-port-accent/30 bg-port-accent/5 p-3 sm:flex-row sm:items-center sm:justify-between">
@@ -518,6 +526,8 @@ export default function TracksManager() {
                 ) : genMode === 'chiptune' ? (
                   <ChiptunePanel
                     track={persisted}
+                    sourcePrompt={form.prompt}
+                    sourceLyrics={form.lyrics}
                     remix={chiptuneRemix}
                     onTrackUpdate={(updated) => {
                       upsertLocal(updated); // list update is id-keyed → always safe

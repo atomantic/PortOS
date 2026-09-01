@@ -43,19 +43,19 @@ import LoomSettingsDrawer from '../components/fableloom/LoomSettingsDrawer';
 import LoomSeriesPlan from '../components/fableloom/LoomSeriesPlan';
 import LoomValidationPanel from '../components/fableloom/LoomValidationPanel';
 import LoomAiRunStatus from '../components/fableloom/LoomAiRunStatus';
-import FalH3MaxPromptFallback from '../components/videoGen/FalH3MaxPromptFallback';
 import { fieldClass, labelClass } from '../components/fableloom/fieldStyles';
 import {
   buildFableLoomImageRequest, buildFableLoomVideoRequest,
 } from '../components/fableloom/sceneMediaRequests';
 import { universeStylePreset } from '../lib/universeStylePreset';
 import { fableLoomMediaReadiness } from '../lib/fableLoomReadiness';
-import { openFalH3MaxFreeTool } from '../lib/falVideoHandoff';
+import { buildFalH3MaxPrompt } from '../lib/falVideoHandoff';
 import { LOOM_ORIENTATION, LOOM_STACK_WIDTH } from '../lib/loomLayout';
+import { asFableLoomRenderSettings } from '../../../server/lib/fableLoomProduction.js';
 import {
   addLoomEpisode, addLoomNode, deleteLoomEpisode, generateImage, generateVideo,
   getLoom, getPipelineSeries, getUniverse, updateLoomEpisode, updateLoomNode,
-  weaveLoomEpisode,
+  startLoomFalVideo, weaveLoomEpisode,
 } from '../services/api';
 
 // Phone-first sizing: a 44px touch target next to the overflow trigger, then
@@ -85,7 +85,6 @@ export default function FableLoomStory({ view = 'graph' }) {
   const [notFound, setNotFound] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [falManualPrompt, setFalManualPrompt] = useState('');
   const playOpen = searchParams.get('play') === '1';
   useScrollLock(playOpen);
   const seriesPlanOpen = episodeId === 'plan';
@@ -240,10 +239,10 @@ export default function FableLoomStory({ view = 'graph' }) {
     if (kind === 'image') {
       applySceneMedia(targetNodeId, { image: progress.filename, imageJobId: jobId });
     } else {
-      applySceneMedia(targetNodeId, { videoHistoryId: jobId });
+      applySceneMedia(targetNodeId, { videoHistoryId: progress.videoHistoryId || jobId });
     }
     setSceneMediaJob(targetNodeId, kind, null);
-    toast.success(`Scene ${label} ready`);
+    toast.success(progress.source === 'fal-browser' ? 'Scene video ready from fal.ai' : `Scene ${label} ready`);
   }, [applySceneMedia, setSceneMediaJob]);
 
   const queueSceneImage = useCallback(async (targetNode) => {
@@ -347,28 +346,56 @@ export default function FableLoomStory({ view = 'graph' }) {
     return queued;
   }, [episodeId, generationDisabledReason, loom, mediaReadiness.reason, mediaWorkflowBlocked, sceneStylePreset, setSceneMediaJob, styleContextLoading, styleContextUnavailable]);
 
-  const openFalSceneVideo = useCallback((targetNode) => {
+  const automateFalSceneVideo = useCallback(async (targetNode) => {
     const prompt = (targetNode?.videoPrompt || '').trim() || (targetNode?.prose || '').trim();
     if (!prompt) {
       toast.error('Write the scene first');
-      return false;
+      return null;
+    }
+    if (!targetNode?.image) {
+      toast.error('Generate a scene image first so fal.ai has a starting frame');
+      return null;
     }
     if (mediaWorkflowBlocked) {
       toast.error(mediaReadiness.reason);
-      return false;
+      return null;
     }
     if (styleContextLoading || styleContextUnavailable) {
       toast.error(generationDisabledReason || 'Scene style is not ready');
-      return false;
+      return null;
     }
     const request = buildFableLoomVideoRequest({
       loom, episodeId, node: targetNode, stylePreset: sceneStylePreset,
     });
-    return openFalH3MaxFreeTool({
-      ...request,
-      onCopyFailure: setFalManualPrompt,
+    const fullPrompt = buildFalH3MaxPrompt(request.prompt, request.negativePrompt);
+    const render = asFableLoomRenderSettings(loom?.renderSettings);
+    setSceneMediaJob(targetNode.id, 'video', {
+      jobId: null,
+      source: 'fal-browser',
+      status: 'submitting',
+      statusMsg: 'Starting fal.ai browser automation…',
     });
-  }, [episodeId, generationDisabledReason, loom, mediaReadiness.reason, mediaWorkflowBlocked, sceneStylePreset, styleContextLoading, styleContextUnavailable]);
+    const queued = await startLoomFalVideo(
+      loom.id,
+      episodeId,
+      targetNode.id,
+      { prompt: fullPrompt, aspectRatio: render.aspectRatio },
+      { silent: true },
+    ).catch((error) => {
+      setSceneMediaJob(targetNode.id, 'video', {
+        jobId: null,
+        source: 'fal-browser',
+        status: 'failed',
+        error: error.message || 'Could not start fal.ai browser automation',
+      });
+      toast.error(`Could not start fal.ai video: ${error.message || 'Browser automation failed'}`);
+      return null;
+    });
+    if (!queued) return null;
+    setSceneMediaJob(targetNode.id, 'video', { ...queued, jobId: queued.id });
+    toast.success(queued.status === 'queued' ? 'fal.ai scene video queued' : 'fal.ai scene video already running');
+    return queued;
+  }, [episodeId, generationDisabledReason, loom, mediaReadiness.reason, mediaWorkflowBlocked, sceneStylePreset, setSceneMediaJob, styleContextLoading, styleContextUnavailable]);
 
   const basePath = `/fableloom/${loomId}`;
   const episodePath = useCallback(
@@ -612,7 +639,7 @@ export default function FableLoomStory({ view = 'graph' }) {
                 mediaJobs={mediaJobs}
                 onGenerateImage={queueSceneImage}
                 onGenerateVideo={queueSceneVideo}
-                onOpenFalVideo={openFalSceneVideo}
+                onAutomateFalVideo={automateFalSceneVideo}
                 generationDisabled={styleContextLoading || styleContextUnavailable || mediaWorkflowBlocked}
                 generationDisabledReason={mediaGenerationDisabledReason}
               />
@@ -683,7 +710,7 @@ export default function FableLoomStory({ view = 'graph' }) {
                   mediaJobs={mediaJobs[node.id]}
                   onGenerateImage={queueSceneImage}
                   onGenerateVideo={queueSceneVideo}
-                  onOpenFalVideo={openFalSceneVideo}
+                  onAutomateFalVideo={automateFalSceneVideo}
                   generationDisabled={styleContextLoading || styleContextUnavailable || mediaWorkflowBlocked}
                   generationDisabledReason={mediaGenerationDisabledReason}
                   onMakeStart={node.id !== episode.startNodeId ? async () => {
@@ -752,10 +779,6 @@ export default function FableLoomStory({ view = 'graph' }) {
         </Modal>
       )}
 
-      <FalH3MaxPromptFallback
-        prompt={falManualPrompt}
-        onClose={() => setFalManualPrompt('')}
-      />
     </div>
   );
 }

@@ -5,8 +5,7 @@
 // (TOOL_GROUPS + GROUP_INTENT), and exposes the stable public API consumed by
 // the voice pipeline (pipeline.js) and the ⌘K command palette (routes/palette.js):
 //   getToolSpecs, getToolSpecsForIntent, getAllToolNames, getToolMetadata,
-//   classifyIntent, dispatchTool, UI_KINDS, UI_INTENT_RE, UI_FILL_INTENT_RE,
-//   anchorLocalMidnightUtc.
+//   classifyIntent, dispatchTool, UI_KINDS, UI_INTENT_RE, UI_FILL_INTENT_RE.
 // Add a new tool by adding it to its domain module's tool array (and, if it
 // should be intent-gated, mapping its name in TOOL_GROUPS to a GROUP_INTENT key).
 
@@ -18,7 +17,7 @@ import { DAILYLOG_TOOLS, DAILYLOG_INTENT_RE } from './tools/dailylog.js';
 import { UI_TOOLS, UI_INTENT_RE, UI_FILL_INTENT_RE } from './tools/ui.js';
 import { ASK_TOOLS, ASK_INTENT_RE } from './tools/ask.js';
 import { VISION_TOOLS, VISION_INTENT_RE } from './tools/vision.js';
-import { AMBIENT_TOOLS, CALENDAR_INTENT_RE, WEATHER_INTENT_RE, anchorLocalMidnightUtc } from './tools/ambient.js';
+import { AMBIENT_TOOLS, CALENDAR_INTENT_RE, WEATHER_INTENT_RE } from './tools/ambient.js';
 import { TIMER_TOOLS, TIMER_INTENT_RE } from './tools/timer.js';
 import { MEDIA_TOOLS, MEDIA_INTENT_RE } from './tools/media.js';
 import { PIPELINE_TOOLS, PIPELINE_INTENT_RE } from './tools/pipeline.js';
@@ -28,9 +27,8 @@ import { WORKSPACE_TOOLS, WORKSPACE_INTENT_RE } from './tools/workspace.js';
 import { UI_KINDS } from './tools/shared.js';
 
 // Re-exported for pipeline.js (UI_KINDS, UI_INTENT_RE) and the form-fill
-// suppression check; anchorLocalMidnightUtc is re-exported for the unit tests
-// that exercise the DST-anchoring math directly.
-export { UI_KINDS, UI_INTENT_RE, UI_FILL_INTENT_RE, anchorLocalMidnightUtc };
+// suppression check.
+export { UI_KINDS, UI_INTENT_RE, UI_FILL_INTENT_RE };
 
 // The registry. Order is not load-bearing (consumers resolve by name/id) but
 // kept domain-grouped for readability.

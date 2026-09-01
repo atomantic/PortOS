@@ -47,6 +47,7 @@ import {
 } from './taskScheduleRegistry.js';
 import { loadSchedule, updateSchedule } from './taskScheduleStore.js';
 import { isInstanceFeatureEnabled } from './instanceFeatures.js';
+import { recordUserAction } from './userActions.js';
 import { getTaskDataInputCatalog } from '../lib/taskDataInputCatalog.js';
 import {
   clearFailureLedgerFields,
@@ -1165,6 +1166,23 @@ export async function triggerOnDemandTask(taskType, appId = null, { emit = true,
   });
 
   if (request.error) return request;
+
+  // Operator-action ledger (#5594): ONLY a human pressing Run Now. The perpetual
+  // drain re-issues itself through this same lane with `origin: REFILL` — logging
+  // that would fill the ledger with events the user never performed and make
+  // "what did I trigger?" unanswerable.
+  if (origin === ON_DEMAND_ORIGINS.USER) {
+    await recordUserAction({
+      type: 'cos.schedule.trigger',
+      target: taskType,
+      targetName: appId,
+      summary: `Ran scheduled task '${taskType}' on demand${appId ? ` for ${appId}` : ''}`,
+      payload: { taskType, appId: appId ?? null, requestId: request.id },
+      source: { service: 'taskSchedule', fn: 'triggerOnDemandTask' },
+      happenedAt: request.requestedAt,
+      dedupeKey: `cos.schedule.trigger:${request.id}`,
+    });
+  }
 
   emitLog('info', `On-demand task requested: ${taskType}`, { appId }, '📅 TaskSchedule');
   // The event's only consumer is a `dequeueNextTask()` trigger (cos.js). Callers

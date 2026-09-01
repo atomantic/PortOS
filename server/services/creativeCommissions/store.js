@@ -65,6 +65,7 @@ import {
   setSyncBaseHash,
   deleteSyncBaseHash,
   flushBaseHashes,
+  withBaseHashFlushBatch,
   maybeJournalBeforeOverwrite,
 } from '../../lib/conflictJournal.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
@@ -986,21 +987,23 @@ export async function pruneTombstonedCommissions(olderThanMs) {
   // put, and the next sweep retries both halves — never an orphaned rating.
   const candidates = await store.listPrunable(olderThanMs);
   const ids = [];
-  for (const id of candidates) {
-    const pruned = await store.queueRecordWrite(id, async () => {
-      // Recheck the backend's FULL prune predicate, not just deleted:true — a
-      // peer merge that rewrote this tombstone with a fresher deletedAt mid-
-      // sweep restarted its GC grace period, and hard-deleting it early would
-      // let an offline peer resurrect the stale record.
-      if (!(await store.isPrunable(id, olderThanMs))) return false;
-      await tombstoneFeedbackForCommission(id);
-      await store.deleteRaw(id);
-      return true;
-    });
-    if (!pruned) continue;
-    ids.push(id);
-    await deleteSyncBaseHash(CREATIVE_COMMISSION_KIND, id).catch(() => {});
-  }
+  await withBaseHashFlushBatch(async () => {
+    for (const id of candidates) {
+      const pruned = await store.queueRecordWrite(id, async () => {
+        // Recheck the backend's FULL prune predicate, not just deleted:true — a
+        // peer merge that rewrote this tombstone with a fresher deletedAt mid-
+        // sweep restarted its GC grace period, and hard-deleting it early would
+        // let an offline peer resurrect the stale record.
+        if (!(await store.isPrunable(id, olderThanMs))) return false;
+        await tombstoneFeedbackForCommission(id);
+        await store.deleteRaw(id);
+        return true;
+      });
+      if (!pruned) continue;
+      ids.push(id);
+      await deleteSyncBaseHash(CREATIVE_COMMISSION_KIND, id).catch(() => {});
+    }
+  });
   return { pruned: ids.length, ids };
 }
 

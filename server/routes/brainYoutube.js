@@ -18,7 +18,7 @@ const router = Router();
 /**
  * POST /api/brain/youtube/ingest
  * Start an ingest. Body: { url, captureTranscript?, downloadVideo?, ingestAudio?,
- * agentPrompt?, tags?, priority? } → { jobId, videoId }
+ * note?, agentPrompt?, tags?, priority? } → { jobId, videoId }
  */
 router.post('/ingest', asyncHandler(async (req, res) => {
   const data = validateRequest(youtubeIngestSchema, req.body || {});

@@ -5,7 +5,7 @@ import Pill from '../../ui/Pill';
 import ToggleSwitch from '../../ToggleSwitch';
 import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
-import { parseGitHubUrl } from '../../../lib/githubRepoUrl';
+import { parseRepoUrl, repoBrowseUrl } from '../../../lib/repoUrl';
 
 /** Whether a submodule's pointer differs from what its remote default branch has. */
 const needsUpdate = (sub) => sub.behind > 0 || sub.outOfSync || !sub.initialized || sub.conflicted;
@@ -13,11 +13,12 @@ const needsUpdate = (sub) => sub.behind > 0 || sub.outOfSync || !sub.initialized
 /**
  * Browsable URL for a submodule's remote. `.gitmodules` commonly declares the
  * scp-style SSH form (`git@github.com:owner/repo`), which is not a link a
- * browser can follow — normalize it rather than href-ing it raw.
+ * browser can follow — normalize it rather than href-ing it raw. Host-generic:
+ * a gitlab.com submodule earns the same link.
  */
 function repoHref(url) {
-  const parsed = parseGitHubUrl(url || '');
-  if (parsed) return `https://github.com/${parsed.owner}/${parsed.repo}`;
+  const parsed = parseRepoUrl(url || '');
+  if (parsed) return repoBrowseUrl(parsed);
   return /^https?:\/\//i.test(url || '') ? url.replace(/\.git$/, '') : null;
 }
 

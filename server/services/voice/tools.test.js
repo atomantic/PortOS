@@ -54,6 +54,12 @@ vi.mock('../../lib/timezone.js', () => ({
   todayInTimezone: vi.fn(() => '2026-04-17'),
   getLocalParts: vi.fn(() => ({ year: 2026, month: 4, day: 17 })),
   getUtcOffsetMs: vi.fn(() => -7 * 3600 * 1000),
+  // Pinned PDT day window; the real DST math is covered in lib/timezone.test.js.
+  localDayWindowUtc: vi.fn(() => ({
+    date: '2026-04-17',
+    startDate: '2026-04-17T07:00:00.000Z',
+    endDate: '2026-04-18T06:59:59.999Z',
+  })),
 }));
 vi.mock('../userTimezone.js', () => ({
   getUserTimezone: vi.fn(async () => 'America/Los_Angeles'),
@@ -193,8 +199,7 @@ vi.mock('../providers.js', () => ({
   getProviderById: vi.fn(async () => null),
 }));
 
-const { dispatchTool, getToolSpecs, getToolSpecsForIntent, classifyIntent, anchorLocalMidnightUtc } = await import('./tools.js');
-const { getUtcOffsetMs: mockedGetUtcOffsetMs } = await import('../../lib/timezone.js');
+const { dispatchTool, getToolSpecs, getToolSpecsForIntent, classifyIntent } = await import('./tools.js');
 const { getVoiceConfig: mockedGetVoiceConfig } = await import('./config.js');
 const { addTask: mockedAddTask, isRunning: mockedIsRunning } = await import('../cos.js');
 const { getActiveProvider: mockedGetActiveProvider, getAllProviders: mockedGetAllProviders, getProviderById: mockedGetProviderById } = await import('../providers.js');
@@ -1369,29 +1374,6 @@ describe('calendar_next', () => {
     expect(r.found).toBe(true);
     expect(r.title).toBe('Conference Day');
     expect(r.allDay).toBe(true);
-  });
-});
-
-describe('anchorLocalMidnightUtc (DST-safe local-midnight anchor)', () => {
-  it('subtracts the constant offset off the naive UTC parse', () => {
-    // Both passes see the mocked -7h (PDT) offset → local midnight is +7h of the
-    // naive UTC parse of the day string (PDT midnight = 07:00 UTC).
-    const naive = Date.parse('2026-04-17T00:00:00Z');
-    expect(anchorLocalMidnightUtc('2026-04-17', 'America/Los_Angeles'))
-      .toBe(naive + 7 * 3600 * 1000);
-  });
-
-  it('uses the offset evaluated AT the target midnight, not the first guess', () => {
-    // Simulate a DST boundary: the offset at the naive-parse instant differs
-    // from the offset at the refined candidate instant. The returned anchor must
-    // use the SECOND (refined) offset, proving the two-pass convergence.
-    const naive = Date.parse('2026-03-08T00:00:00Z');
-    mockedGetUtcOffsetMs
-      .mockImplementationOnce(() => -8 * 3600 * 1000)  // first pass: PST
-      .mockImplementationOnce(() => -7 * 3600 * 1000); // refined: PDT
-    expect(anchorLocalMidnightUtc('2026-03-08', 'America/Los_Angeles'))
-      .toBe(naive + 7 * 3600 * 1000); // refined offset wins
-    mockedGetUtcOffsetMs.mockReturnValue(-7 * 3600 * 1000); // restore default
   });
 });
 

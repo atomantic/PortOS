@@ -126,6 +126,44 @@ describe('MediaJobsQueue — Creative Director renders', () => {
   });
 });
 
+describe('MediaJobsQueue — video render lanes', () => {
+  it('shows local, Grok, and remote work in separate queues', async () => {
+    listMediaJobs.mockResolvedValue([
+      {
+        id: 'localvideo0001',
+        kind: 'video',
+        status: 'running',
+        queuedAt: '2026-06-19T10:00:00Z',
+        params: { prompt: 'an invented local shot', mode: 'text', modelId: 'local-video' },
+      },
+      {
+        id: 'grokvideo0001',
+        kind: 'video',
+        status: 'running',
+        queuedAt: '2026-06-19T10:01:00Z',
+        params: { prompt: 'an invented cloud shot', mode: 'grok' },
+      },
+      {
+        id: 'remotevideo001',
+        kind: 'video',
+        status: 'queued',
+        queuedAt: '2026-06-19T10:02:00Z',
+        renderer: 'remote',
+        params: { prompt: 'an invented peer shot', mode: 'text', modelId: 'peer-video' },
+      },
+    ]);
+
+    render(<MediaJobsQueue kind="video" />);
+
+    expect(await screen.findByRole('region', { name: 'Local machine video queue' })).toHaveTextContent('an invented local shot');
+    expect(screen.getByRole('region', { name: 'Grok video queue' })).toHaveTextContent('an invented cloud shot');
+    expect(screen.getByRole('region', { name: 'Remote machines video queue' })).toHaveTextContent('an invented peer shot');
+    expect(screen.getByRole('heading', { name: 'Local machine' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Grok' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Remote machines' })).toBeInTheDocument();
+  });
+});
+
 describe('MediaJobsQueue — federated render badge', () => {
   it('badges a peer-rendered job remote instead of claiming a local render', async () => {
     // The server projects `renderer` and rebuilds `modelId` off the wire

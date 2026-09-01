@@ -3,6 +3,7 @@ export * from './completion.js';
 export * from './constants.js';
 export * from './forge.js';
 export * from './instructions.js';
+export * from './plannerAttribution.js';
 export * from './reviewLifecycle.js';
 export * from './slashdo.js';
 export * from './taskContext.js';

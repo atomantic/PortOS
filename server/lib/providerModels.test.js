@@ -53,6 +53,8 @@ import { readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
+const SHIPPED_PROVIDERS = JSON.parse(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../data.reference/providers.json'), 'utf8'));
+
 // The catalog `agy models` prints — the shipped provider list mirrors it.
 const AGY_CATALOG = [
   'antigravity-configured-default',
@@ -652,6 +654,15 @@ describe('providerModels', () => {
     it('passes a sentinel-free list through unchanged', () => {
       expect(filterSelectableModels(['a', 'b'])).toEqual(['a', 'b']);
     });
+
+    it('leaves every current Codex fallback choice available to server pickers', () => {
+      const codexModels = SHIPPED_PROVIDERS.providers.codex.models;
+      expect(codexModels).toContain('gpt-5.3-codex-spark');
+      expect(filterSelectableModels([
+        CODEX_CONFIGURED_DEFAULT,
+        ...codexModels,
+      ])).toEqual(codexModels);
+    });
   });
 
   describe('hasModelFlag', () => {
@@ -940,8 +951,7 @@ describe('providerModels', () => {
     // Anthropic models under its own ids is covered without anyone remembering
     // to add a case. Only `claude` may rewrite; everything else is verbatim.
     it('rewrites the model id for no shipped non-claude TUI command', () => {
-      const __dirname = dirname(fileURLToPath(import.meta.url));
-      const seed = JSON.parse(readFileSync(resolve(__dirname, '../../data.reference/providers.json'), 'utf8'));
+      const seed = SHIPPED_PROVIDERS;
       const commands = [...new Set(
         Object.values(seed.providers)
           .filter((p) => p.type === 'tui' && typeof p.command === 'string')

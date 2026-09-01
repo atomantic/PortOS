@@ -8,7 +8,8 @@
  */
 
 import { useState } from 'react';
-import { AlertCircle, ExternalLink, ImagePlus, Loader2, Upload, Video } from 'lucide-react';
+import { AlertCircle, ImagePlus, Loader2, Sparkles, Upload, Video } from 'lucide-react';
+import { FAL_H3_MAX_FREE_ALLOWANCE_NOTE } from '../../lib/falVideoHandoff.js';
 import MediaImage from '../MediaImage';
 import GalleryVideoPicker from '../videoGen/GalleryVideoPicker';
 
@@ -30,6 +31,7 @@ const jobStateLabel = (kind, job) => {
   if (job.status === 'failed') return `${noun[0].toUpperCase()}${noun.slice(1)} failed`;
   if (job.status === 'canceled') return `${noun[0].toUpperCase()}${noun.slice(1)} canceled`;
   if (!isActive(job)) return null;
+  if (job.source === 'fal-browser' && job.statusMsg) return job.statusMsg;
   const pct = progressPercent(job);
   return job.status === 'submitting'
     ? `Starting ${noun}…`
@@ -41,7 +43,7 @@ export default function LoomSceneMedia({
   jobs = {},
   onGenerateImage,
   onGenerateVideo,
-  onOpenFalVideo,
+  onAutomateFalVideo,
   onAttachVideo,
   compact = false,
   generationDisabled = false,
@@ -51,11 +53,16 @@ export default function LoomSceneMedia({
 }) {
   const [videoPickerOpen, setVideoPickerOpen] = useState(false);
   const imageJob = jobs.image || null;
-  const freeToolDisabled = falDisabled ?? generationDisabled;
-  const freeToolDisabledReason = falDisabledReason ?? generationDisabledReason;
   const videoJob = jobs.video || null;
   const imageActive = isActive(imageJob);
   const videoActive = isActive(videoJob);
+  const falActive = videoActive && videoJob?.source === 'fal-browser';
+  const falRequiresImage = !node.image;
+  const freeToolDisabled = (falDisabled ?? generationDisabled) || videoActive || falRequiresImage;
+  const configuredFalDisabledReason = falDisabledReason ?? generationDisabledReason;
+  const freeToolDisabledReason = configuredFalDisabledReason
+    || (falRequiresImage ? 'Generate a scene image first so fal.ai has a starting frame' : '')
+    || (videoActive ? 'A scene video is already rendering' : '');
   const activeJob = videoActive ? videoJob : imageActive ? imageJob : null;
   const activeKind = videoActive ? 'video' : imageActive ? 'image' : null;
   const failedJob = videoJob?.status === 'failed'
@@ -180,13 +187,15 @@ export default function LoomSceneMedia({
         </button>
         <button
           type="button"
-          onClick={() => onOpenFalVideo?.(node)}
-          disabled={freeToolDisabled || !onOpenFalVideo}
-          title={freeToolDisabledReason || 'Copy this scene prompt and open fal H3 Max (up to 15 free browser renders per day with an account)'}
+          onClick={() => onAutomateFalVideo?.(node)}
+          disabled={freeToolDisabled || !onAutomateFalVideo}
+          title={freeToolDisabledReason || 'Upload the scene image and prompt to fal.ai H3 Max, then save the finished video here'}
           className={buttonClass}
         >
-          <ExternalLink size={compact ? 10 : 12} aria-hidden="true" />
-          <span className="truncate">fal.ai free</span>
+          {falActive
+            ? <Loader2 size={compact ? 10 : 12} className="animate-spin" aria-hidden="true" />
+            : <Sparkles size={compact ? 10 : 12} aria-hidden="true" />}
+          <span className="truncate">{falActive ? 'Running fal.ai' : 'Automate fal.ai'}</span>
         </button>
         {!compact && (
           <button
@@ -210,6 +219,16 @@ export default function LoomSceneMedia({
       )}
       {generationDisabledReason && !noticeLabel && !compact && (
         <p className="text-xs text-port-text-muted" role="status">{generationDisabledReason}</p>
+      )}
+      {!generationDisabledReason && falRequiresImage && !noticeLabel && !compact && (
+        <p className="text-xs text-port-text-muted" role="status">
+          Generate a scene image first to use it as fal.ai&apos;s starting frame.
+        </p>
+      )}
+      {onAutomateFalVideo && !compact && (
+        <p className="text-xs text-port-text-muted" role="note">
+          {FAL_H3_MAX_FREE_ALLOWANCE_NOTE}
+        </p>
       )}
       {!compact && (
         <GalleryVideoPicker

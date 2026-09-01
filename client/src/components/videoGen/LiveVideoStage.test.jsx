@@ -6,14 +6,18 @@ import { resolveVideoStagePreview, VIDEO_STAGE_KIND } from '../../lib/videoStage
 const stageFrame = () => screen.getByTestId('video-stage-frame');
 
 describe('LiveVideoStage', () => {
-  it('renders a live runner frame as an image at the render aspect ratio', () => {
+  it('keeps conditioning media on stage instead of showing a live runner frame', () => {
     const descriptor = resolveVideoStagePreview({
-      generating: true, currentImage: 'iVBORw0KG', width: 480, height: 832,
+      generating: true,
+      currentImage: 'iVBORw0KG',
+      sourceImageFile: 'start.png',
+      width: 480,
+      height: 832,
     });
     render(<LiveVideoStage descriptor={descriptor} generating progressPct={40} statusMsg="Rendering step 4/10" />);
 
-    const img = screen.getByAltText('Live frame');
-    expect(img.getAttribute('src')).toBe('data:image/png;base64,iVBORw0KG');
+    expect(screen.queryByAltText('Live frame')).not.toBeInTheDocument();
+    expect(screen.getByAltText('Start frame').getAttribute('src')).toBe('/data/images/start.png');
     // Portrait geometry: an inline style, never a computed Tailwind class
     // (a `aspect-[480/832]` class name would not survive the JIT build).
     // (CSS normalizes a bare number to `<n> / 1`, hence the split.)
@@ -31,7 +35,7 @@ describe('LiveVideoStage', () => {
   });
 
   it('leaves the aspect ratio unset when the render geometry is unknown', () => {
-    const descriptor = resolveVideoStagePreview({ generating: true, currentImage: 'AAA' });
+    const descriptor = resolveVideoStagePreview({ generating: true });
     render(<LiveVideoStage descriptor={descriptor} generating />);
     expect(stageFrame().style.aspectRatio).toBe('');
   });
@@ -104,9 +108,9 @@ describe('LiveVideoStage', () => {
     const { rerender } = render(<LiveVideoStage descriptor={loop} generating />);
     fireEvent.play(screen.getByLabelText('Continuing from this clip'));
 
-    const live = resolveVideoStagePreview({ generating: true, currentImage: 'AAA' });
-    rerender(<LiveVideoStage descriptor={live} generating />);
-    expect(stageFrame().dataset.stageKind).toBe(VIDEO_STAGE_KIND.LIVE);
+    const still = resolveVideoStagePreview({ generating: true, sourceImageFile: 'start.png' });
+    rerender(<LiveVideoStage descriptor={still} generating />);
+    expect(stageFrame().dataset.stageKind).toBe(VIDEO_STAGE_KIND.STILL);
   });
 
   it('surfaces a render failure over the stage', () => {

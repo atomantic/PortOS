@@ -27,7 +27,7 @@ import { EFFORT_LEVELS } from '../../lib/providerModels.js';
 import { DIAGNOSIS_MAX_FILED } from './seriesAutopilot/diagnosisCore.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes,
-  deleteSyncBaseHash,
+  deleteSyncBaseHash, withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
 import {
   emitRecordUpdated, emitRecordDeleted,
@@ -1314,17 +1314,18 @@ export async function pruneTombstonedSeries(beforeMs) {
   // queued delete; without the re-check we'd rm -rf a freshly un-deleted
   // record. Mirrors pruneTombstonedUniverses. Uses deleteOneNow (not deleteOne —
   // that re-enters queueRecordWrite for the same id and would deadlock).
-  const results = await Promise.allSettled(candidates.map((id) =>
-    s.queueRecordWrite(id, async () => {
-      const fresh = await s.loadOne(id);
-      if (!fresh?.deleted) return false; // un-deleted between snapshot and queue
-      const t = Date.parse(fresh.deletedAt || '');
-      if (!Number.isFinite(t) || t >= beforeMs) return false;
-      await s.deleteOneNow(id);
-      await deleteSyncBaseHash('series', id);
-      return true;
-    })
-  ));
+  const results = await withBaseHashFlushBatch(() =>
+    Promise.allSettled(candidates.map((id) =>
+      s.queueRecordWrite(id, async () => {
+        const fresh = await s.loadOne(id);
+        if (!fresh?.deleted) return false; // un-deleted between snapshot and queue
+        const t = Date.parse(fresh.deletedAt || '');
+        if (!Number.isFinite(t) || t >= beforeMs) return false;
+        await s.deleteOneNow(id);
+        await deleteSyncBaseHash('series', id);
+        return true;
+      })
+    )));
   let pruned = 0;
   for (const r of results) {
     if (r.status === 'fulfilled' && r.value === true) pruned += 1;

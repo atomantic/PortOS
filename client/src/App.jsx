@@ -338,7 +338,7 @@ export default function App() {
           <Route path="voice/call-host" element={<VoiceCallHost />} />
           <Route path="api-reference" element={<Navigate to="/api-reference/catalog" replace />} />
           <Route path="api-reference/:tab" element={<ApiExplorer />} />
-          <Route path="models" element={<Navigate to="/models/performance" replace />} />
+          <Route path="models" element={<Navigate to="/models/llms" replace />} />
           {/* A tab's drill-down (today: the LoRA dataset workbench) renders through
               Models itself, so it keeps the section header and tab bar — see
               TAB_DETAIL there. */}

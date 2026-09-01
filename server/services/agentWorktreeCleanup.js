@@ -27,7 +27,7 @@ import { resolveTaskTargetBranch, shouldStripTaskTargetBranch } from '../lib/tas
 import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
 import { detectForgeCli } from '../lib/gitForge.js';
 import { PR_COMPLETIONS, PR_COMPLETION_VALUES, PR_CREATION, leavesPrForHuman, prClaimWasVerified } from '../lib/prDisposition.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds } from '../lib/validation.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, prioritizeToolFreeReviewers } from '../lib/validation.js';
 
 // In-flight cleanup per agentId, so two completion paths racing to clean the
 // SAME agent coalesce onto one run instead of tripping over each other.
@@ -828,7 +828,9 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   // An EXPLICITLY empty list means "no review was requested" and must stay empty —
   // normalizeReviewers' `[copilot]` default would otherwise resurrect a reviewer.
   const reviewerList = (Array.isArray(reviewers) && reviewers.length === 0) ? [] : normalizeReviewers({ reviewers });
-  const effectiveReviewers = isNonGithubForge ? reviewerList.filter(r => r !== DEFAULT_REVIEWER) : reviewerList;
+  const effectiveReviewers = prioritizeToolFreeReviewers(
+    isNonGithubForge ? reviewerList.filter(r => r !== DEFAULT_REVIEWER) : reviewerList
+  );
   // GitHub reviewer usernames are forge-agnostic requested reviewers, so they are
   // NOT stripped on a non-GitHub forge — a username reviewer alone can drive the
   // loop even when copilot was dropped.
@@ -950,7 +952,9 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
       // is NOT `0`, which slashdo reads as "loop until clean".
       reviewLoopReviewerMaxRounds: effectiveReviewerMaxRounds,
       reviewLoopStopMode: reviewStopMode,
-      reviewLoopReviewerApplies: reviewerApplies,
+      // Public PR/MR diffs are untrusted input. Review subprocesses stay
+      // advisory/read-only; the follow-up agent independently applies fixes.
+      reviewLoopReviewerApplies: false,
       reviewLoopReviewerModels: narrowedReviewerModels,
       reviewLoopReviewerEfforts: narrowedReviewerEfforts,
       // Back-compat: older installs' prompt builder reads only the codex-scalar key.

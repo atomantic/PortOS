@@ -1,5 +1,5 @@
 /**
- * Mirror parity test for server/lib/githubRepoUrl.js ↔ client/src/lib/githubRepoUrl.js
+ * Mirror parity test for server/lib/repoUrl.js ↔ client/src/lib/repoUrl.js
  *
  * The server decides whether a captured URL gets cloned; the client previews
  * that decision by revealing the post-clone agent options (malware scan /
@@ -18,20 +18,25 @@ import { compareDeclaration } from './mirrorParity.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const SERVER_PATH = resolve(__dirname, 'githubRepoUrl.js');
-const CLIENT_PATH = resolve(__dirname, '../../client/src/lib/githubRepoUrl.js');
+const SERVER_PATH = resolve(__dirname, 'repoUrl.js');
+const CLIENT_PATH = resolve(__dirname, '../../client/src/lib/repoUrl.js');
 
 const MIRRORED_NAMES = [
-  'OWNER',
-  'REPO',
-  'SSH_REPO_RE',
-  'HTTPS_REPO_RE',
+  'REPO_HOSTS',
+  'OWNER_RE',
+  'REPO_RE',
   'DOT_SEGMENTS',
+  'SSH_RE',
+  'HTTP_RE',
+  'RESERVED_PATH_SEGMENTS',
+  'parseRepoUrl',
+  'isRepoUrl',
+  'repoBrowseUrl',
   'parseGitHubUrl',
   'isGitHubRepoUrl',
 ];
 
-describe('githubRepoUrl server↔client mirror parity', () => {
+describe('repoUrl server↔client mirror parity', () => {
   const serverSrc = readFileSync(SERVER_PATH, 'utf8');
   const clientSrc = readFileSync(CLIENT_PATH, 'utf8');
 
@@ -45,8 +50,8 @@ describe('githubRepoUrl server↔client mirror parity', () => {
       const { serverDecl, clientDecl, serverNorm, clientNorm } =
         compareDeclaration(serverSrc, clientSrc, name);
 
-      expect(serverDecl, `server/lib/githubRepoUrl.js is missing: ${name}`).not.toBeNull();
-      expect(clientDecl, `client/src/lib/githubRepoUrl.js is missing: ${name}`).not.toBeNull();
+      expect(serverDecl, `server/lib/repoUrl.js is missing: ${name}`).not.toBeNull();
+      expect(clientDecl, `client/src/lib/repoUrl.js is missing: ${name}`).not.toBeNull();
       expect(
         clientNorm,
         `"${name}" diverged — the server copy is authoritative; port the change verbatim`,

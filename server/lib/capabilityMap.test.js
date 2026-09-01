@@ -12,6 +12,7 @@ import {
   appsRow,
   buildCapabilityRows,
   summarizeCapabilities,
+  summarizeSetupCapabilities,
 } from './capabilityMap.js';
 
 const { OK, WARN, ERROR, UNCONFIGURED } = CAPABILITY_STATUS;
@@ -45,6 +46,87 @@ describe('providersRow', () => {
   it('accepts a bare status map (no providers wrapper)', () => {
     const r = providersRow([{ id: 'a' }], { a: { available: false } });
     expect(r.status).toBe(ERROR);
+  });
+
+  it('does not call an enabled provider ready when strict prerequisites are blocked or unknown', () => {
+    const blocked = providersRow(
+      [{ id: 'a' }],
+      { providers: {} },
+      { a: { status: 'blocked', reasonCodes: ['runtime'] } },
+    );
+    expect(blocked).toMatchObject({ status: ERROR, setupComplete: false });
+    expect(blocked.detail).toMatchObject({ available: 0, blocked: 1, unknown: 0, setupReady: 0 });
+
+    const unavailableProbe = providersRow([{ id: 'a' }], { providers: {} }, null);
+    expect(unavailableProbe).toMatchObject({ status: WARN, setupComplete: false });
+    expect(unavailableProbe.detail.unknown).toBe(1);
+  });
+
+  it('marks setup complete when at least one strictly ready provider exists', () => {
+    const r = providersRow(
+      [{ id: 'a' }, { id: 'b' }],
+      { providers: {} },
+      { a: { status: 'ready' }, b: { status: 'blocked' } },
+    );
+    expect(r).toMatchObject({ status: WARN, setupComplete: true });
+    expect(r.detail).toMatchObject({ available: 1, blocked: 1, setupReady: 1 });
+  });
+
+  it('keeps setup complete during a transient provider availability outage', () => {
+    const r = providersRow(
+      [{ id: 'a' }],
+      { providers: { a: { available: false, reason: 'rate-limit' } } },
+      { a: { status: 'ready' } },
+    );
+    expect(r).toMatchObject({ status: ERROR, setupComplete: true });
+    expect(r.detail).toMatchObject({ setupReady: 1, unavailable: 1 });
+  });
+
+  it('requires a local daemon provider to be running with its model ready', () => {
+    const provider = {
+      id: 'local',
+      type: 'api',
+      endpoint: 'http://localhost:11434/v1',
+      defaultModel: 'example-model',
+    };
+    const blocked = providersRow(
+      [provider],
+      { providers: {} },
+      { local: { status: 'ready' } },
+      { local: { ready: false } },
+    );
+    expect(blocked).toMatchObject({ status: ERROR, setupComplete: false });
+    expect(blocked.detail).toMatchObject({ blocked: 1, setupReady: 0 });
+
+    const ready = providersRow(
+      [provider],
+      { providers: {} },
+      { local: { status: 'ready' } },
+      { local: { ready: true } },
+    );
+    expect(ready).toMatchObject({ status: OK, setupComplete: true });
+  });
+
+  it('keeps local provider readiness unknown when its daemon probe fails', () => {
+    const r = providersRow(
+      [{ id: 'local', type: 'api', endpoint: 'http://localhost:11434/v1' }],
+      { providers: {} },
+      { local: { status: 'ready' } },
+      null,
+    );
+    expect(r).toMatchObject({ status: WARN, setupComplete: false });
+    expect(r.detail).toMatchObject({ unknown: 1, setupReady: 0 });
+  });
+
+  it('does not turn an inconclusive local model listing into a setup failure', () => {
+    const r = providersRow(
+      [{ id: 'local', type: 'api', endpoint: 'http://localhost:11434/v1' }],
+      { providers: {} },
+      { local: { status: 'ready' } },
+      { local: { ready: false, checks: [{ id: 'runtime', ok: true }, { id: 'model', ok: null }] } },
+    );
+    expect(r).toMatchObject({ status: WARN, setupComplete: false });
+    expect(r.detail).toMatchObject({ blocked: 0, unknown: 1 });
   });
 });
 
@@ -120,6 +202,21 @@ describe('networkRow', () => {
   it('warns when only one of the two is present', () => {
     expect(networkRow({ httpsEnabled: true, cert: {} }).status).toBe(WARN);
     expect(networkRow({ httpsEnabled: false, cert: { tailscaleHost: 'h' } }).status).toBe(WARN);
+  });
+
+  it('uses the ordered setup contract when present', () => {
+    const r = networkRow({
+      httpsEnabled: false,
+      tailscale: { available: true },
+      setup: {
+        complete: false,
+        summary: 'Enable MagicDNS',
+        nextStep: { id: 'magic-dns' },
+      },
+      cert: {},
+    });
+    expect(r).toMatchObject({ status: WARN, setupRequired: true, setupComplete: false });
+    expect(r.detail.nextStepId).toBe('magic-dns');
   });
 });
 
@@ -228,5 +325,24 @@ describe('summarizeCapabilities', () => {
   it('does not default to ok when a non-empty list has only unknown statuses', () => {
     const s = summarizeCapabilities([{ status: 'bogus' }, {}]);
     expect(s).toMatchObject({ ok: 0, warn: 0, error: 0, unconfigured: 0, total: 2, overall: UNCONFIGURED });
+  });
+});
+
+describe('summarizeSetupCapabilities', () => {
+  it('rolls up only essential first-run capabilities', () => {
+    expect(summarizeSetupCapabilities([
+      { setupRequired: true, setupComplete: true },
+      { setupRequired: true, setupComplete: false },
+      { setupRequired: false, setupComplete: false },
+    ])).toEqual({ total: 2, ready: 1, remaining: 1, complete: false });
+  });
+
+  it('requires a non-empty setup contract before reporting completion', () => {
+    expect(summarizeSetupCapabilities([])).toEqual({
+      total: 0,
+      ready: 0,
+      remaining: 0,
+      complete: false,
+    });
   });
 });

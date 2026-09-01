@@ -13,7 +13,9 @@ import { MemoryRouter, Route, Routes } from 'react-router';
 import { TABS } from '../components/models/ModelsTabsHeader';
 
 vi.mock('../components/settings/LocalModelAssessments.jsx', () => ({ default: () => <div>assessments panel</div> }));
-vi.mock('../components/settings/LocalLlmTab', () => ({ LocalLlmTab: () => <div>llms panel</div> }));
+vi.mock('../components/settings/LocalLlmTab', () => ({
+  LocalLlmTab: ({ view }) => <div data-testid="llms-view" data-view={view || 'runtimes'}>llms panel</div>,
+}));
 vi.mock('../components/settings/EmbeddingsTab', () => ({ default: () => <div>embeddings panel</div> }));
 vi.mock('../components/models/Image3dRuntimes', () => ({ default: () => <div>3d runtimes panel</div> }));
 vi.mock('../components/models/ModelStatusTab', () => ({ default: () => <div>status panel</div> }));
@@ -74,12 +76,11 @@ describe('Models', () => {
     },
   );
 
-  // A stale ⌘K entry or a typo must not produce a blank page — Performance is
-  // the tab that answers "which model should I use?", which is why people land
-  // here at all.
-  it('redirects an unknown tab slug to Performance', async () => {
+  // A stale ⌘K entry or a typo must not produce a blank page; it follows the
+  // same LLMs default as the bare route and primary navigation.
+  it('redirects an unknown tab slug to LLMs', async () => {
     renderAt('/models/not-a-tab');
-    expect(await screen.findByText('assessments panel')).toBeInTheDocument();
+    expect(await screen.findByText('llms panel')).toBeInTheDocument();
   });
 
   // The slug comes straight off the URL, so a plain `TAB_CONTENT[tab]` lookup
@@ -89,7 +90,7 @@ describe('Models', () => {
     'treats the inherited property %s as an unknown tab',
     async (slug) => {
       renderAt(`/models/${slug}`);
-      expect(await screen.findByText('assessments panel')).toBeInTheDocument();
+      expect(await screen.findByText('llms panel')).toBeInTheDocument();
     },
   );
 
@@ -116,10 +117,10 @@ describe('Models', () => {
   });
 
   // A tab listed in the header but missing from TAB_CONTENT falls through to the
-  // unknown-slug redirect and silently lands on Performance. Selection state is
-  // what distinguishes "rendered this tab" from "bounced to Performance" — the
+  // unknown-slug redirect and silently lands on LLMs. Selection state is what
+  // distinguishes "rendered this tab" from "bounced to LLMs" — the
   // per-path cases above can't see it, because a bounced tab still renders A panel.
-  it('serves every /models tab the header advertises, without bouncing to Performance', () => {
+  it('serves every /models tab the header advertises, without bouncing to LLMs', () => {
     for (const tab of ownTabs) {
       const { unmount } = renderAt(tab.to);
       expect(screen.getByRole('tab', { name: tab.label })).toHaveAttribute('aria-selected', 'true');
@@ -129,6 +130,12 @@ describe('Models', () => {
 });
 
 describe('Models — tab drill-downs', () => {
+  it('passes an LLM sub-route through to the focused LLM view', async () => {
+    renderAt('/models/llms/library');
+    expect(await screen.findByTestId('llms-view')).toHaveAttribute('data-view', 'library');
+    expect(screen.getByRole('tab', { name: 'LLMs' })).toHaveAttribute('aria-selected', 'true');
+  });
+
   it('renders a tab detail view INSIDE the section shell, not as a bare page', async () => {
     // Under /media these pages kept the shell's chrome for free, because MediaGen
     // was a layout route. Registering the workbench as its own top-level route
@@ -140,8 +147,8 @@ describe('Models — tab drill-downs', () => {
   });
 
   it('falls back to the tab index when the tab has no detail view', async () => {
-    // A link carrying one segment too many should land on something real rather
-    // than 404 — every tab except Training is in this case today.
+    // A tab that does not recognize the focused sub-view id should still land on
+    // something real rather than 404. LLMs consumes this segment; LoRAs does not.
     renderAt('/models/loras/some-id');
     expect(await screen.findByText('loras panel')).toBeInTheDocument();
   });

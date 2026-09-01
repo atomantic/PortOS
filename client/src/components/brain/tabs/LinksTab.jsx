@@ -32,6 +32,7 @@ import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { timeAgo } from '../../../utils/formatters';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 import BucketBoard from '../links/BucketBoard';
+import RepoRestudyPanel from '../RepoRestudyPanel';
 import { LINK_DND_TYPE } from '../links/bucketColors';
 import { reorderLinksInBucket } from '../links/bucketReorder';
 import { normalizeUrl as normalizeUrlShared } from '../../../utils/urlNormalize';
@@ -55,8 +56,13 @@ function normalizeUrl(raw) {
   return normalizeUrlShared(raw, { allowGit: true, requireDot: true });
 }
 
+const REPO_TYPE_COLOR = 'bg-purple-500/20 text-purple-400 border-purple-500/30';
+
 const LINK_TYPE_COLORS = {
-  github: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
+  repo: REPO_TYPE_COLOR,
+  // Pre-multi-host records still carry `github`; migration 330 renames the
+  // stored value but a peer on older code can still federate one in.
+  github: REPO_TYPE_COLOR,
   article: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
   documentation: 'bg-green-500/20 text-green-400 border-green-500/30',
   tool: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
@@ -116,18 +122,21 @@ function cloneProgressPatch(fresh, current) {
 export default function LinksTab({ onRefresh }) {
   const [inputUrl, setInputUrl] = useState('');
   const [inputTitle, setInputTitle] = useState('');
+  const [inputNote, setInputNote] = useState('');
   const [inputTags, setInputTags] = useState('');
   const [showDetails, setShowDetails] = useState(false);
   const [sending, setSending] = useState(false);
   const [links, setLinks] = useState([]);
   const [buckets, setBuckets] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState('all'); // all, github, scanned, other, ungrouped
+  const [filter, setFilter] = useState('all'); // all, repo, scanned, other, ungrouped
   const [search, setSearch] = useState('');
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({});
   const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
   const [scanningId, setScanningId] = useState(null);
+  // The one repo whose "Update & study" form is open, if any.
+  const [studyingId, setStudyingId] = useState(null);
   const inputRef = useRef(null);
 
   // Fetch the full link set; filtering, search, and bucket membership are all
@@ -219,9 +228,9 @@ export default function LinksTab({ onRefresh }) {
 
   // Client-side filter (type / bucket membership) then keyword search.
   const matchesFilter = (link) => {
-    if (filter === 'github') return link.isGitHubRepo;
+    if (filter === 'repo') return link.isRepo;
     if (filter === 'scanned') return hasScanReport(link);
-    if (filter === 'other') return !link.isGitHubRepo;
+    if (filter === 'other') return !link.isRepo;
     if (filter === 'ungrouped') return !link.bucketId;
     return true;
   };
@@ -233,6 +242,7 @@ export default function LinksTab({ onRefresh }) {
         const haystack = [
           link.title,
           link.url,
+          link.note,
           link.description,
           ...(link.tags || [])
         ].filter(Boolean).join(' ').toLowerCase();
@@ -253,6 +263,8 @@ export default function LinksTab({ onRefresh }) {
     const payload = { url };
     const title = inputTitle.trim();
     if (title) payload.title = title;
+    const note = inputNote.trim();
+    if (note) payload.note = note;
     const tags = inputTags.split(',').map(t => t.trim()).filter(Boolean);
     if (tags.length) payload.tags = tags;
 
@@ -268,10 +280,10 @@ export default function LinksTab({ onRefresh }) {
     setSending(false);
 
     if (result) {
-      const isGitHub = result.isGitHubRepo;
-      toast.success(isGitHub ? 'GitHub repo added - cloning in background' : 'Link saved');
+      toast.success(result.isRepo ? 'Repo added - cloning in background' : 'Link saved');
       setInputUrl('');
       setInputTitle('');
+      setInputNote('');
       setInputTags('');
       setShowDetails(false);
       fetchLinks();
@@ -352,6 +364,7 @@ export default function LinksTab({ onRefresh }) {
       url: link.url,
       title: link.title,
       description: link.description || '',
+      note: link.note || '',
       linkType: link.linkType,
       tags: link.tags?.join(', ') || ''
     });
@@ -368,6 +381,7 @@ export default function LinksTab({ onRefresh }) {
       url,
       title: editForm.title,
       description: editForm.description,
+      note: editForm.note,
       linkType: editForm.linkType,
       tags: editForm.tags ? editForm.tags.split(',').map(t => t.trim()).filter(Boolean) : []
     };
@@ -475,7 +489,7 @@ export default function LinksTab({ onRefresh }) {
             type="text"
             value={inputUrl}
             onChange={(e) => setInputUrl(e.target.value)}
-            placeholder="Paste a URL (GitHub repos auto-clone)..."
+            placeholder="Paste a URL (GitHub / GitLab repos auto-clone)..."
             aria-label="Link URL to save"
             className="flex-1 px-4 py-3 bg-port-card border border-port-border rounded-lg text-white placeholder-gray-500 focus:outline-hidden focus:border-port-accent"
             disabled={sending}
@@ -499,7 +513,7 @@ export default function LinksTab({ onRefresh }) {
           className="mt-2 flex items-center gap-1 text-xs text-gray-400 hover:text-white transition-colors"
         >
           {showDetails ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-          {showDetails ? 'Hide title & tags' : 'Add title & tags (optional)'}
+          {showDetails ? 'Hide link details' : 'Add title, note & tags (optional)'}
         </button>
 
         {showDetails && (
@@ -513,6 +527,21 @@ export default function LinksTab({ onRefresh }) {
                 onChange={(e) => setInputTitle(e.target.value)}
                 placeholder="Title (defaults to repo name or URL)"
                 className="w-full px-3 py-2 bg-port-card border border-port-border rounded-lg text-white text-sm placeholder-gray-500 focus:outline-hidden focus:border-port-accent"
+                disabled={sending}
+              />
+            </div>
+            <div>
+              <label htmlFor="link-note" className="block text-xs text-gray-400 mb-1">
+                Why are you saving this? <span className="text-gray-600">(optional)</span>
+              </label>
+              <textarea
+                id="link-note"
+                rows={2}
+                maxLength={2000}
+                value={inputNote}
+                onChange={(e) => setInputNote(e.target.value)}
+                placeholder="e.g. Read later, share with the team, or turn into a future task"
+                className="w-full px-3 py-2 bg-port-card border border-port-border rounded-lg text-white text-sm placeholder-gray-500 focus:outline-hidden focus:border-port-accent resize-y"
                 disabled={sending}
               />
             </div>
@@ -532,7 +561,7 @@ export default function LinksTab({ onRefresh }) {
         )}
 
         <p className="mt-2 text-xs text-gray-500">
-          Paste any URL. GitHub repos will be automatically cloned for local reference.
+          Paste any URL. GitHub and GitLab repos will be automatically cloned for local reference.
         </p>
       </form>
 
@@ -540,9 +569,9 @@ export default function LinksTab({ onRefresh }) {
       <div className="flex gap-2 mb-4 flex-wrap">
         {[
           { id: 'all', label: 'All', count: links.length },
-          { id: 'github', label: 'GitHub Repos', icon: GitBranch, count: links.filter(l => l.isGitHubRepo).length },
+          { id: 'repo', label: 'Repos', icon: GitBranch, count: links.filter(l => l.isRepo).length },
           { id: 'scanned', label: 'Scan Reports', icon: FileText, count: links.filter(hasScanReport).length },
-          { id: 'other', label: 'Other Links', icon: Link2, count: links.filter(l => !l.isGitHubRepo).length },
+          { id: 'other', label: 'Other Links', icon: Link2, count: links.filter(l => !l.isRepo).length },
           { id: 'ungrouped', label: 'Ungrouped', icon: FolderClosed, count: links.filter(l => !l.bucketId).length }
         ].map(tab => {
           const Icon = tab.icon;
@@ -574,7 +603,7 @@ export default function LinksTab({ onRefresh }) {
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search links by title, URL, description, or tag..."
+          placeholder="Search links by title, URL, note, description, or tag..."
           aria-label="Search links"
           className="w-full pl-9 pr-9 py-2 bg-port-card border border-port-border rounded-lg text-white text-sm placeholder-gray-500 focus:outline-hidden focus:border-port-accent"
         />
@@ -641,6 +670,19 @@ export default function LinksTab({ onRefresh }) {
                     placeholder="Description (optional)"
                     rows={2}
                   />
+                  <div>
+                    <label htmlFor={`link-note-${link.id}`} className="block text-xs text-gray-400 mb-1">
+                      Why are you saving this? <span className="text-gray-600">(optional)</span>
+                    </label>
+                    <textarea
+                      id={`link-note-${link.id}`}
+                      value={editForm.note}
+                      onChange={(e) => setEditForm({ ...editForm, note: e.target.value })}
+                      className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm resize-y"
+                      placeholder="Why are you saving this link?"
+                      rows={2}
+                    />
+                  </div>
                   <div className="flex gap-2">
                     <select
                       aria-label="Link type"
@@ -648,7 +690,12 @@ export default function LinksTab({ onRefresh }) {
                       onChange={(e) => setEditForm({ ...editForm, linkType: e.target.value })}
                       className="px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
                     >
-                      <option value="github">GitHub</option>
+                      <option value="repo">Repository</option>
+                      {/* Pre-multi-host records (and any federated in from a peer on
+                          older code) still carry `github`. Without an option to match,
+                          the select renders BLANK on those rows — the value is intact
+                          but it reads as data loss. */}
+                      {editForm.linkType === 'github' && <option value="github">GitHub (legacy)</option>}
                       <option value="article">Article</option>
                       <option value="documentation">Documentation</option>
                       <option value="tool">Tool</option>
@@ -685,7 +732,7 @@ export default function LinksTab({ onRefresh }) {
                 <>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
-                      {link.isGitHubRepo ? (
+                      {link.isRepo ? (
                         link.malwareScan?.verdict === 'DANGEROUS'
                           ? <Skull size={16} className="text-port-error shrink-0" aria-label="Dangerous repository" />
                           : <GitBranch size={16} className="text-purple-400 shrink-0" />
@@ -705,6 +752,11 @@ export default function LinksTab({ onRefresh }) {
                     </a>
                     {link.description && (
                       <p className="text-sm text-gray-500 mt-1">{link.description}</p>
+                    )}
+                    {link.note && (
+                      <p className="text-sm text-gray-400 mt-1">
+                        <span className="text-gray-500">Note:</span> {link.note}
+                      </p>
                     )}
                   </div>
 
@@ -787,8 +839,8 @@ export default function LinksTab({ onRefresh }) {
                   </div>
                 )}
 
-                {/* GitHub-specific controls */}
-                {link.isGitHubRepo && (
+                {/* Repository-specific controls */}
+                {link.isRepo && (
                   <>
                     {/* Clone status */}
                     <span className={`flex items-center gap-1 text-xs ${CLONE_STATUS_STYLES[link.cloneStatus]}`}>
@@ -903,6 +955,18 @@ export default function LinksTab({ onRefresh }) {
                           Pull
                         </button>
                         <button
+                          onClick={() => setStudyingId(current => (current === link.id ? null : link.id))}
+                          className={`flex items-center gap-1 px-2 py-1 text-xs rounded border transition-colors ${
+                            studyingId === link.id
+                              ? 'border-port-accent/30 bg-port-accent/20 text-port-accent'
+                              : 'border-port-border text-gray-400 hover:text-white'
+                          }`}
+                          title="Pull the latest commits and queue a fresh repo study with your own brief"
+                        >
+                          <Lightbulb size={12} />
+                          Update &amp; study
+                        </button>
+                        <button
                           onClick={() => handleScan(link.id)}
                           disabled={scanningId === link.id}
                           className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -916,6 +980,14 @@ export default function LinksTab({ onRefresh }) {
                           Scan
                         </button>
                       </>
+                    )}
+
+                    {studyingId === link.id && (
+                      <RepoRestudyPanel
+                        link={link}
+                        onClose={() => setStudyingId(null)}
+                        onQueued={(updated) => updated && setLinks(prev => prev.map(l => (l.id === updated.id ? updated : l)))}
+                      />
                     )}
                   </>
                 )}

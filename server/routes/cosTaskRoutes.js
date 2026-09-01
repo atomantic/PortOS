@@ -7,13 +7,15 @@ import { z } from 'zod';
 import * as cos from '../services/cos.js';
 import * as taskWatcher from '../services/taskWatcher.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
-import { buildClaimWorkTask, buildJiraTicketTask } from '../services/cosTaskGenerator.js';
+import { buildClaimWorkTask, buildIssueReplanTask, buildJiraTicketTask } from '../services/cosTaskGenerator.js';
 import { getAppById, getAppWorkTracker, PORTOS_APP_ID } from '../services/apps.js';
 import { getAssignableInstances } from '../services/instances.js';
+import { resolveManagedAppIssueTarget } from '../services/managedAppRepositories.js';
 import { workTrackerLabel } from '../lib/workTracker.js';
 import { getSlashdoWorkflow, slashdoWorkflowAppliesTo, SLASHDO_COMMAND_NAMES } from '../lib/slashdoCatalog.js';
 import { NON_PM2_TYPES } from '../services/streamingDetect.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
+import { recordUserAction } from '../services/userActions.js';
 import {
   createCosTaskSchema,
   slashdoTaskSchema,
@@ -29,6 +31,44 @@ const enhanceTaskSchema = z.object({
   description: z.string().min(1),
   context: z.string().optional(),
 });
+
+// ── Operator-action ledger (#5594) ──────────────────────────────────────────
+//
+// Hooked at the THREE HTTP create routes below rather than at
+// `cosTaskStore.addTask`, which is ALSO the generator / autopilot / mind dispatch
+// path. Only a request arriving here is a human pressing a button, and the whole
+// point of the ledger is to separate those from everything PortOS queues itself.
+//
+// Every write is awaited before the response (same posture as `history.logAction`),
+// and every hook fires only AFTER the mutation succeeded — a 409/404 is not an
+// operator action that happened.
+const TASK_CREATE_PAYLOAD_FIELDS = [
+  'prompt', 'description', 'context', 'provider', 'model', 'effort', 'app',
+  'useWorktree', 'openPR', 'prCompletion', 'planOnly', 'reviewLoop', 'reviewers',
+  'approvalRequired',
+  // The one create field with an open shape (`cosTaskDiagnosticsSchema` is a
+  // passthrough), so it is both the most informative thing to keep and the reason
+  // `recordUserAction` redacts credential-shaped keys at all.
+  'diagnostics',
+];
+
+const routeSource = (req) => ({ route: `${req.baseUrl}${req.route?.path ?? ''}`, method: req.method });
+
+const pickDefined = (source, fields) => Object.fromEntries(
+  fields.filter((field) => source?.[field] !== undefined).map((field) => [field, source[field]]),
+);
+
+async function logTaskCreated(req, task, taskData) {
+  await recordUserAction({
+    type: 'cos.task.create',
+    target: task.id,
+    targetName: task.description,
+    summary: `Queued CoS task: ${task.description}`,
+    payload: { taskId: task.id, ...pickDefined(taskData, TASK_CREATE_PAYLOAD_FIELDS) },
+    source: routeSource(req),
+    dedupeKey: `cos.task.create:${task.id}`,
+  });
+}
 
 // One-off "implement THIS JIRA ticket" task (the per-card play button on the
 // app overview's sprint board). `ticketKey` is a JIRA key like `PROJ-1234`.
@@ -50,17 +90,37 @@ async function assertAssignableInstance(instanceId) {
 
 const ISSUE_TRACKERS = new Set(['github', 'gitlab']);
 
-// The bundled plan-task workflow files an issue; it cannot target PLAN.md or
-// JIRA. Keep the API contract aligned with the quick-task form so direct
-// callers cannot bypass the tracker gate.
-async function assertPlanOnlyTracker(taskData) {
-  if (taskData.planOnly !== true && taskData.slashdoCommand !== 'plan-task') return;
-  const trackerInfo = await getAppWorkTracker(taskData.app || PORTOS_APP_ID);
-  if (!trackerInfo || ISSUE_TRACKERS.has(trackerInfo.resolved)) return;
-  throw new ServerError(
-    `Plan-and-file tasks require a GitHub or GitLab issue tracker (resolved to ${trackerInfo.resolved})`,
-    { status: 400, code: 'UNSUPPORTED_PLAN_ONLY_TRACKER' }
-  );
+function issueTargetInstructions(target, tracker) {
+  if (!target?.fullName) {
+    return '## Issue repository\n\nBefore filing, inspect whether the checkout origin is a fork. If it is, file on the canonical upstream repository rather than the origin fork. Do not rely on the working directory\'s implicit forge target.';
+  }
+  const role = target.role === 'upstream' ? 'canonical upstream' : 'configured origin';
+  const repoFlag = tracker === 'github' ? (target.repoSpec || target.fullName) : target.fullName;
+  const cli = tracker === 'github' ? 'gh' : 'glab';
+  return `## Issue repository\n\nFile this issue on the ${role} repository \`${target.fullName}\`. Pass \`--repo ${repoFlag}\` to every \`${cli} issue\`, label, and related repository command; do not let \`${cli}\` infer the origin fork from the working directory.`;
+}
+
+// The bundled plan-task workflow files an issue; resolve the app's canonical
+// destination before queueing so a checkout whose origin is a fork does not
+// silently file project work on that fork. The form may deliberately choose the
+// origin; upstream is the unattended/default posture.
+async function preparePlanOnlyTask(taskData, knownApp = null) {
+  if (taskData.planOnly !== true && taskData.slashdoCommand !== 'plan-task') return taskData;
+  const appId = taskData.app || PORTOS_APP_ID;
+  const [trackerInfo, app] = await Promise.all([
+    getAppWorkTracker(appId),
+    knownApp ? Promise.resolve(knownApp) : getAppById(appId),
+  ]);
+  if (trackerInfo && !ISSUE_TRACKERS.has(trackerInfo.resolved)) {
+    throw new ServerError(
+      `Plan-and-file tasks require a GitHub or GitLab issue tracker (resolved to ${trackerInfo.resolved})`,
+      { status: 400, code: 'UNSUPPORTED_PLAN_ONLY_TRACKER' }
+    );
+  }
+  if (!app || !trackerInfo) return taskData;
+  const target = await resolveManagedAppIssueTarget(app, taskData.issueTarget || 'upstream').catch(() => null);
+  const targetPrompt = issueTargetInstructions(target, target?.forge || trackerInfo.resolved);
+  return { ...taskData, prompt: [taskData.prompt, targetPrompt].filter(Boolean).join('\n\n') };
 }
 
 const router = Router();
@@ -151,7 +211,7 @@ router.post('/tasks/enhance', asyncHandler(async (req, res) => {
 // source, so the two surfaces can't drift.
 router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
   const {
-    command, app, provider, model, effort, simplify,
+    command, app, provider, model, effort, simplify, issueTarget,
     target, issueContext, overrideContext, issueAuthorFilter, reviewers, usernames, optionalReviewers,
     reviewerMaxRounds, reviewerModels, reviewerEfforts
   } = validateRequest(slashdoTaskSchema, req.body);
@@ -169,10 +229,11 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
     throw new ServerError(`App not found: ${app}`, { status: 404, code: 'APP_NOT_FOUND' });
   }
 
-  // `plan-task` is also a plan-only quick action, so it must use the same
-  // forge-only gate as the general task endpoint rather than reaching
-  // `cos.addTask` through this separate route.
-  if (command === 'plan-task') await assertPlanOnlyTracker({ app, slashdoCommand: command });
+  // `plan-task` is also a plan-only quick action, so resolve its forge target
+  // before it reaches the store through this separate route.
+  const planTask = command === 'plan-task'
+    ? await preparePlanOnlyTask({ app, slashdoCommand: command, issueTarget }, appObj)
+    : null;
 
   // Enforce the catalog's stack gate server-side. The Agent Operations panel only
   // offers the applicable one of `better` / `better-swift`, but the API must not
@@ -185,15 +246,20 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
     );
   }
 
-  // Two task shapes, produced whole so the either/or is visible rather than
-  // assembled from separately-mutated locals:
+  // Three task shapes, produced whole so the either/or is visible rather than
+  // assembled from separately-mutated locals. The first two are the TARGETED
+  // shapes: a command pinned to one work item, where PortOS assembles the whole
+  // prompt itself and therefore must NOT also set `slashdoCommand` (that would
+  // append the bundled `/do:<cmd>` body on top of the assembled prompt and
+  // re-point the agent at the command's unpinned behavior).
   //
   // - `/do:next` is the work-claim consumer and is genuinely special: it routes
   //   through the same workTracker-aware logic the scheduled `claim-work` flow
   //   uses, so the manual button honors the app's per-app Work Tracker (PLAN.md /
-  //   GitHub / GitLab / JIRA) instead of always draining PLAN.md. Its assembled
-  //   claim prompt IS the task prompt, so it carries NO `slashdoCommand` — adding one
-  //   would append the whole `/do:next` body on top of the claim prompt.
+  //   GitHub / GitLab / JIRA) instead of always draining PLAN.md.
+  // - `replan` + a `target` is the Issues tab's Replan button: a second model
+  //   reviews ONE already-planned issue. Untargeted, it stays the bundled
+  //   backlog audit and falls through to the generic shape below.
   // - Every other command carries only the bare `slashdoCommand` and lets the
   //   prompt builder render the invocation + inline the body once the provider is
   //   known (`applySlashdoInvocation`). Eagerly inlining the body here — and
@@ -212,7 +278,21 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
   // the catalog.
   const { useWorktree, openPR, worktreeChangesExpected } = workflow.settings;
   let shape;
-  if (command === 'next') {
+  if (command === 'replan' && target) {
+    // `replan` + a pinned issue is the Issues tab's Replan button, the same
+    // command/target pairing `next` uses for a pinned claim: a SECOND model
+    // reviews ONE already-planned issue and comments its refinements. Without a
+    // target the command stays the bundled `/do:replan` backlog audit below, so
+    // the Agent Operations button is unaffected. Like the claim branch, its
+    // assembled prompt IS the task prompt and carries no `slashdoCommand` —
+    // appending the whole `/do:replan` body would re-point it at the backlog.
+    const replan = await buildIssueReplanTask(appObj, { target, issueContext, overrideContext });
+    shape = {
+      description: `${workflow.label} for ${appObj.name} — review the plan on ${workTrackerLabel(replan.tracker)} issue ${replan.target}`,
+      prompt: replan.prompt,
+      taskMetadata: { ...replan.taskMetadata, replanTarget: replan.target },
+    };
+  } else if (command === 'next') {
     const claim = await buildClaimWorkTask(appObj, {
       target,
       issueContext,
@@ -272,12 +352,13 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
     simplify: simplify === true,
     reviewLoop: false
   };
-  const result = await cos.addTask(taskData, 'user');
+  const result = await cos.addTask(planTask ? { ...taskData, prompt: planTask.prompt } : taskData, 'user');
 
   if (result?.duplicate) {
     throw new ServerError(`A task with this description is already ${result.status}`, { status: 409, code: 'DUPLICATE_TASK' });
   }
 
+  await logTaskCreated(req, result, taskData);
   res.json(result);
 }));
 
@@ -316,6 +397,7 @@ router.post('/tasks/jira-ticket', asyncHandler(async (req, res) => {
     throw new ServerError(`A task for ${key} is already ${result.status}`, { status: 409, code: 'DUPLICATE_TASK' });
   }
 
+  await logTaskCreated(req, result, taskData);
   res.json(result);
 }));
 
@@ -325,13 +407,14 @@ router.post('/tasks', asyncHandler(async (req, res) => {
   if (!parsed.success) failValidation(parsed);
   const { type, ...taskData } = parsed.data;
   if (taskData.targetInstanceId) await assertAssignableInstance(taskData.targetInstanceId);
-  await assertPlanOnlyTracker(taskData);
-  const result = await cos.addTask(taskData, type);
+  const preparedTask = await preparePlanOnlyTask(taskData);
+  const result = await cos.addTask(preparedTask, type);
 
   if (result?.duplicate) {
     throw new ServerError(`A task with this description is already ${result.status}`, { status: 409, code: 'DUPLICATE_TASK' });
   }
 
+  await logTaskCreated(req, result, preparedTask);
   res.json(result);
 }));
 
@@ -374,6 +457,20 @@ router.put('/tasks/:id', asyncHandler(async (req, res) => {
   if (result?.error) {
     throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
   }
+
+  // An edit is not an idempotent retry — two saves of the same field are two
+  // distinct operator actions — so the timestamp is part of the dedupe key.
+  const happenedAt = new Date().toISOString();
+  await recordUserAction({
+    type: 'cos.task.update',
+    target: id,
+    targetName: result?.description,
+    summary: `Edited CoS task ${id}: ${Object.keys(updates).join(', ') || 'no fields'}`,
+    payload: { taskId: id, ...updates },
+    source: routeSource(req),
+    happenedAt,
+    dedupeKey: `cos.task.update:${id}:${happenedAt}`,
+  });
   res.json(result);
 }));
 
@@ -382,10 +479,25 @@ router.delete('/tasks/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { type = 'user' } = req.query;
 
+  // Read the description BEFORE the delete: once the row is gone the ledger's
+  // only handle on what was thrown away would be an opaque task id.
+  // `.catch` because this read only supplies a LABEL — a task file that will not
+  // parse must not turn a working delete into a 500.
+  const doomed = await cos.getTaskById(id).catch(() => null);
   const result = await cos.deleteTask(id, type);
   if (result?.error) {
     throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
   }
+
+  await recordUserAction({
+    type: 'cos.task.delete',
+    target: id,
+    targetName: doomed?.description,
+    summary: `Deleted CoS task ${id}${doomed?.description ? `: ${doomed.description}` : ''}`,
+    payload: { taskId: id, description: doomed?.description ?? null },
+    source: routeSource(req),
+    dedupeKey: `cos.task.delete:${id}`,
+  });
   res.json(result);
 }));
 
@@ -397,6 +509,16 @@ router.post('/tasks/:id/approve', asyncHandler(async (req, res) => {
   if (result?.error) {
     throw new ServerError(result.error, { status: 400, code: 'BAD_REQUEST' });
   }
+
+  await recordUserAction({
+    type: 'cos.task.approve',
+    target: id,
+    targetName: result?.description,
+    summary: `Approved CoS task ${id}${result?.description ? `: ${result.description}` : ''}`,
+    payload: { taskId: id },
+    source: routeSource(req),
+    dedupeKey: `cos.task.approve:${id}`,
+  });
   res.json(result);
 }));
 
@@ -460,6 +582,19 @@ router.post('/tasks/:id/spawn', asyncHandler(async (req, res) => {
     }
     throw new ServerError(result.error, { status, code });
   }
+
+  // Force-spawn is repeatable (spawn, it fails, spawn again), so each press is
+  // its own row — hence the timestamp in the dedupe key.
+  const happenedAt = new Date().toISOString();
+  await recordUserAction({
+    type: 'cos.task.spawn',
+    target: req.params.id,
+    summary: `Force-spawned CoS task ${req.params.id}`,
+    payload: { taskId: req.params.id },
+    source: routeSource(req),
+    happenedAt,
+    dedupeKey: `cos.task.spawn:${req.params.id}:${happenedAt}`,
+  });
   res.json(result);
 }));
 

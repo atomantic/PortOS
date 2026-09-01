@@ -8,6 +8,7 @@ vi.mock('../services/apiLocalLlm', () => ({ getToolUseModels: (...a) => getToolU
 
 import ProviderModelSelector from './ProviderModelSelector';
 import { __resetToolUseModelIdsCache } from '../hooks/useToolUseModelIds.js';
+import SHIPPED_PROVIDERS from '../../../data.reference/providers.json';
 
 const PROVIDERS = [
   { id: 'p1', name: 'Provider One' },
@@ -33,6 +34,20 @@ describe('ProviderModelSelector', () => {
     renderSelector();
     const options = screen.getAllByRole('option').map((o) => o.textContent);
     expect(options).toEqual(['Provider One', 'Provider Two', 'm1', 'm2']);
+  });
+
+  it('renders every current Codex fallback choice, including Codex Spark', () => {
+    const codexModels = SHIPPED_PROVIDERS.providers.codex.models;
+    expect(codexModels).toContain('gpt-5.3-codex-spark');
+    renderSelector({
+      providers: [{ id: 'codex', name: 'Codex CLI', type: 'cli', models: codexModels }],
+      selectedProviderId: 'codex',
+      selectedModel: 'gpt-5.3-codex-spark',
+      availableModels: codexModels,
+    });
+    const modelSelect = screen.getAllByRole('combobox')[1];
+    expect([...modelSelect.querySelectorAll('option')].map((option) => option.value)).toEqual(codexModels);
+    expect(modelSelect.value).toBe('gpt-5.3-codex-spark');
   });
 
   it('prepends empty options with value "" when emptyProviderOption/emptyModelOption are set', () => {

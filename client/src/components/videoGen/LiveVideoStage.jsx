@@ -5,9 +5,10 @@
  * to the Generate button; the clip appeared in the gallery minutes later. The
  * stage shows, at the render's RESOLVED geometry (so a portrait render is a
  * portrait box, not a letterboxed 16:9 one), whatever best represents the
- * in-flight render: a live runner frame if one exists, otherwise the clip an
- * extend is continuing (animated, muted, looping) or the still it is growing
- * out of, and the finished clip once it lands.
+ * in-flight render: the clip an extend is continuing (animated, muted, looping)
+ * or the still it is growing out of, and the finished clip once it lands.
+ * Transient runner frames stay off this surface because a single decoded frame
+ * does not usefully represent the motion or quality of the finished video.
  *
  * Hold and return. The stage never yanks a clip out from under the user: while
  * `held` is set by the page (the lightbox is open) or while the user is playing

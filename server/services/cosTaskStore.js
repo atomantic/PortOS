@@ -482,6 +482,11 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     // consumers can associate lifecycle events with the row that launched it.
     // The route has already normalized this value, and unpinned runs omit it.
     if (typeof taskData.claimTarget === 'string' && taskData.claimTarget) metadata.claimTarget = taskData.claimTarget;
+    // Same durability need as claimTarget, for the Issues tab's Replan button:
+    // the row that launched a replan associates the run's lifecycle events with
+    // itself by this value. Separate key so a replan can never light up the
+    // Claim button (or vice versa) on the same issue.
+    if (typeof taskData.replanTarget === 'string' && taskData.replanTarget) metadata.replanTarget = taskData.replanTarget;
     if (taskData.jiraTicketId) metadata.jiraTicketId = taskData.jiraTicketId;
     if (taskData.jiraTicketUrl) metadata.jiraTicketUrl = taskData.jiraTicketUrl;
     if (taskData.screenshots?.length > 0) metadata.screenshots = taskData.screenshots;

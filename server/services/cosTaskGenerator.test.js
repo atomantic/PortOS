@@ -140,6 +140,22 @@ describe('claim reviewer resolution', () => {
     expect(bare).toContain('--arg backend lmstudio');
     expect(bare).not.toContain('--arg model');
   });
+
+  it('gates public GitHub comments through the first tool-free local reviewer', () => {
+    const prompt = buildLocalReviewerInstructions(
+      ['ollama', 'lmstudio'],
+      { ollama: 'example-model' },
+      { ollama: 'high' },
+      { claimCommentGate: true },
+    );
+    expect(prompt).toContain('## Tool-Free Public Comment Gate');
+    expect(prompt).toContain('--arg kind claim-comments');
+    expect(prompt).toContain('--arg backend ollama');
+    expect(prompt).toContain('currentUser: $currentUser, comments: .');
+    expect(prompt).toContain('The chat-completions request supplies no tools');
+    expect(prompt).toContain('COMMENT_REVIEW_SUSPICIOUS');
+    expect(prompt).not.toContain('cat "$COMMENTS_FILE"');
+  });
 });
 
 // The unit tests above exercise selectDryRunAutoApproved with synthetic hooks;
@@ -613,6 +629,9 @@ describe('work-item target', () => {
       const block = buildTargetWorkItemBlock('claim-issue', '42');
       expect(block).toContain('already carries any of `in-progress`, `blocked`, `needs-input`');
       expect(block).toContain('ignore its current assignee');
+      expect(block).toContain('does not override a contributor\'s clear claim comment');
+      expect(block).toContain('set `CANDIDATE="42"`, and then run Phase 1 step 5\'s untrusted-comment check');
+      expect(block).toContain('assign that contributor, verify the readback, and exit');
       expect(block).not.toContain('already assigned');
     });
 
@@ -624,6 +643,7 @@ describe('work-item target', () => {
     it('threads the same wiring through the gitlab flow', () => {
       const block = buildTargetWorkItemBlock('claim-issue-gitlab', '42', resolveIssueExcludeLabelsBlock(['good first issue']));
       expect(block).toContain('`good first issue`');
+      expect(block).not.toContain('untrusted-comment check');
     });
   });
 

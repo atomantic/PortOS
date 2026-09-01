@@ -10,7 +10,7 @@
  * transcript.
  *
  * `readiness` is one entry of the map from `GET /api/providers/readiness`
- * (`{ kind, label, endpoint, ready, checks, manageUrl, setup }`).
+ * (`{ kind, label, endpoint, ready, standby, checks, manageUrl, setup }`).
  * Renders nothing without one, so providers with no local dependency — and
  * cards drawn before the fetch resolves — show no checklist at all.
  *
@@ -36,7 +36,7 @@
  */
 
 import { Link } from 'react-router';
-import { CheckCircle2, Download, HelpCircle, RefreshCw, Wand2, Wrench, XCircle } from 'lucide-react';
+import { CheckCircle2, Download, HelpCircle, PauseCircle, RefreshCw, Wand2, Wrench, XCircle } from 'lucide-react';
 import Banner from '../ui/Banner';
 import Pill from '../ui/Pill';
 
@@ -72,13 +72,30 @@ function CodeText({ text }) {
 
 export default function ProviderReadiness({ readiness, onAutoSetup, onUseServedModel, onServeWantedModel, serving = false, className = '' }) {
   if (!readiness || !Array.isArray(readiness.checks) || readiness.checks.length === 0) return null;
-  const { label, endpoint, ready, checks, manageUrl, setup } = readiness;
+  const { label, endpoint, ready, standby, standbyDetail, checks, manageUrl, setup } = readiness;
 
   if (ready) {
     return (
       <Pill tone="success" size="xs" icon={CheckCircle2} className={className} title={`${label} is running at ${endpoint}.`}>
         {label} ready
       </Pill>
+    );
+  }
+
+  if (standby) {
+    return (
+      <Banner
+        tone="info"
+        size="sm"
+        icon={PauseCircle}
+        className={className}
+        title={`${label} installed · standby`}
+      >
+        {standbyDetail && <p className="mt-1 text-gray-400"><CodeText text={standbyDetail} /></p>}
+        {manageUrl && (
+          <Link to={manageUrl} className={`${ACTION_CLASS} mt-2`}>Open the LLMs page</Link>
+        )}
+      </Banner>
     );
   }
 

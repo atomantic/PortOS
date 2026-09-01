@@ -9,6 +9,8 @@ import { mockNoPeerSync, mockNoPeers } from "../lib/mockPathsDataRoot.js";
 // tree in beforeEach. The fileUtils mock below overrides PATHS.data so the
 // universeBuilder + collectionStore land here instead of the real ./data.
 const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), "universe-builder-test-"));
+const writeCounter = vi.hoisted(() => ({ baseHash: 0 }));
+const baseHashEvictionSequence = vi.hoisted(() => ({ enabled: false, tail: Promise.resolve() }));
 
 // Per-test reference-sheet "what exists on disk" — keys are filenames the
 // referenceSheetImageRef preservation guard / pruner asks about. Default
@@ -25,6 +27,10 @@ vi.mock("../lib/fileUtils.js", async (importOriginal) => {
     // (atomicWrite, readJSONFile, ensureDir, etc.) uses the real impl so
     // collectionStore's readdir/stat/rm operate against a real fs tree.
     PATHS: { ...actual.PATHS, data: TEST_DATA_ROOT },
+    atomicWrite: async (path, data) => {
+      if (typeof path === 'string' && path.endsWith('sync_base_hashes.json')) writeCounter.baseHash += 1;
+      return actual.atomicWrite(path, data);
+    },
     // mustExist: true → return a non-null path when the filename either
     // appears in refSheetFilesByName or has no explicit "missing" entry.
     // Tests opt into "this file is gone" by calling
@@ -34,6 +40,25 @@ vi.mock("../lib/fileUtils.js", async (importOriginal) => {
       if (refSheetFilesByName.has(ref)) return refSheetFilesByName.get(ref);
       return `/mock/refs/${ref}`;
     }),
+  };
+});
+
+vi.mock("../lib/conflictJournal.js", async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    deleteSyncBaseHash: async (...args) => {
+      if (!baseHashEvictionSequence.enabled) return actual.deleteSyncBaseHash(...args);
+      const previous = baseHashEvictionSequence.tail;
+      let release;
+      baseHashEvictionSequence.tail = new Promise((resolve) => { release = resolve; });
+      await previous;
+      try {
+        return await actual.deleteSyncBaseHash(...args);
+      } finally {
+        release();
+      }
+    },
   };
 });
 
@@ -80,6 +105,7 @@ vi.mock("crypto", async () => {
 });
 
 const svc = await import("./universeBuilder.js");
+const cj = await import("../lib/conflictJournal.js");
 const { recordEvents, registerSubscriptionAdapter, __resetSubscriptionAdapter } = await import("./sharing/recordEvents.js");
 
 // Default universe with non-empty influences. Override `influences` for tests
@@ -122,6 +148,10 @@ describe("universeBuilder service", () => {
     // universes/ tree.
     rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
     mkdirSync(TEST_DATA_ROOT, { recursive: true });
+    cj.__resetBaseHashCacheForTests();
+    writeCounter.baseHash = 0;
+    baseHashEvictionSequence.enabled = false;
+    baseHashEvictionSequence.tail = Promise.resolve();
     uuidCounter = 0;
     refSheetFilesByName.clear();
   });
@@ -1325,26 +1355,48 @@ describe("universeBuilder service", () => {
       it("removes tombstones older than the cutoff and leaves newer ones + live records", async () => {
         const live = await seedWorld();
         const oldTombstone = await seedWorld();
+        const oldTombstone2 = await seedWorld();
         const newTombstone = await seedWorld();
         await svc.deleteUniverse(oldTombstone.id);
+        await svc.deleteUniverse(oldTombstone2.id);
         await svc.deleteUniverse(newTombstone.id);
-        // Backdate the old tombstone's deletedAt directly via merge.
+        // Backdate both old tombstones' deletedAt directly via merge.
         const oldDeletedAt = new Date(Date.now() - 100_000).toISOString();
-        await svc.mergeUniversesFromSync([{
-          ...(await svc.getUniverse(oldTombstone.id, { includeDeleted: true })),
-          deletedAt: oldDeletedAt,
-          updatedAt: new Date(Date.now() + 10_000).toISOString(),
-        }]);
+        const mergeUpdatedAt = new Date(Date.now() + 10_000).toISOString();
+        await svc.mergeUniversesFromSync([
+          {
+            ...(await svc.getUniverse(oldTombstone.id, { includeDeleted: true })),
+            deletedAt: oldDeletedAt,
+            updatedAt: mergeUpdatedAt,
+          },
+          {
+            ...(await svc.getUniverse(oldTombstone2.id, { includeDeleted: true })),
+            deletedAt: oldDeletedAt,
+            updatedAt: mergeUpdatedAt,
+          },
+        ]);
+        await cj.setSyncBaseHash('universe', oldTombstone.id, 'hash-old-a');
+        await cj.setSyncBaseHash('universe', oldTombstone2.id, 'hash-old-b');
+        await cj.flushBaseHashes();
+        writeCounter.baseHash = 0;
+        // Serialize the eviction calls without sleeping. Without the batch,
+        // each call would finish its own side-store write before the next one.
+        baseHashEvictionSequence.enabled = true;
 
         // Cutoff = now - 50s — old (100s ago) is past, new (just now) is not.
         const cutoff = Date.now() - 50_000;
         const result = await svc.pruneTombstonedUniverses(cutoff);
-        expect(result.pruned).toBe(1);
+        expect(result.pruned).toBe(2);
+        expect(writeCounter.baseHash).toBe(1);
         const remaining = await svc.listUniverses({ includeDeleted: true });
         const ids = remaining.map((u) => u.id);
         expect(ids).toContain(live.id);
         expect(ids).toContain(newTombstone.id);
         expect(ids).not.toContain(oldTombstone.id);
+        expect(ids).not.toContain(oldTombstone2.id);
+        cj.__resetBaseHashCacheForTests();
+        expect(await cj.getSyncBaseHash('universe', oldTombstone.id)).toBeNull();
+        expect(await cj.getSyncBaseHash('universe', oldTombstone2.id)).toBeNull();
       });
 
       it("keeps tombstones with unparseable deletedAt (conservative)", async () => {

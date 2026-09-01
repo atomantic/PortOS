@@ -58,8 +58,14 @@ vi.mock('../services/messageTokenExtractor.js', () => ({
   clearTokenCache: vi.fn()
 }));
 
+vi.mock('../services/userTimezone.js', () => ({
+  getUserTimezone: vi.fn()
+}));
+
 import calendarRoutes from './calendar.js';
+import * as calendarAccounts from '../services/calendarAccounts.js';
 import * as calendarSync from '../services/calendarSync.js';
+import { getUserTimezone } from '../services/userTimezone.js';
 import * as calendarGoogleSync from '../services/calendarGoogleSync.js';
 import * as calendarGoogleApiSync from '../services/calendarGoogleApiSync.js';
 import * as googleAuth from '../services/googleAuth.js';
@@ -165,6 +171,69 @@ describe('Calendar Routes — normalized error handling', () => {
 
       expect(response.status).toBe(200);
       expect(googleAuth.getAuthUrl).toHaveBeenCalledWith('messages');
+    });
+  });
+
+  describe('GET /agenda — today\'s events for the dashboard widget', () => {
+    it('reports zero accounts without touching events when none are enabled', async () => {
+      calendarAccounts.listAccounts.mockResolvedValue([{ id: ACCOUNT_ID, enabled: false }]);
+
+      const response = await request(app).get('/api/calendar/agenda');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ date: null, timezone: null, accountCount: 0, events: [], total: 0 });
+      expect(calendarSync.getEvents).not.toHaveBeenCalled();
+    });
+
+    it('returns today\'s window in the user timezone with trimmed event fields', async () => {
+      calendarAccounts.listAccounts.mockResolvedValue([
+        { id: ACCOUNT_ID, enabled: true },
+        { id: '22222222-2222-2222-2222-222222222222', enabled: false }
+      ]);
+      getUserTimezone.mockResolvedValue('America/Los_Angeles');
+      calendarSync.getEvents.mockResolvedValue({
+        events: [
+          {
+            id: 'evt-1', accountId: ACCOUNT_ID, title: 'Standup',
+            startTime: '2026-09-01T17:00:00Z', endTime: '2026-09-01T17:30:00Z',
+            isAllDay: false, location: 'Room 4', description: 'secret notes stay server-side'
+          },
+          { id: 'evt-2', accountId: ACCOUNT_ID, title: '', startTime: '2026-09-01T20:00:00Z' }
+        ],
+        total: 2
+      });
+
+      const response = await request(app).get('/api/calendar/agenda');
+
+      expect(response.status).toBe(200);
+      expect(response.body.accountCount).toBe(1);
+      expect(response.body.timezone).toBe('America/Los_Angeles');
+      expect(response.body.total).toBe(2);
+      expect(response.body.events).toEqual([
+        {
+          id: 'evt-1', accountId: ACCOUNT_ID, title: 'Standup',
+          startTime: '2026-09-01T17:00:00Z', endTime: '2026-09-01T17:30:00Z',
+          isAllDay: false, location: 'Room 4'
+        },
+        {
+          id: 'evt-2', accountId: ACCOUNT_ID, title: 'Untitled event',
+          startTime: '2026-09-01T20:00:00Z', endTime: null,
+          isAllDay: false, location: null
+        }
+      ]);
+
+      // The bounds are the user's LOCAL day expressed in UTC: startDate is
+      // local midnight in the configured timezone and the window spans 24h.
+      const [{ startDate, endDate, limit }] = calendarSync.getEvents.mock.calls[0];
+      expect(limit).toBe(8);
+      const localStart = new Date(startDate).toLocaleTimeString('en-US', {
+        timeZone: 'America/Los_Angeles', hour12: false, hour: '2-digit', minute: '2-digit'
+      });
+      expect(localStart).toBe('00:00');
+      expect(new Date(endDate).getTime() - new Date(startDate).getTime()).toBe(86399999);
+      expect(response.body.date).toBe(
+        new Date(startDate).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' })
+      );
     });
   });
 

@@ -23,7 +23,7 @@ import {
   BYOV_RUNTIME_INFO, BYOV_VIDEO_RUNTIMES, MINIMAX_H3_CUDA_OFFLOAD_PROFILES,
   byovRuntimeLoraCapable, invalidateByovLoraCapabilityCache, invalidateByovReadyCache,
   isByovRuntimeCurrent, isByovRuntimeReady, isPinnedSourceStatusClean, modelAnchorsLastFrame,
-  resolveByovRuntimeLoraCapable, runtimeIsCacheOnly, runtimeNeedsProcessGroupKill,
+  resolveByovRuntimeLoraCapable, runtimeIsCacheOnly, runtimeNeedsProcessGroupKill, runtimeUsesMlx,
   routesToWindowsHelper, LTX25_EXPECTED_REVISION,
 } from './runtimes.js';
 
@@ -494,6 +494,15 @@ describe('runtime execution flags', () => {
     expect(runtimeNeedsProcessGroupKill('wan22_cuda')).toBe(true);
     expect(runtimeNeedsProcessGroupKill('ltx2')).toBe(false);
     expect(runtimeNeedsProcessGroupKill('nope')).toBe(false);
+  });
+
+  it('identifies exactly the Apple MLX runners that need display-watchdog mitigation', () => {
+    for (const runtime of ['wan22', 'ltx2', 'ltx25', 'fastvideo', 'minimax_h3']) {
+      expect(runtimeUsesMlx(runtime)).toBe(true);
+    }
+    for (const runtime of ['wan22_cuda', 'ltx25_cuda', 'minimax_h3_cuda', 'nope', undefined]) {
+      expect(runtimeUsesMlx(runtime)).toBe(false);
+    }
   });
 });
 

@@ -18,7 +18,6 @@ import {
   PROVIDER_CARD_STATE,
   filterHardwareCompatibleProviderModels,
   isApiProvider,
-  isGrokBuildCli,
   gatewayForProvider,
   isPrivateNetworkEndpoint,
   isProcessProvider,
@@ -33,7 +32,7 @@ import {
 import { formatContextLength } from '../../utils/formatters';
 import ProviderRuntimeStatus from './ProviderRuntimeStatus';
 import ProviderReadiness from './ProviderReadiness';
-import { GrokUploadWarning, GatewayKeyHint } from './ProviderNotices';
+import { GatewayKeyHint } from './ProviderNotices';
 
 // One phrasing for "this command isn't on the CoS Agent Runner's allowlist".
 // The editor states the same thing in its own inline banner, in prose.
@@ -432,8 +431,6 @@ export default function ProviderCard({
             </div>
           )}
         </div>
-
-        {isGrokBuildCli(provider) && <GrokUploadWarning className="max-w-3xl" />}
 
         {gatewayForProvider(provider) && (
           <GatewayKeyHint

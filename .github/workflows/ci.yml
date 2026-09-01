@@ -112,9 +112,13 @@ jobs:
     needs: impact
     if: needs.impact.outputs.server_mode != 'skip'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           # See the impact job: depth 2 is the whole PR merge ref, which is all
           # the planner needs to identify changed sources.
           fetch-depth: 2
@@ -251,14 +255,24 @@ jobs:
         if: needs.impact.outputs.smoke == 'true'
         run: npm run smoke
 
+      - name: Cancel sibling CI jobs after failure
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/cancel-current-ci-run.js
+
   client:
     name: Client tests and build
     needs: impact
     if: needs.impact.outputs.client_mode != 'skip' || needs.impact.outputs.build == 'true' || needs.impact.outputs.lint_mode != 'skip'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           # See the impact job: depth 2 is the whole PR merge ref, which is all
           # the planner needs to identify changed sources.
           fetch-depth: 2
@@ -306,11 +320,20 @@ jobs:
         if: needs.impact.outputs.build == 'true'
         run: npm run build --prefix client
 
+      - name: Cancel sibling CI jobs after failure
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/cancel-current-ci-run.js
+
   database:
     name: DB tests
     needs: impact
     if: needs.impact.outputs.db == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     services:
       postgres:
         image: pgvector/pgvector:pg17
@@ -332,6 +355,8 @@ jobs:
       PGPASSWORD: portos
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Use Node.js 24.x
         uses: actions/setup-node@v7
@@ -438,14 +463,24 @@ jobs:
         env:
           PGDATABASE: portos_test
 
+      - name: Cancel sibling CI jobs after failure
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/cancel-current-ci-run.js
+
   windows-server:
     name: Windows server unit tests
     needs: impact
     if: needs.impact.outputs.windows == 'true'
     runs-on: windows-latest
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           # See the impact job: depth 2 is the whole PR merge ref, which is all
           # the planner needs to identify changed sources.
           fetch-depth: 2
@@ -554,6 +589,12 @@ jobs:
           PORTOS_TEST_QUIET: 1
           PGPASSWORD: portos
         run: node scripts/run-ci-tests.js server
+
+      - name: Cancel sibling CI jobs after failure
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/cancel-current-ci-run.js
 
   gate:
     name: CI Gate

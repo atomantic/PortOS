@@ -10,6 +10,7 @@ vi.mock('./fileUtils.js', () => ({
 
 import { execGit } from './execGit.js';
 import {
+  classifyOriginRemote,
   parseGitRemoteUrl,
   getOriginInfo,
   readOriginRemoteUrl,
@@ -168,6 +169,30 @@ describe('getOriginInfo', () => {
     expect(info.fullName).toBe('alice/PortOS');
   });
 
+  it('classifies managed integration forks against their own canonical upstream', async () => {
+    execGit.mockResolvedValue({
+      stdout: 'git@github.com:alice/eidoverse-worlds.git\n',
+      stderr: '',
+      exitCode: 0,
+    });
+
+    const info = await getOriginInfo('/managed/worlds', {
+      upstreamOwner: 'anima-research',
+      upstreamRepo: 'eidoverse-worlds',
+    });
+
+    expect(execGit).toHaveBeenCalledWith(
+      ['remote', 'get-url', 'origin'],
+      '/managed/worlds',
+      { ignoreExitCode: true },
+    );
+    expect(info).toMatchObject({
+      fullName: 'alice/eidoverse-worlds',
+      isUpstream: false,
+      isFork: true,
+    });
+  });
+
   it('does NOT classify as fork when the repo name differs (renamed/unrelated)', async () => {
     // Someone might fork-and-rename, or point origin at an unrelated GitHub
     // repo. Treating that as a fork would invoke `gh repo sync` and fail.
@@ -213,6 +238,21 @@ describe('getOriginInfo', () => {
     expect(info.fullName).toBeNull();
     expect(info.isFork).toBe(false);
     expect(info.isUpstream).toBe(false);
+  });
+});
+
+describe('classifyOriginRemote', () => {
+  it('keeps credential redaction when classifying a non-PortOS upstream', () => {
+    const info = classifyOriginRemote(
+      'https://alice:secret@github.com/alice/eidoverse-worlds.git',
+      { upstreamOwner: 'anima-research', upstreamRepo: 'eidoverse-worlds' },
+    );
+
+    expect(info).toMatchObject({
+      originUrl: 'https://***@github.com/alice/eidoverse-worlds.git',
+      fullName: 'alice/eidoverse-worlds',
+      isFork: true,
+    });
   });
 });
 

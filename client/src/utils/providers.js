@@ -1433,12 +1433,9 @@ const credentialMissing = (provider, { keySetFor = null, envVarSet = null } = {}
 
 /**
  * Check if a provider is the Grok Build CLI/TUI (the `grok` command harness).
- * Mirrors the Grok detection in `knownProviderContextWindow`: matches the shipped
- * `grok-cli` / `grok-tui` samples or any process provider whose command basename
- * is `grok`. Used to surface the `~/.grok/config.toml` privacy notice: the Grok
- * harness uploads the entire working repo to xAI/GCP as it works unless the user
- * opts out via `[harness] disable_codebase_upload = true`. The plain `grok` API
- * provider (type `api`) doesn't run the harness, so it's intentionally excluded.
+ * Matches the shipped `grok-cli` / `grok-tui` samples or any process provider
+ * whose command basename is `grok`; the plain Grok API provider is excluded.
+ * Reviewer-model discovery uses this for custom Grok process providers too.
  */
 export const isGrokBuildCli = (provider) => {
   if (!isProcessProvider(provider)) return false;

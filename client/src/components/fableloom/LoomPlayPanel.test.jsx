@@ -47,7 +47,7 @@ describe('LoomPlayPanel', () => {
     expect(screen.getByRole('region', { name: 'Scene media' })).toBeInTheDocument();
     expect(screen.getByRole('complementary', { name: 'Teleplay' })).toHaveTextContent('You stand before it.');
     expect(screen.getByRole('img', { name: 'The Gate' })).toHaveClass('h-full', 'w-full', 'object-contain');
-    expect(screen.getByLabelText('Preview stage')).toHaveValue('image');
+    expect(screen.getByLabelText('Preview stage')).toHaveValue('auto');
 
     fireEvent.click(screen.getByRole('button', { name: 'Close player' }));
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -67,6 +67,73 @@ describe('LoomPlayPanel', () => {
 
     expect(screen.getByText('Scene description & dialogue')).toBeInTheDocument();
     expect(screen.getByText('You stand before it.')).toBeInTheDocument();
+  });
+
+  it('uses the best available medium as playback moves between scenes', async () => {
+    const user = userEvent.setup();
+    const mixedMediaEpisode = {
+      id: 'ep-mixed-media',
+      startNodeId: 'opening-video',
+      nodes: [{
+        id: 'opening-video',
+        title: 'Video opening',
+        prose: 'The episode begins in motion.',
+        playbackMode: 'cut',
+        videoHistoryId: 'video-opening',
+        transitions: [{ id: 'to-still', targetNodeId: 'still-scene', intent: 'Continue' }],
+      }],
+    };
+    playLoomTurn
+      .mockResolvedValueOnce({
+        action: 'move',
+        narration: '',
+        ended: false,
+        node: {
+          id: 'still-scene',
+          title: 'Storyboard scene',
+          prose: 'The story holds on a painted frame.',
+          image: 'storyboard-scene.png',
+          choices: [{ id: 'to-video', intent: 'Continue onward' }],
+        },
+      })
+      .mockResolvedValueOnce({
+        action: 'move',
+        narration: '',
+        ended: true,
+        node: {
+          id: 'closing-video',
+          title: 'Video closing',
+          prose: 'Motion returns for the ending.',
+          videoHistoryId: 'video-closing',
+          isEnding: true,
+          choices: [],
+        },
+      });
+
+    render(<LoomPlayPanel
+      loom={{ ...loom, episodes: [mixedMediaEpisode] }}
+      episode={mixedMediaEpisode}
+    />);
+
+    expect(screen.getByLabelText('Video opening')).toHaveAttribute(
+      'src',
+      expect.stringContaining('video-opening'),
+    );
+    fireEvent.ended(screen.getByLabelText('Video opening'));
+
+    expect(await screen.findByRole('img', { name: 'Storyboard scene' })).toHaveAttribute(
+      'src',
+      expect.stringContaining('storyboard-scene.png'),
+    );
+    expect(screen.queryByText('No video rendered for this cut yet.')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Take path: Continue onward' }));
+
+    expect(await screen.findByLabelText('Video closing')).toHaveAttribute(
+      'src',
+      expect.stringContaining('video-closing'),
+    );
+    expect(screen.getByLabelText('Preview stage')).toHaveValue('auto');
   });
 
   it('keeps a helper audience passive and follows the first canon path until the channel connects', async () => {

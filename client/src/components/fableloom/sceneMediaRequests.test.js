@@ -90,4 +90,35 @@ describe('FableLoom scene media request composition', () => {
     expect(buildFableLoomVideoRequest({ loom: portraitLoom, episodeId: 'ep-1', node }))
       .toMatchObject({ width: 576, height: 1024 });
   });
+
+  it('carries the saved image renderer and Codex effort into a scene request', () => {
+    const preferredLoom = {
+      ...loom,
+      renderSettings: { formatId: 'landscape-16-9', imageMode: 'codex', effort: 'high' },
+    };
+    expect(buildFableLoomImageRequest({
+      loom: preferredLoom,
+      episodeId: 'ep-1',
+      node: { id: 'node-1', imagePrompt: 'a lantern in the fog' },
+    })).toMatchObject({ mode: 'codex', effort: 'high' });
+  });
+
+  it('carries the saved local video model or cloud backend into a scene request', () => {
+    const localLoom = {
+      ...loom,
+      renderSettings: { formatId: 'landscape-16-9', videoMode: 'local', videoModel: 'video-model' },
+    };
+    expect(buildFableLoomVideoRequest({
+      loom: localLoom,
+      episodeId: 'ep-1',
+      node: { id: 'node-1', videoPrompt: 'A lantern flickers.' },
+    })).toMatchObject({ backend: 'local', modelId: 'video-model' });
+
+    const grokLoom = { ...loom, renderSettings: { formatId: 'landscape-16-9', videoMode: 'grok' } };
+    expect(buildFableLoomVideoRequest({
+      loom: grokLoom,
+      episodeId: 'ep-1',
+      node: { id: 'node-1', videoPrompt: 'A lantern flickers.' },
+    })).toMatchObject({ backend: 'grok' });
+  });
 });

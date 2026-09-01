@@ -10,7 +10,7 @@
 
 import * as storage from './brainStorage.js';
 import { brainEvents } from './brainStorage.js';
-import { getInstanceId } from './instances.js';
+import { getInstanceId, ensureInstanceId, UNKNOWN_INSTANCE_ID } from './instances.js';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { buildPrompt } from './promptService.js';
 import { validate } from '../lib/validation.js';
@@ -19,7 +19,8 @@ import { runPromptThroughProvider } from './promptRunner.js';
 import { getDomainAutonomyMode } from './cosState.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 import { deleteMemoryAssets } from './chatgptImport.js';
-import * as githubCloner from './githubCloner.js';
+import * as repoCloner from './repoCloner.js';
+import { deriveRepoLinkFields } from '../lib/repoLinkFields.js';
 import { parseBareUrl } from '../lib/bareUrl.js';
 import { normalizeRepoIntake } from '../lib/repoIntakeActions.js';
 import {
@@ -136,7 +137,7 @@ function safeParseJsonResponse(content) {
  * Returns immediately after creating the inbox entry.
  * AI classification runs in the background and emits a socket event on completion.
  */
-export async function captureThought(text, providerOverride, modelOverride, { creative = false, repoIntake = null } = {}) {
+export async function captureThought(text, providerOverride, modelOverride, { creative = false, repoIntake = null, note } = {}) {
   // A capture that is nothing but a URL is a bookmark, not a thought: file it
   // straight to Links exactly as the Links tab would, and skip the classifier
   // LLM call entirely. This outranks the creative flag — a bare URL carries no
@@ -144,7 +145,7 @@ export async function captureThought(text, providerOverride, modelOverride, { cr
   // Creative toggle for a URL rather than the two rules disagreeing.
   const bareUrl = parseBareUrl(text);
   if (bareUrl) {
-    return captureUrlAsLink(bareUrl, text, repoIntake);
+    return captureUrlAsLink(bareUrl, text, { repoIntake, note });
   }
 
   const meta = await storage.loadMeta();
@@ -218,9 +219,9 @@ export async function captureThought(text, providerOverride, modelOverride, { cr
  * an already-saved URL performs no clone, so there is no fresh clone for the
  * agents to read and re-queueing them silently would be a surprise.
  */
-async function captureUrlAsLink(url, capturedText, repoIntake = null) {
+async function captureUrlAsLink(url, capturedText, { repoIntake = null, note } = {}) {
   const existing = await storage.getLinkByUrl(url);
-  const link = existing || await createLinkFromUrl(url, { repoIntake });
+  const link = existing || await createLinkFromUrl(url, { repoIntake, note });
 
   // No `classification` block: nothing classified this — the destination was
   // decided by shape, not by a model, so there is no confidence or extraction to
@@ -242,12 +243,12 @@ async function captureUrlAsLink(url, capturedText, repoIntake = null) {
     link,
     message: existing
       ? 'Already saved in Links.'
-      : (link.isGitHubRepo ? repoCaptureMessage(link.repoIntake) : 'Saved to Links!')
+      : (link.isRepo ? repoCaptureMessage(link.repoIntake) : 'Saved to Links!')
   };
 }
 
 /**
- * What a freshly-captured GitHub repo link tells the user will happen next. The
+ * What a freshly-captured repo link tells the user will happen next. The
  * clone is always implied; the agent runs only when they ticked the boxes, and
  * they only start once the clone lands.
  */
@@ -257,8 +258,8 @@ function repoCaptureMessage(repoIntake) {
     repoIntake?.learn && 'repo study',
   ].filter(Boolean);
   return queued.length
-    ? `GitHub repo saved — cloning, then queueing ${queued.join(' + ')}.`
-    : 'GitHub repo saved to Links — cloning now.';
+    ? `Repo saved — cloning, then queueing ${queued.join(' + ')}.`
+    : 'Repo saved to Links — cloning now.';
 }
 
 /**
@@ -838,6 +839,62 @@ export async function recoverStuckClassifications() {
   }
 }
 
+// Matches the client's clone stall window (#5442). Past it, a `cloning` record
+// this install cannot attribute to itself is treated as orphaned rather than
+// left in place — see `shouldRecoverInterruptedClone`.
+const CLONE_STALE_MS = 10 * 60 * 1000;
+
+/**
+ * Whether THIS install should reset `link` out of `cloning` at boot.
+ *
+ * Ours, or unattributed (pre-#5463 records carry no `cloneInstanceId`) — always,
+ * because no in-process clone survives a restart. A clone another instance owns
+ * is left alone while it could still be running, but ages out of that
+ * protection: a peer that crashed mid-clone and never comes back must not
+ * strand the link at `cloning` forever, which is the whole bug (#5463).
+ */
+const shouldRecoverInterruptedClone = (link, instanceId) => {
+  const owner = link.cloneInstanceId ?? link.originInstanceId ?? null;
+  if (!owner || owner === instanceId) return true;
+  const updatedAt = Date.parse(link.updatedAt);
+  return Number.isFinite(updatedAt) && Date.now() - updatedAt >= CLONE_STALE_MS;
+};
+
+/**
+ * Recover repository clones interrupted by a previous server shutdown.
+ * Clone work is published only after git exits successfully; an orphaned child
+ * can keep writing its private staging directory without racing a retry.
+ */
+export async function recoverInterruptedRepoClones() {
+  // `ensureInstanceId`, not `getInstanceId`: this comparison decides a durable
+  // record mutation, and the sentinel would match every other uninitialized
+  // install's records while missing our own.
+  const instanceId = await ensureInstanceId();
+  const links = await storage.getLinks({ cloneStatus: 'cloning' });
+  let recovered = 0;
+  for (const link of links) {
+    // Keep the state guard even though storage applies the filter so a future
+    // storage implementation cannot broaden this boot-time mutation by accident.
+    if (link.cloneStatus !== 'cloning') continue;
+    if (!shouldRecoverInterruptedClone(link, instanceId)) continue;
+    await storage.updateLink(link.id, {
+      cloneStatus: 'failed',
+      cloneError: 'Clone interrupted by a server restart. Retry to clone the repository again.',
+      cloneInstanceId: null,
+      cloneInterrupted: true
+    });
+    recovered++;
+  }
+  if (recovered > 0) {
+    console.log(`🧠 Recovered ${recovered} interrupted repository clone(s)`);
+  }
+  // Detached on purpose: boot AWAITS this function so the first links request
+  // can't see an orphaned `cloning` badge, and a recursive scan plus `rm -rf` of
+  // abandoned partial checkouts must not sit in front of `startListening()`.
+  repoCloner.reapStaleCloneStaging()
+    .catch(err => console.error(`❌ Clone staging recovery failed: ${err.message}`));
+}
+
 // Re-export storage functions for convenience
 export const loadMeta = storage.loadMeta;
 export const updateMeta = storage.updateMeta;
@@ -949,7 +1006,7 @@ function hostnameFromUrl(url) {
 }
 
 /**
- * Clone a GitHub repo in the background, tracking progress on the link record.
+ * Clone a repo in the background, tracking progress on the link record.
  * Runs outside the request lifecycle, so every failure is caught and recorded
  * on the link rather than left to bubble.
  *
@@ -961,14 +1018,31 @@ function hostnameFromUrl(url) {
  * queue an agent against a path that doesn't exist.
  */
 export async function cloneRepoInBackground(linkId, url) {
-  await storage.updateLink(linkId, { cloneStatus: 'cloning' });
+  const previous = await storage.getLinkById(linkId);
+  // `ensureInstanceId`, and null rather than the sentinel: `cloneInstanceId`
+  // lands on a durable, federated record, and a stamped 'unknown' would read as
+  // "some other install owns this" at boot on every machine — re-stranding the
+  // exact record this recovery exists to free.
+  const resolvedInstanceId = await ensureInstanceId();
+  const cloneInstanceId = resolvedInstanceId === UNKNOWN_INSTANCE_ID ? null : resolvedInstanceId;
+  await storage.updateLink(linkId, {
+    cloneStatus: 'cloning',
+    // The Links tab renders `cloneError` whenever it is set, independent of
+    // status — leaving the previous attempt's message would show the failure
+    // text beside the new attempt's spinner.
+    cloneError: null,
+    cloneInstanceId,
+    cloneInterrupted: false
+  });
 
-  githubCloner.cloneRepo(url)
+  repoCloner.cloneRepo(url, { replaceIncomplete: previous?.cloneInterrupted === true })
     .then(async (result) => {
       const link = await storage.updateLink(linkId, {
         localPath: result.localPath,
         cloneStatus: 'cloned',
-        cloneError: null
+        cloneError: null,
+        cloneInstanceId: null,
+        cloneInterrupted: false
       });
       console.log(`✅ Background clone complete: ${linkId}`);
       // `link` is null when the user deleted the bookmark mid-clone — nothing
@@ -990,14 +1064,16 @@ export async function cloneRepoInBackground(linkId, url) {
     .catch(async (err) => {
       await storage.updateLink(linkId, {
         cloneStatus: 'failed',
-        cloneError: err.message
+        cloneError: err.message,
+        cloneInstanceId: null,
+        cloneInterrupted: false
       });
       console.error(`❌ Background clone failed: ${linkId} - ${err.message}`);
     });
 }
 
 /**
- * Create a link from a URL: derives the GitHub metadata + a readable default
+ * Create a link from a URL: derives the repository metadata + a readable default
  * title and kicks off the background clone for a repo. Shared by the Links
  * route's quick-add and the bare-URL capture short-circuit so a URL pasted into
  * the Brain inbox lands exactly as it would from the Links tab.
@@ -1006,31 +1082,31 @@ export async function cloneRepoInBackground(linkId, url) {
  * link) — this always creates.
  */
 export async function createLinkFromUrl(url, {
-  title, description, linkType, tags, bucketId, bucketOrder, autoClone, repoIntake
+  title, description, note, linkType, tags, bucketId, bucketOrder, autoClone, repoIntake
 } = {}) {
-  const parsed = githubCloner.parseGitHubUrl(url);
-  const isGitHubRepo = !!parsed;
-  const shouldClone = isGitHubRepo && autoClone !== false;
+  const repoFields = deriveRepoLinkFields(url);
+  const shouldClone = repoFields.isRepo && autoClone !== false;
   // Opt-in post-clone agent actions. Only meaningful when a clone will actually
   // happen, and persisted on the link so the record says what was asked for even
   // if the clone is still running.
   const intake = shouldClone ? normalizeRepoIntake(repoIntake) : null;
 
-  // Derive a readable default title: repo slug for GitHub, hostname for plain
-  // URLs (so quick-added bucket chips read "example.com" instead of the full URL).
-  const defaultTitle = parsed
-    ? `${parsed.owner}/${parsed.repo}`
+  // Derive a readable default title: repo slug for a repository, hostname for
+  // plain URLs (so quick-added bucket chips read "example.com" instead of the
+  // full URL).
+  const defaultTitle = repoFields.isRepo
+    ? `${repoFields.repoOwner}/${repoFields.repoName}`
     : (hostnameFromUrl(url) || url);
+  const cleanNote = typeof note === 'string' ? note.trim() : '';
 
   const link = await storage.createLink({
     url,
     title: title || defaultTitle,
     description: description || '',
-    linkType: linkType || (isGitHubRepo ? 'github' : 'other'),
+    note: cleanNote,
+    linkType: linkType || (repoFields.isRepo ? 'repo' : 'other'),
     tags: tags || [],
-    isGitHubRepo,
-    gitHubOwner: parsed?.owner,
-    gitHubRepo: parsed?.repo,
+    ...repoFields,
     localPath: null,
     cloneStatus: shouldClone ? 'pending' : 'none',
     cloneError: null,
@@ -1038,7 +1114,7 @@ export async function createLinkFromUrl(url, {
     ...(bucketId !== undefined ? { bucketId } : {}),
     ...(bucketOrder !== undefined ? { bucketOrder } : {})
   });
-  console.log(`🔗 Created link: ${link.id} (${isGitHubRepo ? 'GitHub repo' : 'regular URL'})`);
+  console.log(`🔗 Created link: ${link.id} (${repoFields.isRepo ? `${repoFields.repoHost} repo` : 'regular URL'})`);
 
   if (shouldClone) {
     cloneRepoInBackground(link.id, url).catch(err => {

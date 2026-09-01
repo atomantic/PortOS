@@ -53,6 +53,7 @@ vi.mock('../../services/appIconDetect.js', () => ({
 import * as appsService from '../../services/apps.js';
 import * as pm2Service from '../../services/pm2.js';
 import * as history from '../../services/history.js';
+import * as appUpdater from '../../services/appUpdater.js';
 
 describe('Apps Lifecycle Routes', () => {
   let app;
@@ -394,6 +395,43 @@ describe('Apps Lifecycle Routes', () => {
       const response = await request(app).post('/api/apps/app-999/restart');
 
       expect(response.status).toBe(404);
+    });
+  });
+
+  describe('POST /api/apps/:id/update', () => {
+    const mockApp = {
+      id: 'app-001',
+      name: 'Test App',
+      repoPath: REAL_DIR,
+      pm2ProcessNames: ['test-app'],
+    };
+
+    it('passes the validated fork-sync request to the managed updater', async () => {
+      appsService.getAppById.mockResolvedValue(mockApp);
+      appUpdater.updateApp.mockResolvedValue({ success: true, steps: [] });
+      history.logAction.mockResolvedValue();
+
+      const response = await request(app)
+        .post('/api/apps/app-001/update')
+        .send({ syncFork: true });
+
+      expect(response.status).toBe(200);
+      expect(appUpdater.updateApp).toHaveBeenCalledWith(
+        mockApp,
+        expect.any(Function),
+        { syncFork: true },
+      );
+    });
+
+    it('rejects a non-boolean fork-sync request before updating', async () => {
+      appsService.getAppById.mockResolvedValue(mockApp);
+
+      const response = await request(app)
+        .post('/api/apps/app-001/update')
+        .send({ syncFork: 'yes' });
+
+      expect(response.status).toBe(400);
+      expect(appUpdater.updateApp).not.toHaveBeenCalled();
     });
   });
 

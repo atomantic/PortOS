@@ -371,7 +371,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // editorial/final-delivery sign-offs let the ordered workflow survive a
   // reload. A v4 peer would strip those choices and silently reopen completed
   // gates, erase challenge-to-scene mapping, or reintroduce mixed geometry.
-  fableLoom: 5,
+  // v6 = the loom-level render pin gained image/video backend, model, and
+  // effort preferences. A v5 peer would preserve the format but strip these
+  // additive preferences during an unrelated whole-record update.
+  fableLoom: 6,
   // v1 = Creative Director projects (PostgreSQL `creative_director_projects`)
   // federated via the per-record peer-sync push pipeline (record kind
   // `creativeDirectorProject`, sync category `creativeDirectorProjects`, #1564).

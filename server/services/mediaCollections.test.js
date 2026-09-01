@@ -12,10 +12,18 @@ import { mockNoPeerSync } from '../lib/mockPathsDataRoot.js';
 // readdir/lstat/rm operate against a real fs tree.
 const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'media-collections-test-'));
 const COLLECTIONS_DIR = join(TEST_DATA_ROOT, 'media-collections');
+const writeCounter = vi.hoisted(() => ({ baseHash: 0 }));
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, PATHS: { ...actual.PATHS, data: TEST_DATA_ROOT } };
+  return {
+    ...actual,
+    PATHS: { ...actual.PATHS, data: TEST_DATA_ROOT },
+    atomicWrite: async (path, data) => {
+      if (typeof path === 'string' && path.endsWith('sync_base_hashes.json')) writeCounter.baseHash += 1;
+      return actual.atomicWrite(path, data);
+    },
+  };
 });
 
 // Suppress the fire-and-forget dynamic import so tests don't load the real
@@ -48,6 +56,7 @@ function resetStore() {
   rmSync(join(TEST_DATA_ROOT, 'conflict-journal'), { recursive: true, force: true });
   mkdirSync(COLLECTIONS_DIR, { recursive: true });
   cj.__resetBaseHashCacheForTests();
+  writeCounter.baseHash = 0;
   uuidCounter = 0;
 }
 
@@ -1723,11 +1732,21 @@ describe('pruneTombstonedCollections', () => {
       createdAt: oldTs, updatedAt: futureTs, deleted: true, deletedAt: futureTs,
     });
     await seedState({ collections });
+    for (let i = 0; i < 10; i++) {
+      await cj.setSyncBaseHash('mediaCollection', `c-old-${i}`, `hash-old-${i}`);
+    }
+    await cj.flushBaseHashes();
+    writeCounter.baseHash = 0;
 
     const result = await svc.pruneTombstonedCollections(Date.now());
     expect(result).toEqual({ pruned: 10 }); // 10 old tombstones; live + recent survive
+    expect(writeCounter.baseHash).toBe(1);
     const surviving = (await svc.listCollections({ includeDeleted: true })).map((c) => c.id).sort();
     expect(surviving).toEqual(['c-live', 'c-recent']);
+    cj.__resetBaseHashCacheForTests();
+    for (let i = 0; i < 10; i++) {
+      expect(await cj.getSyncBaseHash('mediaCollection', `c-old-${i}`)).toBeNull();
+    }
   });
 
   it('does NOT prune a live collection', async () => {

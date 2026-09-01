@@ -427,6 +427,10 @@ async function runAgentSpawn(task) {
       providerType: provider.type,
       providerId: provider.id,
       providerCommand: provider.command,
+      // The planner identity a filing agent stamps as `planner:<model>` — the
+      // model this run RESOLVED to (post-fallback), which the agent cannot
+      // report about itself.
+      providerModel: selectedModel,
       agentId, // scopes the completion sentinel filename — see doneSentinelName
       leanMode,
       split: splitSystemPrompt

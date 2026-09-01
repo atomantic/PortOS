@@ -252,12 +252,15 @@ export async function ensureForgeLabels({ cli, cwd, env, extraLabels = [], exec 
  * slug marker in the body, and returns `{ success, number, url }`. The issue
  * number is parsed from the created URL's trailing digits. Optional dispatch
  * hints and contributor labels are applied only when the proposal supplied
- * valid values — never derived from `complexity`.
+ * valid values — never derived from `complexity`. `planner` is the identity of
+ * the model that REASONED this proposal (PortOS knows it; the reasoner is never
+ * asked to name itself), applied as `planner:<model>` and lazily created by
+ * `ensureForgeLabels` like every other extra.
  */
 export async function fileProposalToForge({
-  cli, cwd, env, title, body, slug, model, effort, goodFirstIssue, helpWanted, exec = runCli
+  cli, cwd, env, title, body, slug, model, effort, goodFirstIssue, helpWanted, planner, exec = runCli
 } = {}) {
-  const extras = forgeIssueLabels({ model, effort, goodFirstIssue, helpWanted });
+  const extras = forgeIssueLabels({ model, effort, goodFirstIssue, helpWanted, planner });
   await ensureForgeLabels({ cli, cwd, env, extraLabels: extras, exec });
   const fullBody = `${body}\n\n${slugMarker(slug)}`;
   const labelArgs = [LI_LABEL, ...extras].flatMap((name) => ['--label', name]);

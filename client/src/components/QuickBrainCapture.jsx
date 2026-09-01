@@ -26,7 +26,7 @@ export default function QuickBrainCapture() {
   // A single-video YouTube URL takes a different path entirely (ingest, not
   // capture) and unlocks the advanced panel below.
   const isYoutube = useMemo(() => isYoutubeVideoUrl(input), [input]);
-  // A bare GitHub repo URL is cloned on capture, which unlocks the two post-clone
+  // A bare repo URL is cloned on capture, which unlocks the two post-clone
   // agent opt-ins (malware scan / repo study).
   const repoIntake = useRepoIntake(input);
 
@@ -34,6 +34,7 @@ export default function QuickBrainCapture() {
   const [ingestOpts, setIngestOpts] = useState(defaultIngestOptions);
   const [agentPrompt, setAgentPrompt] = useState('');
   const [tagsInput, setTagsInput] = useState('');
+  const [linkNote, setLinkNote] = useState('');
 
   // Server-side defaults for the checkboxes, so a user who always wants audio
   // sets it once in settings instead of every capture.
@@ -66,6 +67,7 @@ export default function QuickBrainCapture() {
     e?.preventDefault();
     const text = input.trim();
     if (!text || submittingRef.current) return;
+    const note = linkNote.trim();
 
     if (isYoutube) {
       if (nothingSelected) {
@@ -75,9 +77,11 @@ export default function QuickBrainCapture() {
       // The ingest job is long-running and streams its own progress/toasts, so
       // the input clears immediately and the widget stays usable.
       setInput('');
+      setLinkNote('');
       ingest.start({
         url: text,
         ...ingestOpts,
+        ...(note ? { note } : {}),
         agentPrompt: agentPrompt.trim(),
         tags: tagsInput.split(',').map((t) => t.trim()).filter(Boolean),
       });
@@ -97,10 +101,12 @@ export default function QuickBrainCapture() {
     // the request honest about what will be stored.
     // `intakeFor` re-derives from the submitted text, so a sticky tick can't ride
     // along on a capture that is no longer a repo URL.
-    const result = await api.captureBrainThought(text, undefined, undefined, {
+    const captureOptions = {
       creative: creative && !isUrl,
       repoIntake: repoIntake.intakeFor(text),
-    }, { silent: true }).catch(err => {
+    };
+    if (note) captureOptions.note = note;
+    const result = await api.captureBrainThought(text, undefined, undefined, captureOptions, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to capture');
       setInput(prev => prev || text);
       return null;
@@ -108,6 +114,7 @@ export default function QuickBrainCapture() {
     if (result) {
       toast.success(result.message || 'Captured');
       repoIntake.setStudyContext('');
+      setLinkNote('');
     }
     submittingRef.current = false;
     setIsSubmitting(false);
@@ -131,6 +138,7 @@ export default function QuickBrainCapture() {
       return;
     }
     setInput(trimmed);
+    if (!parseBareUrl(trimmed)) setLinkNote('');
     inputRef.current?.focus();
   };
 
@@ -152,7 +160,11 @@ export default function QuickBrainCapture() {
           type="text"
           placeholder="Thought, URL, or YouTube link..."
           value={input}
-          onChange={e => setInput(e.target.value)}
+          onChange={e => {
+            const value = e.target.value;
+            setInput(value);
+            if (!parseBareUrl(value)) setLinkNote('');
+          }}
           className="flex-1 min-w-0 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
         />
         <button
@@ -203,6 +215,23 @@ export default function QuickBrainCapture() {
         </button>
       </form>
 
+      {isUrl && (
+        <div className="mt-3">
+          <label htmlFor="quick-brain-note" className="block text-xs text-gray-400 mb-1">
+            Why are you saving this link? <span className="text-gray-600">(optional)</span>
+          </label>
+          <textarea
+            id="quick-brain-note"
+            rows={2}
+            maxLength={2000}
+            value={linkNote}
+            onChange={e => setLinkNote(e.target.value)}
+            placeholder="e.g. Read later, share with the team, or turn into a future task"
+            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm resize-y"
+          />
+        </div>
+      )}
+
       {isYoutube && showAdvanced && (
         <div id="quick-brain-advanced" className="mt-3 pt-3 border-t border-port-border space-y-3">
           <div className="flex flex-wrap gap-2">
@@ -250,18 +279,7 @@ export default function QuickBrainCapture() {
 
       <RepoIntakeOptions
         idPrefix="quick-brain-repo"
-        repo={repoIntake.repo}
-        options={repoIntake.options}
-        managedApps={repoIntake.managedApps}
-        targetAppId={repoIntake.targetAppId}
-        onTargetAppChange={repoIntake.setTargetAppId}
-        studyContext={repoIntake.studyContext}
-        onStudyContextChange={repoIntake.setStudyContext}
-        providerOverride={repoIntake.providerOverride}
-        providers={repoIntake.providers}
-        activeProviderId={repoIntake.activeProviderId}
-        onProviderOverrideChange={repoIntake.setProviderOverride}
-        onToggle={repoIntake.toggle}
+        {...repoIntake}
       />
 
       {ingest.active && (

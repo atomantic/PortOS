@@ -27,6 +27,7 @@
  */
 
 import { PORTOS_APP_ID, updateAppLayeredIntelligence, getAppById } from '../apps.js'
+import { resolvePlannerId } from '../../lib/dispatchLabels.js'
 import {
   getEffectiveConfig,
   buildPrompt,
@@ -426,14 +427,29 @@ export async function buildTaskInput({ app } = {}) {
 }
 
 /**
+ * The planner identity of the agent run that produced a proposal — the model
+ * PortOS actually dispatched, read from the agent record `agentLifecycle` stamps
+ * at spawn. Best-effort: an unreadable record (or a run older than the stamp)
+ * yields null and the proposal is filed with no `planner:` label rather than a
+ * fabricated one.
+ */
+async function resolveProposalPlanner(agentId) {
+  if (!agentId) return null
+  const { getAgentRecord } = await import('../cosAgentLifecycle.js')
+  const record = await getAgentRecord(agentId).catch(() => null)
+  if (!record?.metadata) return null
+  return resolvePlannerId({ providerId: record.metadata.providerId, model: record.metadata.model })
+}
+
+/**
  * File the proposal via the resolved tracker's filer (forge / jira / plan).
  */
-async function fileProposal({ filer, forgeCli, cwd, app, proposal, jira }) {
+async function fileProposal({ filer, forgeCli, cwd, app, proposal, jira, planner }) {
   if (filer === 'forge' && forgeCli) {
     return fileProposalToForge({
       cli: forgeCli, cwd, title: proposal.title, body: proposal.body, slug: proposal.slug,
       model: proposal.model, effort: proposal.effort,
-      goodFirstIssue: proposal.goodFirstIssue, helpWanted: proposal.helpWanted
+      goodFirstIssue: proposal.goodFirstIssue, helpWanted: proposal.helpWanted, planner
     })
   }
   if (filer === 'jira' && jira) {
@@ -441,7 +457,7 @@ async function fileProposal({ filer, forgeCli, cwd, app, proposal, jira }) {
       instanceId: jira.instanceId, projectKey: jira.projectKey, issueType: jira.issueType,
       title: proposal.title, body: proposal.body, slug: proposal.slug,
       model: proposal.model, effort: proposal.effort,
-      goodFirstIssue: proposal.goodFirstIssue, helpWanted: proposal.helpWanted
+      goodFirstIssue: proposal.goodFirstIssue, helpWanted: proposal.helpWanted, planner
     })
   }
   if (filer === 'plan' && cwd) {
@@ -641,7 +657,13 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
       filedAction = 'semantic-duplicate'
       reason = 'semantic-duplicate'
     } else {
-      const filed = await fileProposal({ filer, forgeCli, cwd, app, proposal, jira })
+      // Which model actually REASONED this proposal, read off the agent record
+      // rather than re-resolving the configured pin: a run that fell back to a
+      // different provider must be attributed to the model that ran, not the one
+      // that was scheduled. Unresolvable (a pre-upgrade record, or no agentId) ⇒
+      // no planner label, never a guess.
+      const planner = await resolveProposalPlanner(agentId)
+      const filed = await fileProposal({ filer, forgeCli, cwd, app, proposal, jira, planner })
       if (filed.success && filed.duplicate) {
         // The tracker already carries this slug's tag (a checked PLAN item the
         // reasoner re-proposed — normally caught by the dedup guard since #2620,

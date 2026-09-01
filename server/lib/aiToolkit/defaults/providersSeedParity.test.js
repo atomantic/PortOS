@@ -37,8 +37,18 @@ const MODEL_FIELDS = ['models', 'defaultModel', 'lightModel', 'mediumModel', 'he
 // local model it ships guidance for, while the toolkit sample ships an empty
 // list because a generic install has no way to know what the user has pulled.
 const EXEMPT_IDS = new Set(['lmstudio']);
+const MODEL_PIN_FIELDS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
+const STATIC_CLI_PROVIDER_SENTINELS = new Map([
+  // Codex's sentinel-only legacy records migrate to real defaults; its fresh
+  // seeds intentionally point at selectable models instead.
+  ['codex', null],
+  ['codex-tui', null],
+  ['antigravity-cli', 'antigravity-configured-default'],
+  ['antigravity-tui', 'antigravity-configured-default'],
+]);
 
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'));
+const modelId = (model) => (typeof model === 'string' ? model : model?.id);
 
 describe('provider seed parity — data.reference ↔ aiToolkit sample', () => {
   const reference = readJson(REFERENCE_PATH);
@@ -59,4 +69,30 @@ describe('provider seed parity — data.reference ↔ aiToolkit sample', () => {
       }
     });
   }
+
+  it('ships unique model IDs with valid sentinels and pins', () => {
+    for (const [seedName, seed] of [['reference', reference], ['sample', sample]]) {
+      for (const [id, provider] of Object.entries(seed.providers)) {
+        const modelIds = provider.models.map(modelId);
+        expect(modelIds.every(Boolean), `${seedName}.${id}.models contains an invalid entry`).toBe(true);
+        expect(new Set(modelIds).size, `${seedName}.${id}.models contains duplicate ids`).toBe(modelIds.length);
+        for (const field of MODEL_PIN_FIELDS) {
+          if (provider[field] != null) {
+            expect(modelIds, `${seedName}.${id}.${field} is not in its catalog`).toContain(provider[field]);
+          }
+        }
+      }
+      for (const [id, sentinel] of STATIC_CLI_PROVIDER_SENTINELS) {
+        const provider = seed.providers[id];
+        expect(provider, `${seedName} is missing ${id}`).toBeDefined();
+        expect(Array.isArray(provider.models), `${seedName}.${id}.models must be an array`).toBe(true);
+        if (sentinel) {
+          expect(provider.models, `${seedName}.${id} lost its configured-default sentinel`).toContain(sentinel);
+        }
+        if (id === 'codex' || id === 'codex-tui') {
+          expect(provider.models, `${seedName}.${id} lost the current Codex Spark fallback`).toContain('gpt-5.3-codex-spark');
+        }
+      }
+    }
+  });
 });

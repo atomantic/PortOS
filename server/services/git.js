@@ -1416,8 +1416,10 @@ export async function deleteMergedBranches(dir, { excludeBranches } = {}) {
     execGit(['branch', '-r', '--merged', `origin/${defaultBranch}`, '--format=%(refname:short)'], dir, { ignoreExitCode: true })
   ]);
 
-  const mergedLocalNames = [...localMergedNames]
-    .filter(name => !protectedSet.has(name) && !localOnlyProtected.has(name) && name !== currentBranch);
+  const mergedLocalCandidates = [...localMergedNames]
+    .filter(name => !protectedSet.has(name));
+  const mergedLocalNames = mergedLocalCandidates
+    .filter(name => !localOnlyProtected.has(name) && name !== currentBranch);
 
   const mergedRemoteNames = remoteMerged.stdout.trim().split('\n').filter(Boolean)
     .filter(ref => ref.startsWith('origin/'))
@@ -1429,7 +1431,16 @@ export async function deleteMergedBranches(dir, { excludeBranches } = {}) {
   const remoteSet = new Set(mergedRemoteNames);
 
   const deleted = [];
-  const skipped = [];
+  const skipped = mergedLocalCandidates
+    .filter(name => localOnlyProtected.has(name) || name === currentBranch)
+    .map(name => {
+      const reason = name === currentBranch
+        ? 'currently checked out'
+        : excludeBranches?.has(name)
+          ? 'used by an active agent'
+          : 'checked out in a worktree';
+      return `${name} (local: ${reason})`;
+    });
   const opts = { ignoreExitCode: true };
 
   for (const name of allMerged) {

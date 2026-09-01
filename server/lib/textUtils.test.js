@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { countWords } from './textUtils.js';
+import { countWords, trimTo } from './textUtils.js';
 
 describe('countWords', () => {
   it('counts whitespace-separated tokens', () => {
@@ -24,5 +24,14 @@ describe('countWords', () => {
     expect(countWords(undefined)).toBe(0);
     expect(countWords(42)).toBe(0);
     expect(countWords({})).toBe(0);
+  });
+});
+
+describe('trimTo', () => {
+  it('trims and caps strings without coercing other values', () => {
+    expect(trimTo('  bounded text  ', 7)).toBe('bounded');
+    expect(trimTo(' short ', 20)).toBe('short');
+    expect(trimTo(null, 20)).toBe('');
+    expect(trimTo(42, 20)).toBe('');
   });
 });

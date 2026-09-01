@@ -510,3 +510,68 @@ describe('IssuesTab', () => {
     expect(screen.queryByRole('button', { name: /Claim/ })).not.toBeInTheDocument();
   });
 });
+
+// Replan is a SECOND opinion on an already-planned issue, launched from the same
+// row as Claim. The failure modes worth pinning are the ones where the two runs
+// bleed into each other: the wrong slashdo command, or one run's lifecycle events
+// swapping out the other's button.
+describe('IssuesTab replan', () => {
+  it('queues the replan command with the same pin and prefetched content a claim gets', async () => {
+    await renderTab();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Replan/ }));
+
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalledWith(
+      'replan', 'app-1', {
+        target: '42',
+        issueContext: {
+          number: 42,
+          title: 'Crash on save',
+          body: 'Repro: open the editor and hit save.',
+          url: 'https://github.com/acme/widget/issues/42'
+        }
+      }, { silent: true }
+    ));
+    expect(await screen.findByRole('link', { name: /Replan #42: Queued/ })).toBeInTheDocument();
+  });
+
+  it('leaves the Claim button live while a replan of the same issue is running', async () => {
+    await renderTab();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Replan/ }));
+    expect(await screen.findByRole('link', { name: /Replan #42: Queued/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Claim/ })).toBeEnabled();
+  });
+
+  // Before the POST resolves there is no task id to match on, so the socket path
+  // falls back to the target the server stamped. Reading `claimTarget` there
+  // would light up the Claim row from a replan's events (and vice versa).
+  it('matches a pre-response socket update on replanTarget, never on claimTarget', async () => {
+    let resolveReplan;
+    api.createSlashdoTask.mockImplementation(() => new Promise(resolve => { resolveReplan = resolve; }));
+    await renderTab();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Replan/ }));
+    act(() => socketHandlers.get('cos:tasks:changed')({
+      task: { id: 'task-9', status: 'in_progress', metadata: { app: 'app-1', claimTarget: '42' } }
+    }));
+    // A claim's event must not advance the replan row.
+    expect(screen.getByRole('button', { name: /Claim/ })).toBeInTheDocument();
+
+    act(() => socketHandlers.get('cos:tasks:changed')({
+      task: { id: 'task-9', status: 'in_progress', metadata: { app: 'app-1', replanTarget: '42' } }
+    }));
+    expect(await screen.findByRole('link', { name: /Replan #42: Active/ })).toBeInTheDocument();
+
+    await act(async () => { resolveReplan({ id: 'task-9', status: 'pending' }); });
+    expect(screen.getByRole('link', { name: /Replan #42: Active/ })).toBeInTheDocument();
+  });
+
+  it('re-enables the Replan button when queuing fails, instead of stranding it', async () => {
+    api.createSlashdoTask.mockRejectedValue(new Error('tracker is not a forge'));
+    await renderTab();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Replan/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Replan/ })).toBeEnabled());
+  });
+});

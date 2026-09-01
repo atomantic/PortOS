@@ -1,7 +1,7 @@
 /**
  * FableLoom story settings — the loom-level choices that steer every AI lane.
  *
- * Three things live here:
+ * Four things live here:
  *   - **Audience participation.** Whether the audience acts as the protagonist
  *     or helps an autonomous protagonist through a named in-story channel.
  *   - **Scene format.** Whether scenes are written as narrated prose or as a
@@ -14,22 +14,62 @@
  *     text into a path during play. Unset means the play stage's own pin (or
  *     the install's active provider) — a tapped path never calls a provider at
  *     all, so this only governs typed input.
+ *   - **Rendering defaults.** Which image/video backend and local model to use,
+ *     plus the shared aspect ratio and Codex image effort for new scene media.
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, Loader2, Sparkles } from 'lucide-react';
+import { CheckCircle2, Cloud, Cpu, Layers, Loader2, Sparkles } from 'lucide-react';
 import { Link } from 'react-router';
 import Drawer from '../Drawer';
+import BackendChipStrip from '../media/BackendChipStrip';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { FormField } from '../ui/FormField.jsx';
 import toast from '../ui/Toast';
 import useProviderModels from '../../hooks/useProviderModels';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
-import { effectiveModelFor, effortAwareModelOptions } from '../../utils/providers';
-import { reformatLoomEpisode, updateLoom } from '../../services/api';
+import { CODEX_EFFORT_LEVELS, effectiveModelFor, effortAwareModelOptions } from '../../utils/providers';
+import { listImageModels, listVideoModels, reformatLoomEpisode, updateLoom } from '../../services/api';
 import { fieldClass, labelClass } from './fieldStyles';
 import { LOOM_FORMATS, episodesNeedingReformat, loomFormatHint, loomFormatLabel } from './loomFormats';
 import { FABLELOOM_PARTICIPATION_MODES } from '../../../../server/lib/fableLoomParticipation.js';
+import {
+  asFableLoomRenderPreferences,
+  asFableLoomRenderSettings,
+  FABLELOOM_RENDER_FORMATS,
+} from '../../../../server/lib/fableLoomProduction.js';
+
+const IMAGE_RENDER_BACKENDS = [
+  { id: 'auto', label: 'Auto', icon: Layers },
+  { id: 'local', label: 'Local', icon: Cpu },
+  { id: 'codex', label: 'Codex', icon: Cloud },
+  { id: 'grok', label: 'Grok', icon: Cloud },
+  { id: 'agy', label: 'Agy', icon: Sparkles },
+];
+
+const VIDEO_RENDER_BACKENDS = [
+  { id: 'auto', label: 'Auto', icon: Layers },
+  { id: 'local', label: 'Local', icon: Cpu },
+  { id: 'grok', label: 'Grok', icon: Cloud },
+];
+
+const modelOptions = (models, selected) => {
+  const options = (Array.isArray(models) ? models : [])
+    .filter((model) => model?.id)
+    .map((model) => ({ id: model.id, label: model.name || model.id }));
+  if (selected && !options.some((option) => option.id === selected)) {
+    return [{ id: selected, label: `${selected} (unavailable)` }, ...options];
+  }
+  return options;
+};
+
+const replaceModelList = (setModels, nextModels) => setModels((currentModels) => {
+  const unchanged = currentModels.length === nextModels.length
+    && currentModels.every((model, index) => (
+      model?.id === nextModels[index]?.id && model?.name === nextModels[index]?.name
+    ));
+  return unchanged ? currentModels : nextModels;
+});
 
 /**
  * The one line of feedback a multi-minute rewrite gives. Built as a single
@@ -57,6 +97,15 @@ export default function LoomSettingsDrawer({ open, onClose, loom, universe, onLo
   const [protagonistCharacterId, setProtagonistCharacterId] = useState(loom.protagonistCharacterId || '');
   const [protagonistWardrobeId, setProtagonistWardrobeId] = useState(loom.protagonistWardrobeId || '');
   const [protagonistWardrobeLocked, setProtagonistWardrobeLocked] = useState(loom.protagonistWardrobeLocked === true);
+  const renderSettings = asFableLoomRenderSettings(loom.renderSettings);
+  const savedRender = asFableLoomRenderPreferences(loom.renderSettings);
+  const [imageMode, setImageMode] = useState(savedRender.imageMode);
+  const [imageModel, setImageModel] = useState(savedRender.imageModel);
+  const [videoMode, setVideoMode] = useState(savedRender.videoMode);
+  const [videoModel, setVideoModel] = useState(savedRender.videoModel);
+  const [renderEffort, setRenderEffort] = useState(savedRender.effort);
+  const [imageModels, setImageModels] = useState([]);
+  const [videoModels, setVideoModels] = useState([]);
   useEffect(() => {
     if (open) return;
     setParticipationMode(loom.participationMode || 'protagonist');
@@ -64,7 +113,24 @@ export default function LoomSettingsDrawer({ open, onClose, loom, universe, onLo
     setProtagonistCharacterId(loom.protagonistCharacterId || '');
     setProtagonistWardrobeId(loom.protagonistWardrobeId || '');
     setProtagonistWardrobeLocked(loom.protagonistWardrobeLocked === true);
-  }, [open, loom.participationMode, loom.audienceCommunicationMedium, loom.protagonistCharacterId, loom.protagonistWardrobeId, loom.protagonistWardrobeLocked]);
+    setImageMode(savedRender.imageMode);
+    setImageModel(savedRender.imageModel);
+    setVideoMode(savedRender.videoMode);
+    setVideoModel(savedRender.videoModel);
+    setRenderEffort(savedRender.effort);
+  }, [
+    open,
+    loom.participationMode,
+    loom.audienceCommunicationMedium,
+    loom.protagonistCharacterId,
+    loom.protagonistWardrobeId,
+    loom.protagonistWardrobeLocked,
+    savedRender.imageMode,
+    savedRender.imageModel,
+    savedRender.videoMode,
+    savedRender.videoModel,
+    savedRender.effort,
+  ]);
   const play = loom.playSettings || {};
   const playProvider = providers.find((p) => p.id === play.providerId);
   // Only scenes not already in the target format are sent, so this is what the
@@ -80,6 +146,75 @@ export default function LoomSettingsDrawer({ open, onClose, loom, universe, onLo
     async (body) => onLoomUpdate(await updateLoom(loom.id, body, { silent: true })),
     { errorMessage: 'Save failed' },
   );
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const load = (loader) => Promise.resolve()
+      .then(() => loader({ silent: true }))
+      .catch(() => []);
+    let mounted = true;
+    Promise.all([load(listImageModels), load(listVideoModels)]).then(([images, videos]) => {
+      if (!mounted) return;
+      replaceModelList(setImageModels, images);
+      replaceModelList(setVideoModels, videos);
+    });
+    return () => { mounted = false; };
+  }, [open]);
+
+  const pendingRender = useRef(null);
+  if (!pendingRender.current || !saving) {
+    pendingRender.current = {
+      formatId: renderSettings.formatId,
+      imageMode: savedRender.imageMode,
+      imageModel: savedRender.imageModel,
+      videoMode: savedRender.videoMode,
+      videoModel: savedRender.videoModel,
+      effort: savedRender.effort,
+    };
+  }
+
+  const saveRender = (changes) => {
+    pendingRender.current = { ...pendingRender.current, ...changes };
+    return patch({ renderSettings: { ...pendingRender.current } });
+  };
+
+  const chooseImageMode = (value) => {
+    const nextMode = value === 'auto' ? null : value;
+    setImageMode(nextMode);
+    if (nextMode && nextMode !== 'local') setImageModel(null);
+    saveRender({
+      imageMode: nextMode,
+      ...(nextMode && nextMode !== 'local' ? { imageModel: null } : {}),
+    });
+  };
+
+  const chooseImageModel = (event) => {
+    const nextModel = event.target.value || null;
+    setImageModel(nextModel);
+    saveRender({ imageModel: nextModel });
+  };
+
+  const chooseVideoMode = (value) => {
+    const nextMode = value === 'auto' ? null : value;
+    setVideoMode(nextMode);
+    if (nextMode && nextMode !== 'local') setVideoModel(null);
+    saveRender({
+      videoMode: nextMode,
+      ...(nextMode && nextMode !== 'local' ? { videoModel: null } : {}),
+    });
+  };
+
+  const chooseVideoModel = (event) => {
+    const nextModel = event.target.value || null;
+    setVideoModel(nextModel);
+    saveRender({ videoModel: nextModel });
+  };
+
+  const chooseRenderEffort = (event) => {
+    const nextEffort = event.target.value || null;
+    setRenderEffort(nextEffort);
+    saveRender({ effort: nextEffort });
+  };
 
   const universeCharacters = Array.isArray(universe?.characters) ? universe.characters : [];
   const protagonist = universeCharacters.find((character) => character.id === protagonistCharacterId) || null;
@@ -383,6 +518,125 @@ export default function LoomSettingsDrawer({ open, onClose, loom, universe, onLo
               {rewriteProgressLabel(rewritingEpisode)}
             </p>
           )}
+        </section>
+
+        <section className="border-t border-port-border pt-4 space-y-3">
+          <div>
+            <h4 className="text-sm font-semibold">Rendering defaults</h4>
+            <p className="mt-1 text-xs text-port-text-muted">
+              New scene images, video clips, and batch production use these story defaults. The production panel can still override them for one run.
+            </p>
+          </div>
+          <FormField
+            label="Aspect ratio"
+            labelClassName={labelClass}
+            hint="One format keeps storyboard stills and motion clips consistent."
+          >
+            <select
+              id="loom-render-format"
+              className={fieldClass}
+              value={renderSettings.formatId}
+              disabled={saving || reformatting}
+              onChange={(event) => saveRender({ formatId: event.target.value })}
+            >
+              {FABLELOOM_RENDER_FORMATS.map((option) => (
+                <option key={option.formatId} value={option.formatId}>
+                  {option.label} · {option.width}×{option.height}
+                </option>
+              ))}
+            </select>
+          </FormField>
+
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-medium text-port-text-muted">Image renderer</span>
+              <BackendChipStrip
+                availableBackends={IMAGE_RENDER_BACKENDS}
+                value={imageMode || 'auto'}
+                onChange={chooseImageMode}
+                size="sm"
+                ariaLabel="Story image renderer"
+                disabled={saving || reformatting}
+                titlePrefix="Use for story images"
+              />
+            </div>
+            {(imageMode === 'local' || !imageMode) && (
+              <FormField
+                label="Local image model"
+                labelClassName="block text-[11px] text-port-text-muted mb-1"
+                hint="Leave this at the instance default unless this story needs a specific installed model."
+              >
+                <select
+                  id="loom-image-model"
+                  className={fieldClass}
+                  aria-label="Local image model"
+                  value={imageModel || ''}
+                  disabled={saving || reformatting}
+                  onChange={chooseImageModel}
+                >
+                  <option value="">Instance default</option>
+                  {modelOptions(imageModels, imageModel).map((option) => (
+                    <option key={option.id} value={option.id}>{option.label}</option>
+                  ))}
+                </select>
+              </FormField>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-medium text-port-text-muted">Video renderer</span>
+              <BackendChipStrip
+                availableBackends={VIDEO_RENDER_BACKENDS}
+                value={videoMode || 'auto'}
+                onChange={chooseVideoMode}
+                size="sm"
+                ariaLabel="Story video renderer"
+                disabled={saving || reformatting}
+                titlePrefix="Use for story video"
+              />
+            </div>
+            {(videoMode === 'local' || !videoMode) && (
+              <FormField
+                label="Local video model"
+                labelClassName="block text-[11px] text-port-text-muted mb-1"
+                hint="Leave this at the instance default unless this story needs a specific installed model."
+              >
+                <select
+                  id="loom-video-model"
+                  className={fieldClass}
+                  aria-label="Local video model"
+                  value={videoModel || ''}
+                  disabled={saving || reformatting}
+                  onChange={chooseVideoModel}
+                >
+                  <option value="">Instance default</option>
+                  {modelOptions(videoModels, videoModel).map((option) => (
+                    <option key={option.id} value={option.id}>{option.label}</option>
+                  ))}
+                </select>
+              </FormField>
+            )}
+          </div>
+
+          <FormField
+            label="Codex image effort"
+            labelClassName={labelClass}
+            hint="Used when the image renderer is Codex; other renderers use their own controls."
+          >
+            <select
+              id="loom-render-effort"
+              className={fieldClass}
+              value={renderEffort || ''}
+              disabled={saving || reformatting}
+              onChange={chooseRenderEffort}
+            >
+              <option value="">Provider default</option>
+              {CODEX_EFFORT_LEVELS.map((level) => (
+                <option key={level} value={level}>{level[0].toUpperCase() + level.slice(1)}</option>
+              ))}
+            </select>
+          </FormField>
         </section>
 
         <section className="border-t border-port-border pt-4 space-y-2">

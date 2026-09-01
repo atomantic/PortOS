@@ -1,9 +1,9 @@
 import { GitBranch, ShieldCheck, Lightbulb } from 'lucide-react';
 import ToggleChip from '../ui/ToggleChip';
-import AgentJobProviderFields from '../cos/AgentJobProviderFields';
+import RepoStudyFields from './RepoStudyFields';
 
 /**
- * The "this URL is a GitHub repo" affordance shared by both Brain capture boxes
+ * The "this URL is a repository" affordance shared by both Brain capture boxes
  * (the Quick Capture dashboard widget and the Inbox capture form).
  *
  * Presentational only — the sticky checkbox state and the repo-URL rule live in
@@ -30,18 +30,15 @@ export const REPO_INTAKE_OPTIONS = [
  * @param {object} props
  * @param {string} props.idPrefix unique per host form — the checkbox ids/labels
  *   must not collide when both capture boxes are mounted on the same page.
- * @param {{owner: string, repo: string}|null} props.repo parsed repo, or null to
- *   render nothing (the capture isn't a bare repo URL)
+ * @param {{host: string, owner: string, repo: string}|null} props.repo parsed
+ *   repo, or null to render nothing (the capture isn't a bare repo URL)
  * @param {{malwareScan: boolean, learn: boolean}} props.options
- * @param {string} props.studyContext
- * @param {(context: string) => void} props.onStudyContextChange
- * @param {{providerId: string, model: string, effort: string}} props.providerOverride
- * @param {Array} props.providers
- * @param {string} props.activeProviderId
- * @param {(patch: object) => void} props.onProviderOverrideChange
- * @param {(key: string) => void} props.onToggle
+ * @param {(key: string) => void} props.toggle
+ *   Remaining props are the `useRepoStudyConfig` shape, forwarded to
+ *   `RepoStudyFields` when the study option is ticked — so a host can spread
+ *   the whole `useRepoIntake` return onto this component.
  */
-export default function RepoIntakeOptions({ idPrefix, repo, options, managedApps = [], targetAppId, onTargetAppChange, studyContext = '', onStudyContextChange, providerOverride = { providerId: '', model: '', effort: '' }, providers = [], activeProviderId = '', onProviderOverrideChange, onToggle }) {
+export default function RepoIntakeOptions({ idPrefix, repo, options, toggle, ...studyFields }) {
   if (!repo) return null;
 
   return (
@@ -49,7 +46,7 @@ export default function RepoIntakeOptions({ idPrefix, repo, options, managedApps
       <p className="flex items-center gap-1.5 text-xs text-gray-400">
         <GitBranch size={12} className="text-port-accent shrink-0" />
         <span>
-          <span className="text-gray-200">{repo.owner}/{repo.repo}</span> will be cloned locally.
+          <span className="text-gray-200">{repo.owner}/{repo.repo}</span> on {repo.host} will be cloned locally.
         </span>
       </p>
       <div className="flex flex-wrap gap-2">
@@ -61,54 +58,11 @@ export default function RepoIntakeOptions({ idPrefix, repo, options, managedApps
             hint={hint}
             Icon={Icon}
             checked={options[key]}
-            onToggle={() => onToggle(key)}
+            onToggle={() => toggle(key)}
           />
         ))}
       </div>
-      {options.learn && managedApps.length > 0 && (
-        <label htmlFor={`${idPrefix}-target-app`} className="block text-xs text-gray-400">
-          File study issues against
-          <select
-            id={`${idPrefix}-target-app`}
-            value={targetAppId}
-            onChange={e => onTargetAppChange?.(e.target.value)}
-            className="ml-2 px-2 py-1 bg-port-bg border border-port-border rounded text-gray-200 text-xs"
-          >
-            {managedApps.map(app => <option key={app.id} value={app.id}>{app.name}</option>)}
-          </select>
-        </label>
-      )}
-      {options.learn && (
-        <div>
-          <label htmlFor={`${idPrefix}-study-context`} className="block text-xs text-gray-400 mb-1">
-            Study context <span className="text-gray-600">(optional)</span>
-          </label>
-          <textarea
-            id={`${idPrefix}-study-context`}
-            rows={3}
-            maxLength={5000}
-            value={studyContext}
-            onChange={e => onStudyContextChange?.(e.target.value)}
-            placeholder="What should the agent look for, and where might an implementation fit?"
-            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-          />
-        </div>
-      )}
-      {options.learn && (
-        <div className="pt-1">
-          <AgentJobProviderFields
-            data={providerOverride}
-            providers={providers}
-            activeProviderId={activeProviderId}
-            onChange={onProviderOverrideChange}
-          />
-          {providers.length > 0 && (
-            <p className="mt-1 text-xs text-gray-500">
-              Optional override for this study only. Leave it on the default to use the configured CoS provider.
-            </p>
-          )}
-        </div>
-      )}
+      {options.learn && <RepoStudyFields idPrefix={idPrefix} {...studyFields} />}
       {REPO_INTAKE_OPTIONS.some(({ key }) => options[key]) && (
         <p className="text-xs text-gray-500">
           A CoS agent starts once the clone finishes — track it in Chief of Staff.

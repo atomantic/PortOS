@@ -8,9 +8,9 @@
  * before an outline is expanded and whenever an author edits it by hand.
  */
 
-import { trimTo } from './storyBible.js';
 import { LOOM_LIMITS } from './fableLoomLimits.js';
 import { FABLELOOM_PROTAGONIST_PRESENCE } from './fableLoomPlayback.js';
+import { trimTo } from './textUtils.js';
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const isObject = (value) => value && typeof value === 'object';

@@ -1,6 +1,6 @@
 import { ServerError } from '../lib/errorHandler.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
-import { parseGitHubUrl } from '../lib/githubRepoUrl.js';
+import { parseGitHubUrl } from '../lib/repoUrl.js';
 import { INSTANCE_FEATURES, INSTANCE_FEATURE_IDS } from '../lib/instanceFeatureRegistry.js';
 import { isPlainObject } from '../lib/objects.js';
 import {

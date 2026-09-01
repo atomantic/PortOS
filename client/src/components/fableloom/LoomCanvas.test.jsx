@@ -72,7 +72,7 @@ describe('LoomCanvas', () => {
   it('keeps media controls in each visual node and gives a finished video preview precedence', () => {
     const onGenerateImage = vi.fn();
     const onGenerateVideo = vi.fn();
-    const onOpenFalVideo = vi.fn();
+    const onAutomateFalVideo = vi.fn();
     const withMedia = episode();
     withMedia.nodes[0] = {
       ...withMedia.nodes[0], image: 'scene.png', videoHistoryId: 'video-1',
@@ -84,7 +84,7 @@ describe('LoomCanvas', () => {
         onSelectNode={() => {}}
         onGenerateImage={onGenerateImage}
         onGenerateVideo={onGenerateVideo}
-        onOpenFalVideo={onOpenFalVideo}
+        onAutomateFalVideo={onAutomateFalVideo}
       />,
     );
 
@@ -92,10 +92,10 @@ describe('LoomCanvas', () => {
     expect(screen.queryByAltText('The Gate image preview')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Regenerate image' }));
     fireEvent.click(screen.getByRole('button', { name: 'Regenerate video' }));
-    fireEvent.click(screen.getAllByRole('button', { name: 'fal.ai free' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Automate fal.ai' })[0]);
     expect(onGenerateImage).toHaveBeenCalledWith(withMedia.nodes[0]);
     expect(onGenerateVideo).toHaveBeenCalledWith(withMedia.nodes[0]);
-    expect(onOpenFalVideo).toHaveBeenCalledWith(withMedia.nodes[0]);
+    expect(onAutomateFalVideo).toHaveBeenCalledWith(withMedia.nodes[0]);
   });
 
   it('shows live image progress and retains an actionable failed indicator', () => {
@@ -125,6 +125,36 @@ describe('LoomCanvas', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Image failed');
     expect(screen.getByRole('alert')).toHaveAttribute('title', 'Synthetic failure');
     expect(screen.getAllByRole('button', { name: 'Generate image' })[0]).toBeEnabled();
+  });
+
+  it('preserves numeric progress for local video jobs and uses fal browser stage messages', () => {
+    const { rerender } = render(
+      <LoomCanvas
+        episode={episode()}
+        selectedNodeId={null}
+        onSelectNode={() => {}}
+        onGenerateVideo={() => {}}
+        mediaJobs={{ n1: { video: {
+          jobId: 'video-1', status: 'running', progress: 0.42, statusMsg: 'Sampling frames',
+        } } }}
+      />,
+    );
+    expect(screen.getByText('Generating video 42%')).toBeInTheDocument();
+    expect(screen.queryByText('Sampling frames')).not.toBeInTheDocument();
+
+    rerender(
+      <LoomCanvas
+        episode={episode()}
+        selectedNodeId={null}
+        onSelectNode={() => {}}
+        onGenerateVideo={() => {}}
+        mediaJobs={{ n1: { video: {
+          jobId: 'fal-1', source: 'fal-browser', status: 'running', progress: 0.3,
+          statusMsg: 'Generating the scene video on fal.ai…',
+        } } }}
+      />,
+    );
+    expect(screen.getByText('Generating the scene video on fal.ai…')).toBeInTheDocument();
   });
 
   it('uses absolute SVG coordinates for compact media so WebKit keeps it inside the card', () => {

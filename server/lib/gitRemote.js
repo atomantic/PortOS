@@ -73,7 +73,13 @@ export function parseGitRemoteUrl(url) {
  * isn't a git repo or has no `origin` remote (rare, e.g. a tarball install).
  */
 export async function readOriginRemoteUrl(cwd = PATHS.root) {
-  const result = await execGit(['remote', 'get-url', 'origin'], cwd, { ignoreExitCode: true });
+  return readRemoteUrl('origin', cwd);
+}
+
+/** Read a named git remote without exposing it to a shell. */
+export async function readRemoteUrl(remote, cwd = PATHS.root) {
+  if (typeof remote !== 'string' || !/^[A-Za-z0-9._-]+$/.test(remote)) return null;
+  const result = await execGit(['remote', 'get-url', remote], cwd, { ignoreExitCode: true });
   if (result.exitCode !== 0) return null;
   const url = result.stdout.trim();
   return url || null;
@@ -104,8 +110,10 @@ export async function readOriginRemoteUrl(cwd = PATHS.root) {
  *
  * Comparison is case-insensitive (GitHub treats owner/repo names as such).
  */
-export async function getOriginInfo(cwd = PATHS.root) {
-  const originUrl = await readOriginRemoteUrl(cwd);
+export function classifyOriginRemote(originUrl, {
+  upstreamOwner = UPSTREAM_OWNER,
+  upstreamRepo = UPSTREAM_REPO,
+} = {}) {
   if (!originUrl) {
     return {
       hasOrigin: false,
@@ -140,8 +148,8 @@ export async function getOriginInfo(cwd = PATHS.root) {
   }
 
   const isGithub = /(^|\.)github\.com$/i.test(parsed.host);
-  const ownerMatchesUpstream = parsed.owner.toLowerCase() === UPSTREAM_OWNER.toLowerCase();
-  const repoMatchesUpstream = parsed.repo.toLowerCase() === UPSTREAM_REPO.toLowerCase();
+  const ownerMatchesUpstream = parsed.owner.toLowerCase() === upstreamOwner.toLowerCase();
+  const repoMatchesUpstream = parsed.repo.toLowerCase() === upstreamRepo.toLowerCase();
   const isUpstream = isGithub && ownerMatchesUpstream && repoMatchesUpstream;
   // Strict fork: same repo name, different owner, on GitHub. A renamed
   // GitHub repo (different name) doesn't count — `gh repo sync` would fail
@@ -159,4 +167,15 @@ export async function getOriginInfo(cwd = PATHS.root) {
     isGithub,
     isFork
   };
+}
+
+/**
+ * Read and classify one checkout's origin against a named canonical upstream.
+ * The default remains atomantic/PortOS for the self-update callers; managed
+ * integrations can supply their own owner/repo without reimplementing the
+ * credential redaction and strict same-name fork rules.
+ */
+export async function getOriginInfo(cwd = PATHS.root, upstream = {}) {
+  const originUrl = await readOriginRemoteUrl(cwd);
+  return classifyOriginRemote(originUrl, upstream);
 }

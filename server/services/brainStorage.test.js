@@ -449,7 +449,7 @@ describe('Brain summary projection index (issue #5438)', () => {
       ideas: { title: 'Summary Idea' },
       admin: { title: 'Summary Admin', status: 'open' },
       memories: { title: 'Summary Memory' },
-      links: { url: 'https://example.com/summary-repo', isGitHubRepo: true },
+      links: { url: 'https://example.com/summary-repo', isRepo: true },
       buckets: { name: 'Summary Bucket' },
     };
 
@@ -479,7 +479,7 @@ describe('Brain summary projection index (issue #5438)', () => {
     expect(summary.activeProjects).toBe(before.activeProjects + 2);
     expect(summary.activeIdeas).toBe(before.activeIdeas + 2);
     expect(summary.openAdmin).toBe(before.openAdmin + 2);
-    expect(summary.gitHubRepos).toBe(before.gitHubRepos + 2);
+    expect(summary.repos).toBe(before.repos + 2);
     expect(summary).toEqual(expect.objectContaining({
       needsReview: summary.counts.inbox.needs_review,
       lastDailyDigest: before.lastDailyDigest,
@@ -588,24 +588,47 @@ describe('getLinksPage (paginated link reads, issue #3509)', () => {
     expect(mine(await brainStorage.getLinksPage({ linkType: 'tool', limit: 50 }), ids)).toHaveLength(0);
   });
 
-  it('filters strictly on linkType and isGitHubRepo, matching the old in-memory filter', async () => {
-    const repo = await brainStorage.create('links', { url: 'https://example.com/gh', linkType: 'github', isGitHubRepo: true });
-    const plain = await brainStorage.create('links', { url: 'https://example.com/plain', linkType: 'documentation', isGitHubRepo: false });
-    // No isGitHubRepo field at all — must NOT match `false`, exactly as the old
-    // `l.isGitHubRepo === isGitHubRepo` filter behaved.
+  it('filters on linkType strictly and on isRepo by resolved repo-ness', async () => {
+    const repo = await brainStorage.create('links', { url: 'https://example.com/gh', linkType: 'repo', isRepo: true });
+    const plain = await brainStorage.create('links', { url: 'https://example.com/plain', linkType: 'documentation', isRepo: false });
+    // No repo field at all — resolved as `false`, which is what it means.
     const untyped = await brainStorage.create('links', { url: 'https://example.com/untyped', linkType: 'documentation' });
-    const ids = [repo.id, plain.id, untyped.id];
+    // A record still in the pre-migration GitHub-only shape (or federated in
+    // from a peer on older code) must filter as a repo, not as a bookmark.
+    const legacy = await brainStorage.create('links', { url: 'https://example.com/legacy', linkType: 'github', isGitHubRepo: true });
+    const ids = [repo.id, plain.id, untyped.id, legacy.id];
 
-    expect(mine(await brainStorage.getLinksPage({ isGitHubRepo: true, limit: 50 }), ids)).toEqual([repo.id]);
-    expect(mine(await brainStorage.getLinksPage({ isGitHubRepo: false, limit: 50 }), ids)).toEqual([plain.id]);
+    expect(mine(await brainStorage.getLinksPage({ isRepo: true, limit: 50 }), ids).sort())
+      .toEqual([repo.id, legacy.id].sort());
+    expect(mine(await brainStorage.getLinksPage({ isRepo: false, limit: 50 }), ids).sort())
+      .toEqual([plain.id, untyped.id].sort());
     expect(mine(await brainStorage.getLinksPage({ linkType: 'documentation', limit: 50 }), ids).sort())
       .toEqual([plain.id, untyped.id].sort());
-    expect(mine(await brainStorage.getLinksPage({ linkType: 'github', isGitHubRepo: true, limit: 50 }), ids))
+    expect(mine(await brainStorage.getLinksPage({ linkType: 'repo', isRepo: true, limit: 50 }), ids))
       .toEqual([repo.id]);
     // An empty linkType means "no filter" (the route's old truthiness check), and
-    // is NOT the same as omitting isGitHubRepo — `false` there is a real filter.
+    // is NOT the same as omitting isRepo — `false` there is a real filter.
     expect(mine(await brainStorage.getLinksPage({ linkType: '', limit: 50 }), ids).sort())
       .toEqual(ids.slice().sort());
+  });
+
+  it('reads a legacy GitHub-only link record in the host-generic shape', async () => {
+    const legacy = await brainStorage.create('links', {
+      url: 'https://github.com/example-owner/example-repo',
+      linkType: 'github',
+      isGitHubRepo: true,
+      gitHubOwner: 'example-owner',
+      gitHubRepo: 'example-repo',
+    });
+
+    expect(await brainStorage.getLinkById(legacy.id)).toMatchObject({
+      isRepo: true,
+      repoHost: 'github.com',
+      repoOwner: 'example-owner',
+      repoName: 'example-repo',
+    });
+    expect(await brainStorage.getLinkByUrl('https://github.com/example-owner/example-repo'))
+      .toMatchObject({ isRepo: true, repoOwner: 'example-owner' });
   });
 
   it('drops a link from the page as soon as it is deleted', async () => {

@@ -40,6 +40,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
 const stubs = {
   generateVideo: vi.fn(async () => ({
 tryReadFile: vi.fn().mockResolvedValue(null), jobId: 'whatever' })),
+  generateVideoGrok: vi.fn(async () => ({ jobId: 'whatever' })),
   generateChainedVideo: vi.fn(async () => ({ jobId: 'whatever' })),
   generateImage: vi.fn(async () => ({ jobId: 'whatever' })),
   generateImageCodex: vi.fn(async () => ({ jobId: 'whatever' })),
@@ -64,6 +65,11 @@ tryReadFile: vi.fn().mockResolvedValue(null), jobId: 'whatever' })),
 vi.mock('../videoGen/local.js', () => ({
   generateVideo: (...args) => stubs.generateVideo(...args),
   generateChainedVideo: (...args) => stubs.generateChainedVideo(...args),
+  cancel: (...args) => stubs.cancelVideo(...args),
+}));
+
+vi.mock('../videoGen/grok.js', () => ({
+  generateVideo: (...args) => stubs.generateVideoGrok(...args),
   cancel: (...args) => stubs.cancelVideo(...args),
 }));
 
@@ -212,6 +218,31 @@ describe('mediaJobQueue', () => {
       expect(capacity.lanes.remote).toMatchObject({ running: 1, queued: 0 });
       expect(capacity.runningKind).toBe('video');
       expect(capacity.totals).toEqual({ running: 2, queued: 1 });
+    });
+
+    it('runs local and Grok video renders in parallel lanes', async () => {
+      stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
+      stubs.generateVideoGrok.mockImplementation(() => new Promise(() => {}));
+      const local = mediaJobQueue.enqueueJob({ kind: 'video', params: { mode: 'text', prompt: 'local' } });
+      const grok = mediaJobQueue.enqueueJob({
+        kind: 'video',
+        params: { mode: IMAGE_GEN_MODE.GROK, prompt: 'grok' },
+      });
+
+      await waitFor(() => stubs.generateVideo.mock.calls.length === 1
+        && stubs.generateVideoGrok.mock.calls.length === 1);
+
+      expect(mediaJobQueue.getJob(local.jobId).status).toBe('running');
+      expect(mediaJobQueue.getJob(grok.jobId).status).toBe('running');
+      expect(mediaJobQueue.getQueueCapacity().lanes).toMatchObject({
+        gpu: { running: 1, queued: 0 },
+        cloud: { running: 1, queued: 0 },
+      });
+
+      videoGenEvents.emit('failed', { generationId: local.jobId, error: 'cleanup' });
+      videoGenEvents.emit('failed', { generationId: grok.jobId, error: 'cleanup' });
+      await waitFor(() => mediaJobQueue.getJob(local.jobId)?.status === 'failed'
+        && mediaJobQueue.getJob(grok.jobId)?.status === 'failed');
     });
 
     it('counts queue depth per kind', async () => {
@@ -1235,6 +1266,35 @@ describe('Audio kind (#1928)', () => {
     await waitFor(() => mediaJobQueue.getJob(remote.jobId)?.status === 'completed');
   });
 
+  it('runs local and federated video renders in parallel lanes', async () => {
+    stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
+    stubs.generateVideoRemote.mockImplementation(() => new Promise(() => {}));
+
+    const local = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'local render' } });
+    const remote = mediaJobQueue.enqueueJob({
+      kind: 'video',
+      params: { prompt: '', modelId: null, remoteMedia: remoteVideoMediaParams() },
+    });
+
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1
+      && stubs.generateVideoRemote.mock.calls.length === 1);
+
+    expect(mediaJobQueue.getJob(local.jobId).status).toBe('running');
+    expect(mediaJobQueue.getJob(remote.jobId).status).toBe('running');
+    expect(stubs.generateVideo).not.toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: remote.jobId }),
+    );
+    expect(mediaJobQueue.getQueueCapacity().lanes).toMatchObject({
+      gpu: { running: 1, queued: 0 },
+      remote: { running: 1, queued: 0 },
+    });
+
+    videoGenEvents.emit('failed', { generationId: local.jobId, error: 'cleanup' });
+    videoGenEvents.emit('failed', { generationId: remote.jobId, error: 'cleanup' });
+    await waitFor(() => mediaJobQueue.getJob(local.jobId)?.status === 'failed'
+      && mediaJobQueue.getJob(remote.jobId)?.status === 'failed');
+  });
+
   it('re-enqueues a persisted running remote VIDEO job with reconciliation enabled', async () => {
     const id = '00000000-0000-4000-8000-000000000003';
     writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({
@@ -1587,11 +1647,65 @@ describe('mediaJobQueue unreadable snapshot (#4115)', () => {
   });
 });
 
+// Polling helper for the async settles this suite waits on (a debounced disk
+// write, a worker tick). A predicate that THROWS counts as "not true yet" and
+// keeps polling: several predicates readFileSync the persisted snapshot, which
+// legitimately does not exist until the first write lands in the freshly-made
+// temp dir, so an unguarded throw escaped the loop and failed the test on its
+// FIRST poll instead of waiting for the write (#5512 — flaked on slow Windows
+// CI runners). Swallowing is bounded to the retry window only: the timeout
+// still throws, and names the predicate source plus the last error, so a
+// genuinely broken predicate stays diagnosable instead of becoming an
+// anonymous 3-second stall. No predicate here uses expect(), so a real
+// assertion failure cannot be downgraded into a timeout by the catch.
 async function waitFor(predicate, { timeoutMs = 3000, intervalMs = 30 } = {}) {
   const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (predicate()) return;
+  let lastError = null;
+  for (;;) {
+    try {
+      if (predicate()) return;
+      lastError = null;
+    } catch (err) {
+      lastError = err;
+    }
+    // Deadline is checked AFTER a poll so the budget always ends on an
+    // evaluation. Checking first (the `while` this replaced) spent the final
+    // interval asleep and threw without ever re-testing the predicate, losing
+    // up to intervalMs of the window to the same race this helper guards.
+    if (Date.now() >= deadline) break;
     await new Promise((r) => setTimeout(r, intervalMs));
   }
-  throw new Error('waitFor: predicate never became true within timeout');
+  const source = String(predicate).replace(/\s+/g, ' ').slice(0, 160);
+  throw new Error(
+    `waitFor: predicate never became true within ${timeoutMs}ms: ${source}${lastError ? ` — last error: ${lastError.message}` : ''}`,
+    lastError ? { cause: lastError } : undefined,
+  );
 }
+
+// Contract test for the helper above. The bug it guards (#5512) only surfaces
+// under timing luck on a slow runner, so it is pinned deterministically here
+// rather than left to the flake that found it. One short real timeout, not a
+// repeated sleep.
+describe('waitFor test helper (#5512)', () => {
+  it('treats a throwing predicate as not-yet-true and keeps polling', async () => {
+    let calls = 0;
+    await waitFor(() => {
+      calls += 1;
+      if (calls < 3) throw new Error('ENOENT: no such file or directory');
+      return true;
+    }, { timeoutMs: 1000, intervalMs: 1 });
+    expect(calls).toBe(3);
+  });
+
+  it('still fails loudly on timeout, naming the predicate and the last error', async () => {
+    await expect(waitFor(
+      () => { throw new Error('ENOENT: no such file or directory'); },
+      { timeoutMs: 20, intervalMs: 5 },
+    )).rejects.toThrow(/never became true within 20ms.*last error: ENOENT/s);
+  });
+
+  it('reports a cleanly-false predicate without inventing an error', async () => {
+    await expect(waitFor(() => false, { timeoutMs: 20, intervalMs: 5 }))
+      .rejects.toThrow(/never became true within 20ms(?!.*last error)/s);
+  });
+});

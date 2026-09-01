@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../../services/api', () => ({
+  listImageModels: vi.fn(() => Promise.resolve([])),
+  listVideoModels: vi.fn(() => Promise.resolve([])),
   reformatLoomEpisode: vi.fn(),
   updateLoom: vi.fn(),
 }));
@@ -237,5 +239,46 @@ describe('LoomSettingsDrawer character continuity', () => {
     expect(screen.getByRole('status')).toHaveTextContent('1 character sheet');
     expect(screen.getByRole('status')).toHaveTextContent('Identity pack missing neutral, profile, full-body');
     expect(screen.getByRole('checkbox', { name: /Lock this wardrobe across on-screen scenes/ })).toBeChecked();
+  });
+});
+
+describe('LoomSettingsDrawer rendering defaults', () => {
+  it('shows the saved aspect ratio, renderers, models, and effort', () => {
+    renderDrawer({
+      ...makeLoom([]),
+      renderSettings: {
+        formatId: 'portrait-9-16',
+        imageMode: 'local',
+        imageModel: 'image-model',
+        videoMode: 'grok',
+        effort: 'high',
+      },
+    });
+
+    expect(screen.getByLabelText('Aspect ratio')).toHaveValue('portrait-9-16');
+    expect(screen.getByLabelText('Local image model')).toHaveValue('image-model');
+    expect(screen.getByLabelText('Codex image effort')).toHaveValue('high');
+    expect(within(screen.getByRole('group', { name: 'Story image renderer' }))
+      .getByRole('button', { name: 'Local' })).toHaveClass('bg-port-accent');
+    expect(within(screen.getByRole('group', { name: 'Story video renderer' }))
+      .getByRole('button', { name: 'Grok' })).toHaveClass('bg-port-accent');
+  });
+
+  it('saves rendering defaults as one story-level pin', async () => {
+    const user = userEvent.setup();
+    renderDrawer(makeLoom([]));
+
+    await user.selectOptions(screen.getByLabelText('Aspect ratio'), 'square-1-1');
+
+    await waitFor(() => expect(updateLoom).toHaveBeenCalledWith('loom-1', {
+      renderSettings: {
+        formatId: 'square-1-1',
+        imageMode: null,
+        imageModel: null,
+        videoMode: null,
+        videoModel: null,
+        effort: null,
+      },
+    }, { silent: true }));
   });
 });

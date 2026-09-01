@@ -1,5 +1,5 @@
 /**
- * The opt-in post-clone agent actions a Brain capture can request for a GitHub
+ * The opt-in post-clone agent actions a Brain capture can request for a
  * repo URL. Pure — the queueing itself lives in `services/repoIntake.js`, which
  * pulls the whole CoS task graph; this half is safe to import from the link
  * write path and from the Zod schemas.

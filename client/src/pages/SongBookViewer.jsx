@@ -927,13 +927,13 @@ export default function SongBookViewer() {
             {/* Transpose — meaningless on a kit grid, so hidden for drum charts */}
             {!isDrum && (
               <div className="flex items-center gap-1" role="group" aria-label="Transpose">
-                <button type="button" onClick={() => setTranspose(transpose - 1)} className={ctrlBtnClass} aria-label="Transpose down" title="Transpose down ([)">
+                <button type="button" onClick={() => setTranspose(transpose - 1)} className={ctrlBtnClass} aria-label={`Transpose down (currently ${transpose > 0 ? '+' : ''}${transpose} semitones)`} title="Transpose down ([)">
                   <Minus size={16} />
                 </button>
-                <span className="min-w-[3.5rem] text-center text-sm text-gray-300 font-mono" title="Transpose (semitones)">
-                  {transpose > 0 ? `+${transpose}` : transpose}
+                <span className="min-w-[3.5rem] text-center text-sm text-gray-300 font-mono" title="Transpose (semitones)" role="status" aria-live="polite" aria-atomic="true">
+                  Transpose {transpose > 0 ? `+${transpose}` : transpose} semitones
                 </span>
-                <button type="button" onClick={() => setTranspose(transpose + 1)} className={ctrlBtnClass} aria-label="Transpose up" title="Transpose up (])">
+                <button type="button" onClick={() => setTranspose(transpose + 1)} className={ctrlBtnClass} aria-label={`Transpose up (currently ${transpose > 0 ? '+' : ''}${transpose} semitones)`} title="Transpose up (])">
                   <Plus size={16} />
                 </button>
               </div>
@@ -943,10 +943,11 @@ export default function SongBookViewer() {
                 (DrumSheetView scales the whole strip off fontSizeRem), so it's
                 labelled for what it actually does there. */}
             <div className="flex items-center gap-1" role="group" aria-label={isDrum ? 'Grid size' : 'Font size'}>
-              <button type="button" onClick={() => setFontSize(fontSize - FONT_STEP)} className={`${ctrlBtnClass} text-xs font-bold`} aria-label={isDrum ? 'Zoom out' : 'Smaller text'}>
+              <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{isDrum ? `Grid size ${fontSize.toFixed(3)} rem` : `Font size ${fontSize.toFixed(3)} rem`}</span>
+              <button type="button" onClick={() => setFontSize(fontSize - FONT_STEP)} className={`${ctrlBtnClass} text-xs font-bold`} aria-label={`${isDrum ? 'Zoom out' : 'Smaller text'} (currently ${fontSize.toFixed(3)} rem)`}>
                 A−
               </button>
-              <button type="button" onClick={() => setFontSize(fontSize + FONT_STEP)} className={`${ctrlBtnClass} text-sm font-bold`} aria-label={isDrum ? 'Zoom in' : 'Larger text'}>
+              <button type="button" onClick={() => setFontSize(fontSize + FONT_STEP)} className={`${ctrlBtnClass} text-sm font-bold`} aria-label={`${isDrum ? 'Zoom in' : 'Larger text'} (currently ${fontSize.toFixed(3)} rem)`}>
                 A+
               </button>
             </div>

@@ -9,7 +9,7 @@
  */
 import { hasTailscaleCert } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
-import { readCertMeta } from '../lib/certMeta.js';
+import { getTailscaleHttpsUrl, readCertMeta } from '../lib/certMeta.js';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -23,11 +23,13 @@ if (!hasTailscaleCert(CERT_DIR)) {
   process.exit(0);
 }
 
-const mode = readCertMeta(META_PATH)?.mode || '';
+const meta = readCertMeta(META_PATH);
+const mode = meta?.mode || '';
+const trustedUrl = getTailscaleHttpsUrl(meta, API_PORT);
 
 console.log(`Access at: http://localhost:${MIRROR_PORT}  (loopback HTTP mirror — no cert warning)`);
-if (mode === 'tailscale') {
-  console.log(`       or: https://<machine>.<tailnet>.ts.net:${API_PORT}  (trusted via Tailscale)`);
+if (mode === 'tailscale' && trustedUrl) {
+  console.log(`       or: ${trustedUrl}  (trusted via Tailscale)`);
   console.log(`       or: https://localhost:${API_PORT}  (browser warns — cert is for the Tailscale hostname)`);
 } else if (mode === 'self-signed') {
   console.log(`       or: https://localhost:${API_PORT}  (browser warns on first visit — self-signed cert)`);

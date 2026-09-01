@@ -23,8 +23,10 @@
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureSchema, query } from '../lib/db.js';
 import { normalizeIdentifier } from '../lib/tribeMatch.js';
-import { getLocalParts, getUtcOffsetMs, todayInTimezone } from '../lib/timezone.js';
+import { getLocalParts, localDayRangeUtc, todayInTimezone, anchorLocalMidnightUtc } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
+
+export { localDayRangeUtc };
 
 // ---------------------------------------------------------------------------
 // Pure helpers (exported for unit tests — no DB, no side effects).
@@ -47,39 +49,6 @@ export function localDayKey(when, timezone) {
   if (Number.isNaN(d.getTime())) return null;
   const p = getLocalParts(d, timezone);
   return `${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
-}
-
-// UTC instant of local midnight for a (y, m, d) calendar date in `timezone`.
-// The offset is sampled at the approximate midnight, then the candidate is
-// verified with the formatter-based getLocalParts and nudged by the exact
-// landed-vs-desired delta (the same DST correction pattern as nextLocalTime in
-// lib/timezone.js). getUtcOffsetMs alone is NOT re-sampled at the candidate —
-// its toLocaleString round-trip mis-parses ambiguous wall-clock times right at
-// a transition, which is exactly when the correction matters.
-function localMidnightUtc(y, mo, d, timezone) {
-  const approxUtc = new Date(Date.UTC(y, mo - 1, d, 0, 0, 0));
-  const offset = getUtcOffsetMs(approxUtc, timezone);
-  let t = approxUtc.getTime() - offset;
-  const p = getLocalParts(new Date(t), timezone);
-  const desired = Date.UTC(y, mo - 1, d);
-  const landed = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute);
-  if (landed !== desired) t -= landed - desired;
-  return new Date(t);
-}
-
-// UTC [start, end) instants that bound a local calendar day (YYYY-MM-DD) in the
-// given timezone. The end is the NEXT local date's midnight — not start + 24h —
-// so DST transition days keep their true 23h/25h length instead of leaking an
-// hour into (or dropping an hour from) the neighboring day.
-export function localDayRangeUtc(dateStr, timezone) {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr || '').trim());
-  if (!m) return null;
-  const [, y, mo, d] = m.map(Number);
-  const start = localMidnightUtc(y, mo, d, timezone);
-  // Date.UTC rolls d+1 over month/year boundaries for us.
-  const next = new Date(Date.UTC(y, mo - 1, d + 1));
-  const end = localMidnightUtc(next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate(), timezone);
-  return { start, end };
 }
 
 // Normalize a participant to { name, email, phone, personId } — trimmed, empty
@@ -261,9 +230,9 @@ export function resolveEventInstant(value, timezone) {
   const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?)?$/.exec(s);
   if (m && timezone) {
     const [, y, mo, d, hh, mm, ss] = m;
-    const midnight = localMidnightUtc(Number(y), Number(mo), Number(d), timezone);
+    const midnightMs = anchorLocalMidnightUtc(`${y}-${mo}-${d}`, timezone);
     const dayMs = ((Number(hh) || 0) * 3600 + (Number(mm) || 0) * 60 + (Number(ss) || 0)) * 1000;
-    return new Date(midnight.getTime() + dayMs);
+    return new Date(midnightMs + dayMs);
   }
   const parsed = new Date(s);
   return Number.isNaN(parsed.getTime()) ? null : parsed;

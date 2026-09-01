@@ -42,10 +42,11 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     expect(PORTOS_SCHEMA_VERSIONS.mediaCollections).toBe(1);
   });
 
-  it('version-gates the persisted FableLoom render-format shape', () => {
-    // v5 adds renderSettings. Older peers stay on the v4 protagonist-
-    // continuity shape until they advertise support for the render contract.
-    expect(PORTOS_SCHEMA_VERSIONS.fableLoom).toBe(5);
+  it('version-gates the persisted FableLoom render-settings shape', () => {
+    // v5 adds renderSettings; v6 adds its image/video provider preferences.
+    // Older peers stay behind the full render contract until they advertise
+    // support for the additive fields.
+    expect(PORTOS_SCHEMA_VERSIONS.fableLoom).toBe(6);
   });
 
   it('version-gates the additive Creative Commission taste brief shape', () => {

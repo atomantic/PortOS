@@ -3928,7 +3928,7 @@ describe('peerSync', () => {
         }
       });
 
-      it('keeps the Tribe graph + universe render-runs + activity timeline intentionally OUT of the sync graph (#1724, #2150)', () => {
+      it('keeps the Tribe graph + universe render-runs + activity timeline + operator-action ledger intentionally OUT of the sync graph (#1724, #2150, #5594)', () => {
         // ADR 2026-06-26: tribe_* and universe_runs are deliberately machine-local.
         // - Tribe is relationship-graph data (mirrors the deliberate "memory_links
         //   are instance-local" policy in memorySync.js) and is coupled to
@@ -3939,14 +3939,19 @@ describe('peerSync', () => {
         // - human_activity_events (#2150) is coupled to per-machine accounts and OS
         //   databases; only DERIVED summaries (Brain journals, digital-twin) federate,
         //   never the raw events. Same machine-local boundary per the ADR.
+        // - user_action_events (#5594) is the operator-action ledger: what ONE human
+        //   did on ONE machine, with task prompts and settings diffs attached. PII
+        //   must not ride the federation layer at all (ADR
+        //   2026-08-08-privacy-records-machine-local), and a peer has no use for a
+        //   record of a button someone pressed on another install.
         // This guard pins that decision: federating any of them later is a conscious
         // act — wire the kind AND update this assertion + the ADR together.
-        const localOnlyKinds = ['tribe', 'tribePerson', 'tribeTouchpoint', 'tribeMemoryLink', 'universeRun', 'humanActivityEvent'];
+        const localOnlyKinds = ['tribe', 'tribePerson', 'tribeTouchpoint', 'tribeMemoryLink', 'universeRun', 'humanActivityEvent', 'userActionEvent'];
         for (const kind of localOnlyKinds) {
           expect(PEER_SUBSCRIBABLE_KINDS).not.toContain(kind);
           expect(RECORD_KIND_SCHEMA_CATEGORIES[kind]).toBeUndefined();
         }
-        const localOnlyCategories = ['tribe', 'tribePeople', 'tribeTouchpoints', 'tribeMemoryLinks', 'universeRuns', 'humanActivityEvents'];
+        const localOnlyCategories = ['tribe', 'tribePeople', 'tribeTouchpoints', 'tribeMemoryLinks', 'universeRuns', 'humanActivityEvents', 'userActionEvents'];
         for (const category of localOnlyCategories) {
           expect(PORTOS_SCHEMA_VERSIONS[category]).toBeUndefined();
           expect(NON_RECORD_SCHEMA_CATEGORIES.has(category)).toBe(false);

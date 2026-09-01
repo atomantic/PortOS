@@ -16,6 +16,7 @@
  *   launch     — open-editor, open-claude, open-folder, open-xcode
  *   documents  — planning-doc read/list/commit
  *   agents     — recent CoS agent history
+ *   repositorySources — checkout origin/upstream status and fork synchronization
  *
  * Route ordering is safe across sub-routers: every param route is either the
  * single-segment `/:id` or a deeper `/:id/...`, and the static routes
@@ -38,6 +39,7 @@ import launchRoutes from './launch.js';
 import documentRoutes from './documents.js';
 import agentRoutes from './agents.js';
 import spriteBindingRoutes from './spriteBindings.js';
+import repositorySourceRoutes from './repositorySources.js';
 
 const router = Router();
 
@@ -53,5 +55,6 @@ router.use(launchRoutes);
 router.use(documentRoutes);
 router.use(agentRoutes);
 router.use(spriteBindingRoutes);
+router.use(repositorySourceRoutes);
 
 export default router;

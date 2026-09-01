@@ -25,6 +25,7 @@ export function useVideoGenFieldState({
   const [prompt, setPrompt] = useState(incomingPrompt || '');
   const [negativePrompt, setNegativePrompt] = useState(incomingNegativePrompt || '');
   const [stylePreset, setStylePreset] = useState(null);
+  const [selectedUniverse, setSelectedUniverse] = useState(null);
   const [modelId, setModelId] = useState('');
   const [remixSourceModel, setRemixSourceModel] = useState(null);
   const [remixModelFallback, setRemixModelFallback] = useState(null);
@@ -105,6 +106,7 @@ export function useVideoGenFieldState({
     remixSourceModel, setRemixSourceModel,
     seed, setSeed,
     selectedLoras, setSelectedLoras,
+    selectedUniverse, setSelectedUniverse,
     sizeManuallySetRef,
     speedProfileId, setSpeedProfileId,
     draftDecode, setDraftDecode,

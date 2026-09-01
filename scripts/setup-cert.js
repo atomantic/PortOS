@@ -27,6 +27,7 @@
  *   --self-signed    skip Tailscale attempt and go straight to self-signed
  */
 import { execFileSync } from 'child_process';
+import { X509Certificate } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from 'fs';
 import { networkInterfaces } from 'os';
 import { join, dirname } from 'path';
@@ -146,9 +147,15 @@ function readMeta() {
 
 function certExpiresAt() {
   if (!existsSync(CERT_PATH)) return null;
-  const out = execFileSync('openssl', ['x509', '-in', CERT_PATH, '-noout', '-enddate']).toString();
-  const match = out.match(/notAfter=(.+)/);
-  return match ? new Date(match[1]) : null;
+  // Node already ships the same X.509 parser its TLS stack uses. Relying on an
+  // `openssl` executable here made otherwise-successful Tailscale provisioning
+  // fail on Windows, where OpenSSL is not normally on PATH.
+  try {
+    const expiresAt = new Date(new X509Certificate(readFileSync(CERT_PATH)).validTo);
+    return Number.isNaN(expiresAt.getTime()) ? null : expiresAt;
+  } catch {
+    return null;
+  }
 }
 
 function daysUntil(date) {

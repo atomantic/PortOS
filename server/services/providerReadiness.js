@@ -373,6 +373,10 @@ export async function getProviderReadiness(provider, deps = {}) {
   // Resolved BEFORE the checks so each unmet one can point at the button that
   // fixes it rather than at a setup doc.
   const setup = describeRuntimeSetup(runtime.kind, { installed, running: result.reachable, weights });
+  const standby = runtime.standbyWhenStopped === true
+    && installed
+    && !result.reachable
+    && !weightsBlockStart(weights);
 
   const checks = [
     runtimeCheck(runtime, { onPath, appInstalled, installed, reachable: result.reachable, setup }),
@@ -391,6 +395,11 @@ export async function getProviderReadiness(provider, deps = {}) {
     // `ready` is strict: a check that could not be evaluated (`ok: null`) is not
     // a pass, so the card never claims a provider is good to go on unknowns.
     ready: checks.every((check) => check.ok === true),
+    // Standby is deliberately separate from `ready`: no endpoint is currently
+    // available, but an installed model-selecting runtime is not missing setup
+    // merely because no model was chosen to occupy resources right now.
+    standby,
+    standbyDetail: standby ? runtime.standbyDetail : null,
     checks,
     // What a one-click "set this up for me" button can do about the unmet
     // checks, or `null` when nothing here is auto-fixable (see

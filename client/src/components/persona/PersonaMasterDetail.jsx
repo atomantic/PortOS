@@ -191,7 +191,10 @@ export default function PersonaMasterDetail({
           {loading ? (
             <div className="text-sm p-2"><BrailleSpinner text="Loading…" /></div>
           ) : records.length === 0 ? (
-            <div className="text-gray-500 text-sm p-2">No {plural.toLowerCase()} yet. Click <span className="text-port-accent">New {singular}</span>.</div>
+            <div className="text-gray-500 text-sm p-2">
+              No {plural.toLowerCase()} yet.{' '}
+              <button type="button" onClick={() => navigate(`${basePath}/new`)} className="text-port-accent hover:underline">New {singular}</button>
+            </div>
           ) : (
             <ul className="space-y-1">
               {records.map((record) => (
@@ -217,7 +220,10 @@ export default function PersonaMasterDetail({
               <button type="button" onClick={() => navigate(basePath)} className="text-port-accent hover:underline">Back to {plural.toLowerCase()}</button>
             </div>
           ) : !isCreate && !selected ? (
-            <div className="text-gray-500 text-sm">Select a {singular.toLowerCase()} to edit, or create a new one.</div>
+            <div className="text-gray-500 text-sm">
+              <p>Select a {singular.toLowerCase()} to edit, or create a new one.</p>
+              <CreateButton singular={singular} onClick={() => navigate(`${basePath}/new`)} />
+            </div>
           ) : (
             <div className="space-y-3">
               {fields.map((field) => (

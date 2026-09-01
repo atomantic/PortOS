@@ -11,8 +11,28 @@
  * survive the run even on the test DB. Mirrors authors/db.test.js.
  */
 
-import { describe, it, expect, afterAll, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, vi, afterAll, beforeAll, beforeEach } from 'vitest';
+import { rmSync } from 'fs';
+import { join } from 'path';
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
+import { getSyncBaseHash, __resetBaseHashCacheForTests } from '../../lib/conflictJournal.js';
+
+const testState = vi.hoisted(() => ({ dataRoot: null, writeCounter: { baseHash: 0 } }));
+
+vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  testState.dataRoot ??= mkdtempSync(join(tmpdir(), 'artists-db-test-'));
+  return {
+    ...actual,
+    PATHS: { ...actual.PATHS, data: testState.dataRoot },
+    atomicWrite: async (path, data) => {
+      if (typeof path === 'string' && path.endsWith('sync_base_hashes.json')) testState.writeCounter.baseHash += 1;
+      return actual.atomicWrite(path, data);
+    },
+  };
+});
 
 let dbReady = false;
 let skipReason = '';
@@ -32,6 +52,8 @@ let skipReason = '';
 
 if (!dbReady) console.log(`⏭️  services/artists/db.test.js skipped: ${skipReason}`);
 
+afterAll(() => rmSync(testState.dataRoot, { recursive: true, force: true }));
+
 describe.skipIf(!dbReady)('artists DB adapter round-trip', () => {
   let db;
   let snap = [];
@@ -40,7 +62,12 @@ describe.skipIf(!dbReady)('artists DB adapter round-trip', () => {
     snap = (await query(`SELECT * FROM artists`)).rows;
   });
 
-  beforeEach(async () => { await query(`DELETE FROM artists`); });
+  beforeEach(async () => {
+    await query(`DELETE FROM artists`);
+    rmSync(join(testState.dataRoot, 'sharing'), { recursive: true, force: true });
+    __resetBaseHashCacheForTests();
+    testState.writeCounter.baseHash = 0;
+  });
 
   afterAll(async () => {
     await query(`DELETE FROM artists`).catch(() => {});
@@ -112,16 +139,25 @@ describe.skipIf(!dbReady)('artists DB adapter round-trip', () => {
   });
 
   describe('pruneTombstonedArtists', () => {
-    it('hard-removes tombstones older than the cutoff, keeps newer + live', async () => {
+    it('hard-removes multiple old tombstones with one base-hash write', async () => {
       const live = await db.createArtist({ name: 'Live' });
       const oldDead = await db.createArtist({ name: 'OldDead' });
+      const oldDeadTwo = await db.createArtist({ name: 'OldDeadTwo' });
       const newDead = await db.createArtist({ name: 'NewDead' });
       await db.mergeArtistsFromSync([
         { ...oldDead, deleted: true, deletedAt: '2020-01-01T00:00:00.000Z', updatedAt: '2099-01-01T00:00:00.000Z' },
+        { ...oldDeadTwo, deleted: true, deletedAt: '2020-01-02T00:00:00.000Z', updatedAt: '2099-01-01T00:00:00.000Z' },
         { ...newDead, deleted: true, deletedAt: '2099-01-01T00:00:00.000Z', updatedAt: '2099-01-02T00:00:00.000Z' },
       ]);
+      expect(await getSyncBaseHash('artist', oldDead.id)).not.toBeNull();
+      expect(await getSyncBaseHash('artist', oldDeadTwo.id)).not.toBeNull();
+
+      testState.writeCounter.baseHash = 0;
       const { pruned } = await db.pruneTombstonedArtists(Date.parse('2030-01-01T00:00:00.000Z'));
-      expect(pruned).toBe(1);
+      expect(pruned).toBe(2);
+      expect(testState.writeCounter.baseHash).toBe(1);
+      expect(await getSyncBaseHash('artist', oldDead.id)).toBeNull();
+      expect(await getSyncBaseHash('artist', oldDeadTwo.id)).toBeNull();
       const remaining = (await query(`SELECT id FROM artists ORDER BY id`)).rows.map((r) => r.id);
       expect(remaining.sort()).toEqual([live.id, newDead.id].sort());
     });

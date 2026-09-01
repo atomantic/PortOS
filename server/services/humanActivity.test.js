@@ -5,6 +5,7 @@
  * listEvents / getDaySummary idempotency) is covered in humanActivity.db.test.js.
  */
 import { describe, it, expect } from 'vitest';
+import { localDayRangeUtc as canonicalLocalDayRangeUtc } from '../lib/timezone.js';
 import {
   shortSummary,
   localDayKey,
@@ -36,44 +37,25 @@ describe('shortSummary', () => {
   });
 });
 
-describe('localDayKey / localDayRangeUtc', () => {
+describe('localDayKey', () => {
   it('derives the local day key in a given timezone', () => {
     // 2026-07-04T02:00:00Z is still 2026-07-03 in America/Los_Angeles (-07:00).
     expect(localDayKey('2026-07-04T02:00:00Z', 'America/Los_Angeles')).toBe('2026-07-03');
     // …and the same instant is already 2026-07-04 in UTC.
     expect(localDayKey('2026-07-04T02:00:00Z', 'UTC')).toBe('2026-07-04');
   });
-  it('returns a 24h UTC window bounding the local day', () => {
-    const range = localDayRangeUtc('2026-07-04', 'America/Los_Angeles');
-    expect(range).toBeTruthy();
-    // Local midnight PDT (-07:00) → 07:00Z.
-    expect(range.start.toISOString()).toBe('2026-07-04T07:00:00.000Z');
-    expect(range.end.getTime() - range.start.getTime()).toBe(24 * 60 * 60 * 1000);
-  });
   it('rejects a malformed date string', () => {
-    expect(localDayRangeUtc('not-a-date', 'UTC')).toBeNull();
     expect(localDayKey('not-a-date', 'UTC')).toBeNull();
   });
-  it('ends at the NEXT local midnight across DST transitions (25h fall-back, 23h spring-forward)', () => {
-    // 2026-11-01 America/Los_Angeles: clocks fall back — a 25-hour local day.
-    // start = midnight PDT (07:00Z); end = next midnight PST (08:00Z on 11-02).
-    const fallBack = localDayRangeUtc('2026-11-01', 'America/Los_Angeles');
-    expect(fallBack.start.toISOString()).toBe('2026-11-01T07:00:00.000Z');
-    expect(fallBack.end.toISOString()).toBe('2026-11-02T08:00:00.000Z');
-    expect(fallBack.end.getTime() - fallBack.start.getTime()).toBe(25 * 60 * 60 * 1000);
-    // 2026-03-08 America/Los_Angeles: clocks spring forward — a 23-hour local day.
-    const springForward = localDayRangeUtc('2026-03-08', 'America/Los_Angeles');
-    expect(springForward.start.toISOString()).toBe('2026-03-08T08:00:00.000Z');
-    expect(springForward.end.toISOString()).toBe('2026-03-09T07:00:00.000Z');
-    expect(springForward.end.getTime() - springForward.start.getTime()).toBe(23 * 60 * 60 * 1000);
-  });
-  it('rolls the end boundary over month and year edges', () => {
-    const monthEdge = localDayRangeUtc('2026-01-31', 'UTC');
-    expect(monthEdge.end.toISOString()).toBe('2026-02-01T00:00:00.000Z');
-    const yearEdge = localDayRangeUtc('2026-12-31', 'UTC');
-    expect(yearEdge.end.toISOString()).toBe('2027-01-01T00:00:00.000Z');
-  });
 });
+
+it('keeps the localDayRangeUtc compatibility export wired to lib/timezone.js', () => {
+  expect(localDayRangeUtc).toBe(canonicalLocalDayRangeUtc);
+});
+
+// localDayRangeUtc itself (24h window, DST 23h/25h days, month/year rollover,
+// malformed input) is now owned and tested by lib/timezone.js (#5572) — see
+// timezone.test.js's own `localDayRangeUtc` describe block.
 
 describe('participant normalization', () => {
   it('lowercases email, trims, drops empties', () => {

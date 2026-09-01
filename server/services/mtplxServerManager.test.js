@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   getMtplxServerStatus,
@@ -35,9 +38,16 @@ const resetForTest = (overrides = {}) => {
 describe('mtplxServerManager', () => {
   let pm2State = null;
   let execPm2Calls = [];
+  let testLogDir = null;
 
-  beforeEach(() => {
-    resetForTest();
+  beforeEach(async () => {
+    testLogDir = await mkdtemp(join(tmpdir(), 'portos-mtplx-test-'));
+    resetForTest({
+      logFiles: {
+        stdout: join(testLogDir, 'portos-mtplx-out.log'),
+        stderr: join(testLogDir, 'portos-mtplx-error.log'),
+      },
+    });
     vi.restoreAllMocks();
     pm2State = null;
     execPm2Calls = [];
@@ -74,9 +84,11 @@ describe('mtplxServerManager', () => {
     vi.spyOn(pm2Module, 'clearJlistCache').mockImplementation(() => {});
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     _resetMtplxServerStateForTests();
     vi.restoreAllMocks();
+    await rm(testLogDir, { recursive: true, force: true });
+    testLogDir = null;
   });
 
   describe('getMtplxServerStatus', () => {
@@ -202,11 +214,122 @@ describe('mtplxServerManager', () => {
           pm2State = { name: MTPLX_APP, status: 'errored', pid: null, args: [] };
         }
         if (args[0] === 'delete') pm2State = null;
-        if (args[0] === 'logs') return { stdout: '', stderr: 'error: model is not available locally' };
+        if (args[0] === 'logs') {
+          return {
+            stdout: '',
+            stderr: [
+              'runtime is not installed',
+              'Bootstrapping with pip',
+              'python3.13 -m ensurepip --upgrade --default-pip',
+              'error: model is not available locally',
+            ].join('\n'),
+          };
+        }
         return { stdout: '', stderr: '' };
       });
       await expect(startMtplxServer()).rejects.toThrow(/model is not available locally/);
       // The failed entry is cleaned up so the next start isn't a name collision.
+      expect(pm2State).toBeNull();
+    });
+
+    it('explains how to recover when MTPLX cannot bootstrap its Python runtime', async () => {
+      vi.spyOn(pm2Module, 'execPm2').mockImplementation(async (args) => {
+        execPm2Calls.push(args);
+        if (args[0] === 'start') {
+          pm2State = { name: MTPLX_APP, status: 'errored', pid: null, args: [] };
+        }
+        if (args[0] === 'delete') pm2State = null;
+        if (args[0] === 'logs') {
+          return {
+            stdout: '',
+            stderr: [
+              'runtime is not installed',
+              'Bootstrapping with pip',
+              'python3.13 -m ensurepip --upgrade --default-pip',
+              "Command '['python3.13', '-m', 'ensurepip']' returned non-zero exit status 1",
+            ].join('\n'),
+          };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const err = await startMtplxServer().catch((error) => error);
+
+      expect(err).toMatchObject({ code: 'MTPLX_EXITED' });
+      expect(err.message).toContain('Homebrew\'s Python does not provide a working `ensurepip`');
+      expect(err.message).toContain('brew reinstall python@3.13');
+      expect(err.message).toContain('brew reinstall --build-from-source youssofal/mtplx/mtplx');
+      const start = execPm2Calls.find((args) => args[0] === 'start');
+      expect(start[start.indexOf('--output') + 1]).toMatch(/portos-mtplx-out\.log$/);
+      expect(start[start.indexOf('--error') + 1]).toMatch(/portos-mtplx-error\.log$/);
+      expect(err.message).toContain('returned non-zero exit status 1');
+      expect(pm2State).toBeNull();
+    });
+
+    it('does not classify bootstrap text left by a previous launch', async () => {
+      await startMtplxServer();
+      const firstStart = execPm2Calls.find((args) => args[0] === 'start');
+      const outputPath = firstStart[firstStart.indexOf('--output') + 1];
+      const errorPath = firstStart[firstStart.indexOf('--error') + 1];
+      await stopMtplxServer();
+
+      const staleBootstrap = [
+        'runtime is not installed',
+        'Bootstrapping with pip',
+        'python3.13 -m ensurepip --upgrade --default-pip',
+        "Command '['python3.13', '-m', 'ensurepip']' returned non-zero exit status 1",
+      ].join('\n');
+      await writeFile(outputPath, staleBootstrap);
+      await writeFile(errorPath, staleBootstrap);
+
+      execPm2Calls = [];
+      pm2Module.execPm2.mockImplementation(async (args) => {
+        execPm2Calls.push(args);
+        if (args[0] === 'start') {
+          pm2State = { name: MTPLX_APP, status: 'errored', pid: null, args: [] };
+        }
+        if (args[0] === 'delete') pm2State = null;
+        if (args[0] === 'logs') {
+          return {
+            stdout: await readFile(outputPath, 'utf8'),
+            stderr: await readFile(errorPath, 'utf8'),
+          };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const err = await startMtplxServer().catch((error) => error);
+
+      expect(err).toMatchObject({ code: 'MTPLX_EXITED' });
+      expect(err.message).toMatch(/MTPLX exited immediately/);
+      expect(err.message).not.toMatch(/Homebrew/);
+      expect(await readFile(outputPath, 'utf8')).toBe('');
+      expect(await readFile(errorPath, 'utf8')).toBe('');
+      expect(pm2State).toBeNull();
+    });
+
+    it('keeps the in-memory launch context when log reset is unavailable', async () => {
+      resetForTest({
+        logFiles: {
+          stdout: join(testLogDir, 'missing', 'portos-mtplx-out.log'),
+          stderr: join(testLogDir, 'missing', 'portos-mtplx-error.log'),
+        },
+      });
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      vi.spyOn(pm2Module, 'execPm2').mockImplementation(async (args) => {
+        execPm2Calls.push(args);
+        if (args[0] === 'start') {
+          pm2State = { name: MTPLX_APP, status: 'errored', pid: null, args: [] };
+        }
+        if (args[0] === 'delete') pm2State = null;
+        return { stdout: '', stderr: '' };
+      });
+
+      const err = await startMtplxServer().catch((error) => error);
+
+      expect(err).toMatchObject({ code: 'MTPLX_EXITED' });
+      expect(err.message).toContain('Starting: mtplx serve');
+      expect(err.message).not.toMatch(/Homebrew/);
       expect(pm2State).toBeNull();
     });
 

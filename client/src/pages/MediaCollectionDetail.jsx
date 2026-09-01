@@ -184,6 +184,27 @@ export default function MediaCollectionDetail() {
     toast.success(`Deleted ${item.kind === 'image' ? item.filename : 'video'}`);
   }, []);
 
+  const handlePromptSaved = useCallback((item, prompt) => {
+    const nextPrompt = prompt === '(no prompt)' ? '' : prompt;
+    if (item.kind === 'image') {
+      setImagesByName((current) => {
+        const existing = current.get(item.filename);
+        if (!existing) return current;
+        const next = new Map(current);
+        next.set(item.filename, { ...existing, prompt: nextPrompt });
+        return next;
+      });
+      return;
+    }
+    setVideosById((current) => {
+      const existing = current.get(item.id);
+      if (!existing) return current;
+      const next = new Map(current);
+      next.set(item.id, { ...existing, prompt: nextPrompt });
+      return next;
+    });
+  }, []);
+
   // Unordered membership — Set, not array.
   const toggleSelect = useCallback((key) => setSelected((prev) => {
     const next = new Set(prev);
@@ -571,6 +592,7 @@ export default function MediaCollectionDetail() {
         items={items}
         annotations={annotations}
         updateAnnotation={updateAnnotation}
+        onPromptSaved={handlePromptSaved}
         onRemix={handleRemix}
         onSendToImage={handleSendToImage}
         onSendToVideo={handleSendToVideo}

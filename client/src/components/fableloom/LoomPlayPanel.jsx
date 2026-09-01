@@ -60,14 +60,12 @@ const initialPhaseForNode = (node) => {
   return 'hold';
 };
 
-const episodePreviewMode = (episode) => {
-  const opening = findNode(episode, episode?.startNodeId);
-  if (
-    opening?.videoHistoryId
-    || opening?.playbackAssets?.entryVideoHistoryId
-    || opening?.playbackAssets?.holdLoopVideoHistoryIds?.length
-  ) return 'video';
-  if (opening?.image) return 'image';
+const bestAvailablePreviewMode = (node, videoId, videoFailed) => {
+  if (videoId && !videoFailed) return 'video';
+  if (node?.image) return 'image';
+  // Without a still to fall back to, keep the failed-video state visible so
+  // authors can distinguish an unavailable render from a scene with no media.
+  if (videoId) return 'video';
   return 'text';
 };
 
@@ -102,7 +100,7 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
   const [pendingTransition, setPendingTransition] = useState(null);
   const [transcript, setTranscript] = useState(() => (start ? [{ role: 'scene', node: start }] : []));
   const [message, setMessage] = useState('');
-  const [previewMode, setPreviewMode] = useState(() => episodePreviewMode(initialEpisode));
+  const [previewMode, setPreviewMode] = useState('auto');
   const [failedVideoId, setFailedVideoId] = useState(null);
   const [showInspector, setShowInspector] = useState(false);
   const [hostedModalOpen, setHostedModalOpen] = useState(false);
@@ -190,6 +188,11 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
     activeHoldIndex,
     transitionId: pendingTransition?.id || null,
   }), [scene, playbackPhase, activeHoldIndex, pendingTransition]);
+  const currentVideoId = currentAsset.videoHistoryId || scene?.videoHistoryId || null;
+  const currentVideoFailed = Boolean(currentVideoId && failedVideoId === currentVideoId);
+  const activePreviewMode = previewMode === 'auto'
+    ? bestAvailablePreviewMode(scene, currentVideoId, currentVideoFailed)
+    : previewMode;
 
   const restart = () => {
     setScene(start);
@@ -203,7 +206,7 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
 
   useEffect(() => { setPlayEpisodeId(initialEpisode.id); }, [initialEpisode.id]);
 
-  useEffect(() => { setPreviewMode(episodePreviewMode(episode)); }, [episode.id]);
+  useEffect(() => { setPreviewMode('auto'); }, [episode.id]);
 
   // An episode switch (or a changed opening scene) re-anchors the session.
   useEffect(() => { restart(); }, [start]);
@@ -256,7 +259,7 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
     setTranscript(history);
 
     const hasExitClip = Boolean(scene.playbackAssets?.exitByTransition?.[choice.id]);
-    if (hasExitClip && previewMode === 'video') {
+    if (hasExitClip && activePreviewMode === 'video') {
       setPendingTransition(choice);
       setPlaybackPhase('exit');
     } else {
@@ -393,6 +396,7 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
             value={previewMode}
             onChange={(event) => setPreviewMode(event.target.value)}
           >
+            <option value="auto">Best available</option>
             <option value="text">Text</option>
             <option value="image">Storyboard images</option>
             <option value="video">Rendered video</option>
@@ -439,13 +443,13 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
         >
           <SceneMedia
             node={scene}
-            previewMode={previewMode}
+            previewMode={activePreviewMode}
             onCutEnded={handleVideoEnded}
             playbackPhase={playbackPhase}
             activeAsset={currentAsset}
             automaticCut={automaticCut}
-            videoFailed={Boolean(currentAsset.videoHistoryId && failedVideoId === currentAsset.videoHistoryId)}
-            onVideoError={() => setFailedVideoId(currentAsset.videoHistoryId)}
+            videoFailed={currentVideoFailed}
+            onVideoError={() => setFailedVideoId(currentVideoId)}
           />
           <div className="port-media-overlay-strong absolute left-3 top-3 max-w-[calc(100%-1.5rem)] rounded px-2.5 py-1.5 sm:left-4 sm:top-4">
             <p className="truncate text-[10px] uppercase tracking-[0.18em] opacity-70">
@@ -594,12 +598,12 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
             <button
               type="button"
               onClick={advanceCut}
-              disabled={sending || (previewMode === 'video' && Boolean(currentAsset.videoHistoryId) && failedVideoId !== currentAsset.videoHistoryId)}
+              disabled={sending || (activePreviewMode === 'video' && Boolean(currentVideoId) && !currentVideoFailed)}
               className="flex-1 px-3 py-2 rounded bg-port-accent text-white text-sm disabled:opacity-50"
             >
               {sending
                 ? 'Loading next cut…'
-                : previewMode === 'video' && currentAsset.videoHistoryId && failedVideoId !== currentAsset.videoHistoryId
+                : activePreviewMode === 'video' && currentVideoId && !currentVideoFailed
                   ? 'Video advances automatically'
                   : 'Next cut'}
             </button>

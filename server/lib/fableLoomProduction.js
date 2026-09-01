@@ -7,7 +7,9 @@
  */
 
 import { computeGraphLayers } from './fableLoomGraph.js';
+import { EFFORT_LEVELS } from './providerModels.js';
 import { validateAudioOccupancy } from './fableLoomPlayback.js';
+import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 
 export const FABLELOOM_PRODUCTION_MODES = Object.freeze(['current_canon', 'exact_inputs']);
 export const FABLELOOM_PRODUCTION_MODE_DEFAULT = 'current_canon';
@@ -28,6 +30,57 @@ export const FABLELOOM_RENDER_FORMAT_IDS = Object.freeze(
   FABLELOOM_RENDER_FORMATS.map((format) => format.formatId),
 );
 export const FABLELOOM_DEFAULT_RENDER_FORMAT_ID = 'landscape-16-9';
+
+// These preferences are intentionally part of the loom's persisted render
+// settings rather than the production panel's transient request controls. A
+// story can therefore render the same way from a scene card, a batch, or a
+// fresh page load; the production panel may still override them for one run.
+export const FABLELOOM_RENDER_PREFERENCE_KEYS = Object.freeze([
+  'imageMode', 'imageModel', 'videoMode', 'videoModel', 'effort',
+]);
+
+const isRecord = (value) => value != null && typeof value === 'object' && !Array.isArray(value);
+const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+const trimModelId = (value) => (typeof value === 'string' && value.trim()
+  ? value.trim().slice(0, 64)
+  : null);
+
+/**
+ * Normalize the optional provider/model preferences on a loom render pin.
+ * Image and video model ids are local-model selections; cloud backends use
+ * their configured model, so a cloud mode clears an accidentally retained
+ * local model rather than presenting a misleading pin to the planner.
+ */
+export function asFableLoomRenderPreferences(raw) {
+  const source = isRecord(raw) ? raw : {};
+  const imageMode = QUEUEABLE_IMAGE_MODES.includes(source.imageMode) ? source.imageMode : null;
+  const videoMode = VIDEO_GEN_MODES.includes(source.videoMode) ? source.videoMode : null;
+  return {
+    imageMode,
+    imageModel: imageMode && imageMode !== 'local' ? null : trimModelId(source.imageModel),
+    videoMode,
+    videoModel: videoMode && videoMode !== 'local' ? null : trimModelId(source.videoModel),
+    effort: EFFORT_LEVELS.includes(source.effort) ? source.effort : null,
+  };
+}
+
+/**
+ * Sanitize the full persisted render-settings shape while keeping legacy
+ * records byte-compatible when they have no provider preferences yet.
+ */
+export function sanitizeFableLoomRenderSettings(raw) {
+  const geometry = asFableLoomRenderSettings(raw);
+  if (!isRecord(raw) || !FABLELOOM_RENDER_PREFERENCE_KEYS.some((key) => hasOwn(raw, key))) {
+    return geometry;
+  }
+  return { ...geometry, ...asFableLoomRenderPreferences(raw) };
+}
+
+/** Merge a partial format/preferences PATCH before the record is re-sanitized. */
+export function mergeFableLoomRenderSettings(current, patch) {
+  if (!isRecord(patch)) return patch;
+  return { ...(isRecord(current) ? current : {}), ...patch };
+}
 
 export function asFableLoomRenderSettings(raw) {
   const requestedId = typeof raw === 'string' ? raw : raw?.formatId;

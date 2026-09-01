@@ -16,6 +16,7 @@ intent to a transition and moves them through the graph until an ending.
 | `formats.js` | Scene formats (`prose` / `teleplay`) and the prompt contracts each generative stage renders for them. |
 | `hostedSession.js` | Scoped QR-hosted play session lifecycle, HTTPS readiness preflight, token hashing, live voice gate revalidation, and half-duplex turn taking (#5383). |
 | `production.js` | Episodic production orchestration: batch planning, DAG generation, cancellable batch runs, and user-triggered episodic continuity review (#5384). |
+| `falVideoAutomation.js` | User-triggered, serialized Playwright automation over the persistent PortOS CDP browser: uploads a scene still + full shot prompt to fal.ai H3 Max, downloads the finished MP4 into shared video history, and attaches it to the originating scene. |
 | `store.js` | PostgreSQL/file backend facade (`fableloom_stories`; collectionStore escape hatch for tests). |
 | `db.js` | PostgreSQL leaf I/O. |
 

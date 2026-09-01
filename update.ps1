@@ -286,8 +286,8 @@ if (-not (Test-Path "client/node_modules/vite/bin/vite.js")) {
 Step "npm-install" "done" "Dependencies installed"
 
 # Run data/db/browser setup. Don't call `npm run setup` — that re-runs the
-# installs we just did above. The three scripts here are the data-side half
-# of `npm run setup` and are idempotent.
+# installs we just did above. These scripts are the data-side half of
+# `npm run setup` and are idempotent.
 Step "setup" "running" "Running setup..."
 Invoke-Logged node scripts/setup-data.js
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -297,6 +297,23 @@ Invoke-Logged node scripts/setup-browser.js
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Invoke-Logged node scripts/setup-ghostty.js
 Step "setup" "done" "Setup complete"
+Write-SafeHost ""
+
+# Retry the safe Tailscale certificate path on every update. Missing sign-in,
+# MagicDNS, or the admin HTTPS toggle is reported as guidance rather than a
+# failed update; setup-guide owns the shared human-readable next step.
+Step "network-setup" "running" "Checking Tailscale, MagicDNS, and HTTPS..."
+Invoke-Logged node scripts/setup-cert.js
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$networkSummary = & {
+    $ErrorActionPreference = 'Continue'
+    & node scripts/setup-guide.js --summary 2>> $UpdateLog
+}
+if ($LASTEXITCODE -ne 0 -or -not $networkSummary) {
+    $networkSummary = "Network setup checked"
+    $global:LASTEXITCODE = 0
+}
+Step "network-setup" "done" ($networkSummary -join " ")
 Write-SafeHost ""
 
 # Run data migrations
@@ -402,6 +419,16 @@ $accessUrl = & node scripts/print-access-url.js 2>$null
 $global:LASTEXITCODE = 0
 if ($accessUrl) {
     $accessUrl | ForEach-Object { Write-SafeHost $_ -ForegroundColor Cyan }
+    Write-SafeHost ""
+}
+
+$setupGuide = & {
+    $ErrorActionPreference = 'Continue'
+    & node scripts/setup-guide.js --assume-active 2>$null
+}
+$global:LASTEXITCODE = 0
+if ($setupGuide) {
+    $setupGuide | ForEach-Object { Write-SafeHost $_ -ForegroundColor Cyan }
     Write-SafeHost ""
 }
 

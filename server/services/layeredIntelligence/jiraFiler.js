@@ -114,7 +114,7 @@ export async function listJiraBlockingIssues({ instanceId, projectKey, search = 
  */
 export async function fileProposalToJira({
   instanceId, projectKey, issueType = 'Task', title, body, slug,
-  model, effort, goodFirstIssue, helpWanted, create = createTicket
+  model, effort, goodFirstIssue, helpWanted, planner, create = createTicket
 } = {}) {
   if (!instanceId || !projectKey) return { success: false, error: 'jira instance/project not configured' };
   const description = `${body}\n\n${slugMarker(slug)}`;
@@ -123,7 +123,7 @@ export async function fileProposalToJira({
     summary: title,
     description,
     issueType,
-    labels: [LI_LABEL, ...jiraIssueLabels({ model, effort, goodFirstIssue, helpWanted })]
+    labels: [LI_LABEL, ...jiraIssueLabels({ model, effort, goodFirstIssue, helpWanted, planner })]
   }).then(r => r, (err) => ({ success: false, error: err?.message || 'jira create failed' }));
   if (!res?.success) return { success: false, error: res?.error || 'jira create failed' };
   return { success: true, key: res.ticketId || null, url: res.url || null };

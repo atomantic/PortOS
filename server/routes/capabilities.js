@@ -1,14 +1,20 @@
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { buildCapabilityRows, summarizeCapabilities } from '../lib/capabilityMap.js';
+import {
+  buildCapabilityRows,
+  summarizeCapabilities,
+  summarizeSetupCapabilities,
+} from '../lib/capabilityMap.js';
 import { getAllProviders, getProviderById } from '../services/providers.js';
+import { getProviderPrerequisiteReadinessMap } from '../services/providerPrerequisites.js';
+import { getProviderReadinessMap } from '../services/providerReadiness.js';
 import { getAllProviderStatuses } from '../services/providerStatus.js';
 import { listAccounts as listCalendarAccounts } from '../services/calendarAccounts.js';
 import { listAccounts as listMessageAccounts } from '../services/messageAccounts.js';
 import { countMemories } from '../services/memoryBackend.js';
 import { getConfig as getCosConfig } from '../services/cos.js';
 import { getVoiceConfig } from '../services/voice/config.js';
-import { getNetworkExposureStatus } from '../lib/networkExposure.js';
+import { getNetworkExposureSetupStatus } from '../lib/networkExposure.js';
 import { getGenomeSummary } from '../services/genome.js';
 import { getSettings } from '../services/settings.js';
 import * as telegram from '../services/telegram.js';
@@ -49,8 +55,22 @@ async function resolveTelegram() {
 
 // GET /api/capabilities — capability map of every connected system.
 router.get('/', asyncHandler(async (req, res) => {
+  const providersPromise = getAllProviders().catch(() => ({ providers: [] }));
+  const providerPrerequisiteReadinessPromise = providersPromise.then((data) => {
+    const providers = Array.isArray(data?.providers) ? data.providers : [];
+    const enabled = providers.filter((provider) => provider?.enabled !== false);
+    return getProviderPrerequisiteReadinessMap(providers, { candidates: enabled });
+  }).catch(() => null);
+  const providerLocalReadinessPromise = providersPromise.then((data) => {
+    const providers = Array.isArray(data?.providers) ? data.providers : [];
+    const enabled = providers.filter((provider) => provider?.enabled !== false);
+    return getProviderReadinessMap(enabled);
+  }).catch(() => null);
+
   const [
     providersData,
+    providerPrerequisiteReadiness,
+    providerLocalReadiness,
     providerStatuses,
     calendarAccounts,
     messageAccounts,
@@ -62,7 +82,9 @@ router.get('/', asyncHandler(async (req, res) => {
     appSummary,
     network,
   ] = await Promise.all([
-    getAllProviders().catch(() => ({ providers: [] })),
+    providersPromise,
+    providerPrerequisiteReadinessPromise,
+    providerLocalReadinessPromise,
     Promise.resolve().then(() => getAllProviderStatuses()).catch(() => ({})),
     listCalendarAccounts().catch(() => []),
     listMessageAccounts().catch(() => []),
@@ -72,13 +94,13 @@ router.get('/', asyncHandler(async (req, res) => {
     getGenomeSummary().catch(() => ({ uploaded: false })),
     resolveTelegram().catch(() => ({})),
     apps.getAppStatusSummary().catch(() => ({ total: 0 })),
-    // Synchronous in-memory read — wrap so a cert-meta read failure degrades
-    // to {} instead of 500-ing the whole page (no try/catch in route bodies).
-    Promise.resolve().then(() => getNetworkExposureStatus()).catch(() => ({})),
+    getNetworkExposureSetupStatus().catch(() => ({})),
   ]);
 
   const rows = buildCapabilityRows({
     providers: providersData?.providers ?? [],
+    providerPrerequisiteReadiness,
+    providerLocalReadiness,
     providerStatuses,
     calendarAccounts,
     messageAccounts,
@@ -94,7 +116,10 @@ router.get('/', asyncHandler(async (req, res) => {
   res.json({
     timestamp: new Date().toISOString(),
     summary: summarizeCapabilities(rows),
+    optionalSummary: summarizeCapabilities(rows.filter((row) => row.setupRequired !== true)),
+    setup: summarizeSetupCapabilities(rows),
     capabilities: rows,
+    network,
   });
 }));
 

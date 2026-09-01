@@ -42,7 +42,7 @@ router.get('/', asyncHandler(async (req, res) => {
 // stored price; one sent as null (or 0) is cleared.
 router.put('/subscriptions', asyncHandler(async (req, res) => {
   const { costs } = validateRequest(subscriptionCostsSchema, req.body);
-  res.json({ costs: await saveSubscriptionCosts(costs) });
+  res.json({ costs: await saveSubscriptionCosts(costs, { actor: 'user' }) });
 }));
 
 // GET /api/usage/providers - Subscription-quota status for every enabled

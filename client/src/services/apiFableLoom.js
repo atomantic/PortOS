@@ -91,6 +91,14 @@ export const deleteLoomNode = (id, episodeId, nodeId, options = {}) => request(n
   method: 'DELETE', ...options,
 });
 
+export const startLoomFalVideo = (id, episodeId, nodeId, body, options = {}) =>
+  request(nodePath(id, episodeId, nodeId, '/fal-video'), {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
+
+export const getLoomFalVideo = (id, episodeId, nodeId, jobId, options = {}) =>
+  request(nodePath(id, episodeId, nodeId, `/fal-video/${encodeURIComponent(jobId)}`), options);
+
 // One path out of a scene per call. `addLoomTransition` resolves to
 // `{ loom, transition }` — the row carries its server-minted id, so the editor
 // never has to reconcile ids back into locally-added rows. The node PATCH's

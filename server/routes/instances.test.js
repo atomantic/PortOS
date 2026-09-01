@@ -21,11 +21,12 @@ vi.mock('../services/certProvisioner.js', () => ({
   provisionTailscaleCert: vi.fn(),
 }));
 vi.mock('../lib/tailscale.js', () => ({
-  findTailscale: vi.fn(() => null),
+  getTailscaleStatus: vi.fn(),
 }));
 
 import { getSyncStatus } from '../services/syncOrchestrator.js';
 import * as instances from '../services/instances.js';
+import { getTailscaleStatus } from '../lib/tailscale.js';
 import instancesRoutes from './instances.js';
 
 const buildApp = () => {
@@ -35,6 +36,36 @@ const buildApp = () => {
   app.use(errorMiddleware);
   return app;
 };
+
+describe('GET /api/instances/tailnet-suffix', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns the shared normalized MagicDNS snapshot used by setup guidance', async () => {
+    getTailscaleStatus.mockResolvedValue({
+      reason: 'running',
+      dnsName: 'host-alpha.example-tailnet.ts.net',
+      magicDnsSuffix: 'example-tailnet.ts.net',
+      peers: [{
+        dnsName: 'host-beta.example-tailnet.ts.net',
+        hostName: 'host-beta',
+        ips: ['100.64.0.50'],
+      }],
+    });
+
+    const res = await request(buildApp()).get('/api/instances/tailnet-suffix');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      reason: 'running',
+      self: 'host-alpha.example-tailnet.ts.net',
+      suffix: 'example-tailnet.ts.net',
+      peers: [{
+        dnsName: 'host-beta.example-tailnet.ts.net',
+        hostName: 'host-beta',
+        ips: ['100.64.0.50'],
+      }],
+    });
+  });
+});
 
 // #4520: the CoS task form's instance picker reads this. It is deliberately
 // narrower than GET /api/instances — no addresses, no sync state, no peer that

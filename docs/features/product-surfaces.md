@@ -4,7 +4,7 @@ PortOS is a local-first operating system for a developer's machines, work, and p
 
 This document is the **canonical user-facing feature inventory** for PortOS. It serves three primary functions:
 1. **User & Contributor Orientation**: A comprehensive map of every major surface, route, and capability in PortOS.
-2. **Autonomous Repo-Study Reference**: The canonical baseline consumed by the `repo-study` task (`server/services/repoIntake.js`) when studying external GitHub repositories to map new capabilities, enhancements, and UX patterns onto PortOS.
+2. **Autonomous Repo-Study Reference**: The canonical baseline consumed by the `repo-study` task (`server/services/repoIntake.js`) when studying external repositories (github.com / gitlab.com) to map new capabilities, enhancements, and UX patterns onto PortOS.
 3. **Architecture & Guide Index**: Quick pointers to dedicated feature deep dives in `docs/features/` and root architectural guides in `docs/`.
 
 ---

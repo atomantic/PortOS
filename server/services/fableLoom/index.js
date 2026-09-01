@@ -111,3 +111,9 @@ export {
   resumeEpisodeProductionBatch,
   startEpisodeProductionBatch,
 } from './production.js';
+export {
+  FAL_H3_MAX_FREE_URL,
+  _resetFalVideoAutomations,
+  getFalVideoAutomation,
+  startFalVideoAutomation,
+} from './falVideoAutomation.js';

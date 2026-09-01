@@ -2,14 +2,38 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
 
 const fileStore = new Map();
+const writeCounter = vi.hoisted(() => ({ baseHash: 0 }));
+const baseHashEvictionSequence = vi.hoisted(() => ({ enabled: false, tail: Promise.resolve() }));
 
 vi.mock('../../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
   PATHS: { data: '/mock/data' },
   ensureDir: vi.fn().mockResolvedValue(undefined),
-  atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
+  atomicWrite: vi.fn(async (path, data) => {
+    if (typeof path === 'string' && path.endsWith('sync_base_hashes.json')) writeCounter.baseHash += 1;
+    fileStore.set(path, data);
+  }),
   readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
 }));
+
+vi.mock('../../lib/conflictJournal.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    deleteSyncBaseHash: async (...args) => {
+      if (!baseHashEvictionSequence.enabled) return actual.deleteSyncBaseHash(...args);
+      const previous = baseHashEvictionSequence.tail;
+      let release;
+      baseHashEvictionSequence.tail = new Promise((resolve) => { release = resolve; });
+      await previous;
+      try {
+        return await actual.deleteSyncBaseHash(...args);
+      } finally {
+        release();
+      }
+    },
+  };
+});
 
 let uuidCounter = 0;
 vi.mock('crypto', async () => {
@@ -21,11 +45,16 @@ vi.mock('../instances.js', () => mockNoPeers());
 vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
 
 const svc = await import('./series.js');
+const cj = await import('../../lib/conflictJournal.js');
 const { recordEvents, registerSubscriptionAdapter, __resetSubscriptionAdapter } = await import('../sharing/recordEvents.js');
 
 describe('pipeline series service', () => {
   beforeEach(() => {
     fileStore.clear();
+    cj.__resetBaseHashCacheForTests();
+    writeCounter.baseHash = 0;
+    baseHashEvictionSequence.enabled = false;
+    baseHashEvictionSequence.tail = Promise.resolve();
     uuidCounter = 0;
   });
 
@@ -423,26 +452,41 @@ describe('pipeline series service', () => {
     describe('pruneTombstonedSeries', () => {
       it('removes tombstones older than the cutoff and leaves newer ones + live records', async () => {
         const live = await svc.createSeries({ name: 'Live' });
-        const oldT = await svc.createSeries({ name: 'Old tombstone' });
+        const oldT = await svc.createSeries({ name: 'Old tombstone A' });
+        const oldT2 = await svc.createSeries({ name: 'Old tombstone B' });
         const newT = await svc.createSeries({ name: 'New tombstone' });
         await svc.deleteSeries(oldT.id);
+        await svc.deleteSeries(oldT2.id);
         await svc.deleteSeries(newT.id);
-        // Back-date the old tombstone via merge so the GC sees it as 100s ago.
+        // Back-date both old tombstones via merge so the GC sees them as 100s ago.
         const oldDeletedAt = new Date(Date.now() - 100_000).toISOString();
         const oldSeries = await svc.getSeries(oldT.id, { includeDeleted: true });
-        await svc.mergeSeriesFromSync([{
-          ...oldSeries,
-          deletedAt: oldDeletedAt,
-          updatedAt: new Date(Date.now() + 10_000).toISOString(),
-        }]);
+        const oldSeries2 = await svc.getSeries(oldT2.id, { includeDeleted: true });
+        const mergeUpdatedAt = new Date(Date.now() + 10_000).toISOString();
+        await svc.mergeSeriesFromSync([
+          { ...oldSeries, deletedAt: oldDeletedAt, updatedAt: mergeUpdatedAt },
+          { ...oldSeries2, deletedAt: oldDeletedAt, updatedAt: mergeUpdatedAt },
+        ]);
+        await cj.setSyncBaseHash('series', oldT.id, 'hash-old-a');
+        await cj.setSyncBaseHash('series', oldT2.id, 'hash-old-b');
+        await cj.flushBaseHashes();
+        writeCounter.baseHash = 0;
+        // Serialize the eviction calls without sleeping. Without the batch,
+        // each call would finish its own side-store write before the next one.
+        baseHashEvictionSequence.enabled = true;
         const cutoff = Date.now() - 50_000;
         const result = await svc.pruneTombstonedSeries(cutoff);
-        expect(result.pruned).toBe(1);
+        expect(result.pruned).toBe(2);
+        expect(writeCounter.baseHash).toBe(1);
         const remaining = await svc.listSeries({ includeDeleted: true });
         const ids = remaining.map((s) => s.id);
         expect(ids).toContain(live.id);
         expect(ids).toContain(newT.id);
         expect(ids).not.toContain(oldT.id);
+        expect(ids).not.toContain(oldT2.id);
+        cj.__resetBaseHashCacheForTests();
+        expect(await cj.getSyncBaseHash('series', oldT.id)).toBeNull();
+        expect(await cj.getSyncBaseHash('series', oldT2.id)).toBeNull();
       });
 
       it('keeps tombstones with unparseable deletedAt (conservative — never silently delete)', async () => {

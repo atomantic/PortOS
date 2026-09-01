@@ -54,7 +54,7 @@ const renderEditor = (transitions = [existingPath]) => {
   const onLoomUpdate = vi.fn();
   const onGenerateImage = vi.fn().mockResolvedValue({ jobId: 'image-1' });
   const onGenerateVideo = vi.fn().mockResolvedValue({ jobId: 'video-1' });
-  const onOpenFalVideo = vi.fn();
+  const onAutomateFalVideo = vi.fn();
   render(
     <MemoryRouter>
       <LoomNodeEditor
@@ -71,11 +71,11 @@ const renderEditor = (transitions = [existingPath]) => {
         onClearSelection={() => {}}
         onGenerateImage={onGenerateImage}
         onGenerateVideo={onGenerateVideo}
-        onOpenFalVideo={onOpenFalVideo}
+        onAutomateFalVideo={onAutomateFalVideo}
       />
     </MemoryRouter>,
   );
-  return { onLoomUpdate, onGenerateImage, onGenerateVideo, onOpenFalVideo };
+  return { onLoomUpdate, onGenerateImage, onGenerateVideo, onAutomateFalVideo };
 };
 
 const renderHelperEditor = () => {
@@ -324,19 +324,23 @@ describe('LoomNodeEditor scene media', () => {
     }));
   });
 
-  it('hands the current scene direction to the fal free tool without waiting on a save', async () => {
+  it('saves and hands the current scene direction to fal browser automation', async () => {
     const user = userEvent.setup();
-    const { onOpenFalVideo } = renderEditor();
+    updateLoomNode.mockResolvedValue({ id: 'loom-1' });
+    const { onAutomateFalVideo } = renderEditor();
 
     await user.clear(screen.getByLabelText('Video prompt'));
     await user.type(screen.getByLabelText('Video prompt'), 'A fast practical-effects reveal.');
-    await user.click(screen.getByRole('button', { name: 'fal.ai free' }));
+    await user.tab();
+    await waitFor(() => expect(updateLoomNode).toHaveBeenCalledWith(
+      'loom-1', 'ep-1', 'n1', { videoPrompt: 'A fast practical-effects reveal.' }, { silent: true },
+    ));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Automate fal.ai' })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: 'Automate fal.ai' }));
 
-    expect(onOpenFalVideo).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'n1',
-      videoPrompt: 'A fast practical-effects reveal.',
-      cameraMovement: 'slow-dolly-in',
-    }));
+    await waitFor(() => expect(onAutomateFalVideo).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'n1', videoPrompt: 'A fast practical-effects reveal.', cameraMovement: 'slow-dolly-in',
+    })));
   });
 
   it('attaches an uploaded fal MP4 through the durable gallery history id', async () => {

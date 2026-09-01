@@ -64,6 +64,8 @@ Rules of thumb:
    - **Production side:** `server/lib/assetRoutePrefixes.js` lists the namespaces the server owns (`SERVER_OWNED_PREFIXES`) alongside the exact client routes inside them (`spaPaths` — `/data` itself is the Data Manager page), and `mountAssetRoutes` closes each one with a terminating 404 (#4688).
    - `scripts/dev-proxy-drift.test.js` fails if the proxy, the mounts, and the client's own routes drift apart. It reads both `NAV_COMMANDS` and `App.jsx`'s nested `<Route>` tree, so a new page under a server-owned prefix — which the terminator would otherwise 404 silently — fails the build even when only its `:id` detail route exists.
 
+Run `npm run setup:guide` to print the currently valid local URL, the exact trusted MagicDNS URL when available, and the next Tailscale/HTTPS prerequisite. The end-to-end walkthrough is in [SETUP.md](./SETUP.md).
+
 ## Defining Ports in ecosystem.config.cjs
 
 Define all ports in a top-level `PORTS` object as the single source of truth:

@@ -64,7 +64,11 @@ import {
   fableLoomPlotPointKind,
   sanitizeStoryOutline,
 } from '../../lib/fableLoomOutline.js';
-import { asFableLoomRenderSettings } from '../../lib/fableLoomProduction.js';
+import {
+  FABLELOOM_RENDER_PREFERENCE_KEYS,
+  mergeFableLoomRenderSettings,
+  sanitizeFableLoomRenderSettings,
+} from '../../lib/fableLoomProduction.js';
 
 export { LOOM_LIMITS };
 
@@ -328,7 +332,7 @@ export function sanitizeLoom(raw) {
     // turns a reader's free text into a path. An unset dimension stays null
     // ('fall through to the stage pin / active provider').
     playSettings: sanitizeLlmRoutePin(raw.playSettings),
-    renderSettings: asFableLoomRenderSettings(raw.renderSettings),
+    renderSettings: sanitizeFableLoomRenderSettings(raw.renderSettings),
     protagonistCharacterId,
     protagonistWardrobeId,
     protagonistWardrobeLocked: Boolean(protagonistWardrobeId && raw.protagonistWardrobeLocked !== false),
@@ -587,7 +591,11 @@ export async function updateLoom(id, patch = {}) {
   return mutateLoom(id, (loom) => {
     const next = { ...loom };
     for (const key of PATCH_FIELDS) {
-      if (key in patch) next[key] = patch[key];
+      if (key in patch) {
+        next[key] = key === 'renderSettings'
+          ? mergeFableLoomRenderSettings(loom.renderSettings, patch[key])
+          : patch[key];
+      }
     }
     assertParticipationConfigured(next);
     return next;
@@ -599,7 +607,11 @@ export function restoreLoom(id, patch = {}) {
   return mutateLoom(id, (loom) => {
     const next = { ...loom };
     for (const key of RESTORABLE_FIELDS) {
-      if (key in patch) next[key] = patch[key];
+      if (key in patch) {
+        next[key] = key === 'renderSettings'
+          ? mergeFableLoomRenderSettings(loom.renderSettings, patch[key])
+          : patch[key];
+      }
     }
     assertParticipationConfigured(next);
     return next;
@@ -627,13 +639,25 @@ export async function deleteLoom(id) {
 // them. A sender at the current schema version's present null remains an
 // intentional clear.
 const preserveLegacyVisualProduction = (remote, local, senderVersion) => {
-  if (!local || senderVersion >= 5) return remote;
+  if (!local || senderVersion >= 6) return remote;
   const localEpisodes = new Map(local.episodes.map((episode) => [episode.id, episode]));
   const localPlotPoints = new Map((local.seriesPlan?.plotPoints || []).map((item) => [item.id, item]));
+  const legacyRenderSettings = senderVersion < 5
+    ? local.renderSettings
+    : {
+      ...remote.renderSettings,
+      ...Object.fromEntries(FABLELOOM_RENDER_PREFERENCE_KEYS
+        .filter((key) => Object.prototype.hasOwnProperty.call(local.renderSettings, key))
+        .map((key) => [key, local.renderSettings[key]])),
+    };
   return {
     ...remote,
+    ...(senderVersion < 6 ? {
+      // v5 peers understand the aspect-ratio format but would strip the
+      // provider/model preferences added in v6 during an unrelated update.
+      renderSettings: legacyRenderSettings,
+    } : {}),
     ...(senderVersion < 5 ? {
-      renderSettings: local.renderSettings,
       productionStatus: local.productionStatus,
     } : {}),
     seriesPlan: senderVersion < 5 ? {
@@ -702,7 +726,7 @@ export async function mergeLoomsFromSync(
   remoteLooms,
   {
     source = { via: 'sync', peerId: null },
-    senderSchemaVersions = { fableLoom: 5 },
+    senderSchemaVersions = { fableLoom: 6 },
   } = {},
 ) {
   if (!Array.isArray(remoteLooms)) return { applied: false, count: 0 };

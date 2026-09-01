@@ -498,6 +498,7 @@ describe('runPostRouteSequence — post-route boot order', () => {
       ensureSelf: step('ensureSelf', () => Promise.resolve()),
       initSyncLog: step('initSyncLog', () => Promise.resolve()),
       recoverStuckClassifications: step('recoverStuckClassifications', () => Promise.resolve()),
+      recoverInterruptedRepoClones: step('recoverInterruptedRepoClones', () => Promise.resolve()),
       initMediaJobQueue: step('initMediaJobQueue', () => Promise.resolve()),
       initMediaJobDependentHooks: step('initMediaJobDependentHooks'),
       initSharing: step('initSharing', () => Promise.resolve()),
@@ -520,6 +521,7 @@ describe('runPostRouteSequence — post-route boot order', () => {
       'ensureSelf',
       'initSyncLog',
       'recoverStuckClassifications',
+      'recoverInterruptedRepoClones',
       'initMediaJobQueue',
       'initMediaJobDependentHooks',
       'initSharing',
@@ -550,9 +552,11 @@ describe('runPostRouteSequence — post-route boot order', () => {
     // Recovering earlier would mint colliding sync sequence numbers and corrupt
     // every peer's cursor.
     expect(recorder.calls).not.toContain('recoverStuckClassifications');
+    expect(recorder.calls).not.toContain('recoverInterruptedRepoClones');
     gate.resolve();
     await done;
     expect(recorder.calls).toContain('recoverStuckClassifications');
+    expect(recorder.calls).toContain('recoverInterruptedRepoClones');
   });
 
   it('awaits the media job queue before wiring its completion hooks', async () => {
@@ -565,14 +569,29 @@ describe('runPostRouteSequence — post-route boot order', () => {
     await flush();
     // The hooks must be listening before the queue replays `completed` for
     // reloaded jobs, and no route may enqueue against a half-init queue.
-    expect(recorder.calls).toEqual(['startBackgroundServices', 'ensureSelf', 'initSyncLog', 'recoverStuckClassifications', 'initMediaJobQueue']);
+    expect(recorder.calls).toEqual(['startBackgroundServices', 'ensureSelf', 'initSyncLog', 'recoverStuckClassifications', 'recoverInterruptedRepoClones', 'initMediaJobQueue']);
     gate.resolve();
     await done;
     expect(recorder.calls).toContain('initMediaJobDependentHooks');
     expect(recorder.calls).toContain('startListening');
   });
 
-  it('does NOT await brain recovery, sharing, CD recovery, or the cover backfill', async () => {
+  it('finishes interrupted clone recovery before accepting requests', async () => {
+    const recorder = createRecorder();
+    const gate = deferred();
+    const deps = buildDeps(recorder, {
+      recoverInterruptedRepoClones: recorder.step('recoverInterruptedRepoClones', () => gate.promise),
+    });
+    const done = runPostRouteSequence(deps);
+    await flush();
+    expect(recorder.calls).not.toContain('initMediaJobQueue');
+    expect(recorder.calls).not.toContain('startListening');
+    gate.resolve();
+    await done;
+    expect(recorder.calls).toContain('startListening');
+  });
+
+  it('does NOT await inbox recovery, sharing, CD recovery, or the cover backfill', async () => {
     const recorder = createRecorder();
     const stuck = deferred();
     const deps = buildDeps(recorder, {
@@ -645,6 +664,7 @@ describe('runPostRouteSequence — post-route boot order', () => {
     const recorder = createRecorder();
     const deps = buildDeps(recorder, {
       recoverStuckClassifications: recorder.step('recoverStuckClassifications', () => Promise.reject(new Error('brain boom'))),
+      recoverInterruptedRepoClones: recorder.step('recoverInterruptedRepoClones', () => Promise.reject(new Error('clone boom'))),
       initSharing: recorder.step('initSharing', () => Promise.reject(new Error('bucket gone'))),
       loadSeriesCoverBackfill: recorder.step('loadSeriesCoverBackfill', () =>
         Promise.resolve(recorder.step('backfillSeriesCoverImages', () => Promise.reject(new Error('no covers')))))
@@ -654,6 +674,7 @@ describe('runPostRouteSequence — post-route boot order', () => {
     expect(deps.onFatal).not.toHaveBeenCalled();
     expect(recorder.calls).toContain('startListening');
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Brain recovery failed'));
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Brain clone recovery failed'));
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Sharing init failed'));
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining('series cover backfill failed at boot'));
   });

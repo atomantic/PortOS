@@ -38,6 +38,40 @@ describe('Modal accessibility', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps one top-most Escape stack across module re-evaluation', async () => {
+    vi.resetModules();
+    const { default: ReevaluatedModal } = await import('./Modal');
+    const baseOnClose = vi.fn();
+    const topOnClose = vi.fn();
+
+    const { rerender } = render(
+      <>
+        <Modal open onClose={baseOnClose} ariaLabel="base">
+          <p>base body</p>
+        </Modal>
+        <ReevaluatedModal open onClose={topOnClose} ariaLabel="top">
+          <p>top body</p>
+        </ReevaluatedModal>
+      </>
+    );
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(topOnClose).toHaveBeenCalledTimes(1);
+    expect(baseOnClose).not.toHaveBeenCalled();
+
+    rerender(
+      <>
+        <Modal open onClose={baseOnClose} ariaLabel="base">
+          <p>base body</p>
+        </Modal>
+        <ReevaluatedModal open={false} onClose={topOnClose} ariaLabel="top">
+          <p>top body</p>
+        </ReevaluatedModal>
+      </>
+    );
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(baseOnClose).toHaveBeenCalledTimes(1);
+  });
+
   it('closes on backdrop click but not on panel click', () => {
     const onClose = vi.fn();
     render(<Modal open onClose={onClose} ariaLabel="x"><p>body</p></Modal>);

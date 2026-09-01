@@ -9,6 +9,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hasTailscaleCert } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
+import { getCliSetupGuide } from './setup-guide.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const { dir: CERT_DIR } = certPaths(join(ROOT, 'data'));
@@ -22,12 +23,20 @@ const HTTPS_MODE = hasTailscaleCert(CERT_DIR);
 
 // When HTTPS is on, :5555 speaks TLS only — plain http:// requests hit a TLS
 // mismatch and time out. The loopback HTTP mirror on :5553 serves the same
-// app and skips the cert warning. We use it for both polling and the URL
-// handed to the browser. See docs/PORTS.md.
+// app and skips the cert warning, so startup polling always stays local even
+// when the final browser destination is the trusted MagicDNS origin.
 const LOCAL_BASE = HTTPS_MODE
   ? `http://localhost:${HTTP_LOOPBACK_PORT}`
   : `http://localhost:${API_PORT}`;
-const TARGET_URL = LOCAL_BASE;
+// Poll through loopback so certificate trust never delays startup detection,
+// but land the browser on the real MagicDNS origin when a trusted Tailscale
+// cert exists. That is the URL remote devices use and the secure context where
+// microphone/browser APIs work; opening the mirror hid this final setup step.
+// The shared walkthrough also proves that Tailscale is currently connected and
+// the cert matches its current MagicDNS name; a stale cert alone must not send
+// the managed browser to an unreachable host.
+const setupGuide = await getCliSetupGuide({ assumeActive: HTTPS_MODE });
+const TARGET_URL = setupGuide.trustedUrl || LOCAL_BASE;
 
 // First-boot startup can take a while: the server binds, opens the DB pool,
 // loads the brain index, attaches Socket.IO, then health responds. 90s is

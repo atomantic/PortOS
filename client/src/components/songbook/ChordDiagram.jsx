@@ -20,6 +20,23 @@ const SIZES = {
   md: { cell: 16, row: 15, dot: 4.5, font: 8.5 },
 };
 
+const formatFretPosition = (fret, baseFret) => {
+  if (fret < 0) return 'muted';
+  if (fret === 0) return 'open';
+  const absoluteFret = baseFret > 1 ? baseFret + fret - 1 : fret;
+  return `fret ${absoluteFret}`;
+};
+
+const fretboxDescription = (voicing) => {
+  const { frets, baseFret, instrument, bass } = voicing;
+  const strings = frets
+    .map((fret, index) => `string ${frets.length - index}: ${formatFretPosition(fret, baseFret)}`)
+    .join(', ');
+  const base = baseFret > 1 ? ` Base fret ${baseFret}.` : '';
+  const bassHint = bass ? ` Bass note ${bass}.` : '';
+  return `${instrument} chord voicing. ${strings}.${base}${bassHint}`;
+};
+
 const FretboxDiagram = ({ voicing, size }) => {
   const s = SIZES[size] || SIZES.md;
   const { frets, baseFret } = voicing;
@@ -32,13 +49,15 @@ const FretboxDiagram = ({ voicing, size }) => {
   const stringX = (i) => left + i * s.cell;
 
   return (
-    <svg
-      width={width}
-      height={height}
-      viewBox={`0 0 ${width} ${height}`}
-      aria-hidden="true"
-      className="text-gray-400"
-    >
+    <>
+      <span className="sr-only">{fretboxDescription(voicing)}</span>
+      <svg
+        width={width}
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        aria-hidden="true"
+        className="text-gray-400"
+      >
       {/* Nut (thick at first position) + frets */}
       {Array.from({ length: rows + 1 }, (_, j) => (
         <line
@@ -113,7 +132,8 @@ const FretboxDiagram = ({ voicing, size }) => {
           />
         ) : null))}
       </g>
-    </svg>
+      </svg>
+    </>
   );
 };
 

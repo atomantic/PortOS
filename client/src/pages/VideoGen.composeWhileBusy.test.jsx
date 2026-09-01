@@ -31,7 +31,6 @@ const MODEL = {
 const state = vi.hoisted(() => ({
   generateVideo: vi.fn(),
   attach: vi.fn(),
-  enqueue: vi.fn(),
   eventSourceRef: { current: null },
 }));
 
@@ -98,15 +97,6 @@ vi.mock('../hooks/useMediaAnnotations', () => ({
   useMediaAnnotations: () => ({ annotations: {}, updateAnnotation: vi.fn(), getCardProps: vi.fn(() => ({})) }),
 }));
 vi.mock('../hooks/usePreviewRoute', () => ({ default: () => [null, vi.fn()] }));
-vi.mock('../hooks/useVideoGenQueue.js', () => ({
-  useVideoGenQueue: () => ({
-    queue: [],
-    enqueue: state.enqueue,
-    removeFromQueue: vi.fn(),
-    clearFinishedQueue: vi.fn(),
-    cancelRunning: vi.fn(),
-  }),
-}));
 vi.mock('../components/ui/Toast', () => ({
   default: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), loading: vi.fn() }),
 }));
@@ -119,6 +109,19 @@ vi.mock('../components/media/PromptEnhancer', () => ({
 vi.mock('../components/media/PromptFromMedia', () => ({
   default: ({ disabled }) => (
     <div data-testid="prompt-from-media" data-disabled={disabled ? '1' : '0'}>Prompt from media</div>
+  ),
+}));
+vi.mock('../components/media/UniverseStylePicker', () => ({
+  default: ({ onChange }) => (
+    <button
+      type="button"
+      onClick={() => onChange({
+        id: 'u-1', name: 'Example Universe',
+        influences: { embrace: ['inky linework'], avoid: ['glossy'] },
+      })}
+    >
+      Use universe style
+    </button>
   ),
 }));
 
@@ -138,7 +141,6 @@ vi.mock('../components/videoGen/RuntimeFingerprint', () => ({ default: () => nul
 vi.mock('../components/videoGen/VideoGenGallery', () => ({ default: () => null }));
 vi.mock('../components/media/MediaPreview', () => ({ default: () => null }));
 vi.mock('../components/media/StylePresetPicker', () => ({ default: () => null }));
-vi.mock('../components/media/BatchQueuePanel', () => ({ default: () => null }));
 vi.mock('../components/media/MediaJobsQueue', () => ({ default: () => null }));
 vi.mock('../components/imageGen/LoraPicker', () => ({ default: () => null }));
 vi.mock('../components/media/ResolutionField', () => ({ default: () => null }));
@@ -149,7 +151,6 @@ describe('VideoGen compose-while-busy', () => {
   beforeEach(() => {
     state.generateVideo.mockReset().mockReturnValue(new Promise(() => {}));
     state.attach.mockReset().mockReturnValue(new Promise(() => {}));
-    state.enqueue.mockReset();
     state.eventSourceRef.current = null;
     vi.stubGlobal('open', vi.fn());
     Object.defineProperty(globalThis.navigator, 'clipboard', {
@@ -193,7 +194,7 @@ describe('VideoGen compose-while-busy', () => {
     expect(screen.getByRole('button', { name: /Add to queue/ })).toBeEnabled();
   });
 
-  it('copies the composed prompt and opens fal H3 Max without queueing a paid API job', async () => {
+  it('includes the selected universe style in the submitted video prompt', async () => {
     await act(async () => {
       render(
         <MemoryRouter initialEntries={['/media/video']}>
@@ -202,14 +203,36 @@ describe('VideoGen compose-while-busy', () => {
       );
     });
 
-    fireEvent.change(await screen.findByLabelText('Prompt'), { target: { value: 'A clockwork bird takes flight.' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Copy prompt & open fal.ai' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use universe style' }));
+    fireEvent.change(await screen.findByLabelText('Prompt'), { target: { value: 'a fox watches the rain' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Generate$/ }));
 
-    expect(globalThis.open).toHaveBeenCalledWith(
-      'https://fal.ai/tools/minimax-h3-max', '_blank', 'noopener,noreferrer',
-    );
-    await waitFor(() => expect(globalThis.navigator.clipboard.writeText)
-      .toHaveBeenCalledWith('A clockwork bird takes flight.'));
-    expect(state.generateVideo).not.toHaveBeenCalled();
+    await waitFor(() => expect(state.generateVideo).toHaveBeenCalled());
+    expect(state.generateVideo.mock.calls[0][0].prompt).toBe('inky linework. a fox watches the rain');
   });
+
+  it('submits an additional render to the server queue while another render is active', async () => {
+    await act(async () => {
+      render(
+        <MemoryRouter initialEntries={['/media/video']}>
+          <VideoGen />
+        </MemoryRouter>,
+      );
+    });
+
+    const prompt = await screen.findByLabelText('Prompt');
+    fireEvent.change(prompt, { target: { value: 'a fox watches the rain' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Generate$/ })).toBeEnabled());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Generate$/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Cancel/i })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Add to queue/ }));
+    await waitFor(() => expect(state.generateVideo).toHaveBeenCalledTimes(2));
+    expect(state.generateVideo.mock.calls[1][0]).toMatchObject({
+      mode: 'text',
+      prompt: 'a fox watches the rain',
+    });
+  });
+
 });

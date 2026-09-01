@@ -12,11 +12,11 @@ export const updateBrainSettings = (settings, options = {}) => request('/brain/s
 // Brain - Capture & Inbox
 // `repoIntake` ({ malwareScan, learn, targetAppId, studyContext, providerId,
 // model, effort }) is the capture box's post-clone agent opt-in; the server
-// ignores it unless the text is a bare GitHub repo URL. Provider pins apply to
-// the optional repo study only.
-export const captureBrainThought = (text, providerOverride, modelOverride, { creative, repoIntake } = {}, options = {}) => request('/brain/capture', {
+// ignores it unless the text is a bare repository URL. Provider pins apply to
+// the optional repo study only. `note` is saved on a bare-URL link.
+export const captureBrainThought = (text, providerOverride, modelOverride, { creative, repoIntake, note } = {}, options = {}) => request('/brain/capture', {
   method: 'POST',
-  body: JSON.stringify({ text, providerOverride, modelOverride, creative, repoIntake }),
+  body: JSON.stringify({ text, providerOverride, modelOverride, creative, repoIntake, note }),
   ...options
 });
 export const getBrainInbox = (options = {}) => {
@@ -222,7 +222,7 @@ export const runBrainReview = (providerOverride, modelOverride, options = {}) =>
 export const getBrainLinks = (options = {}) => {
   const params = new URLSearchParams();
   if (options.linkType) params.set('linkType', options.linkType);
-  if (options.isGitHubRepo !== undefined) params.set('isGitHubRepo', options.isGitHubRepo);
+  if (options.isRepo !== undefined) params.set('isRepo', options.isRepo);
   if (options.limit) params.set('limit', options.limit);
   if (options.offset) params.set('offset', options.offset);
   return request(`/brain/links?${params}`);
@@ -251,6 +251,14 @@ export const cloneBrainLink = (id, options = {}) => request(`/brain/links/${id}/
 export const pullBrainLink = (id, options = {}) => request(`/brain/links/${id}/pull`, { method: 'POST', ...options });
 export const openBrainLinkFolder = (id, options = {}) => request(`/brain/links/${id}/open-folder`, { method: 'POST', ...options });
 export const scanBrainLink = (id, options = {}) => request(`/brain/links/${id}/scan`, { method: 'POST', ...options });
+// Refresh the clone (unless `pull: false`) and queue a fresh repo-study run with
+// the brief in `studyContext` — the on-demand twin of the capture-time
+// "study for app ideas" checkbox.
+export const studyBrainLink = (id, data = {}, options = {}) => request(`/brain/links/${id}/study`, {
+  method: 'POST',
+  body: JSON.stringify(data),
+  ...options
+});
 export const brainScanReportPath = (id) => `/brain/links/${encodeURIComponent(id)}/scan-report`;
 export const getBrainScanReport = (id, options = {}) => request(`/brain/links/${encodeURIComponent(id)}/scan-report`, {
   responseType: 'text',
@@ -320,6 +328,9 @@ export const getEmbeddingsStatus = () => request('/brain/embeddings/status');
 // caller with its own error toast doesn't get a duplicate from the helper.
 export const syncBrainData = ({ refresh = false, onlyMissing = false } = {}, options = {}) =>
   request('/brain/bridge-sync', { method: 'POST', body: JSON.stringify({ refresh, onlyMissing }), ...options });
+
+// Brain - On This Day (dashboard widget: past-year journals/memories/ideas)
+export const getBrainOnThisDay = (options = {}) => request('/brain/on-this-day', options);
 
 // Brain - Daily Log
 export const listDailyLogs = (options = {}) => {

@@ -1,6 +1,6 @@
 /**
  * Video Generation page (LTX models via mlx_video on macOS, diffusers on
- * Windows). Local-only — there is no external A1111 equivalent for video.
+ * Windows), with local, Grok, and federated render targets.
  *
  * Accepts a source image either via direct upload or via the
  * `?sourceImageFile=` query param so the Image Gen page can pipe a generation
@@ -26,13 +26,13 @@
  * Form state, the URL-param prefill paths, the mode/backend transitions, and
  * `buildGeneratePayload()` live in `useVideoGenForm` (issue #3291) — this page
  * owns the fetching (status/models/history/gallery), the SSE run pipeline, the
- * batch queue, and the rendering.
+ * the rendering. The durable server queue owns queued work; each render target
+ * drains through its own lane.
  *
- * Batch queue: client-side serial executor. The form's "Add to queue" button
- * appends a job to the queue (preserving the current params). When no job is
- * actively generating, the head of the queue is dequeued and submitted via
- * the same generate path as the inline button — so SSE progress, history
- * refresh, and error handling are all reused.
+ * "Add to queue" submits immediately to the durable server queue. That is
+ * important for mixed-target work: a Grok submission can start in its cloud
+ * lane while a local render occupies the GPU lane, and a federated peer owns
+ * the queue for the work it receives.
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
@@ -56,22 +56,21 @@ import LiveVideoStage from '../components/videoGen/LiveVideoStage';
 import { resolveVideoStagePreview, VIDEO_STAGE_KIND } from '../lib/videoStagePreview';
 import VideoGenGallery from '../components/videoGen/VideoGenGallery';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
-import GalleryVideoPicker from '../components/videoGen/GalleryVideoPicker';
-import FalH3MaxPromptFallback from '../components/videoGen/FalH3MaxPromptFallback';
 import MediaPreview from '../components/media/MediaPreview';
 import StylePresetPicker from '../components/media/StylePresetPicker';
+import UniverseStylePicker from '../components/media/UniverseStylePicker';
 import PromptEnhancer from '../components/media/PromptEnhancer';
 import PromptFromMedia from '../components/media/PromptFromMedia';
 import { normalizeVideo } from '../components/media/normalize';
 import {
   Film, Sparkles, Settings as SettingsIcon, RefreshCw, AlertTriangle,
-  X, Type, Image as ImageIcon, GitBranch, ListPlus, Music, SlidersHorizontal, ExternalLink,
+  X, Type, Image as ImageIcon, GitBranch, ListPlus, Music, SlidersHorizontal,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
-import BatchQueuePanel from '../components/media/BatchQueuePanel';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
 import ModelSelect from '../components/ModelSelect';
 import { FormField } from '../components/ui/FormField';
+import AutoSizeTextarea from '../components/ui/AutoSizeTextarea';
 import ModelDownloadBadge, { deriveSizeEstimate } from '../components/media/ModelDownloadBadge';
 import { useModelDownloadStatus, TEXT_ENCODER_DOWNLOAD_ID, textEncoderDownloadId } from '../hooks/useModelDownloadStatus';
 import TextEncoderPicker from '../components/videoGen/TextEncoderPicker';
@@ -80,7 +79,6 @@ import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import usePreviewRoute from '../hooks/usePreviewRoute';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
-import { useVideoGenQueue } from '../hooks/useVideoGenQueue.js';
 import { useVideoGenForm } from '../hooks/useVideoGenForm.js';
 import { useFederatedMediaTarget } from '../hooks/useFederatedMediaTarget';
 import RemoteMediaTargetPicker from '../components/federatedMedia/RemoteMediaTargetPicker';
@@ -96,12 +94,11 @@ import {
 } from '../services/api';
 import LoraPicker from '../components/imageGen/LoraPicker';
 import { VIDEO_RESOLUTIONS, resolutionOptionsForModel } from '../lib/videoGenResolutions';
-import { GROK_VIDEO_DURATIONS, GROK_VIDEO_DEFAULT_DURATION } from '../lib/grokVideoClip.js';
+import { GROK_VIDEO_DURATIONS } from '../lib/grokVideoClip.js';
 import ResolutionField from '../components/media/ResolutionField';
 import { VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, IC_LORA_MODES } from '../lib/videoGenParams.js';
 import { finishTargetForRecord, isDeliveryVideoModel } from '../lib/videoFinish.js';
 import { peerModelRequiresInput } from '../lib/federatedMediaReadiness.js';
-import { openFalH3MaxFreeTool } from '../lib/falVideoHandoff.js';
 const MODES = [
   { id: 'text',   label: 'Text',   icon: Type,       desc: 'Text-to-video' },
   { id: 'image',  label: 'Image',  icon: ImageIcon,  desc: 'Image-to-video (start frame)' },
@@ -115,7 +112,6 @@ const MODES = [
 
 export default function VideoGen() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [falManualPrompt, setFalManualPrompt] = useState('');
   const settingsOpen = searchParams.get('settings') === '1';
   const openSettings = () => setSearchParams(prev => { const n = new URLSearchParams(prev); n.set('settings', '1'); return n; });
   const closeSettings = () => {
@@ -156,7 +152,8 @@ export default function VideoGen() {
   const {
     backend, isGrok, handleBackendChange, grokDuration, setGrokDuration,
     mode, handleModeChange,
-    prompt, setPrompt, envelopedPrompt, negativePrompt, setNegativePrompt, stylePreset, setStylePreset, remixModelFallback,
+    prompt, setPrompt, envelopedPrompt, negativePrompt, setNegativePrompt, stylePreset, setStylePreset,
+    selectedUniverse, setSelectedUniverse, remixModelFallback,
     modelId, handleModelChange, currentModel, visibleModels,
     loraFamily, videoLoras, loraUnavailableHint,
     selectedLoras, setSelectedLoras,
@@ -192,16 +189,6 @@ export default function VideoGen() {
     remoteSubmissionFields: remoteTarget.isRemote ? remoteTarget.submissionFields : null,
   });
 
-  // fal's daily H3 Max allowance is browser-only; its API is a separately
-  // metered product. Keep this as an explicit handoff rather than pretending a
-  // provider POST can spend the free quota. The exact composed prompt (style +
-  // no-music envelope) is what gets copied, matching a normal submission.
-  const falFreeSupported = mode === 'text' || mode === 'image';
-  const openFalFree = () => openFalH3MaxFreeTool({
-    prompt: envelopedPrompt,
-    negativePrompt,
-    onCopyFailure: setFalManualPrompt,
-  });
   // Conditioning the selected peer model cannot take. The server refuses a job
   // holding any of it (MEDIA_PROVIDER_INPUT_UNSUPPORTED) rather than silently
   // rendering something else, so the form says so before the user commits.
@@ -264,7 +251,6 @@ export default function VideoGen() {
   // `null` = closed; otherwise `{ kind, index? }` records which slot the pick
   // lands in, since one modal serves every slot.
   const [galleryPicker, setGalleryPicker] = useState(null);
-  const [falImportOpen, setFalImportOpen] = useState(false);
   const handleGalleryPick = (item) => {
     const filename = item?.filename;
     if (!filename || !galleryPicker) return;
@@ -320,6 +306,13 @@ export default function VideoGen() {
     const raw = item?.raw || item;
     await deleteVideoHistoryItem(raw.id, { silent: true }).catch((err) => toast.error(err.message || 'Delete failed'));
     setHistory((h) => h.filter((v) => v.id !== raw.id));
+  }, []);
+  const handlePromptSaved = useCallback((item, prompt) => {
+    const id = item?.id || item?.raw?.id;
+    if (!id) return;
+    setHistory((h) => h.map((v) => v.id === id
+      ? { ...v, prompt: prompt === '(no prompt)' ? '' : prompt }
+      : v));
   }, []);
   const handleToggleHistoryHidden = useCallback(async (item) => {
     const raw = item?.raw || item;
@@ -384,21 +377,18 @@ export default function VideoGen() {
   const [progress, setProgress] = useState(null);
   const [statusMsg, setStatusMsg] = useState('');
   const [error, setError] = useState(null);
-  // Main-stage preview state (#4588). `currentImage` is the runner's latest
-  // decoded frame (absent for every runner that doesn't publish one yet, which
-  // is why the stage falls back to the render's conditioning). `renderGeometry`
-  // is the server's RESOLVED width/height — the form's values are what we
-  // asked for, and videoGen snaps both edges down to the model's grid.
+  // Main-stage preview state (#4588). `renderGeometry` is the server's
+  // RESOLVED width/height — the form's values are what we asked for, and
+  // videoGen snaps both edges down to the model's grid. Transient runner frames
+  // are intentionally ignored: they are not useful for judging a video render.
   // `lastRender` is this session's finished clip, so the stage hands off to it
   // instead of going blank when the render lands.
-  const [currentImage, setCurrentImage] = useState(null);
   const [renderGeometry, setRenderGeometry] = useState(null);
   const [lastRender, setLastRender] = useState(null);
   const { attach, eventSourceRef } = useMediaJobSse('video');
   // Hold the reject() of the in-flight runGeneration Promise so cancel can
   // settle it. Without this, handleCancel() closes the EventSource but the
-  // outstanding Promise dangles forever — and the queue worker's .finally()
-  // never runs, leaving runningQueueId stuck and freezing further dequeue.
+  // outstanding Promise dangles forever.
   const runRejectRef = useRef(null);
   // Per-run abort token. Bumped at the start of each runGeneration() and
   // again on cancel; runGeneration captures the value at start and bails
@@ -431,15 +421,9 @@ export default function VideoGen() {
       onQueued: (msg) => setStatusMsg(typeof msg.position === 'number' ? `Queued (position ${msg.position})` : 'Queued'),
       onStarted: () => setStatusMsg('Starting render…'),
       onRenderMeta: (msg) => setRenderGeometry({ width: msg.width, height: msg.height }),
-      // Preview-only frame: a runner frame with no progress value. It must not
-      // disturb the progress bar, hence its own frame type on the wire.
-      onPreview: (msg) => { if (msg.currentImage) setCurrentImage(msg.currentImage); },
       onStatus: (msg) => setStatusMsg(msg.message),
       onProgress: (msg) => {
         setProgress({ progress: msg.progress });
-        // Runners throttle frames, so an absent key must leave the last frame
-        // on the stage rather than blanking it.
-        if (msg.currentImage) setCurrentImage(msg.currentImage);
         // A bare tqdm percentage shouldn't blank the STATUS line that just
         // preceded it; only overwrite when the progress event carries text.
         if (msg.message) setStatusMsg(msg.message);
@@ -448,8 +432,7 @@ export default function VideoGen() {
         setGenerating(false);
         setProgress({ progress: 1 });
         setStatusMsg('Complete');
-        // Hand the stage off from the forming preview to the finished clip.
-        setCurrentImage(null);
+        // Hand the stage off from the conditioning media to the finished clip.
         if (msg.result) setLastRender(msg.result);
         if (withToast) toast.success('Video generated');
         refreshHistory();
@@ -670,7 +653,6 @@ export default function VideoGen() {
   );
   const stage = useMemo(() => resolveVideoStagePreview({
     generating,
-    currentImage,
     width: renderGeometry?.width ?? width,
     height: renderGeometry?.height ?? height,
     result: lastRender,
@@ -679,14 +661,15 @@ export default function VideoGen() {
     lastImageFile, lastUploadUrl,
     keyframes: keyframesActive ? keyframes : null,
   }), [
-    generating, currentImage, renderGeometry, width, height, lastRender, extendSource,
+    generating, renderGeometry, width, height, lastRender, extendSource,
     sourceImageFile, sourceUploadUrl, lastImageFile, lastUploadUrl, keyframesActive, keyframes,
   ]);
   const showStage = generating || stage.kind !== VIDEO_STAGE_KIND.EMPTY;
 
   // Run a single payload through the SSE pipeline. Returns a promise that
-  // resolves when the job completes (or rejects on error / cancel). Shared
-  // by the inline submit and the queue worker.
+  // resolves when the job completes (or rejects on error / cancel). The
+  // separate queue-submit path below deliberately does not attach SSE: the
+  // shared MediaJobsQueue is the live view for work submitted in parallel.
   //
   // Per-run abort token: the user can press Cancel during the brief window
   // between generateVideo() POST and its `.then()` resolving with a jobId.
@@ -703,19 +686,17 @@ export default function VideoGen() {
     setProgress({ progress: 0 });
     setStatusMsg('Starting...');
     setError(null);
-    // Stale-job isolation: the previous run's frame and geometry must not be
-    // shown as if they belonged to this one. `lastRender` deliberately
-    // survives so the stage keeps the finished clip until this run produces
-    // something of its own.
-    setCurrentImage(null);
+    // Stale-job isolation: the previous run's geometry must not be shown as if
+    // it belonged to this one. `lastRender` deliberately survives so the stage
+    // keeps the finished clip until this run produces something of its own.
     setRenderGeometry(null);
 
     const myToken = ++runTokenRef.current;
     const isCurrent = () => myToken === runTokenRef.current;
 
     // Wrap settle so the cancel ref is cleared exactly once when the Promise
-    // transitions to a final state — guarantees the queue worker's .finally()
-    // always runs and stale rejects can't fire after a successful complete.
+    // transitions to a final state and stale rejects can't fire after a
+    // successful complete.
     const settleResolve = (value) => { runRejectRef.current = null; activeJobIdRef.current = null; resolve(value); };
     const settleReject = (err) => { runRejectRef.current = null; activeJobIdRef.current = null; reject(err); };
     runRejectRef.current = settleReject;
@@ -748,39 +729,44 @@ export default function VideoGen() {
     });
   });
 
-  // Client-side serial batch queue. Owns the queue state + worker effect;
-  // the page supplies `generating` (parks the worker) and `runGeneration`
-  // (runs one payload through the SSE pipeline).
-  const {
-    queue, enqueue, removeFromQueue, clearFinishedQueue, cancelRunning,
-  } = useVideoGenQueue({ generating, runGeneration });
-
   const handleGenerate = async (e) => {
     e?.preventDefault?.();
     if (generating) {
-      if (canEnqueue) handleEnqueue();
+      if (canEnqueue) await handleEnqueue();
       return;
     }
     if (!canEnqueue) return;
     // A capacity window expires on the clock, so an enabled button can already
     // be pointing at a lapsed peer — re-derive at the moment of commit and say
     // so, rather than letting the peer reject a render already paid for.
-    if (remoteTarget.isRemote) {
-      const fresh = remoteTarget.verify();
-      if (!fresh.ok) { toast.error(fresh.message); return; }
-    }
+    if (!verifyRemoteTarget()) return;
     await runGeneration(buildGeneratePayload()).catch(() => {});
   };
 
-  const handleEnqueue = () => {
+  const verifyRemoteTarget = () => {
+    if (!remoteTarget.isRemote) return true;
+    const fresh = remoteTarget.verify();
+    if (!fresh.ok) { toast.error(fresh.message); return false; }
+    return true;
+  };
+
+  const handleEnqueue = async () => {
     // Mirror the Generate guard — a BYOV runtime that isn't installed yet
     // would silently queue a doomed job that fails late in the worker with
     // VENV_MISSING, hiding the installer banner from the user. Block at
     // enqueue time so the only path forward is the install banner above.
     if (!canEnqueue) return;
-    // useVideoGenQueue strips the File blobs into `_blobs` and snapshots the
-    // rest as a stable summary for the queue UI.
-    enqueue(buildGeneratePayload());
+    // A capacity window expires on the clock, so re-check the selected peer at
+    // the moment this queued job is committed. The server then owns the job,
+    // including any multipart uploads, and the appropriate lane can start it
+    // without waiting for this tab's active SSE render.
+    if (!verifyRemoteTarget()) return;
+    await generateVideo(buildGeneratePayload())
+      .then((data) => {
+        const position = Number.isInteger(data?.position) ? ` (position ${data.position})` : '';
+        toast.success(`Queued${position}`);
+      })
+      .catch((err) => toast.error(err.message || 'Failed to queue video'));
   };
 
   const handleCancel = async () => {
@@ -799,17 +785,13 @@ export default function VideoGen() {
     }
     setGenerating(false);
     setStatusMsg('Cancelled');
-    // Settle the in-flight runGeneration Promise so the queue worker's
-    // .finally() releases runningQueueId and the next pending item can run.
-    // Without this the Promise would dangle and the worker would stay parked.
+    // Settle the in-flight runGeneration Promise so callers waiting on the
+    // active render do not retain a dangling promise after cancellation.
     if (runRejectRef.current) {
       const reject = runRejectRef.current;
       runRejectRef.current = null;
       reject(new Error('Cancelled'));
     }
-    // Mark the running queue item errored + release the slot so the next
-    // pending item can dispatch (no-op when nothing's queued).
-    cancelRunning();
   };
 
   // `status.connected` reflects the LEGACY mlx_video pythonPath health. BYOV
@@ -887,44 +869,6 @@ export default function VideoGen() {
       )}
 
       <RuntimeFingerprint runtime={status?.runtime} />
-
-      <div className="flex flex-col gap-3 rounded-xl border border-port-accent/35 bg-port-accent/10 p-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0">
-          <p className="text-sm font-medium text-port-text">MiniMax H3 Max on fal.ai</p>
-          <p className="mt-0.5 text-xs text-port-text-muted">
-            fal offers up to 15 free browser-tool renders per day with an account. PortOS copies this form&rsquo;s composed prompt and opens that tool; download the MP4, then upload it to Media History. fal&rsquo;s app API is separately metered.
-          </p>
-          {!falFreeSupported && (
-            <p className="mt-1 text-xs text-port-warning" role="status">
-              Switch to Text or Image mode for the H3 Max free-tool handoff.
-            </p>
-          )}
-        </div>
-        <div className="flex shrink-0 flex-col gap-2 sm:items-stretch">
-          <button
-            type="button"
-            onClick={openFalFree}
-            disabled={!falFreeSupported || !envelopedPrompt?.trim()}
-            title={!falFreeSupported
-              ? 'fal H3 Max free-tool handoff supports Text and Image modes'
-              : !envelopedPrompt?.trim()
-                ? 'Write a prompt first'
-                : mode === 'image'
-                  ? 'Copies the prompt; add your selected start frame in fal after it opens'
-                  : 'Copies the prompt and opens fal H3 Max'}
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-port-accent px-3 py-2 text-xs font-medium text-white hover:bg-port-accent/80 disabled:cursor-not-allowed disabled:opacity-45"
-          >
-            <ExternalLink size={14} aria-hidden="true" /> Copy prompt &amp; open fal.ai
-          </button>
-          <button
-            type="button"
-            onClick={() => setFalImportOpen(true)}
-            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-port-border px-3 py-2 text-xs font-medium text-port-text hover:border-port-accent hover:text-port-accent"
-          >
-            Import downloaded video
-          </button>
-        </div>
-      </div>
 
       {status && status.connected === false && (() => {
         const missingCount = status.missingPackages?.length || 0;
@@ -1082,27 +1026,31 @@ export default function VideoGen() {
               repairing={modelDownload.repairing}
             />
           )}
+          <UniverseStylePicker
+            value={selectedUniverse?.id || ''}
+            onChange={setSelectedUniverse}
+          />
           <StylePresetPicker
             value={stylePreset?.id || ''}
             onChange={setStylePreset}
           />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <FormField label="Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-              <textarea
+              <AutoSizeTextarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 rows={3}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 resize-y"
+                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[80px]"
                 placeholder="Describe the video you want to generate..."
               />
             </FormField>
             <FormField label="Negative Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-              <textarea
+              <AutoSizeTextarea
                 value={negativePrompt}
                 onChange={(e) => setNegativePrompt(e.target.value)}
                 disabled={!isGrok && currentModel?.supportsNegativePrompt === false}
                 rows={3}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 resize-y"
+                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[80px]"
                 placeholder={!isGrok && currentModel?.supportsNegativePrompt === false
                   ? 'This CFG-distilled model does not use a negative prompt.'
                   : 'What to avoid...'}
@@ -1111,7 +1059,8 @@ export default function VideoGen() {
           </div>
 
           {/* Keep Enhance live while a render is in flight so the next clip
-              can be composed and queued. Generate itself becomes Cancel. */}
+              can be composed and submitted to its server queue. Generate
+              itself becomes Cancel. */}
           <PromptEnhancer
             kind="video"
             prompt={prompt}
@@ -1502,7 +1451,7 @@ export default function VideoGen() {
               onClick={handleEnqueue}
               disabled={!canEnqueue}
               className="flex items-center gap-2 px-4 py-2 border border-port-border text-gray-200 hover:text-white hover:bg-port-border/40 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium rounded-lg min-h-[40px]"
-              title={canEnqueue ? 'Add this configuration to the batch queue'
+              title={canEnqueue ? 'Submit this configuration to its server queue; local, Grok, and remote lanes run independently'
                 : icWeightsBlocked ? `Download the ${icSpec?.label || 'IC-LoRA'} weight before queueing`
                   : weightsGateBlocked ? 'Finish required model downloads before queueing'
                     : 'Complete the required inputs before queueing'}
@@ -1530,18 +1479,6 @@ export default function VideoGen() {
         </div>
       </form>
 
-      <BatchQueuePanel
-        queue={queue}
-        onRemove={removeFromQueue}
-        onClear={clearFinishedQueue}
-        summarize={(item) => (
-          <>
-            <span className="uppercase mr-2">{item.params.backend === 'grok' ? `grok ${item.params.mode}` : item.params.mode}</span>
-            {item.params.width}×{item.params.height} · {item.params.backend === 'grok' ? `${item.params.grokDuration || GROK_VIDEO_DEFAULT_DURATION}s` : `${item.params.numFrames}f`}
-          </>
-        )}
-      />
-
       <MediaJobsQueue kind="video" />
 
       <VideoGenGallery
@@ -1568,6 +1505,7 @@ export default function VideoGen() {
         items={previewItems}
         annotations={annotations}
         updateAnnotation={updateAnnotation}
+        onPromptSaved={handlePromptSaved}
         onContinue={handleContinue}
         onRemix={(item) => item?.raw && handleRemixVideo(item.raw)}
       />
@@ -1576,26 +1514,6 @@ export default function VideoGen() {
         open={!!galleryPicker}
         onClose={() => setGalleryPicker(null)}
         onSelect={handleGalleryPick}
-      />
-
-      <GalleryVideoPicker
-        open={falImportOpen}
-        onClose={() => setFalImportOpen(false)}
-        onSelect={(_item, context) => {
-          if (context?.origin === 'upload') {
-            refreshHistory();
-            toast.success('Video imported to Media History');
-          } else {
-            toast('That video is already in Media History');
-          }
-        }}
-        allowUpload
-        uploadToGallery
-      />
-
-      <FalH3MaxPromptFallback
-        prompt={falManualPrompt}
-        onClose={() => setFalManualPrompt('')}
       />
 
       <Drawer open={settingsOpen} onClose={closeSettings} title="Media Generation Settings" size="lg">

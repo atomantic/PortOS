@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useMemo, useId, useRef } from 'react';
 import { Link } from 'react-router';
 import {
-  AlertTriangle, Bot, ChevronDown, ChevronRight, CircleDot, ExternalLink,
-  Loader2, RefreshCw, Rocket, Search, Tag, User
+  AlertTriangle, Bot, ChevronDown, ChevronRight, CircleDot, ClipboardCheck,
+  ExternalLink, Loader2, RefreshCw, Rocket, Search, Tag, User
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import Banner from '../../ui/Banner';
@@ -19,20 +19,76 @@ import { timeAgo } from '../../../utils/formatters';
 
 const FORGE_LABEL = { github: 'GitHub', gitlab: 'GitLab' };
 
-const CLAIM_STATUS_RANK = { queuing: 0, queued: 1, active: 2, completed: 3, blocked: 3 };
-const CLAIM_STATUS_LABEL = {
+const RUN_STATUS_RANK = { queuing: 0, queued: 1, active: 2, completed: 3, blocked: 3 };
+const RUN_STATUS_LABEL = {
   queued: 'Queued — view',
   active: 'Active — view',
   completed: 'Completed — view',
   blocked: 'Blocked — view'
 };
 
-const claimStatusForTask = (status) => ({
+const runStatusForTask = (status) => ({
   pending: 'queued',
   in_progress: 'active',
   completed: 'completed',
   blocked: 'blocked'
 }[status] || null);
+
+// The two per-issue agent runs this tab can launch. Both POST the same
+// `/tasks/slashdo` shape — a slashdo command pinned to one issue via `target` —
+// and differ only in which command, which task-metadata key carries the pinned
+// issue back over the socket, and how the row reads.
+//
+// They are tracked as SEPARATE runs (the state map is keyed `<action>:<number>`,
+// and the server persists `claimTarget` / `replanTarget` under distinct keys) so
+// replanning an issue never disables its Claim button, and neither run's
+// lifecycle events can light up the other's.
+// Every message this tab prints about a run is "<verb> #42 <happened>", so the
+// per-action table carries only the two words that vary — the imperative the
+// button promises and the noun the notice names it by — and one formatter
+// renders all four sentences from them. A third action supplies two strings.
+const runMessages = ({ verb, noun }) => ({
+  queued: (number) => `Queued a CoS agent to ${verb} #${number}`,
+  failed: (number) => `Failed to queue a ${verb} for #${number}`,
+  transition: (number, to) => ({
+    active: `${noun} #${number} is now active`,
+    completed: `${noun} #${number} completed`,
+    blocked: `${noun} #${number} was blocked`
+  }[to])
+});
+
+const ISSUE_ACTIONS = {
+  replan: {
+    command: 'replan',
+    targetKey: 'replanTarget',
+    label: 'Replan',
+    icon: ClipboardCheck,
+    tone: 'bg-port-border/60 text-gray-300 enabled:hover:bg-port-border',
+    title: (number) => `Queue a CoS agent to review the plan on issue #${number} and comment its refinements — it writes no code`,
+    ...runMessages({ verb: 'replan', noun: 'Replan of' })
+  },
+  claim: {
+    command: 'next',
+    targetKey: 'claimTarget',
+    label: 'Claim',
+    icon: Rocket,
+    tone: 'bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30',
+    title: (number, appName) => `Queue a CoS agent to claim issue #${number} for ${appName}`,
+    ...runMessages({ verb: 'claim', noun: 'Claim' })
+  }
+};
+
+// Buttons render in table order — no second list to keep in sync.
+const ACTION_ORDER = Object.keys(ISSUE_ACTIONS);
+
+/** Run-map key. One issue can carry an independent run per action. */
+const runKey = (action, issueNumber) => `${action}:${issueNumber}`;
+
+/** Split a run key back into its action + issue number (as a string). */
+function parseRunKey(key) {
+  const at = key.indexOf(':');
+  return { action: key.slice(0, at), issueNumber: key.slice(at + 1) };
+}
 
 // Module-scoped so `useProviderModels` sees a stable predicate — an inline
 // arrow would be a new identity every render, re-firing the hook's fetch
@@ -139,6 +195,11 @@ function LabelFilterChip({ facet, hidden, onToggle }) {
  * Claiming queues the SAME `/do:next` task the Agent Operations panel does,
  * pinned to this issue via `target` — so the run honors the app's configured
  * Work Tracker, worktree, and PR settings instead of a parallel code path.
+ *
+ * Replan is the same mechanism pointed at `replan`: a SECOND model re-derives
+ * the plan on one already-planned issue (and, for an epic, its children) and
+ * comments its refinements. It writes no code and claims nothing, so it is
+ * offered alongside Claim rather than instead of it.
  */
 export default function IssuesTab({ appId, appName }) {
   const searchId = useId();
@@ -153,18 +214,18 @@ export default function IssuesTab({ appId, appName }) {
   // default without reconciling state against the new facet list.
   const [hiddenLabels, setHiddenLabels] = useState(() => new Set(DEFAULT_HIDDEN_LABELS));
   const [expanded, setExpanded] = useState(() => new Set());
-  // Per-issue claim lifecycle: 'queuing' while the POST is in flight, then the
-  // task's live CoS state. Keyed by issue number so one claim can't disable
-  // every other row's button.
-  const [claims, setClaims] = useState({});
-  const claimsRef = useRef({});
+  // Per-issue run lifecycle: 'queuing' while the POST is in flight, then the
+  // task's live CoS state. Keyed `<action>:<issue number>` so neither one row's
+  // run nor its sibling action can disable the others' buttons.
+  const [runs, setRuns] = useState({});
+  const runsRef = useRef({});
   // Generation guard: a forge list can take seconds, so a Refresh (or a switch to
   // a different app, which updates this component in place rather than
   // remounting it) can leave an older request in flight. Without this, that older
   // response lands last and shows one app's issues under another's Claim buttons.
   const requestRef = useRef(0);
 
-  // Page-level provider/model/effort pin for every Claim button on this tab —
+  // Page-level provider/model/effort pin for every Claim AND Replan button on this tab —
   // left untouched (blank), a claim resolves the install's active provider,
   // same as the bare button always did (POST /tasks/slashdo -> resolveAgentProviderAndModel;
   // this manual path does NOT consult the app's scheduled claim-work override —
@@ -179,18 +240,18 @@ export default function IssuesTab({ appId, appName }) {
   const [effort, setEffort] = useState('');
   const [overrideContext, setOverrideContext] = useState('');
 
-  // Keep the event-driven path based on the latest claims without putting a
+  // Keep the event-driven path based on the latest runs without putting a
   // mutable state snapshot in its effect dependencies. Socket callbacks can
   // arrive between the POST response and the next React render.
-  const replaceClaims = useCallback((updater) => {
-    const next = updater(claimsRef.current);
-    claimsRef.current = next;
-    setClaims(next);
+  const replaceRuns = useCallback((updater) => {
+    const next = updater(runsRef.current);
+    runsRef.current = next;
+    setRuns(next);
   }, []);
 
   useEffect(() => {
-    claimsRef.current = {};
-    setClaims({});
+    runsRef.current = {};
+    setRuns({});
     setOverrideContext('');
     setHiddenLabels(new Set(DEFAULT_HIDDEN_LABELS));
     setUnassignedOnly(false);
@@ -203,36 +264,45 @@ export default function IssuesTab({ appId, appName }) {
 
     const applyTaskUpdate = (task) => {
       if (!task?.id) return;
-      const nextStatus = claimStatusForTask(task.status);
+      const nextStatus = runStatusForTask(task.status);
       if (!nextStatus) return;
 
-      const currentClaims = claimsRef.current;
-      const nextClaims = { ...currentClaims };
+      const currentRuns = runsRef.current;
+      const nextRuns = { ...currentRuns };
       const transitions = [];
 
-      for (const [issueNumber, rawClaim] of Object.entries(currentClaims)) {
-        const claim = typeof rawClaim === 'string' ? { status: rawClaim } : rawClaim;
-        const matchesTask = claim.taskId === task.id || (
-          !claim.taskId && task.metadata?.app === appId &&
-          String(task.metadata?.claimTarget) === issueNumber
+      for (const [key, rawRun] of Object.entries(currentRuns)) {
+        const { action, issueNumber } = parseRunKey(key);
+        const spec = ISSUE_ACTIONS[action];
+        if (!spec) continue;
+        const run = typeof rawRun === 'string' ? { status: rawRun } : rawRun;
+        // Before the POST resolves there is no task id to match on, so fall back
+        // to the durable per-action target the server stamped. Reading THIS
+        // action's key is what keeps a claim's events off a replan's row.
+        const matchesTask = run.taskId === task.id || (
+          !run.taskId && task.metadata?.app === appId &&
+          String(task.metadata?.[spec.targetKey]) === issueNumber
         );
         if (!matchesTask) continue;
 
-        const currentStatus = claim.status || 'queuing';
-        if ((CLAIM_STATUS_RANK[nextStatus] ?? 0) < (CLAIM_STATUS_RANK[currentStatus] ?? 0)) continue;
-        if (claim.taskId === task.id && currentStatus === nextStatus) continue;
+        const currentStatus = run.status || 'queuing';
+        if ((RUN_STATUS_RANK[nextStatus] ?? 0) < (RUN_STATUS_RANK[currentStatus] ?? 0)) continue;
+        if (run.taskId === task.id && currentStatus === nextStatus) continue;
 
-        nextClaims[issueNumber] = { ...claim, taskId: claim.taskId || task.id, status: nextStatus };
-        transitions.push({ issueNumber, from: currentStatus, to: nextStatus });
+        nextRuns[key] = { ...run, taskId: run.taskId || task.id, status: nextStatus };
+        transitions.push({ action, issueNumber, from: currentStatus, to: nextStatus });
       }
 
       if (transitions.length === 0) return;
-      replaceClaims(() => nextClaims);
+      replaceRuns(() => nextRuns);
 
-      for (const { issueNumber, from, to } of transitions) {
-        if (to === 'active' && from !== 'active') toast(`Claim #${issueNumber} is now active`, { icon: '▶️' });
-        if (to === 'completed' && from !== 'completed') toast.success(`Claim #${issueNumber} completed`);
-        if (to === 'blocked' && from !== 'blocked') toast.error(`Claim #${issueNumber} was blocked`);
+      for (const { action, issueNumber, from, to } of transitions) {
+        if (to === from) continue;
+        const message = ISSUE_ACTIONS[action].transition(issueNumber, to);
+        if (!message) continue;
+        if (to === 'active') toast(message, { icon: '▶️' });
+        else if (to === 'completed') toast.success(message);
+        else if (to === 'blocked') toast.error(message);
       }
     };
 
@@ -269,7 +339,7 @@ export default function IssuesTab({ appId, appName }) {
       socket.off('cos:agent:spawned', handleAgentSpawned);
       socket.off('cos:agent:completed', handleAgentCompleted);
     };
-  }, [appId, replaceClaims]);
+  }, [appId, replaceRuns]);
 
   const load = useCallback(async () => {
     const generation = requestRef.current + 1;
@@ -348,10 +418,16 @@ export default function IssuesTab({ appId, appName }) {
     return next;
   });
 
-  const handleClaim = async (issue) => {
-    replaceClaims(prev => ({ ...prev, [issue.number]: { status: 'queuing', taskId: null } }));
+  // One launcher for both per-issue actions: they POST the same body to the same
+  // endpoint and differ only in the slashdo command. Keeping them on one path is
+  // what guarantees the provider pin, override context, and prefetched issue
+  // content reach a replan exactly as they reach a claim.
+  const handleRun = async (issue, action) => {
+    const spec = ISSUE_ACTIONS[action];
+    const key = runKey(action, issue.number);
+    replaceRuns(prev => ({ ...prev, [key]: { status: 'queuing', taskId: null } }));
     const trimmedOverrideContext = overrideContext.trim();
-    const result = await api.createSlashdoTask('next', appId, {
+    const result = await api.createSlashdoTask(spec.command, appId, {
       target: String(issue.number),
       issueContext: {
         number: issue.number,
@@ -365,34 +441,34 @@ export default function IssuesTab({ appId, appName }) {
       ...(trimmedOverrideContext ? { overrideContext: trimmedOverrideContext } : {}),
     }, { silent: true })
       .catch(err => {
-        toast.error(err?.message || `Failed to queue a claim for #${issue.number}`);
+        toast.error(err?.message || spec.failed(issue.number));
         return null;
       });
     if (!result) {
-      replaceClaims(prev => {
+      replaceRuns(prev => {
         const next = { ...prev };
-        delete next[issue.number];
+        delete next[key];
         return next;
       });
       return;
     }
-    replaceClaims(prev => {
-      const current = prev[issue.number];
+    replaceRuns(prev => {
+      const current = prev[key];
       const currentStatus = typeof current === 'string' ? current : current?.status;
-      const resultStatus = claimStatusForTask(result.status) || 'queued';
-      const status = (CLAIM_STATUS_RANK[resultStatus] ?? 0) >= (CLAIM_STATUS_RANK[currentStatus] ?? 0)
+      const resultStatus = runStatusForTask(result.status) || 'queued';
+      const status = (RUN_STATUS_RANK[resultStatus] ?? 0) >= (RUN_STATUS_RANK[currentStatus] ?? 0)
         ? resultStatus
         : currentStatus;
       return {
         ...prev,
-        [issue.number]: {
+        [key]: {
           ...(typeof current === 'object' ? current : {}),
           status,
           taskId: current?.taskId || result.id || null
         }
       };
     });
-    toast.success(`Queued a CoS agent to claim #${issue.number}`);
+    toast.success(spec.queued(issue.number));
   };
 
   if (loading && !data) return <BrailleSpinner text="Loading issues" />;
@@ -484,7 +560,7 @@ export default function IssuesTab({ appId, appName }) {
       <div className="space-y-3 px-3 py-2 bg-port-card border border-port-border rounded-lg">
         <div className="flex flex-col sm:flex-row sm:items-center gap-2">
           <span className="flex items-center gap-1.5 text-xs text-gray-500 uppercase tracking-wide shrink-0">
-            <Bot size={14} /> Claim with
+            <Bot size={14} /> Run with
           </span>
           <div className="flex-1">
             <ProviderModelSelector
@@ -513,11 +589,11 @@ export default function IssuesTab({ appId, appName }) {
             onChange={e => setOverrideContext(e.target.value)}
             maxLength={4000}
             rows={2}
-            placeholder="Add guidance for this claim, such as a preferred implementation focus…"
+            placeholder="Add guidance for the run you launch below, such as a preferred implementation focus…"
             className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm placeholder:text-gray-600 focus:border-port-accent focus:outline-hidden resize-y"
           />
           <p className="text-xs text-gray-600">
-            Appended to the selected claim&apos;s instructions; blank leaves the claim prompt unchanged.
+            Applies to every Claim and Replan you launch below — appended to that run&apos;s instructions; blank leaves its prompt unchanged.
           </p>
         </div>
       </div>
@@ -558,8 +634,6 @@ export default function IssuesTab({ appId, appName }) {
         <div className="border border-port-border rounded-lg divide-y divide-port-border overflow-hidden">
           {issues.map(issue => {
             const isOpen = expanded.has(issue.number);
-            const claim = claims[issue.number];
-            const claimState = typeof claim === 'string' ? claim : claim?.status;
             return (
               <div key={issue.number} className="bg-port-card">
                 <div className="flex flex-col sm:flex-row sm:items-start gap-3 p-3">
@@ -616,27 +690,42 @@ export default function IssuesTab({ appId, appName }) {
                     </div>
                   </div>
 
-                  <div className="shrink-0">
-                    {claimState && claimState !== 'queuing' ? (
-                      <Link
-                        to="/cos/agents"
-                        className="px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 border border-port-border rounded-lg text-xs flex items-center gap-1.5 transition-colors"
-                      >
-                        <Rocket size={14} /> {CLAIM_STATUS_LABEL[claimState] || 'Queued — view'}
-                      </Link>
-                    ) : (
-                      <button
-                        onClick={() => handleClaim(issue)}
-                        disabled={claimState === 'queuing'}
-                        title={`Queue a CoS agent to claim issue #${issue.number} for ${appName}`}
-                        className="px-3 py-1.5 bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 border border-port-border rounded-lg text-xs flex items-center gap-1.5 disabled:opacity-50 transition-colors"
-                      >
-                        {claimState === 'queuing'
-                          ? <Loader2 size={14} className="animate-spin" />
-                          : <Rocket size={14} />}
-                        {claimState === 'queuing' ? 'Queuing…' : 'Claim'}
-                      </button>
-                    )}
+                  <div className="shrink-0 flex items-center gap-2">
+                    {ACTION_ORDER.map(action => {
+                      const spec = ISSUE_ACTIONS[action];
+                      const run = runs[runKey(action, issue.number)];
+                      const state = typeof run === 'string' ? run : run?.status;
+                      const Icon = spec.icon;
+                      // A launched run swaps its button for a link to the agent
+                      // queue: the run is no longer this row's to start, and the
+                      // one thing the user wants next is to watch it.
+                      if (state && state !== 'queuing') {
+                        return (
+                          <Link
+                            key={action}
+                            to="/cos/agents"
+                            aria-label={`${spec.label} #${issue.number}: ${RUN_STATUS_LABEL[state] || 'Queued — view'}`}
+                            className="px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 border border-port-border rounded-lg text-xs flex items-center gap-1.5 transition-colors"
+                          >
+                            <Icon size={14} /> {spec.label} · {RUN_STATUS_LABEL[state] || 'Queued — view'}
+                          </Link>
+                        );
+                      }
+                      return (
+                        <button
+                          key={action}
+                          onClick={() => handleRun(issue, action)}
+                          disabled={state === 'queuing'}
+                          title={spec.title(issue.number, appName)}
+                          className={`px-3 py-1.5 ${spec.tone} border border-port-border rounded-lg text-xs flex items-center gap-1.5 disabled:opacity-50 transition-colors`}
+                        >
+                          {state === 'queuing'
+                            ? <Loader2 size={14} className="animate-spin" />
+                            : <Icon size={14} />}
+                          {state === 'queuing' ? 'Queuing…' : spec.label}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 

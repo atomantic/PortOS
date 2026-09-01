@@ -33,6 +33,16 @@ import {
   CONTRIBUTOR_LABELS,
   JIRA_CONTRIBUTOR_LABELS,
   formatContributorLabelReleaseCommands,
+  PLANNER_LABEL_COLOR,
+  normalizePlannerId,
+  resolvePlannerId,
+  forgePlannerLabel,
+  jiraPlannerLabel,
+  isPlannerLabel,
+  plannerLabelSpec,
+  formatPlannerLabelGuidance,
+  OPTIONAL_ISSUE_LABEL_FLAG_SLOTS,
+  formatOptionalIssueLabelFlags,
 } from './dispatchLabels.js';
 
 describe('dispatch label vocabulary', () => {
@@ -225,5 +235,132 @@ describe('shared guidance', () => {
       .toBe('--label area:<area> --label model:<tier> --label effort:<level>');
     expect(REPO_STUDY_LABEL_CONTRACT.jiraFlags).toContain('model-<tier>');
     expect(REPO_STUDY_LABEL_CONTRACT.instructions).toContain('complete-label contract (mandatory)');
+  });
+});
+
+// The planner axis records WHO wrote a plan. It is the only open-ended label
+// vocabulary here, so its risks are different from the enumerated axes: a bad
+// slug produces a junk label the forge happily creates, and a fallback that
+// guesses would attribute a plan to a model that never saw it.
+describe('planner attribution labels', () => {
+  it('slugs a model id down to the identity a human recognizes', () => {
+    expect(normalizePlannerId('claude-opus-5')).toBe('opus-5');
+    expect(normalizePlannerId('  Claude-Sonnet-5  ')).toBe('sonnet-5');
+    expect(normalizePlannerId('anthropic/claude-haiku-4-5-20251001')).toBe('haiku-4-5');
+    expect(normalizePlannerId('gemini-3.7-flash')).toBe('gemini-3-7-flash');
+    expect(normalizePlannerId('grok')).toBe('grok');
+  });
+
+  // `claude-code` is a PROVIDER id, not a model — stripping `claude-` off it
+  // would file every plan as `planner:code`.
+  it('strips the claude- prefix only when a model family follows', () => {
+    expect(normalizePlannerId('claude-code')).toBe('claude-code');
+    expect(normalizePlannerId('claude-opus-5')).toBe('opus-5');
+  });
+
+  it('returns null rather than an empty or unusable label', () => {
+    expect(normalizePlannerId('')).toBe(null);
+    expect(normalizePlannerId('   ')).toBe(null);
+    expect(normalizePlannerId('///')).toBe(null);
+    expect(normalizePlannerId(null)).toBe(null);
+    expect(normalizePlannerId(42)).toBe(null);
+    expect(forgePlannerLabel('!!!')).toBe(null);
+    expect(jiraPlannerLabel(undefined)).toBe(null);
+  });
+
+  it('prefers the model that ran and falls back to the provider, never to a guess', () => {
+    expect(resolvePlannerId({ providerId: 'claude-code', model: 'claude-opus-5' })).toBe('opus-5');
+    expect(resolvePlannerId({ providerId: 'grok', model: '' })).toBe('grok');
+    expect(resolvePlannerId({ providerId: 'grok' })).toBe('grok');
+    expect(resolvePlannerId({})).toBe(null);
+    expect(resolvePlannerId()).toBe(null);
+  });
+
+  it('uses the colon form on a forge and the hyphen form on Jira', () => {
+    expect(forgePlannerLabel('claude-opus-5')).toBe('planner:opus-5');
+    expect(jiraPlannerLabel('claude-opus-5')).toBe('planner-opus-5');
+    expect(jiraPlannerLabel('grok')).not.toContain(':');
+  });
+
+  // Prefix-matched, so `formatLabelCreateCommand` / `ensureForgeLabels` can
+  // create a planner label they have never seen before — the whole point of an
+  // open-ended axis.
+  it('resolves a spec by prefix so an unseen planner label still creates lazily', () => {
+    expect(plannerLabelSpec('planner:opus-5')).toEqual({
+      name: 'planner:opus-5',
+      color: PLANNER_LABEL_COLOR,
+      description: 'Plan authored by the opus-5 model',
+    });
+    expect(dispatchLabelSpec('planner:gemini-3-7-flash')?.color).toBe(PLANNER_LABEL_COLOR);
+    expect(formatLabelCreateCommand('planner:opus-5')).toBe(
+      "gh label create planner:opus-5 --color C2185B --description 'Plan authored by the opus-5 model' 2>/dev/null || true",
+    );
+    expect(isPlannerLabel('planner:opus-5')).toBe(true);
+    expect(isPlannerLabel('planner:')).toBe(false);
+    expect(plannerLabelSpec('planner:')).toBe(null);
+    expect(plannerLabelSpec('plan')).toBe(null);
+    expect(dispatchLabelSpec('planner-opus-5')).toBe(null);
+  });
+
+  // The axis must never crowd out the dispatch hints — it answers a different
+  // question (author vs. how to run it).
+  it('rides alongside the dispatch and contributor axes rather than replacing them', () => {
+    expect(forgeIssueLabels({ model: 'heavy', effort: 'max', planner: 'claude-opus-5' }))
+      .toEqual(['model:heavy', 'effort:max', 'planner:opus-5']);
+    expect(forgeIssueLabels({ planner: 'grok' })).toEqual(['planner:grok']);
+    expect(forgeIssueLabels({ model: 'light' })).toEqual(['model:light']);
+    expect(jiraIssueLabels({ effort: 'low', planner: 'claude-opus-5' }))
+      .toEqual(['effort-low', 'planner-opus-5']);
+  });
+
+  it('emits an unattributable run no guidance at all instead of a blank label', () => {
+    expect(formatPlannerLabelGuidance(null)).toBe('');
+    expect(formatPlannerLabelGuidance('   ')).toBe('');
+    const guidance = formatPlannerLabelGuidance('claude-opus-5');
+    expect(guidance).toContain('--label planner:opus-5');
+    expect(guidance).toContain('gh label create planner:opus-5');
+    expect(formatPlannerLabelGuidance('claude-opus-5', { cli: 'glab' }))
+      .toContain('glab label create --name planner:opus-5');
+  });
+
+  // A model cannot reliably name itself, so the standing guidance must send it
+  // to the injected value rather than inviting it to self-identify.
+  it('tells every planner prompt to take the label from its run, not from itself', () => {
+    for (const guidance of [DISPATCH_HINT_GUIDANCE, MANDATORY_DISPATCH_HINT_GUIDANCE]) {
+      expect(guidance).toContain('planner:<model>');
+      expect(guidance).toContain('Planner attribution');
+      expect(guidance).toContain('Never guess it');
+    }
+    expect(JIRA_DISPATCH_HINT_GUIDANCE).toContain('planner-<model>');
+    expect(JIRA_DISPATCH_HINT_GUIDANCE).not.toMatch(/planner:</);
+  });
+});
+
+// The rendered `issue create` example is what an agent actually copies. It used
+// to be a literal per prompt template, which is how a new axis could reach the
+// guidance prose while being absent from every command an agent runs.
+describe('optional issue-label flag slots', () => {
+  it('offers every conditional axis, planner included', () => {
+    expect(formatOptionalIssueLabelFlags()).toBe(
+      '[--label model:<tier>] [--label effort:<level>] [--label planner:<model>] [--label "good first issue"] [--label "help wanted"]',
+    );
+    expect(OPTIONAL_ISSUE_LABEL_FLAG_SLOTS).toContain('[--label planner:<model>]');
+  });
+
+  // A contract that already REQUIRES an axis must not have it offered a second
+  // time as optional — an example listing `--label model:<tier>` twice reads as
+  // two different labels.
+  it('suppresses a slot the caller already spells out as required', () => {
+    const rendered = formatOptionalIssueLabelFlags(REPO_STUDY_LABEL_CONTRACT.forgeFlags);
+    expect(rendered.startsWith(REPO_STUDY_LABEL_CONTRACT.forgeFlags)).toBe(true);
+    expect(rendered).not.toContain('[--label model:<tier>]');
+    expect(rendered).not.toContain('[--label effort:<level>]');
+    expect(rendered).toContain('[--label planner:<model>]');
+    expect(rendered).toContain('[--label "help wanted"]');
+  });
+
+  it('tolerates a missing or non-string contract', () => {
+    expect(formatOptionalIssueLabelFlags(null)).toBe(formatOptionalIssueLabelFlags());
+    expect(formatOptionalIssueLabelFlags(undefined)).toBe(formatOptionalIssueLabelFlags());
   });
 });

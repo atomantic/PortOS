@@ -149,6 +149,14 @@ export const LOCAL_RUNTIMES = Object.freeze({
     // `providerReadiness.js` offer to relaunch the same weights under the id the
     // provider asks for.
     aliasFlag: '--alias',
+    // A stopped llama-server is not an incomplete installation. Unlike an
+    // always-on API daemon, llama.cpp needs a concrete GGUF launch choice; once
+    // started with idle release enabled it unloads that checkpoint in place
+    // and reloads it on the next request. Keep the stopped state visible as
+    // standby without turning every enabled llama-backed provider into a setup
+    // failure on the capability map.
+    standbyWhenStopped: true,
+    standbyDetail: 'No model server is running, which is a valid idle state. Choose a GGUF preset in Models → LLMs when you want to start one; with idle release configured, llama.cpp unloads it in place and reloads it on the next request.',
   }),
   ollama: Object.freeze({
     id: 'ollama',
@@ -323,7 +331,7 @@ export function localRuntimeKind(provider) {
  * The local runtime a provider needs, with the endpoint PortOS should probe.
  *
  * @param {object|null|undefined} provider
- * @returns {{kind:string,label:string,command:string|null,endpoint:string|null,manageUrl:string|null,docsUrl:string,modelsHint:string}|null}
+ * @returns {{kind:string,label:string,command:string|null,endpoint:string|null,manageUrl:string|null,docsUrl:string,modelsHint:string,standbyWhenStopped?:boolean,standbyDetail?:string}|null}
  */
 export function localRuntimeForProvider(provider) {
   const kind = localRuntimeKind(provider);

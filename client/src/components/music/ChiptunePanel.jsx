@@ -27,8 +27,14 @@ import {
 const slugify = (s) => String(s || '').toLowerCase().trim().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
 const DEFAULT_SUBDIR = 'game/assets/music';
 
-export default function ChiptunePanel({ track, onTrackUpdate, remix }) {
-  const [prompt, setPrompt] = useState(track?.chiptunePrompt || '');
+const buildSourceBrief = (sourcePrompt, sourceLyrics) => [
+  sourcePrompt?.trim(),
+  sourceLyrics?.trim() ? `Lyrics:\n${sourceLyrics.trim()}` : '',
+].filter(Boolean).join('\n\n');
+
+export default function ChiptunePanel({ track, onTrackUpdate, remix, sourcePrompt = '', sourceLyrics = '' }) {
+  const sourceBrief = buildSourceBrief(sourcePrompt, sourceLyrics);
+  const [prompt, setPrompt] = useState(track?.chiptunePrompt || sourceBrief);
   const [fresh, setFresh] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [rendering, setRendering] = useState(false);
@@ -70,7 +76,7 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix }) {
 
   // Reseed the prompt + publish slug from the newly-selected track.
   useEffect(() => {
-    setPrompt(track?.chiptunePrompt || '');
+    setPrompt(track?.chiptunePrompt || sourceBrief);
     setFresh(false);
     setPublishedFiles(null);
     setPublishSlug(slugify(track?.title));
@@ -271,6 +277,10 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix }) {
       <div className="flex items-center gap-2 text-sm text-gray-300">
         <Gamepad2 size={14} className="text-port-accent" /> Chiptune score — looping 8-bit background music
       </div>
+
+      <p className="text-xs text-gray-400">
+        This brief is seeded from the track editor&apos;s Prompt and Lyrics. Refine it here for the chiptune composer; changes are used when you compose the score.
+      </p>
 
       <label className="block">
         <span className="block text-[11px] uppercase tracking-wider text-gray-500 mb-1">Describe the music</span>

@@ -95,7 +95,7 @@ export * from './dndTransform.js';
 export * from './downloadBlob.js';
 export * from './extensionErrors.js';
 export * from './genUtils.js';
-export * from './githubRepoUrl.js';
+export * from './repoUrl.js';
 export * from './healthProvenance.js';
 export * from './joinInfluenceList.js';
 export * from './kanbanColumns.js';

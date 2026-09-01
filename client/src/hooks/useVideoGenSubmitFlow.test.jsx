@@ -13,9 +13,12 @@ const submissionState = (prompt) => ({
   keyframes: [],
   keyframesActive: false,
   mode: 'text',
+  negativePrompt: '',
   noMusic: false,
   prompt,
   selectedLoras: [],
+  selectedUniverse: null,
+  stylePreset: null,
 });
 
 describe('useVideoGenSubmitFlow', () => {
@@ -30,5 +33,25 @@ describe('useVideoGenSubmitFlow', () => {
     rerender({ prompt: 'updated prompt' });
     expect(result.current.buildGeneratePayload).toBe(build);
     expect(build().prompt).toBe('updated prompt');
+  });
+
+  it('layers the selected universe style into the video payload', () => {
+    const state = {
+      ...submissionState('a quiet harbor'),
+      negativePrompt: 'lowres',
+      selectedUniverse: {
+        id: 'u-1',
+        name: 'Example Universe',
+        influences: { embrace: ['inky linework'], avoid: ['glossy'] },
+      },
+      stylePreset: { prompt: 'film noir', negativePrompt: 'pastel' },
+    };
+    const { result } = renderHook(() => useVideoGenSubmitFlow(state));
+
+    expect(result.current.envelopedPrompt).toBe('inky linework. film noir. a quiet harbor');
+    expect(result.current.buildGeneratePayload()).toMatchObject({
+      prompt: 'inky linework. film noir. a quiet harbor',
+      negativePrompt: 'lowres, glossy, pastel',
+    });
   });
 });

@@ -29,6 +29,7 @@ import {
 } from './projectsLogic.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
+  withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
 
 // `data` JSONB is the whole record; status/created_at/updated_at are a queryable
@@ -197,7 +198,9 @@ export async function pruneTombstonedProjects(olderThanMs) {
      RETURNING id`,
     [cutoffIso],
   );
-  for (const r of rows) await deleteSyncBaseHash('musicVideoProject', r.id);
+  await withBaseHashFlushBatch(async () => {
+    for (const r of rows) await deleteSyncBaseHash('musicVideoProject', r.id);
+  });
   return { pruned: rows.length };
 }
 

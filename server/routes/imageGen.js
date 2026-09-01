@@ -51,6 +51,7 @@ import {
   compileFableLoomVisualRequest, fableLoomImageCapabilities,
 } from '../services/fableLoom/visualConditioning.js';
 import { loraCompatKey } from '../lib/runners.js';
+import { EFFORT_LEVELS } from '../lib/providerModels.js';
 
 const router = Router();
 
@@ -76,6 +77,10 @@ const generateSchema = z.object({
   // `imageGen.mode` from settings.json.
   mode: z.enum(IMAGE_GEN_MODES).optional(),
   modelId: z.string().max(64).optional(),
+  // Per-render Codex reasoning effort. Other image backends ignore this
+  // provider-specific preference, preserving the story pin across a backend
+  // switch without inventing a second image request shape.
+  effort: z.enum(EFFORT_LEVELS).optional(),
   // Per-render override of a cloud CLI's session model, replacing the saved
   // `settings.imageGen.<mode>.model` for this one queue item. Deliberately NOT
   // `modelId`: that field carries a *local* model id (`dev`, `schnell`), and a

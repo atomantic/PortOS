@@ -589,7 +589,7 @@ export const resolveReviewerEfforts = keyedReviewerPinResolver(normalizeReviewer
  */
 export function resolveReviewerConfig(metadata, codeReviewDefaults, defaultReviewers) {
   return {
-    reviewers: normalizeReviewers(metadata, defaultReviewers),
+    reviewers: prioritizeToolFreeReviewers(normalizeReviewers(metadata, defaultReviewers)),
     usernames: resolveReviewUsernames(metadata?.usernames, codeReviewDefaults?.usernames),
     optionalReviewers: resolveOptionalReviewers(metadata?.optionalReviewers, codeReviewDefaults?.optionalReviewers),
     reviewerMaxRounds: resolveReviewerMaxRounds(metadata?.reviewerMaxRounds, codeReviewDefaults?.reviewerMaxRounds),
@@ -610,6 +610,21 @@ const CLAIM_REVIEWER_FALLBACK = ['codex'];
 export function claimSafeReviewers(reviewers) {
   const kept = (Array.isArray(reviewers) ? reviewers : []).filter((reviewer) => reviewer !== 'copilot');
   return kept.length ? kept : [...CLAIM_REVIEWER_FALLBACK];
+}
+
+/**
+ * Put tool-free local-LLM reviewers ahead of every reviewer that can execute
+ * tools or reach a forge. Public issue comments and contributor diffs cross the
+ * trust boundary in that first pass; later reviewers see a chain that has
+ * already received a no-tool inspection. Stable partitioning preserves the
+ * user's order within the local and non-local groups.
+ */
+export function prioritizeToolFreeReviewers(reviewers) {
+  const normalized = Array.isArray(reviewers) ? reviewers : [];
+  return [
+    ...normalized.filter((reviewer) => LOCAL_LLM_REVIEWERS.includes(reviewer)),
+    ...normalized.filter((reviewer) => !LOCAL_LLM_REVIEWERS.includes(reviewer)),
+  ];
 }
 
 /**
@@ -1270,6 +1285,10 @@ export const createCosTaskSchema = z.object({
     v => v === 'true' ? true : v === 'false' ? false : v,
     z.boolean().optional()
   ),
+  // Plan-only issue destination when the selected app is a fork. The server
+  // resolves this role to a validated forge repository; callers never provide
+  // an arbitrary owner/repo string.
+  issueTarget: z.enum(['upstream', 'origin']).optional(),
   openPR: z.preprocess(
     v => v === 'true' ? true : v === 'false' ? false : v,
     z.boolean().optional()
@@ -1836,7 +1855,7 @@ export const slashdoTaskSchema = createCosTaskSchema
   .pick({
     model: true, provider: true, effort: true, simplify: true,
     reviewers: true, usernames: true, optionalReviewers: true, reviewerMaxRounds: true,
-    reviewerModels: true, reviewerEfforts: true
+    reviewerModels: true, reviewerEfforts: true, issueTarget: true
   })
   .extend({
     command: z.string().min(1),

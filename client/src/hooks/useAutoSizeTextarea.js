@@ -13,20 +13,29 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
  * the inline height this hook sets), and pair it with `resize-none` /
  * `overflow-hidden` so the browser scrollbar never appears.
  */
-export default function useAutoSizeTextarea(value) {
-  const ref = useRef(null);
+export default function useAutoSizeTextarea(value, externalRef) {
+  const localRef = useRef(null);
+  const externalRefRef = useRef(externalRef);
+  externalRefRef.current = externalRef;
+
   const resize = useCallback(() => {
-    const el = ref.current;
+    const el = localRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${el.scrollHeight}px`;
+    const style = typeof window !== 'undefined' && window.getComputedStyle ? window.getComputedStyle(el) : null;
+    const borderOffset = style && style.boxSizing === 'border-box'
+      ? (parseFloat(style.borderTopWidth) || 0) + (parseFloat(style.borderBottomWidth) || 0)
+      : 0;
+    el.style.height = `${el.scrollHeight + borderOffset}px`;
   }, []);
+
   useLayoutEffect(() => { resize(); }, [value, resize]);
+
   // Re-fit on width changes only. Gating on width is essential: resize() mutates
   // the element's height, which would otherwise re-trigger the observer into a
   // feedback loop.
   useEffect(() => {
-    const el = ref.current;
+    const el = localRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return undefined;
     let lastWidth = el.clientWidth;
     const ro = new ResizeObserver(() => {
@@ -38,5 +47,27 @@ export default function useAutoSizeTextarea(value) {
     ro.observe(el);
     return () => ro.disconnect();
   }, [resize]);
-  return [ref, resize];
+
+  const setRef = useCallback((el) => {
+    localRef.current = el;
+    setRef.current = el;
+    const ext = externalRefRef.current;
+    if (typeof ext === 'function') {
+      ext(el);
+    } else if (ext && typeof ext === 'object') {
+      ext.current = el;
+    }
+  }, []);
+  setRef.current = localRef.current;
+
+  useEffect(() => {
+    if (!externalRef) return;
+    if (typeof externalRef === 'function') {
+      externalRef(localRef.current);
+    } else if (typeof externalRef === 'object') {
+      externalRef.current = localRef.current;
+    }
+  }, [externalRef]);
+
+  return [setRef, resize];
 }

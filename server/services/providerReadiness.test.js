@@ -68,13 +68,14 @@ describe('getProviderReadiness', () => {
     expect(readiness.checks.map((check) => check.ok)).toEqual([true, true, true]);
   });
 
-  it('separates "not installed" from "installed but not running" — the two different fixes', async () => {
+  it('separates missing llama.cpp from its installed, intentionally stopped standby state', async () => {
     const missing = await getProviderReadiness(llamaProvider(), {
       findCommand: () => null,
       probe: unreachable(),
     });
     expect(checkById(missing, 'runtime').ok).toBe(false);
     expect(checkById(missing, 'runtime').fixHint).toMatch(/Install llama\.cpp/);
+    expect(missing.standby).toBe(false);
 
     const stopped = await getProviderReadiness(llamaProvider(), {
       findCommand: () => '/opt/homebrew/bin/llama-server',
@@ -84,6 +85,15 @@ describe('getProviderReadiness', () => {
     expect(checkById(stopped, 'server').ok).toBe(false);
     expect(checkById(stopped, 'server').fixHint).toMatch(/Start llama\.cpp/);
     expect(stopped.ready).toBe(false);
+    expect(stopped.standby).toBe(true);
+    expect(stopped.standbyDetail).toMatch(/valid idle state/);
+
+    const missingWeights = await getProviderReadiness(llamaProvider(), {
+      findCommand: () => '/opt/homebrew/bin/llama-server',
+      probe: unreachable(),
+      readWeights: async () => 'empty',
+    });
+    expect(missingWeights.standby).toBe(false);
   });
 
   it('counts a responding endpoint as installed even with nothing on PATH', async () => {

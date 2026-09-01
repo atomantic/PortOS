@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Palette, Check, Dice5, Cpu, Settings as SettingsIcon } from 'lucide-react';
 import { randomSeed } from '../../lib/genUtils';
 import BackendChipStrip from '../media/BackendChipStrip';
+import AutoSizeTextarea from '../ui/AutoSizeTextarea';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 import StagePromptModelPicker from './StagePromptModelPicker';
 import { STYLE_ID, EMPTY_IMAGE_STYLE } from '../../lib/wrImageDefaults';
@@ -101,28 +102,30 @@ function WorldStyleRow({ value, presets, onChange }) {
       </select>
       {value.presetId !== STYLE_ID.NONE && (
         <>
-          <label className="block">
+          <label htmlFor="wr-style-prompt" className="block">
             <span className="text-[9px] uppercase tracking-wider text-gray-500">
               Style prompt {value.presetId === STYLE_ID.CUSTOM && <Check size={9} className="inline text-port-accent" />}
             </span>
-            <textarea
+            <AutoSizeTextarea
+              id="wr-style-prompt"
               value={draftPrompt}
               onChange={(e) => setDraftPrompt(e.target.value)}
               onBlur={commitDraft}
               rows={3}
               placeholder="cinematic still, anamorphic lens…"
-              className="w-full mt-0.5 bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200 font-sans resize-y"
+              className="w-full mt-0.5 bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200 font-sans min-h-[60px]"
             />
           </label>
-          <label className="block">
+          <label htmlFor="wr-neg-prompt" className="block">
             <span className="text-[9px] uppercase tracking-wider text-gray-500">Negative prompt (optional)</span>
-            <textarea
+            <AutoSizeTextarea
+              id="wr-neg-prompt"
               value={draftNeg}
               onChange={(e) => setDraftNeg(e.target.value)}
               onBlur={commitDraft}
               rows={2}
               placeholder="cartoon, low quality…"
-              className="w-full mt-0.5 bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200 font-sans resize-y"
+              className="w-full mt-0.5 bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200 font-sans min-h-[44px]"
             />
           </label>
           <div className="text-[10px] text-gray-500">

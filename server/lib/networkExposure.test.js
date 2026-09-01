@@ -13,6 +13,14 @@ vi.mock('./peerSelfHost.js', () => ({
   getSelfHost: vi.fn(),
 }));
 
+vi.mock('./tailscale.js', () => ({
+  getTailscaleStatus: vi.fn(),
+}));
+
+vi.mock('../../lib/tailscale-https.js', () => ({
+  hasTailscaleCert: vi.fn(),
+}));
+
 vi.mock('node:fs', () => ({
   readFileSync: vi.fn(),
   statSync: vi.fn(),
@@ -21,7 +29,14 @@ vi.mock('node:fs', () => ({
 import { readFileSync, statSync } from 'node:fs';
 import { getHttpsEnabledAtBoot } from './httpsState.js';
 import { getSelfHost } from './peerSelfHost.js';
-import { getNetworkExposureStatus, isLoopbackHost } from './networkExposure.js';
+import { getTailscaleStatus } from './tailscale.js';
+import { hasTailscaleCert } from '../../lib/tailscale-https.js';
+import {
+  buildNetworkSetupGuide,
+  getNetworkExposureSetupStatus,
+  getNetworkExposureStatus,
+  isLoopbackHost,
+} from './networkExposure.js';
 
 describe('networkExposure.isLoopbackHost', () => {
   it.each([
@@ -49,6 +64,7 @@ describe('networkExposure.getNetworkExposureStatus', () => {
     delete process.env.PORT;
     delete process.env.PORTOS_HTTP_PORT;
     statSync.mockReturnValue(undefined);
+    hasTailscaleCert.mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -70,6 +86,7 @@ describe('networkExposure.getNetworkExposureStatus', () => {
   it('reports HTTPS + tailscale mode when cert meta.json indicates tailscale', () => {
     getHttpsEnabledAtBoot.mockReturnValue({ value: true, initialized: true });
     getSelfHost.mockReturnValue('host-alpha.example-tailnet.ts.net');
+    hasTailscaleCert.mockReturnValue(true);
     statSync.mockReturnValue({ mtimeMs: 1 });
     readFileSync.mockReturnValue(JSON.stringify({
       mode: 'tailscale',
@@ -82,6 +99,8 @@ describe('networkExposure.getNetworkExposureStatus', () => {
     expect(status.httpsEnabled).toBe(true);
     expect(status.loopbackMirror.enabled).toBe(true);
     expect(status.cert.mode).toBe('tailscale');
+    expect(status.cert.provisioned).toBe(true);
+    expect(status.cert.provisionedHost).toBe('host-alpha.example-tailnet.ts.net');
     expect(status.cert.tailscaleHost).toBe('host-alpha.example-tailnet.ts.net');
     expect(status.cert.ips).toEqual(['100.64.0.50']);
   });
@@ -89,6 +108,7 @@ describe('networkExposure.getNetworkExposureStatus', () => {
   it('reports HTTPS + self-signed mode when meta.json mode is self-signed', () => {
     getHttpsEnabledAtBoot.mockReturnValue({ value: true, initialized: true });
     getSelfHost.mockReturnValue(null);
+    hasTailscaleCert.mockReturnValue(true);
     statSync.mockReturnValue({ mtimeMs: 1 });
     readFileSync.mockReturnValue(JSON.stringify({
       mode: 'self-signed',
@@ -133,5 +153,209 @@ describe('networkExposure.getNetworkExposureStatus', () => {
     const status = getNetworkExposureStatus();
     expect(status.bind.port).toBe(6000);
     expect(status.loopbackMirror.port).toBe(6001);
+  });
+});
+
+describe('networkExposure.buildNetworkSetupGuide', () => {
+  const baseNetwork = {
+    httpsEnabled: false,
+    bind: { port: 5555 },
+    cert: {
+      mode: null,
+      provisioned: false,
+      provisionedMode: null,
+      provisionedHost: null,
+      tailscaleHost: null,
+    },
+  };
+
+  it('starts at Tailscale installation when the CLI is absent', () => {
+    const guide = buildNetworkSetupGuide(baseNetwork, {
+      available: false,
+      running: false,
+      reason: 'tailscale-not-installed',
+    });
+
+    expect(guide.complete).toBe(false);
+    expect(guide.nextStep).toMatchObject({ id: 'tailscale-install', status: 'action' });
+    expect(guide.steps.map((step) => step.id)).toEqual([
+      'tailscale-install',
+      'tailscale-connect',
+      'magic-dns',
+      'https-cert',
+      'activate-https',
+    ]);
+  });
+
+  it('offers automatic provisioning after Tailscale and MagicDNS are ready', () => {
+    const guide = buildNetworkSetupGuide(baseNetwork, {
+      available: true,
+      running: true,
+      sandboxed: false,
+      dnsName: 'Host-Alpha.Example-Tailnet.ts.net.',
+    });
+
+    expect(guide.canProvision).toBe(true);
+    expect(guide.dnsName).toBe('host-alpha.example-tailnet.ts.net');
+    expect(guide.nextStep).toMatchObject({
+      id: 'https-cert',
+      action: { type: 'provision-cert' },
+    });
+  });
+
+  it('offers the writable CLI command when only the sandboxed macOS CLI is available', () => {
+    const guide = buildNetworkSetupGuide(baseNetwork, {
+      available: true,
+      running: true,
+      sandboxed: true,
+      dnsName: 'host-alpha.example-tailnet.ts.net',
+    });
+
+    expect(guide.nextStep).toMatchObject({
+      id: 'https-cert',
+      status: 'action',
+      action: { type: 'command', command: 'brew install tailscale' },
+    });
+  });
+
+  it('names a stale certificate hostname before offering reprovisioning', () => {
+    const guide = buildNetworkSetupGuide({
+      ...baseNetwork,
+      cert: {
+        mode: null,
+        provisioned: true,
+        provisionedMode: 'tailscale',
+        provisionedHost: 'host-old.example-tailnet.ts.net',
+      },
+    }, {
+      available: true,
+      running: true,
+      sandboxed: false,
+      dnsName: 'host-alpha.example-tailnet.ts.net',
+    });
+
+    expect(guide.nextStep).toMatchObject({
+      id: 'https-cert',
+      status: 'action',
+      detail: 'The installed certificate is for host-old.example-tailnet.ts.net; reprovision it for host-alpha.example-tailnet.ts.net.',
+      action: { type: 'provision-cert' },
+    });
+  });
+
+  it('asks for a restart when the trusted cert exists but this process booted on HTTP', () => {
+    const guide = buildNetworkSetupGuide({
+      ...baseNetwork,
+      cert: {
+        mode: null,
+        provisioned: true,
+        provisionedMode: 'tailscale',
+        provisionedHost: 'host-alpha.example-tailnet.ts.net',
+      },
+    }, {
+      available: true,
+      running: true,
+      sandboxed: false,
+      dnsName: 'host-alpha.example-tailnet.ts.net',
+    });
+
+    expect(guide.nextStep).toMatchObject({ id: 'activate-https', action: { type: 'restart' } });
+    expect(guide.pendingTrustedUrl).toBe('https://host-alpha.example-tailnet.ts.net:5555');
+  });
+
+  it('reports the exact trusted URL only when HTTPS is active for the current host', () => {
+    const guide = buildNetworkSetupGuide({
+      ...baseNetwork,
+      httpsEnabled: true,
+      cert: {
+        mode: 'tailscale',
+        provisioned: true,
+        provisionedMode: 'tailscale',
+        provisionedHost: 'host-alpha.example-tailnet.ts.net',
+      },
+    }, {
+      available: true,
+      running: true,
+      sandboxed: false,
+      dnsName: 'host-alpha.example-tailnet.ts.net',
+    });
+
+    expect(guide.complete).toBe(true);
+    expect(guide.nextStep).toBeNull();
+    expect(guide.trustedUrl).toBe('https://host-alpha.example-tailnet.ts.net:5555');
+  });
+
+  it('never constructs a trusted URL from invalid or missing certificate host metadata', () => {
+    const guide = buildNetworkSetupGuide({
+      ...baseNetwork,
+      httpsEnabled: true,
+      cert: {
+        mode: 'tailscale',
+        provisioned: true,
+        provisionedMode: 'tailscale',
+        provisionedHost: null,
+      },
+    }, {
+      available: true,
+      running: true,
+      sandboxed: false,
+      dnsName: 'https://example.com/path',
+    });
+
+    expect(guide.complete).toBe(false);
+    expect(guide.dnsName).toBeNull();
+    expect(guide.trustedUrl).toBeNull();
+    expect(guide.pendingTrustedUrl).toBeNull();
+  });
+
+  it('does not report remote setup complete while Tailscale is disconnected', () => {
+    const guide = buildNetworkSetupGuide({
+      ...baseNetwork,
+      httpsEnabled: true,
+      cert: {
+        mode: 'tailscale',
+        provisioned: true,
+        provisionedMode: 'tailscale',
+        provisionedHost: 'host-alpha.example-tailnet.ts.net',
+      },
+    }, {
+      available: true,
+      running: false,
+      state: 'Stopped',
+      dnsName: null,
+    });
+
+    expect(guide.complete).toBe(false);
+    expect(guide.nextStep).toMatchObject({ id: 'tailscale-connect', status: 'action' });
+    expect(guide.trustedUrl).toBeNull();
+  });
+});
+
+describe('networkExposure.getNetworkExposureSetupStatus', () => {
+  it('publishes only local setup facts and excludes the Tailscale peer map', async () => {
+    readFileSync.mockImplementation(() => { throw new Error('missing'); });
+    statSync.mockReturnValue(undefined);
+    getHttpsEnabledAtBoot.mockReturnValue({ value: false, initialized: true });
+    getSelfHost.mockReturnValue(null);
+    hasTailscaleCert.mockReturnValue(false);
+    getTailscaleStatus.mockResolvedValue({
+      available: true,
+      running: true,
+      state: 'Running',
+      reason: 'running',
+      sandboxed: false,
+      dnsName: 'host-alpha.example-tailnet.ts.net',
+      peers: [{ hostName: 'host-beta', ips: ['100.64.0.50'] }],
+    });
+
+    const status = await getNetworkExposureSetupStatus();
+    expect(status.tailscale).toEqual({
+      available: true,
+      running: true,
+      state: 'Running',
+      reason: 'running',
+      sandboxed: false,
+      dnsName: 'host-alpha.example-tailnet.ts.net',
+    });
+    expect(JSON.stringify(status)).not.toContain('host-beta');
   });
 });

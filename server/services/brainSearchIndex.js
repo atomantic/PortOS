@@ -64,9 +64,12 @@ const PROJECTED_FIELDS = Object.freeze({
   inbox: Object.freeze(['capturedText']),
   people: GRAPH_PROJECTION_FIELDS,
   projects: GRAPH_PROJECTION_FIELDS,
-  ideas: GRAPH_PROJECTION_FIELDS,
+  // `createdAt` (+ import-time `sourceCreatedAt` on memories) serves
+  // `getOnThisDay` (server/services/brainOnThisDay.js), which matches records
+  // to a calendar date without walking the stores.
+  ideas: Object.freeze([...GRAPH_PROJECTION_FIELDS, 'createdAt']),
   admin: Object.freeze([...GRAPH_PROJECTION_FIELDS, 'nextAction']),
-  memories: Object.freeze([...GRAPH_PROJECTION_FIELDS, 'mood']),
+  memories: Object.freeze([...GRAPH_PROJECTION_FIELDS, 'mood', 'createdAt', 'sourceCreatedAt']),
   links: Object.freeze(['title', 'url', 'description']),
   journals: Object.freeze(['date']),
   songs: GRAPH_PROJECTION_FIELDS,
