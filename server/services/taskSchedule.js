@@ -1339,6 +1339,13 @@ export async function getScheduleStatus() {
       if (auditDoWorkRequiresWorktree(taskType)) {
         taskStatus.doWorkRequiresWorktree = true;
       }
+    } else if (taskType === 'user-action-review') {
+      // Not an audit-catalog type (no mode-contract injection — its
+      // alternative to filing issues is queueing CoS tasks, not editing code),
+      // but its deliverable posture is the same fileIssues toggle, so the
+      // schedule UI surfaces the switch the same way.
+      taskStatus.fileIssuesCapable = true;
+      taskStatus.defaultFileIssues = true;
     }
 
     // Perpetual tasks park PER-APP (parkPerpetual is called with the appId), so

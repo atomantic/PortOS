@@ -77,6 +77,8 @@ import {
   buildClaimOverrideContextBlock,
   buildLocalReviewerInstructions,
   resolveTaskInputHook,
+  resolveUserActionDeliveryBlock,
+  applyUserActionDeliveryMode,
   resolveReconcileDrainGate,
   applyPerpetualDrainCap
 } from './cosTaskGenerator.js';
@@ -271,7 +273,7 @@ describe('isConfiguredApprovalRequired', () => {
   it('both generators stamp approvalReason onto metadata so the hint survives COS-TASKS.md', () => {
     const selfStart = GEN_SRC.indexOf('export async function generateSelfImprovementTaskForType');
     const appStart = GEN_SRC.indexOf('export async function generateManagedAppImprovementTaskForType');
-    expect(GEN_SRC.slice(selfStart, selfStart + 2500)).toContain('stampApprovalReason(metadata, approval)');
+    expect(GEN_SRC.slice(selfStart, selfStart + 4500)).toContain('stampApprovalReason(metadata, approval)');
     expect(GEN_SRC.slice(appStart, appStart + 11000)).toContain('stampApprovalReason(metadata, approval)');
   });
 
@@ -1380,6 +1382,50 @@ describe('buildImprovementDedupSets (#2614 — failure-blocked tasks occupy thei
     // Source-pinned: the queue path must consume buildImprovementDedupSets so
     // its occupancy semantics can't silently drift from the tested helper.
     expect(GEN_SRC).toMatch(/buildImprovementDedupSets\(existingTasks/);
+  });
+});
+
+describe('resolveUserActionDeliveryBlock (#5595)', () => {
+  it('renders the tracker-issue posture by default and the CoS-task posture when fileIssues is off', () => {
+    expect(resolveUserActionDeliveryBlock('user-action-review', { fileIssues: true })).toContain('FILED TRACKER ISSUE');
+    expect(resolveUserActionDeliveryBlock('user-action-review', {})).toContain('FILED TRACKER ISSUE');
+    expect(resolveUserActionDeliveryBlock('user-action-review', { fileIssues: false })).toContain('QUEUED CoS TASK');
+    // Metadata round-trips through COS-TASKS.md as text — string 'false' counts.
+    expect(resolveUserActionDeliveryBlock('user-action-review', { fileIssues: 'false' })).toContain('QUEUED CoS TASK');
+    expect(resolveUserActionDeliveryBlock('security', { fileIssues: false })).toBe('');
+  });
+
+  it('applyUserActionDeliveryMode substitutes the token, or PREPENDS on a customized prompt that dropped it', () => {
+    const withToken = applyUserActionDeliveryMode('Intro\n\n{userActionDelivery}\n\nOutro', 'user-action-review', {});
+    expect(withToken).toContain('FILED TRACKER ISSUE');
+    expect(withToken).not.toContain('{userActionDelivery}');
+    // A customized stored prompt without the token must still receive the
+    // operator's fileIssues choice — otherwise the toggle is a silent no-op.
+    const custom = applyUserActionDeliveryMode('My custom review prompt', 'user-action-review', { fileIssues: false });
+    expect(custom).toMatch(/^## Delivery mode\n\n.*QUEUED CoS TASK/s);
+    expect(custom).toContain('My custom review prompt');
+    // Every other task type passes through untouched.
+    expect(applyUserActionDeliveryMode('Prompt', 'security', {})).toBe('Prompt');
+  });
+
+  it('the install-wide lane consumes the input hook and renders the delivery block', () => {
+    // Source-pinned like the approval-stamp guard above: the empty-ledger skip
+    // and the delivery posture must reach the "Run Now with no app" lane, which
+    // is the only lane an install-wide type dispatches from.
+    const selfStart = GEN_SRC.indexOf('export async function generateSelfImprovementTaskForType');
+    const selfBody = GEN_SRC.slice(selfStart, selfStart + 9000);
+    // Gated to install-wide types: the per-app hooks (issue-watcher,
+    // layered-intelligence) guard on `!app`, and the truthy synthetic
+    // `{ id: null }` row would defeat that guard.
+    expect(selfBody).toContain('if (taskSchedule.INSTALL_WIDE_TASK_TYPES.has(taskType)) {');
+    expect(selfBody).toContain("resolveTaskInputHook({ id: null, name: 'PortOS' }, taskType, taskSchedule)");
+    expect(selfBody).toContain('applyUserActionDeliveryMode(description, taskType, metadata)');
+    // The action-output posture must be dispatch-stamped: noCodeOutput is not a
+    // sanitizer-allowed key, so it cannot ride in from DEFAULT_TASK_INTERVALS —
+    // without the stamp the completion contract tells a live-checkout agent to
+    // commit and /do:push.
+    expect(selfBody).toContain('metadata.noCodeOutput = true');
+    expect(selfBody).toContain('metadata.worktreeChangesExpected = false');
   });
 });
 

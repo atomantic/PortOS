@@ -93,6 +93,15 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // claim flows pick up later. Always-filing tracker-filing type
   // (TRACKER_FILING_PRESETS['plan-feature']), like reference-watch/repo-study.
   'plan-feature',
+  // user-action-review reads the machine-local operator-action ledger
+  // (services/userActions.js) for repeated manual work — Run Now on the same
+  // schedule type over and over, near-duplicate task prompts, negative feedback
+  // clusters, settings churn — and PROPOSES automations as filed tracker issues
+  // (default) or queued CoS tasks. It never edits settings or schedules itself.
+  // Install-wide: the ledger records PortOS-operator activity, not one managed
+  // app's tree. Its buildTaskInput hook (userActionReviewHooks.js) skips the
+  // dispatch entirely when the ledger is empty, so no provider call is burned.
+  'user-action-review',
   // layered-intelligence is a PROGRAMMATIC-I/O task: it spawns a NORMAL reasoning
   // agent (visible in the CoS queue + Active Agents, TUI-attachable) with two
   // deterministic hooks around it — buildTaskInput gathers the app's goals +
@@ -189,7 +198,7 @@ export const DEFAULT_BRANCHES_PER_AGENT = 3;
  * instead of forcing every run through the app picker (which would make the
  * install-wide lane unreachable on any install that has apps).
  */
-export const INSTALL_WIDE_TASK_TYPES = new Set(['repo-sync']);
+export const INSTALL_WIDE_TASK_TYPES = new Set(['repo-sync', 'user-action-review']);
 
 // Fresh installs expose every task as an enabled manual action. The on-demand
 // type keeps provider work silent until the user explicitly runs a task, while
@@ -385,6 +394,18 @@ export const DEFAULT_TASK_INTERVALS = {
   // runAfter do-replan so proposals are checked against the freshest available
   // work tracker before a new feature plan is filed.
   'plan-feature':         { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['product-requirements', 'project-goals', 'open-issues', 'open-pull-requests', 'closed-unmerged-pull-requests'], runAfter: ['do-replan'], taskMetadata: { useWorktree: false, openPR: false, readOnly: false } },
+  // user-action-review proposes automations from the operator-action ledger.
+  // fileIssues defaults ON (safer unattended: a filed issue over queued work);
+  // flipping it OFF makes the agent queue CoS tasks instead — either way it
+  // ships no code of its own (useWorktree/openPR off, like the other
+  // file-issues types; dispatch stamps noCodeOutput). On-demand + enabled per
+  // the AI-provider policy: a manual Run is the consent for the review's LLM
+  // run, and the empty-ledger skip in its buildTaskInput hook keeps an idle
+  // install silent. Effectively on-demand-only today: the hook also skips
+  // every per-app dispatch (a per-app cadence would queue one identical
+  // global-ledger review PER app) and scheduled dispatch has no global lane
+  // for install-wide types yet — see #5629.
+  'user-action-review':  { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
   // layered-intelligence is a programmatic-I/O task (agent-backed, hooked). On-demand
   // by default; per-app scheduling (enabled/interval/provider/model) is set in the
   // Intelligence tab and stored on the app's taskTypeOverrides['layered-intelligence'].
@@ -535,6 +556,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'stash-cleanup': 'Triage git stash list — drop entries superseded by or stale relative to main, leave real unlanded work in place',
   'repo-sync': 'Sync every managed app with origin — back on the default branch, pushed and pulled, merged branches/worktrees and redundant stashes cleared',
   'plan-feature': "Brainstorm one feature and file its decision-complete plan to the app's work tracker (no code)",
+  'user-action-review': 'Review the operator-action log for repeated manual work and propose automations — file issues (default) or queue CoS tasks',
   'layered-intelligence': "Use app goals + performance metrics to file at most one deduplicated improvement issue; inspect read-only context and file a visibility gap when evidence is insufficient — no code"
 };
 

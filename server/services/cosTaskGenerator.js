@@ -1874,6 +1874,35 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
   // exists for — so the pre-step runs here, not only in the per-app lane. It
   // returns `skip` when the sweep left nothing for an agent to do, which is the
   // common case on an already-clean machine and costs no provider call.
+  // Programmatic pre-agent input hook (taskTypeHooks.js) — the install-wide
+  // lane mirrors the per-app one so a hook-gated type (user-action-review's
+  // empty-ledger check) can skip here too, without burning an agent. Gated to
+  // INSTALL-WIDE types: the per-app hooks (issue-watcher, layered-intelligence)
+  // guard on `!app`, and the synthetic `{ id: null }` row below is truthy — an
+  // ungated call would march issue-watcher into resolving the PortOS repo as
+  // its app via getOriginInfo's cwd default. The synthetic row only labels the
+  // skip log / execution record; provider pins from a hook are a per-app
+  // concept and are not applied in this lane.
+  if (taskSchedule.INSTALL_WIDE_TASK_TYPES.has(taskType)) {
+    const inputHook = await resolveTaskInputHook({ id: null, name: 'PortOS' }, taskType, taskSchedule);
+    if (inputHook.skip) return null;
+    if (inputHook.hookPrompt) description = inputHook.hookPrompt;
+  }
+
+  // user-action-review delivers filed issues / queued tasks, never a commit.
+  // Stamp the action-output posture the way the audit file-issues path does —
+  // `noCodeOutput` is dispatch-stamped, not user-settable, so it cannot arrive
+  // from DEFAULT_TASK_INTERVALS through sanitizeTaskMetadata. Without it the
+  // completion contract tells a live-checkout agent to commit and `/do:push`.
+  if (taskType === 'user-action-review') {
+    metadata.noCodeOutput = true;
+    metadata.worktreeChangesExpected = false;
+  }
+
+  // user-action-review: render the delivery posture the operator chose
+  // (fileIssues on = tracker issues, off = queued CoS tasks).
+  description = applyUserActionDeliveryMode(description, taskType, metadata);
+
   const repoSync = await resolveRepoSyncBlock(null, taskType, metadata);
   if (repoSync.skip) return null;
   if (repoSync.block) {
@@ -2872,6 +2901,35 @@ async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedule) {
   });
   emitLog('info', `pr-watcher dispatching for ${app.name}: ${check.newPrs.length} new PR(s)`, { appId: app.id, analysisType: taskType });
   return { skip: false, block, repoFullName: check.repoFullName, defaultBranch: check.defaultBranch };
+}
+
+/**
+ * user-action-review's `{userActionDelivery}` block: the operator's
+ * `fileIssues` choice decides HOW proposals leave the run — filed tracker
+ * issues (default) or queued CoS tasks. Resolved at dispatch, like the audit
+ * mode contract, so a customized stored prompt still honors the toggle. The
+ * type is not in the audit catalog (its "do work" alternative is queueing
+ * tasks, not editing code), so the audit mode wrapper does not apply to it.
+ */
+export function resolveUserActionDeliveryBlock(taskType, metadata) {
+  if (taskType !== 'user-action-review') return '';
+  return metadata?.fileIssues === false || metadata?.fileIssues === 'false'
+    ? 'Deliver each accepted proposal as a QUEUED CoS TASK (`POST /api/cos/tasks`, one bounded task per proposal, priority LOW unless the evidence is severe) — the operator turned off file-issues mode for this schedule. Do not file tracker issues.'
+    : 'Deliver each accepted proposal as a FILED TRACKER ISSUE in the PortOS repository (`gh issue create` with the `plan` label; create the label first if missing). This is file-issues mode, the default. Do not queue CoS tasks.';
+}
+
+/**
+ * Render the delivery posture into a user-action-review prompt. Mirrors
+ * `applyAuditModeWrapper`: a customized stored prompt that dropped the
+ * `{userActionDelivery}` token still gets the operator's choice PREPENDED —
+ * otherwise flipping fileIssues would be a silent no-op on that install.
+ */
+export function applyUserActionDeliveryMode(promptTemplate, taskType, metadata) {
+  const prompt = typeof promptTemplate === 'string' ? promptTemplate : '';
+  const block = resolveUserActionDeliveryBlock(taskType, metadata);
+  if (!block) return prompt;
+  if (prompt.includes('{userActionDelivery}')) return prompt.replace(/\{userActionDelivery\}/g, () => block);
+  return `## Delivery mode\n\n${block}\n\n---\n\n${prompt}`;
 }
 
 /**

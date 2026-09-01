@@ -272,7 +272,9 @@ describe('taskSchedule', () => {
 
   describe('INSTALL_WIDE_TASK_TYPES', () => {
     it('names only task types that really sweep the whole install', () => {
-      expect([...INSTALL_WIDE_TASK_TYPES]).toEqual(['repo-sync'])
+      // repo-sync sweeps every managed checkout; user-action-review reads the
+      // install-wide operator-action ledger — neither is a per-app run.
+      expect([...INSTALL_WIDE_TASK_TYPES]).toEqual(['repo-sync', 'user-action-review'])
     })
 
     it('every install-wide type is a registered task type', () => {
@@ -308,6 +310,33 @@ describe('taskSchedule', () => {
       }
     })
   })
+
+  describe('user-action-review (operator-ledger automation proposals)', () => {
+    it('is registered install-wide with an on-demand + enabled default and a v1 prompt', () => {
+      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('user-action-review');
+      expect(INSTALL_WIDE_TASK_TYPES.has('user-action-review')).toBe(true);
+      expect(TASK_TYPE_DESCRIPTIONS['user-action-review']).toContain('propose automations');
+      expect(DEFAULT_TASK_INTERVALS['user-action-review']).toMatchObject({ type: INTERVAL_TYPES.ON_DEMAND, enabled: true });
+      expect(PROMPT_VERSIONS['user-action-review']).toBe(1);
+      expect(DEFAULT_TASK_PROMPTS['user-action-review']).toContain('{userActionDelivery}');
+      // The prompt proposes; it must never instruct the agent to enact.
+      expect(DEFAULT_TASK_PROMPTS['user-action-review']).toContain('NEVER change settings');
+    });
+
+    it('defaults to file-issues with the no-code posture', () => {
+      expect(DEFAULT_TASK_INTERVALS['user-action-review'].taskMetadata).toMatchObject({
+        fileIssues: true, useWorktree: false, openPR: false
+      });
+    });
+
+    it('surfaces the fileIssues toggle on schedule status without joining the audit catalog', async () => {
+      mockSchedule({ tasks: {}, executions: {} });
+      const status = await getScheduleStatus();
+      expect(status.tasks['user-action-review']).toMatchObject({
+        installWide: true, fileIssuesCapable: true, defaultFileIssues: true
+      });
+    });
+  });
 
   describe('layered-intelligence (programmatic-I/O agent task)', () => {
     it('is registered as a self-improvement task with a description and an on-demand default', () => {

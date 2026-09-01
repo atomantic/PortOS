@@ -2014,6 +2014,50 @@ Once every escalation is handled, walk EVERY repository named above and confirm 
 
 Per repository: what you changed, what you deliberately left and why, and the five verification results above. End with a one-line verdict per repo — CLEAN, or what is still outstanding. If you left anything unresolved, say exactly what a human needs to decide.`,
 
+  'user-action-review': `[Improvement] User Action Review — propose automations from the operator-action ledger
+
+PortOS keeps a machine-local ledger of what the operator actually did in the app (created CoS tasks, rated agent runs, pressed Run Now on scheduled tasks, changed settings). Your job is to read the last 7 days of that ledger, find the repetition a mind or a schedule should have handled, and PROPOSE concrete automations. You propose — you never enact.
+
+## Delivery mode
+
+{userActionDelivery}
+
+## Read the ledger
+
+Query the last 7 days of events, then group them by \`type\` + \`target\` (for schedule triggers the target is the task type; for tasks/agents it is the record id):
+
+- If you can call PortOS semantic tools, use \`user_actions_query\` (readPortos grant) with a \`from\` timestamp 7 days back. Results are capped at 100 events per call and carry no event ids; when a result says \`truncated: true\`, narrow the window (set \`to\` just BELOW the oldest \`happenedAt\` you already have — the bound is inclusive, so reusing it verbatim repeats that event — or filter by \`type\`) and query again.
+- Otherwise call the local PortOS HTTP API from this machine: \`GET ${PORTOS_API_URL}/api/user-actions?from=<ISO-7-days-ago>&limit=100\`. Filters: \`type\`/\`types\`, \`actor\`, \`from\`/\`to\`, \`limit\`, \`offset\`.
+
+**If the query returns no events, stop immediately**: report "nothing to review" in one line and make no further LLM tool calls, no proposals, and no filed items.
+
+## What counts as automatable tedium
+
+Look specifically for, in priority order:
+
+1. **Repeated manual schedule triggers** — multiple \`cos.schedule.trigger\` events with \`actor=user\` for the same task type (especially \`branch-reconcile\` / \`issue-reconcile\`) while that schedule presumably remains on-demand. The proposal is to enable a cadence (say which) or queue a reconcile run — proposed, never enacted.
+2. **Repeated similar CoS tasks** — several \`cos.task.create\` events whose prompts/settings look alike. Propose a scheduled task, a saved automation, or one recurring CoS task that replaces the hand-queued ones.
+3. **Negative feedback clusters** — \`cos.agent.feedback\` events with low ratings concentrated on one task type, provider, or model. Propose the configuration change worth trying (different model/effort, a prompt fix), as a proposal the operator applies.
+4. **Settings churn** — repeated \`settings.update\` events touching the same key paths. Propose whatever would remove the need to keep flipping them.
+
+## Propose (1–5 proposals, evidence-grounded)
+
+Deliver each surviving proposal through the delivery mode above. Every proposal must:
+
+- **Name its evidence**: event counts, types, date ranges, and — where the target is a task TYPE (schedule triggers) — the target itself (e.g. "5× cos.schedule.trigger branch-reconcile between <date> and <date>"). No evidence, no proposal.
+- **Describe the automation concretely**: which schedule/cadence/task/setting, and what the operator gains.
+- **Summarize, never paste**: a filed item is world-readable the moment it exists. CoS task prompts, target NAMES (task descriptions), and settings values in the ledger may contain private project names or personal context — describe them ("three near-identical tasks asking for dependency updates on the same app") and never quote prompt bodies, targetName values, or payload values. When a proposal must point at specific ledger rows, cite counts, event types, and time ranges — plus the opaque event \`id\`s when you read the ledger over the HTTP API (the semantic tool's projection carries no ids), nothing more.
+
+## Hard limits
+
+- NEVER change settings (\`PUT /api/settings\`), schedule types, cadences, or task metadata yourself — not even the automation you are proposing. The proposal IS the deliverable; enacting it is the operator's call.
+- Do not edit source, commit, open a PR, or create branches. The run must end with a clean \`git status\`.
+- Cap yourself at 5 proposals per run; fold duplicates of an already-filed proposal into a comment on the existing item instead of filing again.
+
+## Report
+
+End with a short summary: the event window you reviewed, total events by type, each proposal you delivered (with its issue/task reference), and anything you deliberately did not propose and why.`,
+
   'jira-sprint-manager': `[Improvement: {appName}] JIRA Sprint Manager
 
 Triage and implement JIRA tickets for {appName}:

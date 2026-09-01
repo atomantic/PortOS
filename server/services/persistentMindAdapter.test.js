@@ -41,6 +41,9 @@ vi.mock('./persistentMindVisibility.js', () => ({
   readPersistentMindVisibility: (...args) => mock.readVisibility(...args),
   buildPersistentMindVisibilityPrompt: () => 'Environment visibility: READY',
 }));
+vi.mock('./persistentMindUserActions.js', () => ({
+  readPersistentMindUserActionsPrompt: vi.fn(async () => '# Recent user actions (last 24h)\n- 2× cos.schedule.trigger (branch-reconcile) actor=user'),
+}));
 vi.mock('./persistentMindCallCapability.js', () => ({
   buildPersistentMindCallCapabilityPrompt: ({ enabled }) => `Call access: ${enabled ? 'ON' : 'OFF'}`,
   executePersistentMindCallRequest: (...args) => mock.executeCallRequest(...args),
@@ -112,6 +115,7 @@ describe('persistent mind adapter', () => {
     });
     expect(mock.runPrompt.mock.calls[0][0].prompt).toContain('Task access: ON');
     expect(mock.runPrompt.mock.calls[0][0].prompt).toContain('Environment visibility: READY');
+    expect(mock.runPrompt.mock.calls[0][0].prompt).toContain('# Recent user actions (last 24h)');
     expect(mock.runPrompt.mock.calls[0][0].prompt).toContain('PortOS tools: read=false write=false');
   });
 

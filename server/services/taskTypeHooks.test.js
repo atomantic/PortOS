@@ -14,6 +14,13 @@ describe('taskTypeHooks registry', () => {
     expect(typeof await getTaskOutputHook('issue-watcher')).toBe('function');
   });
 
+  it('resolves an input hook but no output hook for user-action-review', async () => {
+    // Input-only registration: the empty-ledger skip is the whole hook. The
+    // agent's deliverable (filed issues / queued tasks) has no output payload.
+    expect(typeof await getTaskInputHook('user-action-review')).toBe('function');
+    expect(await getTaskOutputHook('user-action-review')).toBeNull();
+  });
+
   it('returns null for a task type with no registered hooks', async () => {
     expect(await getTaskInputHook('security')).toBeNull();
     expect(await getTaskOutputHook('security')).toBeNull();

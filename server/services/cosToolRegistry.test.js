@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   worldProject: vi.fn(),
   worldAugment: vi.fn(),
   worldSay: vi.fn(),
+  listUserActions: vi.fn(),
 }));
 
 const specs = [
@@ -54,6 +55,9 @@ vi.mock('./eidoverseWorld.js', () => ({
   augmentEidoverseWorld: (...args) => mocks.worldAugment(...args),
   sayInEidoverseWorld: (...args) => mocks.worldSay(...args),
 }));
+vi.mock('./userActions.js', () => ({
+  listUserActions: (...args) => mocks.listUserActions(...args),
+}));
 
 import {
   __testing,
@@ -82,6 +86,7 @@ describe('cosToolRegistry', () => {
     expect(catalog.tools.map((tool) => tool.name)).toEqual([
       'cos.create-task',
       'mind.cleanup',
+      'user-actions.query',
       'eidoverse.status',
       'eidoverse.project',
       'eidoverse.augment',
@@ -93,6 +98,7 @@ describe('cosToolRegistry', () => {
     expect(catalog.tools.find((tool) => tool.name === 'brain.capture').granted).toBe(false);
     const openai = formatCosToolCatalog(catalog, 'openai');
     expect(openai.tools).toEqual([
+      expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'user_actions_query' }) }),
       expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'eidoverse_status' }) }),
       expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'brain_search' }) }),
     ]);
@@ -104,6 +110,90 @@ describe('cosToolRegistry', () => {
     const prompt = buildPersistentMindToolPrompt({ readPortos: true });
     expect(prompt).toContain('brain.search');
     expect(prompt).not.toContain('brain.capture');
+  });
+
+  it('exposes the operator-action ledger to mind and agent scopes only behind readPortos', async () => {
+    const agentCatalog = getCosToolCatalog({ scope: 'agent', capabilities: { readPortos: true } });
+    expect(agentCatalog.tools.find((tool) => tool.providerName === 'user_actions_query').granted).toBe(true);
+    // scope 'agent' + granted is exactly what agentContextMcp's
+    // semanticToolsForConfig re-exports over the loopback MCP surface.
+    expect(formatCosToolCatalog(agentCatalog, 'mcp').tools.map((tool) => tool.name)).toContain('user_actions_query');
+    const denied = getCosToolCatalog({ scope: 'agent', capabilities: { writePortos: true } });
+    expect(denied.tools.find((tool) => tool.providerName === 'user_actions_query').granted).toBe(false);
+    await expect(executeCosToolCall({
+      call: { requestId: 'ua-denied', name: 'user-actions.query', arguments: {} },
+      authority: { scope: 'mind', capabilities: { createTasks: true } },
+    })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+    expect(mocks.listUserActions).not.toHaveBeenCalled();
+  });
+
+  it('returns bounded ledger events with source reduced to route identity', async () => {
+    mocks.listUserActions.mockResolvedValue([
+      {
+        id: 'evt-1', happenedAt: '2026-09-01T00:00:02.000Z', type: 'cos.schedule.trigger', actor: 'user',
+        summary: "Ran scheduled task 'branch-reconcile' on demand", target: 'branch-reconcile', targetName: null,
+        payload: { taskType: 'branch-reconcile', prompt: 'use sk-abcdefghijklmnopqrstuvwx for deploy' },
+        source: { route: '/api/cos/schedule/trigger', method: 'POST', service: 'taskSchedule', file: '/home/alice/portos/server.js' },
+      },
+      {
+        id: 'evt-2', happenedAt: '2026-09-01T00:00:01.000Z', type: 'settings.update', actor: 'user',
+        summary: 'Updated settings with token ghp_abcdefghijklmnopqrstuv inside',
+        targetName: 'uses sk-abcdefghijklmnopqrstuvwx here',
+        payload: {}, source: { service: 'settings', fn: 'save' },
+      },
+      {
+        id: 'evt-3', happenedAt: '2026-09-01T00:00:00.000Z', type: 'cos.task.create', actor: 'user',
+        summary: 'Queued task', payload: {}, source: {},
+      },
+    ]);
+    const result = await executeCosToolCall({
+      call: { requestId: 'ua-read', name: 'user-actions.query', arguments: { actor: 'user', limit: 2 } },
+      authority: { scope: 'mind', capabilities: { readPortos: true } },
+    });
+    // Fetches one extra row so a full page reports truncation honestly.
+    expect(mocks.listUserActions).toHaveBeenCalledWith({ actor: 'user', limit: 3 });
+    expect(result.state).toBe('completed');
+    expect(result.result.truncated).toBe(true);
+    expect(result.result.events).toHaveLength(2);
+    expect(result.result.events[0]).toMatchObject({
+      type: 'cos.schedule.trigger',
+      target: 'branch-reconcile',
+      source: { route: '/api/cos/schedule/trigger', method: 'POST' },
+    });
+    // A `{ service, fn }` source (and any filesystem path) never crosses out.
+    expect(result.result.events[1].source).toEqual({});
+    expect(JSON.stringify(result.result)).not.toContain('/home/alice');
+    // Free-text projections get the value-side credential scrub — payload
+    // string values included (record-time redaction is key-based only).
+    expect(result.result.events[1].summary).toBe('Updated settings with token [REDACTED] inside');
+    expect(result.result.events[1].targetName).toBe('uses [REDACTED] here');
+    expect(result.result.events[0].payload.prompt).toBe('use [REDACTED] for deploy');
+  });
+
+  it('rejects an unparseable date filter with field attribution', async () => {
+    mocks.listUserActions.mockResolvedValue([]);
+    const result = await executeCosToolCall({
+      call: { requestId: 'ua-bad-date', name: 'user-actions.query', arguments: { from: 'last tuesday-ish' } },
+      authority: { scope: 'mind', capabilities: { readPortos: true } },
+    });
+    expect(result.state).toBe('failed');
+    expect(result.error).toContain("Invalid 'from'");
+    expect(mocks.listUserActions).not.toHaveBeenCalled();
+  });
+
+  it('clamps the ledger query limit to 100 and rejects unknown filters', async () => {
+    mocks.listUserActions.mockResolvedValue([]);
+    const result = await executeCosToolCall({
+      call: { requestId: 'ua-clamp', name: 'user-actions.query', arguments: { limit: 500 } },
+      authority: { scope: 'mind', capabilities: { readPortos: true } },
+    });
+    expect(result.state).toBe('completed');
+    expect(result.result).toEqual({ events: [], truncated: false });
+    expect(mocks.listUserActions).toHaveBeenCalledWith({ limit: 101 });
+    await expect(executeCosToolCall({
+      call: { requestId: 'ua-bad', name: 'user-actions.query', arguments: { sql: 'DROP TABLE' } },
+      authority: { scope: 'mind', capabilities: { readPortos: true } },
+    })).rejects.toMatchObject({ code: 'TOOL_VALIDATION_ERROR' });
   });
 
   it('validates arguments and executes an allowed read', async () => {

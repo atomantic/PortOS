@@ -62,6 +62,12 @@ const HOOK_MODULES = {
   'layered-intelligence': {
     load: () => import('./autonomousJobs/layeredIntelligenceHooks.js')
   },
+  // buildTaskInput only: skips the dispatch when the operator-action ledger is
+  // empty. No output hook — the agent's deliverable is filed issues / queued
+  // tasks, and registering here already exempts it from the commit criterion.
+  'user-action-review': {
+    load: () => import('./userActionReviewHooks.js')
+  },
 };
 const PAYLOAD_OPTIONAL_OUTPUT_HOOKS = new Set();
 

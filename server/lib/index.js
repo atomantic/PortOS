@@ -214,6 +214,7 @@ export * from './uploads.js';
 export * from './icloudFile.js';
 export * from './spawnCwd.js';
 export * from './schemaVersions.js';
+export * from './secretText.js';
 export * from './imageClean.js';
 export * from './imageFrameStats.js';
 export * from './imageRgba.js';

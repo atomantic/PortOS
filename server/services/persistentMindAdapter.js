@@ -41,6 +41,7 @@ import {
   buildPersistentMindVisibilityPrompt,
   readPersistentMindVisibility,
 } from './persistentMindVisibility.js';
+import { readPersistentMindUserActionsPrompt } from './persistentMindUserActions.js';
 import {
   buildPersistentMindToolPrompt,
   executeCosToolCall,
@@ -221,11 +222,11 @@ const currentWakeText = (wake) => {
   return `This is a self-directed wake. Continue one worthwhile thread from the trajectory.\nreason=${wake?.reason || 'scheduled reflection'}`;
 };
 
-export function buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, toolCapabilityPrompt = '# PortOS semantic tools\nSemantic tool access is OFF.', visibilityPrompt = '# Persistent Mind environment visibility\nWorkspace and runtime visibility is unknown.', callCapabilityPrompt = buildPersistentMindCallCapabilityPrompt({ enabled: false }) }) {
+export function buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, toolCapabilityPrompt = '# PortOS semantic tools\nSemantic tool access is OFF.', visibilityPrompt = '# Persistent Mind environment visibility\nWorkspace and runtime visibility is unknown.', userActionsPrompt = '', callCapabilityPrompt = buildPersistentMindCallCapabilityPrompt({ enabled: false }) }) {
   return `${context.text}
 
 ${visibilityPrompt}
-
+${userActionsPrompt ? `\n${userActionsPrompt}\n` : ''}
 # Current wake
 ${currentWakeText(wake)}
 
@@ -350,6 +351,10 @@ export function createPersistentMindTurnAdapter() {
         catalog: taskCatalog,
       });
       const visibilityPrompt = buildPersistentMindVisibilityPrompt(visibility);
+      // Deterministic and always included (epic #5593 decision 14): bounded,
+      // already redacted, no grant required. Deeper lookbacks use the
+      // readPortos-gated user-actions.query tool.
+      const userActionsPrompt = await readPersistentMindUserActionsPrompt();
       const toolCapabilityPrompt = buildPersistentMindToolPrompt(taskAccess);
       const callCapabilityPrompt = buildPersistentMindCallCapabilityPrompt({ enabled: taskAccess.callUser });
       const screenshots = (Array.isArray(wake?.message?.images) ? wake.message.images : []).map((image) => {
@@ -363,6 +368,7 @@ export function createPersistentMindTurnAdapter() {
         taskCapabilityPrompt,
         toolCapabilityPrompt,
         visibilityPrompt,
+        userActionsPrompt,
         callCapabilityPrompt,
       });
       let providerPrompt = basePrompt;
