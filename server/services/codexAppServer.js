@@ -113,6 +113,8 @@ let modelsCache = null;
 let textTransportBench = null;
 /** The empty scratch directory generic text turns run in. Created lazily. */
 let textTurnCwd = null;
+/** Coalesces concurrent first-calls so only one scratch directory is created. */
+let creatingTextTurnCwd = null;
 
 const codexError = (code, message, options = {}) => new ServerError(message, {
   status: options.status ?? 502,
@@ -219,11 +221,18 @@ const routeTurnNotification = (method, params) => {
   // The accumulator is pure; a malformed frame can still throw inside a
   // normalizer, and this runs on a stdout event handler where an uncaught
   // throw would take down the node process.
+  // The caller's progress hook runs in its OWN guard: a throwing `onDelta` must
+  // not skip the accumulator below, or the finished answer would silently lose
+  // that chunk of text.
+  if (turn.onDelta && method === CODEX_TURN_NOTIFICATIONS.agentMessageDelta && typeof params.delta === 'string') {
+    try {
+      turn.onDelta(params.delta);
+    } catch (err) {
+      console.error(`❌ Codex turn progress hook failed: ${err.message}`);
+    }
+  }
   let terminal = false;
   try {
-    if (turn.onDelta && method === CODEX_TURN_NOTIFICATIONS.agentMessageDelta && typeof params.delta === 'string') {
-      turn.onDelta(params.delta);
-    }
     terminal = applyCodexTurnEvent(turn.acc, method, params);
   } catch (err) {
     console.error(`❌ Codex turn event ${method} could not be applied: ${err.message}`);
@@ -572,8 +581,15 @@ const MODELS_TTL_MS = 10 * 60_000;
  */
 const ensureTextTurnCwd = async () => {
   if (textTurnCwd) return textTurnCwd;
-  textTurnCwd = await mkdtemp(join(tmpdir(), 'portos-codex-text-'));
-  return textTurnCwd;
+  // Coalesced the same way `connect()` is: two turns starting together would
+  // otherwise each `mkdtemp`, and the loser's directory would leak for the life
+  // of the process because only one path can be remembered.
+  if (!creatingTextTurnCwd) {
+    creatingTextTurnCwd = mkdtemp(join(tmpdir(), 'portos-codex-text-'))
+      .then((dir) => { textTurnCwd = dir; return dir; })
+      .finally(() => { creatingTextTurnCwd = null; });
+  }
+  return creatingTextTurnCwd;
 };
 
 /**
@@ -794,6 +810,7 @@ export async function stopCodexAppServer() {
   modelsCache = null;
   const scratch = textTurnCwd;
   textTurnCwd = null;
+  creatingTextTurnCwd = null;
   if (scratch) {
     await rm(scratch, { recursive: true, force: true })
       .catch((err) => console.error(`❌ Failed to remove the Codex text scratch directory: ${err.message}`));
@@ -817,4 +834,5 @@ export function __resetCodexAppServer() {
   modelsCache = null;
   textTransportBench = null;
   textTurnCwd = null;
+  creatingTextTurnCwd = null;
 }
