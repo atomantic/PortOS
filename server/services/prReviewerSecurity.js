@@ -179,6 +179,7 @@ export async function runPrReviewerSecurityScan({ app, providerId, model, effort
   if (!target.ok) return target
 
   const reviewedPrs = []
+  let hasFindings = false
   for (const pr of target.prs) {
     const diff = await execGh(['pr', 'diff', String(pr.number), '--repo', target.repoSpec]).catch(() => null)
     if (diff === null) return failure('security-scan-diff-unavailable', { reviewedPrs })
@@ -202,17 +203,19 @@ export async function runPrReviewerSecurityScan({ app, providerId, model, effort
 
     const passed = verdict.findings.trim() === 'No findings.'
     reviewedPrs.push({ number: pr.number, passed })
-    if (!passed) {
-      return {
-        ok: true,
-        passed: false,
-        code: 'security-scan-findings',
-        backend: selected.backend,
-        model: selected.model,
-        repoFullName: target.repoFullName,
-        defaultBranch: target.defaultBranch,
-        reviewedPrs,
-      }
+    if (!passed) hasFindings = true
+  }
+
+  if (hasFindings) {
+    return {
+      ok: true,
+      passed: false,
+      code: 'security-scan-findings',
+      backend: selected.backend,
+      model: selected.model,
+      repoFullName: target.repoFullName,
+      defaultBranch: target.defaultBranch,
+      reviewedPrs,
     }
   }
 

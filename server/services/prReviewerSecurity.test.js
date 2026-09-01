@@ -139,7 +139,7 @@ describe('pr-reviewer Security Scan execution', () => {
     ])
   })
 
-  it('stops on the first non-clean verdict and fails the pipeline', async () => {
+  it('reviews every external PR before failing the pipeline on any non-clean verdict', async () => {
     runLocalCodeReviewMock.mockResolvedValue({ ok: true, findings: 'Finding: suspicious install script.' })
     execGhMock
       .mockResolvedValueOnce('main')
@@ -148,11 +148,12 @@ describe('pr-reviewer Security Scan execution', () => {
         { number: 13, author: { login: 'contributor-b' } },
       ]))
       .mockResolvedValueOnce('diff for twelve')
+      .mockResolvedValueOnce('diff for thirteen')
 
     const result = await runPrReviewerSecurityScan({ app, providerId: 'ollama', model: 'safe-model' })
 
     expect(result).toMatchObject({ ok: true, passed: false, code: 'security-scan-findings' })
-    expect(result.reviewedPrs).toEqual([{ number: 12, passed: false }])
-    expect(runLocalCodeReviewMock).toHaveBeenCalledTimes(1)
+    expect(result.reviewedPrs).toEqual([{ number: 12, passed: false }, { number: 13, passed: false }])
+    expect(runLocalCodeReviewMock).toHaveBeenCalledTimes(2)
   })
 })
