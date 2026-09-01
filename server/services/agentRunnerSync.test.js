@@ -151,9 +151,9 @@ describe('syncRunnerAgents runner-owned TUI recovery', () => {
       return { id, status: 'running' };
     });
     vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([
-      { id: 'agent-finalized', taskId: 'task-1', pid: 1, startedAt: Date.now(), kind: 'cli' },
-      { id: 'agent-gone', taskId: 'task-1', pid: 2, startedAt: Date.now(), kind: 'cli' },
-      { id: 'agent-real', taskId: 'task-1', pid: 3, startedAt: Date.now(), kind: 'cli' },
+      { id: 'agent-finalized', taskId: 'task-1', pid: 1, startedAt: Date.now(), kind: 'cli', processActive: true, liveness: 'pid' },
+      { id: 'agent-gone', taskId: 'task-1', pid: 2, startedAt: Date.now(), kind: 'cli', processActive: true, liveness: 'pid' },
+      { id: 'agent-real', taskId: 'task-1', pid: 3, startedAt: Date.now(), kind: 'cli', processActive: true, liveness: 'pid' },
     ]);
 
     await expect(syncRunnerAgents()).resolves.toBe(1);
@@ -179,6 +179,8 @@ describe('syncRunnerAgents runner-owned TUI recovery', () => {
         pid: 4321,
         startedAt: Date.now(),
         kind: 'tui',
+        processActive: true,
+        liveness: 'pty',
         sessionId: 'tui-session-live',
         command: 'claude',
         workspacePath: '/tmp/example-workspace',
