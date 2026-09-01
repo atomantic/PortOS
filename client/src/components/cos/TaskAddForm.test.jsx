@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import TaskAddForm from './TaskAddForm';
 
@@ -554,5 +554,46 @@ describe('TaskAddForm worktree/PR defaults', () => {
     await waitFor(() => expect(screen.getByPlaceholderText('Task description *')).toBeInTheDocument());
     expect(worktreeToggle()).not.toBeChecked();
     expect(openPrToggle()).not.toBeChecked();
+  });
+
+  describe('description auto-sizing textarea', () => {
+    it('renders task description as an auto-sizing textarea in full mode', async () => {
+      render(<TaskAddForm providers={[]} apps={[]} onTaskAdded={vi.fn()} />);
+      await act(async () => {});
+      const fullDesc = screen.getByPlaceholderText('Task description *');
+      expect(fullDesc.tagName).toBe('TEXTAREA');
+      expect(fullDesc).toHaveClass('resize-none');
+      expect(fullDesc).toHaveClass('break-words');
+    });
+
+    it('renders task description as an auto-sizing textarea in compact mode', async () => {
+      render(<TaskAddForm providers={[]} apps={[]} onTaskAdded={vi.fn()} compact />);
+      await act(async () => {});
+      const compactDesc = screen.getByPlaceholderText('Task description *');
+      expect(compactDesc.tagName).toBe('TEXTAREA');
+      expect(compactDesc).toHaveClass('resize-none');
+      expect(compactDesc).toHaveClass('break-words');
+    });
+
+    it('submits on Enter without shiftKey, and preserves newlines when typing multi-line description', async () => {
+      const user = userEvent.setup();
+      const onTaskAdded = vi.fn();
+      api.addCosTask.mockResolvedValue({ id: 'task-1', description: 'Line 1\nLine 2', status: 'pending', metadata: {} });
+
+      render(<TaskAddForm providers={[]} apps={[]} onTaskAdded={onTaskAdded} />);
+      await act(async () => {});
+      const desc = screen.getByPlaceholderText('Task description *');
+
+      // Type multi-line text using Shift+Enter
+      await user.type(desc, 'Line 1{Shift>}{Enter}{/Shift}Line 2');
+      expect(desc).toHaveValue('Line 1\nLine 2');
+
+      // Press Enter to submit
+      await user.type(desc, '{Enter}');
+      await waitFor(() => expect(api.addCosTask).toHaveBeenCalledWith(
+        expect.objectContaining({ description: 'Line 1\nLine 2' }),
+        expect.anything()
+      ));
+    });
   });
 });

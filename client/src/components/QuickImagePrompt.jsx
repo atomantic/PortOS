@@ -10,6 +10,7 @@ import { useLocalStoragePersisted } from '../hooks/useLocalStorageBool';
 import useMounted from '../hooks/useMounted';
 import ResolutionField from './media/ResolutionField';
 import MediaJobThumb from './pipeline/MediaJobThumb';
+import AutoSizeTextarea from './ui/AutoSizeTextarea';
 import toast from './ui/Toast';
 
 // Universal presets only (no `compatible` gate) so the quick widget can offer
@@ -132,7 +133,7 @@ export default function QuickImagePrompt() {
       </div>
       <form onSubmit={handleGenerate} className="flex flex-col gap-2 flex-1 min-h-0">
         <label htmlFor="quick-image-prompt" className="sr-only">Image prompt</label>
-        <textarea
+        <AutoSizeTextarea
           id="quick-image-prompt"
           placeholder="A neon-lit alley at dusk, cinematic, 50mm..."
           value={prompt}
@@ -141,7 +142,7 @@ export default function QuickImagePrompt() {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleGenerate(e);
           }}
           rows={3}
-          className="flex-1 min-h-[60px] px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm resize-none"
+          className="w-full min-h-[60px] px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
         />
 
         {/* Universe styling. Hidden entirely when no universe carries style
@@ -207,13 +208,13 @@ export default function QuickImagePrompt() {
           {showNegative && (
             <>
               <label htmlFor="quick-image-negative" className="sr-only">Negative prompt</label>
-              <textarea
+              <AutoSizeTextarea
                 id="quick-image-negative"
                 value={negativePrompt}
                 onChange={(e) => setNegativePrompt(e.target.value)}
                 placeholder="Things to avoid…"
                 rows={2}
-                className="mt-1 w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm resize-none"
+                className="mt-1 w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
               />
             </>
           )}

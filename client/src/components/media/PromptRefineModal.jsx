@@ -4,6 +4,7 @@ import ProviderModelSelector from '../ProviderModelSelector';
 import toast from '../ui/Toast';
 import Modal from '../ui/Modal';
 import { FormField } from '../ui/FormField';
+import AutoSizeTextarea from '../ui/AutoSizeTextarea';
 import useProviderModels from '../../hooks/useProviderModels';
 import { generateImage, generateVideo, refineMediaPrompt } from '../../services/api';
 import { getRenderConfigForItem } from './normalize';
@@ -186,20 +187,20 @@ export default function PromptRefineModal({ item, open, onClose }) {
               )}
 
               <FormField label="New prompt" labelClassName="block text-[11px] uppercase tracking-wide text-gray-500 mb-1">
-                <textarea
+                <AutoSizeTextarea
                   value={refinedPrompt}
                   onChange={(e) => setRefinedPrompt(e.target.value)}
-                  rows={6}
-                  className="w-full bg-port-bg border border-port-border rounded-lg p-3 text-sm text-white focus:outline-none focus:border-port-accent resize-y"
+                  rows={4}
+                  className="w-full bg-port-bg border border-port-border rounded-lg p-3 text-sm text-white focus:outline-none focus:border-port-accent min-h-[100px]"
                 />
               </FormField>
 
               <FormField label="New negative prompt" labelClassName="block text-[11px] uppercase tracking-wide text-gray-500 mb-1">
-                <textarea
+                <AutoSizeTextarea
                   value={refinedNegative}
                   onChange={(e) => setRefinedNegative(e.target.value)}
-                  rows={3}
-                  className="w-full bg-port-bg border border-port-border rounded-lg p-3 text-sm text-white focus:outline-none focus:border-port-accent resize-y"
+                  rows={2}
+                  className="w-full bg-port-bg border border-port-border rounded-lg p-3 text-sm text-white focus:outline-none focus:border-port-accent min-h-[60px]"
                 />
               </FormField>
             </div>

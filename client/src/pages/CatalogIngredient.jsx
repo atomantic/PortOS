@@ -13,6 +13,7 @@ import FilePickerButton from '../components/ui/FilePickerButton';
 import Modal from '../components/ui/Modal.jsx';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair.jsx';
 import UnsavedChangesConfirm from '../components/ui/UnsavedChangesConfirm.jsx';
+import AutoSizeTextarea from '../components/ui/AutoSizeTextarea';
 import {
   getCatalogIngredientDetails,
   updateCatalogIngredient,
@@ -1126,23 +1127,25 @@ function GenerateImageControl({ ingredientId, name, description, universeId, onC
             <span className="text-xs font-semibold text-white">Generate image</span>
             {prefilling && <Loader2 size={12} className="animate-spin text-gray-400" aria-hidden="true" />}
           </div>
-          <label className="block">
+          <label htmlFor="ci-image-prompt" className="block">
             <span className="text-[11px] text-gray-400">Prompt</span>
-            <textarea
+            <AutoSizeTextarea
+              id="ci-image-prompt"
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              rows={4}
+              rows={3}
               placeholder="Describe the image to render…"
-              className="mt-1 w-full text-xs bg-port-bg border border-port-border rounded px-2 py-1 text-gray-200 resize-y"
+              className="mt-1 w-full text-xs bg-port-bg border border-port-border rounded px-2 py-1 text-gray-200 min-h-[60px]"
             />
           </label>
-          <label className="block">
+          <label htmlFor="ci-image-negative-prompt" className="block">
             <span className="text-[11px] text-gray-400">Negative prompt (optional)</span>
-            <textarea
+            <AutoSizeTextarea
+              id="ci-image-negative-prompt"
               value={negativePrompt}
               onChange={(e) => setNegativePrompt(e.target.value)}
               rows={2}
-              className="mt-1 w-full text-xs bg-port-bg border border-port-border rounded px-2 py-1 text-gray-200 resize-y"
+              className="mt-1 w-full text-xs bg-port-bg border border-port-border rounded px-2 py-1 text-gray-200 min-h-[44px]"
             />
           </label>
           <div className="flex items-center justify-end gap-2 pt-1">

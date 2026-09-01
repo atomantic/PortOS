@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Plus, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText, Zap, Bookmark, Ticket, GitBranch, GitPullRequest, Wand2 } from 'lucide-react';
 import toast from '../ui/Toast';
+import AutoSizeTextarea from '../ui/AutoSizeTextarea';
 import AppContextPicker from '../AppContextPicker';
 import * as api from '../../services/api';
 import { processScreenshotUploads, processAttachmentUploads } from '../../services/apiMedia';
@@ -616,13 +617,17 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       <div className="space-y-3">
         <div className="flex flex-col sm:flex-row gap-2">
           <label htmlFor="compact-task-desc" className="sr-only">Task description (required)</label>
-          <input
+          <AutoSizeTextarea
             id="compact-task-desc"
-            type="text"
             placeholder="Task description *"
             value={newTask.description}
             onChange={e => setNewTask(t => ({ ...t, description: e.target.value }))}
-            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && !isSubmitting && handleAddTask()}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey && !isSubmitting) {
+                e.preventDefault();
+                handleAddTask();
+              }
+            }}
             className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
             aria-required="true"
           />
@@ -723,10 +728,9 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       <div className="space-y-2">
         <div>
           <label htmlFor="task-description" className="sr-only">Task description (required)</label>
-          <input
+          <AutoSizeTextarea
             id="task-description"
             ref={descriptionRef}
-            type="text"
             placeholder="Task description *"
             value={newTask.description}
             onChange={e => setNewTask(t => ({ ...t, description: e.target.value }))}

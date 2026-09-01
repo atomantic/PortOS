@@ -4,6 +4,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import { FormField } from '../ui/FormField';
+import AutoSizeTextarea from '../ui/AutoSizeTextarea';
 import { listMediaJobs, cancelMediaJob, cancelQueuedMediaJobs, deleteMediaJob, retryMediaJob, runMediaJobNow } from '../../services/apiMediaJobs.js';
 import { listLoraTrainingCheckpoints } from '../../services/apiLoraTraining.js';
 import { isCloudCliMode, IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_EFFORT, supportsCloudModelOverride, modeLabel } from '../../lib/imageGenBackends';
@@ -650,20 +651,20 @@ function EditRetryForm({ job, onSubmit, onCancel }) {
   return (
     <form onSubmit={submit} className="mt-3 pt-3 border-t border-port-border space-y-2">
       <FormField label="Prompt" labelClassName="block text-[10px] uppercase tracking-wide text-port-text-muted">
-        <textarea
+        <AutoSizeTextarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           rows={3}
-          className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs"
+          className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs min-h-[60px]"
           maxLength={8000}
         />
       </FormField>
       <FormField label="Negative prompt" labelClassName="block text-[10px] uppercase tracking-wide text-port-text-muted">
-        <textarea
+        <AutoSizeTextarea
           value={negativePrompt}
           onChange={(e) => setNegativePrompt(e.target.value)}
           rows={2}
-          className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs"
+          className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs min-h-[44px]"
           maxLength={8000}
         />
       </FormField>
@@ -929,10 +930,10 @@ function VideoRetryForm({ job, onSubmit, onCancel }) {
     <form onSubmit={submit} className="mt-3 pt-3 border-t border-port-border space-y-3">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <FormField label="Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-          <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={3} maxLength={8000} className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white" />
+          <AutoSizeTextarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={3} maxLength={8000} className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white min-h-[80px]" />
         </FormField>
         <FormField label="Negative Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-          <textarea value={negativePrompt} onChange={(e) => setNegativePrompt(e.target.value)} rows={3} maxLength={8000} className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white" />
+          <AutoSizeTextarea value={negativePrompt} onChange={(e) => setNegativePrompt(e.target.value)} rows={3} maxLength={8000} className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white min-h-[80px]" />
         </FormField>
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">

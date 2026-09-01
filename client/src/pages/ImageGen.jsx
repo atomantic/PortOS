@@ -33,6 +33,7 @@ import ReferenceImagePicker from '../components/imageGen/ReferenceImagePicker';
 import RemoteMediaTargetPicker from '../components/federatedMedia/RemoteMediaTargetPicker';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
 import { FormField } from '../components/ui/FormField';
+import AutoSizeTextarea from '../components/ui/AutoSizeTextarea';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
@@ -1301,22 +1302,22 @@ export default function ImageGen() {
           />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <FormField label="Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-              <textarea
+              <AutoSizeTextarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 rows={3}
                 disabled={statusLoading}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 resize-y"
+                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[80px]"
                 placeholder="Describe the image you want to generate..."
               />
             </FormField>
             <FormField label="Negative Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-              <textarea
+              <AutoSizeTextarea
                 value={negativePrompt}
                 onChange={(e) => setNegativePrompt(e.target.value)}
                 rows={3}
                 disabled={statusLoading}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 resize-y"
+                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[80px]"
                 placeholder="What to avoid..."
               />
             </FormField>
