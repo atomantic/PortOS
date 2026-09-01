@@ -29,7 +29,7 @@
  * answered so the UI can flag approximate rows.
  */
 
-export const PRICING_AS_OF = '2026-07-12';
+export const PRICING_AS_OF = '2026-09-01';
 
 /**
  * Every shipped Claude Opus generation bills at the same published rate, so the
@@ -48,9 +48,20 @@ const OPUS_MODEL_IDS = [
   'claude-opus-4-5',
 ];
 
+/**
+ * Fable 5.1 (2026-09-01) keeps Fable 5's input/output rates — only its cache
+ * tiers changed (see CACHE_MULTIPLIER_RULES) — but it's its own EXACT_RATES row
+ * rather than folded into OPUS-style array sharing, since `claude-fable-5`
+ * stays a distinct historical entry rather than being renamed. Ordered NEWEST
+ * FIRST, same convention as OPUS_MODEL_IDS: its head is what the `/fable/i`
+ * family rule reports for a fable id the table doesn't list.
+ */
+const FABLE_MODEL_IDS = ['claude-fable-5-1', 'claude-fable-5'];
+
 /** USD per 1M tokens: [input, output]. Exact model-id matches. */
 const EXACT_RATES = {
   // Anthropic
+  'claude-fable-5-1': [10.0, 50.0],
   'claude-fable-5': [10.0, 50.0],
   'claude-mythos-5': [10.0, 50.0],
   // Cloned per row so each key owns its pair exactly as the hand-written rows
@@ -109,7 +120,7 @@ const EXACT_KEYS_BY_LENGTH = Object.keys(EXACT_RATES).sort((a, b) => b.length - 
  * contain their provider family name).
  */
 const FAMILY_RULES = [
-  { test: /fable|mythos/i, rateModel: 'claude-fable-5' },
+  { test: /fable|mythos/i, rateModel: FABLE_MODEL_IDS[0] },
   // Reports the newest listed opus id (see OPUS_MODEL_IDS) — the whole tier
   // shares one rate pair, so the pointer only supplies the label, and deriving
   // it means an opus bump never has to edit this line.
@@ -167,10 +178,17 @@ const FALLBACK_RATES = { rateModel: null, inputPer1M: 3.0, outputPer1M: 15.0 };
  * Codex are the only CLIs that write per-message cache counts to disk (see
  * `lib/providerTranscriptUsage.js`), so any other family's multiplier applies to
  * a token count that is currently always 0.
+ *
+ * Fable 5.1 is a one-off exception to that default: its cache-read rate dropped
+ * 75% ($1.00 -> $0.25 per 1M, i.e. 0.1x -> 0.025x its $10 input rate) while
+ * cache-write stayed at the standard 1.25x — Fable 5's own cache tiers are
+ * unchanged, so the override is scoped to the `-5-1` id rather than the whole
+ * `/fable/i` family.
  */
 const DEFAULT_CACHE_MULTIPLIERS = { read: 0.1, write: 1.25 };
 const CACHE_MULTIPLIER_RULES = [
   { test: /^grok/, read: 0.15, write: 1.25 },
+  { test: /^claude-fable-5-1/, read: 0.025, write: 1.25 },
 ];
 
 const cacheMultipliers = (rateModel) => {
