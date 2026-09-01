@@ -664,6 +664,21 @@ describe('cleanupZombieAgents — runner listing is not proof of life', () => {
     await rm(mockCosState.agentsDir, { recursive: true, force: true });
   });
 
+  it('does not reap a runner-owned TUI while the runner probe is unavailable', async () => {
+    mockCosState.state.agents['agent-tui'] = {
+      id: 'agent-tui',
+      status: 'running',
+      pid: 0,
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+      metadata: { useRunner: true, executionMode: 'runner-tui' },
+    };
+    vi.mocked(getActiveAgentsFromRunner).mockRejectedValueOnce(new Error('runner is booting'));
+
+    const result = await cleanupZombieAgents();
+    expect(result.cleaned).toEqual([]);
+    expect(mockCosState.state.agents['agent-tui'].status).toBe('running');
+  });
+
   it('leaves a live runner-owned TUI whose onExit liveness is true', async () => {
     mockCosState.state.agents['agent-tui'] = {
       id: 'agent-tui',

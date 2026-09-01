@@ -133,6 +133,10 @@ async function inspectAgentProcess(agent) {
 app.get('/agents', async (req, res) => {
   const agents = [];
   for (const [agentId, agent] of activeAgents) {
+    // onExit stamps exited then awaits disk I/O; skip so a dying handle is
+    // not advertised as a stale listing that sweeps would reap before
+    // agent:completed lands.
+    if (agent.exited === true) continue;
     const inspected = await inspectAgentProcess(agent);
     agents.push({
       id: agentId,
@@ -270,6 +274,10 @@ app.post('/spawn-tui', async (req, res) => {
       const current = activeAgents.get(agentId);
       if (!current) return;
       current.exited = true;
+      // Drop the handle before the awaited state write so GET /agents cannot
+      // publish processActive:false for a TUI whose completion event is still
+      // in flight (completeAgent keeps the first terminal verdict).
+      activeAgents.delete(agentId);
       current.doneWatcher?.();
       // Cancel any pending SIGKILL timer — process already exited.
       if (current.killTimer) {
@@ -313,7 +321,6 @@ app.post('/spawn-tui', async (req, res) => {
         if (!success) state.stats.failed++;
         delete state.agents[agentId];
       });
-      activeAgents.delete(agentId);
     } catch (err) {
       console.error(`❌ TUI agent ${agentId} exit handler error: ${err.message}`);
       activeAgents.delete(agentId);
