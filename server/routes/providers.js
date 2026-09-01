@@ -9,6 +9,8 @@ import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 import {
   validateRequest,
+  codexLoginCancelSchema,
+  codexLoginStartSchema,
   providerVisionTestSchema,
   providerVisionSuiteSchema,
 } from '../lib/validation.js';
@@ -24,6 +26,14 @@ import { getProviderReadinessMap, resetProviderReadinessCache, servedModelId } f
 import { getLlamaServerEndpoint, relaunchLlamaServerWithAlias } from '../services/llamaServerManager.js';
 import { claimHeavyLocalJob } from '../lib/heavyJobClaim.js';
 import { getProviderPrerequisiteMap } from '../services/providerPrerequisites.js';
+import { isCodexSubscriptionProvider } from '../lib/codexAccount.js';
+import {
+  cancelCodexChatGptLogin,
+  peekCodexAccountReadiness,
+  codexLogout,
+  getCodexAccountReadiness,
+  startCodexChatGptLogin,
+} from '../services/codexAppServer.js';
 import { runLocalRuntimeSetup, SETUP_ACTIONS } from '../services/localRuntimeSetup.js';
 import { localEndpointPort, localRuntimeForProvider } from '../lib/localProviderRuntime.js';
 import { buildTuiShellLaunch } from '../lib/tuiShellLaunch.js';
@@ -160,12 +170,17 @@ export function createPortOSProviderRoutes(aiToolkit) {
     const data = await providerService.getAllProviders();
     const prerequisites = getProviderPrerequisiteMap(data.providers);
     const capabilities = await detectSystemCapabilities();
+    // Cache-only: this list must stay a synchronous read that spawns nothing.
+    // `null` here means NOT PROBED, and the dedicated `/codex/account` fetch is
+    // what fills it — a card renders "unknown", never "signed out", until then.
+    const codexAccount = peekCodexAccountReadiness();
     res.json({
       activeProvider: data.activeProvider,
       providers: data.providers.map((provider) => ({
         ...presentProvider(provider, capabilities),
         prerequisitesMet: prerequisites[provider.id]?.met ?? true,
         missingPrerequisites: prerequisites[provider.id]?.missing ?? [],
+        ...(isCodexSubscriptionProvider(provider) ? { codexAccount } : {}),
       })),
       runnerAllowedCommands: RUNNER_ALLOWED_COMMANDS
     });
@@ -225,6 +240,55 @@ export function createPortOSProviderRoutes(aiToolkit) {
   router.get('/readiness', asyncHandler(async (_req, res) => {
     const data = await providerService.getAllProviders();
     res.json({ readiness: await getProviderReadinessMap(data.providers) });
+  }));
+
+  /**
+   * Is a ChatGPT subscription signed in, and is it usable right now?
+   *
+   * The Codex CLI/TUI cards could already say whether the `codex` binary
+   * exists; they could not say whether the account behind it is signed in, on
+   * which plan, expired, or out of quota — the user learned that from a failed
+   * agent transcript. The answer comes from the Codex app-server's own
+   * `account/read`: PortOS never reads Codex's credential file and never holds
+   * a token.
+   *
+   * LAZY BY CONTRACT. This is the call that may spawn `codex app-server`, and
+   * it runs only from an explicit page fetch — nothing on the boot path calls
+   * it, and `GET /api/providers` decorates its cards from the cache-only peek.
+   * `?fresh=1` skips the TTL for the poll that follows a sign-in.
+   *
+   * The payload carries a status, a plan name, and quota percentages. No token,
+   * no account id, no email, no credential path.
+   */
+  router.get('/codex/account', asyncHandler(async (req, res) => {
+    res.json({ readiness: await getCodexAccountReadiness({ fresh: req.query.fresh === '1' }) });
+  }));
+
+  /**
+   * Begin an explicit ChatGPT sign-in and return only the URL (browser flow) or
+   * the verification URL plus short code (device-code flow) the user needs.
+   *
+   * A POST because it starts an OAuth flow — never a side effect of a read.
+   * The response deliberately contains no token material, and `loginId` is the
+   * bounded handle the cancel endpoint takes.
+   */
+  router.post('/codex/account/login', asyncHandler(async (req, res) => {
+    const { deviceCode } = validateRequest(codexLoginStartSchema, req.body ?? {});
+    res.json({ login: await startCodexChatGptLogin({ deviceCode }) });
+  }));
+
+  /**
+   * Abandon the sign-in this PortOS started. The id must match the pending
+   * login, so a stale tab cannot cancel a flow the user began afterwards.
+   */
+  router.post('/codex/account/login/cancel', asyncHandler(async (req, res) => {
+    const { loginId } = validateRequest(codexLoginCancelSchema, req.body ?? {});
+    res.json({ readiness: await cancelCodexChatGptLogin(loginId) });
+  }));
+
+  /** Sign out. Codex drops its own credentials; PortOS has none to clear. */
+  router.post('/codex/account/logout', asyncHandler(async (_req, res) => {
+    res.json({ readiness: await codexLogout() });
   }));
 
   /**

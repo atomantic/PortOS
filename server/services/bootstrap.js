@@ -146,6 +146,7 @@ import { outcomesStore as liOutcomesStore } from './layeredIntelligenceOutcomes.
 import * as gameStore from './games/store.js';
 import * as fableLoomStore from './fableLoom/store.js';
 import { prerequisitesMetForRouting } from './providerPrerequisites.js';
+import { stopCodexAppServer } from './codexAppServer.js';
 
 /**
  * Pre-route boot. Everything a route handler may depend on being ready the
@@ -897,6 +898,16 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     const markerWritten = withGrace('Host-shutdown marker', 1500, (finish) =>
       writeHostShutdownMarker({ agentIds: [...activeAgents.keys()], signal })
         .then(() => finish(), (err) => finish(`⚠️ Host-shutdown marker failed: ${err.message}`, true)));
+
+    // Terminate the Codex app-server child before the socket teardown below.
+    // pm2's TreeKill would reap it anyway, but a direct SIGTERM keeps a manual
+    // `kill` of the server from orphaning a Codex process holding the user's
+    // sign-in, and it is a no-op when nothing was ever spawned.
+    await withGrace('Codex app-server', 2000, (finish) =>
+      stopCodexAppServer().then(
+        () => finish(),
+        (err) => finish(`⚠️ Codex app-server stop failed: ${err.message}`, true),
+      ));
 
     // Drop existing long-lived sockets (SSE + keep-alive) up front so the closes
     // below don't wait on connections that never end on their own.

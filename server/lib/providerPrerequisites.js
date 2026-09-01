@@ -36,6 +36,7 @@
  */
 
 import { PROVIDER_TYPES } from './aiToolkit/constants.js';
+import { CODEX_ACCOUNT_STATUS, isCodexSubscriptionProvider } from './codexAccount.js';
 import { isLocalInstanceHost } from './localProviderRuntime.js';
 import { commandBasename } from './providerModels.js';
 import { gatewayForProvider } from './providerGateways.js';
@@ -162,19 +163,49 @@ const providerHasApiKey = (provider) =>
   provider?.hasApiKey === true || Boolean(provider?.apiKey);
 
 /**
+ * The ChatGPT-subscription finding for a Codex provider, or `null`.
+ *
+ * PRESENTATION ONLY — deliberately absent from {@link ROUTING_BLOCKING_CODES}.
+ * Codex can authenticate several ways and PortOS's readiness snapshot may be
+ * seconds stale, so a card may say "sign in" while the router still tries the
+ * run: taking a working provider out of the fallback chain is the worse failure
+ * (see the module note above).
+ *
+ * `readiness: null` is NOT PROBED and produces nothing, and so does every
+ * status that isn't a definite negative — `unknown` must never be painted as
+ * signed out.
+ */
+const codexAccountFinding = (provider, readiness) => {
+  if (!readiness || !isCodexSubscriptionProvider(provider)) return null;
+  switch (readiness.status) {
+    case CODEX_ACCOUNT_STATUS.signedOut:
+      return { code: 'codexAccount', label: 'No ChatGPT account is signed in' };
+    case CODEX_ACCOUNT_STATUS.reauthRequired:
+      return { code: 'codexAccount', label: 'ChatGPT sign-in has expired' };
+    case CODEX_ACCOUNT_STATUS.quotaExhausted:
+      return { code: 'codexQuota', label: 'ChatGPT usage limit reached' };
+    default:
+      return null;
+  }
+};
+
+/**
  * Which prerequisites `provider` is missing, and whether it is runnable at all.
  *
  * @param {object} provider — raw or sanitized provider record
  * @param {object} [options]
  * @param {object|null} [options.runtime] — the provider's entry of the runtimes
  *   map. `null` = NOT PROBED (see the sentinel note at the top of this file).
+ * @param {object|null} [options.codexAccount] — the Codex ChatGPT readiness
+ *   snapshot, or `null` for NOT PROBED (presentation-only; see
+ *   {@link codexAccountFinding}).
  * @param {Record<string, boolean|null>|null} [options.gatewayKeySet] — per gateway
  *   id, does the sibling API provider of that id hold the key an OpenCode
  *   wrapper inherits at spawn time? `false` covers both "no key" and "sibling
  *   deleted"; `null`/absent is "cannot tell".
  * @returns {{met: boolean, missing: {code: string, label: string}[]}}
  */
-export const providerPrerequisites = (provider, { runtime = null, gatewayKeySet = null } = {}) => {
+export const providerPrerequisites = (provider, { runtime = null, gatewayKeySet = null, codexAccount = null } = {}) => {
   const missing = [];
 
   if (runtime && runtime.installed === false) {
@@ -194,6 +225,9 @@ export const providerPrerequisites = (provider, { runtime = null, gatewayKeySet 
   if (gateway && !providerHasApiKey(provider) && gatewayKeySet?.[gateway.id] === false) {
     missing.push({ code: 'inheritedApiKey', label: `${gateway.label} API provider has no API key` });
   }
+
+  const codexFinding = codexAccountFinding(provider, codexAccount);
+  if (codexFinding) missing.push(codexFinding);
 
   return { met: missing.length === 0, missing };
 };

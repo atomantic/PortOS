@@ -554,6 +554,19 @@ export const providerVisionTestSchema = z.object({
   model: z.preprocess(emptyToUndefined, z.string().trim().min(1).max(256).optional()),
 });
 
+// POST /api/providers/codex/account/login/cancel. The id is minted by the Codex
+// app-server and only ever echoed back, so this bounds the shape and nothing
+// more — the service still refuses an id that isn't the pending login's.
+export const codexLoginCancelSchema = z.object({
+  loginId: z.string().trim().min(1).max(200),
+});
+
+// POST /api/providers/codex/account/login. `deviceCode` picks the device-code
+// flow (a URL plus a short code) over opening a browser URL directly.
+export const codexLoginStartSchema = z.object({
+  deviceCode: z.boolean().optional().default(false),
+});
+
 // POST /api/providers/:id/vision-suite.
 export const providerVisionSuiteSchema = z.object({
   model: z.preprocess(emptyToUndefined, z.string().trim().min(1).max(256).optional()),

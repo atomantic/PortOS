@@ -37,6 +37,7 @@ import { blocksRouting, describeMissingPrerequisites, providerPrerequisites, pro
 import { PROVIDER_GATEWAYS } from '../lib/providerGateways.js';
 import { inferTuiCommand } from '../lib/providerVendors.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
+import { peekCodexAccountReadiness } from './codexAppServer.js';
 import { delimiter, isAbsolute } from 'path';
 import {
   getProviderRuntime,
@@ -96,11 +97,17 @@ const runtimeSnapshotFor = (keys) => {
   return runtimes;
 };
 
+// CACHE-ONLY (`peek`, never `get`): the Codex ChatGPT readiness a card shows
+// must never be the thing that spawns `codex app-server`. A cold cache answers
+// `null` — NOT PROBED — so `GET /api/providers` stays a synchronous read and a
+// fresh boot starts no auth check (AGENTS.md, no cold-bootstrap provider calls).
+// The Providers page's own explicit fetch is what fills it.
 const forProvider = (provider, runtimes, gatewayKeySet) => providerPrerequisites(provider, {
   // `undefined` (no entry in the map) is NOT PROBED — normalize it to the
   // module's `null` sentinel rather than letting it fall through as a value.
   runtime: runtimes?.[providerRuntimeKey(provider) ?? ''] ?? null,
   gatewayKeySet,
+  codexAccount: peekCodexAccountReadiness(),
 });
 
 const effectiveProcessCommand = (provider) => {
