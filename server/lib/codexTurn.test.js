@@ -266,15 +266,24 @@ describe('turn projection', () => {
     expect(finalizeCodexTurn(acc).text).toBe('message one. message two.');
   });
 
-  it('refuses an anonymous completion once the turn id is latched', () => {
-    // An unnamed `turn/completed` would otherwise finish somebody else's turn and
-    // hand this caller the partial text streamed so far as a success.
+  it('fails on an anonymous completion once the turn id is latched', () => {
+    // An unnamed `turn/completed` cannot finish this turn — it would hand the
+    // caller the partial text streamed so far as a success. Terminal rather than
+    // ignored, so the call fails now instead of waiting out its full deadline.
     const acc = createTurnAccumulator({ threadId: 't', turnId: 'turn-1' });
     delta(acc, '{"answer":"hal');
-    expect(complete(acc, { status: 'completed' })).toBe(false);
+    expect(complete(acc, { status: 'completed' })).toBe(true);
 
-    complete(acc, { id: 'turn-1', status: 'failed', error: { message: 'nope' } });
     expect(finalizeCodexTurn(acc).text).toBeUndefined();
+  });
+
+  it('still ignores a completion that names a different turn', () => {
+    const acc = createTurnAccumulator({ threadId: 't', turnId: 'turn-1' });
+    delta(acc, 'mine');
+    expect(complete(acc, { id: 'turn-2', status: 'completed' })).toBe(false);
+
+    complete(acc, { id: 'turn-1', status: 'completed' });
+    expect(finalizeCodexTurn(acc).text).toBe('mine');
   });
 
   it('scrubs a credential quoted by a failed turn before it becomes an error', () => {

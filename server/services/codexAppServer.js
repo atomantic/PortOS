@@ -769,11 +769,17 @@ export async function runCodexTextTurn({
   const { effort: resolvedEffort, clamped, reason } = resolveCodexEffort(effort, cachedModelEntry(model));
   if (clamped) console.log(`⚠️ Codex effort clamped: ${reason}`);
 
-  const started = await call(CODEX_TURN_RPC.threadStart, {
+  // The whole turn is pinned to ONE connection, resolved up front rather than
+  // per request. A thread lives inside a single app-server process, so a
+  // mid-turn reconnect could not continue it — and `call`'s reconnect would
+  // silently send this turn's frames to a child that has never heard of its
+  // thread id.
+  const owner = await connect();
+  const started = await sendRequest(owner, CODEX_TURN_RPC.threadStart, {
     ...CODEX_TEXT_THREAD_CONFIG,
     cwd,
     ...(model ? { model } : {}),
-  });
+  }, REQUEST_TIMEOUT_MS);
   const threadId = typeof started?.thread?.id === 'string' ? started.thread.id : null;
   if (!threadId) {
     throw codexError(CODEX_ERROR_CODES.protocol, 'Codex started a thread with no id.');
@@ -807,7 +813,7 @@ export async function runCodexTextTurn({
   signal?.addEventListener('abort', onAbort, { once: true });
 
   try {
-    const response = await call(CODEX_TURN_RPC.turnStart, {
+    const response = await sendRequest(owner, CODEX_TURN_RPC.turnStart, {
       threadId,
       input: [{ type: 'text', text: prompt }],
       sandboxPolicy: { ...CODEX_TEXT_TURN_SANDBOX },
@@ -841,12 +847,11 @@ export async function runCodexTextTurn({
     activeTurns.delete(threadId);
     // Best-effort: tell the app-server to stop working a turn PortOS has
     // abandoned, so a cancelled request does not keep burning subscription
-    // quota. Sent on the LIVE connection directly rather than through `call`,
-    // which would `connect()` — spawning a whole new app-server to interrupt a
-    // thread that only existed in the one that just died.
-    const live = connection;
-    if (acc.status === 'inProgress' && acc.turnId && live && !live.closed) {
-      sendRequest(live, CODEX_TURN_RPC.turnInterrupt, { threadId, turnId: acc.turnId })
+    // quota. Sent to the connection that OWNS the thread, and only while it is
+    // still alive — routing it through `call` would reconnect, spawning a whole
+    // new app-server to interrupt a thread that only existed in the dead one.
+    if (acc.status === 'inProgress' && acc.turnId && !owner.closed) {
+      sendRequest(owner, CODEX_TURN_RPC.turnInterrupt, { threadId, turnId: acc.turnId })
         .catch((err) => console.error(`❌ Codex turn interrupt failed: ${err.message}`));
     }
   }

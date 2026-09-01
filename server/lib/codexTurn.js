@@ -389,10 +389,16 @@ export const applyCodexTurnEvent = (acc, method, params) => {
       return true;
     case CODEX_TURN_NOTIFICATIONS.turnCompleted: {
       const turn = params.turn;
-      // Once the id is latched, a completion must name it. An anonymous
-      // `turn/completed` would otherwise finish somebody else's turn — and hand
-      // this caller the partial text streamed so far as a success.
-      if (acc.turnId && turn?.id !== acc.turnId) return false;
+      // Once the id is latched, a completion must name it, or it cannot finish
+      // this turn — it would otherwise hand the caller whatever streamed so far
+      // as a success. A frame naming a DIFFERENT turn is somebody else's and is
+      // ignored; one naming NO turn is malformed, and fails this turn now rather
+      // than leaving it to wait out its full deadline.
+      if (acc.turnId && typeof turn?.id === 'string' && turn.id !== acc.turnId) return false;
+      if (acc.turnId && typeof turn?.id !== 'string') {
+        acc.status = 'malformed';
+        return true;
+      }
       // A frame with no status is MALFORMED, and defaulting it to 'completed'
       // would hand the caller whatever text had streamed so far as a finished
       // answer. `finalizeCodexTurn` errors on anything that is not 'completed',

@@ -150,7 +150,10 @@ export const redactCodexPayload = (value, depth = 0) => {
  */
 export const redactCodexMessage = (value) => {
   if (typeof value !== 'string' || value.trim() === '') return null;
-  const masked = value
+  // Clamped BEFORE the patterns run, so the scan is bounded by a constant no
+  // matter what an upstream error decides to quote at us.
+  const clamped = value.length > 400 ? `${value.slice(0, 400)}…` : value;
+  return clamped
     // `key=<value>` / `key: <value>` where the key is credential-shaped AND the
     // value LOOKS like a credential — long, and not plain prose. Requiring both
     // is what keeps "The secret: sauce" intact while masking
@@ -167,7 +170,6 @@ export const redactCodexMessage = (value) => {
     // A bare vendor key, which carries no label at all to key on.
     .replace(/\b(sk|pk|rk)-[A-Za-z0-9._-]{8,}/g, REDACTED)
     .replace(/\beyJ[A-Za-z0-9._-]{16,}/g, REDACTED);
-  return masked.length > 400 ? `${masked.slice(0, 400)}…` : masked;
 };
 
 const trimmedString = (value) => (typeof value === 'string' && value.trim() !== '' ? value.trim() : null);
