@@ -102,7 +102,7 @@ export default function PipelineStageConfig({ taskType, config, providers, onUpd
                 effort={stageEffort}
                 onEffortChange={(effort) => updateStage('effort', effort)}
                 emptyProviderOption={isSecurityStage ? 'Select local provider (required)' : 'Default (task-level)'}
-                emptyModelOption={isSecurityStage ? 'Select verified tool-free model (required)' : 'Default (task-level)'}
+                emptyModelOption={isSecurityStage ? 'Select verified local text model (required)' : 'Default (task-level)'}
                 alwaysShowModel
                 selectionPolicy={selectionPolicy}
                 disabled={updating}
@@ -111,7 +111,7 @@ export default function PipelineStageConfig({ taskType, config, providers, onUpd
                 <p className="text-xs text-gray-500 mt-2">
                   {localModelsLoading
                     ? 'Loading local model capability reports…'
-                    : 'Security Scan requires an explicit local model whose runtime reports no tool-calling capability. CLI/TUI agents and unknown capability states are not eligible.'}
+                    : 'Security Scan requires an explicit local text model whose runtime reports no tool-calling capability. Embedding-only models, CLI/TUI agents, and unknown capability states are not eligible.'}
                 </p>
               )}
             </div>

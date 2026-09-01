@@ -909,10 +909,20 @@ describe('toolFreeLocalSelectionPolicy', () => {
     expect(isToolFreeLocalProvider({ ...ollama, endpoint: 'http://example.internal:11434/v1' })).toBe(false);
   });
 
-  it('requires an authoritative capability report and rejects tool-capable models', () => {
-    const capabilities = { ollama: { 'safe-model': ['chat'], 'agent-model': ['chat', 'tools'], 'empty-model': [] } };
+  it('requires an authoritative text capability report and rejects tool or embedding models', () => {
+    const capabilities = {
+      ollama: {
+        'safe-model': ['chat'],
+        'completion-model': ['completion'],
+        'agent-model': ['chat', 'tools'],
+        'embedding-model': ['embedding'],
+        'empty-model': [],
+      },
+    };
     expect(isToolFreeLocalModel('safe-model', ollama, capabilities)).toBe(true);
-    expect(isToolFreeLocalModel('empty-model', ollama, capabilities)).toBe(true);
+    expect(isToolFreeLocalModel('completion-model', ollama, capabilities)).toBe(true);
+    expect(isToolFreeLocalModel('embedding-model', ollama, capabilities)).toBe(false);
+    expect(isToolFreeLocalModel('empty-model', ollama, capabilities)).toBe(false);
     expect(isToolFreeLocalModel('agent-model', ollama, capabilities)).toBe(false);
     expect(isToolFreeLocalModel('unknown-model', ollama, capabilities)).toBe(false);
     expect(isToolFreeLocalModel({ id: 'safe-object', capabilities: ['chat'] }, ollama, {})).toBe(true);

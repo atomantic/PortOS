@@ -73,10 +73,13 @@ describe('pr-reviewer Security Scan selection', () => {
     expect(isToolFreeLocalProvider({ ...localProvider(), id: 'custom-ollama' })).toBe(false)
   })
 
-  it('requires an installed model with explicit capabilities and no tools', () => {
+  it('requires an installed text model with explicit capabilities and no tools', () => {
     const provider = localProvider()
     expect(isToolFreeLocalModel('safe-model', provider, [{ id: 'safe-model', capabilities: ['chat'] }])).toBe(true)
+    expect(isToolFreeLocalModel('completion-model', provider, [{ id: 'completion-model', capabilities: ['completion'] }])).toBe(true)
     expect(isToolFreeLocalModel('tool-model', provider, [{ id: 'tool-model', capabilities: ['chat', 'tools'] }])).toBe(false)
+    expect(isToolFreeLocalModel('embedding-model', provider, [{ id: 'embedding-model', capabilities: ['embedding'] }])).toBe(false)
+    expect(isToolFreeLocalModel('empty-model', provider, [{ id: 'empty-model', capabilities: [] }])).toBe(false)
     expect(isToolFreeLocalModel('unknown-model', provider, [{ id: 'unknown-model' }])).toBe(false)
     expect(isToolFreeLocalModel('missing-model', provider, [])).toBe(false)
   })
@@ -89,6 +92,11 @@ describe('pr-reviewer Security Scan selection', () => {
     getProviderByIdMock.mockResolvedValue(localProvider())
     listModelsMock.mockResolvedValue([{ id: 'safe-model', capabilities: null }])
     getModelCapabilitiesMock.mockResolvedValue(null)
+    await expect(resolveToolFreeLocalSecurityModel({ providerId: 'ollama', model: 'safe-model' }))
+      .resolves.toMatchObject({ ok: false, code: 'security-scan-model-not-verified' })
+
+    listModelsMock.mockResolvedValue([{ id: 'safe-model', capabilities: ['chat'] }])
+    getModelCapabilitiesMock.mockResolvedValue(['embedding'])
     await expect(resolveToolFreeLocalSecurityModel({ providerId: 'ollama', model: 'safe-model' }))
       .resolves.toMatchObject({ ok: false, code: 'security-scan-model-not-verified' })
   })

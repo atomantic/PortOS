@@ -187,6 +187,7 @@ export const AGENT_HARNESS_PROVIDER_TYPES = Object.freeze([
 // but the harness still has filesystem/process authority, so they do not belong
 // in a tool-free security-review picker.
 export const TOOL_FREE_LOCAL_PROVIDER_IDS = Object.freeze(['ollama', 'lmstudio']);
+export const TOOL_FREE_LOCAL_TEXT_CAPABILITIES = Object.freeze(['chat', 'completion']);
 
 /**
  * True only for PortOS's canonical local HTTP backends on this machine.
@@ -202,10 +203,10 @@ export const isToolFreeLocalProvider = (provider) =>
   && isLocalInstanceProvider(provider);
 
 /**
- * Whether a local model has an authoritative, explicit capability report that
- * excludes native tool use. Unknown capability state is unsafe for a security
- * scan and therefore returns false rather than falling back to model-name
- * heuristics.
+ * Whether a local model has an authoritative, explicit text capability report
+ * that excludes native tool use. Embedding-only models cannot review a diff;
+ * unknown capability state is unsafe for a security scan and therefore returns
+ * false rather than falling back to model-name heuristics.
  *
  * `capabilitiesByBackend` is the shape returned by `useLocalModels`; object
  * model entries are accepted too so callers with a richer model catalog can use
@@ -219,7 +220,9 @@ export const isToolFreeLocalModel = (model, provider, capabilitiesByBackend = {}
     ? model.capabilities
     : capabilitiesByBackend?.[localBackendForProvider(provider)]?.[id];
   if (!Array.isArray(reported)) return false;
-  return !reported.some((capability) => String(capability).toLowerCase() === 'tools');
+  const normalized = reported.map((capability) => String(capability).toLowerCase());
+  return normalized.some((capability) => TOOL_FREE_LOCAL_TEXT_CAPABILITIES.includes(capability))
+    && !normalized.includes('tools');
 };
 
 /**

@@ -25,6 +25,7 @@ export const TOOL_FREE_LOCAL_BACKENDS = Object.freeze([...LOCAL_LLM_REVIEWERS])
 export const SECURITY_SCAN_MAX_OPEN_PRS = 200
 export const SECURITY_SCAN_MAX_DIFF_CHARS = 500_000
 export const SECURITY_SCAN_MAX_VERDICT_CHARS = 20_000
+const TOOL_FREE_LOCAL_TEXT_CAPABILITIES = new Set(['chat', 'completion'])
 
 const failure = (code, extra = {}) => ({ ok: false, passed: false, code, ...extra })
 
@@ -37,6 +38,11 @@ const modelId = (model) => {
 const hasToolCapability = (capabilities) => (
   Array.isArray(capabilities)
   && capabilities.some((capability) => String(capability).toLowerCase() === 'tools')
+)
+
+const hasTextCapability = (capabilities) => (
+  Array.isArray(capabilities)
+  && capabilities.some((capability) => TOOL_FREE_LOCAL_TEXT_CAPABILITIES.has(String(capability).toLowerCase()))
 )
 
 /**
@@ -53,15 +59,16 @@ export function isToolFreeLocalProvider(provider) {
 }
 
 /**
- * Require an installed model with an explicit capability report that does not
- * list tools. `null`/missing capability metadata is unknown, not safe.
+ * Require an installed model with an explicit text capability report that does
+ * not list tools. Embedding-only models cannot review a diff, and `null`/missing
+ * capability metadata is unknown, not safe.
  */
 export function isToolFreeLocalModel(model, provider, installedModels = []) {
   if (!isToolFreeLocalProvider(provider)) return false
   const id = modelId(model)
   if (!id || !Array.isArray(installedModels)) return false
   const installed = installedModels.find((entry) => modelId(entry) === id)
-  return Array.isArray(installed?.capabilities) && !hasToolCapability(installed.capabilities)
+  return hasTextCapability(installed?.capabilities) && !hasToolCapability(installed.capabilities)
 }
 
 /**
