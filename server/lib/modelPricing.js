@@ -68,7 +68,7 @@ const EXACT_RATES = {
   // above and below do — sharing one array across five keys would make any
   // future edit to one opus row silently rewrite the whole tier.
   ...Object.fromEntries(OPUS_MODEL_IDS.map((id) => [id, [...OPUS_TIER_RATES]])),
-  'claude-sonnet-5': [2.0, 10.0], // intro pricing through 2026-08-31 ($3/$15 after)
+  'claude-sonnet-5': [3.0, 15.0], // intro pricing ended 2026-08-31; $3/$15 standard rate since
   'claude-sonnet-4-6': [3.0, 15.0],
   'claude-sonnet-4-5': [3.0, 15.0],
   'claude-haiku-4-5': [1.0, 5.0],
