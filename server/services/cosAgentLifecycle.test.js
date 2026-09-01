@@ -684,6 +684,28 @@ describe('cleanupZombieAgents — runner listing is not proof of life', () => {
     expect(mockCosState.state.agents['agent-tui'].status).toBe('running');
   });
 
+  it('retires a stale listing even if runnerAgents already adopted the id', async () => {
+    await writeFile(join(mockCosState.agentsDir, 'index.json'), '{}');
+    runnerAgents.set('agent-stale', { taskId: 'task-1' });
+    mockCosState.state.agents['agent-stale'] = {
+      id: 'agent-stale',
+      status: 'running',
+      pid: 2147483646,
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+    };
+    vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([{
+      id: 'agent-stale',
+      pid: 2147483646,
+      kind: 'cli',
+      processActive: false,
+      liveness: 'pid',
+    }]);
+
+    const result = await cleanupZombieAgents();
+    expect(result.cleaned).toEqual(['agent-stale']);
+    expect(mockCosState.state.agents['agent-stale'].status).toBe('completed');
+  });
+
   it('retires a durable running record whose runner listing is stale', async () => {
     await writeFile(join(mockCosState.agentsDir, 'index.json'), '{}');
     mockCosState.state.agents['agent-stale'] = {
