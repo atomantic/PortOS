@@ -58,7 +58,9 @@ export function runnerListedAgentIsLive(entry) {
   if (entry.processActive === true) return true;
   // Pre-fix Windows TUI: node-pty reports pid 0, so processActive is always
   // false whether the session is alive or dead. Presence is all we have.
-  return entry.kind === 'tui';
+  // A pre-fix POSIX TUI has a real pid and a working probe — do not treat
+  // processActive:false as live just because kind is tui.
+  return entry.kind === 'tui' && !usableAgentPid(entry.pid);
 }
 
 /**
@@ -92,6 +94,6 @@ export async function runnerEntryShieldsRunningRecord(entry, pidIsAlive = defaul
     return pid ? Boolean(await pidIsAlive(pid)) : false;
   }
   if (entry.processActive === true) return true;
-  if (entry.kind === 'tui') return true;
+  if (entry.kind === 'tui' && !pid) return true;
   return pid ? Boolean(await pidIsAlive(pid)) : false;
 }

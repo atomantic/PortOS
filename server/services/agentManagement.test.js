@@ -266,6 +266,33 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
     expect(markAgentComplete).not.toHaveBeenCalled();
   });
 
+  it('reaps a stale listing even if runnerAgents already adopted the id', async () => {
+    runnerAgents.set('agent-stale', { taskId: 'task-1' });
+    getAgents.mockResolvedValueOnce([{
+      id: 'agent-stale',
+      status: 'running',
+      pid: 2147483646,
+      taskId: 'task-1',
+      metadata: { useRunner: true, executionMode: 'runner' },
+    }]);
+    getActiveAgentsFromRunner.mockResolvedValueOnce([{
+      id: 'agent-stale',
+      pid: 2147483646,
+      kind: 'cli',
+      processActive: false,
+      liveness: 'pid',
+    }]);
+    getTaskById.mockResolvedValue({ id: 'task-1', taskType: 'user', status: 'in_progress', metadata: {} });
+
+    await cleanupOrphanedAgents();
+
+    expect(markAgentComplete).toHaveBeenCalledWith('agent-stale', expect.objectContaining({
+      success: false,
+      orphaned: true,
+    }));
+    expect(runnerAgents.has('agent-stale')).toBe(false);
+  });
+
   it('does not reap a pre-fix Windows TUI whose processActive is a pid-0 artifact', async () => {
     getAgents.mockResolvedValueOnce([{
       id: 'agent-tui-old',

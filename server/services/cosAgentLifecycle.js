@@ -658,10 +658,10 @@ async function isPidAlive(pid) {
 
 // Cleanup zombie agents - agents marked as running but whose process is dead
 export async function cleanupZombieAgents() {
-  // Check local tracking maps (read from the side-effect-free state module, not
-  // subAgentSpawner — avoids pulling in the heavier orchestrator just to read the maps).
-  const { getActiveAgentIds } = await import('./agentState.js');
-  const activeIds = getActiveAgentIds();
+  // Direct-spawn handles in this process (not leftover runnerAgents adopts —
+  // those are only a handle, same as GET /agents). Read from the side-effect-free
+  // state module, not subAgentSpawner.
+  const { activeAgents } = await import('./agentState.js');
 
   // Also check with the CoS runner for agents it's actively tracking
   const { getActiveAgentsFromRunner } = await import('./cosRunnerClient.js');
@@ -678,10 +678,10 @@ export async function cleanupZombieAgents() {
     const cleaned = [];
 
     for (const agent of runningAgents) {
-      // Local maps are this process's own handles. A runner listing is only a
-      // shield when corroborated (live pid or processActive from onExit/pid
-      // probe) — presence in GET /agents is a handle, not a liveness check.
-      if (activeIds.includes(agent.id)) continue;
+      // A runner listing is only a shield when corroborated (live pid or
+      // processActive from onExit/pid probe). Leftover runnerAgents ownership
+      // from an earlier adopt is not.
+      if (activeAgents.has(agent.id)) continue;
       if (await runnerEntryShieldsRunningRecord(runnerById.get(agent.id), isPidAlive)) {
         continue;
       }

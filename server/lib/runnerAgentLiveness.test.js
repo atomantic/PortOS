@@ -89,6 +89,12 @@ describe('runnerListedAgentIsLive', () => {
     })).toBe(true);
   });
 
+  it('does not treat a pre-fix POSIX TUI with a dead pid as live', () => {
+    expect(runnerListedAgentIsLive({
+      kind: 'tui', pid: 4242, processActive: false,
+    })).toBe(false);
+  });
+
   it('does not treat a bare CLI listing as live', () => {
     expect(runnerListedAgentIsLive({ id: 'agent-1', kind: 'cli', pid: 9 })).toBe(false);
     expect(runnerListedAgentIsLive({
@@ -131,6 +137,17 @@ describe('runnerEntryShieldsRunningRecord', () => {
   it('shields a pre-fix Windows TUI listed with a pid-0 artifact', async () => {
     await expect(runnerEntryShieldsRunningRecord({
       kind: 'tui', pid: 0, processActive: false,
+    }, pidIsAlive)).resolves.toBe(true);
+  });
+
+  it('does not shield a pre-fix POSIX TUI listing unless the pid is still alive', async () => {
+    pidIsAlive.mockResolvedValue(false);
+    await expect(runnerEntryShieldsRunningRecord({
+      kind: 'tui', pid: 4242, processActive: false,
+    }, pidIsAlive)).resolves.toBe(false);
+    pidIsAlive.mockResolvedValue(true);
+    await expect(runnerEntryShieldsRunningRecord({
+      kind: 'tui', pid: 4242, processActive: false,
     }, pidIsAlive)).resolves.toBe(true);
   });
 
