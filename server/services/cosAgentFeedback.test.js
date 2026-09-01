@@ -24,7 +24,23 @@ vi.mock('./cosAgentIndex.js', () => ({
   getAgentDir: (agentId, dateBucket) => join(mockCosState.agentsDir, dateBucket || '', agentId)
 }));
 
-import { getFeedbackStats, getPendingAgentFeedbackCount } from './cosAgentFeedback.js';
+// The operator-action ledger's file backend writes under PATHS.data — re-root it
+// at a temp dir so this suite never touches the developer's live `data/` tree
+// (#3683/#3687). Everything else in fileUtils stays real (agent metadata I/O).
+const ledgerRoot = await vi.hoisted(async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join: joinPath } = await import('node:path');
+  return mkdtempSync(joinPath(tmpdir(), 'portos-agent-feedback-ledger-'));
+});
+vi.mock('../lib/fileUtils.js', async () => {
+  const actual = await vi.importActual('../lib/fileUtils.js');
+  const { makePathsProxy } = await import('../lib/mockPathsDataRoot.js');
+  return makePathsProxy(actual, { dataRoot: ledgerRoot });
+});
+
+import { getFeedbackStats, getPendingAgentFeedbackCount, submitAgentFeedback } from './cosAgentFeedback.js';
+import { listUserActions } from './userActions.js';
 
 describe('getPendingAgentFeedbackCount', () => {
   beforeEach(() => {
@@ -123,5 +139,62 @@ describe('getPendingAgentFeedbackCount', () => {
         submittedAt: '2026-08-01T11:00:00.000Z'
       }]
     });
+  });
+});
+
+// ── Operator-action ledger (#5594) ──────────────────────────────────────────
+//
+// The hook lives in `submitAgentFeedback` rather than the HTTP route so every
+// caller records the rating, and it runs AFTER the CoS state lock releases so a
+// ledger write never holds that lock across I/O.
+describe('submitAgentFeedback records the rating (#5594)', () => {
+  beforeEach(async () => {
+    mockCosState.state = {
+      agents: {
+        'agent-1': {
+          id: 'agent-1',
+          taskId: 'task-42',
+          status: 'completed',
+          completedAt: '2026-08-01T10:00:00.000Z',
+          metadata: { taskType: 'user', taskDescription: 'Fix the failing render test' },
+        },
+      },
+    };
+    mockAgentIndex.entries = new Map();
+    await rm(join(ledgerRoot, 'user-action-events.json'), { force: true });
+  });
+
+  afterAll(async () => {
+    await rm(ledgerRoot, { recursive: true, force: true });
+  });
+
+  it('writes a cos.agent.feedback row with the rating, comment, and derived task type', async () => {
+    const result = await submitAgentFeedback('agent-1', { rating: 'negative', comment: 'Missed the root cause' });
+    expect(result).toMatchObject({ success: true });
+    // The internal feedbackData carrier must not leak into the caller's response.
+    expect(result).not.toHaveProperty('feedbackData');
+
+    const [event] = await listUserActions({ type: 'cos.agent.feedback' });
+    expect(event).toMatchObject({
+      actor: 'user',
+      target: 'agent-1',
+      targetName: 'Fix the failing render test',
+      source: { service: 'cosAgentFeedback', fn: 'submitAgentFeedback' },
+    });
+    expect(event.payload).toMatchObject({
+      agentId: 'agent-1',
+      taskId: 'task-42',
+      rating: 'negative',
+      comment: 'Missed the root cause',
+      // extractTaskType maps the description to a bucket the learning view uses.
+      taskType: 'bug-fix',
+    });
+    expect(event.dedupeKey).toBe(`cos.agent.feedback:agent-1:${event.happenedAt}`);
+  });
+
+  it('records nothing when the agent is not in a ratable state', async () => {
+    mockCosState.state.agents['agent-1'].status = 'running';
+    await expect(submitAgentFeedback('agent-1', { rating: 'positive' })).rejects.toThrow(/completed agents/);
+    expect(await listUserActions({ type: 'cos.agent.feedback' })).toEqual([]);
   });
 });

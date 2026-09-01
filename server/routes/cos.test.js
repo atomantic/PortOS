@@ -1,7 +1,27 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
+import { rmSync } from 'node:fs';
 import { request } from '../lib/testHelper.js';
 import { ServerError } from '../lib/errorHandler.js';
+
+// The CoS task routes write operator-action rows (#5594) through the ledger's
+// file backend, which resolves under PATHS.data — re-root it so this suite can
+// never write into the developer's live `data/` tree (#3683/#3687). Everything
+// else in fileUtils stays real. `vi.hoisted` because the router below is a
+// STATIC import, so the mock factory runs during module linking.
+const ledgerRoot = await vi.hoisted(async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  return mkdtempSync(join(tmpdir(), 'portos-cos-routes-ledger-'));
+});
+vi.mock('../lib/fileUtils.js', async () => {
+  const actual = await vi.importActual('../lib/fileUtils.js');
+  const { makePathsProxy } = await import('../lib/mockPathsDataRoot.js');
+  return makePathsProxy(actual, { dataRoot: ledgerRoot });
+});
+afterAll(() => rmSync(ledgerRoot, { recursive: true, force: true }));
+
 import cosRoutes from './cos.js';
 
 // Mock the cos service
@@ -19,6 +39,8 @@ vi.mock('../services/cos.js', () => ({
   reorderTasks: vi.fn(),
   addTask: vi.fn(),
   updateTask: vi.fn(),
+  // Read by the DELETE route so the ledger row keeps the task's description.
+  getTaskById: vi.fn(async () => null),
   deleteTask: vi.fn(),
   approveTask: vi.fn(),
   evaluateTasks: vi.fn(),

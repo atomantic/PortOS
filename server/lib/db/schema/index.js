@@ -18,6 +18,7 @@ import { tribeDdl } from './tribe.js';
 import { humanActivityDdl } from './humanActivity.js';
 import { postDdl } from './post.js';
 import { commissionsDdl } from './commissions.js';
+import { userActionsDdl } from './userActions.js';
 import { catalogDdl, catalogUserTypesDdl } from './catalog.js';
 import { mediaDdl } from './media.js';
 import { universesDdl } from './universes.js';
@@ -36,6 +37,7 @@ export {
   humanActivityDdl,
   postDdl,
   commissionsDdl,
+  userActionsDdl,
   catalogDdl,
   catalogUserTypesDdl,
   mediaDdl,
@@ -53,8 +55,8 @@ export {
 };
 
 // Phase 1 — the `upgrades` list: memory-sync columns + migration tracker, then
-// the machine-local Tribe / human-activity / POST / commission tables. Run first,
-// before the catalog block.
+// the machine-local Tribe / human-activity / POST / commission / user-action
+// tables. Run first, before the catalog block.
 export function buildUpgradeDdl() {
   return [
     ...coreDdl,
@@ -62,6 +64,7 @@ export function buildUpgradeDdl() {
     ...humanActivityDdl,
     ...postDdl,
     ...commissionsDdl,
+    ...userActionsDdl,
   ];
 }
 

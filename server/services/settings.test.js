@@ -21,6 +21,11 @@ vi.mock('../lib/fileUtils.js', async (importActual) => {
   };
 });
 
+// The operator-action ledger (#5594) writes through the SAME mocked atomicWrite
+// this suite asserts on, so leave it stubbed here — the real settings→ledger
+// round trip is covered end-to-end in settings.userActions.test.js.
+vi.mock('./userActions.js', () => ({ recordUserAction: vi.fn() }));
+
 import { mkdtempSync, rmSync } from 'fs';
 import { join as joinPath } from 'path';
 import { tmpdir } from 'os';

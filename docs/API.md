@@ -632,6 +632,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/feeds` | RSS/content feeds |
 | `/api/catalog` | Creative ingredients catalog |
 | `/api/tribe` | Tribe relationship graph |
+| `/api/user-actions` | Operator-action ledger — read-only log of what the user did (machine-local) |
 | `/api/notes` | Notes |
 | `/api/calendar` | Calendar integration |
 | `/api/messages` | Messages (email) integration |

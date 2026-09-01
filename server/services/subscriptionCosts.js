@@ -71,7 +71,10 @@ export async function getSubscriptionCosts() {
  * is deleted. Without that split, an editor that only submits changed rows
  * could never remove a plan the user cancelled.
  */
-export async function saveSubscriptionCosts(patch) {
+// `options` is forwarded to `updateSettingsWith` so the operator-action actor
+// (#5594) survives: both callers — the Settings PUT and the usage page's price
+// editor — are a human, and would otherwise be logged as `system`.
+export async function saveSubscriptionCosts(patch, options) {
   const incoming = isPlainObject(patch) ? patch : {};
   const next = await updateSettingsWith((current) => {
     const merged = { ...normalizeSubscriptionCosts(current?.[SETTINGS_KEY]) };
@@ -81,7 +84,7 @@ export async function saveSubscriptionCosts(patch) {
       else merged[family] = cost;
     }
     return { ...current, [SETTINGS_KEY]: merged };
-  });
+  }, options);
   return normalizeSubscriptionCosts(next?.[SETTINGS_KEY]);
 }
 

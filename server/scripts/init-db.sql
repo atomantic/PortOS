@@ -197,6 +197,31 @@ CREATE TABLE IF NOT EXISTS human_activity_events (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_human_activity_dedupe ON human_activity_events (source, dedupe_key);
 CREATE INDEX IF NOT EXISTS idx_human_activity_happened ON human_activity_events (happened_at);
 
+-- Operator-action ledger (#5594) — the durable, filterable record of what the
+-- human actually did in PortOS. Machine-local like human_activity_events:
+-- excluded from peer sync, guarded in sharing/peerSync.test.js. Idempotent via
+-- the unique (type, dedupe_key) index + ON CONFLICT DO NOTHING. Deliberately
+-- NOT audited (no trg_user_action_events_audit) — a personal operator log, same
+-- rationale as post_runs.
+CREATE TABLE IF NOT EXISTS user_action_events (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  happened_at TIMESTAMPTZ NOT NULL,
+  target TEXT,
+  target_name TEXT,
+  success BOOLEAN NOT NULL DEFAULT TRUE,
+  summary TEXT NOT NULL,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  source JSONB NOT NULL DEFAULT '{}'::jsonb,
+  dedupe_key TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_action_dedupe ON user_action_events (type, dedupe_key);
+CREATE INDEX IF NOT EXISTS idx_user_action_happened ON user_action_events (happened_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_action_type_time ON user_action_events (type, happened_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_action_actor_time ON user_action_events (actor, happened_at DESC);
+
 -- Auto-update updated_at and sync_sequence on content/metadata changes.
 -- Skips bump for access-stat-only updates (access_count, last_accessed)
 -- to avoid sync noise from read operations.

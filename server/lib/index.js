@@ -444,6 +444,7 @@ export * from './sseUtils.js';
 export * from './repoIntakeActions.js';
 export * from './tombstones.js';
 export * from './uploadLimits.js';
+export * from './userActionTypes.js';
 export * from './uuid.js';
 export * from './versionUtils.js';
 export * from './workTracker.js';

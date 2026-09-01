@@ -23,6 +23,7 @@ Parity with `server/scripts/init-db.sql` (the fresh-install path) is locked by
 | `humanActivity.js` | `humanActivityDdl` | Human-activity timeline event store (machine-local) |
 | `post.js` | `postDdl` | MeatSpace POST normalized runs and attempts (machine-local) |
 | `commissions.js` | `commissionsDdl` | Creative Commissions + feedback (machine-local) |
+| `userActions.js` | `userActionsDdl` | Operator-action ledger — what the human did in the UI (machine-local) |
 | `catalog.js` | `catalogDdl`, `catalogUserTypesDdl` | Catalog scraps/ingredients/tags/media + user-defined types |
 | `media.js` | `mediaDdl` | Creative-director / music-video projects, mood boards, media assets |
 | `universes.js` | `universesDdl` | Universes, machine-local character voice profiles/renders, + universe run history |
@@ -37,7 +38,7 @@ Parity with `server/scripts/init-db.sql` (the fresh-install path) is locked by
 
 ### Composer (`index.js`)
 
-- `buildUpgradeDdl()` → phase-1 list (`core` → `tribe` → `humanActivity` → `post` → `commissions`).
+- `buildUpgradeDdl()` → phase-1 list (`core` → `tribe` → `humanActivity` → `post` → `commissions` → `userActions`).
 - `buildCatalogDdl()` → phase-2 list (`catalog` → `media` → `catalogUserTypes` →
   `universes` → `library` → `pipeline` → `writersRoom` → `lora` → `privacy` → `stackerNews` → `x` →
   `audit` DDL → audit triggers).

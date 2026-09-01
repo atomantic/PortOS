@@ -60,6 +60,7 @@ vi.mock('../services/eidoverseHost.js', () => ({
 }));
 
 import settingsRoutes from './settings.js';
+import { updateSettingsWith } from '../services/settings.js';
 import { hasConfiguredInstances as hasConfiguredDatadogInstances } from '../services/datadog.js';
 import { hasConfiguredInstances as hasConfiguredJiraInstances } from '../services/jira.js';
 import { assertEidoverseInstalled, installEidoverse, setEidoverseWorldsOrigin } from '../services/eidoverse.js';
@@ -71,6 +72,18 @@ const buildApp = () => {
   app.use('/api/settings', settingsRoutes);
   return app;
 };
+
+// The operator-action ledger (#5594) distinguishes a human on the Settings page
+// from every other settings writer purely by this argument, so the route has to
+// keep passing it. The row it produces is asserted end-to-end in
+// services/settings.userActions.test.js.
+describe('Settings routes — operator-action actor (#5594)', () => {
+  it('marks a settings PUT as a user action', async () => {
+    const res = await request(buildApp()).put('/api/settings').send({ timezone: 'America/Los_Angeles' });
+    expect(res.status).toBe(200);
+    expect(updateSettingsWith).toHaveBeenCalledWith(expect.any(Function), { actor: 'user' });
+  });
+});
 
 describe('Settings routes — apiAccess slice', () => {
   beforeEach(() => {

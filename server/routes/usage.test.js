@@ -143,7 +143,9 @@ describe('usage routes', () => {
       .put('/api/usage/subscriptions')
       .send({ costs: { claude: 200, codex: null } });
     expect(res.status).toBe(200);
-    expect(saveSubscriptionCosts).toHaveBeenCalledWith({ claude: 200, codex: null });
+    // The second argument marks the save as a human edit for the operator-action
+    // ledger (#5594) — without it the row would read as actor 'system'.
+    expect(saveSubscriptionCosts).toHaveBeenCalledWith({ claude: 200, codex: null }, { actor: 'user' });
   });
 
   it('PUT /api/usage/subscriptions rejects a non-numeric price', async () => {

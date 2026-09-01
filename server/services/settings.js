@@ -2,7 +2,8 @@ import { join } from 'path';
 import { EventEmitter } from 'events';
 import { safeJSONParse, PATHS, atomicWrite, tryReadFile, tryReadFileStrict } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
-import { isPlainObject, POLLUTING_KEYS } from '../lib/objects.js';
+import { canonicalStringify, isPlainObject, POLLUTING_KEYS } from '../lib/objects.js';
+import { recordUserAction } from './userActions.js';
 
 // POLLUTING_KEYS (`__proto__`/`constructor`/`prototype`) is the project-wide
 // prototype-pollution denylist (defined in server/lib/objects.js). Without it,
@@ -178,7 +179,60 @@ export const reloadSettings = async () => {
 // stay off the queue — atomicWrite's temp-file+rename keeps every read whole.
 const queueWrite = createFileWriteQueue();
 
-const save = async (settings) => {
+// Longest scalar the ledger keeps verbatim. A settings value longer than this
+// is a blob (a prompt template, a key list), and the useful fact for "what did I
+// change?" is THAT it changed, not its full text.
+const LEDGER_SCALAR_MAX_CHARS = 120;
+
+// `undefined` counts: it is how "the key was not set before" arrives, and a
+// first-time set is exactly the case where a before/after pair is most useful.
+// It is normalized to null in the recorded value.
+const isShortScalar = (value) => (
+  value === null
+  || value === undefined
+  || typeof value === 'boolean'
+  || typeof value === 'number'
+  || (typeof value === 'string' && value.length <= LEDGER_SCALAR_MAX_CHARS)
+);
+
+// Shallow top-level diff of the settings object. Top-level is the right grain:
+// the settings file is a map of feature slices, and "the `federation` slice
+// changed" is the answerable question — a deep diff would produce a per-leaf
+// path list nobody reads and would carry slice internals into the log.
+//
+// Values are only kept for SHORT SCALARS; everything else records the fact of the
+// change alone. Secret-shaped keys are NOT filtered here — `recordUserAction`
+// redacts by key name and lists the paths under `payload.redactedKeys`, so the
+// denylist has exactly one home.
+//
+// Equality goes through `canonicalStringify` (key-order independent) so a slice
+// that was merely REBUILT — same values, different insertion order — is not
+// reported as an edit the user did not make.
+const diffSettings = (prev, next) => {
+  const keys = [...new Set([...Object.keys(prev), ...Object.keys(next)])].sort();
+  const keysChanged = [];
+  const changes = {};
+  for (const key of keys) {
+    const before = prev[key];
+    const after = next[key];
+    if (canonicalStringify(before) === canonicalStringify(after)) continue;
+    keysChanged.push(key);
+    changes[key] = isShortScalar(before) && isShortScalar(after)
+      ? { from: before ?? null, to: after ?? null }
+      : { changed: true };
+  }
+  return { keysChanged, changes };
+};
+
+/**
+ * Persist settings.
+ *
+ * `actor` (#5594) names WHO is saving, and defaults to `'system'` — the honest
+ * default, because most callers here are schedulers, sync hooks, and internal
+ * feature writes. Only `PUT /api/settings` passes `'user'`. `reloadSettings` does
+ * not call this at all, so a backup restore is excluded by construction.
+ */
+const save = async (settings, { actor = 'system' } = {}) => {
   const cleaned = stripStoreKeys(settings);
   // Stamp `timezoneUpdatedAt` whenever the effective `timezone` actually
   // changes, so timezone-dependent schedulers can gate catch-up/re-evaluation
@@ -189,11 +243,12 @@ const save = async (settings) => {
   // comparison is against the freshest persisted snapshot, and any prior
   // `timezoneUpdatedAt` on an unchanged-timezone save rides through untouched
   // via the merged object.
-  if (isPlainObject(cleaned)) {
-    const prev = stripStoreKeys(await loadRaw());
-    if (isPlainObject(prev) && cleaned.timezone !== prev.timezone) {
-      cleaned.timezoneUpdatedAt = Date.now();
-    }
+  const prev = isPlainObject(cleaned) ? stripStoreKeys(await loadRaw()) : null;
+  // Diff BEFORE the timezoneUpdatedAt stamp below, so a timezone change reports
+  // `keysChanged: ['timezone']` rather than dragging in the derived stamp.
+  const change = isPlainObject(prev) ? diffSettings(prev, cleaned) : null;
+  if (isPlainObject(prev) && cleaned.timezone !== prev.timezone) {
+    cleaned.timezoneUpdatedAt = Date.now();
   }
   // atomicWrite (temp-file + rename) so a mid-write crash never truncates
   // settings.json. Pass a pre-stringified string to preserve the trailing
@@ -208,6 +263,27 @@ const save = async (settings) => {
     }
   }
   settingsEvents.emit('settings:updated', cleaned);
+  // A no-op save writes no ledger row: the settings page PUTs the whole object
+  // on every visit, and a log full of "changed nothing" rows would bury the
+  // changes that matter.
+  if (change && change.keysChanged.length > 0) {
+    const happenedAt = new Date().toISOString();
+    const changedKeys = change.keysChanged.join(',');
+    await recordUserAction({
+      type: 'settings.update',
+      actor,
+      summary: `Updated settings: ${change.keysChanged.join(', ')}`,
+      payload: { keysChanged: change.keysChanged, changes: change.changes },
+      source: { service: 'settings', fn: 'save' },
+      happenedAt,
+      // Timestamp because a save is not an idempotent retry, PLUS the changed
+      // keys because `toISOString()` only resolves to the millisecond — two
+      // distinct saves landing in the same one would otherwise silently collapse
+      // to a single row. Deterministic (not random) so a genuine duplicate still
+      // dedupes.
+      dedupeKey: `settings.update:${happenedAt}:${changedKeys.slice(0, 200)}`,
+    });
+  }
   return cleaned;
 };
 
@@ -251,18 +327,18 @@ export const getSettingsWithStatus = async () => {
 };
 
 export const getSettings = async () => (await getSettingsWithStatus()).settings;
-export const saveSettings = (settings) => queueWrite(() => save(settings));
+export const saveSettings = (settings, options) => queueWrite(() => save(settings, options));
 
 // Merge against the unstripped on-disk snapshot so save() sees every
 // MortalLoom store key in one place — guaranteeing exactly one warning
 // per updateSettings call, only when the write succeeds. The whole
 // read-merge-write runs inside one queued turn so it merges against the
 // freshest persisted snapshot, not a stale pre-image.
-export const updateSettings = (patch) => queueWrite(async () => {
+export const updateSettings = (patch, options) => queueWrite(async () => {
   const raw = await loadRaw();
   const incoming = isPlainObject(patch) ? patch : {};
   const merged = { ...raw, ...incoming };
-  return save(merged);
+  return save(merged, options);
 });
 
 // Read-modify-write INSIDE the write queue. For callers whose merge semantics
@@ -276,7 +352,7 @@ export const updateSettings = (patch) => queueWrite(async () => {
 // between the external read and the queued write was clobbered by the caller's
 // stale pre-image. Here the read and the write share one queued turn, so the
 // mutator always sees the latest persisted snapshot.
-export const updateSettingsWith = (mutate) => queueWrite(async () => {
+export const updateSettingsWith = (mutate, options) => queueWrite(async () => {
   const current = stripStoreKeys(await loadRaw());
   const next = await mutate(current);
   // Guard the mutator's return BEFORE persisting: unlike the old
@@ -286,5 +362,5 @@ export const updateSettingsWith = (mutate) => queueWrite(async () => {
   if (!isPlainObject(next)) {
     throw new TypeError('updateSettingsWith: mutate() must return a plain settings object');
   }
-  return save(next);
+  return save(next, options);
 });

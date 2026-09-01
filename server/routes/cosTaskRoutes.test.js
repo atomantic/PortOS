@@ -4,12 +4,40 @@
  * be re-settable and CLEARABLE on update, and be refused when it names an
  * instance this install doesn't know — a pin nothing matches would leave the
  * task pending on every peer forever.
+ *
+ * Also the operator-action ledger hooks (#5594): these routes are the ONLY CoS
+ * task writes that are a human pressing a button, so they are where the ledger
+ * rows are produced. Those cases run against the real `services/userActions.js`
+ * on its file backend (with `PATHS.data` re-rooted at a temp dir below) so they
+ * assert a PERSISTED row rather than a mock call.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
+import { rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
+
+// Re-root PATHS.data so the ledger writes land in a temp dir instead of the
+// developer's live `data/` tree (#3683/#3687). Everything else in fileUtils
+// stays real.
+//
+// `vi.hoisted` + an in-factory import, rather than the shorter
+// `mockPathsDataRoot()` destructure: this file imports the router STATICALLY, so
+// the mock factory runs during module linking — before any module-body const is
+// initialized.
+const tempRoot = await vi.hoisted(async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join: joinPath } = await import('node:path');
+  return mkdtempSync(joinPath(tmpdir(), 'portos-cos-task-routes-'));
+});
+vi.mock('../lib/fileUtils.js', async () => {
+  const actual = await vi.importActual('../lib/fileUtils.js');
+  const { makePathsProxy } = await import('../lib/mockPathsDataRoot.js');
+  return makePathsProxy(actual, { dataRoot: tempRoot });
+});
 
 vi.mock('../services/cos.js', () => ({
   addTask: vi.fn(),
@@ -26,6 +54,7 @@ vi.mock('../services/cos.js', () => ({
   resolveTaskChallengeWithRecheck: vi.fn(),
   evaluateTasks: vi.fn(),
   reviveBlockedTask: vi.fn(),
+  forceSpawnTask: vi.fn(),
 }));
 vi.mock('../services/taskWatcher.js', () => ({ refreshTasks: vi.fn() }));
 vi.mock('../services/taskEnhancer.js', () => ({ enhanceTaskPrompt: vi.fn() }));
@@ -43,6 +72,7 @@ import { getAssignableInstances } from '../services/instances.js';
 import { getAppById, getAppWorkTracker } from '../services/apps.js';
 import { resolveManagedAppIssueTarget } from '../services/managedAppRepositories.js';
 import cosTaskRoutes from './cosTaskRoutes.js';
+import { listUserActions } from '../services/userActions.js';
 
 const SELF = 'self-instance-id';
 const PEER = 'peer-instance-id';
@@ -55,8 +85,11 @@ const buildApp = () => {
   return app;
 };
 
+afterAll(() => rmSync(tempRoot, { recursive: true, force: true }));
+
 beforeEach(() => {
   vi.clearAllMocks();
+  rmSync(join(tempRoot, 'user-action-events.json'), { force: true });
   getAssignableInstances.mockResolvedValue([
     { instanceId: SELF, name: 'workstation', isSelf: true },
     { instanceId: PEER, name: 'render-box', isSelf: false },
@@ -192,5 +225,105 @@ describe('PUT /api/cos/tasks/:id — targetInstanceId (#4520)', () => {
       .send({ status: 'blocked', blockedReason: 'waiting on hardware', targetInstanceId: PEER });
     expect(res.status).toBe(200);
     expect(metadataOf()).toEqual({ targetInstanceId: PEER, blocker: 'waiting on hardware' });
+  });
+});
+
+
+// ── Operator-action ledger (#5594) ──────────────────────────────────────────
+describe('CoS task routes write operator-action rows (#5594)', () => {
+  const onlyType = async (type) => (await listUserActions({ type }));
+
+  it('records cos.task.create with the run settings, a truncated prompt, and no secret value', async () => {
+    const prompt = `render the shot ${'x'.repeat(5000)}`;
+    const res = await request(buildApp())
+      .post('/api/cos/tasks')
+      .send({
+        description: 'Render the opening shot',
+        prompt,
+        provider: 'claude',
+        model: 'opus',
+        effort: 'high',
+        app: 'portos-default',
+        useWorktree: true,
+        openPR: true,
+        // `diagnostics` is the one create field with an open shape
+        // (cosTaskDiagnosticsSchema passthrough), so a credential-shaped key
+        // genuinely survives validation and reaches the recorder here.
+        diagnostics: { category: 'render', apiKey: 'sk-EXAMPLE-not-a-real-key' },
+      });
+
+    expect(res.status).toBe(200);
+    const [event] = await onlyType('cos.task.create');
+    expect(event).toMatchObject({
+      actor: 'user',
+      target: 'task-1',
+      success: true,
+      dedupeKey: 'cos.task.create:task-1',
+      source: { route: '/api/cos/tasks', method: 'POST' },
+    });
+    expect(event.payload).toMatchObject({
+      taskId: 'task-1',
+      provider: 'claude',
+      model: 'opus',
+      effort: 'high',
+      app: 'portos-default',
+      useWorktree: true,
+      openPR: true,
+    });
+    expect(event.payload.prompt.length).toBeLessThan(prompt.length);
+    expect(event.payload.truncated).toBe(true);
+    expect(event.payload.redactedKeys).toEqual(['diagnostics.apiKey']);
+    expect(JSON.stringify(event)).not.toContain('sk-EXAMPLE-not-a-real-key');
+  });
+
+  it('records nothing when the create is refused as a duplicate', async () => {
+    cos.addTask.mockResolvedValueOnce({ id: 'task-1', duplicate: true, status: 'pending' });
+    const res = await request(buildApp()).post('/api/cos/tasks').send({ description: 'Render the opening shot' });
+    expect(res.status).toBe(409);
+    expect(await listUserActions()).toEqual([]);
+  });
+
+  it('records cos.task.update with only the fields that changed', async () => {
+    const res = await request(buildApp())
+      .put('/api/cos/tasks/task-1')
+      .send({ priority: 'HIGH', model: 'sonnet' });
+
+    expect(res.status).toBe(200);
+    const [event] = await onlyType('cos.task.update');
+    expect(event).toMatchObject({ actor: 'user', target: 'task-1' });
+    expect(event.payload).toEqual({ taskId: 'task-1', priority: 'HIGH', model: 'sonnet' });
+    // Updates are not idempotent retries — the key carries the timestamp.
+    expect(event.dedupeKey).toBe(`cos.task.update:task-1:${event.happenedAt}`);
+  });
+
+  it('records cos.task.delete with the description the task had before it was removed', async () => {
+    cos.getTaskById.mockResolvedValue({ id: 'task-1', description: 'Render the opening shot' });
+    cos.deleteTask.mockResolvedValue({ success: true, taskId: 'task-1' });
+
+    const res = await request(buildApp()).delete('/api/cos/tasks/task-1');
+
+    expect(res.status).toBe(200);
+    const [event] = await onlyType('cos.task.delete');
+    expect(event.payload).toEqual({ taskId: 'task-1', description: 'Render the opening shot' });
+    expect(event.dedupeKey).toBe('cos.task.delete:task-1');
+  });
+
+  it('records cos.task.approve and cos.task.spawn', async () => {
+    cos.approveTask.mockResolvedValue({ id: 'sys-1', description: 'Nightly sweep' });
+    cos.forceSpawnTask.mockResolvedValue({ success: true });
+
+    expect((await request(buildApp()).post('/api/cos/tasks/sys-1/approve')).status).toBe(200);
+    expect((await request(buildApp()).post('/api/cos/tasks/sys-1/spawn')).status).toBe(200);
+
+    const [approve] = await onlyType('cos.task.approve');
+    expect(approve).toMatchObject({ target: 'sys-1', dedupeKey: 'cos.task.approve:sys-1' });
+    const [spawn] = await onlyType('cos.task.spawn');
+    expect(spawn.dedupeKey).toBe(`cos.task.spawn:sys-1:${spawn.happenedAt}`);
+  });
+
+  it('records nothing when the mutation itself failed', async () => {
+    cos.updateTask.mockResolvedValueOnce({ error: 'Task not found' });
+    expect((await request(buildApp()).put('/api/cos/tasks/ghost').send({ priority: 'HIGH' })).status).toBe(404);
+    expect(await listUserActions()).toEqual([]);
   });
 });

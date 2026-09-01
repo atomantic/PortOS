@@ -15,6 +15,7 @@ import { loadState, saveState, withStateLock, AGENTS_DIR } from './cosState.js';
 import { atomicWrite, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { loadAgentIndex, getAgentDir } from './cosAgentIndex.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { recordUserAction } from './userActions.js';
 
 const isSystemAgent = (agent) =>
   agent.taskId?.startsWith('sys-') || agent.id?.startsWith('sys-');
@@ -74,9 +75,15 @@ export async function getPendingAgentFeedbackCount() {
     .length;
 }
 
-// Submit feedback for a completed agent
+// Submit feedback for a completed agent.
+//
+// The operator-action ledger write (#5594) happens AFTER the state lock releases,
+// not inside it: a rating is a human verdict every caller should record, so it
+// belongs at this one boundary rather than in the HTTP route — but nesting a DB
+// write inside the CoS state lock would hold the lock across an I/O round trip
+// for a log line. The lock's own failures still reject before anything is logged.
 export async function submitAgentFeedback(agentId, feedback) {
-  return withStateLock(async () => {
+  const result = await withStateLock(async () => {
     const state = await loadState();
     const feedbackData = {
       rating: feedback.rating,
@@ -110,7 +117,7 @@ export async function submitAgentFeedback(agentId, feedback) {
 
       emitLog('info', `Feedback received for agent ${agentId}: ${feedback.rating}`, { agentId, rating: feedback.rating });
       cosEvents.emit('agent:feedback', { agentId, feedback: feedbackData });
-      return { success: true, agent: state.agents[agentId] };
+      return { success: true, agent: state.agents[agentId], feedbackData };
     }
 
     // Agent not in state — look up from disk via index
@@ -130,8 +137,27 @@ export async function submitAgentFeedback(agentId, feedback) {
 
     emitLog('info', `Feedback received for agent ${agentId}: ${feedback.rating}`, { agentId, rating: feedback.rating });
     cosEvents.emit('agent:feedback', { agentId, feedback: feedbackData });
-    return { success: true, agent: { ...raw, id: agentId } };
+    return { success: true, agent: { ...raw, id: agentId }, feedbackData };
   });
+
+  const { feedbackData, ...response } = result;
+  await recordUserAction({
+    type: 'cos.agent.feedback',
+    target: agentId,
+    targetName: response.agent?.metadata?.taskDescription,
+    summary: `Rated agent ${agentId} ${feedbackData.rating}`,
+    payload: {
+      agentId,
+      taskId: response.agent?.taskId ?? null,
+      rating: feedbackData.rating,
+      comment: feedbackData.comment,
+      taskType: extractTaskType(response.agent?.metadata?.taskDescription),
+    },
+    source: { service: 'cosAgentFeedback', fn: 'submitAgentFeedback' },
+    happenedAt: feedbackData.submittedAt,
+    dedupeKey: `cos.agent.feedback:${agentId}:${feedbackData.submittedAt}`,
+  });
+  return response;
 }
 
 // Get aggregated feedback statistics

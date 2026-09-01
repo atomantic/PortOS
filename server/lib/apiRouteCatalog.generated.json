@@ -138,6 +138,7 @@
     "/api/update",
     "/api/uploads",
     "/api/usage",
+    "/api/user-actions",
     "/api/video-gen",
     "/api/video-timeline",
     "/api/voice",
@@ -5183,7 +5184,7 @@
       "sources": [
         {
           "source": "server/routes/cosTaskRoutes.js",
-          "line": 480
+          "line": 561
         }
       ]
     },
@@ -6239,7 +6240,7 @@
       "sources": [
         {
           "source": "server/routes/cosTaskRoutes.js",
-          "line": 100
+          "line": 139
         }
       ]
     },
@@ -6250,7 +6251,7 @@
       "sources": [
         {
           "source": "server/routes/cosTaskRoutes.js",
-          "line": 364
+          "line": 405
         }
       ]
     },
@@ -6261,7 +6262,7 @@
       "sources": [
         {
           "source": "server/routes/cosTaskRoutes.js",
-          "line": 422
+          "line": 478
         }
       ]
     },
@@ -6272,7 +6273,7 @@
       "sources": [
         {
           "source": "server/routes/cosTaskRoutes.js",
-          "line": 380
+          "line": 422
         }
       ]
     },
@@ -6283,7 +6284,7 @@
       "sources": [
         {
           "source": "server/routes/cosTaskRoutes.js",
-          "line": 434
+          "line": 505
         }
       ]
     },
@@ -6294,7 +6295,7 @@
       "sources": [
         {
           "source": "server/routes/cosTaskRoutes.js",
-          "line": 447
+          "line": 528
         }
       ]
     },
@@ -6305,7 +6306,7 @@
       "sources": [
         {
           "source": "server/routes/cosTaskRoutes.js",
-          "line": 464
+          "line": 545
         }
       ]
     },
@@ -6316,7 +6317,7 @@
       "sources": [
         {
           "source": "server/routes/cosTaskRoutes.js",
-          "line": 486
+          "line": 567
         }
       ]
     },
@@ -6327,7 +6328,7 @@
       "sources": [
         {
           "source": "server/routes/cosTaskRoutes.js",
-          "line": 154
+          "line": 193
         }
       ]
     },
@@ -6338,7 +6339,7 @@
       "sources": [
         {
           "source": "server/routes/cosTaskRoutes.js",
-          "line": 130
+          "line": 169
         }
       ]
     },
@@ -6349,7 +6350,7 @@
       "sources": [
         {
           "source": "server/routes/cosTaskRoutes.js",
-          "line": 330
+          "line": 370
         }
       ]
     },
@@ -6360,7 +6361,7 @@
       "sources": [
         {
           "source": "server/routes/cosTaskRoutes.js",
-          "line": 136
+          "line": 175
         }
       ]
     },
@@ -6371,7 +6372,7 @@
       "sources": [
         {
           "source": "server/routes/cosTaskRoutes.js",
-          "line": 142
+          "line": 181
         }
       ]
     },
@@ -6382,7 +6383,7 @@
       "sources": [
         {
           "source": "server/routes/cosTaskRoutes.js",
-          "line": 173
+          "line": 212
         }
       ]
     },
@@ -6393,7 +6394,7 @@
       "sources": [
         {
           "source": "server/routes/cosTaskRoutes.js",
-          "line": 124
+          "line": 163
         }
       ]
     },
@@ -22244,6 +22245,28 @@
       ]
     },
     {
+      "method": "GET",
+      "path": "/api/user-actions",
+      "mountPath": "/api/user-actions",
+      "sources": [
+        {
+          "source": "server/routes/userActions.js",
+          "line": 32
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/user-actions/types",
+      "mountPath": "/api/user-actions",
+      "sources": [
+        {
+          "source": "server/routes/userActions.js",
+          "line": 22
+        }
+      ]
+    },
+    {
       "method": "POST",
       "path": "/api/video-gen",
       "mountPath": "/api/video-gen",
@@ -23807,9 +23830,9 @@
     }
   ],
   "stats": {
-    "mounts": 146,
-    "operations": 2148,
-    "declarations": 2151,
-    "sourceFiles": 227
+    "mounts": 147,
+    "operations": 2150,
+    "declarations": 2153,
+    "sourceFiles": 228
   }
 }

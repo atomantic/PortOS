@@ -15,6 +15,7 @@ import { workTrackerLabel } from '../lib/workTracker.js';
 import { getSlashdoWorkflow, slashdoWorkflowAppliesTo, SLASHDO_COMMAND_NAMES } from '../lib/slashdoCatalog.js';
 import { NON_PM2_TYPES } from '../services/streamingDetect.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
+import { recordUserAction } from '../services/userActions.js';
 import {
   createCosTaskSchema,
   slashdoTaskSchema,
@@ -30,6 +31,44 @@ const enhanceTaskSchema = z.object({
   description: z.string().min(1),
   context: z.string().optional(),
 });
+
+// ── Operator-action ledger (#5594) ──────────────────────────────────────────
+//
+// Hooked at the THREE HTTP create routes below rather than at
+// `cosTaskStore.addTask`, which is ALSO the generator / autopilot / mind dispatch
+// path. Only a request arriving here is a human pressing a button, and the whole
+// point of the ledger is to separate those from everything PortOS queues itself.
+//
+// Every write is awaited before the response (same posture as `history.logAction`),
+// and every hook fires only AFTER the mutation succeeded — a 409/404 is not an
+// operator action that happened.
+const TASK_CREATE_PAYLOAD_FIELDS = [
+  'prompt', 'description', 'context', 'provider', 'model', 'effort', 'app',
+  'useWorktree', 'openPR', 'prCompletion', 'planOnly', 'reviewLoop', 'reviewers',
+  'approvalRequired',
+  // The one create field with an open shape (`cosTaskDiagnosticsSchema` is a
+  // passthrough), so it is both the most informative thing to keep and the reason
+  // `recordUserAction` redacts credential-shaped keys at all.
+  'diagnostics',
+];
+
+const routeSource = (req) => ({ route: `${req.baseUrl}${req.route?.path ?? ''}`, method: req.method });
+
+const pickDefined = (source, fields) => Object.fromEntries(
+  fields.filter((field) => source?.[field] !== undefined).map((field) => [field, source[field]]),
+);
+
+async function logTaskCreated(req, task, taskData) {
+  await recordUserAction({
+    type: 'cos.task.create',
+    target: task.id,
+    targetName: task.description,
+    summary: `Queued CoS task: ${task.description}`,
+    payload: { taskId: task.id, ...pickDefined(taskData, TASK_CREATE_PAYLOAD_FIELDS) },
+    source: routeSource(req),
+    dedupeKey: `cos.task.create:${task.id}`,
+  });
+}
 
 // One-off "implement THIS JIRA ticket" task (the per-card play button on the
 // app overview's sprint board). `ticketKey` is a JIRA key like `PROJ-1234`.
@@ -319,6 +358,7 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
     throw new ServerError(`A task with this description is already ${result.status}`, { status: 409, code: 'DUPLICATE_TASK' });
   }
 
+  await logTaskCreated(req, result, taskData);
   res.json(result);
 }));
 
@@ -357,6 +397,7 @@ router.post('/tasks/jira-ticket', asyncHandler(async (req, res) => {
     throw new ServerError(`A task for ${key} is already ${result.status}`, { status: 409, code: 'DUPLICATE_TASK' });
   }
 
+  await logTaskCreated(req, result, taskData);
   res.json(result);
 }));
 
@@ -373,6 +414,7 @@ router.post('/tasks', asyncHandler(async (req, res) => {
     throw new ServerError(`A task with this description is already ${result.status}`, { status: 409, code: 'DUPLICATE_TASK' });
   }
 
+  await logTaskCreated(req, result, preparedTask);
   res.json(result);
 }));
 
@@ -415,6 +457,20 @@ router.put('/tasks/:id', asyncHandler(async (req, res) => {
   if (result?.error) {
     throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
   }
+
+  // An edit is not an idempotent retry — two saves of the same field are two
+  // distinct operator actions — so the timestamp is part of the dedupe key.
+  const happenedAt = new Date().toISOString();
+  await recordUserAction({
+    type: 'cos.task.update',
+    target: id,
+    targetName: result?.description,
+    summary: `Edited CoS task ${id}: ${Object.keys(updates).join(', ') || 'no fields'}`,
+    payload: { taskId: id, ...updates },
+    source: routeSource(req),
+    happenedAt,
+    dedupeKey: `cos.task.update:${id}:${happenedAt}`,
+  });
   res.json(result);
 }));
 
@@ -423,10 +479,25 @@ router.delete('/tasks/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { type = 'user' } = req.query;
 
+  // Read the description BEFORE the delete: once the row is gone the ledger's
+  // only handle on what was thrown away would be an opaque task id.
+  // `.catch` because this read only supplies a LABEL — a task file that will not
+  // parse must not turn a working delete into a 500.
+  const doomed = await cos.getTaskById(id).catch(() => null);
   const result = await cos.deleteTask(id, type);
   if (result?.error) {
     throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
   }
+
+  await recordUserAction({
+    type: 'cos.task.delete',
+    target: id,
+    targetName: doomed?.description,
+    summary: `Deleted CoS task ${id}${doomed?.description ? `: ${doomed.description}` : ''}`,
+    payload: { taskId: id, description: doomed?.description ?? null },
+    source: routeSource(req),
+    dedupeKey: `cos.task.delete:${id}`,
+  });
   res.json(result);
 }));
 
@@ -438,6 +509,16 @@ router.post('/tasks/:id/approve', asyncHandler(async (req, res) => {
   if (result?.error) {
     throw new ServerError(result.error, { status: 400, code: 'BAD_REQUEST' });
   }
+
+  await recordUserAction({
+    type: 'cos.task.approve',
+    target: id,
+    targetName: result?.description,
+    summary: `Approved CoS task ${id}${result?.description ? `: ${result.description}` : ''}`,
+    payload: { taskId: id },
+    source: routeSource(req),
+    dedupeKey: `cos.task.approve:${id}`,
+  });
   res.json(result);
 }));
 
@@ -501,6 +582,19 @@ router.post('/tasks/:id/spawn', asyncHandler(async (req, res) => {
     }
     throw new ServerError(result.error, { status, code });
   }
+
+  // Force-spawn is repeatable (spawn, it fails, spawn again), so each press is
+  // its own row — hence the timestamp in the dedupe key.
+  const happenedAt = new Date().toISOString();
+  await recordUserAction({
+    type: 'cos.task.spawn',
+    target: req.params.id,
+    summary: `Force-spawned CoS task ${req.params.id}`,
+    payload: { taskId: req.params.id },
+    source: routeSource(req),
+    happenedAt,
+    dedupeKey: `cos.task.spawn:${req.params.id}:${happenedAt}`,
+  });
   res.json(result);
 }));
 

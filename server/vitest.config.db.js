@@ -20,6 +20,7 @@ export const DB_TEST_INCLUDE = [
   'services/catalogDB.facets.db.test.js',
   'services/humanActivity.db.test.js',
   'services/postRunDb.db.test.js',
+  'services/userActions.db.test.js',
   'services/memoryDB.db.test.js',
   'services/privacySubjects.db.test.js',
   'services/privacyVault.db.test.js',
