@@ -691,7 +691,13 @@ export async function listCodexModels({ fresh = false } = {}) {
       cursor = result.nextCursor;
       if (!cursor) break;
     }
-    if (cursor) console.error(`❌ Codex model/list stopped after ${MODEL_LIST_MAX_PAGES} pages with a cursor still pending`);
+    if (cursor) {
+      // A truncated catalog is not a successful read: caching it would replace a
+      // complete last-known-good list with a partial one, and reporting
+      // `error: null` would tell the client the picker is authoritative.
+      console.error(`❌ Codex model/list stopped after ${MODEL_LIST_MAX_PAGES} pages with a cursor still pending`);
+      throw new Error(`model/list did not finish paginating within ${MODEL_LIST_MAX_PAGES} pages`);
+    }
     modelsCache = { at: Date.now(), models };
     return { models, fetchedAt: modelsCache.at, error: null };
   } catch (err) {
@@ -835,9 +841,12 @@ export async function runCodexTextTurn({
     activeTurns.delete(threadId);
     // Best-effort: tell the app-server to stop working a turn PortOS has
     // abandoned, so a cancelled request does not keep burning subscription
-    // quota. A thread that already completed answers with an error we ignore.
-    if (acc.status === 'inProgress' && acc.turnId) {
-      call(CODEX_TURN_RPC.turnInterrupt, { threadId, turnId: acc.turnId })
+    // quota. Sent on the LIVE connection directly rather than through `call`,
+    // which would `connect()` — spawning a whole new app-server to interrupt a
+    // thread that only existed in the one that just died.
+    const live = connection;
+    if (acc.status === 'inProgress' && acc.turnId && live && !live.closed) {
+      sendRequest(live, CODEX_TURN_RPC.turnInterrupt, { threadId, turnId: acc.turnId })
         .catch((err) => console.error(`❌ Codex turn interrupt failed: ${err.message}`));
     }
   }
@@ -861,9 +870,16 @@ export async function stopCodexAppServer() {
       .catch((err) => console.error(`❌ Failed to remove the Codex text scratch directory: ${err.message}`));
   }
   const target = connection || connectingTarget;
-  connection = null;
-  if (!target || target.closed) return;
+  if (!target || target.closed) {
+    connection = null;
+    return;
+  }
+  // `teardown` decides whether to fail live turns by comparing `connection` to
+  // the dying target — so `connection` must still point at it here. Nulling
+  // first left every in-flight turn waiting on a notification that could never
+  // arrive, until its own 5-minute deadline.
   stopTarget(target, codexError(CODEX_ERROR_CODES.exited, 'PortOS is shutting down the Codex app-server.'));
+  connection = null;
   console.log('🔌 Codex app-server stopped');
 }
 

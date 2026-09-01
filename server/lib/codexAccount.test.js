@@ -9,6 +9,7 @@ import {
   normalizeCodexAccount,
   normalizeCodexLoginStart,
   normalizeCodexRateLimits,
+  redactCodexMessage,
   redactCodexPayload,
 } from './codexAccount.js';
 
@@ -176,5 +177,43 @@ describe('isCodexAuthError', () => {
     expect(isCodexAuthError({ message: 'token expired' })).toBe(true);
     expect(isCodexAuthError({ message: 'connection refused' })).toBe(false);
     expect(isCodexAuthError(null)).toBe(false);
+  });
+});
+
+describe('redactCodexMessage', () => {
+  it('masks a credential-shaped value under any label or scheme', () => {
+    // These messages are logged AND returned to the browser by the `/codex/*`
+    // routes, and the payload redactor keys on FIELD NAMES a free-text message
+    // does not have.
+    for (const [message, secret] of [
+      ['access_token=sk-live-ABCDEFGH1234 expired', 'sk-live-ABCDEFGH1234'],
+      ['refresh_token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9 rejected', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9'],
+      ['Authorization: Bearer abcdefghijklmnopqrst', 'abcdefghijklmnopqrst'],
+      // Not just Bearer/Basic — a scheme PortOS has never seen must not slip past.
+      ['Authorization: Token eyJhbGciOiJIUzI1NiJ9abcd', 'eyJhbGciOiJIUzI1NiJ9abcd'],
+    ]) {
+      const masked = redactCodexMessage(message);
+      expect(masked).not.toContain(secret);
+      expect(masked).toContain('[redacted]');
+    }
+  });
+
+  it('leaves an ordinary message alone', () => {
+    // A redactor that mangles prose makes every error harder to act on, so the
+    // value has to look like a credential — not merely follow a scary word.
+    for (const message of [
+      'The secret: sauce',
+      'The secret is safe',
+      'GET /v1/secrets:read failed',
+      'Codex app-server did not answer account/read within 15s.',
+    ]) {
+      expect(redactCodexMessage(message)).toBe(message);
+    }
+  });
+
+  it('reports nothing to say as null, not an empty string', () => {
+    expect(redactCodexMessage('')).toBeNull();
+    expect(redactCodexMessage(null)).toBeNull();
+    expect(redactCodexMessage(42)).toBeNull();
   });
 });

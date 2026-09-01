@@ -266,13 +266,41 @@ describe('turn projection', () => {
     expect(finalizeCodexTurn(acc).text).toBe('message one. message two.');
   });
 
+  it('refuses an anonymous completion once the turn id is latched', () => {
+    // An unnamed `turn/completed` would otherwise finish somebody else's turn and
+    // hand this caller the partial text streamed so far as a success.
+    const acc = createTurnAccumulator({ threadId: 't', turnId: 'turn-1' });
+    delta(acc, '{"answer":"hal');
+    expect(complete(acc, { status: 'completed' })).toBe(false);
+
+    complete(acc, { id: 'turn-1', status: 'failed', error: { message: 'nope' } });
+    expect(finalizeCodexTurn(acc).text).toBeUndefined();
+  });
+
+  it('scrubs a credential quoted by a failed turn before it becomes an error', () => {
+    // The message becomes a thrown error's text, which aiProvider logs, reports
+    // over `ai:status`, and returns to the caller as `{ error }`.
+    const acc = createTurnAccumulator({ threadId: 't', turnId: 'turn-1' });
+    complete(acc, {
+      id: 'turn-1',
+      status: 'failed',
+      error: { message: 'upstream rejected access_token=sk-live-ABCDEFGH1234' },
+    });
+
+    expect(finalizeCodexTurn(acc).error).not.toContain('sk-live-ABCDEFGH1234');
+  });
+
   it('records token usage under the subscription, with no invented dollar cost', () => {
     const acc = createTurnAccumulator({ threadId: 't', turnId: 'turn-1' });
     applyCodexTurnEvent(acc, CODEX_TURN_NOTIFICATIONS.tokenUsage, {
       threadId: 't',
       turnId: 'turn-1',
       tokenUsage: {
-        last: { inputTokens: 120, outputTokens: 40, cachedInputTokens: 10, reasoningOutputTokens: 5, totalTokens: 160 },
+        // `last` counts only the FINAL model request; a turn that took a
+        // reasoning step first would under-report by an order of magnitude.
+        // PortOS's threads are ephemeral and carry one turn, so `total` is it.
+        last: { inputTokens: 20, outputTokens: 4, cachedInputTokens: 0, reasoningOutputTokens: 0, totalTokens: 24 },
+        total: { inputTokens: 120, outputTokens: 40, cachedInputTokens: 10, reasoningOutputTokens: 5, totalTokens: 160 },
         modelContextWindow: 400000,
       },
     });

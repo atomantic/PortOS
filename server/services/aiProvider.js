@@ -322,7 +322,7 @@ async function callCodexSubscription(provider, model, prompt, {
     if (!turn.error) {
       if (turn.effortClamped) statusOp.update('model:corrected', turn.clampReason, { model: turn.model });
       statusOp.complete(`${doneLabel} done (${elapsedSec()}s)`, throughput(turn.usage?.outputTokens));
-      return { text: turn.text, usage: turn.usage };
+      return { result: { text: turn.text, usage: turn.usage } };
     }
 
     reason = turn.error.message;
@@ -332,7 +332,7 @@ async function callCodexSubscription(provider, model, prompt, {
     // the fallback would pay for an answer nobody is waiting for.
     if (category === ERROR_CATEGORIES.CANCELED) {
       statusOp.error(reason, { providerId: provider.id });
-      return { error: reason, canceled: true };
+      return { result: { error: reason, canceled: true } };
     }
     const bench = resolveProviderBench({ category, message: reason });
     if (bench) {
@@ -347,26 +347,20 @@ async function callCodexSubscription(provider, model, prompt, {
   const fallback = await resolveExplicitFallback(provider);
   if (!fallback) {
     statusOp.error(reason, { providerId: provider.id });
-    return { error: reason };
+    return { result: { error: reason } };
   }
 
   const fallbackModel = provider.fallbackModel || fallback.defaultModel || null;
   statusOp.update('start', `Falling back to ${fallback.name || fallback.id}…`, {
     providerId: fallback.id, model: fallbackModel,
   });
-  const retry = await postChatCompletion(fallback, fallbackModel, prompt, {
-    temperature: 0.3,
-    max_tokens: 1000,
-    timeout: fallback.timeout || DEFAULT_PROVIDER_TIMEOUT_MS,
-  });
-  if (retry.error) {
-    statusOp.error(retry.error, { providerId: fallback.id, model: fallbackModel });
-    return { error: retry.error };
-  }
-  statusOp.complete(`${doneLabel} done (${elapsedSec()}s)`, {
-    providerId: fallback.id, model: fallbackModel, ...throughput(retry.tokens),
-  });
-  return { text: retry.text };
+  // Handed BACK rather than posted here: re-entering `callProviderAISimple` is
+  // what gives the fallback the local-backend warm-ups (Ollama / MTPLX), the LM
+  // Studio no-models-loaded auto-load-and-retry, and the caller's own
+  // `temperature` / `max_tokens` — all of which a direct `postChatCompletion`
+  // silently drops, making the fallback least reliable exactly when it is
+  // needed. The recursion terminates: an explicit fallback must be API-type.
+  return { fallback, fallbackModel };
 }
 
 /**
@@ -469,9 +463,16 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
   // so it takes over here — before the local-backend warm-ups, which are all
   // `/chat/completions` concerns.
   if (isSubscriptionText(provider)) {
-    return callCodexSubscription(provider, model, body, {
+    const attempt = await callCodexSubscription(provider, model, body, {
       statusOp, doneLabel, elapsedSec, throughput, timeout: opts.timeout, responseSchema, signal,
     });
+    if (attempt.result) return attempt.result;
+    // The subscription could not serve this call and the user named an explicit
+    // fallback. Re-enter with the ORIGINAL prompt and options so the fallback
+    // gets the same treatment any direct call would — including the creative
+    // stamp, which is applied per-transport rather than carried on `body`. The
+    // shared `op` groups both attempts under one toast.
+    return callProviderAISimple(attempt.fallback, attempt.fallbackModel, prompt, options);
   }
 
   if (isOllamaProvider(provider)) {

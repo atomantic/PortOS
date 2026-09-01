@@ -151,12 +151,22 @@ export const redactCodexPayload = (value, depth = 0) => {
 export const redactCodexMessage = (value) => {
   if (typeof value !== 'string' || value.trim() === '') return null;
   const masked = value
-    // key=value / key: value, where the key is credential-shaped
-    .replace(/\b([A-Za-z0-9_-]*(?:token|secret|password|credential|api[_-]?key|access[_-]?key|cookie)[A-Za-z0-9_-]*)\s*[=:]\s*\S+/gi, '$1=' + REDACTED)
-    // an inline bearer/basic credential
-    .replace(/\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 ' + REDACTED)
-    // a bare OpenAI-style key, which carries no label at all
-    .replace(/\bsk-[A-Za-z0-9._-]{8,}/g, REDACTED);
+    // `key=<value>` / `key: <value>` where the key is credential-shaped AND the
+    // value LOOKS like a credential — long, and not plain prose. Requiring both
+    // is what keeps "The secret: sauce" intact while masking
+    // "refresh_token: eyJhbGciOi…". A short value cannot carry a usable secret.
+    .replace(
+      /\b([A-Za-z0-9_-]*(?:token|secret|password|passwd|credential|api[_-]?key|access[_-]?key|cookie|signature)[A-Za-z0-9_-]*)(\s*[=:]\s*)("?)([A-Za-z0-9._~+/=-]{12,})\3/gi,
+      (match, key, sep, quote, secret) => (/^[A-Za-z]+$/.test(secret) ? match : `${key}${sep}${quote}${REDACTED}${quote}`),
+    )
+    // An inline authorization credential under ANY scheme — Bearer, Basic,
+    // Token, and whatever a future provider invents. Anchored on the header
+    // name, so an ordinary sentence containing "token" is untouched.
+    .replace(/\b(authorization|proxy-authorization)(\s*[=:]\s*)(\S+\s+)?\S+/gi, `$1$2${REDACTED}`)
+    .replace(/\b(bearer|basic|token)\s+[A-Za-z0-9._~+/=-]{12,}/gi, `$1 ${REDACTED}`)
+    // A bare vendor key, which carries no label at all to key on.
+    .replace(/\b(sk|pk|rk)-[A-Za-z0-9._-]{8,}/g, REDACTED)
+    .replace(/\beyJ[A-Za-z0-9._-]{16,}/g, REDACTED);
   return masked.length > 400 ? `${masked.slice(0, 400)}…` : masked;
 };
 

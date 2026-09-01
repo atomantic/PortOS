@@ -297,12 +297,18 @@ describe('callProviderAISimple through the ChatGPT subscription', () => {
 
     const result = await callProviderAISimple(
       { ...CODEX_ENABLED, fallbackProvider: 'openai', fallbackModel: 'fallback-model' },
-      'model-alpha', 'hi', {},
+      'model-alpha', 'hi', { max_tokens: 1500, temperature: 0.9 },
     );
 
     expect(result).toMatchObject({ text: 'fallback answer' });
     expect(globalThis.fetch.mock.calls[0][0]).toBe('https://api.example.com/v1/chat/completions');
-    expect(JSON.parse(globalThis.fetch.mock.calls[0][1].body).model).toBe('fallback-model');
+    const sent = JSON.parse(globalThis.fetch.mock.calls[0][1].body);
+    expect(sent.model).toBe('fallback-model');
+    // The caller's generation options survive the handoff. A fallback that
+    // silently capped at the defaults would truncate the very summaries a caller
+    // raised `max_tokens` for — and only ever on the failure path, where nobody
+    // is watching.
+    expect(sent).toMatchObject({ max_tokens: 1500, temperature: 0.9 });
   });
 
   it('fails closed when the provider named no fallback — never picks an API key on its own', async () => {

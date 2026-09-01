@@ -350,3 +350,41 @@ describe('progress hooks', () => {
     expect(seen).toEqual(['mine']);
   });
 });
+
+describe('shutdown while a turn is live', () => {
+  it('fails the turn instead of leaving it to time out, and never respawns the child', async () => {
+    // `turn/start` already answered, so there is no pending RPC to reject — only
+    // the teardown hook can settle this. If shutdown drops the live handle first,
+    // the turn hangs for its full 5-minute deadline and its cleanup then spawns a
+    // WHOLE NEW app-server just to interrupt a thread that no longer exists.
+    const promise = runCodexTextTurn({ prompt: 'hi' });
+    await handshake();
+    await awaitRequest(child, 'thread/start', { thread: { id: 'thread-1' } });
+    await awaitRequest(child, 'turn/start', { turn: { id: 'turn-1', items: [], status: 'inProgress' } });
+    expect(spawn).toHaveBeenCalledTimes(1);
+
+    await stopCodexAppServer();
+
+    await expect(promise).rejects.toMatchObject({ code: CODEX_ERROR_CODES.exited });
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a catalog that will not stop paginating', () => {
+  it('reports an error rather than caching a partial list as authoritative', async () => {
+    // Caching a truncated catalog would replace a complete last-known-good list
+    // with a partial one, and `error: null` would tell the client it is whole.
+    const promise = listCodexModels();
+    await handshake();
+    for (let page = 0; page < 20; page += 1) {
+      await awaitRequest(child, 'model/list', {
+        data: [{ id: `model-${page}`, supportedReasoningEfforts: [] }], nextCursor: `page-${page + 1}`,
+      });
+    }
+
+    const result = await promise;
+    expect(result.models).toBeNull();
+    expect(result.error.message).toMatch(/paginating/i);
+    expect(peekCodexModels()).toBeNull();
+  });
+});

@@ -30,7 +30,7 @@
  */
 
 import { ERROR_CATEGORIES } from './aiToolkit/errorDetection.js';
-import { CODEX_ERROR_CODES, isCodexSubscriptionProvider } from './codexAccount.js';
+import { CODEX_ERROR_CODES, isCodexSubscriptionProvider, redactCodexMessage } from './codexAccount.js';
 
 /**
  * The value a provider record carries to advertise that it can serve generic
@@ -192,7 +192,11 @@ export const normalizeCodexModels = (result) => {
  */
 export const normalizeCodexTokenUsage = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
-  const breakdown = raw.last ?? raw.total ?? raw;
+  // `total` first: PortOS's threads are ephemeral and carry exactly one turn, so
+  // the thread total IS this turn's usage, while `last` counts only the final
+  // model request. A turn that took a reasoning step then answered would
+  // otherwise under-report by an order of magnitude.
+  const breakdown = raw.total ?? raw.last ?? raw;
   if (!breakdown || typeof breakdown !== 'object') return null;
   const inputTokens = finiteInt(breakdown.inputTokens);
   const outputTokens = finiteInt(breakdown.outputTokens);
@@ -258,7 +262,10 @@ const errorInfoTag = (error) => {
  */
 export const classifyCodexTurnError = (error) => {
   const tag = errorInfoTag(error);
-  const message = trimmed(error?.message) || 'The Codex turn failed';
+  // Scrubbed at the boundary: this message becomes a thrown error's text, which
+  // `aiProvider` logs, reports through `ai:status`, and hands back to the caller
+  // as `{ error }` — and an upstream failure can quote the credential.
+  const message = redactCodexMessage(error?.message) || 'The Codex turn failed';
   if (QUOTA_ERROR_INFO.has(tag)) return { category: ERROR_CATEGORIES.USAGE_LIMIT, message };
   if (RATE_LIMIT_ERROR_INFO.has(tag)) return { category: ERROR_CATEGORIES.RATE_LIMIT, message };
   if (AUTH_ERROR_INFO.has(tag)) return { category: ERROR_CATEGORIES.AUTH_ERROR, message };
@@ -382,7 +389,10 @@ export const applyCodexTurnEvent = (acc, method, params) => {
       return true;
     case CODEX_TURN_NOTIFICATIONS.turnCompleted: {
       const turn = params.turn;
-      if (acc.turnId && turn?.id && turn.id !== acc.turnId) return false;
+      // Once the id is latched, a completion must name it. An anonymous
+      // `turn/completed` would otherwise finish somebody else's turn — and hand
+      // this caller the partial text streamed so far as a success.
+      if (acc.turnId && turn?.id !== acc.turnId) return false;
       // A frame with no status is MALFORMED, and defaulting it to 'completed'
       // would hand the caller whatever text had streamed so far as a finished
       // answer. `finalizeCodexTurn` errors on anything that is not 'completed',

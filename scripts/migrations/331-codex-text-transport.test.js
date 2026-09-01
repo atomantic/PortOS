@@ -64,6 +64,27 @@ describe('migration 331 — codex text transport', () => {
     });
   });
 
+  it('matches the runtime predicate exactly on command spelling', async () => {
+    // A record this stamps but `providerDeclaresCodexTextTransport` then rejects
+    // advertises a capability the toggle can never switch on; one it skips never
+    // gets the flag at all. Both halves must apply the same rule: lowercase the
+    // basename, strip only `.exe`.
+    writeProviders({
+      codex: { ...CODEX, command: 'Codex' },
+      'codex-exe': { id: 'codex-exe', type: 'cli', command: 'C:\\bin\\CODEX.EXE', enabled: true },
+      'codex-cmd': { id: 'codex-cmd', type: 'cli', command: 'codex.cmd', enabled: true },
+    });
+
+    await migration.up({ rootDir });
+
+    const providers = readProviders();
+    expect(providers.codex.textTransport).toBe('codex-app-server');
+    expect(providers['codex-exe'].textTransport).toBe('codex-app-server');
+    // `.cmd` is not directly spawnable and the runtime gate rejects it, so the
+    // migration must not advertise it either.
+    expect(providers['codex-cmd'].textTransport).toBeUndefined();
+  });
+
   it('leaves a record the user repointed at a different binary untouched', async () => {
     writeProviders({ codex: { ...CODEX, command: 'my-wrapper' } });
 

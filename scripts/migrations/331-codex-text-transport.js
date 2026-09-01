@@ -22,8 +22,6 @@
  * require a new migration.
  */
 
-import { basename } from 'path';
-
 import { readProvidersDoc, writeJsonAtomic } from './_lib.js';
 
 const TRANSPORT = 'codex-app-server';
@@ -54,7 +52,12 @@ const isCodexHarness = (provider) => {
   if (provider.textTransport) return false;
   const command = typeof provider.command === 'string' ? provider.command.trim() : '';
   if (command === '') return false;
-  return basename(command).replace(/\.(exe|cmd|bat)$/i, '') === CODEX_COMMAND;
+  // Byte-for-byte the rule `lib/providerModels.commandBasename` applies (inlined
+  // because a migration is a frozen snapshot and must not drift when that helper
+  // changes). Case-INSENSITIVE, and only `.exe` is stripped: a record this
+  // stamps but the runtime gate then rejects would advertise a capability that
+  // can never be switched on, and one it skips never gets the flag at all.
+  return command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '') === CODEX_COMMAND;
 };
 
 export default {
