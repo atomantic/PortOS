@@ -15,6 +15,7 @@ describe('taskSchedule module boundaries', () => {
         .map((name) => [name, constants[name]]),
       ...['DEFAULT_BRANCHES_PER_AGENT', 'DEFAULT_TASK_INTERVALS', 'MANAGED_AGENT_OPTIONS',
         'PERPETUAL_DRAIN_DISPATCH_CAP', 'SELF_IMPROVEMENT_TASK_TYPES', 'TASK_TYPE_DESCRIPTIONS',
+        'TASK_TYPE_INVOCATION', 'TASK_TYPE_PROMPT_INFO', 'getTaskTypeInvocation', 'getTaskTypePromptInfo',
         'stripManagedAgentOptionsFromOverride'].map((name) => [name, registry[name]]),
       ...['FAILURE_BACKOFF_BASE_MS', 'FAILURE_BACKOFF_CAP_MS', 'FAILURE_PARK_THRESHOLD',
         'clearTaskTypeFailurePark', 'computeFailureBackoffMs', 'recordTaskTypeFailure',

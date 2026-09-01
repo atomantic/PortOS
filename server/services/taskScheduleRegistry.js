@@ -490,7 +490,7 @@ export function enforceBranchReconcileBatch(taskType, config) {
   return false;
 }
 
-// Short human-readable blurb per task type, shown in the schedule UI's
+// Short human-readable blurb per task type, shown on schedule cards and in the
 // upcoming-tasks list. Every entry in SELF_IMPROVEMENT_TASK_TYPES must have a
 // key here — a missing one falls back to a dasherized label ("claim work"),
 // which reads as an orphaned/legacy task. A parity guard in taskSchedule.test.js
@@ -515,9 +515,9 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'release-check': 'Check for release readiness',
   'error-handling': 'Failure-path audit — file issues or implement fixes',
   'typing': 'TypeScript types — file issues or implement fixes',
-  'pr-reviewer': 'Review open PRs from contributors',
+  'pr-reviewer': 'Review contributor PRs with a security scan before code review and merge',
   'pr-watcher': 'Run a custom prompt on PRs newly opened against the default branch',
-  'issue-watcher': 'Assign issue volunteers and review external PRs with deterministic GitHub actions around one reasoning pass',
+  'issue-watcher': 'Watch external issues and PRs: assign volunteers, review changes, and apply deterministic GitHub actions around one reasoning pass',
   'code-reviewer-a': 'Review the codebase and triage/implement findings (independent provider/model instance A)',
   'code-reviewer-b': 'Review the codebase and triage/implement findings (independent provider/model instance B)',
   'do-replan': 'Audit and prune PLAN.md after merges and branch cleanup so it reflects what actually shipped',
@@ -540,4 +540,55 @@ export const TASK_TYPE_DESCRIPTIONS = {
 
 export function getTaskTypeDescription(taskType) {
   return TASK_TYPE_DESCRIPTIONS[taskType] || taskType.replace(/-/g, ' ');
+}
+
+/**
+ * Prompt presentation metadata for task types whose prompt is assembled by a
+ * programmatic input hook rather than read from the persisted schedule.
+ *
+ * Keeping this separate from DEFAULT_TASK_PROMPTS is intentional: adding a
+ * placeholder prompt there would make the schedule look configured while the
+ * hook still replaces it at dispatch time. The UI can therefore explain the
+ * real execution shape without changing prompt-version migration state.
+ */
+export const TASK_TYPE_PROMPT_INFO = Object.freeze({
+  'issue-watcher': Object.freeze({
+    mode: 'runtime-generated',
+    description: 'Generated for each run after deterministic GitHub gathering. The reasoning agent receives bounded, untrusted issue/PR data and has no tools.'
+  }),
+  'layered-intelligence': Object.freeze({
+    mode: 'runtime-generated',
+    description: 'Generated for each run from the app\'s configured goals, metrics, and repository context.'
+  })
+});
+
+/**
+ * Sparse, explicit contract for task types owned by another automation.
+ *
+ * The current scheduled task catalog has no top-level subsidiary-only entries:
+ * every task card is a user-invokable task, while pipeline stages are nested
+ * inside their parent task. Future automation-only types belong here instead
+ * of being inferred from names or from a task's implementation details.
+ *
+ * A visible subsidiary entry should use:
+ *   { kind: 'subsidiary', visibility: 'visible', userInvokable: false,
+ *     label: 'Automation-only', description: '...' }
+ * A hidden entry should use `visibility: 'hidden'` and still set
+ * `userInvokable: false`.
+ */
+export const TASK_TYPE_INVOCATION = Object.freeze({});
+
+const DEFAULT_TASK_TYPE_PROMPT_INFO = Object.freeze({ mode: 'template', description: null });
+const DEFAULT_TASK_TYPE_INVOCATION = Object.freeze({
+  kind: 'direct',
+  visibility: 'visible',
+  userInvokable: true
+});
+
+export function getTaskTypePromptInfo(taskType) {
+  return TASK_TYPE_PROMPT_INFO[taskType] || DEFAULT_TASK_TYPE_PROMPT_INFO;
+}
+
+export function getTaskTypeInvocation(taskType) {
+  return TASK_TYPE_INVOCATION[taskType] || DEFAULT_TASK_TYPE_INVOCATION;
 }

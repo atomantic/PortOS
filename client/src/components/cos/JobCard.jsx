@@ -363,6 +363,9 @@ export default function JobCard({
               </span>
             )}
           </div>
+          {job.description?.trim() && (
+            <p className="text-xs text-gray-400 truncate mt-1" title={job.description}>{job.description}</p>
+          )}
           <div className="flex items-center gap-3 text-xs text-gray-500 mt-1 flex-wrap">
             <span className="flex items-center gap-1">
               <Clock size={10} />
@@ -422,9 +425,14 @@ export default function JobCard({
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
                 />
               </FormField>
-              <FormField label="Description" labelClassName="block text-xs text-gray-400 mb-1">
+              <FormField
+                label="Card summary"
+                hint="Shown beneath the task name on its card."
+                labelClassName="block text-xs text-gray-400 mb-1"
+              >
                 <input
                   type="text"
+                  placeholder="One-line summary (optional)"
                   value={editData.description}
                   onChange={e => setEditData(d => ({ ...d, description: e.target.value }))}
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"

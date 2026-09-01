@@ -234,6 +234,8 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
   // (this panel persists a separate Thinking Effort), and keeps a stale suffixed
   // pin selectable so it still runs while showing what it is.
   const status = config.status || {};
+  const userInvokable = config.invocation?.userInvokable !== false;
+  const invocationDescription = config.invocation?.description || 'Runs as part of another automation and is not directly invokable.';
 
   return (
     <div className="space-y-4">
@@ -675,14 +677,20 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
       )}
 
       <div className="flex gap-2">
-        <RunTaskButton
-          taskType={taskType}
-          apps={apps}
-          onTrigger={onTrigger}
-          installWide={config.installWide}
-          // `updating` covers an in-flight pin write here, same race the card gates on.
-          disabledReason={improvementDisabled ? IMPROVEMENT_DISABLED_TITLE : (updating ? SAVING_TITLE : '')}
-        />
+        {userInvokable ? (
+          <RunTaskButton
+            taskType={taskType}
+            apps={apps}
+            onTrigger={onTrigger}
+            installWide={config.installWide}
+            // `updating` covers an in-flight pin write here, same race the card gates on.
+            disabledReason={improvementDisabled ? IMPROVEMENT_DISABLED_TITLE : (updating ? SAVING_TITLE : '')}
+          />
+        ) : (
+          <div className="text-xs text-port-warning/80" title={invocationDescription}>
+            {config.invocation?.label || 'Automation-only'} — runs from its parent automation
+          </div>
+        )}
         {config.type === 'once' && status.reason === 'once-completed' && (
           <button
             onClick={() => onReset(taskType)}

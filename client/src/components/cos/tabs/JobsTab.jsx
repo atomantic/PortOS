@@ -243,9 +243,14 @@ export default function JobsTab() {
                 />
               </FormField>
             </div>
-            <FormField label="Description" labelClassName="block text-xs text-gray-400 mb-1">
+            <FormField
+              label="Card summary"
+              hint="Shown beneath the task name on its card."
+              labelClassName="block text-xs text-gray-400 mb-1"
+            >
               <input
                 type="text"
+                placeholder="One-line summary (optional)"
                 value={newJob.description}
                 onChange={e => setNewJob(j => ({ ...j, description: e.target.value }))}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"

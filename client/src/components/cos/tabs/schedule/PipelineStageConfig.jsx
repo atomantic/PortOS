@@ -107,7 +107,7 @@ export default function PipelineStageConfig({ taskType, config, providers, onUpd
           );
         })}
       </div>
-      <p className="text-xs text-gray-500 mt-2">Each stage runs as a separate agent. Configure different providers per stage (e.g., Codex for review, Claude for implementation).</p>
+      <p className="text-xs text-gray-500 mt-2">Each stage runs as a separate agent inside this pipeline; stages are not scheduled independently. Configure different providers per stage (e.g., Codex for review, Claude for implementation).</p>
     </div>
   );
 }

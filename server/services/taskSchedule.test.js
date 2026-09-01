@@ -154,6 +154,9 @@ import {
   MANAGED_AGENT_OPTIONS,
   stripManagedAgentOptionsFromOverride,
   TASK_TYPE_DESCRIPTIONS,
+  TASK_TYPE_INVOCATION,
+  TASK_TYPE_PROMPT_INFO,
+  getTaskTypeInvocation,
   REFERENCE_WATCH_AUDITED_VERSION,
   boundParkedUntil
 } from './taskSchedule.js'
@@ -344,12 +347,13 @@ describe('taskSchedule', () => {
   });
 
   describe('issue-watcher (programmatic-I/O agent task)', () => {
-    it('ships as an enabled on-demand task with a 30-minute fallback and no persisted prompt', () => {
+    it('ships as an enabled on-demand task with a 30-minute fallback and a runtime-generated prompt', () => {
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('issue-watcher');
       expect(DEFAULT_TASK_INTERVALS['issue-watcher']).toMatchObject({
         type: INTERVAL_TYPES.ON_DEMAND, intervalMs: 30 * 60 * 1000, enabled: true, prompt: null
       });
       expect(DEFAULT_TASK_PROMPTS['issue-watcher']).toBeUndefined();
+      expect(TASK_TYPE_PROMPT_INFO['issue-watcher']).toMatchObject({ mode: 'runtime-generated' });
     });
 
     it('locks the reasoning-only throwaway-worktree posture', () => {
@@ -2043,6 +2047,33 @@ describe('taskSchedule', () => {
       const status = await getScheduleStatus()
 
       expect(status.improvementEnabled).toBe(false)
+    })
+
+    it('projects task summaries and explains hook-owned prompts', async () => {
+      mockSchedule()
+
+      const status = await getScheduleStatus()
+
+      expect(status.tasks['issue-watcher']).toMatchObject({
+        description: TASK_TYPE_DESCRIPTIONS['issue-watcher'],
+        promptMode: 'runtime-generated',
+        promptDescription: expect.stringContaining('deterministic GitHub gathering'),
+        invocation: { kind: 'direct', visibility: 'visible', userInvokable: true },
+      })
+      expect(status.tasks.security).toMatchObject({
+        description: TASK_TYPE_DESCRIPTIONS.security,
+        promptMode: 'template',
+        invocation: { kind: 'direct', visibility: 'visible', userInvokable: true },
+      })
+    })
+
+    it('keeps subsidiary-task visibility explicit instead of inferring it from task names', () => {
+      expect(Object.keys(TASK_TYPE_INVOCATION)).toEqual([])
+      for (const taskType of SELF_IMPROVEMENT_TASK_TYPES) {
+        expect(getTaskTypeInvocation(taskType), taskType).toEqual({
+          kind: 'direct', visibility: 'visible', userInvokable: true
+        })
+      }
     })
 
     it('hides shipped tasks whose required instance feature is disabled', async () => {

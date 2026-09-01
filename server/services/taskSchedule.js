@@ -42,6 +42,8 @@ import {
   INSTALL_WIDE_TASK_TYPES,
   MANAGED_AGENT_OPTIONS,
   getTaskTypeDescription,
+  getTaskTypeInvocation,
+  getTaskTypePromptInfo,
   enforceBranchReconcileBatch,
   enforceManagedAgentOptions
 } from './taskScheduleRegistry.js';
@@ -63,7 +65,8 @@ export {
 export {
   DEFAULT_BRANCHES_PER_AGENT, DEFAULT_TASK_INTERVALS, INSTALL_WIDE_TASK_TYPES,
   MANAGED_AGENT_OPTIONS, PERPETUAL_DRAIN_DISPATCH_CAP, SELF_IMPROVEMENT_TASK_TYPES,
-  TASK_TYPE_DESCRIPTIONS, stripManagedAgentOptionsFromOverride
+  TASK_TYPE_DESCRIPTIONS, TASK_TYPE_INVOCATION, TASK_TYPE_PROMPT_INFO,
+  getTaskTypeInvocation, getTaskTypePromptInfo, stripManagedAgentOptionsFromOverride
 } from './taskScheduleRegistry.js';
 export { loadSchedule } from './taskScheduleStore.js';
 export {
@@ -1142,6 +1145,10 @@ export async function triggerOnDemandTask(taskType, appId = null, { emit = true,
     if (!(await createFeatureGate()(tasks[taskType]))) {
       return { result: { error: `Task type '${taskType}' requires the '${tasks[taskType].feature}' feature` }, changed: false };
     }
+    const invocation = getTaskTypeInvocation(taskType);
+    if (origin === ON_DEMAND_ORIGINS.USER && !invocation.userInvokable) {
+      return { result: { error: `Task type '${taskType}' is managed by another automation and cannot be run manually` }, changed: false };
+    }
 
     // Reject if the master Improve toggle is off — request would be silently dropped downstream
     const state = await loadState();
@@ -1231,7 +1238,8 @@ export async function getScheduleStatus() {
   // Surface the master Improve toggle so the UI can disable Run Now affordances
   const [schedule, state] = await Promise.all([loadSchedule(), loadState()]);
   const featureEnabled = createFeatureGate();
-  const onDemandRequests = await getAvailableOnDemandRequests(schedule, featureEnabled);
+  const onDemandRequests = (await getAvailableOnDemandRequests(schedule, featureEnabled))
+    .filter(request => getTaskTypeInvocation(request.taskType).visibility !== 'hidden');
 
   const status = {
     lastUpdated: schedule.lastUpdated,
@@ -1249,7 +1257,10 @@ export async function getScheduleStatus() {
 
   for (const [taskType, interval] of Object.entries(schedule.tasks)) {
     if (!(await featureEnabled(interval))) continue;
+    const invocation = getTaskTypeInvocation(taskType);
+    if (invocation.visibility === 'hidden') continue;
     const execution = schedule.executions[`task:${taskType}`] || { lastRun: null, count: 0, perApp: {} };
+    const promptInfo = getTaskTypePromptInfo(taskType);
 
     // Get learning adjustment info
     const baseInterval = interval.type === 'daily' ? DAY : interval.type === 'weekly' ? WEEK : (interval.intervalMs || DAY);
@@ -1299,6 +1310,10 @@ export async function getScheduleStatus() {
       dataPoints: learningInfo.dataPoints,
       adjustedIntervalMs: learningInfo.adjustedIntervalMs,
       recommendation: learningInfo.recommendation,
+      description: getTaskTypeDescription(taskType),
+      promptMode: promptInfo.mode,
+      ...(promptInfo.description ? { promptDescription: promptInfo.description } : {}),
+      invocation,
       // Whether a "Run Now" with NO app is this type's real run (it sweeps every
       // managed app in one dispatch). Served from the server registry rather than
       // mirrored in client constants, so the UI cannot drift from the set the
@@ -1425,6 +1440,7 @@ export async function getUpcomingTasks(limit = 10) {
   for (const [taskType, interval] of Object.entries(schedule.tasks)) {
     if (!interval.enabled) continue;
     if (!(await featureEnabled(interval))) continue;
+    if (getTaskTypeInvocation(taskType).visibility === 'hidden') continue;
     if (interval.type === INTERVAL_TYPES.ON_DEMAND) continue;
 
     const check = await shouldRunTask(taskType, null, { featureEnabled });
