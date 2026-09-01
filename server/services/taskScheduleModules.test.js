@@ -14,9 +14,10 @@ describe('taskSchedule module boundaries', () => {
       ...['INTERVAL_TYPES', 'ON_DEMAND_ORIGINS', 'isRefillRequest']
         .map((name) => [name, constants[name]]),
       ...['DEFAULT_BRANCHES_PER_AGENT', 'DEFAULT_TASK_INTERVALS', 'MANAGED_AGENT_OPTIONS',
+        'MANAGED_APP_TARGET_TASK_TYPES',
         'PERPETUAL_DRAIN_DISPATCH_CAP', 'SELF_IMPROVEMENT_TASK_TYPES', 'TASK_TYPE_DESCRIPTIONS',
         'TASK_TYPE_INVOCATION', 'TASK_TYPE_PROMPT_INFO', 'getTaskTypeInvocation', 'getTaskTypePromptInfo',
-        'stripManagedAgentOptionsFromOverride'].map((name) => [name, registry[name]]),
+        'requiresManagedAppTarget', 'stripManagedAgentOptionsFromOverride'].map((name) => [name, registry[name]]),
       ...['FAILURE_BACKOFF_BASE_MS', 'FAILURE_BACKOFF_CAP_MS', 'FAILURE_PARK_THRESHOLD',
         'clearTaskTypeFailurePark', 'computeFailureBackoffMs', 'recordTaskTypeFailure',
         'recordTaskTypeSuccess'].map((name) => [name, backoff[name]]),

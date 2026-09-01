@@ -151,12 +151,14 @@ import {
   FAILURE_PARK_THRESHOLD,
   PROMPT_VERSIONS,
   DEFAULT_TASK_INTERVALS,
+  MANAGED_APP_TARGET_TASK_TYPES,
   MANAGED_AGENT_OPTIONS,
   stripManagedAgentOptionsFromOverride,
   TASK_TYPE_DESCRIPTIONS,
   TASK_TYPE_INVOCATION,
   TASK_TYPE_PROMPT_INFO,
   getTaskTypeInvocation,
+  requiresManagedAppTarget,
   REFERENCE_WATCH_AUDITED_VERSION,
   boundParkedUntil
 } from './taskSchedule.js'
@@ -280,6 +282,21 @@ describe('taskSchedule', () => {
     it('every install-wide type is a registered task type', () => {
       for (const t of INSTALL_WIDE_TASK_TYPES) {
         expect(SELF_IMPROVEMENT_TASK_TYPES).toContain(t)
+      }
+    })
+  })
+
+  describe('managed-app target task types', () => {
+    it('keeps app-required scope explicit and separate from install-wide scope', () => {
+      expect([...MANAGED_APP_TARGET_TASK_TYPES]).toEqual(['pr-reviewer'])
+      expect(requiresManagedAppTarget('pr-reviewer')).toBe(true)
+      expect(requiresManagedAppTarget('security')).toBe(false)
+      expect(requiresManagedAppTarget('repo-sync')).toBe(false)
+    })
+
+    it('only names registered task types', () => {
+      for (const taskType of MANAGED_APP_TARGET_TASK_TYPES) {
+        expect(SELF_IMPROVEMENT_TASK_TYPES).toContain(taskType)
       }
     })
   })
@@ -1928,6 +1945,18 @@ describe('taskSchedule', () => {
       expect(result.taskType).toBe('security')
       expect(result.appId).toBe('app-1')
       expect(result.origin).toBe(ON_DEMAND_ORIGINS.USER)
+    })
+
+    it('rejects an app-required task without a managed app target', async () => {
+      mockSchedule({
+        tasks: { 'pr-reviewer': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true } }
+      })
+
+      const result = await triggerOnDemandTask('pr-reviewer')
+
+      expect(result.error).toMatch(/requires a managed app target/i)
+      expect(recordUserAction).not.toHaveBeenCalled()
+      expect((await getOnDemandRequests()).filter(r => r.taskType === 'pr-reviewer')).toHaveLength(0)
     })
 
     it('should reject unknown task types instead of silently queuing them', async () => {

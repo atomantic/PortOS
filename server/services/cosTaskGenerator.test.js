@@ -273,7 +273,7 @@ describe('isConfiguredApprovalRequired', () => {
   it('both generators stamp approvalReason onto metadata so the hint survives COS-TASKS.md', () => {
     const selfStart = GEN_SRC.indexOf('export async function generateSelfImprovementTaskForType');
     const appStart = GEN_SRC.indexOf('export async function generateManagedAppImprovementTaskForType');
-    expect(GEN_SRC.slice(selfStart, selfStart + 4500)).toContain('stampApprovalReason(metadata, approval)');
+    expect(GEN_SRC.slice(selfStart, appStart)).toContain('stampApprovalReason(metadata, approval)');
     expect(GEN_SRC.slice(appStart, appStart + 12000)).toContain('stampApprovalReason(metadata, approval)');
   });
 
@@ -1746,6 +1746,14 @@ describe('the drain cap has exactly one implementation, at the choke point', () 
 });
 
 describe('pr-reviewer security preflight wiring', () => {
+  it('does not allow the global generator to bypass the managed-app target boundary', () => {
+    const start = GEN_SRC.indexOf('export async function generateSelfImprovementTaskForType');
+    const body = GEN_SRC.slice(start, start + 1800);
+    expect(body).toContain('taskSchedule.requiresManagedAppTarget(taskType)');
+    expect(body).toContain('Skipping ${taskType} without a managed app target');
+    expect(body).toContain('return null;');
+  });
+
   it('runs the direct preflight before stage gates and resolves the next-stage prompt', () => {
     const start = GEN_SRC.indexOf('export async function generateManagedAppImprovementTaskForType');
     const body = GEN_SRC.slice(start, GEN_SRC.indexOf('return task;', start));

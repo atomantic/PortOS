@@ -1837,6 +1837,13 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
   const taskSchedule = await import('./taskSchedule.js');
   const { getTaskPrompt } = await import('./taskPromptService.js');
   const interval = await taskSchedule.getTaskInterval(taskType);
+  // App-scoped task types must never fall through this global lane. The
+  // on-demand request gate normally rejects a missing appId, but scheduled
+  // rotation and older callers can still reach the generator directly.
+  if (taskSchedule.requiresManagedAppTarget(taskType)) {
+    emitLog('warn', `Skipping ${taskType} without a managed app target`);
+    return null;
+  }
   let description = await getTaskPrompt(taskType);
 
   const metadata = {

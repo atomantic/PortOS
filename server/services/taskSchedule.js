@@ -40,10 +40,12 @@ import {
 import {
   DEFAULT_TASK_INTERVALS,
   INSTALL_WIDE_TASK_TYPES,
+  MANAGED_APP_TARGET_TASK_TYPES,
   MANAGED_AGENT_OPTIONS,
   getTaskTypeDescription,
   getTaskTypeInvocation,
   getTaskTypePromptInfo,
+  requiresManagedAppTarget,
   enforceBranchReconcileBatch,
   enforceManagedAgentOptions
 } from './taskScheduleRegistry.js';
@@ -64,9 +66,11 @@ export {
 } from './taskScheduleConstants.js';
 export {
   DEFAULT_BRANCHES_PER_AGENT, DEFAULT_TASK_INTERVALS, INSTALL_WIDE_TASK_TYPES,
+  MANAGED_APP_TARGET_TASK_TYPES,
   MANAGED_AGENT_OPTIONS, PERPETUAL_DRAIN_DISPATCH_CAP, SELF_IMPROVEMENT_TASK_TYPES,
   TASK_TYPE_DESCRIPTIONS, TASK_TYPE_INVOCATION, TASK_TYPE_PROMPT_INFO,
-  getTaskTypeInvocation, getTaskTypePromptInfo, stripManagedAgentOptionsFromOverride
+  getTaskTypeInvocation, getTaskTypePromptInfo, requiresManagedAppTarget,
+  stripManagedAgentOptionsFromOverride
 } from './taskScheduleRegistry.js';
 export { loadSchedule } from './taskScheduleStore.js';
 export {
@@ -1148,6 +1152,9 @@ export async function triggerOnDemandTask(taskType, appId = null, { emit = true,
     const invocation = getTaskTypeInvocation(taskType);
     if (origin === ON_DEMAND_ORIGINS.USER && !invocation.userInvokable) {
       return { result: { error: `Task type '${taskType}' is managed by another automation and cannot be run manually` }, changed: false };
+    }
+    if (requiresManagedAppTarget(taskType) && !appId) {
+      return { result: { error: `Task type '${taskType}' requires a managed app target` }, changed: false };
     }
 
     // Reject if the master Improve toggle is off — request would be silently dropped downstream

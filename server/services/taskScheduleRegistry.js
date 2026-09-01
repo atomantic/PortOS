@@ -200,6 +200,16 @@ export const DEFAULT_BRANCHES_PER_AGENT = 3;
  */
 export const INSTALL_WIDE_TASK_TYPES = new Set(['repo-sync', 'user-action-review']);
 
+// Task types that only make sense when pointed at a managed app. Keeping this
+// alongside the install-wide registry gives both the on-demand request gate
+// and the global generator one target-scope contract; neither has to infer
+// scope from a task name or from which generator happened to receive a call.
+export const MANAGED_APP_TARGET_TASK_TYPES = new Set(['pr-reviewer']);
+
+export function requiresManagedAppTarget(taskType) {
+  return MANAGED_APP_TARGET_TASK_TYPES.has(taskType);
+}
+
 // Fresh installs expose every task as an enabled manual action. The on-demand
 // type keeps provider work silent until the user explicitly runs a task, while
 // retaining timing metadata such as custom intervals and recheck settings if
