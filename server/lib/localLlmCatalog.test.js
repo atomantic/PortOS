@@ -165,6 +165,21 @@ describe('localLlmCatalog', () => {
     it('ships the refreshed local models for reasoning, coding, and multilingual categories', () => {
       const ollama = getCatalog('ollama');
       expect(ollama.find((m) => m.key === 'deepseek-r1-8b')?.id).toBe('deepseek-r1:8b');
+      expect(ollama.find((m) => m.key === 'gemma3-27b-it')).toMatchObject({
+        id: 'gemma3:27b',
+        category: 'general',
+        recommendedFor: expect.arrayContaining(['general', 'reasoning']),
+        featured: { label: 'Recommended for Security Scan' },
+        repository: 'google/gemma-3-27b-it',
+        gated: true,
+        capabilities: ['chat', 'vision'],
+        contextLength: 131072,
+      });
+      expect(ollama.find((m) => m.key === 'gemma3-27b-it').capabilities).not.toContain('tools');
+      // Gemma 4 is newer, but its native function-calling capability makes it
+      // ineligible for the read-only Security Scan model pin.
+      expect(ollama.find((m) => m.key === 'gemma4-12b').capabilities).toContain('tools');
+      expect(ollama.find((m) => m.key === 'gpt-oss-20b').capabilities).toContain('tools');
       expect(ollama.find((m) => m.key === 'qwen2.5-coder-7b')?.id).toBe('qwen2.5-coder:7b');
       expect(ollama.find((m) => m.key === 'phi-4-14b')?.id).toBe('phi4');
       expect(ollama.find((m) => m.key === 'aya-expanse-8b')?.id).toBe('aya-expanse:8b');

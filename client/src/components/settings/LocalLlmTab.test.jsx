@@ -469,6 +469,31 @@ describe('LocalLlmTab recommendations', () => {
     await waitFor(() => expect(screen.getByText('Qwen3.8 27B')).toBeTruthy());
   });
 
+  it('highlights the catalog recommendation for the Security Scan', async () => {
+    getLocalLlmCatalog.mockResolvedValue({
+      models: [{
+        id: 'gemma3:27b',
+        key: 'gemma3-27b-it',
+        name: 'Gemma 3 27B IT',
+        category: 'general',
+        recommendedFor: ['general', 'reasoning'],
+        featured: {
+          label: 'Recommended for Security Scan',
+          description: 'A verified local text model without native tool capability.',
+        },
+        params: '27B',
+        size: '17 GB',
+        description: 'Long-context local analysis.',
+        capabilities: ['chat', 'vision'],
+      }],
+    });
+
+    await renderTab('library');
+
+    expect(await screen.findByText('Recommended for Security Scan')).toBeInTheDocument();
+    expect(screen.getByText('A verified local text model without native tool capability.')).toBeInTheDocument();
+  });
+
   it('offers redownload on an already-installed catalog card', async () => {
     installLocalLlmModel.mockResolvedValue({ success: true });
     getLocalLlmCatalog.mockResolvedValue({

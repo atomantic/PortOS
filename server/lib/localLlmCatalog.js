@@ -292,9 +292,30 @@ export const LOCAL_LLM_CATALOG = [
     size: '12 GB',
     family: 'gpt-oss',
     description: 'Open-weights 20B model — the default local thinking model.',
-    capabilities: ['chat', 'reasoning'],
+    capabilities: ['chat', 'reasoning', 'tools'],
     ollama: 'gpt-oss:20b',
     lmstudio: 'lmstudio-community/gpt-oss-20b-GGUF'
+  },
+  {
+    key: 'gemma3-27b-it',
+    name: 'Gemma 3 27B IT',
+    category: 'general',
+    recommendedFor: ['general', 'reasoning'],
+    featured: {
+      label: 'Recommended for Security Scan',
+      description: 'Purpose-specific pick for reviewing untrusted contributor diffs: long-context local text analysis in the verified Ollama build, with no native tool capability to expose.'
+    },
+    params: '27B',
+    size: '17 GB',
+    family: 'gemma',
+    description: "Google's Gemma 3 27B instruction model — long-context local analysis for code-review findings without native tool calling.",
+    note: 'The Security Scan verifies Ollama capabilities before every run and remains read-only; Hugging Face’s official Gemma repository requires accepting its terms.',
+    repository: 'google/gemma-3-27b-it',
+    gated: true,
+    capabilities: ['chat', 'vision'],
+    context: 131072,
+    ollama: 'gemma3:27b',
+    lmstudio: 'lmstudio-community/gemma-3-27b-it-GGUF'
   },
   // ── Large general-purpose / long-context tier (32–128GB unified memory) ──
   // Best suited for whole-manuscript editorial review, where prose quality and a
