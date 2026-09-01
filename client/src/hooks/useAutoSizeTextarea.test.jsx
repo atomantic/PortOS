@@ -68,16 +68,11 @@ describe('useAutoSizeTextarea', () => {
     const el = document.createElement('textarea');
     const externalRef = { current: null };
 
-    renderHook(() => {
-      const [ref] = useAutoSizeTextarea('text', externalRef);
-      ref(el);
-      return ref;
-    });
-
+    const { result } = renderHook(() => useAutoSizeTextarea('text', externalRef));
+    const [ref] = result.current;
+    act(() => { ref(el); });
     expect(externalRef.current).toBe(el);
-
-    const [ref] = renderHook(() => useAutoSizeTextarea('text', externalRef)).result.current;
-    ref(null);
+    act(() => { ref(null); });
     expect(externalRef.current).toBeNull();
   });
 

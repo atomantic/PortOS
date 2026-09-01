@@ -628,7 +628,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
                 handleAddTask();
               }
             }}
-            className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
+            className="w-full sm:flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
             aria-required="true"
           />
           <div className="flex gap-2">
