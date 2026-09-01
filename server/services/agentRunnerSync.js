@@ -12,6 +12,7 @@
  */
 
 import { connectTuiSessionViaRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
+import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
 import { isAgentOwnedLocally, runnerAgents } from './agentState.js';
 import { AGENT_RECORD_UNREADABLE, isLiveAgentRecord, readAgentRecordOrUnreadable } from './cosAgentLifecycle.js';
@@ -65,6 +66,10 @@ export async function syncRunnerAgents() {
 
   let syncedCount = 0;
   for (const agent of agents) {
+    // A stale runner handle (listed, process gone) is not a survivor to
+    // re-adopt — adopting it would put it in runnerAgents and the orphan
+    // sweep would treat that local map as ownership. Live rows still sync.
+    if (!(await runnerEntryShieldsRunningRecord(agent))) continue;
     // Only sync if this process isn't already driving it
     if (!isAgentOwnedLocally(agent.id)) {
       const task = taskMap.get(agent.taskId);

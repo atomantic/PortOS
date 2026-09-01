@@ -17,6 +17,7 @@ import { cosEvents } from './cosEvents.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { loadState, saveState, withStateLock, readAgentsStateForSafetyCheck, AGENTS_DIR } from './cosState.js';
 import { atomicWrite, ensureDir, readFileTail, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { repairCodexTaskSummary } from './codexSummaryRepair.js';
 import { loadAgentIndex, saveAgentIndex, getAgentDir } from './cosAgentIndex.js';
@@ -665,7 +666,11 @@ export async function cleanupZombieAgents() {
   // Also check with the CoS runner for agents it's actively tracking
   const { getActiveAgentsFromRunner } = await import('./cosRunnerClient.js');
   const runnerAgents = await getActiveAgentsFromRunner().catch(() => []);
-  const runnerAgentIds = new Set(runnerAgents.map(a => a.id));
+  const runnerById = new Map(
+    (Array.isArray(runnerAgents) ? runnerAgents : [])
+      .filter((row) => row?.id)
+      .map((row) => [row.id, row]),
+  );
 
   return withStateLock(async () => {
     const state = await loadState();
@@ -673,8 +678,11 @@ export async function cleanupZombieAgents() {
     const cleaned = [];
 
     for (const agent of runningAgents) {
-      // Skip if tracked in local maps or runner
-      if (activeIds.includes(agent.id) || runnerAgentIds.has(agent.id)) {
+      // Local maps are this process's own handles. A runner listing is only a
+      // shield when corroborated (live pid or processActive from onExit/pid
+      // probe) — presence in GET /agents is a handle, not a liveness check.
+      if (activeIds.includes(agent.id)) continue;
+      if (await runnerEntryShieldsRunningRecord(runnerById.get(agent.id), isPidAlive)) {
         continue;
       }
 

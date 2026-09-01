@@ -67,6 +67,8 @@ describe('syncRunnerAgents runner-owned TUI recovery', () => {
       pid: 1234,
       startedAt: Date.now(),
       kind: 'tui',
+      processActive: true,
+      liveness: 'pty',
       sessionId: 'tui-session-1',
       command: 'codex',
       workspacePath: '/tmp/example-workspace',
@@ -102,7 +104,8 @@ describe('syncRunnerAgents runner-owned TUI recovery', () => {
       metadata: { runId: 'run-abc123', model: 'claude-opus-5' },
     });
     vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([{
-      id: 'agent-1', taskId: 'task-1', pid: 1234, startedAt: Date.now(), kind: 'cli',
+      id: 'agent-1', taskId: 'task-1', pid: 1234, startedAt: Date.now(),
+      kind: 'cli', processActive: true, liveness: 'pid',
     }]);
 
     await expect(syncRunnerAgents()).resolves.toBe(1);
@@ -121,7 +124,8 @@ describe('syncRunnerAgents runner-owned TUI recovery', () => {
     // event lands. The run stays open, which the warning line says out loud.
     vi.mocked(readAgentRecordOrUnreadable).mockResolvedValue(AGENT_RECORD_UNREADABLE);
     vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([{
-      id: 'agent-2', taskId: 'task-1', pid: 99, startedAt: Date.now(), kind: 'cli',
+      id: 'agent-2', taskId: 'task-1', pid: 99, startedAt: Date.now(),
+      kind: 'cli', processActive: true, liveness: 'pid',
     }]);
 
     await expect(syncRunnerAgents()).resolves.toBe(1);
@@ -179,7 +183,7 @@ describe('syncRunnerAgents runner-owned TUI recovery', () => {
         command: 'claude',
         workspacePath: '/tmp/example-workspace',
       },
-      { id: 'agent-orphan', taskId: 'task-1', pid: 8765, startedAt: Date.now(), kind: 'cli' },
+      { id: 'agent-orphan', taskId: 'task-1', pid: 8765, startedAt: Date.now(), kind: 'cli', processActive: true, liveness: 'pid' },
     ]);
 
     await expect(syncRunnerAgents()).resolves.toBe(1);
@@ -190,6 +194,21 @@ describe('syncRunnerAgents runner-owned TUI recovery', () => {
     // re-attaching would hand the same PTY two readers.
     expect(connectTuiSessionViaRunner).not.toHaveBeenCalled();
     expect(shellService.registerExternalSession).not.toHaveBeenCalled();
+  });
+
+  it('does not re-adopt a stale runner handle whose process is gone', async () => {
+    vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([{
+      id: 'agent-stale',
+      taskId: 'task-1',
+      pid: 2147483646,
+      startedAt: Date.now(),
+      kind: 'cli',
+      processActive: false,
+      liveness: 'pid',
+    }]);
+
+    await expect(syncRunnerAgents()).resolves.toBe(0);
+    expect(runnerAgents.has('agent-stale')).toBe(false);
   });
 });
 
@@ -204,7 +223,8 @@ describe('syncRunnerAgents — reconnect boundary (#4540)', () => {
 
   const survivingTui = {
     id: 'agent-1', taskId: 'task-1', pid: 42, startedAt: Date.now(),
-    kind: 'tui', sessionId: 'tui-session-1', workspacePath: '/repo/worktree', command: 'claude',
+    kind: 'tui', processActive: true, liveness: 'pty',
+    sessionId: 'tui-session-1', workspacePath: '/repo/worktree', command: 'claude',
   };
 
   it('records the PTY re-attach separately from the run re-adoption', async () => {
