@@ -18575,7 +18575,7 @@
         },
         {
           "source": "server/routes/providers.js",
-          "line": 169
+          "line": 170
         }
       ]
     },
@@ -18590,7 +18590,7 @@
         },
         {
           "source": "server/routes/providers.js",
-          "line": 750
+          "line": 767
         }
       ]
     },
@@ -18616,7 +18616,7 @@
         },
         {
           "source": "server/routes/providers.js",
-          "line": 704
+          "line": 721
         }
       ]
     },
@@ -18631,7 +18631,7 @@
         },
         {
           "source": "server/routes/providers.js",
-          "line": 716
+          "line": 733
         }
       ]
     },
@@ -18653,7 +18653,7 @@
       "sources": [
         {
           "source": "server/routes/providers.js",
-          "line": 664
+          "line": 681
         }
       ]
     },
@@ -18664,7 +18664,7 @@
       "sources": [
         {
           "source": "server/routes/providers.js",
-          "line": 672
+          "line": 689
         }
       ]
     },
@@ -18686,7 +18686,7 @@
       "sources": [
         {
           "source": "server/routes/providers.js",
-          "line": 683
+          "line": 700
         }
       ]
     },
@@ -18697,7 +18697,7 @@
       "sources": [
         {
           "source": "server/routes/providers.js",
-          "line": 678
+          "line": 695
         }
       ]
     },
@@ -18708,7 +18708,7 @@
       "sources": [
         {
           "source": "server/routes/providers.js",
-          "line": 697
+          "line": 714
         }
       ]
     },
@@ -18723,7 +18723,7 @@
         },
         {
           "source": "server/routes/providers.js",
-          "line": 189
+          "line": 190
         }
       ]
     },
@@ -18738,7 +18738,7 @@
         },
         {
           "source": "server/routes/providers.js",
-          "line": 196
+          "line": 197
         }
       ]
     },
@@ -18749,7 +18749,7 @@
       "sources": [
         {
           "source": "server/routes/providers.js",
-          "line": 263
+          "line": 264
         }
       ]
     },
@@ -18760,7 +18760,7 @@
       "sources": [
         {
           "source": "server/routes/providers.js",
-          "line": 275
+          "line": 276
         }
       ]
     },
@@ -18771,7 +18771,7 @@
       "sources": [
         {
           "source": "server/routes/providers.js",
-          "line": 284
+          "line": 285
         }
       ]
     },
@@ -18782,7 +18782,18 @@
       "sources": [
         {
           "source": "server/routes/providers.js",
-          "line": 290
+          "line": 307
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/providers/codex/models",
+      "mountPath": "/api/providers",
+      "sources": [
+        {
+          "source": "server/routes/providers.js",
+          "line": 302
         }
       ]
     },
@@ -18793,7 +18804,7 @@
       "sources": [
         {
           "source": "server/routes/providers.js",
-          "line": 629
+          "line": 646
         }
       ]
     },
@@ -18804,7 +18815,7 @@
       "sources": [
         {
           "source": "server/routes/providers.js",
-          "line": 624
+          "line": 641
         }
       ]
     },
@@ -18815,7 +18826,7 @@
       "sources": [
         {
           "source": "server/routes/providers.js",
-          "line": 240
+          "line": 241
         }
       ]
     },
@@ -18826,7 +18837,7 @@
       "sources": [
         {
           "source": "server/routes/providers.js",
-          "line": 542
+          "line": 559
         }
       ]
     },
@@ -18837,7 +18848,7 @@
       "sources": [
         {
           "source": "server/routes/providers.js",
-          "line": 444
+          "line": 461
         }
       ]
     },
@@ -18848,7 +18859,7 @@
       "sources": [
         {
           "source": "server/routes/providers.js",
-          "line": 221
+          "line": 222
         }
       ]
     },
@@ -18859,7 +18870,7 @@
       "sources": [
         {
           "source": "server/routes/providers.js",
-          "line": 617
+          "line": 634
         }
       ]
     },
@@ -18874,7 +18885,7 @@
         },
         {
           "source": "server/routes/providers.js",
-          "line": 209
+          "line": 210
         }
       ]
     },
@@ -18885,7 +18896,7 @@
       "sources": [
         {
           "source": "server/routes/providers.js",
-          "line": 651
+          "line": 668
         }
       ]
     },
@@ -23853,8 +23864,8 @@
   ],
   "stats": {
     "mounts": 147,
-    "operations": 2152,
-    "declarations": 2155,
+    "operations": 2153,
+    "declarations": 2156,
     "sourceFiles": 229
   }
 }

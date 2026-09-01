@@ -631,6 +631,12 @@ export function createProviderService(config = {}) {
         ...modelContextWindowPatch(providerData.modelContextWindows),
         timeout: providerData.timeout || 300000,
         enabled: providerData.enabled !== false,
+        // Subscription text-transport capability + its explicit opt-in. Only
+        // persisted when set, so every existing HTTP/CLI record stays byte-identical
+        // and an older install reading this file sees nothing new.
+        ...(typeof providerData.textTransport === 'string' && providerData.textTransport
+          ? { textTransport: providerData.textTransport } : {}),
+        ...(providerData.textTransportEnabled === true ? { textTransportEnabled: true } : {}),
         // Claude Ollama marker — preserve so adopting the sample via POST drives
         // ollama-backed model refresh (see isOllamaBackedProvider).
         ...(providerData.ollamaBacked === true ? { ollamaBacked: true } : {}),

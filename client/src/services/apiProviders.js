@@ -73,3 +73,11 @@ export const cancelCodexLogin = (loginId, options) => request('/providers/codex/
   ...options,
 });
 export const codexLogout = (options) => request('/providers/codex/account/logout', { method: 'POST', ...options });
+// The models this subscription may run, from the app-server catalog (#5590).
+// Resolves to { models, fetchedAt, error }. `models: null` means NEVER FETCHED
+// and `[]` means fetched-and-empty; when `error` is set the list is the
+// last-known-good one, so render that rather than emptying the picker.
+export const getCodexModels = (options = {}) => {
+  const { fresh = false, ...rest } = options;
+  return request(`/providers/codex/models${fresh ? '?fresh=1' : ''}`, rest);
+};

@@ -69,6 +69,7 @@
       "heavyModel": "gpt-5.6-sol",
       "timeout": 300000,
       "enabled": true,
+      "textTransport": "codex-app-server",
       "envVars": {}
     },
     "antigravity-cli": {

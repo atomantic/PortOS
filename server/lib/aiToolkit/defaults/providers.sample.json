@@ -422,6 +422,7 @@
       "contextWindow": 1000000,
       "timeout": 300000,
       "enabled": true,
+      "textTransport": "codex-app-server",
       "envVars": {},
       "secretEnvVars": []
     },

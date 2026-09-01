@@ -128,6 +128,17 @@ export const providerSchema = z.object({
   modelContextWindows: z.record(z.number().int().min(512).max(33554432)).optional(),
   timeout: z.number().int().min(MIN_TIMEOUT).max(MAX_TIMEOUT).optional(),
   enabled: z.boolean().optional(),
+  // A CLI/TUI provider that can ALSO serve plain text through a non-HTTP
+  // transport — today only `codex-app-server`, the ChatGPT-subscription
+  // endpoint. A string rather than a boolean so a second transport is a new
+  // value instead of a second flag that can contradict the first. Declaring it
+  // only ADVERTISES the capability.
+  textTransport: z.enum(['codex-app-server']).nullable().optional(),
+  // The explicit opt-in that makes the advertised transport usable. Separate
+  // from `enabled` (which governs the CLI harness) and defaulted off, so a
+  // fresh install never bills a subscription for a background feature the user
+  // has not knowingly pointed at it.
+  textTransportEnabled: z.boolean().optional(),
   // Marks a `claude` CLI/TUI provider whose ANTHROPIC_BASE_URL points at a
   // local Ollama daemon — the "Claude Ollama" pattern. Drives model refresh to
   // pull tool-use-capable Ollama models instead of the static Anthropic list.

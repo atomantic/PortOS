@@ -43,6 +43,9 @@ export const COOLDOWN_MS_BY_CATEGORY = {
   [ERROR_CATEGORIES.UNKNOWN]: 60 * 1000,
 };
 export const DEFAULT_COOLDOWN_MS = 60 * 1000;
+// A usage limit with no parsed reset window. Matches QUOTA_EXCEEDED's hour:
+// both mean "the plan is spent", and retrying inside the hour is futile.
+export const DEFAULT_USAGE_LIMIT_COOLDOWN_MS = 60 * 60 * 1000;
 
 // Categories the tiered cascade classifies as schema/type (mirrors
 // autoFixer.CATEGORY_TO_TIER's SCHEMA_TYPE entries; kept out of the CoS stack so
@@ -102,4 +105,31 @@ export function resolveProviderBench(analysis) {
     message,
     waitTimeMs: COOLDOWN_MS_BY_CATEGORY[category] ?? DEFAULT_COOLDOWN_MS,
   };
+}
+
+/**
+ * How long a bench should actually last, in milliseconds.
+ *
+ * `resolveProviderBench` deliberately returns the `usage-limit` marker WITHOUT a
+ * duration, because `providerStatus.markUsageLimit` parses its own window out of
+ * the provider's error text. A caller that benches something other than a whole
+ * provider record — the ChatGPT-subscription text transport, say — has no such
+ * parser, and needs a number.
+ *
+ * `resetsAt` is the provider's own stated recovery time when one is known (Codex
+ * reports it on the rate-limit window). It wins over the category table because
+ * it is the truth rather than an estimate, but only when it is a real future
+ * timestamp: a past or unparseable value would otherwise resolve to "unbench
+ * immediately", which is exactly the failure a bench exists to prevent.
+ *
+ * @param {ReturnType<typeof resolveProviderBench>} bench
+ * @param {{ resetsAt?: string|number|Date|null, now?: number }} [options]
+ * @returns {number} milliseconds; `0` when `bench` is null (don't bench)
+ */
+export function resolveBenchWaitMs(bench, { resetsAt = null, now = Date.now() } = {}) {
+  if (!bench) return 0;
+  const resetMs = resetsAt == null ? NaN : new Date(resetsAt).getTime();
+  if (Number.isFinite(resetMs) && resetMs > now) return resetMs - now;
+  if (bench.marker === 'usage-limit') return DEFAULT_USAGE_LIMIT_COOLDOWN_MS;
+  return bench.waitTimeMs ?? DEFAULT_COOLDOWN_MS;
 }

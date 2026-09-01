@@ -31,6 +31,7 @@ import {
   cancelCodexChatGptLogin,
   peekCodexAccountReadiness,
   codexLogout,
+  listCodexModels,
   getCodexAccountReadiness,
   startCodexChatGptLogin,
 } from '../services/codexAppServer.js';
@@ -284,6 +285,22 @@ export function createPortOSProviderRoutes(aiToolkit) {
   router.post('/codex/account/login/cancel', asyncHandler(async (req, res) => {
     const { loginId } = validateRequest(codexLoginCancelSchema, req.body ?? {});
     res.json({ readiness: await cancelCodexChatGptLogin(loginId) });
+  }));
+
+  /**
+   * Which models this ChatGPT subscription may run, from the app-server's own
+   * catalog rather than a hard-coded list — so the picker reflects the account's
+   * actual plan.
+   *
+   * LAZY, like `/codex/account`: only an explicit page fetch reaches it.
+   * `?fresh=1` skips the TTL after a plan change or a sign-in.
+   *
+   * `models: null` means NEVER FETCHED, `[]` means fetched-and-empty, and a read
+   * that fails returns the last-known-good list alongside `error` — the client
+   * must not repaint an empty picker because one call timed out.
+   */
+  router.get('/codex/models', asyncHandler(async (req, res) => {
+    res.json(await listCodexModels({ fresh: req.query.fresh === '1' }));
   }));
 
   /** Sign out. Codex drops its own credentials; PortOS has none to clear. */
