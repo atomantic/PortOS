@@ -14,6 +14,7 @@ export const TABS = [
   { id: 'api-access', label: 'API Access', to: '/settings/api-access' },
   { id: 'autofixer', label: 'Autofixer', to: '/settings/autofixer' },
   { id: 'backup', label: 'Backup', to: '/settings/backup' },
+  { id: 'credentials', label: 'Credentials', to: '/settings/credentials' },
   { id: 'database', label: 'Database', to: '/settings/database' },
   { id: 'features', label: 'Features', to: '/settings/features' },
   { id: 'general', label: 'General', to: '/settings/general' },

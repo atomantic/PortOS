@@ -63,7 +63,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiSchedules.js` | Automation schedules. |
 | `apiQuotaBurn.js` | Quota Burn plan + live status, the job-type catalog its config form renders, and manual runs (`getQuotaBurn`/`getQuotaBurnCatalog`/`saveQuotaBurn`/`runQuotaBurn`), plus `rearmQuotaBurn` to put spent `run once` steps back into the rotation. |
 | `apiRapidReader.js` | Rapid Reader's optional author-hosted Accelerando loader and machine-local shelf API. |
-| `apiSystem.js` | System info (CPU/memory/ports/alerts/active processing and local hardware capabilities) + D&D-style character sheet getter, plus the usage cost report and explicit historical reconciliation (`getUsage`, `getProviderUsage`, `getUsageBackfillStatus`/`startUsageBackfill`, `updateSubscriptionCosts` for the subscription-vs-API savings comparison, `updateUsageFleetBilling` to exclude an API-billed federated instance from Across Instances totals). |
+| `apiSystem.js` | System info (CPU/memory/ports/alerts/active processing and local hardware capabilities) + D&D-style character sheet getter, plus the usage cost report and explicit historical reconciliation (`getUsage`, `getProviderUsage`, `getUsageBackfillStatus`/`startUsageBackfill`, `updateSubscriptionCosts` for the subscription-vs-API savings comparison, `updateUsageFleetBilling` to exclude an API-billed federated instance from Across Instances totals). Also `getCredentialInventory` (`GET /settings/credentials`) — presence and source of each PortOS credential, never a value. |
 | `apiAuth.js` | Optional login password — status, login, set/clear password. |
 | `apiLoops.js` | Scheduled loops. |
 

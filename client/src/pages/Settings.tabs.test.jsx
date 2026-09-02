@@ -16,6 +16,9 @@ vi.mock('../components/settings/GeneralTab', () => ({
 vi.mock('../components/settings/InstanceFeaturesTab', () => ({
   default: () => <div data-testid="instance-features-tab" />,
 }));
+vi.mock('../components/settings/CredentialsTab', () => ({
+  default: () => <div data-testid="credentials-tab" />,
+}));
 
 const Settings = (await import('./Settings')).default;
 
@@ -49,5 +52,19 @@ describe('Settings — MortalLoom tab', () => {
   it('marks MortalLoom as part of the health-tracking feature', () => {
     const tab = TABS.find(t => t.id === 'mortalloom');
     expect(tab).toMatchObject({ to: '/settings/mortalloom', feature: 'health' });
+  });
+});
+
+describe('Settings — Credentials tab', () => {
+  it('is listed in the settings sub-nav', () => {
+    const tab = TABS.find(t => t.id === 'credentials');
+    expect(tab?.to).toBe('/settings/credentials');
+  });
+
+  it('routes /settings/credentials to the credential inventory', async () => {
+    renderTab('/settings/credentials');
+    await act(async () => {});
+    expect(screen.getByTestId('credentials-tab')).toBeTruthy();
+    expect(screen.queryByTestId('general-tab')).toBeNull();
   });
 });

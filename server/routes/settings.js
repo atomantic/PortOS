@@ -12,6 +12,7 @@ import {
 } from '../services/mediaJobQueue/index.js';
 import { assertMediaRoutingConfig } from '../services/federatedMedia/routingPolicy.js';
 import { assertConfiguredEidoverseInstalled, getInstanceFeatures, updateEidoverseWorldsRepo, updateEidoverseWorldsSource, updateInstanceFeature } from '../services/instanceFeatures.js';
+import { getCredentialInventory } from '../services/credentialInventory.js';
 import { installEidoverse } from '../services/eidoverse.js';
 import { ensureEidoverseHost } from '../services/eidoverseHost.js';
 import { isGitHubRepoUrl } from '../lib/repoUrl.js';
@@ -167,6 +168,13 @@ router.get('/ai-assignments', asyncHandler(async (_req, res) => {
 // GET /api/settings/features
 router.get('/features', asyncHandler(async (_req, res) => {
   res.json(await getInstanceFeatures());
+}));
+
+// GET /api/settings/credentials
+// Presence + source only. Never a value or masked prefix — the page links out
+// to the existing per-integration tab to enter a secret.
+router.get('/credentials', asyncHandler(async (_req, res) => {
+  res.json(await getCredentialInventory());
 }));
 
 // POST /api/settings/features/eidoverse/install

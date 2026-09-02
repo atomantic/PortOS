@@ -70,6 +70,7 @@ export const syncPortosFork = (opts = {}, requestOpts = {}) => request('/update/
 // Settings
 export const getSettings = (options) => request('/settings', options);
 export const getInstanceFeatures = (options) => request('/settings/features', options);
+export const getCredentialInventory = (options) => request('/settings/credentials', options);
 export const updateInstanceFeature = (featureId, enabled, options = {}) => request(`/settings/features/${encodeURIComponent(featureId)}`, {
   method: 'PUT',
   body: JSON.stringify({ enabled }),

@@ -266,6 +266,7 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.devtools.api-explorer', path: '/api-reference/catalog', label: 'API Explorer', section: 'Dev Tools', aliases: ['api-explorer', 'api-reference', 'swagger-ui', 'rest-reference'], keywords: ['openapi', 'rest', 'endpoints', 'routes', 'agent tools', 'contracts', 'developer docs'] },
   { id: 'nav.settings.autofixer', path: '/settings/autofixer', label: 'Autofixer', section: 'Settings', aliases: ['autofixer', 'settings-autofixer', 'auto-fixer'], keywords: ['crash', 'fix', 'pm2', 'repair', 'ai provider', 'restart'] },
   { id: 'nav.settings.backup', path: '/settings/backup', label: 'Backup', section: 'Settings', aliases: ['backup', 'settings-backup'] },
+  { id: 'nav.settings.credentials', path: '/settings/credentials', label: 'Credentials', section: 'Settings', aliases: ['settings-credentials', 'credentials', 'api-keys', 'tokens'], keywords: ['configured', 'unconfigured', 'env', 'huggingface', 'civitai', 'jira', 'datadog', 'telegram'] },
   { id: 'nav.settings.database', path: '/settings/database', label: 'Database', section: 'Settings', aliases: ['settings-database', 'database'] },
   { id: 'nav.settings.features', path: '/settings/features', label: 'Features', section: 'Settings', aliases: ['settings-features', 'instance-features', 'feature-usage'], keywords: ['enabled', 'disabled', 'instance', 'optional', 'participation', 'metrics', 'reminders'] },
   { id: 'nav.settings.general', path: '/settings/general', label: 'General', section: 'Settings', aliases: ['settings', 'settings-general', 'general'] },

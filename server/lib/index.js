@@ -361,6 +361,7 @@ export * from './migrationMarker.js';
 export * from './modelPricing.js';
 export * from './navManifest.js';
 export * from './instanceFeatureRegistry.js';
+export * from './credentialRegistry.js';
 export * from './usageRange.js';
 export * from './subscriptionSavings.js';
 export * from './providerFamilies.js';

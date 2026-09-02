@@ -7,6 +7,7 @@ import AiAssignmentsTab from '../components/settings/AiAssignmentsTab';
 import { BackupTab } from '../components/settings/BackupTab';
 import { DatabaseTab } from '../components/settings/DatabaseTab';
 import InstanceFeaturesTab from '../components/settings/InstanceFeaturesTab';
+import CredentialsTab from '../components/settings/CredentialsTab';
 import { TelegramTab } from '../components/settings/TelegramTab';
 import { GeneralTab } from '../components/settings/GeneralTab';
 import { MortalLoomTab } from '../components/settings/MortalLoomTab';
@@ -43,6 +44,7 @@ export default function Settings() {
       case 'autofixer': return <AutofixerTab />;
       case 'backup': return <BackupTab />;
       case 'database': return <DatabaseTab />;
+      case 'credentials': return <CredentialsTab />;
       case 'features': return <InstanceFeaturesTab />;
       case 'security': return <SecurityTab />;
       case 'sharing': return <SharingTab />;

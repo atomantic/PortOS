@@ -136,7 +136,7 @@ describe('Layout — manifest-derived sidebar structure', () => {
   it('covers all sub-tabs for Settings, Digital Twin, and Messages in NAV_PRESENTATION', () => {
     const settingsPaths = [
       '/settings/general', '/settings/ai-assignments', '/settings/api-access', '/settings/autofixer',
-      '/settings/backup', '/settings/database', '/settings/features',
+      '/settings/backup', '/settings/credentials', '/settings/database', '/settings/features',
       '/settings/security', '/settings/sharing',
       '/settings/telegram', '/settings/voice', '/settings/mortalloom',
       '/openclaw', '/prompts', '/ai'
