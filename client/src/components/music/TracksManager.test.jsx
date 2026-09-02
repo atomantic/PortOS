@@ -182,6 +182,7 @@ describe('<TracksManager> generator mode toggle', () => {
     listTracks.mockResolvedValue([{ ...TRACK, prompt: 'Rainy arcade chase', lyrics: '[verse]\nRun!' }]);
     renderAt('track-1');
     await screen.findByTestId('gen-panel');
+    await screen.findByDisplayValue('Rainy arcade chase');
     fireEvent.click(modeButton('Chiptune score'));
 
     expect(chiptuneProps.current).toMatchObject({
