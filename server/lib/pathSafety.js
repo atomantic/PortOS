@@ -1,6 +1,7 @@
 /** Filename validation, containment checks, and approved asset resolution. */
 import { existsSync, statSync } from 'fs';
 import { basename, join, resolve as resolvePath, sep as PATH_SEP } from 'path';
+import { platform } from 'os';
 import { ServerError } from './errorHandler.js';
 import { PATHS } from './paths.js';
 import { escapeRegExp } from './textUtils.js';
@@ -122,16 +123,31 @@ export function isTopLevelEntryName(name) {
  * NOT reported as "inside" (there's no trailing separator on the bare root),
  * which is the desired behavior for file-containment checks.
  *
+ * Comparison is case-INSENSITIVE on Windows and macOS, whose filesystems are.
+ * A bare `startsWith` there reports `C:\\Users\\Foo\\wt` as outside
+ * `C:\\Users\\foo`, even though both name the same directory — so a managed
+ * worktree read as `worktree-unmanaged-location` and was silently never reaped.
+ * Git is a live source of such spellings: `git worktree list` reports paths the
+ * way git normalized them (drive-letter case, 8.3 short names like
+ * `C:\\Users\\RUNNER~1`), which need not match how PortOS spelled the root.
+ * Case-folding only ever makes containment recognize paths that ARE the same
+ * file on that platform; it can never admit a path from outside the root, so
+ * the security posture is unchanged. Linux stays case-sensitive, where two
+ * spellings really are two different directories.
+ *
  * @param {string} dir - the containing directory (absolute or relative)
  * @param {string} candidatePath - the path to test
  * @returns {boolean}
  */
+const CASE_INSENSITIVE_FS = platform() === 'win32' || platform() === 'darwin';
+
 export function isPathInsideDir(dir, candidatePath) {
   if (typeof dir !== 'string' || typeof candidatePath !== 'string' || !dir || !candidatePath) {
     return false;
   }
-  const rootPrefix = resolvePath(dir) + PATH_SEP;
-  return resolvePath(candidatePath).startsWith(rootPrefix);
+  const fold = (p) => (CASE_INSENSITIVE_FS ? p.toLowerCase() : p);
+  const rootPrefix = fold(resolvePath(dir) + PATH_SEP);
+  return fold(resolvePath(candidatePath)).startsWith(rootPrefix);
 }
 
 /**

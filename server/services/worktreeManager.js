@@ -958,14 +958,22 @@ export async function mergeBaseIntoFeatureWorktree(featureAgentId, baseBranch) {
 }
 
 /**
- * List all active worktrees for the repository
+ * List all active worktrees for the repository.
+ *
+ * Split on CRLF as well as LF. On Windows git's porcelain output is CRLF, and a
+ * bare `split('\n')` leaves a trailing \r on every value: `path` and `branch`
+ * silently carry it, so containment checks and path equality match nothing, and
+ * the flag lines never compare equal (`'bare\r' !== 'bare'`) so `bare`,
+ * `detached`, `locked` and `prunable` all read as false. That is what made the
+ * reaper report a managed worktree as `worktree-unmanaged-location` on Windows
+ * and skip it forever, while every Linux run stayed green.
  */
 export async function listWorktrees(sourceWorkspace) {
   const { stdout } = await execGit(['worktree', 'list', '--porcelain'], sourceWorkspace);
   const worktrees = [];
   let current = {};
 
-  for (const line of stdout.split('\n')) {
+  for (const line of stdout.split(/\r?\n/)) {
     if (line.startsWith('worktree ')) {
       if (current.path) worktrees.push(current);
       current = { path: line.slice(9) };

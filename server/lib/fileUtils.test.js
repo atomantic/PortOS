@@ -814,6 +814,27 @@ describe('fileUtils', () => {
       expect(isPathInsideDir('/data/uploads', '/etc/passwd')).toBe(false);
     });
 
+    // Windows and macOS filesystems are case-insensitive, so two spellings of
+    // one directory are one directory. A case-SENSITIVE prefix compare reported
+    // a managed worktree as `worktree-unmanaged-location` and the reaper
+    // silently never reaped it — git reports paths its own way (drive-letter
+    // case, 8.3 short names), which need not match how PortOS spelled the root.
+    it('matches case-insensitively only where the filesystem is', () => {
+      const insensitive = process.platform === 'win32' || process.platform === 'darwin';
+      expect(isPathInsideDir('/data/Uploads', '/data/uploads/foo.png')).toBe(insensitive);
+      expect(isPathInsideDir('/data/uploads', '/data/UPLOADS/sub/foo.png')).toBe(insensitive);
+    });
+
+    // Case-folding must only ever recognize the SAME directory — never widen
+    // containment to a sibling or admit a traversal.
+    it('still rejects escapes and prefix-sibling directories under case-folding', () => {
+      expect(isPathInsideDir('/data/Uploads', '/data/uploads-evil/foo.png')).toBe(false);
+      expect(isPathInsideDir('/data/Uploads', '/data/UPLOADS/../etc/passwd')).toBe(false);
+      expect(isPathInsideDir('/data/Uploads', '/etc/passwd')).toBe(false);
+      // The root itself is not "inside" itself, in either casing.
+      expect(isPathInsideDir('/data/Uploads', '/data/uploads')).toBe(false);
+    });
+
     it('rejects a sibling dir whose name merely starts with the root (the trailing-sep bug)', () => {
       // The old `startsWith(DIR)` check without a trailing separator let
       // `/data/uploads-evil/x` slip through because the string prefix matched.

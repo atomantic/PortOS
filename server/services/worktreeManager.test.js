@@ -42,6 +42,7 @@ const {
   findAdoptableWorktreeForBranch,
   createWorktree,
   createPersistentWorktree,
+  listWorktrees,
 } = await import('./worktreeManager.js');
 const { isPathInsideDir } = await import('../lib/fileUtils.js');
 const { worktreeOwnershipReason } = await import('../lib/worktreeOwnership.js');
@@ -578,6 +579,47 @@ describe('isGitLockError (worktree add lock detection, #2193)', () => {
 
   it('still flags a genuine lock-FILE creation failure', () => {
     expect(isGitLockError("fatal: Unable to create '/repo/.git/config.lock': File exists")).toBe(true);
+  });
+});
+
+// Windows git emits CRLF, and a bare split('\n') leaves a trailing \r on every
+// parsed value. That is invisible on Linux and silently breaks the reaper on
+// Windows: the path and branch carry the \r so containment and equality match
+// nothing, and the flag lines stop comparing equal so bare/detached/locked/
+// prunable all read false. It failed a real Windows CI job for hours while every
+// Linux run stayed green, so the contract is pinned against BOTH line endings.
+describe('listWorktrees line endings', () => {
+  beforeEach(() => { execGitMock.mockReset(); });
+
+  const PORCELAIN = [
+    'worktree /repo',
+    'HEAD abc123',
+    'branch refs/heads/main',
+    '',
+    'worktree /repo/.claude/worktrees/wt',
+    'HEAD def456',
+    'branch refs/heads/feature',
+    'locked',
+    'prunable',
+    '',
+  ];
+
+  it.each([['LF', '\n'], ['CRLF', '\r\n']])('parses %s porcelain identically', async (_label, eol) => {
+    execGitMock.mockResolvedValueOnce({ stdout: PORCELAIN.join(eol), stderr: '', exitCode: 0 });
+
+    const worktrees = await listWorktrees('/repo');
+
+    expect(worktrees).toHaveLength(2);
+    // No stray \r anywhere — these values are compared against filesystem paths
+    // and branch names, where a trailing carriage return matches nothing.
+    expect(worktrees[0]).toMatchObject({ path: '/repo', head: 'abc123', branch: 'refs/heads/main' });
+    expect(worktrees[1]).toMatchObject({
+      path: '/repo/.claude/worktrees/wt',
+      head: 'def456',
+      branch: 'refs/heads/feature',
+      locked: true,
+      prunable: true,
+    });
   });
 });
 

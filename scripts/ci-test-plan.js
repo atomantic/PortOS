@@ -39,6 +39,15 @@ const WINDOWS_RISK_RULES = [
   /^scripts\/fix-windows-console(?:\.test)?\.js$/,
   /^scripts\/ps1-bom\.test\.js$/,
   /^server\/lib\/(?:bufferedSpawn|detachedSpawn|childProcess|bashResolver|processEnv|platform|spawnCwd|cliProviderRun|grok)\b/,
+  // Path SEMANTICS differ per platform in ways pinPlatform() cannot fake: NTFS
+  // and APFS are case-insensitive while ext4 is not, and git reports paths its
+  // own way (drive-letter case, 8.3 short names like C:\Users\RUNNER~1). A
+  // case-sensitive containment check therefore passed on Linux while reporting a
+  // managed worktree as unmanaged on Windows, and the reaper silently skipped it
+  // — green everywhere CI looked. These modules decide containment and worktree
+  // identity, so they need a real Windows run.
+  /^server\/lib\/(?:pathSafety|worktreeOwnership)(?:\.test)?\.js$/,
+  /^server\/services\/worktree(?:Manager|Reap)\b/,
   /^server\/lib\/shell(?:Cd|Exit|LivenessProbe|ReadinessProbe)(?:\.test)?\.js$/,
   /^server\/lib\/agentGuard\//,
   /^server\/cos-runner\//,
