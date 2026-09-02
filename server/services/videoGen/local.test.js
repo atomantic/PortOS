@@ -361,6 +361,16 @@ vi.mock('../loras.js', () => ({
       .map((n) => [n, loraSidecarState.byFilename[n]?.triggerWords])
       .filter(([, words]) => Array.isArray(words)),
   )),
+  readLoraLicensesByFilename: vi.fn(async (names) => Object.fromEntries(
+    (names || []).map((n) => {
+      const sc = loraSidecarState.byFilename[n] || {};
+      return [n, {
+        license: typeof sc.license === 'string' && sc.license.trim() ? sc.license.trim() : null,
+        sourceUrl: sc.sourceUrl || sc.civitai?.url || sc.huggingface?.url || null,
+        name: sc.name || null,
+      }];
+    }),
+  )),
 }));
 
 // Adapter-effect gate (#4872). generateVideo opts every render into the probe,
@@ -2452,6 +2462,10 @@ describe('generateVideo — LoRA history-record contract (Remix round-trip)', ()
     // handler consume — parallel arrays, not a `loras: [{filename,scale}]` blob.
     expect(startedMeta.loraFilenames).toEqual(['a.safetensors', 'b.safetensors']);
     expect(startedMeta.loraScales).toEqual([0.7, 1.0]);
+    expect(startedMeta.provenance.sources.map((s) => s.id)).toEqual([
+      'ltx2_unified', 'a.safetensors', 'b.safetensors',
+    ]);
+    expect(startedMeta.provenance.sources.every((s) => s.license == null)).toBe(true);
     expect(startedMeta.loras).toBeUndefined();
   });
 });
