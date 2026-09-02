@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { Readable } from 'stream';
@@ -15,6 +15,8 @@ import {
   verifyDownloadHash,
   partialPathFor,
   probeRemoteSize,
+  sweepOrphanedPartials,
+  ORPHANED_PARTIAL_MAX_AGE_MS,
 } from './downloadPreflight.js';
 
 const GiB = 1024 ** 3;
@@ -558,5 +560,79 @@ describe('verifyDownloadHash', () => {
     await writeFile(path, payload);
     const digest = createHash('sha256').update(payload).digest('hex').toUpperCase();
     await expect(verifyDownloadHash(path, digest)).resolves.toMatchObject({ ok: true });
+  });
+});
+
+describe('sweepOrphanedPartials', () => {
+  let dir;
+  afterEach(async () => {
+    if (dir) await rm(dir, { recursive: true, force: true });
+  });
+
+  const writeAged = async (name, ageMs, contents = 'x') => {
+    const p = join(dir, name);
+    await writeFile(p, contents);
+    if (ageMs > 0) {
+      const when = new Date(Date.now() - ageMs);
+      await utimes(p, when, when);
+    }
+    return p;
+  };
+
+  it('all-zero on a missing dir (does not throw)', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'portos-partial-sweep-'));
+    const res = await sweepOrphanedPartials(join(dir, 'nope'));
+    expect(res).toEqual({ deleted: 0, keptYoung: 0, keptProtected: 0 });
+  });
+
+  it('removes a .partial older than the cutoff and its .etag sidecar', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'portos-partial-sweep-'));
+    const age = ORPHANED_PARTIAL_MAX_AGE_MS + 60_000;
+    const partial = await writeAged('model.gguf.partial', age);
+    const etag = await writeAged('model.gguf.partial.etag', age, '"abc"');
+    await writeAged('keep.gguf', age, 'done');
+    const res = await sweepOrphanedPartials(dir);
+    expect(res.deleted).toBe(1);
+    expect(await readFile(partial).catch(() => null)).toBeNull();
+    expect(await readFile(etag).catch(() => null)).toBeNull();
+    expect(await readFile(join(dir, 'keep.gguf'), 'utf8')).toBe('done');
+  });
+
+  it('keeps a recent .partial (in-flight / still-resumable)', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'portos-partial-sweep-'));
+    const fresh = await writeAged('model.gguf.partial', 0);
+    const res = await sweepOrphanedPartials(dir);
+    expect(res.deleted).toBe(0);
+    expect(res.keptYoung).toBe(1);
+    expect(await readFile(fresh).catch(() => null)).not.toBeNull();
+  });
+
+  it('never deletes an isProtected dest even when the .partial is old', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'portos-partial-sweep-'));
+    const age = ORPHANED_PARTIAL_MAX_AGE_MS + 60_000;
+    const pinned = await writeAged('live.gguf.partial', age);
+    const stray = await writeAged('stale.gguf.partial', age);
+    const dest = join(dir, 'live.gguf');
+    const res = await sweepOrphanedPartials(dir, {
+      isProtected: (path) => path === dest,
+    });
+    expect(res.deleted).toBe(1);
+    expect(res.keptProtected).toBe(1);
+    expect(await readFile(pinned).catch(() => null)).not.toBeNull();
+    expect(await readFile(stray).catch(() => null)).toBeNull();
+  });
+
+  it('walks nested download dirs (ollama/lmstudio-style trees)', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'portos-partial-sweep-'));
+    const nested = join(dir, 'blobs');
+    await mkdir(nested);
+    const age = ORPHANED_PARTIAL_MAX_AGE_MS + 60_000;
+    const nestedPartial = join(nested, 'sha.partial');
+    await writeFile(nestedPartial, 'x');
+    const when = new Date(Date.now() - age);
+    await utimes(nestedPartial, when, when);
+    const res = await sweepOrphanedPartials(dir);
+    expect(res.deleted).toBe(1);
+    expect(await readFile(nestedPartial).catch(() => null)).toBeNull();
   });
 });

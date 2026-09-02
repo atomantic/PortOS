@@ -377,6 +377,16 @@ export function cancelSpecDecodeModelDownload({ presetId, role }) {
   return true;
 }
 
+/** True while a curated GGUF download is writing `destPath` (or its `.partial`). */
+export function isSpecDecodeDownloadInFlight(destPath) {
+  if (!destPath) return false;
+  if (inFlight.has(destPath)) return true;
+  if (String(destPath).endsWith('.partial')) {
+    return inFlight.has(destPath.slice(0, -'.partial'.length));
+  }
+  return false;
+}
+
 /** Clears in-flight download bookkeeping (used by test suites). */
 export function _resetSpecDecodeDownloadsForTests() {
   inFlight.clear();

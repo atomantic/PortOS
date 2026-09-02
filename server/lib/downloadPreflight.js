@@ -14,8 +14,8 @@
  */
 
 import { createWriteStream } from 'fs';
-import { readFile, rm, stat, statfs, rename, writeFile } from 'fs/promises';
-import { dirname } from 'path';
+import { readFile, readdir, rm, stat, statfs, rename, writeFile } from 'fs/promises';
+import { dirname, join } from 'path';
 import { Readable, Transform } from 'stream';
 import { pipeline } from 'stream/promises';
 import { ServerError } from './errorHandler.js';
@@ -41,6 +41,93 @@ export const partialPathFor = (destPath) => `${destPath}${PARTIAL_SUFFIX}`;
 // later resume can send `If-Range` and detect a same-length replacement
 // object instead of silently splicing its bytes onto our stale prefix.
 export const etagPathFor = (destPath) => `${partialPathFor(destPath)}.etag`;
+
+/** Age after which a leftover `.partial` is treated as abandoned rather than resumable. */
+export const ORPHANED_PARTIAL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+const destPathForPartial = (partialPath) => (
+  String(partialPath).endsWith(PARTIAL_SUFFIX)
+    ? partialPath.slice(0, -PARTIAL_SUFFIX.length)
+    : partialPath
+);
+
+const MAX_SWEEP_DEPTH = 8;
+
+/**
+ * Recursively collect `${name}.partial` files under `dir`. A missing or
+ * non-directory path returns `null` so the caller can treat it as a no-op.
+ */
+async function collectPartialFiles(dir, { recursive = true, depth = 0 } = {}) {
+  const entries = await readdir(dir, { withFileTypes: true }).catch((err) => {
+    if (err?.code === 'ENOENT' || err?.code === 'ENOTDIR') return null;
+    throw err;
+  });
+  if (!entries) return null;
+  const files = [];
+  for (const entry of entries) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (!recursive || depth >= MAX_SWEEP_DEPTH) continue;
+      const nested = await collectPartialFiles(full, { recursive, depth: depth + 1 });
+      if (nested) files.push(...nested);
+      continue;
+    }
+    if (entry.isFile() && entry.name.endsWith(PARTIAL_SUFFIX)) files.push(full);
+  }
+  return files;
+}
+
+/**
+ * Age-based sweep of leftover `${dest}.partial` files (and their
+ * `.partial.etag` sidecars) in one or more download destination directories.
+ *
+ * A missing directory is a no-op. Recent files (mtime within `maxAgeMs`) and
+ * any path `isProtected` returns true for — an in-flight download's dest, or
+ * its `.partial` — are never unlinked. An active transfer's mtime keeps
+ * advancing as bytes land, but the protected-path check is the belt against a
+ * sweep tick racing a live write.
+ *
+ * @param {string|string[]} dirs
+ * @param {{ maxAgeMs?: number, now?: number, isProtected?: (path: string) => boolean, recursive?: boolean }} [opts]
+ * @returns {Promise<{ deleted: number, keptYoung: number, keptProtected: number }>}
+ */
+export async function sweepOrphanedPartials(dirs, {
+  maxAgeMs = ORPHANED_PARTIAL_MAX_AGE_MS,
+  now = Date.now(),
+  isProtected = () => false,
+  recursive = true,
+} = {}) {
+  const dirList = (Array.isArray(dirs) ? dirs : [dirs])
+    .filter((d) => typeof d === 'string' && d);
+  let deleted = 0;
+  let keptYoung = 0;
+  let keptProtected = 0;
+  for (const dir of dirList) {
+    const files = await collectPartialFiles(dir, { recursive }).catch(() => null);
+    if (!files) continue;
+    for (const partial of files) {
+      const destPath = destPathForPartial(partial);
+      if (isProtected(destPath) || isProtected(partial)) {
+        keptProtected += 1;
+        continue;
+      }
+      const info = await stat(partial).catch(() => null);
+      if (!info) continue;
+      if (now - info.mtimeMs < maxAgeMs) {
+        keptYoung += 1;
+        continue;
+      }
+      const removed = await rm(partial, { force: true }).then(() => true).catch(() => false);
+      // Only drop the sidecar after the partial itself is gone — an EACCES
+      // (or any other unlink failure) must not strand a `.partial` without
+      // the etag a later resume uses for If-Range.
+      if (!removed) continue;
+      await rm(etagPathFor(destPath), { force: true }).catch(() => {});
+      deleted += 1;
+    }
+  }
+  return { deleted, keptYoung, keptProtected };
+}
 
 export function normalizeSha256(value) {
   if (typeof value !== 'string') return null;

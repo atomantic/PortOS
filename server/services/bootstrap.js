@@ -98,6 +98,7 @@ import { restoreLoops } from './loops.js';
 import { startOrphanShellGc } from './importerOrphanGc.js';
 import { startImageRefsGc } from './imageRefsGc.js';
 import { startImageCleanTmpGc } from './imageCleanTmpGc.js';
+import { startOrphanedPartialGc } from './orphanedPartialGc.js';
 import { initBridge as initBrainMemoryBridge } from './brainMemoryBridge.js';
 import { initDrillCache } from './meatspacePostDrillCache.js';
 import { registerPostReminderSchedule } from './meatspacePostReminder.js';
@@ -455,6 +456,12 @@ const startBackgroundServices = ({ spawnerReady, io }) => {
   // mask/original) that land in data/image-clean-tmp and are never long-lived
   // (issue #2264). Age-gate only — nothing here is referenced after the fetch.
   startImageCleanTmpGc();
+  // Periodically GC leftover `${dest}.partial` files from resumable weight
+  // downloads (issue #5855). Age-gated (7 days) so an overnight pause-and-resume
+  // is not punished; in-flight spec-decode dests are also pinned. Fire-and-forget
+  // like the other GCs — not part of the awaited warmStores pruneLegacyFiles
+  // chain, so a large sweep cannot stall listen().
+  startOrphanedPartialGc();
   // Warm the catalog user-type registry from the user-type store (Postgres as of
   // #1001; the settings.json slice under the escape hatch) before any catalog
   // request can land, so user-defined types validate + mint ids immediately on
