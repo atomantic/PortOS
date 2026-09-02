@@ -678,7 +678,7 @@ export default function UpdateTab() {
               )}
             </div>
             {status.lastUpdateResult.log && (
-              <pre className="text-xs text-gray-400 mt-2 font-mono">{status.lastUpdateResult.log}</pre>
+              <pre className="text-xs text-gray-400 mt-2 font-mono whitespace-pre-wrap break-all max-h-48 overflow-y-auto">{status.lastUpdateResult.log}</pre>
             )}
           </div>
         </div>
