@@ -16,6 +16,14 @@ import {
   THREEJS_RENDER_PROFILE,
 } from './threejsModelEnvironment.js';
 import { THREEJS_PLAYER_SOURCE } from './threejsModelPlayerSource.js';
+import {
+  applyLinear,
+  IDENTITY_LINEAR,
+  multiplyLinear,
+  rotationMatrix,
+  scaleLinear,
+  vectorLength,
+} from './threejsTransform.js';
 
 const idSchema = z.string().trim().min(1).max(80).regex(/^[A-Za-z][A-Za-z0-9_-]*$/);
 const colorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/);
@@ -974,57 +982,10 @@ const isCoplanarCloud = (vertices) => {
 // each ancestor's transform from the outside. Keeping the linear part here is
 // enough for the relative thickness check and avoids making the server-side gate
 // depend on Three.js just to answer a geometry question.
-const IDENTITY_LINEAR = [1, 0, 0, 0, 1, 0, 0, 0, 1];
-
-const multiplyLinear = (a, b) => [
-  (a[0] * b[0]) + (a[1] * b[3]) + (a[2] * b[6]),
-  (a[0] * b[1]) + (a[1] * b[4]) + (a[2] * b[7]),
-  (a[0] * b[2]) + (a[1] * b[5]) + (a[2] * b[8]),
-  (a[3] * b[0]) + (a[4] * b[3]) + (a[5] * b[6]),
-  (a[3] * b[1]) + (a[4] * b[4]) + (a[5] * b[7]),
-  (a[3] * b[2]) + (a[4] * b[5]) + (a[5] * b[8]),
-  (a[6] * b[0]) + (a[7] * b[3]) + (a[8] * b[6]),
-  (a[6] * b[1]) + (a[7] * b[4]) + (a[8] * b[7]),
-  (a[6] * b[2]) + (a[7] * b[5]) + (a[8] * b[8]),
-];
-
-const rotationLinear = (degrees = [0, 0, 0]) => {
-  const [x = 0, y = 0, z = 0] = degrees;
-  const ax = (Number.isFinite(x) ? x : 0) * (Math.PI / 180);
-  const ay = (Number.isFinite(y) ? y : 0) * (Math.PI / 180);
-  const az = (Number.isFinite(z) ? z : 0) * (Math.PI / 180);
-  const a = Math.cos(ax);
-  const b = Math.sin(ax);
-  const c = Math.cos(ay);
-  const d = Math.sin(ay);
-  const e = Math.cos(az);
-  const f = Math.sin(az);
-  // Row-major equivalent of THREE.Euler's default XYZ matrix.
-  return [
-    c * e, -c * f, d,
-    (b * d * e) + (a * f), (-b * d * f) + (a * e), -b * c,
-    (-a * d * e) + (b * f), (a * d * f) + (b * e), a * c,
-  ];
-};
-
-const scaleLinear = (scale = [1, 1, 1]) => [
-  Number.isFinite(scale[0]) ? scale[0] : 1, 0, 0,
-  0, Number.isFinite(scale[1]) ? scale[1] : 1, 0,
-  0, 0, Number.isFinite(scale[2]) ? scale[2] : 1,
-];
-
 const partLinear = (part) => multiplyLinear(
-  rotationLinear(part.rotationDegrees),
+  rotationMatrix(part.rotationDegrees),
   scaleLinear(part.scale),
 );
-
-const applyLinear = (matrix, vector) => [
-  (matrix[0] * vector[0]) + (matrix[1] * vector[1]) + (matrix[2] * vector[2]),
-  (matrix[3] * vector[0]) + (matrix[4] * vector[1]) + (matrix[5] * vector[2]),
-  (matrix[6] * vector[0]) + (matrix[7] * vector[1]) + (matrix[8] * vector[2]),
-];
-
-const vectorLength = (vector) => Math.hypot(...vector);
 
 const transformVertices = (vertices, matrix) => {
   const transformed = [];

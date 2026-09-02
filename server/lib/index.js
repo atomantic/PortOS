@@ -66,6 +66,7 @@ export * from './threejsModelPenetration.js';
 export * from './threejsModelPhysicalAudit.js';
 export * from './threejsModelPlayerSource.js';
 export * from './threejsModelRig.js';
+export * from './threejsTransform.js';
 
 // === Story & narrative ===
 export * as catalogBulkParsers from './catalogBulkParsers.js';

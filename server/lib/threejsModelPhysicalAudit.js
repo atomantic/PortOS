@@ -41,6 +41,12 @@ import {
   listSpecNames,
   resolveThreejsAttachments,
 } from './threejsModel.js';
+import {
+  applyTransform,
+  composeTransform,
+  IDENTITY_TRANSFORM,
+  multiplyLinear,
+} from './threejsTransform.js';
 
 const EPSILON = 1e-4;
 const COPLANAR_TOLERANCE = 1e-3;
@@ -64,68 +70,6 @@ const CHIRALITY_POSITION_TOLERANCE = 1e-3;
 // pair sits from the lateral plane, so a limb two units out is not reported for
 // authoring noise that a limb near the centreline would never produce.
 const CHIRALITY_POSITION_RELATIVE_TOLERANCE = 0.02;
-
-const degreesToRadians = (degrees) => (degrees * Math.PI) / 180;
-
-const rotationMatrix = ([xDegrees, yDegrees, zDegrees]) => {
-  const [c1, s1] = [Math.cos(degreesToRadians(xDegrees)), Math.sin(degreesToRadians(xDegrees))];
-  const [c2, s2] = [Math.cos(degreesToRadians(yDegrees)), Math.sin(degreesToRadians(yDegrees))];
-  const [c3, s3] = [Math.cos(degreesToRadians(zDegrees)), Math.sin(degreesToRadians(zDegrees))];
-  return [
-    c2 * c3, -c2 * s3, s2,
-    (c1 * s3) + (s1 * c3 * s2), (c1 * c3) - (s1 * s3 * s2), -s1 * c2,
-    (s1 * s3) - (c1 * c3 * s2), (s1 * c3) + (c1 * s3 * s2), c1 * c2,
-  ];
-};
-
-const multiplyLinear = (a, b) => {
-  const out = new Array(9);
-  for (let row = 0; row < 3; row += 1) {
-    for (let column = 0; column < 3; column += 1) {
-      out[(row * 3) + column] = (a[row * 3] * b[column])
-        + (a[(row * 3) + 1] * b[3 + column])
-        + (a[(row * 3) + 2] * b[6 + column]);
-    }
-  }
-  return out;
-};
-
-const applyLinear = (linear, [x, y, z]) => [
-  (linear[0] * x) + (linear[1] * y) + (linear[2] * z),
-  (linear[3] * x) + (linear[4] * y) + (linear[5] * z),
-  (linear[6] * x) + (linear[7] * y) + (linear[8] * z),
-];
-
-const applyTransform = (transform, point) => {
-  const rotated = applyLinear(transform.linear, point);
-  return [
-    rotated[0] + transform.translation[0],
-    rotated[1] + transform.translation[1],
-    rotated[2] + transform.translation[2],
-  ];
-};
-
-const IDENTITY_TRANSFORM = { linear: [1, 0, 0, 0, 1, 0, 0, 0, 1], translation: [0, 0, 0] };
-
-const composeTransform = (parent, position, rotationDegrees, scale) => {
-  const rotation = rotationMatrix(rotationDegrees || [0, 0, 0]);
-  const [sx, sy, sz] = scale || [1, 1, 1];
-  const local = [
-    rotation[0] * sx, rotation[1] * sy, rotation[2] * sz,
-    rotation[3] * sx, rotation[4] * sy, rotation[5] * sz,
-    rotation[6] * sx, rotation[7] * sy, rotation[8] * sz,
-  ];
-  const pos = position || [0, 0, 0];
-  const offset = applyLinear(parent.linear, pos);
-  return {
-    linear: multiplyLinear(parent.linear, local),
-    translation: [
-      offset[0] + parent.translation[0],
-      offset[1] + parent.translation[1],
-      offset[2] + parent.translation[2],
-    ],
-  };
-};
 
 function getLocalBounds(geometry) {
   if (!geometry) return null;
@@ -331,7 +275,7 @@ function collectPoseVolumes(spec, getPartState) {
       opacity: part.opacity ?? 1,
     };
 
-    const transform = composeTransform(parentTransform, state.position, state.rotationDegrees, state.scale);
+    const transform = composeTransform(parentTransform, state);
     transformsByPartId.set(part.id, transform);
     const localBounds = getLocalBounds(part.geometry);
 
@@ -680,7 +624,7 @@ const transformsRelativeToCommonAncestor = (leftChain, rightChain) => {
     shared += 1;
   }
   const compose = (chain) => chain.slice(shared).reduce(
-    (transform, part) => composeTransform(transform, part.position, part.rotationDegrees, part.scale),
+    (transform, part) => composeTransform(transform, part),
     IDENTITY_TRANSFORM,
   );
   return [compose(leftChain), compose(rightChain)];

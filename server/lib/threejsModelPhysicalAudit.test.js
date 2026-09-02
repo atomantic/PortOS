@@ -18,6 +18,27 @@ describe('threejsModelPhysicalAudit', () => {
     });
   });
 
+  it('still measures a spec whose rotation or scale is not a finite triple', () => {
+    // Reachable only past the schema — a record stored before a bound tightened.
+    // The shared transform reads a non-finite component as 0 degrees / scale 1
+    // (what the renderer does). Feeding the raw value into Math.cos instead gave
+    // the part NaN world bounds, and every touch test against NaN is false, so a
+    // block sitting flat on the ground was reported as `floating-part`.
+    const spec = (rotationDegrees, scale) => ({
+      name: 'Stacked Blocks',
+      parts: [
+        { id: 'ground', name: 'Ground', geometry: { type: 'box', width: 6, height: 1, depth: 6 }, position: [0, 0, 0] },
+        { id: 'block', name: 'Block', geometry: { type: 'box', width: 1, height: 1, depth: 1 }, position: [0, 1, 0], rotationDegrees, scale },
+      ],
+    });
+    const wellFormed = evaluateThreejsPhysicalAudit(spec([0, 0, 0], [1, 1, 1]));
+    const malformed = evaluateThreejsPhysicalAudit(spec([0, undefined, NaN], [NaN, 1, 1]));
+
+    expect(malformed.evaluatedPartCount).toBe(2);
+    expect(malformed.findings.map((entry) => entry.code)).not.toContain('floating-part');
+    expect(malformed.findings).toEqual(wellFormed.findings);
+  });
+
   it('evaluates clean static model without findings', () => {
     const spec = {
       name: 'Clean Box',
