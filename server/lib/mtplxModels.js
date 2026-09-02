@@ -13,12 +13,21 @@
  * readiness checklist's "Start MTPLX" button into "MTPLX did not start: mtplx
  * exited early (code 1)".
  *
- * So PortOS asks first. `mtplx models --json` is a local directory listing (no
- * network, no model load), and naming a cached repo on the command line is the
- * difference between a server that comes up and one that cannot. A start still
- * never downloads weights — a multi-gigabyte pull stays the user's decision,
- * made on a button that says so (`services/localRuntimeSetup.js`'s `pull-start`
- * action), exactly as `docs/features/mtplx.md` promises.
+ * So PortOS asks first. `mtplx models --json` walks local directories — it
+ * pulls no weights and loads no model — and naming a cached repo on the command
+ * line is the difference between a server that comes up and one that cannot. A
+ * start still never downloads weights: a multi-gigabyte pull stays the user's
+ * decision, made on a button that says so (`services/localRuntimeSetup.js`'s
+ * `pull-start` action), exactly as `docs/features/mtplx.md` promises.
+ *
+ * **It is NOT free, and it is NOT safe on an un-warmed status poll.** The
+ * `mtplx` Homebrew puts on PATH is a wrapper that bootstraps a version-keyed
+ * Python venv — several hundred megabytes over the network — on its first
+ * invocation, and `brew upgrade` re-arms it. So on such a host THIS spawn is
+ * that download: it outruns the timeout below, gets killed, and the next caller
+ * starts it over. Callers on a poll must gate on `lib/mtplxRuntime.js`'s
+ * `describeMtplxRuntime().ready` first — `services/mtplxServerManager.js` and
+ * `services/localRuntimeSetup.js` both do.
  */
 
 import { bufferedSpawn, spawnFailureDetail } from './bufferedSpawn.js';

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -665,6 +665,141 @@ describe('mtplxServerManager', () => {
       vi.spyOn(platform, 'isAppleSilicon').mockReturnValue(false);
       await expect(installMtplx()).rejects.toThrow(/macOS with Apple Silicon/);
       expect(streamingSpawn.runStreamingCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * The Homebrew `mtplx` is a shell wrapper that downloads MTPLX itself — a
+   * several-hundred-megabyte pip install — on its first invocation, and
+   * `brew upgrade` re-arms it (the venv path carries the version). These pin
+   * the two hot paths OFF that download and the install flow ON to it.
+   *
+   * Real files on disk rather than a mocked probe: what is being mirrored is
+   * the wrapper's own `[ ! -x "$VENV/bin/mtplx" ]` guard, and only the
+   * filesystem can prove the two agree.
+   */
+  describe('the lazily-bootstrapped Python runtime', () => {
+    let runtimeDir = null;
+
+    const wrapperOnPath = async (venv) => {
+      const path = join(runtimeDir, 'mtplx');
+      await writeFile(path, [
+        '#!/bin/bash',
+        `VENV="\${MTPLX_BREW_VENV:-${venv}}"`,
+        'if [ ! -x "$VENV/bin/mtplx" ]; then echo "MTPLX runtime is not installed. Bootstrapping with pip..."; fi',
+        'exec "$VENV/bin/mtplx" "$@"',
+        '',
+      ].join('\n'));
+      await chmod(path, 0o755);
+      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(path);
+      return path;
+    };
+    const buildVenv = async (venv) => {
+      await mkdir(join(venv, 'bin'), { recursive: true });
+      await writeFile(join(venv, 'bin', 'mtplx'), '#!/bin/sh\n');
+      await chmod(join(venv, 'bin', 'mtplx'), 0o755);
+    };
+
+    beforeEach(async () => {
+      runtimeDir = await mkdtemp(join(tmpdir(), 'portos-mtplx-runtime-'));
+      // The probe honours $MTPLX_BREW_VENV exactly as the wrapper does, so a
+      // value in the developer's own environment would decide these tests.
+      vi.stubEnv('MTPLX_BREW_VENV', '');
+    });
+    afterEach(async () => {
+      vi.unstubAllEnvs();
+      await rm(runtimeDir, { recursive: true, force: true });
+    });
+
+    it('does not spawn the cache read while the runtime is missing — that spawn IS the download', async () => {
+      await wrapperOnPath(join(runtimeDir, 'venv-2.10.1'));
+
+      const status = await getMtplxServerStatus();
+
+      expect(status.installed).toBe(true);
+      expect(status.runtimeReady).toBe(false);
+      expect(mtplxModels.listMtplxCachedModels).not.toHaveBeenCalled();
+      // "Not read" must not read as "read, and empty" — and a phantom error
+      // here would say MTPLX's cache is broken rather than never fetched into.
+      expect(status.cachedModels).toEqual([]);
+      expect(status.cachedModelRows).toEqual([]);
+      expect(status.cacheError).toBeNull();
+    });
+
+    it('reads the cache once the venv the wrapper names is actually there', async () => {
+      const venv = join(runtimeDir, 'venv-2.10.1');
+      await buildVenv(venv);
+      await wrapperOnPath(venv);
+
+      const status = await getMtplxServerStatus();
+
+      expect(status.runtimeReady).toBe(true);
+      expect(mtplxModels.listMtplxCachedModels).toHaveBeenCalled();
+      expect(status.cachedModels).toEqual(['Example/Qwen-MTP']);
+    });
+
+    it('treats an mtplx that is not a Homebrew wrapper as ready — a pip install keeps working', async () => {
+      const path = join(runtimeDir, 'mtplx');
+      await writeFile(path, '#!/usr/bin/env python3\nfrom mtplx.cli import main\nmain()\n');
+      await chmod(path, 0o755);
+      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(path);
+
+      const status = await getMtplxServerStatus();
+
+      expect(status.runtimeReady).toBe(true);
+      expect(mtplxModels.listMtplxCachedModels).toHaveBeenCalled();
+    });
+
+    it('refuses a start rather than handing PM2 a process whose first act is a package download', async () => {
+      await wrapperOnPath(join(runtimeDir, 'venv-2.10.1'));
+
+      await expect(startMtplxServer()).rejects.toMatchObject({
+        code: 'MTPLX_RUNTIME_NOT_BOOTSTRAPPED',
+        status: 400,
+      });
+      // The eight-second startup window cannot survive the bootstrap, so this
+      // start would have been reported to the user as a crashed daemon.
+      expect(execPm2Calls.some((args) => args[0] === 'start')).toBe(false);
+    });
+
+    it('warms the runtime inside the install, where the user pressed a button and the budget fits', async () => {
+      const binary = await wrapperOnPath(join(runtimeDir, 'venv-2.10.1'));
+      vi.spyOn(commandExistsModule, 'commandExists').mockResolvedValue(true);
+      vi.spyOn(streamingSpawn, 'runStreamingCommand').mockResolvedValue({ success: true });
+      const emitted = [];
+
+      const result = await installMtplx({ onProgress: (p) => emitted.push(p.message) });
+
+      expect(result.success).toBe(true);
+      const calls = streamingSpawn.runStreamingCommand.mock.calls;
+      expect(calls[0][0]).toBe('brew');
+      // One invocation of the wrapper, AFTER the package install, on the
+      // 20-minute install budget rather than a status poll's 30 seconds.
+      expect(calls[1].slice(0, 2)).toEqual([binary, ['--version']]);
+      expect(calls[1][3].timeoutMs).toBeGreaterThanOrEqual(20 * 60 * 1000);
+      expect(emitted.join(' ')).toMatch(/bootstraps its own Python runtime/i);
+    });
+
+    it('fails the install when the bootstrap fails, instead of succeeding into a card that cannot start', async () => {
+      await wrapperOnPath(join(runtimeDir, 'venv-2.10.1'));
+      vi.spyOn(commandExistsModule, 'commandExists').mockResolvedValue(true);
+      vi.spyOn(streamingSpawn, 'runStreamingCommand').mockImplementation(async (cmd) => (
+        cmd === 'brew' ? { success: true } : { success: false, error: 'ensurepip returned non-zero exit status 1' }
+      ));
+
+      await expect(installMtplx()).rejects.toMatchObject({ code: 'MTPLX_RUNTIME_BOOTSTRAP_FAILED' });
+    });
+
+    it('skips the warm-up when the runtime is already bootstrapped', async () => {
+      const venv = join(runtimeDir, 'venv-2.10.1');
+      await buildVenv(venv);
+      await wrapperOnPath(venv);
+      vi.spyOn(commandExistsModule, 'commandExists').mockResolvedValue(true);
+      vi.spyOn(streamingSpawn, 'runStreamingCommand').mockResolvedValue({ success: true });
+
+      await installMtplx();
+
+      expect(streamingSpawn.runStreamingCommand).toHaveBeenCalledTimes(1);
     });
   });
 

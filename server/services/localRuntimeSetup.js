@@ -56,6 +56,7 @@
 
 import { LOCAL_RUNTIMES, localEndpointPort } from '../lib/localProviderRuntime.js';
 import { describeMtplxCache, listMtplxCachedModels } from '../lib/mtplxModels.js';
+import { describeMtplxRuntime } from '../lib/mtplxRuntime.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 import { inspectSglangQwenProject, sglangStartBlockedReason } from '../lib/sglangQwenProject.js';
 import { sglangUnsupportedReason } from '../lib/sglangQwenRecipe.js';
@@ -111,6 +112,30 @@ const MTPLX_NO_MODEL_ERROR = 'no model weights are cached, so its server exits b
 /** The same dead end, reached from a cache holding only interrupted pulls. */
 const mtplxPartialCacheError = (count) =>
   `its cache holds ${count} model${count === 1 ? '' : 's'}, but none passed its own file check — an interrupted download leaves a partial pack behind. Use “Download the default model & start MTPLX” on the checklist to re-fetch it, or pick another checkpoint on the MTPLX card in Models → LLMs.`;
+
+/**
+ * MTPLX's cache state, read WITHOUT invoking `mtplx`'s Homebrew wrapper before
+ * its Python runtime exists.
+ *
+ * `mtplx models --json` touches no network — but on a host where the wrapper
+ * has not bootstrapped its version-keyed venv yet, spawning it IS a
+ * several-hundred-megabyte pip install (`lib/mtplxRuntime.js`). The readiness
+ * checklist polls this, so without the gate a checklist refresh would kick off
+ * that download unannounced and then time out on it.
+ *
+ * A runtime that is not bootstrapped reports `unknown` — the cache genuinely
+ * could not be read, which is deliberately NOT `empty` — so the checklist does
+ * not claim MTPLX has no weights. A start attempted anyway is refused by
+ * `startMtplxServer` with `MTPLX_RUNTIME_NOT_BOOTSTRAPPED`, which names the
+ * download step rather than the checkpoint one.
+ */
+async function readMtplxCacheState() {
+  const runtime = await describeMtplxRuntime(findCommandOnPath('mtplx'));
+  if (!runtime.ready) {
+    return { state: 'unknown', model: null, count: 0, error: 'MTPLX\'s Python runtime has not been downloaded yet' };
+  }
+  return describeMtplxCache(await listMtplxCachedModels());
+}
 
 /**
  * The `platforms` gate below is a static list, so its refusal has to be static
@@ -247,7 +272,7 @@ const SETUP_ROWS = Object.freeze({
      * `readRuntimeWeights` to put the same fact on the checklist.
      */
     async weights() {
-      return describeMtplxCache(await listMtplxCachedModels()).state;
+      return (await readMtplxCacheState()).state;
     },
     provision: Object.freeze({
       action: 'pull-start',
@@ -264,7 +289,7 @@ const SETUP_ROWS = Object.freeze({
       // checklist can offer the `pull-start` download button, and the messages
       // above say so; the Models → LLMs launcher has no such button and names
       // `mtplx pull` instead.
-      const cache = describeMtplxCache(await listMtplxCachedModels());
+      const cache = await readMtplxCacheState();
       if (cache.state === 'unknown') {
         // The cache could not be READ — which is not "read, and empty". Fall
         // through to MTPLX's own default rather than blocking a start that may

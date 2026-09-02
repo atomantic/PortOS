@@ -44,6 +44,12 @@ export default function MtplxServerCard({
   // payloads (a peer or a tab open across an upgrade) carry only the ids.
   const cachedRows = status?.cachedModelRows || cached.map((repo) => ({ repo }));
   const emptyCache = Boolean(status?.installed) && cached.length === 0 && !status?.cacheError;
+  // The Homebrew `mtplx` is a wrapper that downloads its real Python runtime on
+  // first run, so "on PATH" and "can serve" are two different facts. Older
+  // status payloads (a peer, or a tab left open across an upgrade) carry no
+  // `runtimeReady` at all — treat those as ready, which is what the card did
+  // before this field existed.
+  const runtimeMissing = Boolean(status?.installed) && status?.runtimeReady === false;
   const external = status?.running && status?.managed === false;
   const tuningFlags = status?.tuningFlags || [];
 
@@ -119,6 +125,22 @@ export default function MtplxServerCard({
             )}
           </div>
         </div>
+      ) : runtimeMissing ? (
+        <div className="bg-port-warning/10 border border-port-warning/30 rounded-lg p-3 text-xs text-port-warning flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="space-y-1">
+            <p className="font-semibold">Installed — runtime not yet downloaded.</p>
+            <p className="text-gray-300">
+              Homebrew installs a wrapper that fetches MTPLX itself (several hundred megabytes of
+              Python and MLX) the first time it runs. PortOS will not do that inside a status poll
+              or a server start, so run it here — it streams into the install progress and takes a
+              few minutes.
+            </p>
+          </div>
+          <button onClick={onInstall} disabled={busy} className={`${btnClass} bg-port-accent/20 hover:bg-port-accent/30 text-port-accent shrink-0`}>
+            {actionInProgress === 'runtime-install-mtplx' ? <BrailleSpinner /> : <Download size={13} />}
+            Download MTPLX runtime
+          </button>
+        </div>
       ) : (
         <div className="bg-port-bg border border-port-border rounded-lg p-3 space-y-3">
           {emptyCache ? (
@@ -184,7 +206,7 @@ export default function MtplxServerCard({
         </div>
       )}
 
-      {status?.installed && status?.supported !== false && (
+      {status?.installed && status?.supported !== false && !runtimeMissing && (
         <MtplxCheckpoints
           cached={cachedRows}
           cacheError={status?.cacheError || null}

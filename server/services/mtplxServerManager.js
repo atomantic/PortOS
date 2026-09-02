@@ -31,6 +31,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { launchArgs, normalizeTuning, tuningSpecsFor } from '../lib/localModelTuning.js';
 import { LOCAL_RUNTIMES, localEndpointPort, localRuntimeKind, isLocalInstanceEndpoint } from '../lib/localProviderRuntime.js';
 import { listMtplxCachedModels, pickMtplxCachedModel } from '../lib/mtplxModels.js';
+import { describeMtplxRuntime } from '../lib/mtplxRuntime.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 import { createDaemonWatcher, pm2ArgValue, idleWindowMs, markDaemonUsed, registerIdleDaemon, MTPLX_APP } from '../lib/managedDaemon.js';
 // `settings.js` is lazy-imported at its call sites below, never statically: it
@@ -119,6 +120,16 @@ export const MTPLX_UNSUPPORTED_REASON = 'MTPLX runs only on macOS with Apple Sil
 const MTPLX_NO_MODEL_ERROR = 'MTPLX has no model weights cached, so its server exits before it binds a port. Use "Download default checkpoint" on the MTPLX card (or search for another MTP model there) to fetch one — a multi-gigabyte download PortOS will not start without you asking — then start MTPLX again.';
 
 const MTPLX_RUNTIME_BOOTSTRAP_ERROR = 'MTPLX\'s own Python runtime failed to bootstrap because Homebrew\'s Python does not provide a working `ensurepip`. Try `brew reinstall python@3.13` (or `brew reinstall --build-from-source youssofal/mtplx/mtplx` to force a rebuild against a working interpreter), then start MTPLX again.';
+
+/**
+ * Why an installed MTPLX still cannot be started, one layer below a missing
+ * checkpoint: the Homebrew wrapper on PATH has not built its Python venv yet, so
+ * its first act would be a multi-hundred-megabyte pip install — inside an
+ * eight-second startup window, reported afterwards as a crashed daemon. Same
+ * contract as MTPLX_NO_MODEL_ERROR: a large download is a button the user
+ * presses, never something a start does behind them.
+ */
+const MTPLX_RUNTIME_NOT_BOOTSTRAPPED_ERROR = `MTPLX's Python runtime has not been downloaded yet — Homebrew installs a wrapper that fetches it (several hundred megabytes) on first run, and PortOS will not do that inside a server start. Use "Download MTPLX runtime" on the MTPLX card to run it as its own step, then start MTPLX again.`;
 
 /**
  * Keep MTPLX startup logs raw while scoping each diagnosis to the current
@@ -304,13 +315,19 @@ export async function getMtplxServerEndpoint() {
 }
 
 /**
- * Current MTPLX state: binary availability, process state, endpoint, config,
- * logs, and what is in its model cache.
+ * Current MTPLX state: binary availability, runtime readiness, process state,
+ * endpoint, config, logs, and what is in its model cache.
  *
- * The cache listing is a local directory walk (`mtplx models --json`) — no
- * network, no model load — so it is safe on a status poll, and it is what lets
- * the UI say "installed, but nothing to serve" instead of making the user press
- * Start to find out.
+ * The cache listing (`mtplx models --json`) reads a local directory and pulls
+ * nothing over the network — but it does so by INVOKING `mtplx`, and the
+ * Homebrew `mtplx` is a wrapper whose first invocation on a given version
+ * bootstraps a several-hundred-megabyte Python venv (`lib/mtplxRuntime.js`).
+ * On a host where that has not happened yet, this poll WAS the bootstrap: it
+ * outran the 30s cache-query budget, got killed, reported `cacheError`, and the
+ * next poll started the download over. So the cache is only read once
+ * `runtimeReady` says the wrapper will exec straight through to the real
+ * binary; until then `cachedModels` stays empty with `cacheError: null` —
+ * "not read", never "read and empty".
  */
 export async function getMtplxServerStatus() {
   const binaryPath = resolveMtplxBinary();
@@ -323,14 +340,21 @@ export async function getMtplxServerStatus() {
 
   const base = await daemon.getStatusBase({ installed });
 
+  // Reading the wrapper, never running it — see `lib/mtplxRuntime.js`.
+  const runtimeReady = installed ? (await describeMtplxRuntime(binaryPath)).ready : false;
+
   // `models: null` means the cache could NOT be read — deliberately not the same
   // as `[]` (read, and empty). Only the latter blocks a start.
-  const cache = installed ? await listMtplxCachedModels() : { models: null, error: null };
+  const cache = installed && runtimeReady ? await listMtplxCachedModels() : { models: null, error: null };
 
   return {
     ...base,
     supported,
     unsupportedReason: supported ? null : MTPLX_UNSUPPORTED_REASON,
+    // Installed ≠ runnable: the Homebrew binary is a wrapper that downloads the
+    // real runtime on first use. The card needs the two apart so it offers the
+    // download instead of a Start button that is guaranteed to fail.
+    runtimeReady,
     // The tuning flags the running daemon was LAUNCHED with, rendered by the
     // catalog that owns the transport rather than re-derived in the UI. A
     // measured assessment relaunches this daemon and leaves its flags on, so a
@@ -362,6 +386,38 @@ export async function getMtplxServerStatus() {
 }
 
 /**
+ * Run the Homebrew wrapper's deferred bootstrap HERE, where the user pressed a
+ * button and the budget fits.
+ *
+ * `brew install` finishes with only a shell shim on PATH; the actual MTPLX —
+ * fastapi, huggingface_hub, numpy/scipy, the MLX stack — is downloaded by the
+ * wrapper's first invocation (`lib/mtplxRuntime.js`). Left alone, that lands on
+ * whatever runs `mtplx` next: a 30s status poll or an 8s-judged PM2 start,
+ * neither of which can survive it, both of which misreport it. `mtplx --version`
+ * is the cheapest invocation that trips the same guard, and it streams into the
+ * install modal under the 20-minute install budget.
+ *
+ * A failure here FAILS the install: returning success would leave a card
+ * reporting `installed: true` for something that cannot serve a request.
+ *
+ * Skipped when the runtime is already present — a re-run of the install (the
+ * card's "Download MTPLX runtime" button drives this same flow) then costs a
+ * `brew install` no-op rather than another invocation.
+ */
+async function warmMtplxRuntime(emit) {
+  const binaryPath = resolveMtplxBinary();
+  if (!binaryPath) return;
+  const runtime = await describeMtplxRuntime(binaryPath);
+  if (runtime.ready) return;
+
+  emit('MTPLX bootstraps its own Python runtime on first run — downloading it now. This can take several minutes.');
+  const result = await runStreamingCommand(binaryPath, ['--version'], emit, { timeoutMs: INSTALL_TIMEOUT_MS });
+  if (!result.success) {
+    throw new ServerError(`MTPLX installed, but its Python runtime failed to bootstrap: ${result.error}`, { status: 500, code: 'MTPLX_RUNTIME_BOOTSTRAP_FAILED' });
+  }
+}
+
+/**
  * Install MTPLX from upstream's Homebrew tap, falling back to pip on a host
  * without Homebrew. Both install the same `mtplx` binary, and neither runs the
  * optional privileged fan-control helper.
@@ -375,9 +431,12 @@ export async function installMtplx({ onProgress = () => {} } = {}) {
     emit('Installing MTPLX via Homebrew (youssofal/mtplx/mtplx)…');
     const result = await runStreamingCommand('brew', ['install', 'youssofal/mtplx/mtplx'], emit, { timeoutMs: INSTALL_TIMEOUT_MS });
     if (!result.success) throw new ServerError(`MTPLX install failed: ${result.error}`, { status: 500 });
+    await warmMtplxRuntime(emit);
     return { success: true, message: 'MTPLX installed' };
   }
   if (await commandExists('python3', ['--version'])) {
+    // No warm-up here: pip installs the REAL package, not a wrapper, so there is
+    // no deferred runtime left to fetch.
     emit('Homebrew was not found — installing MTPLX with pip instead…');
     const result = await runStreamingCommand('python3', ['-m', 'pip', 'install', '--upgrade', 'mtplx'], emit, { timeoutMs: INSTALL_TIMEOUT_MS });
     if (!result.success) throw new ServerError(`MTPLX install failed: ${result.error}`, { status: 500 });
@@ -447,6 +506,14 @@ export async function startMtplxServer(options = {}) {
       'The `mtplx` binary was not found on PATH. Install it from this card (Homebrew tap, or pip as a fallback), then try again.',
       { status: 400, code: 'MTPLX_NOT_INSTALLED' }
     );
+  }
+
+  // A start never performs a large silent download — the same limit that keeps
+  // it off model weights. Launching the wrapper before its venv exists would
+  // hand PM2 a process whose first act is a pip install, judged (and killed) by
+  // an eight-second startup window and reported as a crashed daemon.
+  if (!(await describeMtplxRuntime(binaryPath)).ready) {
+    throw new ServerError(MTPLX_RUNTIME_NOT_BOOTSTRAPPED_ERROR, { status: 400, code: 'MTPLX_RUNTIME_NOT_BOOTSTRAPPED' });
   }
 
   const pm2Status = await getAppStatusStrict(MTPLX_APP);
