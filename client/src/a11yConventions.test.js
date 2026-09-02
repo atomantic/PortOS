@@ -1619,15 +1619,101 @@ function hasUsableAriaLabelledByReference(src, tag) {
   });
 }
 
+// The element's BODY, prepared the way `hasUsableElementText` prepares it:
+// comments masked, `aria-hidden` subtrees removed — so the two content-name
+// checks cannot drift on what "hidden" means.
+function accessibleBodyOf(src, { contentStart, matchingClose }) {
+  if (!matchingClose) return null;
+  return stripHiddenElementContent(
+    maskComments(src.slice(contentStart, matchingClose.index), { startMode: 'jsx-text' }),
+  );
+}
+
+// `alt` names an element only where HTML says it does. A `<div alt="…">` or a
+// `<Thumb alt={caption} />` is inert markup as far as the accessibility tree is
+// concerned — reading it as a name would exempt an unnamed link on the strength
+// of an attribute no browser looks at. `<input type="image">` is left out
+// deliberately: it is not phrasing content inside a link, and `<input>` has its
+// own name rule two branches down.
+const ALT_NAMED_TAGS = new Set(['img', 'area']);
+
+// Which components declared in THIS file render text of their own? An anchor
+// wrapping one is named by whatever that component renders — KanbanBoard's
+// `<a><TicketCard ticket={ticket} /></a>` announces the ticket's key, summary,
+// priority and type — and an `aria-label` on such a link would REPLACE that
+// whole subtree with a terser name rather than add to it.
+//
+// Only a LOCAL declaration is credited, and only one that actually renders
+// text. Every link this rule exists to catch wraps an IMPORTED icon
+// (`<Download />`, `<ExternalLink />`), and a file-local icon wrapper renders no
+// text either — so neither is exempted. Crediting any component child, or
+// following imports, would hand the rule the one bypass that makes it vacuous.
+const textRenderingLocalComponentsBySource = new Map();
+
+function textRenderingLocalComponents(src) {
+  const cached = textRenderingLocalComponentsBySource.get(src);
+  if (cached) return cached;
+  const names = new Set();
+  forEachLocalComponent(src, (name, body) => {
+    if (names.has(name)) return;
+    for (const node of forEachOpeningTag(body)) {
+      if (isHiddenFromAccessibility(node.tag)) continue;
+      if (!hasUsableElementText(body, node)) continue;
+      names.add(name);
+      return;
+    }
+  });
+  textRenderingLocalComponentsBySource.set(src, names);
+  return names;
+}
+
+// Everything an <a> can be named by that is NOT its own plain text: a
+// descendant image's `alt` (a thumbnail link — an `aria-label` bolted onto one
+// would OVERRIDE that alt rather than add to it, a regression dressed up as a
+// fix), and a same-file component that renders text.
+//
+// One walk of the prepared body answers both. It is the expensive half of the
+// rule, so it runs only after `hasUsableElementText` has already cleared the
+// ordinary text links, and the local-component set is resolved lazily — a body
+// with no component child at all never builds one.
+function hasAccessibleLinkContent(src, node) {
+  const body = accessibleBodyOf(src, node);
+  if (body === null) return false;
+  const componentChildren = new Set();
+  for (const child of forEachOpeningTag(body, undefined, { startMode: 'jsx-text' })) {
+    if (ALT_NAMED_TAGS.has(child.name) && hasUsableAccessibleNameAttribute(child.tag, 'alt')) return true;
+    if (child.name && COMPONENT_TAG_NAME.test(child.name)) componentChildren.add(child.name);
+  }
+  if (componentChildren.size === 0) return false;
+  const local = textRenderingLocalComponents(src);
+  return [...componentChildren].some((name) => local.has(name));
+}
+
 // `type`-derived names are an <input>-only affordance: a submit button names
 // itself from `value`, an image button from `alt`, and a hidden input is not in
 // the a11y tree at all. <select> and <textarea> have no such escape hatch, so
 // the caller passes the tag name rather than this reading `type` off anything
 // that happens to carry one.
-function hasAccessibleControlName(src, tag, index, tagName, file) {
+//
+// Takes the tag-index NODE, not a `(tag, index)` pair: the <a> branch needs the
+// element's BODY, and `matchingClose` is the lexer's answer to where that ends.
+// Re-deriving it from an index inside here would be a second answer to a
+// question the scan already settled — the same trap `controlSourceAnchor`
+// documents.
+function hasAccessibleControlName(src, node, tagName, file) {
+  const { tag, index } = node;
   if (hasUsableAccessibleNameAttribute(tag, 'aria-label')) return true;
   if (hasUsableAccessibleNameAttribute(tag, 'aria-labelledby') && hasUsableAriaLabelledByReference(src, tag)) return true;
   if (tagName === 'input' && hasUsableNativeInputName(tag)) return true;
+  // Unlike a form control, a link names itself from its own CONTENT — its text,
+  // a descendant image's `alt`, or a same-file component that renders either.
+  // The overwhelming majority of anchors in the tree are ordinary text links,
+  // and without these branches the rule would report every one of them. All
+  // three read the body through the one `accessibleBodyOf` preparation, so an
+  // `aria-hidden` subtree contributes to none of them: an anchor whose only
+  // child is `<Icon aria-hidden="true" />` computes an EMPTY name in the browser
+  // and is correctly reported as unnamed here.
+  if (tagName === 'a' && (hasUsableElementText(src, node) || hasAccessibleLinkContent(src, node))) return true;
   if (isNestedInLabel(src, index)) return true;
 
   const id = normalizedAttributeValue(attributeValue(tag, 'id'));
@@ -1641,8 +1727,12 @@ function hasAccessibleControlName(src, tag, index, tagName, file) {
 // control; remove each entry as its control receives a real name. The tag name
 // is part of the anchor so a <select> and a <textarea> that happen to share a
 // file and an attribute set can't exempt each other.
+// `href` is what distinguishes one <a> from another — without it a page's links
+// all share the empty semantic anchor and the offender list reads as
+// `file|a||occurrence=7`, which names nothing a reader can find. No <input>,
+// <select> or <textarea> carries one, so adding it cannot move an existing row.
 const CONTROL_ANCHOR_ATTRIBUTES = [
-  'id', 'name', 'type', 'placeholder', 'value', 'ref', 'title', 'role',
+  'id', 'name', 'type', 'placeholder', 'value', 'ref', 'title', 'role', 'href',
   'aria-label', 'aria-labelledby', 'autoFocus', 'min', 'max', 'step', 'rows',
 ];
 
@@ -1710,6 +1800,22 @@ const PREEXISTING_SELECT_TEXTAREA_NAME_ALLOWLIST = new Set([
   "src/components/ui/AutoSizeTextarea.jsx|textarea|value=value|ref=ref",
   "src/components/ui/ProseEditor.jsx|textarea|placeholder=placeholder|value=value|ref=ref",
 ]);
+
+// The <a> half, added by #5674. "Anchor" here means the ELEMENT, not the
+// `controlSourceAnchor` string the other two lists are keyed by — the rows are
+// still those strings.
+//
+// It is EMPTY and stays empty: the eight unnamed links the rule exposed (the
+// media lightbox / media card download links, the brain link-row and mood-board
+// "open in new tab" links, the file browser and uploads download links, and the
+// two LoRA source links) were named in the same change rather than seeded here.
+//
+// A link with no accessible name is announced as bare "link" — the destination
+// is exactly what a screen-reader user is choosing between. `title` alone does
+// not fill that gap, for the reasons the icon-only-button rule spells out, so
+// the fix for a new offender is an `aria-label` alongside whatever `title` it
+// already carries — never a row here.
+const PREEXISTING_ANCHOR_NAME_ALLOWLIST = new Set([]);
 
 describe('a11y conventions', () => {
   // Modal.jsx IS the shared implementation; Drawer and Layout use the same
@@ -1900,7 +2006,7 @@ describe('a11y conventions', () => {
     for (const file of trackedJsxFiles()) {
       const scanSrc = maskedSourceOf(file);
       for (const node of forEachOpeningTag(scanSrc, tagName)) {
-        if (hasAccessibleControlName(scanSrc, node.tag, node.index, tagName, file)) continue;
+        if (hasAccessibleControlName(scanSrc, node, tagName, file)) continue;
         anchors.add(controlSourceAnchor(file, scanSrc, node, tagName));
       }
     }
@@ -1911,19 +2017,27 @@ describe('a11y conventions', () => {
   // One rule per tag rather than one merged rule, so a failure names the tag
   // and each backlog burns down on its own schedule. `<select>` and `<textarea>`
   // share an allowlist because they were seeded together by the same widening.
+  //
+  // `remedy` rides on the rule rather than being spelled inline, because the fix
+  // is not the same for every tag: a form control wants a `<label>`, and a link
+  // wants its own text — an `aria-label` is the fallback for both, and telling
+  // someone to put a `<label>` on an anchor is advice that does not work.
   const CONTROL_NAME_RULES = [
-    { tag: 'input', listName: 'PREEXISTING_INPUT_NAME_ALLOWLIST', allowlist: PREEXISTING_INPUT_NAME_ALLOWLIST, issue: '#4297' },
-    { tag: 'select', listName: 'PREEXISTING_SELECT_TEXTAREA_NAME_ALLOWLIST', allowlist: PREEXISTING_SELECT_TEXTAREA_NAME_ALLOWLIST, issue: '#4309' },
-    { tag: 'textarea', listName: 'PREEXISTING_SELECT_TEXTAREA_NAME_ALLOWLIST', allowlist: PREEXISTING_SELECT_TEXTAREA_NAME_ALLOWLIST, issue: '#4309' },
+    { tag: 'input', listName: 'PREEXISTING_INPUT_NAME_ALLOWLIST', allowlist: PREEXISTING_INPUT_NAME_ALLOWLIST, issue: '#4297', remedy: 'add aria-label/aria-labelledby or an explicit/implicit <label>, or exclude type="hidden"' },
+    { tag: 'select', listName: 'PREEXISTING_SELECT_TEXTAREA_NAME_ALLOWLIST', allowlist: PREEXISTING_SELECT_TEXTAREA_NAME_ALLOWLIST, issue: '#4309', remedy: 'add aria-label/aria-labelledby or an explicit/implicit <label>' },
+    { tag: 'textarea', listName: 'PREEXISTING_SELECT_TEXTAREA_NAME_ALLOWLIST', allowlist: PREEXISTING_SELECT_TEXTAREA_NAME_ALLOWLIST, issue: '#4309', remedy: 'add aria-label/aria-labelledby or an explicit/implicit <label>' },
+    { tag: 'a', listName: 'PREEXISTING_ANCHOR_NAME_ALLOWLIST', allowlist: PREEXISTING_ANCHOR_NAME_ALLOWLIST, issue: '#5674', remedy: 'an icon-only link is announced as bare "link" — give it visible text or an aria-label naming the destination; a title alone is not read as the accessible name, and an aria-hidden icon leaves the name empty' },
   ];
 
-  for (const { tag, listName, allowlist, issue } of CONTROL_NAME_RULES) {
+  for (const { tag, listName, allowlist, issue, remedy } of CONTROL_NAME_RULES) {
     it(`gives every <${tag}> an accessible name`, () => {
-      // A control with no name is announced as bare "edit text" / "combo box".
-      // Prefer a paired `<label htmlFor>`; aria-label is for the compact rows
-      // (peer management, inline filters) where a visible label breaks layout.
+      // A control with no name is announced as bare "edit text" / "combo box",
+      // and a link with no name as bare "link". Prefer the name the element
+      // already renders — a paired `<label htmlFor>`, or the anchor's own text;
+      // aria-label is for the compact rows (peer management, inline filters,
+      // icon-only action links) where visible text breaks the layout.
       const offenders = [...unnamedControlAnchors(tag)].filter((anchor) => !allowlist.has(anchor));
-      expect(offenders, `<${tag}> without an accessible name — add aria-label/aria-labelledby or an explicit/implicit <label>${tag === 'input' ? ', or exclude type="hidden"' : ''}:\n${offenders.join('\n')}`).toEqual([]);
+      expect(offenders, `<${tag}> without an accessible name — ${remedy}:\n${offenders.join('\n')}`).toEqual([]);
     });
 
     it(`keeps no stale <${tag}> entries in ${listName} (${issue})`, () => {
@@ -1944,9 +2058,12 @@ describe('a11y conventions', () => {
   // way a call site's would. Only the directory matters — the file itself need
   // not exist.
   const FIXTURE_HOST = 'src/components/settings/FixtureHost.jsx';
+  // Reads the control off the same tag index the real scan walks, so a fixture
+  // asks the recognizer exactly the question a tracked file would — and the
+  // node carries the `matchingClose` the <a> branch reads its body from.
   const isNamed = (src, tagName = 'input', file = FIXTURE_HOST) => {
-    const index = src.indexOf(`<${tagName}`);
-    return hasAccessibleControlName(src, openingTagAt(src, index), index, tagName, file);
+    const [node] = forEachOpeningTag(src, tagName);
+    return node !== undefined && hasAccessibleControlName(src, node, tagName, file);
   };
   // The id-keyed half of the same question: is a control carrying this `id`
   // named by one of the wrappers the source renders? These fixtures declare
@@ -1976,6 +2093,59 @@ describe('a11y conventions', () => {
     expect(isNamed('<input type="hidden" value={token} />', 'input')).toBe(true);
     expect(isNamed('<select type="hidden" value={sort} />', 'select')).toBe(false);
     expect(isNamed('<textarea type="submit" value="Send" />', 'textarea')).toBe(false);
+  });
+
+  it('reads a name for <a> from its own content, and from nothing else', () => {
+    // The <a> rule (#5674) rests on a recognizer no other tag uses: a link
+    // names itself from what it renders. Both directions have to be pinned or
+    // the rule goes vacuous in whichever one drifts — credit everything and it
+    // never reports the icon-only links it exists for; credit nothing and it
+    // floods with every ordinary text link in the tree, which is the failure
+    // that would get it deleted.
+    expect(isNamed('<a href={url}>Open in Jira</a>', 'a')).toBe(true);
+    expect(isNamed('<a href={url}>{label}</a>', 'a')).toBe(true);
+    expect(isNamed('<a href={url} aria-label="Download"><Download size={14} /></a>', 'a')).toBe(true);
+    expect(isNamed('<a href={url} title="Download"><Download size={14} /></a>', 'a')).toBe(false);
+    expect(isNamed('<a href={url}><Download size={14} /></a>', 'a')).toBe(false);
+
+    // `title` is a hover affordance, not the accessible name — the same reason
+    // the icon-only-button rule refuses it. Asserted rather than assumed,
+    // because seven of the eight anchors #5674 named already carried one, and a
+    // recognizer that credited `title` would have reported none of them.
+    expect(isNamed('<a href={url} title="Open on Civitai"><ExternalLink /></a>', 'a')).toBe(false);
+
+    // A thumbnail link is named by its image's alt — bolting an aria-label onto
+    // one would OVERRIDE that alt, so crediting it is what keeps the rule from
+    // driving a regression. An empty/absent alt names nothing.
+    expect(isNamed('<a href={url}><img src={src} alt={caption} /></a>', 'a')).toBe(true);
+    expect(isNamed('<a href={url}><img src={src} alt="Cover art" /></a>', 'a')).toBe(true);
+    expect(isNamed('<a href={url}><img src={src} alt="" /></a>', 'a')).toBe(false);
+    expect(isNamed('<a href={url}><img src={src} /></a>', 'a')).toBe(false);
+
+    // …but only where HTML says `alt` names anything. On a <div> the browser
+    // ignores it outright, and on a component nothing proves it is forwarded to
+    // an image — crediting either would exempt an unnamed link on the strength
+    // of inert markup.
+    expect(isNamed('<a href={url}><div alt="Cover art" /></a>', 'a')).toBe(false);
+    expect(isNamed('<a href={url}><Thumb alt="Cover art" /></a>', 'a')).toBe(false);
+
+    // An anchor wrapping a component THIS FILE declares is named by what that
+    // component renders, so an aria-label here would replace a whole card's
+    // text with a terser name. The discriminator is text, not componentness:
+    // every link this rule exists to catch wraps an imported icon, and a
+    // file-local icon wrapper is credited no more than an imported one.
+    const localCard = 'function Card({ t }) {\n  return (<div><span>{t.key}</span></div>);\n}\n';
+    const localIcon = 'function IconOnly() {\n  return (<Download size={14} />);\n}\n';
+    expect(isNamed(`${localCard}<a href={url}><Card t={t} /></a>`, 'a')).toBe(true);
+    expect(isNamed(`${localIcon}<a href={url}><IconOnly /></a>`, 'a')).toBe(false);
+
+    // An aria-hidden child is removed from the name computation, so an anchor
+    // whose ONLY content is hidden computes an empty name — worse than the
+    // title-only shape, and invisible to a check that merely asked "does this
+    // anchor have children".
+    expect(isNamed('<a href={url} title="Open board"><ExternalLink aria-hidden="true" /></a>', 'a')).toBe(false);
+    expect(isNamed('<a href={url}><img src={src} alt="Cover" aria-hidden="true" /></a>', 'a')).toBe(false);
+    expect(isNamed('<a href={url}><span aria-hidden="true">→</span>Next page</a>', 'a')).toBe(true);
   });
 
   it('masks JSX examples written in comments after an expression-rendered list', () => {

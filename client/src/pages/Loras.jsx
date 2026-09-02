@@ -1257,6 +1257,7 @@ function LoraCard({ lora, onDelete, onMeasured, deleting, deleteConfirm }) {
                 rel="noopener noreferrer"
                 className="text-gray-400 hover:text-gray-200 p-1.5 rounded hover:bg-port-bg"
                 title="Open on Civitai"
+                aria-label="Open on Civitai"
               >
                 <ExternalLink size={14} />
               </a>
@@ -1268,6 +1269,7 @@ function LoraCard({ lora, onDelete, onMeasured, deleting, deleteConfirm }) {
                 rel="noopener noreferrer"
                 className="text-gray-400 hover:text-gray-200 p-1.5 rounded hover:bg-port-bg"
                 title="Open on HuggingFace"
+                aria-label="Open on HuggingFace"
               >
                 <ExternalLink size={14} />
               </a>

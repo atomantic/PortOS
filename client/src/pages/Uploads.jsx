@@ -266,6 +266,7 @@ export default function Uploads() {
                     rel="noopener noreferrer"
                     className="p-2 text-gray-500 hover:text-port-accent transition-colors"
                     title="Download / View"
+                    aria-label={`Download or view ${file.filename}`}
                   >
                     <Download size={18} />
                   </a>

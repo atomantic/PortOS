@@ -920,6 +920,7 @@ function SettingsPane({
         <a
           href={item.downloadUrl}
           download
+          aria-label="Download"
           className="flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-border hover:bg-port-border/70 text-white rounded"
         >
           <Download className="w-3.5 h-3.5" />

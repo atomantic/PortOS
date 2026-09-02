@@ -200,6 +200,7 @@ export default function MoodBoardReferenceStrip({
                     target="_blank"
                     rel="noopener noreferrer"
                     title="Open board in new tab"
+                    aria-label="Open board in new tab"
                     className="shrink-0 p-1 text-gray-400 hover:text-port-accent"
                   >
                     <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
