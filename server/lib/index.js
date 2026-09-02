@@ -409,6 +409,7 @@ export * from './viteAllowedHosts.js';
 export * from './apiAccessPolicy.js';
 export * from './apiCatalog.js';
 export * from './socketEventCatalog.js';
+export * from './sourceScan.js';
 export * from './apiOperationContracts.js';
 export * from './apiRegistry.js';
 export * from './arrayUtils.js';

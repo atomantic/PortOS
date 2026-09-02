@@ -226,6 +226,12 @@ const structuralTestsFor = (changedFiles, trackedSet) => {
   if (changedFiles.some((path) => /^server\/lib\//.test(path))) {
     add('server/lib/index.test.js');
   }
+  // The socket guard readdir-scans server/sockets/ rather than importing it, so
+  // no import edge reaches it — a handler added there would otherwise only be
+  // checked on a full suite.
+  if (changedFiles.some((path) => /^server\/sockets\//.test(path))) {
+    add('server/sockets/asyncHandlerGuard.test.js');
+  }
   if (changedFiles.some((path) => /^client\/src\/lib\//.test(path))) {
     add('client/src/lib/index.test.js');
   }

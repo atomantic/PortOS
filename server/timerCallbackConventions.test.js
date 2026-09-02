@@ -65,6 +65,14 @@
  *
  * Tightening any of these means moving to an AST pass; the shapes above are
  * rare enough here that the scan earns its keep as-is.
+ *
+ * ## Where the machinery lives
+ *
+ * The lexer, bracket matcher, callback parser and the await checker are in
+ * `server/lib/sourceScan.js`, shared with `sockets/asyncHandlerGuard.test.js` —
+ * the same rule for Socket.IO handlers. Only the `setTimeout`/`setInterval`
+ * recognizer below is timer-specific; keeping the rest shared is what stops the
+ * two guards drifting on what "owns its rejection" means.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -72,134 +80,17 @@ import { execFileSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { blankLiterals, matchBracket, parseCallbackAt, unguardedAwaits } from './lib/sourceScan.js';
 
 const SERVER_ROOT = dirname(fileURLToPath(import.meta.url));
 
-/**
- * Replace the contents of comments, string/template literals, and regex
- * literals with spaces, preserving length so every index still maps back to the
- * original source. Everything downstream (brace walks, `await` matching) then
- * sees code only.
- */
-export function blankLiterals(src) {
-  const out = src.split('');
-  const n = src.length;
-  const blank = (i) => { if (i < n && src[i] !== '\n') out[i] = ' '; };
-  // Brace depths of the code regions opened by `${` inside template literals,
-  // so a nested template resumes correctly at its closing `}`.
-  const templateStack = [];
-  let inTemplate = false;
-  let braceDepth = 0;
-  // A `/` starts a regex only where a value cannot precede it. Tracking the last
-  // significant character is the standard heuristic and is what keeps a
-  // character class like /["']/ from being read as a string opener.
-  let prevSignificant = '';
-  let i = 0;
-
-  while (i < n) {
-    const c = src[i];
-
-    if (inTemplate) {
-      if (c === '\\') { blank(i); blank(i + 1); i += 2; continue; }
-      if (c === '`') { blank(i); i += 1; inTemplate = false; prevSignificant = '`'; continue; }
-      if (c === '$' && src[i + 1] === '{') {
-        blank(i); blank(i + 1); i += 2;
-        templateStack.push(braceDepth);
-        braceDepth = 0;
-        inTemplate = false;
-        prevSignificant = '{';
-        continue;
-      }
-      blank(i); i += 1; continue;
-    }
-
-    if (c === '/' && src[i + 1] === '/') {
-      while (i < n && src[i] !== '\n') { blank(i); i += 1; }
-      continue;
-    }
-    if (c === '/' && src[i + 1] === '*') {
-      while (i < n && !(src[i] === '*' && src[i + 1] === '/')) { blank(i); i += 1; }
-      blank(i); blank(i + 1); i += 2;
-      continue;
-    }
-    if (c === "'" || c === '"') {
-      const quote = c;
-      blank(i); i += 1;
-      while (i < n && src[i] !== quote) {
-        if (src[i] === '\\') { blank(i); i += 1; }
-        blank(i); i += 1;
-      }
-      blank(i); i += 1;
-      prevSignificant = quote;
-      continue;
-    }
-    if (c === '`') { blank(i); i += 1; inTemplate = true; continue; }
-    if (c === '/' && regexCanStartAfter(prevSignificant)) {
-      blank(i); i += 1;
-      let inClass = false;
-      while (i < n && src[i] !== '\n') {
-        if (src[i] === '\\') { blank(i); blank(i + 1); i += 2; continue; }
-        if (src[i] === '[') inClass = true;
-        else if (src[i] === ']') inClass = false;
-        else if (src[i] === '/' && !inClass) break;
-        blank(i); i += 1;
-      }
-      blank(i); i += 1;
-      // Blank the flags too so `gi` can't be read as an identifier.
-      while (i < n && /[a-z]/.test(src[i])) { blank(i); i += 1; }
-      prevSignificant = ')';
-      continue;
-    }
-
-    if (c === '{') braceDepth += 1;
-    else if (c === '}') {
-      if (braceDepth === 0 && templateStack.length > 0) {
-        blank(i); i += 1;
-        braceDepth = templateStack.pop();
-        inTemplate = true;
-        continue;
-      }
-      braceDepth -= 1;
-    }
-    if (!/\s/.test(c)) prevSignificant = c;
-    i += 1;
-  }
-
-  return out.join('');
-}
-
-/**
- * True when a `/` at this position opens a regex literal rather than division.
- * A regex can only follow a position where an operand cannot: an operator, an
- * opening bracket, a statement boundary, or the start of the file.
- */
-function regexCanStartAfter(prev) {
-  return prev === '' || '(,=:[!&|?{};+-*%~^<>'.includes(prev);
-}
-
-/** Index just past the bracket matching the one at `open`, or -1. */
-function matchBracket(src, open) {
-  const pairs = { '(': ')', '[': ']', '{': '}' };
-  const close = pairs[src[open]];
-  let depth = 0;
-  for (let i = open; i < src.length; i += 1) {
-    if (src[i] === src[open]) depth += 1;
-    else if (src[i] === close) {
-      depth -= 1;
-      if (depth === 0) return i + 1;
-    }
-  }
-  return -1;
-}
-
-const TIMER_OPEN = /\b(setTimeout|setInterval)\s*\(\s*async\b/g;
+// The lookahead leaves `match.index + match[0].length` sitting ON `async`, which
+// is where `parseCallbackAt` expects to start.
+const TIMER_OPEN = /\b(setTimeout|setInterval)\s*\(\s*(?=async\b)/g;
 
 /**
  * The body text of every `setTimeout(async …)` / `setInterval(async …)` in
  * `blanked` (which must already have been through `blankLiterals`).
- *
- * A concise arrow body (`async () => save()`) has no braces; the whole remaining
- * argument list is taken as the body so an `await` in it is still seen.
  */
 export function timerCallbackBodies(blanked) {
   const bodies = [];
@@ -207,122 +98,11 @@ export function timerCallbackBodies(blanked) {
     const callOpen = blanked.indexOf('(', match.index);
     const callEnd = matchBracket(blanked, callOpen);
     if (callEnd === -1) continue;
-
-    let i = match.index + match[0].length;
-    const skipSpace = () => { while (i < callEnd && /\s/.test(blanked[i])) i += 1; };
-    skipSpace();
-
-    if (blanked.startsWith('function', i)) {
-      i += 'function'.length;
-      skipSpace();
-      // Optional name.
-      while (i < callEnd && /[\w$]/.test(blanked[i])) i += 1;
-      skipSpace();
-    } else {
-      // Arrow: parenthesized params, or a single bare identifier.
-      if (blanked[i] === '(') i = matchBracket(blanked, i);
-      else while (i < callEnd && /[\w$]/.test(blanked[i])) i += 1;
-      if (i === -1) continue;
-      skipSpace();
-      if (!blanked.startsWith('=>', i)) continue;
-      i += 2;
-    }
-    skipSpace();
-
-    if (blanked[i] === '(') i = matchBracket(blanked, i); // arrow with parenthesized params
-    if (i === -1) continue;
-    skipSpace();
-
-    if (blanked[i] === '{') {
-      const end = matchBracket(blanked, i);
-      if (end === -1) continue;
-      bodies.push({ start: i, text: blanked.slice(i, end) });
-    } else {
-      // Concise body — take the rest of the call's argument list.
-      bodies.push({ start: i, text: blanked.slice(i, callEnd - 1) });
-    }
+    // `callEnd - 1` is the call's `)` — the bound a concise arrow body runs to.
+    const callback = parseCallbackAt(blanked, match.index + match[0].length, callEnd - 1);
+    if (callback) bodies.push({ start: callback.start, text: callback.text });
   }
   return bodies;
-}
-
-/**
- * `[start, end)` spans of every `try { … }` block in `body` that actually has a
- * `catch` clause. A `try … finally` with no `catch` runs its cleanup and then
- * re-throws, so it does NOT own the rejection — counting it would let the exact
- * bug this guard exists for through.
- */
-function tryBlockSpans(body) {
-  const spans = [];
-  for (const match of body.matchAll(/\btry\s*\{/g)) {
-    const open = body.indexOf('{', match.index);
-    const end = matchBracket(body, open);
-    // Comments between `}` and `catch` are already blanked to spaces.
-    if (end !== -1 && /^\s*catch\b/.test(body.slice(end))) spans.push([open, end]);
-  }
-  return spans;
-}
-
-/**
- * The member/call chain awaited at `start` — e.g. for
- * `await pm2.restart(name)\n  .catch(err => …)` it returns the whole thing,
- * newline continuation included, so a trailing `.catch(` is visible.
- */
-function awaitedChain(body, start) {
-  let i = start;
-  while (i < body.length && /\s/.test(body[i])) i += 1;
-  const begin = i;
-  while (i < body.length) {
-    const c = body[i];
-    if (/[\w$.?]/.test(c)) { i += 1; continue; }
-    if (c === '(' || c === '[') {
-      const end = matchBracket(body, i);
-      if (end === -1) break;
-      i = end;
-      continue;
-    }
-    if (/\s/.test(c)) {
-      // Only a `.` continuation may follow whitespace; anything else ends the chain.
-      let j = i;
-      while (j < body.length && /\s/.test(body[j])) j += 1;
-      if (body[j] === '.') { i = j; continue; }
-      break;
-    }
-    break;
-  }
-  return body.slice(begin, i);
-}
-
-/**
- * True when the LAST link of an awaited chain is `.catch(…)`. It has to be the
- * last one: `await work().catch(recover).then(rethrow)` handles a rejection from
- * `work()` and then hands the awaited promise straight back to `then`, so the
- * chain as a whole can still reject.
- */
-function chainEndsInCatch(chain) {
-  const at = chain.lastIndexOf('.catch');
-  if (at === -1) return false;
-  let i = at + '.catch'.length;
-  while (i < chain.length && /\s/.test(chain[i])) i += 1;
-  if (chain[i] !== '(') return false;
-  const end = matchBracket(chain, i);
-  return end !== -1 && chain.slice(end).trim() === '';
-}
-
-/**
- * Awaits in `body` that neither sit inside a `try`/`catch` nor end in `.catch(…)`.
- * Returns the offending chain text for each, so a failure message points at the
- * expression rather than at a line number that rebases away.
- */
-export function unguardedAwaits(body) {
-  const spans = tryBlockSpans(body);
-  const offenders = [];
-  for (const match of body.matchAll(/\bawait\b/g)) {
-    if (spans.some(([from, to]) => match.index > from && match.index < to)) continue;
-    const chain = awaitedChain(body, match.index + match[0].length);
-    if (chainEndsInCatch(chain)) continue;
-    offenders.push(`await ${chain.replace(/\s+/g, ' ').trim()}`);
-  }
-  return offenders;
 }
 
 /** Every unguarded await in every async timer callback in one file's source. */
