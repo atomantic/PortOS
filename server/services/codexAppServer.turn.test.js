@@ -168,6 +168,42 @@ describe('running a text turn', () => {
     expect(child.lastRequest('turn/interrupt').params).toEqual({ threadId: 'thread-1', turnId: 'turn-1' });
   });
 
+  it('abandons the turn when the caller aborts during the app-server cold start', async () => {
+    // `connect()` can spawn and handshake a whole child, so the up-front
+    // `signal.aborted` check is many awaits stale by the time it resolves and
+    // no listener is registered yet. Without a re-read, a Stop pressed here
+    // dispatched a full turn against the subscription.
+    const controller = new AbortController();
+    const promise = runCodexTextTurn({ prompt: 'long one', signal: controller.signal });
+
+    let frame = null;
+    await vi.waitFor(() => { frame = child.take('initialize'); expect(frame).toBeTruthy(); });
+    controller.abort();
+    child.reply(frame, {});
+
+    await expect(promise).rejects.toMatchObject({ code: CODEX_TURN_ERROR_CODES.turnInterrupted });
+    expect(child.lastRequest('thread/start')).toBeUndefined();
+    expect(child.lastRequest('turn/start')).toBeUndefined();
+  });
+
+  it('honours an abort that lands while the thread is starting, which fires no late event', async () => {
+    // An AbortSignal emits 'abort' exactly once: aborting before the listener
+    // is registered means the listener never runs, so the flag has to be
+    // re-read at registration time.
+    const controller = new AbortController();
+    const promise = runCodexTextTurn({ prompt: 'long one', signal: controller.signal });
+    await handshake();
+    await awaitRequest(child, 'thread/start', (frame) => {
+      controller.abort();
+      child.reply(frame, { thread: { id: 'thread-1' } });
+    });
+
+    await expect(promise).rejects.toMatchObject({ code: CODEX_TURN_ERROR_CODES.turnInterrupted });
+    // Cancellation is surfaced without dispatching the turn at all, so Stop
+    // neither spends quota nor waits out a `turn/start` round trip.
+    expect(child.lastRequest('turn/start')).toBeUndefined();
+  });
+
   it('carries a quota failure out as a usage-limit category', async () => {
     const promise = runCodexTextTurn({ prompt: 'hi' });
     await handshake();

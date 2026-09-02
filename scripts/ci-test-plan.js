@@ -12,7 +12,7 @@ const MAX_TARGETED_TEST_FILES = 120;
 
 const FULL_TRIGGER_RULES = [
   { re: /^\.github\/workflows\//, reason: 'workflow definition changed' },
-  { re: /^(?:package|server\/package|client\/package)(?:-lock)?\.json$/, reason: 'dependency manifest changed' },
+  { re: /^(?:package|server\/package|client\/package|autofixer\/package)(?:-lock)?\.json$/, reason: 'dependency manifest changed' },
   { re: /^(?:server|client)\/vitest\.config(?:\.db)?\.js$/, reason: 'test runner configuration changed' },
   { re: /^scripts\/vitestCiPool(?:\.test)?\.js$/, reason: 'test runner pool configuration changed' },
   { re: /^server\/vitest\.setup\.js$/, reason: 'server test setup changed' },
@@ -129,6 +129,7 @@ export const ALWAYS_RUN_TESTS = [
   'scripts/node-version-drift.test.js',
   'scripts/repo-scan-guards.test.js',
   'scripts/tailnet-identity-leak.test.js',
+  'server/dependency-overrides.test.js',
   'server/lib/qwenAgentParsers.test.js',
   'server/lib/testDataIsolation.guards.test.js',
   'server/lib/testHelper.test.js',

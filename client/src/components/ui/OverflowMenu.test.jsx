@@ -2,6 +2,7 @@ import { useRef } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router';
 import OverflowMenu from './OverflowMenu';
 
 const items = (overrides = {}) => ([
@@ -142,5 +143,31 @@ describe('OverflowMenu', () => {
 
     await user.click(screen.getByRole('button', { name: 'outside' }));
     expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  // A page header can demote its navigation actions here (#5653) only if they
+  // stay real anchors — a <button> would lose middle-click / open-in-new-tab.
+  it('renders a `to` item as a link and closes the menu on activation', async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <OverflowMenu
+          label="More actions"
+          items={[{ id: 'compare', label: 'Compare local models', to: '/models/performance' }]}
+        />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getByRole('button', { name: 'More actions' }));
+    const item = screen.getByRole('menuitem', { name: 'Compare local models' });
+    expect(item.tagName).toBe('A');
+    expect(item).toHaveAttribute('href', '/models/performance');
+
+    const trigger = screen.getByRole('button', { name: 'More actions' });
+    await user.click(item);
+    expect(screen.queryByRole('menu')).toBeNull();
+    // The activated anchor unmounts with the menu, so focus has to be handed
+    // back or a keyboard user is stranded on <body>.
+    expect(document.activeElement).toBe(trigger);
   });
 });

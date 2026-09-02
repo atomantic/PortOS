@@ -17,6 +17,7 @@ import { isStr } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
+import { RESPONSE_TOO_LARGE } from '../../lib/httpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { getOrComputeImageSha256, sidecarGenParamsHash } from '../../lib/assetHash.js';
 import { generateThumbnail } from '../../lib/ffmpeg.js';
@@ -810,12 +811,13 @@ export async function pullMissingAssetsFromPeer(senderInstanceId, missingAssets)
  */
 export async function fetchCappedAssetBuffer(peer, url, label, maxBytes, { allowEmpty = false } = {}) {
   // maxBytes propagates into the HTTPS shim's streaming cap (see
-  // server/lib/httpClient.js); the plain-HTTP path falls back to the
-  // post-resolve content-length checks below (serve-static always sets it).
+  // server/lib/httpClient.js), which rejects with a RESPONSE_TOO_LARGE-coded
+  // Error; the plain-HTTP path falls back to the post-resolve content-length
+  // checks below (serve-static always sets it).
   const res = await withAbortTimeout(ASSET_PULL_TIMEOUT_MS, (signal) =>
     peerFetch(url, { signal, maxBytes }, peer))
     .catch((err) => {
-      if (err?.message?.includes('exceed')) {
+      if (err?.code === RESPONSE_TOO_LARGE) {
         console.log(`⚠️ peerSync: ${label} exceeded asset size cap — ${err.message}`);
       }
       return null;

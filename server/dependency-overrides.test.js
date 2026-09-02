@@ -1,21 +1,44 @@
 import { describe, it, expect } from 'vitest';
+import { execFileSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { discoverWorkspaces } from '../scripts/trusted-rebuilds.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..');
 
-const MANIFESTS = ['package.json', 'server/package.json', 'client/package.json'];
+const MANIFESTS = [
+  'package.json',
+  'server/package.json',
+  'client/package.json',
+  'autofixer/package.json'
+];
 
 const readOverrides = (rel) => {
   const pkg = JSON.parse(readFileSync(join(REPO_ROOT, rel), 'utf8'));
   return pkg.overrides ?? {};
 };
 
-// PortOS pins security fixes for transitive dependencies as `overrides` in THREE
-// independent manifests (root, server/, client/) — each with its own lockfile, so
-// npm resolves each tree separately. The recurring failure (issue #2848) is that a
+// Tracked, not on-disk. `browser/package-lock.json` is deliberately gitignored
+// (.gitignore) yet appears the moment anyone runs an install there, so an
+// existsSync() probe would make these assertions depend on the developer's
+// working tree. What ships in the repo is the thing under governance.
+const trackedLockfiles = () =>
+  new Set(
+    execFileSync('git', ['ls-files', '--', '*package-lock.json'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8'
+    })
+      .split('\n')
+      .filter(Boolean)
+  );
+
+const workspacePrefix = (label) => (label === 'root' ? '' : `${label}/`);
+
+// PortOS pins security fixes for transitive dependencies as `overrides` in FOUR
+// independent manifests (root, server/, client/, autofixer/) — each with its own
+// lockfile, so npm resolves each tree separately. The recurring failure (issue #2848) is that a
 // CVE gets pinned in one manifest and the others quietly keep the vulnerable
 // version: `brace-expansion` sat at the patched 5.0.6 in server/ while root and
 // client/ stayed on the vulnerable 5.0.5, so `npm audit` stayed red in two of three
@@ -110,5 +133,63 @@ describe('dependency override parity across manifests (#2848)', () => {
     }
 
     expect(stale).toEqual([]);
+  });
+
+  // The three mechanisms that govern a dependency tree — the manifest `overrides`
+  // block, a Dependabot entry, and the assertions above — were all hardcoded to
+  // root/server/client, so `autofixer/` (a fourth npm install prefix with its own
+  // tracked lockfile) sat outside every one of them and quietly resolved
+  // path-to-regexp@8.4.0 / qs@6.15.2 while server/ enforced 8.4.2 / 6.15.3
+  // (issue #5658). MANIFESTS is a hand-written list; this derives the roster from
+  // the same `discoverWorkspaces()` the install-script allowlist uses, so a fifth
+  // workspace added later fails here instead of silently inheriting no governance.
+  it('governs every workspace manifest that ships its own lockfile', () => {
+    const tracked = trackedLockfiles();
+    const ungoverned = discoverWorkspaces()
+      .map(workspacePrefix)
+      .filter((prefix) => tracked.has(`${prefix}package-lock.json`))
+      .map((prefix) => `${prefix}package.json`)
+      .filter((manifest) => !MANIFESTS.includes(manifest));
+
+    expect(ungoverned).toEqual([]);
+  });
+
+  // The source-level assertions above compare manifest against manifest and so
+  // cannot see a pin that was declared but never applied: adding an `overrides`
+  // entry without regenerating that workspace's lockfile leaves the vulnerable
+  // version installed while the manifest reads as remediated. Reading the
+  // lockfiles closes that gap in both directions — a workspace that resolves a
+  // package another workspace has pinned must land on the pinned version, whether
+  // it declares the pin itself or has simply never noticed it needs one.
+  it('resolves every pinned package to its pinned version in all tracked lockfiles', () => {
+    const pins = new Map();
+    for (const rel of MANIFESTS) {
+      for (const [name, version] of Object.entries(readOverrides(rel))) {
+        // Nested overrides are scoped to one consumer's subtree — same exclusion
+        // as the parity assertion above.
+        if (typeof version !== 'string') continue;
+        if (!pins.has(name)) pins.set(name, new Set());
+        pins.get(name).add(version);
+      }
+    }
+
+    const NESTED = 'node_modules/';
+    const drift = [];
+    for (const lockRel of [...trackedLockfiles()].sort()) {
+      const packages = JSON.parse(readFileSync(join(REPO_ROOT, lockRel), 'utf8')).packages ?? {};
+      for (const [path, meta] of Object.entries(packages)) {
+        // '' is the workspace itself, workspace-link entries carry no
+        // `node_modules/` segment, and `link: true` entries carry no version.
+        if (!path?.includes(NESTED) || !meta?.version) continue;
+        const name = path.slice(path.lastIndexOf(NESTED) + NESTED.length);
+        const pinned = pins.get(name);
+        // A package with disagreeing pins is already reported by the parity
+        // assertion above; don't double-report it as drift here.
+        if (!pinned || pinned.size > 1 || pinned.has(meta.version)) continue;
+        drift.push(`${lockRel}: ${name}@${meta.version} != pinned ${[...pinned][0]}`);
+      }
+    }
+
+    expect(drift).toEqual([]);
   });
 });

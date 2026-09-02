@@ -410,6 +410,18 @@ describe('taskSchedule', () => {
     });
   });
 
+  describe('pr-reviewer (layered public-content review task)', () => {
+    it('describes the preflight-owned prompt and keeps both stages read-only', () => {
+      expect(TASK_TYPE_PROMPT_INFO['pr-reviewer']).toMatchObject({ mode: 'runtime-generated' });
+      expect(TASK_TYPE_PROMPT_INFO['pr-reviewer'].description).toContain('exact cleared snapshot');
+      expect(DEFAULT_TASK_INTERVALS['pr-reviewer'].taskMetadata.pipeline.stages).toEqual([
+        expect.objectContaining({ name: 'Security Scan', readOnly: true, managed: true }),
+        expect.objectContaining({ name: 'Code Review & Actions', readOnly: true, executionProfile: 'public-review' }),
+      ]);
+      expect(MANAGED_AGENT_OPTIONS['pr-reviewer']).toEqual(['useWorktree', 'openPR', 'worktreeChangesExpected']);
+    });
+  });
+
   describe('do-replan task type', () => {
     it('should default to on-demand and enabled, with worktree+PR metadata', async () => {
       const interval = await getTaskInterval('do-replan')

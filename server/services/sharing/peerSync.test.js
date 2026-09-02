@@ -253,6 +253,7 @@ import { listWorksForSync, listFoldersForSync, listExercisesForSync } from '../w
 import { listCommissionFeedbackForSync } from '../creativeCommissions/feedbackStore.js';
 import { listCommissionsForSync } from '../creativeCommissions/store.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
+import { RESPONSE_TOO_LARGE } from '../../lib/httpClient.js';
 import { reconcileMediaAssets } from '../mediaAssetIndex/index.js';
 import { getBackendName } from '../memoryBackend.js';
 import { getCatalogBundleForRef } from '../catalogDB.js';
@@ -1408,11 +1409,23 @@ describe('peerSync', () => {
     });
 
     it('payload-too-large (not peer-unreachable) when the HTTPS shim trips the maxBytes cap', async () => {
-      // The shim rejects with an "exceed" Error — must map to payload-too-large,
-      // consistent with the Content-Length path, not be misread as offline.
-      vi.mocked(peerFetch).mockRejectedValue(new Error('Response body exceeded maxBytes 16777216 (got 99999999)'));
+      // The shim rejects with a RESPONSE_TOO_LARGE-coded Error — must map to
+      // payload-too-large, consistent with the Content-Length path, not be
+      // misread as offline.
+      vi.mocked(peerFetch).mockRejectedValue(
+        Object.assign(new Error('Response body exceeded maxBytes 16777216 (got 99999999)'), { code: RESPONSE_TOO_LARGE })
+      );
       expect(await pullRecordFromPeer('peer-a', 'universe', 'u-pull'))
         .toEqual({ pulled: false, reason: 'payload-too-large' });
+    });
+
+    it('peer-unreachable for an uncoded transport error that merely says "exceed"', async () => {
+      // Discrimination is on err.code, not on message prose: an unrelated
+      // transport failure whose text happens to contain "exceed" must stay
+      // peer-unreachable rather than being reported as an oversize payload.
+      vi.mocked(peerFetch).mockRejectedValue(new Error('socket hang up: retries exceeded'));
+      expect(await pullRecordFromPeer('peer-a', 'universe', 'u-pull'))
+        .toEqual({ pulled: false, reason: 'peer-unreachable' });
     });
 
     it('invalid-payload when the returned record is not the one we requested', async () => {

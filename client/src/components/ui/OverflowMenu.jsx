@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { Link } from 'react-router';
 import { MoreHorizontal } from 'lucide-react';
 import useClickOutside from '../../hooks/useClickOutside';
 import useEscapeKey from '../../hooks/useEscapeKey';
@@ -7,6 +8,12 @@ import usePopoverPosition, { VIEWPORT_PADDING } from '../../hooks/usePopoverPosi
 
 // "…" overflow menu for demoting rare/destructive row actions out of the
 // always-visible control set, so the row keeps a single primary affordance.
+// An item is `{ id, label, icon?, tone? }` plus exactly one of `onSelect` (a
+// callback, which may also take `disabled`) or `to` (a route). A `to` item
+// renders a real `<Link>` so middle-click and open-in-new-tab keep working —
+// the reason a page header's navigation actions can be demoted here without
+// losing anchor semantics. Navigation is never conditionally unavailable here,
+// so `to` items have no disabled state; omit the item instead.
 // Keyboard: ArrowDown from the trigger opens and focuses the first item,
 // ArrowUp/ArrowDown cycle, Escape closes and returns focus to the trigger.
 // Trigger and items are >=44px on phones (the repo's touch-target floor) and
@@ -122,22 +129,41 @@ export default function OverflowMenu({ label, items = [], className = '', trigge
             visibility: style ? 'visible' : 'hidden',
           }}
         >
-          {items.map(item => (
-            <button
-              key={item.id}
-              type="button"
-              role="menuitem"
-              disabled={item.disabled}
-              // Close first so focus lands somewhere real; an item that reveals
-              // follow-up UI (an inline confirm) owns moving focus onward from
-              // there — its mount effect runs after this commit and wins.
-              onClick={() => { close(true); item.onSelect?.(); }}
-              className={`w-full px-3 py-2 min-h-[44px] sm:min-h-[40px] text-left text-xs flex items-center gap-2 transition-colors disabled:opacity-50 focus:outline-hidden focus:bg-port-border/70 ${TONES[item.tone] || TONES.default}`}
-            >
-              {item.icon ? <item.icon size={14} aria-hidden="true" /> : null}
-              <span>{item.label}</span>
-            </button>
-          ))}
+          {items.map(item => {
+            const itemClass = `w-full px-3 py-2 min-h-[44px] sm:min-h-[40px] text-left text-xs flex items-center gap-2 transition-colors disabled:opacity-50 focus:outline-hidden focus:bg-port-border/70 ${TONES[item.tone] || TONES.default}`;
+            const content = (
+              <>
+                {item.icon ? <item.icon size={14} aria-hidden="true" /> : null}
+                <span>{item.label}</span>
+              </>
+            );
+            // A navigating item is an anchor, not a button. Hand focus back to
+            // the trigger the same way an action item does: the anchor unmounts
+            // with the menu, so without this a keyboard activation would strand
+            // focus on <body> whenever the route renders in place.
+            if (item.to) {
+              return (
+                <Link key={item.id} to={item.to} role="menuitem" className={itemClass} onClick={() => close(true)}>
+                  {content}
+                </Link>
+              );
+            }
+            return (
+              <button
+                key={item.id}
+                type="button"
+                role="menuitem"
+                disabled={item.disabled}
+                // Close first so focus lands somewhere real; an item that reveals
+                // follow-up UI (an inline confirm) owns moving focus onward from
+                // there — its mount effect runs after this commit and wins.
+                onClick={() => { close(true); item.onSelect?.(); }}
+                className={itemClass}
+              >
+                {content}
+              </button>
+            );
+          })}
         </div>,
         document.body,
       )}

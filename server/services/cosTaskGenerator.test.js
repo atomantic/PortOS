@@ -1849,6 +1849,7 @@ describe('pr-reviewer security preflight wiring', () => {
     expect(body).toContain('if (securityPreflight.skipped) return null;');
     expect(GEN_SRC).toContain('previousStageOutput');
     expect(GEN_SRC).toContain('security-scan-report-pending');
+    expect(GEN_SRC).toContain('no-external-open-prs');
     expect(GEN_SRC).toContain('findActiveSecurityScanTask');
     expect(GEN_SRC).toContain('securityScanFingerprint');
   });
@@ -1884,6 +1885,18 @@ describe('pr-reviewer security preflight wiring', () => {
     });
     expect(output).not.toContain(flaggedPayload);
     expect(output).not.toContain('modelResponse');
+  });
+
+  it('requires the explicit safe field when building the Stage 2 allowlist', () => {
+    const output = buildSecurityScanPipelineOutput(
+      { code: 'security-scan-passed' },
+      [{ number: 13, safe: false, passed: true, headRefOid: 'b'.repeat(40), securityFindings: [] }],
+      'passed',
+    );
+
+    expect(JSON.parse(output).reviewedPrs).toEqual([
+      { number: 13, safe: false, headRefOid: null, findingCount: 1 },
+    ]);
   });
 });
 

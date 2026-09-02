@@ -169,12 +169,12 @@ describe('localLlmCatalog', () => {
         id: 'gemma3:27b',
         category: 'general',
         recommendedFor: expect.arrayContaining(['general', 'reasoning']),
-        featured: { label: 'Recommended for Security Scan' },
         repository: 'google/gemma-3-27b-it',
         gated: true,
         capabilities: ['chat', 'vision'],
         contextLength: 131072,
       });
+      expect(ollama.find((m) => m.key === 'gemma3-27b-it').featured).toBeNull();
       expect(ollama.find((m) => m.key === 'gemma3-27b-it').capabilities).not.toContain('tools');
       // Gemma 4 is newer, but its native function-calling capability makes it
       // ineligible for the read-only Security Scan model pin.

@@ -35,6 +35,7 @@ import {
 import AppContextPicker from '../components/AppContextPicker';
 import FilePickerButton from '../components/ui/FilePickerButton';
 import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
+import PageHeader from '../components/PageHeader';
 import * as api from '../services/apiOpenClaw';
 import * as coreApi from '../services/api';
 import { formatDateTime } from '../utils/formatters';
@@ -314,40 +315,37 @@ export default function OpenClaw() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-port-border p-4">
-        <div className="flex items-center gap-3">
-          <Bot className="h-7 w-7 shrink-0 text-port-accent" />
-          <div>
-            <h1 className="text-xl font-bold text-white">OpenClaw</h1>
-            <p className="hidden text-sm text-gray-500 sm:block">Operator chat surface with streaming, context, and attachments.</p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setShowSidePanel(current => !current)}
-            aria-expanded={showSidePanel}
-            className="inline-flex items-center gap-2 rounded-lg border border-port-border bg-port-card px-3 py-2 text-sm text-gray-200 transition-colors hover:border-gray-500 hover:text-white lg:hidden"
-          >
-            <MessageSquareText size={16} />
-            Sessions
-            <span className="text-xs text-gray-500">{sessions.length}</span>
-          </button>
-          <span className={`inline-flex items-center rounded-full border px-3 py-1 text-sm font-medium ${runtimeState.classes}`}>
-            {runtimeState.label}
-          </span>
-          <button
-            type="button"
-            onClick={loadRuntime}
-            disabled={statusLoading || sessionsLoading}
-            className="inline-flex items-center gap-2 rounded-lg border border-port-border bg-port-card px-3 py-2 text-sm text-gray-200 transition-colors hover:border-gray-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <RefreshCw size={16} className={statusLoading || sessionsLoading ? 'animate-spin' : ''} />
-            Refresh
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        icon={Bot}
+        title="OpenClaw"
+        subtitle="Operator chat surface with streaming, context, and attachments."
+        actions={(
+          <>
+            <button
+              type="button"
+              onClick={() => setShowSidePanel(current => !current)}
+              aria-expanded={showSidePanel}
+              className="inline-flex items-center gap-2 rounded-lg border border-port-border bg-port-card px-3 py-2 text-sm text-gray-200 transition-colors hover:border-gray-500 hover:text-white lg:hidden"
+            >
+              <MessageSquareText size={16} />
+              Sessions
+              <span className="text-xs text-gray-500">{sessions.length}</span>
+            </button>
+            <span className={`inline-flex items-center rounded-full border px-3 py-1 text-sm font-medium ${runtimeState.classes}`}>
+              {runtimeState.label}
+            </span>
+            <button
+              type="button"
+              onClick={loadRuntime}
+              disabled={statusLoading || sessionsLoading}
+              className="inline-flex items-center gap-2 rounded-lg border border-port-border bg-port-card px-3 py-2 text-sm text-gray-200 transition-colors hover:border-gray-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <RefreshCw size={16} className={statusLoading || sessionsLoading ? 'animate-spin' : ''} />
+              Refresh
+            </button>
+          </>
+        )}
+      />
 
       <SettingsTabsHeader activeTab="openclaw" />
 

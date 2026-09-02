@@ -14,6 +14,11 @@ describe('taskTypeHooks registry', () => {
     expect(typeof await getTaskOutputHook('issue-watcher')).toBe('function');
   });
 
+  it('keeps pr-reviewer input owned by its screened preflight while sharing only the action hook', async () => {
+    expect(await getTaskInputHook('pr-reviewer')).toBeNull();
+    expect(typeof await getTaskOutputHook('pr-reviewer')).toBe('function');
+  });
+
   it('resolves an input hook but no output hook for user-action-review', async () => {
     // Input-only registration: the empty-ledger skip is the whole hook. The
     // agent's deliverable (filed issues / queued tasks) has no output payload.
@@ -42,6 +47,7 @@ describe('isProgrammaticIoTaskType (#2700)', () => {
   it('recognizes a registered programmatic-I/O task type', () => {
     expect(isProgrammaticIoTaskType('layered-intelligence')).toBe(true);
     expect(isProgrammaticIoTaskType('issue-watcher')).toBe(true);
+    expect(isProgrammaticIoTaskType('pr-reviewer')).toBe(true);
   });
 
   it('rejects unregistered types, non-strings, and inherited Object keys', () => {

@@ -5,9 +5,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
-  # server/ and client/ carry their own package.json + overrides, and their
-  # lockfiles are gitignored — without these entries their dependency trees are
-  # invisible to Dependabot (a critical node-tar advisory sat unreported).
+  # server/, client/ and autofixer/ each carry their own package.json +
+  # overrides and their own lockfile, so npm resolves each tree separately —
+  # without an entry per directory those trees are invisible to Dependabot (a
+  # critical node-tar advisory sat unreported). browser/ is deliberately absent:
+  # it has zero dependencies and its lockfile is gitignored.
   - package-ecosystem: npm
     directory: /server
     schedule:
@@ -15,6 +17,11 @@ updates:
     open-pull-requests-limit: 10
   - package-ecosystem: npm
     directory: /client
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+  - package-ecosystem: npm
+    directory: /autofixer
     schedule:
       interval: weekly
     open-pull-requests-limit: 10

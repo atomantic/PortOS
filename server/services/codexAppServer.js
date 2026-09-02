@@ -740,6 +740,10 @@ const cachedModelEntry = (modelId) => {
   return modelsCache.models.find((entry) => entry.id === modelId) ?? null;
 };
 
+/** The one shape a caller's Stop takes, wherever in a turn it is noticed. */
+const turnCancelledError = () =>
+  codexError(CODEX_TURN_ERROR_CODES.turnInterrupted, 'The Codex turn was cancelled.', { status: 499 });
+
 /**
  * Run ONE bounded text turn against the ChatGPT subscription.
  *
@@ -773,7 +777,7 @@ export async function runCodexTextTurn({
   // later, so the caller's cancellation has to be honoured here or the turn runs
   // (and bills) for an answer nobody is waiting for.
   if (signal?.aborted) {
-    throw codexError(CODEX_TURN_ERROR_CODES.turnInterrupted, 'The Codex turn was cancelled.', { status: 499 });
+    throw turnCancelledError();
   }
   const benched = getCodexTextTransportBench();
   if (benched) {
@@ -794,6 +798,13 @@ export async function runCodexTextTurn({
   // silently send this turn's frames to a child that has never heard of its
   // thread id.
   const owner = await connect();
+  // `connect()` can spawn and handshake a whole app-server child, which is the
+  // longest await in this function. Re-read the signal before paying for a
+  // thread the caller has already abandoned — the up-front check above ran
+  // several awaits ago, and no listener is registered yet.
+  if (signal?.aborted) {
+    throw turnCancelledError();
+  }
   const started = await sendRequest(owner, CODEX_TURN_RPC.threadStart, {
     ...CODEX_TEXT_THREAD_CONFIG,
     cwd,
@@ -828,10 +839,20 @@ export async function runCodexTextTurn({
   }, timeoutMs);
   timer.unref?.();
 
-  const onAbort = () => fail(codexError(CODEX_TURN_ERROR_CODES.turnInterrupted, 'The Codex turn was cancelled.', { status: 499 }));
-  signal?.addEventListener('abort', onAbort, { once: true });
+  const onAbort = () => fail(turnCancelledError());
+  // An AbortSignal fires its 'abort' event exactly once; a listener added after
+  // the fact never runs. An abort raised during `connect()`/`thread/start` has
+  // to be honoured by re-reading the flag, or the turn streams for the whole
+  // deadline and bills for an answer nobody is waiting for.
+  if (signal?.aborted) onAbort();
+  else signal?.addEventListener('abort', onAbort, { once: true });
 
   try {
+    // Already aborted: `onAbort` has rejected `finished`, so awaiting it here
+    // surfaces the cancellation WITHOUT dispatching a turn — no quota is spent,
+    // and Stop does not have to wait out a `turn/start` response that would
+    // only be thrown away. The `finally` below still runs the shared cleanup.
+    if (signal?.aborted) await finished;
     const response = await sendRequest(owner, CODEX_TURN_RPC.turnStart, {
       threadId,
       input: [{ type: 'text', text: prompt }],

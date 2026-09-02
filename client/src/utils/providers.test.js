@@ -937,6 +937,23 @@ describe('toolFreeLocalSelectionPolicy', () => {
     expect(policy.model('safe-model', ollama)).toBe(true);
     expect(policy.model('unknown-model', ollama)).toBe(false);
   });
+
+  it('reuses the same no-tool model policy for an explicitly maintained local wrapper', () => {
+    const wrapper = {
+      id: 'claude-ollama',
+      type: 'cli',
+      name: 'Claude Ollama',
+      endpoint: 'http://localhost:11434',
+      publicReviewSupported: true,
+    };
+    const policy = toolFreeLocalSelectionPolicy(
+      { ollama: { 'safe-model': ['chat'], 'agent-model': ['chat', 'tools'] } },
+      { providerPredicate: (provider) => provider?.publicReviewSupported === true },
+    );
+    expect(policy.provider(wrapper)).toBe(true);
+    expect(policy.model('safe-model', wrapper)).toBe(true);
+    expect(policy.model('agent-model', wrapper)).toBe(false);
+  });
 });
 
 describe('modelCapabilityInfo', () => {

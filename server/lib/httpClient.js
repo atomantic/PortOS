@@ -5,6 +5,19 @@
 
 import https from 'https';
 
+/**
+ * `err.code` stamped on every rejection from the `insecureFetch` size cap —
+ * both the declared-Content-Length pre-check and the streamed-body accumulator.
+ * Callers (peer-sync record + asset pulls) discriminate the oversize failure
+ * from a generic transport failure on this code, NOT on the English message
+ * text: rewording a message must never silently reclassify a rejected oversize
+ * payload as `peer-unreachable`. A `code` string (rather than an Error
+ * subclass) matches how the rest of the server discriminates service errors
+ * (see `createServiceErrorMapper` in lib/errorHandler.js) and survives
+ * structured-clone / serialization boundaries.
+ */
+export const RESPONSE_TOO_LARGE = 'RESPONSE_TOO_LARGE';
+
 // Wraps https.request as fetch-compatible for self-signed cert support
 export function insecureFetch(agent) {
   return async (url, { method = 'GET', headers = {}, body, signal, maxBytes } = {}) => {
@@ -39,7 +52,10 @@ export function insecureFetch(agent) {
           if (Number.isFinite(declared) && declared > maxBytes) {
             cleanup();
             req.destroy();
-            reject(new Error(`Response declared Content-Length ${declared} exceeds maxBytes ${maxBytes}`));
+            reject(Object.assign(
+              new Error(`Response declared Content-Length ${declared} exceeds maxBytes ${maxBytes}`),
+              { code: RESPONSE_TOO_LARGE }
+            ));
             return;
           }
         }
@@ -61,7 +77,10 @@ export function insecureFetch(agent) {
               capTripped = true;
               cleanup();
               req.destroy();
-              reject(new Error(`Response body exceeded maxBytes ${maxBytes} (got ${bytesSoFar})`));
+              reject(Object.assign(
+                new Error(`Response body exceeded maxBytes ${maxBytes} (got ${bytesSoFar})`),
+                { code: RESPONSE_TOO_LARGE }
+              ));
               return;
             }
           }

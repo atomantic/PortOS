@@ -79,6 +79,17 @@ const openEditorTab = async (label) => {
   fireEvent.click(await screen.findByRole('tab', { name: label }));
 };
 
+// The rare page actions (Compare local models, Fleet setup, Load Samples) sit
+// behind the header's overflow menu since #5653, so the bar stays one row tall.
+const openHeaderMenu = async () => {
+  fireEvent.click(await screen.findByRole('button', { name: 'More provider actions' }));
+};
+
+const clickLoadSamples = async () => {
+  await openHeaderMenu();
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'Load Samples' }));
+};
+
 // One entry of the `runtimes` map from GET /api/providers/runtimes.
 const missingRuntime = {
   id: 'opencode',
@@ -253,9 +264,32 @@ describe('AIProviders page load error handling', () => {
     renderPage();
 
     expect(await screen.findByText('OpenAI')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Compare local models/ })).toHaveAttribute('href', '/models/performance');
     expect(screen.queryByText('No providers configured')).not.toBeInTheDocument();
     expect(screen.queryByText('Failed to load AI providers')).not.toBeInTheDocument();
+
+    // Demoted to the overflow menu, but still a real anchor so it can be
+    // opened in a new tab.
+    await openHeaderMenu();
+    expect(screen.getByRole('menuitem', { name: /Compare local models/ })).toHaveAttribute('href', '/models/performance');
+  });
+
+  // The page hosts SettingsTabsHeader; before #5653 it also hand-rolled a
+  // `Settings` title bar above it, so every render stacked two h1s and pushed
+  // the first provider card off a phone viewport.
+  it('renders exactly one h1, naming the page rather than the settings section', async () => {
+    api.getProviders.mockResolvedValue({
+      providers: [
+        { id: 'p1', name: 'OpenAI', type: 'api', enabled: true, endpoint: 'https://api.openai.com', models: ['gpt-4'] }
+      ],
+      activeProvider: 'p1',
+    });
+
+    renderPage();
+
+    await screen.findByText('OpenAI');
+    const headings = screen.getAllByRole('heading', { level: 1 });
+    expect(headings).toHaveLength(1);
+    expect(headings[0]).toHaveAccessibleName('AI Providers');
   });
 
   it('shows a blank secret environment value as not set', async () => {
@@ -608,8 +642,7 @@ describe('handleAddSample error handling', () => {
 
     renderPage();
 
-    const loadSamplesBtn = await screen.findByRole('button', { name: 'Load Samples' });
-    fireEvent.click(loadSamplesBtn);
+    await clickLoadSamples();
 
     const addBtn = await screen.findByRole('button', { name: 'Add' });
     fireEvent.click(addBtn);
@@ -650,8 +683,7 @@ describe('handleAddAllSamples partial failure handling', () => {
 
     renderPage();
 
-    const loadSamplesBtn = await screen.findByRole('button', { name: 'Load Samples' });
-    fireEvent.click(loadSamplesBtn);
+    await clickLoadSamples();
 
     const addAllBtn = await screen.findByRole('button', { name: 'Add All (3)' });
     fireEvent.click(addAllBtn);
@@ -1508,7 +1540,7 @@ describe('hardware-incompatible providers', () => {
 
     renderPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Load Samples' }));
+    await clickLoadSamples();
 
     expect(await screen.findByText('Sample Runs Here')).toBeInTheDocument();
     expect(screen.queryByText('Sample Needs More RAM')).not.toBeInTheDocument();
@@ -1533,7 +1565,7 @@ describe('hardware-incompatible providers', () => {
 
     renderPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Load Samples' }));
+    await clickLoadSamples();
 
     expect(await screen.findByText(/cannot run on this machine/)).toBeInTheDocument();
   });

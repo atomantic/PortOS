@@ -19,8 +19,8 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 
 | Package | Tier | Verdict | Where Used | Notes |
 |---------|------|---------|------------|-------|
-| **Root devDeps** | | | | |
-| `pm2` | 1 | KEEP | top-level scripts | Process manager, foundational. Pinned `7.0.4` (aligned with server pin) |
+| **Root deps** | | | | |
+| `pm2` | 1 | KEEP | top-level scripts | Process manager, foundational. Declared in root `dependencies` (the root manifest has no devDependencies). Pinned `7.0.4` (aligned with server pin) |
 | **Server deps** | | | | |
 | `@novnc/novnc` | 1 | KEEP | PortDeck remote desktop viewer | Mature RFB/VNC protocol implementation; replacing it would require owning multiple security types and framebuffer encodings |
 | `@googleapis/calendar` | 1 | KEEP | Calendar integration | Scoped official Google SDK (replaced monolithic `googleapis`) |
@@ -77,6 +77,10 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `@testing-library/react` | 1 | KEEP | component tests | |
 | `@testing-library/user-event` | 1 | KEEP | interaction tests | |
 | `rollup-plugin-visualizer` | 2 | KEEP | bundle-size analysis | Dev-only, opt-in |
+| **Autofixer deps** | | | | |
+| `express` | 1 | KEEP | `autofixer/ui.js` | Same framework and pin (`5.2.1`) as the server workspace, but a separate install prefix with its own lockfile — so it needs its own `overrides` block to inherit the server's express-tree pins |
+| **Browser workspace** | | | | |
+| _(none)_ | — | — | `browser/server.js` | Zero dependencies — Node built-ins only, plus one in-repo import from `server/lib/`. No Dependabot entry, and its lockfile is gitignored |
 
 ## Detailed Findings — Tier 2/3 Audits
 
@@ -119,14 +123,12 @@ This is intentionally NOT done in default mode — current dependency footprint 
 
 ## Override Pins (`overrides`)
 
-Defined in `package.json` (root + server + client) — kept current to dodge known upstream advisories:
+Defined in `package.json` (root + server + client + autofixer) — kept current to dodge known upstream advisories:
 
 - `ws@8.21.3` (all three)
 - `lodash@4.18.1`, `follow-redirects@1.16.0`, `js-yaml@4.3.1`, `ip-address@10.5.0` (root + server)
 - `nanoid@3.3.18`, `socket.io-parser@4.2.7` (server + client)
-- `path-to-regexp@8.4.2` (server only)
-- `body-parser@2.3.0` (server only)
-- `qs@6.15.3` (server only)
+- `path-to-regexp@8.4.2`, `body-parser@2.3.0`, `qs@6.15.3` (server + autofixer — the express-reachable subset; `autofixer/` mirrors only these three because a pin for a package absent from the tree reads as protection that does not exist)
 - `tar@7.5.22` (server only)
 - `engine.io@6.6.9` (server only)
 - `postcss@8.5.26` (server only)
@@ -138,7 +140,7 @@ Defined in `package.json` (root + server + client) — kept current to dodge kno
 
 These exist purely to force-bump transitive deps; revisit if `npm audit` flags new advisories.
 
-**Keep this list in sync with the manifests** — a stale entry here reads as a pin that exists when it doesn't. `server/dependency-overrides.test.js` guards the pins themselves (cross-manifest version parity, plus a `MINIMUM_SAFE` floor per remediated advisory), but it does not read this document. When a floor moves because a *new* advisory covers the version already pinned — as `js-yaml@4.3.0` did under GHSA-5p4m-2wfm-xmqj — bump the pin, the `MINIMUM_SAFE` row, and this list together.
+**Keep this list in sync with the manifests** — a stale entry here reads as a pin that exists when it doesn't. `server/dependency-overrides.test.js` guards the pins themselves (cross-manifest version parity, a `MINIMUM_SAFE` floor per remediated advisory, that every workspace shipping a tracked lockfile is in the governed manifest list, and that each tracked lockfile actually resolves the pinned version), but it does not read this document. When a floor moves because a *new* advisory covers the version already pinned — as `js-yaml@4.3.0` did under GHSA-5p4m-2wfm-xmqj — bump the pin, the `MINIMUM_SAFE` row, and this list together.
 
 **Not every compromised package warrants a pin.** A pin only helps when the installed version is *below* the top of its permitted range — otherwise there is nothing to force. The August 2026 `keyv` / `flat-cache` / `file-entry-cache` compromise deliberately got **no** pin: each range was already at its ceiling (highest published `keyv@4.x` *is* `4.5.4`, etc.), so a pin would have been a no-op, and the packages were removed outright instead. Check headroom (`npm view <pkg>@<major> version`) before adding an entry here.
 

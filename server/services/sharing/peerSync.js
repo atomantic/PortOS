@@ -22,6 +22,7 @@
  */
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
+import { RESPONSE_TOO_LARGE } from '../../lib/httpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { flushBaseHashes, withBaseHashFlushBatch } from '../../lib/conflictJournal.js';
 import { recordEvents, registerSubscriptionAdapter } from './recordEvents.js';
@@ -865,12 +866,13 @@ export async function pullRecordFromPeer(peerId, recordKind, recordId) {
   // 'peer-unreachable'.
   // maxBytes caps the HTTPS shim's in-memory buffering (see lib/httpClient.js);
   // a buggy/misbehaving peer streaming an oversized body is aborted mid-stream
-  // rather than buffered whole. The shim rejects with an "exceed" Error.
+  // rather than buffered whole. The shim rejects with a RESPONSE_TOO_LARGE-coded
+  // Error so an oversize body stays distinguishable from a dead peer.
   let tooLarge = false;
   const res = await withAbortTimeout(PUSH_TIMEOUT_MS, (signal) =>
     peerFetch(url, { signal, maxBytes: RECORD_PAYLOAD_MAX_BYTES }, peer))
     .catch((err) => {
-      if (err?.message?.includes('exceed')) {
+      if (err?.code === RESPONSE_TOO_LARGE) {
         tooLarge = true; // HTTPS shim tripped the cap — same condition as the Content-Length check
         console.log(`⚠️ peerSync: pull-record ${recordKind}/${recordId} exceeded payload cap — ${err.message}`);
       }

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router';
-import { AlertTriangle, Gauge, Network } from 'lucide-react';
+import { AlertTriangle, Bot, Gauge, Network, Package } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
@@ -9,7 +9,6 @@ import { copyToClipboard } from '../lib/clipboard';
 import { isHttpsUrl } from '../utils/urlNormalize';
 import useLocalModels from '../hooks/useLocalModels';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
-import BrailleSpinner from '../components/BrailleSpinner';
 import EmptyState from '../components/EmptyState';
 import Banner from '../components/ui/Banner';
 import {
@@ -21,6 +20,8 @@ import {
   TIMEOUT_INPUT_STEP_MS,
 } from '../utils/formatters';
 import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
+import PageHeader from '../components/PageHeader';
+import OverflowMenu from '../components/ui/OverflowMenu';
 import EffortSelect from '../components/cos/EffortSelect';
 import Drawer from '../components/Drawer';
 import useDrawerTab from '../hooks/useDrawerTab';
@@ -689,9 +690,7 @@ export default function AIProviders() {
   if (loading) {
     return (
       <div className="flex flex-col h-full">
-        <div className="flex items-center gap-3 p-4 border-b border-port-border">
-          <h1 className="text-2xl font-bold text-white">Settings</h1>
-        </div>
+        <PageHeader icon={Bot} title="AI Providers" />
         <SettingsTabsHeader activeTab="providers" />
         <div className="flex-1 flex items-center justify-center">
           <div className="text-gray-400">Loading providers...</div>
@@ -700,50 +699,49 @@ export default function AIProviders() {
     );
   }
 
+  // Only the two actions a user reaches for on nearly every visit stay as
+  // visible buttons; the rare ones are demoted to the overflow menu so the bar
+  // stays one row tall on a 360px viewport and the first provider card is
+  // reachable without scrolling (issue #5653).
+  const secondaryActions = [
+    { id: 'compare-models', label: 'Compare local models', icon: Gauge, to: '/models/performance' },
+    { id: 'fleet-setup', label: 'Fleet setup', icon: Network, to: '/ai/fleet' },
+    {
+      id: 'load-samples',
+      label: loadingSamples ? 'Loading samples…' : 'Load Samples',
+      icon: Package,
+      disabled: loadingSamples,
+      onSelect: handleLoadSamples,
+    },
+  ];
+
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center gap-3 p-4 border-b border-port-border">
-        <h1 className="text-2xl font-bold text-white">Settings</h1>
-      </div>
+      <PageHeader
+        icon={Bot}
+        title="AI Providers"
+        actions={(
+          <>
+            <button
+              onClick={() => setShowRunPanel(!showRunPanel)}
+              className="inline-flex min-h-[40px] items-center rounded-lg bg-port-accent px-3 py-1.5 text-sm text-white transition-colors hover:bg-port-accent/80"
+            >
+              {showRunPanel ? 'Hide Runner' : 'Run Prompt'}
+            </button>
+            <button
+              onClick={() => openForm(null)}
+              className="inline-flex min-h-[40px] items-center rounded-lg bg-port-border px-3 py-1.5 text-sm text-white transition-colors hover:bg-port-border/80"
+            >
+              Add Provider
+            </button>
+            <OverflowMenu label="More provider actions" items={secondaryActions} />
+          </>
+        )}
+      />
 
       <SettingsTabsHeader activeTab="providers" />
 
       <div className="flex-1 overflow-auto p-4 space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <h1 className="text-2xl font-bold text-white">AI Providers</h1>
-        <div className="flex flex-wrap gap-2">
-          <Link
-            to="/models/performance"
-            className="inline-flex items-center gap-1.5 px-4 py-2 bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors text-sm sm:text-base"
-          >
-            <Gauge size={15} /> Compare local models
-          </Link>
-          <Link
-            to="/ai/fleet"
-            className="inline-flex items-center gap-1.5 px-4 py-2 bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors text-sm sm:text-base"
-          >
-            <Network size={15} /> Fleet setup
-          </Link>
-          <button
-            onClick={() => setShowRunPanel(!showRunPanel)}
-            className="px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors text-sm sm:text-base"
-          >
-            {showRunPanel ? 'Hide Runner' : 'Run Prompt'}
-          </button>
-          <button
-            onClick={handleLoadSamples}
-            className="px-4 py-2 bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors text-sm sm:text-base"
-          >
-            {loadingSamples ? <BrailleSpinner text="Loading" /> : 'Load Samples'}
-          </button>
-          <button
-            onClick={() => openForm(null)}
-            className="px-4 py-2 bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors text-sm sm:text-base"
-          >
-            Add Provider
-          </button>
-        </div>
-      </div>
 
       {/* Sample Providers Panel */}
       {showSamples && (

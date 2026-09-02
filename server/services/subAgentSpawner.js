@@ -155,6 +155,14 @@ let spawnerInitPromise = null;
  * process-level unhandled-rejection toast with no task id in it.
  */
 async function handleTaskReady(task) {
+  // The on-demand generator normally clears approval for a user-triggered Run,
+  // but a task type can deliberately retain a non-bypassable approval marker
+  // (for example, a public review that would hand a later coordinator the
+  // ability to act on external PRs). Keep this check at the shared dispatch
+  // chokepoint so every emitter honors it, including on-demand and job paths.
+  if (task?.approvalRequired === true) {
+    return holdTask(task, 'task requires approval');
+  }
   // ── HOLDS, at the one chokepoint all seven `task:ready` emitters funnel
   // through. Each leaves the task queued (no status write, no retry charged)
   // for a condition that clears on its own.

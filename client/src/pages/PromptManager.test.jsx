@@ -825,3 +825,21 @@ describe('PromptManager job skill unsaved-edit guard', () => {
   });
 });
 
+
+// The page hosts SettingsTabsHeader; before #5653 it also hand-rolled a
+// `Settings` title bar above it, so every render stacked two h1s and pushed the
+// first prompt group off a phone viewport.
+describe('PromptManager page header', () => {
+  beforeEach(() => {
+    getPrompts.mockReset().mockResolvedValue({ stages: STAGES, systemStages: SYSTEM_STAGES });
+  });
+
+  it('renders exactly one h1, naming the page rather than the settings section', async () => {
+    renderPage();
+
+    await screen.findByLabelText('Search prompt stages');
+    const headings = screen.getAllByRole('heading', { level: 1 });
+    expect(headings).toHaveLength(1);
+    expect(headings[0]).toHaveAccessibleName('Prompt Manager');
+  });
+});

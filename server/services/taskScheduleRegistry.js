@@ -7,6 +7,7 @@
 
 import { BRANCHES_PER_AGENT_MAX, BRANCHES_PER_AGENT_MIN, DEFAULT_REPO_SYNC_VERIFY_MODE } from '../lib/cosValidation.js';
 import { isAuditTaskType, defaultFileIssuesFor } from '../lib/auditCatalog.js';
+import { MODEL_ABUSE_GUARD_ID } from '../lib/modelAbuseGuard.js';
 import { INTERVAL_TYPES } from './taskScheduleConstants.js';
 
 export const SELF_IMPROVEMENT_TASK_TYPES = [
@@ -342,7 +343,7 @@ export const DEFAULT_TASK_INTERVALS = {
   // is ON except `reapRemotes`, which DELETES branches on origin and so stays
   // opt-in even though the reconciler only ever reaps already-merged ones.
   'repo-sync':           { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA, syncPush: true, syncPull: true, switchDefault: true, cleanupMerged: true, dropStashes: true, reapRemotes: false, verifyMode: DEFAULT_REPO_SYNC_VERIFY_MODE } },
-  'pr-reviewer':         { type: INTERVAL_TYPES.ON_DEMAND, intervalMs: 7200000, enabled: true, weekdaysOnly: true, providerId: null, model: null, prompt: null, taskMetadata: { readOnly: true, pipeline: { stages: [{ name: 'Security Scan', promptKey: 'pr-reviewer-security', readOnly: true }, { name: 'Code Review & Merge', promptKey: 'pr-reviewer-review', readOnly: false }] } } },
+  'pr-reviewer':         { type: INTERVAL_TYPES.ON_DEMAND, intervalMs: 7200000, enabled: true, weekdaysOnly: true, providerId: null, model: null, prompt: null, taskMetadata: { readOnly: true, useWorktree: false, openPR: false, worktreeChangesExpected: false, pipeline: { stages: [{ name: 'Security Scan', promptKey: 'pr-reviewer-security', readOnly: true, managed: true, guardId: MODEL_ABUSE_GUARD_ID }, { name: 'Code Review & Actions', promptKey: 'pr-reviewer-review', readOnly: true, useWorktree: true, openPR: false, simplify: false, reviewLoop: false, discardWorktree: true, noCodeOutput: true, managed: true, executionProfile: 'public-review' }] } } },
   'code-reviewer-a':     { ...CODE_REVIEWER_INTERVAL },
   'code-reviewer-b':     { ...CODE_REVIEWER_INTERVAL },
   'jira-sprint-manager': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, weekdaysOnly: true, feature: 'jira', providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, simplify: true } },
@@ -435,6 +436,11 @@ export const DEFAULT_TASK_INTERVALS = {
 // CoS-managed worktree would clobber it).
 export const MANAGED_AGENT_OPTIONS = {
   'plan-task': ['useWorktree', 'openPR', 'claimFlow'],
+  // The parent task is a non-committing coordinator. Its isolated Stage 2
+  // reviewer explicitly overrides `useWorktree` inside the pipeline; the
+  // parent-level false prevents the generic task defaults from treating the
+  // coordinator itself as code-producing work.
+  'pr-reviewer': ['useWorktree', 'openPR', 'worktreeChangesExpected'],
   // Programmatic-I/O review task: the model only returns structured judgment;
   // deterministic hooks own every GitHub mutation. Keep its worktree throwaway
   // even when a global/per-app metadata override tries to make it writable.
@@ -584,6 +590,10 @@ export function getTaskTypeDescription(taskType) {
  * real execution shape without changing prompt-version migration state.
  */
 export const TASK_TYPE_PROMPT_INFO = Object.freeze({
+  'pr-reviewer': Object.freeze({
+    mode: 'runtime-generated',
+    description: 'Runs a complete external-content abuse screen, then passes only the exact cleared snapshot to a read-only local code reviewer.'
+  }),
   'issue-watcher': Object.freeze({
     mode: 'runtime-generated',
     description: 'Generated for each run after deterministic GitHub gathering. The reasoning agent receives bounded, untrusted issue/PR data and has no tools.'
