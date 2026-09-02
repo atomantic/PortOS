@@ -108,8 +108,12 @@ describe('cosToolRegistry', () => {
 
   it('includes only granted tools in the Persistent Mind prompt', () => {
     const prompt = buildPersistentMindToolPrompt({ readPortos: true });
-    expect(prompt).toContain('brain.search');
-    expect(prompt).not.toContain('brain.capture');
+    // Catalog entries are JSON.stringified as `"name":"<tool>"`. A granted
+    // tool's input schema may list the same token as an enum (user-actions.query
+    // type `brain.capture`, #5596) — that must not be mistaken for advertising
+    // the ungranted write tool.
+    expect(prompt).toContain('"name":"brain.search"');
+    expect(prompt).not.toContain('"name":"brain.capture"');
   });
 
   it('exposes the operator-action ledger to mind and agent scopes only behind readPortos', async () => {
