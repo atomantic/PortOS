@@ -5,8 +5,6 @@ vi.mock('../../../services/api', () => ({
   PORTOS_APP_ID: 'portos-default',
   getAppRepositorySources: vi.fn(),
   syncAppRepositoryFork: vi.fn(),
-  pullAndUpdateApp: vi.fn(),
-  getPreferredSelfRestartOrigin: vi.fn(),
   handleSelfRestart: vi.fn(),
 }));
 vi.mock('../../../hooks/useAppOperation', () => ({
@@ -90,7 +88,6 @@ beforeEach(() => {
   });
   api.getAppRepositorySources.mockResolvedValue(canonicalStatus());
   api.syncAppRepositoryFork.mockResolvedValue({ synced: true, alreadyUpToDate: false });
-  api.pullAndUpdateApp.mockResolvedValue({ success: true });
 });
 
 afterEach(() => cleanup());
@@ -147,7 +144,7 @@ describe('managed app repository sources', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Sync fork' }));
     await waitFor(() => expect(api.syncAppRepositoryFork).toHaveBeenCalledWith('app-example', { silent: true }));
-    expect(api.pullAndUpdateApp).not.toHaveBeenCalled();
+    expect(useAppOperation.mock.results[0].value.startUpdate).not.toHaveBeenCalled();
   });
 
   it('confirms that one managed update syncs the fork and updates every checkout', async () => {
