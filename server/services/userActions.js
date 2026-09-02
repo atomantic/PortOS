@@ -71,20 +71,27 @@ const REAL_REPO_DATA_DIR = join(resolveInstallRoot(resolveCodeRootForModule(impo
  * `user-action-events.json` into the developer's live `data/` tree the next
  * time such a route gets exercised — #5594 patched three known offenders
  * one at a time, which is a per-suite fix, not a guard against the next one.
- * Fires only under the test runner, and only at the moment a write is
- * actually attempted, so a suite that merely reads (or never triggers a
- * `recordUserAction` call) is unaffected either way.
+ * Fires only under the test runner, and only at the moment the file backend
+ * actually touches the ledger, so a suite that never reaches `recordUserAction`
+ * / `listUserActions` is unaffected either way.
+ *
+ * Reads are guarded as well as writes: the live ledger holds machine-local
+ * operator records (ADR docs/decisions/2026-08-08-privacy-records-machine-local.md),
+ * so an untethered suite must not pull them into the test process either.
+ *
+ * @param {string} attempted what the file backend was about to do, e.g.
+ *   `'recordUserAction attempted a write of'`
  */
-function assertTestDataRootRedirected() {
+function assertTestDataRootRedirected(attempted) {
   if (!isTestRunner() || PATHS.data !== REAL_REPO_DATA_DIR) return;
   throw new Error(
-    'recordUserAction attempted a file-backend write of user-action-events.json ' +
-      "into the repo's real data/ tree. This suite exercises a route wired to " +
-      'recordUserAction but never redirected PATHS.data to a temp root - mock ' +
-      "`../lib/fileUtils.js` with lib/mockPathsDataRoot.js's makePathsProxy/" +
-      'createTempDataRoot (the same fix #5594 applied to cos.test.js / ' +
-      'cosTaskRoutes.test.js / cosAgentFeedback.test.js) rather than letting the ' +
-      'write land here.',
+    `${attempted} user-action-events.json in the repo's real data/ tree. ` +
+      'This suite exercises the user-action ledger but never redirected ' +
+      'PATHS.data to a temp root - mock `../lib/fileUtils.js` with ' +
+      "lib/mockPathsDataRoot.js's makePathsProxy/createTempDataRoot (the same " +
+      'fix #5594 applied to cos.test.js / cosTaskRoutes.test.js / ' +
+      'cosAgentFeedback.test.js) rather than letting the file backend touch the ' +
+      'real tree.',
   );
 }
 
@@ -320,7 +327,7 @@ function makeFileBackend() {
       // BEFORE this guard ever ran, silently no-op'ing past it with no throw —
       // and by then loadFileEvents() had already read the real ledger into the
       // test process regardless. Running the guard first closes both holes.
-      assertTestDataRootRedirected();
+      assertTestDataRootRedirected('recordUserAction attempted a file-backend write of');
       const events = await loadFileEvents();
       if (events.some((row) => row.type === event.type && row.dedupeKey === event.dedupeKey)) return null;
       await ensureDir(PATHS.data);
@@ -328,6 +335,10 @@ function makeFileBackend() {
       return event;
     }),
     list: async (filters) => {
+      // Same guard as the write path: an un-redirected suite must not get to READ
+      // the developer's live ledger either — those rows are machine-local operator
+      // records (docs/decisions/2026-08-08-privacy-records-machine-local.md).
+      assertTestDataRootRedirected('listUserActions attempted a file-backend read of');
       const events = await loadFileEvents();
       return events
         .filter((event) => matchesFilters(event, filters))
