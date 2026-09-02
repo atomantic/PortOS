@@ -37,6 +37,7 @@ import {
 } from '../services/codexAppServer.js';
 import { runLocalRuntimeSetup, SETUP_ACTIONS } from '../services/localRuntimeSetup.js';
 import { localEndpointPort, localRuntimeForProvider } from '../lib/localProviderRuntime.js';
+import { supportsPublicReviewProvider } from '../lib/providerVendors.js';
 import { buildTuiShellLaunch } from '../lib/tuiShellLaunch.js';
 import {
   captureSystemCapabilities,
@@ -137,9 +138,19 @@ const withTuiLaunchCommand = (provider) => {
  * the toolkit keeps its copy so it stays correct standalone. Both decorate on
  * the way out only — the field is never persisted.
  */
-const presentProvider = (provider, capabilities = captureSystemCapabilities()) => sanitizeProvider(
-  withProviderHardwareCompatibility(withTuiLaunchCommand(withRefreshCapability(provider)), capabilities),
-);
+const presentProvider = (provider, capabilities = captureSystemCapabilities()) => {
+  const decorated = withProviderHardwareCompatibility(
+    withTuiLaunchCommand(withRefreshCapability(provider)),
+    capabilities,
+  );
+  // Derived on read from the raw provider. This is an explicit capability of
+  // the maintained public-review recipe, not a client-side guess based on a
+  // provider name or a user-writable `args` list.
+  return sanitizeProvider({
+    ...decorated,
+    publicReviewSupported: supportsPublicReviewProvider(provider, { tui: provider?.type === 'tui' }),
+  });
+};
 
 /**
  * Create PortOS-specific provider routes

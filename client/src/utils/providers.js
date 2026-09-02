@@ -223,8 +223,8 @@ export const isToolFreeLocalProvider = (provider) =>
  * model entries are accepted too so callers with a richer model catalog can use
  * the same predicate without rebuilding a map.
  */
-export const isToolFreeLocalModel = (model, provider, capabilitiesByBackend = {}) => {
-  if (!isToolFreeLocalProvider(provider)) return false;
+const isToolFreeLocalModelForProvider = (model, provider, capabilitiesByBackend, providerPredicate) => {
+  if (!providerPredicate(provider)) return false;
   const id = typeof model === 'string' ? model : model?.id || model?.name;
   if (typeof id !== 'string' || !id.trim()) return false;
   const reported = Array.isArray(model?.capabilities)
@@ -236,14 +236,25 @@ export const isToolFreeLocalModel = (model, provider, capabilitiesByBackend = {}
     && !normalized.includes('tools');
 };
 
+export const isToolFreeLocalModel = (model, provider, capabilitiesByBackend = {}) =>
+  isToolFreeLocalModelForProvider(model, provider, capabilitiesByBackend, isToolFreeLocalProvider);
+
 /**
  * Build the shared selection policy used by security-sensitive AI pickers.
  * ProviderModelSelector owns applying all three predicates consistently; a
  * caller supplies only the policy-specific capability source.
  */
-export const toolFreeLocalSelectionPolicy = (capabilitiesByBackend = {}) => ({
-  provider: isToolFreeLocalProvider,
-  model: (model, provider) => isToolFreeLocalModel(model, provider, capabilitiesByBackend),
+export const toolFreeLocalSelectionPolicy = (
+  capabilitiesByBackend = {},
+  { providerPredicate = isToolFreeLocalProvider } = {},
+) => ({
+  provider: providerPredicate,
+  model: (model, provider) => isToolFreeLocalModelForProvider(
+    model,
+    provider,
+    capabilitiesByBackend,
+    providerPredicate,
+  ),
 });
 
 /**

@@ -301,15 +301,11 @@ export const LOCAL_LLM_CATALOG = [
     name: 'Gemma 3 27B IT',
     category: 'general',
     recommendedFor: ['general', 'reasoning'],
-    featured: {
-      label: 'Recommended for Security Scan',
-      description: 'Purpose-specific pick for reviewing untrusted contributor diffs: long-context local text analysis in the verified Ollama build, with no native tool capability to expose.'
-    },
     params: '27B',
     size: '17 GB',
     family: 'gemma',
     description: "Google's Gemma 3 27B instruction model — long-context local analysis for code-review findings without native tool calling.",
-    note: 'The Security Scan verifies Ollama capabilities before every run and remains read-only; Hugging Face’s official Gemma repository requires accepting its terms.',
+    note: 'Long-context local analysis option; Hugging Face’s official Gemma repository requires accepting its terms.',
     repository: 'google/gemma-3-27b-it',
     gated: true,
     capabilities: ['chat', 'vision'],

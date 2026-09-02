@@ -24,6 +24,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, resolveClaimReviewerConfig, reviewerConfigMetadata, SWARM_COUNT_MIN, ISSUE_AUTHOR_FILTERS } from '../lib/validation.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { MODEL_ABUSE_GUARD_ID } from '../lib/modelAbuseGuard.js';
 import { isPlainObject } from '../lib/objects.js';
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, diagnoseUnpickablePlan } from '../lib/planIds.js';
 import { loadState, saveState, withStateLock, isImprovementEnabled, isDaemonRunning } from './cosState.js';
@@ -2119,7 +2120,7 @@ function securityScanReports(scan) {
   return []
 }
 
-const reportIsSafe = (report) => report?.safe === true || report?.passed === true
+const reportIsSafe = (report) => report?.safe === true
 
 const reportFindingCount = (report) => (
   Array.isArray(report?.securityFindings) && report.securityFindings.length > 0
@@ -2165,7 +2166,7 @@ function formatSecurityScanContext(scan, reports, status) {
     `Reviewed ${reports.length} external pull request${reports.length === 1 ? '' : 's'}${findingCount ? `; ${findingCount} contained model-abuse flags or an unvalidated response` : ''}.`,
     'No GitHub pull request or issue actions have been taken.',
     status === 'findings'
-      ? 'This scan is only a model-abuse boundary. Flagged PR content and the human-facing report are withheld from Stage 2; Stage 2 may process only PRs explicitly marked safe and must not fetch or inspect flagged PRs.'
+      ? 'This scan is only a model-abuse boundary. Flagged PR content and its source text are withheld from Stage 2; Stage 2 may process only PRs explicitly marked safe and must not fetch or inspect flagged PRs.'
       : status === 'unavailable'
         ? `The scan stopped with ${scan.code || 'an unknown error'} after retaining the reports collected so far. No PR has a safe status; leave every PR untouched until the scan can be completed.`
         : 'All reviewed PRs have an explicit model-abuse safety status. Stage 2 may review only the PRs marked safe, after approval.',
@@ -2207,10 +2208,15 @@ async function runPrReviewerSecurityPreflight(taskType, app, metadata) {
   }
 
   const { listExternalOpenPullRequests, runPrReviewerSecurityScan, securityScanFingerprint } = await import('./prReviewerSecurity.js');
+  const { writePublicReviewInputSnapshot } = await import('./modelAbuseGuard.js');
   const target = await listExternalOpenPullRequests(app);
   if (!target.ok) {
     emitLog('warn', `Skipping pr-reviewer for ${app.name}: ${target.code || 'security-scan-target-unavailable'}`, { appId: app.id, analysisType: taskType });
     return { skipped: true };
+  }
+  if (target.prs.length === 0) {
+    emitLog('info', `Skipping pr-reviewer for ${app.name}: no-external-open-prs`, { appId: app.id, analysisType: taskType });
+    return { skipped: true, reason: 'no-external-open-prs' };
   }
   const scanKey = securityScanFingerprint(target);
   const active = await findActiveSecurityScanTask(app.id, scanKey);
@@ -2225,9 +2231,6 @@ async function runPrReviewerSecurityPreflight(taskType, app, metadata) {
 
   const scan = await runPrReviewerSecurityScan({
     app,
-    providerId: securityStage.providerId,
-    model: securityStage.model,
-    effort: securityStage.effort || null,
     target,
   });
   const reports = securityScanReports(scan);
@@ -2238,7 +2241,19 @@ async function runPrReviewerSecurityPreflight(taskType, app, metadata) {
 
   const status = !scan.ok ? 'unavailable' : (scan.passed ? 'passed' : 'findings');
   const requiresApproval = reports.length > 0;
+  const snapshotWritten = await writePublicReviewInputSnapshot({
+    scanKey: scan.scanKey || scanKey,
+    pullRequests: scan.ok ? (scan.reviewInputs || []) : [],
+  });
+  if (!snapshotWritten) {
+    emitLog('warn', `Skipping pr-reviewer for ${app.name}: public-review-input-snapshot-failed`, { appId: app.id, analysisType: taskType });
+    return { skipped: true };
+  }
   const reviewOutput = buildSecurityScanPipelineOutput(scan, reports, status);
+  // A partial/unavailable scan is never a usable allowlist. Keeping already
+  // safe-looking reports here would let a later stage review a subset while
+  // the remaining PRs had no completed safety verdict.
+  const safeReports = scan.ok ? reports.filter(reportIsSafe) : [];
   metadata.pipeline = {
     ...metadata.pipeline,
     currentStage: 1,
@@ -2249,7 +2264,9 @@ async function runPrReviewerSecurityPreflight(taskType, app, metadata) {
       success: true,
       completedAt: new Date().toISOString(),
       summary: {
-        backend: scan.backend || null,
+        guardId: scan.guardId || MODEL_ABUSE_GUARD_ID,
+        guardModel: scan.guardModel || null,
+        guardRevision: scan.guardRevision || null,
         code: scan.code || null,
         reviewedPrCount: reports.length,
         findingCount: reports.filter((report) => !reportIsSafe(report)).length,
@@ -2262,8 +2279,10 @@ async function runPrReviewerSecurityPreflight(taskType, app, metadata) {
       completed: scan.ok,
       status,
       code: scan.code || null,
-      backend: scan.backend,
-      model: scan.model || null,
+      guardId: scan.guardId || MODEL_ABUSE_GUARD_ID,
+      guardModel: scan.guardModel || null,
+      guardRevision: scan.guardRevision || null,
+      layers: scan.layers || null,
       repoFullName: scan.repoFullName || target.repoFullName,
       defaultBranch: scan.defaultBranch || target.defaultBranch,
       scanKey: scan.scanKey || scanKey,
@@ -2272,8 +2291,23 @@ async function runPrReviewerSecurityPreflight(taskType, app, metadata) {
       reports,
       noActionsTaken: true,
       requiresApproval,
+      safePrCount: safeReports.length,
     },
   };
+  metadata.issueWatcher = {
+    repoFullName: scan.repoFullName || target.repoFullName,
+    defaultBranch: scan.defaultBranch || target.defaultBranch,
+    issueComments: [],
+    pullRequests: safeReports.map((report) => ({
+      number: report.number,
+      headSha: report.headRefOid,
+      diffTruncated: false,
+      contentFingerprint: report.contentFingerprint,
+    })),
+    strictPullRequestCoverage: true,
+  };
+  metadata.executionProfile = nextStage.executionProfile || null;
+  metadata.pipeline.reviewInputKey = scan.scanKey || scanKey;
   metadata.context = formatSecurityScanContext(scan, reports, status);
 
   // Apply the next stage's provider/model/effort and behavior flags exactly as

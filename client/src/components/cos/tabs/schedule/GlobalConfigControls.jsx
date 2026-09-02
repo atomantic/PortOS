@@ -56,6 +56,14 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
   const [selectedType, setSelectedType] = useState(config.type);
   const [editingPrompt, setEditingPrompt] = useState(false);
   const [promptValue, setPromptValue] = useState(config.prompt || '');
+  const descriptionDraft = useFieldDraft(
+    config.description || '',
+    async (next) => {
+      setUpdating(true);
+      await onUpdate(taskType, { description: next.trim() || null }).catch(() => {});
+      setUpdating(false);
+    },
+  );
   // Comma-separated free text, committed to taskMetadata.issueExcludeLabels
   // (an array) on blur. Routes through setUpdating like every other handler
   // in this file so RunTaskButton (client/src/AGENTS.md's "gate on in-flight
@@ -258,6 +266,21 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
           All scheduled runs are paused for this task
         </Banner>
       )}
+
+      <FormField label="Summary / byline" labelClassName="text-sm text-gray-400 block mb-2">
+        <input
+          id={`schedule-description-${taskType}`}
+          type="text"
+          maxLength={240}
+          value={descriptionDraft.value}
+          onChange={descriptionDraft.onChange}
+          onBlur={descriptionDraft.onBlur}
+          disabled={updating}
+          placeholder={config.description || 'Explain what this scheduled task does'}
+          className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
+        />
+        <p className="text-xs text-gray-500 mt-1">Shown on scheduled-task cards and upcoming-task lists. It does not change the prompt.</p>
+      </FormField>
 
       <FormField label="Interval Type" labelClassName="text-sm text-gray-400 block mb-2">
         <select

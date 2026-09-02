@@ -167,7 +167,13 @@ async function getPerformanceAdjustedInterval(taskType, baseIntervalMs) {
 
 export async function getTaskInterval(taskType) {
   const schedule = await loadSchedule();
-  return schedule.tasks[taskType] || { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null };
+  return schedule.tasks[taskType] || {
+    type: INTERVAL_TYPES.ROTATION,
+    enabled: false,
+    providerId: null,
+    model: null,
+    description: getTaskTypeDescription(taskType),
+  };
 }
 
 export async function updateTaskInterval(taskType, settings) {
@@ -179,6 +185,13 @@ export async function updateTaskInterval(taskType, settings) {
     // Normalize empty/whitespace prompts to null (treated as "use default")
     if ('prompt' in settings && typeof settings.prompt === 'string' && !settings.prompt.trim()) {
       settings.prompt = null;
+    }
+    // The description is display-only schedule metadata. Keep it separate from
+    // the prompt so custom card copy never becomes agent instructions.
+    if ('description' in settings) {
+      settings.description = typeof settings.description === 'string'
+        ? settings.description.trim().slice(0, 240) || null
+        : null;
     }
     // If user is setting a custom prompt, mark it so auto-upgrade won't overwrite it.
     // If user clears the prompt (null), remove the customized flag to resume defaults.
@@ -1317,7 +1330,7 @@ export async function getScheduleStatus() {
       dataPoints: learningInfo.dataPoints,
       adjustedIntervalMs: learningInfo.adjustedIntervalMs,
       recommendation: learningInfo.recommendation,
-      description: getTaskTypeDescription(taskType),
+      description: interval.description || getTaskTypeDescription(taskType),
       promptMode: promptInfo.mode,
       ...(promptInfo.description ? { promptDescription: promptInfo.description } : {}),
       invocation,
@@ -1501,7 +1514,7 @@ export async function getUpcomingTasks(limit = 10) {
       successRate: check.successRate ?? null,
       learningAdjusted: check.learningApplied || false,
       adjustmentMultiplier: check.adjustmentMultiplier || 1.0,
-      description: getTaskTypeDescription(taskType)
+      description: interval.description || getTaskTypeDescription(taskType)
     });
   }
 

@@ -45,7 +45,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiCommands.js` | CLI command dispatch. |
 | `apiDashboard.js` | Dashboard state. |
 | `apiDatabase.js` | Database introspection. |
-| `apiLocalLlm.js` | Local LLM backends (Ollama / LM Studio): status (incl. installed models), catalog, model install/delete, backend install (Homebrew/script), switch/migrate, playground test/compare, and measured per-model assessments (run + persisted results + intent ranking + the server-side "measure everything" sweep). Also the PM2-managed runtime servers (llama.cpp, MTPLX) and MTPLX's checkpoint catalog — `searchMtplxModels` / `pullMtplxModel` / `removeMtplxModel`, so weights are managed in-app rather than from a terminal. |
+| `apiLocalLlm.js` | Local LLM backends (Ollama / LM Studio): status (incl. installed models), catalog, model install/delete, the managed Prompt Guard model-abuse classifier lifecycle, backend install (Homebrew/script), switch/migrate, playground test/compare, and measured per-model assessments (run + persisted results + intent ranking + the server-side "measure everything" sweep). Also the PM2-managed runtime servers (llama.cpp, MTPLX) and MTPLX's checkpoint catalog — `searchMtplxModels` / `pullMtplxModel` / `removeMtplxModel`, so weights are managed in-app rather than from a terminal. |
 | `apiGit.js` | Git operations. |
 | `apiGithub.js` | GitHub repo metadata. |
 | `apiHistory.js` | Historical logs / runs. |

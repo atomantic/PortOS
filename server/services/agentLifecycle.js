@@ -62,6 +62,10 @@ import { cliProviderAuthDescriptor } from '../lib/processEnv.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { buildCliSpawnConfig, isClaudeCliProvider, isTuiProvider, getClaudeSettingsEnv, spawnDirectly } from './agentCliSpawning.js';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
+import { supportsPublicReviewProvider } from '../lib/providerVendors.js';
+import { PUBLIC_REVIEW_EXECUTION_PROFILE } from '../lib/agentExecutionProfiles.js';
+import { formatPublicReviewInputPrompt } from '../lib/modelAbuseGuard.js';
+import { materializePublicReviewInput, readPublicReviewInputSnapshot, validatePublicReviewModel } from './modelAbuseGuard.js';
 import { releaseAppReviewMarker } from './appActivity.js';
 import { ensureInstanceId } from './instances.js';
 import { isClaimableBy, buildClaim, buildRelease, getClaimOwner, getTargetInstance, isTargetedElsewhere } from './cosTaskClaim.js';
@@ -370,6 +374,46 @@ async function runAgentSpawn(task) {
       return null;
     }
     const { provider, selectedModel, modelSelection } = resolution;
+    const isTui = isTuiProvider(provider);
+    const publicReview = task.metadata?.executionProfile === PUBLIC_REVIEW_EXECUTION_PROFILE;
+    if (publicReview && !supportsPublicReviewProvider(provider, { tui: isTui })) {
+      const reason = `Provider '${provider?.id || provider?.command || 'unknown'}' has no enforced read-only public-content review mode`;
+      await updateTask(task.id, {
+        status: 'blocked',
+        metadata: {
+          ...task.metadata,
+          blockedReason: reason,
+          blockedCategory: 'public-review-provider-unsupported',
+          blockedAt: new Date().toISOString(),
+        },
+      }, task.taskType || 'user').catch(() => {});
+      await cleanupOnError(reason);
+      cosEvents.emit('agent:error', { taskId: task.id, error: reason });
+      return null;
+    }
+    if (publicReview) {
+      const modelPolicy = await validatePublicReviewModel({ provider, model: selectedModel });
+      if (!modelPolicy.ok) {
+        const reason = `Public review model is unavailable or not tool-free (${modelPolicy.code})`;
+        await updateTask(task.id, {
+          status: 'blocked',
+          metadata: {
+            ...task.metadata,
+            blockedReason: reason,
+            blockedCategory: modelPolicy.code || 'public-review-model-unsupported',
+            blockedAt: new Date().toISOString(),
+          },
+        }, task.taskType || 'user').catch(() => {});
+        await cleanupOnError(reason);
+        cosEvents.emit('agent:error', { taskId: task.id, error: reason });
+        return null;
+      }
+    }
+    // Public review is intentionally direct-only: the CoS runner is a shared
+    // process and may inherit a forge credential or ambient tool configuration.
+    // The direct child receives a reduced environment below.
+    const dispatchUseRunner = publicReview ? false : useRunner;
+    let publicReviewPromptData = null;
 
     // Resolve the workspace and provision any worktree / JIRA branch the task
     // needs. A git conflict defers the task; an explicitly-requested worktree
@@ -388,6 +432,46 @@ async function runAgentSpawn(task) {
     }
     const { workspacePath, resolvedAppName, worktreeInfo, jiraTicket, jiraBranchName, explicitWorktree } = prep;
 
+    if (publicReview) {
+      const materialized = await materializePublicReviewInput({
+        scanKey: task.metadata?.pipeline?.reviewInputKey,
+        workspacePath,
+      });
+      if (!materialized) {
+        const reason = 'The screened public-review input snapshot is unavailable or invalid';
+        await updateTask(task.id, {
+          status: 'blocked',
+          metadata: {
+            ...task.metadata,
+            blockedReason: reason,
+            blockedCategory: 'public-review-input-missing',
+            blockedAt: new Date().toISOString(),
+          },
+        }, task.taskType || 'user').catch(() => {});
+        await cleanupOnError(reason);
+        cosEvents.emit('agent:error', { taskId: task.id, error: reason });
+        return null;
+      }
+      publicReviewPromptData = await readPublicReviewInputSnapshot({
+        scanKey: task.metadata?.pipeline?.reviewInputKey,
+      });
+      if (!publicReviewPromptData) {
+        const reason = 'The screened public-review input could not be loaded for the no-tools reviewer';
+        await updateTask(task.id, {
+          status: 'blocked',
+          metadata: {
+            ...task.metadata,
+            blockedReason: reason,
+            blockedCategory: 'public-review-input-missing',
+            blockedAt: new Date().toISOString(),
+          },
+        }, task.taskType || 'user').catch(() => {});
+        await cleanupOnError(reason);
+        cosEvents.emit('agent:error', { taskId: task.id, error: reason });
+        return null;
+      }
+    }
+
     // Auto-snapshot the workspace context of the app CoS was last working in
     // when this dispatch switches to a different app/repo (#2035). Snapshot-only
     // — it never restores and never calls an LLM. Dynamic import avoids pulling
@@ -399,8 +483,6 @@ async function runAgentSpawn(task) {
       .catch((err) => {
         emitLog('warn', `Workspace auto-snapshot skipped for task ${task.id}: ${err?.message || err}`, { taskId: task.id });
       });
-
-    const isTui = isTuiProvider(provider);
 
     // Lean mode: an Ollama-backed Claude session gets `--bare --strict-mcp-config`
     // (see applyLeanClaudeArgs) so the user's personal environment — hooks,
@@ -435,7 +517,10 @@ async function runAgentSpawn(task) {
       leanMode,
       split: splitSystemPrompt
     });
-    const prompt = typeof promptResult === 'string' ? promptResult : promptResult.userPrompt;
+    const basePrompt = typeof promptResult === 'string' ? promptResult : promptResult.userPrompt;
+    const prompt = publicReview
+      ? `${basePrompt}\n\n${formatPublicReviewInputPrompt(publicReviewPromptData)}`
+      : basePrompt;
     const systemPrompt = typeof promptResult === 'string' ? null : promptResult.systemPrompt;
 
     // Create agent directory
@@ -461,7 +546,7 @@ async function runAgentSpawn(task) {
       workspacePath,
       appName: resolvedAppName
     });
-    const executionMode = isTui ? (useRunner ? 'runner-tui' : 'tui') : useRunner ? 'runner' : 'direct';
+    const executionMode = isTui ? (dispatchUseRunner ? 'runner-tui' : 'tui') : dispatchUseRunner ? 'runner' : 'direct';
 
     // Register the agent with model info.
     //
@@ -551,7 +636,7 @@ async function runAgentSpawn(task) {
       modelReason: modelSelection.reason,
       runId,
       phase: 'initializing',
-      useRunner,
+      useRunner: dispatchUseRunner,
       executionMode,
       taskAnalysisType: task.metadata?.analysisType || null,
       taskReviewType: task.metadata?.reviewType || null,
@@ -677,7 +762,9 @@ async function runAgentSpawn(task) {
     // Without it, a host that supplies Bedrock mode only via settings.json would
     // bake a bare, Bedrock-invalid --model into the argv. Cached (5-min TTL), so
     // the spawn helper's own getClaudeSettingsEnv() call is effectively free.
-    const cliSettingsEnv = isClaudeCliProvider(provider) ? await getClaudeSettingsEnv() : {};
+    const cliSettingsEnv = !publicReview && isClaudeCliProvider(provider)
+      ? await getClaudeSettingsEnv()
+      : {};
     // Task-level OpenCode/Ollama generation controls override provider defaults
     // for this one run. The child-environment composer turns these into the
     // dynamic `agent.build` config instead of mutating saved provider state.
@@ -701,8 +788,8 @@ async function runAgentSpawn(task) {
     // their deliberately bounded GPU concurrency posture.
     const maxConcurrentThreads = cloudSwarmThreadCapacity(runProvider, task.metadata?.swarmCount);
     const cliConfig = isTui
-      ? buildTuiSpawnConfig(runProvider, selectedModel, { systemPromptFile, effort: taskEffort, maxConcurrentThreads })
-      : buildCliSpawnConfig(runProvider, selectedModel, cliSettingsEnv, { systemPromptFile, effort: taskEffort, maxConcurrentThreads });
+      ? buildTuiSpawnConfig(runProvider, selectedModel, { systemPromptFile, effort: taskEffort, maxConcurrentThreads, safetyProfile: publicReview ? PUBLIC_REVIEW_EXECUTION_PROFILE : null })
+      : buildCliSpawnConfig(runProvider, selectedModel, cliSettingsEnv, { systemPromptFile, effort: taskEffort, maxConcurrentThreads, safetyProfile: publicReview ? PUBLIC_REVIEW_EXECUTION_PROFILE : null });
 
     emitLog('success', `Spawning agent for task ${task.id}`, {
       agentId,
@@ -740,10 +827,10 @@ async function runAgentSpawn(task) {
         cleanupWorktreeFn: cleanupAgentWorktree,
         isTruthyMetaFn: isTruthyMeta,
         leanMode,
-        useDurableRunner: useRunner,
+        useDurableRunner: dispatchUseRunner,
       });
     }
-    if (useRunner) {
+    if (dispatchUseRunner) {
       return await spawnViaRunner(agentId, task, { prompt, workspacePath, model: selectedModel, provider: runProvider, runId, cliConfig, executionId: toolExecution.id, laneName });
     }
     // Direct spawn mode (fallback)
@@ -761,6 +848,7 @@ async function runAgentSpawn(task) {
       laneName,
       cleanupWorktreeFn: cleanupAgentWorktree,
       isTruthyMetaFn: isTruthyMeta,
+      safetyProfile: publicReview ? PUBLIC_REVIEW_EXECUTION_PROFILE : null,
     });
   } catch (err) {
     if (handedOff) {

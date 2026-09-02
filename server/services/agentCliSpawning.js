@@ -44,6 +44,7 @@ import { doneSentinelPath } from '../lib/agentSentinel.js';
 import { isHostShuttingDown, shouldAbandonForHostShutdown, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
 import { ensureOllamaAgentContext } from './ollamaAgentContext.js';
 import { isOllamaBackedProvider } from './providers.js';
+import { PUBLIC_REVIEW_EXECUTION_PROFILE } from '../lib/agentExecutionProfiles.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
 
@@ -268,6 +269,7 @@ export function buildCliSpawnConfig(provider, model, settingsEnv = {}, {
   systemPromptFile = null,
   effort = null,
   maxConcurrentThreads = null,
+  safetyProfile = null,
 } = {}) {
   // Configured-default sentinels (Codex / Antigravity / Grok Build) → null so
   // the CLI uses its own default without a --model flag.
@@ -278,6 +280,7 @@ export function buildCliSpawnConfig(provider, model, settingsEnv = {}, {
     maxConcurrentThreads,
     systemPromptFile,
     settingsEnv,
+    safetyProfile,
   });
 }
 
@@ -348,6 +351,7 @@ export async function spawnDirectly({
   laneName,
   cleanupWorktreeFn,
   isTruthyMetaFn,
+  safetyProfile = null,
 }) {
   const fullCommand = `${cliConfig.command} ${cliConfig.args.join(' ')} <<< "${(task.description || '').substring(0, 100)}..."`;
 
@@ -379,10 +383,12 @@ export async function spawnDirectly({
   // entirely when the provider supplies its own GH_TOKEN/GITHUB_TOKEN so its
   // explicit credential wins (gh prefers GH_TOKEN, so injecting one would shadow a
   // provider GITHUB_TOKEN).
-  const [claudeSettingsEnv, forgeTokenEnv] = await Promise.all([
-    isClaudeCliProvider(provider) ? getClaudeSettingsEnv() : Promise.resolve({}),
-    providerSuppliesGithubToken(provider) ? Promise.resolve({}) : resolveForgeTokenEnv(cwd),
-  ]);
+  const [claudeSettingsEnv, forgeTokenEnv] = safetyProfile === PUBLIC_REVIEW_EXECUTION_PROFILE
+    ? [{}, {}]
+    : await Promise.all([
+      isClaudeCliProvider(provider) ? getClaudeSettingsEnv() : Promise.resolve({}),
+      providerSuppliesGithubToken(provider) ? Promise.resolve({}) : resolveForgeTokenEnv(cwd),
+    ]);
 
   // Shared composition (provider.envVars + OpenCode models map + PWD pin +
   // CLAUDECODE strip) — see buildCliChildEnv. forgeTokenEnv/claudeSettingsEnv go
@@ -396,6 +402,7 @@ export async function spawnDirectly({
     model,
     cwd,
     guard: true,
+    safetyProfile,
   });
 
   // Resolve a bare npm-installed CLI (a .cmd/.bat shim on Windows) to its real

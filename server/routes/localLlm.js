@@ -53,6 +53,7 @@ import { saveProcessList } from '../services/pm2.js'
 import { getSpecDecodePresetStatus, downloadSpecDecodeModel, cancelSpecDecodeModelDownload } from '../services/specDecodeModels.js'
 import { SPEC_TYPE_SUGGESTIONS } from '../lib/specDecodePresets.js'
 import { resetProviderReadinessCache } from '../services/providerReadiness.js'
+import { MODEL_ABUSE_GUARD } from '../lib/modelAbuseGuard.js'
 import { getCatalog, searchCatalog, isBackend } from '../lib/localLlmCatalog.js'
 import { isAppleSilicon } from '../lib/platform.js'
 import {
@@ -66,6 +67,7 @@ import {
   getStatus, listModels, listVisionModels, listToolUseModels, installModel, deleteModel, switchBackend, migrateBackend, installBackend, upgradeBackend, controlOllamaServer,
   describeInstallProgress
 } from '../services/localLlm.js'
+import { getModelAbuseGuardStatus, installModelAbuseGuard, cancelModelAbuseGuardInstall } from '../services/modelAbuseGuard.js'
 import { getSettings } from '../services/settings.js'
 import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlayground.js'
 import { getAssessmentReport, runAssessment, deleteAssessment } from '../services/localModelAssessments.js'
@@ -169,7 +171,38 @@ router.get('/catalog', asyncHandler(async (req, res) => {
   // been run here. Disk-only read — a catalog listing must never trigger a
   // measurement (AI Provider Usage Policy).
   applyMeasuredFit(models, { backend, measured: await getMeasuredFits(backend).catch(() => ({})) })
-  res.json({ backend, models, systemMemoryGb: Math.round(systemMemoryBytes / 1024 ** 3) })
+  res.json({
+    backend,
+    models,
+    // Prompt Guard is a managed classifier, not a chat model. Keep it beside
+    // the catalog response so the UI can highlight the safety recommendation
+    // without making it selectable in any normal provider/model picker.
+    securityGuards: [MODEL_ABUSE_GUARD],
+    systemMemoryGb: Math.round(systemMemoryBytes / 1024 ** 3),
+  })
+}))
+
+// The model-abuse guard has its own lifecycle: it is a pinned, offline
+// classifier and must never be installed through the general chat-model path.
+router.get('/security-guard/status', asyncHandler(async (_req, res) => {
+  res.json(await getModelAbuseGuardStatus())
+}))
+
+router.post('/security-guard/install', asyncHandler(async (req, res) => {
+  const emit = emitter(req)
+  const result = await installModelAbuseGuard({
+    onEvent: ({ event, message }) => emit(event, message),
+  })
+  if (!result?.ok) {
+    emit('error', result?.code || 'Prompt Guard installation failed')
+    throw new ServerError(result?.code || 'Prompt Guard installation failed', { status: 502 })
+  }
+  res.json(result)
+}))
+
+router.post('/security-guard/install/cancel', asyncHandler(async (_req, res) => {
+  cancelModelAbuseGuardInstall()
+  res.json({ cancelled: true })
 }))
 
 // GET /api/local-llm/huggingface-search?backend=ollama&q=qwen&category=coding

@@ -15,6 +15,10 @@ import { getSettings } from '../services/settings.js';
 import { localLlmCompareSchema, localLlmTestSchema } from '../lib/validation.js';
 import { errorEvents } from '../lib/errorHandler.js';
 
+const getModelAbuseGuardStatus = vi.fn(async () => ({ ready: false, modelCached: false, runtimeReady: false }));
+const installModelAbuseGuard = vi.fn(async () => ({ ok: true, ready: true }));
+const cancelModelAbuseGuardInstall = vi.fn();
+
 // asyncHandler emits to errorEvents on every route failure; with `io` set on
 // the app it always fires. Swallow it so a validation-rejection test doesn't
 // trip Node's "unhandled 'error' event" — assertions go through the response.
@@ -33,6 +37,12 @@ vi.mock('../services/localLlm.js', () => ({
   installBackend: vi.fn(),
   upgradeBackend: vi.fn(),
   controlOllamaServer: vi.fn(),
+}));
+
+vi.mock('../services/modelAbuseGuard.js', () => ({
+  getModelAbuseGuardStatus: (...args) => getModelAbuseGuardStatus(...args),
+  installModelAbuseGuard: (...args) => installModelAbuseGuard(...args),
+  cancelModelAbuseGuardInstall: (...args) => cancelModelAbuseGuardInstall(...args),
 }));
 
 vi.mock('../services/localLlmPlayground.js', () => ({
@@ -150,6 +160,34 @@ describe('local LLM playground routes', () => {
     expect(Array.isArray(res.body.models)).toBe(true);
     // The playground only needs catalog metadata — it must not pay for HF probes.
     expect(enrichCatalogWithVariants).not.toHaveBeenCalled();
+  });
+
+  it('GET /catalog exposes the managed security classifier separately from chat models', async () => {
+    const res = await request(makeApp()).get('/api/local-llm/catalog?backend=ollama');
+
+    expect(res.status).toBe(200);
+    expect(res.body.securityGuards).toEqual([expect.objectContaining({
+      id: 'llama-prompt-guard-2-86m',
+      pipelineTag: 'text-classification',
+      runtime: 'python-transformers',
+    })]);
+    expect(res.body.models.some((model) => model.id === 'llama-prompt-guard-2-86m')).toBe(false);
+  });
+
+  it('keeps the Prompt Guard lifecycle out of the general model installer', async () => {
+    const status = await request(makeApp()).get('/api/local-llm/security-guard/status');
+    expect(status.status).toBe(200);
+    expect(getModelAbuseGuardStatus).toHaveBeenCalled();
+
+    const install = await request(makeApp()).post('/api/local-llm/security-guard/install').send({});
+    expect(install.status).toBe(200);
+    expect(installModelAbuseGuard).toHaveBeenCalledWith({ onEvent: expect.any(Function) });
+    expect(installModel).not.toHaveBeenCalled();
+
+    const cancel = await request(makeApp()).post('/api/local-llm/security-guard/install/cancel').send({});
+    expect(cancel.status).toBe(200);
+    expect(cancel.body).toEqual({ cancelled: true });
+    expect(cancelModelAbuseGuardInstall).toHaveBeenCalled();
   });
 
   it('POST /install forwards force so a redownload can replace on-disk weights', async () => {

@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { posixPath } from './testHelper.js';
 
-import { buildCliChildEnv, composeProviderEnv } from './cliChildEnv.js';
+import { buildCliChildEnv, buildPublicReviewCliEnv, composeProviderEnv } from './cliChildEnv.js';
+import { PUBLIC_REVIEW_EXECUTION_PROFILE } from './agentExecutionProfiles.js';
 import { cliProviderAuthDescriptor } from './processEnv.js';
 import { AGENT_GUARD_BIN } from './agentGuard/index.js';
 import { collectServerSources, readServerSource } from './testHelper.js';
@@ -111,6 +112,66 @@ describe('buildCliChildEnv — layering', () => {
     const env = buildCliChildEnv({ baseEnv, extra: { B: '2' } });
     expect(baseEnv).toEqual({ A: '1' });
     expect(env).not.toBe(baseEnv);
+  });
+});
+
+describe('buildCliChildEnv — public-review profile', () => {
+  it('keeps runtime essentials but strips forge, cloud, SSH, and provider credentials', () => {
+    const source = {
+      PATH: '/usr/bin',
+      HOME: '/home/example',
+      LC_ALL: 'C',
+      ANTHROPIC_BASE_URL: 'http://127.0.0.1:11434',
+      ANTHROPIC_AUTH_TOKEN: 'local-only',
+      GH_TOKEN: 'forge-secret',
+      GITHUB_TOKEN: 'forge-secret-2',
+      AWS_SECRET_ACCESS_KEY: 'cloud-secret',
+      SSH_AUTH_SOCK: '/tmp/agent.sock',
+      OPENAI_API_KEY: 'provider-secret',
+      OPENCODE_CONFIG_CONTENT: '{"mcp":"unexpected"}',
+      PRIVATE_APP_SETTING: 'must-not-forward',
+    };
+
+    const env = buildPublicReviewCliEnv(source);
+    expect(env).toMatchObject({
+      PATH: '/usr/bin',
+      HOME: '/home/example',
+      LC_ALL: 'C',
+      ANTHROPIC_BASE_URL: 'http://127.0.0.1:11434',
+      ANTHROPIC_AUTH_TOKEN: 'local-only',
+    });
+    expect(env).not.toHaveProperty('GH_TOKEN');
+    expect(env).not.toHaveProperty('GITHUB_TOKEN');
+    expect(env).not.toHaveProperty('AWS_SECRET_ACCESS_KEY');
+    expect(env).not.toHaveProperty('SSH_AUTH_SOCK');
+    expect(env).not.toHaveProperty('OPENAI_API_KEY');
+    expect(env).not.toHaveProperty('OPENCODE_CONFIG_CONTENT');
+    expect(env).not.toHaveProperty('PRIVATE_APP_SETTING');
+  });
+
+  it('applies the same allowlist after all provider and inherited layers are composed', () => {
+    const env = buildCliChildEnv({
+      baseEnv: { PATH: '/usr/bin', GH_TOKEN: 'ambient' },
+      before: { GH_TOKEN: 'forge', AWS_PROFILE: 'cloud-profile' },
+      provider: {
+        envVars: {
+          ANTHROPIC_BASE_URL: 'http://127.0.0.1:11434',
+          ANTHROPIC_AUTH_TOKEN: 'local-only',
+          GH_TOKEN: 'provider-forge',
+          OPENAI_API_KEY: 'provider-secret',
+        },
+      },
+      cwd: '/tmp/public-review',
+      safetyProfile: PUBLIC_REVIEW_EXECUTION_PROFILE,
+    });
+
+    expect(env.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:11434');
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe('local-only');
+    expect(env.PWD).toBe('/tmp/public-review');
+    expect(env).not.toHaveProperty('GH_TOKEN');
+    expect(env).not.toHaveProperty('AWS_PROFILE');
+    expect(env).not.toHaveProperty('OPENAI_API_KEY');
+    expect(env).not.toHaveProperty('CLAUDECODE');
   });
 });
 

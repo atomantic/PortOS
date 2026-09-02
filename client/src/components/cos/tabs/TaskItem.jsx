@@ -124,16 +124,6 @@ function SecurityScanReport({ scan, idScope, taskId }) {
                 text={typeof report?.findings === 'string' && report.findings ? report.findings : 'No findings.'}
                 className="mt-1 text-gray-300 whitespace-pre-wrap"
               />
-              {typeof report?.modelResponse === 'string' && report.modelResponse && (
-                <div className="mt-1">
-                  <span className="text-xs text-gray-500">Model response (untrusted)</span>
-                  <CollapsibleText
-                    id={`security-model-response-${idScope}-${taskId}-${number}`}
-                    text={report.modelResponse}
-                    className="mt-1 text-gray-400 whitespace-pre-wrap"
-                  />
-                </div>
-              )}
             </div>
           );
         })}

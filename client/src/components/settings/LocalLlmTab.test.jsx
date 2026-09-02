@@ -6,6 +6,9 @@ vi.mock('../../services/api', () => ({
   getLocalLlmStatus: vi.fn(),
   getLocalLlmCatalog: vi.fn(),
   getLocalLlmHuggingFaceSearch: vi.fn(),
+  getModelAbuseGuardStatus: vi.fn(),
+  installModelAbuseGuard: vi.fn(),
+  cancelModelAbuseGuardInstall: vi.fn(),
   installLocalLlmModel: vi.fn(),
   deleteLocalLlmModel: vi.fn(),
   switchLocalLlmBackend: vi.fn(),
@@ -45,6 +48,9 @@ import {
   deleteLocalLlmModel,
   getLocalLlmStatus,
   getLocalLlmCatalog,
+  getModelAbuseGuardStatus,
+  installModelAbuseGuard,
+  cancelModelAbuseGuardInstall,
   installLocalLlmBackend,
   patchSettingsSlice,
   installLocalLlmModel,
@@ -102,6 +108,17 @@ beforeEach(() => {
     lmstudio: { installed: false, available: false, modelCount: 0, models: [] },
   });
   getLocalLlmCatalog.mockResolvedValue({ models: [] });
+  getModelAbuseGuardStatus.mockResolvedValue({
+    id: 'llama-prompt-guard-2-86m',
+    name: 'Llama Prompt Guard 2 86M',
+    repository: 'meta-llama/Llama-Prompt-Guard-2-86M',
+    sourceUrl: 'https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-86M',
+    ready: false,
+    modelCached: false,
+    runtimeReady: false,
+  });
+  installModelAbuseGuard.mockResolvedValue({ ok: true, ready: true });
+  cancelModelAbuseGuardInstall.mockResolvedValue({ cancelled: true });
   installLocalLlmBackend.mockResolvedValue({ success: true });
   patchSettingsSlice.mockResolvedValue({});
   deleteLocalLlmModel.mockResolvedValue({ success: true });
@@ -469,29 +486,19 @@ describe('LocalLlmTab recommendations', () => {
     await waitFor(() => expect(screen.getByText('Qwen3.8 27B')).toBeTruthy());
   });
 
-  it('highlights the catalog recommendation for the Security Scan', async () => {
+  it('highlights the managed model-abuse guard separately from the chat catalog', async () => {
     getLocalLlmCatalog.mockResolvedValue({
-      models: [{
-        id: 'gemma3:27b',
-        key: 'gemma3-27b-it',
-        name: 'Gemma 3 27B IT',
-        category: 'general',
-        recommendedFor: ['general', 'reasoning'],
-        featured: {
-          label: 'Recommended for Security Scan',
-          description: 'A verified local text model without native tool capability.',
-        },
-        params: '27B',
-        size: '17 GB',
-        description: 'Long-context local analysis.',
-        capabilities: ['chat', 'vision'],
-      }],
+      models: [],
+      securityGuards: [{ id: 'llama-prompt-guard-2-86m' }],
     });
 
     await renderTab('library');
 
-    expect(await screen.findByText('Recommended for Security Scan')).toBeInTheDocument();
-    expect(screen.getByText('A verified local text model without native tool capability.')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Model-abuse guard' })).toBeInTheDocument();
+    expect(screen.getByText('Recommended safety layer · managed classifier')).toBeInTheDocument();
+    expect(screen.getByText('Llama Prompt Guard 2 86M')).toBeInTheDocument();
+    expect(screen.queryByText('Recommended for Security Scan')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Install model-abuse guard' })).toBeInTheDocument();
   });
 
   it('offers redownload on an already-installed catalog card', async () => {

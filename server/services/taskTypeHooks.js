@@ -42,8 +42,10 @@
  * Hook modules are lazy-imported (their dependency graphs are heavy) and resolved
  * by task type. `HOOK_MODULES` is the single registration point; a new
  * programmatic-I/O task type adds one entry here plus a module that exports the
- * hook(s) above. The resolvers return `null` for any unregistered type without
- * importing anything, so a normal task type pays ~zero cost.
+ * hook(s) above. An entry may set `input: false` when input is owned by an
+ * earlier coordinator phase but the type still needs an output hook. The
+ * resolvers return `null` for any unregistered type without importing anything,
+ * so a normal task type pays ~zero cost.
  */
 
 import { isFalsyMeta, isTruthyMeta } from './agentState.js';
@@ -58,6 +60,16 @@ import { isAuditTaskType } from '../lib/auditCatalog.js';
 const HOOK_MODULES = {
   'issue-watcher': {
     load: () => import('./issueWatcher.js')
+  },
+  // pr-reviewer uses the same deterministic forge-action coordinator as
+  // issue-watcher, but its generator supplies a screened PR-only input set.
+  // Do not run issue-watcher's live gather hook here: the preflight's exact,
+  // fingerprinted snapshot is the only content allowed into Stage 2. Keeping
+  // the output hook shared prevents the two freshness/action contracts from
+  // drifting.
+  'pr-reviewer': {
+    load: () => import('./issueWatcher.js'),
+    input: false,
   },
   'layered-intelligence': {
     load: () => import('./autonomousJobs/layeredIntelligenceHooks.js')
@@ -152,7 +164,7 @@ export function resolveTaskHookType(task) {
  */
 export const NON_COMMITTING_COORDINATOR_TASK_TYPES = new Set([
   'branch-reconcile', 'issue-reconcile', 'branch-cleanup', 'jira-status-report', 'release-check',
-  'stash-cleanup', 'repo-sync',
+  'stash-cleanup', 'repo-sync', 'pr-reviewer',
 ]);
 
 /**
@@ -278,6 +290,7 @@ function isTrackerFilingDispatch(task) {
  * (see the module header for each field's contract).
  */
 export async function getTaskInputHook(taskType) {
+  if (HOOK_MODULES[taskType]?.input === false) return null;
   const mod = await loadHookModule(taskType);
   return mod && typeof mod.buildTaskInput === 'function' ? mod.buildTaskInput : null;
 }

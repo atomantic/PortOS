@@ -21,6 +21,23 @@ export const getToolUseModels = (options) => request('/local-llm/tool-use-models
 export const getLocalLlmCatalog = (backend, q = '', { variants = false } = {}) =>
   request(`/local-llm/catalog?backend=${encodeURIComponent(backend)}${q ? `&q=${encodeURIComponent(q)}` : ''}${variants ? '&variants=1' : ''}`);
 
+export const getModelAbuseGuardStatus = (options) =>
+  request('/local-llm/security-guard/status', options);
+
+export const installModelAbuseGuard = (options) =>
+  request('/local-llm/security-guard/install', {
+    method: 'POST',
+    body: '{}',
+    ...options,
+  });
+
+export const cancelModelAbuseGuardInstall = (options) =>
+  request('/local-llm/security-guard/install/cancel', {
+    method: 'POST',
+    body: '{}',
+    ...options,
+  });
+
 export const getLocalLlmHuggingFaceSearch = (backend, q = '', category = 'all', limit = 12) =>
   request(`/local-llm/huggingface-search?backend=${encodeURIComponent(backend)}&category=${encodeURIComponent(category)}&limit=${encodeURIComponent(limit)}${q ? `&q=${encodeURIComponent(q)}` : ''}`);
 

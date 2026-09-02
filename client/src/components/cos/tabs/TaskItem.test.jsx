@@ -506,7 +506,7 @@ describe('TaskItem security scan report', () => {
     expect(screen.getByRole('region', { name: 'Security scan report' })).toBeInTheDocument();
     expect(screen.getByText('Security scan findings')).toBeInTheDocument();
     expect(screen.getByText(/The diff attempts to direct the downstream reviewer/)).toBeInTheDocument();
-    expect(screen.getByText('Model response (untrusted)')).toBeInTheDocument();
+    expect(screen.queryByText('Model response (untrusted)')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open PR' })).toHaveAttribute('href', 'https://github.com/example/repo/pull/42');
   });
 

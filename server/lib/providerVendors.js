@@ -59,6 +59,7 @@ import {
   resolveCliEffort,
   foldCursorEffortIntoModel,
   isCursorProvider,
+  isClaudeCommand,
   hasModelFlag,
   resolveInjectedTuiModel,
   resolveBedrockCliModel,
@@ -69,7 +70,12 @@ import {
   prefixOpencodeModel,
   applyLeanClaudeArgs,
 } from './providerModels.js';
-import { isCodexCommand, ensureCodexTuiArgs, CODEX_COMMAND, CODEX_CLI_ID } from './codex.js';
+import {
+  isCodexCommand,
+  ensureCodexTuiArgs,
+  CODEX_COMMAND,
+  CODEX_CLI_ID,
+} from './codex.js';
 import {
   ANTIGRAVITY_COMMAND,
   isAntigravityCommand,
@@ -81,7 +87,16 @@ import {
 } from './antigravity.js';
 import { isGrokCommand, ensureGrokTuiArgs, ensureGrokHeadlessArgs, prepareGrokPromptFile } from './grok.js';
 import { isKimiCommand, ensureKimiTuiArgs, ensureKimiHeadlessArgs, prepareKimiPrompt } from './kimi.js';
-import { CURSOR_COMMAND, isCursorCommand, ensureCursorTuiArgs, ensureCursorHeadlessArgs } from './cursor.js';
+import {
+  CURSOR_COMMAND,
+  isCursorCommand,
+  ensureCursorTuiArgs,
+  ensureCursorHeadlessArgs,
+} from './cursor.js';
+import { isLocalInstanceEndpoint } from './localEndpoint.js';
+import { PUBLIC_REVIEW_EXECUTION_PROFILE } from './agentExecutionProfiles.js';
+
+export { PUBLIC_REVIEW_EXECUTION_PROFILE } from './agentExecutionProfiles.js';
 
 /**
  * For every vendor EXCEPT codex/claude, `buildCliSpawnConfig`'s argv is just
@@ -303,6 +318,56 @@ function claudeSpawnArgs(provider, { effectiveModel, effort, systemPromptFile, s
   return { command, args, stdinMode: 'prompt', streamFormat: 'stream-json' };
 }
 
+const CLAUDE_PUBLIC_REVIEW_ARGS = [
+  '--permission-mode', 'plan',
+  // The code-review model gets the cleared PR material in its prompt. No
+  // tool call is needed, so an accidental model/tool interaction cannot read
+  // another file, invoke a shell, or reach the network.
+  '--tools', '',
+  '--disallowedTools', 'Bash,Read,Glob,Grep,WebFetch,WebSearch,Write,Edit,NotebookEdit,Task,Skill,TodoWrite',
+  '--strict-mcp-config',
+  '--mcp-config', '{"mcpServers":{}}',
+  '--no-chrome',
+  '--no-session-persistence',
+  '--disable-slash-commands',
+  '--bare',
+];
+
+function isLocalClaudePublicReviewProvider(provider) {
+  if (provider?.type !== 'cli' || provider?.ollamaBacked !== true || !isClaudeCommand(provider?.command)) return false;
+  const endpoint = provider?.envVars?.ANTHROPIC_BASE_URL || provider?.endpoint || 'http://localhost:11434';
+  return isLocalInstanceEndpoint(endpoint);
+}
+
+function claudePublicReviewArgs(provider, {
+  effectiveModel,
+  effort,
+  systemPromptFile,
+  settingsEnv,
+  tui = false,
+} = {}) {
+  const providerId = provider?.id || 'claude-code';
+  const args = [
+    ...CLAUDE_PUBLIC_REVIEW_ARGS,
+    ...(tui ? [] : ['--print', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']),
+  ];
+  if (systemPromptFile) args.push('--append-system-prompt-file', systemPromptFile);
+  if (effectiveModel) {
+    // This profile is local-only. Do not consult the host's Bedrock settings or
+    // ambient environment while constructing its model id: a server started in
+    // Bedrock mode must not turn a local Ollama model into a cloud model name.
+    args.push('--model', effectiveModel);
+  }
+  const safeArgs = applyLeanClaudeArgs(provider, args, provider?.command || 'claude');
+  safeArgs.push(...buildEffortArgs(effort, { id: providerId, command: provider?.command || 'claude' }, safeArgs));
+  return {
+    command: provider?.command || 'claude',
+    args: safeArgs,
+    stdinMode: 'prompt',
+    streamFormat: 'stream-json',
+  };
+}
+
 const CLAUDE = {
   id: 'claude',
   idFragment: null, // never matched by id.includes() — it's the outside-the-loop default
@@ -313,6 +378,8 @@ const CLAUDE = {
   matchCommand: () => true,
   cliArgs: claudeCliArgs,
   spawnArgs: claudeSpawnArgs,
+  publicReviewSpawnArgs: claudePublicReviewArgs,
+  publicReviewProvider: isLocalClaudePublicReviewProvider,
 };
 
 /**
@@ -338,6 +405,25 @@ function matchesProvider(vendor, provider) {
   return vendor.matchCliProvider ? vendor.matchCliProvider(provider) : vendor.matchCommand(provider?.command);
 }
 
+function matchesPublicReviewProvider(vendor, provider) {
+  if (!matchesProvider(vendor, provider)) {
+    // The normal Codex provider matcher intentionally distinguishes the CLI
+    // id from the TUI id. The safety profile must recognize both because they
+    // share the same binary and receive the same read-only posture.
+    if (vendor.id === 'codex' && (provider?.id === 'codex-tui' || isCodexCommand(provider?.command))) return true;
+    return false;
+  }
+  // Claude is the historical fallback row. It is safe only when the selected
+  // provider actually launches Claude; an unknown command must never inherit
+  // Claude's safe argv by accident.
+  if (vendor.id === 'claude') {
+    return typeof vendor.publicReviewProvider === 'function'
+      ? vendor.publicReviewProvider(provider)
+      : false;
+  }
+  return true;
+}
+
 /**
  * `inferTuiCommand`'s id-substring walk (tuiHandshake.js) checks a DIFFERENT
  * thing than every other dispatch site here — `provider.id` substrings, not
@@ -356,9 +442,19 @@ export function inferTuiCommand(id) {
 }
 
 /** `applyCommandDefaults` (tuiHandshake.js): TUI posture-flag dispatch. */
-export function applyCommandDefaults(command, args) {
-  const vendor = PROVIDER_VENDORS.find((v) => v.tuiArgs && v.matchCommand(command));
-  return vendor ? vendor.tuiArgs(args) : args;
+export function applyCommandDefaults(command, args, { safetyProfile = null } = {}) {
+  const vendor = PROVIDER_VENDORS.find((v) => (
+    (safetyProfile === PUBLIC_REVIEW_EXECUTION_PROFILE ? v.publicReviewTuiArgs : v.tuiArgs)
+      && v.matchCommand(command)
+  ));
+  if (safetyProfile === PUBLIC_REVIEW_EXECUTION_PROFILE) {
+    if (!vendor || typeof vendor.publicReviewTuiArgs !== 'function') {
+      throw new Error(`Provider command '${command}' has no enforced public-review posture`);
+    }
+    return vendor.publicReviewTuiArgs(args, { safetyProfile });
+  }
+  if (!vendor) return args;
+  return vendor.tuiArgs(args);
 }
 
 /**
@@ -387,8 +483,35 @@ export function buildVendorCliArgs(provider, baseArgs, { model, effort }) {
  * before this registry existed (see file header).
  */
 export function buildVendorSpawnConfig(provider, ctx) {
-  const vendor = PROVIDER_VENDORS.find((v) => v.spawnArgs && matchesProvider(v, provider));
+  const vendor = PROVIDER_VENDORS.find((v) => v.spawnArgs && (
+    ctx?.safetyProfile === PUBLIC_REVIEW_EXECUTION_PROFILE
+      ? matchesPublicReviewProvider(v, provider)
+      : matchesProvider(v, provider)
+  ));
+  if (ctx?.safetyProfile === PUBLIC_REVIEW_EXECUTION_PROFILE) {
+    if (!vendor?.publicReviewSpawnArgs) {
+      throw new Error(`Provider '${provider?.id || provider?.command || 'unknown'}' has no enforced public-review posture`);
+    }
+    return vendor.publicReviewSpawnArgs(provider, ctx);
+  }
   return vendor.spawnArgs(provider, ctx);
+}
+
+/**
+ * Whether a provider has a maintained, enforced read-only public-content
+ * execution recipe for the requested transport. Unknown vendors fail closed.
+ */
+export function supportsPublicReviewProvider(provider, { tui = false } = {}) {
+  // Interactive sessions and API/custom providers do not have a maintained
+  // no-tools recipe here. Public contributor content is intentionally routed
+  // only through the non-interactive Claude recipe below; callers must fail
+  // closed instead of treating a generic read-only prompt as enforcement.
+  if (tui || provider?.type !== 'cli') return false;
+  const vendor = PROVIDER_VENDORS.find((v) => (
+    v.publicReviewSpawnArgs
+      && matchesPublicReviewProvider(v, provider)
+  ));
+  return Boolean(vendor);
 }
 
 /**

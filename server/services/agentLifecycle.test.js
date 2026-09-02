@@ -532,9 +532,9 @@ describe('runAgentSpawn source — handedOff pre-spawn vs post-handoff split', (
 describe('runAgentSpawn source — durable TUI ownership (#3202)', () => {
   it('routes TUI providers through the runner when it is available', () => {
     expect(RUN_SPAWN_BODY).toMatch(
-      /const executionMode = isTui \? \(useRunner \? 'runner-tui' : 'tui'\)/
+      /const executionMode = isTui \? \(dispatchUseRunner \? 'runner-tui' : 'tui'\)/
     );
-    expect(RUN_SPAWN_BODY).toMatch(/spawnTuiAgent\(\{[\s\S]{0,1000}?useDurableRunner:\s*useRunner/);
+    expect(RUN_SPAWN_BODY).toMatch(/spawnTuiAgent\(\{[\s\S]{0,1000}?useDurableRunner:\s*dispatchUseRunner/);
     expect(RUN_SPAWN_BODY).not.toMatch(/useRunner:\s*isTui\s*\?\s*false\s*:\s*useRunner/);
   });
 });

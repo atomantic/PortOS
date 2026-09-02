@@ -1,32 +1,20 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const execGhMock = vi.fn()
 const ensureForgeReachableMock = vi.fn()
-const getProviderByIdMock = vi.fn()
-const listModelsMock = vi.fn()
-const getModelCapabilitiesMock = vi.fn()
-const runLocalSecurityScanMock = vi.fn()
 const getSelfLoginMock = vi.fn()
 const getOriginInfoMock = vi.fn()
+const runModelAbuseScanMock = vi.fn()
 
 vi.mock('./github.js', () => ({
   execGh: (...args) => execGhMock(...args),
   ensureForgeReachable: (...args) => ensureForgeReachableMock(...args),
 }))
-vi.mock('./providers.js', () => ({
-  getProviderById: (...args) => getProviderByIdMock(...args),
-}))
-vi.mock('./localLlm.js', () => ({
-  listModels: (...args) => listModelsMock(...args),
-}))
-vi.mock('./ollamaManager.js', () => ({
-  getModelCapabilities: (...args) => getModelCapabilitiesMock(...args),
-}))
-vi.mock('./codeReview.js', () => ({
-  runLocalSecurityScan: (...args) => runLocalSecurityScanMock(...args),
-}))
 vi.mock('./prWatcher.js', () => ({
   getSelfLogin: (...args) => getSelfLoginMock(...args),
+}))
+vi.mock('./modelAbuseGuard.js', () => ({
+  runModelAbuseScan: (...args) => runModelAbuseScanMock(...args),
 }))
 vi.mock('../lib/gitRemote.js', () => ({
   getOriginInfo: (...args) => getOriginInfoMock(...args),
@@ -41,83 +29,72 @@ vi.mock('../lib/workTracker.js', async (importActual) => {
 })
 
 import {
-  isToolFreeLocalModel,
-  isToolFreeLocalProvider,
-  resolveToolFreeLocalSecurityModel,
-  securityScanFingerprint,
+  listExternalOpenPullRequests,
   runPrReviewerSecurityScan,
+  securityScanFingerprint,
+  summarizeSecurityScanReport,
 } from './prReviewerSecurity.js'
 
-const localProvider = (id = 'ollama') => ({
-  id,
-  type: 'api',
-  enabled: true,
-  endpoint: id === 'ollama' ? 'http://127.0.0.1:11434/v1' : 'http://localhost:1234/v1',
-})
-
 const app = { id: 'app-example', repoPath: '/tmp/example-repo' }
-
-describe('pr-reviewer Security Scan selection', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    getProviderByIdMock.mockResolvedValue(localProvider())
-    listModelsMock.mockResolvedValue([{ id: 'safe-model', capabilities: ['chat'] }])
-    getModelCapabilitiesMock.mockResolvedValue(['completion'])
-  })
-
-  it('accepts only enabled canonical local API providers', () => {
-    expect(isToolFreeLocalProvider(localProvider('ollama'))).toBe(true)
-    expect(isToolFreeLocalProvider(localProvider('lmstudio'))).toBe(true)
-    expect(isToolFreeLocalProvider({ ...localProvider(), type: 'cli' })).toBe(false)
-    expect(isToolFreeLocalProvider({ ...localProvider(), enabled: false })).toBe(false)
-    expect(isToolFreeLocalProvider({ ...localProvider(), endpoint: 'https://example.com/v1' })).toBe(false)
-    expect(isToolFreeLocalProvider({ ...localProvider(), id: 'custom-ollama' })).toBe(false)
-  })
-
-  it('requires an installed text model with explicit capabilities and no tools', () => {
-    const provider = localProvider()
-    expect(isToolFreeLocalModel('safe-model', provider, [{ id: 'safe-model', capabilities: ['chat'] }])).toBe(true)
-    expect(isToolFreeLocalModel('completion-model', provider, [{ id: 'completion-model', capabilities: ['completion'] }])).toBe(true)
-    expect(isToolFreeLocalModel('tool-model', provider, [{ id: 'tool-model', capabilities: ['chat', 'tools'] }])).toBe(false)
-    expect(isToolFreeLocalModel('embedding-model', provider, [{ id: 'embedding-model', capabilities: ['embedding'] }])).toBe(false)
-    expect(isToolFreeLocalModel('empty-model', provider, [{ id: 'empty-model', capabilities: [] }])).toBe(false)
-    expect(isToolFreeLocalModel('unknown-model', provider, [{ id: 'unknown-model' }])).toBe(false)
-    expect(isToolFreeLocalModel('missing-model', provider, [])).toBe(false)
-  })
-
-  it('fails closed when the provider/model pin is not verified', async () => {
-    getProviderByIdMock.mockResolvedValue({ ...localProvider(), endpoint: 'https://example.com/v1' })
-    await expect(resolveToolFreeLocalSecurityModel({ providerId: 'ollama', model: 'safe-model' }))
-      .resolves.toMatchObject({ ok: false, code: 'security-scan-provider-not-tool-free' })
-
-    getProviderByIdMock.mockResolvedValue(localProvider())
-    listModelsMock.mockResolvedValue([{ id: 'safe-model', capabilities: null }])
-    getModelCapabilitiesMock.mockResolvedValue(null)
-    await expect(resolveToolFreeLocalSecurityModel({ providerId: 'ollama', model: 'safe-model' }))
-      .resolves.toMatchObject({ ok: false, code: 'security-scan-model-not-verified' })
-
-    listModelsMock.mockResolvedValue([{ id: 'safe-model', capabilities: ['chat'] }])
-    getModelCapabilitiesMock.mockResolvedValue(['embedding'])
-    await expect(resolveToolFreeLocalSecurityModel({ providerId: 'ollama', model: 'safe-model' }))
-      .resolves.toMatchObject({ ok: false, code: 'security-scan-model-not-verified' })
-  })
+const guardVerdict = (safe = true) => ({
+  ok: true,
+  safe,
+  code: safe ? 'security-guard-passed' : 'security-guard-classified-malicious',
+  guardId: 'llama-prompt-guard-2-86m',
+  model: 'Llama Prompt Guard 2 86M',
+  revision: 'a8ded8e697ce7c355e395a0df51f94adb4a2fd27',
+  findings: safe ? [] : [{
+    severity: 'blocking',
+    category: 'prompt-classifier',
+    location: 'external-content',
+    reason: 'The dedicated model-abuse classifier marked one or more complete content windows as malicious.',
+  }],
+  layers: { deterministic: 'passed', classifier: safe ? 'passed' : 'blocked', verdict: 'validated' },
+  chunkCount: 1,
+  minBenignScore: safe ? 0.99 : null,
 })
 
-describe('pr-reviewer Security Scan execution', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    getProviderByIdMock.mockResolvedValue(localProvider())
-    listModelsMock.mockResolvedValue([{ id: 'safe-model', capabilities: ['chat'] }])
-    getModelCapabilitiesMock.mockResolvedValue(['completion'])
-    ensureForgeReachableMock.mockResolvedValue({ ok: true })
-    getOriginInfoMock.mockResolvedValue({ host: 'github.com', fullName: 'example/repo' })
-    getSelfLoginMock.mockResolvedValue('maintainer')
-    runLocalSecurityScanMock.mockResolvedValue({
+const listedPr = (number, authorLogin, headRefOid, overrides = {}) => ({
+  number,
+  author: { login: authorLogin },
+  url: `https://example.test/pr/${number}`,
+  headRefOid,
+  updatedAt: '2026-08-31T00:00:00Z',
+  title: `Contributor update ${number}`,
+  body: `Description for PR ${number}`,
+  ...overrides,
+})
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  ensureForgeReachableMock.mockResolvedValue({ ok: true })
+  getOriginInfoMock.mockResolvedValue({ host: 'github.com', fullName: 'example/repo' })
+  getSelfLoginMock.mockResolvedValue('maintainer')
+  runModelAbuseScanMock.mockResolvedValue(guardVerdict())
+})
+
+describe('pr-reviewer model-abuse preflight', () => {
+  it('lists every external open PR and excludes the repository owner', async () => {
+    execGhMock
+      .mockResolvedValueOnce('main')
+      .mockResolvedValueOnce(JSON.stringify([
+        listedPr(11, 'maintainer', 'a'.repeat(40)),
+        listedPr(12, 'Contributor-A', 'b'.repeat(40)),
+      ]))
+
+    const result = await listExternalOpenPullRequests(app)
+
+    expect(result).toMatchObject({
       ok: true,
-      safe: true,
-      findings: [],
-      rawResponse: '{"safe":true,"findings":[]}',
+      repoSpec: 'github.com/example/repo',
+      repoFullName: 'example/repo',
+      defaultBranch: 'main',
     })
+    expect(result.prs).toEqual([expect.objectContaining({ number: 12, authorLogin: 'Contributor-A' })])
+    expect(execGhMock).toHaveBeenCalledWith([
+      'pr', 'list', '--repo', 'github.com/example/repo', '--base', 'main', '--state', 'open',
+      '--limit', '200', '--json', 'number,author,url,headRefOid,updatedAt,title,body',
+    ])
   })
 
   it('keys a pending report to the exact external PR head set', () => {
@@ -138,59 +115,83 @@ describe('pr-reviewer Security Scan execution', () => {
     expect(securityScanFingerprint({ ...base, prs: [{ number: 12, headRefOid: null }] })).toBeNull()
   })
 
-  it('reviews every open external PR through the structured no-tools abuse scan', async () => {
+  it('scans every external PR through the dedicated classifier and keeps only generic report data', async () => {
     execGhMock
       .mockResolvedValueOnce('main')
       .mockResolvedValueOnce(JSON.stringify([
-        { number: 11, author: { login: 'maintainer' }, url: 'https://example.test/pr/11', headRefOid: 'a'.repeat(40), updatedAt: '2026-08-31T00:00:00Z' },
-        { number: 12, author: { login: 'contributor-a' }, url: 'https://example.test/pr/12', headRefOid: 'b'.repeat(40), updatedAt: '2026-08-31T00:00:00Z' },
-        { number: 13, author: { login: 'contributor-b' }, url: 'https://example.test/pr/13', headRefOid: 'c'.repeat(40), updatedAt: '2026-08-31T00:00:00Z' },
+        listedPr(11, 'maintainer', 'a'.repeat(40)),
+        listedPr(12, 'contributor-a', 'b'.repeat(40)),
+        listedPr(13, 'contributor-b', 'c'.repeat(40)),
       ]))
       .mockResolvedValueOnce('diff for twelve')
       .mockResolvedValueOnce('diff for thirteen')
 
-    const result = await runPrReviewerSecurityScan({ app, providerId: 'ollama', model: 'safe-model' })
+    const result = await runPrReviewerSecurityScan({ app })
 
-    expect(result).toMatchObject({ ok: true, passed: true, code: 'security-scan-passed', backend: 'ollama' })
+    expect(result).toMatchObject({ ok: true, passed: true, code: 'security-scan-passed' })
     expect(result.reviewedPrs).toEqual([
-      expect.objectContaining({ number: 12, passed: true, findings: 'No findings.' }),
-      expect.objectContaining({ number: 13, passed: true, findings: 'No findings.' }),
+      expect.objectContaining({ number: 12, passed: true, findings: 'No model-abuse findings.' }),
+      expect.objectContaining({ number: 13, passed: true, findings: 'No model-abuse findings.' }),
     ])
-    expect(result.scanKey).toMatch(/^[a-f0-9]{64}$/)
-    expect(runLocalSecurityScanMock).toHaveBeenCalledTimes(2)
-    expect(runLocalSecurityScanMock.mock.calls.every(([request]) => request.backend === 'ollama' && !('tools' in request))).toBe(true)
-    expect(execGhMock.mock.calls.map(([args]) => args.slice(0, 2))).toEqual([
-      ['repo', 'view'],
-      ['pr', 'list'],
-      ['pr', 'diff'],
-      ['pr', 'diff'],
-    ])
+    expect(result.reviewedPrs[0]).not.toHaveProperty('rawResponse')
+    expect(result.reviewedPrs[0]).not.toHaveProperty('diff')
+    expect(result.guardId).toBe('llama-prompt-guard-2-86m')
+    expect(runModelAbuseScanMock).toHaveBeenCalledTimes(2)
+    expect(runModelAbuseScanMock.mock.calls[0][0].content).toContain('Complete unified diff:')
+    expect(runModelAbuseScanMock.mock.calls[0][0].content).toContain('diff for twelve')
   })
 
-  it('reviews every external PR before failing the pipeline on any non-clean verdict', async () => {
-    runLocalSecurityScanMock.mockResolvedValue({
-      ok: true,
-      safe: false,
-      findings: [{ severity: 'blocking', location: 'package.json:12', reason: 'Attempts to direct the downstream reviewer to run an installer.' }],
-      rawResponse: '{"safe":false,"findings":[{"severity":"blocking","location":"package.json:12","reason":"unsafe instruction"}]}',
-    })
+  it('reviews all external PRs before returning a generic finding report', async () => {
+    runModelAbuseScanMock.mockResolvedValue(guardVerdict(false))
     execGhMock
       .mockResolvedValueOnce('main')
       .mockResolvedValueOnce(JSON.stringify([
-        { number: 12, author: { login: 'contributor-a' }, headRefOid: 'b'.repeat(40) },
-        { number: 13, author: { login: 'contributor-b' }, headRefOid: 'c'.repeat(40) },
+        listedPr(12, 'contributor-a', 'b'.repeat(40)),
+        listedPr(13, 'contributor-b', 'c'.repeat(40)),
       ]))
       .mockResolvedValueOnce('diff for twelve')
       .mockResolvedValueOnce('diff for thirteen')
 
-    const result = await runPrReviewerSecurityScan({ app, providerId: 'ollama', model: 'safe-model' })
+    const result = await runPrReviewerSecurityScan({ app })
 
     expect(result).toMatchObject({ ok: true, passed: false, code: 'security-scan-findings' })
-    expect(result.reviewedPrs).toEqual([
-      expect.objectContaining({ number: 12, passed: false, safe: false, findings: 'blocking — package.json:12: Attempts to direct the downstream reviewer to run an installer.' }),
-      expect.objectContaining({ number: 13, passed: false, safe: false, findings: 'blocking — package.json:12: Attempts to direct the downstream reviewer to run an installer.' }),
-    ])
-    expect(result.reports).toEqual(result.reviewedPrs)
-    expect(runLocalSecurityScanMock).toHaveBeenCalledTimes(2)
+    expect(result.reviewedPrs).toHaveLength(2)
+    expect(result.reviewedPrs.every((report) => report.safe === false)).toBe(true)
+    expect(result.reviewedPrs[0].findings).toContain('dedicated model-abuse classifier')
+    expect(result.reviewedPrs[0].securityFindings[0]).not.toHaveProperty('quote')
+    expect(runModelAbuseScanMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('fails closed while retaining generic reports collected before an unavailable verdict', async () => {
+    runModelAbuseScanMock
+      .mockResolvedValueOnce(guardVerdict())
+      .mockResolvedValueOnce({ ok: false, code: 'security-guard-timeout' })
+    execGhMock
+      .mockResolvedValueOnce('main')
+      .mockResolvedValueOnce(JSON.stringify([
+        listedPr(12, 'contributor-a', 'b'.repeat(40)),
+        listedPr(13, 'contributor-b', 'c'.repeat(40)),
+      ]))
+      .mockResolvedValueOnce('diff for twelve')
+      .mockResolvedValueOnce('diff for thirteen')
+
+    const result = await runPrReviewerSecurityScan({ app })
+
+    expect(result).toMatchObject({ ok: false, passed: false, code: 'security-guard-timeout' })
+    expect(result.reviewedPrs).toEqual([expect.objectContaining({ number: 12, safe: true })])
+  })
+
+  it('summarizes a report without exposing source content', () => {
+    expect(summarizeSecurityScanReport({
+      number: 12,
+      safe: false,
+      securityFindings: [{ severity: 'blocking', reason: 'generic' }],
+      diff: 'must not be returned',
+    })).toEqual({
+      number: 12,
+      safe: false,
+      findingCount: 1,
+      guardId: 'llama-prompt-guard-2-86m',
+    })
   })
 })
