@@ -48,7 +48,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `@dnd-kit/sortable` | 1 | KEEP | drag/drop | |
 | `@react-three/drei` | 1 | KEEP | CyberCity 3D | Three.js helpers |
 | `@react-three/fiber` | 1 | KEEP | CyberCity 3D | React renderer for Three |
-| `@scalar/api-reference-react` | 1 | KEEP | Dev Tools → API Explorer | Interactive OpenAPI reference UI rendering |
+| `@scalar/api-reference-react` | 2 | KEEP | Dev Tools → API Explorer | Interactive OpenAPI reference UI. Heaviest client dependency by far — 261/599 packages, 3.24 MB of dist assets. Kept for lack of a maintained lighter alternative; bounded by a budget test. See detailed finding |
 | `@xterm/xterm` | 1 | KEEP | browser terminal | |
 | `@xterm/addon-fit` | 1 | KEEP | xterm sizing | |
 | `@xterm/addon-web-links` | 1 | KEEP | xterm links | |
@@ -95,6 +95,19 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 - **Regression cover**: two boundary tests assert real output bytes rather than helper behaviour, because a same-API fork can only regress below the helper layer — `proseExport.test.js` (`buildProsePdf` returns a `Uint8Array` starting `%PDF-` and ending `%%EOF`) and `comicPdf.test.js` (image XObject count scales with the number of embedded pages, catching a silently-dropped `drawImage` payload).
 - **Grep caveat for the next audit**: `server/services/legacyExport.js` contains a byte sequence that makes `file(1)` classify it as `data`, so plain `grep -r` **silently skips it** — a repo-wide dependency sweep must use `grep -ra`. That is exactly how the fourth import site was missed when this migration was first scoped; it surfaced only as an `ERR_MODULE_NOT_FOUND` in the suite.
 - **Re-audit trigger**: revisit if `@cantoo/pdf-lib` itself goes >12 months without a publish, or on any CVE against it. The fallback is the same shape as the swap in: another maintained fork, or upstream `pdf-lib` if it ever resumes releases.
+
+### `@scalar/api-reference-react` — KEEP (Tier 2)
+
+- **Usage**: 1 import, in `client/src/components/api-explorer/ScalarReference.jsx`, which `client/src/pages/ApiExplorer.jsx` reaches through a `lazy()` dynamic import on one route (Dev Tools → API Explorer, the REST Reference tab). No other call site.
+- **Measured footprint** (2026-09-02, fresh `npm run build --prefix client`):
+  - **Packages**: 261 of the client's 599 installed packages (44%) are reachable ONLY via Scalar — computed by walking each top-level dependency's transitive closure in `client/package-lock.json` and subtracting every closure that does not include Scalar. Scalar's own subtree is 282. The exclusive set includes an entire second UI framework (`vue`, `radix-vue`, `@headlessui/vue`, `@floating-ui/vue`, `vue-sonner`, `@unhead/vue`) and the Vercel AI SDK (`ai`, `@ai-sdk/gateway`, `@ai-sdk/provider`, `@ai-sdk/provider-utils`, `@ai-sdk/vue`).
+  - **Bundle**: 3.24 MB of dist assets against ~13.0 MB of built JS — `OperationBlock.vue-*.js` (2.21 MB, the single largest chunk in the app, roughly twice the whole three.js vendor bundle), `ScalarReference-*.js` (608 KB), `AgentScalarChatInterface.vue-*.js` (197 KB), `ScalarReference-*.css` (250 KB).
+- **The AI SDK is a hard dependency, not an optional peer**: `@scalar/api-reference` depends on `@scalar/agent-chat`, whose own dependencies include `ai` and `@ai-sdk/vue`. `agent: { disabled: true }` in `ScalarReference.jsx` is a **runtime** config value, so Rollup cannot tree-shake on it — the agent chat interface is emitted as its own chunk regardless. Turning the feature off changes the UI, not the build.
+- **What bounds the user-facing cost**: the `lazy()` import. None of this is in the initial payload; it downloads only when a developer opens the REST Reference tab.
+- **Replacement complexity**: Complex, and every surveyed alternative is worse. `rapidoc` has had no publish since 2024-10 (trading a heavy maintained dependency for an unmaintained one), and `@stoplight/elements` is comparably large. Owning an OpenAPI renderer is a project of its own.
+- **Decision**: KEEP, bounded by a test. What was missing here was measurement, not removal.
+- **Regression cover**: `client/src/pages/ApiExplorer.bundle.test.js` sums the Scalar-attributable `client/dist/assets` files and asserts they stay under a **4.0 MB** budget (~23% headroom over the measured 3.24 MB). It skips itself when `client/dist` is absent, so the plain unit-test job stays green; CI runs it as its own step right after `npm run build --prefix client`, against a fresh build rather than a stale `dist/`. A companion assertion pins non-vacuity — it fails if no `ScalarReference-*.js` chunk is found, so a Vite chunk-naming change cannot turn the budget into a 0-byte pass. This is the only test in the client suite that looks at build output; every other one runs against source, so a version bump that doubles the chunk is otherwise completely unobserved.
+- **Re-audit trigger**: revisit if the budget test fails (re-measure and decide deliberately — do not reflexively raise the number), if Scalar drops the `agent` config toggle, or if a maintained framework-free OpenAPI renderer appears.
 
 ### `kokoro-js` — KEEP (Tier 2)
 

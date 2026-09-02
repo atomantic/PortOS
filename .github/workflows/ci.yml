@@ -320,6 +320,13 @@ jobs:
         if: needs.impact.outputs.build == 'true'
         run: npm run build --prefix client
 
+      # The Scalar bundle budget can only be measured against a real build, and it
+      # skips itself when client/dist is absent — so it runs here, not in the unit
+      # test job. See client/src/pages/ApiExplorer.bundle.test.js.
+      - name: Check API Explorer bundle budget
+        if: needs.impact.outputs.build == 'true'
+        run: npm run test --prefix client -- ApiExplorer.bundle
+
       - name: Cancel sibling CI jobs after failure
         if: failure() && github.event_name == 'pull_request'
         env:
