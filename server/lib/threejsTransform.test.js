@@ -105,6 +105,10 @@ describe('composeTransform', () => {
   it('leaves IDENTITY_TRANSFORM unmutated so every walk starts from the same frame', () => {
     composeTransform(IDENTITY_TRANSFORM, { position: [5, 5, 5], scale: [9, 9, 9] });
     expect(IDENTITY_TRANSFORM).toEqual({ linear: IDENTITY_LINEAR, translation: [0, 0, 0] });
+    // Frozen rather than merely unwritten: these are process-wide now.
+    expect(Object.isFrozen(IDENTITY_TRANSFORM)).toBe(true);
+    expect(Object.isFrozen(IDENTITY_TRANSFORM.linear)).toBe(true);
+    expect(Object.isFrozen(IDENTITY_TRANSFORM.translation)).toBe(true);
   });
 });
 

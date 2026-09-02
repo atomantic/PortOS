@@ -19,10 +19,16 @@
 /** Degrees to radians. Not input-guarded: callers pass schema-validated angles. */
 export const degreesToRadians = (degrees) => (degrees * Math.PI) / 180;
 
-export const IDENTITY_LINEAR = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+// Frozen: these are shared across every gate in the process, and each one used
+// to be a module-private literal. A stray write would silently move the frame
+// every subsequent walk starts from.
+export const IDENTITY_LINEAR = Object.freeze([1, 0, 0, 0, 1, 0, 0, 0, 1]);
 
 /** Row-major 3x3 linear part plus a translation — an affine transform. */
-export const IDENTITY_TRANSFORM = { linear: [...IDENTITY_LINEAR], translation: [0, 0, 0] };
+export const IDENTITY_TRANSFORM = Object.freeze({
+  linear: IDENTITY_LINEAR,
+  translation: Object.freeze([0, 0, 0]),
+});
 
 // A non-finite angle reads as 0 degrees — see `rotationMatrix`.
 const angleCosSin = (degrees) => {
