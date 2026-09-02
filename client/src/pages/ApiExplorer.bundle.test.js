@@ -24,9 +24,13 @@ import { describe, expect, it } from 'vitest';
 const SCALAR_BUDGET_BYTES = 4 * 1024 * 1024;
 
 // Vite names these chunks after the module that pulls them in: our own
-// ScalarReference entry, plus Scalar's Vue single-file components (`*.vue-<hash>`).
-// Nothing else in the client is authored in Vue, so `.vue-` is Scalar-exclusive.
-const SCALAR_ASSET = /(Scalar|\.vue-)[^/]*\.(js|css)$/;
+// ScalarReference entry, plus Scalar's Vue single-file components
+// (`OperationBlock.vue-<hash>.js`). The `vue-` half is matched at a name boundary
+// rather than only after a dot, so a Vue-runtime or `radix-vue` vendor chunk is
+// counted too if Rollup ever splits one out. Nothing else in the client is authored
+// in Vue, so anything Vue-named is Scalar-attributable by construction.
+const isScalarAsset = (name) => /\.(js|css)$/.test(name)
+  && (name.includes('Scalar') || /(^|[.-])vue-/.test(name));
 
 // Anchors the matcher: this chunk is named after
 // client/src/components/api-explorer/ScalarReference.jsx, the module ApiExplorer
@@ -34,12 +38,16 @@ const SCALAR_ASSET = /(Scalar|\.vue-)[^/]*\.(js|css)$/;
 // and report a 0-byte pass — this assertion fails loudly instead.
 const ENTRY_CHUNK = /^ScalarReference-[^/]*\.js$/;
 
-// Vitest's project root is client/, so cwd is client/ under `npm test --prefix client`.
-// `import.meta.url` is not usable here: the jsdom environment rewrites it to an http URL.
-const ASSETS_DIR = resolve(process.cwd(), 'dist/assets');
+// `import.meta.url` is not usable here: the jsdom environment rewrites it to an http
+// URL. Resolve from cwd instead — client/ under `npm test --prefix client`, but the
+// repo root when a runner is pointed at the client project from above, so try both
+// rather than silently skipping on a build that is present.
+const ASSETS_DIR = ['dist/assets', 'client/dist/assets']
+  .map((rel) => resolve(process.cwd(), rel))
+  .find(existsSync) ?? resolve(process.cwd(), 'dist/assets');
 
 const scalarAssets = () => readdirSync(ASSETS_DIR)
-  .filter((name) => SCALAR_ASSET.test(name))
+  .filter(isScalarAsset)
   .map((name) => ({ name, bytes: statSync(join(ASSETS_DIR, name)).size }))
   .sort((a, b) => b.bytes - a.bytes);
 
@@ -54,7 +62,7 @@ describe.skipIf(!hasBuild)('API Explorer bundle footprint', () => {
       names.some((name) => ENTRY_CHUNK.test(name)),
       `no ScalarReference-*.js chunk in ${ASSETS_DIR}. Either the lazy import in `
       + 'ApiExplorer.jsx was renamed/removed, or Vite changed its chunk naming — in '
-      + 'both cases SCALAR_ASSET in this test no longer measures anything. Found: '
+      + 'both cases isScalarAsset in this test no longer measures anything. Found: '
       + `${names.join(', ') || '(no matching assets)'}`
     ).toBe(true);
   });
