@@ -73,8 +73,12 @@ const serializableJob = ({
  * `error` can both fire for one child and each rewrites the same file.
  */
 const persistJob = (jobState) => {
+  // Capture the durable state when this write is queued. Otherwise a checkpoint
+  // write that runs after a later terminal event serializes the mutable current
+  // object and can race the terminal write out of order.
+  const record = structuredClone(serializableJob(jobState));
   jobState.persistChain = (jobState.persistChain || Promise.resolve())
-    .then(() => atomicWrite(jobRecordPath(jobState.profileId, jobState.id), serializableJob(jobState)))
+    .then(() => atomicWrite(jobRecordPath(jobState.profileId, jobState.id), record))
     .catch((err) => console.error(`❌ Failed to persist fine-tune job ${jobState.id}: ${err.message}`));
   return jobState.persistChain;
 };
