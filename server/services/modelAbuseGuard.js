@@ -37,7 +37,7 @@ import {
 } from '../lib/modelAbuseGuard.js';
 import { findCachedRepoFiles } from '../lib/hfCache.js';
 import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
-import { supportsPublicReviewPosture, PUBLIC_REVIEW_NO_TOOL_POSTURE } from '../lib/providerVendors.js';
+import { publicReviewProviderBlock, PUBLIC_REVIEW_NO_TOOL_POSTURE } from '../lib/providerVendors.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 import { detectVenvBasePythonSync, createVenv, installPackages } from '../lib/pythonSetup.js';
 import { safeChildProcessOptions } from '../lib/processEnv.js';
@@ -156,9 +156,14 @@ function normalizePublicReviewInputs(pullRequests) {
  * their own model (grok, antigravity) legitimately run with no `--model` pin.
  */
 export async function validatePublicReviewModel({ provider, model, posture = PUBLIC_REVIEW_NO_TOOL_POSTURE } = {}) {
-  if (!supportsPublicReviewPosture(provider, posture)) {
-    return publicReviewModelFailure('public-review-provider-unsupported');
-  }
+  // Reuse the gate's own descriptor rather than re-deriving it. This takes a
+  // `posture` but hardcoded the NO-TOOL category, so a sandboxed-actions
+  // failure reported `public-review-provider-unsupported` for every provider.
+  // Latent today (the one caller passes the no-tool literal), but it fails
+  // closed with a plausible-looking wrong code, which is harder to diagnose
+  // than the outage #5866 fixed.
+  const postureBlock = publicReviewProviderBlock(provider, posture);
+  if (postureBlock) return publicReviewModelFailure(postureBlock.category);
   const modelId = typeof model === 'string' ? model.trim() : '';
   const runtime = localRuntimeForProvider(provider);
   if (!runtime) return { ok: true, model: modelId || null, runtime: null };

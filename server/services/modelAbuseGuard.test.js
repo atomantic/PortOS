@@ -58,7 +58,7 @@ describe('validatePublicReviewModel', () => {
       provider: LOCAL_CLAUDE,
       model: 'safe-model',
       posture: 'sandboxed-actions',
-    })).resolves.toMatchObject({ ok: false, code: 'public-review-provider-unsupported' });
+    })).resolves.toMatchObject({ ok: false, code: 'public-review-actions-provider-unsupported' });
   });
 
   it('rejects missing model selection and an unavailable catalog', async () => {
