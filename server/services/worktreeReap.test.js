@@ -132,18 +132,37 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('reapMergedWorktrees', () => {
   // or <repo>/.claude/worktrees — so the test trees live under .claude/worktrees.
   const claudeRoot = (d) => join(d, '.claude', 'worktrees');
 
+  /**
+   * Adopt git's spelling of a worktree PortOS just created, the same way
+   * `initRepo` adopts git's spelling of the repo root, and by the same means:
+   * ask git. The reaper reports paths as `git worktree list` recorded them, and
+   * on Windows that is the LONG form (`C:/Users/runneradmin/...`) while
+   * `mkdtemp` + `realpathSync` hand back the 8.3 short form
+   * (`C:\\Users\\RUNNER~1\\...`) — realpath does not expand short names. Comparing
+   * the two matched nothing, so `skipReason` returned undefined and the
+   * assertion read as "the tree was never held" when it had been held correctly.
+   * A string comparison cannot bridge that (no casing rule turns `RUNNER~1` into
+   * `runneradmin`); only git can.
+   */
+  async function gitWorktreePath(worktreePath) {
+    const { stdout } = await execGit(['rev-parse', '--show-toplevel'], worktreePath);
+    return stdout.trim() || worktreePath;
+  }
+
   /** A worktree in a directory PortOS never created — the unmanaged case. */
   async function addExternalWorktree(d, name, branch) {
-    const path = join(externalRoot, name);
-    await execGit(['worktree', 'add', '-b', branch, path, 'main'], d);
+    const requested = join(externalRoot, name);
+    await execGit(['worktree', 'add', '-b', branch, requested, 'main'], d);
+    const path = await gitWorktreePath(requested);
     await commitFile(path, `${name}.txt`, `${name}\n`, `${name} work`);
     return path;
   }
 
   async function addWorktree(d, name, branch, { commit = true, base = 'main' } = {}) {
-    const path = join(claudeRoot(d), name);
+    const requested = join(claudeRoot(d), name);
     await mkdir(claudeRoot(d), { recursive: true });
-    await execGit(['worktree', 'add', '-b', branch, path, base], d);
+    await execGit(['worktree', 'add', '-b', branch, requested, base], d);
+    const path = await gitWorktreePath(requested);
     if (commit) await commitFile(path, `${name}.txt`, `${name}\n`, `${name} work`);
     return path;
   }
@@ -281,8 +300,16 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('reapMergedWorktrees', () => {
     await execGit(['merge', '--no-ff', 'loose-br', '--no-edit'], dir);
 
     const withoutOptIn = await reapMergedWorktrees(dir, { includeClaudeTrees: true });
-    expect(withoutOptIn.reaped.map(r => r.branch)).not.toContain('loose-br');
-    expect(skipReason(withoutOptIn, path)).toBe('worktree-unmanaged-location');
+    // A bare `expected undefined` says the path matched no skip entry but not
+    // why; this reproduces only on Windows, so the CI log is the sole place to
+    // read it. Same style as the sibling assertion below.
+    const context = () => [
+      `wanted path = ${JSON.stringify(path)}`,
+      `skipped = ${JSON.stringify(withoutOptIn.skipped)}`,
+      `reaped = ${JSON.stringify(withoutOptIn.reaped)}`,
+    ].join('\n');
+    expect(withoutOptIn.reaped.map(r => r.branch), context()).not.toContain('loose-br');
+    expect(skipReason(withoutOptIn, path), context()).toBe('worktree-unmanaged-location');
     expect(existsSync(path)).toBe(true);
 
     const withOptIn = await reapMergedWorktrees(dir, { includeUnmanagedTrees: true });
