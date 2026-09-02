@@ -197,9 +197,15 @@ export const installXcodeScripts = (id, scripts) => request(`/apps/${id}/xcode-s
   body: JSON.stringify({ scripts })
 });
 export const getAppDocuments = (id, options) => request(`/apps/${id}/documents`, options);
-export const getAppDocument = (id, filename) => request(`/apps/${id}/documents/${filename}`);
-export const saveAppDocument = (id, filename, content, commitMessage) =>
-  request(`/apps/${id}/documents/${filename}`, {
+// Document paths are repo-relative and may be nested (`docs/decisions/x.md`), so
+// encode per segment — encodeURIComponent on the whole path would escape the
+// separators the wildcard route splits on.
+const documentPath = (id, filename) =>
+  `/apps/${id}/documents/${String(filename).split('/').map(encodeURIComponent).join('/')}`;
+export const getAppDocument = (id, filename, options) => request(documentPath(id, filename), options);
+export const saveAppDocument = (id, filename, content, commitMessage, options) =>
+  request(documentPath(id, filename), {
+    ...options,
     method: 'PUT',
     body: JSON.stringify({ content, ...(commitMessage && { commitMessage }) })
   });

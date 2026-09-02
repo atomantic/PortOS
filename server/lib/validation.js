@@ -1986,7 +1986,7 @@ export const llmSchema = z.object({
 // =============================================================================
 
 /**
- * Body schema for PUT /api/apps/:id/documents/:filename and
+ * Body schema for PUT /api/apps/:id/documents/*docPath and
  * PUT /api/cos/gsd/projects/:appId/documents/:docName.
  * Both routes accept a content string plus an optional commit message.
  */

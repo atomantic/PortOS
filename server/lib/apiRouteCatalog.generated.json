@@ -1290,29 +1290,29 @@
       "sources": [
         {
           "source": "server/routes/apps/documents.js",
-          "line": 26
+          "line": 129
         }
       ]
     },
     {
       "method": "GET",
-      "path": "/api/apps/:id/documents/:filename",
+      "path": "/api/apps/:id/documents/*docPath",
       "mountPath": "/api/apps",
       "sources": [
         {
           "source": "server/routes/apps/documents.js",
-          "line": 54
+          "line": 163
         }
       ]
     },
     {
       "method": "PUT",
-      "path": "/api/apps/:id/documents/:filename",
+      "path": "/api/apps/:id/documents/*docPath",
       "mountPath": "/api/apps",
       "sources": [
         {
           "source": "server/routes/apps/documents.js",
-          "line": 83
+          "line": 178
         }
       ]
     },
