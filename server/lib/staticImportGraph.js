@@ -22,7 +22,7 @@
  */
 
 import { readdirSync, readFileSync, existsSync } from 'fs';
-import { dirname, join, relative, resolve } from 'path';
+import { dirname, join, relative, resolve, sep } from 'path';
 
 // `import … from 'x'` / `export … from 'x'` (line-anchored, non-greedy up to
 // the `from`), and bare `import 'x'` side-effect imports.
@@ -119,7 +119,7 @@ export function buildStaticImportGraph(rootDir) {
     const deps = new Set();
     for (const spec of staticImportSpecifiers(abs)) {
       if (!spec.startsWith('.')) continue;
-      const rel = relative(rootDir, resolve(dirname(abs), spec));
+      const rel = relative(rootDir, resolve(dirname(abs), spec)).split(sep).join('/');
       if (known.has(rel)) deps.add(rel);
     }
     graph.set(file, [...deps]);
