@@ -146,9 +146,9 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
       title: single
         ? `${first.leftoverCount} leftover branches on ${first.appId}, agents idle. Run branch-reconcile?`
         : `${leftoverCount} leftover branches across ${leftoverFindings.length} apps, agents idle. Run branch-reconcile?`,
-      description: single
-        ? `${first.leftoverCount} leftover branches on ${first.appId}, agents idle. Run branch-reconcile?`
-        : `${leftoverCount} leftover branches across ${leftoverFindings.length} apps, agents idle.`,
+      description: first.lastUserReconcileAt
+        ? `Last manual reconcile ${first.lastUserReconcileAt}. Propose a Run Now — never enact.`
+        : 'No manual reconcile in the last 14 days. Propose a Run Now — never enact.',
       action: { label: 'Run Now', route: '/cos/schedule' },
       count: leftoverCount
     });

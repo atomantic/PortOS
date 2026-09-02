@@ -61,17 +61,22 @@ const routeSource = (req) => ({ route: `${req.baseUrl}${req.route?.path ?? ''}`,
 // Event-only pointer: job id in `target`, never the generation prompt (#5596).
 async function enqueueLoggedImage(req, job) {
   const queued = enqueueJob(job);
-  const happenedAt = new Date().toISOString();
-  await recordUserAction({
-    type: 'media.image.enqueue',
-    actor: 'user',
-    target: queued.jobId,
-    summary: 'enqueued image job',
-    payload: { jobId: queued.jobId },
-    source: routeSource(req),
-    happenedAt,
-    dedupeKey: `media.image.enqueue:${queued.jobId}`,
-  });
+  try {
+    const happenedAt = new Date().toISOString();
+    await recordUserAction({
+      type: 'media.image.enqueue',
+      actor: 'user',
+      target: queued.jobId,
+      summary: 'enqueued image job',
+      payload: { jobId: queued.jobId },
+      source: routeSource(req),
+      happenedAt,
+      dedupeKey: `media.image.enqueue:${queued.jobId}`,
+    });
+  } catch (error) {
+    // Ledger is a side effect — the job is already queued.
+    console.error(`❌ Failed to record media.image.enqueue: ${error.message}`);
+  }
   return queued;
 }
 

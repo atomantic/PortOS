@@ -30,15 +30,20 @@ export function scheduleChangePayload(patch) {
 export async function logCosScheduleUpdate({ target, patch, source, extra = {} } = {}) {
   const { keysChanged, changes } = scheduleChangePayload(patch);
   if (keysChanged.length === 0) return null;
-  const happenedAt = new Date().toISOString();
-  return recordUserAction({
-    type: 'cos.schedule.update',
-    actor: 'user',
-    target,
-    summary: `Updated CoS schedule: ${keysChanged.join(', ')}`,
-    payload: { keysChanged, changes, ...extra },
-    source,
-    happenedAt,
-    dedupeKey: `cos.schedule.update:${target}:${happenedAt}:${keysChanged.join(',').slice(0, 200)}`,
-  });
+  try {
+    const happenedAt = new Date().toISOString();
+    return await recordUserAction({
+      type: 'cos.schedule.update',
+      actor: 'user',
+      target,
+      summary: `Updated CoS schedule: ${keysChanged.join(', ')}`,
+      payload: { keysChanged, changes, ...extra },
+      source,
+      happenedAt,
+      dedupeKey: `cos.schedule.update:${target}:${happenedAt}:${keysChanged.join(',').slice(0, 200)}`,
+    });
+  } catch (error) {
+    console.error(`❌ Failed to record cos.schedule.update: ${error.message}`);
+    return null;
+  }
 }

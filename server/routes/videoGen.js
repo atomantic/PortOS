@@ -947,17 +947,21 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
     failValidation(parsed);
   }
   const queued = await submitVideoGenJob(parsed.data, uploads);
-  const happenedAt = new Date().toISOString();
-  await recordUserAction({
-    type: 'media.video.enqueue',
-    actor: 'user',
-    target: queued.jobId,
-    summary: 'enqueued video job',
-    payload: { jobId: queued.jobId },
-    source: { route: `${req.baseUrl}${req.route?.path ?? ''}`, method: req.method },
-    happenedAt,
-    dedupeKey: `media.video.enqueue:${queued.jobId}`,
-  });
+  try {
+    const happenedAt = new Date().toISOString();
+    await recordUserAction({
+      type: 'media.video.enqueue',
+      actor: 'user',
+      target: queued.jobId,
+      summary: 'enqueued video job',
+      payload: { jobId: queued.jobId },
+      source: { route: `${req.baseUrl}${req.route?.path ?? ''}`, method: req.method },
+      happenedAt,
+      dedupeKey: `media.video.enqueue:${queued.jobId}`,
+    });
+  } catch (error) {
+    console.error(`❌ Failed to record media.video.enqueue: ${error.message}`);
+  }
   res.json(queued);
 }));
 

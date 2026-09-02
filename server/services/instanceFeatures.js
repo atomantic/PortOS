@@ -216,17 +216,21 @@ export async function updateInstanceFeature(featureId, enabled) {
     };
   }, { actor: 'user', skipUserAction: true });
 
-  const happenedAt = new Date().toISOString();
-  await recordUserAction({
-    type: 'instance-feature.toggle',
-    actor: 'user',
-    target: featureId,
-    summary: `Toggled instance feature ${featureId} ${enabled ? 'on' : 'off'}`,
-    payload: { id: featureId, enabled },
-    source: { service: 'instanceFeatures', fn: 'updateInstanceFeature' },
-    happenedAt,
-    dedupeKey: `instance-feature.toggle:${featureId}:${enabled}:${happenedAt}`,
-  });
+  try {
+    const happenedAt = new Date().toISOString();
+    await recordUserAction({
+      type: 'instance-feature.toggle',
+      actor: 'user',
+      target: featureId,
+      summary: `Toggled instance feature ${featureId} ${enabled ? 'on' : 'off'}`,
+      payload: { id: featureId, enabled },
+      source: { service: 'instanceFeatures', fn: 'updateInstanceFeature' },
+      happenedAt,
+      dedupeKey: `instance-feature.toggle:${featureId}:${enabled}:${happenedAt}`,
+    });
+  } catch (error) {
+    console.error(`❌ Failed to record instance-feature.toggle: ${error.message}`);
+  }
 
   const detected = await detectFeatureConfiguration();
   return { features: await attachSetupStatus(resolveInstanceFeatures(settings, { detected }), settings) };
