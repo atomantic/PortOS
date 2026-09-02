@@ -46,6 +46,7 @@ import { getOpencodeLocalProviderNamespace, isClaudeCommand } from './providerMo
 import { isGatewayNamespace } from './providerGateways.js';
 import { agentGuardEnv } from './agentGuard/index.js';
 import { buildSafeCliBaseEnv } from './processEnv.js';
+import { isPublicReviewNoToolProfile, isPublicReviewRestrictedProfile } from './agentExecutionProfiles.js';
 
 // Claude Code defaults to 32K output tokens. Thinking-capable local models can
 // legitimately spend more than that before returning their final tool call;
@@ -127,6 +128,47 @@ export function composeProviderEnv({ before = null, provider = null, model = nul
   };
 }
 
+// Public contributor content is run through a no-tools local Claude wrapper.
+// Keep only runtime essentials plus the local Anthropic-compatible endpoint;
+// in particular, never pass forge, cloud, SSH, auth, or arbitrary provider env
+// vars into the child. This is a second boundary in addition to the CLI argv.
+const PUBLIC_REVIEW_ENV_KEYS = new Set([
+  'PATH', 'Path', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'PWD', 'TMPDIR', 'TMP', 'TEMP',
+  'LANG', 'LANGUAGE', 'TERM', 'COLORTERM', 'TZ', 'NODE', 'NODE_ENV', 'NODE_PATH',
+  'NVM_DIR', 'NVM_BIN', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME',
+  'SystemRoot', 'SystemDrive', 'ComSpec', 'PATHEXT', 'USERPROFILE', 'APPDATA',
+  'LOCALAPPDATA', 'ProgramData', 'ProgramFiles', 'HOMEDRIVE', 'HOMEPATH',
+  'ANTHROPIC_BASE_URL', 'ANTHROPIC_SMALL_FAST_MODEL',
+  'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'MAX_THINKING_TOKENS',
+]);
+
+export function buildPublicReviewCliEnv(env = {}) {
+  return Object.fromEntries(Object.entries(env || {}).filter(([key, value]) => (
+    value != null && (PUBLIC_REVIEW_ENV_KEYS.has(key) || key.startsWith('LC_'))
+  )));
+}
+
+// The actions stage is allowed to use its vendor's own workspace sandbox for
+// repository inspection and tests, but it must never inherit forge credentials, SSH
+// configuration, cloud-provider keys, or arbitrary provider env vars. This is
+// deliberately a second strict allowlist rather than a blocklist: a new secret
+// added to the server or provider environment must not silently become visible
+// to a contributor-controlled review. The deterministic output hook owns every
+// forge mutation after the model exits.
+const PUBLIC_REVIEW_ACTIONS_ENV_KEYS = new Set([
+  'PATH', 'Path', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'PWD', 'TMPDIR', 'TMP', 'TEMP',
+  'LANG', 'LANGUAGE', 'TERM', 'COLORTERM', 'TZ', 'NODE', 'NODE_ENV', 'NODE_PATH',
+  'NVM_DIR', 'NVM_BIN',
+  'SystemRoot', 'SystemDrive', 'ComSpec', 'PATHEXT', 'USERPROFILE', 'APPDATA',
+  'LOCALAPPDATA', 'ProgramData', 'ProgramFiles', 'HOMEDRIVE', 'HOMEPATH',
+]);
+
+export function buildPublicReviewActionsCliEnv(env = {}) {
+  return Object.fromEntries(Object.entries(env || {}).filter(([key, value]) => (
+    value != null && (PUBLIC_REVIEW_ACTIONS_ENV_KEYS.has(key) || key.startsWith('LC_'))
+  )));
+}
+
 /**
  * Compose the complete environment an AI-CLI child process is spawned with.
  *
@@ -160,11 +202,18 @@ export function buildCliChildEnv({
   cwd,
   extra = null,
   guard = false,
+  safetyProfile = null,
 } = {}) {
-  const env = withSpawnCwdEnv(
+  const composed = withSpawnCwdEnv(
     { ...buildSafeCliBaseEnv(baseEnv, provider), ...composeProviderEnv({ before, provider, model, extra }) },
     cwd,
   );
+
+  const env = isPublicReviewNoToolProfile(safetyProfile)
+    ? buildPublicReviewCliEnv(composed)
+    : isPublicReviewRestrictedProfile(safetyProfile)
+      ? buildPublicReviewActionsCliEnv(composed)
+      : composed;
 
   // CLAUDECODE is set when PortOS itself runs inside Claude Code; passing it
   // through would make a spawned Claude CLI think it's nested in that session.

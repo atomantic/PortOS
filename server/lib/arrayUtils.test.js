@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { shuffle } from './arrayUtils.js';
+import { shuffle, dedupeByKey } from './arrayUtils.js';
 
 describe('shuffle', () => {
   it('returns a new array — never mutates the input', () => {
@@ -43,5 +43,42 @@ describe('shuffle', () => {
     const out = shuffle(input);
     expect(out).toHaveLength(100);
     expect(new Set(out).size).toBe(100);
+  });
+});
+
+describe('dedupeByKey', () => {
+  it('keeps one item per key, in first-seen order', () => {
+    const out = dedupeByKey(
+      [{ k: 'a', v: 1 }, { k: 'b', v: 2 }, { k: 'a', v: 3 }],
+      (x) => x.k,
+    );
+    expect(out.map((x) => x.k)).toEqual(['a', 'b']);
+  });
+
+  it('defaults to last-seen-wins — what a sequential upsert loop would leave', () => {
+    const out = dedupeByKey([{ k: 'a', v: 1 }, { k: 'a', v: 2 }], (x) => x.k);
+    expect(out).toEqual([{ k: 'a', v: 2 }]);
+  });
+
+  it('honors a `pick` comparator, so a non-latest conflict rule can win', () => {
+    // memorySync's case: the newest `updatedAt` survives regardless of the
+    // order a peer happened to send the duplicates in.
+    const newest = (held, next) => (held.at > next.at ? held : next);
+    const rows = [{ k: 'a', at: 30 }, { k: 'a', at: 10 }, { k: 'a', at: 20 }];
+    expect(dedupeByKey(rows, (x) => x.k, newest)).toEqual([{ k: 'a', at: 30 }]);
+    // Same set, reversed — the winner must not depend on arrival order.
+    expect(dedupeByKey([...rows].reverse(), (x) => x.k, newest)).toEqual([{ k: 'a', at: 30 }]);
+  });
+
+  it('never mutates the input, and passes a unique list through unchanged', () => {
+    const input = [{ k: 'a' }, { k: 'b' }];
+    const out = dedupeByKey(input, (x) => x.k);
+    expect(out).not.toBe(input);
+    expect(out).toEqual(input);
+    expect(input).toHaveLength(2);
+  });
+
+  it('handles an empty list', () => {
+    expect(dedupeByKey([], (x) => x.k)).toEqual([]);
   });
 });

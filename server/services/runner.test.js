@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import EventEmitter from 'events';
+import { ChildProcess } from '../lib/childProcess.js';
 
 // executeCliRun validates that a requested workspace actually exists before
 // spawning (#3180 — a bad repoPath used to silently run in the PortOS root), so
@@ -106,9 +107,15 @@ const flushMicrotasks = () => new Promise((resolve) => setImmediate(resolve));
 
 function makeChild() {
   const child = new EventEmitter();
+  // killProcessTree tells a spawned child from a node-pty session by
+  // `instanceof ChildProcess` (a pty takes a different kill shape), so the fake
+  // has to carry the prototype the way a real spawn() result does.
+  Object.setPrototypeOf(child, ChildProcess.prototype);
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
-  child.stdin = { write: vi.fn(), end: vi.fn() };
+  // A real ChildProcess stdin is a stream — the fake is one too, or the
+  // production guardChildStdin listener has nothing to attach to (#5655).
+  child.stdin = Object.assign(new EventEmitter(), { write: vi.fn(), end: vi.fn(), destroy: vi.fn() });
   child.kill = vi.fn();
   child.killed = false;
   return child;
@@ -136,6 +143,52 @@ describe('finalizeRunRecord — authoritative timeout classification', () => {
       success: false,
       errorCategory: ERROR_CATEGORIES.TIMEOUT,
       errorAnalysis: expect.objectContaining({ category: ERROR_CATEGORIES.TIMEOUT }),
+    });
+  });
+
+  // Exit 124 is not the only authoritative statement of cause: the local-LLM
+  // playground aborts its OWN wall-clock deadline and finalizes with exit 1 +
+  // "Timed out after Nms", carrying the partial generation as `output`. Scanning
+  // that generation matched nothing, so the run landed in UNKNOWN with the
+  // story's first line lifted as its error message — and autoFixer escalated a
+  // plain timeout as a Tier-4 provider failure titled with the story headline.
+  it('classifies a host-deadline timeout from the stated error, not the generation it interrupted', async () => {
+    setAIToolkit(fakeToolkit({ analyzeError }), { dataDir: '/tmp/test-runner' });
+
+    const metadata = await finalizeRunRecord({
+      runId: 'run-playground-timeout',
+      output: '# THE FIRST PAGE OF EVERYTHING\n\nThe light turned every twelve seconds…',
+      exitCode: 1,
+      success: false,
+      error: 'Timed out after 300000ms',
+      startTime: Date.now(),
+    });
+
+    expect(metadata).toMatchObject({
+      success: false,
+      error: 'Timed out after 300000ms',
+      errorCategory: ERROR_CATEGORIES.TIMEOUT,
+    });
+    expect(metadata.errorAnalysis.message).not.toContain('THE FIRST PAGE OF EVERYTHING');
+  });
+
+  // The other half of the same rule: a CLI/TUI run whose caller only knows the
+  // exit code still has to be classified from the provider banner in its output.
+  it('still scans the output when the caller states nothing more than the exit code', async () => {
+    setAIToolkit(fakeToolkit({ analyzeError }), { dataDir: '/tmp/test-runner' });
+
+    const metadata = await finalizeRunRecord({
+      runId: 'run-cli-banner',
+      output: "You've hit your usage limit. Upgrade to Pro to keep going.",
+      exitCode: 1,
+      success: false,
+      error: 'Process exited with code 1',
+      startTime: Date.now(),
+    });
+
+    expect(metadata).toMatchObject({
+      errorCategory: ERROR_CATEGORIES.USAGE_LIMIT,
+      errorAnalysis: expect.objectContaining({ category: ERROR_CATEGORIES.USAGE_LIMIT }),
     });
   });
 
@@ -570,6 +623,49 @@ describe('executeCliRun — Windows .cmd/.bat shim spawning (#1865)', () => {
     const [command, , options] = spawn.mock.calls.at(-1);
     expect(command).toBe('codex');
     expect(options.shell).toBeFalsy();
+  });
+});
+
+describe('executeCliRun — stdin pipe containment (#5655)', () => {
+  const provider = {
+    id: 'codex', command: 'codex', args: [],
+    defaultModel: 'codex-configured-default', timeout: 5000,
+  };
+
+  it('guards the pipe before writing, so a dead child\'s EPIPE cannot crash the server', async () => {
+    // executeCliRun runs outside the Express request lifecycle: an unlistened
+    // 'error' on the stdin stream is re-thrown by Node and takes the whole
+    // server process down with every live run on it.
+    const child = makeChild();
+    let listenersAtWriteTime = null;
+    child.stdin.write = vi.fn(() => { listenersAtWriteTime = child.stdin.listenerCount('error'); });
+    spawn.mockReturnValue(child);
+
+    await executeCliRun({ runId: 'run-stdin-guard', provider, prompt: 'test prompt', workspacePath: TEST_WORKSPACE });
+
+    expect(listenersAtWriteTime).toBe(1);
+    expect(() => child.stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))).not.toThrow();
+    child.emit('close', 0);
+  });
+
+  it('closes the pipe and logs when the write throws, rather than stranding the run', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const child = makeChild();
+    child.stdin.write = vi.fn(() => { throw Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }); });
+    spawn.mockReturnValue(child);
+
+    const onComplete = vi.fn();
+    // The synchronous throw is contained — executeCliRun still returns normally.
+    await executeCliRun({ runId: 'run-stdin-throw', provider, prompt: 'test prompt', workspacePath: TEST_WORKSPACE, onComplete });
+
+    // A child still reading stdin must see EOF instead of waiting on a write that never lands.
+    expect(child.stdin.destroy).toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('run run-stdin-throw stdin write failed'));
+
+    child.emit('close', 0);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    errorSpy.mockRestore();
   });
 });
 

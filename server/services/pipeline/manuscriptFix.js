@@ -19,6 +19,7 @@ import { getSeries, MANUSCRIPT_TYPES } from './series.js';
 import { getIssue, updateStageWithLatest, updateStagesWithLatest } from './issues.js';
 import { collectManuscriptSections, stageVersionsOf, sectionsCorpus, manuscriptSectionHeader } from './arcPlanner.js';
 import { getComment, updateComment } from './manuscriptReview.js';
+import { escapeRegExp } from '../../lib/textUtils.js';
 
 export const ERR_VALIDATION = 'PIPELINE_MANUSCRIPT_FIX_VALIDATION';
 export const ERR_NOT_FOUND = 'PIPELINE_MANUSCRIPT_FIX_NOT_FOUND';
@@ -231,7 +232,7 @@ function locateFind(text, find, anchorQuote) {
 // the matched { start, end } in the ORIGINAL text (so the splice covers the real
 // span, whose length may differ from `find.length`), or null if not found.
 function buildWhitespaceTolerantRegex(find) {
-  const escaped = find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escaped = escapeRegExp(find);
   return new RegExp(escaped.replace(/\s+/g, '\\s+'));
 }
 

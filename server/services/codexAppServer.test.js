@@ -12,9 +12,21 @@ vi.mock('../lib/processEnv.js', async (importOriginal) => ({
   ...(await importOriginal()),
   findCommandOnPath: vi.fn(() => '/usr/local/bin/codex'),
 }));
+// Spied, not replaced: the real pure functions still run (so the POSIX no-op
+// path is exercised as shipped), while a test can force the Windows branch's
+// result without pretending to be on win32.
+vi.mock('../lib/bufferedSpawn.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    prepareWindowsSafeSpawn: vi.fn(actual.prepareWindowsSafeSpawn),
+    killProcessTree: vi.fn(actual.killProcessTree),
+  };
+});
 
 const { spawn } = await import('../lib/childProcess.js');
 const { findCommandOnPath } = await import('../lib/processEnv.js');
+const { killProcessTree, prepareWindowsSafeSpawn } = await import('../lib/bufferedSpawn.js');
 const { CODEX_ACCOUNT_STATUS, CODEX_ERROR_CODES } = await import('../lib/codexAccount.js');
 const {
   __resetCodexAppServer,
@@ -111,6 +123,38 @@ describe('spawning the app-server', () => {
     expect(spawn).not.toHaveBeenCalled();
     expect(readiness.status).toBe(CODEX_ACCOUNT_STATUS.runtimeMissing);
     expect(readiness.runtimeInstalled).toBe(false);
+  });
+
+  it('routes the resolved binary through prepareWindowsSafeSpawn, so a Windows codex.cmd shim starts (#5838)', async () => {
+    // The reported bug: `codex` installs as a `.cmd` npm shim on Windows, and
+    // Node's CVE-2024-27980 patch refuses that target under `shell: false`
+    // ("spawn EINVAL"), so every account read and ChatGPT sign-in failed there.
+    // The fix is the canonical wrap — asserted here with a sentinel, because
+    // the wrap itself is platform-gated and owned by bufferedSpawn.
+    findCommandOnPath.mockReturnValue('C:\\npm\\codex.cmd');
+    vi.mocked(prepareWindowsSafeSpawn).mockReturnValueOnce({
+      command: 'cmd.exe',
+      args: ['/c', 'C:\\npm\\codex.cmd', 'app-server'],
+    });
+
+    const promise = getCodexAccountReadiness();
+    await scripted(child, promise, [['initialize', {}], ['account/read', { account: null }]]);
+    await promise;
+
+    expect(prepareWindowsSafeSpawn).toHaveBeenCalledWith('C:\\npm\\codex.cmd', ['app-server']);
+    // spawn() received the wrapped pair, NOT the raw shim path.
+    expect(spawn.mock.calls[0][0]).toBe('cmd.exe');
+    expect(spawn.mock.calls[0][1]).toEqual(['/c', 'C:\\npm\\codex.cmd', 'app-server']);
+  });
+
+  it('tears the child down through killProcessTree, so a cmd.exe shim cannot orphan codex', async () => {
+    const promise = getCodexAccountReadiness();
+    await scripted(child, promise, [['initialize', {}], ['account/read', { account: null }]]);
+    await promise;
+
+    await stopCodexAppServer();
+
+    expect(killProcessTree).toHaveBeenCalledWith(child, 'SIGTERM');
   });
 
   it('reuses one child across calls, so a page poll cannot fan out processes', async () => {

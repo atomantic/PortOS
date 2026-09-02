@@ -119,8 +119,8 @@ export default function ChiefOfStaff() {
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
   const tabsRef = useRef(null);
-  // Monotonic counter for queue-state writes, so a slow fetchData cannot overwrite
-  // a fresher fetchQueue result (see both functions below).
+  // Monotonic counter for queue/insight-state writes, so a slow fetchData cannot
+  // overwrite a fresher optimistic mutation or fetchQueue result.
   const queueSeqRef = useRef(0);
   const socket = useSocket();
 
@@ -241,7 +241,7 @@ export default function ChiefOfStaff() {
     // Apply a real insights payload (including a legitimately-empty []); a null
     // from a failed/transient fetch preserves the last-good array so the banner
     // doesn't flicker empty on a blip.
-    if (insightsData?.insights) setInsights(insightsData.insights);
+    if (insightsData?.insights && queueSeqRef.current === queueSeq) setInsights(insightsData.insights);
 
     const newState = deriveAgentState(statusData, agentsData, mergedHealth);
     setAgentState(newState);
@@ -261,10 +261,14 @@ export default function ChiefOfStaff() {
   // endpoint runs a health check that auto-restarts errored PM2 processes (see
   // the note below), which must never ride the store's per-mutation task stream.
   const fetchQueue = useCallback(async () => {
+    const queueSeq = queueSeqRef.current;
     const [tasksData, agentsData] = await Promise.all([
       api.getCosTasks({ silent: true }).catch(() => null),
       api.getCosAgents({ silent: true }).catch(() => null)
     ]);
+    // A confirmed local mutation can supersede this read while it is in flight;
+    // never let its older task snapshot undo the optimistic state.
+    if (queueSeqRef.current !== queueSeq) return;
     if (tasksData) setTasks(tasksData);
     if (Array.isArray(agentsData)) setAgents(agentsData);
     // Supersede any fetchData still in flight — see the guard in fetchData. Bumped
@@ -532,24 +536,30 @@ export default function ChiefOfStaff() {
     }
   };
 
-  const handleTaskUnblocked = (taskId) => {
+  const handleTaskUnblocked = useCallback((taskId) => {
+    // A full refresh starts before its first await, so invalidate any read that
+    // began before this confirmed mutation. Otherwise its pre-unblock snapshot
+    // can put the task and insight back into the blocked state after our local
+    // update has already rendered.
+    queueSeqRef.current += 1;
     setTasks(prev => {
       const unblockSlice = (slice) => {
         if (!slice) return slice;
         const blockedTask = slice.grouped?.blocked?.find(t => t.id === taskId);
-        if (!blockedTask && !slice.tasks?.some(t => t.id === taskId)) return slice;
-        const unblocked = blockedTask
-          ? { ...blockedTask, status: 'pending', metadata: { ...blockedTask.metadata, blocker: undefined } }
-          : null;
+        const existingTask = slice.tasks?.find(t => t.id === taskId) || blockedTask;
+        if (!existingTask) return slice;
+        const unblocked = { ...existingTask, status: 'pending', metadata: { ...existingTask.metadata, blocker: undefined, blockedReason: undefined } };
         const currentPending = slice.grouped?.pending || [];
-        const alreadyPending = currentPending.some(t => t.id === taskId);
+        const pending = currentPending.some(t => t.id === taskId)
+          ? currentPending.map(t => t.id === taskId ? unblocked : t)
+          : [...currentPending, unblocked];
         return {
           ...slice,
-          tasks: slice.tasks?.map(t => t.id === taskId ? { ...t, status: 'pending', metadata: { ...t.metadata, blocker: undefined } } : t),
+          tasks: slice.tasks?.map(t => t.id === taskId ? unblocked : t),
           grouped: {
             ...slice.grouped,
             blocked: slice.grouped?.blocked?.filter(t => t.id !== taskId) || [],
-            pending: alreadyPending ? currentPending : [...currentPending, ...(unblocked ? [unblocked] : [])]
+            pending
           }
         };
       };
@@ -559,7 +569,24 @@ export default function ChiefOfStaff() {
         cos: unblockSlice(prev.cos)
       };
     });
-  };
+    setInsights(prev => {
+      if (!Array.isArray(prev)) return prev;
+      return prev.flatMap(insight => {
+        if (insight.type !== 'blocked' || !Array.isArray(insight.tasks)) return [insight];
+        const remaining = insight.tasks.filter(task => task.id !== taskId);
+        if (remaining.length === insight.tasks.length) return [insight];
+        if (remaining.length === 0) return [];
+        const firstRemaining = remaining[0];
+        return [{
+          ...insight,
+          title: `${remaining.length} blocked task${remaining.length > 1 ? 's' : ''}`,
+          description: firstRemaining.blocker || firstRemaining.description || insight.description,
+          count: remaining.length,
+          tasks: remaining,
+        }];
+      });
+    });
+  }, []);
 
   // A successful task POST returns the persisted task synchronously. Insert it
   // into the queue right away so the user gets a durable pending indication
@@ -1026,7 +1053,7 @@ export default function ChiefOfStaff() {
       <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-3 lg:p-4">
         {/* Stats Bar - hidden for SVG/canvas modes (now integrated into CoS sidebar);
             ascii/terminal mode keeps it because TerminalCoSPanel doesn't host the cards. */}
-        <div className={`grid grid-cols-5 gap-1.5 sm:gap-2 lg:gap-3 mb-3 sm:mb-4 lg:mb-6 ${avatarStyle !== 'ascii' ? 'hidden' : ''}`}>
+        <div className={`grid grid-cols-3 gap-1.5 sm:grid-cols-5 sm:gap-2 lg:gap-3 mb-3 sm:mb-4 lg:mb-6 ${avatarStyle !== 'ascii' ? 'hidden' : ''}`}>
           <StatCard
             label="Active"
             value={activeAgentCount}
@@ -1106,7 +1133,7 @@ export default function ChiefOfStaff() {
         {activeTab === 'tasks' && (
           <div role="tabpanel" id="tabpanel-tasks" aria-labelledby="tab-tasks">
             <ActionableInsightsBanner insights={insights} onTaskUnblocked={handleTaskUnblocked} onRefresh={fetchData} />
-            <TasksTab tasks={tasks} agents={agents} onRefresh={fetchData} onTaskAdded={handleUserTaskAdded} providers={providers} apps={apps} />
+            <TasksTab tasks={tasks} agents={agents} onRefresh={fetchData} onTaskAdded={handleUserTaskAdded} onTaskUnblocked={handleTaskUnblocked} providers={providers} apps={apps} />
           </div>
         )}
         {activeTab === 'agents' && (

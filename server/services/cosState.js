@@ -247,20 +247,41 @@ export async function loadState() {
   return stateCache;
 }
 
-// Read only the persisted Persistent Mind shape for source-transition safety
-// checks. Unlike loadState(), this deliberately does not replace malformed JSON
-// with defaults: an update gate must distinguish "known empty" from "could not
-// establish what is queued" before switching to an older source reader.
-export async function readPersistentMindStateForSafetyCheck() {
+// Read the persisted state for safety checks, bypassing both the cache and
+// loadState()'s defaulting. Unlike loadState(), this deliberately does not
+// replace malformed JSON with defaults: a gate that authorizes a destructive
+// action must distinguish "known empty" from "could not establish what is
+// there". `trusted: false` means the file exists but could not be read as an
+// object — every caller must treat that as "assume the worst", never as empty.
+async function readStateForSafetyCheck() {
   await ensureDirectories();
-  if (!existsSync(STATE_FILE)) return { trusted: true, persistentMind: null };
+  if (!existsSync(STATE_FILE)) return { trusted: true, state: null };
   const content = await readFile(STATE_FILE, 'utf-8');
-  if (!isValidJSON(content)) return { trusted: false, persistentMind: null };
+  if (!isValidJSON(content)) return { trusted: false, state: null };
   const state = safeJSONParse(content, null, { logError: true, context: 'CoS state safety check' });
   if (!state || typeof state !== 'object' || Array.isArray(state)) {
-    return { trusted: false, persistentMind: null };
+    return { trusted: false, state: null };
   }
-  return { trusted: true, persistentMind: state.persistentMind };
+  return { trusted: true, state };
+}
+
+// The Persistent Mind slice, for the update route's image-work gate.
+export async function readPersistentMindStateForSafetyCheck() {
+  const { trusted, state } = await readStateForSafetyCheck();
+  return { trusted, persistentMind: trusted ? state?.persistentMind ?? null : null };
+}
+
+// The agent records, for the update route's live-agent gate. Same contract:
+// `trusted: false` is "the records could not be established", which that gate
+// must read as "an agent may be running", not as "no agents are running" —
+// getting that backwards restarts PortOS out from under a live agent.
+export async function readAgentsStateForSafetyCheck() {
+  const { trusted, state } = await readStateForSafetyCheck();
+  const agents = state?.agents;
+  return {
+    trusted,
+    agents: trusted && agents && typeof agents === 'object' && !Array.isArray(agents) ? agents : null,
+  };
 }
 
 export async function saveState(state) {

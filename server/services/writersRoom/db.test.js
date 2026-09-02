@@ -9,6 +9,7 @@
 
 import { describe, it, expect, afterAll, beforeAll, beforeEach } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
+import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 
 const TABLES = [
   'writers_room_folders', 'writers_room_works',
@@ -31,7 +32,7 @@ let skipReason = '';
   }
 }
 
-if (!dbReady) console.log(`⏭️  writersRoom/db.test.js skipped: ${skipReason}`);
+const runDb = requireDbOrSkip('services/writersRoom/db.test', dbReady, skipReason);
 
 const draft = (id, extra = {}) => ({
   id, label: 'Draft 1', contentFile: `drafts/${id}.md`, contentHash: 'h'.repeat(64),
@@ -45,7 +46,7 @@ const manifest = (id, extra = {}) => ({
   createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-02T00:00:00.000Z', ...extra,
 });
 
-describe.skipIf(!dbReady)('Writers Room DB adapter round-trip', () => {
+describe.skipIf(!runDb)('Writers Room DB adapter round-trip', () => {
   let db;
   const snaps = {};
   beforeAll(async () => {

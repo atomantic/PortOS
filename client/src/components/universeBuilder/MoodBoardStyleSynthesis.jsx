@@ -198,7 +198,7 @@ export default function MoodBoardStyleSynthesis({
         size="2xl"
         closeOnBackdrop={!bodyBusy}
         usePortal
-        panelClassName="bg-port-card border border-port-border rounded-xl max-h-[90vh] overflow-y-auto"
+        panelClassName="bg-port-card border border-port-border rounded-xl"
         ariaLabel="Synthesize universe style from mood board"
       >
         {open ? (

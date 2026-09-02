@@ -75,7 +75,7 @@ export default function Flux2InstallModal({ open, onClose, onComplete }) {
       // imperceptible (~16px) and not worth a custom override.
       backdropClassName="bg-black/70 backdrop-blur-sm"
       ariaLabelledBy="flux2-install-title"
-      panelClassName="bg-port-card rounded-xl border border-port-border shadow-2xl overflow-hidden flex flex-col max-h-[80vh]"
+      panelClassName="bg-port-card rounded-xl border border-port-border shadow-2xl overflow-hidden flex flex-col"
     >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-port-border">

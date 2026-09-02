@@ -5,7 +5,6 @@ import { request } from './apiCore.js';
 // request()'s auto-toast with `{ silent: true }` when it owns its own error UI.
 
 export const listMusicVideoProjects = (options = {}) => request('/music-video', options);
-export const getMusicVideoProject = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}`, options);
 export const createMusicVideoProject = (data, options = {}) => request('/music-video', {
   method: 'POST', body: JSON.stringify(data), ...options,
 });

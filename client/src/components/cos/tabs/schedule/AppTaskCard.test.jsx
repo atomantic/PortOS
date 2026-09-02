@@ -57,6 +57,12 @@ describe('AppTaskCard', () => {
     expect(screen.getByText('App coverage')).toBeTruthy();
   });
 
+  it('shows the shipped task summary beneath the task name', () => {
+    const summary = 'Review contributor changes before they merge';
+    renderCard({ description: summary });
+    expect(screen.getByText(summary)).toBeInTheDocument();
+  });
+
   it('shows a future next-run countdown for active scheduled tasks', () => {
     renderCard();
     // timeUntil for a year-2999 date returns an "in …" string.
@@ -79,6 +85,23 @@ describe('AppTaskCard', () => {
   it('shows "Paused" for disabled tasks', () => {
     renderCard({ enabled: false });
     expect(screen.getByText('Paused')).toBeTruthy();
+  });
+
+  it('marks an automation-only task and removes direct actions', () => {
+    const { onTrigger, onConfigure } = renderCard({
+      invocation: {
+        kind: 'subsidiary',
+        visibility: 'visible',
+        userInvokable: false,
+        label: 'Automation-only',
+        description: 'Runs from a parent automation.'
+      }
+    });
+    expect(screen.getAllByText('Automation-only').length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: /Run Now|Run on App/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Configure/i })).not.toBeInTheDocument();
+    expect(onTrigger).not.toHaveBeenCalled();
+    expect(onConfigure).not.toHaveBeenCalled();
   });
 
   it('shows the dependency wait state', () => {

@@ -30,7 +30,8 @@
  *      import out of its own directory (see `aiToolkit/AGENTS.md`);
  *      `providerGateways.parity.test.js` fails when the two drift;
  *   3. `client/src/utils/providers.js` — the browser, which cannot import server
- *      code at all.
+ *      code at all; `providerGateways.parity.test.js` reads it as TEXT (never
+ *      imports it) and pins the fields it carries.
  */
 
 /**

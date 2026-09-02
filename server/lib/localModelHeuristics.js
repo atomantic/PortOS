@@ -9,9 +9,10 @@
  *     generation/fallback run — the cause of the nomic-embed-text fallback bug)
  *   - localLlm.getStatus (recommend a best-fit editorial model)
  *
- * The client mirrors `isEmbeddingModel` + `isVisionModel` in
- * client/src/utils/providers.js — keep the regexes in lockstep (the
- * aiToolkit/lib dirs can't be imported there).
+ * The client mirrors `isEmbeddingModel` + `isVisionModel` + `isToolUseModel`
+ * in client/src/utils/providers.js — keep the regexes in lockstep (the
+ * aiToolkit/lib dirs can't be imported there). `localModelHeuristics.mirror.test.js`
+ * enforces that, by what each pattern matches rather than by its text.
  */
 
 // Embedding-only models — never valid for chat/generation. The bge/nomic/e5/gte
@@ -171,7 +172,8 @@ export function isVisionModel(model) {
 // Gemma 4), so the gemma rule is anchored to the family AND the version.
 //
 // MIRRORED in client/src/utils/providers.js (isToolUseModel) and inlined in
-// server/lib/aiToolkit/providers.js (TOOL_USE_RE) — keep all three in lockstep.
+// server/lib/aiToolkit/providers.js (TOOL_USE_RE) — keep all three in lockstep;
+// `localModelHeuristics.mirror.test.js` fails when any of them drifts.
 const TOOL_USE_RE = new RegExp([
   'qwen',
   'llama-?3\\.[1-9]', 'llama-?4',

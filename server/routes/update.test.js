@@ -27,6 +27,12 @@ vi.mock('../services/agentState.js', () => ({
   getActiveAgentIds: vi.fn().mockReturnValue([]),
   spawningTasks: mockSpawningTasks
 }));
+// The map ids are filtered through PortOS's durable records before they count.
+// Default the filter to "every tracked id has a live record" so the existing
+// cases keep asserting the counting arithmetic; the stale-entry case overrides it.
+vi.mock('../services/cosAgentLifecycle.js', () => ({
+  filterLiveAgentIds: vi.fn(async (ids) => ids)
+}));
 const { mockCosState } = vi.hoisted(() => ({
   mockCosState: {
     persistentMind: { queuedMessages: [], activeTurn: null },
@@ -44,6 +50,7 @@ import * as updateChecker from '../services/updateChecker.js';
 import { executeUpdate } from '../services/updateExecutor.js';
 import { getActiveAgentIds } from '../services/agentState.js';
 import { readPersistentMindStateForSafetyCheck } from '../services/cosState.js';
+import { filterLiveAgentIds } from '../services/cosAgentLifecycle.js';
 import updateRoutes from './update.js';
 
 const makeApp = () => {
@@ -71,6 +78,7 @@ describe('POST /api/update/execute — reconcile gating (issue #1779)', () => {
     updateChecker.setUpdateInProgress.mockResolvedValue(true);
     executeUpdate.mockResolvedValue({ success: true, version: '1.26.0' });
     getActiveAgentIds.mockReturnValue([]);
+    vi.mocked(filterLiveAgentIds).mockImplementation(async (ids) => ids);
     mockCosState.persistentMind = { queuedMessages: [], activeTurn: null };
     readPersistentMindStateForSafetyCheck.mockImplementation(async () => ({
       trusted: true,
@@ -166,6 +174,7 @@ describe('POST /api/update/execute — active CoS agent gating', () => {
     updateChecker.getUpdateStatus.mockResolvedValue(baseStatus());
     executeUpdate.mockResolvedValue({ success: true, version: '1.26.0' });
     getActiveAgentIds.mockReturnValue([]);
+    vi.mocked(filterLiveAgentIds).mockImplementation(async (ids) => ids);
     mockCosState.persistentMind = { queuedMessages: [], activeTurn: null };
     readPersistentMindStateForSafetyCheck.mockImplementation(async () => ({
       trusted: true,
@@ -307,6 +316,19 @@ describe('POST /api/update/execute — active CoS agent gating', () => {
     expect(res.status).toBe(200);
     expect(executeUpdate).toHaveBeenCalled();
   });
+
+  // The phantom that pinned the Update page: the CoS Runner kept advertising
+  // TUIs it had failed to kill, `syncRunnerAgents` adopted them, and the count
+  // blocked the restart — the only thing that would have cleared them.
+  it('lets the update run when every tracked id is an already-finalized ghost', async () => {
+    getActiveAgentIds.mockReturnValue(['agent-ghost-1', 'agent-ghost-2']);
+    vi.mocked(filterLiveAgentIds).mockResolvedValue([]);
+
+    const res = await request(makeApp()).post('/api/update/execute').send({});
+
+    expect(res.status).toBe(200);
+    expect(executeUpdate).toHaveBeenCalled();
+  });
 });
 
 describe('GET /api/update/status — activeCosAgents', () => {
@@ -316,6 +338,7 @@ describe('GET /api/update/status — activeCosAgents', () => {
     updateChecker.clearStaleUpdateInProgress.mockResolvedValue(false);
     updateChecker.getUpdateStatus.mockResolvedValue(baseStatus());
     getActiveAgentIds.mockReturnValue([]);
+    vi.mocked(filterLiveAgentIds).mockImplementation(async (ids) => ids);
     mockCosState.persistentMind = { queuedMessages: [], activeTurn: null };
     readPersistentMindStateForSafetyCheck.mockImplementation(async () => ({
       trusted: true,
@@ -345,6 +368,18 @@ describe('GET /api/update/status — activeCosAgents', () => {
     const res = await request(makeApp()).get('/api/update/status');
     expect(res.status).toBe(200);
     expect(res.body.activeCosAgents).toBe(3);
+  });
+
+  // The maps are not self-cleaning: the CoS Runner keeps advertising a TUI it
+  // failed to kill, and `syncRunnerAgents` adopts it. Counting those pinned the
+  // Update page on "4 CoS agents are currently running" above an empty agent
+  // list — and only a restart, the very thing being blocked, could clear it.
+  it('ignores tracked ids PortOS has already finalized', async () => {
+    getActiveAgentIds.mockReturnValue(['agent-ghost-1', 'agent-ghost-2', 'agent-live']);
+    vi.mocked(filterLiveAgentIds).mockResolvedValue(['agent-live']);
+    const res = await request(makeApp()).get('/api/update/status');
+    expect(res.status).toBe(200);
+    expect(res.body.activeCosAgents).toBe(1);
   });
 
   it('reports 0 when no agents are running', async () => {

@@ -8,11 +8,6 @@ export const getPlatformAccounts = (agentId = null, platform = null, options = {
   const query = params.toString();
   return request(`/agents/accounts${query ? `?${query}` : ''}`, options);
 };
-export const getPlatformAccount = (id) => request(`/agents/accounts/${id}`);
-export const createPlatformAccount = (data) => request('/agents/accounts', {
-  method: 'POST',
-  body: JSON.stringify(data)
-});
 export const registerPlatformAccount = (agentId, platform, name, description) => request('/agents/accounts', {
   method: 'POST',
   body: JSON.stringify({ agentId, platform, name, description })
@@ -63,13 +58,6 @@ export const checkAgentPosts = (agentId, accountId, days, maxReplies, maxUpvotes
     method: 'POST',
     body: JSON.stringify({ agentId, accountId, days, maxReplies, maxUpvotes })
   });
-
-// Moltworld Tools
-export const moltworldJoin = (accountId, x, y, thinking, say, sayTo, agentId) =>
-  request('/agents/tools/moltworld/join', {
-    method: 'POST',
-    body: JSON.stringify({ accountId, agentId, x, y, thinking, say, sayTo })
-  });
 export const moltworldBuild = (accountId, agentId, x, y, z, type, action) =>
   request('/agents/tools/moltworld/build', {
     method: 'POST',
@@ -82,8 +70,6 @@ export const moltworldExplore = (accountId, agentId, x, y, thinking) =>
   });
 export const moltworldStatus = (accountId) =>
   request(`/agents/tools/moltworld/status?accountId=${accountId}`);
-export const moltworldBalance = (accountId) =>
-  request(`/agents/tools/moltworld/balance?accountId=${accountId}`);
 export const moltworldRateLimits = (accountId) =>
   request(`/agents/tools/moltworld/rate-limits?accountId=${accountId}`);
 export const moltworldThink = (accountId, thought, agentId) =>
@@ -127,11 +113,6 @@ export const moltworldWsThink = (thought) =>
   request('/agents/tools/moltworld/ws/think', {
     method: 'POST',
     body: JSON.stringify({ thought })
-  });
-export const moltworldWsNearby = (radius) =>
-  request('/agents/tools/moltworld/ws/nearby', {
-    method: 'POST',
-    body: JSON.stringify({ ...(radius ? { radius } : {}) })
   });
 export const moltworldWsInteract = (to, payload) =>
   request('/agents/tools/moltworld/ws/interact', {

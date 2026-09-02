@@ -26,7 +26,13 @@ import Pill from '../ui/Pill';
 
 const ACTION_CLASS = 'inline-flex items-center gap-1 px-2 py-1 rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors';
 
-export default function ProviderRuntimeStatus({ runtime, onInstall, className = '' }) {
+/**
+ * `optional` — the provider is switched off, so a missing binary is a note on
+ * what enabling it would take, not a gap in the install (see
+ * `providerCardState`): the badge drops to the muted tone. The install button
+ * stays — it is still the one click that makes the provider usable.
+ */
+export default function ProviderRuntimeStatus({ runtime, onInstall, optional = false, className = '' }) {
   if (!runtime) return null;
   const { label, command, installed, installable, blockedReason, docsUrl, manageUrl } = runtime;
 
@@ -42,7 +48,7 @@ export default function ProviderRuntimeStatus({ runtime, onInstall, className = 
 
   return (
     <div className={`flex flex-wrap items-center gap-2 text-xs ${className}`}>
-      <Pill tone="warning" size="xs">{label} not installed</Pill>
+      <Pill tone={optional ? 'muted' : 'warning'} size="xs">{label} not installed</Pill>
       {installable ? (
         <button
           type="button"

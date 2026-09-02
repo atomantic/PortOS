@@ -12,7 +12,7 @@
  *
  * This module is the pure half of the answer: given a provider record, which
  * local runtime backs it (`llama` / `ollama` / `lmstudio` / `mtplx` / `vllm` /
- * `sglang`) and what
+ * `sglang` / `slotstream`) and what
  * base URL should be probed. `services/providerReadiness.js` does the probing.
  * Kept side-effect-free so both the readiness service and its tests can reason
  * about the mapping without a daemon on the host.
@@ -31,6 +31,10 @@
 import { getOpencodeLocalProviderNamespace, isOpencodeCommand } from './providerModels.js';
 import { opencodeLocalBaseUrl } from './opencodeConfig.js';
 import { isGatewayNamespace } from './providerGateways.js';
+import { PORTS } from './ports.js';
+import { isLocalInstanceHost, isLocalInstanceEndpoint, localEndpointPort } from './localEndpoint.js';
+
+export { isLocalInstanceHost, isLocalInstanceEndpoint, localEndpointPort } from './localEndpoint.js';
 
 // Default OpenAI-compatible ports for the two local backends PortOS manages. An
 // endpoint-only provider (no id/name) pointed at one of these on the local
@@ -47,49 +51,6 @@ const BACKEND_DEFAULT_PORT = { 11434: 'ollama', 1234: 'lmstudio' };
  * instance whose installed models we must not heal against, and whose daemon
  * PortOS must not offer to install here.
  */
-export function isLocalInstanceHost(hostname) {
-  const h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, ''); // strip IPv6 brackets
-  return h === 'localhost' || h === '0.0.0.0' || h === '::' || h === '::1' ||
-    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h);
-}
-
-/** Parse a provider endpoint (with any `/v1` suffix stripped) into a URL, or null. */
-function parseEndpoint(endpoint) {
-  const cleaned = String(endpoint || '').replace(/\/v\d+\/?$/, '').replace(/\/+$/, '');
-  try {
-    return new URL(cleaned);
-  } catch { return null; }
-}
-
-/**
- * Does this endpoint point at a daemon running on THIS machine?
- *
- * The distinction decides whether PortOS may inspect the host it is running on
- * to explain the endpoint. An endpoint on a LAN/tailnet box is an EXTERNAL API
- * server: whether `lms` is on this machine's PATH, or this machine's LM Studio
- * app is installed, says nothing about it — so those checks must not run, and
- * their answers must never be reported as that provider's requirements.
- *
- * An unparseable/blank endpoint is NOT local: callers resolve their own local
- * default before asking, so anything still unparseable here is a typo, and
- * guessing "local" would put this machine's install state on a remote card.
- */
-export function isLocalInstanceEndpoint(endpoint) {
-  const url = parseEndpoint(endpoint);
-  return url ? isLocalInstanceHost(url.hostname) : false;
-}
-
-/**
- * The port of a provider endpoint when it points at THIS machine's local
- * instance (any loopback / bind-all host spelling); null otherwise — so a
- * LAN/Tailscale peer on the same port is NOT mistaken for a local backend.
- */
-export function localEndpointPort(endpoint) {
-  const u = parseEndpoint(endpoint);
-  if (!u || !isLocalInstanceHost(u.hostname)) return null;
-  return u.port || (u.protocol === 'https:' ? '443' : '80');
-}
-
 // MIRROR of `isOllamaProvider` in services/ollamaManager.js — keep in lockstep.
 // Inlined so this module stays free of the manager's module graph.
 const isOllamaShape = (provider) =>
@@ -220,6 +181,19 @@ export const LOCAL_RUNTIMES = Object.freeze({
     // the card class, so there is no per-model rename for PortOS to offer.
     servesOneModel: true,
   }),
+  slotstream: Object.freeze({
+    id: 'slotstream',
+    label: 'Slotstream',
+    command: 'slotstream',
+    // Dedicated loopback port — never 11434, which is a PortOS-managed Ollama.
+    defaultBaseUrl: `http://127.0.0.1:${PORTS.SLOTSTREAM}/v1`,
+    manageUrl: '/models/llms',
+    docsUrl: 'https://github.com/carloslfu/slotstream',
+    modelsHint: 'A start never fetches weights — add a checkpoint on Models → LLMs, then start Slotstream there.',
+    servesOneModel: true,
+    standbyWhenStopped: true,
+    standbyDetail: 'No streaming runtime is running, which is a valid idle state. Start it from Models → LLMs when you want a model larger than this machine\'s RAM; with idle release configured, PortOS stops it and starts it again on the next request.',
+  }),
   mtplx: Object.freeze({
     id: 'mtplx',
     label: 'MTPLX',
@@ -255,7 +229,7 @@ export const LOCAL_RUNTIMES = Object.freeze({
  *     launcher) started. Its "installed models" are whatever `GET /v1/models`
  *     reports right now, and a measurement talks to the endpoint directly.
  */
-export const ASSESSABLE_RUNTIMES = Object.freeze(['ollama', 'lmstudio', 'llama', 'mtplx', 'vllm', 'sglang']);
+export const ASSESSABLE_RUNTIMES = Object.freeze(['ollama', 'lmstudio', 'llama', 'mtplx', 'vllm', 'sglang', 'slotstream']);
 
 /** Assessable runtimes PortOS holds a provider record and model catalog for. */
 export const MANAGED_ASSESSMENT_BACKENDS = Object.freeze(['ollama', 'lmstudio']);
@@ -316,7 +290,7 @@ function opencodeConfiguredBaseUrl(provider, namespace) {
  * local daemon to check.
  *
  * @param {object|null|undefined} provider
- * @returns {'llama'|'ollama'|'lmstudio'|'mtplx'|'vllm'|'sglang'|null}
+ * @returns {'llama'|'ollama'|'lmstudio'|'mtplx'|'vllm'|'sglang'|'slotstream'|null}
  */
 export function localRuntimeKind(provider) {
   if (!provider || typeof provider !== 'object') return null;
@@ -324,6 +298,8 @@ export function localRuntimeKind(provider) {
   // carries `ollamaBacked` without being an OpenCode provider.
   const namespace = getOpencodeLocalProviderNamespace(provider);
   if (namespace && !isGatewayNamespace(namespace)) return namespace;
+  if (provider?.id === 'slotstream' || /slotstream/i.test(provider?.name || '')) return 'slotstream';
+  if (Number(localEndpointPort(provider?.endpoint)) === PORTS.SLOTSTREAM) return 'slotstream';
   return localBackendForProvider(provider);
 }
 

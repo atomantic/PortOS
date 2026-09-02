@@ -4,6 +4,7 @@ import { Layers, Code, Server, Globe, Smartphone, MonitorSmartphone, Plus } from
 import * as api from '../services/api';
 import FolderPicker from '../components/FolderPicker';
 import { FormField } from '../components/ui/FormField';
+import PageSkeleton from '../components/ui/PageSkeleton';
 
 const ICONS = {
   layers: Layers,
@@ -68,9 +69,15 @@ export default function Templates() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-gray-500">Loading templates...</div>
-      </div>
+      <PageSkeleton
+        label="Loading app templates"
+        headerRowClass="flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+        titleWidthClass="w-56"
+        showSubtitle
+        subtitleOnMobile
+        layout="grid"
+        cards={6}
+      />
     );
   }
 

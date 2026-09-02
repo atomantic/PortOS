@@ -16,7 +16,7 @@
             "url": "https://pypi.org/project/mlx-video-with-audio/"
           },
           "estimatedDownloadGb": 53.5,
-          "reviewedAt": "2026-08-30"
+          "reviewedAt": "2026-09-02"
         }
       },
       {
@@ -33,7 +33,7 @@
             "url": "https://pypi.org/project/mlx-video-with-audio/"
           },
           "estimatedDownloadGb": 22.8,
-          "reviewedAt": "2026-08-30"
+          "reviewedAt": "2026-09-02"
         }
       },
       {
@@ -54,7 +54,7 @@
             "url": "https://github.com/dgrauet/ltx-2-mlx/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 59.7,
-          "reviewedAt": "2026-08-30"
+          "reviewedAt": "2026-09-02"
         }
       },
       {
@@ -75,7 +75,7 @@
             "url": "https://github.com/dgrauet/ltx-2-mlx/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 87.5,
-          "reviewedAt": "2026-08-30"
+          "reviewedAt": "2026-09-02"
         }
       },
       {
@@ -100,7 +100,7 @@
             "url": "https://github.com/MrMoferFRAN/ltx-2-mlx/blob/57952288076766abe27dda3a774b2c24f7346977/LICENSE"
           },
           "estimatedDownloadGb": 67.7,
-          "reviewedAt": "2026-08-30"
+          "reviewedAt": "2026-09-02"
         },
         "speedProfiles": [
           {
@@ -249,7 +249,7 @@
             "url": "https://github.com/PipeNetwork/minimax-h3-mlx/blob/fcd9e9b79a1d6018d91ac477c0968de1fa067e49/LICENSE"
           },
           "estimatedDownloadGb": 103.3,
-          "reviewedAt": "2026-08-30"
+          "reviewedAt": "2026-09-02"
         },
         "termsGate": {
           "id": "minimax-h3-community-license-2026-08-02",
@@ -354,7 +354,7 @@
             "url": "https://github.com/sawfwair/mere-run/blob/v0.47.0/LICENSE"
           },
           "estimatedDownloadGb": 70.9,
-          "reviewedAt": "2026-08-30"
+          "reviewedAt": "2026-09-02"
         },
         "termsGate": {
           "id": "minimax-h3-community-license-2026-08-02",
@@ -412,7 +412,7 @@
             "url": "https://github.com/lpalbou/mlx-gen/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 18.2,
-          "reviewedAt": "2026-08-30"
+          "reviewedAt": "2026-09-02"
         }
       },
       {
@@ -447,7 +447,7 @@
             "url": "https://github.com/lpalbou/mlx-gen/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 42.4,
-          "reviewedAt": "2026-08-30"
+          "reviewedAt": "2026-09-02"
         }
       },
       {
@@ -482,7 +482,7 @@
             "url": "https://github.com/lpalbou/mlx-gen/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 42.4,
-          "reviewedAt": "2026-08-30"
+          "reviewedAt": "2026-09-02"
         }
       },
       {
@@ -532,7 +532,7 @@
             "url": "https://github.com/lpalbou/mlx-gen/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 44.9,
-          "reviewedAt": "2026-08-30"
+          "reviewedAt": "2026-09-02"
         },
         "finishModelId": "wan22_t2v_a14b"
       },
@@ -583,7 +583,7 @@
             "url": "https://github.com/lpalbou/mlx-gen/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 44.9,
-          "reviewedAt": "2026-08-30"
+          "reviewedAt": "2026-09-02"
         }
       },
       {
@@ -612,8 +612,8 @@
             "name": "Apache-2.0",
             "url": "https://github.com/hao-ai-lab/FastVideo/blob/main/LICENSE"
           },
-          "estimatedDownloadGb": 3.5,
-          "reviewedAt": "2026-08-30"
+          "estimatedDownloadGb": 13.4,
+          "reviewedAt": "2026-09-02"
         }
       },
       {
@@ -642,8 +642,8 @@
             "name": "Apache-2.0",
             "url": "https://github.com/hao-ai-lab/FastVideo/blob/main/LICENSE"
           },
-          "estimatedDownloadGb": 10.2,
-          "reviewedAt": "2026-08-30"
+          "estimatedDownloadGb": 19.5,
+          "reviewedAt": "2026-09-02"
         }
       },
       {
@@ -672,8 +672,90 @@
             "name": "Apache-2.0",
             "url": "https://github.com/hao-ai-lab/FastVideo/blob/main/LICENSE"
           },
-          "estimatedDownloadGb": 25.4,
-          "reviewedAt": "2026-08-30"
+          "estimatedDownloadGb": 42.3,
+          "reviewedAt": "2026-09-02"
+        }
+      },
+      {
+        "id": "fasth3_dense_datafree_mlx_int4",
+        "name": "FastH3 Preview v1 Dense Data-Free MLX INT4 (video + audio, ~89 GB download, 36+ GB RAM, 4-step)",
+        "repo": "MrMofer/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree-MLX-INT4",
+        "revision": "4c8c3e54da8cd667b5db10f6074b4cb9b7559f15",
+        "runtime": "fastvideo",
+        "fastvideoFamily": "fasth3",
+        "supportedModes": [
+          "text"
+        ],
+        "defaultWidth": 832,
+        "defaultHeight": 480,
+        "defaultFrames": 124,
+        "frameOptions": [
+          107,
+          124,
+          141,
+          158,
+          175,
+          192,
+          209,
+          226,
+          243,
+          260,
+          277,
+          294,
+          311,
+          328,
+          345,
+          362
+        ],
+        "fpsOptions": [
+          24
+        ],
+        "resolutionStep": 32,
+        "resolutionOptions": [
+          {
+            "label": "832x480 (16:9 FastH3 default)",
+            "w": 832,
+            "h": 480
+          },
+          {
+            "label": "1280x720 (16:9 HD)",
+            "w": 1280,
+            "h": 720
+          }
+        ],
+        "memoryGb": 36,
+        "steps": 4,
+        "guidance": 1,
+        "samplerLocked": true,
+        "samplerNote": "FastH3 Preview v1 is a 4-step DMD2 model. This export is dense-attention only — it does not support VSA. Renders video with audio at a fixed 24 fps.",
+        "supportsNegativePrompt": false,
+        "supportsTiling": false,
+        "supportsDisableAudio": false,
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/MrMofer/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree-MLX-INT4",
+          "weightsLicense": {
+            "name": "MiniMax H3 Community License",
+            "url": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/6818f6c32d12b210915e44ad56a4228c2608f160/LICENSE"
+          },
+          "runtimeLicense": {
+            "name": "Apache-2.0",
+            "url": "https://github.com/hao-ai-lab/FastVideo/blob/main/LICENSE"
+          },
+          "estimatedDownloadGb": 89.3,
+          "reviewedAt": "2026-09-02"
+        },
+        "termsGate": {
+          "id": "minimax-h3-community-license-2026-08-02",
+          "title": "MiniMax H3 eligibility and terms",
+          "summary": "MiniMax grants use only in its Applicable Territory. The license excludes the European Union, United Kingdom, Republic of Korea, and United States of America.",
+          "acknowledgement": "I confirm I am in the Applicable Territory and agree to the MiniMax H3 Community License and its Acceptable Use Policy.",
+          "licenseUrl": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/6818f6c32d12b210915e44ad56a4228c2608f160/LICENSE",
+          "excludedTerritories": [
+            "European Union",
+            "United Kingdom",
+            "Republic of Korea",
+            "United States of America"
+          ]
         }
       }
     ],
@@ -689,7 +771,7 @@
             "name": "Apache-2.0",
             "url": "https://github.com/huggingface/diffusers/blob/main/LICENSE"
           },
-          "reviewedAt": "2026-08-30"
+          "reviewedAt": "2026-09-02"
         }
       },
       {
@@ -706,10 +788,15 @@
           "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"
         ],
         "runtime": "ltx25_cuda",
-        "supportedModes": ["text", "image"],
+        "supportedModes": [
+          "text",
+          "image"
+        ],
         "defaultFrames": 121,
         "resolutionStep": 64,
-        "fpsOptions": [24],
+        "fpsOptions": [
+          24
+        ],
         "steps": 8,
         "guidance": 1,
         "samplerLocked": true,
@@ -733,8 +820,8 @@
             "name": "Apache-2.0",
             "url": "https://github.com/Lightricks/LTX-2/blob/v1.2.0/LICENSE"
           },
-          "estimatedDownloadGb": 72.1,
-          "reviewedAt": "2026-08-30"
+          "estimatedDownloadGb": 71.1,
+          "reviewedAt": "2026-09-02"
         }
       },
       {
@@ -743,13 +830,17 @@
         "repo": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
         "revision": "b8fff7315c768468a5333511427288870b2e9635",
         "runtime": "wan22_cuda",
-        "supportedModes": ["text"],
+        "supportedModes": [
+          "text"
+        ],
         "defaultWidth": 1280,
         "defaultHeight": 704,
         "resolutionStep": 16,
         "defaultFrames": 121,
         "frameStride": 4,
-        "fpsOptions": [24],
+        "fpsOptions": [
+          24
+        ],
         "steps": 50,
         "guidance": 5,
         "supportsNegativePrompt": true,
@@ -770,7 +861,7 @@
             "url": "https://github.com/huggingface/diffusers/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 34.2,
-          "reviewedAt": "2026-08-30"
+          "reviewedAt": "2026-09-02"
         }
       },
       {
@@ -921,7 +1012,7 @@
             "url": "https://github.com/huggingface/diffusers/blob/main/LICENSE"
           },
           "estimatedDownloadGb": 144.1,
-          "reviewedAt": "2026-08-30"
+          "reviewedAt": "2026-09-02"
         },
         "termsGate": {
           "id": "minimax-h3-community-license-2026-08-02",

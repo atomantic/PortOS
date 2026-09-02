@@ -7,7 +7,7 @@
  */
 
 import { createReadStream } from 'fs';
-import { unlink } from 'fs';
+import { unlink } from 'fs/promises';
 import { extractDateStr, readDayFile, writeDayFile } from './appleHealthIngest.js';
 import { createAppleHealthRecordStream } from './appleHealthXmlParser.js';
 
@@ -266,57 +266,68 @@ export async function importAppleHealthXml(filePath, io = null) {
 
   const inputStream = createReadStream(filePath);
 
-  await new Promise((resolve, reject) => {
-    const parser = createAppleHealthRecordStream({
-      onRecord: (node) => {
-        const normalized = normalizeXmlRecord(node);
-        if (!normalized) return;
+  try {
+    await new Promise((resolve, reject) => {
+      const parser = createAppleHealthRecordStream({
+        onRecord: (node) => {
+          const normalized = normalizeXmlRecord(node);
+          if (!normalized) return;
 
-        const { metricName, dateStr, dataPoint } = normalized;
+          const { metricName, dateStr, dataPoint } = normalized;
 
-        if (!dayBuckets[dateStr]) dayBuckets[dateStr] = {};
-        if (!dayBuckets[dateStr][metricName]) dayBuckets[dateStr][metricName] = [];
-        dayBuckets[dateStr][metricName].push(dataPoint);
-        allDays.add(dateStr);
+          if (!dayBuckets[dateStr]) dayBuckets[dateStr] = {};
+          if (!dayBuckets[dateStr][metricName]) dayBuckets[dateStr][metricName] = [];
+          dayBuckets[dateStr][metricName].push(dataPoint);
+          allDays.add(dateStr);
 
-        processedRecords++;
+          processedRecords++;
 
-        if (processedRecords % 10000 === 0) {
-          io?.emit('health:xml:progress', { processed: processedRecords });
-          console.log(`🍎 XML import progress: ${processedRecords} records`);
-        }
+          if (processedRecords % 10000 === 0) {
+            io?.emit('health:xml:progress', { processed: processedRecords });
+            console.log(`🍎 XML import progress: ${processedRecords} records`);
+          }
 
-        // Batch flush to prevent OOM — pause input stream, flush to disk, resume
-        if (processedRecords - lastFlush >= FLUSH_INTERVAL && !flushing) {
-          flushing = true;
-          lastFlush = processedRecords;
-          inputStream.pause();
-          flushDayBuckets(dayBuckets).then(() => {
-            console.log(`🍎 Flushed batch at ${processedRecords} records (${allDays.size} days total)`);
-            flushing = false;
-            inputStream.resume();
-          }).catch(reject);
-        }
-      },
+          // Batch flush to prevent OOM — pause input stream, flush to disk, resume
+          if (processedRecords - lastFlush >= FLUSH_INTERVAL && !flushing) {
+            flushing = true;
+            lastFlush = processedRecords;
+            inputStream.pause();
+            flushDayBuckets(dayBuckets).then(() => {
+              console.log(`🍎 Flushed batch at ${processedRecords} records (${allDays.size} days total)`);
+              flushing = false;
+              inputStream.resume();
+            }).catch(reject);
+          }
+        },
+      });
+
+      // Malformed records can't throw here — records missing required attributes
+      // are dropped by normalizeXmlRecord, so minor XML malformations are skipped
+      // rather than fatal (matching the prior sax error-skip behavior).
+      parser.on('finish', resolve);
+      parser.on('error', reject);
+
+      inputStream.on('error', reject);
+      inputStream.pipe(parser);
     });
 
-    // Malformed records can't throw here — records missing required attributes
-    // are dropped by normalizeXmlRecord, so minor XML malformations are skipped
-    // rather than fatal (matching the prior sax error-skip behavior).
-    parser.on('finish', resolve);
-    parser.on('error', reject);
+    console.log(`🍎 XML parsing done: ${processedRecords} raw records across ${allDays.size} days — flushing remaining`);
 
-    inputStream.on('error', reject);
-    inputStream.pipe(parser);
-  });
-
-  console.log(`🍎 XML parsing done: ${processedRecords} raw records across ${allDays.size} days — flushing remaining`);
-
-  // Final flush for remaining records
-  await flushDayBuckets(dayBuckets);
-
-  // Clean up temp file
-  unlink(filePath, () => {});
+    // Final flush for remaining records
+    await flushDayBuckets(dayBuckets);
+  } finally {
+    // Runs on success AND on every rejection route (parser error, input-stream
+    // error, rejected batch flush). Destroy before unlink: a batch-flush
+    // rejection leaves the stream pause()d and still holding its fd, and on
+    // Windows unlink fails while the file is open. An Apple Health export.xml
+    // is routinely 0.5-3GB, so a leaked temp file is expensive.
+    inputStream.destroy();
+    // destroy() tears the fd down asynchronously, so wait for 'close' before
+    // unlinking — on Windows the unlink fails while the handle is open and the
+    // failure is swallowed below (same wait the ZIP write-stream cleanup does).
+    if (!inputStream.closed) await new Promise((res) => inputStream.once('close', res));
+    await unlink(filePath).catch(() => {});
+  }
 
   io?.emit('health:xml:complete', { days: allDays.size, records: processedRecords });
   console.log(`🍎 XML import complete: ${processedRecords} records across ${allDays.size} days`);

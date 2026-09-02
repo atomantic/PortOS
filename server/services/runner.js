@@ -11,7 +11,7 @@ import { hasModelFlag, extractBakedModel } from '../lib/providerModels.js';
 import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { createImmediateFallbackSignalDetector, ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
-import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn } from '../lib/bufferedSpawn.js';
+import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { isHostShuttingDown } from '../lib/hostShutdown.js';
 import { ensureOllamaAgentContext } from './ollamaAgentContext.js';
 import { isOllamaBackedProvider } from './providers.js';
@@ -147,8 +147,24 @@ export async function finalizeRunRecord({ runId, output, exitCode, success, erro
     // "billing", which used to turn a plain timeout into quota-exceeded and
     // bench a healthy provider for an hour. Other failures still analyze the
     // output because their provider banner is often the only useful signal.
+    const analyzeError = toolkit.services.errorDetection.analyzeError;
     const analysisInput = exitCode === 124 ? (error || 'Process timed out') : output;
-    const errorAnalysis = toolkit.services.errorDetection.analyzeError(analysisInput, exitCode);
+    let errorAnalysis = analyzeError(analysisInput, exitCode);
+    // When that scan lands on nothing, the caller's own `error` is the better
+    // evidence — and the run that proved it was a local-LLM playground timeout:
+    // the host aborted its OWN deadline, finalized with exit 1 + `Timed out after
+    // Nms`, and handed over the partial generation as `output`. Scanning a
+    // generation that carries no failure signal returns UNKNOWN with its first
+    // line lifted as the "error message", so a plain timeout reached the
+    // provider-failure hook as an uncategorized Tier-4 failure titled with the
+    // story's own headline. Consulted only as a fallback, so a scan that already
+    // found a real category (the CLI/TUI banner case) keeps it.
+    if (error && (!errorAnalysis.category || errorAnalysis.category === ERROR_CATEGORIES.UNKNOWN)) {
+      const statedAnalysis = analyzeError(error, exitCode);
+      if (statedAnalysis.category && statedAnalysis.category !== ERROR_CATEGORIES.UNKNOWN) {
+        errorAnalysis = statedAnalysis;
+      }
+    }
     metadata.error = metadata.error || errorAnalysis.message || `Process exited with code ${exitCode}`;
     metadata.errorCategory = errorAnalysis.category;
     metadata.errorAnalysis = errorAnalysis;
@@ -392,11 +408,15 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
     env: childEnv
   });
 
+  // Guard the stdin pipe BEFORE writing: a child that exits before reading it
+  // (bad flag, missing CLI) emits EPIPE, and an unlistened stream 'error' out
+  // here crashes the server. The 'error'/'close' handlers below settle the run.
+  guardChildStdin(childProcess);
+
   // Pass prompt via stdin to avoid OS argv limits. When grok is delivered via a
   // Windows temp file (useStdin === false) the prompt is already on disk, so
   // just close stdin.
-  if (useStdin) childProcess.stdin.write(promptInput);
-  childProcess.stdin.end();
+  deliverChildStdin(childProcess, useStdin ? promptInput : null, `run ${runId}`);
 
   // Track active run via the toolkit's declared external-run registry so its
   // stopRun/isRunActive/deleteRun account for this host-spawned child process.

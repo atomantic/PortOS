@@ -1,13 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 vi.mock('../../../services/api', () => ({
+  PORTOS_APP_ID: 'portos-default',
   getAppRepositorySources: vi.fn(),
   syncAppRepositoryFork: vi.fn(),
-  pullAndUpdateApp: vi.fn(),
+  handleSelfRestart: vi.fn(),
+}));
+vi.mock('../../../hooks/useAppOperation', () => ({
+  useAppOperation: vi.fn(),
 }));
 
 import * as api from '../../../services/api';
+import { useAppOperation } from '../../../hooks/useAppOperation';
 import RepositorySourcePanel from './RepositorySourcePanel';
 
 const source = ({
@@ -77,9 +82,12 @@ const canonicalStatus = () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  useAppOperation.mockReturnValue({
+    steps: [], isOperating: false, operationType: null, error: null, completed: false,
+    startUpdate: vi.fn(),
+  });
   api.getAppRepositorySources.mockResolvedValue(canonicalStatus());
   api.syncAppRepositoryFork.mockResolvedValue({ synced: true, alreadyUpToDate: false });
-  api.pullAndUpdateApp.mockResolvedValue({ success: true });
 });
 
 afterEach(() => cleanup());
@@ -95,6 +103,21 @@ describe('managed app repository sources', () => {
     expect(screen.getByTestId('repository-source-companion-1')).toHaveTextContent('prod-serving @ 2222222');
     expect(screen.getByTestId('repository-source-companion-1')).toHaveTextContent('Current');
     expect(screen.getByRole('button', { name: 'Update app' })).toBeInTheDocument();
+  });
+
+  it('keeps the current update step visible while the operation is running', async () => {
+    useAppOperation.mockReturnValue({
+      steps: [{ step: 'npm-install:root', status: 'running', message: 'Installing root dependencies...' }],
+      isOperating: true,
+      operationType: 'update',
+      error: null,
+      completed: false,
+      startUpdate: vi.fn(),
+    });
+    render(<RepositorySourcePanel appId="app-example" appName="Example App" />);
+
+    expect(await screen.findByRole('status', { name: 'App operation status' })).toHaveTextContent('Installing root dependencies...');
+    expect(screen.getByRole('button', { name: 'Updating...' })).toBeDisabled();
   });
 
   it('shows local, fork, and upstream as separate version hops and can sync only the fork', async () => {
@@ -121,7 +144,7 @@ describe('managed app repository sources', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Sync fork' }));
     await waitFor(() => expect(api.syncAppRepositoryFork).toHaveBeenCalledWith('app-example', { silent: true }));
-    expect(api.pullAndUpdateApp).not.toHaveBeenCalled();
+    expect(useAppOperation.mock.results[0].value.startUpdate).not.toHaveBeenCalled();
   });
 
   it('confirms that one managed update syncs the fork and updates every checkout', async () => {
@@ -145,16 +168,57 @@ describe('managed app repository sources', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Sync fork & update app' }));
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toHaveTextContent('Pull 1 independent companion checkout');
+    expect(dialog).toHaveTextContent('Rebuild the production UI when a build script is configured');
     expect(dialog).toHaveTextContent('Restart the app\'s managed processes');
 
     fireEvent.click(screen.getByRole('button', { name: 'Sync fork and update' }));
-    await waitFor(() => expect(api.pullAndUpdateApp).toHaveBeenCalledWith(
-      'app-example',
-      { syncFork: true },
-      { silent: true },
+    await waitFor(() => expect(useAppOperation.mock.results[0].value.startUpdate).toHaveBeenCalledWith(
+      'app-example', 'Example App', { syncFork: true },
     ));
     expect(api.syncAppRepositoryFork).not.toHaveBeenCalled();
-    await waitFor(() => expect(onUpdated).toHaveBeenCalledOnce());
+    expect(onUpdated).not.toHaveBeenCalled();
+  });
+
+  it('refreshes source status when the parent Git tab reports a branch update', async () => {
+    const currentStatus = canonicalStatus();
+    currentStatus.updateAvailable = false;
+    currentStatus.sources[0] = source({
+      id: 'primary',
+      label: 'Example App',
+      branch: 'main',
+      head: '3'.repeat(40),
+      origin: {
+        fullName: 'anima-research/example-app',
+        isUpstream: true,
+        isFork: false,
+      },
+    });
+    api.getAppRepositorySources
+      .mockResolvedValueOnce(canonicalStatus())
+      .mockResolvedValueOnce(currentStatus);
+
+    const { rerender } = render(
+      <RepositorySourcePanel appId="app-example" appName="Example App" refreshKey={0} />,
+    );
+    expect(await screen.findByText('Checkout 1 behind')).toBeInTheDocument();
+
+    rerender(<RepositorySourcePanel appId="app-example" appName="Example App" refreshKey={1} />);
+
+    await waitFor(() => expect(api.getAppRepositorySources).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTestId('repository-source-primary')).toHaveTextContent('Current'));
+  });
+
+  it('locks the update action after dispatch until the page reloads', async () => {
+    render(<RepositorySourcePanel appId="portos-default" appName="PortOS" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Update app' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Update app' }));
+
+    const updateButton = screen.getByRole('button', { name: 'Reload to update again' });
+    expect(updateButton).toBeDisabled();
+    expect(useAppOperation.mock.results[0].value.startUpdate).toHaveBeenCalledWith(
+      'portos-default', 'PortOS', { syncFork: false },
+    );
   });
 
   it('refuses automatic fork sync after divergence but still permits updating from the fork as-is', async () => {
@@ -178,7 +242,7 @@ describe('managed app repository sources', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Update app from fork' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Update app' }));
 
-    await waitFor(() => expect(api.pullAndUpdateApp).toHaveBeenCalledOnce());
+    await waitFor(() => expect(useAppOperation.mock.results[0].value.startUpdate).toHaveBeenCalledOnce());
     expect(api.syncAppRepositoryFork).not.toHaveBeenCalled();
   });
 

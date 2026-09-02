@@ -2,7 +2,7 @@ import { spawn } from '../lib/childProcess.js';
 import { existsSync } from 'fs';
 import { join, resolve } from 'path';
 import { safeJSONParse, PATHS, sleep } from '../lib/fileUtils.js';
-import { isGitLockError, listWorktrees } from './worktreeManager.js';
+import { isGitLockError, listWorktrees, reapMergedWorktrees } from './worktreeManager.js';
 import { execGit } from '../lib/execGit.js';
 import {
   parseStatus,
@@ -1384,16 +1384,43 @@ export async function resetToDefaultBranch(dir) {
   };
 }
 
+// Prose for each `reapMergedWorktrees` skip slug, so `skipped` says WHY a merged
+// branch survived rather than only that it did. An unlisted slug falls back to
+// the plain "it's in a worktree" phrasing.
+const WORKTREE_HOLD_REASONS = {
+  uncommitted: 'worktree has uncommitted changes',
+  unmerged: 'worktree has unmerged commits',
+  'status-failed': 'worktree status could not be read',
+  'worktree-locked': 'worktree is locked',
+  'worktree-active-agent': 'worktree is in use by a running agent',
+  'worktree-agent-liveness-unknown': 'agent liveness unknown',
+  'worktree-human-claim': 'worktree is a claimed session'
+};
+const worktreeHoldReason = (reason) => WORKTREE_HOLD_REASONS[reason] || 'checked out in a worktree';
+
 /**
  * Delete all merged branches (local and remote) in one operation.
  * Skips the `PROTECTED_BRANCHES` set (see `../lib/gitArgs.js`), the current branch,
- * branches checked out in worktrees, and any explicitly excluded branches.
+ * and any explicitly excluded branches.
+ *
+ * A merged branch checked out in a WORKTREE is no longer reported-and-left: the
+ * worktree is reaped first (`reapMergedWorktrees`, which removes the tree and the
+ * branch together) so the "Clean N merged" affordance actually clears instead of
+ * offering the same branch on every visit. That reap refuses anything it cannot
+ * prove disposable — an uncommitted tree, a branch not fully in
+ * `origin/<default>` (which is also what rules out losing unpushed work: every
+ * commit on a reaped branch is already on the remote), a locked tree, a live
+ * agent's tree, or a human `/claim` session. Those come back in `skipped` with
+ * the reason, so the UI can say why one survived.
+ *
  * @param {string} dir - Working directory
  * @param {object} options
  * @param {Set<string>} options.excludeBranches - Additional branches to protect (e.g., active agent branches)
- * @returns {Promise<{deleted: Array<{name: string, local: string, remote: string}>, skipped: string[], defaultBranch: string}>}
+ * @param {Set<string>} [options.activeAgentIds] - CoS agent ids whose worktrees must survive. Anything
+ *   but a Set (the default) reads as "liveness unknown" and holds every `agent-*` worktree.
+ * @returns {Promise<{deleted: Array<{name: string, local: string, remote: string, worktree?: string}>, skipped: string[], defaultBranch: string}>}
  */
-export async function deleteMergedBranches(dir, { excludeBranches } = {}) {
+export async function deleteMergedBranches(dir, { excludeBranches, activeAgentIds = null } = {}) {
   const [{ baseBranch }, currentBranch, worktreeBranches] = await Promise.all([
     getRepoBranches(dir),
     getBranch(dir),
@@ -1403,13 +1430,33 @@ export async function deleteMergedBranches(dir, { excludeBranches } = {}) {
   const protectedSet = new Set(PROTECTED_BRANCHES);
   if (baseBranch) protectedSet.add(baseBranch);
 
-  // Worktree and agent branches are only protected from local deletion
+  // Worktree and agent branches are only protected from local deletion. Read
+  // BEFORE the reap and corrected below, so nothing the reap freed stays behind
+  // a hold that no longer exists.
   const localOnlyProtected = new Set([...worktreeBranches]);
   if (excludeBranches) {
     for (const b of excludeBranches) localOnlyProtected.add(b);
   }
 
-  await execGitSafe(['fetch', 'origin', '--prune'], dir, { ignoreExitCode: true });
+  // Ahead of the merged-branch listing, so a reaped branch reads as an ordinary
+  // already-deleted local rather than as a worktree-held skip. `defaultBranch` is
+  // handed over because the reap's own lookup can fall back to a `remote set-head`
+  // probe, which is a 5s stall on this request path.
+  const reap = await reapMergedWorktrees(dir, {
+    activeAgentIds, excludeBranches, includeUnmanagedTrees: true, defaultBranch
+  }).catch(err => {
+    console.error(`❌ Worktree reap failed during merged-branch cleanup: ${err.message}`);
+    return null;
+  });
+  // Whatever the reap removed no longer has a worktree holding it, so drop the
+  // hold: a branch whose tree went but whose delete failed falls through to the
+  // ordinary `branch -d` pass below, which reports its own outcome.
+  for (const entry of reap?.reaped || []) localOnlyProtected.delete(entry.branch);
+  const reapedBranches = (reap?.reaped || []).filter(entry => entry.branch && entry.branchDeleted).map(entry => entry.branch);
+  const reapHolds = new Map((reap?.skipped || []).filter(entry => entry.branch).map(entry => [entry.branch, entry.reason]));
+
+  // The reap already fetched --prune; a second round-trip would change nothing.
+  if (!reap) await execGitSafe(['fetch', 'origin', '--prune'], dir, { ignoreExitCode: true });
 
   const [localMergedNames, remoteMerged] = await Promise.all([
     getLocalMergedBranchNames(dir, defaultBranch),
@@ -1430,7 +1477,9 @@ export async function deleteMergedBranches(dir, { excludeBranches } = {}) {
   const localSet = new Set(mergedLocalNames);
   const remoteSet = new Set(mergedRemoteNames);
 
-  const deleted = [];
+  // One record per branch, so a branch whose local half the reap already deleted
+  // and whose remote half is deleted below reports as a single row.
+  const records = new Map(reapedBranches.map(name => [name, { name, local: 'deleted', remote: null, worktree: 'removed' }]));
   const skipped = mergedLocalCandidates
     .filter(name => localOnlyProtected.has(name) || name === currentBranch)
     .map(name => {
@@ -1438,7 +1487,7 @@ export async function deleteMergedBranches(dir, { excludeBranches } = {}) {
         ? 'currently checked out'
         : excludeBranches?.has(name)
           ? 'used by an active agent'
-          : 'checked out in a worktree';
+          : worktreeHoldReason(reapHolds.get(name));
       return `${name} (local: ${reason})`;
     });
   const opts = { ignoreExitCode: true };
@@ -1446,7 +1495,8 @@ export async function deleteMergedBranches(dir, { excludeBranches } = {}) {
   for (const name of allMerged) {
     const hasLocal = localSet.has(name);
     const hasRemote = remoteSet.has(name);
-    const result = { name, local: null, remote: null };
+    const result = records.get(name) || { name, local: null, remote: null };
+    records.set(name, result);
 
     if (hasLocal) {
       const r = await execGitSafe(['branch', '-d', name], dir, opts);
@@ -1459,11 +1509,9 @@ export async function deleteMergedBranches(dir, { excludeBranches } = {}) {
       result.remote = r.exitCode === 0 ? 'deleted' : 'failed';
       if (r.exitCode !== 0) skipped.push(`${name} (remote: ${r.stderr?.trim()})`);
     }
-
-    if (result.local === 'deleted' || result.remote === 'deleted') {
-      deleted.push(result);
-    }
   }
+
+  const deleted = [...records.values()].filter(r => r.local === 'deleted' || r.remote === 'deleted');
 
   return { deleted, skipped, defaultBranch };
 }

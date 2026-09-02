@@ -112,8 +112,6 @@ export const listLoraTrainingRuns = (filters = {}) => {
   return request(`/lora-training/runs${qs ? `?${qs}` : ''}`);
 };
 
-export const getLoraTrainingRun = (runId) => request(`/lora-training/runs/${runId}`);
-
 export const cancelLoraTrainingRun = (runId) =>
   request(`/lora-training/runs/${runId}/cancel`, { method: 'POST' });
 
@@ -138,9 +136,6 @@ export const promoteLoraTrainingCheckpoint = (runId, step, { silent = false } = 
   request(`/lora-training/runs/${runId}/promote-checkpoint`, {
     method: 'POST', body: JSON.stringify({ step }), silent,
   });
-
-export const deleteLoraTrainingRun = (runId, { deleteLora = false } = {}) =>
-  request(`/lora-training/runs/${runId}${deleteLora ? '?deleteLora=true' : ''}`, { method: 'DELETE' });
 
 // ---- Character → trained-LoRA link ----
 

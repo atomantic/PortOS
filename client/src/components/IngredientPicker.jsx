@@ -124,7 +124,7 @@ export default function IngredientPicker({
       onClose={onClose}
       size="xl"
       closeOnBackdrop
-      panelClassName="bg-port-card border border-port-border rounded-xl max-h-[85vh] flex flex-col"
+      panelClassName="bg-port-card border border-port-border rounded-xl flex flex-col"
       ariaLabelledBy="ingredient-picker-title"
     >
       <div className="flex items-center justify-between p-4 border-b border-port-border flex-shrink-0">

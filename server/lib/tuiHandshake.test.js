@@ -699,6 +699,14 @@ describe('tuiHandshake.buildTuiInvocation', () => {
     expect(out.args).toEqual(['--force', '--model', 'auto']);
   });
 
+  it('canonicalizes a dotted Claude model id for the TUI spawn (regression: claude-fable-5.1)', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const provider = { id: 'claude-code-tui', command: 'claude', args: ['--dangerously-skip-permissions'] };
+    const out = buildTuiInvocation(provider, 'claude-fable-5.1');
+    expect(out.args).toEqual(['--dangerously-skip-permissions', '--model', 'claude-fable-5-1']);
+    spy.mockRestore();
+  });
+
   it('injects --force when a cursor provider’s saved args dropped it', () => {
     const out = buildTuiInvocation({ id: 'cursor-tui', command: 'cursor-agent', args: [] }, null);
     expect(out.args).toEqual(['--force']);

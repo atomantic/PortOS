@@ -66,27 +66,60 @@ describe('cos-runner spawn — per-provider prompt delivery (antigravity --print
 
   it('gates the stdin write on useStdin so an argv-delivered prompt is not also piped', () => {
     // For antigravity (--print value) / grok-on-Windows (temp file) useStdin is
-    // false — writing the prompt to stdin too would be redundant/incorrect.
-    expect(RUNNER_SRC).toMatch(/if\s*\(\s*useStdin\s*\)\s*claudeProcess\.stdin\.write\(prompt\)/);
+    // false — writing the prompt to stdin too would be redundant/incorrect. The
+    // delivery helper writes its payload only when it is non-null, so passing
+    // null there is what "don't pipe it" looks like now (#5655).
+    expect(RUNNER_SRC).toMatch(/deliverChildStdin\(claudeProcess,\s*useStdin \? prompt : null,/);
   });
 });
 
-describe('cos-runner termination — Windows tree-kill for cmd.exe-wrapped shims (#2243)', () => {
-  it('imports killProcessTree from the shared bufferedSpawn helper', () => {
-    expect(RUNNER_SRC).toMatch(
-      /import\s*\{[^}]*\bkillProcessTree\b[^}]*\}\s*from\s*'\.\.\/lib\/bufferedSpawn\.js';/
-    );
+describe('cos-runner termination', () => {
+  // Both halves of a kill now live in modules that can actually be imported:
+  // killProcessTree (bufferedSpawn.js) decides what "kill" means for the
+  // handle, and armForceKill (forceKill.js) owns the SIGTERM -> grace ->
+  // SIGKILL escalation. bufferedSpawn.test.js and forceKill.test.js exercise
+  // those for real; all this file pins is that index.js delegates to both
+  // rather than hand-rolling either.
+  it('kills only through the shared killProcessTree helper', () => {
+    // Matched as "killProcessTree is on the bufferedSpawn import line" rather than
+    // as the exact line text — pinning the whole specifier list made an unrelated
+    // helper import (guardChildStdin, #5655) fail a kill-path assertion.
+    expect(RUNNER_SRC).toMatch(/^import \{[^}]*\bkillProcessTree\b[^}]*\} from '\.\.\/lib\/bufferedSpawn\.js';$/m);
+    // A BARE `.kill()` is still fine — the sentinel watcher closes a finished
+    // TUI session that way, and a bare kill is the one form node-pty accepts
+    // on every platform. What must not reappear is a hand-rolled signal kill.
+    expect(RUNNER_SRC).not.toContain(".process.kill('SIG");
   });
 
-  it('tree-kills wrapped CLI agents while using node-pty kill for TUI handles', () => {
-    // Once an agent is spawned as `cmd.exe /c opencode.cmd …` on Windows, a
-    // plain agent.process.kill() signals only cmd.exe and orphans the real CLI.
-    // node-pty handles are the exception: their own kill API releases the
-    // native PTY resources correctly.
-    expect(RUNNER_SRC).toMatch(
-      /if\s*\(\s*agent\.kind\s*===\s*'tui'\s*\)\s*\{[\s\S]{0,100}?agent\.process\.kill\(signal\)[\s\S]{0,100}?return;/
-    );
-    expect(RUNNER_SRC).toMatch(/killProcessTree\(agent\.process,\s*signal\)/);
+  it('guards the child stdin pipe BEFORE writing the prompt to it', () => {
+    // A child that dies before reading stdin emits EPIPE, and an unlistened
+    // stream 'error' in this non-request context kills the runner process
+    // (#5655). Source-text because the route spawns a real child; the helper's
+    // behavior is covered in lib/bufferedSpawn.test.js.
+    const guardAt = RUNNER_SRC.indexOf('guardChildStdin(claudeProcess);');
+    const deliverAt = RUNNER_SRC.indexOf('deliverChildStdin(claudeProcess,');
+    expect(guardAt).toBeGreaterThan(-1);
+    expect(deliverAt).toBeGreaterThan(guardAt);
+  });
+
+  it('escalates through the shared armForceKill on every terminate path', () => {
+    expect(RUNNER_SRC).toContain("import { armForceKill as armForceKillShared } from './forceKill.js';");
+    // /terminate and /terminate-all, plus the post-finalize tui:kill relay.
+    expect(RUNNER_SRC.split('armForceKill(agentId, agent);')).toHaveLength(3);
+    expect(RUNNER_SRC).toContain('armForceKill(agentId, agent, { dropState: agent.paused !== true })');
+  });
+
+  // A paused agent was stopped deliberately and its record is what a later
+  // resume reads. The CLI close handler always had this guard; the TUI one did
+  // not, and the node-pty kill fix is what made that path reachable on Windows
+  // (before it, the kill threw and the PTY never exited at all).
+  it('reports nothing when a paused TUI exits, instead of finalizing it failed', () => {
+    const exitIdx = RUNNER_SRC.indexOf('tuiProcess.onExit(');
+    expect(exitIdx, 'the TUI exit handler must exist').toBeGreaterThan(-1);
+    const completedIdx = RUNNER_SRC.indexOf("emitToServer('agent:completed'", exitIdx);
+    const handler = RUNNER_SRC.slice(exitIdx, completedIdx);
+    expect(handler).toContain('current.paused === true');
+    expect(handler).toContain('activeAgents.delete(agentId)');
   });
 });
 
@@ -114,6 +147,27 @@ describe('cos-runner durable TUI ownership (#3202)', () => {
     expect(RUNNER_SRC).toContain('Command executable unavailable: ${basename(command)} is not on the CoS Runner PATH');
     expect(RUNNER_SRC).toContain('Command executable unavailable: ${basename(command)} did not pass the CoS Runner capability check');
     expect(RUNNER_SRC).toContain('const { command: ptyCommand, args: ptyArgs } = prepareCliSpawn(executable, args, childEnv);');
+  });
+
+  it('tracks TUI liveness from onExit bookkeeping rather than a pid probe', () => {
+    // node-pty reports pid 0 for ConPTY on Windows, so getProcessStats(pid)
+    // reads every runner-owned TUI as invalid/dead. GET /agents must use the
+    // runner's own onExit flag, then tag the row so sweeps can tell a real
+    // processActive from that pid-0 artifact.
+    expect(RUNNER_SRC).toMatch(
+      /import\s*\{[^}]*\brunnerAgentLivenessFields\b[^}]*\}\s*from\s*'\.\.\/lib\/runnerAgentLiveness\.js';/
+    );
+    expect(RUNNER_SRC).toMatch(/exited:\s*false/);
+    expect(RUNNER_SRC).toMatch(/current\.exited\s*=\s*true/);
+    const onExitIdx = RUNNER_SRC.indexOf('tuiProcess.onExit');
+    const exitedIdx = RUNNER_SRC.indexOf('current.exited = true');
+    expect(exitedIdx, 'onExit must stamp exited before deleting the handle').toBeGreaterThan(onExitIdx);
+    const deleteIdx = RUNNER_SRC.indexOf('activeAgents.delete(agentId);', exitedIdx);
+    expect(deleteIdx, 'onExit must drop the handle before awaiting completion I/O').toBeGreaterThan(exitedIdx);
+    expect(deleteIdx).toBeLessThan(RUNNER_SRC.indexOf('await withState((state) => {', exitedIdx));
+    expect(RUNNER_SRC).toMatch(/if\s*\(\s*agent\.exited\s*===\s*true\s*\)\s*continue;/);
+    expect(RUNNER_SRC).toMatch(/runnerAgentLivenessFields\(agent,\s*stats\)/);
+    expect(RUNNER_SRC).toMatch(/inspectAgentProcess\(agent\)/);
   });
 
   it('spawns the PTY through the shared Windows-safe CLI wrapper', () => {

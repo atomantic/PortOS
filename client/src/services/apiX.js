@@ -1,7 +1,6 @@
 import { request } from './apiCore.js';
 
 export const getXAccounts = (options = {}) => request('/x/accounts', options);
-export const getXAccount = (id, options = {}) => request(`/x/accounts/${id}`, options);
 export const createXAccount = (data, options = {}) => request('/x/accounts', { method: 'POST', body: JSON.stringify(data), ...options });
 export const updateXAccount = (id, data, options = {}) => request(`/x/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(data), ...options });
 export const deleteXAccount = (id, options = {}) => request(`/x/accounts/${id}`, { method: 'DELETE', ...options });

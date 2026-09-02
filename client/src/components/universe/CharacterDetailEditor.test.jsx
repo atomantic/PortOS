@@ -8,7 +8,6 @@ vi.mock('../voice/VoicePicker', () => ({ default: () => null }));
 vi.mock('../../services/apiVoice', () => ({
   listVoiceEngines: vi.fn().mockResolvedValue({ engines: [] }),
   listVoiceProfiles: vi.fn(),
-  promotePresetProfile: vi.fn(),
   promoteVoicePreset: vi.fn(),
   renderVoiceProfileBenchmark: vi.fn(),
   createVoiceDesignCandidate: vi.fn(),

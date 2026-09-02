@@ -20,11 +20,9 @@ import { tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
 import * as appsService from '../../services/apps.js';
 import { notifyAppsChanged, PORTOS_APP_ID } from '../../services/apps.js';
 import * as pm2Service from '../../services/pm2.js';
-import * as appUpdater from '../../services/appUpdater.js';
 import * as appBuilder from '../../services/appBuilder.js';
 import { logAction } from '../../services/history.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { managedAppUpdateSchema, validateRequest } from '../../lib/validation.js';
 import { parseEcosystemFromPath, usesPm2, isDesktopType } from '../../services/streamingDetect.js';
 import { detectAppIcon, isUsableSvg } from '../../services/appIconDetect.js';
 import { loadApp, pathExists, deriveUiPort } from './shared.js';
@@ -234,30 +232,6 @@ router.post('/:id/restart', loadApp, asyncHandler(async (req, res) => {
   notifyAppsChanged('restart');
 
   res.json({ success: true, results });
-}));
-
-// POST /api/apps/:id/update - Pull, install deps, setup, restart
-router.post('/:id/update', loadApp, asyncHandler(async (req, res) => {
-  const app = req.loadedApp;
-  const options = validateRequest(managedAppUpdateSchema, req.body || {});
-
-  if (!app.repoPath || !await pathExists(app.repoPath)) {
-    throw new ServerError('App repo path does not exist', { status: 400, code: 'PATH_NOT_FOUND' });
-  }
-
-  console.log(`⬇️ Starting update for ${app.name}`);
-  const progressSteps = [];
-  const emit = (step, status, message) => {
-    progressSteps.push({ step, status, message, timestamp: Date.now() });
-  };
-
-  const result = await appUpdater.updateApp(app, emit, options);
-  const success = result.success;
-  await logAction('update', app.id, app.name, { steps: result.steps }, success);
-  notifyAppsChanged('update');
-  console.log(`${success ? '✅' : '❌'} Update ${success ? 'complete' : 'failed'} for ${app.name}`);
-
-  res.json({ success, steps: result.steps, progress: progressSteps });
 }));
 
 // POST /api/apps/:id/build - Build production UI

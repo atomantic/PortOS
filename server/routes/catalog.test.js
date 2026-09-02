@@ -20,6 +20,7 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { checkHealth, ensureSchema, close, query } from '../lib/db.js';
+import { requireDbOrSkip } from '../lib/dbTestGate.js';
 
 // Mock embeddings — the bulk-import + restore routes call these; we don't want a
 // network round-trip and the assertions never inspect the vector.
@@ -47,7 +48,7 @@ let skipReason = '';
     else skipReason = 'catalog schema not present';
   }
 }
-if (!dbReady) console.log(`⏭️ routes/catalog.test: skipping suite — ${skipReason || 'no database'}`);
+const runDb = requireDbOrSkip('routes/catalog.test', dbReady, skipReason);
 
 function makeApp() {
   const app = express();
@@ -76,7 +77,7 @@ afterAll(async () => {
   await close();
 });
 
-describe.skipIf(!dbReady)('POST /api/catalog/bulk-import — scrap persistence', () => {
+describe.skipIf(!runDb)('POST /api/catalog/bulk-import — scrap persistence', () => {
   it('persists a round-tripped `### Scraps` bullet as a catalog_scraps row + source link', async () => {
     const markdown = [
       `## Character: Scrap Persist Hero ${NONCE}`,
@@ -121,7 +122,7 @@ describe.skipIf(!dbReady)('POST /api/catalog/bulk-import — scrap persistence',
   });
 });
 
-describe.skipIf(!dbReady)('POST /api/catalog/scraps — chunking', () => {
+describe.skipIf(!runDb)('POST /api/catalog/scraps — chunking', () => {
   it('chunks a long paste into a parent + children but returns the parent scrap', async () => {
     // Over the 12k cap so createChunkedScrap splits it.
     const para = `Para body ${NONCE} `.repeat(300); // ~5400 chars
@@ -176,7 +177,7 @@ describe.skipIf(!dbReady)('POST /api/catalog/scraps — chunking', () => {
   });
 });
 
-describe.skipIf(!dbReady)('POST /api/catalog/bulk-import — export-bundle ref recreation', () => {
+describe.skipIf(!runDb)('POST /api/catalog/bulk-import — export-bundle ref recreation', () => {
   it('recreates the bundle ref link from `bundleRef` and honors per-row role', async () => {
     const seriesId = `test-series-${NONCE}`;
     const bundle = {
@@ -206,7 +207,7 @@ describe.skipIf(!dbReady)('POST /api/catalog/bulk-import — export-bundle ref r
   });
 });
 
-describe.skipIf(!dbReady)('POST /api/catalog/ingredients/:id/revisions/:revisionId/restore', () => {
+describe.skipIf(!runDb)('POST /api/catalog/ingredients/:id/revisions/:revisionId/restore', () => {
   it('restores the revision payload verbatim, preserving its schemaVersion, and records a new revision', async () => {
     // Seed an ingredient, then write an "old shape" payload (schemaVersion 0) so
     // a later restore can prove the marker is preserved, not re-stamped.
@@ -249,7 +250,7 @@ describe.skipIf(!dbReady)('POST /api/catalog/ingredients/:id/revisions/:revision
   });
 });
 
-describe.skipIf(!dbReady)('GET /api/catalog/ingredients/:id/details — batched hydration', () => {
+describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/details — batched hydration', () => {
   it('returns ingredient + refs + sources + relations + revisions + media + missingMedia in one response', async () => {
     const a = await catalogDB.createIngredient({ type: 'character', name: `Details A ${NONCE}`, payload: { physicalDescription: 'lead' } });
     const b = await catalogDB.createIngredient({ type: 'place', name: `Details B ${NONCE}`, payload: { description: 'a place' } });
@@ -299,7 +300,7 @@ describe.skipIf(!dbReady)('GET /api/catalog/ingredients/:id/details — batched 
   });
 });
 
-describe.skipIf(!dbReady)('GET /api/catalog/facets + ingredient filters (#1762)', () => {
+describe.skipIf(!runDb)('GET /api/catalog/facets + ingredient filters (#1762)', () => {
   const UNI = `route-uni-${NONCE}`;
   afterAll(async () => {
     await query('DELETE FROM catalog_ingredient_refs WHERE ref_id = $1', [UNI]).catch(() => {});

@@ -14,17 +14,20 @@ import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal';
+import DownloadPreflightConfirm from '../components/models/DownloadPreflightConfirm.jsx';
 import Banner from '../components/ui/Banner';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import ProgressBar from '../components/ui/ProgressBar';
 import { FormField } from '../components/ui/FormField';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
+import useDownloadPreflightConfirm from '../hooks/useDownloadPreflightConfirm';
 import { formatBytes } from '../utils/formatters';
 import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, isVideoLoraFamily } from '../lib/runnerFamilies';
 import { LORA_EFFECT_STATUSES, formatLoraEffect, loraEffectBadge } from '../lib/loraEffect';
 import {
   listLorasFull,
   installLoraFromCivitai,
+  previewLoraInstall,
   installLoraFromHuggingfaceStream,
   deleteLoraFull,
   getCivitaiAuth,
@@ -127,6 +130,7 @@ export default function Loras() {
   const [suggestions, setSuggestions] = useState(null);
   const [loadingSuggestions, setLoadingSuggestions] = useState(true);
   const [installingSuggestion, setInstallingSuggestion] = useState(null);
+  const { confirm: downloadConfirm, request: requestDownloadConfirm, cancel: cancelDownloadConfirm, confirmRun: runDownloadConfirm } = useDownloadPreflightConfirm();
   // Repo+file key of the video suggestion currently installing. A single HF
   // repo can publish multiple versions that must remain independently selectable.
   const [installingVideoKey, setInstallingVideoKey] = useState(null);
@@ -161,7 +165,40 @@ export default function Loras() {
   // silent:true so the auth-error path goes through the modal instead of a
   // one-shot toast the user can't act on. Shared by the initial install
   // submit and the post-key-save retry so both behave identically.
-  const performInstall = useCallback(async (url) => {
+  //
+  // A gated Civitai model can already fail with CIVITAI_AUTH at the PREVIEW
+  // step (previewCivitaiInstall fetches the model metadata, which needs the
+  // same key the download does) — before startCivitaiInstall ever runs. Catch
+  // it here and route it into the existing key-entry prompt instead of
+  // letting the hook's generic error land inside the preflight modal, which
+  // has no path back to that prompt.
+  const requestLoraDownload = useCallback((title, url, source, run, extra = {}) => requestDownloadConfirm({
+    title,
+    preview: () => previewLoraInstall({ url, source, ...extra, silent: true }).catch((err) => {
+      if (source === 'civitai' && err?.code === 'CIVITAI_AUTH') {
+        setAuthPrompt({ url, message: err.message || 'This LoRA needs an API key.' });
+        // No confirm modal opens for a `handled` rejection, so nothing else
+        // will clear a suggestion card's spinner for this attempt.
+        setInstallingSuggestion(null);
+        const handled = new Error(err.message);
+        handled.handled = true;
+        throw handled;
+      }
+      throw err;
+    }),
+    run,
+  }), [requestDownloadConfirm]);
+
+  // Dismissing the confirm modal without confirming ends a suggestion card's
+  // install attempt before startCivitaiInstall/startVideoSuggestionInstall
+  // ever run — clear its spinner here too, or it sticks until another card
+  // is clicked. A no-op for every other caller of the shared modal.
+  const handleCancelDownloadConfirm = useCallback(() => {
+    cancelDownloadConfirm();
+    setInstallingSuggestion(null);
+  }, [cancelDownloadConfirm]);
+
+  const startCivitaiInstall = useCallback(async (url) => {
     if (!url || installing) return;
     setInstalling(true);
     await installLoraFromCivitai({ url, silent: true })
@@ -183,8 +220,15 @@ export default function Loras() {
           toast.error(err?.message || 'Install failed');
         }
       })
-      .finally(() => setInstalling(false));
-  }, [installing]);
+      // Clears whichever suggestion card (if any) triggered this install —
+      // a no-op for the manual-form submit, which never sets it.
+      .finally(() => { setInstalling(false); setInstallingSuggestion(null); });
+  }, [installing, refresh]);
+
+  const performInstall = useCallback((url) => {
+    if (!url || installing) return undefined;
+    return requestLoraDownload('Install LoRA', url, 'civitai', () => startCivitaiInstall(url));
+  }, [installing, requestLoraDownload, startCivitaiInstall]);
 
   const handleInstall = (e) => {
     e?.preventDefault?.();
@@ -227,14 +271,16 @@ export default function Loras() {
   const handleHfInstall = useCallback((e) => {
     e?.preventDefault?.();
     setHfFamilyPrompt(null);
-    return runHfInstall(hfUrl.trim(), undefined);
-  }, [hfUrl, runHfInstall]);
+    const url = hfUrl.trim();
+    if (!url) return undefined;
+    return requestLoraDownload('Install HuggingFace LoRA', url, 'huggingface', () => runHfInstall(url, undefined));
+  }, [hfUrl, runHfInstall, requestLoraDownload]);
 
   // Quick-install a curated video LoRA suggestion. Routes through the HF
   // installer (not the Civitai one) with the card's known family. Tracks the
   // in-flight repo in its own state because the Civitai `installingSuggestion`
   // key is modelId/versionId-based — video installs have neither.
-  const installVideoSuggestion = useCallback(async (card) => {
+  const startVideoSuggestionInstall = useCallback(async (card) => {
     // Cross-guard against the form install (see runHfInstall) — one HF install
     // at a time so they don't clobber the shared hfProgress.
     if (!card?.installUrl || installingVideoKey || hfInstalling) return;
@@ -253,6 +299,19 @@ export default function Loras() {
       .catch((err) => toast.error(err?.message || 'HuggingFace install failed'))
       .finally(() => { setInstallingVideoKey(null); setHfProgress(null); });
   }, [installingVideoKey, hfInstalling, refresh]);
+
+  // Card carries its own family/file, so the preview forwards them and shows
+  // the exact file "Quick install" is about to fetch — not a re-guess.
+  const installVideoSuggestion = useCallback((card) => {
+    if (!card?.installUrl || installingVideoKey || hfInstalling) return undefined;
+    return requestLoraDownload(
+      'Install video LoRA',
+      card.installUrl,
+      'huggingface',
+      () => startVideoSuggestionInstall(card),
+      { family: card.runnerFamily, file: card.file },
+    );
+  }, [installingVideoKey, hfInstalling, requestLoraDownload, startVideoSuggestionInstall]);
 
   // The measurement lives in the LIST, not in the card. The Installed section
   // swaps between LoraGrid and InstalledGroups when the media filter changes,
@@ -381,7 +440,13 @@ export default function Loras() {
                 <button
                   key={family}
                   type="button"
-                  onClick={() => runHfInstall(hfFamilyPrompt, family)}
+                  onClick={() => requestLoraDownload(
+                    'Install HuggingFace LoRA',
+                    hfFamilyPrompt,
+                    'huggingface',
+                    () => runHfInstall(hfFamilyPrompt, family),
+                    { family },
+                  )}
                   disabled={hfInstalling}
                   className="bg-port-accent text-white px-3 py-1 rounded text-xs font-medium hover:bg-port-accent/90 disabled:opacity-50"
                 >
@@ -433,14 +498,19 @@ export default function Loras() {
         videoInstallBusy={hfInstalling}
         onRefresh={() => refreshSuggestions({ force: true })}
         onInstallVideo={installVideoSuggestion}
-        onInstall={async (card, url, versionId) => {
+        onInstall={(card, url, versionId) => {
           // Curated cards pass a family-specific (url, versionId); non-curated
           // cards omit versionId and we fall back to the card's primary.
           const vid = versionId ?? card.versionId;
           const key = suggestionKey(card.modelId, vid);
           setInstallingSuggestion(key);
-          await performInstall(url || card.installUrl);
-          setInstallingSuggestion(null);
+          // performInstall() resolves once the PREVIEW is ready (the confirm
+          // modal is now showing) — the actual install can run far later, so
+          // clearing this card's spinner belongs to that install's own
+          // lifecycle (startCivitaiInstall's finally) and the cancel/auth-
+          // redirect paths that can end this attempt before it ever starts,
+          // not to this promise settling.
+          performInstall(url || card.installUrl);
         }}
       />
 
@@ -471,6 +541,16 @@ export default function Loras() {
             : <LoraGrid loras={visibleLoras} deleting={deleting} onDelete={handleDelete} onMeasured={handleMeasured} deleteConfirm={deleteConfirm} />
         )}
       </div>
+      <DownloadPreflightConfirm
+        open={Boolean(downloadConfirm)}
+        title={downloadConfirm?.title}
+        loading={Boolean(downloadConfirm?.loading)}
+        error={downloadConfirm?.error}
+        assessment={downloadConfirm?.assessment}
+        confirmLabel="Start download"
+        onCancel={handleCancelDownloadConfirm}
+        onConfirm={runDownloadConfirm}
+      />
     </div>
   );
 }
@@ -1135,7 +1215,7 @@ function LoraCard({ lora, onDelete, onMeasured, deleting, deleteConfirm }) {
   // and "Delete undefined" is a bad thing to announce over a destructive action.
   const displayName = lora.name || lora.filename;
 
-  // Read straight off the server's CACHED report (listLoras never probes) — an
+  // Read straight off the server's CACHED report (listLorasFull never probes) — an
   // explicit re-check hands the new one to `onMeasured`, which updates the list
   // entry, so the badge survives this card being unmounted by a filter change.
   const effect = lora.effectReport || null;
@@ -1257,6 +1337,7 @@ function LoraCard({ lora, onDelete, onMeasured, deleting, deleteConfirm }) {
                 rel="noopener noreferrer"
                 className="text-gray-400 hover:text-gray-200 p-1.5 rounded hover:bg-port-bg"
                 title="Open on Civitai"
+                aria-label="Open on Civitai"
               >
                 <ExternalLink size={14} />
               </a>
@@ -1268,6 +1349,7 @@ function LoraCard({ lora, onDelete, onMeasured, deleting, deleteConfirm }) {
                 rel="noopener noreferrer"
                 className="text-gray-400 hover:text-gray-200 p-1.5 rounded hover:bg-port-bg"
                 title="Open on HuggingFace"
+                aria-label="Open on HuggingFace"
               >
                 <ExternalLink size={14} />
               </a>

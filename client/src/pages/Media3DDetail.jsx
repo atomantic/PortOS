@@ -12,6 +12,7 @@ import ImageTo3dRenderOptions from '../components/media/ImageTo3dRenderOptions';
 import { fieldsFromRun, renderOptionsBody, runWantsTransparency } from '../lib/imageTo3dRenderOptions';
 import { imageTo3dStatusMeta } from '../components/media/imageTo3dStatus';
 import toast from '../components/ui/Toast';
+import PageSkeleton from '../components/ui/PageSkeleton';
 
 // Poll cadence while a render is in flight (a real TRELLIS.2 render is multi-minute).
 const POLL_INTERVAL_MS = 2500;
@@ -107,8 +108,14 @@ export default function Media3DDetail() {
 
   if (loading) {
     return (
-      <div className="mx-auto flex max-w-4xl items-center gap-2 py-16 text-sm text-gray-400">
-        <Loader2 className="h-4 w-4 animate-spin" /> Loading 3D model…
+      <div className="mx-auto max-w-4xl">
+        <PageSkeleton
+          label="Loading 3D model"
+          headerRowClass="flex flex-wrap items-center justify-between gap-3"
+          titleWidthClass="w-56"
+          cards={2}
+          sidebar={false}
+        />
       </div>
     );
   }

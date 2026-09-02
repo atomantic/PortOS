@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { getAiAssignments, updateAiAssignment } from '../services/aiAssignments.js';
 import { saveSubscriptionCosts } from '../services/subscriptionCosts.js';
+import { saveApiBilledInstanceIds } from '../services/usageFleetBilling.js';
 import {
   setCodexParallelLimit,
   CODEX_PARALLEL_MIN,
@@ -18,7 +19,7 @@ import { asyncHandler } from '../lib/errorHandler.js';
 import { isPlainObject } from '../lib/objects.js';
 import { agentContextSettingsSchema } from '../lib/agentContextValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
-import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, openWorldSnapshotConfigSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, validateRequest } from '../lib/validation.js';
+import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, openWorldSnapshotConfigSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, usageApiBilledInstanceIdsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -375,6 +376,11 @@ router.put('/', asyncHandler(async (req, res) => {
   if (req.body?.subscriptionCosts !== undefined) {
     validateRequest(subscriptionCostsMapSchema, req.body.subscriptionCosts);
   }
+  // Same schema PUT /api/usage/fleet-billing's store uses, so a restore dump
+  // can't write an unbounded or non-string list through the generic endpoint.
+  if (req.body?.usageApiBilledInstanceIds !== undefined) {
+    validateRequest(usageApiBilledInstanceIdsSchema, req.body.usageApiBilledInstanceIds);
+  }
   // User-defined catalog types moved out of settings.json into PostgreSQL
   // (`catalog_user_types`, #1001). The `/api/catalog/types` routes are the only
   // write path; a `catalogUserTypes` key in a PUT /api/settings body (legacy
@@ -387,12 +393,19 @@ router.put('/', asyncHandler(async (req, res) => {
   // would bypass the current-password proof the /api/auth/password routes
   // require. Secrets are write-only through their dedicated routes
   // (/api/auth/password, /api/github/secrets, etc.).
-  // subscriptionCosts is excluded from the generic shallow spread below and
-  // routed through the same per-family merge PUT /api/usage/subscriptions
-  // uses (saveSubscriptionCosts) — a shallow `{ ...current, ...settingsPatch }`
-  // would replace the whole map, silently dropping any family the incoming
-  // patch didn't mention.
-  const { secrets: _ignoredSecrets, catalogUserTypes: _ignoredTypes, subscriptionCosts: subscriptionCostsPatch, ...settingsPatch } = req.body || {};
+  // subscriptionCosts and usageApiBilledInstanceIds are excluded from the
+  // generic shallow spread below and routed through their dedicated savers —
+  // the same merge PUT /api/usage/subscriptions and PUT /api/usage/fleet-billing
+  // use — so a restore dump can't persist an unvalidated slice, and a shallow
+  // `{ ...current, ...settingsPatch }` can't replace a map by dropping keys
+  // the incoming patch didn't mention.
+  const {
+    secrets: _ignoredSecrets,
+    catalogUserTypes: _ignoredTypes,
+    subscriptionCosts: subscriptionCostsPatch,
+    usageApiBilledInstanceIds: apiBilledPatch,
+    ...settingsPatch
+  } = req.body || {};
   // updateSettingsWith (not updateSettings) so the multi-owner `federation`
   // slice merges per sub-key and persisted write-only tokens the incoming patch
   // omits get re-injected — both against the freshest snapshot inside the write
@@ -408,6 +421,10 @@ router.put('/', asyncHandler(async (req, res) => {
   if (subscriptionCostsPatch !== undefined) {
     const costs = await saveSubscriptionCosts(subscriptionCostsPatch, { actor: 'user' });
     merged = { ...merged, subscriptionCosts: costs };
+  }
+  if (apiBilledPatch !== undefined) {
+    const ids = await saveApiBilledInstanceIds(apiBilledPatch, { actor: 'user' });
+    merged = { ...merged, usageApiBilledInstanceIds: ids };
   }
   // The queue caches codex.parallelLimit in-process; sync it from the
   // merged value so a save takes effect without a restart and without

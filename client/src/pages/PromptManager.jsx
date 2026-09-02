@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
 import { FileText, Variable, RefreshCw, Save, Plus, Trash2, Eye, Briefcase, Search, X, ChevronRight, ChevronDown } from 'lucide-react';
 import toast from '../components/ui/Toast';
-import BrailleSpinner from '../components/BrailleSpinner';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import { filterSelectableModels, getProviderTimeout } from '../utils/providers';
 import {
@@ -14,6 +13,8 @@ import {
 } from '../utils/formatters';
 import useFieldDraft from '../hooks/useFieldDraft';
 import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
+import PageSkeleton from '../components/ui/PageSkeleton';
+import PageHeader from '../components/PageHeader';
 import { FormField } from '../components/ui/FormField';
 import Modal from '../components/ui/Modal';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
@@ -28,6 +29,10 @@ import Pill from '../components/ui/Pill';
 import { buildStageGroups, stageGroupKeyFor } from '../lib/promptStageGroups';
 
 const VALID_PROMPT_TABS = ['stages', 'variables', 'job-skills'];
+
+// Shared by the loading and loaded branches so the bar doesn't change height
+// when the fetch settles.
+const PAGE_SUBTITLE = 'Customize AI prompts for backend operations';
 
 export default function PromptManager() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -455,12 +460,10 @@ export default function PromptManager() {
   if (loading) {
     return (
       <div className="flex flex-col h-full">
-        <div className="flex items-center gap-3 p-4 border-b border-port-border">
-          <h1 className="text-2xl font-bold text-white">Settings</h1>
-        </div>
+        <PageHeader icon={FileText} title="Prompt Manager" subtitle={PAGE_SUBTITLE} />
         <SettingsTabsHeader activeTab="prompts" />
-        <div className="flex-1 flex items-center justify-center">
-          <BrailleSpinner text="Loading prompts" />
+        <div className="flex-1 overflow-auto p-4">
+          <PageSkeleton header="none" label="Loading prompts" cards={3} sidebar={false} />
         </div>
       </div>
     );
@@ -468,28 +471,24 @@ export default function PromptManager() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center gap-3 p-4 border-b border-port-border">
-        <h1 className="text-2xl font-bold text-white">Settings</h1>
-      </div>
+      <PageHeader
+        icon={FileText}
+        title="Prompt Manager"
+        subtitle={PAGE_SUBTITLE}
+        actions={(
+          <button
+            onClick={loadData}
+            className="p-2 text-gray-400 hover:text-white"
+            title="Reload" aria-label="Reload"
+          >
+            <RefreshCw size={20} />
+          </button>
+        )}
+      />
 
       <SettingsTabsHeader activeTab="prompts" />
 
       <div className="flex-1 overflow-auto p-4">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-white">Prompt Manager</h1>
-          <p className="text-gray-500 text-sm sm:text-base">Customize AI prompts for backend operations</p>
-        </div>
-        <button
-          onClick={loadData}
-          className="p-2 text-gray-400 hover:text-white self-end sm:self-auto"
-          title="Reload" aria-label="Reload"
-        >
-          <RefreshCw size={20} />
-        </button>
-      </div>
-
       {/* Tabs */}
       <div className="flex flex-wrap gap-2 mb-6">
         <button

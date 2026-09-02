@@ -5,24 +5,24 @@ vi.mock('./apiCore.js', () => ({
 }));
 
 let request;
-let detectDigitalTwinContradictions;
+let detectSoulContradictions;
 let openDigitalTwinSpotifyBrowser;
 let importDigitalTwinSpotifyBrowser;
 
 beforeEach(async () => {
   vi.resetModules();
   ({ request } = await import('./apiCore.js'));
-  ({ detectDigitalTwinContradictions, openDigitalTwinSpotifyBrowser, importDigitalTwinSpotifyBrowser } = await import('./apiDigitalTwin.js'));
+  ({ detectSoulContradictions, openDigitalTwinSpotifyBrowser, importDigitalTwinSpotifyBrowser } = await import('./apiDigitalTwin.js'));
   request.mockReset();
 });
 
-describe('detectDigitalTwinContradictions', () => {
+describe('detectSoulContradictions', () => {
   // OverviewTab renders the failure inline (contradictions.error), so it needs a
   // way to suppress request()'s own toast — otherwise one failure reports twice.
   it('forwards caller options (e.g. silent) into the request', async () => {
     request.mockResolvedValue({ issues: [] });
 
-    await detectDigitalTwinContradictions('openai', 'gpt-4', { silent: true });
+    await detectSoulContradictions('openai', 'gpt-4', { silent: true });
 
     const [path, options] = request.mock.calls[0];
     expect(path).toBe('/digital-twin/validate/contradictions');
@@ -35,7 +35,7 @@ describe('detectDigitalTwinContradictions', () => {
   it('stays callable without options (back-compat) and then toasts by default', async () => {
     request.mockResolvedValue({ issues: [] });
 
-    await detectDigitalTwinContradictions('openai', 'gpt-4');
+    await detectSoulContradictions('openai', 'gpt-4');
 
     const [, options] = request.mock.calls[0];
     expect(options.silent).toBeUndefined();

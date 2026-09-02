@@ -19,6 +19,7 @@
 
 import { describe, it, expect, afterAll, vi } from 'vitest';
 import { checkHealth, ensureSchema, close } from '../lib/db.js';
+import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import * as catalogDB from './catalogDB.js';
 import { projectToCanon, projectToCatalog, _inFlightSize } from './catalogCanonProjection.js';
 
@@ -35,7 +36,7 @@ let skipReason = '';
     else skipReason = 'catalog schema not present';
   }
 }
-if (!dbReady) console.log(`⏭️ catalogCanonProjection.test: skipping suite — ${skipReason || 'no database'}`);
+const runDb = requireDbOrSkip('services/catalogCanonProjection.test', dbReady, skipReason);
 
 const createdIngredientIds = new Set();
 afterAll(async () => {
@@ -54,7 +55,7 @@ async function makeLinkedCharacter(universeId, { name = 'Proj Test', payload = {
   return ing;
 }
 
-describe.skipIf(!dbReady)('catalogCanonProjection', () => {
+describe.skipIf(!runDb)('catalogCanonProjection', () => {
   it('projectToCanon fans a catalog edit into every linked universe canon entry', async () => {
     const uA = `u-proj-${Date.now()}-a`;
     const uB = `u-proj-${Date.now()}-b`;

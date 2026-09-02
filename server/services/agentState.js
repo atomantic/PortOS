@@ -20,6 +20,60 @@ export const userTerminatedAgents = new Set();
 // task or cleaning up the worktree (Map<agentId, { pausedAt, reason }>)
 export const pausedAgents = new Map();
 
+// Waiters for a paused agent's process to ACTUALLY exit, keyed by agentId
+// (Map<agentId, Array<(exited: boolean) => void>>). See whenPausedAgentExits.
+const pausedExitWaiters = new Map();
+
+/**
+ * Consume the pause flag on the way out of a close handler.
+ *
+ * The spawner close handlers (agentCliSpawning / agentTuiSpawning) and the
+ * runner completion handler (agentLifecycle) all skip finalization for a paused
+ * agent and drop the flag as they go. Deleting through here also releases anyone
+ * waiting on the exit, so `whenPausedAgentExits` is an event rather than a poll —
+ * and the two can't drift, because the delete IS the notification.
+ */
+export const consumePausedAgentExit = (agentId) => {
+  pausedAgents.delete(agentId);
+  const waiters = pausedExitWaiters.get(agentId);
+  if (!waiters) return;
+  pausedExitWaiters.delete(agentId);
+  for (const settle of waiters) settle(true);
+};
+
+/**
+ * Resolve once a paused agent's process is gone — `true` if the exit was
+ * observed, `false` if the window closed first.
+ *
+ * Pausing STOPS a local process without waiting for it: `pauseAgent` returns
+ * after the signal, and the close handler lands milliseconds later. A caller
+ * that acts on the paused agent immediately (relaunch, which requeues the task
+ * and retires the record) has to let that handler run first — once the record is
+ * retired the handler no longer recognizes the exit as a pause and finalizes the
+ * run, cleaning up the worktree the requeued task points at.
+ *
+ * An agent that is not in `activeAgents` has nothing left to wait for: either
+ * the handler already ran, or the run is runner-backed and its stop was
+ * confirmed by an awaited RPC.
+ */
+export const whenPausedAgentExits = (agentId, timeoutMs) => {
+  if (!activeAgents.has(agentId)) return Promise.resolve(true);
+  return new Promise(resolve => {
+    const settle = (exited) => {
+      clearTimeout(timer);
+      const waiters = pausedExitWaiters.get(agentId);
+      if (waiters) {
+        const rest = waiters.filter(w => w !== settle);
+        if (rest.length) pausedExitWaiters.set(agentId, rest);
+        else pausedExitWaiters.delete(agentId);
+      }
+      resolve(exited);
+    };
+    const timer = setTimeout(() => settle(false), timeoutMs);
+    pausedExitWaiters.set(agentId, [...(pausedExitWaiters.get(agentId) || []), settle]);
+  });
+};
+
 // spawningTasks: tasks currently being spawned (Set<taskId>) — deduplication guard
 export const spawningTasks = new Set();
 
@@ -66,6 +120,32 @@ export const setUseRunner = (val) => { useRunner = val; };
 // orchestrator (which re-exports the whole agent-lifecycle module graph).
 // `subAgentSpawner` re-exports it for backward compatibility.
 export const getActiveAgentIds = () => [...activeAgents.keys(), ...runnerAgents.keys()];
+
+/**
+ * Agent ids whose worktree must not be taken out from under them, from an
+ * already-read agent list:
+ *
+ *   - the in-process maps, which are authoritative for THIS process;
+ *   - every persisted `running` agent, which is how a run that survived a server
+ *     restart (the maps are empty then) still counts;
+ *   - every persisted `paused` agent — pausing deliberately preserves the tree as
+ *     resume context, and a paused agent is absent from the maps.
+ *
+ * Under-counting here removes a directory another run is mid-edit in, so the one
+ * definition lives here rather than being restated by each reaper. Takes the
+ * list instead of fetching it, both to stay off `cos.js`'s import path and so a
+ * caller that already read the agents does not read them twice.
+ *
+ * @param {Array<{id?: string, status?: string}>} [agents]
+ * @returns {Set<string>}
+ */
+export const protectedAgentIds = (agents = []) => {
+  const ids = new Set(getActiveAgentIds());
+  for (const agent of agents) {
+    if (agent?.status === 'running' || agent?.status === 'paused') ids.add(agent.id);
+  }
+  return ids;
+};
 
 // Does THIS process already own the agent's lifecycle?
 //

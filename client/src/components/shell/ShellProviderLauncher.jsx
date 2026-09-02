@@ -113,7 +113,7 @@ export default function ShellProviderLauncher({ providers, onLaunch, onOpen, loa
       {open && createPortal(
         <div
           ref={popoverRef}
-          className="fixed max-w-[calc(100vw-1rem)] max-h-[70vh] overflow-y-auto overscroll-contain z-[100] bg-port-card border border-port-border rounded-lg shadow-xl"
+          className="fixed max-w-[calc(100vw-1rem)] max-h-dvh-cap [--dvh-cap:70dvh] overflow-y-auto overscroll-contain z-[100] bg-port-card border border-port-border rounded-lg shadow-xl"
           style={{
             left: style?.left ?? `${VIEWPORT_PADDING}px`,
             top: style?.top ?? `${VIEWPORT_PADDING}px`,

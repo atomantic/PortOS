@@ -36,7 +36,10 @@ const TABBED_PAGES = [
   { prefix: '/messages', file: 'client/src/pages/Messages.jsx', kind: 'ids', constName: 'TABS' },
   { prefix: '/wiki', file: 'client/src/pages/Wiki.jsx', kind: 'ids', constName: 'TABS' },
   { prefix: '/settings', file: 'client/src/components/settings/SettingsTabsHeader.jsx', kind: 'links', constName: 'TABS' },
-  { prefix: '/models', file: 'client/src/components/models/ModelsTabsHeader.jsx', kind: 'links', constName: 'TABS' },
+  { prefix: '/models', file: 'client/src/components/models/ModelsTabsHeader.jsx', kind: 'links', constName: 'TABS',
+    nestedIdSources: [
+      { parent: 'llms', file: 'client/src/components/settings/LocalLlmTab.jsx', constName: 'LLM_NAV_SUBROUTES' },
+    ] },
   { prefix: '/media', file: 'client/src/pages/MediaGen.jsx', kind: 'ids', constName: 'TABS', allowBasePrefix: true },
   { prefix: '/music', file: 'client/src/pages/Music.jsx', kind: 'ids', constName: 'TABS', allowBasePrefix: true },
   { prefix: '/sharing', file: 'client/src/pages/Sharing.jsx', kind: 'links', constName: 'SECTIONS' },
@@ -111,12 +114,15 @@ function extractTabPaths(filePath, { kind, constName, switchVar, prefix, nestedI
   const block = extractConstArrayBlock(src, constName);
   if (kind === 'ids') {
     const ids = [...block.matchAll(/id:\s*['"]([^'"]+)['"]/g)].map((m) => `${prefix}/${m[1]}`);
-    return allowBasePrefix ? [prefix, ...ids] : ids;
+    return [...(allowBasePrefix ? [prefix, ...ids] : ids), ...nested];
   }
   // kind 'links': keep only entries that point at this page, dropping cross-links.
-  return [...block.matchAll(/(?:to|path):\s*['"]([^'"]+)['"]/g)]
-    .map((m) => m[1])
-    .filter((p) => p === prefix || p.startsWith(`${prefix}/`));
+  return [
+    ...[...block.matchAll(/(?:to|path):\s*['"]([^'"]+)['"]/g)]
+      .map((m) => m[1])
+      .filter((p) => p === prefix || p.startsWith(`${prefix}/`)),
+    ...nested,
+  ];
 }
 
 describe('navManifest — shape invariants', () => {
@@ -244,6 +250,8 @@ describe('resolveNavCommand — fuzzy matching', () => {
     expect(resolveNavCommand('loras')?.path).toBe('/models/loras');
     expect(resolveNavCommand('lora training')?.path).toBe('/models/training');
     expect(resolveNavCommand('embeddings')?.path).toBe('/models/embeddings');
+    expect(resolveNavCommand('prompt guard')?.path).toBe('/models/llms/abuse');
+    expect(resolveNavCommand('abuse-guard')?.path).toBe('/models/llms/abuse');
   });
 
   it('resolves Universe Builder to the /universes index path', () => {

@@ -2,7 +2,8 @@ import {
   CLAUDE_EFFORT_LEVELS,
   CODEX_EFFORT_LEVELS,
   ANTIGRAVITY_EFFORT_LEVELS,
-  CURSOR_EFFORT_LEVELS
+  CURSOR_EFFORT_LEVELS,
+  GROK_EFFORT_LEVELS
 } from '../utils/providers';
 
 /**
@@ -53,7 +54,7 @@ export const MAX_REVIEWER_MODEL_LENGTH = 200;
 export const LOCAL_LLM_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high']);
 
 // The effort ladder each reviewer offers, or absent when it has no effort control
-// (`copilot` is a GitHub review, `grok`'s CLI has no effort control at all, and an
+// (`copilot` is a GitHub review, and an
 // `@username` reviewer is a person). A ladder means the level is PICKABLE, not
 // that the CLI takes an `--effort` flag — `cursor` accepts one only as a
 // parameter of its model id, which the server folds in when it builds the
@@ -66,6 +67,7 @@ export const REVIEWER_EFFORT_LEVELS = Object.freeze({
   codex: CODEX_EFFORT_LEVELS,
   antigravity: ANTIGRAVITY_EFFORT_LEVELS,
   cursor: CURSOR_EFFORT_LEVELS,
+  grok: GROK_EFFORT_LEVELS,
   lmstudio: LOCAL_LLM_EFFORT_LEVELS,
   ollama: LOCAL_LLM_EFFORT_LEVELS,
 });

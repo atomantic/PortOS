@@ -15,7 +15,7 @@
  *      plus the cover image from the existing cover stage. Packaged in-repo with
  *      `server/lib/zipWriter.js` (no epub dependency, per the dependency policy).
  *   3. Print-interior PDF   — a trade-format interior (trim size, margins,
- *      running heads, title page, chapter openers) built on the same `pdf-lib`
+ *      running heads, title page, chapter openers) built on the same `@cantoo/pdf-lib`
  *      plumbing as `volumePdf.js` / `comicPdf.js`.
  *
  * All three are assembled on demand and streamed straight to the response — no
@@ -25,7 +25,7 @@
  * via `__testing` so the export shape is unit-tested without touching disk.
  */
 
-import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import { PDFDocument, rgb, StandardFonts } from '@cantoo/pdf-lib';
 import { createZip } from '../../lib/zipWriter.js';
 import { slugifyForFilename } from '../../lib/civitai.js';
 import { readImageFromMedia, detectImageKind } from '../../lib/pdfImageEmbed.js';
@@ -317,7 +317,7 @@ export async function buildEpub(seriesId) {
 // 3) Print-interior PDF
 // ---------------------------------------------------------------------------
 
-// Greedy word-wrap a paragraph to `maxWidth` at `size` using pdf-lib font
+// Greedy word-wrap a paragraph to `maxWidth` at `size` using @cantoo/pdf-lib font
 // metrics. Returns an array of lines. Pure over the font (exported via
 // __testing with a stub `widthOfTextAtSize`).
 export function wrapText(text, font, size, maxWidth) {
@@ -347,7 +347,7 @@ const PDF_FONT_MAP = {
  * Build the print-interior PDF as a Uint8Array. Trade-format interior: title
  * page → per-volume/-chapter body with running heads (author verso, title
  * recto) and page numbers, wrapping the prose to the text block. Reuses the
- * `pdf-lib` plumbing from volumePdf.js. Returns `{ bytes, pageCount, filename }`.
+ * `@cantoo/pdf-lib` plumbing from volumePdf.js. Returns `{ bytes, pageCount, filename }`.
  */
 export async function buildProsePdf(seriesId) {
   const { series, volumes } = await gatherProse(seriesId);

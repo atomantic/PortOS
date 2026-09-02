@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
-import { Cpu, Box, Zap, Gauge, Play, Square, Download, ArrowUpCircle, Power, PowerOff, RefreshCw, Save, Settings2, ExternalLink } from 'lucide-react';
+import { Cpu, Box, Zap, Gauge, HardDrive, Play, Square, Download, ArrowUpCircle, Power, PowerOff, RefreshCw, Save, Settings2, ExternalLink } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 
 /**
@@ -90,6 +90,8 @@ function pm2Row({ id, label, icon, status, platformReason, onStart, onStop, onIn
     version: status?.version || null,
     latestVersion: status?.latestVersion || null,
     updateAvailable,
+    // Named in the tooltip so the button never promises the wrong tool.
+    updateVia: status?.packageManagerLabel || null,
     onUpgrade: updateAvailable && status?.canUpgrade ? onUpgrade : null,
     updateUrl: updateAvailable && !status?.canUpgrade ? status?.downloadUrl : null,
   };
@@ -245,7 +247,7 @@ function ServerRow({ row, busy, actionInProgress, children }) {
             onClick={() => row.onUpgrade()}
             disabled={busy}
             className={`${accentBtn} bg-port-success/20 hover:bg-port-success/30 text-port-success`}
-            title={row.latestVersion ? `Update ${row.label} to v${row.latestVersion} through Homebrew` : `Update ${row.label} through Homebrew`}
+            title={`Update ${row.label}${row.latestVersion ? ` to v${row.latestVersion}` : ''}${row.updateVia ? ` through ${row.updateVia}` : ''}`}
           >
             {actionInProgress === `runtime-upgrade-${row.id}` ? <BrailleSpinner /> : <ArrowUpCircle size={12} />}
             {row.latestVersion ? `Update to v${row.latestVersion}` : 'Update'}
@@ -272,6 +274,7 @@ export default function RuntimeServersCard({
   status,
   llamaStatus,
   mtplxStatus,
+  slotstreamStatus,
   loading,
   busy,
   actionInProgress,
@@ -287,13 +290,21 @@ export default function RuntimeServersCard({
   onInstallMtplx,
   onStartMtplx,
   onStopMtplx,
+  onConfigureSlotstream,
+  onInstallSlotstream,
+  onStartSlotstream,
+  onStopSlotstream,
   onSaveStartup,
   onSaveIdleWindow,
 }) {
   // Read off each daemon's own status payload — the same place `runAtStartup`
   // and Ollama's `disabled` come from — so there is no second settings fetch on
   // this tab to keep in sync.
-  const idleWindows = { llama: llamaStatus?.idleMinutes ?? 0, mtplx: mtplxStatus?.idleMinutes ?? 0 };
+  const idleWindows = {
+    llama: llamaStatus?.idleMinutes ?? 0,
+    mtplx: mtplxStatus?.idleMinutes ?? 0,
+    slotstream: slotstreamStatus?.idleMinutes ?? 0,
+  };
   const ollamaService = status?.ollama?.service;
   const ollamaRunsAtStartup = Boolean(ollamaService?.runAtStartup);
 
@@ -350,6 +361,32 @@ export default function RuntimeServersCard({
         ? `${mtplxStatus.cachedModels.length} checkpoint${mtplxStatus.cachedModels.length === 1 ? '' : 's'} cached`
         : null,
     }),
+    pm2Row({
+      id: 'slotstream',
+      label: 'Slotstream',
+      icon: HardDrive,
+      status: slotstreamStatus,
+      platformReason: slotstreamStatus?.supported === false ? 'macOS with Apple Silicon only' : null,
+      onInstall: onInstallSlotstream,
+      onStart: slotstreamStatus?.cachedModels?.length ? onStartSlotstream : null,
+      onStop: onStopSlotstream,
+      // An unreadable cache also leaves `cachedModels` empty, so it withholds
+      // Start too — it must say WHY, or the row renders "stopped" with nothing
+      // to click and no explanation.
+      startBlockedReason: slotstreamStatus?.installed && !slotstreamStatus?.running
+        ? (slotstreamStatus?.cacheError
+          ? `Checkpoint cache unreadable — ${slotstreamStatus.cacheError}`
+          : (slotstreamStatus?.cachedModels?.length === 0
+            ? 'No checkpoint yet — a start never fetches weights'
+            : null))
+        : null,
+      detail: [
+        slotstreamStatus?.memoryPlan
+          && `target ${slotstreamStatus.memoryPlan.targetGb} GB${slotstreamStatus.memoryPlan.auto ? ' (auto)' : ''} · peak ${slotstreamStatus.memoryPlan.expectedPeakGb} GB · ~${slotstreamStatus.memoryPlan.expectedWarmDecodeToks} tok/s`,
+        slotstreamStatus?.cachedModels?.length
+          && `${slotstreamStatus.cachedModels.length} checkpoint${slotstreamStatus.cachedModels.length === 1 ? '' : 's'} cached`,
+      ].filter(Boolean).join(' · ') || null,
+    }),
   ];
 
   return (
@@ -386,7 +423,7 @@ export default function RuntimeServersCard({
                 {ollamaRunsAtStartup ? 'Disable at login' : 'Run at login'}
               </button>
             )}
-            {(row.id === 'llama' || row.id === 'mtplx') && row.state !== 'unsupported' && row.state !== 'missing' && (
+            {(row.id === 'llama' || row.id === 'mtplx' || row.id === 'slotstream') && row.state !== 'unsupported' && row.state !== 'missing' && (
               <IdleWindowField
                 id={row.id}
                 value={idleWindows[row.id] ?? 0}
@@ -394,12 +431,14 @@ export default function RuntimeServersCard({
                 onSave={(minutes) => onSaveIdleWindow?.(row.id, minutes)}
                 note={row.id === 'llama'
                   ? 'Minutes of PortOS inactivity after which llama.cpp unloads the model in place and reloads it on the next request. 0 = keep it resident. Applies from the next start.'
-                  : 'Minutes of PortOS inactivity after which MTPLX is stopped. The next PortOS request starts it again on the same checkpoint. 0 = keep it running.'}
+                  : row.id === 'slotstream'
+                    ? 'Minutes of PortOS inactivity after which Slotstream is stopped. The next PortOS request starts it again on the same checkpoint and memory cap. 0 = keep it running.'
+                    : 'Minutes of PortOS inactivity after which MTPLX is stopped. The next PortOS request starts it again on the same checkpoint. 0 = keep it running.'}
               />
             )}
-            {(row.id === 'llama' || row.id === 'mtplx') && row.state !== 'unsupported' && (
+            {(row.id === 'llama' || row.id === 'mtplx' || row.id === 'slotstream') && row.state !== 'unsupported' && (
               <button
-                onClick={row.id === 'llama' ? onConfigureLlama : onConfigureMtplx}
+                onClick={row.id === 'llama' ? onConfigureLlama : row.id === 'slotstream' ? onConfigureSlotstream : onConfigureMtplx}
                 className={neutralBtn}
                 title={`Jump to the ${row.label} launcher below`}
               >
@@ -412,7 +451,7 @@ export default function RuntimeServersCard({
       </div>
 
       <p className="text-xs text-gray-500">
-        <span className="text-gray-400">Idle release</span> puts a model down when nothing has used it for that many minutes — llama.cpp unloads it in place and reloads it on the next request; MTPLX is stopped and restarted on demand. <span className="text-gray-400">Only PortOS traffic counts.</span> A client hitting these ports directly is invisible to the timer and cannot lazily start a stopped server, so set <code className="text-gray-400">0</code> for a daemon you drive from outside PortOS.
+        <span className="text-gray-400">Idle release</span> puts a model down when nothing has used it for that many minutes — llama.cpp unloads it in place and reloads it on the next request; MTPLX and Slotstream are stopped and restarted on demand. <span className="text-gray-400">Only PortOS traffic counts.</span> A client hitting these ports directly is invisible to the timer and cannot lazily start a stopped server, so set <code className="text-gray-400">0</code> for a daemon you drive from outside PortOS.
       </p>
 
       <div className="flex flex-col sm:flex-row sm:items-center gap-2 pt-1">
@@ -421,7 +460,7 @@ export default function RuntimeServersCard({
           Save PM2 list for reboot
         </button>
         <p className="text-xs text-gray-500">
-          llama.cpp and MTPLX run as PM2 processes (<code className="text-gray-400">portos-llama-server</code>, <code className="text-gray-400">portos-mtplx</code>). Saving snapshots what is running now so it comes back after a reboot — this needs <code className="text-gray-400">pm2 startup</code> to have been run once in a terminal, which is a privileged one-time step PortOS deliberately leaves to you. <span className="text-gray-400">MTPLX is deliberately left out of that snapshot</span>: it starts on demand when a request needs it, so resurrecting it at boot would only pin its checkpoint on an idle machine. Ollama and LM Studio manage their own launch-at-login.
+          llama.cpp, MTPLX and Slotstream run as PM2 processes (<code className="text-gray-400">portos-llama-server</code>, <code className="text-gray-400">portos-mtplx</code>, <code className="text-gray-400">portos-slotstream</code>). Saving snapshots what is running now so it comes back after a reboot — this needs <code className="text-gray-400">pm2 startup</code> to have been run once in a terminal, which is a privileged one-time step PortOS deliberately leaves to you. <span className="text-gray-400">MTPLX and Slotstream are deliberately left out of that snapshot</span>: they start on demand when a request needs them, so resurrecting them at boot would only pin a checkpoint on an idle machine. Ollama and LM Studio manage their own launch-at-login.
         </p>
       </div>
     </div>

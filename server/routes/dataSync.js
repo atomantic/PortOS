@@ -3,12 +3,43 @@
  *
  * Endpoints for snapshot-based data sync between PortOS peer instances.
  * Each category returns its full data + checksum for merge-based sync.
+ *
+ * Authorization (#5663). This is the OLDER of the two pull transports; the
+ * per-record `/api/peer-sync/*` routes got receiver-side peer-pull
+ * authorization in #3659 and these did not, so the whole of every category —
+ * including the user's identity record — was served to anything that could
+ * reach the port. Both reads now run the SAME `authorizePeerPull` gate, keyed
+ * on the caller's `X-PortOS-Instance-Id` (which `syncOrchestrator.fetchPeer`
+ * sends via `peerFetch`).
+ *
+ * Two tiers, deliberately:
+ *  - Ordinary categories keep #3659's warn-first ramp — an un-upgraded peer is
+ *    still served and logs one `⚠️`, because the distribution model requires
+ *    peers that upgrade on their own schedule to keep syncing.
+ *  - `PII_CATEGORIES` are refused outright (`alwaysEnforce`) whatever
+ *    `federation.strictPullAuthorization` says. Root `AGENTS.md` forbids PII on
+ *    the federation layer at all, and the privacy ADR's stated reason for
+ *    refusing to federate these records was precisely that "the pull path
+ *    carries no peer identity": docs/decisions/2026-08-08-privacy-records-machine-local.md.
+ *
+ * Consent is per-category, not just per-peer: the gate resolves the caller's
+ * `syncCategories` map (`peerAllowsCategoryPull`) rather than only asking
+ * whether the peer may receive anything at all. A peer the user enabled for
+ * `universe` must not be able to ask for `digitalTwin` — that is the same
+ * shape of hole #3659 closed for records. Resolving through
+ * `resolveEffectiveCategories` also keeps a default-ON category (`usage`)
+ * flowing for a peer whose other sync the user switched off.
+ *
+ * Scope: what a category CONTAINS is unchanged, and a user federating their own
+ * two machines keeps working as long as the SOURCE machine has that category
+ * ticked for the peer asking — which is exactly what its sharing config means.
  */
 
 import { Router } from 'express';
 import { z } from 'zod';
 import * as dataSync from '../services/dataSync.js';
 import { sweepTombstones, getSweepStatus, TOMBSTONE_GRACE_MS } from '../services/sharing/tombstoneGc.js';
+import { authorizePeerPull } from '../services/sharing/peerPullAuthorization.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
@@ -16,7 +47,21 @@ const router = Router();
 // MUST stay in sync with dataSync.getSupportedCategories() — a category
 // registered in the service but absent here 400s before its snapshot/apply
 // handler can run (the latent bug #730 hit for `storyBuilder`).
-const categoryParam = z.enum(['goals', 'character', 'digitalTwin', 'meatspace', 'universe', 'pipeline', 'mediaCollections', 'videoHistory', 'storyBuilder']);
+const categoryParam = z.enum(['goals', 'character', 'digitalTwin', 'meatspace', 'universe', 'pipeline', 'mediaCollections', 'videoHistory', 'storyBuilder', 'usage']);
+
+// Categories whose payload is the user's own person rather than their creative
+// work — `digitalTwin` alone carries identity, chronotype, longevity markers,
+// taste profile, autobiography stories and social accounts. These skip the
+// warn-first ramp entirely (see the header note).
+const PII_CATEGORIES = new Set(['digitalTwin', 'meatspace', 'character']);
+
+// The one gate both reads share, so the checksum can never become the weaker
+// door: a checksum is a fingerprint of the same payload.
+const authorizeSyncPull = (req, category) => authorizePeerPull(req, {
+  syncCategory: category,
+  route: `sync ${category}`,
+  alwaysEnforce: PII_CATEGORIES.has(category),
+});
 
 // Tombstone GC manual trigger. Declared BEFORE `/:category/*` so the literal
 // "tombstones" segment wins Express's first-match lookup (categoryParam's
@@ -63,6 +108,7 @@ const forPeerOf = (req) => {
 // GET /api/sync/:category/checksum — return checksum only (lightweight)
 router.get('/:category/checksum', asyncHandler(async (req, res) => {
   const category = categoryParam.parse(req.params.category);
+  await authorizeSyncPull(req, category);
   const result = await dataSync.getChecksum(category, { forPeerId: forPeerOf(req) });
   if (!result) throw new ServerError('Category not found', { status: 404 });
   res.json(result);
@@ -71,6 +117,7 @@ router.get('/:category/checksum', asyncHandler(async (req, res) => {
 // GET /api/sync/:category/snapshot — return category data + checksum
 router.get('/:category/snapshot', asyncHandler(async (req, res) => {
   const category = categoryParam.parse(req.params.category);
+  await authorizeSyncPull(req, category);
   const snapshot = await dataSync.getSnapshot(category, { forPeerId: forPeerOf(req) });
   if (!snapshot) throw new ServerError('Category not found', { status: 404 });
   res.json(snapshot);

@@ -47,6 +47,7 @@ import {
   createLoop,
   stopLoop,
   triggerLoop,
+  updateLoop,
   getLoops,
   loopEvents
 } from './loops.js';
@@ -69,6 +70,13 @@ const MOCK_RUN_RESULT = {
   metadata: { id: 'run-123' },
   provider: MOCK_PROVIDER
 };
+
+// executeIteration re-reads the loop record from disk before dispatching, so the
+// promise chain a fire-and-forget iteration walks is a few microtask turns deep.
+// Flush generously rather than pinning an exact turn count.
+async function flushAsync(turns = 20) {
+  for (let i = 0; i < turns; i++) await Promise.resolve();
+}
 
 function setupProviderMocks() {
   mockGetProviderById.mockResolvedValue(MOCK_PROVIDER);
@@ -280,8 +288,7 @@ describe('loops.js', () => {
 
       await triggerLoop(loop.id);
 
-      // Allow microtasks to settle (the .catch on the runner is async)
-      for (let i = 0; i < 5; i++) await Promise.resolve();
+      await flushAsync();
 
       expect(consoleSpy).toHaveBeenCalledWith(
         expect.stringContaining('CLI execution failed')
@@ -304,8 +311,7 @@ describe('loops.js', () => {
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
       await triggerLoop(loop.id);
-      // Flush promise microtask queue
-      for (let i = 0; i < 5; i++) await Promise.resolve();
+      await flushAsync();
 
       expect(consoleSpy).toHaveBeenCalledWith(
         expect.stringContaining('createRun blew up')
@@ -331,8 +337,7 @@ describe('loops.js', () => {
       loopEvents.on('iteration:error', (data) => errors.push(data));
 
       await triggerLoop(loop.id);
-      // Flush promise microtask queue
-      for (let i = 0; i < 5; i++) await Promise.resolve();
+      await flushAsync();
 
       expect(errors.length).toBeGreaterThan(0);
       expect(errors[0].error).toBe('No AI provider available');
@@ -362,7 +367,7 @@ describe('loops.js', () => {
       atomicWrite.mockClear();
 
       await triggerLoop(loop.id);
-      for (let i = 0; i < 10; i++) await Promise.resolve();
+      await flushAsync();
 
       // The success branch must NOT log its swallowed-throw message — that only
       // fires if onComplete threw (the bare-writeFile ReferenceError regression).
@@ -419,8 +424,7 @@ describe('loops.js', () => {
       let threw = false;
       try {
         await triggerLoop(loop.id);
-        // Flush async chains so the fallback reassignment path runs
-        for (let i = 0; i < 10; i++) await Promise.resolve();
+        await flushAsync();
       } catch (err) {
         threw = true;
       }
@@ -434,4 +438,81 @@ describe('loops.js', () => {
       expect(callArg.model).toBe('pinned-fallback-model');
     });
   });
+
+  // ===========================================================================
+  // live edits reach the running interval (#5648) — the timer used to close
+  // over the record it was armed with, so an edit persisted to disk but the
+  // interval kept running the OLD prompt/provider/cwd/timeout until restart.
+  // Driven through the TIMER (not triggerLoop, which always re-read) because
+  // the timer is the only seam that exposed the stale closure.
+  // ===========================================================================
+  describe('edits reach the running interval', () => {
+    let disk;
+
+    beforeEach(() => {
+      disk = [];
+      tryReadFile.mockImplementation(async (path) =>
+        String(path).endsWith('loops.json') ? JSON.stringify(disk) : null
+      );
+      atomicWrite.mockImplementation(async (path, data) => {
+        if (String(path).endsWith('loops.json') && Array.isArray(data)) {
+          disk = JSON.parse(JSON.stringify(data));
+          for (const l of disk) {
+            if (l.id && !createdLoopIds.includes(l.id)) createdLoopIds.push(l.id);
+          }
+        }
+      });
+    });
+
+    it('runs the next scheduled iteration with the edited prompt, provider, cwd and timeout', async () => {
+      const loop = await createLoop({
+        prompt: 'old prompt',
+        interval: '30s',
+        cwd: '/old/cwd',
+        providerId: 'old-provider',
+        runImmediately: false,
+      });
+
+      await updateLoop(loop.id, {
+        prompt: 'new prompt',
+        providerId: 'new-provider',
+        cwd: '/new/cwd',
+        timeout: 12_345,
+      });
+
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(mockResolveProvider).toHaveBeenCalledWith({ providerId: 'new-provider' });
+      expect(mockCreateRun).toHaveBeenCalledTimes(1);
+      expect(mockCreateRun.mock.calls[0][0]).toMatchObject({
+        prompt: 'new prompt',
+        workspacePath: '/new/cwd',
+      });
+      expect(mockRunPrompt).toHaveBeenCalledTimes(1);
+      expect(mockRunPrompt.mock.calls[0][0]).toMatchObject({
+        prompt: 'new prompt',
+        cwd: '/new/cwd',
+        timeout: 12_345,
+      });
+    });
+
+    it('re-arms on an interval change without leaking the old timer', async () => {
+      const loop = await createLoop({
+        prompt: 'interval test',
+        interval: '30s',
+        runImmediately: false,
+      });
+
+      await updateLoop(loop.id, { interval: '60s' });
+
+      // The old 30s handle must have been cleared — nothing fires at 30s.
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(mockRunPrompt).not.toHaveBeenCalled();
+
+      // The new 60s handle fires on its own schedule.
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(mockRunPrompt).toHaveBeenCalledTimes(1);
+    });
+  });
+
 });

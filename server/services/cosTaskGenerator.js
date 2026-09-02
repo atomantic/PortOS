@@ -22,8 +22,9 @@
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, resolveClaimReviewerConfig, reviewerConfigMetadata, SWARM_COUNT_MIN, ISSUE_AUTHOR_FILTERS } from '../lib/validation.js';
+import { sanitizeTaskMetadata, PIPELINE_STAGE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, resolveClaimReviewerConfig, reviewerConfigMetadata, SWARM_COUNT_MIN, ISSUE_AUTHOR_FILTERS } from '../lib/validation.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { MODEL_ABUSE_GUARD_ID } from '../lib/modelAbuseGuard.js';
 import { isPlainObject } from '../lib/objects.js';
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, diagnoseUnpickablePlan } from '../lib/planIds.js';
 import { loadState, saveState, withStateLock, isImprovementEnabled, isDaemonRunning } from './cosState.js';
@@ -50,6 +51,7 @@ import { NON_ACTIONABLE_ISSUE_LABELS } from './perpetualWork.js';
 import {
   isAuditTaskType,
   isFileIssuesMode,
+  auditDoWorkRequiresWorktree,
   modeContractFor,
   applyAuditModeWrapper,
 } from '../lib/auditCatalog.js';
@@ -69,6 +71,7 @@ import {
   normalizeWorkItemRef,
 } from './cosTaskPrompts.js';
 import { appendTaskDataInputs, resolveTaskDataInputs } from './taskDataInputs.js';
+import { ensurePrReviewerPipeline } from './prReviewerPipeline.js';
 
 export {
   buildClaimOverrideContextBlock,
@@ -952,7 +955,8 @@ async function spawnPriority0OnDemand(ctx) {
         await taskSchedule.recordExecution(`task:${request.taskType}`, targetApp.id);
         task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state, {
           skipPreconditions: true,
-          deferPerpetualDispatch: true
+          deferPerpetualDispatch: true,
+          targetPullRequest: request.targetPullRequest ?? null
         });
         if (task) {
           await bindAppReviewAgent(targetApp.id, `on-demand-${Date.now()}`);
@@ -1570,6 +1574,69 @@ export function buildImprovementDedupSets(existingTasks, { ignoreTaskId = null }
   return { existingTaskTypes, appsWithPendingImprovement, blockedTaskTypes, appsWithBlockedImprovement };
 }
 
+function prepareQueuedImprovementTask(task) {
+  // Queued tasks round-trip through COS-TASKS.md, whose task description field
+  // is single-line. Preserve the full prompt in metadata so the agent receives
+  // it after the task is re-read from disk.
+  if (typeof task.description === 'string' && task.description.includes('\n')) {
+    task.metadata = task.metadata || {};
+    task.metadata.prompt = task.description;
+    task.description = firstLine(task.description);
+  }
+  return task;
+}
+
+export async function queueDueInstallWideImprovementTasks({
+  dueTasks,
+  state,
+  taskSchedule,
+  existingTaskTypes,
+  blockedTaskTypes,
+  ignoreTaskId = null,
+  wakeAfterRecord = true,
+  generateTask = generateSelfImprovementTaskForType,
+  persistTask = addTask,
+  wake = () => cosEvents.emit('cos:dequeue-requested')
+}) {
+  let queued = 0;
+  const dueInstallWideTasks = dueTasks
+    .filter(({ taskType }) => taskSchedule.INSTALL_WIDE_TASK_TYPES.has(taskType));
+
+  for (const { taskType } of dueInstallWideTasks) {
+    const taskKey = taskType;
+    if (existingTaskTypes.has(taskKey)) {
+      if (blockedTaskTypes.has(taskKey)) {
+        emitLog('info', `⛔ Skipping install-wide ${taskType}: blocked task ${blockedTaskTypes.get(taskKey)} already exists — resolve or delete it to resume`, { analysisType: taskType });
+      } else {
+        emitLog('debug', `Install-wide improvement task ${taskType} already queued`);
+      }
+      continue;
+    }
+
+    const task = await generateTask(taskType, state);
+    // Hooks such as user-action-review's empty-ledger check deliberately
+    // advance their cadence while returning no task, so do not record a second
+    // execution here when the generator declines to dispatch.
+    if (!task) continue;
+
+    task.priority = 'LOW';
+    task.priorityValue = PRIORITY_VALUES.LOW;
+    task.id = `sys-install-${taskType}-${Date.now().toString(36)}`;
+    prepareQueuedImprovementTask(task);
+
+    const newTask = await persistTask(task, 'internal', { raw: true, ignoreTaskId, suppressDequeue: true });
+    if (newTask?.duplicate) continue;
+    if (wakeAfterRecord) wake();
+
+    await taskSchedule.recordExecution(`task:${taskType}`);
+    emitLog('info', `Queued install-wide improvement task: ${taskType}`, { taskId: newTask.id, analysisType: taskType });
+    existingTaskTypes.add(taskKey);
+    queued++;
+  }
+
+  return queued;
+}
+
 /**
  * Queue eligible self-improvement and app improvement tasks as system tasks
  * Called during every evaluation to ensure system tasks are queued even when user tasks exist
@@ -1577,7 +1644,7 @@ export function buildImprovementDedupSets(existingTasks, { ignoreTaskId = null }
  */
 export async function queueEligibleImprovementTasks(state, cosTaskData, { ignoreTaskId = null, wakeAfterRecord = true } = {}) {
   const taskSchedule = await import('./taskSchedule.js');
-  const { getNextTaskType, recordExecution } = taskSchedule;
+  const { getDueTasks, getNextTaskType, recordExecution } = taskSchedule;
 
   if (!isImprovementEnabled(state)) return;
 
@@ -1590,6 +1657,21 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, { ignore
     buildImprovementDedupSets(existingTasks, { ignoreTaskId });
 
   let queued = 0;
+
+  // Install-wide task types have no managed-app target: their cadence is
+  // tracked by the global execution record, and one task is the complete run
+  // for this PortOS install. Run this before the per-app pass: an install-wide
+  // hook may deliberately reject app targets while recording that app-scoped
+  // check, which must not consume the global due window first.
+  //
+  // Do not select a single generic next task here — every install-wide type
+  // that is independently due must get its own lane. The dedup key is the bare
+  // analysis type, matching buildImprovementDedupSets for globally-scoped tasks
+  // and ensuring one pending/blocked task suppresses only its own duplicate.
+  queued += await queueDueInstallWideImprovementTasks({
+    dueTasks: await getDueTasks(), state, taskSchedule, existingTaskTypes,
+    blockedTaskTypes, ignoreTaskId, wakeAfterRecord
+  });
 
   // Load the activity snapshot ONCE before the per-app loop. Both the
   // cooldown gate and the rotation `lastType` lookup are derived from
@@ -1708,6 +1790,9 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, { ignore
     // multi-thousand-character agent prompt indistinguishable from one. Readers
     // go through `getTaskPrompt` (server/lib/cosTaskPrompt.js), which falls back
     // to `metadata.context` for tasks written before the split.
+    // Keep the queue-path normalization visible here as well as in the
+    // install-wide helper: COS-TASKS.md is a single-line format, and the
+    // queue contract is source-checked by the scheduler tests.
     if (typeof task.description === 'string' && task.description.includes('\n')) {
       task.metadata = task.metadata || {};
       task.metadata.prompt = task.description;
@@ -1836,6 +1921,13 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
   const taskSchedule = await import('./taskSchedule.js');
   const { getTaskPrompt } = await import('./taskPromptService.js');
   const interval = await taskSchedule.getTaskInterval(taskType);
+  // App-scoped task types must never fall through this global lane. The
+  // on-demand request gate normally rejects a missing appId, but scheduled
+  // rotation and older callers can still reach the generator directly.
+  if (taskSchedule.requiresManagedAppTarget(taskType)) {
+    emitLog('warn', `Skipping ${taskType} without a managed app target`);
+    return null;
+  }
   let description = await getTaskPrompt(taskType);
 
   const metadata = {
@@ -1873,6 +1965,35 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
   // exists for — so the pre-step runs here, not only in the per-app lane. It
   // returns `skip` when the sweep left nothing for an agent to do, which is the
   // common case on an already-clean machine and costs no provider call.
+  // Programmatic pre-agent input hook (taskTypeHooks.js) — the install-wide
+  // lane mirrors the per-app one so a hook-gated type (user-action-review's
+  // empty-ledger check) can skip here too, without burning an agent. Gated to
+  // INSTALL-WIDE types: the per-app hooks (issue-watcher, layered-intelligence)
+  // guard on `!app`, and the synthetic `{ id: null }` row below is truthy — an
+  // ungated call would march issue-watcher into resolving the PortOS repo as
+  // its app via getOriginInfo's cwd default. The synthetic row only labels the
+  // skip log / execution record; provider pins from a hook are a per-app
+  // concept and are not applied in this lane.
+  if (taskSchedule.INSTALL_WIDE_TASK_TYPES.has(taskType)) {
+    const inputHook = await resolveTaskInputHook({ id: null, name: 'PortOS' }, taskType, taskSchedule);
+    if (inputHook.skip) return null;
+    if (inputHook.hookPrompt) description = inputHook.hookPrompt;
+  }
+
+  // user-action-review delivers filed issues / queued tasks, never a commit.
+  // Stamp the action-output posture the way the audit file-issues path does —
+  // `noCodeOutput` is dispatch-stamped, not user-settable, so it cannot arrive
+  // from DEFAULT_TASK_INTERVALS through sanitizeTaskMetadata. Without it the
+  // completion contract tells a live-checkout agent to commit and `/do:push`.
+  if (taskType === 'user-action-review') {
+    metadata.noCodeOutput = true;
+    metadata.worktreeChangesExpected = false;
+  }
+
+  // user-action-review: render the delivery posture the operator chose
+  // (fileIssues on = tracker issues, off = queued CoS tasks).
+  description = applyUserActionDeliveryMode(description, taskType, metadata);
+
   const repoSync = await resolveRepoSyncBlock(null, taskType, metadata);
   if (repoSync.skip) return null;
   if (repoSync.block) {
@@ -1982,7 +2103,7 @@ function initializePipelineMetadata(metadata) {
   // Read-only stages default flags to false to prevent worktree/PR/simplify on review-only stages
   metadata.pipeline.taskDefaults = {};
   const stageReadOnly = stage0.readOnly ?? false;
-  for (const flag of PIPELINE_BEHAVIOR_FLAGS) {
+  for (const flag of PIPELINE_STAGE_BEHAVIOR_FLAGS) {
     if (metadata[flag] !== undefined) metadata.pipeline.taskDefaults[flag] = metadata[flag];
     if (flag in stage0) {
       metadata[flag] = stage0[flag];
@@ -1990,6 +2111,278 @@ function initializePipelineMetadata(metadata) {
       metadata[flag] = false;
     }
   }
+}
+
+const SECURITY_SCAN_ACTIVE_TASK_STATUSES = new Set(['pending', 'in_progress', 'blocked'])
+const SECURITY_SCAN_PIPELINE_OUTPUT_MAX_CHARS = 11_000
+
+function securityScanReports(scan) {
+  if (Array.isArray(scan?.reports)) return scan.reports
+  if (Array.isArray(scan?.reviewedPrs)) return scan.reviewedPrs
+  return []
+}
+
+const reportIsSafe = (report) => report?.safe === true
+
+const reportFindingCount = (report) => (
+  Array.isArray(report?.securityFindings) && report.securityFindings.length > 0
+    ? report.securityFindings.length
+    : reportIsSafe(report) ? 0 : 1
+)
+
+/**
+ * Serialize only the trust decision needed by the app-code reviewer. The
+ * human-facing report and the raw model response deliberately never cross
+ * this boundary: even a report that calls itself an explanation is still
+ * untrusted model output and could contain a second prompt injection.
+ */
+export function buildSecurityScanPipelineOutput(scan, reports, status) {
+  const base = {
+    securityScan: status,
+    scanCode: scan.code || null,
+    reviewedCount: reports.length,
+    reviewedPrs: [],
+  }
+  const included = []
+  for (const report of reports) {
+    const candidate = {
+      number: report.number,
+      safe: reportIsSafe(report),
+      headRefOid: reportIsSafe(report) && typeof report.headRefOid === 'string' ? report.headRefOid : null,
+      findingCount: reportFindingCount(report),
+    }
+    const next = JSON.stringify({ ...base, reviewedPrs: [...included, candidate] })
+    if (next.length <= SECURITY_SCAN_PIPELINE_OUTPUT_MAX_CHARS) {
+      included.push(candidate)
+      continue
+    }
+    return JSON.stringify({ ...base, complete: false, reviewedPrs: included })
+  }
+  return JSON.stringify({ ...base, complete: true, reviewedPrs: included })
+}
+
+/**
+ * Name the single PR a targeted pr-reviewer run covers. The number goes in the
+ * FIRST line specifically: `addTask`'s duplicate guard keys on (first line +
+ * app), so without it, targeting a second PR while the first run is still in
+ * flight would be rejected as a duplicate of it. The trailing sentence repeats
+ * the scope for the agent; the header keeps its `[Improvement: <app>] …` shape
+ * so the CoS queue still reads the same way.
+ */
+function scopeDescriptionToPullRequest(description, metadata) {
+  const number = metadata?.targetPullRequest;
+  if (!number) return description;
+  const [firstLine, ...rest] = description.split('\n');
+  return [
+    `${firstLine} — pull request #${number} only`,
+    ...rest,
+    '',
+    `This run is scoped to pull request #${number}: it is the only request the server cleared, and the only one this run may act on.`,
+  ].join('\n');
+}
+
+function formatSecurityScanContext(scan, reports, status) {
+  const findingCount = reports.filter((report) => !reportIsSafe(report)).length
+  return [
+    `Security scan status: ${status}.`,
+    `Reviewed ${reports.length} external pull request${reports.length === 1 ? '' : 's'}${findingCount ? `; ${findingCount} contained model-abuse flags or an unvalidated response` : ''}.`,
+    'No GitHub pull request or issue actions have been taken.',
+    status === 'findings'
+      ? 'This scan is only a model-abuse boundary. Flagged PR content and its source text are withheld from the Eligibility Gate; the gate may process only PRs explicitly marked safe and must not fetch or inspect flagged PRs.'
+      : status === 'unavailable'
+        ? `The scan stopped with ${scan.code || 'an unknown error'} after retaining the reports collected so far. No PR has a safe status; leave every PR untouched until the scan can be completed.`
+        : 'All reviewed PRs have an explicit model-abuse safety status. The Eligibility Gate may process only the PRs marked safe, after approval.',
+  ].join('\n')
+}
+
+async function findActiveSecurityScanTask(appId, scanKey) {
+  if (!scanKey) return { unavailable: false, task: null }
+  const cosTasks = await getCosTasks().catch(() => null)
+  if (!cosTasks) return { unavailable: true, task: null }
+  const task = cosTasks.tasks?.find((candidate) => (
+    SECURITY_SCAN_ACTIVE_TASK_STATUSES.has(candidate.status)
+    && candidate.metadata?.analysisType === 'pr-reviewer'
+    && candidate.metadata?.app === appId
+    && candidate.metadata?.pipeline?.securityScan?.scanKey === scanKey
+  )) || null
+  return { unavailable: false, task }
+}
+
+/**
+ * Run pr-reviewer's Security Scan through the direct local, no-tools path and
+ * hand only safe PR metadata to the Eligibility Gate. A normal stage-0 agent
+ * is intentionally never spawned: `readOnly` is prompt guidance, not an OS
+ * sandbox, and the generic agent resolver rejects API providers anyway.
+ *
+ * External contributor PRs are held for human approval before the stage that
+ * can review, comment, or merge. The preflight itself remains read-only and
+ * does not checkout or execute any contributor branch.
+ *
+ * `targetPullRequest` narrows the run to ONE open PR — the per-row "Review this
+ * PR" trigger on an app's PRs / MRs tab. The narrowing happens BEFORE the
+ * fingerprint and the security scan, so every downstream contract (scan key,
+ * public-review snapshot, `issueWatcher.pullRequests` coverage, and the output
+ * hook's strict envelope check) is scoped to that one PR by construction rather
+ * than by a prompt asking the agent to ignore the rest.
+ */
+async function runPrReviewerSecurityPreflight(taskType, app, metadata, targetPullRequest = null) {
+  if (taskType !== 'pr-reviewer') return { skipped: false };
+
+  const stages = metadata.pipeline?.stages;
+  const securityStage = stages?.[0];
+  const nextStage = stages?.[1];
+  if (!securityStage || !nextStage) {
+    emitLog('warn', `Skipping pr-reviewer for ${app.name}: security pipeline requires an eligibility gate`, { appId: app.id, analysisType: taskType });
+    return { skipped: true };
+  }
+
+  const { listExternalOpenPullRequests, runPrReviewerSecurityScan, securityScanFingerprint } = await import('./prReviewerSecurity.js');
+  const { writePublicReviewInputSnapshot } = await import('./modelAbuseGuard.js');
+  let target = await listExternalOpenPullRequests(app);
+  if (!target.ok) {
+    emitLog('warn', `Skipping pr-reviewer for ${app.name}: ${target.code || 'security-scan-target-unavailable'}`, { appId: app.id, analysisType: taskType });
+    return { skipped: true };
+  }
+  if (target.prs.length === 0) {
+    emitLog('info', `Skipping pr-reviewer for ${app.name}: no-external-open-prs`, { appId: app.id, analysisType: taskType });
+    return { skipped: true, reason: 'no-external-open-prs' };
+  }
+  if (targetPullRequest) {
+    const scoped = target.prs.filter((pr) => pr.number === targetPullRequest);
+    if (scoped.length === 0) {
+      emitLog('warn', `Skipping pr-reviewer for ${app.name}: target-pull-request-not-reviewable (#${targetPullRequest})`, { appId: app.id, analysisType: taskType });
+      return { skipped: true, reason: 'target-pull-request-not-reviewable' };
+    }
+    target = { ...target, prs: scoped };
+    metadata.targetPullRequest = targetPullRequest;
+  }
+  const scanKey = securityScanFingerprint(target);
+  const active = await findActiveSecurityScanTask(app.id, scanKey);
+  if (active.unavailable) {
+    emitLog('warn', `Skipping pr-reviewer for ${app.name}: security-scan-task-state-unavailable`, { appId: app.id, analysisType: taskType });
+    return { skipped: true };
+  }
+  if (active.task) {
+    emitLog('info', `Skipping pr-reviewer for ${app.name}: security-scan-report-pending`, { appId: app.id, analysisType: taskType, taskId: active.task.id });
+    return { skipped: true, reason: 'security-scan-report-pending', task: active.task };
+  }
+
+  const scan = await runPrReviewerSecurityScan({
+    app,
+    target,
+  });
+  const reports = securityScanReports(scan);
+  if (!scan.ok && !reports.length) {
+    emitLog('warn', `Skipping pr-reviewer for ${app.name}: ${scan.code || 'security-scan-not-passed'}`, { appId: app.id, analysisType: taskType });
+    return { skipped: true };
+  }
+
+  const status = !scan.ok ? 'unavailable' : (scan.passed ? 'passed' : 'findings');
+  const requiresApproval = reports.length > 0;
+  const snapshotWritten = await writePublicReviewInputSnapshot({
+    scanKey: scan.scanKey || scanKey,
+    pullRequests: scan.ok ? (scan.reviewInputs || []) : [],
+  });
+  if (!snapshotWritten) {
+    emitLog('warn', `Skipping pr-reviewer for ${app.name}: public-review-input-snapshot-failed`, { appId: app.id, analysisType: taskType });
+    return { skipped: true };
+  }
+  const reviewOutput = buildSecurityScanPipelineOutput(scan, reports, status);
+  // A partial/unavailable scan is never a usable allowlist. Keeping already
+  // safe-looking reports here would let a later stage review a subset while
+  // the remaining PRs had no completed safety verdict.
+  const safeReports = scan.ok ? reports.filter(reportIsSafe) : [];
+  metadata.pipeline = {
+    ...metadata.pipeline,
+    currentStage: 1,
+    stageResults: [{
+      stage: 0,
+      name: securityStage.name,
+      agentId: null,
+      success: scan.ok,
+      completedAt: new Date().toISOString(),
+      summary: {
+        guardId: scan.guardId || MODEL_ABUSE_GUARD_ID,
+        guardModel: scan.guardModel || null,
+        guardRevision: scan.guardRevision || null,
+        code: scan.code || null,
+        reviewedPrCount: reports.length,
+        findingCount: reports.filter((report) => !reportIsSafe(report)).length,
+        reportStatus: status,
+      },
+    }],
+    previousStageAgentId: null,
+    previousStageOutput: reviewOutput,
+    securityScan: {
+      completed: scan.ok,
+      status,
+      code: scan.code || null,
+      guardId: scan.guardId || MODEL_ABUSE_GUARD_ID,
+      guardModel: scan.guardModel || null,
+      guardRevision: scan.guardRevision || null,
+      layers: scan.layers || null,
+      repoFullName: scan.repoFullName || target.repoFullName,
+      defaultBranch: scan.defaultBranch || target.defaultBranch,
+      scanKey: scan.scanKey || scanKey,
+      reviewedPrCount: reports.length,
+      findingCount: reports.filter((report) => !reportIsSafe(report)).length,
+      reports,
+      noActionsTaken: true,
+      requiresApproval,
+      safePrCount: safeReports.length,
+    },
+  };
+  const safeInputByNumber = new Map((scan.reviewInputs || []).map((input) => [input.number, input]));
+  metadata.issueWatcher = {
+    repoFullName: scan.repoFullName || target.repoFullName,
+    defaultBranch: scan.defaultBranch || target.defaultBranch,
+    issueComments: [],
+    pullRequests: safeReports.map((report) => ({
+      number: report.number,
+      headSha: report.headRefOid,
+      authorLogin: safeInputByNumber.get(report.number)?.authorLogin || null,
+      eligibilityFacts: safeInputByNumber.get(report.number)?.eligibilityFacts || null,
+      diffTruncated: false,
+      contentFingerprint: report.contentFingerprint,
+    })),
+    strictPullRequestCoverage: true,
+  };
+  metadata.executionProfile = nextStage.executionProfile || null;
+  metadata.pipeline.reviewInputKey = scan.scanKey || scanKey;
+  metadata.context = formatSecurityScanContext(scan, reports, status);
+
+  // Apply the next stage's provider/model/effort and behavior flags exactly as
+  // the ordinary agent-completion hand-off does. Keeping this in the generator
+  // makes the synthetic stage-0 result indistinguishable from a real one to
+  // the rest of task creation.
+  metadata.readOnly = nextStage.readOnly ?? false;
+  if (nextStage.model) metadata.model = nextStage.model;
+  if (nextStage.providerId) {
+    metadata.provider = nextStage.providerId;
+    metadata.providerId = nextStage.providerId;
+  }
+  if (nextStage.effort) metadata.effort = nextStage.effort;
+  const nextStageReadOnly = nextStage.readOnly ?? false;
+  const taskDefaults = metadata.pipeline.taskDefaults || {};
+  for (const flag of PIPELINE_STAGE_BEHAVIOR_FLAGS) {
+    if (flag in nextStage) {
+      metadata[flag] = nextStage[flag];
+    } else if (nextStageReadOnly) {
+      metadata[flag] = false;
+    } else if (flag in taskDefaults) {
+      metadata[flag] = taskDefaults[flag];
+    }
+  }
+
+  // applyOnDemandConsent deliberately honors this marker, so a user-triggered
+  // run cannot silently bypass the human gate for external contributor PRs.
+  if (requiresApproval) metadata.requireApproval = true;
+  emitLog(
+    status === 'passed' ? 'info' : 'warn',
+    `pr-reviewer security scan ${status} for ${app.name}: ${reports.length} external PR(s)`,
+    { appId: app.id, analysisType: taskType },
+  );
+  return { skipped: false, scan };
 }
 
 // Apply app-level worktree/PR defaults only when not already set by task-type metadata.
@@ -2052,9 +2445,16 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
 
   let nextType;
   let selectionReason;
+  // A stolen on-demand request may be SCOPED to one PR (the PRs/MRs tab's
+  // per-row pr-reviewer trigger). Carrying it is not optional: the generator
+  // reads no target as "sweep every external PR", so dropping it here would
+  // silently promote the user's one-row click into a full-repo review — the
+  // same widening the perpetual-refill skip guards against on the other side.
+  let targetPullRequest = null;
 
   if (appRequests.length > 0) {
     const request = appRequests[0];
+    targetPullRequest = request.targetPullRequest ?? null;
     await taskSchedule.clearOnDemandRequest(request.id);
     // Only a human "Run" may clear the drain's brakes (park state, dispatch
     // count); the policy lives in applyOnDemandRunResets so this idle-review
@@ -2102,7 +2502,8 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
   // spawn; the per-type generator does not record execution itself.
   const task = await generateManagedAppImprovementTaskForType(nextType, app, state, {
     ignoreTaskId,
-    deferPerpetualDispatch: true
+    deferPerpetualDispatch: true,
+    targetPullRequest
   });
   // Idle-review can steal a queued on-demand request for this app. That
   // request is still a user Run — apply the same consent as Priority 0.
@@ -2874,6 +3275,35 @@ async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedule) {
 }
 
 /**
+ * user-action-review's `{userActionDelivery}` block: the operator's
+ * `fileIssues` choice decides HOW proposals leave the run — filed tracker
+ * issues (default) or queued CoS tasks. Resolved at dispatch, like the audit
+ * mode contract, so a customized stored prompt still honors the toggle. The
+ * type is not in the audit catalog (its "do work" alternative is queueing
+ * tasks, not editing code), so the audit mode wrapper does not apply to it.
+ */
+export function resolveUserActionDeliveryBlock(taskType, metadata) {
+  if (taskType !== 'user-action-review') return '';
+  return metadata?.fileIssues === false || metadata?.fileIssues === 'false'
+    ? 'Deliver each accepted proposal as a QUEUED CoS TASK (`POST /api/cos/tasks`, one bounded task per proposal, priority LOW unless the evidence is severe) — the operator turned off file-issues mode for this schedule. Do not file tracker issues.'
+    : 'Deliver each accepted proposal as a FILED TRACKER ISSUE in the PortOS repository (`gh issue create` with the `plan` label; create the label first if missing). This is file-issues mode, the default. Do not queue CoS tasks.';
+}
+
+/**
+ * Render the delivery posture into a user-action-review prompt. Mirrors
+ * `applyAuditModeWrapper`: a customized stored prompt that dropped the
+ * `{userActionDelivery}` token still gets the operator's choice PREPENDED —
+ * otherwise flipping fileIssues would be a silent no-op on that install.
+ */
+export function applyUserActionDeliveryMode(promptTemplate, taskType, metadata) {
+  const prompt = typeof promptTemplate === 'string' ? promptTemplate : '';
+  const block = resolveUserActionDeliveryBlock(taskType, metadata);
+  if (!block) return prompt;
+  if (prompt.includes('{userActionDelivery}')) return prompt.replace(/\{userActionDelivery\}/g, () => block);
+  return `## Delivery mode\n\n${block}\n\n---\n\n${prompt}`;
+}
+
+/**
  * Prompt resolution: resolve the `{reviewers}` / `{issueAuthorFilter}` /
  * `{swarm}` directives from task metadata + the user's Code Review Defaults,
  * then render every token in the prompt template. `blocks` carries the
@@ -3040,7 +3470,8 @@ function applyProviderModelPins(metadata, interval, appPin, hookOverride) {
 export async function generateManagedAppImprovementTaskForType(taskType, app, state, {
   skipPreconditions = false,
   ignoreTaskId = null,
-  deferPerpetualDispatch = false
+  deferPerpetualDispatch = false,
+  targetPullRequest = null
 } = {}) {
   const { updateAppActivity } = await import('./appActivity.js');
   const taskSchedule = await import('./taskSchedule.js');
@@ -3071,7 +3502,10 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   const appOverride = appOverrides[taskType] || null;
   const metadata = buildImprovementTaskMetadata(taskType, app, interval, taskSchedule, appOverride);
 
+  if (taskType === 'pr-reviewer') ensurePrReviewerPipeline(metadata);
   initializePipelineMetadata(metadata);
+  const securityPreflight = await runPrReviewerSecurityPreflight(taskType, app, metadata, targetPullRequest);
+  if (securityPreflight.skipped) return null;
   if (!skipPreconditions && shouldSkipForPrecondition(metadata, app, taskType)) return null;
 
   // Programmatic-I/O input hook. A task type may register a buildTaskInput hook
@@ -3137,10 +3571,11 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   // A buildTaskInput hook that returned a fully-rendered prompt wins over the
   // template path — the hook owns its prompt (LI has no DEFAULT_TASK_PROMPTS
   // entry). The token-replacement chain below is a no-op on it (no {tokens}).
+  const currentStageIndex = metadata.pipeline?.currentStage ?? 0;
   const promptTemplate = hookPrompt
     ? hookPrompt
     : (metadata.pipeline?.stages
-      ? await getStagePrompt(taskType, 0)
+      ? await getStagePrompt(taskType, currentStageIndex)
       : await getTaskPrompt(promptKeyForBody));
 
   // reference-watch: dynamically inject {referenceData} — a Markdown chunk
@@ -3203,7 +3638,10 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     }
   });
   const taskDataInputs = await resolveTaskDataInputs(interval.dataInputs, { app });
-  const description = appendTaskDataInputs(baseDescription, taskDataInputs);
+  const description = scopeDescriptionToPullRequest(
+    appendTaskDataInputs(baseDescription, taskDataInputs),
+    metadata
+  );
 
   applyAppWorktreeDefault(metadata, app);
   // File-issues posture wins over app worktree/PR defaults — the deliverable
@@ -3214,6 +3652,12 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     metadata.useWorktree = false;
     metadata.openPR = false;
     metadata.simplify = false;
+  } else if (auditDoWorkRequiresWorktree(taskType)) {
+    // Some structural audits are safe to remediate only in isolation. Enforce
+    // this after schedule/app defaults so a stale file-issues toggle transition
+    // cannot dispatch edits into the app's live checkout. PR creation remains
+    // independently configurable through metadata.openPR.
+    metadata.useWorktree = true;
   }
   // The app's per-app provider/model pin (#4783). Resolved through the shared
   // harness guard, so an api-typed pin falls back to the Schedule pin instead of

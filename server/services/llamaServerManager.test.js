@@ -25,7 +25,7 @@ import { PORTS } from '../lib/ports.js';
 import { EventEmitter } from 'events';
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { delimiter, join } from 'path';
 
 function fakeSpawnProcess() {
   const child = new EventEmitter();
@@ -50,8 +50,11 @@ const FAST_TIMING = {
   pm2ReadRetryDelay: 0,
 };
 
+// Pinned to darwin so the Homebrew paths are exercised identically on every
+// developer's OS — otherwise the same assertions would run against winget on a
+// Windows checkout. The winget half pins `platform: 'win32'` the same way.
 const resetForTest = (overrides = {}) => {
-  _resetLlamaServerStateForTests({ ...FAST_TIMING, ...overrides });
+  _resetLlamaServerStateForTests({ ...FAST_TIMING, platform: 'darwin', ...overrides });
 };
 
 const brewInfoJson = ({ installedVersion = 'build-100', latestVersion = '0.3.0', outdated = true, pinned = false, linkedKeg = 'build-100' } = {}) => JSON.stringify({
@@ -769,6 +772,164 @@ describe('llamaServerManager', () => {
         error: expect.stringMatching(/could not be restarted/i),
       });
       expect(execPm2Calls.filter((args) => args[0] === 'delete').length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  // ---- Windows (winget) ---------------------------------------------------
+  // llama.cpp ships an official winget package, so Windows gets the same
+  // install/update buttons as macOS rather than a Homebrew command it cannot
+  // run. Everything here pins `platform: 'win32'` so the branch is covered from
+  // any developer's OS.
+  describe('winget', () => {
+    const WINGET_BINARY = 'C:\\Users\\example\\AppData\\Local\\Microsoft\\WinGet\\Links\\llama-server.exe';
+    const wingetTable = (available) => [
+      'Name      Id            Version Available Source',
+      '-------------------------------------------------',
+      `llama.cpp ggml.llamacpp b10500  ${available ? 'b10730    ' : ''}winget`,
+    ].join('\n');
+    // `--upgrade-available` lists the package ONLY when a newer build exists;
+    // the plain listing always does. That difference is the staleness signal.
+    const stubWinget = ({ installed = true, outdated = true } = {}) =>
+      vi.spyOn(bufferedSpawnModule, 'bufferedSpawn').mockImplementation(async (command, args) => {
+        if (command !== 'winget') return { success: true, code: 0, stdout: 'version: b10500', stderr: '', timedOut: false };
+        const checkingUpgrade = args.includes('--upgrade-available');
+        const listed = installed && (!checkingUpgrade || outdated);
+        return {
+          success: true,
+          code: 0,
+          stdout: listed ? wingetTable(checkingUpgrade) : 'No installed package found matching input criteria.',
+          stderr: '',
+          timedOut: false,
+        };
+      });
+
+    // Set by the PATH-adoption test below, which needs a real directory on disk
+    // for its existsSync probe; torn down here so a failed assertion can't leak it.
+    let wingetTmpDir = null;
+
+    beforeEach(() => {
+      resetForTest({ platform: 'win32' });
+      vi.stubEnv('LOCALAPPDATA', 'C:\\Users\\example\\AppData\\Local');
+    });
+
+    afterEach(async () => {
+      vi.unstubAllEnvs();
+      if (wingetTmpDir) await rm(wingetTmpDir, { recursive: true, force: true });
+      wingetTmpDir = null;
+    });
+
+    it('names the winget command on a host with no llama-server', async () => {
+      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(null);
+
+      await expect(getLlamaServerStatus()).resolves.toMatchObject({
+        installed: false,
+        packageManager: 'winget',
+        packageManagerLabel: 'winget',
+        installCommand: 'winget install ggml.llamacpp',
+      });
+    });
+
+    it('reports an available winget build as an update PortOS can apply', async () => {
+      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(WINGET_BINARY);
+      const buffered = stubWinget();
+
+      await expect(getLlamaServerUpdateStatus()).resolves.toMatchObject({
+        version: 'b10500',
+        latestVersion: 'b10730',
+        updateAvailable: true,
+        canUpgrade: true,
+      });
+      expect(buffered).toHaveBeenCalledWith(
+        'winget',
+        ['list', '--id', 'ggml.llamacpp', '--exact', '--disable-interactivity', '--upgrade-available'],
+        { timeoutMs: 60_000, shell: false },
+      );
+    });
+
+    it('keeps a hand-installed Windows build updateable by manual means only', async () => {
+      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue('C:\\tools\\llama.cpp\\llama-server.exe');
+      stubWinget();
+
+      await expect(getLlamaServerUpdateStatus()).resolves.toMatchObject({
+        latestVersion: 'b10730',
+        updateAvailable: true,
+        canUpgrade: false,
+      });
+    });
+
+    it('installs through winget without any Homebrew step', async () => {
+      vi.spyOn(commandExistsModule, 'commandExists').mockImplementation(async (cmd) => cmd === 'winget');
+      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(WINGET_BINARY);
+      const spawnCalls = [];
+      vi.spyOn(childProcess, 'spawn').mockImplementation((cmd, args) => {
+        spawnCalls.push({ cmd, args });
+        const child = fakeSpawnProcess();
+        setTimeout(() => endProcess(child, 0), 10);
+        return child;
+      });
+
+      await expect(installLlamaServer()).resolves.toMatchObject({ success: true });
+      expect(spawnCalls).toEqual([{
+        cmd: 'winget',
+        args: ['install', '--id', 'ggml.llamacpp', '--exact', '--disable-interactivity', '--accept-source-agreements', '--accept-package-agreements'],
+      }]);
+    });
+
+    it("adopts winget's Links directory when the new shim is not on PATH yet", async () => {
+      // winget adds that directory to the USER environment, a change an already
+      // running PortOS never inherits — so a perfectly successful install would
+      // otherwise report "llama-server was not found on PATH" until a restart.
+      const localAppData = await mkdtemp(join(tmpdir(), 'portos-winget-'));
+      wingetTmpDir = localAppData;
+      const links = join(localAppData, 'Microsoft', 'WinGet', 'Links');
+      await mkdir(links, { recursive: true });
+      vi.stubEnv('LOCALAPPDATA', localAppData);
+      vi.stubEnv('PATH', process.env.PATH || '');
+      vi.spyOn(commandExistsModule, 'commandExists').mockImplementation(async (cmd) => cmd === 'winget');
+      vi.spyOn(processEnv, 'findCommandOnPath').mockImplementation(() => (
+        (process.env.PATH || '').split(delimiter).includes(links) ? join(links, 'llama-server.exe') : null
+      ));
+      vi.spyOn(childProcess, 'spawn').mockImplementation(() => {
+        const child = fakeSpawnProcess();
+        setTimeout(() => endProcess(child, 0), 10);
+        return child;
+      });
+
+      await expect(installLlamaServer()).resolves.toMatchObject({ success: true });
+      expect((process.env.PATH || '').split(delimiter)).toContain(links);
+    });
+
+    it('rejects install with a winget hint rather than a Homebrew one', async () => {
+      vi.spyOn(commandExistsModule, 'commandExists').mockResolvedValue(false);
+
+      await expect(installLlamaServer()).rejects.toThrow(/winget was not found/i);
+    });
+
+    it('updates a winget installation in place', async () => {
+      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(WINGET_BINARY);
+      stubWinget();
+      const stream = vi.spyOn(streamingSpawnModule, 'runStreamingCommand').mockResolvedValue({ success: true });
+
+      await expect(upgradeLlamaServer()).resolves.toMatchObject({ success: true });
+      expect(stream).toHaveBeenCalledWith(
+        'winget',
+        ['upgrade', '--id', 'ggml.llamacpp', '--exact', '--disable-interactivity', '--accept-source-agreements', '--accept-package-agreements'],
+        expect.any(Function),
+        { timeoutMs: 30 * 60 * 1000 },
+      );
+    });
+
+    it('refuses to update a llama-server winget did not install', async () => {
+      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue('C:\\tools\\llama.cpp\\llama-server.exe');
+      stubWinget();
+      const stream = vi.spyOn(streamingSpawnModule, 'runStreamingCommand');
+
+      await expect(upgradeLlamaServer()).resolves.toMatchObject({
+        success: false,
+        manualUpdateRequired: true,
+        error: expect.stringMatching(/not the winget-installed llama\.cpp/i),
+      });
+      expect(stream).not.toHaveBeenCalled();
     });
   });
 

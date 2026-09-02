@@ -60,6 +60,7 @@ export * from './slashdoCatalog.js';
 export * from './videoFinish.js';
 export * from './videoGenParams.js';
 export * from './videoGenResolutions.js';
+export * from './videoGenStatusCache.js';
 export * from './videoGenSubmission.js';
 export * from './videoReferenceModes.js';
 export * from './videoStagePreview.js';

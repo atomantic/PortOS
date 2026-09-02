@@ -16,8 +16,20 @@ vi.mock('../lib/streamingSpawn.js', () => streaming);
 // PARTIAL for the rest of the module: `vllmProjectSetupState` is a pure
 // classifier, and stubbing it would let a wrong reading of a real inspection
 // pass here.
-const project = vi.hoisted(() => ({ inspectVllmQwenProject: vi.fn(), vllmStartBlockedReason: vi.fn(() => null) }));
+const project = vi.hoisted(() => ({
+  inspectVllmQwenProject: vi.fn(),
+  vllmStartBlockedReason: vi.fn(() => null),
+  // PortOS's own `.env`, which the real pair reads and writes — mocked so a
+  // suite can never be answered by (or write into) the developer's install.
+  vllmProjectDirIsSettled: vi.fn(() => false),
+  recordVllmProjectDir: vi.fn(async () => {}),
+}));
 vi.mock('../lib/vllmQwenProject.js', async (importOriginal) => ({ ...(await importOriginal()), ...project }));
+
+// `wsl.exe`. Mocked because the real one answers on the developer's Windows box
+// — the placement tests would then assert against THAT machine's distro.
+const wsl = vi.hoisted(() => ({ detectWslProjectDir: vi.fn() }));
+vi.mock('../lib/wslDistro.js', async (importOriginal) => ({ ...(await importOriginal()), ...wsl }));
 
 // The two side effects: the `.env` write and the provider records the generated
 // key lands on. `tryReadFile`/`formatBytes` stay real — they are pure readers.
@@ -33,6 +45,8 @@ vi.mock('./providers.js', () => providers);
 import { provisionVllmQwenProject, readVllmQwenSetupState, startVllmQwenProject, VLLM_UPSTREAM_REPO } from './vllmQwenManager.js';
 
 const DIR = '/home/example/qwen-serving';
+/** What `wsl.exe` says on a Windows host with an ordinary distro. */
+const WSL_DIR = '\\\\wsl.localhost\\Ubuntu\\home\\example\\qwen-serving';
 const emptyProject = { dir: DIR, hasProject: false, composeFile: null, hasWeights: null, weightsRoot: null };
 const clonedProject = { ...emptyProject, hasProject: true, composeFile: 'docker-compose.yml', hasWeights: false };
 const preparedProject = { ...clonedProject, hasWeights: true, weightsRoot: `${DIR}/models` };
@@ -68,6 +82,8 @@ beforeEach(() => {
   pathLookup.findCommandOnPath.mockImplementation((cmd) => (cmd === 'docker' || cmd === 'git' ? `/usr/bin/${cmd}` : null));
   project.inspectVllmQwenProject.mockResolvedValue(preparedProject);
   project.vllmStartBlockedReason.mockReturnValue(null);
+  project.vllmProjectDirIsSettled.mockImplementation(() => Boolean(process.env.VLLM_QWEN_PROJECT_DIR));
+  wsl.detectWslProjectDir.mockResolvedValue({ dir: WSL_DIR, distro: 'Ubuntu', home: '\\\\wsl.localhost\\Ubuntu\\home\\example' });
   files.tryReadFile.mockResolvedValue(null);
   providers.getAllProviders.mockResolvedValue({ activeProvider: null, providers: [] });
   streaming.runStreamingCommand.mockResolvedValue({ success: true });
@@ -234,15 +250,72 @@ describe('provisionVllmQwenProject', () => {
     expect(files.atomicWrite).toHaveBeenCalled();
   });
 
-  it('refuses to clone onto the Windows filesystem when no project dir was configured', async () => {
+  it('asks WSL where to put the project on Windows, and records the answer', async () => {
+    repin('win32');
+    stageFreshProject();
+    const lines = [];
+
+    const result = await provision(lines);
+
+    // The whole point: no refusal, no UNC template for a human to fill in.
+    expect(result.success).toBe(true);
+    expect(project.recordVllmProjectDir).toHaveBeenCalledWith(WSL_DIR);
+    expect(emitted(lines)).toContain(WSL_DIR);
+    // Recording is what lets the readiness poll and the Start button resolve the
+    // same directory this run used.
+    expect(emitted(lines)).toMatch(/VLLM_QWEN_PROJECT_DIR/);
+  });
+
+  it('never spends a WSL probe when the directory is already settled', async () => {
+    repin('win32');
+    process.env.VLLM_QWEN_PROJECT_DIR = WSL_DIR;
+    stageFreshProject();
+
+    await provision();
+    expect(wsl.detectWslProjectDir).not.toHaveBeenCalled();
+
+    // …and the same for a directory an earlier run already recorded.
+    delete process.env.VLLM_QWEN_PROJECT_DIR;
+    project.vllmProjectDirIsSettled.mockReturnValue(true);
+    wsl.detectWslProjectDir.mockClear();
+    stageFreshProject();
+
+    await provision();
+    expect(wsl.detectWslProjectDir).not.toHaveBeenCalled();
+  });
+
+  it('refuses before cloning when WSL cannot offer a home, naming that host\'s fix', async () => {
     repin('win32');
     project.inspectVllmQwenProject.mockResolvedValue(emptyProject);
+    wsl.detectWslProjectDir.mockResolvedValue({ dir: null, reason: 'internal-distro', distro: 'docker-desktop', distros: ['Ubuntu'] });
 
     const result = await provision();
 
-    expect(result).toMatchObject({ success: false, error: expect.stringMatching(/VLLM_QWEN_PROJECT_DIR/) });
+    // Docker Desktop's own distro is wiped on a reset — and the refusal names
+    // the distro that ISN'T, rather than a `<distro>` placeholder.
+    expect(result).toMatchObject({ success: false, error: expect.stringMatching(/docker-desktop/) });
+    expect(result.error).toMatch(/wsl --set-default/);
+    expect(result.error).toContain('Ubuntu');
     expect(dockerCalls()).toEqual(['version --format {{.Server.Version}}']);
     expect(files.atomicWrite).not.toHaveBeenCalled();
+  });
+
+  it('carries on with the detected directory when recording it fails', async () => {
+    repin('win32');
+    project.recordVllmProjectDir.mockRejectedValue(new Error('.env is read-only'));
+    stageFreshProject();
+    const lines = [];
+
+    const result = await provision(lines);
+
+    // A ~30 GB run must not be lost to a failed one-line config write — but the
+    // consequence (a restart looks on C: again) has to be said out loud.
+    expect(result.success).toBe(true);
+    expect(emitted(lines)).toMatch(/Could not record VLLM_QWEN_PROJECT_DIR/);
+    // And the run itself still uses the detected directory: the process env is
+    // the highest-precedence input `resolveVllmProjectDir` reads, so a failed
+    // file write cannot send the very next inspection back to C:.
+    expect(process.env.VLLM_QWEN_PROJECT_DIR).toBe(WSL_DIR);
   });
 
   it('refuses before cloning anything when the Docker daemon is not answering', async () => {
@@ -355,6 +428,28 @@ describe('startVllmQwenProject', () => {
 
     expect(result).toMatchObject({ success: false, error: expect.stringMatching(/no Qwen weights are cached/) });
     // The whole point: a 20 GB pull is never started on the user's behalf.
+    expect(streaming.runStreamingCommand).not.toHaveBeenCalled();
+  });
+
+  it('settles a Windows host\'s project directory before looking for the project', async () => {
+    // A checkout prepared inside WSL — by hand, or by another install — sits at
+    // a UNC path this PortOS has never been told about. Without this the start
+    // looks on C:, finds nothing, and reports "cannot read a models directory".
+    repin('win32');
+
+    const result = await startVllmQwenProject({ emit: () => {}, isCancelled: () => false });
+
+    expect(result.success).toBe(true);
+    expect(project.recordVllmProjectDir).toHaveBeenCalledWith(WSL_DIR);
+  });
+
+  it('refuses without running compose when Windows has no WSL to place it in', async () => {
+    repin('win32');
+    wsl.detectWslProjectDir.mockResolvedValue({ dir: null, reason: 'no-wsl', error: 'ENOENT' });
+
+    const result = await startVllmQwenProject({ emit: () => {}, isCancelled: () => false });
+
+    expect(result).toMatchObject({ success: false, error: expect.stringMatching(/wsl --install/) });
     expect(streaming.runStreamingCommand).not.toHaveBeenCalled();
   });
 

@@ -35,6 +35,25 @@
  *   usePortal               LayoutEditor / KeyboardHelp — escape any
  *                           stacking-context ancestors.
  *
+ * Height: the panel is clamped to the *visible* viewport by Modal itself —
+ * `max-h-dvh-cap` (index.css) minus a per-align `--dvh-inset`. Call sites must
+ * NOT pass their own `max-h-[NNvh]` in `panelClassName`: the overlay is
+ * `fixed inset-0` (the small viewport on iOS Safari) and centres with
+ * `items-center`, so a panel taller than the overlay has its overflow split
+ * top and bottom — the dialog's title AND its Save/Cancel footer end up
+ * off-screen, which is unrecoverable on a modal that also opts out of Esc and
+ * backdrop dismissal. The clamp lives in the primitive for the same reason
+ * portaling does (`client/src/AGENTS.md`): so no call site has to remember it.
+ * `client/src/components/ui/modalPanelHeights.test.js` fails the build if the
+ * per-caller idiom comes back. The inset accounts for the align padding,
+ * including align='top' (`pt-[10dvh]`), so a top-aligned panel still ends
+ * above the bottom edge. A caller that wants a *shorter* panel sets the cap
+ * rather than a raw vh: `panelClassName="… [--dvh-cap:60dvh]"`. Modal also
+ * supplies `overflow-auto` unless `panelClassName` already declares an
+ * overflow utility, so a clamped panel is always scrollable — a panel that
+ * needs an un-portaled popover to escape its bounds declares
+ * `overflow-visible` and keeps the clamp.
+ *
  * Stacking: Modal uses a single module-scope bubble-phase `keydown`
  * listener that dispatches Esc only to the top-most open Modal — and only
  * the top-most. Every open Modal registers on the stack (regardless of its
@@ -67,12 +86,27 @@ const SIZE_CLASSES = {
 // order — see the note next to the overlay <div> below.
 const ALIGN_CLASSES = {
   center: 'items-center justify-center p-4',
-  top: 'items-start justify-center pt-[10vh] px-4 pb-4',
+  top: 'items-start justify-center pt-[10dvh] px-4 pb-4',
   // No padding — for callers that historically had a bare overlay (no `p-*`)
   // and provide their own panel-internal padding instead. Used by
   // ResumeAgentModal where the pre-refactor overlay was
   // `fixed inset-0 ... flex items-center justify-center` with no padding.
   none: 'items-center justify-center',
+};
+
+// Per-align `--dvh-inset` for the panel's unconditional `max-h-dvh-cap` clamp
+// (see the "Height" section of the docblock). The inset is the vertical space
+// the overlay's own padding already consumes, so the clamped panel never
+// exceeds the *visible* dynamic viewport:
+//   center  p-4                → 1rem top + 1rem bottom
+//   top     pt-[10dvh] + pb-4  → 10dvh top + 1rem bottom
+//   none    no padding         → 0
+// These must be written as literal class strings so Tailwind's source scanner
+// emits the arbitrary-property utilities.
+const ALIGN_DVH_INSET = {
+  center: '[--dvh-inset:2rem]',
+  top: '[--dvh-inset:calc(10dvh_+_1rem)]',
+  none: '[--dvh-inset:0px]',
 };
 
 // Module-scope stack of open Modal ids. A single bubble-phase keydown
@@ -271,6 +305,18 @@ export default function Modal({
   const alignClass = ALIGN_CLASSES[align] || ALIGN_CLASSES.center;
   const sizeClass = SIZE_CLASSES[size] ?? SIZE_CLASSES.md;
   const widthClass = size === 'none' ? '' : `w-full ${sizeClass}`;
+  const insetClass = ALIGN_DVH_INSET[align] || ALIGN_DVH_INSET.center;
+  // Only supply the scroll behaviour when the caller declares an UNPREFIXED
+  // overflow of its own. Tailwind precedence follows CSS source order, not
+  // class-string order (see the overlay note below), so emitting
+  // `overflow-auto` alongside a caller's base `overflow-hidden` would be a
+  // coin flip rather than an override. A variant-prefixed utility
+  // (`sm:overflow-hidden`) is deliberately NOT a match: it only applies inside
+  // its media query — which does outrank the base utility — so suppressing the
+  // default would leave the panel clamped but unscrollable below that
+  // breakpoint.
+  const overflowClass = /(^|\s)!?overflow-/.test(panelClassName) ? '' : 'overflow-auto';
+  const heightClass = `max-h-dvh-cap ${insetClass} ${overflowClass}`;
 
   const overlay = (
     <div
@@ -295,7 +341,7 @@ export default function Modal({
         aria-modal="true"
         aria-labelledby={ariaLabelledBy}
         aria-label={!ariaLabelledBy ? ariaLabel : undefined}
-        className={`relative ${widthClass} ${panelClassName}`}
+        className={`relative ${widthClass} ${heightClass} ${panelClassName}`}
         // Swallow click bubbling at the panel boundary. Two reasons: (1)
         // target-check on the backdrop already prevents panel clicks from
         // firing our own backdrop dismiss, but if this Modal is rendered as

@@ -24,6 +24,16 @@ vi.mock('../services/voice/stt.js', () => ({ transcribe: vi.fn() }));
 // pipeline; stub it so the barge-in test below can observe exactly what
 // signal a call turn was given without a real STT/LLM/TTS round trip.
 vi.mock('../services/voice/pipeline.js', () => ({ runTurn: vi.fn(async () => ({})) }));
+// Partial-mock the call session so one test can make detachHost() reject the
+// way a failing teardown does. endCall()'s own hangup/journal/mind steps are
+// each internally guarded, so no dependency seam can force that rejection from
+// the outside. Only detachHost is wrapped, and its default implementation is
+// still the real one, so every other case in this file exercises the genuine
+// session.
+vi.mock(import('../services/voice/callSession.js'), async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, detachHost: vi.fn(actual.detachHost) };
+});
 
 const { truncateOnWordBoundary, registerVoiceHandlers } = await import('./voice.js');
 const {
@@ -37,6 +47,7 @@ const {
   attachHost: attachCallHost,
   __resetCallSession,
   __setCallSessionDeps,
+  detachHost,
   getCallState,
   pollCall,
   startCall,
@@ -393,6 +404,93 @@ describe('voice:call:hangup', () => {
     registerVoiceHandlers(socket);
     await expect(socket.fire('voice:call:hangup')).resolves.not.toThrow();
     expect(getCallState().active).toBe(false);
+  });
+});
+
+describe('voice:call:detach', () => {
+  beforeEach(() => {
+    __resetCallSession();
+    __setCallSessionDeps({
+      probe: vi.fn(async () => ({ state: 'connected' })),
+      call: vi.fn(async () => ({ state: 'dialing' })),
+      hangup: vi.fn(async () => ({ state: 'ended' })),
+      appendJournal: vi.fn(async () => ({})),
+      enqueueMindMessage: vi.fn(async () => ({})),
+    });
+  });
+
+  afterEach(() => detachHost.mockClear());
+
+  it('logs and still emits call state when the teardown throws, instead of rejecting out of the listener', async () => {
+    // Socket.IO never awaits a listener's promise, so a rejection escaping
+    // this handler is an unhandled rejection — process-fatal on Node >= 15,
+    // which would take every agent run, PTY session and media job down with
+    // the whole server. Detaching during a live call funnels into endCall(),
+    // the same teardown voice:call:hangup guards for exactly this reason.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const host = makeFakeSocket();
+    registerVoiceHandlers(host);
+    await host.fire('voice:call:attach');
+    await startCall();
+    host.emitted.length = 0;
+
+    detachHost.mockRejectedValueOnce(new Error('teardown exploded'));
+    await expect(host.fire('voice:call:detach')).resolves.not.toThrow();
+
+    const logged = errorSpy.mock.calls.map(([msg]) => String(msg));
+    expect(logged.some((msg) => msg.includes('voice:call:detach failed'))).toBe(true);
+    // The client's call widget is left in a "detaching" state until a state
+    // frame arrives, so the failure path still has to send one.
+    expect(host.emitted.filter((e) => e.event === 'voice:call:state')).toHaveLength(1);
+    errorSpy.mockRestore();
+  });
+
+  it('emits the detached state on the success path', async () => {
+    const host = makeFakeSocket();
+    registerVoiceHandlers(host);
+    await host.fire('voice:call:attach');
+    host.emitted.length = 0;
+
+    await host.fire('voice:call:detach');
+
+    const states = host.emitted.filter((e) => e.event === 'voice:call:state');
+    expect(states.length).toBeGreaterThanOrEqual(1);
+    expect(states.at(-1).payload.hostAttached).toBe(false);
+  });
+});
+
+// A source scan rather than a runtime case per event: the failure mode this
+// guards is "someone adds handler #11 without the guard", which only a scan
+// catches. Scoped to this one file so it cannot fail on unrelated modules.
+describe('async socket handlers in voice.js are all guarded', () => {
+  it('opens every `socket.on(..., async ...)` body with a try block', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const source = await readFile(new URL('./voice.js', import.meta.url), 'utf8');
+    // Every async registration, regardless of how its parameter list is
+    // written...
+    const asyncHandlers = [...source.matchAll(/socket\.on\('([^']+)',\s*async\b/g)];
+    // ...versus the ones this scan can actually parse a body out of.
+    const registrations = [...source.matchAll(/socket\.on\('([^']+)',\s*async\s*(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>\s*\{/g)];
+
+    // Guards the regex itself. A vacuous pass is the one way this scan fails
+    // silently, so an unrecognized handler shape (a bare `async payload =>`,
+    // an `async function () {}`) must fail loudly rather than be skipped.
+    expect(asyncHandlers.length).toBeGreaterThanOrEqual(7);
+    expect(registrations.map((match) => match[1])).toEqual(asyncHandlers.map((match) => match[1]));
+
+    const unguarded = registrations
+      .filter((match) => {
+        const body = source.slice(match.index + match[0].length);
+        // Skip leading blank lines and line comments to find the first real statement.
+        const firstStatement = body
+          .split('\n')
+          .map((line) => line.trim())
+          .find((line) => line && !line.startsWith('//'));
+        return firstStatement !== 'try {';
+      })
+      .map((match) => match[1]);
+
+    expect(unguarded).toEqual([]);
   });
 });
 

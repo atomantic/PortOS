@@ -130,7 +130,7 @@ export default function DeployPanel({ appId, appName }) {
           onEsc={handleEsc}
           size="xl"
           backdropClassName="bg-black/60"
-          panelClassName="bg-port-bg border border-port-border rounded-xl shadow-2xl max-h-[80vh] flex flex-col"
+          panelClassName="bg-port-bg border border-port-border rounded-xl shadow-2xl flex flex-col"
           ariaLabelledBy="deploy-panel-title"
         >
           <div className="flex items-center justify-between px-4 py-3 border-b border-port-border">

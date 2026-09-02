@@ -19,6 +19,7 @@ vi.mock('../../../services/socket', () => ({ default: socketMock }));
 vi.mock('../../../services/api', () => ({
   getAppPullRequests: vi.fn(),
   resolveAppPullRequest: vi.fn(),
+  reviewAppPullRequest: vi.fn(),
 }));
 
 import * as api from '../../../services/api';
@@ -39,6 +40,7 @@ const PULL_REQUEST = {
   mergeStateStatus: 'DIRTY',
   mergeable: 'CONFLICTING',
   labels: ['bug'],
+  reviewEligible: true,
   checks: [
     { name: 'unit', status: 'SUCCESS', url: null },
     { name: 'lint', status: 'SUCCESS', url: null },
@@ -73,6 +75,11 @@ beforeEach(() => {
   api.getAppPullRequests.mockResolvedValue(okPayload([PULL_REQUEST]));
   api.resolveAppPullRequest.mockResolvedValue({
     task: { id: 'task-1', status: 'pending' },
+    duplicate: false,
+  });
+  api.reviewAppPullRequest.mockResolvedValue({
+    requestId: 'demand-abc',
+    reviewAction: { taskId: null, status: 'pending' },
     duplicate: false,
   });
 });
@@ -123,6 +130,57 @@ describe('PullRequestsTab', () => {
     expect(await screen.findByRole('link', { name: /Completed/ })).toBeInTheDocument();
   });
 
+  it('does not treat a failed agent completion as a completed action', async () => {
+    await renderTab();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Resolve & merge/ }));
+    expect(await screen.findByRole('link', { name: /Queued/ })).toBeInTheDocument();
+
+    act(() => socketHandlers.get('cos:agent:completed')({
+      taskId: 'task-1', result: { success: false },
+    }));
+
+    expect(screen.getByRole('link', { name: /Queued/ })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Completed/ })).not.toBeInTheDocument();
+  });
+
+  it('applies every task from a user task-list update', async () => {
+    const SECOND_PULL_REQUEST = {
+      ...PULL_REQUEST,
+      number: 18,
+      title: 'Repair the sync path',
+      url: 'https://github.com/acme/widget/pull/18',
+    };
+    api.getAppPullRequests.mockResolvedValue(okPayload([PULL_REQUEST, SECOND_PULL_REQUEST]));
+    api.resolveAppPullRequest
+      .mockResolvedValueOnce({ task: { id: 'task-1', status: 'pending' }, duplicate: false })
+      .mockResolvedValueOnce({ task: { id: 'task-2', status: 'pending' }, duplicate: false });
+    await renderTab();
+
+    const resolveButtons = await screen.findAllByRole('button', { name: /Resolve & merge/ });
+    fireEvent.click(resolveButtons[0]);
+    fireEvent.click(resolveButtons[1]);
+    await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalledTimes(2));
+
+    act(() => socketHandlers.get('cos:tasks:user:changed')({
+      tasks: [
+        { id: 'task-1', status: 'completed' },
+        { id: 'task-2', status: 'completed' },
+      ],
+    }));
+
+    await waitFor(() => expect(screen.getAllByRole('link', { name: /Completed/ })).toHaveLength(2));
+  });
+
+  it('removes every CoS socket listener when unmounted', async () => {
+    const listenerCountBeforeMount = socketHandlers.size;
+    const { unmount } = await renderTab();
+
+    expect(socketHandlers.size).toBe(listenerCountBeforeMount + 6);
+    unmount();
+    expect(socketHandlers.size).toBe(listenerCountBeforeMount);
+  });
+
   it('hydrates an active server-side resolve action without offering another button', async () => {
     api.getAppPullRequests.mockResolvedValue(okPayload([{
       ...PULL_REQUEST,
@@ -133,6 +191,55 @@ describe('PullRequestsTab', () => {
 
     expect(await screen.findByRole('link', { name: /Active/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Resolve & merge/ })).not.toBeInTheDocument();
+  });
+
+  it('queues a pr-reviewer run scoped to the row it was pressed on', async () => {
+    await renderTab();
+
+    fireEvent.click(await screen.findByRole('button', { name: /PR review/ }));
+
+    await waitFor(() => expect(api.reviewAppPullRequest).toHaveBeenCalledWith('app-1', 17));
+    expect(await screen.findByRole('link', { name: /PR review: Queued/ })).toBeInTheDocument();
+    // The resolve action is a separate lane and must stay offered.
+    expect(screen.getByRole('button', { name: /Resolve & merge/ })).toBeInTheDocument();
+  });
+
+  it('binds a pr-reviewer task update to the row by its target PR number', async () => {
+    await renderTab();
+
+    fireEvent.click(await screen.findByRole('button', { name: /PR review/ }));
+    expect(await screen.findByRole('link', { name: /PR review: Queued/ })).toBeInTheDocument();
+
+    act(() => socketHandlers.get('cos:tasks:changed')({
+      task: {
+        id: 'app-improve-17',
+        status: 'in_progress',
+        metadata: { app: 'app-1', analysisType: 'pr-reviewer', targetPullRequest: 17 },
+      },
+    }));
+
+    expect(await screen.findByRole('link', { name: /PR review: Active/ })).toBeInTheDocument();
+  });
+
+  it('hydrates an in-flight pr-reviewer run without offering the button again', async () => {
+    api.getAppPullRequests.mockResolvedValue(okPayload([{
+      ...PULL_REQUEST,
+      reviewAction: { taskId: 'app-improve-17', status: 'in_progress' },
+    }]));
+
+    await renderTab();
+
+    expect(await screen.findByRole('link', { name: /PR review: Active/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /PR review/ })).not.toBeInTheDocument();
+  });
+
+  it('omits the pr-reviewer action on a row the server marked ineligible', async () => {
+    api.getAppPullRequests.mockResolvedValue(okPayload([{ ...PULL_REQUEST, reviewEligible: false }]));
+
+    await renderTab();
+
+    expect(await screen.findByRole('button', { name: /Resolve & merge/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /PR review/ })).not.toBeInTheDocument();
   });
 
   it('keeps forge failures distinct from a healthy empty list', async () => {

@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => ({
   ensureMtplx: vi.fn(),
   isOllama: vi.fn(),
   isMtplx: vi.fn(),
+  ensureSlotstream: vi.fn(),
+  isSlotstream: vi.fn(),
 }));
 
 vi.mock('./ollamaManager.js', () => ({
@@ -17,6 +19,11 @@ vi.mock('./mtplxServerManager.js', () => ({
   isMtplxProvider: mocks.isMtplx,
 }));
 
+vi.mock('./slotstreamServerManager.js', () => ({
+  ensureSlotstreamProviderReady: mocks.ensureSlotstream,
+  isSlotstreamProvider: mocks.isSlotstream,
+}));
+
 const { ensureProviderReadyForExecution } = await import('./providerExecutionReadiness.js');
 
 describe('provider execution readiness', () => {
@@ -26,6 +33,8 @@ describe('provider execution readiness', () => {
     mocks.ensureMtplx.mockResolvedValue({ success: true });
     mocks.isOllama.mockReturnValue(false);
     mocks.isMtplx.mockReturnValue(false);
+    mocks.ensureSlotstream.mockResolvedValue({ success: true });
+    mocks.isSlotstream.mockReturnValue(false);
   });
 
   it('leaves configured providers without a managed local daemon alone', async () => {
@@ -75,6 +84,16 @@ describe('provider execution readiness', () => {
     await expect(ensureProviderReadyForExecution(provider)).resolves.toEqual({ success: true });
     expect(mocks.ensureMtplx).toHaveBeenCalledWith(provider);
     expect(mocks.ensureOllama).not.toHaveBeenCalled();
+  });
+
+  it('wakes Slotstream for a Slotstream provider the idle reaper stopped', async () => {
+    const provider = { id: 'slotstream', type: 'api', endpoint: 'http://127.0.0.1:5564/v1' };
+    mocks.isSlotstream.mockReturnValue(true);
+
+    await expect(ensureProviderReadyForExecution(provider)).resolves.toEqual({ success: true });
+    expect(mocks.ensureSlotstream).toHaveBeenCalledWith(provider);
+    expect(mocks.ensureOllama).not.toHaveBeenCalled();
+    expect(mocks.ensureMtplx).not.toHaveBeenCalled();
   });
 
   it('keeps the failing runtime in the error shown by the runner', async () => {

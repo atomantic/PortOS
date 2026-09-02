@@ -12,6 +12,22 @@ export default function PromptEditor({ config, promptValue, setPromptValue, edit
   }, [stages?.length, activeTab]);
 
   if (!hasPipeline) {
+    if (config.promptMode === 'runtime-generated') {
+      return (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-400">Task Prompt</span>
+            <span className="text-[10px] px-1.5 py-0.5 bg-port-accent/10 text-port-accent rounded">Generated at run time</span>
+          </div>
+          <div className="bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-gray-400">
+            {config.promptDescription || 'This task builds its prompt from fresh runtime context before each run.'}
+          </div>
+          <p className="text-xs text-gray-500">
+            There is no stored prompt template to edit; the task hook owns the runtime prompt.
+          </p>
+        </div>
+      );
+    }
     // Standard single prompt editor
     return (
       <div>

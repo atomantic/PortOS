@@ -22,6 +22,7 @@ export const DB_TEST_INCLUDE = [
   'services/postRunDb.db.test.js',
   'services/userActions.db.test.js',
   'services/memoryDB.db.test.js',
+  'services/memorySync.db.test.js',
   'services/privacySubjects.db.test.js',
   'services/privacyVault.db.test.js',
   'services/privacyOrgs.db.test.js',

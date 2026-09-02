@@ -70,7 +70,7 @@ export default function RuntimeInstallModal({
       closeOnEsc={false}
       backdropClassName="bg-black/70 backdrop-blur-sm"
       ariaLabelledBy="runtime-install-title"
-      panelClassName="bg-port-card rounded-xl border border-port-border shadow-2xl overflow-hidden flex flex-col max-h-[80vh]"
+      panelClassName="bg-port-card rounded-xl border border-port-border shadow-2xl overflow-hidden flex flex-col"
     >
         <div className="flex items-center justify-between px-5 py-4 border-b border-port-border">
           <div className="flex items-center gap-2.5">

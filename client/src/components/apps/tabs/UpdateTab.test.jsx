@@ -331,3 +331,32 @@ describe('UpdateTab — active CoS agent suppression', () => {
     expect(screen.getByRole('button', { name: 'Reconcile Now' })).toBeTruthy();
   });
 });
+
+describe('UpdateTab — last update log', () => {
+  beforeEach(() => {
+    handlers.clear();
+    mockCheckHealth.mockReset().mockResolvedValue({ version: '2.24.0', uptime: 120 });
+    mockExecutePortosUpdate.mockReset();
+    mockToast.mockClear();
+  });
+
+  it('wraps a long single-line update log so its tail stays reachable', async () => {
+    // Real update logs contain long unbroken paths/URLs. The app shell is
+    // `overflow-x-hidden`, so an unwrapped <pre> clips the tail with no
+    // horizontal scrollbar to recover it — the wrap pair is the fix.
+    const log = `error: ${'no-spaces-in-this-path/'.repeat(20)}done`;
+    mockGetUpdateStatus.mockReset().mockResolvedValue({
+      currentVersion: '2.24.0',
+      lastUpdateResult: { success: false, version: '2.25.0', log },
+    });
+
+    render(<UpdateTab />);
+
+    const pre = await screen.findByText(log);
+    expect(pre.tagName).toBe('PRE');
+    expect(pre.className).toContain('whitespace-pre-wrap');
+    expect(pre.className).toContain('break-all');
+    // A multi-thousand-line log must not push the rest of the tab off-screen.
+    expect(pre.className).toContain('overflow-y-auto');
+  });
+});

@@ -7,11 +7,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import Loras from './Loras';
-import { listLorasFull, deleteLoraFull, installLoraFromHuggingfaceStream, probeLoraEffect } from '../services/api';
+import {
+  listLorasFull, deleteLoraFull, installLoraFromHuggingfaceStream, probeLoraEffect,
+  previewLoraInstall, getCivitaiSuggestions, installLoraFromCivitai,
+} from '../services/api';
 
 vi.mock('../services/api', () => ({
   listLorasFull: vi.fn(),
   installLoraFromCivitai: vi.fn(),
+  previewLoraInstall: vi.fn(async () => ({
+    kind: 'civitai', destPath: 'lora-x.safetensors', expectedBytes: 1024, freeBytes: 1e12, requiredBytes: 1024, headroomBytes: 0, verdict: 'ok',
+  })),
   installLoraFromHuggingfaceStream: vi.fn(),
   deleteLoraFull: vi.fn(),
   getCivitaiAuth: vi.fn(async () => ({ hasKey: false, source: 'none' })),
@@ -128,10 +134,123 @@ describe('Loras HuggingFace family picker', () => {
     const input = await screen.findByLabelText('HuggingFace LoRA URL');
     fireEvent.change(input, { target: { value: 'https://huggingface.co/Alissonerdx/CharacterSheet' } });
     fireEvent.submit(input.closest('form'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Start download' }));
     expect(await screen.findByRole('button', { name: 'Install as Flux 2' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Install as Flux 1' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Install as LTX-Video' })).toBeInTheDocument();
     expect(screen.queryByText(/Install it as an LTX-Video LoRA/)).not.toBeInTheDocument();
+  });
+});
+
+// A gated Civitai model can fail with CIVITAI_AUTH at the disk-preflight
+// PREVIEW step (before any download starts) — the same code the download
+// itself would hit. That must still surface the key-entry modal, not a
+// dead-end error inside the disk-preflight confirm dialog.
+describe('Loras Civitai auth recovery through preflight', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listLorasFull.mockResolvedValue([]);
+    getCivitaiSuggestions.mockResolvedValue({ runners: {}, video: [], fetchedAt: null });
+  });
+
+  it('routes a preflight CIVITAI_AUTH rejection into the key-entry modal, not a generic error', async () => {
+    previewLoraInstall.mockRejectedValueOnce(
+      Object.assign(new Error('This LoRA needs an API key.'), { code: 'CIVITAI_AUTH' }),
+    );
+    renderPage();
+    const input = await screen.findByLabelText('Civitai model URL');
+    fireEvent.change(input, { target: { value: 'https://civitai.com/models/123/gated' } });
+    fireEvent.submit(input.closest('form'));
+
+    expect(await screen.findByText('Civitai API key')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Start download' })).not.toBeInTheDocument();
+  });
+});
+
+// performInstall() now returns once the PREVIEW resolves (the confirm modal
+// is showing), not once the download finishes — the suggestion card's own
+// "Installing…" spinner must track the real install lifecycle instead of
+// that promise settling, or it flips back to "Quick install" the moment the
+// confirm dialog opens while a multi-GB transfer is still ahead of it.
+describe('Loras suggestion card busy state', () => {
+  const SUGGESTION_CARD = { modelId: 42, versionId: 7, name: 'Example LoRA', installUrl: 'https://civitai.com/models/42' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listLorasFull.mockResolvedValue([]);
+    getCivitaiSuggestions.mockResolvedValue({ runners: { mflux: [SUGGESTION_CARD] }, video: [], fetchedAt: null });
+  });
+
+  it('keeps the card "Installing…" through the confirm step and clears only once the install settles', async () => {
+    let resolveInstall;
+    installLoraFromCivitai.mockReturnValue(new Promise((resolve) => { resolveInstall = resolve; }));
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Quick install' }));
+    // Preview resolved (the confirm modal opened) — the card must still read
+    // "Installing…", not have reverted to "Quick install" already.
+    expect(await screen.findByRole('button', { name: 'Installing…' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start download' }));
+    expect(await screen.findByRole('button', { name: 'Installing…' })).toBeInTheDocument();
+
+    resolveInstall({ name: 'lora-example.safetensors' });
+    expect(await screen.findByRole('button', { name: 'Quick install' })).toBeInTheDocument();
+  });
+
+  it('clears the spinner when the confirm is cancelled instead of leaving it stuck', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Quick install' }));
+    await screen.findByRole('button', { name: 'Start download' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(await screen.findByRole('button', { name: 'Quick install' })).toBeInTheDocument();
+    expect(installLoraFromCivitai).not.toHaveBeenCalled();
+  });
+});
+
+// The curated video suggestion "Quick install" used to call the HF streaming
+// installer directly, skipping the disk-preflight confirm every other install
+// path now shows. It must go through the same modal, with the card's own
+// family/file forwarded so the preview matches the file the install picks.
+describe('Loras video suggestion quick-install preflight', () => {
+  const VIDEO_CARD = {
+    repo: 'fal/ltx2.3-audio-reactive-lora',
+    file: 'pytorch_lora_weights.safetensors',
+    installUrl: 'https://huggingface.co/fal/ltx2.3-audio-reactive-lora',
+    runnerFamily: 'ltx-video',
+    name: 'Audio-Reactive LTX LoRA',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listLorasFull.mockResolvedValue([]);
+    getCivitaiSuggestions.mockResolvedValue({ runners: {}, video: [VIDEO_CARD], fetchedAt: null });
+    previewLoraInstall.mockResolvedValue({
+      kind: 'huggingface', destPath: 'lora-fal-ltx-hf.safetensors', expectedBytes: 2048,
+      freeBytes: 1e12, requiredBytes: 2048, headroomBytes: 0, verdict: 'ok',
+    });
+    installLoraFromHuggingfaceStream.mockResolvedValue({ name: 'lora-fal-ltx-hf.safetensors' });
+  });
+
+  it('shows the disk-preflight confirm before starting the stream install', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Quick install' }));
+
+    expect(await screen.findByRole('button', { name: 'Start download' })).toBeInTheDocument();
+    expect(previewLoraInstall).toHaveBeenCalledWith(expect.objectContaining({
+      url: VIDEO_CARD.installUrl,
+      source: 'huggingface',
+      family: VIDEO_CARD.runnerFamily,
+      file: VIDEO_CARD.file,
+    }));
+    expect(installLoraFromHuggingfaceStream).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start download' }));
+    await waitFor(() => expect(installLoraFromHuggingfaceStream).toHaveBeenCalledWith(
+      expect.objectContaining({ url: VIDEO_CARD.installUrl, family: VIDEO_CARD.runnerFamily, file: VIDEO_CARD.file }),
+    ));
   });
 });
 

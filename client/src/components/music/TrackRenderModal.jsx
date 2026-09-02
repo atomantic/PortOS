@@ -34,7 +34,7 @@ export default function TrackRenderModal({ render, active = false, onClose, onSe
       size="lg"
       align="top"
       ariaLabelledBy="track-render-title"
-      panelClassName="bg-port-card rounded-xl border border-port-border shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
+      panelClassName="bg-port-card rounded-xl border border-port-border shadow-2xl overflow-hidden flex flex-col"
     >
       <div className="flex items-center justify-between px-5 py-3 border-b border-port-border">
         <h2 id="track-render-title" className="text-sm font-semibold text-white flex items-center gap-2">

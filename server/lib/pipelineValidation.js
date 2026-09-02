@@ -609,7 +609,7 @@ export const objectBibleUpdateSchema = writersRoomObjectUpdateSchema;
 
 // Per-call timeout bounds: STAGE_TIMEOUT_MIN_MS / STAGE_TIMEOUT_MAX_MS are
 // imported (aliased) from aiToolkit/constants.js at the top of this file so
-// the route validator, the runner (server/lib/stageRunner.js), and the
+// the route validator, the runner (server/services/stageRunner.js), and the
 // toolkit's own provider/run validation all share one source of truth. The
 // client mirror in client/src/utils/formatters.js can't import across the
 // server boundary — comments on both sides flag the requirement to keep
@@ -674,7 +674,7 @@ export const stageConfigUpdateSchema = z.object({
     // string so the inner `.number()` check fails. The digit-only rule
     // (and the `.trim()` before it) mirror `parseTimeoutMs` in
     // client/src/utils/formatters.js and `normalizeTimeout` in
-    // server/lib/stageRunner.js so all three reject the same shapes.
+    // server/services/stageRunner.js so all three reject the same shapes.
     (v) => {
       if (v === '' || v === null) return null;
       if (v === undefined) return undefined;

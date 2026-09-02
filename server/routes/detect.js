@@ -13,6 +13,42 @@ import { isWithinAllowedRoots, outsideAllowedRootsMessage, WORKSPACE_ROOTS_CONFI
 const execAsync = promisify(exec);
 const router = Router();
 
+// Optional confinement, shared by every handler here that takes a caller-supplied
+// path (POST /repo and POST /ai): enforced only when the operator has configured
+// PORTOS_WORKSPACE_ROOTS. realpath() first so a symlink can't smuggle a path past
+// the containment check. realpathSync can throw on a permission/TOCTOU edge (the
+// path deleted between an earlier stat and here) — reported as a refusal rather
+// than leaking a 500. This is the sanctioned fs-edge-case exception to the
+// no-try/catch rule (see commands.js).
+//
+// Returns { ok: true } or { ok: false, error, code } so each caller shapes the
+// refusal its own way: /repo answers with its valid:false verdict (deciding
+// "is this a usable repo?" is that route's whole product), while /ai — which has
+// no such field, and where {success:false} could not be told apart from
+// "provider unavailable" — throws a 400. The resolved path stays out of both,
+// appearing only in the redacted server-side diagnostic.
+const checkWorkspacePathAllowed = (path) => {
+  if (!WORKSPACE_ROOTS_CONFIGURED) return { ok: true };
+
+  let realPath;
+  try {
+    realPath = realpathSync(resolve(path));
+  } catch {
+    return { ok: false, error: 'Path is not accessible', code: 'PATH_NOT_ACCESSIBLE' };
+  }
+
+  if (!isWithinAllowedRoots(realPath)) {
+    console.error(`❌ ${outsideAllowedRootsMessage(realPath)}`);
+    return {
+      ok: false,
+      error: 'Path is outside the configured workspace roots (PORTOS_WORKSPACE_ROOTS)',
+      code: 'PATH_OUTSIDE_WORKSPACE_ROOTS'
+    };
+  }
+
+  return { ok: true };
+};
+
 // POST /api/detect/repo - Validate repo path and detect project type
 //
 // TRUST MODEL: This endpoint accepts an arbitrary, caller-supplied filesystem
@@ -29,7 +65,8 @@ const router = Router();
 // `routes/commands.js` uses to scope command execution). When that env var is set,
 // this route enforces the allow-list too — a path outside the roots returns valid:false
 // rather than reading its files. When it is unset (the default), detection is
-// unrestricted, matching the pre-existing behavior.
+// unrestricted, matching the pre-existing behavior. POST /ai enforces the same
+// allow-list via the shared `checkWorkspacePathAllowed` helper above.
 router.post('/repo', asyncHandler(async (req, res) => {
   const { path } = req.body;
 
@@ -54,26 +91,9 @@ router.post('/repo', asyncHandler(async (req, res) => {
     });
   }
 
-  // Optional confinement: only when the operator has configured workspace roots.
-  // realpath() first so a symlink can't smuggle a path past the containment check.
-  // realpathSync can throw on a permission/TOCTOU edge (path deleted between the
-  // stat above and here) — convert that to the same valid:false shape the rest of
-  // this route returns for unusable paths, rather than leaking a 500. This is the
-  // sanctioned fs-edge-case exception to the no-try/catch rule (see commands.js).
-  if (WORKSPACE_ROOTS_CONFIGURED) {
-    let realPath;
-    try {
-      realPath = realpathSync(resolve(path));
-    } catch {
-      return res.json({ valid: false, error: 'Path is not accessible' });
-    }
-    if (!isWithinAllowedRoots(realPath)) {
-      console.error(`❌ ${outsideAllowedRootsMessage(realPath)}`);
-      return res.json({
-        valid: false,
-        error: 'Path is outside the configured workspace roots (PORTOS_WORKSPACE_ROOTS)'
-      });
-    }
+  const confinement = checkWorkspacePathAllowed(path);
+  if (!confinement.ok) {
+    return res.json({ valid: false, error: confinement.error });
   }
 
   // Detect project type
@@ -236,11 +256,20 @@ router.post('/pm2', asyncHandler(async (req, res) => {
 }));
 
 // POST /api/detect/ai - AI-powered app detection
+// Unlike /repo this reads package.json, config files, .env port lines and the
+// README, then ships them to a configured AI provider (possibly a hosted API) and
+// runs that provider's CLI with cwd set here — so the confinement check must run
+// BEFORE detectAppWithAi, or a refused path has already left the machine.
 router.post('/ai', asyncHandler(async (req, res) => {
   const { path, providerId } = req.body;
 
   if (!path) {
     throw new ServerError('Path is required', { status: 400, code: 'MISSING_PATH' });
+  }
+
+  const confinement = checkWorkspacePathAllowed(path);
+  if (!confinement.ok) {
+    throw new ServerError(confinement.error, { status: 400, code: confinement.code });
   }
 
   const result = await detectAppWithAi(path, providerId);

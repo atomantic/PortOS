@@ -12,7 +12,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'mv-projects-file-test-'));
-const writeCounter = vi.hoisted(() => ({ baseHash: 0 }));
+const writeCounter = vi.hoisted(() => ({ project: 0, baseHash: 0 }));
 
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -20,6 +20,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
     ...actual,
     PATHS: { ...actual.PATHS, data: TEST_DATA_ROOT },
     atomicWrite: async (path, data) => {
+      if (typeof path === 'string' && path.endsWith('music-video-projects.json')) writeCounter.project += 1;
       if (typeof path === 'string' && path.endsWith('sync_base_hashes.json')) writeCounter.baseHash += 1;
       return actual.atomicWrite(path, data);
     },
@@ -35,6 +36,7 @@ function reset() {
   rmSync(join(TEST_DATA_ROOT, 'conflict-journal'), { recursive: true, force: true });
   cj.__resetBaseHashCacheForTests();
   writeCounter.baseHash = 0;
+  writeCounter.project = 0;
 }
 beforeEach(reset);
 afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
@@ -122,6 +124,16 @@ describe('projectsFile federation (#1770)', () => {
     const older = { ...p, name: 'RemoteOlder', updatedAt: '2000-01-01T00:00:00Z' };
     expect(await file.mergeProjectsFromSync([older])).toEqual({ applied: false, count: 0 });
     expect((await file.getProject(p.id)).name).toBe('RemoteNewer');
+  });
+
+  it('same-updatedAt re-push is a no-op without project or base-hash writes', async () => {
+    const remote = { id: 'mv-peer-1', name: 'Peer', status: 'draft', updatedAt: '2026-02-01T00:00:00Z', createdAt: '2026-02-01T00:00:00Z', scenes: [] };
+    await file.mergeProjectsFromSync([remote]);
+    writeCounter.project = 0;
+    writeCounter.baseHash = 0;
+
+    expect(await file.mergeProjectsFromSync([remote])).toEqual({ applied: false, count: 0 });
+    expect(writeCounter).toEqual({ project: 0, baseHash: 0 });
   });
 
   it('mergeProjectsFromSync applies a remote tombstone (delete federates)', async () => {

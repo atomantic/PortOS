@@ -25,6 +25,17 @@ const DOMAIN_PATTERN = /^\S+\.\S+$/;
 export const isHttpUrl = (url) => /^https?:\/\//i.test(url || '');
 
 /**
+ * True only for a syntactically valid HTTPS URL. Use this for provider-issued
+ * browser handoffs, where a local process response must never become a script
+ * URL in the PortOS page.
+ *
+ * @param {string} url
+ * @returns {boolean}
+ */
+export const isHttpsUrl = (url) =>
+  typeof url === 'string' && URL.canParse(url) && new URL(url).protocol === 'https:';
+
+/**
  * Extract a TikTok video id from a share/watch URL so a reference can render
  * TikTok's documented iframe Embed Player instead of loading their embed.js.
  * Returns null for anything that isn't a TikTok video URL — those references

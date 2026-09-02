@@ -280,13 +280,15 @@ export default function App() {
           <Route path="devtools/agents" element={<AgentsPage />} />
           <Route path="eidoverse" element={<Eidoverse />} />
           <Route path="ai" element={<AIProviders />} />
-          {/* The provider editor is a deep-linkable slide-in over the same page:
-              /ai/new creates, /ai/edit/:providerId edits. The id sits under its
-              own `edit` segment rather than directly under /ai so the create
-              route can't be shadowed by a real provider: ids are slugified from
-              the display name, so a provider named "New" gets the id `new` and
-              /ai/new would otherwise match the static create route instead. */}
+          {/* Provider overlays are deep-linkable over the same page: /ai/new
+              creates, /ai/fleet walks through a remote GPU host, and
+              /ai/edit/:providerId edits. The id sits under its own `edit`
+              segment rather than directly under /ai so the create route can't
+              be shadowed by a real provider: ids are slugified from the display
+              name, so a provider named "New" gets the id `new` and /ai/new
+              would otherwise match the static create route instead. */}
           <Route path="ai/new" element={<AIProviders />} />
+          <Route path="ai/fleet" element={<AIProviders />} />
           <Route path="ai/edit/:providerId" element={<AIProviders />} />
           <Route path="prompts" element={<PromptManager />} />
           <Route path="cos" element={<Navigate to="/cos/tasks" replace />} />

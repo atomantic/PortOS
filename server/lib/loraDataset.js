@@ -12,6 +12,8 @@
  * `server/services/loraDatasets.js`.
  */
 
+import { escapeRegExp } from './textUtils.js';
+
 export const LORA_DATASET_SCHEMA_VERSION = 1;
 
 // Minimum ready+captioned images before a training run is allowed. Below
@@ -149,8 +151,6 @@ export function deriveTriggerWord(name, { taken = [] } = {}) {
   return `${candidate}_${Date.now().toString(36)}`;
 }
 
-const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
 /**
  * Ensure a caption starts with exactly one `"<triggerWord>, "` prefix.
  * Idempotent; also strips a stale prefix when the trigger word changed
@@ -166,7 +166,7 @@ export function prefixCaption(triggerWord, text, { previousTriggerWord = null } 
     // [a-z0-9_] tokens that often prefix a real word (e.g. `her` in `heroic`),
     // and the trailing comma is optional — without the boundary, stripping
     // `her` from `heroic stance` would amputate it to `oic stance`.
-    return value.replace(new RegExp(`^${escapeRe(token)}(?=[\\s,]|$)\\s*,?\\s*`, 'i'), '');
+    return value.replace(new RegExp(`^${escapeRegExp(token)}(?=[\\s,]|$)\\s*,?\\s*`, 'i'), '');
   };
   body = stripPrefix(body, word);
   const prev = trim(previousTriggerWord);
@@ -231,7 +231,7 @@ export function captionHasTriggerWord(caption, triggerWord) {
   const text = trim(caption);
   if (!text) return false;
   if (!word) return true; // no trigger configured yet — any caption counts
-  return new RegExp(`(?:^|[^a-z0-9_])${escapeRe(word)}(?:[^a-z0-9_]|$)`, 'i').test(text);
+  return new RegExp(`(?:^|[^a-z0-9_])${escapeRegExp(word)}(?:[^a-z0-9_]|$)`, 'i').test(text);
 }
 
 /**
@@ -299,7 +299,7 @@ const captionBody = (caption, triggerWord) => {
   const word = trim(triggerWord);
   let body = trim(caption);
   if (word) {
-    body = body.replace(new RegExp(`^${escapeRe(word)}(?=[\\s,]|$)\\s*,?\\s*`, 'i'), '');
+    body = body.replace(new RegExp(`^${escapeRegExp(word)}(?=[\\s,]|$)\\s*,?\\s*`, 'i'), '');
   }
   return body;
 };

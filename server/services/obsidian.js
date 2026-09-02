@@ -12,6 +12,7 @@ import { join, relative, resolve, basename, dirname, extname, isAbsolute } from 
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { ICLOUD_NOT_MATERIALIZED, isSuspectedDataless, materializeAndWait, readIfMaterialized } from '../lib/icloudFile.js';
+import { escapeRegExp } from '../lib/textUtils.js';
 
 const VAULTS_FILE = join(PATHS.brain, 'obsidian-vaults.json');
 
@@ -479,7 +480,7 @@ export async function searchNotes(vaultId, query) {
   const results = [];
   const queryLower = query.toLowerCase();
   // Compile regex once for count matching
-  const countRe = new RegExp(escapeRegex(queryLower), 'g');
+  const countRe = new RegExp(escapeRegExp(queryLower), 'g');
   const skipped = newSkipTally();
   await searchDir(vault.path, vault.path, queryLower, countRe, results, skipped);
 
@@ -809,8 +810,4 @@ async function collectFolders(rootPath, currentPath, results) {
       await collectFolders(rootPath, fullPath, results);
     }
   }
-}
-
-function escapeRegex(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

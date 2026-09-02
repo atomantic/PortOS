@@ -19,6 +19,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { ServerError, sendErrorResponse } from '../lib/errorHandler.js';
 import { ASSET_ROUTE_PREFIXES, SERVER_OWNED_PREFIXES } from '../lib/assetRoutePrefixes.js';
 import { wrWorksDir } from './writersRoom/_shared.js';
+import { escapeRegExp } from '../lib/textUtils.js';
 
 // `acceptRanges: true` is the serve-static default already, but we set it
 // explicitly because the federated peer-sync receiver
@@ -107,7 +108,7 @@ function toRouteMatcher(pattern) {
     .map((segment) => {
       if (segment.startsWith(':')) return '[^/]+';
       if (segment === '*') return '.*';
-      return segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return escapeRegExp(segment);
     })
     .join('/');
   const regex = new RegExp(`^${source}$`);

@@ -3,6 +3,7 @@ import { RefreshCw, Activity, XCircle, Cpu, MemoryStick, Terminal } from 'lucide
 import * as api from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { formatDateTime } from '../utils/formatters';
+import PageSkeleton from '../components/ui/PageSkeleton';
 
 export function AgentsPage() {
   const [killing, setKilling] = useState({});
@@ -32,7 +33,15 @@ export function AgentsPage() {
   const totalMemory = agents.reduce((sum, a) => sum + (a.memory || 0), 0);
 
   if (loading) {
-    return <div className="text-center py-8 text-gray-400">Scanning for AI agents...</div>;
+    return (
+      <PageSkeleton
+        label="Scanning for AI agents"
+        headerRowClass="flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+        titleWidthClass="w-56"
+        cards={3}
+        sidebar={false}
+      />
+    );
   }
 
   return (

@@ -52,11 +52,10 @@ export const apiOperationId = (method, path) => {
 
 const generatedOperation = (operation) => {
   const parameters = pathParametersFor(operation.path);
-  const source = operation.sources.map(({ source: file, line }) => `${file}:${line}`).join(', ');
   return {
     operationId: apiOperationId(operation.method, operation.path),
     summary: operation.summary,
-    description: `Generated from the mounted Express route inventory. Detailed request and response schemas are not modeled yet. Source: ${source}.`,
+    description: `Generated from the mounted Express route inventory. Detailed request and response schemas are not modeled yet. Source: ${operation.sources.join(', ')}.`,
     tags: [operation.domain],
     ...(parameters.length ? { parameters } : {}),
     responses: { default: { description: 'Response shape is not yet modeled.' } },

@@ -23,7 +23,7 @@ export const TRIM_SIZES = Object.freeze({
 });
 export const DEFAULT_TRIM_SIZE = 'us-trade';
 
-// Interior body fonts — the pdf-lib StandardFonts a print interior can use
+// Interior body fonts — the @cantoo/pdf-lib StandardFonts a print interior can use
 // without embedding a font file. Times is the traditional book-interior serif.
 export const INTERIOR_FONTS = Object.freeze(['times', 'helvetica', 'courier']);
 export const DEFAULT_INTERIOR_FONT = 'times';

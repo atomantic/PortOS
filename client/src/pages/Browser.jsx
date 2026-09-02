@@ -591,6 +591,7 @@ export default function BrowserPage() {
                               download={file.name}
                               className="p-1.5 rounded-md text-gray-400 hover:text-white hover:bg-port-border/50 transition-colors"
                               title="Save to device"
+                              aria-label={`Save ${file.name} to device`}
                             >
                               <Download size={16} />
                             </a>

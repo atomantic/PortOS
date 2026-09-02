@@ -18,7 +18,7 @@
 
 import { createHash } from 'crypto';
 import { hostname } from 'os';
-import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import { PDFDocument, rgb, StandardFonts } from '@cantoo/pdf-lib';
 import { createZip } from '../lib/zipWriter.js';
 import { getCurrentVersion } from './updateChecker.js';
 import { exportDigitalTwin } from './digital-twin-export.js';
@@ -529,7 +529,7 @@ export function buildManifest(files, { sections, portosVersion, generatedAt, pdf
 
 // === PDF rendering (Phase 2) ===
 // A rendered, human-readable portrait of the same per-section Markdown the
-// bundle already produces. Uses pdf-lib (already a dependency, shared with
+// bundle already produces. Uses @cantoo/pdf-lib (already a dependency, shared with
 // `pipeline/comicPdf.js`) — Helvetica family, basic word-wrap, heading sizing.
 // No images, no external fonts: the Markdown bundle stays the primary artifact;
 // the PDF is a convenience for reading/printing offline.
@@ -543,7 +543,7 @@ const PDF_TEXT_WIDTH = PDF_PAGE.width - PDF_MARGIN * 2;
 const PDF_HEADING_SIZE = { 1: 22, 2: 16, 3: 13 };
 const PDF_BODY_SIZE = 11;
 
-// Strip the inline Markdown emphasis/link syntax pdf-lib can't render so it
+// Strip the inline Markdown emphasis/link syntax @cantoo/pdf-lib can't render so it
 // doesn't print literal `**`/`*`/`[text](url)` markers. Pure.
 function stripInlineMarkdown(text) {
   return String(text)
@@ -553,12 +553,12 @@ function stripInlineMarkdown(text) {
     .replace(/`([^`]+)`/g, '$1');                 // `code`
 }
 
-// WinAnsi (pdf-lib's StandardFont encoding) can't encode arbitrary Unicode —
+// WinAnsi (@cantoo/pdf-lib's StandardFont encoding) can't encode arbitrary Unicode —
 // an unencodable glyph throws at draw time. Map the few non-ASCII characters
 // our Markdown builders actually emit (VO₂, ⚠️, smart quotes) to safe ASCII,
 // then drop anything still outside the encodable range. Pure.
 //
-// pdf-lib's WinAnsi encoder also throws on control bytes that ARE ≤ 0xFF —
+// @cantoo/pdf-lib's WinAnsi encoder also throws on control bytes that ARE ≤ 0xFF —
 // the C0 controls (0x00–0x1F), DEL (0x7F), and the undefined C1 range
 // (0x80–0x9F) — so a stray control char pasted into free-text identity content
 // (brain notes, journals, autobiography) must be stripped BEFORE it reaches
@@ -617,7 +617,7 @@ function wrapLine(text, font, size, maxWidth) {
 
 /**
  * Render the per-section Markdown into a single PDF. Pure-ish (async only for
- * pdf-lib's font embedding) — takes the same `{ name, data }` content files
+ * @cantoo/pdf-lib's font embedding) — takes the same `{ name, data }` content files
  * `buildBundleFiles` produces and walks the `.md` ones in bundle order.
  * Returns the PDF bytes (Uint8Array). `meta` stamps the title page.
  *

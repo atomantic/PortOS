@@ -58,6 +58,25 @@ you are already on.
 1. Install MTPLX from **Local Runtime Servers**. PortOS installs the package
    from upstream's Homebrew tap (`brew install youssofal/mtplx/mtplx`), falling
    back to `python3 -m pip install mtplx` on a host without Homebrew.
+
+   The Homebrew formula does **not** install MTPLX itself. It installs a small
+   shell wrapper that builds a version-keyed Python venv — several hundred
+   megabytes of pip downloads (fastapi, huggingface_hub, numpy/scipy, the MLX
+   stack) — the first time anything runs `mtplx`, and `brew upgrade mtplx`
+   re-arms it, because the venv path carries the version.
+
+   PortOS runs that bootstrap **here**, as part of the install: after `brew
+   install` returns it invokes `mtplx --version` once, streaming the pip output
+   into the install progress under the same 20-minute budget, and fails the
+   install if the bootstrap fails. Nothing else invokes the wrapper before then
+   — a status poll skips its `mtplx models --json` cache read and a start
+   refuses with `MTPLX_RUNTIME_NOT_BOOTSTRAPPED`, because neither can survive a
+   package download inside its timeout, and a start never performs a large
+   silent download. Readiness is decided by READING the wrapper (the venv it
+   names, and whether `<venv>/bin/mtplx` is executable — its own guard), never
+   by running it; a pip install or any other layout is treated as ready. The
+   card reports it as **Installed — runtime not yet downloaded**, with a
+   **Download MTPLX runtime** button that re-runs the install flow.
 2. **Download a checkpoint** from the MTPLX card's **Cached checkpoints** /
    **Find a checkpoint** panel. Search runs `mtplx forge discover` — upstream's
    index of MTPLX-branded MTP models, which is exactly the set `mtplx serve` can

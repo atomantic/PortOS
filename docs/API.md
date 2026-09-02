@@ -121,6 +121,7 @@ own wire contract in [FEDERATED_MEDIA_PROVIDERS.md](./FEDERATED_MEDIA_PROVIDERS.
 | POST | `/providers/codex/account/login` | Start an explicit ChatGPT sign-in. Returns `{ login }` — a bounded `loginId` plus `authUrl` (browser flow) or `verificationUrl` + `userCode` (device-code flow, via `{ "deviceCode": true }`). A POST because it begins an OAuth flow; never a side effect of a read. 409s while another sign-in is already pending. |
 | POST | `/providers/codex/account/login/cancel` | Abandon the pending sign-in named by `{ loginId }`, then re-read. 409s for an id that is not the pending login, so a stale tab cannot cancel a flow the user started afterwards. |
 | POST | `/providers/codex/account/logout` | Sign out of ChatGPT and re-read. Codex drops its own credentials; PortOS holds none to clear. |
+| GET | `/providers/codex/models?fresh=1` | Which models this ChatGPT subscription may run, from the app-server's own `model/list` rather than a hard-coded table. Answers `{ models, fetchedAt, error }`. The sentinels are load-bearing: `models: null` = NEVER FETCHED, `[]` = fetched and the plan genuinely has none, and a failed read returns the LAST-KNOWN-GOOD list alongside `error` — so one timeout can never empty the picker. Lazy like `/codex/account`; `fresh=1` skips the 10m TTL after a plan change or a sign-in. |
 | GET | `/providers/opencode/installation` | **Legacy alias**, kept so a stale client bundle still renders: `{ installed, npmAvailable }` for the `opencode` runtime. New code uses `/providers/runtimes`. |
 | POST | `/providers/opencode/install` | **Legacy alias** for `/providers/runtimes/install?runtime=opencode`. |
 
@@ -640,7 +641,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/messages` | Messages (email) integration |
 | `/api/digital-twin/social-accounts`, `/api/digital-twin/identity`, `/api/digital-twin/autobiography` | Digital-twin sub-domains |
 | `/api/meatspace` | MeatSpace (health, POST, genome) |
-| `/api/lmstudio`, `/api/local-llm` | Local LLM backends and the local runtime servers PortOS can start/stop (Ollama, LM Studio, `llama-server`, MTPLX — the last two as PM2 processes; `POST /api/local-llm/save-startup` is `pm2 save`), plus MTPLX's checkpoint catalog — `GET /api/local-llm/mtplx/models/search`, `POST .../models/pull` (byte progress on the `mtplx:download` socket event), `POST .../models/remove` |
+| `/api/lmstudio`, `/api/local-llm` | Local LLM backends and the local runtime servers PortOS can start/stop (Ollama, LM Studio, `llama-server`, MTPLX, Slotstream — the last three as PM2 processes; `POST /api/local-llm/save-startup` is `pm2 save`), plus MTPLX's checkpoint catalog — `GET /api/local-llm/mtplx/models/search`, `POST .../models/pull` (byte progress on the `mtplx:download` socket event), `POST .../models/remove`. Slotstream lifecycle is `GET /api/local-llm/slotstream/status`, `POST .../start` (never downloads weights), `POST .../stop`, `POST .../install`. |
 | `/api/code-review` | Code review runs |
 | `/api/voice`, `/api/voice/public` | Voice assistant |
 | `/api/api-docs` | Generated HTTP/event catalogs, OpenAPI 3.0.3 documents, AsyncAPI 3 document, and the minimized semantic tool resource |

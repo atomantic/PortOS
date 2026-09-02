@@ -55,11 +55,11 @@
  * account id (#3532) — see mergeSocialAccounts.
  */
 
-import crypto from 'crypto';
 import { join, basename } from 'path';
 import { readdir, readFile, unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { atomicWrite, readJSONFile, ensureDir, PATHS } from '../lib/fileUtils.js';
+import { snapshotChecksum } from '../lib/snapshotChecksum.js';
 import { canonicalStringify, isPlainObject } from '../lib/objects.js';
 import { normalizeTombstones, mergeTombstones, isTombstoned, pruneTombstones, tombstonesEqual } from '../lib/tombstones.js';
 import { compareNewerWins } from '../lib/lwwTimestamp.js';
@@ -90,9 +90,9 @@ const SOCIAL_ACCOUNTS_FILE = join(DIR, 'social-accounts.json');
 // the checksum is unchanged and the orchestrator still skips the transfer).
 export const DIGITAL_TWIN_CHECKSUM_PATHS = [DIR];
 
-function computeChecksum(data) {
-  return crypto.createHash('md5').update(JSON.stringify(data)).digest('hex');
-}
+// Insertion-order sensitive by design: every getter here canonicalizes its own
+// ordering before hashing (see the sorted-record notes below).
+const computeChecksum = snapshotChecksum;
 
 // --- Pure merge helpers (exported for unit tests) ---
 

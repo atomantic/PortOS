@@ -1,7 +1,7 @@
 /**
  * Shared plumbing for a local daemon PortOS runs as an optional PM2 process
  * (`llamaServerManager.js` → `portos-llama-server`, `mtplxServerManager.js` →
- * `portos-mtplx`).
+ * `portos-mtplx`, `slotstreamServerManager.js` → `portos-slotstream`).
  *
  * Both managers answer the same two questions the same way, and the answers are
  * fiddly enough that two copies drift:
@@ -21,22 +21,25 @@
  */
 
 /**
- * The PM2 process names of the two local model servers PortOS manages.
+ * The PM2 process names of the local model servers PortOS manages.
  *
  * Declared here rather than in each manager so the health monitor can recognize
  * them without importing a manager (and its whole PM2/model-probe dependency
- * chain); `llamaServerManager.js` and `mtplxServerManager.js` re-export these as
- * `LLAMA_APP` / `MTPLX_APP`.
+ * chain); `llamaServerManager.js`, `mtplxServerManager.js`, and
+ * `slotstreamServerManager.js` re-export these as `LLAMA_APP` / `MTPLX_APP` /
+ * `SLOTSTREAM_APP`.
  */
 export const LLAMA_APP = 'portos-llama-server';
 export const MTPLX_APP = 'portos-mtplx';
-const MODEL_SERVER_APPS = [LLAMA_APP, MTPLX_APP];
+export const SLOTSTREAM_APP = 'portos-slotstream';
+const MODEL_SERVER_APPS = [LLAMA_APP, MTPLX_APP, SLOTSTREAM_APP];
 
 /**
  * Whether a PM2 process is one of those model servers.
  *
- * A model server's resident size IS the checkpoint it loaded — llama.cpp and
- * MTPLX hold multi-GB weights for as long as they are up, by design. Measuring
+ * A model server's resident size IS the checkpoint it loaded — llama.cpp,
+ * MTPLX, and Slotstream hold multi-GB weights for as long as they are up, by
+ * design. Measuring
  * them against a generic per-process memory cap produces a warning the user can
  * never clear (a 24GB llama-server against a 2GB cap is a correctly-running
  * server, not a leak), so callers policing per-process memory skip them. Genuine

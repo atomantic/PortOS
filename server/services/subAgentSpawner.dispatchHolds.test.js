@@ -157,6 +157,24 @@ describe('subAgentSpawner — runner-down hold', () => {
   });
 });
 
+describe('subAgentSpawner — approval hold', () => {
+  beforeEach(async () => {
+    await initSpawner();
+    vi.clearAllMocks();
+    vi.useRealTimers();
+    setUseRunner(true);
+    isRunnerReachable.mockResolvedValue(true);
+    isUpdateInProgress.mockReturnValue(false);
+  });
+
+  it('honors an approval-required task before any runner or agent dispatch', async () => {
+    await dispatch({ id: 'cos-approval-1', approvalRequired: true, metadata: {} });
+
+    expect(isRunnerReachable).not.toHaveBeenCalled();
+    expect(spawnAgentForTask).not.toHaveBeenCalled();
+  });
+});
+
 describe('subAgentSpawner — self-update hold (#4124)', () => {
   beforeEach(async () => {
     await initSpawner();

@@ -9,18 +9,6 @@ export const getTimelineDay = (options = {}) => {
   return request(`/timeline/day${qs ? `?${qs}` : ''}`, { silent: options.silent });
 };
 
-export const getTimelineEvents = (options = {}) => {
-  const params = new URLSearchParams();
-  if (options.from) params.set('from', options.from);
-  if (options.to) params.set('to', options.to);
-  if (options.source) params.set('source', options.source);
-  if (options.kind) params.set('kind', options.kind);
-  if (options.personId) params.set('personId', options.personId);
-  if (options.limit) params.set('limit', String(options.limit));
-  const qs = params.toString();
-  return request(`/timeline/events${qs ? `?${qs}` : ''}`, { silent: options.silent });
-};
-
 // Bulk-backfill importers (#2160). Upload an export file (ZIP or single JSON).
 // `preview: true` returns parse-only counts + a summary without writing; a real
 // import is idempotent so re-imports are safe. request() detects the FormData

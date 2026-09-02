@@ -11,6 +11,7 @@ import { describe, it, expect, vi, afterAll, beforeAll, beforeEach } from 'vites
 import { rmSync } from 'fs';
 import { join } from 'path';
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
+import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 import { getSyncBaseHash, __resetBaseHashCacheForTests } from '../../lib/conflictJournal.js';
 
 const testState = vi.hoisted(() => ({ dataRoot: null, writeCounter: { baseHash: 0 } }));
@@ -46,7 +47,7 @@ let skipReason = '';
   }
 }
 
-if (!dbReady) console.log(`⏭️  musicVideo/projectsDB.test.js skipped: ${skipReason}`);
+const runDb = requireDbOrSkip('services/musicVideo/projectsDB.test', dbReady, skipReason);
 
 afterAll(() => rmSync(testState.dataRoot, { recursive: true, force: true }));
 
@@ -62,7 +63,7 @@ const project = (id, deletedAt) => ({
   deletedAt,
 });
 
-describe.skipIf(!dbReady)('music video projects DB adapter', () => {
+describe.skipIf(!runDb)('music video projects DB adapter', () => {
   let db;
 
   beforeAll(async () => { db = await import('./projectsDB.js'); });
@@ -78,6 +79,44 @@ describe.skipIf(!dbReady)('music video projects DB adapter', () => {
   afterAll(async () => {
     await query(`DELETE FROM music_video_projects WHERE id LIKE $1`, [`${PRUNE_PREFIX}%`]).catch(() => {});
     await close();
+  });
+
+  it('backfills a missing JSONB id from the primary-key column', async () => {
+    const id = `${PRUNE_PREFIX}legacy-no-json-id`;
+    await query(
+      `INSERT INTO music_video_projects (id, status, data, created_at, updated_at, deleted)
+       VALUES ($1, 'draft', $2::jsonb, now(), now(), FALSE)`,
+      [id, JSON.stringify({ name: 'Legacy row', status: 'draft', scenes: [] })],
+    );
+
+    expect(await db.getProject(id)).toMatchObject({ id, name: 'Legacy row' });
+    expect((await db.listProjects()).find((item) => item.name === 'Legacy row')?.id).toBe(id);
+  });
+
+  it('rejects persistence when the project id is missing', async () => {
+    await expect(db.persist(query, { name: 'Missing id' })).rejects.toMatchObject({ code: 'PROJECT_ID_MISSING' });
+  });
+
+  it('rejects a mutator against a tombstoned project', async () => {
+    const created = await db.createProject({ name: 'Doomed' });
+    await db.deleteProject(created.id);
+    await expect(db.updateProject(created.id, { name: 'Zombie' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('same-updatedAt re-push does not persist or rewrite the base hash', async () => {
+    const remote = {
+      id: `${PRUNE_PREFIX}same-timestamp`, name: 'Same', status: 'draft', scenes: [],
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+      deleted: false, deletedAt: null,
+    };
+    await db.mergeProjectsFromSync([remote]);
+    const before = await query(`SELECT xmin::text AS version FROM music_video_projects WHERE id = $1`, [remote.id]);
+    testState.writeCounter.baseHash = 0;
+
+    expect(await db.mergeProjectsFromSync([remote])).toEqual({ applied: false, count: 0 });
+    const after = await query(`SELECT xmin::text AS version FROM music_video_projects WHERE id = $1`, [remote.id]);
+    expect(after.rows[0].version).toBe(before.rows[0].version);
+    expect(testState.writeCounter.baseHash).toBe(0);
   });
 
   it('pruneTombstonedProjects batches base-hash eviction for multiple tombstones', async () => {

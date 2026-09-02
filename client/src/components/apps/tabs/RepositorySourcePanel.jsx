@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -12,6 +12,8 @@ import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import Modal from '../../ui/Modal';
 import toast from '../../ui/Toast';
+import AppOperationBanner from '../AppOperationBanner';
+import { useAppOperation } from '../../../hooks/useAppOperation';
 
 const statusTone = {
   current: 'bg-port-success/15 text-port-success',
@@ -137,14 +139,15 @@ function RepositoryCard({ source }) {
   );
 }
 
-export default function RepositorySourcePanel({ appId, appName, onUpdated }) {
+export default function RepositorySourcePanel({ appId, appName, onUpdated, refreshKey = 0 }) {
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [syncingFork, setSyncingFork] = useState(false);
-  const [updating, setUpdating] = useState(false);
+  const [updateRequested, setUpdateRequested] = useState(false);
   const [error, setError] = useState(null);
   const [updateIntent, setUpdateIntent] = useState(null);
+  const lastRefreshKey = useRef(refreshKey);
 
   const load = useCallback(async ({ initial = false } = {}) => {
     if (initial) setLoading(true);
@@ -160,9 +163,37 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated }) {
     return result;
   }, [appId]);
 
+  const handleOperationComplete = useCallback(() => {
+    onUpdated?.();
+  }, [onUpdated]);
+  const {
+    steps: operationSteps,
+    isOperating,
+    operationType,
+    error: operationError,
+    completed: operationCompleted,
+    startUpdate,
+  } = useAppOperation({ appId, onComplete: handleOperationComplete });
+  const updating = isOperating && operationType === 'update';
+  const operationBusy = isOperating;
+
+  useEffect(() => {
+    if (updating) setUpdateRequested(true);
+  }, [updating]);
+
+  useEffect(() => {
+    setUpdateRequested(false);
+  }, [appId]);
+
   useEffect(() => {
     load({ initial: true });
   }, [load]);
+
+  useEffect(() => {
+    if (lastRefreshKey.current === refreshKey) return;
+    lastRefreshKey.current = refreshKey;
+    load();
+  }, [load, refreshKey]);
 
   const sources = status?.sources || [];
   const primary = sources.find((source) => source.id === 'primary') || sources[0] || null;
@@ -202,25 +233,11 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated }) {
     setSyncingFork(false);
   };
 
-  const handleManagedUpdate = async () => {
+  const handleManagedUpdate = () => {
     const intent = updateIntent;
     setUpdateIntent(null);
-    setUpdating(true);
-
-    const result = await api.pullAndUpdateApp(
-      appId,
-      { syncFork: intent?.syncFork === true },
-      { silent: true },
-    ).catch((reason) => {
-      toast.error(reason.message || `Could not update ${appName || 'the app'}`);
-      return null;
-    });
-    if (result?.success) {
-      toast.success(`${appName || 'App'} updated${status?.updateRestartsApp ? ' and restarted' : ''}`);
-      await load();
-      onUpdated?.();
-    }
-    setUpdating(false);
+    setUpdateRequested(true);
+    startUpdate(appId, appName, { syncFork: intent?.syncFork === true });
   };
 
   return (
@@ -237,13 +254,26 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated }) {
         </div>
         <button
           onClick={() => load()}
-          disabled={loading || refreshing || syncingFork || updating}
+          disabled={loading || refreshing || syncingFork || operationBusy || updateRequested}
           className="flex min-h-[40px] items-center gap-1.5 rounded-lg border border-port-border px-3 py-2 text-sm text-gray-300 hover:border-port-accent hover:text-white disabled:opacity-50"
         >
           <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />
           {refreshing ? 'Checking...' : 'Check sources'}
         </button>
       </div>
+
+      {(isOperating || operationError || operationCompleted) && (
+        <div className="mt-4">
+          <AppOperationBanner
+            appName={appName}
+            type={operationType || 'update'}
+            steps={operationSteps}
+            error={operationError}
+            completed={operationCompleted}
+            completedMessage={operationType === 'update' ? 'Reload this page before starting another update.' : undefined}
+          />
+        </div>
+      )}
 
       {loading && !status ? (
         <div className="py-8 text-center"><BrailleSpinner text="Checking repository sources" /></div>
@@ -272,7 +302,7 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated }) {
               {primary?.origin?.isFork && (
                 <button
                   onClick={handleSyncOnly}
-                  disabled={syncingFork || updating || forkDiverged}
+                  disabled={syncingFork || operationBusy || updateRequested || forkDiverged}
                   title={forkDiverged
                     ? 'Reconcile the fork commits on GitHub before syncing'
                     : 'Fast-forward the GitHub fork only; does not touch the checkout or restart the app'}
@@ -285,11 +315,11 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated }) {
               {shouldOfferUpdate && (
                 <button
                   onClick={() => setUpdateIntent({ syncFork: forkNeedsSync })}
-                  disabled={!canUpdate || syncingFork || updating}
+                  disabled={!canUpdate || syncingFork || operationBusy || updateRequested}
                   className="flex min-h-[40px] items-center gap-1.5 rounded-lg bg-port-accent px-4 py-2 text-sm text-white hover:bg-port-accent/80 disabled:opacity-50"
                 >
                   <Download size={16} className={updating ? 'animate-bounce' : ''} />
-                  {updating ? 'Updating...' : primaryLabel}
+                  {updating ? 'Updating...' : updateRequested ? 'Reload to update again' : primaryLabel}
                 </button>
               )}
             </div>
@@ -324,6 +354,7 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated }) {
             <li>Pull the application checkout from its configured origin</li>
             {companions.length > 0 && <li>Pull {companions.length} independent companion checkout{companions.length === 1 ? '' : 's'}</li>}
             <li>Install dependencies and run the app&apos;s setup script when configured</li>
+            <li>Rebuild the production UI when a build script is configured</li>
             {status?.updateRestartsApp && <li>Restart the app&apos;s managed processes</li>}
           </ul>
         </div>
@@ -331,6 +362,7 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated }) {
           <button onClick={() => setUpdateIntent(null)} className="px-4 py-2 text-sm text-gray-400 hover:text-white">Cancel</button>
           <button
             onClick={handleManagedUpdate}
+            disabled={updateRequested || operationBusy}
             className="flex items-center gap-2 rounded-lg bg-port-accent px-4 py-2 text-sm text-white hover:bg-port-accent/80"
           >
             <Download size={16} />

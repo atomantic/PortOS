@@ -11,20 +11,23 @@
  * thing is one POST; progress is reported through the existing image-gen
  * SSE channel (TBD — for v1 the client polls).
  *
- * No try/catch — errors bubble. Stream-failure cleanup is handled inline by
- * downloadToFile's pipeline().catch (the .partial gets unlinked on network
- * drops, disk full, etc.); only a process crash or power loss can leave a
- * .partial behind, and listLoras() filters those out by extension.
+ * No try/catch — errors bubble. `downloadToFile` Range-resumes a leftover
+ * `.partial` after a transport drop; a user-cancelled SSE disconnect still
+ * discards it. listLoras() filters `.partial` files out by extension.
  */
 
 import { existsSync } from 'fs';
 import { link, readFile, rename, rm, stat, unlink } from 'fs/promises';
-import { createWriteStream } from 'fs';
-import { randomBytes } from 'crypto';
-import { Readable, Transform } from 'stream';
-import { pipeline } from 'stream/promises';
 import { basename, join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
+import {
+  assessDownloadPreflight,
+  assertDownloadFits,
+  etagPathFor,
+  probeRemoteSize,
+  siblingDownloadMeta,
+  streamResumableDownload,
+} from '../lib/downloadPreflight.js';
 import { atomicWrite, assertSafeFilename, ensureDir, listDirectoryByExtension, sha256File, PATHS } from '../lib/fileUtils.js';
 import { verifySafetensorsStructure } from '../lib/hfCache.js';
 import { isPlainObject } from '../lib/objects.js';
@@ -414,40 +417,24 @@ export const resolveCivitaiKey = async () => {
   return fromSettings || env || '';
 };
 
-// Stream-download a URL to a temp file in PATHS.loras then rename into place.
-// The temp suffix prevents the listLoras endpoint from picking up a
-// half-downloaded file. The random suffix avoids clobbering a leftover
-// `.partial` from a previous crashed install (and prevents two concurrent
-// installs of the same target from racing on the same temp path).
-// fetchImpl is injectable for tests.
+// Stream-download a URL to `${destPath}.partial` then link/rename into place.
+// A leftover `.partial` is Range-resumed on retry; a user-cancelled SSE
+// disconnect still discards it. The `.partial` suffix keeps listLoras from
+// picking up a half-written file. fetchImpl is injectable for tests.
 // `onProgress({ received, total })` (optional) fires with byte counts during
 // the stream download — the manager's streaming install endpoint forwards these
 // as SSE `progress` frames so the UI can show a percentage. `total` is 0 when
 // the response carries no Content-Length (chunked / some CDN redirects), in
 // which case the client renders an indeterminate bar.
 const downloadToFile = async (url, destPath, { fetchImpl = fetch, headers = {} , hasApiKey = false, source = 'civitai', onProgress = null, signal = null } = {}) => {
-  const tmpPath = `${destPath}.${randomBytes(6).toString('hex')}.partial`;
-  // `signal` (optional) aborts the fetch + stream mid-download — the streaming
-  // install route passes it so an SSE client disconnect actually cancels a
-  // multi-GB transfer instead of letting it run to completion unwatched. On
-  // abort the fetch rejects (or the body stream errors), the pipeline().catch
-  // below unlinks the .partial, and the throw propagates before any sidecar is
-  // written — so a cancelled install leaves nothing behind.
-  const res = await fetchImpl(url, { headers, redirect: 'follow', signal });
-  if (!res.ok) {
+  const onHttpError = (res) => {
     if (res.status === 401 || res.status === 403) {
-      // HuggingFace LoRAs: a 401/403 means the repo is gated and the token is
-      // missing/insufficient — point the user at the license + HF token UI.
       if (source === 'huggingface') {
         const message = hasApiKey
           ? `HuggingFace rejected the download (${res.status}) even with your saved token — accept the model's license on its HF page, or the token may be expired/scoped.`
           : `HuggingFace download rejected (${res.status}) — this LoRA's repo is gated. Accept its license on HuggingFace and add your HF token in Image Gen settings, then retry.`;
         throw new ServerError(message, { status: res.status, code: 'HF_AUTH' });
       }
-      // When a key was supplied and Civitai still rejects, the cause is
-      // almost always early-access content or a deactivated/scoped key —
-      // not a missing key. Don't tell the user to set a key they've
-      // already set; surface both possibilities instead.
       const message = hasApiKey
         ? `Civitai rejected the download (${res.status}) even with your saved API key. The LoRA is likely in early-access (Civitai supporters only) or your key has expired/been revoked.`
         : `Civitai download rejected (${res.status}) — this LoRA may require an API key. Configure a Civitai API key in PortOS Settings (or set the CIVITAI_API_KEY env var) and retry.`;
@@ -456,42 +443,36 @@ const downloadToFile = async (url, destPath, { fetchImpl = fetch, headers = {} ,
     const label = source === 'huggingface' ? 'HuggingFace' : 'Civitai';
     const code = source === 'huggingface' ? 'HF_DOWNLOAD_FAILED' : 'CIVITAI_DOWNLOAD_FAILED';
     throw new ServerError(`${label} download failed: ${res.status} ${res.statusText}`, { status: 502, code });
-  }
-  if (!res.body) {
-    throw new ServerError('Civitai download returned no body', { status: 502, code: 'CIVITAI_DOWNLOAD_FAILED' });
-  }
-  // Node 18+ fetch returns a web ReadableStream; pipeline accepts it directly
-  // when wrapped in Readable.fromWeb (also handles backpressure correctly).
-  // On stream failure (network drop, disk full) the .partial would otherwise
-  // accumulate in PATHS.loras across retries.
-  const writer = createWriteStream(tmpPath);
-  const stages = [Readable.fromWeb(res.body)];
-  if (onProgress) {
-    // Count bytes via a passthrough Transform — NOT a bare `.on('data')`
-    // listener, which flips the source into flowing mode and defeats pipeline's
-    // backpressure. `res.headers?.get?.` is defensive: injected test fetch
-    // mocks return a bare `{ ok, body }` with no headers object.
-    const total = Number(res.headers?.get?.('content-length')) || 0;
-    let received = 0;
-    let lastEmit = 0;
-    stages.push(new Transform({
-      transform(chunk, _enc, cb) {
-        received += chunk.length;
-        // Throttle to ~150ms so a fast link doesn't flood the SSE stream.
+  };
+
+  let lastEmit = 0;
+  let lastTick = { received: 0, total: 0 };
+  const { tmpPath } = await streamResumableDownload({
+    url,
+    destPath,
+    headers,
+    fetchImpl,
+    signal,
+    finalize: false,
+    isCancelled: () => Boolean(signal?.aborted),
+    onHttpError,
+    onBytes: onProgress
+      ? (received, total) => {
+        lastTick = { received, total };
         const now = Date.now();
-        if (now - lastEmit >= 150) { lastEmit = now; onProgress({ received, total }); }
-        cb(null, chunk);
-      },
-      // Final flush guarantees a 100% (received === total) tick even if the
-      // last data chunk landed inside the throttle window.
-      flush(cb) { onProgress({ received, total }); cb(); },
-    }));
-  }
-  stages.push(writer);
-  await pipeline(...stages).catch(async (err) => {
-    await rm(tmpPath, { force: true }).catch(() => {});
-    throw err;
+        if (now - lastEmit < 150) return;
+        lastEmit = now;
+        onProgress({ received, total });
+      }
+      : undefined,
   });
+  // `finalize: false` means streamResumableDownload never had a chance to
+  // clean up its own etag sidecar (that only happens on ITS finalize path).
+  // Reaching here means the stream completed successfully — every branch
+  // below either moves or deletes tmpPath outright, never leaves it for a
+  // future resume, so the sidecar describing it is equally done.
+  await rm(etagPathFor(destPath), { force: true }).catch(() => {});
+  if (onProgress) onProgress(lastTick);
   // Atomic no-clobber finalize: `link` is POSIX-atomic and fails with EEXIST
   // when destPath already exists (concurrent install that snuck past our
   // pre-check). On success we unlink the tmp; on EEXIST we clean up and
@@ -569,7 +550,16 @@ const verifyDownloadedLora = async (destPath, { expectedSha256 = null, source = 
 
 // Install a LoRA from a Civitai URL. Returns the new sidecar JSON so the
 // client can render it immediately without a second list round-trip.
-const performCivitaiInstall = async (input, { modelId, versionId, fetchImpl }) => {
+// Civitai's `type` casing varies in the wild (LORA / Lora / lora) and the
+// family includes LoCon / LyCORIS / DoRA / LoHA — all of which load through
+// diffusers' lora pipeline. Refuse only true non-LoRA checkpoints.
+const ALLOWED_CIVITAI_LORA_TYPES = new Set(['lora', 'locon', 'lycoris', 'dora', 'loha']);
+
+// Shared by performCivitaiInstall and previewCivitaiInstall so a preview can
+// never promise a download the install would actually refuse — early-access
+// gating, the LoRA-type check, and the missing-downloadUrl guard all throw
+// from here now, instead of only guarding the real transfer.
+const resolveCivitaiInstallPlan = async (input, { modelId, versionId, fetchImpl }) => {
   const apiKey = (typeof input?.apiKey === 'string' && input.apiKey.trim()) || (await resolveCivitaiKey());
   const model = await fetchCivitaiModel(modelId, { apiKey, fetchImpl });
   const version = pickVersion(model, versionId);
@@ -596,11 +586,7 @@ const performCivitaiInstall = async (input, { modelId, versionId, fetchImpl }) =
       { status: 422, code: 'CIVITAI_NO_DOWNLOAD' },
     );
   }
-  // Civitai's `type` casing varies in the wild (LORA / Lora / lora) and the
-  // family includes LoCon / LyCORIS / DoRA / LoHA — all of which load
-  // through diffusers' lora pipeline. Refuse only true non-LoRA checkpoints.
-  const ALLOWED_LORA_TYPES = new Set(['lora', 'locon', 'lycoris', 'dora', 'loha']);
-  if (model?.type && !ALLOWED_LORA_TYPES.has(String(model.type).toLowerCase())) {
+  if (model?.type && !ALLOWED_CIVITAI_LORA_TYPES.has(String(model.type).toLowerCase())) {
     throw new ServerError(
       `Civitai model "${model.name}" is type "${model.type}", not a LoRA — refusing to install`,
       { status: 400, code: 'CIVITAI_NOT_A_LORA' },
@@ -614,31 +600,42 @@ const performCivitaiInstall = async (input, { modelId, versionId, fetchImpl }) =
   const slug = slugifyForFilename(model.name || file.name?.replace(/\.safetensors$/i, ''));
   const filename = `lora-${slug}-v${version.id}.safetensors`;
   const destPath = join(PATHS.loras, filename);
-  if (existsSync(destPath)) {
+  const expectedBytes = Number(file.sizeKB) > 0 ? Number(file.sizeKB) * 1024 : 0;
+
+  return { apiKey, model, version, file, filename, destPath, expectedBytes };
+};
+
+const performCivitaiInstall = async (input, { modelId, versionId, fetchImpl }) => {
+  const plan = await resolveCivitaiInstallPlan(input, { modelId, versionId, fetchImpl });
+  if (existsSync(plan.destPath)) {
     throw new ServerError(
-      `Already installed: ${filename}. Delete it first or pick a different version.`,
+      `Already installed: ${plan.filename}. Delete it first or pick a different version.`,
       { status: 409, code: 'CIVITAI_ALREADY_INSTALLED' },
     );
   }
 
   await ensureDir(PATHS.loras);
+  assertDownloadFits(await assessDownloadPreflight({ destPath: plan.destPath, expectedBytes: plan.expectedBytes }));
 
-  console.log(`📥 Installing Civitai LoRA: ${model.name} v${version.id} → ${filename} (${file.sizeKB ? Math.round(file.sizeKB / 1024) + ' MB' : 'size unknown'})`);
+  console.log(`📥 Installing Civitai LoRA: ${plan.model.name} v${plan.version.id} → ${plan.filename} (${plan.file.sizeKB ? Math.round(plan.file.sizeKB / 1024) + ' MB' : 'size unknown'})`);
   // Authenticate downloads via `?token=` only — the Authorization header
   // doesn't survive the 302 to CDN, AND sending both means the token also
   // ends up in CDN access logs. The metadata fetch (fetchCivitaiModel)
   // still uses the header since /api/v1/* doesn't redirect.
-  const tokenized = applyDownloadToken(file.downloadUrl, apiKey);
-  await downloadToFile(tokenized, destPath, {
+  const tokenized = applyDownloadToken(plan.file.downloadUrl, plan.apiKey);
+  await downloadToFile(tokenized, plan.destPath, {
     fetchImpl,
     headers: { 'User-Agent': 'PortOS/civitai-installer' },
-    hasApiKey: !!apiKey,
+    hasApiKey: !!plan.apiKey,
   });
-  await verifyDownloadedLora(destPath, { expectedSha256: file?.hashes?.SHA256 || null, source: 'civitai' });
+  await verifyDownloadedLora(plan.destPath, { expectedSha256: plan.file?.hashes?.SHA256 || null, source: 'civitai' });
 
-  const sidecar = await withKeyLayout(buildSidecar({ model, version, file, filename }), destPath);
-  await writeLoraSidecar(filename, sidecar);
-  console.log(`✅ Installed Civitai LoRA: ${filename} [layout=${sidecar.keyLayout || 'unknown'}]`);
+  const sidecar = await withKeyLayout(
+    buildSidecar({ model: plan.model, version: plan.version, file: plan.file, filename: plan.filename }),
+    plan.destPath,
+  );
+  await writeLoraSidecar(plan.filename, sidecar);
+  console.log(`✅ Installed Civitai LoRA: ${plan.filename} [layout=${sidecar.keyLayout || 'unknown'}]`);
   return sidecar;
 };
 
@@ -651,47 +648,49 @@ export const installFromCivitai = async (input, { fetchImpl = fetch } = {}) => {
   );
 };
 
+/** Size / dest / free-disk numbers for the LoRA confirm step — no transfer. */
+export const previewCivitaiInstall = async (input, { fetchImpl = fetch } = {}) => {
+  const { modelId, versionId } = parseCivitaiUrl(input?.url);
+  const plan = await resolveCivitaiInstallPlan(input, { modelId, versionId, fetchImpl });
+  const preflight = await assessDownloadPreflight({ destPath: plan.destPath, expectedBytes: plan.expectedBytes });
+  return {
+    kind: 'civitai',
+    ...preflight,
+    destPath: plan.filename,
+    alreadyDownloaded: existsSync(plan.destPath),
+  };
+};
+
 // Set of recognized LoRA families an HF import may target (image runners +
 // video families). Used to validate a user-supplied `family` override.
 const HF_LORA_FAMILY_VALUES = new Set(HF_LORA_FAMILIES);
 
-// Install a LoRA from a HuggingFace repo (Flux.2 Klein image adapters, fal /
-// Lightricks LTX video LoRAs, MiniMax H3). Mirrors installFromCivitai: parse
-// the ref → fetch repo metadata → pick the .safetensors → stream-download →
-// write the sidecar. The family is auto-detected from the repo id / tags /
-// base_model / filenames, or taken from an explicit `input.family` override
-// (validated against the known image + video families). Returns the new sidecar.
-export const installFromHuggingface = async (input, { fetchImpl = fetch, onProgress = null, signal = null } = {}) => {
+// Shared by installFromHuggingface and previewHuggingfaceInstall so a preview
+// can never show a different file/filename than the install it precedes.
+// `family` is resolved (override → autodetection → null) but NOT required —
+// it only narrows `pickHfLoraFile`'s pick among flux2 variant files; the
+// generated filename depends only on `repo` + the picked `file`. Preview
+// therefore never throws HF_UNKNOWN_FAMILY: that check belongs to the actual
+// install, which needs a concrete family for the sidecar metadata.
+// Neither caller threads a cancellation signal into this metadata lookup
+// (only the actual byte-stream download gets one) — a stalled-but-reachable
+// HF would otherwise hang a preview, or an install, indefinitely on this
+// call alone.
+const METADATA_FETCH_TIMEOUT_MS = 10_000;
+
+const resolveHfLoraInstallPlan = async (input, { fetchImpl = fetch } = {}) => {
   const { repo, revision, file: parsedFile } = parseHuggingfaceLoraRef(input?.url);
   // Stored/env/CLI HF token — only needed for gated repos, but harmless to
   // send on public ones (HF ignores a bearer it doesn't require).
   const token = (typeof input?.token === 'string' && input.token.trim()) || (await getHfToken()) || '';
-  const model = await fetchHuggingfaceModel(repo, { token, revision, fetchImpl });
+  const model = await fetchHuggingfaceModel(repo, {
+    token, revision, fetchImpl, signal: AbortSignal.timeout(METADATA_FETCH_TIMEOUT_MS),
+  });
   const preferredFile = input?.file || parsedFile || null;
   const detected = detectHfLoraFamily({ repo, model, file: preferredFile });
 
-  // Family: explicit override (validated) wins over autodetection so a user
-  // can correct a mis-detected repo from the UI. An unrecognized repo with no
-  // override is refused rather than silently tagged — a wrongly-tagged LoRA
-  // would surface under a model it can't actually load against.
-  let family = null;
-  if (input?.family) {
-    if (!HF_LORA_FAMILY_VALUES.has(input.family)) {
-      throw new ServerError(
-        `Unknown LoRA family "${input.family}" — expected one of ${[...HF_LORA_FAMILY_VALUES].join(', ')}`,
-        { status: 400, code: 'HF_BAD_FAMILY' },
-      );
-    }
-    family = input.family;
-  } else {
-    family = detected?.family || null;
-  }
-  if (!family) {
-    throw new ServerError(
-      `Couldn't determine a supported model for HuggingFace repo "${repo}". PortOS can install Flux 2, Flux 1, Z-Image, ERNIE, HiDream, Qwen, LTX-Video, and MiniMax H3 LoRAs — pass an explicit family if you know which one this targets.`,
-      { status: 422, code: 'HF_UNKNOWN_FAMILY' },
-    );
-  }
+  // Family: explicit override (validated by the caller) wins over autodetection.
+  const family = input?.family || detected?.family || null;
 
   const file = pickHfLoraFile(
     model,
@@ -719,19 +718,61 @@ export const installFromHuggingface = async (input, { fetchImpl = fetch, onProgr
       : (fileStemSlug === repoNameSlug ? '' : fileStemSlug));
   const filename = `lora-${slug}${explicitVariant ? `-${explicitVariant}` : ''}-hf.safetensors`;
   const destPath = join(PATHS.loras, filename);
-  if (existsSync(destPath)) {
+  const hfSibling = (Array.isArray(model?.siblings) ? model.siblings : []).find((row) => row?.rfilename === file);
+  // The model-metadata response never carries per-sibling sizes without the
+  // `blobs=true` expand we deliberately skip (see fetchHuggingfaceModel) —
+  // siblingDownloadMeta is ~always 0 here. Without a real number the preflight
+  // can never refuse an oversized LoRA, so probe the resolved file directly
+  // (same fallback specDecodeModels.js already uses for GGUF weights).
+  let expectedBytes = siblingDownloadMeta(hfSibling).bytes;
+  if (!expectedBytes) {
+    const probed = await probeRemoteSize(buildHfResolveUrl(repo, revision, file), {
+      headers: buildHfAuthHeaders(token),
+      fetchImpl,
+      signal: AbortSignal.timeout(METADATA_FETCH_TIMEOUT_MS),
+    });
+    expectedBytes = probed.bytes;
+  }
+
+  return { repo, revision, token, model, family, fluxVariant, file, filename, destPath, expectedBytes };
+};
+
+// Install a LoRA from a HuggingFace repo (Flux.2 Klein image adapters, fal /
+// Lightricks LTX video LoRAs, MiniMax H3). Mirrors installFromCivitai: parse
+// the ref → fetch repo metadata → pick the .safetensors → stream-download →
+// write the sidecar. The family is auto-detected from the repo id / tags /
+// base_model / filenames, or taken from an explicit `input.family` override
+// (validated against the known image + video families). Returns the new sidecar.
+export const installFromHuggingface = async (input, { fetchImpl = fetch, onProgress = null, signal = null } = {}) => {
+  // An unrecognized override is refused before the network round trip — a
+  // wrongly-tagged LoRA would surface under a model it can't actually load.
+  if (input?.family && !HF_LORA_FAMILY_VALUES.has(input.family)) {
     throw new ServerError(
-      `Already installed: ${filename}. Delete it first to reinstall.`,
+      `Unknown LoRA family "${input.family}" — expected one of ${[...HF_LORA_FAMILY_VALUES].join(', ')}`,
+      { status: 400, code: 'HF_BAD_FAMILY' },
+    );
+  }
+  const plan = await resolveHfLoraInstallPlan(input, { fetchImpl });
+  if (!plan.family) {
+    throw new ServerError(
+      `Couldn't determine a supported model for HuggingFace repo "${plan.repo}". PortOS can install Flux 2, Flux 1, Z-Image, ERNIE, HiDream, Qwen, LTX-Video, and MiniMax H3 LoRAs — pass an explicit family if you know which one this targets.`,
+      { status: 422, code: 'HF_UNKNOWN_FAMILY' },
+    );
+  }
+  if (existsSync(plan.destPath)) {
+    throw new ServerError(
+      `Already installed: ${plan.filename}. Delete it first to reinstall.`,
       { status: 409, code: 'HF_ALREADY_INSTALLED' },
     );
   }
 
   await ensureDir(PATHS.loras);
-  console.log(`📥 Installing HuggingFace LoRA: ${repo} (${file}) → ${filename} [family=${family}]`);
-  await downloadToFile(buildHfResolveUrl(repo, revision, file), destPath, {
+  assertDownloadFits(await assessDownloadPreflight({ destPath: plan.destPath, expectedBytes: plan.expectedBytes }));
+  console.log(`📥 Installing HuggingFace LoRA: ${plan.repo} (${plan.file}) → ${plan.filename} [family=${plan.family}]`);
+  await downloadToFile(buildHfResolveUrl(plan.repo, plan.revision, plan.file), plan.destPath, {
     fetchImpl,
-    headers: { 'User-Agent': 'PortOS/hf-lora-installer', ...buildHfAuthHeaders(token) },
-    hasApiKey: !!token,
+    headers: { 'User-Agent': 'PortOS/hf-lora-installer', ...buildHfAuthHeaders(plan.token) },
+    hasApiKey: !!plan.token,
     source: 'huggingface',
     onProgress,
     signal,
@@ -739,13 +780,27 @@ export const installFromHuggingface = async (input, { fetchImpl = fetch, onProgr
   // HF's model metadata doesn't expose a per-file digest through pickHfLoraFile,
   // so the structural header/size check is the integrity guard here (no deep
   // sha256 compare available for this path).
-  await verifyDownloadedLora(destPath, { source: 'huggingface' });
+  await verifyDownloadedLora(plan.destPath, { source: 'huggingface' });
 
   const sidecar = await withKeyLayout(
-    buildHfLoraSidecar({ repo, revision, file, model, family, filename, fluxVariant }),
-    destPath,
+    buildHfLoraSidecar({ repo: plan.repo, revision: plan.revision, file: plan.file, model: plan.model, family: plan.family, filename: plan.filename, fluxVariant: plan.fluxVariant }),
+    plan.destPath,
   );
-  await writeLoraSidecar(filename, sidecar);
-  console.log(`✅ Installed HuggingFace LoRA: ${filename} [layout=${sidecar.keyLayout || 'unknown'}]`);
+  await writeLoraSidecar(plan.filename, sidecar);
+  console.log(`✅ Installed HuggingFace LoRA: ${plan.filename} [layout=${sidecar.keyLayout || 'unknown'}]`);
   return sidecar;
+};
+
+/** Size / dest / free-disk numbers for the HF LoRA confirm step — mirrors the
+ * exact file/filename installFromHuggingface will write, so the number shown
+ * never disagrees with what installs. No transfer starts. */
+export const previewHuggingfaceInstall = async (input, { fetchImpl = fetch } = {}) => {
+  const plan = await resolveHfLoraInstallPlan(input, { fetchImpl });
+  const preflight = await assessDownloadPreflight({ destPath: plan.destPath, expectedBytes: plan.expectedBytes });
+  return {
+    kind: 'huggingface',
+    ...preflight,
+    destPath: plan.filename,
+    alreadyDownloaded: existsSync(plan.destPath),
+  };
 };

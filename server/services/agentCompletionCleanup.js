@@ -21,7 +21,7 @@ import { unlink, rm } from 'fs/promises';
 import { emitLog } from './cosEvents.js';
 import { updateAgent } from './cosAgentLifecycle.js';
 import { updateTask, addTask, reviveBlockedTask, checkStagePrecondition } from './cos.js';
-import { PIPELINE_BEHAVIOR_FLAGS, normalizeReviewers } from '../lib/validation.js';
+import { PIPELINE_STAGE_BEHAVIOR_FLAGS, normalizeReviewers } from '../lib/validation.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import * as jiraService from './jira.js';
 import * as git from './git.js';
@@ -30,6 +30,7 @@ import { resolveReviewLoopOptions } from './codeReview.js';
 import { cleanupAgentWorktree, spawnMergeRecoveryTask, releaseRetryHold } from './agentWorktreeCleanup.js';
 import { resolvePrCompletion, resolvePrCreation } from '../lib/prDisposition.js';
 import { resolveOwnsPrWorkflow } from '../lib/slashdoInvocation.js';
+import { isPublicReviewRestrictedProfile } from '../lib/agentExecutionProfiles.js';
 
 const ROOT_DIR = PATHS.root;
 
@@ -83,6 +84,21 @@ export async function handlePipelineProgression(task, agentId, success) {
 
   const nextStage = stages[nextStageIndex];
 
+  // A restricted execution profile must never be INHERITED across a stage
+  // boundary — the profile is what selects the provider posture and the
+  // stripped child environment, so carrying the previous stage's value would
+  // run the next stage under the wrong contract (or, if cleared, under none at
+  // all while still holding untrusted public content). A pipeline that has
+  // entered a restricted profile and whose next stage declares none fails
+  // closed rather than handing that content to an unrestricted agent.
+  if (isPublicReviewRestrictedProfile(task.metadata?.executionProfile) && !nextStage.executionProfile) {
+    await updateTask(task.id, {
+      metadata: { ...task.metadata, pipeline: { ...pipeline, status: 'failed', stageResults: updatedResults } }
+    }, task.taskType);
+    emitLog('warn', `⛔ Pipeline ${pipeline.id} stage ${nextStageIndex} declares no execution profile after a restricted stage`, { pipelineId: pipeline.id });
+    return;
+  }
+
   // Check next stage's precondition before advancing
   if (nextStage.precondition && task.metadata.repoPath) {
     const check = checkStagePrecondition(nextStage, task.metadata.repoPath);
@@ -129,10 +145,14 @@ export async function handlePipelineProgression(task, agentId, success) {
     nextTask.metadata.providerId = nextStage.providerId;
   }
   if (nextStage.effort) nextTask.metadata.effort = nextStage.effort;
+  // The profile, unlike the pins above, is SET-OR-CLEARED (see the guard at the
+  // top of the hand-off): each stage runs under exactly the contract it
+  // declares, never the previous stage's.
+  nextTask.metadata.executionProfile = nextStage.executionProfile || null;
   // Apply per-stage overrides for agent behavior flags
   const stageReadOnly = nextStage.readOnly ?? false;
   const taskDefaults = pipeline.taskDefaults || {};
-  for (const flag of PIPELINE_BEHAVIOR_FLAGS) {
+  for (const flag of PIPELINE_STAGE_BEHAVIOR_FLAGS) {
     if (flag in nextStage) {
       nextTask.metadata[flag] = nextStage[flag];
     } else if (stageReadOnly) {

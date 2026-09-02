@@ -2,8 +2,8 @@
 
 Living reference of every third-party dependency in PortOS, why it's kept, and what the current verdict is. Updated by `/do:depfree` runs.
 
-**Last audited:** 2026-08-04 (scoped audit of the `keyv`/`cacheable` supply-chain compromise); prior follow-up 2026-07-14 (issue #2547), prior full audit 2026-04-28 (default mode), tables corrected 2026-07-01 during a docs audit.
-**Verdict:** All dependencies justified. The 2026-08-04 audit replaced the entire `eslint` stack with `@biomejs/biome`, dropping 110 net client packages including the `file-entry-cache → flat-cache → keyv` chain named in the August 2026 Shai-Hulud npm compromise (PortOS held safe versions throughout — see the detailed finding below). The same pass closed a latent hole where `ignore-scripts=true` was only active for repo-root installs, not for any workspace install or CI. Since the last full audit: `sax` was removed (replaced with an owned parser, issue #1824), `portos-ai-toolkit` was vendored in-tree (`server/lib/aiToolkit/`), and monolithic `googleapis` was replaced with scoped `@googleapis/*` packages. The 2026-07-14 follow-up bumped `kokoro-js` to its latest patch `1.2.1` (still on maintenance watch — no publish since 2025-05) and aligned the dual `pm2` pins (root + server both `7.0.4`).
+**Last audited:** 2026-09-02 (scoped: `pdf-lib` → `@cantoo/pdf-lib`, issue #5672); prior 2026-08-04 (scoped audit of the `keyv`/`cacheable` supply-chain compromise); prior follow-up 2026-07-14 (issue #2547), prior full audit 2026-04-28 (default mode), tables corrected 2026-07-01 during a docs audit.
+**Verdict:** All dependencies justified. The 2026-08-04 audit replaced the entire `eslint` stack with `@biomejs/biome`, dropping 110 net client packages including the `file-entry-cache → flat-cache → keyv` chain named in the August 2026 Shai-Hulud npm compromise (PortOS held safe versions throughout — see the detailed finding below). The same pass closed a latent hole where `ignore-scripts=true` was only active for repo-root installs, not for any workspace install or CI. Since the last full audit: `sax` was removed (replaced with an owned parser, issue #1824), `portos-ai-toolkit` was vendored in-tree (`server/lib/aiToolkit/`), and monolithic `googleapis` was replaced with scoped `@googleapis/*` packages. The 2026-07-14 follow-up bumped `kokoro-js` to its latest patch `1.2.1` (still on maintenance watch — no publish since 2025-05) and aligned the dual `pm2` pins (root + server both `7.0.4`). The 2026-09-02 follow-up replaced abandoned `pdf-lib` (no publish since 2022-05) with the maintained MIT fork `@cantoo/pdf-lib@2.9.1` — a same-public-API swap across the four export paths, done while `npm audit` was still clean rather than under advisory pressure.
 
 ## Audit Methodology
 
@@ -19,9 +19,11 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 
 | Package | Tier | Verdict | Where Used | Notes |
 |---------|------|---------|------------|-------|
-| **Root devDeps** | | | | |
-| `pm2` | 1 | KEEP | top-level scripts | Process manager, foundational. Pinned `7.0.4` (aligned with server pin) |
+| **Root deps** | | | | |
+| `pm2` | 1 | KEEP | top-level scripts | Process manager, foundational. Declared in root `dependencies` (the root manifest has no devDependencies). Pinned `7.0.4` (aligned with server pin) |
 | **Server deps** | | | | |
+| `@cantoo/pdf-lib` | 2 | KEEP | PDF generation for the volume / comic / prose / legacy-archive exports | Maintained MIT fork of `pdf-lib`, which has had no publish since 2022-05. Same public API (`PDFDocument`/`rgb`/`StandardFonts`); the swap was 4 import lines. On maintenance watch — see the detailed finding |
+| `pdf-lib` | — | REPLACED | PDF generation | 2026-09-02 → `@cantoo/pdf-lib` (issue #5672). Abandoned upstream: `1.17.1` is simultaneously the pinned and the latest published version, unchanged since 2022-05-12. Not deprecated and never flagged by `npm audit` — replaced ahead of an advisory, not in response to one |
 | `@novnc/novnc` | 1 | KEEP | PortDeck remote desktop viewer | Mature RFB/VNC protocol implementation; replacing it would require owning multiple security types and framebuffer encodings |
 | `@googleapis/calendar` | 1 | KEEP | Calendar integration | Scoped official Google SDK (replaced monolithic `googleapis`) |
 | `@googleapis/gmail` | 1 | KEEP | Messages/Gmail integration | Scoped official Google SDK |
@@ -30,7 +32,6 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `google-auth-library` | 1 | KEEP | Google OAuth | Pairs with `@googleapis/*` |
 | `kokoro-js` | 2 | KEEP | `server/services/voice/tts-kokoro.js` | Only pure-JS in-process TTS; replacement = Python subprocess + pooling |
 | `node-pty` | 1 | KEEP | shell/terminal services | Native PTY binding (N-API) |
-| `pdf-lib` | 1 | KEEP | PDF generation/manipulation | |
 | `pg` | 1 | KEEP | Postgres access | Official `pg` driver |
 | `pm2` | 1 | KEEP | app lifecycle | Process manager. Pinned `7.0.4` (aligned with root pin) |
 | `sharp` | 1 | KEEP | image processing | Native, widely-audited |
@@ -47,7 +48,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `@dnd-kit/sortable` | 1 | KEEP | drag/drop | |
 | `@react-three/drei` | 1 | KEEP | CyberCity 3D | Three.js helpers |
 | `@react-three/fiber` | 1 | KEEP | CyberCity 3D | React renderer for Three |
-| `@scalar/api-reference-react` | 1 | KEEP | Dev Tools → API Explorer | Interactive OpenAPI reference UI rendering |
+| `@scalar/api-reference-react` | 2 | KEEP | Dev Tools → API Explorer | Interactive OpenAPI reference UI. Heaviest client dependency by far — 261/599 packages, 3.24 MB of dist assets. Kept for lack of a maintained lighter alternative; bounded by a budget test. See detailed finding |
 | `@xterm/xterm` | 1 | KEEP | browser terminal | |
 | `@xterm/addon-fit` | 1 | KEEP | xterm sizing | |
 | `@xterm/addon-web-links` | 1 | KEEP | xterm links | |
@@ -61,7 +62,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `three-stdlib` | 1 | KEEP | CyberCity 3D | Community-maintained Three.js utilities used by the client renderer |
 | **Client devDeps** | | | | |
 | `@biomejs/biome` | 1 | KEEP | linting | Replaced the whole eslint stack 2026-08-04; native binary, 0 regular deps + 8 platform optionals (1 installed) |
-| `eslint` | — | REMOVED | linting | 2026-08-04 → `@biomejs/biome`. 53 packages were reachable only via `eslint` itself (incl. the `file-entry-cache → flat-cache → keyv` chain); 110 net once the plugin subtrees and orphaned `typescript` go too |
+| `eslint` | — | REMOVED | linting | 2026-08-04 → `@biomejs/biome`. 53 packages were reachable only via `eslint` itself (incl. the `file-entry-cache → flat-cache → keyv` chain); 110 net once the plugin subtrees and orphaned `typescript` go too. `minimatch` and `brace-expansion` left the tree with it (both now 0 occurrences in every lockfile), so neither needs an override pin — do not re-add one |
 | `@eslint/js` | — | REMOVED | linting | Removed with `eslint` |
 | `@eslint-react/eslint-plugin` | — | REMOVED | linting | Removed with `eslint`; its 8 enabled rules map to Biome rules + one GritQL plugin |
 | `eslint-plugin-react-hooks` | — | REMOVED | linting | Removed with `eslint`; `rules-of-hooks` → Biome `useHookAtTopLevel` |
@@ -77,8 +78,36 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `@testing-library/react` | 1 | KEEP | component tests | |
 | `@testing-library/user-event` | 1 | KEEP | interaction tests | |
 | `rollup-plugin-visualizer` | 2 | KEEP | bundle-size analysis | Dev-only, opt-in |
+| **Autofixer deps** | | | | |
+| `express` | 1 | KEEP | `autofixer/ui.js` | Same framework and pin (`5.2.1`) as the server workspace, but a separate install prefix with its own lockfile — so it needs its own `overrides` block to inherit the server's express-tree pins |
+| **Browser workspace** | | | | |
+| _(none)_ | — | — | `browser/server.js` | Zero dependencies — Node built-ins only, plus one in-repo import from `server/lib/`. No Dependabot entry, and its lockfile is gitignored |
 
 ## Detailed Findings — Tier 2/3 Audits
+
+### `@cantoo/pdf-lib` — KEEP (Tier 2), replaced `pdf-lib` 2026-09-02 (issue #5672)
+
+- **Usage**: 4 import sites, all the same named import — `server/services/pipeline/volumePdf.js`, `comicPdf.js`, `proseExport.js`, and `server/services/legacyExport.js` (`import { PDFDocument, rgb, StandardFonts }`). ~40 call sites across them, all in the narrow high-level core: `PDFDocument.create`, `addPage`, `embedFont`, `drawText`, `drawImage`, `widthOfTextAtSize`, `save`, plus `rgb()` and 9 `StandardFonts` constants. No low-level `PDFDict`/`PDFRef` work, no form filling, no encryption, no incremental update.
+- **Why the swap**: `pdf-lib@1.17.1` has had **no npm publish since 2022-05-12** — the pinned version and the latest published version are the same release. It is not deprecated and `npm audit` was clean, but it is a parser/serializer for a hostile binary format sitting on the export path for four user-facing pipelines. When a PDF advisory lands there is no upstream release to take. Migrating while audit is green is a planned change; migrating after an advisory is an emergency.
+- **The fork**: `@cantoo/pdf-lib` (`github.com/cantoo-scribe/pdf-lib`), same MIT license, pinned `2.9.1`, published 2026-08. It preserves the `PDFDocument` / `rgb` / `StandardFonts` public API, so the migration was 4 import lines + 1 manifest line + the lockfile — no output, layout, font, or page-geometry change.
+- **Transitive cost**: `server/package-lock.json` goes 380 → 385 packages (**+5 net**). In: the fork plus `color`, `color-string`, `is-arrayish`, `simple-swizzle`, `html-entities`, `node-html-better-parser`, and a top-level `pako`. Out: `pdf-lib` and its nested `pako` / `tslib` copies. `@pdf-lib/standard-fonts` and `@pdf-lib/upng` **stay** — the fork depends on them too — and so does the top-level `tslib`, which other packages pull. `npm audit` stays at 0 vulnerabilities.
+- **Replacement complexity if owned in-tree instead**: Infeasible (300+ lines of font metrics, xref tables, and content-stream encoding) — which is why a maintained fork, not a rewrite, was the decision.
+- **Regression cover**: two boundary tests assert real output bytes rather than helper behaviour, because a same-API fork can only regress below the helper layer — `proseExport.test.js` (`buildProsePdf` returns a `Uint8Array` starting `%PDF-` and ending `%%EOF`) and `comicPdf.test.js` (image XObject count scales with the number of embedded pages, catching a silently-dropped `drawImage` payload).
+- **Grep caveat for the next audit**: `server/services/legacyExport.js` contains a byte sequence that makes `file(1)` classify it as `data`, so plain `grep -r` **silently skips it** — a repo-wide dependency sweep must use `grep -ra`. That is exactly how the fourth import site was missed when this migration was first scoped; it surfaced only as an `ERR_MODULE_NOT_FOUND` in the suite.
+- **Re-audit trigger**: revisit if `@cantoo/pdf-lib` itself goes >12 months without a publish, or on any CVE against it. The fallback is the same shape as the swap in: another maintained fork, or upstream `pdf-lib` if it ever resumes releases.
+
+### `@scalar/api-reference-react` — KEEP (Tier 2)
+
+- **Usage**: 1 import, in `client/src/components/api-explorer/ScalarReference.jsx`, which `client/src/pages/ApiExplorer.jsx` reaches through a `lazy()` dynamic import on one route (Dev Tools → API Explorer, the REST Reference tab). No other call site.
+- **Measured footprint** (2026-09-02, fresh `npm run build --prefix client`):
+  - **Packages**: 261 of the client's 599 installed packages (44%) are reachable ONLY via Scalar — computed by walking each top-level dependency's transitive closure in `client/package-lock.json` and subtracting every closure that does not include Scalar. Scalar's own subtree is 282. The exclusive set includes an entire second UI framework (`vue`, `radix-vue`, `@headlessui/vue`, `@floating-ui/vue`, `vue-sonner`, `@unhead/vue`) and the Vercel AI SDK (`ai`, `@ai-sdk/gateway`, `@ai-sdk/provider`, `@ai-sdk/provider-utils`, `@ai-sdk/vue`).
+  - **Bundle**: 3.24 MB of dist assets against ~13.0 MB of built JS — `OperationBlock.vue-*.js` (2.21 MB, the single largest chunk in the app, roughly twice the whole three.js vendor bundle), `ScalarReference-*.js` (608 KB), `AgentScalarChatInterface.vue-*.js` (197 KB), `ScalarReference-*.css` (250 KB).
+- **The AI SDK is a hard dependency, not an optional peer**: `@scalar/api-reference` depends on `@scalar/agent-chat`, whose own dependencies include `ai` and `@ai-sdk/vue`. `agent: { disabled: true }` in `ScalarReference.jsx` is a **runtime** config value, so Rollup cannot tree-shake on it — the agent chat interface is emitted as its own chunk regardless. Turning the feature off changes the UI, not the build.
+- **What bounds the user-facing cost**: the `lazy()` import. None of this is in the initial payload; it downloads only when a developer opens the REST Reference tab.
+- **Replacement complexity**: Complex, and every surveyed alternative is worse. `rapidoc` has had no publish since 2024-10 (trading a heavy maintained dependency for an unmaintained one), and `@stoplight/elements` is comparably large. Owning an OpenAPI renderer is a project of its own.
+- **Decision**: KEEP, bounded by a test. What was missing here was measurement, not removal.
+- **Regression cover**: `client/src/pages/ApiExplorer.bundle.test.js` sums the Scalar-attributable `client/dist/assets` files and asserts they stay under a **4.0 MB** budget (~23% headroom over the measured 3.24 MB). It skips itself when `client/dist` is absent, so the plain unit-test job stays green; CI runs it as its own step right after `npm run build --prefix client`, against a fresh build rather than a stale `dist/`. A companion assertion pins non-vacuity — it fails if no `ScalarReference-*.js` chunk is found, so a Vite chunk-naming change cannot turn the budget into a 0-byte pass. This is the only test in the client suite that looks at build output; every other one runs against source, so a version bump that doubles the chunk is otherwise completely unobserved.
+- **Re-audit trigger**: revisit if the budget test fails (re-measure and decide deliberately — do not reflexively raise the number), if Scalar drops the `agent` config toggle, or if a maintained framework-free OpenAPI renderer appears.
 
 ### `kokoro-js` — KEEP (Tier 2)
 
@@ -119,26 +148,22 @@ This is intentionally NOT done in default mode — current dependency footprint 
 
 ## Override Pins (`overrides`)
 
-Defined in `package.json` (root + server + client) — kept current to dodge known upstream advisories:
+Defined in `package.json` (root + server + client + autofixer) — kept current to dodge known upstream advisories:
 
 - `ws@8.21.3` (all three)
 - `lodash@4.18.1`, `follow-redirects@1.16.0`, `js-yaml@4.3.1`, `ip-address@10.5.0` (root + server)
 - `nanoid@3.3.18`, `socket.io-parser@4.2.7` (server + client)
-- `path-to-regexp@8.4.2` (server only)
-- `body-parser@2.3.0` (server only)
-- `qs@6.15.3` (server only)
+- `path-to-regexp@8.4.2`, `body-parser@2.3.0`, `qs@6.15.3` (server + autofixer — the express-reachable subset; `autofixer/` mirrors only these three because a pin for a package absent from the tree reads as protection that does not exist)
 - `tar@7.5.22` (server only)
 - `engine.io@6.6.9` (server only)
 - `postcss@8.5.26` (server only)
 - `protobufjs@7.6.5` + `@protobufjs/utf8@1.1.2` (server only)
 - `sharp@0.35.4` (server only, collapses the nested copy `@huggingface/transformers` requests)
-- `brace-expansion@5.0.9` (client only)
-- `minimatch@3 → brace-expansion@1.1.18` (client only, scoped)
 - `three@0.185.1` (client only, keeps drei/fiber on one three copy)
 
 These exist purely to force-bump transitive deps; revisit if `npm audit` flags new advisories.
 
-**Keep this list in sync with the manifests** — a stale entry here reads as a pin that exists when it doesn't. `server/dependency-overrides.test.js` guards the pins themselves (cross-manifest version parity, plus a `MINIMUM_SAFE` floor per remediated advisory), but it does not read this document. When a floor moves because a *new* advisory covers the version already pinned — as `js-yaml@4.3.0` did under GHSA-5p4m-2wfm-xmqj — bump the pin, the `MINIMUM_SAFE` row, and this list together.
+**Keep this list in sync with the manifests** — a stale entry here reads as a pin that exists when it doesn't. `server/dependency-overrides.test.js` guards the pins themselves (cross-manifest version parity, a `MINIMUM_SAFE` floor per remediated advisory, that every workspace shipping a tracked lockfile is in the governed manifest list, that each tracked lockfile actually resolves the pinned version, and that every pin names a package its own workspace lockfile still contains — so a pin outliving its consumer fails rather than lingering as imaginary protection), but it does not read this document. When a floor moves because a *new* advisory covers the version already pinned — as `js-yaml@4.3.0` did under GHSA-5p4m-2wfm-xmqj — bump the pin, the `MINIMUM_SAFE` row, and this list together.
 
 **Not every compromised package warrants a pin.** A pin only helps when the installed version is *below* the top of its permitted range — otherwise there is nothing to force. The August 2026 `keyv` / `flat-cache` / `file-entry-cache` compromise deliberately got **no** pin: each range was already at its ceiling (highest published `keyv@4.x` *is* `4.5.4`, etc.), so a pin would have been a no-op, and the packages were removed outright instead. Check headroom (`npm view <pkg>@<major> version`) before adding an entry here.
 

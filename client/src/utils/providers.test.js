@@ -16,6 +16,13 @@ import {
   isVisionCapableCliProvider,
   visionLocalModelFilter,
   isToolUseModel,
+  isToolFreeLocalProvider,
+  isToolFreeLocalModel,
+  toolFreeLocalSelectionPolicy,
+  publicReviewSelectionPolicy,
+  supportsPublicReviewPosture,
+  PUBLIC_REVIEW_ACTIONS_POSTURE,
+  PUBLIC_REVIEW_NO_TOOL_POSTURE,
   localToolUseHint,
   withToolUseOptionLabel,
   localBackendForProvider,
@@ -48,6 +55,7 @@ import {
   isGrokBuildCli,
   isKimiProvider,
   isCodexProvider,
+  isCodexSubscriptionProvider,
   supportsModelRefresh,
   isAntigravityProvider,
   effortLevelsForProvider,
@@ -56,6 +64,7 @@ import {
   CLAUDE_EFFORT_LEVELS,
   CODEX_EFFORT_LEVELS,
   CURSOR_EFFORT_LEVELS,
+  GROK_EFFORT_LEVELS,
   ANTIGRAVITY_EFFORT_LEVELS,
   isConfiguredDefaultModel,
   configuredDefaultIn,
@@ -97,6 +106,7 @@ describe('resolveCliEffort (server mirror)', () => {
   const CLAUDE = { id: 'claude-code', command: 'claude' };
   const CODEX = { id: 'codex', command: 'codex' };
   const GROK = { id: 'grok-cli', command: 'grok' };
+  const KIMI = { id: 'kimi-cli', command: 'kimi' };
 
   it.each([
     ['supported value passes through', 'medium', AGY, 'medium'],
@@ -110,7 +120,13 @@ describe('resolveCliEffort (server mirror)', () => {
     ['codex accepts max', 'max', CODEX, 'max'],
     ['ultra resolves to codex max without a supported model', 'ultra', CODEX, 'max'],
     ['unknown value yields no flag', 'bogus', AGY, null],
-    ['effort-less provider yields no flag', 'high', GROK, null],
+    ['effort-less provider yields no flag', 'high', KIMI, null],
+    // grok's ladder tops out at xhigh, so a level saved against claude/codex
+    // clamps rather than dropping — on BOTH sides of the mirror.
+    ['grok accepts its whole ladder', 'xhigh', GROK, 'xhigh'],
+    ['above grok ladder clamps to xhigh', 'max', GROK, 'xhigh'],
+    ['ultra clamps to grok xhigh', 'ultra', GROK, 'xhigh'],
+    ['below grok ladder takes the weakest', 'minimal', GROK, 'low'],
     ['unset yields no flag', '', AGY, null],
     ['null yields no flag', null, CLAUDE, null],
   ])('%s', (_label, effort, provider, expected) => {
@@ -146,7 +162,13 @@ describe('effortLevelsForProvider (server mirror)', () => {
     ['OpenCode vLLM TUI', { id: 'opencode-vllm-tui', command: 'opencode', vllmBacked: true }, ['low', 'medium', 'high']],
     ['OpenCode SGLang TUI', { id: 'opencode-sglang-tui', command: 'opencode', sglangBacked: true }, ['low', 'medium', 'high']],
     ['OpenCode with no local backend', { id: 'opencode', command: 'opencode' }, null],
-    ['grok (no effort control)', { id: 'grok-cli', command: 'grok' }, null],
+    // grok DOES have an effort control (`--reasoning-effort`, aliased `--effort`);
+    // its ladder stops at xhigh, which is why it is not simply CLAUDE's.
+    ['grok CLI', { id: 'grok-cli', command: 'grok' }, GROK_EFFORT_LEVELS],
+    ['grok TUI', { id: 'grok-tui' }, GROK_EFFORT_LEVELS],
+    ['path-configured grok', { id: 'custom', command: '/Users/x/.grok/bin/grok' }, GROK_EFFORT_LEVELS],
+    // The bare `grok` id is the HTTP API provider — no CLI, so no flag to carry a level.
+    ['grok API provider', { id: 'grok', type: 'api' }, null],
     ['blank command is not claude', { id: 'ollama' }, null],
   ];
 
@@ -376,7 +398,7 @@ describe('Antigravity base-model split (server mirror)', () => {
     });
 
     it('drops the effort for a provider with no effort control at all', () => {
-      expect(effortSurvivingModel({ id: 'grok-cli', command: 'grok' }, 'grok-4', 'high')).toBe('');
+      expect(effortSurvivingModel({ id: 'kimi-cli', command: 'kimi' }, 'kimi-k2', 'high')).toBe('');
     });
 
     it('normalizes a nullish effort to the empty sentinel', () => {
@@ -891,6 +913,64 @@ describe('localBackendForProvider', () => {
     expect(localBackendForProvider({ endpoint: 'https://api.openai.com/v1', name: 'OpenAI' })).toBeNull();
     expect(localBackendForProvider({})).toBeNull();
     expect(localBackendForProvider(null)).toBeNull();
+  });
+});
+
+describe('toolFreeLocalSelectionPolicy', () => {
+  const ollama = { id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1', enabled: true };
+  const lmstudio = { id: 'lmstudio', type: 'api', endpoint: 'http://localhost:1234/v1', enabled: true };
+
+  it('allows only canonical local API providers', () => {
+    expect(isToolFreeLocalProvider(ollama)).toBe(true);
+    expect(isToolFreeLocalProvider(lmstudio)).toBe(true);
+    expect(isToolFreeLocalProvider({ ...ollama, type: 'tui' })).toBe(false);
+    expect(isToolFreeLocalProvider({ ...ollama, id: 'custom-local' })).toBe(false);
+    expect(isToolFreeLocalProvider({ ...ollama, endpoint: 'http://example.internal:11434/v1' })).toBe(false);
+  });
+
+  it('requires an authoritative text capability report and rejects tool or embedding models', () => {
+    const capabilities = {
+      ollama: {
+        'safe-model': ['chat'],
+        'completion-model': ['completion'],
+        'agent-model': ['chat', 'tools'],
+        'embedding-model': ['embedding'],
+        'empty-model': [],
+      },
+    };
+    expect(isToolFreeLocalModel('safe-model', ollama, capabilities)).toBe(true);
+    expect(isToolFreeLocalModel('completion-model', ollama, capabilities)).toBe(true);
+    expect(isToolFreeLocalModel('embedding-model', ollama, capabilities)).toBe(false);
+    expect(isToolFreeLocalModel('empty-model', ollama, capabilities)).toBe(false);
+    expect(isToolFreeLocalModel('agent-model', ollama, capabilities)).toBe(false);
+    expect(isToolFreeLocalModel('unknown-model', ollama, capabilities)).toBe(false);
+    expect(isToolFreeLocalModel({ id: 'safe-object', capabilities: ['chat'] }, ollama, {})).toBe(true);
+    expect(isToolFreeLocalModel({ id: 'tool-object', capabilities: ['chat', 'tools'] }, ollama, {})).toBe(false);
+  });
+
+  it('provides one policy object for provider and model filtering', () => {
+    const policy = toolFreeLocalSelectionPolicy({ ollama: { 'safe-model': ['chat'] } });
+    expect(policy.provider(ollama)).toBe(true);
+    expect(policy.provider({ id: 'claude-code', type: 'cli', command: 'claude' })).toBe(false);
+    expect(policy.model('safe-model', ollama)).toBe(true);
+    expect(policy.model('unknown-model', ollama)).toBe(false);
+  });
+
+  it('reuses the same no-tool model policy for an explicitly maintained local wrapper', () => {
+    const wrapper = {
+      id: 'claude-ollama',
+      type: 'cli',
+      name: 'Claude Ollama',
+      endpoint: 'http://localhost:11434',
+      publicReviewSupported: true,
+    };
+    const policy = toolFreeLocalSelectionPolicy(
+      { ollama: { 'safe-model': ['chat'], 'agent-model': ['chat', 'tools'] } },
+      { providerPredicate: (provider) => provider?.publicReviewSupported === true },
+    );
+    expect(policy.provider(wrapper)).toBe(true);
+    expect(policy.model('safe-model', wrapper)).toBe(true);
+    expect(policy.model('agent-model', wrapper)).toBe(false);
   });
 });
 
@@ -1438,6 +1518,17 @@ describe('credentialSource', () => {
     })).toEqual({ kind: 'none', ref: null });
   });
 
+  it('keeps a Codex ChatGPT subscription separate from API-key credentials', () => {
+    expect(credentialSource({ id: 'codex', type: 'cli', command: 'codex', apiKey: 'legacy-key' }))
+      .toEqual({ kind: 'subscription', ref: 'codex' });
+  });
+
+  it('keys Codex subscription credentials on the command, not an editable id', () => {
+    const renamed = { id: 'codex', type: 'cli', command: 'opencode', envVars: { CUSTOM_API_KEY: '' } };
+    expect(isCodexSubscriptionProvider(renamed)).toBe(false);
+    expect(credentialSource(renamed)).toEqual({ kind: 'env', ref: 'CUSTOM_API_KEY' });
+  });
+
   it('lets a wrapper carrying its own key stand down from inheritance', () => {
     expect(credentialSource({ id: 'wrapper', type: 'cli', apiKey: 'sk-example', orcarouterBacked: true }))
       .toEqual({ kind: 'stored', ref: 'wrapper' });
@@ -1459,6 +1550,20 @@ describe('providerCardState', () => {
     expect(providerCardState(cli(), { runtime: { label: 'OpenCode CLI', installed: true } }))
       .toEqual({ state: PROVIDER_CARD_STATE.READY, missing: [] });
     expect(providerCardState(cloudApi({ hasApiKey: true })))
+      .toEqual({ state: PROVIDER_CARD_STATE.READY, missing: [] });
+  });
+
+  it('uses bounded Codex account states without calling a subscription an API-key provider', () => {
+    const codex = { id: 'codex', type: 'cli', command: 'codex', enabled: true };
+    expect(providerCardState(codex, { codexAccount: { status: 'signed-out' } })).toEqual({
+      state: PROVIDER_CARD_STATE.BLOCKED,
+      missing: [{ code: 'codexAccount', label: 'No ChatGPT account is signed in' }],
+    });
+    expect(providerCardState(codex, { codexAccount: { status: 'unknown' } }))
+      .toEqual({ state: PROVIDER_CARD_STATE.UNKNOWN, missing: [] });
+    expect(providerCardState(codex, { codexAccount: null }))
+      .toEqual({ state: PROVIDER_CARD_STATE.UNKNOWN, missing: [] });
+    expect(providerCardState(codex, { codexAccount: { status: 'ready' } }))
       .toEqual({ state: PROVIDER_CARD_STATE.READY, missing: [] });
   });
 
@@ -1698,11 +1803,12 @@ describe('providerCardState', () => {
       .toBe(PROVIDER_CARD_STATE.DISABLED);
   });
 
-  // The toggle is not what's stopping a provider whose CLI is missing, so the
-  // missing prerequisite outranks it — that's the bucket the user must act in.
-  it('keeps a switched-off provider with a missing prerequisite in the blocked bucket', () => {
-    expect(providerCardState(cli({ enabled: false }), { runtime: { label: 'OpenCode CLI', installed: false } }).state)
-      .toBe(PROVIDER_CARD_STATE.BLOCKED);
+  // Switched off outranks every finding, and the findings ride along so the
+  // card can still say what enabling it would take.
+  it('reads a switched-off provider with a missing prerequisite as disabled, keeping the findings', () => {
+    const readiness = providerCardState(cli({ enabled: false }), { runtime: { label: 'OpenCode CLI', installed: false } });
+    expect(readiness.state).toBe(PROVIDER_CARD_STATE.DISABLED);
+    expect(readiness.missing).toEqual([{ code: 'runtime', label: 'OpenCode CLI is not installed' }]);
   });
 
   it('collects every missing prerequisite at once', () => {
@@ -1817,3 +1923,45 @@ describe('isPrivateNetworkEndpoint', () => {
 });
 
 // @vitest-environment node
+
+describe('publicReviewSelectionPolicy', () => {
+  const LOCAL_CLAUDE = {
+    id: 'claude-ollama',
+    type: 'cli',
+    command: 'claude',
+    endpoint: 'http://127.0.0.1:11434',
+    publicReviewPostures: ['no-tool'],
+  };
+  const GROK = { id: 'grok-cli', type: 'cli', command: 'grok', publicReviewPostures: ['no-tool', 'sandboxed-actions'] };
+  const CAPS = { ollama: { 'safe-model': ['chat'], 'tool-model': ['chat', 'tools'] } };
+
+  it('reads eligibility from the server-published postures, not a vendor list', () => {
+    expect(supportsPublicReviewPosture(GROK, PUBLIC_REVIEW_ACTIONS_POSTURE)).toBe(true);
+    expect(supportsPublicReviewPosture(LOCAL_CLAUDE, PUBLIC_REVIEW_ACTIONS_POSTURE)).toBe(false);
+    expect(supportsPublicReviewPosture({ id: 'x', type: 'cli', publicReviewPostures: [] }, PUBLIC_REVIEW_NO_TOOL_POSTURE)).toBe(false);
+  });
+
+  it('falls back to the legacy booleans so an older server still renders a picker', () => {
+    expect(supportsPublicReviewPosture({ id: 'legacy', publicReviewSupported: true }, PUBLIC_REVIEW_NO_TOOL_POSTURE)).toBe(true);
+    expect(supportsPublicReviewPosture({ id: 'legacy', publicReviewActionsSupported: true }, PUBLIC_REVIEW_ACTIONS_POSTURE)).toBe(true);
+    expect(supportsPublicReviewPosture({ id: 'legacy' }, PUBLIC_REVIEW_NO_TOOL_POSTURE)).toBe(false);
+  });
+
+  // The probe only exists for a local runtime; a cloud model is held tool-free
+  // by the provider's own enforced argv, so filtering it out would leave the
+  // picker empty on an install with no local backend.
+  it('applies the no-tool capability probe to a local model only', () => {
+    const policy = publicReviewSelectionPolicy(PUBLIC_REVIEW_NO_TOOL_POSTURE, CAPS);
+    expect(policy.model('safe-model', LOCAL_CLAUDE)).toBe(true);
+    expect(policy.model('tool-model', LOCAL_CLAUDE)).toBe(false);
+    expect(policy.model('unprobed-model', LOCAL_CLAUDE)).toBe(false);
+    expect(policy.model('grok-4', GROK)).toBe(true);
+  });
+
+  it('never accepts a model on a provider that cannot enforce the posture', () => {
+    const policy = publicReviewSelectionPolicy(PUBLIC_REVIEW_ACTIONS_POSTURE, CAPS);
+    expect(policy.provider(LOCAL_CLAUDE)).toBe(false);
+    expect(policy.model('safe-model', LOCAL_CLAUDE)).toBe(false);
+    expect(policy.model('grok-4', GROK)).toBe(true);
+  });
+});

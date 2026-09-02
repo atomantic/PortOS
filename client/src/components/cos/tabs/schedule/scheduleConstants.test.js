@@ -1,5 +1,37 @@
 import { describe, it, expect } from 'vitest';
-import { getTaskStatusGroup, taskSortKey, TASK_FILTERS, STATUS_GROUPS, describeNextRun, coverageTone, setMetadataOverride, toggleMetadataField, fileIssuesEffective, managedAgentOptionsFor, toggleFileIssuesMetadata } from './scheduleConstants';
+import { getTaskStatusGroup, taskSortKey, TASK_FILTERS, STATUS_GROUPS, describeNextRun, coverageTone, setMetadataOverride, toggleMetadataField, fileIssuesEffective, managedAgentOptionsFor, toggleFileIssuesMetadata, prReviewerStageRole, togglePrReviewerActions } from './scheduleConstants';
+
+describe('pr-reviewer pipeline helpers', () => {
+  it('recognizes semantic roles and legacy prompt-key stages', () => {
+    expect(prReviewerStageRole({ role: 'eligibility' })).toBe('eligibility');
+    expect(prReviewerStageRole({ promptKey: 'pr-reviewer-review' })).toBe('actions');
+    expect(prReviewerStageRole({ promptKey: 'other' })).toBeNull();
+  });
+
+  it('removes only the optional actions stage and restores its full safe posture', () => {
+    const stages = [
+      { name: 'Security Scan', role: 'security' },
+      { name: 'Eligibility Gate', role: 'eligibility' },
+      { name: 'Code Review & Actions', role: 'actions', providerId: 'codex-cli' },
+    ];
+    expect(togglePrReviewerActions(stages, false)).toEqual(stages.slice(0, 2));
+    expect(togglePrReviewerActions(stages.slice(0, 2), true)).toEqual([
+      ...stages.slice(0, 2),
+      expect.objectContaining({
+        role: 'actions',
+        promptKey: 'pr-reviewer-review',
+        executionProfile: 'public-review-actions',
+        discardWorktree: true,
+        noCodeOutput: true,
+      }),
+    ]);
+  });
+
+  it('is idempotent when the optional stage is already enabled', () => {
+    const stages = [{ role: 'security' }, { role: 'eligibility' }, { role: 'actions' }];
+    expect(togglePrReviewerActions(stages, true)).toBe(stages);
+  });
+});
 
 describe('setMetadataOverride', () => {
   it('sets a key without disturbing the app\'s other overrides', () => {
@@ -42,14 +74,30 @@ describe('managedAgentOptionsFor', () => {
   it('leaves non-audit tasks alone', () => {
     expect(managedAgentOptionsFor({ managedAgentOptions: ['useWorktree'] })).toEqual(['useWorktree']);
   });
+
+  it('locks the worktree on for an isolation-required audit in do-work mode', () => {
+    expect(managedAgentOptionsFor({
+      fileIssuesCapable: true,
+      defaultFileIssues: true,
+      doWorkRequiresWorktree: true,
+    }, { fileIssues: false })).toEqual(['useWorktree']);
+  });
 });
 
 describe('toggleFileIssuesMetadata', () => {
-  it('forces the no-code posture on and leaves it when turning off', () => {
+  it('forces the no-code posture on and otherwise leaves agent options alone', () => {
     expect(toggleFileIssuesMetadata({ useWorktree: true, openPR: true, simplify: true }, true))
       .toEqual({ useWorktree: false, openPR: false, simplify: false, fileIssues: true });
     expect(toggleFileIssuesMetadata({ fileIssues: true, useWorktree: false }, false))
       .toEqual({ fileIssues: false, useWorktree: false });
+  });
+
+  it('restores required worktree isolation when do-work mode is selected', () => {
+    expect(toggleFileIssuesMetadata(
+      { fileIssues: true, useWorktree: false, openPR: false },
+      false,
+      true,
+    )).toEqual({ fileIssues: false, useWorktree: true, openPR: false });
   });
 });
 

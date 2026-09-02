@@ -15,7 +15,7 @@ import * as specDecodePresets from '../lib/specDecodePresets.js';
 import * as hfToken from './hfToken.js';
 import * as huggingfaceLora from '../lib/huggingfaceLora.js';
 
-const siblings = (...names) => ({ siblings: names.map((rfilename) => ({ rfilename })) });
+const siblings = (...names) => ({ siblings: names.map((rfilename) => ({ rfilename, size: 6 })) });
 
 describe('pickGgufSibling', () => {
   it('matches a quant hint across the naming styles repos actually publish', () => {
@@ -178,7 +178,7 @@ describe('downloadSpecDecodeModel', () => {
     expect(frames.at(-1)).toMatchObject({ event: 'complete', role: 'model' });
   });
 
-  it('leaves no .partial behind when the transfer fails mid-stream', async () => {
+  it('keeps the .partial on a transport failure so a retry can Range-resume', async () => {
     stubPreset();
     vi.spyOn(huggingfaceLora, 'fetchHuggingfaceModel').mockResolvedValue(siblings('Example-Q4_K_M.gguf'));
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({
@@ -193,7 +193,9 @@ describe('downloadSpecDecodeModel', () => {
     await expect(downloadSpecDecodeModel({ presetId: 'test-preset', role: 'model' }))
       .rejects.toThrow(/connection reset/);
     const { readdir } = await import('fs/promises');
-    expect(await readdir(dir)).toEqual([]);
+    // The partial survives for a Range-resume, alongside the ETag sidecar
+    // recorded up front so that resume can send If-Range.
+    expect((await readdir(dir)).sort()).toEqual(['base.gguf.partial', 'base.gguf.partial.etag']);
   });
 
   it('cancels an active transfer, emits a terminal frame, and removes its partial file', async () => {
@@ -244,9 +246,15 @@ describe('downloadSpecDecodeModel', () => {
     });
 
     const download = downloadSpecDecodeModel({ presetId: 'test-preset', role: 'model' });
+    // Attach the rejection assertion before advancing timers — the extra
+    // promise hop the resumable-download refactor added means the real
+    // stream-destroy → pipeline-reject chain can settle a tick after
+    // advanceTimersByTimeAsync returns, so subscribing afterward races an
+    // "unhandled rejection" against Node's own handler-attached check.
+    const assertion = expect(download).rejects.toMatchObject({ code: 'SPEC_DOWNLOAD_STALLED' });
     await vi.waitFor(() => expect(signal).toBeDefined());
     await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
-    await expect(download).rejects.toMatchObject({ code: 'SPEC_DOWNLOAD_STALLED' });
+    await assertion;
     vi.useRealTimers();
   });
 

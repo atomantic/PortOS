@@ -7,7 +7,7 @@
 // provider is missing, not API-type, or the toolkit hasn't warmed yet.
 
 import { getProviderById } from '../providers.js';
-import { assertSecretEndpoint } from '../../lib/aiToolkit/internal/endpointGuard.js';
+import { assertSecretEndpoint } from '../../lib/aiToolkit/endpointGuard.js';
 
 // Legacy env-based LM Studio default. Returns the OpenAI-compatible API base
 // INCLUDING the version path, so callers append `/models` / `/chat/completions`.

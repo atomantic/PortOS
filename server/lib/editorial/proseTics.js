@@ -19,6 +19,8 @@
  * judgment case these pure scanners deliberately avoid (false-positive-prone).
  */
 
+import { escapeRegExp } from '../textUtils.js';
+
 // ---------------------------------------------------------------------------
 // Seed word/phrase lists. Each is curated, not exhaustive; a series can extend
 // (extraWords) or mute (allowWords) entries per house style. Entries are
@@ -176,10 +178,6 @@ const NON_ADVERB_LY = new Set([
   'telly', 'wholly', 'duly', 'truly', 'unduly', 'curly', 'burly',
   'surly', 'gnarly', 'pearly', 'hourly', 'daily', 'doily', 'gaily',
 ]);
-
-function escapeRegExp(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 function normalizeWord(p) {
   return typeof p === 'string' ? p.trim().toLowerCase() : '';

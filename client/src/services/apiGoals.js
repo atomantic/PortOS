@@ -6,10 +6,6 @@ export const getCrossInsights = () => request('/digital-twin/identity/cross-insi
 export const getChronotype = (options) => request('/digital-twin/identity/chronotype', options);
 export const getChronotypeEnergySchedule = () => request('/digital-twin/identity/chronotype/energy-schedule');
 export const deriveChronotype = () => request('/digital-twin/identity/chronotype/derive', { method: 'POST' });
-export const updateChronotypeBehavioral = (data) => request('/digital-twin/identity/chronotype', {
-  method: 'PUT',
-  body: JSON.stringify(data)
-});
 export const getLongevity = () => request('/digital-twin/identity/longevity');
 export const deriveLongevity = () => request('/digital-twin/identity/longevity/derive', { method: 'POST' });
 export const getGoals = (options) => request('/digital-twin/identity/goals', options);
@@ -53,10 +49,6 @@ export const deleteGoalProgress = (goalId, entryId) =>
 // Goal Calendar linking
 export const linkGoalCalendar = (goalId, data) => request(`/digital-twin/identity/goals/${goalId}/calendars`, { method: 'POST', body: JSON.stringify(data) });
 export const unlinkGoalCalendar = (goalId, subcalendarId) => request(`/digital-twin/identity/goals/${goalId}/calendars/${encodeURIComponent(subcalendarId)}`, { method: 'DELETE' });
-export const getGoalCalendarEvents = (goalId, params = {}) => {
-  const str = new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString();
-  return request(`/digital-twin/identity/goals/${goalId}/calendar-events${str ? `?${str}` : ''}`);
-};
 
 // Goal Progress & Todos
 export const updateGoalProgress = (goalId, value) => request(`/digital-twin/identity/goals/${goalId}/progress`, { method: 'PUT', body: JSON.stringify({ value }) });

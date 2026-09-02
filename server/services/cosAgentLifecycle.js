@@ -15,8 +15,9 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { cosEvents } from './cosEvents.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { loadState, saveState, withStateLock, AGENTS_DIR } from './cosState.js';
+import { loadState, saveState, withStateLock, readAgentsStateForSafetyCheck, AGENTS_DIR } from './cosState.js';
 import { atomicWrite, ensureDir, readFileTail, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { repairCodexTaskSummary } from './codexSummaryRepair.js';
 import { loadAgentIndex, saveAgentIndex, getAgentDir } from './cosAgentIndex.js';
@@ -375,6 +376,70 @@ export async function getAgents() {
   return Object.values(state.agents);
 }
 
+/**
+ * Is this agent record still work in flight, rather than a run PortOS has
+ * already finalized?
+ *
+ * `completed` is the only terminal status; a missing record is terminal too,
+ * because a finalized agent is archived out of `state.agents` into its date
+ * bucket, and an id that was never registered is not a run at all. `paused`
+ * counts as live: its task is still owed a resume, and pausing already removes
+ * the agent from the in-memory maps, so it can never inflate a map-derived
+ * count on its own.
+ */
+export const isLiveAgentRecord = (record) => Boolean(record) && record.status !== 'completed';
+
+/**
+ * Returned by `readAgentRecordOrUnreadable` when the READ ITSELF failed — which
+ * is not the same answer as `null` ("there is genuinely no such record"), and
+ * leads to the opposite decision: an absent record means the run is finalized
+ * and its tracking can go, while a failed read proves nothing and must leave
+ * live state alone.
+ */
+export const AGENT_RECORD_UNREADABLE = Symbol('agent-record-unreadable');
+
+/**
+ * `getAgentRecord` that reports an I/O failure as `AGENT_RECORD_UNREADABLE`
+ * instead of collapsing it into `null`. Pair it with `isLiveAgentRecord`:
+ *
+ *   const read = await readAgentRecordOrUnreadable(id);
+ *   if (read !== AGENT_RECORD_UNREADABLE && !isLiveAgentRecord(read)) { … }
+ */
+export const readAgentRecordOrUnreadable = (agentId) =>
+  getAgentRecord(agentId).then(record => record, () => AGENT_RECORD_UNREADABLE);
+
+/**
+ * Narrow a set of in-memory agent ids to the ones PortOS still considers work
+ * in flight.
+ *
+ * The in-memory maps (`activeAgents` / `runnerAgents`) are not self-cleaning:
+ * `syncRunnerAgents` adopts whatever `GET /agents` on the CoS Runner reports,
+ * so a TUI PTY the runner never managed to kill stays "active" for the life of
+ * the process. That is how the Update page came to sit on "4 CoS agents are
+ * currently running" above an empty agent list — four finalized codex TUIs the
+ * runner was still advertising, blocking the restart that would have cleared
+ * them. `registerAgent` writes the record before the spawn, and the whole spawn
+ * runs inside `spawningTasks`, so no genuinely starting agent falls through.
+ *
+ * **Fails CLOSED.** The one caller gates a pm2 restart that severs live agents,
+ * so this reads the records through `readAgentsStateForSafetyCheck` — which
+ * reports whether they could be established at all — rather than `loadState`,
+ * which silently substitutes an EMPTY default state for a corrupt file. Reading
+ * that default would judge every tracked id finalized and hand the gate a
+ * confident zero, restarting PortOS out from under whatever was running. When
+ * the records cannot be trusted, every tracked id counts as live instead.
+ */
+export async function filterLiveAgentIds(agentIds) {
+  if (agentIds.length === 0) return [];
+  const ids = [...new Set(agentIds)];
+  const { trusted, agents } = await readAgentsStateForSafetyCheck();
+  if (!trusted || !agents) {
+    console.warn(`⚠️ CoS agent records could not be established — treating all ${ids.length} tracked agent(s) as live`);
+    return ids;
+  }
+  return ids.filter(id => isLiveAgentRecord(agents[id]));
+}
+
 // Get agent by ID with full output from file
 /**
  * The agent record WITHOUT its transcript — in-memory state first, falling back
@@ -593,15 +658,24 @@ async function isPidAlive(pid) {
 
 // Cleanup zombie agents - agents marked as running but whose process is dead
 export async function cleanupZombieAgents() {
-  // Check local tracking maps (read from the side-effect-free state module, not
-  // subAgentSpawner — avoids pulling in the heavier orchestrator just to read the maps).
-  const { getActiveAgentIds } = await import('./agentState.js');
-  const activeIds = getActiveAgentIds();
+  // Direct-spawn handles in this process (not leftover runnerAgents adopts —
+  // those are only a handle, same as GET /agents). Read from the side-effect-free
+  // state module, not subAgentSpawner.
+  const { activeAgents } = await import('./agentState.js');
 
   // Also check with the CoS runner for agents it's actively tracking
   const { getActiveAgentsFromRunner } = await import('./cosRunnerClient.js');
-  const runnerAgents = await getActiveAgentsFromRunner().catch(() => []);
-  const runnerAgentIds = new Set(runnerAgents.map(a => a.id));
+  const runnerProbe = await getActiveAgentsFromRunner().then(
+    (agents) => Array.isArray(agents)
+      ? { available: true, agents }
+      : { available: false, agents: [] },
+    () => ({ available: false, agents: [] }),
+  );
+  const runnerById = new Map(
+    runnerProbe.agents
+      .filter((row) => row?.id)
+      .map((row) => [row.id, row]),
+  );
 
   return withStateLock(async () => {
     const state = await loadState();
@@ -609,8 +683,20 @@ export async function cleanupZombieAgents() {
     const cleaned = [];
 
     for (const agent of runningAgents) {
-      // Skip if tracked in local maps or runner
-      if (activeIds.includes(agent.id) || runnerAgentIds.has(agent.id)) {
+      // A runner listing is only a shield when corroborated (live pid or
+      // processActive from onExit/pid probe). Leftover runnerAgents ownership
+      // from an earlier adopt is not.
+      if (activeAgents.has(agent.id)) continue;
+      const executionMode = agent.metadata?.executionMode;
+      const runnerOwned = agent.metadata?.useRunner === true
+        || agent.metadata?.useRunner === 'true'
+        || executionMode === 'runner'
+        || executionMode === 'runner-tui';
+      // Same as the orphan sweep: a failed probe is not evidence the runner
+      // process died. A pid-0 TUI after restart would otherwise be archived
+      // as "never started" the moment the runner is unreachable.
+      if (!runnerProbe.available && runnerOwned) continue;
+      if (await runnerEntryShieldsRunningRecord(runnerById.get(agent.id), isPidAlive)) {
         continue;
       }
 

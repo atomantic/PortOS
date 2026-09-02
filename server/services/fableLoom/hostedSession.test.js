@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import {
   _getInternalSession,
   _resetHostedSessions,
@@ -12,6 +12,8 @@ import {
   revalidateLiveConversationGate,
   sanitizeHostedSession,
   startHostedListening,
+  startHostedSessionSweep,
+  stopHostedSessionSweep,
   updateHostedSession,
   verifyHostedToken,
 } from './hostedSession.js';
@@ -65,9 +67,27 @@ describe('fableLoom hostedSession', () => {
     }],
   };
 
+  // Hosted-session preflight gates on the live network posture. Every test
+  // that isn't specifically exercising the HTTPS gate runs against this
+  // TLS-provisioned snapshot so the rest of the readiness checks are what
+  // the assertion is about.
+  const httpsExposure = () => ({
+    scheme: 'https',
+    httpsEnabled: true,
+    bind: { host: '0.0.0.0', port: 5555, audience: 'all-interfaces' },
+    cert: { mode: 'tailscale', tailscaleHost: 'host-example.example-tailnet.ts.net' },
+  });
+
+  const httpExposure = () => ({
+    ...httpsExposure(),
+    scheme: 'http',
+    httpsEnabled: false,
+  });
+
   beforeEach(() => {
     _resetHostedSessions();
     vi.restoreAllMocks();
+    vi.spyOn(networkExposure, 'getNetworkExposureStatus').mockImplementation(httpsExposure);
     vi.spyOn(records, 'getLoom').mockResolvedValue(mockLoom);
     vi.spyOn(tts, 'synthesize').mockResolvedValue({
       wav: Buffer.from('RIFFmockwavdata'),
@@ -95,11 +115,25 @@ describe('fableLoom hostedSession', () => {
   });
 
   describe('checkHostedSessionReadiness', () => {
-    it('passes readiness when loom, episode, and start scene are configured', async () => {
+    it('passes readiness when loom, episode, and start scene are configured over HTTPS', async () => {
       const result = await checkHostedSessionReadiness({ loomId: 'loom-1', episodeId: 'ep-1' });
       expect(result.ready).toBe(true);
-      expect(result.https.url).toMatch(/^https?:\/\//);
+      expect(result.https.enabled).toBe(true);
+      expect(result.https.url).toMatch(/^https:\/\//);
+      expect(result.checks.https.ok).toBe(true);
       expect(result.checks.host.ok).toBe(true);
+    });
+
+    it('flags error when the install is serving plain HTTP', async () => {
+      vi.spyOn(networkExposure, 'getNetworkExposureStatus').mockImplementation(httpExposure);
+      const result = await checkHostedSessionReadiness({ loomId: 'loom-1', episodeId: 'ep-1' });
+      expect(result.ready).toBe(false);
+      expect(result.https.enabled).toBe(false);
+      expect(result.checks.https.ok).toBe(false);
+      expect(result.https.url).toMatch(/^http:\/\//);
+      expect(result.errors).toContain(
+        'HTTPS is required for mobile device QR microphone join (run npm run setup:cert to enable TLS).',
+      );
     });
 
     it('flags error if start scene is missing', async () => {
@@ -139,6 +173,14 @@ describe('fableLoom hostedSession', () => {
       expect(verifyHostedToken(result.session.id, result.token)).toBe(true);
       expect(verifyHostedToken(result.session.id, 'wrong-token')).toBe(false);
       expect(verifyHostedToken('missing-session', result.token)).toBe(false);
+    });
+
+    it('refuses to start a session on an HTTP-only install with a 412 preflight failure', async () => {
+      vi.spyOn(networkExposure, 'getNetworkExposureStatus').mockImplementation(httpExposure);
+      await expect(createHostedSession('loom-1', 'ep-1', { audioTarget: 'host' })).rejects.toMatchObject({
+        status: 412,
+        code: 'HOSTED_SESSION_PREFLIGHT_FAILED',
+      });
     });
   });
 
@@ -300,6 +342,91 @@ describe('fableLoom hostedSession', () => {
 
       endHostedSession(session.id, { reason: 'user_ended' });
       expect(getHostedSession(session.id)).toBeNull();
+    });
+  });
+
+  describe('expired-session sweep', () => {
+    // A stub Socket.IO surface that records every namespace emit.
+    const makeIo = () => {
+      const emits = [];
+      return {
+        emits,
+        of: () => ({
+          to: (room) => ({
+            emit: (event, payload) => emits.push({ room, event, payload }),
+          }),
+        }),
+      };
+    };
+
+    // Age a session past its TTL without waiting out 30 real minutes.
+    const expire = (sessionId) => {
+      const internal = _getInternalSession(sessionId);
+      internal.expiresAt = new Date(Date.now() - 1000).toISOString();
+      return internal;
+    };
+
+    afterEach(() => {
+      stopHostedSessionSweep();
+      vi.useRealTimers();
+    });
+
+    it('deletes an expired session on the next sweep tick, aborting its turn and notifying the room', async () => {
+      const io = makeIo();
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      await startHostedListening(session.id);
+      const internal = expire(session.id);
+      const { signal } = internal.activeTurn.abortController;
+      expect(signal.aborted).toBe(false);
+
+      vi.useFakeTimers();
+      startHostedSessionSweep({ intervalMs: 60_000, io });
+      // Arming alone tears nothing down; the first tick does.
+      expect(io.emits).toHaveLength(0);
+      vi.advanceTimersByTime(60_000);
+
+      expect(signal.aborted).toBe(true);
+      expect(getHostedSession(session.id)).toBeNull();
+      expect(io.emits).toContainEqual({
+        room: `session:${session.id}`,
+        event: 'hosted:session:ended',
+        payload: { sessionId: session.id, reason: 'expired' },
+      });
+    });
+
+    it('leaves an unexpired session untouched', async () => {
+      const io = makeIo();
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+
+      vi.useFakeTimers();
+      startHostedSessionSweep({ intervalMs: 60_000, io });
+      vi.advanceTimersByTime(180_000);
+
+      expect(getHostedSession(session.id)?.status).toBe('active');
+      expect(io.emits).toHaveLength(0);
+    });
+
+    it('rejects a late reconnect: _getInternalSession returns null once the TTL has passed', async () => {
+      const { session, token } = await createHostedSession('loom-1', 'ep-1');
+      expect(_getInternalSession(session.id)).not.toBeNull();
+
+      expire(session.id);
+
+      // What the /fableloom-hosted handshake gates on, for host and audience alike.
+      expect(_getInternalSession(session.id)).toBeNull();
+      expect(verifyHostedToken(session.id, token)).toBe(false);
+    });
+
+    it('arms an unref\'d timer once and clears it on stop', () => {
+      vi.useFakeTimers();
+      const first = startHostedSessionSweep({ intervalMs: 60_000 });
+      expect(first.unref).toBeTypeOf('function');
+      // Re-arming is a no-op rather than a second leaked interval.
+      expect(startHostedSessionSweep({ intervalMs: 60_000 })).toBe(first);
+      expect(vi.getTimerCount()).toBe(1);
+
+      stopHostedSessionSweep();
+      expect(vi.getTimerCount()).toBe(0);
     });
   });
 });

@@ -5,7 +5,7 @@
  * (https://api.cerebras.ai/v1) authenticated with a plain API key, so the
  * toolkit's generic `executeApiRun` drives it with no runner changes — the
  * provider is pure configuration. `api.cerebras.ai` is allowlisted in
- * aiToolkit/internal/endpointGuard.js so the key may be attached outbound.
+ * aiToolkit/endpointGuard.js so the key may be attached outbound.
  *
  * `setup-data.js` merges *missing* provider entries from data.reference, but
  * only when an install re-runs setup. This migration delivers the provider on a

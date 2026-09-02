@@ -14,14 +14,6 @@ export const getOpenWorldSnapshots = (options = {}) => {
   return request(`/openworld/snapshots${qs ? `?${qs}` : ''}`, rest);
 };
 
-// GET /api/openworld/snapshots/config — effective capture config + next run time.
-export const getOpenWorldSnapshotConfig = (options = {}) =>
-  request('/openworld/snapshots/config', options);
-
-// POST /api/openworld/snapshots/capture — capture a frame on demand.
-export const captureOpenWorldSnapshot = (options = {}) =>
-  request('/openworld/snapshots/capture', { method: 'POST', ...options });
-
 // GET /api/openworld/introspection — DB tables + data/ domain sizes for the Data
 // Harbor district. Server-cached; `db: null` means the database is unreachable.
 export const getOpenWorldIntrospection = (options = {}) =>

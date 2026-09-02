@@ -17,10 +17,19 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'cd-projects-file-test-'));
+const writeCounter = vi.hoisted(() => ({ project: 0, baseHash: 0 }));
 
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, PATHS: { ...actual.PATHS, data: TEST_DATA_ROOT } };
+  return {
+    ...actual,
+    PATHS: { ...actual.PATHS, data: TEST_DATA_ROOT },
+    atomicWrite: async (path, data) => {
+      if (typeof path === 'string' && path.endsWith('creative-director-projects.json')) writeCounter.project += 1;
+      if (typeof path === 'string' && path.endsWith('sync_base_hashes.json')) writeCounter.baseHash += 1;
+      return actual.atomicWrite(path, data);
+    },
+  };
 });
 // createProject would otherwise spin up the full media stack; we only test the
 // federation paths here, none of which create a collection.
@@ -36,6 +45,8 @@ function reset() {
   rmSync(join(TEST_DATA_ROOT, 'sharing'), { recursive: true, force: true });
   rmSync(join(TEST_DATA_ROOT, 'conflict-journal'), { recursive: true, force: true });
   cj.__resetBaseHashCacheForTests();
+  writeCounter.project = 0;
+  writeCounter.baseHash = 0;
 }
 beforeEach(reset);
 afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
@@ -90,6 +101,16 @@ describe('projectsFile federation merge', () => {
     const res = await file.mergeProjectsFromSync([project('cd-1', { updatedAt: '2026-06-23T01:00:00.000Z', styleSpec: 'stale' })]);
     expect(res).toEqual({ applied: false, count: 0 });
     expect((await file.getProject('cd-1')).styleSpec).toBe('keep');
+  });
+
+  it('same-updatedAt re-push is a no-op without project or base-hash writes', async () => {
+    const remote = project('cd-1');
+    await file.mergeProjectsFromSync([remote]);
+    writeCounter.project = 0;
+    writeCounter.baseHash = 0;
+
+    expect(await file.mergeProjectsFromSync([remote])).toEqual({ applied: false, count: 0 });
+    expect(writeCounter).toEqual({ project: 0, baseHash: 0 });
   });
 
   it('soft-delete tombstones the project (excluded from live reads, present with includeDeleted)', async () => {

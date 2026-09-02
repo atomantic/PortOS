@@ -6,7 +6,6 @@ export const createMessageAccount = (data, options = {}) => request('/messages/a
 export const updateMessageAccount = (id, data, options = {}) => request(`/messages/accounts/${id}`, { method: 'PUT', body: JSON.stringify(data), ...options });
 export const deleteMessageAccount = (id) => request(`/messages/accounts/${id}`, { method: 'DELETE' });
 export const syncMessageAccount = (accountId, mode = 'unread', options = {}) => request(`/messages/sync/${accountId}`, { method: 'POST', body: JSON.stringify({ mode }), ...options });
-export const getMessageSyncStatus = (accountId) => request(`/messages/sync/${accountId}/status`);
 export const evaluateMessages = (data = {}, options = {}) => request('/messages/evaluate', { method: 'POST', body: JSON.stringify(data), ...options });
 export const getMessageInbox = (params = {}) => {
   const qs = new URLSearchParams();
@@ -72,8 +71,6 @@ export const purgeImessageConversation = (chatKey, options = {}) =>
 export const deleteImessageEvent = (id, options = {}) =>
   request(`/imessage/events/${encodeURIComponent(id)}`, { method: 'DELETE', ...options });
 export const getImessageBlocklist = (options = {}) => request('/imessage/blocklist', options);
-export const setImessageBlocklist = (handles, options = {}) =>
-  request('/imessage/blocklist', { method: 'PUT', body: JSON.stringify({ handles }), ...options });
 export const addImessageBlocklist = (handles, { purgeExisting = false, ...options } = {}) =>
   request('/imessage/blocklist', {
     method: 'POST',

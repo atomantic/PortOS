@@ -32,7 +32,7 @@ export default function ConversationViewer({ record, onClose }) {
       onClose={onClose}
       size="xl"
       ariaLabel={record.title}
-      panelClassName="bg-port-card border border-port-border rounded-lg max-h-[85vh] flex flex-col"
+      panelClassName="bg-port-card border border-port-border rounded-lg flex flex-col"
     >
       <div className="flex items-center justify-between px-4 py-3 border-b border-port-border">
         <h3 className="font-medium text-white truncate pr-4">{record.title}</h3>

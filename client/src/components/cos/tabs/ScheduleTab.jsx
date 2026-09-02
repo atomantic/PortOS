@@ -25,6 +25,17 @@ export function mergeUpdatedTaskInterval(schedule, taskType, interval) {
   };
 }
 
+function mergeOnDemandRequest(schedule, request) {
+  if (!schedule || !request?.id) return schedule;
+  return {
+    ...schedule,
+    onDemandRequests: [
+      ...(schedule.onDemandRequests || []).filter(current => current.id !== request.id),
+      request,
+    ],
+  };
+}
+
 // `providers` is owned by ChiefOfStaff (30s poll, see useAutoRefetch there) and
 // passed down — same convention as TasksTab/AgentsTab — so this tab's provider/
 // model pickers stay live without standing up a second independent poll of the
@@ -87,11 +98,21 @@ export default function ScheduleTab({ apps, providers, activeProviderId }) {
       toast.error(err.message);
       return null;
     });
-    if (result?.success) {
-      toast.success(`Triggered ${taskType} task${appId ? ' for app' : ''} - will run on next evaluation`);
-      fetchSchedule();
+    if (!result?.success) return null;
+
+    const appName = appId ? apps?.find(app => app.id === appId)?.name || 'selected app' : null;
+    toast.success(`Queued ${taskType} request${appName ? ` for ${appName}` : ''} — it will appear in Tasks when evaluation begins`);
+
+    // The POST returns the persisted request. Paint it immediately instead of
+    // waiting for a second round trip; the evaluator may drain it into Tasks
+    // before that GET returns, while RunTaskButton retains the sent receipt at
+    // the click locus either way.
+    if (result.request) {
+      setSchedule(current => mergeOnDemandRequest(current, result.request));
     }
-  }, [fetchSchedule]);
+    fetchSchedule();
+    return result.request || true;
+  }, [apps, fetchSchedule]);
 
   const handleResetTask = async (taskType) => {
     const result = await api.resetCosTaskHistory(taskType, null, { silent: true }).catch(err => {
@@ -164,7 +185,7 @@ export default function ScheduleTab({ apps, providers, activeProviderId }) {
           <div className="space-y-1 mt-2">
             {schedule.onDemandRequests.map(req => (
               <div key={req.id} className="text-sm text-gray-300">
-                {req.taskType}{req.appId ? ` (${req.appId})` : ''} - requested {formatTimeOfDaySeconds(req.requestedAt)}
+                {req.taskType}{req.appId ? ` (${apps?.find(app => app.id === req.appId)?.name || req.appId})` : ''} - requested {formatTimeOfDaySeconds(req.requestedAt)}
               </div>
             ))}
           </div>

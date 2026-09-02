@@ -1,18 +1,20 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { Cpu, Box, Download, RefreshCw, Search, Plus, ExternalLink, Star, Link2, Copy, Play, Power, PowerOff, AlertTriangle, Zap, ChevronDown, ChevronUp, Terminal, Server } from 'lucide-react';
+import { Cpu, Box, Download, RefreshCw, Search, Plus, ExternalLink, Star, Link2, Copy, Play, Power, PowerOff, AlertTriangle, Zap, ChevronDown, ChevronUp, Terminal, Server, ShieldCheck } from 'lucide-react';
 import toast from '../ui/Toast';
 import FormField from '../ui/FormField';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatAgeDays, formatBytes, formatContextLength, timeAgo, recommendedRamGb, formatDateNumeric } from '../../utils/formatters';
 import { localLlmTargetKey } from '../../lib/localLlmTargetKey';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
+import useDownloadPreflightConfirm from '../../hooks/useDownloadPreflightConfirm';
 import {
   getLocalLlmStatus, getLocalLlmCatalog, getLocalLlmHuggingFaceSearch, installLocalLlmModel,
   deleteLocalLlmModel, migrateLocalLlmBackend, installLocalLlmBackend, upgradeLocalLlmBackend, controlOllamaService,
   installAudioModel, patchSettingsSlice, getLlamaServerStatus, getLlamaServerUpdateStatus, startLlamaServer, stopLlamaServer, installLlamaServer, upgradeLlamaServer,
-  downloadSpecDecodeModel, cancelSpecDecodeModelDownload, controlLmStudioService, getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx,
+  downloadSpecDecodeModel, cancelSpecDecodeModelDownload, previewLocalLlmDownload, controlLmStudioService, getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx,
   searchMtplxModels, pullMtplxModel, removeMtplxModel,
+  getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream,
   saveRuntimeStartupList
 } from '../../services/api';
 import socket from '../../services/socket';
@@ -20,8 +22,11 @@ import CapabilityBadges from '../models/CapabilityBadges.jsx';
 import SpecDecodeWeightRow from './SpecDecodeWeightRow.jsx';
 import RuntimeServersCard from './RuntimeServersCard.jsx';
 import MtplxServerCard from './MtplxServerCard.jsx';
+import SlotstreamServerCard from './SlotstreamServerCard.jsx';
 import LocalLlmBackendCard from './LocalLlmBackendCard.jsx';
 import LocalLlmInstalledModels from './LocalLlmInstalledModels.jsx';
+import ModelAbuseGuardPanel from '../models/ModelAbuseGuardPanel.jsx';
+import DownloadPreflightConfirm from '../models/DownloadPreflightConfirm.jsx';
 import TabPills from '../ui/TabPills.jsx';
 
 const BACKENDS = [
@@ -58,9 +63,18 @@ const LLAMA_CACHE_TYPES = ['f16', 'q8_0', 'q4_0'];
 
 const btnClass = 'flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors disabled:opacity-50';
 
-const LLM_VIEWS = [
+export const LLM_VIEWS = [
   { id: 'runtimes', label: 'Runtimes', icon: Server },
   { id: 'library', label: 'Model Library', icon: Download },
+  { id: 'abuse', label: 'Abuse Guard', icon: ShieldCheck },
+];
+
+// Palettable LLM drill-downs. Runtimes and Model Library stay focused views of
+// `/models/llms` (the Models → LLMs landing). Abuse Guard is a managed
+// classifier lifecycle of its own, so ⌘K and voice need a dedicated path.
+// Scraped by server/lib/navManifest.test.js.
+export const LLM_NAV_SUBROUTES = [
+  { id: 'abuse' },
 ];
 
 const CATEGORY_LABELS = {
@@ -187,15 +201,18 @@ export function LocalLlmTab({ view }) {
 
   const [llamaStatus, setLlamaStatus] = useState(null);
   const [mtplxStatus, setMtplxStatus] = useState(null);
+  const [slotstreamStatus, setSlotstreamStatus] = useState(null);
   // Live byte progress for an in-flight `mtplx pull`, driven by the socket. One
   // at a time on purpose: a checkpoint is tens of gigabytes, so two concurrent
   // pulls just make both slower.
   const [mtplxDownload, setMtplxDownload] = useState(null);
+  const { confirm: downloadConfirm, request: requestWeightDownload, cancel: cancelDownloadConfirm, confirmRun: runDownloadConfirm } = useDownloadPreflightConfirm();
   const [llamaLoading, setLlamaLoading] = useState(false);
   // Anchor for the unified server card's "Configure" action — llama-server needs
   // a model path, so its Start lives in the launcher rather than in that row.
   const llamaSectionRef = useRef(null);
   const mtplxSectionRef = useRef(null);
+  const slotstreamSectionRef = useRef(null);
   const [llamaPresetId, setLlamaPresetId] = useState(DEFAULT_SPEC_PRESET_ID);
   const [llamaForm, setLlamaForm] = useState({
     model: '',
@@ -259,12 +276,26 @@ export function LocalLlmTab({ view }) {
       .catch(() => null)
   ), []);
 
+  const loadSlotstreamStatus = useCallback(() => (
+    getSlotstreamServerStatus({ silent: true })
+      .then((res) => {
+        if (res) setSlotstreamStatus(res);
+        return res;
+      })
+      .catch(() => null)
+  ), []);
+
   const loadStatus = useCallback(() => {
     const requestId = ++statusRequestId.current;
+    if (activeView === 'abuse') {
+      setLoading(false);
+      return Promise.resolve();
+    }
     setLoading(true);
     if (activeView === 'runtimes') {
       loadLlamaStatus();
       loadMtplxStatus();
+      loadSlotstreamStatus();
     }
     return getLocalLlmStatus({ silent: true })
       .then((s) => {
@@ -282,7 +313,7 @@ export function LocalLlmTab({ view }) {
       .finally(() => {
         if (requestId === statusRequestId.current) setLoading(false);
       });
-  }, [activeView, loadLlamaStatus, loadMtplxStatus]);
+  }, [activeView, loadLlamaStatus, loadMtplxStatus, loadSlotstreamStatus]);
 
   // `source` and `category` are required rather than defaulted from state: a
   // state default would put them in the dep list, so `loadCatalog`'s identity
@@ -420,7 +451,7 @@ export function LocalLlmTab({ view }) {
       // per model, so answering them would reload the status AND re-query the
       // Hugging Face catalog once per measured model, all night. This tab owns
       // the unscoped install/migrate/upgrade frames only.
-      if (data?.scope === 'assessment' || data?.scope === 'assessment-sweep') return;
+      if (data?.scope === 'assessment' || data?.scope === 'assessment-sweep' || data?.scope === 'security-guard') return;
       clearTimeout(progressTimer.current);
       setProgressMsg(data.message || '');
       if (data.event === 'complete') {
@@ -530,21 +561,43 @@ export function LocalLlmTab({ view }) {
     'Saved — MTPLX will start on these options when a request needs it'
   ).then(loadMtplxStatus);
 
-  // The idle window is a plain settings write for both daemons; only what
-  // happens when it elapses differs (llama.cpp unloads in place on its next
-  // start, MTPLX is stopped and lazily restarted).
+  // The idle window is a plain settings write for the PM2-managed daemons;
+  // only what happens when it elapses differs (llama.cpp unloads in place on
+  // its next start; MTPLX and Slotstream are stopped and lazily restarted).
+  const idleRuntimeLabel = { llama: 'llama.cpp', mtplx: 'MTPLX', slotstream: 'Slotstream' };
   const saveIdleWindow = (runtime, minutes) => runAction(
     `runtime-idle-${runtime}`,
     () => patchSettingsSlice(`localLlm.${runtime}`, { idleMinutes: minutes }),
     minutes === 0
-      ? `${runtime === 'llama' ? 'llama.cpp' : 'MTPLX'} will stay loaded while idle`
-      : `${runtime === 'llama' ? 'llama.cpp' : 'MTPLX'} releases its model after ${minutes} idle minute${minutes === 1 ? '' : 's'}`
-  ).then(runtime === 'llama' ? loadLlamaStatus : loadMtplxStatus);
+      ? `${idleRuntimeLabel[runtime] || runtime} will stay loaded while idle`
+      : `${idleRuntimeLabel[runtime] || runtime} releases its model after ${minutes} idle minute${minutes === 1 ? '' : 's'}`
+  ).then(runtime === 'llama' ? loadLlamaStatus : runtime === 'slotstream' ? loadSlotstreamStatus : loadMtplxStatus);
+  const runtimeInstallSlotstream = () => runAction(
+    'runtime-install-slotstream',
+    () => installSlotstream(),
+    'Slotstream installed'
+  ).then(loadSlotstreamStatus);
+  const runtimeStartSlotstream = (launch = {}) => runAction(
+    'runtime-start-slotstream',
+    () => startSlotstreamServer(launch),
+    (r) => r?.online ? 'Slotstream is running' : 'Slotstream is loading its checkpoint'
+  ).then(loadSlotstreamStatus);
+  const saveSlotstreamLaunch = (launch) => runAction(
+    'runtime-save-slotstream-launch',
+    () => patchSettingsSlice('localLlm.slotstream', { launch }),
+    'Saved — Slotstream will start on these options when a request needs it'
+  ).then(loadSlotstreamStatus);
+  const runtimeStopSlotstream = () => runAction(
+    'runtime-stop-slotstream',
+    () => stopSlotstreamServer(),
+    (r) => r?.message || 'Slotstream stopped'
+  ).then(loadSlotstreamStatus);
   const runtimeStopMtplx = () => runAction(
     'runtime-stop-mtplx',
     () => stopMtplxServer(),
     (r) => r?.message || 'MTPLX stopped'
   ).then(loadMtplxStatus);
+
   // Checkpoint management (search / download / remove), owned by the MTPLX card.
   //
   // `mtplxSearch` keeps a stable identity because the checkpoint panel keys its
@@ -556,7 +609,7 @@ export function LocalLlmTab({ view }) {
   // The pull resolves only when the weights are on disk; byte progress arrives
   // on `mtplx:download` (subscribed above), so the button spinner is not the
   // only sign of life during a multi-gigabyte transfer.
-  const mtplxPull = (model) => runAction(
+  const startMtplxPull = (model) => runAction(
     model ? `mtplx-pull-${model}` : 'mtplx-pull',
     // A failed download RESOLVES `{success: false, error}` rather than throwing
     // (its progress already streamed), so convert it to the rejection
@@ -572,6 +625,11 @@ export function LocalLlmTab({ view }) {
     setMtplxDownload(null);
     return loadMtplxStatus();
   });
+  const mtplxPull = (model) => requestWeightDownload({
+    title: 'Download MTPLX checkpoint',
+    preview: () => previewLocalLlmDownload({ kind: 'mtplx', model: model || null }, { silent: true }),
+    run: () => startMtplxPull(model),
+  });
   const mtplxRemove = (model) => runAction(
     `mtplx-remove-${model}`,
     () => removeMtplxModel(model),
@@ -581,7 +639,7 @@ export function LocalLlmTab({ view }) {
     'runtime-save-startup',
     () => saveRuntimeStartupList(),
     'Saved — the PM2 processes running now will come back after a reboot'
-  ).then(() => { loadLlamaStatus(); loadMtplxStatus(); });
+  ).then(() => { loadLlamaStatus(); loadMtplxStatus(); loadSlotstreamStatus(); });
   const scrollTo = (ref) => ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   const selectedData = status?.[selected];
   const selectedOllamaStartupAction = selectedData?.service?.supported ? 'enable' : 'start';
@@ -636,7 +694,7 @@ export function LocalLlmTab({ view }) {
   // queued, not finished — so don't claim "installed" in that case. Install is
   // silent so an OLLAMA_OUTDATED failure can take over the UI with the upgrade
   // banner instead of stacking a useless toast with the auto-upgrade flow.
-  const install = (modelId, { force = false } = {}) => runAction(
+  const startInstall = (modelId, { force = false } = {}) => runAction(
     `install-${modelId}`,
     () => installLocalLlmModel(selected, modelId, { silent: true, force }),
     (r) => r?.pending ? `${modelId} download started` : `${modelId} ${force ? 'redownloaded' : 'installed'}`,
@@ -660,6 +718,11 @@ export function LocalLlmTab({ view }) {
       clearConfirm: false
     }
   );
+  const install = (modelId, opts = {}) => requestWeightDownload({
+    title: opts.force ? 'Redownload local model' : 'Install local model',
+    preview: () => previewLocalLlmDownload({ kind: 'install', backend: selected, modelId }, { silent: true }),
+    run: () => startInstall(modelId, opts),
+  });
   // Audio/music models don't run on Ollama/LM Studio — they install into the
   // shared audio-model registry (server/services/audioModels.js) via the Music
   // studio's streaming HF-download endpoint, so the Music studio picks them up.
@@ -729,7 +792,7 @@ export function LocalLlmTab({ view }) {
     ).then((r) => {
       if (r?.success && modelId) {
         setUpgradeFlow({ modelId, phase: 'retrying' });
-        install(modelId);
+        startInstall(modelId);
         // install() either succeeds (its own success toast + status reload covers
         // it) or re-enters the OLLAMA_OUTDATED branch above and resets the flow.
         // Clear after a beat so the banner doesn't linger past the retry kickoff.
@@ -793,6 +856,9 @@ export function LocalLlmTab({ view }) {
     : drafterConfigured && !drafterInUse
       ? 'The Drafter Model will be ignored — none of these spec types use one.'
       : '';
+  // Resolved server-side, because the browser has no idea what OS it is talking
+  // to; absent until the first status lands, and the copy below says so.
+  const llamaInstallCommand = llamaStatus?.installCommand;
   const llamaStartBlockedReason = llamaModelMissing
     ? 'Enter a Target Base Model path to enable Start'
     : baseWeightMissing
@@ -801,7 +867,7 @@ export function LocalLlmTab({ view }) {
         ? 'Download the drafter, or clear the field to run without it'
         : '';
 
-  const handleDownloadSpecModel = async (role) => {
+  const startSpecDownload = async (role) => {
     const presetId = llamaPresetId;
     const key = downloadKey(presetId, role);
     setLlamaDownloads((prev) => ({ ...prev, [key]: { received: 0, total: 0 } }));
@@ -838,6 +904,15 @@ export function LocalLlmTab({ view }) {
       loadLlamaStatus();
     }
   };
+
+  const handleDownloadSpecModel = (role) => requestWeightDownload({
+    title: 'Download speculative-decoding weights',
+    preview: () => previewLocalLlmDownload(
+      { kind: 'spec-decode', presetId: llamaPresetId, role },
+      { silent: true },
+    ),
+    run: () => startSpecDownload(role),
+  });
 
   const handleCancelSpecModelDownload = async (role) => {
     try {
@@ -952,7 +1027,9 @@ export function LocalLlmTab({ view }) {
         <p className="text-xs text-gray-500">
           {activeView === 'runtimes'
             ? 'Install, start, stop, and configure the local servers that run language models.'
-            : 'Find, install, compare, and remove the model weights available to Ollama and LM Studio.'}
+            : activeView === 'abuse'
+              ? 'Install and verify each stage of the pinned Prompt Guard classifier used to screen external content.'
+              : 'Find, install, compare, and remove the model weights available to Ollama and LM Studio.'}
         </p>
       </div>
 
@@ -963,6 +1040,7 @@ export function LocalLlmTab({ view }) {
         status={status}
         llamaStatus={llamaStatus}
         mtplxStatus={mtplxStatus}
+        slotstreamStatus={slotstreamStatus}
         loading={loading}
         busy={busy}
         actionInProgress={actionInProgress}
@@ -978,6 +1056,10 @@ export function LocalLlmTab({ view }) {
         onInstallMtplx={runtimeInstallMtplx}
         onStartMtplx={runtimeStartMtplx}
         onStopMtplx={runtimeStopMtplx}
+        onConfigureSlotstream={() => scrollTo(slotstreamSectionRef)}
+        onInstallSlotstream={runtimeInstallSlotstream}
+        onStartSlotstream={runtimeStartSlotstream}
+        onStopSlotstream={runtimeStopSlotstream}
         onSaveStartup={saveRuntimeStartup}
         onSaveIdleWindow={saveIdleWindow}
       />
@@ -1086,6 +1168,21 @@ export function LocalLlmTab({ view }) {
         )}
       </div>
 
+      {/* Slotstream — PM2-managed SSD-streaming MoE runtime (Apple Silicon) */}
+      <div ref={slotstreamSectionRef}>
+        <SlotstreamServerCard
+          status={slotstreamStatus}
+          loading={loading}
+          busy={busy}
+          actionInProgress={actionInProgress}
+          onRefresh={loadSlotstreamStatus}
+          onSaveLaunch={saveSlotstreamLaunch}
+          onStart={runtimeStartSlotstream}
+          onStop={runtimeStopSlotstream}
+          onInstall={runtimeInstallSlotstream}
+        />
+      </div>
+
       {/* MTPLX — PM2-managed native-MTP runtime (Apple Silicon) */}
       <div ref={mtplxSectionRef}>
         <MtplxServerCard
@@ -1132,7 +1229,7 @@ export function LocalLlmTab({ view }) {
         </div>
 
         <p className="text-xs text-gray-400 leading-relaxed">
-          Speculative decoding pairs a small drafter with your target model for 2–3× faster generation at identical output. You can launch and manage a local <code className="text-gray-300">llama-server</code> from PortOS and connect using the <strong className="text-white">OpenCode llama TUI</strong> provider. <strong className="text-white">DSpark</strong> (<code className="text-gray-300">draft-dspark</code>) works on a stock <code className="text-gray-300">brew install llama.cpp</code>; the DFlash 2 presets need a from-source build of an unmerged llama.cpp branch. No drafter GGUF to hand? The <code className="text-gray-300">ngram-*</code> spec types under Advanced options draft from the context window alone.
+          Speculative decoding pairs a small drafter with your target model for 2–3× faster generation at identical output. You can launch and manage a local <code className="text-gray-300">llama-server</code> from PortOS and connect using the <strong className="text-white">OpenCode llama TUI</strong> provider. <strong className="text-white">DSpark</strong> (<code className="text-gray-300">draft-dspark</code>) works on a stock llama.cpp{llamaInstallCommand ? <> (<code className="text-gray-300">{llamaInstallCommand}</code>)</> : null}; the DFlash 2 presets need a from-source build of an unmerged llama.cpp branch. No drafter GGUF to hand? The <code className="text-gray-300">ngram-*</code> spec types under Advanced options draft from the context window alone.
         </p>
 
         {llamaStatus?.running ? (
@@ -1453,7 +1550,9 @@ export function LocalLlmTab({ view }) {
             <div className="space-y-1">
               <p className="font-semibold">llama-server was not detected on system PATH.</p>
               <p className="text-gray-300">
-                Install via Homebrew or compile the DFlash 2-enabled branch from source.
+                {llamaInstallCommand
+                  ? <>Install it with <code className="text-gray-300">{llamaInstallCommand}</code>, or compile the DFlash 2-enabled branch from source.</>
+                  : <>Install it from your platform&apos;s package manager, or compile the DFlash 2-enabled branch from source.</>}
               </p>
             </div>
             <button
@@ -1487,6 +1586,8 @@ export function LocalLlmTab({ view }) {
       </div>
         </section>
       )}
+
+      {activeView === 'abuse' && <ModelAbuseGuardPanel />}
 
       {activeView === 'library' && (
         <section id="llm-management-panel-library" role="tabpanel" aria-labelledby="tab-library">
@@ -1870,6 +1971,16 @@ export function LocalLlmTab({ view }) {
       </div>
         </section>
       )}
+      <DownloadPreflightConfirm
+        open={Boolean(downloadConfirm)}
+        title={downloadConfirm?.title}
+        loading={Boolean(downloadConfirm?.loading)}
+        error={downloadConfirm?.error}
+        assessment={downloadConfirm?.assessment}
+        confirmLabel="Start download"
+        onCancel={cancelDownloadConfirm}
+        onConfirm={runDownloadConfirm}
+      />
     </div>
   );
 }

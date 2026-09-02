@@ -40,12 +40,6 @@ export const createTribeTouchpoint = (personId, data = {}, options = {}) => requ
   ...options,
 });
 
-export const createTribeCalendarTouchpoint = (personId, data) =>
-  request(`/tribe/people/${personId}/touchpoints/calendar`, {
-    method: 'POST',
-    body: JSON.stringify(data),
-  });
-
 export const getTribeMemoryLinks = (personId) => request(`/tribe/people/${personId}/memories`);
 
 export const linkTribeMemory = (personId, data, options = {}) => request(`/tribe/people/${personId}/memories`, {

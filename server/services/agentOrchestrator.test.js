@@ -15,6 +15,7 @@ import { describe, it, expect, vi } from 'vitest';
 vi.mock('./agentManagement.js', () => ({
   pauseAgent: () => {},
   resumeAgent: () => {},
+  relaunchAgent: () => {},
   killAgent: () => {},
   terminateAgent: () => {},
   getAgentProcessStats: () => {}
@@ -38,6 +39,7 @@ import * as agentLifecycle from './agentLifecycle.js';
 const WIRING = [
   ['pauseAgent', agentManagement, 'pauseAgent'],
   ['resumeAgent', agentManagement, 'resumeAgent'],
+  ['relaunchAgent', agentManagement, 'relaunchAgent'],
   ['killAgent', agentManagement, 'killAgent'],
   ['terminateAgent', agentManagement, 'terminateAgent'],
   ['getAgentProcessStats', agentManagement, 'getAgentProcessStats'],

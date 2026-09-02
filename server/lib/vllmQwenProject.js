@@ -10,9 +10,9 @@
  * a directory that has never been prepared would kick off exactly the multi-tens-
  * of-gigabytes download PortOS promises never to start on its own.
  *
- * So the button asks first, and this module is the question. It only reads
- * directory entries — it never runs docker, contacts a registry, or reads a
- * weight file.
+ * So the button asks first, and this module is the question. It reads directory
+ * entries and records where it looked — it never runs docker, contacts a
+ * registry, or reads a weight file.
  *
  * **Sentinels matter here.** `hasWeights` is a tri-state: `true` (a Qwen model
  * directory was found), `false` (every candidate root was readable and none held
@@ -28,14 +28,45 @@
  * working directory. `VLLM_QWEN_WEIGHTS_DIR` covers the rarer case of a cache
  * kept somewhere else entirely; otherwise the operator simply runs compose
  * themselves, which is the documented path anyway.
+ *
+ * **The operator no longer types that UNC path themselves.** On Windows,
+ * `services/vllmQwenManager.js` asks WSL for it (`lib/wslDistro.js`) and records
+ * the answer through `recordVllmProjectDir` below, so every later read — the
+ * once-a-minute readiness inspection, the Start button, a restarted server —
+ * resolves the same directory the provisioning run actually used. The record is
+ * one line in PortOS's own `.env`, kept HERE because "where does this project
+ * live" is one question and one module should answer it.
  */
 
+import { readFileSync } from 'fs';
 import { readdir, stat } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
 
+// From the leaf modules, not the `fileUtils.js` aggregate: several route suites
+// replace that whole aggregate with a small literal, and a module-level
+// `PATHS.root` read through it explodes at import time in a suite that never
+// touches this file.
+import { atomicWrite } from './fileCore.js';
+import { PATHS } from './paths.js';
+import { parseEnvContents, upsertEnvLine } from './vllmQwenProvision.js';
+
 /** Operator override for where the compose project was cloned. */
 export const VLLM_PROJECT_DIR_ENV = 'VLLM_QWEN_PROJECT_DIR';
+
+/** The directory name upstream's README uses, inside whichever home holds it. */
+export const VLLM_PROJECT_LEAF = 'qwen-serving';
+
+/**
+ * PortOS's own `.env` — where an auto-detected project directory is recorded.
+ *
+ * `installRoot`, not `root`: what is recorded here is machine-local runtime state
+ * ("where this machine's WSL project lives"), so it belongs to the install and
+ * not to whichever checkout loaded the code. A server booted from a CoS agent
+ * worktree has no `.env` in its own tree (`lib/paths.js`, #1947), and anchoring
+ * to `root` there would write a throwaway file the real install never reads.
+ */
+export const PORTOS_ENV_PATH = join(PATHS.installRoot, '.env');
 
 /**
  * Operator override for the HuggingFace cache holding the weights — the answer
@@ -52,7 +83,44 @@ const resolveHome = (env) =>
   String(env?.HOME || env?.USERPROFILE || '').trim() || homedir();
 
 /** Where the upstream README tells the operator to clone it. */
-export const vllmDefaultProjectDir = (env = process.env) => join(resolveHome(env), 'qwen-serving');
+export const vllmDefaultProjectDir = (env = process.env) => join(resolveHome(env), VLLM_PROJECT_LEAF);
+
+/**
+ * The project directory PortOS recorded for itself, or `''` when there is none.
+ *
+ * Read from the file on every call rather than cached: the provisioning run
+ * writes it, and the readiness poll that must start seeing the new directory
+ * lives in the same process without a restart between them. PortOS has no
+ * dotenv, so `.env` reaches `process.env` for nobody — a module that wants a
+ * value out of it reads the file, the same way `services/localLlm.js` reads its
+ * `LLM_BACKEND` marker.
+ *
+ * @param {string} [envPath]
+ * @returns {string}
+ */
+export function readRecordedVllmProjectDir(envPath = PORTOS_ENV_PATH) {
+  let contents = '';
+  try { contents = readFileSync(envPath, 'utf8'); } catch { return ''; }
+  return parseEnvContents(contents).get(VLLM_PROJECT_DIR_ENV) || '';
+}
+
+/**
+ * Remember where this project was placed, so nothing has to detect it twice.
+ *
+ * `upsertEnvLine` rather than an append: a file accumulating one line per
+ * provisioning run is a config whose meaning depends on which reader opens it
+ * (some take the first mention, some the last). Atomic, because PortOS's `.env`
+ * also carries the database password and a half-written truncate is readable by
+ * a concurrent boot.
+ *
+ * @param {string} dir
+ * @param {string} [envPath]
+ */
+export async function recordVllmProjectDir(dir, envPath = PORTOS_ENV_PATH) {
+  let contents = '';
+  try { contents = readFileSync(envPath, 'utf8'); } catch { /* no .env yet */ }
+  await atomicWrite(envPath, upsertEnvLine(contents, VLLM_PROJECT_DIR_ENV, dir));
+}
 
 /** Compose file names the upstream project may ship under. */
 const COMPOSE_FILENAMES = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'];
@@ -87,10 +155,31 @@ const LOCAL_WEIGHT_MARKERS = ['model.safetensors.index.json', 'model.safetensors
 const isDirectory = (path) => stat(path).then((s) => s.isDirectory(), () => false);
 const isFile = (path) => stat(path).then((s) => s.isFile(), () => false);
 
-/** The configured project directory, or upstream's documented default. */
-export function resolveVllmProjectDir(env = process.env) {
+/**
+ * The configured project directory, what PortOS recorded, or upstream's
+ * documented default — in that order.
+ *
+ * The process environment outranks the recorded value deliberately: an operator
+ * who exports this variable (in their shell, or in `ecosystem.config.cjs`) is
+ * making a decision for this run, and a directory PortOS auto-detected on some
+ * earlier run must not quietly outlive it.
+ */
+export function resolveVllmProjectDir(env = process.env, envPath = PORTOS_ENV_PATH) {
   const configured = String(env?.[VLLM_PROJECT_DIR_ENV] || '').trim();
-  return configured || vllmDefaultProjectDir(env);
+  if (configured) return configured;
+  return readRecordedVllmProjectDir(envPath) || vllmDefaultProjectDir(env);
+}
+
+/**
+ * Whether anything already answers "where does this project live", so a caller
+ * knows whether detecting it is still worth a subprocess.
+ *
+ * Exported so `services/vllmQwenManager.js` asks THIS module rather than
+ * re-listing the two sources above — a precedence change made in one place and
+ * not the other is invisible on any non-Windows machine.
+ */
+export function vllmProjectDirIsSettled(env = process.env, envPath = PORTOS_ENV_PATH) {
+  return Boolean(String(env?.[VLLM_PROJECT_DIR_ENV] || '').trim() || readRecordedVllmProjectDir(envPath));
 }
 
 /**
@@ -135,11 +224,15 @@ async function rootHoldsQwenWeights(root, entries) {
  * Inspect the operator's vLLM project without touching docker.
  *
  * @param {NodeJS.ProcessEnv} [env]
+ * @param {string} [envPath] - which `.env` holds the recorded directory; a
+ *   parameter for the same reason `resolveHome` reads the passed env — every
+ *   path this module derives has to be answerable by a test's sandbox rather
+ *   than by whatever the developer's own install happens to have recorded.
  * @returns {Promise<{dir:string, hasProject:boolean, composeFile:string|null,
  *   hasWeights:boolean|null, weightsRoot:string|null}>}
  */
-export async function inspectVllmQwenProject(env = process.env) {
-  const dir = resolveVllmProjectDir(env);
+export async function inspectVllmQwenProject(env = process.env, envPath = PORTOS_ENV_PATH) {
+  const dir = resolveVllmProjectDir(env, envPath);
   const hasProject = await isDirectory(dir);
 
   let composeFile = null;
@@ -181,16 +274,16 @@ export async function inspectVllmQwenProject(env = process.env) {
  */
 export function vllmStartBlockedReason(project) {
   if (!project?.hasProject) {
-    return `the compose project was not found at ${project?.dir}. Clone https://github.com/syv-ai/qwen38-27b-rtx3090 there (or set ${VLLM_PROJECT_DIR_ENV}) and run its prepare step once — PortOS never downloads the image or the weights.`;
+    return `the compose project was not found at ${project?.dir}. Use the checklist's “Clone, build & prepare” button — it does the whole ~30 GB sequence for you, and a plain Start never downloads an image or a weight.`;
   }
   if (!project.composeFile) {
     return `${project.dir} exists but holds no docker-compose file. Point ${VLLM_PROJECT_DIR_ENV} at the cloned syv-ai/qwen38-27b-rtx3090 checkout.`;
   }
   if (project.hasWeights === false) {
-    return `the project is cloned but no Qwen weights are cached yet. Run its prepare step in a terminal — starting compose now would pull roughly 20 GB, which PortOS will not do for you.`;
+    return `the project is cloned but no Qwen weights are cached yet. Use the checklist's “Clone, build & prepare” button, which runs that step and names the ~20 GB before it starts — a plain Start will not spend it for you.`;
   }
   if (project.hasWeights === null) {
-    return `PortOS cannot read a models directory for this project, so it cannot confirm the weights are already downloaded. On Windows the project usually lives inside WSL2 — point ${VLLM_PROJECT_DIR_ENV} at its UNC path (\\\\wsl.localhost\\<distro>\\home\\<user>\\qwen-serving). Otherwise set ${VLLM_WEIGHTS_DIR_ENV} to the directory holding the weights, or start it yourself with \`docker compose --profile single up -d\` in ${project.dir}.`;
+    return `PortOS cannot read a models directory for this project, so it cannot confirm the weights are already downloaded. On Windows it places the project inside WSL2 and records the UNC path for itself — if that record is stale, or the weights live somewhere else entirely, set ${VLLM_PROJECT_DIR_ENV} or ${VLLM_WEIGHTS_DIR_ENV} to where they actually are. Failing that, start it yourself with \`docker compose --profile single up -d\` in ${project.dir}.`;
   }
   return null;
 }

@@ -99,6 +99,7 @@ import ResolutionField from '../components/media/ResolutionField';
 import { VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, IC_LORA_MODES } from '../lib/videoGenParams.js';
 import { finishTargetForRecord, isDeliveryVideoModel } from '../lib/videoFinish.js';
 import { peerModelRequiresInput } from '../lib/federatedMediaReadiness.js';
+import { readCachedVideoGenStatus, writeCachedVideoGenStatus } from '../lib/videoGenStatusCache.js';
 const MODES = [
   { id: 'text',   label: 'Text',   icon: Type,       desc: 'Text-to-video' },
   { id: 'image',  label: 'Image',  icon: ImageIcon,  desc: 'Image-to-video (start frame)' },
@@ -121,7 +122,11 @@ export default function VideoGen() {
     refreshGrokEnabled();
   };
 
-  const [status, setStatus] = useState(null);
+  // Paint the model picker from the previous /status answer while the live
+  // probe runs. The cached entry carries `stale: true` and holds nothing but
+  // the model-shaping fields (see lib/videoGenStatusCache.js); connectivity UI
+  // below gates on `statusFresh`.
+  const [status, setStatus] = useState(readCachedVideoGenStatus);
   const [statusLoading, setStatusLoading] = useState(true);
   // Grok Build CLI video backend (#2859 phase 2) — surfaced only when the
   // user enabled Grok in Settings → Image Gen (one toggle covers image +
@@ -130,7 +135,7 @@ export default function VideoGen() {
   // The jobId of the render this tab's Generate button currently owns —
   // threaded into cancelVideoGen so cancellation is job-scoped.
   const activeJobIdRef = useRef(null);
-  const [models, setModels] = useState([]);
+  const [models, setModels] = useState(() => status?.models || []);
   const refreshGrokEnabled = useCallback(() => {
     getSettings({ silent: true })
       .then((sv) => setGrokEnabled(sv?.imageGen?.grok?.enabled === true))
@@ -401,6 +406,7 @@ export default function VideoGen() {
       .then((s) => {
         setStatus(s);
         setModels(s.models || []);
+        writeCachedVideoGenStatus(s);
       })
       .catch(() => setStatus({ connected: false, reason: 'Status check failed' }))
       .finally(() => setStatusLoading(false));
@@ -800,7 +806,16 @@ export default function VideoGen() {
   // `byovRuntimeMissing` for those models. Without this, a user who installed
   // ONLY a BYOV runtime via the modal would stay stuck behind a "not
   // configured" error from the unrelated legacy probe.
-  const notConnected = !!status && status.connected === false && !needsByovProbe;
+  // A cached entry says nothing about python health, so the connectivity UI
+  // waits for the live probe rather than reporting the interpreter state of
+  // whenever the last visit happened.
+  const statusFresh = !!status && !status.stale;
+  // The Model field renders as soon as there is anything to say — the list, or
+  // the fact that it is still being probed. Only a finished probe that named no
+  // model at all takes the field away.
+  const modelsLoading = models.length === 0;
+  const modelFieldVisible = !modelsLoading || statusLoading;
+  const notConnected = statusFresh && status.connected === false && !needsByovProbe;
 
   // A federated render answers to the PEER’s readiness, not to this machine’s
   // runtime gates — none of the local probes below describe the hardware it
@@ -814,7 +829,7 @@ export default function VideoGen() {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-2 text-xs">
-        {status ? (
+        {statusFresh ? (
           <span
             className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full border ${
               status.connected
@@ -870,7 +885,7 @@ export default function VideoGen() {
 
       <RuntimeFingerprint runtime={status?.runtime} />
 
-      {status && status.connected === false && (() => {
+      {statusFresh && status.connected === false && (() => {
         const missingCount = status.missingPackages?.length || 0;
         const hasPath = !!status.pythonPath;
         return (
@@ -1239,13 +1254,15 @@ export default function VideoGen() {
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             {/* The peer advertises its own models; the local list would name
                 none of them, and a stale selection here must not read as the
-                model that rendered the clip. */}
-            {models.length > 0 && !remoteTarget.isRemote && (
+                model that rendered the clip. Locally the field holds its place
+                through the probe rather than popping into the form late. */}
+            {modelFieldVisible && !remoteTarget.isRemote && (
               <FormField className="col-span-2 sm:col-span-3" label="Model" labelClassName="block text-xs font-medium text-gray-400 mb-1">
                 <ModelSelect
                   models={visibleModels}
                   value={modelId}
                   onChange={(e) => handleModelChange(e.target.value)}
+                  loading={modelsLoading}
                 />
                 {remixModelFallback && (
                   <p className="mt-1 text-[11px] text-port-accent leading-snug" role="status">

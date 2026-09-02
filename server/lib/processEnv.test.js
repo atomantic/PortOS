@@ -1,6 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { basename, dirname } from 'path';
-import { buildSafeCliBaseEnv, findCommandOnPath, safeChildProcessEnv, stripDebugMallocEnv, whichFirst } from './processEnv.js';
+import { afterEach, beforeEach, describe, it, expect } from 'vitest';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { basename, delimiter, dirname, join } from 'path';
+import { adoptPathDirs, buildSafeCliBaseEnv, findCommandOnPath, safeChildProcessEnv, stripDebugMallocEnv, whichFirst } from './processEnv.js';
 
 describe('stripDebugMallocEnv', () => {
   it('drops every key that starts with "Malloc"', () => {
@@ -152,5 +154,53 @@ describe('findCommandOnPath', () => {
       cwd: dirname(nodePath),
     });
     expect(resolved).toBe(nodePath);
+  });
+});
+
+describe('adoptPathDirs', () => {
+  const IS_WIN = process.platform === 'win32';
+  let root;
+  let originalPath;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'portos-adopt-path-'));
+    originalPath = process.env.PATH;
+  });
+
+  afterEach(() => {
+    process.env.PATH = originalPath;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  // A package manager that installed into a directory this process's PATH does
+  // not name (winget's Links dir, npm's global prefix) is invisible to both
+  // findCommandOnPath AND the bare-name spawns children make until it is here.
+  it('appends a real directory and reports it, skipping one that does not exist', () => {
+    const missing = join(root, 'never-created');
+
+    expect(adoptPathDirs([root, missing])).toEqual([root]);
+
+    const entries = process.env.PATH.split(delimiter);
+    expect(entries).toContain(root);
+    // A dead entry taxes every later PATH walk, so it must never be added.
+    expect(entries).not.toContain(missing);
+  });
+
+  it('does not re-add a directory PATH already carries', () => {
+    adoptPathDirs([root]);
+    const afterFirst = process.env.PATH;
+
+    expect(adoptPathDirs([root, root])).toEqual([]);
+    expect(process.env.PATH).toBe(afterFirst);
+  });
+
+  // Windows PATH mixes casings freely and its paths are case-insensitive, so a
+  // case-sensitive compare would append a duplicate of an entry already there.
+  it.runIf(IS_WIN)('matches an existing Windows PATH entry regardless of case', () => {
+    process.env.PATH = `${originalPath}${delimiter}${root.toUpperCase()}`;
+    const before = process.env.PATH;
+
+    expect(adoptPathDirs([root])).toEqual([]);
+    expect(process.env.PATH).toBe(before);
   });
 });

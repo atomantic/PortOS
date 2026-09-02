@@ -16,10 +16,6 @@
 
 import { request } from './apiCore.js';
 
-export const PEER_SUBSCRIBABLE_KINDS = Object.freeze([
-  'universe', 'series', 'mediaCollection', 'fableLoom',
-]);
-
 export const listPeerSubscriptions = (filter = {}, options) => {
   const qs = new URLSearchParams();
   if (filter.peerId) qs.set('peerId', filter.peerId);
@@ -92,17 +88,6 @@ export const pullRecordFromPeer = (peerId, recordKind, recordId, options = {}) =
   request('/peer-sync/pull-record', {
     method: 'POST',
     body: JSON.stringify({ peerId, recordKind, recordId }),
-    ...options,
-  });
-
-/**
- * Trigger a full sync-now for all subscribed records to a peer.
- * Same silent-capable pattern as `syncRecordToPeer`.
- */
-export const syncNowForPeer = (peerId, options = {}) =>
-  request('/peer-sync/sync-now', {
-    method: 'POST',
-    body: JSON.stringify({ peerId }),
     ...options,
   });
 

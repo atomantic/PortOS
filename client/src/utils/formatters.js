@@ -320,6 +320,18 @@ export function formatCompactCount(n) {
 }
 
 /**
+ * `formatCompactCount` for a count that may legitimately be absent: renders an
+ * em-dash instead of "0", so "no data" and "measured zero" read differently on
+ * a stat tile. `formatCompactCount` itself can't take this on — a real 0 must
+ * still render as "0".
+ * @param {number|null|undefined} n
+ * @returns {string}
+ */
+export function formatCompactCountOrDash(n) {
+  return n == null ? '—' : formatCompactCount(n);
+}
+
+/**
  * Round a number to `decimals` places and drop trailing zeros
  * (170.35000000000002 → 170.4, 170.0 → 170). Returns null for
  * non-finite input so callers can render their own fallback.

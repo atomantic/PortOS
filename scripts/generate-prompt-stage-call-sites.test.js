@@ -13,6 +13,7 @@ import {
   readStageCallSitesManifest,
   serializeManifest,
 } from './generate-prompt-stage-call-sites.js';
+import { POSITION_INVARIANCE_FAILURE, shiftSourceText } from './lib/positionInvariance.js';
 
 // Fixture sources exercise the scanner's contract without depending on the
 // real tree, so a legitimate refactor of `server/` can't turn these into
@@ -151,6 +152,24 @@ describe('prompt stage call-site scanner', () => {
 
     expect(Object.keys(index)).toEqual(['demo-alpha', 'demo-beta']);
     expect(index['demo-beta']).toEqual(['server/services/a.js', 'server/services/z.js']);
+  });
+
+  // This manifest already keys by stage and lists paths only, so it passes
+  // today. The test is here to keep it that way: it states the rule as a
+  // property, so a future scanner that starts recording where a call site sits
+  // fails here rather than in someone's rebase. Same guard as the route
+  // catalog's, which is why both call the one helper.
+  it('builds a byte-identical index after every source line shifts', () => {
+    const sources = [
+      src('server/services/a.js', "await getStage('demo-alpha');"),
+      src('server/services/b.js', 'await buildPrompt("demo-beta", {});'),
+    ];
+    const build = (scanned) => serializeManifest(buildStageCallSites({ shippedStageKeys, sources: scanned }));
+
+    expect(
+      build(sources.map(({ path, source }) => src(path, shiftSourceText(source)))),
+      POSITION_INVARIANCE_FAILURE,
+    ).toBe(build(sources));
   });
 });
 

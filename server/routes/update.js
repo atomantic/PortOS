@@ -8,6 +8,7 @@ import * as updateChecker from '../services/updateChecker.js';
 import { executeUpdate } from '../services/updateExecutor.js';
 import { getActiveAgentIds, spawningTasks } from '../services/agentState.js';
 import { readPersistentMindStateForSafetyCheck, withStateLock } from '../services/cosState.js';
+import { filterLiveAgentIds } from '../services/cosAgentLifecycle.js';
 
 const router = Router();
 
@@ -28,8 +29,16 @@ const router = Router();
 // reads this but before update.sh's pm2 restart. The route's post-lock re-check
 // below narrows it; fully closing it needs every CoS spawn engine to consult
 // updateInProgress (tracked in #4124) — the orphan reaper bounds the residual.
-function countActiveCosAgents() {
-  return getActiveAgentIds().length + spawningTasks.size;
+//
+// The map ids are filtered through PortOS's own durable records first
+// (`filterLiveAgentIds`). Neither map is self-cleaning, and `syncRunnerAgents`
+// adopts whatever the CoS Runner still advertises — so a TUI the runner failed
+// to kill stayed "active" until the next PortOS restart, permanently blocking
+// the one action that would have cleared it. A restart cannot sever a run this
+// process has already finalized, so a finalized id must not gate the update.
+async function countActiveCosAgents() {
+  const live = await filterLiveAgentIds(getActiveAgentIds());
+  return live.length + spawningTasks.size;
 }
 
 // The 409 the update flow raises when a restart would sever a live/spawning
@@ -93,11 +102,12 @@ const executeSchema = z.object({
 // restart out from under a running agent).
 router.get('/status', asyncHandler(async (req, res) => {
   await updateChecker.clearStaleUpdateInProgress();
-  const [status, persistentMindImages] = await Promise.all([
+  const [status, persistentMindImages, activeCosAgents] = await Promise.all([
     updateChecker.getUpdateStatus(),
     getPersistentMindImageWorkGuard(),
+    countActiveCosAgents(),
   ]);
-  res.json({ ...status, activeCosAgents: countActiveCosAgents(), persistentMindImages });
+  res.json({ ...status, activeCosAgents, persistentMindImages });
 }));
 
 // POST /api/update/check — triggers manual check
@@ -182,14 +192,12 @@ router.post('/execute', asyncHandler(async (req, res) => {
   // Never restart PortOS out from under a live CoS agent. Both a normal update
   // and a reconcile run update.sh, which pm2-restarts THIS server process and
   // severs any in-flight agent (each agent's PTY/child process is a child of it).
-  // countActiveCosAgents() reflects exactly what a restart would kill — live
-  // processes plus in-flight spawns — so a stale persisted `status: 'running'`
-  // on disk can't spuriously block, and a paused agent (its process already
-  // stopped) correctly doesn't. Fast-fail here so it covers reconcile, normal
-  // update, and both fork variants (all funnel through /execute) before doing
-  // the git/fork work below; a second re-check after the lock closes the window
-  // an agent could start in during that work.
-  const preCheck = countActiveCosAgents();
+  // countActiveCosAgents() reflects exactly what a restart would kill (see its
+  // definition above). Fast-fail here so it covers reconcile, normal update, and
+  // both fork variants (all funnel through /execute) before doing the git/fork
+  // work below; a second re-check after the lock closes the window an agent
+  // could start in during that work.
+  const preCheck = await countActiveCosAgents();
   if (preCheck > 0) throw agentsActiveError(preCheck);
   const preImageCheck = await getPersistentMindImageWorkGuard();
   if (!preImageCheck.trusted) throw persistentMindStateUntrustedError();
@@ -261,7 +269,7 @@ router.post('/execute', asyncHandler(async (req, res) => {
   // `updateChecker.isUpdateInProgress()`, which subAgentSpawner's `task:ready`
   // listener and `spawnAgentForTask` both check, holding the task as `pending`
   // until after the restart (issue #4124).
-  const postLock = countActiveCosAgents();
+  const postLock = await countActiveCosAgents();
   if (postLock > 0) {
     await updateChecker.setUpdateInProgress(false);
     throw agentsActiveError(postLock);

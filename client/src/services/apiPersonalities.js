@@ -14,7 +14,6 @@ export const updateAgentPersonality = (id, data) => request(`/agents/personaliti
   method: 'PUT',
   body: JSON.stringify(data)
 });
-export const deleteAgentPersonality = (id) => request(`/agents/personalities/${id}`, { method: 'DELETE' });
 export const toggleAgentPersonality = (id, enabled) => request(`/agents/personalities/${id}/toggle`, {
   method: 'POST',
   body: JSON.stringify({ enabled })

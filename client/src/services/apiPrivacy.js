@@ -53,7 +53,6 @@ export const getPrivacyStatus = (options) => request(...scoped('/privacy/status'
 // ── Vault records ───────────────────────────────────────────────────────────
 export const getVaultRecords = (type, options) =>
   request(...scoped('/privacy/vault', options, { type }));
-export const getVaultRecord = (id, options) => request(`/privacy/vault/${id}`, options);
 export const createVaultRecord = (data, options) => request('/privacy/vault', {
   method: 'POST',
   body: JSON.stringify(data),
@@ -77,7 +76,6 @@ export const revealVaultRecord = (id, options) => request(`/privacy/vault/${id}/
 // ── Trusted Organizations registry ──────────────────────────────────────────
 export const getPrivacyOrgs = (filters = {}, options) =>
   request(...scoped('/privacy/orgs', options, filters));
-export const getPrivacyOrg = (id, options) => request(`/privacy/orgs/${id}`, options);
 export const createPrivacyOrg = (data, options) => request('/privacy/orgs', {
   method: 'POST',
   body: JSON.stringify(data),

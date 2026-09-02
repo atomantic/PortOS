@@ -301,6 +301,44 @@ describe('analyzeAgentFailure — ERROR_PATTERNS classification', () => {
     expect(analysis.suggestedFix).toContain('num_ctx');
   });
 
+  it('classifies an Ollama tool-capability rejection as a model problem, not a bad request', () => {
+    const body = 'API Error: 400 registry.ollama.ai/library/gemma3:27b does not support tools';
+    const analysis = analyzeAgentFailure(withLead(body), { id: 't' }, 'gemma3:27b');
+    // NOT `bad-request`: the request was well-formed and the model simply can't
+    // emit tool calls, so "check prompt formatting" (that rule's advice) sends
+    // the retry after a defect that isn't there.
+    expect(analysis.category).toBe('model-not-found');
+    expect(analysis.origin).toBe('provider');
+    expect(analysis.actionable).toBe(true);
+    // The registry path is stripped down to the tag a provider's model field holds.
+    expect(analysis.affectedModel).toBe('gemma3:27b');
+    expect(analysis.affectedCapability).toBe('tools');
+    expect(analysis.suggestedFix).toMatch(/tool-capable model/i);
+  });
+
+  it('classifies the same rejection for a non-tools capability', () => {
+    const body = 'API Error: 400 {"error":"nomic-embed-text:latest does not support chat"}';
+    const analysis = analyzeAgentFailure(withLead(body), { id: 't' }, 'nomic-embed-text:latest');
+    expect(analysis.category).toBe('model-not-found');
+    expect(analysis.affectedModel).toBe('nomic-embed-text:latest');
+    expect(analysis.affectedCapability).toBe('chat');
+  });
+
+  it('does not classify prose about tool support as a model rejection', () => {
+    // This file's rules sweep the whole transcript, and an agent editing this
+    // very code writes the phrase in passing — without the `API Error: 4NN`
+    // anchor that output would be misread as a provider signal.
+    const prose = 'Noted in the review that gemma3:27b does not support tools, so the harness needs a different model.';
+    const analysis = analyzeAgentFailure(withLead(prose), { id: 't' }, 'x');
+    expect(analysis.category).not.toBe('model-not-found');
+  });
+
+  it('still classifies an ordinary malformed request as bad-request', () => {
+    const body = 'API Error: 400 {"type":"invalid_request_error","message":"messages: at least one message is required"}';
+    const analysis = analyzeAgentFailure(withLead(body), { id: 't' }, 'x');
+    expect(analysis.category).toBe('bad-request');
+  });
+
   it('falls back to an unknown, non-actionable category for unrecognized output', () => {
     const analysis = analyzeAgentFailure(withLead('The agent halted after an unrecognized condition with no diagnostic.'), { id: 't' }, 'x');
     expect(analysis.category).toBe('unknown');

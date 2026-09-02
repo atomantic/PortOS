@@ -14,6 +14,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router';
 import { Loader2, ArrowLeft, Download, Save, BookText, FileText, FileType } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import {
   getPipelineSeries,
   updatePipelineSeries,
@@ -109,9 +110,17 @@ export default function PipelineExport() {
 
   if (loading) {
     return (
-      <div className="h-full flex items-center justify-center text-gray-400">
-        <Loader2 className="animate-spin" size={20} />
-      </div>
+      <PageSkeleton
+        label="Loading export options"
+        fullHeight
+        padded
+        headerRowClass="flex flex-wrap items-center gap-2"
+        titleWidthClass="w-56"
+        showAction={false}
+        layout="grid"
+        gridColsClass="lg:grid-cols-2"
+        cards={2}
+      />
     );
   }
 

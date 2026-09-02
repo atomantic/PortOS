@@ -14,6 +14,8 @@ import {
   hasBedrockRegionPrefix,
   toBedrockModelId,
   resolveBedrockCliModel,
+  normalizeClaudeModelId,
+  resolveClaudeCliModel,
   prefixOpencodeModel,
   getOpencodeLocalProviderNamespace,
   isOpencodeCommand,
@@ -27,6 +29,7 @@ import {
   CODEX_EFFORT_LEVELS,
   ANTIGRAVITY_EFFORT_LEVELS,
   CURSOR_EFFORT_LEVELS,
+  GROK_EFFORT_LEVELS,
   EFFORT_LEVELS,
   isAntigravityProvider,
   isCursorProvider,
@@ -235,6 +238,16 @@ describe('providerModels', () => {
       expect(effortLevelsForProvider({ id: 'claude-ollama', command: '/usr/local/bin/claude' })).toBe(CLAUDE_EFFORT_LEVELS);
     });
 
+    it('returns grok levels for grok CLI/TUI ids and the grok command, but not the API provider', () => {
+      expect(effortLevelsForProvider({ id: 'grok-cli', command: 'grok' })).toBe(GROK_EFFORT_LEVELS);
+      expect(effortLevelsForProvider({ id: 'grok-tui' })).toBe(GROK_EFFORT_LEVELS);
+      expect(effortLevelsForProvider({ id: 'custom', command: '/Users/x/.grok/bin/grok' })).toBe(GROK_EFFORT_LEVELS);
+      expect(effortLevelsForProvider({ id: 'custom', command: 'Grok.exe' })).toBe(GROK_EFFORT_LEVELS);
+      // The bare `grok` id is the HTTP API provider — no CLI, so no flag to
+      // carry a level, and offering the picker one would be a lie.
+      expect(effortLevelsForProvider({ id: 'grok', type: 'api' })).toBeNull();
+    });
+
     it('returns the narrower agy ladder for antigravity ids and the agy command', () => {
       expect(effortLevelsForProvider({ id: 'antigravity-cli', command: 'agy' })).toBe(ANTIGRAVITY_EFFORT_LEVELS);
       expect(effortLevelsForProvider({ id: 'antigravity-tui' })).toBe(ANTIGRAVITY_EFFORT_LEVELS);
@@ -256,7 +269,8 @@ describe('providerModels', () => {
     });
 
     it('returns null for providers without an effort control (and does NOT default blank commands to claude)', () => {
-      expect(effortLevelsForProvider({ id: 'grok-cli', command: 'grok' })).toBeNull();
+      expect(effortLevelsForProvider({ id: 'kimi-cli', command: 'kimi' })).toBeNull();
+      expect(effortLevelsForProvider({ id: 'opencode', command: 'opencode' })).toBeNull();
       expect(effortLevelsForProvider({ id: 'ollama' })).toBeNull();
       expect(effortLevelsForProvider(null)).toBeNull();
     });
@@ -379,6 +393,15 @@ describe('providerModels', () => {
   });
 
   describe('buildEffortArgs', () => {
+    it('emits grok’s --effort alias, and suppresses it when --reasoning-effort is baked in', () => {
+      const grok = { id: 'grok-cli', command: 'grok' };
+      expect(buildEffortArgs('xhigh', grok, [])).toEqual(['--effort', 'xhigh']);
+      // A user's own long-form pin wins. Grok's parser takes the LAST occurrence,
+      // so appending a second flag here would silently override their choice.
+      expect(buildEffortArgs('low', grok, ['--reasoning-effort', 'high'])).toEqual([]);
+      expect(buildEffortArgs('low', grok, ['--reasoning-effort=high'])).toEqual([]);
+    });
+
     it('emits --effort for claude and a -c config pair for codex', () => {
       expect(buildEffortArgs('high', { id: 'claude-code', command: 'claude' })).toEqual(['--effort', 'high']);
       expect(buildEffortArgs('xhigh', { id: 'codex', command: 'codex' })).toEqual(['-c', 'model_reasoning_effort=xhigh']);
@@ -401,7 +424,7 @@ describe('providerModels', () => {
 
     it('returns [] when unset, unsupported, or already baked into existing args', () => {
       expect(buildEffortArgs(null, { id: 'codex', command: 'codex' })).toEqual([]);
-      expect(buildEffortArgs('high', { id: 'grok-cli', command: 'grok' })).toEqual([]);
+      expect(buildEffortArgs('high', { id: 'kimi-cli', command: 'kimi' })).toEqual([]);
       expect(buildEffortArgs('max', { id: 'claude-code', command: 'claude' }, ['--effort', 'low'])).toEqual([]);
     });
 
@@ -483,6 +506,18 @@ describe('providerModels', () => {
   });
 
   describe('resolveCliEffort', () => {
+    it('clamps an out-of-ladder effort down to grok’s xhigh ceiling', () => {
+      const grok = { id: 'grok-cli', command: 'grok' };
+      // grok's ladder stops at xhigh — a level saved against claude/codex must
+      // clamp rather than vanish, the same contract agy's ladder has.
+      expect(resolveCliEffort('max', grok)).toBe('xhigh');
+      expect(resolveCliEffort('ultra', grok)).toBe('xhigh');
+      expect(resolveCliEffort('xhigh', grok)).toBe('xhigh');
+      expect(resolveCliEffort('low', grok)).toBe('low');
+      // Nothing sits below `minimal`, so it lands on the weakest level.
+      expect(resolveCliEffort('minimal', grok)).toBe('low');
+    });
+
     it('passes a supported level through for claude and codex', () => {
       expect(resolveCliEffort('high', { id: 'claude-code', command: 'claude' })).toBe('high');
       expect(resolveCliEffort('minimal', { id: 'codex', command: 'codex' })).toBe('minimal');
@@ -512,7 +547,7 @@ describe('providerModels', () => {
       expect(resolveCliEffort('', { id: 'codex', command: 'codex' })).toBeNull();
       expect(resolveCliEffort('bogus', { id: 'codex', command: 'codex' })).toBeNull();
       expect(resolveCliEffort('bogus', { id: 'antigravity-cli', command: 'agy' })).toBeNull();
-      expect(resolveCliEffort('high', { id: 'grok-cli', command: 'grok' })).toBeNull();
+      expect(resolveCliEffort('high', { id: 'kimi-cli', command: 'kimi' })).toBeNull();
     });
 
     it('clamps to the tiers the selected agy model has, so agy never sees an invalid pair', () => {
@@ -545,6 +580,15 @@ describe('providerModels', () => {
     it('detects a baked --effort pin in both arg shapes', () => {
       expect(hasEffortFlag(['--effort', 'high'])).toBe(true);
       expect(hasEffortFlag(['--effort=high'])).toBe(true);
+    });
+
+    it('detects grok’s --reasoning-effort long form in both arg shapes', () => {
+      expect(hasEffortFlag(['--reasoning-effort', 'high'])).toBe(true);
+      expect(hasEffortFlag(['--reasoning-effort=high'])).toBe(true);
+      // Same dangling/valueless rules as the short form.
+      expect(hasEffortFlag(['--reasoning-effort'])).toBe(false);
+      expect(hasEffortFlag(['--reasoning-effort', '--verbose'])).toBe(false);
+      expect(hasEffortFlag(['--reasoning-effort='])).toBe(false);
     });
 
     it('detects a baked codex model_reasoning_effort config pair', () => {
@@ -895,6 +939,74 @@ describe('providerModels', () => {
       expect(resolveBedrockCliModel('claude-opus-4-8', { env: {} })).toBe('claude-opus-4-8');
       expect(resolveBedrockCliModel('us.anthropic.claude-opus-4-7-v1:0', { env: { CLAUDE_CODE_USE_BEDROCK: '1' } }))
         .toBe('us.anthropic.claude-opus-4-7-v1:0');
+      expect(spy).not.toHaveBeenCalled();
+      spy.mockRestore();
+    });
+  });
+
+  // Real input matrix for a rewrite that silently changes the id handed to the
+  // CLI — a wrong match here mangles another vendor's model, and a missed one
+  // blocks a task with "model not found" — which is what a stored
+  // `claude-fable-5.1` did.
+  describe('normalizeClaudeModelId', () => {
+    it('rewrites a dotted first-party version to the dashed id Claude Code serves', () => {
+      expect(normalizeClaudeModelId('claude-fable-5.1')).toBe('claude-fable-5-1');
+      expect(normalizeClaudeModelId('claude-opus-4.8')).toBe('claude-opus-4-8');
+      expect(normalizeClaudeModelId('claude-haiku-4.5-20251001')).toBe('claude-haiku-4-5-20251001');
+    });
+
+    it('leaves an already-canonical or non-first-party id alone', () => {
+      for (const id of [
+        'claude-fable-5-1',
+        'claude-opus-5',
+        'claude-haiku-4-5-20251001',
+        // Cursor labels Anthropic models under its OWN dotted ids.
+        'claude-4.6-sonnet-medium',
+        'claude-opus-5-thinking-high',
+        // Other vendors' dotted ids never start with a Claude family prefix.
+        'gpt-5.3-codex',
+        'gemini-3.1-pro',
+        'hf.co/some/repo-fable5-v1-GGUF:Q4_K_M',
+      ]) {
+        expect(normalizeClaudeModelId(id), id).toBe(id);
+      }
+    });
+
+    it('leaves a Bedrock region-prefixed id alone — its dots are structural', () => {
+      expect(normalizeClaudeModelId('global.anthropic.claude-fable-5-v1:0'))
+        .toBe('global.anthropic.claude-fable-5-v1:0');
+    });
+
+    it('passes empty/non-string input through', () => {
+      expect(normalizeClaudeModelId('')).toBe('');
+      expect(normalizeClaudeModelId(null)).toBeNull();
+      expect(normalizeClaudeModelId(undefined)).toBeUndefined();
+    });
+  });
+
+  describe('resolveClaudeCliModel', () => {
+    it('canonicalizes a dotted id and warns once per provider+model', () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const opts = { env: {}, providerId: 'claude-code-dotted-test' };
+      expect(resolveClaudeCliModel('claude-fable-5.1', opts)).toBe('claude-fable-5-1');
+      expect(resolveClaudeCliModel('claude-fable-5.1', opts)).toBe('claude-fable-5-1');
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy.mock.calls[0][0]).toMatch(/claude-fable-5\.1/);
+      spy.mockRestore();
+    });
+
+    it('canonicalizes BEFORE the Bedrock rewrite, so Bedrock gets the dashed id', () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      expect(resolveClaudeCliModel('claude-fable-5.1', {
+        env: { CLAUDE_CODE_USE_BEDROCK: '1' },
+        providerId: 'claude-code-dotted-bedrock-test',
+      })).toBe('global.anthropic.claude-fable-5-1');
+      spy.mockRestore();
+    });
+
+    it('stays silent for an id that needs no correction', () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      expect(resolveClaudeCliModel('claude-fable-5-1', { env: {} })).toBe('claude-fable-5-1');
       expect(spy).not.toHaveBeenCalled();
       spy.mockRestore();
     });

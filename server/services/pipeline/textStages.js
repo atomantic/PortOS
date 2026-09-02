@@ -34,6 +34,7 @@ import { composeStyleNotes } from '../../lib/styleGuide.js';
 import { renderTickingClock } from '../../lib/storyArc.js';
 import { filterCanonForIssue } from '../../lib/storyBible.js';
 import { usableInputTokens, trimContextToBudget, CHARS_PER_TOKEN } from '../../lib/contextBudget.js';
+import { escapeRegExp } from '../../lib/textUtils.js';
 
 const STAGE_TO_TEMPLATE = Object.freeze({
   idea: 'pipeline-idea-expansion',
@@ -356,7 +357,7 @@ const PRINCIPAL_ROLE_RE = /\b(main|lead|protagonist|principal|recurring|primary|
 // also calls it).
 const wordInText = (needle, haystack) => {
   if (!needle) return false;
-  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escaped = escapeRegExp(needle);
   return new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, 'iu').test(haystack);
 };
 
@@ -378,7 +379,7 @@ const firstNameToken = (c) => {
 // team…") still matches — that's the safe over-inclusion direction.
 const properNounInText = (needle, haystack) => {
   if (!needle) return false;
-  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escaped = escapeRegExp(needle);
   const re = new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, 'giu');
   for (const m of String(haystack || '').matchAll(re)) {
     const ch = m[0][0];

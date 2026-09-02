@@ -550,7 +550,7 @@ export default function AlcoholTab() {
           <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">
             All Drink Entries ({allEntries.length} days)
           </h3>
-          <div className="max-h-[70vh] overflow-x-auto overflow-y-auto rounded-lg border border-port-border">
+          <div className="max-h-dvh-cap [--dvh-cap:70dvh] overflow-x-auto overflow-y-auto rounded-lg border border-port-border">
             <table className="w-full text-sm min-w-[600px]">
               <thead className="sticky top-0 bg-port-card z-10">
                 <tr className="border-b border-port-border text-left text-xs text-gray-500 uppercase">

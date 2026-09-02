@@ -29,6 +29,16 @@ describe('getVideoSuggestions', () => {
     expect(card.installUrl).toBe('https://huggingface.co/fal/ltx2.3-audio-reactive-lora');
   });
 
+  it('includes the MiniMax H3 curated card', async () => {
+    const fetchImpl = async () => mockJsonResponse({ cardData: {} });
+    const cards = await svc.getVideoSuggestions({ fetchImpl });
+    const card = cards.find((c) => c.repo === 'KennethFal/vh5tape-vhs-lora-minimax-h3');
+    expect(card).toBeTruthy();
+    expect(card.runnerFamily).toBe('minimax-h3');
+    expect(card.file).toBe('vh5tape.safetensors');
+    expect(card.installUrl).toBe('https://huggingface.co/KennethFal/vh5tape-vhs-lora-minimax-h3');
+  });
+
   it('degrades to the static card when the HF metadata fetch fails', async () => {
     const fetchImpl = async () => ({ ok: false, status: 404 });
     const cards = await svc.getVideoSuggestions({ fetchImpl });

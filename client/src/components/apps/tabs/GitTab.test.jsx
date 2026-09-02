@@ -7,12 +7,15 @@ vi.mock('../../../services/api', () => ({
   getBranches: vi.fn(),
   getBranchComparison: vi.fn(),
   getRemoteBranches: vi.fn(),
+  updateBranches: vi.fn(),
   getGitDiff: vi.fn(),
   cleanupMergedBranches: vi.fn(),
   resetToDefaultBranch: vi.fn(),
 }));
 vi.mock('./RepositorySourcePanel', () => ({
-  default: ({ appId }) => <div data-testid="repository-source-panel">{appId}</div>,
+  default: ({ appId, refreshKey }) => (
+    <div data-testid="repository-source-panel" data-refresh-key={refreshKey}>{appId}</div>
+  ),
 }));
 
 import * as api from '../../../services/api';
@@ -38,6 +41,7 @@ beforeEach(() => {
   api.getBranches.mockResolvedValue({ branches: [] });
   api.getBranchComparison.mockResolvedValue(COMPARISON);
   api.getRemoteBranches.mockResolvedValue({ branches: [], defaultBranch: 'main' });
+  api.updateBranches.mockResolvedValue({ currentBranch: 'main', main: 'up to date' });
   api.getGitDiff.mockResolvedValue({ diff: '@@ -1 +1 @@\n-old\n+new' });
   api.cleanupMergedBranches.mockResolvedValue({ deleted: [], skipped: [] });
   api.resetToDefaultBranch.mockResolvedValue({ success: true, branch: 'main', previousBranch: 'main', previousHead: 'b'.repeat(40), head: 'a'.repeat(40), discardedFiles: 1, fetched: true });
@@ -70,6 +74,16 @@ describe('GitTab managed repository sources', () => {
       />,
     );
     expect(screen.getByTestId('repository-source-panel')).toHaveTextContent('app-other');
+  });
+
+  it('refreshes repository sources after fetching branches', async () => {
+    render(<GitTab appId="app-example" appName="Example App" repoPath="/repo" />);
+
+    expect(await screen.findByTestId('repository-source-panel')).toHaveAttribute('data-refresh-key', '0');
+    fireEvent.click(screen.getByRole('button', { name: 'Fetch branches' }));
+
+    await waitFor(() => expect(api.updateBranches).toHaveBeenCalledWith('/repo'));
+    await waitFor(() => expect(screen.getByTestId('repository-source-panel')).toHaveAttribute('data-refresh-key', '1'));
   });
 });
 
@@ -151,8 +165,8 @@ describe('GitTab merged-branch cleanup scoping', () => {
 
 describe('GitTab merged branches checked out in worktrees', () => {
   beforeEach(() => {
-    // Both merged branches are checked out in worktrees, so the cleanup action
-    // remains visible while disclosing that the server will preserve them.
+    // Both merged branches are checked out in worktrees, which cleanup now tears
+    // down as well — the disclosure names the one condition that preserves one.
     api.getBranches.mockResolvedValue({
       branches: [
         { name: 'main', current: true, tracking: 'origin/main', ahead: 0, behind: 0, isDefault: true, merged: false, worktree: false },
@@ -169,19 +183,32 @@ describe('GitTab merged branches checked out in worktrees', () => {
     // The merged branches still render (with their badges) so the user can see them.
     expect(await screen.findByText('claim/issue-1')).toBeInTheDocument();
     const localCleanBtn = screen.getByRole('button', { name: 'Clean 2 merged' });
-    expect(localCleanBtn).toHaveAttribute('title', 'Cleans merged branches when safe; 2 merged branches checked out in a worktree will be preserved');
-    expect(screen.getByRole('status')).toHaveTextContent('2 merged branches in a worktree will be preserved');
+    expect(localCleanBtn).toHaveAttribute(
+      'title',
+      'Deletes merged branches locally and on the remote, removing the 2 worktrees holding one — unless it still has uncommitted or unmerged work, or is in use'
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('2 worktrees removed too, except any still in use or holding uncommitted work');
   });
 
-  it('uses an eligible-only confirmation when merged branches are held in worktrees', async () => {
+  it('confirms that worktrees go with the branches', async () => {
     render(<GitTab appId="x" appName="App" repoPath="/repo" />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Clean 2 merged' }));
 
-    expect(await screen.findByRole('button', { name: 'Delete eligible merged (local + remote)' })).toHaveAttribute(
-      'title',
-      'Cleans merged branches when safe; 2 merged branches checked out in a worktree will be preserved'
-    );
+    expect(await screen.findByRole('button', { name: 'Delete all merged (local + remote + worktrees)' })).toBeInTheDocument();
+  });
+
+  it('re-reads the branches after a cleanup that removed a worktree, so stale worktree badges clear', async () => {
+    api.cleanupMergedBranches.mockResolvedValue({
+      deleted: [{ name: 'claim/issue-1', local: 'deleted', remote: null, worktree: 'removed' }],
+      skipped: []
+    });
+    render(<GitTab appId="x" appName="App" repoPath="/repo" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Clean 2 merged' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete all merged (local + remote + worktrees)' }));
+
+    await waitFor(() => expect(api.getBranches.mock.calls.length).toBeGreaterThan(1));
   });
 
   it('labels worktree-checked-out branches with a worktree badge', async () => {

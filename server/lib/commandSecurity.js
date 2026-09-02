@@ -15,6 +15,29 @@ export const ALLOWED_COMMANDS = new Set([
 // Pre-sorted list for API responses
 export const ALLOWED_COMMANDS_SORTED = Array.from(ALLOWED_COMMANDS).sort();
 
+// Narrower allowlist for the UNATTENDED lane (Layered Intelligence `cmd` custom
+// sources), which runs on a schedule with nobody watching. Read-only repository
+// and tracker inspection is the entire documented purpose of a `cmd` source, so
+// this list deliberately excludes every network-fetch and code-execution verb
+// that ALLOWED_COMMANDS admits for the operator-driven runner (`npx`, `node`,
+// `python`, `pip`, `curl`, `wget`, `go`, `cargo`, `make`, `brew`, `pm2`, …).
+// `npx <pkg>` / `pip install <pkg>` / `curl -o <path> <url>` contain no shell
+// metacharacter, so the metacharacter filter alone does NOT stop them.
+//
+// Scope: this gate is binary-level, not subcommand-level. Every admitted binary
+// is one whose *documented* use here is inspection, but a few are multi-purpose
+// (`git commit`, `find -delete`, `gh api -X POST`) and are NOT rejected. That is
+// a deliberately smaller step than subcommand gating: it removes remote-code
+// fetch/exec from the unattended lane, which is the class that turns hostile
+// config into arbitrary RCE. Subcommand gating is tracked separately.
+export const UNATTENDED_READONLY_COMMANDS = new Set([
+  'git', 'gh', 'glab',
+  'ls', 'cat', 'head', 'tail', 'grep', 'find', 'wc',
+  'pwd', 'echo'
+]);
+
+const UNATTENDED_READONLY_COMMANDS_SORTED = Array.from(UNATTENDED_READONLY_COMMANDS).sort();
+
 // Shell metacharacters that could be used for command injection
 // Security: Reject any command containing these to prevent injection via pipes, chaining, etc.
 export const DANGEROUS_SHELL_CHARS = /[;|&`$(){}[\]<>\\!#*?~]/;
@@ -78,10 +101,12 @@ export function validatePm2Command(args) {
 }
 
 /**
- * Validate a command against the allowlist.
+ * Shared shape/metacharacter/allowlist gate. Both public validators route
+ * through this so the two lanes can never disagree about parsing or about
+ * which shell metacharacters are rejected — only the allowlist differs.
  * Returns { valid, error?, baseCommand?, args? }
  */
-export function validateCommand(command) {
+function validateAgainst(command, allowlist, allowlistSorted) {
   if (!command || typeof command !== 'string') {
     return { valid: false, error: 'Command is required' };
   }
@@ -92,15 +117,38 @@ export function validateCommand(command) {
   }
   const parts = parseCommandArgs(trimmed);
   const baseCommand = parts[0];
-  if (!ALLOWED_COMMANDS.has(baseCommand)) {
-    return { valid: false, error: `Command '${baseCommand}' is not in the allowlist. Allowed: ${ALLOWED_COMMANDS_SORTED.join(', ')}` };
+  if (!allowlist.has(baseCommand)) {
+    return { valid: false, error: `Command '${baseCommand}' is not in the allowlist. Allowed: ${allowlistSorted.join(', ')}` };
   }
-  const args = parts.slice(1);
-  if (baseCommand === 'pm2') {
-    const pm2Check = validatePm2Command(args);
+  return { valid: true, baseCommand, args: parts.slice(1) };
+}
+
+/**
+ * Validate a command against the operator-driven allowlist (the manual command
+ * runner, POST /api/commands/execute — a human triggers and watches each run).
+ * Returns { valid, error?, baseCommand?, args? }
+ */
+export function validateCommand(command) {
+  const check = validateAgainst(command, ALLOWED_COMMANDS, ALLOWED_COMMANDS_SORTED);
+  if (!check.valid) return check;
+  if (check.baseCommand === 'pm2') {
+    const pm2Check = validatePm2Command(check.args);
     if (!pm2Check.valid) return pm2Check;
   }
-  return { valid: true, baseCommand, args };
+  return check;
+}
+
+/**
+ * Validate a command for the UNATTENDED lane — a scheduled job executing a
+ * string that lives in persistent, attacker-reachable config with no human in
+ * the loop. Same parsing and metacharacter rules as `validateCommand`, but only
+ * `UNATTENDED_READONLY_COMMANDS` are admitted, so a config that lands `npx`,
+ * `curl` or `pip install` cannot reach a spawn. No pm2 sub-check is needed —
+ * pm2 is not on the list at all.
+ * Returns { valid, error?, baseCommand?, args? }
+ */
+export function validateUnattendedCommand(command) {
+  return validateAgainst(command, UNATTENDED_READONLY_COMMANDS, UNATTENDED_READONLY_COMMANDS_SORTED);
 }
 
 // Patterns matching sensitive env var values in command output

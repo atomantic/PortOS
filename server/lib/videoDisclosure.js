@@ -27,7 +27,7 @@ import { ServerError } from './errorHandler.js';
 
 // Every shipped disclosure was checked against its upstream source on this
 // date. Bump it (and re-check) whenever an entry below changes.
-export const VIDEO_DISCLOSURE_REVIEWED_AT = '2026-08-30';
+export const VIDEO_DISCLOSURE_REVIEWED_AT = '2026-09-02';
 
 // License descriptors reused across entries. `url` points at the primary text
 // of the license, or at the model card when the card declares a custom license
@@ -240,7 +240,7 @@ export const VIDEO_MODEL_DISCLOSURES = Object.freeze({
       modelCardUrl: hfModelCard('Lightricks/LTX-2.5'),
       weightsLicense: LTX_2X_WEIGHTS,
       runtimeLicense: RUNTIME_LICENSE.ltx25_cuda,
-      estimatedDownloadGb: 72.1,
+      estimatedDownloadGb: 71.1,
       reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
     },
   },
@@ -317,13 +317,16 @@ export const VIDEO_MODEL_DISCLOSURES = Object.freeze({
       reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
     },
   },
+  // The FastMetal repos bundle their own text encoder and VAE beside the MLX
+  // DiT, and the entries declare no `repoFiles`, so the download is the whole
+  // snapshot — several times the DiT-only size their display names quote.
   fastmetal_1_3b_qad: {
     shippedRepo: 'FastVideo/FastMetal-1.3B-QAD',
     disclosure: {
       modelCardUrl: hfModelCard('FastVideo/FastMetal-1.3B-QAD'),
       weightsLicense: APACHE_2,
       runtimeLicense: RUNTIME_LICENSE.fastvideo,
-      estimatedDownloadGb: 3.5,
+      estimatedDownloadGb: 13.4,
       reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
     },
   },
@@ -333,7 +336,7 @@ export const VIDEO_MODEL_DISCLOSURES = Object.freeze({
       modelCardUrl: hfModelCard('FastVideo/FastMetal-5B-QAD'),
       weightsLicense: APACHE_2,
       runtimeLicense: RUNTIME_LICENSE.fastvideo,
-      estimatedDownloadGb: 10.2,
+      estimatedDownloadGb: 19.5,
       reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
     },
   },
@@ -343,9 +346,27 @@ export const VIDEO_MODEL_DISCLOSURES = Object.freeze({
       modelCardUrl: hfModelCard('FastVideo/FastMetal-14B-QAD'),
       weightsLicense: APACHE_2,
       runtimeLicense: RUNTIME_LICENSE.fastvideo,
-      estimatedDownloadGb: 25.4,
+      estimatedDownloadGb: 42.3,
       reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
     },
+  },
+  // FastH3 Preview v1 Dense / Data-Free, packed for MLX. Same MiniMax H3
+  // weights lineage as the entries above — its `conversion_manifest.json`
+  // names FastVideo/…-Dense-DataFree @ f624f08c as the source — so it carries
+  // the same license and the same territory gate. The repo is self-contained:
+  // the quantized DiT ships beside the vae / audio_vae / text_encoder /
+  // tokenizer the MLX pipeline loads, which is why the whole snapshot is the
+  // download figure.
+  fasth3_dense_datafree_mlx_int4: {
+    shippedRepo: 'MrMofer/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree-MLX-INT4',
+    disclosure: {
+      modelCardUrl: hfModelCard('MrMofer/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree-MLX-INT4'),
+      weightsLicense: MINIMAX_H3_WEIGHTS,
+      runtimeLicense: RUNTIME_LICENSE.fastvideo,
+      estimatedDownloadGb: 89.3,
+      reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
+    },
+    termsGate: MINIMAX_H3_TERMS_GATE,
   },
   // Legacy CUDA entry. It carries no `repo` because its diffusers helper
   // resolves LTX-Video 0.9.5 directly, so its weights license stays Unknown.

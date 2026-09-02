@@ -126,7 +126,7 @@ export default function LoomHostedSessionModal({
       onClose={onClose}
       usePortal
       backdropClassName="bg-black/60 backdrop-blur-sm"
-      panelClassName="bg-port-card border border-port-border rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+      panelClassName="bg-port-card border border-port-border rounded-xl shadow-2xl overflow-hidden flex flex-col"
       ariaLabelledBy="hosted-two-device-play-title"
     >
         {/* Header */}

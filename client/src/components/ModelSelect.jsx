@@ -9,6 +9,10 @@
 // it for "optional model / fall back to the server default" pickers (mirrors
 // ProviderModelSelector's `emptyModelOption`). `ariaLabel` / `title` let an
 // inline picker with no visible <label> stay accessible.
+//
+// `loading` swaps the options for a disabled "Loading models…" placeholder, so
+// a caller whose list arrives from a slow probe can keep the field (and its
+// label) in the form instead of letting it pop in late.
 const defaultGetLabel = (m) => m.name;
 export default function ModelSelect({
   models,
@@ -21,25 +25,31 @@ export default function ModelSelect({
   emptyOption,
   ariaLabel,
   title,
+  loading = false,
 }) {
   const active = models.filter((m) => !m.deprecated);
   const legacy = models.filter((m) => m.deprecated);
   return (
     <select
       id={id}
-      value={value}
+      value={loading ? '' : value}
       onChange={onChange}
-      disabled={disabled}
+      disabled={disabled || loading}
+      aria-busy={loading || undefined}
       aria-label={ariaLabel}
       title={title}
       className={className}
     >
-      {emptyOption != null && <option value="">{emptyOption}</option>}
-      {active.map((m) => <option key={m.id} value={m.id}>{getLabel(m)}</option>)}
-      {legacy.length > 0 && (
-        <optgroup label="Legacy">
-          {legacy.map((m) => <option key={m.id} value={m.id}>{getLabel(m)}</option>)}
-        </optgroup>
+      {loading ? <option value="">Loading models…</option> : (
+        <>
+          {emptyOption != null && <option value="">{emptyOption}</option>}
+          {active.map((m) => <option key={m.id} value={m.id}>{getLabel(m)}</option>)}
+          {legacy.length > 0 && (
+            <optgroup label="Legacy">
+              {legacy.map((m) => <option key={m.id} value={m.id}>{getLabel(m)}</option>)}
+            </optgroup>
+          )}
+        </>
       )}
     </select>
   );

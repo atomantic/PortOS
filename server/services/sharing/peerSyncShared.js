@@ -13,7 +13,7 @@
 import { join } from 'path';
 import { EventEmitter } from 'events';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
-import { getPeers } from '../instances.js';
+import { getPeers, resolveEffectiveCategories } from '../instances.js';
 
 
 export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'fableLoom', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback', 'creativeCommission']);
@@ -106,8 +106,19 @@ export const KIND_TO_CATEGORY = Object.freeze({
   creativeCommission: 'creativeCommissions',
 });
 
-export function peerAllowsOutbound(peer) {
+// The half every outbound predicate shares: the peer exists, the user has not
+// disabled it, and the relationship was established FROM here. An absent/empty
+// `directions` is a legacy record (permissive); `['inbound']` is a peer that
+// merely announced itself to us and was auto-created with no approval step, so
+// nothing may flow back out to it.
+export function peerOutboundEligible(peer) {
   if (!peer || peer.enabled === false) return false;
+  const directions = Array.isArray(peer.directions) ? peer.directions : [];
+  return directions.length === 0 || directions.includes('outbound');
+}
+
+export function peerAllowsOutbound(peer) {
+  if (!peerOutboundEligible(peer)) return false;
   // `syncEnabled` is the global "sync this peer at all" toggle (separate from
   // per-category `syncCategories.*`). When the user has globally disabled sync
   // for a peer, auto-subscribe MUST NOT create subscriptions or fire pushes —
@@ -115,9 +126,32 @@ export function peerAllowsOutbound(peer) {
   // per-category check (peerHasCategory) is necessary but not sufficient on
   // its own, because syncCategories can be set independently.
   if (peer.syncEnabled === false) return false;
-  const directions = Array.isArray(peer.directions) ? peer.directions : [];
-  if (directions.length > 0 && !directions.includes('outbound')) return false;
   return true;
+}
+
+/**
+ * Category-level counterpart of `peerHasCategory`, for the snapshot transport
+ * (`server/routes/dataSync.js`) whose unit of consent is a whole sync CATEGORY
+ * rather than one record kind.
+ *
+ * Resolves through `resolveEffectiveCategories` — the single definition of
+ * "what syncs with this peer" — so the pull gate agrees with the sync loop and
+ * the settings UI on fullSync, on the shipped defaults, and on the master
+ * `syncEnabled` switch masking down to the default-ON categories (which is
+ * what keeps `usage` flowing for a peer the user otherwise silenced, instead of
+ * `peerAllowsOutbound` refusing it outright).
+ */
+export function peerAllowsCategoryPull(peer, category) {
+  if (!peerOutboundEligible(peer)) return false;
+  // `resolveEffectiveCategories` short-circuits `fullSync` BEFORE applying the
+  // master-switch mask. That is the right reading for a loop deciding what to
+  // ASK a peer for, and the wrong one for a gate deciding what to HAND OUT: the
+  // reachable-but-contradictory `{ fullSync: true, syncEnabled: false }` state
+  // (set full mirror, then flip the switch off) would otherwise be handed every
+  // category here while `peerAllowsOutbound` refuses it every push. Resolve
+  // with fullSync dropped so the mask wins and only default-ON survives.
+  const masked = peer.syncEnabled === false ? { ...peer, fullSync: false } : peer;
+  return resolveEffectiveCategories(masked)[category] === true;
 }
 
 export function peerHasCategory(peer, recordKind) {

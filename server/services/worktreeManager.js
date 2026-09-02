@@ -958,14 +958,22 @@ export async function mergeBaseIntoFeatureWorktree(featureAgentId, baseBranch) {
 }
 
 /**
- * List all active worktrees for the repository
+ * List all active worktrees for the repository.
+ *
+ * Split on CRLF as well as LF. On Windows git's porcelain output is CRLF, and a
+ * bare `split('\n')` leaves a trailing \r on every value: `path` and `branch`
+ * silently carry it, so containment checks and path equality match nothing, and
+ * the flag lines never compare equal (`'bare\r' !== 'bare'`) so `bare`,
+ * `detached`, `locked` and `prunable` all read as false. That is what made the
+ * reaper report a managed worktree as `worktree-unmanaged-location` on Windows
+ * and skip it forever, while every Linux run stayed green.
  */
 export async function listWorktrees(sourceWorkspace) {
   const { stdout } = await execGit(['worktree', 'list', '--porcelain'], sourceWorkspace);
   const worktrees = [];
   let current = {};
 
-  for (const line of stdout.split('\n')) {
+  for (const line of stdout.split(/\r?\n/)) {
     if (line.startsWith('worktree ')) {
       if (current.path) worktrees.push(current);
       current = { path: line.slice(9) };
@@ -980,6 +988,10 @@ export async function listWorktrees(sourceWorkspace) {
     } else if (line === 'locked' || line.startsWith('locked ')) {
       // `git worktree list --porcelain` emits a bare `locked` line, or `locked <reason>`.
       current.locked = true;
+    } else if (line === 'prunable' || line.startsWith('prunable ')) {
+      // Same two spellings. Set when git considers the registration disposable —
+      // its directory is gone, or its .git pointer no longer resolves.
+      current.prunable = true;
     }
   }
   if (current.path) worktrees.push(current);
@@ -1068,16 +1080,34 @@ export async function cleanupOrphanedWorktrees(sourceWorkspace, activeAgentIds) 
  * `requireAgentId: true`, so a `claim-*` basename is refused as
  * `worktree-missing-agent-id` before the claim test is even reached.)
  *
+ * `includeUnmanagedTrees` drops the managed-root allowlist, so a worktree living
+ * anywhere is eligible. It drops the two rules that allowlist carried — the
+ * location check, and `WORKTREES_DIR`'s `requireAgentId` — and nothing else: the
+ * lock, live-agent, unknown-liveness and human-claim holds all still apply, as do
+ * both gates above (so a tree it reaches is still merged + clean before anything
+ * is removed). It exists for the user-initiated "clean merged branches" action,
+ * where the point IS to clear whatever worktree pins a merged branch; the
+ * scheduled sweeps leave it off so an unattended pass never reaches outside the
+ * directories PortOS created.
+ *
  * @param {string} sourceWorkspace - repo root
  * @param {object} [options]
- * @param {Set<string>} [options.activeAgentIds] - CoS agents currently running (never reaped)
+ * @param {Set<string>} [options.activeAgentIds] - CoS agents currently running (never reaped).
+ *   Anything but a Set reads as "liveness unknown" and holds every `agent-*` tree.
+ * @param {Set<string>} [options.excludeBranches] - branch names never reaped, whatever their tree
  * @param {boolean} [options.includeClaudeTrees=true] - also reap `.claude/worktrees/`
+ * @param {boolean} [options.includeUnmanagedTrees=false] - consider worktrees outside the managed roots
+ * @param {string} [options.defaultBranch] - skip the default-branch lookup, which can
+ *   contact the remote (`remote set-head`); pass it on a latency-sensitive request path
  * @param {boolean} [options.dryRun=false] - report candidates without deleting
- * @returns {Promise<{reaped: Array<{path,branch,locked}>, skipped: Array<{path,reason}>, defaultBranch: string, target: string, dryRun: boolean}>}
+ * @returns {Promise<{reaped: Array<{path,branch,locked,branchDeleted}>, skipped: Array<{path,branch,reason}>, defaultBranch: string, target: string, dryRun: boolean}>}
  */
 export async function reapMergedWorktrees(sourceWorkspace, {
   activeAgentIds = new Set(),
+  excludeBranches = null,
   includeClaudeTrees = true,
+  includeUnmanagedTrees = false,
+  defaultBranch: knownDefaultBranch = null,
   dryRun = false
 } = {}) {
   const { getDefaultBranch, isBranchMergedInto } = await import('./git.js');
@@ -1086,7 +1116,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
   // after a `gh pr merge`. Best-effort — fall back to local refs on failure.
   await execGit(['fetch', 'origin', '--prune'], sourceWorkspace, { ignoreExitCode: true }).catch(() => {});
 
-  const defaultBranch = await getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
+  const defaultBranch = knownDefaultBranch || await getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
   // Prefer the remote-tracking ref (post-merge truth); fall back to the local branch.
   const remoteTarget = await execGit(['rev-parse', '--verify', `origin/${defaultBranch}^{commit}`], sourceWorkspace, { ignoreExitCode: true })
     .then(r => (r.exitCode === 0 ? `origin/${defaultBranch}` : null))
@@ -1099,7 +1129,9 @@ export async function reapMergedWorktrees(sourceWorkspace, {
 
   const protectedBranches = new Set(['main', 'master', 'dev', 'develop', 'release', defaultBranch]);
   const claudeTreesRoot = join(sourceWorkspace, '.claude', 'worktrees');
-  const managedRoots = [
+  // An empty allowlist is how worktreeOwnershipReason spells "no location check"
+  // (see includeUnmanagedTrees above for what that gives up).
+  const managedRoots = includeUnmanagedTrees ? [] : [
     { path: WORKTREES_DIR, requireAgentId: true },
     { path: claudeTreesRoot, requireAgentId: false },
   ];
@@ -1115,7 +1147,12 @@ export async function reapMergedWorktrees(sourceWorkspace, {
 
     const branchName = wt.branch.replace(/^refs\/heads\//, '');
     if (!branchName) { skipped.push({ path: wt.path, reason: 'no-branch' }); continue; }
-    if (protectedBranches.has(branchName) || branchName === currentBranch) { skipped.push({ path: wt.path, reason: 'protected' }); continue; }
+    // Named so a caller can say WHICH branch a hold kept, not just which path.
+    const hold = (reason) => skipped.push({ path: wt.path, branch: branchName, reason });
+    if (protectedBranches.has(branchName) || branchName === currentBranch || excludeBranches?.has(branchName)) {
+      hold('protected');
+      continue;
+    }
 
     const isClaudeTree = isPathInsideDir(claudeTreesRoot, wt.path);
     const ownershipReason = worktreeOwnershipReason({
@@ -1125,35 +1162,43 @@ export async function reapMergedWorktrees(sourceWorkspace, {
       roots: managedRoots,
       requireKnownLiveness: true,
     });
-    if (ownershipReason) {
-      skipped.push({ path: wt.path, reason: ownershipReason });
-      continue;
-    }
-    if (isClaudeTree && !includeClaudeTrees) { skipped.push({ path: wt.path, reason: 'claude-tree-excluded' }); continue; }
+    if (ownershipReason) { hold(ownershipReason); continue; }
+    if (isClaudeTree && !includeClaudeTrees) { hold('claude-tree-excluded'); continue; }
 
     // Gate 1: working tree must be completely clean. Unlike removeWorktree(),
     // the background reaper does not discard even lockfile-only edits: an
     // uncommitted fresh-from-main worktree may be an active agent that has not
     // made its first commit yet.
-    const status = await execGit(['status', '--porcelain'], wt.path).then(r => r.stdout).catch(() => null);
-    if (status === null) { skipped.push({ path: wt.path, reason: 'status-failed' }); continue; }
-    if (!classifyWorktreeDirt(status).clean) { skipped.push({ path: wt.path, reason: 'uncommitted' }); continue; }
+    //
+    // A registration git already calls prunable has no working tree left to be
+    // dirty, so it reads as clean rather than status-failed — otherwise `git
+    // status` fails in the missing directory and the branch stays pinned behind a
+    // worktree that no longer exists. `existsSync` covers the same state on a git
+    // too old to report `prunable` in `worktree list --porcelain`.
+    const status = wt.prunable || !existsSync(wt.path)
+      ? ''
+      : await execGit(['status', '--porcelain'], wt.path).then(r => r.stdout).catch(() => null);
+    if (status === null) { hold('status-failed'); continue; }
+    if (!classifyWorktreeDirt(status).clean) { hold('uncommitted'); continue; }
 
     // Gate 2: branch fully merged into the default branch (regular, squash, or rebase).
     const merged = await isBranchMergedInto(sourceWorkspace, branchName, target).catch(() => false);
-    if (!merged) { skipped.push({ path: wt.path, reason: 'unmerged' }); continue; }
+    if (!merged) { hold('unmerged'); continue; }
 
-    if (dryRun) { reaped.push({ path: wt.path, branch: branchName, locked: !!wt.locked }); continue; }
+    if (dryRun) { reaped.push({ path: wt.path, branch: branchName, locked: !!wt.locked, branchDeleted: false }); continue; }
 
     // Remove the worktree, then force-delete the branch (-D because squash-merged
     // branches aren't recognized by -d, and we've proven the work is in default).
     await forceRemoveWorktreeDir(sourceWorkspace, wt.path, {
       label: `worktree remove failed for ${wt.path}, manual cleanup`,
     });
-    await execGit(['branch', '-D', branchName], sourceWorkspace).catch(err => {
+    // Reported per entry: the tree is gone either way, but a caller that
+    // presents this as "branch deleted" would otherwise be lying on a failure.
+    const branchDeleted = await execGit(['branch', '-D', branchName], sourceWorkspace).then(() => true).catch(err => {
       console.log(`⚠️ branch delete failed for ${branchName}: ${err.message}`);
+      return false;
     });
-    reaped.push({ path: wt.path, branch: branchName, locked: !!wt.locked });
+    reaped.push({ path: wt.path, branch: branchName, locked: !!wt.locked, branchDeleted });
   }
 
   if (reaped.length > 0) {

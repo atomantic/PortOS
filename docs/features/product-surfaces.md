@@ -35,7 +35,7 @@ Manage local applications, terminal environments, system resources, and develope
 | **Storage Report & Disk Cleanup** | `/system-resources/storage` | Comprehensive disk usage breakdown, cache directory inspection, AI-assisted cleanup triage, and temporary artifact removal. | [STORAGE.md](../STORAGE.md) |
 | **Active Queues** | `/system-resources/queues` | Live inspection of background job queues (media renders, agent tasks, batch jobs), queue prioritization, and cancellation. | — |
 | **Uploads Staging** | `/uploads` | File upload manager and staging directory for media, documents, and datasets. | — |
-| **Activity & Action History** | `/devtools/history` | Historical audit log of user actions, system mutations, and automated tasks. | [SECURITY_AUDIT.md](../SECURITY_AUDIT.md) |
+| **Activity & Action History** | `/devtools/history` | Historical audit log of user actions, system mutations, and automated tasks. | — |
 | **Code & Script Runner** | `/devtools/runner` | Ad-hoc code execution environment and script runner for quick operational utilities. | — |
 | **GitHub Integration** | `/devtools/github` | Pull request tracking, open issue triage, commit log browsing, branch switching, and upstream synchronization. | [GITHUB_ACTIONS.md](../GITHUB_ACTIONS.md) |
 | **JIRA Sprint Manager & Reports** | `/devtools/jira`, `/devtools/jira/reports` | JIRA sprint planning, active board triage, backlog management, velocity metrics, and sprint burndown reports. | [JIRA Sprint Manager](./jira-sprint-manager.md) |
@@ -206,7 +206,7 @@ Local AI model acceleration, multi-machine peer federation, storage classificati
 | **Instances & Peer Federation** | `/instances`, `/settings/sharing` | Multi-install peer federation across Tailscale VPN, capability discovery, and federated media generation offloading. | [FEDERATED_MEDIA_PROVIDERS.md](../FEDERATED_MEDIA_PROVIDERS.md) |
 | **PostgreSQL Datastore** | `/settings/database` | Mandatory local PostgreSQL datastore with pgvector extension, migrations, and storage classification contract. | [STORAGE.md](../STORAGE.md), [Postgres ADR](../decisions/2026-06-07-postgres-as-primary-datastore.md) |
 | **Backup & Restore** | `/settings/backup` | Automated filesystem rsync snapshots and database dumps with point-in-time restore. | [BACKUP.md](../BACKUP.md) |
-| **Security & Trust Model** | `/settings/security`, `/security` | Opt-in instance password authentication, TLS certificates (`setup:cert`), Tailscale trust boundary, port allocation, and audit logs. | [PORTS.md](../PORTS.md), [SECURITY_AUDIT.md](../SECURITY_AUDIT.md), [REMOTE_DESKTOP.md](../REMOTE_DESKTOP.md) |
+| **Security & Trust Model** | `/settings/security`, `/security` | Opt-in instance password authentication, TLS certificates (`setup:cert`), Tailscale trust boundary, port allocation, and audit logs. | [SETUP.md](../SETUP.md), [PORTS.md](../PORTS.md), [REMOTE_DESKTOP.md](../REMOTE_DESKTOP.md) |
 
 ---
 

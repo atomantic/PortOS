@@ -700,6 +700,37 @@ describe('ollamaManager curated Hugging Face Safetensors import', () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(2) // availability + installed-version probes only
   })
 
+  // This import writes the checkpoint TWICE — staged under a temp dir, then
+  // again when `ollama create` lands it in the models dir — so a disk
+  // refusal must happen BEFORE either copy starts, using the real per-file
+  // bytes this import already fetched from HF (not a coarse catalog
+  // estimate the caller passed in, which the outer installModel() preflight
+  // already checked separately).
+  it('refuses before downloading or creating when the real checkpoint size will not fit', async () => {
+    hfTokenMock.token = 'hf_example_token'
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      const href = String(url)
+      if (href.endsWith('/api/version')) return versionResponse()
+      if (href.includes('/api/models/example/Qwen-MLX')) {
+        return new Response(JSON.stringify({ siblings: [
+          { rfilename: '4-bit/config.json', size: 10 },
+          // No real disk holds this many bytes.
+          { rfilename: '4-bit/model.safetensors', lfs: { size: Number.MAX_SAFE_INTEGER } }
+        ] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      throw new Error(`unexpected fetch: ${href} — the size refusal should have happened first`)
+    }))
+    execMock.impl = (cmd, args, _opts, cb) => {
+      if (cmd === 'ollama' && args.join(' ') === '--version') return cb(null, { stdout: 'ollama 0.31.0', stderr: '' })
+      throw new Error(`unexpected exec: ${cmd} ${args.join(' ')} — the size refusal should have happened first`)
+    }
+    const { importModelFromHfSafetensors } = await loadManager()
+
+    const result = await importModelFromHfSafetensors(spec)
+
+    expect(result).toMatchObject({ success: false, code: 'DISK_INSUFFICIENT' })
+  })
+
   it('requires an Ollama release with Safetensors create support', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url) => {
       if (String(url).endsWith('/api/version')) {

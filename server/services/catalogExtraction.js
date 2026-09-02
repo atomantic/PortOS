@@ -25,6 +25,7 @@ import { CATALOG_TYPES } from '../lib/catalogTypes.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { catalogEvents } from './catalogEvents.js';
 import { getScrap, listChildScraps, listIngredientsForRef } from './catalogDB.js';
+import { escapeRegExp } from '../lib/textUtils.js';
 
 // Light-shape ingredient type ids, sourced from the shared registry
 // (`extractionShape === 'light'`). Adding a light type to `catalogTypes.js`
@@ -455,7 +456,7 @@ export async function scanProseForIngredientRefs(text, scope = {}) {
     // are user-controlled, so escape regex metacharacters; the \p{L}\p{N}
     // lookarounds keep multi-word phrases ("The Drowned Harbor") matching as a
     // unit while still treating the whole name as one token boundary-wise.
-    const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const esc = escapeRegExp(needle);
     const re = new RegExp(`(?<![\\p{L}\\p{N}])${esc}(?![\\p{L}\\p{N}])`, 'iu');
     if (re.test(text)) matched.push(id);
   }

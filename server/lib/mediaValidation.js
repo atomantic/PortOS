@@ -181,6 +181,14 @@ export const localLlmMtplxStartSchema = z.object({
     'model must be a Hugging Face repo id',
   ).optional().nullable(),
 });
+// Slotstream launch. Every field is optional: with none of them PortOS serves
+// the first cached checkpoint on the dedicated loopback port. `memoryGb` is the
+// explicit cache-size cap persisted on the saved launch line; absent = auto.
+export const localLlmSlotstreamStartSchema = z.object({
+  port: z.coerce.number().int().min(1).max(65535).optional(),
+  model: z.string().trim().max(300).optional().nullable(),
+  memoryGb: z.coerce.number().min(6).max(512).optional().nullable(),
+});
 // MTPLX model catalog. `mtplx forge discover` is upstream's own index of
 // MTPLX-branded MTP checkpoints; an empty query means its default listing.
 export const localLlmMtplxSearchSchema = z.object({
@@ -239,6 +247,27 @@ export const localLlmSpecModelDownloadSchema = z.object({
   presetId: z.string().trim().min(1).max(100),
   role: z.enum(['model', 'draftModel']),
 });
+// Confirm-step disk preflight for a weight download. Discriminated on `kind`
+// so the server resolves dest + expected size — the client never supplies a
+// path. `insufficient` is returned as a verdict, not thrown, so the confirm
+// UI can disable the button instead of toasting a failure the user hasn't
+// committed to yet. The download endpoints still throw DISK_INSUFFICIENT.
+export const localLlmDownloadPreflightSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('spec-decode'),
+    presetId: z.string().trim().min(1).max(100),
+    role: z.enum(['model', 'draftModel']),
+  }),
+  z.object({
+    kind: z.literal('mtplx'),
+    model: mtplxRepoIdSchema.optional().nullable(),
+  }),
+  z.object({
+    kind: z.literal('install'),
+    backend: localLlmBackendSchema,
+    modelId: localLlmModelIdSchema,
+  }),
+]);
 export const localLlmHuggingFaceSearchSchema = z.object({
   backend: localLlmBackendSchema,
   q: z.string().max(160).optional().default(''),

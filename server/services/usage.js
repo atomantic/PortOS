@@ -5,7 +5,7 @@ import { familyForProvider } from '../lib/providerFamilies.js';
 import { roundCents } from '../lib/subscriptionSavings.js';
 
 const DATA_DIR = PATHS.data;
-const USAGE_FILE = join(DATA_DIR, 'usage.json');
+export const USAGE_FILE = join(DATA_DIR, 'usage.json');
 
 // Day buckets older than this are rolled up into monthly buckets at load time so
 // dailyActivity (and therefore the whole-file rewrite on every AI run) stops growing
@@ -1009,4 +1009,61 @@ export async function resetUsage() {
   usageData = getEmptyUsage();
   await saveUsage();
   return true;
+}
+
+/**
+ * How many days of PER-DAY granularity ride the federated usage digest. Older
+ * days are folded into their month bucket for the WIRE ONLY — the local file
+ * keeps its own (much longer) `ROLLUP_RETENTION_DAYS` window untouched, and a
+ * local report always reads the live maps.
+ *
+ * The cap exists because the digest is re-fetched by every peer whenever local
+ * usage moves (which is every AI run). All-time totals stay exact either way —
+ * folding a day into its month preserves every count, just at coarser
+ * granularity, which is all a fleet-level report needs for old periods.
+ */
+const DIGEST_DAILY_RETENTION_DAYS = 120;
+
+/**
+ * Build the federated wire shape for this instance's usage: aggregate counters
+ * only — provider ids, model ids, token counts, timestamps. No prompts, no
+ * transcripts, no record contents, no PII.
+ *
+ * Two fields of `usageData` are deliberately absent. `reconciledRuns` is
+ * idempotency bookkeeping keyed by LOCAL run ids — meaningless on a peer and
+ * the largest field in the file. All-time `byProvider`/`byModel` are a coarser
+ * restatement of what the day buckets already carry, which is what a fleet
+ * report actually aggregates.
+ *
+ * Pure: only the buckets that survive the wire rollup are copied, so the
+ * caller's `usageData` is untouched and old days aren't cloned to be discarded.
+ */
+export function buildUsageDigest(source = getUsage(), { retentionDays = DIGEST_DAILY_RETENTION_DAYS, now = new Date() } = {}) {
+  // Shallow copy first: the rollup DELETES the days it folds away, so it runs
+  // over our own map of references while only READING the buckets themselves.
+  // Deep-cloning afterwards therefore copies just the days that survived,
+  // instead of copying the whole history to throw most of it away.
+  const surviving = { ...(source?.dailyActivity || {}) };
+  const monthlyActivity = structuredClone(source?.monthlyActivity || {});
+  rollupOldDailyActivity(surviving, monthlyActivity, { retentionDays, now });
+  const dailyActivity = structuredClone(surviving);
+
+  const hourly = Array.isArray(source?.hourlyActivity) ? source.hourlyActivity : [];
+  return {
+    totalSessions: source?.totalSessions || 0,
+    totalMessages: source?.totalMessages || 0,
+    totalToolCalls: source?.totalToolCalls || 0,
+    totalTokens: {
+      input: source?.totalTokens?.input || 0,
+      output: source?.totalTokens?.output || 0
+    },
+    dailyActivity,
+    monthlyActivity,
+    hourlyActivity: Array.from({ length: 24 }, (_, i) => hourly[i] || 0),
+    earliestActivityDay: findEarliestActivityDay(dailyActivity, monthlyActivity),
+    // The instant this instance last recorded usage. Doubles as the digest's
+    // LWW stamp on the wire — it moves on every `saveUsage`, and NOT on a mere
+    // re-read, so a peer's checksum stays stable while nothing has happened.
+    lastUpdated: source?.lastUpdated ?? null
+  };
 }

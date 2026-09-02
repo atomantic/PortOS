@@ -130,9 +130,9 @@ describe('Models', () => {
 });
 
 describe('Models — tab drill-downs', () => {
-  it('passes an LLM sub-route through to the focused LLM view', async () => {
-    renderAt('/models/llms/library');
-    expect(await screen.findByTestId('llms-view')).toHaveAttribute('data-view', 'library');
+  it.each(['library', 'abuse'])('passes the LLM %s sub-route through to the focused LLM view', async (view) => {
+    renderAt(`/models/llms/${view}`);
+    expect(await screen.findByTestId('llms-view')).toHaveAttribute('data-view', view);
     expect(screen.getByRole('tab', { name: 'LLMs' })).toHaveAttribute('aria-selected', 'true');
   });
 

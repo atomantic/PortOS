@@ -4,10 +4,10 @@ import {
   Layers, GitBranch, SquareTerminal, ListChecks, Save, RotateCcw,
   Trash2, FolderGit2, AlertCircle, CheckCircle2, ArrowRight
 } from 'lucide-react';
-import BrailleSpinner from '../components/BrailleSpinner';
 import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { timeAgo } from '../utils/formatters';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import {
   listWorkspaceContexts, getWorkspaceContext, saveWorkspaceContext,
   restoreWorkspaceContext, deleteWorkspaceContext
@@ -68,7 +68,7 @@ function ContextDetail({ appId }) {
   }, { errorMessage: 'Failed to clear context' });
 
   if (loading) {
-    return <div className="text-sm"><BrailleSpinner text="Loading…" /></div>;
+    return <PageSkeleton header="none" label="Loading workspace context" cards={2} sidebar={false} />;
   }
   if (!ctx) return null;
 
@@ -209,7 +209,15 @@ function ContextList() {
   useEffect(() => { load(); }, [load]);
 
   if (loading) {
-    return <div className="text-sm"><BrailleSpinner text="Loading projects…" /></div>;
+    return (
+      <PageSkeleton
+        header="none"
+        label="Loading workspace projects"
+        layout="grid"
+        gridColsClass="sm:grid-cols-2 lg:grid-cols-3"
+        cards={3}
+      />
+    );
   }
 
   if (rows.length === 0) {

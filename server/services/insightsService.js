@@ -19,13 +19,7 @@ import { MARKER_CATEGORIES, CURATED_MARKERS } from '../lib/curatedGenomeMarkers.
 import { getTasteProfile } from './taste-questionnaire.js';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { getCorrelationData } from './appleHealthQuery.js';
-import { stripCodeFences, parseLLMJSON } from './aiProvider.js';
-import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
-import { readResponseJson } from '../lib/readResponseJson.js';
-import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
-import { evaluateSecretEndpoint } from '../lib/aiToolkit/internal/endpointGuard.js';
-
-const DEFAULT_AI_TIMEOUT_MS = 300000;
+import { stripCodeFences, parseLLMJSON, callProviderAISimple } from './aiProvider.js';
 
 const MARKER_BY_RSID = new Map(CURATED_MARKERS.map(m => [m.rsid, m]));
 
@@ -161,68 +155,6 @@ function getLatestBloodValues(tests) {
   }
 
   return latest;
-}
-
-/**
- * Replicate callProviderAISimple pattern from taste-questionnaire.js.
- * API-type providers only. Returns { text } on success, { error } on failure.
- * Exported for unit testing of the non-JSON-body guard — the public entries that
- * reach it (refreshCrossDomainNarrative / generateThemeAnalysis) need the full
- * genome/taste/health context mocked, so the guard is exercised directly.
- */
-export async function callProviderAISimple(provider, model, prompt, { temperature = 0.3, max_tokens = 1000 } = {}) {
-  const timeout = provider.timeout || DEFAULT_AI_TIMEOUT_MS;
-
-  if (provider.type === 'api') {
-    const ready = await ensureOllamaProviderReady(provider).catch((err) => ({ success: false, error: err.message }));
-    if (!ready.success) {
-      return { error: `Ollama is not running and PortOS could not start it: ${ready.error || 'unknown error'}` };
-    }
-
-    // Never send the API key to an arbitrary/metadata host (SSRF / key
-    // exfiltration). Keyless local-LLM calls skip this guard entirely.
-    if (provider.apiKey) {
-      const guard = evaluateSecretEndpoint(provider.endpoint, {
-        allowCustomEndpoint: provider.allowCustomEndpoint === true,
-      });
-      if (!guard.allowed) {
-        return { error: `Provider endpoint blocked: ${guard.reason}` };
-      }
-    }
-
-    const headers = { 'Content-Type': 'application/json' };
-    if (provider.apiKey) headers['Authorization'] = `Bearer ${provider.apiKey}`;
-
-    const response = await fetchWithTimeout(`${provider.endpoint}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature,
-        max_tokens
-      })
-    }, timeout);
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => 'Unknown error');
-      return { error: `Provider returned ${response.status}: ${errorText}` };
-    }
-
-    // Sentinel fallback: a non-JSON/blank 200 body must surface as an error, not
-    // an empty `{ text: '' }` success — both callers persist the result
-    // (refreshCrossDomainNarrative → narrative.json, generateThemeAnalysis →
-    // themes.json), so a masqueraded-empty success would overwrite the cached
-    // narrative/themes with nothing. A valid body (even one with empty content)
-    // still flows through unchanged.
-    const data = await readResponseJson(response, { fallback: null, emptyValue: null });
-    if (!data) {
-      return { error: `Provider returned a non-JSON response (${response.status})` };
-    }
-    return { text: data.choices?.[0]?.message?.content || '' };
-  }
-
-  return { error: 'Insights analysis requires an API-based provider' };
 }
 
 // =============================================================================

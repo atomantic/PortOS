@@ -18,9 +18,46 @@ vi.mock('../services/dataSync.js', () => ({
   getSupportedCategories: vi.fn(() => []),
 }));
 
+// Stub only the two leaves the REAL peer-pull gate reads — the peer registry
+// and the settings file — so `findPeerById` / `peerAllowsOutbound` and the
+// warn-first ramp all run for real here. Mocking `authorizePeerPull` itself
+// would let the route and the gate drift, which is the whole bug (#5663).
+const peers = [];
+vi.mock('../services/instances.js', async () => ({
+  // Keep the REAL resolveEffectiveCategories + shipped category defaults: a
+  // hand-written stand-in would let the gate's idea of "enabled for this peer"
+  // drift from the sync loop's and the settings UI's.
+  ...(await vi.importActual('../services/instances.js')),
+  getPeers: async () => peers,
+}));
+let settings = {};
+vi.mock('../services/settings.js', () => ({
+  getSettings: async () => settings,
+}));
+
 import { sweepTombstones, getSweepStatus } from '../services/sharing/tombstoneGc.js';
 import { getChecksum, getSnapshot } from '../services/dataSync.js';
+import { PEER_INSTANCE_ID_HEADER, __resetPullWarnThrottleForTests } from '../services/sharing/peerPullAuthorization.js';
 import dataSyncRoutes from './dataSync.js';
+
+const PEER_ID = 'peer-a-instance-id';
+// Obviously-fake peer record. `fullSync` stands in for "the user ticked every
+// category for this peer" — the snapshot gate's unit of consent is the sync
+// CATEGORY, so a fixture without one would be denied on category grounds and
+// the identity assertions below would pass for the wrong reason.
+const allowedPeer = (overrides = {}) => ({
+  instanceId: PEER_ID,
+  name: 'Example Peer',
+  enabled: true,
+  syncEnabled: true,
+  fullSync: true,
+  directions: ['outbound', 'inbound'],
+  ...overrides,
+});
+const setPeers = (...next) => {
+  peers.length = 0;
+  peers.push(...next);
+};
 
 const buildApp = () => {
   const app = express();
@@ -92,6 +129,9 @@ describe('POST /api/sync/tombstones/sweep', () => {
 describe('GET /api/sync/:category/checksum — forPeer scoping', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    settings = {};
+    setPeers(allowedPeer());
+    __resetPullWarnThrottleForTests();
     getChecksum.mockResolvedValue({ checksum: 'abc' });
     getSnapshot.mockResolvedValue({ data: {}, checksum: 'abc' });
   });
@@ -121,9 +161,127 @@ describe('GET /api/sync/:category/checksum — forPeer scoping', () => {
   // is caught here.
   it.each([
     'goals', 'character', 'digitalTwin', 'meatspace',
-    'universe', 'pipeline', 'mediaCollections', 'videoHistory', 'storyBuilder',
+    'universe', 'pipeline', 'mediaCollections', 'videoHistory', 'storyBuilder', 'usage',
   ])('accepts the %s category (enum parity with getSupportedCategories)', async (category) => {
-    const res = await request(buildApp()).get(`/api/sync/${category}/checksum`);
+    // Identified as a configured peer so the PII categories clear the pull gate
+    // (#5663) and this stays a test of the ENUM, not of authorization.
+    const res = await request(buildApp())
+      .get(`/api/sync/${category}/checksum`)
+      .set(PEER_INSTANCE_ID_HEADER, PEER_ID);
     expect(res.status).not.toBe(400);
+  });
+});
+
+// #5663 — the snapshot transport predates the peer-pull gate #3659 added to
+// `/api/peer-sync/*`, so it served the user's identity record to anything that
+// could reach the port.
+describe('GET /api/sync/:category — peer-pull authorization', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    settings = {};
+    setPeers(allowedPeer());
+    __resetPullWarnThrottleForTests();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    getChecksum.mockResolvedValue({ checksum: 'abc' });
+    getSnapshot.mockResolvedValue({ data: { identity: 'redacted' }, checksum: 'abc' });
+  });
+
+  it('403s the digitalTwin snapshot for a caller with no X-PortOS-Instance-Id', async () => {
+    const res = await request(buildApp()).get('/api/sync/digitalTwin/snapshot');
+    expect(res.status).toBe(403);
+    expect(getSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('403s the digitalTwin snapshot for an id that matches no configured peer', async () => {
+    const res = await request(buildApp())
+      .get('/api/sync/digitalTwin/snapshot')
+      .set(PEER_INSTANCE_ID_HEADER, 'some-other-instance');
+    expect(res.status).toBe(403);
+    expect(getSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('403s the digitalTwin snapshot for a peer the user disabled sync for', async () => {
+    setPeers(allowedPeer({ fullSync: false, syncEnabled: false, syncCategories: { digitalTwin: true } }));
+    const res = await request(buildApp())
+      .get('/api/sync/digitalTwin/snapshot')
+      .set(PEER_INSTANCE_ID_HEADER, PEER_ID);
+    expect(res.status).toBe(403);
+    expect(getSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('403s the digitalTwin snapshot for a peer the user only enabled for universe', async () => {
+    // Per-category consent, not just per-peer: this is the record-side hole
+    // #3659 closed, applied to the snapshot transport's unit of sharing.
+    setPeers(allowedPeer({ fullSync: false, syncCategories: { universe: true } }));
+    const res = await request(buildApp())
+      .get('/api/sync/digitalTwin/snapshot')
+      .set(PEER_INSTANCE_ID_HEADER, PEER_ID);
+    expect(res.status).toBe(403);
+    expect(getSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('403s a peer that only ANNOUNCED itself (inbound-only, never approved here)', async () => {
+    setPeers(allowedPeer({ directions: ['inbound'] }));
+    const res = await request(buildApp())
+      .get('/api/sync/digitalTwin/snapshot')
+      .set(PEER_INSTANCE_ID_HEADER, PEER_ID);
+    expect(res.status).toBe(403);
+  });
+
+  it('keeps serving the default-ON usage category to a peer whose other sync is off', async () => {
+    // `usage` survives the master switch by design; folding the switch into the
+    // resolved category map (rather than checking it separately) is what keeps
+    // that true here. Non-PII, so this is the warn-first tier.
+    settings = { federation: { strictPullAuthorization: true } };
+    setPeers(allowedPeer({ fullSync: false, syncEnabled: false }));
+    const res = await request(buildApp())
+      .get('/api/sync/usage/snapshot')
+      .set(PEER_INSTANCE_ID_HEADER, PEER_ID);
+    expect(res.status).toBe(200);
+  });
+
+  it.each(['digitalTwin', 'meatspace', 'character'])(
+    '403s the %s checksum too — a checksum must not be the weaker door',
+    async (category) => {
+      const res = await request(buildApp()).get(`/api/sync/${category}/checksum`);
+      expect(res.status).toBe(403);
+      expect(getChecksum).not.toHaveBeenCalled();
+    },
+  );
+
+  it('refuses a PII category even with strictPullAuthorization explicitly off', async () => {
+    settings = { federation: { strictPullAuthorization: false } };
+    const res = await request(buildApp()).get('/api/sync/meatspace/snapshot');
+    expect(res.status).toBe(403);
+  });
+
+  it('serves the digitalTwin snapshot to a configured, outbound-allowed peer', async () => {
+    const res = await request(buildApp())
+      .get('/api/sync/digitalTwin/snapshot')
+      .set(PEER_INSTANCE_ID_HEADER, PEER_ID);
+    expect(res.status).toBe(200);
+    expect(getSnapshot).toHaveBeenCalledWith('digitalTwin', { forPeerId: undefined });
+  });
+
+  it('still serves a non-PII snapshot to an unidentified caller, warning once', async () => {
+    const app = buildApp();
+    expect((await request(app).get('/api/sync/universe/snapshot')).status).toBe(200);
+    expect((await request(app).get('/api/sync/universe/snapshot')).status).toBe(200);
+    expect(getSnapshot).toHaveBeenCalledTimes(2);
+    expect(console.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('403s a non-PII snapshot once the user opts into strict enforcement', async () => {
+    settings = { federation: { strictPullAuthorization: true } };
+    const res = await request(buildApp()).get('/api/sync/universe/snapshot');
+    expect(res.status).toBe(403);
+  });
+
+  it('leaves the write direction alone — apply is gated by its schema-version check, not this', async () => {
+    const { applyRemote } = await import('../services/dataSync.js');
+    applyRemote.mockResolvedValue({ applied: true, count: 1 });
+    const res = await request(buildApp()).post('/api/sync/digitalTwin/apply').send({ data: { a: 1 } });
+    expect(res.status).toBe(200);
+    expect(applyRemote).toHaveBeenCalled();
   });
 });

@@ -27,6 +27,7 @@
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { checkHealth, ensureSchema, close, query } from '../lib/db.js';
+import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { mockNoPeers, mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 import { DEFAULT_MEMORY_CONFIG } from './memoryConfig.js';
 
@@ -63,7 +64,7 @@ let skipReason = '';
     else skipReason = 'memory schema not present';
   }
 }
-if (!dbReady) console.log(`⏭️ memoryDB.db.test: skipping suite — ${skipReason || 'no database'}`);
+const runDb = requireDbOrSkip('services/memoryDB.db.test', dbReady, skipReason);
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
@@ -113,7 +114,7 @@ afterAll(async () => {
 // CRUD
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!dbReady)('memoryDB CRUD (#3447)', () => {
+describe.skipIf(!runDb)('memoryDB CRUD (#3447)', () => {
   beforeAll(async () => {
     if (!dbReady) return;
     await resetMemories();
@@ -305,7 +306,7 @@ describe.skipIf(!dbReady)('memoryDB CRUD (#3447)', () => {
 // Listing / filtering
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!dbReady)('memoryDB listing filters (#3447)', () => {
+describe.skipIf(!runDb)('memoryDB listing filters (#3447)', () => {
   let brainFact;
   let studioPreference;
   let archivedFact;
@@ -390,7 +391,7 @@ describe.skipIf(!dbReady)('memoryDB listing filters (#3447)', () => {
 // Search
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!dbReady)('memoryDB search (#3447)', () => {
+describe.skipIf(!runDb)('memoryDB search (#3447)', () => {
   let quasar;      // VEC_A,      app 'brain'
   let zebrafish;   // VEC_NEAR_A, app 'studio'
   let pantry;      // VEC_FAR,    no app
@@ -523,7 +524,7 @@ describe.skipIf(!dbReady)('memoryDB search (#3447)', () => {
 // Consolidation
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!dbReady)('memoryDB consolidateMemories (#3447)', () => {
+describe.skipIf(!runDb)('memoryDB consolidateMemories (#3447)', () => {
   let keeper;   // importance 0.9, VEC_A
   let duplicate; // importance 0.3, VEC_NEAR_A (≈0.995 similar to keeper)
   let lone;      // importance 0.5, orthogonal
@@ -572,7 +573,7 @@ describe.skipIf(!dbReady)('memoryDB consolidateMemories (#3447)', () => {
 // Decay
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!dbReady)('memoryDB applyDecay boundaries (#3447)', () => {
+describe.skipIf(!runDb)('memoryDB applyDecay boundaries (#3447)', () => {
   it('is a no-op at decayRate 0 for memories past the recency-bonus window', async () => {
     await resetMemories();
     // The recency bonus is GREATEST(0, 0.1 - daysSinceAccess * 0.001) — zero once
@@ -647,7 +648,7 @@ describe.skipIf(!dbReady)('memoryDB applyDecay boundaries (#3447)', () => {
 // Graph
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!dbReady)('memoryDB getGraphData (#3447)', () => {
+describe.skipIf(!runDb)('memoryDB getGraphData (#3447)', () => {
   let hub;      // VEC_A
   let spoke;    // VEC_FAR, explicitly linked to hub
   let neighbour; // VEC_NEAR_A, similar to hub by embedding only

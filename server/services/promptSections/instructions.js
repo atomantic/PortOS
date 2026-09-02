@@ -17,6 +17,10 @@ const SKILLS_DIR = join(PATHS.root, 'data/prompts/skills');
  */
 const SKILL_MATCHERS = [
   {
+    skill: 'module-hygiene',
+    keywords: ['module-hygiene', 'module hygiene']
+  },
+  {
     skill: 'data-safety',
     keywords: ['data-safety', 'upgrade-safety', 'schema parity', 'schemaversion', 'seed file', 'data.reference']
   },
@@ -50,6 +54,28 @@ const SKILL_MATCHERS = [
   }
 ];
 
+const SKILL_NAMES = new Set(SKILL_MATCHERS.map(({ skill }) => skill));
+const TASK_TYPE_SKILL_ALIASES = Object.freeze({
+  security: 'security-audit',
+});
+
+const skillForTaskType = (task) => {
+  const taskTypes = [
+    task?.metadata?.analysisType,
+    task?.metadata?.taskAnalysisType,
+    task?.metadata?.selfImprovementType,
+  ];
+  for (const taskType of taskTypes) {
+    if (typeof taskType !== 'string') continue;
+    const normalized = taskType.trim().toLowerCase();
+    if (Object.hasOwn(TASK_TYPE_SKILL_ALIASES, normalized)) {
+      return TASK_TYPE_SKILL_ALIASES[normalized];
+    }
+    if (SKILL_NAMES.has(normalized)) return normalized;
+  }
+  return null;
+};
+
 // Domain templates complement (rather than replace) the lifecycle template
 // selected above. Keep this list narrow: broad graphics terms would add prompt
 // weight to tasks that do not involve scene construction or rendering.
@@ -71,6 +97,9 @@ const DOMAIN_SKILL_MATCHERS = [
  * @returns {string|null} Skill template name or null if no match
  */
 export function detectSkillTemplate(task) {
+  const taskTypeSkill = skillForTaskType(task);
+  if (taskTypeSkill) return taskTypeSkill;
+
   const desc = (task?.description || '').toLowerCase();
   for (const matcher of SKILL_MATCHERS) {
     if (matcher.keywords.some(kw => desc.includes(kw))) {

@@ -16,9 +16,16 @@ import { assertSafeFilename, isPathInsideDir } from './pathSafety.js';
  * copyFile + unlink instead of rename — the source usually lives in
  * `os.tmpdir()`, which may sit on a different filesystem (rename across devices
  * throws EXDEV on Linux); copy works regardless. The temp unlink is best-effort
- * cleanup. Returns `{ filename, sizeBytes }`.
+ * cleanup. When `extensions` is supplied, the persisted name must use one of
+ * those extensions. A persisted extension determines the Content-Type for
+ * files that may live under a static mount, so it must never come from a
+ * client-supplied filename. Returns `{ filename, sizeBytes }`.
  */
-export async function importFileToDir(tempPath, originalName, destDir) {
+export async function importFileToDir(tempPath, originalName, destDir, { extensions } = {}) {
+  const extension = getFileExtension(originalName);
+  if (extensions && !extensions.map((item) => item.toLowerCase()).includes(extension)) {
+    throw new ServerError('Invalid file type', { status: 400, code: 'INVALID_FILE_TYPE' });
+  }
   await ensureDir(destDir);
   const filename = `${randomUUID().slice(0, 8)}-${sanitizeFilename(originalName)}`;
   const dest = join(destDir, filename);

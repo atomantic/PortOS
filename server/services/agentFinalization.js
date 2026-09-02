@@ -224,6 +224,8 @@ export function resolveProgrammaticIoVerdict({ success, hookResult }) {
   // an exit-0 run banked a free success for the task type (#4107). Skip the
   // learning write entirely instead.
   if (HOOK_ABORTED_BEFORE_EVALUATION.has(hookResult.outcome.reason)) return SKIP_LEARNING_VERDICT;
+  if (hookResult.outcome.accepted === false) return false;
+  if (hookResult.outcome.accepted === true) return true;
   return resolveTypeFailureSignal({ success, hookResult }).record === 'success';
 }
 
@@ -813,8 +815,8 @@ export async function finalizeAgent({
   // side effect. Same reason `terminatedByUser` keeps its own verdict.
   const driftDowngrade = drift.drifted && reportedSuccess && !terminatedByUser;
 
-  const success = reportedSuccess && prVerdict.ok && !driftDowngrade;
-  const errorAnalysis = driftDowngrade
+  let success = reportedSuccess && prVerdict.ok && !driftDowngrade;
+  let errorAnalysis = driftDowngrade
     ? primaryCheckoutDriftAnalysis(drift)
     : prVerdict.ok ? reportedErrorAnalysis : prVerificationAnalysis(prVerdict);
   if (!prVerdict.ok) {
@@ -835,7 +837,7 @@ export async function finalizeAgent({
   }
 
   const taskType = task?.taskType || 'user';
-  const taskUpdate = terminatedByUser
+  let taskUpdate = terminatedByUser
     ? {
       status: 'blocked',
       metadata: {
@@ -873,6 +875,33 @@ export async function finalizeAgent({
   // withOutputHookTimeout.
   const hookResult = await dispatchTaskOutputHookOnce({ agentId, task, success, workspacePath });
 
+  // Output hooks may return a trusted metadata patch that advances a staged
+  // workflow. Apply it before task persistence and cleanup so the next stage
+  // sees the narrowed input set. An explicit `accepted: false` is a real
+  // programmatic-output failure even when the agent exited zero; this is the
+  // fail-closed path for incomplete or contradictory eligibility envelopes.
+  const hookOutcome = hookResult?.outcome;
+  const hookMetadata = hookOutcome?.taskMetadata && typeof hookOutcome.taskMetadata === 'object'
+    && !Array.isArray(hookOutcome.taskMetadata)
+    ? hookOutcome.taskMetadata
+    : null;
+  if (hookMetadata) {
+    task.metadata = { ...task.metadata, ...hookMetadata };
+  }
+  const hookRejected = !terminatedByUser && hookResult?.ran && hookOutcome?.accepted === false;
+  if (hookRejected && success) {
+    success = false;
+    errorAnalysis = {
+      category: hookOutcome.reason || 'output-hook-rejected',
+      message: hookOutcome.message || 'The scheduled task output was rejected by its validation hook',
+      actionable: false,
+      origin: 'task-output-hook',
+    };
+    taskUpdate = await resolveFailedTaskUpdate(task, errorAnalysis, agentId);
+  } else if (hookMetadata && success && !terminatedByUser) {
+    taskUpdate = { ...taskUpdate, metadata: task.metadata };
+  }
+
   // Success-criteria validation (issue #2344): stamp an explicit pass/fail (or
   // null-when-undeclared) verdict onto the completion result, distinct from the
   // exit-code `success`, so task-learning telemetry can distinguish "ran clean
@@ -906,10 +935,20 @@ export async function finalizeAgent({
   // reason the PR downgrade does, and outranks it: the run may well have opened
   // its PR fine and still mutated the primary, and THAT is the thing a human has
   // to act on.
-  const finalError = driftDowngrade ? drift.message : prVerdict.ok ? error : prVerdict.message;
+  const finalError = driftDowngrade
+    ? drift.message
+    : !prVerdict.ok
+      ? prVerdict.message
+      : hookRejected
+        ? errorAnalysis?.message || error
+        : error;
   const finalCompletionReason = driftDowngrade
     ? PRIMARY_CHECKOUT_MUTATED_REASON
-    : prVerdict.ok ? completionReason : prVerdict.category;
+    : !prVerdict.ok
+      ? prVerdict.category
+      : hookRejected
+        ? errorAnalysis?.category || completionReason
+        : completionReason;
 
   await completeAgent(agentId, {
     success,

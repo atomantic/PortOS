@@ -137,10 +137,52 @@ describe('mediaModels registry', () => {
     expect(ltx25.repoFiles).toContain(
       'text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors',
     );
+    // Summed from the six pinned `repoFiles` at the pinned revision — the set
+    // PortOS actually downloads, not the 200 GB repo total. The review DATE is
+    // read from the module so a routine re-check of the disclosure facts
+    // doesn't turn this assertion red.
+    const { VIDEO_DISCLOSURE_REVIEWED_AT } = await import('./videoDisclosure.js');
     expect(ltx25.disclosure).toMatchObject({
-      estimatedDownloadGb: 72.1,
-      reviewedAt: '2026-08-30',
+      estimatedDownloadGb: 71.1,
+      reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
     });
+  });
+
+  it('ships FastH3 on the existing fastvideo runtime with H3 output limits', async () => {
+    const { loadMediaModels, FASTH3_OUTPUT_PROFILE } = await import('./mediaModels.js');
+    // MLX-only, so read the shipped macOS catalog rather than this platform's
+    // filtered list.
+    const fasth3 = loadMediaModels().video.mlx.find((m) => m.id === 'fasth3_dense_datafree_mlx_int4');
+    expect(fasth3).toMatchObject({
+      repo: 'MrMofer/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree-MLX-INT4',
+      revision: '4c8c3e54da8cd667b5db10f6074b4cb9b7559f15',
+      // NOT a new BYOV runtime: a new id would have no venv, no install button
+      // and no status probe. FastH3 is another family on `fastvideo`.
+      runtime: 'fastvideo',
+      fastvideoFamily: 'fasth3',
+      supportedModes: ['text'],
+      defaultWidth: 832,
+      defaultHeight: 480,
+      defaultFrames: 124,
+      steps: 4,
+      samplerLocked: true,
+    });
+    // FastH3 is a distilled MiniMax H3, so it decodes only 17n+5 frame counts
+    // and always muxes 24 fps. Without these the picker offers LTX's generic
+    // 8k+1 grid and a 16/30 fps choice the runner silently overrides.
+    expect(fasth3.frameOptions).toEqual([...FASTH3_OUTPUT_PROFILE.frameOptions]);
+    expect(fasth3.frameOptions.every((f) => (f - 5) % 17 === 0)).toBe(true);
+    expect(fasth3.frameOptions).toContain(fasth3.defaultFrames);
+    expect(fasth3.fpsOptions).toEqual([24]);
+    expect(fasth3.resolutionStep).toBe(32);
+    // Each control mlx_fasth3.py has no flag for must be declared unsupported,
+    // or the form offers a knob whose value dies at the argv boundary.
+    expect(fasth3.supportsNegativePrompt).toBe(false);
+    expect(fasth3.supportsTiling).toBe(false);
+    expect(fasth3.supportsDisableAudio).toBe(false);
+    // The MiniMax H3 Community License travels with the distilled weights, so
+    // the row carries the same territory gate as the other H3 entries.
+    expect(fasth3.termsGate?.id).toBe('minimax-h3-community-license-2026-08-02');
   });
 
   it('ships MiniMax H3 as a pinned, keyframe-capable 128 GB BYOV profile', async () => {

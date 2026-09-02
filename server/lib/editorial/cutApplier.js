@@ -19,6 +19,7 @@
  */
 
 import { SAFE_CUT_TYPES, CUT_TYPES } from './checkInfra.js';
+import { escapeRegExp } from '../textUtils.js';
 
 export { SAFE_CUT_TYPES, CUT_TYPES };
 
@@ -31,7 +32,7 @@ export const MIN_ANCHOR_CHARS = 25;
  * even when the quote clearly targets a real span.
  */
 export function buildWhitespaceTolerantRegex(quote) {
-  const escaped = quote.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escaped = escapeRegExp(quote);
   return new RegExp(escaped.replace(/\s+/g, '\\s+'), 'g');
 }
 

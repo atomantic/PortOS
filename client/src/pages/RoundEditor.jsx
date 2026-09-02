@@ -32,6 +32,7 @@ import ReferenceAnalysis from '../components/songs/ReferenceAnalysis';
 import RoundEditForm from '../components/songs/RoundEditForm';
 import RoundReadView from '../components/songs/RoundReadView';
 import { TEMP_ID_RE } from '../lib/roundDraft.js';
+import PageSkeleton from '../components/ui/PageSkeleton';
 
 export default function RoundEditor() {
   const { id } = useParams();
@@ -45,7 +46,20 @@ export default function RoundEditor() {
   const { partnerSongs, otherSongs, togglePartner } = useRoundPartners({ id, song, setSong });
 
   if (loading) {
-    return <div className="p-6 text-sm text-gray-500">Loading round…</div>;
+    return (
+      <PageSkeleton
+        header="bar"
+        label="Loading round"
+        fullHeight
+        padded
+        barClassName="px-4 py-3 bg-port-card"
+        bodyClassName="p-4"
+        headerRowClass="flex items-center gap-3"
+        titleWidthClass="w-48"
+        cards={2}
+        sidebar={false}
+      />
+    );
   }
   if (!song) {
     return (

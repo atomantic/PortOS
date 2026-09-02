@@ -38,6 +38,7 @@
 import { spawn } from '../lib/childProcess.js';
 import { killProcessTree, prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import { commandExists } from '../lib/commandExists.js';
+import { adoptNpmGlobalBinDir } from '../lib/npmGlobalBin.js';
 import { findCommandOnPath, safeChildProcessEnv, safeChildProcessOptions } from '../lib/processEnv.js';
 import { PROVIDER_VENDORS } from '../lib/providerVendors.js';
 
@@ -176,6 +177,11 @@ export function getProviderRuntime(id) {
 async function probeRuntimeStatus(runtime, findCommand, probeCommand) {
   const kind = runtime.install.kind;
   const tool = INSTALL_TOOL[kind];
+
+  // Boot adopts this already; repeat it here because the install route probes
+  // again straight after `npm install --global`, and on a first install the
+  // prefix directory did not exist when boot looked. Cached and idempotent.
+  await adoptNpmGlobalBinDir();
 
   const [resolved, toolPath] = await Promise.all([findCommand(runtime.command), findCommand(tool)]);
 

@@ -33,10 +33,7 @@
 
 import { tokenizeWords, splitSentences } from './proseTics.js';
 import { measureSentenceRhythm } from './repetition.js';
-
-function escapeRegExp(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+import { escapeRegExp } from '../textUtils.js';
 
 function normalizeWord(p) {
   return typeof p === 'string' ? p.trim().toLowerCase() : '';

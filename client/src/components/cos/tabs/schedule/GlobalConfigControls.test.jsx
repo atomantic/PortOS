@@ -252,4 +252,16 @@ describe('GlobalConfigControls — file issues only', () => {
       taskMetadata: { useWorktree: false, openPR: false, simplify: false, fileIssues: true },
     });
   });
+
+  it('restores required worktree isolation when module-hygiene switches to do-work mode', () => {
+    const onUpdate = renderControls({
+      taskType: 'module-hygiene',
+      taskMetadata: { useWorktree: false, openPR: false, simplify: false, fileIssues: true },
+      config: { fileIssuesCapable: true, defaultFileIssues: true, doWorkRequiresWorktree: true },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /File issues only/i }));
+    expect(onUpdate).toHaveBeenCalledWith('module-hygiene', {
+      taskMetadata: { useWorktree: true, openPR: false, simplify: false, fileIssues: false },
+    });
+  });
 });

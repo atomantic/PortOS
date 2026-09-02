@@ -91,6 +91,27 @@ export function getNetworkExposureStatus() {
   };
 }
 
+/**
+ * Plain-HTTP base URL for reaching this install's own API from the same
+ * machine — what local scripts, curl snippets, and the shell commands PortOS
+ * hands its CoS agents should target.
+ *
+ * When HTTPS is active, `:5555` is TLS-only and a plain-HTTP request to it
+ * fails at the transport layer; the loopback-only HTTP mirror (`PORTS.API_LOCAL`,
+ * overridable via `PORTOS_HTTP_PORT`) is the right target. When HTTPS is off,
+ * the API port itself already speaks HTTP and no mirror is bound.
+ *
+ * Uses `127.0.0.1` rather than `localhost` because the mirror listener binds to
+ * 127.0.0.1 specifically — a `::1`-preferring resolver can miss it.
+ */
+export function localApiBaseUrl() {
+  const status = getNetworkExposureStatus();
+  const port = status.loopbackMirror.enabled
+    ? status.loopbackMirror.port
+    : status.bind.port;
+  return `http://127.0.0.1:${port}`;
+}
+
 const setupStep = (id, title, status, detail, action = null) => ({
   id,
   title,

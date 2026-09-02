@@ -29,7 +29,6 @@ export const getBrainInbox = (options = {}) => {
   // the rest of `options` is query params handled above.
   return request(`/brain/inbox?${params}`, { silent: options.silent });
 };
-export const getBrainInboxEntry = (id) => request(`/brain/inbox/${id}`);
 export const resolveBrainReview = (inboxLogId, destination, editedExtracted, options = {}) => request('/brain/review/resolve', {
   method: 'POST',
   body: JSON.stringify({ inboxLogId, destination, editedExtracted }),
@@ -177,9 +176,6 @@ export const updateBrainMemory = (id, data, options = {}) => request(`/brain/mem
   ...options
 });
 export const deleteBrainMemory = (id, options = {}) => request(`/brain/memories/${id}`, { method: 'DELETE', ...options });
-
-// Brain - Third-party Imports
-export const getBrainImportSources = () => request('/brain/import/sources');
 export const previewChatgptImport = (data) => request('/brain/import/chatgpt/preview', {
   method: 'POST',
   body: JSON.stringify({ data })
@@ -393,10 +389,6 @@ export const cancelYoutubeIngest = (jobId, options = {}) => request(
   { method: 'POST', ...options }
 );
 export const getYoutubeIngests = (options = {}) => request('/brain/youtube/ingests', options);
-export const getYoutubeIngest = (videoId, options = {}) => request(
-  `/brain/youtube/ingests/${encodeURIComponent(videoId)}`,
-  options
-);
 export const deleteYoutubeIngest = (videoId, options = {}) => request(
   `/brain/youtube/ingests/${encodeURIComponent(videoId)}`,
   { method: 'DELETE', ...options }

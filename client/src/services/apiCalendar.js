@@ -6,7 +6,6 @@ export const createCalendarAccount = (data, options = {}) => request('/calendar/
 export const updateCalendarAccount = (id, data, options = {}) => request(`/calendar/accounts/${id}`, { method: 'PUT', body: JSON.stringify(data), ...options });
 export const deleteCalendarAccount = (id) => request(`/calendar/accounts/${id}`, { method: 'DELETE' });
 export const syncCalendarAccount = (accountId) => request(`/calendar/sync/${accountId}`, { method: 'POST' });
-export const getCalendarSyncStatus = (accountId) => request(`/calendar/sync/${accountId}/status`);
 export const getCalendarEvents = (params = {}) => {
   const str = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null)).toString();
   return request(`/calendar/events${str ? `?${str}` : ''}`);
@@ -31,7 +30,3 @@ export const startGoogleAutoConfig = (options = {}) => request('/calendar/google
 export const runGoogleAutoConfig = (email, options = {}) => request('/calendar/google/auto-configure/run', { method: 'POST', body: JSON.stringify({ email }), ...options });
 export const getDailyReview = (date) => request(`/calendar/review/${date}`);
 export const confirmDailyReviewEvent = (date, data, options = {}) => request(`/calendar/review/${date}/confirm`, { method: 'POST', body: JSON.stringify(data), ...options });
-export const getDailyReviewHistory = (params = {}) => {
-  const str = new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString();
-  return request(`/calendar/review/history${str ? `?${str}` : ''}`);
-};

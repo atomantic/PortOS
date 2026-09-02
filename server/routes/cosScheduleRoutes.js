@@ -21,7 +21,7 @@ const templateTaskSchema = z.object({
 
 const router = Router();
 
-const SCHEDULE_FIELDS = ['type', 'enabled', 'intervalMs', 'cronExpression', 'providerId', 'model', 'effort', 'prompt', 'dataInputs', 'taskMetadata', 'runAfter',
+const SCHEDULE_FIELDS = ['type', 'enabled', 'intervalMs', 'cronExpression', 'providerId', 'model', 'effort', 'prompt', 'description', 'dataInputs', 'taskMetadata', 'runAfter',
   // Perpetual (drain-until-done) recheck cadence: after a perpetual task drains
   // its backlog and parks, it re-probes its work-detector on this cadence.
   // `recheckCron` (5-field) takes precedence over `recheckIntervalMs`.
@@ -41,6 +41,16 @@ function pickScheduleSettings(body) {
   }
   if (settings.enabled !== undefined && typeof settings.enabled !== 'boolean') {
     throw new ServerError('enabled must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (settings.description !== undefined) {
+    if (settings.description !== null && typeof settings.description !== 'string') {
+      throw new ServerError('description must be a string or null', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    const description = settings.description == null ? '' : settings.description.trim();
+    if (description.length > 240) {
+      throw new ServerError('description must be 240 characters or fewer', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    settings.description = description || null;
   }
   if (settings.intervalMs !== undefined && settings.intervalMs !== null && (typeof settings.intervalMs !== 'number' || settings.intervalMs < 0)) {
     throw new ServerError('intervalMs must be a non-negative number or null', { status: 400, code: 'VALIDATION_ERROR' });

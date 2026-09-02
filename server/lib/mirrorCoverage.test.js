@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync } from 'fs';
 import { basename, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { escapeRegExp } from './textUtils.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const CLIENT_LIB = join(here, '../../client/src/lib');
@@ -50,7 +51,7 @@ function uniquePairs(pairs) {
 // mentioning a filename, or an unrelated same-prefix fixture, must not count
 // as "this test imports that file".
 function importsRef(source, ref) {
-  const escaped = ref.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escaped = escapeRegExp(ref);
   // Quote characters only — no backtick. Backtick-fenced prose is this
   // codebase's dominant style for referencing a file path in a comment or
   // JSDoc header (see every existing parity-test docstring), so treating it

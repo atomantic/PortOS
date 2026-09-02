@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, rm } from 'fs/promises';
 import { atomicWrite } from './internal/atomicWrite.js';
-import { evaluateSecretEndpoint } from './internal/endpointGuard.js';
+import { evaluateSecretEndpoint } from './endpointGuard.js';
 import { existsSync } from 'fs';
 import { join, extname, basename, isAbsolute, delimiter } from 'path';
 import { spawn, ChildProcess } from 'child_process';
@@ -120,12 +120,24 @@ function escapeCmdMetacharsIfUnquoted(value) {
 // a raw `taskkill` against its pid bypasses node-pty's own Windows teardown
 // (releasing its native ConPTY handle), leaking it. Any non-ChildProcess
 // killable always uses its own `.kill()` instead, on every platform.
+//
+// On Windows node-pty additionally throws `Signals not supported on windows.`
+// for any signal argument — so a signalled kill there killed nothing and threw
+// past this function, and stopping a TUI run silently left it running. The
+// signal is therefore offered first and the signal-free form used only for a
+// handle that refuses it (retrying is harmless — the first attempt did nothing);
+// dropping it unconditionally would downgrade other signal-forwarding killables.
+// Mirrors server/lib/bufferedSpawn.js (this directory stays self-contained).
 function killProcessTree(child) {
-  if (IS_WIN32 && child.pid && child instanceof ChildProcess) {
+  const isChildProcess = child instanceof ChildProcess;
+  if (IS_WIN32 && child.pid && isChildProcess) {
     child.killed = true;
     spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true })
       .on('error', () => {})
       .unref();
+  } else if (IS_WIN32 && !isChildProcess) {
+    try { child.kill('SIGTERM'); }
+    catch { child.kill(); }
   } else {
     child.kill('SIGTERM');
   }
@@ -620,6 +632,13 @@ export function createRunnerService(config = {}) {
           metadata.success = false;
           metadata.error = error;
           metadata.errorCategory = ERROR_CATEGORIES.TIMEOUT;
+          // Hosts classify a failure from `errorAnalysis`, not `errorCategory`
+          // (PortOS's onRunFailed hook reads only the former), so setting the
+          // category alone left every API-run timeout looking like an
+          // uncategorized failure downstream — escalated for investigation
+          // instead of recognized as the timeout it is. Build it from the same
+          // pattern table the other failure paths use so the two can't drift.
+          metadata.errorAnalysis = analyzeError(error);
           metadata.outputSize = Buffer.byteLength(output);
           await atomicWrite(metadataPath, metadata);
           safeSettle(() => hooks.onRunFailed?.(metadata, error, output), `Run ${runId} onRunFailed hook`);

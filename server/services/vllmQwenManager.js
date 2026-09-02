@@ -34,10 +34,14 @@ import { localEndpointPort } from '../lib/localProviderRuntime.js';
 import { PORTS } from '../lib/ports.js';
 import {
   inspectVllmQwenProject,
+  recordVllmProjectDir,
+  vllmProjectDirIsSettled,
   vllmProjectSetupState,
   vllmStartBlockedReason,
   VLLM_PROJECT_DIR_ENV,
+  VLLM_PROJECT_LEAF,
 } from '../lib/vllmQwenProject.js';
+import { detectWslProjectDir, WSL_UNC_PREFIX } from '../lib/wslDistro.js';
 import {
   generateVllmApiKey,
   isWsl2Engine,
@@ -85,24 +89,91 @@ export async function readVllmQwenSetupState() {
   return vllmProjectSetupState(await inspectVllmQwenProject());
 }
 
+/** The real distros to offer, when there are any. */
+const nameDistros = (distros) => (distros?.length
+  ? ` PortOS can see ${distros.join(', ')} — \`wsl --set-default <name>\` picks one; otherwise`
+  : ' Install one with');
+
 /**
- * Why PortOS must not clone this project to a Windows path.
+ * The lead sentence for each way the WSL question can go unanswered.
  *
- * Docker Desktop's engine is a WSL2 VM. A project cloned onto the Windows
- * filesystem is reached from inside that VM over a 9p share, so `prepare` would
- * write ~20 GB of weights across it and the server would page them back the same
- * way — the documented layout is the Linux filesystem, and this is a mistake that
- * costs 20 GB to discover and 20 GB to undo. An operator who genuinely wants a
- * Windows path can still have one: setting the override IS that decision, so the
- * refusal only fires when nothing was configured at all.
- *
- * @returns {string|null} the refusal, or `null` when the placement is the
- *   operator's own explicit choice (or the host is not Windows).
+ * A table rather than four returns so the tail below is appended exactly once.
+ * That tail is the part that must never go missing — a fifth reason added to
+ * `detectWslProjectDir` would otherwise ship a refusal that neither rules out
+ * `C:\` nor names the override.
  */
-export function vllmWindowsPlacementRefusal(dir, env = process.env, platform = process.platform) {
-  if (platform !== 'win32') return null;
-  if (String(env?.[VLLM_PROJECT_DIR_ENV] || '').trim()) return null;
-  return `on Windows this project and its ~20 GB of weights belong on the WSL2 filesystem, not the Windows one — cloning to ${dir} would leave every weight read crossing a 9p share. Set ${VLLM_PROJECT_DIR_ENV} to the distro's UNC path (\\\\wsl.localhost\\<distro>\\home\\<user>\\qwen-serving) and click this again.`;
+const PLACEMENT_REFUSALS = Object.freeze({
+  'internal-distro': (f) => `the default WSL distro is \`${f.distro}\`, which is a container engine's own plumbing — it is recreated from scratch on a reset, so ~20 GB of weights must not live there.${nameDistros(f.distros)} \`wsl --install -d Ubuntu\`.`,
+  'unreadable-share': (f, detail) => `the \`${f.distro}\` distro answered, but Windows cannot read ${f.home} — the ${WSL_UNC_PREFIX} share is not responding${detail}. \`wsl --shutdown\` restarts it (that takes the whole VM down, so stop your containers first).`,
+  'no-distro': (f, detail) => `WSL is present but no distro answered${detail}, so there is no Linux filesystem to put this project on.${nameDistros(f.distros)} \`wsl --install -d Ubuntu\`.`,
+  'no-wsl': (_f, detail) => `this stack runs inside WSL2 — Docker Desktop's own engine IS a WSL2 VM — and \`wsl.exe\` did not run on this host${detail}. Install a distro with \`wsl --install -d Ubuntu\`, then click this again and PortOS will place the project inside it for you.`,
+});
+
+/**
+ * Why PortOS could not find a Linux-side home for this project on a Windows
+ * host — prose the checklist renders verbatim, one fix per case.
+ *
+ * There is no case for "the operator did not configure a directory" any more.
+ * That was the old refusal, and it asked a person to look up two values
+ * (`<distro>`, `<user>`) that WSL will state on request. What survives is the
+ * set of answers PortOS genuinely cannot supply for itself: a machine with no
+ * WSL, a default distro that belongs to a container engine, and a share Windows
+ * cannot read.
+ *
+ * @param {{reason?: string, distro?: string, home?: string, error?: string, distros?: string[]}} found
+ * @returns {string}
+ */
+export function wslPlacementRefusal(found) {
+  const lead = PLACEMENT_REFUSALS[found?.reason] || PLACEMENT_REFUSALS['no-wsl'];
+  return `${lead(found || {}, found?.error ? ` (${found.error})` : '')} PortOS will not fall back to the Windows filesystem, where every one of those weight reads would cross a 9p share. To place the project somewhere of your own choosing instead, set ${VLLM_PROJECT_DIR_ENV} and click this again.`;
+}
+
+/**
+ * Settle where this project goes before anything is written to it.
+ *
+ * On Windows the answer is never the default `%USERPROFILE%\qwen-serving`:
+ * Docker Desktop's engine is a WSL2 VM, so a project on the Windows filesystem
+ * is reached from inside that VM over a 9p share, and the ~20 GB of weights
+ * would be written across it once and paged back across it forever. PortOS used
+ * to refuse and hand the operator a UNC template to fill in by hand; it now asks
+ * WSL for the same two values (`lib/wslDistro.js`) and records the answer, so
+ * the readiness poll, the Start button, and the next server boot all resolve the
+ * directory this run actually used.
+ *
+ * Detection runs ONLY when nothing already answers the question — an exported
+ * `VLLM_QWEN_PROJECT_DIR` or an earlier recording both win, and neither costs a
+ * subprocess. Off Windows there is nothing to detect: the default home is a
+ * Linux filesystem already.
+ *
+ * @param {{emit?: (line: string) => void}} [ctx]
+ * @returns {Promise<string|null>} the refusal, or `null` once the directory is
+ *   settled — the same shape as `vllmStartBlockedReason`, and read back the same
+ *   way, through `inspectVllmQwenProject()`.
+ */
+export async function ensureVllmProjectDir({ emit = () => {} } = {}) {
+  if (process.platform !== 'win32') return null;
+  if (vllmProjectDirIsSettled()) return null;
+
+  emit('Windows host — asking WSL where this project belongs, so its ~20 GB of weights land on the distro filesystem rather than on the Windows one.');
+  const found = await detectWslProjectDir(VLLM_PROJECT_LEAF);
+  if (!found.dir) return wslPlacementRefusal(found);
+
+  emit(`Placing it in the \`${found.distro}\` distro, at ${found.dir}.`);
+  // This process FIRST, the file second. `resolveVllmProjectDir` reads the env
+  // ahead of the record, so every later read in this run — the re-inspection
+  // below, the readiness poll, the Start button — resolves the detected
+  // directory even when the write fails. Without it, a failed write silently
+  // sends the very next inspection back to `%USERPROFILE%\qwen-serving`: the
+  // C:\ placement this whole path exists to refuse.
+  process.env[VLLM_PROJECT_DIR_ENV] = found.dir;
+  // Recording is only what makes the choice outlive this run, so a failed write
+  // costs exactly that — not a ~30 GB provision.
+  const recordedOk = await recordVllmProjectDir(found.dir).then(() => true, (err) => {
+    emit(`Could not record ${VLLM_PROJECT_DIR_ENV} in PortOS's .env (${err.message}) — this run still uses that directory, but set it there yourself or the next restart will look on the Windows filesystem again.`);
+    return false;
+  });
+  if (recordedOk) emit(`Recorded ${VLLM_PROJECT_DIR_ENV} in PortOS's .env, so the readiness check and the Start button find it too.`);
+  return null;
 }
 
 /**
@@ -214,13 +285,16 @@ export async function provisionVllmQwenProject({ emit, isCancelled }) {
     return { success: false, error: `the Docker daemon is not answering (${docker.error}). Start Docker Desktop (or dockerd) and try again — PortOS does not install it.` };
   }
 
+  // Before the first inspection, because on Windows this is what decides which
+  // directory gets inspected at all.
+  const misplaced = await ensureVllmProjectDir({ emit });
+  if (misplaced) return { success: false, error: misplaced };
+
   let project = await inspectVllmQwenProject();
   const dir = project.dir;
   const alreadyPrepared = vllmProjectSetupState(project) === 'ready';
 
   if (!project.hasProject) {
-    const misplaced = vllmWindowsPlacementRefusal(dir);
-    if (misplaced) return { success: false, error: misplaced };
     const git = findCommandOnPath('git');
     if (!git) return { success: false, error: '`git` was not found on PortOS\'s PATH, so the compose project cannot be cloned.' };
     emit(`Cloning ${VLLM_UPSTREAM_REPO} into ${dir}…`);
@@ -286,6 +360,14 @@ export async function provisionVllmQwenProject({ emit, isCancelled }) {
  * @returns {Promise<{success: boolean, error?: string}>}
  */
 export async function startVllmQwenProject({ emit, endpoint, isCancelled }) {
+  // A Windows host whose project was prepared inside WSL — by an earlier
+  // provisioning run on another install, or by hand from the feature doc — has
+  // it at a UNC path this PortOS has never been told about. Resolving that here
+  // as well as in provisioning is what turns "cannot read a models directory"
+  // into a start that works.
+  const misplaced = await ensureVllmProjectDir({ emit });
+  if (misplaced) return { success: false, error: misplaced };
+
   const project = await inspectVllmQwenProject();
   const blocked = vllmStartBlockedReason(project);
   if (blocked) return { success: false, error: blocked };

@@ -83,7 +83,8 @@ export const shellStopSchema = shellSessionIdSchema;
 
 // app:update — app ID for pull/install/restart cycle
 export const appUpdateSchema = z.object({
-  appId: z.string().min(1, 'appId is required')
+  appId: z.string().min(1, 'appId is required'),
+  syncFork: z.boolean().optional()
 });
 
 // app:standardize — app ID for PM2 standardization.

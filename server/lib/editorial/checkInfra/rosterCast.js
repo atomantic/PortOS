@@ -4,6 +4,7 @@
  */
 
 import { normalizeName } from './externals.js';
+import { escapeRegExp } from '../../textUtils.js';
 
 // ---------------------------------------------------------------------------
 // Roster economy (#1292) — character-appearance accounting over the stitched
@@ -18,10 +19,6 @@ import { normalizeName } from './externals.js';
 // over-counting first-issue crowding. Classifying unmodeled proper nouns as
 // characters needs an LLM pass and is tracked as its own check (see the issue).
 // ---------------------------------------------------------------------------
-
-// Escape a name so it rides inside a RegExp alternation literally — names carry
-// regex-significant punctuation ("D'Argo", "Anne-Marie", "T.A.R.D.I.S.").
-const escapeRegExp = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // A character's match tokens: its name plus every alias, trimmed + de-duped.
 // Empty when the character has no usable name.

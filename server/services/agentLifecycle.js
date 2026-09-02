@@ -62,11 +62,15 @@ import { cliProviderAuthDescriptor } from '../lib/processEnv.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { buildCliSpawnConfig, isClaudeCliProvider, isTuiProvider, getClaudeSettingsEnv, spawnDirectly } from './agentCliSpawning.js';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
+import { publicReviewProviderBlock, publicReviewPostureForProfile, PUBLIC_REVIEW_NO_TOOL_POSTURE } from '../lib/providerVendors.js';
+import { PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE } from '../lib/agentExecutionProfiles.js';
+import { formatPublicReviewInputPrompt } from '../lib/modelAbuseGuard.js';
+import { materializePublicReviewInput, materializePublicReviewPatches, readPublicReviewInputSnapshot, validatePublicReviewModel } from './modelAbuseGuard.js';
 import { releaseAppReviewMarker } from './appActivity.js';
 import { ensureInstanceId } from './instances.js';
 import { isClaimableBy, buildClaim, buildRelease, getClaimOwner, getTargetInstance, isTargetedElsewhere } from './cosTaskClaim.js';
 import { resolveForgeTokenEnv } from './git.js';
-import { runnerAgents, pausedAgents, spawningTasks, useRunner, isTruthyMeta } from './agentState.js';
+import { runnerAgents, pausedAgents, consumePausedAgentExit, spawningTasks, useRunner, isTruthyMeta } from './agentState.js';
 import { withSpawnDedupGuard, withMapEntryCleanup, withUpdateInProgressGuard, SPAWN_DEDUP_SKIP, SPAWN_UPDATE_SKIP } from './agentGuards.js';
 import { isUpdateInProgress } from './updateChecker.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
@@ -90,6 +94,49 @@ import { handleOrphanedTask } from './agentManagement.js';
 
 const ROOT_DIR = PATHS.root;
 const AGENTS_DIR = PATHS.cosAgents;
+const PUBLIC_REVIEW_SCAN_STATUSES = new Set(['passed', 'findings']);
+
+function publicReviewScanBlock(task) {
+  const scan = task?.metadata?.pipeline?.securityScan;
+  const hasClearedPr = Number.isInteger(scan?.safePrCount) && scan.safePrCount > 0;
+  if (scan?.completed === true && PUBLIC_REVIEW_SCAN_STATUSES.has(scan.status) && hasClearedPr) return null;
+
+  if (scan?.completed === true && scan.status === 'findings' && !hasClearedPr) {
+    return {
+      reason: 'Public review withheld: the model-abuse scan cleared no pull requests',
+      category: 'public-review-no-cleared-prs',
+    };
+  }
+  return {
+    reason: `Public review withheld: the model-abuse scan is incomplete${scan?.code ? ` (${scan.code})` : ''}`,
+    category: 'public-review-security-scan-incomplete',
+  };
+}
+
+function publicReviewEligibilityBlock(task) {
+  const eligibility = task?.metadata?.pipeline?.eligibility;
+  const eligibleNumbers = Array.isArray(eligibility?.eligibleNumbers)
+    ? eligibility.eligibleNumbers.filter((number) => Number.isInteger(number) && number > 0)
+    : [];
+  const expected = task?.metadata?.issueWatcher?.pullRequests;
+  const expectedNumbers = Array.isArray(expected)
+    ? expected.map((item) => item?.number).filter((number) => Number.isInteger(number) && number > 0)
+    : [];
+  const allowed = new Set(eligibleNumbers);
+  const coverageMatches = expectedNumbers.length === eligibleNumbers.length
+    && expectedNumbers.every((number) => allowed.has(number));
+  if (eligibility?.complete === true && eligibleNumbers.length > 0 && coverageMatches) return null;
+  if (eligibility?.complete === true && eligibleNumbers.length === 0) {
+    return {
+      reason: 'Public review withheld: the eligibility gate cleared no pull requests',
+      category: 'public-review-no-eligible-prs',
+    };
+  }
+  return {
+    reason: 'Public review withheld: a complete eligibility gate result is required before actions',
+    category: 'public-review-eligibility-incomplete',
+  };
+}
 
 
 
@@ -370,6 +417,94 @@ async function runAgentSpawn(task) {
       return null;
     }
     const { provider, selectedModel, modelSelection } = resolution;
+    const isTui = isTuiProvider(provider);
+    const executionProfile = task.metadata?.executionProfile;
+    const publicReviewPosture = publicReviewPostureForProfile(executionProfile);
+    const publicReviewNoTools = publicReviewPosture === PUBLIC_REVIEW_NO_TOOL_POSTURE;
+    const publicReviewActions = executionProfile === PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE;
+    const publicReview = Boolean(publicReviewPosture);
+    if (publicReview) {
+      const scanBlock = publicReviewScanBlock(task);
+      if (scanBlock) {
+        await updateTask(task.id, {
+          status: 'blocked',
+          metadata: {
+            ...task.metadata,
+            blockedReason: scanBlock.reason,
+            blockedCategory: scanBlock.category,
+            blockedAt: new Date().toISOString(),
+          },
+        }, task.taskType || 'user').catch(() => {});
+        await cleanupOnError(scanBlock.reason);
+        // This is an expected fail-closed safety outcome, not an agent/provider
+        // failure. Do not emit agent:error, which would create an automatic
+        // investigator and potentially retry the same unvalidated input.
+        emitLog('warn', `Public review withheld for task ${task.id}: ${scanBlock.category}`, { taskId: task.id });
+        return null;
+      }
+    }
+    if (publicReviewActions) {
+      const eligibilityBlock = publicReviewEligibilityBlock(task);
+      if (eligibilityBlock) {
+        await updateTask(task.id, {
+          status: 'blocked',
+          metadata: {
+            ...task.metadata,
+            blockedReason: eligibilityBlock.reason,
+            blockedCategory: eligibilityBlock.category,
+            blockedAt: new Date().toISOString(),
+          },
+        }, task.taskType || 'user').catch(() => {});
+        await cleanupOnError(eligibilityBlock.reason);
+        emitLog('warn', `Public review withheld for task ${task.id}: ${eligibilityBlock.category}`, { taskId: task.id });
+        return null;
+      }
+    }
+    // One posture check for both stages. Eligibility is declared by the vendor
+    // row and re-asserted HERE, at spawn time, because a schedule or API
+    // payload can be edited without the browser: the picker is a convenience,
+    // never the enforcement. The helper owns the "no posture requested" case,
+    // so an ordinary task (posture `null`) passes straight through (#5830).
+    const postureBlock = publicReviewProviderBlock(provider, publicReviewPosture, { tui: isTui });
+    if (postureBlock) {
+      const { reason, category } = postureBlock;
+      await updateTask(task.id, {
+        status: 'blocked',
+        metadata: {
+          ...task.metadata,
+          blockedReason: reason,
+          blockedCategory: category,
+          blockedAt: new Date().toISOString(),
+        },
+      }, task.taskType || 'user').catch(() => {});
+      await cleanupOnError(reason);
+      cosEvents.emit('agent:error', { taskId: task.id, error: reason });
+      return null;
+    }
+    if (publicReviewNoTools) {
+      const modelPolicy = await validatePublicReviewModel({ provider, model: selectedModel, posture: PUBLIC_REVIEW_NO_TOOL_POSTURE });
+      if (!modelPolicy.ok) {
+        const reason = `Public review model is unavailable or not tool-free (${modelPolicy.code})`;
+        await updateTask(task.id, {
+          status: 'blocked',
+          metadata: {
+            ...task.metadata,
+            blockedReason: reason,
+            blockedCategory: modelPolicy.code || 'public-review-model-unsupported',
+            blockedAt: new Date().toISOString(),
+          },
+        }, task.taskType || 'user').catch(() => {});
+        await cleanupOnError(reason);
+        cosEvents.emit('agent:error', { taskId: task.id, error: reason });
+        return null;
+      }
+    }
+    // Every public-content stage is direct-only. The CoS runner is a shared
+    // process and may inherit ambient tool configuration; the final stage's
+    // provider-specific direct CLI recipe is what enforces its sandbox.
+    // GitHub mutations still belong to the deterministic output hook.
+    const dispatchUseRunner = publicReview ? false : useRunner;
+    let publicReviewPromptData = null;
 
     // Resolve the workspace and provision any worktree / JIRA branch the task
     // needs. A git conflict defers the task; an explicitly-requested worktree
@@ -388,6 +523,58 @@ async function runAgentSpawn(task) {
     }
     const { workspacePath, resolvedAppName, worktreeInfo, jiraTicket, jiraBranchName, explicitWorktree } = prep;
 
+    if (publicReview) {
+      const allowedPullRequestNumbers = publicReviewActions
+        ? task.metadata?.pipeline?.eligibility?.eligibleNumbers
+        : null;
+      const materialized = await materializePublicReviewInput({
+        scanKey: task.metadata?.pipeline?.reviewInputKey,
+        workspacePath,
+        allowedPullRequestNumbers,
+      });
+      const patchesMaterialized = !publicReviewActions || await materializePublicReviewPatches({
+        scanKey: task.metadata?.pipeline?.reviewInputKey,
+        workspacePath,
+        allowedPullRequestNumbers,
+      });
+      if (!materialized || !patchesMaterialized) {
+        const reason = 'The screened public-review input snapshot is unavailable or invalid';
+        await updateTask(task.id, {
+          status: 'blocked',
+          metadata: {
+            ...task.metadata,
+            blockedReason: reason,
+            blockedCategory: 'public-review-input-missing',
+            blockedAt: new Date().toISOString(),
+          },
+        }, task.taskType || 'user').catch(() => {});
+        await cleanupOnError(reason);
+        cosEvents.emit('agent:error', { taskId: task.id, error: reason });
+        return null;
+      }
+      publicReviewPromptData = await readPublicReviewInputSnapshot({
+        scanKey: task.metadata?.pipeline?.reviewInputKey,
+        allowedPullRequestNumbers,
+      });
+      if (!publicReviewPromptData) {
+        const reason = publicReviewNoTools
+          ? 'The screened public-review input could not be loaded for the no-tools reviewer'
+          : 'The screened public-review input could not be loaded for the final reviewer';
+        await updateTask(task.id, {
+          status: 'blocked',
+          metadata: {
+            ...task.metadata,
+            blockedReason: reason,
+            blockedCategory: 'public-review-input-missing',
+            blockedAt: new Date().toISOString(),
+          },
+        }, task.taskType || 'user').catch(() => {});
+        await cleanupOnError(reason);
+        cosEvents.emit('agent:error', { taskId: task.id, error: reason });
+        return null;
+      }
+    }
+
     // Auto-snapshot the workspace context of the app CoS was last working in
     // when this dispatch switches to a different app/repo (#2035). Snapshot-only
     // — it never restores and never calls an LLM. Dynamic import avoids pulling
@@ -399,8 +586,6 @@ async function runAgentSpawn(task) {
       .catch((err) => {
         emitLog('warn', `Workspace auto-snapshot skipped for task ${task.id}: ${err?.message || err}`, { taskId: task.id });
       });
-
-    const isTui = isTuiProvider(provider);
 
     // Lean mode: an Ollama-backed Claude session gets `--bare --strict-mcp-config`
     // (see applyLeanClaudeArgs) so the user's personal environment — hooks,
@@ -435,7 +620,10 @@ async function runAgentSpawn(task) {
       leanMode,
       split: splitSystemPrompt
     });
-    const prompt = typeof promptResult === 'string' ? promptResult : promptResult.userPrompt;
+    const basePrompt = typeof promptResult === 'string' ? promptResult : promptResult.userPrompt;
+    const prompt = publicReview
+      ? `${basePrompt}\n\n${formatPublicReviewInputPrompt(publicReviewPromptData)}`
+      : basePrompt;
     const systemPrompt = typeof promptResult === 'string' ? null : promptResult.systemPrompt;
 
     // Create agent directory
@@ -461,7 +649,7 @@ async function runAgentSpawn(task) {
       workspacePath,
       appName: resolvedAppName
     });
-    const executionMode = isTui ? (useRunner ? 'runner-tui' : 'tui') : useRunner ? 'runner' : 'direct';
+    const executionMode = isTui ? (dispatchUseRunner ? 'runner-tui' : 'tui') : dispatchUseRunner ? 'runner' : 'direct';
 
     // Register the agent with model info.
     //
@@ -551,7 +739,7 @@ async function runAgentSpawn(task) {
       modelReason: modelSelection.reason,
       runId,
       phase: 'initializing',
-      useRunner,
+      useRunner: dispatchUseRunner,
       executionMode,
       taskAnalysisType: task.metadata?.analysisType || null,
       taskReviewType: task.metadata?.reviewType || null,
@@ -562,6 +750,11 @@ async function runAgentSpawn(task) {
       // the auto-run-gated queue lane. `isTruthyMeta` accepts the boolean set at
       // spawn AND the string `"true"` a COS-TASKS.md round-trip yields.
       taskOnDemand: isTruthyMeta(task.metadata?.onDemand),
+      // The single PR a pr-reviewer run was narrowed to. Same hand-picked-projection
+      // reason as the keys around it: perpetualRefillPlan must see from the AGENT
+      // record that this run was scoped, or its untargeted re-issue silently widens
+      // a per-row click back into a sweep of every open PR.
+      taskTargetPullRequest: task.metadata?.targetPullRequest || null,
       // LI hand-off provenance (#2765): projected onto the agent so the completion
       // hook (recordTaskCompletion) can attribute the run's success/failure back to
       // the proposal's domain. agent.metadata is a hand-picked projection of
@@ -677,7 +870,9 @@ async function runAgentSpawn(task) {
     // Without it, a host that supplies Bedrock mode only via settings.json would
     // bake a bare, Bedrock-invalid --model into the argv. Cached (5-min TTL), so
     // the spawn helper's own getClaudeSettingsEnv() call is effectively free.
-    const cliSettingsEnv = isClaudeCliProvider(provider) ? await getClaudeSettingsEnv() : {};
+    const cliSettingsEnv = !publicReview && isClaudeCliProvider(provider)
+      ? await getClaudeSettingsEnv()
+      : {};
     // Task-level OpenCode/Ollama generation controls override provider defaults
     // for this one run. The child-environment composer turns these into the
     // dynamic `agent.build` config instead of mutating saved provider state.
@@ -700,9 +895,10 @@ async function runAgentSpawn(task) {
     // provider whose inference lands on this machine: local runtimes retain
     // their deliberately bounded GPU concurrency posture.
     const maxConcurrentThreads = cloudSwarmThreadCapacity(runProvider, task.metadata?.swarmCount);
+    const safetyProfile = publicReview ? executionProfile : null;
     const cliConfig = isTui
-      ? buildTuiSpawnConfig(runProvider, selectedModel, { systemPromptFile, effort: taskEffort, maxConcurrentThreads })
-      : buildCliSpawnConfig(runProvider, selectedModel, cliSettingsEnv, { systemPromptFile, effort: taskEffort, maxConcurrentThreads });
+      ? buildTuiSpawnConfig(runProvider, selectedModel, { systemPromptFile, effort: taskEffort, maxConcurrentThreads, safetyProfile })
+      : buildCliSpawnConfig(runProvider, selectedModel, cliSettingsEnv, { systemPromptFile, effort: taskEffort, maxConcurrentThreads, safetyProfile });
 
     emitLog('success', `Spawning agent for task ${task.id}`, {
       agentId,
@@ -740,10 +936,10 @@ async function runAgentSpawn(task) {
         cleanupWorktreeFn: cleanupAgentWorktree,
         isTruthyMetaFn: isTruthyMeta,
         leanMode,
-        useDurableRunner: useRunner,
+        useDurableRunner: dispatchUseRunner,
       });
     }
-    if (useRunner) {
+    if (dispatchUseRunner) {
       return await spawnViaRunner(agentId, task, { prompt, workspacePath, model: selectedModel, provider: runProvider, runId, cliConfig, executionId: toolExecution.id, laneName });
     }
     // Direct spawn mode (fallback)
@@ -761,6 +957,7 @@ async function runAgentSpawn(task) {
       laneName,
       cleanupWorktreeFn: cleanupAgentWorktree,
       isTruthyMetaFn: isTruthyMeta,
+      safetyProfile,
     });
   } catch (err) {
     if (handedOff) {
@@ -1154,7 +1351,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
   // completion event can't clean the worktree / complete the task out from
   // under a later resume. Mirrors the CLI/TUI close-handler pause guards.
   if (pausedAgents.has(agentId)) {
-    pausedAgents.delete(agentId);
+    consumePausedAgentExit(agentId);
     runnerAgents.delete(agentId);
     return;
   }

@@ -8,11 +8,6 @@ export const getDirectories = (path = null) => {
   return request(`/scaffold/directories${params}`);
 };
 
-export const scaffoldApp = (data) => request('/scaffold', {
-  method: 'POST',
-  body: JSON.stringify(data)
-});
-
 export const createFromTemplate = (data) => request('/scaffold/templates/create', {
   method: 'POST',
   body: JSON.stringify(data)

@@ -13,6 +13,7 @@
  */
 import { describe, it, expect, afterAll } from 'vitest';
 import { checkHealth, ensureSchema, close, query } from '../lib/db.js';
+import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { recordEvents, listEvents, getDaySummary, stripParticipantsForAccount } from './humanActivity.js';
 
 let dbReady = false;
@@ -26,7 +27,7 @@ let skipReason = '';
     dbReady = true;
   }
 }
-if (!dbReady) console.log(`⏭️ humanActivity.db.test: skipping suite — ${skipReason || 'no database'}`);
+const runDb = requireDbOrSkip('services/humanActivity.db.test', dbReady, skipReason);
 
 const nonce = `ha${Date.now()}`;
 const SOURCE = `test-${nonce}`;
@@ -52,7 +53,7 @@ const mk = (over = {}) => ({
   ...over,
 });
 
-describe.skipIf(!dbReady)('humanActivity store (#2150)', () => {
+describe.skipIf(!runDb)('humanActivity store (#2150)', () => {
   it('records events and is idempotent on (source, dedupe_key)', async () => {
     const cands = [
       mk({ dedupeKey: 'dup-1', title: 'First' }),
@@ -135,7 +136,7 @@ describe.skipIf(!dbReady)('humanActivity store (#2150)', () => {
   });
 });
 
-describe.skipIf(!dbReady)('stripParticipantsForAccount — send-as alias backfill (#2855)', () => {
+describe.skipIf(!runDb)('stripParticipantsForAccount — send-as alias backfill (#2855)', () => {
   const ACCT = `acct-${nonce}`;
   const OTHER_ACCT = `other-${nonce}`;
   const ALIAS = 'alias@example.com';

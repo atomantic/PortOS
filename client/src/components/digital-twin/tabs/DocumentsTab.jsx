@@ -323,7 +323,7 @@ export default function DocumentsTab({ onRefresh }) {
         closeOnBackdrop={false}
         closeOnEsc={false}
         ariaLabel="Create Soul Document"
-        panelClassName="bg-port-card rounded-lg border border-port-border p-4 sm:p-6 max-h-[90vh] overflow-y-auto"
+        panelClassName="bg-port-card rounded-lg border border-port-border p-4 sm:p-6"
       >
         <h2 className="text-lg font-semibold text-white mb-4">Create Soul Document</h2>
 

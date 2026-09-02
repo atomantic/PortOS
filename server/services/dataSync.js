@@ -6,11 +6,11 @@
  * No data is ever lost — unique records from both sides are kept (union semantics).
  */
 
-import crypto from 'crypto';
 import { stat, readdir } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
+import { snapshotChecksum } from '../lib/snapshotChecksum.js';
 import {
   PORTOS_SCHEMA_VERSIONS,
   RECORD_KIND_SCHEMA_CATEGORIES,
@@ -34,6 +34,11 @@ import {
   applyDigitalTwinRemote,
   DIGITAL_TWIN_CHECKSUM_PATHS,
 } from './digital-twin-sync.js';
+import {
+  getUsageSnapshot,
+  applyUsageRemote,
+  USAGE_CHECKSUM_PATHS,
+} from './peerUsage.js';
 
 // --- Category Definitions ---
 
@@ -114,9 +119,9 @@ const MEATSPACE_FILES = {
 
 // --- Checksum Helper ---
 
-function computeChecksum(data) {
-  return crypto.createHash('md5').update(JSON.stringify(data)).digest('hex');
-}
+// Insertion-order sensitive by design: every getter here canonicalizes its own
+// ordering before hashing (see the sorted-record notes below).
+const computeChecksum = snapshotChecksum;
 
 // --- Merge Helpers ---
 
@@ -749,6 +754,10 @@ const CHECKSUM_PATHS = {
   // getter filters back to sync:true and the checksum is unchanged when no
   // synced session moved, so the orchestrator still skips the transfer.
   storyBuilder: [STORY_BUILDER_DIR, STORY_BUILDER_EPOCH_KEY],
+  // usage invalidates on our OWN usage.json (every recorded AI run rewrites it)
+  // and on the peer-digest store (a peer's newer digest changes what we forward
+  // on). Both are atomicWrite'd — see peerUsage.js.
+  usage: USAGE_CHECKSUM_PATHS,
 };
 
 const CATEGORIES = {
@@ -760,7 +769,8 @@ const CATEGORIES = {
   pipeline: { getSnapshot: getPipelineSnapshot, applyRemote: applyPipelineRemote },
   mediaCollections: { getSnapshot: getMediaCollectionsSnapshot, applyRemote: applyMediaCollectionsRemote },
   videoHistory: { getSnapshot: getVideoHistorySnapshot, applyRemote: applyVideoHistoryRemote },
-  storyBuilder: { getSnapshot: getStoryBuilderSnapshot, applyRemote: applyStoryBuilderRemote }
+  storyBuilder: { getSnapshot: getStoryBuilderSnapshot, applyRemote: applyStoryBuilderRemote },
+  usage: { getSnapshot: getUsageSnapshot, applyRemote: applyUsageRemote }
 };
 
 // Map a snapshot CATEGORY to the `PORTOS_SCHEMA_VERSIONS` keys whose storage
@@ -791,6 +801,9 @@ const SNAPSHOT_CATEGORY_SCHEMA_KEYS = {
   meatspace: [],
   videoHistory: [],
   storyBuilder: RECORD_KIND_SCHEMA_CATEGORIES.storyBuilder,
+  // Per-instance digests replaced whole under an LWW stamp, with every field
+  // read defensively — no versioned on-disk layout to gate on.
+  usage: [],
 };
 
 // Exported for the boot-adjacent guard test (see dataSync.pipelineUniverse.test.js):

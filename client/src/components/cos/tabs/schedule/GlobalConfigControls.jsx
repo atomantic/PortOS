@@ -56,6 +56,14 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
   const [selectedType, setSelectedType] = useState(config.type);
   const [editingPrompt, setEditingPrompt] = useState(false);
   const [promptValue, setPromptValue] = useState(config.prompt || '');
+  const descriptionDraft = useFieldDraft(
+    config.description || '',
+    async (next) => {
+      setUpdating(true);
+      await onUpdate(taskType, { description: next.trim() || null }).catch(() => {});
+      setUpdating(false);
+    },
+  );
   // Comma-separated free text, committed to taskMetadata.issueExcludeLabels
   // (an array) on blur. Routes through setUpdating like every other handler
   // in this file so RunTaskButton (client/src/AGENTS.md's "gate on in-flight
@@ -234,6 +242,8 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
   // (this panel persists a separate Thinking Effort), and keeps a stale suffixed
   // pin selectable so it still runs while showing what it is.
   const status = config.status || {};
+  const userInvokable = config.invocation?.userInvokable !== false;
+  const invocationDescription = config.invocation?.description || 'Runs as part of another automation and is not directly invokable.';
 
   return (
     <div className="space-y-4">
@@ -256,6 +266,21 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
           All scheduled runs are paused for this task
         </Banner>
       )}
+
+      <FormField label="Summary / byline" labelClassName="text-sm text-gray-400 block mb-2">
+        <input
+          id={`schedule-description-${taskType}`}
+          type="text"
+          maxLength={240}
+          value={descriptionDraft.value}
+          onChange={descriptionDraft.onChange}
+          onBlur={descriptionDraft.onBlur}
+          disabled={updating}
+          placeholder={config.description || 'Explain what this scheduled task does'}
+          className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
+        />
+        <p className="text-xs text-gray-500 mt-1">Shown on scheduled-task cards and upcoming-task lists. It does not change the prompt.</p>
+      </FormField>
 
       <FormField label="Interval Type" labelClassName="text-sm text-gray-400 block mb-2">
         <select
@@ -526,7 +551,11 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
           onClick={async () => {
             setUpdating(true);
             await onUpdate(taskType, {
-              taskMetadata: toggleFileIssuesMetadata(config.taskMetadata, !fileIssuesEffective(config))
+              taskMetadata: toggleFileIssuesMetadata(
+                config.taskMetadata,
+                !fileIssuesEffective(config),
+                config.doWorkRequiresWorktree,
+              )
             });
             setUpdating(false);
           }}
@@ -671,14 +700,20 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
       )}
 
       <div className="flex gap-2">
-        <RunTaskButton
-          taskType={taskType}
-          apps={apps}
-          onTrigger={onTrigger}
-          installWide={config.installWide}
-          // `updating` covers an in-flight pin write here, same race the card gates on.
-          disabledReason={improvementDisabled ? IMPROVEMENT_DISABLED_TITLE : (updating ? SAVING_TITLE : '')}
-        />
+        {userInvokable ? (
+          <RunTaskButton
+            taskType={taskType}
+            apps={apps}
+            onTrigger={onTrigger}
+            installWide={config.installWide}
+            // `updating` covers an in-flight pin write here, same race the card gates on.
+            disabledReason={improvementDisabled ? IMPROVEMENT_DISABLED_TITLE : (updating ? SAVING_TITLE : '')}
+          />
+        ) : (
+          <div className="text-xs text-port-warning/80" title={invocationDescription}>
+            {config.invocation?.label || 'Automation-only'} — runs from its parent automation
+          </div>
+        )}
         {config.type === 'once' && status.reason === 'once-completed' && (
           <button
             onClick={() => onReset(taskType)}

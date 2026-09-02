@@ -144,6 +144,7 @@ export { default as useCatalogTypes } from './useCatalogTypes.jsx';
 export * from './useCatalogTypes.jsx';
 
 // === Sockets & lifecycle ===
+export * from './useCosTaskUpdates.js';
 export * from './usePrevious.js';
 export * from './useShellSession.js';
 export * from './useSocket.js';
@@ -157,6 +158,7 @@ export * from './useAutoRefetch.js';
 export * from './useCmdKSearch.js';
 export * from './useCooldownTick.js';
 export { default as useDrawerTab } from './useDrawerTab.js';
+export { default as useDownloadPreflightConfirm } from './useDownloadPreflightConfirm.js';
 export { default as useChordPlayer } from './useChordPlayer.js';
 export { default as useDrumPlayer } from './useDrumPlayer.js';
 export * from './useHfTokenStatus.js';

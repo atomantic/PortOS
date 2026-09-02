@@ -121,7 +121,7 @@ export default function PromptRefineModal({ item, open, onClose }) {
       zIndexClassName="z-[70]"
       backdropClassName="bg-black/80"
       ariaLabelledBy="prompt-refine-title"
-      panelClassName="max-h-[90vh] overflow-hidden bg-port-card border border-port-border rounded-xl shadow-2xl flex flex-col"
+      panelClassName="overflow-hidden bg-port-card border border-port-border rounded-xl shadow-2xl flex flex-col"
     >
       <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-port-border">
         <div className="flex items-center gap-2 min-w-0">

@@ -6,7 +6,6 @@ import { request } from './apiCore.js';
 // to generate an artist portrait. `options` lets a caller suppress request()'s
 // auto-toast with `{ silent: true }`.
 export const listArtists = (options = {}) => request('/artists', options);
-export const getArtist = (id, options = {}) => request(`/artists/${encodeURIComponent(id)}`, options);
 export const createArtist = (data, requestOptions = {}) => request('/artists', {
   method: 'POST',
   body: JSON.stringify(data),

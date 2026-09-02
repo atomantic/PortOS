@@ -8,7 +8,6 @@ vi.mock('./apiCore.js', () => ({
 let request;
 let fetchSyncIntegrity;
 let syncRecordToPeer;
-let syncNowForPeer;
 let pullMissingMetadata;
 let pullRecordFromPeer;
 
@@ -18,7 +17,6 @@ beforeEach(async () => {
   ({
     fetchSyncIntegrity,
     syncRecordToPeer,
-    syncNowForPeer,
     pullMissingMetadata,
     pullRecordFromPeer,
   } = await import('./apiPeerSync.js'));
@@ -64,22 +62,6 @@ describe('syncRecordToPeer', () => {
     const [, opts] = request.mock.calls[0];
     expect(opts.silent).toBe(true);
     expect(opts.method).toBe('POST');
-  });
-});
-
-describe('syncNowForPeer', () => {
-  it('calls POST /peer-sync/sync-now with peerId in body', async () => {
-    await syncNowForPeer('peer-c');
-    expect(request).toHaveBeenCalledWith('/peer-sync/sync-now', {
-      method: 'POST',
-      body: JSON.stringify({ peerId: 'peer-c' }),
-    });
-  });
-
-  it('spreads caller options', async () => {
-    await syncNowForPeer('peer-c', { silent: true });
-    const [, opts] = request.mock.calls[0];
-    expect(opts.silent).toBe(true);
   });
 });
 

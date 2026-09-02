@@ -14,13 +14,14 @@ import { emitLog } from './cosEvents.js';
 // to open. Inside the closure the single address for a transition is the module
 // that declares it; a barrel would be a third answer to "where does completeAgent
 // live", which is the thing this sequencing keeps removing.
-import { completeAgent, updateAgent, getAgents, getAgentRecord } from './cosAgentLifecycle.js';
+import { completeAgent, updateAgent, getAgents, getAgentRecord, AGENT_RECORD_UNREADABLE, isLiveAgentRecord, readAgentRecordOrUnreadable } from './cosAgentLifecycle.js';
 import { updateTask, addTask, getTaskById, reviveBlockedTask, evaluateTasks } from './cos.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, pauseMetadata, isAgentPausedTask, isResumablePausedTask, registerPauseReleaseAdapter } from '../lib/taskPauseHold.js';
 import { terminateAgentViaRunner, killAgentViaRunner, pauseAgentViaRunner, getAgentStatsFromRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
+import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
-import { activeAgents, runnerAgents, userTerminatedAgents, pausedAgents, useRunner, isAgentOwnedLocally, unregisterSpawnedAgent } from './agentState.js';
+import { activeAgents, runnerAgents, userTerminatedAgents, pausedAgents, whenPausedAgentExits, useRunner, unregisterSpawnedAgent } from './agentState.js';
 // Both were extracted out of agentLifecycle.js (issue #2837) so this module no
 // longer depends on the lifecycle orchestrator — which depends on THIS module
 // for handleOrphanedTask. Importing them from their own leaf modules is what
@@ -435,6 +436,68 @@ export async function resumeAgent(agentId, overrides = {}) {
   return { success: true, agentId, created: mode === 'new-task', ...resumed };
 }
 
+/**
+ * How long a relaunch waits for a LOCAL paused run's process to actually exit.
+ * The pause path escalates SIGTERM → SIGKILL after 5s, so the close handler has
+ * landed well inside this window in every observed case; the cap only exists so
+ * a wedged child can't hold the request open forever.
+ */
+const RELAUNCH_EXIT_TIMEOUT_MS = 15000;
+
+/**
+ * Relaunch a RUNNING agent's task on a different provider/model/effort.
+ *
+ * The motivating case is a run that is alive but going nowhere — a CLI sitting on
+ * a provider usage limit. Pausing and resuming already does exactly the right
+ * thing (stop the process, keep the worktree, requeue the same task with new
+ * provider/model/effort overrides), but as two clicks it is neither discoverable
+ * nor safe to do quickly. This composes the two so one click switches providers.
+ *
+ * Composition, not a third code path: `pauseAgent` owns stopping the process and
+ * preserving the worktree, `resumeAgent` owns the requeue and the four resume
+ * modes. The only thing between them is waiting for the stopped process to be
+ * gone — a human clicking Pause then Resume takes seconds, but collapsing the two
+ * into one request does not, and resuming first is what loses the worktree
+ * (`whenPausedAgentExits` in agentState.js has the mechanism).
+ *
+ * @param {string} agentId
+ * @param {{context?: string, provider?: string, model?: string, effort?: string, app?: string, reason?: string}} overrides
+ */
+export async function relaunchAgent(agentId, overrides = {}) {
+  const agent = await getAgentRecord(agentId);
+  if (!agent) {
+    throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  if (agent.status !== 'running') {
+    throw new ServerError(`Agent ${agentId} is ${agent.status}, not running`, {
+      status: 409, code: 'AGENT_NOT_RUNNING'
+    });
+  }
+
+  const { reason, ...resumeOverrides } = overrides;
+  const pauseReason = reason || relaunchReason(resumeOverrides);
+  const paused = await pauseAgent(agentId, pauseReason);
+
+  if (!await whenPausedAgentExits(agentId, RELAUNCH_EXIT_TIMEOUT_MS)) {
+    // Proceed anyway: the task is already parked as paused, so refusing here
+    // would leave the user with a stopped agent and no relaunch. Say so in the
+    // log, since this is the window where a late exit can clean the worktree.
+    emitLog('warn', `⚠️ Relaunch of ${agentId} proceeded before its process exited — its worktree may not survive`, { agentId });
+  }
+
+  const resumed = await resumeAgent(agentId, resumeOverrides);
+  emitLog('info', `🔁 Relaunched agent ${agentId} — ${pauseReason}`, {
+    agentId, taskId: resumed.taskId, mode: resumed.mode
+  });
+  return { ...resumed, relaunched: true, pausedAt: paused.pausedAt };
+}
+
+/** The pause reason a relaunch records, naming what the user actually changed. */
+function relaunchReason({ provider, model, effort }) {
+  const target = [provider, model, effort].filter(Boolean).join(' / ');
+  return `Relaunched by user${target ? ` on ${target}` : ''}`;
+}
+
 /** One line naming what the resume actually did — used for the log and the record. */
 function resumeSummary(agentId, { taskId, mode, branchName }) {
   switch (mode) {
@@ -473,7 +536,7 @@ async function requeuePausedTask({ task, taskType, overrides }) {
   // `pending` is non-terminal, so the pointer that write lands survives it
   // (updateTask only strips a resume pointer on a terminal status).
   const result = await reviveBlockedTask(task.id, {
-    metadata: resumeOverrideMetadata(overrides, task.metadata?.context)
+    metadata: resumeOverrideMetadata(overrides, task.metadata)
   }, taskType);
   if (result?.error) {
     throw new ServerError(`Failed to requeue task ${task.id}: ${result.error}`, {
@@ -526,7 +589,7 @@ async function replacePausedTask({ agentId, task, taskType, overrides }) {
     description,
     context, prompt, provider, model, effort, app,
     metadata: inheritedMetadata,
-    ...resumeOverrideMetadata(overrides, context)
+    ...resumeOverrideMetadata(overrides, task?.metadata)
   }, taskType);
   if (created?.error) {
     throw new ServerError(`Failed to queue resume task: ${created.error}`, {
@@ -546,16 +609,27 @@ async function replacePausedTask({ agentId, task, taskType, overrides }) {
  * NOTE, and folding a note into the agent-facing payload would make the two
  * indistinguishable again (#4153).
  */
-function resumeOverrideMetadata({ context, provider, model, effort, app, screenshots }, existingContext) {
+function resumeOverrideMetadata({ context, provider, model, effort, app, screenshots }, priorMetadata = {}) {
   const patch = {};
   if (context) {
-    patch.context = [existingContext, context].filter(Boolean).join('\n\n');
+    patch.context = [priorMetadata?.context, context].filter(Boolean).join('\n\n');
   }
   if (provider) patch.provider = provider;
   if (model) patch.model = model;
   if (effort) patch.effort = effort;
   if (app) patch.app = app;
   if (screenshots?.length) patch.screenshots = screenshots;
+  // The one place blank does NOT mean unchanged: a provider SWITCH invalidates a
+  // model or effort pinned to the provider being left behind. `selectModelForTask`
+  // returns `metadata.model` verbatim as the user's choice, so carrying
+  // `claude-opus-5` across to codex hands that CLI a model it does not have and the
+  // requeued run dies on its first spawn. Both dialogs clear their model select when
+  // the provider changes, so blank here is the user seeing "Default model" — clear the
+  // stale pin and let the new provider resolve its own.
+  if (provider && provider !== priorMetadata?.provider) {
+    if (!model) patch.model = '';
+    if (!effort) patch.effort = '';
+  }
   return patch;
 }
 
@@ -1018,10 +1092,10 @@ async function runCleanupOrphanedAgents() {
       return { available: false, agents: [] };
     },
   );
-  const runnerActiveIds = new Set();
+  const runnerById = new Map();
   const runnerAgentsList = runnerProbe.agents;
-  for (const agent of runnerAgentsList) {
-    runnerActiveIds.add(agent.id);
+  for (const row of runnerAgentsList) {
+    if (row?.id) runnerById.set(row.id, row);
   }
 
   // Also sync runner agents to our local map for event handling
@@ -1032,9 +1106,33 @@ async function runCleanupOrphanedAgents() {
     }
   }
 
+  // The reverse pass: drop `runnerAgents` entries with nothing behind them.
+  // The sweep below walks durable RECORDS, so it can never reach a map entry
+  // that has no record — and nothing else prunes the map either, so a phantom
+  // adopted from the runner survived until the process restarted. It then
+  // over-protected worktrees from the cleanup job, and counted against the
+  // update gate that blocks a restart, which is the one thing that would have
+  // cleared it.
+  //
+  // Scoped to `runnerAgents` on purpose. `activeAgents` entries hold live
+  // PTY/child handles owned by this process's own spawn closures; dropping one
+  // would flip `isAgentOwnedLocally` to false and re-open the #4540
+  // double-finalize that `agentRunnerSync`'s ownership check exists to prevent.
+  // A runner-side entry is only ever a mirror, so losing it costs nothing but a
+  // re-adoption on the next sweep if the runner still advertises it.
+  for (const agentId of [...runnerAgents.keys()]) {
+    const read = await readAgentRecordOrUnreadable(agentId);
+    if (read === AGENT_RECORD_UNREADABLE || isLiveAgentRecord(read)) continue;
+    runnerAgents.delete(agentId);
+    emitLog('info', `🧹 Dropped stale runner-agent tracking for ${agentId} — no live record behind it`, { agentId });
+  }
+
   for (const agent of agents) {
     if (agent.status === 'running') {
-      const inRemoteRunner = runnerActiveIds.has(agent.id);
+      const inRemoteRunner = await runnerEntryShieldsRunningRecord(
+        runnerById.get(agent.id),
+        isPidAlive,
+      );
 
       // A runner-owned agent may still be alive while the runner is booting or
       // reconnecting. Its absence from a failed probe is not evidence that the
@@ -1052,98 +1150,103 @@ async function runCleanupOrphanedAgents() {
         continue;
       }
 
-      if (!isAgentOwnedLocally(agent.id) && !inRemoteRunner) {
-        // Before marking as orphaned, check if the process is actually still running
-        if (agent.pid) {
-          const stillAlive = await isPidAlive(agent.pid);
-          if (stillAlive) {
-            console.log(`🔄 Agent ${agent.id} (PID ${agent.pid}) still running, re-syncing to runner tracking`);
-            const inferredType = isInternalTaskId(agent.taskId) ? 'internal' : 'user';
-            runnerAgents.set(agent.id, {
-              id: agent.id, pid: agent.pid, taskId: agent.taskId,
-              task: { id: agent.taskId, taskType: inferredType, description: 'Re-synced from PID check' }
-            });
-            continue;
-          }
-        }
+      // Direct-spawn handles in this process are live. Leftover runnerAgents
+      // ownership from an earlier adopt is not — a stale listing must not keep
+      // the durable record running forever.
+      if (activeAgents.has(agent.id)) continue;
+      if (inRemoteRunner) continue;
+      if (runnerAgents.has(agent.id)) runnerAgents.delete(agent.id);
 
-        const interrupted = interruptedByRestart.has(agent.id);
-        const errorMessage = interrupted
-          ? 'Agent was interrupted by a PortOS server restart'
-          : 'Agent process terminated unexpectedly';
-        console.log(interrupted
-          ? `🛑 Recovering agent ${agent.id} interrupted by a PortOS restart (PID ${agent.pid || 'unknown'} not running)`
-          : `🧹 Cleaning up orphaned agent ${agent.id} (PID ${agent.pid || 'unknown'} not running)`);
-        // Record the reap in the lifecycle ledger BEFORE the run is closed
-        // (#4540), so the ordered stream reads "orphaned, then finalized" and a
-        // replay can tell an agent that died from one that exited. Emitted even
-        // when the agent record carries no `runId` — a survivor whose run id
-        // never landed is precisely the case the mutable records cannot explain,
-        // so it keys off the agent instead of disappearing.
-        await appendRunEvent({
-          kind: 'run.orphan-recovered',
-          // Explicit natural key rather than the content-derived default: this
-          // sweep runs every 15 minutes and can re-observe the same dead agent
-          // if the `completeAgent` write below ever fails to land, and the
-          // content hash covers the wall-clock `at`, so a retry would otherwise
-          // mint a second "this agent died" fact. An agent dies once per life,
-          // and `id + startedAt` names exactly that.
-          eventId: `orphan:${agent.id}:${agent.startedAt || 'unknown'}`,
-          runId: agent.metadata?.runId,
-          agentId: agent.id,
-          taskId: agent.taskId,
-          data: {
-            interruptedByRestart: interrupted,
-            pid: agent.pid ?? null,
-            hasRunId: Boolean(agent.metadata?.runId),
-            startedAt: agent.startedAt ?? null,
-          },
-        });
-        const task = agent.taskId ? await getTaskById(agent.taskId).catch(() => null) : null;
-        await dispatchRecoveredTaskOutputHook({
-          agentId: agent.id,
-          task,
-          success: false,
-          workspacePath: agent.metadata?.workspacePath || null,
-        });
-        if (agent.metadata?.runId) {
-          const bufferedOutput = Array.isArray(agent.output)
-            ? agent.output.map((entry) => typeof entry === 'string' ? entry : entry?.line).filter(Boolean).join('\n')
-            : '';
-          const output = await tryReadFile(join(PATHS.cosAgents, agent.id, 'output.txt')) ?? bufferedOutput;
-          const startedAt = Date.parse(agent.startedAt);
-          const duration = Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : 0;
-          // Close the run BEFORE the agent record. If the run write fails, the
-          // agent remains eligible for the next sweep; if the later agent write
-          // fails, completeAgentRun's endTime guard makes this retry harmless.
-          await completeAgentRun(agent.metadata.runId, output, interrupted ? 143 : 1, duration, {
-            message: errorMessage,
-            category: interrupted ? 'interrupted' : 'orphaned',
+      // Before marking as orphaned, check if the process is actually still running
+      if (agent.pid) {
+        const stillAlive = await isPidAlive(agent.pid);
+        if (stillAlive) {
+          console.log(`🔄 Agent ${agent.id} (PID ${agent.pid}) still running, re-syncing to runner tracking`);
+          const inferredType = isInternalTaskId(agent.taskId) ? 'internal' : 'user';
+          runnerAgents.set(agent.id, {
+            id: agent.id, pid: agent.pid, taskId: agent.taskId,
+            task: { id: agent.taskId, taskType: inferredType, description: 'Re-synced from PID check' }
           });
+          continue;
         }
-        await completeAgent(agent.id, {
-          success: false,
-          error: errorMessage,
-          orphaned: true,
-          // Post-mortem telemetry on the agent record (nothing reads it yet —
-          // the human-visible distinction is the `error` string above). Worth
-          // persisting because an infrastructure interruption and a real agent
-          // fault are indistinguishable from the process's point of view once
-          // the record is written.
-          interruptedByRestart: interrupted,
-        });
-        cleanedCount++;
+      }
 
-        if (agent.taskId) {
-          // Carry the agent's metadata forward rather than re-reading the record
-          // later: `getAgent` on a completed agent still hits the disk to hydrate
-          // its output.txt tail (capped since #3498, but not free), and the
-          // worktree fields the resume pointer needs are stamped once at
-          // registerAgent and never mutated.
-          // `startedAt` rides along too — it's the window the commit probe in
-          // handleOrphanedTask needs to tell this run's commits from the repo's.
-          orphanedTaskIds.push({ taskId: agent.taskId, agentId: agent.id, agentMetadata: agent.metadata, agentStartedAt: agent.startedAt });
-        }
+      const interrupted = interruptedByRestart.has(agent.id);
+      const errorMessage = interrupted
+        ? 'Agent was interrupted by a PortOS server restart'
+        : 'Agent process terminated unexpectedly';
+      console.log(interrupted
+        ? `🛑 Recovering agent ${agent.id} interrupted by a PortOS restart (PID ${agent.pid || 'unknown'} not running)`
+        : `🧹 Cleaning up orphaned agent ${agent.id} (PID ${agent.pid || 'unknown'} not running)`);
+      // Record the reap in the lifecycle ledger BEFORE the run is closed
+      // (#4540), so the ordered stream reads "orphaned, then finalized" and a
+      // replay can tell an agent that died from one that exited. Emitted even
+      // when the agent record carries no `runId` — a survivor whose run id
+      // never landed is precisely the case the mutable records cannot explain,
+      // so it keys off the agent instead of disappearing.
+      await appendRunEvent({
+        kind: 'run.orphan-recovered',
+        // Explicit natural key rather than the content-derived default: this
+        // sweep runs every 15 minutes and can re-observe the same dead agent
+        // if the `completeAgent` write below ever fails to land, and the
+        // content hash covers the wall-clock `at`, so a retry would otherwise
+        // mint a second "this agent died" fact. An agent dies once per life,
+        // and `id + startedAt` names exactly that.
+        eventId: `orphan:${agent.id}:${agent.startedAt || 'unknown'}`,
+        runId: agent.metadata?.runId,
+        agentId: agent.id,
+        taskId: agent.taskId,
+        data: {
+          interruptedByRestart: interrupted,
+          pid: agent.pid ?? null,
+          hasRunId: Boolean(agent.metadata?.runId),
+          startedAt: agent.startedAt ?? null,
+        },
+      });
+      const task = agent.taskId ? await getTaskById(agent.taskId).catch(() => null) : null;
+      await dispatchRecoveredTaskOutputHook({
+        agentId: agent.id,
+        task,
+        success: false,
+        workspacePath: agent.metadata?.workspacePath || null,
+      });
+      if (agent.metadata?.runId) {
+        const bufferedOutput = Array.isArray(agent.output)
+          ? agent.output.map((entry) => typeof entry === 'string' ? entry : entry?.line).filter(Boolean).join('\n')
+          : '';
+        const output = await tryReadFile(join(PATHS.cosAgents, agent.id, 'output.txt')) ?? bufferedOutput;
+        const startedAt = Date.parse(agent.startedAt);
+        const duration = Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : 0;
+        // Close the run BEFORE the agent record. If the run write fails, the
+        // agent remains eligible for the next sweep; if the later agent write
+        // fails, completeAgentRun's endTime guard makes this retry harmless.
+        await completeAgentRun(agent.metadata.runId, output, interrupted ? 143 : 1, duration, {
+          message: errorMessage,
+          category: interrupted ? 'interrupted' : 'orphaned',
+        });
+      }
+      await completeAgent(agent.id, {
+        success: false,
+        error: errorMessage,
+        orphaned: true,
+        // Post-mortem telemetry on the agent record (nothing reads it yet —
+        // the human-visible distinction is the `error` string above). Worth
+        // persisting because an infrastructure interruption and a real agent
+        // fault are indistinguishable from the process's point of view once
+        // the record is written.
+        interruptedByRestart: interrupted,
+      });
+      cleanedCount++;
+
+      if (agent.taskId) {
+        // Carry the agent's metadata forward rather than re-reading the record
+        // later: `getAgent` on a completed agent still hits the disk to hydrate
+        // its output.txt tail (capped since #3498, but not free), and the
+        // worktree fields the resume pointer needs are stamped once at
+        // registerAgent and never mutated.
+        // `startedAt` rides along too — it's the window the commit probe in
+        // handleOrphanedTask needs to tell this run's commits from the repo's.
+        orphanedTaskIds.push({ taskId: agent.taskId, agentId: agent.id, agentMetadata: agent.metadata, agentStartedAt: agent.startedAt });
       }
     }
   }

@@ -103,7 +103,7 @@ export default function DailyTrendsChart({ days = 30, initialExpanded = true }) 
       {expanded && (
         <div className="p-4 pt-0">
           {/* Summary Stats */}
-          <div className="grid grid-cols-4 gap-2 mb-4">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 mb-4">
             <div className="text-center">
               <div className="text-lg font-bold text-white">{summary.totalTasks}</div>
               <div className="text-xs text-gray-500">Total Tasks</div>

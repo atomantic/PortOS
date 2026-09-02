@@ -19,6 +19,7 @@ import { mkdtemp, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { checkHealth, ensureSchema, query, withTransaction, close } from '../lib/db.js';
+import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { runDbMigrations } from './run-db-migrations.js';
 
 let dbReady = false;
@@ -37,7 +38,7 @@ let skipReason = '';
   }
 }
 
-if (!dbReady) console.log(`⏭️  run-db-migrations.test.js skipped: ${skipReason}`);
+const runDb = requireDbOrSkip('scripts/run-db-migrations.test', dbReady, skipReason);
 
 // Test fixtures use a unique id prefix so we can clean ONLY our own rows /
 // scratch tables without touching a developer's real migration history.
@@ -46,7 +47,7 @@ const SCRATCH = `${PREFIX}scratch`;
 
 const db = { query, withTransaction };
 
-describe.skipIf(!dbReady)('versioned DB-migration runner', () => {
+describe.skipIf(!runDb)('versioned DB-migration runner', () => {
   let dir;
 
   beforeAll(async () => {

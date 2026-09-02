@@ -65,7 +65,7 @@ export function FeedbackSummary({ feedback }) {
             Durable ratings across live and archived agent runs
           </p>
         </div>
-        <div className="grid grid-cols-4 gap-4 sm:gap-6 text-center">
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 sm:gap-6 text-center">
           <div>
             <div className={`text-lg font-bold ${satisfactionClass}`}>{satisfaction}%</div>
             <div className="text-[11px] text-gray-500">helpful</div>

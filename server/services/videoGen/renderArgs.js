@@ -553,6 +553,22 @@ export const assertRenderModeContract = ({
   if (err) throw err;
 };
 
+// Which FastVideo entry script a `fastvideo` row renders through. The runtime
+// is shared (one venv, one checkout, one progress protocol) but the entry
+// scripts are not interchangeable: FastMetal drives the distilled Wan exports
+// through mlx_wan_prompt_to_video.py, while FastH3 drives a pre-quantized MLX
+// DiT through mlx_fasth3.py, which has no --fps/--guidance/--negative-prompt
+// /--image-path and is text-to-video-with-audio only.
+//
+// Read off the registry entry rather than matched against an id list here, so
+// a peer-synced or user-added FastH3 row routes correctly without an edit to
+// this file — the same "execution facts live on the entry" convention
+// `samplerLocked` and `supportedModes` already use. An absent/unknown value
+// means FastMetal, which is what every pre-#5860 row is.
+export const FASTVIDEO_FAMILIES = Object.freeze(['fastmetal', 'fasth3']);
+export const fastvideoFamily = (model) =>
+  (FASTVIDEO_FAMILIES.includes(model?.fastvideoFamily) ? model.fastvideoFamily : 'fastmetal');
+
 // Build args for the FastVideo MLX helper on Apple Silicon.
 export const buildFastVideoArgs = ({
   model, fastvideoModelPath, prompt, negativePrompt, width, height,
@@ -560,10 +576,13 @@ export const buildFastVideoArgs = ({
 }) => {
   assertByovRuntimeInstalled('fastvideo');
   assertRenderModeContract({ model, mode, sourceImagePath });
+  const family = fastvideoFamily(model);
+  const modelRoot = fastvideoModelPath || model.repo;
   const args = [
     FASTVIDEO_HELPER_SCRIPT,
     '--repo-dir', FASTVIDEO_REPO_DIR,
-    '--model-root', fastvideoModelPath || model.repo,
+    '--family', family,
+    '--model-root', modelRoot,
     '--prompt', prompt,
     '--width', String(width),
     '--height', String(height),
@@ -574,6 +593,12 @@ export const buildFastVideoArgs = ({
     '--seed', String(seed),
     '--output', outputPath,
   ];
+  // The shipped FastH3 checkpoint is a self-contained snapshot: the quantized
+  // MLX DiT sits beside the vae/audio_vae/text_encoder/tokenizer the pipeline
+  // loads, so model-root IS the checkpoint. Stated explicitly rather than left
+  // to the helper's "defaults to model-root" fallback, so the two paths become
+  // separately addressable the day a row ships the DiT as its own download.
+  if (family === 'fasth3') args.push('--mlx-checkpoint', modelRoot);
   if (negativePrompt) args.push('--negative-prompt', negativePrompt);
   if (sourceImagePath) args.push('--image', sourceImagePath);
   return { bin: FASTVIDEO_VENV_PYTHON, args };

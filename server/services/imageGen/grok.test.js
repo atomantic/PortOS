@@ -6,6 +6,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { EventEmitter } from 'events';
+import { ChildProcess } from '../../lib/childProcess.js';
 
 // Spawn mock — capture every spawn call so tests can assert args, drive
 // stdout/stderr, capture the stdin-delivered prompt, and trigger the close
@@ -15,6 +16,10 @@ import { EventEmitter } from 'events';
 const spawnCalls = [];
 const makeFakeChild = () => {
   const child = new EventEmitter();
+  // killProcessTree tells a spawned child from a node-pty session by
+  // `instanceof ChildProcess` (a pty takes a different kill shape), so the fake
+  // has to carry the prototype the way a real spawn() result does.
+  Object.setPrototypeOf(child, ChildProcess.prototype);
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.stdin = { written: '', on: vi.fn(), write: vi.fn(function (s) { child.stdin.written += s; }), end: vi.fn() };

@@ -7,7 +7,7 @@ import {
   Database, Brain, CheckCircle2, AlertCircle, Clock,
   RefreshCcw, Timer,
   Target, Sword, Fingerprint, HeartPulse, ChevronDown, ChevronRight,
-  Lock, Globe, Sparkles, Film, Images, Library, BookOpen, FilePen, Music, Music2, Disc3, Clapperboard, Palette, BookText, FolderTree, Video, Waypoints
+  Lock, Globe, Sparkles, Film, Images, Library, BookOpen, FilePen, Music, Music2, Disc3, Clapperboard, Palette, BookText, FolderTree, Video, Waypoints, Gauge
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Pill from '../components/ui/Pill';
@@ -30,6 +30,7 @@ import BrainParitySchedule from '../components/instances/BrainParitySchedule';
 import TailnetHelpBanner from '../components/instances/TailnetHelpBanner';
 import { timeAgo, timeUntil } from '../utils/formatters';
 import { directionalCounts, describeDirectional } from '../lib/syncCounts';
+import PageSkeleton from '../components/ui/PageSkeleton';
 
 const STATUS_COLORS = {
   online: 'text-port-success',
@@ -392,6 +393,7 @@ const SYNC_CATEGORY_META = [
   { key: 'mediaCollections', label: 'Media Collections', icon: Images, description: 'Per-universe/series image + video buckets' },
   { key: 'videoHistory', label: 'Video History', icon: Film, description: 'Generated-video metadata rows (so synced collection videos render)' },
   { key: 'storyBuilder', label: 'Story Builder', icon: BookOpen, description: 'Resumable Story Builder sessions you marked for cross-machine sync' },
+  { key: 'usage', label: 'AI Usage Metrics', icon: Gauge, description: 'On by default. Aggregate AI usage counters — providers, models, token counts, estimated spend — so the Usage page totals your whole federation. No prompts, transcripts, or record contents. Turning it off stops PULLING this peer\u2019s usage; disable the peer to stop every direction.' },
   { key: 'fableLoom', label: 'FableLoom', icon: Waypoints, description: 'Branching stories, series plans, episode graphs, and rendered scene references' },
   { key: 'authors', label: 'Authors', icon: FilePen, description: 'Author personas + headshots used as series bylines (PostgreSQL)' },
   { key: 'artists', label: 'Artists', icon: Music, description: 'Music artist personas + portraits (PostgreSQL)' },
@@ -465,14 +467,12 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
     onRefresh();
   };
 
+  // `syncEnabled` is NOT sent: the server derives it from the resulting category
+  // map, excluding the default-ON ones. Deriving it here would read `usage: true`
+  // as "something is enabled" and widen the peer's outbound push consent.
   const toggleCategory = async (key) => {
     if (fullSync) return; // categories are locked-on under full mirror
-    const newValue = !categories[key];
-    const anyCatEnabled = Object.values({ ...categories, [key]: newValue }).some(Boolean);
-    await updatePeer(peer.id, {
-      syncCategories: { [key]: newValue },
-      syncEnabled: anyCatEnabled
-    }).catch(() => null);
+    await updatePeer(peer.id, { syncCategories: { [key]: !categories[key] } }).catch(() => null);
     onRefresh();
   };
 
@@ -481,10 +481,7 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
     for (const { key } of SYNC_CATEGORY_META) {
       updated[key] = enable;
     }
-    await updatePeer(peer.id, {
-      syncCategories: updated,
-      syncEnabled: enable
-    }).catch(() => null);
+    await updatePeer(peer.id, { syncCategories: updated }).catch(() => null);
     onRefresh();
   };
 
@@ -1299,9 +1296,15 @@ export default function Instances() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-gray-500">Loading instances...</div>
-      </div>
+      <PageSkeleton
+        label="Loading instances"
+        headerRowClass="flex items-center gap-3"
+        titleWidthClass="w-40"
+        showAction={false}
+        layout="grid"
+        gridColsClass="md:grid-cols-2"
+        cards={4}
+      />
     );
   }
 

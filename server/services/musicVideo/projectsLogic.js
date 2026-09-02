@@ -24,8 +24,11 @@ import {
   musicVideoSceneUpdateSchema,
 } from '../../lib/validation.js';
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
-import { sanitizeSoftDeleteFields, stripMusicVideoLocalRenderPins } from '../../lib/syncWire.js';
+import { stripMusicVideoLocalRenderPins } from '../../lib/syncWire.js';
 import { persistedRenderPinFields } from '../../lib/renderTargets.js';
+import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
+
+export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 
 // Re-exported for the PG backend's typed mirror columns (mirrors the CD store).
 export { mirrorTimestamp } from '../../lib/pgTimestamp.js';
@@ -331,15 +334,6 @@ export function reorderScenes(project, orderedIds) {
  * normalizes the timestamps + soft-delete pair so a legacy/hand-edited payload
  * converges byte-for-byte with a freshly-written one. Returns null when unusable.
  */
-export function sanitizeProjectForSync(raw) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  if (!isStr(raw.id) || !raw.id) return null;
-  const createdAt = isStr(raw.createdAt) ? raw.createdAt : new Date().toISOString();
-  const updatedAt = isStr(raw.updatedAt) ? raw.updatedAt : createdAt;
-  const { deleted, deletedAt } = sanitizeSoftDeleteFields(raw);
-  return { ...raw, createdAt, updatedAt, deleted, deletedAt };
-}
-
 /**
  * LWW merge decision for one incoming peer record against the local copy.
  * Returns `{ next, inserted, remoteWins, changed }`:

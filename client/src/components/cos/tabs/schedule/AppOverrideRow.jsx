@@ -8,7 +8,7 @@ import ToggleSwitch from '../../../ToggleSwitch';
 import useFieldDraft from '../../../../hooks/useFieldDraft';
 import { INTERVAL_LABELS, setMetadataOverride } from './scheduleConstants';
 
-const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalIntervalType, globalTaskMetadata, managedAgentOptions, fileIssuesCapable, defaultFileIssues, inheritedProviderText, providers, override, onUpdate }) {
+const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalIntervalType, globalTaskMetadata, managedAgentOptions, fileIssuesCapable, defaultFileIssues, doWorkRequiresWorktree, inheritedProviderText, providers, override, onUpdate }) {
   const [updating, setUpdating] = useState(false);
   const [cronEditing, setCronEditing] = useState(false);
   const isEnabled = override?.enabled === true;
@@ -61,6 +61,8 @@ const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalInter
       : null;
     if (field === 'fileIssues' && nextFileIssues === true && taskMetadata) {
       taskMetadata = { ...taskMetadata, useWorktree: false, openPR: false, simplify: false };
+    } else if (field === 'fileIssues' && nextFileIssues === false && doWorkRequiresWorktree && taskMetadata) {
+      taskMetadata = { ...taskMetadata, useWorktree: true };
     }
     await onUpdate(app.id, taskType, { taskMetadata }).catch(() => {});
     setUpdating(false);
@@ -175,7 +177,9 @@ const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalInter
             const effective = override?.taskMetadata?.[field] ?? globalTaskMetadata?.[field] ?? false;
             const hasOverride = override?.taskMetadata?.[field] !== undefined;
             const fileIssuesOn = (override?.taskMetadata?.fileIssues ?? globalTaskMetadata?.fileIssues ?? defaultFileIssues) === true;
-            const managed = managedAgentOptions?.includes(field) || (fileIssuesCapable && fileIssuesOn && ['useWorktree', 'openPR', 'simplify'].includes(field));
+            const managed = managedAgentOptions?.includes(field)
+              || (fileIssuesCapable && fileIssuesOn && ['useWorktree', 'openPR', 'simplify'].includes(field))
+              || (doWorkRequiresWorktree && !fileIssuesOn && field === 'useWorktree');
             const titleText = managed
               ? `${label}: managed internally by ${taskType}`
               : `${label}: ${effective ? 'on' : 'off'}${hasOverride ? ' (app override)' : ' (inherited)'}`;

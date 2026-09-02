@@ -1,4 +1,8 @@
 // Shared constants and pure helpers for the CoS Schedule tab subcomponents.
+import {
+  PUBLIC_REVIEW_ACTIONS_POSTURE,
+  PUBLIC_REVIEW_NO_TOOL_POSTURE,
+} from '../../../../utils/providers';
 import { timeUntil } from '../../../../utils/formatters';
 import { describeCron } from '../../../../utils/cronHelpers';
 
@@ -49,6 +53,73 @@ export const SAVING_TITLE = 'Saving provider/model settings — the run will use
 // The task's pipeline stages (always an array). A non-empty one means its
 // provider/model are resolved per stage, so a task-level pin would be ignored.
 export const pipelineStages = (config) => config?.taskMetadata?.pipeline?.stages || [];
+
+// pr-reviewer stages are semantic trust-boundary roles, not just numbered
+// cards. Keep the prompt-key fallback for schedules saved before roles were
+// persisted, so an older local schedule still renders with the right policy.
+export const PR_REVIEWER_STAGE_ROLES = Object.freeze(['security', 'eligibility', 'actions']);
+
+export function prReviewerStageRole(stage) {
+  if (PR_REVIEWER_STAGE_ROLES.includes(stage?.role)) return stage.role;
+  return {
+    'pr-reviewer-security': 'security',
+    'pr-reviewer-eligibility': 'eligibility',
+    'pr-reviewer-review': 'actions',
+  }[stage?.promptKey] || null;
+}
+
+// A stage declares an execution PROFILE; the profile maps to the enforceable
+// POSTURE a provider must have a maintained recipe for. Mirrors
+// `server/lib/agentExecutionProfiles.js` so the picker offers exactly the
+// providers the server would accept at spawn time — and so neither side names
+// a vendor. The Security Scan is a managed server-side classifier and has no
+// posture, so it has no provider picker at all.
+export const STAGE_EXECUTION_PROFILE_POSTURES = Object.freeze({
+  'public-review': PUBLIC_REVIEW_NO_TOOL_POSTURE,
+  'public-review-gate': PUBLIC_REVIEW_NO_TOOL_POSTURE,
+  'public-review-actions': PUBLIC_REVIEW_ACTIONS_POSTURE,
+});
+
+// Role fallback for a stage persisted before profiles were stored: the server
+// reasserts the profile on the next dispatch, but the picker has to gate
+// correctly on what is on disk right now.
+const PR_REVIEWER_ROLE_POSTURES = Object.freeze({
+  eligibility: PUBLIC_REVIEW_NO_TOOL_POSTURE,
+  actions: PUBLIC_REVIEW_ACTIONS_POSTURE,
+});
+
+export function stagePublicReviewPosture(stage) {
+  return STAGE_EXECUTION_PROFILE_POSTURES[stage?.executionProfile]
+    || PR_REVIEWER_ROLE_POSTURES[prReviewerStageRole(stage)]
+    || null;
+}
+
+// The optional final stage is deliberately defined as a complete posture, not
+// just a display label. The server sanitizes and reasserts the same contract;
+// this copy lets the schedule UI add it without manufacturing a weaker stage.
+export const PR_REVIEWER_ACTIONS_STAGE_DEFAULTS = Object.freeze({
+  name: 'Code Review & Actions',
+  role: 'actions',
+  promptKey: 'pr-reviewer-review',
+  readOnly: true,
+  useWorktree: true,
+  openPR: false,
+  simplify: false,
+  reviewLoop: false,
+  discardWorktree: true,
+  noCodeOutput: true,
+  managed: true,
+  executionProfile: 'public-review-actions',
+});
+
+export function togglePrReviewerActions(stages, enabled) {
+  const current = Array.isArray(stages) ? stages : [];
+  const withoutActions = current.filter((stage) => prReviewerStageRole(stage) !== 'actions');
+  if (!enabled) return withoutActions;
+  return current.some((stage) => prReviewerStageRole(stage) === 'actions')
+    ? current
+    : [...withoutActions, { ...PR_REVIEWER_ACTIONS_STAGE_DEFAULTS }];
+}
 
 export const triggerButtonClass = (disabled) =>
   `flex items-center gap-1 px-3 py-1.5 text-sm rounded transition-colors ${disabled ? 'bg-port-border/30 text-gray-500 cursor-not-allowed' : 'bg-port-accent/20 hover:bg-port-accent/30 text-port-accent'}`;
@@ -199,20 +270,26 @@ export const FILE_ISSUES_MANAGED_FIELDS = ['useWorktree', 'openPR', 'simplify'];
 
 export function managedAgentOptionsFor(config, overrideMetadata) {
   const managed = [...(config?.managedAgentOptions || [])];
-  if (config?.fileIssuesCapable && fileIssuesEffective(config, overrideMetadata)) {
+  const fileIssues = fileIssuesEffective(config, overrideMetadata);
+  if (config?.fileIssuesCapable && fileIssues) {
     for (const field of FILE_ISSUES_MANAGED_FIELDS) {
       if (!managed.includes(field)) managed.push(field);
     }
   }
+  if (config?.doWorkRequiresWorktree && !fileIssues && !managed.includes('useWorktree')) {
+    managed.push('useWorktree');
+  }
   return managed;
 }
 
-export function toggleFileIssuesMetadata(metadata, next) {
+export function toggleFileIssuesMetadata(metadata, next, doWorkRequiresWorktree = false) {
   const taskMetadata = { ...(metadata || {}), fileIssues: next };
   if (next) {
     taskMetadata.useWorktree = false;
     taskMetadata.openPR = false;
     taskMetadata.simplify = false;
+  } else if (doWorkRequiresWorktree) {
+    taskMetadata.useWorktree = true;
   }
   return taskMetadata;
 }

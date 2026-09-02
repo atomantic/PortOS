@@ -25,11 +25,6 @@ export const updateStorySession = (id, patch, options = {}) => request(`/story-b
   ...options,
 });
 
-export const deleteStorySession = (id, options = {}) => request(`/story-builder/${id}`, {
-  method: 'DELETE',
-  ...options,
-});
-
 // Cross-machine resume (#730). setStorySessionSync toggles whether a session
 // participates in peer sync; reconcileStorySession re-baselines a synced
 // session's staleness baseline to the current machine's live records (rejected

@@ -18,6 +18,7 @@ import { listUniverses } from '../services/apiUniverseBuilder.js';
 import { listPipelineSeries } from '../services/apiPipeline.js';
 import ModelSelect from '../components/ModelSelect';
 import PageHeader from '../components/PageHeader';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import Drawer from '../components/Drawer';
 import DirectiveComposer from '../components/creative-director/DirectiveComposer.jsx';
 import CreativeDirectorModelsDrawer from '../components/creative-director/CreativeDirectorModelsDrawer.jsx';
@@ -259,7 +260,20 @@ export default function CreativeDirector() {
   };
 
   if (loading) {
-    return <div className="p-6 text-port-text-muted">Loading projects…</div>;
+    return (
+      <PageSkeleton
+        header="bar"
+        label="Loading Creative Director projects"
+        fullHeight
+        padded
+        showSubtitle
+        titleWidthClass="w-56"
+        layout="grid"
+        gridColsClass="md:grid-cols-2 lg:grid-cols-3"
+        cards={6}
+        bodyClassName="p-6"
+      />
+    );
   }
 
   return (

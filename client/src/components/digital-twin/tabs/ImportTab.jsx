@@ -435,12 +435,12 @@ export default function ImportTab() {
               {analysisResult.insights.personalityInferences.bigFive && (
                 <div className="mb-6">
                   <h4 className="text-sm font-medium text-gray-400 mb-3">Big Five Traits</h4>
-                  <div className="grid grid-cols-5 gap-2">
+                  <div className="grid grid-cols-5 gap-1 sm:gap-2">
                     {Object.entries(analysisResult.insights.personalityInferences.bigFive).map(([trait, score]) => {
                       const labels = { O: 'Open', C: 'Consc', E: 'Extra', A: 'Agree', N: 'Neuro' };
                       return (
                         <div key={trait} className="text-center">
-                          <div className="text-xs text-gray-500 mb-1">{labels[trait] || trait}</div>
+                          <div className="text-[10px] sm:text-xs text-gray-500 mb-1">{labels[trait] || trait}</div>
                           <div className="h-16 bg-port-bg rounded-lg relative overflow-hidden">
                             <div
                               className="absolute bottom-0 left-0 right-0 bg-port-accent/50"

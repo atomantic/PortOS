@@ -79,6 +79,7 @@ export const WORKFLOW_STAGES = [
       'ux',
       'data-safety',
       'simplify',
+      'module-hygiene',
       'api-contract',
       'react-lifecycle',
       'observability',

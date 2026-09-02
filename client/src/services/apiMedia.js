@@ -8,19 +8,16 @@ import {
 } from '../utils/fileUpload.js';
 
 // Screenshots
-export const uploadScreenshot = (base64Data, filename, mimeType) => request('/screenshots', {
+const uploadScreenshot = (base64Data, filename, mimeType) => request('/screenshots', {
   method: 'POST',
   body: JSON.stringify({ data: base64Data, filename, mimeType })
 });
 
 // Attachments (generic file uploads for tasks)
-export const uploadAttachment = (base64Data, filename) => request('/attachments', {
+const uploadAttachment = (base64Data, filename) => request('/attachments', {
   method: 'POST',
   body: JSON.stringify({ data: base64Data, filename })
 });
-export const getAttachment = (filename) => request(`/attachments/${encodeURIComponent(filename)}`);
-export const deleteAttachment = (filename) => request(`/attachments/${encodeURIComponent(filename)}`, { method: 'DELETE' });
-export const listAttachments = () => request('/attachments');
 
 /**
  * Upload a single screenshot file
@@ -31,7 +28,7 @@ export const listAttachments = () => request('/attachments');
  * @param {Function} options.onError - Callback for errors
  * @returns {Promise<Object|null>} Uploaded file info or null on failure
  */
-export async function uploadScreenshotFile(file, options = {}) {
+async function uploadScreenshotFile(file, options = {}) {
   const { onSuccess, onError } = options;
 
   return new Promise((resolve) => {
@@ -188,7 +185,7 @@ export async function processAttachmentUploads(files, options = {}) {
  * @param {Function} options.onError - Callback for errors
  * @returns {Promise<Object|null>} Uploaded file info or null on failure
  */
-export async function uploadAttachmentFile(file, options = {}) {
+async function uploadAttachmentFile(file, options = {}) {
   const { onSuccess, onError } = options;
 
   return new Promise((resolve) => {

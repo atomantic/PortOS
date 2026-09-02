@@ -120,7 +120,7 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
       // applies the same flex centring without the default `p-4`.
       align="none"
       backdropClassName="bg-black/50"
-      panelClassName="bg-port-card border border-port-border rounded-xl p-6 max-h-[90vh] overflow-auto"
+      panelClassName="bg-port-card border border-port-border rounded-xl p-6"
       ariaLabelledBy="resume-agent-title"
     >
       <div className="flex items-center justify-between mb-4">

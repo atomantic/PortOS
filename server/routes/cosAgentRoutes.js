@@ -8,7 +8,7 @@ import * as cos from '../services/cos.js';
 // Lifecycle transitions go through the facade (#3450), not the `cos.js` barrel.
 import * as agentOrchestrator from '../services/agentOrchestrator.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, resumeCosAgentSchema } from '../lib/validation.js';
+import { validateRequest, resumeCosAgentSchema, relaunchCosAgentSchema } from '../lib/validation.js';
 
 const router = Router();
 
@@ -108,6 +108,16 @@ router.post('/agents/:id/pause', asyncHandler(async (req, res) => {
 router.post('/agents/:id/resume', asyncHandler(async (req, res) => {
   const overrides = validateRequest(resumeCosAgentSchema, req.body ?? {});
   const result = await agentOrchestrator.resumeAgent(req.params.id, overrides);
+  res.json(result);
+}));
+
+// POST /api/cos/agents/:id/relaunch - Stop a RUNNING agent and requeue its own
+// task on a different provider/model/effort (see relaunchAgent for why).
+// relaunchAgent throws a ServerError — 404 when the agent is missing, 409 when
+// it isn't running, 500 when the pause or requeue write fails.
+router.post('/agents/:id/relaunch', asyncHandler(async (req, res) => {
+  const overrides = validateRequest(relaunchCosAgentSchema, req.body ?? {});
+  const result = await agentOrchestrator.relaunchAgent(req.params.id, overrides);
   res.json(result);
 }));
 

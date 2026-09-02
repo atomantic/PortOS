@@ -12,6 +12,7 @@
 
 import { describe, it, expect, afterAll, beforeAll } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../lib/db.js';
+import { requireDbOrSkip } from '../lib/dbTestGate.js';
 
 // A valid key BEFORE the service is imported/called so ensureVaultKey never
 // touches the repo's real .env during the run.
@@ -35,9 +36,9 @@ let skipReason = '';
   }
 }
 
-if (!dbReady) console.log(`⏭️  privacyVault.db.test.js skipped: ${skipReason}`);
+const runDb = requireDbOrSkip('services/privacyVault.db.test', dbReady, skipReason);
 
-describe.skipIf(!dbReady)('privacy vault DB round-trip', () => {
+describe.skipIf(!runDb)('privacy vault DB round-trip', () => {
   let vault;
   let subjects;
   const created = [];

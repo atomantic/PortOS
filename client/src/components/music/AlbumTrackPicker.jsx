@@ -46,7 +46,7 @@ export default function AlbumTrackPicker({ open, tracks = [], onClose, onAdd }) 
       open={open}
       onClose={onClose}
       size="lg"
-      panelClassName="bg-port-card border border-port-border rounded-xl max-h-[85vh] flex flex-col"
+      panelClassName="bg-port-card border border-port-border rounded-xl flex flex-col"
       ariaLabelledBy="album-track-picker-title"
     >
       <div className="flex items-center justify-between p-4 border-b border-port-border flex-shrink-0">

@@ -21,7 +21,7 @@ import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { appendRunEvent } from './agentRunEventLog.js';
 import { finalizeAgent, releaseAgentLane } from './agentFinalization.js';
-import { activeAgents, userTerminatedAgents, pausedAgents, registerSpawnedAgent, unregisterSpawnedAgent } from './agentState.js';
+import { activeAgents, userTerminatedAgents, pausedAgents, consumePausedAgentExit, registerSpawnedAgent, unregisterSpawnedAgent } from './agentState.js';
 import { normalizeReviewers } from '../lib/validation.js';
 import { resolveReviewLoopOptions } from './codeReview.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
@@ -36,7 +36,7 @@ import { buildVendorSpawnConfig } from '../lib/providerVendors.js';
 import { resolveCliModel, providerSuppliesGithubToken, isOllamaClaudeProvider } from '../lib/providerModels.js';
 import { resolveForgeTokenEnv } from './git.js';
 import { resolveAgentCliCwd } from '../lib/spawnCwd.js';
-import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
+import { prepareCliSpawn, killProcessTree, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { prClaimWasVerified, resolvePrCompletion, resolvePrCreation } from '../lib/prDisposition.js';
 import { canTypeSlashCommands, agentOwnsPrWorkflow } from '../lib/slashdoInvocation.js';
@@ -44,6 +44,7 @@ import { doneSentinelPath } from '../lib/agentSentinel.js';
 import { isHostShuttingDown, shouldAbandonForHostShutdown, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
 import { ensureOllamaAgentContext } from './ollamaAgentContext.js';
 import { isOllamaBackedProvider } from './providers.js';
+import { isPublicReviewRestrictedProfile } from '../lib/agentExecutionProfiles.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
 
@@ -268,6 +269,7 @@ export function buildCliSpawnConfig(provider, model, settingsEnv = {}, {
   systemPromptFile = null,
   effort = null,
   maxConcurrentThreads = null,
+  safetyProfile = null,
 } = {}) {
   // Configured-default sentinels (Codex / Antigravity / Grok Build) → null so
   // the CLI uses its own default without a --model flag.
@@ -278,6 +280,7 @@ export function buildCliSpawnConfig(provider, model, settingsEnv = {}, {
     maxConcurrentThreads,
     systemPromptFile,
     settingsEnv,
+    safetyProfile,
   });
 }
 
@@ -348,6 +351,7 @@ export async function spawnDirectly({
   laneName,
   cleanupWorktreeFn,
   isTruthyMetaFn,
+  safetyProfile = null,
 }) {
   const fullCommand = `${cliConfig.command} ${cliConfig.args.join(' ')} <<< "${(task.description || '').substring(0, 100)}..."`;
 
@@ -379,10 +383,12 @@ export async function spawnDirectly({
   // entirely when the provider supplies its own GH_TOKEN/GITHUB_TOKEN so its
   // explicit credential wins (gh prefers GH_TOKEN, so injecting one would shadow a
   // provider GITHUB_TOKEN).
-  const [claudeSettingsEnv, forgeTokenEnv] = await Promise.all([
-    isClaudeCliProvider(provider) ? getClaudeSettingsEnv() : Promise.resolve({}),
-    providerSuppliesGithubToken(provider) ? Promise.resolve({}) : resolveForgeTokenEnv(cwd),
-  ]);
+  const [claudeSettingsEnv, forgeTokenEnv] = isPublicReviewRestrictedProfile(safetyProfile)
+    ? [{}, {}]
+    : await Promise.all([
+      isClaudeCliProvider(provider) ? getClaudeSettingsEnv() : Promise.resolve({}),
+      providerSuppliesGithubToken(provider) ? Promise.resolve({}) : resolveForgeTokenEnv(cwd),
+    ]);
 
   // Shared composition (provider.envVars + OpenCode models map + PWD pin +
   // CLAUDECODE strip) — see buildCliChildEnv. forgeTokenEnv/claudeSettingsEnv go
@@ -396,6 +402,7 @@ export async function spawnDirectly({
     model,
     cwd,
     guard: true,
+    safetyProfile,
   });
 
   // Resolve a bare npm-installed CLI (a .cmd/.bat shim on Windows) to its real
@@ -418,31 +425,48 @@ export async function spawnDirectly({
     env: childEnv
   });
 
-  registerSpawnedAgent(claudeProcess.pid, {
-    fullCommand,
-    agentId,
-    taskId: task.id,
-    model,
-    workspacePath: cwd,
-    prompt: (task.description || '').substring(0, 500)
+  // spawn() can hand back a handle with no pid or stdio when command lookup
+  // fails. Listen immediately so that failure cannot become an unhandled error
+  // while the async setup below is still yielding.
+  let pendingSpawnError = null;
+  let handleSpawnError = null;
+  claudeProcess.on('error', (err) => {
+    if (handleSpawnError) void handleSpawnError(err);
+    else pendingSpawnError = err;
   });
+  // Same reasoning for the stdin pipe: a child that exits before reading it
+  // emits EPIPE, and an unlistened stream 'error' out here would crash the
+  // server. The 'error'/'exit' handlers below settle the run with the real cause.
+  guardChildStdin(claudeProcess);
 
-  if (writePromptToStdin) claudeProcess.stdin.write(prompt);
-  claudeProcess.stdin.end();
+  const spawnedPid = claudeProcess.pid;
+  if (spawnedPid != null) {
+    registerSpawnedAgent(spawnedPid, {
+      fullCommand,
+      agentId,
+      taskId: task.id,
+      model,
+      workspacePath: cwd,
+      prompt: (task.description || '').substring(0, 500)
+    });
 
-  activeAgents.set(agentId, {
-    process: claudeProcess,
-    taskId: task.id,
-    startedAt: Date.now(),
-    runId,
-    pid: claudeProcess.pid,
-    providerId: provider.id,
-    executionId,
-    laneName
-  });
+    deliverChildStdin(claudeProcess, writePromptToStdin ? prompt : null, `agent ${agentId}`);
 
-  // Store PID in persisted state for zombie detection
-  await updateAgent(agentId, { pid: claudeProcess.pid });
+    activeAgents.set(agentId, {
+      process: claudeProcess,
+      taskId: task.id,
+      startedAt: Date.now(),
+      runId,
+      pid: spawnedPid,
+      providerId: provider.id,
+      executionId,
+      laneName
+    });
+
+    // Store PID in persisted state for zombie detection only after spawn gave
+    // us a live process identity.
+    await updateAgent(agentId, { pid: spawnedPid });
+  }
 
   let outputBuffer = '';
   let rawStreamBuffer = ''; // Raw stdout for stream-json (used for error analysis)
@@ -618,13 +642,14 @@ export async function spawnDirectly({
     }
   });
 
-  claudeProcess.on('error', async (err) => {
+  handleSpawnError = async (err) => {
     // Runs outside the request lifecycle — an uncaught throw from the awaited
     // completeAgent/completeAgentRun would crash the process, so wrap the body.
     try {
       clearTimeout(initializationTimeout);
       cleanupPromptFile();
       console.error(`❌ Agent ${agentId} spawn error: ${err.message}`);
+      outputBatcher.push(`❌ Agent ${agentId} spawn error: ${err.message}`);
 
       // Release execution lane
       if (laneName) {
@@ -656,7 +681,8 @@ export async function spawnDirectly({
       console.error(`❌ Agent ${agentId} error handler failed: ${handlerErr.message}`);
       activeAgents.delete(agentId);
     }
-  });
+  };
+  if (pendingSpawnError) void handleSpawnError(pendingSpawnError);
 
   claudeProcess.on('close', async (code) => {
     // Runs outside the request lifecycle — a throw from outputBatcher.flush,
@@ -742,7 +768,7 @@ export async function spawnDirectly({
     // it on the same executionId logs a spurious "Invalid state transition".
     // Mirrors the TUI path's pause-check-before-releaseAgentLane ordering.
     if (pausedAgents.has(agentId)) {
-      pausedAgents.delete(agentId);
+      consumePausedAgentExit(agentId);
       if (agentData?.pid) unregisterSpawnedAgent(agentData.pid);
       activeAgents.delete(agentId);
       return;
@@ -893,7 +919,7 @@ export async function spawnDirectly({
       // (mirrors the normal pause path) — finalizing it as failed here would
       // overwrite the paused state and break later resume.
       if (pausedAgents.has(agentId)) {
-        pausedAgents.delete(agentId);
+        consumePausedAgentExit(agentId);
         unregisterSpawnedAgent(claudeProcess.pid);
         activeAgents.delete(agentId);
       } else {

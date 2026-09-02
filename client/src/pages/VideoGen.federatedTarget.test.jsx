@@ -57,11 +57,6 @@ const state = vi.hoisted(() => ({
   eventSourceRef: { current: null },
 }));
 
-vi.mock('../services/apiImageVideo.js', () => ({
-  getVideoModelTerms: vi.fn(async () => ({ accepted: [TERMS_ID] })),
-  setVideoModelTerms: vi.fn(async () => ({ accepted: [TERMS_ID] })),
-}));
-
 vi.mock('../services/api', () => ({
   getInstances: vi.fn(async () => ({ peers: [PEER] })),
   getVideoGenStatus: vi.fn(async () => ({

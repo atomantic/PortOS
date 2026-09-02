@@ -150,6 +150,28 @@ describe('runLocalLlmTest timeout/abort contract', () => {
     );
   });
 
+  // A big local model that needs longer than the caller allowed is not a broken
+  // provider: the partial text proves it was streaming, `timeoutMs` is the
+  // caller's own knob, and the error comes straight back inline. Reporting it
+  // through the host's provider-failure hook filed a CoS investigation task per
+  // slow playground run.
+  it('does not report a run cut off by its own deadline as a provider failure', async () => {
+    stubStream(makeReader([sse({ content: 'Hello ' })], { abort: true }));
+
+    await runLocalLlmTest({ backend: 'lmstudio', modelId: 'm1', prompt: 'hi', timeoutMs: 5000 });
+
+    expect(finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({ reportFailure: false }));
+  });
+
+  it('still reports a genuine provider failure through the host hook', async () => {
+    global.fetch = vi.fn().mockRejectedValue(new Error('fetch failed: ECONNREFUSED'));
+
+    const result = await runLocalLlmTest({ backend: 'lmstudio', modelId: 'm1', prompt: 'hi', timeoutMs: 5000 });
+
+    expect(result.error).toContain('ECONNREFUSED');
+    expect(finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({ reportFailure: true }));
+  });
+
   it('surfaces a reasoning-only partial when no visible content streamed before the abort', async () => {
     stubStream(makeReader([sse({ reasoning: 'thinking hard…' })], { abort: true }));
 

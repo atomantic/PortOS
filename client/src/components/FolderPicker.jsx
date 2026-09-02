@@ -110,7 +110,7 @@ export default function FolderPicker({ value, onChange, defaultPath }) {
           size="md"
           usePortal
           ariaLabelledBy="folder-picker-title"
-          panelClassName="bg-port-card border border-port-border rounded-xl max-h-[80vh] flex flex-col shadow-2xl"
+          panelClassName="bg-port-card border border-port-border rounded-xl flex flex-col shadow-2xl"
         >
           {/* Header */}
           <div className="flex items-center justify-between p-4 border-b border-port-border">

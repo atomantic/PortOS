@@ -151,9 +151,14 @@ import {
   FAILURE_PARK_THRESHOLD,
   PROMPT_VERSIONS,
   DEFAULT_TASK_INTERVALS,
+  MANAGED_APP_TARGET_TASK_TYPES,
   MANAGED_AGENT_OPTIONS,
   stripManagedAgentOptionsFromOverride,
   TASK_TYPE_DESCRIPTIONS,
+  TASK_TYPE_INVOCATION,
+  TASK_TYPE_PROMPT_INFO,
+  getTaskTypeInvocation,
+  requiresManagedAppTarget,
   REFERENCE_WATCH_AUDITED_VERSION,
   boundParkedUntil
 } from './taskSchedule.js'
@@ -269,12 +274,29 @@ describe('taskSchedule', () => {
 
   describe('INSTALL_WIDE_TASK_TYPES', () => {
     it('names only task types that really sweep the whole install', () => {
-      expect([...INSTALL_WIDE_TASK_TYPES]).toEqual(['repo-sync'])
+      // repo-sync sweeps every managed checkout; user-action-review reads the
+      // install-wide operator-action ledger — neither is a per-app run.
+      expect([...INSTALL_WIDE_TASK_TYPES]).toEqual(['repo-sync', 'user-action-review'])
     })
 
     it('every install-wide type is a registered task type', () => {
       for (const t of INSTALL_WIDE_TASK_TYPES) {
         expect(SELF_IMPROVEMENT_TASK_TYPES).toContain(t)
+      }
+    })
+  })
+
+  describe('managed-app target task types', () => {
+    it('keeps app-required scope explicit and separate from install-wide scope', () => {
+      expect([...MANAGED_APP_TARGET_TASK_TYPES]).toEqual(['pr-reviewer'])
+      expect(requiresManagedAppTarget('pr-reviewer')).toBe(true)
+      expect(requiresManagedAppTarget('security')).toBe(false)
+      expect(requiresManagedAppTarget('repo-sync')).toBe(false)
+    })
+
+    it('only names registered task types', () => {
+      for (const taskType of MANAGED_APP_TARGET_TASK_TYPES) {
+        expect(SELF_IMPROVEMENT_TASK_TYPES).toContain(taskType)
       }
     })
   })
@@ -305,6 +327,33 @@ describe('taskSchedule', () => {
       }
     })
   })
+
+  describe('user-action-review (operator-ledger automation proposals)', () => {
+    it('is registered install-wide with an on-demand + enabled default and a v1 prompt', () => {
+      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('user-action-review');
+      expect(INSTALL_WIDE_TASK_TYPES.has('user-action-review')).toBe(true);
+      expect(TASK_TYPE_DESCRIPTIONS['user-action-review']).toContain('propose automations');
+      expect(DEFAULT_TASK_INTERVALS['user-action-review']).toMatchObject({ type: INTERVAL_TYPES.ON_DEMAND, enabled: true });
+      expect(PROMPT_VERSIONS['user-action-review']).toBe(1);
+      expect(DEFAULT_TASK_PROMPTS['user-action-review']).toContain('{userActionDelivery}');
+      // The prompt proposes; it must never instruct the agent to enact.
+      expect(DEFAULT_TASK_PROMPTS['user-action-review']).toContain('NEVER change settings');
+    });
+
+    it('defaults to file-issues with the no-code posture', () => {
+      expect(DEFAULT_TASK_INTERVALS['user-action-review'].taskMetadata).toMatchObject({
+        fileIssues: true, useWorktree: false, openPR: false
+      });
+    });
+
+    it('surfaces the fileIssues toggle on schedule status without joining the audit catalog', async () => {
+      mockSchedule({ tasks: {}, executions: {} });
+      const status = await getScheduleStatus();
+      expect(status.tasks['user-action-review']).toMatchObject({
+        installWide: true, fileIssuesCapable: true, defaultFileIssues: true
+      });
+    });
+  });
 
   describe('layered-intelligence (programmatic-I/O agent task)', () => {
     it('is registered as a self-improvement task with a description and an on-demand default', () => {
@@ -344,12 +393,13 @@ describe('taskSchedule', () => {
   });
 
   describe('issue-watcher (programmatic-I/O agent task)', () => {
-    it('ships as an enabled on-demand task with a 30-minute fallback and no persisted prompt', () => {
+    it('ships as an enabled on-demand task with a 30-minute fallback and a runtime-generated prompt', () => {
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('issue-watcher');
       expect(DEFAULT_TASK_INTERVALS['issue-watcher']).toMatchObject({
         type: INTERVAL_TYPES.ON_DEMAND, intervalMs: 30 * 60 * 1000, enabled: true, prompt: null
       });
       expect(DEFAULT_TASK_PROMPTS['issue-watcher']).toBeUndefined();
+      expect(TASK_TYPE_PROMPT_INFO['issue-watcher']).toMatchObject({ mode: 'runtime-generated' });
     });
 
     it('locks the reasoning-only throwaway-worktree posture', () => {
@@ -357,6 +407,19 @@ describe('taskSchedule', () => {
       const config = { taskMetadata: { useWorktree: false, openPR: true, discardWorktree: false } };
       expect(enforceManagedAgentOptions('issue-watcher', config)).toBe(true);
       expect(config.taskMetadata).toMatchObject({ useWorktree: true, openPR: false, discardWorktree: true });
+    });
+  });
+
+  describe('pr-reviewer (layered public-content review task)', () => {
+    it('describes the preflight-owned prompt and ships the optional three-stage pipeline read-only', () => {
+      expect(TASK_TYPE_PROMPT_INFO['pr-reviewer']).toMatchObject({ mode: 'runtime-generated' });
+      expect(TASK_TYPE_PROMPT_INFO['pr-reviewer'].description).toContain('tool-free eligibility gate');
+      expect(DEFAULT_TASK_INTERVALS['pr-reviewer'].taskMetadata.pipeline.stages).toEqual([
+        expect.objectContaining({ name: 'Security Scan', role: 'security', readOnly: true, managed: true }),
+        expect.objectContaining({ name: 'Eligibility Gate', role: 'eligibility', readOnly: true, executionProfile: 'public-review-gate' }),
+        expect.objectContaining({ name: 'Code Review & Actions', role: 'actions', readOnly: true, executionProfile: 'public-review-actions' }),
+      ]);
+      expect(MANAGED_AGENT_OPTIONS['pr-reviewer']).toEqual(['useWorktree', 'openPR', 'worktreeChangesExpected']);
     });
   });
 
@@ -1749,8 +1812,8 @@ describe('taskSchedule', () => {
   })
 
   describe('audit file-issues types', () => {
-    it('registers data-safety and simplify as enabled on-demand file-issues audits', () => {
-      for (const taskType of ['data-safety', 'simplify']) {
+    it('registers data-safety, simplify, and module-hygiene as enabled on-demand file-issues audits', () => {
+      for (const taskType of ['data-safety', 'simplify', 'module-hygiene']) {
         expect(SELF_IMPROVEMENT_TASK_TYPES).toContain(taskType)
         expect(TASK_TYPE_DESCRIPTIONS[taskType]).toBeTruthy()
         const cfg = DEFAULT_TASK_INTERVALS[taskType]
@@ -1761,6 +1824,10 @@ describe('taskSchedule', () => {
         expect(cfg.taskMetadata.openPR).toBe(false)
         expect(MANAGED_AGENT_OPTIONS[taskType]).toBeUndefined()
       }
+      expect(DEFAULT_TASK_INTERVALS['module-hygiene'].dataInputs).toEqual([
+        'open-issues',
+        'open-pull-requests',
+      ])
     })
 
     it('surfaces fileIssuesCapable on audit types in getScheduleStatus', async () => {
@@ -1771,6 +1838,10 @@ describe('taskSchedule', () => {
       expect(status.tasks['ux'].fileIssuesCapable).toBe(true)
       expect(status.tasks['ux'].defaultFileIssues).toBe(true)
       expect(status.tasks['data-safety'].fileIssuesCapable).toBe(true)
+      expect(status.tasks['module-hygiene'].fileIssuesCapable).toBe(true)
+      expect(status.tasks['module-hygiene'].defaultFileIssues).toBe(true)
+      expect(status.tasks['module-hygiene'].doWorkRequiresWorktree).toBe(true)
+      expect(status.tasks['simplify'].doWorkRequiresWorktree).toBeUndefined()
       expect(status.tasks['claim-issue'].fileIssuesCapable).toBeUndefined()
     })
 
@@ -1887,6 +1958,42 @@ describe('taskSchedule', () => {
       expect(result.taskType).toBe('security')
       expect(result.appId).toBe('app-1')
       expect(result.origin).toBe(ON_DEMAND_ORIGINS.USER)
+    })
+
+    it('rejects an app-required task without a managed app target', async () => {
+      mockSchedule({
+        tasks: { 'pr-reviewer': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true } }
+      })
+
+      const result = await triggerOnDemandTask('pr-reviewer')
+
+      expect(result.error).toMatch(/requires a managed app target/i)
+      expect(recordUserAction).not.toHaveBeenCalled()
+      expect((await getOnDemandRequests()).filter(r => r.taskType === 'pr-reviewer')).toHaveLength(0)
+    })
+
+    it('carries a targeted PR number onto the queued request', async () => {
+      mockSchedule({
+        tasks: { 'pr-reviewer': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true } }
+      })
+
+      const result = await triggerOnDemandTask('pr-reviewer', 'app-1', { targetPullRequest: 17 })
+
+      expect(result.error).toBeUndefined()
+      expect(result.targetPullRequest).toBe(17)
+      const queued = (await getOnDemandRequests()).find(r => r.id === result.id)
+      expect(queued.targetPullRequest).toBe(17)
+    })
+
+    it('drops a non-positive-integer PR target rather than queueing an unusable filter', async () => {
+      mockSchedule({
+        tasks: { 'pr-reviewer': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true } }
+      })
+
+      const result = await triggerOnDemandTask('pr-reviewer', 'app-1', { targetPullRequest: 'all' })
+
+      expect(result.error).toBeUndefined()
+      expect('targetPullRequest' in result).toBe(false)
     })
 
     it('should reject unknown task types instead of silently queuing them', async () => {
@@ -2035,6 +2142,33 @@ describe('taskSchedule', () => {
       const status = await getScheduleStatus()
 
       expect(status.improvementEnabled).toBe(false)
+    })
+
+    it('projects task summaries and explains hook-owned prompts', async () => {
+      mockSchedule()
+
+      const status = await getScheduleStatus()
+
+      expect(status.tasks['issue-watcher']).toMatchObject({
+        description: TASK_TYPE_DESCRIPTIONS['issue-watcher'],
+        promptMode: 'runtime-generated',
+        promptDescription: expect.stringContaining('deterministic GitHub gathering'),
+        invocation: { kind: 'direct', visibility: 'visible', userInvokable: true },
+      })
+      expect(status.tasks.security).toMatchObject({
+        description: TASK_TYPE_DESCRIPTIONS.security,
+        promptMode: 'template',
+        invocation: { kind: 'direct', visibility: 'visible', userInvokable: true },
+      })
+    })
+
+    it('keeps subsidiary-task visibility explicit instead of inferring it from task names', () => {
+      expect(Object.keys(TASK_TYPE_INVOCATION)).toEqual([])
+      for (const taskType of SELF_IMPROVEMENT_TASK_TYPES) {
+        expect(getTaskTypeInvocation(taskType), taskType).toEqual({
+          kind: 'direct', visibility: 'visible', userInvokable: true
+        })
+      }
     })
 
     it('hides shipped tasks whose required instance feature is disabled', async () => {

@@ -95,7 +95,10 @@ export const buildApiCatalog = (settings = {}) => {
   const modeled = operations.filter((operation) => operation.contractStatus === 'modeled').length;
 
   return {
-    schemaVersion: 1,
+    // Mirrors the manifest rather than restating it: this projection reshapes
+    // `operations[]` but never changes the shape independently, so a hand-copied
+    // literal here could only ever drift from the file it describes.
+    schemaVersion: routeManifest.schemaVersion,
     generatedFrom: 'server/index.js and mounted Express routers',
     regenerateCommand: 'node scripts/generate-api-route-catalog.js',
     stats: { ...routeManifest.stats, domains: domains.length, modeled, generated: operations.length - modeled },

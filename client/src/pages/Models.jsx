@@ -28,7 +28,7 @@ const MediaModels = lazyWithReload(() => import('./MediaModels'));
  *
  *   - **3D** — image-to-3D runtime install/repair (TRELLIS.2, Pixal3D).
  *   - **Embeddings** — the embedding model backing pgvector search.
- *   - **LLMs** — focused runtime-management and model-library sub-routes.
+ *   - **LLMs** — focused runtime, model-library, and abuse-guard sub-routes.
  *   - **LoRAs** — installed image/video adapters.
  *   - **Media** — image/video checkpoints and the Hugging Face cache.
  *   - **Performance** — measured assessments and launch-tuning comparison.
@@ -83,7 +83,7 @@ export default function Models() {
 
   // A record id in the URL selects the tab's drill-down, when it has one. Tabs
   // without a detail component receive it as a focused sub-view id (LLMs uses
-  // `runtimes` and `library`); tabs that do not recognize it render their index.
+  // `runtimes`, `library`, and `abuse`); tabs that do not recognize it render their index.
   const DetailContent = recordId && Object.hasOwn(TAB_DETAIL, activeTab) ? TAB_DETAIL[activeTab] : null;
   const TabContent = TAB_CONTENT[activeTab];
 
@@ -96,7 +96,7 @@ export default function Models() {
       <div className="flex-1 min-w-0 overflow-auto p-4">
         {/* Local boundary rather than the App-level one: a lazy tab must not blank
             out the section header and tab bar while its chunk loads. */}
-        <Suspense fallback={<PageSkeleton />}>
+        <Suspense fallback={<PageSkeleton header="none" label="Loading models section" cards={3} sidebar={false} />}>
           {DetailContent ? <DetailContent recordId={recordId} /> : <TabContent view={recordId} />}
         </Suspense>
       </div>

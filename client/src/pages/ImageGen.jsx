@@ -250,6 +250,10 @@ export default function ImageGen() {
   // apply to it. Keep the target state intact so switching back to another
   // backend restores the user's previous target selection.
   const remoteTargetActive = effectiveMode !== IMAGE_GEN_MODE.GROK && remoteTarget.isRemote;
+  // The status probe describes THIS machine's backend, and it can hang for a long
+  // time against an unconfigured external SD API URL. A federated target renders
+  // on the peer, so only a LOCAL dispatch waits on the probe.
+  const localBackendPending = statusLoading && !remoteTargetActive;
   const isAsyncMode = isLocalMode || isCloudMode || remoteTargetActive;
   // Only probe `agy models` while Agy is the active backend — it spawns a
   // child process server-side, so an unselected backend must not pay for it.
@@ -983,6 +987,11 @@ export default function ImageGen() {
     // fires onSubmit — gate here too so an edit-only model without a source image
     // (or codex text-to-image with no prompt) hits the inline hint, not a 400 toast.
     if (editImageMissing || cloudNeedsPrompt) return;
+    // Same reason, for the backend probe: the form stays typable while the status
+    // pill is still checking, so an implicit submit must not dispatch against a
+    // backend we haven't confirmed. A remote target runs on the peer, so the
+    // LOCAL probe result doesn't gate it — mirror the submit button exactly.
+    if (localBackendPending || (!remoteTargetActive && notConnected)) return;
     // The button reading is as old as the last render and a capacity window
     // expires on the clock, so an enabled button can already be pointing at a
     // lapsed peer. Re-derive here and say so, rather than letting the server
@@ -1293,12 +1302,10 @@ export default function ImageGen() {
           <UniverseStylePicker
             value={selectedUniverse?.id || ''}
             onChange={setSelectedUniverse}
-            disabled={statusLoading}
           />
           <StylePresetPicker
             value={stylePreset?.id || ''}
             onChange={setStylePreset}
-            disabled={statusLoading}
           />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <FormField label="Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
@@ -1306,7 +1313,6 @@ export default function ImageGen() {
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 rows={3}
-                disabled={statusLoading}
                 className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[80px]"
                 placeholder="Describe the image you want to generate..."
               />
@@ -1316,7 +1322,6 @@ export default function ImageGen() {
                 value={negativePrompt}
                 onChange={(e) => setNegativePrompt(e.target.value)}
                 rows={3}
-                disabled={statusLoading}
                 className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[80px]"
                 placeholder="What to avoid..."
               />
@@ -1330,14 +1335,12 @@ export default function ImageGen() {
             negativePrompt={negativePrompt}
             setNegativePrompt={setNegativePrompt}
             renderConfig={{ stylePreset: stylePreset?.id, mode: effectiveMode }}
-            disabled={statusLoading}
           />
           <PromptFromMedia
             kindDefault="both"
             applyKind="image"
             setPrompt={setPrompt}
             setNegativePrompt={setNegativePrompt}
-            disabled={statusLoading}
           />
 
           {flux2Issue === 'venv' && (
@@ -1349,7 +1352,6 @@ export default function ImageGen() {
               <button
                 type="button"
                 onClick={() => setFlux2InstallOpen(true)}
-                disabled={statusLoading}
                 className="self-start sm:self-auto whitespace-nowrap inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/80 disabled:opacity-50"
               >
                 <Sparkles size={14} />
@@ -1376,7 +1378,6 @@ export default function ImageGen() {
             <RemoteMediaTargetPicker
               target={remoteTarget}
               kind="image"
-              disabled={statusLoading}
               localBlockedReason={remoteUnsupportedInputs}
             />
           )}
@@ -1397,7 +1398,6 @@ export default function ImageGen() {
             quantize={quantize} onQuantizeChange={setQuantize}
             seed={seed} onSeedChange={setSeed}
             showSeed
-            disabled={statusLoading}
             // The peer advertises its own models and runs its own quantization;
             // the local dropdowns would name neither. Resolution/steps/guidance/
             // seed do cross the wire, so those stay.
@@ -1431,7 +1431,6 @@ export default function ImageGen() {
               // raise a hint nor be appended a second time.
               onAppendTrigger={(words) => setPrompt((p) => appendTriggerWords(p, words, styledPrompt))}
               prompt={styledPrompt}
-              disabled={statusLoading}
             />
           )}
 
@@ -1445,7 +1444,6 @@ export default function ImageGen() {
               onBrowse={() => setGalleryPicker({ kind: 'init' })}
               editOnly={isEditOnlyModel}
               backend={effectiveMode}
-              disabled={statusLoading}
             />
           )}
 
@@ -1460,7 +1458,6 @@ export default function ImageGen() {
               onClear={handleClearReferenceImage}
               onStrengthChange={handleReferenceStrengthChange}
               onBrowse={(slot) => setGalleryPicker({ kind: 'reference', slot })}
-              disabled={statusLoading}
             />
           )}
 
@@ -1477,13 +1474,18 @@ export default function ImageGen() {
           <div className="flex items-center gap-2 pt-1 flex-wrap">
             <button
               type="submit"
+              // The probe decides WHICH backend can run, not what the user may
+              // type — so it gates submit and backend selection only. Every form
+              // control above stays live while the status pill is still checking.
               disabled={remoteTargetActive
                 ? remoteBlocked !== null
-                : (notConnected || editImageMissing || cloudNeedsPrompt)}
-              title={remoteBlocked || (editImageMissing ? 'This image-edit model needs a source image — upload one below first' : cloudNeedsPrompt ? cloudPromptHint : undefined)}
+                : (localBackendPending || notConnected || editImageMissing || cloudNeedsPrompt)}
+              title={localBackendPending
+                ? 'Checking the image backend…'
+                : remoteBlocked || (editImageMissing ? 'This image-edit model needs a source image — upload one below first' : cloudNeedsPrompt ? cloudPromptHint : undefined)}
               className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg min-h-[40px]"
             >
-              <Sparkles className="w-4 h-4" /> {generating ? 'Queue' : 'Generate'}
+              <Sparkles className="w-4 h-4" /> {localBackendPending ? 'Checking…' : generating ? 'Queue' : 'Generate'}
               {isAsyncMode && batchCount > 1 && <span className="text-xs opacity-80">× {batchCount}</span>}
             </button>
             {editImageMissing && (

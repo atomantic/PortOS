@@ -188,7 +188,13 @@ export async function validateVideoRetryParams(params = {}) {
  *
  * @param {object} uploads - `req.files` keyed by fieldname (may be empty)
  */
+const cleanedMultipartUploads = new WeakSet();
+
 export const cleanupMultipartTemp = async (uploads) => {
+  if (uploads && typeof uploads === 'object') {
+    if (cleanedMultipartUploads.has(uploads)) return;
+    cleanedMultipartUploads.add(uploads);
+  }
   for (const f of Object.values(uploads || {})) {
     if (f?.path) await unlink(f.path).catch(() => {});
   }

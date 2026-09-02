@@ -54,11 +54,6 @@ const state = vi.hoisted(() => ({
   eventSourceRef: { current: null },
 }));
 
-vi.mock('../services/apiImageVideo.js', () => ({
-  getVideoModelTerms: vi.fn(async () => ({ accepted: [TERMS_ID] })),
-  setVideoModelTerms: vi.fn(async () => ({ accepted: [TERMS_ID] })),
-}));
-
 vi.mock('../services/api', () => ({
   // The page offers a federated render target (#4348); with no peer opted in
   // as a media provider the picker renders nothing and every local path below

@@ -18,6 +18,7 @@ import {
   Fingerprint, Plus, Trash2, Wand2, Check, X, Download,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import ArcCanvas from '../components/pipeline/ArcCanvas';
 import AutopilotPanel from '../components/pipeline/AutopilotPanel';
 import SeriesReviewPanel from '../components/pipeline/SeriesReviewPanel';
@@ -165,7 +166,21 @@ export default function PipelineSeries() {
     if (didSave) toast.success('Series saved');
   };
 
-  if (loading) return <div className="p-6 text-gray-500 text-sm">Loading series…</div>;
+  if (loading) {
+    return (
+      <PageSkeleton
+        layout="split"
+        label="Loading series"
+        fullHeight
+        padded
+        bodyClassName="p-4"
+        sideCollapsed={sidebarCollapsed}
+        splitColsClass={sidebarCollapsed ? 'lg:grid-cols-[0px_1fr]' : 'lg:grid-cols-[360px_1fr]'}
+        sideClassName="flex flex-col gap-3 border-b lg:border-b-0 lg:border-r border-port-border bg-port-card/40 p-3 lg:p-4 lg:h-full lg:overflow-hidden"
+        cards={3}
+      />
+    );
+  }
   if (!series) return null;
 
   // Mobile = flex column (grid template ignored); lg+ = grid where the inline

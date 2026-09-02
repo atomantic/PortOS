@@ -139,6 +139,41 @@ export const redactCodexPayload = (value, depth = 0) => {
   ]));
 };
 
+/**
+ * A free-text protocol message with any credential-shaped substring masked, or
+ * `null` when there is nothing to say.
+ *
+ * The payload redactor keys on FIELD NAMES; an upstream failure quoted into a
+ * `message` string has no field names to key on ("access_token=… expired",
+ * "Authorization: Bearer …"). These messages are both logged AND returned to the
+ * browser by the `/codex/*` routes, so they need their own scrub.
+ */
+export const redactCodexMessage = (value) => {
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  // Clamped BEFORE the patterns run, so the scan is bounded by a constant no
+  // matter what an upstream error decides to quote at us.
+  const clamped = value.length > 400 ? `${value.slice(0, 400)}…` : value;
+  return clamped
+    // `key=<value>` / `key: <value>` where the key is credential-shaped and the
+    // value is long enough to BE one. The length floor is what keeps "The secret:
+    // sauce" intact while masking "refresh_token: eyJhbGciOi…" — and it is the
+    // only exemption, because a long all-letters value after such a key is a
+    // passphrase, not a sentence. The value class runs to the next whitespace or
+    // quote so a trailing "!" cannot leave half a secret behind.
+    .replace(
+      /\b([A-Za-z0-9_-]*(?:token|secret|password|passwd|credential|api[_-]?key|access[_-]?key|cookie|signature)[A-Za-z0-9_-]*)(\s*[=:]\s*)("?)([^\s"']{12,})\3?/gi,
+      `$1$2${REDACTED}`,
+    )
+    // An inline authorization credential under ANY scheme — Bearer, Basic,
+    // Token, and whatever a future provider invents. Anchored on the header
+    // name, so an ordinary sentence containing "token" is untouched.
+    .replace(/\b(authorization|proxy-authorization)(\s*[=:]\s*)(\S+\s+)?\S+/gi, `$1$2${REDACTED}`)
+    .replace(/\b(bearer|basic|token)\s+[A-Za-z0-9._~+/=-]{12,}/gi, `$1 ${REDACTED}`)
+    // A bare vendor key, which carries no label at all to key on.
+    .replace(/\b(sk|pk|rk)-[A-Za-z0-9._-]{8,}/g, REDACTED)
+    .replace(/\beyJ[A-Za-z0-9._-]{16,}/g, REDACTED);
+};
+
 const trimmedString = (value) => (typeof value === 'string' && value.trim() !== '' ? value.trim() : null);
 
 /**
@@ -237,8 +272,12 @@ export const normalizeCodexLoginStart = (result) => {
   if (!result || typeof result !== 'object') throw new Error('login start returned a non-object result');
   const loginId = trimmedString(result.loginId);
   if (!loginId) throw new Error('login start returned no loginId');
-  const authUrl = trimmedString(result.authUrl);
-  const verificationUrl = trimmedString(result.verificationUrl);
+  const httpsUrl = (value) => {
+    const url = trimmedString(value);
+    return url && URL.canParse(url) && new URL(url).protocol === 'https:' ? url : null;
+  };
+  const authUrl = httpsUrl(result.authUrl);
+  const verificationUrl = httpsUrl(result.verificationUrl);
   if (!authUrl && !verificationUrl) throw new Error('login start returned no sign-in URL');
   return {
     loginId,

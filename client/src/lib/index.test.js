@@ -9,20 +9,22 @@ const BARREL_SRC = readFileSync(join(HERE, 'index.js'), 'utf8');
 const README_SRC = readFileSync(join(HERE, 'README.md'), 'utf8');
 
 const sourceFiles = readdirSync(HERE).filter(
-  (f) => f.endsWith('.js') && !f.endsWith('.test.js') && f !== 'index.js',
+  (f) => (f.endsWith('.js') || f.endsWith('.jsx'))
+    && !f.endsWith('.test.js') && !f.endsWith('.test.jsx')
+    && f !== 'index.js',
 );
 
 describe('client/src/lib/ barrel', () => {
-  it('re-exports every non-test .js file from index.js', () => {
+  it('re-exports every non-test source file from index.js', () => {
     expect(Object.keys(barrel).length).toBeGreaterThan(0);
     for (const f of sourceFiles) {
       expect(BARREL_SRC, `missing barrel re-export for ${f}`).toContain(`'./${f}'`);
     }
   });
 
-  it('every non-test .js file has a README row', () => {
+  it('every non-test source file has a README row', () => {
     for (const f of sourceFiles) {
-      const base = f.replace(/\.js$/, '');
+      const base = f.replace(/\.jsx?$/, '');
       expect(README_SRC, `missing README entry for ${f}`).toContain(base);
     }
   });

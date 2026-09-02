@@ -96,6 +96,7 @@ import {
   restoreLlamaServerConfig,
 } from './llamaServerManager.js';
 import { getMtplxServerEndpoint, getMtplxServerStatus, relaunchMtplxServerWithTuning } from './mtplxServerManager.js';
+import { getSlotstreamServerEndpoint } from './slotstreamServerManager.js';
 import { getSpecDecodePresetStatus } from './specDecodeModels.js';
 import { listModels } from './localLlm.js';
 import {
@@ -176,7 +177,7 @@ export async function runtimeEndpoint(runtime) {
   // The endpoint-only accessors, NOT the `get*Status` calls — those pay for a
   // network probe and an `execPm2 logs` subprocess, and this path runs on every
   // Performance page load only to learn a port number.
-  const resolver = { llama: getLlamaServerEndpoint, mtplx: getMtplxServerEndpoint }[runtime];
+  const resolver = { llama: getLlamaServerEndpoint, mtplx: getMtplxServerEndpoint, slotstream: getSlotstreamServerEndpoint }[runtime];
   if (resolver) {
     const endpoint = await resolver().catch(() => null);
     if (endpoint) return endpoint;

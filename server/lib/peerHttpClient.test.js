@@ -83,6 +83,7 @@ import {
   peerAuthHeaders,
   __resetSelfInstanceIdForTests,
 } from './peerHttpClient.js';
+import { RESPONSE_TOO_LARGE } from './httpClient.js';
 
 describe('peerHttpClient', () => {
   it('peerSocketOptions disables cert validation for Socket.IO peer connections', () => {
@@ -202,8 +203,15 @@ describe('peerHttpClient', () => {
         res.once('close', responseClosed);
       });
 
+      // Assert the machine-readable code, not just the prose: peer-sync's
+      // record and asset pullers discriminate an oversize response from a dead
+      // peer on err.code, so a reworded message must not silently reclassify
+      // the failure as `peer-unreachable` (#5662).
       await expect(peerFetch(`${fixture.url}/stream`, { maxBytes: 8 }))
-        .rejects.toThrow('Response body exceeded maxBytes 8');
+        .rejects.toMatchObject({
+          code: RESPONSE_TOO_LARGE,
+          message: expect.stringContaining('Response body exceeded maxBytes 8'),
+        });
       await responseClosedPromise;
     });
 
@@ -225,7 +233,10 @@ describe('peerHttpClient', () => {
       });
 
       await expect(peerFetch(`${fixture.url}/declared-size`, { maxBytes: 32 }))
-        .rejects.toThrow('Response declared Content-Length 1024 exceeds maxBytes 32');
+        .rejects.toMatchObject({
+          code: RESPONSE_TOO_LARGE,
+          message: expect.stringContaining('Response declared Content-Length 1024 exceeds maxBytes 32'),
+        });
       await responseClosedPromise;
       expect(bodyStarted).toBe(false);
     });

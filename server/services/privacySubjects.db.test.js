@@ -13,6 +13,7 @@
 
 import { describe, it, expect, afterAll, beforeAll } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../lib/db.js';
+import { requireDbOrSkip } from '../lib/dbTestGate.js';
 
 // A valid key BEFORE the service is imported/called so ensureVaultKey never
 // touches the repo's real .env during the run (createVaultRecord encrypts).
@@ -36,9 +37,9 @@ let skipReason = '';
   }
 }
 
-if (!dbReady) console.log(`⏭️  privacySubjects.db.test.js skipped: ${skipReason}`);
+const runDb = requireDbOrSkip('services/privacySubjects.db.test', dbReady, skipReason);
 
-describe.skipIf(!dbReady)('privacy household subjects DB round-trip', () => {
+describe.skipIf(!runDb)('privacy household subjects DB round-trip', () => {
   let subjects;
   let vault;
   let selfSubjectId = '';

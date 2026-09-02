@@ -92,7 +92,7 @@ export default function OpenWorldFastTravel({ open, onClose, onTravel, activeReg
       usePortal
       ariaLabel="Village map"
       zIndexClassName="z-[120]"
-      panelClassName="w-full max-w-3xl max-h-[85vh] rounded-xl border port-media-overlay flex flex-col overflow-hidden"
+      panelClassName="w-full max-w-3xl rounded-xl border port-media-overlay flex flex-col overflow-hidden"
     >
       <div className="flex items-center gap-3 px-4 py-3 border-b border-current/10">
         <div className="font-pixel text-[12px] tracking-widest">VILLAGE MAP</div>

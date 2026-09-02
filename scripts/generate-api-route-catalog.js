@@ -18,6 +18,17 @@
  * is deterministic, works in packaged installs without a source scan, and is
  * guarded against drift by `generate-api-route-catalog.test.js`.
  *
+ * The manifest records WHICH FILE declares an operation, never which line.
+ * Line numbers move whenever anything above a declaration is edited, so a
+ * manifest carrying them is rewritten by refactors that change no route at
+ * all — which turns the drift guard into a rebase/merge conflict generator on
+ * every parallel branch. Declarations are therefore identified semantically
+ * (`file#routerId METHOD /path`, see `routeDeclarationKey`), and coverage is
+ * verified by comparing two fresh in-memory scans instead of pointing the
+ * committed file back at the source it was derived from. Same rule as
+ * `promptStageCallSites.generated.json`, enforced for every checked-in manifest
+ * by `server/lib/generatedManifests.test.js`.
+ *
  * Usage: node scripts/generate-api-route-catalog.js
  */
 
@@ -30,6 +41,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(HERE, '..');
 export const MANIFEST_RELATIVE_PATH = 'server/lib/apiRouteCatalog.generated.json';
 export const REGENERATE_COMMAND = 'node scripts/generate-api-route-catalog.js';
+const SCHEMA_VERSION = 2;
 
 const INDEX_RELATIVE_PATH = 'server/index.js';
 const ROUTE_METHODS = Object.freeze(['delete', 'get', 'head', 'options', 'patch', 'post', 'put']);
@@ -87,7 +99,22 @@ export function parseImports(source, filePath) {
   return imports;
 }
 
-const sourceLineFor = (source, index) => source.slice(0, index).split('\n').length;
+/**
+ * Position-independent identity for one `router.<method>('<path>')` call.
+ *
+ * Two declarations collide when the same file registers the same method and
+ * path on the same router *name* — normally a duplicate registration rather
+ * than two distinct bindings. The exception is shadowing: a module-level
+ * `const router = Router()` and a second one inside a factory share the id
+ * `router`, so distinct bindings could collide and silently undercount. That
+ * is why `scanRouteGraph` reports `duplicateDeclarationKeys` instead of just
+ * folding them into a Set — see the collision assertion in the test.
+ *
+ * Unlike a line number, this key survives every edit that does not change the
+ * declaration itself.
+ */
+export const routeDeclarationKey = ({ source, routerId, method, path }) =>
+  `${source}#${routerId} ${method.toUpperCase()} ${path || '/'}`;
 
 const resolveComposedRouter = (expression, repoRoot) => {
   const routeName = expression.match(COMPOSED_ROUTER_RE)?.[2];
@@ -114,7 +141,6 @@ export function parseRouteModule(filePath, repoRoot = REPO_ROOT) {
         method,
         path: match[4],
         source: toPosix(relative(repoRoot, filePath)),
-        line: sourceLineFor(source, match.index),
       });
     }
   }
@@ -148,34 +174,26 @@ const joinRoutePath = (...parts) => {
   return `/${joined}`.replace(/\/{2,}/g, '/');
 };
 
-const uniqueSortedSources = (sources) => [...new Map(
-  sources
-    .sort((a, b) => a.source.localeCompare(b.source) || a.line - b.line)
-    .map((entry) => [`${entry.source}:${entry.line}`, entry]),
-).values()];
-
-export function parseTopLevelMounts({ source, filePath, repoRoot = REPO_ROOT }) {
+export function parseTopLevelMounts({ source, filePath }) {
   const imports = parseImports(source, filePath);
   const mounts = [];
   for (const match of source.matchAll(APP_MOUNT_RE)) {
     const imported = imports.get(match[3]);
     if (!imported) continue;
-    mounts.push({
-      mountPath: match[2],
-      routerName: match[3],
-      filePath: imported.file,
-      imported: imported.imported,
-      source: toPosix(relative(repoRoot, filePath)),
-      line: sourceLineFor(source, match.index),
-    });
+    mounts.push({ mountPath: match[2], filePath: imported.file });
   }
   return mounts;
 }
 
-export function buildApiRouteCatalog({ repoRoot = REPO_ROOT, indexSource } = {}) {
+/**
+ * Walk the mounted route graph and return everything the scan learned,
+ * including the `declarationKeys` that never reach the manifest —
+ * `buildApiRouteCatalog` narrows this to the serializable subset.
+ */
+export function scanRouteGraph({ repoRoot = REPO_ROOT, indexSource } = {}) {
   const indexPath = join(repoRoot, INDEX_RELATIVE_PATH);
   const source = indexSource ?? readFileSync(indexPath, 'utf8');
-  const topLevelMounts = parseTopLevelMounts({ source, filePath: indexPath, repoRoot });
+  const topLevelMounts = parseTopLevelMounts({ source, filePath: indexPath });
   const moduleCache = new Map();
   const operations = new Map();
   const declarationKeys = new Set();
@@ -187,14 +205,14 @@ export function buildApiRouteCatalog({ repoRoot = REPO_ROOT, indexSource } = {})
 
   const record = ({ method, path, mountPath, declaration }) => {
     const key = `${method.toUpperCase()} ${path}`;
-    declarationKeys.add(`${declaration.source}:${declaration.line}:${method}`);
+    declarationKeys.add(routeDeclarationKey(declaration));
     const existing = operations.get(key) || {
       method: method.toUpperCase(),
       path,
       mountPath,
       sources: [],
     };
-    existing.sources.push({ source: declaration.source, line: declaration.line });
+    existing.sources.push(declaration.source);
     operations.set(key, existing);
   };
 
@@ -260,18 +278,45 @@ export function buildApiRouteCatalog({ repoRoot = REPO_ROOT, indexSource } = {})
   }
 
   const routes = [...operations.values()]
-    .map((operation) => ({ ...operation, sources: uniqueSortedSources(operation.sources) }))
+    .map((operation) => ({ ...operation, sources: [...new Set(operation.sources)].sort() }))
     .sort((a, b) => a.path.localeCompare(b.path) || a.method.localeCompare(b.method));
 
+  // Collisions are counted PER MODULE, from the parsed declarations rather than
+  // from `record`: one router mounted at two prefixes reaches `record` twice
+  // with the same declaration, which is the same binding seen twice, not two
+  // bindings sharing a key. Within a single file, a repeated key is the real
+  // thing — a duplicate registration, or two shadowed routers sharing a name.
+  const duplicateDeclarationKeys = [...moduleCache.values()].flatMap((module) => {
+    const seen = new Set();
+    return module.routes
+      .map((declaration) => routeDeclarationKey(declaration))
+      .filter((key) => {
+        if (seen.has(key)) return true;
+        seen.add(key);
+        return false;
+      });
+  }).sort();
+
   return {
-    schemaVersion: 1,
     mounts: [...new Set(topLevelMounts.map((mount) => mount.mountPath))].sort(),
     routes,
+    declarationKeys,
+    duplicateDeclarationKeys,
+    sourceFileCount: moduleCache.size,
+  };
+}
+
+export function buildApiRouteCatalog(options = {}) {
+  const { mounts, routes, declarationKeys, sourceFileCount } = scanRouteGraph(options);
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    mounts,
+    routes,
     stats: {
-      mounts: new Set(topLevelMounts.map((mount) => mount.mountPath)).size,
+      mounts: mounts.length,
       operations: routes.length,
       declarations: declarationKeys.size,
-      sourceFiles: moduleCache.size,
+      sourceFiles: sourceFileCount,
     },
   };
 }

@@ -12,15 +12,18 @@
  * about which file a relative or `~`-prefixed path means.
  */
 
-import { createWriteStream } from 'fs';
-import { rename, rm, stat } from 'fs/promises';
-import { dirname, resolve } from 'path';
-import { randomBytes } from 'crypto';
-import { Readable, Transform } from 'stream';
-import { pipeline } from 'stream/promises';
-import { ensureDir, expandHome } from '../lib/fileUtils.js';
+import { stat } from 'fs/promises';
+import { resolve } from 'path';
+import { expandHome } from '../lib/fileUtils.js';
 import { isProjectorName, isShardedGguf } from '../lib/localLlmDisk.js';
 import { ServerError } from '../lib/errorHandler.js';
+import {
+  assessDownloadPreflight,
+  assertDownloadFits,
+  probeRemoteSize,
+  siblingDownloadMeta,
+  streamResumableDownload,
+} from '../lib/downloadPreflight.js';
 import { buildHfAuthHeaders, buildHfResolveUrl, fetchHuggingfaceModel, modelSiblingFilenames } from '../lib/huggingfaceLora.js';
 import { getHfToken } from './hfToken.js';
 import {
@@ -159,65 +162,55 @@ export function pickGgufSibling(model, { file, quant, repo }) {
   );
 }
 
-const streamToFile = async ({ url, headers, destPath, onBytes, signal, onIdleStall }) => {
-  let idleTimer = null;
-  const clearIdleTimer = () => {
-    if (!idleTimer) return;
-    clearTimeout(idleTimer);
-    idleTimer = null;
-  };
-  const resetIdleTimer = () => {
-    clearIdleTimer();
-    idleTimer = setTimeout(() => {
-      // This callback is outside Express's error lifecycle, so never permit a
-      // timer failure to take down the server.
-      try {
-        onIdleStall();
-      } catch (err) {
-        console.error(`❌ Speculative-decoding download watchdog failed: ${err.message}`);
-      }
-    }, IDLE_STALL_TIMEOUT_MS);
-    idleTimer.unref?.();
-  };
-
-  resetIdleTimer();
-  try {
-    const res = await fetch(url, { headers, redirect: 'follow', signal });
-    if (!res.ok || !res.body) {
-      if (res.status === 401 || res.status === 403) {
-        throw new ServerError(
-          `Hugging Face rejected the download (${res.status}) — this repo is gated. Accept its license on Hugging Face and add your HF token in Image Gen settings, then retry.`,
-          { status: res.status, code: 'HF_AUTH' },
-        );
-      }
-      throw new ServerError(`Hugging Face download failed: ${res.status} ${res.statusText}`, { status: 502, code: 'HF_DOWNLOAD_FAILED' });
-    }
-    const total = Number(res.headers?.get?.('content-length')) || 0;
-    // A random temp suffix keeps a crashed transfer's leftovers from being
-    // mistaken for this one's, and keeps the half-written file out of the
-    // launcher's existence check until it is complete.
-    const tmpPath = `${destPath}.${randomBytes(6).toString('hex')}.partial`;
-    await ensureDir(dirname(destPath));
-    let received = 0;
-    // Count bytes in a passthrough Transform, NOT a bare `.on('data')` listener —
-    // that flips the source into flowing mode and defeats pipeline backpressure.
-    const counter = new Transform({
-      transform(chunk, _enc, cb) {
-        received += chunk.length;
-        resetIdleTimer();
-        onBytes(received, total);
-        cb(null, chunk);
-      },
-    });
-    await pipeline(Readable.fromWeb(res.body), counter, createWriteStream(tmpPath)).catch(async (err) => {
-      await rm(tmpPath, { force: true }).catch(() => {});
-      throw err;
-    });
-    await rename(tmpPath, destPath);
-    return { bytes: received || total };
-  } finally {
-    clearIdleTimer();
+const hfDownloadHttpError = (res) => {
+  if (res.status === 401 || res.status === 403) {
+    throw new ServerError(
+      `Hugging Face rejected the download (${res.status}) — this repo is gated. Accept its license on Hugging Face and add your HF token in Image Gen settings, then retry.`,
+      { status: res.status, code: 'HF_AUTH' },
+    );
   }
+  throw new ServerError(`Hugging Face download failed: ${res.status} ${res.statusText}`, { status: 502, code: 'HF_DOWNLOAD_FAILED' });
+};
+
+const streamToFile = async ({ url, headers, destPath, onBytes, signal, onIdleStall, expectedSha256, isCancelled }) => (
+  streamResumableDownload({
+    url,
+    headers,
+    destPath,
+    onBytes,
+    signal,
+    onIdleStall,
+    idleStallTimeoutMs: IDLE_STALL_TIMEOUT_MS,
+    expectedSha256,
+    isCancelled,
+    onHttpError: hfDownloadHttpError,
+  })
+);
+
+const siblingFor = (model, filename) => {
+  const siblings = Array.isArray(model?.siblings) ? model.siblings : [];
+  return siblings.find((row) => row?.rfilename === filename) || null;
+};
+
+// The preview path (previewSpecDecodeDownload) calls this with no signal —
+// a real download's own abort chain covers the actual transfer, but a
+// metadata/size lookup that just blocks the confirm modal needs its own
+// bound, or a stalled-but-reachable HF hangs the preview indefinitely.
+const METADATA_FETCH_TIMEOUT_MS = 10_000;
+
+const resolveSpecDownloadPlan = async ({ source, destPath, token, signal }) => {
+  const boundedSignal = signal || AbortSignal.timeout(METADATA_FETCH_TIMEOUT_MS);
+  const headers = buildHfAuthHeaders(token);
+  const model = await fetchHuggingfaceModel(source.repo, { token, signal: boundedSignal });
+  const file = pickGgufSibling(model, { file: source.file, quant: source.quant, repo: source.repo });
+  const url = buildHfResolveUrl(source.repo, 'main', file);
+  let meta = siblingDownloadMeta(siblingFor(model, file));
+  if (!meta.bytes) {
+    const probed = await probeRemoteSize(url, { headers, signal: boundedSignal });
+    meta = { bytes: probed.bytes || meta.bytes, sha256: meta.sha256 || probed.sha256 };
+  }
+  const preflight = await assessDownloadPreflight({ destPath, expectedBytes: meta.bytes });
+  return { file, url, headers, meta, preflight };
 };
 
 const downloadAbortError = (state) => {
@@ -278,18 +271,24 @@ export async function downloadSpecDecodeModel({ presetId, role, onProgress = () 
   let lastEmit = 0;
   try {
     const token = await getHfToken();
-    const headers = buildHfAuthHeaders(token);
     throwIfAborted(state);
     onProgress({ event: 'start', presetId, role, path: source.path, message: `Resolving ${source.repo} on Hugging Face…` });
-    const model = await fetchHuggingfaceModel(source.repo, { token, signal: state.controller.signal });
-    throwIfAborted(state);
-    const file = pickGgufSibling(model, { file: source.file, quant: source.quant, repo: source.repo });
-    console.log(`⬇️  Downloading speculative-decoding weights ${source.repo}/${file} → ${source.path}`);
-    const { bytes } = await streamToFile({
-      url: buildHfResolveUrl(source.repo, 'main', file),
-      headers,
+    const plan = await resolveSpecDownloadPlan({
+      source,
       destPath,
+      token,
       signal: state.controller.signal,
+    });
+    throwIfAborted(state);
+    assertDownloadFits(plan.preflight);
+    console.log(`⬇️  Downloading speculative-decoding weights ${source.repo}/${plan.file} → ${source.path}`);
+    const { bytes } = await streamToFile({
+      url: plan.url,
+      headers: plan.headers,
+      destPath,
+      expectedSha256: plan.meta.sha256,
+      signal: state.controller.signal,
+      isCancelled: () => state.abortReason === 'cancelled',
       onIdleStall: () => {
         state.abortReason = 'stalled';
         state.controller.abort();
@@ -305,7 +304,7 @@ export async function downloadSpecDecodeModel({ presetId, role, onProgress = () 
     });
     onProgress({ event: 'complete', presetId, role, path: source.path, received: bytes, total: bytes, message: `${source.path} downloaded` });
     console.log(`✅ Speculative-decoding weights ready: ${source.path} (${bytes} bytes)`);
-    return { success: true, path: source.path, repo: source.repo, file, sizeBytes: bytes };
+    return { success: true, path: source.path, repo: source.repo, file: plan.file, sizeBytes: bytes };
   } catch (err) {
     const error = state.abortReason ? downloadAbortError(state) : err;
     const event = state.abortReason === 'cancelled' ? 'cancelled' : 'error';
@@ -321,6 +320,49 @@ export async function downloadSpecDecodeModel({ presetId, role, onProgress = () 
   }
 }
 
+/**
+ * Size / dest / free-disk numbers for the confirm step — no transfer starts.
+ * `alreadyDownloaded` short-circuits the confirm; `verdict: insufficient`
+ * is returned rather than thrown so the UI can disable Confirm instead of
+ * toasting a failure the user hasn't committed to yet.
+ */
+export async function previewSpecDecodeDownload({ presetId, role }) {
+  if (!SPEC_MODEL_ROLES.includes(role)) {
+    throw new ServerError(`Unknown model role "${role}"`, { status: 400 });
+  }
+  const source = specDecodeSource(presetId, role);
+  if (!source) {
+    throw new ServerError(
+      `No Hugging Face source is registered for that preset's ${role === 'model' ? 'base model' : 'drafter'} — download it manually and point the field at the file.`,
+      { status: 400, code: 'SPEC_NO_SOURCE' },
+    );
+  }
+  const destPath = resolveSpecModelPath(source.path);
+  const existing = await fileStat(source.path);
+  if (existing) {
+    return {
+      kind: 'spec-decode',
+      destPath: source.path,
+      expectedBytes: existing.size,
+      requiredBytes: 0,
+      headroomBytes: 0,
+      freeBytes: null,
+      verdict: 'ok',
+      alreadyDownloaded: true,
+      file: null,
+    };
+  }
+  const token = await getHfToken();
+  const plan = await resolveSpecDownloadPlan({ source, destPath, token });
+  return {
+    kind: 'spec-decode',
+    file: plan.file,
+    alreadyDownloaded: false,
+    ...plan.preflight,
+    destPath: source.path,
+  };
+}
+
 /** Cancel one active curated GGUF download. Returns false when none is active. */
 export function cancelSpecDecodeModelDownload({ presetId, role }) {
   if (!SPEC_MODEL_ROLES.includes(role)) {
@@ -333,6 +375,16 @@ export function cancelSpecDecodeModelDownload({ presetId, role }) {
   state.abortReason = 'cancelled';
   state.controller.abort();
   return true;
+}
+
+/** True while a curated GGUF download is writing `destPath` (or its `.partial`). */
+export function isSpecDecodeDownloadInFlight(destPath) {
+  if (!destPath) return false;
+  if (inFlight.has(destPath)) return true;
+  if (String(destPath).endsWith('.partial')) {
+    return inFlight.has(destPath.slice(0, -'.partial'.length));
+  }
+  return false;
 }
 
 /** Clears in-flight download bookkeeping (used by test suites). */

@@ -17,6 +17,7 @@ import GoalScorecardTab from '../components/insights/GoalScorecardTab';
 import ConfidenceBadge from '../components/insights/ConfidenceBadge';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import { timeAgo } from '../utils/formatters';
 
 // Exported for the nav-manifest tab-coverage guard (server/lib/navManifest.test.js).
@@ -27,17 +28,6 @@ export const TABS = [
   { id: 'cross-domain', label: 'Cross-Domain Patterns', icon: Link2 },
   { id: 'goal-scorecard', label: 'Goal Scorecard', icon: Target }
 ];
-
-function SummaryCardSkeleton() {
-  return (
-    <div className="bg-port-card border border-port-border rounded-lg p-6 animate-pulse">
-      <div className="h-5 bg-gray-700 rounded w-2/3 mb-3" />
-      <div className="h-8 bg-gray-800 rounded w-1/2 mb-2" />
-      <div className="h-3 bg-gray-800 rounded w-full mb-1" />
-      <div className="h-3 bg-gray-800 rounded w-4/5" />
-    </div>
-  );
-}
 
 export function OverviewTab() {
   const navigate = useNavigate();
@@ -72,11 +62,13 @@ export function OverviewTab() {
 
   if (loading) {
     return (
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <SummaryCardSkeleton />
-        <SummaryCardSkeleton />
-        <SummaryCardSkeleton />
-      </div>
+      <PageSkeleton
+        header="none"
+        label="Loading insights overview"
+        layout="grid"
+        gridColsClass="lg:grid-cols-3"
+        cards={3}
+      />
     );
   }
 

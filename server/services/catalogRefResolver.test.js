@@ -14,6 +14,7 @@
 
 import { describe, it, expect, afterAll, beforeAll, beforeEach } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../lib/db.js';
+import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { REF_TARGET_TABLES, RESOLVABLE_REF_KINDS } from './catalogRefResolver.js';
 import { REF_KINDS } from '../lib/catalogValidation.js';
 
@@ -44,7 +45,7 @@ let skipReason = '';
     else skipReason = 'catalog_ingredient_refs table not present';
   }
 }
-if (!dbReady) console.log(`⏭️  catalogRefResolver.test.js (live) skipped: ${skipReason}`);
+const runDb = requireDbOrSkip('services/catalogRefResolver.test', dbReady, skipReason);
 
 // The catalog refs table FKs ingredient_id → catalog_ingredients(id), so we
 // need a real ingredient row (ING) to hang refs on. Synthetic target rows use a
@@ -62,7 +63,7 @@ async function cleanSynthetic() {
   await query(`DELETE FROM catalog_ingredients WHERE id = $1`, [ING]).catch(() => {});
 }
 
-describe.skipIf(!dbReady)('catalog ref resolver — live resolution + dangling report', () => {
+describe.skipIf(!runDb)('catalog ref resolver — live resolution + dangling report', () => {
   let resolver;
 
   beforeAll(async () => { resolver = await import('./catalogRefResolver.js'); });

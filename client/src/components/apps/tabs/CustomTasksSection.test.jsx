@@ -21,6 +21,7 @@ const task = {
   id: 'job-1',
   appId: 'app-1',
   name: 'Example Task',
+  description: 'A short card summary',
   enabled: true,
   type: 'agent',
   interval: 'daily',
@@ -102,6 +103,7 @@ describe('CustomTasksSection trigger outcomes', () => {
     await screen.findByText('Example Task');
     fireEvent.click(screen.getByRole('button', { name: /New Custom Task/ }));
     fireEvent.change(screen.getByPlaceholderText('Task name *'), { target: { value: 'Pinned Task' } });
+    fireEvent.change(screen.getByPlaceholderText('One-line summary (optional)'), { target: { value: 'A concise card summary' } });
     fireEvent.change(screen.getByPlaceholderText('Prompt for the agent *'), { target: { value: 'Do the thing' } });
     fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'codex' } });
     fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'gpt-5' } });
@@ -112,6 +114,7 @@ describe('CustomTasksSection trigger outcomes', () => {
     await waitFor(() => expect(api.createCosJob).toHaveBeenCalledWith(expect.objectContaining({
       appId: 'app-1',
       type: 'agent',
+      description: 'A concise card summary',
       providerId: 'codex',
       model: 'gpt-5',
       effort: 'high',

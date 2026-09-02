@@ -4,9 +4,8 @@
  *
  * This module holds only pure helpers (base64 read, validation, constants) —
  * no I/O. The upload orchestration that actually POSTs to the server
- * (`uploadScreenshotFile` / `processScreenshotUploads` / `uploadAttachmentFile`
- * / `processAttachmentUploads`) lives in `../services/apiMedia.js`; import it
- * from there directly.
+ * (`processScreenshotUploads` / `processAttachmentUploads`) lives in
+ * `../services/apiMedia.js`; import those from there directly.
  */
 
 import { formatBytes } from './formatters';

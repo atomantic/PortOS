@@ -4,8 +4,10 @@ import { getClaudeCodeUsage } from '../services/claudeCodeUsage.js';
 import { getProviderQuotas } from '../services/providerUsage.js';
 import { getAllProviders } from '../services/providers.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest, usageQuerySchema, usageMessagesSchema, providerUsageQuerySchema, subscriptionCostsSchema } from '../lib/validation.js';
+import { validateRequest, usageQuerySchema, usageMessagesSchema, providerUsageQuerySchema, subscriptionCostsSchema, usageFleetBillingSchema } from '../lib/validation.js';
 import { saveSubscriptionCosts, getSubscriptionSavings } from '../services/subscriptionCosts.js';
+import { getFleetUsage } from '../services/peerUsage.js';
+import { getApiBilledInstanceIds, setInstanceUsesSubscriptions } from '../services/usageFleetBilling.js';
 import { resolveUsageRange } from '../lib/usageRange.js';
 import { WAIT } from '../lib/staleWhileRevalidate.js';
 import {
@@ -23,19 +25,27 @@ router.get('/', asyncHandler(async (req, res) => {
   const result = await getAllProviders();
   const providers = Array.isArray(result) ? result : (result?.providers || []);
   const summary = usage.getUsageSummary({ from, to, providers });
-  // The report prices this window's usage at published API rates; the savings
-  // block says what the user's flat-rate plans cost over the SAME window, so
-  // the headline figure has something to be compared against.
-  const subscriptionSavings = await getSubscriptionSavings({
-    report: summary.report,
-    providers,
-    from,
-    to,
-    // Only an unbounded ("All time") window needs a start day inferred from
-    // history; every other range already has one, so don't pay the scan.
-    firstActivityDay: from ? null : usage.getFirstActivityDay()
-  });
-  res.json({ ...summary, subscriptionSavings });
+  // Two independent reads over the same resolved window, so they overlap:
+  // - savings: what the user's flat-rate plans cost over the SAME window, so
+  //   the headline API-rate figure has something to be compared against.
+  // - fleet: the per-instance breakdown across the federation, priced over the
+  //   same window by the same report builder. Empty on a single-machine install
+  //   (or before a peer's first usage sync) — the UI hides that section rather
+  //   than showing a one-row "fleet".
+  const [subscriptionSavings, fleet] = await Promise.all([
+    getSubscriptionSavings({
+      report: summary.report,
+      providers,
+      from,
+      to,
+      // Only an unbounded ("All time") window needs a start day inferred from
+      // history; every other range already has one, so don't pay the scan.
+      firstActivityDay: from ? null : usage.getFirstActivityDay()
+    }),
+    getApiBilledInstanceIds().then((apiBilledInstanceIds) =>
+      getFleetUsage({ from, to, providers, apiBilledInstanceIds })),
+  ]);
+  res.json({ ...summary, subscriptionSavings, fleet });
 }));
 
 // PUT /api/usage/subscriptions - Merge plan prices. An omitted family keeps its
@@ -43,6 +53,15 @@ router.get('/', asyncHandler(async (req, res) => {
 router.put('/subscriptions', asyncHandler(async (req, res) => {
   const { costs } = validateRequest(subscriptionCostsSchema, req.body);
   res.json({ costs: await saveSubscriptionCosts(costs, { actor: 'user' }) });
+}));
+
+// PUT /api/usage/fleet-billing - Mark one federated instance as paying API
+// rates (`usesSubscriptions: false`) or riding the viewer's subscriptions
+// (`true`). The Across Instances combined total skips API-billed rows.
+router.put('/fleet-billing', asyncHandler(async (req, res) => {
+  const { instanceId, usesSubscriptions } = validateRequest(usageFleetBillingSchema, req.body);
+  const apiBilledInstanceIds = await setInstanceUsesSubscriptions(instanceId, usesSubscriptions, { actor: 'user' });
+  res.json({ instanceId, usesSubscriptions, apiBilledInstanceIds });
 }));
 
 // GET /api/usage/providers - Subscription-quota status for every enabled

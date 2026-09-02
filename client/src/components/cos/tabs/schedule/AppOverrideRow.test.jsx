@@ -12,6 +12,7 @@ function renderRow({
   taskType = 'feature-ideas',
   fileIssuesCapable,
   defaultFileIssues,
+  doWorkRequiresWorktree,
   inheritedProviderText,
   providers,
 } = {}) {
@@ -24,6 +25,7 @@ function renderRow({
       managedAgentOptions={[]}
       fileIssuesCapable={fileIssuesCapable}
       defaultFileIssues={defaultFileIssues}
+      doWorkRequiresWorktree={doWorkRequiresWorktree}
       inheritedProviderText={inheritedProviderText}
       providers={providers}
       override={override}
@@ -186,6 +188,22 @@ describe('AppOverrideRow — file issues only', () => {
     });
     expect(onUpdate).toHaveBeenCalledWith('app-1', 'security', {
       taskMetadata: { fileIssues: true, useWorktree: false, openPR: false, simplify: false },
+    });
+  });
+
+  it('restores required worktree isolation in a per-app do-work override', async () => {
+    const onUpdate = renderRow({
+      taskType: 'module-hygiene',
+      fileIssuesCapable: true,
+      defaultFileIssues: true,
+      doWorkRequiresWorktree: true,
+      globalTaskMetadata: { fileIssues: true, useWorktree: false, openPR: false },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /File issues only/i }));
+    });
+    expect(onUpdate).toHaveBeenCalledWith('app-1', 'module-hygiene', {
+      taskMetadata: { fileIssues: false, useWorktree: true },
     });
   });
 });

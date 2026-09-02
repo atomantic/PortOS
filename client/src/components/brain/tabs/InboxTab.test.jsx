@@ -5,7 +5,6 @@ import { MemoryRouter } from 'react-router';
 vi.mock('../../../services/api', () => ({
   getBrainInbox: vi.fn(),
   captureBrainThought: vi.fn(),
-  getBrainInboxEntry: vi.fn(),
   resolveBrainReview: vi.fn(),
   fixBrainClassification: vi.fn(),
   retryBrainClassification: vi.fn(),

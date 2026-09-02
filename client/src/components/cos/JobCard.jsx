@@ -363,6 +363,9 @@ export default function JobCard({
               </span>
             )}
           </div>
+          {job.description?.trim() && (
+            <p className="text-xs text-gray-400 truncate mt-1" title={job.description}>{job.description}</p>
+          )}
           <div className="flex items-center gap-3 text-xs text-gray-500 mt-1 flex-wrap">
             <span className="flex items-center gap-1">
               <Clock size={10} />
@@ -422,9 +425,14 @@ export default function JobCard({
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
                 />
               </FormField>
-              <FormField label="Description" labelClassName="block text-xs text-gray-400 mb-1">
+              <FormField
+                label="Card summary"
+                hint="Shown beneath the task name on its card."
+                labelClassName="block text-xs text-gray-400 mb-1"
+              >
                 <input
                   type="text"
+                  placeholder="One-line summary (optional)"
                   value={editData.description}
                   onChange={e => setEditData(d => ({ ...d, description: e.target.value }))}
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
@@ -522,7 +530,7 @@ export default function JobCard({
               ) : editData.type === 'script' ? (
                 <div className="space-y-1">
                   <span className="text-xs text-gray-400">Legacy script command (read-only)</span>
-                  <pre className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-gray-400 text-sm font-mono">{editData.command || 'No command'}</pre>
+                  <pre className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-gray-400 text-sm font-mono whitespace-pre-wrap break-all">{editData.command || 'No command'}</pre>
                 </div>
               ) : (
                 <textarea
@@ -577,13 +585,13 @@ export default function JobCard({
               {isShell && job.lastOutput && (
                 <details className="group">
                   <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300 transition-colors">Last output (exit {job.lastExitCode})</summary>
-                  <pre className="mt-2 p-3 bg-port-bg border border-port-border rounded-lg text-xs text-gray-400 font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">{job.lastOutput}</pre>
+                  <pre className="mt-2 p-3 bg-port-bg border border-port-border rounded-lg text-xs text-gray-400 font-mono whitespace-pre-wrap break-all max-h-48 overflow-y-auto">{job.lastOutput}</pre>
                 </details>
               )}
               {!isShell && !isScript && (
                 <details className="group">
                   <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300 transition-colors">View prompt template</summary>
-                  <pre className="mt-2 p-3 bg-port-bg border border-port-border rounded-lg text-xs text-gray-400 font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">{job.promptTemplate}</pre>
+                  <pre className="mt-2 p-3 bg-port-bg border border-port-border rounded-lg text-xs text-gray-400 font-mono whitespace-pre-wrap break-words max-h-48 overflow-y-auto">{job.promptTemplate}</pre>
                 </details>
               )}
               {isConfirming(job.id) ? (

@@ -683,6 +683,17 @@ describe('installFromCivitai', () => {
     ).rejects.toThrow(/not a LoRA/);
   });
 
+  // previewCivitaiInstall shares its filename/guard logic with the real
+  // install (resolveCivitaiInstallPlan) — a preview that didn't share it
+  // would show a normal confirm dialog (size, destination, enabled Confirm)
+  // for a download that could never actually start.
+  it('previewCivitaiInstall refuses a non-LoRA model type, same as the real install', async () => {
+    const fetchImpl = async () => (mockJsonResponse({ ...FAKE_MODEL, type: 'Checkpoint' }));
+    await expect(
+      lorasService.previewCivitaiInstall({ url: 'https://civitai.com/models/2600698' }, { fetchImpl }),
+    ).rejects.toThrow(/not a LoRA/);
+  });
+
   it('accepts LoRA-family types case-insensitively (DoRA, Lora, lycoris)', async () => {
     // Civitai's `type` casing isn't stable in the wild — DoRA / LoHA / Lora
     // / lower-case variants are all the same family from diffusers' POV.
@@ -835,7 +846,7 @@ describe('installFromHuggingface', () => {
         const stream = new ReadableStream({
           start(c) { c.enqueue(new Uint8Array(validSafetensors())); c.close(); },
         });
-        return { ok: true, status: 200, body: stream };
+        return { ok: true, status: 200, headers: { get: (name) => (name === 'etag' ? '"lora-etag"' : null) }, body: stream };
       }
       throw new Error(`unexpected fetch: ${url}`);
     };
@@ -850,6 +861,31 @@ describe('installFromHuggingface', () => {
     expect(sidecar.triggerWords).toEqual(['audio reactive']);
     // The picked file is the canonical diffusers weights, not the README.
     expect(calls.some((u) => u.includes('/resolve/main/pytorch_lora_weights.safetensors'))).toBe(true);
+    // downloadToFile's `finalize: false` means streamResumableDownload never
+    // runs its own etag-sidecar cleanup — a successful install must still
+    // remove it (nothing left it there for a future resume to use).
+    expect(existsSync(join(tmpLoras, `${sidecar.filename}.partial.etag`))).toBe(false);
+  });
+
+  // HF's model-metadata response never carries per-sibling sizes (the
+  // `blobs=true` expand is deliberately not requested), so the preflight
+  // must probe the resolved file's own Content-Length via a HEAD request —
+  // otherwise expectedBytes stays 0 and disk-insufficient can never fire.
+  it('previews the probed Content-Length when the metadata response has no sibling size', async () => {
+    const fetchImpl = async (url, opts = {}) => {
+      if (url.startsWith('https://huggingface.co/api/models/fal/ltx2.3-audio-reactive-lora')) {
+        return mockJsonResponse(HF_MODEL);
+      }
+      if (url.includes('/resolve/main/pytorch_lora_weights.safetensors') && opts.method === 'HEAD') {
+        return { ok: true, status: 200, headers: { get: (name) => (name === 'content-length' ? '123456789' : null) } };
+      }
+      throw new Error(`unexpected fetch: ${url} ${opts.method || 'GET'}`);
+    };
+    const preview = await lorasService.previewHuggingfaceInstall(
+      { url: 'https://huggingface.co/fal/ltx2.3-audio-reactive-lora', token: 'hf_test' },
+      { fetchImpl },
+    );
+    expect(preview.expectedBytes).toBe(123456789);
   });
 
   it('installs an exact versioned file beside the repo default', async () => {

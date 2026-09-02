@@ -1,10 +1,59 @@
-import { effectiveModelFor, effortAwareModelOptions, effortSurvivingModel } from '../../../../utils/providers';
-import { FormField } from '../../../ui/FormField';
-import EffortSelect from '../../EffortSelect';
-import { pipelineStages } from './scheduleConstants';
+import { useMemo } from 'react';
+import { Link } from 'react-router';
+import {
+  effortAwareModelOptions,
+  effortSurvivingModel,
+  localBackendForProvider,
+  publicReviewSelectionPolicy,
+  supportsPublicReviewPosture,
+  PUBLIC_REVIEW_ACTIONS_POSTURE,
+  PUBLIC_REVIEW_NO_TOOL_POSTURE,
+} from '../../../../utils/providers';
+import useLocalModels from '../../../../hooks/useLocalModels';
+import ProviderModelSelector from '../../../ProviderModelSelector';
+import ToggleSwitch from '../../../ToggleSwitch';
+import {
+  pipelineStages,
+  prReviewerStageRole,
+  stagePublicReviewPosture,
+  togglePrReviewerActions,
+} from './scheduleConstants';
+
+// Which providers on THIS install can enforce a posture. The server publishes
+// `publicReviewPostures` per provider, derived from the vendor rows, so the
+// picker never carries its own list of vendor names — an install with only
+// grok, only codex, or only a local Claude wrapper each get a correct list.
+const eligibleProvidersFor = (providers, posture) =>
+  (providers || []).filter((provider) => supportsPublicReviewPosture(provider, posture));
 
 export default function PipelineStageConfig({ taskType, config, providers, onUpdate, updating, setUpdating }) {
   const stages = pipelineStages(config);
+  const needsSecurityModelPolicy = taskType === 'pr-reviewer';
+  const { ollama, lmstudio, capabilitiesByBackend, loading: localModelsLoading } = useLocalModels({
+    enabled: needsSecurityModelPolicy,
+  });
+  // One policy per posture. The provider half is server-derived; the model half
+  // adds the authoritative no-tool capability check only for a local runtime,
+  // which is the only place PortOS can probe it.
+  const selectionPolicies = useMemo(() => ({
+    [PUBLIC_REVIEW_NO_TOOL_POSTURE]: publicReviewSelectionPolicy(PUBLIC_REVIEW_NO_TOOL_POSTURE, capabilitiesByBackend),
+    [PUBLIC_REVIEW_ACTIONS_POSTURE]: publicReviewSelectionPolicy(PUBLIC_REVIEW_ACTIONS_POSTURE, capabilitiesByBackend),
+  }), [capabilitiesByBackend]);
+
+  const hasActionsStage = stages.some((stage) => prReviewerStageRole(stage) === 'actions');
+
+  const handlePrReviewerActionsToggle = async (enabled) => {
+    setUpdating(true);
+    const updatedMeta = {
+      ...config.taskMetadata,
+      pipeline: {
+        ...config.taskMetadata.pipeline,
+        stages: togglePrReviewerActions(stages, enabled),
+      },
+    };
+    await onUpdate(taskType, { taskMetadata: updatedMeta }).catch(() => {});
+    setUpdating(false);
+  };
 
   const handleStageUpdate = async (stageIndex, field, value) => {
     setUpdating(true);
@@ -42,14 +91,63 @@ export default function PipelineStageConfig({ taskType, config, providers, onUpd
   return (
     <div>
       <h4 className="text-sm font-medium text-gray-400 mb-3">Pipeline Stages</h4>
+      {needsSecurityModelPolicy && (
+        <div className="rounded-lg border border-port-accent-2/30 bg-port-bg/60 px-3 py-3 mb-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium text-white">Run final code review and actions</p>
+              <p className="text-xs text-gray-400 mt-1">
+                When enabled, a sandbox-capable reviewer applies only the screened patch, runs local tests, and returns a structured review for the deterministic GitHub coordinator. It is nested here, not a separate scheduled task.
+              </p>
+            </div>
+            <ToggleSwitch
+              enabled={hasActionsStage}
+              onChange={() => handlePrReviewerActionsToggle(!hasActionsStage)}
+              disabled={updating}
+              ariaLabel="Enable final code review and actions"
+              size="sm"
+            />
+          </div>
+          {!hasActionsStage && (
+            <p className="text-xs text-port-warning mt-2">
+              Disabled runs stop after the tool-free eligibility gate; no PR comments, issue filing, CI triggers, or merge actions occur.
+            </p>
+          )}
+        </div>
+      )}
       <div className="space-y-3">
         {stages.map((stage, i) => {
           const stageProvider = providers?.find(p => p.id === stage.providerId);
-          // Each stage persists its own effort, so Antigravity lists BASE models
-          // with the tier picked beside them. A stage saved before the split
-          // keeps its suffixed id as its own option and still runs (the server
-          // splits it into `--model` + `--effort`).
-          const stageModels = effortAwareModelOptions(stageProvider, stage.model);
+          const role = needsSecurityModelPolicy
+            ? (prReviewerStageRole(stage) || (i === 0 ? 'security' : i === 1 ? 'eligibility' : 'actions'))
+            : null;
+          const isSecurityStage = role === 'security';
+          // The posture is read off the stage's own execution profile, so a
+          // custom pipeline that reuses one of these profiles gets the same
+          // gating without being a pr-reviewer stage.
+          const posture = isSecurityStage ? null : stagePublicReviewPosture(stage);
+          const isNoToolStage = posture === PUBLIC_REVIEW_NO_TOOL_POSTURE;
+          const isActionsStage = Boolean(posture) && !isNoToolStage;
+          const eligibleProviders = posture ? eligibleProvidersFor(providers, posture) : null;
+          const localBackend = localBackendForProvider(stageProvider);
+          const localModelIds = localBackend === 'ollama' ? ollama : localBackend === 'lmstudio' ? lmstudio : [];
+          // A LOCAL provider's installed-model list is the source of truth (its
+          // stored catalog is stale, and only an installed model has a probeable
+          // capability report). Every other provider uses its own catalog, so a
+          // cloud CLI stage can pick any model that provider offers.
+          const stageModels = isNoToolStage && localBackend
+            ? localModelIds.map(id => ({
+              id,
+              name: id,
+              capabilities: capabilitiesByBackend?.[localBackend]?.[id],
+            }))
+            : effortAwareModelOptions(stageProvider, stage.model);
+          const selectionPolicy = posture ? selectionPolicies[posture] : undefined;
+          const stageProviderId = stage.providerId || '';
+          const stageModel = stage.model || '';
+          const stageEffort = stage.effort || '';
+
+          const updateStage = (field, value) => handleStageUpdate(i, field, value || null);
           return (
             <div key={i} className="bg-port-card border border-port-border rounded-lg p-3">
               <div className="flex items-center gap-2 mb-3">
@@ -57,57 +155,76 @@ export default function PipelineStageConfig({ taskType, config, providers, onUpd
                 {stage.readOnly && (
                   <span className="text-[10px] px-1 py-0.5 bg-gray-600/30 text-gray-400 rounded">read-only</span>
                 )}
+                {isNoToolStage && (
+                  <span className="text-[10px] px-1 py-0.5 bg-port-accent/15 text-port-accent rounded">tool-free gate</span>
+                )}
+                {isActionsStage && (
+                  <span className="text-[10px] px-1 py-0.5 bg-port-accent-2/15 text-port-accent-2 rounded">sandboxed actions</span>
+                )}
                 <span className="text-sm text-white font-medium">{stage.name}</span>
                 {i < stages.length - 1 && (
                   <span className="text-gray-500 ml-auto text-xs">→ Stage {i + 2}</span>
                 )}
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <FormField label="Provider" labelClassName="text-xs text-gray-500 block mb-1">
-                  <select
-                    value={stage.providerId || ''}
-                    onChange={(e) => handleStageUpdate(i, 'providerId', e.target.value || null)}
-                    disabled={updating}
-                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs"
-                  >
-                    <option value="">Default (task-level)</option>
-                    {providers?.map(provider => (
-                      <option key={provider.id} value={provider.id}>{provider.name}</option>
-                    ))}
-                  </select>
-                </FormField>
-                <FormField label="Model" labelClassName="text-xs text-gray-500 block mb-1">
-                  <select
-                    value={stage.model || ''}
-                    onChange={(e) => handleStageUpdate(i, 'model', e.target.value || null)}
-                    disabled={updating}
-                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs"
-                  >
-                    <option value="">Default (task-level)</option>
-                    {stage.model && !stageModels.includes(stage.model) && (
-                      <option value={stage.model}>{stage.model}</option>
-                    )}
-                    {stageModels.map(model => (
-                      <option key={model} value={model}>{model}</option>
-                    ))}
-                  </select>
-                </FormField>
-                <EffortSelect
-                  provider={stageProvider}
-                  model={effectiveModelFor(stageProvider, stage.model)}
-                  value={stage.effort}
-                  onChange={(effort) => handleStageUpdate(i, 'effort', effort || null)}
+              {isSecurityStage && (
+                <div className="rounded-lg border border-port-accent/30 bg-port-bg/60 px-3 py-2 text-xs text-gray-300">
+                  <p className="font-medium text-port-accent">Managed Llama Prompt Guard 2 86M</p>
+                  <p className="mt-1">Fixed, pinned, offline classifier. It scans complete external content before Stage 2 and never appears as a chat model or receives tools, MCP servers, repository files, or GitHub credentials.</p>
+                  <p className="mt-1 text-gray-500">
+                    Install or check readiness from{' '}
+                    <Link to="/models/llms/abuse" className="underline hover:text-port-accent">Models → LLMs → Abuse Guard</Link>.
+                  </p>
+                </div>
+              )}
+              {!isSecurityStage && (
+                <ProviderModelSelector
+                  providers={providers || []}
+                  selectedProviderId={stageProviderId}
+                  selectedModel={stageModel}
+                  availableModels={stageModels}
+                  onProviderChange={(providerId) => updateStage('providerId', providerId)}
+                  onModelChange={(model) => updateStage('model', model)}
+                  effort={stageEffort}
+                  onEffortChange={(effort) => updateStage('effort', effort)}
+                  emptyProviderOption={posture
+                    ? 'First eligible provider on this install'
+                    : 'Default (task-level)'}
+                  emptyModelOption={posture ? 'Use provider default model' : 'Default (task-level)'}
+                  alwaysShowModel
+                  selectionPolicy={selectionPolicy}
                   disabled={updating}
-                  label="Thinking Effort"
-                  labelClassName="text-xs text-gray-500 block mb-1"
-                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs"
                 />
-              </div>
+              )}
+              {posture && eligibleProviders?.length === 0 && (
+                <p className="text-xs text-port-warning mt-2">
+                  No enabled AI provider on this install can enforce the{' '}
+                  {isActionsStage ? 'sandboxed-actions' : 'tool-free'} posture, so this stage will not run.
+                  Enable a supported CLI provider in{' '}
+                  <Link to="/ai" className="underline hover:text-port-accent">Settings → Providers</Link>.
+                </p>
+              )}
+              {isNoToolStage && eligibleProviders?.length > 0 && (
+                <p className="text-xs text-gray-500 mt-2">
+                  {localModelsLoading
+                    ? 'Loading installed local model capability reports…'
+                    : `Tool-free stage. Eligible on this install: ${eligibleProviders.map((p) => p.name || p.id).join(', ')}. A local model must additionally report no tool-calling capability; a cloud model is held tool-free by the provider's own enforced flags. Leave the provider unset to use the first eligible one. It returns only a binary allowlist; the final stage never receives rejected content.`}
+                </p>
+              )}
+              {isActionsStage && eligibleProviders?.length > 0 && (
+                <p className="text-xs text-gray-500 mt-2">
+                  {`Sandboxed stage. Eligible on this install: ${eligibleProviders.map((p) => p.name || p.id).join(', ')}. PortOS passes the selected provider, model, and thinking effort through that provider's maintained sandbox recipe, with no forge credential or configuration overlays; the deterministic coordinator owns comments, issue filing, CI triggers, and merges.`}
+                </p>
+              )}
             </div>
           );
         })}
       </div>
-      <p className="text-xs text-gray-500 mt-2">Each stage runs as a separate agent. Configure different providers per stage (e.g., Codex for review, Claude for implementation).</p>
+      <p className="text-xs text-gray-500 mt-2">
+        {needsSecurityModelPolicy
+          ? 'Stage 1 screens complete public content with a managed classifier; only cleared content reaches the tool-free Eligibility Gate, and only eligible PRs reach the optional sandboxed final review. Stages are nested, not independently scheduled.'
+          : 'Each stage runs as a separate agent inside this pipeline; stages are not scheduled independently.'}
+        {' Configure a different provider, model, and thinking effort per stage.'}
+      </p>
     </div>
   );
 }

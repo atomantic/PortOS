@@ -13,6 +13,7 @@ import {
   LayoutGrid, Image as ImageIcon, Clapperboard, Users, Settings, Mic, Lock, Unlock,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import Modal from '../components/ui/Modal';
 import TabPills from '../components/ui/TabPills';
 import {
@@ -287,7 +288,23 @@ export default function PipelineIssue() {
     ? `${PIPELINE_STAGE_LABELS[stageId]} stage is locked — unlock it to regenerate`
     : ambientLockHint;
 
-  if (loading) return <div className="p-6 text-gray-500 text-sm">Loading issue…</div>;
+  if (loading) {
+    return (
+      <PageSkeleton
+        header="bar"
+        label="Loading pipeline issue"
+        fullHeight
+        padded
+        barClassName="p-4 md:p-6"
+        bodyClassName="p-4 md:p-6"
+        headerRowClass="flex items-center justify-between gap-3 flex-wrap"
+        titleWidthClass="w-64"
+        tabs={stageTabs.length}
+        cards={2}
+        sidebar={false}
+      />
+    );
+  }
   if (!issue) return null;
 
   const StageComponent = STAGE_COMPONENTS[stageId];

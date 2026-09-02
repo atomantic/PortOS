@@ -14,6 +14,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router';
 import { Loader2, RefreshCw, X, ArrowLeft, BookOpen, AlertTriangle, BookMarked, Lock } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import {
   getPipelineSeries,
   getContinuityBible,
@@ -112,9 +113,16 @@ export default function PipelineContinuityBible() {
 
   if (loading) {
     return (
-      <div className="h-full flex items-center justify-center text-gray-400">
-        <Loader2 className="animate-spin" size={20} />
-      </div>
+      <PageSkeleton
+        label="Loading series continuity"
+        fullHeight
+        padded
+        headerRowClass="flex flex-wrap items-center gap-2"
+        titleWidthClass="w-56"
+        showAction={false}
+        cards={4}
+        sidebar={false}
+      />
     );
   }
 

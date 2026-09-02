@@ -18,7 +18,7 @@
 
 import { spawn } from './childProcess.js';
 import { buildCliArgs, prepareCliPrompt } from './cliProviderArgs.js';
-import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn } from './bufferedSpawn.js';
+import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn, guardChildStdin } from './bufferedSpawn.js';
 import { buildCliChildEnv } from './cliChildEnv.js';
 
 // How much stderr to hand back to callers. Enough to carry a rate-limit banner
@@ -174,9 +174,8 @@ export function runCliProviderPrompt(args = {}) {
     child.stderr?.on('data', (d) => { const t = d.toString(); stderr += t; onData?.(t, 'stderr'); });
 
     // Swallow EPIPE on stdin (child gone before/while we write) — the close/
-    // error handler is the authoritative settle point; an unhandled stdin
-    // 'error' would crash the process.
-    child.stdin?.on('error', () => {});
+    // error handler is the authoritative settle point. See guardChildStdin.
+    guardChildStdin(child);
     try {
       // When grok is delivered via a Windows temp file, the prompt is already on
       // disk — just close stdin instead of writing it.

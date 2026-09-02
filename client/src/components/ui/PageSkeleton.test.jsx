@@ -88,6 +88,29 @@ describe('PageSkeleton', () => {
     expect(container.innerHTML).not.toContain('px-3 py-2 sm:px-4 sm:py-3');
   });
 
+  it('owns the height on a fullHeight bar page and gives the body the scroll', () => {
+    // The bar branch keeps the shell `h-full` and puts `overflow-y-auto` on the
+    // BODY, not the root — a full-bleed page's header bar must not scroll away.
+    const { container } = render(<PageSkeleton header="bar" fullHeight padded bodyClassName="p-4" />);
+    expect(status().className).toContain('h-full');
+    expect(status().className).not.toContain('overflow-y-auto');
+    const bodyRegion = container.querySelector('.flex-1.min-h-0');
+    expect(bodyRegion.className).toContain('overflow-y-auto');
+    expect(bodyRegion.className).toContain('p-4');
+  });
+
+  it('reserves a card grid under a page-supplied header for layout="grid" + header="none"', () => {
+    const { container } = render(
+      <PageSkeleton header="none" layout="grid" gridColsClass="lg:grid-cols-3" cards={3} />
+    );
+    // No title/action placeholders — the page already painted its own chrome.
+    expect(cardCount(container)).toBe(3);
+    expect(container.innerHTML).toContain('lg:grid-cols-3');
+    expect(container.innerHTML).not.toContain('lg:grid-cols-[1fr_360px]');
+    // 3 cards x (1 title + 2 body lines) and nothing else.
+    expect(container.querySelectorAll('.animate-pulse')).toHaveLength(9);
+  });
+
   it('omits body padding on a full-bleed tab even in bar mode', () => {
     const { container } = render(<PageSkeleton header="bar" padded={false} bodyClassName="p-4" />);
     const bodyRegion = container.querySelector('.flex-1.min-h-0');

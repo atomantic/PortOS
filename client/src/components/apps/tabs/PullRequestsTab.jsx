@@ -2,14 +2,14 @@ import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react'
 import { Link } from 'react-router';
 import {
   AlertTriangle, CheckCircle2, ExternalLink, GitBranch, GitMerge,
-  GitPullRequest, Loader2, RefreshCw, Rocket, Search, ShieldAlert, User
+  GitPullRequest, Loader2, RefreshCw, Rocket, ScanSearch, Search, ShieldAlert, User
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import Banner from '../../ui/Banner';
 import Pill from '../../ui/Pill';
 import toast from '../../ui/Toast';
+import { useCosTaskUpdates } from '../../../hooks/useCosTaskUpdates';
 import * as api from '../../../services/api';
-import socket from '../../../services/socket';
 import { timeAgo } from '../../../utils/formatters';
 
 const FORGE_LABEL = { github: 'GitHub', gitlab: 'GitLab' };
@@ -28,6 +28,41 @@ const actionStatusForTask = status => ({
   completed: 'completed',
   blocked: 'blocked',
 }[status] || null);
+
+// The two per-row agent actions. They share every piece of state machinery —
+// only the CoS task that backs each one differs, so the kind is data rather
+// than a duplicated block of hooks.
+//   resolve — the review-loop follow-up that fixes and merges the branch.
+//   review  — `pr-reviewer` narrowed to this one request.
+// `field` is where the GET response carries this kind's server-side state, and
+// `queued` reads the same record out of the POST response. `matches` is the
+// LATE-BINDING rule: a click knows its PR number before the server has a task
+// id, so a socket update is claimed by the row it names.
+const ACTION_KINDS = {
+  resolve: {
+    label: 'Resolve & merge',
+    Icon: Rocket,
+    field: 'agentAction',
+    queued: result => result.task && { taskId: result.task.id, status: result.task.status },
+    title: (forgeLabel, number, appName) =>
+      `Queue a CoS agent to resolve and merge ${forgeLabel} request #${number} for ${appName}`,
+    matches: (task, appId, number) => task.metadata?.app === appId
+      && Number(task.metadata?.reviewLoopPRNumber) === number,
+  },
+  review: {
+    label: 'PR review',
+    Icon: ScanSearch,
+    field: 'reviewAction',
+    queued: result => result.reviewAction,
+    title: (forgeLabel, number, appName) =>
+      `Run the pr-reviewer scheduled task against ${forgeLabel} request #${number} for ${appName}`,
+    matches: (task, appId, number) => task.metadata?.app === appId
+      && task.metadata?.analysisType === 'pr-reviewer'
+      && Number(task.metadata?.targetPullRequest) === number,
+  },
+};
+const KIND_IDS = Object.keys(ACTION_KINDS);
+const emptyActions = () => Object.fromEntries(KIND_IDS.map(kind => [kind, {}]));
 
 const EMPTY_REASONS = {
   'no-repo-path': 'This app has no repo path configured.',
@@ -95,75 +130,56 @@ export default function PullRequestsTab({ appId, appName }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
-  const [actions, setActions] = useState({});
-  const actionsRef = useRef({});
+  const [actions, setActions] = useState(emptyActions);
+  const actionsRef = useRef(emptyActions());
   const requestRef = useRef(0);
 
+  // One writer for the whole `{ kind: { number: action } }` bag so the ref the
+  // socket handler reads and the state React renders can never disagree.
   const replaceActions = useCallback(updater => {
     const next = updater(actionsRef.current);
     actionsRef.current = next;
     setActions(next);
   }, []);
 
+  const setAction = useCallback((kind, number, action) => {
+    replaceActions(previous => ({
+      ...previous,
+      [kind]: action
+        ? { ...previous[kind], [number]: action }
+        : Object.fromEntries(Object.entries(previous[kind]).filter(([key]) => Number(key) !== number)),
+    }));
+  }, [replaceActions]);
+
   useEffect(() => {
-    actionsRef.current = {};
-    setActions({});
+    actionsRef.current = emptyActions();
+    setActions(emptyActions());
   }, [appId]);
 
-  useEffect(() => {
-    const subscribe = () => socket.emit('cos:subscribe');
-    if (socket.connected) subscribe();
-    socket.on('connect', subscribe);
+  const applyTaskUpdate = useCallback(task => {
+    if (!task?.id) return;
+    const nextStatus = actionStatusForTask(task.status);
+    if (!nextStatus) return;
 
-    const applyTaskUpdate = task => {
-      if (!task?.id) return;
-      const nextStatus = actionStatusForTask(task.status);
-      if (!nextStatus) return;
-
-      replaceActions(current => {
-        const next = { ...current };
-        let changed = false;
-        for (const [number, action] of Object.entries(current)) {
-          const matches = action.taskId === task.id || (
-            !action.taskId
-            && task.metadata?.app === appId
-            && Number(task.metadata?.reviewLoopPRNumber) === Number(number)
-          );
+    replaceActions(current => {
+      let changed = false;
+      const next = { ...current };
+      for (const kind of KIND_IDS) {
+        const updated = { ...current[kind] };
+        for (const [number, action] of Object.entries(current[kind])) {
+          const matches = action.taskId === task.id
+            || (!action.taskId && ACTION_KINDS[kind].matches(task, appId, Number(number)));
           if (!matches || actionRank(nextStatus) < actionRank(action.status)) continue;
-          next[number] = { ...action, taskId: action.taskId || task.id, status: nextStatus };
+          updated[number] = { ...action, taskId: action.taskId || task.id, status: nextStatus };
           changed = true;
         }
-        return changed ? next : current;
-      });
-    };
-
-    const handleTaskChanged = event => applyTaskUpdate(event?.task);
-    const handleTaskListChanged = event => (event?.tasks || []).forEach(applyTaskUpdate);
-    const handleTaskCompleted = event => (event?.tasks || []).forEach(applyTaskUpdate);
-    const handleAgentSpawned = agent => {
-      if (agent?.taskId) applyTaskUpdate({ id: agent.taskId, status: 'in_progress' });
-    };
-    const handleAgentCompleted = agent => {
-      if (agent?.taskId && agent.result?.success === true) {
-        applyTaskUpdate({ id: agent.taskId, status: 'completed' });
+        next[kind] = updated;
       }
-    };
-
-    socket.on('cos:tasks:changed', handleTaskChanged);
-    socket.on('cos:tasks:user:changed', handleTaskListChanged);
-    socket.on('cos:tasks:user:completed', handleTaskCompleted);
-    socket.on('cos:agent:spawned', handleAgentSpawned);
-    socket.on('cos:agent:completed', handleAgentCompleted);
-
-    return () => {
-      socket.off('connect', subscribe);
-      socket.off('cos:tasks:changed', handleTaskChanged);
-      socket.off('cos:tasks:user:changed', handleTaskListChanged);
-      socket.off('cos:tasks:user:completed', handleTaskCompleted);
-      socket.off('cos:agent:spawned', handleAgentSpawned);
-      socket.off('cos:agent:completed', handleAgentCompleted);
-    };
+      return changed ? next : current;
+    });
   }, [appId, replaceActions]);
+
+  useCosTaskUpdates(applyTaskUpdate);
 
   const load = useCallback(async () => {
     const generation = requestRef.current + 1;
@@ -183,17 +199,22 @@ export default function PullRequestsTab({ appId, appName }) {
     setData(result);
     replaceActions(previous => {
       const next = { ...previous };
-      for (const pullRequest of result.pullRequests || []) {
-        const serverAction = actionStatusFromRecord(pullRequest.agentAction);
-        if (!serverAction) continue;
-        const current = next[pullRequest.number];
-        if (!current || actionRank(serverAction) >= actionRank(current.status)) {
-          next[pullRequest.number] = {
-            ...(current || {}),
-            taskId: current?.taskId || pullRequest.agentAction.taskId || null,
-            status: serverAction,
-          };
+      for (const kind of KIND_IDS) {
+        const merged = { ...previous[kind] };
+        for (const pullRequest of result.pullRequests || []) {
+          const record = pullRequest[ACTION_KINDS[kind].field];
+          const serverAction = actionStatusFromRecord(record);
+          if (!serverAction) continue;
+          const current = merged[pullRequest.number];
+          if (!current || actionRank(serverAction) >= actionRank(current.status)) {
+            merged[pullRequest.number] = {
+              ...(current || {}),
+              taskId: current?.taskId || record.taskId || null,
+              status: serverAction,
+            };
+          }
         }
+        next[kind] = merged;
       }
       return next;
     });
@@ -219,43 +240,61 @@ export default function PullRequestsTab({ appId, appName }) {
   const requestNoun = data?.forge === 'gitlab' ? 'merge requests' : 'pull requests';
   const unavailable = data?.transient === true;
 
-  const handleResolve = async pullRequest => {
-    replaceActions(previous => ({
-      ...previous,
-      [pullRequest.number]: { status: 'queuing', taskId: null },
-    }));
-    const result = await api.resolveAppPullRequest(appId, pullRequest.number).catch(err => {
-      toast.error(err?.message || `Failed to queue an agent for #${pullRequest.number}`);
+  // Both row actions queue a CoS task and then track it identically: optimistic
+  // `queuing`, roll back on failure, and never let a stale response downgrade a
+  // status a socket update already advanced.
+  const queueAction = async (kind, pullRequest, { call, queued, already }) => {
+    const { number } = pullRequest;
+    setAction(kind, number, { status: 'queuing', taskId: null });
+    const result = await call().catch(err => {
+      toast.error(err?.message || `Failed to queue an agent for #${number}`);
       return null;
     });
     if (!result) {
-      replaceActions(previous => {
-        const next = { ...previous };
-        delete next[pullRequest.number];
-        return next;
-      });
+      setAction(kind, number, null);
       return;
     }
 
-    const taskStatus = actionStatusForTask(result.task?.status) || 'queued';
+    const record = ACTION_KINDS[kind].queued(result);
+    const taskStatus = actionStatusFromRecord(record) || 'queued';
     replaceActions(previous => {
-      const current = previous[pullRequest.number];
-      const status = actionRank(taskStatus) >= actionRank(current?.status)
-        ? taskStatus
-        : current?.status;
+      const current = previous[kind][number];
+      const status = actionRank(taskStatus) >= actionRank(current?.status) ? taskStatus : current?.status;
       return {
         ...previous,
-        [pullRequest.number]: {
-          ...(current || {}),
-          taskId: current?.taskId || result.task?.id || null,
-          status,
+        [kind]: {
+          ...previous[kind],
+          [number]: {
+            ...(current || {}),
+            taskId: current?.taskId || record?.taskId || null,
+            status,
+          },
         },
       };
     });
-    toast.success(result.duplicate
-      ? `An agent is already resolving ${forgeLabel} #${pullRequest.number}`
-      : `Queued an agent to resolve and merge ${forgeLabel} #${pullRequest.number}`);
+    toast.success(result.duplicate ? already : queued);
   };
+
+  const handleResolve = pullRequest => queueAction('resolve', pullRequest, {
+    call: () => api.resolveAppPullRequest(appId, pullRequest.number),
+    queued: `Queued an agent to resolve and merge ${forgeLabel} #${pullRequest.number}`,
+    already: `An agent is already resolving ${forgeLabel} #${pullRequest.number}`,
+  });
+
+  const handleReview = pullRequest => queueAction('review', pullRequest, {
+    call: () => api.reviewAppPullRequest(appId, pullRequest.number),
+    queued: `Queued the pr-reviewer task for ${forgeLabel} #${pullRequest.number}`,
+    already: `pr-reviewer is already queued for ${forgeLabel} #${pullRequest.number}`,
+  });
+
+  // pr-reviewer covers only GitHub PRs opened by someone else against the default
+  // branch, and the server answers every other row with 409. `reviewEligible` is
+  // the server's own verdict per row, so the button appears exactly where it can
+  // work rather than offering a guaranteed failure.
+  const rowActionsFor = pullRequest => [
+    { kind: 'resolve', onQueue: handleResolve },
+    ...(pullRequest.reviewEligible ? [{ kind: 'review', onQueue: handleReview }] : []),
+  ];
 
   if (loading && !data) return <BrailleSpinner text="Loading pull requests" />;
 
@@ -293,8 +332,15 @@ export default function PullRequestsTab({ appId, appName }) {
         </button>
       </div>
 
-      <div className="px-3 py-2 text-xs text-gray-500 bg-port-card border border-port-border rounded-lg">
-        Resolve and merge queues a PortOS agent to inspect feedback, fix the branch, wait for checks, and merge when the forge allows it. It uses the configured Code Review Defaults.
+      <div className="px-3 py-2 text-xs text-gray-500 bg-port-card border border-port-border rounded-lg space-y-1">
+        <p>
+          Resolve and merge queues a PortOS agent to inspect feedback, fix the branch, wait for checks, and merge when the forge allows it. It uses the configured Code Review Defaults.
+        </p>
+        {(data?.pullRequests || []).some(pullRequest => pullRequest.reviewEligible) && (
+          <p>
+            PR review points the <span className="font-mono">pr-reviewer</span> scheduled task at this one request instead of letting it sweep every open contributor PR. It appears only on requests it can review — opened by someone else against the default branch — and its security scan still holds the review behind approval.
+          </p>
+        )}
       </div>
 
       {error && (
@@ -325,8 +371,6 @@ export default function PullRequestsTab({ appId, appName }) {
       {filteredPullRequests.length > 0 && (
         <div className="border border-port-border rounded-lg divide-y divide-port-border overflow-hidden">
           {filteredPullRequests.map(pullRequest => {
-            const action = actions[pullRequest.number];
-            const actionStatus = action?.status;
             const review = reviewSummary(pullRequest);
             const checks = checkSummary(pullRequest);
             const merge = mergeSummary(pullRequest);
@@ -384,28 +428,37 @@ export default function PullRequestsTab({ appId, appName }) {
                     </div>
                   </div>
 
-                  <div className="shrink-0 lg:pt-0.5">
-                    {actionStatus && actionStatus !== 'queuing' ? (
-                      <Link
-                        to="/cos/agents"
-                        className="px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 border border-port-border rounded-lg text-xs flex items-center gap-1.5 transition-colors"
-                      >
-                        <Rocket size={14} /> {ACTION_STATUS_LABEL[actionStatus] || 'Queued — view'}
-                      </Link>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => handleResolve(pullRequest)}
-                        disabled={actionStatus === 'queuing'}
-                        title={`Queue a CoS agent to resolve and merge ${forgeLabel} request #${pullRequest.number} for ${appName}`}
-                        className="px-3 py-1.5 bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 border border-port-border rounded-lg text-xs flex items-center gap-1.5 disabled:opacity-50 transition-colors"
-                      >
-                        {actionStatus === 'queuing'
-                          ? <Loader2 size={14} className="animate-spin" />
-                          : <Rocket size={14} />}
-                        {actionStatus === 'queuing' ? 'Queuing…' : 'Resolve & merge'}
-                      </button>
-                    )}
+                  <div className="shrink-0 lg:pt-0.5 flex flex-wrap items-start gap-2">
+                    {rowActionsFor(pullRequest).map(({ kind, onQueue }) => {
+                      const { label, Icon, title } = ACTION_KINDS[kind];
+                      const actionStatus = actions[kind][pullRequest.number]?.status;
+                      if (actionStatus && actionStatus !== 'queuing') {
+                        return (
+                          <Link
+                            key={kind}
+                            to="/cos/agents"
+                            className="px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 border border-port-border rounded-lg text-xs flex items-center gap-1.5 transition-colors"
+                          >
+                            <Icon size={14} /> {label}: {ACTION_STATUS_LABEL[actionStatus] || 'Queued — view'}
+                          </Link>
+                        );
+                      }
+                      return (
+                        <button
+                          key={kind}
+                          type="button"
+                          onClick={() => onQueue(pullRequest)}
+                          disabled={actionStatus === 'queuing'}
+                          title={title(forgeLabel, pullRequest.number, appName)}
+                          className="px-3 py-1.5 bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 border border-port-border rounded-lg text-xs flex items-center gap-1.5 disabled:opacity-50 transition-colors"
+                        >
+                          {actionStatus === 'queuing'
+                            ? <Loader2 size={14} className="animate-spin" />
+                            : <Icon size={14} />}
+                          {actionStatus === 'queuing' ? 'Queuing…' : label}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               </div>

@@ -141,11 +141,12 @@ export default function ActionableInsightsBanner({ insights, onTaskUnblocked, on
     });
     if (!result) return;
     toast.success('Task unblocked and moved to pending');
-    // Ask the parent to refetch — its fetchData re-pulls insights so the
-    // unblocked task drops out of the banner — and optimistically splice the
-    // task list for instant feedback.
-    onRefresh?.();
+    // Update the parent-owned queue and insight snapshot before starting the
+    // slower full refresh. That keeps both the banner and task list honest while
+    // the refresh is in flight; the parent also guards the refresh from writing
+    // an older pre-unblock snapshot over this state.
     onTaskUnblocked?.(taskId);
+    onRefresh?.();
   };
 
   if (!insights) {

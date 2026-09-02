@@ -8,9 +8,9 @@ import { buildFormData } from './apiImageVideo.js';
 // between Prose and Comic Pages, but it's NOT in server TEXT_STAGE_IDS — so
 // auto-run text chain skips it and POST /stages/nouns/generate would 400.
 export const PIPELINE_TEXT_STAGES = Object.freeze(['idea', 'prose', 'comicScript', 'teleplay']);
-export const PIPELINE_VISUAL_STAGES = Object.freeze(['comicPages', 'storyboards', 'episodeVideo']);
-export const PIPELINE_AUDIO_STAGES = Object.freeze(['audio']);
-export const PIPELINE_UI_STAGES = Object.freeze(['nouns']);
+const PIPELINE_VISUAL_STAGES = Object.freeze(['comicPages', 'storyboards', 'episodeVideo']);
+const PIPELINE_AUDIO_STAGES = Object.freeze(['audio']);
+const PIPELINE_UI_STAGES = Object.freeze(['nouns']);
 export const PIPELINE_STAGES = Object.freeze([
   ...PIPELINE_TEXT_STAGES, ...PIPELINE_VISUAL_STAGES, ...PIPELINE_AUDIO_STAGES, ...PIPELINE_UI_STAGES,
 ]);
@@ -47,8 +47,6 @@ export const PIPELINE_DEFAULT_FORWARD_SOURCE = Object.freeze({
   comicScript: ['prose'],
   teleplay: ['prose'],
 });
-
-export const PIPELINE_TARGET_FORMATS = Object.freeze(['comic', 'tv', 'comic+tv']);
 
 export const PIPELINE_STAGE_STATUS_LABEL = Object.freeze({
   empty: 'Not started',
@@ -133,7 +131,6 @@ export const discoverSeriesVoice = (id, opts = {}, requestOptions = {}) =>
 
 // Mirror server caps in `server/services/pipeline/series.js` — bump both sides.
 export const SERIES_TITLE_LOGO_MAX = 2000;
-export const SERIES_AUTHOR_MAX = 120;
 
 // ---- Issues ----
 export const listPipelineIssues = (seriesId, options = {}) =>
@@ -426,10 +423,6 @@ export const generatePipelineSceneImagePrompts = (issueId, sceneIndex, opts = {}
     ...options,
   });
 
-// ---- Seasons (Phase 2 of Story Arc Planning) ----
-export const listPipelineSeasons = (seriesId) =>
-  request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons`);
-
 export const createPipelineSeason = (seriesId, data, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons`, {
     method: 'POST',
@@ -634,25 +627,6 @@ export const reformatPipelineManuscriptText = (seriesId, { stageId, content, pro
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/reformat`, {
     method: 'POST',
     body: JSON.stringify({ stageId, content, providerOverride, modelOverride }),
-    ...options,
-  });
-
-// ---- Adversarial cuts (#2168) ----
-// Preview cuts — dry-run that returns before/after diffs without applying.
-// Returns { preview: [{ issueNumber, before, after, applied, refused, refusedDetails }], totalApplied, totalRefused }.
-export const previewPipelineManuscriptCuts = (seriesId, { commentIds, allowTypes, safeTypesOnly } = {}, options = {}) =>
-  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/cuts/preview`, {
-    method: 'POST',
-    body: JSON.stringify({ commentIds, allowTypes, safeTypesOnly }),
-    ...options,
-  });
-
-// Apply cuts — writes through the serialized stage-write path with snapshots.
-// Returns { applied, refused, sections, refusedDetails, acceptedCount }.
-export const applyPipelineManuscriptCuts = (seriesId, { commentIds, allowTypes, safeTypesOnly } = {}, options = {}) =>
-  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/cuts/apply`, {
-    method: 'POST',
-    body: JSON.stringify({ commentIds, allowTypes, safeTypesOnly }),
     ...options,
   });
 
@@ -999,13 +973,6 @@ export const getPipelineAutopilotStatus = (seriesId, options = {}) =>
 export const getPipelineAutopilotModelMetrics = (seriesId, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/autopilot/model-metrics`, options);
 
-export const recordPipelineAutopilotModelOutcome = (seriesId, outcome, options = {}) =>
-  request(`/pipeline/series/${encodeURIComponent(seriesId)}/autopilot/model-outcomes`, {
-    method: 'POST',
-    body: JSON.stringify(outcome),
-    ...options,
-  });
-
 export const pipelineAutopilotSseUrl = (seriesId) =>
   `/api/pipeline/series/${encodeURIComponent(seriesId)}/autopilot/progress`;
 
@@ -1057,20 +1024,8 @@ export const startPipelineSeriesFix = (seriesId, opts = {}, options = {}) =>
 export const getPipelineSeriesFixStatus = (seriesId, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/review/fix/status`, options);
 
-export const cancelPipelineSeriesFix = (seriesId, options = {}) =>
-  request(`/pipeline/series/${encodeURIComponent(seriesId)}/review/fix/cancel`, {
-    method: 'POST',
-    ...options,
-  });
-
 export const pipelineSeriesFixSseUrl = (seriesId) =>
   `/api/pipeline/series/${encodeURIComponent(seriesId)}/review/fix/progress`;
-
-// ---- Canon descriptive-integrity (production readiness) ----
-// Read-only: which canon nouns appear where they'd be drawn but lack a
-// description (blocking visual production).
-export const getPipelineIssueCanonReadiness = (issueId, options = {}) =>
-  request(`/pipeline/issues/${encodeURIComponent(issueId)}/canon-readiness`, options);
 
 export const getPipelineSeriesCanonReadiness = (seriesId, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/canon-readiness`, options);

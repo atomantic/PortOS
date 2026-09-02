@@ -44,7 +44,7 @@ export const GEMINI_CONTEXT_WINDOW = 1_048_576;
 export const GROK_CONTEXT_WINDOW = 256_000;
 export const KIMI_CONTEXT_WINDOW = 256_000;
 
-// Keep in sync with server/lib/stageRunner.js.
+// Keep in sync with server/services/stageRunner.js.
 const KNOWN_MODEL_CONTEXT_WINDOWS = Object.freeze([
   [/gpt[-_.:/]?5\.5(?:[-_.:/]|\b)/i, CODEX_CONTEXT_WINDOW],
   [/gpt[-_.:/]?5\.4[-_.:/]?mini(?:[-_.:/]|\b)/i, 400_000],
@@ -86,6 +86,30 @@ export const isCodexProvider = (provider) => {
   const id = String(provider?.id || '').toLowerCase();
   return id === 'codex' || id === 'codex-tui' || commandBasename(provider?.command) === 'codex';
 };
+
+/**
+ * True when a provider is Grok-Build-flavored. MIRROR of `isGrokProvider` in
+ * server/lib/providerModels.js — the shipped `grok-cli`/`grok-tui` ids or a
+ * `grok` command basename. The bare `grok` id is the HTTP API provider, which
+ * has no CLI flag to carry an effort level, and is excluded.
+ * @param {{id?:string, command?:string}|null|undefined} provider
+ * @returns {boolean}
+ */
+export const isGrokProvider = (provider) => {
+  const id = String(provider?.id || '').toLowerCase();
+  return id === 'grok-cli' || id === 'grok-tui' || commandBasename(provider?.command) === 'grok';
+};
+
+/**
+ * True when a CLI/TUI record uses Codex's ChatGPT subscription. This mirrors
+ * server/lib/codexAccount.js: the command, not an editable provider id, owns
+ * the account contract.
+ * @param {{type?:string, command?:string}|null|undefined} provider
+ * @returns {boolean}
+ */
+export const isCodexSubscriptionProvider = (provider) =>
+  (provider?.type === 'cli' || provider?.type === 'tui')
+  && commandBasename(provider?.command) === 'codex';
 
 /**
  * True when a provider is Kimi-Code-flavored — the shipped `kimi-cli`/`kimi-tui`
@@ -182,6 +206,113 @@ export const AGENT_HARNESS_PROVIDER_TYPES = Object.freeze([
   PROVIDER_TYPES.TUI
 ]);
 
+// Direct local HTTP providers are the only provider class that can be made
+// tool-free by construction. CLI/TUI providers may be pointed at a local model,
+// but the harness still has filesystem/process authority, so they do not belong
+// in a tool-free security-review picker.
+export const TOOL_FREE_LOCAL_PROVIDER_IDS = Object.freeze(['ollama', 'lmstudio']);
+export const TOOL_FREE_LOCAL_TEXT_CAPABILITIES = Object.freeze(['chat', 'completion']);
+
+/**
+ * True only for PortOS's canonical local HTTP backends on this machine.
+ *
+ * The explicit ids keep a custom provider from inheriting a security-sensitive
+ * policy merely because its endpoint happens to mention Ollama or LM Studio.
+ * `isLocalInstanceProvider` keeps a renamed canonical record pointed at another
+ * machine out of the same policy.
+ */
+export const isToolFreeLocalProvider = (provider) =>
+  isApiProvider(provider)
+  && TOOL_FREE_LOCAL_PROVIDER_IDS.includes(String(provider?.id || '').toLowerCase())
+  && isLocalInstanceProvider(provider);
+
+/**
+ * Whether a local model has an authoritative, explicit text capability report
+ * that excludes native tool use. Embedding-only models cannot review a diff;
+ * unknown capability state is unsafe for a security scan and therefore returns
+ * false rather than falling back to model-name heuristics.
+ *
+ * `capabilitiesByBackend` is the shape returned by `useLocalModels`; object
+ * model entries are accepted too so callers with a richer model catalog can use
+ * the same predicate without rebuilding a map.
+ */
+const isToolFreeLocalModelForProvider = (model, provider, capabilitiesByBackend, providerPredicate) => {
+  if (!providerPredicate(provider)) return false;
+  const id = typeof model === 'string' ? model : model?.id || model?.name;
+  if (typeof id !== 'string' || !id.trim()) return false;
+  const reported = Array.isArray(model?.capabilities)
+    ? model.capabilities
+    : capabilitiesByBackend?.[localBackendForProvider(provider)]?.[id];
+  if (!Array.isArray(reported)) return false;
+  const normalized = reported.map((capability) => String(capability).toLowerCase());
+  return normalized.some((capability) => TOOL_FREE_LOCAL_TEXT_CAPABILITIES.includes(capability))
+    && !normalized.includes('tools');
+};
+
+export const isToolFreeLocalModel = (model, provider, capabilitiesByBackend = {}) =>
+  isToolFreeLocalModelForProvider(model, provider, capabilitiesByBackend, isToolFreeLocalProvider);
+
+/**
+ * Build the shared selection policy used by security-sensitive AI pickers.
+ * ProviderModelSelector owns applying all three predicates consistently; a
+ * caller supplies only the policy-specific capability source.
+ */
+export const toolFreeLocalSelectionPolicy = (
+  capabilitiesByBackend = {},
+  { providerPredicate = isToolFreeLocalProvider } = {},
+) => ({
+  provider: providerPredicate,
+  model: (model, provider) => isToolFreeLocalModelForProvider(
+    model,
+    provider,
+    capabilitiesByBackend,
+    providerPredicate,
+  ),
+});
+
+// The two enforceable public-review postures. MIRROR of
+// `server/lib/agentExecutionProfiles.js`; a pr-reviewer stage names a posture
+// and the server publishes each provider's `publicReviewPostures` on
+// `GET /api/providers`, so no vendor is ever named on either side.
+export const PUBLIC_REVIEW_NO_TOOL_POSTURE = 'no-tool';
+export const PUBLIC_REVIEW_ACTIONS_POSTURE = 'sandboxed-actions';
+
+/**
+ * Whether the SERVER says this provider can enforce `posture`. Falls back to
+ * the older per-posture booleans so a browser talking to a peer/older server
+ * still renders a correct picker instead of an empty one.
+ */
+export const supportsPublicReviewPosture = (provider, posture) => {
+  if (Array.isArray(provider?.publicReviewPostures)) return provider.publicReviewPostures.includes(posture);
+  return posture === PUBLIC_REVIEW_ACTIONS_POSTURE
+    ? provider?.publicReviewActionsSupported === true
+    : provider?.publicReviewSupported === true;
+};
+
+/**
+ * Selection policy for a pr-reviewer stage.
+ *
+ * Provider eligibility is entirely server-derived. Model eligibility adds the
+ * authoritative no-tool capability check only where PortOS can actually probe
+ * it — a LOCAL runtime behind the provider. A cloud model is not probeable, so
+ * the vendor's enforced argv (`--restricted --tools ''`, `--sandbox read-only`,
+ * `--permission-mode plan`) is what denies it tools, and every model the
+ * provider lists stays selectable.
+ */
+export const publicReviewSelectionPolicy = (posture, capabilitiesByBackend = {}) => ({
+  provider: (provider) => supportsPublicReviewPosture(provider, posture),
+  model: (model, provider) => {
+    if (!supportsPublicReviewPosture(provider, posture)) return false;
+    if (posture !== PUBLIC_REVIEW_NO_TOOL_POSTURE || !localBackendForProvider(provider)) return true;
+    return isToolFreeLocalModelForProvider(
+      model,
+      provider,
+      capabilitiesByBackend,
+      () => true,
+    );
+  },
+});
+
 /**
  * Retain an existing non-runnable pin so a saved job can still be edited and
  * cleared, while limiting new agent-job selections to runnable providers.
@@ -247,6 +378,11 @@ export const OPENCODE_LOCAL_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'hig
 // syntax (`gpt-5[effort=max]`) — but the level is still user-pickable, so this
 // ladder drives the same selects as every other CLI's.
 export const CURSOR_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
+// Grok Build CLI. MIRROR of `GROK_EFFORT_LEVELS` in server/lib/providerModels.js.
+// Grok's own ladder, read off its rejection message rather than guessed
+// (`use one of: xhigh, high, medium, low`) — no `max`/`minimal`, so a stored
+// `max` clamps to `xhigh` here exactly as it does on the server.
+export const GROK_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh']);
 
 const CODEX_ULTRA_MODELS = new Set(['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra']);
 
@@ -455,6 +591,7 @@ export const effortLevelsForProvider = (provider, model = null) => {
     return perModel.length ? perModel : null;
   }
   if (isCursorProvider(provider)) return CURSOR_EFFORT_LEVELS;
+  if (isGrokProvider(provider)) return GROK_EFFORT_LEVELS;
   const id = String(provider.id || '').toLowerCase();
   if (id.startsWith('claude-code') || commandBasename(provider.command) === 'claude') return CLAUDE_EFFORT_LEVELS;
   // Sanitized provider inventories intentionally omit command/path/env details.
@@ -573,7 +710,8 @@ export const isVisionCapableCliProvider = (provider) =>
  * Tool-use (function-calling) capable model detector — mirror of `isToolUseModel`
  * in server/lib/localModelHeuristics.js (and the TOOL_USE_RE inlined in
  * server/lib/aiToolkit/providers.js). Keep all three in lockstep (the server libs
- * can't be imported here). Ollama's /api/show `tools` capability is authoritative
+ * can't be imported here) — server/lib/localModelHeuristics.mirror.test.js reads
+ * this file as text and fails when the patterns stop matching the same ids. Ollama's /api/show `tools` capability is authoritative
  * when known; this id regex is the fallback for bare model-id strings. The CoS
  * agent harness depends on reliable tool-calling, so only these families should
  * be selectable for a local-model-backed coding provider.
@@ -851,6 +989,16 @@ export const isLocalInstanceProvider = (provider) => {
   return isLocalEndpoint(endpoint);
 };
 
+/**
+ * Does this provider run on another machine inside the private network?
+ *
+ * This is presentation identity, not a trust escalation: prerequisite and key
+ * rules still come from {@link isPrivateNetworkEndpoint}. Public hosted APIs
+ * stay ordinary remote providers; loopback daemons stay local.
+ */
+export const isFleetProvider = (provider) =>
+  !isLocalInstanceProvider(provider) && isPrivateNetworkEndpoint(provider?.endpoint);
+
 export const isLikelyLargeContextProvider = (provider) => {
   if (isProcessProvider(provider)) return true;
   return isApiProvider(provider) && !isLocalEndpoint(provider.endpoint);
@@ -879,7 +1027,7 @@ export const CONTEXT_WINDOW_SOURCE = Object.freeze({
  * The window this provider's own `/models` catalog reported for this model, or
  * `null` when it never mentioned it. Recorded by model refresh — the serving
  * side's own declaration, so it outranks the hand-maintained regex table.
- * Mirror of `catalogModelContextWindow` in server/lib/stageRunner.js.
+ * Mirror of `catalogModelContextWindow` in server/services/stageRunner.js.
  */
 export function catalogModelContextWindow(provider, model) {
   const windows = provider?.modelContextWindows;
@@ -891,7 +1039,7 @@ export function catalogModelContextWindow(provider, model) {
 
 /**
  * The planning context window for a provider/model AND where it came from.
- * Mirror of `effectiveContextWindow` in server/lib/stageRunner.js — the two
+ * Mirror of `effectiveContextWindow` in server/services/stageRunner.js — the two
  * must resolve identically, or the card promises a budget the budgeter won't use.
  *
  * `{ tokens: null, source: null }` means nothing is known (an unrecognized model
@@ -1191,7 +1339,8 @@ export const modelCapabilityInfo = (provider, model, {
  * front-end. MIRROR of `PROVIDER_GATEWAYS` in `server/lib/providerGateways.js`
  * (and its vendored twin `server/lib/aiToolkit/internal/gateways.js`) — the
  * browser cannot import server code, so the table is duplicated; keep the three
- * in lockstep. `id` is simultaneously the OpenCode namespace, the
+ * in lockstep (server/lib/providerGateways.parity.test.js pins this copy's
+ * `id`/`label`/`apiKeyEnv`/`legacyMarker` rows against the server registry). `id` is simultaneously the OpenCode namespace, the
  * `gatewayBacked` marker value, and the id of the sibling `api` record that
  * owns the key.
  */
@@ -1319,9 +1468,16 @@ const credentialEnvVars = (provider) => {
  * provider carrying `provider.apiKey` untouched at spawn time.
  *
  * @param {{id?:string,type?:string,endpoint?:string,apiKey?:string,hasApiKey?:boolean,gatewayBacked?:string,orcarouterBacked?:boolean,envVars?:Record<string,string>,secretEnvVars?:string[]}|null|undefined} provider
- * @returns {{kind:'stored'|'inherited'|'env'|'none',ref:string|null}}
+ * @returns {{kind:'stored'|'inherited'|'env'|'subscription'|'none',ref:string|null}}
  */
 export const credentialSource = (provider) => {
+  // Codex CLI/TUI providers can use the ChatGPT subscription that Codex owns
+  // outside PortOS. It is neither a stored API key nor an environment
+  // credential, so the regular credential UI must not tell the user to paste a
+  // key. `providerCardState` receives the separate, bounded account verdict.
+  if (isCodexSubscriptionProvider(provider)) {
+    return { kind: 'subscription', ref: 'codex' };
+  }
   // Local API endpoints need no credential, even if an old record happens to
   // retain one from before the endpoint was changed.
   if (isApiProvider(provider) && isPrivateNetworkEndpoint(provider?.endpoint)) {
@@ -1397,7 +1553,7 @@ const inheritedCredentialMissing = (provider, keySetFor) => {
 
 const credentialMissing = (provider, { keySetFor = null, envVarSet = null } = {}) => {
   const source = credentialSource(provider);
-  if (source.kind === 'none' || !source.ref) return null;
+  if (source.kind === 'none' || source.kind === 'subscription' || !source.ref) return null;
 
   if (source.kind === 'env') {
     const groups = credentialEnvGroups(provider).map((group) => group.map((name) => {
@@ -1452,6 +1608,7 @@ export const PROVIDER_CARD_STATE = Object.freeze({
   READY: 'ready',
   BENCHED: 'benched',
   BLOCKED: 'blocked',
+  UNKNOWN: 'unknown',
   DISABLED: 'disabled',
 });
 
@@ -1497,10 +1654,13 @@ export const PROVIDER_CARD_STATE = Object.freeze({
  *                      explicitly empty configured value is `false`; a missing
  *                      or redacted value is unknown and must not be reported.
  *
- * `blocked` outranks `disabled`: a provider whose CLI isn't installed can't be
- * enabled at all, so it belongs in the "needs setup" bucket whichever way its
- * toggle happens to sit. `benched` only applies to an enabled provider that
- * otherwise meets its prerequisites.
+ * `disabled` outranks `blocked`: a provider the user switched off is not a gap
+ * in this install. PortOS ships dozens of provider records the user may never
+ * want, and calling every switched-off one "needs setup" makes an install with
+ * a perfectly good provider read as degraded or half-configured. What such a
+ * provider is missing is still returned in `missing` — a note for the user IF
+ * they decide to turn it on, not an outstanding task. `benched` only applies to
+ * an enabled provider that otherwise meets its prerequisites.
  *
  * @returns {{state: string, missing: {code: string, label: string}[]}}
  */
@@ -1509,6 +1669,10 @@ export const providerCardState = (provider, {
   status = null,
   keySetFor = null,
   envVarSet = null,
+  // `undefined` means an older server did not provide the account feature at
+  // all; `null` means this page tried to fetch it but could not determine a
+  // verdict. They must not collapse into "signed out" or "ready".
+  codexAccount = undefined,
 } = {}) => {
   // The server publishes its own verdict on `GET /api/providers`
   // (`missingPrerequisites`, from server/lib/providerPrerequisites.js) and
@@ -1557,8 +1721,24 @@ export const providerCardState = (provider, {
     }
   }
 
-  if (missing.length > 0) return { state: PROVIDER_CARD_STATE.BLOCKED, missing };
+  const codexSubscription = isCodexSubscriptionProvider(provider);
+  const accountStatus = codexAccount && typeof codexAccount === 'object'
+    ? codexAccount.status
+    : null;
+  if (codexSubscription && accountStatus === 'signed-out') {
+    addMissing('codexAccount', 'No ChatGPT account is signed in');
+  } else if (codexSubscription && accountStatus === 'reauth-required') {
+    addMissing('codexAccount', 'ChatGPT sign-in has expired');
+  } else if (codexSubscription && accountStatus === 'quota-exhausted') {
+    addMissing('codexQuota', 'ChatGPT usage limit reached');
+  }
+
+  // Switched off wins over every finding — see the precedence note above. The
+  // findings ride along so the card can still say what enabling it would take.
   if (!provider?.enabled) return { state: PROVIDER_CARD_STATE.DISABLED, missing };
+  if (codexSubscription && codexAccount === null) return { state: PROVIDER_CARD_STATE.UNKNOWN, missing };
+  if (codexSubscription && accountStatus === 'unknown') return { state: PROVIDER_CARD_STATE.UNKNOWN, missing };
+  if (missing.length > 0) return { state: PROVIDER_CARD_STATE.BLOCKED, missing };
   if (status?.available === false) return { state: PROVIDER_CARD_STATE.BENCHED, missing };
   return { state: PROVIDER_CARD_STATE.READY, missing };
 };

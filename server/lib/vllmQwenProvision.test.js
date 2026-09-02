@@ -5,6 +5,7 @@ import {
   isWsl2Engine,
   mergeEnvFileContents,
   parseEnvContents,
+  upsertEnvLine,
   vllmEnvDefaults,
   VLLM_API_KEY_VAR,
 } from './vllmQwenProvision.js';
@@ -125,5 +126,27 @@ describe('mergeEnvFileContents', () => {
     const result = mergeEnvFileContents(existing, defaults());
     expect(result.contents).toBe(existing);
     expect(result.added).toEqual([]);
+  });
+});
+
+describe('upsertEnvLine', () => {
+  it('replaces the line a key already declares, leaving the rest byte for byte', () => {
+    const existing = 'PGPASSWORD=portos\nVLLM_QWEN_PROJECT_DIR=/srv/old\nGPU_UTIL=0.93\n';
+    expect(upsertEnvLine(existing, 'VLLM_QWEN_PROJECT_DIR', '/srv/new'))
+      .toBe('PGPASSWORD=portos\nVLLM_QWEN_PROJECT_DIR=/srv/new\nGPU_UTIL=0.93\n');
+  });
+
+  it('appends a key the file does not mention, without splicing onto its last line', () => {
+    expect(upsertEnvLine('PGPASSWORD=portos', 'VLLM_QWEN_PROJECT_DIR', '/srv/qwen'))
+      .toBe('PGPASSWORD=portos\nVLLM_QWEN_PROJECT_DIR=/srv/qwen\n');
+    expect(upsertEnvLine('', 'SPEC', 'dflash2')).toBe('SPEC=dflash2\n');
+  });
+
+  it('writes a value containing a $-pattern literally', () => {
+    // A string replacement would expand `$&` into the matched line and `$\`` into
+    // everything before it, corrupting the file and every key around it.
+    const written = upsertEnvLine('A=1\nSECRET=old\nB=2\n', 'SECRET', 'p$&w$`d');
+    expect(written).toBe('A=1\nSECRET=p$&w$`d\nB=2\n');
+    expect(parseEnvContents(written).get('SECRET')).toBe('p$&w$`d');
   });
 });

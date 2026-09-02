@@ -16,8 +16,10 @@ import { creativeDirectorTreatmentSchema, creativeDirectorPlanSchema } from '../
 import { PROJECT_STATUSES, PLAN_STEP_TERMINAL_SUCCESS } from '../../lib/creativeDirectorPresets.js';
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { pickLlmRoutePinLayer } from '../../lib/llmRoutePin.js';
-import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
 import { localImageFilename } from '../../lib/localImageFilename.js';
+import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
+
+export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 
 const isStr = (v) => typeof v === 'string';
 
@@ -138,6 +140,12 @@ export function trimRuns(runs) {
     }
   }
   return kept.reverse();
+}
+
+/** Normalize a project at either storage backend's write chokepoint. */
+export function beforeSave(project) {
+  if (!Array.isArray(project?.runs)) return project;
+  return { ...project, runs: trimRuns(project.runs) };
 }
 
 // Postgres `status` column is VARCHAR(32) and created_at/updated_at are
@@ -280,15 +288,6 @@ export function startingImageFilename(startingImageFile) {
  * (`updatedAt`) and the soft-delete trio are normalized so the wire/hash shape
  * is stable regardless of on-disk key position.
  */
-export function sanitizeProjectForSync(raw) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  if (!isStr(raw.id) || !raw.id) return null;
-  const createdAt = isStr(raw.createdAt) ? raw.createdAt : new Date().toISOString();
-  const updatedAt = isStr(raw.updatedAt) ? raw.updatedAt : createdAt;
-  const { deleted, deletedAt } = sanitizeSoftDeleteFields(raw);
-  return { ...raw, createdAt, updatedAt, deleted, deletedAt };
-}
-
 /**
  * LWW merge decision for one incoming project record against the local copy —
  * mirrors `mergeAuthorRecord` (services/authors/logic.js):

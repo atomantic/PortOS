@@ -115,7 +115,7 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
   useEffect(() => {
     if (!hostedSession?.id) return;
     const socket = io('/fableloom-hosted', {
-      auth: { sessionId: hostedSession.id, role: 'host' },
+      auth: { sessionId: hostedSession.id, token: hostedSession.token, role: 'host' },
       transports: ['websocket', 'polling'],
     });
     hostedSocketRef.current = socket;
@@ -161,7 +161,7 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
       socket.disconnect();
       hostedSocketRef.current = null;
     };
-  }, [hostedSession?.id]);
+  }, [hostedSession?.id, hostedSession?.token]);
 
   // Sync playback phase & scene updates to hosted audience
   useEffect(() => {

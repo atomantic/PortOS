@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import { formatManuscript } from '../lib/manuscriptFormat';
 import toast from '../components/ui/Toast';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import UnsavedChangesConfirm from '../components/ui/UnsavedChangesConfirm';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { usePipelineProgress } from '../hooks/usePipelineProgress';
@@ -733,7 +734,19 @@ export default function PipelineManuscriptEditor() {
     else sectionRefs.current.delete(number);
   };
 
-  if (loading) return <div className="p-6 text-gray-500 text-sm">Loading manuscript…</div>;
+  if (loading) {
+    return (
+      <PageSkeleton
+        label="Loading manuscript"
+        fullHeight
+        padded
+        headerRowClass="flex items-center gap-3 flex-wrap"
+        titleWidthClass="w-56"
+        showAction={false}
+        cards={3}
+      />
+    );
+  }
 
   return (
     // The full-bleed route removes Layout's default scroll container. The

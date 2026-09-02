@@ -24,6 +24,7 @@ import {
   TimelineBlock, FloatingLane, LibraryTile, StillTile, AudioRow, BedAudio,
 } from '../components/media/VideoTimelineLanes';
 import { NumberField, FadeFields, RemoveButton } from '../components/media/VideoTimelineInspector';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import {
   assetUrl,
   segmentDuration,
@@ -647,7 +648,17 @@ export default function VideoTimelineEditor() {
   const overlayLabel = useCallback((ov) => ov.assetFile, []);
   const bedLabel = useCallback((tr) => tr.assetFile, []);
 
-  if (loading) return <div className="text-gray-500 text-sm">Loading project…</div>;
+  if (loading) {
+    return (
+      <PageSkeleton
+        label="Loading timeline project"
+        headerRowClass="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-port-border"
+        titleWidthClass="w-56"
+        cards={3}
+        sidebar={false}
+      />
+    );
+  }
   if (error || !project) {
     return (
       <div className="text-center py-12">

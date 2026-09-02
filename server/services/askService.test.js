@@ -272,6 +272,62 @@ describe('runAsk', () => {
     expect(fullText).toBe('Hello, world.');
   });
 
+  it('keeps streamed content and emits an error when the canonical reader fails', async () => {
+    providers.getActiveProvider.mockResolvedValue(fakeStreamProvider());
+    const encoded = new TextEncoder().encode('data: {"choices":[{"delta":{"content":"partial"}}]}\n');
+    let reads = 0;
+    const cancel = vi.fn(async () => {});
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: {
+        getReader: () => ({
+          read: vi.fn(async () => {
+            reads += 1;
+            if (reads === 1) return { done: false, value: encoded };
+            throw new Error('socket reset');
+          }),
+          cancel,
+        }),
+      },
+    });
+
+    const events = [];
+    for await (const evt of askService.runAsk({ question: 'hi' })) events.push(evt);
+    fetchSpy.mockRestore();
+
+    expect(events.find((event) => event.type === 'delta')).toEqual({ type: 'delta', text: 'partial' });
+    expect(events.find((event) => event.type === 'error')?.error).toContain('socket reset');
+    expect(events.find((event) => event.type === 'done')).toBeUndefined();
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it('cancels the canonical reader without a terminal event after client abort', async () => {
+    providers.getActiveProvider.mockResolvedValue(fakeStreamProvider());
+    const controller = new AbortController();
+    const encoded = new TextEncoder().encode('data: {"choices":[{"delta":{"content":"partial"}}]}\n');
+    const cancel = vi.fn(async () => {});
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: {
+        getReader: () => ({
+          read: vi.fn(async () => ({ done: false, value: encoded })),
+          cancel,
+        }),
+      },
+    });
+
+    const stream = askService.runAsk({ question: 'hi', signal: controller.signal });
+    expect((await stream.next()).value.type).toBe('sources');
+    expect((await stream.next()).value).toEqual({ type: 'delta', text: 'partial' });
+    controller.abort();
+    expect(await stream.next()).toEqual({ done: true, value: undefined });
+    fetchSpy.mockRestore();
+
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it('emits an error event for an empty question', async () => {
     const events = [];
     for await (const evt of askService.runAsk({ question: '   ' })) events.push(evt);

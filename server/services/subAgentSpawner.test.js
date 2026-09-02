@@ -23,8 +23,67 @@ vi.mock('./thinkingLevels.js', async (importOriginal) => {
   };
 });
 
-import { describe, it, expect, vi } from 'vitest';
+// ── Listener-guard suite support (see "CoS event listener rejection guards").
+// `initSpawner()` wires the real `task:ready` / `agent:terminate` listeners onto
+// the shared `cosEvents` emitter; these mocks keep that wiring off the network,
+// the runner socket and the agent store, and let a single test force the one
+// rejection it is about.
+const listenerGuardState = vi.hoisted(() => ({ loadStateError: null, terminateError: null }));
+
+vi.mock('./providerStatus.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  initProviderStatus: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('./cosRunnerClient.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  isRunnerAvailable: vi.fn().mockResolvedValue(false),
+  isRunnerReachable: vi.fn().mockResolvedValue(false),
+  initCosRunnerConnection: vi.fn(),
+  onCosRunnerEvent: vi.fn(),
+}));
+
+vi.mock('./agentManagement.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  cleanupOrphanedAgents: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('./updateChecker.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  isUpdateInProgress: vi.fn().mockReturnValue(false),
+}));
+
+vi.mock('./cosForgeSpawnGate.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  forgeSpawnHoldReason: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock('./cosState.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    loadState: vi.fn(async () => {
+      if (listenerGuardState.loadStateError) throw listenerGuardState.loadStateError;
+      return actual.loadState();
+    }),
+  };
+});
+
+vi.mock('./agentOrchestrator.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    spawnAgentForTask: vi.fn().mockResolvedValue(undefined),
+    terminateAgent: vi.fn(async () => {
+      if (listenerGuardState.terminateError) throw listenerGuardState.terminateError;
+    }),
+  };
+});
+
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { isTruthyMeta, isFalsyMeta } from './agentState.js';
+import { cosEvents } from './cosEvents.js';
+import { initSpawner } from './subAgentSpawner.js';
 import { selectModelForTask } from './agentModelSelection.js';
 import { applyAppWorktreeDefault } from './cos.js';
 
@@ -416,3 +475,70 @@ describe('Worktree & metadata flag helpers', () => {
 
 });
 
+
+/**
+ * `cosEvents` is a plain `EventEmitter` — it neither awaits nor catches what a
+ * listener returns, so an `async` listener passed straight to `.on` turns any
+ * rejection into a process-level `unhandledRejection`. For `task:ready`, the one
+ * chokepoint every spawn emitter funnels through, that also means the queued
+ * task is silently never dispatched and the failure carries no task id.
+ *
+ * These two cases pin the wrapper: they fail if the `.catch` is dropped, or if a
+ * new `await` is added ahead of the listener's inner `try`.
+ */
+describe('CoS event listener rejection guards', () => {
+  const flushMicrotasks = async () => {
+    for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve));
+  };
+
+  let logs;
+  let unhandled;
+  const collectLog = entry => logs.push(entry);
+  const collectUnhandled = reason => unhandled.push(reason);
+
+  beforeAll(async () => {
+    await initSpawner();
+  });
+
+  beforeEach(() => {
+    logs = [];
+    unhandled = [];
+    cosEvents.on('log', collectLog);
+    process.on('unhandledRejection', collectUnhandled);
+  });
+
+  afterEach(() => {
+    cosEvents.off('log', collectLog);
+    process.off('unhandledRejection', collectUnhandled);
+    listenerGuardState.loadStateError = null;
+    listenerGuardState.terminateError = null;
+  });
+
+  it('logs a task:ready dispatch failure with the task id instead of leaking a rejection', async () => {
+    listenerGuardState.loadStateError = new Error('state read failed');
+
+    cosEvents.emit('task:ready', { id: 'task-x' });
+    await flushMicrotasks();
+
+    expect(unhandled).toEqual([]);
+    const errors = logs.filter(entry => entry.level === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toContain('task-x');
+    expect(errors[0].message).toContain('state read failed');
+    expect(errors[0].taskId).toBe('task-x');
+  });
+
+  it('logs an agent:terminate failure with the agent id instead of leaking a rejection', async () => {
+    listenerGuardState.terminateError = new Error('Agent not found');
+
+    cosEvents.emit('agent:terminate', 'agent-unknown');
+    await flushMicrotasks();
+
+    expect(unhandled).toEqual([]);
+    const errors = logs.filter(entry => entry.level === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toContain('agent-unknown');
+    expect(errors[0].message).toContain('Agent not found');
+    expect(errors[0].agentId).toBe('agent-unknown');
+  });
+});

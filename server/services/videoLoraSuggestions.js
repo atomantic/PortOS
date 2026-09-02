@@ -33,6 +33,13 @@ const CURATED_VIDEO_LORAS = [
     name: 'LTX-2.3 Audio Reactive V2',
     note: 'Improved beat response for LTX-2.3 audio-conditioned renders. Use music as motion guidance; PortOS keeps generated vocals disabled.',
   },
+  {
+    repo: 'KennethFal/vh5tape-vhs-lora-minimax-h3',
+    file: 'vh5tape.safetensors',
+    family: VIDEO_LORA_FAMILIES.MINIMAX_H3,
+    name: 'VH5 VHS Tape (MiniMax H3)',
+    note: 'Retro 1980s VHS look — tracking artifacts, tape grain, and CRT color for MiniMax H3 renders.',
+  },
 ];
 
 const now = () => Date.now();

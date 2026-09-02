@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
+import { errorMiddleware, ServerError } from '../lib/errorHandler.js';
 
 vi.mock('../services/contactsSync.js', () => ({
   checkSetup: vi.fn(async () => ({ ok: true, sourceCount: 2, rawContactRows: 100 })),
@@ -22,6 +22,7 @@ vi.mock('../services/tribeContacts.js', () => ({
 }));
 
 const { default: router } = await import('./contacts.js');
+const tribeContacts = await import('../services/tribeContacts.js');
 
 function makeApp() {
   const app = express();
@@ -69,5 +70,25 @@ describe('contacts routes (#2415)', () => {
     const res = await request(makeApp()).post('/api/contacts/import-to-tribe').send({ contactId: 'c1', name: 'Sam' });
     expect(res.status).toBe(201);
     expect(res.body.created).toBe(true);
+  });
+
+  // #5676: the route no longer re-wraps service errors — the shared middleware
+  // normalizes them. Pin the envelope so dropping that catch stays invisible
+  // to callers.
+  it('POST /import-to-tribe surfaces a service ServerError as its own 400 envelope', async () => {
+    tribeContacts.importContactToTribe.mockRejectedValueOnce(
+      new ServerError('name is required', { status: 400, code: 'BAD_REQUEST' }),
+    );
+    const res = await request(makeApp()).post('/api/contacts/import-to-tribe').send({ contactId: 'c1' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('name is required');
+    expect(res.body.code).toBe('BAD_REQUEST');
+  });
+
+  it('POST /import-to-tribe maps an unexpected service throw to a 500 envelope', async () => {
+    tribeContacts.importContactToTribe.mockRejectedValueOnce(new Error('address book exploded'));
+    const res = await request(makeApp()).post('/api/contacts/import-to-tribe').send({ contactId: 'c1' });
+    expect(res.status).toBe(500);
+    expect(res.body.code).toBe('INTERNAL_ERROR');
   });
 });

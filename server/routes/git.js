@@ -4,6 +4,7 @@ import { resolve } from 'path';
 import * as git from '../services/git.js';
 import * as appsService from '../services/apps.js';
 import { getAgents } from '../services/cosAgentLifecycle.js';
+import { protectedAgentIds } from '../services/agentState.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
 import { validateRequest, submoduleStatusQuerySchema, submoduleUpdateSchema } from '../lib/validation.js';
@@ -38,17 +39,25 @@ function assertAllowedWorkspace(path) {
 }
 
 /**
- * Collect branch names actively used by running CoS agents.
- * Includes worktree branches and workspace branches from agent metadata.
+ * What a branch/worktree cleanup must leave alone, from ONE read of the agent
+ * list so the two sets can't be built from different snapshots:
+ *   - `excludeBranches` — the branch each running agent is working on.
+ *   - `activeAgentIds` — every agent whose worktree is in use (`protectedAgentIds`).
+ *
+ * An unreadable agent list yields `activeAgentIds: null`, which the worktree
+ * reaper reads as "liveness unknown" and fails closed on — the alternative,
+ * an empty Set, would pass for "nothing is running" and take a live agent's
+ * directory out from under it.
+ * @returns {Promise<{excludeBranches: Set<string>, activeAgentIds: Set<string>|null}>}
  */
-async function getActiveAgentBranches() {
-  const agents = await getAgents().catch(() => []);
+async function getAgentProtections() {
+  const agents = await getAgents().catch(() => null);
   const branches = new Set();
-  for (const agent of agents) {
+  for (const agent of agents || []) {
     if (agent.status !== 'running') continue;
     if (agent.metadata?.worktreeBranch) branches.add(agent.metadata.worktreeBranch);
   }
-  return branches;
+  return { excludeBranches: branches, activeAgentIds: agents ? protectedAgentIds(agents) : null };
 }
 
 const router = Router();
@@ -260,12 +269,15 @@ router.post('/reset-to-default', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// POST /api/git/cleanup-merged - Delete all merged branches (local + remote)
+// POST /api/git/cleanup-merged - Delete all merged branches (local + remote),
+// including the worktrees pinning them. The service reaps a worktree only when
+// it is clean and its branch is fully in origin/<default>; anything else comes
+// back in `skipped` with the reason.
 router.post('/cleanup-merged', asyncHandler(async (req, res) => {
   const { path } = req.body;
   assertAllowedWorkspace(path);
-  const excludeBranches = await getActiveAgentBranches();
-  const result = await git.deleteMergedBranches(path, { excludeBranches });
+  const { excludeBranches, activeAgentIds } = await getAgentProtections();
+  const result = await git.deleteMergedBranches(path, { excludeBranches, activeAgentIds });
   res.json(result);
 }));
 
@@ -279,7 +291,7 @@ router.post('/delete-branch', asyncHandler(async (req, res) => {
   if (!local && !remote) {
     throw new ServerError('at least one of local or remote must be true', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  const excludeBranches = await getActiveAgentBranches();
+  const { excludeBranches } = await getAgentProtections();
   const result = await git.deleteBranch(path, branch, { local, remote, excludeBranches });
   res.json(result);
 }));

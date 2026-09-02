@@ -8,6 +8,7 @@
 import { listIngredients as listCatalogIngredients, listRefsForIngredient } from '../../catalogDB.js';
 import { getActiveCatalogTypes, isActiveType } from '../../../lib/catalogTypes.js';
 import { clampLimit } from './shared.js';
+import { escapeRegExp } from '../../../lib/textUtils.js';
 
 // Creative catalog lookups — "find my character X", "what scenes feature Y",
 // "look up the place named Z", "search my catalog for …". Tight enough that
@@ -29,10 +30,6 @@ const activeCatalogTypeIds = () => {
 // The live `type` enum for catalog_lookup, used by the orchestrator's
 // spec-builder to widen the static schema with user-defined types.
 export const catalogTypeEnum = () => activeCatalogTypeIds();
-
-// Escape a freeform string (a user-type label can be anything) for safe use
-// inside a `new RegExp(...)` so a label like "C++ faction" can't throw or inject.
-const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // The static `catalog` regex only knows the six built-in nouns. A user-defined
 // type (e.g. "wardrobe", "faction") wouldn't trip it, so "search my wardrobes"

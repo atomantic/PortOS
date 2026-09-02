@@ -17,6 +17,7 @@ import { emitLog } from './cosEvents.js';
 import { getActiveProvider, getAllProviders, getProviderById } from './providers.js';
 import { isProviderAvailable, getFallbackProvider, getProviderStatus } from './providerStatus.js';
 import { selectModelForTask } from './agentModelSelection.js';
+import { publicReviewPostureForTask, resolvePublicReviewProvider } from './publicReviewProviderSelection.js';
 
 /**
  * Resolve the provider + model for a task.
@@ -28,6 +29,56 @@ import { selectModelForTask } from './agentModelSelection.js';
  * >}
  */
 export async function resolveAgentProviderAndModel(task) {
+  // A public-review stage is resolved against the POSTURE it declares, not the
+  // usual pin → active → fallback chain: the ordinary chain is allowed to swap
+  // onto any healthy provider, and swapping untrusted contributor content onto
+  // a provider with no enforced posture is exactly what must not happen. The
+  // eligible set comes from this install's own enabled providers, so a stage
+  // configured on a machine that only has grok resolves to grok.
+  const publicReviewPosture = publicReviewPostureForTask(task);
+  if (publicReviewPosture) return resolvePublicReviewAgentProvider(task, publicReviewPosture);
+  return resolveOrdinaryProviderAndModel(task);
+}
+
+/**
+ * Provider + model for a public-review stage. A stage's own provider/model/
+ * effort pins (`metadata.provider` / `metadata.model`, set by the pipeline
+ * hand-off from the stage config) are honored when the pin is still eligible;
+ * otherwise the install's own eligible set decides, and an install with none
+ * fails PERMANENTLY so the task surfaces instead of re-dispatching forever.
+ */
+async function resolvePublicReviewAgentProvider(task, posture) {
+  const resolved = await resolvePublicReviewProvider({
+    posture,
+    pinnedProviderId: task.metadata?.provider || null,
+  });
+  if (!resolved.ok) {
+    return { ok: false, permanent: true, error: resolved.error, providerId: task.metadata?.provider || undefined };
+  }
+  const { provider } = resolved;
+  if (task.metadata?.provider && !resolved.pinHonored) {
+    emitLog('warn', `Public-review stage provider ${task.metadata.provider} is not eligible for the ${posture} posture — using ${provider.id}`, {
+      taskId: task.id,
+      providerId: provider.id,
+    });
+  }
+  // A model pin only survives when it was chosen FOR this provider; otherwise
+  // fall back to the provider's own default rather than handing one vendor's
+  // model id to another (the failure mode documented in the ordinary path).
+  const modelSelection = await selectModelForTask(task, provider);
+  const pinnedModel = task.metadata?.model;
+  const selectedModel = pinnedModel && task.metadata?.provider === provider.id
+    ? pinnedModel
+    : (modelSelection.model || provider.defaultModel || null);
+  emitLog('info', `Public-review stage (${posture}) resolved to provider ${provider.id}${selectedModel ? ` model ${selectedModel}` : ''}`, {
+    taskId: task.id,
+    providerId: provider.id,
+    model: selectedModel,
+  });
+  return { ok: true, provider, selectedModel, modelSelection };
+}
+
+async function resolveOrdinaryProviderAndModel(task) {
   // A task can pin a specific provider via metadata.provider (e.g. a CoS job's
   // per-job AI override). Resolve it BEFORE the active-provider availability
   // gate so a pinned-but-healthy provider isn't blocked when the *active*

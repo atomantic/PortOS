@@ -11,16 +11,9 @@ export const getAppleHealthMetrics = (metricName, from, to) => {
   if (to) params.set('to', to);
   return request(`/health/metrics/${metricName}/daily?${params}`);
 };
-export const getAppleHealthSummary = (metricName, from, to) => {
-  const params = new URLSearchParams();
-  if (from) params.set('from', from);
-  if (to) params.set('to', to);
-  return request(`/health/metrics/${metricName}?${params}`);
-};
 export const getAvailableHealthMetrics = () => request('/health/metrics/available');
 export const getLatestHealthMetrics = (metricNames, options = {}) =>
   request(`/health/metrics/latest?metrics=${metricNames.join(',')}`, options);
-export const getAppleHealthRange = () => request('/health/range');
 export const getAppleHealthCorrelation = (from, to) => {
   const params = new URLSearchParams();
   if (from) params.set('from', from);

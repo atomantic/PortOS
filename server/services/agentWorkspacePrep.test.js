@@ -139,6 +139,48 @@ describe('prepareAgentWorkspace', () => {
     expect(ensureLatest).not.toHaveBeenCalled();
   });
 
+  it('read-only task with explicit isolation gets a disposable worktree', async () => {
+    createWorktree.mockResolvedValue({
+      worktreePath: '/mock/worktrees/agent-ro-isolated',
+      branchName: 'cos/t-ro-isolated/agent-ro-isolated',
+      baseBranch: 'main',
+    });
+    const task = {
+      id: 't-ro-isolated', taskType: 'internal',
+      metadata: { readOnly: true, useWorktree: true },
+    };
+
+    const r = await prepareAgentWorkspace({ agentId: 'agent-ro-isolated', task });
+
+    expect(r.outcome).toBe('ready');
+    expect(r.workspacePath).toBe('/mock/worktrees/agent-ro-isolated');
+    expect(r.worktreeInfo).toEqual(expect.objectContaining({
+      worktreePath: '/mock/worktrees/agent-ro-isolated',
+    }));
+    expect(createWorktree).toHaveBeenCalledWith('agent-ro-isolated', expect.any(String), 't-ro-isolated', expect.objectContaining({
+      baseBranch: 'main',
+    }));
+    expect(ensureLatest).not.toHaveBeenCalled();
+    expect(detectConflicts).not.toHaveBeenCalled();
+  });
+
+  it('blocks a read-only task when its required worktree cannot be created', async () => {
+    createWorktree.mockResolvedValue(null);
+    const task = {
+      id: 't-ro-blocked', taskType: 'internal',
+      metadata: { readOnly: true, useWorktree: true },
+    };
+
+    const r = await prepareAgentWorkspace({ agentId: 'agent-ro-blocked', task });
+
+    expect(r.outcome).toBe('blocked');
+    expect(r.reason).toContain('isolation was required');
+    expect(updateTask).toHaveBeenCalledWith('t-ro-blocked', expect.objectContaining({
+      status: 'blocked',
+      metadata: expect.objectContaining({ blockedCategory: 'worktree-failed' }),
+    }), 'internal');
+  });
+
   it('plan-only task: keeps the no-worktree path even with delivery flags present', async () => {
     const task = {
       id: 't-plan-only',

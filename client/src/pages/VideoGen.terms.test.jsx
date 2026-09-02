@@ -38,20 +38,8 @@ const state = vi.hoisted(() => ({
   repairModel: vi.fn(),
   attach: vi.fn(),
   eventSourceRef: { current: null },
-  // Stands in for the persisted install-wide acceptance list
-  // (settings.videoGen.acceptedModelTerms) the terms endpoints read and write.
-  acceptedTerms: [],
-  setVideoModelTerms: vi.fn(),
   getVideoGenStatus: vi.fn(),
   runtimeInstallComplete: null,
-}));
-
-// Acceptance lives on the server, not in this browser, so a single
-// acknowledgement authorizes every render surface. The page reads and writes it
-// through these two endpoints.
-vi.mock('../services/apiImageVideo.js', () => ({
-  getVideoModelTerms: vi.fn(async () => ({ accepted: [...state.acceptedTerms] })),
-  setVideoModelTerms: (...args) => state.setVideoModelTerms(...args),
 }));
 
 vi.mock('../services/api', () => ({
@@ -168,13 +156,6 @@ describe('VideoGen MiniMax H3 orchestration', () => {
     state.generateVideo.mockReset().mockResolvedValue({ jobId: 'job-1' });
     state.startDownload.mockReset();
     state.repairModel.mockReset().mockResolvedValue({ ok: true });
-    state.acceptedTerms = [];
-    state.setVideoModelTerms.mockReset().mockImplementation(async (termsId, accepted) => {
-      state.acceptedTerms = accepted
-        ? [...new Set([...state.acceptedTerms, termsId])]
-        : state.acceptedTerms.filter((id) => id !== termsId);
-      return { accepted: [...state.acceptedTerms] };
-    });
     state.getVideoGenStatus.mockReset().mockResolvedValue({
       connected: true,
       pythonPath: '/opt/example/python3',

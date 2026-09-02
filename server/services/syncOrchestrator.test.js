@@ -1,18 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock all dependencies
-vi.mock('./instances.js', () => ({
+vi.mock('./instances.js', async () => ({
+  // Keep the REAL resolveEffectiveCategories (and the default map it resolves
+  // against): a hand-written stand-in would let the shipped defaults drift from
+  // what these tests assert the sync loop does with them.
+  ...(await vi.importActual('./instances.js')),
   getPeers: vi.fn(),
   updatePeer: vi.fn().mockResolvedValue(undefined),
   // forPeer scoping resolves our own instanceId; the orchestrator catches a
   // throw/UNKNOWN and just omits the query param, so the default mock returns
   // a stable id to exercise the scoped path.
   getInstanceId: vi.fn().mockResolvedValue('our-inst-id'),
-  UNKNOWN_INSTANCE_ID: 'unknown',
-  DEFAULT_SYNC_CATEGORIES: {
-    brain: false, memory: false, goals: false,
-    character: false, digitalTwin: false, meatspace: false, catalog: false
-  }
 }));
 vi.mock('./brainSyncLog.js', () => ({
   getChangesSince: vi.fn(),
@@ -89,6 +88,12 @@ tryReadFile: vi.fn().mockResolvedValue(null),
 vi.mock('../lib/asyncMutex.js', () => ({
   createMutex: () => async (fn) => fn()
 }));
+// Spy on the REAL peerFetch (not a stand-in) so the orchestrator's hops still
+// go through the production client — the assertion is only that they do.
+vi.mock('../lib/peerHttpClient.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, peerFetch: vi.fn(actual.peerFetch) };
+});
 vi.mock('fs/promises', () => ({
   writeFile: vi.fn().mockResolvedValue(),
   rename: vi.fn().mockResolvedValue()
@@ -104,6 +109,7 @@ import { instanceEvents } from './instanceEvents.js';
 import { getCurrentSeq, compactLog } from './brainSyncLog.js';
 import { getBrainChecksum, applyBrainSnapshot } from './brainReconcile.js';
 import { getMaxSequence } from './memorySync.js';
+import { peerFetch } from '../lib/peerHttpClient.js';
 import { syncWithPeer, syncAllPeers, getSyncStatus, initSyncOrchestrator, stopSyncOrchestrator } from './syncOrchestrator.js';
 
 const mockFetch = vi.fn();
@@ -324,6 +330,28 @@ describe('syncOrchestrator', () => {
       // Categories still pulled, but WITHOUT the forPeer param (full snapshot).
       expect(urls.some((u) => u.includes('/api/sync/universe/'))).toBe(true);
       expect(urls.some((u) => u.includes('forPeer='))).toBe(false);
+    });
+
+    it('pulls snapshots through peerFetch, with the peer record, so the hop is identified (#5663)', async () => {
+      // The receiver's peer-pull gate keys on `X-PortOS-Instance-Id`; without
+      // it the PII categories now refuse us outright. Passing the peer record
+      // as peerFetch's third arg is what attaches that header AND the stored
+      // Basic credential (header contents themselves: peerHttpClient.test.js).
+      // `forPeer` is a payload-scoping hint, NOT identity — don't confuse them.
+      const dataSync = await import('./dataSync.js');
+      dataSync.getSupportedCategories.mockReturnValue(['digitalTwin']);
+      const peerWithCats = {
+        ...mockPeer,
+        syncCategories: { digitalTwin: true },
+        auth: { username: 'alice', password: 'pw' },
+      };
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({ checksum: 'x', data: null }) });
+      await syncWithPeer(peerWithCats);
+      const call = peerFetch.mock.calls.find((c) => c[0].includes('/api/sync/digitalTwin/'));
+      expect(call).toBeDefined();
+      expect(call[2]).toBe(peerWithCats);
+      // The 15s budget survived the move off fetchWithTimeout.
+      expect(call[1].signal).toBeInstanceOf(AbortSignal);
     });
   });
 
@@ -776,6 +804,69 @@ describe('syncOrchestrator', () => {
 
       expect(applyBrainSnapshot).not.toHaveBeenCalled();
       expect(result.brain.totalApplied).toBe(0);
+    });
+  });
+
+  // AI usage metrics are the one DEFAULT-ON sync category: a fresh peer syncs
+  // them without the user enabling anything, and the peer-level `syncEnabled`
+  // master switch (which predates default-on categories and means "don't
+  // replicate my content here") must not silently retract them.
+  describe('default-ON categories', () => {
+    const categoryUrls = () => mockFetch.mock.calls
+      .map((c) => c[0])
+      .filter((url) => url.includes('/api/sync/'));
+
+    beforeEach(async () => {
+      const dataSync = await import('./dataSync.js');
+      dataSync.getSupportedCategories.mockReturnValue(['usage', 'goals']);
+      dataSync.getChecksum.mockResolvedValue({ checksum: 'local' });
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/checksum')) return { ok: true, json: async () => ({ checksum: 'remote' }) };
+        if (url.includes('/snapshot')) return { ok: true, json: async () => ({ data: { instances: {} }, checksum: 'remote' }) };
+        return { ok: true, json: async () => ({}) };
+      });
+      dataSync.applyRemote.mockResolvedValue({ applied: true, count: 1 });
+    });
+
+    it('pulls usage from a peer whose stored map predates the category', async () => {
+      // A peer record written before `usage` existed has no key for it — it must
+      // pick up the shipped default rather than reading as off forever.
+      await syncWithPeer({ ...mockPeer, syncEnabled: true, syncCategories: { goals: false } });
+      expect(categoryUrls().some((url) => url.includes('/api/sync/usage/'))).toBe(true);
+    });
+
+    it('keeps pulling usage — and only usage — when the master switch is off', async () => {
+      await syncWithPeer({ ...mockPeer, syncEnabled: false, syncCategories: { goals: true } });
+      const urls = categoryUrls();
+      expect(urls.some((url) => url.includes('/api/sync/usage/'))).toBe(true);
+      expect(urls.some((url) => url.includes('/api/sync/goals/'))).toBe(false);
+    });
+
+    it('honors an explicit opt-out of the category itself', async () => {
+      await syncWithPeer({ ...mockPeer, syncEnabled: true, syncCategories: { usage: false } });
+      expect(categoryUrls().some((url) => url.includes('/api/sync/usage/'))).toBe(false);
+    });
+
+    it('still syncs nothing for a disabled peer', async () => {
+      getPeers.mockResolvedValue([{ ...mockPeer, enabled: false, syncCategories: { usage: true } }]);
+      await syncAllPeers();
+      expect(categoryUrls()).toHaveLength(0);
+    });
+
+    // The peer:online handler gates only on hasAnySyncEnabled, and a default-ON
+    // category makes that truthy for nearly every peer — so `enabled: false`
+    // has to be checked there too, or a manual Connect on a disabled peer would
+    // start syncing it.
+    it('a disabled peer is not eligible even when its status flips online', async () => {
+      const disabled = { ...mockPeer, enabled: false, syncCategories: { usage: true } };
+      getPeers.mockResolvedValue([disabled]);
+      initSyncOrchestrator();
+      // instanceEvents is mocked, so invoke the handler the orchestrator just
+      // registered rather than relying on a real emit.
+      const [, onPeerOnline] = instanceEvents.on.mock.calls.find(([event]) => event === 'peer:online');
+      await onPeerOnline(disabled);
+      await vi.runOnlyPendingTimersAsync();
+      expect(categoryUrls()).toHaveLength(0);
     });
   });
 

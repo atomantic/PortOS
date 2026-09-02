@@ -9,6 +9,12 @@ vi.mock('../services/loras.js', () => ({
   deleteLora: vi.fn(),
   getLora: vi.fn(),
   installFromCivitai: vi.fn(),
+  previewCivitaiInstall: vi.fn(async () => ({
+    kind: 'civitai', verdict: 'ok', destPath: 'lora-x.safetensors', expectedBytes: 1024, freeBytes: 1e12, requiredBytes: 1024, headroomBytes: 0,
+  })),
+  previewHuggingfaceInstall: vi.fn(async () => ({
+    kind: 'huggingface', verdict: 'ok', destPath: 'weights.safetensors', expectedBytes: 1024, freeBytes: 1e12, requiredBytes: 1024, headroomBytes: 0,
+  })),
   installFromHuggingface: vi.fn(async (_input, { onProgress } = {}) => {
     onProgress?.({ received: 4, total: 8 });
     onProgress?.({ received: 8, total: 8 });

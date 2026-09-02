@@ -219,8 +219,31 @@ describe('git routes — active agent branch exclusion', () => {
 
       // Should not 500 — getAgents failure is swallowed via .catch(() => [])
       expect(res.status).toBe(200);
-      const { excludeBranches } = gitService.deleteMergedBranches.mock.calls[0][1];
+      const { excludeBranches, activeAgentIds } = gitService.deleteMergedBranches.mock.calls[0][1];
       expect(excludeBranches.size).toBe(0);
+      // Cleanup now tears worktrees down, so an unreadable agent list must NOT
+      // read as "nothing is running" — null makes the reaper hold every agent tree.
+      expect(activeAgentIds).toBeNull();
+    });
+
+    it('protects running AND paused agent worktrees via activeAgentIds', async () => {
+      cosAgentLifecycleService.getAgents.mockResolvedValue([
+        { id: 'agent-running', status: 'running', metadata: { worktreeBranch: 'feature/agent-work' } },
+        { id: 'agent-paused', status: 'paused' },
+        { id: 'agent-done', status: 'completed' },
+      ]);
+      gitService.deleteMergedBranches.mockResolvedValue({ deleted: [] });
+
+      const app = makeApp();
+      await request(app)
+        .post('/api/git/cleanup-merged')
+        .send({ path: WORKSPACE });
+
+      const { activeAgentIds } = gitService.deleteMergedBranches.mock.calls[0][1];
+      expect(activeAgentIds.has('agent-running')).toBe(true);
+      // A paused agent keeps its worktree as resume context.
+      expect(activeAgentIds.has('agent-paused')).toBe(true);
+      expect(activeAgentIds.has('agent-done')).toBe(false);
     });
   });
 

@@ -104,7 +104,7 @@ function TranscriptTruncationNotice({ transcript }) {
   );
 }
 
-export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, completed, paused = false, liveOutput, durations, onFeedbackChange, remote, peerName }) {
+export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, onRelaunch, completed, paused = false, liveOutput, durations, onFeedbackChange, remote, peerName }) {
   const [expanded, setExpanded] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [fullOutput, setFullOutput] = useState(null);
@@ -472,6 +472,16 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                 aria-expanded={expanded}
               >
                 {expanded ? 'Hide' : 'Show'}
+              </button>
+            )}
+            {!inactive && onRelaunch && (
+              <button
+                onClick={() => onRelaunch(agent)}
+                className="flex items-center gap-1.5 px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors"
+                aria-label="Relaunch this agent's task on a different provider or model"
+              >
+                <RefreshCw size={12} aria-hidden="true" />
+                <span className="hidden sm:inline">Relaunch</span>
               </button>
             )}
             {!inactive && onPause && (
@@ -963,7 +973,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
 
       {/* Expanded output view */}
       {expanded && (
-        <div className="border-t border-port-border bg-port-bg/50 p-3 min-w-0 overflow-y-auto max-h-[60vh]">
+        <div className="border-t border-port-border bg-port-bg/50 p-3 min-w-0 overflow-y-auto max-h-dvh-cap [--dvh-cap:60dvh]">
           {/* Pipeline stage tabs */}
           {pipelineStages && (
             <div className="flex items-center gap-1 mb-2 overflow-x-auto">
@@ -1054,7 +1064,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
         onClose={() => setPromptOpen(false)}
         size="2xl"
         usePortal
-        panelClassName="bg-port-card border border-port-border rounded-lg max-h-[80vh] flex flex-col"
+        panelClassName="bg-port-card border border-port-border rounded-lg flex flex-col"
         ariaLabel="Agent prompt"
       >
         <div className="flex items-center justify-between px-4 py-2 border-b border-port-border shrink-0">

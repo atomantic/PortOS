@@ -16,6 +16,7 @@
  */
 import { describe, it, expect, afterAll, beforeAll } from 'vitest';
 import * as db from '../lib/db.js';
+import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { checkHealth, ensureSchema, close, query } from '../lib/db.js';
 import {
   insertUserActionEvent,
@@ -35,7 +36,7 @@ let skipReason = '';
     dbReady = true;
   }
 }
-if (!dbReady) console.log(`⏭️ userActions.db.test: skipping suite — ${skipReason || 'no database'}`);
+const runDb = requireDbOrSkip('services/userActions.db.test', dbReady, skipReason);
 
 const nonce = `ua${Date.now()}`;
 const key = (suffix) => `${nonce}:${suffix}`;
@@ -71,7 +72,7 @@ const listMine = async (options = {}) => {
   return rows.filter((row) => row.dedupeKey.startsWith(`${nonce}:`));
 };
 
-describe.skipIf(!dbReady)('user_action_events store (#5594)', () => {
+describe.skipIf(!runDb)('user_action_events store (#5594)', () => {
   it('inserts and round-trips the full row shape', async () => {
     const row = event({
       dedupeKey: key('shape'),

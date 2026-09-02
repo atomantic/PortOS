@@ -1,10 +1,14 @@
 import { describe, it, expect } from 'vitest';
 
+import { ERROR_CATEGORIES } from './aiToolkit/errorDetection.js';
 import {
   COOLDOWN_MS_BY_CATEGORY,
   DEFAULT_COOLDOWN_MS,
+  DEFAULT_USAGE_LIMIT_COOLDOWN_MS,
+  MAX_BENCH_MS,
   isRequestSpecificCategory,
   isSchemaTypeCategory,
+  resolveBenchWaitMs,
   resolveProviderBench,
 } from './providerCooldown.js';
 
@@ -76,5 +80,41 @@ describe('resolveProviderBench', () => {
       category: 'unknown',
       waitTimeMs: COOLDOWN_MS_BY_CATEGORY.unknown,
     });
+  });
+});
+
+describe('resolveBenchWaitMs', () => {
+  const NOW = 1_700_000_000_000;
+
+  it('prefers the reset time the provider itself reported', () => {
+    const bench = resolveProviderBench({ category: ERROR_CATEGORIES.USAGE_LIMIT });
+    const resetsAt = new Date(NOW + 42 * 60_000).toISOString();
+
+    expect(resolveBenchWaitMs(bench, { resetsAt, now: NOW })).toBe(42 * 60_000);
+  });
+
+  it('falls back to the category table when the reset time is missing, past, or junk', () => {
+    // A past or unparseable timestamp resolving to "unbench now" is exactly the
+    // failure a bench exists to prevent, so it must never win.
+    const usage = resolveProviderBench({ category: ERROR_CATEGORIES.USAGE_LIMIT });
+    expect(resolveBenchWaitMs(usage, { now: NOW })).toBe(DEFAULT_USAGE_LIMIT_COOLDOWN_MS);
+    expect(resolveBenchWaitMs(usage, { resetsAt: new Date(NOW - 60_000).toISOString(), now: NOW }))
+      .toBe(DEFAULT_USAGE_LIMIT_COOLDOWN_MS);
+    expect(resolveBenchWaitMs(usage, { resetsAt: 'not a date', now: NOW }))
+      .toBe(DEFAULT_USAGE_LIMIT_COOLDOWN_MS);
+
+    const auth = resolveProviderBench({ category: ERROR_CATEGORIES.AUTH_ERROR });
+    expect(resolveBenchWaitMs(auth, { now: NOW })).toBe(COOLDOWN_MS_BY_CATEGORY[ERROR_CATEGORIES.AUTH_ERROR]);
+  });
+
+  it('clamps an implausibly distant reset so a bad unit cannot bench for days', () => {
+    const bench = resolveProviderBench({ category: ERROR_CATEGORIES.USAGE_LIMIT });
+    const aWeekOut = new Date(NOW + 7 * 24 * 60 * 60_000).toISOString();
+
+    expect(resolveBenchWaitMs(bench, { resetsAt: aWeekOut, now: NOW })).toBe(MAX_BENCH_MS);
+  });
+
+  it('is zero for a failure that must not bench anything', () => {
+    expect(resolveBenchWaitMs(resolveProviderBench({ category: ERROR_CATEGORIES.CONTENT_REFUSAL }))).toBe(0);
   });
 });

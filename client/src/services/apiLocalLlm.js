@@ -21,6 +21,23 @@ export const getToolUseModels = (options) => request('/local-llm/tool-use-models
 export const getLocalLlmCatalog = (backend, q = '', { variants = false } = {}) =>
   request(`/local-llm/catalog?backend=${encodeURIComponent(backend)}${q ? `&q=${encodeURIComponent(q)}` : ''}${variants ? '&variants=1' : ''}`);
 
+export const getModelAbuseGuardStatus = (options) =>
+  request('/local-llm/security-guard/status', options);
+
+export const installModelAbuseGuard = (options) =>
+  request('/local-llm/security-guard/install', {
+    method: 'POST',
+    body: '{}',
+    ...options,
+  });
+
+export const cancelModelAbuseGuardInstall = (options) =>
+  request('/local-llm/security-guard/install/cancel', {
+    method: 'POST',
+    body: '{}',
+    ...options,
+  });
+
 export const getLocalLlmHuggingFaceSearch = (backend, q = '', category = 'all', limit = 12) =>
   request(`/local-llm/huggingface-search?backend=${encodeURIComponent(backend)}&category=${encodeURIComponent(category)}&limit=${encodeURIComponent(limit)}${q ? `&q=${encodeURIComponent(q)}` : ''}`);
 
@@ -72,6 +89,20 @@ export const stopMtplxServer = () =>
 export const installMtplx = () =>
   request('/local-llm/mtplx/install', { method: 'POST' });
 
+// Slotstream (SSD-streaming MoE on Apple Silicon) — a PM2-managed process,
+// same lifecycle shape as MTPLX. A start never downloads weights.
+export const getSlotstreamServerStatus = (options) =>
+  request('/local-llm/slotstream/status', options);
+
+export const startSlotstreamServer = (config = {}) =>
+  request('/local-llm/slotstream/start', { method: 'POST', body: JSON.stringify(config) });
+
+export const stopSlotstreamServer = () =>
+  request('/local-llm/slotstream/stop', { method: 'POST' });
+
+export const installSlotstream = () =>
+  request('/local-llm/slotstream/install', { method: 'POST' });
+
 // MTPLX model catalog — search, download, and remove MTP checkpoints in-app.
 // `mtplx forge discover` is upstream's index of MTPLX-branded models, which is
 // exactly the set `mtplx serve` can run; an empty query returns its default list.
@@ -101,9 +132,9 @@ export const saveRuntimeStartupList = () =>
 export const getLlamaServerStatus = (options) =>
   request('/local-llm/llama-server/status', options);
 
-// Optional version/Homebrew metadata for the Local LLMs runtime card. Kept
-// separate from lifecycle status because the provider version probe and Homebrew
-// query can be slow on a cold machine.
+// Optional version/package-manager metadata for the Local LLMs runtime card.
+// Kept separate from lifecycle status because the provider version probe and the
+// `brew info` / `winget list` query can be slow on a cold machine.
 export const getLlamaServerUpdateStatus = (options) =>
   request('/local-llm/llama-server/update-status', options);
 
@@ -116,10 +147,21 @@ export const stopLlamaServer = () =>
 export const installLlamaServer = () =>
   request('/local-llm/llama-server/install', { method: 'POST' });
 
-// Upgrade a Homebrew-installed llama.cpp binary. A managed llama-server is
-// restarted by the server with its existing launch configuration.
+// Upgrade a package-manager-installed llama.cpp binary (Homebrew on macOS/Linux,
+// winget on Windows). A managed llama-server is restarted by the server with its
+// existing launch configuration.
 export const upgradeLlamaServer = () =>
   request('/local-llm/llama-server/upgrade', { method: 'POST' });
+
+// Size/destination/free-disk numbers for the confirm step, before any
+// transfer starts. `body.kind` picks which download this previews
+// ('spec-decode' | 'mtplx' | 'install') — see localLlmDownloadPreflightSchema.
+export const previewLocalLlmDownload = (body, options) =>
+  request('/local-llm/download-preflight', {
+    method: 'POST',
+    body: JSON.stringify(body),
+    ...options,
+  });
 
 // Fetch one speculative-decoding preset's GGUF (role: 'model' | 'draftModel')
 // from Hugging Face into the path the launcher passes llama.cpp. Byte progress
@@ -172,22 +214,18 @@ export const unloadLmStudioModel = (modelId, options) =>
     ...options,
   });
 
-export const testLocalLlmModel = (payload, options) =>
-  request('/local-llm/test', { method: 'POST', body: JSON.stringify(payload), ...options });
-
 export const compareLocalLlmModels = (payload, options) =>
   request('/local-llm/compare', { method: 'POST', body: JSON.stringify(payload), ...options });
 
-// Streaming variant of testLocalLlmModel. POSTs the same payload but reads the
-// NDJSON response body so `onToken(delta, kind)` fires per chunk for live
-// rendering — kind is 'content' or 'reasoning' so the caller can render a
-// reasoning model's chain-of-thought on its own channel. Resolves with the
-// terminal result object (same shape as
-// testLocalLlmModel, including `error`/`text` for a timed-out partial). The
-// caller passes `signal` to cancel — aborting rejects the read with AbortError,
-// which the caller should swallow when `signal.aborted` (intentional cancel).
-// Can't use the EventSource-based useSseProgress hook here: that's GET-only and
-// this request carries a prompt body.
+// Streaming playground test. POSTs the prompt payload and reads the NDJSON
+// response body so `onToken(delta, kind)` fires per chunk for live rendering —
+// kind is 'content' or 'reasoning' so the caller can render a reasoning model's
+// chain-of-thought on its own channel. Resolves with the terminal result object
+// (including `error`/`text` for a timed-out partial). The caller passes
+// `signal` to cancel — aborting rejects the read with AbortError, which the
+// caller should swallow when `signal.aborted` (intentional cancel). Can't use
+// the EventSource-based useSseProgress hook here: that's GET-only and this
+// request carries a prompt body.
 export async function streamLocalLlmTest(payload, { signal, onToken } = {}) {
   const response = await fetch(`${API_BASE}/local-llm/test/stream`, {
     method: 'POST',

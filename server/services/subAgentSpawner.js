@@ -143,6 +143,103 @@ export async function loadSlashdoCommand(commandName) {
 let spawnerInitPromise = null;
 
 /**
+ * Dispatch a ready task — the single chokepoint every `task:ready` emitter
+ * funnels through.
+ *
+ * A named function rather than the `.on(...)` callback itself so the
+ * registration can attach a `.catch`: `cosEvents` is a plain `EventEmitter`, so
+ * it neither awaits nor catches an async listener's promise, and the awaits
+ * ahead of the `try` below (`isRunnerReachable`, `forgeSpawnHoldReason`,
+ * `loadState`, `holdTask`) would otherwise escape as an unhandled rejection —
+ * leaving a queued task silently never dispatched, and surfacing only as a
+ * process-level unhandled-rejection toast with no task id in it.
+ */
+async function handleTaskReady(task) {
+  // The on-demand generator normally clears approval for a user-triggered Run,
+  // but a task type can deliberately retain a non-bypassable approval marker
+  // (for example, a public review that would hand a later coordinator the
+  // ability to act on external PRs). Keep this check at the shared dispatch
+  // chokepoint so every emitter honors it, including on-demand and job paths.
+  if (task?.approvalRequired === true) {
+    return holdTask(task, 'task requires approval');
+  }
+  // ── HOLDS, at the one chokepoint all seven `task:ready` emitters funnel
+  // through. Each leaves the task queued (no status write, no retry charged)
+  // for a condition that clears on its own.
+  //
+  // Held HERE rather than inside `runAgentSpawn`: a hold below this line would
+  // return past `releaseAppReviewMarker`, stranding the synthetic "in review"
+  // marker for the whole outage — issue #989's exact failure mode. The
+  // releases in `holdTask` are the same ones the spawn body owns.
+  //
+  // 1. Self-update in progress (issue #4124). `/api/update/execute` refuses to
+  //    start while an agent is live, but `update.sh` then spends multiple
+  //    seconds in `git pull` / submodule update / `npm install` before it
+  //    reaches `pm2 delete` — an agent spawned inside that window is severed
+  //    by the restart (its PTY/child process is a child of this server). The
+  //    flag reads synchronously, so nothing can slip between the check and the
+  //    spawn; the task runs on the other side of the restart.
+  if (isUpdateInProgress()) {
+    return holdTask(task, 'a PortOS self-update is in progress');
+  }
+  // 2. Runner down. Dispatching into a stopped runner is not a task failure,
+  //    but both spawn arms recorded it as one: the CLI arm finalized
+  //    `spawn-rejected` (a retry each time, so a runner left off overnight
+  //    walked every queued task through its retry budget into `blocked`), and
+  //    the TUI arm threw into the actionable `spawn-error`, parking the task
+  //    for a human over an app the user simply turned off.
+  if (useRunner && !(await isRunnerReachable())) {
+    return holdTask(task, 'CoS Runner is down');
+  }
+  // 3. Forge unreachable, for a task that cannot finish without it (#5110). An
+  //    agent whose task promises a change request does its work, fails to push,
+  //    and finalizes `forge-unreachable` — non-actionable, so the task retries,
+  //    and each retry re-runs the whole agent against the same dead network. One
+  //    VPN drop cost three runs (101 + 50 + 23 minutes) to reach `blocked`. See
+  //    cosForgeSpawnGate.js for the narrowings that keep the hold from becoming
+  //    the silent wedge a wrong hold would be.
+  const forgeHold = await forgeSpawnHoldReason(task);
+  if (forgeHold) return holdTask(task, forgeHold);
+  // 4. Global capacity. Reserve across the spawn window so direct persistent
+  //    turns and ordinary agents cannot both pass a stale pre-registration
+  //    snapshot.
+  const capacityState = await loadState();
+  const globalSlot = acquireCosGlobalSlot({
+    agents: capacityState.agents,
+    limit: capacityState.config?.maxConcurrentAgents,
+    reservationId: task.id,
+  });
+  if (!globalSlot.ok) return holdTask(task, globalSlot.reason);
+
+  // 5. Local inference endpoint at capacity (issue #4834). A CoS agent runs a
+  //    vendor CLI that opens its own connection to the local model server, so
+  //    promptRunner's in-flight gate never sees it — without this, two agents
+  //    can be dispatched at one GPU and the runtime kills a turn with an
+  //    accelerator OOM. Held HERE because `dequeueNextTask` is only one of the
+  //    emitters: evaluateTasks, forceSpawnTask, the job scheduler and the
+  //    Creative Director bridge all reach this listener directly. The slot is
+  //    reserved across the spawn window and released below, since the agent
+  //    record isn't countable until it reaches `running`.
+  try {
+    const localSlot = await acquireLocalEndpointSpawnSlot(task, capacityState.agents);
+    if (!localSlot.ok) return holdTask(task, localSlot.reason);
+    try {
+      await spawnAgentForTask(task);
+    } catch (err) {
+      emitLog('error', `Failed to spawn agent for task ${task.id}: ${err?.message || err}`, { taskId: task.id });
+      const jobId = task.metadata?.jobId;
+      if (jobId) {
+        cosEvents.emit('job:spawn-failed', { jobId });
+      }
+    } finally {
+      localSlot.release();
+    }
+  } finally {
+    globalSlot.release();
+  }
+}
+
+/**
  * Initialize the spawner — listen for task:ready events. Idempotent: repeated
  * calls return the same promise (and re-run only after a failed attempt).
  */
@@ -344,86 +441,22 @@ async function runInitSpawner() {
     }
   });
 
-  cosEvents.on('task:ready', async (task) => {
-    // ── HOLDS, at the one chokepoint all seven `task:ready` emitters funnel
-    // through. Each leaves the task queued (no status write, no retry charged)
-    // for a condition that clears on its own.
-    //
-    // Held HERE rather than inside `runAgentSpawn`: a hold below this line would
-    // return past `releaseAppReviewMarker`, stranding the synthetic "in review"
-    // marker for the whole outage — issue #989's exact failure mode. The
-    // releases in `holdTask` are the same ones the spawn body owns.
-    //
-    // 1. Self-update in progress (issue #4124). `/api/update/execute` refuses to
-    //    start while an agent is live, but `update.sh` then spends multiple
-    //    seconds in `git pull` / submodule update / `npm install` before it
-    //    reaches `pm2 delete` — an agent spawned inside that window is severed
-    //    by the restart (its PTY/child process is a child of this server). The
-    //    flag reads synchronously, so nothing can slip between the check and the
-    //    spawn; the task runs on the other side of the restart.
-    if (isUpdateInProgress()) {
-      return holdTask(task, 'a PortOS self-update is in progress');
-    }
-    // 2. Runner down. Dispatching into a stopped runner is not a task failure,
-    //    but both spawn arms recorded it as one: the CLI arm finalized
-    //    `spawn-rejected` (a retry each time, so a runner left off overnight
-    //    walked every queued task through its retry budget into `blocked`), and
-    //    the TUI arm threw into the actionable `spawn-error`, parking the task
-    //    for a human over an app the user simply turned off.
-    if (useRunner && !(await isRunnerReachable())) {
-      return holdTask(task, 'CoS Runner is down');
-    }
-    // 3. Forge unreachable, for a task that cannot finish without it (#5110). An
-    //    agent whose task promises a change request does its work, fails to push,
-    //    and finalizes `forge-unreachable` — non-actionable, so the task retries,
-    //    and each retry re-runs the whole agent against the same dead network. One
-    //    VPN drop cost three runs (101 + 50 + 23 minutes) to reach `blocked`. See
-    //    cosForgeSpawnGate.js for the narrowings that keep the hold from becoming
-    //    the silent wedge a wrong hold would be.
-    const forgeHold = await forgeSpawnHoldReason(task);
-    if (forgeHold) return holdTask(task, forgeHold);
-    // 4. Global capacity. Reserve across the spawn window so direct persistent
-    //    turns and ordinary agents cannot both pass a stale pre-registration
-    //    snapshot.
-    const capacityState = await loadState();
-    const globalSlot = acquireCosGlobalSlot({
-      agents: capacityState.agents,
-      limit: capacityState.config?.maxConcurrentAgents,
-      reservationId: task.id,
-    });
-    if (!globalSlot.ok) return holdTask(task, globalSlot.reason);
+  // `cosEvents` does not await or catch a listener's promise, so the async body
+  // is wrapped rather than passed straight to `.on` (same reason as the guarded
+  // orphan sweep below). `emitLog` rather than `console.error`: every other
+  // failure path in this dispatch already logs there, and the CoS Logs tab is
+  // where an operator looks for a task that never started.
+  // The settled promise is RETURNED even though EventEmitter discards it: it is
+  // what lets a test `await` a dispatch rather than racing it.
+  cosEvents.on('task:ready', (task) =>
+    handleTaskReady(task).catch(err =>
+      emitLog('error', `Task ${task?.id} could not be dispatched: ${err?.message || err}`, { taskId: task?.id })));
 
-    // 5. Local inference endpoint at capacity (issue #4834). A CoS agent runs a
-    //    vendor CLI that opens its own connection to the local model server, so
-    //    promptRunner's in-flight gate never sees it — without this, two agents
-    //    can be dispatched at one GPU and the runtime kills a turn with an
-    //    accelerator OOM. Held HERE because `dequeueNextTask` is only one of the
-    //    emitters: evaluateTasks, forceSpawnTask, the job scheduler and the
-    //    Creative Director bridge all reach this listener directly. The slot is
-    //    reserved across the spawn window and released below, since the agent
-    //    record isn't countable until it reaches `running`.
-    try {
-      const localSlot = await acquireLocalEndpointSpawnSlot(task, capacityState.agents);
-      if (!localSlot.ok) return holdTask(task, localSlot.reason);
-      try {
-        await spawnAgentForTask(task);
-      } catch (err) {
-        emitLog('error', `Failed to spawn agent for task ${task.id}: ${err?.message || err}`, { taskId: task.id });
-        const jobId = task.metadata?.jobId;
-        if (jobId) {
-          cosEvents.emit('job:spawn-failed', { jobId });
-        }
-      } finally {
-        localSlot.release();
-      }
-    } finally {
-      globalSlot.release();
-    }
-  });
-
-  cosEvents.on('agent:terminate', async (agentId) => {
-    await terminateAgent(agentId);
-  });
+  // `terminateAgent` throws for an unknown or already-gone agent id, and this
+  // listener is not on a request path — an unguarded rejection would escape.
+  cosEvents.on('agent:terminate', (agentId) =>
+    terminateAgent(agentId).catch(err =>
+      emitLog('error', `Terminate request for agent ${agentId} failed: ${err?.message || err}`, { agentId })));
 
   // Clean up orphaned agents after a short delay (let other services finish init).
   // setTimeout runs outside the request lifecycle, so guard the async callback.

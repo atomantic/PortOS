@@ -87,6 +87,7 @@ export {
 } from './visualConditioning.js';
 export {
   DEFAULT_SESSION_TTL_MINUTES,
+  HOSTED_SESSION_SWEEP_INTERVAL_MS,
   MAX_SESSION_TTL_MINUTES,
   _getInternalSession,
   _resetHostedSessions,
@@ -100,6 +101,9 @@ export {
   revalidateLiveConversationGate,
   sanitizeHostedSession,
   startHostedListening,
+  startHostedSessionSweep,
+  stopHostedSessionSweep,
+  sweepExpiredHostedSessions,
   updateHostedSession,
   verifyHostedToken,
 } from './hostedSession.js';

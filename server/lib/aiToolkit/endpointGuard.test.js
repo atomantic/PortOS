@@ -138,3 +138,17 @@ describe('endpointGuard — assertSecretEndpoint', () => {
     expect(() => assertSecretEndpoint('http://169.254.169.254/', { hasSecret: true, allowCustomEndpoint: true })).toThrow();
   });
 });
+
+// The guard's public path is this module; `index.js` also re-exports it via
+// `export *` so the barrel advertises the surface. That line is otherwise only
+// exercised at server boot (bootstrap.js is the sole barrel importer), so a
+// rename here would fail a live start rather than a test. Load the barrel
+// lazily — a static import would pull the toolkit's route/provider/runner graph
+// into every case in this file.
+describe('endpointGuard — public barrel re-export', () => {
+  it('resolves both functions through aiToolkit/index.js, same identities', async () => {
+    const barrel = await import('./index.js');
+    expect(barrel.evaluateSecretEndpoint).toBe(evaluateSecretEndpoint);
+    expect(barrel.assertSecretEndpoint).toBe(assertSecretEndpoint);
+  });
+});

@@ -16,6 +16,7 @@
 
 import { describe, it, expect, afterAll } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
+import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 import { readRaw, listRaw, writeRaw, deleteRaw } from './db.js';
 
 let dbReady = false;
@@ -34,7 +35,7 @@ let skipReason = '';
   }
 }
 
-if (!dbReady) console.log(`⏭️  creativeCommissions/db.test.js skipped: ${skipReason}`);
+const runDb = requireDbOrSkip('services/creativeCommissions/db.test', dbReady, skipReason);
 
 const nonce = `cc${Date.now()}`;
 const cid = (n) => `${nonce}-${n}`;
@@ -61,7 +62,7 @@ afterAll(async () => {
   }
 });
 
-describe.skipIf(!dbReady)('creativeCommissions DB adapter round-trip', () => {
+describe.skipIf(!runDb)('creativeCommissions DB adapter round-trip', () => {
   it('writes and reads a record back verbatim', async () => {
     const r = rec(cid('rw'), { brief: { intent: 'noir', constraints: { universeId: 'u-1' } } });
     await writeRaw(r.id, r);

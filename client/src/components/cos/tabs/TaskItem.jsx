@@ -18,7 +18,8 @@ import {
   Play,
   Scale,
   Unlock,
-  Server
+  Server,
+  RefreshCw
 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import AutoSizeTextarea from '../../ui/AutoSizeTextarea';
@@ -32,6 +33,7 @@ import CollapsibleText from '../../ui/CollapsibleText';
 import { extractCosTaskType } from '../../../lib/cosTaskType';
 import InstancePicker from '../InstancePicker';
 import EffortSelect from '../EffortSelect';
+import RelaunchAgentModal from './RelaunchAgentModal';
 
 const statusIcons = {
   pending: <Clock size={16} aria-hidden="true" className="text-yellow-500" />,
@@ -79,6 +81,59 @@ const getTaskEditData = (task, providers) => {
 
 export const taskRowId = (taskId, source) => `cos-task-${source}-${encodeURIComponent(taskId)}`;
 
+function SecurityScanReport({ scan, idScope, taskId }) {
+  const reports = Array.isArray(scan?.reports) ? scan.reports : [];
+  if (!reports.length || !['findings', 'unavailable'].includes(scan?.status)) return null;
+  const incomplete = scan.status === 'unavailable';
+
+  return (
+    <section
+      className="mt-2 px-2 py-2 bg-port-error/10 border border-port-error/20 rounded text-sm"
+      aria-label="Security scan report"
+    >
+      <div className="flex items-center gap-2 text-port-error/90">
+        <AlertCircle size={14} aria-hidden="true" />
+        <span className="font-medium">{incomplete ? 'Security scan report' : 'Security scan findings'}</span>
+        <span className="text-xs text-gray-400">read-only report · no PR actions taken</span>
+      </div>
+      <p className="mt-1 text-xs text-gray-400">
+        {incomplete
+          ? 'Stage 1 could not complete safely. Any collected report remains human-only and no PR actions have been taken.'
+          : 'Stage 1 flagged possible model-abuse content. The flagged diff and report are withheld from the Stage 2 model; no PR actions have been taken.'}
+      </p>
+      <div className="space-y-2 mt-2">
+        {reports.map((report) => {
+          const number = String(report?.number ?? 'unknown');
+          const url = typeof report?.url === 'string' && /^https?:\/\//i.test(report.url) ? report.url : null;
+          return (
+            <div key={`${taskId}-security-report-${number}`} className="pl-2 border-l border-port-error/30">
+              <div className="flex items-center gap-2 flex-wrap text-xs text-gray-300">
+                <span className="font-medium">PR #{number}</span>
+                {url && (
+                  <a
+                    href={url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-port-accent hover:text-port-accent/80"
+                  >
+                    Open PR
+                  </a>
+                )}
+                {report?.passed === true && <span className="text-port-success">clean</span>}
+              </div>
+              <CollapsibleText
+                id={`security-report-${idScope}-${taskId}-${number}`}
+                text={typeof report?.findings === 'string' && report.findings ? report.findings : 'No findings.'}
+                className="mt-1 text-gray-300 whitespace-pre-wrap"
+              />
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 // Get success rate styling based on percentage
 function getSuccessRateStyle(rate) {
   if (rate >= 70) return { bg: 'bg-port-success/15', text: 'text-port-success', label: 'high' };
@@ -86,7 +141,7 @@ function getSuccessRateStyle(rate) {
   return { bg: 'bg-port-error/15', text: 'text-port-error', label: 'low' };
 }
 
-export default function TaskItem({ task, isSystem, spawning = false, selected = false, onRefresh, providers, durations, dragHandleProps, apps, instances = null, onEditingChange }) {
+export default function TaskItem({ task, agent = null, isSystem, spawning = false, selected = false, onRefresh, onTaskUnblocked, providers, durations, dragHandleProps, apps, instances = null, onEditingChange }) {
   // System tasks are persisted in COS-TASKS.md. Every task
   // mutation must name that source; otherwise the API's user-queue default
   // searches TASKS.md and reports the system task as missing.
@@ -139,6 +194,7 @@ export default function TaskItem({ task, isSystem, spawning = false, selected = 
   const savedEditData = getTaskEditData(task, providers);
   const [editData, setEditData] = useState(() => savedEditData);
   const [showBlockedModal, setShowBlockedModal] = useState(false);
+  const [relaunching, setRelaunching] = useState(false);
   const [blockedReason, setBlockedReason] = useState('');
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   // Independent armed-state from the delete confirm above — a second instance
@@ -212,6 +268,7 @@ export default function TaskItem({ task, isSystem, spawning = false, selected = 
     const result = await api.updateCosTask(task.id, updates, { silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result) return false;
     toast.success(successMessage);
+    if (task.status === 'blocked' && newStatus === 'pending') onTaskUnblocked?.(task.id);
     onRefresh();
     return true;
   };
@@ -558,6 +615,11 @@ export default function TaskItem({ task, isSystem, spawning = false, selected = 
                   className="text-sm text-gray-500 mt-1"
                 />
               )}
+              <SecurityScanReport
+                scan={task.metadata?.pipeline?.securityScan}
+                idScope={idScope}
+                taskId={task.id}
+              />
               {(task.metadata?.model || task.metadata?.provider || task.metadata?.effort) && (
                 <div className="flex flex-wrap items-center gap-2 mt-1">
                   {task.metadata?.model && (
@@ -703,6 +765,19 @@ export default function TaskItem({ task, isSystem, spawning = false, selected = 
                     <Play size={14} aria-hidden="true" />
                   </button>
                 )}
+                {/* Only when a live agent holds this task — relaunching pauses that
+                    agent (see relaunchAgent in agentManagement.js). */}
+                {agent && (
+                  <button
+                    type="button"
+                    onClick={() => setRelaunching(true)}
+                    className="p-1 text-gray-500 hover:text-port-accent transition-colors"
+                    title="Relaunch on a different provider or model"
+                    aria-label={`Relaunch task ${task.id} on a different provider or model`}
+                  >
+                    <RefreshCw size={14} aria-hidden="true" />
+                  </button>
+                )}
                 {/* Labeled, not icon-only: this is the primary next action for a
                     blocked task, and the icon-only affordance (clicking the status
                     glyph) wasn't discoverable — the user had to go find the banner
@@ -751,6 +826,16 @@ export default function TaskItem({ task, isSystem, spawning = false, selected = 
           )}
         </div>
       </div>
+
+      {relaunching && agent && (
+        <RelaunchAgentModal
+          agent={agent}
+          providers={providers}
+          apps={apps}
+          onDone={onRefresh}
+          onClose={() => setRelaunching(false)}
+        />
+      )}
 
       {/* Blocked Reason Modal */}
       <Modal

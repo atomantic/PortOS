@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import RunTaskButton from './RunTaskButton';
@@ -58,6 +58,25 @@ describe('RunTaskButton', () => {
     expect(onTrigger).toHaveBeenCalledWith('review', 'app-1');
     // Picking an app dismisses the panel.
     expect(screen.queryByText('Example App')).toBeNull();
+  });
+
+  it('shows sending progress and keeps a receipt at the app-card action', async () => {
+    const user = userEvent.setup();
+    let resolveTrigger;
+    const onTrigger = vi.fn(() => new Promise(resolve => { resolveTrigger = resolve; }));
+    render(<RunTaskButton taskType="review" apps={APPS} onTrigger={onTrigger} />);
+
+    await user.click(screen.getByRole('button', { name: /Run on App/i }));
+    await user.click(screen.getByText('Example App'));
+
+    expect(screen.getByRole('button', { name: 'Sending…' })).toBeDisabled();
+    expect(screen.getByRole('status')).toHaveTextContent('Sending request');
+
+    await act(async () => { resolveTrigger({ id: 'request-1' }); });
+
+    expect(screen.getByRole('status')).toHaveTextContent('Request sent to Example App');
+    expect(screen.getByText('Request sent to Example App')).toBeVisible();
+    expect(screen.getByRole('button', { name: /Run on App/i })).toBeEnabled();
   });
 
   it('keeps the app panel inside the viewport on a phone-width screen', async () => {

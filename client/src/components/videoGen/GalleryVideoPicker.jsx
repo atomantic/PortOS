@@ -120,7 +120,7 @@ export default function GalleryVideoPicker({
       onClose={onClose}
       size="3xl"
       usePortal
-      panelClassName="bg-port-card border border-port-border rounded-xl max-h-[85vh] flex flex-col"
+      panelClassName="bg-port-card border border-port-border rounded-xl flex flex-col"
       ariaLabel="Pick a video from your gallery"
     >
       <div className="p-3 border-b border-port-border space-y-2">

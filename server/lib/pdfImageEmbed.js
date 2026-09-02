@@ -1,7 +1,7 @@
 /**
  * PDF image-embed helpers shared between the issue-level comic PDF and the
  * volume-level trade-paperback PDF. Both assemblies read PNG/JPEG files
- * from PATHS.images, embed them into a pdf-lib document, and fit each
+ * from PATHS.images, embed them into a @cantoo/pdf-lib document, and fit each
  * image to a printable page with a small white margin.
  *
  * Caller passes its own error codes / subject strings so a failure inside

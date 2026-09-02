@@ -11,6 +11,8 @@ import * as mtplxModels from '../lib/mtplxModels.js';
 import * as processEnv from '../lib/processEnv.js';
 import * as streamingSpawn from '../lib/streamingSpawn.js';
 import * as hfCatalog from './huggingFaceCatalog.js';
+import * as huggingfaceLora from '../lib/huggingfaceLora.js';
+import * as hfToken from './hfToken.js';
 
 const BINARY = '/opt/homebrew/bin/mtplx';
 
@@ -23,6 +25,8 @@ describe('mtplxModelManager', () => {
     vi.spyOn(mtplxModels, 'listMtplxCachedModels').mockResolvedValue({ models: [], error: null });
     // Publish dates come from the Hub — no suite may reach it.
     vi.spyOn(hfCatalog, 'fetchRepoPublishedDates').mockResolvedValue({});
+    vi.spyOn(hfToken, 'getHfToken').mockResolvedValue(null);
+    vi.spyOn(huggingfaceLora, 'fetchHuggingfaceModel').mockResolvedValue({ usedStorage: 0 });
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });

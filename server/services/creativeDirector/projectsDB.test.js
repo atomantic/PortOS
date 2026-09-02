@@ -14,10 +14,22 @@
 
 import { describe, it, expect, afterAll, beforeAll, vi } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
+import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 
 vi.mock('../mediaCollections.js', () => ({
   createCollection: vi.fn(async () => ({ id: 'col-test' })),
 }));
+
+const syncCounter = vi.hoisted(() => ({ baseHash: 0 }));
+vi.mock('../../lib/conflictJournal.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    maybeJournalBeforeOverwrite: vi.fn(async () => {}),
+    setSyncBaseHash: vi.fn(async () => { syncCounter.baseHash += 1; }),
+    flushBaseHashes: vi.fn(async () => {}),
+  };
+});
 
 let dbReady = false;
 let skipReason = '';
@@ -38,7 +50,7 @@ let skipReason = '';
   }
 }
 
-if (!dbReady) console.log(`⏭️  projectsDB.test.js skipped: ${skipReason}`);
+const runDb = requireDbOrSkip('services/creativeDirector/projectsDB.test', dbReady, skipReason);
 
 const CREATE_INPUT = {
   name: 'DB round-trip', aspectRatio: '1:1', quality: 'draft', modelId: 'm', targetDurationSeconds: 9,
@@ -48,7 +60,7 @@ const TREATMENT = {
   scenes: [{ sceneId: 'scene-1', order: 0, intent: 'bounce', prompt: 'a bouncing ball', durationSeconds: 3 }],
 };
 
-describe.skipIf(!dbReady)('projectsDB round-trip', () => {
+describe.skipIf(!runDb)('projectsDB round-trip', () => {
   const created = [];
   let db;
   // Import AFTER the skip gate so a no-DB run never touches the pool.
@@ -96,6 +108,27 @@ describe.skipIf(!dbReady)('projectsDB round-trip', () => {
 
     const all = await db.listProjects();
     expect(all.find((p) => p.name === 'Legacy row')?.id).toBe(id);
+  });
+
+  it('rejects persistence when the project id is missing', async () => {
+    await expect(db.persist(query, { name: 'Missing id' })).rejects.toMatchObject({ code: 'PROJECT_ID_MISSING' });
+  });
+
+  it('same-updatedAt re-push does not persist or rewrite the base hash', async () => {
+    const remote = {
+      id: 'cd-same-timestamp', name: 'Same', status: 'draft', runs: [],
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+      deleted: false, deletedAt: null,
+    };
+    created.push(remote.id);
+    await db.mergeProjectsFromSync([remote]);
+    const before = await query(`SELECT xmin::text AS version FROM creative_director_projects WHERE id = $1`, [remote.id]);
+    syncCounter.baseHash = 0;
+
+    expect(await db.mergeProjectsFromSync([remote])).toEqual({ applied: false, count: 0 });
+    const after = await query(`SELECT xmin::text AS version FROM creative_director_projects WHERE id = $1`, [remote.id]);
+    expect(after.rows[0].version).toBe(before.rows[0].version);
+    expect(syncCounter.baseHash).toBe(0);
   });
 
   // #4148 — the batch-by-id read the Creative Commission detail page uses so it
@@ -147,6 +180,7 @@ describe.skipIf(!dbReady)('projectsDB round-trip', () => {
     const res = await db.deleteProject(p.id);
     expect(res).toEqual({ ok: true });
     expect(await db.getProject(p.id)).toBeNull();
+    await expect(db.updateProject(p.id, { name: 'Zombie' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
     await expect(db.deleteProject(p.id)).rejects.toThrow(/not found/);
   });
 

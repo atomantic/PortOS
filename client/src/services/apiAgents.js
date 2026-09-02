@@ -2,11 +2,9 @@ import { request } from './apiCore.js';
 
 // Running Agents (Process Management)
 export const getRunningAgents = (options) => request('/agents', options);
-export const getRunningAgentInfo = (pid) => request(`/agents/${pid}`);
-export const killRunningAgent = (pid) => request(`/agents/${pid}`, { method: 'DELETE' });
+const killRunningAgent = (pid) => request(`/agents/${pid}`, { method: 'DELETE' });
 // Legacy aliases
 export const getAgents = getRunningAgents;
-export const getAgentInfo = getRunningAgentInfo;
 export const killAgent = killRunningAgent;
 
 // Agent Activity
@@ -24,14 +22,6 @@ export const getAgentActivityTimeline = (limit = 50, agentIds = null, before = n
   if (before) params.set('before', before);
   return request(`/agents/activity/timeline?${params}`);
 };
-export const getAgentActivityByAgent = (agentId, options = {}) => {
-  const params = new URLSearchParams();
-  if (options.date) params.set('date', options.date);
-  if (options.limit) params.set('limit', options.limit);
-  if (options.offset) params.set('offset', options.offset);
-  if (options.action) params.set('action', options.action);
-  return request(`/agents/activity/agent/${agentId}?${params}`);
-};
 export const getAgentActivityStats = (agentId, days = 7) =>
   request(`/agents/activity/agent/${agentId}/stats?days=${days}`);
 
@@ -47,8 +37,6 @@ const runEventQuery = (filters = {}) => {
   const query = params.toString();
   return query ? `?${query}` : '';
 };
-export const getRunEvents = (filters = {}, options = {}) =>
-  request(`/agents/activity/run-events${runEventQuery(filters)}`, options);
 export const getRunEventStats = (options = {}) =>
   request('/agents/activity/run-events/stats', options);
 export const getRunEventProjections = (filters = {}, options = {}) =>
@@ -72,14 +60,6 @@ export const getCosToolCatalog = ({ scope = 'all', format = 'portos', intent, ..
   if (intent) params.set('intent', intent);
   return request(`/cos/tools?${params}`, options);
 };
-export const callCosTool = (call, options = {}) => request('/cos/tools/call', {
-  method: 'POST',
-  body: JSON.stringify(call),
-  ...options,
-  headers: { 'Idempotency-Key': call.requestId, ...(options.headers || {}) },
-});
-export const getCosToolCall = (requestId, options = {}) =>
-  request(`/cos/tools/calls/${encodeURIComponent(requestId)}`, options);
 export const getPersistentMindRuntime = (options = {}) => request('/cos/mind/runtime', options);
 export const getPersistentMindVisibility = (options = {}) => {
   const { refresh, ...requestOptions } = options;
@@ -189,7 +169,6 @@ export const getCosAgents = (options) => request('/cos/agents', options);
 export const getCosAgentDates = () => request('/cos/agents/history');
 export const getCosAgentsByDate = (date) => request(`/cos/agents/history/${date}`);
 export const getCosAgent = (id) => request(`/cos/agents/${id}`);
-export const terminateCosAgent = (id) => request(`/cos/agents/${id}/terminate`, { method: 'POST' });
 export const pauseCosAgent = (id, reason, options = {}) => request(`/cos/agents/${id}/pause`, {
   method: 'POST',
   body: JSON.stringify({ reason }),
@@ -200,6 +179,14 @@ export const pauseCosAgent = (id, reason, options = {}) => request(`/cos/agents/
 // (extra context, provider/model/effort/app) — omit a field to keep the paused
 // run's value.
 export const resumeCosAgent = (id, overrides = {}, options = {}) => request(`/cos/agents/${id}/resume`, {
+  method: 'POST',
+  body: JSON.stringify(overrides),
+  ...options
+});
+// Relaunch a RUNNING agent: the server pauses it (process stopped, worktree kept)
+// and requeues its own task with the overrides. Omit a field to keep the stalled
+// run's value. Returns the same mode enum as resumeCosAgent.
+export const relaunchCosAgent = (id, overrides = {}, options = {}) => request(`/cos/agents/${id}/relaunch`, {
   method: 'POST',
   body: JSON.stringify(overrides),
   ...options
@@ -220,9 +207,6 @@ export const sendCosAgentBtw = (id, message, options = {}) => request(`/cos/agen
   ...options
 });
 export const getCosFeedbackStats = (options = {}) => request('/cos/feedback/stats', options);
-export const getCosReports = () => request('/cos/reports');
-export const getCosTodayReport = () => request('/cos/reports/today');
-export const getCosReport = (date) => request(`/cos/reports/${date}`);
 
 // CoS Briefings
 export const getCosBriefings = () => request('/cos/briefings');
@@ -256,27 +240,15 @@ export const restoreCosRecommendation = (id) => request('/cos/learning/recommend
   body: JSON.stringify({ id })
 });
 export const clearDismissedCosRecommendations = () => request('/cos/learning/recommendations/clear-dismissed', { method: 'POST' });
-
-// CoS Quick Task Templates
-export const getCosTaskTemplates = () => request('/cos/templates');
 export const getCosPopularTemplates = (limit = 5) => request(`/cos/templates/popular?limit=${limit}`);
-export const getCosTemplateCategories = () => request('/cos/templates/categories');
 export const createCosTaskTemplate = (data, options = {}) => request('/cos/templates', {
   method: 'POST',
   body: JSON.stringify(data),
   ...options
 });
-export const createCosTemplateFromTask = (task, templateName) => request('/cos/templates/from-task', {
-  method: 'POST',
-  body: JSON.stringify({ task, templateName })
-});
 export const applyCosTaskTemplate = (id, options = {}) => request(`/cos/templates/${id}/use`, {
   method: 'POST',
   ...options
-});
-export const updateCosTaskTemplate = (id, data) => request(`/cos/templates/${id}`, {
-  method: 'PUT',
-  body: JSON.stringify(data)
 });
 export const deleteCosTaskTemplate = (id, options = {}) => request(`/cos/templates/${id}`, { method: 'DELETE', ...options });
 
@@ -287,80 +259,48 @@ export const getCosWeeklyDigest = (weekId = null) => {
 };
 export const listCosWeeklyDigests = () => request('/cos/digest/list');
 export const getCosWeekProgress = () => request('/cos/digest/progress');
-export const getCosDigestText = async () => {
-  const response = await fetch('/api/cos/digest/text');
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.text();
-};
 export const generateCosDigest = (weekId = null) => request('/cos/digest/generate', {
   method: 'POST',
   body: JSON.stringify({ weekId })
 });
-export const compareCosWeeks = (week1, week2) => request(`/cos/digest/compare?week1=${week1}&week2=${week2}`);
 
 // Productivity
 export const getCosProductivity = () => request('/cos/productivity');
-export const getCosProductivitySummary = () => request('/cos/productivity/summary');
 export const recalculateCosProductivity = () => request('/cos/productivity/recalculate', { method: 'POST' });
 export const getCosProductivityTrends = (days = 30) => request(`/cos/productivity/trends?days=${days}`);
 export const getCosActivityCalendar = (weeks = 12, options) => request(`/cos/productivity/calendar?weeks=${weeks}`, options);
 export const getCosQuickSummary = (options) => request('/cos/quick-summary', options);
 export const getCosRecentTasks = (limit = 10, options) => request(`/cos/recent-tasks?limit=${limit}`, options);
 export const getCosActionableInsights = (options) => request('/cos/actionable-insights', options);
-export const getCosGoalProgress = () => request('/cos/goal-progress');
 export const getCosGoalProgressSummary = (options) => request('/cos/goal-progress/summary', options);
 
 // Auto-Fix Telemetry (issue #2328) — aggregated from persisted metadata.diagnostics
 export const getAutoFixMetrics = (options) => request('/autofix/metrics', options);
-
-// Decision Log
-export const getCosDecisions = (limit = 20, type = null) => {
-  const params = new URLSearchParams({ limit: limit.toString() });
-  if (type) params.append('type', type);
-  return request(`/cos/decisions?${params}`);
-};
 export const getCosDecisionSummary = (options) => request('/cos/decisions/summary', options);
-export const getCosDecisionPatterns = () => request('/cos/decisions/patterns');
 
 // Task Schedule (Configurable Intervals)
 export const getCosUpcomingTasks = (limit = 10, options) => request(`/cos/upcoming?limit=${limit}`, options);
 export const getCosSchedule = () => request('/cos/schedule');
-export const getCosScheduleIntervalTypes = () => request('/cos/schedule/interval-types');
-export const getCosScheduleDueTasks = () => request('/cos/schedule/due');
-export const getCosScheduleDueAppTasks = (appId) => request(`/cos/schedule/due/${appId}`);
 // Unified task interval update
 export const updateCosTaskInterval = (taskType, settings, options = {}) => request(`/cos/schedule/task/${taskType}`, {
   method: 'PUT',
   body: JSON.stringify(settings),
   ...options
 });
-// Deprecated aliases — delegate to unified endpoint
-export const updateCosSelfImprovementInterval = (taskType, settings) => updateCosTaskInterval(taskType, settings);
-export const updateCosAppImprovementInterval = (taskType, settings) => updateCosTaskInterval(taskType, settings);
 
 export const triggerCosOnDemandTask = (taskType, appId = null, options = {}) => request('/cos/schedule/trigger', {
   method: 'POST',
   body: JSON.stringify({ taskType, appId }),
   ...options
 });
-export const getCosOnDemandRequests = () => request('/cos/schedule/on-demand');
 export const resetCosTaskHistory = (taskType, appId = null, options = {}) => request('/cos/schedule/reset', {
   method: 'POST',
   body: JSON.stringify({ taskType, appId }),
   ...options
 });
-export const getCosScheduleTemplates = () => request('/cos/schedule/templates');
-export const addCosScheduleTemplate = (template) => request('/cos/schedule/templates', {
-  method: 'POST',
-  body: JSON.stringify(template)
-});
-export const deleteCosScheduleTemplate = (templateId) => request(`/cos/schedule/templates/${templateId}`, { method: 'DELETE' });
 
 // Autonomous Jobs
 export const getCosJobs = (options = {}) => request('/cos/jobs', options);
-export const getCosJobsDue = () => request('/cos/jobs/due');
-export const getCosJobIntervals = () => request('/cos/jobs/intervals');
-export const getCosJobAllowedCommands = () => request('/cos/jobs/allowed-commands');
 export const getCosJob = (id, options = {}) => request(`/cos/jobs/${id}`, options);
 export const createCosJob = (data, options = {}) => request('/cos/jobs', {
   method: 'POST',

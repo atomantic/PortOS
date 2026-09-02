@@ -23,7 +23,9 @@
 
 import { bufferedSpawn, spawnFailureDetail } from '../lib/bufferedSpawn.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { assessDownloadPreflight, assertDownloadFits } from '../lib/downloadPreflight.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
+import { getHfCacheRoot } from '../lib/hfCache.js';
 import { listMtplxCachedModels } from '../lib/mtplxModels.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
 import { fetchRepoPublishedDates } from './huggingFaceCatalog.js';
@@ -56,6 +58,34 @@ const PULL_TIMEOUT_MS = 6 * 60 * 60 * 1000;
 const REPO_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export const isMtplxRepoId = (value) => typeof value === 'string' && REPO_ID_RE.test(value);
+
+// MTPLX's own Python venv pulls checkpoints via huggingface_hub (see
+// docs/features/mtplx.md), landing them in the standard HF hub cache — NOT
+// necessarily the boot disk. getHfCacheRoot() honors the same
+// HF_HUB_CACHE/HF_HOME overrides ollamaManager/lmStudioManager already do,
+// so a "weights on an external SSD" setup gets checked against the volume
+// the pull actually lands on.
+const mtplxCachePath = () => getHfCacheRoot();
+
+// No reliable byte count exists for what an MTPLX pull actually transfers.
+// `usedStorage` (an `expand[]` field fetchHuggingfaceModel can request)
+// looks like a fix, but it's the WHOLE repo's total across EVERY format
+// variant hosted there — pytorch + tf + jax + tflite + onnx + safetensors,
+// etc. — not just what MTPLX downloads, and a multi-format repo can
+// over-report by 2-3x. Refusing a valid pull over files it WON'T fetch is
+// worse than the status quo, so expectedBytes stays 0 (never refuse when
+// the size is unknown) rather than trading an under-protective gap for an
+// over-refusing one.
+const UNKNOWN_MTPLX_BYTES = 0;
+
+export async function previewMtplxPull({ model = null } = {}) {
+  const repo = model ? requireRepoId(model) : null;
+  const preflight = await assessDownloadPreflight({
+    destPath: mtplxCachePath(),
+    expectedBytes: UNKNOWN_MTPLX_BYTES,
+  });
+  return { kind: 'mtplx', ...preflight, destPath: repo || 'MTPLX cache', alreadyDownloaded: false };
+}
 
 /** Resolve `mtplx`, or say why the operation cannot run at all. */
 function requireBinary() {
@@ -179,6 +209,10 @@ export async function pullMtplxModel({ model = null, onProgress = () => {} } = {
   const binary = requireBinary();
   const repo = model ? requireRepoId(model) : null;
   const label = repo || 'MTPLX\'s default verified checkpoint';
+  assertDownloadFits(await assessDownloadPreflight({
+    destPath: mtplxCachePath(),
+    expectedBytes: UNKNOWN_MTPLX_BYTES,
+  }));
 
   onProgress({ event: 'start', model: repo, message: `Downloading ${label}. This is a multi-gigabyte download and can take a while.` });
   console.log(`⬇️  MTPLX pull started for ${label}`);

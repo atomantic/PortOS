@@ -82,7 +82,11 @@ vi.mock('fs', () => ({ existsSync: vi.fn().mockReturnValue(false) }));
 // Default passthrough for the Windows resolve+wrap helper (#2243) — POSIX
 // behavior. A specific test overrides it with mockReturnValueOnce to assert the
 // spawn wiring uses whatever prepareCliSpawn returns.
-vi.mock('../lib/bufferedSpawn.js', () => ({
+// Only the two spawn-shaping helpers are stubbed. `guardChildStdin` stays REAL
+// so the stdin-EPIPE containment test below pins the production listener rather
+// than a test double of it.
+vi.mock('../lib/bufferedSpawn.js', async (importActual) => ({
+  ...(await importActual()),
   prepareCliSpawn: vi.fn((command, args) => ({ command, args })),
   killProcessTree: vi.fn(),
 }));
@@ -521,12 +525,18 @@ describe('buildCliSpawnConfig', () => {
 
 describe('stream error containment', () => {
   // Build a minimal fake process with stdin/stdout/stderr EventEmitters.
-  function makeFakeProcess() {
+  function makeFakeProcess({ failWith = null, noStdin = false } = {}) {
     const proc = new EventEmitter();
-    proc.pid = 12345;
-    proc.stdin = { write: vi.fn(), end: vi.fn() };
+    if (!noStdin) {
+      proc.pid = 12345;
+      // A real ChildProcess stdin is a stream, so the fake is one too — otherwise
+      // the production `guardChildStdin` listener has nothing to attach to and the
+      // stdin-EPIPE path below would be tested against a shape that can't occur.
+      proc.stdin = Object.assign(new EventEmitter(), { write: vi.fn(), end: vi.fn() });
+    }
     proc.stdout = new EventEmitter();
     proc.stderr = new EventEmitter();
+    if (failWith) setImmediate(() => proc.emit('error', failWith));
     return proc;
   }
 
@@ -576,6 +586,95 @@ describe('stream error containment', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  describe('spawn failure containment', () => {
+    const failedSpawn = () => makeFakeProcess({
+      noStdin: true,
+      failWith: Object.assign(new Error('spawn claude ENOENT'), { code: 'ENOENT' }),
+    });
+
+    const waitForSpawnFailure = async () => {
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+    };
+
+    it('the failing fake really has no stdin (bypass probe)', () => {
+      expect(makeFakeProcess({ noStdin: true }).stdin).toBeUndefined();
+    });
+
+    it('settles with a startup failure when the provider CLI is missing', async () => {
+      fakeProcess = failedSpawn();
+
+      await expect(spawnDirectly(minimalArgs)).resolves.toBe('agent-test');
+      await waitForSpawnFailure();
+
+      expect(agentStateMocks.completeAgent).toHaveBeenCalledWith(
+        'agent-test',
+        expect.objectContaining({ success: false, error: expect.stringContaining('ENOENT') }),
+      );
+    });
+
+    it('does not leave the agent registered in activeAgents after a failed spawn', async () => {
+      const { activeAgents, registerSpawnedAgent } = await import('./agentState.js');
+      activeAgents.clear();
+      registerSpawnedAgent.mockClear();
+      agentStateMocks.updateAgent.mockClear();
+      fakeProcess = failedSpawn();
+
+      await spawnDirectly(minimalArgs);
+      await waitForSpawnFailure();
+
+      expect(activeAgents.has('agent-test')).toBe(false);
+      expect(registerSpawnedAgent).not.toHaveBeenCalled();
+      expect(agentStateMocks.updateAgent).not.toHaveBeenCalled();
+    });
+
+    it('surfaces the spawn error message to the run log', async () => {
+      agentStateMocks.appendAgentOutputLines.mockClear();
+      fakeProcess = failedSpawn();
+
+      await spawnDirectly(minimalArgs);
+      await waitForSpawnFailure();
+
+      const lines = agentStateMocks.appendAgentOutputLines.mock.calls.flatMap(([, batch]) => batch);
+      expect(lines.some((line) => line.includes('ENOENT'))).toBe(true);
+    });
+
+    it('contains an EPIPE on stdin from a child that died before reading the prompt', async () => {
+      // Two hazards in one shape, both fatal to the WHOLE server process because
+      // this runs outside the Express request lifecycle (no next(err) to bubble to):
+      //   1. a synchronous throw from stdin.write on an already-destroyed pipe, and
+      //   2. an 'error' emitted on the stdin stream with no listener, which Node re-throws.
+      // Regression guard for the listener drifting back below the write.
+      const epipe = () => Object.assign(new Error('write EPIPE'), { code: 'EPIPE' });
+      fakeProcess = makeFakeProcess();
+      // Captured INSIDE write so the assertion is about ordering, not just
+      // eventual presence — a guard moved below the write would read 0 here.
+      let listenersAtWriteTime = null;
+      fakeProcess.stdin = Object.assign(new EventEmitter(), {
+        write: vi.fn(function () {
+          listenersAtWriteTime = fakeProcess.stdin.listenerCount('error');
+          throw epipe();
+        }),
+        end: vi.fn(),
+        destroy: vi.fn(),
+      });
+
+      const spawnPromise = spawnDirectly(minimalArgs);
+      await new Promise((r) => setTimeout(r, 10));
+
+      // The guard was already in place when the write ran…
+      expect(listenersAtWriteTime).toBe(1);
+      // …so a late pipe error is swallowed instead of thrown.
+      expect(() => fakeProcess.stdin.emit('error', epipe())).not.toThrow();
+      // …and the pipe was closed anyway, so a child still reading stdin sees EOF.
+      expect(fakeProcess.stdin.destroy).toHaveBeenCalled();
+
+      fakeProcess.emit('close', 0);
+      // The synchronous write throw did not escape as a rejected spawn either.
+      await expect(spawnPromise).resolves.toBe('agent-test');
+    });
   });
 
   // ─── Lifecycle ledger — the first-output boundary (#4540) ─────────────────

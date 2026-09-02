@@ -1,16 +1,12 @@
 /** Canonical install/source roots and path construction helpers. */
 import { homedir } from 'os';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
-import { resolveInstallRoot } from './dataRoot.js';
-
-const __lib_filename = fileURLToPath(import.meta.url);
-const __lib_dirname = dirname(__lib_filename);
+import { join } from 'path';
+import { resolveCodeRootForModule, resolveInstallRoot } from './dataRoot.js';
 
 // The executing checkout's root (where THIS file physically lives). Code/source
 // paths — the repo root for git ops, `lib/slashdo` — must stay anchored here so
 // they always point at the checkout that loaded the code.
-const CODE_ROOT = join(__lib_dirname, '../..');
+const CODE_ROOT = resolveCodeRootForModule(import.meta.url);
 
 // The install root that holds the runtime `data/` tree. Prefer an explicit
 // PORTOS_DATA_ROOT env var over the executing-file location so a process booted

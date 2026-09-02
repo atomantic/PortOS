@@ -31,7 +31,12 @@
  * cache.
  */
 
+import { mkdtemp, rm } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
+
 import { spawn } from '../lib/childProcess.js';
+import { killProcessTree, prepareWindowsSafeSpawn } from '../lib/bufferedSpawn.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { createLineReader } from '../lib/streamLines.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
@@ -47,8 +52,21 @@ import {
   normalizeCodexAccount,
   normalizeCodexLoginStart,
   normalizeCodexRateLimits,
+  redactCodexMessage,
   redactCodexPayload,
 } from '../lib/codexAccount.js';
+import {
+  CODEX_TEXT_THREAD_CONFIG,
+  CODEX_TEXT_TURN_SANDBOX,
+  CODEX_TURN_ERROR_CODES,
+  CODEX_TURN_NOTIFICATIONS,
+  CODEX_TURN_RPC,
+  applyCodexTurnEvent,
+  createTurnAccumulator,
+  finalizeCodexTurn,
+  normalizeCodexModels,
+  resolveCodexEffort,
+} from '../lib/codexTurn.js';
 
 /** The app-server answers a local read in milliseconds; a stall is a fault. */
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -79,6 +97,27 @@ let connectingTarget = null;
 let readinessCache = null;
 /** `{ loginId, startedAt, expiresAt, timer }` for a PortOS-initiated login. */
 let pendingLogin = null;
+/**
+ * Live text turns, keyed by threadId. One app-server connection serves every
+ * caller, so notifications are routed by thread rather than broadcast — a
+ * concurrent turn's deltas must never leak into another caller's answer.
+ */
+const activeTurns = new Map();
+/**
+ * `{ at, models }` — the last successful `model/list`. `null` = NEVER FETCHED,
+ * which is not the same as a fetched catalog that is genuinely empty; a failed
+ * read leaves the last-known-good list in place rather than publishing "this
+ * account has no models".
+ */
+let modelsCache = null;
+/** `{ until, category, message }` while the TEXT transport is benched. */
+let textTransportBench = null;
+/** The empty scratch directory generic text turns run in. Created lazily. */
+let textTurnCwd = null;
+/** Coalesces concurrent first-calls so only one scratch directory is created. */
+let creatingTextTurnCwd = null;
+/** Set by `stopCodexAppServer`, so a handshake that lands mid-shutdown is dropped. */
+let stopped = false;
 
 const codexError = (code, message, options = {}) => new ServerError(message, {
   status: options.status ?? 502,
@@ -106,9 +145,35 @@ const teardown = (target, error) => {
   const pendingEntries = [...target.pending.values()];
   target.pending.clear();
   target.closed = true;
-  for (const entry of pendingEntries) entry.reject(error);
-  if (connection === target) connection = null;
+  for (const entry of pendingEntries) {
+    // Clearing matters more now that turns exist: a request deadline can be the
+    // full 5-minute turn timeout, and an unfired timer for an already-rejected
+    // request keeps a callback armed for the rest of that window.
+    clearTimeout(entry.timer);
+    entry.reject(error);
+  }
+  // A turn whose `turn/start` already answered has no pending request to reject,
+  // so losing the child would otherwise leave it waiting on a notification that
+  // can never arrive. Scoped to the LIVE connection: a stale target's late
+  // `exit` event must not kill turns running on the replacement that took over.
+  const wasLive = connection === target;
+  if (wasLive) {
+    connection = null;
+    failActiveTurns(error);
+  }
 };
+
+/**
+ * Fail every live text turn with `error`.
+ *
+ * Each entry is removed before it is settled, so a caller that immediately
+ * retries cannot observe the same thread id twice.
+ */
+function failActiveTurns(error) {
+  const turns = [...activeTurns.values()];
+  activeTurns.clear();
+  for (const turn of turns) turn.fail(error);
+}
 
 /** Reject the target and terminate its child unless it already stopped. */
 const stopTarget = (target, error) => {
@@ -116,7 +181,10 @@ const stopTarget = (target, error) => {
   teardown(target, error);
   if (target.child.killed) return;
   try {
-    target.child.kill('SIGTERM');
+    // Not `child.kill()`: on Windows the child is the `cmd.exe /c` shim wrapper
+    // (see `openConnection`), and signalling it leaves the real codex process
+    // orphaned — still holding the JSON-RPC pipes PortOS just gave up on.
+    killProcessTree(target.child, 'SIGTERM');
   } catch (err) {
     console.error(`❌ Failed to stop Codex app-server: ${err.message}`);
   }
@@ -139,17 +207,75 @@ const settleLogin = (reason) => {
  * merging a partial payload would invent state PortOS was not told.
  */
 const handleNotification = (method, params) => {
+  routeTurnNotification(method, params);
   if (method === CODEX_NOTIFICATIONS.accountUpdated || method === CODEX_NOTIFICATIONS.rateLimitsUpdated) {
     readinessCache = null;
     return;
   }
   if (method !== CODEX_NOTIFICATIONS.loginCompleted) return;
   readinessCache = null;
+  // A sign-in that actually completed changed the ACCOUNT, whoever started it —
+  // so the cached catalog belongs to whoever was signed in before, and an
+  // auth/quota bench was benching a subscription that is no longer the current
+  // one. Both are invalidated ahead of the correlation check below, because a
+  // login another Codex client on this host started switches accounts just as
+  // completely as one PortOS started.
+  if (params?.success !== false) {
+    modelsCache = null;
+    clearCodexTextTransportBench();
+  }
   const loginId = typeof params?.loginId === 'string' ? params.loginId : null;
-  // A completion for a login PortOS did not start (another Codex client on this
-  // host) still invalidates the cache above, but must not settle ours.
+  // A completion for a login PortOS did not start still invalidates the caches
+  // above, but must not settle ours.
   if (!pendingLogin || (loginId && loginId !== pendingLogin.loginId)) return;
   settleLogin(params?.success === false ? 'failed' : 'completed');
+};
+
+/**
+ * Hand one server notification to the turn that owns its thread.
+ *
+ * Runs BEFORE the account handling so a turn keeps streaming even while an
+ * account notification is invalidating the readiness cache. A frame for a
+ * thread PortOS is not running is dropped, not logged: the app-server also
+ * streams a coding agent's own thread over this connection.
+ */
+const routeTurnNotification = (method, params) => {
+  const threadId = typeof params?.threadId === 'string' ? params.threadId : null;
+  if (!threadId) return;
+  const turn = activeTurns.get(threadId);
+  if (!turn) return;
+  // The accumulator is pure; a malformed frame can still throw inside a
+  // normalizer, and this runs on a stdout event handler where an uncaught
+  // throw would take down the node process.
+  // Whether the accumulator will accept this frame, computed BEFORE applying it
+  // (which may latch the turn id). The progress hook honours the same filters:
+  // streaming another turn's delta, or one that lands after this turn already
+  // failed, would show a consumer partial text from an answer PortOS is going to
+  // refuse.
+  const accepted = turn.acc.status === 'inProgress'
+    && (!turn.acc.turnId || typeof params.turnId !== 'string' || params.turnId === turn.acc.turnId);
+
+  let terminal = false;
+  try {
+    terminal = applyCodexTurnEvent(turn.acc, method, params);
+  } catch (err) {
+    console.error(`❌ Codex turn event ${method} could not be applied: ${err.message}`);
+    return;
+  }
+  // Fired AFTER the accumulator, and in its own guard: a throwing hook must not
+  // skip the frame (the finished answer would silently lose that text), and an
+  // async hook's rejection is invisible to try/catch — unhandled here would be a
+  // process-level crash, since this runs on a stdout event outside any request.
+  if (accepted && turn.onDelta && method === CODEX_TURN_NOTIFICATIONS.agentMessageDelta
+    && typeof params.delta === 'string') {
+    try {
+      Promise.resolve(turn.onDelta(params.delta))
+        .catch((err) => console.error(`❌ Codex turn progress hook rejected: ${err.message}`));
+    } catch (err) {
+      console.error(`❌ Codex turn progress hook failed: ${err.message}`);
+    }
+  }
+  if (terminal) turn.settle();
 };
 
 /** One decoded stdout line. Malformed input is logged and dropped, never thrown. */
@@ -173,7 +299,10 @@ const handleFrame = (target, line) => {
   target.pending.delete(frame.id);
   clearTimeout(entry.timer);
   if (frame.error) {
-    const message = typeof frame.error?.message === 'string' ? frame.error.message : 'Codex app-server returned an error';
+    // Scrubbed, not raw: this message is logged AND returned to the browser by
+    // the `/codex/*` routes, and an upstream failure can quote the credential
+    // that failed ("access_token=… expired").
+    const message = redactCodexMessage(frame.error?.message) ?? 'Codex app-server returned an error';
     const rpcError = codexError(
       isCodexAuthError(frame.error) ? CODEX_ERROR_CODES.authRevoked : CODEX_ERROR_CODES.protocol,
       message,
@@ -240,11 +369,18 @@ const openConnection = async () => {
     );
   }
 
+  // `codex` installs as a `codex.cmd` npm shim on Windows, which `spawn()`
+  // refuses under `shell: false` — "spawn EINVAL", so every account read and
+  // ChatGPT sign-in failed there (#5838). The canonical wrap (see
+  // `prepareWindowsSafeSpawn` for why, and #1865) is a no-op off Windows and
+  // for a native `codex.exe`; this spawner was the last site bypassing it.
+  const { command, args } = prepareWindowsSafeSpawn(binary, [...CODEX_APP_SERVER_ARGS]);
+
   let child = null;
   try {
     // Fixed argv, inherited env, no shell — nothing from a request or a stored
     // provider record reaches this command line.
-    child = spawn(binary, [...CODEX_APP_SERVER_ARGS], { stdio: ['pipe', 'pipe', 'pipe'] });
+    child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'] });
   } catch (err) {
     throw codexError(CODEX_ERROR_CODES.startFailed, `Codex app-server failed to start: ${err.message}`);
   }
@@ -289,7 +425,17 @@ const connect = async () => {
   if (connection && !connection.closed) return connection;
   if (!connecting) {
     connecting = openConnection()
-      .then((target) => { connection = target; return target; })
+      .then((target) => {
+        // Shutdown may have run while this handshake was in flight. Publishing
+        // now would leave a dead handle behind that the next call would replace
+        // with a fresh child — after the graceful-shutdown hook already ran.
+        if (stopped) {
+          stopTarget(target, codexError(CODEX_ERROR_CODES.exited, 'PortOS shut down the Codex app-server.'));
+          throw codexError(CODEX_ERROR_CODES.exited, 'PortOS is shutting down the Codex app-server.');
+        }
+        connection = target;
+        return target;
+      })
       .finally(() => { connecting = null; connectingTarget = null; });
   }
   return connecting;
@@ -365,6 +511,13 @@ const readReadiness = async () => {
     }
   }
 
+  // Deliberately does NOT clear a bench. `ready` is far weaker evidence than it
+  // looks: a per-session budget can be spent while the account's 5h/weekly
+  // windows sit at 60%, and a quota read that merely FAILED also lands on
+  // `ready` (an unread window is not an exhausted one). Clearing on either would
+  // unbench a still-spent subscription on the Providers page's next 15s poll,
+  // and loop that way for the whole window. The bench expires on the reset time
+  // Codex itself reported; only an explicit sign-in or sign-out clears it early.
   return buildReadiness({ runtimeInstalled: true, accountFetched, account, rateLimits, error });
 };
 
@@ -456,8 +609,303 @@ export async function codexLogout() {
   await call(CODEX_RPC.logout);
   settleLogin('ended by sign-out');
   readinessCache = null;
+  modelsCache = null;
+  // Signing out invalidates whatever the bench was waiting on, and signing back
+  // in must not inherit the previous account's cooldown.
+  clearCodexTextTransportBench();
   console.log('🔒 Codex ChatGPT account signed out');
   return getCodexAccountReadiness({ fresh: true });
+}
+
+/* ------------------------------------------------------------------------- *
+ * Text inference (#5590)
+ *
+ * Everything below serves the SUBSCRIPTION TEXT TRANSPORT — the second, opt-in
+ * capability of the `codex` provider record. It is deliberately separate from
+ * the CLI/TUI coding harness: a Brain or JIRA summary runs here, in an empty
+ * throwaway directory under a read-only no-network sandbox with no MCP servers
+ * and no web search, while a CoS coding task keeps going through
+ * `executeCliRun` with the workspace it was given.
+ * ------------------------------------------------------------------------- */
+
+/** A turn is a network round trip against a frontier model — not a local read. */
+const TURN_TIMEOUT_MS = 300_000;
+/** The catalog changes when a plan does. Long enough to not re-list per call. */
+const MODELS_TTL_MS = 10 * 60_000;
+/** A real catalog is tens of models; this only bounds a misbehaving server. */
+const MODEL_LIST_MAX_PAGES = 20;
+
+/**
+ * The empty directory every generic text turn runs in.
+ *
+ * Outside the PortOS checkout and outside `data/`, so even a sandbox escape
+ * would land somewhere with nothing in it. Created once per process and reused;
+ * `mkdtemp` guarantees it is fresh and unshared.
+ */
+const ensureTextTurnCwd = async () => {
+  if (textTurnCwd) return textTurnCwd;
+  // Coalesced the same way `connect()` is: two turns starting together would
+  // otherwise each `mkdtemp`, and the loser's directory would leak for the life
+  // of the process because only one path can be remembered.
+  if (!creatingTextTurnCwd) {
+    creatingTextTurnCwd = mkdtemp(join(tmpdir(), 'portos-codex-text-'))
+      .then((dir) => { textTurnCwd = dir; return dir; })
+      .finally(() => { creatingTextTurnCwd = null; });
+  }
+  return creatingTextTurnCwd;
+};
+
+/**
+ * Is the text transport benched right now?
+ *
+ * Returns `null` when it is usable, or `{ until, category, message }` while a
+ * quota/auth failure is still in its cooldown. Benching is SCOPED TO THE
+ * TRANSPORT on purpose: an exhausted subscription window must not take the
+ * `codex` coding harness — which the user may still want for a task that is
+ * already mid-flight — off the board as a side effect.
+ */
+export function getCodexTextTransportBench() {
+  if (!textTransportBench) return null;
+  if (Date.now() >= textTransportBench.until) {
+    textTransportBench = null;
+    return null;
+  }
+  return { ...textTransportBench };
+}
+
+/**
+ * Bench the text transport for `waitMs`.
+ *
+ * The DURATION is the caller's, resolved from the shared cooldown policy in
+ * `lib/providerCooldown.js`, so a quota exhaustion waits the same window here
+ * as it does on every other path. A longer bench never shortens an existing
+ * one.
+ */
+export function benchCodexTextTransport({ waitMs, category, message } = {}) {
+  const until = Date.now() + Math.max(Number(waitMs) || 0, 0);
+  if (textTransportBench && textTransportBench.until >= until) return getCodexTextTransportBench();
+  textTransportBench = { until, category: category || null, message: message || null };
+  console.log(`⚠️ Codex subscription text transport benched for ${Math.round((until - Date.now()) / 60000)}m: ${category || 'unknown'}`);
+  return getCodexTextTransportBench();
+}
+
+/** Clear the bench — used when the account is re-read as ready, and by tests. */
+export function clearCodexTextTransportBench() {
+  textTransportBench = null;
+}
+
+/**
+ * The models this ChatGPT account may run, from the app-server catalog.
+ *
+ * `null` means NEVER FETCHED and `[]` means fetched-and-empty; a failed read
+ * returns the last-known-good list rather than either. That distinction is what
+ * lets the Providers page tell "we have not asked yet" from "this plan really
+ * has no models", and stops one transient failure from emptying a good picker.
+ *
+ * LAZY: only an explicit request reaches this. Nothing on the boot path may.
+ */
+export async function listCodexModels({ fresh = false } = {}) {
+  if (!fresh && modelsCache && Date.now() - modelsCache.at < MODELS_TTL_MS) {
+    return { models: modelsCache.models, fetchedAt: modelsCache.at, error: null };
+  }
+  try {
+    // Follow `nextCursor`. A truncated catalog is not just a short picker: a
+    // model on a later page is absent from `cachedModelEntry`, so its effort is
+    // sent unclamped — the exact failure the clamp exists to prevent. The page
+    // cap bounds a server that never stops handing back a cursor.
+    const models = [];
+    let cursor = null;
+    for (let page = 0; page < MODEL_LIST_MAX_PAGES; page += 1) {
+      const result = normalizeCodexModels(await call(CODEX_TURN_RPC.modelList, cursor ? { cursor } : {}));
+      models.push(...result.models);
+      cursor = result.nextCursor;
+      if (!cursor) break;
+    }
+    if (cursor) {
+      // A truncated catalog is not a successful read: caching it would replace a
+      // complete last-known-good list with a partial one, and reporting
+      // `error: null` would tell the client the picker is authoritative.
+      console.error(`❌ Codex model/list stopped after ${MODEL_LIST_MAX_PAGES} pages with a cursor still pending`);
+      throw new Error(`model/list did not finish paginating within ${MODEL_LIST_MAX_PAGES} pages`);
+    }
+    modelsCache = { at: Date.now(), models };
+    return { models, fetchedAt: modelsCache.at, error: null };
+  } catch (err) {
+    console.error(`❌ Codex model/list failed: ${err.message}`);
+    return {
+      models: modelsCache ? modelsCache.models : null,
+      fetchedAt: modelsCache ? modelsCache.at : null,
+      error: { code: err.code || CODEX_ERROR_CODES.protocol, message: err.message },
+    };
+  }
+}
+
+/** The cached catalog without spawning anything. `null` = never fetched. */
+export function peekCodexModels() {
+  return modelsCache ? { models: modelsCache.models, fetchedAt: modelsCache.at } : null;
+}
+
+/** The catalog entry for `modelId`, or `null` when the catalog is unknown. */
+const cachedModelEntry = (modelId) => {
+  if (!modelId || !modelsCache?.models) return null;
+  return modelsCache.models.find((entry) => entry.id === modelId) ?? null;
+};
+
+/** The one shape a caller's Stop takes, wherever in a turn it is noticed. */
+const turnCancelledError = () =>
+  codexError(CODEX_TURN_ERROR_CODES.turnInterrupted, 'The Codex turn was cancelled.', { status: 499 });
+
+/**
+ * Run ONE bounded text turn against the ChatGPT subscription.
+ *
+ * Resolves `{ text, usage, model, effort, effortClamped }`, or rejects with a
+ * typed `ServerError`. It never resolves with partial text: an interrupted or
+ * failed turn rejects, so a caller parsing JSON can't be handed half an object.
+ *
+ * @param {object} options
+ * @param {string} options.prompt — the only thing the model is given
+ * @param {string|null} [options.model] — a catalog id; null uses Codex's default
+ * @param {string|null} [options.effort] — clamped against the model's catalog entry
+ * @param {number} [options.timeoutMs]
+ * @param {AbortSignal|null} [options.signal] — aborting interrupts the turn
+ * @param {(delta: string) => void} [options.onDelta] — live progress
+ * @param {object|null} [options.responseSchema] — JSON Schema constraining the
+ *   final assistant message, when the caller needs structured output
+ */
+export async function runCodexTextTurn({
+  prompt,
+  model = null,
+  effort = null,
+  timeoutMs = TURN_TIMEOUT_MS,
+  signal = null,
+  onDelta = null,
+  responseSchema = null,
+} = {}) {
+  if (typeof prompt !== 'string' || prompt.trim() === '') {
+    throw codexError(CODEX_ERROR_CODES.protocol, 'A Codex text turn needs a prompt.', { status: 400 });
+  }
+  // An already-aborted signal fires no 'abort' event when a listener is added
+  // later, so the caller's cancellation has to be honoured here or the turn runs
+  // (and bills) for an answer nobody is waiting for.
+  if (signal?.aborted) {
+    throw turnCancelledError();
+  }
+  const benched = getCodexTextTransportBench();
+  if (benched) {
+    throw codexError(
+      CODEX_TURN_ERROR_CODES.transportBenched,
+      benched.message || 'The ChatGPT subscription is temporarily unavailable.',
+      { status: 503, context: { category: benched.category, until: benched.until } },
+    );
+  }
+
+  const cwd = await ensureTextTurnCwd();
+  const { effort: resolvedEffort, clamped, reason } = resolveCodexEffort(effort, cachedModelEntry(model));
+  if (clamped) console.log(`⚠️ Codex effort clamped: ${reason}`);
+
+  // The whole turn is pinned to ONE connection, resolved up front rather than
+  // per request. A thread lives inside a single app-server process, so a
+  // mid-turn reconnect could not continue it — and `call`'s reconnect would
+  // silently send this turn's frames to a child that has never heard of its
+  // thread id.
+  const owner = await connect();
+  // `connect()` can spawn and handshake a whole app-server child, which is the
+  // longest await in this function. Re-read the signal before paying for a
+  // thread the caller has already abandoned — the up-front check above ran
+  // several awaits ago, and no listener is registered yet.
+  if (signal?.aborted) {
+    throw turnCancelledError();
+  }
+  const started = await sendRequest(owner, CODEX_TURN_RPC.threadStart, {
+    ...CODEX_TEXT_THREAD_CONFIG,
+    cwd,
+    ...(model ? { model } : {}),
+  }, REQUEST_TIMEOUT_MS);
+  const threadId = typeof started?.thread?.id === 'string' ? started.thread.id : null;
+  if (!threadId) {
+    throw codexError(CODEX_ERROR_CODES.protocol, 'Codex started a thread with no id.');
+  }
+
+  const acc = createTurnAccumulator({ threadId });
+  let settle = null;
+  let fail = null;
+  const finished = new Promise((resolve, reject) => { settle = resolve; fail = reject; });
+  // `finished` is not awaited until `turn/start` answers, and it can be rejected
+  // before then (a lost child, an abort, the deadline). Without this parked
+  // handler that rejection is an UNHANDLED one — which is a process-level crash
+  // under Node's default policy, not a test-only nuisance. The real error still
+  // surfaces from the `await finished` below.
+  finished.catch(() => {});
+  // Registered BEFORE `turn/start` is sent: the first delta can arrive before
+  // that request's own response does, and an unregistered thread drops frames.
+  activeTurns.set(threadId, {
+    acc,
+    settle: () => settle(),
+    fail: (err) => fail(err),
+    onDelta: typeof onDelta === 'function' ? onDelta : null,
+  });
+
+  const timer = setTimeout(() => {
+    fail(codexError(CODEX_ERROR_CODES.timeout, `The Codex turn did not finish within ${Math.round(timeoutMs / 1000)}s.`));
+  }, timeoutMs);
+  timer.unref?.();
+
+  const onAbort = () => fail(turnCancelledError());
+  // An AbortSignal fires its 'abort' event exactly once; a listener added after
+  // the fact never runs. An abort raised during `connect()`/`thread/start` has
+  // to be honoured by re-reading the flag, or the turn streams for the whole
+  // deadline and bills for an answer nobody is waiting for.
+  if (signal?.aborted) onAbort();
+  else signal?.addEventListener('abort', onAbort, { once: true });
+
+  try {
+    // Already aborted: `onAbort` has rejected `finished`, so awaiting it here
+    // surfaces the cancellation WITHOUT dispatching a turn — no quota is spent,
+    // and Stop does not have to wait out a `turn/start` response that would
+    // only be thrown away. The `finally` below still runs the shared cleanup.
+    if (signal?.aborted) await finished;
+    const response = await sendRequest(owner, CODEX_TURN_RPC.turnStart, {
+      threadId,
+      input: [{ type: 'text', text: prompt }],
+      sandboxPolicy: { ...CODEX_TEXT_TURN_SANDBOX },
+      approvalPolicy: CODEX_TEXT_THREAD_CONFIG.approvalPolicy,
+      ...(model ? { model } : {}),
+      ...(resolvedEffort ? { effort: resolvedEffort } : {}),
+      ...(responseSchema ? { outputSchema: responseSchema } : {}),
+    }, timeoutMs);
+    const turnId = typeof response?.turn?.id === 'string' ? response.turn.id : null;
+    if (turnId) acc.turnId = turnId;
+    // A turn that completed before its own response was read leaves the
+    // accumulator terminal with nobody to settle it.
+    if (acc.status !== 'inProgress') settle();
+
+    await finished;
+    const result = finalizeCodexTurn(acc);
+    if (result.error) {
+      throw codexError(
+        result.canceled ? CODEX_TURN_ERROR_CODES.turnInterrupted : CODEX_TURN_ERROR_CODES.turnFailed,
+        result.error,
+        { context: { category: result.category } },
+      );
+    }
+    // The model Codex ACTUALLY ran, which is the thread's answer rather than the
+    // request's — a caller that passed `null` still gets told what served it.
+    const ranModel = typeof started.model === 'string' && started.model ? started.model : (model ?? null);
+    return { ...result, model: ranModel, effort: resolvedEffort, effortClamped: clamped, clampReason: reason };
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
+    activeTurns.delete(threadId);
+    // Best-effort: tell the app-server to stop working a turn PortOS has
+    // abandoned, so a cancelled request does not keep burning subscription
+    // quota. Sent to the connection that OWNS the thread, and only while it is
+    // still alive — routing it through `call` would reconnect, spawning a whole
+    // new app-server to interrupt a thread that only existed in the dead one.
+    if (acc.status === 'inProgress' && acc.turnId && !owner.closed) {
+      sendRequest(owner, CODEX_TURN_RPC.turnInterrupt, { threadId, turnId: acc.turnId })
+        .catch((err) => console.error(`❌ Codex turn interrupt failed: ${err.message}`));
+    }
+  }
 }
 
 /**
@@ -467,13 +915,38 @@ export async function codexLogout() {
  * orphaned Codex process behind. Safe to call when nothing is running.
  */
 export async function stopCodexAppServer() {
+  // Set FIRST and never cleared: `connect()` checks it before publishing a
+  // handshake that finished mid-shutdown, so a late resolve cannot leave a live
+  // `connection` behind for the next call to reuse — or, worse, hand it a closed
+  // one and have it spawn a replacement child after the shutdown hook ran.
+  stopped = true;
   settleLogin(null);
   readinessCache = null;
+  modelsCache = null;
+
+  // The child goes down BEFORE any await. `teardown` decides whether to fail
+  // live turns by comparing `connection` to the dying target, so `connection`
+  // must still point at it here; and an await first would let a concurrent
+  // connect publish itself into the gap.
   const target = connection || connectingTarget;
+  if (target && !target.closed) {
+    stopTarget(target, codexError(CODEX_ERROR_CODES.exited, 'PortOS is shutting down the Codex app-server.'));
+    console.log('🔌 Codex app-server stopped');
+  }
   connection = null;
-  if (!target || target.closed) return;
-  stopTarget(target, codexError(CODEX_ERROR_CODES.exited, 'PortOS is shutting down the Codex app-server.'));
-  console.log('🔌 Codex app-server stopped');
+
+  // Drain a scratch directory that is still being created, or its `mkdtemp`
+  // resolves after shutdown and leaves the directory behind for good.
+  const pending = creatingTextTurnCwd
+    ? await creatingTextTurnCwd.catch(() => null)
+    : null;
+  const scratch = textTurnCwd || pending;
+  textTurnCwd = null;
+  creatingTextTurnCwd = null;
+  if (scratch) {
+    await rm(scratch, { recursive: true, force: true })
+      .catch((err) => console.error(`❌ Failed to remove the Codex text scratch directory: ${err.message}`));
+  }
 }
 
 /** Test-only: drop every module-level handle so a suite starts clean. */
@@ -484,4 +957,10 @@ export function __resetCodexAppServer() {
   connection = null;
   connecting = null;
   connectingTarget = null;
+  activeTurns.clear();
+  modelsCache = null;
+  textTransportBench = null;
+  textTurnCwd = null;
+  creatingTextTurnCwd = null;
+  stopped = false;
 }

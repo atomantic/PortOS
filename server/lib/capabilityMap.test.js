@@ -23,6 +23,20 @@ describe('providersRow', () => {
     expect(providersRow([{ id: 'a', enabled: false }]).status).toBe(UNCONFIGURED);
   });
 
+  // The server half of the rule the AI Providers page states: a switched-off
+  // provider is optional, so it must never reach the "need setup" tally or pull
+  // the row out of OK. The `enabled` filter above is what enforces it.
+  it('ignores switched-off providers even when their prerequisites are blocked', () => {
+    const r = providersRow(
+      [{ id: 'a' }, { id: 'off', enabled: false }],
+      { providers: {} },
+      { a: { status: 'ready' }, off: { status: 'blocked', reasonCodes: ['runtime'] } },
+    );
+    expect(r).toMatchObject({ status: OK, setupComplete: true });
+    expect(r.detail).toMatchObject({ configured: 1, available: 1, blocked: 0, unknown: 0 });
+    expect(r.summary).not.toMatch(/need setup/);
+  });
+
   it('treats never-marked providers as available', () => {
     const r = providersRow([{ id: 'a' }, { id: 'b' }], { providers: {} });
     expect(r.status).toBe(OK);

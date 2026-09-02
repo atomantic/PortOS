@@ -5,7 +5,6 @@ import { request } from './apiCore.js';
 // description + headshot style used to generate a book-cover author headshot.
 // `options` lets a caller suppress request()'s auto-toast with `{ silent: true }`.
 export const listAuthors = (options = {}) => request('/authors', options);
-export const getAuthor = (id, options = {}) => request(`/authors/${encodeURIComponent(id)}`, options);
 export const createAuthor = (data, requestOptions = {}) => request('/authors', {
   method: 'POST',
   body: JSON.stringify(data),

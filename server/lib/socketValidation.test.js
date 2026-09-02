@@ -165,6 +165,8 @@ describe('socketValidation schemas', () => {
   describe('app schemas', () => {
     it('appUpdateSchema and appStandardizeSchema require appId', () => {
       expect(appUpdateSchema.safeParse({ appId: 'foo' }).success).toBe(true);
+      expect(appUpdateSchema.safeParse({ appId: 'foo', syncFork: true }).success).toBe(true);
+      expect(appUpdateSchema.safeParse({ appId: 'foo', syncFork: 'yes' }).success).toBe(false);
       expect(appStandardizeSchema.safeParse({ appId: 'foo' }).success).toBe(true);
       expect(appUpdateSchema.safeParse({}).success).toBe(false);
       expect(appStandardizeSchema.safeParse({}).success).toBe(false);

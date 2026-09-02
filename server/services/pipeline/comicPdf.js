@@ -7,7 +7,7 @@
  * route surfaces "X of Y rendered" to the user before download.
  */
 
-import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import { PDFDocument, rgb, StandardFonts } from '@cantoo/pdf-lib';
 import { slugifyForFilename } from '../../lib/civitai.js';
 import { getIssue } from './issues.js';
 import { getSeries } from './series.js';
@@ -62,7 +62,7 @@ export async function buildComicPdf(issueId, opts = {}) {
     throw makeErr('Issue has no rendered pages or cover yet', ERR_NO_RENDERED_PAGES);
   }
 
-  // Read all files concurrently — disk I/O parallelizes cleanly; pdf-lib's
+  // Read all files concurrently — disk I/O parallelizes cleanly; @cantoo/pdf-lib's
   // embed is CPU-bound on the event loop so embedding stays sequential below.
   // One bad page must not fail the whole download, so errors are captured
   // alongside the bytes and logged when the loop reaches them.

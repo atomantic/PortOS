@@ -18,6 +18,26 @@ const measured = vi.hoisted(() => ({ ollama: {}, lmstudio: {} }));
 vi.mock('./localModelAssessmentStore.js', () => ({
   getMeasuredFits: async (backend) => measured[backend] || {},
 }));
+// Forces assessDownloadPreflight's verdict on its NEXT call only, then
+// reverts to real behavior (real statfs) — so a two-model migrateBackend
+// test can make model #1's preflight fail without also failing model #2's,
+// and the other ~14 installModel/migrateBackend call sites in this file
+// that never set `once` are unaffected.
+const preflightOverride = vi.hoisted(() => ({ once: null, lastCall: null }));
+vi.mock('../lib/downloadPreflight.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    assessDownloadPreflight: async (opts) => {
+      preflightOverride.lastCall = opts;
+      const real = await actual.assessDownloadPreflight(opts);
+      if (!preflightOverride.once) return real;
+      const verdict = preflightOverride.once;
+      preflightOverride.once = null;
+      return { ...real, verdict };
+    },
+  };
+});
 vi.mock('../lib/fileUtils.js', async () => {
   const fsMod = await import('fs');
   return {
@@ -36,6 +56,7 @@ const mocks = vi.hoisted(() => ({
     deleteModel: vi.fn(async (id) => ({ success: true, modelId: id })),
     getLoadedModels: vi.fn(async () => []),
     getLastLoadedModelsError: vi.fn(() => null),
+    getModelsDir: vi.fn(() => '/tmp/portos-ollama-models'),
     getStatus: vi.fn(async () => ({ available: true, baseUrl: 'x', version: '1', modelCount: 0, models: [] })),
     startServer: vi.fn(async () => ({ success: true, running: true })),
     stopServer: vi.fn(async () => ({ success: true, running: false })),
@@ -54,6 +75,7 @@ const mocks = vi.hoisted(() => ({
       === String(right).split('/').pop().replace(/-GGUF$/i, '').toLowerCase()),
     deleteModel: vi.fn(async (id) => ({ success: true, modelId: id })),
     evictDownloadedQuant: vi.fn(async (id) => ({ success: true, modelId: id })),
+    getModelsDir: vi.fn(async () => '/tmp/portos-lmstudio-models'),
     downloadModel: vi.fn(async (id) => ({ success: true, modelId: id })),
     getStatus: vi.fn(async () => ({ available: false, baseUrl: 'y', loadedModels: 0 })),
     resetCache: vi.fn(),
@@ -134,6 +156,8 @@ const flushMicrotasks = () => new Promise((resolve) => setTimeout(resolve, 0));
 let svc;
 beforeEach(async () => {
   vi.clearAllMocks(); // clears calls, keeps the default impls defined above
+  preflightOverride.once = null;
+  preflightOverride.lastCall = null;
   // `clearAllMocks` clears recorded CALLS but not queued `…Once` values, and the
   // provider fan-out is fire-and-forget: a test where it correctly never runs
   // (a failed pull) leaves its `getAllProviders` answer queued and the NEXT test
@@ -314,6 +338,33 @@ describe('localLlm', () => {
     it('rejects an unknown backend', async () => {
       expect((await svc.installModel('nope', 'x')).success).toBe(false);
     });
+    // installModel must resolve `{success:false}` for a disk-insufficient
+    // preflight, not throw — migrateBackend's per-model loop has no
+    // try/catch of its own and is written against that resolve-not-throw
+    // contract (matching every other anticipated failure this function
+    // already handles, e.g. the "unknown backend" case above).
+    it('resolves DISK_INSUFFICIENT rather than throwing', async () => {
+      preflightOverride.once = 'insufficient';
+      const result = await svc.installModel('ollama', 'llama3.2');
+      expect(result).toMatchObject({ success: false, code: 'DISK_INSUFFICIENT' });
+      expect(mocks.ollama.pullModel).not.toHaveBeenCalled();
+    });
+    // A pull of a model already on disk transfers little to nothing (Ollama
+    // dedupes unchanged registry layers) — sizing it against the full
+    // catalog entry like a genuine net-new install can refuse a
+    // "Redownload" the real transfer would finish in seconds.
+    it('does not size an already-installed model against its full catalog size', async () => {
+      mocks.ollama.getInstalledModels.mockResolvedValueOnce([{ id: 'llama3.2', name: 'llama3.2' }]);
+      await svc.installModel('ollama', 'llama3.2', undefined, { force: true });
+      expect(preflightOverride.lastCall).toMatchObject({ expectedBytes: 0 });
+      expect(mocks.ollama.pullModel).toHaveBeenCalled();
+    });
+    it('previewInstallModel reports alreadyDownloaded for an installed model', async () => {
+      mocks.ollama.getInstalledModels.mockResolvedValueOnce([{ id: 'llama3.2', name: 'llama3.2' }]);
+      const preview = await svc.previewInstallModel('ollama', 'llama3.2');
+      expect(preview.alreadyDownloaded).toBe(true);
+      expect(preview.expectedBytes).toBe(0);
+    });
     it('refreshes Ollama-backed providers after a successful install', async () => {
       mocks.providers.getAllProviders.mockResolvedValueOnce({
         providers: [
@@ -474,6 +525,24 @@ describe('localLlm', () => {
       expect(svc.getBackend()).toBe('lmstudio'); // default marker untouched
       expect(mocks.providers.updateProvider).not.toHaveBeenCalled(); // providers untouched
       expect(events.at(-1).event).toBe('complete');
+    });
+
+    // A thrown DISK_INSUFFICIENT out of installModel would escape this loop
+    // (no try/catch here) and abort the whole migration on whichever model
+    // hits it, losing every result gathered for the models before it.
+    it('records one model as failed on DISK_INSUFFICIENT and still installs the next one', async () => {
+      mocks.lmstudio.getAvailableModels.mockResolvedValueOnce([
+        { id: 'lmstudio-community/Llama-3.2-3B-Instruct-GGUF' },
+        { id: 'someorg/Totally-Unknown-GGUF' }, // best-effort → ollama bare name
+      ]);
+      preflightOverride.once = 'insufficient'; // hits the FIRST model's preflight only
+
+      const r = await svc.migrateBackend('ollama');
+
+      expect(r.success).toBe(true); // model #2 still succeeded
+      expect(r.results.find((x) => x.target === 'llama3.2')).toMatchObject({ status: 'failed' });
+      expect(r.results.find((x) => x.target !== 'llama3.2').status).toBe('installed');
+      expect(r.results).toHaveLength(2);
     });
 
     it('returns success with no results when the source backend has no models', async () => {

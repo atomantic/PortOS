@@ -267,7 +267,7 @@ function OrganizePanel({ suggestion, goals, onApply, onClose, applying }) {
   if (!suggestion) return null;
 
   return (
-    <div className="absolute top-12 right-3 z-20 bg-port-card border border-port-border rounded-lg p-4 w-96 max-h-[80vh] overflow-y-auto shadow-xl">
+    <div className="absolute top-12 right-3 z-20 bg-port-card border border-port-border rounded-lg p-4 w-96 max-h-dvh-cap [--dvh-cap:80dvh] overflow-y-auto shadow-xl">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <Wand2 className="w-4 h-4 text-port-accent" />

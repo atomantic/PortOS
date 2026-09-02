@@ -182,9 +182,9 @@ export default function AgentList() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto p-4 md:p-6">
         {/* Stats Bar */}
-        <div className="grid grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4 mb-6">
           <div className="p-4 bg-port-card border border-port-border rounded-lg">
             <div className="text-2xl font-bold text-white">{stats.agents}</div>
             <div className="text-sm text-gray-400">Total Agents</div>

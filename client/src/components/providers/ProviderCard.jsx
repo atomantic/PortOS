@@ -12,14 +12,16 @@
  */
 
 import { Link } from 'react-router';
-import { Terminal } from 'lucide-react';
+import { ExternalLink, Network, Terminal } from 'lucide-react';
 import {
   CONTEXT_WINDOW_SOURCE,
   PROVIDER_CARD_STATE,
   filterHardwareCompatibleProviderModels,
   isApiProvider,
+  isCodexSubscriptionProvider,
   gatewayForProvider,
   isPrivateNetworkEndpoint,
+  isFleetProvider,
   isProcessProvider,
   isRunnerAllowedCommand,
   isProviderHardwareCompatible,
@@ -30,6 +32,7 @@ import {
   supportsModelRefresh,
 } from '../../utils/providers';
 import { formatContextLength } from '../../utils/formatters';
+import { isHttpsUrl } from '../../utils/urlNormalize';
 import ProviderRuntimeStatus from './ProviderRuntimeStatus';
 import ProviderReadiness from './ProviderReadiness';
 import { GatewayKeyHint } from './ProviderNotices';
@@ -61,6 +64,12 @@ export const CARD_STATE_STYLES = {
     badge: 'bg-port-warning/20 text-port-warning',
     hint: 'Missing a prerequisite — install the CLI or add the API key to use it.',
   },
+  [PROVIDER_CARD_STATE.UNKNOWN]: {
+    label: 'CHECK ACCOUNT',
+    border: 'border-port-warning/50',
+    badge: 'bg-port-warning/20 text-port-warning',
+    hint: 'PortOS could not determine the ChatGPT subscription state yet.',
+  },
   [PROVIDER_CARD_STATE.DISABLED]: {
     label: 'DISABLED',
     border: 'border-port-border',
@@ -68,7 +77,7 @@ export const CARD_STATE_STYLES = {
     // Switched-off cards recede until hovered, so a long list reads as the
     // handful of providers that are actually live.
     dim: 'opacity-70 hover:opacity-100 transition-opacity',
-    hint: 'Ready to go, but switched off.',
+    hint: 'Switched off — nothing to do unless you want to use it.',
   },
 };
 
@@ -96,9 +105,34 @@ export default function ProviderCard({
   onUseServedModel,
   onServeWantedModel,
   servingModel = false,
+  codexAccount,
+  codexModels = null,
+  codexAccountLoading = false,
+  codexLoginLoading = false,
+  onCodexCheckAccount,
+  onCodexSignIn,
+  onCodexCancelLogin,
+  onCodexLogout,
+  onCodexRefreshModels,
+  onCodexCopyCode,
+  onCodexEnable,
 }) {
   const style = CARD_STATE_STYLES[cardState.state];
   const compatibleModels = filterHardwareCompatibleProviderModels(provider.models, provider);
+  const fleetProvider = isFleetProvider(provider);
+  const fleetHost = fleetProvider && URL.canParse(provider.endpoint)
+    ? new URL(provider.endpoint).hostname
+    : null;
+  // What the provider is missing — carried by both BLOCKED and DISABLED.
+  const missingSummary = cardState.missing.map(m => m.label).join(' · ');
+  // Switched off, so every finding on this card is a note about enabling it
+  // rather than an outstanding task (see `providerCardState`). Read from
+  // `cardState`, not `provider.enabled`, so the setup widgets below can never
+  // tone one way while the badge, border, and section file the card another.
+  const optional = cardState.state === PROVIDER_CARD_STATE.DISABLED;
+  const codexSubscription = isCodexSubscriptionProvider(provider);
+  const subscriptionAccountReady = !codexSubscription || codexAccount?.status === 'ready';
+  const subscriptionReady = !codexSubscription || (subscriptionAccountReady && provider.textTransportEnabled === true);
   return (
     <div
       className={`@container bg-port-card border border-l-4 rounded-xl p-4 ${style.border} ${style.dim || ''} ${
@@ -122,6 +156,14 @@ export default function ProviderCard({
           {isDefault && (
             <span className="text-xs px-2 py-0.5 rounded bg-port-accent/20 text-port-accent">
               DEFAULT
+            </span>
+          )}
+          {fleetProvider && (
+            <span
+              className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30"
+              title={`Runs on ${fleetHost || 'another private-network machine'}`}
+            >
+              <Network size={11} /> FLEET HOST
             </span>
           )}
           {provider.llamaBacked && (
@@ -152,7 +194,7 @@ export default function ProviderCard({
           <span
             className={`text-xs px-2 py-0.5 rounded ${style.badge}`}
             title={cardState.state === PROVIDER_CARD_STATE.BLOCKED
-              ? cardState.missing.map(m => m.label).join(' · ')
+              ? missingSummary
               : (status?.message || style.hint)}
           >
             {style.label}
@@ -160,12 +202,15 @@ export default function ProviderCard({
               ? ` · ${status.reason}`
               : ''}
           </span>
-          {/* A blocked provider's toggle is not what's stopping it, so
-              spell out which way it sits rather than leaving the reader
-              to infer it from the Enable/Disable button. */}
-          {cardState.state === PROVIDER_CARD_STATE.BLOCKED && (
-            <span className="text-xs px-2 py-0.5 rounded bg-gray-500/20 text-gray-400">
-              {provider.enabled ? 'SWITCHED ON' : 'SWITCHED OFF'}
+          {/* A switched-off provider that would also need a CLI or a key says
+              so — wearing the DISABLED badge's own colors, because it is an FYI
+              for the day the user wants it, not a task this install is behind on. */}
+          {optional && missingSummary && (
+            <span
+              className={`text-xs px-2 py-0.5 rounded ${style.badge}`}
+              title={`To enable: ${missingSummary}`}
+            >
+              SETUP TO ENABLE
             </span>
           )}
           {/* Off the CoS Agent Runner's exec allowlist: the provider still
@@ -213,7 +258,7 @@ export default function ProviderCard({
 
           <button
             onClick={() => onTest(provider.id)}
-            disabled={testResult?.testing}
+            disabled={testResult?.testing || !subscriptionReady}
             className="px-3 py-1.5 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors disabled:opacity-50"
           >
             {testResult?.testing ? 'Testing...' : 'Test'}
@@ -232,6 +277,7 @@ export default function ProviderCard({
 
           <button
             onClick={() => onToggleEnabled(provider)}
+            disabled={!provider.enabled && !subscriptionAccountReady}
             className={`px-3 py-1.5 text-sm rounded transition-colors ${
               provider.enabled
                 ? 'bg-port-warning/20 text-port-warning hover:bg-port-warning/30'
@@ -244,6 +290,7 @@ export default function ProviderCard({
           {!isDefault && provider.enabled && (
             <button
               onClick={() => onSetActive(provider.id)}
+              disabled={!subscriptionReady}
               className="px-3 py-1.5 text-sm bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded transition-colors"
             >
               Set Default
@@ -269,9 +316,26 @@ export default function ProviderCard({
       {/* Card body — full width, below the header row rather than beside the
           action buttons. */}
       <div className="mt-3 space-y-2">
+        {codexSubscription && (
+          <CodexSubscriptionPanel
+            account={codexAccount}
+            models={codexModels}
+            loading={codexAccountLoading}
+            loginLoading={codexLoginLoading}
+            onCheck={onCodexCheckAccount}
+            onSignIn={onCodexSignIn}
+            onCancel={onCodexCancelLogin}
+            onLogout={onCodexLogout}
+            onRefreshModels={onCodexRefreshModels}
+            onCopyCode={onCodexCopyCode}
+            subscriptionEnabled={provider.textTransportEnabled === true}
+            onEnable={onCodexEnable}
+          />
+        )}
         <ProviderRuntimeStatus
           runtime={runtime}
           onInstall={onInstallRuntime}
+          optional={optional}
         />
 
         {/* The other half of "can this actually run": is the local daemon this
@@ -285,6 +349,7 @@ export default function ProviderCard({
           onUseServedModel={(modelId) => onUseServedModel?.(provider, modelId)}
           onServeWantedModel={onServeWantedModel ? () => onServeWantedModel(provider) : undefined}
           serving={servingModel}
+          optional={optional}
         />
 
         {provider.enabled && status?.available === false && (
@@ -322,7 +387,7 @@ export default function ProviderCard({
           )}
           {provider.vllmBacked && (
             <p className="text-xs text-emerald-300/90">
-              Local vLLM container (endpoint: <code className="text-emerald-200">{provider.endpoint}</code>) — Qwen3.8-27B with DFlash 2 drafting. It holds the whole GPU, so stop it before running local image/video generation.
+              {fleetProvider ? 'Fleet vLLM runtime' : 'Local vLLM container'} (endpoint: <code className="text-emerald-200">{provider.endpoint}</code>) — Qwen3.8-27B with DFlash 2 drafting. {fleetProvider ? 'This PortOS sends work over the private network; runtime lifecycle stays on the GPU host.' : 'It holds the whole GPU, so stop it before running local image/video generation.'}
             </p>
           )}
           {provider.sglangBacked && (
@@ -335,6 +400,11 @@ export default function ProviderCard({
           )}
           {isApiProvider(provider) && (
             <p className="break-words">Endpoint: <code className="text-gray-300 break-all">{provider.endpoint}</code></p>
+          )}
+          {fleetProvider && (
+            <p className="text-xs text-cyan-300/90">
+              Runs on <span className="font-medium">{fleetHost || 'another private-network machine'}</span>; install, start, and GPU-memory controls belong to that host.
+            </p>
           )}
           {/* API-type providers auth solely via the stored apiKey (sent as a
               Bearer header) — surface its state here so "where does the key
@@ -350,7 +420,9 @@ export default function ProviderCard({
                  orange "API key: not set" line for exactly those endpoints. */
               <p className="text-xs">API key: <span className="text-gray-500">none (private network endpoint)</span></p>
             ) : (
-              <p className="text-xs">API key: <span className="text-port-warning">not set — Edit this provider to paste one</span></p>
+              /* Amber only while the provider is switched ON, where a missing
+                 key is what's stopping it — `optional` mutes it otherwise. */
+              <p className="text-xs">API key: <span className={optional ? 'text-gray-400' : 'text-port-warning'}>not set — Edit this provider to paste one</span></p>
             )
           )}
           {compatibleModels.length > 0 && (
@@ -448,6 +520,114 @@ export default function ProviderCard({
               : `✗ ${testResult.error}`
             }
           </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const BUTTON_CLASS = 'px-3 py-1.5 text-sm rounded transition-colors bg-port-accent/20 text-port-accent hover:bg-port-accent/30 disabled:opacity-50 disabled:cursor-not-allowed';
+
+const quotaText = (window) => {
+  if (!window || typeof window !== 'object') return null;
+  const used = typeof window.usedPercent === 'number' ? Math.max(0, Math.min(100, Math.round(window.usedPercent))) : null;
+  const label = typeof window.limitName === 'string' && window.limitName.trim() ? window.limitName.trim() : 'Usage window';
+  const reset = typeof window.resetsAt === 'string' && window.resetsAt.trim() ? ` · resets ${window.resetsAt.trim()}` : '';
+  return used === null ? `${label}${reset}` : `${label}: ${used}% used${reset}`;
+};
+
+function CodexSubscriptionPanel({
+  account,
+  models,
+  loading,
+  loginLoading,
+  onCheck,
+  onSignIn,
+  onCancel,
+  onLogout,
+  onRefreshModels,
+  onCopyCode,
+  subscriptionEnabled,
+  onEnable,
+}) {
+  const status = account?.status || 'unknown';
+  const login = account?.login;
+  const verificationUrl = isHttpsUrl(login?.verificationUrl) ? login.verificationUrl : null;
+  const authUrl = isHttpsUrl(login?.authUrl) ? login.authUrl : null;
+  const windows = [quotaText(account?.rateLimits?.primary), quotaText(account?.rateLimits?.secondary)].filter(Boolean);
+  const catalogCount = Array.isArray(models?.models) ? models.models.length : null;
+  const modelError = models?.error;
+  const action = status === 'runtime-missing'
+    ? 'Install Codex CLI from the runtime control below.'
+    : status === 'signed-out' || status === 'reauth-required'
+      ? 'Sign in with ChatGPT to use this subscription.'
+      : status === 'quota-exhausted'
+        ? 'Wait for a reported usage window to reset, then check the account again.'
+        : status === 'login-pending'
+          ? 'Finish sign-in in the opened browser or use the device-code fallback.'
+          : status === 'ready'
+            ? 'This provider uses ChatGPT subscription limits, not an OpenAI API key.'
+            : 'Check the account again. PortOS could not determine this state.';
+
+  return (
+    <div className="max-w-3xl text-xs rounded border border-port-border bg-port-bg/50 px-3 py-2.5 space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="font-medium text-gray-200">ChatGPT subscription</p>
+        <span className="text-gray-400">{account?.account?.planType ? `${account.account.planType} plan` : status.replaceAll('-', ' ')}</span>
+      </div>
+      <p className="text-gray-400">{action}</p>
+      {windows.length > 0 && <p className="text-gray-400">{windows.join(' · ')}</p>}
+      {typeof account?.checkedAt === 'number' && <p className="text-gray-500">Last usage refresh: {new Date(account.checkedAt).toLocaleString()}</p>}
+      {catalogCount !== null && <p className="text-gray-500">Subscription catalog: {catalogCount} model{catalogCount === 1 ? '' : 's'} available.</p>}
+      {modelError && <p className="text-port-warning">Using the last known model catalog while a refresh is unavailable.</p>}
+      {verificationUrl && (
+        <div className="rounded bg-port-card px-2.5 py-2 text-gray-300 space-y-1">
+          <p>Headless sign-in: open the verification page and enter this code.</p>
+          {login.userCode && (
+            <div className="flex flex-wrap items-center gap-2">
+              <code className="text-port-accent font-semibold">{login.userCode}</code>
+              <button type="button" className={BUTTON_CLASS} onClick={() => onCopyCode?.(login.userCode)}>Copy code</button>
+            </div>
+          )}
+          <a className="inline-flex items-center gap-1 text-port-accent hover:underline" href={verificationUrl} target="_blank" rel="noreferrer">
+            Open verification page <ExternalLink size={12} />
+          </a>
+        </div>
+      )}
+      {authUrl && (
+        <a className="inline-flex items-center gap-1 text-port-accent hover:underline" href={authUrl} target="_blank" rel="noreferrer">
+          Open ChatGPT sign-in <ExternalLink size={12} />
+        </a>
+      )}
+      <div className="flex flex-wrap gap-2">
+        {(status === 'signed-out' || status === 'reauth-required' || status === 'unknown') && (
+          <button type="button" className={BUTTON_CLASS} disabled={loading || loginLoading} onClick={() => onSignIn?.(false)}>
+            {loginLoading ? 'Starting sign-in…' : 'Sign in with ChatGPT'}
+          </button>
+        )}
+        {(status === 'signed-out' || status === 'reauth-required' || status === 'login-pending' || status === 'unknown') && (
+          <button type="button" className="px-3 py-1.5 text-sm rounded transition-colors bg-port-border hover:bg-port-border/80 text-white disabled:opacity-50" disabled={loading || loginLoading} onClick={() => onSignIn?.(true)}>
+            Use device code
+          </button>
+        )}
+        {status === 'login-pending' && login?.loginId && (
+          <button type="button" className="px-3 py-1.5 text-sm rounded transition-colors bg-port-warning/20 text-port-warning hover:bg-port-warning/30 disabled:opacity-50" disabled={loading || loginLoading} onClick={() => onCancel?.(login.loginId)}>
+            Cancel sign-in
+          </button>
+        )}
+        {status === 'ready' && (
+          <>
+            {!subscriptionEnabled && (
+              <button type="button" className={BUTTON_CLASS} disabled={loading} onClick={onEnable}>
+                Enable subscription transport
+              </button>
+            )}
+            <button type="button" className={BUTTON_CLASS} disabled={loading} onClick={onRefreshModels}>Refresh subscription models</button>
+            <button type="button" className="px-3 py-1.5 text-sm rounded transition-colors bg-port-warning/20 text-port-warning hover:bg-port-warning/30 disabled:opacity-50" disabled={loading} onClick={onLogout}>Log out</button>
+          </>
+        )}
+        {(status === 'quota-exhausted' || status === 'unknown') && (
+          <button type="button" className={BUTTON_CLASS} disabled={loading} onClick={onCheck}>{loading ? 'Checking…' : 'Check account'}</button>
         )}
       </div>
     </div>

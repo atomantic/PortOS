@@ -15,7 +15,7 @@ import { updateAgent } from './cosAgentLifecycle.js';
 import { createOutputSpooler } from './agentTuiSpawning/outputSpooler.js';
 import { resolveErrorAnalysis } from './agentTuiSpawning/finalizeHelpers.js';
 import { finalizeAgent, releaseAgentLane } from './agentFinalization.js';
-import { activeAgents, userTerminatedAgents, pausedAgents, registerSpawnedAgent, unregisterSpawnedAgent } from './agentState.js';
+import { activeAgents, userTerminatedAgents, pausedAgents, consumePausedAgentExit, registerSpawnedAgent, unregisterSpawnedAgent } from './agentState.js';
 import { PATHS, watchForFile } from '../lib/fileUtils.js';
 import { resolveAgentCliCwd } from '../lib/spawnCwd.js';
 import { doneSentinelName, doneSentinelPath as resolveDoneSentinelPath, parseSentinelPayload } from '../lib/agentSentinel.js';
@@ -66,6 +66,7 @@ import {
   SUBMIT_KEY,
 } from '../lib/tuiHandshake.js';
 import { injectTuiModelAndEffort } from '../lib/providerVendors.js';
+import { isPublicReviewNoToolProfile } from '../lib/agentExecutionProfiles.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { composeProviderEnv } from '../lib/cliChildEnv.js';
 import { cliProviderAuthDescriptor } from '../lib/processEnv.js';
@@ -194,10 +195,15 @@ export function buildTuiSpawnConfig(provider, model, {
   systemPromptFile = null,
   effort = null,
   maxConcurrentThreads = null,
+  safetyProfile = null,
   shell = resolveInteractiveShell(),
 } = {}) {
   const command = provider?.command || inferTuiCommand(provider?.id);
-  const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])]);
+  const baseArgs = applyCommandDefaults(
+    command,
+    isPublicReviewNoToolProfile(safetyProfile) ? [] : [...(provider?.args || [])],
+    { safetyProfile },
+  );
   // Model+effort injection (including the antigravity-validates-the-pair special
   // case) is shared with tuiHandshake.js#buildTuiInvocation via
   // providerVendors.js#injectTuiModelAndEffort, so the two spawn paths can't
@@ -800,7 +806,7 @@ export async function spawnTuiAgent({
     await drainRaw();
 
     if (pausedAgents.has(agentId)) {
-      pausedAgents.delete(agentId);
+      consumePausedAgentExit(agentId);
       const pausedAgentData = activeAgents.get(agentId);
       if (pausedAgentData?.pid) unregisterSpawnedAgent(pausedAgentData.pid);
       activeAgents.delete(agentId);

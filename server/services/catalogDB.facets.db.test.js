@@ -14,6 +14,7 @@
 
 import { describe, it, expect, afterAll, beforeAll } from 'vitest';
 import { checkHealth, ensureSchema, close, query } from '../lib/db.js';
+import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import * as catalogDB from './catalogDB.js';
 
 let dbReady = false;
@@ -29,7 +30,7 @@ let skipReason = '';
     else skipReason = 'catalog schema not present';
   }
 }
-if (!dbReady) console.log(`⏭️ catalogDB.facets.db.test: skipping suite — ${skipReason || 'no database'}`);
+const runDb = requireDbOrSkip('services/catalogDB.facets.db.test', dbReady, skipReason);
 
 const nonce = `f${Date.now()}`;
 const UNI_ID = `uni-${nonce}`;
@@ -55,7 +56,7 @@ afterAll(async () => {
   await close();
 });
 
-describe.skipIf(!dbReady)('catalogDB facets + album filters (#1762)', () => {
+describe.skipIf(!runDb)('catalogDB facets + album filters (#1762)', () => {
   it('lists ingredients by universe ref (membership), composing with type', async () => {
     const linked = await catalogDB.createIngredient({ type: 'character', name: `Linked ${nonce}`, tags: [TAG] });
     const other = await catalogDB.createIngredient({ type: 'place', name: `Other ${nonce}` });

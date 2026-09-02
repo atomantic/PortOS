@@ -118,12 +118,12 @@ export const buildHfResolveUrl = (repo, revision, file) =>
 // Fetch model metadata from the public HF API. Returns the parsed JSON with
 // `siblings` (file list), `tags`, and `cardData` (carries `base_model`).
 // fetchImpl is injectable for tests.
+// The `blobs=true` expand isn't needed — siblings carry rfilename, and we
+// size-rank via the resolve HEAD only if multiple LoRA files tie.
 export const fetchHuggingfaceModel = async (repo, { token, revision, fetchImpl = fetch, signal } = {}) => {
   if (!/^[^/\s]+\/[^/\s]+$/.test(String(repo))) {
     throw new ServerError(`Invalid HuggingFace repo id: ${repo}`, { status: 400, code: 'HF_BAD_URL' });
   }
-  // The `blobs=true` expand isn't needed — siblings carry rfilename, and we
-  // size-rank via the resolve HEAD only if multiple LoRA files tie.
   const url = revision
     ? `${HF_API}/${repo}/revision/${encodeURIComponent(revision)}`
     : `${HF_API}/${repo}`;

@@ -11,9 +11,9 @@ import { join } from 'path';
 import { readJSONFile, ensureDir, PATHS, dataPath, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { instanceEvents } from './instanceEvents.js';
-import { getPeers, DEFAULT_SYNC_CATEGORIES, allSyncCategoriesOn, updatePeer, getInstanceId, UNKNOWN_INSTANCE_ID } from './instances.js';
+import { getPeers, resolveEffectiveCategories, updatePeer, getInstanceId, UNKNOWN_INSTANCE_ID } from './instances.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
-import { peerAuthHeaders } from '../lib/peerHttpClient.js';
+import { peerFetch } from '../lib/peerHttpClient.js';
 import * as brainSync from './brainSync.js';
 import { BRAIN_ENTITY_TYPES } from './brainStorage.js';
 import * as brainSyncLog from './brainSyncLog.js';
@@ -22,7 +22,7 @@ import * as memorySync from './memorySync.js';
 import * as catalogSync from './catalogSync.js';
 import * as dataSync from './dataSync.js';
 import { getBackendName } from './memoryBackend.js';
-import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { withAbortTimeout } from '../lib/abortTimeout.js';
 
 const CURSORS_FILE = dataPath('instances_sync_cursors.json');
 const SYNC_INTERVAL_MS = 60000;
@@ -76,15 +76,25 @@ async function withCursors(fn) {
 
 // --- Peer fetch helper ---
 
+// Every outbound hop goes through `peerFetch` so it carries
+// `X-PortOS-Instance-Id` (and the peer's stored Basic credential). The receiver
+// keys its per-peer sharing config on that header — without it the snapshot
+// transport reads as an unidentified caller and the PII categories now refuse
+// it outright (#5663). `peerFetch` also carries the peer HTTPS agent, so a
+// self-signed tailnet peer no longer fails TLS validation on these pulls.
+//
+// The timeout bounds the peerFetch call and nothing after it, so the JSON
+// decode of an already-received body can't be aborted — the same shape
+// `fetchWithTimeout` had here. (Over HTTPS the budget does still cover the
+// download itself, because the insecure-agent shim buffers the whole body
+// before it resolves; that is a property of that transport, not of this call.)
+// Contract is unchanged: null on transport failure, non-2xx, or bad JSON.
 async function fetchPeer(peer, path) {
   const url = `${peerBaseUrl(peer)}${path}`;
-  try {
-    const res = await fetchWithTimeout(url, { headers: peerAuthHeaders(peer) }, FETCH_TIMEOUT_MS);
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
+  const res = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(url, { signal }, peer))
+    .catch(() => null);
+  if (!res?.ok) return null;
+  return res.json().catch(() => null);
 }
 
 /**
@@ -103,16 +113,18 @@ async function syncImageFromPeer(peer, avatarPath) {
   if (exists) return;
 
   const url = `${peerBaseUrl(peer)}${avatarPath}`;
-  try {
-    const res = await fetchWithTimeout(url, { headers: peerAuthHeaders(peer) }, FETCH_TIMEOUT_MS);
-    if (!res.ok) return;
-    const buffer = Buffer.from(await res.arrayBuffer());
-    await ensureDir(PATHS.images);
-    await writeFile(localPath, buffer);
-    console.log(`🔄 Synced avatar image: ${filename}`);
-  } catch {
-    // Non-critical — avatar will sync on next cycle
-  }
+  // Same `peerFetch` hop and the same timeout scope as fetchPeer. Non-critical
+  // either way: a failure just retries next cycle.
+  const res = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(url, { signal }, peer))
+    .catch(() => null);
+  if (!res?.ok) return;
+  await res.arrayBuffer()
+    .then(async (bytes) => {
+      await ensureDir(PATHS.images);
+      await writeFile(localPath, Buffer.from(bytes));
+      console.log(`🔄 Synced avatar image: ${filename}`);
+    })
+    .catch(() => {});
 }
 
 // --- Status ---
@@ -444,25 +456,10 @@ function detectCursorReset(cursor, peer) {
   return corrected;
 }
 
-/**
- * Resolve effective sync categories for a peer.
- * Returns object with boolean flags for each category.
- * Falls back to legacy behavior: if syncCategories is absent but syncEnabled is true,
- * enable brain + memory for backward compatibility with older peers.
- */
-function getEffectiveCategories(peer) {
-  // A full-sync ("mirror everything") peer pulls EVERY snapshot category from
-  // its mirror, regardless of the stored per-category map — including a category
-  // added in a later version (allSyncCategoriesOn derives off
-  // DEFAULT_SYNC_CATEGORIES, so it stays current automatically).
-  if (peer.fullSync === true) return allSyncCategoriesOn();
-  if (peer.syncCategories) return peer.syncCategories;
-  // Legacy fallback: peers without syncCategories but with syncEnabled get brain+memory
-  if (peer.syncEnabled !== false) {
-    return { ...DEFAULT_SYNC_CATEGORIES, brain: true, memory: true };
-  }
-  return { ...DEFAULT_SYNC_CATEGORIES };
-}
+// The effective category map lives in instances.js, next to the defaults it
+// resolves against, so the sync loop and the client-facing peer payload
+// (sanitizePeerForClient) can't drift apart on what "on" means for a peer.
+const getEffectiveCategories = resolveEffectiveCategories;
 
 /**
  * Sync a snapshot-based data category from a peer.
@@ -818,7 +815,13 @@ export async function syncWithPeer(peer) {
  * Check if a peer has any sync category enabled
  */
 function hasAnySyncEnabled(peer) {
-  if (peer.syncEnabled === false) return false;
+  // `enabled: false` is the switch that stops everything, and it is checked HERE
+  // rather than only in syncAllPeers: the `peer:online` handler gates solely on
+  // this function, and a default-ON category makes it truthy for almost every
+  // peer — so without this a disabled peer would still sync the moment a manual
+  // Connect flipped its status. No `syncEnabled === false` short-circuit though:
+  // getEffectiveCategories already masks that peer down to its default-ON set.
+  if (peer.enabled === false) return false;
   const cats = getEffectiveCategories(peer);
   return Object.values(cats).some(Boolean);
 }

@@ -9,6 +9,7 @@
 
 import { describe, it, expect, afterAll, beforeAll } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../lib/db.js';
+import { requireDbOrSkip } from '../lib/dbTestGate.js';
 
 // A valid vault key BEFORE privacyVault is imported so the runScanPass test can
 // create a scan-eligible name without touching the repo's real .env.
@@ -31,9 +32,9 @@ let skipReason = '';
   }
 }
 
-if (!dbReady) console.log(`⏭️  privacyBrokers.db.test.js skipped: ${skipReason}`);
+const runDb = requireDbOrSkip('services/privacyBrokers.db.test', dbReady, skipReason);
 
-describe.skipIf(!dbReady)('privacy brokers DB round-trip', () => {
+describe.skipIf(!runDb)('privacy brokers DB round-trip', () => {
   let svc;
   let scan;
   let vault;

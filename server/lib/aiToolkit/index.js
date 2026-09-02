@@ -28,6 +28,7 @@ export const DEFAULT_PROVIDERS_SAMPLE = join(__dirname, 'defaults/providers.samp
 
 export * from './validation.js';
 export * from './errorDetection.js';
+export * from './endpointGuard.js';
 export * from './constants.js';
 export { createProviderService, createRunnerService, createPromptsService, createProviderStatusService };
 export { isOllamaBackedProvider, canRefreshModels, ollamaRefreshGroupKey };

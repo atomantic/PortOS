@@ -9,6 +9,31 @@
 // would break the published site, so it is protected everywhere the others are.
 export const PROTECTED_BRANCHES = ['main', 'master', 'dev', 'develop', 'release', 'gh-pages'];
 
+// Null bytes and shell command separators. Shared by the predicate and the
+// thrower below so the two can never disagree about what is unsafe.
+const GIT_UNSAFE_CHARS = /[\0;|&`$]/;
+
+/**
+ * `validateFilePaths`'s non-throwing twin: true when `file` is a repo-relative
+ * path git can be asked to stage. For callers that must REPORT an unstageable
+ * path as data rather than throw — e.g. a route that would otherwise write the
+ * file to disk and only then discover the commit can't reference it, leaving a
+ * mutated tree behind a 500. `validateFilePaths` is layered on this, so the
+ * gate and the predicate always admit the same set.
+ *
+ * Note `..` is rejected as a SUBSTRING, not just as a path component, which is
+ * stricter than `pathSafety.isTopLevelEntryName` — `notes..md` is a perfectly
+ * good filename that git staging still refuses here.
+ *
+ * @param {string} file - Repo-relative file path
+ * @returns {boolean}
+ */
+export function isGitStageableFilePath(file) {
+  if (!file || typeof file !== 'string') return false;
+  if (GIT_UNSAFE_CHARS.test(file)) return false;
+  return !file.startsWith('/') && !file.includes('..');
+}
+
 /**
  * Validate file paths to prevent command injection and path traversal.
  * Throws on null bytes / shell metacharacters, absolute paths, or `..` traversal.
@@ -26,11 +51,11 @@ export function validateFilePaths(files) {
   const fileList = Array.isArray(files) ? files : [files];
   return fileList.map(f => {
     // Reject paths with null bytes or command separators
-    if (/[\0;|&`$]/.test(f)) {
+    if (GIT_UNSAFE_CHARS.test(f)) {
       throw new Error(`Invalid character in file path: ${f}`);
     }
     // Reject absolute paths or parent directory traversal
-    if (f.startsWith('/') || f.includes('..')) {
+    if (!isGitStageableFilePath(f)) {
       throw new Error(`Invalid file path: ${f}`);
     }
     return f;

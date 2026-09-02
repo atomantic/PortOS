@@ -73,13 +73,14 @@ export const PERSISTENT_MIND_TOOL_CATALOG = Object.freeze([
     id: 'portos.read',
     capability: 'readPortos',
     name: 'Read PortOS context',
-    description: 'Use the bounded semantic catalog to inspect selected Brain, goals, journal, calendar, health, feed, catalog, and runtime context.',
+    description: 'Use the bounded semantic catalog to inspect selected Brain, goals, journal, calendar, health, feed, catalog, runtime context, and the recent operator-action ledger (what you did in PortOS — including the prompts and settings changes those actions recorded).',
     kind: 'semantic-tools',
     defaultEnabled: false,
     guardrails: [
       'Read-only adapters only',
       'No arbitrary URL, route, SQL, shell, or filesystem access',
       'Tool inputs and results are schema-validated and size-bounded',
+      'Operator-action ledger reads are machine-local, capped at 100 events per call, and credential-redacted at record time plus value-scrubbed on output',
     ],
   }),
   Object.freeze({

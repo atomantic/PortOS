@@ -6,6 +6,7 @@ import { DEFAULT_REVIEWER, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, MODEL_
 import { oversizedBodyPointer } from '../../lib/slashdoInvocation.js';
 import { detectForgeCli } from '../../lib/gitForge.js';
 import { shellQuote } from '../../lib/shellQuote.js';
+import { localApiBaseUrl } from '../../lib/networkExposure.js';
 import { INLINE_REVIEW_LOOP_STEP } from './constants.js';
 import { normalizeForgeCli } from './forge.js';
 
@@ -346,8 +347,10 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   // per-reviewer-kind bullet that actually applies to the configured list.
   // `lmstudio`/`ollama` don't have CLIs the agent can spawn — PortOS exposes
   // `POST /api/code-review/local` which runs the configured local model against
-  // the diff and returns findings text. The agent always reaches it via
-  // `http://localhost:5555` (the canonical loopback API port).
+  // the diff and returns findings text. The agent reaches it over plain HTTP at
+  // `localApiBaseUrl()` — the loopback HTTP mirror port when this install booted
+  // with HTTPS (where the API port is TLS-only and a plain-HTTP curl would fail
+  // at the transport layer), the API port otherwise.
   // A pinned local-LLM model can't ride the endpoint's server-side default: that
   // reads the GLOBAL settings scalar and has never seen this task. So when the
   // user pinned one on the reviewer's row, name it in the request body — `model`
@@ -384,6 +387,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
     ...(localLlmPins.some(p => p.effort) ? ['effort: "…"'] : []),
     'diff: .'
   ].join(', ');
+  const apiBase = localApiBaseUrl();
   const diffCommand = localOnly
     ? `git diff ${renderedBaseBranch}...HEAD`
     : reviewForgeCli === 'glab'
@@ -392,7 +396,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const localLlmInvocation = `POST the diff to PortOS's local reviewer endpoint and extract its review text before evaluating it. Substitute the active reviewer name for \`<lmstudio|ollama>\`:
 \`\`\`bash
 REVIEW_RESPONSE=$(mktemp)
-HTTP_STATUS=$(${diffCommand} | jq -Rs '{ backend: "<lmstudio|ollama>", diff: . }' | curl -sS -X POST http://localhost:5555/api/code-review/local -H 'Content-Type: application/json' -d @- -o "$REVIEW_RESPONSE" -w '%{http_code}') || {
+HTTP_STATUS=$(${diffCommand} | jq -Rs '{ backend: "<lmstudio|ollama>", diff: . }' | curl -sS -X POST ${apiBase}/api/code-review/local -H 'Content-Type: application/json' -d @- -o "$REVIEW_RESPONSE" -w '%{http_code}') || {
   echo "Local reviewer failed: request transport error" >&2
   STATUS=cli-error
   exit 1
@@ -532,7 +536,7 @@ Only a successfully extracted \`.findings\` value is the review text; treat it l
   const challengeProtocolNote = [
     '**Challenge protocol (dispute a wrong rejection — use sparingly):** If a reviewer raises a BLOCKING finding you have strong, specific evidence is a false positive (it misread the diff, flagged intended behavior, or contradicts a documented repo convention), do NOT silently "fix" it or accept a false block — dispute it **exactly once** for this task:',
     '```bash',
-    `curl -sS -X POST http://localhost:5555/api/cos/tasks/${sourceTaskId}/challenge -H 'Content-Type: application/json' -d '{"reason":"<why the finding is wrong>","evidence":"<file:line or diff quote>","reviewer":"<disputed reviewer>"}'`,
+    `curl -sS -X POST ${apiBase}/api/cos/tasks/${sourceTaskId}/challenge -H 'Content-Type: application/json' -d '{"reason":"<why the finding is wrong>","evidence":"<file:line or diff quote>","reviewer":"<disputed reviewer>"}'`,
     '```',
     `A \`409\` (\`CHALLENGE_EXHAUSTED\` = the one challenge is spent, or \`CHALLENGE_BUDGET_EXHAUSTED\` = the task is out of retry budget) means you can't dispute — then fix the finding or, if genuinely blocked, ${localOnly ? 'stop without pushing or opening a PR/MR' : 'post a PR comment and stop'}. After filing, RE-CHECK: re-run the disputed reviewer (or another configured reviewer) against the current diff, then resolve — overturned → \`POST .../challenge/resolve\` with \`{"outcome":"upheld"}\` and continue to ${localOnly ? 'the PR/MR creation step' : 'merge'}; confirmed → fix it, or send \`{"outcome":"escalated"}\` to hand the dispute to the user.` + (hasLocalLlm ? ' For a local reviewer you may instead POST `{"recheck":{"backend":"<lmstudio|ollama>","diff":"<unified diff>"}}` and let the server re-run it and auto-derive the outcome.' : ''),
   ].join('\n');

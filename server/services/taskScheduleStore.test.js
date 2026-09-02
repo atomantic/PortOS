@@ -65,7 +65,7 @@ vi.mock('../lib/fileUtils.js', async () => {
   };
 });
 
-import { updateSchedule } from './taskScheduleStore.js';
+import { loadSchedule, updateSchedule } from './taskScheduleStore.js';
 import { updateTaskInterval } from './taskSchedule.js';
 import { recordTaskTypeFailure } from './taskScheduleBackoff.js';
 
@@ -115,5 +115,36 @@ describe('taskScheduleStore', () => {
     expect(state.persisted.tasks.security.enabled).toBe(true);
     expect(state.persisted.executions['task:security'].consecutiveFailures).toBe(1);
     expect(state.persisted.executions['task:security'].lastErrorCategory).toBe('provider');
+  });
+
+  it('migrates the former two-stage pr-reviewer schedule to the gated pipeline', async () => {
+    state.persisted = {
+      version: 2,
+      tasks: {
+        'pr-reviewer': {
+          type: 'on-demand',
+          enabled: true,
+          prompt: null,
+          taskMetadata: {
+            pipeline: {
+              stages: [
+                { name: 'Security Scan', promptKey: 'pr-reviewer-security', readOnly: true },
+                { name: 'Code Review & Actions', promptKey: 'pr-reviewer-review', providerId: 'codex-cli', model: 'gpt-5.6' },
+              ],
+            },
+          },
+        },
+      },
+      executions: {},
+      templates: [],
+    };
+
+    const schedule = await loadSchedule();
+    const stages = schedule.tasks['pr-reviewer'].taskMetadata.pipeline.stages;
+
+    expect(stages).toHaveLength(3);
+    expect(stages[1]).toMatchObject({ role: 'eligibility', promptKey: 'pr-reviewer-eligibility', executionProfile: 'public-review-gate' });
+    expect(stages[2]).toMatchObject({ role: 'actions', providerId: 'codex-cli', model: 'gpt-5.6', executionProfile: 'public-review-actions' });
+    expect(state.writes.at(-1).tasks['pr-reviewer'].taskMetadata.pipeline.stages).toHaveLength(3);
   });
 });

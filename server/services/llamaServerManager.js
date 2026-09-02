@@ -9,7 +9,7 @@
 import { realpath, stat } from 'fs/promises';
 import { spawn } from '../lib/childProcess.js';
 import { commandExists } from '../lib/commandExists.js';
-import { findCommandOnPath, safeChildProcessEnv, safeChildProcessOptions } from '../lib/processEnv.js';
+import { adoptPathDirs, findCommandOnPath, safeChildProcessEnv, safeChildProcessOptions } from '../lib/processEnv.js';
 import { expandHome, sleep } from '../lib/fileUtils.js';
 import { createDaemonWatcher, pm2ArgValue, LLAMA_APP } from '../lib/managedDaemon.js';
 import { execFile } from '../lib/childProcess.js';
@@ -17,6 +17,14 @@ import { resolveSpecModelPath } from './specDecodeModels.js';
 import { parseSpecTypes, isDraftSpecType } from '../lib/specDecodePresets.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 import { isPortInUse } from '../lib/platform.js';
+import {
+  LLAMA_CPP_BREW_FORMULA,
+  LLAMA_CPP_DOWNLOAD_URL,
+  isWingetManagedPath,
+  llamaCppInstallPlan,
+  parseWingetPackageFields,
+  wingetLinkDirs,
+} from '../lib/llamaCppInstall.js';
 import { PORTS } from '../lib/ports.js';
 import { tuningSpecsFor } from '../lib/localModelTuning.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -37,10 +45,11 @@ const STARTUP_WAIT_TIMEOUT_MS = 4000;
 const STARTUP_POLL_DELAY_MS = 500;
 const RELAUNCH_READY_TIMEOUT_MS = 120000;
 const RELAUNCH_POLL_DELAY_MS = 1000;
-const LLAMA_CPP_FORMULA = 'llama.cpp';
-const LLAMA_CPP_DOWNLOAD_URL = 'https://github.com/ggml-org/llama.cpp/releases';
 const VERSION_PROBE_TIMEOUT_MS = 5000;
 const BREW_INFO_TIMEOUT_MS = 15_000;
+// winget rebuilds its source index on the first query of a session, which takes
+// longer than any single `brew info`.
+const WINGET_LIST_TIMEOUT_MS = 60_000;
 const UPGRADE_TIMEOUT_MS = 30 * 60 * 1000;
 // `llama-server --help` is a fast local exec; this only bounds a wedged binary.
 const HELP_PROBE_TIMEOUT_MS = 5000;
@@ -52,6 +61,10 @@ const SLEEP_IDLE_FLAG = '--sleep-idle-seconds';
 const sleepIdleSupport = new Map();
 // See `configuredSleepIdleMinutes`. Only `_resetLlamaServerStateForTests` writes it.
 let sleepIdleMinutesOverride = null;
+// Which package manager PortOS drives for llama.cpp. Only the test seam writes
+// it, so both the Homebrew and the winget path stay coverable from either OS.
+let platformOverride = null;
+const installPlan = () => llamaCppInstallPlan(platformOverride || process.platform);
 // How long a relaunch waits for the kernel to release the old listener.
 const PORT_RELEASE_TIMEOUT_MS = 5000;
 // How long a relaunch waits for the new process to answer. `startLlamaServer`
@@ -131,7 +144,7 @@ async function readLlamaServerVersion(binaryPath) {
 async function readBrewLlamaCppInfo() {
   const result = await readCommandOutput(
     'brew',
-    ['info', '--json=v2', '--formula', LLAMA_CPP_FORMULA],
+    ['info', '--json=v2', '--formula', LLAMA_CPP_BREW_FORMULA],
     BREW_INFO_TIMEOUT_MS,
   );
   if (result.error) return null;
@@ -139,12 +152,12 @@ async function readBrewLlamaCppInfo() {
   return Promise.resolve()
     .then(() => JSON.parse(result.stdout))
     .then(async (payload) => {
-      const formula = payload?.formulae?.find((entry) => entry?.name === LLAMA_CPP_FORMULA);
+      const formula = payload?.formulae?.find((entry) => entry?.name === LLAMA_CPP_BREW_FORMULA);
       const installed = formula?.installed?.[0];
       if (!installed) return null;
       const prefixResult = await readCommandOutput(
         'brew',
-        ['--prefix', LLAMA_CPP_FORMULA],
+        ['--prefix', LLAMA_CPP_BREW_FORMULA],
         BREW_INFO_TIMEOUT_MS,
       );
       return {
@@ -178,6 +191,74 @@ async function isHomebrewLlamaServer(binaryPath, brewInfo) {
   ]);
   return Boolean(activePath && homebrewPath && activePath === homebrewPath);
 }
+
+/**
+ * Homebrew's answer to "what is installed, is it stale, and may PortOS update
+ * it?", in the shape every caller below consumes.
+ *
+ * `blockedReason` is what makes this the single manager-specific step: a pinned
+ * or unlinked formula, or a source build sitting earlier on PATH, all stay the
+ * user's to update by hand, and each refusal has to say which. `null` means
+ * PortOS may run the upgrade, so `canUpgrade` is simply its absence.
+ */
+async function readBrewPackageStatus(binaryPath) {
+  const brewInfo = await readBrewLlamaCppInfo();
+  if (!brewInfo) return null;
+  const blockedReason = brewInfo.pinned
+    ? 'llama.cpp is pinned in Homebrew. Unpin it before asking PortOS to update it.'
+    : !brewInfo.linked
+      ? 'Homebrew has llama.cpp installed, but its keg is not linked to the llama-server on PATH. Link the formula manually before asking PortOS to update it.'
+      : !(await isHomebrewLlamaServer(binaryPath, brewInfo))
+        ? `The active llama-server is not the linked Homebrew llama.cpp binary, so PortOS left it untouched. Update that installation manually: ${LLAMA_CPP_DOWNLOAD_URL}`
+        : null;
+  return {
+    installedVersion: brewInfo.installedVersion || null,
+    latestVersion: brewInfo.latestVersion || null,
+    outdated: brewInfo.outdated === true,
+    canUpgrade: blockedReason === null,
+    blockedReason,
+  };
+}
+
+/**
+ * The same shape, read from winget.
+ *
+ * winget has no `brew info --json` equivalent, so this asks two questions in
+ * parallel instead of parsing one payload: `winget list` says whether the
+ * package is installed at all (and at what version), and the same query with
+ * `--upgrade-available` lists it only when a newer build exists. Neither answer
+ * is a version comparison PortOS performs — llama.cpp versions are build
+ * numbers (`b10730`), which no semver comparison orders correctly.
+ */
+async function readWingetPackageStatus(binaryPath, plan) {
+  const [listed, upgradable] = await Promise.all([
+    readCommandOutput('winget', plan.listArgs, WINGET_LIST_TIMEOUT_MS),
+    readCommandOutput('winget', plan.upgradeCheckArgs, WINGET_LIST_TIMEOUT_MS),
+  ]);
+  if (listed.error) return null;
+  const installedFields = parseWingetPackageFields(listed.stdout, plan.packageId);
+  if (!installedFields) return null;
+  // Only the `--upgrade-available` table is guaranteed to carry the `Available`
+  // column, so the newer version is read from that run and nowhere else.
+  const upgradeFields = upgradable.error ? null : parseWingetPackageFields(upgradable.stdout, plan.packageId);
+  const ours = isWingetManagedPath(binaryPath);
+  return {
+    installedVersion: installedFields[0] || null,
+    latestVersion: upgradeFields?.[1] || null,
+    outdated: Boolean(upgradeFields),
+    canUpgrade: ours,
+    blockedReason: ours
+      ? null
+      : `The active llama-server is not the winget-installed llama.cpp, so PortOS left it untouched. Update that installation manually: ${LLAMA_CPP_DOWNLOAD_URL}`,
+  };
+}
+
+/** Package metadata for whichever manager this platform uses, or `null`. */
+const readPackageStatus = (plan, binaryPath) => (
+  plan.manager === 'winget'
+    ? readWingetPackageStatus(binaryPath, plan)
+    : readBrewPackageStatus(binaryPath)
+);
 
 /**
  * Probes whether an OpenAI-compatible endpoint responds at the given host/port.
@@ -379,9 +460,18 @@ export async function getLlamaServerEndpoint() {
 export async function getLlamaServerStatus() {
   const binaryPath = resolveLlamaServerBinary();
   const installed = Boolean(binaryPath);
+  const plan = installPlan();
 
   return {
     ...await daemon.getStatusBase({ installed }),
+    // How llama.cpp is installed HERE, so the LLMs page can name the command
+    // instead of guessing. Carried on the lifecycle status rather than on the
+    // update probe below, because the not-installed card is exactly the one
+    // that has to name it — and it never reaches that probe, which needs a
+    // binary to ask about.
+    packageManager: plan.manager,
+    packageManagerLabel: plan.managerLabel,
+    installCommand: plan.installCommand,
     // The SAVED window, which is what the settings field edits. What the running
     // process actually got is `config.sleepIdleMinutes` — they differ until the
     // next start, because this is a launch flag.
@@ -390,7 +480,7 @@ export async function getLlamaServerStatus() {
 }
 
 /**
- * Check whether the installed llama.cpp formula has a newer Homebrew build.
+ * Check whether this platform's package manager has a newer llama.cpp build.
  * This is kept separate from the lifecycle status probe because the latter is
  * also used by performance/ownership paths that must remain disk-and-process
  * local; the LLMs page calls this explicit update-information path.
@@ -407,16 +497,15 @@ export async function getLlamaServerUpdateStatus() {
     };
   }
 
-  const [version, brewInfo] = await Promise.all([
+  const [version, packageStatus] = await Promise.all([
     readLlamaServerVersion(binaryPath),
-    readBrewLlamaCppInfo(),
+    readPackageStatus(installPlan(), binaryPath),
   ]);
-  const homebrewBinary = await isHomebrewLlamaServer(binaryPath, brewInfo);
   return {
-    version: version || brewInfo?.installedVersion || null,
-    latestVersion: brewInfo?.latestVersion || null,
-    updateAvailable: Boolean(brewInfo?.outdated),
-    canUpgrade: Boolean(brewInfo?.linked && !brewInfo.pinned && homebrewBinary),
+    version: version || packageStatus?.installedVersion || null,
+    latestVersion: packageStatus?.latestVersion || null,
+    updateAvailable: Boolean(packageStatus?.outdated),
+    canUpgrade: Boolean(packageStatus?.canUpgrade),
     downloadUrl: LLAMA_CPP_DOWNLOAD_URL,
   };
 }
@@ -451,7 +540,7 @@ export async function startLlamaServer(options = {}) {
   const binaryPath = resolveLlamaServerBinary();
   if (!binaryPath) {
     throw new ServerError(
-      'llama-server binary was not found on PATH. Install it via Homebrew (`brew install llama.cpp`) or build from source.',
+      `llama-server binary was not found on PATH. Install it with \`${installPlan().installCommand}\` or build from source.`,
       { status: 400 }
     );
   }
@@ -764,44 +853,39 @@ async function upgradeFailureResult(message, managedConfig, baseline, updated = 
 }
 
 /**
- * Upgrade a Homebrew-installed llama.cpp binary in place.
+ * Refuse an upgrade PortOS has no business running, with the reason.
  *
- * A managed llama-server is stopped before Homebrew swaps the binary and then
- * restarted with the exact launch configuration it was using. An external
- * process is never stopped; changing the package only takes effect for it when
- * its owner starts it again.
+ * A package PortOS did not install — a source build, a hand-extracted release
+ * zip, a pinned or unlinked keg — must be left alone: swapping the package would
+ * not touch the binary actually on PATH, so the user would be told their runtime
+ * was updated while the serving process stayed exactly as stale as before.
+ *
+ * Manager-agnostic on purpose: `readPackageStatus` is the ONE place that knows
+ * how each package manager answers "may PortOS update this?", so a new manager
+ * is registered there and in its plan rather than adding a branch here.
+ *
+ * @returns {Promise<object|null>} a failure result, or `null` to proceed
+ */
+async function upgradePreflight(plan, binaryPath) {
+  const status = await readPackageStatus(plan, binaryPath);
+  if (!status) return { success: false, error: plan.notInstalledError };
+  if (status.canUpgrade) return null;
+  return { success: false, manualUpdateRequired: true, error: status.blockedReason };
+}
+
+/**
+ * Upgrade a package-manager-installed llama.cpp binary in place.
+ *
+ * A managed llama-server is stopped before the package manager swaps the binary
+ * and then restarted with the exact launch configuration it was using. An
+ * external process is never stopped; changing the package only takes effect for
+ * it when its owner starts it again.
  */
 export async function upgradeLlamaServer({ onProgress = () => {} } = {}) {
-  const brewInfo = await readBrewLlamaCppInfo();
-  if (!brewInfo) {
-    return {
-      success: false,
-      error: `llama.cpp is not installed through Homebrew, so PortOS cannot update it here. Install it with Homebrew or update your source build manually: ${LLAMA_CPP_DOWNLOAD_URL}`,
-    };
-  }
-  if (brewInfo.pinned) {
-    return {
-      success: false,
-      manualUpdateRequired: true,
-      error: 'llama.cpp is pinned in Homebrew. Unpin it before asking PortOS to update it.',
-    };
-  }
-  if (!brewInfo.linked) {
-    return {
-      success: false,
-      manualUpdateRequired: true,
-      error: 'Homebrew has llama.cpp installed, but its keg is not linked to the llama-server on PATH. Link the formula manually before asking PortOS to update it.',
-    };
-  }
-
+  const plan = installPlan();
   const binaryPath = resolveLlamaServerBinary();
-  if (!(await isHomebrewLlamaServer(binaryPath, brewInfo))) {
-    return {
-      success: false,
-      manualUpdateRequired: true,
-      error: `The active llama-server is not the linked Homebrew llama.cpp binary, so PortOS left it untouched. Update that installation manually: ${LLAMA_CPP_DOWNLOAD_URL}`,
-    };
-  }
+  const refusal = await upgradePreflight(plan, binaryPath);
+  if (refusal) return refusal;
 
   const launch = await readLlamaServerLaunch();
   if (launch.readFailed) {
@@ -830,35 +914,27 @@ export async function upgradeLlamaServer({ onProgress = () => {} } = {}) {
     }
   }
 
-  onProgress({ event: 'progress', message: 'Updating llama.cpp via Homebrew…' });
+  onProgress({ event: 'progress', message: `Updating llama.cpp via ${plan.managerLabel}…` });
   const upgraded = await runStreamingCommand(
-    'brew',
-    ['upgrade', LLAMA_CPP_FORMULA],
+    plan.manager,
+    plan.upgradeArgs,
     (message) => onProgress({ event: 'progress', message }),
     { timeoutMs: UPGRADE_TIMEOUT_MS },
   );
 
   if (!upgraded.success) {
     return upgradeFailureResult(
-      `llama.cpp upgrade failed: ${upgraded.error || 'Homebrew reported an unknown error'}.`,
+      `llama.cpp upgrade failed: ${upgraded.error || `${plan.managerLabel} reported an unknown error`}.`,
       managedConfig,
       baseline,
     );
   }
 
-  // Homebrew normally keeps a linked formula linked across an upgrade, but an
-  // unlinked keg should not leave the newly-upgraded runtime invisible to PATH.
   if (!resolveLlamaServerBinary()) {
-    onProgress({ event: 'progress', message: 'llama.cpp upgraded but is not linked — linking…' });
-    const linked = await runStreamingCommand(
-      'brew',
-      ['link', '--overwrite', LLAMA_CPP_FORMULA],
-      (message) => onProgress({ event: 'progress', message }),
-      { timeoutMs: 60_000 },
-    );
-    if (!linked.success || !resolveLlamaServerBinary()) {
+    const { repaired, detail } = await repairBinaryOnPath(plan, safeChildProcessEnv(), onProgress);
+    if (!repaired) {
       return upgradeFailureResult(
-        `llama.cpp was upgraded, but its llama-server binary is not on PATH${linked.error ? `: ${linked.error}` : '.'}`,
+        `llama.cpp was upgraded, but its llama-server binary is not on PATH${detail ? `: ${detail}` : '.'}`,
         managedConfig,
         baseline,
         true,
@@ -1336,7 +1412,7 @@ function linkLlamaCpp(env) {
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    const child = spawn('brew', ['link', '--overwrite', 'llama.cpp'], spawnOpts);
+    const child = spawn('brew', ['link', '--overwrite', LLAMA_CPP_BREW_FORMULA], spawnOpts);
     let output = '';
     const collect = (chunk) => { output += chunk.toString(); };
     child.stdout?.on('data', collect);
@@ -1351,18 +1427,64 @@ function linkLlamaCpp(env) {
 }
 
 /**
- * Installs llama.cpp via Homebrew.
+ * Adopt winget's portable-shim directory onto this process's PATH.
+ *
+ * winget links a portable package's executables into a Links directory and adds
+ * that directory to the USER environment — a change an already-running PortOS
+ * does not inherit, so a perfectly successful install would otherwise report
+ * "llama-server was not found on PATH" until the server was restarted. See
+ * `adoptPathDirs` for why extending `process.env.PATH` is the fix.
+ *
+ * @returns {string|null} the newly-visible binary path, or null if it is not there
+ */
+function adoptWingetLinkDirs() {
+  adoptPathDirs(wingetLinkDirs());
+  return resolveLlamaServerBinary();
+}
+
+/**
+ * Put llama.cpp's binary on PATH when the package manager left it off.
+ *
+ * The two managers land in this state for different reasons and get out of it
+ * in different ways, but from here they look identical — the manager reports a
+ * package it installed, and PATH still finds nothing. `brew install`/`brew
+ * upgrade` can leave a keg unlinked ("Warning: llama.cpp X is already
+ * installed, it's just not linked."); winget puts its portable shims in a Links
+ * directory it adds to the USER environment, which an already-running PortOS has
+ * not inherited. Shared by the install and upgrade paths so a change to either
+ * story is made once.
+ *
+ * Resolves rather than rejecting: a failed repair falls through to the caller's
+ * own error message, and `detail` is what makes that message diagnosable.
+ *
+ * @returns {Promise<{repaired: boolean, detail: string|null}>}
+ */
+async function repairBinaryOnPath(plan, env, onProgress) {
+  if (plan.manager === 'winget') {
+    return { repaired: Boolean(adoptWingetLinkDirs()), detail: null };
+  }
+  onProgress({ event: 'progress', message: 'llama.cpp is installed but not linked — linking…' });
+  const { linked, output } = await linkLlamaCpp(env);
+  return {
+    repaired: Boolean(linked && resolveLlamaServerBinary()),
+    // A `brew link` conflict can list every clashing file, so cap what rides
+    // along into the caller's error message.
+    detail: output ? output.slice(0, 500) : null,
+  };
+}
+
+/**
+ * Installs llama.cpp through this platform's package manager — Homebrew on
+ * macOS/Linux, winget on Windows.
  */
 export async function installLlamaServer({ onProgress = () => {} } = {}) {
-  const brewExists = await commandExists('brew', ['--version']);
-  if (!brewExists) {
-    throw new ServerError(
-      'Homebrew was not found. Please install Homebrew from https://brew.sh or build llama.cpp from source.',
-      { status: 400 }
-    );
+  const plan = installPlan();
+  const managerExists = await commandExists(plan.manager, ['--version']);
+  if (!managerExists) {
+    throw new ServerError(plan.missingManagerError, { status: 400 });
   }
 
-  onProgress({ event: 'start', message: 'Installing llama.cpp via Homebrew…' });
+  onProgress({ event: 'start', message: `Installing llama.cpp via ${plan.managerLabel}…` });
   const env = safeChildProcessEnv();
   const spawnOpts = safeChildProcessOptions({
     env,
@@ -1370,7 +1492,7 @@ export async function installLlamaServer({ onProgress = () => {} } = {}) {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-  const child = spawn('brew', ['install', 'llama.cpp'], spawnOpts);
+  const child = spawn(plan.manager, plan.installArgs, spawnOpts);
 
   return new Promise((resolve, reject) => {
     child.stdout?.on('data', (d) => {
@@ -1388,7 +1510,7 @@ export async function installLlamaServer({ onProgress = () => {} } = {}) {
     child.on('error', (err) => {
       if (settled) return;
       settled = true;
-      reject(new ServerError(`Failed to run brew: ${err.message}`, { status: 500 }));
+      reject(new ServerError(`Failed to run ${plan.manager}: ${err.message}`, { status: 500 }));
     });
     // Async listener on a child-process event: it runs outside the Express
     // lifecycle AND outside this Promise executor's own throw path, so an
@@ -1399,17 +1521,14 @@ export async function installLlamaServer({ onProgress = () => {} } = {}) {
       settled = true;
       try {
         let binaryPath = resolveLlamaServerBinary();
-        let linkOutput = '';
-
-        // `brew install` exits 0 without linking when the keg is already
-        // installed but unlinked ("Warning: llama.cpp X is already installed,
-        // it's just not linked."). Link it explicitly rather than leaving that
-        // warning as a dead end for the caller.
+        // The manager reported success but PATH finds nothing — an unlinked keg
+        // or a Links directory this process has not picked up. Repair it rather
+        // than leaving that as a dead end for the caller.
+        let repairDetail = null;
         if (!binaryPath && code === 0) {
-          onProgress({ event: 'progress', message: 'llama.cpp keg is installed but not linked — linking…' });
-          const { linked, output } = await linkLlamaCpp(env);
-          linkOutput = output;
-          if (linked) binaryPath = resolveLlamaServerBinary();
+          const repair = await repairBinaryOnPath(plan, env, onProgress);
+          repairDetail = repair.detail;
+          if (repair.repaired) binaryPath = resolveLlamaServerBinary();
         }
 
         if (binaryPath) {
@@ -1418,14 +1537,10 @@ export async function installLlamaServer({ onProgress = () => {} } = {}) {
           return;
         }
 
-        // A `brew link` conflict can list every clashing file, so cap what
-        // rides along into the error message.
-        const hint = linkOutput
-          ? `brew link said: ${linkOutput.slice(0, 500)}`
-          : 'try running `brew link --overwrite llama.cpp` manually';
+        const hint = repairDetail ? `${plan.manager} said: ${repairDetail}` : plan.pathRepairHint;
         const msg = code === 0
-          ? `brew completed but llama-server was not found on PATH — ${hint}`
-          : `brew install llama.cpp failed (exit code ${code})`;
+          ? `${plan.manager} completed but llama-server was not found on PATH — ${hint}`
+          : `${plan.installCommand} failed (exit code ${code})`;
         reject(new ServerError(msg, { status: 500 }));
       } catch (err) {
         reject(new ServerError(`Failed to verify the llama.cpp install: ${err.message}`, { status: 500 }));
@@ -1444,10 +1559,14 @@ export function _resetLlamaServerStateForTests({
   relaunchPollDelay,
   pm2ReadRetryDelay,
   sleepIdleMinutes = 0,
+  platform = null,
 } = {}) {
   sleepIdleSupport.clear();
   // Pinned rather than read from disk — see `configuredSleepIdleMinutes`.
   sleepIdleMinutesOverride = sleepIdleMinutes;
+  // `null` = use the real host platform, which is what every suite that is not
+  // specifically exercising the other package manager's path wants.
+  platformOverride = platform;
   currentConfig = null;
   preTuningConfig = null;
   daemon.resetLogs();

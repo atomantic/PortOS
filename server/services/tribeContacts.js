@@ -15,6 +15,7 @@ import {
   normalizePhone,
   identityFromHandle,
 } from '../lib/tribeMatch.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { loadContactIndex } from './contactsSync.js';
 import * as tribe from './tribe.js';
 import * as humanActivity from './humanActivity.js';
@@ -198,10 +199,7 @@ export async function importContactToTribe({
   }
   const personName = String(name || contact?.displayName || organization || contact?.organization || '').trim();
   if (!personName) {
-    const err = new Error('name is required');
-    err.status = 400;
-    err.code = 'BAD_REQUEST';
-    throw err;
+    throw new ServerError('name is required', { status: 400, code: 'BAD_REQUEST' });
   }
   const personPhones = phones || contact?.phones || [];
   const personEmails = emails || contact?.emails || [];

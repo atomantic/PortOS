@@ -1078,7 +1078,7 @@ describe('tuning', () => {
 describe('runtime roster', () => {
   it('reports every assessable runtime with its knob catalog', async () => {
     const report = await svc.getAssessmentReport();
-    expect(report.runtimes.map((r) => r.id)).toEqual(['ollama', 'lmstudio', 'llama', 'mtplx', 'vllm', 'sglang']);
+    expect(report.runtimes.map((r) => r.id)).toEqual(['ollama', 'lmstudio', 'llama', 'mtplx', 'vllm', 'sglang', 'slotstream']);
     expect(report.runtimes.find((r) => r.id === 'llama').tuningSpecs.some((s) => s.id === 'ubatchSize')).toBe(true);
   });
 

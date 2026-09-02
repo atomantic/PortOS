@@ -344,7 +344,7 @@ PortOS binds to `0.0.0.0` so you can access it from any device on your Tailscale
 - Check logs and restart services from your phone
 - View dashboard on your tablet while coding on your laptop
 
-> **Security Note**: PortOS is designed for private Tailscale networks. Do not expose ports 5553-5561 to the public internet. An optional instance password (*Settings → Security*) gates `/api/*` and `/data/*` if you want a second layer, but it is **off by default** — the tailnet is the trust boundary. See the [Security Audit](./docs/SECURITY_AUDIT.md) for hardening details.
+> **Security Note**: PortOS is designed for private Tailscale networks. Do not expose ports 5553-5561 to the public internet. An optional instance password (*Settings → Security*) gates `/api/*` and `/data/*` if you want a second layer, but it is **off by default** — the tailnet is the trust boundary. See the Security Model in [AGENTS.md](./AGENTS.md#security-model) and the [Setup Guide](./docs/SETUP.md) for network and authentication details.
 
 ## Tech Stack
 
@@ -426,7 +426,6 @@ Full catalog (including design plans, ADRs, and research notes): [docs/README.md
 - [GitHub Actions](./docs/GITHUB_ACTIONS.md) — CI/CD workflow patterns
 - [Versioning & Releases](./docs/VERSIONING.md) — Semantic versioning and release process
 - [Dependency Audit](./docs/DEPS.md) — Every third-party dependency and why it stays
-- [Security Audit](./docs/SECURITY_AUDIT.md) — Historical hardening audit (2026-02, 10/10 items resolved)
 - [Troubleshooting](./docs/TROUBLESHOOTING.md) — Common issues and solutions
 
 ### Feature Deep Dives
@@ -438,6 +437,7 @@ Full catalog (including design plans, ADRs, and research notes): [docs/README.md
 - [Agent Tools (MCP)](./docs/features/agent-context.md) — Loopback-only bounded context plus independently granted semantic PortOS tools for local CoS agents
 - [Agent Skills](./docs/features/agent-skills.md) — Task-type-specific agent prompts
 - [Claude on Ollama](./docs/features/claude-ollama.md) — Run agent tasks on a local model
+- [Fleet LLM Host](./docs/features/fleet-llm-host.md) — Dedicated GPU host serving OpenAI-compatible models to a PortOS fleet
 - [CoS Agent Runner](./docs/features/cos-agent-runner.md) — Isolated agent process architecture
 - [CoS Enhancement](./docs/features/cos-enhancement.md) — Hybrid search, proactive execution, error recovery
 - [MTPLX](./docs/features/mtplx.md) — Native multi-token-prediction Qwen runtime on Apple Silicon, managed as a PM2 process from Models → LLMs

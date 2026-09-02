@@ -225,8 +225,8 @@ export default function ManuscriptReadAloud({ open, onClose, section }) {
   const progressPct = totalMs > 0 ? Math.min(100, (elapsedMs / totalMs) * 100) : 0;
 
   return (
-    <Modal open={open} onClose={onClose} size="3xl" backdropClassName="bg-black/70 p-4" panelClassName="bg-port-card border border-port-border rounded-lg">
-      <div className="flex flex-col max-h-[85vh]">
+    <Modal open={open} onClose={onClose} size="3xl" backdropClassName="bg-black/70 p-4" panelClassName="bg-port-card border border-port-border rounded-lg overflow-hidden flex flex-col">
+      <div className="flex flex-col min-h-0">
         <header className="flex items-center gap-2 px-4 py-3 border-b border-port-border">
           <Volume2 className="w-4 h-4 text-port-accent" />
           <h2 className="text-sm font-semibold text-white">

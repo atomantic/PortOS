@@ -87,8 +87,6 @@ export const getWritersRoomPolishStatus = (workId) =>
   request(`/writers-room/works/${enc(workId)}/polish/status`);
 export const listWritersRoomPolishSnapshots = (workId) =>
   request(`/writers-room/works/${enc(workId)}/polish/snapshots`);
-export const getWritersRoomPolishSnapshot = (workId, snapshotId) =>
-  request(`/writers-room/works/${enc(workId)}/polish/snapshots/${enc(snapshotId)}`);
 export const revertWritersRoomPolishSnapshot = (workId, snapshotId, options = {}) =>
   request(`/writers-room/works/${enc(workId)}/polish/revert`, {
     method: 'POST',

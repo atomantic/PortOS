@@ -15,7 +15,7 @@
  * so the route surfaces a 409 with ERR_NO_VOLUME_COVER instead.
  */
 
-import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import { PDFDocument, rgb, StandardFonts } from '@cantoo/pdf-lib';
 import { slugifyForFilename } from '../../lib/civitai.js';
 import { pickRenderedFilename } from '../../lib/renderSlot.js';
 import { readImageFromMedia, embedImageBytes, fitImage } from '../../lib/pdfImageEmbed.js';
@@ -105,7 +105,7 @@ export async function buildVolumePdf(seriesId, seasonId, opts = {}) {
     );
   }
 
-  // Parallel disk reads; embed sequentially because pdf-lib is single-threaded.
+  // Parallel disk reads; embed sequentially because @cantoo/pdf-lib is single-threaded.
   // A failed read for one image must not fail the whole download.
   const loaded = await Promise.all(targets.map(({ filename, kind }) =>
     readImageFromMedia(filename, READ_OPTS)

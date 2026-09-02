@@ -137,6 +137,52 @@ describe('handlePipelineProgression', () => {
 // two disagree, PortOS fires `gh pr create` on a branch that already has a PR
 // ("a pull request already exists" preserves the worktree as a false-positive
 // failure), or conversely never opens the PR the agent was told not to open.
+// The execution profile selects the provider POSTURE and the stripped child
+// environment. Inheriting the previous stage's value (or silently clearing it)
+// would run a stage holding untrusted public content under the wrong contract.
+describe('handlePipelineProgression — execution profile hand-off', () => {
+  const publicReviewPipeline = (stages) => runningPipeline({ currentStage: 0, stages });
+
+  it('sets the next stage\'s own profile rather than inheriting the previous one', async () => {
+    const task = {
+      id: 't',
+      taskType: 'user',
+      metadata: {
+        executionProfile: 'public-review-gate',
+        pipeline: publicReviewPipeline([
+          { name: 'Eligibility Gate', executionProfile: 'public-review-gate' },
+          { name: 'Code Review & Actions', executionProfile: 'public-review-actions' },
+        ]),
+      },
+    };
+    await handlePipelineProgression(task, 'agent-1', true);
+    expect(addTask.mock.calls[0][0].metadata.executionProfile).toBe('public-review-actions');
+  });
+
+  it('fails the pipeline closed rather than advancing a restricted run into an unprofiled stage', async () => {
+    const task = {
+      id: 't',
+      taskType: 'user',
+      metadata: {
+        executionProfile: 'public-review-gate',
+        pipeline: publicReviewPipeline([
+          { name: 'Eligibility Gate', executionProfile: 'public-review-gate' },
+          { name: 'Unprofiled' },
+        ]),
+      },
+    };
+    await handlePipelineProgression(task, 'agent-1', true);
+    expect(addTask).not.toHaveBeenCalled();
+    expect(updateTask.mock.calls[0][1].metadata.pipeline.status).toBe('failed');
+  });
+
+  it('leaves an ordinary pipeline unprofiled', async () => {
+    const task = { id: 't', taskType: 'user', metadata: { pipeline: runningPipeline() } };
+    await handlePipelineProgression(task, 'agent-1', true);
+    expect(addTask.mock.calls[0][0].metadata.executionProfile).toBeNull();
+  });
+});
+
 describe('runAgentCompletionCleanup — agentOwnsPR mirrors the prompt gate', () => {
   const prTask = { id: 't', taskType: 'user', metadata: { openPR: true } };
 

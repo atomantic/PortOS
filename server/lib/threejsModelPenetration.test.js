@@ -312,6 +312,22 @@ describe('evaluateThreejsPenetration', () => {
     expect(penetration.evaluatedPartCount).toBe(1);
     expect(penetration.findings).toEqual([]);
   });
+it('still measures a stored spec whose rotation or scale is not a finite triple', () => {
+    // Reachable only past the schema — a record stored before a bound tightened.
+    // The shared transform reads a non-finite component as 0 degrees / scale 1
+    // (what the renderer does), so the gate keeps measuring instead of handing
+    // back NaN bounds that would read as `no overlap`.
+    const spec = makeSpec({ parts: [part('hull', box(6)), part('core', box(1))] });
+    spec.parts[1].rotationDegrees = [45, undefined, NaN];
+    spec.parts[1].scale = [NaN, 1, 1];
+
+    const penetration = evaluateThreejsPenetration(spec);
+    expect(penetration.evaluatedPartCount).toBe(2);
+    expect(codes(penetration)).toContain('buried-part');
+    const [pair] = finding(penetration, 'buried-part').pairs;
+    expect(pair).toMatchObject({ partId: 'core', containerPartId: 'hull' });
+    expect(Number.isFinite(pair.fraction)).toBe(true);
+  });
 });
 
 describe('buildThreejsPenetrationFeedback', () => {

@@ -52,6 +52,15 @@ const activeSessions = new Map();
 export const DEFAULT_SESSION_TTL_MINUTES = 30;
 export const MAX_SESSION_TTL_MINUTES = 180;
 
+// How often the sweeper walks `activeSessions` looking for expired records.
+// TTLs run 1-180 minutes and a machine hosts at most a handful of sessions at
+// once, so one unref'd interval is cheaper than arming (and having to cancel)
+// a per-session timeout.
+export const HOSTED_SESSION_SWEEP_INTERVAL_MS = 60_000;
+
+/** True once a session record is past its TTL. */
+const isExpired = (session) => new Date(session.expiresAt).getTime() <= Date.now();
+
 /** Helper to derive initial playback phase for a node */
 export function initialPhaseForNode(node) {
   if (!node) return 'ended';
@@ -104,12 +113,11 @@ export async function checkHostedSessionReadiness({ loomId, episodeId, loom: cus
 
   // 1. HTTPS & Network Exposure check
   const netStatus = getNetworkExposureStatus();
-  const httpsEnabled = netStatus.httpsEnabled === true || process.env.NODE_ENV === 'test';
   const joinHost = netStatus.cert?.tailscaleHost
     || (netStatus.bind?.host && !isLoopbackHost(netStatus.bind.host) && netStatus.bind.host !== '0.0.0.0' ? netStatus.bind.host : null)
     || 'localhost';
   const joinPort = netStatus.bind?.port || PORTS.API;
-  const isHttps = netStatus.scheme === 'https' || process.env.NODE_ENV === 'test';
+  const isHttps = netStatus.scheme === 'https';
   const httpsUrl = isHttps
     ? `https://${joinHost}${joinPort === 443 ? '' : `:${joinPort}`}`
     : `http://${joinHost}${joinPort === 80 ? '' : `:${joinPort}`}`;
@@ -325,7 +333,7 @@ export function verifyHostedToken(sessionId, token) {
   if (!sessionId || !token || typeof token !== 'string') return false;
   const session = activeSessions.get(sessionId);
   if (!session || session.status !== 'active') return false;
-  if (new Date(session.expiresAt).getTime() <= Date.now()) {
+  if (isExpired(session)) {
     session.status = 'ended';
     return false;
   }
@@ -343,7 +351,7 @@ export function getHostedSession(sessionId) {
   if (!sessionId) return null;
   const session = activeSessions.get(sessionId);
   if (!session) return null;
-  if (session.status === 'active' && new Date(session.expiresAt).getTime() <= Date.now()) {
+  if (session.status === 'active' && isExpired(session)) {
     session.status = 'ended';
   }
   return sanitizeHostedSession(session);
@@ -351,9 +359,19 @@ export function getHostedSession(sessionId) {
 
 /**
  * Internal session record retrieval for socket and service operations.
+ *
+ * Evaluates the TTL, so an expired record reads as absent even when nothing has
+ * swept it yet — that is what stops a host reconnecting into the
+ * `/fableloom-hosted` namespace minutes after its session should have died.
  */
 export function _getInternalSession(sessionId) {
-  return activeSessions.get(sessionId) || null;
+  const session = activeSessions.get(sessionId);
+  if (!session) return null;
+  if (session.status === 'active' && isExpired(session)) {
+    session.status = 'ended';
+  }
+  if (session.status !== 'active') return null;
+  return session;
 }
 
 /**
@@ -688,10 +706,65 @@ export function abortHostedTurn(sessionId, { reason = 'aborted', io } = {}) {
   return { ok: true };
 }
 
+let sweepTimer = null;
+let sweepIo = null;
+
+/**
+ * Arm the expired-session sweeper.
+ *
+ * Expiry used to be evaluated only when something happened to look a session up,
+ * and even then it just flipped `status` — so the normal end of a QR play
+ * session (guest closes the tab, host navigates away) left the record, its node
+ * history and its live `AbortController` resident for the process lifetime, and
+ * the room never saw `hosted:session:ended`. The sweep reuses `endHostedSession`
+ * so teardown stays in one place.
+ */
+export function startHostedSessionSweep({ intervalMs = HOSTED_SESSION_SWEEP_INTERVAL_MS, io = null } = {}) {
+  sweepIo = io || sweepIo;
+  if (sweepTimer) return sweepTimer;
+  sweepTimer = setInterval(() => {
+    // Timer callback — outside the request lifecycle, so an uncaught throw here
+    // would take the process down instead of reaching error middleware.
+    try {
+      sweepExpiredHostedSessions();
+    } catch (err) {
+      console.error(`❌ FableLoom hosted-session sweep failed: ${err.message}`);
+    }
+  }, intervalMs);
+  sweepTimer.unref?.();
+  return sweepTimer;
+}
+
+/** Disarm the sweeper (graceful shutdown, tests). */
+export function stopHostedSessionSweep() {
+  if (sweepTimer) clearInterval(sweepTimer);
+  sweepTimer = null;
+  sweepIo = null;
+}
+
+/**
+ * Tear down every expired or already-ended session. Exported so a test (and a
+ * future manual "clean up" action) can run one tick without waiting on wall time.
+ */
+export function sweepExpiredHostedSessions({ io = sweepIo } = {}) {
+  const doomed = [];
+  for (const [id, session] of activeSessions) {
+    if (session.status !== 'active' || isExpired(session)) doomed.push(id);
+  }
+  for (const id of doomed) {
+    endHostedSession(id, { reason: 'expired', io });
+  }
+  if (doomed.length) {
+    console.log(`🧹 Swept ${doomed.length} expired FableLoom hosted session(s)`);
+  }
+  return doomed.length;
+}
+
 /**
  * Test helper to reset in-memory sessions between test runs.
  */
 export function _resetHostedSessions() {
+  stopHostedSessionSweep();
   for (const session of activeSessions.values()) {
     if (session.activeTurn?.abortController) {
       session.activeTurn.abortController.abort('reset');

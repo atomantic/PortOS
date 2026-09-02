@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -7,14 +7,22 @@ import {
   VLLM_PROJECT_DIR_ENV,
   VLLM_WEIGHTS_DIR_ENV,
   inspectVllmQwenProject,
+  readRecordedVllmProjectDir,
+  recordVllmProjectDir,
   resolveVllmProjectDir,
   vllmDefaultProjectDir,
+  vllmProjectDirIsSettled,
   vllmProjectSetupState,
   vllmStartBlockedReason,
 } from './vllmQwenProject.js';
 
 let root;
 const projectDir = () => join(root, 'qwen-serving');
+/**
+ * The `.env` PortOS records a detected directory in — inside the sandbox, so
+ * the developer's own install can never answer one of these assertions.
+ */
+const envPath = () => join(root, '.env');
 
 /**
  * An env with HOME/USERPROFILE/HF_HOME pointed inside the sandbox. Without it,
@@ -42,21 +50,58 @@ describe('resolveVllmProjectDir', () => {
 
   it('ignores a blank override rather than resolving to an empty path', () => {
     const home = { HOME: '/home/example', USERPROFILE: '/home/example' };
-    expect(resolveVllmProjectDir({ ...home, [VLLM_PROJECT_DIR_ENV]: '   ' }))
+    expect(resolveVllmProjectDir({ ...home, [VLLM_PROJECT_DIR_ENV]: '   ' }, envPath()))
       .toBe(vllmDefaultProjectDir(home));
+  });
+
+  it('falls back to the directory PortOS recorded for itself', async () => {
+    const home = { HOME: '/home/example', USERPROFILE: '/home/example' };
+    const recorded = '\\\\wsl.localhost\\Ubuntu\\home\\alice\\qwen-serving';
+    await recordVllmProjectDir(recorded, envPath());
+
+    expect(readRecordedVllmProjectDir(envPath())).toBe(recorded);
+    expect(resolveVllmProjectDir(home, envPath())).toBe(recorded);
+    // An exported override still outranks it — that is this run's decision,
+    // and a directory detected on some earlier run must not outlive it.
+    expect(resolveVllmProjectDir({ ...home, [VLLM_PROJECT_DIR_ENV]: '/srv/qwen' }, envPath())).toBe('/srv/qwen');
+  });
+
+  it('rewrites its own record instead of appending a second line', async () => {
+    writeFileSync(envPath(), 'PGPASSWORD=portos');
+    await recordVllmProjectDir('/srv/first', envPath());
+    await recordVllmProjectDir('/srv/second', envPath());
+
+    const contents = readFileSync(envPath(), 'utf8');
+    expect(contents.match(/^VLLM_QWEN_PROJECT_DIR=/gm)).toHaveLength(1);
+    expect(readRecordedVllmProjectDir(envPath())).toBe('/srv/second');
+    // The line it was appended after had no trailing newline — splicing onto it
+    // would have corrupted both settings.
+    expect(contents).toContain('PGPASSWORD=portos\n');
+  });
+
+  it('reports nothing settled until something answers', async () => {
+    const bare = { HOME: '/home/example', USERPROFILE: '/home/example' };
+    expect(vllmProjectDirIsSettled(bare, envPath())).toBe(false);
+
+    expect(vllmProjectDirIsSettled({ ...bare, [VLLM_PROJECT_DIR_ENV]: '/srv/qwen' }, envPath())).toBe(true);
+
+    await recordVllmProjectDir('/srv/recorded', envPath());
+    expect(vllmProjectDirIsSettled(bare, envPath())).toBe(true);
   });
 });
 
 describe('inspectVllmQwenProject', () => {
   it('reports no project when the directory is absent', async () => {
-    const project = await inspectVllmQwenProject(env());
+    const project = await inspectVllmQwenProject(env(), envPath());
     expect(project).toMatchObject({ hasProject: false, composeFile: null });
-    expect(vllmStartBlockedReason(project)).toContain('syv-ai/qwen38-27b-rtx3090');
+    // Points at the checklist button that does the whole sequence, not at a
+    // `git clone` the operator has to run themselves.
+    expect(vllmStartBlockedReason(project)).toContain('Clone, build & prepare');
   });
 
   it('reports a directory with no compose file as not a project', async () => {
     mkdirSync(projectDir(), { recursive: true });
-    const project = await inspectVllmQwenProject(env());
+    const project = await inspectVllmQwenProject(env(), envPath());
     expect(project).toMatchObject({ hasProject: true, composeFile: null });
     expect(vllmStartBlockedReason(project)).toContain('no docker-compose file');
   });
@@ -65,7 +110,7 @@ describe('inspectVllmQwenProject', () => {
     mkdirSync(projectDir(), { recursive: true });
     writeFileSync(join(projectDir(), 'docker-compose.yml'), 'services: {}\n');
 
-    const project = await inspectVllmQwenProject(env());
+    const project = await inspectVllmQwenProject(env(), envPath());
     expect(project.composeFile).toBe('docker-compose.yml');
     // `null`, not `false` — nothing was READ, which is a different fix than an
     // empty cache. The distinction is the point of the sentinel.
@@ -78,7 +123,7 @@ describe('inspectVllmQwenProject', () => {
     writeFileSync(join(projectDir(), 'compose.yaml'), 'services: {}\n');
     mkdirSync(join(projectDir(), 'models'), { recursive: true });
 
-    const project = await inspectVllmQwenProject(env());
+    const project = await inspectVllmQwenProject(env(), envPath());
     expect(project).toMatchObject({ composeFile: 'compose.yaml', hasWeights: false });
     expect(vllmStartBlockedReason(project)).toContain('no Qwen weights are cached');
   });
@@ -88,7 +133,7 @@ describe('inspectVllmQwenProject', () => {
     writeFileSync(join(projectDir(), 'docker-compose.yml'), 'services: {}\n');
     mkdirSync(join(projectDir(), 'models', 'models--syv-ai--Qwen3.8-27B-w4a16'), { recursive: true });
 
-    const project = await inspectVllmQwenProject(env());
+    const project = await inspectVllmQwenProject(env(), envPath());
     expect(project.hasWeights).toBe(true);
     expect(project.weightsRoot).toBe(join(projectDir(), 'models'));
     expect(vllmStartBlockedReason(project)).toBeNull();
@@ -103,7 +148,7 @@ describe('inspectVllmQwenProject', () => {
     mkdirSync(model, { recursive: true });
     writeFileSync(join(model, 'model.safetensors.index.json'), '{"weight_map":{}}\n');
 
-    const project = await inspectVllmQwenProject(env());
+    const project = await inspectVllmQwenProject(env(), envPath());
     expect(project.hasWeights).toBe(true);
     expect(project.weightsRoot).toBe(join(projectDir(), 'models'));
     expect(vllmStartBlockedReason(project)).toBeNull();
@@ -116,7 +161,7 @@ describe('inspectVllmQwenProject', () => {
     mkdirSync(model, { recursive: true });
     writeFileSync(join(model, 'model.safetensors'), 'tensors\n');
 
-    expect((await inspectVllmQwenProject(env())).hasWeights).toBe(true);
+    expect((await inspectVllmQwenProject(env(), envPath())).hasWeights).toBe(true);
   });
 
   it('does not count a qwen-named directory that holds no weight file', async () => {
@@ -127,7 +172,7 @@ describe('inspectVllmQwenProject', () => {
     mkdirSync(notes, { recursive: true });
     writeFileSync(join(notes, 'README.md'), 'not weights\n');
 
-    expect((await inspectVllmQwenProject(env())).hasWeights).toBe(false);
+    expect((await inspectVllmQwenProject(env(), envPath())).hasWeights).toBe(false);
   });
 
   it('ignores a cache holding only unrelated models', async () => {
@@ -135,7 +180,7 @@ describe('inspectVllmQwenProject', () => {
     writeFileSync(join(projectDir(), 'docker-compose.yml'), 'services: {}\n');
     mkdirSync(join(projectDir(), 'models', 'models--meta-llama--Llama-3.1-8B'), { recursive: true });
 
-    expect((await inspectVllmQwenProject(env())).hasWeights).toBe(false);
+    expect((await inspectVllmQwenProject(env(), envPath())).hasWeights).toBe(false);
   });
 
   it('honors the weights-directory override, for a cache PortOS cannot otherwise see', async () => {
@@ -144,7 +189,7 @@ describe('inspectVllmQwenProject', () => {
     const cache = join(root, 'elsewhere', 'hub');
     mkdirSync(join(cache, 'models--syv-ai--qwen3.8-27b'), { recursive: true });
 
-    const project = await inspectVllmQwenProject(env({ [VLLM_WEIGHTS_DIR_ENV]: cache }));
+    const project = await inspectVllmQwenProject(env({ [VLLM_WEIGHTS_DIR_ENV]: cache }), envPath());
     expect(project).toMatchObject({ hasWeights: true, weightsRoot: cache });
   });
 
@@ -154,7 +199,7 @@ describe('inspectVllmQwenProject', () => {
     const hfHome = join(root, 'hf');
     mkdirSync(join(hfHome, 'hub', 'models--Qwen--Qwen3.8-27B'), { recursive: true });
 
-    const project = await inspectVllmQwenProject(env({ HF_HOME: hfHome }));
+    const project = await inspectVllmQwenProject(env({ HF_HOME: hfHome }), envPath());
     expect(project.hasWeights).toBe(true);
   });
 });

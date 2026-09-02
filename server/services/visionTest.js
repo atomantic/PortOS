@@ -13,7 +13,7 @@ import { describeFrameStats, isDegenerateFrame } from '../lib/imageFrameStats.js
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
 import { describeImageViaCli } from './visionCli.js';
-import { assertSecretEndpoint, evaluateSecretEndpoint } from '../lib/aiToolkit/internal/endpointGuard.js';
+import { assertSecretEndpoint, evaluateSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
 
 const SCREENSHOTS_DIR = PATHS.screenshots;
 const DEFAULT_VISION_TIMEOUT_MS = 60000;

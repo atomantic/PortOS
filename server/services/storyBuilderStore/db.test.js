@@ -5,6 +5,7 @@
 
 import { describe, it, expect, afterAll, beforeAll, beforeEach } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
+import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 
 let dbReady = false;
 let skipReason = '';
@@ -22,7 +23,7 @@ let skipReason = '';
   }
 }
 
-if (!dbReady) console.log(`⏭️  storyBuilderStore/db.test.js skipped: ${skipReason}`);
+const runDb = requireDbOrSkip('services/storyBuilderStore/db.test', dbReady, skipReason);
 
 const S = (id, extra = {}) => ({
   id, title: id, intakeMode: 'seed', universeId: 'u-1', seriesId: 'ser-1',
@@ -31,7 +32,7 @@ const S = (id, extra = {}) => ({
   deleted: false, deletedAt: null, ...extra,
 });
 
-describe.skipIf(!dbReady)('Story Builder sessions DB adapter round-trip', () => {
+describe.skipIf(!runDb)('Story Builder sessions DB adapter round-trip', () => {
   let db;
   let snap = [];
   beforeAll(async () => {

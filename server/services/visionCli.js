@@ -31,7 +31,7 @@ import { extname, join } from 'path';
 import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { resolveCliModel, isCodexProvider, buildCodexStartupArgs, buildEffortArgs } from '../lib/providerModels.js';
 import { extractCodexAssistant, extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
-import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn } from '../lib/bufferedSpawn.js';
+import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 
 const CLI_VISION_TIMEOUT_MS = 120000;
@@ -286,14 +286,14 @@ async function runCliVisionSpawn({ provider, model, invocation, timeout, spawnIm
       reject(new Error(`${command} vision call exited ${code}${tail ? `: ${tail}` : ''}`));
     });
 
+    // Guard the pipe before writing — a vision CLI that exits before reading
+    // stdin emits EPIPE, and an unlistened stream 'error' out here crashes the
+    // server rather than rejecting this promise. See guardChildStdin.
+    guardChildStdin(child);
+
     // When grok is delivered via a Windows temp file the prompt is already on
     // disk (writePromptToStdin=false) — just close stdin.
-    if (writePromptToStdin && stdin != null) {
-      child.stdin?.write(stdin);
-      child.stdin?.end();
-    } else {
-      child.stdin?.end();
-    }
+    deliverChildStdin(child, writePromptToStdin ? stdin : null, `${command} vision call`);
   });
 
   return text;

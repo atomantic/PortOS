@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { join } from 'node:path';
 import { collectServerSources, readServerSource, SERVER_DIR } from './testHelper.js';
+import { blankComments } from './sourceScan.js';
 
 // Windows hands a newly allocated console off to Windows Terminal when a
 // console-less parent (every PM2 fork, which is all of PortOS) spawns a console
@@ -29,20 +30,6 @@ const CALL_SITE_TREES = ['lib/aiToolkit/', '../autofixer/', '../browser/'];
 const SIBLING_PACKAGES = ['../autofixer', '../browser'];
 
 const SPAWN_FNS = ['spawn', 'spawnSync', 'fork', 'exec', 'execSync', 'execFile', 'execFileSync'];
-
-/**
- * Blank comment lines while preserving line count, so a rule can be *described*
- * in a comment without the guard flagging the description as a violation
- * (`cosHealthMonitor.js` explains the pm2 rule using the banned pattern).
- * Line-based on purpose: every real `child_process` mention outside the wrapper
- * is a JSDoc `@param {import('child_process').ChildProcess}` line, and a false
- * positive here is loud and one line to fix.
- * @param {string} src
- * @returns {string[]}
- */
-function blankComments(src) {
-  return src.split('\n').map((line) => (/^\s*(\/\/|\*|\/\*)/.test(line) ? '' : line));
-}
 
 /**
  * Extract whole call expressions by name, brace-balanced so a call wrapped

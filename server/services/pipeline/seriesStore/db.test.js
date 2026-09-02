@@ -8,6 +8,7 @@
 
 import { describe, it, expect, afterAll, beforeAll, beforeEach } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../../../lib/db.js';
+import { requireDbOrSkip } from '../../../lib/dbTestGate.js';
 
 let dbReady = false;
 let skipReason = '';
@@ -25,7 +26,7 @@ let skipReason = '';
   }
 }
 
-if (!dbReady) console.log(`⏭️  pipeline/seriesStore/db.test.js skipped: ${skipReason}`);
+const runDb = requireDbOrSkip('services/pipeline/seriesStore/db.test', dbReady, skipReason);
 
 const S = (id, extra = {}) => ({
   id, name: id, universeId: null, writersRoomWorkId: null,
@@ -33,7 +34,7 @@ const S = (id, extra = {}) => ({
   deleted: false, deletedAt: null, ...extra,
 });
 
-describe.skipIf(!dbReady)('pipeline series DB adapter round-trip', () => {
+describe.skipIf(!runDb)('pipeline series DB adapter round-trip', () => {
   let db;
   let snap = [];
   beforeAll(async () => {

@@ -8,6 +8,7 @@ import {
   normalizeOpenAiBaseUrl,
 } from './localProviderRuntime.js';
 import { opencodeLocalBaseUrl } from './opencodeConfig.js';
+import { PORTS } from './ports.js';
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -88,6 +89,13 @@ describe('localRuntimeKind', () => {
     expect(localRuntimeKind({ type: 'api', id: 'openai', endpoint: 'https://api.openai.com/v1' })).toBeNull();
     expect(localRuntimeKind(null)).toBeNull();
     expect(localRuntimeKind('nope')).toBeNull();
+  });
+
+  it('recognizes Slotstream by id, name, and dedicated port — never 11434', () => {
+    expect(localRuntimeKind({ id: 'slotstream' })).toBe('slotstream');
+    expect(localRuntimeKind({ name: 'Slotstream (local)' })).toBe('slotstream');
+    expect(localRuntimeKind({ endpoint: `http://127.0.0.1:${PORTS.SLOTSTREAM}/v1` })).toBe('slotstream');
+    expect(localRuntimeKind({ endpoint: 'http://127.0.0.1:11434/v1' })).toBe('ollama');
   });
 });
 
@@ -184,6 +192,8 @@ describe('localRuntimeForProvider', () => {
     expect(LOCAL_RUNTIMES.ollama.defaultBaseUrl).toBe(opencodeLocalBaseUrl('ollama'));
     expect(LOCAL_RUNTIMES.mtplx.defaultBaseUrl).toBe(opencodeLocalBaseUrl('mtplx'));
     expect(LOCAL_RUNTIMES.vllm.defaultBaseUrl).toBe(opencodeLocalBaseUrl('vllm'));
+    expect(LOCAL_RUNTIMES.slotstream.defaultBaseUrl).toBe(`http://127.0.0.1:${PORTS.SLOTSTREAM}/v1`);
+    expect(LOCAL_RUNTIMES.slotstream.defaultBaseUrl).not.toMatch(/11434/);
   });
 
   it('honors the env override the backend managers themselves read', () => {

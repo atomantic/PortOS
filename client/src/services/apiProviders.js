@@ -9,14 +9,14 @@ export const setActiveProvider = (id) => request('/providers/active', {
   method: 'PUT',
   body: JSON.stringify({ id })
 });
-export const getProvider = (id) => request(`/providers/${id}`);
 export const createProvider = (data) => request('/providers', {
   method: 'POST',
   body: JSON.stringify(data)
 });
-export const updateProvider = (id, data) => request(`/providers/${id}`, {
+export const updateProvider = (id, data, options = {}) => request(`/providers/${id}`, {
   method: 'PUT',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options,
 });
 export const deleteProvider = (id) => request(`/providers/${id}`, { method: 'DELETE' });
 export const getSampleProviders = () => request('/providers/samples');
@@ -44,7 +44,6 @@ export const serveProviderModel = (id, options) => request(
 
 // Provider status (usage limits, availability)
 export const getProviderStatuses = () => request('/providers/status');
-export const getProviderStatus = (id) => request(`/providers/${id}/status`);
 export const recoverProvider = (id, options) => request(`/providers/${id}/status/recover`, { method: 'POST', ...options });
 
 // Codex / ChatGPT subscription account (#5589). The Codex app-server owns the
@@ -73,3 +72,13 @@ export const cancelCodexLogin = (loginId, options) => request('/providers/codex/
   ...options,
 });
 export const codexLogout = (options) => request('/providers/codex/account/logout', { method: 'POST', ...options });
+// The models this subscription may run, from the app-server catalog (#5590).
+// Not yet called from a component: the Providers-page picker that consumes it is
+// #5591 (phase 3), which also ships the toggle that sets `textTransportEnabled`.
+// Resolves to { models, fetchedAt, error }. `models: null` means NEVER FETCHED
+// and `[]` means fetched-and-empty; when `error` is set the list is the
+// last-known-good one, so render that rather than emptying the picker.
+export const getCodexModels = (options = {}) => {
+  const { fresh = false, ...rest } = options;
+  return request(`/providers/codex/models${fresh ? '?fresh=1' : ''}`, rest);
+};

@@ -132,6 +132,23 @@ const h3FrameGrid = (min, max) => {
   return Object.freeze(out);
 };
 
+// FastH3 Preview v1's output contract (#5860). It is a distilled MiniMax H3, so
+// it inherits H3's 17n+5 VAE frame grid and 32px edge rounding — but NOT H3's
+// canvas: the MLX FastH3 entry point is validated at 832x480 (its own default,
+// and the resolution upstream's conversion manifest records a passing 124-frame
+// generation at), and its docstring documents 1280x720 as the other supported
+// request. `resolutionOptions` are presets rather than a whitelist, so a custom
+// size still resolves through `resolutionStep`.
+export const FASTH3_OUTPUT_PROFILE = Object.freeze({
+  frameOptions: h3FrameGrid(107, 362),
+  fpsOptions: Object.freeze([24]),
+  resolutionStep: 32,
+  resolutionOptions: Object.freeze([
+    Object.freeze({ label: '832x480 (16:9 FastH3 default)', w: 832, h: 480 }),
+    Object.freeze({ label: '1280x720 (16:9 HD)', w: 1280, h: 720 }),
+  ]),
+});
+
 // The MLX entry's output profile: the shared canvas above PLUS the upgrade
 // machinery migration 267 and `upgradeMiniMaxH3OutputControls` key off (the id,
 // the repo it was checked against, and the frame list it supersedes). That
@@ -613,6 +630,42 @@ const DEFAULT_REGISTRY = {
         guidance: 1.0,
         samplerLocked: true,
         samplerNote: 'FastMetal models are DMD2-distilled 3-step models with affine INT8 quantization.',
+      },
+      // FastH3 Preview v1 Dense / Data-Free, packed for MLX (#5860). Same
+      // `fastvideo` venv and checkout as FastMetal above, but a different entry
+      // script and argv shape — `fastvideoFamily` is what routes it, see
+      // buildFastVideoArgs. Text-to-video-WITH-AUDIO: the runner muxes H.264 at
+      // a fixed 24 fps with 32 kHz stereo AAC, which is why `fpsOptions` offers
+      // that one value rather than letting the form ask for a rate the entry
+      // script has no flag to accept.
+      // The DiT arrives pre-quantized, so nothing is converted on first render.
+      {
+        id: 'fasth3_dense_datafree_mlx_int4',
+        name: 'FastH3 Preview v1 Dense Data-Free MLX INT4 (video + audio, ~89 GB download, 36+ GB RAM, 4-step)',
+        repo: 'MrMofer/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree-MLX-INT4',
+        revision: '4c8c3e54da8cd667b5db10f6074b4cb9b7559f15',
+        runtime: 'fastvideo',
+        fastvideoFamily: 'fasth3',
+        supportedModes: ['text'],
+        defaultWidth: 832,
+        defaultHeight: 480,
+        defaultFrames: 124,
+        frameOptions: [...FASTH3_OUTPUT_PROFILE.frameOptions],
+        fpsOptions: [...FASTH3_OUTPUT_PROFILE.fpsOptions],
+        resolutionStep: FASTH3_OUTPUT_PROFILE.resolutionStep,
+        resolutionOptions: FASTH3_OUTPUT_PROFILE.resolutionOptions.map((preset) => ({ ...preset })),
+        memoryGb: 36,
+        steps: 4,
+        guidance: 1.0,
+        samplerLocked: true,
+        samplerNote: 'FastH3 Preview v1 is a 4-step DMD2 model. This export is dense-attention only — it does not support VSA. Renders video with audio at a fixed 24 fps.',
+        // mlx_fasth3.py takes no --negative-prompt, exposes no way to mute the
+        // joint audio track, and PortOS never passes it a tiling flag. Declaring
+        // each `false` is what removes the control from the form rather than
+        // offering a knob whose value is silently dropped at the argv boundary.
+        supportsNegativePrompt: false,
+        supportsTiling: false,
+        supportsDisableAudio: false,
       },
     ]))))),
     cuda: applyMiniMaxH3MemoryProfiles(applyVideoDraftDecoders(applyVideoSpeedProfiles(applyVideoFinishProfiles(applyVideoDisclosures([

@@ -15,10 +15,27 @@
  * worktree-rooted process so callers (boot migrations) can skip work that
  * assumes the real install tree instead of crashing.
  */
-import { isAbsolute, resolve as resolvePath, sep } from 'path';
+import { dirname, isAbsolute, join, resolve as resolvePath, sep } from 'path';
+import { fileURLToPath } from 'url';
 
 /** Env var a real launch sets to pin the install root (see ecosystem.config.cjs). */
 export const DATA_ROOT_ENV = 'PORTOS_DATA_ROOT';
+
+/**
+ * The executing checkout's root, derived from a caller's `import.meta.url`
+ * (two directories up from wherever that module physically lives). Single
+ * source of truth for this depth assumption — `lib/paths.js`'s `CODE_ROOT`
+ * and any code that must independently re-derive the real (non-test-mocked)
+ * install root, such as `userActions.js`'s data-root guard, both resolve it
+ * through here so the two can never silently drift apart if this formula
+ * ever changes.
+ *
+ * @param {string} moduleUrl the caller's `import.meta.url`
+ * @returns {string} absolute path two directories above the caller's file
+ */
+export function resolveCodeRootForModule(moduleUrl) {
+  return join(dirname(fileURLToPath(moduleUrl)), '../..');
+}
 
 /**
  * Resolve the PortOS install root (the parent of `data/` and `data.reference/`).

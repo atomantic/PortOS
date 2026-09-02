@@ -4,12 +4,27 @@
  * word-wrap, and a full ePub zip round-trip through the parser.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+// Store mocks for the `buildProsePdf` boundary test at the bottom of this file.
+// `vi.mock` is hoisted above every import, so each factory is self-contained —
+// it must not close over a `const` declared later in the file.
+vi.mock('./series.js', () => ({
+  getSeries: async () => ({ id: 's1', name: 'Example Series', logline: 'A subtitle.', author: 'A. Author' }),
+}));
+vi.mock('./seasons.js', () => ({ listSeasons: async () => [] }));
+vi.mock('./arcPlanner.js', () => ({
+  collectManuscriptSections: async () => [
+    { issueId: 'i1', seasonId: null, number: 1, title: 'One', stageId: 'prose', content: 'Body one.\n\nSecond paragraph.' },
+    { issueId: 'i2', seasonId: null, number: 2, title: 'Two', stageId: 'prose', content: 'Body two.' },
+  ],
+}));
 import { Readable, Writable } from 'stream';
 import { __testing } from './proseExport.js';
 import { createZip } from '../../lib/zipWriter.js';
 import { parseZip } from '../../lib/zipStream.js';
 import {
+  buildProsePdf,
   buildOpf as buildOpfExport,
   buildNavXhtml as buildNavXhtmlExport,
   buildChapterXhtml as buildChapterXhtmlExport,
@@ -217,5 +232,29 @@ describe('ePub OCF zip round-trip', () => {
     expect(byPath['META-INF/container.xml']).toBe('<container/>');
     expect(byPath['OEBPS/content.opf']).toBe('<package/>');
     expect(byPath['OEBPS/vol1.xhtml']).toContain('<p>Body one.</p>');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PDF boundary test. `buildProsePdf` is the only path that leaves JS and enters
+// the PDF library, so it is the one place a same-API library swap (issue #5672,
+// `pdf-lib` → the maintained `@cantoo/pdf-lib` fork) can regress invisibly:
+// every helper above would still pass while `save()` returned a different
+// container type or a structurally invalid document. Assert the real bytes.
+// ---------------------------------------------------------------------------
+
+describe('buildProsePdf — byte-level output contract', () => {
+  it('returns a byte-valid PDF as a Uint8Array', async () => {
+    const { bytes, pageCount, filename } = await buildProsePdf('s1');
+    // Container type: a fork returning a Buffer/ArrayBuffer/string here would
+    // break every streaming caller without failing any helper test.
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(Buffer.from(bytes).subarray(0, 5).toString('latin1')).toBe('%PDF-');
+    expect(Buffer.from(bytes).subarray(-1024).toString('latin1')).toContain('%%EOF');
+    // Title page + one opener page per chapter.
+    expect(pageCount).toBe(3);
+    // Comfortably above an empty-document floor (a blank one-page PDF is <1KB).
+    expect(bytes.length).toBeGreaterThan(2000);
+    expect(filename).toBe('example-series-interior.pdf');
   });
 });

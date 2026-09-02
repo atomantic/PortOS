@@ -98,7 +98,7 @@ afterEach(() => {
 
 describe('describeRuntimeSetup', () => {
   it('covers every runtime the readiness checklist can report', () => {
-    expect([...SETUP_RUNTIME_KINDS].sort()).toEqual(['llama', 'lmstudio', 'mtplx', 'ollama', 'sglang', 'vllm']);
+    expect([...SETUP_RUNTIME_KINDS].sort()).toEqual(['llama', 'lmstudio', 'mtplx', 'ollama', 'sglang', 'slotstream', 'vllm']);
   });
 
   it('offers install AND start when nothing is there yet', () => {

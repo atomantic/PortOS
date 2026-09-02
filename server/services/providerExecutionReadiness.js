@@ -14,6 +14,7 @@
 import { describeMissingPrerequisites, providerPrerequisites } from '../lib/providerPrerequisites.js';
 import { ensureProviderReady as ensureOllamaProviderReady, isOllamaProvider } from './ollamaManager.js';
 import { ensureMtplxProviderReady, isMtplxProvider } from './mtplxServerManager.js';
+import { ensureSlotstreamProviderReady, isSlotstreamProvider } from './slotstreamServerManager.js';
 
 const failedReadiness = (runtime, result) => ({
   ...result,
@@ -42,6 +43,11 @@ export async function ensureProviderReadyForExecution(provider) {
   if (isMtplxProvider(provider)) {
     const result = await ensureMtplxProviderReady(provider);
     return result.success ? result : failedReadiness('MTPLX', result);
+  }
+
+  if (isSlotstreamProvider(provider)) {
+    const result = await ensureSlotstreamProviderReady(provider);
+    return result.success ? result : failedReadiness('Slotstream', result);
   }
 
   return { success: true };

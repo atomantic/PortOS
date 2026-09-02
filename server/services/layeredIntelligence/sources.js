@@ -12,7 +12,7 @@ import { realpath } from 'fs/promises';
 import { tryReadFile, readJSONFile, PATHS } from '../../lib/fileUtils.js';
 import { bufferedSpawn } from '../../lib/bufferedSpawn.js';
 import { fetchPublicText } from '../../lib/safeUrlFetch.js';
-import { validateCommand } from '../../lib/commandSecurity.js';
+import { validateUnattendedCommand } from '../../lib/commandSecurity.js';
 import { getSettings } from '../settings.js';
 import { computeWindowedStats } from '../taskLearning/store.js';
 import { computeChurn, summarizeRecentRuns, SHORT_LIVED_MS } from '../agentChurn.js';
@@ -505,19 +505,29 @@ export async function fetchHttpSource(url, { timeoutMs = 10_000, fetchText = fet
  * by length + a 15s timeout. That is arbitrary RCE: `; rm -rf ~`, `$(curl … | sh)`,
  * pipes to `sh`, etc. all execute. Issue #2515.
  *
- * Defense: by default we DENY the shell. The command is parsed and checked
- * against the shared binary allowlist (`validateCommand` in commandSecurity.js —
- * same gate the manual command runner uses), which rejects shell metacharacters
- * (`;|&$(){}` …) and any binary not on the allowlist, then we spawn the base
+ * Defense: by default we DENY the shell. The command is parsed and checked by
+ * `validateUnattendedCommand` (commandSecurity.js), which rejects shell
+ * metacharacters (`;|&$(){}` …) and admits only the read-only inspection
+ * binaries in `UNATTENDED_READONLY_COMMANDS` (`git`, `gh`, `glab`, `ls`, `cat`,
+ * `head`, `tail`, `grep`, `find`, `wc`, `pwd`, `echo`); then we spawn the base
  * binary with parsed args and `shell: false` — so no shell ever interprets the
- * string. A non-allowlisted / metacharacter command is dropped (key omitted) with
- * a warning, exactly like any other failed source read.
+ * string. A rejected command is dropped (key omitted) with a warning, exactly
+ * like any other failed source read.
+ *
+ * This lane deliberately does NOT use the operator-facing `validateCommand`
+ * allowlist. That one admits `npx`, `node`, `python`, `pip`, `curl`, `wget`,
+ * `go`, `cargo`, `make` and `brew` — every one of which fetches and/or executes
+ * arbitrary code without a single shell metacharacter (`npx <pkg>`,
+ * `pip install <pkg>`, `curl -o <path> <url>`), so the metacharacter filter
+ * would be doing all the work here. Fine for a run a human triggered and is
+ * watching; not fine for persistent config on an autonomous schedule. Issue #5669.
  *
  * Escape hatch: an operator who genuinely needs a pipeline (`git log … | head`)
- * can set the install-level `settings.layeredIntelligence.trustShellSources`
- * flag, which restores the full `shell: true` behavior for THIS install only.
- * It is an explicit, install-wide opt-in — off by default — so a fresh install
- * (or a synced-in app config) can never execute an un-allowlisted command.
+ * or a binary outside the read-only list can set the install-level
+ * `settings.layeredIntelligence.trustShellSources` flag, which restores the full
+ * `shell: true` behavior for THIS install only. It is an explicit, install-wide
+ * opt-in — off by default — so a fresh install (or a synced-in app config) can
+ * never execute anything but a read-only inspection command.
  *
  * `exec` is injectable for tests; `trustShellSources` is resolved by the caller
  * (`gatherSources`) from install settings and threaded in.
@@ -533,9 +543,9 @@ export async function runShellCommand(cmd, { cwd, timeoutMs = 15_000, exec = buf
     if (code !== 0) return null;
     return (stdout || '').trim() || null;
   }
-  const check = validateCommand(cmd);
+  const check = validateUnattendedCommand(cmd);
   if (!check.valid) {
-    console.warn(`⚠️ Layered Intelligence: custom cmd source "${cmd}" rejected — ${check.error} (enable settings.layeredIntelligence.trustShellSources to allow arbitrary shell commands)`);
+    console.warn(`⚠️ Layered Intelligence: custom cmd source "${cmd}" rejected — ${check.error} (unattended sources are limited to read-only inspection commands; enable settings.layeredIntelligence.trustShellSources to allow arbitrary shell commands)`);
     return null;
   }
   const { code, stdout } = await exec(check.baseCommand, check.args, { cwd, timeoutMs, shell: false });

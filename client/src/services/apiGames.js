@@ -11,17 +11,6 @@ export const createGame = (body, options = {}) => request('/games', {
   ...options,
 });
 
-export const updateGame = (id, patch, options = {}) => request(`/games/${encodeURIComponent(id)}`, {
-  method: 'PATCH',
-  body: JSON.stringify(patch),
-  ...options,
-});
-
-export const deleteGame = (id, options = {}) => request(`/games/${encodeURIComponent(id)}`, {
-  method: 'DELETE',
-  ...options,
-});
-
 export const bindGameSprite = (id, spriteId, options = {}) => request(
   `/games/${encodeURIComponent(id)}/sprites`,
   { method: 'POST', body: JSON.stringify({ spriteId }), ...options },

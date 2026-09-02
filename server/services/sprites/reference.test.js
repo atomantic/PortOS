@@ -209,16 +209,26 @@ describe('startReferenceGeneration', () => {
     expect(manifest.designPrompt).toBe('a wiry ranger');
   });
 
-  it('persists an uploaded design reference and records it in the tag provenance', async () => {
+  it('persists an uploaded design reference with a server-derived extension and records it in the tag provenance', async () => {
     const id = newId();
     await createCharacter(id);
     const tmp = join(TEST_ROOT, 'upload-tmp.png');
     await writeCandidatePng(tmp);
-    await startReferenceGeneration(id, { target: 'turnaround' }, { tempPath: tmp, originalname: 'concept.png' });
+    await startReferenceGeneration(id, { target: 'turnaround' }, { tempPath: tmp, originalname: 'concept.svg', ext: '.png' });
     const call = enqueueJob.mock.calls[0][0];
-    expect(call.params.spriteRef.designReferencePath).toMatch(/^reference\/uploads\/.+concept\.png$/);
+    expect(call.params.spriteRef.designReferencePath).toMatch(/^reference\/uploads\/.+design-reference\.png$/);
     expect(call.params.initImagePath).toContain(join('reference', 'uploads'));
     expect(call.params.initImageStrength).toBe(0.65);
+  });
+
+  it('maps an image/webp design upload to .webp regardless of the client filename', async () => {
+    const id = newId();
+    await createCharacter(id);
+    const tmp = join(TEST_ROOT, 'upload-tmp.webp');
+    await writeCandidatePng(tmp);
+    await startReferenceGeneration(id, { target: 'turnaround' }, { tempPath: tmp, originalname: 'payload.html', ext: '.webp' });
+    expect(enqueueJob.mock.calls[0][0].params.spriteRef.designReferencePath)
+      .toMatch(/^reference\/uploads\/.+design-reference\.webp$/);
   });
 
   it('refuses the main and anchors before the turnaround is locked, and south always', async () => {

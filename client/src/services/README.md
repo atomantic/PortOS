@@ -38,33 +38,33 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 
 | File | Purpose |
 |---|---|
-| `apiApps.js` | App CRUD + PM2 ops (start/stop/restart/logs) + local open actions (editor, Claude Code, folder, Xcode) + `getAppIssues` (open GitHub/GitLab issues for the Issues tab). |
+| `apiApps.js` | App CRUD + PM2 ops (start/stop/restart) + local open actions (editor, folder, Xcode) + `getAppIssues` (open GitHub/GitLab issues for the Issues tab). |
 | `apiWorkspaceContexts.js` | Per-project working-context save/restore (branch, shells, tasks). |
 | `apiAccounts.js` | Platform accounts. |
 | `apiAgents.js` | Running-agent process management, CoS run-event diagnostics, and persistent-mind conversation, lifecycle, context, and runtime-telemetry calls. |
 | `apiCommands.js` | CLI command dispatch. |
 | `apiDashboard.js` | Dashboard state. |
 | `apiDatabase.js` | Database introspection. |
-| `apiLocalLlm.js` | Local LLM backends (Ollama / LM Studio): status (incl. installed models), catalog, model install/delete, backend install (Homebrew/script), switch/migrate, playground test/compare, and measured per-model assessments (run + persisted results + intent ranking + the server-side "measure everything" sweep). Also the PM2-managed runtime servers (llama.cpp, MTPLX) and MTPLX's checkpoint catalog — `searchMtplxModels` / `pullMtplxModel` / `removeMtplxModel`, so weights are managed in-app rather than from a terminal. |
+| `apiLocalLlm.js` | Local LLM backends (Ollama / LM Studio): status (incl. installed models), catalog, model install/delete, the managed Prompt Guard model-abuse classifier lifecycle, backend install (Homebrew/script), switch/migrate, playground test/compare, and measured per-model assessments (run + persisted results + intent ranking + the server-side "measure everything" sweep). Also the PM2-managed runtime servers (llama.cpp, MTPLX, Slotstream) and MTPLX's checkpoint catalog — `searchMtplxModels` / `pullMtplxModel` / `removeMtplxModel`, so weights are managed in-app rather than from a terminal. |
 | `apiGit.js` | Git operations. |
 | `apiGithub.js` | GitHub repo metadata. |
 | `apiHistory.js` | Historical logs / runs. |
 | `apiLogs.js` | PM2 system logs: fetch a process's recent log tail (process list comes from `apiCommands.getProcessesList`). |
-| `apiPorts.js` | Port forwarding / allocation. |
+| `apiPorts.js` | Port scan/detect wrappers (no current UI callers; module kept for the catalog). |
 | `apiProviders.js` | AI provider configuration, plus provider-runtime (CLI) install readiness for the per-card Install buttons, and the Codex / ChatGPT-subscription account calls (`getCodexAccount`, `startCodexLogin`, `cancelCodexLogin`, `codexLogout`) — sign-in STATE only, never a token. |
 | `apiPrompts.js` | Prompt Manager: stage templates, variables, and job-skill templates (providers list reuses `apiProviders.getProviders`). |
 | `apiReferenceRepos.js` | Per-app reference-repo registry. |
 | `apiReview.js` | Review hub. |
 | `apiCodeReview.js` | Code Review Defaults (Review Loop reviewer chain + per-backend local-LLM model). |
-| `apiCatalog.js` | Creative catalog ingredients (list/create/update/delete scraps + `listCatalogIngredientsByIds` / facets). |
+| `apiCatalog.js` | Creative catalog ingredients (list/create/update/delete + `listCatalogIngredientsByIds` / facets) and scrap ingest (create/extract/commit + url/file/voice/brain). |
 | `apiCatalogTypes.js` | User-defined catalog ingredient types (list active registry + create/update/delete user types). |
 | `apiRuns.js` | Agent run history. |
 | `apiScaffold.js` | App scaffolding templates. |
 | `apiSchedules.js` | Automation schedules. |
 | `apiQuotaBurn.js` | Quota Burn plan + live status, the job-type catalog its config form renders, and manual runs (`getQuotaBurn`/`getQuotaBurnCatalog`/`saveQuotaBurn`/`runQuotaBurn`), plus `rearmQuotaBurn` to put spent `run once` steps back into the rotation. |
 | `apiRapidReader.js` | Rapid Reader's optional author-hosted Accelerando loader and machine-local shelf API. |
-| `apiSystem.js` | System info (CPU/memory/ports/alerts/active processing and local hardware capabilities) + D&D-style character sheet getter, plus the usage cost report and explicit historical reconciliation (`getUsage`/`getUsageRaw`/`resetUsage`, `getProviderUsage`, `getUsageBackfillStatus`/`startUsageBackfill`, `updateSubscriptionCosts` for the subscription-vs-API savings comparison). |
-| `apiAuth.js` | Optional login password — status, login/logout, set/clear password. |
+| `apiSystem.js` | System info (CPU/memory/ports/alerts/active processing and local hardware capabilities) + D&D-style character sheet getter, plus the usage cost report and explicit historical reconciliation (`getUsage`, `getProviderUsage`, `getUsageBackfillStatus`/`startUsageBackfill`, `updateSubscriptionCosts` for the subscription-vs-API savings comparison, `updateUsageFleetBilling` to exclude an API-billed federated instance from Across Instances totals). |
+| `apiAuth.js` | Optional login password — status, login, set/clear password. |
 | `apiLoops.js` | Scheduled loops. |
 
 ## Personal data / identity
@@ -82,7 +82,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiMortalLoom.js` | Mortality tracking. |
 | `apiMoodBoard.js` | Mood boards (inspiration canvas + items). |
 | `apiTribe.js` | Tribe people (relationship rings + contacts). |
-| `apiTimeline.js` | Human-activity timeline: `/timeline/day` + `/timeline/events`. |
+| `apiTimeline.js` | Human-activity timeline: `/timeline/day`. |
 | `apiCalendar.js` | Calendar events. |
 | `apiMessages.js` | Messages / notifications + iMessage manager (#2413). |
 | `apiStackerNews.js` | Stacker News account, territory, review-action, and safe analysis APIs. |
@@ -98,8 +98,8 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | File | Purpose |
 |---|---|
 | `apiImageVideo.js` | Image-gen local backend extras (gallery, models, LoRAs, cancel, delete). |
-| `apiLoraTraining.js` | Character LoRA training — datasets (CRUD, upload, generate, slice, caption), training runs (start/list/cancel/delete + status), character→LoRA link lookup. |
-| `apiMedia.js` | Screenshots + media assets. Also owns the multi-file upload orchestration — `processScreenshotUploads` / `processAttachmentUploads` and their single-file variants (`uploadScreenshotFile` / `uploadAttachmentFile`) — moved from `utils/fileUpload.js` since they perform network I/O, not pure transforms. `utils/fileUpload.js` keeps only the pure helpers/constants and no longer re-exports these. |
+| `apiLoraTraining.js` | Character LoRA training — datasets (CRUD, upload, generate, slice, caption), training runs (start/list/cancel + status), character→LoRA link lookup. |
+| `apiMedia.js` | Screenshots + media assets. Also owns the multi-file upload orchestration — `processScreenshotUploads` / `processAttachmentUploads` — moved from `utils/fileUpload.js` since they perform network I/O, not pure transforms. `utils/fileUpload.js` keeps only the pure helpers/constants and no longer re-exports these. |
 | `apiMediaJobs.js` | Media generation job tracking + `refineMediaPrompt` / `promptFromMedia` (vision reverse-prompt). |
 | `apiCreativeDirector.js` | Creative Director (video production). |
 | `apiCreativeCommission.js` | Creative Commissions (Autonomous Creation Engine — standing recurring briefs). |
@@ -115,7 +115,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiAuthors.js` | Author personas (name, writing style, bio, headshot description/style). |
 | `apiArtists.js` | Music artist personas (name, genre, bio, musical style, portrait description/style). |
 | `apiAlbums.js` | Music albums (title, artist FK + name, description, genre, release year, cover art, ordered track ids). |
-| `apiTracks.js` | Music tracks (title, album/artist FKs, lyrics, prompt, gen metadata, audio-library pointer) + shared music-library list + audio upload/attach/clear. |
+| `apiTracks.js` | Music tracks (title, album/artist FKs, lyrics, prompt, gen metadata, audio-library pointer) + shared music-library list + audio upload/attach. |
 | `apiVideoDownload.js` | Dev Tools video downloader (#1946): start/cancel a YouTube/x.com full-video download via yt-dlp (SSE progress), list + delete downloaded clips. |
 | `apiMusic.js` | On-device music generation (MusicGen / AudioLDM2 / ACE-Step): list engines (+ readiness), the stepped designer's AI describe/lyrics steps, and generate a track from a prompt/lyrics. |
 | `apiWritersRoom.js` | Writers Room (folders + works + drafts, live continuation + render-preview reservation, scene-image attach). |
@@ -136,7 +136,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiOpenClaw.js` | File browser / picker backend. |
 | `apiPalette.js` | Command-palette manifest + action dispatch. |
 | `apiVoice.js` | Voice synthesis / processing. |
-| `apiOpenWorld.js` | OpenWorld snapshots — historical world-state series for the timeline scrubber (GET /snapshots, GET /config, POST /capture). |
+| `apiOpenWorld.js` | OpenWorld snapshots — historical world-state series for the timeline scrubber (GET /snapshots) plus introspection. |
 | `apiPrivacy.js` | Privacy Center — encrypted PII Vault + Trusted Organizations registry (status, vault CRUD + reveal, org CRUD, org holdings replace-set) + Digital Twin social-account cross-link + household subjects (subject CRUD, consent audit, and a `subjectId` scope passed in each wrapper's trailing `options`). |
 
 ## Browser-facing (DOM, voice, build) — not pure API wrappers

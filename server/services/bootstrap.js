@@ -32,6 +32,7 @@ import { ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
 import { createAIToolkit } from '../lib/aiToolkit/index.js';
 import { verifyCollectionVersions } from '../lib/collectionStore.js';
 import { startIdleReaper, stopIdleReaper } from '../lib/managedDaemon.js';
+import { adoptNpmGlobalBinDir } from '../lib/npmGlobalBin.js';
 import { conflictJournalStore } from '../lib/conflictJournal.js';
 import { markHostShuttingDown, writeHostShutdownMarker } from '../lib/hostShutdown.js';
 import { setUserCatalogTypes } from '../lib/catalogTypes.js';
@@ -97,6 +98,7 @@ import { restoreLoops } from './loops.js';
 import { startOrphanShellGc } from './importerOrphanGc.js';
 import { startImageRefsGc } from './imageRefsGc.js';
 import { startImageCleanTmpGc } from './imageCleanTmpGc.js';
+import { startOrphanedPartialGc } from './orphanedPartialGc.js';
 import { initBridge as initBrainMemoryBridge } from './brainMemoryBridge.js';
 import { initDrillCache } from './meatspacePostDrillCache.js';
 import { registerPostReminderSchedule } from './meatspacePostReminder.js';
@@ -119,6 +121,7 @@ import { initMortalLoomStore } from './mortalLoomStore.js';
 import { initUniverseBuilderCollectionHook } from './universeBuilderCollectionHook.js';
 import { initCatalogImageAttachHook } from './catalogImageAttachHook.js';
 import { initWritersRoomSceneImageHook } from './writersRoomSceneImageHook.js';
+import { startHostedSessionSweep, stopHostedSessionSweep } from './fableLoom/hostedSession.js';
 import { initFableLoomSceneImageHook } from './fableLoomSceneImageHook.js';
 import { initFableLoomSceneVideoHook } from './fableLoomSceneVideoHook.js';
 import { initMusicVideoSceneImageHook } from './musicVideoSceneImageHook.js';
@@ -314,7 +317,16 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
  * Fire-and-forget service inits + scheduler arming. None of these block the
  * server from listening; each logs its own failure and the boot continues.
  */
-const startBackgroundServices = ({ spawnerReady }) => {
+const startBackgroundServices = ({ spawnerReady, io }) => {
+  // Put npm's global bin directory on PATH before anything spawns a provider
+  // CLI. npm's prefix need not be the directory the host's Node installer put
+  // on PATH, and a CLI installed there is invisible to the bare-name spawn a
+  // TUI provider uses until it is adopted. One `npm prefix -g` child, never an
+  // AI provider call — safe under AGENTS.md's no-cold-bootstrap rule, on the
+  // same footing as the `--version` probes providerPrerequisites.js already
+  // runs. The CoS runner is a separate process and adopts it separately.
+  adoptNpmGlobalBinDir().catch((err) => console.error(`❌ npm global bin adoption failed: ${err.message}`));
+
   // Explicit call (not a module-level side effect) so test imports of cos.js
   // don't spin up its event listeners and timers. The spawner gate itself lives
   // in bootstrapSequence.js.
@@ -359,6 +371,10 @@ const startBackgroundServices = ({ spawnerReady }) => {
   // under AGENTS.md's "No cold-bootstrap LLM calls". Off in practice until the
   // user sets an idle window (0 = never, the default).
   startIdleReaper();
+  // Arm the FableLoom hosted-session sweeper. Timer only — it walks in-memory
+  // QR play sessions and tears down the ones past their TTL, making no AI
+  // provider call, so it is safe under AGENTS.md's "No cold-bootstrap LLM calls".
+  startHostedSessionSweep({ io });
   // Initialize brain scheduler for daily digests and weekly reviews
   startBrainScheduler();
   // Initialize activity-digest scheduler — OFF by default; drafts daily-log
@@ -440,6 +456,12 @@ const startBackgroundServices = ({ spawnerReady }) => {
   // mask/original) that land in data/image-clean-tmp and are never long-lived
   // (issue #2264). Age-gate only — nothing here is referenced after the fetch.
   startImageCleanTmpGc();
+  // Periodically GC leftover `${dest}.partial` files from resumable weight
+  // downloads (issue #5855). Age-gated (7 days) so an overnight pause-and-resume
+  // is not punished; in-flight spec-decode dests are also pinned. Fire-and-forget
+  // like the other GCs — not part of the awaited warmStores pruneLegacyFiles
+  // chain, so a large sweep cannot stall listen().
+  startOrphanedPartialGc();
   // Warm the catalog user-type registry from the user-type store (Postgres as of
   // #1001; the settings.json slice under the escape hatch) before any catalog
   // request can land, so user-defined types validate + mint ids immediately on
@@ -734,7 +756,7 @@ const announceListening = ({ io, httpServer, localHttpServer, httpsEnabled, port
  */
 export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled, port, host, spawnerReady }) =>
   runPostRouteSequence({
-    startBackgroundServices: () => startBackgroundServices({ spawnerReady }),
+    startBackgroundServices: () => startBackgroundServices({ spawnerReady, io }),
 
     // Instance identity + sync log come up before requests are accepted, so a
     // brain mutation can't arrive before the sync log is ready.
@@ -856,6 +878,9 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // -shutdown would `pm2 stop` a model server the user never asked to lose,
     // and PortOS is about to stop being the thing that could restart it.
     stopIdleReaper();
+    // Same reasoning for the hosted-session sweeper: a tick mid-shutdown would
+    // emit into a namespace we are about to close.
+    stopHostedSessionSweep();
     // Diagnostic context for the shutdown trigger. ppid tells us whether the
     // signal came from PM2 (parent is the PM2 god process), a TTY (parent is
     // the user's shell), or some external orchestrator. pm_* env vars are set

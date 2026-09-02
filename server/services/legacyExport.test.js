@@ -325,7 +325,7 @@ describe('buildLegacyPdf', () => {
 
   it('does not throw on control bytes WinAnsi cannot encode (NUL, VT, ESC, DEL, C1)', async () => {
     // Stray control chars pasted into free-text identity content (a note, a
-    // journal) must not crash the whole PDF render. pdf-lib's WinAnsi encoder
+    // journal) must not crash the whole PDF render. @cantoo/pdf-lib's WinAnsi encoder
     // throws on 0x00–0x1F / 0x7F / 0x80–0x9F even though they're ≤ 0xFF.
     const dirty = 'before\x00\x0B\x1B\x7F\x9Dafter and a\ttab';
     const contentFiles = [{ name: 'brain/journals.md', data: Buffer.from(`# Journal\n\n${dirty}\n`) }];

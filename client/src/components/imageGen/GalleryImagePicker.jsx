@@ -244,7 +244,7 @@ export default function GalleryImagePicker({
       // overlay beneath the page header/cards (and beneath a host modal when the
       // picker is opened from inside one).
       usePortal
-      panelClassName="bg-port-card border border-port-border rounded-xl max-h-[85vh] flex flex-col"
+      panelClassName="bg-port-card border border-port-border rounded-xl flex flex-col"
       ariaLabel="Pick an image from your gallery"
     >
       <div className="p-3 border-b border-port-border space-y-2">

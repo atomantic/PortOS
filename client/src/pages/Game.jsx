@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Boxes, Gamepad2, Images, MessageSquare, Plus } from 'lucide-react';
 import { Link, useNavigate, useParams } from 'react-router';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import AppContextPicker from '../components/AppContextPicker.jsx';
 import GameBindings from '../components/games/GameBindings.jsx';
@@ -259,7 +260,32 @@ export default function Game() {
   };
 
   if (loading) {
-    return <div className="py-12 text-center text-sm text-gray-400">Loading Game studio…</div>;
+    // The detail workspace is a full-bleed h-full shell with its own bordered
+    // bar; the index is a plain padded page. `id` is known before the fetch
+    // settles, so each reserves the chrome its own loaded state renders.
+    return id ? (
+      <PageSkeleton
+        header="bar"
+        label="Loading Game workspace"
+        fullHeight
+        padded
+        barClassName="px-4 py-3"
+        bodyClassName="p-4"
+        headerRowClass="flex flex-col justify-between gap-2 sm:flex-row sm:items-center"
+        titleWidthClass="w-48"
+        cards={3}
+        sidebar={false}
+      />
+    ) : (
+      <PageSkeleton
+        label="Loading Game studio"
+        titleWidthClass="w-32"
+        showSubtitle
+        showAction={false}
+        cards={3}
+        sidebar={false}
+      />
+    );
   }
 
   if (id && !game) {

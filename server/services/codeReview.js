@@ -264,7 +264,7 @@ function adaptiveFence(content) {
   return '`'.repeat(Math.max(3, ...(content.match(/`+/g) || ['']).map((run) => run.length + 1)))
 }
 
-async function runToolFreeLocalCompletion({ backend, model, messages, effort, timeoutMs }) {
+async function runToolFreeLocalCompletion({ backend, model, messages, effort, timeoutMs, baseUrl: requestedBaseUrl = null }) {
   if (!isLocalLlmReviewer(backend)) {
     return { ok: false, error: `Unsupported reviewer backend: ${backend}` }
   }
@@ -273,7 +273,12 @@ async function runToolFreeLocalCompletion({ backend, model, messages, effort, ti
   }
 
   const resolvedEffort = normalizeReviewerEffort(effort, backend) || null
-  const baseUrl = BACKEND_BASE_URLS[backend]()
+  // Local runtime records are normalized to the OpenAI `/v1` root, while the
+  // legacy backend managers return the host root. Keep both forms compatible
+  // with the one endpoint suffix below.
+  const baseUrl = String(requestedBaseUrl || BACKEND_BASE_URLS[backend]())
+    .replace(/\/+$/, '')
+    .replace(/\/v\d+$/i, '')
   const body = {
     model,
     messages,
@@ -322,8 +327,10 @@ async function runToolFreeLocalCompletion({ backend, model, messages, effort, ti
  *   only spelling of "use the model's own default".
  * @param {number} [opts.timeoutMs=120000] - 2 min default — LM Studio cold-
  *   load of a large coder model regularly exceeds 30s but rarely 2 min.
+ * @param {string} [opts.baseUrl] - Validated local OpenAI-compatible base URL;
+ *   defaults to the backend manager's current URL.
  */
-export async function runLocalCodeReview({ backend, model, diff, effort = null, timeoutMs = 120000 } = {}) {
+export async function runLocalCodeReview({ backend, model, diff, effort = null, timeoutMs = 120000, baseUrl = null } = {}) {
   if (!isLocalLlmReviewer(backend)) {
     return { ok: false, error: `Unsupported reviewer backend: ${backend}` }
   }
@@ -348,6 +355,7 @@ export async function runLocalCodeReview({ backend, model, diff, effort = null, 
     model,
     effort,
     timeoutMs,
+    baseUrl,
     messages: [
       { role: 'system', content: CODE_REVIEW_SYSTEM_PROMPT },
       { role: 'user', content: `Review this PR diff:\n\n${fence}diff\n${trimmedDiff}\n${fence}` },

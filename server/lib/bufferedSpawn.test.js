@@ -29,6 +29,8 @@ const {
   WIN_CMD_SHIMS,
   MAX_OUTPUT_BYTES,
   spawnFailureDetail,
+  guardChildStdin,
+  deliverChildStdin,
 } = await import('./bufferedSpawn.js');
 
 /**
@@ -148,16 +150,80 @@ describe('killProcessTree', () => {
     killSpy.mockRestore();
   });
 
-  it('on Windows still uses .kill() (not taskkill) for a non-ChildProcess killable, e.g. a node-pty session', () => {
+  // A killable that exposes .kill()/.pid like a ChildProcess but isn't one
+  // (node-pty's IPty, registered via registerExternalRun for TUI runs). taskkill
+  // against its pid would bypass node-pty's own native teardown (releasing a
+  // Windows ConPTY handle) and leak it.
+  //
+  // The platform is INJECTED on these, not read from the host: the branch below
+  // is Windows-only, and a `if (!IS_WIN32) return` guard would assert nothing on
+  // a Linux CI runner — leaving the fix free to regress everywhere but a
+  // developer's Windows box.
+  const ptyLike = (onSignal) => ({ pid: 4321, kill: vi.fn(onSignal) });
+  // node-pty's Windows backend throws for ANY signal argument. A signalled kill
+  // there therefore killed nothing and threw past the caller, which logged it
+  // and moved on — which is how every CoS Runner TUI kill became a silent no-op
+  // on Windows, stranding the process and pinning the Update page on
+  // "N CoS agents running".
+  const rejectsSignals = (signal) => { if (signal) throw new Error('Signals not supported on windows.'); };
+
+  it('falls back to a signal-free kill on Windows for a handle that rejects signals', () => {
+    const pty = ptyLike(rejectsSignals);
+    killProcessTree(pty, 'SIGKILL', {}, true);
+    expect(pty.kill.mock.calls).toEqual([['SIGKILL'], []]);
+    // Never taskkill — that bypasses node-pty's ConPTY teardown and leaks the handle.
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps the signal on Windows for a non-ChildProcess killable that accepts one', () => {
+    // cosRunnerClient's TUI proxy relays { signal } over a socket. Dropping the
+    // signal unconditionally would silently downgrade a force-kill to graceful.
+    const proxy = ptyLike(undefined);
+    killProcessTree(proxy, 'SIGKILL', {}, true);
+    expect(proxy.kill.mock.calls).toEqual([['SIGKILL']]);
+  });
+
+  it('forwards the signal to a node-pty handle off Windows, where node-pty honors it', () => {
+    const pty = ptyLike(undefined);
+    killProcessTree(pty, 'SIGKILL', {}, false);
+    expect(pty.kill.mock.calls).toEqual([['SIGKILL']]);
+  });
+
+  it('on Windows ignores processGroup — taskkill /T is already the tree', () => {
+    if (!IS_WIN32) return; // platform-gated behavior
+    const child = makeFakeChild({ pid: 777 });
+    const tk = makeFakeChild();
+    tk.unref = vi.fn();
+    spawnMock.mockReturnValueOnce(tk);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    killProcessTree(child, undefined, { processGroup: true });
+    expect(spawnMock).toHaveBeenCalledWith('taskkill', ['/T', '/F', '/PID', '777'], expect.anything());
+    expect(killSpy).not.toHaveBeenCalled();
+    killSpy.mockRestore();
+  });
+
+  it('on Windows kills a non-ChildProcess killable (a node-pty session) with .kill() and NO signal', () => {
     if (!IS_WIN32) return; // can't simulate platform branch from outside
     // A killable that exposes .kill()/.pid like a ChildProcess but isn't one
     // (e.g. node-pty's IPty, registered via registerExternalRun for TUI
     // runs) — taskkill against its pid would bypass its own native teardown
     // (releasing a Windows ConPTY handle) and leak it.
-    const ptyLike = { pid: 4321, kill: vi.fn() };
-    killProcessTree(ptyLike);
+    //
+    // The signal must be DROPPED: node-pty's Windows backend throws
+    // "Signals not supported on windows." for any signal argument, so a
+    // signalled kill there killed nothing and threw past the caller — which is
+    // how every CoS Runner TUI kill became a silent no-op on Windows.
+    const ptyLike = { pid: 4321, kill: vi.fn((signal) => { if (signal) throw new Error('Signals not supported on windows.'); }) };
+    killProcessTree(ptyLike, 'SIGKILL');
     expect(spawnMock).not.toHaveBeenCalled();
-    expect(ptyLike.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(ptyLike.kill).toHaveBeenCalledWith();
+  });
+
+  it('on non-Windows still forwards the signal to a node-pty session', () => {
+    if (IS_WIN32) return; // platform-gated behavior
+    const ptyLike = { pid: 4321, kill: vi.fn() };
+    killProcessTree(ptyLike, 'SIGKILL');
+    expect(ptyLike.kill).toHaveBeenCalledWith('SIGKILL');
   });
 });
 
@@ -536,5 +602,72 @@ describe('spawnFailureDetail', () => {
   it('returns the fallback when the command failed without saying anything', () => {
     expect(spawnFailureDetail({}, fallback)).toBe(fallback);
     expect(spawnFailureDetail(null, fallback)).toBe(fallback);
+  });
+});
+
+describe('guardChildStdin', () => {
+  // An 'error' on a stream with no listener is re-thrown by Node. Every CLI-agent
+  // spawn site runs outside the Express request lifecycle, so that throw takes the
+  // whole server process down — with every live agent run, PTY shell and socket on
+  // it. This is the contract every CLI spawn site that writes stdin relies on.
+  it('swallows an EPIPE emitted on the child stdin pipe', () => {
+    const child = { stdin: new EventEmitter() };
+    guardChildStdin(child);
+    expect(() => child.stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))).not.toThrow();
+  });
+
+  it('proves the fake really is unguarded without it (bypass probe)', () => {
+    const child = { stdin: new EventEmitter() };
+    expect(() => child.stdin.emit('error', new Error('write EPIPE'))).toThrow('write EPIPE');
+  });
+
+  it('is a no-op for a spawn that failed command lookup and has no stdio at all', () => {
+    expect(() => guardChildStdin({})).not.toThrow();
+    expect(() => guardChildStdin(null)).not.toThrow();
+  });
+
+  it('returns the child so it can be chained at a spawn site', () => {
+    const child = { stdin: new EventEmitter() };
+    expect(guardChildStdin(child)).toBe(child);
+  });
+});
+
+describe('deliverChildStdin', () => {
+  const streamStdin = (overrides = {}) => Object.assign(new EventEmitter(), {
+    write: vi.fn(), end: vi.fn(), destroy: vi.fn(), ...overrides,
+  });
+
+  it('writes the payload and closes the pipe', () => {
+    const child = { stdin: streamStdin() };
+    expect(deliverChildStdin(child, 'prompt', 'run r1')).toBe(true);
+    expect(child.stdin.write).toHaveBeenCalledWith('prompt');
+    expect(child.stdin.end).toHaveBeenCalled();
+  });
+
+  it('closes the pipe without writing when the prompt already went out by argv', () => {
+    const child = { stdin: streamStdin() };
+    expect(deliverChildStdin(child, null, 'run r1')).toBe(true);
+    expect(child.stdin.write).not.toHaveBeenCalled();
+    expect(child.stdin.end).toHaveBeenCalled();
+  });
+
+  it('destroys the pipe and logs when write throws, instead of letting it escape', () => {
+    // A bare swallow would leave a child that IS reading stdin waiting on a
+    // write that never lands, and file the resulting empty run as clean (#5655).
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const child = { stdin: streamStdin({ write: vi.fn(() => { throw Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }); }) }) };
+
+    expect(deliverChildStdin(child, 'prompt', 'run r1')).toBe(false);
+
+    expect(child.stdin.destroy).toHaveBeenCalled();
+    expect(consoleSpy.mock.calls[0][0]).toContain('❌ run r1 stdin write failed');
+    expect(consoleSpy.mock.calls[0][0]).toContain('EPIPE');
+    consoleSpy.mockRestore();
+  });
+
+  it('survives a spawn that failed command lookup and has no stdio at all', () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(deliverChildStdin({}, 'prompt', 'run r1')).toBe(false);
+    consoleSpy.mockRestore();
   });
 });

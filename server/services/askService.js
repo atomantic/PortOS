@@ -38,7 +38,8 @@ import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
-import { evaluateSecretEndpoint } from '../lib/aiToolkit/internal/endpointGuard.js';
+import { evaluateSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
+import { iterateOpenAiChat } from '../lib/openAiChatStream.js';
 
 // Re-export so the route can keep importing modes via askService — but
 // askConversations is the source of truth (it owns the persistence schema).
@@ -456,112 +457,25 @@ async function* streamCompletion(provider, model, prompt, signal) {
         throw new Error(`Provider endpoint blocked: ${guard.reason}`);
       }
     }
-    const headers = { 'Content-Type': 'application/json' };
-    if (provider.apiKey) headers['Authorization'] = `Bearer ${provider.apiKey}`;
-    // Combine the per-provider timeout with the caller's abort signal so
-    // either one tearing down propagates to the upstream fetch + reader.
-    // The timeout stays armed through the entire stream-consumption window
-    // — clearing it after the initial fetch resolved (the previous
-    // implementation) wouldn't catch an upstream that opens the stream and
-    // then stalls indefinitely. Mirrors the `AbortSignal.any` fallback in
-    // `lib/fetchWithTimeout.js` so older Node builds without
-    // `AbortSignal.any` keep working.
-    const timeoutController = new AbortController();
-    const timeoutId = setTimeout(() => timeoutController.abort(), provider.timeout || 300000);
-    let fetchSignal = timeoutController.signal;
-    let externalAbortHandler;
-    if (signal) {
-      if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.any === 'function') {
-        fetchSignal = AbortSignal.any([timeoutController.signal, signal]);
-      } else {
-        externalAbortHandler = () => timeoutController.abort();
-        if (signal.aborted) timeoutController.abort();
-        else signal.addEventListener('abort', externalAbortHandler, { once: true });
-      }
+    const ready = await ensureOllamaProviderReady(provider);
+    if (!ready.success) {
+      throw new Error(`Ollama is not running and PortOS could not start it: ${ready.error || 'unknown error'}`);
     }
-    const cleanup = () => {
-      clearTimeout(timeoutId);
-      if (signal && externalAbortHandler) signal.removeEventListener('abort', externalAbortHandler);
-    };
-    let response;
-    try {
-      const ready = await ensureOllamaProviderReady(provider);
-      if (!ready.success) {
-        throw new Error(`Ollama is not running and PortOS could not start it: ${ready.error || 'unknown error'}`);
-      }
-      response = await fetch(`${provider.endpoint}/chat/completions`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          model,
-          messages: [{ role: 'user', content: prompt }],
-          temperature: 0.4,
-          stream: true,
-        }),
-        signal: fetchSignal,
-      });
-    } catch (err) {
-      cleanup();
-      throw err;
+    for await (const chunk of iterateOpenAiChat({
+      endpoint: provider.endpoint,
+      apiKey: provider.apiKey,
+      model,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.4,
+      signal,
+      timeoutMs: provider.timeout || 300000,
+    })) {
+      // Ask's public SSE contract remains content-only. The shared transport
+      // still parses reasoning/usage frames so lifecycle and compatibility
+      // decisions stay canonical without exposing a new Ask event shape.
+      if (chunk.kind === 'content') yield chunk.text;
     }
-    if (!response.ok || !response.body) {
-      cleanup();
-      const text = await response.text().catch(() => '');
-      throw new Error(`AI API error: ${response.status} - ${text.slice(0, 500)}`);
-    }
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    // Returns `{ delta, done }`. `done: true` means we hit `[DONE]` and
-    // should stop. A single malformed/partial frame from the upstream
-    // provider must not kill the whole stream — log and skip so subsequent
-    // good frames still flow.
-    const parseFrame = (frame) => {
-      const trimmed = frame.trim();
-      if (!trimmed.startsWith('data:')) return { delta: null, done: false };
-      const payload = trimmed.slice(5).trim();
-      if (payload === '[DONE]') return { delta: null, done: true };
-      let parsed;
-      try {
-        parsed = JSON.parse(payload);
-      } catch {
-        console.warn(`⚠️ Ask: skipping malformed SSE frame from ${provider.id}`);
-        return { delta: null, done: false };
-      }
-      return { delta: parsed?.choices?.[0]?.delta?.content || null, done: false };
-    };
-    try {
-      while (true) {
-        if (signal?.aborted) {
-          await reader.cancel().catch(() => {});
-          return;
-        }
-        const { value, done } = await reader.read();
-        if (done) break;
-        // Some SSE producers emit CRLF line terminators (`\r\n\r\n` between
-        // frames); normalise to LF so the `\n\n` frame split below works
-        // regardless of upstream.
-        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
-        let idx;
-        while ((idx = buffer.indexOf('\n\n')) !== -1) {
-          const frame = buffer.slice(0, idx);
-          buffer = buffer.slice(idx + 2);
-          const { delta, done: terminal } = parseFrame(frame);
-          if (delta) yield delta;
-          if (terminal) return;
-        }
-      }
-      // Flush any final un-terminated frame — some upstreams close the
-      // socket without a trailing `\n\n`, so the last delta would
-      // otherwise sit forever in `buffer` and get dropped.
-      buffer += decoder.decode().replace(/\r\n/g, '\n');
-      if (buffer.trim()) {
-        const { delta } = parseFrame(buffer);
-        if (delta) yield delta;
-      }
-    } finally {
-      cleanup();
-    }
+    if (signal?.aborted) return;
     return;
   }
 
@@ -766,6 +680,7 @@ export async function* runAsk({
     yield { type: 'error', error: `Provider stream failed: ${err.message}` };
     return;
   }
+  if (signal?.aborted) return;
 
   const answer = chunks.join('');
   console.log(`✅ Ask complete: ${provider.id}/${effectiveModel} ${Date.now() - startedAt}ms ${answer.length} chars`);

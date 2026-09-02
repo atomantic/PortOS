@@ -33,8 +33,10 @@ import { tmpdir } from 'os'
 import { pipeline } from 'stream/promises'
 import { Readable } from 'stream'
 import { PATHS, atomicWrite, ensureDir, pathExists, sleep } from '../lib/fileUtils.js'
+import { ServerError } from '../lib/errorHandler.js'
+import { assessDownloadPreflight, diskInsufficientError, DOWNLOAD_VERDICTS } from '../lib/downloadPreflight.js'
 import { compareSemver } from '../lib/versionUtils.js'
-import { getCatalog, isBackend, mapModelToBackend, getOllamaImportSpec } from '../lib/localLlmCatalog.js'
+import { getCatalog, isBackend, mapModelToBackend, getOllamaImportSpec, catalogSizeBytes } from '../lib/localLlmCatalog.js'
 import { sanitizeOllamaName } from '../lib/localLlmDisk.js'
 import { recommendEditorialModel, isVisionModel, isVisionCapableCliProvider, isToolUseModel } from '../lib/localModelHeuristics.js'
 import { captureSystemCapabilities, withHardwareCompatibility } from '../lib/systemCapabilities.js'
@@ -907,8 +909,60 @@ export function describeInstallProgress(p) {
  *   files first so `lms get` actually re-fetches in-place GGUF replacements.
  *   Ollama's pull already re-checks the registry digest, so force is a no-op there.
  */
+async function localInstallDest(backend) {
+  return backend === 'ollama' ? ollamaManager.getModelsDir() : lmStudioManager.getModelsDir()
+}
+
+// A "Redownload" of a model already on disk transfers little to nothing in
+// practice — Ollama's pull re-checks the registry digest and dedupes
+// unchanged layers, and LM Studio's own `lms get` skips files already
+// present — so sizing it against the FULL catalog size (like a genuine
+// net-new install) can refuse a redownload the real transfer would have
+// completed in seconds. `expectedBytes: 0` matches this feature's existing
+// "can't size it, don't block it" convention for that case.
+async function expectedInstallBytes(backend, modelId) {
+  const installed = await listModels(backend).catch(() => [])
+  if (installed.some((m) => m.id === modelId)) return 0
+  return catalogSizeBytes(backend, modelId)
+}
+
+export async function previewInstallModel(backend, modelId) {
+  if (!isBackend(backend)) {
+    throw new ServerError(`Unknown backend: ${backend}`, { status: 400 })
+  }
+  const destPath = await localInstallDest(backend)
+  const installed = await listModels(backend).catch(() => [])
+  const alreadyDownloaded = installed.some((m) => m.id === modelId)
+  // 0 for a free-text/uncurated model id (e.g. a bare Ollama tag the user
+  // typed) — the preflight already treats that as "unknown, never refuse."
+  const preflight = await assessDownloadPreflight({
+    destPath,
+    expectedBytes: alreadyDownloaded ? 0 : catalogSizeBytes(backend, modelId),
+  })
+  return {
+    kind: 'install',
+    backend,
+    modelId,
+    ...preflight,
+    destPath,
+    alreadyDownloaded,
+  }
+}
+
 export async function installModel(backend, modelId, onProgress, { force = false } = {}) {
   if (!isBackend(backend)) return { success: false, error: `Unknown backend: ${backend}` }
+  // Resolve-not-throw: every other failure this function can hit (unknown
+  // backend, OLLAMA_OUTDATED, ...) resolves `{ success: false, error }` —
+  // migrateBackend's per-model loop is written against that contract with no
+  // try/catch of its own, so a throw here would abort the whole migration on
+  // model N instead of recording one more `status: 'failed'` row and moving on.
+  const preflight = await assessDownloadPreflight({
+    destPath: await localInstallDest(backend),
+    expectedBytes: await expectedInstallBytes(backend, modelId),
+  })
+  if (preflight.verdict === DOWNLOAD_VERDICTS.INSUFFICIENT) {
+    return { success: false, error: diskInsufficientError(preflight).message, code: 'DISK_INSUFFICIENT' }
+  }
   if (backend === 'ollama') {
     const importSpec = getOllamaImportSpec(modelId)
     const result = importSpec

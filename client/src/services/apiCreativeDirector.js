@@ -81,18 +81,6 @@ export const updateCreativeDirectorPlanStep = (id, stepId, action, options = {})
     body: JSON.stringify({ action }),
     ...options,
   });
-// Autonomous auto-cast (#1810). `suggest` previews the catalog ingredients the
-// director would propose for a free-text brief (no mutation). `apply` derives the
-// brief from the project (or accepts an explicit one), appends the fresh
-// candidates to the project cast, and links them — returning
-// `{ project, added, suggestions }`. `options.silent` defers error toasting to a
-// caller that owns its own error UI.
-export const suggestCreativeDirectorAutoCast = (brief, { types, limit } = {}, options = {}) =>
-  request('/creative-director/auto-cast/suggest', {
-    method: 'POST',
-    body: JSON.stringify({ brief, ...(types ? { types } : {}), ...(limit ? { limit } : {}) }),
-    ...options,
-  });
 // `compose: true` (#1817) tells the director to autonomously write a treatment +
 // scene plan grounded in the freshly-seeded cast — the response carries
 // `composing: true` when the server actually kicked the agent off.

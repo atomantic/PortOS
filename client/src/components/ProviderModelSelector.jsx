@@ -50,6 +50,12 @@
  *   authoritative capability fetch (`useToolUseModelIds`), so an unannotated
  *   picker costs nothing. No-op for cloud/API providers, whose ids don't encode
  *   their family.
+ * @param {{provider?: function, model?: function, effort?: function}} [props.selectionPolicy]
+ *   Optional shared policy applied to all three option lists. Provider
+ *   predicates receive `(provider)`, model predicates receive `(model, provider)`
+ *   and effort predicates receive `(effort, provider, model)`. A selected value
+ *   that no longer satisfies the policy remains visible but disabled so it can
+ *   be cleared without hiding a stale saved pin.
  */
 import { useId } from 'react';
 import {
@@ -96,7 +102,8 @@ export default function ProviderModelSelector({
   layout = 'row',
   highlightToolUse = false,
   effort,
-  onEffortChange
+  onEffortChange,
+  selectionPolicy
 }) {
   const providerSelectId = useId();
   const modelSelectId = useId();
@@ -107,7 +114,11 @@ export default function ProviderModelSelector({
   // scoped to a genuinely tool-incapable local pin.
   // Resolve against the effective provider (the pin, or what a blank selection
   // falls back to) — everything below describes what a run would actually use.
-  const selectedProvider = providers.find((p) => p.id === (effectiveProviderId ?? selectedProviderId));
+  const providerList = Array.isArray(providers) ? providers : [];
+  const providerAllowed = selectionPolicy?.provider;
+  const modelAllowed = selectionPolicy?.model;
+  const effortAllowed = selectionPolicy?.effort;
+  const selectedProvider = providerList.find((p) => p.id === (effectiveProviderId ?? selectedProviderId));
   // A blank model ("Default model") isn't a no-op: the agent resolver then runs
   // the provider's own defaultModel — which for an Ollama-backed provider can be
   // a non-tool model that silently wedges the stage. So evaluate the EFFECTIVE
@@ -133,16 +144,23 @@ export default function ProviderModelSelector({
   // pinned to a now-disabled provider still renders its value instead of
   // silently blanking the select. This is the single DRY gate for every
   // provider→model picker; callers may also pre-filter, which is idempotent.
-  const visibleProviders = providers.filter(
+  const visibleProviders = providerList.filter(
     (p) => (p.enabled !== false || p.id === selectedProviderId)
       && (isProviderHardwareCompatible(p) || p.id === selectedProviderId)
+      && (!providerAllowed || providerAllowed(p) || p.id === selectedProviderId)
   );
-  const compatibleModels = filterHardwareCompatibleProviderModels(availableModels, selectedProvider);
+  const compatibleModels = filterHardwareCompatibleProviderModels(availableModels, selectedProvider)
+    .filter((model) => !modelAllowed || modelAllowed(model, selectedProvider));
   const selectedModelIsUnavailable = Boolean(
     selectedModel
     && !isProviderModelHardwareCompatible(selectedProvider, selectedModel)
   );
-  const modelOptions = selectedModelIsUnavailable
+  const selectedModelIsDisallowed = Boolean(
+    selectedModel
+    && modelAllowed
+    && !modelAllowed(selectedModel, selectedProvider)
+  );
+  const modelOptions = (selectedModelIsUnavailable || selectedModelIsDisallowed)
     && !compatibleModels.some((model) => modelOption(model)?.value === selectedModel)
     ? [selectedModel, ...compatibleModels]
     : compatibleModels;
@@ -150,7 +168,16 @@ export default function ProviderModelSelector({
   // The effort select is opt-in (`onEffortChange`) AND self-hiding: EffortSelect
   // renders null for a provider with no effort control, so gate the label+wrapper
   // on the same predicate or a non-effort provider gets an orphaned label.
-  const showEffort = !!onEffortChange && !!effortLevelsForProvider(selectedProvider, effectiveModel);
+  const effortLevels = effortLevelsForProvider(selectedProvider, effectiveModel);
+  const visibleEffortLevels = effortLevels?.filter(
+    (level) => !effortAllowed || effortAllowed(level, selectedProvider, effectiveModel)
+  );
+  const selectedEffortIsDisallowed = Boolean(
+    effort
+    && effortAllowed
+    && !effortAllowed(effort, selectedProvider, effectiveModel)
+  );
+  const showEffort = !!onEffortChange && Boolean(visibleEffortLevels?.length || selectedEffortIsDisallowed);
   // Picking a model with NO effort tiers (Antigravity's ladder is per-model) makes
   // the select above disappear — so clear the effort with it, or the value stays in
   // state with no UI left to change it and every submit still sends it. Owned here
@@ -159,7 +186,11 @@ export default function ProviderModelSelector({
     onModelChange(value);
     if (!onEffortChange || !effort) return;
     const surviving = effortSurvivingModel(selectedProvider, value, effort);
-    if (surviving !== effort) onEffortChange(surviving);
+    const filteredSurviving = surviving && effortAllowed
+      && !effortAllowed(surviving, selectedProvider, effectiveModelFor(selectedProvider, value))
+      ? ''
+      : surviving;
+    if (filteredSurviving !== effort) onEffortChange(filteredSurviving);
   };
   // `row` was sized for two selects; the effort control makes it three, which is
   // unreadable at phone width — stack until `sm` when it's showing.
@@ -180,10 +211,14 @@ export default function ProviderModelSelector({
         >
           {emptyProviderOption != null && <option value="">{emptyProviderOption}</option>}
           {visibleProviders.map((p) => {
-            const unavailable = !isProviderHardwareCompatible(p);
+            const hardwareUnavailable = !isProviderHardwareCompatible(p);
+            const policyDisallowed = Boolean(providerAllowed && !providerAllowed(p));
+            const unavailable = hardwareUnavailable || policyDisallowed;
             return (
               <option key={p.id} value={p.id} disabled={unavailable}>
-                {p.name}{unavailable ? ' (unavailable on this machine)' : ''}
+                {p.name}{hardwareUnavailable
+                  ? ' (unavailable on this machine)'
+                  : policyDisallowed ? ' (not permitted here)' : ''}
               </option>
             );
           })}
@@ -205,13 +240,17 @@ export default function ProviderModelSelector({
             {modelOptions.map(m => {
               const opt = modelOption(m);
               if (!opt) return null;
-              const unavailable = !isProviderModelHardwareCompatible(selectedProvider, opt.value);
+              const hardwareUnavailable = !isProviderModelHardwareCompatible(selectedProvider, opt.value);
+              const policyDisallowed = Boolean(modelAllowed && !modelAllowed(m, selectedProvider));
+              const unavailable = hardwareUnavailable || policyDisallowed;
               const label = annotateToolUse
                 ? withToolUseOptionLabel(opt.value, opt.label, selectedProvider, toolUseIdsByProvider)
                 : opt.label;
               return (
                 <option key={opt.value} value={opt.value} disabled={unavailable}>
-                  {unavailable ? `${label} (unavailable on this machine)` : label}
+                  {hardwareUnavailable
+                    ? `${label} (unavailable on this machine)`
+                    : policyDisallowed ? `${label} (not permitted here)` : label}
                 </option>
               );
             })}
@@ -237,6 +276,7 @@ export default function ProviderModelSelector({
             value={effort || ''}
             onChange={onEffortChange}
             disabled={disabled}
+            optionFilter={effortAllowed}
             className={SELECT_CLASS}
           />
         </div>

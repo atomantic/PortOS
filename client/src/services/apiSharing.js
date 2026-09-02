@@ -1,7 +1,5 @@
 import { request } from './apiCore.js';
 
-export const BUCKET_MODES = Object.freeze(['auto-merge', 'inbox']);
-
 // ---- Buckets ----
 export const listShareBuckets = (options) => request('/sharing/buckets', options);
 

@@ -264,11 +264,6 @@ export const WORLD_LOCKABLE_FIELDS = [
   'influencesAvoid',
 ];
 
-// Mirror of `normalizeLabelKey` in server/services/universeBuilder.js — used for
-// case-insensitive identity matching between original and refined items.
-export const normalizeLabelKey = (label) =>
-  typeof label === 'string' ? label.trim().toLowerCase() : '';
-
 // Coerce whatever shape the server / draft / patch hands us into a strict
 // `{ embrace: [], avoid: [] }` so consumers never have to guard undefined.
 // Fast-path: if the input is already shape-correct, return it unchanged so
@@ -286,7 +281,7 @@ export const ensureInfluences = (raw) => {
 // (embrace + avoid). Use this instead of `.startsWith('influences')` so a
 // future LOCKABLE_FIELDS entry like `influencesPriority` doesn't get silently
 // swept into per-list handling.
-export const WORLD_INFLUENCE_LOCK_FIELDS = ['influencesEmbrace', 'influencesAvoid'];
+const WORLD_INFLUENCE_LOCK_FIELDS = ['influencesEmbrace', 'influencesAvoid'];
 export const isInfluenceLockField = (key) => WORLD_INFLUENCE_LOCK_FIELDS.includes(key);
 
 // Build a refined influences object that honors per-list locks. Locked lists
@@ -428,15 +423,6 @@ export const setUniverseCanonLockAll = (universeId, kind, locked, options = {}) 
     method: 'PATCH',
     body: JSON.stringify({ locked }),
     ...options,
-  }));
-
-// Bulk lock/unlock variations across one bucket (`category`) or every bucket
-// (`category: null`). Pass `includeSheets: true` to also flip composite
-// sheets in the same call.
-export const setUniverseVariationsLockAll = (universeId, { locked, category = null, includeSheets = false } = {}) =>
-  trackUniverseWrite(universeId, request(`/universe-builder/${encodeURIComponent(universeId)}/variations/lock-all`, {
-    method: 'PATCH',
-    body: JSON.stringify({ locked, category, includeSheets }),
   }));
 
 // Promote a category variation into a full canon entry. `targetKind` is

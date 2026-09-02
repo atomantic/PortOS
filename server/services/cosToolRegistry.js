@@ -22,6 +22,7 @@ import {
   eidoverseWorldAugmentSchema,
   eidoverseWorldSaySchema,
 } from '../lib/validation.js';
+import { USER_ACTION_ACTORS, USER_ACTION_TYPES } from '../lib/userActionTypes.js';
 import { dispatchTool, getToolSpecs, getToolSpecsForIntent } from './voice/tools.js';
 import { executePersistentMindTaskRequests } from './persistentMindTaskCapability.js';
 import { cleanupPersistentMind } from './persistentMindMaintenance.js';
@@ -139,6 +140,39 @@ const mindCleanupTool = Object.freeze({
   adapter: { kind: 'persistent-mind-maintenance' },
 });
 
+// One mind turn must not be able to dump the whole ledger into context — the
+// store's own list cap (500) is sized for the HTTP API, not a prompt.
+export const USER_ACTIONS_QUERY_MAX_RESULTS = 100;
+
+const userActionsQuerySchema = z.object({
+  from: z.string().trim().min(1).optional(),
+  to: z.string().trim().min(1).optional(),
+  type: z.enum([...USER_ACTION_TYPES]).optional(),
+  types: z.array(z.enum([...USER_ACTION_TYPES])).max(USER_ACTION_TYPES.length).optional(),
+  actor: z.enum([...USER_ACTION_ACTORS]).optional(),
+  limit: z.number().int().min(1).optional(),
+}).strict();
+
+const userActionsQueryTool = Object.freeze({
+  type: 'portos_tool',
+  name: 'user-actions.query',
+  version: COS_TOOL_SCHEMA_VERSION,
+  providerName: 'user_actions_query',
+  aliases: ['user_actions_query'],
+  description: 'Query the machine-local operator-action ledger — what the user, a schedule, or PortOS itself recently did in the app — filtered by time range, event type, and actor.',
+  input_schema: zodToOpenApiSchema(userActionsQuerySchema),
+  output_schema: objectOutputSchema,
+  policy: {
+    scopes: ['agent', 'mind', 'ui'],
+    requiredCapabilities: ['readPortos'],
+    sideEffect: 'read',
+    idempotent: true,
+    async: false,
+    confirmation: 'none',
+  },
+  adapter: { kind: 'user-actions' },
+});
+
 const eidoverseStatusTool = Object.freeze({
   type: 'portos_tool',
   name: 'eidoverse.status',
@@ -220,7 +254,7 @@ const eidoverseSayTool = Object.freeze({
 });
 
 const eidoverseTools = [eidoverseStatusTool, eidoverseProjectTool, eidoverseAugmentTool, eidoverseSayTool];
-const toolCatalog = (intent) => [taskTool, mindCleanupTool, ...eidoverseTools, ...voiceTools(intent)];
+const toolCatalog = (intent) => [taskTool, mindCleanupTool, userActionsQueryTool, ...eidoverseTools, ...voiceTools(intent)];
 const toolCalls = new Map();
 const toolCallFingerprints = new Map();
 
@@ -355,6 +389,44 @@ const executeAdapter = async (tool, args, context) => {
       preserveTurnId: context.turnId || null,
       preserveMessageId: context.wake?.kind === 'message' ? context.wake.message?.id || null : null,
     });
+  }
+  if (tool.adapter.kind === 'user-actions') {
+    const [{ listUserActions }, { scrubSecretTokens, scrubSecretTokensDeep }] = await Promise.all([
+      import('./userActions.js'),
+      import('../lib/secretText.js'),
+    ]);
+    // Refinements do not survive the input schema's JSON-Schema round trip, so
+    // date parseability is enforced here — with field attribution, since the
+    // failure surfaces to the model as this error string.
+    for (const field of ['from', 'to']) {
+      if (args[field] !== undefined && Number.isNaN(new Date(args[field]).getTime())) {
+        throw new ServerError(`Invalid '${field}' for '${tool.name}': must be a parseable date/timestamp`, { status: 400, code: 'TOOL_VALIDATION_ERROR' });
+      }
+    }
+    const limit = Math.min(args.limit ?? USER_ACTIONS_QUERY_MAX_RESULTS, USER_ACTIONS_QUERY_MAX_RESULTS);
+    // Fetch one extra row so a full page can honestly report `truncated`.
+    const rows = await listUserActions({ ...args, limit: limit + 1 });
+    return {
+      events: rows.slice(0, limit).map((event) => ({
+        happenedAt: event.happenedAt,
+        type: event.type,
+        actor: event.actor,
+        // Every text projection gets the value-side token scrub — the ledger's
+        // record-time redaction is key-based and cannot catch a credential
+        // pasted into a task description or a settings value.
+        summary: scrubSecretTokens(event.summary),
+        target: event.target ?? null,
+        targetName: event.targetName != null ? scrubSecretTokens(event.targetName) : null,
+        payload: scrubSecretTokensDeep(event.payload ?? {}),
+        // Only the route identity crosses into a prompt — a `{ service, fn }`
+        // source or any filesystem path stays behind.
+        source: {
+          ...(event.source?.route ? { route: event.source.route } : {}),
+          ...(event.source?.method ? { method: event.source.method } : {}),
+        },
+      })),
+      truncated: rows.length > limit,
+    };
   }
   if (tool.adapter.kind === 'eidoverse-world') {
     const world = await import('./eidoverseWorld.js');

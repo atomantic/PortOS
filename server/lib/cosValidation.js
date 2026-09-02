@@ -16,6 +16,7 @@ import { ANTIGRAVITY_COMMAND } from './antigravity.js';
 import { CURSOR_COMMAND } from './cursor.js';
 import { isValidSlashdoCommand } from './slashdoInvocation.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
+import { PUBLIC_REVIEW_EXECUTION_PROFILES } from './agentExecutionProfiles.js';
 import { AGENT_RUN_EVENT_KINDS, RUN_EVENT_READ_LIMITS } from './agentRunEvents.js';
 import { recurrenceRuleSchema } from './recurrenceValidation.js';
 import { TASK_DATA_INPUT_DEFINITIONS, TASK_DATA_INPUT_IDS } from './taskDataInputCatalog.js';
@@ -1689,6 +1690,92 @@ export const codeReviewSettingsSchema = z.object({
 // Agent behavior flags that can be overridden per-pipeline-stage
 export const PIPELINE_BEHAVIOR_FLAGS = ['useWorktree', 'openPR', 'prCompletion', 'simplify', 'reviewLoop'];
 
+// These two flags are dispatch/completion posture rather than ordinary
+// user-facing task switches, but a pipeline stage must carry them forward to
+// the child task. Keeping the list beside the generic behavior flags prevents
+// each hand-off path from silently dropping the throwaway-worktree contract.
+export const PIPELINE_STAGE_BEHAVIOR_FLAGS = [
+  ...PIPELINE_BEHAVIOR_FLAGS,
+  'discardWorktree',
+  'noCodeOutput',
+];
+
+// Pipeline stage roles are semantic contracts, not display labels. The
+// pr-reviewer stages use these values to decide which content may cross the
+// boundary and which provider posture is safe; generic pipelines may omit the
+// role and continue to use their existing promptKey-only behavior.
+export const PIPELINE_STAGE_ROLES = ['security', 'eligibility', 'actions'];
+// Re-exported, not restated: a new profile must be legal to persist the moment
+// it is declared, or the sanitizer silently rejects the stage that uses it.
+export const PIPELINE_EXECUTION_PROFILES = PUBLIC_REVIEW_EXECUTION_PROFILES;
+
+const PIPELINE_STAGE_BOOLEAN_FIELDS = [
+  'readOnly', 'managed', 'useWorktree', 'openPR', 'simplify', 'reviewLoop',
+  'discardWorktree', 'noCodeOutput',
+];
+const PIPELINE_STAGE_STRING_LIMITS = {
+  name: 120,
+  promptKey: 120,
+  providerId: 200,
+  model: 200,
+  guardId: 120,
+};
+
+function safePipelinePrecondition(raw) {
+  if (!isPlainObject(raw)) return null;
+  const keys = Object.keys(raw);
+  if (keys.length !== 1 || !['fileExists', 'fileNotExists'].includes(keys[0])) return null;
+  const value = raw[keys[0]];
+  if (typeof value !== 'string' || !value.trim() || value.length > 240) return null;
+  const path = value.trim();
+  if (path.startsWith('/') || path.startsWith('\\') || path.includes('\0')) return null;
+  if (path.split(/[\\/]/).some((part) => part === '..')) return null;
+  return { [keys[0]]: path };
+}
+
+function sanitizePipelineStage(raw) {
+  if (!isPlainObject(raw)) return null;
+  const clean = Object.create(null);
+  for (const [field, maxLength] of Object.entries(PIPELINE_STAGE_STRING_LIMITS)) {
+    if (!Object.prototype.hasOwnProperty.call(raw, field)) continue;
+    if (raw[field] === null && ['providerId', 'model'].includes(field)) continue;
+    if (typeof raw[field] !== 'string') return null;
+    const value = raw[field].trim();
+    if (!value || value.length > maxLength) return null;
+    clean[field] = value;
+  }
+  if (Object.prototype.hasOwnProperty.call(raw, 'role')) {
+    if (!PIPELINE_STAGE_ROLES.includes(raw.role)) return null;
+    clean.role = raw.role;
+  }
+  if (Object.prototype.hasOwnProperty.call(raw, 'executionProfile')) {
+    if (!PIPELINE_EXECUTION_PROFILES.includes(raw.executionProfile)) return null;
+    clean.executionProfile = raw.executionProfile;
+  }
+  if (Object.prototype.hasOwnProperty.call(raw, 'effort')) {
+    if (raw.effort !== null && !EFFORT_LEVELS.includes(raw.effort)) return null;
+    if (raw.effort !== null) clean.effort = raw.effort;
+  }
+  for (const field of PIPELINE_STAGE_BOOLEAN_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(raw, field)) continue;
+    if (typeof raw[field] !== 'boolean') return null;
+    clean[field] = raw[field];
+  }
+  if (Object.prototype.hasOwnProperty.call(raw, 'precondition')) {
+    const precondition = safePipelinePrecondition(raw.precondition);
+    if (!precondition) return null;
+    clean.precondition = precondition;
+  }
+  return { ...clean };
+}
+
+function sanitizePipeline(raw) {
+  if (!isPlainObject(raw) || !Array.isArray(raw.stages) || raw.stages.length > 10) return null;
+  const stages = raw.stages.map(sanitizePipelineStage);
+  if (stages.some((stage) => !stage)) return null;
+  return { stages };
+}
+
 // Absolute cap on total agent spawns per task (across all retry types)
 export const MAX_TOTAL_SPAWNS = 5;
 
@@ -1880,6 +1967,16 @@ export const resumeCosAgentSchema = createCosTaskSchema
   .pick({ description: true, context: true, model: true, provider: true, effort: true, app: true, screenshots: true })
   .partial();
 
+// A relaunch is a resume aimed at a RUNNING agent: the point is swapping the
+// provider/model/effort out from under a stalled run (a CLI parked on a usage
+// limit), so it takes no `description` — the task it requeues is the one the
+// agent is already working. `reason` is the pause note recorded against it.
+// Derived from the resume schema, not re-picked from the task schema, so a field
+// added to one resume door reaches the other instead of silently diverging.
+export const relaunchCosAgentSchema = resumeCosAgentSchema
+  .omit({ description: true, screenshots: true })
+  .extend({ reason: z.string().trim().max(500).optional() });
+
 /**
  * Sanitize taskMetadata to an allow-list of agent-option keys. Boolean flags
  * (`useWorktree`/`openPR`/`simplify`/`reviewLoop`/`readOnly`/`claimFlow`/
@@ -2011,9 +2108,13 @@ export function sanitizeTaskMetadata(raw) {
     clean.branchesPerAgent = raw.branchesPerAgent;
     hasKeys = true;
   }
-  // Pass through pipeline config (validated shape: object with stages array)
-  if (raw.pipeline && typeof raw.pipeline === 'object' && Array.isArray(raw.pipeline.stages)) {
-    clean.pipeline = raw.pipeline;
+  // Pipeline configuration is the one nested task-metadata shape. Keep only
+  // known stage fields and fail the whole update when a known field is malformed
+  // so a bad custom pipeline cannot silently lose its safety posture.
+  if (Object.prototype.hasOwnProperty.call(raw, 'pipeline')) {
+    const pipeline = sanitizePipeline(raw.pipeline);
+    if (!pipeline) return null;
+    clean.pipeline = pipeline;
     hasKeys = true;
   }
   return hasKeys ? { ...clean } : null;

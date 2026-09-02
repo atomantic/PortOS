@@ -17,16 +17,19 @@ import { existsSync } from 'fs';
 import http from 'http';
 import { Server as SocketServer } from 'socket.io';
 import { ensureDir, PATHS, sleep, watchForFile } from '../lib/fileUtils.js';
-import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
+import { prepareCliSpawn, killProcessTree, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { commandExists } from '../lib/commandExists.js';
+import { adoptNpmGlobalBinDir } from '../lib/npmGlobalBin.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { createStreamJsonParser } from './streamJsonParser.js';
 import { loadState, saveState, withState } from './runnerState.js';
 import { getProcessStats, checkProcessRunning } from './processStats.js';
+import { usableAgentPid, runnerAgentLivenessFields } from '../lib/runnerAgentLiveness.js';
 import { ALLOWED_COMMANDS, isAllowedCommand } from './allowedCommands.js';
+import { armForceKill as armForceKillShared } from './forceKill.js';
 import { PORTS } from '../lib/ports.js';
 import { setupProcessErrorHandlers } from '../lib/errorHandler.js';
 import { parseSentinelPayload } from '../lib/agentSentinel.js';
@@ -68,6 +71,7 @@ const HOST = process.env.HOST || '127.0.0.1';
 
 // Active agent processes (in memory)
 const activeAgents = new Map();
+
 // `tui:output` is live telemetry, so an immediate process exit can beat its
 // socket delivery. Keep a small terminal tail with the exit event: the PortOS
 // spawner owns failure analysis and can persist it when no ordinary TUI chunk
@@ -76,13 +80,19 @@ const activeAgents = new Map();
 const TUI_EXIT_OUTPUT_TAIL_CHARS = 16 * 1024;
 const TUI_SIGNALS = new Set(['SIGTERM', 'SIGKILL', 'SIGINT']);
 
-const terminateRunnerProcess = (agent, signal = 'SIGTERM') => {
-  if (agent.kind === 'tui') {
-    agent.process.kill(signal);
-    return;
-  }
-  killProcessTree(agent.process, signal);
-};
+// Bind the shared escalation to this process's map, grace window, and durable
+// state. See forceKill.js for the contract (notably: a fresh termination always
+// re-arms, and `dropState` is only for a kill relayed after the PortOS server
+// has already finalized the agent).
+const armForceKill = (agentId, agent, opts = {}) =>
+  armForceKillShared(activeAgents, agentId, agent, {
+    graceMs: SIGKILL_GRACE_MS,
+    ...opts,
+    onDropState: (id) => {
+      withState((state) => { delete state.agents[id]; })
+        .catch(err => console.error(`❌ Reap state write failed for ${id}: ${err.message}`));
+    },
+  });
 
 // Express app setup
 const app = express();
@@ -112,23 +122,34 @@ app.get('/health', (req, res) => {
   });
 });
 
+async function inspectAgentProcess(agent) {
+  const pid = usableAgentPid(agent.pid);
+  const stats = pid ? await getProcessStats(pid) : null;
+  return { stats, ...runnerAgentLivenessFields(agent, stats) };
+}
+
 /**
  * Get list of active agents with process stats
  */
 app.get('/agents', async (req, res) => {
   const agents = [];
   for (const [agentId, agent] of activeAgents) {
-    const stats = await getProcessStats(agent.pid);
+    // onExit stamps exited then awaits disk I/O; skip so a dying handle is
+    // not advertised as a stale listing that sweeps would reap before
+    // agent:completed lands.
+    if (agent.exited === true) continue;
+    const inspected = await inspectAgentProcess(agent);
     agents.push({
       id: agentId,
       taskId: agent.taskId,
       pid: agent.pid,
       startedAt: agent.startedAt,
       runningTime: Date.now() - agent.startedAt,
-      processActive: stats.active,
-      cpu: stats.cpu,
-      memoryMb: stats.memoryMb,
-      state: stats.state,
+      processActive: inspected.processActive,
+      cpu: inspected.cpu,
+      memoryMb: inspected.memoryMb,
+      state: inspected.state,
+      liveness: inspected.liveness,
       kind: agent.kind || 'cli',
       sessionId: agent.sessionId || null,
       command: agent.command || null,
@@ -233,6 +254,9 @@ app.post('/spawn-tui', async (req, res) => {
     doneSentinelPath,
     completedBySentinel: false,
     doneWatcher: null,
+    // node-pty reports pid 0 for ConPTY on Windows, so a pid probe is not a
+    // liveness signal. onExit is the runner's authority; GET /agents reads this.
+    exited: false,
   };
   activeAgents.set(agentId, agent);
 
@@ -250,7 +274,28 @@ app.post('/spawn-tui', async (req, res) => {
     try {
       const current = activeAgents.get(agentId);
       if (!current) return;
+      current.exited = true;
+      // Drop the handle before the awaited state write so GET /agents cannot
+      // publish processActive:false for a TUI whose completion event is still
+      // in flight (completeAgent keeps the first terminal verdict).
+      activeAgents.delete(agentId);
       current.doneWatcher?.();
+      // Cancel any pending SIGKILL timer — process already exited.
+      if (current.killTimer) {
+        clearTimeout(current.killTimer);
+        current.killTimer = null;
+      }
+      // A paused agent's process was stopped deliberately and its record is what
+      // a later resume reads, so report nothing: emitting `agent:completed` here
+      // would finalize it as FAILED and retire the task the pause meant to keep.
+      // Mirrors the CLI close handler's own pause guard below. This became
+      // reachable when the node-pty kill started landing on Windows — before
+      // that, pausing a runner-owned TUI threw and the PTY simply never exited.
+      if (current.paused === true) {
+        console.log(`⏸️ TUI agent ${agentId} exited after pause`);
+        activeAgents.delete(agentId);
+        return;
+      }
       const duration = Date.now() - current.startedAt;
       const success = current.completedBySentinel;
       const effectiveExitCode = success ? 0 : exitCode;
@@ -277,7 +322,6 @@ app.post('/spawn-tui', async (req, res) => {
         if (!success) state.stats.failed++;
         delete state.agents[agentId];
       });
-      activeAgents.delete(agentId);
     } catch (err) {
       console.error(`❌ TUI agent ${agentId} exit handler error: ${err.message}`);
       activeAgents.delete(agentId);
@@ -332,8 +376,17 @@ app.get('/agents/:agentId/stats', async (req, res) => {
     return res.status(404).json({ error: 'Agent not found or not running' });
   }
 
-  const stats = await getProcessStats(agent.pid);
-  res.json({ agentId, pid: agent.pid, ...stats });
+  const inspected = await inspectAgentProcess(agent);
+  res.json({
+    agentId,
+    pid: agent.pid,
+    active: inspected.processActive,
+    cpu: inspected.cpu,
+    memoryKb: inspected.stats?.memoryKb ?? 0,
+    memoryMb: inspected.memoryMb,
+    state: inspected.state,
+    liveness: inspected.liveness,
+  });
 });
 
 /**
@@ -454,10 +507,14 @@ app.post('/spawn', async (req, res) => {
     workspacePath: cwd
   });
 
+  // Guard the stdin pipe BEFORE writing: a child that exits before reading it
+  // (bad flag, missing CLI) emits EPIPE, and an unlistened stream 'error' out
+  // here crashes the runner process. The 'error'/'close' handlers settle the run.
+  guardChildStdin(claudeProcess);
+
   // Send prompt via stdin (skipped when the prompt was delivered via argv —
   // antigravity's --print value, or grok's Windows temp file).
-  if (useStdin) claudeProcess.stdin.write(prompt);
-  claudeProcess.stdin.end();
+  deliverChildStdin(claudeProcess, useStdin ? prompt : null, `agent ${agentId}`);
 
   // Handle stdout
   claudeProcess.stdout.on('data', (data) => {
@@ -635,18 +692,8 @@ app.post('/terminate/:agentId', (req, res) => {
 
   console.log(`🔪 Terminating agent ${agentId}`);
 
-  // killProcessTree (not .kill) so a Windows cmd.exe-wrapped CLI shim's real
-  // child is taken down too, not orphaned (#2243). No-op difference on POSIX.
-  terminateRunnerProcess(agent, 'SIGTERM');
-
-  // Force kill after timeout; store handle so it can be cancelled if the
-  // process exits cleanly before the grace window expires.
-  agent.killTimer = setTimeout(() => {
-    if (activeAgents.has(agentId)) {
-      terminateRunnerProcess(agent, 'SIGKILL');
-      activeAgents.delete(agentId);
-    }
-  }, SIGKILL_GRACE_MS);
+  killProcessTree(agent.process, 'SIGTERM');
+  armForceKill(agentId, agent);
 
   res.json({ success: true, agentId });
 });
@@ -664,9 +711,7 @@ app.post('/kill/:agentId', async (req, res) => {
 
   console.log(`💀 Force killing agent ${agentId} (PID: ${agent.pid})`);
 
-  // Use SIGKILL for immediate termination — killProcessTree so a Windows
-  // cmd.exe-wrapped shim's real child isn't orphaned (#2243). POSIX unchanged.
-  terminateRunnerProcess(agent, 'SIGKILL');
+  killProcessTree(agent.process, 'SIGKILL');
 
   // Clean up immediately
   activeAgents.delete(agentId);
@@ -700,12 +745,13 @@ app.post('/pause/:agentId', async (req, res) => {
   agent.pausedAt = pausedAt;
   agent.pauseReason = reason;
 
-  // killProcessTree so a Windows cmd.exe-wrapped shim's child isn't orphaned (#2243).
-  terminateRunnerProcess(agent, 'SIGTERM');
-  // Store handle so the close handler can clear it when the process exits first.
+  killProcessTree(agent.process, 'SIGTERM');
+  // NOT armForceKill: a pause keeps its map entry (the agent is meant to be
+  // resumable) and only escalates while the pause is still in force.
   agent.killTimer = setTimeout(() => {
+    agent.killTimer = null;
     const current = activeAgents.get(agentId);
-    if (current?.paused) terminateRunnerProcess(current, 'SIGKILL');
+    if (current?.paused) killProcessTree(current.process, 'SIGKILL');
   }, SIGKILL_GRACE_MS);
 
   res.json({ success: true, agentId, pid: agent.pid, pausedAt });
@@ -724,14 +770,8 @@ app.post('/terminate-all', async (req, res) => {
   for (const agentId of agentIds) {
     const agent = activeAgents.get(agentId);
     if (agent) {
-      // killProcessTree so a Windows cmd.exe-wrapped shim's child isn't orphaned (#2243).
-      terminateRunnerProcess(agent, 'SIGTERM');
-      agent.killTimer = setTimeout(() => {
-        if (activeAgents.has(agentId)) {
-          terminateRunnerProcess(agent, 'SIGKILL');
-          activeAgents.delete(agentId);
-        }
-      }, SIGKILL_GRACE_MS);
+      killProcessTree(agent.process, 'SIGTERM');
+      armForceKill(agentId, agent);
     }
   }
 
@@ -822,8 +862,16 @@ io.on('connection', (socket) => {
   socket.on('tui:kill', ({ sessionId, signal = 'SIGTERM' }) => {
     try {
       if (!TUI_SIGNALS.has(signal)) return;
-      const agent = [...activeAgents.values()].find(candidate => candidate.sessionId === sessionId);
-      if (agent?.kind === 'tui') terminateRunnerProcess(agent, signal);
+      const entry = [...activeAgents.entries()].find(([, candidate]) => candidate.sessionId === sessionId);
+      if (!entry) return;
+      const [agentId, agent] = entry;
+      if (agent.kind !== 'tui') return;
+      killProcessTree(agent.process, signal);
+      // `dropState` only for an agent the server has already FINALIZED. A pause
+      // also relays a kill (the server stops a TUI session through this socket),
+      // and its durable record is exactly what a later resume reads — reaping it
+      // would strand the paused run.
+      armForceKill(agentId, agent, { dropState: agent.paused !== true });
     } catch (err) {
       console.error(`❌ TUI termination relay failed: ${err.message}`);
     }
@@ -881,17 +929,40 @@ async function cleanupOrphanedAgents() {
 server.listen(PORT, HOST, async () => {
   console.log(`🤖 CoS Agent Runner started on http://${HOST}:${PORT}`);
 
-  // Ensure agents directory exists
-  if (!existsSync(AGENTS_DIR)) {
-    await ensureDir(AGENTS_DIR);
+  // The runner is its own PM2 app with its own environment, and it spawns
+  // provider CLIs by bare name — so it must adopt npm's global bin directory
+  // itself. Without this a CLI the AI Providers page reports as installed
+  // (the main server adopted it there) still 422s here as "not on the CoS
+  // Runner PATH". Fire-and-forget: never blocks accepting work.
+  adoptNpmGlobalBinDir().catch((err) => console.error(`❌ npm global bin adoption failed: ${err.message}`));
+
+  // Ensure agents directory exists. try/catch is mandatory: this listener runs
+  // outside the request lifecycle, so a rejected await here escapes as an
+  // unhandled rejection and takes the runner down at boot (fatal on Node >= 15).
+  try {
+    if (!existsSync(AGENTS_DIR)) {
+      await ensureDir(AGENTS_DIR);
+    }
+  } catch (err) {
+    console.error(`❌ Agents dir setup failed: ${err.message}`);
   }
 
   // Delay orphan cleanup to allow socket connections to establish
   // This ensures completion events reach the main server for task retry
   setTimeout(async () => {
-    const orphaned = await cleanupOrphanedAgents();
-    if (orphaned.length > 0) {
-      console.log(`🧹 Cleaned ${orphaned.length} orphaned agent(s)`);
+    // Same rule, and this body is the one that reads and rewrites the agent
+    // state file: a truncated/corrupt `agents.json` or an EACCES rejects out of
+    // an async timer callback with no owner, killing the runner seconds after
+    // boot and leaving PM2 to restart-loop it against the same bad file.
+    // Log and continue — a corrupt state file must not stop the runner from
+    // accepting new work, and the sweep re-runs on the next restart.
+    try {
+      const orphaned = await cleanupOrphanedAgents();
+      if (orphaned.length > 0) {
+        console.log(`🧹 Cleaned ${orphaned.length} orphaned agent(s)`);
+      }
+    } catch (err) {
+      console.error(`❌ Orphan cleanup failed: ${err.message}`);
     }
   }, ORPHAN_CLEANUP_DELAY_MS);
 });
@@ -903,7 +974,7 @@ process.on('SIGTERM', async () => {
   // Terminate all agents
   for (const [agentId, agent] of activeAgents) {
     console.log(`🔪 Terminating agent ${agentId}`);
-    terminateRunnerProcess(agent, 'SIGTERM');
+    killProcessTree(agent.process, 'SIGTERM');
   }
 
   // Wait for agents to terminate

@@ -507,7 +507,7 @@ function scheduleNextRun(event) {
   if (delay < 0) {
     // Already past - run immediately for non-recurring, or calculate next for recurring
     if (event.type === 'once') {
-      runEvent(event)
+      runEventFloating(event)
       return
     }
     // Calculate next occurrence
@@ -516,8 +516,104 @@ function scheduleNextRun(event) {
     return
   }
 
-  const timer = createSafeTimer(() => runEvent(event), delay, event.id)
+  // Drop any handle this arm replaces (e.g. triggerNow re-arming ahead of the
+  // pending deadline) so the old timeout can't fire a duplicate run later.
+  clearPendingTimer(event.id)
+  const timer = createSafeTimer(() => runEventFloating(event), delay, event.id)
   activeTimers.set(event.id, timer)
+}
+
+/**
+ * Start a run without awaiting it, from a timer or another fire-and-forget path.
+ * runEvent already swallows handler failures; this catch exists so a defect in
+ * runEvent's own bookkeeping surfaces as one log line instead of an unhandled
+ * rejection that can take the process down.
+ * @param {Object} event - Event object
+ */
+function runEventFloating(event) {
+  runEvent(event).catch(err => {
+    console.error(`❌ Event ${event.id} run failed: ${err.message}`)
+  })
+}
+
+/**
+ * Clear an event's pending timeout and forget its handle.
+ * @param {string} id - Event identifier
+ */
+function clearPendingTimer(id) {
+  const timer = activeTimers.get(id)
+  if (timer) clearTimeout(timer.timerId)
+  activeTimers.delete(id)
+}
+
+/**
+ * Stop an event and drop its pending timer handle.
+ * @param {Object} event - Event object
+ */
+function deactivate(event) {
+  event.active = false
+  clearPendingTimer(event.id)
+}
+
+/**
+ * Re-arm an event after a run.
+ *
+ * Runs from runEvent's `finally`, so a throw anywhere earlier in the run can
+ * never leave a recurring schedule un-armed but still listed as active. A next
+ * run time that cannot be computed (malformed cron, a recurrence with no
+ * occurrence left in the search horizon) deactivates the event with an error
+ * line naming the reason, rather than leaving the CoS Schedule tab showing an
+ * armed schedule that will never fire again.
+ *
+ * @param {Object} event - Event object
+ */
+function rearm(event) {
+  if (!event.active) return
+
+  if (event.type === 'once') {
+    deactivate(event)
+    return
+  }
+
+  try {
+    updateNextRunTime(event)
+  } catch (err) {
+    console.error(`❌ Event ${event.id} could not compute its next run (${err.message}) - schedule stopped`)
+    deactivate(event)
+    return
+  }
+
+  if (!event.nextRunAt) {
+    console.error(`❌ Event ${event.id} has no next run time - schedule stopped`)
+    deactivate(event)
+    return
+  }
+
+  scheduleNextRun(event)
+}
+
+/**
+ * Append one run to the bounded history ring.
+ * @param {Object} event - Event object
+ * @param {Object} result - Run outcome
+ * @param {number} result.startTime - Run start timestamp
+ * @param {boolean} result.success - Whether the handler completed
+ * @param {string|null} result.error - Handler failure message, if any
+ */
+function recordEventHistory(event, { startTime, success, error }) {
+  // push + truncate is faster than unshift + pop for large arrays
+  eventHistory.push({
+    eventId: event.id,
+    type: event.type,
+    runAt: startTime,
+    duration: Date.now() - startTime,
+    success,
+    error
+  })
+
+  if (eventHistory.length > MAX_HISTORY) {
+    eventHistory.splice(0, eventHistory.length - MAX_HISTORY)
+  }
 }
 
 /**
@@ -539,36 +635,17 @@ async function runEvent(event) {
     success = false
     error = err.message
     console.error(`⚠️ Event ${event.id} failed: ${err.message}`)
-  }
+  } finally {
+    recordEventHistory(event, { startTime, success, error })
 
-  // Record in history (push + truncate is faster than unshift + pop for large arrays)
-  eventHistory.push({
-    eventId: event.id,
-    type: event.type,
-    runAt: startTime,
-    duration: Date.now() - startTime,
-    success,
-    error
-  })
+    // A synchronous listener that throws must not cost the schedule its re-arm
+    try {
+      cosEvents.emit('scheduler:ran', { id: event.id, success, runCount: event.runCount })
+    } catch (err) {
+      console.error(`⚠️ Event ${event.id} scheduler:ran listener threw: ${err.message}`)
+    }
 
-  if (eventHistory.length > MAX_HISTORY) {
-    eventHistory.splice(0, eventHistory.length - MAX_HISTORY)
-  }
-
-  // Emit completion
-  cosEvents.emit('scheduler:ran', {
-    id: event.id,
-    success,
-    runCount: event.runCount
-  })
-
-  // Schedule next run for recurring events
-  if (event.active && event.type !== 'once') {
-    updateNextRunTime(event)
-    scheduleNextRun(event)
-  } else if (event.type === 'once') {
-    event.active = false
-    activeTimers.delete(event.id)
+    rearm(event)
   }
 }
 
@@ -608,12 +685,7 @@ function cancel(id) {
   if (!event) return false
 
   event.active = false
-
-  const timer = activeTimers.get(id)
-  if (timer) {
-    clearTimeout(timer.timerId)
-    activeTimers.delete(id)
-  }
+  clearPendingTimer(id)
 
   scheduledEvents.delete(id)
   console.log(`📅 Event cancelled: ${id}`)
@@ -632,12 +704,7 @@ function pause(id) {
   if (!event) return false
 
   event.active = false
-
-  const timer = activeTimers.get(id)
-  if (timer) {
-    clearTimeout(timer.timerId)
-    activeTimers.delete(id)
-  }
+  clearPendingTimer(id)
 
   console.log(`⏸️ Event paused: ${id}`)
   return true
@@ -768,6 +835,9 @@ async function triggerNow(id) {
   const event = scheduledEvents.get(id)
   if (!event) return false
 
+  // Disarm before running: a long manual run must not have its own pending
+  // deadline elapse underneath it and start a second, concurrent run.
+  clearPendingTimer(id)
   await runEvent(event)
   return true
 }

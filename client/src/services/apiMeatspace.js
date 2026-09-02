@@ -27,7 +27,6 @@ export const deleteGenomeData = () => request('/meatspace/genome', { method: 'DE
 export const getClinvarStatus = () => request('/meatspace/genome/clinvar/status');
 export const syncClinvar = () => request('/meatspace/genome/clinvar/sync', { method: 'POST' });
 export const scanClinvar = () => request('/meatspace/genome/clinvar/scan', { method: 'POST' });
-export const deleteClinvar = () => request('/meatspace/genome/clinvar', { method: 'DELETE' });
 
 // MeatSpace - Epigenetic Lifestyle Tracking
 export const getEpigeneticInterventions = () => request('/meatspace/genome/epigenetic');
@@ -58,10 +57,6 @@ export const updateMeatspaceConfig = (data) => request('/meatspace/config', {
   method: 'PUT',
   body: JSON.stringify(data)
 });
-export const updateMeatspaceLifestyle = (data) => request('/meatspace/lifestyle', {
-  method: 'PUT',
-  body: JSON.stringify(data)
-});
 export const getMeatspaceBirthDate = () => request('/meatspace/birth-date');
 export const setMeatspaceBirthDate = (birthDate) => request('/meatspace/birth-date', {
   method: 'PUT',
@@ -69,7 +64,6 @@ export const setMeatspaceBirthDate = (birthDate) => request('/meatspace/birth-da
 });
 export const getDeathClock = () => request('/meatspace/death-clock');
 export const getMeatspaceLoggingStats = (options = {}) => request('/meatspace/logging-stats', options);
-export const getLEV = () => request('/meatspace/lev');
 export const getAlcoholSummary = () => request('/meatspace/alcohol');
 export const getDailyAlcohol = (from, to) => {
   const params = new URLSearchParams();
@@ -135,30 +129,14 @@ export const removeCustomNicotineProduct = (index) => request(`/meatspace/nicoti
   method: 'DELETE'
 });
 export const getBloodTests = () => request('/meatspace/blood');
-export const addBloodTest = (data) => request('/meatspace/blood', {
-  method: 'POST',
-  body: JSON.stringify(data)
-});
 export const getBodyHistory = () => request('/meatspace/body');
-export const addBodyEntry = (data) => request('/meatspace/body', {
-  method: 'POST',
-  body: JSON.stringify(data)
-});
 export const getBloodPressure = () => request('/meatspace/blood-pressure');
 export const addBloodPressure = (data) => request('/meatspace/blood-pressure', {
   method: 'POST',
   body: JSON.stringify(data)
 });
 export const getWorkouts = () => request('/meatspace/workouts');
-export const addWorkout = (data) => request('/meatspace/workouts', {
-  method: 'POST',
-  body: JSON.stringify(data)
-});
 export const getEpigeneticTests = () => request('/meatspace/epigenetic');
-export const addEpigeneticTest = (data) => request('/meatspace/epigenetic', {
-  method: 'POST',
-  body: JSON.stringify(data)
-});
 export const getEyeExams = () => request('/meatspace/eyes');
 export const addEyeExam = (data) => request('/meatspace/eyes', {
   method: 'POST',
@@ -251,10 +229,6 @@ export const createMemoryItem = (data) => request('/meatspace/post/memory-items'
   method: 'POST',
   body: JSON.stringify(data)
 });
-export const updateMemoryItem = (id, data) => request(`/meatspace/post/memory-items/${id}`, {
-  method: 'PUT',
-  body: JSON.stringify(data)
-});
 export const deleteMemoryItem = (id) => request(`/meatspace/post/memory-items/${id}`, {
   method: 'DELETE'
 });
@@ -269,10 +243,6 @@ export const attestMemoryMastery = (id, options = {}) => request(`/meatspace/pos
 });
 export const getMemoryMastery = (id) => request(`/meatspace/post/memory-items/${id}/mastery`);
 export const getChunkMastery = (id) => request(`/meatspace/post/memory-items/${id}/chunk-mastery`);
-export const generateMemoryDrill = (data) => request('/meatspace/post/memory-drill', {
-  method: 'POST',
-  body: JSON.stringify(data)
-});
 
 // MeatSpace - POST Training Log
 export const submitTrainingEntry = (data, options = {}) => request('/meatspace/post/training', {
@@ -286,7 +256,6 @@ export const submitTrainingRun = (data, options = {}) => request('/meatspace/pos
   ...options
 });
 export const getTrainingStats = (days) => request(`/meatspace/post/training/stats${days != null ? `?days=${days}` : ''}`);
-export const getTrainingEntries = (limit) => request(`/meatspace/post/training/entries${limit ? `?limit=${limit}` : ''}`);
 
 // MeatSpace - POST Morse Trainer progress (server-side Koch level, round history,
 // accuracy/WPM trends, per-character confusion matrix). Callers own their error
@@ -312,13 +281,7 @@ export const getActivities = () => request('/meatspace/activities');
 export const addActivity = (data) => request('/meatspace/activities', {
   method: 'POST', body: JSON.stringify(data)
 });
-export const updateActivity = (index, data) => request(`/meatspace/activities/${index}`, {
-  method: 'PUT', body: JSON.stringify(data)
-});
 export const removeActivity = (index) => request(`/meatspace/activities/${index}`, { method: 'DELETE' });
-
-// Life Events
-export const getLifeEvents = () => request('/meatspace/life-events');
 export const addLifeEvent = (data) => request('/meatspace/life-events', {
   method: 'POST', body: JSON.stringify(data)
 });

@@ -93,10 +93,10 @@ function TaskForm({ form, setForm, onSave, onCancel, saveLabel, timezone, provid
           className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
         />
       </FormField>
-      <FormField label="Description">
+      <FormField label="Card summary" hint="Shown beneath the task name on its card.">
         <input
           type="text"
-          placeholder="Description"
+          placeholder="One-line summary (optional)"
           value={form.description}
           onChange={e => update('description', e.target.value)}
           className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"

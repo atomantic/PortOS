@@ -766,8 +766,16 @@ ${prompt}`;
       // idleWatchTimer, the inline-output fallback.)
       responseFileWatchTimer = setInterval(async () => {
         if (finalized) return;
-        if (await responseFileSettled()) {
-          finish({ success: true, exitCode: 0, reason: 'response-file' });
+        // try/catch is mandatory in an async timer callback: a rejected await
+        // has no owner and escapes as an unhandled rejection (process-killing
+        // on Node >= 15). The poll is a best-effort completion signal — drop a
+        // failed tick and let the next one (or the hard timeout) settle the run.
+        try {
+          if (await responseFileSettled()) {
+            finish({ success: true, exitCode: 0, reason: 'response-file' });
+          }
+        } catch (err) {
+          console.error(`❌ TUI run ${runId} response-file poll failed: ${err?.message || err}`);
         }
       }, 1000);
 
@@ -967,15 +975,23 @@ ${prompt}`;
     // via `timeout`; defaults to 5 min.
     hardTimeoutTimer = setTimeout(async () => {
       if (finalized) return;
-      // Salvage net: if the model already wrote its response file, the run truly
-      // finished — the TUI just never exited — so the timeout is a false failure.
-      // Complete as success with the written result instead of discarding it and
-      // triggering a pointless fallback retry. (The response-file watcher above
-      // normally catches this within ~2s; this covers the boundary case where the
-      // file lands right at the deadline or the watcher hadn't confirmed yet.)
-      if (await responseFileHasContent()) {
-        finish({ success: true, exitCode: 0, reason: 'timeout-response-file' });
-        return;
+      // try/catch is mandatory in an async timer callback — see the response-file
+      // watcher above. Only the salvage read is wrapped: a read that rejects
+      // falls through to the timeout verdict below (the run really did exceed
+      // its budget) instead of escaping as an unhandled rejection.
+      try {
+        // Salvage net: if the model already wrote its response file, the run truly
+        // finished — the TUI just never exited — so the timeout is a false failure.
+        // Complete as success with the written result instead of discarding it and
+        // triggering a pointless fallback retry. (The response-file watcher above
+        // normally catches this within ~2s; this covers the boundary case where the
+        // file lands right at the deadline or the watcher hadn't confirmed yet.)
+        if (await responseFileHasContent()) {
+          finish({ success: true, exitCode: 0, reason: 'timeout-response-file' });
+          return;
+        }
+      } catch (err) {
+        console.error(`❌ TUI run ${runId} timeout salvage read failed: ${err?.message || err}`);
       }
       finish({
         success: false,

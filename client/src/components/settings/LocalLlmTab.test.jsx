@@ -18,6 +18,10 @@ vi.mock('../../services/api', () => ({
   startMtplxServer: vi.fn(),
   stopMtplxServer: vi.fn(),
   installMtplx: vi.fn(),
+  getSlotstreamServerStatus: vi.fn().mockResolvedValue({ installed: false, running: false, supported: true, cachedModels: [], memoryPlan: { targetGb: 22, expectedPeakGb: 22, expectedWarmDecodeToks: 8, auto: true } }),
+  startSlotstreamServer: vi.fn(),
+  stopSlotstreamServer: vi.fn(),
+  installSlotstream: vi.fn(),
   // The MTPLX card's checkpoint panel loads upstream's default listing on mount.
   searchMtplxModels: vi.fn().mockResolvedValue({ models: [], error: null }),
   pullMtplxModel: vi.fn(),
@@ -32,6 +36,15 @@ vi.mock('../../services/api', () => ({
   installLlamaServer: vi.fn().mockResolvedValue({ success: true }),
   upgradeLlamaServer: vi.fn().mockResolvedValue({ success: true, note: 'updated' }),
   downloadSpecDecodeModel: vi.fn(),
+  previewLocalLlmDownload: vi.fn(async () => ({
+    kind: 'spec-decode',
+    destPath: 'models/example.gguf',
+    expectedBytes: 6,
+    freeBytes: 1e12,
+    requiredBytes: 6,
+    headroomBytes: 0,
+    verdict: 'ok',
+  })),
   cancelSpecDecodeModelDownload: vi.fn(),
 }));
 vi.mock('../../services/socket', () => ({
@@ -39,6 +52,9 @@ vi.mock('../../services/socket', () => ({
 }));
 vi.mock('../ui/Toast', () => ({
   default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }),
+}));
+vi.mock('../models/ModelAbuseGuardPanel.jsx', () => ({
+  default: () => <section id="llm-management-panel-abuse" role="tabpanel" aria-labelledby="tab-abuse" data-testid="model-abuse-guard-card">abuse panel</section>,
 }));
 
 import {
@@ -71,6 +87,8 @@ const renderTab = async (view = 'runtimes') => {
   await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', `llm-management-panel-${view}`));
   if (view === 'library') {
     await waitFor(() => expect(screen.getByText(/Installed on (Ollama|LM Studio)/)).toBeTruthy());
+  } else if (view === 'abuse') {
+    await waitFor(() => expect(screen.getByTestId('model-abuse-guard-card')).toBeInTheDocument());
   } else {
     await waitFor(() => expect(screen.getByTitle(/PortOS routes local-LLM runs here by default/)).toBeInTheDocument());
   }
@@ -116,8 +134,17 @@ describe('LocalLlmTab information architecture', () => {
     expect(getLocalLlmCatalog).not.toHaveBeenCalled();
   });
 
+  it('gives the model-abuse guard its own panel without mounting the catalog', async () => {
+    await renderTab('abuse');
+
+    expect(screen.getByTestId('model-abuse-guard-card')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Models' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Local Runtime Servers' })).not.toBeInTheDocument();
+    expect(getLocalLlmCatalog).not.toHaveBeenCalled();
+  });
+
   it('gives model installation its own panel without mounting runtime management', async () => {
-    const { getLlamaServerStatus, getMtplxServerStatus } = await import('../../services/api');
+    const { getLlamaServerStatus, getMtplxServerStatus, getSlotstreamServerStatus } = await import('../../services/api');
 
     await renderTab('library');
 
@@ -125,6 +152,7 @@ describe('LocalLlmTab information architecture', () => {
     expect(screen.queryByRole('heading', { name: 'Local Runtime Servers' })).not.toBeInTheDocument();
     expect(getLlamaServerStatus).not.toHaveBeenCalled();
     expect(getMtplxServerStatus).not.toHaveBeenCalled();
+    expect(getSlotstreamServerStatus).not.toHaveBeenCalled();
     await waitFor(() => expect(getLocalLlmCatalog).toHaveBeenCalled());
   });
 
@@ -133,6 +161,15 @@ describe('LocalLlmTab information architecture', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Model Library' }));
     expect(screen.getByTestId('location')).toHaveTextContent('/models/llms/library');
+    fireEvent.click(screen.getByRole('tab', { name: 'Abuse Guard' }));
+    expect(screen.getByTestId('location')).toHaveTextContent('/models/llms/abuse');
+  });
+
+  it('keeps the model-abuse guard off the catalog panel', async () => {
+    await renderTab('library');
+
+    expect(screen.queryByRole('heading', { name: 'Model-abuse guard' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Models' })).toBeInTheDocument();
   });
 });
 
@@ -257,6 +294,7 @@ describe('LocalLlmTab runtime servers', () => {
 
     await renderTab();
     fireEvent.click(screen.getByRole('button', { name: /Download default checkpoint/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Start download' }));
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/no space left on device/)));
     expect(toast.success).not.toHaveBeenCalled();
@@ -271,6 +309,7 @@ describe('LocalLlmTab runtime servers', () => {
 
     await renderTab();
     fireEvent.click(screen.getByRole('button', { name: /Download default checkpoint/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Start download' }));
 
     // `null` (not a repo id the card invented) = MTPLX's own verified default.
     await waitFor(() => expect(pullMtplxModel).toHaveBeenCalledWith(null));
@@ -320,6 +359,7 @@ describe('LocalLlmTab installed models', () => {
     installLocalLlmModel.mockResolvedValue({ success: true });
     await renderTab('library');
     fireEvent.click(screen.getByRole('button', { name: `Redownload ${LONG_ID}` }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Start download' }));
     await waitFor(() => expect(installLocalLlmModel).toHaveBeenCalledWith(
       'ollama',
       LONG_ID,
@@ -386,6 +426,7 @@ describe('LocalLlmTab installed models', () => {
     );
     await waitFor(() => expect(screen.getByText(/Installed on LM Studio/)).toBeTruthy());
     fireEvent.click(screen.getByRole('button', { name: 'Redownload Qwen3.8 27B' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Start download' }));
     await waitFor(() => expect(installLocalLlmModel).toHaveBeenCalledWith(
       'lmstudio',
       'unsloth/Qwen3.8-27B-GGUF@UD-Q4_K_M',
@@ -488,6 +529,7 @@ describe('LocalLlmTab recommendations', () => {
     await renderTab('library');
     expect(await screen.findByText('Qwen3.8 27B')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /^Redownload$/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Start download' }));
     await waitFor(() => expect(installLocalLlmModel).toHaveBeenCalledWith(
       'ollama',
       'hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M',
@@ -878,6 +920,7 @@ describe('LocalLlmTab llama-server management', () => {
     expect(screen.getByText(/Downloaded \(1\.1 GB\)/)).toBeInTheDocument();
     const downloadBtn = screen.getByRole('button', { name: /^Download$/ });
     fireEvent.click(downloadBtn);
+    fireEvent.click(await screen.findByRole('button', { name: 'Start download' }));
 
     await waitFor(() => {
       expect(downloadSpecDecodeModel).toHaveBeenCalledWith('qwen3.8-27b-dspark', 'model', { silent: true });
@@ -904,6 +947,7 @@ describe('LocalLlmTab llama-server management', () => {
     await renderTab();
 
     fireEvent.click(await screen.findByRole('button', { name: /^Download$/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Start download' }));
 
     await waitFor(() => {
       expect(toast.warning).toHaveBeenCalledWith(expect.stringMatching(/still running in the background/));
@@ -970,6 +1014,28 @@ describe('LocalLlmTab llama-server management', () => {
     await waitFor(() => {
       expect(installLlamaServer).toHaveBeenCalled();
     });
+  });
+
+  it('names the install command the SERVER reports, not a hardcoded Homebrew one', async () => {
+    // The browser cannot know what OS the install runs on, so this copy has to
+    // come off the status payload — a Windows user was previously told to run
+    // `brew install llama.cpp`, which does not exist there.
+    const { getLlamaServerStatus } = await import('../../services/api');
+    getLlamaServerStatus.mockResolvedValue({
+      installed: false,
+      running: false,
+      managed: false,
+      packageManager: 'winget',
+      packageManagerLabel: 'winget',
+      installCommand: 'winget install ggml.llamacpp',
+      presets: specPresets(),
+    });
+
+    await renderTab();
+
+    await screen.findByRole('button', { name: /Install llama\.cpp/ });
+    expect(screen.getAllByText('winget install ggml.llamacpp').length).toBeGreaterThan(0);
+    expect(screen.queryByText('brew install llama.cpp')).not.toBeInTheDocument();
   });
 
   it('updates llama.cpp from the unified runtime row', async () => {

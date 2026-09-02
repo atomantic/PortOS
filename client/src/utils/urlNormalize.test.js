@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isUrl, normalizeUrl, tiktokEmbedSrc, tiktokVideoId } from './urlNormalize';
+import { isHttpsUrl, isUrl, normalizeUrl, tiktokEmbedSrc, tiktokVideoId } from './urlNormalize';
 
 describe('tiktokVideoId', () => {
   it('extracts the id from the share/watch, short, and embed forms', () => {
@@ -62,6 +62,15 @@ describe('isUrl', () => {
   it('tolerates null/undefined', () => {
     expect(isUrl(null)).toBe(false);
     expect(isUrl(undefined)).toBe(false);
+  });
+});
+
+describe('isHttpsUrl', () => {
+  it('accepts valid HTTPS browser handoffs and rejects unsafe schemes', () => {
+    expect(isHttpsUrl('https://auth.example.com/sign-in')).toBe(true);
+    expect(isHttpsUrl('http://auth.example.com/sign-in')).toBe(false);
+    expect(isHttpsUrl('javascript:alert(1)')).toBe(false);
+    expect(isHttpsUrl('not a URL')).toBe(false);
   });
 });
 

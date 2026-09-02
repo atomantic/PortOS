@@ -11,6 +11,8 @@
  * `brainJournal.upsertAutoSection()` splices it in.
  */
 
+import { escapeRegExp } from './textUtils.js';
+
 // Build a matched start/end marker pair for a stable section id. HTML-comment
 // syntax so the markers render invisibly in Markdown / Obsidian previews and
 // never collide with user prose.
@@ -20,11 +22,6 @@ export function buildMarkers(id) {
     start: `<!-- portos:${safe}:start -->`,
     end: `<!-- portos:${safe}:end -->`,
   };
-}
-
-// Escape a literal string for embedding inside a RegExp.
-function escapeRegExp(s) {
-  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // Match the full marker region plus any leading blank line(s) the writer added

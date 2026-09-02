@@ -323,4 +323,18 @@ describe('audit fileIssues toggle', () => {
     expect(task.description).toContain('Mode: implement the highest-value fix');
     expect(task.description).not.toContain('[security-…]');
   });
+
+  it('forces module-hygiene remediation into a worktree after an unsafe toggle transition', async () => {
+    const { getTaskInterval } = await import('./taskSchedule.js');
+    getTaskInterval.mockResolvedValue({
+      type: 'weekly',
+      taskMetadata: { fileIssues: false, useWorktree: false, openPR: false },
+    });
+    const task = await generate(makeApp(), 'module-hygiene');
+    expect(task.metadata.fileIssues).toBe(false);
+    expect(task.metadata.useWorktree).toBe(true);
+    expect(task.metadata.openPR).toBe(false);
+    expect(task.metadata.noCodeOutput).toBeUndefined();
+    expect(task.description).toContain('Mode: implement the highest-value fix');
+  });
 });

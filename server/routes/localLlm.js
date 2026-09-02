@@ -34,10 +34,12 @@ import {
   localLlmLlamaServerStartSchema,
   localLlmLmStudioServiceSchema,
   localLlmMtplxStartSchema,
+  localLlmSlotstreamStartSchema,
   localLlmMtplxSearchSchema,
   localLlmMtplxPullSchema,
   localLlmMtplxRemoveSchema,
-  localLlmSpecModelDownloadSchema
+  localLlmSpecModelDownloadSchema,
+  localLlmDownloadPreflightSchema,
 } from '../lib/validation.js'
 import {
   getLlamaServerStatus,
@@ -48,11 +50,13 @@ import {
   upgradeLlamaServer,
 } from '../services/llamaServerManager.js'
 import { MTPLX_APP, getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx } from '../services/mtplxServerManager.js'
-import { searchMtplxCatalog, pullMtplxModel, removeMtplxModel } from '../services/mtplxModelManager.js'
+import { SLOTSTREAM_APP, getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream } from '../services/slotstreamServerManager.js'
+import { searchMtplxCatalog, pullMtplxModel, previewMtplxPull, removeMtplxModel } from '../services/mtplxModelManager.js'
 import { saveProcessList } from '../services/pm2.js'
-import { getSpecDecodePresetStatus, downloadSpecDecodeModel, cancelSpecDecodeModelDownload } from '../services/specDecodeModels.js'
+import { getSpecDecodePresetStatus, downloadSpecDecodeModel, previewSpecDecodeDownload, cancelSpecDecodeModelDownload } from '../services/specDecodeModels.js'
 import { SPEC_TYPE_SUGGESTIONS } from '../lib/specDecodePresets.js'
 import { resetProviderReadinessCache } from '../services/providerReadiness.js'
+import { MODEL_ABUSE_GUARD } from '../lib/modelAbuseGuard.js'
 import { getCatalog, searchCatalog, isBackend } from '../lib/localLlmCatalog.js'
 import { isAppleSilicon } from '../lib/platform.js'
 import {
@@ -63,9 +67,10 @@ import {
 import { searchHuggingFaceModels, enrichCatalogWithVariants, applyMeasuredFit } from '../services/huggingFaceCatalog.js'
 import { getMeasuredFits } from '../services/localModelAssessmentStore.js'
 import {
-  getStatus, listModels, listVisionModels, listToolUseModels, installModel, deleteModel, switchBackend, migrateBackend, installBackend, upgradeBackend, controlOllamaServer,
+  getStatus, listModels, listVisionModels, listToolUseModels, installModel, previewInstallModel, deleteModel, switchBackend, migrateBackend, installBackend, upgradeBackend, controlOllamaServer,
   describeInstallProgress
 } from '../services/localLlm.js'
+import { getModelAbuseGuardStatus, installModelAbuseGuard, cancelModelAbuseGuardInstall } from '../services/modelAbuseGuard.js'
 import { getSettings } from '../services/settings.js'
 import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlayground.js'
 import { getAssessmentReport, runAssessment, deleteAssessment } from '../services/localModelAssessments.js'
@@ -92,7 +97,7 @@ const router = Router()
 
 const emitter = (req) => {
   const io = req.app.get('io')
-  return (event, message) => io?.emit('localLlm:progress', { event, message })
+  return (event, message, extra) => io?.emit('localLlm:progress', { event, message, ...extra })
 }
 
 // GET /api/local-llm/status — both backends + active marker
@@ -169,7 +174,44 @@ router.get('/catalog', asyncHandler(async (req, res) => {
   // been run here. Disk-only read — a catalog listing must never trigger a
   // measurement (AI Provider Usage Policy).
   applyMeasuredFit(models, { backend, measured: await getMeasuredFits(backend).catch(() => ({})) })
-  res.json({ backend, models, systemMemoryGb: Math.round(systemMemoryBytes / 1024 ** 3) })
+  res.json({
+    backend,
+    models,
+    // Prompt Guard is a managed classifier, not a chat model. Keep it beside
+    // the catalog response so the UI can highlight the safety recommendation
+    // without making it selectable in any normal provider/model picker.
+    securityGuards: [MODEL_ABUSE_GUARD],
+    systemMemoryGb: Math.round(systemMemoryBytes / 1024 ** 3),
+  })
+}))
+
+// The model-abuse guard has its own lifecycle: it is a pinned, offline
+// classifier and must never be installed through the general chat-model path.
+router.get('/security-guard/status', asyncHandler(async (_req, res) => {
+  res.json(await getModelAbuseGuardStatus())
+}))
+
+router.post('/security-guard/install', asyncHandler(async (req, res) => {
+  const emit = emitter(req)
+  const result = await installModelAbuseGuard({
+    onEvent: ({ event, message, stage }) => emit(event, message, { scope: 'security-guard', stage }),
+  })
+  if (!result?.ok) {
+    const code = result?.code || 'security-guard-install-failed'
+    const message = code === 'security-guard-huggingface-token-required'
+      ? 'Add a Hugging Face read token before installing Prompt Guard.'
+      : code === 'security-guard-huggingface-access-required'
+        ? 'Hugging Face has not granted Prompt Guard access yet. Submit the usage request on its model card, then retry.'
+        : code
+    emit('error', message, { scope: 'security-guard' })
+    throw new ServerError(message, { status: 502, code })
+  }
+  res.json(result)
+}))
+
+router.post('/security-guard/install/cancel', asyncHandler(async (_req, res) => {
+  cancelModelAbuseGuardInstall()
+  res.json({ cancelled: true })
 }))
 
 // GET /api/local-llm/huggingface-search?backend=ollama&q=qwen&category=coding
@@ -271,6 +313,23 @@ router.post('/lmstudio-service', asyncHandler(async (req, res) => {
   resetProviderReadinessCache()
   emit('complete', action === 'start' ? 'LM Studio server is running' : 'LM Studio server stopped')
   res.json(result)
+}))
+
+// POST /api/local-llm/download-preflight — size / dest / free-disk numbers for
+// the confirm step. Does not start a transfer. An `insufficient` verdict is
+// returned in the body so the UI can disable Confirm; the download endpoints
+// still throw DISK_INSUFFICIENT if the confirm is skipped.
+router.post('/download-preflight', asyncHandler(async (req, res) => {
+  const body = validateRequest(localLlmDownloadPreflightSchema, req.body)
+  if (body.kind === 'spec-decode') {
+    res.json(await previewSpecDecodeDownload({ presetId: body.presetId, role: body.role }))
+    return
+  }
+  if (body.kind === 'mtplx') {
+    res.json(await previewMtplxPull({ model: body.model }))
+    return
+  }
+  res.json(await previewInstallModel(body.backend, body.modelId))
 }))
 
 // POST /api/local-llm/install — pull/download a model (streams progress)
@@ -650,10 +709,10 @@ router.get('/llama-server/status', asyncHandler(async (_req, res) => {
   res.json({ ...status, presets, specTypes: SPEC_TYPE_SUGGESTIONS })
 }))
 
-// GET /api/local-llm/llama-server/update-status — optional Homebrew/version
-// metadata for the Local LLMs page. Keep it out of the lifecycle status request:
-// a slow Homebrew installation or a backend-initializing `--version` probe must
-// not delay ordinary runtime status and preset rendering.
+// GET /api/local-llm/llama-server/update-status — optional package-manager and
+// version metadata for the Local LLMs page. Keep it out of the lifecycle status
+// request: a slow `brew info` / `winget list` or a backend-initializing
+// `--version` probe must not delay ordinary runtime status and preset rendering.
 router.get('/llama-server/update-status', asyncHandler(async (_req, res) => {
   res.json(await getLlamaServerUpdateStatus())
 }))
@@ -702,7 +761,8 @@ router.post('/llama-server/stop', asyncHandler(async (_req, res) => {
   res.json(result)
 }))
 
-// POST /api/local-llm/llama-server/install — install llama.cpp via Homebrew
+// POST /api/local-llm/llama-server/install — install llama.cpp through this
+// platform package manager (Homebrew on macOS/Linux, winget on Windows)
 router.post('/llama-server/install', asyncHandler(async (req, res) => {
   const io = req.app.get('io')
   const onProgress = (data) => io?.emit('localLlm:progress', data)
@@ -711,7 +771,7 @@ router.post('/llama-server/install', asyncHandler(async (req, res) => {
   res.json(result)
 }))
 
-// POST /api/local-llm/llama-server/upgrade — update a Homebrew-installed
+// POST /api/local-llm/llama-server/upgrade — update a package-manager-installed
 // llama.cpp binary, restarting a llama-server process PortOS owns with the same
 // launch configuration. An externally-started process is left alone.
 router.post('/llama-server/upgrade', asyncHandler(async (req, res) => {
@@ -812,19 +872,58 @@ router.post('/mtplx/models/remove', asyncHandler(async (req, res) => {
   res.json(result)
 }))
 
+// GET /api/local-llm/slotstream/status — binary, process, memory plan, cache, logs.
+router.get('/slotstream/status', asyncHandler(async (_req, res) => {
+  res.json(await getSlotstreamServerStatus())
+}))
+
+// POST /api/local-llm/slotstream/start — launch `slotstream serve` under PM2.
+// Never downloads weights; an empty cache is a 400, not a silent fetch.
+router.post('/slotstream/start', asyncHandler(async (req, res) => {
+  const options = validateRequest(localLlmSlotstreamStartSchema, req.body)
+  const emit = emitter(req)
+  emit('start', 'Starting Slotstream…')
+  const result = await startSlotstreamServer({ ...options, onProgress: (line) => emit('start', line) })
+    .catch((err) => {
+      emit('error', err.message)
+      throw err
+    })
+  resetProviderReadinessCache()
+  emit('complete', `Slotstream is running at ${result.endpoint}`)
+  res.json(result)
+}))
+
+router.post('/slotstream/stop', asyncHandler(async (_req, res) => {
+  const result = await stopSlotstreamServer()
+  resetProviderReadinessCache()
+  res.json(result)
+}))
+
+router.post('/slotstream/install', asyncHandler(async (req, res) => {
+  const emit = emitter(req)
+  const result = await installSlotstream({ onProgress: ({ event, message }) => emit(event, message) })
+    .catch((err) => {
+      emit('error', `Install failed: ${err.message}`)
+      throw err
+    })
+  resetProviderReadinessCache()
+  emit('complete', 'Slotstream installed')
+  res.json(result)
+}))
+
 // POST /api/local-llm/save-startup — `pm2 save`, so the PM2-managed local
 // runtime servers currently running (llama-server, PortOS itself) are in the
 // dump a boot-time `pm2 resurrect` replays. The privileged half — `pm2
 // startup`, which writes the launchd/systemd unit — is deliberately blocked and
 // stays a one-time operator command.
 //
-// MTPLX is deliberately EXCLUDED. It is started on demand by the first request
-// that needs it and stopped again when idle, so resurrecting it at boot would
-// pin its multi-gigabyte checkpoint on a machine nobody has asked anything of
-// yet — the exact waste the idle stop exists to end. The running process is
-// left alone; only the boot list drops it.
+// MTPLX and Slotstream are deliberately EXCLUDED. Both are started on demand
+// by the first request that needs them and stopped again when idle, so
+// resurrecting them at boot would pin a multi-gigabyte checkpoint on a machine
+// nobody has asked anything of yet — the exact waste the idle stop exists to
+// end. The running process is left alone; only the boot list drops it.
 router.post('/save-startup', asyncHandler(async (_req, res) => {
-  res.json(await saveProcessList(null, { exclude: [MTPLX_APP] }))
+  res.json(await saveProcessList(null, { exclude: [MTPLX_APP, SLOTSTREAM_APP] }))
 }))
 
 export default router

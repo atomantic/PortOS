@@ -22,6 +22,10 @@ const renderCard = (props = {}) => {
     onStartMtplx: vi.fn(),
     onSaveIdleWindow: vi.fn(),
     onStopMtplx: vi.fn(),
+    onConfigureSlotstream: vi.fn(),
+    onInstallSlotstream: vi.fn(),
+    onStartSlotstream: vi.fn(),
+    onStopSlotstream: vi.fn(),
     onSaveStartup: vi.fn(),
   };
   render(
@@ -44,7 +48,7 @@ const renderCard = (props = {}) => {
 describe('RuntimeServersCard', () => {
   it('lists every local runtime PortOS can run, not just the two catalog backends', () => {
     renderCard();
-    for (const label of ['Ollama', 'LM Studio', 'llama.cpp', 'MTPLX']) {
+    for (const label of ['Ollama', 'LM Studio', 'llama.cpp', 'MTPLX', 'Slotstream']) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
   });
@@ -166,6 +170,49 @@ describe('RuntimeServersCard', () => {
 
     fireEvent.click(within(row('Ollama')).getByRole('button', { name: /Install/ }));
     expect(handlers.onInstallBackend).toHaveBeenCalledWith('ollama');
+  });
+
+  it('offers Slotstream Start when a checkpoint is cached and shows the memory plan', () => {
+    const handlers = renderCard({
+      slotstreamStatus: {
+        installed: true,
+        running: false,
+        supported: true,
+        cachedModels: ['qwen-moe'],
+        memoryPlan: { targetGb: 22, expectedPeakGb: 22, expectedWarmDecodeToks: 8, auto: false },
+      },
+    });
+    const slotstream = row('Slotstream');
+    expect(within(slotstream).getByText(/target 22 GB/)).toBeInTheDocument();
+    fireEvent.click(within(slotstream).getByRole('button', { name: /^Start/ }));
+    expect(handlers.onStartSlotstream).toHaveBeenCalledWith();
+  });
+
+  it('keeps Slotstream Start unavailable when no checkpoint is cached', () => {
+    renderCard({
+      slotstreamStatus: { installed: true, running: false, supported: true, cachedModels: [], cacheError: null },
+    });
+    const slotstream = row('Slotstream');
+    expect(within(slotstream).queryByRole('button', { name: /^Start/ })).toBeNull();
+    expect(within(slotstream).getByText(/a start never fetches weights/i)).toBeInTheDocument();
+  });
+
+  it('says why Slotstream cannot start when its checkpoint cache is unreadable', () => {
+    // An unreadable cache also reports zero checkpoints, so it withholds Start
+    // too — without its own reason the row renders "stopped" with nothing to
+    // click and no explanation of what to fix.
+    renderCard({
+      slotstreamStatus: {
+        installed: true,
+        running: false,
+        supported: true,
+        cachedModels: [],
+        cacheError: 'could not read Slotstream cache (EACCES)',
+      },
+    });
+    const slotstream = row('Slotstream');
+    expect(within(slotstream).queryByRole('button', { name: /^Start/ })).toBeNull();
+    expect(within(slotstream).getByText(/cache unreadable/i)).toHaveTextContent('EACCES');
   });
 
   it('points at the in-app download when the MTPLX cache is empty', () => {

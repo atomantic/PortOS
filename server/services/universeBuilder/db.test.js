@@ -11,6 +11,7 @@
 
 import { describe, it, expect, afterAll, beforeAll, beforeEach } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
+import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 
 let dbReady = false;
 let skipReason = '';
@@ -28,7 +29,7 @@ let skipReason = '';
   }
 }
 
-if (!dbReady) console.log(`⏭️  universeBuilder/db.test.js skipped: ${skipReason}`);
+const runDb = requireDbOrSkip('services/universeBuilder/db.test', dbReady, skipReason);
 
 const U = (id, extra = {}) => ({
   id, name: id, schemaVersion: 4,
@@ -36,7 +37,7 @@ const U = (id, extra = {}) => ({
   deleted: false, deletedAt: null, ...extra,
 });
 
-describe.skipIf(!dbReady)('universeBuilder DB adapter round-trip', () => {
+describe.skipIf(!runDb)('universeBuilder DB adapter round-trip', () => {
   let db;
   let uSnap = [];
   let rSnap = [];

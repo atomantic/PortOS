@@ -37,6 +37,7 @@
 import { randomBytes } from 'crypto';
 
 import { vllmExtraArgs } from './qwenAgentParsers.js';
+import { escapeRegExp } from './textUtils.js';
 
 /** Bytes of entropy in a generated key — matches the doc's `openssl rand -hex 24`. */
 const API_KEY_BYTES = 24;
@@ -129,6 +130,51 @@ export function parseEnvContents(contents) {
 }
 
 /**
+ * Add lines to the end of a `.env`, or return it unchanged when there are none.
+ *
+ * The separator is the whole point: a file not ending in a newline would splice
+ * the first new key onto the operator's last line and silently corrupt both.
+ * Shared by the two writers below so that guard is written once.
+ *
+ * @param {string} base
+ * @param {string[]} lines
+ * @returns {string}
+ */
+function appendEnvLines(base, lines) {
+  const text = String(base || '');
+  if (lines.length === 0) return text;
+  const separator = text.length === 0 || text.endsWith('\n') ? '' : '\n';
+  return `${text}${separator}${lines.join('\n')}\n`;
+}
+
+/**
+ * Set ONE key, replacing the line that already declares it.
+ *
+ * The complement of `mergeEnvFileContents`: that one is additive by contract and
+ * never overrules the operator, which is exactly wrong for a value PortOS owns
+ * and re-derives (`vllmQwenProject.js`'s recorded project directory). Everything
+ * else in the file is left byte for byte.
+ *
+ * The replacement is a FUNCTION, not a string. A value carrying one of
+ * String.replace's special $-patterns would otherwise be expanded into the
+ * surrounding text instead of written literally — `scripts/lib/envFile.js`
+ * learned that on a password, and this is the same fix kept next to the parser
+ * it belongs with.
+ *
+ * @param {string} contents
+ * @param {string} key
+ * @param {string} value
+ * @returns {string}
+ */
+export function upsertEnvLine(contents, key, value) {
+  const text = String(contents || '');
+  const pattern = new RegExp(`^${escapeRegExp(key)}=.*$`, 'm');
+  return pattern.test(text)
+    ? text.replace(pattern, () => `${key}=${value}`)
+    : appendEnvLines(text, [`${key}=${value}`]);
+}
+
+/**
  * Append the missing defaults to an existing `.env`, changing nothing else.
  *
  * @param {string} existing - current file contents (`''` when there is no file)
@@ -155,13 +201,7 @@ export function mergeEnvFileContents(existing, defaults) {
     lines.push(`${key}=${value}`);
   }
 
-  const base = String(existing || '');
-  if (lines.length === 0) return { contents: base, added, kept, effective };
-
-  // A file that does not end in a newline would otherwise splice the first new
-  // key onto the operator's last line and silently corrupt both.
-  const separator = base.length === 0 || base.endsWith('\n') ? '' : '\n';
-  return { contents: `${base}${separator}${lines.join('\n')}\n`, added, kept, effective };
+  return { contents: appendEnvLines(existing, lines), added, kept, effective };
 }
 
 /**

@@ -18,7 +18,10 @@ vi.mock('./cosState.js', () => ({
   AGENTS_DIR: mockCosState.agentsDir,
   loadState: vi.fn(async () => mockCosState.state),
   saveState: vi.fn(),
-  withStateLock: async (fn) => fn()
+  withStateLock: async (fn) => fn(),
+  // The uncached, non-defaulting read the update gate uses. Defaults to
+  // "trusted, and these are the records"; one test drives the untrusted answer.
+  readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: true, agents: mockCosState.state?.agents ?? {} })),
 }));
 
 vi.mock('./domainUsage.js', () => ({
@@ -51,16 +54,25 @@ vi.mock('fs/promises', async (importOriginal) => {
   };
 });
 
-import { getAgent, createAgentOutputBatcher, completeAgent, updateAgent, registerAgent, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
-import { saveState } from './cosState.js';
+vi.mock('./cosRunnerClient.js', () => ({
+  getActiveAgentsFromRunner: vi.fn().mockResolvedValue([]),
+}));
+
+import { getAgent, createAgentOutputBatcher, completeAgent, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
+import { saveState, loadState, readAgentsStateForSafetyCheck } from './cosState.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
+import { getActiveAgentsFromRunner } from './cosRunnerClient.js';
+import { activeAgents, runnerAgents } from './agentState.js';
 
 describe('cosAgentLifecycle', () => {
   beforeEach(async () => {
     await rm(mockCosState.agentsDir, { recursive: true, force: true });
     await mkdir(mockCosState.agentsDir, { recursive: true });
     mockCosState.state = { agents: {} };
+    vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([]);
+    activeAgents.clear();
+    runnerAgents.clear();
   });
 
   afterEach(async () => {
@@ -88,6 +100,51 @@ describe('cosAgentLifecycle', () => {
       { line: 'full line two', timestamp: pausedAt }
     ]);
     expect(agent.outputTruncated).toBe(false);
+  });
+
+  // The predicate behind the "CoS agents running" update gate. Its whole job is
+  // to keep the two failure directions apart: a tracked id whose run PortOS has
+  // already finalized must not block a restart forever, and a genuinely live one
+  // must still block it.
+  it('narrows tracked ids to live records, dropping finalized and unknown ones', async () => {
+    mockCosState.state.agents = {
+      'agent-running': { id: 'agent-running', status: 'running' },
+      // A paused agent is still owed a resume, so its record stays live.
+      'agent-paused': { id: 'agent-paused', status: 'paused' },
+      'agent-done': { id: 'agent-done', status: 'completed', completedAt: '2026-05-25T12:00:00.000Z' }
+    };
+
+    await expect(filterLiveAgentIds([
+      'agent-running', 'agent-running', 'agent-paused', 'agent-done', 'agent-archived-away'
+    ])).resolves.toEqual(['agent-running', 'agent-paused']);
+    await expect(filterLiveAgentIds([])).resolves.toEqual([]);
+  });
+
+  // The gate this feeds authorizes a pm2 restart that severs live agents, so an
+  // unreadable state file must not read as "nothing is running". `loadState`
+  // substitutes an EMPTY default state for a corrupt file — trusting that would
+  // hand the gate a confident zero and restart PortOS out from under whatever
+  // was live.
+  it('treats every tracked id as live when the records cannot be established', async () => {
+    vi.mocked(readAgentsStateForSafetyCheck).mockResolvedValueOnce({ trusted: false, agents: null });
+
+    await expect(filterLiveAgentIds(['agent-a', 'agent-b']))
+      .resolves.toEqual(['agent-a', 'agent-b']);
+  });
+
+  // "The read failed" and "there is no such record" lead to opposite decisions —
+  // one leaves live tracking alone, the other retires it — so the reader must
+  // never let an I/O failure arrive as a plain null.
+  it('reports an unreadable record as its own sentinel, not as an absent one', async () => {
+    mockCosState.state.agents = { 'agent-running': { id: 'agent-running', status: 'running' } };
+
+    await expect(readAgentRecordOrUnreadable('agent-running'))
+      .resolves.toMatchObject({ id: 'agent-running' });
+    await expect(readAgentRecordOrUnreadable('agent-never-existed')).resolves.toBeNull();
+
+    loadState.mockRejectedValueOnce(new Error('state.json unreadable'));
+    await expect(readAgentRecordOrUnreadable('agent-running'))
+      .resolves.toBe(AGENT_RECORD_UNREADABLE);
   });
 
   // #3498: output.txt is unbounded — a long TUI run writes tens of MB. Reading it
@@ -590,5 +647,99 @@ describe('createAgentOutputBatcher', () => {
         args[0].startsWith(`❌ agent ${agentId} output batch flush failed:`)
     );
     expect(logged).toBe(true);
+  });
+});
+
+describe('cleanupZombieAgents — runner listing is not proof of life', () => {
+  beforeEach(async () => {
+    await rm(mockCosState.agentsDir, { recursive: true, force: true });
+    await mkdir(mockCosState.agentsDir, { recursive: true });
+    mockCosState.state = { agents: {} };
+    vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([]);
+    activeAgents.clear();
+    runnerAgents.clear();
+  });
+
+  afterEach(async () => {
+    await rm(mockCosState.agentsDir, { recursive: true, force: true });
+  });
+
+  it('does not reap a runner-owned TUI while the runner probe is unavailable', async () => {
+    mockCosState.state.agents['agent-tui'] = {
+      id: 'agent-tui',
+      status: 'running',
+      pid: 0,
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+      metadata: { useRunner: true, executionMode: 'runner-tui' },
+    };
+    vi.mocked(getActiveAgentsFromRunner).mockRejectedValueOnce(new Error('runner is booting'));
+
+    const result = await cleanupZombieAgents();
+    expect(result.cleaned).toEqual([]);
+    expect(mockCosState.state.agents['agent-tui'].status).toBe('running');
+  });
+
+  it('leaves a live runner-owned TUI whose onExit liveness is true', async () => {
+    mockCosState.state.agents['agent-tui'] = {
+      id: 'agent-tui',
+      status: 'running',
+      pid: 0,
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+    };
+    vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([{
+      id: 'agent-tui',
+      pid: 0,
+      kind: 'tui',
+      processActive: true,
+      liveness: 'pty',
+    }]);
+
+    const result = await cleanupZombieAgents();
+    expect(result.cleaned).toEqual([]);
+    expect(mockCosState.state.agents['agent-tui'].status).toBe('running');
+  });
+
+  it('retires a stale listing even if runnerAgents already adopted the id', async () => {
+    await writeFile(join(mockCosState.agentsDir, 'index.json'), '{}');
+    runnerAgents.set('agent-stale', { taskId: 'task-1' });
+    mockCosState.state.agents['agent-stale'] = {
+      id: 'agent-stale',
+      status: 'running',
+      pid: 2147483646,
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+    };
+    vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([{
+      id: 'agent-stale',
+      pid: 2147483646,
+      kind: 'cli',
+      processActive: false,
+      liveness: 'pid',
+    }]);
+
+    const result = await cleanupZombieAgents();
+    expect(result.cleaned).toEqual(['agent-stale']);
+    expect(mockCosState.state.agents['agent-stale'].status).toBe('completed');
+  });
+
+  it('retires a durable running record whose runner listing is stale', async () => {
+    await writeFile(join(mockCosState.agentsDir, 'index.json'), '{}');
+    mockCosState.state.agents['agent-stale'] = {
+      id: 'agent-stale',
+      status: 'running',
+      pid: 2147483646,
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+    };
+    vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([{
+      id: 'agent-stale',
+      pid: 2147483646,
+      kind: 'cli',
+      processActive: false,
+      liveness: 'pid',
+    }]);
+
+    const result = await cleanupZombieAgents();
+    expect(result.cleaned).toEqual(['agent-stale']);
+    expect(mockCosState.state.agents['agent-stale'].status).toBe('completed');
+    expect(mockCosState.state.agents['agent-stale'].result.error).toMatch(/terminated unexpectedly/);
   });
 });

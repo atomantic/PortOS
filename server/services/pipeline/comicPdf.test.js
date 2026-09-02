@@ -14,7 +14,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
   };
 });
 
-// 1×1 RGBA PNG — smallest valid PNG pdf-lib will accept via embedPng.
+// 1×1 RGBA PNG — smallest valid PNG @cantoo/pdf-lib will accept via embedPng.
 const TINY_PNG = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
   0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
@@ -171,6 +171,42 @@ describe('buildComicPdf — happy path', () => {
     });
     const { pageCount } = await buildComicPdf('iss-test', { includeBackCover: false });
     expect(pageCount).toBe(3); // cover + page1 + colophon — back skipped
+  });
+});
+
+describe('buildComicPdf — embedded-image contract', () => {
+  // `drawImage` is the only API in this pipeline that carries binary payloads
+  // into the PDF, so it is the one path a same-API library swap (issue #5672,
+  // `pdf-lib` → the maintained `@cantoo/pdf-lib` fork) can regress while every
+  // page-count assertion above still passes. A fork that silently dropped the
+  // image XObject would emit a structurally valid PDF of near-constant size.
+  const coverOnlyIssue = () => ({
+    ...structuredClone(mockIssue),
+    stages: { comicPages: { cover: { filename: 'cover.png' }, pages: [] } },
+  });
+
+  const imageXObjects = (bytes) =>
+    (Buffer.from(bytes).toString('latin1').match(/\/Subtype\s*\/Image/g) || []).length;
+
+  it('scales embedded image XObjects with the page count and emits a byte-valid PDF', async () => {
+    getIssueMock.mockResolvedValueOnce(coverOnlyIssue());
+    const one = await buildComicPdf('iss-test', { includeColophon: false });
+    const three = await buildComicPdf('iss-test', { includeColophon: false });
+
+    expect(one.pageCount).toBe(1);
+    expect(three.pageCount).toBe(3);
+    // Counting the XObjects (not the byte length) is what separates "the image
+    // data made it in" from "three blank pages were emitted". Each RGBA PNG
+    // costs more than one image object (the alpha channel rides along as an
+    // SMask), so assert the ratio rather than a hard-coded object count.
+    const perPage = imageXObjects(one.bytes);
+    expect(perPage).toBeGreaterThan(0);
+    expect(imageXObjects(three.bytes)).toBe(perPage * 3);
+    expect(three.bytes.length).toBeGreaterThan(one.bytes.length);
+    // Container type: a fork returning a Buffer/ArrayBuffer here would break
+    // every streaming caller without failing a page-count assertion.
+    expect(three.bytes).toBeInstanceOf(Uint8Array);
+    expect(Buffer.from(three.bytes).subarray(-1024).toString('latin1')).toContain('%%EOF');
   });
 });
 

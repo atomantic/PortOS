@@ -5,6 +5,7 @@ import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import AgentCard from './AgentCard';
 import ResumeAgentModal from './ResumeAgentModal';
+import RelaunchAgentModal from './RelaunchAgentModal';
 import BrailleSpinner from '../../BrailleSpinner';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 
@@ -31,6 +32,7 @@ const needsAgentFeedback = (agent) => {
 export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, apps }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [resumingAgent, setResumingAgent] = useState(null);
+  const [relaunchingAgent, setRelaunchingAgent] = useState(null);
   const [durations, setDurations] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [feedbackUpdates, setFeedbackUpdates] = useState({});
@@ -124,6 +126,11 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
   const handleResumeClick = (agent) => {
     setResumingAgent(agent);
   };
+
+  // A stalled RUNNING agent (a CLI parked on a provider usage limit) moves to a
+  // different provider/model in one step. The dialog owns the call and the
+  // outcome message — see RelaunchAgentModal.
+  const handleRelaunchClick = useCallback((agent) => setRelaunchingAgent(agent), []);
 
   const handleFeedbackChange = useCallback((updatedAgent) => {
     if (updatedAgent?.id && updatedAgent.feedback) {
@@ -253,6 +260,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
                 agent={agent}
                 onPause={handlePause}
                 onKill={handleKill}
+                onRelaunch={handleRelaunchClick}
                 liveOutput={liveOutputs[agent.id]}
                 durations={durations}
               />
@@ -410,6 +418,17 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
             )}
           </div>
         </div>
+      )}
+
+      {/* Relaunch Modal */}
+      {relaunchingAgent && (
+        <RelaunchAgentModal
+          agent={relaunchingAgent}
+          providers={providers}
+          apps={apps}
+          onDone={onRefresh}
+          onClose={() => setRelaunchingAgent(null)}
+        />
       )}
 
       {/* Resume Modal */}

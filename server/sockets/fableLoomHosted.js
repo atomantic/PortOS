@@ -30,7 +30,8 @@ export function registerFableLoomHostedNamespace(io) {
   const ns = io.of('/fableloom-hosted');
   hostedNsInstance = ns;
 
-  // Handshake authentication middleware for /fableloom-hosted
+  // `io.use(socketAuthGate)` only covers the default namespace, so every role
+  // here must authenticate with this session's join token.
   ns.use(async (socket, next) => {
     try {
       const auth = socket.handshake.auth || {};
@@ -48,18 +49,15 @@ export function registerFableLoomHostedNamespace(io) {
         return next(new Error('HOSTED_SESSION_NOT_FOUND_OR_EXPIRED'));
       }
 
-      if (role === 'host') {
-        socket.hostedRole = 'host';
-        socket.hostedSessionId = sessionId;
-        return next();
-      }
-
-      // Audience role requires valid join token
       if (!token || !verifyHostedToken(sessionId, token)) {
         return next(new Error('HOSTED_SESSION_UNAUTHORIZED'));
       }
 
-      socket.hostedRole = 'audience';
+      if (role !== 'audience' && role !== 'host') {
+        return next(new Error('HOSTED_SESSION_ROLE_INVALID'));
+      }
+
+      socket.hostedRole = role;
       socket.hostedSessionId = sessionId;
       return next();
     } catch (err) {
@@ -141,6 +139,7 @@ export function registerFableLoomHostedNamespace(io) {
 
     // --- Audience actions ---
     socket.on('hosted:mic:start', async () => {
+      if (socket.hostedRole !== 'audience') return;
       micChunks = [];
       try {
         await startHostedListening(sessionId, { io });
@@ -150,6 +149,7 @@ export function registerFableLoomHostedNamespace(io) {
     });
 
     socket.on('hosted:mic:frame', (chunk) => {
+      if (socket.hostedRole !== 'audience') return;
       if (!session || session.turnPhase !== 'listening') return;
       if (chunk) {
         micChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -157,6 +157,7 @@ export function registerFableLoomHostedNamespace(io) {
     });
 
     socket.on('hosted:mic:stop', async (completeBuffer) => {
+      if (socket.hostedRole !== 'audience') return;
       if (!session || session.turnPhase !== 'listening') return;
       let finalAudio = null;
       if (completeBuffer && (Buffer.isBuffer(completeBuffer) || ArrayBuffer.isView(completeBuffer))) {
@@ -174,6 +175,7 @@ export function registerFableLoomHostedNamespace(io) {
     });
 
     socket.on('hosted:turn:text', async (data) => {
+      if (socket.hostedRole !== 'audience') return;
       if (!session || session.turnPhase !== 'listening') return;
       try {
         await processHostedUtterance(sessionId, { textMessage: data?.text, io });

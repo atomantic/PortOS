@@ -15,6 +15,10 @@ import { getSettings } from '../services/settings.js';
 import { localLlmCompareSchema, localLlmTestSchema } from '../lib/validation.js';
 import { errorEvents } from '../lib/errorHandler.js';
 
+const getModelAbuseGuardStatus = vi.fn(async () => ({ ready: false, modelCached: false, runtimeReady: false }));
+const installModelAbuseGuard = vi.fn(async () => ({ ok: true, ready: true }));
+const cancelModelAbuseGuardInstall = vi.fn();
+
 // asyncHandler emits to errorEvents on every route failure; with `io` set on
 // the app it always fires. Swallow it so a validation-rejection test doesn't
 // trip Node's "unhandled 'error' event" — assertions go through the response.
@@ -26,6 +30,9 @@ vi.mock('../services/localLlm.js', () => ({
   listVisionModels: vi.fn(async () => []),
   listToolUseModels: vi.fn(async () => []),
   installModel: vi.fn(),
+  previewInstallModel: vi.fn(async () => ({
+    kind: 'install', verdict: 'ok', destPath: '/tmp/models', expectedBytes: 0, freeBytes: 1e12, requiredBytes: 0, headroomBytes: 0,
+  })),
   describeInstallProgress: vi.fn((p) => p?.status || null),
   deleteModel: vi.fn(),
   switchBackend: vi.fn(),
@@ -33,6 +40,12 @@ vi.mock('../services/localLlm.js', () => ({
   installBackend: vi.fn(),
   upgradeBackend: vi.fn(),
   controlOllamaServer: vi.fn(),
+}));
+
+vi.mock('../services/modelAbuseGuard.js', () => ({
+  getModelAbuseGuardStatus: (...args) => getModelAbuseGuardStatus(...args),
+  installModelAbuseGuard: (...args) => installModelAbuseGuard(...args),
+  cancelModelAbuseGuardInstall: (...args) => cancelModelAbuseGuardInstall(...args),
 }));
 
 vi.mock('../services/localLlmPlayground.js', () => ({
@@ -105,6 +118,9 @@ vi.mock('../services/llamaServerManager.js', () => ({
 vi.mock('../services/specDecodeModels.js', () => ({
   getSpecDecodePresetStatus: vi.fn(async () => ([{ id: 'test-preset', label: 'Test', specType: 'draft-dspark', model: null, draftModel: null }])),
   downloadSpecDecodeModel: vi.fn(async () => ({ success: true, path: 'models/base.gguf', file: 'base.gguf' })),
+  previewSpecDecodeDownload: vi.fn(async () => ({
+    kind: 'spec-decode', verdict: 'ok', destPath: 'models/base.gguf', expectedBytes: 6, freeBytes: 1e12, requiredBytes: 6, headroomBytes: 0, alreadyDownloaded: false,
+  })),
   cancelSpecDecodeModelDownload: vi.fn(() => true),
 }));
 
@@ -150,6 +166,58 @@ describe('local LLM playground routes', () => {
     expect(Array.isArray(res.body.models)).toBe(true);
     // The playground only needs catalog metadata — it must not pay for HF probes.
     expect(enrichCatalogWithVariants).not.toHaveBeenCalled();
+  });
+
+  it('GET /catalog exposes the managed security classifier separately from chat models', async () => {
+    const res = await request(makeApp()).get('/api/local-llm/catalog?backend=ollama');
+
+    expect(res.status).toBe(200);
+    expect(res.body.securityGuards).toEqual([expect.objectContaining({
+      id: 'llama-prompt-guard-2-86m',
+      pipelineTag: 'text-classification',
+      runtime: 'python-transformers',
+    })]);
+    expect(res.body.models.some((model) => model.id === 'llama-prompt-guard-2-86m')).toBe(false);
+  });
+
+  it('keeps the Prompt Guard lifecycle out of the general model installer', async () => {
+    const status = await request(makeApp()).get('/api/local-llm/security-guard/status');
+    expect(status.status).toBe(200);
+    expect(getModelAbuseGuardStatus).toHaveBeenCalled();
+
+    const install = await request(makeApp()).post('/api/local-llm/security-guard/install').send({});
+    expect(install.status).toBe(200);
+    expect(installModelAbuseGuard).toHaveBeenCalledWith({ onEvent: expect.any(Function) });
+    expect(installModel).not.toHaveBeenCalled();
+
+    const cancel = await request(makeApp()).post('/api/local-llm/security-guard/install/cancel').send({});
+    expect(cancel.status).toBe(200);
+    expect(cancel.body).toEqual({ cancelled: true });
+    expect(cancelModelAbuseGuardInstall).toHaveBeenCalled();
+  });
+
+  it('returns actionable Prompt Guard access prerequisites from the install route', async () => {
+    installModelAbuseGuard.mockResolvedValueOnce({
+      ok: false,
+      code: 'security-guard-huggingface-token-required',
+    });
+    const missingToken = await request(makeApp()).post('/api/local-llm/security-guard/install').send({});
+    expect(missingToken.status).toBe(502);
+    expect(missingToken.body).toMatchObject({
+      code: 'security-guard-huggingface-token-required',
+      error: 'Add a Hugging Face read token before installing Prompt Guard.',
+    });
+
+    installModelAbuseGuard.mockResolvedValueOnce({
+      ok: false,
+      code: 'security-guard-huggingface-access-required',
+    });
+    const missingAccess = await request(makeApp()).post('/api/local-llm/security-guard/install').send({});
+    expect(missingAccess.status).toBe(502);
+    expect(missingAccess.body).toMatchObject({
+      code: 'security-guard-huggingface-access-required',
+      error: 'Hugging Face has not granted Prompt Guard access yet. Submit the usage request on its model card, then retry.',
+    });
   });
 
   it('POST /install forwards force so a redownload can replace on-disk weights', async () => {
@@ -736,6 +804,25 @@ describe('llama-server routes', () => {
       .send({ presetId: 'test-preset', role: 'sneaky' });
 
     expect(res.status).toBe(400);
+  });
+
+  it('POST /api/local-llm/download-preflight returns size, dest, and free disk without starting a transfer', async () => {
+    const { previewSpecDecodeDownload, downloadSpecDecodeModel } = await import('../services/specDecodeModels.js');
+    downloadSpecDecodeModel.mockClear();
+    const res = await request(makeApp())
+      .post('/api/local-llm/download-preflight')
+      .send({ kind: 'spec-decode', presetId: 'test-preset', role: 'model' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      kind: 'spec-decode',
+      destPath: 'models/base.gguf',
+      expectedBytes: 6,
+      freeBytes: 1e12,
+      verdict: 'ok',
+    });
+    expect(previewSpecDecodeDownload).toHaveBeenCalledWith({ presetId: 'test-preset', role: 'model' });
+    expect(downloadSpecDecodeModel).not.toHaveBeenCalled();
   });
 
   it('POST /api/local-llm/llama-server/download-model/cancel cancels one active preset download', async () => {

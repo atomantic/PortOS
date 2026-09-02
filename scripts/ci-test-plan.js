@@ -12,7 +12,7 @@ const MAX_TARGETED_TEST_FILES = 120;
 
 const FULL_TRIGGER_RULES = [
   { re: /^\.github\/workflows\//, reason: 'workflow definition changed' },
-  { re: /^(?:package|server\/package|client\/package)(?:-lock)?\.json$/, reason: 'dependency manifest changed' },
+  { re: /^(?:package|server\/package|client\/package|autofixer\/package)(?:-lock)?\.json$/, reason: 'dependency manifest changed' },
   { re: /^(?:server|client)\/vitest\.config(?:\.db)?\.js$/, reason: 'test runner configuration changed' },
   { re: /^scripts\/vitestCiPool(?:\.test)?\.js$/, reason: 'test runner pool configuration changed' },
   { re: /^server\/vitest\.setup\.js$/, reason: 'server test setup changed' },
@@ -39,6 +39,15 @@ const WINDOWS_RISK_RULES = [
   /^scripts\/fix-windows-console(?:\.test)?\.js$/,
   /^scripts\/ps1-bom\.test\.js$/,
   /^server\/lib\/(?:bufferedSpawn|detachedSpawn|childProcess|bashResolver|processEnv|platform|spawnCwd|cliProviderRun|grok)\b/,
+  // Path SEMANTICS differ per platform in ways pinPlatform() cannot fake: NTFS
+  // and APFS are case-insensitive while ext4 is not, and git reports paths its
+  // own way (drive-letter case, 8.3 short names like C:\Users\RUNNER~1). A
+  // case-sensitive containment check therefore passed on Linux while reporting a
+  // managed worktree as unmanaged on Windows, and the reaper silently skipped it
+  // — green everywhere CI looked. These modules decide containment and worktree
+  // identity, so they need a real Windows run.
+  /^server\/lib\/(?:pathSafety|worktreeOwnership)(?:\.test)?\.js$/,
+  /^server\/services\/worktree(?:Manager|Reap)\b/,
   /^server\/lib\/shell(?:Cd|Exit|LivenessProbe|ReadinessProbe)(?:\.test)?\.js$/,
   /^server\/lib\/agentGuard\//,
   /^server\/cos-runner\//,
@@ -129,11 +138,14 @@ export const ALWAYS_RUN_TESTS = [
   'scripts/node-version-drift.test.js',
   'scripts/repo-scan-guards.test.js',
   'scripts/tailnet-identity-leak.test.js',
+  'server/dependency-overrides.test.js',
+  'server/lib/generatedManifests.test.js',
   'server/lib/qwenAgentParsers.test.js',
   'server/lib/testDataIsolation.guards.test.js',
   'server/lib/testHelper.test.js',
   'server/services/imageGen/renderTargets.guard.test.js',
   'server/services/taskPromptDefaults.test.js',
+  'server/timerCallbackConventions.test.js',
 ];
 
 const DB_RISK_RULES = [
@@ -223,6 +235,12 @@ const structuralTestsFor = (changedFiles, trackedSet) => {
   if (changedFiles.some((path) => /^server\/lib\//.test(path))) {
     add('server/lib/index.test.js');
   }
+  // The socket guard readdir-scans server/sockets/ rather than importing it, so
+  // no import edge reaches it — a handler added there would otherwise only be
+  // checked on a full suite.
+  if (changedFiles.some((path) => /^server\/sockets\//.test(path))) {
+    add('server/sockets/asyncHandlerGuard.test.js');
+  }
   if (changedFiles.some((path) => /^client\/src\/lib\//.test(path))) {
     add('client/src/lib/index.test.js');
   }
@@ -235,13 +253,15 @@ const structuralTestsFor = (changedFiles, trackedSet) => {
   if (changedFiles.some((path) => /^client\/src\/.*\.jsx$/.test(path))) {
     add('client/src/a11yConventions.test.js');
   }
-  // Both `.js` and `.jsx`: the StrictMode mounted-ref bug this guards against
+  // Both `.js` and `.jsx`: the StrictMode mounted-ref bug the first guard covers
   // reached its widest blast radius through a plain-`.js` hook (`useAsyncAction`),
-  // so a `.jsx`-only trigger would miss the case that matters most. Nothing else
-  // selects this file — it has no source sibling and imports no app module, so
-  // without this entry it only ever runs on a full suite.
+  // so a `.jsx`-only trigger would miss the case that matters most, and the
+  // responsive-grid guard reads class strings out of both extensions. Neither
+  // file has a source sibling or imports an app module, so nothing else selects
+  // them — without this entry they only ever run on a full suite.
   if (changedFiles.some((path) => /^client\/src\/.*\.jsx?$/.test(path))) {
     add('client/src/hooks/mountedRefConventions.test.js');
+    add('client/src/responsiveGridConventions.test.js');
   }
 
   return selected;

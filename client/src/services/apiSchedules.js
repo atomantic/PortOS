@@ -8,14 +8,9 @@ export const getAutomationSchedules = (agentId = null, accountId = null, options
   const query = params.toString();
   return request(`/agents/schedules${query ? `?${query}` : ''}`, options);
 };
-export const getAutomationSchedule = (id) => request(`/agents/schedules/${id}`);
 export const getScheduleStats = (options = {}) => request('/agents/schedules/stats', options);
 export const createAutomationSchedule = (data) => request('/agents/schedules', {
   method: 'POST',
-  body: JSON.stringify(data)
-});
-export const updateAutomationSchedule = (id, data) => request(`/agents/schedules/${id}`, {
-  method: 'PUT',
   body: JSON.stringify(data)
 });
 export const deleteAutomationSchedule = (id) => request(`/agents/schedules/${id}`, { method: 'DELETE' });

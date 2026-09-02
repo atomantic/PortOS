@@ -39,10 +39,16 @@ export const trimTo = (value, max) => (
 /**
  * Escape a string for literal use inside a RegExp.
  *
- * Exported because this was hand-rolled privately in seven other modules
- * (markedSection, loraTriggers, loraDataset, scenePrompt, assetMounts,
- * editorial/cutApplier, editorial/proseTics) — none of them exported it, so the
- * eighth caller copied it too. This is the one to import.
+ * This is the ONE copy — import it, never re-inline the character class. It was
+ * hand-rolled privately in a dozen modules before the extraction, and because
+ * none of them exported it every new caller copied the nearest one again. The
+ * `no private escapeRegExp` guard in textUtils.test.js scans the server tree and
+ * fails the build if a private copy reappears.
+ *
+ * Non-string input is coerced rather than throwing: the callers escape
+ * user-supplied tokens (LoRA trigger words, character aliases, catalog type
+ * labels) on the way into `new RegExp(...)`, where a TypeError would surface as
+ * an opaque 500 instead of a harmless non-match.
  */
 export function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

@@ -13,6 +13,7 @@ vi.mock('../services/codexAppServer.js', () => ({
   cancelCodexChatGptLogin: vi.fn(),
   codexLogout: vi.fn(),
   peekCodexAccountReadiness: vi.fn(() => null),
+  listCodexModels: vi.fn(),
 }));
 vi.mock('../services/providerRuntimeInstaller.js', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -183,5 +184,41 @@ describe('GET /api/providers decorates the Codex cards', () => {
 
     expect(cards.codex.missingPrerequisites).toEqual([]);
     expect(cards.codex.prerequisitesMet).toBe(true);
+  });
+});
+
+describe('GET /api/providers/codex/models', () => {
+  it('returns the catalog and honours ?fresh=1', async () => {
+    codexAppServer.listCodexModels.mockResolvedValue({
+      models: [{ id: 'model-alpha', displayName: 'Alpha', supportedEfforts: ['low', 'medium'] }],
+      fetchedAt: 1_700_000_000_000,
+      error: null,
+    });
+
+    const res = await request(appWith()).get('/api/providers/codex/models');
+    expect(res.status).toBe(200);
+    expect(res.body.models).toHaveLength(1);
+    expect(codexAppServer.listCodexModels).toHaveBeenCalledWith({ fresh: false });
+
+    await request(appWith()).get('/api/providers/codex/models?fresh=1');
+    expect(codexAppServer.listCodexModels).toHaveBeenLastCalledWith({ fresh: true });
+  });
+
+  it('passes the failed-fetch sentinel through instead of publishing an empty picker', async () => {
+    // `models` here is the LAST-KNOWN-GOOD list plus an `error` — the client
+    // must be able to tell that from a plan that genuinely has no models (`[]`)
+    // and from never having asked (`null`).
+    codexAppServer.listCodexModels.mockResolvedValue({
+      models: [{ id: 'model-alpha' }],
+      fetchedAt: 1_700_000_000_000,
+      error: { code: 'CODEX_APP_SERVER_TIMEOUT', message: 'timed out' },
+    });
+
+    const res = await request(appWith()).get('/api/providers/codex/models');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      models: [{ id: 'model-alpha' }],
+      error: { code: 'CODEX_APP_SERVER_TIMEOUT' },
+    });
   });
 });

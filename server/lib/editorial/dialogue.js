@@ -20,6 +20,8 @@
  * the pipeline use double-quote dialogue, so this is a safe simplification.
  */
 
+import { escapeRegExp } from '../textUtils.js';
+
 // Straight + curly double quotes. Used both as a character class body (DQUOTE)
 // and to build "quoted span" / "non-quote run" regexes.
 const DQUOTE = '"“”';
@@ -84,10 +86,6 @@ export const PLAIN_SPEECH_TAG_GROUPS = Object.freeze([
 // Flattened surface forms — kept for the attribution scan's PLAIN_TAG_RE, which
 // only needs "is this token a plain speech tag", not which lemma it maps to.
 const PLAIN_SPEECH_TAGS = Object.freeze(PLAIN_SPEECH_TAG_GROUPS.flatMap((g) => g.forms));
-
-function escapeRegExp(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 function normalizeWord(p) {
   return typeof p === 'string' ? p.trim().toLowerCase() : '';

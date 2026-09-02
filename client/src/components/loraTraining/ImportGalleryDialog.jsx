@@ -81,7 +81,7 @@ export default function ImportGalleryDialog({ dataset, onClose, onImported }) {
       open
       onClose={onClose}
       size="3xl"
-      panelClassName="bg-port-card border border-port-border rounded-xl max-h-[85vh] flex flex-col"
+      panelClassName="bg-port-card border border-port-border rounded-xl flex flex-col"
       ariaLabel="Import images from your gallery"
     >
       <div className="flex items-center justify-between gap-3 p-3 border-b border-port-border">

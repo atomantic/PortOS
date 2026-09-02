@@ -91,6 +91,11 @@ const router = Router();
 
 const MAX_REFERENCE_UPLOAD_BYTES = 20 * 1024 * 1024;
 const ACCEPTED_REFERENCE_MIME = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const REFERENCE_MIME_TO_EXT = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/webp': '.webp',
+};
 
 /**
  * Validate + resolve the `:trackId` path param to a registered track id (#3136).
@@ -289,7 +294,10 @@ router.post('/:id/reference/generate', referenceUpload, asyncHandler(async (req,
   // The service moves the file on success, so the unlink is a harmless
   // ENOENT there.
   const file = req.files?.referenceImage;
-  const upload = file ? { tempPath: file.path, originalname: file.originalname } : null;
+  const upload = file ? {
+    tempPath: file.path,
+    ext: REFERENCE_MIME_TO_EXT[(file.mimetype || '').toLowerCase()],
+  } : null;
   if (upload) res.on('close', () => { unlink(upload.tempPath).catch(() => {}); });
   const body = validateRequest(spriteReferenceGenerateSchema, req.body ?? {});
   // A design upload seeds the identity root, which is always the turnaround

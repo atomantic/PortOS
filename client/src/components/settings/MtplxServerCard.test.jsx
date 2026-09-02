@@ -190,6 +190,34 @@ describe('MtplxServerCard', () => {
     expect(handlers.onInstall).toHaveBeenCalled();
   });
 
+  // The Homebrew `mtplx` is a wrapper that downloads MTPLX itself on first run,
+  // so "on PATH" and "can serve a request" are two different facts. A card that
+  // conflated them offered a Start button guaranteed to fail.
+  it('offers the runtime download, not a Start button, when only the wrapper is installed', async () => {
+    const handlers = await renderCard({
+      installed: true, runtimeReady: false, running: false, supported: true, port: 8000, cachedModels: [],
+    });
+
+    expect(screen.getByText(/Installed — runtime not yet downloaded/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Start MTPLX/ })).toBeNull();
+    // Nor the checkpoint panel: every action in it invokes the same wrapper.
+    expect(screen.queryByRole('button', { name: /Download default checkpoint/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /Download MTPLX runtime/ }));
+    expect(handlers.onInstall).toHaveBeenCalled();
+  });
+
+  // A peer, or a tab left open across an upgrade, sends a payload predating the
+  // field. Reading its absence as "not downloaded" would replace a working
+  // card with a download prompt.
+  it('treats a status payload with no runtimeReady as ready', async () => {
+    await renderCard({
+      installed: true, running: false, supported: true, port: 8000, cachedModels: ['Example/Qwen-MTP'],
+    });
+    expect(screen.queryByText(/runtime not yet downloaded/)).toBeNull();
+    expect(screen.getByRole('button', { name: /Start MTPLX/ })).toBeInTheDocument();
+  });
+
   it('says why, and offers nothing, on a host that cannot run MLX', async () => {
     await renderCard({ installed: false, running: false, supported: false, unsupportedReason: 'MTPLX runs only on macOS with Apple Silicon.' });
     expect(screen.getByText('MTPLX runs only on macOS with Apple Silicon.')).toBeInTheDocument();

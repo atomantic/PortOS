@@ -176,6 +176,12 @@ This is the one rule that keeps catalogs from rotting, and it is enforced: `serv
 
 Existing deep imports (`import { x } from '../lib/foo.js'`) keep working — the barrel exists for *discovery*, not to force a re-import. New code may use either form. The worked example for "barrel + documented exports" is `server/lib/aiToolkit/index.js`.
 
+### Generated manifests are addressed by content, never by position
+
+A checked-in `*.generated.json` must change when — and *only* when — the thing it describes changes. A record pointing at `foo.js:412` breaks the *only*: any edit inserting a line above 412 rewrites it, so its drift test fires on commits that change nothing, each parallel branch regenerates it differently, and **every rebase conflicts on it**. Key each record by the declaring file plus the semantic identity of what it declares (`routeDeclarationKey` in `scripts/generate-api-route-catalog.js`), never by line/column.
+
+**A new generator proves this with `generateAcrossShiftedSources` (`scripts/lib/positionInvariance.js`)** — shift every line in its inputs, regenerate, assert byte-identical output. That tests the rule itself, so it catches a position under any key name. `server/lib/generatedManifests.test.js` is the tree-wide backstop for a manifest whose generator skipped it, and it also **fails when a `scripts/generate-*.js` has no sibling test importing `positionInvariance.js`** — so adoption is structural, not a convention you have to remember. This rule lives in root because the generators are in `scripts/`, which carries no nested file; rationale and the coverage-without-positions pattern are in `server/AGENTS.md`.
+
 ## Scope Boundary
 
 When CoS agents or AI tools work on managed apps outside PortOS, all research, plans, docs, and code for those apps must be written to the target app's own repository/directory — never to this repo. PortOS stores only its own features, plans, and documentation. A PLAN.md, research doc, or feature spec generated for another app goes in that app's directory.

@@ -7,11 +7,6 @@ export const addNotesVault = (data) => request('/notes/vaults', {
   method: 'POST',
   body: JSON.stringify(data)
 });
-export const updateNotesVault = (id, data) => request(`/notes/vaults/${id}`, {
-  method: 'PUT',
-  body: JSON.stringify(data)
-});
-export const deleteNotesVault = (id) => request(`/notes/vaults/${id}`, { method: 'DELETE' });
 
 // Notes - Scanning & Reading
 export const scanNotesVault = (id, options = {}) => {

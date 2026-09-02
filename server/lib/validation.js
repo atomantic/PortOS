@@ -354,10 +354,6 @@ export const referenceRepoUpdateSchema = z.object({
 // either — all ref CRUD goes through /api/apps/:appId/reference-repos.
 export const appUpdateSchema = partialWithoutDefaults(appSchema);
 
-export const managedAppUpdateSchema = z.object({
-  syncFork: z.boolean().optional(),
-}).strict();
-
 const standardizePlanFileSchema = z.string().trim().min(1).max(500)
   .refine((file) => {
     const segments = file.split(/[/\\]/);
@@ -536,7 +532,7 @@ export const providerSchema = z.object({
   orcarouterBacked: z.boolean().optional(),
   // Explicit opt-in to attach the API key to an arbitrary (non-local,
   // non-allowlisted) endpoint — mirrors the aiToolkit providerSchema. Guards
-  // SSRF / key exfiltration (server/lib/aiToolkit/internal/endpointGuard.js).
+  // SSRF / key exfiltration (server/lib/aiToolkit/endpointGuard.js).
   allowCustomEndpoint: z.boolean().optional(),
   envVars: z.record(z.string()).optional(),
   headlessArgs: z.array(z.string()).optional(),
@@ -1522,6 +1518,22 @@ export const subscriptionCostsMapSchema = z.partialRecord(
 /** Body for PUT /api/usage/subscriptions. */
 export const subscriptionCostsSchema = z.object({ costs: subscriptionCostsMapSchema });
 
+/**
+ * Instances that pay API rates rather than the viewer's subscriptions, so the
+ * Across Instances combined total can leave them out. Used by BOTH write
+ * paths — `PUT /api/usage/fleet-billing` (the per-row toggle) and the
+ * `usageApiBilledInstanceIds` slice of `PUT /api/settings` — so a restore
+ * dump can't write an unbounded or non-string list through the generic
+ * settings endpoint. Cap matches the stored peer-digest cap (64).
+ */
+export const usageApiBilledInstanceIdsSchema = z.array(z.string().min(1).max(200)).max(64);
+
+/** Body for PUT /api/usage/fleet-billing. */
+export const usageFleetBillingSchema = z.object({
+  instanceId: z.string().min(1).max(200),
+  usesSubscriptions: z.boolean(),
+});
+
 
 // =============================================================================
 // PORTS
@@ -1916,6 +1928,14 @@ export const localLlmSettingsSchema = z.object({
       port: z.number().int().min(1).max(65535).optional(),
     }).strict().optional(),
   }).strict().optional(),
+  slotstream: z.object({
+    idleMinutes: z.number().int().min(0).max(1440).optional(),
+    launch: z.object({
+      model: z.string().trim().max(300).nullable().optional(),
+      port: z.number().int().min(1).max(65535).optional(),
+      memoryGb: z.number().min(6).max(512).nullable().optional(),
+    }).strict().optional(),
+  }).strict().optional(),
 }).strict();
 
 // =============================================================================
@@ -1986,7 +2006,7 @@ export const llmSchema = z.object({
 // =============================================================================
 
 /**
- * Body schema for PUT /api/apps/:id/documents/:filename and
+ * Body schema for PUT /api/apps/:id/documents/*docPath and
  * PUT /api/cos/gsd/projects/:appId/documents/:docName.
  * Both routes accept a content string plus an optional commit message.
  */

@@ -46,9 +46,6 @@ export const generateLyrics = (body, requestOptions = {}) => request('/music/lyr
   ...requestOptions,
 });
 
-// The merged shipped+user model list for one engine → { models }.
-export const listEngineModels = (engine, options = {}) => request(`/music/models/${encodeURIComponent(engine)}`, options);
-
 // De-register a user-installed model (id is the HF repo id) → { removed }.
 export const removeAudioModel = (engine, id, requestOptions = {}) =>
   request(`/music/models/${encodeURIComponent(engine)}/${id.split('/').map(encodeURIComponent).join('/')}`, {

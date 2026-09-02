@@ -13,6 +13,7 @@
 
 import { describe, it, expect, afterAll, beforeAll, beforeEach } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
+import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 
 let dbReady = false;
 let skipReason = '';
@@ -30,9 +31,9 @@ let skipReason = '';
   }
 }
 
-if (!dbReady) console.log(`⏭️  services/authors/db.test.js skipped: ${skipReason}`);
+const runDb = requireDbOrSkip('services/authors/db.test', dbReady, skipReason);
 
-describe.skipIf(!dbReady)('authors DB adapter round-trip', () => {
+describe.skipIf(!runDb)('authors DB adapter round-trip', () => {
   let db;
   let snap = [];
   beforeAll(async () => {

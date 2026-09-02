@@ -9,7 +9,9 @@ const BARREL_SRC = readFileSync(join(HERE, 'index.js'), 'utf8');
 const README_SRC = readFileSync(join(HERE, 'README.md'), 'utf8');
 
 const sourceFiles = readdirSync(HERE)
-  .filter((f) => f.endsWith('.js') && !f.endsWith('.test.js') && f !== 'index.js');
+  .filter((f) => (f.endsWith('.js') || f.endsWith('.jsx'))
+    && !f.endsWith('.test.js') && !f.endsWith('.test.jsx')
+    && f !== 'index.js');
 
 // The barrel is the machine-checkable enumeration of every public surface in
 // `server/lib/`. If a `export * from './foo.js'` line points to a non-existent
@@ -18,7 +20,7 @@ const sourceFiles = readdirSync(HERE)
 // a README row. Both halves keep the discovery contract in AGENTS.md honest.
 
 describe('server/lib/ barrel', () => {
-  it('re-exports every non-test .js file from index.js', () => {
+  it('re-exports every non-test source file from index.js', () => {
     // The `import * as barrel` above is the load: a star-export of a missing
     // module throws before this body runs. The length check keeps `barrel` live
     // so an unused-import lint can't delete that load.
@@ -30,12 +32,12 @@ describe('server/lib/ barrel', () => {
     }
   });
 
-  it('every non-test .js file has a README row', () => {
+  it('every non-test source file has a README row', () => {
     // Forces the catalog parity: a new helper must also get a one-line
     // README entry. Looser match (filename anywhere in the README) so the
     // table format can evolve without breaking this guard.
     for (const f of sourceFiles) {
-      const base = f.replace(/\.js$/, '');
+      const base = f.replace(/\.jsx?$/, '');
       expect(README_SRC, `missing README entry for ${f}`).toContain(base);
     }
   });

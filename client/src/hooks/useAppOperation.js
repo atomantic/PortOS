@@ -155,14 +155,14 @@ export function useAppOperation({ onComplete, appId: scopeAppId } = {}) {
     };
   }, [scopeAppId, drop]);
 
-  const start = useCallback((type, appId, appName) => {
+  const start = useCallback((type, appId, appName, options = {}) => {
     clearTimeout(clearTimersRef.current[appId]);
     delete clearTimersRef.current[appId];
     setOperations(prev => ({ ...prev, [appId]: { appId, appName, type, steps: [], error: null, completed: false } }));
-    socket.emit(type === 'update' ? 'app:update' : 'app:standardize', { appId });
+    socket.emit(type === 'update' ? 'app:update' : 'app:standardize', { appId, ...options });
   }, []);
 
-  const startUpdate = useCallback((appId, appName) => start('update', appId, appName), [start]);
+  const startUpdate = useCallback((appId, appName, options = {}) => start('update', appId, appName, options), [start]);
   const startStandardize = useCallback((appId, appName) => start('standardize', appId, appName), [start]);
 
   const list = Object.values(operations);

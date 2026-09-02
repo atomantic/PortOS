@@ -77,7 +77,8 @@ export const resolveCliModel = (model) => isConfiguredDefaultModel(model) ? null
 // values (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, plus
 // model-gated `ultra`) and agy
 // (`--help`: "Reasoning effort for the current CLI session (low|medium|high)"). Mirrored in
-// client/src/utils/providers.js — keep in sync.
+// client/src/utils/providers.js — keep in sync
+// (`providerModels.mirror.test.js` fails when the two copies drift).
 //
 // Codex Ultra adds automatic task delegation on the models that advertise it.
 // Keep it model-gated: older Codex models and Luna top out at `max`.
@@ -103,6 +104,12 @@ export const OPENCODE_LOCAL_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'hig
 // identical is the point, since the same pin has to survive a round trip
 // through slashdo.
 export const CURSOR_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
+// Grok Build CLI. `--reasoning-effort <EFFORT>` (aliased `--effort`, which is what
+// `buildEffortArgs` emits). The ladder is grok's own, read off its rejection
+// message rather than guessed: `grok --reasoning-effort bogus` answers
+// `use one of: xhigh, high, medium, low` — so there is no `max`/`minimal` here,
+// and `resolveCliEffort` clamps a stored `max`/`ultra` down to `xhigh`.
+export const GROK_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh']);
 
 /** Union of every accepted effort value across effort-capable CLIs, low→high. */
 export const EFFORT_LEVELS = Object.freeze([...new Set([
@@ -215,6 +222,22 @@ export function antigravityModelEffortLevels(model, models) {
 export function isCodexProvider(provider) {
   const id = String(provider?.id || '').toLowerCase();
   return id === 'codex' || id === 'codex-tui' || commandBasename(provider?.command) === 'codex';
+}
+
+/**
+ * True when a provider is Grok-Build-flavored — the shipped `grok-cli`/`grok-tui`
+ * ids or any provider whose launch command basename is `grok`. Same posture as
+ * `isCodexProvider`, and deliberately defined here rather than imported from
+ * `grok.js`: that module imports THIS one, so importing back would cycle.
+ *
+ * The bare `grok` id is the HTTP API provider, which has no CLI to pass a flag
+ * to — it is excluded so it gets no effort ladder.
+ * @param {{id?:string, command?:string}|null|undefined} provider
+ * @returns {boolean}
+ */
+export function isGrokProvider(provider) {
+  const id = String(provider?.id || '').toLowerCase();
+  return id === 'grok-cli' || id === 'grok-tui' || commandBasename(provider?.command) === 'grok';
 }
 
 /**
@@ -362,6 +385,7 @@ export function effortLevelsForProvider(provider, model = null) {
     return perModel.length ? perModel : null;
   }
   if (isCursorProvider(provider)) return CURSOR_EFFORT_LEVELS;
+  if (isGrokProvider(provider)) return GROK_EFFORT_LEVELS;
   if (isClaudeProvider(provider)) return CLAUDE_EFFORT_LEVELS;
   return null;
 }
@@ -405,11 +429,21 @@ export function resolveCliEffort(effort, provider, model = null) {
 // analyzer when a config rejection has to be blamed on PortOS or on the user.
 export const CODEX_EFFORT_KEY = 'model_reasoning_effort';
 
+// Every spelling of the effort flag a provider CLI accepts as a VALUE-taking
+// argument. `--reasoning-effort` is grok's canonical long form (`--effort` is its
+// documented alias, and the alias is what buildEffortArgs emits) — it has to be
+// recognized here or a user who baked `--reasoning-effort high` into their
+// provider args gets a SECOND, injected `--effort <level>` appended. Grok's
+// parser accepts the duplicate and takes the last one, so their explicit pin
+// would be silently overridden — the exact opposite of the contract below.
+const EFFORT_FLAG_NAMES = Object.freeze(['--effort', '--reasoning-effort']);
+
 /**
  * True when the user has already baked an effort override into the provider's
- * args — claude's `--effort <level>` / `--effort=<level>` or a codex
- * `-c model_reasoning_effort=…` config pair. Mirrors `hasModelFlag`: a baked
- * pin wins and the runner-injected effort is suppressed.
+ * args — claude/agy/grok's `--effort <level>` / `--effort=<level>`, grok's
+ * `--reasoning-effort` long form, or a codex `-c model_reasoning_effort=…`
+ * config pair. Mirrors `hasModelFlag`: a baked pin wins and the
+ * runner-injected effort is suppressed.
  * @param {unknown[]} args
  * @returns {boolean}
  */
@@ -417,10 +451,12 @@ export function hasEffortFlag(args) {
   if (!Array.isArray(args)) return false;
   return args.some((a, i) => {
     if (typeof a !== 'string') return false;
-    if (a.startsWith('--effort=') && a.length > '--effort='.length) return true;
-    if (a === '--effort') {
-      const next = args[i + 1];
-      return typeof next === 'string' && next.length > 0 && !next.startsWith('-');
+    for (const flag of EFFORT_FLAG_NAMES) {
+      if (a.startsWith(`${flag}=`) && a.length > flag.length + 1) return true;
+      if (a === flag) {
+        const next = args[i + 1];
+        if (typeof next === 'string' && next.length > 0 && !next.startsWith('-')) return true;
+      }
     }
     return a.startsWith(`${CODEX_EFFORT_KEY}=`);
   });
@@ -732,6 +768,66 @@ export function resolveBedrockCliModel(id, { env = process.env, providerId } = {
 }
 
 /**
+ * Claude Code's first-party model ids spell a version with DASHES
+ * (`claude-fable-5-1`, `claude-opus-4-8`), while the release is spoken and
+ * written with a dot ("Fable 5.1"). A stored `claude-fable-5.1` therefore looks
+ * right in the picker and is rejected by the CLI at spawn time — the run dies
+ * with "model not found", the task blocks, and nothing about the id says why.
+ *
+ * This canonicalizes the dotted spelling to the dashed one, and ONLY that:
+ *
+ *  - the id must start with a first-party family prefix (`claude-opus-`,
+ *    `claude-sonnet-`, `claude-haiku-`, `claude-fable-`), so a vendor id that
+ *    merely mentions Claude (cursor's `claude-4.6-sonnet-medium`) is untouched;
+ *  - only a dot BETWEEN DIGITS is rewritten, leaving any other dot alone;
+ *  - a Bedrock region-prefixed id (`global.anthropic.…`) is left alone, since
+ *    its prefix dots are structural.
+ *
+ * @param {string|null|undefined} id
+ * @returns {string|null|undefined} the canonical id (or the input unchanged)
+ */
+export function normalizeClaudeModelId(id) {
+  if (typeof id !== 'string' || !id) return id;
+  if (hasBedrockRegionPrefix(id)) return id;
+  if (!/^claude-(?:opus|sonnet|haiku|fable)-/i.test(id)) return id;
+  return id.replace(/(\d)\.(?=\d)/g, '$1-');
+}
+
+// Dedup so the canonicalization notice prints once per (provider, model) per
+// process rather than on every run, matching `warnBareBedrockModel`.
+const _warnedDottedClaudeModels = new Set();
+
+/**
+ * The model string a Claude Code spawn should pass to `--model`: canonicalize a
+ * dotted first-party id, then map it to its Bedrock form when the box is in
+ * Bedrock mode. The single home for both corrections, called from every
+ * Claude-command argv builder (`claudeCliArgs`, `claudeSpawnArgs`,
+ * `resolveInjectedTuiModel`) so a fix in one is a fix in all.
+ *
+ * Deliberately NOT folded into `resolveBedrockCliModel`: that helper is also the
+ * documented Bedrock-only mapper, and the dot rewrite is gated on the caller
+ * already having resolved a Claude *Code* command — cursor and friends label
+ * Anthropic models under their own dotted ids and must not be rewritten.
+ *
+ * @param {string|null|undefined} id
+ * @param {{env?:NodeJS.ProcessEnv, providerId?:string}} [opts]
+ * @returns {string|null|undefined}
+ */
+export function resolveClaudeCliModel(id, { env = process.env, providerId } = {}) {
+  const canonical = normalizeClaudeModelId(id);
+  if (canonical !== id) {
+    const key = `${providerId || 'claude-code'}::${id}`;
+    if (!_warnedDottedClaudeModels.has(key)) {
+      _warnedDottedClaudeModels.add(key);
+      console.error(
+        `⚠️ Provider '${providerId || 'claude-code'}' model '${id}' spells its version with a dot — Claude Code only serves the dashed id, using '${canonical}' for this run (update the provider's model list to silence).`,
+      );
+    }
+  }
+  return resolveBedrockCliModel(canonical, { env, providerId });
+}
+
+/**
  * The model string a TUI spawn should actually pass to `--model`, given the
  * resolved launch command. The single home for a decision that used to be
  * open-coded in TWO parallel ladders — `tuiHandshake.js#buildTuiInvocation`
@@ -741,8 +837,10 @@ export function resolveBedrockCliModel(id, { env = process.env, providerId } = {
  * only answers "which id".
  *
  *  - OpenCode: namespace a bare Ollama id (`ollama/<id>`); never Bedrock-mapped.
- *  - Claude Code: map a bare Claude id to its region-prefixed Bedrock form when
- *              the box is in Bedrock mode (no-op off Bedrock / for non-Claude ids).
+ *  - Claude Code: canonicalize a dotted first-party id (`claude-fable-5.1` →
+ *              `claude-fable-5-1`), then map a bare Claude id to its
+ *              region-prefixed Bedrock form when the box is in Bedrock mode
+ *              (no-op off Bedrock / for non-Claude ids).
  *  - Anything else: passed through verbatim.
  *
  * The Bedrock arm is deliberately OPT-IN on the launch command rather than the
@@ -765,7 +863,7 @@ export function resolveBedrockCliModel(id, { env = process.env, providerId } = {
 export function resolveInjectedTuiModel(model, provider, command = provider?.command) {
   if (isOpencodeCommand(command)) return prefixOpencodeModel(provider, model);
   if (!isClaudeCommand(command)) return model;
-  return resolveBedrockCliModel(model, {
+  return resolveClaudeCliModel(model, {
     env: { ...process.env, ...provider?.envVars },
     providerId: provider?.id,
   });

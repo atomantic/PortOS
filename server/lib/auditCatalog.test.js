@@ -7,6 +7,7 @@ import {
   DO_WORK_MODE_CONTRACT,
   isAuditTaskType,
   defaultFileIssuesFor,
+  auditDoWorkRequiresWorktree,
   isFileIssuesMode,
   getAuditFilingPreset,
   modeContractFor,
@@ -36,9 +37,16 @@ describe('AUDIT_DEFINITIONS', () => {
     expect(defaultFileIssuesFor('ux')).toBe(true);
     expect(defaultFileIssuesFor('data-safety')).toBe(true);
     expect(defaultFileIssuesFor('simplify')).toBe(true);
+    expect(defaultFileIssuesFor('module-hygiene')).toBe(true);
     expect(defaultFileIssuesFor('security')).toBe(false);
     expect(defaultFileIssuesFor('accessibility')).toBe(false);
     expect(defaultFileIssuesFor('unknown')).toBe(false);
+  });
+
+  it('declares isolation as a catalog capability only for audits that require it', () => {
+    expect(auditDoWorkRequiresWorktree('module-hygiene')).toBe(true);
+    expect(auditDoWorkRequiresWorktree('simplify')).toBe(false);
+    expect(auditDoWorkRequiresWorktree('unknown')).toBe(false);
   });
 });
 
@@ -99,6 +107,7 @@ describe('getAuditFilingPreset', () => {
   it('returns the preset for an audit type and null otherwise', () => {
     expect(getAuditFilingPreset('data-safety').slugPrefix).toBe('data-safety-');
     expect(getAuditFilingPreset('simplify').issueLabel).toBe('code-quality');
+    expect(getAuditFilingPreset('module-hygiene').slugPrefix).toBe('module-hygiene-');
     expect(getAuditFilingPreset('claim-issue')).toBeNull();
   });
 

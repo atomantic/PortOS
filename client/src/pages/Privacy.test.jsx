@@ -41,7 +41,6 @@ vi.mock('../services/api', () => ({
   ]),
   // Broker case summary chips on the Overview tab (#2146).
   getPrivacyScanStatus: vi.fn().mockResolvedValue({ enabledBrokers: 2, caseCounts: { found: 1 }, dueForRecheck: 0 }),
-  getPrivacyOrg: vi.fn(),
   createPrivacyOrg: vi.fn(),
   updatePrivacyOrg: vi.fn(),
   deletePrivacyOrg: vi.fn().mockResolvedValue({ ok: true }),

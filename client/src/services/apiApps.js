@@ -54,6 +54,17 @@ export const resolveAppPullRequest = (id, number, options = {}) =>
     silent: true,
     ...options,
   });
+// Queue the `pr-reviewer` scheduled task narrowed to ONE open PR/MR instead of
+// letting it pick from the app's whole external open set. The server owns the
+// eligibility check (open, GitHub, opened by someone else) and the duplicate
+// guard, so a refusal comes back as an explained error rather than a run that
+// silently reviews nothing.
+export const reviewAppPullRequest = (id, number, options = {}) =>
+  request(`/apps/${id}/pull-requests/${encodeURIComponent(number)}/review`, {
+    method: 'POST',
+    silent: true,
+    ...options,
+  });
 // Effective Layered Intelligence config (self-improvement loop) for an app —
 // stored partial merged over the shipped defaults. Read-only; saved through
 // updateApp (the `layeredIntelligence` key routes to the merge helper server-
@@ -145,22 +156,15 @@ export const fixAppViteHosts = (id, body) => request(`/apps/${id}/fix-vite-hosts
 export const archiveApp = (id) => request(`/apps/${id}/archive`, { method: 'POST' });
 export const unarchiveApp = (id) => request(`/apps/${id}/unarchive`, { method: 'POST' });
 export const openAppInEditor = (id) => request(`/apps/${id}/open-editor`, { method: 'POST' });
-export const openAppInClaude = (id) => request(`/apps/${id}/open-claude`, { method: 'POST' });
 export const openAppFolder = (id) => request(`/apps/${id}/open-folder`, { method: 'POST' });
 // The server resolves the real .xcworkspace/.xcodeproj name and opens it on the
 // machine Xcode runs on — so this works from a phone, and a missing project
 // comes back as a real error instead of a silent `xcode://` no-op.
 export const openAppInXcode = (id) => request(`/apps/${id}/open-xcode`, { method: 'POST' });
 export const refreshAppConfig = (id) => request(`/apps/${id}/refresh-config`, { method: 'POST' });
-export const pullAndUpdateApp = (id, body = {}, options = {}) => request(`/apps/${id}/update`, {
-  method: 'POST',
-  body: JSON.stringify(body),
-  ...options,
-});
 // `options` lets a caller suppress request()'s auto-toast with `{ silent: true }`
 // when it already renders its own error UI.
 export const buildApp = (id, options = {}) => request(`/apps/${id}/build`, { method: 'POST', ...options });
-export const getAppStatus = (id) => request(`/apps/${id}/status`);
 export const getAppTaskTypes = (id) => request(`/apps/${id}/task-types`);
 export const toggleAllAppTaskTypes = (id, enabled, options = {}) => request(`/apps/${id}/task-types/all`, {
   method: 'PUT',
@@ -180,22 +184,22 @@ export const bulkUpdateAppTaskTypeOverride = (taskType, { enabled }, options = {
   body: JSON.stringify({ enabled }),
   ...options
 });
-export const detectAppIcons = () => request('/apps/detect-icons', { method: 'POST' });
 export const detectAppIcon = (id) => request(`/apps/${id}/detect-icon`, { method: 'POST' });
-export const getAppLogs = (id, lines = 100, processName) => {
-  const params = new URLSearchParams({ lines: String(lines) });
-  if (processName) params.set('process', processName);
-  return request(`/apps/${id}/logs?${params}`);
-};
 
 export const installXcodeScripts = (id, scripts) => request(`/apps/${id}/xcode-scripts/install`, {
   method: 'POST',
   body: JSON.stringify({ scripts })
 });
 export const getAppDocuments = (id, options) => request(`/apps/${id}/documents`, options);
-export const getAppDocument = (id, filename) => request(`/apps/${id}/documents/${filename}`);
-export const saveAppDocument = (id, filename, content, commitMessage) =>
-  request(`/apps/${id}/documents/${filename}`, {
+// Document paths are repo-relative and may be nested (`docs/decisions/x.md`), so
+// encode per segment — encodeURIComponent on the whole path would escape the
+// separators the wildcard route splits on.
+const documentPath = (id, filename) =>
+  `/apps/${id}/documents/${String(filename).split('/').map(encodeURIComponent).join('/')}`;
+export const getAppDocument = (id, filename, options) => request(documentPath(id, filename), options);
+export const saveAppDocument = (id, filename, content, commitMessage, options) =>
+  request(documentPath(id, filename), {
+    ...options,
     method: 'PUT',
     body: JSON.stringify({ content, ...(commitMessage && { commitMessage }) })
   });

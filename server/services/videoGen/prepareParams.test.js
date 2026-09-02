@@ -130,9 +130,12 @@ describe('withStagedRollback', () => {
 
 describe('cleanupMultipartTemp', () => {
   it('unlinks every multipart temp path and tolerates an empty/absent map', async () => {
-    await cleanupMultipartTemp({ sourceImage: upload('sourceImage'), lastImage: upload('lastImage', 'end.png') });
+    const uploads = { sourceImage: upload('sourceImage'), lastImage: upload('lastImage', 'end.png') };
+    await cleanupMultipartTemp(uploads);
     expect(unlink).toHaveBeenCalledWith('/tmp/multipart-sourceImage-frame.png');
     expect(unlink).toHaveBeenCalledWith('/tmp/multipart-lastImage-end.png');
+    await cleanupMultipartTemp(uploads);
+    expect(unlink).toHaveBeenCalledTimes(2);
     await expect(cleanupMultipartTemp(undefined)).resolves.toBeUndefined();
   });
 });

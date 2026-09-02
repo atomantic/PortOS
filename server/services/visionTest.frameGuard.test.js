@@ -19,7 +19,7 @@ vi.mock('./providers.js', () => ({
 vi.mock('../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout: vi.fn() }));
 vi.mock('./ollamaManager.js', () => ({ ensureProviderReady: vi.fn(async () => ({ success: true })) }));
 vi.mock('./visionCli.js', () => ({ describeImageViaCli: vi.fn() }));
-vi.mock('../lib/aiToolkit/internal/endpointGuard.js', () => ({
+vi.mock('../lib/aiToolkit/endpointGuard.js', () => ({
   assertSecretEndpoint: vi.fn(),
   evaluateSecretEndpoint: vi.fn(() => ({ ok: true })),
 }));

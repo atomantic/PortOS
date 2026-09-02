@@ -72,6 +72,35 @@ describe('chatgptZipImport service', () => {
       expect(datAssetId('file-ABC123.dat')).toBe('file-ABC123');
       expect(datAssetId('nested/dir/file_DEADBEEF.dat')).toBe('file_DEADBEEF');
     });
+    it('splits on backslashes too, so a Windows-style member reduces to a basename', () => {
+      expect(datAssetId('a\\..\\..\\evil.dat')).toBe('evil');
+      expect(datAssetId('nested\\dir\\file-ABC.dat')).toBe('file-ABC');
+    });
+  });
+
+  describe('isSafeDatMember', () => {
+    it('accepts plain and forward-slash-nested member names', async () => {
+      const { isSafeDatMember } = (await import('./chatgptZipImport.js')).__test;
+      expect(isSafeDatMember('file-ABC.dat')).toBe(true);
+      expect(isSafeDatMember('chat/files/file-abc.dat')).toBe(true);
+    });
+    it('rejects backslash separators, NUL, and empty/dot ids', async () => {
+      const { isSafeDatMember } = (await import('./chatgptZipImport.js')).__test;
+      // A `\` is NOT a ZIP separator, so a name carrying one is malformed or
+      // hostile — refused rather than normalized into an extracted file.
+      expect(isSafeDatMember('a\\..\\..\\evil.dat')).toBe(false);
+      expect(isSafeDatMember('files/..\\evil.dat')).toBe(false);
+      expect(isSafeDatMember('bad\u0000name.dat')).toBe(false);
+      expect(isSafeDatMember('.dat')).toBe(false);     // id becomes ''
+      expect(isSafeDatMember('..dat')).toBe(false);    // id becomes '.'
+      // Windows device names resolve to a device, not a file, whatever the ext.
+      expect(isSafeDatMember('CON.dat')).toBe(false);
+      expect(isSafeDatMember('files/lpt1.dat')).toBe(false);
+      expect(isSafeDatMember('com10.dat')).toBe(true);  // only COM1-9 are reserved
+      // Forward-slash components ARE directories: the basename is what's used,
+      // so traversal components reduce away harmlessly.
+      expect(isSafeDatMember('../../evil.dat')).toBe(true);
+    });
   });
 
   describe('extFromName (fallback extension allowlist)', () => {
@@ -170,6 +199,85 @@ describe('chatgptZipImport service', () => {
       await expect(extractChatgptZip(zipPath, { assetDir })).rejects.toThrow();
       const written = await readdir(assetDir).catch(() => []);
       expect(written).toEqual([]);   // no <id>.part temp left behind
+    });
+
+    it('writes nothing outside the asset dir for a member whose name carries backslashes', async () => {
+      // `a\..\..\evil.dat` is the classic Zip Slip shape. Two layers stand
+      // between it and an escape: `zipStream.js` flattens separators and
+      // `.`/`..` components as it decodes the header (so the consumer sees
+      // `a/evil.dat` and extracts a harmless `evil.png` INSIDE the asset dir),
+      // and `isSafeDatMember` refuses anything that still isn't a plain filename
+      // before the temp file is opened. This pins the end-to-end outcome that
+      // matters: whichever layer acts, no write lands outside `assetDir` on any
+      // platform, and the rest of the import still succeeds.
+      const assetDir = join(TMP, 'nest', 'assets');
+      const zipPath = await writeZip([
+        ['conversations-000.json', JSON.stringify([{ id: 'c1', title: 'A', mapping: {} }])],
+        ['a\\..\\..\\evil.dat', PNG],
+        ['file-OK.dat', JPEG],
+      ]);
+      const { conversationFiles, assets } = await extractChatgptZip(zipPath, { assetDir });
+
+      expect(conversationFiles.length).toBe(1);
+      expect(assets.get('file-OK').file).toBe('file-OK.jpg');
+      // The hostile member was flattened to a basename and landed inside the
+      // asset dir — never at `${TMP}/evil.png` or above it.
+      expect((await readdir(assetDir)).sort()).toEqual(['evil.png', 'file-OK.jpg']);
+      expect((await readdir(join(TMP, 'nest'))).sort()).toEqual(['assets']);
+      expect((await readdir(TMP)).sort()).toEqual(['export.zip', 'nest']);
+    });
+
+    it('skips a .dat member whose name contains a NUL instead of failing the whole import', async () => {
+      // A NUL survives the parser's sanitizer, and `createWriteStream` on such a
+      // path errors — which used to reject the ENTIRE import. The member is now
+      // skipped and the rest of the export still lands.
+      const assetDir = join(TMP, 'assets');
+      const zipPath = await writeZip([
+        ['conversations-000.json', JSON.stringify([{ id: 'c1', title: 'A', mapping: {} }])],
+        ['bad\u0000name.dat', PNG],
+        ['file-OK.dat', JPEG],
+      ]);
+      const { conversationFiles, stats } = await extractChatgptZip(zipPath, { assetDir });
+      expect(conversationFiles.length).toBe(1);
+      expect(stats.assetCount).toBe(1);
+      expect(await readdir(assetDir)).toEqual(['file-OK.jpg']);
+    });
+
+    it('skips a .dat member named after a Windows device instead of failing the import', async () => {
+      const assetDir = join(TMP, 'assets');
+      const zipPath = await writeZip([
+        ['conversations-000.json', JSON.stringify([{ id: 'c1', title: 'A', mapping: {} }])],
+        ['CON.dat', PNG],
+        ['file-OK.dat', JPEG],
+      ]);
+      const { conversationFiles, stats } = await extractChatgptZip(zipPath, { assetDir });
+      expect(conversationFiles.length).toBe(1);
+      expect(stats.assetCount).toBe(1);
+      expect(await readdir(assetDir)).toEqual(['file-OK.jpg']);
+    });
+
+    it('skips .dat members whose id degenerates to "" or "." rather than writing a dotfile', async () => {
+      const assetDir = join(TMP, 'assets');
+      const zipPath = await writeZip([
+        ['conversations-000.json', JSON.stringify([{ id: 'c1', title: 'A', mapping: {} }])],
+        ['..dat', PNG],   // id '.'
+        ['.dat', PNG],    // id ''
+      ]);
+      const { stats } = await extractChatgptZip(zipPath, { assetDir });
+      expect(stats.assetCount).toBe(0);
+      expect(await readdir(assetDir)).toEqual([]);   // no `..png` / `.png` dotfiles
+    });
+
+    it('still extracts a normally-nested member such as chat/files/file-abc.dat', async () => {
+      const assetDir = join(TMP, 'assets');
+      const zipPath = await writeZip([
+        ['conversations-000.json', JSON.stringify([{ id: 'c1', title: 'A', mapping: {} }])],
+        ['chat/files/file-abc.dat', PNG],
+      ]);
+      const { assets, stats } = await extractChatgptZip(zipPath, { assetDir });
+      expect(stats.assetCount).toBe(1);
+      expect(assets.get('file-abc').file).toBe('file-abc.png');
+      expect(await readdir(assetDir)).toEqual(['file-abc.png']);
     });
 
     it('cleans up already-written assets and throws a 400 when a conversation shard is corrupt JSON', async () => {

@@ -2,14 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { escapeRegExp } from '../../lib/textUtils.js';
 
 const TEST_HOME = join(tmpdir(), `portos-audiomux-test-${process.pid}-${Date.now()}`);
 
-// Escape every RegExp metacharacter so a filesystem path can be spliced into a
-// pattern literally. `\` and `]` are the two that matter most here: `\` is the
-// Windows path separator, and a class that forgets to escape `]` closes itself
-// early and silently stops escaping anything.
-const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const FAKE_MUSIC_DIR = join(TEST_HOME, 'music');
 
 vi.mock('../../lib/fileUtils.js', async () => {

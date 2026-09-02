@@ -4,8 +4,21 @@ import userEvent from '@testing-library/user-event';
 
 vi.mock('../../services/api', () => ({ playLoomTurn: vi.fn() }));
 vi.mock('../MediaImage', () => ({ default: (props) => <img alt="" {...props} /> }));
+vi.mock('socket.io-client', () => ({
+  io: vi.fn(() => ({ on: vi.fn(), emit: vi.fn(), disconnect: vi.fn() })),
+}));
+vi.mock('./LoomHostedSessionModal', () => ({
+  default: ({ onSessionCreated }) => (
+    <button type="button" onClick={() => onSessionCreated({ id: 'host-session' }, {
+      id: 'host-session', token: 'host-token', joinUrl: 'https://example.test/fableloom/join#session=host-session&token=host-token',
+    })}>
+      Start hosted session
+    </button>
+  ),
+}));
 
 import { playLoomTurn } from '../../services/api';
+import { io } from 'socket.io-client';
 import LoomPlayPanel from './LoomPlayPanel';
 
 const loom = { id: 'loom-1', name: 'The Hollow Crown', episodes: [] };
@@ -31,6 +44,18 @@ const sendMessage = async (user, text) => {
 beforeEach(() => vi.clearAllMocks());
 
 describe('LoomPlayPanel', () => {
+  it('authenticates the host socket with the session token', async () => {
+    const user = userEvent.setup();
+    render(<LoomPlayPanel loom={loom} episode={episode} />);
+
+    await user.click(screen.getByRole('button', { name: 'Host (QR)' }));
+    await user.click(screen.getByRole('button', { name: 'Start hosted session' }));
+
+    expect(io).toHaveBeenCalledWith('/fableloom-hosted', expect.objectContaining({
+      auth: { sessionId: 'host-session', token: 'host-token', role: 'host' },
+    }));
+  });
+
   it('presents produced media as the main stage with the teleplay beside it', () => {
     const onClose = vi.fn();
     const producedEpisode = {

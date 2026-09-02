@@ -11,6 +11,7 @@
 
 import { describe, it, expect, afterAll, beforeAll } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../lib/db.js';
+import { requireDbOrSkip } from '../lib/dbTestGate.js';
 
 const originalKey = process.env.PRIVACY_VAULT_KEY;
 process.env.PRIVACY_VAULT_KEY = 'e'.repeat(64);
@@ -31,9 +32,9 @@ let skipReason = '';
   }
 }
 
-if (!dbReady) console.log(`⏭️  privacyOptOut.db.test.js skipped: ${skipReason}`);
+const runDb = requireDbOrSkip('services/privacyOptOut.db.test', dbReady, skipReason);
 
-describe.skipIf(!dbReady)('privacy opt-out engine DB round-trip', () => {
+describe.skipIf(!runDb)('privacy opt-out engine DB round-trip', () => {
   let svc; // privacyOptOut
   let brokers; // privacyBrokers
   let vault;

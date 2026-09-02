@@ -35,6 +35,13 @@
  */
 
 import { listSpecNames, resolveThreejsAttachments } from './threejsModel.js';
+import {
+  applyLinear,
+  applyTransform,
+  composeTransform,
+  degreesToRadians,
+  IDENTITY_TRANSFORM,
+} from './threejsTransform.js';
 
 // Sampling resolution over a part's local bounding box. 8³ is enough to
 // estimate a containment fraction to a couple of percent, which is all the
@@ -62,73 +69,6 @@ const HEAVY_OVERLAP_FRACTION = 0.5;
 const CONTACT_FRACTION = 0.15;
 
 const EPSILON = 1e-9;
-
-const degreesToRadians = (degrees) => (degrees * Math.PI) / 180;
-
-/** Row-major 3×3 linear part plus a translation — an affine transform. */
-const IDENTITY_TRANSFORM = { linear: [1, 0, 0, 0, 1, 0, 0, 0, 1], translation: [0, 0, 0] };
-
-const multiplyLinear = (a, b) => {
-  const out = new Array(9);
-  for (let row = 0; row < 3; row += 1) {
-    for (let column = 0; column < 3; column += 1) {
-      out[(row * 3) + column] = (a[row * 3] * b[column])
-        + (a[(row * 3) + 1] * b[3 + column])
-        + (a[(row * 3) + 2] * b[6 + column]);
-    }
-  }
-  return out;
-};
-
-const applyLinear = (linear, [x, y, z]) => [
-  (linear[0] * x) + (linear[1] * y) + (linear[2] * z),
-  (linear[3] * x) + (linear[4] * y) + (linear[5] * z),
-  (linear[6] * x) + (linear[7] * y) + (linear[8] * z),
-];
-
-const applyTransform = (transform, point) => {
-  const rotated = applyLinear(transform.linear, point);
-  return [
-    rotated[0] + transform.translation[0],
-    rotated[1] + transform.translation[1],
-    rotated[2] + transform.translation[2],
-  ];
-};
-
-// Matches `THREE.Euler` order 'XYZ', which is what the preview and the exported
-// factory both apply — a different composition here would measure a part that
-// is not the one on screen.
-const rotationMatrix = ([xDegrees, yDegrees, zDegrees]) => {
-  const [c1, s1] = [Math.cos(degreesToRadians(xDegrees)), Math.sin(degreesToRadians(xDegrees))];
-  const [c2, s2] = [Math.cos(degreesToRadians(yDegrees)), Math.sin(degreesToRadians(yDegrees))];
-  const [c3, s3] = [Math.cos(degreesToRadians(zDegrees)), Math.sin(degreesToRadians(zDegrees))];
-  return [
-    c2 * c3, -c2 * s3, s2,
-    (c1 * s3) + (s1 * c3 * s2), (c1 * c3) - (s1 * s3 * s2), -s1 * c2,
-    (s1 * s3) - (c1 * c3 * s2), (s1 * c3) + (c1 * s3 * s2), c1 * c2,
-  ];
-};
-
-const composeTransform = (parent, part) => {
-  const rotation = rotationMatrix(part.rotationDegrees || [0, 0, 0]);
-  const [sx, sy, sz] = part.scale || [1, 1, 1];
-  // R · S with S diagonal — scaling columns is the whole multiplication.
-  const local = [
-    rotation[0] * sx, rotation[1] * sy, rotation[2] * sz,
-    rotation[3] * sx, rotation[4] * sy, rotation[5] * sz,
-    rotation[6] * sx, rotation[7] * sy, rotation[8] * sz,
-  ];
-  const position = part.position || [0, 0, 0];
-  const offset = applyLinear(parent.linear, position);
-  return {
-    linear: multiplyLinear(parent.linear, local),
-    translation: [
-      offset[0] + parent.translation[0],
-      offset[1] + parent.translation[1],
-      offset[2] + parent.translation[2],
-    ],
-  };
-};
 
 /**
  * Affine inverse, or `null` when the linear part is singular. A stored spec

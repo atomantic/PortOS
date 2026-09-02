@@ -81,7 +81,18 @@ const detectVideoRuntime = (blob) => {
   if (/\bwan[\s._-]?2|wan-ai\b/.test(blob) || /\bwan2\.\d/.test(blob)) {
     return { runtime: 'wan22', installHint: 'INSTALL_WAN22=1 bash scripts/setup-image-video.sh' };
   }
-  if (/fastvideo|fastmetal/i.test(blob)) {
+  if (/fastvideo|fastmetal|fasth3/i.test(blob)) {
+    // FastH3 needs more than the venv: the row also has to declare
+    // `fastvideoFamily: 'fasth3'` (a different entry script and argv shape),
+    // and the published packs are split across a components repo and a DiT
+    // pack — neither of which a single-repo self-service add can express. Say
+    // that instead of pointing at an install script that would not fix it.
+    if (/fasth3/i.test(blob)) {
+      return {
+        runtime: 'fastvideo',
+        refusal: 'needs a FastH3 registry row (its own entry script, and for the split packs a second download) that the self-service add flow cannot express — use the shipped FastH3 entry in Video Gen, or add it to data/media-models.json by hand',
+      };
+    }
     return { runtime: 'fastvideo', installHint: 'INSTALL_FASTVIDEO=1 bash scripts/setup-image-video.sh' };
   }
   if (/hunyuan/.test(blob)) {
@@ -297,9 +308,10 @@ export const classifyHfMediaModel = ({ repo, model, kind, runtime, runner, isWin
   // (which would otherwise route it into the image branch and skip this check
   // entirely, persisting a Wan/Hunyuan repo as a bogus image model).
   if (detectedVideo && !ADDABLE_VIDEO_RUNTIMES.includes(detectedVideo.runtime)) {
-    const runtimeReason = detectedVideo.installHint
-      ? `needs a dedicated venv (${detectedVideo.installHint}) and can't be added self-service — set it up via the script, then edit data/media-models.json`
-      : 'is not supported by PortOS';
+    const runtimeReason = detectedVideo.refusal
+      || (detectedVideo.installHint
+        ? `needs a dedicated venv (${detectedVideo.installHint}) and can't be added self-service — set it up via the script, then edit data/media-models.json`
+        : 'is not supported by PortOS');
     throw new ServerError(
       `HuggingFace repo "${repo}" targets the "${detectedVideo.runtime}" runtime, which ${runtimeReason}.`,
       { status: 422, code: 'HF_UNSUPPORTED_RUNTIME' },

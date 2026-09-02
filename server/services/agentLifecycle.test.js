@@ -303,6 +303,40 @@ describe('agentLifecycle — guard wiring', () => {
     // The synchronous mirror, not a re-implemented disk read.
     expect(AGENT_LIFECYCLE_SRC).toMatch(/import \{ isUpdateInProgress \} from '\.\/updateChecker\.js'/);
   });
+
+  it('fails closed before spawning when public-review security screening is incomplete', () => {
+    expect(AGENT_LIFECYCLE_SRC).toContain('public-review-security-scan-incomplete');
+    expect(AGENT_LIFECYCLE_SRC).toContain('public-review-no-cleared-prs');
+    expect(AGENT_LIFECYCLE_SRC).toContain('public-review-eligibility-incomplete');
+    // The provider-unsupported categories moved to `publicReviewProviderBlock`
+    // with the gate decision itself; their exact values are asserted there
+    // (providerVendors.publicReview.test.js).
+    expect(AGENT_LIFECYCLE_SRC).toMatch(/if \(scanBlock\) \{[\s\S]*?status: 'blocked'/);
+    expect(AGENT_LIFECYCLE_SRC).toMatch(/expected fail-closed safety outcome/);
+    const gateStart = AGENT_LIFECYCLE_SRC.indexOf('const scanBlock = publicReviewScanBlock(task)');
+    const gateEnd = AGENT_LIFECYCLE_SRC.indexOf('const postureBlock = publicReviewProviderBlock(provider, publicReviewPosture', gateStart);
+    expect(gateEnd).toBeGreaterThan(gateStart);
+    expect(AGENT_LIFECYCLE_SRC.slice(gateStart, gateEnd)).not.toContain("cosEvents.emit('agent:error'");
+  });
+
+  // #5830 collapsed the two per-stage provider gates into one and dropped the
+  // `publicReview &&` guard with them, so an ORDINARY task — posture `null`,
+  // which no vendor declares a recipe for — was blocked at spawn with
+  // "has no enforced null public-content review mode". The decision now lives
+  // in `publicReviewProviderBlock` (unit-tested in
+  // providerVendors.publicReview.test.js), which returns null for a task that
+  // requested no posture. Pin the call so the caller cannot re-derive it from a
+  // boolean support check and reintroduce the same collapse.
+  it('asks the posture helper for the provider gate rather than re-deriving it', () => {
+    expect(AGENT_LIFECYCLE_SRC).toContain('const postureBlock = publicReviewProviderBlock(provider, publicReviewPosture, { tui: isTui })');
+    expect(AGENT_LIFECYCLE_SRC).toMatch(/if \(postureBlock\) \{[\s\S]*?status: 'blocked'/);
+    // The helper owns the blocked category too, so the gate cannot pick its own.
+    expect(AGENT_LIFECYCLE_SRC).toContain('const { reason, category } = postureBlock;');
+    // The reason text belongs to the helper — building it here means the gate
+    // decided for itself whether the posture was supported.
+    expect(AGENT_LIFECYCLE_SRC).not.toContain('public-content review mode');
+    expect(AGENT_LIFECYCLE_SRC).not.toMatch(/supportsPublicReviewPosture\(/);
+  });
 });
 
 // ─── Coverage guard for the self-update spawn gate (issue #4124) ────────────
@@ -364,8 +398,11 @@ describe('self-update spawn gate — funnel coverage (#4124)', () => {
   it('subAgentSpawner holds the dispatch on the synchronous update flag', () => {
     const src = readFileSync(join(SERVICES_DIR, 'subAgentSpawner.js'), 'utf-8');
     expect(src).toMatch(/import \{ isUpdateInProgress \} from '\.\/updateChecker\.js'/);
-    const idx = src.indexOf("cosEvents.on('task:ready'");
-    expect(idx, 'the task:ready listener must exist').toBeGreaterThan(-1);
+    // The dispatch body lives in `handleTaskReady`, the named function the
+    // `task:ready` registration wraps in a `.catch` (a plain EventEmitter would
+    // otherwise leak an async listener's rejection).
+    const idx = src.indexOf('async function handleTaskReady');
+    expect(idx, 'the task:ready dispatch must exist').toBeGreaterThan(-1);
     const spawnIdx = src.indexOf('await spawnAgentForTask(task)', idx);
     expect(spawnIdx).toBeGreaterThan(idx);
     // The hold is BEFORE the spawn, and before the (awaited) runner probe — a
@@ -529,9 +566,9 @@ describe('runAgentSpawn source — handedOff pre-spawn vs post-handoff split', (
 describe('runAgentSpawn source — durable TUI ownership (#3202)', () => {
   it('routes TUI providers through the runner when it is available', () => {
     expect(RUN_SPAWN_BODY).toMatch(
-      /const executionMode = isTui \? \(useRunner \? 'runner-tui' : 'tui'\)/
+      /const executionMode = isTui \? \(dispatchUseRunner \? 'runner-tui' : 'tui'\)/
     );
-    expect(RUN_SPAWN_BODY).toMatch(/spawnTuiAgent\(\{[\s\S]{0,1000}?useDurableRunner:\s*useRunner/);
+    expect(RUN_SPAWN_BODY).toMatch(/spawnTuiAgent\(\{[\s\S]{0,1000}?useDurableRunner:\s*dispatchUseRunner/);
     expect(RUN_SPAWN_BODY).not.toMatch(/useRunner:\s*isTui\s*\?\s*false\s*:\s*useRunner/);
   });
 });
@@ -692,7 +729,10 @@ describe('runAgentSpawn source — instance provenance + claim ordering (#1563)'
 
   it('records claimFlow separately from CoS-managed PR/worktree flags', () => {
     const registerIdx = AGENT_LIFECYCLE_SRC.indexOf('registerAgent(agentId, task.id, {');
-    const metaSlice = AGENT_LIFECYCLE_SRC.slice(registerIdx, registerIdx + 8_000);
+    // Slice to the END of the call, not a fixed byte window: the projected keys
+    // sit near the bottom of a growing metadata object, so a magic-number window
+    // makes an unrelated comment above them read as a missing key.
+    const metaSlice = AGENT_LIFECYCLE_SRC.slice(registerIdx, AGENT_LIFECYCLE_SRC.indexOf('\n  });', registerIdx));
     expect(metaSlice).toContain('configOpenPR: isTruthyMeta(task.metadata?.openPR)');
     expect(metaSlice).toContain('configClaimFlow: isClaimFlowTask(task, isTruthyMeta)');
     expect(metaSlice.indexOf('configClaimFlow')).toBeGreaterThan(metaSlice.indexOf('configOpenPR'));

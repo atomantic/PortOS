@@ -7,6 +7,11 @@
 
 import { BRANCHES_PER_AGENT_MAX, BRANCHES_PER_AGENT_MIN, DEFAULT_REPO_SYNC_VERIFY_MODE } from '../lib/cosValidation.js';
 import { isAuditTaskType, defaultFileIssuesFor } from '../lib/auditCatalog.js';
+import { MODEL_ABUSE_GUARD_ID } from '../lib/modelAbuseGuard.js';
+import {
+  PUBLIC_REVIEW_GATE_EXECUTION_PROFILE,
+  PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
+} from '../lib/agentExecutionProfiles.js';
 import { INTERVAL_TYPES } from './taskScheduleConstants.js';
 
 export const SELF_IMPROVEMENT_TASK_TYPES = [
@@ -43,6 +48,10 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // copy-paste drift — distinct from `code-quality` (which is the broader DRY /
   // long-function / TODO pass). Defaults to file-issues.
   'simplify',
+  // Structural-maintainability audit. Treats complexity thresholds as candidate
+  // signals, then proves responsibility, reuse, or discoverability impact before
+  // filing. Direct remediation is isolated in a managed worktree.
+  'module-hygiene',
   // Quota-burn `api-contract-audit` counterpart. Route validation, client/server
   // drift, status envelopes, and missing `asyncHandler`. Defaults to file-issues.
   'api-contract',
@@ -89,6 +98,15 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // claim flows pick up later. Always-filing tracker-filing type
   // (TRACKER_FILING_PRESETS['plan-feature']), like reference-watch/repo-study.
   'plan-feature',
+  // user-action-review reads the machine-local operator-action ledger
+  // (services/userActions.js) for repeated manual work — Run Now on the same
+  // schedule type over and over, near-duplicate task prompts, negative feedback
+  // clusters, settings churn — and PROPOSES automations as filed tracker issues
+  // (default) or queued CoS tasks. It never edits settings or schedules itself.
+  // Install-wide: the ledger records PortOS-operator activity, not one managed
+  // app's tree. Its buildTaskInput hook (userActionReviewHooks.js) skips the
+  // dispatch entirely when the ledger is empty, so no provider call is burned.
+  'user-action-review',
   // layered-intelligence is a PROGRAMMATIC-I/O task: it spawns a NORMAL reasoning
   // agent (visible in the CoS queue + Active Agents, TUI-attachable) with two
   // deterministic hooks around it — buildTaskInput gathers the app's goals +
@@ -185,7 +203,61 @@ export const DEFAULT_BRANCHES_PER_AGENT = 3;
  * instead of forcing every run through the app picker (which would make the
  * install-wide lane unreachable on any install that has apps).
  */
-export const INSTALL_WIDE_TASK_TYPES = new Set(['repo-sync']);
+export const INSTALL_WIDE_TASK_TYPES = new Set(['repo-sync', 'user-action-review']);
+
+// Task types that only make sense when pointed at a managed app. Keeping this
+// alongside the install-wide registry gives both the on-demand request gate
+// and the global generator one target-scope contract; neither has to infer
+// scope from a task name or from which generator happened to receive a call.
+export const MANAGED_APP_TARGET_TASK_TYPES = new Set(['pr-reviewer']);
+
+export function requiresManagedAppTarget(taskType) {
+  return MANAGED_APP_TARGET_TASK_TYPES.has(taskType);
+}
+
+// The pr-reviewer pipeline is a trust boundary, not three interchangeable
+// prompt tabs. Keep the shipped role/profile pairing in one place so the
+// scheduler, migration, generator, and UI can all recognize the same stages.
+// Stage 3 is present by default for backwards compatibility with the former
+// security → review flow; the schedule UI can remove it for a gate-only run.
+export const createPrReviewerDefaultStages = () => ([
+  {
+    name: 'Security Scan',
+    role: 'security',
+    promptKey: 'pr-reviewer-security',
+    readOnly: true,
+    managed: true,
+    guardId: MODEL_ABUSE_GUARD_ID,
+  },
+  {
+    name: 'Eligibility Gate',
+    role: 'eligibility',
+    promptKey: 'pr-reviewer-eligibility',
+    readOnly: true,
+    useWorktree: true,
+    openPR: false,
+    simplify: false,
+    reviewLoop: false,
+    discardWorktree: true,
+    noCodeOutput: true,
+    managed: true,
+    executionProfile: PUBLIC_REVIEW_GATE_EXECUTION_PROFILE,
+  },
+  {
+    name: 'Code Review & Actions',
+    role: 'actions',
+    promptKey: 'pr-reviewer-review',
+    readOnly: true,
+    useWorktree: true,
+    openPR: false,
+    simplify: false,
+    reviewLoop: false,
+    discardWorktree: true,
+    noCodeOutput: true,
+    managed: true,
+    executionProfile: PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
+  },
+]);
 
 // Fresh installs expose every task as an enabled manual action. The on-demand
 // type keeps provider work silent until the user explicitly runs a task, while
@@ -319,7 +391,7 @@ export const DEFAULT_TASK_INTERVALS = {
   // is ON except `reapRemotes`, which DELETES branches on origin and so stays
   // opt-in even though the reconciler only ever reaps already-merged ones.
   'repo-sync':           { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA, syncPush: true, syncPull: true, switchDefault: true, cleanupMerged: true, dropStashes: true, reapRemotes: false, verifyMode: DEFAULT_REPO_SYNC_VERIFY_MODE } },
-  'pr-reviewer':         { type: INTERVAL_TYPES.ON_DEMAND, intervalMs: 7200000, enabled: true, weekdaysOnly: true, providerId: null, model: null, prompt: null, taskMetadata: { readOnly: true, pipeline: { stages: [{ name: 'Security Scan', promptKey: 'pr-reviewer-security', readOnly: true }, { name: 'Code Review & Merge', promptKey: 'pr-reviewer-review', readOnly: false }] } } },
+  'pr-reviewer':         { type: INTERVAL_TYPES.ON_DEMAND, intervalMs: 7200000, enabled: true, weekdaysOnly: true, providerId: null, model: null, prompt: null, taskMetadata: { readOnly: true, useWorktree: false, openPR: false, worktreeChangesExpected: false, pipeline: { stages: createPrReviewerDefaultStages() } } },
   'code-reviewer-a':     { ...CODE_REVIEWER_INTERVAL },
   'code-reviewer-b':     { ...CODE_REVIEWER_INTERVAL },
   'jira-sprint-manager': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, weekdaysOnly: true, feature: 'jira', providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, simplify: true } },
@@ -357,6 +429,7 @@ export const DEFAULT_TASK_INTERVALS = {
   // defaults keep manual filing available without opting into scheduling.
   'data-safety':         { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
   'simplify':            { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  'module-hygiene':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
   'api-contract':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
   'react-lifecycle':   { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
   'observability':     { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
@@ -380,6 +453,18 @@ export const DEFAULT_TASK_INTERVALS = {
   // runAfter do-replan so proposals are checked against the freshest available
   // work tracker before a new feature plan is filed.
   'plan-feature':         { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['product-requirements', 'project-goals', 'open-issues', 'open-pull-requests', 'closed-unmerged-pull-requests'], runAfter: ['do-replan'], taskMetadata: { useWorktree: false, openPR: false, readOnly: false } },
+  // user-action-review proposes automations from the operator-action ledger.
+  // fileIssues defaults ON (safer unattended: a filed issue over queued work);
+  // flipping it OFF makes the agent queue CoS tasks instead — either way it
+  // ships no code of its own (useWorktree/openPR off, like the other
+  // file-issues types; dispatch stamps noCodeOutput). On-demand + enabled per
+  // the AI-provider policy: a manual Run is the consent for the review's LLM
+  // run, and the empty-ledger skip in its buildTaskInput hook keeps an idle
+  // install silent. Effectively on-demand-only today: the hook also skips
+  // every per-app dispatch (a per-app cadence would queue one identical
+  // global-ledger review PER app) and scheduled dispatch has no global lane
+  // for install-wide types yet — see #5629.
+  'user-action-review':  { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
   // layered-intelligence is a programmatic-I/O task (agent-backed, hooked). On-demand
   // by default; per-app scheduling (enabled/interval/provider/model) is set in the
   // Intelligence tab and stored on the app's taskTypeOverrides['layered-intelligence'].
@@ -399,6 +484,11 @@ export const DEFAULT_TASK_INTERVALS = {
 // CoS-managed worktree would clobber it).
 export const MANAGED_AGENT_OPTIONS = {
   'plan-task': ['useWorktree', 'openPR', 'claimFlow'],
+  // The parent task is a non-committing coordinator. Its isolated Stage 2
+  // reviewer explicitly overrides `useWorktree` inside the pipeline; the
+  // parent-level false prevents the generic task defaults from treating the
+  // coordinator itself as code-producing work.
+  'pr-reviewer': ['useWorktree', 'openPR', 'worktreeChangesExpected'],
   // Programmatic-I/O review task: the model only returns structured judgment;
   // deterministic hooks own every GitHub mutation. Keep its worktree throwaway
   // even when a global/per-app metadata override tries to make it writable.
@@ -485,7 +575,7 @@ export function enforceBranchReconcileBatch(taskType, config) {
   return false;
 }
 
-// Short human-readable blurb per task type, shown in the schedule UI's
+// Short human-readable blurb per task type, shown on schedule cards and in the
 // upcoming-tasks list. Every entry in SELF_IMPROVEMENT_TASK_TYPES must have a
 // key here — a missing one falls back to a dasherized label ("claim work"),
 // which reads as an orphaned/legacy task. A parity guard in taskSchedule.test.js
@@ -510,9 +600,9 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'release-check': 'Check for release readiness',
   'error-handling': 'Failure-path audit — file issues or implement fixes',
   'typing': 'TypeScript types — file issues or implement fixes',
-  'pr-reviewer': 'Review open PRs from contributors',
+  'pr-reviewer': 'Screen contributor PRs, gate eligibility, then review and act on approved changes',
   'pr-watcher': 'Run a custom prompt on PRs newly opened against the default branch',
-  'issue-watcher': 'Assign issue volunteers and review external PRs with deterministic GitHub actions around one reasoning pass',
+  'issue-watcher': 'Watch external issues and PRs: assign volunteers, review changes, and apply deterministic GitHub actions around one reasoning pass',
   'code-reviewer-a': 'Review the codebase and triage/implement findings (independent provider/model instance A)',
   'code-reviewer-b': 'Review the codebase and triage/implement findings (independent provider/model instance B)',
   'do-replan': 'Audit and prune PLAN.md after merges and branch cleanup so it reflects what actually shipped',
@@ -522,6 +612,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'ux': 'UX/design audit — file issues (default) or implement fixes',
   'data-safety': 'Data/upgrade-safety audit — file issues (default) or implement fixes',
   'simplify': 'Dead-code/duplication audit — file issues (default) or implement removals',
+  'module-hygiene': 'Module hygiene — complexity, reuse, ownership, and discoverability; file issues (default) or implement one refactor',
   'api-contract': 'API/route-contract audit — file issues (default) or implement fixes',
   'react-lifecycle': 'React lifecycle/state audit — file issues (default) or implement fixes',
   'observability': 'Logging/observability audit — file issues (default) or implement fixes',
@@ -529,9 +620,65 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'stash-cleanup': 'Triage git stash list — drop entries superseded by or stale relative to main, leave real unlanded work in place',
   'repo-sync': 'Sync every managed app with origin — back on the default branch, pushed and pulled, merged branches/worktrees and redundant stashes cleared',
   'plan-feature': "Brainstorm one feature and file its decision-complete plan to the app's work tracker (no code)",
+  'user-action-review': 'Review the operator-action log for repeated manual work and propose automations — file issues (default) or queue CoS tasks',
   'layered-intelligence': "Use app goals + performance metrics to file at most one deduplicated improvement issue; inspect read-only context and file a visibility gap when evidence is insufficient — no code"
 };
 
 export function getTaskTypeDescription(taskType) {
   return TASK_TYPE_DESCRIPTIONS[taskType] || taskType.replace(/-/g, ' ');
+}
+
+/**
+ * Prompt presentation metadata for task types whose prompt is assembled by a
+ * programmatic input hook rather than read from the persisted schedule.
+ *
+ * Keeping this separate from DEFAULT_TASK_PROMPTS is intentional: adding a
+ * placeholder prompt there would make the schedule look configured while the
+ * hook still replaces it at dispatch time. The UI can therefore explain the
+ * real execution shape without changing prompt-version migration state.
+ */
+export const TASK_TYPE_PROMPT_INFO = Object.freeze({
+  'pr-reviewer': Object.freeze({
+    mode: 'runtime-generated',
+    description: 'Runs a model-abuse screen, a tool-free eligibility gate, and an optional action-capable code review; only the final stage may drive the deterministic GitHub workflow.'
+  }),
+  'issue-watcher': Object.freeze({
+    mode: 'runtime-generated',
+    description: 'Generated for each run after deterministic GitHub gathering. The reasoning agent receives bounded, untrusted issue/PR data and has no tools.'
+  }),
+  'layered-intelligence': Object.freeze({
+    mode: 'runtime-generated',
+    description: 'Generated for each run from the app\'s configured goals, metrics, and repository context.'
+  })
+});
+
+/**
+ * Sparse, explicit contract for task types owned by another automation.
+ *
+ * The current scheduled task catalog has no top-level subsidiary-only entries:
+ * every task card is a user-invokable task, while pipeline stages are nested
+ * inside their parent task. Future automation-only types belong here instead
+ * of being inferred from names or from a task's implementation details.
+ *
+ * A visible subsidiary entry should use:
+ *   { kind: 'subsidiary', visibility: 'visible', userInvokable: false,
+ *     label: 'Automation-only', description: '...' }
+ * A hidden entry should use `visibility: 'hidden'` and still set
+ * `userInvokable: false`.
+ */
+export const TASK_TYPE_INVOCATION = Object.freeze({});
+
+const DEFAULT_TASK_TYPE_PROMPT_INFO = Object.freeze({ mode: 'template', description: null });
+const DEFAULT_TASK_TYPE_INVOCATION = Object.freeze({
+  kind: 'direct',
+  visibility: 'visible',
+  userInvokable: true
+});
+
+export function getTaskTypePromptInfo(taskType) {
+  return TASK_TYPE_PROMPT_INFO[taskType] || DEFAULT_TASK_TYPE_PROMPT_INFO;
+}
+
+export function getTaskTypeInvocation(taskType) {
+  return TASK_TYPE_INVOCATION[taskType] || DEFAULT_TASK_TYPE_INVOCATION;
 }

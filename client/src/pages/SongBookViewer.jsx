@@ -84,6 +84,7 @@ import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage.js';
 import { formatBytes, formatDurationSec } from '../utils/formatters';
 import { isHttpUrl } from '../utils/urlNormalize';
 import { readFileAsBase64, JSON_UPLOAD_MAX_FILE_SIZE } from '../utils/fileUpload';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import {
   getSong, updateSong, deleteSong,
   listSongAttachments, uploadSongAttachment, deleteSongAttachment, songAttachmentUrl,
@@ -593,7 +594,19 @@ export default function SongBookViewer() {
   }
 
   if (loading || !song) {
-    return <p className="p-6 text-sm text-gray-500">Loading song…</p>;
+    return (
+      <PageSkeleton
+        header="bar"
+        label="Loading song"
+        fullHeight
+        padded
+        bodyClassName="p-4"
+        showSubtitle
+        titleWidthClass="w-56"
+        cards={3}
+        sidebar={false}
+      />
+    );
   }
 
   const stageClass = SONG_STAGE_COLORS[song.stage] || SONG_STAGE_COLORS.new;

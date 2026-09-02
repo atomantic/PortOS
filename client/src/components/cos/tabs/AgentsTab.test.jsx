@@ -10,6 +10,7 @@ vi.mock('../../../services/api', () => ({
   getCosAgentsByDate: vi.fn(),
   clearCompletedCosAgents: vi.fn(),
   resumeCosAgent: vi.fn(),
+  relaunchCosAgent: vi.fn(),
   addCosTask: vi.fn(),
 }));
 
@@ -18,11 +19,14 @@ vi.mock('../../ui/Toast', () => ({
 }));
 
 vi.mock('./AgentCard', () => ({
-  default: ({ agent, onFeedbackChange, onResume }) => (
+  default: ({ agent, onFeedbackChange, onResume, onRelaunch }) => (
     <div data-testid={`agent-${agent.id}`}>
       <span>{agent.metadata?.taskDescription}</span>
       {onResume && (
         <button type="button" onClick={() => onResume(agent)}>Resume {agent.id}</button>
+      )}
+      {onRelaunch && (
+        <button type="button" onClick={() => onRelaunch(agent)}>Relaunch {agent.id}</button>
       )}
       {!agent.feedback?.rating && (
         <button
@@ -59,6 +63,15 @@ vi.mock('./ResumeAgentModal', () => ({
     </button>
   ),
 }));
+// The dialog owns the relaunch call and its outcome message; the tab's job is to
+// mount it against the right agent and refresh when it is done.
+vi.mock('./RelaunchAgentModal', () => ({
+  default: ({ agent, onDone }) => (
+    <button type="button" onClick={() => onDone?.({ mode: 'requeued' })}>
+      Relaunch dialog for {agent.id}
+    </button>
+  ),
+}));
 vi.mock('../../ui/InlineConfirmRow', () => ({ default: () => null }));
 
 import * as api from '../../../services/api';
@@ -92,6 +105,45 @@ beforeEach(() => {
   api.getCosLearningDurations.mockResolvedValue({});
   api.getCosAgentDates.mockResolvedValue({ dates: [] });
   api.getCosAgentsByDate.mockResolvedValue([]);
+});
+
+// A relaunch is offered only on a RUNNING agent — it is the recovery for a run
+// that is alive but stalled (a CLI parked on a provider usage limit), where the
+// existing Pause/Kill/Resume trio either loses the worktree or parks the task.
+describe('AgentsTab relaunch routing', () => {
+  const runningAgent = {
+    id: 'agent-live',
+    taskId: 'task-abc',
+    status: 'running',
+    startedAt: '2026-07-13T09:00:00.000Z',
+    metadata: { taskDescription: 'Stalled on a usage limit' },
+  };
+
+  it('opens the relaunch dialog on the running agent and refreshes when it finishes', async () => {
+    const user = userEvent.setup();
+    const onRefresh = vi.fn();
+    renderTab([runningAgent], onRefresh);
+    await act(async () => {});
+
+    await user.click(screen.getByRole('button', { name: 'Relaunch agent-live' }));
+    await user.click(screen.getByRole('button', { name: 'Relaunch dialog for agent-live' }));
+
+    await waitFor(() => expect(onRefresh).toHaveBeenCalled());
+    // A relaunch moves the EXISTING task, so neither resume door may fire — a
+    // second task would spawn a second agent.
+    expect(api.addCosTask).not.toHaveBeenCalled();
+    expect(api.resumeCosAgent).not.toHaveBeenCalled();
+  });
+
+  it('offers no relaunch on a settled agent, which has no live run to move', async () => {
+    renderTab([completedAgent('agent-done', 'Finished work')]);
+    await act(async () => {});
+
+    // The card renders (its Resume door is offered), so the missing Relaunch is a
+    // real absence rather than a row that never mounted.
+    expect(screen.getByRole('button', { name: 'Resume agent-done' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Relaunch agent-done' })).toBeNull();
+  });
 });
 
 describe('AgentsTab resume routing', () => {

@@ -11,6 +11,7 @@
 
 import { describe, it, expect, afterAll, beforeAll, beforeEach } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
+import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 
 let dbReady = false;
 let skipReason = '';
@@ -28,11 +29,11 @@ let skipReason = '';
   }
 }
 
-if (!dbReady) console.log(`⏭️  catalogUserTypes/db.test.js skipped: ${skipReason}`);
+const runDb = requireDbOrSkip('services/catalogUserTypes/db.test', dbReady, skipReason);
 
 const T = (id, extra = {}) => ({ id, label: id, primaryContentKey: 'description', fields: [], ...extra });
 
-describe.skipIf(!dbReady)('catalog user-type DB round-trip', () => {
+describe.skipIf(!runDb)('catalog user-type DB round-trip', () => {
   let db;
   let snapshot = [];
   beforeAll(async () => {

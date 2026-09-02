@@ -35,6 +35,8 @@
  *     `low` when no one is clearly visible (an orphaned/unclear balloon).
  */
 
+import { escapeRegExp } from '../textUtils.js';
+
 // Speaker modifiers that mean "this speaker need not be drawn in the panel" —
 // broadcast/PA, off-panel/off-screen, voice-over/narration, and transmission
 // devices (the remote party isn't in frame). Mirrors the disembodied + device
@@ -47,8 +49,6 @@ export const OFFPANEL_OK_MODIFIER =
 // The severity ranks a violation can take (most-severe first). Local copy so the
 // module stays self-contained.
 const ATTRIBUTION_SEVERITIES = ['high', 'medium', 'low'];
-
-const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // Split a `NAME (MODIFIER)` speaker token into { speaker, modifier }. Tolerates
 // stacked parentheticals by treating the whole inner-paren blob as the modifier.
@@ -69,9 +69,9 @@ export function nameInText(name, text) {
   const n = (typeof name === 'string' ? name : '').trim().toLowerCase();
   const t = (typeof text === 'string' ? text : '').toLowerCase();
   if (!n || !t) return false;
-  if (new RegExp(`\\b${escapeRe(n)}\\b`).test(t)) return true;
+  if (new RegExp(`\\b${escapeRegExp(n)}\\b`).test(t)) return true;
   const tokens = n.split(/[^a-z0-9]+/).filter((tok) => tok.length >= 4);
-  return tokens.some((tok) => new RegExp(`\\b${escapeRe(tok)}\\b`).test(t));
+  return tokens.some((tok) => new RegExp(`\\b${escapeRegExp(tok)}\\b`).test(t));
 }
 
 /**

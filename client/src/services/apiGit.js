@@ -5,17 +5,9 @@ export const getGitInfo = (path) => request('/git/info', {
   method: 'POST',
   body: JSON.stringify({ path })
 });
-export const getGitStatus = (path) => request('/git/status', {
-  method: 'POST',
-  body: JSON.stringify({ path })
-});
 export const getGitDiff = (path, staged = false) => request('/git/diff', {
   method: 'POST',
   body: JSON.stringify({ path, staged })
-});
-export const getGitCommits = (path, limit = 10) => request('/git/commits', {
-  method: 'POST',
-  body: JSON.stringify({ path, limit })
 });
 export const stageFiles = (path, files) => request('/git/stage', {
   method: 'POST',
@@ -52,10 +44,6 @@ export const getBranches = (path) => request('/git/branches', {
 export const checkoutBranch = (path, branch) => request('/git/checkout', {
   method: 'POST',
   body: JSON.stringify({ path, branch })
-});
-export const pullBranch = (path) => request('/git/pull', {
-  method: 'POST',
-  body: JSON.stringify({ path })
 });
 export const syncBranch = (path, branch) => request('/git/sync', {
   method: 'POST',

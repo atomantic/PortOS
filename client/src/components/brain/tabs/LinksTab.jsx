@@ -782,6 +782,7 @@ export default function LinksTab({ onRefresh }) {
                       draggable={false}
                       className="p-1.5 text-gray-400 hover:text-port-accent transition-colors"
                       title="Open in new tab"
+                      aria-label={`Open ${link.title || link.url} in a new tab`}
                     >
                       <ExternalLink size={14} />
                     </a>

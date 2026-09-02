@@ -38,6 +38,7 @@ import {
 } from '../lib/ollamaContext.js'
 import { compareSemver } from '../lib/versionUtils.js'
 import { isSafeHfRepoRelativePath } from '../lib/hfCache.js'
+import { assessDownloadPreflight, diskInsufficientError, DOWNLOAD_VERDICTS } from '../lib/downloadPreflight.js'
 
 const execFileAsync = promisify(execFile)
 const AVAILABILITY_CACHE_TTL_MS = 30_000
@@ -1441,9 +1442,24 @@ async function importModelFromHfSafetensors(spec, onProgress) {
     return { success: false, error: `The ${subdir} checkpoint is incomplete or unavailable on Hugging Face.`, modelId }
   }
 
+  // This import writes the checkpoint TWICE — once staged under `tmpdir()`,
+  // once more when `ollama create` below lands it in the models dir — on
+  // volumes that can differ (a temp partition, or OLLAMA_MODELS pointed at
+  // external storage). The outer installModel() preflight only checked one
+  // copy against one of those volumes using a catalog-string size estimate;
+  // this uses the real per-file bytes this import already fetched from HF.
+  const total = files.reduce((sum, file) => sum + file.size, 0)
+  const stagingPreflight = await assessDownloadPreflight({ destPath: tmpdir(), expectedBytes: total })
+  if (stagingPreflight.verdict === DOWNLOAD_VERDICTS.INSUFFICIENT) {
+    return { success: false, error: diskInsufficientError(stagingPreflight).message, modelId, code: 'DISK_INSUFFICIENT' }
+  }
+  const modelsDirPreflight = await assessDownloadPreflight({ destPath: getModelsDir(), expectedBytes: total })
+  if (modelsDirPreflight.verdict === DOWNLOAD_VERDICTS.INSUFFICIENT) {
+    return { success: false, error: diskInsufficientError(modelsDirPreflight).message, modelId, code: 'DISK_INSUFFICIENT' }
+  }
+
   const tempRoot = await mkdtemp(join(tmpdir(), 'portos-ollama-hf-import-'))
   const modelDir = join(tempRoot, 'model')
-  const total = files.reduce((sum, file) => sum + file.size, 0)
   let completed = 0
   let lastPercent = -1
   const reportBytes = (bytes) => {

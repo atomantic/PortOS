@@ -22,6 +22,7 @@ import { ArcRoadmapChart } from '../components/pipeline/ArcCanvas';
 import ReaderPanelView from '../components/pipeline/ReaderPanelView';
 import ComparativeRankView from '../components/pipeline/ComparativeRankView';
 import TabPills from '../components/ui/TabPills';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import {
   getPipelineSeries, getIssueEditorial, analyzeIssueEditorial, getSeriesJudge,
 } from '../services/api';
@@ -270,9 +271,18 @@ export default function PipelineSeriesRoadmap() {
 
   if (loading) {
     return (
-      <div className="h-full flex items-center justify-center text-gray-500">
-        <Loader2 size={18} className="animate-spin mr-2" /> Loading reader map…
-      </div>
+      <PageSkeleton
+        label="Loading reader map"
+        fullHeight
+        padded
+        headerRowClass="flex items-center gap-3"
+        titleWidthClass="w-40"
+        showSubtitle
+        subtitleOnMobile
+        tabs={TABS.length}
+        cards={3}
+        sidebar={false}
+      />
     );
   }
 

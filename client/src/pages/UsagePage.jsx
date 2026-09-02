@@ -5,10 +5,11 @@ import * as api from '../services/api';
 import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import Pill from '../components/ui/Pill';
-import { formatCompactCount, formatUsd, timeUntil } from '../utils/formatters';
+import { formatCompactCount, formatCompactCountOrDash as formatNumber, formatUsd, timeUntil } from '../utils/formatters';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import SubscriptionSavingsCard from '../components/usage/SubscriptionSavingsCard';
+import FleetUsageCard from '../components/usage/FleetUsageCard';
 
 // How often to re-ask while a provider's quota reading is still being taken. A
 // CLI/TUI scrape is a 10-20s spawn, so this is a handful of polls, not a loop.
@@ -20,10 +21,6 @@ const PERIOD_OPTIONS = [
   { id: '90d', label: '90 days' },
   { id: 'all', label: 'All time' }
 ];
-
-// Preserve the em-dash empty-state; delegate K/M abbreviation to the shared helper.
-const formatNumber = (num) => (num == null ? '—' : formatCompactCount(num));
-
 
 // Every provider adapter normalizes its reset to ISO before it reaches here, so
 // this localizes and adds the relative "in 3h" that makes a reset time useful at
@@ -843,6 +840,10 @@ function InternalUsageMetrics() {
           {' '}Rows marked ~ use an approximated rate.
         </p>
       </div>
+
+      {/* Same window, split by machine — renders only once a peer's usage has
+          synced, so a single-machine install sees no change. */}
+      <FleetUsageCard fleet={usage.fleet} onSaved={fetchUsage} />
 
       {/* Directly under the API estimate it is derived from: the estimate is the
           opportunity cost, this is what the quota plans actually cost to avoid it. */}

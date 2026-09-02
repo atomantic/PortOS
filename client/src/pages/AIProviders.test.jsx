@@ -8,6 +8,15 @@ const api = vi.hoisted(() => ({
   getProviderStatuses: vi.fn(),
   getProviderRuntimes: vi.fn(),
   getProviderReadiness: vi.fn(),
+  // Kept pending by default so existing page tests that use a Codex fixture do
+  // not accidentally assert a subscription account state. Subscription-specific
+  // tests replace this with a bounded readiness response.
+  getCodexAccount: vi.fn(() => new Promise(() => {})),
+  getCodexModels: vi.fn(),
+  startCodexLogin: vi.fn(),
+  cancelCodexLogin: vi.fn(),
+  codexLogout: vi.fn(),
+  getInstances: vi.fn(),
   getSampleProviders: vi.fn(),
   createProvider: vi.fn(),
   updateProvider: vi.fn(),
@@ -58,6 +67,7 @@ const renderPage = (initialPath = '/ai') => render(
     <Routes>
       <Route path="/ai" element={<AIProviders />} />
       <Route path="/ai/new" element={<AIProviders />} />
+      <Route path="/ai/fleet" element={<AIProviders />} />
       <Route path="/ai/edit/:providerId" element={<AIProviders />} />
     </Routes>
   </MemoryRouter>
@@ -67,6 +77,17 @@ const renderPage = (initialPath = '/ai') => render(
 // switch (the drawer renders only the active panel).
 const openEditorTab = async (label) => {
   fireEvent.click(await screen.findByRole('tab', { name: label }));
+};
+
+// The rare page actions (Compare local models, Fleet setup, Load Samples) sit
+// behind the header's overflow menu since #5653, so the bar stays one row tall.
+const openHeaderMenu = async () => {
+  fireEvent.click(await screen.findByRole('button', { name: 'More provider actions' }));
+};
+
+const clickLoadSamples = async () => {
+  await openHeaderMenu();
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'Load Samples' }));
 };
 
 // One entry of the `runtimes` map from GET /api/providers/runtimes.
@@ -88,6 +109,7 @@ describe('AIProviders page load error handling', () => {
     api.getProviderStatuses.mockResolvedValue({ providers: {} });
     api.getProviderRuntimes.mockResolvedValue({ runtimes: {} });
     api.getProviderReadiness.mockResolvedValue({ readiness: {} });
+    api.getCodexAccount.mockImplementation(() => new Promise(() => {}));
     localModels.value = { ctxById: {}, installed: { ollama: null, lmstudio: null } };
   });
 
@@ -242,9 +264,32 @@ describe('AIProviders page load error handling', () => {
     renderPage();
 
     expect(await screen.findByText('OpenAI')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Compare local models/ })).toHaveAttribute('href', '/models/performance');
     expect(screen.queryByText('No providers configured')).not.toBeInTheDocument();
     expect(screen.queryByText('Failed to load AI providers')).not.toBeInTheDocument();
+
+    // Demoted to the overflow menu, but still a real anchor so it can be
+    // opened in a new tab.
+    await openHeaderMenu();
+    expect(screen.getByRole('menuitem', { name: /Compare local models/ })).toHaveAttribute('href', '/models/performance');
+  });
+
+  // The page hosts SettingsTabsHeader; before #5653 it also hand-rolled a
+  // `Settings` title bar above it, so every render stacked two h1s and pushed
+  // the first provider card off a phone viewport.
+  it('renders exactly one h1, naming the page rather than the settings section', async () => {
+    api.getProviders.mockResolvedValue({
+      providers: [
+        { id: 'p1', name: 'OpenAI', type: 'api', enabled: true, endpoint: 'https://api.openai.com', models: ['gpt-4'] }
+      ],
+      activeProvider: 'p1',
+    });
+
+    renderPage();
+
+    await screen.findByText('OpenAI');
+    const headings = screen.getAllByRole('heading', { level: 1 });
+    expect(headings).toHaveLength(1);
+    expect(headings[0]).toHaveAccessibleName('AI Providers');
   });
 
   it('shows a blank secret environment value as not set', async () => {
@@ -499,6 +544,81 @@ describe('an API provider pointed at another machine', () => {
   });
 });
 
+describe('fleet LLM setup walkthrough', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getApps.mockResolvedValue([]);
+    api.getProviderStatuses.mockResolvedValue({ providers: {} });
+    api.getProviderRuntimes.mockResolvedValue({ runtimes: {} });
+    api.getProviderReadiness.mockResolvedValue({ readiness: {} });
+    api.getProviders.mockResolvedValue({ providers: [], activeProvider: null });
+    api.getInstances.mockResolvedValue({
+      peers: [{
+        id: 'peer-example',
+        name: 'Example GPU host',
+        host: 'gpu-host.example.ts.net',
+        address: '192.0.2.10',
+        status: 'online',
+        enabled: true,
+      }],
+    });
+    api.createProvider.mockImplementation(async (provider) => ({
+      id: 'fleet-gpu-opencode-tui',
+      ...provider,
+      hasApiKey: true,
+    }));
+  });
+
+  it('creates an OpenCode provider whose actual baseURL points at the selected peer', async () => {
+    renderPage('/ai/fleet');
+
+    expect(await screen.findByRole('heading', { name: 'Fleet LLM setup' })).toBeInTheDocument();
+    expect(screen.getByText(/Recommended for one RTX 3090/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Connect client' }));
+    fireEvent.change(await screen.findByLabelText('Known PortOS peer'), { target: { value: 'peer-example' } });
+    fireEvent.change(screen.getByLabelText('vLLM API key'), { target: { value: 'example-secret' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create fleet provider' }));
+
+    await waitFor(() => expect(api.createProvider).toHaveBeenCalledTimes(1));
+    const created = api.createProvider.mock.calls[0][0];
+    expect(created).toMatchObject({
+      type: 'tui',
+      command: 'opencode',
+      endpoint: 'http://gpu-host.example.ts.net:18020/v1',
+      apiKey: 'example-secret',
+      defaultModel: 'qwen3.8-27b',
+      vllmBacked: true,
+      thinking: false,
+      enabled: true,
+    });
+    expect(JSON.parse(created.envVars.OPENCODE_CONFIG_CONTENT).provider.vllm.options.baseURL)
+      .toBe('http://gpu-host.example.ts.net:18020/v1');
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Fleet LLM setup' })).not.toBeInTheDocument());
+    expect(toast.success).toHaveBeenCalledWith('Fleet GPU · OpenCode TUI is connected to the fleet GPU host');
+  });
+
+  it('creates a direct API provider without an inert OpenCode config', async () => {
+    renderPage('/ai/fleet?fleetStep=client');
+
+    fireEvent.change(await screen.findByLabelText('Known PortOS peer'), { target: { value: 'peer-example' } });
+    fireEvent.change(screen.getByLabelText('Harness'), { target: { value: 'api' } });
+    fireEvent.change(screen.getByLabelText('vLLM API key'), { target: { value: 'example-secret' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create fleet provider' }));
+
+    await waitFor(() => expect(api.createProvider).toHaveBeenCalledTimes(1));
+    const created = api.createProvider.mock.calls[0][0];
+    expect(created).toMatchObject({
+      name: 'Fleet GPU · API',
+      type: 'api',
+      endpoint: 'http://gpu-host.example.ts.net:18020/v1',
+      vllmBacked: true,
+    });
+    expect(created).not.toHaveProperty('command');
+    expect(created).not.toHaveProperty('envVars');
+  });
+});
+
 describe('handleAddSample error handling', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -522,8 +642,7 @@ describe('handleAddSample error handling', () => {
 
     renderPage();
 
-    const loadSamplesBtn = await screen.findByRole('button', { name: 'Load Samples' });
-    fireEvent.click(loadSamplesBtn);
+    await clickLoadSamples();
 
     const addBtn = await screen.findByRole('button', { name: 'Add' });
     fireEvent.click(addBtn);
@@ -564,8 +683,7 @@ describe('handleAddAllSamples partial failure handling', () => {
 
     renderPage();
 
-    const loadSamplesBtn = await screen.findByRole('button', { name: 'Load Samples' });
-    fireEvent.click(loadSamplesBtn);
+    await clickLoadSamples();
 
     const addAllBtn = await screen.findByRole('button', { name: 'Add All (3)' });
     fireEvent.click(addAllBtn);
@@ -875,6 +993,73 @@ describe('provider reasoning defaults', () => {
     expect(payload).not.toHaveProperty('temperature');
     expect(payload).not.toHaveProperty('topP');
     expect(payload).not.toHaveProperty('thinking');
+  });
+});
+
+describe('Codex subscription text read-risk gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getApps.mockResolvedValue([]);
+    api.getProviderStatuses.mockResolvedValue({ providers: {} });
+    api.getProviderRuntimes.mockResolvedValue({ runtimes: {} });
+    api.getProviderReadiness.mockResolvedValue({ readiness: {} });
+    api.getProviders.mockResolvedValue({
+      providers: [{
+        id: 'codex',
+        name: 'Codex',
+        type: 'cli',
+        command: 'codex',
+        enabled: true,
+        textTransport: 'codex-app-server',
+      }],
+      activeProvider: 'codex',
+    });
+  });
+
+  it('requires the read-risk acknowledgement before enabling generic text calls', async () => {
+    renderPage('/ai/edit/codex');
+
+    const acknowledgement = await screen.findByLabelText(/Codex may read local files/i);
+    const enable = screen.getByLabelText(/serve generic text calls/i);
+    expect(acknowledgement).not.toBeChecked();
+    expect(enable).toBeDisabled();
+
+    fireEvent.click(acknowledgement);
+    expect(enable).toBeEnabled();
+    fireEvent.click(enable);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(api.updateProvider).toHaveBeenCalledWith(
+      'codex',
+      expect.objectContaining({
+        textTransportEnabled: true,
+        textTransportReadRiskAcknowledged: true,
+      }),
+    ));
+  });
+
+  it('turns the transport back off when the acknowledgement is withdrawn', async () => {
+    api.getProviders.mockResolvedValue({
+      providers: [{
+        id: 'codex',
+        name: 'Codex',
+        type: 'cli',
+        command: 'codex',
+        enabled: true,
+        textTransport: 'codex-app-server',
+        textTransportEnabled: true,
+        textTransportReadRiskAcknowledged: true,
+      }],
+      activeProvider: 'codex',
+    });
+    renderPage('/ai/edit/codex');
+
+    const acknowledgement = await screen.findByLabelText(/Codex may read local files/i);
+    const enable = screen.getByLabelText(/serve generic text calls/i);
+    expect(enable).toBeChecked();
+    fireEvent.click(acknowledgement);
+    expect(enable).not.toBeChecked();
+    expect(enable).toBeDisabled();
   });
 });
 
@@ -1190,11 +1375,17 @@ describe('readiness grouping', () => {
     expect(screen.getByText('NEEDS SETUP')).toBeInTheDocument();
     // The blocker itself stays where its fix is — the card's API-key row.
     expect(screen.getByText(/not set — Edit this provider to paste one/)).toBeInTheDocument();
+    // "Needs setup" is the only outstanding-task bucket, so it reads before the
+    // long optional catalog rather than being buried under it. Sections render
+    // in `PROVIDER_SECTIONS` order, so the array is what pins it.
+    expect(PROVIDER_SECTIONS.findIndex((s) => s.key === 'blocked'))
+      .toBeLessThan(PROVIDER_SECTIONS.findIndex((s) => s.key === 'disabled'));
   });
 
-  // A missing CLI is what stops the provider — not the toggle — so it belongs in
-  // "Needs setup" whichever way the switch sits.
-  it('files a switched-off provider with a missing CLI under Needs setup', async () => {
+  // "Needs setup" is the outstanding-task list, so only providers the user has
+  // switched ON belong in it. A switched-off one is optional — it files under
+  // Disabled and merely notes what enabling it would take.
+  it('files a switched-off provider with a missing CLI under Disabled, noting the setup', async () => {
     api.getProviders.mockResolvedValue({
       providers: [{ id: 'opencode-ollama', name: 'OpenCode Ollama', type: 'cli', command: 'opencode', enabled: false }],
       activeProvider: null,
@@ -1203,10 +1394,15 @@ describe('readiness grouping', () => {
 
     renderPage();
 
-    expect(await screen.findByText('NEEDS SETUP')).toBeInTheDocument();
-    expect(screen.getByText('OpenCode CLI not installed')).toBeInTheDocument();
-    expect(screen.getByText('SWITCHED OFF')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: new RegExp('^Disabled') })).not.toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: new RegExp('^Disabled') })).toBeInTheDocument();
+    expect(screen.getByText('DISABLED')).toBeInTheDocument();
+    expect(screen.getByText('SETUP TO ENABLE')).toBeInTheDocument();
+    // The missing CLI is still named — that IS the note about enabling it — but
+    // in the muted tone, not the amber that would read as a gap in the install.
+    const runtimePill = screen.getByText('OpenCode CLI not installed');
+    expect(runtimePill).toBeInTheDocument();
+    expect(runtimePill.className).not.toMatch(/port-warning/);
+    expect(screen.queryByRole('button', { name: new RegExp('^Needs setup') })).not.toBeInTheDocument();
   });
 
   // The provider list is authoritative: no sibling means the wrapper has no key
@@ -1344,7 +1540,7 @@ describe('hardware-incompatible providers', () => {
 
     renderPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Load Samples' }));
+    await clickLoadSamples();
 
     expect(await screen.findByText('Sample Runs Here')).toBeInTheDocument();
     expect(screen.queryByText('Sample Needs More RAM')).not.toBeInTheDocument();
@@ -1369,7 +1565,7 @@ describe('hardware-incompatible providers', () => {
 
     renderPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Load Samples' }));
+    await clickLoadSamples();
 
     expect(await screen.findByText(/cannot run on this machine/)).toBeInTheDocument();
   });

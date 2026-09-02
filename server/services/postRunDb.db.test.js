@@ -1,6 +1,7 @@
 /** PostgreSQL atomicity/idempotency coverage for normalized POST runs (#4441). */
 import { afterAll, describe, expect, it } from 'vitest';
 import { checkHealth, close, ensureSchema, query, withTransaction } from '../lib/db.js';
+import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { saveNormalizedRun } from './postRunDb.js';
 
 let dbReady = false;
@@ -15,7 +16,7 @@ let skipReason = '';
     if (!dbReady) skipReason = 'post_runs schema unavailable';
   }
 }
-if (!dbReady) console.log(`⏭️ postRunDb.db.test: skipping suite — ${skipReason}`);
+const runDb = requireDbOrSkip('services/postRunDb.db.test', dbReady, skipReason);
 
 const nonce = `post-test-${Date.now()}`;
 const runIds = [`${nonce}-one`, `${nonce}-owner`, `${nonce}-rollback`, `${nonce}-concurrent`];
@@ -41,7 +42,7 @@ afterAll(async () => {
   }
 });
 
-describe.skipIf(!dbReady)('postRunDb transaction (#4441)', () => {
+describe.skipIf(!runDb)('postRunDb transaction (#4441)', () => {
   it('upserts one run and its complete attempt set idempotently', async () => {
     await saveNormalizedRun(db, makeRun(runIds[0], [attempt(`${nonce}-a1`), attempt(`${nonce}-a2`)]));
     await saveNormalizedRun(db, makeRun(runIds[0], [attempt(`${nonce}-a2`), attempt(`${nonce}-a1`, 95)]));

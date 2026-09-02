@@ -56,6 +56,8 @@
 
 import { LOCAL_RUNTIMES, localEndpointPort } from '../lib/localProviderRuntime.js';
 import { describeMtplxCache, listMtplxCachedModels } from '../lib/mtplxModels.js';
+import { describeMtplxRuntime } from '../lib/mtplxRuntime.js';
+import { listSlotstreamCachedModels } from '../lib/slotstreamModels.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 import { inspectSglangQwenProject, sglangStartBlockedReason } from '../lib/sglangQwenProject.js';
 import { sglangUnsupportedReason } from '../lib/sglangQwenRecipe.js';
@@ -64,6 +66,9 @@ import { findCommandOnPath } from '../lib/processEnv.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
 import { installLlamaServer } from './llamaServerManager.js';
 import { installMtplx, startMtplxServer, MTPLX_UNSUPPORTED_REASON } from './mtplxServerManager.js';
+import { installSlotstream, startSlotstreamServer, SLOTSTREAM_UNSUPPORTED_REASON } from './slotstreamServerManager.js';
+import { previewMtplxPull } from './mtplxModelManager.js';
+import { assertDownloadFits } from '../lib/downloadPreflight.js';
 import { controlOllamaServer, installBackend } from './localLlm.js';
 import { isAppInstalled as isLmStudioAppInstalled } from './lmStudioManager.js';
 import { provisionVllmQwenProject, readVllmQwenSetupState, startVllmQwenProject } from './vllmQwenManager.js';
@@ -113,6 +118,30 @@ const mtplxPartialCacheError = (count) =>
   `its cache holds ${count} model${count === 1 ? '' : 's'}, but none passed its own file check — an interrupted download leaves a partial pack behind. Use “Download the default model & start MTPLX” on the checklist to re-fetch it, or pick another checkpoint on the MTPLX card in Models → LLMs.`;
 
 /**
+ * MTPLX's cache state, read WITHOUT invoking `mtplx`'s Homebrew wrapper before
+ * its Python runtime exists.
+ *
+ * `mtplx models --json` touches no network — but on a host where the wrapper
+ * has not bootstrapped its version-keyed venv yet, spawning it IS a
+ * several-hundred-megabyte pip install (`lib/mtplxRuntime.js`). The readiness
+ * checklist polls this, so without the gate a checklist refresh would kick off
+ * that download unannounced and then time out on it.
+ *
+ * A runtime that is not bootstrapped reports `unknown` — the cache genuinely
+ * could not be read, which is deliberately NOT `empty` — so the checklist does
+ * not claim MTPLX has no weights. A start attempted anyway is refused by
+ * `startMtplxServer` with `MTPLX_RUNTIME_NOT_BOOTSTRAPPED`, which names the
+ * download step rather than the checkpoint one.
+ */
+async function readMtplxCacheState() {
+  const runtime = await describeMtplxRuntime(findCommandOnPath('mtplx'));
+  if (!runtime.ready) {
+    return { state: 'unknown', model: null, count: 0, error: 'MTPLX\'s Python runtime has not been downloaded yet' };
+  }
+  return describeMtplxCache(await listMtplxCachedModels());
+}
+
+/**
  * The `platforms` gate below is a static list, so its refusal has to be static
  * too — read from the recipe module rather than re-typed, so the platform
  * refusal and the runtime refusal cannot drift into telling an Apple Silicon
@@ -134,6 +163,7 @@ const PROVISION_STEPS = Object.freeze({
   'pull-start': Object.freeze({
     // Names the download so the click IS the consent.
     label: (label) => `Download the default model & start ${label}`,
+    begun: (label) => `${label} is already installed — downloading its default checkpoint before starting it.`,
     refused: (label) => `PortOS cannot download model weights for ${label}.`,
     failed: (label, error) => `${label} model download failed: ${error}`,
     done: (label) => `${label}'s default checkpoint is cached.`,
@@ -145,6 +175,7 @@ const PROVISION_STEPS = Object.freeze({
     // PROJECT on a host whose docker / NVIDIA / WSL2 setup is already the
     // operator's own decision.
     label: (label) => `Clone, build & prepare ${label} (~30 GB), then start`,
+    begun: (label) => `Docker is installed — preparing ${label}'s compose project before starting it.`,
     refused: (label) => `PortOS cannot provision a compose project for ${label}.`,
     failed: (label, error) => `${label} provisioning failed: ${error}`,
     done: (label) => `${label}'s compose project is built and prepared.`,
@@ -203,6 +234,13 @@ const rowProvisionAction = (row) => row?.provision?.action || null;
 async function pullMtplxDefaultCheckpoint({ emit, isCancelled }) {
   const binary = findCommandOnPath('mtplx');
   if (!binary) return { success: false, error: '`mtplx` was not found on PortOS\'s PATH. Restart PortOS so it picks up the new bin directory, then try again.' };
+  // Same disk-space guard the Models → LLMs MTPLX card runs before its own
+  // pull — this readiness-checklist button reaches the same `mtplx pull`
+  // with no repo id, so it shares previewMtplxPull's cache path and its
+  // (unknown-size, so effectively best-effort) preflight. A refusal throws;
+  // the SSE route above already treats an unexpected throw from this step as
+  // a clean `{success:false}` termination, not a 500.
+  assertDownloadFits(await previewMtplxPull({}));
   emit('Downloading MTPLX\'s default verified checkpoint. This is a multi-gigabyte download and can take a long while — leave this window open to watch it.');
   // `mtplx pull` redraws one progress line with a bare `\r`; splitting on
   // newlines alone would leave the stream silent for the whole download.
@@ -245,7 +283,7 @@ const SETUP_ROWS = Object.freeze({
      * `readRuntimeWeights` to put the same fact on the checklist.
      */
     async weights() {
-      return describeMtplxCache(await listMtplxCachedModels()).state;
+      return (await readMtplxCacheState()).state;
     },
     provision: Object.freeze({
       action: 'pull-start',
@@ -262,7 +300,7 @@ const SETUP_ROWS = Object.freeze({
       // checklist can offer the `pull-start` download button, and the messages
       // above say so; the Models → LLMs launcher has no such button and names
       // `mtplx pull` instead.
-      const cache = describeMtplxCache(await listMtplxCachedModels());
+      const cache = await readMtplxCacheState();
       if (cache.state === 'unknown') {
         // The cache could not be READ — which is not "read, and empty". Fall
         // through to MTPLX's own default rather than blocking a start that may
@@ -287,6 +325,38 @@ const SETUP_ROWS = Object.freeze({
       // so it buys the full cold-model-load budget rather than the launcher's
       // short beat — MTPLX loads a multi-gigabyte MLX checkpoint before it binds.
       return startMtplxServer({ port, model: cache.model, waitMs: START_TIMEOUT_MS, onProgress: emit })
+        .then(() => ({ success: true }))
+        .catch((err) => ({ success: false, error: err.message }));
+    },
+  }),
+
+  slotstream: Object.freeze({
+    platforms: ['darwin'],
+    unsupportedReason: SLOTSTREAM_UNSUPPORTED_REASON,
+    async install({ emit }) {
+      return installSlotstream({ onProgress: (p) => { if (p?.message) emit(p.message); } })
+        .catch((err) => ({ success: false, error: err.message }));
+    },
+    /**
+     * What Slotstream's cache holds, WITHOUT starting it — a local directory
+     * walk. There is deliberately no `provision` row beside it: PortOS does not
+     * fetch weights for this runtime, so the checklist reports an empty cache
+     * rather than offering a download button.
+     *
+     * This row is what keeps `standbyWhenStopped` honest. Without it
+     * `readRuntimeWeights('slotstream')` answers `'unknown'`, and a stopped
+     * Slotstream with an empty cache reads as "a valid idle state" — pointing
+     * the user at a start that cannot succeed.
+     */
+    async weights() {
+      const cache = await listSlotstreamCachedModels();
+      if (cache.models === null) return 'unknown';
+      return cache.models.length > 0 ? 'ready' : 'empty';
+    },
+    async start({ emit, endpoint, isCancelled }) {
+      if (isCancelled()) return { success: false, error: 'Cancelled before the server was started.' };
+      const port = Number(localEndpointPort(endpoint)) || undefined;
+      return startSlotstreamServer({ port, waitMs: START_TIMEOUT_MS, onProgress: emit })
         .then(() => ({ success: true }))
         .catch((err) => ({ success: false, error: err.message }));
     },
@@ -566,7 +636,13 @@ export async function runLocalRuntimeSetup(kind, { endpoint, emit = () => {}, is
     emit(`${runtime.label} is installed.`);
     if (result.note) emit(result.note);
   } else {
-    emit(`${runtime.label} is already installed — starting it.`);
+    // "already installed — starting it" was a lie whenever the click was a
+    // provisioning one: the next thing to happen is a clone or a multi-gigabyte
+    // download, and reporting a start makes every line after it read as a
+    // failure of the start. Each provisioning step says what it is about to do.
+    emit(resolved === provision
+      ? PROVISION_STEPS[provision].begun(runtime.label)
+      : `${runtime.label} is already installed — starting it.`);
   }
 
   if (!row.start) {

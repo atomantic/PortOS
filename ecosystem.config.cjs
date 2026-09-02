@@ -122,6 +122,7 @@ const PORTS = {
   POSTGRES_DOCKER: 5561, // PostgreSQL Docker container (host port mapping)
   WHISPER: 5562,       // Loopback whisper.cpp speech-to-text server
   EIDOVERSE_HOST: 5563, // Optional HTTPS/WebSocket bridge to Eidoverse Worlds on :8940
+  SLOTSTREAM: 5564,    // Loopback SSD-streaming MoE runtime (never 11434 — that collides with Ollama)
   LLAMA_SERVER: 5568,  // Loopback llama.cpp speculative-decoding server
   VLLM_QWEN: 18020,    // Loopback vLLM Qwen3.8-27B (DFlash 2) container — started by the operator, never by PortOS
   SGLANG_QWEN: 18021,  // Loopback SGLang Qwen3.8-27B container (Hopper/Blackwell) — started by the operator, never by PortOS

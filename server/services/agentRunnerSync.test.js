@@ -30,8 +30,13 @@ vi.mock('./cos.js', () => ({
   }),
 }));
 
-vi.mock('./cosAgentLifecycle.js', () => ({
-  getAgent: vi.fn(),
+// Stub ONLY the read. `isLiveAgentRecord` is the contract this guard turns on,
+// so it comes from the real module — a re-implemented copy here would keep
+// passing if the real predicate changed (e.g. started treating `paused` as
+// terminal) while production behavior flipped underneath it.
+vi.mock('./cosAgentLifecycle.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  readAgentRecordOrUnreadable: vi.fn(),
 }));
 
 // The lifecycle ledger is a real file writer (data/cos/run-events.jsonl) —
@@ -42,7 +47,7 @@ vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent }));
 
 import { connectTuiSessionViaRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
 import * as shellService from './shell.js';
-import { getAgent } from './cosAgentLifecycle.js';
+import { AGENT_RECORD_UNREADABLE, readAgentRecordOrUnreadable } from './cosAgentLifecycle.js';
 import { activeAgents, runnerAgents } from './agentState.js';
 import { syncRunnerAgents } from './agentRunnerSync.js';
 
@@ -52,7 +57,7 @@ describe('syncRunnerAgents runner-owned TUI recovery', () => {
     runnerAgents.clear();
     activeAgents.clear();
     vi.mocked(shellService.getSession).mockReturnValue(null);
-    vi.mocked(getAgent).mockResolvedValue(null);
+    vi.mocked(readAgentRecordOrUnreadable).mockResolvedValue({ id: 'agent-1', status: 'running' });
   });
 
   it('reconciles one surviving TUI and restores its attachable shell relay', async () => {
@@ -62,6 +67,8 @@ describe('syncRunnerAgents runner-owned TUI recovery', () => {
       pid: 1234,
       startedAt: Date.now(),
       kind: 'tui',
+      processActive: true,
+      liveness: 'pty',
       sessionId: 'tui-session-1',
       command: 'codex',
       workspacePath: '/tmp/example-workspace',
@@ -91,30 +98,34 @@ describe('syncRunnerAgents runner-owned TUI recovery', () => {
   // `completeAgentRun` returns early on a null id — and survivors are the normal
   // case since #3202 made TUI agents durable.
   it('recovers the run id and model from the persisted agent record', async () => {
-    vi.mocked(getAgent).mockResolvedValue({
+    vi.mocked(readAgentRecordOrUnreadable).mockResolvedValue({
       id: 'agent-1',
+      status: 'running',
       metadata: { runId: 'run-abc123', model: 'claude-opus-5' },
     });
     vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([{
-      id: 'agent-1', taskId: 'task-1', pid: 1234, startedAt: Date.now(), kind: 'cli',
+      id: 'agent-1', taskId: 'task-1', pid: 1234, startedAt: Date.now(),
+      kind: 'cli', processActive: true, liveness: 'pid',
     }]);
 
     await expect(syncRunnerAgents()).resolves.toBe(1);
 
-    expect(getAgent).toHaveBeenCalledWith('agent-1');
+    expect(readAgentRecordOrUnreadable).toHaveBeenCalledWith('agent-1');
     expect(runnerAgents.get('agent-1')).toMatchObject({
       runId: 'run-abc123',
       model: 'claude-opus-5',
     });
   });
 
-  it('recovers with a null run id rather than throwing when the record is gone', async () => {
-    // A record that cannot be read must not take the whole recovery sweep down
-    // with it — the surviving agent still needs re-adopting so its completion
+  it('recovers with a null run id rather than throwing when the record is unreadable', async () => {
+    // A record that cannot be READ must not take the whole recovery sweep down
+    // with it, and must not be mistaken for one that is absent: the read proves
+    // nothing, and the surviving agent still needs re-adopting so its completion
     // event lands. The run stays open, which the warning line says out loud.
-    vi.mocked(getAgent).mockRejectedValue(new Error('metadata.json unreadable'));
+    vi.mocked(readAgentRecordOrUnreadable).mockResolvedValue(AGENT_RECORD_UNREADABLE);
     vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([{
-      id: 'agent-2', taskId: 'task-1', pid: 99, startedAt: Date.now(), kind: 'cli',
+      id: 'agent-2', taskId: 'task-1', pid: 99, startedAt: Date.now(),
+      kind: 'cli', processActive: true, liveness: 'pid',
     }]);
 
     await expect(syncRunnerAgents()).resolves.toBe(1);
@@ -127,6 +138,29 @@ describe('syncRunnerAgents runner-owned TUI recovery', () => {
       runId: null,
       data: expect.objectContaining({ hasRunId: false })
     }));
+  });
+
+  // The runner goes on advertising a PTY it failed to kill. Adopting one mints a
+  // phantom runnerAgents entry nothing ever removes — which is what pinned the
+  // Update page on "4 CoS agents are currently running" above an empty agent
+  // list, since the durable records those four were finalized in are long gone.
+  it('ignores a runner agent PortOS has already finalized, and one with no record at all', async () => {
+    vi.mocked(readAgentRecordOrUnreadable).mockImplementation(async (id) => {
+      if (id === 'agent-finalized') return { id, status: 'completed' };
+      if (id === 'agent-gone') return null;
+      return { id, status: 'running' };
+    });
+    vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([
+      { id: 'agent-finalized', taskId: 'task-1', pid: 1, startedAt: Date.now(), kind: 'cli', processActive: true, liveness: 'pid' },
+      { id: 'agent-gone', taskId: 'task-1', pid: 2, startedAt: Date.now(), kind: 'cli', processActive: true, liveness: 'pid' },
+      { id: 'agent-real', taskId: 'task-1', pid: 3, startedAt: Date.now(), kind: 'cli', processActive: true, liveness: 'pid' },
+    ]);
+
+    await expect(syncRunnerAgents()).resolves.toBe(1);
+
+    expect(runnerAgents.has('agent-finalized')).toBe(false);
+    expect(runnerAgents.has('agent-gone')).toBe(false);
+    expect(runnerAgents.has('agent-real')).toBe(true);
   });
 
   // A live runner-TUI is owned by this process's spawnTuiAgent closure, which
@@ -145,11 +179,13 @@ describe('syncRunnerAgents runner-owned TUI recovery', () => {
         pid: 4321,
         startedAt: Date.now(),
         kind: 'tui',
+        processActive: true,
+        liveness: 'pty',
         sessionId: 'tui-session-live',
         command: 'claude',
         workspacePath: '/tmp/example-workspace',
       },
-      { id: 'agent-orphan', taskId: 'task-1', pid: 8765, startedAt: Date.now(), kind: 'cli' },
+      { id: 'agent-orphan', taskId: 'task-1', pid: 8765, startedAt: Date.now(), kind: 'cli', processActive: true, liveness: 'pid' },
     ]);
 
     await expect(syncRunnerAgents()).resolves.toBe(1);
@@ -161,6 +197,21 @@ describe('syncRunnerAgents runner-owned TUI recovery', () => {
     expect(connectTuiSessionViaRunner).not.toHaveBeenCalled();
     expect(shellService.registerExternalSession).not.toHaveBeenCalled();
   });
+
+  it('does not re-adopt a stale runner handle whose process is gone', async () => {
+    vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([{
+      id: 'agent-stale',
+      taskId: 'task-1',
+      pid: 2147483646,
+      startedAt: Date.now(),
+      kind: 'cli',
+      processActive: false,
+      liveness: 'pid',
+    }]);
+
+    await expect(syncRunnerAgents()).resolves.toBe(0);
+    expect(runnerAgents.has('agent-stale')).toBe(false);
+  });
 });
 
 describe('syncRunnerAgents — reconnect boundary (#4540)', () => {
@@ -169,12 +220,13 @@ describe('syncRunnerAgents — reconnect boundary (#4540)', () => {
     runnerAgents.clear();
     activeAgents.clear();
     vi.mocked(shellService.getSession).mockReturnValue(null);
-    vi.mocked(getAgent).mockResolvedValue({ metadata: { runId: 'run-abc123' } });
+    vi.mocked(readAgentRecordOrUnreadable).mockResolvedValue({ status: 'running', metadata: { runId: 'run-abc123' } });
   });
 
   const survivingTui = {
     id: 'agent-1', taskId: 'task-1', pid: 42, startedAt: Date.now(),
-    kind: 'tui', sessionId: 'tui-session-1', workspacePath: '/repo/worktree', command: 'claude',
+    kind: 'tui', processActive: true, liveness: 'pty',
+    sessionId: 'tui-session-1', workspacePath: '/repo/worktree', command: 'claude',
   };
 
   it('records the PTY re-attach separately from the run re-adoption', async () => {

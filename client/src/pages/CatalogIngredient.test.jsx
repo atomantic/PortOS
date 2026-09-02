@@ -60,7 +60,6 @@ vi.mock('../services/apiCatalog', () => ({
   getCatalogIngredientDetails: vi.fn(async () => detailsOf(CHAR_FIXTURE)),
   updateCatalogIngredient: vi.fn(),
   deleteCatalogIngredient: vi.fn(),
-  listCatalogIngredientRelations: vi.fn(async () => ({ outbound: [], inbound: [] })),
   linkCatalogIngredientRelation: vi.fn(),
   unlinkCatalogIngredientRelation: vi.fn(),
   listCatalogIngredientRevisions: vi.fn(async () => ({ items: [] })),

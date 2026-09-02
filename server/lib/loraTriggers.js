@@ -14,6 +14,8 @@
  * videoGen/local.js) own the sidecar reads and the provenance stamping.
  */
 
+import { escapeRegExp } from './textUtils.js';
+
 // Only the FIRST trigger word of each LoRA is woven. Civitai's `trainedWords`
 // routinely lists a dozen loosely-related tags (style hints, sample-prompt
 // fragments); appending all of them would rewrite the render rather than
@@ -24,8 +26,6 @@ export const firstTriggerWord = (words) => {
   const first = words.find((w) => typeof w === 'string' && w.trim());
   return first ? first.trim() : null;
 };
-
-const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // What counts as "inside a word" for the boundary assertions below. Unicode
 // letters/digits, not just ASCII, so a non-ASCII trigger or an accented prompt

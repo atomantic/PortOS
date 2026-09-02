@@ -9,12 +9,6 @@ export const getOpenClawMessages = (sessionId, options = {}) => {
   return request(`/openclaw/sessions/${encodeURIComponent(sessionId)}/messages${query ? `?${query}` : ''}`, { silent: true });
 };
 
-export const sendOpenClawMessage = (sessionId, message, context, attachments) => request(`/openclaw/sessions/${encodeURIComponent(sessionId)}/messages`, {
-  method: 'POST',
-  body: JSON.stringify({ message, context, attachments }),
-  silent: true
-});
-
 export async function streamOpenClawMessage(sessionId, { message, context, attachments, signal, onEvent }) {
   const response = await fetch(`${API_BASE}/openclaw/sessions/${encodeURIComponent(sessionId)}/messages/stream`, {
     method: 'POST',

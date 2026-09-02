@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router';
 import { ArrowLeft, FileText, RefreshCw, ShieldAlert, ShieldCheck, Skull } from 'lucide-react';
 import * as api from '../services/api';
 import MarkdownOutput from '../components/cos/MarkdownOutput';
-import BrailleSpinner from '../components/BrailleSpinner';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 
 const VERDICT_STYLES = {
@@ -36,7 +36,13 @@ export default function BrainScanReport() {
   if (loading) {
     return (
       <Shell>
-        <div className="flex justify-center py-16"><BrailleSpinner text="Loading scan report" /></div>
+        <PageSkeleton
+          label="Loading scan report"
+          headerRowClass="flex flex-wrap items-start justify-between gap-3"
+          titleWidthClass="w-64"
+          cards={1}
+          sidebar={false}
+        />
       </Shell>
     );
   }

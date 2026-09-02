@@ -8,7 +8,8 @@
  * (llama.cpp, Ollama, LM Studio, MTPLX, vLLM) that share exactly one wire
  * protocol and nothing else.
  *
- * Two callers, deliberately:
+ * Three callers, deliberately:
+ *   - `services/askService.js` — the Ask API's content-delta stream.
  *   - `services/localLlmPlayground.js` — a provider-backed run with a `/runs`
  *     record, for the backends PortOS configures as providers.
  *   - `services/localModelAssessments.js` — a measurement against a bare
@@ -64,6 +65,11 @@ export function parseStreamFrame(rawLine) {
   if (parsed?.timings && typeof parsed.timings === 'object') frame.timings = parsed.timings;
   if (parsed?.mtplx_stats && typeof parsed.mtplx_stats === 'object') frame.mtplxStats = parsed.mtplx_stats;
   return frame;
+}
+
+function isTerminalStreamFrame(rawLine) {
+  const line = rawLine.trim();
+  return line === 'data: [DONE]' || line === 'data: ✅';
 }
 
 // Endpoints that answered 4xx to `stream_options`. A sweep runs hundreds of
@@ -197,8 +203,38 @@ export function buildMessages({ systemPrompt, prompt, images }) {
   ];
 }
 
+/** Combine a caller abort with an optional whole-stream timeout. */
+function composeStreamSignal(signal, timeoutMs) {
+  const duration = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 0;
+  if (!duration) return { signal, cleanup: () => {} };
+
+  const timeoutController = new AbortController();
+  const timeoutId = setTimeout(() => timeoutController.abort(), duration);
+  let externalAbortHandler;
+  let requestSignal = timeoutController.signal;
+  if (signal) {
+    if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.any === 'function') {
+      requestSignal = AbortSignal.any([timeoutController.signal, signal]);
+    } else {
+      externalAbortHandler = () => timeoutController.abort();
+      if (signal.aborted) timeoutController.abort();
+      else signal.addEventListener('abort', externalAbortHandler, { once: true });
+    }
+  }
+  return {
+    signal: requestSignal,
+    cleanup: () => {
+      clearTimeout(timeoutId);
+      if (externalAbortHandler) signal.removeEventListener('abort', externalAbortHandler);
+    },
+  };
+}
+
 /**
- * Stream a chat completion and return the final text.
+ * Iterate normalized content/reasoning chunks from one OpenAI-compatible chat.
+ * The iterator owns request retries, SSE parsing, timeout/abort composition,
+ * reader cleanup, and backpressure: it does not read the next upstream chunk
+ * until its consumer asks for the next item.
  *
  * @param {object} options
  * @param {string} options.endpoint OpenAI-compatible base ending in `/v1`
@@ -211,20 +247,16 @@ export function buildMessages({ systemPrompt, prompt, images }) {
  *   caller passes a backend-specific knob (Ollama's `num_ctx`) without this
  *   module growing a per-backend branch.
  * @param {AbortSignal} [options.signal]
- * @param {(chunk: string, kind: 'content'|'reasoning') => any} [options.onChunk]
- *   awaited, so a consumer's backpressure reaches the upstream read loop.
- * @param {(stats: object) => void} [options.onStats] registering one is what
- *   asks the daemon for a terminal usage frame (`stream_options.include_usage`);
- *   a daemon that rejects the key is retried once without it and remembered, so
- *   no caller has to know which runtimes support it. Called exactly once, before
- *   this resolves or throws, with `{ completionTokens, promptTokens, estimated }`.
- *   Token counts are `null` when the daemon reported none AND nothing streamed
- *   to estimate from — never 0, which would read as "generated nothing".
- * @returns {Promise<string>} the streamed text. Throws on transport/HTTP
- *   failure; an abort mid-stream throws with `.partialOutput` carrying whatever
- *   had already streamed.
+ * @param {number} [options.timeoutMs] abort the request and reader after this
+ *   many milliseconds; the caller's signal remains independently effective.
+ * @param {boolean} [options.stopOnAbort=true] return quietly without reading
+ *   another buffered chunk after caller cancellation. The text adapter disables
+ *   this to preserve its established AbortError plus partial-output contract.
+ * @param {(stats: object) => void} [options.onStats] registering one asks the
+ *   daemon for a terminal usage frame (`stream_options.include_usage`).
+ * @returns {AsyncGenerator<{text:string,kind:'content'|'reasoning'}>}
  */
-export async function streamOpenAiChat({
+export async function* iterateOpenAiChat({
   endpoint,
   apiKey,
   model,
@@ -233,9 +265,12 @@ export async function streamOpenAiChat({
   maxTokens,
   extraBody = {},
   signal,
-  onChunk,
+  timeoutMs,
+  stopOnAbort = true,
   onStats,
 }) {
+  const composed = composeStreamSignal(signal, timeoutMs);
+  const requestSignal = composed.signal;
   const headers = { 'Content-Type': 'application/json' };
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
   const url = `${String(endpoint || '').replace(/\/+$/, '')}/chat/completions`;
@@ -246,7 +281,7 @@ export async function streamOpenAiChat({
   const post = (withUsage) => fetchWithPreHeaderRetry(() => fetch(url, {
     method: 'POST',
     headers,
-    signal,
+    signal: requestSignal,
     body: JSON.stringify({
       model,
       messages,
@@ -257,148 +292,195 @@ export async function streamOpenAiChat({
       ...extraBody,
     }),
   }), {
-    signal,
+    signal: requestSignal,
     allowReplay: isReplaySafeLocalRequest({ endpoint, apiKey }),
   }).catch((err) => ({ ok: false, status: 0, error: err.message }));
 
-  let response = await post(includeUsage);
-  // `stream_options` is standard OpenAI, but a stricter daemon (or an older
-  // build) can reject an unknown body key outright. Token counts are a
-  // nice-to-have; the generation is not — so drop the ask and retry once rather
-  // than failing a run over a metric. Narrowed to the two codes that actually
-  // mean "I did not like this body": a 401 (key-gated vLLM), a 404, a 5xx, or a
-  // transport error all say nothing about `stream_options`, and retrying them
-  // would double every real failure.
-  let responseErrorBody = '';
-  const mayRejectUsage = !response.ok
-    && includeUsage
-    && (response.status === 400 || response.status === 422)
-    && !signal?.aborted;
-  if (mayRejectUsage) {
-    // A bad model or request can also be a 400/422. Inspect the body before
-    // caching endpoint capability, otherwise one unrelated failure disables
-    // exact usage collection for every later sample on this daemon.
-    responseErrorBody = typeof response.clone === 'function'
-      ? await response.clone().text().catch(() => '')
-      : (response.text ? await response.text().catch(() => '') : response.error || '');
-    if (/stream_options|include_usage/i.test(responseErrorBody)) {
-      console.log(`⚠️  Local LLM: ${model} rejected stream_options (${response.status}) — retrying without usage reporting`);
-      usageUnsupportedEndpoints.add(url);
-      // Drain the rejected response so its socket is released before the retry.
-      await response.body?.cancel?.().catch(() => {});
-      responseErrorBody = '';
-      response = await post(false);
+  try {
+    let response = await post(includeUsage);
+    // `stream_options` is standard OpenAI, but a stricter daemon (or an older
+    // build) can reject an unknown body key outright. Token counts are a
+    // nice-to-have; the generation is not — so drop the ask and retry once rather
+    // than failing a run over a metric. Narrowed to the two codes that actually
+    // mean "I did not like this body": a 401 (key-gated vLLM), a 404, a 5xx, or a
+    // transport error all say nothing about `stream_options`, and retrying them
+    // would double every real failure.
+    let responseErrorBody = '';
+    const mayRejectUsage = !response.ok
+      && includeUsage
+      && (response.status === 400 || response.status === 422)
+      && !requestSignal?.aborted;
+    if (mayRejectUsage) {
+      // A bad model or request can also be a 400/422. Inspect the body before
+      // caching endpoint capability, otherwise one unrelated failure disables
+      // exact usage collection for every later sample on this daemon.
+      responseErrorBody = typeof response.clone === 'function'
+        ? await response.clone().text().catch(() => '')
+        : (response.text ? await response.text().catch(() => '') : response.error || '');
+      if (/stream_options|include_usage/i.test(responseErrorBody)) {
+        console.log(`⚠️  Local LLM: ${model} rejected stream_options (${response.status}) — retrying without usage reporting`);
+        usageUnsupportedEndpoints.add(url);
+        // Drain the rejected response so its socket is released before the retry.
+        await response.body?.cancel?.().catch(() => {});
+        responseErrorBody = '';
+        response = await post(false);
+      }
     }
+
+    if (!response.ok) {
+      const body = responseErrorBody || (response.text ? await response.text().catch(() => '') : response.error || '');
+      throw new Error(`Provider returned ${response.status || 0}: ${body || response.error || response.statusText || 'request failed'}`);
+    }
+
+    // A stats listener must fire on EVERY exit path, including the abort/throw one
+    // — a timed-out run still measured real tokens up to the cut, and dropping
+    // them would report "not measured" for a sample that was in fact measured.
+    // Guarded because a broken listener must not take down a live generation.
+    const emitStats = (stats) => {
+      if (typeof onStats !== 'function') return;
+      try { onStats(stats); }
+      catch (err) { console.error(`❌ Local LLM: usage listener failed: ${err.message}`); }
+    };
+
+    if (!response.body?.getReader) {
+      // A non-streaming 200 (some daemons ignore `stream: true`). Read it whole
+      // rather than reporting an empty generation, which a caller would persist as
+      // a successful run that produced nothing — hence the `null` sentinel on both
+      // a blank and an unparseable body, which throws rather than returning ''.
+      const data = await readResponseJson(response, { fallback: null, emptyValue: null });
+      if (!data) throw new Error(`Provider returned a non-JSON response (${response.status})`);
+      const text = data.choices?.[0]?.message?.content || '';
+      // A whole-body response reports usage the same way a non-streamed call does.
+      // There is no per-chunk fallback here — nothing streamed — so an absent usage
+      // block stays `null` rather than being estimated from a count we never made.
+      emitStats({ ...normalizeUsage(data.usage), estimated: false });
+      if (text) yield { text, kind: 'content' };
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let output = '';
+    let reasoning = '';
+    // Token counts as the daemon reported them, plus the streamed-frame fallback.
+    // A frame carrying content is one decode step on every local runtime PortOS
+    // talks to, so counting frames approximates the completion length closely —
+    // but it is an ESTIMATE and is labelled as one, never merged into the reported
+    // figure. `null` until a usage frame arrives keeps "reported none" distinct
+    // from "reported zero".
+    //
+    // CONTENT frames only, deliberately: the text this returns is content-only
+    // (`resolvePartialOutput` prefers it), so counting reasoning frames too would
+    // report a tokens/s figure covering more output than the chars/s figure beside
+    // it — the two would disagree systematically on every reasoning model.
+    let usage = null;
+    let contentFrames = 0;
+    let runtimeTimings = null;
+    let mtplxStats = null;
+
+    const consumeLine = (rawLine) => {
+      if (isTerminalStreamFrame(rawLine)) return { chunks: [], terminal: true };
+      const delta = parseStreamFrame(rawLine);
+      if (!delta) return { chunks: [], terminal: false };
+      if (delta.usage) usage = delta.usage;
+      if (delta.timings) runtimeTimings = delta.timings;
+      if (delta.mtplxStats) mtplxStats = delta.mtplxStats;
+      if (delta.content) contentFrames += 1;
+      const chunks = [];
+      if (delta.content) {
+        output += delta.content;
+        chunks.push({ text: delta.content, kind: 'content' });
+      }
+      // Reasoning streams on its own channel so a reasoning-only model
+      // (deepseek-r1, qwq, …) renders as it arrives instead of sitting on
+      // "waiting for the first token", and so the final content-only text does
+      // not inherit reasoning prose.
+      if (delta.reasoning) {
+        reasoning += delta.reasoning;
+        chunks.push({ text: delta.reasoning, kind: 'reasoning' });
+      }
+      return { chunks, terminal: false };
+    };
+
+    // Always release the reader (and tear down the socket) on every exit path — a
+    // normal finish, an abort via a timeout signal, or a throw mid-stream. On a
+    // throw, surface the tokens already streamed (attached to the error) instead
+    // of discarding them.
+    try {
+      let terminal = false;
+      while (!terminal && (!stopOnAbort || !signal?.aborted)) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (stopOnAbort && signal?.aborted) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          const consumed = consumeLine(line);
+          for (const chunk of consumed.chunks) yield chunk;
+          if (consumed.terminal) {
+            terminal = true;
+            break;
+          }
+        }
+      }
+      buffer += decoder.decode();
+      if (!terminal && buffer.trim()) {
+        const consumed = consumeLine(buffer);
+        for (const chunk of consumed.chunks) yield chunk;
+      }
+    } catch (err) {
+      err.partialOutput = resolvePartialOutput({ output, reasoning });
+      throw err;
+    } finally {
+      const reported = normalizeUsage(usage);
+      const runtime = normalizeRuntimeTiming(runtimeTimings, mtplxStats);
+      emitStats(reported.completionTokens !== null
+        ? { ...reported, ...runtime, estimated: false }
+        // No usage block: fall back to the streamed-frame count, which is the only
+        // token-shaped evidence we have. `null` when nothing streamed at all —
+        // reporting 0 would file a transport failure as a zero-token generation.
+        : {
+          completionTokens: runtime.completionTokens ?? (contentFrames > 0 ? contentFrames : null),
+          promptTokens: runtime.promptTokens ?? reported.promptTokens,
+          ...(runtime.promptMs !== undefined ? { promptMs: runtime.promptMs } : {}),
+          ...(runtime.completionMs !== undefined ? { completionMs: runtime.completionMs } : {}),
+          estimated: runtime.completionTokens === undefined && contentFrames > 0,
+        });
+      await reader.cancel().catch(() => {});
+    }
+  } catch (err) {
+    // The iterator is the quiet cancellation seam used by Ask. The convenience
+    // adapter below restores its established AbortError contract for callers
+    // that await a final string instead of consuming chunks directly.
+    if (!stopOnAbort || !signal?.aborted) throw err;
+  } finally {
+    composed.cleanup();
   }
+}
 
-  if (!response.ok) {
-    const body = responseErrorBody || (response.text ? await response.text().catch(() => '') : response.error || '');
-    throw new Error(`Provider returned ${response.status || 0}: ${body || response.error || response.statusText || 'request failed'}`);
-  }
-
-  // A stats listener must fire on EVERY exit path, including the abort/throw one
-  // — a timed-out run still measured real tokens up to the cut, and dropping
-  // them would report "not measured" for a sample that was in fact measured.
-  // Guarded because a broken listener must not take down a live generation.
-  const emitStats = (stats) => {
-    if (typeof onStats !== 'function') return;
-    try { onStats(stats); }
-    catch (err) { console.error(`❌ Local LLM: usage listener failed: ${err.message}`); }
-  };
-
-  if (!response.body?.getReader) {
-    // A non-streaming 200 (some daemons ignore `stream: true`). Read it whole
-    // rather than reporting an empty generation, which a caller would persist as
-    // a successful run that produced nothing — hence the `null` sentinel on both
-    // a blank and an unparseable body, which throws rather than returning ''.
-    const data = await readResponseJson(response, { fallback: null, emptyValue: null });
-    if (!data) throw new Error(`Provider returned a non-JSON response (${response.status})`);
-    const text = data.choices?.[0]?.message?.content || '';
-    // A whole-body response reports usage the same way a non-streamed call does.
-    // There is no per-chunk fallback here — nothing streamed — so an absent usage
-    // block stays `null` rather than being estimated from a count we never made.
-    emitStats({ ...normalizeUsage(data.usage), estimated: false });
-    if (text) await onChunk?.(text, 'content');
-    return text;
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
+/**
+ * Stream a chat completion and return the final visible text.
+ *
+ * This convenience adapter preserves the established callback API while the
+ * iterator above remains available to callers, such as Ask, that already speak
+ * async iteration.
+ */
+export async function streamOpenAiChat(options) {
+  const { onChunk, ...transportOptions } = options;
   let output = '';
   let reasoning = '';
-  // Token counts as the daemon reported them, plus the streamed-frame fallback.
-  // A frame carrying content is one decode step on every local runtime PortOS
-  // talks to, so counting frames approximates the completion length closely —
-  // but it is an ESTIMATE and is labelled as one, never merged into the reported
-  // figure. `null` until a usage frame arrives keeps "reported none" distinct
-  // from "reported zero".
-  //
-  // CONTENT frames only, deliberately: the text this returns is content-only
-  // (`resolvePartialOutput` prefers it), so counting reasoning frames too would
-  // report a tokens/s figure covering more output than the chars/s figure beside
-  // it — the two would disagree systematically on every reasoning model.
-  let usage = null;
-  let contentFrames = 0;
-  let runtimeTimings = null;
-  let mtplxStats = null;
-
-  const consumeLine = async (rawLine) => {
-    const delta = parseStreamFrame(rawLine);
-    if (!delta) return;
-    if (delta.usage) usage = delta.usage;
-    if (delta.timings) runtimeTimings = delta.timings;
-    if (delta.mtplxStats) mtplxStats = delta.mtplxStats;
-    if (delta.content) contentFrames += 1;
-    if (delta.content) {
-      output += delta.content;
-      await onChunk?.(delta.content, 'content');
-    }
-    // Reasoning streams on its own channel so a reasoning-only model
-    // (deepseek-r1, qwq, …) renders as it arrives instead of sitting on
-    // "waiting for the first token", and so the final content-only text does
-    // not inherit reasoning prose.
-    if (delta.reasoning) {
-      reasoning += delta.reasoning;
-      await onChunk?.(delta.reasoning, 'reasoning');
-    }
-  };
-
-  // Always release the reader (and tear down the socket) on every exit path — a
-  // normal finish, an abort via a timeout signal, or a throw mid-stream. On a
-  // throw, surface the tokens already streamed (attached to the error) instead
-  // of discarding them.
   try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-      for (const line of lines) await consumeLine(line);
+    for await (const chunk of iterateOpenAiChat({ ...transportOptions, stopOnAbort: false })) {
+      if (chunk.kind === 'content') output += chunk.text;
+      else reasoning += chunk.text;
+      await onChunk?.(chunk.text, chunk.kind);
     }
-    if (buffer.trim()) await consumeLine(buffer);
   } catch (err) {
-    err.partialOutput = resolvePartialOutput({ output, reasoning });
+    if (!err.partialOutput) err.partialOutput = resolvePartialOutput({ output, reasoning });
     throw err;
-  } finally {
-    const reported = normalizeUsage(usage);
-    const runtime = normalizeRuntimeTiming(runtimeTimings, mtplxStats);
-    emitStats(reported.completionTokens !== null
-      ? { ...reported, ...runtime, estimated: false }
-      // No usage block: fall back to the streamed-frame count, which is the only
-      // token-shaped evidence we have. `null` when nothing streamed at all —
-      // reporting 0 would file a transport failure as a zero-token generation.
-      : {
-        completionTokens: runtime.completionTokens ?? (contentFrames > 0 ? contentFrames : null),
-        promptTokens: runtime.promptTokens ?? reported.promptTokens,
-        ...(runtime.promptMs !== undefined ? { promptMs: runtime.promptMs } : {}),
-        ...(runtime.completionMs !== undefined ? { completionMs: runtime.completionMs } : {}),
-        estimated: runtime.completionTokens === undefined && contentFrames > 0,
-      });
-    await reader.cancel().catch(() => {});
   }
-
   return resolvePartialOutput({ output, reasoning });
 }
 

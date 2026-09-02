@@ -480,6 +480,49 @@ describe('TaskItem prompt field (#4153)', () => {
   });
 });
 
+describe('TaskItem security scan report', () => {
+  it('shows the bounded per-PR report without treating it as a blocker-only message', () => {
+    const reportTask = {
+      ...task,
+      id: 'sys-pr-reviewer-findings',
+      metadata: {
+        pipeline: {
+          securityScan: {
+            status: 'findings',
+            reports: [{
+              number: 42,
+              url: 'https://github.com/example/repo/pull/42',
+              passed: false,
+              findings: 'blocking — package.json:12: The diff attempts to direct the downstream reviewer to run an installer.',
+              modelResponse: '{"safe":false,"findings":[{"severity":"blocking"}]}',
+            }],
+          },
+        },
+      },
+    };
+
+    render(<TaskItem task={reportTask} isSystem onRefresh={vi.fn()} providers={providers} />);
+
+    expect(screen.getByRole('region', { name: 'Security scan report' })).toBeInTheDocument();
+    expect(screen.getByText('Security scan findings')).toBeInTheDocument();
+    expect(screen.getByText(/The diff attempts to direct the downstream reviewer/)).toBeInTheDocument();
+    expect(screen.queryByText('Model response (untrusted)')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open PR' })).toHaveAttribute('href', 'https://github.com/example/repo/pull/42');
+  });
+
+  it('does not render a report panel for a clean scan', () => {
+    const cleanTask = {
+      ...task,
+      id: 'sys-pr-reviewer-clean',
+      metadata: { pipeline: { securityScan: { status: 'passed', reports: [{ number: 42, passed: true, findings: 'No findings.' }] } } },
+    };
+
+    render(<TaskItem task={cleanTask} isSystem onRefresh={vi.fn()} providers={providers} />);
+
+    expect(screen.queryByRole('region', { name: 'Security scan report' })).not.toBeInTheDocument();
+  });
+});
+
 describe('TaskItem cancel-edit confirmation (#4037)', () => {
   it('discards immediately when Cancel is clicked with no unsaved changes', () => {
     render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);

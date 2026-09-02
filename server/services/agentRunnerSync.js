@@ -12,9 +12,10 @@
  */
 
 import { connectTuiSessionViaRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
+import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
 import { isAgentOwnedLocally, runnerAgents } from './agentState.js';
-import { getAgent } from './cosAgentLifecycle.js';
+import { AGENT_RECORD_UNREADABLE, isLiveAgentRecord, readAgentRecordOrUnreadable } from './cosAgentLifecycle.js';
 import { appendRunEvent } from './agentRunEventLog.js';
 import * as shellService from './shell.js';
 
@@ -65,6 +66,10 @@ export async function syncRunnerAgents() {
 
   let syncedCount = 0;
   for (const agent of agents) {
+    // A stale runner handle (listed, process gone) is not a survivor to
+    // re-adopt — adopting it would put it in runnerAgents and the orphan
+    // sweep would treat that local map as ownership. Live rows still sync.
+    if (!(await runnerEntryShieldsRunningRecord(agent))) continue;
     // Only sync if this process isn't already driving it
     if (!isAgentOwnedLocally(agent.id)) {
       const task = taskMap.get(agent.taskId);
@@ -80,7 +85,22 @@ export async function syncRunnerAgents() {
       // silently exempting the longest-lived runs in the system from all cost
       // accounting. Survivors are the normal case since #3202 made TUI agents
       // durable, so this cannot stay a best-effort null.
-      const persisted = await getAgent(agent.id).catch(() => null);
+      // Adopt only what PortOS still believes is running. The runner keeps
+      // advertising a PTY it never managed to kill, and adopting one of those
+      // mints a phantom `runnerAgents` entry that nothing ever removes: it holds
+      // an open run, reads as locally owned forever, and counts against the
+      // "CoS agents running" gate that pauses the Update page — while the agent
+      // list, built from the durable records, shows nothing at all.
+      //
+      // A read that FAILED is not a record that is absent: the failure proves
+      // nothing, and the live process behind it still needs its completion event
+      // to land, so it gets its own sentinel and is adopted anyway.
+      const read = await readAgentRecordOrUnreadable(agent.id);
+      if (read !== AGENT_RECORD_UNREADABLE && !isLiveAgentRecord(read)) {
+        console.warn(`⚠️ Ignoring stale runner agent ${agent.id} — PortOS has no live record for it`);
+        continue;
+      }
+      const persisted = read === AGENT_RECORD_UNREADABLE ? null : read;
       const recoveredRunId = persisted?.metadata?.runId || null;
       runnerAgents.set(agent.id, {
         taskId: agent.taskId,

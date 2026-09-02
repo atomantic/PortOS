@@ -150,9 +150,6 @@ export const createHostedLoomSession = (id, episodeId, body = {}, options = {}) 
     method: 'POST', body: JSON.stringify(body), ...options,
   });
 
-export const getHostedLoomSession = (sessionId, options = {}) =>
-  request(`/fableloom/sessions/${encodeURIComponent(sessionId)}`, options);
-
 export const updateHostedLoomSession = (sessionId, patch = {}, options = {}) =>
   request(`/fableloom/sessions/${encodeURIComponent(sessionId)}`, {
     method: 'PATCH', body: JSON.stringify(patch), ...options,

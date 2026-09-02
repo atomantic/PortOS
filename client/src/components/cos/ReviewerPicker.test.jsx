@@ -455,10 +455,15 @@ describe('ReviewerPicker', () => {
       });
 
       it('renders no Effort control for a reviewer with no effort knob', () => {
-        render(<ReviewerPicker reviewers={['copilot', 'grok']} usernames={['flaky-bot']} onChange={() => {}} />);
+        render(<ReviewerPicker reviewers={['copilot']} usernames={['flaky-bot']} onChange={() => {}} />);
         expect(screen.queryByLabelText('Reasoning effort for Copilot')).not.toBeInTheDocument();
-        expect(screen.queryByLabelText('Reasoning effort for Grok')).not.toBeInTheDocument();
         expect(screen.queryByLabelText('Reasoning effort for @flaky-bot')).not.toBeInTheDocument();
+      });
+
+      it('offers grok its own ladder, which stops short of max', () => {
+        render(<ReviewerPicker reviewers={['grok']} onChange={() => {}} />);
+        const select = screen.getByLabelText('Reasoning effort for Grok');
+        expect([...select.options].map((o) => o.value)).toEqual(['', 'low', 'medium', 'high', 'xhigh']);
       });
 
       it('shows an existing pin and emits a picked tier', () => {

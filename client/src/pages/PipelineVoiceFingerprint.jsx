@@ -18,8 +18,9 @@
 
 import { useEffect, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router';
-import { Loader2, ArrowLeft, Fingerprint, BookOpen, Info } from 'lucide-react';
+import { ArrowLeft, Fingerprint, BookOpen, Info } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import { getPipelineSeries, getVoiceFingerprint } from '../services/api';
 
 // A cell is an outlier when the (issue, metricKey) pair is in the drift set.
@@ -59,9 +60,16 @@ export default function PipelineVoiceFingerprint() {
 
   if (loading) {
     return (
-      <div className="h-full flex items-center justify-center text-gray-400">
-        <Loader2 className="animate-spin" size={20} />
-      </div>
+      <PageSkeleton
+        label="Loading voice fingerprint"
+        fullHeight
+        padded
+        headerRowClass="flex flex-wrap items-center gap-2"
+        titleWidthClass="w-56"
+        showAction={false}
+        cards={3}
+        sidebar={false}
+      />
     );
   }
 

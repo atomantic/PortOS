@@ -78,7 +78,9 @@ export const closeJobAfterDelay = (jobs, jobId, delay = SSE_CLEANUP_DELAY_MS, ex
       for (const c of expectedJob.clients || []) c.end();
       return;
     }
-    if (job) for (const c of job.clients) c.end();
+    // `clients` is absent on job maps that use this purely for eviction (the
+    // voice fine-tuning registry has no SSE route), so guard like the branch above.
+    if (job) for (const c of job.clients || []) c.end();
     jobs.delete(jobId);
   }, delay);
 };

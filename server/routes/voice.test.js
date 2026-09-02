@@ -203,24 +203,33 @@ describe('Voice Routes', () => {
     });
 
     it('manages fine-tuning lifecycle: start, status, cancel, promote', async () => {
-      fineTuning.startFineTuningJob.mockResolvedValue({ jobId: 'job-1', status: 'running' });
-      fineTuning.getFineTuningJobStatus.mockReturnValue({ jobId: 'job-1', status: 'completed', checkpoints: [{ id: 'ckpt-1' }] });
-      fineTuning.cancelFineTuningJob.mockReturnValue({ ok: true, jobId: 'job-1', status: 'cancelled' });
+      const jobId = '11111111-2222-4333-8444-555555555555';
+      fineTuning.startFineTuningJob.mockResolvedValue({ jobId, status: 'running' });
+      fineTuning.getFineTuningJobStatus.mockResolvedValue({ jobId, status: 'completed', checkpoints: [{ id: 'ckpt-1' }] });
+      fineTuning.cancelFineTuningJob.mockReturnValue({ ok: true, jobId, status: 'cancelled' });
       fineTuning.promoteCheckpoint.mockResolvedValue({ id: 'voice-profile-1', kind: 'fine-tuned' });
 
       const startRes = await request(buildApp()).post('/api/voice/profiles/voice-profile-1/fine-tune/start').send({ epochs: 5 });
       expect(startRes.status).toBe(202);
 
-      const statusRes = await request(buildApp()).get('/api/voice/profiles/voice-profile-1/fine-tune/job-1');
+      const statusRes = await request(buildApp()).get(`/api/voice/profiles/voice-profile-1/fine-tune/${jobId}`);
       expect(statusRes.status).toBe(200);
       expect(statusRes.body.status).toBe('completed');
+      expect(fineTuning.getFineTuningJobStatus).toHaveBeenCalledWith(jobId, 'voice-profile-1');
 
-      const cancelRes = await request(buildApp()).post('/api/voice/profiles/voice-profile-1/fine-tune/job-1/cancel').send({});
+      const cancelRes = await request(buildApp()).post(`/api/voice/profiles/voice-profile-1/fine-tune/${jobId}/cancel`).send({});
       expect(cancelRes.status).toBe(200);
 
-      const promoteRes = await request(buildApp()).post('/api/voice/profiles/voice-profile-1/fine-tune/job-1/promote').send({ checkpointId: 'ckpt-1' });
+      const promoteRes = await request(buildApp()).post(`/api/voice/profiles/voice-profile-1/fine-tune/${jobId}/promote`).send({ checkpointId: 'ckpt-1' });
       expect(promoteRes.status).toBe(200);
       expect(promoteRes.body.profile.kind).toBe('fine-tuned');
+    });
+
+    it('rejects a fine-tuning job id that could escape the profile directory', async () => {
+      const res = await request(buildApp())
+        .get('/api/voice/profiles/voice-profile-1/fine-tune/..%2F..%2Fother-profile');
+      expect(res.status).toBe(400);
+      expect(fineTuning.getFineTuningJobStatus).not.toHaveBeenCalled();
     });
 
     it('probes Qwen3 runtime status and downloads model on demand', async () => {

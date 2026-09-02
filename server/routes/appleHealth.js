@@ -112,9 +112,17 @@ router.post('/import/xml', uploadXml, asyncHandler(async (req, res) => {
 
   // If ZIP, extract export.xml to a temp file and collect clinical records
   let clinicalJsons = [];
+  // Set once a ZIP is extracted: the private mkdtemp directory holding
+  // export.xml, removed in the finally below whether the import succeeds or not.
+  let extractDir = null;
 
   if (req.file.originalname.endsWith('.zip') || isZip(req.file)) {
-    const xmlPath = join(tmpdir(), `apple-health-${Date.now()}.xml`);
+    // mkdtemp, not `apple-health-${Date.now()}.xml`: two imports issued in the
+    // same millisecond would otherwise write into one another's file. One
+    // directory per extraction is also a single recursive remove to clean up
+    // (matching codexAppServer.ensureTextTurnCwd and repoCloner).
+    extractDir = await fs.mkdtemp(join(tmpdir(), 'portos-apple-health-'));
+    const xmlPath = join(extractDir, 'export.xml');
     let foundXml = false;
     let xmlWriteFinished = false;
     // Each clinical-record collect is async (entries stream through an inflate
@@ -190,23 +198,33 @@ router.post('/import/xml', uploadXml, asyncHandler(async (req, res) => {
       //
       // settle(reject) already destroy()'d xmlWriteStream, but createWriteStream
       // opens its fd asynchronously and can finish creating xmlPath *after* an
-      // early destroy — so unlinking immediately can no-op and leave the temp
-      // file behind. Wait for the stream to emit 'close' (the fd is fully
-      // opened-and-closed by then) before unlinking.
+      // early destroy — so removing immediately can race and leave a re-created
+      // export.xml (and its directory) behind. Wait for the stream to emit
+      // 'close' (the fd is fully opened-and-closed by then) before removing.
       if (xmlWriteStream && !xmlWriteStream.closed) {
         await new Promise((res) => xmlWriteStream.once('close', res));
       }
       await fs.unlink(filePath).catch(() => {});
-      await fs.unlink(xmlPath).catch(() => {});
+      await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
       throw err;
     });
 
-    await fs.unlink(filePath);
+    // Tolerate a failed unlink of the uploaded ZIP (same posture as the reject
+    // branch above): throwing here would skip the finally that removes
+    // extractDir and leak the far larger extracted export.xml.
+    await fs.unlink(filePath).catch(() => {});
     filePath = xmlPath;
     console.log(`📋 Found ${clinicalJsons.length} clinical record files in ZIP`);
   }
 
-  const result = await importAppleHealthXml(filePath, io);
+  // importAppleHealthXml unlinks the XML it was handed on both outcomes; the
+  // extraction directory around it is ours to remove, on both outcomes too.
+  let result;
+  try {
+    result = await importAppleHealthXml(filePath, io);
+  } finally {
+    if (extractDir) await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
+  }
 
   // Import clinical records if any were found
   let clinicalResult = null;

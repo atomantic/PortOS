@@ -85,10 +85,6 @@ vi.mock('../services/apiImageVideo.js', () => ({
   getVideoHistoryItem: vi.fn(async (id) => (id === 'rh-9'
     ? { id: 'rh-9', filename: 'final.mp4' }
     : Promise.reject(Object.assign(new Error('Not found'), { status: 404 })))),
-  // Restricted-model license gate — none of the models above carry a
-  // `termsGate`, so the board renders no acceptance panel and nothing blocks.
-  getVideoModelTerms: vi.fn(async () => ({ accepted: [] })),
-  setVideoModelTerms: vi.fn(async () => ({ accepted: [] })),
 }));
 vi.mock('../services/apiTracks.js', () => ({
   listTracks: vi.fn(async () => []),

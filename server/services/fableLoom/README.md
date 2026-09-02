@@ -14,7 +14,7 @@ intent to a transition and moves them through the graph until an ending.
 | `editorialAutopilot.js` | User-triggered bounded editor/reviewer loop: remediate, exercise every bounded branch variation, judge story quality, then complete, pause on residuals/plateau, fail, or cancel cooperatively. |
 | `editorialSelfImprove.js` | Opt-in, budget-gated post-mortem for paused/failed editorial-autopilot runs. Sends only content-free counters to a diagnostic stage and queues a deduplicated, approval-gated PortOS CoS task for confident workflow defects. |
 | `formats.js` | Scene formats (`prose` / `teleplay`) and the prompt contracts each generative stage renders for them. |
-| `hostedSession.js` | Scoped QR-hosted play session lifecycle, HTTPS readiness preflight, token hashing, live voice gate revalidation, and half-duplex turn taking (#5383). |
+| `hostedSession.js` | Scoped QR-hosted play session lifecycle, HTTPS readiness preflight, token hashing, live voice gate revalidation, half-duplex turn taking (#5383), and the expired-session sweeper armed from bootstrap (#5660). |
 | `production.js` | Episodic production orchestration: batch planning, DAG generation, cancellable batch runs, and user-triggered episodic continuity review (#5384). |
 | `falVideoAutomation.js` | User-triggered, serialized Playwright automation over the persistent PortOS CDP browser: uploads a scene still + full shot prompt to fal.ai H3 Max, downloads the finished MP4 into shared video history, and attaches it to the originating scene. |
 | `store.js` | PostgreSQL/file backend facade (`fableloom_stories`; collectionStore escape hatch for tests). |

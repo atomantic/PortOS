@@ -1493,7 +1493,7 @@ describe('cos.js source — priority + capacity invariants', () => {
       .toMatch(/acquireLocalEndpointSpawnSlot\(/);
     // The reservation is only correct if it is released once the spawn settles;
     // a missing `finally` leaks the slot and wedges the endpoint forever.
-    const listener = SPAWNER_SRC.slice(SPAWNER_SRC.indexOf("cosEvents.on('task:ready'"));
+    const listener = SPAWNER_SRC.slice(SPAWNER_SRC.indexOf('async function handleTaskReady'));
     expect(listener, 'the acquired slot must be released in a finally')
       .toMatch(/finally\s*\{\s*\n\s*localSlot\.release\(\);/);
     expect(listener, 'a task at capacity must be HELD (left pending), not failed')
@@ -1912,7 +1912,10 @@ describe('cos.js source — priority + capacity invariants', () => {
     expect(onIdx, 'tasks:changed listener must exist').toBeGreaterThan(-1);
     const handler = COS_SRC.slice(onIdx, COS_SRC.indexOf('});', onIdx) + 3);
 
-    const dequeueIdx = handler.indexOf('dequeueNextTask()');
+    // Scheduled through the shared `scheduleDequeue` wrapper (#5644) — the bare
+    // `setImmediate(() => dequeueNextTask())` it replaced left the rejection
+    // unguarded outside the request lifecycle.
+    const dequeueIdx = handler.indexOf('scheduleDequeue()');
     const spawnIdx = handler.indexOf('tryImmediateSpawn(');
     expect(dequeueIdx, 'listener must schedule dequeueNextTask').toBeGreaterThan(-1);
     expect(spawnIdx, 'listener must schedule tryImmediateSpawn').toBeGreaterThan(-1);
@@ -1939,6 +1942,41 @@ describe('cos.js source — priority + capacity invariants', () => {
     const onIdx = COS_SRC.indexOf("cosEvents.on('tasks:changed'");
     const handler = COS_SRC.slice(onIdx, COS_SRC.indexOf('});', onIdx) + 3);
     expect(handler).toMatch(/data\.action\s*===\s*'requeued'/);
+  });
+
+  // #5644 — every dequeue/immediate-spawn here is scheduled from a timer or
+  // setImmediate, i.e. outside the request lifecycle, where a rejection has
+  // nowhere to bubble: it escapes as an unhandled rejection, which
+  // setupProcessErrorHandlers classifies `critical` and broadcasts to every
+  // connected browser as `system:critical-error` — and the open agent slot the
+  // cycle was meant to fill stays empty until an unrelated event fires another
+  // one. There is no runtime seam that would catch a future contributor
+  // re-adding a bare `setImmediate(() => dequeueNextTask())`, so scan the source.
+  it('never floats a dequeueNextTask / tryImmediateSpawn schedule without a .catch', () => {
+    expect(
+      COS_SRC,
+      'schedule the dequeue through scheduleDequeue() so the rejection is caught'
+    ).not.toMatch(/set(?:Immediate|Timeout)\(\(\) => dequeueNextTask\(/);
+
+    const lineStartOf = (idx) => COS_SRC.lastIndexOf('\n', idx) + 1;
+    const unguarded = [];
+    for (const name of ['dequeueNextTask', 'tryImmediateSpawn']) {
+      const re = new RegExp(`${name}\\(`, 'g');
+      let match;
+      while ((match = re.exec(COS_SRC)) !== null) {
+        const line = COS_SRC.slice(lineStartOf(match.index), COS_SRC.indexOf('\n', match.index));
+        if (/^\s*(?:\/\/|\*)/.test(line)) continue; // prose mention in a comment
+        const before = COS_SRC.slice(Math.max(0, match.index - 40), match.index);
+        if (/function\s+$/.test(before)) continue;     // the declaration itself
+        if (/await\s+$/.test(before)) continue;        // awaited by an async caller
+        // Otherwise the promise floats, so a `.catch(` must follow inside the
+        // same statement (before the terminating `;`).
+        const tail = COS_SRC.slice(match.index, match.index + 400);
+        if (/^[^;]*\.catch\(/s.test(tail)) continue;
+        unguarded.push(line.trim());
+      }
+    }
+    expect(unguarded, 'floated scheduler promises must be .catch-guarded').toEqual([]);
   });
 
   // A finished investigation is what releases the failure-blocked task(s) it was
@@ -2228,6 +2266,13 @@ describe('perpetualRefillPlan — manual vs scheduled drain lane', () => {
       agent({ taskAnalysisType: 'claim-issue', taskOnDemand: true }),
       schedule,
     )).toEqual({ lane: 'onDemand', taskType: 'claim-issue', appId: null });
+  });
+
+  it('does not refill a run that was narrowed to one pull request', () => {
+    expect(perpetualRefillPlan(
+      agent({ taskAnalysisType: 'claim-issue', taskOnDemand: true, taskApp: 'app-42', taskTargetPullRequest: 17 }),
+      schedule,
+    )).toEqual({ lane: 'skip' });
   });
 
   it('skips a non-candidate even when it is marked on-demand (disabled / non-perpetual / unknown)', () => {

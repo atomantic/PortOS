@@ -340,6 +340,49 @@ export const ERROR_PATTERNS = [
     }
   },
   {
+    // Ollama's capability rejection: the request asked a model for something its
+    // manifest doesn't declare — for an agent harness, almost always
+    // `API Error: 400 registry.ollama.ai/library/gemma3:27b does not support tools`.
+    // Must sit AHEAD of `bad-request`, which it arrives as, and which draws
+    // exactly the wrong conclusion: "check prompt formatting, tool names, and
+    // parameter sizes" sends the retry (and the investigation task it spawns)
+    // after a malformed request, when the request was fine and the MODEL simply
+    // cannot emit tool calls. No amount of reformatting fixes that; only picking
+    // a tool-capable model does, so this is a Tier 1 config correction, not a
+    // Tier 2 schema/type one.
+    //
+    // Categorized `model-not-found` to mirror the identical clause in
+    // aiToolkit/errorDetection.js (the API path) — same fault, same vocabulary,
+    // and the category is REQUEST-specific in providerCooldown, so a healthy
+    // Ollama daemon serving other tool-capable models is not benched for naming
+    // one model that can't.
+    //
+    // Anchored on the `API Error: 4NN` line rather than the bare phrase: this
+    // file's rules sweep the whole transcript, and "does not support tools" is
+    // a sentence an agent working on this very code writes in passing.
+    pattern: /API Error:\s*4\d\d[\s\S]{0,200}?["']?([\w.\-/:]+)["']?\s+does not support\s+(tools|thinking|insert|chat|generate|completions?|embeddings?)\b/i,
+    category: 'model-not-found',
+    actionable: true,
+    origin: 'provider',
+    escalation: 'Point this task at a model whose backend reports the missing capability (Ollama tags tool-callers with a `tools` capability), then approve the retry.',
+    extract: (match, output, task, model) => {
+      // Ollama echoes the fully-qualified registry path; the bare tag is what a
+      // provider's model field actually holds.
+      const affected = match[1].replace(/^.*\/library\//, '');
+      const capability = match[2].toLowerCase();
+      const forTools = capability === 'tools';
+      return {
+        message: `Model "${affected}" does not support ${capability}`,
+        suggestedFix: forTools
+          ? `"${affected}" cannot emit native tool calls, and an agent run is nothing but tool calls — every retry dies identically no matter how the prompt is written. Point this task's provider at a tool-capable model (AI Providers → the provider → Model; the Local LLMs tab marks these "🔧 tool use") and retry.`
+          : `The backend serving "${affected}" reports no "${capability}" capability, so this request can never succeed against it. Pick a model that declares it, or route this task to a provider that does.`,
+        affectedModel: affected,
+        affectedCapability: capability,
+        configuredModel: model
+      };
+    }
+  },
+  {
     pattern: /API Error: 400|invalid_request_error|bad.?request/i,
     category: 'bad-request',
     actionable: true,
@@ -1436,6 +1479,9 @@ export function resolveTypeFailureSignal({ success, terminatedByUser = false, ho
 
   if (hookResult?.ran) {
     if (hookResult.threw) return { record: 'failure', category: 'hook-error' };
+    if (hookResult.outcome?.accepted === false) {
+      return { record: 'failure', category: hookResult.outcome.reason || 'output-hook-rejected' };
+    }
     if (hookResult.outcome?.reason === 'unparseable-response') return { record: 'failure', category: 'unparseable-response' };
   }
 

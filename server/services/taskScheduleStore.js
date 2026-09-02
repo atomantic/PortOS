@@ -9,6 +9,7 @@ import { emitLog } from './cosEvents.js';
 import { INTERVAL_TYPES } from './taskScheduleConstants.js';
 import {
   DEFAULT_TASK_INTERVALS,
+  createPrReviewerDefaultStages,
   enforceBranchReconcileBatch,
   enforceManagedAgentOptions
 } from './taskScheduleRegistry.js';
@@ -129,7 +130,42 @@ function migrateScheduleV1toV2(schedule) {
     }
   }
 
+  // v1 schedules predate the v2 merge loop below, so apply the narrow
+  // pr-reviewer pipeline migration here as well. Otherwise an install that
+  // jumps directly from v1 would keep the old two-stage shape on disk even
+  // though the runtime can only safely dispatch the new eligibility boundary.
+  migrateLegacyPrReviewerPipeline(migrated.tasks?.['pr-reviewer']);
+
   return migrated;
+}
+
+/**
+ * Add the eligibility boundary to the former two-stage pr-reviewer default.
+ * This is deliberately narrow: a user-customized pipeline is left alone for
+ * the schedule UI to preserve, while the exact shipped security → review shape
+ * is upgraded in place. The runtime generator still enforces the gate for a
+ * hand-edited/legacy shape that reaches dispatch without this save.
+ */
+function migrateLegacyPrReviewerPipeline(config) {
+  const stages = config?.taskMetadata?.pipeline?.stages;
+  if (!Array.isArray(stages) || stages.length !== 2) return false;
+  const [security, review] = stages;
+  if (security?.promptKey !== 'pr-reviewer-security' || review?.promptKey !== 'pr-reviewer-review') return false;
+  if (security.role || review.role || (review.executionProfile && review.executionProfile !== 'public-review')) return false;
+
+  const [defaultSecurity, defaultEligibility, defaultActions] = createPrReviewerDefaultStages();
+  config.taskMetadata = {
+    ...config.taskMetadata,
+    pipeline: {
+      ...config.taskMetadata.pipeline,
+      stages: [
+        { ...defaultSecurity, ...security, role: 'security' },
+        { ...defaultEligibility },
+        { ...defaultActions, ...review, role: 'actions', executionProfile: defaultActions.executionProfile },
+      ],
+    },
+  };
+  return true;
 }
 
 /**
@@ -170,6 +206,13 @@ async function readSchedule() {
       const storedMeta = loadedTask.taskMetadata;
       merged.taskMetadata = { ...defaultTask.taskMetadata, ...(isPlainObject(storedMeta) ? storedMeta : {}) };
     }
+    if (taskType === 'pr-reviewer' && migrateLegacyPrReviewerPipeline(merged)) {
+      // The migration is applied below while the normal schedule read is still
+      // deciding whether this normalized snapshot needs persistence.
+      // `needsSave` is declared after this merge loop, so mark it on the task
+      // and detect it in the pass that enforces managed settings.
+      merged.__prReviewerPipelineMigrated = true;
+    }
     mergedTasks[taskType] = merged;
   }
   // Preserve any extra task types from loaded that aren't in defaults
@@ -190,6 +233,10 @@ async function readSchedule() {
   // Populate prompts from defaults if missing, and auto-upgrade stale defaults
   let needsSave = false;
   for (const [taskType, config] of Object.entries(schedule.tasks)) {
+    if (config.__prReviewerPipelineMigrated) {
+      delete config.__prReviewerPipelineMigrated;
+      needsSave = true;
+    }
     if (enforceManagedAgentOptions(taskType, config)) needsSave = true;
     if (enforceBranchReconcileBatch(taskType, config)) needsSave = true;
     // Stamp a creation timestamp the first time we see a task so the cron

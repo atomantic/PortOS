@@ -12,7 +12,7 @@ const LABELS = {
  * app list rather than inside the expanded row so collapsing the row — or
  * returning to /apps mid-operation — still shows what is running (#3435).
  */
-export default function AppOperationBanner({ appName, type, steps, error, completed, onDismiss }) {
+export default function AppOperationBanner({ appName, type, steps, error, completed, onDismiss, completedMessage }) {
   const labels = LABELS[type] || LABELS.update;
   const name = appName || 'app';
   const heading = error ? `${labels.failed} ${name}` : completed ? `${labels.done} ${name}` : `${labels.running} ${name}…`;
@@ -43,7 +43,7 @@ export default function AppOperationBanner({ appName, type, steps, error, comple
             {error
               ? error
               : completed
-                ? 'You can start another operation now.'
+                ? completedMessage || 'You can start another operation now.'
                 : 'This keeps running if you collapse the row or leave the page.'}
           </div>
         </div>

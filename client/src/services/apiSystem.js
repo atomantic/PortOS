@@ -25,7 +25,6 @@ export const getCharacter = ({ skills = true, metrics = true, ...options } = {})
 // Health
 export const checkHealth = (options) => request('/system/health', options);
 export const getSystemHealth = (options) => request('/system/health/details', options);
-export const getSystemCapabilities = (options) => request('/system/capabilities', options);
 // Its own route, not a field on health/details — peers scrape that payload and
 // persist it verbatim, and the build stamp must stay machine-local (#4694).
 export const getSystemBuild = (options) => request('/system/build', options);
@@ -94,22 +93,8 @@ export const updateEidoverseWorldConfig = (payload, options = {}) => request('/e
   body: JSON.stringify(payload),
   ...options,
 });
-export const ensureEidoverseWorldPresence = (options = {}) => request('/eidoverse/world/presence', {
-  method: 'POST',
-  ...options,
-});
 export const projectEidoverseWorld = (options = {}) => request('/eidoverse/world/project', {
   method: 'POST',
-  ...options,
-});
-export const augmentEidoverseWorld = (operations, options = {}) => request('/eidoverse/world/augment', {
-  method: 'POST',
-  body: JSON.stringify({ operations }),
-  ...options,
-});
-export const sayInEidoverseWorld = (text, options = {}) => request('/eidoverse/world/say', {
-  method: 'POST',
-  body: JSON.stringify({ text }),
   ...options,
 });
 export const updateSettings = (data, options) => request('/settings', {
@@ -126,7 +111,6 @@ export const getMediaShareCandidates = (options) => request('/settings/media-sha
 // API Access — the OpenAPI 3.0.3 spec for the public API surface (built from the
 // exposed entries in apiAccess settings). Rendered by the API Access settings tab.
 export const getOpenApiSpec = (options) => request('/api-docs/openapi.json', options);
-export const getInternalOpenApiSpec = (options) => request('/api-docs/internal/openapi.json', options);
 export const getApiCatalog = (options) => request('/api-docs/catalog.json', options);
 export const getSocketEventCatalog = (options) => request('/api-docs/events.json', options);
 export const updateAiAssignment = (id, data, options) => request(`/settings/ai-assignments/${encodeURIComponent(id)}`, {
@@ -179,8 +163,6 @@ export const getUsage = (params = {}) => {
   ).toString();
   return request(`/usage${qs ? `?${qs}` : ''}`);
 };
-export const getUsageRaw = () => request('/usage/raw');
-export const resetUsage = () => request('/usage', { method: 'DELETE' });
 export const getUsageBackfillStatus = (options = {}) => request('/usage/backfill', options);
 // Monthly plan prices per provider family, used to compare subscription spend
 // against the report's estimated API cost. `costs` is a partial patch: an
@@ -188,8 +170,16 @@ export const getUsageBackfillStatus = (options = {}) => request('/usage/backfill
 // the report (`getUsage().subscriptionSavings`), so there is no getter here.
 export const updateSubscriptionCosts = (costs, options = {}) =>
   request('/usage/subscriptions', { method: 'PUT', body: JSON.stringify({ costs }), ...options });
+// Mark one federated instance as paying API rates (`usesSubscriptions: false`)
+// or riding this install's subscriptions (`true`). The Across Instances
+// combined total skips API-billed rows; the row itself stays listed.
+export const updateUsageFleetBilling = ({ instanceId, usesSubscriptions }, options = {}) =>
+  request('/usage/fleet-billing', {
+    method: 'PUT',
+    body: JSON.stringify({ instanceId, usesSubscriptions }),
+    ...options,
+  });
 export const startUsageBackfill = (options = {}) => request('/usage/backfill', { method: 'POST', ...options });
-
 
 // Subscription-quota status for every enabled provider family (claude, codex,
 // agy, grok). Callers own their inline error UI — silent by default. `family`
@@ -288,7 +278,6 @@ export const getNotifications = (options = {}) => {
   return request(`/notifications?${params}`);
 };
 export const getNotificationCount = () => request('/notifications/count');
-export const getNotificationCounts = () => request('/notifications/counts');
 export const markNotificationRead = (id) => request(`/notifications/${id}/read`, { method: 'POST' });
 export const markAllNotificationsRead = () => request('/notifications/read-all', { method: 'POST' });
 export const deleteNotification = (id) => request(`/notifications/${id}`, { method: 'DELETE' });
@@ -317,7 +306,6 @@ export const updateTelegramMethod = (method, options) => request('/telegram/meth
   body: JSON.stringify({ method }),
   ...options
 });
-export const reloadTelegramBridge = () => request('/telegram/bridge/reload', { method: 'POST' });
 
 // Browser - CDP browser management
 export const getBrowserStatus = () => request('/browser');
@@ -330,12 +318,7 @@ export const updateBrowserConfig = (config, options = {}) => request('/browser/c
 export const launchBrowser = (options = {}) => request('/browser/launch', { method: 'POST', ...options });
 export const stopBrowser = (options = {}) => request('/browser/stop', { method: 'POST', ...options });
 export const restartBrowser = (options = {}) => request('/browser/restart', { method: 'POST', ...options });
-export const getBrowserHealth = () => request('/browser/health');
-export const getBrowserProcess = () => request('/browser/process');
-export const getBrowserPages = () => request('/browser/pages');
-export const getBrowserVersion = () => request('/browser/version');
 export const getBrowserLogs = (lines = 50) => request(`/browser/logs?lines=${lines}`);
-export const getBrowserDownloads = () => request('/browser/downloads');
 export const deleteBrowserDownload = (name, options = {}) =>
   request(`/browser/downloads/${encodeURIComponent(name)}`, { method: 'DELETE', ...options });
 export const browserDownloadUrl = (name) =>
@@ -360,7 +343,6 @@ export const reciprocatePeer = (id, options) => request(`/instances/peers/${id}/
 export const probePeer = (id) => request(`/instances/peers/${id}/probe`, { method: 'POST' });
 export const syncPeer = (id, options) => request(`/instances/peers/${id}/sync`, { method: 'POST', ...options });
 export const getPeerFullSyncCoverage = (id, options) => request(`/instances/peers/${id}/full-sync-coverage`, options);
-export const queryPeer = (id, path) => request(`/instances/peers/${id}/query?path=${encodeURIComponent(path)}`);
 export const getTailnetInfo = () => request('/instances/tailnet-suffix');
 export const provisionTailnetCert = () => request('/instances/provision-cert', { method: 'POST' });
 
@@ -406,7 +388,6 @@ export const uploadGalleryImage = (base64Data, options = {}) => request('/image-
 
 // Tools Registry
 export const getToolsList = (options) => request('/tools', options);
-export const getEnabledTools = () => request('/tools/enabled');
 export const registerTool = (data, options) => request('/tools', {
   method: 'POST',
   body: JSON.stringify(data),
@@ -417,7 +398,6 @@ export const updateTool = (id, data, options) => request(`/tools/${id}`, {
   body: JSON.stringify(data),
   ...options
 });
-export const deleteTool = (id) => request(`/tools/${id}`, { method: 'DELETE' });
 
 // DataDog
 export const getDatadogInstances = () => request('/datadog/instances');
@@ -456,30 +436,6 @@ export const generateJiraReport = (appId) => request('/jira/reports/generate', {
   body: JSON.stringify(appId ? { appId } : {})
 });
 export const getJiraReport = (appId, date) => request(`/jira/reports/${appId}/${date}`);
-export const getLatestJiraReport = (appId) => request(`/jira/reports/${appId}/latest`);
-
-// PM2 Standardization
-export const analyzeStandardization = (repoPath, providerId) => request('/standardize/analyze', {
-  method: 'POST',
-  body: JSON.stringify({ repoPath, providerId })
-});
-export const analyzeStandardizationByApp = (appId, providerId) => request('/standardize/analyze', {
-  method: 'POST',
-  body: JSON.stringify({ appId, providerId })
-});
-export const applyStandardization = (repoPath, plan) => request('/standardize/apply', {
-  method: 'POST',
-  body: JSON.stringify({ repoPath, plan })
-});
-export const applyStandardizationByApp = (appId, plan) => request('/standardize/apply', {
-  method: 'POST',
-  body: JSON.stringify({ appId, plan })
-});
-export const getStandardizeTemplate = () => request('/standardize/template');
-export const createGitBackup = (repoPath) => request('/standardize/backup', {
-  method: 'POST',
-  body: JSON.stringify({ repoPath })
-});
 
 // Insights
 export const getInsightThemes = () => request('/insights/themes');
@@ -515,12 +471,3 @@ export const updateGoalScorecardSettings = (partial) => request('/insights/goal-
   method: 'PUT',
   body: JSON.stringify(partial ?? {})
 });
-
-// Media - Server media devices
-export const getMediaDevices = () => request('/media/devices');
-export const getMediaStatus = () => request('/media/status');
-export const startMediaStream = (videoDeviceId, audioDeviceId, video = true, audio = true) => request('/media/start', {
-  method: 'POST',
-  body: JSON.stringify({ videoDeviceId, audioDeviceId, video, audio })
-});
-export const stopMediaStream = () => request('/media/stop', { method: 'POST' });

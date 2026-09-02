@@ -17,6 +17,7 @@ const api = vi.hoisted(() => ({
   getCosBudgetUsage: vi.fn(),
   getPersistentMind: vi.fn(),
   forceCosEvaluate: vi.fn(),
+  updateCosTask: vi.fn(),
   pauseCos: vi.fn(),
   resumeCos: vi.fn(),
   forceHealthCheck: vi.fn(),
@@ -85,6 +86,7 @@ beforeEach(() => {
   api.getCosLearningSummary.mockResolvedValue(null);
   api.getCosActionableInsights.mockResolvedValue({ insights: [] });
   api.forceHealthCheck.mockResolvedValue({ metrics: { timestamp: 1 }, issues: [] });
+  api.updateCosTask.mockResolvedValue({ id: 'task-updated', status: 'pending', metadata: {} });
   api.getCosTodayActivity.mockResolvedValue({ isRunning: false, stats: { completed: 0 } });
   api.getCosLearning.mockResolvedValue(null);
   api.getProviderStatuses.mockResolvedValue({ providers: {} });
@@ -592,6 +594,81 @@ describe('ChiefOfStaff task-change subscriptions', () => {
     // processes. Every task add, status flip, delete and lease heartbeat emits
     // `tasks:changed`, so this handler must never reach that endpoint.
     expect(api.getCosActionableInsights.mock.calls.length).toBe(insightsBefore);
+  });
+});
+
+describe('ChiefOfStaff task unblock freshness', () => {
+  const blockedTask = {
+    id: 'sys-blocked-immediate',
+    description: 'Blocked task updates immediately',
+    status: 'blocked',
+    metadata: { blockedReason: 'Waiting for an operator' },
+  };
+
+  const blockedInsight = {
+    type: 'blocked',
+    priority: 'high',
+    icon: 'XCircle',
+    title: '1 blocked task',
+    description: 'Waiting for an operator',
+    action: { label: 'Unblock', route: '/cos/tasks' },
+    count: 1,
+    tasks: [{
+      id: blockedTask.id,
+      description: blockedTask.description,
+      blocker: 'Waiting for an operator',
+      taskType: 'internal',
+    }],
+  };
+
+  const renderBlockedTask = (insights = []) => {
+    api.getCosTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [blockedTask] } });
+    api.getCosActionableInsights.mockResolvedValue({ insights });
+    return render(
+      <MemoryRouter initialEntries={['/cos/tasks']}>
+        <Routes>
+          <Route path="/cos/:tab" element={<ChiefOfStaff />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+  };
+
+  it('moves a banner-unblocked task and removes its insight before refresh settles', async () => {
+    renderBlockedTask([blockedInsight]);
+    expect(await screen.findByText('1 blocked task')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'View Tasks' }));
+    const banner = screen.getByText('1 blocked task').closest('.border');
+    // Keep the post-mutation reads pending so this assertion only passes when
+    // the successful banner action updates both parent-owned surfaces directly.
+    api.getCosTasks.mockReturnValue(new Promise(() => {}));
+    api.getCosActionableInsights.mockReturnValue(new Promise(() => {}));
+    fireEvent.click(within(banner).getByRole('button', { name: 'Unblock' }));
+
+    await waitFor(() => expect(api.updateCosTask).toHaveBeenCalledWith(
+      blockedTask.id,
+      { status: 'pending', type: 'internal' },
+      { silent: true },
+    ));
+    expect(await screen.findByText('Pending (1)')).toBeInTheDocument();
+    expect(screen.queryByText('Blocked (1)')).not.toBeInTheDocument();
+    expect(screen.queryByText('1 blocked task')).not.toBeInTheDocument();
+  });
+
+  it('moves a card-unblocked task before its follow-up refresh settles', async () => {
+    renderBlockedTask();
+    expect(await screen.findByText('Blocked (1)')).toBeInTheDocument();
+    // Keep the post-mutation read pending so this assertion only passes when the
+    // card uses the shared optimistic update rather than waiting for onRefresh.
+    api.getCosTasks.mockReturnValue(new Promise(() => {}));
+    fireEvent.click(screen.getByRole('button', { name: `Unblock task ${blockedTask.id} and move it to pending` }));
+
+    await waitFor(() => expect(api.updateCosTask).toHaveBeenCalledWith(
+      blockedTask.id,
+      { status: 'pending', type: 'internal' },
+      { silent: true },
+    ));
+    expect(await screen.findByText('Pending (1)')).toBeInTheDocument();
+    expect(screen.queryByText('Blocked (1)')).not.toBeInTheDocument();
   });
 });
 

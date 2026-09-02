@@ -11,6 +11,7 @@
 
 import { describe, it, expect, afterAll, beforeAll } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../lib/db.js';
+import { requireDbOrSkip } from '../lib/dbTestGate.js';
 
 const HEX_KEY = 'd'.repeat(64);
 const originalKey = process.env.PRIVACY_VAULT_KEY;
@@ -32,9 +33,9 @@ let skipReason = '';
   }
 }
 
-if (!dbReady) console.log(`⏭️  privacyOrgs.db.test.js skipped: ${skipReason}`);
+const runDb = requireDbOrSkip('services/privacyOrgs.db.test', dbReady, skipReason);
 
-describe.skipIf(!dbReady)('privacy orgs DB round-trip', () => {
+describe.skipIf(!runDb)('privacy orgs DB round-trip', () => {
   let orgs;
   let vault;
   const createdOrgs = [];

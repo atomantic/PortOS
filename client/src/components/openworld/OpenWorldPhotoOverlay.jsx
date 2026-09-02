@@ -167,7 +167,7 @@ export default function OpenWorldPhotoOverlay({ active, presetId, onPresetChange
         size="none"
         usePortal
         ariaLabel="OpenWorld postcard preview"
-        panelClassName="max-w-[80vw] max-h-[80vh] flex flex-col items-center gap-3"
+        panelClassName="max-w-[80vw] flex flex-col items-center gap-3"
       >
         <img src={postcard} alt="OpenWorld postcard" className="max-w-full max-h-[68vh] rounded-lg border border-cyan-500/40 shadow-[0_0_30px_rgba(6,182,212,0.3)]" />
         <div className="flex gap-3">

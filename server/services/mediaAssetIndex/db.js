@@ -26,6 +26,7 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { query } from '../../lib/db.js';
+import { dedupeByKey } from '../../lib/arrayUtils.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { imageToRow, videoToRow } from './logic.js';
 
@@ -58,8 +59,16 @@ export async function upsertAsset(row) {
 // boot over the whole gallery) is a handful of round-trips, not one-per-asset.
 const UPSERT_CHUNK = 500;
 async function upsertAssets(rows) {
-  for (let i = 0; i < rows.length; i += UPSERT_CHUNK) {
-    const chunk = rows.slice(i, i + UPSERT_CHUNK);
+  // Collapse duplicate media_keys BEFORE chunking (see `dedupeByKey` for why a
+  // multi-row upsert cannot carry a repeated conflict key). Untreated, one throw
+  // aborted the WHOLE reconcile — a single duplicated gallery filename or
+  // repeated video-history id froze the entire index and turned boot's
+  // catalog-migration step red. Disk is the authority and it can honestly hand
+  // us the same ref twice (a re-appended history entry, a filename two scans
+  // both list); that is data to absorb, not an error to propagate.
+  const deduped = dedupeByKey(rows, (row) => row.mediaKey);
+  for (let i = 0; i < deduped.length; i += UPSERT_CHUNK) {
+    const chunk = deduped.slice(i, i + UPSERT_CHUNK);
     const values = [];
     const params = [];
     chunk.forEach((row, j) => {
@@ -75,6 +84,7 @@ async function upsertAssets(rows) {
       params,
     );
   }
+  return deduped.length;
 }
 
 /** Remove one index row by media_key. */
@@ -182,7 +192,8 @@ export async function reconcileMediaAssets(deps = {}) {
   const videoRows = (Array.isArray(videoRead.list) ? videoRead.list : [])
     .map((v) => videoToRow(v, { now })).filter(Boolean);
 
-  await upsertAssets([...imageRows, ...videoRows]);
+  // Rows WRITTEN, which is below the rows read when disk repeated a ref.
+  const indexed = await upsertAssets([...imageRows, ...videoRows]);
 
   // Per-kind prune, gated on a successful read for that kind. Pruning one kind
   // never touches the other's rows (an image-read failure can't wipe videos).
@@ -193,7 +204,7 @@ export async function reconcileMediaAssets(deps = {}) {
   const skipped = [!imageRead.ok && 'images', !videoRead.ok && 'videos'].filter(Boolean);
   const skipNote = skipped.length ? ` — SKIPPED prune for ${skipped.join('+')} (disk read failed)` : '';
   console.log(`🗂️  Media asset index reconciled: ${imageRows.length} img / ${videoRows.length} vid on disk, ${pruned} stale row(s) pruned${skipNote}`);
-  return { ok: true, indexed: imageRows.length + videoRows.length, pruned, skippedPrune: skipped };
+  return { ok: true, indexed, pruned, skippedPrune: skipped };
 }
 
 // Delete index rows of `kind` whose media_key isn't in `liveKeys`. An empty

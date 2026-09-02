@@ -55,8 +55,9 @@ describe('RoundEditor round→round navigation', () => {
     fireEvent.click(screen.getByText('go-b'));
 
     // The old draft must be gone (so a Save can't write Song A into Song B) and
-    // the loading state shown until the new song arrives.
-    await waitFor(() => expect(screen.getByText(/Loading round/)).toBeTruthy());
+    // the loading state shown until the new song arrives. That state is the
+    // shared PageSkeleton, which announces itself by aria-label, not by text.
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Loading round' })).toBeTruthy());
     expect(screen.queryByText('Song A')).toBeNull();
     expect(screen.queryByRole('button', { name: /^Save$/ })).toBeNull();
 

@@ -340,3 +340,61 @@ describe('resolveAgentProviderAndModel', () => {
     expect(r.selectedModel).toBe('heavy-x');
   });
 });
+
+// ─── public-review stages ───────────────────────────────────────────────────
+//
+// A public-review stage must NOT go through the ordinary pin → active →
+// fallback chain: that chain can swap onto any healthy provider, and running
+// untrusted contributor content on a provider with no enforced posture is the
+// exact failure this branch exists to prevent. These pin that the eligible set
+// comes from the install's own enabled providers instead.
+describe('resolveAgentProviderAndModel — public-review stages', () => {
+  const CODEX = { id: 'codex-cli', type: 'cli', command: 'codex' };
+  const GROK = { id: 'grok-cli', type: 'cli', command: 'grok' };
+  const OPENCODE = { id: 'opencode', type: 'cli', command: 'opencode' };
+  const gateTask = (metadata = {}) => ({
+    id: 'task-pr',
+    metadata: { executionProfile: 'public-review-gate', ...metadata },
+  });
+
+  it('resolves onto the only eligible provider an install actually has', async () => {
+    getAllProviders.mockResolvedValue({ providers: [OPENCODE, GROK], activeProvider: { id: 'opencode' } });
+    const r = await resolveAgentProviderAndModel(gateTask());
+    expect(r).toMatchObject({ ok: true, provider: { id: 'grok-cli' } });
+    // Never consults the ordinary fallback chain.
+    expect(getFallbackProvider).not.toHaveBeenCalled();
+  });
+
+  it('ignores a stage pin that is not eligible for the posture', async () => {
+    getAllProviders.mockResolvedValue({ providers: [OPENCODE, CODEX], activeProvider: null });
+    const r = await resolveAgentProviderAndModel(gateTask({ provider: 'opencode' }));
+    expect(r).toMatchObject({ ok: true, provider: { id: 'codex-cli' } });
+  });
+
+  it('keeps a model pin only on the provider it was chosen for', async () => {
+    getAllProviders.mockResolvedValue({ providers: [CODEX, GROK], activeProvider: null });
+    await expect(resolveAgentProviderAndModel(gateTask({ provider: 'grok-cli', model: 'grok-4' })))
+      .resolves.toMatchObject({ provider: { id: 'grok-cli' }, selectedModel: 'grok-4' });
+    // Pinned for a DIFFERENT provider — falls back to that provider's own model.
+    await expect(resolveAgentProviderAndModel(gateTask({ provider: 'opencode', model: 'grok-4' })))
+      .resolves.toMatchObject({ provider: { id: 'codex-cli' }, selectedModel: 'm-default' });
+  });
+
+  it('blocks PERMANENTLY when no enabled provider can enforce the posture', async () => {
+    getAllProviders.mockResolvedValue({ providers: [OPENCODE], activeProvider: { id: 'opencode' } });
+    const r = await resolveAgentProviderAndModel(gateTask());
+    expect(r.ok).toBe(false);
+    expect(r.permanent).toBe(true);
+    expect(r.error).toMatch(/no-tool/);
+  });
+
+  it('requires the sandboxed posture for the actions stage, not merely a CLI', async () => {
+    const LOCAL_CLAUDE = { id: 'claude-ollama', type: 'cli', command: 'claude', ollamaBacked: true };
+    getAllProviders.mockResolvedValue({ providers: [LOCAL_CLAUDE], activeProvider: { id: 'claude-ollama' } });
+    // Claude has a no-tool recipe but no sandbox recipe.
+    await expect(resolveAgentProviderAndModel({ id: 't', metadata: { executionProfile: 'public-review-gate' } }))
+      .resolves.toMatchObject({ ok: true, provider: { id: 'claude-ollama' } });
+    await expect(resolveAgentProviderAndModel({ id: 't', metadata: { executionProfile: 'public-review-actions' } }))
+      .resolves.toMatchObject({ ok: false, permanent: true });
+  });
+});

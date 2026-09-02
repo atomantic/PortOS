@@ -266,6 +266,13 @@ describe('cliProviderArgs', () => {
       'claude-sonnet-4-6',
     ];
 
+    it('canonicalizes a dotted Claude model id — the CLI only serves the dashed form', () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      expect(buildCliArgs({ id: 'claude-code', command: 'claude', defaultModel: 'claude-fable-5.1' }))
+        .toEqual(['-p', '-', '--model', 'claude-fable-5-1']);
+      spy.mockRestore();
+    });
+
     it('emits --effort for Claude Code', () => {
       expect(buildCliArgs({ id: 'claude-code', command: 'claude', defaultModel: 'claude-opus-5', effort: 'max' }))
         .toEqual(['-p', '-', '--model', 'claude-opus-5', '--effort', 'max']);

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import * as contactsSync from '../services/contactsSync.js';
 import * as identityResolve from '../services/identityResolve.js';
@@ -84,15 +84,8 @@ const importBodySchema = z.object({
 
 router.post('/import-to-tribe', asyncHandler(async (req, res) => {
   const body = validateRequest(importBodySchema, req.body || {});
-  try {
-    const result = await tribeContacts.importContactToTribe(body);
-    res.status(result.created ? 201 : 200).json(result);
-  } catch (err) {
-    if (err?.status === 400) {
-      throw new ServerError(err.message, { status: 400, code: err.code || 'BAD_REQUEST' });
-    }
-    throw err;
-  }
+  const result = await tribeContacts.importContactToTribe(body);
+  res.status(result.created ? 201 : 200).json(result);
 }));
 
 export default router;

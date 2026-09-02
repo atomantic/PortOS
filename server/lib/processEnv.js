@@ -12,7 +12,7 @@
 // stripping the prefix is a no-op on Linux/Windows.
 import { execFile, execFileSync } from './childProcess.js';
 import { promisify } from 'util';
-import { accessSync, constants, statSync } from 'fs';
+import { accessSync, constants, existsSync, statSync } from 'fs';
 import { delimiter, isAbsolute, join, resolve } from 'path';
 
 const execFileAsync = promisify(execFile);
@@ -207,4 +207,47 @@ export function findCommandOnPath(name, { env = process.env, cwd = process.cwd()
     }
   }
   return null;
+}
+
+// Windows paths are case-insensitive and PATH mixes casings freely
+// (`C:\ProgramData\npm` vs `c:\programdata\npm`), so a case-sensitive compare
+// would append a duplicate of an entry that is already there.
+const samePathEntry = (a, b) => (IS_WIN ? a.toLowerCase() === b.toLowerCase() : a === b);
+
+/**
+ * Adopt directories onto THIS process's PATH.
+ *
+ * A package manager that installs into a directory the running process's PATH
+ * does not name is the recurring case, and it always looks the same from here:
+ * the install succeeds and the binary reports as "not found". winget adds its
+ * portable-shim Links directory to the USER environment, which an
+ * already-running server never inherited; npm's global prefix need not be the
+ * directory the platform's Node installer put on PATH at all, so no restart
+ * fixes that one.
+ *
+ * Extending `process.env.PATH` fixes both this process's own lookups AND every
+ * child it spawns, since `safeChildProcessEnv` / `buildSafeCliBaseEnv` derive
+ * from it — which is what a CLI launched by BARE NAME through node-pty needs,
+ * because resolving its path is not something that launch can use.
+ *
+ * Only directories that exist are adopted: `findCommandOnPath` stats every PATH
+ * entry against every PATHEXT extension, so a dead entry taxes every later
+ * lookup for the life of the process.
+ *
+ * @param {string[]} dirs
+ * @returns {string[]} the directories newly added
+ */
+export function adoptPathDirs(dirs) {
+  // `process.env` is case-insensitive on Windows, so `.PATH` reads a `Path`
+  // entry too — no second spelling to check. The empty segments a trailing or
+  // doubled delimiter leaves behind are dropped rather than carried along.
+  const entries = String(process.env.PATH || '').split(delimiter).filter(Boolean);
+  const added = [];
+  for (const dir of dirs) {
+    if (!dir || entries.some((entry) => samePathEntry(entry, dir)) || !existsSync(dir)) continue;
+    entries.push(dir);
+    added.push(dir);
+  }
+  if (added.length > 0) process.env.PATH = entries.join(delimiter);
+  return added;
 }

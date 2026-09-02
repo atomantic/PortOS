@@ -13,6 +13,15 @@ vi.mock('../services/usage.js', () => ({
   resetUsage: vi.fn()
 }));
 
+vi.mock('../services/peerUsage.js', () => ({
+  getFleetUsage: vi.fn(async () => ({ instances: [], totals: null }))
+}));
+
+vi.mock('../services/usageFleetBilling.js', () => ({
+  getApiBilledInstanceIds: vi.fn(async () => []),
+  setInstanceUsesSubscriptions: vi.fn(async () => []),
+}));
+
 vi.mock('../services/subscriptionCosts.js', () => ({
   saveSubscriptionCosts: vi.fn(async (costs) => costs),
   getSubscriptionSavings: vi.fn(async () => ({ configured: false, families: [] }))
@@ -42,6 +51,8 @@ import { getAllProviders } from '../services/providers.js';
 import { getProviderQuotas } from '../services/providerUsage.js';
 import { getHistoricalUsageBackfillStatus, startHistoricalUsageBackfill } from '../services/usageBackfill.js';
 import { getSubscriptionSavings, saveSubscriptionCosts } from '../services/subscriptionCosts.js';
+import { getFleetUsage } from '../services/peerUsage.js';
+import { getApiBilledInstanceIds, setInstanceUsesSubscriptions } from '../services/usageFleetBilling.js';
 import usageRoutes from './usage.js';
 
 const buildApp = () => {
@@ -64,12 +75,16 @@ describe('usage routes', () => {
     expect(res.body).toEqual({
       totalSessions: 4,
       providers: ['anthropic'],
-      subscriptionSavings: { configured: false, families: [] }
+      subscriptionSavings: { configured: false, families: [] },
+      fleet: { instances: [], totals: null }
     });
     const arg = usage.getUsageSummary.mock.calls[0][0];
     expect(arg.from).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(arg.to).toBeNull();
     expect(arg.providers).toEqual([]);
+    // The fleet breakdown must be priced over the SAME window as the summary,
+    // or a peer row would silently report a different period than its heading.
+    expect(getFleetUsage).toHaveBeenCalledWith({ from: arg.from, to: null, providers: [], apiBilledInstanceIds: [] });
   });
 
   it('GET /api/usage passes an explicit from/to range through', async () => {
@@ -171,6 +186,37 @@ describe('usage routes', () => {
       .put('/api/usage/subscriptions')
       .send({ costs: { claude: 100001 } });
     expect(res.status).toBe(400);
+  });
+
+  it('PUT /api/usage/fleet-billing marks an instance as API-billed', async () => {
+    setInstanceUsesSubscriptions.mockResolvedValue(['inst-peer']);
+    const res = await request(buildApp())
+      .put('/api/usage/fleet-billing')
+      .send({ instanceId: 'inst-peer', usesSubscriptions: false });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      instanceId: 'inst-peer',
+      usesSubscriptions: false,
+      apiBilledInstanceIds: ['inst-peer'],
+    });
+    expect(setInstanceUsesSubscriptions).toHaveBeenCalledWith('inst-peer', false, { actor: 'user' });
+  });
+
+  it('PUT /api/usage/fleet-billing rejects a blank instance id', async () => {
+    const res = await request(buildApp())
+      .put('/api/usage/fleet-billing')
+      .send({ instanceId: '', usesSubscriptions: false });
+    expect(res.status).toBe(400);
+    expect(setInstanceUsesSubscriptions).not.toHaveBeenCalled();
+  });
+
+  it('GET /api/usage prices the fleet with the stored API-billed set', async () => {
+    usage.getUsageSummary.mockReturnValue({});
+    getApiBilledInstanceIds.mockResolvedValueOnce(['inst-peer']);
+    await request(buildApp()).get('/api/usage');
+    expect(getFleetUsage).toHaveBeenCalledWith(expect.objectContaining({
+      apiBilledInstanceIds: ['inst-peer'],
+    }));
   });
 
   it('GET /api/usage/providers returns quota entries and honors refresh', async () => {

@@ -31,11 +31,13 @@ import {
   cancelCodexChatGptLogin,
   peekCodexAccountReadiness,
   codexLogout,
+  listCodexModels,
   getCodexAccountReadiness,
   startCodexChatGptLogin,
 } from '../services/codexAppServer.js';
 import { runLocalRuntimeSetup, SETUP_ACTIONS } from '../services/localRuntimeSetup.js';
 import { localEndpointPort, localRuntimeForProvider } from '../lib/localProviderRuntime.js';
+import { publicReviewPosturesForProvider, PUBLIC_REVIEW_NO_TOOL_POSTURE, PUBLIC_REVIEW_ACTIONS_POSTURE } from '../lib/providerVendors.js';
 import { buildTuiShellLaunch } from '../lib/tuiShellLaunch.js';
 import {
   captureSystemCapabilities,
@@ -136,9 +138,25 @@ const withTuiLaunchCommand = (provider) => {
  * the toolkit keeps its copy so it stays correct standalone. Both decorate on
  * the way out only — the field is never persisted.
  */
-const presentProvider = (provider, capabilities = captureSystemCapabilities()) => sanitizeProvider(
-  withProviderHardwareCompatibility(withTuiLaunchCommand(withRefreshCapability(provider)), capabilities),
-);
+const presentProvider = (provider, capabilities = captureSystemCapabilities()) => {
+  const decorated = withProviderHardwareCompatibility(
+    withTuiLaunchCommand(withRefreshCapability(provider)),
+    capabilities,
+  );
+  // Derived on read from the raw provider. This is an explicit capability of
+  // the maintained public-review recipe, not a client-side guess based on a
+  // provider name or a user-writable `args` list.
+  // `publicReviewPostures` is the value the schedule UI filters on, so a stage
+  // offers exactly the providers this install can actually enforce. The two
+  // booleans are derived from it and kept for existing consumers.
+  const publicReviewPostures = publicReviewPosturesForProvider(provider, { tui: provider?.type === 'tui' });
+  return sanitizeProvider({
+    ...decorated,
+    publicReviewPostures,
+    publicReviewSupported: publicReviewPostures.includes(PUBLIC_REVIEW_NO_TOOL_POSTURE),
+    publicReviewActionsSupported: publicReviewPostures.includes(PUBLIC_REVIEW_ACTIONS_POSTURE),
+  });
+};
 
 /**
  * Create PortOS-specific provider routes
@@ -286,6 +304,22 @@ export function createPortOSProviderRoutes(aiToolkit) {
     res.json({ readiness: await cancelCodexChatGptLogin(loginId) });
   }));
 
+  /**
+   * Which models this ChatGPT subscription may run, from the app-server's own
+   * catalog rather than a hard-coded list — so the picker reflects the account's
+   * actual plan.
+   *
+   * LAZY, like `/codex/account`: only an explicit page fetch reaches it.
+   * `?fresh=1` skips the TTL after a plan change or a sign-in.
+   *
+   * `models: null` means NEVER FETCHED, `[]` means fetched-and-empty, and a read
+   * that fails returns the last-known-good list alongside `error` — the client
+   * must not repaint an empty picker because one call timed out.
+   */
+  router.get('/codex/models', asyncHandler(async (req, res) => {
+    res.json(await listCodexModels({ fresh: req.query.fresh === '1' }));
+  }));
+
   /** Sign out. Codex drops its own credentials; PortOS has none to clear. */
   router.post('/codex/account/logout', asyncHandler(async (_req, res) => {
     res.json({ readiness: await codexLogout() });
@@ -414,7 +448,7 @@ export function createPortOSProviderRoutes(aiToolkit) {
         if (installed) {
           emit({ type: 'complete', message: `${runtime.label} is installed and available to PortOS.` });
         } else if (code === 0) {
-          emit({ type: 'error', message: `The installer finished, but PortOS still cannot run \`${runtime.command}\`. Its bin directory may be missing from PortOS's PATH — restart PortOS, then try again.` });
+          emit({ type: 'error', message: `The installer finished, but PortOS still cannot run \`${runtime.command}\`. npm wrote it to a bin directory that is not on this machine's PATH — run \`npm prefix -g\` in a terminal, add that directory (plus \`/bin\` off Windows) to your PATH, then restart PortOS.` });
         } else {
           emit({ type: 'error', message: `${runtime.label} installer exited with code ${code}.` });
         }
@@ -742,6 +776,15 @@ export function createPortOSProviderRoutes(aiToolkit) {
     res.json(presentProvider(provider, await detectSystemCapabilities()));
   }));
 
+  // POST /:id/refresh-models — intercept the toolkit response so the refreshed
+  // provider record receives the same secret redaction as every other provider
+  // response. The toolkit returns its raw persisted record here.
+  router.post('/:id/refresh-models', asyncHandler(async (req, res) => {
+    const provider = await providerService.refreshProviderModels(req.params.id);
+    if (!provider) throw new ServerError('Provider not found', { status: 404 });
+    res.json(presentProvider(provider, await detectSystemCapabilities()));
+  }));
+
   // POST / — intercept to (a) validate the body against providerSchema so
   // invalid fields like `timeout: "abc"` or non-object `envVars` don't
   // persist and later break runner behavior, and (b) sanitize the created
@@ -756,8 +799,10 @@ export function createPortOSProviderRoutes(aiToolkit) {
     res.status(201).json(presentProvider(provider, await detectSystemCapabilities()));
   }));
 
-  // Mount base toolkit routes last (GET/PUT /:id and POST / are now shadowed
-  // by sanitized versions above)
+  // Mount base toolkit routes last (GET/PUT /:id, POST /, and
+  // POST /:id/refresh-models are now shadowed by sanitized versions above).
+  // DELETE /:id has no provider body; POST /:id/test returns only its test
+  // result, so neither endpoint needs a sanitizing shadow.
   router.use('/', aiToolkit.routes.providers);
 
   return router;

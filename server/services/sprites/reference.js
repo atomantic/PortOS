@@ -646,10 +646,15 @@ const lockedSeedArtifact = (manifest) => (
 async function resolveSeedSource(recordId, body, upload) {
   if (upload) {
     // Shared temp-import (uuid-prefixed name, EXDEV-safe copy+unlink) — the
-    // upload persists in the record dir as design provenance so a locked
-    // candidate stays traceable to the upload that guided it.
+    // persisted extension derives from the accepted multipart MIME, never the
+    // client filename, because this directory is served as a static asset.
     const uploadsDir = join(spriteDir(recordId), 'reference', 'uploads');
-    const { filename } = await importFileToDir(upload.tempPath, upload.originalname || 'design-reference.png', uploadsDir);
+    const { filename } = await importFileToDir(
+      upload.tempPath,
+      `design-reference${upload.ext || '.png'}`,
+      uploadsDir,
+      { extensions: ['.png', '.jpg', '.jpeg', '.webp'] },
+    );
     return { initImagePath: join(uploadsDir, filename), designReferencePath: `reference/uploads/${filename}` };
   }
   if (body.initImageGalleryFile) {

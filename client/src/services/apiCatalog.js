@@ -22,21 +22,6 @@ export const getCatalogFacets = (options) => request('/catalog/facets', options)
 export const createCatalogScrap = (body = {}, options) =>
   request('/catalog/scraps', { method: 'POST', body: JSON.stringify(body), ...options });
 
-export const listCatalogScraps = ({ limit, offset, ...options } = {}) => {
-  const params = new URLSearchParams();
-  if (limit) params.set('limit', String(limit));
-  if (offset) params.set('offset', String(offset));
-  return request(`/catalog/scraps${params.toString() ? `?${params}` : ''}`, options);
-};
-
-export const getCatalogScrap = (id, options) => request(`/catalog/scraps/${enc(id)}`, options);
-
-export const updateCatalogScrap = (id, patch, options) =>
-  request(`/catalog/scraps/${enc(id)}`, { method: 'PATCH', body: JSON.stringify(patch), ...options });
-
-export const deleteCatalogScrap = (id, options) =>
-  request(`/catalog/scraps/${enc(id)}`, { method: 'DELETE', ...options });
-
 export const extractFromCatalogScrap = (id, body = {}, options) =>
   request(`/catalog/scraps/${enc(id)}/extract`, { method: 'POST', body: JSON.stringify(body), ...options });
 
@@ -97,9 +82,6 @@ export const listCatalogIngredientsByIds = async (ids = [], options) => {
   return list.map((id) => byId.get(id)).filter(Boolean);
 };
 
-export const getCatalogIngredient = (id, options) =>
-  request(`/catalog/ingredients/${enc(id)}`, options);
-
 // Batched detail hydration — one request for ingredient + refs + sources +
 // relations + revisions + media + missingMedia, used by the detail page's
 // initial load in place of five separate calls.
@@ -151,11 +133,6 @@ export const unlinkCatalogIngredient = (id, body, options) =>
 export const listCatalogIngredientsForRef = (refKind, refId, options) =>
   request(`/catalog/refs/${enc(refKind)}/${enc(refId)}/ingredients`, options);
 
-// --- Relations (ingredient ↔ ingredient) --------------------------------
-
-export const listCatalogIngredientRelations = (id, options) =>
-  request(`/catalog/ingredients/${enc(id)}/relations`, options);
-
 export const linkCatalogIngredientRelation = (id, body, options) =>
   request(`/catalog/ingredients/${enc(id)}/relations`, { method: 'POST', body: JSON.stringify(body), ...options });
 
@@ -193,20 +170,6 @@ export const recordCatalogIngredientVoiceMemo = (id, body, options) =>
 
 export const bulkImportCatalogIngredients = (body, options) =>
   request('/catalog/bulk-import', { method: 'POST', body: JSON.stringify(body), ...options });
-
-// Returns the raw bundle text/JSON; the caller is responsible for triggering
-// a browser download (typically by constructing a Blob and clicking an
-// anchor). For programmatic use (round-trip ingest), the JSON form is the
-// canonical shape.
-export const exportCatalogSlice = ({ refKind, refId, format = 'json' } = {}, options) => {
-  const params = new URLSearchParams({ refKind, refId, format });
-  return request(`/catalog/export?${params}`, { responseType: 'text', ...options });
-};
-
-// --- Admin --------------------------------------------------------------
-
-export const backfillCatalogEmbeddings = ({ limit, ...options } = {}) =>
-  request('/catalog/embeddings/backfill', { method: 'POST', body: JSON.stringify({ limit }), ...options });
 
 export const rerunCatalogMigration = ({ force, ...options } = {}) =>
   request('/catalog/migration/rerun', { method: 'POST', body: JSON.stringify({ force }), ...options });

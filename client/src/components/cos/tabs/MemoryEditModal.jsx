@@ -104,7 +104,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
       closeOnEsc={false}
       size="lg"
       backdropClassName="bg-black/50"
-      panelClassName="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 max-h-[90vh] overflow-auto"
+      panelClassName="bg-port-card border border-port-border rounded-xl p-4 sm:p-6"
       ariaLabelledBy="memory-edit-title"
     >
       <div className="flex items-center justify-between mb-4">

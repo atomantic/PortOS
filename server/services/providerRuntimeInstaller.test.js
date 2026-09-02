@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PROVIDER_VENDORS } from '../lib/providerVendors.js';
+
+// The npm-prefix probe shells out; the PATH-adoption contract itself is covered
+// by lib/npmGlobalBin.test.js.
+const npmGlobalBin = vi.hoisted(() => ({ adoptNpmGlobalBinDir: vi.fn(async () => null) }));
+vi.mock('../lib/npmGlobalBin.js', () => npmGlobalBin);
+
 import {
   buildRuntimeInstallCommand,
   getProviderRuntime,
@@ -17,6 +23,7 @@ const IS_WIN = process.platform === 'win32';
 describe('provider runtime installer', () => {
   beforeEach(() => {
     __resetRuntimeStatusCache();
+    npmGlobalBin.adoptNpmGlobalBinDir.mockClear();
   });
 
   it('reports runnable availability as booleans without returning local paths', async () => {
@@ -48,6 +55,16 @@ describe('provider runtime installer', () => {
     await getProviderRuntimeStatus('codex', { findCommand: async () => '/example/codex', probeCommand });
 
     expect(probeCommand).toHaveBeenCalledWith('/example/codex', ['--version'], { timeoutMs: 15_000 });
+  });
+
+  // npm installs into ITS OWN global bin directory, which is not necessarily
+  // one the host's Node installer put on PATH. Without adopting that directory
+  // the probe reports a perfectly installed CLI as missing, and the card offers
+  // an install that can never take.
+  it('adopts the npm global bin directory before probing', async () => {
+    await getProviderRuntimeStatus('codex', { findCommand: async () => null, probeCommand: async () => false });
+
+    expect(npmGlobalBin.adoptNpmGlobalBinDir).toHaveBeenCalled();
   });
 
   it('reports a PATH-resolved but broken CLI as unavailable', async () => {

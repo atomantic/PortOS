@@ -20,7 +20,7 @@ vi.mock('./digital-twin.js', () => ({
 // without a live LLM. Re-imported per test because beforeEach resets the module
 // registry, which mints fresh spies for each generation.
 vi.mock('./aiProvider.js', () => ({
-  resolveAPIProvider: vi.fn(),
+  resolveTextProvider: vi.fn(),
   callProviderAISimple: vi.fn(),
 }));
 
@@ -140,8 +140,8 @@ describe('generatePersonalizedTasteQuestion outcomes', () => {
   });
 
   it('reports no-provider rather than blaming the user documents that do exist', async () => {
-    const { resolveAPIProvider } = await import('./aiProvider.js');
-    resolveAPIProvider.mockResolvedValue(null);
+    const { resolveTextProvider } = await import('./aiProvider.js');
+    resolveTextProvider.mockResolvedValue(null);
     const taste = await import('./taste-questionnaire.js');
     await seedIdentityContext(taste);
 
@@ -152,8 +152,8 @@ describe('generatePersonalizedTasteQuestion outcomes', () => {
   });
 
   it('throws AI_PROVIDER_ERROR instead of collapsing a provider failure into "nothing to ask"', async () => {
-    const { resolveAPIProvider, callProviderAISimple } = await import('./aiProvider.js');
-    resolveAPIProvider.mockResolvedValue(PROVIDER);
+    const { resolveTextProvider, callProviderAISimple } = await import('./aiProvider.js');
+    resolveTextProvider.mockResolvedValue(PROVIDER);
     callProviderAISimple.mockResolvedValue({ error: 'Provider returned 401: invalid key' });
     const taste = await import('./taste-questionnaire.js');
     await seedIdentityContext(taste);
@@ -173,8 +173,8 @@ describe('generatePersonalizedTasteQuestion outcomes', () => {
   });
 
   it('returns the question with reason null on success', async () => {
-    const { resolveAPIProvider, callProviderAISimple } = await import('./aiProvider.js');
-    resolveAPIProvider.mockResolvedValue(PROVIDER);
+    const { resolveTextProvider, callProviderAISimple } = await import('./aiProvider.js');
+    resolveTextProvider.mockResolvedValue(PROVIDER);
     callProviderAISimple.mockResolvedValue({ text: '  Which film would you rewatch forever?  ' });
     const taste = await import('./taste-questionnaire.js');
     await seedIdentityContext(taste);

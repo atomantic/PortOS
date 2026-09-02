@@ -26,7 +26,6 @@ export const repairImageModel = (modelId, { deep = false } = {}) => request(`/im
   body: JSON.stringify({ deep }),
   silent: true,
 });
-export const listLoras = () => request('/image-gen/loras');
 export const listImageGallery = (options = {}) => request('/image-gen/gallery', options);
 export const getActiveImageJob = () => request('/image-gen/active');
 // cancelImageGen({ all: true }) cancels every queued/running image job.
@@ -166,16 +165,6 @@ export const getVideoGenStatus = (options = {}) => request('/video-gen/status', 
 export const listVideoModels = ({ includeUnavailable = false, ...options } = {}) =>
   request('/video-gen/models', options)
     .then((models) => filterHardwareCompatibleModels(models, { includeUnavailable }));
-// Install-wide acknowledgement of a restricted model's reviewed license, keyed
-// by the exact `termsGate.id`. Persisted server-side so accepting once (on any
-// render surface) authorizes every other one, including background producers.
-// Both return `{ accepted: [termsId, ...] }`.
-export const getVideoModelTerms = (options = {}) => request('/video-gen/model-terms', options);
-export const setVideoModelTerms = (termsId, accepted, options = {}) => request('/video-gen/model-terms', {
-  method: 'POST',
-  body: JSON.stringify({ termsId, accepted }),
-  ...options,
-});
 // `{ models: [...], textEncoder: { repo, cached, sizeBytes } }`. Same shape
 // contract as the image variant + a text-encoder block since the active
 // encoder is a separate multi-GB pull.
@@ -316,9 +305,6 @@ export const renderTimelineProject = (id, options = {}) => request(`/video-timel
   method: 'POST',
   ...options,
 });
-export const cancelTimelineRender = (jobId) => request(`/video-timeline/${encodeURIComponent(jobId)}/cancel`, {
-  method: 'POST',
-});
 
 // Media collections — user-named buckets that can hold any mix of images
 // and videos. An item key is "<kind>:<ref>" (e.g. "image:foo.png" or
@@ -395,18 +381,6 @@ export const deleteLora = (filename, options = {}) => request(`/image-video/mode
 // manager can install/delete their separate prompt-conditioner pulls.
 export const listMediaModelRegistry = () => request('/image-video/models/registry');
 
-// Search the HuggingFace Hub for candidate base-model repos. `pipeline` scopes
-// to e.g. 'text-to-image'/'text-to-video'. `silent` (default true) because the
-// caller owns its own error UI. Returns `{ items: [{ id, likes, downloads, pipeline_tag }] }`.
-export const searchHfMediaModels = ({ query = '', pipeline, limit, silent = true } = {}) => {
-  const params = new URLSearchParams();
-  if (query) params.set('query', query);
-  if (pipeline) params.set('pipeline', pipeline);
-  if (limit) params.set('limit', String(limit));
-  const qs = params.toString();
-  return request(`/image-video/models/search${qs ? `?${qs}` : ''}`, { silent });
-};
-
 // Add a custom base model from a HuggingFace repo. The server strictly refuses
 // GGUF-only / wan / hunyuan / unclassifiable repos, so a rejection carries a
 // typed `.code` (HF_UNSUPPORTED_FORMAT, HF_UNKNOWN_KIND, HF_UNKNOWN_RUNNER, …)
@@ -456,22 +430,22 @@ export const installLoraFromCivitai = ({ url, silent = false } = {}) => request(
   silent,
 });
 
-// Install an image or video LoRA from a HuggingFace repo (Flux.2 Klein, fal /
-// Lightricks LTX, MiniMax H3). `family` is an optional override (e.g. 'flux2'
-// or 'ltx-video') when autodetection from the repo id/tags/filenames can't
-// classify it. `silent` lets the page route HF_AUTH / HF_UNKNOWN_FAMILY errors
-// into its own inline UI.
-export const installLoraFromHuggingface = ({ url, family, file, silent = false } = {}) => request('/loras/install/huggingface', {
+// `family`/`file` are optional overrides — pass them when the caller already
+// knows the exact target (a curated video suggestion card) so the previewed
+// file matches what the HF install will actually pick. A curated card
+// without one (buildCard's `file: entry.file || null`) must not serialize a
+// literal `null` — the route schema's `.optional()` accepts an ABSENT key,
+// not `null`.
+export const previewLoraInstall = ({ url, source = 'civitai', family, file, silent = false } = {}) => request('/loras/install/preflight', {
   method: 'POST',
-  body: JSON.stringify({ url, ...(family ? { family } : {}), ...(file ? { file } : {}) }),
+  body: JSON.stringify({ url, source, ...(family ? { family } : {}), ...(file ? { file } : {}) }),
   silent,
 });
 
-// Streaming HF LoRA install — same install as installLoraFromHuggingface but
-// reads a byte-level progress stream. Resolves with the new sidecar on the
-// `complete` frame; rejects with an Error carrying `.code` (e.g.
-// 'HF_UNKNOWN_FAMILY', 'HF_ALREADY_INSTALLED') on an `error` frame, so the page
-// can drive the same inline family-confirm retry it does for the POST path.
+// Streaming HF LoRA install — reads a byte-level progress stream. Resolves
+// with the new sidecar on the `complete` frame; rejects with an Error carrying
+// `.code` (e.g. 'HF_UNKNOWN_FAMILY', 'HF_ALREADY_INSTALLED') on an `error`
+// frame, so the page can drive an inline family-confirm retry.
 // `onProgress({ received, total, progress })` fires per throttled download tick
 // — `progress` is 0..1, or null when the server had no Content-Length to divide.
 //
@@ -567,11 +541,6 @@ export const setCivitaiAuth = (apiKey, options = {}) => request('/loras/auth/civ
   ...options,
 });
 export const clearCivitaiAuth = (options = {}) => request('/loras/auth/civitai', { method: 'DELETE', ...options });
-export const getLora = (filename) => request(`/loras/${encodeURIComponent(filename)}`);
-export const patchLora = (filename, patch) => request(`/loras/${encodeURIComponent(filename)}`, {
-  method: 'PATCH',
-  body: JSON.stringify(patch),
-});
 export const deleteLoraFull = (filename, options = {}) => request(`/loras/${encodeURIComponent(filename)}`, { method: 'DELETE', ...options });
 // Adapter-effect diagnostic (#4872) — measures whether a LoRA actually changes
 // anything before a long render commits to it. POST because it spawns the probe

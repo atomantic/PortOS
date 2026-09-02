@@ -8,7 +8,6 @@ export const createRun = (data, options) => request('/runs', {
   body: JSON.stringify(data),
   ...options
 });
-export const getRun = (id) => request(`/runs/${id}`);
 // These endpoints deliberately return text/plain. A model response can itself
 // be valid JSON; forcing the shared request helper's default JSON parser turns
 // it into an object that React cannot render inside <pre>.

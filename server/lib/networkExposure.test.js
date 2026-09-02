@@ -36,6 +36,7 @@ import {
   getNetworkExposureSetupStatus,
   getNetworkExposureStatus,
   isLoopbackHost,
+  localApiBaseUrl,
 } from './networkExposure.js';
 
 describe('networkExposure.isLoopbackHost', () => {
@@ -52,6 +53,44 @@ describe('networkExposure.isLoopbackHost', () => {
     [undefined, false],
   ])('isLoopbackHost(%p) === %p', (input, expected) => {
     expect(isLoopbackHost(input)).toBe(expected);
+  });
+});
+
+describe('networkExposure.localApiBaseUrl', () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.PORT;
+    delete process.env.PORTOS_HTTP_PORT;
+    statSync.mockReturnValue(undefined);
+    hasTailscaleCert.mockReturnValue(false);
+    getSelfHost.mockReturnValue(null);
+  });
+
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  // Under HTTPS the API port is TLS-only, so handing a plain-HTTP caller that
+  // port fails at the transport layer — the mirror is the only correct target.
+  it('resolves to the loopback HTTP mirror port when HTTPS is active', () => {
+    getHttpsEnabledAtBoot.mockReturnValue({ value: true, initialized: true });
+    expect(localApiBaseUrl()).toBe('http://127.0.0.1:5553');
+  });
+
+  it('honors PORTOS_HTTP_PORT for the mirror', () => {
+    getHttpsEnabledAtBoot.mockReturnValue({ value: true, initialized: true });
+    process.env.PORTOS_HTTP_PORT = '5999';
+    expect(localApiBaseUrl()).toBe('http://127.0.0.1:5999');
+  });
+
+  it('resolves to the bound API port when HTTPS is off and no mirror is bound', () => {
+    getHttpsEnabledAtBoot.mockReturnValue({ value: false, initialized: true });
+    expect(localApiBaseUrl()).toBe('http://127.0.0.1:5555');
+
+    process.env.PORT = '6000';
+    expect(localApiBaseUrl()).toBe('http://127.0.0.1:6000');
   });
 });
 

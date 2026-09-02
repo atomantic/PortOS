@@ -519,7 +519,7 @@ async function runStart() {
       if (!canQueueImprovementTasks(state)) return;
       const cosTaskData = await getCosTasks();
       await queueEligibleImprovementTasks(state, cosTaskData);
-      setImmediate(() => dequeueNextTask());
+      scheduleDequeue();
     }).catch(err => emitLog('warn', `Post-startup improvement queuing failed: ${err.message}`));
   }, POST_STARTUP_QUEUE_DELAY_MS);
 
@@ -606,7 +606,7 @@ export async function resume() {
   // Trigger immediate task dequeue on resume (outside lock to avoid holding it)
   if (result.success && isDaemonRunning()) {
     await handlePersistentMindGlobalResume();
-    setTimeout(() => dequeueNextTask(), RESUME_DEQUEUE_DELAY_MS);
+    setTimeout(() => scheduleDequeue(), RESUME_DEQUEUE_DELAY_MS);
   }
 
   return result;
@@ -1016,7 +1016,8 @@ async function spawnDequeuePriority0OnDemand(ctx) {
       await taskScheduleMod.recordExecution(`task:${request.taskType}`, targetApp.id);
       task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state, {
         skipPreconditions: true,
-        deferPerpetualDispatch: true
+        deferPerpetualDispatch: true,
+        targetPullRequest: request.targetPullRequest ?? null
       });
       if (task) {
         await bindAppReviewAgent(targetApp.id, `on-demand-${Date.now()}`);
@@ -1301,6 +1302,17 @@ async function spawnDequeuePriority4IdleReview(ctx) {
   }
 }
 
+// Every dequeue below is scheduled from a timer/setImmediate outside the request
+// lifecycle, so a rejection has nowhere to bubble: it escapes as an unhandled
+// rejection, which setupProcessErrorHandlers classifies `critical` and broadcasts
+// `system:critical-error` to every browser, while the open slot it was meant to
+// fill stays empty until an unrelated event fires another cycle. One wrapper so
+// the guard cannot drift between the ~10 call sites.
+const scheduleDequeue = (options = {}) => setImmediate(() => {
+  dequeueNextTask(options).catch(err =>
+    console.error(`❌ CoS dequeue cycle failed: ${err?.message ?? String(err)}`));
+});
+
 /**
  * Event-driven task dequeue — the primary way tasks get spawned.
  *
@@ -1492,6 +1504,10 @@ export function isPerpetualRefillCandidate(agent, schedule) {
  */
 export function perpetualRefillPlan(agent, schedule) {
   if (!isPerpetualRefillCandidate(agent, schedule)) return { lane: 'skip' };
+  // A run narrowed to ONE pull request is a one-shot the user asked for on a
+  // specific row. A refill carries no target, so continuing the drain here would
+  // silently promote that click into a sweep of every open contributor PR.
+  if (agent?.metadata?.taskTargetPullRequest) return { lane: 'skip' };
   if (agent?.metadata?.taskOnDemand) {
     return { lane: 'onDemand', taskType: agentScheduledType(agent), appId: agent?.metadata?.taskApp || null };
   }
@@ -1673,11 +1689,12 @@ export async function init() {
       // tasks:changed — registering dequeue via this listener — before it called
       // setImmediate(tryImmediateSpawn)). dequeue fills slots in priority order
       // first; tryImmediateSpawn then handles the just-added task.
-      setImmediate(() => dequeueNextTask());
-      if (data.type === 'user' && data.task) setImmediate(() => tryImmediateSpawn(data.task));
+      scheduleDequeue();
+      if (data.type === 'user' && data.task) setImmediate(() => tryImmediateSpawn(data.task)
+        .catch(err => console.error(`❌ Immediate spawn for task ${data.task?.id} failed: ${err?.message ?? String(err)}`)));
     } else if (data.action === 'approved' || data.action === 'unblocked' || data.action === 'requeued') {
       if (data.suppressDequeue) return;
-      setImmediate(() => dequeueNextTask());
+      scheduleDequeue();
     } else if (data.task?.status === 'completed' && data.previousStatus !== 'completed') {
       // A finished investigation releases the task(s) its failure was blocking
       // (see investigationRetry.js). Keyed on the completion rather than on who
@@ -1704,29 +1721,29 @@ export async function init() {
   });
 
   cosEvents.on('tasks:user:added', () => {
-    if (isDaemonRunning()) setImmediate(() => dequeueNextTask());
+    if (isDaemonRunning()) scheduleDequeue();
   });
 
   // Changing the investigation override can make an already-queued held task
   // eligible. Re-run the normal dequeue so autonomy, budgets, leases, and
   // capacity remain the same as for every other system task.
   cosEvents.on('config:changed', () => {
-    if (isDaemonRunning()) setImmediate(() => dequeueNextTask());
+    if (isDaemonRunning()) scheduleDequeue();
   });
 
   cosEvents.on('tasks:cos:added', () => {
-    if (isDaemonRunning()) setImmediate(() => dequeueNextTask());
+    if (isDaemonRunning()) scheduleDequeue();
   });
 
   cosEvents.on('task:on-demand-requested', () => {
-    if (isDaemonRunning()) setImmediate(() => dequeueNextTask());
+    if (isDaemonRunning()) scheduleDequeue();
   });
 
   // The improvement-check timer (cosJobScheduler.scheduleNextImprovementCheck)
   // queues eligible improvement tasks then asks for a dequeue via this event,
   // since dequeueNextTask lives here. Mirrors the pre-extraction direct call.
   cosEvents.on('cos:dequeue-requested', () => {
-    if (isDaemonRunning()) setImmediate(() => dequeueNextTask());
+    if (isDaemonRunning()) scheduleDequeue();
   });
 
   // Autonomous job lifecycle → re-register/cancel individual job timers

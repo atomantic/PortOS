@@ -11,6 +11,7 @@
 
 import { describe, it, expect, afterAll, beforeAll, vi } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../lib/db.js';
+import { requireDbOrSkip } from '../lib/dbTestGate.js';
 
 vi.mock('./messageAccounts.js', () => ({
   listAccounts: vi.fn(async () => [{ id: 'acct-test', type: 'gmail', name: 'Test' }]),
@@ -39,9 +40,9 @@ let skipReason = '';
   }
 }
 
-if (!dbReady) console.log(`⏭️  privacyChanges.db.test.js skipped: ${skipReason}`);
+const runDb = requireDbOrSkip('services/privacyChanges.db.test', dbReady, skipReason);
 
-describe.skipIf(!dbReady)('privacy changes DB round-trip', () => {
+describe.skipIf(!runDb)('privacy changes DB round-trip', () => {
   let changes;
   let orgs;
   let vault;

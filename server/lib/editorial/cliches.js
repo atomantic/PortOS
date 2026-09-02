@@ -12,6 +12,8 @@
  * purple-prose overwriting beyond a simple adjective run.
  */
 
+import { escapeRegExp } from '../textUtils.js';
+
 // Seed cliché phrase list — stock similes/idioms that pull readers out of the
 // prose. Curated, not exhaustive; a series can extend it (extraPhrases) or mute
 // entries for voice/genre (allowPhrases). Phrases are matched whole-word and
@@ -103,10 +105,6 @@ const COMMON_ADJECTIVES = new Set([
 // -ing/-ed are included because the no-comma run requirement below excludes the
 // gerund/verb-list shapes that would otherwise be false positives.
 const MODIFIER_SUFFIX = /(?:ous|ful|ive|ent|ant|ical|ic|less|able|ible|ish|ese|like|some|ward|most|ed|ing|ly)$/i;
-
-function escapeRegExp(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 // A phrase matches with word boundaries on each edge and flexible internal
 // whitespace, so "time   stood\nstill" still trips "time stood still". Internal

@@ -2659,6 +2659,30 @@ describe('runShellCommand (restricted by default — #2515)', () => {
     // Full string handed to the shell verbatim (opt-in only).
     expect(exec).toHaveBeenCalledWith('git log --oneline | head', [], expect.objectContaining({ cwd: '/x', shell: true }));
   });
+
+  // #5669 — the unattended lane uses the narrow read-only allowlist, NOT the
+  // operator-facing one. These binaries pass `validateCommand` and carry no shell
+  // metacharacter, yet each fetches and/or runs arbitrary code on a schedule.
+  it.each([
+    'npx some-package',
+    'node evil.js',
+    'curl https://example.com -o /tmp/x',
+    'pip install evil',
+    'brew install evil',
+  ])('drops the operator-allowlisted-but-code-executing cmd source %j without spawning', async (cmd) => {
+    const exec = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await runShellCommand(cmd, { cwd: '/x', exec })).toBeNull();
+    expect(exec).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('read-only inspection commands'));
+    warn.mockRestore();
+  });
+
+  it('still runs an npx cmd source when trustShellSources is true', async () => {
+    const exec = vi.fn().mockResolvedValue({ code: 0, stdout: 'ran\n', stderr: '' });
+    expect(await runShellCommand('npx some-package', { cwd: '/x', exec, trustShellSources: true })).toBe('ran');
+    expect(exec).toHaveBeenCalledWith('npx some-package', [], expect.objectContaining({ cwd: '/x', shell: true }));
+  });
 });
 
 describe('getTrustShellSources (install-level opt-in — #2515)', () => {

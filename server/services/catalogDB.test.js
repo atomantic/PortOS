@@ -16,11 +16,12 @@
 
 import { describe, it, expect, afterAll } from 'vitest';
 import { checkHealth, ensureSchema, close } from '../lib/db.js';
+import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { setUserCatalogTypes } from '../lib/catalogTypes.js';
 import * as catalogDB from './catalogDB.js';
 
 // Probe the DB ONCE at module load via top-level await, so the suite is
-// registered with `describe.skipIf(!dbReady)` below and the runner reports
+// registered with `describe.skipIf(!runDb)` below and the runner reports
 // its tests as SKIPPED when Postgres is unreachable — rather than as
 // zero-assertion green, which would silently mask a broken connection in CI.
 let dbReady = false;
@@ -38,7 +39,7 @@ let skipReason = '';
     else skipReason = 'catalog schema not present (ensureSchema did not create catalog tables)';
   }
 }
-if (!dbReady) console.log(`⏭️ catalogDB.test: skipping suite — ${skipReason || 'no database'}`);
+const runDb = requireDbOrSkip('services/catalogDB.test', dbReady, skipReason);
 
 // Secondary guard for the (registered) tests: when the suite runs, dbReady is
 // always true here, so this is a no-op; describe.skipIf is the real gate.
@@ -91,7 +92,7 @@ describe('cdRefRoleForType', () => {
   });
 });
 
-describe.skipIf(!dbReady)('catalogDB (Postgres CRUD round-trip)', () => {
+describe.skipIf(!runDb)('catalogDB (Postgres CRUD round-trip)', () => {
   it('creates and reads back an ingredient with payload + tags', async () => {
     if (!requireDb('create/get ingredient')) return;
     const created = await catalogDB.createIngredient({

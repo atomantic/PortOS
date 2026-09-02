@@ -13,6 +13,7 @@ import { describe, it, expect, afterAll, beforeAll, beforeEach, vi } from 'vites
 import { rmSync } from 'fs';
 import { join } from 'path';
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
+import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 import { getSyncBaseHash, __resetBaseHashCacheForTests } from '../../lib/conflictJournal.js';
 
 const testState = vi.hoisted(() => ({ dataRoot: null, writeCounter: { baseHash: 0 } }));
@@ -48,11 +49,11 @@ let skipReason = '';
   }
 }
 
-if (!dbReady) console.log(`⏭️  moodBoard/db.test.js skipped: ${skipReason}`);
+const runDb = requireDbOrSkip('services/moodBoard/db.test', dbReady, skipReason);
 
 afterAll(() => rmSync(testState.dataRoot, { recursive: true, force: true }));
 
-describe.skipIf(!dbReady)('mood board DB round-trip', () => {
+describe.skipIf(!runDb)('mood board DB round-trip', () => {
   let db;
   const created = [];
   beforeAll(async () => {
@@ -136,7 +137,7 @@ describe.skipIf(!dbReady)('mood board DB round-trip', () => {
   });
 });
 
-describe.skipIf(!dbReady)('mood board federation (#1564)', () => {
+describe.skipIf(!runDb)('mood board federation (#1564)', () => {
   let db;
   const created = [];
   const remote = (id, over = {}) => ({

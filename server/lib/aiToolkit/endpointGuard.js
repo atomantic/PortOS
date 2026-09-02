@@ -24,8 +24,11 @@
  * — a bearer token has no business going there and it's the canonical SSRF
  * credential-theft target.
  *
- * Kept in `aiToolkit/internal/` (pure, no imports) so the toolkit stays
- * self-contained; `server/services/aiProvider.js` imports it from here too.
+ * Pure (no imports), and lives at the toolkit's own root — a peer of
+ * `errorDetection.js` — rather than under `internal/`, so PortOS's own
+ * `server/services/*` (six modules, at #5619) can import it directly
+ * without pulling the full toolkit barrel's much larger graph (routes,
+ * providers, runner) just for this one guard (#5625).
  *
  * NOTE: checks are performed on the URL's literal host. We do not resolve DNS,
  * so a user-supplied hostname that resolves to a private/metadata IP is treated

@@ -32,7 +32,7 @@ export const HF_SOURCE_LABEL = {
  * gated access is explained — including the token-present case, since a token alone
  * doesn't grant access. `linkClassName` lets a caller match its surrounding box
  * (warning banner vs. neutral confirmation) without forking the markup.
- * @param {{models: {label: string, url: string}[], linkClassName?: string}} props
+ * @param {{models: {label: string, url: string, linkLabel?: string}[], linkClassName?: string}} props
  */
 export function GatedModelList({ models, linkClassName = 'underline text-white' }) {
   if (!models?.length) return null;
@@ -46,7 +46,7 @@ export function GatedModelList({ models, linkClassName = 'underline text-white' 
             rel="noreferrer"
             className={`inline-flex items-center gap-1 ${linkClassName}`}
           >
-            <ExternalLink className="h-3 w-3" /> {m.label}
+            <ExternalLink className="h-3 w-3" /> {m.linkLabel || m.label}
           </a>
         </li>
       ))}
@@ -92,8 +92,9 @@ export default function HfTokenBanner({ modelLabel, licenseUrl, models, onSaved 
   return (
     <div className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-3 text-xs text-port-warning space-y-2">
       <div>
-        This needs a free Hugging Face account. Accept the terms for each gated model below (signed in to
-        Hugging Face), then create a read token at {tokenLink} and paste it here.
+        This needs a free Hugging Face account. Open each gated model card below, submit any required
+        usage/access request, and accept its terms (while signed in to Hugging Face). Then create a read
+        token at {tokenLink} and paste it here.
         <GatedModelList models={list} />
       </div>
       <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center">

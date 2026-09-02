@@ -146,7 +146,7 @@ export default function UniverseStyleReferences({
         size="2xl"
         closeOnBackdrop={!analyzing && !persisting}
         usePortal
-        panelClassName="bg-port-card border border-port-border rounded-xl max-h-[90vh] overflow-y-auto"
+        panelClassName="bg-port-card border border-port-border rounded-xl"
         ariaLabel="Add universe art style reference"
       >
         <div className="p-4 space-y-4">

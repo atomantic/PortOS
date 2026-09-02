@@ -75,6 +75,7 @@ import {
   handleAnnounce,
   redactPeerForWire,
   sanitizePeerForClient,
+  resolveEffectiveCategories,
   applyReciprocalSync,
   requestReciprocalSync,
   enqueueReciprocalSync,
@@ -450,7 +451,56 @@ describe('instances.js', () => {
     });
   });
 
+  // handleAnnounce auto-creates an inbound-only peer for ANY host that can reach
+  // the port — no approval step, and auth is off by default. A default-ON
+  // category must not reach those, or announcing would be enough to get a
+  // stranger's numbers pulled into this install's fleet report.
+  describe('resolveEffectiveCategories — default-ON scope', () => {
+    it('does not default a category on for an unapproved announce peer', () => {
+      const announced = { id: 'p1', directions: ['inbound'], syncEnabled: false };
+      expect(resolveEffectiveCategories(announced).usage).toBe(false);
+    });
+
+    it('does default it on for a peer the user added here', () => {
+      expect(resolveEffectiveCategories({ id: 'p1', directions: ['outbound'] }).usage).toBe(true);
+      // A legacy record with no directions array stays permissive.
+      expect(resolveEffectiveCategories({ id: 'p2' }).usage).toBe(true);
+    });
+
+    it('honors an explicit opt-IN on an announce peer — that is a user decision', () => {
+      const announced = { id: 'p1', directions: ['inbound'], syncCategories: { usage: true } };
+      expect(resolveEffectiveCategories(announced).usage).toBe(true);
+    });
+  });
+
   describe('sanitizePeerForClient', () => {
+    // The sync path layers DEFAULT_SYNC_CATEGORIES *under* the stored map so a
+    // peer record written before a category existed picks up its shipped default
+    // with no migration. Shipping the RAW map to the client would render a
+    // default-ON category's checkbox off while the server actively syncs it.
+    it('resolves the effective category map so the UI matches what actually syncs', () => {
+      const sanitized = sanitizePeerForClient({ id: 'p1', syncCategories: { brain: true } });
+      expect(sanitized.syncCategories.brain).toBe(true);
+      expect(sanitized.syncCategories.usage).toBe(true);   // default-ON, absent from the stored map
+      expect(sanitized.syncCategories.goals).toBe(false);
+    });
+
+    it('lets an explicit opt-out survive the default merge', () => {
+      const sanitized = sanitizePeerForClient({ id: 'p1', syncCategories: { usage: false } });
+      expect(sanitized.syncCategories.usage).toBe(false);
+    });
+
+    // The UI renders syncEnabled separately, so the payload shows what the user
+    // CONFIGURED. Masking here would render every box on a syncEnabled:false peer
+    // unchecked, and ticking one would silently reactivate the rest.
+    it('shows the configured selection on a peer whose master switch is off', () => {
+      const sanitized = sanitizePeerForClient({
+        id: 'p1', syncEnabled: false, syncCategories: { brain: true, universe: true },
+      });
+      expect(sanitized.syncCategories.brain).toBe(true);
+      expect(sanitized.syncCategories.universe).toBe(true);
+    });
+
     it('redacts the password to a hasPassword marker but keeps the username', () => {
       const peer = { id: 'peer-1', name: 'host', auth: { username: 'alice', password: 'secret' }, status: 'online' };
       const sanitized = sanitizePeerForClient(peer);
@@ -462,9 +512,11 @@ describe('instances.js', () => {
       expect(peer.auth.password).toBe('secret');
     });
 
-    it('leaves a credential-less peer untouched', () => {
+    it('leaves a credential-less peer\'s credential alone', () => {
       const peer = { id: 'peer-1', name: 'host', auth: null };
-      expect(sanitizePeerForClient(peer)).toBe(peer);
+      const sanitized = sanitizePeerForClient(peer);
+      expect(sanitized.auth).toBeNull();
+      expect(sanitized.id).toBe('peer-1');
     });
   });
 
@@ -702,6 +754,35 @@ describe('instances.js', () => {
       const { changed } = await applyReciprocalSync('inst-A', { goals: false });
 
       expect(changed).toBe(false);
+    });
+
+    // `usage` is the one default-ON category. `syncEnabled` is derived from the
+    // category map AND gates per-record outbound pushes (peerAllowsOutbound), so
+    // a default-ON category must never flip it on by itself — otherwise adding
+    // one would silently widen what every existing peer may receive.
+    // The client used to compute syncEnabled itself by summing the whole category
+    // map — which reads a default-ON category as "something is enabled" and
+    // widens the peer's outbound push consent (peerAllowsOutbound). syncEnabled
+    // is DERIVED, so a syncCategories edit recomputes it and ignores the value
+    // a caller sent alongside.
+    it('recomputes syncEnabled from the categories, ignoring a caller-sent value', async () => {
+      const peers = [{ id: 'p1', instanceId: 'inst-A', name: 'A', syncCategories: { brain: true, usage: true }, syncEnabled: true }];
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers });
+
+      const peer = await updatePeer('p1', { syncCategories: { brain: false }, syncEnabled: true });
+
+      expect(peer.syncCategories.usage).toBe(true);
+      expect(peer.syncEnabled).toBe(false);
+    });
+
+    it('a default-ON category alone does not flip syncEnabled on', async () => {
+      const peers = [{ id: 'p1', instanceId: 'inst-A', name: 'A', syncCategories: { brain: true }, syncEnabled: true }];
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'me' }, peers });
+
+      const { peer } = await applyReciprocalSync('inst-A', { brain: false, usage: true });
+
+      expect(peer.syncCategories.usage).toBe(true);
+      expect(peer.syncEnabled).toBe(false); // no CONTENT category left enabled
     });
 
     it('applies an all-false map to clear a stale enabled category (the offline-disable recovery path)', async () => {

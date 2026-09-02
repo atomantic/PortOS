@@ -549,12 +549,12 @@ describe('sprites routes', () => {
   // Build a multipart/form-data body with one file part + text fields —
   // exercises the real streamMultipart path (the fileFilter signature bug
   // class is invisible to JSON-only tests).
-  const buildMultipart = (boundary, { fileBytes = Buffer.from('\x89PNGfake'), mime = 'image/png', fields = {} } = {}) => {
+  const buildMultipart = (boundary, { fileBytes = Buffer.from('\x89PNGfake'), filename = 'design.png', mime = 'image/png', fields = {} } = {}) => {
     const parts = [];
     for (const [k, v] of Object.entries(fields)) {
       parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`));
     }
-    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="referenceImage"; filename="design.png"\r\nContent-Type: ${mime}\r\n\r\n`));
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="referenceImage"; filename="${filename}"\r\nContent-Type: ${mime}\r\n\r\n`));
     parts.push(fileBytes);
     parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
     return Buffer.concat(parts);
@@ -584,7 +584,7 @@ describe('sprites routes', () => {
     expect(reference.startReferenceGeneration).toHaveBeenCalledWith(
       'pioneer',
       expect.objectContaining({ target: 'turnaround', designPrompt: 'a ranger' }),
-      expect.objectContaining({ originalname: 'design.png', tempPath: expect.any(String) }),
+      expect.objectContaining({ ext: '.png', tempPath: expect.any(String) }),
     );
   });
 
@@ -624,6 +624,21 @@ describe('sprites routes', () => {
       .send(buildMultipart(boundary, { mime: 'application/zip', fields: { target: 'main' } }));
     expect(res.status).toBe(400);
     expect(reference.startReferenceGeneration).not.toHaveBeenCalled();
+  });
+
+  it('POST /:id/reference/generate derives a safe extension instead of forwarding the client filename', async () => {
+    const boundary = '----spritetest-safe-extension';
+    const res = await request(app)
+      .post('/api/sprites/pioneer/reference/generate')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`)
+      .send(buildMultipart(boundary, { filename: 'payload.svg', fields: { target: 'turnaround' } }));
+    expect(res.status).toBe(200);
+    expect(reference.startReferenceGeneration).toHaveBeenCalledWith(
+      'pioneer',
+      expect.objectContaining({ target: 'turnaround' }),
+      expect.objectContaining({ ext: '.png', tempPath: expect.any(String) }),
+    );
+    expect(reference.startReferenceGeneration.mock.calls[0][2]).not.toHaveProperty('originalname');
   });
 
   it('POST /:id/reference/generate rejects a non-queueable mode', async () => {

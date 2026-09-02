@@ -19,6 +19,8 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
   const coverage = coverageTone(enabledCount, totalCount);
   const coveragePct = hasApps ? Math.round((enabledCount / totalCount) * 100) : 0;
   const nextRun = describeNextRun(config);
+  const userInvokable = config.invocation?.userInvokable !== false;
+  const invocationDescription = config.invocation?.description || 'Runs as part of another automation and is not directly invokable.';
   // A pipeline task resolves provider/model per stage — a single card-level pin
   // would be ignored, so point at the drawer instead of offering one.
   const stageCount = pipelineStages(config).length;
@@ -68,7 +70,7 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
       </button>
 
       {/* Quick model pins — the drawer's Global defaults, inline */}
-      {onUpdate && (stageCount > 0 ? (
+      {userInvokable && onUpdate && (stageCount > 0 ? (
         <button
           type="button"
           onClick={() => onConfigure(taskType)}
@@ -83,21 +85,29 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
 
       {/* Footer actions */}
       <div className="flex items-center gap-2 px-4 py-2.5 border-t border-port-border">
-        <RunTaskButton
-          taskType={taskType}
-          apps={apps}
-          onTrigger={onTrigger}
-          installWide={config.installWide}
-          disabledReason={improvementDisabled ? IMPROVEMENT_DISABLED_TITLE : (pins.saving ? SAVING_TITLE : '')}
-        />
-        <button
-          type="button"
-          onClick={() => onConfigure(taskType)}
-          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-sm rounded text-gray-300 hover:text-white hover:bg-port-border/50 transition-colors"
-        >
-          <SlidersHorizontal size={13} />
-          Configure
-        </button>
+        {userInvokable ? (
+          <>
+            <RunTaskButton
+              taskType={taskType}
+              apps={apps}
+              onTrigger={onTrigger}
+              installWide={config.installWide}
+              disabledReason={improvementDisabled ? IMPROVEMENT_DISABLED_TITLE : (pins.saving ? SAVING_TITLE : '')}
+            />
+            <button
+              type="button"
+              onClick={() => onConfigure(taskType)}
+              className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-sm rounded text-gray-300 hover:text-white hover:bg-port-border/50 transition-colors"
+            >
+              <SlidersHorizontal size={13} />
+              Configure
+            </button>
+          </>
+        ) : (
+          <span className="text-xs text-port-warning/80" title={invocationDescription}>
+            {config.invocation?.label || 'Automation-only'} — runs from its parent automation
+          </span>
+        )}
       </div>
     </div>
   );

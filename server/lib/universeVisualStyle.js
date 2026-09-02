@@ -23,6 +23,8 @@
  * there `styleNotes` is exactly the right context and stays included.
  */
 
+import { escapeRegExp } from './textUtils.js';
+
 const tokenList = (values) => (Array.isArray(values) ? values : [])
   .map((token) => (typeof token === 'string' ? token.trim() : ''))
   .filter(Boolean);
@@ -57,8 +59,6 @@ export function buildVisualStyleClause(universe, { override = '', mode = 'prepen
   const parts = mode === 'append' ? [embrace, trimmedOverride] : [trimmedOverride, embrace];
   return parts.filter(Boolean).join('. ');
 }
-
-const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
  * Remove a style clause the authored prompt already leads with.

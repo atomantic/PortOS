@@ -70,12 +70,26 @@ function withLoopsTail(mutatorFn) {
   return loopsTail;
 }
 
-async function executeIteration(loop) {
-  const id = loop.id;
+async function executeIteration(loopId) {
+  const id = loopId;
   const active = activeLoops.get(id);
   if (!active || active.running) return;
 
+  // Claim the slot before the disk read below so a slow read cannot admit a
+  // second overlapping iteration through the same guard.
   active.running = true;
+
+  // Re-read the record on every tick so an edit through updateLoop (prompt,
+  // provider, cwd, timeout, name) takes effect on the NEXT iteration instead of
+  // at the next restart. Previously the interval closed over the record object
+  // it was armed with, so edits persisted to disk but never reached the run.
+  const loops = await loadLoops();
+  const loop = loops.find(l => l.id === id);
+  if (!loop) {
+    active.running = false;
+    return;
+  }
+
   active.iterationCount++;
   const iterationNum = active.iterationCount;
 
@@ -230,6 +244,16 @@ async function executeIteration(loop) {
   });
 }
 
+/**
+ * Fire-and-forget wrapper: iterations run outside the request lifecycle, so an
+ * escaping rejection would become an unhandled rejection.
+ */
+function runIteration(loopId) {
+  executeIteration(loopId).catch(err => {
+    console.error(`❌ [loops] iteration error for loop ${loopId}: ${err?.stack || err?.message || String(err)}`);
+  });
+}
+
 async function updatePersistedLoop(id, updates) {
   await withLoopsTail(async () => {
     const loops = await loadLoops();
@@ -283,9 +307,7 @@ export async function createLoop({ prompt, interval, name, cwd, providerId, time
 }
 
 function startLoopTimer(loop, runImmediately = false) {
-  const runWithLogging = () => executeIteration(loop).catch(err => {
-    console.error(`❌ [loops] iteration error for loop ${loop.id}: ${err?.stack || err?.message || String(err)}`);
-  });
+  const runWithLogging = () => runIteration(loop.id);
   const timer = setInterval(runWithLogging, loop.intervalMs);
   activeLoops.set(loop.id, {
     timer,
@@ -387,9 +409,7 @@ export async function triggerLoop(id) {
   if (!loop) throw new Error(`Loop ${id} not found`);
   if (!activeLoops.has(id)) throw new Error(`Loop ${id} is not running`);
 
-  executeIteration(loop).catch(err => {
-    console.error(`❌ [loops] iteration error for loop ${loop.id}: ${err?.stack || err?.message || String(err)}`);
-  });
+  runIteration(id);
   return { triggered: true };
 }
 
@@ -420,9 +440,7 @@ export async function updateLoop(id, updates) {
   if (activeLoops.has(id) && updates.interval) {
     const active = activeLoops.get(id);
     clearInterval(active.timer);
-    active.timer = setInterval(() => executeIteration(updatedRecord).catch(err => {
-      console.error(`❌ [loops] iteration error for loop ${updatedRecord.id}: ${err?.stack || err?.message || String(err)}`);
-    }), updatedRecord.intervalMs);
+    active.timer = setInterval(() => runIteration(id), updatedRecord.intervalMs);
   }
 
   loopEvents.emit('updated', { loop: updatedRecord });

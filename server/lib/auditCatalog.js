@@ -249,6 +249,20 @@ export const AUDIT_DEFINITIONS = Object.freeze({
       noun: 'simplify finding(s)',
     }),
   },
+  'module-hygiene': {
+    quotaBurnId: null,
+    label: 'Module hygiene',
+    description: 'Module-hygiene audit — configurable: file issues (default) or implement one isolated refactor',
+    defaultFileIssues: true,
+    doWorkRequiresWorktree: true,
+    filing: filing({
+      slugPrefix: 'module-hygiene-',
+      label: 'module-hygiene-audit',
+      issueLabel: 'code-quality',
+      labelDescription: 'Proposed from a module-hygiene audit',
+      noun: 'module-hygiene finding(s)',
+    }),
+  },
   'api-contract': {
     quotaBurnId: 'api-contract-audit',
     label: 'API & route contracts',
@@ -327,6 +341,17 @@ export function isAuditTaskType(taskType) {
  */
 export function defaultFileIssuesFor(taskType) {
   return AUDIT_DEFINITIONS[taskType]?.defaultFileIssues === true;
+}
+
+/**
+ * Whether do-work mode for this audit must use an isolated managed worktree.
+ * The flag is catalog-owned so dispatch and schedule UI cannot drift.
+ *
+ * @param {string} taskType - Task type identifier
+ * @returns {boolean} True when live-checkout remediation is forbidden
+ */
+export function auditDoWorkRequiresWorktree(taskType) {
+  return AUDIT_DEFINITIONS[taskType]?.doWorkRequiresWorktree === true;
 }
 
 /**

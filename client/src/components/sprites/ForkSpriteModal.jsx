@@ -64,7 +64,7 @@ export default function ForkSpriteModal({ open, onClose, source, referencePath, 
       size="lg"
       usePortal
       closeOnBackdrop={false}
-      panelClassName="bg-port-card border border-port-border rounded-xl max-h-[85vh] flex flex-col"
+      panelClassName="bg-port-card border border-port-border rounded-xl flex flex-col"
       ariaLabel="Fork sprite"
     >
       <div className="flex items-center justify-between gap-3 p-3 border-b border-port-border">
