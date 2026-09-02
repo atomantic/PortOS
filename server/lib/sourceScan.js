@@ -195,6 +195,13 @@ export function parseCallbackAt(blanked, from, limit) {
     // Optional name.
     while (i < limit && /[\w$]/.test(blanked[i])) i += 1;
     skipSpace();
+    // Parameter list. Only the `function` spelling reaches this — an arrow's
+    // params are consumed below, and skipping a second `(` after its `=>` would
+    // step straight over a parenthesized concise body (`async () => (await f())`),
+    // hiding every await in it.
+    if (blanked[i] === '(') i = matchBracket(blanked, i);
+    if (i === -1) return null;
+    skipSpace();
   } else {
     // Arrow: parenthesized params, or a single bare identifier.
     if (blanked[i] === '(') i = matchBracket(blanked, i);
@@ -203,13 +210,8 @@ export function parseCallbackAt(blanked, from, limit) {
     skipSpace();
     if (!blanked.startsWith('=>', i)) return null;
     i += 2;
+    skipSpace();
   }
-  skipSpace();
-
-  // `function` params, or an arrow's parenthesized concise body.
-  if (blanked[i] === '(') i = matchBracket(blanked, i);
-  if (i === -1) return null;
-  skipSpace();
 
   if (blanked[i] === '{') {
     const end = matchBracket(blanked, i);

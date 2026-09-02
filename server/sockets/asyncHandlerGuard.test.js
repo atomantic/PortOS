@@ -44,7 +44,10 @@ import { blankLiterals, matchBracket, parseCallbackAt, unguardedAwaits } from '.
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-const REGISTRATION = /(?<![\w$.])[\w$]+(?:\.[\w$]+)*\.on\(/g;
+// `.once` as well as `.on`: a one-shot listener returns its promise to nobody
+// exactly the same way, so leaving it out would be a silent hole rather than a
+// narrower rule.
+const REGISTRATION = /(?<![\w$.])[\w$]+(?:\.[\w$]+)*\.(?:on|once)\s*\(/g;
 
 /** Index of the `,` separating a call's first two arguments, or -1. */
 function firstArgumentEnd(blanked, from, limit) {
@@ -219,12 +222,23 @@ describe('the socket-handler recognizer', () => {
     expect(socketHandlers('socket.on(EVENT, async () => { await boom(); });')).toEqual([]);
   });
 
-  it('reads a non-socket emitter in this directory too', () => {
+  it('reads a non-socket emitter, and a one-shot listener, in this directory too', () => {
     // `ns.on('connection', …)` and the pm2-logs child's `.on('data', …)` are in
     // the same blast radius; scoping the scan to the literal `socket.` would let
-    // the next one in unnoticed.
+    // the next one in unnoticed. `.once` returns its promise to nobody the same
+    // way `.on` does.
     expect(findUnguardedHandlerAwaits("logProcess.stdout.on('data', async (chunk) => { await flush(chunk); });"))
       .toEqual(["line 1 'data': await flush(chunk)"]);
+    expect(findUnguardedHandlerAwaits("socket.once('shell:attach', async () => { await attach(); });"))
+      .toEqual(["line 1 'shell:attach': await attach()"]);
+  });
+
+  it('sees a parenthesized concise body rather than stepping over it', () => {
+    // `parseCallbackAt` used to skip a second `(` after the `=>`, reading it as
+    // a parameter list and jumping the whole body — so every await inside was
+    // invisible and the handler passed green.
+    expect(findUnguardedHandlerAwaits("socket.on('x', async () => (await boom()));"))
+      .toEqual(["line 1 'x': await boom()"]);
   });
 
   it('reports the voice call handlers as guarded', () => {

@@ -183,6 +183,11 @@ describe('the timer-callback recognizer', () => {
     // A concise body has no braces to walk, but still owns its await.
     expect(findUnguardedTimerAwaits('setTimeout(async () => await f(), 100);'))
       .toEqual(['line 1: await f()']);
+    // Parenthesized concise body. The parser used to read the `(` after the `=>`
+    // as a parameter list and jump the whole body, so the await inside was
+    // invisible and this passed green.
+    expect(findUnguardedTimerAwaits('setTimeout(async () => (await f()), 100);'))
+      .toEqual(['line 1: await f()']);
   });
 
   it('accepts a try-wrapped body', () => {
