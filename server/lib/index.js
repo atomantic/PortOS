@@ -358,6 +358,7 @@ export * from './musicDuration.js';
 export * from './investigationTasks.js';
 export * from './learningVerdict.js';
 export * from './mediaItemKey.js';
+export * from './assetProvenance.js';
 export * from './migrationMarker.js';
 export * from './modelPricing.js';
 export * from './navManifest.js';

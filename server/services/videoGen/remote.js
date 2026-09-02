@@ -26,6 +26,9 @@ import { applyRemoteInputAssets, remoteInputAssetsSchema } from '../federatedMed
 import { videoGenEvents } from './events.js';
 import { mutateVideoHistory } from './history.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
+import { provenanceForRender } from '../../lib/assetProvenance.js';
+import { readLoraLicensesByFilename } from '../loras.js';
+import { getVideoModels } from '../../lib/mediaModels.js';
 
 const remoteVideoMarkerSchema = z.object({
   wireVersion: z.literal(FEDERATED_MEDIA_WIRE_VERSION),
@@ -69,12 +72,17 @@ const executor = createRemoteMediaExecutor({
     // missing thumbnail must not fail a render that already landed verified.
     await optimizeForStreaming(path);
     const thumbnail = await generateThumbnail(path, jobId);
+    const createdAt = new Date().toISOString();
+    const modelId = remoteJob.result.modelId ?? request.modelId;
+    const model = getVideoModels().find((m) => m.id === modelId);
+    const loraFilenames = Array.isArray(request.loraFilenames) ? request.loraFilenames : [];
+    const loraLicenses = await readLoraLicensesByFilename(loraFilenames);
     await mutateVideoHistory((history) => {
       history.unshift({
         id: jobId,
         prompt: request.prompt,
         negativePrompt: request.negativePrompt ?? '',
-        modelId: remoteJob.result.modelId ?? request.modelId,
+        modelId,
         seed: request.seed ?? null,
         width: request.width ?? null,
         height: request.height ?? null,
@@ -88,7 +96,21 @@ const executor = createRemoteMediaExecutor({
         // the federation, never a hostname, address, or credential.
         federatedPeerId: peerId,
         federatedJobId: remoteJob.id,
-        createdAt: new Date().toISOString(),
+        createdAt,
+        provenance: provenanceForRender({
+          model: {
+            id: modelId,
+            name: model?.name || modelId,
+            license: model?.license,
+            repo: model?.repo,
+            disclosure: model?.disclosure,
+          },
+          loras: loraFilenames.map((filename) => ({
+            filename,
+            ...(loraLicenses[filename] || {}),
+          })),
+          capturedAt: createdAt,
+        }),
         ...renderTimingFields(renderStartedAtMs),
       });
       return history;

@@ -99,6 +99,7 @@ export function normalizeImage(i) {
     // `cleanedFrom` sibling "Watermark removed" rather than "Cleaned", so it
     // MUST survive normalization (same contract as `regenerated` above).
     watermarkRemoved: i.watermarkRemoved === true,
+    provenance: i.provenance || null,
     raw: i,
   };
 }
@@ -127,6 +128,7 @@ export function normalizeVideo(v) {
     // Same contract as normalizeImage's renderMs above.
     renderMs: Number.isFinite(v.renderMs) ? v.renderMs : null,
     hidden: !!v.hidden,
+    provenance: v.provenance || null,
     raw: v,
   };
 }

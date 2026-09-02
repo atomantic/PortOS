@@ -24,6 +24,9 @@ import {
 import { createRemoteMediaExecutor } from '../federatedMedia/remoteExecutor.js';
 import { applyRemoteInputAssets, remoteInputAssetsSchema } from '../federatedMedia/inputAssets.js';
 import { imageGenEvents } from '../imageGenEvents.js';
+import { provenanceForRender } from '../../lib/assetProvenance.js';
+import { readLoraLicensesByFilename } from '../loras.js';
+import { getImageModels } from '../../lib/mediaModels.js';
 
 const remoteImageMarkerSchema = z.object({
   wireVersion: z.literal(FEDERATED_MEDIA_WIRE_VERSION),
@@ -70,11 +73,16 @@ const executor = createRemoteMediaExecutor({
     // never reported. `federatedPeer`/`federatedJob` are instance-level
     // identifiers already shared across the federation — they are the result
     // provenance, and carry no hostname, address, or credential.
+    const createdAt = new Date().toISOString();
+    const modelId = remoteJob.result.modelId ?? request.modelId;
+    const model = getImageModels().find((m) => m.id === modelId);
+    const loraFilenames = Array.isArray(request.loraFilenames) ? request.loraFilenames : [];
+    const loraLicenses = await readLoraLicensesByFilename(loraFilenames);
     const meta = {
       id: jobId,
       prompt: request.prompt,
       negativePrompt: request.negativePrompt ?? '',
-      modelId: remoteJob.result.modelId ?? request.modelId,
+      modelId,
       seed: request.seed ?? null,
       width: request.width,
       height: request.height,
@@ -83,7 +91,21 @@ const executor = createRemoteMediaExecutor({
       filename,
       federatedPeerId: peerId,
       federatedJobId: remoteJob.id,
-      createdAt: new Date().toISOString(),
+      createdAt,
+      provenance: provenanceForRender({
+        model: {
+          id: modelId,
+          name: model?.name || modelId,
+          license: model?.license,
+          repo: model?.repo,
+          disclosure: model?.disclosure,
+        },
+        loras: loraFilenames.map((filename) => ({
+          filename,
+          ...(loraLicenses[filename] || {}),
+        })),
+        capturedAt: createdAt,
+      }),
       ...renderTimingFields(renderStartedAtMs),
     };
     await atomicWrite(join(dir, `${jobId}.metadata.json`), meta);

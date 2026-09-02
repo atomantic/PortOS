@@ -127,6 +127,25 @@ export const readTriggerWordsByFilename = async (filenames) => {
   );
 };
 
+// License + source URL as recorded on the sidecar at install time (#5638).
+// Missing/legacy sidecars contribute `{ license: null, sourceUrl: null }` so
+// a render still stamps the LoRA id with unknown terms rather than skipping it.
+export const readLoraLicensesByFilename = async (filenames) => {
+  const names = [...new Set(
+    (Array.isArray(filenames) ? filenames : [])
+      .filter((f) => typeof f === 'string' && f)
+      .map((f) => basename(f)),
+  )];
+  if (!names.length) return {};
+  const sidecars = await Promise.all(names.map((n) => readSidecar(n)));
+  return Object.fromEntries(names.map((n, i) => {
+    const sc = sidecars[i] || {};
+    const sourceUrl = sc.civitai?.url || sc.huggingface?.url || null;
+    const license = typeof sc.license === 'string' && sc.license.trim() ? sc.license.trim() : null;
+    return [n, { license, sourceUrl, name: sc.name || null }];
+  }));
+};
+
 // Validate a basename so it can't escape PATHS.loras. Delegates to the
 // shared `assertSafeFilename` helper in fileUtils.js (which also handles
 // gallery .png assertions). Substring `..` is allowed because
@@ -246,6 +265,7 @@ export const listLoras = async () => {
         // media list mixes clips in, and the card renders this in an <img>.
         previewImageUrl: normalizeCivitaiImageUrl(stillPreviewUrl(sidecar?.previewImageUrl)) || null,
         description: sidecar?.description || '',
+        license: typeof sidecar?.license === 'string' && sidecar.license.trim() ? sidecar.license.trim() : null,
         // Trained-LoRA surfacing (sidecars written by services/loraTraining):
         // 'trained' source + the character identity block let the library UI
         // badge them and characterLoraResolver match them. Null for Civitai

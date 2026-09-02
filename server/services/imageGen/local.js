@@ -44,7 +44,8 @@ import { getImageModels, isFlux2, isErnie, isHiDream, isQwen } from '../../lib/m
 import { isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { usesDiffusersRunner, flux2Bf16BaseRepo } from '../../lib/runners.js';
 import { weaveLoraTriggers } from '../../lib/loraTriggers.js';
-import { readTriggerWordsByFilename } from '../loras.js';
+import { provenanceForRender } from '../../lib/assetProvenance.js';
+import { readTriggerWordsByFilename, readLoraLicensesByFilename } from '../loras.js';
 
 // Read the registry lazily — callers below hit getImageModels() at request
 // time. A prior `IMAGE_MODELS = Object.fromEntries(getImageModels()...)`
@@ -330,6 +331,9 @@ export function buildSidecarMeta({
   // passes the map so this stays pure. Keyed rather than positional because the
   // valid-LoRA order is only known after the prefix-check below.
   loraTriggerWords = null,
+  // License map keyed by LoRA basename, read from sidecars by generateImage
+  // so this stays pure. Missing entries stamp license: null (unknown).
+  loraLicenses = null,
   initImagePath = null,
   initImageStrength = null,
   referenceImagePaths = [],
@@ -453,6 +457,23 @@ export function buildSidecarMeta({
     meta.renderPrompt = renderPrompt;
     meta.addedTriggerWords = addedTriggerWords;
   }
+  // Stamp the licenses known at THIS render. A later re-read of the LoRA
+  // sidecar or model card must not rewrite what was true when the pixels
+  // were made (#5638). Unknown stays null.
+  meta.provenance = provenanceForRender({
+    model: {
+      id: modelId,
+      name: model?.name || modelId,
+      license: model?.license,
+      repo: model?.repo,
+      disclosure: model?.disclosure,
+    },
+    loras: validLoraFilenames.map((filename) => ({
+      filename,
+      ...(loraLicenses?.[filename] || {}),
+    })),
+    capturedAt: meta.createdAt,
+  });
   return {
     meta,
     renderPrompt,
@@ -592,6 +613,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   // simply contributes nothing and the render is unchanged. A no-LoRA render
   // short-circuits inside the helper, so the common case does zero extra I/O.
   const loraTriggerWords = await readTriggerWordsByFilename([...loraFilenames, ...loraPaths]);
+  const loraLicenses = await readLoraLicensesByFilename([...loraFilenames, ...loraPaths]);
   const {
     meta,
     renderPrompt,
@@ -626,6 +648,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     visualConditioning,
     regenOf,
     loraTriggerWords,
+    loraLicenses,
     resolveInputPath: resolveImageInputPath,
     loraExists: existsSync,
   });

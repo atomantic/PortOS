@@ -106,6 +106,7 @@ export * from './loopbackHost.js';
 export * from './manuscriptAnchors.js';
 export * from './manuscriptFormat.js';
 export * from './mediaCollectionList.js';
+export * from './assetProvenance.js';
 export * from './mediaNavigation.js';
 export * from './mediaSearch.js';
 export * from './morsePractice.js';

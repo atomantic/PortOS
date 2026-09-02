@@ -18,6 +18,7 @@
 import { ServerError } from './errorHandler.js';
 import { RUNNER_FAMILIES } from './runners.js';
 import { readResponseJson } from './readResponseJson.js';
+import { licenseFromCivitaiModel } from './assetProvenance.js';
 
 const CIVITAI_API = 'https://civitai.com/api/v1';
 const CIVITAI_HOSTS = new Set(['civitai.com', 'civitai.red', 'civitai.green', 'www.civitai.com']);
@@ -334,6 +335,9 @@ export const buildSidecar = ({ model, version, file, filename }) => {
       downloadUrl: file?.downloadUrl || null,
     },
     previewImageUrl: normalizeCivitaiImageUrl(previewImage?.url) || null,
+    // License as known at install time (#5638). Unknown stays null — never
+    // inferred from allowCommercialUse. Re-read at render would lie.
+    license: licenseFromCivitaiModel(model),
     installedAt: new Date().toISOString(),
   };
 };
