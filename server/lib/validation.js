@@ -354,10 +354,6 @@ export const referenceRepoUpdateSchema = z.object({
 // either — all ref CRUD goes through /api/apps/:appId/reference-repos.
 export const appUpdateSchema = partialWithoutDefaults(appSchema);
 
-export const managedAppUpdateSchema = z.object({
-  syncFork: z.boolean().optional(),
-}).strict();
-
 const standardizePlanFileSchema = z.string().trim().min(1).max(500)
   .refine((file) => {
     const segments = file.split(/[/\\]/);

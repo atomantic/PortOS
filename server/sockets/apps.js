@@ -1,6 +1,7 @@
 import { streamDetection } from '../services/streamingDetect.js';
 import * as pm2Standardizer from '../services/pm2Standardizer.js';
 import * as appsService from '../services/apps.js';
+import { logAction } from '../services/history.js';
 import * as appUpdater from '../services/appUpdater.js';
 import * as appDeployer from '../services/appDeployer.js';
 import {
@@ -119,10 +120,18 @@ export const registerAppHandlers = (socket, io) => {
         io.emit('app:update:step', frame);
       };
 
+      let failure = null;
       const result = await appUpdater.updateApp(app, emit, { syncFork: data.syncFork === true }).catch(err => {
+        failure = err;
         io.emit('app:update:error', { appId: app.id, message: err.message });
         return null;
       });
+
+      // The ledger and the apps-changed broadcast are the socket path's job now
+      // that it is the only way to update an app — a thrown update still gets a
+      // row, with success:false, rather than vanishing from the history.
+      await logAction('update', app.id, app.name, { steps: result?.steps ?? [] }, result?.success === true, failure?.message ?? null);
+      appsService.notifyAppsChanged('update', app.id);
 
       if (result) {
         io.emit('app:update:complete', { appId: app.id, success: result.success, steps: result.steps });

@@ -14,7 +14,9 @@ vi.mock('./pm2.js', () => ({
 }));
 vi.mock('./streamingDetect.js', () => ({ streamDetection: vi.fn() }));
 vi.mock('./cosEvents.js', () => ({ cosEvents: { on: vi.fn() }, emitLog: vi.fn() }));
-vi.mock('./apps.js', () => ({ appsEvents: { on: vi.fn() }, getAppById: vi.fn(), resolvePm2HomeForProcess: vi.fn(), updateApp: vi.fn() }));
+vi.mock('./apps.js', () => ({ appsEvents: { on: vi.fn() }, getAppById: vi.fn(), notifyAppsChanged: vi.fn(), resolvePm2HomeForProcess: vi.fn(), updateApp: vi.fn() }));
+// logAction appends to the real history file — mock it or this suite writes to data/.
+vi.mock('./history.js', () => ({ logAction: vi.fn(async () => {}) }));
 vi.mock('../lib/errorHandler.js', () => ({ errorEvents: { on: vi.fn() } }));
 vi.mock('./autoFixer.js', () => ({ handleErrorRecovery: vi.fn() }));
 vi.mock('./pm2Standardizer.js', () => ({ analyzeApp: vi.fn(), createGitBackup: vi.fn(), applyStandardization: vi.fn(), runStandardizeFlow: vi.fn(), standardizeRefusalFor: vi.fn(() => null) }));
@@ -73,7 +75,8 @@ vi.mock('../sockets/voice.js', () => ({ registerVoiceHandlers: vi.fn() }));
 
 import { initSocket } from './socket.js';
 import { spawnPm2 } from './pm2.js';
-import { getAppById, resolvePm2HomeForProcess } from './apps.js';
+import { getAppById, notifyAppsChanged, resolvePm2HomeForProcess } from './apps.js';
+import { logAction } from './history.js';
 import { cosEvents } from './cosEvents.js';
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { audioGenEvents } from './audioGen/events.js';
@@ -783,6 +786,36 @@ describe('socket.js — initSocket', () => {
       await flush();
       expect(vi.mocked(runAppUpdate)).toHaveBeenCalledTimes(2);
       expect(vi.mocked(runAppUpdate).mock.calls.at(-1)[2]).toEqual({ syncFork: true });
+    });
+
+    // The HTTP route that used to own these two calls is gone; the socket is the
+    // only update path, so it has to write the ledger row and fan out the
+    // apps-changed broadcast itself.
+    it('records a successful update in the action ledger and notifies apps-changed', async () => {
+      const socket = makeSocket('app-op-ledger');
+      io.connect(socket);
+
+      vi.mocked(runAppUpdate).mockResolvedValueOnce({ success: true, steps: [{ step: 'pull' }] });
+      await socket.handlers['app:update']({ appId: APP.id });
+      await flush();
+
+      expect(vi.mocked(logAction)).toHaveBeenCalledWith(
+        'update', APP.id, APP.name, { steps: [{ step: 'pull' }] }, true, null,
+      );
+      expect(vi.mocked(notifyAppsChanged)).toHaveBeenCalledWith('update', APP.id);
+    });
+
+    it('still writes a ledger row when the update throws, flagged unsuccessful', async () => {
+      const socket = makeSocket('app-op-ledger-fail');
+      io.connect(socket);
+
+      vi.mocked(runAppUpdate).mockRejectedValueOnce(new Error('pull failed'));
+      await socket.handlers['app:update']({ appId: APP.id });
+      await flush();
+
+      expect(vi.mocked(logAction)).toHaveBeenCalledWith(
+        'update', APP.id, APP.name, { steps: [] }, false, 'pull failed',
+      );
     });
 
     it('blocks a second app record that points at the same checkout', async () => {

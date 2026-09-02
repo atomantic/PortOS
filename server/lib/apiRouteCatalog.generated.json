@@ -1216,14 +1216,6 @@
     },
     {
       "method": "POST",
-      "path": "/api/apps/:id/update",
-      "mountPath": "/api/apps",
-      "sources": [
-        "server/routes/apps/lifecycle.js"
-      ]
-    },
-    {
-      "method": "POST",
       "path": "/api/apps/:id/upgrade-tls",
       "mountPath": "/api/apps",
       "sources": [
@@ -17465,8 +17457,8 @@
   ],
   "stats": {
     "mounts": 147,
-    "operations": 2163,
-    "declarations": 2167,
+    "operations": 2162,
+    "declarations": 2166,
     "sourceFiles": 229
   }
 }
