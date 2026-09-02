@@ -8,9 +8,9 @@ import {
   resetRenderBudget,
   getEffectiveTier,
   percentile,
-  recommendOpenWorldStartTier,
+  recommendStartTier,
   tierToIndex,
-} from './openWorldRenderBudget.js';
+} from './renderBudget.js';
 
 const CFG = DEFAULT_RENDER_BUDGET_CONFIG;
 
@@ -39,7 +39,7 @@ function makeDriver(startTier) {
   };
 }
 
-describe('openWorldRenderBudget — helpers', () => {
+describe('renderBudget — helpers', () => {
   it('percentile uses nearest-rank and handles empty input', () => {
     expect(percentile([], 0.75)).toBeNull();
     expect(percentile([10, 20, 30, 40], 0.75)).toBe(30);
@@ -53,21 +53,21 @@ describe('openWorldRenderBudget — helpers', () => {
   });
 
   it('starts conservatively on touch and lower-capability devices', () => {
-    expect(recommendOpenWorldStartTier({ coarsePointer: true, hardwareConcurrency: 12 })).toBe('medium');
-    expect(recommendOpenWorldStartTier({ hardwareConcurrency: 6 })).toBe('medium');
-    expect(recommendOpenWorldStartTier({ deviceMemory: 6 })).toBe('medium');
-    expect(recommendOpenWorldStartTier({ hardwareConcurrency: 2 })).toBe('low');
-    expect(recommendOpenWorldStartTier({ deviceMemory: 4 })).toBe('low');
+    expect(recommendStartTier({ coarsePointer: true, hardwareConcurrency: 12 })).toBe('medium');
+    expect(recommendStartTier({ hardwareConcurrency: 6 })).toBe('medium');
+    expect(recommendStartTier({ deviceMemory: 6 })).toBe('medium');
+    expect(recommendStartTier({ hardwareConcurrency: 2 })).toBe('low');
+    expect(recommendStartTier({ deviceMemory: 4 })).toBe('low');
   });
 
   it('keeps capable and unknown desktops at high', () => {
-    expect(recommendOpenWorldStartTier()).toBe('high');
-    expect(recommendOpenWorldStartTier({ hardwareConcurrency: 12, deviceMemory: 16 })).toBe('high');
-    expect(recommendOpenWorldStartTier({ hardwareConcurrency: 0, deviceMemory: Number.NaN })).toBe('high');
+    expect(recommendStartTier()).toBe('high');
+    expect(recommendStartTier({ hardwareConcurrency: 12, deviceMemory: 16 })).toBe('high');
+    expect(recommendStartTier({ hardwareConcurrency: 0, deviceMemory: Number.NaN })).toBe('high');
   });
 });
 
-describe('openWorldRenderBudget — warm-up & gap rejection (ignored samples)', () => {
+describe('renderBudget — warm-up & gap rejection (ignored samples)', () => {
   it('ignores frames inside the warm-up window but records after it', () => {
     let s = createRenderBudget('high', 0);
     // Frames before warmupMs never accumulate (dt=40 would otherwise be pressure).
@@ -139,7 +139,7 @@ describe('openWorldRenderBudget — warm-up & gap rejection (ignored samples)', 
   });
 });
 
-describe('openWorldRenderBudget — downshift', () => {
+describe('renderBudget — downshift', () => {
   it('steps down exactly one tier after two consecutive pressure windows', () => {
     const d = makeDriver('high');
     d.window(30); // window 1: p75 30ms > 25ms
@@ -159,7 +159,7 @@ describe('openWorldRenderBudget — downshift', () => {
   });
 });
 
-describe('openWorldRenderBudget — recovery (upshift)', () => {
+describe('renderBudget — recovery (upshift)', () => {
   it('steps up one tier after five consecutive headroom windows', () => {
     const d = makeDriver('medium');
     for (let w = 0; w < 4; w += 1) d.window(10); // four fast windows: not enough
@@ -178,7 +178,7 @@ describe('openWorldRenderBudget — recovery (upshift)', () => {
   });
 });
 
-describe('openWorldRenderBudget — cooldown', () => {
+describe('renderBudget — cooldown', () => {
   it('blocks a second tier change until the cooldown elapses', () => {
     const d = makeDriver('high');
     d.window(30);
@@ -208,7 +208,7 @@ describe('openWorldRenderBudget — cooldown', () => {
   });
 });
 
-describe('openWorldRenderBudget — visibility transitions', () => {
+describe('renderBudget — visibility transitions', () => {
   it('restartWarmup re-arms warm-up and clears streaks/samples without changing tier', () => {
     const d = makeDriver('high');
     d.window(30); // pressure streak = 1
@@ -230,7 +230,7 @@ describe('openWorldRenderBudget — visibility transitions', () => {
   });
 });
 
-describe('openWorldRenderBudget — purity', () => {
+describe('renderBudget — purity', () => {
   it('recordFrame does not mutate the input state', () => {
     const s = createRenderBudget('high', 0);
     const before = JSON.stringify(s);

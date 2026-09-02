@@ -22,7 +22,7 @@ export function useCooldownTick(options = {}) {
   // is always visible to the interval tick — a useEffect-driven ref update
   // can lag one render behind and, if `onAllExpired` changes right before
   // the expiry tick, the interval would fire the previous closure once.
-  // Pattern mirrored from usePostSession.js / useOpenWorldAudio.js.
+  // Pattern mirrored from usePostSession.js.
   const callbackRef = useRef(onAllExpired);
   callbackRef.current = onAllExpired;
 

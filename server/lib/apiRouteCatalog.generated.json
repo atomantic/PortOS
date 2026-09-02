@@ -30,7 +30,6 @@
     "/api/capabilities",
     "/api/catalog",
     "/api/character",
-    "/api/city",
     "/api/client-errors",
     "/api/code-review",
     "/api/commands",
@@ -98,7 +97,6 @@
     "/api/notes",
     "/api/notifications",
     "/api/openclaw",
-    "/api/openworld",
     "/api/palette",
     "/api/peer-sync",
     "/api/pipeline",
@@ -3316,38 +3314,6 @@
       "mountPath": "/api/character",
       "sources": [
         "server/routes/character.js"
-      ]
-    },
-    {
-      "method": "GET",
-      "path": "/api/city/introspection",
-      "mountPath": "/api/city",
-      "sources": [
-        "server/routes/openWorldRoutes.js"
-      ]
-    },
-    {
-      "method": "GET",
-      "path": "/api/city/snapshots",
-      "mountPath": "/api/city",
-      "sources": [
-        "server/routes/openWorldRoutes.js"
-      ]
-    },
-    {
-      "method": "POST",
-      "path": "/api/city/snapshots/capture",
-      "mountPath": "/api/city",
-      "sources": [
-        "server/routes/openWorldRoutes.js"
-      ]
-    },
-    {
-      "method": "GET",
-      "path": "/api/city/snapshots/config",
-      "mountPath": "/api/city",
-      "sources": [
-        "server/routes/openWorldRoutes.js"
       ]
     },
     {
@@ -11703,38 +11669,6 @@
       ]
     },
     {
-      "method": "GET",
-      "path": "/api/openworld/introspection",
-      "mountPath": "/api/openworld",
-      "sources": [
-        "server/routes/openWorldRoutes.js"
-      ]
-    },
-    {
-      "method": "GET",
-      "path": "/api/openworld/snapshots",
-      "mountPath": "/api/openworld",
-      "sources": [
-        "server/routes/openWorldRoutes.js"
-      ]
-    },
-    {
-      "method": "POST",
-      "path": "/api/openworld/snapshots/capture",
-      "mountPath": "/api/openworld",
-      "sources": [
-        "server/routes/openWorldRoutes.js"
-      ]
-    },
-    {
-      "method": "GET",
-      "path": "/api/openworld/snapshots/config",
-      "mountPath": "/api/openworld",
-      "sources": [
-        "server/routes/openWorldRoutes.js"
-      ]
-    },
-    {
       "method": "POST",
       "path": "/api/palette/action/:id",
       "mountPath": "/api/palette",
@@ -17472,9 +17406,9 @@
     }
   ],
   "stats": {
-    "mounts": 147,
-    "operations": 2164,
-    "declarations": 2168,
-    "sourceFiles": 229
+    "mounts": 145,
+    "operations": 2156,
+    "declarations": 2164,
+    "sourceFiles": 228
   }
 }

@@ -122,7 +122,6 @@ export * from './youtubeUrl.js';
 
 // === Page-scoped pure helpers ===
 export * from './audioContext.js';
-export * from './openWorldPlaybackFrame.js';
 export * from './canvasRoll.js';
 export * from './chiptunePlayback.js';
 export * from './chordPlayback.js';

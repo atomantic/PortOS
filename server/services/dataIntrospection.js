@@ -1,7 +1,7 @@
 /**
- * OpenWorld Introspection
+ * Data Introspection
  *
- * Read-only diagnostics backing OpenWorld's Data Harbor district: the PostgreSQL
+ * Read-only diagnostics for data-backed product surfaces: the PostgreSQL
  * datastore (one silo per table) and the `data/` filesystem (one archive rack per
  * domain directory). Purely derived state — nothing is stored, synced, or backed
  * up (see docs/STORAGE.md: transient query results need no classification).
@@ -100,7 +100,7 @@ async function build() {
   return { ts: new Date().toISOString(), db, fs };
 }
 
-export async function getOpenWorldIntrospection() {
+export async function getDataIntrospection() {
   const now = Date.now();
   if (cache && now - cacheBuiltAt < INTROSPECTION_TTL_MS) return cache;
 
@@ -117,7 +117,7 @@ export async function getOpenWorldIntrospection() {
         // rethrow would be an unhandled rejection — resolve to the stale
         // payload instead and only propagate when there's nothing to serve.
         inFlight = null;
-        console.error(`❌ OpenWorld introspection rebuild failed: ${err.message}`);
+        console.error(`❌ Data introspection rebuild failed: ${err.message}`);
         if (cache) return cache;
         throw err;
       },

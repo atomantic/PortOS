@@ -255,8 +255,6 @@ describe('generated API route catalog', () => {
     const operations = new Set(readApiRouteCatalog().routes.map((route) => `${route.method} ${route.path}`));
     for (const operation of [
       'POST /api/brain/songbook/import/url',
-      'GET /api/city/introspection',
-      'GET /api/openworld/introspection',
       'GET /api/providers/readiness',
       'DELETE /api/providers/:id',
       'POST /api/providers/:id/test',

@@ -1,5 +1,5 @@
 /**
- * Tests for the Data Harbor introspection service: DB section shape (including
+ * Tests for the data introspection service: DB section shape (including
  * the down-DB → `db: null` absent-vs-empty contract), the data/ domain section
  * (delegated to dataManager's getDataOverview so the harbor and the Data page
  * always agree), and the TTL + stale-while-revalidate cache discipline.
@@ -15,10 +15,10 @@ vi.mock('../lib/db.js', () => ({ query: queryMock }));
 vi.mock('./dataManager.js', () => ({ getDataOverview: overviewMock }));
 
 const {
-  getOpenWorldIntrospection,
+  getDataIntrospection,
   resetIntrospectionCache,
   INTROSPECTION_TTL_MS,
-} = await import('./openWorldIntrospection.js');
+} = await import('./dataIntrospection.js');
 
 const TABLE_ROWS = [
   { name: 'memories', row_estimate: '1200', total_bytes: '900000' },
@@ -57,9 +57,9 @@ beforeEach(() => {
   overviewMock.mockResolvedValue(happyOverview());
 });
 
-describe('getOpenWorldIntrospection — db section', () => {
+describe('getDataIntrospection — db section', () => {
   it('maps tables with coerced numbers, embedding flags, size, and migrations', async () => {
-    const result = await getOpenWorldIntrospection();
+    const result = await getDataIntrospection();
     expect(result.ts).toBeTruthy();
     expect(result.db.sizeBytes).toBe(5000000);
     expect(result.db.tables).toHaveLength(3);
@@ -77,7 +77,7 @@ describe('getOpenWorldIntrospection — db section', () => {
       if (sql.includes('pg_stat_user_tables')) throw new Error('connection refused');
       return happyQueries(sql);
     });
-    const result = await getOpenWorldIntrospection();
+    const result = await getDataIntrospection();
     expect(result.db).toBeNull();
     // The filesystem section is independent of DB health.
     expect(result.fs.domains.length).toBeGreaterThan(0);
@@ -90,7 +90,7 @@ describe('getOpenWorldIntrospection — db section', () => {
       if (sql.includes('information_schema.columns')) throw new Error('nope');
       return happyQueries(sql);
     });
-    const result = await getOpenWorldIntrospection();
+    const result = await getDataIntrospection();
     expect(result.db.tables).toHaveLength(3);
     expect(result.db.migrations).toBeNull();
     expect(result.db.sizeBytes).toBeNull();
@@ -98,9 +98,9 @@ describe('getOpenWorldIntrospection — db section', () => {
   });
 });
 
-describe('getOpenWorldIntrospection — fs section', () => {
+describe('getDataIntrospection — fs section', () => {
   it('maps the data overview into harbor domains + totals', async () => {
-    const { fs } = await getOpenWorldIntrospection();
+    const { fs } = await getDataIntrospection();
     expect(fs.domains).toEqual([
       { name: 'images', bytes: 3_100_000_000, files: 2400 },
       { name: 'brain', bytes: 800_000, files: 60 },
@@ -111,24 +111,24 @@ describe('getOpenWorldIntrospection — fs section', () => {
 
   it('returns fs: null (absent) when the overview fails, keeping the db section', async () => {
     overviewMock.mockRejectedValue(new Error('du exploded'));
-    const result = await getOpenWorldIntrospection();
+    const result = await getDataIntrospection();
     expect(result.fs).toBeNull();
     expect(result.db.tables).toHaveLength(3);
   });
 });
 
-describe('getOpenWorldIntrospection — cache discipline', () => {
+describe('getDataIntrospection — cache discipline', () => {
   it('serves the cached payload within the TTL without re-querying', async () => {
-    const first = await getOpenWorldIntrospection();
+    const first = await getDataIntrospection();
     const callsAfterFirst = queryMock.mock.calls.length;
-    const second = await getOpenWorldIntrospection();
+    const second = await getDataIntrospection();
     expect(second).toBe(first);
     expect(queryMock.mock.calls.length).toBe(callsAfterFirst);
     expect(overviewMock).toHaveBeenCalledTimes(1);
   });
 
   it('serves stale immediately past the TTL while revalidating in the background', async () => {
-    const first = await getOpenWorldIntrospection();
+    const first = await getDataIntrospection();
     // Jump past the TTL without fake timers — the background rebuild does real
     // async work that fake timers can't flush.
     vi.spyOn(Date, 'now').mockReturnValue(Date.now() + INTROSPECTION_TTL_MS + 1000);
@@ -139,12 +139,12 @@ describe('getOpenWorldIntrospection — cache discipline', () => {
       return happyQueries(sql);
     });
 
-    const stale = await getOpenWorldIntrospection();
+    const stale = await getDataIntrospection();
     expect(stale).toBe(first); // immediate stale answer, no blocking on the rebuild
 
     // Once the background rebuild settles, the fresh payload is served.
     await vi.waitFor(async () => {
-      expect((await getOpenWorldIntrospection()).db.sizeBytes).toBe(777);
+      expect((await getDataIntrospection()).db.sizeBytes).toBe(777);
     });
     vi.restoreAllMocks();
   });

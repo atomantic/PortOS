@@ -1,4 +1,4 @@
-// Pure render-budget state machine for OpenWorld's Auto quality mode (issue #2592).
+// Pure render-budget state machine for adaptive quality (issue #2592).
 //
 // It observes per-frame delta times and decides when the *effective* detail tier
 // should step down (frame pressure) or up (headroom), with hysteresis + a cooldown
@@ -20,7 +20,7 @@ export const QUALITY_TIERS = ['low', 'medium', 'high', 'ultra'];
 // before Auto quality could react. Unknown desktop capabilities remain High; a coarse
 // pointer or sub-8-core/sub-8GB device starts at Medium, while clearly constrained
 // hardware starts at Low. The live budget can still climb when it measures headroom.
-export function recommendOpenWorldStartTier({
+export function recommendStartTier({
   coarsePointer = false,
   hardwareConcurrency = null,
   deviceMemory = null,
@@ -104,7 +104,7 @@ export function createRenderBudget(startTier = 'high', now = 0) {
   };
 }
 
-// Re-arm the warm-up without touching the current tier — used when the OpenWorld frameloop
+// Re-arm the warm-up without touching the current tier — used when a frameloop
 // resumes after the tab was hidden, so the first sluggish post-resume frames (and any
 // pre-hide pressure/headroom streaks) don't drive a bogus decision.
 export function restartWarmup(state, now) {

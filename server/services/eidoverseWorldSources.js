@@ -22,7 +22,7 @@ import { getGoals } from './identity.js';
 import { getActivityCalendar, getVelocityMetrics } from './productivity.js';
 import { getBrainGraphOverview } from './brainGraph.js';
 import { getInboxLogCounts } from './brainStorage.js';
-import { getOpenWorldIntrospection } from './openWorldIntrospection.js';
+import { getDataIntrospection } from './dataIntrospection.js';
 import { fetchMyCurrentSprintTickets } from './jira.js';
 
 const safeText = (value, fallback = '', max = 160) => {
@@ -434,7 +434,7 @@ export async function collectEidoverseWorldSources({ signal } = {}) {
     getGoals().catch(() => null),
     getBrainGraphOverview({ limit: 100 }).catch(() => null),
     getInboxLogCounts().catch(() => null),
-    getOpenWorldIntrospection().catch(() => null),
+    getDataIntrospection().catch(() => null),
   ]), signal);
   const [apps, appConfig, agents, taskState, cosStatus, review, featuresState, peers, backupState, notifications, character, voiceConfig, memory, diskPercent, todayActivity, velocity, activityCalendar, goalsData, memoryGraph, inboxCounts, introspection] = reads;
 

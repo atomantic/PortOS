@@ -77,7 +77,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `genomeValidation.js` | Genome upload + search schemas. |
 | `identityValidation.js` | Identity section + chronotype + scheduling schemas. |
 | `meatspaceValidation.js` | Meatspace (location/health log) schemas. |
-| `mediaValidation.js` | Media-generation & local-model infra schemas (LoRA training, local-LLM/Ollama/LM Studio management, OpenWorld snapshots, media-collection bulk ops). |
+| `mediaValidation.js` | Media-generation & local-model infra schemas (LoRA training, local-LLM/Ollama/LM Studio management, media-collection bulk ops). |
 | `memoryValidation.js` | Memory record + retrieval schemas. |
 | `modelPersonalityValidation.js` | LLM personality self-profile test schemas: trait taxonomy (versioned), self-eval + twin-alignment response schemas, run/settings route inputs. |
 | `moodBoardValidation.js` | Mood board + board-item create/update schemas. |

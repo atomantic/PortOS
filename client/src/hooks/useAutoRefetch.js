@@ -27,7 +27,7 @@ import { useVisibilityEvent } from './useVisibilityEvent.js';
  * @param {boolean} [options.enabled=true] - when false, no interval and no fetch.
  * @param {boolean} [options.immediate=true] - when false, skip the on-mount
  *   fetch and wait `intervalMs` before the first fetch. Use when the caller
- *   already performs a one-shot fetch via another path (e.g. `useOpenWorldData.fetchAll`).
+ *   already performs a one-shot fetch via another path.
  * @param {(prev:any, next:any)=>boolean} [options.compare] - when provided,
  *   each fetch keeps the previous reference (skipping the re-render) if
  *   `compare(prev, next)` returns true. Only invoked when both `prev` and

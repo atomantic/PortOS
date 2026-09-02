@@ -87,7 +87,6 @@ import jiraRoutes from './routes/jira.js';
 import autobiographyRoutes from './routes/autobiography.js';
 import backupRoutes from './routes/backup.js';
 import legacyExportRoutes from './routes/legacyExport.js';
-import openWorldRoutes from './routes/openWorldRoutes.js';
 import eidoverseWorldRoutes from './routes/eidoverseWorldRoutes.js';
 import databaseRoutes from './routes/database.js';
 import localLlmRoutes from './routes/localLlm.js';
@@ -299,9 +298,6 @@ app.use('/api/autofix', autoFixMetricsRoutes);
 app.use('/api/backup', backupRoutes);
 app.use('/api/legacy-export', legacyExportRoutes);
 app.use('/api/eidoverse/world', eidoverseWorldRoutes);
-app.use('/api/openworld', openWorldRoutes);
-// Keep the pre-rename API prefix available to older clients and installed voice tools.
-app.use('/api/city', openWorldRoutes);
 app.use('/api/database', databaseRoutes);
 app.use('/api/uploads', uploadsRoutes);
 app.use('/api/image-clean', imageCleanRoutes);

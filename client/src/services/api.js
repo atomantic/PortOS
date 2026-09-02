@@ -84,7 +84,6 @@ export * from './apiImporter.js';
 export * from './apiStoryBuilder.js';
 export * from './apiVoice.js';
 export * from './apiAuth.js';
-export * from './apiOpenWorld.js';
 export * from './apiPrivacy.js';
 export * from './apiQuotaBurn.js';
 export * from './apiRapidReader.js';
