@@ -144,6 +144,52 @@ describe('finalizeRunRecord — authoritative timeout classification', () => {
     });
   });
 
+  // Exit 124 is not the only authoritative statement of cause: the local-LLM
+  // playground aborts its OWN wall-clock deadline and finalizes with exit 1 +
+  // "Timed out after Nms", carrying the partial generation as `output`. Scanning
+  // that generation matched nothing, so the run landed in UNKNOWN with the
+  // story's first line lifted as its error message — and autoFixer escalated a
+  // plain timeout as a Tier-4 provider failure titled with the story headline.
+  it('classifies a host-deadline timeout from the stated error, not the generation it interrupted', async () => {
+    setAIToolkit(fakeToolkit({ analyzeError }), { dataDir: '/tmp/test-runner' });
+
+    const metadata = await finalizeRunRecord({
+      runId: 'run-playground-timeout',
+      output: '# THE FIRST PAGE OF EVERYTHING\n\nThe light turned every twelve seconds…',
+      exitCode: 1,
+      success: false,
+      error: 'Timed out after 300000ms',
+      startTime: Date.now(),
+    });
+
+    expect(metadata).toMatchObject({
+      success: false,
+      error: 'Timed out after 300000ms',
+      errorCategory: ERROR_CATEGORIES.TIMEOUT,
+    });
+    expect(metadata.errorAnalysis.message).not.toContain('THE FIRST PAGE OF EVERYTHING');
+  });
+
+  // The other half of the same rule: a CLI/TUI run whose caller only knows the
+  // exit code still has to be classified from the provider banner in its output.
+  it('still scans the output when the caller states nothing more than the exit code', async () => {
+    setAIToolkit(fakeToolkit({ analyzeError }), { dataDir: '/tmp/test-runner' });
+
+    const metadata = await finalizeRunRecord({
+      runId: 'run-cli-banner',
+      output: "You've hit your usage limit. Upgrade to Pro to keep going.",
+      exitCode: 1,
+      success: false,
+      error: 'Process exited with code 1',
+      startTime: Date.now(),
+    });
+
+    expect(metadata).toMatchObject({
+      errorCategory: ERROR_CATEGORIES.USAGE_LIMIT,
+      errorAnalysis: expect.objectContaining({ category: ERROR_CATEGORIES.USAGE_LIMIT }),
+    });
+  });
+
   it('records cancellation without scanning output or firing the provider-failure hook', async () => {
     const errorDetection = { analyzeError: vi.fn() };
     const onRunFailed = vi.fn();

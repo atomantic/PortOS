@@ -269,9 +269,13 @@ export async function runLocalLlmTest({
     // investigation task (the run still has partial model output).
     const timedOut = timeoutController.signal.aborted;
     const canceled = clientSignal?.aborted === true && !timedOut;
+    // Every abort that isn't the client's is this function's own deadline — the
+    // same condition that names the run "Timed out", so the label and the
+    // reporting decision below can never drift apart.
+    const deadlineHit = !canceled && err?.name === 'AbortError';
     const error = canceled
       ? 'Local LLM test canceled by client'
-      : err?.name === 'AbortError' ? `Timed out after ${timeoutMs}ms` : err?.message || 'Local LLM test failed';
+      : deadlineHit ? `Timed out after ${timeoutMs}ms` : err?.message || 'Local LLM test failed';
     // A timeout/abort mid-stream still has tokens worth keeping — surface what the
     // model already streamed (attached to the error by streamChatCompletion) instead
     // of discarding it. Persist it on the failed run record too so /runs replay shows it.
@@ -286,6 +290,16 @@ export async function runLocalLlmTest({
         success: false,
         error,
         startTime: startedAt,
+        // A run cut off by THIS function's own `timeoutMs` is the playground's
+        // measurement decision, not evidence the provider is broken: the model
+        // was streaming (the partial text proves it), the deadline is a request
+        // option the caller chose, and the caller gets the error back inline —
+        // the playground pins its provider and refuses fallback, so there is no
+        // recovery for the host hook to drive either. Firing `onRunFailed` here
+        // only filed an investigation task for a big local model that needed
+        // more than the caller allowed. Cancellation already skips the hook the
+        // same way (via the `canceled` flag), for the same reason.
+        reportFailure: !deadlineHit,
         ...(canceled ? { extras: { canceled: true, completionReason: 'client-disconnect' } } : {}),
       }).catch(() => {});
     }

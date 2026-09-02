@@ -624,6 +624,10 @@ describe('AI Toolkit runner service', () => {
     // The failure is classified as a timeout, not the AbortError's UNKNOWN/HTTP 0.
     expect(metadata).toMatchObject({ success: false, errorCategory: 'timeout' });
     expect(metadata.error).toMatch(/timed out/i);
+    // Hosts read `errorAnalysis`, not `errorCategory` — with only the latter set,
+    // every API timeout reached the host's failure hook as an uncategorized
+    // failure and was escalated for investigation instead of read as a timeout.
+    expect(metadata.errorAnalysis).toMatchObject({ hasError: true, category: 'timeout' });
   });
 
   it('bounds a run whose provider-readiness hook never resolves (fetch never reached)', async () => {

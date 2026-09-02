@@ -147,8 +147,24 @@ export async function finalizeRunRecord({ runId, output, exitCode, success, erro
     // "billing", which used to turn a plain timeout into quota-exceeded and
     // bench a healthy provider for an hour. Other failures still analyze the
     // output because their provider banner is often the only useful signal.
+    const analyzeError = toolkit.services.errorDetection.analyzeError;
     const analysisInput = exitCode === 124 ? (error || 'Process timed out') : output;
-    const errorAnalysis = toolkit.services.errorDetection.analyzeError(analysisInput, exitCode);
+    let errorAnalysis = analyzeError(analysisInput, exitCode);
+    // When that scan lands on nothing, the caller's own `error` is the better
+    // evidence — and the run that proved it was a local-LLM playground timeout:
+    // the host aborted its OWN deadline, finalized with exit 1 + `Timed out after
+    // Nms`, and handed over the partial generation as `output`. Scanning a
+    // generation that carries no failure signal returns UNKNOWN with its first
+    // line lifted as the "error message", so a plain timeout reached the
+    // provider-failure hook as an uncategorized Tier-4 failure titled with the
+    // story's own headline. Consulted only as a fallback, so a scan that already
+    // found a real category (the CLI/TUI banner case) keeps it.
+    if (error && (!errorAnalysis.category || errorAnalysis.category === ERROR_CATEGORIES.UNKNOWN)) {
+      const statedAnalysis = analyzeError(error, exitCode);
+      if (statedAnalysis.category && statedAnalysis.category !== ERROR_CATEGORIES.UNKNOWN) {
+        errorAnalysis = statedAnalysis;
+      }
+    }
     metadata.error = metadata.error || errorAnalysis.message || `Process exited with code ${exitCode}`;
     metadata.errorCategory = errorAnalysis.category;
     metadata.errorAnalysis = errorAnalysis;

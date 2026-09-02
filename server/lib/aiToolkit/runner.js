@@ -632,6 +632,13 @@ export function createRunnerService(config = {}) {
           metadata.success = false;
           metadata.error = error;
           metadata.errorCategory = ERROR_CATEGORIES.TIMEOUT;
+          // Hosts classify a failure from `errorAnalysis`, not `errorCategory`
+          // (PortOS's onRunFailed hook reads only the former), so setting the
+          // category alone left every API-run timeout looking like an
+          // uncategorized failure downstream — escalated for investigation
+          // instead of recognized as the timeout it is. Build it from the same
+          // pattern table the other failure paths use so the two can't drift.
+          metadata.errorAnalysis = analyzeError(error);
           metadata.outputSize = Buffer.byteLength(output);
           await atomicWrite(metadataPath, metadata);
           safeSettle(() => hooks.onRunFailed?.(metadata, error, output), `Run ${runId} onRunFailed hook`);
