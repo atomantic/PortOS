@@ -13,6 +13,9 @@ const mock = vi.hoisted(() => ({
   setEidoverseWorldsOrigin: vi.fn(),
 }));
 
+const recordUserAction = vi.hoisted(() => vi.fn(async () => ({ id: 'evt' })));
+vi.mock('./userActions.js', () => ({ recordUserAction }));
+
 vi.mock('./settings.js', () => ({
   getSettings: vi.fn(async () => structuredClone(mock.settings)),
   getSettingsWithStatus: vi.fn(async () => ({ corrupt: mock.corrupt, settings: structuredClone(mock.settings) })),
@@ -262,5 +265,16 @@ describe('instance features', () => {
   it('rejects an unknown feature id', async () => {
     await expect(updateInstanceFeature('nope', true)).rejects.toMatchObject({ status: 404 });
     expect(await isInstanceFeatureEnabled('nope')).toBe(false);
+  });
+
+  it('records instance-feature.toggle with { id, enabled } and skips settings.update', async () => {
+    await updateInstanceFeature('post', false);
+    expect(mock.updateSettingsWith).toHaveBeenCalledWith(expect.any(Function), { actor: 'user', skipUserAction: true });
+    expect(recordUserAction).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'instance-feature.toggle',
+      actor: 'user',
+      target: 'post',
+      payload: { id: 'post', enabled: false },
+    }));
   });
 });

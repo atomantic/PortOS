@@ -6,6 +6,9 @@ import taskTypeRoutes from './taskTypes.js';
 // Only the apps service is mocked; SELF_IMPROVEMENT_TASK_TYPES (taskScheduleRegistry) and
 // parseCronToNextRun (eventScheduler) run for real, as do the sanitizeTaskMetadata
 // validators.
+const recordUserAction = vi.hoisted(() => vi.fn(async () => ({ id: 'evt' })));
+vi.mock('../../services/userActions.js', () => ({ recordUserAction }));
+
 vi.mock('../../services/apps.js', () => ({
   getAppById: vi.fn(),
   updateAppTaskTypeOverride: vi.fn(),
@@ -265,6 +268,15 @@ describe('Apps Task-Type Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);
+      expect(recordUserAction).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'cos.schedule.update',
+        target: 'feature-ideas',
+        payload: expect.objectContaining({
+          keysChanged: ['taskMetadata'],
+          changes: { taskMetadata: { changed: true } },
+          appId: 'app-001',
+        }),
+      }));
     });
 
     it('should accept taskMetadata: null to clear metadata', async () => {

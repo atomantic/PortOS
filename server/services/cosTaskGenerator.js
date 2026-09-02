@@ -87,6 +87,7 @@ import {
   resolveRepoSyncBlock,
   resolveSwarmBlock,
 } from './cosTaskPreStepBlocks.js';
+import { detectIdleLeftoverBranches, formatUserActionDetectorBlock } from './userActionDetectors.js';
 
 // Back-compat shim — these five were public here before the pre-step layer moved
 // to its own module, so a deep import of this file keeps resolving them.
@@ -1828,6 +1829,7 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
   // user-action-review: render the delivery posture the operator chose
   // (fileIssues on = tracker issues, off = queued CoS tasks).
   description = applyUserActionDeliveryMode(description, taskType, metadata);
+  description = await applyUserActionDetectorSection(description, taskType);
 
   const repoSync = await resolveRepoSyncBlock(null, taskType, metadata);
   if (repoSync.skip) return null;
@@ -2688,6 +2690,24 @@ export function applyUserActionDeliveryMode(promptTemplate, taskType, metadata) 
   if (prompt.includes('{userActionDelivery}')) return prompt.replace(/\{userActionDelivery\}/g, () => block);
   return `## Delivery mode\n\n${block}\n\n---\n\n${prompt}`;
 }
+
+/**
+ * Render leftover-branch detector findings into a user-action-review prompt.
+ * A customized stored prompt that dropped `{userActionDetectors}` still gets
+ * the section PREPENDED — otherwise the detector would be a silent no-op.
+ */
+export async function applyUserActionDetectorSection(promptTemplate, taskType) {
+  if (taskType !== 'user-action-review') return typeof promptTemplate === 'string' ? promptTemplate : '';
+  const prompt = typeof promptTemplate === 'string' ? promptTemplate : '';
+  const findings = await detectIdleLeftoverBranches().catch((error) => {
+    console.error(`❌ user-action-review detector interpolation failed: ${error.message}`);
+    return [];
+  });
+  const block = formatUserActionDetectorBlock(findings) || 'No leftover-branch findings.';
+  if (prompt.includes('{userActionDetectors}')) return prompt.replace(/\{userActionDetectors\}/g, () => block);
+  return `## Detectors\n\n${block}\n\n---\n\n${prompt}`;
+}
+
 
 const EMPTY_PROVIDER_PIN = Object.freeze({ providerId: null, model: null });
 

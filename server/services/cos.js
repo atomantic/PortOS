@@ -25,6 +25,7 @@ import { INTERVAL_TYPES, isReconcileDrainTaskType } from './taskScheduleConstant
 import { isRetryHeld, isStaleRetryHold } from '../lib/taskRetryHold.js';
 import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, clearStaleActiveAgents } from './appActivity.js';
 import { getActiveApps } from './apps.js';
+import { logCosScheduleUpdate } from './userActionScheduleLog.js';
 import { getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningInsights } from './taskLearning.js';
 import { schedule as scheduleEvent, cancel as cancelEvent } from './eventScheduler.js';
 import { generateProactiveTasks as generateMissionTasks } from './missions.js';
@@ -277,6 +278,15 @@ export async function updateConfig(updates) {
     }
     await saveState(state);
     return state.config;
+  });
+  const improveKeys = ['improvementEnabled', 'selfImprovementEnabled', 'appImprovementEnabled'];
+  const improvePatch = Object.fromEntries(
+    improveKeys.filter((key) => Object.prototype.hasOwnProperty.call(updates, key)).map((key) => [key, updates[key]]),
+  );
+  await logCosScheduleUpdate({
+    target: 'cos-config',
+    patch: improvePatch,
+    source: { service: 'cos', fn: 'updateConfig' },
   });
   cosEvents.emit('config:changed', config);
   if (persistentMindWakeCadenceChanged) {

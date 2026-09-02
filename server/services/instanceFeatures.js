@@ -11,6 +11,7 @@ import {
   setEidoverseWorldsOrigin,
 } from './eidoverse.js';
 import { getSettingsWithStatus, updateSettingsWith } from './settings.js';
+import { recordUserAction } from './userActions.js';
 
 // Runtime resolution for the feature registry in
 // server/lib/instanceFeatureRegistry.js. Instance features are local to one
@@ -213,6 +214,18 @@ export async function updateInstanceFeature(featureId, enabled) {
         [featureId]: { ...currentFeature, enabled },
       },
     };
+  }, { actor: 'user', skipUserAction: true });
+
+  const happenedAt = new Date().toISOString();
+  await recordUserAction({
+    type: 'instance-feature.toggle',
+    actor: 'user',
+    target: featureId,
+    summary: `Toggled instance feature ${featureId} ${enabled ? 'on' : 'off'}`,
+    payload: { id: featureId, enabled },
+    source: { service: 'instanceFeatures', fn: 'updateInstanceFeature' },
+    happenedAt,
+    dedupeKey: `instance-feature.toggle:${featureId}:${enabled}:${happenedAt}`,
   });
 
   const detected = await detectFeatureConfiguration();

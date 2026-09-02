@@ -51,6 +51,15 @@ vi.mock('./taskSchedule.js', async (importActual) => {
 // emitOnDemandEmpty's gh-health read spawns `gh api rate_limit` for real. Stub it
 // so the transient-verdict tests assert OUR branching, not the machine's gh.
 const ghHealth = vi.fn(async () => ({ status: 'ok', ok: true, detail: null, remedy: null }));
+const detectorMocks = vi.hoisted(() => ({
+  detectIdleLeftoverBranches: vi.fn(async () => []),
+  formatUserActionDetectorBlock: vi.fn(() => ''),
+}));
+vi.mock('./userActionDetectors.js', () => ({
+  detectIdleLeftoverBranches: (...args) => detectorMocks.detectIdleLeftoverBranches(...args),
+  formatUserActionDetectorBlock: (...args) => detectorMocks.formatUserActionDetectorBlock(...args),
+}));
+
 vi.mock('./github.js', async (importActual) => ({
   ...(await importActual()),
   checkGhHealth: (...a) => ghHealth(...a),
@@ -78,6 +87,7 @@ import {
   resolveTaskInputHook,
   resolveUserActionDeliveryBlock,
   applyUserActionDeliveryMode,
+  applyUserActionDetectorSection,
   buildSecurityScanPipelineOutput
 } from './cosTaskGenerator.js';
 import * as cosTaskGenerator from './cosTaskGenerator.js';
@@ -1309,6 +1319,17 @@ describe('resolveUserActionDeliveryBlock (#5595)', () => {
     expect(applyUserActionDeliveryMode('Prompt', 'security', {})).toBe('Prompt');
   });
 
+  it('applyUserActionDetectorSection substitutes the token, or PREPENDS on a customized prompt that dropped it', async () => {
+    detectorMocks.formatUserActionDetectorBlock.mockReturnValue('LEFTOVER-FINDING');
+    const withToken = await applyUserActionDetectorSection('Intro\n\n{userActionDetectors}\n\nOutro', 'user-action-review');
+    expect(withToken).toContain('LEFTOVER-FINDING');
+    expect(withToken).not.toContain('{userActionDetectors}');
+    const custom = await applyUserActionDetectorSection('My custom review prompt', 'user-action-review');
+    expect(custom).toMatch(/^## Detectors\n\nLEFTOVER-FINDING/s);
+    expect(custom).toContain('My custom review prompt');
+    expect(await applyUserActionDetectorSection('Prompt', 'security')).toBe('Prompt');
+  });
+
   it('the install-wide lane consumes the input hook and renders the delivery block', () => {
     // Source-pinned like the approval-stamp guard above: the empty-ledger skip
     // and the delivery posture must reach the "Run Now with no app" lane, which
@@ -1321,6 +1342,7 @@ describe('resolveUserActionDeliveryBlock (#5595)', () => {
     expect(selfBody).toContain('if (taskSchedule.INSTALL_WIDE_TASK_TYPES.has(taskType)) {');
     expect(selfBody).toContain("resolveTaskInputHook({ id: null, name: 'PortOS' }, taskType, taskSchedule)");
     expect(selfBody).toContain('applyUserActionDeliveryMode(description, taskType, metadata)');
+    expect(selfBody).toContain('applyUserActionDetectorSection(description, taskType)');
     // The action-output posture must be dispatch-stamped: noCodeOutput is not a
     // sanitizer-allowed key, so it cannot ride in from DEFAULT_TASK_INTERVALS —
     // without the stamp the completion contract tells a live-checkout agent to

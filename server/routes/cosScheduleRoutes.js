@@ -5,6 +5,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import * as taskSchedule from '../services/taskSchedule.js';
+import { logCosScheduleUpdate } from '../services/userActionScheduleLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination } from '../lib/validation.js';
 import { promptSourceSchema, PROMPT_SOURCES } from '../lib/cosValidation.js';
@@ -144,6 +145,11 @@ router.put('/schedule/task/:taskType', asyncHandler(async (req, res) => {
     if (settings.runAfter.length === 0) settings.runAfter = null;
   }
   const result = await taskSchedule.updateTaskInterval(taskType, settings);
+  await logCosScheduleUpdate({
+    target: taskType,
+    patch: settings,
+    source: { route: `${req.baseUrl}${req.route?.path ?? ''}`, method: req.method },
+  });
   res.json({ success: true, taskType, interval: result });
 }));
 

@@ -16,6 +16,7 @@
  */
 
 import { Router } from 'express';
+import { logCosScheduleUpdate } from '../../services/userActionScheduleLog.js';
 import * as appsService from '../../services/apps.js';
 import { PORTOS_APP_ID } from '../../services/apps.js';
 import { sanitizeTaskMetadata, ISSUE_AUTHOR_FILTERS } from '../../lib/validation.js';
@@ -47,6 +48,12 @@ router.put('/bulk-task-type/:taskType', asyncHandler(async (req, res) => {
   }
 
   const result = await appsService.bulkUpdateAppTaskTypeOverride(req.params.taskType, { enabled });
+  await logCosScheduleUpdate({
+    target: req.params.taskType,
+    patch: { enabled },
+    source: { route: `${req.baseUrl}${req.route?.path ?? ''}`, method: req.method },
+    extra: { bulk: true, appsUpdated: result.count },
+  });
   console.log(`📋 Bulk ${enabled ? 'enabled' : 'disabled'} task type ${req.params.taskType} for ${result.count} apps`);
   res.json({ success: true, taskType: req.params.taskType, enabled, appsUpdated: result.count });
 }));
@@ -189,6 +196,12 @@ router.put('/:id/task-types/all', loadApp, asyncHandler(async (req, res) => {
   if (!result) {
     throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
+  await logCosScheduleUpdate({
+    target: req.params.id,
+    patch: { enabled },
+    source: { route: `${req.baseUrl}${req.route?.path ?? ''}`, method: req.method },
+    extra: { all: true },
+  });
   console.log(`📋 ${enabled ? 'Enabled' : 'Disabled'} all task types for ${result.name}`);
   res.json({ success: true, appId: result.id, taskTypeOverrides: result.taskTypeOverrides || {} });
 }));
@@ -258,10 +271,17 @@ router.put('/:id/task-types/:taskType', asyncHandler(async (req, res) => {
     }
   }
 
-  const result = await appsService.updateAppTaskTypeOverride(req.params.id, req.params.taskType, { enabled, interval, intervalMs, providerId, model, taskMetadata: sanitizedTaskMetadata });
+  const override = { enabled, interval, intervalMs, providerId, model, taskMetadata: sanitizedTaskMetadata };
+  const result = await appsService.updateAppTaskTypeOverride(req.params.id, req.params.taskType, override);
   if (!result) {
     throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
+  await logCosScheduleUpdate({
+    target: req.params.taskType,
+    patch: override,
+    source: { route: `${req.baseUrl}${req.route?.path ?? ''}`, method: req.method },
+    extra: { appId: result.id },
+  });
 
   const action = typeof enabled === 'boolean' ? (enabled ? 'Enabled' : 'Disabled') : 'Updated interval for';
   console.log(`📋 ${action} task type ${req.params.taskType} for ${result.name}`);

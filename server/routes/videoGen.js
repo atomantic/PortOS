@@ -23,6 +23,7 @@ import {
   videoModelTermsGateId,
 } from '../lib/videoDisclosure.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
+import { recordUserAction } from '../services/userActions.js';
 import { checkPackages, isAllowedPython } from '../lib/pythonSetup.js';
 import {
   listVideoModels,
@@ -945,7 +946,19 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
     await cleanupMultipartTemp(uploads);
     failValidation(parsed);
   }
-  res.json(await submitVideoGenJob(parsed.data, uploads));
+  const queued = await submitVideoGenJob(parsed.data, uploads);
+  const happenedAt = new Date().toISOString();
+  await recordUserAction({
+    type: 'media.video.enqueue',
+    actor: 'user',
+    target: queued.jobId,
+    summary: 'enqueued video job',
+    payload: { jobId: queued.jobId },
+    source: { route: `${req.baseUrl}${req.route?.path ?? ''}`, method: req.method },
+    happenedAt,
+    dedupeKey: `media.video.enqueue:${queued.jobId}`,
+  });
+  res.json(queued);
 }));
 
 // Currently-running video job (if any) so the page can re-attach after a

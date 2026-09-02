@@ -10,6 +10,7 @@
  */
 
 import { listUserActions } from './userActions.js';
+import { detectIdleLeftoverBranches } from './userActionDetectors.js';
 
 export const USER_ACTION_REVIEW_LOOKBACK_DAYS = 7;
 
@@ -21,6 +22,12 @@ export async function buildTaskInput({ app } = {}) {
   const from = new Date(Date.now() - USER_ACTION_REVIEW_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
   // One row is enough to answer "is there anything to review?".
   const events = await listUserActions({ from, limit: 1 });
-  if (events.length === 0) return { skip: { reason: 'no-user-actions' } };
+  if (events.length === 0) {
+    const findings = await detectIdleLeftoverBranches().catch((error) => {
+      console.error(`❌ user-action-review leftover-branch detector failed: ${error.message}`);
+      return [];
+    });
+    if (findings.length === 0) return { skip: { reason: 'no-user-actions' } };
+  }
   return {};
 }

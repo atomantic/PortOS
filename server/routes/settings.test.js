@@ -5,6 +5,8 @@ import { request } from '../lib/testHelper.js';
 // In-memory settings store backing the mocked service.
 let store = {};
 
+vi.mock('../services/userActions.js', () => ({ recordUserAction: vi.fn(async () => ({ id: 'evt' })) }));
+
 vi.mock('../services/settings.js', () => ({
   getSettings: vi.fn(async () => ({ ...store })),
   getSettingsWithStatus: vi.fn(async () => ({ corrupt: false, settings: { ...store } })),

@@ -1,8 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ listUserActions: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  listUserActions: vi.fn(),
+  detectIdleLeftoverBranches: vi.fn(async () => []),
+}));
 vi.mock('./userActions.js', () => ({
   listUserActions: (...args) => mocks.listUserActions(...args),
+}));
+vi.mock('./userActionDetectors.js', () => ({
+  detectIdleLeftoverBranches: (...args) => mocks.detectIdleLeftoverBranches(...args),
 }));
 
 import { USER_ACTION_REVIEW_LOOKBACK_DAYS, buildTaskInput } from './userActionReviewHooks.js';
@@ -23,6 +29,14 @@ describe('user-action-review buildTaskInput hook', () => {
   it('dispatches normally (no prompt override) when events exist', async () => {
     mocks.listUserActions.mockResolvedValueOnce([{ id: 'evt-1', type: 'settings.update' }]);
     await expect(buildTaskInput({ app: { id: null, name: 'PortOS' } })).resolves.toEqual({});
+  });
+
+  it('dispatches when the ledger is empty but leftover-branch findings exist', async () => {
+    mocks.listUserActions.mockResolvedValueOnce([]);
+    mocks.detectIdleLeftoverBranches.mockResolvedValueOnce([{
+      appId: 'app-acme', leftoverCount: 1, lastUserReconcileAt: null, agentsIdle: true,
+    }]);
+    await expect(buildTaskInput()).resolves.toEqual({});
   });
 
   it('skips any per-app dispatch — the review is install-wide only', async () => {

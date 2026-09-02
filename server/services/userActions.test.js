@@ -85,6 +85,15 @@ describe('recordUserAction', () => {
     await expect(recordUserAction(action({ actor: 'schedule' }))).resolves.not.toBeNull();
   });
 
+  it('accepts the phase-3 types (#5596)', async () => {
+    for (const type of [
+      'media.image.enqueue', 'media.video.enqueue', 'brain.capture',
+      'instance-feature.toggle', 'cos.schedule.update',
+    ]) {
+      await expect(recordUserAction(action({ type, dedupeKey: type }))).resolves.not.toBeNull();
+    }
+  });
+
   it('refuses an action with no dedupe key', async () => {
     await expect(recordUserAction(action({ dedupeKey: '  ' }))).rejects.toThrow(/missing a dedupeKey/);
   });

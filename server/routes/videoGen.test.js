@@ -212,6 +212,9 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   listJobs: vi.fn(() => []),
 }));
 
+const recordUserAction = vi.hoisted(() => vi.fn(async () => ({ id: 'evt' })));
+vi.mock('../services/userActions.js', () => ({ recordUserAction }));
+
 // Pending file metadata for tests that need to simulate an upload. Tests set
 // this via `setPendingUpload({ fieldname, ... })` before issuing the request;
 // the mocked uploadFields middleware reads it off the holder, attaches it as
@@ -993,6 +996,13 @@ describe('videoGen routes', () => {
           seed: undefined,
         }),
       }));
+      expect(recordUserAction).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'media.video.enqueue',
+        target: 'mock-video-job',
+        summary: 'enqueued video job',
+        payload: { jobId: 'mock-video-job' },
+      }));
+      expect(JSON.stringify(recordUserAction.mock.calls[0][0])).not.toContain('a cat');
     });
 
     it('translates the universal loraFilenames/loraScales contract into internal { filename, scale } params', async () => {

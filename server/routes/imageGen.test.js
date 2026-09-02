@@ -103,6 +103,9 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   listJobs: vi.fn(() => []),
 }));
 
+const recordUserAction = vi.hoisted(() => vi.fn(async () => ({ id: 'evt' })));
+vi.mock('../services/userActions.js', () => ({ recordUserAction }));
+
 // The /generate route resolves an optional universeRun collection target via
 // findOrCreateUniverseCollection. Mock it so the universeRun test asserts the
 // tag-resolution wiring without touching real collection storage.
@@ -419,6 +422,13 @@ describe('Image Gen Routes', () => {
       // Synchronous generateImage MUST NOT be called in local mode — the
       // queue takes ownership of the job lifecycle.
       expect(imageGen.generateImage).not.toHaveBeenCalled();
+      expect(recordUserAction).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'media.image.enqueue',
+        target: 'queued-job-001',
+        summary: 'enqueued image job',
+        payload: { jobId: 'queued-job-001' },
+      }));
+      expect(JSON.stringify(recordUserAction.mock.calls[0][0])).not.toContain('a fox in a forest');
     });
 
     it('local mode maps cfgScale to guidance before enqueueing', async () => {

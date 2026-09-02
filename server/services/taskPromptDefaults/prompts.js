@@ -2041,6 +2041,12 @@ PortOS keeps a machine-local ledger of what the operator actually did in the app
 
 {userActionDelivery}
 
+## Detectors
+
+{userActionDetectors}
+
+Leftover-branch findings (if any) are READ-ONLY. They never run reconcile and never trigger a scheduled task. If leftover local branches are reported while agents are idle, propose enabling a cadence or queuing a branch-reconcile run — proposed, never enacted.
+
 ## Read the ledger
 
 Query the last 7 days of events, then group them by \`type\` + \`target\` (for schedule triggers the target is the task type; for tasks/agents it is the record id):
@@ -2048,7 +2054,7 @@ Query the last 7 days of events, then group them by \`type\` + \`target\` (for s
 - If you can call PortOS semantic tools, use \`user_actions_query\` (readPortos grant) with a \`from\` timestamp 7 days back. Results are capped at 100 events per call and carry no event ids; when a result says \`truncated: true\`, narrow the window (set \`to\` just BELOW the oldest \`happenedAt\` you already have — the bound is inclusive, so reusing it verbatim repeats that event — or filter by \`type\`) and query again.
 - Otherwise call the local PortOS HTTP API from this machine: \`GET ${PORTOS_API_URL}/api/user-actions?from=<ISO-7-days-ago>&limit=100\`. Filters: \`type\`/\`types\`, \`actor\`, \`from\`/\`to\`, \`limit\`, \`offset\`.
 
-**If the query returns no events, stop immediately**: report "nothing to review" in one line and make no further LLM tool calls, no proposals, and no filed items.
+**If the query returns no events AND the detectors section is empty, stop immediately**: report "nothing to review" in one line and make no further LLM tool calls, no proposals, and no filed items. If detectors reported leftover idle branches, continue and propose from that evidence even when the ledger is empty.
 
 ## What counts as automatable tedium
 
@@ -2058,6 +2064,7 @@ Look specifically for, in priority order:
 2. **Repeated similar CoS tasks** — several \`cos.task.create\` events whose prompts/settings look alike. Propose a scheduled task, a saved automation, or one recurring CoS task that replaces the hand-queued ones.
 3. **Negative feedback clusters** — \`cos.agent.feedback\` events with low ratings concentrated on one task type, provider, or model. Propose the configuration change worth trying (different model/effort, a prompt fix), as a proposal the operator applies.
 4. **Settings churn** — repeated \`settings.update\` events touching the same key paths. Propose whatever would remove the need to keep flipping them.
+5. **Leftover idle branches** — the leftover-branch detector reports local branches with no live owner while agents are idle. Propose a \`branch-reconcile\` run or enabling its cadence. Do not run it yourself.
 
 ## Propose (1–5 proposals, evidence-grounded)
 

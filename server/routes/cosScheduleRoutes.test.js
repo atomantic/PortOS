@@ -3,6 +3,9 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import scheduleRoutes from './cosScheduleRoutes.js';
 
+const recordUserAction = vi.hoisted(() => vi.fn(async () => ({ id: 'evt' })));
+vi.mock('../services/userActions.js', () => ({ recordUserAction }));
+
 vi.mock('../services/taskSchedule.js', () => ({
   getScheduleStatus: vi.fn(),
   getUpcomingTasks: vi.fn(),
@@ -141,6 +144,31 @@ describe('CoS Schedule Routes', () => {
       expect(taskSchedule.updateTaskInterval).toHaveBeenCalledWith('review', expect.objectContaining({
         runAfter: ['deploy']
       }));
+      expect(recordUserAction).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'cos.schedule.update',
+        target: 'review',
+        payload: expect.objectContaining({
+          keysChanged: ['runAfter'],
+          changes: { runAfter: { changed: true } },
+        }),
+      }));
+    });
+
+    it('records a long prompt as { changed: true }, never the body', async () => {
+      taskSchedule.updateTaskInterval.mockResolvedValue({ type: 'daily' });
+      const prompt = 'x'.repeat(200);
+      const response = await request(app)
+        .put('/api/cos/schedule/task/review')
+        .send({ prompt });
+      expect(response.status).toBe(200);
+      expect(recordUserAction).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'cos.schedule.update',
+        payload: expect.objectContaining({
+          keysChanged: ['prompt'],
+          changes: { prompt: { changed: true } },
+        }),
+      }));
+      expect(JSON.stringify(recordUserAction.mock.calls.at(-1)[0])).not.toContain(prompt);
     });
 
     it('should set runAfter to null when only self-reference remains', async () => {

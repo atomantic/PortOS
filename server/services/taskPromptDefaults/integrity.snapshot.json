@@ -43,7 +43,7 @@
     "test-coverage": "0d8359170529da12cd63356610b2e220",
     "typing": "1f2758ce0bb62d789a21aec241549531",
     "ui-bugs": "def9ad96bd74ab397233f234d79a1974",
-    "user-action-review": "945a716d446d26a03e2805d28bd1ae16",
+    "user-action-review": "1a083430e43f60cdd586cfffbdebc583",
     "ux": "e03d03fc7c16faa5b5db93be2896b9ad"
   },
   "PROMPT_VERSIONS": {
@@ -86,7 +86,7 @@
     "test-coverage": 2,
     "typing": 2,
     "ui-bugs": 2,
-    "user-action-review": 1,
+    "user-action-review": 2,
     "ux": 1
   },
   "REFERENCE_WATCH_AUDITED_VERSION": 3,
@@ -284,6 +284,9 @@
     ],
     "ui-bugs": [
       "01d2a7e034713195f33071f2c71a3c99"
+    ],
+    "user-action-review": [
+      "945a716d446d26a03e2805d28bd1ae16"
     ]
   }
 }

@@ -329,13 +329,14 @@ describe('taskSchedule', () => {
   })
 
   describe('user-action-review (operator-ledger automation proposals)', () => {
-    it('is registered install-wide with an on-demand + enabled default and a v1 prompt', () => {
+    it('is registered install-wide with an on-demand + enabled default and a v2 prompt', () => {
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('user-action-review');
       expect(INSTALL_WIDE_TASK_TYPES.has('user-action-review')).toBe(true);
       expect(TASK_TYPE_DESCRIPTIONS['user-action-review']).toContain('propose automations');
       expect(DEFAULT_TASK_INTERVALS['user-action-review']).toMatchObject({ type: INTERVAL_TYPES.ON_DEMAND, enabled: true });
-      expect(PROMPT_VERSIONS['user-action-review']).toBe(1);
+      expect(PROMPT_VERSIONS['user-action-review']).toBe(2);
       expect(DEFAULT_TASK_PROMPTS['user-action-review']).toContain('{userActionDelivery}');
+      expect(DEFAULT_TASK_PROMPTS['user-action-review']).toContain('{userActionDetectors}');
       // The prompt proposes; it must never instruct the agent to enact.
       expect(DEFAULT_TASK_PROMPTS['user-action-review']).toContain('NEVER change settings');
     });
