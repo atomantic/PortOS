@@ -105,6 +105,39 @@ When `isFork` is true, `UpdateTab` replaces the single "Update Now" button with 
 
 Keep these three behaviors distinct. Collapsing them strips the user's agency over what touches their GitHub fork.
 
+## Running a customized fork
+
+The `UpdateTab` fork panel states this in short form. The full loop is here, because that panel is
+the only other place it exists and it renders only when `isFork` is true.
+
+Keep `main` a clean mirror of upstream and never commit to it — that is what keeps `gh repo sync`
+fast-forward and avoids 409 `FORK_DIVERGED`. Private changes live on their own branch, rebased
+onto `main` after each sync. Anything shareable goes upstream as a PR instead, so you carry less
+forward each time.
+
+**PM2 boots whatever is checked out**, so the branch you are on is the code that runs. Staying on
+your private branch is what makes your customizations live; there is no separate step.
+
+### After rebasing, reinstall and rebuild
+
+`update.sh` always finishes on `main`, so it cannot do this half for you:
+
+```bash
+git checkout main && ./update.sh
+git checkout <your-branch> && git rebase main
+for d in . client server autofixer; do (cd "$d" && npm install); done
+npm run build && npm run pm2:restart
+```
+
+Order matters. `npm install` rewrites `client/package.json`, so building before installing leaves
+the build stale again.
+
+**A clean rebase makes the install look broken.** Checking out a branch based on an older `main`
+rewinds the working tree, and the rebase rolls it forward, so every touched file gets a new mtime.
+`getInstallState()` (`server/services/installState.js`) compares mtimes, so it reports a stale
+build and stale deps in all four workspaces even though no dependency changed and no build input
+was edited. The reinstall and rebuild above clear it.
+
 ## Image-bearing Persistent Mind work must drain before source transitions
 
 The managed update route refuses to restart into a different source revision while a queued Persistent Mind message or active turn carries image references. `GET /api/update/status` reports the privacy-safe `persistentMindImages` preflight (`safe`, queued count, and active-turn boolean), and `POST /api/update/execute` re-checks it before and after acquiring the update lock.
