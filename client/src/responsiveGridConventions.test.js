@@ -12,10 +12,17 @@
  *
  * The rule: a `className` string holding a bare `grid-cols-N` for N >= 4 must
  * also hold at least one *prefixed* `…:grid-cols-*` in the same string, so the
- * wide layout is something the viewport opts into rather than the phone default.
- * Any variant prefix counts — a media breakpoint (`sm:`), a container query
- * (`@3xl:`), or a custom variant — because each of them makes the column count
- * conditional on available width.
+ * column count is conditional on available width instead of frozen at every
+ * viewport. Any variant prefix counts — a media breakpoint (`sm:`), a container
+ * query (`@3xl:`), or a custom variant.
+ *
+ * Deliberately NOT "the unprefixed default must be <= 3 columns": a grid of
+ * square thumbnails or heatmap cells is legitimately four to six wide on a
+ * phone (`grid-cols-4 sm:grid-cols-8 lg:grid-cols-12` over sprite frames,
+ * `grid-cols-6 sm:grid-cols-12` over a 24-hour heatmap) because the cell holds
+ * no text to wrap. The defect this guard exists for is the *frozen* count — a
+ * grid that never learned the viewport changes — and the author who writes a
+ * breakpoint at all has demonstrably thought about the narrow case.
  *
  * Scoped to git-tracked non-test sources under `client/src` so an untracked
  * scratch file can't fail the suite. Comments are masked first: a doc comment
@@ -95,11 +102,21 @@ function maskComments(source) {
 }
 
 const STRING_LITERAL = /(['"`])((?:\\.|(?!\1)[\s\S])*?)\1/g;
-// A column count that is the phone default: no `variant:` in front of it.
-const BARE_WIDE_GRID = /(?:^|\s)grid-cols-(\d+)(?=\s|$)/;
+// A column count that is the phone default: no `variant:` in front of it. Global,
+// because a single class string can hold more than one bare token and the widest
+// one is the one that decides whether the layout is legible.
+const BARE_GRID = /(?:^|\s)grid-cols-(\d+)(?=\s|$)/g;
 // Any variant prefix — `sm:`, `lg:`, `@3xl:`, `roomy-viewport:` — makes it conditional.
 const PREFIXED_GRID = /[\w@[\]().\-/]+:grid-cols-/;
 const MIN_WIDE_COLUMNS = 4;
+
+function widestBareColumnCount(value) {
+  BARE_GRID.lastIndex = 0;
+  let widest = 0;
+  let bare;
+  while ((bare = BARE_GRID.exec(value))) widest = Math.max(widest, Number(bare[1]));
+  return widest;
+}
 
 function lineOf(source, index) {
   return source.slice(0, index).split('\n').length;
@@ -112,8 +129,7 @@ function violationsIn(rawSource, file) {
   STRING_LITERAL.lastIndex = 0;
   while ((match = STRING_LITERAL.exec(source))) {
     const value = match[2];
-    const bare = value.match(BARE_WIDE_GRID);
-    if (!bare || Number(bare[1]) < MIN_WIDE_COLUMNS) continue;
+    if (widestBareColumnCount(value) < MIN_WIDE_COLUMNS) continue;
     if (PREFIXED_GRID.test(value)) continue;
     found.push(`${file}:${lineOf(source, match.index)} — "${value.trim()}"`);
   }
@@ -136,6 +152,10 @@ describe('responsive grid conventions', () => {
     const flagged = (markup) => violationsIn(`<div className="${markup}" />`, 'probe.jsx').length;
     expect(flagged('grid grid-cols-4 gap-4 mb-6')).toBe(1);
     expect(flagged('grid grid-cols-5 gap-2')).toBe(1);
+    // A widened gap is not a column breakpoint — it leaves four columns frozen.
+    expect(flagged('grid grid-cols-4 gap-4 sm:gap-6 text-center')).toBe(1);
+    // The widest bare token decides, not the first one seen.
+    expect(flagged('grid grid-cols-2 gap-2 grid-cols-6')).toBe(1);
     expect(flagged('grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4')).toBe(0);
     expect(flagged('grid grid-cols-4 sm:grid-cols-8 lg:grid-cols-12 gap-1.5')).toBe(0);
     expect(flagged('grid grid-cols-2 gap-3 @3xl:grid-cols-4')).toBe(0);
