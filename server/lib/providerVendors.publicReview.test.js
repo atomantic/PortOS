@@ -44,6 +44,7 @@ describe('public-review provider profile', () => {
     expect(config.stdinMode).toBe('prompt');
     expect(config.args).toContain('--permission-mode');
     expect(config.args).toContain('plan');
+    expect(config.args).toContain('--restricted');
     expect(config.args).toContain('--tools');
     expect(config.args[config.args.indexOf('--tools') + 1]).toBe('');
     expect(config.args).toContain('--strict-mcp-config');
@@ -53,6 +54,7 @@ describe('public-review provider profile', () => {
     expect(config.args).toContain('--effort');
     expect(config.args).not.toContain('--dangerously-skip-permissions');
     expect(config.args).not.toContain('Bash');
+    expect(config.args).not.toContain('--disallowedTools');
   });
 
   it('fails closed instead of assigning the profile to cloud or unknown providers', () => {

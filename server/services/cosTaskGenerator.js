@@ -2261,7 +2261,7 @@ async function runPrReviewerSecurityPreflight(taskType, app, metadata) {
       stage: 0,
       name: securityStage.name,
       agentId: null,
-      success: true,
+      success: scan.ok,
       completedAt: new Date().toISOString(),
       summary: {
         guardId: scan.guardId || MODEL_ABUSE_GUARD_ID,

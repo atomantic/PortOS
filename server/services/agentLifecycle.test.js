@@ -303,6 +303,16 @@ describe('agentLifecycle — guard wiring', () => {
     // The synchronous mirror, not a re-implemented disk read.
     expect(AGENT_LIFECYCLE_SRC).toMatch(/import \{ isUpdateInProgress \} from '\.\/updateChecker\.js'/);
   });
+
+  it('fails closed before spawning when public-review security screening is incomplete', () => {
+    expect(AGENT_LIFECYCLE_SRC).toContain('public-review-security-scan-incomplete');
+    expect(AGENT_LIFECYCLE_SRC).toContain('public-review-no-cleared-prs');
+    expect(AGENT_LIFECYCLE_SRC).toMatch(/if \(scanBlock\) \{[\s\S]*?status: 'blocked'/);
+    expect(AGENT_LIFECYCLE_SRC).toMatch(/expected fail-closed safety outcome/);
+    const gateStart = AGENT_LIFECYCLE_SRC.indexOf('const scanBlock = publicReviewScanBlock(task)');
+    const gateEnd = AGENT_LIFECYCLE_SRC.indexOf('if (publicReview && !supportsPublicReviewProvider', gateStart);
+    expect(AGENT_LIFECYCLE_SRC.slice(gateStart, gateEnd)).not.toContain("cosEvents.emit('agent:error'");
+  });
 });
 
 // ─── Coverage guard for the self-update spawn gate (issue #4124) ────────────

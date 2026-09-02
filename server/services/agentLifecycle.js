@@ -94,6 +94,24 @@ import { handleOrphanedTask } from './agentManagement.js';
 
 const ROOT_DIR = PATHS.root;
 const AGENTS_DIR = PATHS.cosAgents;
+const PUBLIC_REVIEW_SCAN_STATUSES = new Set(['passed', 'findings']);
+
+function publicReviewScanBlock(task) {
+  const scan = task?.metadata?.pipeline?.securityScan;
+  const hasClearedPr = Number.isInteger(scan?.safePrCount) && scan.safePrCount > 0;
+  if (scan?.completed === true && PUBLIC_REVIEW_SCAN_STATUSES.has(scan.status) && hasClearedPr) return null;
+
+  if (scan?.completed === true && scan.status === 'findings' && !hasClearedPr) {
+    return {
+      reason: 'Public review withheld: the model-abuse scan cleared no pull requests',
+      category: 'public-review-no-cleared-prs',
+    };
+  }
+  return {
+    reason: `Public review withheld: the model-abuse scan is incomplete${scan?.code ? ` (${scan.code})` : ''}`,
+    category: 'public-review-security-scan-incomplete',
+  };
+}
 
 
 
@@ -376,6 +394,26 @@ async function runAgentSpawn(task) {
     const { provider, selectedModel, modelSelection } = resolution;
     const isTui = isTuiProvider(provider);
     const publicReview = task.metadata?.executionProfile === PUBLIC_REVIEW_EXECUTION_PROFILE;
+    if (publicReview) {
+      const scanBlock = publicReviewScanBlock(task);
+      if (scanBlock) {
+        await updateTask(task.id, {
+          status: 'blocked',
+          metadata: {
+            ...task.metadata,
+            blockedReason: scanBlock.reason,
+            blockedCategory: scanBlock.category,
+            blockedAt: new Date().toISOString(),
+          },
+        }, task.taskType || 'user').catch(() => {});
+        await cleanupOnError(scanBlock.reason);
+        // This is an expected fail-closed safety outcome, not an agent/provider
+        // failure. Do not emit agent:error, which would create an automatic
+        // investigator and potentially retry the same unvalidated input.
+        emitLog('warn', `Public review withheld for task ${task.id}: ${scanBlock.category}`, { taskId: task.id });
+        return null;
+      }
+    }
     if (publicReview && !supportsPublicReviewProvider(provider, { tui: isTui })) {
       const reason = `Provider '${provider?.id || provider?.command || 'unknown'}' has no enforced read-only public-content review mode`;
       await updateTask(task.id, {

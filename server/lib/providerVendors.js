@@ -320,11 +320,12 @@ function claudeSpawnArgs(provider, { effectiveModel, effort, systemPromptFile, s
 
 const CLAUDE_PUBLIC_REVIEW_ARGS = [
   '--permission-mode', 'plan',
-  // The code-review model gets the cleared PR material in its prompt. No
-  // tool call is needed, so an accidental model/tool interaction cannot read
-  // another file, invoke a shell, or reach the network.
+  // The code-review model gets the cleared PR material in its prompt. Keep
+  // both controls: `--restricted` removes the command/network-capable built-in
+  // tools, while the explicit empty set prevents Claude Code from advertising
+  // any tool schema to a local model that does not support tool calls.
+  '--restricted',
   '--tools', '',
-  '--disallowedTools', 'Bash,Read,Glob,Grep,WebFetch,WebSearch,Write,Edit,NotebookEdit,Task,Skill,TodoWrite',
   '--strict-mcp-config',
   '--mcp-config', '{"mcpServers":{}}',
   '--no-chrome',
