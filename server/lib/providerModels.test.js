@@ -27,6 +27,7 @@ import {
   CODEX_EFFORT_LEVELS,
   ANTIGRAVITY_EFFORT_LEVELS,
   CURSOR_EFFORT_LEVELS,
+  GROK_EFFORT_LEVELS,
   EFFORT_LEVELS,
   isAntigravityProvider,
   isCursorProvider,
@@ -235,6 +236,16 @@ describe('providerModels', () => {
       expect(effortLevelsForProvider({ id: 'claude-ollama', command: '/usr/local/bin/claude' })).toBe(CLAUDE_EFFORT_LEVELS);
     });
 
+    it('returns grok levels for grok CLI/TUI ids and the grok command, but not the API provider', () => {
+      expect(effortLevelsForProvider({ id: 'grok-cli', command: 'grok' })).toBe(GROK_EFFORT_LEVELS);
+      expect(effortLevelsForProvider({ id: 'grok-tui' })).toBe(GROK_EFFORT_LEVELS);
+      expect(effortLevelsForProvider({ id: 'custom', command: '/Users/x/.grok/bin/grok' })).toBe(GROK_EFFORT_LEVELS);
+      expect(effortLevelsForProvider({ id: 'custom', command: 'Grok.exe' })).toBe(GROK_EFFORT_LEVELS);
+      // The bare `grok` id is the HTTP API provider — no CLI, so no flag to
+      // carry a level, and offering the picker one would be a lie.
+      expect(effortLevelsForProvider({ id: 'grok', type: 'api' })).toBeNull();
+    });
+
     it('returns the narrower agy ladder for antigravity ids and the agy command', () => {
       expect(effortLevelsForProvider({ id: 'antigravity-cli', command: 'agy' })).toBe(ANTIGRAVITY_EFFORT_LEVELS);
       expect(effortLevelsForProvider({ id: 'antigravity-tui' })).toBe(ANTIGRAVITY_EFFORT_LEVELS);
@@ -256,7 +267,8 @@ describe('providerModels', () => {
     });
 
     it('returns null for providers without an effort control (and does NOT default blank commands to claude)', () => {
-      expect(effortLevelsForProvider({ id: 'grok-cli', command: 'grok' })).toBeNull();
+      expect(effortLevelsForProvider({ id: 'kimi-cli', command: 'kimi' })).toBeNull();
+      expect(effortLevelsForProvider({ id: 'opencode', command: 'opencode' })).toBeNull();
       expect(effortLevelsForProvider({ id: 'ollama' })).toBeNull();
       expect(effortLevelsForProvider(null)).toBeNull();
     });
@@ -379,6 +391,15 @@ describe('providerModels', () => {
   });
 
   describe('buildEffortArgs', () => {
+    it('emits grok’s --effort alias, and suppresses it when --reasoning-effort is baked in', () => {
+      const grok = { id: 'grok-cli', command: 'grok' };
+      expect(buildEffortArgs('xhigh', grok, [])).toEqual(['--effort', 'xhigh']);
+      // A user's own long-form pin wins. Grok's parser takes the LAST occurrence,
+      // so appending a second flag here would silently override their choice.
+      expect(buildEffortArgs('low', grok, ['--reasoning-effort', 'high'])).toEqual([]);
+      expect(buildEffortArgs('low', grok, ['--reasoning-effort=high'])).toEqual([]);
+    });
+
     it('emits --effort for claude and a -c config pair for codex', () => {
       expect(buildEffortArgs('high', { id: 'claude-code', command: 'claude' })).toEqual(['--effort', 'high']);
       expect(buildEffortArgs('xhigh', { id: 'codex', command: 'codex' })).toEqual(['-c', 'model_reasoning_effort=xhigh']);
@@ -401,7 +422,7 @@ describe('providerModels', () => {
 
     it('returns [] when unset, unsupported, or already baked into existing args', () => {
       expect(buildEffortArgs(null, { id: 'codex', command: 'codex' })).toEqual([]);
-      expect(buildEffortArgs('high', { id: 'grok-cli', command: 'grok' })).toEqual([]);
+      expect(buildEffortArgs('high', { id: 'kimi-cli', command: 'kimi' })).toEqual([]);
       expect(buildEffortArgs('max', { id: 'claude-code', command: 'claude' }, ['--effort', 'low'])).toEqual([]);
     });
 
@@ -483,6 +504,18 @@ describe('providerModels', () => {
   });
 
   describe('resolveCliEffort', () => {
+    it('clamps an out-of-ladder effort down to grok’s xhigh ceiling', () => {
+      const grok = { id: 'grok-cli', command: 'grok' };
+      // grok's ladder stops at xhigh — a level saved against claude/codex must
+      // clamp rather than vanish, the same contract agy's ladder has.
+      expect(resolveCliEffort('max', grok)).toBe('xhigh');
+      expect(resolveCliEffort('ultra', grok)).toBe('xhigh');
+      expect(resolveCliEffort('xhigh', grok)).toBe('xhigh');
+      expect(resolveCliEffort('low', grok)).toBe('low');
+      // Nothing sits below `minimal`, so it lands on the weakest level.
+      expect(resolveCliEffort('minimal', grok)).toBe('low');
+    });
+
     it('passes a supported level through for claude and codex', () => {
       expect(resolveCliEffort('high', { id: 'claude-code', command: 'claude' })).toBe('high');
       expect(resolveCliEffort('minimal', { id: 'codex', command: 'codex' })).toBe('minimal');
@@ -512,7 +545,7 @@ describe('providerModels', () => {
       expect(resolveCliEffort('', { id: 'codex', command: 'codex' })).toBeNull();
       expect(resolveCliEffort('bogus', { id: 'codex', command: 'codex' })).toBeNull();
       expect(resolveCliEffort('bogus', { id: 'antigravity-cli', command: 'agy' })).toBeNull();
-      expect(resolveCliEffort('high', { id: 'grok-cli', command: 'grok' })).toBeNull();
+      expect(resolveCliEffort('high', { id: 'kimi-cli', command: 'kimi' })).toBeNull();
     });
 
     it('clamps to the tiers the selected agy model has, so agy never sees an invalid pair', () => {
@@ -545,6 +578,15 @@ describe('providerModels', () => {
     it('detects a baked --effort pin in both arg shapes', () => {
       expect(hasEffortFlag(['--effort', 'high'])).toBe(true);
       expect(hasEffortFlag(['--effort=high'])).toBe(true);
+    });
+
+    it('detects grok’s --reasoning-effort long form in both arg shapes', () => {
+      expect(hasEffortFlag(['--reasoning-effort', 'high'])).toBe(true);
+      expect(hasEffortFlag(['--reasoning-effort=high'])).toBe(true);
+      // Same dangling/valueless rules as the short form.
+      expect(hasEffortFlag(['--reasoning-effort'])).toBe(false);
+      expect(hasEffortFlag(['--reasoning-effort', '--verbose'])).toBe(false);
+      expect(hasEffortFlag(['--reasoning-effort='])).toBe(false);
     });
 
     it('detects a baked codex model_reasoning_effort config pair', () => {

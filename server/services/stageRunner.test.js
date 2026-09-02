@@ -841,7 +841,8 @@ describe('stageRunner — effort threading into the run (#3641)', () => {
     const effort = resolveEffortHint(null, { effortDefault: 'high' });
     expect(buildEffortArgs(effort, { id: 'codex', command: 'codex' })).toEqual(['-c', 'model_reasoning_effort=high']);
     expect(buildEffortArgs(effort, { id: 'claude-cli', command: 'claude' })).toEqual(['--effort', 'high']);
-    expect(buildEffortArgs(effort, { id: 'grok-cli', command: 'grok' })).toEqual([]);
+    expect(buildEffortArgs(effort, { id: 'grok-cli', command: 'grok' })).toEqual(['--effort', 'high']);
+    expect(buildEffortArgs(effort, { id: 'kimi-cli', command: 'kimi' })).toEqual([]);
     expect(buildEffortArgs(effort, { id: 'openai-api', type: 'api' })).toEqual([]);
   });
 });

@@ -104,6 +104,12 @@ export const OPENCODE_LOCAL_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'hig
 // identical is the point, since the same pin has to survive a round trip
 // through slashdo.
 export const CURSOR_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
+// Grok Build CLI. `--reasoning-effort <EFFORT>` (aliased `--effort`, which is what
+// `buildEffortArgs` emits). The ladder is grok's own, read off its rejection
+// message rather than guessed: `grok --reasoning-effort bogus` answers
+// `use one of: xhigh, high, medium, low` — so there is no `max`/`minimal` here,
+// and `resolveCliEffort` clamps a stored `max`/`ultra` down to `xhigh`.
+export const GROK_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh']);
 
 /** Union of every accepted effort value across effort-capable CLIs, low→high. */
 export const EFFORT_LEVELS = Object.freeze([...new Set([
@@ -216,6 +222,22 @@ export function antigravityModelEffortLevels(model, models) {
 export function isCodexProvider(provider) {
   const id = String(provider?.id || '').toLowerCase();
   return id === 'codex' || id === 'codex-tui' || commandBasename(provider?.command) === 'codex';
+}
+
+/**
+ * True when a provider is Grok-Build-flavored — the shipped `grok-cli`/`grok-tui`
+ * ids or any provider whose launch command basename is `grok`. Same posture as
+ * `isCodexProvider`, and deliberately defined here rather than imported from
+ * `grok.js`: that module imports THIS one, so importing back would cycle.
+ *
+ * The bare `grok` id is the HTTP API provider, which has no CLI to pass a flag
+ * to — it is excluded so it gets no effort ladder.
+ * @param {{id?:string, command?:string}|null|undefined} provider
+ * @returns {boolean}
+ */
+export function isGrokProvider(provider) {
+  const id = String(provider?.id || '').toLowerCase();
+  return id === 'grok-cli' || id === 'grok-tui' || commandBasename(provider?.command) === 'grok';
 }
 
 /**
@@ -363,6 +385,7 @@ export function effortLevelsForProvider(provider, model = null) {
     return perModel.length ? perModel : null;
   }
   if (isCursorProvider(provider)) return CURSOR_EFFORT_LEVELS;
+  if (isGrokProvider(provider)) return GROK_EFFORT_LEVELS;
   if (isClaudeProvider(provider)) return CLAUDE_EFFORT_LEVELS;
   return null;
 }
@@ -406,11 +429,21 @@ export function resolveCliEffort(effort, provider, model = null) {
 // analyzer when a config rejection has to be blamed on PortOS or on the user.
 export const CODEX_EFFORT_KEY = 'model_reasoning_effort';
 
+// Every spelling of the effort flag a provider CLI accepts as a VALUE-taking
+// argument. `--reasoning-effort` is grok's canonical long form (`--effort` is its
+// documented alias, and the alias is what buildEffortArgs emits) — it has to be
+// recognized here or a user who baked `--reasoning-effort high` into their
+// provider args gets a SECOND, injected `--effort <level>` appended. Grok's
+// parser accepts the duplicate and takes the last one, so their explicit pin
+// would be silently overridden — the exact opposite of the contract below.
+const EFFORT_FLAG_NAMES = Object.freeze(['--effort', '--reasoning-effort']);
+
 /**
  * True when the user has already baked an effort override into the provider's
- * args — claude's `--effort <level>` / `--effort=<level>` or a codex
- * `-c model_reasoning_effort=…` config pair. Mirrors `hasModelFlag`: a baked
- * pin wins and the runner-injected effort is suppressed.
+ * args — claude/agy/grok's `--effort <level>` / `--effort=<level>`, grok's
+ * `--reasoning-effort` long form, or a codex `-c model_reasoning_effort=…`
+ * config pair. Mirrors `hasModelFlag`: a baked pin wins and the
+ * runner-injected effort is suppressed.
  * @param {unknown[]} args
  * @returns {boolean}
  */
@@ -418,10 +451,12 @@ export function hasEffortFlag(args) {
   if (!Array.isArray(args)) return false;
   return args.some((a, i) => {
     if (typeof a !== 'string') return false;
-    if (a.startsWith('--effort=') && a.length > '--effort='.length) return true;
-    if (a === '--effort') {
-      const next = args[i + 1];
-      return typeof next === 'string' && next.length > 0 && !next.startsWith('-');
+    for (const flag of EFFORT_FLAG_NAMES) {
+      if (a.startsWith(`${flag}=`) && a.length > flag.length + 1) return true;
+      if (a === flag) {
+        const next = args[i + 1];
+        if (typeof next === 'string' && next.length > 0 && !next.startsWith('-')) return true;
+      }
     }
     return a.startsWith(`${CODEX_EFFORT_KEY}=`);
   });

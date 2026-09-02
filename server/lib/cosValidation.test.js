@@ -39,7 +39,7 @@ import {
   taskTemplateSettingsSchema,
 } from './cosValidation.js';
 import { LOCAL_AGENT_REVIEWERS } from './slashdoInvocation.js';
-import { EFFORT_LEVELS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, ANTIGRAVITY_EFFORT_LEVELS, CURSOR_EFFORT_LEVELS } from './providerModels.js';
+import { EFFORT_LEVELS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, ANTIGRAVITY_EFFORT_LEVELS, CURSOR_EFFORT_LEVELS, GROK_EFFORT_LEVELS } from './providerModels.js';
 
 describe('cosValidation effort field', () => {
   it('accepts every EFFORT_LEVELS value on create and rejects unknown values', () => {
@@ -292,16 +292,18 @@ describe('per-reviewer reasoning effort (reviewerEfforts)', () => {
     // the level is a variant of its model id, folded in by `reviewerModelArg`.
     expect(reviewerEffortLevels('cursor')).toEqual(CURSOR_EFFORT_LEVELS);
     expect(reviewerEffortLevels('cursor-agent')).toEqual(CURSOR_EFFORT_LEVELS);
-    // No effort control: copilot is a GitHub review, grok's CLI takes no flag,
-    // and a `@username` reviewer is a person.
+    // grok's ladder stops at xhigh — derived from effortLevelsForProvider, so it
+    // is exactly what `grok --reasoning-effort` accepts.
+    expect(reviewerEffortLevels('grok')).toEqual(GROK_EFFORT_LEVELS);
+    // No effort control: copilot is a GitHub review, and a `@username` reviewer
+    // is a person.
     expect(reviewerEffortLevels('copilot')).toBeNull();
-    expect(reviewerEffortLevels('grok')).toBeNull();
     expect(reviewerEffortLevels('@somebody')).toBeNull();
   });
 
   it('EFFORT_SELECTABLE_REVIEWERS is exactly the reviewers with a non-empty ladder', () => {
     expect([...EFFORT_SELECTABLE_REVIEWERS].sort())
-      .toEqual(['antigravity', 'claude', 'codex', 'cursor', 'lmstudio', 'ollama']);
+      .toEqual(['antigravity', 'claude', 'codex', 'cursor', 'grok', 'lmstudio', 'ollama']);
     for (const reviewer of REVIEWER_VALUES) {
       expect(EFFORT_SELECTABLE_REVIEWERS.includes(reviewer))
         .toBe((reviewerEffortLevels(reviewer) || []).length > 0);
@@ -321,8 +323,11 @@ describe('per-reviewer reasoning effort (reviewerEfforts)', () => {
     // `agy` really does reject `--effort max`; clamping it to `high` would review
     // at a different effort than the picker shows.
     expect(normalizeReviewerEfforts({ antigravity: 'max' })).toEqual({});
+    // grok rejects `max` the way agy rejects it — dropped, not clamped.
+    expect(normalizeReviewerEfforts({ grok: 'max' })).toEqual({});
+    expect(normalizeReviewerEfforts({ grok: 'xhigh' })).toEqual({ grok: 'xhigh' });
     // Reviewers with no effort control at all.
-    expect(normalizeReviewerEfforts({ copilot: 'high', grok: 'high', '@bot': 'high' })).toEqual({});
+    expect(normalizeReviewerEfforts({ copilot: 'high', '@bot': 'high' })).toEqual({});
     // Non-strings and blanks are absent, never an empty pin.
     expect(normalizeReviewerEfforts({ codex: '', claude: null, ollama: 3 })).toEqual({});
     // Non-object input is undefined so an omitted field isn't persisted as `{}`.
@@ -343,8 +348,8 @@ describe('per-reviewer reasoning effort (reviewerEfforts)', () => {
       antigravityEffort: 'max',   // not in agy's ladder — dropped, not clamped
       ollamaEffort: 'medium',
       lmstudioEffort: 'ultra',    // OpenAI-shaped backends don't take this tier
-      grokEffort: 'high',         // grok has no effort control at all
-    })).toEqual({ codex: 'high', claude: 'xhigh', ollama: 'medium' });
+      grokEffort: 'high',         // in grok's ladder — kept
+    })).toEqual({ codex: 'high', claude: 'xhigh', ollama: 'medium', grok: 'high' });
     expect(reviewerEffortsFromDefaults(null)).toEqual({});
   });
 
@@ -353,7 +358,10 @@ describe('per-reviewer reasoning effort (reviewerEfforts)', () => {
     expect(reviewerEffortArgs('codex', 'high')).toEqual(['-c', 'model_reasoning_effort=high']);
     // The `antigravity` slug names no executable — `agy` does, and it takes --effort.
     expect(reviewerEffortArgs('antigravity', 'low')).toEqual(['--effort', 'low']);
-    expect(reviewerEffortArgs('grok', 'high')).toEqual([]);
+    // grok's CLI takes `--reasoning-effort`, aliased `--effort` — the alias is
+    // what buildEffortArgs emits, and `max` is outside its ladder so it drops.
+    expect(reviewerEffortArgs('grok', 'xhigh')).toEqual(['--effort', 'xhigh']);
+    expect(reviewerEffortArgs('grok', 'max')).toEqual([]);
     expect(reviewerEffortArgs('copilot', 'high')).toEqual([]);
     expect(reviewerEffortArgs('claude', null)).toEqual([]);
   });
@@ -478,7 +486,7 @@ describe('per-reviewer reasoning effort (reviewerEfforts)', () => {
     // An explicitly empty MAP is KEPT: it's a real "use each reviewer's own
     // default for this task" choice that must override the Code Review Defaults.
     expect(sanitizeTaskMetadata({ reviewerEfforts: {} })).toEqual({ reviewerEfforts: {} });
-    expect(sanitizeTaskMetadata({ reviewerEfforts: { claude: 'high', grok: 'high' } }))
+    expect(sanitizeTaskMetadata({ reviewerEfforts: { claude: 'high', grok: 'max' } }))
       .toEqual({ reviewerEfforts: { claude: 'high' } });
   });
 
@@ -607,10 +615,11 @@ describe('per-reviewer model pins', () => {
     expect(buildReviewWithArgs(['grok'], { reviewerModels: { grok: 'grok-code-fast-1' } }))
       .toBe('--review-with grok[grok-code-fast-1]');
     // Only agy bakes an effort into the model id. A grok id passes through whole,
-    // and grok gains no effort pin from having one — its CLI takes no effort flag.
+    // and a bare model pin adds no effort pin — grok carries its level on its own
+    // flag, not inside the model id.
     expect(pairReviewerModelsAndEfforts({ grok: 'grok-code-fast-1' }, {}))
       .toEqual({ reviewerModels: { grok: 'grok-code-fast-1' }, reviewerEfforts: {} });
-    expect(reviewerEffortLevels('grok')).toBeNull();
+    expect(reviewerEffortLevels('grok')).toEqual(GROK_EFFORT_LEVELS);
   });
 });
 

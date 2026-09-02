@@ -60,6 +60,7 @@ import {
   CLAUDE_EFFORT_LEVELS,
   CODEX_EFFORT_LEVELS,
   CURSOR_EFFORT_LEVELS,
+  GROK_EFFORT_LEVELS,
   ANTIGRAVITY_EFFORT_LEVELS,
   isConfiguredDefaultModel,
   configuredDefaultIn,
@@ -101,6 +102,7 @@ describe('resolveCliEffort (server mirror)', () => {
   const CLAUDE = { id: 'claude-code', command: 'claude' };
   const CODEX = { id: 'codex', command: 'codex' };
   const GROK = { id: 'grok-cli', command: 'grok' };
+  const KIMI = { id: 'kimi-cli', command: 'kimi' };
 
   it.each([
     ['supported value passes through', 'medium', AGY, 'medium'],
@@ -114,7 +116,13 @@ describe('resolveCliEffort (server mirror)', () => {
     ['codex accepts max', 'max', CODEX, 'max'],
     ['ultra resolves to codex max without a supported model', 'ultra', CODEX, 'max'],
     ['unknown value yields no flag', 'bogus', AGY, null],
-    ['effort-less provider yields no flag', 'high', GROK, null],
+    ['effort-less provider yields no flag', 'high', KIMI, null],
+    // grok's ladder tops out at xhigh, so a level saved against claude/codex
+    // clamps rather than dropping — on BOTH sides of the mirror.
+    ['grok accepts its whole ladder', 'xhigh', GROK, 'xhigh'],
+    ['above grok ladder clamps to xhigh', 'max', GROK, 'xhigh'],
+    ['ultra clamps to grok xhigh', 'ultra', GROK, 'xhigh'],
+    ['below grok ladder takes the weakest', 'minimal', GROK, 'low'],
     ['unset yields no flag', '', AGY, null],
     ['null yields no flag', null, CLAUDE, null],
   ])('%s', (_label, effort, provider, expected) => {
@@ -150,7 +158,13 @@ describe('effortLevelsForProvider (server mirror)', () => {
     ['OpenCode vLLM TUI', { id: 'opencode-vllm-tui', command: 'opencode', vllmBacked: true }, ['low', 'medium', 'high']],
     ['OpenCode SGLang TUI', { id: 'opencode-sglang-tui', command: 'opencode', sglangBacked: true }, ['low', 'medium', 'high']],
     ['OpenCode with no local backend', { id: 'opencode', command: 'opencode' }, null],
-    ['grok (no effort control)', { id: 'grok-cli', command: 'grok' }, null],
+    // grok DOES have an effort control (`--reasoning-effort`, aliased `--effort`);
+    // its ladder stops at xhigh, which is why it is not simply CLAUDE's.
+    ['grok CLI', { id: 'grok-cli', command: 'grok' }, GROK_EFFORT_LEVELS],
+    ['grok TUI', { id: 'grok-tui' }, GROK_EFFORT_LEVELS],
+    ['path-configured grok', { id: 'custom', command: '/Users/x/.grok/bin/grok' }, GROK_EFFORT_LEVELS],
+    // The bare `grok` id is the HTTP API provider — no CLI, so no flag to carry a level.
+    ['grok API provider', { id: 'grok', type: 'api' }, null],
     ['blank command is not claude', { id: 'ollama' }, null],
   ];
 
@@ -380,7 +394,7 @@ describe('Antigravity base-model split (server mirror)', () => {
     });
 
     it('drops the effort for a provider with no effort control at all', () => {
-      expect(effortSurvivingModel({ id: 'grok-cli', command: 'grok' }, 'grok-4', 'high')).toBe('');
+      expect(effortSurvivingModel({ id: 'kimi-cli', command: 'kimi' }, 'kimi-k2', 'high')).toBe('');
     });
 
     it('normalizes a nullish effort to the empty sentinel', () => {

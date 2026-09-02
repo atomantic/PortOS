@@ -88,6 +88,19 @@ export const isCodexProvider = (provider) => {
 };
 
 /**
+ * True when a provider is Grok-Build-flavored. MIRROR of `isGrokProvider` in
+ * server/lib/providerModels.js — the shipped `grok-cli`/`grok-tui` ids or a
+ * `grok` command basename. The bare `grok` id is the HTTP API provider, which
+ * has no CLI flag to carry an effort level, and is excluded.
+ * @param {{id?:string, command?:string}|null|undefined} provider
+ * @returns {boolean}
+ */
+export const isGrokProvider = (provider) => {
+  const id = String(provider?.id || '').toLowerCase();
+  return id === 'grok-cli' || id === 'grok-tui' || commandBasename(provider?.command) === 'grok';
+};
+
+/**
  * True when a CLI/TUI record uses Codex's ChatGPT subscription. This mirrors
  * server/lib/codexAccount.js: the command, not an editable provider id, owns
  * the account contract.
@@ -322,6 +335,11 @@ export const OPENCODE_LOCAL_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'hig
 // syntax (`gpt-5[effort=max]`) — but the level is still user-pickable, so this
 // ladder drives the same selects as every other CLI's.
 export const CURSOR_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
+// Grok Build CLI. MIRROR of `GROK_EFFORT_LEVELS` in server/lib/providerModels.js.
+// Grok's own ladder, read off its rejection message rather than guessed
+// (`use one of: xhigh, high, medium, low`) — no `max`/`minimal`, so a stored
+// `max` clamps to `xhigh` here exactly as it does on the server.
+export const GROK_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh']);
 
 const CODEX_ULTRA_MODELS = new Set(['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra']);
 
@@ -530,6 +548,7 @@ export const effortLevelsForProvider = (provider, model = null) => {
     return perModel.length ? perModel : null;
   }
   if (isCursorProvider(provider)) return CURSOR_EFFORT_LEVELS;
+  if (isGrokProvider(provider)) return GROK_EFFORT_LEVELS;
   const id = String(provider.id || '').toLowerCase();
   if (id.startsWith('claude-code') || commandBasename(provider.command) === 'claude') return CLAUDE_EFFORT_LEVELS;
   // Sanitized provider inventories intentionally omit command/path/env details.

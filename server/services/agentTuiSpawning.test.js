@@ -473,8 +473,18 @@ describe('agent TUI spawning', () => {
     const noEffort = buildTuiSpawnConfig({ id: 'claude-code-tui', command: 'claude', type: 'tui', args: [] }, null);
     expect(noEffort.args).not.toContain('--effort');
 
+    // kimi's TUI takes no effort flag at all, so a pinned level emits nothing.
+    const kimi = buildTuiSpawnConfig({ id: 'kimi-tui', command: 'kimi', type: 'tui', args: [] }, null, { effort: 'high' });
+    expect(kimi.args.join(' ')).not.toContain('effort');
+  });
+
+  it('injects grok’s effort into the TUI — its --reasoning-effort/--effort is a root flag', () => {
     const grok = buildTuiSpawnConfig({ id: 'grok-tui', command: 'grok', type: 'tui', args: [] }, null, { effort: 'high' });
-    expect(grok.args.join(' ')).not.toContain('effort');
+    expect(grok.args).toEqual(expect.arrayContaining(['--effort', 'high']));
+    // Outside grok's ladder — clamped down rather than passed through as-is,
+    // because grok rejects an unknown level outright.
+    const clamped = buildTuiSpawnConfig({ id: 'grok-tui', command: 'grok', type: 'tui', args: [] }, null, { effort: 'max' });
+    expect(clamped.args).toEqual(expect.arrayContaining(['--effort', 'xhigh']));
   });
 
   it('passes --effort through to the Antigravity TUI, clamped to its low|medium|high ladder', () => {
