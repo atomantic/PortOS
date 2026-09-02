@@ -37,7 +37,7 @@ export default function IconPicker({ value, onChange }) {
             aria-hidden="true"
           />
           <div className="absolute top-full left-0 mt-1 w-full bg-port-card border border-port-border rounded-lg shadow-xl z-50 p-2 max-h-64 overflow-auto">
-            <div className="grid grid-cols-5 gap-1">
+            <div className="grid grid-cols-4 gap-1 sm:grid-cols-5">
               {iconNames.map(name => (
                 <button
                   key={name}

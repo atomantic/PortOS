@@ -124,7 +124,7 @@ function CollectionPreview({ collection, loading, error }) {
         <p className="text-gray-500 text-xs">{items.length} item{items.length !== 1 ? 's' : ''}</p>
       </div>
       {imageItems.length > 0 && (
-        <div className="grid grid-cols-4 gap-1">
+        <div className="grid grid-cols-2 gap-1 sm:grid-cols-4">
           {imageItems.map((it) => (
             <MediaImage
               key={`${it.kind}:${it.ref}`}

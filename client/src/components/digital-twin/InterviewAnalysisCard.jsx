@@ -69,10 +69,10 @@ export default function InterviewAnalysisCard({ analysisResult }) {
               {traitsUpdated.bigFive && (
                 <div>
                   <p className="text-gray-400 mb-1">Big Five:</p>
-                  <div className="grid grid-cols-5 gap-2">
+                  <div className="grid grid-cols-5 gap-1 sm:gap-2">
                     {Object.entries(traitsUpdated.bigFive).filter(([k]) => k !== 'notes').map(([k, v]) => (
                       <div key={k} className="text-center">
-                        <div className="text-xs text-gray-500">{k}</div>
+                        <div className="text-[10px] sm:text-xs text-gray-500">{k}</div>
                         <div className="text-white font-medium">{typeof v === 'number' ? v.toFixed(2) : v}</div>
                       </div>
                     ))}
