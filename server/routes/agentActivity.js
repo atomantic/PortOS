@@ -6,7 +6,15 @@
 
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import {
+  validateRequest,
+  agentActivityQuerySchema,
+  agentActivityTimelineQuerySchema,
+  agentActivityAgentParamsSchema,
+  agentActivityAgentQuerySchema,
+  agentActivityStatsQuerySchema,
+  agentActivityCleanupSchema,
+} from '../lib/validation.js';
 import { runEventsQuerySchema, runEventProjectionsQuerySchema, runEventProjectionIdSchema, runEventReconcileSchema } from '../lib/cosValidation.js';
 import * as agentActivity from '../services/agentActivity.js';
 import * as runEventLog from '../services/agentRunEventLog.js';
@@ -16,57 +24,53 @@ const router = Router();
 
 // GET / - Get recent activity across all agents
 router.get('/', asyncHandler(async (req, res) => {
-  const { limit = 50, agentIds, action } = req.query;
+  const { limit, agentIds, action } = validateRequest(agentActivityQuerySchema, req.query);
 
-  const activities = await agentActivity.getRecentActivities({
-    limit: parseInt(limit, 10),
-    agentIds: agentIds ? agentIds.split(',') : null,
-    action: action || null
-  });
-
-  res.json(activities);
+  res.json(await agentActivity.getRecentActivities({
+    limit,
+    agentIds: agentIds ?? null,
+    action: action ?? null
+  }));
 }));
 
 // GET /timeline - Get activity timeline (for infinite scroll)
 router.get('/timeline', asyncHandler(async (req, res) => {
-  const { limit = 50, agentIds, before } = req.query;
+  const { limit, agentIds, before } = validateRequest(agentActivityTimelineQuerySchema, req.query);
 
-  const activities = await agentActivity.getActivityTimeline({
-    limit: parseInt(limit, 10),
-    agentIds: agentIds ? agentIds.split(',') : null,
-    beforeTimestamp: before || null
-  });
-
-  res.json(activities);
+  res.json(await agentActivity.getActivityTimeline({
+    limit,
+    agentIds: agentIds ?? null,
+    beforeTimestamp: before ?? null
+  }));
 }));
 
 // GET /agent/:agentId - Get activities for specific agent
 router.get('/agent/:agentId', asyncHandler(async (req, res) => {
-  const { agentId } = req.params;
-  const { date, limit = 100, offset = 0, action } = req.query;
+  const { agentId } = validateRequest(agentActivityAgentParamsSchema, req.params);
+  const { date, limit, offset, action } = validateRequest(agentActivityAgentQuerySchema, req.query);
 
-  const activities = await agentActivity.getActivities(agentId, {
-    date: date ? new Date(date) : new Date(),
-    limit: parseInt(limit, 10),
-    offset: parseInt(offset, 10),
-    action: action || null
-  });
-
-  res.json(activities);
+  res.json(await agentActivity.getActivities(agentId, {
+    // A `YYYY-MM-DD` string, which getActivityFilePath consumes as-is.
+    date: date ?? null,
+    limit,
+    offset,
+    action: action ?? null
+  }));
 }));
 
 // GET /agent/:agentId/stats - Get activity stats for agent
 router.get('/agent/:agentId/stats', asyncHandler(async (req, res) => {
-  const { agentId } = req.params;
-  const { days = 7 } = req.query;
+  const { agentId } = validateRequest(agentActivityAgentParamsSchema, req.params);
+  const { days } = validateRequest(agentActivityStatsQuerySchema, req.query);
 
-  const stats = await agentActivity.getAgentStats(agentId, parseInt(days, 10));
-  res.json(stats);
+  res.json(await agentActivity.getAgentStats(agentId, days));
 }));
 
-// POST /cleanup - Clean up old activity files
+// POST /cleanup - Clean up old activity files. Destructive: it unlinks every
+// day file older than the window, so the schema's 1-day floor is what stands
+// between a mistyped client call and the whole archive.
 router.post('/cleanup', asyncHandler(async (req, res) => {
-  const { daysToKeep = 30 } = req.body;
+  const { daysToKeep } = validateRequest(agentActivityCleanupSchema, req.body ?? {});
 
   const deletedCount = await agentActivity.cleanupOldActivity(daysToKeep);
   res.json({ success: true, deletedCount });

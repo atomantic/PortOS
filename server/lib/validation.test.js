@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  agentActivityAgentParamsSchema,
   processSchema,
   appSchema,
   appUpdateSchema,
@@ -2294,6 +2295,19 @@ describe('ad-hoc route schemas (#2521)', () => {
       expect(typeof eidoverseWorldConfigPatchSchema?.safeParse).toBe('function');
       expect(eidoverseWorldConfigPatchSchema.safeParse({ cosEnabled: true }).success).toBe(true);
       expect(eidoverseWorldConfigPatchSchema.safeParse({ notAField: 1 }).success).toBe(false);
+    });
+  });
+
+  // The activity log builds a file path out of this id, so the schema — not the
+  // URL layer — is what has to refuse a non-segment (#5714).
+  describe('agentActivityAgentParamsSchema', () => {
+    it('accepts a bare filename segment', () => {
+      expect(agentActivityAgentParamsSchema.safeParse({ agentId: 'agent_a-1.v2' }).success).toBe(true);
+    });
+    it('refuses a dot segment or a path separator', () => {
+      for (const agentId of ['.', '..', '../etc', 'a/b', 'a\\b', 'a b', '']) {
+        expect(agentActivityAgentParamsSchema.safeParse({ agentId }).success).toBe(false);
+      }
     });
   });
 });

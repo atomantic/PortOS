@@ -310,12 +310,29 @@ export async function getActivityTimeline(options = {}) {
   return activities.slice(0, limit);
 }
 
+// Smallest retention window this function will honour. A caller asking for 0
+// puts the cutoff at now and unlinks the ENTIRE archive; a negative value walks
+// the cutoff into the future and takes today's file with it. Neither is a
+// retention window, so both fall back to the default rather than deleting.
+const MIN_DAYS_TO_KEEP = 1;
+const DEFAULT_DAYS_TO_KEEP = 30;
+
 /**
- * Clean up old activity files (older than N days)
+ * Clean up old activity files (older than N days).
+ *
+ * The floor lives here and not only at the HTTP boundary because schedulers
+ * call this directly.
  */
-export async function cleanupOldActivity(daysToKeep = 30) {
+export async function cleanupOldActivity(daysToKeep = DEFAULT_DAYS_TO_KEEP) {
+  const days = Number.isInteger(daysToKeep) && daysToKeep >= MIN_DAYS_TO_KEEP
+    ? daysToKeep
+    : DEFAULT_DAYS_TO_KEEP;
+  if (days !== daysToKeep) {
+    console.warn(`⚠️ Ignoring unusable activity retention window ${daysToKeep}; keeping ${days} days`);
+  }
+
   const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
+  cutoffDate.setDate(cutoffDate.getDate() - days);
 
   let deletedCount = 0;
 

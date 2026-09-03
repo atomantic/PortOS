@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, rm, writeFile } from 'fs/promises';
+import { mkdir, readdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
@@ -10,7 +10,7 @@ vi.mock('../lib/fileUtils.js', async () => {
   return makeProxy(actual);
 });
 
-const { getActivityTimeline } = await import('./agentActivity.js');
+const { cleanupOldActivity, getActivityTimeline } = await import('./agentActivity.js');
 
 const activityRoot = join(tempRoot, 'agents', 'activity');
 
@@ -71,5 +71,43 @@ describe('getActivityTimeline', () => {
     await expect(getActivityTimeline({ limit: 1 })).resolves.toMatchObject([
       { id: 'older', agentId: 'agent-a' },
     ]);
+  });
+});
+
+// A destructive-action guard: `cleanupOldActivity` unlinks day files, and the
+// service is called from schedulers as well as the HTTP route, so the floor
+// cannot live only at the request boundary (#5714).
+describe('cleanupOldActivity', () => {
+  beforeEach(async () => {
+    await rm(activityRoot, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  const seedTodayAndOld = async () => {
+    const today = new Date();
+    const iso = (d) => d.toISOString().slice(0, 10);
+    const old = new Date(today);
+    old.setDate(old.getDate() - 400);
+    await writeDay('agent-a', iso(today), [entry('today', today.toISOString())]);
+    await writeDay('agent-a', iso(old), [entry('ancient', old.toISOString())]);
+    return { today: iso(today), old: iso(old) };
+  };
+
+  const dayFiles = async () => (await readdir(join(activityRoot, 'agent-a'))).sort();
+
+  it.each([0, -5, 1.5, 'abc', null])('falls back to 30 days for %s', async (bad) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { today } = await seedTodayAndOld();
+
+    await expect(cleanupOldActivity(bad)).resolves.toBe(1);
+    // The ancient file goes; today's survives — the whole archive does not.
+    await expect(dayFiles()).resolves.toEqual([`${today}.json`]);
+  });
+
+  it('honours a real retention window', async () => {
+    const { today, old } = await seedTodayAndOld();
+
+    await expect(cleanupOldActivity(3650)).resolves.toBe(0);
+    await expect(dayFiles()).resolves.toEqual([`${old}.json`, `${today}.json`].sort());
   });
 });
