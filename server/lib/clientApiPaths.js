@@ -201,7 +201,10 @@ function parsePathHelpers(source) {
     if (!arrow) continue;
     const bodyStart = end + 1 + arrow[0].length;
     if (source[bodyStart] === '{') continue;
-    const { text: body } = scanTo(source, bodyStart, [';', '\n']);
+    // Bounded by the declaration's own semicolon, NOT by the newline: a concise
+    // body wrapped across lines would otherwise be truncated to its first line
+    // and fold to a WRONG path instead of failing loudly.
+    const { text: body } = scanTo(source, bodyStart, [';']);
     helpers.set(match[1], {
       parameters: splitArguments(parameterText).map(parseParameter),
       body: body.trim(),
