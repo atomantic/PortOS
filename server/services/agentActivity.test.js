@@ -83,14 +83,19 @@ describe('cleanupOldActivity', () => {
     vi.restoreAllMocks();
   });
 
+  // Day files are named with the LOCAL date, so the fixtures are keyed the
+  // same way — spelled out here rather than imported, so the test does not
+  // re-implement the helper it is checking.
+  const dayKey = (daysAgo) => {
+    const d = new Date();
+    d.setDate(d.getDate() - daysAgo);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+
   const seedTodayAndOld = async () => {
-    const today = new Date();
-    const iso = (d) => d.toISOString().slice(0, 10);
-    const old = new Date(today);
-    old.setDate(old.getDate() - 400);
-    await writeDay('agent-a', iso(today), [entry('today', today.toISOString())]);
-    await writeDay('agent-a', iso(old), [entry('ancient', old.toISOString())]);
-    return { today: iso(today), old: iso(old) };
+    await writeDay('agent-a', dayKey(0), [entry('today', '2026-01-01T00:00:00.000Z')]);
+    await writeDay('agent-a', dayKey(400), [entry('ancient', '2025-01-01T00:00:00.000Z')]);
+    return { today: dayKey(0), old: dayKey(400) };
   };
 
   const dayFiles = async () => (await readdir(join(activityRoot, 'agent-a'))).sort();
@@ -102,6 +107,25 @@ describe('cleanupOldActivity', () => {
     await expect(cleanupOldActivity(bad)).resolves.toBe(1);
     // The ancient file goes; today's survives — the whole archive does not.
     await expect(dayFiles()).resolves.toEqual([`${today}.json`]);
+  });
+
+  it('compares the file name against the local cutoff date, not a parsed UTC instant', async () => {
+    await writeDay('agent-a', dayKey(7), [entry('boundary', '2026-01-01T00:00:00.000Z')]);
+    await writeDay('agent-a', dayKey(8), [entry('past-boundary', '2026-01-01T00:00:00.000Z')]);
+
+    // The day exactly `daysToKeep` back is still inside the window; only the
+    // day before it expires. Parsing the name as a Date made the boundary day
+    // lose to the current time-of-day and get deleted a day early.
+    await expect(cleanupOldActivity(7)).resolves.toBe(1);
+    await expect(dayFiles()).resolves.toEqual([`${dayKey(7)}.json`]);
+  });
+
+  it('never unlinks a non-day file', async () => {
+    await mkdir(join(activityRoot, 'agent-a'), { recursive: true });
+    await writeFile(join(activityRoot, 'agent-a', 'notes.json'), '{}');
+
+    await expect(cleanupOldActivity(1)).resolves.toBe(0);
+    await expect(dayFiles()).resolves.toEqual(['notes.json']);
   });
 
   it('honours a real retention window', async () => {

@@ -5,7 +5,7 @@
  * and rate limit enforcement. Activity is stored per-agent per-day.
  */
 
-import { readFile, readdir } from 'fs/promises';
+import { readFile, readdir, unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import EventEmitter from 'events';
@@ -13,6 +13,10 @@ import { ensureDir, getDateString, atomicWrite, PATHS } from '../lib/fileUtils.j
 
 const AGENTS_DIR = PATHS.agentPersonalities;
 const ACTIVITY_DIR = join(AGENTS_DIR, 'activity');
+
+// A day file is `<YYYY-MM-DD>.json`. Anything else in an agent directory is not
+// activity and is never read as a day nor unlinked as an expired one.
+const DAY_FILE_RE = /^\d{4}-\d{2}-\d{2}\.json$/;
 
 // Event emitter for activity events
 export const activityEvents = new EventEmitter();
@@ -277,7 +281,7 @@ export async function getActivityTimeline(options = {}) {
   for (const agentId of agentDirs) {
     const files = await readdir(join(ACTIVITY_DIR, agentId));
     for (const file of files) {
-      if (/^\d{4}-\d{2}-\d{2}\.json$/.test(file)) dates.add(file.slice(0, -5));
+      if (DAY_FILE_RE.test(file)) dates.add(file.slice(0, -5));
     }
   }
 
@@ -331,8 +335,13 @@ export async function cleanupOldActivity(daysToKeep = DEFAULT_DAYS_TO_KEEP) {
     console.warn(`⚠️ Ignoring unusable activity retention window ${daysToKeep}; keeping ${days} days`);
   }
 
-  const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - days);
+  // Day files are named with the LOCAL date (getDateString), so the cutoff is
+  // compared as a `YYYY-MM-DD` string too. Parsing the name with `new Date()`
+  // would yield UTC midnight and compare it against a local now-with-time —
+  // deleting the boundary day early, and shifting a whole day west of UTC.
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  const cutoffDateStr = getDateString(cutoff);
 
   let deletedCount = 0;
 
@@ -348,13 +357,9 @@ export async function cleanupOldActivity(daysToKeep = DEFAULT_DAYS_TO_KEEP) {
     const files = await readdir(agentDir);
 
     for (const file of files) {
-      if (!file.endsWith('.json')) continue;
+      if (!DAY_FILE_RE.test(file)) continue;
 
-      const dateStr = file.replace('.json', '');
-      const fileDate = new Date(dateStr);
-
-      if (fileDate < cutoffDate) {
-        const { unlink } = await import('fs/promises');
+      if (file.slice(0, -5) < cutoffDateStr) {
         await unlink(join(agentDir, file));
         deletedCount++;
       }

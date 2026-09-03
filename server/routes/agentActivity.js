@@ -26,22 +26,14 @@ const router = Router();
 router.get('/', asyncHandler(async (req, res) => {
   const { limit, agentIds, action } = validateRequest(agentActivityQuerySchema, req.query);
 
-  res.json(await agentActivity.getRecentActivities({
-    limit,
-    agentIds: agentIds ?? null,
-    action: action ?? null
-  }));
+  res.json(await agentActivity.getRecentActivities({ limit, agentIds, action }));
 }));
 
 // GET /timeline - Get activity timeline (for infinite scroll)
 router.get('/timeline', asyncHandler(async (req, res) => {
   const { limit, agentIds, before } = validateRequest(agentActivityTimelineQuerySchema, req.query);
 
-  res.json(await agentActivity.getActivityTimeline({
-    limit,
-    agentIds: agentIds ?? null,
-    beforeTimestamp: before ?? null
-  }));
+  res.json(await agentActivity.getActivityTimeline({ limit, agentIds, beforeTimestamp: before }));
 }));
 
 // GET /agent/:agentId - Get activities for specific agent
@@ -49,13 +41,9 @@ router.get('/agent/:agentId', asyncHandler(async (req, res) => {
   const { agentId } = validateRequest(agentActivityAgentParamsSchema, req.params);
   const { date, limit, offset, action } = validateRequest(agentActivityAgentQuerySchema, req.query);
 
-  res.json(await agentActivity.getActivities(agentId, {
-    // A `YYYY-MM-DD` string, which getActivityFilePath consumes as-is.
-    date: date ?? null,
-    limit,
-    offset,
-    action: action ?? null
-  }));
+  // `date` stays a `YYYY-MM-DD` string, which getActivityFilePath consumes
+  // as-is; absent fields fall through to the service's own defaults.
+  res.json(await agentActivity.getActivities(agentId, { date, limit, offset, action }));
 }));
 
 // GET /agent/:agentId/stats - Get activity stats for agent

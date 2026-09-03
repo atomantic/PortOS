@@ -231,7 +231,7 @@ describe('activity route validation', () => {
       expect(activityMocks.getRecentActivities).toHaveBeenCalledWith({
         limit: 10,
         agentIds: ['a-1', 'a-2'],
-        action: null,
+        action: undefined,
       });
     });
 
@@ -240,8 +240,8 @@ describe('activity route validation', () => {
       expect(res.status).toBe(200);
       expect(activityMocks.getRecentActivities).toHaveBeenCalledWith({
         limit: 50,
-        agentIds: null,
-        action: null,
+        agentIds: undefined,
+        action: undefined,
       });
     });
 
@@ -254,8 +254,8 @@ describe('activity route validation', () => {
       await get('/');
       expect(activityMocks.getRecentActivities).toHaveBeenCalledWith({
         limit: 50,
-        agentIds: null,
-        action: null,
+        agentIds: undefined,
+        action: undefined,
       });
     });
   });
@@ -271,7 +271,7 @@ describe('activity route validation', () => {
       expect(res.status).toBe(200);
       expect(activityMocks.getActivityTimeline).toHaveBeenCalledWith({
         limit: 25,
-        agentIds: null,
+        agentIds: undefined,
         beforeTimestamp: '2026-08-23T00:00:05.000Z',
       });
     });
@@ -295,7 +295,7 @@ describe('activity route validation', () => {
         date: '2026-08-22',
         limit: 10,
         offset: 5,
-        action: null,
+        action: undefined,
       });
     });
 
