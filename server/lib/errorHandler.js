@@ -127,11 +127,19 @@ const clampLogText = (value) => {
   return flat.length > LOG_DETAIL_MAX_CHARS ? `${flat.slice(0, LOG_DETAIL_MAX_CHARS)}…` : flat;
 };
 
+const describeObjectEntries = (obj) => Object.entries(obj).map(([k, v]) => `${k}=${v}`).join('; ');
+
 const describeDetailEntry = (entry) => {
   if (!entry || typeof entry !== 'object') return String(entry);
-  const { path, message } = entry;
-  if (path && message) return `${path}: ${message}`;
-  return String(message || path || '?');
+  // `validate`/`validateRequest` pre-join the Zod path, but a caller passing raw
+  // issues through would leave an array — render it as dot notation, not CSV.
+  const path = Array.isArray(entry.path) ? entry.path.join('.') : entry.path;
+  const { message } = entry;
+  // Nullish, not truthy: a `message` of `0`/`false` is still a message.
+  if (path != null && message != null) return `${path}: ${message}`;
+  if (path != null || message != null) return String(message ?? path);
+  // Not a Zod-shaped issue — name its own fields rather than logging a bare '?'.
+  return describeObjectEntries(entry) || '?';
 };
 
 /**
@@ -154,9 +162,7 @@ const summarizeDetails = (details) => {
     const elided = details.length - LOG_DETAIL_MAX_ENTRIES;
     return elided > 0 ? `${shown} (+${elided} more)` : shown;
   }
-  if (details && typeof details === 'object') {
-    return clampLogText(Object.entries(details).map(([k, v]) => `${k}=${v}`).join('; '));
-  }
+  if (details && typeof details === 'object') return clampLogText(describeObjectEntries(details));
   return clampLogText(details);
 };
 
@@ -186,8 +192,10 @@ export function asyncHandler(fn) {
       } else if (error.status >= 500) {
         console.error(logMsg, error.stack ? error.stack : '');
       } else {
-        const details = error.context?.details;
-        console.error(details ? `${logMsg}: ${summarizeDetails(details)}` : logMsg);
+        // An empty `[]`/`{}` is truthy but summarizes to nothing — gate on the
+        // summary so the line can't end in a dangling colon.
+        const summary = error.context?.details ? summarizeDetails(error.context.details) : '';
+        console.error(summary ? `${logMsg}: ${summary}` : logMsg);
       }
 
       return sendErrorResponse(res, error, { io });

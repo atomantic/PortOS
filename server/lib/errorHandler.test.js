@@ -522,6 +522,18 @@ describe('errorHandler.js', () => {
       expect(line.endsWith('…')).toBe(true);
     });
 
+    // `[]` and `{}` are truthy but summarize to nothing.
+    it('omits the details segment entirely when it summarizes to nothing', async () => {
+      const { req, res } = makeReqRes(null);
+
+      await asyncHandler(async () => {
+        throw new ServerError('Validation failed', { status: 400, context: { details: [] } });
+      })(req, res, vi.fn());
+      await flushMicrotasks();
+
+      expect(errorSpy.mock.calls[0][0]).toBe('❌ Route error [GET /api/thing]: Validation failed');
+    });
+
     // The 500 branch logs the stack, not `details` — it must stay untouched.
     it('leaves the 500 stack branch alone', async () => {
       const { req, res } = makeReqRes(null);
