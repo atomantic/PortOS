@@ -86,6 +86,9 @@ describe('downloadAudioToTempMp3 — outcomes', () => {
     const result = await downloadAudioToTempMp3(baseArgs);
     expect(result.outcome).toBe('failed');
     expect(result.reason).toMatch(/no audio was produced/);
+    // The bounds are the only diagnosis the user gets — --print suppresses yt-dlp's own.
+    expect(result.reason).toMatch(/20 minutes/);
+    expect(result.reason).toMatch(/60MB/);
   });
 
   it('reports failed with the exit code when yt-dlp errors', async () => {

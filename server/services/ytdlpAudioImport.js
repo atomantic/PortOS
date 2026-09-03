@@ -5,7 +5,9 @@
  * round reference-audio "Download from URL" convenience (#2120) — can reuse the
  * hard part (yt-dlp arg construction, `--progress-template` machine-readable
  * progress parsing, cancel-aware exit classification, temp-file cleanup) rather
- * than duplicating ~120 lines of subtle yt-dlp knowledge.
+ * than duplicating ~120 lines of subtle yt-dlp knowledge. The spawn, marker
+ * parsing and exit classification it shares with the video core live in
+ * ytdlpRun.js; this module owns the audio argv and the temp-file lifecycle.
  *
  * A single yt-dlp invocation does the whole job (`-x --audio-format mp3`,
  * pointed at our discovered ffmpeg via --ffmpeg-location) — yt-dlp already
@@ -20,7 +22,6 @@
  * http(s) URL (SSRF-guarded) — so the core never sees an unvetted URL.
  */
 
-import { spawn } from '../lib/childProcess.js';
 import { existsSync } from 'fs';
 import { readdir, unlink } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -28,17 +29,7 @@ import { join, dirname } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
 import { findFfmpeg } from '../lib/ffmpeg.js';
 import { findYtDlp } from '../lib/ytdlp.js';
-import { safeChildProcessOptions } from '../lib/processEnv.js';
-import { createLineReader } from '../lib/streamLines.js';
-
-const TITLE_PREFIX = 'PORTOS_TITLE:';
-// Custom progress markers via yt-dlp's `--progress-template`, rather than
-// scraping the human-readable `[download] NN%` / `[ExtractAudio]` console
-// lines — a stable machine interface (mirrors ffmpeg's `-progress pipe:2`
-// key=value protocol used by render.js) that a yt-dlp text-format change
-// can't silently break.
-const PROGRESS_PREFIX = 'PORTOS_PROGRESS:';
-const STAGE_PREFIX = 'PORTOS_STAGE:';
+import { runYtDlp, ytdlpMarkerArgs } from './ytdlpRun.js';
 
 /**
  * Locate yt-dlp + ffmpeg, throwing an actionable ServerError if either is
@@ -93,25 +84,12 @@ export async function downloadAudioToTempMp3({
   const tempBase = join(tmpdir(), tempPrefix);
   const outPath = `${tempBase}.mp3`;
 
-  let title = '';
   const args = [
     '-f', 'bestaudio/best',
     '-x', '--audio-format', 'mp3', '--audio-quality', '0',
     '--no-playlist',
     '--ffmpeg-location', dirname(ffmpeg),
-    '--newline',
-    '--print', `${TITLE_PREFIX}%(title)s`,
-    '--progress-template', `download:${PROGRESS_PREFIX}%(progress._percent_str)s`,
-    '--progress-template', `postprocess:${STAGE_PREFIX}extracting`,
-    // `--print` has two side effects that would otherwise break this job
-    // (confirmed against a real download): it implies `--simulate` (skips the
-    // actual download/postprocess entirely, so `--no-simulate` is required to
-    // force the real run), AND it suppresses ALL of yt-dlp's normal
-    // progress/postprocessor reporting — so `--progress` plus the two
-    // `--progress-template`s above are required to get stable, machine-readable
-    // progress/stage markers back alongside the printed title in one invocation.
-    '--no-simulate',
-    '--progress',
+    ...ytdlpMarkerArgs('extracting'),
     // Bound resource use — without these, a long video or a livestream/archive
     // URL downloads and transcodes unbounded, eating disk in tmpdir() and CPU
     // with no cap.
@@ -121,51 +99,16 @@ export async function downloadAudioToTempMp3({
     url,
   ];
 
-  const proc = spawn(ytDlp, args, safeChildProcessOptions({ stdio: ['ignore', 'pipe', 'pipe'] }));
-  registerProcess(proc);
+  const exit = await runYtDlp({ ytDlp, args, onProgress, registerProcess });
 
-  const onLine = (line) => {
-    if (line.startsWith(TITLE_PREFIX)) {
-      title = line.slice(TITLE_PREFIX.length).trim();
-      return;
-    }
-    if (line.startsWith(PROGRESS_PREFIX)) {
-      const percent = parseFloat(line.slice(PROGRESS_PREFIX.length));
-      if (Number.isFinite(percent)) onProgress({ percent });
-      return;
-    }
-    if (line.startsWith(STAGE_PREFIX)) {
-      onProgress({ percent: 100, stage: line.slice(STAGE_PREFIX.length) });
-    }
-  };
-  // Separate readers per stream — stdout and stderr chunks arrive
-  // independently, so a shared buffer can complete a partial line from one
-  // stream with a chunk from the other, corrupting a marker line.
-  const stdoutReader = createLineReader(onLine);
-  const stderrReader = createLineReader(onLine);
-  proc.stdout.on('data', stdoutReader.push);
-  proc.stderr.on('data', stderrReader.push); // yt-dlp writes some progress/info lines to stderr too
-
-  const exit = await new Promise((resolve) => {
-    proc.on('error', (err) => resolve({ code: null, reason: `spawn failed: ${err.message}` }));
-    proc.on('close', (code, signal) => resolve({ code, signal }));
-  });
-  registerProcess(null);
-
-  if (exit.signal === 'SIGTERM' || exit.signal === 'SIGKILL') {
-    // Don't flush on cancel — a SIGKILL'd child leaves only a partial marker
-    // line in the carry, and emitting it would fire a stray progress/stage
-    // callback right before the caller reports the cancellation.
+  if (exit.canceled) {
     await cleanupYtDlpTemp(tempPrefix);
     return { outcome: 'canceled' };
   }
-  // Flush any final line the child wrote without a trailing newline before exit.
-  stdoutReader.flush();
-  stderrReader.flush();
   if (exit.code !== 0 || !existsSync(outPath)) {
     // A --match-filters/--max-filesize rejection exits 0 with no output file
     // (yt-dlp treats a filtered-out video as "nothing to do", not an error) —
-    // `--print`'s suppression of normal reporting (see above) means the
+    // `--print`'s suppression of normal reporting (see ytdlpRun) means the
     // specific reason never reaches our stdout/stderr parsing, so name the two
     // known bounds explicitly rather than a bare exit code.
     const reason = exit.code === 0
@@ -175,5 +118,5 @@ export async function downloadAudioToTempMp3({
     return { outcome: 'failed', reason };
   }
 
-  return { outcome: 'complete', outPath, title };
+  return { outcome: 'complete', outPath, title: exit.title };
 }

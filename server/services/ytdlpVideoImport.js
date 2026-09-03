@@ -7,7 +7,8 @@
  * remux flags, the `--progress-template` machine-readable markers, the
  * two-`--match-filters` duration bound, and the "find the produced file, because
  * the extension isn't knowable up front" logic — but as ONE step inside a larger
- * job rather than as its own SSE-owning service.
+ * job rather than as its own SSE-owning service. The spawn/marker-parsing/exit
+ * classification middle both importers share lives in ytdlpRun.js.
  *
  * Like the audio core, this is deliberately SSE-agnostic: it takes `onProgress`
  * and `registerProcess` callbacks and RETURNS an outcome. The caller owns the
@@ -16,18 +17,10 @@
  * unvetted URL.
  */
 
-import { spawn } from '../lib/childProcess.js';
 import { readdir, unlink } from 'fs/promises';
 import { join, dirname } from 'path';
 import { ensureDir } from '../lib/fileUtils.js';
-import { safeChildProcessOptions } from '../lib/processEnv.js';
-import { createLineReader } from '../lib/streamLines.js';
-
-const TITLE_PREFIX = 'PORTOS_TITLE:';
-// Machine-readable progress markers via yt-dlp's --progress-template rather than
-// scraping human-readable console lines — same rationale as ytdlpAudioImport.
-const PROGRESS_PREFIX = 'PORTOS_PROGRESS:';
-const STAGE_PREFIX = 'PORTOS_STAGE:';
+import { runYtDlp, ytdlpMarkerArgs } from './ytdlpRun.js';
 
 /**
  * Locate the final produced file for a download prefix. yt-dlp writes
@@ -92,7 +85,6 @@ export async function downloadVideoToDir({
   // yt-dlp points at a missing directory and fails before producing a file.
   await ensureDir(outDir);
 
-  let title = '';
   const args = [
     // Prefer an mp4 (h264/aac) video+audio pair that merges cleanly for broad
     // browser playback; fall back to best single-file mp4, then best.
@@ -104,15 +96,7 @@ export async function downloadVideoToDir({
     '--remux-video', 'mp4',
     '--no-playlist',
     '--ffmpeg-location', dirname(ffmpeg),
-    '--newline',
-    '--print', `${TITLE_PREFIX}%(title)s`,
-    '--progress-template', `download:${PROGRESS_PREFIX}%(progress._percent_str)s`,
-    '--progress-template', `postprocess:${STAGE_PREFIX}merging`,
-    // --print implies --simulate AND suppresses normal progress reporting;
-    // --no-simulate + --progress restore the real run + machine markers
-    // (the yt-dlp quirk documented at length in ytdlpAudioImport).
-    '--no-simulate',
-    '--progress',
+    ...ytdlpMarkerArgs('merging'),
     '--max-filesize', String(maxBytes),
     // Two --match-filters are OR'd by yt-dlp: bound KNOWN-duration videos to the
     // cap, but let a post whose duration can't be resolved pre-download (common
@@ -125,47 +109,12 @@ export async function downloadVideoToDir({
     url,
   ];
 
-  const proc = spawn(ytDlp, args, safeChildProcessOptions({ stdio: ['ignore', 'pipe', 'pipe'] }));
-  registerProcess(proc);
+  const exit = await runYtDlp({ ytDlp, args, onProgress, registerProcess });
 
-  const onLine = (line) => {
-    if (line.startsWith(TITLE_PREFIX)) {
-      title = line.slice(TITLE_PREFIX.length).trim();
-      return;
-    }
-    if (line.startsWith(PROGRESS_PREFIX)) {
-      const percent = parseFloat(line.slice(PROGRESS_PREFIX.length));
-      if (Number.isFinite(percent)) onProgress({ percent });
-      return;
-    }
-    if (line.startsWith(STAGE_PREFIX)) {
-      onProgress({ percent: 100, stage: line.slice(STAGE_PREFIX.length) });
-    }
-  };
-  // Separate readers per stream — stdout and stderr chunks arrive independently,
-  // so a shared buffer can complete a partial line from one stream with a chunk
-  // from the other, corrupting a marker line.
-  const stdoutReader = createLineReader(onLine);
-  const stderrReader = createLineReader(onLine);
-  proc.stdout.on('data', stdoutReader.push);
-  proc.stderr.on('data', stderrReader.push); // yt-dlp writes some progress/info lines to stderr too
-
-  const exit = await new Promise((resolve) => {
-    proc.on('error', (err) => resolve({ code: null, reason: `spawn failed: ${err.message}` }));
-    proc.on('close', (code, signal) => resolve({ code, signal }));
-  });
-  registerProcess(null);
-
-  if (exit.signal === 'SIGTERM' || exit.signal === 'SIGKILL') {
-    // Don't flush on cancel — a SIGKILL'd child leaves only a partial marker
-    // line in the carry, and emitting it would fire a stray progress/stage
-    // callback right before the caller reports the cancellation.
+  if (exit.canceled) {
     await cleanupProducedFiles(filePrefix, outDir);
     return { outcome: 'canceled' };
   }
-  // Flush any final line the child wrote without a trailing newline before exit.
-  stdoutReader.flush();
-  stderrReader.flush();
 
   const filename = await findProducedFile(filePrefix, outDir);
   if (exit.code !== 0 || !filename) {
@@ -180,5 +129,5 @@ export async function downloadVideoToDir({
     return { outcome: 'failed', reason };
   }
 
-  return { outcome: 'complete', filename, title };
+  return { outcome: 'complete', filename, title: exit.title };
 }
