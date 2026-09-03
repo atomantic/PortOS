@@ -109,7 +109,7 @@ export function toModuleKey(relPath) {
  * only top-level files leaves a hole big enough to drive a cycle back through,
  * because a subdirectory module can import back up.
  */
-function listModuleFiles(rootDir, dir = rootDir, prefix = '') {
+export function listModuleFiles(rootDir, dir = rootDir, prefix = '') {
   const out = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const rel = toModuleKey(prefix ? `${prefix}/${entry.name}` : entry.name);
