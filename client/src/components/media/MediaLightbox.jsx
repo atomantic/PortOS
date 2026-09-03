@@ -16,7 +16,8 @@ import { i2vReferenceModeLabel } from '../../lib/videoReferenceModes';
 import useFocusTrap from '../../hooks/useFocusTrap.js';
 import { copyToClipboard } from '../../lib/clipboard';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
-import { formatDateTime, formatDateNumeric } from '../../utils/formatters';
+import { formatDateTime, formatDateNumeric, formatDurationMs } from '../../utils/formatters';
+import AttributionList from './AttributionList';
 
 // Intentionally NOT migrated to <ui/Modal> or <components/Drawer>. The
 // prev/next buttons sit as viewport-edge siblings of the card (not children
@@ -286,6 +287,9 @@ export default function MediaLightbox({
     ['Reference', item.raw?.i2vReferenceMode ? i2vReferenceModeLabel(item.raw.i2vReferenceMode) : null],
     ['Image strength', item.raw?.imageStrength],
     ['Created', item.createdAt && formatDateTime(item.createdAt)],
+    // Wall-clock the render itself took, excluding queue wait (see the renderMs
+    // contract in normalize.js). Absent drops the row via the null-filter below.
+    ['Render time', item.renderMs != null ? formatDurationMs(item.renderMs) : null],
   ].filter(([, v]) => v != null && v !== '');
 
   const cardClasses = fullScreen
@@ -715,6 +719,8 @@ function SettingsPane({
             </div>
           </div>
         )}
+
+        <AttributionList record={item} />
 
         {meta.length > 0 && (
           <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1">

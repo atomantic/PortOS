@@ -38,8 +38,14 @@ const STRUCTURALLY_SELECTED = new Map([
   // client/src/**.jsx (a11y) or .js/.jsx (mounted-ref) file changes, which is
   // the only way either can start failing.
   ['client/src/a11yConventions.test.js', 'structuralTestsFor: client/src/**.jsx'],
+  ['client/src/globalShadowConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
+  ['client/src/headingTruncationConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/hooks/mountedRefConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
+  ['client/src/pollingConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
+  ['client/src/popoverClampConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
+  ['client/src/preWrapClasses.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/responsiveGridConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
+  ['client/src/storageConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   // `.ps1` is not in EXECUTABLE_RE, so touching one is an "unclassified changed
   // file" and forces the complete suite. The guard also rides the Windows
   // contract list.

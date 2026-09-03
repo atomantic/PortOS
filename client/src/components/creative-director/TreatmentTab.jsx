@@ -40,9 +40,9 @@ export default function TreatmentTab({ project }) {
                   {typeof s.imageStrength === 'number' && ` · str ${s.imageStrength}`}
                 </span>
               </div>
-              <pre className="whitespace-pre-wrap text-xs text-port-text-muted font-mono mt-2">{s.prompt}</pre>
+              <pre className="whitespace-pre-wrap break-words text-xs text-port-text-muted font-mono mt-2">{s.prompt}</pre>
               {s.negativePrompt && (
-                <pre className="whitespace-pre-wrap text-xs text-port-error/70 font-mono mt-1">neg: {s.negativePrompt}</pre>
+                <pre className="whitespace-pre-wrap break-words text-xs text-port-error/70 font-mono mt-1">neg: {s.negativePrompt}</pre>
               )}
             </div>
           ))}

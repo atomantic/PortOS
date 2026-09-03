@@ -5,7 +5,7 @@ import socket from '../../services/socket';
 import EventDetail from './EventDetail';
 import ChronotypeOverlay from './ChronotypeOverlay';
 import { buildSubcalendarColorMap, eventChipStyle } from './calendarUtils';
-import { formatDateFull } from '../../utils/formatters';
+import { formatDateFull, formatHourOfDay } from '../../utils/formatters';
 import BrailleSpinner from '../BrailleSpinner';
 import { useThemeContext } from '../ThemeContext';
 import useUrlParams from '../../hooks/useUrlParams';
@@ -16,13 +16,6 @@ const HOURS = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => i + START_
 const PX_PER_HOUR = 80;
 const PX_PER_15MIN = PX_PER_HOUR / 4; // 20px per 15-min block
 const START_MINUTES = START_HOUR * 60;
-
-function formatHour(hour) {
-  if (hour === 0) return '12 AM';
-  if (hour < 12) return `${hour} AM`;
-  if (hour === 12) return '12 PM';
-  return `${hour - 12} PM`;
-}
 
 function getEventMinutes(event) {
   const start = new Date(event.startTime);
@@ -207,7 +200,7 @@ export default function DayView({ accounts }) {
               <div key={hour} className="border-b border-port-border last:border-b-0" style={{ height: PX_PER_HOUR }}>
                 <div className="flex h-full">
                   <div className="w-16 shrink-0 text-xs text-gray-500 text-right pr-2 pt-1">
-                    {formatHour(hour)}
+                    {formatHourOfDay(hour)}
                   </div>
                   <div className="flex-1 border-l border-port-border flex flex-col">
                     {[0, 1, 2, 3].map(q => (

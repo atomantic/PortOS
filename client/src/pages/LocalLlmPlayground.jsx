@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useAutoRefetch } from '../hooks/useAutoRefetch.js';
 import useMounted from '../hooks/useMounted';
 import { Link, useSearchParams } from 'react-router';
 import { ArrowLeft, ArrowRightLeft, Brain, Check, ChevronDown, Clock, Copy, Cpu, Gauge, MessageSquare, Play, RefreshCw, Send, TriangleAlert, X } from 'lucide-react';
@@ -307,11 +308,7 @@ export default function LocalLlmPlayground() {
 
   // Poll which models are warm in memory. A faster cadence while a run is busy
   // so the "serving" flag and freed-slot countdown stay live; relaxed when idle.
-  useEffect(() => {
-    refreshLoaded();
-    const interval = setInterval(refreshLoaded, busy ? 2000 : 6000);
-    return () => clearInterval(interval);
-  }, [refreshLoaded, busy]);
+  useAutoRefetch(refreshLoaded, busy ? 2000 : 6000, { pollOnly: true });
 
   const installedTargets = useMemo(() => {
     const models = [];

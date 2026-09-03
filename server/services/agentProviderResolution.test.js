@@ -388,12 +388,17 @@ describe('resolveAgentProviderAndModel — public-review stages', () => {
     expect(r.error).toMatch(/no-tool/);
   });
 
-  it('requires the sandboxed posture for the actions stage, not merely a CLI', async () => {
-    const LOCAL_CLAUDE = { id: 'claude-ollama', type: 'cli', command: 'claude', ollamaBacked: true };
-    getAllProviders.mockResolvedValue({ providers: [LOCAL_CLAUDE], activeProvider: { id: 'claude-ollama' } });
-    // Claude has a no-tool recipe but no sandbox recipe.
+  it('runs the actions stage on any enabled binary provider but never on an api one', async () => {
+    const OPENCODE = { id: 'opencode', type: 'cli', command: 'opencode' };
+    getAllProviders.mockResolvedValue({ providers: [OPENCODE], activeProvider: { id: 'opencode' } });
+    // opencode has no no-tool recipe, so the gate fails closed; the actions
+    // stage still runs headless in the disposable worktree.
     await expect(resolveAgentProviderAndModel({ id: 't', metadata: { executionProfile: 'public-review-gate' } }))
-      .resolves.toMatchObject({ ok: true, provider: { id: 'claude-ollama' } });
+      .resolves.toMatchObject({ ok: false, permanent: true });
+    await expect(resolveAgentProviderAndModel({ id: 't', metadata: { executionProfile: 'public-review-actions' } }))
+      .resolves.toMatchObject({ ok: true, provider: { id: 'opencode' } });
+
+    getAllProviders.mockResolvedValue({ providers: [{ id: 'ollama', type: 'api' }], activeProvider: { id: 'ollama' } });
     await expect(resolveAgentProviderAndModel({ id: 't', metadata: { executionProfile: 'public-review-actions' } }))
       .resolves.toMatchObject({ ok: false, permanent: true });
   });

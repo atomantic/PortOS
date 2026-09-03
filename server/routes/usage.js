@@ -112,7 +112,7 @@ router.get('/backfill', asyncHandler(async (req, res) => {
 }));
 
 router.post('/backfill', asyncHandler(async (req, res) => {
-  res.status(202).json(startHistoricalUsageBackfill());
+  res.status(202).json(await startHistoricalUsageBackfill());
 }));
 
 // POST /api/usage/session - Record a session

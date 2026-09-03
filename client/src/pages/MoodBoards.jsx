@@ -14,6 +14,7 @@ import { Plus, Palette, Trash2, ImageIcon, FileText } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
+import EmptyState from '../components/EmptyState';
 import { timeAgo } from '../utils/formatters';
 import { listMoodBoards, createMoodBoard, deleteMoodBoard } from '../services/api';
 
@@ -46,6 +47,10 @@ export default function MoodBoards() {
   useEffect(() => { load(); }, [load]);
 
   const handleCreate = async () => {
+    // The header button is disabled while a create is in flight, but the empty
+    // state's call to action has no disabled state — guard here so a double
+    // click can't mint two boards.
+    if (creating) return;
     setCreating(true);
     const board = await createMoodBoard({ name: 'Untitled board' }, { silent: true }).catch(() => null);
     setCreating(false);
@@ -86,9 +91,13 @@ export default function MoodBoards() {
       {loading ? (
         <PageSkeleton header="none" label="Loading mood boards" cards={3} sidebar={false} />
       ) : boards.length === 0 ? (
-        <div className="text-gray-400 text-sm py-12 text-center border border-dashed border-port-border rounded">
-          No mood boards yet. Create one to start pinning references.
-        </div>
+        <EmptyState
+          icon={Palette}
+          title="No mood boards yet"
+          message="A board is a canvas of image and text references that feeds the Create suite. Make one to start pinning."
+          actionLabel="Create your first board"
+          onAction={handleCreate}
+        />
       ) : (
         <ul className="space-y-2">
           {boards.map((board) => {

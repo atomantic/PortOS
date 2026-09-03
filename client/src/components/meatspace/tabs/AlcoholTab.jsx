@@ -384,10 +384,10 @@ export default function AlcoholTab() {
                       aria-label="Drink button ABV percent"
                       className="w-16 px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white text-right"
                     />
-                    <button onClick={saveEditButton} className="p-1.5 text-port-success hover:text-port-success/80" title="Save" aria-label="Save">
+                    <button onClick={saveEditButton} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-port-success hover:text-port-success/80" title="Save" aria-label="Save">
                       <Check size={14} />
                     </button>
-                    <button onClick={cancelEditButton} className="p-1.5 text-gray-500 hover:text-gray-300" title="Cancel" aria-label="Cancel">
+                    <button onClick={cancelEditButton} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-gray-300" title="Cancel" aria-label="Cancel">
                       <X size={14} />
                     </button>
                   </>
@@ -396,7 +396,7 @@ export default function AlcoholTab() {
                     <span className="flex-1 text-xs text-gray-300">{drink.name}</span>
                     <span className="text-xs text-gray-500">{drink.oz}oz</span>
                     <span className="text-xs text-gray-500">{drink.abv}%</span>
-                    <button onClick={() => startEditButton(idx)} className="p-1.5 text-gray-600 hover:text-port-accent" title="Edit" aria-label="Edit">
+                    <button onClick={() => startEditButton(idx)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-600 hover:text-port-accent" title="Edit" aria-label="Edit">
                       <Pencil size={12} />
                     </button>
                     {isConfirming(`btn:${idx}`) ? (
@@ -409,7 +409,7 @@ export default function AlcoholTab() {
                         onCancel={cancelDelete}
                       />
                     ) : (
-                      <button onClick={() => requestDelete(`btn:${idx}`)} className="p-1.5 text-gray-600 hover:text-port-error" title="Remove" aria-label="Remove">
+                      <button onClick={() => requestDelete(`btn:${idx}`)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-600 hover:text-port-error" title="Remove" aria-label="Remove">
                         <Trash2 size={12} />
                       </button>
                     )}
@@ -658,17 +658,17 @@ export default function AlcoholTab() {
                               {computeStdDrinks(toOz(parseFloat(editForm.oz), editVolumeUnit), parseFloat(editForm.abv), parseInt(editForm.count) || 1)}
                             </td>
                             <td className="px-3 py-1.5 text-right">
-                              <div className="flex items-center justify-end gap-1">
+                              <div className="flex items-center justify-end gap-2">
                                 <button
                                   onClick={saveEdit}
-                                  className="p-1 text-port-success hover:text-port-success/80 transition-colors"
+                                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-port-success hover:text-port-success/80 transition-colors"
                                   title="Save" aria-label="Save"
                                 >
                                   <Check size={14} />
                                 </button>
                                 <button
                                   onClick={cancelEdit}
-                                  className="p-1 text-gray-500 hover:text-gray-300 transition-colors"
+                                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-gray-300 transition-colors"
                                   title="Cancel" aria-label="Cancel"
                                 >
                                   <X size={14} />
@@ -684,10 +684,10 @@ export default function AlcoholTab() {
                             <td className="px-3 py-1.5 text-right text-gray-300">{drink.count > 1 ? drink.count : 1}</td>
                             <td className="px-3 py-1.5 text-right text-gray-400">{stdDrinks}</td>
                             <td className="px-3 py-1.5 text-right">
-                              <div className="flex items-center justify-end gap-1">
+                              <div className="flex items-center justify-end gap-2">
                                 <button
                                   onClick={() => startEdit(entry.date, idx, drink)}
-                                  className="p-1 text-gray-600 hover:text-port-accent transition-colors"
+                                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-600 hover:text-port-accent transition-colors"
                                   title="Edit drink" aria-label="Edit drink"
                                 >
                                   <Pencil size={12} />
@@ -704,7 +704,7 @@ export default function AlcoholTab() {
                                 ) : (
                                   <button
                                     onClick={() => requestDelete(key)}
-                                    className="p-1 text-gray-600 hover:text-port-error transition-colors"
+                                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-600 hover:text-port-error transition-colors"
                                     title="Remove drink" aria-label="Remove drink"
                                   >
                                     <Trash2 size={12} />

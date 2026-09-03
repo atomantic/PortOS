@@ -34,6 +34,7 @@ import TabPills from '../ui/TabPills';
 import toast from '../ui/Toast';
 import useMounted from '../../hooks/useMounted';
 import useProviderModels from '../../hooks/useProviderModels';
+import { safeReadStorage, safeRemoveStorage, safeWriteStorage } from '../../lib/safeStorage.js';
 import {
   createTrack, describeMusic, generateLyrics, getSettings, getTrack, updateSettings, updateTrack,
 } from '../../services/api';
@@ -66,7 +67,7 @@ export default function MusicDesigner() {
   const [searchParams] = useSearchParams();
   const mountedRef = useMounted();
   const requestedTrackId = searchParams.get('trackId') || '';
-  const storedDraftId = requestedTrackId || window.localStorage.getItem(ACTIVE_DRAFT_KEY) || '';
+  const storedDraftId = requestedTrackId || safeReadStorage(ACTIVE_DRAFT_KEY) || '';
 
   // Wizard text — lifted here so MusicGenPanel (which never writes back to
   // prompt/lyrics) can be re-hosted under step 4 unchanged, and so edits
@@ -100,8 +101,8 @@ export default function MusicDesigner() {
 
   const hydrateDraft = (track) => {
     setTrackId(track.id);
-    if (track.title === DRAFT_TITLE) window.localStorage.setItem(ACTIVE_DRAFT_KEY, track.id);
-    else if (window.localStorage.getItem(ACTIVE_DRAFT_KEY) === track.id) window.localStorage.removeItem(ACTIVE_DRAFT_KEY);
+    if (track.title === DRAFT_TITLE) safeWriteStorage(ACTIVE_DRAFT_KEY, track.id);
+    else if (safeReadStorage(ACTIVE_DRAFT_KEY) === track.id) safeRemoveStorage(ACTIVE_DRAFT_KEY);
     setConcept(track.concept || '');
     setDescription(track.prompt || '');
     setLyrics(track.lyrics || '');
@@ -561,8 +562,8 @@ export default function MusicDesigner() {
               onChange={(event) => setTitle(event.target.value)}
               onBlur={() => {
                 const nextTitle = title.trim() || DRAFT_TITLE;
-                if (title.trim()) window.localStorage.removeItem(ACTIVE_DRAFT_KEY);
-                else window.localStorage.setItem(ACTIVE_DRAFT_KEY, trackId);
+                if (title.trim()) safeRemoveStorage(ACTIVE_DRAFT_KEY);
+                else safeWriteStorage(ACTIVE_DRAFT_KEY, trackId);
                 saveDraft({ title: nextTitle });
               }}
               disabled={!draftReady}

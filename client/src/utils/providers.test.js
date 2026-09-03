@@ -1132,6 +1132,12 @@ describe('supportsModelRefresh', () => {
       'opencode-orcarouter', 'opencode-orcarouter-tui',
       'opencode-sglang', 'opencode-sglang-tui',
       'opencode-vllm', 'opencode-vllm-tui',
+      // The Zen API record is an ordinary OpenAI-compatible endpoint. Its CLI/TUI
+      // wrappers are deliberately ABSENT: they carry no namespace marker, which
+      // is what makes OpenCode resolve `opencode/*` through its own built-in
+      // provider — nothing here can enumerate that, and Models → Harnesses
+      // ("Refresh models") is where their catalog comes from instead.
+      'opencode-zen',
       'openrouter', 'orcarouter',
     ]);
   });

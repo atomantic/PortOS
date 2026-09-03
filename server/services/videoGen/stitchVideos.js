@@ -13,7 +13,22 @@ import {
   hasAudioStream, buildTrimConcatArgs, bt709TagFilter,
 } from '../../lib/ffmpeg.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
+import { renderTimingFields } from '../../lib/renderTiming.js';
 import { loadHistory, mutateVideoHistory } from './history.js';
+
+// Wall-clock render timing (#5878) for a CHAINED render's stitched entry. A
+// chain writes its chunk rows `hidden: true`, so this is the only row the user
+// ever sees. Chunks render sequentially, so the honest number is the span from
+// the first chunk's start to now — it includes the inter-chunk trimming and
+// this concat, which summing the chunks' own `renderMs` would drop. A
+// hand-stitched clip is assembled from renders that already existed and gets
+// nothing; so does a chain missing any chunk's start instant, rather than a
+// span measured from a later chunk.
+const chainRenderTiming = (videos, historyKey) => {
+  if (historyKey !== 'chainedFrom') return {};
+  const starts = videos.map((v) => Date.parse(v.renderStartedAt));
+  return starts.every(Number.isFinite) ? renderTimingFields(Math.min(...starts)) : {};
+};
 
 // Fold the per-chunk DRAFTDECODE: reports into one claim, or none. Unanimity is
 // on the `applied` verdict rather than deep equality: two chunks that both fell
@@ -199,6 +214,7 @@ export async function stitchVideos(videoIds, opts = {}) {
     filename: outFilename,
     thumbnail: thumb,
     createdAt: new Date().toISOString(),
+    ...chainRenderTiming(videos, historyKey),
     [historyKey]: videoIds,
     ...(Array.isArray(chunkPrompts) ? { chunkPrompts } : {}),
     // The stitched clip is the chain's visible history row, so it must carry

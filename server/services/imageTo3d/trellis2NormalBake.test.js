@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { resolveTestPython } from '../../lib/testHelper.js';
+import { PY_SUBPROCESS_TIMEOUT_MS, PY_TEST_TIMEOUT_MS, resolveTestPython } from '../../lib/testHelper.js';
 import { trellis2VenvPython } from './trellis2.js';
 
 // The bake's helpers are numpy-based, and the interpreter `resolveTestPython` finds is
@@ -18,7 +18,7 @@ function resolveNumpyPython() {
   for (const bin of candidates) {
     if (bin.includes('/') && !existsSync(bin)) continue;
     try {
-      execFileSync(bin, ['-c', 'import numpy'], { stdio: 'ignore' });
+      execFileSync(bin, ['-c', 'import numpy'], { stdio: 'ignore', timeout: PY_SUBPROCESS_TIMEOUT_MS });
       return bin;
     } catch {
       // Not this one — keep looking.
@@ -38,7 +38,7 @@ function hasMetalStack(bin) {
     execFileSync(bin, ['-c',
       'import torch, trimesh, o_voxel.postprocess as pp, mtldiffrast.torch;'
       + ' assert getattr(pp, "_HAS_DR", False) and getattr(pp, "_BVH", None)'],
-    { stdio: 'ignore' });
+    { stdio: 'ignore', timeout: PY_SUBPROCESS_TIMEOUT_MS });
     return true;
   } catch {
     return false;
@@ -59,7 +59,8 @@ describe.skipIf(!pyBin)('trellis2NormalBake helpers', () => {
         'import trellis2NormalBake as nb',
         body,
       ].join('\n'));
-      return JSON.parse(execFileSync(pyBin, [script], { encoding: 'utf8' }));
+      return JSON.parse(execFileSync(pyBin, [script],
+        { encoding: 'utf8', timeout: PY_SUBPROCESS_TIMEOUT_MS }));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -76,7 +77,7 @@ pts = np.array([[1, 2, 3], [0, 1, 0], [-1, -2, -3]], dtype=np.float32)
 print(json.dumps(nb.decoder_to_export_space(pts).tolist()))
 `);
       expect(r).toEqual([[1, 3, -2], [0, 0, -1], [-1, -3, 2]]);
-    });
+    }, PY_TEST_TIMEOUT_MS);
 
     it('does not mutate its input', () => {
       // The source array is reused by the caller for the BVH; an in-place swap would
@@ -89,7 +90,7 @@ print(json.dumps({"input": pts.tolist(), "output": out.tolist()}))
 `);
       expect(r.input).toEqual([[1, 2, 3]]);
       expect(r.output).toEqual([[1, 3, -2]]);
-    });
+    }, PY_TEST_TIMEOUT_MS);
 
     it('is length-preserving, as a rotation must be', () => {
       const r = run(`
@@ -100,7 +101,7 @@ b = np.linalg.norm(nb.decoder_to_export_space(pts), axis=-1)
 print(json.dumps({"max_delta": float(np.abs(a - b).max())}))
 `);
       expect(r.max_delta).toBeLessThan(1e-5);
-    });
+    }, PY_TEST_TIMEOUT_MS);
   });
 
   describe('compute_vertex_normals', () => {
@@ -113,7 +114,7 @@ print(json.dumps({"normals": n.tolist(), "lengths": np.linalg.norm(n, axis=-1).t
 `);
       for (const n of r.normals) expect(n).toEqual([0, 0, 1]);
       for (const l of r.lengths) expect(l).toBeCloseTo(1, 5);
-    });
+    }, PY_TEST_TIMEOUT_MS);
 
     it('weights by area, so slivers cannot outvote a large face', () => {
       // The decoder emits wildly uneven triangle areas; uniform averaging lets a
@@ -124,7 +125,7 @@ f = np.array([[0,1,2],[0,1,3]], dtype=np.int32)
 print(json.dumps({"z": float(abs(nb.compute_vertex_normals(v, f)[0][2]))}))
 `);
       expect(r.z).toBeGreaterThan(0.99);
-    });
+    }, PY_TEST_TIMEOUT_MS);
 
     it('yields a finite zero vector for an unreferenced vertex', () => {
       // np.add.at leaves it at zero; normalizing must not divide by zero and produce
@@ -137,7 +138,7 @@ print(json.dumps({"finite": bool(np.all(np.isfinite(n))), "orphan": n[3].tolist(
 `);
       expect(r.finite).toBe(true);
       expect(r.orphan).toEqual([0, 0, 0]);
-    });
+    }, PY_TEST_TIMEOUT_MS);
   });
 
   describe('compute_uv_tangents', () => {
@@ -153,7 +154,7 @@ print(json.dumps({"first": t[0].tolist(), "w": w.tolist()}))
       expect(r.first[0]).toBeCloseTo(1, 4);
       expect(Math.abs(r.first[1])).toBeLessThan(1e-4);
       expect(r.w.every((x) => x === 1)).toBe(true);
-    });
+    }, PY_TEST_TIMEOUT_MS);
 
     // The bug this pins was a real defect: `b = cross(n, t)` with no handedness term.
     // A UV unwrapper may mirror individual charts (cumesh's does), and on a mirrored
@@ -190,7 +191,7 @@ print(json.dumps({
       expect(r.mirrored.w).toBe(-1);
       expect(r.mirrored.naive).toBeCloseTo(-1, 3);
       expect(r.mirrored.corrected).toBeCloseTo(1, 3);
-    });
+    }, PY_TEST_TIMEOUT_MS);
 
     it('breaks a seam-vertex handedness tie deterministically instead of emitting 0', () => {
       // A vertex straddling two oppositely-wound charts sums to exactly 0. Returning 0
@@ -204,7 +205,7 @@ print(json.dumps({"w": w.tolist(), "any_zero": bool((w == 0).any())}))
 `);
       expect(r.any_zero).toBe(false);
       for (const x of r.w) expect(Math.abs(x)).toBe(1);
-    });
+    }, PY_TEST_TIMEOUT_MS);
 
     it('survives a degenerate UV triangle without NaN', () => {
       // Zero-area-in-texture-space faces have no defined tangent. Left unguarded the
@@ -217,7 +218,7 @@ t, w = nb.compute_uv_tangents(v, f, uv)
 print(json.dumps({"finite": bool(np.all(np.isfinite(t))) and bool(np.all(np.isfinite(w)))}))
 `);
       expect(r.finite).toBe(true);
-    });
+    }, PY_TEST_TIMEOUT_MS);
   });
 
   describe('_extract_mesh', () => {
@@ -234,7 +235,7 @@ except ValueError as e:
     print(json.dumps({"raised": str(e)}))
 `);
       expect(r.raised).toMatch(/requires the exported mesh to carry UVs/);
-    });
+    }, PY_TEST_TIMEOUT_MS);
 
     it('refuses an ambiguous multi-mesh scene', () => {
       const r = run(`
@@ -246,7 +247,7 @@ except ValueError as e:
     print(json.dumps({"raised": str(e)}))
 `);
       expect(r.raised).toMatch(/expects exactly one mesh, got 2/);
-    });
+    }, PY_TEST_TIMEOUT_MS);
   });
 });
 
@@ -266,7 +267,8 @@ describe.skipIf(!hasStack)('bake_normal_map attaches a usable normal map', () =>
         'import trellis2NormalBake as nb',
         body,
       ].join('\n'));
-      return JSON.parse(execFileSync(pyBin, [script], { encoding: 'utf8', timeout: 240000 }));
+      return JSON.parse(execFileSync(pyBin, [script],
+        { encoding: 'utf8', timeout: PY_SUBPROCESS_TIMEOUT_MS }));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -334,7 +336,7 @@ print(json.dumps({
     expect(r.mean_z).toBeGreaterThan(0.5);
     // And it must actually carry the dome's curvature rather than being flat.
     expect(r.tilt_fraction).toBeGreaterThan(0.2);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('exports that texture through a real GLB round-trip', () => {
     // trimesh silently dropping normalTexture on export would make the whole feature
@@ -349,5 +351,5 @@ print(json.dumps({"survived": nt is not None, "size": list(nt.size) if nt else N
 `);
     expect(r.survived).toBe(true);
     expect(r.size).toEqual([64, 64]);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 });

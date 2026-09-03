@@ -247,3 +247,20 @@ describe('MediaLightbox — local image execution provenance', () => {
     expect(screen.getByText('Unknown (invalid runner marker)')).toBeTruthy();
   });
 });
+
+// Render duration (#5878) — the detail panel is where the number is read
+// deliberately ("why did this one take four minutes?"), so it needs both the
+// humanized value and the row label, and must not invent a row for a record
+// that carries no timing.
+describe('MediaLightbox render-time row', () => {
+  it('shows a humanized render time beside its label', () => {
+    render(<MediaLightbox item={{ ...imageItem, renderMs: 254_000 }} onClose={() => {}} />);
+    const label = screen.getByText('Render time');
+    expect(label.nextElementSibling).toHaveTextContent('4m 14s');
+  });
+
+  it('omits the row entirely when the record was never timed', () => {
+    render(<MediaLightbox item={{ ...imageItem, renderMs: null }} onClose={() => {}} />);
+    expect(screen.queryByText('Render time')).toBeNull();
+  });
+});

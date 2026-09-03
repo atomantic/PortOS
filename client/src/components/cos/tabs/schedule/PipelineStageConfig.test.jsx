@@ -105,7 +105,7 @@ describe('PipelineStageConfig — pr-reviewer', () => {
     const modelSelects = screen.getAllByLabelText('Model');
     expect([...modelSelects[0].options].map((option) => option.value)).toEqual(['', 'safe-model']);
     expect([...modelSelects[1].options].map((option) => option.value)).toEqual(['', 'gpt-5.6']);
-    expect(screen.getByText(/maintained sandbox/i)).toBeInTheDocument();
+    expect(screen.getByText(/maintained OS sandbox/i)).toBeInTheDocument();
   });
 
   it('removes the optional actions stage without changing the mandatory gate', async () => {
@@ -177,10 +177,44 @@ describe('PipelineStageConfig — posture-driven eligibility', () => {
     expect(screen.getAllByText(/Eligible on this install: Grok/).length).toBe(2);
   });
 
+  // The bug behind #5906's blocked run: the CLI records were disabled and the
+  // TUI records enabled, so the note listed three "eligible" providers while
+  // the dropdown offered only the placeholder. Eligibility now follows what the
+  // server publishes for the ENABLED records — TUI siblings included.
+  it('lists only enabled providers as eligible, matching what the dropdown offers', () => {
+    renderWith([
+      { id: 'codex', name: 'Codex CLI', type: 'cli', command: 'codex', enabled: false, models: ['gpt-5.6'], publicReviewPostures: ['no-tool', 'sandboxed-actions'] },
+      { id: 'codex-tui', name: 'Codex TUI', type: 'tui', command: 'codex', enabled: true, models: ['gpt-5.6'], publicReviewPostures: ['no-tool', 'sandboxed-actions'] },
+      { id: 'grok-cli', name: 'Grok Build CLI', type: 'cli', command: 'grok', enabled: false, models: ['grok-4'], publicReviewPostures: ['no-tool', 'sandboxed-actions'] },
+    ]);
+    const providerSelects = screen.getAllByLabelText('Provider');
+    expect([...providerSelects[1].options].map((o) => o.value)).toEqual(['', 'codex-tui']);
+    const note = screen.getByText(/Sandboxed stage\. Eligible on this install:/);
+    expect(note.textContent).toContain('Eligible on this install: Codex TUI.');
+    expect(note.textContent).not.toContain('Grok Build CLI');
+  });
+
   it('warns instead of silently offering nothing when a stage has no eligible provider', () => {
     renderWith([
       { id: 'claude-ollama', name: 'Local Claude', type: 'cli', command: 'claude', endpoint: 'http://127.0.0.1:11434', models: ['safe-model'], publicReviewPostures: ['no-tool'] },
     ]);
     expect(screen.getByText(/No enabled AI provider on this install can enforce the sandboxed-actions posture/)).toBeInTheDocument();
+  });
+
+  // Stage 3 offers every enabled binary provider the server publishes as
+  // runnable, and the note separates the vendor-sandboxed ones from those the
+  // disposable worktree alone isolates.
+  it('offers a worktree-only provider for the actions stage and says which providers are OS-sandboxed', () => {
+    renderWith([
+      { id: 'codex-tui', name: 'Codex TUI', type: 'tui', command: 'codex', models: ['gpt-5.6'], publicReviewPostures: ['no-tool', 'sandboxed-actions'], publicReviewEnforcedPostures: ['no-tool', 'sandboxed-actions'] },
+      { id: 'opencode-tui', name: 'OpenCode TUI', type: 'tui', command: 'opencode', models: ['x'], publicReviewPostures: ['sandboxed-actions'], publicReviewEnforcedPostures: [] },
+    ]);
+    const providerSelects = screen.getAllByLabelText('Provider');
+    expect([...providerSelects[0].options].map((o) => o.value)).toEqual(['', 'codex-tui']);
+    expect([...providerSelects[1].options].map((o) => o.value)).toEqual(['', 'codex-tui', 'opencode-tui']);
+    const note = screen.getByText(/Sandboxed stage\. Eligible on this install:/);
+    expect(note.textContent).toContain('Eligible on this install: Codex TUI, OpenCode TUI.');
+    expect(note.textContent).toContain("OS-sandboxed by the vendor's own recipe: Codex TUI.");
+    expect(note.textContent).toContain('isolated by the disposable worktree only: OpenCode TUI.');
   });
 });

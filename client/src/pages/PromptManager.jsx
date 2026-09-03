@@ -755,7 +755,7 @@ export default function PromptManager() {
                 {preview && (
                   <div className="bg-port-card border border-port-border rounded-xl p-4">
                     <h4 className="text-sm font-medium text-gray-400 mb-2">Preview</h4>
-                    <pre className="text-sm text-gray-300 whitespace-pre-wrap bg-port-bg p-3 rounded max-h-64 overflow-auto">
+                    <pre className="text-sm text-gray-300 whitespace-pre-wrap break-words bg-port-bg p-3 rounded max-h-64 overflow-auto">
                       {preview}
                     </pre>
                   </div>
@@ -1012,7 +1012,7 @@ export default function PromptManager() {
                 {jobSkillPreview && (
                   <div className="bg-port-card border border-port-border rounded-xl p-4">
                     <h4 className="text-sm font-medium text-gray-400 mb-2">Effective Prompt Preview</h4>
-                    <pre className="text-sm text-gray-300 whitespace-pre-wrap bg-port-bg p-3 rounded max-h-64 overflow-auto">
+                    <pre className="text-sm text-gray-300 whitespace-pre-wrap break-words bg-port-bg p-3 rounded max-h-64 overflow-auto">
                       {jobSkillPreview}
                     </pre>
                   </div>

@@ -20,22 +20,23 @@
 import { randomBytes, createCipheriv, createDecipheriv } from 'crypto';
 import { readFileSync } from 'fs';
 import { chmod } from 'fs/promises';
-import { join } from 'path';
-import { PATHS, tryReadFile, atomicWrite } from './fileUtils.js';
+import { tryReadFile, atomicWrite } from './fileUtils.js';
 import { createSingleFlight } from './singleFlight.js';
+import { PORTOS_ENV_PATH } from './portosEnv.js';
 
 const CIPHER = 'aes-256-gcm';
 const IV_BYTES = 12;
 const KEY_BYTES = 32;
 const FORMAT_VERSION = 'v1';
 
-// Anchor to the INSTALL root, not the code root: the encrypted rows live in
-// the ONE install-shared Postgres, so the key must live next to that data. A
-// server booted from a CoS git worktree (PORTOS_DATA_ROOT pinned, #1947) has
-// no .env in its checkout — anchoring to PATHS.root there would mint a
-// throwaway key in the worktree, encrypt shared rows with it, and destroy the
-// key when the worktree is pruned (irreversible PII loss).
-const DEFAULT_ENV_PATH = join(PATHS.installRoot, '.env');
+// Path is the canonical one from `portosEnv.js` (#1947). Vault retains its own
+// read/write pair because `readKeyFromEnvFile` must find the first *valid* key
+// among possibly several `PRIVACY_VAULT_KEY=` lines (an uncommented `.env.example`
+// placeholder is invalid), while `provisionVaultKey` must atomically drop *all*
+// invalid lines before appending the new key — both are more than the generic
+// `readPortosEnvValue` / `upsertPortosEnvLine` helpers do. The path constant
+// is shared so the file identity stays single.
+const DEFAULT_ENV_PATH = PORTOS_ENV_PATH;
 
 // Test hook: unit tests point this at a temp .env so the read-path fallback
 // below never touches (or is satisfied by) the real install's key.

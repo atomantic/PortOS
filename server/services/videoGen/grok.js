@@ -124,6 +124,13 @@ export async function generateVideo({
 }) {
   await ensureDir(PATHS.videos);
 
+  // Wall-clock render timing (#5878). finalizeGeneratedVideo reads this off the
+  // job; without it a grok render lands with no `renderMs` at all — the cloud
+  // lane is exactly the one whose cost the user can't guess from hardware.
+  // Measured from here (queue ingestion) rather than from the spawn, which is
+  // what videoGen/spawnWatch.js does for local renders.
+  const renderStartedAtMs = Date.now();
+
   if (!prompt?.trim()) {
     throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
@@ -169,7 +176,7 @@ export async function generateVideo({
     createdAt: new Date().toISOString(),
     mode: sourceImagePath ? 'image' : 'text',
   };
-  const job = { ...meta, clients: [], status: 'running' };
+  const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
   jobs.set(jobId, job);
 
   console.log(`🎬 Generating video [${jobId.slice(0, 8)}] grok: ${prompt.slice(0, 60)}…`);

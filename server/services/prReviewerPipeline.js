@@ -9,7 +9,7 @@
  * response, and eligibility reasons can never cross into the action stage.
  */
 
-import { MODEL_ABUSE_GUARD_ID } from '../lib/modelAbuseGuard.js';
+import { MODEL_ABUSE_GUARD_ID, issuePrerequisiteWaived, normalizeEligibilityFacts } from '../lib/modelAbuseGuard.js';
 import { PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE, PUBLIC_REVIEW_GATE_EXECUTION_PROFILE } from '../lib/agentExecutionProfiles.js';
 import { createPrReviewerDefaultStages } from './taskScheduleRegistry.js';
 import {
@@ -95,19 +95,20 @@ function normalizedExpectedPullRequests(task) {
       headSha: item.headSha,
       contentFingerprint: item.contentFingerprint,
       authorLogin: item.authorLogin,
-      eligibilityFacts: item.eligibilityFacts,
+      eligibilityFacts: normalizeEligibilityFacts(item.eligibilityFacts),
     });
   }
   return pullRequests;
 }
 
+// `facts` is already normalized by normalizedExpectedPullRequests.
 function eligibilityFactsAllow(facts) {
-  if (!facts || facts.issueLookupComplete !== true) return false;
-  const linked = new Set(Array.isArray(facts.linkedIssueNumbers) ? facts.linkedIssueNumbers : []);
-  const open = new Set(Array.isArray(facts.openLinkedIssueNumbers) ? facts.openLinkedIssueNumbers : []);
-  const assigned = new Set(Array.isArray(facts.openerAssignedIssueNumbers) ? facts.openerAssignedIssueNumbers : []);
-  return linked.size > 0
-    && [...assigned].some((number) => linked.has(number) && open.has(number));
+  // The model's own quality verdict still applies to a waived PR.
+  if (issuePrerequisiteWaived(facts)) return true;
+  if (!facts.issueLookupComplete) return false;
+  const linked = new Set(facts.linkedIssueNumbers);
+  const open = new Set(facts.openLinkedIssueNumbers);
+  return facts.openerAssignedIssueNumbers.some((number) => linked.has(number) && open.has(number));
 }
 
 function validateEligibilityDecision(raw, expected) {

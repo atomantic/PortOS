@@ -6,6 +6,7 @@ import useDrawerTab from '../../hooks/useDrawerTab';
 import { FormField } from '../ui/FormField';
 import Banner from '../ui/Banner';
 import { isLocalEndpoint, isPrivateNetworkEndpoint } from '../../utils/providers';
+import { PORTS } from '../../lib/ports.js';
 
 const FLEET_TABS = [
   { id: 'architecture', label: 'Architecture' },
@@ -229,7 +230,7 @@ export default function FleetProviderSetup({ peers = [], onClose, onCreate }) {
             </FormField>
           )}
 
-          <FormField label="GPU host endpoint" hint="Use the runtime endpoint, not the PortOS :5555 address.">
+          <FormField label="GPU host endpoint" hint={`Use the runtime endpoint, not the PortOS :${PORTS.API} address.`}>
             <input
               type="text"
               value={endpointInput}

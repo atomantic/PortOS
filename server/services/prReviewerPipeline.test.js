@@ -104,6 +104,42 @@ describe('ensurePrReviewerPipeline', () => {
 });
 
 describe('pr-reviewer eligibility output', () => {
+  // A "Review this PR" click waives the linked-open-issue prerequisite (the
+  // maintainer is spending the review deliberately), but ONLY via the fact the
+  // preflight stamps — the model cannot grant it, and it still must judge the
+  // change itself.
+  it('honors the maintainer-targeted waiver from the server facts, never from the model', async () => {
+    const targetedFacts = {
+      linkedIssueNumbers: [],
+      openLinkedIssueNumbers: [],
+      openerAssignedIssueNumbers: [],
+      issueLookupComplete: true,
+      maintainerTargeted: true,
+    };
+    const task = eligibilityTask();
+    task.metadata.issueWatcher.pullRequests[0].eligibilityFacts = targetedFacts;
+
+    const accepted = await processTaskOutput({ appId: 'app-example', success: true, payload: decisionPayload(), task });
+    expect(accepted).toMatchObject({ action: 'eligibility-evaluated', accepted: true, terminal: false });
+    expect(accepted.taskMetadata.prReviewerEligibility.eligibleNumbers).toEqual([12]);
+
+    // The model's own "not eligible" still wins for a targeted PR.
+    const rejected = await processTaskOutput({
+      appId: 'app-example',
+      success: true,
+      payload: decisionPayload({ eligible: false, decisions: [{ number: 12, headSha: HEAD_SHA, eligible: false, reason: 'placeholder change' }] }),
+      task,
+    });
+    expect(rejected.taskMetadata.prReviewerEligibility.eligibleNumbers).toEqual([]);
+
+    // Without the stamp, the same fact set (no linked issue) is still ineligible
+    // whatever the model says.
+    const sweep = eligibilityTask();
+    sweep.metadata.issueWatcher.pullRequests[0].eligibilityFacts = { ...targetedFacts, maintainerTargeted: false };
+    const swept = await processTaskOutput({ appId: 'app-example', success: true, payload: decisionPayload(), task: sweep });
+    expect(swept.taskMetadata.prReviewerEligibility.eligibleNumbers).toEqual([]);
+  });
+
   it('returns only the eligible allowlist and carries the server facts into validation', async () => {
     const result = await processTaskOutput({
       appId: 'app-example',
@@ -118,7 +154,8 @@ describe('pr-reviewer eligibility output', () => {
       headSha: HEAD_SHA,
       contentFingerprint: CONTENT_FINGERPRINT,
       authorLogin: 'contributor',
-      eligibilityFacts: eligibleFacts,
+      // Facts are re-normalized on the read path, so the waiver flag is explicit.
+      eligibilityFacts: { ...eligibleFacts, maintainerTargeted: false },
       diffTruncated: false,
     }]);
     expect(result.taskMetadata.prReviewerEligibility).toMatchObject({

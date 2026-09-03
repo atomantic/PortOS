@@ -196,6 +196,10 @@ CREATE TABLE IF NOT EXISTS human_activity_events (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_human_activity_dedupe ON human_activity_events (source, dedupe_key);
 CREATE INDEX IF NOT EXISTS idx_human_activity_happened ON human_activity_events (happened_at);
+-- Source-scoped timeline reads (#5715) — see db/schema/humanActivity.js for why
+-- there are two composites and why neither uses CONCURRENTLY.
+CREATE INDEX IF NOT EXISTS idx_human_activity_source_happened ON human_activity_events (source, happened_at DESC);
+CREATE INDEX IF NOT EXISTS idx_human_activity_source_kind_happened ON human_activity_events (source, kind, happened_at DESC);
 
 -- Operator-action ledger (#5594) — the durable, filterable record of what the
 -- human actually did in PortOS. Machine-local like human_activity_events:

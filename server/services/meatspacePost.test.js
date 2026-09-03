@@ -44,10 +44,7 @@ import {
   submitPostSession,
   updatePostConfig,
   postConfigEvents,
-  resolveDrillConfig,
   getMultiplicationProgress,
-  getAdaptivePreview,
-  getPostStats,
   getPostConfig,
   getPostSessions,
   getPostSession,
@@ -61,6 +58,8 @@ import {
   POST_BENCHMARK_PROTOCOL,
   benchmarkCompatibility,
 } from './meatspacePost.js';
+import { getPostStats } from './meatspacePostStats.js';
+import { resolveDrillConfig, getAdaptivePreview } from './meatspacePostAdaptive.js';
 import { generateCognitiveDrill } from './meatspacePostCognitive.js';
 
 describe('Quick POST config', () => {

@@ -770,7 +770,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
             {showSource ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
             Full comic script (markdown source)
           </summary>
-          <pre className="px-3 py-2 text-xs text-gray-300 whitespace-pre-wrap font-mono border-t border-port-border">
+          <pre className="px-3 py-2 text-xs text-gray-300 whitespace-pre-wrap break-words font-mono border-t border-port-border">
             {script.output}
           </pre>
         </details>

@@ -318,8 +318,10 @@ export const VIDEO_MODEL_DISCLOSURES = Object.freeze({
     },
   },
   // The FastMetal repos bundle their own text encoder and VAE beside the MLX
-  // DiT, and the entries declare no `repoFiles`, so the download is the whole
-  // snapshot — several times the DiT-only size their display names quote.
+  // DiT, so the download is several times the DiT-only size. The 1.3B and 5B
+  // rows declare no `repoFiles` and pull the whole snapshot; the 14B row does
+  // (#5871), dropping the duplicated `ema/` DiT, so its figure is the narrowed
+  // pull rather than the 42.3 GB the full snapshot would cost.
   fastmetal_1_3b_qad: {
     shippedRepo: 'FastVideo/FastMetal-1.3B-QAD',
     disclosure: {
@@ -346,10 +348,26 @@ export const VIDEO_MODEL_DISCLOSURES = Object.freeze({
       modelCardUrl: hfModelCard('FastVideo/FastMetal-14B-QAD'),
       weightsLicense: APACHE_2,
       runtimeLicense: RUNTIME_LICENSE.fastvideo,
-      estimatedDownloadGb: 42.3,
+      estimatedDownloadGb: 27.1,
       reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
     },
   },
+  // FastVideo's own FastH3 Dense / Data-Free snapshot — the checkpoint the
+  // repack below is converted FROM, so same weights, same license, same
+  // territory gate. The three rows share one 144 GB download: the format in the
+  // id names a LOCAL conversion of the snapshot's transformer/, not a separate
+  // repo, which is why they all quote the same figure.
+  ...Object.fromEntries(['int8', 'int6', 'int4'].map((format) => [`fasth3_dense_datafree_${format}`, {
+    shippedRepo: 'FastVideo/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree',
+    disclosure: {
+      modelCardUrl: hfModelCard('FastVideo/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree'),
+      weightsLicense: MINIMAX_H3_WEIGHTS,
+      runtimeLicense: RUNTIME_LICENSE.fastvideo,
+      estimatedDownloadGb: 144.0,
+      reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
+    },
+    termsGate: MINIMAX_H3_TERMS_GATE,
+  }])),
   // FastH3 Preview v1 Dense / Data-Free, packed for MLX. Same MiniMax H3
   // weights lineage as the entries above — its `conversion_manifest.json`
   // names FastVideo/…-Dense-DataFree @ f624f08c as the source — so it carries

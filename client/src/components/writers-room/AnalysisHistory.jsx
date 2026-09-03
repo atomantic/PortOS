@@ -198,7 +198,7 @@ function FormatResult({ result, onApply }) {
           </button>
         )}
       </div>
-      <pre className="whitespace-pre-wrap font-serif text-gray-300 bg-port-bg border border-port-border rounded p-2 max-h-64 overflow-y-auto">{text}</pre>
+      <pre className="whitespace-pre-wrap break-words font-serif text-gray-300 bg-port-bg border border-port-border rounded p-2 max-h-64 overflow-y-auto">{text}</pre>
     </div>
   );
 }

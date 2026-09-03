@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Plus, FolderOpen, Inbox, Trash2, Image as ImageIcon, Film, Search } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import EmptyState from '../components/EmptyState';
 import toast from '../components/ui/Toast';
 import {
   listMediaCollections, createMediaCollection, deleteMediaCollection,
@@ -63,6 +64,9 @@ const resolveCover = (collection, imagesByName, videosById) => {
 };
 
 export default function MediaCollections() {
+  // Focus target for the empty state's call to action — the create form sits
+  // above the list, so the button has to point back up at it.
+  const nameInputRef = useRef(null);
   const navigate = useNavigate();
   const [searchParams, updateParams] = useUrlParams();
   const [collections, setCollections] = useState([]);
@@ -203,6 +207,7 @@ export default function MediaCollections() {
     <div className="space-y-4">
       <form onSubmit={handleCreate} className="flex gap-2 items-center">
         <input
+          ref={nameInputRef}
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -271,9 +276,13 @@ export default function MediaCollections() {
               isn't on screen. The grid is independent of both — a fresh install
               with loose media shows the onboarding copy AND its Unsorted card. */}
           {collections.length === 0 && !query ? (
-            <div className="text-gray-500 text-sm bg-port-card border border-port-border rounded-lg p-6 text-center">
-              No collections yet. Create one above, or use the folder icon on any image/video card to start a new collection.
-            </div>
+            <EmptyState
+              icon={FolderOpen}
+              title="No collections yet"
+              message="Group images and videos into a collection — name one above, or use the folder icon on any image/video card."
+              actionLabel="Name your first collection"
+              onAction={() => nameInputRef.current?.focus()}
+            />
           ) : (
             <>
               {hiddenEmptyCount > 0 && (

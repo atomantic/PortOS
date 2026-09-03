@@ -50,6 +50,8 @@ import {
   FASTVIDEO_VENV_PYTHON,
   FASTVIDEO_HELPER_SCRIPT,
   FASTVIDEO_REPO_DIR,
+  FASTVIDEO_MLX_CHECKPOINT_DIR,
+  FASTVIDEO_PROMPT_CACHE_DIR,
   LTX25_CUDA_VENV_PYTHON,
   LTX25_CUDA_HELPER_SCRIPT,
   WAN22_CUDA_VENV_PYTHON,
@@ -569,6 +571,19 @@ export const FASTVIDEO_FAMILIES = Object.freeze(['fastmetal', 'fasth3']);
 export const fastvideoFamily = (model) =>
   (FASTVIDEO_FAMILIES.includes(model?.fastvideoFamily) ? model.fastvideoFamily : 'fastmetal');
 
+// FastVideo publishes FastH3 as a bf16 diffusers snapshot whose DiT sits under
+// `transformer/`, but mlx_fasth3.py loads a pre-quantized `mlx_h3_dit`
+// directory instead. A row that names one of these formats is pointing at that
+// upstream snapshot and wants the helper to run FastVideo's own converter once;
+// a row that omits it already ships the quantized DiT beside its model root.
+// Mirrors MLX_DIT_FORMATS in scripts/generate_fastvideo.py, itself the
+// converter's own format list. Kept in sync by hand — the helper's argparse
+// `choices=` is the enforcement; this list is what lets the server reject a
+// bad value before queueing a render.
+export const FASTVIDEO_MLX_FORMATS = Object.freeze(['int8', 'int6', 'int4']);
+export const fastvideoMlxFormat = (model) =>
+  (FASTVIDEO_MLX_FORMATS.includes(model?.fastvideoMlxFormat) ? model.fastvideoMlxFormat : null);
+
 // Build args for the FastVideo MLX helper on Apple Silicon.
 export const buildFastVideoArgs = ({
   model, fastvideoModelPath, prompt, negativePrompt, width, height,
@@ -593,12 +608,21 @@ export const buildFastVideoArgs = ({
     '--seed', String(seed),
     '--output', outputPath,
   ];
-  // The shipped FastH3 checkpoint is a self-contained snapshot: the quantized
-  // MLX DiT sits beside the vae/audio_vae/text_encoder/tokenizer the pipeline
-  // loads, so model-root IS the checkpoint. Stated explicitly rather than left
-  // to the helper's "defaults to model-root" fallback, so the two paths become
-  // separately addressable the day a row ships the DiT as its own download.
-  if (family === 'fasth3') args.push('--mlx-checkpoint', modelRoot);
+  // Two FastH3 checkpoint layouts, and the row is what distinguishes them.
+  // An upstream FastVideo snapshot carries the bf16 DiT under `transformer/`
+  // and declares a target format, so the helper converts once and owns the
+  // resulting path — passing --mlx-checkpoint here would pin the wrong
+  // directory. A repack that already ships `mlx_h3_dit.safetensors` beside the
+  // vae/audio_vae/text_encoder/tokenizer IS its own checkpoint, and says so
+  // explicitly rather than leaning on the helper's default-to-model-root.
+  if (family === 'fasth3') {
+    // Conditioning is half the wall clock of a render and recomputes identical
+    // embeddings every time, so every FastH3 row reuses one cache.
+    args.push('--prompt-cache-dir', FASTVIDEO_PROMPT_CACHE_DIR);
+    const mlxFormat = fastvideoMlxFormat(model);
+    if (mlxFormat) args.push('--mlx-format', mlxFormat, '--mlx-checkpoint-cache-dir', FASTVIDEO_MLX_CHECKPOINT_DIR);
+    else args.push('--mlx-checkpoint', modelRoot);
+  }
   if (negativePrompt) args.push('--negative-prompt', negativePrompt);
   if (sourceImagePath) args.push('--image', sourceImagePath);
   return { bin: FASTVIDEO_VENV_PYTHON, args };

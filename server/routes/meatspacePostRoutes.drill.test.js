@@ -30,7 +30,6 @@ vi.mock('../services/meatspacePostRhetoric.js', () => ({
 }));
 
 vi.mock('../services/meatspacePost.js', () => ({
-  resolveDrillConfig: vi.fn(),
   generateDrill: vi.fn(),
   getPostReviewReps: vi.fn(),
   // The memory branch reads the saved config to scope generateMemoryDrill's
@@ -38,11 +37,22 @@ vi.mock('../services/meatspacePost.js', () => ({
   getPostConfig: vi.fn(),
 }));
 
+// resolveDrillConfig moved to the adaptive policy module (#5690); the stats and
+// recommendations siblings are stubbed because the route imports them too and
+// they would otherwise link against the meatspacePost.js mock above.
+vi.mock('../services/meatspacePostAdaptive.js', () => ({
+  resolveDrillConfig: vi.fn(),
+  getAdaptivePreview: vi.fn(),
+}));
+vi.mock('../services/meatspacePostStats.js', () => ({ getPostStats: vi.fn() }));
+vi.mock('../services/meatspacePostRecommendations.js', () => ({ getPostRecommendations: vi.fn() }));
+
 import { getCachedDrill, triggerReplenish } from '../services/meatspacePostDrillCache.js';
 import { generateLlmDrill } from '../services/meatspacePostLlm.js';
 import { generateMemoryDrill } from '../services/meatspacePostMemory.js';
 import { evaluateRhetoricAttempt } from '../services/meatspacePostRhetoric.js';
-import { resolveDrillConfig, generateDrill, getPostReviewReps, getPostConfig } from '../services/meatspacePost.js';
+import { generateDrill, getPostReviewReps, getPostConfig } from '../services/meatspacePost.js';
+import { resolveDrillConfig } from '../services/meatspacePostAdaptive.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import meatspacePostRoutes from './meatspacePostRoutes.js';
 

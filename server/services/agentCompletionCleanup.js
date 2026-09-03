@@ -30,7 +30,7 @@ import { resolveReviewLoopOptions } from './codeReview.js';
 import { cleanupAgentWorktree, spawnMergeRecoveryTask, releaseRetryHold } from './agentWorktreeCleanup.js';
 import { resolvePrCompletion, resolvePrCreation } from '../lib/prDisposition.js';
 import { resolveOwnsPrWorkflow } from '../lib/slashdoInvocation.js';
-import { isPublicReviewRestrictedProfile } from '../lib/agentExecutionProfiles.js';
+import { isPublicReviewRestrictedProfile, publicReviewPostureForProfile } from '../lib/agentExecutionProfiles.js';
 
 const ROOT_DIR = PATHS.root;
 
@@ -139,6 +139,21 @@ export async function handlePipelineProgression(task, agentId, success) {
   // without its own pin inherits the value carried in `...task.metadata` — either
   // the task-level pin (interval config) or the prior stage's. Clearing an unset
   // stage's effort here would wipe a task-level effort from stage 1+.
+  //
+  // A public-review stage is the exception: its provider is resolved against
+  // the posture it declares, and the stages have different postures — the
+  // eligibility gate is typically pinned to a small tool-free local model that
+  // must never be inherited by the sandboxed review stage. An unpinned
+  // public-review stage means "first eligible provider on this install" (what
+  // the schedule UI promises), so the previous stage's pins are dropped here.
+  if (publicReviewPostureForProfile(nextStage.executionProfile)) {
+    for (const key of ['provider', 'providerId', 'model', 'effort']) delete nextTask.metadata[key];
+  }
+  // The previous stage's agent payload must not travel: `description` above IS
+  // this stage's prompt, and addTask only promotes it to `metadata.prompt` when
+  // none is set — an inherited one made every stage after the first run on the
+  // stage before it's instructions.
+  delete nextTask.metadata.prompt;
   if (nextStage.model) nextTask.metadata.model = nextStage.model;
   if (nextStage.providerId) {
     nextTask.metadata.provider = nextStage.providerId;

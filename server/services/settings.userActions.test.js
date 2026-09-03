@@ -114,6 +114,11 @@ describe('settings save → user_action_events (#5594)', () => {
     expect(events.every((e) => e.dedupeKey.startsWith('settings.update:'))).toBe(true);
   });
 
+  it('skipUserAction suppresses the generic settings.update row', async () => {
+    await updateSettings({ timezone: 'Europe/Berlin' }, { actor: 'user', skipUserAction: true });
+    expect(await listUserActions({ type: 'settings.update' })).toEqual([]);
+  });
+
   it('records nothing for reloadSettings — a restore is not an operator edit', async () => {
     seed({ timezone: 'Asia/Tokyo', theme: 'dark' });
     await reloadSettings();

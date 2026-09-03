@@ -64,9 +64,15 @@ vi.mock('./taste-questionnaire.js', () => ({
   getTasteProfile: vi.fn(() => ({ sections: [] }))
 }));
 
-vi.mock('./identity.js', () => ({
-  getChronotype: vi.fn(() => null),
-  getLongevity: vi.fn(() => null),
+vi.mock('./identity/chronotype.js', () => ({
+  getChronotype: vi.fn(() => null)
+}));
+
+vi.mock('./identity/longevity.js', () => ({
+  getLongevity: vi.fn(() => null)
+}));
+
+vi.mock('./identity/goals.js', () => ({
   getGoals: vi.fn(() => ({ goals: [] }))
 }));
 

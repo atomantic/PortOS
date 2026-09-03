@@ -59,6 +59,7 @@ const COS_SRC = readFileSync(join(__dirname, 'cos.js'), 'utf-8');
 // listener) stays in cos.js. Source-level guards below read each invariant from
 // whichever module now owns it.
 const GEN_SRC = readFileSync(join(__dirname, 'cosTaskGenerator.js'), 'utf-8');
+const PRESTEP_SRC = readFileSync(join(__dirname, 'cosTaskPreStepBlocks.js'), 'utf-8');
 const SCHED_SRC = readFileSync(join(__dirname, 'cosJobScheduler.js'), 'utf-8');
 // The pure capacity tracker + mission/idle tier-eligibility predicates that
 // dequeueNextTask (and these tests) call live in cosDequeue.js (issue #2530).
@@ -1758,16 +1759,6 @@ describe('cos.js source — priority + capacity invariants', () => {
       'queue path must collapse description to a single line via firstLine()'
     ).toMatch(/\.description\s*=\s*firstLine\(/);
 
-    // `getNextTaskType` falls back to ROTATION when nothing is time-due, and
-    // the rotation pointer is derived from the `lastType` argument. The queue
-    // path MUST thread the per-app `lastImprovementType` through, otherwise
-    // every tick restarts the rotation at index 0 and starves every other
-    // rotation type for the app. Mirrors the legacy direct-spawn caller.
-    expect(
-      fnBody,
-      'queue path must pass the loaded lastType through to getNextTaskType so rotation advances'
-    ).toMatch(/getNextTaskType\(app\.id,\s*\w+\s*(?:,|\))/);
-
     // appActivity helpers must come from the file-level static import (line ~23),
     // NOT a dynamic `await import('./appActivity.js')` *inside* the per-app
     // loop. Dynamic imports are cached but still add an extra microtask + a
@@ -2181,10 +2172,12 @@ describe('addTask — first-line dedup', () => {
 describe('isPerpetualRefillCandidate — perpetual drain on completion', () => {
   const schedule = {
     tasks: {
-      'claim-issue': { type: 'perpetual', enabled: true },
-      'claim-issue-disabled': { type: 'perpetual', enabled: false },
-      'branch-reconcile': { type: 'on-demand', enabled: true },
-      'plan-task': { type: 'daily', enabled: true },
+      'claim-issue': { type: 'on-demand', perpetual: true, enabled: true },
+      'claim-issue-disabled': { type: 'on-demand', perpetual: true, enabled: false },
+      // A cron cadence carrying the same flag drains identically — the lane is
+      // chosen by `perpetual`, never by the cadence type or the task's name.
+      'branch-reconcile': { type: 'cron', cronExpression: '0 3 * * *', perpetual: true, enabled: true },
+      'plan-task': { type: 'cron', cronExpression: '0 7 * * *', enabled: true },
     },
   };
   const agentFor = (analysisType, key = 'taskAnalysisType') => ({
@@ -2203,7 +2196,7 @@ describe('isPerpetualRefillCandidate — perpetual drain on completion', () => {
     expect(isPerpetualRefillCandidate(agentFor('plan-task'), schedule)).toBe(false);
   });
 
-  it('is true for an enabled on-demand reconciliation drain', () => {
+  it('is true for an enabled cron-scheduled perpetual drain', () => {
     expect(isPerpetualRefillCandidate(agentFor('branch-reconcile'), schedule)).toBe(true);
   });
 
@@ -2234,10 +2227,12 @@ describe('isPerpetualRefillCandidate — perpetual drain on completion', () => {
 describe('perpetualRefillPlan — manual vs scheduled drain lane', () => {
   const schedule = {
     tasks: {
-      'claim-issue': { type: 'perpetual', enabled: true },
-      'claim-issue-disabled': { type: 'perpetual', enabled: false },
-      'branch-reconcile': { type: 'on-demand', enabled: true },
-      'plan-task': { type: 'daily', enabled: true },
+      'claim-issue': { type: 'on-demand', perpetual: true, enabled: true },
+      'claim-issue-disabled': { type: 'on-demand', perpetual: true, enabled: false },
+      // A cron cadence carrying the same flag drains identically — the lane is
+      // chosen by `perpetual`, never by the cadence type or the task's name.
+      'branch-reconcile': { type: 'cron', cronExpression: '0 3 * * *', perpetual: true, enabled: true },
+      'plan-task': { type: 'cron', cronExpression: '0 7 * * *', enabled: true },
     },
   };
   const agent = (metadata) => ({ metadata });
@@ -2254,7 +2249,7 @@ describe('perpetualRefillPlan — manual vs scheduled drain lane', () => {
     )).toEqual({ lane: 'onDemand', taskType: 'claim-issue', appId: 'app-42' });
   });
 
-  it('routes an on-demand reconciliation drain to the on-demand lane', () => {
+  it('routes a cron-scheduled perpetual drain to the on-demand lane when the run was manual', () => {
     expect(perpetualRefillPlan(
       agent({ taskAnalysisType: 'branch-reconcile', taskOnDemand: true, taskApp: 'app-1' }),
       schedule,
@@ -2524,7 +2519,9 @@ describe('pending-merge sweep — own timer, not the evaluation cadence (#3630)'
   });
 
   it('does NOT re-couple the drain to the pr-watcher task type', () => {
-    const watcherFn = extractFnBody(GEN_SRC, GEN_SRC.indexOf('async function resolvePrWatcherBlock'));
+    const start = PRESTEP_SRC.indexOf('async function resolvePrWatcherBlock');
+    expect(start, 'resolvePrWatcherBlock must still be findable — a renamed/moved subject would silently pass').toBeGreaterThan(-1);
+    const watcherFn = extractFnBody(PRESTEP_SRC, start);
     expect(watcherFn).not.toMatch(/sweepPendingMergePrs\(/);
   });
 

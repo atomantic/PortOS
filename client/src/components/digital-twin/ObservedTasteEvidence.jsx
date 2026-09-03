@@ -4,7 +4,7 @@ import * as api from '../../services/api';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import MarkdownOutput from '../cos/MarkdownOutput';
-import { formatDateTime } from '../../utils/formatters';
+import { formatDateTime, formatHourOfDay } from '../../utils/formatters';
 
 // Divergence badge: divergence is SIGNAL, not error — stated and observed
 // chronotypes differing is a legitimate insight, so we frame it neutrally.
@@ -44,13 +44,6 @@ function TopList({ title, items }) {
   );
 }
 
-function fmtHour(h) {
-  if (h == null) return '—';
-  const suffix = h < 12 ? 'am' : 'pm';
-  const hr = h % 12 === 0 ? 12 : h % 12;
-  return `${hr}${suffix}`;
-}
-
 function fmtNovelty(nv) {
   if (!nv || nv.noveltyRatio == null) return null;
   return `${Math.round(nv.noveltyRatio * 100)}% novel · ${nv.distinct}/${nv.total} distinct`;
@@ -66,7 +59,7 @@ function HourBars({ histogram }) {
       {histogram.map((s) => (
         <div
           key={s.hour}
-          title={`${fmtHour(s.hour)}: ${s.total} event(s)`}
+          title={`${formatHourOfDay(s.hour, { style: 'lower' })}: ${s.total} event(s)`}
           className="flex-1 bg-port-accent-2/60 rounded-t"
           style={{ height: `${Math.max(3, ((s.total || 0) / max) * 100)}%` }}
         />
@@ -218,9 +211,9 @@ export default function ObservedTasteEvidence() {
           <HourBars histogram={chronotype.histogram} />
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs text-gray-400">
             <div>Observed: <span className="text-white">{chronotype.observedType || '—'}</span></div>
-            <div>Peak messages: <span className="text-white">{fmtHour(chronotype.peakHours?.messages)}</span></div>
-            <div>Peak media: <span className="text-white">{fmtHour(chronotype.peakHours?.media)}</span></div>
-            <div>Peak overall: <span className="text-white">{fmtHour(chronotype.peakHours?.overall)}</span></div>
+            <div>Peak messages: <span className="text-white">{formatHourOfDay(chronotype.peakHours?.messages, { style: 'lower' })}</span></div>
+            <div>Peak media: <span className="text-white">{formatHourOfDay(chronotype.peakHours?.media, { style: 'lower' })}</span></div>
+            <div>Peak overall: <span className="text-white">{formatHourOfDay(chronotype.peakHours?.overall, { style: 'lower' })}</span></div>
           </div>
           {evidence?.statedChronotype?.type && (
             <div className="text-xs text-gray-500">

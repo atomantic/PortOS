@@ -142,6 +142,26 @@ describe('POST /api/code-review/local', () => {
     )
   })
 
+  // The old lmstudio-or-else ternary handed every non-lmstudio backend the
+  // OLLAMA model id, so a third backend would have reviewed with the wrong model.
+  it('reads each backend\'s own configured model scalar', async () => {
+    settingsSvc.getSettings.mockResolvedValue({
+      codeReview: { ollamaModel: 'ollama-model', mtplxModel: 'mtplx-model' },
+    })
+    codeReviewSvc.runLocalCodeReview.mockResolvedValue({
+      ok: true, backend: 'mtplx', model: 'mtplx-model', findings: 'No findings.',
+    })
+
+    const res = await request(makeApp())
+      .post('/api/code-review/local')
+      .send({ backend: 'mtplx', diff: 'diff --git a b' })
+
+    expect(res.status).toBe(200)
+    expect(codeReviewSvc.runLocalCodeReview).toHaveBeenCalledWith(
+      expect.objectContaining({ backend: 'mtplx', model: 'mtplx-model' }),
+    )
+  })
+
   it('passes the caller-supplied model through when present', async () => {
     settingsSvc.getSettings.mockResolvedValue({
       codeReview: { ollamaModel: 'settings-model' },

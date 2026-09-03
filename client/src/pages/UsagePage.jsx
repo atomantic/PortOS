@@ -60,11 +60,11 @@ function UsageMeter({ limit }) {
           style={{ width: `${Math.min(100, Math.max(0, used))}%` }}
         />
       </div>
-      <div className="flex items-start justify-between gap-1 mt-0.5 sm:mt-1">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-0.5 sm:gap-1 mt-0.5 sm:mt-1">
         <span className="text-[9px] sm:text-xs text-gray-500">{used}% used</span>
         {limit.resetsAt && (
-          <span className="flex min-w-0 text-[9px] sm:text-xs text-gray-500 items-start justify-end gap-1 text-right leading-tight">
-            <Clock size={11} /> resets {formatResetsAt(limit.resetsAt)}
+          <span className="flex min-w-0 text-[9px] sm:text-xs text-gray-500 items-start sm:justify-end gap-1 sm:text-right leading-tight">
+            <Clock size={11} className="shrink-0" /> resets {formatResetsAt(limit.resetsAt)}
           </span>
         )}
       </div>
@@ -833,8 +833,10 @@ function InternalUsageMetrics() {
           Informational estimate of what this usage would have cost under API billing (PortOS runs on subscriptions).
           {' '}<span className="text-gray-400">Measured</span> rows are the provider CLI&rsquo;s own per-message counts, read from its local
           transcript — full per-turn input, output, and prompt-cache reads/writes, each priced at its own rate.
-          {' '}<span className="text-gray-400">Estimated</span> rows are runs with no readable transcript (local models, or a provider
-          that writes none): input is approximated from the initial prompt only and cache traffic is not counted, so those rows
+          {' '}Grok rows are measured the same way once a turn completes; a run killed mid-turn falls back to its chat history.
+          {' '}<span className="text-gray-400">Estimated</span> rows are runs with no token counts to read: Antigravity writes a
+          session transcript but no token fields, so its rows are sized from that transcript&rsquo;s text, and a run with no session
+          file at all (local models) is approximated from the initial prompt only with no cache traffic counted — those rows
           understate real usage substantially.
           Rates are as of {report?.pricingAsOf || 'the last update'} and exclude batch and long-context tiers.
           {' '}Rows marked ~ use an approximated rate.

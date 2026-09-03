@@ -14,6 +14,7 @@ const {
   readMeasuredUsage,
   reconcileRunUsage,
   recordCompletedRunUsage,
+  resolveFamilyProvider,
   __resetUsageClaims
 } = await import('./usageReconciler.js');
 
@@ -106,8 +107,16 @@ describe('transcriptFamily', () => {
     expect(transcriptFamily({ providerId: 'custom', command: '/usr/local/bin/claude' })).toBe('claude');
   });
 
+  it('maps grok and antigravity provider ids to their own families', () => {
+    expect(transcriptFamily({ providerId: 'grok-cli' })).toBe('grok');
+    expect(transcriptFamily({ providerId: 'grok-tui' })).toBe('grok');
+    expect(transcriptFamily({ providerId: 'antigravity-cli' })).toBe('agy');
+    expect(transcriptFamily({ providerId: 'custom', command: '/usr/local/bin/agy' })).toBe('agy');
+  });
+
   it('returns null for providers that write no transcript', () => {
-    for (const providerId of ['ollama', 'lmstudio', 'agy', 'grok', 'kimi', '', null]) {
+    // `legacy` would match the `agy` binary name without word boundaries.
+    for (const providerId of ['ollama', 'lmstudio', 'kimi', 'legacy', '', null]) {
       expect(transcriptFamily({ providerId })).toBeNull();
     }
   });
@@ -251,8 +260,10 @@ describe('reconcileRunUsage', () => {
     const result = await reconcileRunUsage(run, { tokensIn: 30, tokensOut: 9999 }, { home });
 
     // One model in the transcript → one record, carrying PortOS's model id.
+    // `role` marks it as the run's OWN provider rather than a nested CLI's.
     expect(result).toEqual([{
       providerId: 'claude-code-tui',
+      role: 'parent',
       model: 'claude-opus-5',
       messages: 2,
       tokensIn: 15,
@@ -945,5 +956,263 @@ describe('keyless-line claims survive the file changing shape', () => {
     // …and an overlapping run re-bills neither.
     const second = await read(...B);
     expect((first?.tokensOut || 0) + (second?.tokensOut || 0)).toBe(100);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Nested reviewer CLIs — grok and Antigravity (#5831)
+//
+// A CoS task that ships a PR with `--review-with grok,antigravity` bash-launches
+// those CLIs as CHILDREN of the parent agent. They leave a session on disk but
+// never become a PortOS run, so the parent's chars/4 estimate is the only thing
+// that ever gets recorded — and it can't see them.
+// ---------------------------------------------------------------------------
+
+const GROK_MODEL = 'example-grok-model';
+const GROK_PROVIDER = { id: 'grok-cli', type: 'cli', command: 'grok', enabled: true, defaultModel: GROK_MODEL };
+const AGY_PROVIDER = { id: 'antigravity-cli', type: 'cli', command: 'agy', enabled: true, defaultModel: 'example-agy-model' };
+const CLAUDE_PROVIDER = { id: 'claude-code', type: 'cli', command: 'claude', enabled: true, defaultModel: 'claude-opus-5' };
+
+const grokTurnLine = ({ promptId = 'prompt-1', ms, input = 15_000, cachedRead = 11_000, output = 1_800 }) => JSON.stringify({
+  timestamp: Math.round(ms / 1000),
+  method: '_x.ai/session/update',
+  params: {
+    sessionId: 'session-aaaa',
+    update: {
+      sessionUpdate: 'turn_completed',
+      prompt_id: promptId,
+      usage: {
+        inputTokens: input,
+        outputTokens: output,
+        totalTokens: input + output,
+        cachedReadTokens: cachedRead,
+        cacheCreationTokens: 0,
+        reasoningTokens: 0,
+        modelUsage: { [GROK_MODEL]: { inputTokens: input, outputTokens: output } }
+      }
+    },
+    _meta: { eventId: 'evt-1', agentTimestampMs: ms }
+  }
+});
+
+const writeGrokSession = async ({ sessionId = 'session-aaaa', cwd = WORKSPACE, updates = null, chat = null, summary = null }) => {
+  const dir = join(home, '.grok', 'sessions', encodeURIComponent(cwd), sessionId);
+  await mkdir(dir, { recursive: true });
+  if (updates) await writeFile(join(dir, 'updates.jsonl'), updates.join('\n'));
+  if (chat) await writeFile(join(dir, 'chat_history.jsonl'), chat.join('\n'));
+  if (summary) await writeFile(join(dir, 'summary.json'), JSON.stringify(summary));
+};
+
+const writeAgySession = async ({ conversationId = 'conv-aaaa', workspace = WORKSPACE, steps = [] }) => {
+  const root = join(home, '.gemini', 'antigravity-cli');
+  await mkdir(root, { recursive: true });
+  await writeFile(join(root, 'history.jsonl'), [
+    JSON.stringify({ display: '/status', timestamp: 1_800_000_000_000, type: 'slash_command', workspace }),
+    JSON.stringify({ display: 'review this', timestamp: 1_800_000_000_000, workspace, conversationId })
+  ].join('\n'));
+  const brain = join(root, 'brain', conversationId, '.system_generated', 'logs');
+  await mkdir(brain, { recursive: true });
+  await writeFile(join(brain, 'transcript.jsonl'), steps.join('\n'));
+};
+
+const agyStepLine = ({ index, type, createdAt, content }) => JSON.stringify({
+  step_index: index,
+  source: type === 'USER_INPUT' ? 'USER_EXPLICIT' : 'MODEL',
+  type,
+  status: 'DONE',
+  created_at: createdAt,
+  content
+});
+
+const RUN_WINDOW = { startTime: '2026-07-01T10:00:00.000Z', endTime: '2026-07-01T10:30:00.000Z' };
+const IN_WINDOW_MS = Date.parse('2026-07-01T10:10:00.000Z');
+const grokRun = { providerId: 'grok-cli', model: GROK_MODEL, workspacePath: WORKSPACE, ...RUN_WINDOW };
+const claudeRun = { providerId: 'claude-code', model: 'claude-opus-5', workspacePath: WORKSPACE, ...RUN_WINDOW };
+
+describe('resolveFamilyProvider', () => {
+  it('prefers a cli record over a tui one and never an api one', () => {
+    const providers = [
+      { id: 'grok', type: 'api', enabled: true, defaultModel: 'grok-4' },
+      { id: 'grok-tui', type: 'tui', command: 'grok', enabled: true, defaultModel: GROK_MODEL },
+      GROK_PROVIDER
+    ];
+    expect(resolveFamilyProvider(providers, 'grok')?.id).toBe('grok-cli');
+  });
+
+  it('falls back to a tui record when no cli one is configured', () => {
+    const providers = [{ id: 'grok-tui', type: 'tui', command: 'grok', enabled: true, defaultModel: GROK_MODEL }];
+    expect(resolveFamilyProvider(providers, 'grok')?.id).toBe('grok-tui');
+  });
+
+  it('breaks a tie with the model the transcript actually names', () => {
+    const providers = [
+      { id: 'grok-light', type: 'cli', command: 'grok', enabled: true, defaultModel: 'other-grok-model' },
+      GROK_PROVIDER
+    ];
+    const measured = { model: GROK_MODEL, byModel: { [GROK_MODEL]: {} } };
+    expect(resolveFamilyProvider(providers, 'grok', measured)?.id).toBe('grok-cli');
+  });
+
+  it('returns null when the family has no enabled provider', () => {
+    expect(resolveFamilyProvider([{ ...GROK_PROVIDER, enabled: false }], 'grok')).toBeNull();
+    expect(resolveFamilyProvider([CLAUDE_PROVIDER], 'grok')).toBeNull();
+  });
+});
+
+describe('grok sessions', () => {
+  it('measures a first-class grok run from its completed turns', async () => {
+    await writeGrokSession({ updates: [grokTurnLine({ ms: IN_WINDOW_MS })] });
+    const [record] = await reconcileRunUsage(grokRun, { tokensIn: 1, tokensOut: 1 }, { home });
+    expect(record.source).toBe('measured');
+    expect(record.providerId).toBe('grok-cli');
+    expect(record.tokensIn).toBe(4_000);
+    expect(record.cacheReadTokens).toBe(11_000);
+    expect(record.tokensOut).toBe(1_800);
+    expect(record.model).toBe(GROK_MODEL);
+  });
+
+  it('estimates from chat history when the run died before any turn completed', async () => {
+    await writeGrokSession({
+      summary: {
+        info: { id: 'session-aaaa', cwd: WORKSPACE },
+        created_at: '2026-07-01T10:05:00.000Z',
+        last_active_at: '2026-07-01T10:20:00.000Z',
+        current_model_id: GROK_MODEL
+      },
+      chat: [
+        JSON.stringify({ type: 'user', content: [{ type: 'text', text: 'a'.repeat(400) }] }),
+        JSON.stringify({ type: 'assistant', content: 'b'.repeat(200), model_id: GROK_MODEL })
+      ]
+    });
+    const [record] = await reconcileRunUsage(grokRun, { tokensIn: 1, tokensOut: 1 }, { home });
+    expect(record.source).toBe('estimate');
+    expect(record.tokensIn).toBe(100);
+    expect(record.tokensOut).toBe(50);
+    expect(record.model).toBe(GROK_MODEL);
+  });
+
+  it('does not stack a chat-history estimate on a session that already recorded a turn', async () => {
+    await writeGrokSession({
+      updates: [grokTurnLine({ ms: IN_WINDOW_MS, input: 1_000, cachedRead: 0, output: 10 })],
+      summary: { info: { id: 'session-aaaa', cwd: WORKSPACE }, created_at: '2026-07-01T10:05:00.000Z' },
+      chat: [JSON.stringify({ type: 'user', content: 'x'.repeat(4_000) })]
+    });
+    const [record] = await reconcileRunUsage(grokRun, { tokensIn: 1, tokensOut: 1 }, { home });
+    expect(record.source).toBe('measured');
+    expect(record.tokensIn).toBe(1_000);
+  });
+
+  it('ignores a session from another workspace', async () => {
+    await writeGrokSession({ cwd: '/tmp/other-workspace', updates: [grokTurnLine({ ms: IN_WINDOW_MS })] });
+    const record = await reconcileRunUsage(grokRun, { tokensIn: 7, tokensOut: 9 }, { home });
+    expect(record.source).toBe('estimate');
+    expect(record.tokensIn).toBe(7);
+  });
+});
+
+describe('nested sibling-family attribution', () => {
+  it('bills a nested grok review to grok, not to the Claude parent', async () => {
+    await writeClaudeSession('a.jsonl', [
+      claudeAssistant({ id: 'm1', timestamp: '2026-07-01T10:05:00.000Z' })
+    ]);
+    await writeGrokSession({ updates: [grokTurnLine({ ms: IN_WINDOW_MS })] });
+
+    const records = await reconcileRunUsage(claudeRun, { tokensIn: 1, tokensOut: 1 }, {
+      home,
+      providers: [CLAUDE_PROVIDER, GROK_PROVIDER]
+    });
+    const byProvider = Object.fromEntries(records.map((record) => [record.providerId, record]));
+    expect(Object.keys(byProvider).sort()).toEqual(['claude-code', 'grok-cli']);
+    // The nested grok tokens must not appear anywhere on the Claude row.
+    expect(byProvider['claude-code'].tokensOut).toBe(50);
+    expect(byProvider['claude-code'].cacheReadTokens).toBe(1000);
+    expect(byProvider['grok-cli'].tokensOut).toBe(1_800);
+    expect(byProvider['grok-cli'].cacheReadTokens).toBe(11_000);
+    expect(byProvider['grok-cli'].source).toBe('measured');
+  });
+
+  it('bills a nested Antigravity review as an estimate on the agy provider', async () => {
+    await writeClaudeSession('a.jsonl', [
+      claudeAssistant({ id: 'm1', timestamp: '2026-07-01T10:05:00.000Z' })
+    ]);
+    await writeAgySession({
+      steps: [
+        agyStepLine({ index: 0, type: 'USER_INPUT', createdAt: '2026-07-01T10:05:00Z', content: 'u'.repeat(400) }),
+        agyStepLine({ index: 1, type: 'PLANNER_RESPONSE', createdAt: '2026-07-01T10:06:00Z', content: 'p'.repeat(200) })
+      ]
+    });
+
+    const records = await reconcileRunUsage(claudeRun, { tokensIn: 1, tokensOut: 1 }, {
+      home,
+      providers: [CLAUDE_PROVIDER, AGY_PROVIDER]
+    });
+    const agy = records.find((record) => record.providerId === 'antigravity-cli');
+    // Antigravity writes no token counts at all — this row is honest chars/4 of
+    // the real transcript and must never claim to be measured.
+    expect(agy.source).toBe('estimate');
+    expect(agy.tokensIn).toBe(100);
+    expect(agy.tokensOut).toBe(50);
+    // The transcript names no model, so the provider's own default is used.
+    expect(agy.model).toBe('example-agy-model');
+  });
+
+  it('skips a family with no enabled provider instead of opening an unknown bucket', async () => {
+    await writeClaudeSession('a.jsonl', [
+      claudeAssistant({ id: 'm1', timestamp: '2026-07-01T10:05:00.000Z' })
+    ]);
+    await writeGrokSession({ updates: [grokTurnLine({ ms: IN_WINDOW_MS })] });
+
+    const records = await reconcileRunUsage(claudeRun, { tokensIn: 1, tokensOut: 1 }, {
+      home,
+      providers: [CLAUDE_PROVIDER]
+    });
+    for (const record of [records].flat()) expect(record.providerId).toBe('claude-code');
+  });
+
+  it('leaves a skipped family claimable by a later, configured run', async () => {
+    await writeGrokSession({ updates: [grokTurnLine({ ms: IN_WINDOW_MS })] });
+    // First run: grok is not configured, so the session is skipped — and its
+    // turns must NOT be claimed, or they would be unbillable forever.
+    await reconcileRunUsage(claudeRun, { tokensIn: 1, tokensOut: 1 }, { home, providers: [CLAUDE_PROVIDER] });
+    const records = await reconcileRunUsage(claudeRun, { tokensIn: 1, tokensOut: 1 }, {
+      home,
+      providers: [CLAUDE_PROVIDER, GROK_PROVIDER]
+    });
+    expect(records.find((record) => record.providerId === 'grok-cli').tokensOut).toBe(1_800);
+  });
+
+  it('bills a nested session once across two overlapping runs in one cwd', async () => {
+    await writeGrokSession({ updates: [grokTurnLine({ ms: IN_WINDOW_MS })] });
+    const providers = [CLAUDE_PROVIDER, GROK_PROVIDER];
+    const first = [await reconcileRunUsage(claudeRun, { tokensIn: 1, tokensOut: 1 }, { home, providers })].flat();
+    const second = [await reconcileRunUsage(
+      { ...claudeRun, startTime: '2026-07-01T10:05:00.000Z', endTime: '2026-07-01T10:35:00.000Z' },
+      { tokensIn: 1, tokensOut: 1 },
+      { home, providers }
+    )].flat();
+    expect(first.find((record) => record.providerId === 'grok-cli').tokensOut).toBe(1_800);
+    expect(second.find((record) => record.providerId === 'grok-cli')).toBeUndefined();
+  });
+
+  it('reconciles the parent family only when no provider list is supplied', async () => {
+    await writeClaudeSession('a.jsonl', [
+      claudeAssistant({ id: 'm1', timestamp: '2026-07-01T10:05:00.000Z' })
+    ]);
+    await writeGrokSession({ updates: [grokTurnLine({ ms: IN_WINDOW_MS })] });
+    const records = [await reconcileRunUsage(claudeRun, { tokensIn: 1, tokensOut: 1 }, { home })].flat();
+    expect(records).toHaveLength(1);
+    expect(records[0].providerId).toBe('claude-code');
+  });
+
+  it('finds a nested session under a parent whose own provider writes no transcript', async () => {
+    await writeGrokSession({ updates: [grokTurnLine({ ms: IN_WINDOW_MS })] });
+    const records = [await reconcileRunUsage(
+      { providerId: 'ollama-local', model: 'qwen3.6:35b', workspacePath: WORKSPACE, ...RUN_WINDOW },
+      { tokensIn: 3, tokensOut: 4 },
+      { home, providers: [GROK_PROVIDER] }
+    )].flat();
+    // The parent keeps its estimate; the nested grok review gets its own row.
+    expect(records.find((record) => record.providerId === 'ollama-local').source).toBe('estimate');
+    expect(records.find((record) => record.providerId === 'grok-cli').tokensOut).toBe(1_800);
   });
 });

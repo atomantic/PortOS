@@ -77,6 +77,12 @@ const CANVAS_AVATAR_STYLES = new Set([
 // Shared brand gradient for the "CoS" wordmark headings (clipped to text).
 const COS_TITLE_GRADIENT = 'linear-gradient(135deg, #6366f1, #8b5cf6, #06b6d4)';
 
+// How long the avatar keeps "speaking" after an event that gives it something to
+// say. Exported so tests drain the timer by this value rather than a literal —
+// a hardcoded drain that no longer covers the timer lets a state update escape
+// act() again.
+export const SPEAKING_MS = 2000;
+
 function TabLoadFallback({ label }) {
   return <div className="flex items-center justify-center py-12"><BrailleSpinner text={`Loading ${label}`} /></div>;
 }
@@ -357,7 +363,7 @@ export default function ChiefOfStaff() {
       const shortDesc = taskDesc ? taskDesc.substring(0, 60) + (taskDesc.length > 60 ? '...' : '') : 'Working on task...';
       setStatusMessage(`Running: ${shortDesc}`);
       setSpeaking(true);
-      setTimeout(() => setSpeaking(false), 2000);
+      setTimeout(() => setSpeaking(false), SPEAKING_MS);
       // Track active agent metadata for dynamic avatar resolution
       if (data?.metadata) setActiveAgentMeta(data.metadata);
       // Initialize empty output buffer for new agent
@@ -392,7 +398,7 @@ export default function ChiefOfStaff() {
       const success = data?.result?.success;
       setStatusMessage(success ? "Task completed successfully" : "Task failed - checking errors...");
       setSpeaking(true);
-      setTimeout(() => setSpeaking(false), 2000);
+      setTimeout(() => setSpeaking(false), SPEAKING_MS);
       // Clear active agent metadata so avatar reverts to default
       setActiveAgentMeta(null);
       // Clean up live output buffer for completed agent to prevent memory growth
@@ -415,7 +421,7 @@ export default function ChiefOfStaff() {
         setAgentState('investigating');
         setStatusMessage(summarizeHealthIssues(data.issues));
         setSpeaking(true);
-        setTimeout(() => setSpeaking(false), 2000);
+        setTimeout(() => setSpeaking(false), SPEAKING_MS);
       }
     };
     socket.on('cos:health:check', handleHealthCheck);
@@ -474,7 +480,7 @@ export default function ChiefOfStaff() {
       setAgentState('thinking');
       setStatusMessage("Starting daemon - scanning for tasks...");
       setSpeaking(true);
-      setTimeout(() => setSpeaking(false), 2000);
+      setTimeout(() => setSpeaking(false), SPEAKING_MS);
       fetchData();
     }
   };
@@ -530,7 +536,7 @@ export default function ChiefOfStaff() {
       setAgentState('thinking');
       setStatusMessage("Evaluating tasks...");
       setSpeaking(true);
-      setTimeout(() => setSpeaking(false), 2000);
+      setTimeout(() => setSpeaking(false), SPEAKING_MS);
     } catch (err) {
       toast.error(err.message);
     }

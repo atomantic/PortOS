@@ -681,6 +681,48 @@ describe('Provider Service', () => {
       expect(antigravity.defaultModel).toBe('antigravity-configured-default');
     });
 
+    it('upgrades a prior-seeded Antigravity model list to include Gemini 3.8 models', async () => {
+      const priorModels = [
+        'antigravity-configured-default',
+        'gemini-3.7-flash-high',
+        'gemini-3.7-flash-medium',
+        'gemini-3.7-flash-low',
+        'gemini-3.6-flash-high',
+        'gemini-3.6-flash-medium',
+        'gemini-3.6-flash-low',
+        'gemini-3.5-flash-high',
+        'gemini-3.5-flash-medium',
+        'gemini-3.5-flash-low',
+        'gemini-3.1-pro-high',
+        'gemini-3.1-pro-low',
+        'claude-sonnet-4-6',
+        'claude-opus-4-6-thinking',
+        'gpt-oss-120b-medium',
+      ];
+      await writeProvidersFile({
+        activeProvider: 'antigravity-cli',
+        providers: {
+          'antigravity-cli': {
+            id: 'antigravity-cli',
+            name: 'Antigravity CLI',
+            type: 'cli',
+            command: 'agy',
+            contextWindow: 1048576,
+            models: [...priorModels],
+            defaultModel: 'antigravity-configured-default',
+            lightModel: 'antigravity-configured-default'
+          }
+        }
+      });
+
+      const antigravity = await providerService.getProviderById('antigravity-cli');
+      expect(antigravity.models).toContain('gemini-3.8-flash-high');
+      expect(antigravity.models).toContain('gemini-3.8-flash-medium');
+      expect(antigravity.models).toContain('gemini-3.8-flash-low');
+      expect(antigravity.models).toContain('gemini-3.7-flash-high');
+      expect(antigravity.defaultModel).toBe('antigravity-configured-default');
+    });
+
     // A failed `agy models` probe must be distinguishable from a real fetch.
     // Returning the shipped catalog here would persist it and toast "Models
     // refreshed", so a user whose service PATH can't resolve `agy` would pick a

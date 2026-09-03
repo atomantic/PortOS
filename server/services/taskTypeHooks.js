@@ -187,9 +187,16 @@ export const NON_COMMITTING_COORDINATOR_TASK_TYPES = new Set([
  * a merge-only follow-up on an already-green PR just merges it, and even a review
  * follow-up commits nothing when every reviewer comes back clean. Commit-checking
  * them would record each successful run as a failure, the #2696 artifact again.
+ *
+ * PR remediation follow-ups (`metadata.prRemediationFollowUp`, spawned by
+ * prRemediationFollowUp.js when pr-reviewer reviewed an external PR it could not
+ * merge) are the same shape one step further out: their commits land on the
+ * CONTRIBUTOR's branch inside a throwaway worktree, so this app's checkout is
+ * clean by construction even on the run that fixed and merged the PR.
  */
 export function isNonCommittingCoordinatorTask(task) {
   if (task?.metadata?.reviewLoopFollowUp === true || task?.metadata?.reviewLoopFollowUp === 'true') return true;
+  if (task?.metadata?.prRemediationFollowUp === true || task?.metadata?.prRemediationFollowUp === 'true') return true;
   const type = task?.metadata?.analysisType || task?.metadata?.taskAnalysisType || task?.taskType || null;
   return NON_COMMITTING_COORDINATOR_TASK_TYPES.has(type);
 }

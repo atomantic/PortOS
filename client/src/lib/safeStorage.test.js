@@ -2,9 +2,19 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import {
   safeReadStorage, safeReadJsonStorage, safeWriteStorage, safeWriteJsonStorage, safeRemoveStorage,
   safeReadJsonSession, safeWriteJsonSession, safeRemoveSession,
+  safeReadSession, safeWriteSession,
 } from './safeStorage.js';
 
+// Blocked storage is simulated with `vi.stubGlobal`, not `vi.spyOn`: assigning
+// a method onto jsdom's Storage proxy is swallowed as a stored key, so a spy
+// never installs and the test passes on a storage that never threw.
+const throwingStorage = () => {
+  const boom = () => { throw new DOMException('The operation is insecure.', 'SecurityError'); };
+  return { getItem: boom, setItem: boom, removeItem: boom, clear: () => {} };
+};
+
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
   window.localStorage.clear();
   window.sessionStorage.clear();
@@ -25,10 +35,12 @@ describe('safeStorage', () => {
   });
 
   it('returns null instead of throwing when getItem throws', () => {
-    vi.spyOn(window.localStorage, 'getItem').mockImplementation(() => {
-      throw new DOMException('The operation is insecure.', 'SecurityError');
-    });
+    window.localStorage.setItem('k', 'v');
+    vi.stubGlobal('localStorage', throwingStorage());
+    // Asserting on a key that IS set: a null from a missing key would pass on a
+    // storage that never threw at all.
     expect(safeReadStorage('k')).toBeNull();
+    expect(safeReadJsonStorage('k', 'fallback')).toBe('fallback');
   });
 
   it('reads JSON and returns the supplied fallback for missing or corrupt values', () => {
@@ -51,13 +63,9 @@ describe('safeStorage', () => {
   });
 
   it('swallows setItem / removeItem throws', () => {
-    vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => {
-      throw new DOMException('QuotaExceededError', 'QuotaExceededError');
-    });
-    vi.spyOn(window.localStorage, 'removeItem').mockImplementation(() => {
-      throw new DOMException('QuotaExceededError', 'QuotaExceededError');
-    });
+    vi.stubGlobal('localStorage', throwingStorage());
     expect(() => safeWriteStorage('k', 'v')).not.toThrow();
+    expect(() => safeWriteJsonStorage('k', { a: 1 })).not.toThrow();
     expect(() => safeRemoveStorage('k')).not.toThrow();
   });
 
@@ -77,15 +85,26 @@ describe('safeStorage', () => {
     expect(safeReadJsonSession('missing', 'fallback')).toBe('fallback');
   });
 
+  it('stores a session string verbatim, with no JSON quoting', () => {
+    safeWriteSession('flag', 'build-abc');
+    // The raw bytes are the contract: the stale-chunk flag is compared against
+    // values already written by tabs open across an upgrade, so a JSON-quoted
+    // `"build-abc"` would silently never match and the anti-loop guard would
+    // stop working the day the helper was adopted.
+    expect(window.sessionStorage.getItem('flag')).toBe('build-abc');
+    expect(safeReadSession('flag')).toBe('build-abc');
+    expect(safeReadSession('missing')).toBeNull();
+  });
+
   it('swallows a session storage that throws on every access', () => {
     // Blocked storage (Safari private mode, a sandboxed iframe) throws from the
     // accessor itself, so the whole call has to be inside the guard.
-    const boom = () => { throw new DOMException('The operation is insecure.', 'SecurityError'); };
-    vi.stubGlobal('sessionStorage', { getItem: boom, setItem: boom, removeItem: boom });
+    vi.stubGlobal('sessionStorage', throwingStorage());
 
     expect(() => safeWriteJsonSession('k', { a: 1 })).not.toThrow();
     expect(safeReadJsonSession('k', 'fallback')).toBe('fallback');
     expect(() => safeRemoveSession('k')).not.toThrow();
-    vi.unstubAllGlobals();
+    expect(() => safeWriteSession('k', 'v')).not.toThrow();
+    expect(safeReadSession('k')).toBeNull();
   });
 });

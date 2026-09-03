@@ -114,17 +114,6 @@ export default function ScheduleTab({ apps, providers, activeProviderId }) {
     return result.request || true;
   }, [apps, fetchSchedule]);
 
-  const handleResetTask = async (taskType) => {
-    const result = await api.resetCosTaskHistory(taskType, null, { silent: true }).catch(err => {
-      toast.error(err.message);
-      return null;
-    });
-    if (result?.success) {
-      toast.success(`Reset execution history for ${taskType}`);
-      fetchSchedule();
-    }
-  };
-
   const handleTriggerAppImprovement = handleTriggerTask;
 
   const { handleUpdateOverride, handleBulkToggleOverride } = useAppOverrideActions(apps, fetchSchedule);
@@ -218,7 +207,6 @@ export default function ScheduleTab({ apps, providers, activeProviderId }) {
         onClose={() => setSelectedTask(null)}
         onUpdate={handleUpdateTask}
         onTrigger={handleTriggerAppImprovement}
-        onReset={handleResetTask}
         providers={providers}
         activeProviderId={activeProviderId}
         apps={apps}

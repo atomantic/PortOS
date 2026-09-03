@@ -17,7 +17,7 @@
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { emitLog } from './cosEvents.js';
-import { addTask, updateTask } from './cos.js';
+import { addTask, forceSpawnTask, updateTask } from './cos.js';
 import * as git from './git.js';
 import { removeWorktree, classifyWorktreeDirt } from './worktreeManager.js';
 import { isTruthyMeta } from './agentState.js';
@@ -27,7 +27,7 @@ import { resolveTaskTargetBranch, shouldStripTaskTargetBranch } from '../lib/tas
 import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
 import { detectForgeCli } from '../lib/gitForge.js';
 import { PR_COMPLETIONS, PR_COMPLETION_VALUES, PR_CREATION, leavesPrForHuman, prClaimWasVerified } from '../lib/prDisposition.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, prioritizeToolFreeReviewers } from '../lib/validation.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, prioritizeToolFreeReviewers } from '../lib/reviewerConfig.js';
 
 // In-flight cleanup per agentId, so two completion paths racing to clean the
 // SAME agent coalesce onto one run instead of tripping over each other.
@@ -812,8 +812,29 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata }
  * The follow-up task uses an isolated worktree attached to the existing PR branch
  * through its canonical `reviewLoopPRBranch`, so it can fix-and-push without
  * trampling concurrent agents.
+ *
+ * `dispatch` decides WHO starts the task:
+ *   `'queue'`     (default) — the autonomous lane. The task is persisted and the
+ *                 ordinary `tasks:changed` dequeue picks it up, which is correct
+ *                 for a follow-up spawned by cleanup/prWatcher: the run that
+ *                 produced the PR was itself autonomous, so its continuation
+ *                 belongs under the CoS auto-run gate and daily action budget.
+ *   `'immediate'` — an explicit human action (the app PR page's "Resolve &
+ *                 merge"). The dequeue's Priority-2 tier only spawns
+ *                 auto-approved system tasks while CoS auto-run is in `execute`
+ *                 and under budget, so a queued follow-up would sit `pending`
+ *                 until the user pressed Run now on the task page — the whole
+ *                 point of the button was not having to. This suppresses the
+ *                 automatic dequeue and force-spawns the task instead (same path
+ *                 as that Run now button), reporting the outcome as `dispatch`.
+ *
+ * Returns the follow-up task, or — when an equivalent follow-up was already
+ * queued — that existing task with `duplicate: true`. `dispatch: 'immediate'`
+ * additionally stamps `dispatch: { started, reason }` so the caller can say
+ * whether an agent actually started or the task is still waiting (no slots,
+ * daemon stopped, …) rather than guessing.
  */
-export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, sourceWorkspace, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, reviewerEfforts = null, leaveOpen = false }) {
+export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, sourceWorkspace, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, reviewerEfforts = null, leaveOpen = false, dispatch = 'queue' }) {
   if (!prUrl || !prBranch) return null;
   if (prCompletion === PR_COMPLETIONS.LEAVE_OPEN) return null;
 
@@ -973,11 +994,44 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
     section: 'pending'
   };
 
-  await addTask(followUpTask, 'internal', { raw: true });
+  // An immediate dispatch owns the spawn, so the automatic dequeue is suppressed:
+  // otherwise it races this force-spawn for the same task and whichever loses
+  // reports a bogus failure for a run that did start (see the `suppressDequeue`
+  // contract on cos.js's `tasks:changed` listener).
+  const immediate = dispatch === 'immediate';
+  const persisted = await addTask(followUpTask, 'internal', { raw: true, suppressDequeue: immediate });
+
+  // A duplicate rejection persisted NOTHING under `followUpTaskId` — an equivalent
+  // follow-up is already queued under a different id. Return THAT record so a
+  // caller reports (and force-spawns) the task that actually exists instead of the
+  // id we just minted, which `forceSpawnTask` would answer with "Task not found".
+  if (persisted?.duplicate) {
+    emitLog('info', `🔁 ${kind.label} follow-up for PR ${prUrl} matched already-queued task ${persisted.id}`, {
+      taskId: persisted.id, prUrl, prBranch, sourceAgentId: originalAgentId, sourceTaskId: originalTask?.id
+    });
+    return persisted;
+  }
+
   emitLog('info', `🔁 Spawned ${kind.label} follow-up task ${followUpTaskId} (${kind.reviewers}) for PR ${prUrl}`, {
     taskId: followUpTaskId, prUrl, prBranch, sourceAgentId: originalAgentId, sourceTaskId: originalTask?.id
   });
-  return followUpTask;
+  if (!immediate) return followUpTask;
+
+  // A throw here would 500 an explicit user request whose task IS already
+  // persisted — report it the same way a refusal is reported instead.
+  const spawn = await forceSpawnTask(followUpTaskId).catch(err => ({ error: err.message }));
+  if (spawn?.error) {
+    // The task stays `pending` and keeps its place in the queue — say why it has
+    // not started rather than letting the caller claim an agent is running.
+    emitLog('warn', `⏳ ${kind.label} follow-up ${followUpTaskId} queued but not started — ${spawn.error}`, {
+      taskId: followUpTaskId, prUrl
+    });
+    return { ...followUpTask, dispatch: { started: false, reason: spawn.error } };
+  }
+  emitLog('info', `⚡ Started ${kind.label} follow-up ${followUpTaskId} immediately for PR ${prUrl}`, {
+    taskId: followUpTaskId, prUrl
+  });
+  return { ...followUpTask, dispatch: { started: true, reason: null } };
 }
 
 /**

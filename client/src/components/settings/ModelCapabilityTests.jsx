@@ -492,7 +492,7 @@ function CapabilityTestDrawer({
           <>
             <div className="bg-port-bg border border-port-border rounded-lg p-3 space-y-2">
               <h3 className="text-xs font-medium text-gray-400">What PortOS will send</h3>
-              <pre className="text-[11px] text-gray-300 whitespace-pre-wrap font-mono leading-relaxed max-h-56 overflow-y-auto">{prompt}</pre>
+              <pre className="text-[11px] text-gray-300 whitespace-pre-wrap break-words font-mono leading-relaxed max-h-56 overflow-y-auto">{prompt}</pre>
             </div>
             <p className="text-xs text-gray-500 leading-snug">
               This runs <span className="text-gray-300 font-mono break-all">{modelId}</span> on{' '}
@@ -555,7 +555,7 @@ function CapabilityTestDrawer({
                   {result.output === undefined
                     ? <BrailleSpinner text="Loading the output" />
                     : (result.output.trim()
-                      ? <pre className="text-sm text-gray-200 whitespace-pre-wrap leading-relaxed font-sans">{result.output}</pre>
+                      ? <pre className="text-sm text-gray-200 whitespace-pre-wrap break-all leading-relaxed font-sans">{result.output}</pre>
                       : <p className="text-xs text-gray-500 italic">The model returned no text.</p>)}
                 </div>
               </div>
@@ -568,7 +568,7 @@ function CapabilityTestDrawer({
                 {result.transcript === undefined && liveLines.length === 0
                   ? <BrailleSpinner text="Loading the transcript" />
                   : (
-                    <pre className="text-[11px] font-mono text-gray-400 whitespace-pre-wrap leading-relaxed">
+                    <pre className="text-[11px] font-mono text-gray-400 whitespace-pre-wrap break-all leading-relaxed">
                       {result.transcript?.trim() || liveLines.join('\n') || 'No agent transcript for this test.'}
                     </pre>
                   )}

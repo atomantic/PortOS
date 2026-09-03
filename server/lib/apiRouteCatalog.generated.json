@@ -30,7 +30,6 @@
     "/api/capabilities",
     "/api/catalog",
     "/api/character",
-    "/api/city",
     "/api/client-errors",
     "/api/code-review",
     "/api/commands",
@@ -60,6 +59,7 @@
     "/api/games",
     "/api/git",
     "/api/github",
+    "/api/harnesses",
     "/api/health",
     "/api/history",
     "/api/image-clean",
@@ -98,7 +98,6 @@
     "/api/notes",
     "/api/notifications",
     "/api/openclaw",
-    "/api/openworld",
     "/api/palette",
     "/api/peer-sync",
     "/api/pipeline",
@@ -110,6 +109,7 @@
     "/api/rapid-reader",
     "/api/remote-desktop",
     "/api/review",
+    "/api/rigging",
     "/api/rounds",
     "/api/runs",
     "/api/scaffold",
@@ -3316,38 +3316,6 @@
       "mountPath": "/api/character",
       "sources": [
         "server/routes/character.js"
-      ]
-    },
-    {
-      "method": "GET",
-      "path": "/api/city/introspection",
-      "mountPath": "/api/city",
-      "sources": [
-        "server/routes/openWorldRoutes.js"
-      ]
-    },
-    {
-      "method": "GET",
-      "path": "/api/city/snapshots",
-      "mountPath": "/api/city",
-      "sources": [
-        "server/routes/openWorldRoutes.js"
-      ]
-    },
-    {
-      "method": "POST",
-      "path": "/api/city/snapshots/capture",
-      "mountPath": "/api/city",
-      "sources": [
-        "server/routes/openWorldRoutes.js"
-      ]
-    },
-    {
-      "method": "GET",
-      "path": "/api/city/snapshots/config",
-      "mountPath": "/api/city",
-      "sources": [
-        "server/routes/openWorldRoutes.js"
       ]
     },
     {
@@ -7512,6 +7480,30 @@
     },
     {
       "method": "GET",
+      "path": "/api/harnesses",
+      "mountPath": "/api/harnesses",
+      "sources": [
+        "server/routes/harnesses.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/harnesses/action",
+      "mountPath": "/api/harnesses",
+      "sources": [
+        "server/routes/harnesses.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/harnesses/models/refresh",
+      "mountPath": "/api/harnesses",
+      "sources": [
+        "server/routes/harnesses.js"
+      ]
+    },
+    {
+      "method": "GET",
       "path": "/api/health/correlation",
       "mountPath": "/api/health",
       "sources": [
@@ -7945,6 +7937,22 @@
     {
       "method": "POST",
       "path": "/api/image-to-3d/models/:id/generate",
+      "mountPath": "/api/image-to-3d",
+      "sources": [
+        "server/routes/imageTo3d.js"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/image-to-3d/models/:id/usdz",
+      "mountPath": "/api/image-to-3d",
+      "sources": [
+        "server/routes/imageTo3d.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/image-to-3d/models/:id/usdz",
       "mountPath": "/api/image-to-3d",
       "sources": [
         "server/routes/imageTo3d.js"
@@ -11703,38 +11711,6 @@
       ]
     },
     {
-      "method": "GET",
-      "path": "/api/openworld/introspection",
-      "mountPath": "/api/openworld",
-      "sources": [
-        "server/routes/openWorldRoutes.js"
-      ]
-    },
-    {
-      "method": "GET",
-      "path": "/api/openworld/snapshots",
-      "mountPath": "/api/openworld",
-      "sources": [
-        "server/routes/openWorldRoutes.js"
-      ]
-    },
-    {
-      "method": "POST",
-      "path": "/api/openworld/snapshots/capture",
-      "mountPath": "/api/openworld",
-      "sources": [
-        "server/routes/openWorldRoutes.js"
-      ]
-    },
-    {
-      "method": "GET",
-      "path": "/api/openworld/snapshots/config",
-      "mountPath": "/api/openworld",
-      "sources": [
-        "server/routes/openWorldRoutes.js"
-      ]
-    },
-    {
       "method": "POST",
       "path": "/api/palette/action/:id",
       "mountPath": "/api/palette",
@@ -14056,6 +14032,38 @@
     },
     {
       "method": "GET",
+      "path": "/api/rigging/clips",
+      "mountPath": "/api/rigging",
+      "sources": [
+        "server/routes/rigging.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/rigging/models/:id",
+      "mountPath": "/api/rigging",
+      "sources": [
+        "server/routes/rigging.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/rigging/models/:id/retarget",
+      "mountPath": "/api/rigging",
+      "sources": [
+        "server/routes/rigging.js"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/rigging/readiness",
+      "mountPath": "/api/rigging",
+      "sources": [
+        "server/routes/rigging.js"
+      ]
+    },
+    {
+      "method": "GET",
       "path": "/api/rounds",
       "mountPath": "/api/rounds",
       "sources": [
@@ -14329,6 +14337,14 @@
     {
       "method": "PUT",
       "path": "/api/settings/ai-assignments/:id",
+      "mountPath": "/api/settings",
+      "sources": [
+        "server/routes/settings.js"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings/credentials",
       "mountPath": "/api/settings",
       "sources": [
         "server/routes/settings.js"
@@ -15233,6 +15249,14 @@
     {
       "method": "GET",
       "path": "/api/sync/:category/checksum",
+      "mountPath": "/api/sync",
+      "sources": [
+        "server/routes/dataSync.js"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/sync/:category/manifest",
       "mountPath": "/api/sync",
       "sources": [
         "server/routes/dataSync.js"
@@ -17473,8 +17497,8 @@
   ],
   "stats": {
     "mounts": 147,
-    "operations": 2164,
-    "declarations": 2168,
-    "sourceFiles": 229
+    "operations": 2167,
+    "declarations": 2175,
+    "sourceFiles": 230
   }
 }

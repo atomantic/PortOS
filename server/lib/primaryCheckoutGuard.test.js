@@ -10,7 +10,7 @@
  * `VITEST_FAST=1` skips the real-git describes and keeps the prose helpers.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { execGit } from './execGit.js';
@@ -18,6 +18,7 @@ import {
   makeGitSandbox,
   attachBareOrigin,
   destroyGitSandbox,
+  resetGitSandbox,
   SKIP_HEAVY_INTEGRATION,
 } from './gitTestRepo.js';
 import {
@@ -76,12 +77,25 @@ async function pullFromOrigin(subject) {
   await execGit(['pull', '--ff-only'], repo);
 }
 
+/**
+ * One real sandbox per `describe`, reset in place between tests instead of
+ * `fs.cp`-ing a fresh copy and recursively deleting it every time (#5902) —
+ * the sandbox itself is already a cheap `cp` of a per-worker template
+ * (`gitTestRepo.js`), so the remaining cost on a slow filesystem (Windows)
+ * is that copy-and-delete cycle repeating once per test.
+ */
 function useGitSandbox() {
-  beforeEach(async () => {
-    ({ scratch, repo } = await makeGitSandbox({ prefix: 'portos-branch-jack-' }));
+  let sandbox;
+  beforeAll(async () => {
+    sandbox = await makeGitSandbox({ prefix: 'portos-branch-jack-' });
+    sandbox.initialHead = (await execGit(['rev-parse', 'HEAD'], sandbox.repo)).stdout.trim();
   });
-  afterEach(async () => {
-    await destroyGitSandbox(scratch);
+  beforeEach(async () => {
+    await resetGitSandbox(sandbox);
+    ({ scratch, repo } = sandbox);
+  });
+  afterAll(async () => {
+    await destroyGitSandbox(sandbox.scratch);
   });
 }
 

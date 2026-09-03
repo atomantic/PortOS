@@ -21,11 +21,12 @@
 // apiCore's default toast doesn't fire underneath; per the AGENTS.md
 // "Silent vs. toasting API requests" rule, custom catch ⇒ silent: true.
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { Cpu, Mic, Volume2, Trash2, Power, PowerOff, RefreshCw, AlertTriangle } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
+import { useAutoRefetch } from '../../hooks/useAutoRefetch.js';
 import useMounted from '../../hooks/useMounted.js';
 import { formatBytes } from '../../utils/formatters';
 import {
@@ -170,11 +171,7 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
     return snapshot;
   }, [mountedRef, onLoadedModelsChange]);
 
-  useEffect(() => {
-    refresh();
-    const t = setInterval(refresh, POLL_MS);
-    return () => clearInterval(t);
-  }, [refresh]);
+  useAutoRefetch(refresh, POLL_MS, { pollOnly: true });
 
   const [unloadModel, unloadingModel] = useAsyncAction(async (modelId) => {
     await unloadOllamaModel(modelId, SILENT);

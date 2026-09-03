@@ -356,4 +356,123 @@ describe('commandSecurity', () => {
       expect(validateCommand('pip install requests').valid).toBe(true)
     })
   })
+
+  describe('validateUnattendedCommand subcommand gate (#5808)', () => {
+    // Allowlist membership is necessary but not sufficient: `git`, `find`, `gh`
+    // and `glab` all accept destructive verbs that carry no shell metacharacter,
+    // so the binary-level list and the metacharacter filter both wave them past.
+    it.each([
+      ['git reset --hard destroys uncommitted work in the app repo', 'git reset --hard'],
+      ['git checkout . discards local edits', 'git checkout .'],
+      ['git clean -fd removes untracked files', 'git clean -fd'],
+      ['git push writes to the remote', 'git push'],
+      ['git commit writes history', 'git commit -m "x"'],
+      ['git stash is not on the read-only verb allowlist', 'git stash'],
+      ['an unknown-to-the-allowlist verb fails closed', 'git rebase --continue'],
+      ['a bare git has no read-only verb at all', 'git'],
+    ])('rejects %s', (_label, cmd) => {
+      expect(validateUnattendedCommand(cmd).valid).toBe(false)
+    })
+
+    it.each([
+      'git log --oneline -20',
+      'git status --short',
+      'git diff --stat',   // NB: `git diff HEAD~1` is already rejected upstream — `~` is a DANGEROUS_SHELL_CHAR
+      'git show --name-only',
+      'git blame README.md',
+      'git rev-parse --abbrev-ref HEAD',
+      'git shortlog -sn',
+      'git ls-files',
+      'git describe --tags',
+      'git branch -a',
+      'git tag -l v1',
+      'git remote -v',
+      'git remote show origin',
+      'git config --get user.name',
+    ])('accepts read-only git form %s', (cmd) => {
+      expect(validateUnattendedCommand(cmd).valid).toBe(true)
+    })
+
+    it.each([
+      ['git branch -D deletes a branch', 'git branch -D main'],
+      ['git branch <name> creates one', 'git branch newbranch'],
+      ['git tag <name> creates a tag', 'git tag v9.9.9'],
+      ['git tag -d deletes one', 'git tag -d v1'],
+      ['git remote add rewrites remotes', 'git remote add evil https://example.com'],
+      ['git config <key> <value> writes config', 'git config user.email a@example.com'],
+    ])('rejects the mutating form of a listing verb: %s', (_label, cmd) => {
+      expect(validateUnattendedCommand(cmd).valid).toBe(false)
+    })
+
+    it.each([
+      ['-delete removes files', 'find . -delete'],
+      // The `{}` / `;` form is already caught by the metacharacter filter, so this
+      // uses the `+` terminator — it reaches the new check and proves it works.
+      ['-exec runs an arbitrary binary', 'find . -exec rm -f -- +'],
+      ['-execdir runs an arbitrary binary', 'find . -execdir rm -f -- +'],
+      ['-fprint writes an attacker-chosen file', 'find . -fprint /tmp/out'],
+    ])('rejects find action flag: %s', (_label, cmd) => {
+      const result = validateUnattendedCommand(cmd)
+      expect(result.valid).toBe(false)
+      expect(result.error).toMatch(/not allowed on the unattended lane/)
+    })
+
+    it.each([
+      'find . -name README.md',
+      'find . -type f -maxdepth 2 -print',
+    ])('accepts find inspection form %s', (cmd) => {
+      expect(validateUnattendedCommand(cmd).valid).toBe(true)
+    })
+
+    it.each([
+      ['gh api -X POST is an authenticated write', 'gh api -X POST /repos/x/y/issues'],
+      ['gh api --method DELETE is an authenticated write', 'gh api --method DELETE /repos/x/y/issues/1'],
+      ['gh api --method=PATCH is an authenticated write', 'gh api --method=PATCH /repos/x/y/issues/1'],
+      ['a field flag makes gh api an implicit POST', 'gh api /repos/x/y/issues -f title=hi'],
+      ['gh pr merge merges with operator credentials', 'gh pr merge 1'],
+      ['gh issue close mutates the tracker', 'gh issue close 1'],
+      ['gh pr create mutates the tracker', 'gh pr create --fill'],
+      ['glab mr merge merges with operator credentials', 'glab mr merge 1'],
+      ['glab api -X POST is an authenticated write', 'glab api -X POST /projects'],
+      ['a bare gh has no read-only verb at all', 'gh'],
+      ['a methodless -X is malformed and fails closed', 'gh api -X'],
+    ])('rejects %s', (_label, cmd) => {
+      expect(validateUnattendedCommand(cmd).valid).toBe(false)
+    })
+
+    it.each([
+      'gh pr list',
+      'gh issue list --limit 20',
+      'gh issue view 1',
+      'gh api /rate_limit',
+      'gh api -X GET /rate_limit',
+      'glab mr list',
+      'glab issue view 1',
+    ])('accepts read-only tracker command %s', (cmd) => {
+      expect(validateUnattendedCommand(cmd).valid).toBe(true)
+    })
+
+    it('still returns the parsed base command and args on accept', () => {
+      const result = validateUnattendedCommand('git log --oneline -5')
+      expect(result).toEqual({ valid: true, baseCommand: 'git', args: ['log', '--oneline', '-5'] })
+    })
+
+    it.each([
+      'ls -la',
+      'cat README.md',
+      'grep -rn TODO src',
+      'echo hello',
+      'wc -l README.md',
+    ])('leaves single-purpose binaries binary-level: %s', (cmd) => {
+      expect(validateUnattendedCommand(cmd).valid).toBe(true)
+    })
+
+    it('does not touch the operator lane', () => {
+      // POST /api/commands/execute stays byte-identical — a human triggers and
+      // watches it, and `git commit` / `gh pr merge` are legitimate there.
+      for (const cmd of ['git commit -m "x"', 'gh pr merge 1', 'git reset --hard', 'find . -delete']) {
+        expect(validateCommand(cmd).valid).toBe(true)
+      }
+    })
+  })
 })

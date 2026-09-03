@@ -51,7 +51,7 @@ export default function TaskHeader({ taskType, config }) {
               {stages.length}
             </span>
           )}
-          <IntervalBadge type={config.type} cronExpression={config.cronExpression} />
+          <IntervalBadge type={config.type} cronExpression={config.cronExpression} perpetual={config.perpetual} />
         </div>
       </div>
       {config.description && (

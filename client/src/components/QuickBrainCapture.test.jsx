@@ -219,6 +219,32 @@ describe('QuickBrainCapture', () => {
       });
     });
 
+    it('defaults the study context to the save note when the study option is ticked', async () => {
+      renderWidget();
+      type(REPO);
+      fireEvent.change(screen.getByLabelText(/why are you saving this link/i), {
+        target: { value: 'Might be a good fit for the media pipeline' },
+      });
+      fireEvent.click(screen.getByLabelText('Study for app ideas'));
+
+      await waitFor(() => expect(screen.getByLabelText(/study context/i))
+        .toHaveValue('Might be a good fit for the media pipeline'));
+    });
+
+    it('does not overwrite a study context the user already edited', async () => {
+      renderWidget();
+      type(REPO);
+      fireEvent.click(screen.getByLabelText('Study for app ideas'));
+      await waitFor(() => expect(screen.getByLabelText('File study issues against')).toBeInTheDocument());
+      fireEvent.change(screen.getByLabelText(/study context/i), { target: { value: 'My own brief' } });
+      fireEvent.change(screen.getByLabelText(/why are you saving this link/i), {
+        target: { value: 'Unrelated save note' },
+      });
+
+      expect(screen.getByLabelText(/study context/i)).toHaveValue('My own brief');
+      await waitFor(() => expect(screen.getByLabelText('Provider')).toBeInTheDocument());
+    });
+
     it('sends a provider, model, and effort override with the repo study request', async () => {
       renderWidget();
       type(REPO);

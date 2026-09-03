@@ -122,6 +122,20 @@ export const DEFAULT_EXCLUDES = [
   // copies of a fixture that ships in the repo — restoring one would restore a
   // half-finished agent edit, which is worse than not having it.
   { path: '/model-tests/sandboxes/', reason: 'Capability-test agent sandboxes — throwaway working copies of a repo fixture, recreated per run', overridable: false },
+  // Anchored, like every entry here. Scratch for ONE in-flight auto-skin run: the
+  // worker's staging copy of the rigged GLB plus its job/report files, deleted the
+  // moment the run publishes or fails (services/rigging/autoSkin.js). A snapshot that
+  // caught it mid-run would restore a half-written mesh next to the published pair.
+  // The PUBLISHED rig (rig/<rigId>/) is deliberately NOT excluded: re-deriving it needs
+  // a provisioned Blender runtime the restore target may not have, and a rigged GLB is
+  // megabytes, not the gigabyte-per-render the model.obj sidecar below costs.
+  { path: '/image-to-3d/*/rig/.staging/', reason: 'In-flight auto-skin staging directory — scratch for one rigging run, removed when it publishes or fails. The published rig/<rigId>/ pair IS backed up.', overridable: false },
+  // Anchored, like every entry here. Same contract one step later: scratch for ONE
+  // in-flight retarget run (services/rigging/retarget.js), including the probe pass's
+  // job/report files. The PUBLISHED animation (retarget/<retargetId>/) is NOT excluded,
+  // for the same reason the rig is not — re-deriving it needs both a Blender runtime and
+  // the clip file the run used.
+  { path: '/image-to-3d/*/retarget/.staging/', reason: 'In-flight retarget staging directory — scratch for one retarget run, removed when it publishes or fails. The published retarget/<retargetId>/ pair IS backed up.', overridable: false },
   { path: '/image-to-3d/*/model.obj', reason: 'TRELLIS.2 full-resolution mesh sidecar — ~1 GB per render, regenerable by re-rendering at the same seed. The exported model.glb and keyed source ARE backed up.', overridable: true },
   // Anchored, like every entry here. Not overridable: these are another
   // machine's conditioning bytes, staged for one federated render and swept on

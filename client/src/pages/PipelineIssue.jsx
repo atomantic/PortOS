@@ -331,7 +331,12 @@ export default function PipelineIssue() {
         </div>
 
         <div className="flex items-center justify-between gap-3 flex-wrap">
-          <h1 className="text-xl font-bold text-white truncate">#{issue.number} — {issue.title}</h1>
+          <h1
+            className="min-w-0 line-clamp-2 break-words text-xl font-bold text-white"
+            title={`#${issue.number} — ${issue.title}`}
+          >
+            #{issue.number} — {issue.title}
+          </h1>
           <div className="flex items-center gap-2 flex-wrap">
             <ArcRolePicker
               issue={issue}

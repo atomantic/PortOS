@@ -4,6 +4,8 @@ import { fileURLToPath } from 'url';
 
 import { describe, expect, it } from 'vitest';
 
+import { workflowJobs } from './lib/workflowJobs.js';
+
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const WORKFLOW = readFileSync(join(REPO_ROOT, '.github/workflows/ci.yml'), 'utf8');
 const NON_LEAF_JOBS = new Set(['impact', 'gate', 'full-gate']);
@@ -26,23 +28,6 @@ const FAIL_FAST_STEP = [
   '          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}',
   '        run: node scripts/cancel-current-ci-run.js',
 ].join('\n');
-
-function workflowJobs(yaml) {
-  const jobsStart = yaml.indexOf('\njobs:\n');
-  const body = yaml.slice(jobsStart);
-  const jobs = {};
-  let current = null;
-  for (const line of body.split('\n')) {
-    const header = line.match(/^ {2}([a-z][a-z0-9-]*):\s*$/);
-    if (header) {
-      current = header[1];
-      jobs[current] = [];
-      continue;
-    }
-    if (current) jobs[current].push(line);
-  }
-  return Object.fromEntries(Object.entries(jobs).map(([id, lines]) => [id, lines.join('\n')]));
-}
 
 describe('ci.yml fail-fast cancellation contract', () => {
   const jobs = workflowJobs(WORKFLOW);

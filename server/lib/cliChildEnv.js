@@ -142,10 +142,39 @@ const PUBLIC_REVIEW_ENV_KEYS = new Set([
   'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'MAX_THINKING_TOKENS',
 ]);
 
+// A Claude CLI pointed at a LOCAL Anthropic-compatible runtime (the Ollama and
+// SGLang wrappers) authenticates with a placeholder token that means nothing
+// outside that loopback endpoint, and its lean argv passes `--bare`, which
+// disables the keychain — so without the token the CLI exits "Not logged in"
+// before reading the prompt. Keep the credential only for a loopback base URL;
+// against any other host it is a real cloud credential and stays stripped.
+const LOCAL_ANTHROPIC_CREDENTIAL_KEYS = ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY'];
+const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+
+function localAnthropicCredentialEnv(env) {
+  let hostname;
+  try {
+    hostname = new URL(env?.ANTHROPIC_BASE_URL).hostname.toLowerCase();
+  } catch {
+    return {};
+  }
+  if (!LOOPBACK_HOSTNAMES.has(hostname) && !hostname.startsWith('127.')) return {};
+  return Object.fromEntries(LOCAL_ANTHROPIC_CREDENTIAL_KEYS
+    .filter((key) => env[key] != null)
+    .map((key) => [key, env[key]]));
+}
+
+function allowlistEnv(env, keys) {
+  return {
+    ...Object.fromEntries(Object.entries(env || {}).filter(([key, value]) => (
+      value != null && (keys.has(key) || key.startsWith('LC_'))
+    ))),
+    ...localAnthropicCredentialEnv(env),
+  };
+}
+
 export function buildPublicReviewCliEnv(env = {}) {
-  return Object.fromEntries(Object.entries(env || {}).filter(([key, value]) => (
-    value != null && (PUBLIC_REVIEW_ENV_KEYS.has(key) || key.startsWith('LC_'))
-  )));
+  return allowlistEnv(env, PUBLIC_REVIEW_ENV_KEYS);
 }
 
 // The actions stage is allowed to use its vendor's own workspace sandbox for
@@ -161,12 +190,13 @@ const PUBLIC_REVIEW_ACTIONS_ENV_KEYS = new Set([
   'NVM_DIR', 'NVM_BIN',
   'SystemRoot', 'SystemDrive', 'ComSpec', 'PATHEXT', 'USERPROFILE', 'APPDATA',
   'LOCALAPPDATA', 'ProgramData', 'ProgramFiles', 'HOMEDRIVE', 'HOMEPATH',
+  // The local Claude wrappers are eligible for this stage too; without the
+  // endpoint they would talk to the cloud (or, with `--bare`, to nothing).
+  'ANTHROPIC_BASE_URL', 'ANTHROPIC_SMALL_FAST_MODEL',
 ]);
 
 export function buildPublicReviewActionsCliEnv(env = {}) {
-  return Object.fromEntries(Object.entries(env || {}).filter(([key, value]) => (
-    value != null && (PUBLIC_REVIEW_ACTIONS_ENV_KEYS.has(key) || key.startsWith('LC_'))
-  )));
+  return allowlistEnv(env, PUBLIC_REVIEW_ACTIONS_ENV_KEYS);
 }
 
 /**

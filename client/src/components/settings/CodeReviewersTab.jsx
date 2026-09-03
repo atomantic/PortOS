@@ -105,7 +105,7 @@ export default function CodeReviewersTab() {
         <h2 className="text-base font-semibold text-white">Code Review Defaults</h2>
       </div>
       <p className="text-xs text-gray-500">
-        Default Review Loop reviewer chain — used by ad-hoc CoS tasks and task-type schedules that haven't pinned their own. Local-LLM reviewers route the diff through PortOS's local code-review endpoint; the {CLI_REVIEWER_LIST} reviewers invoke their CLI directly. Each runs the model pinned on its row (Claude also supports an Ollama-backed CLI for local-only setups — type one of your installed Ollama models).
+        Default Review Loop reviewer chain — used by ad-hoc CoS tasks and task-type schedules that haven't pinned their own. Leave it empty and reviews follow your default AI provider, at its own model and reasoning effort. Local-LLM reviewers route the diff through PortOS's local code-review endpoint; the {CLI_REVIEWER_LIST} reviewers invoke their CLI directly. Each runs the model picked on its row — choose <span className="font-mono">Custom…</span> to type an id its catalog doesn't list, such as an installed Ollama model for an Ollama-backed Claude.
       </p>
 
       {loadError && (

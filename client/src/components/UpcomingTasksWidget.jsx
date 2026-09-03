@@ -34,11 +34,8 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
   // Get interval type label
   const getIntervalLabel = (intervalType) => {
     const labels = {
-      daily: 'Daily',
-      weekly: 'Weekly',
-      rotation: 'Rotation',
-      once: 'One-time',
-      custom: 'Custom'
+      'on-demand': 'On Demand',
+      cron: 'Scheduled'
     };
     return labels[intervalType] || intervalType;
   };

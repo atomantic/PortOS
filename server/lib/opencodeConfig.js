@@ -236,22 +236,30 @@ export function buildAgentGeneration(generation, providerKey) {
  * @returns {object} OpenCode config object
  */
 export function buildOpencodeConfig(models, base = null, providerKey = 'ollama', generation = null) {
-  const bareIds = toBareModelIds(models, providerKey);
+  // `null` = the harness's OWN catalog (OpenCode Zen). There is no custom
+  // provider entry to declare and no models map to fill — OpenCode already
+  // knows those models and already holds the credential — so the provider half
+  // of this builder is skipped and everything else (base preservation, the
+  // agent generation block) applies unchanged. One path, not two.
+  const named = providerKey !== null && providerKey !== undefined;
+  const bareIds = named ? toBareModelIds(models, providerKey) : [];
   const config = (base && typeof base === 'object')
     ? structuredClone(base)
-    : { permission: 'allow', provider: {} };
-  if (!config.provider || typeof config.provider !== 'object') config.provider = {};
-  if (!config.provider[providerKey] || typeof config.provider[providerKey] !== 'object') {
-    config.provider[providerKey] = structuredClone(localProviderBase(providerKey));
-  }
-  if (bareIds.length > 0) {
-    const existing = (config.provider[providerKey].models && typeof config.provider[providerKey].models === 'object')
-      ? config.provider[providerKey].models
-      : {};
-    config.provider[providerKey].models = {
-      ...existing,
-      ...Object.fromEntries(bareIds.map((id) => [id, { name: id, tool_call: true }])),
-    };
+    : { permission: 'allow', ...(named ? { provider: {} } : {}) };
+  if (named) {
+    if (!config.provider || typeof config.provider !== 'object') config.provider = {};
+    if (!config.provider[providerKey] || typeof config.provider[providerKey] !== 'object') {
+      config.provider[providerKey] = structuredClone(localProviderBase(providerKey));
+    }
+    if (bareIds.length > 0) {
+      const existing = (config.provider[providerKey].models && typeof config.provider[providerKey].models === 'object')
+        ? config.provider[providerKey].models
+        : {};
+      config.provider[providerKey].models = {
+        ...existing,
+        ...Object.fromEntries(bareIds.map((id) => [id, { name: id, tool_call: true }])),
+      };
+    }
   }
   const build = buildAgentGeneration(generation, providerKey);
   if (build) {
@@ -279,10 +287,13 @@ export function buildOpencodeConfigContent(models, base = null, providerKey = 'o
 }
 
 /**
- * Build dynamic env vars for an OpenCode local-provider spawn. Returns an
- * object with `OPENCODE_CONFIG_CONTENT` (models map declared) for Ollama-,
- * MTPLX-, Llama-, vLLM-, or OrcaRouter-backed OpenCode providers, otherwise an empty object (caller keeps
- * existing env).
+ * Build dynamic env vars for an OpenCode spawn. Returns an object with
+ * `OPENCODE_CONFIG_CONTENT` for a provider that names a backend namespace
+ * (Ollama, MTPLX, llama.cpp, vLLM, SGLang, or a hosted gateway) — models map
+ * declared — and for a NAMESPACE-LESS record that ships a stored config of its
+ * own, which is how the seeded OpenCode Zen wrappers run on the harness's own
+ * catalog: no provider entry to declare and no key to inject, just the base plus
+ * the `small_model` pin. Otherwise an empty object (caller keeps existing env).
  *
  * The provider's already-stored `OPENCODE_CONFIG_CONTENT` is used as the base and
  * PRESERVED — a customized `baseURL`, `permission`, or hand-maintained models
@@ -297,7 +308,7 @@ export function buildOpencodeConfigContent(models, base = null, providerKey = 'o
  */
 export function buildOpencodeEnvVars(provider, model) {
   const providerKey = getOpencodeLocalProviderNamespace(provider);
-  if (!isOpencodeCommand(provider?.command) || !providerKey) {
+  if (!isOpencodeCommand(provider?.command)) {
     return {};
   }
   // Parse the provider's stored config as the base so any user customization
@@ -312,6 +323,14 @@ export function buildOpencodeEnvVars(provider, model) {
       base = null; // unparseable stored config → fall back to the canonical default
     }
   }
+  // A record with NO namespace and NO stored config is a hand-made plain
+  // `opencode` provider: it has always run against the user's own
+  // `~/.config/opencode`, and `OPENCODE_CONFIG_CONTENT` REPLACES that file
+  // wholesale — synthesizing one here would silently drop every provider they
+  // declared in it. The seeded Zen records ship `{"permission":"allow"}`, so
+  // they take the path below and get the `small_model` pin merged into it.
+  if (!providerKey && !base) return {};
+
   const ids = [
     ...(Array.isArray(provider?.models) ? provider.models : []),
     provider?.defaultModel,
@@ -345,11 +364,14 @@ export function buildOpencodeEnvVars(provider, model) {
   // Keyed off the RESOLVED namespace, not the record's marker: a malformed
   // record carrying both a local marker and a gateway marker resolves to the
   // local namespace above, and must not then export a gateway key env var.
-  const gateway = gatewayById(providerKey);
-  const apiKey = KEY_BEARING_NAMESPACES.has(providerKey)
+  // A null namespace declares no provider entry, so there is nowhere to attach a
+  // key and nothing that needs one — OpenCode authenticates the harness's own
+  // catalog itself.
+  const gateway = providerKey ? gatewayById(providerKey) : null;
+  const apiKey = providerKey && KEY_BEARING_NAMESPACES.has(providerKey)
     ? (provider?.apiKey || (gateway?.legacyApiKeyField ? provider?.[gateway.legacyApiKeyField] : null))
     : null;
-  if (apiKey) {
+  if (apiKey && providerKey) {
     config.provider[providerKey].options = {
       ...config.provider[providerKey].options,
       apiKey,

@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
+import { useAutoRefetch } from '../../../hooks/useAutoRefetch.js';
 import PersistentMindProfileControls from '../PersistentMindProfileControls';
 import { PersistentMindThoughtStatus } from '../PersistentMindRuntimePanel';
 import ConfigRow from './ConfigRow';
@@ -270,11 +271,7 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle })
   ), []);
 
   useEffect(() => { void refreshBudgetUsage(); }, [refreshBudgetUsage]);
-  useEffect(() => {
-    void refreshMindStatus();
-    const interval = setInterval(() => { void refreshMindStatus(); }, 15_000);
-    return () => clearInterval(interval);
-  }, [refreshMindStatus]);
+  useAutoRefetch(refreshMindStatus, 15_000, { pollOnly: true });
 
   const handleCancel = () => {
     setFormData(getDefaultFormData(config, avatarStyle));

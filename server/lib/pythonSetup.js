@@ -121,6 +121,21 @@ const PYTHON_CANDIDATES = IS_WIN
       '/usr/bin/python3',
     ];
 
+// PortOS's own managed venvs — the first three PYTHON_CANDIDATES entries on
+// both platforms. Fine as a pip-install target (detectPython/detectPythonSync),
+// but never a valid BASE to create a *different* venv from: a venv created
+// from another venv can fail with the base's own pyvenv.cfg pointing at an
+// interpreter path that no longer resolves (e.g. after a Homebrew point-release
+// upgrade prunes the old versioned keg the app venv was built against). See
+// detectVenvBasePythonSync below.
+const APP_MANAGED_VENV_PYTHONS = new Set(PYTHON_CANDIDATES.slice(0, 3));
+
+// PYTHON_CANDIDATES minus the app-managed venvs — the fallback pool for
+// picking a base interpreter to CREATE a venv from, as opposed to
+// PYTHON_CANDIDATES' own ordering, which is tuned for "which interpreter can
+// we pip packages into" (detectPython/detectPythonSync).
+const NON_APP_MANAGED_CANDIDATES = PYTHON_CANDIDATES.filter((p) => !APP_MANAGED_VENV_PYTHONS.has(p));
+
 export async function probePythonArch(pythonPath) {
   const { stdout } = await execFileAsync(pythonPath, [
     '-c', 'import platform; print(platform.machine())'
@@ -173,10 +188,17 @@ export function detectPythonSync() {
 // uv/python.org standalone builds are the reverse: externally-managed (so a bad
 // pip target) but a perfect venv base.
 //
-// So this prefers standalone builds and only falls back to detectPythonSync's
-// answer when there are none — a conda-based venv still beats no venv at all,
-// and the setup script's own import check reports it when it can't work.
-export function detectVenvBasePythonSync() {
+// So this prefers standalone builds and only falls back to a non-app-managed
+// PYTHON_CANDIDATES entry (a conda-based venv still beats no venv at all, and
+// the setup script's own import check reports it when it can't work) — and,
+// as a true last resort with nothing non-app-managed anywhere, PortOS's own
+// managed venv rather than nothing.
+//
+// Deliberately excludes `data/python/venv` / `~/.portos/venv` /
+// `~/.pixie-forge/venv` from every tier above the last: building a venv FROM
+// one of those has its own failure mode independent of the conda/DLL issue
+// above — see APP_MANAGED_VENV_PYTHONS.
+export function venvBaseCandidatesSync() {
   const standalone = [
     ...uvPythonCandidates(),
     ...(IS_WIN
@@ -190,7 +212,20 @@ export function detectVenvBasePythonSync() {
         ]
       : []),
   ];
-  return standalone.find((p) => existsSync(p)) || detectPythonSync();
+  const seen = new Set();
+  return [...standalone, ...NON_APP_MANAGED_CANDIDATES].filter((p) => {
+    if (seen.has(p) || !existsSync(p)) return false;
+    seen.add(p);
+    return true;
+  });
+}
+
+export function detectVenvBasePythonSync() {
+  // detectPythonSync's own PYTHON_CANDIDATES sweep will find an app-managed
+  // venv when nothing else exists — exactly the "beats no venv" last resort
+  // this needs — and its PATH fallback carries the WindowsApps-alias filter,
+  // which a hand-rolled whichFirstSync() call here would have to duplicate.
+  return venvBaseCandidatesSync()[0] || detectPythonSync();
 }
 
 export async function detectPython() {
@@ -254,20 +289,36 @@ export function resolveFlux2Python() {
 // killed-mid-install run leaves the binary but no packages, and we'd
 // otherwise report that broken state as "ready" forever. Cached because the
 // import probe spawns a process; bust via invalidateFlux2Health().
+//
+// A positive result is cached indefinitely — once the venv imports cleanly it
+// stays that way short of the user deleting it, which only happens through
+// this module's own install/invalidate path. A NEGATIVE result gets a short
+// TTL instead of the same indefinite cache: the shared diffusers venv also
+// gates Z-Image/ERNIE/HiDream/Qwen (usesDiffusersRunner in runners.js), and a
+// transient failure (venv mid-install, a package upgrade the user ran by hand
+// outside PortOS) would otherwise report "unavailable" for the rest of the
+// server's lifetime with no way for the user to recover short of a restart.
+const FLUX2_HEALTH_NEGATIVE_TTL_MS = 60_000;
 let cachedFlux2Healthy = null;
+let cachedFlux2HealthyAt = 0;
 export async function isFlux2VenvHealthy() {
-  if (cachedFlux2Healthy !== null) return cachedFlux2Healthy;
+  if (cachedFlux2Healthy === true) return true;
+  if (cachedFlux2Healthy === false && Date.now() - cachedFlux2HealthyAt < FLUX2_HEALTH_NEGATIVE_TTL_MS) {
+    return false;
+  }
   const py = resolveFlux2Python();
-  if (!py) { cachedFlux2Healthy = false; return false; }
+  if (!py) { cachedFlux2Healthy = false; cachedFlux2HealthyAt = Date.now(); return false; }
   const ok = await execFileAsync(py, ['-c', 'from diffusers import Flux2KleinPipeline'], safeChildProcessOptions({ timeout: 30_000 }))
     .then(() => true)
     .catch(() => false);
   cachedFlux2Healthy = ok;
+  cachedFlux2HealthyAt = Date.now();
   return ok;
 }
 export function invalidateFlux2Health() {
   cachedFlux2Python = null;
   cachedFlux2Healthy = null;
+  cachedFlux2HealthyAt = 0;
 }
 
 // mflux's `mflux-train` LoRA trainer CLI is a console script installed beside
@@ -630,12 +681,17 @@ export function isAllowedPython(pythonPath) {
 
 // Idempotent: if the venv exists, returns its python path without recreating.
 // Windows venvs put the interpreter at Scripts\python.exe, POSIX at bin/python3.
-export async function createVenv(basePython, targetDir) {
+// `clear: true` passes `--clear` to rebuild over a directory a prior failed
+// attempt left in a partial/broken state, e.g. when retrying venv creation
+// against a different base after the first base silently failed to
+// materialize the interpreter.
+export async function createVenv(basePython, targetDir, { clear = false } = {}) {
   const venvPython = IS_WIN
     ? join(targetDir, 'Scripts', 'python.exe')
     : join(targetDir, 'bin', 'python3');
-  if (existsSync(venvPython)) return venvPython;
-  await execFileAsync(basePython, ['-m', 'venv', targetDir], safeChildProcessOptions({ timeout: 120_000 }));
+  if (!clear && existsSync(venvPython)) return venvPython;
+  const args = ['-m', 'venv', ...(clear ? ['--clear'] : []), targetDir];
+  await execFileAsync(basePython, args, safeChildProcessOptions({ timeout: 120_000 }));
   if (!existsSync(venvPython)) {
     throw new Error(`Venv created but interpreter missing at ${venvPython}`);
   }
@@ -802,7 +858,13 @@ export function installFlux2Venv(onLog) {
 
   const promise = (async () => {
     stage('detect', 'Looking for system Python…');
-    const basePython = await detectPython();
+    // The base to CREATE the FLUX.2 venv from — deliberately not detectPython(),
+    // which ranks PortOS's own already-provisioned image-gen venv first and is
+    // answering a different question ("which interpreter can we pip into").
+    // Building a venv from an already-provisioned venv is fragile — its
+    // pyvenv.cfg can pin an interpreter path a later system upgrade removes.
+    const baseCandidates = venvBaseCandidatesSync();
+    const basePython = detectVenvBasePythonSync();
     if (!basePython) {
       onLog({ type: 'error', message: 'No system Python 3 found. Install Python 3.10+ and try again.' });
       return { ok: false, stage: 'detect' };
@@ -811,11 +873,26 @@ export function installFlux2Venv(onLog) {
 
     stage('venv', `Creating FLUX.2 venv at ${FLUX2_VENV_DEFAULT}…`);
     const targetDir = FLUX2_VENV_DEFAULT.replace(IS_WIN ? /\\Scripts\\python\.exe$/ : /\/bin\/python3$/, '');
-    const venvPython = await createVenv(basePython, targetDir).catch((err) => {
-      onLog({ type: 'error', message: `venv creation failed: ${err.message}` });
+    const venvFallback = baseCandidates.find((p) => p !== basePython);
+    let venvPython = await createVenv(basePython, targetDir).catch((err) => {
+      log(`venv creation failed against ${basePython}: ${err.message}`);
       return null;
     });
-    if (!venvPython) return { ok: false, stage: 'venv' };
+    if (killed) return { ok: false, stage: 'venv', cancelled: true };
+    if (!venvPython && venvFallback) {
+      log(`Retrying venv creation with ${venvFallback}…`);
+      venvPython = await createVenv(venvFallback, targetDir, { clear: true }).catch((err) => {
+        log(`venv creation also failed against ${venvFallback}: ${err.message}`);
+        return null;
+      });
+    }
+    if (!venvPython) {
+      onLog({
+        type: 'error',
+        message: 'venv creation failed. Try INSTALL_FLUX2=1 FLUX2_FORCE_REINSTALL=1 bash scripts/setup-image-video.sh',
+      });
+      return { ok: false, stage: 'venv' };
+    }
     if (killed) return { ok: false, stage: 'venv', cancelled: true };
 
     stage('upgrade-pip', 'Upgrading pip + wheel + setuptools…');

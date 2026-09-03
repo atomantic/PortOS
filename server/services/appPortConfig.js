@@ -19,7 +19,7 @@
  */
 
 import { parseEcosystemFromPath, writeEcosystemPortEdits } from './streamingDetect.js';
-import { deriveUiPort } from '../routes/apps/shared.js';
+import { deriveUiPort } from './appListEnrichment.js';
 
 const PORT_KEYS = ['apiPort', 'uiPort', 'devUiPort'];
 const LABEL_BY_KEY = { apiPort: 'api', uiPort: 'ui', devUiPort: 'devUi' };

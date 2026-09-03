@@ -3,9 +3,10 @@ import { Link } from 'react-router';
 import {
   effortAwareModelOptions,
   effortSurvivingModel,
+  enforcesPublicReviewPosture,
   localBackendForProvider,
   publicReviewSelectionPolicy,
-  supportsPublicReviewPosture,
+  selectableProviders,
   PUBLIC_REVIEW_ACTIONS_POSTURE,
   PUBLIC_REVIEW_NO_TOOL_POSTURE,
 } from '../../../../utils/providers';
@@ -19,12 +20,36 @@ import {
   togglePrReviewerActions,
 } from './scheduleConstants';
 
-// Which providers on THIS install can enforce a posture. The server publishes
-// `publicReviewPostures` per provider, derived from the vendor rows, so the
-// picker never carries its own list of vendor names — an install with only
-// grok, only codex, or only a local Claude wrapper each get a correct list.
-const eligibleProvidersFor = (providers, posture) =>
-  (providers || []).filter((provider) => supportsPublicReviewPosture(provider, posture));
+// Which providers on THIS install the stage's picker actually offers. The
+// posture half is server-published (`publicReviewPostures`, derived from the
+// vendor rows — no vendor names on the client); the rest is the picker's own
+// visibility rule, reused so the "eligible" note can never list a provider
+// the dropdown hides (switched off, hardware-incompatible), which is what left
+// Stage 3 looking unconfigurable.
+const eligibleProvidersFor = (providers, policy) =>
+  selectableProviders(providers, { allowed: policy.provider });
+
+const providerNames = (providers) => providers.map((p) => p.name || p.id).join(', ');
+
+// Every enabled CLI/TUI provider can run the actions stage; the note says which
+// of them the server additionally wraps in the vendor's own OS sandbox, so a
+// choice that relies on the disposable worktree alone is a visible one.
+const actionsStageNote = (eligibleProviders) => {
+  const isSandboxed = (p) => enforcesPublicReviewPosture(p, PUBLIC_REVIEW_ACTIONS_POSTURE);
+  const sandboxed = eligibleProviders.filter(isSandboxed);
+  const worktreeOnly = eligibleProviders.filter((p) => !isSandboxed(p));
+  const isolation = worktreeOnly.length === 0
+    ? ['Each runs headless inside its vendor\'s maintained OS sandbox.']
+    : [
+      sandboxed.length > 0 && `OS-sandboxed by the vendor's own recipe: ${providerNames(sandboxed)}.`,
+      `Headless with standard permissions, isolated by the disposable worktree only: ${providerNames(worktreeOnly)}.`,
+    ].filter(Boolean);
+  return [
+    `Sandboxed stage. Eligible on this install: ${providerNames(eligibleProviders)}.`,
+    ...isolation,
+    'PortOS passes the selected provider, model, and thinking effort through, with no forge credential or configuration overlays; the deterministic coordinator owns comments, issue filing, CI triggers, and merges.',
+  ].join(' ');
+};
 
 export default function PipelineStageConfig({ taskType, config, providers, onUpdate, updating, setUpdating }) {
   const stages = pipelineStages(config);
@@ -128,7 +153,7 @@ export default function PipelineStageConfig({ taskType, config, providers, onUpd
           const posture = isSecurityStage ? null : stagePublicReviewPosture(stage);
           const isNoToolStage = posture === PUBLIC_REVIEW_NO_TOOL_POSTURE;
           const isActionsStage = Boolean(posture) && !isNoToolStage;
-          const eligibleProviders = posture ? eligibleProvidersFor(providers, posture) : null;
+          const eligibleProviders = posture ? eligibleProvidersFor(providers, selectionPolicies[posture]) : null;
           const localBackend = localBackendForProvider(stageProvider);
           const localModelIds = localBackend === 'ollama' ? ollama : localBackend === 'lmstudio' ? lmstudio : [];
           // A LOCAL provider's installed-model list is the source of truth (its
@@ -168,10 +193,10 @@ export default function PipelineStageConfig({ taskType, config, providers, onUpd
               </div>
               {isSecurityStage && (
                 <div className="rounded-lg border border-port-accent/30 bg-port-bg/60 px-3 py-2 text-xs text-gray-300">
-                  <p className="font-medium text-port-accent">Managed Llama Prompt Guard 2 86M</p>
-                  <p className="mt-1">Fixed, pinned, offline classifier. It scans complete external content before Stage 2 and never appears as a chat model or receives tools, MCP servers, repository files, or GitHub credentials.</p>
+                  <p className="font-medium text-port-accent">Deterministic hidden-content screen</p>
+                  <p className="mt-1">Server-side checks on each external PR&apos;s complete title, description, and diff for content a human reviewer would miss — invisible or direction-control Unicode, comments GitHub never renders that address a model — and for obvious model-directed harm: instruction overrides, decode-and-follow or download-and-run instructions, credential exfiltration, and attempts to steer the review verdict. No model, tools, repository checkout, or GitHub credentials are involved.</p>
                   <p className="mt-1 text-gray-500">
-                    Install or check readiness from{' '}
+                    The pinned Llama Prompt Guard 2 classifier runs as an optional second layer only when it is installed on{' '}
                     <Link to="/models/llms/abuse" className="underline hover:text-port-accent">Models → LLMs → Abuse Guard</Link>.
                   </p>
                 </div>
@@ -212,7 +237,7 @@ export default function PipelineStageConfig({ taskType, config, providers, onUpd
               )}
               {isActionsStage && eligibleProviders?.length > 0 && (
                 <p className="text-xs text-gray-500 mt-2">
-                  {`Sandboxed stage. Eligible on this install: ${eligibleProviders.map((p) => p.name || p.id).join(', ')}. PortOS passes the selected provider, model, and thinking effort through that provider's maintained sandbox recipe, with no forge credential or configuration overlays; the deterministic coordinator owns comments, issue filing, CI triggers, and merges.`}
+                  {actionsStageNote(eligibleProviders)}
                 </p>
               )}
             </div>

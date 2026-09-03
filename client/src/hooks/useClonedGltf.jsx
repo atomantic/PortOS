@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useAnimations, useGLTF } from '@react-three/drei';
-import { SkeletonUtils } from 'three-stdlib';
+import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 
 const preserveAnimations = (animations) => animations;
 

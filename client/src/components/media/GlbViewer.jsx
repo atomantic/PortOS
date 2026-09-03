@@ -54,7 +54,7 @@ export function cloneGlbSceneWithOpaqueMaterials(scene) {
   return clone;
 }
 
-function GlbModel({ src, forceOpaque }) {
+function GlbModel({ src, forceOpaque, onSceneLoaded }) {
   // `useGLTF` keys drei's global cache on the URL, so a new generation (a new
   // `src`) parses fresh while revisiting the same mesh reuses the cache — no
   // manual cache-clear needed (clearing on unmount would force a full multi-MB
@@ -74,6 +74,15 @@ function GlbModel({ src, forceOpaque }) {
       });
     };
   }, [forceOpaque, renderedScene]);
+  // Hand the DISPLAYED graph (post force-opaque clone) to the parent, so a
+  // consumer that re-serializes it — the AR/USDZ export — ships what the user is
+  // actually looking at rather than a differently-materialed original. Cleared on
+  // unmount/src change because the effect above disposes this clone's materials:
+  // a retained handle would then serialize a scene whose textures are gone.
+  useEffect(() => {
+    onSceneLoaded?.(renderedScene);
+    return () => onSceneLoaded?.(null);
+  }, [onSceneLoaded, renderedScene]);
   return <GltfPrimitive object={renderedScene} />;
 }
 
@@ -163,6 +172,10 @@ export default function GlbViewer({
   className = '',
   forceOpaque = false,
   initialBackground = DEFAULT_BACKGROUND,
+  // Called with the loaded three.js object graph once the GLB parses, and with
+  // `null` when it unloads. Must be referentially stable (a `useState` setter or a
+  // `useCallback`) — an inline arrow re-fires the effect on every render.
+  onSceneLoaded,
 }) {
   const backgroundInputId = useId();
   const controlsPanelId = useId();
@@ -270,7 +283,7 @@ export default function GlbViewer({
               </ErrorBoundary>
               <Suspense fallback={null}>
                 <Bounds fit clip observe margin={1.2}>
-                  <GlbModel src={src} forceOpaque={forceOpaque} />
+                  <GlbModel src={src} forceOpaque={forceOpaque} onSceneLoaded={onSceneLoaded} />
                 </Bounds>
               </Suspense>
               <OrbitControls makeDefault enablePan enableZoom enableRotate />

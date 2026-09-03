@@ -55,11 +55,20 @@ const vllmManager = vi.hoisted(() => ({
 vi.mock('./vllmQwenManager.js', () => vllmManager);
 // The SGLang project on disk, and the CUDA probe its start row consults BEFORE
 // docker — mocked so no assertion depends on the developer's actual GPU.
+// PARTIAL: the env-var name and directory leaf the placement loop is keyed on
+// are constants this row imports, and the two `.env` helpers must be stubbed so
+// no assertion here can be answered by (or write into) the developer's install.
 const sglangProject = vi.hoisted(() => ({
   inspectSglangQwenProject: vi.fn(),
   sglangStartBlockedReason: vi.fn(() => null),
+  sglangProjectDirIsSettled: vi.fn(() => false),
+  recordSglangProjectDir: vi.fn(async () => {}),
 }));
-vi.mock('../lib/sglangQwenProject.js', () => sglangProject);
+vi.mock('../lib/sglangQwenProject.js', async (importOriginal) => ({ ...(await importOriginal()), ...sglangProject }));
+// `wsl.exe`. Mocked because the real one answers on a developer's Windows box —
+// the placement tests would then assert against THAT machine's distro.
+const wsl = vi.hoisted(() => ({ detectWslProjectDir: vi.fn() }));
+vi.mock('../lib/wslDistro.js', async (importOriginal) => ({ ...(await importOriginal()), ...wsl }));
 const cuda = vi.hoisted(() => ({ getCudaCapability: vi.fn() }));
 vi.mock('../lib/cudaCapability.js', () => cuda);
 
@@ -71,10 +80,14 @@ const reachable = (models = ['mtplx']) => ({ reachable: true, models, error: nul
 const cachedModels = (models) => ({ models, error: null });
 
 const preparedSglangProject = { dir: '/home/example/sglang-qwen38', hasProject: true, composeFile: 'docker-compose.yml', hasWeights: true, weightsRoot: '/home/example/sglang-qwen38/hf-cache/hub' };
+/** What `wsl.exe` says on a Windows host with an ordinary distro. */
+const SGLANG_WSL_DIR = '\\\\wsl.localhost\\Ubuntu\\home\\example\\sglang-qwen38';
 
 beforeEach(() => {
   sglangProject.inspectSglangQwenProject.mockResolvedValue(preparedSglangProject);
   sglangProject.sglangStartBlockedReason.mockReturnValue(null);
+  sglangProject.sglangProjectDirIsSettled.mockImplementation(() => Boolean(process.env.SGLANG_QWEN_PROJECT_DIR));
+  wsl.detectWslProjectDir.mockResolvedValue({ dir: SGLANG_WSL_DIR, distro: 'Ubuntu', home: '\\\\wsl.localhost\\Ubuntu\\home\\example' });
   // Default to the verified Hopper cell; the hardware cases override it.
   cuda.getCudaCapability.mockResolvedValue({ status: 'available', gpus: [{ name: 'NVIDIA H200', computeCap: '9.0', vramGb: 141 }] });
   // Implementations AND return values (not just call records) survive
@@ -94,6 +107,9 @@ afterEach(() => {
   pathLookup.findCommandOnPath.mockReturnValue(null);
   commands.commandExists.mockResolvedValue(true);
   streaming.runStreamingCommand.mockResolvedValue({ success: true });
+  // The placement loop writes this on a Windows host so the rest of the run
+  // resolves the detected directory; it must not leak into the next test.
+  delete process.env.SGLANG_QWEN_PROJECT_DIR;
 });
 
 describe('describeRuntimeSetup', () => {
@@ -772,6 +788,91 @@ describe('sglang — a hardware gate in front of the same never-provision postur
     expect(result).toMatchObject({ success: false, error: expect.stringMatching(/no Qwen weights are cached/) });
     // The whole point: a 20 GB pull is never started on the user's behalf.
     expect(streaming.runStreamingCommand).not.toHaveBeenCalled();
+    restore();
+  });
+
+  it('asks WSL where the hand-prepared project is on Windows, and records the answer', async () => {
+    // The whole point of #5832: SGLang ships no provisioner, so preparing it by
+    // hand INSIDE the distro is the only path — and every Windows operator used
+    // to be handed a `\\wsl.localhost\<distro>\…` template to look up themselves.
+    const restore = pinPlatform('win32');
+    cuda.getCudaCapability.mockResolvedValue(hopper);
+    const lines = [];
+    pathLookup.findCommandOnPath.mockReturnValue('C:\\docker.exe');
+    probe.probeOpenAiModels
+      .mockResolvedValueOnce(unreachable)
+      .mockResolvedValueOnce(unreachable)
+      .mockResolvedValue(reachable(['qwen3.8-27b']));
+
+    const result = await runLocalRuntimeSetup('sglang', { endpoint: sglangEndpoint, emit: (line) => lines.push(line) });
+
+    expect(result.success).toBe(true);
+    expect(wsl.detectWslProjectDir).toHaveBeenCalledWith('sglang-qwen38');
+    expect(sglangProject.recordSglangProjectDir).toHaveBeenCalledWith(SGLANG_WSL_DIR);
+    // Recorded AND applied to this run, so the inspection below it resolves the
+    // detected directory even if the one-line `.env` write had failed.
+    expect(process.env.SGLANG_QWEN_PROJECT_DIR).toBe(SGLANG_WSL_DIR);
+    expect(lines.join('\n')).toContain(SGLANG_WSL_DIR);
+    restore();
+  });
+
+  it('never spends a WSL probe when the directory is already settled', async () => {
+    const restore = pinPlatform('win32');
+    cuda.getCudaCapability.mockResolvedValue(hopper);
+    process.env.SGLANG_QWEN_PROJECT_DIR = SGLANG_WSL_DIR;
+    pathLookup.findCommandOnPath.mockReturnValue('C:\\docker.exe');
+    probe.probeOpenAiModels
+      .mockResolvedValueOnce(unreachable)
+      .mockResolvedValueOnce(unreachable)
+      .mockResolvedValue(reachable(['qwen3.8-27b']));
+
+    await runLocalRuntimeSetup('sglang', { endpoint: sglangEndpoint, emit: () => {} });
+
+    // An exported value is this run's decision, and it outranks the record — so
+    // there is nothing left to detect and no subprocess worth spending.
+    expect(wsl.detectWslProjectDir).not.toHaveBeenCalled();
+    expect(sglangProject.recordSglangProjectDir).not.toHaveBeenCalled();
+    restore();
+  });
+
+  it('refuses before docker when WSL cannot answer, naming that host\'s fix and the feature doc', async () => {
+    const restore = pinPlatform('win32');
+    cuda.getCudaCapability.mockResolvedValue(hopper);
+    wsl.detectWslProjectDir.mockResolvedValue({ dir: null, reason: 'internal-distro', distro: 'docker-desktop', distros: ['Ubuntu'] });
+    pathLookup.findCommandOnPath.mockReturnValue('C:\\docker.exe');
+    probe.probeOpenAiModels.mockResolvedValue(unreachable);
+
+    const result = await runLocalRuntimeSetup('sglang', { endpoint: sglangEndpoint, emit: () => {} });
+
+    // Docker Desktop's own distro is wiped on a reset — and the refusal names
+    // the distro that ISN'T, rather than a `<distro>` placeholder.
+    expect(result).toMatchObject({ success: false, error: expect.stringMatching(/docker-desktop/) });
+    expect(result.error).toMatch(/wsl --set-default/);
+    expect(result.error).toContain('Ubuntu');
+    expect(result.error).toContain('SGLANG_QWEN_PROJECT_DIR');
+    // Never reaches docker, so no image is ever pulled on a host that cannot
+    // hold the project.
+    expect(streaming.runStreamingCommand).not.toHaveBeenCalled();
+    expect(sglangProject.inspectSglangQwenProject).not.toHaveBeenCalled();
+    restore();
+  });
+
+  it('sends a Windows host with no WSL to the feature doc, never to a clone it does not have', async () => {
+    const restore = pinPlatform('win32');
+    cuda.getCudaCapability.mockResolvedValue(hopper);
+    wsl.detectWslProjectDir.mockResolvedValue({ dir: null, reason: 'no-wsl', error: 'spawn wsl.exe ENOENT' });
+    pathLookup.findCommandOnPath.mockReturnValue('C:\\docker.exe');
+    probe.probeOpenAiModels.mockResolvedValue(unreachable);
+
+    const result = await runLocalRuntimeSetup('sglang', { endpoint: sglangEndpoint, emit: () => {} });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/wsl --install -d Ubuntu/);
+    // SGLang has no provisioner, so the refusal must NOT promise that clicking
+    // again places the project — it points at the doc the operator prepares it
+    // from. That clause is the one piece of this refusal that is per-stack.
+    expect(result.error).toContain('docs/features/sglang-qwen38.md');
+    expect(result.error).not.toMatch(/PortOS will place the project inside it/);
     restore();
   });
 

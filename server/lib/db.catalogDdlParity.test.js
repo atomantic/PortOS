@@ -105,6 +105,26 @@ function extractIndexNames(source, prefix = 'idx_catalog_') {
   return out;
 }
 
+// Names alone can't catch an index that exists in both files under the same
+// name but over different columns (or a different sort order, or having lost
+// its UNIQUE) — that ships a fresh install an index the boot-time DDL never
+// intended, and a dropped UNIQUE breaks the ON CONFLICT idempotency contract
+// the store relies on. Pair each name with its normalized definition so the
+// parity check compares shape, not just identity.
+function extractIndexDefs(source, prefix) {
+  const out = new Map();
+  const re = new RegExp(
+    `CREATE (UNIQUE )?INDEX IF NOT EXISTS\\s+(${prefix}\\w+)\\s+ON\\s+\\w+\\s*\\(([^)]*)\\)`,
+    'gi',
+  );
+  let m;
+  while ((m = re.exec(source)) !== null) {
+    const cols = m[3].replace(/\s+/g, ' ').trim().toLowerCase();
+    out.set(m[2], `${m[1] ? 'unique ' : ''}(${cols})`);
+  }
+  return out;
+}
+
 function extractFunctionNames(source, prefix = 'update_catalog_') {
   const out = new Set();
   const re = new RegExp(`CREATE OR REPLACE FUNCTION\\s+(${prefix}\\w+)`, 'gi');
@@ -171,11 +191,39 @@ describe('catalog DDL parity (init-db.sql ↔ db.js ensureSchema)', () => {
     expect(sqlIdx.size).toBeGreaterThan(0);
   });
 
-  // The operator-action ledger (#5594) is a machine-local db-primary table that
-  // ships in BOTH sources. `human_activity_events` has no dedicated assertion here
-  // and that is a gap, not a precedent — a column or index added to one file only
-  // would leave every EXISTING install without it (init-db.sql runs on fresh
-  // provisioning alone), so pin columns and index names for this one explicitly.
+  // The operator-action ledger (#5594) and the human-activity timeline (#2150)
+  // are machine-local db-primary tables that ship in BOTH sources. A column or
+  // index added to one file only would leave every EXISTING install without it
+  // (init-db.sql runs on fresh provisioning alone), so pin columns and index
+  // names for both explicitly.
+  it('human_activity_events has the same columns and indexes in both files', () => {
+    const sqlBody = extractCreateTable(INIT_SQL, 'human_activity_events');
+    const jsBody = extractCreateTable(DB_JS, 'human_activity_events');
+    expect(sqlBody, 'init-db.sql missing CREATE TABLE human_activity_events').toBeTruthy();
+    expect(jsBody, 'db/schema/humanActivity.js missing CREATE TABLE human_activity_events').toBeTruthy();
+    expect([...new Set(extractColumnNames(sqlBody))].sort())
+      .toEqual([...new Set(extractColumnNames(jsBody))].sort());
+
+    // Compare definitions, not just names: an index present in both files under
+    // the same name but over different columns would ship a fresh install
+    // something the boot-time DDL never intended.
+    const sqlIdx = extractIndexDefs(INIT_SQL, 'idx_human_activity_');
+    const jsIdx = extractIndexDefs(DB_JS, 'idx_human_activity_');
+    // Spell out the expected map: the dedupe index is the idempotency contract
+    // (ON CONFLICT (source, dedupe_key) DO NOTHING) and the two composites
+    // (#5715) are what keep a source-scoped timeline read off a full
+    // happened_at walk — dropping either from both files, or silently losing
+    // the DESC ordering, would otherwise read as a passing set match.
+    const expected = {
+      idx_human_activity_dedupe: 'unique (source, dedupe_key)',
+      idx_human_activity_happened: '(happened_at)',
+      idx_human_activity_source_happened: '(source, happened_at desc)',
+      idx_human_activity_source_kind_happened: '(source, kind, happened_at desc)',
+    };
+    expect(Object.fromEntries(sqlIdx)).toEqual(expected);
+    expect(Object.fromEntries(jsIdx)).toEqual(expected);
+  });
+
   it('user_action_events has the same columns and indexes in both files', () => {
     const sqlBody = extractCreateTable(INIT_SQL, 'user_action_events');
     const jsBody = extractCreateTable(DB_JS, 'user_action_events');

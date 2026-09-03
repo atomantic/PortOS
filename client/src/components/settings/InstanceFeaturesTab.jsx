@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import ToggleSwitch from '../ToggleSwitch';
+import RiggingRuntimeCard from './RiggingRuntimeCard';
 import { useInstanceFeatures, publishInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
 import { isGitHubRepoUrl, parseGitHubUrl } from '../../lib/repoUrl.js';
 import { getPrimaryLaunchUrl } from '../../services/appUrls.js';
@@ -152,6 +153,10 @@ export function InstanceFeaturesTab() {
         {features.map((feature) => {
           const hint = sourceHint(feature);
           const isEidoverse = feature.id === 'eidoverse';
+          // Rigging's "configured" state is a machine-local runtime rather than a
+          // config file, so its row carries the probe's answer (installed/absent, the
+          // resolved interpreter, the module version, the install command).
+          const isRigging = feature.id === 'rigging';
           const setup = isEidoverse ? feature.setup : null;
           const needsInstall = isEidoverse && setup?.installed !== true;
           const installing = savingId === feature.id;
@@ -184,7 +189,11 @@ export function InstanceFeaturesTab() {
                       ? 'Active on this instance'
                       : (isEidoverse ? 'Installed but disabled on this instance' : 'Not used on this instance'))}
                 </p>
-                {hint && <p className="text-xs text-gray-500 mt-1">{hint}</p>}
+                {hint && !isRigging && <p className="text-xs text-gray-500 mt-1">{hint}</p>}
+                {/* Rigging's own card states the runtime's status precisely; the
+                    generic "no <label> instance is configured" hint would talk about
+                    an integration this feature does not have. */}
+                {isRigging && <RiggingRuntimeCard />}
                 {isEidoverse && (
                   <div className="mt-3 space-y-1 text-xs text-gray-400">
                     {needsInstall && <p>

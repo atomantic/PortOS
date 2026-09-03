@@ -293,7 +293,7 @@ export default function MemoryBuilder({ onBack, onSelectItem, onReviewItem = onS
                   <button
                     onClick={() => requestDelete(item.id)}
                     aria-label={`Delete ${item.title}`}
-                    className="p-1.5 text-gray-500 hover:text-port-error transition-colors"
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-error transition-colors"
                   >
                     <Trash2 size={14} />
                   </button>

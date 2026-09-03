@@ -276,6 +276,54 @@ describe('managed app repository sources', () => {
     expect(screen.getByText('Remote freshness is unknown; a managed update can retry the source checkouts.')).toBeInTheDocument();
   });
 
+  it('offers to update from a fork as-is after a FORK_SYNC_REQUIRED refusal', async () => {
+    useAppOperation.mockReturnValue({
+      steps: [], isOperating: false, operationType: 'update',
+      error: 'Running from a fork (alice/PortOS). Sync your fork first, or acknowledge.',
+      errorCode: 'FORK_SYNC_REQUIRED', completed: false,
+      startUpdate: vi.fn(),
+    });
+    render(<RepositorySourcePanel appId="portos-default" appName="PortOS" />);
+
+    const retryButton = await screen.findByRole('button', { name: 'Update from fork as-is' });
+    fireEvent.click(retryButton);
+
+    expect(useAppOperation.mock.results[0].value.startUpdate).toHaveBeenCalledWith(
+      'portos-default', 'PortOS', { acknowledgeFork: true },
+    );
+  });
+
+  it('offers to update anyway after a PERSISTENT_MIND_IMAGES_IN_FLIGHT refusal', async () => {
+    useAppOperation.mockReturnValue({
+      steps: [], isOperating: false, operationType: 'update',
+      error: 'Persistent Mind has 1 queued image message.',
+      errorCode: 'PERSISTENT_MIND_IMAGES_IN_FLIGHT', completed: false,
+      startUpdate: vi.fn(),
+    });
+    render(<RepositorySourcePanel appId="portos-default" appName="PortOS" />);
+
+    const retryButton = await screen.findByRole('button', { name: 'Update anyway (back up first)' });
+    fireEvent.click(retryButton);
+
+    expect(useAppOperation.mock.results[0].value.startUpdate).toHaveBeenCalledWith(
+      'portos-default', 'PortOS', { acknowledgePersistentMindImageBackup: true },
+    );
+  });
+
+  it('does not offer an acknowledgement retry for a refusal with no acknowledgement (AGENTS_ACTIVE)', async () => {
+    useAppOperation.mockReturnValue({
+      steps: [], isOperating: false, operationType: 'update',
+      error: '1 CoS agent is running — updating would restart PortOS and sever it.',
+      errorCode: 'AGENTS_ACTIVE', completed: false,
+      startUpdate: vi.fn(),
+    });
+    render(<RepositorySourcePanel appId="portos-default" appName="PortOS" />);
+
+    await screen.findByText(/CoS agent is running/);
+    expect(screen.queryByRole('button', { name: 'Update from fork as-is' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Update anyway (back up first)' })).not.toBeInTheDocument();
+  });
+
   it('does not mislabel an undiscovered repository topology as a custom origin', async () => {
     const status = canonicalStatus();
     status.updateAvailable = false;

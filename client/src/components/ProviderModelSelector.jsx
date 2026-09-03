@@ -65,6 +65,7 @@ import {
   filterHardwareCompatibleProviderModels,
   isProviderHardwareCompatible,
   isProviderModelHardwareCompatible,
+  selectableProviders,
   localToolUseHint,
   withToolUseOptionLabel,
 } from '../utils/providers.js';
@@ -139,16 +140,11 @@ export default function ProviderModelSelector({
   const annotateToolUse = highlightToolUse && toolUseLoaded;
   const toolHint = annotateToolUse ? localToolUseHint(effectiveModel, selectedProvider, toolUseIdsByProvider) : null;
   const toolIncapable = toolHint?.toolCapable === false;
-  // Only offer enabled providers (treat a missing `enabled` as enabled). The
-  // currently-selected provider stays visible even if disabled, so a record
+  // Only offer enabled, hardware-compatible, policy-allowed providers; the
+  // currently-selected provider stays visible whatever its state, so a record
   // pinned to a now-disabled provider still renders its value instead of
-  // silently blanking the select. This is the single DRY gate for every
-  // provider→model picker; callers may also pre-filter, which is idempotent.
-  const visibleProviders = providerList.filter(
-    (p) => (p.enabled !== false || p.id === selectedProviderId)
-      && (isProviderHardwareCompatible(p) || p.id === selectedProviderId)
-      && (!providerAllowed || providerAllowed(p) || p.id === selectedProviderId)
-  );
+  // silently blanking the select (`selectableProviders` is the one rule).
+  const visibleProviders = selectableProviders(providerList, { selectedId: selectedProviderId, allowed: providerAllowed });
   const compatibleModels = filterHardwareCompatibleProviderModels(availableModels, selectedProvider)
     .filter((model) => !modelAllowed || modelAllowed(model, selectedProvider));
   const selectedModelIsUnavailable = Boolean(

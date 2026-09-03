@@ -342,6 +342,21 @@ describe('GlbViewer HDRI failures', () => {
     expect(logged).toHaveBeenCalledWith(expect.stringContaining('💥 React Error'), expect.anything());
   });
 
+  // The AR/USDZ export re-serializes the graph the viewer loaded, so the handle
+  // has to reach the parent — and has to be RETRACTED when the mesh unloads,
+  // because the force-opaque cleanup disposes that clone's materials. A retained
+  // handle would export a scene whose textures are gone.
+  it('hands the loaded scene to onSceneLoaded and clears it on unmount', () => {
+    const onSceneLoaded = vi.fn();
+    const { unmount } = render(
+      <GlbViewer src="/data/image-to-3d/abc/model.glb" onSceneLoaded={onSceneLoaded} />,
+    );
+    expect(onSceneLoaded).toHaveBeenCalledWith(expect.any(Object));
+    onSceneLoaded.mockClear();
+    unmount();
+    expect(onSceneLoaded).toHaveBeenCalledWith(null);
+  });
+
   // The other half of the split: the mesh's own failure must still surface.
   it('still shows the failure panel when the MESH is what failed', () => {
     gltf.error = new Error('Could not load /data/image-to-3d/abc/model.glb: 404 Not Found');

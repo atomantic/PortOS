@@ -57,15 +57,36 @@ export const safeRemoveStorage = (key) => {
   }
 };
 
-// `sessionStorage` variants, same guarantees. Session scope is for state that
-// should survive a navigation or a reload but must NOT outlive the tab —
-// crash-recovery buffers for edits the server has not accepted yet. Persisting
-// those to `localStorage` would resurrect them weeks later, on top of whatever
-// the record holds by then.
-export const safeReadJsonSession = (key, fallback = null) => {
+// `sessionStorage` variants, same guarantees, and mirroring the `localStorage`
+// pair above: a raw-string read/write plus JSON helpers layered on top. Session
+// scope is for state that should survive a navigation or a reload but must NOT
+// outlive the tab — crash-recovery buffers for edits the server has not accepted
+// yet, and per-tab markers. Persisting those to `localStorage` would resurrect
+// them weeks later, on top of whatever the record holds by then.
+
+// Returns the stored string, or null on any failure / missing storage. Use this
+// rather than the JSON pair for a plain string flag (a build id, a marker):
+// JSON-quoting the value would change the bytes every already-open tab holds.
+export const safeReadSession = (key) => {
   try {
-    const raw = globalThis.sessionStorage?.getItem(key) ?? null;
-    if (raw === null) return fallback;
+    return globalThis.sessionStorage?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+};
+
+export const safeWriteSession = (key, value) => {
+  try {
+    globalThis.sessionStorage?.setItem(key, value);
+  } catch {
+    // Ignore — the value stays in memory when persistence is unavailable.
+  }
+};
+
+export const safeReadJsonSession = (key, fallback = null) => {
+  const raw = safeReadSession(key);
+  if (raw === null) return fallback;
+  try {
     return JSON.parse(raw);
   } catch {
     return fallback;

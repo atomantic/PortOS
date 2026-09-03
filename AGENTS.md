@@ -172,6 +172,8 @@ Any new file in `server/lib/`, `client/src/lib/`, `client/src/hooks/`, `client/s
 
 This is the one rule that keeps catalogs from rotting, and it is enforced: `server/lib/index.test.js` and its client counterparts fail when a non-test `.js` file is missing from either the barrel or the README.
 
+**These catalogs and barrels merge with git's `union` driver** (`.gitattributes`), because every branch inserts one sorted line into each and two concurrent branches routinely collide on the same hunk. Union keeps both sides, which is right for an insertion and wrong for an edit or deletion beside one — so after a rebase that touched a catalog, `scripts/catalog-merge-union.test.js` (always-run) fails on a doubled or resurrected row; keep one and move on. Never give a file with real code paths the `union` attribute; the guard rejects a `.js` that is not a pure re-export barrel.
+
 **Name collisions.** When two modules in one directory export the same identifier (e.g. `settingsUpdateInputSchema` in both `brainValidation.js` and `digitalTwinValidation.js`), the barrel uses `export * as <name>` namespace exports so callers reach for `brainValidation.settingsUpdateInputSchema` explicitly. Catch-all modules like `validation.js` stay flat. The collision-detector test fails if two flat-`export *` modules ever share an identifier, forcing namespace resolution where the conflict is introduced.
 
 Existing deep imports (`import { x } from '../lib/foo.js'`) keep working — the barrel exists for *discovery*, not to force a re-import. New code may use either form. The worked example for "barrel + documented exports" is `server/lib/aiToolkit/index.js`.

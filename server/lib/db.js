@@ -14,13 +14,20 @@ if (!process.env.PGPASSWORD) {
   console.warn('⚠️ PGPASSWORD not set — using default. Set PGPASSWORD env var for production.');
 }
 
-// Connection config from environment or defaults
-const pool = new Pool({
+// Connection config from environment or defaults. Exported so callers that
+// need a SECOND, independent connection to the same database (a raw `pg`
+// client outside the pool) don't have to re-derive these defaults and risk
+// drifting from them — see server/lib/db.test.js.
+export const POOL_CONFIG = {
   host: process.env.PGHOST || 'localhost',
   port: parseInt(process.env.PGPORT || '5432', 10),
   database: process.env.PGDATABASE || 'portos',
   user: process.env.PGUSER || 'portos',
   password: process.env.PGPASSWORD || 'portos',
+};
+
+const pool = new Pool({
+  ...POOL_CONFIG,
   max: 20,
   idleTimeoutMillis: 30000,
   // 10s (was 2s) — a single-user box periodically runs heavy local workloads
@@ -316,6 +323,19 @@ export async function checkHealth() {
 // on pg_type / pg_class). Sharing one in-flight promise serializes them; it's
 // cleared on settle so a deliberate later call (the gate runs it twice) still
 // re-applies (cheap — ~30 no-op parses on an up-to-date DB).
+//
+// That dedup only covers callers IN THIS PROCESS. There is one Postgres per
+// install shared by every process that opens it — the server, `portos-cos`,
+// and every CoS agent worktree — so a restart during an update routinely
+// overlaps an outgoing server (still finishing its shutdown) with an
+// incoming one, both calling ensureSchema() at once. Each `DROP TRIGGER IF
+// EXISTS` / `CREATE TRIGGER` pair (server/scripts/init-db.sql) is idempotent
+// WITHIN one session but not atomic ACROSS sessions: A drops, B's drop is a
+// no-op, A creates, B's create then throws "already exists" (#5977). A
+// session-level Postgres advisory lock serializes the whole DDL block
+// cluster-wide — a dropped connection releases it automatically, so a hard
+// kill mid-boot can never strand a later boot waiting forever.
+export const SCHEMA_DDL_ADVISORY_LOCK_KEY = 5977001;
 let ensureSchemaInFlight = null;
 // Every DB-backed store self-runs ensureSchema() when it warms its backend at
 // boot (memory, creative-director, media index, catalog, universe/story/writers
@@ -360,28 +380,59 @@ async function ensureSchemaImpl() {
   //   either — it must be issued from a dedicated non-transactional path (a
   //   standalone maintenance script / manual step run outside any transaction).
   //   See docs/STORAGE.md ("Boot schema upgrades & lock windows").
-  const upgrades = buildUpgradeDdl();
-  for (const sql of upgrades) {
-    await pool.query(sql);
-  }
+  // Serialize the whole DDL block cluster-wide with a session-level advisory
+  // lock — see SCHEMA_DDL_ADVISORY_LOCK_KEY above. Held on a single dedicated
+  // client (NOT the pool) for the entire block, released in `finally` on both
+  // the success and throw path. Session-level, not transaction-scoped: none of
+  // this runs inside a transaction (the non-CONCURRENT index builds above are
+  // deliberately not wrapped in one either — see the comment block above), so
+  // nothing here may be wrapped in withTransaction()/BEGIN.
+  const client = await pool.connect();
+  try {
+    const { rows: [{ locked }] } = await client.query('SELECT pg_try_advisory_lock($1) AS locked', [SCHEMA_DDL_ADVISORY_LOCK_KEY]);
+    if (!locked) {
+      // Another process is already running this block — normal during a boot
+      // overlap, but pg_advisory_lock's blocking wait is otherwise silent (no
+      // lock_timeout applies to advisory locks), so a peer stalled mid-DDL
+      // (e.g. the large-table index build documented above) would look like a
+      // hung boot with zero log output.
+      console.log('🗄️ Database schema DDL lock held by another process — waiting…');
+      await client.query('SELECT pg_advisory_lock($1)', [SCHEMA_DDL_ADVISORY_LOCK_KEY]);
+    }
 
-  // Catalog block: every statement below is idempotent (CREATE IF NOT EXISTS
-  // / CREATE OR REPLACE FUNCTION / DROP TRIGGER IF EXISTS + CREATE TRIGGER),
-  // so we run the whole list on every boot rather than gating on table
-  // presence. A previous probe that early-returned on "all four tables exist"
-  // would skip the indexes / functions / triggers if the prior boot crashed
-  // between the table CREATEs and the artifact CREATEs — leaving the schema
-  // marked ready while update triggers and HNSW indexes were never installed.
-  // Cost on a fully-applied install is ~30 Postgres no-op parses (<10ms).
+    const upgrades = buildUpgradeDdl();
+    for (const sql of upgrades) {
+      await client.query(sql);
+    }
 
-  const catalogDDL = buildCatalogDdl();
+    // Catalog block: every statement below is idempotent (CREATE IF NOT EXISTS
+    // / CREATE OR REPLACE FUNCTION / DROP TRIGGER IF EXISTS + CREATE TRIGGER),
+    // so we run the whole list on every boot rather than gating on table
+    // presence. A previous probe that early-returned on "all four tables exist"
+    // would skip the indexes / functions / triggers if the prior boot crashed
+    // between the table CREATEs and the artifact CREATEs — leaving the schema
+    // marked ready while update triggers and HNSW indexes were never installed.
+    // Cost on a fully-applied install is ~30 Postgres no-op parses (<10ms).
 
-  for (const sql of catalogDDL) {
-    await pool.query(sql);
-  }
-  if (!schemaUpgradeLogged) {
-    console.log('🗄️ Database schema upgrades applied');
-    schemaUpgradeLogged = true;
+    const catalogDDL = buildCatalogDdl();
+
+    for (const sql of catalogDDL) {
+      await client.query(sql);
+    }
+    if (!schemaUpgradeLogged) {
+      console.log('🗄️ Database schema upgrades applied');
+      schemaUpgradeLogged = true;
+    }
+  } finally {
+    // A session-level advisory lock is tied to the CONNECTION, not the
+    // checkout — release(false) alone would return a still-locked connection
+    // to the pool, and every later ensureSchema() call (in this process AND
+    // every other process, since the lock is cluster-wide) would then block
+    // forever waiting on a lock nobody will ever release. If the unlock
+    // itself fails, destroy the connection instead: closing it releases the
+    // lock automatically, same as a hard kill mid-boot.
+    const unlocked = await client.query('SELECT pg_advisory_unlock($1)', [SCHEMA_DDL_ADVISORY_LOCK_KEY]).then(() => true, () => false);
+    client.release(!unlocked);
   }
 }
 

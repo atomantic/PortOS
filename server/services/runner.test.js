@@ -669,6 +669,76 @@ describe('executeCliRun — stdin pipe containment (#5655)', () => {
   });
 });
 
+describe('executeCliRun — spawn-site error containment (#5792)', () => {
+  const provider = {
+    id: 'codex', command: 'codex', args: [],
+    defaultModel: 'codex-configured-default', timeout: 5000,
+  };
+
+  it('contains a throwing onRunStarted instead of orphaning the spawned child', async () => {
+    // Pre-fix, onRunStarted was the one hook invocation in runner.js not routed
+    // through safeSettle: a throw rejected executeCliRun with the child already
+    // spawned and registered, and the terminal 'error'/'close' handlers ~150
+    // lines below never got wired.
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    setAIToolkit(fakeToolkit(), {
+      dataDir: '/tmp/test-runner',
+      hooks: { onRunStarted: () => { throw new Error('started hook boom'); } },
+    });
+
+    const onComplete = vi.fn();
+    await expect(executeCliRun({
+      runId: 'run-started-hook-throws', provider, prompt: 'test prompt',
+      workspacePath: TEST_WORKSPACE, onComplete,
+    })).resolves.toBe('run-started-hook-throws');
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('onRunStarted hook threw during recovery'));
+
+    // The run is still fully wired: its terminal handler settles the caller.
+    child.emit('close', 0);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onComplete.mock.calls[0][0]).toMatchObject({ success: true });
+    errorSpy.mockRestore();
+  });
+
+  it('replays an error emitted before setup finishes into the terminal handler exactly once', async () => {
+    // An unlistened 'error' on a ChildProcess is re-thrown by Node and kills the
+    // server process, so the listener is claimed in the same tick as spawn() and
+    // buffered until the real handler exists. onRunStarted fires inside that
+    // window, which makes it a faithful stand-in for the racing child.
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    setAIToolkit(fakeToolkit(), {
+      dataDir: '/tmp/test-runner',
+      hooks: {
+        onRunStarted: () => {
+          child.emit('error', Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }));
+        },
+      },
+    });
+
+    const onComplete = vi.fn();
+    await executeCliRun({
+      runId: 'run-early-spawn-error', provider, prompt: 'test prompt',
+      workspacePath: TEST_WORKSPACE, onComplete,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onComplete.mock.calls[0][0]).toMatchObject({ success: false, errorCategory: 'spawn_error' });
+
+    // Node commonly follows a failed spawn's 'error' with 'close'; the run stays settled once.
+    child.emit('close', null);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    errorSpy.mockRestore();
+  });
+});
+
 describe('executeCliRun — close handler crash guard', () => {
   // Drive a codex run whose first write (output) succeeds and second write
   // (metadata) rejects, so the close handler's recovery path runs. Returns the

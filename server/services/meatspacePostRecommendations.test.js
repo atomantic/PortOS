@@ -36,7 +36,6 @@ import {
   composePostRecommendations,
   weakestSkillFromStats,
   stalledProgressions,
-  getPostRecommendations,
   updatePostConfig,
   isRecDrillRunnable,
   memoryPracticeDeepLink,
@@ -45,6 +44,7 @@ import {
   recentPracticeFromActivity,
   weakestSkillsFromStats,
 } from './meatspacePost.js';
+import { getPostRecommendations } from './meatspacePostRecommendations.js';
 import { atomicWrite } from '../lib/fileUtils.js';
 
 beforeEach(() => {

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useLocalStorageBool } from './useLocalStorageBool.js';
 import { useRepoStudyConfig } from './useRepoStudyConfig.js';
 import { parseBareUrl } from '../lib/bareUrl.js';
@@ -38,6 +38,10 @@ export function capturedRepo(text) {
 
 /**
  * @param {string} text the current capture text
+ * @param {string} [note] the "why are you saving this link?" note shown
+ *   alongside the repo opt-ins. When the user ticks "Study for app ideas" with
+ *   an empty study brief, it defaults to this note — the two boxes are almost
+ *   always asked and answered with the same text.
  * @returns {object} the `useRepoStudyConfig` shape plus `repo`, `options`,
  *   `toggle`, and `intakeFor`. `repo` is the parsed `{ host, owner, repo }`
  *   (null when the text isn't a bare repo URL) — both the panel and the host's
@@ -47,13 +51,26 @@ export function capturedRepo(text) {
  *   the SUBMITTED text so a sticky tick can't ride along on a capture the user
  *   retyped into a plain thought.
  */
-export function useRepoIntake(text) {
+export function useRepoIntake(text, note = '') {
   const [malwareScan, setMalwareScan] = useLocalStorageBool(STORAGE_KEYS.malwareScan, false);
   const [learn, setLearn] = useLocalStorageBool(STORAGE_KEYS.learn, false);
   const repo = useMemo(() => capturedRepo(text), [text]);
 
   const repoKey = repo ? `${repo.host}/${repo.owner}/${repo.repo}` : null;
   const study = useRepoStudyConfig({ enabled: Boolean(repo && learn), resetKey: repoKey });
+
+  // Defaults the study brief from the save note the first time "learn" is
+  // ticked on for this repo, rather than on every keystroke — once the user
+  // has their own text in the brief box, typing more in the note shouldn't
+  // clobber it.
+  const prevLearnRef = useRef(learn);
+  useEffect(() => {
+    if (learn && !prevLearnRef.current && !study.studyContext.trim() && note.trim()) {
+      study.setStudyContext(note.trim());
+    }
+    prevLearnRef.current = learn;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [learn, repoKey]);
 
   const options = useMemo(() => ({ malwareScan, learn }), [malwareScan, learn]);
   const setters = { malwareScan: setMalwareScan, learn: setLearn };

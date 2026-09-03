@@ -295,7 +295,7 @@ export default function BrowserPage() {
               <RefreshCw size={14} />
             </button>
           </div>
-          <pre className="p-3 text-xs text-gray-400 font-mono overflow-auto max-h-64 whitespace-pre-wrap">
+          <pre className="p-3 text-xs text-gray-400 font-mono overflow-auto max-h-64 whitespace-pre-wrap break-all">
             {logs || <BrailleSpinner text="Loading logs" />}
           </pre>
         </div>

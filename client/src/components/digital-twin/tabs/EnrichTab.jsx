@@ -683,7 +683,7 @@ export default function EnrichTab({ onRefresh }) {
                         Save to Soul
                       </button>
                     </div>
-                    <pre className="p-3 bg-port-bg rounded-lg text-sm text-gray-300 whitespace-pre-wrap overflow-auto max-h-64">
+                    <pre className="p-3 bg-port-bg rounded-lg text-sm text-gray-300 whitespace-pre-wrap break-words overflow-auto max-h-64">
                       {writingAnalysis.suggestedContent}
                     </pre>
                   </div>

@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, raw } from 'express';
 import { createReadStream } from 'node:fs';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -14,9 +14,13 @@ import {
   deleteModel,
   getModelAsset,
   getModelFullMesh,
+  getModelUsdz,
+  saveModelUsdz,
+  USDZ_MAX_BYTES,
 } from '../services/imageTo3d/models.js';
 import {
   RENDER_STEPS_MIN, RENDER_STEPS_MAX, RENDER_SEED_MAX, DETAIL_TIERS, ALPHA_MODES,
+  SUBJECT_SCALE_MIN_EXCLUSIVE, SUBJECT_SCALE_MAX,
 } from '../services/imageTo3d/renderOptions.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 import { openSseStream } from '../lib/sseDownload.js';
@@ -29,7 +33,7 @@ const galleryFilenameSchema = z.string().trim().min(1).max(256)
 // PER-RUN sampler knobs, shared by create and re-generate. Nothing persists
 // between runs: absent steps → the pipeline default, absent seed → a fresh
 // random roll for that run, absent keyBackground → no keying (the pipeline's own
-// learned matte runs instead).
+// learned matte runs instead), absent subjectScale → the source's own framing.
 const renderOptionsSchema = z.object({
   steps: z.number().int().min(RENDER_STEPS_MIN).max(RENDER_STEPS_MAX).optional(),
   seed: z.number().int().min(0).max(RENDER_SEED_MAX).optional(),
@@ -40,6 +44,13 @@ const renderOptionsSchema = z.object({
   detail: z.enum([...DETAIL_TIERS]).optional(),
   alphaMode: z.enum([...ALPHA_MODES]).optional(),
   normalMap: z.boolean().optional(),
+  // Open at zero, closed at one — `1` is the identity (no reframing) and the
+  // default; bounds come from renderOptions.js so the route can't accept a value
+  // the normalizer would silently discard.
+  subjectScale: z.number()
+    .gt(SUBJECT_SCALE_MIN_EXCLUSIVE)
+    .max(SUBJECT_SCALE_MAX)
+    .optional(),
 });
 
 const createModelSchema = z.object({
@@ -298,6 +309,47 @@ router.get('/models/:id/full-mesh', asyncHandler(async (req, res) => {
     contentType: 'model/obj',
     failure: new ServerError('Mesh file not found', { status: 404, code: 'ASSET_MISSING' }),
     label: 'Image-to-3D asset',
+  });
+}));
+
+// ── AR Quick Look (USDZ) ──────────────────────────────────────────────────
+// The conversion runs in the VIEWER (three's USDZExporter over the scene it has
+// already parsed and decoded), not on the server — PortOS ships no USD toolchain
+// and would otherwise have to re-decode the GLB and its textures in Node to
+// produce a file the browser already holds in memory. The server's job is to
+// persist the result: a blob URL is not reliably openable by AR Quick Look and
+// does not survive a reload, so the bytes are stored as a sibling artifact and
+// re-served on every later visit instead of being re-exported.
+
+/**
+ * A raw USDZ body. `express.json()` is mounted app-wide but only claims
+ * `application/json`, so these content types reach the route unparsed. The limit
+ * is enforced here (a 413 from the parser) AND in `saveModelUsdz` — the parser
+ * guards memory before the body is buffered, the service guards the invariant for
+ * any other caller.
+ */
+const usdzBody = raw({
+  type: ['model/vnd.usdz+zip', 'application/octet-stream'],
+  limit: USDZ_MAX_BYTES,
+});
+
+router.post('/models/:id/usdz', usdzBody, asyncHandler(async (req, res) => {
+  // Body-shape validation is byte-level (non-empty, under cap, zip magic), not a
+  // Zod object schema — there is no JSON here to describe.
+  const model = await saveModelUsdz(req.params.id, Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0));
+  res.status(201).json(withRenderSupport(model));
+}));
+
+// Served `inline`, unlike the GLB/OBJ downloads: AR Quick Look will not engage on
+// an attachment response, and it needs the exact `model/vnd.usdz+zip` type.
+router.get('/models/:id/usdz', asyncHandler(async (req, res) => {
+  const { path, filename } = await getModelUsdz(req.params.id);
+  streamAttachment(res, createReadStream(path), {
+    filename,
+    contentType: 'model/vnd.usdz+zip',
+    disposition: 'inline',
+    failure: new ServerError('USDZ file not found', { status: 404, code: 'ASSET_MISSING' }),
+    label: 'Image-to-3D AR export',
   });
 }));
 

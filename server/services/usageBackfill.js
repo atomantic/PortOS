@@ -3,8 +3,10 @@ import { homedir } from 'os';
 import { atomicWrite, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import {
   applyHistoricalUsageCorrections,
-  getReconciledUsageRunIds
+  getReconciledUsageRunIds,
+  getSiblingReconciledUsageRunIds
 } from './usage.js';
+import { listProviders } from './providers.js';
 import { mergeUsageClaims, snapshotUsageClaims } from './usageReconciler.js';
 
 let job = {
@@ -24,8 +26,18 @@ const markRunMetadata = async (corrections) => {
   for (const correction of corrections) {
     const metadata = await readJSONFile(correction.metadataPath, null);
     if (!metadata) continue;
-    metadata.usageReconciled = true;
-    metadata.usageReconciledAt = new Date().toISOString();
+    const now = new Date().toISOString();
+    // The two passes carry independent markers. A sibling-only correction must
+    // NOT stamp `usageReconciled` — that would tell a later backfill the run's
+    // own estimate had already been replaced when it never was.
+    if (correction.measured) {
+      metadata.usageReconciled = true;
+      metadata.usageReconciledAt = now;
+    }
+    if (correction.siblingScanned) {
+      metadata.usageSiblingsReconciled = true;
+      metadata.usageSiblingsReconciledAt = now;
+    }
     await atomicWrite(correction.metadataPath, metadata);
   }
 };
@@ -38,10 +50,11 @@ export function getHistoricalUsageBackfillStatus() {
  * Start the one-shot historical repair. The explicit POST route is the only
  * caller; no boot hook or schedule invokes this function.
  */
-export function startHistoricalUsageBackfill({
+export async function startHistoricalUsageBackfill({
   runsDir = PATHS.runs,
   home = homedir(),
-  WorkerClass = Worker
+  WorkerClass = Worker,
+  providers = null
 } = {}) {
   if (job.status === 'running') return publicJob();
 
@@ -56,11 +69,20 @@ export function startHistoricalUsageBackfill({
     completedAt: null
   };
 
+  // Resolved HERE, not inside the worker: the toolkit singleton that backs
+  // `listProviders()` is never initialized in a worker thread, so a worker-side
+  // lookup would silently find no provider to attribute a nested session to.
+  // `job.status` is already `running` above, so the await can't let a second
+  // POST start a duplicate scan.
+  const providerList = providers ?? await listProviders().catch(() => []);
+
   const worker = new WorkerClass(new URL('./usageBackfillWorker.js', import.meta.url), {
     workerData: {
       runsDir,
       home,
       reconciledRunIds: getReconciledUsageRunIds(),
+      siblingReconciledRunIds: getSiblingReconciledUsageRunIds(),
+      providers: providerList,
       // The worker gets its own empty copy of usageReconciler.js's claim
       // ledger (a separate module instance) — seed it from this thread's
       // ledger so a message the live completion path already billed isn't
@@ -106,6 +128,7 @@ export function startHistoricalUsageBackfill({
   worker.unref();
   return publicJob();
 }
+
 
 export function __resetHistoricalUsageBackfillForTests() {
   job = {

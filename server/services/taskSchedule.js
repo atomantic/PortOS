@@ -4,17 +4,15 @@
  * Manages configurable intervals for improvement tasks across all apps (including PortOS).
  * All task types live in a single `tasks` object — no more selfImprovement/appImprovement split.
  *
- * Interval types:
- * - 'rotation': Run as part of normal rotation (default)
- * - 'daily': Run once per day
- * - 'weekly': Run once per week
- * - 'once': Run once per app/globally then stop
- * - 'on-demand': Only run when manually triggered
- * - 'custom': Custom interval in milliseconds
- * - 'cron': Cron expression schedule
- * - 'perpetual': Drain actionable work back-to-back (re-queue on completion)
- *   until a programmatic work-detector reports nothing actionable, then PARK
- *   on a recheck cadence (`recheckCron` / `recheckIntervalMs`, default daily).
+ * Cadence model (two variants + one orthogonal flag):
+ * - type 'on-demand': never auto-queued; only a manual trigger runs it.
+ * - type 'cron': clock-scheduled from `cronExpression` (5-field), with catch-up.
+ * - `perpetual: true` (independent of type): drain actionable work back-to-back
+ *   (re-queue on completion) until a programmatic work-detector reports nothing
+ *   actionable, then PARK on a recheck cadence. An on-demand+perpetual task
+ *   rechecks on `recheckCron` / `recheckIntervalMs` (default daily); a
+ *   cron+perpetual task's cron slot INITIATES the drain and the same expression
+ *   gates the next attempt once it parks.
  *   See server/services/perpetualWork.js for the detector registry and the
  *   perpetual gate in cosTaskGenerator.generateManagedAppImprovementTaskForType.
  */
@@ -34,7 +32,8 @@ import {
   DEFAULT_PERPETUAL_RECHECK_MS,
   INTERVAL_TYPES,
   ON_DEMAND_ORIGINS,
-  WEEK,
+  decodeIntervalType,
+  isCronExpression,
   isRefillRequest
 } from './taskScheduleConstants.js';
 import {
@@ -168,7 +167,8 @@ async function getPerformanceAdjustedInterval(taskType, baseIntervalMs) {
 export async function getTaskInterval(taskType) {
   const schedule = await loadSchedule();
   return schedule.tasks[taskType] || {
-    type: INTERVAL_TYPES.ROTATION,
+    type: INTERVAL_TYPES.ON_DEMAND,
+    perpetual: false,
     enabled: false,
     providerId: null,
     model: null,
@@ -179,7 +179,7 @@ export async function getTaskInterval(taskType) {
 export async function updateTaskInterval(taskType, settings) {
   const { task, unparkedScopes } = await updateSchedule(async (schedule) => {
     if (!schedule.tasks[taskType]) {
-      schedule.tasks[taskType] = { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, createdAt: new Date().toISOString() };
+      schedule.tasks[taskType] = { type: INTERVAL_TYPES.ON_DEMAND, perpetual: false, enabled: false, providerId: null, model: null, createdAt: new Date().toISOString() };
     }
 
     // Normalize empty/whitespace prompts to null (treated as "use default")
@@ -260,7 +260,7 @@ export async function updateTaskInterval(taskType, settings) {
     // clears it — so it is a record that is DUE RIGHT NOW. Restamping it from a
     // lengthened cadence would silently push already-due work back into the future.
     const merged = schedule.tasks[taskType];
-    if (merged.type === INTERVAL_TYPES.PERPETUAL && ('recheckCron' in settings || 'recheckIntervalMs' in settings)) {
+    if (merged.perpetual && ('recheckCron' in settings || 'recheckIntervalMs' in settings || 'cronExpression' in settings)) {
       const exec = schedule.executions[`task:${taskType}`];
       if (exec) {
         const nowMs = Date.now();
@@ -349,13 +349,19 @@ export async function getExecutionHistory(taskType) {
 
 /**
  * Compute when a parked perpetual task should next re-probe its work-detector.
- * Prefers `recheckCron` (a 5-field cron string, evaluated in the user's
- * timezone) over `recheckIntervalMs`; falls back to DEFAULT_PERPETUAL_RECHECK_MS.
+ * A cron-scheduled perpetual task rechecks on its own `cronExpression`;
+ * otherwise this prefers `recheckCron` (a 5-field cron string, evaluated in the
+ * user's timezone) over `recheckIntervalMs`, falling back to
+ * DEFAULT_PERPETUAL_RECHECK_MS.
  * Returns an ISO timestamp string.
  */
 export async function computePerpetualRecheckAt(interval, fromMs = Date.now()) {
-  const cron = interval?.recheckCron;
-  if (typeof cron === 'string' && cron.trim().split(/\s+/).length === 5) {
+  // A cron+perpetual task needs no separate recheck cadence: its own schedule
+  // both initiates the drain and gates the next attempt after it parks.
+  const cron = (interval?.type === INTERVAL_TYPES.CRON && isCronExpression(interval?.cronExpression))
+    ? interval.cronExpression
+    : interval?.recheckCron;
+  if (isCronExpression(cron)) {
     const timezone = await getUserTimezone();
     const next = parseCronToNextRun(cron, new Date(fromMs), timezone);
     if (next) return next.toISOString();
@@ -783,26 +789,6 @@ async function checkRunAfterDeps(schedule, taskType, appId = null, featureEnable
 }
 
 /**
- * Shared due/cooldown evaluation for the fixed-cadence interval types
- * (DAILY, WEEKLY, CUSTOM), which differ only in their base interval and the
- * reason-string prefix (`label`). Reason strings are persisted and compared
- * elsewhere, so they must come out byte-identical to what each case produced
- * before this was extracted (e.g. `'daily-due'`, `'weekly-cooldown-adjusted'`).
- */
-async function evaluateFixedInterval(taskType, baseIntervalMs, label, timeSinceLastRun, lastRun, buildResult) {
-  const learningAdjustment = await getPerformanceAdjustedInterval(taskType, baseIntervalMs);
-  const adjustedInterval = learningAdjustment.adjustedIntervalMs;
-  if (timeSinceLastRun >= adjustedInterval) {
-    return buildResult(true, learningAdjustment.adjusted ? `${label}-due-adjusted` : `${label}-due`, baseIntervalMs, { learningAdjustment });
-  }
-  return buildResult(false, learningAdjustment.adjusted ? `${label}-cooldown-adjusted` : `${label}-cooldown`, baseIntervalMs, {
-    learningAdjustment, nextRunIn: adjustedInterval - timeSinceLastRun,
-    nextRunAt: new Date(lastRun + adjustedInterval).toISOString(),
-    baseIntervalMs, adjustedIntervalMs: adjustedInterval
-  });
-}
-
-/**
  * Check if a task type should run for a specific app (or globally)
  */
 export async function shouldRunTask(taskType, appId = null, { featureEnabled = createFeatureGate() } = {}) {
@@ -837,14 +823,22 @@ export async function shouldRunTask(taskType, appId = null, { featureEnabled = c
   // Determine effective interval type: per-app override takes precedence
   const perAppInterval = appId ? await getAppTaskTypeInterval(appId, taskType) : null;
   // A per-app numeric intervalMs override (used by handler-backed tasks like
-  // layered-intelligence, whose Intelligence-tab UI offers sub-daily cadences the
-  // string enum can't express). When set alongside interval:'custom', the CUSTOM
-  // branch below uses THIS value as the base interval instead of the global one.
+  // layered-intelligence, whose Intelligence-tab UI offers sub-daily cadences a
+  // named cadence never expressed). A legacy `interval: 'custom'` override
+  // decodes THIS value into the per-app cron expression below.
   const perAppIntervalMs = appId ? await getAppTaskTypeIntervalMs(appId, taskType) : null;
-  const hasCustomIntervalMs = Number.isFinite(perAppIntervalMs) && perAppIntervalMs > 0;
-  // Cron expressions (contain spaces) are stored directly as the interval value
-  const isCronOverride = perAppInterval && perAppInterval.includes(' ');
-  const effectiveType = isCronOverride ? INTERVAL_TYPES.CRON : (perAppInterval || interval.type);
+  // A per-app override may be a raw cron expression or a retired named cadence
+  // written by an older install; decode both onto the two-variant model.
+  const perAppDecoded = perAppInterval
+    ? decodeIntervalType(perAppInterval, { intervalMs: perAppIntervalMs })
+    : null;
+  const effectiveType = perAppDecoded ? perAppDecoded.type : interval.type;
+  const effectiveCron = perAppDecoded
+    ? perAppDecoded.cronExpression
+    : (interval.cronExpression || null);
+  // `perpetual` is a task-level global property — per-app rows override the
+  // cadence only (see the issue's Out of Scope), so the global flag always wins.
+  const isPerpetual = interval.perpetual === true;
 
   const key = `task:${taskType}`;
   const execution = schedule.executions[key] || { lastRun: null, count: 0, perApp: {} };
@@ -870,56 +864,51 @@ export async function shouldRunTask(taskType, appId = null, { featureEnabled = c
 
   const now = Date.now();
   const lastRun = appExecution.lastRun ? new Date(appExecution.lastRun).getTime() : 0;
-  const timeSinceLastRun = now - lastRun;
-
-  const buildResult = (shouldRun, reason, baseIntervalMs, extra = {}) => {
-    const result = { shouldRun, reason, ...extra };
-    if (extra.learningAdjustment?.adjusted) {
-      result.learningApplied = true;
-      result.successRate = extra.learningAdjustment.successRate;
-      result.adjustmentMultiplier = extra.learningAdjustment.multiplier;
-      result.dataPoints = extra.learningAdjustment.dataPoints;
-    }
-    return result;
-  };
 
   let result;
 
-  switch (effectiveType) {
-    case INTERVAL_TYPES.ROTATION:
-      result = { shouldRun: true, reason: 'rotation' };
-      break;
-
-    case INTERVAL_TYPES.DAILY:
-      result = await evaluateFixedInterval(taskType, DAY, 'daily', timeSinceLastRun, lastRun, buildResult);
-      break;
-
-    case INTERVAL_TYPES.WEEKLY:
-      result = await evaluateFixedInterval(taskType, WEEK, 'weekly', timeSinceLastRun, lastRun, buildResult);
-      break;
-
-    case INTERVAL_TYPES.ONCE:
-      result = appExecution.count === 0
-        ? { shouldRun: true, reason: 'once-first-run' }
-        : { shouldRun: false, reason: 'once-completed', completedAt: appExecution.lastRun };
-      break;
-
-    case INTERVAL_TYPES.ON_DEMAND:
-      result = { shouldRun: false, reason: 'on-demand-only' };
-      break;
-
-    case INTERVAL_TYPES.CUSTOM: {
-      // A per-app numeric intervalMs override wins over the global custom interval
-      // (handler-backed tasks store their per-app cadence there).
-      const baseInterval = (hasCustomIntervalMs ? perAppIntervalMs : interval.intervalMs) || DAY;
-      result = await evaluateFixedInterval(taskType, baseInterval, 'custom', timeSinceLastRun, lastRun, buildResult);
-      break;
+  // A perpetual task's park record is the drain's brake: the work-detector at
+  // DISPATCH time writes `parkedUntil` when nothing is actionable, and this only
+  // READS it (so shouldRunTask never does network I/O). Shared by both cadence
+  // variants — an on-demand+perpetual task is due whenever it isn't parked, a
+  // cron+perpetual task additionally needs a cron slot to initiate a drain.
+  const perpetualParkResult = () => {
+    const parkUntil = parkedUntilMs(appExecution);
+    if (parkUntil && now < parkUntil) {
+      return {
+        shouldRun: false,
+        reason: 'perpetual-parked',
+        nextRunAt: new Date(parkUntil).toISOString(),
+        parkReason: appExecution.parkReason || null,
+        parkActionableCount: appExecution.parkActionableCount ?? null
+      };
     }
+    return parkUntil ? { shouldRun: true, reason: 'perpetual-recheck' } : null;
+  };
+
+  switch (effectiveType) {
+    case INTERVAL_TYPES.ON_DEMAND:
+      // Drain-until-done when perpetual; otherwise a manual trigger is the only
+      // way this ever runs.
+      result = isPerpetual
+        ? (perpetualParkResult() || { shouldRun: true, reason: 'perpetual-drain' })
+        : { shouldRun: false, reason: 'on-demand-only' };
+      break;
 
     case INTERVAL_TYPES.CRON: {
+      // A parked perpetual drain is gated by its park, not by the cron slot —
+      // and once the park elapses it is due immediately (computePerpetualRecheckAt
+      // already derived that instant from this very expression).
+      if (isPerpetual) {
+        const parked = perpetualParkResult();
+        if (parked) { result = parked; break; }
+        // Unparked: the cron evaluation below decides whether to INITIATE a
+        // drain. Once one is running, the completion-refill lane keeps it going
+        // back-to-back regardless of subsequent ticks.
+      }
       // Cron expression: per-app override (stored as the interval string) or global config
-      const cronExpr = isCronOverride ? perAppInterval : interval.cronExpression;
-      if (!cronExpr || typeof cronExpr !== 'string' || cronExpr.trim().split(/\s+/).length !== 5) {
+      const cronExpr = effectiveCron;
+      if (!isCronExpression(cronExpr)) {
         result = { shouldRun: false, reason: 'invalid-cron' };
         break;
       }
@@ -976,32 +965,9 @@ export async function shouldRunTask(taskType, appId = null, { featureEnabled = c
       break;
     }
 
-    case INTERVAL_TYPES.PERPETUAL: {
-      // Drain-until-done: a perpetual task is "due" whenever it isn't parked.
-      // The actual programmatic work-detector runs at DISPATCH time (the gate in
-      // generateManagedAppImprovementTaskForType) and PARKS the task — writing
-      // `parkedUntil` onto the execution record — when nothing is actionable.
-      // shouldRunTask only reads that persisted park, so it never does network
-      // I/O even though it's called several times per evaluation cycle. While
-      // parked, the recheck cadence (parkedUntil) gates re-probing; once it
-      // elapses the task becomes due again and the gate re-runs the detector.
-      const parkUntil = parkedUntilMs(appExecution);
-      if (parkUntil && now < parkUntil) {
-        result = {
-          shouldRun: false,
-          reason: 'perpetual-parked',
-          nextRunAt: new Date(parkUntil).toISOString(),
-          parkReason: appExecution.parkReason || null,
-          parkActionableCount: appExecution.parkActionableCount ?? null
-        };
-      } else {
-        result = { shouldRun: true, reason: parkUntil ? 'perpetual-recheck' : 'perpetual-drain' };
-      }
-      break;
-    }
-
     default:
-      result = { shouldRun: true, reason: 'unknown-default-rotation' };
+      // Unreachable once normalized — an unreadable cadence must never auto-run.
+      result = { shouldRun: false, reason: 'on-demand-only' };
   }
 
   // Escalating failure backoff (#2616): a type with recent consecutive failures
@@ -1065,76 +1031,40 @@ export async function getDueTasks(appId = null) {
 /**
  * Get the next task type to run (optionally for a specific app)
  */
-export async function getNextTaskType(appId = null, lastType = '', { perpetualOnly = false } = {}) {
-  const schedule = await loadSchedule();
+export async function getNextTaskType(appId = null, { perpetualOnly = false } = {}) {
   const dueTasks = await getDueTasks(appId);
 
   // `perpetualOnly` constrains the pick to a due perpetual (drain-until-done)
   // task, skipping every other schedule type. Callers set this when the app is
   // on its review cooldown: only perpetual drains bypass that cooldown (their
-  // work-detector park is the throttle), so a higher-priority cron/custom/daily
-  // type that's also due must NOT be returned — it would mask the perpetual
-  // drain and the caller, seeing a non-exempt pick, would skip the whole app for
-  // the cooldown window (the mixed-schedule stall). Returns null when nothing
-  // perpetual is due, so the caller leaves the cooled-down app alone.
+  // work-detector park is the throttle), so a higher-priority cron type that's
+  // also due must NOT be returned — it would mask the perpetual drain and the
+  // caller, seeing a non-exempt pick, would skip the whole app for the cooldown
+  // window (the mixed-schedule stall). Returns null when nothing perpetual is
+  // due, so the caller leaves the cooled-down app alone.
+  const perpetualDue = dueTasks.filter(t => t.interval.perpetual === true);
   if (perpetualOnly) {
-    const perpetualDue = dueTasks.filter(t => t.interval.type === INTERVAL_TYPES.PERPETUAL);
     return perpetualDue.length > 0
       ? { taskType: perpetualDue[0].taskType, reason: 'perpetual-drain' }
       : null;
   }
 
-  // Explicit time-based schedules (cron, custom interval) outrank loose interval-based
-  // ones (daily/weekly/once). A user-pinned 9 AM cron should fire at 9 AM even if a
-  // weekly task is perpetually "ready" — the loose tasks will pick up the next slot.
-  const cronDue = dueTasks.filter(t => t.interval.type === INTERVAL_TYPES.CRON || t.interval.type === INTERVAL_TYPES.CUSTOM);
+  // A user-pinned wall-clock schedule outranks a drain: a 9 AM cron must fire at
+  // 9 AM even while a perpetual task is mid-backlog. A cron+perpetual task is
+  // already gated by its own park, so it can sit in either bucket safely.
+  const cronDue = dueTasks.filter(t => t.interval.type === INTERVAL_TYPES.CRON);
   if (cronDue.length > 0) {
-    return { taskType: cronDue[0].taskType, reason: `${cronDue[0].interval.type}-due` };
+    return { taskType: cronDue[0].taskType, reason: 'cron-due' };
   }
 
-  // Perpetual tasks actively draining a backlog outrank the loose interval
-  // tasks (daily/weekly/once/rotation) so the drain keeps the app's single
-  // improvement slot until its work-detector idles and it parks — at which
-  // point the loose tasks below get their turn. (Explicit time-pinned cron/
-  // custom schedules above still win, so a perpetual drain can't starve a
-  // user-pinned 9 AM job.)
-  const perpetualDue = dueTasks.filter(t => t.interval.type === INTERVAL_TYPES.PERPETUAL);
+  // Perpetual tasks actively draining a backlog keep the app's single
+  // improvement slot until their work-detector idles and they park.
   if (perpetualDue.length > 0) {
     return { taskType: perpetualDue[0].taskType, reason: 'perpetual-drain' };
   }
 
-  const dailyDue = dueTasks.filter(t => t.interval.type === INTERVAL_TYPES.DAILY);
-  if (dailyDue.length > 0) {
-    return { taskType: dailyDue[0].taskType, reason: 'daily-priority' };
-  }
-
-  const weeklyDue = dueTasks.filter(t => t.interval.type === INTERVAL_TYPES.WEEKLY);
-  if (weeklyDue.length > 0) {
-    return { taskType: weeklyDue[0].taskType, reason: 'weekly-priority' };
-  }
-
-  const onceDue = dueTasks.filter(t => t.interval.type === INTERVAL_TYPES.ONCE);
-  if (onceDue.length > 0) {
-    return { taskType: onceDue[0].taskType, reason: 'once-first-run' };
-  }
-
-  // Fall back to rotation among enabled rotation tasks
-  const featureEnabled = createFeatureGate();
-  const rotationTasks = [];
-  for (const [taskType, interval] of Object.entries(schedule.tasks)) {
-    if (interval.enabled && interval.type === INTERVAL_TYPES.ROTATION && await featureEnabled(interval)) {
-      rotationTasks.push(taskType);
-    }
-  }
-
-  if (rotationTasks.length === 0) {
-    return null;
-  }
-
-  const currentIndex = rotationTasks.indexOf(lastType);
-  const nextIndex = (currentIndex + 1) % rotationTasks.length;
-
-  return { taskType: rotationTasks[nextIndex], reason: 'rotation' };
+  // Everything else is on-demand: it runs only from an explicit trigger.
+  return null;
 }
 
 // ============================================================
@@ -1289,7 +1219,7 @@ export async function getScheduleStatus() {
     const promptInfo = getTaskTypePromptInfo(taskType);
 
     // Get learning adjustment info
-    const baseInterval = interval.type === 'daily' ? DAY : interval.type === 'weekly' ? WEEK : (interval.intervalMs || DAY);
+    const baseInterval = interval.intervalMs || DAY;
     const learningInfo = await getPerformanceAdjustedInterval(taskType, baseInterval);
 
     // Check global shouldRun status
@@ -1381,9 +1311,11 @@ export async function getScheduleStatus() {
     // so the UI can show the true parked/draining state and the soonest recheck.
     // Projects the shared aggregatePerpetualParks rollup (same park semantics as
     // the getUpcomingTasks eligibility derivation below).
-    if (interval.type === INTERVAL_TYPES.PERPETUAL) {
+    if (interval.perpetual) {
       const parks = aggregatePerpetualParks(execution, Date.now());
-      taskStatus.perpetual = {
+      // Named apart from the `perpetual` BOOLEAN this config carries: the flag
+      // says the task drains, this says what its drain is doing right now.
+      taskStatus.perpetualStatus = {
         globalParked: parks.globalParked,
         parkedAppCount: parks.parkedAppCount,
         trackedAppCount: parks.trackedAppCount,
@@ -1474,7 +1406,9 @@ export async function getUpcomingTasks(limit = 10) {
     if (!interval.enabled) continue;
     if (!(await featureEnabled(interval))) continue;
     if (getTaskTypeInvocation(taskType).visibility === 'hidden') continue;
-    if (interval.type === INTERVAL_TYPES.ON_DEMAND) continue;
+    // On-demand tasks have no wall-clock position — unless they are perpetual,
+    // whose park/recheck boundary IS the schedule the daemon must wake on.
+    if (interval.type === INTERVAL_TYPES.ON_DEMAND && !interval.perpetual) continue;
 
     const check = await shouldRunTask(taskType, null, { featureEnabled });
     const execution = schedule.executions[`task:${taskType}`] || { lastRun: null, count: 0 };
@@ -1488,24 +1422,19 @@ export async function getUpcomingTasks(limit = 10) {
     } else if (check.nextRunAt) {
       eligibleAt = new Date(check.nextRunAt).getTime();
       taskStatus = 'scheduled';
-    } else if (interval.type === INTERVAL_TYPES.ONCE && execution.count > 0) {
-      taskStatus = 'completed';
-      eligibleAt = Infinity;
     }
 
     // Perpetual tasks park per-app, so the global `check` above can't see the
     // recheck boundary — re-derive status/eligibility from the park records so
     // scheduleNextImprovementCheck wakes the daemon AT the next recheck (e.g. 9am)
     // instead of only on the ≤1h fallback poll. See perpetualUpcomingEligibility.
-    if (interval.type === INTERVAL_TYPES.PERPETUAL) {
+    if (interval.perpetual) {
       const perpetual = perpetualUpcomingEligibility(execution, now);
       if (perpetual) {
         taskStatus = perpetual.status;
         eligibleAt = perpetual.eligibleAt;
       }
     }
-
-    if (taskStatus === 'completed') continue;
 
     upcoming.push({
       taskType,

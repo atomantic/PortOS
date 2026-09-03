@@ -16,7 +16,7 @@ import {
   ScrollText,
   MessageCircle
 } from 'lucide-react';
-import { normalizeReviewerSlug } from '../../lib/reviewerPins';
+import { normalizeReviewerSlug, REVIEWER_VALUES } from '../../lib/reviewerPins';
 import { inPlaceClipName } from '../../utils/animationClips';
 
 export const TABS = [
@@ -276,23 +276,40 @@ export function pinnedPrCompletion(metadata) {
   return metadata?.reviewLoop === true || metadata?.reviewLoop === 'true' ? 'review-then-merge' : '';
 }
 
-// Reviewer choices for the Review Loop. `copilot` requests a GitHub Copilot
-// review via the native reviewer API; CLI reviewers (claude/antigravity/codex/grok/cursor)
-// instruct the follow-up agent to invoke the named CLI; local-LLM reviewers
-// (lmstudio/ollama) route the diff through PortOS's `POST /api/code-review/local`
-// endpoint, which runs the model configured on the Settings → Code Reviewers
-// page. Keep in sync with the `REVIEWER_VALUES` enum in
-// `server/lib/validation.js`.
-export const REVIEWER_OPTIONS = [
-  { value: 'copilot', label: 'Copilot', description: 'GitHub Copilot (GitHub-only)' },
-  { value: 'claude', label: 'Claude', description: 'Claude CLI reviews the PR diff (optional model on Settings → Code Reviewers; supports an Ollama-backed Claude for local-only setups)' },
-  { value: 'antigravity', label: 'Antigravity', description: 'Antigravity CLI (agy) reviews the PR diff' },
-  { value: 'codex', label: 'Codex', description: 'Codex CLI reviews the PR diff (optional model tier on Settings → Code Reviewers)' },
-  { value: 'grok', label: 'Grok', description: 'Grok Build CLI (grok) reviews the PR diff' },
-  { value: 'cursor', label: 'Cursor Agent', description: 'Cursor Agent CLI (cursor-agent) reviews the PR diff' },
-  { value: 'lmstudio', label: 'LM Studio', description: 'Local LM Studio model reviews the diff (set model on AI Providers)' },
-  { value: 'ollama', label: 'Ollama', description: 'Local Ollama model reviews the diff (set model on AI Providers)' }
-];
+// UI copy for each reviewer in the Review Loop picker. `copilot` requests a
+// GitHub Copilot review via the native reviewer API; CLI reviewers
+// (claude/antigravity/codex/grok/cursor/opencode/kimi) instruct the follow-up agent
+// to invoke the named CLI; local-LLM reviewers (lmstudio/ollama/mtplx) route the
+// diff through
+// PortOS's `POST /api/code-review/local` endpoint, which runs the model
+// configured on the Models → Code Reviewers page.
+//
+// Copy only — the ROSTER is `REVIEWER_VALUES` in `client/src/lib/reviewerPins.js`,
+// which the server suite pins against the server's own enum.
+const REVIEWER_COPY = {
+  copilot: { label: 'Copilot', description: 'GitHub Copilot (GitHub-only)' },
+  claude: { label: 'Claude', description: 'Claude CLI reviews the PR diff (optional model on Models → Code Reviewers; supports an Ollama-backed Claude for local-only setups)' },
+  antigravity: { label: 'Antigravity', description: 'Antigravity CLI (agy) reviews the PR diff' },
+  codex: { label: 'Codex', description: 'Codex CLI reviews the PR diff (optional model tier on Models → Code Reviewers)' },
+  grok: { label: 'Grok', description: 'Grok Build CLI (grok) reviews the PR diff' },
+  cursor: { label: 'Cursor Agent', description: 'Cursor Agent CLI (cursor-agent) reviews the PR diff' },
+  opencode: { label: 'OpenCode', description: 'OpenCode CLI reviews the PR diff (optional provider/model on Models → Code Reviewers)' },
+  kimi: { label: 'Kimi', description: 'Kimi CLI reviews the PR diff (optional model on Models → Code Reviewers)' },
+  lmstudio: { label: 'LM Studio', description: 'Local LM Studio model reviews the diff (set model on AI Providers)' },
+  ollama: { label: 'Ollama', description: 'Local Ollama model reviews the diff (set model on AI Providers)' },
+  mtplx: { label: 'MTPLX', description: 'Local MTPLX model reviews the diff (set model on AI Providers)' }
+};
+
+// Derived from the roster rather than mirroring it, so a reviewer added
+// server-side surfaces as a loud module-load failure here instead of a silently
+// missing dropdown row — and so the picker can never offer a slug the server's
+// enum rejects.
+export const REVIEWER_OPTIONS = REVIEWER_VALUES.map((value) => {
+  const copy = REVIEWER_COPY[value];
+  if (!copy) throw new Error(`❌ REVIEWER_COPY is missing UI copy for reviewer '${value}'`);
+  return { value, ...copy };
+});
+
 // The display label for a reviewer token — the one place UI copy turns a
 // reviewer slug into prose, so a roster addition renders everywhere without a
 // literal edit. Resolves the `gemini` alias; an `@username` (or any token with no
@@ -300,13 +317,25 @@ export const REVIEWER_OPTIONS = [
 export const reviewerLabel = (value) =>
   REVIEWER_OPTIONS.find(o => o.value === normalizeReviewerSlug(value))?.label || value;
 
-// The per-reviewer PIN vocabularies (which reviewers take a model or an effort,
-// and the values each accepts) live in `client/src/lib/reviewerPins.js` and are
-// re-exported here so existing imports keep working. They are NOT defined in this
-// file because the server suite pins them against the server's own ladders, and
-// this module's `lucide-react` icon import isn't installed in that workspace —
-// see the leaf module's header for the full rationale.
+// The whole reviewer vocabulary — the roster, its aliases and defaults, the
+// review-username pattern and cap, the max-rounds ceiling, the stop-mode list,
+// and the per-reviewer pin vocabularies — lives in `client/src/lib/reviewerPins.js`
+// and is re-exported here so existing imports keep working. It is NOT defined in
+// this file because the server suite pins the mirror against the server's own
+// constants, and this module's `lucide-react` icon import isn't installed in that
+// workspace — see the leaf module's header for the full rationale.
 export {
+  REVIEWER_VALUES,
+  REVIEWER_ALIASES,
+  DEFAULT_REVIEWER,
+  DEFAULT_REVIEWERS,
+  MAX_REVIEW_USERNAMES,
+  cleanReviewUsername,
+  normalizeReviewUsernames,
+  MAX_REVIEWER_MAX_ROUNDS,
+  REVIEW_STOP_MODES,
+  DEFAULT_REVIEW_STOP_MODE,
+  normalizeReviewers,
   MODEL_CAPABLE_CLI_REVIEWERS,
   LOCAL_LLM_REVIEWERS,
   MODEL_SELECTABLE_REVIEWERS,
@@ -372,79 +401,6 @@ export const BRANCHES_PER_AGENT_OPTIONS = [1, 2, 3, 4, 5, 6].map((value) => ({
   label: `${value} branch${value === 1 ? '' : 'es'} per agent`,
   description: `Give each branch-reconcile coordinator up to ${value} prioritized branch${value === 1 ? '' : 'es'} per run`
 }));
-
-export const DEFAULT_REVIEWER = 'copilot';
-export const DEFAULT_REVIEWERS = ['copilot'];
-
-// Arbitrary GitHub reviewer usernames (e.g. `@CodeReviewbot`) requested as PR
-// reviewers to gate merging, appended to slashdo's `--review-with` after the
-// keyed reviewers. Client mirror of server/lib/cosValidation.js
-// `normalizeReviewUsernames` + MAX_REVIEW_USERNAMES — keep the pattern/cap in
-// sync so the picker rejects the same tokens the server would drop. Stored
-// WITHOUT the leading `@` (added back only for display / the flag string).
-export const MAX_REVIEW_USERNAMES = 20;
-const REVIEW_USERNAME_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\/[A-Za-z0-9._-]{1,100})?$/;
-
-// Validate a single raw username entry (strip `@`, trim). Returns the clean
-// token or null if it isn't a shell-safe GitHub username/team slug.
-export function cleanReviewUsername(raw) {
-  if (typeof raw !== 'string') return null;
-  const trimmed = raw.trim().replace(/^@+/, '');
-  return trimmed && REVIEW_USERNAME_RE.test(trimmed) ? trimmed : null;
-}
-
-// Normalize a raw list: drop invalid tokens, case-insensitively dedupe while
-// preserving order, cap at MAX_REVIEW_USERNAMES. Returns clean usernames sans `@`.
-export function normalizeReviewUsernames(list) {
-  if (!Array.isArray(list)) return [];
-  const seen = new Set();
-  const out = [];
-  for (const raw of list) {
-    const clean = cleanReviewUsername(raw);
-    if (!clean) continue;
-    const key = clean.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(clean);
-    if (out.length >= MAX_REVIEW_USERNAMES) break;
-  }
-  return out;
-}
-
-// Upper bound on a per-reviewer `~max=<n>` round cap. Client mirror of
-// MAX_REVIEWER_MAX_ROUNDS in `server/lib/cosValidation.js` — a value above it is
-// dropped server-side, so the input must not offer one. `0` is valid and means
-// "loop until clean" (slashdo's unlimited mode, bounded by its own guardrail);
-// blank/absent means "no cap requested" and keeps slashdo's built-in default.
-export const MAX_REVIEWER_MAX_ROUNDS = 10;
-
-// Stop-mode for the multi-reviewer loop (slashdo `--review-stop-on-*`).
-// Keep in sync with REVIEW_STOP_MODES in `server/lib/validation.js`.
-export const REVIEW_STOP_MODES = [
-  { value: 'all', label: 'Run all', description: 'Run every reviewer in order before merging (default)' },
-  { value: 'on-findings', label: 'Stop on first fix', description: 'Stop after the first reviewer that landed a fix' },
-  { value: 'on-clean', label: 'Stop on first clean', description: 'Stop after the first reviewer that reports zero findings' }
-];
-export const DEFAULT_REVIEW_STOP_MODE = 'all';
-
-// Resolve metadata to an ordered, deduped reviewer list (client mirror of the
-// server's normalizeReviewers): prefers `reviewers`, falls back to legacy
-// single `reviewer`, defaults to `['copilot']`.
-const REVIEWER_VALUES = REVIEWER_OPTIONS.map(o => o.value);
-const REVIEWER_ALIASES = { gemini: 'antigravity', 'cursor-agent': 'cursor' };
-export function normalizeReviewers(meta) {
-  const raw = meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {};
-  const source = Array.isArray(raw.reviewers)
-    ? raw.reviewers
-    : (typeof raw.reviewer === 'string' && raw.reviewer ? [raw.reviewer] : []);
-  const seen = new Set();
-  const out = [];
-  for (const r of source) {
-    const normalized = REVIEWER_ALIASES[r] || r;
-    if (REVIEWER_VALUES.includes(normalized) && !seen.has(normalized)) { seen.add(normalized); out.push(normalized); }
-  }
-  return out.length ? out : [...DEFAULT_REVIEWERS];
-}
 
 // Returns the Tailwind className string for an agent option toggle button.
 // effective: whether the option is on (global + override resolved)

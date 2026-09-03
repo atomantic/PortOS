@@ -357,7 +357,7 @@ function PromptResultField({ label, value, negative, onCopy, onApply, applyLabel
       <div className="flex items-center justify-between">
         <span className="text-[11px] uppercase tracking-wide text-gray-500">{label}</span>
         <div className="flex items-center gap-1">
-          <button type="button" onClick={onCopy} className="p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50" aria-label={`Copy ${label}`}>
+          <button type="button" onClick={onCopy} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50" aria-label={`Copy ${label}`}>
             <Copy className="w-3.5 h-3.5" />
           </button>
           <button

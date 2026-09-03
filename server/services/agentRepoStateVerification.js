@@ -43,6 +43,7 @@ import { isTruthyMeta } from './agentState.js';
 import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
 import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
+import { probePrForBranch } from './prProbe.js';
 import {
   REPO_STATE_ISSUES,
   REPO_STATE_SKIPS,
@@ -51,22 +52,11 @@ import {
   resolveRepoStateExpectation,
 } from '../lib/repoStateExpectations.js';
 
-// `resolveForgeForRepo` spawns `git remote get-url` + `gh auth status` + `gh auth
-// token` with no internal timeout; git.js races the same call on the agent-SPAWN
-// path for exactly this reason. The completion path has the same property — a
-// stalled gh (network / keychain hang) must not hold an agent lane open.
-const FORGE_RESOLVE_TIMEOUT_MS = 10000;
-
 // A task in any of these still HOLDS its branch and will resume on it, so a
 // branch one of them targets is owned, not leaked. `challenged` is the easy one
 // to miss: it is a parked-for-dispute status, not a terminal one, and its task
 // keeps its resume pointer (`cosTaskStore.js` `challengeTask`).
 const PENDING_OWNER_STATUSES = new Set(['pending', 'in_progress', 'blocked', 'challenged']);
-
-const withTimeout = (promise, ms, fallback) => Promise.race([
-  promise,
-  new Promise(resolve => setTimeout(() => resolve(fallback), ms)),
-]);
 
 /**
  * Is something ALREADY queued to land this branch?
@@ -175,37 +165,13 @@ async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branc
     return heads ? heads.has(branchName) : null;
   };
 
-  // Ask whichever forge this remote actually lives on. Both lookups share the
-  // same tri-state contract and both return the change request's state in
-  // `detail`, so no second round trip is needed to read it.
+  // Ask whichever forge this remote actually lives on, via the shared probe
+  // (`prProbe.js`) — `verifyPrClaim` already owns "the agent never opened
+  // one", so there is nothing here to report and nothing missing on a `none`
+  // answer.
   const probePr = async () => {
     if (!prExpected || !branchShouldBeGone) return { prState: null, prUrl: null, prNumber: null, cli: null, readable: true };
-    const forge = await withTimeout(
-      git.resolveForgeForRepo(sourceWorkspace).catch(() => null),
-      FORGE_RESOLVE_TIMEOUT_MS,
-      null
-    );
-    if (!forge?.cli) return { prState: null, prUrl: null, prNumber: null, cli: null, readable: false };
-    const { cli, env } = forge;
-    const found = cli === 'glab'
-      ? await (await import('./gitlab.js')).findMergeRequestForBranch(branchName, sourceWorkspace)
-        .catch(() => ({ status: 'unavailable' }))
-      : await (await import('./github.js')).findPullRequestForBranch(branchName, { cwd: sourceWorkspace, env: env || null })
-        .catch(() => ({ status: 'unavailable' }));
-    if (found.status === 'unavailable') return { prState: null, prUrl: null, prNumber: null, cli, readable: false };
-    // `none` is a real answer, not a gap — `verifyPrClaim` already owns "the agent
-    // never opened one", so there is nothing here to report and nothing missing.
-    if (found.status !== 'found') return { prState: null, prUrl: null, prNumber: null, cli, readable: true };
-    return {
-      prState: found.detail ? String(found.detail).toUpperCase() : null,
-      prUrl: found.url || null,
-      // The forge's own identifier for the change request — a GitLab `glab mr
-      // merge` line needs the IID, and emitting a literal `<iid>` placeholder
-      // hands the recovery agent a command it cannot run.
-      prNumber: found.number ?? null,
-      cli,
-      readable: !!found.detail,
-    };
+    return probePrForBranch(sourceWorkspace, branchName);
   };
 
   // `allowRemote: false` — a bookkeeping question must not block on `git remote

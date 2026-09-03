@@ -81,10 +81,15 @@ export const shellAttachSchema = z.object({
 // shell:stop — session ID
 export const shellStopSchema = shellSessionIdSchema;
 
-// app:update — app ID for pull/install/restart cycle
+// app:update — app ID for pull/install/restart cycle. `acknowledgeFork` and
+// `acknowledgePersistentMindImageBackup` are only consulted for the PortOS app
+// record — they mirror POST /api/update/execute's executeSchema so App
+// Management can supply the same preflight acknowledgements (#5984).
 export const appUpdateSchema = z.object({
   appId: z.string().min(1, 'appId is required'),
-  syncFork: z.boolean().optional()
+  syncFork: z.boolean().optional(),
+  acknowledgeFork: z.boolean().optional(),
+  acknowledgePersistentMindImageBackup: z.boolean().optional()
 });
 
 // app:standardize — app ID for PM2 standardization.

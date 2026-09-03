@@ -36,6 +36,9 @@ vi.mock('../services/decisionLog.js', () => ({
   getDecisionPatterns: vi.fn()
 }));
 
+const detectIdleLeftoverBranches = vi.hoisted(() => vi.fn(async () => []));
+vi.mock('../services/userActionDetectors.js', () => ({ detectIdleLeftoverBranches }));
+
 vi.mock('../services/notifications.js', () => ({
   getNotifications: vi.fn().mockResolvedValue([])
 }));
@@ -150,6 +153,32 @@ describe('CoS Insight Routes', () => {
         type: 'agent-feedback',
         count: 2,
         action: { label: 'Review runs', route: '/cos/agents?feedback=needs-feedback' }
+      }));
+    });
+
+    it('surfaces leftover idle branches as a Run Now insight card', async () => {
+      cos.getAllTasks.mockResolvedValue({
+        user: { grouped: { pending: [], blocked: [] } },
+        cos: { awaitingApproval: [], grouped: { pending: [], blocked: [] } }
+      });
+      taskLearning.getLearningInsights.mockResolvedValue({ skippedTypes: [] });
+      cos.runHealthCheck.mockResolvedValue({ issues: [] });
+      cos.getPendingAgentFeedbackCount.mockResolvedValue(0);
+      productivity.getOptimalTimeInfo.mockResolvedValue({ hasData: false });
+      detectIdleLeftoverBranches.mockResolvedValueOnce([{
+        appId: 'app-acme', leftoverCount: 3, lastUserReconcileAt: null, agentsIdle: true,
+      }]);
+
+      const response = await request(app).get('/api/cos/actionable-insights');
+
+      expect(response.status).toBe(200);
+      expect(response.body.insights).toContainEqual(expect.objectContaining({
+        type: 'leftover-branches',
+        priority: 'medium',
+        icon: 'AlertTriangle',
+        title: '3 leftover branches on app-acme, agents idle. Run branch-reconcile?',
+        action: { label: 'Run Now', route: '/cos/schedule' },
+        count: 3,
       }));
     });
 

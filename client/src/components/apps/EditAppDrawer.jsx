@@ -56,6 +56,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     apiPort: app.apiPort || '',
     tlsPort: app.tlsPort || '',
     buildCommand: app.buildCommand || '',
+    updateCommand: app.updateCommand || '',
     startCommands: (app.startCommands || []).join('\n'),
     pm2ProcessNames: (app.pm2ProcessNames || []).join(', '),
     nativeLaunchEnabled: !!app.nativeLaunch,
@@ -252,6 +253,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       apiPort: formData.apiPort ? parseInt(formData.apiPort, 10) : null,
       tlsPort: formData.tlsPort ? parseInt(formData.tlsPort, 10) : null,
       buildCommand: formData.buildCommand || undefined,
+      updateCommand: formData.updateCommand || undefined,
       startCommands: formData.startCommands.split('\n').filter(Boolean),
       pm2ProcessNames: formData.pm2ProcessNames
         ? formData.pm2ProcessNames.split(',').map(s => s.trim()).filter(Boolean)
@@ -495,6 +497,21 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden font-mono text-sm"
                   rows={2}
                 />
+              </div>
+
+              <div>
+                <label htmlFor="edit-app-update-command" className="block text-sm text-gray-400 mb-1">Update Command</label>
+                <input
+                  id="edit-app-update-command"
+                  type="text"
+                  value={formData.updateCommand}
+                  onChange={e => setFormData({ ...formData, updateCommand: e.target.value })}
+                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden font-mono text-sm"
+                  placeholder="npm run update"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Optional. Updates otherwise only switch to origin’s default branch and restart. Node apps can instead define a <code>portos:update</code> package script.
+                </p>
               </div>
 
               <div>

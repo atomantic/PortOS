@@ -6,6 +6,8 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import ModelsTabsHeader from '../components/models/ModelsTabsHeader';
 import Image3dRuntimes from '../components/models/Image3dRuntimes';
 import ModelStatusTab from '../components/models/ModelStatusTab';
+import CodeReviewersTab from '../components/settings/CodeReviewersTab';
+import HarnessesTab from '../components/models/HarnessesTab';
 import EmbeddingsTab from '../components/settings/EmbeddingsTab';
 import LocalModelAssessments from '../components/settings/LocalModelAssessments.jsx';
 import { LocalLlmTab } from '../components/settings/LocalLlmTab';
@@ -27,7 +29,9 @@ const MediaModels = lazyWithReload(() => import('./MediaModels'));
  * covers every KIND of model an install manages (#4728), not just text:
  *
  *   - **3D** — image-to-3D runtime install/repair (TRELLIS.2, Pixal3D).
+ *   - **Code Reviewers** — the review-loop chain and its model/effort pins.
  *   - **Embeddings** — the embedding model backing pgvector search.
+ *   - **Harnesses** — the coding-agent CLIs/TUIs, their versions and model lists.
  *   - **LLMs** — focused runtime, model-library, and abuse-guard sub-routes.
  *   - **LoRAs** — installed image/video adapters.
  *   - **Media** — image/video checkpoints and the Hugging Face cache.
@@ -46,7 +50,9 @@ const MediaModels = lazyWithReload(() => import('./MediaModels'));
  */
 const TAB_CONTENT = {
   '3d': Image3dRuntimes,
+  'code-reviewers': CodeReviewersTab,
   embeddings: EmbeddingsTab,
+  harnesses: HarnessesTab,
   llms: LocalLlmTab,
   loras: Loras,
   media: MediaModels,

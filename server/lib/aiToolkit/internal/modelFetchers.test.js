@@ -24,6 +24,12 @@ const SHIPPED_REFRESHABLE = [
   // Every hosted gateway refreshes through the same sibling `/models` probe —
   // one MODEL_FETCHERS row covers all of them (internal/gateways.js).
   'opencode-openrouter', 'opencode-openrouter-tui', 'openrouter',
+  // OpenCode Zen's API record is an ordinary OpenAI-compatible endpoint, so it
+  // refreshes through the same `/models` probe. Its CLI/TUI wrappers do NOT:
+  // they carry no namespace marker at all, which is what makes OpenCode resolve
+  // `opencode/*` through its own built-in provider — nothing here can enumerate
+  // that, and Models → Harnesses ("Refresh models") is where it comes from.
+  'opencode-zen',
   'opencode-vllm', 'opencode-vllm-tui',
   // SGLang publishes its served catalog through the same OpenAI-compatible
   // `/v1/models` contract as the vLLM pair, so its wrappers refresh too.
@@ -36,6 +42,7 @@ const SHIPPED_REFRESHABLE = [
 const SHIPPED_NOT_REFRESHABLE = [
   'claude-code-tui', 'claude-code-tui-bedrock', 'codex', 'codex-tui',
   'grok-cli', 'grok-tui', 'kimi-cli', 'kimi-tui',
+  'opencode-zen-cli', 'opencode-zen-tui',
 ];
 
 describe('MODEL_FETCHERS — shipped catalog visibility is unchanged', () => {

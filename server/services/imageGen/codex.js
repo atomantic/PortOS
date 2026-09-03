@@ -41,6 +41,7 @@ import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { renderTimingFields } from '../../lib/renderTiming.js';
 import { buildCodexStartupArgs, buildEffortArgs, resolveCliEffort } from '../../lib/providerModels.js';
 import {
   IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT,
@@ -177,6 +178,9 @@ export async function generateImage({
   cleanC2PA = false,
   denoise = false,
 }) {
+  // The ingestion instant `renderTimingFields` measures from — the queue calls
+  // generateImage the moment it picks this job up. See lib/renderTiming.js.
+  const renderStartedAtMs = Date.now();
   await ensureDir(PATHS.images);
 
   // Ship the cheap gpt-5.6-luna / low-effort path by default (see modes.js).
@@ -263,7 +267,7 @@ export async function generateImage({
     ...(visualConditioning ? { visualConditioning } : {}),
     createdAt: new Date().toISOString(),
   };
-  const job = { ...meta, clients: [], status: 'running' };
+  const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
   jobs.set(jobId, job);
 
   console.log(`🎨 Generating image [${jobId.slice(0, 8)}] codex: ${prompt.slice(0, 60)}…`);
@@ -424,7 +428,10 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cle
       // (which doesn't expose one) — uniquely identifies the run and is
       // useful for traceability even though it doesn't reproduce the output.
       const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
-      await atomicWrite(sidecar, { ...meta, codexSessionId: sessionId }).catch(() => {});
+      // `job.renderStartedAtMs` is the queue-ingestion instant generateImage
+      // captured, so the spread measures the render itself — not the time the
+      // job spent queued behind other renders.
+      await atomicWrite(sidecar, { ...meta, codexSessionId: sessionId, ...renderTimingFields(job.renderStartedAtMs) }).catch(() => {});
       // Cleaners run BEFORE the SSE complete + completed events so subscribers
       // see the cleaned bytes. codex output is the highest-value target for
       // C2PA stripping because gpt-image is the one provider that embeds

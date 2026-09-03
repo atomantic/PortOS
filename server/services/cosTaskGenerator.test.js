@@ -51,6 +51,15 @@ vi.mock('./taskSchedule.js', async (importActual) => {
 // emitOnDemandEmpty's gh-health read spawns `gh api rate_limit` for real. Stub it
 // so the transient-verdict tests assert OUR branching, not the machine's gh.
 const ghHealth = vi.fn(async () => ({ status: 'ok', ok: true, detail: null, remedy: null }));
+const detectorMocks = vi.hoisted(() => ({
+  detectIdleLeftoverBranches: vi.fn(async () => []),
+  formatUserActionDetectorBlock: vi.fn(() => ''),
+}));
+vi.mock('./userActionDetectors.js', () => ({
+  detectIdleLeftoverBranches: (...args) => detectorMocks.detectIdleLeftoverBranches(...args),
+  formatUserActionDetectorBlock: (...args) => detectorMocks.formatUserActionDetectorBlock(...args),
+}));
+
 vi.mock('./github.js', async (importActual) => ({
   ...(await importActual()),
   checkGhHealth: (...a) => ghHealth(...a),
@@ -60,9 +69,7 @@ import {
   selectDryRunAutoApproved,
   exceedsMaxSpawns,
   shouldParkUnchangedPerpetualWork,
-  resolveIssueAuthorFilterBlock,
   resolveIssueExcludeLabelsBlock,
-  resolveSwarmBlock,
   isCooldownExemptTask,
   emitOnDemandEmpty,
   applyOnDemandConsent,
@@ -80,20 +87,43 @@ import {
   resolveTaskInputHook,
   resolveUserActionDeliveryBlock,
   applyUserActionDeliveryMode,
-  resolveReconcileDrainGate,
-  applyPerpetualDrainCap,
+  applyUserActionDetectorSection,
   buildSecurityScanPipelineOutput
 } from './cosTaskGenerator.js';
+import * as cosTaskGenerator from './cosTaskGenerator.js';
+import * as cosTaskPreStepBlocks from './cosTaskPreStepBlocks.js';
 import { cosEvents } from './cosEvents.js';
 import { DEFAULT_TASK_INTERVALS, getTaskInterval } from './taskSchedule.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const GEN_SRC = readFileSync(join(__dirname, 'cosTaskGenerator.js'), 'utf-8');
+const PRESTEP_SRC = readFileSync(join(__dirname, 'cosTaskPreStepBlocks.js'), 'utf-8');
+// The CoS task-generation layer spans the selection engine (cosTaskGenerator.js)
+// and the prompt pre-step module it composes (cosTaskPreStepBlocks.js). A guard
+// about WHERE a call sits reads one file; a guard about the call's SHAPE reads
+// both, so moving code between them can neither break it nor silently disarm it.
+const LAYER_SRC = `${GEN_SRC}\n${PRESTEP_SRC}`;
 const COS_SRC = readFileSync(join(__dirname, 'cos.js'), 'utf-8');
 
 const task = (id, metadata = {}) => ({ id, metadata });
 const noCooldown = () => Promise.resolve(false);
+
+// The prompt pre-step layer moved to cosTaskPreStepBlocks.js, but these five
+// were PUBLIC here first — other installs and forks carry deep imports of this
+// path, so the re-export has to keep resolving to the same functions.
+describe('back-compat shim for the extracted pre-step layer', () => {
+  it.each([
+    'applyPerpetualDrainCap',
+    'resolveIssueAuthorFilterBlock',
+    'resolveIssueExcludeLabelsBlock',
+    'resolveReconcileDrainGate',
+    'resolveSwarmBlock',
+  ])('still resolves %s from cosTaskGenerator.js', (name) => {
+    expect(typeof cosTaskGenerator[name]).toBe('function');
+    expect(cosTaskGenerator[name]).toBe(cosTaskPreStepBlocks[name]);
+  });
+});
 
 describe('claim drain convergence', () => {
   it('parks a successful no-progress run when the actionable set is unchanged', () => {
@@ -435,8 +465,8 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
   });
 
   it('keeps local-LLM reviewers and appends their fail-closed invocation procedure', () => {
-    expect(GEN_SRC).not.toContain('.filter((r) => !LOCAL_LLM_REVIEWERS.includes(r))');
-    expect(GEN_SRC).toContain('buildLocalReviewerInstructions(promptReviewers');
+    expect(LAYER_SRC).not.toContain('.filter((r) => !LOCAL_LLM_REVIEWERS.includes(r))');
+    expect(PRESTEP_SRC).toContain('buildLocalReviewerInstructions(promptReviewers');
   });
 
   it('keeps the reasoning-effort PROSE on every claim path (they emit no --review-with)', () => {
@@ -451,8 +481,8 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
     // name (see `reviewerModelArg`).
     expect(GEN_SRC).toContain('appendReviewerEffortBlock(reviewersList, promptReviewerEfforts, promptReviewerModels)');
     expect(GEN_SRC).toContain('appendReviewerEffortBlock(list, reviewerEfforts, reviewerModels)');
-    expect(GEN_SRC).toContain('appendReviewerEffortBlock(promptReviewers, promptReviewerEfforts, promptReviewerModels)');
-    expect(GEN_SRC).not.toMatch(/buildReviewerEffortNote\([^)]*reviewWith/);
+    expect(PRESTEP_SRC).toContain('appendReviewerEffortBlock(promptReviewers, promptReviewerEfforts, promptReviewerModels)');
+    expect(LAYER_SRC).not.toMatch(/buildReviewerEffortNote\([^)]*reviewWith/);
   });
 
   it('persists the resolved reviewer bundle on the SCHEDULED claim path instead of appending a pin (#4770)', () => {
@@ -461,10 +491,10 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
     // stamp what its prompt named. The manual/Issues-tab claim and the JIRA play
     // button are covered behaviorally below; `buildImprovementTaskDescription`
     // is not exported, so its site is pinned by source.
-    expect(GEN_SRC).toContain('if (rendersReviewers) Object.assign(metadata, reviewerConfigMetadata(claimReviewers))');
+    expect(PRESTEP_SRC).toContain('if (rendersReviewers) Object.assign(metadata, reviewerConfigMetadata(claimReviewers))');
     // No generator may re-grow a per-site pin append: three prose copies drifting
     // apart is exactly what #4770 collapsed.
-    expect(GEN_SRC).not.toContain('appendReviewerPinBlock');
+    expect(LAYER_SRC).not.toContain('appendReviewerPinBlock');
   });
 
   it('threads per-reviewer ~max round caps into the prompt CSV on both claim paths', () => {
@@ -472,7 +502,7 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
     // gets — it runs each reviewer by hand, so a configured cap only reaches the
     // run if the CSV carries it. Both the scheduled path and buildClaimWorkTask
     // feed the cap into the shared claim resolver, which applies task-over-default
-    // precedence (unit-tested in cosValidation.test.js).
+    // precedence (unit-tested in reviewerConfig.test.js).
     expect(GEN_SRC).toContain('reviewerMaxRounds: reviewerMaxRounds ?? metadata.reviewerMaxRounds');
     expect(GEN_SRC).toContain('resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers)');
     expect(GEN_SRC).not.toContain('resolveReviewerMaxRounds(');
@@ -530,8 +560,8 @@ describe('claim-work single-source routing', () => {
   });
 
   it('emits a GitLab (glab) author-filter directive for the claim-issue-gitlab body', () => {
-    expect(GEN_SRC).toContain("promptTaskType === 'claim-issue-gitlab' ? 'glab'");
-    expect(GEN_SRC).toContain('glab issue list');
+    expect(PRESTEP_SRC).toContain("promptTaskType === 'claim-issue-gitlab' ? 'glab'");
+    expect(PRESTEP_SRC).toContain('glab issue list');
   });
 
   it('pulls the delegated flow isolation posture from DEFAULT_TASK_INTERVALS metadata', () => {
@@ -765,209 +795,6 @@ describe('buildJiraTicketTask', () => {
   });
 });
 
-// The {issueAuthorFilter} directive is shared by the scheduled claim-work router
-// AND the manual /do:next button (buildClaimWorkTask), so it is a standalone
-// pure helper. These exercise it directly rather than via source string.
-describe('resolveIssueAuthorFilterBlock', () => {
-  it('returns the gh forge directive for the github claim body', () => {
-    expect(resolveIssueAuthorFilterBlock('claim-issue', 'owner')).toContain('gh issue list');
-    expect(resolveIssueAuthorFilterBlock('claim-issue', 'any')).toContain('regardless of who filed it');
-    // 'self' = the --self security boundary: --author "@me", refuse third-party issues.
-    expect(resolveIssueAuthorFilterBlock('claim-issue', 'self')).toContain('--author "@me"');
-  });
-
-  it('returns the glab forge directive for the gitlab claim body', () => {
-    expect(resolveIssueAuthorFilterBlock('claim-issue-gitlab', 'owner')).toContain('glab issue list');
-    expect(resolveIssueAuthorFilterBlock('claim-issue-gitlab', 'any')).toContain('regardless of who opened it');
-    // 'self' resolves the authenticated glab username (no @me token on GitLab).
-    expect(resolveIssueAuthorFilterBlock('claim-issue-gitlab', 'self')).toContain('glab api user');
-  });
-
-  it('tells the agent to build a trusted set and filter the listing in collaborators mode', () => {
-    // Neither CLI's `--author` takes more than one account, so a prompt that
-    // implied a multi-author query would send the agent in circles. Both blocks
-    // must name the two-step recipe AND keep the boundary hard on failure.
-    for (const [type, endpoint] of [
-      ['claim-issue', 'repos/{owner}/{repo}/collaborators'],
-      // members/all, so group-inherited members count as project members.
-      ['claim-issue-gitlab', 'projects/:id/members/all']
-    ]) {
-      const block = resolveIssueAuthorFilterBlock(type, 'collaborators');
-      expect(block).toContain(endpoint);
-      expect(block).toContain('takes exactly ONE account');
-      expect(block).toContain('do NOT silently fall back');
-      if (type === 'claim-issue') {
-        expect(block).toContain('if [ "$GH_HOST" = "ssh.github.com" ]');
-      }
-      // The endpoint the AGENT is told to call must be the one the work detector
-      // actually calls — otherwise the claimable count PortOS shows and the set
-      // the agent claims from silently diverge.
-      expect(readFileSync(join(__dirname, 'perpetualWork.js'), 'utf-8')).toContain(endpoint);
-    }
-  });
-
-  it('defaults to the gh block (harmless no-op) for plan/jira bodies and to self mode', () => {
-    expect(resolveIssueAuthorFilterBlock('plan-task')).toContain('gh issue list');
-    // Default (no mode) is the --self security boundary.
-    expect(resolveIssueAuthorFilterBlock('claim-issue')).toContain('--author "@me"');
-    // Unknown mode collapses to self, not owner/any/collaborators.
-    expect(resolveIssueAuthorFilterBlock('claim-issue', 'bogus')).toContain('--author "@me"');
-    // Including an inherited Object.prototype key, which a bare map lookup would
-    // hand back as a "block".
-    expect(resolveIssueAuthorFilterBlock('claim-issue', 'constructor')).toContain('--author "@me"');
-  });
-});
-
-// {issueExcludeLabels} is the Phase 1 step 4 blocking-label directive — the fixed
-// NON_ACTIONABLE_ISSUE_LABELS set (perpetualWork.js) plus any app-configured extras
-// (e.g. `good first issue`), so the LIVE claim agent honors the same per-app
-// exclusions the perpetual-drain detector applies.
-describe('resolveIssueExcludeLabelsBlock', () => {
-  it('renders the fixed base list with no configured extras (default, matches the prior static prompt text)', () => {
-    const block = resolveIssueExcludeLabelsBlock();
-    expect(block).toBe('`in-progress`, `blocked`, `needs-input`, `future`, `wontfix`, `question`, `discussion`');
-  });
-
-  it('appends configured extras after the fixed base list', () => {
-    const block = resolveIssueExcludeLabelsBlock(['good first issue', 'help wanted']);
-    expect(block).toBe('`in-progress`, `blocked`, `needs-input`, `future`, `wontfix`, `question`, `discussion`, `good first issue`, `help wanted`');
-  });
-
-  it('ignores non-string/empty entries and a non-array input', () => {
-    expect(resolveIssueExcludeLabelsBlock(['ok', 42, '', null])).toBe(
-      '`in-progress`, `blocked`, `needs-input`, `future`, `wontfix`, `question`, `discussion`, `ok`'
-    );
-    expect(resolveIssueExcludeLabelsBlock('not-an-array')).toBe(
-      '`in-progress`, `blocked`, `needs-input`, `future`, `wontfix`, `question`, `discussion`'
-    );
-  });
-
-  it('stays in sync with the NON_ACTIONABLE_ISSUE_LABELS set the perpetual-drain detector uses', () => {
-    expect(readFileSync(join(__dirname, 'cosTaskGenerator.js'), 'utf-8')).toContain("from './perpetualWork.js'");
-  });
-
-  it('buildClaimWorkTask threads the resolved block into the pinned-target constraint, not just the {issueExcludeLabels} placeholder', () => {
-    expect(GEN_SRC).toContain('appendTargetWorkItemBlock(promptTaskType, targetRef, issueExcludeLabelsBlock)');
-  });
-});
-
-// resolveSwarmBlock is prepended to the claim-issue prompt when swarmCount turns
-// on `/do:next --swarm` mode. Like the author filter, it's a standalone pure
-// helper shared by the scheduled router and the manual /do:next button.
-describe('resolveSwarmBlock', () => {
-  it('returns empty (off) below the swarm minimum', () => {
-    expect(resolveSwarmBlock('claim-issue', 0)).toBe('');
-    expect(resolveSwarmBlock('claim-issue', 1)).toBe('');
-    expect(resolveSwarmBlock('claim-issue', undefined)).toBe('');
-    expect(resolveSwarmBlock('claim-issue', 3.5)).toBe('');
-  });
-
-  it('returns a gh swarm directive for the github claim body', () => {
-    const block = resolveSwarmBlock('claim-issue', 3);
-    expect(block).toContain('SWARM MODE');
-    expect(block).toContain('--swarm=3');
-    expect(block).toContain('3 independent issues');
-    expect(block).toContain('gh pr merge');
-    // Ends with a separator so the single-issue body reads as the per-agent flow.
-    expect(block.trimEnd().endsWith('---')).toBe(true);
-  });
-
-  it('instructs the orchestrator to still write the completion sentinel after a swarm run', () => {
-    // Swarm work ships via PRs with no working-tree change, so without an
-    // explicit instruction the orchestrator skips the completion sentinel and
-    // the CoS task hangs as if it never finished. Phase C must point at the
-    // sentinel — by reference, since the filename carries the agent id and the
-    // exact path is handed over by the Completion Workflow section.
-    const block = resolveSwarmBlock('claim-issue', 3);
-    expect(block).toContain('completion sentinel');
-    expect(block).toContain('Completion Workflow');
-    // Naming a literal `.agent-done` here would send the orchestrator to a path
-    // no poller watches.
-    expect(block).not.toMatch(/\.agent-done/);
-  });
-
-  it('gives every fan-out agent its own scratch subdirectory', () => {
-    // All fan-out agents share ONE session scratchpad and run byte-identical
-    // instructions, so without an assigned per-agent directory two of them pick
-    // the same obvious filename (pr-body.md) and clobber each other silently —
-    // which once published one worker's PR body onto another worker's PR.
-    const block = resolveSwarmBlock('claim-issue', 3);
-    expect(block).toContain('<scratchpad>/issue-<num>/');
-    expect(block).toMatch(/scratchpad root/i);
-    // The scope is ALL temp files, not just the PR body that surfaced the bug.
-    expect(block).toMatch(/ALL temp files/i);
-    // CoS agents also run under codex/agy/grok/opencode, which inject no
-    // scratchpad path. Without a named fallback such an agent picks its cwd —
-    // the source repo the prompt otherwise forbids writing to.
-    expect(block).toContain('$(mktemp -d)/issue-<num>');
-  });
-
-  it('instructs each agent to verify its own issue trailer after create and after each edit', () => {
-    // Belt to the namespacing's braces: the PR-body flow is create-then-edit, so
-    // a stale/foreign body can land minutes later during the review loop. `gh`
-    // exits 0 either way, so only a read-back catches it.
-    const block = resolveSwarmBlock('claim-issue', 3);
-    expect(block).toContain('Closes #<num>');
-    expect(block).toContain('Refs #<num>');
-    expect(block).toMatch(/after each edit|after every edit/i);
-  });
-
-  it('reads the PR body back by branch, never by a number that could be the issue number', () => {
-    // `<num>` is the ISSUE number everywhere else in this block, and an issue
-    // number is not a PR number. Passing one to `gh pr view` reads the wrong
-    // object (on GitLab, a real but unrelated MR) — so the agent "corrects" a
-    // stranger's PR body, which is the very bug #3489 is about. Both CLIs infer
-    // the PR/MR from the agent's own claim/issue-<num> branch, so no id is needed.
-    const block = resolveSwarmBlock('claim-issue', 3);
-    expect(block).toContain('gh pr view --json body -q .body');
-    expect(block).not.toContain('gh pr view <num>');
-    expect(block).not.toContain('gh pr view <pr-num>');
-  });
-
-  it('caps the rewrite-and-re-verify loop so one stuck agent cannot stall Phase C', () => {
-    // Phase C waits on every agent, so an unbounded "rewrite from scratch file
-    // and re-verify" blocks the whole batch's merges when the scratch file is
-    // itself the wrong one and republishing can never satisfy the check.
-    const block = resolveSwarmBlock('claim-issue', 3);
-    expect(block).toMatch(/Cap this at 2 rewrites/i);
-    expect(block).toMatch(/Never loop on it/i);
-  });
-
-  it('returns a glab/MR swarm directive for the gitlab claim body', () => {
-    const block = resolveSwarmBlock('claim-issue-gitlab', 4);
-    expect(block).toContain('--swarm=4');
-    expect(block).toContain('glab mr merge');
-    expect(block).toContain('open the MR');
-    // The scratch/read-back guidance is forge-agnostic — the MR body read-back
-    // uses the glab command, not the gh one.
-    expect(block).toContain('<scratchpad>/issue-<num>/');
-    // Same no-identifier rule as the gh path — and it matters MORE here: issue
-    // iids and MR iids are separate sequences on GitLab, so an issue number
-    // passed to `glab mr view` usually resolves to a real, unrelated MR.
-    expect(block).toContain('glab mr view --output json | jq -r .description');
-    expect(block).not.toContain('glab mr view <iid>');
-    expect(block).not.toContain('gh pr view');
-  });
-
-  it('is a no-op for non-forge claim types (plan-task / jira have no swarm flow)', () => {
-    expect(resolveSwarmBlock('plan-task', 6)).toBe('');
-    expect(resolveSwarmBlock('claim-issue-jira', 6)).toBe('');
-  });
-});
-
-// Source-level guard: the swarm block must be PREPENDED at both render sites
-// (the scheduled dispatch and the manual buildClaimWorkTask), not gated behind
-// an in-template placeholder — that's what keeps it an opt-in wrapper with no
-// prompt-default version bump.
-describe('swarm block wiring', () => {
-  it('prepends resolveSwarmBlock(...) to the rendered prompt at both render sites', () => {
-    const occurrences = GEN_SRC.match(/resolveSwarmBlock\(promptTaskType, metadata\.swarmCount\)/g) || [];
-    expect(occurrences.length).toBe(2);
-    expect(GEN_SRC).toContain('`${swarmBlock}${template}`');
-    expect(GEN_SRC).toContain('`${swarmBlock}${promptTemplate}`');
-  });
-});
-
 // A scheduled/self-improvement task with no configured model must NOT pin a
 // hardcoded model literal — it must leave metadata.model unset so
 // selectModelForTask resolves the ACTIVE provider's tier/default model at spawn
@@ -1140,7 +967,7 @@ describe('emitOnDemandEmpty', () => {
   // and the INTERVAL_TYPES enum the perpetual check reads.
   const stubMod = {
     getPerpetualParkInfo: async () => null,
-    INTERVAL_TYPES: { ON_DEMAND: 'on-demand', PERPETUAL: 'perpetual' }
+    INTERVAL_TYPES: { ON_DEMAND: 'on-demand', CRON: 'cron' }
   };
 
   it("emits an 'idle' event with reason null for a non-LI task type", async () => {
@@ -1152,7 +979,7 @@ describe('emitOnDemandEmpty', () => {
         taskScheduleMod: stubMod,
         request: { id: 'req-1', taskType: 'pr-watcher' },
         targetApp: { id: 'app-1', name: 'App One' },
-        taskConfig: { type: 'custom' }
+        taskConfig: { type: 'cron', cronExpression: '0 7 * * *' }
       });
     } finally {
       cosEvents.off('schedule:on-demand-empty', handler);
@@ -1177,7 +1004,7 @@ describe('emitOnDemandEmpty', () => {
         taskScheduleMod: stubMod,
         request: { id: 'req-2', taskType },
         targetApp: { id: 'app-1', name: 'App One' },
-        taskConfig: { type: 'perpetual' }
+        taskConfig: { type: 'on-demand', perpetual: true }
       });
     } finally {
       cosEvents.off('schedule:on-demand-empty', handler);
@@ -1191,7 +1018,7 @@ describe('emitOnDemandEmpty', () => {
     expect(await emitTransient('claim-issue')).toMatchObject({ outcome: 'transient', forge: null });
   });
 
-  it('treats on-demand reconciliation as detector-driven for transient feedback', async () => {
+  it('treats a perpetual on-demand drain as detector-driven for transient feedback', async () => {
     recordPerpetualTransient('branch-reconcile', 'app-1', { cli: null, reason: 'probe-failed' });
     const events = [];
     const handler = (data) => events.push(data);
@@ -1201,7 +1028,7 @@ describe('emitOnDemandEmpty', () => {
         taskScheduleMod: stubMod,
         request: { id: 'req-reconcile', taskType: 'branch-reconcile' },
         targetApp: { id: 'app-1', name: 'App One' },
-        taskConfig: { type: 'on-demand' }
+        taskConfig: { type: 'on-demand', perpetual: true }
       });
     } finally {
       cosEvents.off('schedule:on-demand-empty', handler);
@@ -1492,6 +1319,17 @@ describe('resolveUserActionDeliveryBlock (#5595)', () => {
     expect(applyUserActionDeliveryMode('Prompt', 'security', {})).toBe('Prompt');
   });
 
+  it('applyUserActionDetectorSection substitutes the token, or PREPENDS on a customized prompt that dropped it', async () => {
+    detectorMocks.formatUserActionDetectorBlock.mockReturnValue('LEFTOVER-FINDING');
+    const withToken = await applyUserActionDetectorSection('Intro\n\n{userActionDetectors}\n\nOutro', 'user-action-review');
+    expect(withToken).toContain('LEFTOVER-FINDING');
+    expect(withToken).not.toContain('{userActionDetectors}');
+    const custom = await applyUserActionDetectorSection('My custom review prompt', 'user-action-review');
+    expect(custom).toMatch(/^## Detectors\n\nLEFTOVER-FINDING/s);
+    expect(custom).toContain('My custom review prompt');
+    expect(await applyUserActionDetectorSection('Prompt', 'security')).toBe('Prompt');
+  });
+
   it('the install-wide lane consumes the input hook and renders the delivery block', () => {
     // Source-pinned like the approval-stamp guard above: the empty-ledger skip
     // and the delivery posture must reach the "Run Now with no app" lane, which
@@ -1504,6 +1342,7 @@ describe('resolveUserActionDeliveryBlock (#5595)', () => {
     expect(selfBody).toContain('if (taskSchedule.INSTALL_WIDE_TASK_TYPES.has(taskType)) {');
     expect(selfBody).toContain("resolveTaskInputHook({ id: null, name: 'PortOS' }, taskType, taskSchedule)");
     expect(selfBody).toContain('applyUserActionDeliveryMode(description, taskType, metadata)');
+    expect(selfBody).toContain('applyUserActionDetectorSection(description, taskType)');
     // The action-output posture must be dispatch-stamped: noCodeOutput is not a
     // sanitizer-allowed key, so it cannot ride in from DEFAULT_TASK_INTERVALS —
     // without the stamp the completion contract tells a live-checkout agent to
@@ -1670,115 +1509,6 @@ describe('ignoreTaskId reaches BOTH completion-continuation generators (#3179)',
 });
 
 /**
- * The perpetual reconcile drains (branch- and issue-reconcile) re-issue themselves
- * after every completed run, so their brakes are all that stands between them and
- * a runaway. On 2026-08-12 the signature brake was missing in practice — the refill
- * rode the on-demand lane, which reset the convergence signature on every hop —
- * and ~40 branch-reconcile coordinators ran between 05:19 and 08:47 against the
- * same two branches. The consecutive-dispatch cap is NOT this gate's job any more
- * (#3848): it moved to applyPerpetualDrainCap so every perpetual drain gets it.
- */
-describe('resolveReconcileDrainGate', () => {
-  // Stand-in for the injected taskSchedule module.
-  const fakeSchedule = ({ signature = null, dispatchCount = 0 } = {}) => ({
-    getPerpetualDrainState: vi.fn(async () => ({ signature, dispatchCount })),
-    parkPerpetual: vi.fn(async () => {}),
-    recordPerpetualDispatch: vi.fn(async () => dispatchCount + 1)
-  });
-  const app = { id: 'app-1', name: 'App One' };
-  const ctx = (over = {}) => ({
-    signature: 'a:NEEDS_PR:none', actionableCount: 1,
-    label: '🔀 branch-reconcile', unit: 'branch(es)', ...over
-  });
-
-  it('dispatches when the set advanced', async () => {
-    const ts = fakeSchedule({ signature: 'a:NEEDS_PR:none|b:IN_REVIEW:5', dispatchCount: 2 });
-    expect(await resolveReconcileDrainGate(ts, 'branch-reconcile', app, ctx())).toBe(true);
-    expect(ts.parkPerpetual).not.toHaveBeenCalled();
-    // One write carries all three facts (park cleared, signature recorded, dispatch spent).
-    expect(ts.recordPerpetualDispatch).toHaveBeenCalledWith('branch-reconcile', 'app-1', 'a:NEEDS_PR:none');
-  });
-
-  it('parks no-progress on an unchanged set, clearing signature + counter in the park write', async () => {
-    const ts = fakeSchedule({ signature: 'a:NEEDS_PR:none', dispatchCount: 1 });
-    expect(await resolveReconcileDrainGate(ts, 'branch-reconcile', app, ctx())).toBe(false);
-    expect(ts.parkPerpetual).toHaveBeenCalledWith('branch-reconcile', 'app-1', {
-      reason: 'no-progress', actionableCount: 1, signature: null
-    });
-    expect(ts.recordPerpetualDispatch).not.toHaveBeenCalled();
-  });
-
-  // Exactly one implementation of the cap survives, and it is not this one — an
-  // advanced set dispatches here no matter how much budget has been spent, because
-  // applyPerpetualDrainCap already ran (and returned) at the choke point.
-  it('no longer applies a dispatch cap of its own', async () => {
-    const ts = fakeSchedule({ signature: 'stale-sig', dispatchCount: 99 });
-    expect(await resolveReconcileDrainGate(ts, 'branch-reconcile', app, ctx({ actionableCount: 3 }))).toBe(true);
-    expect(ts.parkPerpetual).not.toHaveBeenCalled();
-  });
-});
-
-/**
- * The ONE consecutive-dispatch cap, at the choke point every spawn engine funnels
- * through. Per type so a bound that suits the reconcile scans (a handful of
- * branches a day) cannot throttle a healthy claim-issue drain to five issues a
- * window — the claim drains ship with no cap at all and stay unbounded (#3848).
- */
-describe('applyPerpetualDrainCap', () => {
-  const fakeSchedule = (dispatchCount = 0) => ({
-    INTERVAL_TYPES: { ON_DEMAND: 'on-demand', PERPETUAL: 'perpetual' },
-    getPerpetualDrainState: vi.fn(async () => ({ signature: null, dispatchCount })),
-    parkPerpetual: vi.fn(async () => {})
-  });
-  const app = { id: 'app-1', name: 'App One' };
-  const perpetual = (over = {}) => ({ type: 'perpetual', ...over });
-
-  it('parks drain-cap once the budget is spent, clearing the signature in the park write', async () => {
-    const ts = fakeSchedule(5);
-    expect(await applyPerpetualDrainCap(app, 'branch-reconcile', perpetual({ drainDispatchCap: 5 }), ts)).toEqual({ skip: true });
-    // The counter is zeroed by parkPerpetual's default — every park ends a window.
-    expect(ts.parkPerpetual).toHaveBeenCalledWith('branch-reconcile', 'app-1', {
-      reason: 'drain-cap', signature: null
-    });
-  });
-
-  it('reads a hand-edited numeric string as the cap rather than silently unbounding the guard', async () => {
-    const ts = fakeSchedule(5);
-    expect(await applyPerpetualDrainCap(app, 'branch-reconcile', perpetual({ drainDispatchCap: '5' }), ts)).toEqual({ skip: true });
-  });
-
-  it('spends exactly CAP dispatches before capping', async () => {
-    const outcomes = [];
-    for (let dispatchCount = 0; dispatchCount <= 5; dispatchCount += 1) {
-      outcomes.push((await applyPerpetualDrainCap(app, 'branch-reconcile', perpetual({ drainDispatchCap: 5 }), fakeSchedule(dispatchCount))).skip);
-    }
-    expect(outcomes).toEqual([false, false, false, false, false, true]);
-  });
-
-  // The whole reason the cap is per-type: an uncapped claim drain must keep going.
-  it('never parks a perpetual type with no cap configured, however many hops it has taken', async () => {
-    for (const drainDispatchCap of [undefined, null, '', 'nope', 0, -1]) {
-      const ts = fakeSchedule(500);
-      expect(await applyPerpetualDrainCap(app, 'claim-issue', perpetual({ drainDispatchCap }), ts)).toEqual({ skip: false });
-      expect(ts.parkPerpetual).not.toHaveBeenCalled();
-      // Unbounded types must not even pay for the state read.
-      expect(ts.getPerpetualDrainState).not.toHaveBeenCalled();
-    }
-  });
-
-  it('ignores non-perpetual intervals entirely', async () => {
-    const ts = fakeSchedule(500);
-    expect(await applyPerpetualDrainCap(app, 'security', { type: 'daily', drainDispatchCap: 5 }, ts)).toEqual({ skip: false });
-    expect(ts.getPerpetualDrainState).not.toHaveBeenCalled();
-  });
-
-  it('applies the cap to the on-demand reconciliation drain', async () => {
-    const ts = fakeSchedule(5);
-    expect(await applyPerpetualDrainCap(app, 'branch-reconcile', { type: 'on-demand', drainDispatchCap: 5 }, ts)).toEqual({ skip: true });
-  });
-});
-
-/**
  * The cap is checked ONCE, at the single point all four spawn engines funnel
  * through, and BEFORE the detectors/scans it would only discard the results of.
  */
@@ -1796,8 +1526,8 @@ describe('the drain cap has exactly one implementation, at the choke point', () 
   it('no second cap implementation reads PERPETUAL_DRAIN_DISPATCH_CAP or re-parks drain-cap', () => {
     // The reconcile gate used to carry its own copy; the constant now only names
     // the DEFAULT_TASK_INTERVALS value for the two reconcile types.
-    expect(GEN_SRC).not.toContain('PERPETUAL_DRAIN_DISPATCH_CAP');
-    expect(GEN_SRC.match(/reason: 'drain-cap'/g) || []).toHaveLength(1);
+    expect(LAYER_SRC).not.toContain('PERPETUAL_DRAIN_DISPATCH_CAP');
+    expect(LAYER_SRC.match(/reason: 'drain-cap'/g) || []).toHaveLength(1);
   });
 
   it("the reconcile types ship a cap and the claim drains deliberately do not", () => {
@@ -1860,7 +1590,7 @@ describe('pr-reviewer security preflight wiring', () => {
   it('narrows a targeted run before the fingerprint, the scan, and the stage-2 allowlist', () => {
     const start = GEN_SRC.indexOf('async function runPrReviewerSecurityPreflight');
     const body = GEN_SRC.slice(start, GEN_SRC.indexOf('\n  return { skipped: false, scan };', start));
-    const narrowAt = body.indexOf('target = { ...target, prs: scoped }');
+    const narrowAt = body.indexOf('prs: scoped.map((pr) => ({ ...pr, eligibilityFacts: { ...normalizeEligibilityFacts(pr.eligibilityFacts), maintainerTargeted: true } }))');
     const fingerprintAt = body.indexOf('securityScanFingerprint(target)');
     const scanAt = body.indexOf('runPrReviewerSecurityScan(');
 

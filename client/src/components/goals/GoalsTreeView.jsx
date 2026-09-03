@@ -267,7 +267,7 @@ function OrganizePanel({ suggestion, goals, onApply, onClose, applying }) {
   if (!suggestion) return null;
 
   return (
-    <div className="absolute top-12 right-3 z-20 bg-port-card border border-port-border rounded-lg p-4 w-96 max-h-dvh-cap [--dvh-cap:80dvh] overflow-y-auto shadow-xl">
+    <div className="absolute top-12 right-3 z-20 bg-port-card border border-port-border rounded-lg p-4 w-96 max-w-[calc(100vw-1rem)] max-h-dvh-cap [--dvh-cap:80dvh] overflow-y-auto shadow-xl">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <Wand2 className="w-4 h-4 text-port-accent" />
@@ -567,7 +567,7 @@ export default function GoalsTreeView({ data, onRefresh }) {
 
         {/* New goal form */}
         {showNewGoal && (
-          <div className="absolute top-12 left-3 z-10 bg-port-card border border-port-border rounded-lg p-3 w-72 space-y-2 shadow-lg">
+          <div className="absolute top-12 left-3 z-10 bg-port-card border border-port-border rounded-lg p-3 w-72 max-w-[calc(100vw-1rem)] space-y-2 shadow-lg">
             <input
               type="text"
               value={newGoal.title}

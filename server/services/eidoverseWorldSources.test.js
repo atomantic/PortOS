@@ -46,8 +46,8 @@ vi.mock('./brainGraph.js', () => ({
 vi.mock('./brainStorage.js', () => ({
   getInboxLogCounts: vi.fn(async () => sources.inboxCounts),
 }));
-vi.mock('./openWorldIntrospection.js', () => ({
-  getOpenWorldIntrospection: vi.fn(async () => sources.introspection),
+vi.mock('./dataIntrospection.js', () => ({
+  getDataIntrospection: vi.fn(async () => sources.introspection),
 }));
 vi.mock('./jira.js', () => ({
   fetchMyCurrentSprintTickets: vi.fn(async () => []),

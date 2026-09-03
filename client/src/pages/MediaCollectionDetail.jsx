@@ -5,6 +5,7 @@ import ShareToButton from '../components/sharing/ShareToButton';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import MediaCard from '../components/media/MediaCard';
+import AttributionList from '../components/media/AttributionList';
 import MediaPreview from '../components/media/MediaPreview';
 import BulkTargetPicker from '../components/media/BulkTargetPicker';
 import { normalizeImage, normalizeVideo } from '../components/media/normalize';
@@ -428,6 +429,8 @@ export default function MediaCollectionDetail() {
           </div>
         )}
       </div>
+
+      <AttributionList records={items} className="bg-port-card border border-port-border rounded-lg px-3 py-2" />
 
       {selectMode && (
         <div className="bg-port-card border border-port-border rounded-lg px-3 py-2 flex flex-wrap items-center gap-2 sticky top-0 z-30">

@@ -7,7 +7,7 @@
 
 import { DEFAULT_MEMORY_CONFIG } from './memoryBackend.js';
 import { getProviderById } from './providers.js';
-import { getConfig as getCosConfig } from './cos.js';
+import { getConfig as getCosConfig } from './cosState.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
 import { estimateTokens, CHARS_PER_TOKEN } from '../lib/contextBudget.js';

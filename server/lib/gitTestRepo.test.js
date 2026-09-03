@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtemp, writeFile } from 'fs/promises';
+import { mkdtemp, writeFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -9,6 +9,8 @@ import {
   attachBareOrigin,
   materializeGitRepo,
   destroyGitSandbox,
+  resetGitSandbox,
+  resetGitWorktreeSandbox,
 } from './gitTestRepo.js';
 
 describe('template exit hook', () => {
@@ -87,5 +89,103 @@ describe('attachBareOrigin / materializeGitRepo', () => {
     expect(top).toBeTruthy();
     expect((await execGit(['log', '-1', '--pretty=%s'], dest)).stdout.trim()).toBe('initial');
     expect((await execGit(['config', 'user.email'], dest)).stdout.trim()).toBe('test@example.com');
+  });
+});
+
+describe('resetGitSandbox', () => {
+  it('discards branches, commits, the origin remote, and scratch siblings back to the initial state', async () => {
+    const box = await makeGitSandbox({ prefix: 'portos-git-fx-reset-' });
+    sandboxes.push(box.scratch);
+    const initialHead = (await execGit(['rev-parse', 'HEAD'], box.repo)).stdout.trim();
+
+    await attachBareOrigin(box.scratch, box.repo);
+    await execGit(['checkout', '-b', 'feature'], box.repo);
+    await writeFile(join(box.repo, 'work.txt'), 'wip');
+    await execGit(['add', '-A'], box.repo);
+    await execGit(['commit', '-m', 'feature work'], box.repo);
+    await writeFile(join(box.repo, 'untracked.txt'), 'scratch');
+
+    await resetGitSandbox({ scratch: box.scratch, repo: box.repo, initialHead });
+
+    expect((await execGit(['rev-parse', 'HEAD'], box.repo)).stdout.trim()).toBe(initialHead);
+    expect((await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], box.repo)).stdout.trim()).toBe('main');
+    const branches = (await execGit(['branch', '--format=%(refname:short)'], box.repo)).stdout.trim();
+    expect(branches).toBe('main');
+    expect((await execGit(['remote'], box.repo)).stdout.trim()).toBe('');
+    expect(existsSync(join(box.repo, 'untracked.txt'))).toBe(false);
+    const scratchEntries = await readdir(box.scratch);
+    expect(scratchEntries).toEqual(['primary']);
+  });
+
+  it('is safe to call on a plain repo with no scratch wrapper', async () => {
+    const dest = await mkdtemp(join(tmpdir(), 'portos-git-fx-reset-plain-'));
+    sandboxes.push(dest);
+    await materializeGitRepo(dest);
+    const initialHead = (await execGit(['rev-parse', 'HEAD'], dest)).stdout.trim();
+    await execGit(['checkout', '-b', 'wip'], dest);
+    await writeFile(join(dest, 'work.txt'), 'wip');
+    await execGit(['add', '-A'], dest);
+    await execGit(['commit', '-m', 'wip'], dest);
+
+    await resetGitSandbox({ repo: dest, initialHead });
+
+    expect((await execGit(['rev-parse', 'HEAD'], dest)).stdout.trim()).toBe(initialHead);
+    expect((await execGit(['branch', '--format=%(refname:short)'], dest)).stdout.trim()).toBe('main');
+  });
+
+  it('checks assertPath instead of repo when a caller passes a respelled repo path', async () => {
+    // Simulates a `repo` that's git's own respelling of an mkdtemp() path
+    // (worktreeReap.test.js's initRepo() does this via `rev-parse
+    // --show-toplevel`) — on Windows that spelling can disagree with
+    // os.tmpdir()'s own (8.3 short form vs git's long form), which
+    // assertTempPath's realpath-based check cannot bridge (#6003).
+    const dest = await mkdtemp(join(tmpdir(), 'portos-git-fx-reset-assertpath-'));
+    sandboxes.push(dest);
+    await materializeGitRepo(dest);
+    const initialHead = (await execGit(['rev-parse', 'HEAD'], dest)).stdout.trim();
+    const respelled = (await execGit(['rev-parse', '--show-toplevel'], dest)).stdout.trim();
+
+    // repo=respelled would still resolve to the real directory (git's
+    // respelling is never actually outside tmpdir — this only stands in for
+    // the case where an OS spelling mismatch would make it look that way to
+    // assertTempPath) — the point is that passing assertPath overrides which
+    // string gets checked, without changing which directory git operates on.
+    await resetGitSandbox({ repo: respelled, initialHead, assertPath: dest });
+
+    expect((await execGit(['rev-parse', 'HEAD'], dest)).stdout.trim()).toBe(initialHead);
+  });
+
+  it('rejects an unsafe assertPath even when repo itself is a real temp dir', async () => {
+    const dest = await mkdtemp(join(tmpdir(), 'portos-git-fx-reset-unsafe-'));
+    sandboxes.push(dest);
+    await materializeGitRepo(dest);
+    const initialHead = (await execGit(['rev-parse', 'HEAD'], dest)).stdout.trim();
+
+    await expect(resetGitSandbox({ repo: dest, initialHead, assertPath: '/etc' }))
+      .rejects.toThrow(/refusing to run/);
+  });
+});
+
+describe('resetGitWorktreeSandbox', () => {
+  it('removes every worktree it grew, including a locked one, and restores main', async () => {
+    const dest = await mkdtemp(join(tmpdir(), 'portos-git-fx-reset-wt-'));
+    sandboxes.push(dest);
+    await materializeGitRepo(dest);
+    const initialHead = (await execGit(['rev-parse', 'HEAD'], dest)).stdout.trim();
+
+    const wtA = await mkdtemp(join(tmpdir(), 'portos-git-fx-reset-wt-a-'));
+    const wtB = await mkdtemp(join(tmpdir(), 'portos-git-fx-reset-wt-b-'));
+    sandboxes.push(wtA, wtB);
+    await execGit(['worktree', 'add', '-b', 'wt-a', wtA, 'main'], dest);
+    await execGit(['worktree', 'add', '-b', 'wt-b', wtB, 'main'], dest);
+    await execGit(['worktree', 'lock', wtB], dest);
+
+    await resetGitWorktreeSandbox(dest, initialHead);
+
+    const listing = (await execGit(['worktree', 'list', '--porcelain'], dest)).stdout;
+    expect(listing).not.toContain('wt-a');
+    expect(listing).not.toContain('wt-b');
+    expect((await execGit(['branch', '--format=%(refname:short)'], dest)).stdout.trim()).toBe('main');
+    expect((await execGit(['rev-parse', 'HEAD'], dest)).stdout.trim()).toBe(initialHead);
   });
 });

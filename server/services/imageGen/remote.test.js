@@ -200,6 +200,13 @@ describe('federated image consumer adapter', () => {
       federatedPeerId: PEER_ID,
       federatedJobId: REMOTE_JOB_ID,
     });
+    // Render timing (#5878) — for a federated render the span this install can
+    // honestly report is its OWN: submission, the peer's queue wait and render,
+    // download, verification. The peer's internal render time never crosses the
+    // wire (a status payload would breach the privacy boundary), so this is the
+    // measurement, not a stand-in for one.
+    expect(sidecar.renderMs).toBeGreaterThanOrEqual(0);
+    expect(Date.parse(sidecar.renderCompletedAt) - Date.parse(sidecar.renderStartedAt)).toBe(sidecar.renderMs);
 
     const submission = transport.fetch.mock.calls
       .find(([url, options]) => url.endsWith('/jobs') && options.method === 'POST');
@@ -447,5 +454,58 @@ describe('standing-route tailnet boundary survives the enqueue', () => {
     const outcome = await settled;
     expect(outcome.type).toBe('failed');
     expect(outcome.event.error).toMatch(/no longer a Tailscale host/i);
+  });
+});
+
+// #5878. A reconcile re-enters the executor after a restart for a job the peer
+// was ALREADY rendering, so the in-memory instant this install would stamp now
+// covers only the download-and-verify tail. Reporting that as the render time
+// would tell the user a 20-minute federated render took a few seconds — worse
+// than saying nothing, which is what the absent-`renderMs` sentinel means.
+describe('a reconciled federated render reports no duration rather than a wrong one', () => {
+  it('omits every timing field when the marker is a post-restart reconcile', async () => {
+    const png = Buffer.from('\x89PNG-reconciled');
+    const digest = sha256(png);
+    transport.fetch.mockImplementation(async (url, options) => {
+      if (url.endsWith('/jobs') && options.method === 'POST') return jsonResponse(providerJob('queued'), 202);
+      if (url.endsWith(`/jobs/${REMOTE_JOB_ID}`)) {
+        return jsonResponse(providerJob('completed', {
+          result: {
+            available: true,
+            mimeType: 'image/png',
+            sizeBytes: png.length,
+            sha256: digest,
+            downloadUrl: `/api/federation/media/v1/jobs/${REMOTE_JOB_ID}/result`,
+            engine: 'local',
+            modelId: 'dev',
+            durationSec: null,
+          },
+        }));
+      }
+      if (url.endsWith(`/jobs/${REMOTE_JOB_ID}/result`)) {
+        return new Response(png, {
+          headers: {
+            'Content-Length': String(png.length),
+            'Content-Type': 'image/png',
+            'X-Content-SHA256': digest,
+          },
+        });
+      }
+      throw new Error(`Unexpected test URL: ${url}`);
+    });
+
+    const base = params();
+    const terminal = captureTerminal(LOCAL_JOB_ID);
+    await generateImage({ ...base, remoteMedia: { ...base.remoteMedia, reconcile: true } });
+    expect((await terminal).type).toBe('completed');
+
+    const sidecar = JSON.parse(readFileSync(join(tempImageDir, `${LOCAL_JOB_ID}.metadata.json`), 'utf8'));
+    // Absent, not zero — `videoGen/eta.js` and the gallery card both read
+    // absence as "unknown", while a 0 would read as an instant render.
+    expect('renderMs' in sidecar).toBe(false);
+    expect('renderStartedAt' in sidecar).toBe(false);
+    expect('renderCompletedAt' in sidecar).toBe(false);
+    // The record still lands — only the duration is withheld.
+    expect(sidecar.federatedJobId).toBe(REMOTE_JOB_ID);
   });
 });

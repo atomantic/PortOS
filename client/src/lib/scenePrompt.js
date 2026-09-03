@@ -2,6 +2,7 @@
 // The shape-invariant tests in server/lib/scenePrompt.test.js are the contract.
 
 import { mapCanonDescriptorFragments, richCanonDescriptorFragments } from './canonPrompt.js';
+import { escapeRegExp } from './textUtils.js';
 
 const PROMPT_MAX = 1900;
 
@@ -63,7 +64,7 @@ function matchEntriesByCandidates(text, entries, candidatesFn) {
   const seen = new Set();
   const wordBoundary = (needle) => {
     if (!needle) return false;
-    const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const escaped = escapeRegExp(needle);
     // Unicode-aware boundary instead of ASCII `\b`: a name starting/ending with a
     // non-ASCII letter (José, Élodie, Zoë) has no `\b` adjacent to the accented
     // char, so `\b…\b` would silently miss it. Lookarounds over `[\p{L}\p{N}_]`

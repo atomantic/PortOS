@@ -10,6 +10,7 @@ import * as goalProgress from '../services/goalProgress.js';
 import * as decisionLog from '../services/decisionLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { parsePagination } from '../lib/validation.js';
+import { detectIdleLeftoverBranches } from '../services/userActionDetectors.js';
 
 const router = Router();
 
@@ -48,13 +49,14 @@ router.get('/productivity/calendar', asyncHandler(async (req, res) => {
 // GET /api/cos/actionable-insights - Get prioritized action items requiring user attention
 // Surfaces the most important things to address right now across all CoS subsystems
 router.get('/actionable-insights', asyncHandler(async (req, res) => {
-  const [tasksData, learningSummary, healthCheck, notificationsModule, optimalTimeInfo, pendingFeedbackCount] = await Promise.all([
+  const [tasksData, learningSummary, healthCheck, notificationsModule, optimalTimeInfo, pendingFeedbackCount, leftoverFindings] = await Promise.all([
     cos.getAllTasks().catch(err => { console.error(`❌ Failed to load tasks: ${err.message}`); return { user: null, cos: null }; }),
     taskLearning.getLearningInsights().catch(err => { console.error(`❌ Failed to load learning insights: ${err.message}`); return null; }),
     cos.runHealthCheck().catch(err => { console.error(`❌ Failed to run health check: ${err.message}`); return { issues: [] }; }),
     import('../services/notifications.js').catch(err => { console.error(`❌ Failed to load notifications: ${err.message}`); return null; }),
     productivity.getOptimalTimeInfo().catch(() => ({ hasData: false })),
-    cos.getPendingAgentFeedbackCount().catch(err => { console.error(`❌ Failed to load pending agent feedback: ${err.message}`); return 0; })
+    cos.getPendingAgentFeedbackCount().catch(err => { console.error(`❌ Failed to load pending agent feedback: ${err.message}`); return 0; }),
+    detectIdleLeftoverBranches().catch(err => { console.error(`❌ Failed to detect leftover branches: ${err.message}`); return []; })
   ]);
 
   const notificationsData = notificationsModule ? await notificationsModule.getNotifications({ unreadOnly: true, limit: 10 }).catch(() => []) : [];
@@ -129,6 +131,26 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
       description: 'Your ratings help CoS learn which work and providers are useful.',
       action: { label: 'Review runs', route: '/cos/agents?feedback=needs-feedback' },
       count: pendingFeedbackCount
+    });
+  }
+
+  // 4b. Leftover idle branches (#5596) — propose-only; Run Now deep-links to the schedule.
+  if (Array.isArray(leftoverFindings) && leftoverFindings.length > 0) {
+    const leftoverCount = leftoverFindings.reduce((sum, finding) => sum + finding.leftoverCount, 0);
+    const first = leftoverFindings[0];
+    const single = leftoverFindings.length === 1;
+    insights.push({
+      type: 'leftover-branches',
+      priority: 'medium',
+      icon: 'AlertTriangle',
+      title: single
+        ? `${first.leftoverCount} leftover branches on ${first.appId}, agents idle. Run branch-reconcile?`
+        : `${leftoverCount} leftover branches across ${leftoverFindings.length} apps, agents idle. Run branch-reconcile?`,
+      description: first.lastUserReconcileAt
+        ? `Last manual reconcile ${first.lastUserReconcileAt}. Propose a Run Now — never enact.`
+        : 'No manual reconcile in the last 14 days. Propose a Run Now — never enact.',
+      action: { label: 'Run Now', route: '/cos/schedule' },
+      count: leftoverCount
     });
   }
 

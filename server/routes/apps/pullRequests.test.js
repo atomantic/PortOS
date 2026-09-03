@@ -82,6 +82,7 @@ describe('app pull-request routes', () => {
       id: 'sys-rl-1',
       status: 'pending',
       description: '[Review Loop] Resolve and merge PR #17 for Widget (https://github.com/acme/widget/pull/17)',
+      dispatch: { started: true, reason: null },
     });
     listExternalOpenPullRequests.mockResolvedValue({
       ok: true,
@@ -151,6 +152,52 @@ describe('app pull-request routes', () => {
       duplicate: false,
       pullRequest: { agentAction: { taskId: 'sys-rl-1', status: 'pending' } },
     });
+  });
+
+  // Pressing the button IS the approval. Without an immediate dispatch the
+  // follow-up is an auto-approved SYSTEM task, which the dequeue only spawns while
+  // CoS auto-run is in `execute` and under budget — so it sat pending until the
+  // user pressed Run now on the task page.
+  it('starts the follow-up immediately instead of leaving it for the autonomous queue', async () => {
+    const response = await request(app).post('/api/apps/app-001/pull-requests/17/resolve');
+
+    expect(response.status).toBe(202);
+    expect(spawnReviewLoopFollowUp).toHaveBeenCalledWith(expect.objectContaining({ dispatch: 'immediate' }));
+    expect(response.body).toMatchObject({ started: true, queueReason: null });
+  });
+
+  it('reports why the agent has not started yet rather than claiming one is running', async () => {
+    spawnReviewLoopFollowUp.mockResolvedValue({
+      id: 'sys-rl-1',
+      status: 'pending',
+      description: '[Review Loop] Resolve and merge PR #17 for Widget',
+      dispatch: { started: false, reason: 'No available agent slots (3/3)' },
+    });
+
+    const response = await request(app).post('/api/apps/app-001/pull-requests/17/resolve');
+
+    expect(response.status).toBe(202);
+    expect(response.body).toMatchObject({
+      started: false,
+      queueReason: 'No available agent slots (3/3)',
+      task: { id: 'sys-rl-1', status: 'pending' },
+    });
+  });
+
+  // The service returns the already-queued task when the store rejects the write
+  // as a duplicate (the window between the route's own scan and the persist).
+  it('reports a duplicate the task store rejected', async () => {
+    spawnReviewLoopFollowUp.mockResolvedValue({
+      id: 'sys-rl-existing',
+      status: 'pending',
+      description: '[Review Loop] Resolve and merge PR #17 for Widget',
+      duplicate: true,
+    });
+
+    const response = await request(app).post('/api/apps/app-001/pull-requests/17/resolve');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ duplicate: true, started: false, task: { id: 'sys-rl-existing' } });
   });
 
   it('keeps a forge-controlled title out of autonomous task instructions', async () => {

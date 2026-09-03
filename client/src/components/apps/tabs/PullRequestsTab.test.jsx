@@ -15,7 +15,15 @@ const { socketHandlers, socketMock } = vi.hoisted(() => {
   return { socketHandlers: handlers, socketMock: mock };
 });
 
+const { toastMock } = vi.hoisted(() => {
+  const fn = vi.fn();
+  fn.success = vi.fn();
+  fn.error = vi.fn();
+  return { toastMock: fn };
+});
+
 vi.mock('../../../services/socket', () => ({ default: socketMock }));
+vi.mock('../../ui/Toast', () => ({ default: toastMock }));
 vi.mock('../../../services/api', () => ({
   getAppPullRequests: vi.fn(),
   resolveAppPullRequest: vi.fn(),
@@ -76,6 +84,8 @@ beforeEach(() => {
   api.resolveAppPullRequest.mockResolvedValue({
     task: { id: 'task-1', status: 'pending' },
     duplicate: false,
+    started: true,
+    queueReason: null,
   });
   api.reviewAppPullRequest.mockResolvedValue({
     requestId: 'demand-abc',
@@ -110,6 +120,36 @@ describe('PullRequestsTab', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Resolve & merge/ }));
 
     await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalledWith('app-1', 17));
+    expect(await screen.findByRole('link', { name: /Queued/ })).toBeInTheDocument();
+  });
+
+  // The server starts the follow-up on the click, so the toast must say so —
+  // and must NOT claim an agent is on it when the dispatch was refused.
+  it('reports that the resolve agent started', async () => {
+    await renderTab();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Resolve & merge/ }));
+
+    await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith(
+      expect.stringContaining('Started an agent to resolve and merge'),
+    ));
+  });
+
+  it('surfaces why a resolve task is queued but not yet running', async () => {
+    api.resolveAppPullRequest.mockResolvedValue({
+      task: { id: 'task-1', status: 'pending' },
+      duplicate: false,
+      started: false,
+      queueReason: 'No available agent slots (3/3)',
+    });
+    await renderTab();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Resolve & merge/ }));
+
+    await waitFor(() => expect(toastMock).toHaveBeenCalledWith(
+      expect.stringContaining('No available agent slots (3/3)'),
+    ));
+    expect(toastMock.success).not.toHaveBeenCalled();
     expect(await screen.findByRole('link', { name: /Queued/ })).toBeInTheDocument();
   });
 

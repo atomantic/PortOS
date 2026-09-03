@@ -1350,15 +1350,18 @@ describe('close-handler skip-finalization — source contract', () => {
   }
 
   it('CLI close handler guards with pausedAgents.has and returns before finalizeAgent', () => {
-    // The guard appears in the claudeProcess.on('close', ...) callback.
-    const closeIdx = AGENT_CLI_SRC.indexOf("claudeProcess.on('close'");
-    expect(closeIdx, "claudeProcess 'close' handler must exist").toBeGreaterThan(-1);
+    // The real body lives in `handleClose`, not in the `claudeProcess.on('close')`
+    // registration — that registration is a forwarding shim attached in the same
+    // tick as spawn() so a fast-exiting child's close event isn't dropped while
+    // the async setup is still yielding (#5791).
+    const closeIdx = AGENT_CLI_SRC.indexOf('handleClose = async (code)');
+    expect(closeIdx, 'CLI handleClose handler must exist').toBeGreaterThan(-1);
 
     // Extract the full callback body via brace-balancing rather than a fixed
     // slice — a try/catch crash-guard wrapper can push finalizeAgent past any
     // fixed window (see #1825).
-    const closeBody = extractFunctionBody(AGENT_CLI_SRC, "claudeProcess.on('close'");
-    expect(closeBody, "claudeProcess 'close' handler body must be extractable").toBeTruthy();
+    const closeBody = extractFunctionBody(AGENT_CLI_SRC, 'handleClose = async (code)');
+    expect(closeBody, 'CLI handleClose handler body must be extractable').toBeTruthy();
 
     // Guard present
     expect(closeBody).toMatch(/pausedAgents\.has\(agentId\)/);

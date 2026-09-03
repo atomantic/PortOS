@@ -227,7 +227,7 @@ export default function GraphTab({ vaultId }) {
         >
           Reset
         </button>
-        <button onClick={loadGraph} aria-label="Refresh" className="p-1.5 rounded bg-port-card border border-port-border text-gray-400 hover:text-white">
+        <button onClick={loadGraph} aria-label="Refresh" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded bg-port-card border border-port-border text-gray-400 hover:text-white">
           <RefreshCw size={14} />
         </button>
       </div>

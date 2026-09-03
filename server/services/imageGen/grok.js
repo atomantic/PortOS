@@ -43,6 +43,7 @@ import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { renderTimingFields } from '../../lib/renderTiming.js';
 import { buildNoImageReason } from './noImageReason.js';
 import { rejectDegenerateFrame } from './frameGuard.js';
 import { checkFabrication, noFabricationClause } from './fabricationGuard.js';
@@ -216,6 +217,9 @@ export async function generateImage({
   cleanC2PA = false,
   denoise = false,
 }) {
+  // The ingestion instant `renderTimingFields` measures from — the queue calls
+  // generateImage the moment it picks this job up. See lib/renderTiming.js.
+  const renderStartedAtMs = Date.now();
   await ensureDir(PATHS.images);
 
   // Re-anchors every path to the allowed input roots (so no caller can point
@@ -273,7 +277,7 @@ export async function generateImage({
     ...(effectiveRatio ? { aspectRatio: effectiveRatio } : {}),
     createdAt: new Date().toISOString(),
   };
-  const job = { ...meta, clients: [], status: 'running' };
+  const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
   jobs.set(jobId, job);
 
   console.log(`🎨 Generating image [${jobId.slice(0, 8)}] grok: ${prompt.slice(0, 60)}…`);
@@ -412,7 +416,10 @@ async function runGrok(job, jobId, bin, args, {
       }
       // Sidecar metadata so the gallery can recover prompt/ratio/etc.
       const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
-      await atomicWrite(sidecar, meta).catch(() => {});
+      // `job.renderStartedAtMs` is the queue-ingestion instant generateImage
+      // captured, so the spread measures the render itself — not the time the
+      // job spent queued behind other renders.
+      await atomicWrite(sidecar, { ...meta, ...renderTimingFields(job.renderStartedAtMs) }).catch(() => {});
       // Cleaners run BEFORE the SSE complete + completed events so
       // subscribers see the cleaned bytes.
       await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath: outputPath, sidecarPath: sidecar, mode: IMAGE_GEN_MODE.GROK });

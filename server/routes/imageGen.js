@@ -22,6 +22,7 @@ import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from '../services/imageGen/ind
 import { resolveCloudProviderConfig } from '../services/imageGen/cloudProviderConfig.js';
 import setupRouter from './imageGenSetup.js';
 import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
+import { recordUserAction } from '../services/userActions.js';
 import { getImageModels, requiredReposForModel } from '../lib/mediaModels.js';
 import { inspectModelCache, verifyModelCache, repairModelCache, aggregateVerifies } from '../lib/hfCache.js';
 import { startHfDownloadStream } from '../services/hfDownloadStream.js';
@@ -54,6 +55,31 @@ import { loraCompatKey } from '../lib/runners.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 
 const router = Router();
+
+const routeSource = (req) => ({ route: `${req.baseUrl}${req.route?.path ?? ''}`, method: req.method });
+
+// Event-only pointer: job id in `target`, never the generation prompt (#5596).
+async function enqueueLoggedImage(req, job) {
+  const queued = enqueueJob(job);
+  try {
+    const happenedAt = new Date().toISOString();
+    await recordUserAction({
+      type: 'media.image.enqueue',
+      actor: 'user',
+      target: queued.jobId,
+      summary: 'enqueued image job',
+      payload: { jobId: queued.jobId },
+      source: routeSource(req),
+      happenedAt,
+      dedupeKey: `media.image.enqueue:${queued.jobId}`,
+    });
+  } catch (error) {
+    // Ledger is a side effect — the job is already queued.
+    console.error(`❌ Failed to record media.image.enqueue: ${error.message}`);
+  }
+  return queued;
+}
+
 
 // Shared validation limits. MAX_REFERENCE_IMAGES must stay in sync with the
 // number of `referenceImageN` upload field names below.
@@ -573,7 +599,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     // normalizes any job carrying one into the downgrade-safe shape, so this
     // render cannot be re-run for real by a build rolled back past
     // `remoteMedia`. Contract: services/federatedMedia/routedJobParams.js.
-    const queued = enqueueJob({
+    const queued = await enqueueLoggedImage(req, {
       kind: 'image',
       params: { ...jobParams, remoteMedia },
     });
@@ -601,12 +627,12 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     // dispatches to the matching imageGen provider module when it sees it.
     // `cloud.modelId` is the *effective* model so the response metadata reports
     // what actually renders (gpt-5.6-luna by default) instead of "codex"/null.
-    const queued = enqueueJob({ kind: 'image', params: { ...cloud.jobParams, ...params } });
+    const queued = await enqueueLoggedImage(req, { kind: 'image', params: { ...cloud.jobParams, ...params } });
     return res.json(queuedImageResponse({ ...queued, mode, model: cloud.modelId }));
   }
   if (mode === IMAGE_GEN_MODE.LOCAL) {
     const { pythonPath: py, selectedModel } = resolveLocalImageModel(settings, params);
-    const queued = enqueueJob({
+    const queued = await enqueueLoggedImage(req, {
       kind: 'image',
       params: {
         ...params,
@@ -966,7 +992,7 @@ router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
     initImageAbsPath,
     annotated: !!body.annotated,
   });
-  const queued = enqueueJob({ kind: 'image', params });
+  const queued = await enqueueLoggedImage(req, { kind: 'image', params });
   const via = body.annotated ? 'annotation re-render' : 'Regenerating';
   console.log(`♻️ ${via} ${filename} via ${backend.model.id} (strength=${strength}) → job ${queued.jobId.slice(0, 8)}`);
   return res.json(queuedImageResponse({ ...queued, mode: IMAGE_GEN_MODE.LOCAL, model: backend.model.id }));

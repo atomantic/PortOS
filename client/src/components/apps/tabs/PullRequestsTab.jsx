@@ -45,7 +45,7 @@ const ACTION_KINDS = {
     field: 'agentAction',
     queued: result => result.task && { taskId: result.task.id, status: result.task.status },
     title: (forgeLabel, number, appName) =>
-      `Queue a CoS agent to resolve and merge ${forgeLabel} request #${number} for ${appName}`,
+      `Start a CoS agent now to resolve and merge ${forgeLabel} request #${number} for ${appName}`,
     matches: (task, appId, number) => task.metadata?.app === appId
       && Number(task.metadata?.reviewLoopPRNumber) === number,
   },
@@ -272,12 +272,26 @@ export default function PullRequestsTab({ appId, appName }) {
         },
       };
     });
-    toast.success(result.duplicate ? already : queued);
+    // The `queued` toast text may be a function of the response, for an action
+    // that reports whether an agent actually STARTED (resolve dispatches
+    // immediately) rather than only that a task was persisted.
+    const duplicate = result.duplicate === true;
+    const message = duplicate ? already
+      : (typeof queued === 'function' ? queued(result) : queued);
+    // Queued-but-not-started is not a failure — it just isn't running yet (no
+    // agent slots, daemon stopped) — but it is not a success claim either, so it
+    // gets the neutral toast. A duplicate stays a success: something is already
+    // on it.
+    if (!duplicate && result.started === false) toast(message);
+    else toast.success(message);
   };
 
   const handleResolve = pullRequest => queueAction('resolve', pullRequest, {
     call: () => api.resolveAppPullRequest(appId, pullRequest.number),
-    queued: `Queued an agent to resolve and merge ${forgeLabel} #${pullRequest.number}`,
+    queued: result => (result.started
+      ? `Started an agent to resolve and merge ${forgeLabel} #${pullRequest.number}`
+      : `Queued an agent to resolve and merge ${forgeLabel} #${pullRequest.number}`
+        + (result.queueReason ? ` — ${result.queueReason}` : '')),
     already: `An agent is already resolving ${forgeLabel} #${pullRequest.number}`,
   });
 
@@ -334,7 +348,7 @@ export default function PullRequestsTab({ appId, appName }) {
 
       <div className="px-3 py-2 text-xs text-gray-500 bg-port-card border border-port-border rounded-lg space-y-1">
         <p>
-          Resolve and merge queues a PortOS agent to inspect feedback, fix the branch, wait for checks, and merge when the forge allows it. It uses the configured Code Review Defaults.
+          Resolve and merge starts a PortOS agent right away to inspect feedback, fix the branch, wait for checks, and merge when the forge allows it. It uses the configured Code Review Defaults.
         </p>
         {(data?.pullRequests || []).some(pullRequest => pullRequest.reviewEligible) && (
           <p>

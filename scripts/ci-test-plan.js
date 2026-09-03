@@ -10,6 +10,28 @@ const EXECUTABLE_RE = /\.(?:cjs|css|html|js|jsx|json|mjs|sql|ts|tsx|ya?ml)$/i;
 const MAX_CHANGED_CODE_FILES = 30;
 const MAX_TARGETED_TEST_FILES = 120;
 
+// Python sidecar scripts (`scripts/generate_ltx2.py`, …). Vitest's import graph
+// cannot reach into them, but their contracts are pinned by suites that read
+// the .py source as text, so main() finds the suites naming each changed script
+// with `git grep` and the plan runs exactly those — failing closed to the full
+// suite for a script nothing names.
+const PYTHON_SCRIPT_RE = /^scripts\/[^/]+\.py$/;
+/** `git grep -E` pattern for a test that names this one script. */
+export const pythonReferencePattern = (scriptPath) => (
+  `(^|[^A-Za-z0-9_])${scriptPath.slice(scriptPath.lastIndexOf('/') + 1).replace(/[.]/g, '\\.')}([^A-Za-z0-9_]|$)`
+);
+
+// Parallel runners per test job on a full plan. Decided here rather than in
+// ci.yml because a job-level `if` cannot read the matrix context, so the
+// planner must emit `[1]` for a scoped plan itself. Sizing rationale:
+// docs/GITHUB_ACTIONS.md "Full-suite sharding".
+export const FULL_SUITE_SHARDS = { server: 2, client: 3, windows: 3 };
+
+/** Matrix values for one runner: every shard on a full run, one otherwise. */
+export const shardIndexes = (mode, count) => (
+  mode === 'full' ? Array.from({ length: count }, (_, index) => index + 1) : [1]
+);
+
 const FULL_TRIGGER_RULES = [
   { re: /^\.github\/workflows\//, reason: 'workflow definition changed' },
   { re: /^(?:package|server\/package|client\/package|autofixer\/package)(?:-lock)?\.json$/, reason: 'dependency manifest changed' },
@@ -47,6 +69,17 @@ const WINDOWS_RISK_RULES = [
   // — green everywhere CI looked. These modules decide containment and worktree
   // identity, so they need a real Windows run.
   /^server\/lib\/(?:pathSafety|worktreeOwnership)(?:\.test)?\.js$/,
+  // Same class, different mechanism: staticImportGraph keys its module map by
+  // string-concatenating entry names with "/" but resolves edge targets with
+  // path.relative, which answers with "\\" on Windows. Every edge into a
+  // subdirectory module then missed the lookup and vanished — reddening the
+  // cluster guards' positive assertions while their acyclicity assertions
+  // passed VACUOUSLY. Nothing here was Windows-risk-tagged, so the Windows job
+  // skipped the PR that introduced it and main went red for every later PR
+  // (#5909). The graph's consumers ride along: their expectations are spelled
+  // in "/" and only a real Windows run can tell.
+  /^server\/lib\/staticImportGraph(?:\.test)?\.js$/,
+  /^server\/services\/(?:agent|twin)ImportCycles\.test\.js$/,
   /^server\/services\/worktree(?:Manager|Reap)\b/,
   /^server\/lib\/shell(?:Cd|Exit|LivenessProbe|ReadinessProbe)(?:\.test)?\.js$/,
   /^server\/lib\/agentGuard\//,
@@ -85,6 +118,7 @@ export const WINDOWS_CONTRACT_TESTS = [
   'server/lib/processEnv.spawnOptions.test.js',
   'server/lib/processEnv.test.js',
   'server/lib/spawnCwd.test.js',
+  'server/lib/staticImportGraph.test.js',
   'server/lib/shellCd.test.js',
   'server/routes/apps/crud.test.js',
   'server/routes/apps/icons.test.js',
@@ -102,6 +136,8 @@ export const WINDOWS_CONTRACT_TESTS = [
   'server/services/shell.test.js',
   'server/services/shellImageDrop.test.js',
   'server/services/agentTuiSpawning.test.js',
+  'server/services/agentImportCycles.test.js',
+  'server/services/twinImportCycles.test.js',
 ];
 
 // Contract guards that run on EVERY plan, whatever the impact scope selects.
@@ -134,11 +170,18 @@ export const WINDOWS_CONTRACT_TESTS = [
 // what can reach it.
 export const ALWAYS_RUN_TESTS = [
   'scripts/agent-instructions-files.test.js',
+  // The union-merged catalogs are `.md` to the planner — documentation-only —
+  // so a rebase that doubled a row would otherwise never be re-checked.
+  'scripts/catalog-merge-union.test.js',
   'scripts/direct-invocation-drift.test.js',
+  'scripts/ensure-deps.test.js',
   'scripts/node-version-drift.test.js',
   'scripts/repo-scan-guards.test.js',
   'scripts/tailnet-identity-leak.test.js',
   'server/dependency-overrides.test.js',
+  // Whole-tree scanner: any server file can add a `process.env` read, and
+  // `.env.example` itself is not a scope the selector routes to a runner.
+  'server/envExampleDrift.test.js',
   'server/lib/generatedManifests.test.js',
   'server/lib/qwenAgentParsers.test.js',
   'server/lib/testDataIsolation.guards.test.js',
@@ -207,7 +250,8 @@ const pathMatchesFeature = (path, feature) => {
 
 const isTestFile = (path) => TEST_FILE_RE.test(path);
 const isDocumentationOnly = (path) => DOCUMENTATION_RULES.some((rule) => rule.test(path));
-const isExecutable = (path) => EXECUTABLE_RE.test(path);
+const isPythonScript = (path) => PYTHON_SCRIPT_RE.test(path);
+const isExecutable = (path) => EXECUTABLE_RE.test(path) || isPythonScript(path);
 const isServerRunnerFile = (path) => RUNNER_ROOTS.server.some((root) => path.startsWith(root));
 const isClientRunnerFile = (path) => RUNNER_ROOTS.client.some((root) => path.startsWith(root));
 
@@ -235,6 +279,15 @@ const structuralTestsFor = (changedFiles, trackedSet) => {
   if (changedFiles.some((path) => /^server\/lib\//.test(path))) {
     add('server/lib/index.test.js');
   }
+  // The generated-manifest drift tests regenerate from the tree and compare;
+  // they import neither the route modules nor the stage call sites they scan,
+  // so no import edge selects them. Without this rule a route added on a
+  // scoped plan merged with a stale catalog (#5898), and every later full-plan
+  // PR inherited the red drift test until someone committed a regeneration.
+  if (changedFiles.some((path) => /^server\/.*\.js$/.test(path) || /^server\/lib\/.*\.generated\.json$/.test(path))) {
+    add('scripts/generate-api-route-catalog.test.js');
+    add('scripts/generate-prompt-stage-call-sites.test.js');
+  }
   // The socket guard readdir-scans server/sockets/ rather than importing it, so
   // no import edge reaches it — a handler added there would otherwise only be
   // checked on a full suite.
@@ -256,12 +309,20 @@ const structuralTestsFor = (changedFiles, trackedSet) => {
   // Both `.js` and `.jsx`: the StrictMode mounted-ref bug the first guard covers
   // reached its widest blast radius through a plain-`.js` hook (`useAsyncAction`),
   // so a `.jsx`-only trigger would miss the case that matters most, and the
-  // responsive-grid guard reads class strings out of both extensions. Neither
-  // file has a source sibling or imports an app module, so nothing else selects
-  // them — without this entry they only ever run on a full suite.
+  // responsive-grid, popover-clamp, pre-wrap/break, safe-storage,
+  // heading-truncation, and global-shadow guards read class strings, storage
+  // accesses, declarations, and JSX markup out of both extensions.
+  // None of these files has a source sibling or imports an app module, so nothing
+  // else selects them — without this entry they only ever run on a full suite.
   if (changedFiles.some((path) => /^client\/src\/.*\.jsx?$/.test(path))) {
+    add('client/src/globalShadowConventions.test.js');
+    add('client/src/headingTruncationConventions.test.js');
     add('client/src/hooks/mountedRefConventions.test.js');
+    add('client/src/pollingConventions.test.js');
+    add('client/src/popoverClampConventions.test.js');
+    add('client/src/preWrapClasses.test.js');
     add('client/src/responsiveGridConventions.test.js');
+    add('client/src/storageConventions.test.js');
   }
 
   return selected;
@@ -295,12 +356,16 @@ const skippedRunner = () => ({ mode: 'skip', files: [], sources: [] });
 // contains no behavior; PR #5296 changed server/lib/index.js and consequently
 // selected 1,244 files / 27,491 tests. Behavioral source files in the same diff
 // still drive related-test selection normally.
-const isStructuralBarrel = (path) => [
+//
+// Also the set `.gitattributes` merges with `union` — scripts/catalog-merge-union.test.js
+// pins the two lists to each other.
+export const STRUCTURAL_BARRELS = [
   'server/lib/index.js',
   'client/src/lib/index.js',
   'client/src/hooks/index.js',
   'client/src/utils/index.js',
-].includes(path);
+];
+const isStructuralBarrel = (path) => STRUCTURAL_BARRELS.includes(path);
 
 /**
  * A route declaration is a safe, client-only subset of the App composition
@@ -350,6 +415,8 @@ export function buildCiTestPlan(changedFiles, {
   forceFull = false,
   forceFullReason = 'full CI requested',
   appRouteOnly = false,
+  // Changed python script → tracked test files naming it (see PYTHON_SCRIPT_RE).
+  pythonContractTests = {},
 } = {}) {
   const changed = uniqueSorted(changedFiles.filter(Boolean));
   const trackedSet = new Set(trackedFiles);
@@ -370,7 +437,7 @@ export function buildCiTestPlan(changedFiles, {
       windowsFiles: [],
       windowsSources: [],
     };
-    return { ...plan, suiteReasons: suiteReasonsFor(plan, { appRouteOnly }) };
+    return finishPlan(plan, { appRouteOnly });
   }
 
   const appCompositionChanged = changed.includes('client/src/App.jsx');
@@ -408,7 +475,7 @@ export function buildCiTestPlan(changedFiles, {
       windowsFiles: [],
       windowsSources: [],
     };
-    return { ...plan, suiteReasons: suiteReasonsFor(plan, { appRouteOnly }) };
+    return finishPlan(plan, { appRouteOnly });
   }
 
   const executable = relevant.filter(isExecutable);
@@ -438,13 +505,27 @@ export function buildCiTestPlan(changedFiles, {
     // the graph.
     return fullPlan(changed, `deleted executable source: ${deletedSources[0]}`, { appRouteOnly });
   }
-  const features = uniqueSorted(sourceFiles.map(featureDirectory).filter(Boolean));
-  const unscopedSources = sourceFiles.filter((path) => !featureDirectory(path));
+  // Python scripts never enter the import graph or a feature directory: their
+  // only selector is the per-script contract list, so they leave the JS-only
+  // scoping below.
+  const pythonSources = sourceFiles.filter(isPythonScript);
+  const jsSources = sourceFiles.filter((path) => !isPythonScript(path));
+  const features = uniqueSorted(jsSources.map(featureDirectory).filter(Boolean));
+  const unscopedSources = jsSources.filter((path) => !featureDirectory(path));
   const selectedTests = [
     ...directTests,
     ...structuralTestsFor(changed, trackedSet),
     ...alwaysRun,
   ];
+
+  for (const script of pythonSources) {
+    const pythonTests = (pythonContractTests[script] || [])
+      .filter((path) => trackedSet.has(path) && runnerForTest(path));
+    if (pythonTests.length === 0) {
+      return fullPlan(changed, `python script with no parsing contract: ${script}`, { appRouteOnly });
+    }
+    selectedTests.push(...pythonTests);
+  }
 
   for (const testFile of trackedFiles.filter(isTestFile)) {
     if (features.some((feature) => pathMatchesFeature(testFile, feature))) {
@@ -459,15 +540,15 @@ export function buildCiTestPlan(changedFiles, {
     return fullPlan(changed, 'targeted test set exceeded safety cap', { appRouteOnly });
   }
 
-  const hasServerSource = sourceFiles.some(isServerRunnerFile);
-  const hasClientSource = sourceFiles.some((path) => path.startsWith('client/'));
+  const hasServerSource = jsSources.some(isServerRunnerFile);
+  const hasClientSource = jsSources.some((path) => path.startsWith('client/'));
   const hasUnscopedServer = unscopedSources.some(isServerRunnerFile);
   const hasUnscopedClient = unscopedSources.some((path) => path.startsWith('client/'));
 
-  const serverSources = sourceFiles
+  const serverSources = jsSources
     .filter(isServerRunnerFile)
     .filter((path) => !isStructuralBarrel(path));
-  const clientSources = sourceFiles
+  const clientSources = jsSources
     .filter((path) => path.startsWith('client/'))
     .filter((path) => !isStructuralBarrel(path));
 
@@ -493,11 +574,13 @@ export function buildCiTestPlan(changedFiles, {
     ? (serverSources.length > 0 ? 'related' : 'files')
     : 'skip';
 
-  const plan = {
+  let reason = 'Vitest related-test fallback';
+  if (features.length) reason = `targeted features: ${features.join(', ')}`;
+  else if (jsSources.length === 0 && pythonSources.length > 0) reason = 'python script parsing contracts';
+
+  return finishPlan({
     full: false,
-    reason: features.length
-      ? `targeted features: ${features.join(', ')}`
-      : 'Vitest related-test fallback',
+    reason,
     changedFiles: changed,
     server,
     client,
@@ -514,12 +597,22 @@ export function buildCiTestPlan(changedFiles, {
     windowsMode,
     windowsFiles: windows ? windowsContractTests(trackedSet) : [],
     windowsSources: windowsMode === 'related' ? serverSources : [],
-  };
-  return { ...plan, suiteReasons: suiteReasonsFor(plan, { appRouteOnly }) };
+  }, { appRouteOnly });
 }
 
+/** The derived fields every plan carries: per-suite reasons and shard matrices. */
+const finishPlan = (plan, options) => ({
+  ...plan,
+  suiteReasons: suiteReasonsFor(plan, options),
+  shards: {
+    server: shardIndexes(plan.server.mode, FULL_SUITE_SHARDS.server),
+    client: shardIndexes(plan.client.mode, FULL_SUITE_SHARDS.client),
+    windows: shardIndexes(plan.windowsMode, FULL_SUITE_SHARDS.windows),
+  },
+});
+
 function fullPlan(changedFiles, reason, options) {
-  const plan = {
+  return finishPlan({
     full: true,
     reason,
     changedFiles,
@@ -533,14 +626,23 @@ function fullPlan(changedFiles, reason, options) {
     windowsMode: 'full',
     windowsFiles: [],
     windowsSources: [],
-  };
-  return { ...plan, suiteReasons: suiteReasonsFor(plan, options) };
+  }, options);
 }
 
 const gitLines = (args) => execFileSync('git', args, { encoding: 'utf8' })
   .split('\n')
   .map((line) => line.trim())
   .filter(Boolean);
+
+/** Tracked test files whose text matches `pattern`; `git grep` exit 1 is "none". */
+const gitGrepFiles = (pattern, pathspecs) => {
+  try {
+    return gitLines(['grep', '-l', '-E', pattern, '--', ...pathspecs]);
+  } catch (err) {
+    if (err.status === 1) return [];
+    throw err;
+  }
+};
 
 export function emitGitHubPlan(plan) {
   const outputs = {
@@ -561,6 +663,9 @@ export function emitGitHubPlan(plan) {
     windows_mode: plan.windowsMode,
     windows_files: JSON.stringify(plan.windowsFiles),
     windows_sources: JSON.stringify(plan.windowsSources),
+    server_shards: JSON.stringify(plan.shards.server),
+    client_shards: JSON.stringify(plan.shards.client),
+    windows_shards: JSON.stringify(plan.shards.windows),
     suite_reasons: JSON.stringify(plan.suiteReasons),
   };
 
@@ -602,11 +707,16 @@ function main() {
   const appDiff = forceFull || !changedFiles.includes('client/src/App.jsx')
     ? null
     : execFileSync('git', ['diff', '--unified=0', `${base}...HEAD`, '--', 'client/src/App.jsx'], { encoding: 'utf8' });
+  const pythonContractTests = Object.fromEntries(changedFiles.filter(isPythonScript).map((script) => [
+    script,
+    gitGrepFiles(pythonReferencePattern(script), ['*.test.js', '*.test.jsx']),
+  ]));
   emitGitHubPlan(buildCiTestPlan(changedFiles, {
     trackedFiles,
     forceFull,
     forceFullReason,
     appRouteOnly: isRouteOnlyAppDiff(appDiff),
+    pythonContractTests,
   }));
 }
 

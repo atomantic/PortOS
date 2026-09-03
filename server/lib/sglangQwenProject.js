@@ -24,13 +24,38 @@
  * cache" send the operator to different fixes. `null` is a real deployment
  * shape, not a bug: a cache kept in a docker named volume is invisible to a
  * PortOS running outside the container, and on Windows the project usually lives
- * inside a WSL2 distro. `SGLANG_QWEN_PROJECT_DIR` / `SGLANG_QWEN_WEIGHTS_DIR`
- * are the answers to those two cases respectively.
+ * inside a WSL2 distro. `SGLANG_QWEN_WEIGHTS_DIR` answers the first.
+ *
+ * **The operator no longer types the Windows UNC path themselves.** The second
+ * case used to be theirs to fix: the default `%USERPROFILE%\sglang-qwen38`
+ * resolves to a *Windows* home, the project is inside a WSL2 distro, and the
+ * refusal handed them a `\\wsl.localhost\<distro>\home\<user>\…` template with
+ * two values to look up. It bit every Windows operator, because SGLang ships no
+ * provisioner and preparing it by hand inside the distro is the only path. Now
+ * `services/sglangQwenManager.js` asks WSL for those two values (the shared
+ * `services/wslProjectPlacement.js` loop) and records the answer through
+ * `recordSglangProjectDir` below, so the readiness poll, the Start button and
+ * the next boot all resolve the directory that run found.
+ *
+ * SGLang gets detect + record only, never placement: there is no provisioner to
+ * clone into the directory, so a host WSL cannot answer for still gets a refusal
+ * pointing at `docs/features/sglang-qwen38.md`.
  */
 
 import { readdir, stat } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
+
+import {
+  projectDirIsSettled,
+  readRecordedProjectDir,
+  recordProjectDir,
+  resolveRecordedProjectDir,
+} from './recordedProjectDir.js';
+// PORTOS_ENV_PATH is declared by portosEnv.js; recordedProjectDir.js imports it
+// for its own defaults but does not re-export it — and it cannot, because both
+// modules are `export *`'d from lib/index.js and a re-export would collide there.
+import { PORTOS_ENV_PATH } from './portosEnv.js';
 
 /** Operator override for where the compose project was created. */
 export const SGLANG_PROJECT_DIR_ENV = 'SGLANG_QWEN_PROJECT_DIR';
@@ -46,8 +71,46 @@ export const SGLANG_WEIGHTS_DIR_ENV = 'SGLANG_QWEN_WEIGHTS_DIR';
 const resolveHome = (env) =>
   String(env?.HOME || env?.USERPROFILE || '').trim() || homedir();
 
+/** The directory name the feature doc uses, inside whichever home holds it. */
+export const SGLANG_PROJECT_LEAF = 'sglang-qwen38';
+
 /** Where `docs/features/sglang-qwen38.md` tells the operator to create it. */
-export const sglangDefaultProjectDir = (env = process.env) => join(resolveHome(env), 'sglang-qwen38');
+export const sglangDefaultProjectDir = (env = process.env) => join(resolveHome(env), SGLANG_PROJECT_LEAF);
+
+/**
+ * This stack's view of the shared `.env` record (`lib/recordedProjectDir.js`),
+ * keyed on `SGLANG_QWEN_PROJECT_DIR`.
+ *
+ * @param {string} [envPath]
+ * @returns {string}
+ */
+export function readRecordedSglangProjectDir(envPath = PORTOS_ENV_PATH) {
+  return readRecordedProjectDir(SGLANG_PROJECT_DIR_ENV, envPath);
+}
+
+/**
+ * Remember where this project was found, so nothing has to detect it twice.
+ *
+ * @param {string} dir
+ * @param {string} [envPath]
+ */
+export async function recordSglangProjectDir(dir, envPath = PORTOS_ENV_PATH) {
+  return recordProjectDir(SGLANG_PROJECT_DIR_ENV, dir, envPath);
+}
+
+/**
+ * Whether anything already answers "where does this project live", so the
+ * manager knows whether a WSL probe is still worth a subprocess. Exported so it
+ * asks THIS module rather than re-listing the precedence `resolveSglangProjectDir`
+ * already owns.
+ *
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {string} [envPath]
+ * @returns {boolean}
+ */
+export function sglangProjectDirIsSettled(env = process.env, envPath = PORTOS_ENV_PATH) {
+  return projectDirIsSettled(SGLANG_PROJECT_DIR_ENV, env, envPath);
+}
 
 /** Compose file names docker itself accepts, in its own precedence order. */
 const COMPOSE_FILENAMES = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'];
@@ -73,10 +136,22 @@ const LOCAL_WEIGHT_MARKERS = ['model.safetensors.index.json', 'model.safetensors
 const isDirectory = (path) => stat(path).then((s) => s.isDirectory(), () => false);
 const isFile = (path) => stat(path).then((s) => s.isFile(), () => false);
 
-/** The configured project directory, or the documented default. */
-export function resolveSglangProjectDir(env = process.env) {
-  const configured = String(env?.[SGLANG_PROJECT_DIR_ENV] || '').trim();
-  return configured || sglangDefaultProjectDir(env);
+/**
+ * The configured project directory, what PortOS recorded, or the documented
+ * default — in that order.
+ *
+ * The process environment outranks the recorded value deliberately: an operator
+ * who exports this variable (in their shell, or in `ecosystem.config.cjs`) is
+ * making a decision for this run, and a directory PortOS auto-detected on some
+ * earlier run must not quietly outlive it.
+ *
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {string} [envPath] - which `.env` holds the record; a parameter for the
+ *   same reason `resolveHome` reads the passed env — so a test's sandbox answers
+ *   instead of whatever the developer's own install happens to have recorded.
+ */
+export function resolveSglangProjectDir(env = process.env, envPath = PORTOS_ENV_PATH) {
+  return resolveRecordedProjectDir(SGLANG_PROJECT_DIR_ENV, () => sglangDefaultProjectDir(env), env, envPath);
 }
 
 /**
@@ -121,11 +196,12 @@ async function rootHoldsQwenWeights(root, entries) {
  * Inspect the operator's SGLang project without touching docker.
  *
  * @param {NodeJS.ProcessEnv} [env]
+ * @param {string} [envPath] - which `.env` holds the recorded directory
  * @returns {Promise<{dir:string, hasProject:boolean, composeFile:string|null,
  *   hasWeights:boolean|null, weightsRoot:string|null}>}
  */
-export async function inspectSglangQwenProject(env = process.env) {
-  const dir = resolveSglangProjectDir(env);
+export async function inspectSglangQwenProject(env = process.env, envPath = PORTOS_ENV_PATH) {
+  const dir = resolveSglangProjectDir(env, envPath);
   const hasProject = await isDirectory(dir);
 
   let composeFile = null;
@@ -176,7 +252,7 @@ export function sglangStartBlockedReason(project) {
     return 'the compose file is in place but no Qwen weights are cached yet. Download them in a terminal first — starting compose now would pull roughly 20 GB, which PortOS will not do for you.';
   }
   if (project.hasWeights === null) {
-    return `PortOS cannot read a HuggingFace cache for this project, so it cannot confirm the weights are already downloaded. Set ${SGLANG_WEIGHTS_DIR_ENV} to the directory holding them (a docker named volume is invisible from here), or start it yourself with \`docker compose up -d\` in ${project.dir}.`;
+    return `PortOS cannot read a HuggingFace cache for this project, so it cannot confirm the weights are already downloaded. On Windows it asks WSL where the project lives and records the UNC path for itself — if that record is stale, or the weights live somewhere else entirely (a docker named volume is invisible from here), set ${SGLANG_PROJECT_DIR_ENV} or ${SGLANG_WEIGHTS_DIR_ENV} to where they actually are. Failing that, start it yourself with \`docker compose up -d\` in ${project.dir}.`;
   }
   return null;
 }

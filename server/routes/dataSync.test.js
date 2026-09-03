@@ -11,11 +11,17 @@ vi.mock('../services/sharing/tombstoneGc.js', () => ({
   getSweepStatus: vi.fn(),
   TOMBSTONE_GRACE_MS: 24 * 60 * 60 * 1000,
 }));
-vi.mock('../services/dataSync.js', () => ({
+// The three I/O entry points are stubbed so the route test never touches real
+// stores — but `getSupportedCategories` delegates to the REAL export (#5705).
+// It is a pure `Object.keys(CATEGORIES)` with no I/O, and it is the source of
+// truth the route's hand-maintained `categoryParam` enum has to match; a stub
+// would make the parity tests below compare the route to a copy of itself.
+vi.mock('../services/dataSync.js', async () => ({
   getChecksum: vi.fn(),
   getSnapshot: vi.fn(),
+  getManifest: vi.fn(),
   applyRemote: vi.fn(),
-  getSupportedCategories: vi.fn(() => []),
+  getSupportedCategories: (await vi.importActual('../services/dataSync.js')).getSupportedCategories,
 }));
 
 // Stub only the two leaves the REAL peer-pull gate reads — the peer registry
@@ -31,14 +37,20 @@ vi.mock('../services/instances.js', async () => ({
   getPeers: async () => peers,
 }));
 let settings = {};
-vi.mock('../services/settings.js', () => ({
+// Spreads the real module rather than listing one export: pulling the real
+// `getSupportedCategories` above loads the whole dataSync graph, which reaches
+// modules importing other settings exports — a hand-listed stub would break
+// again the next time that graph grows an import.
+vi.mock('../services/settings.js', async () => ({
+  ...(await vi.importActual('../services/settings.js')),
   getSettings: async () => settings,
 }));
 
 import { sweepTombstones, getSweepStatus } from '../services/sharing/tombstoneGc.js';
-import { getChecksum, getSnapshot } from '../services/dataSync.js';
+import { getChecksum, getSnapshot, getManifest, applyRemote, getSupportedCategories } from '../services/dataSync.js';
 import { PEER_INSTANCE_ID_HEADER, __resetPullWarnThrottleForTests } from '../services/sharing/peerPullAuthorization.js';
-import dataSyncRoutes from './dataSync.js';
+import { MAX_MANIFEST_SLOTS } from '../lib/syncManifest.js';
+import dataSyncRoutes, { categoryParam } from './dataSync.js';
 
 const PEER_ID = 'peer-a-instance-id';
 // Obviously-fake peer record. `fullSync` stands in for "the user ticked every
@@ -153,22 +165,118 @@ describe('GET /api/sync/:category/checksum — forPeer scoping', () => {
     expect(res.status).toBe(200);
     expect(getChecksum).toHaveBeenCalledWith('universe', { forPeerId: undefined });
   });
+});
 
-  // The category enum is hand-maintained and MUST cover every category the
-  // service supports (a missing one 400s before the snapshot handler runs —
-  // the latent bug #730 hit for `storyBuilder`). Assert each known snapshot
-  // category is accepted (non-400) so a future addition that forgets the enum
-  // is caught here.
-  it.each([
-    'goals', 'character', 'digitalTwin', 'meatspace',
-    'universe', 'pipeline', 'mediaCollections', 'videoHistory', 'storyBuilder', 'usage',
-  ])('accepts the %s category (enum parity with getSupportedCategories)', async (category) => {
-    // Identified as a configured peer so the PII categories clear the pull gate
+// The route's `categoryParam` enum is hand-maintained and has to match
+// `dataSync.getSupportedCategories()` exactly. Drift in either direction is a
+// live bug: a service category missing from the enum 400s before its handler
+// can run (#730 hit that for `storyBuilder`), and an enum entry the service
+// retired lets a request through to a 404 at the service. Both directions are
+// asserted against the REAL export here — the earlier version of this suite
+// stubbed it and iterated a hardcoded copy of the enum, so it compared the
+// route to itself and could not catch either (#5705).
+describe('/api/sync/:category — enum parity with getSupportedCategories()', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    settings = {};
+    // A configured, fully-shared peer so the PII categories clear the pull gate
     // (#5663) and this stays a test of the ENUM, not of authorization.
+    setPeers(allowedPeer());
+    __resetPullWarnThrottleForTests();
+    getChecksum.mockResolvedValue({ checksum: 'abc' });
+  });
+
+  it('matches the service category list exactly', () => {
+    // Symmetric on purpose: a missing entry also trips the sweep below, but
+    // only this gives a stale entry (a category the service retired, which now
+    // reaches a 404 at the service) a failure at all — and it names the drift
+    // in the diff instead of as N route errors.
+    expect([...categoryParam.options].sort()).toEqual([...getSupportedCategories()].sort());
+  });
+
+  it.each(getSupportedCategories())('serves a checksum for the %s category', async (category) => {
     const res = await request(buildApp())
       .get(`/api/sync/${category}/checksum`)
       .set(PEER_INSTANCE_ID_HEADER, PEER_ID);
-    expect(res.status).not.toBe(400);
+    expect(res.status).toBe(200);
+    expect(getChecksum).toHaveBeenCalledWith(category, { forPeerId: undefined });
+  });
+});
+
+// #5759 — the manifest leg that lets a puller fetch only the per-instance slots
+// that moved, instead of the whole digest map every 60s cycle.
+describe('GET /api/sync/:category/manifest', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    settings = {};
+    setPeers(allowedPeer());
+    __resetPullWarnThrottleForTests();
+    getSnapshot.mockResolvedValue({ data: {}, checksum: 'abc' });
+    getManifest.mockResolvedValue({ data: { instances: { 'inst-a': '2026-09-01T10:00:00.000Z' }, tombstones: [] }, checksum: 'abc' });
+  });
+
+  it('serves the version map for a manifest category', async () => {
+    const res = await request(buildApp())
+      .get('/api/sync/usage/manifest')
+      .set(PEER_INSTANCE_ID_HEADER, PEER_ID);
+    expect(res.status).toBe(200);
+    expect(res.body.data.instances).toEqual({ 'inst-a': '2026-09-01T10:00:00.000Z' });
+  });
+
+  // The puller reads a 404 as "no manifest here" and falls back to the whole
+  // snapshot — the same signal a pre-manifest peer gives by not having the route.
+  it('404s a category that serves no manifest', async () => {
+    getManifest.mockResolvedValue(null);
+    const res = await request(buildApp())
+      .get('/api/sync/goals/manifest')
+      .set(PEER_INSTANCE_ID_HEADER, PEER_ID);
+    expect(res.status).toBe(404);
+  });
+
+  it('runs the same peer-pull gate as the other two reads', async () => {
+    // A manifest is a fingerprint of the same payload, so it must not become
+    // the weaker door (#5663).
+    const res = await request(buildApp()).get('/api/sync/digitalTwin/manifest');
+    expect(res.status).toBe(403);
+    expect(getManifest).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/sync/:category/snapshot — slots scoping', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    settings = {};
+    setPeers(allowedPeer());
+    __resetPullWarnThrottleForTests();
+    getSnapshot.mockResolvedValue({ data: {}, checksum: 'abc' });
+  });
+
+  const getSlots = async (qs) => {
+    const res = await request(buildApp())
+      .get(`/api/sync/usage/snapshot${qs}`)
+      .set(PEER_INSTANCE_ID_HEADER, PEER_ID);
+    expect(res.status).toBe(200);
+    return getSnapshot.mock.calls.at(-1)[1].slots;
+  };
+
+  it('threads trimmed, comma-separated slot ids through to the service', async () => {
+    expect(await getSlots('?slots=inst-a%2C%20inst-b')).toEqual(['inst-a', 'inst-b']);
+  });
+
+  it('serves the whole payload when slots is absent, blank, or repeated', async () => {
+    expect(await getSlots('')).toBeUndefined();
+    expect(await getSlots('?slots=%20%2C%20')).toBeUndefined();
+    expect(await getSlots('?slots=a&slots=b')).toBeUndefined();
+  });
+
+  it('caps the slot count so a hostile query string cannot become an unbounded set', async () => {
+    const many = Array.from({ length: MAX_MANIFEST_SLOTS * 2 }, (_, i) => `inst-${i}`).join(',');
+    expect(await getSlots(`?slots=${many}`)).toHaveLength(MAX_MANIFEST_SLOTS);
+  });
+
+  it('caps each id length', async () => {
+    const slots = await getSlots(`?slots=${'x'.repeat(500)}`);
+    expect(slots[0]).toHaveLength(128);
   });
 });
 
@@ -260,7 +368,7 @@ describe('GET /api/sync/:category — peer-pull authorization', () => {
       .get('/api/sync/digitalTwin/snapshot')
       .set(PEER_INSTANCE_ID_HEADER, PEER_ID);
     expect(res.status).toBe(200);
-    expect(getSnapshot).toHaveBeenCalledWith('digitalTwin', { forPeerId: undefined });
+    expect(getSnapshot).toHaveBeenCalledWith('digitalTwin', { forPeerId: undefined, slots: undefined });
   });
 
   it('still serves a non-PII snapshot to an unidentified caller, warning once', async () => {
@@ -278,10 +386,9 @@ describe('GET /api/sync/:category — peer-pull authorization', () => {
   });
 
   it('leaves the write direction alone — apply is gated by its schema-version check, not this', async () => {
-    const { applyRemote } = await import('../services/dataSync.js');
     applyRemote.mockResolvedValue({ applied: true, count: 1 });
     const res = await request(buildApp()).post('/api/sync/digitalTwin/apply').send({ data: { a: 1 } });
     expect(res.status).toBe(200);
-    expect(applyRemote).toHaveBeenCalled();
+    expect(applyRemote).toHaveBeenCalledWith('digitalTwin', { a: 1 }, { portosMeta: undefined });
   });
 });

@@ -14,6 +14,7 @@ import { recordManualLayoutPick } from '../utils/timeWindow.js';
 import { RECENT_KEY, RECENT_CAP, resolveRecentNavEntries } from '../utils/navWorkingSet.js';
 import { filterNavByFeatures } from '../lib/navFeatures.js';
 import { safeReadJsonStorage } from '../lib/safeStorage.js';
+import { escapeRegExp } from '../lib/textUtils.js';
 
 const ICON_MAP = { Brain, Cpu, Package, History, HeartPulse };
 
@@ -46,7 +47,7 @@ const precompute = (cmd) => ({
 
 function Highlight({ text, query }) {
   if (!query || !text) return <span>{text}</span>;
-  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escaped = escapeRegExp(query);
   const parts = text.split(new RegExp(`(${escaped})`, 'gi'));
   return (
     <span>

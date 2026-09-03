@@ -3,6 +3,9 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import scheduleRoutes from './cosScheduleRoutes.js';
 
+const recordUserAction = vi.hoisted(() => vi.fn(async () => ({ id: 'evt' })));
+vi.mock('../services/userActions.js', () => ({ recordUserAction }));
+
 vi.mock('../services/taskSchedule.js', () => ({
   getScheduleStatus: vi.fn(),
   getUpcomingTasks: vi.fn(),
@@ -17,7 +20,7 @@ vi.mock('../services/taskSchedule.js', () => ({
   getTemplateTasks: vi.fn(),
   addTemplateTask: vi.fn(),
   deleteTemplateTask: vi.fn(),
-  INTERVAL_TYPES: ['rotation', 'daily', 'weekly', 'once', 'on-demand', 'custom', 'cron']
+  INTERVAL_TYPES: { ON_DEMAND: 'on-demand', CRON: 'cron' }
 }));
 
 vi.mock('../lib/validation.js', () => ({
@@ -91,7 +94,7 @@ describe('CoS Schedule Routes', () => {
 
   describe('GET /api/cos/schedule/task/:taskType', () => {
     it('should return interval and shouldRun for task type', async () => {
-      taskSchedule.getTaskInterval.mockResolvedValue({ type: 'daily', intervalMs: 86400000 });
+      taskSchedule.getTaskInterval.mockResolvedValue({ type: 'cron', cronExpression: '0 7 * * *' });
       taskSchedule.shouldRunTask.mockResolvedValue(true);
 
       const response = await request(app).get('/api/cos/schedule/task/review');
@@ -141,6 +144,31 @@ describe('CoS Schedule Routes', () => {
       expect(taskSchedule.updateTaskInterval).toHaveBeenCalledWith('review', expect.objectContaining({
         runAfter: ['deploy']
       }));
+      expect(recordUserAction).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'cos.schedule.update',
+        target: 'review',
+        payload: expect.objectContaining({
+          keysChanged: ['runAfter'],
+          changes: { runAfter: { changed: true } },
+        }),
+      }));
+    });
+
+    it('records a long prompt as { changed: true }, never the body', async () => {
+      taskSchedule.updateTaskInterval.mockResolvedValue({ type: 'daily' });
+      const prompt = 'x'.repeat(200);
+      const response = await request(app)
+        .put('/api/cos/schedule/task/review')
+        .send({ prompt });
+      expect(response.status).toBe(200);
+      expect(recordUserAction).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'cos.schedule.update',
+        payload: expect.objectContaining({
+          keysChanged: ['prompt'],
+          changes: { prompt: { changed: true } },
+        }),
+      }));
+      expect(JSON.stringify(recordUserAction.mock.calls.at(-1)[0])).not.toContain(prompt);
     });
 
     it('should set runAfter to null when only self-reference remains', async () => {
@@ -392,12 +420,57 @@ describe('CoS Schedule Routes', () => {
   });
 
   describe('GET /api/cos/schedule/interval-types', () => {
-    it('should return available interval types', async () => {
+    it('returns exactly the two cadence variants, with perpetual described apart', async () => {
       const response = await request(app).get('/api/cos/schedule/interval-types');
 
       expect(response.status).toBe(200);
-      expect(response.body.types).toContain('daily');
-      expect(response.body.descriptions).toHaveProperty('daily');
+      expect(response.body.types).toEqual({ ON_DEMAND: 'on-demand', CRON: 'cron' });
+      expect(Object.keys(response.body.descriptions).sort()).toEqual(['cron', 'on-demand']);
+      // `perpetual` is an orthogonal flag, so it must NOT appear as a type.
+      expect(typeof response.body.perpetual).toBe('string');
+    });
+  });
+
+  describe('PUT /api/cos/schedule/task/:taskType — cadence validation', () => {
+    it('accepts the perpetual flag on either cadence and rejects a non-boolean', async () => {
+      const ok = await request(app)
+        .put('/api/cos/schedule/task/security')
+        .send({ type: 'cron', cronExpression: '0 9 * * *', perpetual: true });
+      expect(ok.status).toBe(200);
+      expect(taskSchedule.updateTaskInterval).toHaveBeenCalledWith('security', expect.objectContaining({
+        type: 'cron', cronExpression: '0 9 * * *', perpetual: true
+      }));
+
+      const bad = await request(app).put('/api/cos/schedule/task/security').send({ perpetual: 'yes' });
+      expect(bad.status).toBe(400);
+    });
+
+    it('rewrites a legacy cadence name from an older client instead of rejecting it', async () => {
+      taskSchedule.updateTaskInterval.mockClear();
+      const weekly = await request(app).put('/api/cos/schedule/task/security').send({ type: 'weekly' });
+      expect(weekly.status).toBe(200);
+      expect(taskSchedule.updateTaskInterval).toHaveBeenCalledWith('security', expect.objectContaining({
+        type: 'cron', cronExpression: '0 7 * * 1'
+      }));
+
+      taskSchedule.updateTaskInterval.mockClear();
+      const perpetual = await request(app).put('/api/cos/schedule/task/security').send({ type: 'perpetual' });
+      expect(perpetual.status).toBe(200);
+      expect(taskSchedule.updateTaskInterval).toHaveBeenCalledWith('security', expect.objectContaining({
+        type: 'on-demand', perpetual: true
+      }));
+    });
+
+    it('rejects an unrecognized cadence name rather than silently making it manual-only', async () => {
+      const response = await request(app).put('/api/cos/schedule/task/security').send({ type: 'hourly-ish' });
+      expect(response.status).toBe(400);
+    });
+
+    it('rejects a cronExpression that is not 5 fields', async () => {
+      const response = await request(app)
+        .put('/api/cos/schedule/task/security')
+        .send({ type: 'cron', cronExpression: '0 9 * *' });
+      expect(response.status).toBe(400);
     });
   });
 

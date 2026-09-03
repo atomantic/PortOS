@@ -51,6 +51,13 @@ jobs:
       windows_mode: ${{ steps.plan.outputs.windows_mode }}
       windows_files: ${{ steps.plan.outputs.windows_files }}
       windows_sources: ${{ steps.plan.outputs.windows_sources }}
+      # JSON arrays of shard indexes — `[1]` for a scoped plan, `[1..n]` for a
+      # full one. Each leaf job builds its matrix from these, because a
+      # job-level `if` cannot read `matrix` and so cannot skip extra shards on
+      # its own. See FULL_SUITE_SHARDS in scripts/ci-test-plan.js.
+      server_shards: ${{ steps.plan.outputs.server_shards }}
+      client_shards: ${{ steps.plan.outputs.client_shards }}
+      windows_shards: ${{ steps.plan.outputs.windows_shards }}
       suite_reasons: ${{ steps.plan.outputs.suite_reasons }}
     steps:
       - uses: actions/checkout@v7
@@ -91,27 +98,36 @@ jobs:
           SMOKE_MODE: ${{ steps.plan.outputs.smoke }}
           WINDOWS_MODE: ${{ steps.plan.outputs.windows }}
           WINDOWS_TEST_MODE: ${{ steps.plan.outputs.windows_mode }}
+          SERVER_SHARDS: ${{ steps.plan.outputs.server_shards }}
+          CLIENT_SHARDS: ${{ steps.plan.outputs.client_shards }}
+          WINDOWS_SHARDS: ${{ steps.plan.outputs.windows_shards }}
           SUITE_REASONS: ${{ steps.plan.outputs.suite_reasons }}
         run: |
           {
             echo "### CI impact plan"
             echo
             echo "- Reason: \`${PLAN_REASON}\`"
-            echo "- Server tests: \`${SERVER_MODE}\`"
-            echo "- Client tests: \`${CLIENT_MODE}\`"
+            echo "- Server tests: \`${SERVER_MODE}\` (shards \`${SERVER_SHARDS}\`)"
+            echo "- Client tests: \`${CLIENT_MODE}\` (shards \`${CLIENT_SHARDS}\`)"
             echo "- DB tests: \`${DB_MODE}\`"
             echo "- Client lint: \`${LINT_MODE}\`"
             echo "- Client build: \`${BUILD_MODE}\`"
             echo "- Server smoke: \`${SMOKE_MODE}\`"
-            echo "- Windows server tests: \`${WINDOWS_MODE}\` (\`${WINDOWS_TEST_MODE}\`)"
+            echo "- Windows server tests: \`${WINDOWS_MODE}\` (\`${WINDOWS_TEST_MODE}\`, shards \`${WINDOWS_SHARDS}\`)"
             echo "- Suite selection reasons: \`${SUITE_REASONS}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   server:
-    name: Server tests
+    # Sharded on a full plan — see docs/GITHUB_ACTIONS.md "Full-suite sharding".
+    # The matrix comes from the planner; once-only steps pin to shard 1, and the
+    # transform-artifact cache key carries the shard so parallel saves don't race.
+    name: Server tests (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: impact
     if: needs.impact.outputs.server_mode != 'skip'
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        shard: ${{ fromJSON(needs.impact.outputs.server_shards) }}
     permissions:
       contents: read
       actions: write
@@ -226,10 +242,34 @@ jobs:
           path: |
             server/node_modules/.vite
             server/node_modules/.vitest
-          key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'scripts/vitestCiPool.js') }}
+          key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'scripts/vitestCiPool.js') }}-${{ matrix.shard }}of${{ strategy.job-total }}
           restore-keys: |
             vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
             vitest-server-${{ runner.os }}-
+
+      # `autofixer/` is a real install target — its own package.json, its own
+      # tracked lockfile, its own .npmrc — installed by `npm run setup` and by
+      # scripts/ensure-deps.js on every `npm start`. Nothing else in CI resolves
+      # it, so a lockfile that no longer installs (a yanked version, a corrupted
+      # integrity hash, a manifest/lockfile mismatch) would ship green and only
+      # break on a user's machine at setup time. The parity assertions in
+      # server/dependency-overrides.test.js are static — they parse the JSON;
+      # only `npm ci` proves the tree still resolves.
+      #
+      # Deliberately uncached and deliberately ungated within the job: a cache
+      # hit that skipped the install would skip the very check this step exists
+      # for, and the job as a whole already gates on the planner's server_mode
+      # (autofixer/ is one of the server runner's roots in ci-test-plan.js, so a
+      # change here selects this job). Unlike the once-only steps that pin to
+      # shard 1, it runs on every shard: autofixer/*.test.js is globbed by the
+      # server runner, and which shard picks up a file that imports `express` is
+      # not knowable from here. 67 packages, well under a second.
+      #
+      # No rebuild step follows. autofixer/.npmrc pins ignore-scripts=true and
+      # scripts/trusted-rebuilds.js deliberately lists no rebuilds for this
+      # workspace, because nothing it depends on ships a native addon.
+      - name: Install autofixer dependencies
+        run: npm ci --prefix autofixer
 
       - name: Check server entry-point syntax
         run: node --check server/index.js
@@ -240,6 +280,7 @@ jobs:
           CI_TEST_MODE: ${{ needs.impact.outputs.server_mode }}
           CI_TEST_FILES: ${{ needs.impact.outputs.server_files }}
           CI_TEST_SOURCES: ${{ needs.impact.outputs.server_sources }}
+          CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
           # Keep successful-test output signal-dense. Developers can reproduce
           # locally without this flag when assertion context needs app logs.
           PORTOS_TEST_QUIET: 1
@@ -252,7 +293,7 @@ jobs:
       # backend. It does need the native rebuild (server boot loads node-pty),
       # which is why it lives on this job rather than a third installer.
       - name: Smoke-boot server
-        if: needs.impact.outputs.smoke == 'true'
+        if: needs.impact.outputs.smoke == 'true' && matrix.shard == 1
         run: npm run smoke
 
       - name: Cancel sibling CI jobs after failure
@@ -262,10 +303,14 @@ jobs:
         run: node scripts/cancel-current-ci-run.js
 
   client:
-    name: Client tests and build
+    # Sharded like the server job; lint, build, and the bundle budget run on shard 1.
+    name: Client tests and build (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: impact
     if: needs.impact.outputs.client_mode != 'skip' || needs.impact.outputs.build == 'true' || needs.impact.outputs.lint_mode != 'skip'
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        shard: ${{ fromJSON(needs.impact.outputs.client_shards) }}
     permissions:
       contents: read
       actions: write
@@ -296,13 +341,13 @@ jobs:
           path: |
             client/node_modules/.vite
             client/node_modules/.vitest
-          key: vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json', 'client/vitest.config.js', 'scripts/vitestCiPool.js') }}
+          key: vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json', 'client/vitest.config.js', 'scripts/vitestCiPool.js') }}-${{ matrix.shard }}of${{ strategy.job-total }}
           restore-keys: |
             vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json') }}-
             vitest-client-${{ runner.os }}-
 
       - name: Lint client
-        if: needs.impact.outputs.lint_mode != 'skip'
+        if: needs.impact.outputs.lint_mode != 'skip' && matrix.shard == 1
         env:
           CI_LINT_MODE: ${{ needs.impact.outputs.lint_mode }}
           CI_LINT_FILES: ${{ needs.impact.outputs.lint_files }}
@@ -314,17 +359,18 @@ jobs:
           CI_TEST_MODE: ${{ needs.impact.outputs.client_mode }}
           CI_TEST_FILES: ${{ needs.impact.outputs.client_files }}
           CI_TEST_SOURCES: ${{ needs.impact.outputs.client_sources }}
+          CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
         run: node scripts/run-ci-tests.js client
 
       - name: Build client
-        if: needs.impact.outputs.build == 'true'
+        if: needs.impact.outputs.build == 'true' && matrix.shard == 1
         run: npm run build --prefix client
 
       # The Scalar bundle budget can only be measured against a real build, and it
       # skips itself when client/dist is absent — so it runs here, not in the unit
       # test job. See client/src/pages/ApiExplorer.bundle.test.js.
       - name: Check API Explorer bundle budget
-        if: needs.impact.outputs.build == 'true'
+        if: needs.impact.outputs.build == 'true' && matrix.shard == 1
         run: npm run test --prefix client -- ApiExplorer.bundle
 
       - name: Cancel sibling CI jobs after failure
@@ -478,10 +524,14 @@ jobs:
         run: node scripts/cancel-current-ci-run.js
 
   windows-server:
-    name: Windows server unit tests
+    # Sharded like the server job.
+    name: Windows server unit tests (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: impact
     if: needs.impact.outputs.windows == 'true'
     runs-on: windows-latest
+    strategy:
+      matrix:
+        shard: ${{ fromJSON(needs.impact.outputs.windows_shards) }}
     permissions:
       contents: read
       actions: write
@@ -581,7 +631,7 @@ jobs:
           path: |
             server/node_modules/.vite
             server/node_modules/.vitest
-          key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'scripts/vitestCiPool.js') }}
+          key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'scripts/vitestCiPool.js') }}-${{ matrix.shard }}of${{ strategy.job-total }}
           restore-keys: |
             vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
             vitest-server-${{ runner.os }}-
@@ -594,6 +644,7 @@ jobs:
           CI_TEST_MODE: ${{ needs.impact.outputs.windows_mode }}
           CI_TEST_FILES: ${{ needs.impact.outputs.windows_files }}
           CI_TEST_SOURCES: ${{ needs.impact.outputs.windows_sources }}
+          CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
           PORTOS_TEST_QUIET: 1
           PGPASSWORD: portos
         run: node scripts/run-ci-tests.js server

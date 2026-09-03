@@ -186,12 +186,6 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
   // Chunks 1+ take the resolved continuity path instead.
   const firstMode = rest.mode || (currentSource ? 'image' : 'text');
 
-  // The geometry the chunks actually render at, learned from the first chunk's
-  // own `started` (see onChunkStarted below). `null` until then — an explicit
-  // "not reported yet", so the outer progress frames omit the keys entirely
-  // rather than carrying a placeholder.
-  let chainGeometry = null;
-
   const runChunk = (i) => new Promise((resolve, reject) => {
     const innerJobId = randomUUID();
     chunkIds.push(innerJobId);
@@ -208,10 +202,10 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
         // Chain-level estimate, NOT the inner chunk's — the outer id's
         // consumers are watching the whole chain's clock.
         ...chainEtaField,
-        // Resolved geometry (#4588), recorded from the chunk's own `started`.
-        // Additive + presence-guarded, like `etaMs` above: absent until a chunk
-        // has reported it, never a zero the UI would size a stage by.
-        ...(chainGeometry || {}),
+        // The chunk's own render phase, so a chained render names its step the
+        // same way a single-shot one does instead of falling back to the
+        // page's load/render heuristic for the whole chain (#5872).
+        phase: typeof e.phase === 'string' && e.phase ? e.phase : undefined,
       });
       broadcastSse(outerJob, {
         type: 'progress',
@@ -219,21 +213,7 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
         message: `Chunk ${i + 1}/${totalChunks}`,
       });
     };
-    // A chained render never announces its own geometry: `started` is emitted
-    // per CHUNK, under an inner id nothing outside this function knows, and the
-    // outer id never gets a `started` at all. Record the chunk's RESOLVED edges
-    // here and let the outer `progress` frames carry them, so a chunked render
-    // sizes its preview stage the same way a single-shot one does (#4588). The
-    // chunk's other `started` fields are deliberately NOT forwarded — its
-    // `totalSteps` is not the chain's — and no synthetic outer `started` is
-    // emitted, because consumers read that event as "the run begins".
-    const onChunkStarted = (e) => {
-      if (e.generationId !== innerJobId) return;
-      if (!Number.isFinite(e.width) || !Number.isFinite(e.height)) return;
-      chainGeometry = { width: e.width, height: e.height };
-    };
     const detach = () => {
-      videoGenEvents.off('started', onChunkStarted);
       videoGenEvents.off('progress', onProgress);
       videoGenEvents.off('completed', onCompleted);
       videoGenEvents.off('failed', onFailed);
@@ -248,7 +228,6 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
       detach();
       reject(new Error(e.error || 'chunk failed'));
     };
-    videoGenEvents.on('started', onChunkStarted);
     videoGenEvents.on('progress', onProgress);
     videoGenEvents.on('completed', onCompleted);
     videoGenEvents.on('failed', onFailed);

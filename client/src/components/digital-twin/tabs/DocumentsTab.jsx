@@ -294,7 +294,7 @@ export default function DocumentsTab({ onRefresh }) {
                   placeholder="Write your soul document here..."
                 />
               ) : (
-                <pre className="p-4 text-sm text-gray-300 whitespace-pre-wrap font-mono">
+                <pre className="p-4 text-sm text-gray-300 whitespace-pre-wrap break-words font-mono">
                   {selectedDoc.content}
                 </pre>
               )}

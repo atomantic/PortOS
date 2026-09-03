@@ -161,7 +161,7 @@ export function isFileTracker(tracker) {
 // replace chain expands — every caller MUST substitute {trackerInstructions}
 // FIRST so these inner placeholders are filled too (see
 // referenceRepos.js#triggerReferenceAnalysis and
-// cosTaskGenerator.js#buildImprovementTaskDescription).
+// cosTaskPreStepBlocks.js#buildImprovementTaskDescription).
 
 /**
  * Per-task-type wording for `formatTrackerInstructions`. Keyed by CoS task type;

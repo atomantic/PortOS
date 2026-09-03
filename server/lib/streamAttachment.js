@@ -20,7 +20,7 @@ function teardown(stream) {
  * after the readiness check) get the JSON error envelope; mid-stream failures
  * tear the socket down, since sendErrorResponse no-ops once headers are sent.
  *
- * Call sites: routes/imageTo3d.js (GLB + full-mesh), routes/backup.js
+ * Call sites: routes/imageTo3d.js (GLB + full-mesh + USDZ), routes/backup.js
  * (snapshot tarball).
  *
  * @param {import('express').Response} res
@@ -32,8 +32,14 @@ function teardown(stream) {
  * @param {import('./errorHandler.js').ServerError} opts.failure - the error
  *   returned when the stream fails before any bytes are written.
  * @param {string} opts.label - short subject for the warning log.
+ * @param {'attachment'|'inline'} [opts.disposition] - defaults to `attachment`.
+ *   Pass `inline` for a format whose whole point is that the OS handler opens it
+ *   in place rather than landing in Downloads (USDZ / AR Quick Look): Safari will
+ *   not engage Quick Look on an `attachment` response.
  */
-export function streamAttachment(res, stream, { filename, contentType, failure, label }) {
+export function streamAttachment(res, stream, {
+  filename, contentType, failure, label, disposition = 'attachment',
+}) {
   // The route awaited settings/stat before getting here, so the client may have
   // already gone — in which case res's 'close' fired before the listener below
   // was installed and nothing would ever tear the stream down.
@@ -47,7 +53,7 @@ export function streamAttachment(res, stream, { filename, contentType, failure, 
   // slugged it: a quote or newline in a record-derived name would otherwise
   // break out of the header value.
   const safeName = String(filename).replace(/[^\w.\-]+/g, '_') || 'download';
-  res.set('Content-Disposition', `attachment; filename="${safeName}"`);
+  res.set('Content-Disposition', `${disposition}; filename="${safeName}"`);
   // Attachments are never meant to be sniffed into an executable type.
   res.set('X-Content-Type-Options', 'nosniff');
 

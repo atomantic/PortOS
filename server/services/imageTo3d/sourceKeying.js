@@ -16,9 +16,17 @@
  * false and this module runs only when a run asks for it.
  *
  * The pixel work is pure (raw RGBA buffers in/out) so it's unit-testable on tiny
- * synthetic images; `prepareSourceImage` is the one sharp/file boundary. The keyed
+ * synthetic images; `prepareSourceImage` is the one sharp/file boundary. The prepared
  * copy is written into the RECORD's render directory — the shared gallery file is
  * never mutated (other features reference it).
+ *
+ * The same boundary also owns the OTHER opt-in source preprocessing step, subject
+ * framing (`subjectScale`): centring the subject on a square canvas at a fraction of
+ * its size, so a full-body pose with outstretched limbs reaches the decoder with
+ * empty margin beyond its extremities instead of running to the edge of the frame.
+ * Extremities with no margin are what come back clipped or fused. It shares this
+ * function because it shares the decode, the record-local output file, and the cache
+ * — and because it must run AFTER keying, never before (see `prepareSourceImage`).
  *
  * A deliberately simpler edge model than the sprites lane's chroma unmix
  * (`services/sprites/chromaKey.js`): that lane reverses source-over compositing
@@ -48,9 +56,11 @@ import sharp from 'sharp';
 import {
   hasMeaningfulAlpha as hasMeaningfulAlphaShared,
 } from '../../lib/borderKey.js';
+import { DEFAULT_SUBJECT_SCALE, isValidSubjectScale } from './renderOptions.js';
 import { atomicWrite, readJSONFile, sha256File } from '../../lib/fileUtils.js';
 import { decodeRgbaFrame, encodePng } from '../../lib/imageRgba.js';
 import {
+  detectSolidBorderColor,
   KEY_TOLERANCE,
   KEY_TIGHT_TOLERANCE,
   KEY_MIN_BORDER_COVERAGE,
@@ -80,8 +90,16 @@ export const KEY_MAX_PIXELS = 16_000_000;
 // Bump the leading version when the kernel changes. The numeric inputs are
 // included so changing a tolerance invalidates fresh keyed output without
 // relying on a developer to remember a second, separate cache edit.
+//
+// v2: the prepared source is now key-then-frame rather than key-only, and the
+// decode honours EXIF orientation — both change the bytes for the same input, so
+// every v1 artifact has to be recomputed. The framing SCALE is per-run rather
+// than a module constant, so it cannot ride in this string; it is written into
+// the cache metadata beside the version and compared there (see
+// `freshPreparedSource`), which is what stops a re-render at a new scale from
+// silently reusing the previously prepared image.
 export const KEYING_CACHE_VERSION = [
-  'source-keying-v1',
+  'source-keying-v2',
   KEY_TOLERANCE,
   KEY_TIGHT_TOLERANCE,
   KEY_MIN_BORDER_COVERAGE,
@@ -130,56 +148,176 @@ const runKeySolidBackground = (frame) => {
   });
 };
 
-const keyedCacheMetadataPath = (targetPath) => `${targetPath}.meta.json`;
+const preparedCacheMetadataPath = (targetPath) => `${targetPath}.meta.json`;
 
-const hasFreshKeyedSource = async (sourcePath, targetPath) => {
+/** The neutral pad colour for an opaque source whose own border isn't solid. */
+const FRAME_FALLBACK_BACKGROUND = [255, 255, 255];
+
+const padColor = ([r, g, b]) => ({ r, g, b, alpha: 1 });
+
+/**
+ * Where a source lands on the square subject-framing canvas.
+ *
+ * The canvas is the source's LONGEST side, so framing never upsamples: the
+ * subject is scaled down to `subjectScale` of that and centred, and the margin is
+ * the remainder. A landscape and a portrait source of the same longest side
+ * therefore produce the same canvas and the same margin beyond the subject's
+ * extremities, which is the whole point — the decoder wants context past the
+ * fingertips, not a particular output resolution.
+ *
+ * Pure (numbers in, numbers out) so the arithmetic is unit-testable without sharp.
+ * Both dimensions floor at 1px: a scale small enough to round a thin source's short
+ * side to zero would otherwise hand sharp an invalid resize.
+ *
+ * @param {{width: number, height: number, subjectScale: number}} opts
+ * @returns {{canvasSize: number, innerWidth: number, innerHeight: number, left: number, top: number}}
+ */
+export function subjectFrameLayout({ width, height, subjectScale }) {
+  const canvasSize = Math.max(width, height);
+  const innerWidth = Math.max(1, Math.round(width * subjectScale));
+  const innerHeight = Math.max(1, Math.round(height * subjectScale));
+  return {
+    canvasSize,
+    innerWidth,
+    innerHeight,
+    left: Math.round((canvasSize - innerWidth) / 2),
+    top: Math.round((canvasSize - innerHeight) / 2),
+  };
+}
+
+/**
+ * Composite an RGBA frame centred on the square framing canvas and return PNG bytes.
+ *
+ * The canvas background is the one detail that cannot be got wrong: a KEYED or
+ * already-transparent source must not gain an opaque backdrop (that would undo the
+ * matte the pipeline is about to consume), and an ordinary photo must not gain a
+ * transparent one (TRELLIS.2 reads any non-opaque alpha as "already matted" and
+ * skips RMBG-2.0, so a transparent pad would silently disable its own background
+ * removal — exactly the trap `keyBackground` documents). For the opaque case the
+ * pad takes the source's own measured border colour when it has one, so the added
+ * margin is indistinguishable from the background already there.
+ */
+async function frameSubject(frame, { subjectScale, transparent }) {
+  const layout = subjectFrameLayout({ width: frame.width, height: frame.height, subjectScale });
+  const resized = await sharp(frame.data, {
+    raw: { width: frame.width, height: frame.height, channels: 4 },
+  })
+    // Explicit target dimensions, already aspect-derived above — `fill` just honors
+    // them rather than re-deriving a fit, so the layout math has a single owner.
+    .resize(layout.innerWidth, layout.innerHeight, { fit: 'fill' })
+    .raw()
+    .toBuffer();
+  const background = transparent
+    ? { r: 0, g: 0, b: 0, alpha: 0 }
+    : padColor(detectSolidBorderColor(frame) ?? FRAME_FALLBACK_BACKGROUND);
+  return sharp({
+    create: {
+      width: layout.canvasSize, height: layout.canvasSize, channels: 4, background,
+    },
+  })
+    .composite([{
+      input: resized,
+      raw: { width: layout.innerWidth, height: layout.innerHeight, channels: 4 },
+      left: layout.left,
+      top: layout.top,
+    }])
+    .png()
+    .toBuffer();
+}
+
+const freshPreparedSource = async (sourcePath, targetPath, request) => {
   const sourceStats = await stat(sourcePath);
   const targetStats = await stat(targetPath).catch(() => null);
-  if (!targetStats?.isFile() || targetStats.mtimeMs <= sourceStats.mtimeMs) return false;
+  if (!targetStats?.isFile() || targetStats.mtimeMs <= sourceStats.mtimeMs) return null;
 
-  const metadata = await readJSONFile(keyedCacheMetadataPath(targetPath), null, { logError: false });
-  if (metadata?.version !== KEYING_CACHE_VERSION || !metadata.sourceSha256) return false;
-  return metadata.sourceSha256 === await sha256File(sourcePath);
+  const metadata = await readJSONFile(preparedCacheMetadataPath(targetPath), null, { logError: false });
+  if (metadata?.version !== KEYING_CACHE_VERSION || !metadata.sourceSha256) return null;
+  // The per-run framing/keying request is part of the cache identity: the same
+  // source at a different subjectScale is a DIFFERENT prepared image.
+  if (metadata.keyBackground !== request.keyBackground) return null;
+  if (metadata.subjectScale !== request.subjectScale) return null;
+  if (metadata.sourceSha256 !== await sha256File(sourcePath)) return null;
+  return { path: targetPath, keyed: metadata.keyed === true, framed: metadata.framed === true };
 };
 
 /**
- * Resolve whether a render should consume a keyed copy of its source. Reads
- * `sourcePath`; when it has no meaningful alpha and sits on a solid background,
- * writes a keyed PNG to `targetPath` and returns that path. Returns null in
- * every non-keyable case (real alpha already present — the pipeline uses it
- * directly — or no solid background, or the sanity gates tripped): the caller
- * renders the original.
+ * Resolve whether a render should consume a PREPARED copy of its source, and
+ * write one when it should.
  *
- * I/O failures (unreadable file) reject; the caller treats keying as
- * best-effort (a keying failure must never fail a render the model could still
+ * Two independent, independently-opt-in steps, in this order:
+ *  1. `keyBackground` — flood-fill a solid backdrop to transparency (see the
+ *     module header for why that is opt-in and usually a downgrade).
+ *  2. `subjectScale < 1` — centre the result on a square canvas at that fraction
+ *     so extremities gain margin (see `frameSubject`).
+ *
+ * ORDER MATTERS and is not interchangeable: reframing first would move the border
+ * pixels the flood fill samples, so the keyer's own "is this background solid"
+ * gate would be measuring the pad colour instead of the image's.
+ *
+ * Returns null in every case where the render should consume the ORIGINAL: neither
+ * step was requested, the source is too large to process affordably, or keying was
+ * asked for and declined (real alpha already present — the pipeline uses it
+ * directly — or no solid background, or the sanity gates tripped) with no framing
+ * to do either.
+ *
+ * I/O failures (unreadable file) reject; the caller treats preparation as
+ * best-effort (a failure here must never fail a render the model could still
  * attempt on the raw image).
  *
- * @param {{sourcePath: string, targetPath: string}} opts
- * @returns {Promise<string|null>} the keyed image path, or null to use the original
+ * @param {{sourcePath: string, targetPath: string, keyBackground?: boolean,
+ *          subjectScale?: number}} opts
+ * @returns {Promise<{path: string, keyed: boolean, framed: boolean}|null>}
  */
-export async function prepareSourceImage({ sourcePath, targetPath }) {
-  if (await hasFreshKeyedSource(sourcePath, targetPath)) return targetPath;
+export async function prepareSourceImage({
+  sourcePath,
+  targetPath,
+  keyBackground = true,
+  subjectScale = DEFAULT_SUBJECT_SCALE,
+}) {
+  const scale = isValidSubjectScale(subjectScale) ? subjectScale : DEFAULT_SUBJECT_SCALE;
+  const wantsFraming = scale < DEFAULT_SUBJECT_SCALE;
+  const wantsKeying = keyBackground === true;
+  if (!wantsKeying && !wantsFraming) return null;
+
+  const request = { keyBackground: wantsKeying, subjectScale: scale };
+  const cached = await freshPreparedSource(sourcePath, targetPath, request);
+  if (cached) return cached;
 
   // Header-only probe: bail before the full decode when the source is too
-  // large to key affordably (KEY_MAX_PIXELS), and when it has no alpha channel
+  // large to process affordably (KEY_MAX_PIXELS), and when it has no alpha channel
   // at all, skip the full-buffer meaningful-alpha scan below (ensureAlpha
   // fabricates the channel).
   const { hasAlpha, width, height } = await sharp(sourcePath).metadata();
   if (!width || !height || width * height > KEY_MAX_PIXELS) return null;
-  const frame = await decodeRgbaFrame(sourcePath);
-  if (hasAlpha && hasMeaningfulAlpha(frame.data)) return null;
-  const result = await runKeySolidBackground(frame);
-  if (!result) return null;
-  await atomicWrite(targetPath, await encodePng({
-    data: result.data,
-    width: frame.width,
-    height: frame.height,
-  }));
-  await atomicWrite(keyedCacheMetadataPath(targetPath), {
+  // Measure AFTER EXIF transposition: raw pixels carry no orientation tag and the
+  // PNG written below records none, so a rotated source framed on its stored
+  // dimensions would be both mis-measured and handed to the decoder sideways.
+  const frame = await decodeRgbaFrame(sourcePath, { autoOrient: true });
+  const sourceHasAlpha = hasAlpha === true && hasMeaningfulAlpha(frame.data);
+
+  const keyed = wantsKeying && !sourceHasAlpha ? await runKeySolidBackground(frame) : null;
+  const current = keyed
+    ? { data: keyed.data, width: frame.width, height: frame.height }
+    : frame;
+  const framed = wantsFraming
+    ? await frameSubject(current, {
+      subjectScale: scale,
+      // A keyed or natively-transparent subject pads transparent; anything else
+      // pads opaque, so the pipeline's own matting still runs.
+      transparent: Boolean(keyed) || sourceHasAlpha,
+    })
+    : null;
+  if (!keyed && !framed) return null;
+
+  await atomicWrite(targetPath, framed ?? await encodePng(current));
+  await atomicWrite(preparedCacheMetadataPath(targetPath), {
     version: KEYING_CACHE_VERSION,
     sourceSha256: await sha256File(sourcePath),
+    ...request,
+    keyed: Boolean(keyed),
+    framed: Boolean(framed),
   }).catch((error) => {
-    console.error(`❌ Image-to-3D keying cache metadata failed for ${targetPath}: ${error.message}`);
+    console.error(`❌ Image-to-3D source cache metadata failed for ${targetPath}: ${error.message}`);
   });
-  return targetPath;
+  return { path: targetPath, keyed: Boolean(keyed), framed: Boolean(framed) };
 }

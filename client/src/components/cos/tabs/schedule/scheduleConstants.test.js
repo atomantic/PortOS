@@ -138,16 +138,17 @@ describe('getTaskStatusGroup', () => {
     expect(getTaskStatusGroup({ enabled: true, type: 'daily' })).toBe('active');
   });
 
-  it('classifies a completed one-shot task as completed, not active', () => {
-    expect(getTaskStatusGroup({ enabled: true, type: 'once', status: { reason: 'once-completed' } })).toBe('completed');
+  it('keeps a scheduled task active', () => {
+    expect(getTaskStatusGroup({ enabled: true, type: 'cron', status: { nextRunAt: '2999-01-01T00:00:00Z' } })).toBe('active');
   });
 
-  it('keeps a not-yet-run one-shot task active', () => {
-    expect(getTaskStatusGroup({ enabled: true, type: 'once', status: { nextRunAt: '2999-01-01T00:00:00Z' } })).toBe('active');
+  it('classifies a perpetual on-demand task as active — its drain runs unattended', () => {
+    expect(getTaskStatusGroup({ enabled: true, type: 'on-demand', perpetual: true })).toBe('active');
+    expect(getTaskStatusGroup({ enabled: true, type: 'on-demand' })).toBe('on-demand');
   });
 
-  it('disabled wins over a completed one-shot', () => {
-    expect(getTaskStatusGroup({ enabled: false, type: 'once', status: { reason: 'once-completed' } })).toBe('disabled');
+  it('disabled wins over a perpetual drain', () => {
+    expect(getTaskStatusGroup({ enabled: false, type: 'on-demand', perpetual: true })).toBe('disabled');
   });
 
   it('disabled wins over waiting', () => {
@@ -157,9 +158,9 @@ describe('getTaskStatusGroup', () => {
 
 describe('taskSortKey', () => {
   it('orders active before on-demand before waiting before disabled', () => {
-    const active = taskSortKey('a', { enabled: true, type: 'daily' });
+    const active = taskSortKey('a', { enabled: true, type: 'cron' });
     const onDemand = taskSortKey('b', { enabled: true, type: 'on-demand' });
-    const waiting = taskSortKey('c', { enabled: true, type: 'daily', status: { reason: 'waiting-on-dependencies' } });
+    const waiting = taskSortKey('c', { enabled: true, type: 'cron', status: { reason: 'waiting-on-dependencies' } });
     const disabled = taskSortKey('d', { enabled: false });
     expect(active.order).toBeLessThan(onDemand.order);
     expect(onDemand.order).toBeLessThan(waiting.order);
@@ -167,8 +168,8 @@ describe('taskSortKey', () => {
   });
 
   it('sorts active tasks by soonest next run, missing runs last', () => {
-    const soon = taskSortKey('a', { enabled: true, type: 'daily', status: { nextRunAt: '2999-01-01T00:00:00Z' } });
-    const later = taskSortKey('b', { enabled: true, type: 'daily', status: { nextRunAt: '2999-06-01T00:00:00Z' } });
+    const soon = taskSortKey('a', { enabled: true, type: 'cron', status: { nextRunAt: '2999-01-01T00:00:00Z' } });
+    const later = taskSortKey('b', { enabled: true, type: 'cron', status: { nextRunAt: '2999-06-01T00:00:00Z' } });
     const none = taskSortKey('c', { enabled: true, type: 'daily' });
     expect(soon.next).toBeLessThan(later.next);
     expect(later.next).toBeLessThan(none.next);
@@ -199,11 +200,6 @@ describe('describeNextRun', () => {
     expect(describeNextRun({ enabled: true, type: 'on-demand' }).text).toBe('Manual trigger only');
   });
 
-  it('reports a completed one-shot as completed with a reset hint', () => {
-    const out = describeNextRun({ enabled: true, type: 'once', status: { reason: 'once-completed' } });
-    expect(out.text).toMatch(/completed/i);
-  });
-
   it('reports the dependency list with a warn flag when waiting', () => {
     const out = describeNextRun({ enabled: true, status: { reason: 'waiting-on-dependencies', pendingDeps: ['build', 'lint'] } });
     expect(out.text).toBe('waiting on build, lint');
@@ -212,7 +208,7 @@ describe('describeNextRun', () => {
   });
 
   it('reports a relative countdown for a scheduled task with a next run', () => {
-    expect(describeNextRun({ enabled: true, type: 'daily', status: { nextRunAt: '2999-01-01T00:00:00Z' } }).text).toMatch(/^in /);
+    expect(describeNextRun({ enabled: true, type: 'cron', status: { nextRunAt: '2999-01-01T00:00:00Z' } }).text).toMatch(/^in /);
   });
 
   it('reports a relative countdown with cron description for a scheduled cron task with next run', () => {
@@ -222,12 +218,12 @@ describe('describeNextRun', () => {
   });
 
   it('falls back to an interval-label pending string when no next run is known', () => {
-    expect(describeNextRun({ enabled: true, type: 'daily' }).text).toBe('Daily — pending');
+    expect(describeNextRun({ enabled: true, type: 'cron' }).text).toBe('Scheduled — pending');
     expect(describeNextRun({ enabled: true, type: 'cron', cronExpression: '0 6 * * 1-5' }).text).toBe('Weekdays at 06:00 — pending');
   });
 
   it('reports a draining perpetual task', () => {
-    const out = describeNextRun({ enabled: true, type: 'perpetual', status: { reason: 'perpetual-drain' } });
+    const out = describeNextRun({ enabled: true, type: 'on-demand', perpetual: true, status: { reason: 'perpetual-drain' } });
     expect(out.text).toMatch(/draining/i);
     expect(out.tone).toBe('text-port-success');
   });
@@ -235,7 +231,9 @@ describe('describeNextRun', () => {
   it('reports a parked perpetual task with its recheck countdown and reason', () => {
     const out = describeNextRun({
       enabled: true,
-      type: 'perpetual',
+      type: 'cron',
+      perpetual: true,
+      cronExpression: '0 3 * * *',
       status: { reason: 'perpetual-parked', nextRunAt: '2999-01-01T00:00:00Z', parkReason: 'no-actionable-issues' }
     });
     expect(out.text).toMatch(/parked · rechecks/);
@@ -246,9 +244,10 @@ describe('describeNextRun', () => {
     // Global status reads drain, but all tracked apps are parked — aggregate wins.
     const out = describeNextRun({
       enabled: true,
-      type: 'perpetual',
+      type: 'on-demand',
+      perpetual: true,
       status: { reason: 'perpetual-drain' },
-      perpetual: { parkedAppCount: 2, trackedAppCount: 2, globalParked: false, nextRecheckAt: '2999-01-01T00:00:00Z', parkReason: 'no-actionable-issues' }
+      perpetualStatus: { parkedAppCount: 2, trackedAppCount: 2, globalParked: false, nextRecheckAt: '2999-01-01T00:00:00Z', parkReason: 'no-actionable-issues' }
     });
     expect(out.text).toMatch(/2 app\(s\) parked · rechecks/);
     expect(out.title).toContain('no-actionable-issues');
@@ -257,9 +256,10 @@ describe('describeNextRun', () => {
   it('shows draining when some apps still have work in the aggregate', () => {
     const out = describeNextRun({
       enabled: true,
-      type: 'perpetual',
+      type: 'on-demand',
+      perpetual: true,
       status: { reason: 'perpetual-drain' },
-      perpetual: { parkedAppCount: 1, trackedAppCount: 3, globalParked: false, nextRecheckAt: null, parkReason: null }
+      perpetualStatus: { parkedAppCount: 1, trackedAppCount: 3, globalParked: false, nextRecheckAt: null, parkReason: null }
     });
     expect(out.text).toMatch(/draining/);
   });

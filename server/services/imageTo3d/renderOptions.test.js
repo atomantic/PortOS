@@ -14,21 +14,24 @@ import {
   DEFAULT_DETAIL_TIER,
   DETAIL_TIERS,
   RENDER_OPTION_KEYS,
+  DEFAULT_SUBJECT_SCALE,
+  SUBJECT_SCALE_MAX,
+  isValidSubjectScale,
 } from './renderOptions.js';
 
 describe('normalizeRenderOptions', () => {
   it('defaults to unset steps/seed with keying disabled', () => {
-    expect(normalizeRenderOptions()).toEqual({ steps: null, seed: null, keyBackground: false, detail: 'auto', alphaMode: null, normalMap: false });
-    expect(normalizeRenderOptions({})).toEqual({ steps: null, seed: null, keyBackground: false, detail: 'auto', alphaMode: null, normalMap: false });
+    expect(normalizeRenderOptions()).toEqual({ steps: null, seed: null, keyBackground: false, detail: 'auto', alphaMode: null, normalMap: false, subjectScale: 1 });
+    expect(normalizeRenderOptions({})).toEqual({ steps: null, seed: null, keyBackground: false, detail: 'auto', alphaMode: null, normalMap: false, subjectScale: 1 });
   });
 
   it('keeps valid values and collapses invalid ones to the unset sentinel', () => {
     expect(normalizeRenderOptions({ steps: 24, seed: 0, keyBackground: false }))
-      .toEqual({ steps: 24, seed: 0, keyBackground: false, detail: 'auto', alphaMode: null, normalMap: false });
+      .toEqual({ steps: 24, seed: 0, keyBackground: false, detail: 'auto', alphaMode: null, normalMap: false, subjectScale: 1 });
     expect(normalizeRenderOptions({ steps: RENDER_STEPS_MAX + 1, seed: RENDER_SEED_MAX + 1 }))
-      .toEqual({ steps: null, seed: null, keyBackground: false, detail: 'auto', alphaMode: null, normalMap: false });
+      .toEqual({ steps: null, seed: null, keyBackground: false, detail: 'auto', alphaMode: null, normalMap: false, subjectScale: 1 });
     expect(normalizeRenderOptions({ steps: 12.5, seed: '42' }))
-      .toEqual({ steps: null, seed: null, keyBackground: false, detail: 'auto', alphaMode: null, normalMap: false });
+      .toEqual({ steps: null, seed: null, keyBackground: false, detail: 'auto', alphaMode: null, normalMap: false, subjectScale: 1 });
   });
 
   // Pinned on its own, not just as a field of a shape assertion, so flipping the
@@ -156,6 +159,36 @@ describe('normalMap', () => {
     for (const bad of [undefined, null, 'true', 1, {}]) {
       expect(normalizeRenderOptions({ normalMap: bad }).normalMap).toBe(false);
     }
+  });
+});
+
+describe('subjectScale', () => {
+  it('defaults to the identity, so no existing render is reframed', () => {
+    // The whole opt-in premise: reframing resamples the source, which costs detail.
+    // A run that never asked for it must reach the decoder untouched.
+    expect(normalizeRenderOptions().subjectScale).toBe(DEFAULT_SUBJECT_SCALE);
+    expect(DEFAULT_SUBJECT_SCALE).toBe(SUBJECT_SCALE_MAX);
+  });
+
+  it.each([0.35, 0.5, 0.65, 0.999, 1])('keeps the in-range value %s', (value) => {
+    expect(normalizeRenderOptions({ subjectScale: value }).subjectScale).toBe(value);
+  });
+
+  it.each([0, -0.5, 1.0001, 2, NaN, Infinity, '0.65', null, {}])(
+    'collapses the out-of-range value %s to the identity',
+    (bad) => {
+      // Open at zero (0 scales the subject out of existence) and closed at one
+      // (above 1 CROPS, which is the failure this knob exists to avoid).
+      expect(normalizeRenderOptions({ subjectScale: bad }).subjectScale)
+        .toBe(DEFAULT_SUBJECT_SCALE);
+    },
+  );
+
+  it('validates the boundary itself', () => {
+    expect(isValidSubjectScale(0)).toBe(false);
+    expect(isValidSubjectScale(Number.MIN_VALUE)).toBe(true);
+    expect(isValidSubjectScale(1)).toBe(true);
+    expect(isValidSubjectScale(1.000001)).toBe(false);
   });
 });
 

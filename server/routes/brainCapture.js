@@ -6,6 +6,7 @@
 
 import { Router } from 'express';
 import * as brainService from '../services/brain.js';
+import { recordUserAction } from '../services/userActions.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import {
@@ -28,6 +29,24 @@ router.post('/capture', asyncHandler(async (req, res) => {
   const captureOptions = { creative, repoIntake };
   if (note !== undefined) captureOptions.note = note;
   const result = await brainService.captureThought(text, providerOverride, modelOverride, captureOptions);
+  const inboxId = result?.inboxLog?.id;
+  if (inboxId) {
+    try {
+      const happenedAt = new Date().toISOString();
+      await recordUserAction({
+        type: 'brain.capture',
+        actor: 'user',
+        target: inboxId,
+        summary: 'captured thought',
+        payload: { id: inboxId },
+        source: { route: `${req.baseUrl}${req.route?.path ?? ''}`, method: req.method },
+        happenedAt,
+        dedupeKey: `brain.capture:${inboxId}`,
+      });
+    } catch (error) {
+      console.error(`❌ Failed to record brain.capture: ${error.message}`);
+    }
+  }
   res.json(result);
 }));
 

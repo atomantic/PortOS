@@ -138,8 +138,11 @@ describe('buildCliChildEnv — public-review profile', () => {
       HOME: '/home/example',
       LC_ALL: 'C',
       ANTHROPIC_BASE_URL: 'http://127.0.0.1:11434',
+      // The wrapper's placeholder token authenticates only to the loopback
+      // runtime; `--bare` disables the keychain, so without it the CLI exits
+      // "Not logged in" (the live Stage 2 failure on the Ollama wrapper).
+      ANTHROPIC_AUTH_TOKEN: 'local-only',
     });
-    expect(env).not.toHaveProperty('ANTHROPIC_AUTH_TOKEN');
     expect(env).not.toHaveProperty('GH_TOKEN');
     expect(env).not.toHaveProperty('GITHUB_TOKEN');
     expect(env).not.toHaveProperty('AWS_SECRET_ACCESS_KEY');
@@ -166,12 +169,28 @@ describe('buildCliChildEnv — public-review profile', () => {
     });
 
     expect(env.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:11434');
-    expect(env).not.toHaveProperty('ANTHROPIC_AUTH_TOKEN');
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe('local-only');
     expect(env.PWD).toBe('/tmp/public-review');
     expect(env).not.toHaveProperty('GH_TOKEN');
     expect(env).not.toHaveProperty('AWS_PROFILE');
     expect(env).not.toHaveProperty('OPENAI_API_KEY');
     expect(env).not.toHaveProperty('CLAUDECODE');
+  });
+});
+
+describe('buildCliChildEnv — public-review profile, cloud endpoint', () => {
+  it('strips the Anthropic credential when the base URL is not loopback', () => {
+    const env = buildPublicReviewCliEnv({
+      PATH: '/usr/bin',
+      ANTHROPIC_BASE_URL: 'https://api.example.com',
+      ANTHROPIC_AUTH_TOKEN: 'cloud-secret',
+      ANTHROPIC_API_KEY: 'cloud-key',
+    });
+    expect(env.ANTHROPIC_BASE_URL).toBe('https://api.example.com');
+    expect(env).not.toHaveProperty('ANTHROPIC_AUTH_TOKEN');
+    expect(env).not.toHaveProperty('ANTHROPIC_API_KEY');
+    // No base URL at all means the cloud default — the credential stays out.
+    expect(buildPublicReviewCliEnv({ ANTHROPIC_API_KEY: 'cloud-key' })).not.toHaveProperty('ANTHROPIC_API_KEY');
   });
 });
 
@@ -212,6 +231,17 @@ describe('buildCliChildEnv — public-review-actions profile', () => {
     expect(env).not.toHaveProperty('ANTHROPIC_AUTH_TOKEN');
     expect(env).not.toHaveProperty('AWS_PROFILE');
     expect(env).not.toHaveProperty('PRIVATE_APP_SETTING');
+  });
+
+  it('keeps the local Claude wrapper endpoint and its placeholder token', () => {
+    const env = buildCliChildEnv({
+      baseEnv: { PATH: '/usr/bin', GH_TOKEN: 'forge-secret' },
+      provider: { envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434', ANTHROPIC_AUTH_TOKEN: 'ollama', ANTHROPIC_SMALL_FAST_MODEL: 'small:7b' } },
+      cwd: '/tmp/public-review-actions',
+      safetyProfile: PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
+    });
+    expect(env).toMatchObject({ ANTHROPIC_BASE_URL: 'http://localhost:11434', ANTHROPIC_AUTH_TOKEN: 'ollama', ANTHROPIC_SMALL_FAST_MODEL: 'small:7b' });
+    expect(env).not.toHaveProperty('GH_TOKEN');
   });
 });
 

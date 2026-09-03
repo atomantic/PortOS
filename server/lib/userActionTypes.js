@@ -26,7 +26,7 @@
  */
 export const USER_ACTION_ACTORS = Object.freeze(['user', 'mind', 'schedule', 'system']);
 
-/** Phase-1 operator actions (issue #5594). */
+/** Phase-1 operator actions (issue #5594) plus phase-3 growth (#5596). */
 export const USER_ACTION_TYPES = Object.freeze([
   'cos.task.create',
   'cos.task.update',
@@ -35,7 +35,12 @@ export const USER_ACTION_TYPES = Object.freeze([
   'cos.task.spawn',
   'cos.agent.feedback',
   'cos.schedule.trigger',
+  'cos.schedule.update',
   'settings.update',
+  'instance-feature.toggle',
+  'media.image.enqueue',
+  'media.video.enqueue',
+  'brain.capture',
 ]);
 
 const TYPES = new Set(USER_ACTION_TYPES);

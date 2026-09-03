@@ -1,3 +1,5 @@
+import { formatHourOfDay } from '../../../utils/formatters';
+
 export default function HourlyActivityWidget({ dashboardState }) {
   const hourlyActivity = dashboardState.usage?.hourlyActivity;
   if (!hourlyActivity) return null;
@@ -8,12 +10,6 @@ export default function HourlyActivityWidget({ dashboardState }) {
     .map((val, idx) => ({ hour: idx, count: val }))
     .filter((h) => h.count === peakValue && h.count > 0);
   const totalSessions = hourlyActivity.reduce((sum, val) => sum + val, 0);
-
-  const formatHour = (hour) => {
-    if (hour === 0) return '12a';
-    if (hour === 12) return '12p';
-    return hour < 12 ? `${hour}a` : `${hour - 12}p`;
-  };
 
   const getIntensityClass = (count) => {
     if (count === 0) return 'bg-port-border/30';
@@ -27,8 +23,8 @@ export default function HourlyActivityWidget({ dashboardState }) {
   const peakDescription = peakHours.length === 0 || peakValue === 0
     ? null
     : peakHours.length === 1
-      ? `Peak: ${formatHour(peakHours[0].hour)} (${peakValue} sessions)`
-      : `Peak hours: ${peakHours.slice(0, 3).map((h) => formatHour(h.hour)).join(', ')} (${peakValue} sessions each)`;
+      ? `Peak: ${formatHourOfDay(peakHours[0].hour, { style: 'tiny' })} (${peakValue} sessions)`
+      : `Peak hours: ${peakHours.slice(0, 3).map((h) => formatHourOfDay(h.hour, { style: 'tiny' })).join(', ')} (${peakValue} sessions each)`;
 
   if (totalSessions === 0) return null;
 
@@ -50,8 +46,8 @@ export default function HourlyActivityWidget({ dashboardState }) {
           <div
             key={hour}
             className={`aspect-square rounded-xs ${getIntensityClass(count)} transition-colors cursor-default min-w-[20px] min-h-[20px]`}
-            title={`${formatHour(hour)}: ${count} session${count !== 1 ? 's' : ''}`}
-            aria-label={`${formatHour(hour)}: ${count} sessions`}
+            title={`${formatHourOfDay(hour, { style: 'tiny' })}: ${count} session${count !== 1 ? 's' : ''}`}
+            aria-label={`${formatHourOfDay(hour, { style: 'tiny' })}: ${count} sessions`}
           />
         ))}
       </div>
@@ -59,8 +55,8 @@ export default function HourlyActivityWidget({ dashboardState }) {
       <div className="mt-2 grid grid-cols-6 sm:grid-cols-12 gap-1.5 sm:gap-1 text-xs text-gray-500">
         {hourlyActivity.map((_, hour) => (
           <div key={hour} className="text-center">
-            <span className="hidden sm:inline">{hour % 3 === 0 ? formatHour(hour) : ''}</span>
-            <span className="sm:hidden">{hour % 4 === 0 ? formatHour(hour) : ''}</span>
+            <span className="hidden sm:inline">{hour % 3 === 0 ? formatHourOfDay(hour, { style: 'tiny' }) : ''}</span>
+            <span className="sm:hidden">{hour % 4 === 0 ? formatHourOfDay(hour, { style: 'tiny' }) : ''}</span>
           </div>
         ))}
       </div>

@@ -72,24 +72,6 @@ describe('sanitizeJob', () => {
     });
   });
 
-  it('projects the resolved render geometry on the envelope, distinct from the requested params', () => {
-    // #4588: `params.width/height` is what was ASKED for; `render` is what the
-    // gen module resolved to after snapping to the model grid. A preview stage
-    // has to size itself by the latter.
-    const sanitized = sanitizeJob({
-      id: 'video-job',
-      kind: 'video',
-      status: 'running',
-      render: { width: 704, height: 480 },
-      params: { width: 720, height: 484 },
-    });
-    expect(sanitized.render).toEqual({ width: 704, height: 480 });
-    expect(sanitized.params).toEqual({ width: 720, height: 484 });
-  });
-
-  it('leaves render absent — not zeroed — when the run never reported a geometry', () => {
-    expect(sanitizeJob({ id: 'j', kind: 'video', status: 'queued' }).render).toBeUndefined();
-  });
   it('exposes instrumental mode without leaking authored Music Studio text', () => {
     const job = sanitizeJob({
       id: 'job-1',

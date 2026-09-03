@@ -16,16 +16,18 @@ const TRACK_COLORS = {
 };
 
 function trackPalette(node) {
-  if (node.schedule?.type === 'perpetual') return TRACK_COLORS.perpetual;
+  if (node.schedule?.perpetual) return TRACK_COLORS.perpetual;
   if (node.schedule?.cronSchedule || node.schedule?.cronExpression) return TRACK_COLORS.cron;
   return TRACK_COLORS[node.kind] || TRACK_COLORS.task;
 }
 
 function describeSchedule(node) {
   const schedule = node.schedule || {};
-  if (schedule.type === 'perpetual') {
-    const reset = schedule.recheckCron ? describeCron(schedule.recheckCron) : 'daily reset';
-    return `perpetual · ${reset}`;
+  // A perpetual task's cadence line names its recheck: a scheduled one rechecks
+  // on its own cron expression, an on-demand one on `recheckCron`.
+  if (schedule.perpetual) {
+    const recheck = schedule.cronExpression || schedule.recheckCron;
+    return `perpetual · ${recheck ? describeCron(recheck) || recheck : 'daily reset'}`;
   }
   if (schedule.cronSchedule) return describeRecurrence(schedule.cronSchedule);
   if (schedule.cronExpression) return describeCron(schedule.cronExpression) || schedule.cronExpression;

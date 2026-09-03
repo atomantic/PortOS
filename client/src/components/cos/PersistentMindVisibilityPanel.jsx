@@ -27,7 +27,7 @@ const REPAIR_ACTIONS = Object.freeze({
   engines: { label: 'Open app settings', href: (appId) => `/apps/${encodeURIComponent(appId)}/overview?edit=1&appTab=general` },
   submodules: { label: 'Manage submodules', href: (appId) => `/apps/${encodeURIComponent(appId)}/submodules` },
   forge: { label: 'Open app Git settings', href: (appId) => `/apps/${encodeURIComponent(appId)}/git` },
-  reviewers: { label: 'Manage reviewers', href: () => '/settings/code-reviewers' },
+  reviewers: { label: 'Manage reviewers', href: () => '/models/code-reviewers' },
   preflight: { label: 'Open app settings', href: (appId) => `/apps/${encodeURIComponent(appId)}/overview?edit=1&appTab=general` },
 });
 

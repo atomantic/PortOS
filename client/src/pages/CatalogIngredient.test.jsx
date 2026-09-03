@@ -129,6 +129,18 @@ beforeEach(() => {
 });
 
 describe('CatalogIngredient — character sheet', () => {
+  // The h1 is the ONLY place the ingredient's name appears on this route, and
+  // clipped text is neither selectable nor expandable — the tooltip is the sole
+  // access path to the rest of a long name on a phone (#5694).
+  it('exposes the full record name through the heading title attribute', async () => {
+    const longName = 'Augusta Ada King, Countess of Lovelace, Analytical Engine Programmer and Mathematician';
+    getCatalogIngredientDetails.mockImplementation(async () => detailsOf({ ...CHAR_FIXTURE, name: longName }));
+    renderPage();
+
+    const heading = await screen.findByRole('heading', { name: longName });
+    expect(heading.getAttribute('title')).toBe(longName);
+  });
+
   it('requires confirmation before detaching media', async () => {
     detachCatalogIngredientMedia.mockResolvedValue({});
     getCatalogIngredientDetails.mockImplementation(async () => ({

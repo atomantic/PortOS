@@ -222,6 +222,34 @@ export function formatClockTime(date, { timeZone, seconds = true, hour12 } = {})
   }, '');
 }
 
+const HOUR_MERIDIEM = {
+  long: [' AM', ' PM'],
+  compact: ['AM', 'PM'],
+  tiny: ['a', 'p'],
+  lower: ['am', 'pm'],
+};
+
+/**
+ * Format a bare hour-of-day number (0-23) as a 12-hour clock label.
+ * The canonical home for what five components each hand-rolled, which is why
+ * the same 3pm used to render as "3 PM", "3PM", "3p" and "3pm" on four screens.
+ * One helper with a `style` option rather than four helpers: every caller wants
+ * the same noon/midnight arithmetic and differs only in separator and case.
+ * @param {number|string|null} hour - Hour of day, 0-23 (numeric strings accepted)
+ * @param {object} [options]
+ * @param {'long'|'compact'|'tiny'|'lower'} [options.style='long'] - `3 PM` / `3PM` / `3p` / `3pm`
+ * @param {string} [options.fallback='—'] - Rendered for missing/non-numeric input
+ * @returns {string} Formatted hour, or the fallback
+ */
+export function formatHourOfDay(hour, { style = 'long', fallback = '—' } = {}) {
+  if (hour === null || hour === undefined || hour === '') return fallback;
+  const h = Number(hour);
+  if (!Number.isFinite(h)) return fallback;
+  const [am, pm] = HOUR_MERIDIEM[style] || HOUR_MERIDIEM.long;
+  const hr = h % 12 === 0 ? 12 : h % 12;
+  return `${hr}${h < 12 ? am : pm}`;
+}
+
 /**
  * Format a duration in milliseconds as a human-readable string
  * @param {number} ms - Duration in milliseconds

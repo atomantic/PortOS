@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { retypeSettled } from '../../test/settledInput';
 
@@ -395,6 +395,39 @@ describe('MediaJobsQueue — training rows', () => {
 
     await waitFor(() => expect(screen.getByText(/"a castle"/)).toBeInTheDocument());
     expect(listLoraTrainingCheckpoints).not.toHaveBeenCalled();
+  });
+});
+
+// #5697 — the checkpoint poll used to be a raw `useEffect` + `setInterval`, so
+// a live training run kept re-listing checkpoints every 5s from a background
+// tab. This is the gated (`enabled`) half of the migration; MemoryManagement
+// covers the unconditional half.
+describe('MediaJobsQueue — hidden-tab polling (#5697)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('pauses the checkpoint poll while the tab is hidden and re-fires on return', async () => {
+    listMediaJobs.mockResolvedValue([trainingJob]);
+    listLoraTrainingCheckpoints.mockResolvedValue({ checkpoints: [] });
+
+    render(<MediaJobsQueue kind="training" />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(1);
+    const jobListCalls = listMediaJobs.mock.calls.length;
+
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(1);
+    // The queue's own job poll is paused by the same hook.
+    expect(listMediaJobs.mock.calls.length).toBe(jobListCalls);
+
+    visibility.mockReturnValue('visible');
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(2);
+    visibility.mockRestore();
   });
 });
 

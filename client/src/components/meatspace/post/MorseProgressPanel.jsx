@@ -174,7 +174,7 @@ export default function MorseProgressPanel({ refreshKey = 0 }) {
           ))}
           <button
             onClick={() => load(days)}
-            className="p-1 text-gray-500 hover:text-port-accent transition-colors"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-accent transition-colors"
             aria-label="Refresh progress"
           >
             <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />

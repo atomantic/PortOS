@@ -28,6 +28,7 @@ vi.mock('./usage.js', async () => {
 const { buildUsageDigest, getUsage } = await import('./usage.js');
 const {
   getUsageSnapshot,
+  getUsageManifest,
   applyUsageRemote,
   getFleetUsage,
   forgetInstanceUsage,
@@ -192,6 +193,98 @@ describe('usage sync category', () => {
     await applyUsageRemote({ instances: { 'inst-peer': peerEntry() } });
     const { data } = await getUsageSnapshot();
     expect(Object.keys(data.instances).sort()).toEqual(['inst-peer', 'inst-self']);
+  });
+});
+
+describe('usage sync manifest (#5759)', () => {
+  const otherEntry = (overrides = {}) => peerEntry({
+    instanceId: 'inst-other',
+    name: 'Render Box',
+    capturedAt: '2026-08-30T08:00:00.000Z',
+    ...overrides,
+  });
+
+  it('publishes one capturedAt per instance instead of the digests', async () => {
+    await applyUsageRemote({ instances: { 'inst-peer': peerEntry(), 'inst-other': otherEntry() } });
+
+    const { data } = await getUsageManifest();
+    expect(data.instances).toEqual({
+      'inst-self': '2026-08-30T12:00:00.000Z',
+      'inst-peer': '2026-08-30T09:00:00.000Z',
+      'inst-other': '2026-08-30T08:00:00.000Z',
+    });
+  });
+
+  // The two endpoints must agree or the puller caches a checksum for state it
+  // never fetched. A pre-manifest peer only ever sees the snapshot's, so this
+  // is also what keeps ITS short-circuit honest.
+  it('reports the same checksum as the snapshot, whole or slot-scoped', async () => {
+    await applyUsageRemote({ instances: { 'inst-peer': peerEntry(), 'inst-other': otherEntry() } });
+
+    const manifest = await getUsageManifest();
+    expect((await getUsageSnapshot()).checksum).toBe(manifest.checksum);
+    expect((await getUsageSnapshot({ slots: ['inst-peer'] })).checksum).toBe(manifest.checksum);
+  });
+
+  it('changes only when an instance digest actually advances', async () => {
+    const before = (await getUsageManifest()).checksum;
+    // A digest that loses the LWW race moves no capturedAt, so nothing to fetch.
+    await applyUsageRemote({ instances: { 'inst-peer': peerEntry() } });
+    const withPeer = (await getUsageManifest()).checksum;
+    expect(withPeer).not.toBe(before);
+
+    await applyUsageRemote({ instances: { 'inst-peer': peerEntry({ capturedAt: '2026-08-29T00:00:00.000Z' }) } });
+    expect((await getUsageManifest()).checksum).toBe(withPeer);
+  });
+
+  it('serves only the requested slots, so one instance advancing moves one digest', async () => {
+    await applyUsageRemote({ instances: { 'inst-peer': peerEntry(), 'inst-other': otherEntry() } });
+
+    const { data } = await getUsageSnapshot({ slots: ['inst-peer'] });
+    expect(Object.keys(data.instances)).toEqual(['inst-peer']);
+    expect(data.instances['inst-peer'].usage.totalTokens.output).toBe(4000);
+  });
+
+  it('still serves everything when no slots are named (a pre-manifest peer)', async () => {
+    await applyUsageRemote({ instances: { 'inst-peer': peerEntry(), 'inst-other': otherEntry() } });
+
+    for (const slots of [undefined, [], null]) {
+      const { data } = await getUsageSnapshot({ slots });
+      expect(Object.keys(data.instances).sort()).toEqual(['inst-other', 'inst-peer', 'inst-self']);
+    }
+  });
+
+  // A retirement advances no slot's capturedAt, so it can only reach a peer by
+  // riding every response — the slot-scoped one included.
+  it('rides tombstones on the manifest and on a slot-scoped snapshot', async () => {
+    await applyUsageRemote({ instances: { 'inst-peer': peerEntry(), 'inst-other': otherEntry() } });
+    await forgetInstanceUsage('inst-peer');
+
+    expect((await getUsageManifest()).data.tombstones).toEqual([
+      { instanceId: 'inst-peer', deletedAt: expect.any(String) },
+    ]);
+    expect((await getUsageSnapshot({ slots: ['inst-other'] })).data.tombstones).toHaveLength(1);
+  });
+
+  // The whole round trip, both directions, against the shipped merge: a puller
+  // that fetches ONLY the diffed slot converges exactly as a whole-payload one.
+  it('converges a receiver that fetches only the advanced slot', async () => {
+    await applyUsageRemote({ instances: { 'inst-peer': peerEntry(), 'inst-other': otherEntry() } });
+    const held = (await getUsageManifest()).data.instances;
+
+    // A source peer whose `inst-other` digest moved on; everything else is level.
+    const advanced = otherEntry({ capturedAt: '2026-09-02T00:00:00.000Z', usage: buildUsageDigest(usageFixture({ tokensOut: 7777 })) });
+    const remoteManifest = { ...held, 'inst-other': advanced.capturedAt };
+    const { diffManifestSlots } = await import('../lib/syncManifest.js');
+    const stale = diffManifestSlots(remoteManifest, held);
+    expect(stale).toEqual(['inst-other']);
+
+    const partial = { instances: Object.fromEntries(stale.map((id) => [id, advanced])) };
+    expect(await applyUsageRemote(partial)).toEqual({ applied: true, count: 1 });
+    const store = await readStoreFile();
+    expect(store.instances['inst-other'].usage.totalTokens.output).toBe(7777);
+    // The slot we did NOT fetch is untouched, not dropped.
+    expect(store.instances['inst-peer'].usage.totalTokens.output).toBe(4000);
   });
 });
 

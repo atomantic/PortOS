@@ -51,7 +51,6 @@ vi.mock('../lib/workspaceRoots.js', () => ({
 
 vi.mock('./scaffoldVite.js', () => ({ scaffoldVite: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./scaffoldExpress.js', () => ({ scaffoldExpress: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('./scaffoldIOS.js', () => ({ scaffoldIOS: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../services/xcodeScaffold.js', () => ({ scaffoldXcode: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./scaffoldPortOS.js', () => ({ scaffoldPortOS: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../services/xcodeScripts.js', () => ({ toTargetName: vi.fn(() => 'TestApp') }));
@@ -205,6 +204,21 @@ describe('POST /api/scaffold — request validation before filesystem mutation (
       'My App',
       'my-app',
       expect.any(Function)
+    );
+  });
+
+  it('routes the ios-native template to the same service, iOS-only', async () => {
+    const res = await request(app)
+      .post('/api/scaffold')
+      .send({ ...validBody, template: 'ios-native' });
+
+    expect(res.status).toBe(200);
+    expect(scaffoldXcode).toHaveBeenCalledWith(
+      join('/tmp/workspace', 'my-app'),
+      'My App',
+      'my-app',
+      expect.any(Function),
+      { platforms: ['ios'] }
     );
   });
 });

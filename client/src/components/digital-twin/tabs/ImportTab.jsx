@@ -566,7 +566,7 @@ export default function ImportTab() {
                       <summary className="text-sm text-port-accent cursor-pointer hover:text-white">
                         Preview content
                       </summary>
-                      <pre className="mt-2 p-3 bg-port-card rounded text-xs text-gray-300 overflow-x-auto whitespace-pre-wrap max-h-48 overflow-y-auto">
+                      <pre className="mt-2 p-3 bg-port-card rounded text-xs text-gray-300 overflow-x-auto whitespace-pre-wrap break-words max-h-48 overflow-y-auto">
                         {doc.content}
                       </pre>
                     </details>

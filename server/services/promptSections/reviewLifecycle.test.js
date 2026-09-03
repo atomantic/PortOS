@@ -57,3 +57,37 @@ describe('reviewLifecycle agent-facing API origin', () => {
     expect(section).toContain('http://127.0.0.1:5555/api/cos/tasks/task-example/challenge');
   });
 });
+
+describe('reviewLifecycle reviewer invocation details', () => {
+  beforeEach(() => {
+    getHttpsEnabledAtBoot.mockReturnValue({ value: false, initialized: true });
+  });
+
+  // The route validates `backend` against a z.enum of the local-LLM reviewers, so
+  // a leftover `<lmstudio|ollama>` placeholder in a run configured for MTPLX is a
+  // 400 the agent has to guess its way out of.
+  it('names the local backend this run actually configured', () => {
+    const section = buildReviewLoopFollowUpSection({ ...metadata, reviewLoopReviewers: ['mtplx'] });
+    expect(section).toContain('backend: "mtplx"');
+    expect(section).not.toContain('<lmstudio|ollama>');
+    expect(section).not.toContain('Substitute the active reviewer name');
+  });
+
+  it('keeps a substitution placeholder when several local backends are configured', () => {
+    const section = buildReviewLoopFollowUpSection({ ...metadata, reviewLoopReviewers: ['ollama', 'mtplx'] });
+    expect(section).toContain('backend: "<ollama|mtplx>"');
+    expect(section).toContain('Substitute the active reviewer name');
+  });
+
+  // `opencode run -m <provider/model>`: rendering `--model` here had agents
+  // probing for a flag OpenCode does not document.
+  it('renders each CLI reviewer\'s own model flag', () => {
+    const section = buildReviewLoopFollowUpSection({
+      ...metadata,
+      reviewLoopReviewers: ['opencode', 'codex'],
+      reviewLoopReviewerModels: { opencode: 'mtplx/qwen38', codex: 'gpt-5.6-sol' },
+    });
+    expect(section).toContain('`opencode -m mtplx/qwen38 …`');
+    expect(section).toContain('`codex --model gpt-5.6-sol …`');
+  });
+});

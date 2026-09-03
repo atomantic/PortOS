@@ -4,7 +4,6 @@ import { testVision, runVisionTestSuite, checkVisionHealth } from '../services/v
 import { providerSchema, providerActiveSchema, validate } from '../lib/aiToolkit/validation.js';
 import { withRefreshCapability } from '../lib/aiToolkit/internal/modelFetchers.js';
 import { ALLOWED_COMMANDS } from '../cos-runner/allowedCommands.js';
-import { createLineReader } from '../lib/streamLines.js';
 import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 import {
@@ -15,13 +14,10 @@ import {
   providerVisionSuiteSchema,
 } from '../lib/validation.js';
 import {
-  describeRuntimeInstall,
-  getProviderRuntime,
   getProviderRuntimeStatus,
   getProviderRuntimeStatuses,
-  spawnRuntimeInstaller,
-  stopRuntimeInstaller,
 } from '../services/providerRuntimeInstaller.js';
+import { streamHarnessAction } from '../services/harnessActionStream.js';
 import { getProviderReadinessMap, resetProviderReadinessCache, servedModelId } from '../services/providerReadiness.js';
 import { getLlamaServerEndpoint, relaunchLlamaServerWithAlias } from '../services/llamaServerManager.js';
 import { claimHeavyLocalJob } from '../lib/heavyJobClaim.js';
@@ -37,7 +33,12 @@ import {
 } from '../services/codexAppServer.js';
 import { runLocalRuntimeSetup, SETUP_ACTIONS } from '../services/localRuntimeSetup.js';
 import { localEndpointPort, localRuntimeForProvider } from '../lib/localProviderRuntime.js';
-import { publicReviewPosturesForProvider, PUBLIC_REVIEW_NO_TOOL_POSTURE, PUBLIC_REVIEW_ACTIONS_POSTURE } from '../lib/providerVendors.js';
+import {
+  enforcedPublicReviewPosturesForProvider,
+  publicReviewPosturesForProvider,
+  PUBLIC_REVIEW_NO_TOOL_POSTURE,
+  PUBLIC_REVIEW_ACTIONS_POSTURE,
+} from '../lib/providerVendors.js';
 import { buildTuiShellLaunch } from '../lib/tuiShellLaunch.js';
 import {
   captureSystemCapabilities,
@@ -61,12 +62,6 @@ import {
  * `data/providers.json`, or a config write could choose the exec target.
  */
 const RUNNER_ALLOWED_COMMANDS = [...ALLOWED_COMMANDS].sort();
-
-// One global CLI install at a time — npm's global prefix and the vendor
-// install scripts all write the same bin directory. This is a lightweight
-// re-entrancy guard for a double-click or a second browser tab; its child stays
-// in the route so a client disconnect can terminate it.
-let runtimeInstallInFlight = null;
 
 // Same re-entrancy guard for the local-daemon setup lane. Separate from the CLI
 // one because they install different things, but each is single-flight: two
@@ -147,12 +142,14 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
   // the maintained public-review recipe, not a client-side guess based on a
   // provider name or a user-writable `args` list.
   // `publicReviewPostures` is the value the schedule UI filters on, so a stage
-  // offers exactly the providers this install can actually enforce. The two
-  // booleans are derived from it and kept for existing consumers.
-  const publicReviewPostures = publicReviewPosturesForProvider(provider, { tui: provider?.type === 'tui' });
+  // offers exactly the providers this install can actually run it on;
+  // `publicReviewEnforcedPostures` is the subset backed by a vendor sandbox
+  // recipe. The two booleans are derived from it and kept for existing consumers.
+  const publicReviewPostures = publicReviewPosturesForProvider(provider);
   return sanitizeProvider({
     ...decorated,
     publicReviewPostures,
+    publicReviewEnforcedPostures: enforcedPublicReviewPosturesForProvider(provider),
     publicReviewSupported: publicReviewPostures.includes(PUBLIC_REVIEW_NO_TOOL_POSTURE),
     publicReviewActionsSupported: publicReviewPostures.includes(PUBLIC_REVIEW_ACTIONS_POSTURE),
   });
@@ -325,142 +322,11 @@ export function createPortOSProviderRoutes(aiToolkit) {
     res.json({ readiness: await codexLogout() });
   }));
 
-  /**
-   * Install one provider runtime, streaming the installer's output as SSE.
-   *
-   * Installing a global CLI mutates host state, so this stays a POST even
-   * though the response is SSE-encoded. The client reads it with fetch rather
-   * than EventSource: EventSource would auto-reconnect after a dropped stream
-   * and could launch another non-idempotent install.
-   *
-   * The request names a runtime *id* only. The command, package, and URL all
-   * come from the installer's fixed table, so no request input ever reaches a
-   * shell word.
-   */
-  const streamRuntimeInstall = async (req, res, runtimeId) => {
-    // Table lookup only (no I/O), so an unknown id is a plain 400 instead of a
-    // stream that only says "no" once the modal is up. The real probe waits
-    // until the disconnect handler is registered below.
-    const row = getProviderRuntime(runtimeId);
-    if (!row) {
-      throw new ServerError('Unknown provider runtime', { status: 400, code: 'UNKNOWN_RUNTIME', context: { runtime: String(runtimeId || '') } });
-    }
-
-    const { send, safeEnd } = openSseStream(res);
-    const installLog = createInstallLogger({ installer: row.label, target: `${row.command} on PortOS's PATH` });
-    const emit = (event) => { installLog.onEvent(event); send(event); };
-    let child = null;
-    let finished = false;
-    let clientGone = false;
-    let reservation = null;
-
-    // Register before the availability probe. If the modal closes while the
-    // probe is resolving, do not start an installer nobody can observe.
-    onClientDisconnect(req, res, () => {
-      clientGone = true;
-      installLog.cancel();
-      if (finished) return;
-      if (child) stopRuntimeInstaller(child);
-      if (reservation && runtimeInstallInFlight === reservation) runtimeInstallInFlight = null;
-      safeEnd();
-    });
-
-    // Un-cached: the user may have just installed this CLI in a terminal, and a
-    // stale "not installed" would run a redundant install.
-    const runtime = await getProviderRuntimeStatus(row.id, { fresh: true });
-    if (clientGone) return safeEnd();
-    if (runtime.installed) {
-      send({ type: 'log', message: `${runtime.label} is already available to PortOS.` });
-      send({ type: 'complete', message: 'Already installed — nothing to do.' });
-      return safeEnd();
-    }
-    if (!runtime.installable) {
-      send({ type: 'error', message: runtime.blockedReason || `PortOS cannot install ${runtime.label} on this host.` });
-      return safeEnd();
-    }
-    if (runtimeInstallInFlight) {
-      send({ type: 'error', message: 'Another runtime install is already running. Wait for it to finish or restart PortOS.' });
-      return safeEnd();
-    }
-
-    // Reserve synchronously before spawning so two requests that finish their
-    // status probe together cannot launch competing installs into the same bin
-    // directory.
-    reservation = {};
-    runtimeInstallInFlight = reservation;
-    if (clientGone) {
-      runtimeInstallInFlight = null;
-      return safeEnd();
-    }
-
-    send({ type: 'stage', stage: 'install', message: `Installing ${runtime.label}.` });
-    emit({ type: 'log', message: `Running ${describeRuntimeInstall(runtime.id)}.` });
-    installLog.start();
-    // `spawn` can throw synchronously (a rejected argv shape, an OS-level spawn
-    // refusal). Two things must happen here that letting it bubble would not do:
-    // release the reservation — or every later install answers "another install
-    // is already running" until PortOS restarts — and report the failure as a
-    // terminal SSE frame, since the headers are already flushed and the error
-    // middleware can no longer send JSON to this response.
-    try {
-      child = spawnRuntimeInstaller(runtime.id);
-    } catch (err) {
-      finished = true;
-      if (runtimeInstallInFlight === reservation) runtimeInstallInFlight = null;
-      emit({ type: 'error', message: `${runtime.label} installer failed to start: ${err.message}` });
-      return safeEnd();
-    }
-    runtimeInstallInFlight = child;
-
-    const onLine = (line) => {
-      const text = line.trimEnd();
-      if (text) emit({ type: 'log', message: text });
-    };
-    // npm runs with `--no-progress`, which suppresses its usual redraws. Keep
-    // the default newline-only reader as a defensive second layer: a lifecycle
-    // child (or a vendor install script's own progress bar) that still writes
-    // bare carriage returns cannot turn every redraw into a browser log frame
-    // and a full modal re-render.
-    const stdoutReader = createLineReader(onLine);
-    const stderrReader = createLineReader(onLine);
-    child.stdout.on('data', stdoutReader.push);
-    child.stderr.on('data', stderrReader.push);
-    child.on('error', (err) => {
-      if (finished) return;
-      finished = true;
-      if (runtimeInstallInFlight === child) runtimeInstallInFlight = null;
-      emit({ type: 'error', message: `${runtime.label} installer failed to start: ${err.message}` });
-      safeEnd();
-    });
-    // The post-install PATH check is deliberately stronger than the installer's
-    // exit code. A successful write whose bin directory is absent from PM2's
-    // PATH would otherwise recreate the same opaque agent-start failure.
-    child.on('close', async (code) => {
-      if (finished) return;
-      try {
-        stdoutReader.flush();
-        stderrReader.flush();
-        finished = true;
-        if (runtimeInstallInFlight === child) runtimeInstallInFlight = null;
-        // `fresh` is load-bearing: the pre-install probe cached "not installed"
-        // seconds ago, and re-reading it would fail a CLI that now works.
-        const installed = code === 0 && (await getProviderRuntimeStatus(runtime.id, { fresh: true })).installed;
-        if (installed) {
-          emit({ type: 'complete', message: `${runtime.label} is installed and available to PortOS.` });
-        } else if (code === 0) {
-          emit({ type: 'error', message: `The installer finished, but PortOS still cannot run \`${runtime.command}\`. npm wrote it to a bin directory that is not on this machine's PATH — run \`npm prefix -g\` in a terminal, add that directory (plus \`/bin\` off Windows) to your PATH, then restart PortOS.` });
-        } else {
-          emit({ type: 'error', message: `${runtime.label} installer exited with code ${code}.` });
-        }
-        safeEnd();
-      } catch (err) {
-        // Child-process completion runs outside Express's request lifecycle.
-        console.error(`❌ ${runtime.label} install completion check failed: ${err.message}`);
-        emit({ type: 'error', message: `${runtime.label} install completion check failed: ${err.message}` });
-        safeEnd();
-      }
-    });
-  };
+  // Install-only: the update and remove lanes of the shared runner are reached
+  // from `/api/harnesses`, which is where the Harnesses page drives them. See
+  // `services/harnessActionStream.js` for the stream contract.
+  const streamRuntimeInstall = (req, res, runtimeId) =>
+    streamHarnessAction(req, res, { runtime: runtimeId, action: 'install' });
 
   /**
    * Install and/or start the LOCAL DAEMON one provider points at, streaming

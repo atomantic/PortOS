@@ -56,6 +56,89 @@ describe('LTX-2.5 CUDA compatibility upgrade', () => {
   });
 });
 
+describe('FastMetal download size disclosure', () => {
+  // #5871: the name quoted the MLX DiT alone while the entry pulled the whole
+  // repo. The picker shows the NAME and the disclosure panel shows the number —
+  // the regression is the two disagreeing, so that is what this pins.
+  it('quotes the same download size in each shipped name as in its disclosure', async () => {
+    const { loadMediaModels } = await import('./mediaModels.js');
+    const rows = loadMediaModels().video.mlx.filter((m) => m.id.startsWith('fastmetal_'));
+    expect(rows).toHaveLength(3);
+    for (const row of rows) {
+      const quoted = row.name.match(/~([\d.]+) GB download/);
+      expect(quoted, `${row.id} name must quote a download size`).not.toBeNull();
+      const gb = row.disclosure.estimatedDownloadGb;
+      // Exact, not "close enough": a tolerance wide enough to be comfortable is
+      // also wide enough to re-admit the bug this pins (a name a GB off its own
+      // panel). If a name must round, the disclosure moves with it.
+      expect(Number(quoted[1]), `${row.id}: name says ${quoted[1]} GB, disclosure says ${gb} GB`).toBe(gb);
+    }
+  });
+
+  // 14.14 GB of the 14B repo is an `ema/` copy of the DiT the entry script
+  // never loads. Only the narrowed row may quote the smaller figure.
+  it('narrows the 14B row off its duplicated ema/ DiT', async () => {
+    const { loadMediaModels } = await import('./mediaModels.js');
+    const rows = loadMediaModels().video.mlx;
+    const fourteen = rows.find((m) => m.id === 'fastmetal_14b_qad');
+    expect(fourteen.repoFiles).toContain('mlx_dit.safetensors');
+    expect(fourteen.repoFiles.some((f) => f.startsWith('ema/'))).toBe(false);
+    // The unnarrowed siblings must NOT claim a subset they do not download.
+    for (const id of ['fastmetal_1_3b_qad', 'fastmetal_5b_qad']) {
+      expect(rows.find((m) => m.id === id).repoFiles).toBeUndefined();
+    }
+  });
+
+  // The path that actually bites a real install: the boot BEFORE migration 336
+  // runs still reads the registry off disk, so the loader — not just the
+  // migration — has to correct it. This is also what fails if someone later
+  // reorders `upgradeFastMetalDownloadSizes` after applyVideoDisclosures (which
+  // only fills an ABSENT block) or drops it from the videoEntries chain.
+  it('corrects a persisted stale registry on load, before the migration runs', async () => {
+    writeFileSync(registryFile, JSON.stringify({
+      video: {
+        mlx: [{
+          id: 'fastmetal_14b_qad',
+          name: 'FastMetal 14B QAD (~25 GB download, 36+ GB RAM, 3-step)',
+          repo: 'FastVideo/FastMetal-14B-QAD',
+          runtime: 'fastvideo',
+          disclosure: { estimatedDownloadGb: 42.3, reviewedAt: '2026-09-02' },
+        }],
+        cuda: [],
+      },
+    }, null, 2));
+
+    const { loadMediaModels } = await import('./mediaModels.js');
+    const row = loadMediaModels().video.mlx.find((m) => m.id === 'fastmetal_14b_qad');
+
+    expect(row.name).toBe('FastMetal 14B QAD (~27.1 GB download, 36+ GB RAM, 3-step)');
+    expect(row.disclosure.estimatedDownloadGb).toBe(27.1);
+    expect(row.repoFiles.some((f) => f.startsWith('ema/'))).toBe(false);
+  });
+
+  it('corrects a stale persisted row but leaves a renamed or re-pointed one alone', async () => {
+    const { upgradeFastMetalDownloadSizes } = await import('./mediaModels.js');
+    const shipped = {
+      id: 'fastmetal_14b_qad',
+      repo: 'FastVideo/FastMetal-14B-QAD',
+      name: 'FastMetal 14B QAD (~25 GB download, 36+ GB RAM, 3-step)',
+      disclosure: { estimatedDownloadGb: 42.3 },
+    };
+    const renamed = { ...shipped, name: 'My big video model' };
+    const fork = { ...shipped, repo: 'example/FastMetal-fork' };
+
+    const [upgraded, keptRename, keptFork] = upgradeFastMetalDownloadSizes([shipped, renamed, fork]);
+
+    expect(upgraded.name).toBe('FastMetal 14B QAD (~27.1 GB download, 36+ GB RAM, 3-step)');
+    expect(upgraded.disclosure.estimatedDownloadGb).toBe(27.1);
+    expect(upgraded.repoFiles.some((f) => f.startsWith('ema/'))).toBe(false);
+    expect(keptRename.name).toBe('My big video model');
+    // A rename does not forfeit the size correction the panel needs.
+    expect(keptRename.disclosure.estimatedDownloadGb).toBe(27.1);
+    expect(keptFork).toBe(fork);
+  });
+});
+
 describe('mediaModels registry', () => {
   it('seeds the registry file on first load', async () => {
     expect(existsSync(registryFile)).toBe(false);
@@ -183,6 +266,59 @@ describe('mediaModels registry', () => {
     // The MiniMax H3 Community License travels with the distilled weights, so
     // the row carries the same territory gate as the other H3 entries.
     expect(fasth3.termsGate?.id).toBe('minimax-h3-community-license-2026-08-02');
+  });
+
+  it('ships the upstream FastH3 snapshot at three MLX formats off ONE pinned download', async () => {
+    const { loadMediaModels, FASTH3_SOURCE_REPO, FASTH3_SOURCE_REVISION, FASTH3_OUTPUT_PROFILE } = await import('./mediaModels.js');
+    const { FASTVIDEO_MLX_FORMATS } = await import('../services/videoGen/renderArgs.js');
+    const rows = loadMediaModels().video.mlx.filter((m) => m.repo === FASTH3_SOURCE_REPO);
+    expect(rows.map((m) => m.id)).toEqual([
+      'fasth3_dense_datafree_int8', 'fasth3_dense_datafree_int6', 'fasth3_dense_datafree_int4',
+    ]);
+    // The three rows differ ONLY by a local conversion of one snapshot, so a
+    // row on a different revision would quietly double a 144 GB download.
+    expect(new Set(rows.map((m) => m.revision))).toEqual(new Set([FASTH3_SOURCE_REVISION]));
+    // Each format must be distinct AND one the converter publishes — a repeated
+    // or misspelled value silently gives two rows the same DiT, or a row whose
+    // format the helper's argparse rejects at render time.
+    const formats = rows.map((m) => m.fastvideoMlxFormat);
+    expect(new Set(formats).size).toBe(rows.length);
+    for (const format of formats) expect(FASTVIDEO_MLX_FORMATS).toContain(format);
+    for (const row of rows) {
+      // Still a FastH3 family row on the existing fastvideo runtime.
+      expect(row.runtime).toBe('fastvideo');
+      expect(row.fastvideoFamily).toBe('fasth3');
+      // Same H3 output contract and same argv boundary as the repack row.
+      expect(row.frameOptions).toEqual([...FASTH3_OUTPUT_PROFILE.frameOptions]);
+      expect(row.fpsOptions).toEqual([24]);
+      expect(row.supportsNegativePrompt).toBe(false);
+      expect(row.supportsTiling).toBe(false);
+      expect(row.supportsDisableAudio).toBe(false);
+      // The MiniMax H3 Community License travels with the distilled weights.
+      expect(row.termsGate?.id).toBe('minimax-h3-community-license-2026-08-02');
+    }
+  });
+
+  it('offers FastH3 only frame counts its pipeline will accept', async () => {
+    const { loadMediaModels, FASTH3_OUTPUT_PROFILE } = await import('./mediaModels.js');
+    // mlx_fasth3.py renders at a fixed 24 fps and resolve_geometry hard-refuses
+    // anything outside 5-15 s, so a frame count off that window reaches the
+    // runtime and RAISES rather than rendering. 107 and 362 both did.
+    const FPS = 24;
+    for (const frames of FASTH3_OUTPUT_PROFILE.frameOptions) {
+      expect((frames - 5) % 17).toBe(0);
+      expect(frames / FPS).toBeGreaterThanOrEqual(5);
+      expect(frames / FPS).toBeLessThanOrEqual(15);
+    }
+    expect(FASTH3_OUTPUT_PROFILE.frameOptions).not.toContain(107);
+    expect(FASTH3_OUTPUT_PROFILE.frameOptions).not.toContain(362);
+    // Every shipped FastH3 row, not just the profile constant.
+    const rows = loadMediaModels().video.mlx.filter((m) => m.fastvideoFamily === 'fasth3');
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) {
+      expect(row.frameOptions).toEqual([...FASTH3_OUTPUT_PROFILE.frameOptions]);
+      expect(row.frameOptions).toContain(row.defaultFrames);
+    }
   });
 
   it('ships MiniMax H3 as a pinned, keyframe-capable 128 GB BYOV profile', async () => {

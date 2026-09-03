@@ -18,6 +18,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import LocalSetupPanel from './LocalSetupPanel';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { isLoopbackHost } from '../../lib/loopbackHost.js';
+import { PORTS } from '../../lib/ports.js';
 import {
   getSettings, updateSettings, getImageGenStatus, generateImage,
   registerTool, updateTool, getToolsList,
@@ -603,8 +604,9 @@ export function ImageGenTab() {
   if (loading) return <BrailleSpinner text="Loading image gen settings" />;
 
   // The advertised A1111 URL must be the canonical user-facing endpoint
-  // (`<tailscale-host>.<tailnet>.ts.net:5555` / `<tailscale-ip>:5555`), not
-  // the loopback HTTP mirror at :5553 or a localhost dev URL — those aren't
+  // (`<tailscale-host>.<tailnet>.ts.net:PORTS.API` / `<tailscale-ip>:PORTS.API`),
+  // not the loopback HTTP mirror on PORTS.API_LOCAL or a localhost dev URL —
+  // those aren't
   // reachable from other tailnet machines.
   const advertisedA1111Url = (() => {
     if (typeof window === 'undefined') return null;
@@ -612,11 +614,11 @@ export function ImageGenTab() {
     // Local dev / loopback mirror — we can't infer the tailnet hostname
     // from the browser; tell the user to look it up.
     if (isLoopbackHost(h)) return null;
-    // Real tailnet host — use the canonical user-facing port (:5555) and
+    // Real tailnet host — use the canonical user-facing API port and
     // match the currently-active scheme so the hint works in both HTTPS-on
     // (Tailscale cert provisioned) and HTTP-only PortOS deployments.
     const scheme = window.location.protocol === 'http:' ? 'http' : 'https';
-    return `${scheme}://${h}:5555`;
+    return `${scheme}://${h}:${PORTS.API}`;
   })();
 
   return (
@@ -1283,7 +1285,7 @@ export function ImageGenTab() {
               {advertisedA1111Url ? (
                 <>Other machines should set their SD API URL to <code className="text-gray-300">{advertisedA1111Url}</code></>
               ) : (
-                <>Other machines should set their SD API URL to <code className="text-gray-300">https://&lt;your-tailscale-host&gt;:5555</code> (run <code className="text-gray-300">tailscale status</code> on this machine to see the hostname).</>
+                <>Other machines should set their SD API URL to <code className="text-gray-300">https://&lt;your-tailscale-host&gt;:{PORTS.API}</code> (run <code className="text-gray-300">tailscale status</code> on this machine to see the hostname).</>
               )}
             </div>
           </div>

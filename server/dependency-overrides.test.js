@@ -270,3 +270,50 @@ describe('dependency override parity across manifests (#2848)', () => {
     expect(drift).toEqual([]);
   });
 });
+
+// An exact npm version: `8.21.3`, or a prerelease like `node-pty@1.2.0-beta.15`.
+// Anything else — `^16.0.0`, `~1.17.1`, `>=5`, `*`, a git/file/npm-alias specifier —
+// lets a fresh install resolve somewhere nobody reviewed.
+const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+const readDirectDeps = (rel) => {
+  const pkg = JSON.parse(readFileSync(join(REPO_ROOT, rel), 'utf8'));
+  return ['dependencies', 'devDependencies'].flatMap((block) =>
+    Object.entries(pkg[block] ?? {}).map(([name, range]) => ({ block, name, range }))
+  );
+};
+
+// The `overrides` blocks have always required an exact pin (see the comment on
+// MINIMUM_SAFE above: a range "lets npm resolve anywhere in the range on a fresh
+// install, which defeats the point of pinning"). The same argument applies to the
+// packages this repo depends on DIRECTLY, and until #5699 nothing enforced it —
+// six server dependencies had drifted to caret ranges. Any tree re-resolution
+// (`npm run setup`'s `npm install --no-save --prefix server`, a Dependabot bump to
+// a sibling, `scripts/ensure-deps.js`'s clean reinstall) would float them to a
+// newer release no human reviewed. Upgrades arrive as reviewable PRs instead.
+describe('direct dependency pinning (#5699)', () => {
+  it.each(MANIFESTS)('%s: pins every direct dependency to an exact version', (rel) => {
+    const ranged = readDirectDeps(rel)
+      .filter(({ range }) => !EXACT_VERSION.test(range))
+      .map(({ block, name, range }) => `${block}.${name}=${range}`);
+
+    expect(
+      ranged,
+      `${rel}: direct dependencies must be exact versions, not ranges (see docs/DEPS.md "Direct Dependency Pinning"): ${ranged.join(', ')}`
+    ).toEqual([]);
+  });
+
+  it('scans every manifest, so a clean result is not vacuous', () => {
+    const scanned = MANIFESTS.flatMap(readDirectDeps);
+    // ~49 entries across the four manifests today. A path or shape change that
+    // makes the loop iterate nothing would otherwise report a clean sweep.
+    expect(scanned.length).toBeGreaterThanOrEqual(40);
+    // And the matcher must actually reject the shapes this guard exists to catch,
+    // so a regex that accidentally accepts everything fails here rather than
+    // passing every manifest.
+    for (const range of ['^16.0.0', '~1.17.1', '>=8.10.0', '8.x', '*', 'latest']) {
+      expect(EXACT_VERSION.test(range), `${range} should not read as an exact pin`).toBe(false);
+    }
+    expect(EXACT_VERSION.test('1.2.0-beta.15')).toBe(true);
+  });
+});

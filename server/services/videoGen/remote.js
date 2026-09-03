@@ -25,6 +25,10 @@ import { createRemoteMediaExecutor } from '../federatedMedia/remoteExecutor.js';
 import { applyRemoteInputAssets, remoteInputAssetsSchema } from '../federatedMedia/inputAssets.js';
 import { videoGenEvents } from './events.js';
 import { mutateVideoHistory } from './history.js';
+import { renderTimingFields } from '../../lib/renderTiming.js';
+import { provenanceForRender } from '../../lib/assetProvenance.js';
+import { readLoraLicensesByFilename } from '../loras.js';
+import { getVideoModels } from '../../lib/mediaModels.js';
 
 const remoteVideoMarkerSchema = z.object({
   wireVersion: z.literal(FEDERATED_MEDIA_WIRE_VERSION),
@@ -62,18 +66,23 @@ const executor = createRemoteMediaExecutor({
   // `<jobId>.mp4` is videoGen/local.js's own filename shape, which is what the
   // provider-side result guard and the local history row both key on.
   resolveDestination: ({ jobId }) => ({ dir: PATHS.videos, filename: `${jobId}.mp4` }),
-  async finalize({ jobId, path, filename, request, remoteJob, peerId }) {
+  async finalize({ jobId, path, filename, request, remoteJob, peerId, renderStartedAtMs }) {
     // Both ffmpeg passes are best-effort by construction (they no-op when
     // ffmpeg is absent), exactly as the local finalize path treats them — a
     // missing thumbnail must not fail a render that already landed verified.
     await optimizeForStreaming(path);
     const thumbnail = await generateThumbnail(path, jobId);
+    const createdAt = new Date().toISOString();
+    const modelId = remoteJob.result.modelId ?? request.modelId;
+    const model = getVideoModels().find((m) => m.id === modelId);
+    const loraFilenames = Array.isArray(request.loraFilenames) ? request.loraFilenames : [];
+    const loraLicenses = await readLoraLicensesByFilename(loraFilenames);
     await mutateVideoHistory((history) => {
       history.unshift({
         id: jobId,
         prompt: request.prompt,
         negativePrompt: request.negativePrompt ?? '',
-        modelId: remoteJob.result.modelId ?? request.modelId,
+        modelId,
         seed: request.seed ?? null,
         width: request.width ?? null,
         height: request.height ?? null,
@@ -87,7 +96,22 @@ const executor = createRemoteMediaExecutor({
         // the federation, never a hostname, address, or credential.
         federatedPeerId: peerId,
         federatedJobId: remoteJob.id,
-        createdAt: new Date().toISOString(),
+        createdAt,
+        provenance: provenanceForRender({
+          model: {
+            id: modelId,
+            name: model?.name || modelId,
+            license: model?.license,
+            repo: model?.repo,
+            disclosure: model?.disclosure,
+          },
+          loras: loraFilenames.map((filename) => ({
+            filename,
+            ...(loraLicenses[filename] || {}),
+          })),
+          capturedAt: createdAt,
+        }),
+        ...renderTimingFields(renderStartedAtMs),
       });
       return history;
     });

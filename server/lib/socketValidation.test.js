@@ -172,6 +172,18 @@ describe('socketValidation schemas', () => {
       expect(appStandardizeSchema.safeParse({}).success).toBe(false);
     });
 
+    it('appUpdateSchema accepts the PortOS preflight acknowledgements (#5984)', () => {
+      const result = appUpdateSchema.safeParse({
+        appId: 'foo',
+        acknowledgeFork: true,
+        acknowledgePersistentMindImageBackup: true,
+      });
+      expect(result.success).toBe(true);
+      expect(result.data.acknowledgeFork).toBe(true);
+      expect(result.data.acknowledgePersistentMindImageBackup).toBe(true);
+      expect(appUpdateSchema.safeParse({ appId: 'foo', acknowledgeFork: 'yes' }).success).toBe(false);
+    });
+
     it('appDeploySchema defaults flags to an empty array', () => {
       const result = appDeploySchema.safeParse({ appId: 'foo' });
       expect(result.success).toBe(true);

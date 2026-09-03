@@ -14,7 +14,7 @@
  * picks up later. The destination-specific guidance is injected into the
  * prompt's `{trackerInstructions}` block by BOTH dispatch paths —
  * `triggerReferenceAnalysis` here (the on-commit trigger) and
- * `resolveReferenceWatchBlock` in cosTaskGenerator.js (the WEEKLY scheduled
+ * `resolveReferenceWatchBlock` in cosTaskPreStepBlocks.js (the WEEKLY scheduled
  * task) — via the shared `formatTrackerInstructions` below (#3140).
  *
  * Storage: refs live inline on each app in data/apps.json under the

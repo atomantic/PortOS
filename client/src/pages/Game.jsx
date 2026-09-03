@@ -391,7 +391,7 @@ export default function Game() {
           </Link>
           <Gamepad2 className="h-6 w-6 shrink-0 text-port-accent" aria-hidden="true" />
           <div className="min-w-0">
-            <h1 className="truncate text-xl font-bold text-white">{game.name}</h1>
+            <h1 className="line-clamp-2 break-words text-xl font-bold text-white" title={game.name}>{game.name}</h1>
             <p className="truncate text-xs text-gray-400">{app?.name || 'Managed app unavailable'}</p>
           </div>
         </div>

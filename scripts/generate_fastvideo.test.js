@@ -45,3 +45,55 @@ describe.skipIf(!pyBin)('generate_fastvideo.py', () => {
     ]);
   });
 });
+
+// Phase reporting (#5872). FastH3's MLX pipeline logs one milestone line per
+// phase and NO per-step denoise progress, so these markers plus the heartbeat
+// are the only thing standing between the user and a 20-minute blank 0%.
+describe.skipIf(!pyBin)('generate_fastvideo.py phase reporting', () => {
+  it('advances the phase on each upstream milestone line', () => {
+    const output = runPython(`${importRunner}\n${[
+      'phase = runner.INITIAL_PHASE',
+      'for line in [',
+      '    "INFO Geometry: output=832x480x124 model=832x480x124 audio_frames=124 fast=None",',
+      '    "INFO Loaded prompt embeddings from cache abc123",',
+      '    "INFO Loaded MLX H3 DiT from /models/int4 in 412.7s",',
+      '    "INFO Generation complete: /out/render.mp4 | timings={} peaks={}",',
+      ']:',
+      '    phase = runner.advance_phase(line, phase)',
+      '    print(phase)',
+    ].join('\n')}`);
+
+    // 'conditioning', deliberately NOT 'encode-prompt' — that exact marker is
+    // generate_ltx2.py's prompt-encode BEGIN sentinel, and emitting it here
+    // would arm an ltx2-only relaunch against a FastVideo render.
+    expect(lines(output)).toEqual(['conditioning', 'sampling', 'sampling', 'mux']);
+  });
+
+  it('never moves the phase backwards when a milestone line repeats', () => {
+    const output = runPython(`${importRunner}\n${[
+      'print(runner.advance_phase("INFO Geometry: output=832x480x124", "sampling"))',
+      'print(runner.advance_phase("nothing to see here", "sampling"))',
+    ].join('\n')}`);
+
+    expect(lines(output)).toEqual(['sampling', 'sampling']);
+  });
+
+  // fastmetal reports denoise steps but none of FastH3's milestone wording, so
+  // without this its heartbeat would keep claiming "Loading the FastVideo
+  // pipeline" while the step counter climbed.
+  it('treats a denoising step as proof the sampler is running', () => {
+    const output = runPython(`${importRunner}\n${[
+      'print(runner.advance_phase("denoising step 2/4", runner.INITIAL_PHASE))',
+    ].join('\n')}`);
+
+    expect(lines(output)).toEqual(['sampling']);
+  });
+
+  it('labels every phase it can advance into', () => {
+    const output = runPython(`${importRunner}\n${[
+      'print(sorted(runner._PHASE_ORDER) == sorted(runner.PHASE_LABELS))',
+    ].join('\n')}`);
+
+    expect(lines(output)).toEqual(['True']);
+  });
+});

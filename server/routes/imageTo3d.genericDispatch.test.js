@@ -54,6 +54,9 @@ vi.mock('../services/imageTo3d/models.js', () => ({
   startGeneration: vi.fn(),
   deleteModel: vi.fn(),
   getModelAsset: vi.fn(),
+  // Read at module scope by the USDZ body parser, so — unlike the handler-only
+  // exports above — omitting it fails the IMPORT, not a test.
+  USDZ_MAX_BYTES: 64 * 1024 * 1024,
 }));
 
 import { hfChildEnv } from '../services/hfToken.js';

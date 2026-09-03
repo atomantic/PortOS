@@ -428,8 +428,8 @@ async function persistImpl() {
     ...archive,
   ];
   // Strip non-serializable bits.
-  const serializable = live.map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs, render }) =>
-    ({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs, render }),
+  const serializable = live.map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs }) =>
+    ({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs }),
   );
   await atomicWrite(JOBS_FILE, { jobs: serializable });
 }
@@ -791,22 +791,9 @@ function synthesizeMessage(e, kind) {
 // Two finite positive edges, or nothing. A runner that reports no geometry —
 // or a heartbeat-shaped frame with a zero/NaN edge — must produce NO geometry
 // rather than a ratio the client would have to defend against.
-const renderGeometryOf = (e) => {
-  const width = Number(e.width);
-  const height = Number(e.height);
-  if (!Number.isFinite(width) || width <= 0) return null;
-  if (!Number.isFinite(height) || height <= 0) return null;
-  return { width, height };
-};
-
 function makeGenDispatcher(emitter, job, handlers) {
   const onProgress = (e) => {
     if (e.generationId !== job.id) return;
-    // A CHAINED video render never emits `started` under the queue's job id —
-    // `started` is per-chunk, under ids only the orchestrator knows — so its
-    // resolved geometry rides the outer progress frames instead (#4588).
-    const chainedGeometry = renderGeometryOf(e);
-    if (chainedGeometry) handlers.renderMeta?.(chainedGeometry);
     const hasProgress = typeof e.progress === 'number' && Number.isFinite(e.progress);
     const hasCurrentImage = typeof e.currentImage === 'string' && e.currentImage.length > 0;
     const message = e.message !== undefined ? e.message : synthesizeMessage(e, job.kind);
@@ -818,17 +805,23 @@ function makeGenDispatcher(emitter, job, handlers) {
     // wall-clock estimate for the whole render. Presence-guarded on purpose —
     // an install with no matching measurement emits no key at all, which the
     // UI must show as "unknown" rather than as a zero countdown.
-    const addStepFields = (payload) => {
+    // `phase` (video gen, #5872) is the runner's own STAGE: id — 'load-model',
+    // 'encode-prompt', 'sampling', 'mux', … The client turns it into a named
+    // render step so a runner that reports no numeric progress for minutes
+    // (FastH3 streams an ~89 GB DiT before its first denoise step) still says
+    // WHAT it is doing rather than showing a motionless 0%.
+    const addFrameFields = (payload) => {
       if (typeof e.step === 'number') payload.step = e.step;
       if (typeof e.totalSteps === 'number') payload.totalSteps = e.totalSteps;
       if (typeof e.loss === 'number') payload.loss = e.loss;
       if (typeof e.etaMs === 'number') payload.etaMs = e.etaMs;
+      if (typeof e.phase === 'string' && e.phase) payload.phase = e.phase;
     };
     if (hasProgress) {
       const payload = { type: 'progress', progress: e.progress };
       if (hasCurrentImage) payload.currentImage = e.currentImage;
       if (message !== undefined) payload.message = message;
-      addStepFields(payload);
+      addFrameFields(payload);
       handlers.progress(payload);
       return;
     }
@@ -837,21 +830,9 @@ function makeGenDispatcher(emitter, job, handlers) {
       // existing consumers can keep their progress-bar value untouched.
       const payload = { type: 'preview', currentImage: e.currentImage };
       if (message !== undefined) payload.message = message;
-      addStepFields(payload);
+      addFrameFields(payload);
       handlers.progress(payload);
     }
-  };
-  // The gen module's `started` event carries the geometry the render actually
-  // resolved to — for video, the requested edges snapped DOWN to the model's
-  // resolution grid (videoGen/local.js), so it is routinely not what the client
-  // submitted. A live preview stage has to size itself by the resolved edges or
-  // a portrait render renders into a landscape box. The queue's own `started`
-  // SSE frame is broadcast before the gen run begins and cannot carry this, so
-  // it rides its own frame type (#4588).
-  const onStarted = (e) => {
-    if (e.generationId !== job.id) return;
-    const geometry = renderGeometryOf(e);
-    if (geometry) handlers.renderMeta?.(geometry);
   };
   const onStatus = (e) => {
     // Optional explicit `status` event for gens that want to push a status
@@ -859,21 +840,21 @@ function makeGenDispatcher(emitter, job, handlers) {
     // can call `videoGenEvents.emit('status', { generationId, message })`.
     if (e.generationId !== job.id) return;
     if (typeof e.message === 'string' && e.message.length > 0) {
-      handlers.progress({ type: 'status', message: e.message });
+      const payload = { type: 'status', message: e.message };
+      if (typeof e.phase === 'string' && e.phase) payload.phase = e.phase;
+      handlers.progress(payload);
     }
   };
   const onCompleted = (e) => { if (e.generationId === job.id) handlers.completed(e); };
   const onFailed = (e) => { if (e.generationId === job.id) handlers.failed({ error: e.error }); };
   return {
     attach() {
-      emitter.on('started', onStarted);
       emitter.on('progress', onProgress);
       emitter.on('status', onStatus);
       emitter.on('completed', onCompleted);
       emitter.on('failed', onFailed);
     },
     detach() {
-      emitter.off('started', onStarted);
       emitter.off('progress', onProgress);
       emitter.off('status', onStatus);
       emitter.off('completed', onCompleted);
@@ -987,18 +968,6 @@ async function runJob(job) {
       }
       if (didUpdatePersistedProgress) scheduleProgressPersist();
       broadcastSse(sseEntry, payload);
-    },
-    // Geometry the render resolved to (#4588) — see makeGenDispatcher's
-    // onStarted. `retain: false` because there is exactly ONE replay slot on
-    // the SSE entry and it must hold the frame that says what the run is doing;
-    // a reconnecting or reloading client recovers the geometry from the job
-    // projection instead, which is why it is persisted here as well.
-    renderMeta: ({ width, height }) => {
-      if (job.terminating || job.status !== 'running') return;
-      if (job.render?.width === width && job.render?.height === height) return;
-      job.render = { width, height };
-      scheduleProgressPersist();
-      broadcastSse(sseEntry, { type: 'render-meta', width, height }, { retain: false });
     },
     completed: (payload) => {
       trackTerminalOperation(
@@ -1341,25 +1310,10 @@ function ensureSseEntry(jobId) {
 // 3. Terminal job after the grace window — entry is gone; we synthesize a
 //    one-shot terminal frame from the archived job and end the stream so
 //    a late client doesn't hang on an empty SSE stream forever.
-// A client attaching to a live job also needs the render's resolved geometry
-// (#4588), and it cannot come from the replay slot: that slot holds exactly one
-// frame and must hold the one that says what the run is DOING. The geometry is
-// announced once, very early — routinely before the submitting page's
-// EventSource has even opened — so replay it from the job to each client as it
-// attaches instead of retaining it on the wire.
-const replayRenderMeta = (job, res) => {
-  if (!job.render) return;
-  res.write(`data: ${JSON.stringify({ type: 'render-meta', ...job.render })}\n\n`);
-};
-
 export function attachSseClient(jobId, res) {
   const job = findJob(jobId);
   if (!job) return false;
-  if (sseJobs.has(jobId)) {
-    const attached = attachSse(sseJobs, jobId, res);
-    if (attached) replayRenderMeta(job, res);
-    return attached;
-  }
+  if (sseJobs.has(jobId)) return attachSse(sseJobs, jobId, res);
   // No SSE entry but the job is still live (queued/running) — the entry was
   // dropped or never created (e.g. crash recovery). Create one on the fly
   // and attach so the client receives subsequent progress/terminal events
@@ -1372,9 +1326,7 @@ export function attachSseClient(jobId, res) {
       ? { type: 'queued', position: job.position }
       : { type: 'started', kind: job.kind };
     broadcastSse(entry, heartbeat);
-    const attached = attachSse(sseJobs, jobId, res);
-    if (attached) replayRenderMeta(job, res);
-    return attached;
+    return attachSse(sseJobs, jobId, res);
   }
   // Terminal job whose SSE entry was already cleaned up. Synthesize the
   // expected terminal payload from the archived state and end immediately.

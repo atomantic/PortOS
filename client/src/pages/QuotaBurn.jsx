@@ -35,7 +35,7 @@ export const SAVE_DEBOUNCE_MS = 500;
 
 // How often to re-ask while a family's quota scrape is still running. A scrape
 // is a 10-20s PTY spawn, so this is a handful of polls, not a busy loop.
-const PENDING_POLL_MS = 4000;
+export const PENDING_POLL_MS = 4000;
 
 const EMPTY_CATALOG = { jobTypes: [], apps: [], universes: [], imageModes: [], providers: [] };
 

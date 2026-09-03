@@ -1,8 +1,9 @@
-import { useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
 import { Check, Film, Radio, RefreshCw, Wind } from 'lucide-react';
 import toast from '../ui/Toast';
 import { approveSpriteTrack, reopenSpriteTrack } from '../../services/apiSprites.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
+import { useAutoRefetch } from '../../hooks/useAutoRefetch.js';
 import { SPRITE_DIRECTIONS } from '../../lib/spriteFacets.js';
 import { CorrectionNoteToggle, trackCorrectionKey } from './CorrectionNote.jsx';
 import { checkerboardStyle, spriteAssetUrl } from './spriteAssets.js';
@@ -48,11 +49,7 @@ export default function TrackWorkflow({
   ])), [runs, directions]);
   const working = runs.some((run) => ['rendering', 'postprocessing'].includes(run.status));
 
-  useEffect(() => {
-    if (!working) return undefined;
-    const timer = setInterval(onChanged, 4000);
-    return () => clearInterval(timer);
-  }, [working, onChanged]);
+  useAutoRefetch(onChanged, 4000, { enabled: working, immediate: false, pollOnly: true });
 
   const [approve, approving] = useAsyncAction(async (direction, runId) => {
     await approveSpriteTrack(record.id, definition.id, { direction, runId }, { silent: true });

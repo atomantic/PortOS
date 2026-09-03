@@ -368,11 +368,12 @@ function TrainingJobDetail({ runId, status }) {
 
   useEffect(() => { load(); }, [load]);
   // Poll only while the run is live — a terminal run's checkpoints are fixed.
-  useEffect(() => {
-    if (status !== 'running' && status !== 'queued') return undefined;
-    const t = setInterval(load, 5000);
-    return () => clearInterval(t);
-  }, [status, load]);
+  // `immediate: false` because the effect above already owns the first load.
+  useAutoRefetch(load, 5000, {
+    enabled: status === 'running' || status === 'queued',
+    immediate: false,
+    pollOnly: true,
+  });
 
   if (checkpoints === null) {
     return <div className="mt-2 text-[11px] text-port-text-muted">Loading checkpoints…</div>;

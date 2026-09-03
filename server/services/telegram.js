@@ -9,11 +9,12 @@ import { createTelegramBot } from '../lib/telegramClient.js';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { getSettings } from './settings.js';
-import { notificationEvents, NOTIFICATION_TYPES, getNotifications } from './notifications.js';
-import { getDomainAutonomyMode } from './cosState.js';
-import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
-import { approveMemory, rejectMemory, peekMemory } from './memoryBackend.js';
+import { notificationEvents, getNotifications } from './notifications.js';
+import { forwardNotification as forwardToTelegram } from './telegramForward.js';
+import { approveMemory, rejectMemory } from './memoryBackend.js';
 import { ensureDir, PATHS, readJSONFileStrict, formatDuration, atomicWrite } from '../lib/fileUtils.js';
+import { createTokenBucket } from '../lib/telegramRateLimit.js';
+import { escapeHtml, CALLBACK_APPROVE, CALLBACK_REJECT } from '../lib/telegramMessage.js';
 import { getActiveAgents } from './agentManagement.js';
 import { getGoals } from './identity.js';
 
@@ -32,11 +33,9 @@ let notificationSubscription = null;
 let authorizedChatId = null;
 let cachedForwardTypes = null;
 
-// Rate limiter: token bucket (30 messages/minute)
-let tokenBucket = 30;
-let lastTokenRefill = Date.now();
-const BUCKET_MAX = 30;
-const REFILL_INTERVAL = 60000; // 1 minute
+// Rate limiter: token bucket (30 messages/minute). Per-transport instance —
+// see lib/telegramRateLimit.js for why it is not shared with the bridge.
+const rateLimiter = createTokenBucket();
 
 // Pending check-ins with 10-minute TTL
 const pendingCheckins = new Map();
@@ -46,41 +45,6 @@ const CHECKINS_DIR = join(PATHS.data, 'telegram');
 const CHECKINS_FILE = join(CHECKINS_DIR, 'checkins.json');
 const MAX_CHECKINS = 500;
 
-// Emoji map for notification types
-const NOTIFICATION_EMOJI = {
-  [NOTIFICATION_TYPES.MEMORY_APPROVAL]: '🧠',
-  [NOTIFICATION_TYPES.TASK_APPROVAL]: '✅',
-  [NOTIFICATION_TYPES.CODE_REVIEW]: '🔍',
-  [NOTIFICATION_TYPES.HEALTH_ISSUE]: '⚠️',
-  [NOTIFICATION_TYPES.BRIEFING_READY]: '📋',
-  [NOTIFICATION_TYPES.AUTOBIOGRAPHY_PROMPT]: '📝',
-  [NOTIFICATION_TYPES.PLAN_QUESTION]: '❓',
-  [NOTIFICATION_TYPES.DAILY_POST_REMINDER]: '🧪'
-};
-
-// Priority emoji
-const PRIORITY_EMOJI = {
-  low: '🟢',
-  medium: '🟡',
-  high: '🟠',
-  critical: '🔴'
-};
-
-function refillTokens() {
-  const now = Date.now();
-  if (now - lastTokenRefill >= REFILL_INTERVAL) {
-    tokenBucket = BUCKET_MAX;
-    lastTokenRefill = now;
-  }
-}
-
-function consumeToken() {
-  refillTokens();
-  if (tokenBucket <= 0) return false;
-  tokenBucket--;
-  return true;
-}
-
 function cleanExpiredCheckins() {
   const now = Date.now();
   for (const [key, value] of pendingCheckins) {
@@ -88,14 +52,6 @@ function cleanExpiredCheckins() {
       pendingCheckins.delete(key);
     }
   }
-}
-
-function escapeHtml(text) {
-  if (!text) return '';
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
 }
 
 /**
@@ -292,7 +248,7 @@ async function healthCheck() {
 export async function sendMessage(text, opts = { parse_mode: 'HTML' }) {
   if (!bot || !authorizedChatId) return { success: false, error: !bot ? 'Bot not initialized' : 'No chatId configured' };
 
-  if (!consumeToken()) {
+  if (!rateLimiter.consume()) {
     console.log('📱 Telegram: rate limit reached, skipping message');
     return { success: false, error: 'Rate limit exceeded' };
   }
@@ -325,10 +281,6 @@ export function getStatus() {
 export function updateCachedForwardTypes(forwardTypes) {
   cachedForwardTypes = forwardTypes;
 }
-
-// Callback data prefixes for inline keyboard actions
-const CALLBACK_APPROVE = 'mem_approve';
-const CALLBACK_REJECT = 'mem_reject';
 
 /**
  * Handle inline keyboard callback queries (memory approve/reject)
@@ -377,68 +329,10 @@ async function handleCallbackQuery(query) {
   }
 }
 
-/**
- * Forward a notification to Telegram
- */
-async function forwardNotification(notification) {
-  // Use cached forwardTypes to avoid disk I/O on every notification.
-  // (Runs before the per-domain gate so a filtered-out notification skips the
-  // state read entirely, and so dry-run only reports what execute would send.)
-  if (Array.isArray(cachedForwardTypes) && cachedForwardTypes.length > 0) {
-    if (!cachedForwardTypes.includes(notification.type)) return;
-  }
-
-  // Per-domain autonomy gate: `off` suppresses outbound forwarding; `dry-run`
-  // logs what would have been sent without actually messaging the channel.
-  const mode = await getDomainAutonomyMode('messages');
-  if (mode !== 'execute') {
-    if (mode === 'dry-run') {
-      console.log(`📨 [dry-run] Messages auto-send would forward notification: ${notification.type} — "${notification.title}"`);
-    }
-    return;
-  }
-
-  // Daily messages budget (#711): once today's auto-send count reaches the cap,
-  // suppress further forwarding for the rest of the day (acts like `off`).
-  const budget = await getDomainBudgetStatus('messages');
-  if (!budget.withinBudget) {
-    console.log(`📨 Messages auto-send daily ${budget.exceeded} budget reached — suppressing forward: ${notification.type} — "${notification.title}"`);
-    return;
-  }
-
-  const emoji = NOTIFICATION_EMOJI[notification.type] || '🔔';
-  const priorityEmoji = PRIORITY_EMOJI[notification.priority] || '';
-  const lines = [`${emoji} <b>${escapeHtml(notification.title)}</b>`];
-  const opts = { parse_mode: 'HTML' };
-  const isMemoryApproval = notification.type === NOTIFICATION_TYPES.MEMORY_APPROVAL && notification.metadata?.memoryId;
-
-  if (isMemoryApproval) {
-    const memory = await peekMemory(notification.metadata.memoryId).catch(() => null);
-    const raw = memory?.summary || memory?.content || notification.description || '';
-    // Telegram 4096 char limit; truncate raw text before escaping to guarantee
-    // the escaped result stays under limit (escaping expands at most 5x per char
-    // for &amp; but typical text is <1.2x; 2800 raw → ≤3500 escaped conservatively)
-    const MAX_RAW = 2800;
-    const truncated = raw.length > MAX_RAW ? raw.slice(0, MAX_RAW) + '…' : raw;
-    if (truncated) lines.push(escapeHtml(truncated));
-    opts.reply_markup = JSON.stringify({
-      inline_keyboard: [[
-        { text: '✅ Approve', callback_data: `${CALLBACK_APPROVE}:${notification.metadata.memoryId}` },
-        { text: '❌ Reject', callback_data: `${CALLBACK_REJECT}:${notification.metadata.memoryId}` }
-      ]]
-    });
-  } else if (notification.description) {
-    lines.push(escapeHtml(notification.description));
-  }
-
-  if (notification.priority) lines.push(`Priority: ${priorityEmoji} ${notification.priority}`);
-  const startTime = Date.now();
-  await sendMessage(lines.join('\n'), opts);
-  // Count the forward (and its wall-clock) against the messages daily budget
-  // (#711) so both the actions and minutes caps are enforced for this domain.
-  await recordDomainUsage('messages', { actions: 1, ms: Date.now() - startTime })
-    .catch(err => console.error(`❌ Failed to record messages budget usage: ${err.message}`));
-}
+// Forward a notification through the shared pipeline. An arrow (not a bound
+// reference) so the CURRENT cachedForwardTypes is read on every event.
+const forwardNotification = (notification) =>
+  forwardToTelegram(notification, { cachedForwardTypes, sendMessage });
 
 /**
  * Subscribe to notification events for forwarding

@@ -114,6 +114,26 @@ describe('AppDetailView app-removal socket handling', () => {
   });
 });
 
+describe('AppDetailView header title', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    socketHandlers.clear();
+  });
+
+  // A truncated h1 is the ONLY place the app name appears on this route, and
+  // clipped text is neither selectable nor expandable — the tooltip is the sole
+  // access path to the rest of a long name on a phone (#5694).
+  it('exposes the full app name through the heading title attribute', async () => {
+    const longName = 'Example Application With A Deliberately Very Long Managed App Name For Wrapping';
+    api.getApp.mockResolvedValue({ ...APP, name: longName });
+
+    renderDetail();
+
+    const heading = await screen.findByRole('heading', { name: longName });
+    expect(heading).toHaveAttribute('title', longName);
+  });
+});
+
 describe('AppDetailView managed-app feature tabs', () => {
   beforeEach(() => {
     vi.clearAllMocks();

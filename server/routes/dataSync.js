@@ -40,14 +40,17 @@ import { z } from 'zod';
 import * as dataSync from '../services/dataSync.js';
 import { sweepTombstones, getSweepStatus, TOMBSTONE_GRACE_MS } from '../services/sharing/tombstoneGc.js';
 import { authorizePeerPull } from '../services/sharing/peerPullAuthorization.js';
+import { MAX_MANIFEST_SLOTS } from '../lib/syncManifest.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
 
 // MUST stay in sync with dataSync.getSupportedCategories() — a category
 // registered in the service but absent here 400s before its snapshot/apply
-// handler can run (the latent bug #730 hit for `storyBuilder`).
-const categoryParam = z.enum(['goals', 'character', 'digitalTwin', 'meatspace', 'universe', 'pipeline', 'mediaCollections', 'videoHistory', 'storyBuilder', 'usage']);
+// handler can run (the latent bug #730 hit for `storyBuilder`). Exported so
+// dataSync.test.js can assert that parity against the REAL service export in
+// both directions, instead of re-typing this list (#5705).
+export const categoryParam = z.enum(['goals', 'character', 'digitalTwin', 'meatspace', 'universe', 'pipeline', 'mediaCollections', 'videoHistory', 'storyBuilder', 'usage']);
 
 // Categories whose payload is the user's own person rather than their creative
 // work — `digitalTwin` alone carries identity, chronotype, longevity markers,
@@ -105,6 +108,37 @@ const forPeerOf = (req) => {
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
+// Optional `?slots=<id>,<id>` on the snapshot read — the per-instance slots a
+// manifest-aware puller diffed as stale. Only a manifest-serving category
+// (`usage`) honours it; everything else ignores it and serves the whole
+// payload, and so does a manifest category given no slots (an older peer, or a
+// puller whose manifest fetch failed). Bounded the same way `forPeer` is: a
+// single scalar, trimmed, per-id length-capped, and capped in COUNT so a
+// hostile query string can't turn into an unbounded Set. Repeated keys arrive
+// as an array from Express and are dropped.
+const slotsOf = (req) => {
+  if (typeof req.query.slots !== 'string') return undefined;
+  const ids = req.query.slots.split(',')
+    .map((id) => id.trim().slice(0, 128))
+    .filter((id) => id.length > 0)
+    .slice(0, MAX_MANIFEST_SLOTS);
+  return ids.length > 0 ? ids : undefined;
+};
+
+// GET /api/sync/:category/manifest — the category's per-slot version map.
+// 404 for a category that doesn't serve one; a puller treats that (and the
+// 404 an older peer returns for the whole route) as "no manifest" and falls
+// back to the whole snapshot.
+router.get('/:category/manifest', asyncHandler(async (req, res) => {
+  const category = categoryParam.parse(req.params.category);
+  // Same gate as the other two reads — a manifest is a fingerprint of the same
+  // payload, so it must never become the weaker door.
+  await authorizeSyncPull(req, category);
+  const manifest = await dataSync.getManifest(category);
+  if (!manifest) throw new ServerError('Category has no sync manifest', { status: 404 });
+  res.json(manifest);
+}));
+
 // GET /api/sync/:category/checksum — return checksum only (lightweight)
 router.get('/:category/checksum', asyncHandler(async (req, res) => {
   const category = categoryParam.parse(req.params.category);
@@ -118,7 +152,7 @@ router.get('/:category/checksum', asyncHandler(async (req, res) => {
 router.get('/:category/snapshot', asyncHandler(async (req, res) => {
   const category = categoryParam.parse(req.params.category);
   await authorizeSyncPull(req, category);
-  const snapshot = await dataSync.getSnapshot(category, { forPeerId: forPeerOf(req) });
+  const snapshot = await dataSync.getSnapshot(category, { forPeerId: forPeerOf(req), slots: slotsOf(req) });
   if (!snapshot) throw new ServerError('Category not found', { status: 404 });
   res.json(snapshot);
 }));

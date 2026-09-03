@@ -2,6 +2,7 @@
 // findings triage grouping, and manuscript deep-link building. No React, no
 // window: the page component and its unit tests both consume these.
 import { descriptorForCanonEntry } from './canonPrompt.js';
+import { escapeRegExp } from './textUtils.js';
 
 // Scope display order + labels (mirrors server CHECK_SCOPES). A check whose
 // scope isn't one of these still renders, bucketed under its raw scope last.
@@ -471,8 +472,6 @@ export function canonEntitiesFromUniverse(universe) {
   }
   return out;
 }
-
-const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // Build a single case-insensitive, word-boundary-anchored matcher over every
 // canon name (longest first so "Jon Snow" wins over "Jon"), plus a lowercase

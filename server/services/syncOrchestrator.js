@@ -23,6 +23,7 @@ import * as catalogSync from './catalogSync.js';
 import * as dataSync from './dataSync.js';
 import { getBackendName } from './memoryBackend.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
+import { isManifestEnvelope, diffManifestSlots, MAX_MANIFEST_SLOTS } from '../lib/syncManifest.js';
 
 const CURSORS_FILE = dataPath('instances_sync_cursors.json');
 const SYNC_INTERVAL_MS = 60000;
@@ -484,9 +485,22 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
     return { totalApplied: 0, checksum: checksumRes.checksum };
   }
 
-  // Checksum changed — fetch full snapshot (same forPeer scoping as checksum
-  // so the snapshot we apply matches the checksum we just cached).
-  const snapshot = await fetchPeer(peer, `/api/sync/${category}/snapshot${forPeerQs}`);
+  // Checksum changed — fetch the snapshot (same forPeer scoping as checksum so
+  // the snapshot we apply matches the checksum we just cached).
+  //
+  // A manifest-serving category (`usage`) narrows that to the per-instance
+  // slots that actually moved. `resolveStaleSlots` returns null when the source
+  // peer serves no usable manifest (an older install 404s the endpoint), and
+  // the whole-snapshot fetch below is then exactly the legacy path.
+  const manifest = await resolveStaleSlots(peer, category, forPeerQs);
+  // No slot moved, yet the checksum did — a retirement (tombstones ride every
+  // response and advance no slot's `capturedAt`), or our own digest coming back
+  // at us, which the receiver skips anyway. Synthesize the empty payload rather
+  // than spending a round trip on it; the tombstones still have to be applied
+  // or the retirement never propagates.
+  const snapshot = manifest?.slots.length === 0
+    ? { data: { instances: {}, tombstones: manifest.tombstones }, portosMeta: manifest.portosMeta, checksum: manifest.checksum }
+    : await fetchPeer(peer, `/api/sync/${category}/snapshot${forPeerQs}${slotsQsOf(manifest, forPeerQs)}`);
   if (!snapshot?.data) return { totalApplied: 0, checksum: null };
 
   // Forward the sender's portosMeta envelope so applyRemote can run the
@@ -519,8 +533,50 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
   await clearPeerSchemaGap(peerId, category)
     .catch((err) => console.log(`⚠️ syncOrchestrator: clear schema gap failed: ${err.message}`));
 
-  return { totalApplied: result.applied ? result.count : 0, checksum: snapshot.checksum };
+  // Cache the MANIFEST's checksum when we took the per-slot path: it is the
+  // state we actually diffed against and converged to. The snapshot's own
+  // checksum could already describe a newer manifest (a digest landing between
+  // the two fetches), and caching that would skip the slot we never pulled.
+  // It is deliberately null on a truncated diff — same reason.
+  return { totalApplied: result.applied ? result.count : 0, checksum: manifest ? manifest.checksum : snapshot.checksum };
 }
+
+/**
+ * Ask a peer for a manifest-serving category's per-slot version map and diff it
+ * against ours, so the snapshot fetch carries only the slots that moved.
+ *
+ * Returns `null` — meaning "fetch the whole snapshot" — for a category with no
+ * manifest, for a source peer too old to serve one (404 → `fetchPeer` null),
+ * for a malformed response, and if our own local read fails. Every one of those
+ * degrades to the pre-manifest transfer, which receivers merge idempotently.
+ */
+async function resolveStaleSlots(peer, category, forPeerQs) {
+  const local = await dataSync.getManifest(category).catch(() => null);
+  if (!local) return null;
+  const remote = await fetchPeer(peer, `/api/sync/${category}/manifest${forPeerQs}`);
+  if (!isManifestEnvelope(remote)) return null;
+  const stale = diffManifestSlots(remote.data.instances, local.data?.instances);
+  return {
+    // A truncated request converges only if we DON'T cache the checksum: the
+    // dropped slots would otherwise sit behind a checksum that now matches. The
+    // next cycle re-diffs and takes the next batch. (Unreachable with today's
+    // 64-instance store cap; the guard is what makes raising that cap safe.)
+    checksum: stale.length > MAX_MANIFEST_SLOTS ? null : remote.checksum,
+    slots: stale.slice(0, MAX_MANIFEST_SLOTS),
+    // Tombstones ride the manifest, so a retirement propagates even on a cycle
+    // where no slot advanced.
+    tombstones: Array.isArray(remote.data.tombstones) ? remote.data.tombstones : [],
+    // Carried so the empty-payload shortcut above still runs the same
+    // schema-version gate a fetched snapshot would.
+    portosMeta: remote.portosMeta,
+  };
+}
+
+// `?slots=` for the narrowed snapshot fetch — empty (whole payload) whenever no
+// manifest resolved. Joined with `&` when `?forPeer=` already opened the query.
+const slotsQsOf = (manifest, forPeerQs) => (manifest
+  ? `${forPeerQs ? '&' : '?'}slots=${manifest.slots.map(encodeURIComponent).join(',')}`
+  : '');
 
 /**
  * Persist a per-(peer, category) schema-version gap on the peer record.

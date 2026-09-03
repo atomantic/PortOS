@@ -12,7 +12,7 @@ vi.mock('../lib/fileUtils.js', async () => {
 });
 
 // Avoid digitalTwinEvents side effects during answer submit
-vi.mock('./digital-twin.js', () => ({
+vi.mock('./digital-twin-meta.js', () => ({
   digitalTwinEvents: { emit: vi.fn() },
 }));
 

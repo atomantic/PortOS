@@ -43,12 +43,17 @@ describe('privacy records never federate (ADR 2026-08-08, #2148)', () => {
     expect([...NON_RECORD_SCHEMA_CATEGORIES].filter(mentionsPrivacy)).toEqual([]);
   });
 
+  // Explicit timeout: the lazy import below resolves the whole dataSync
+  // service graph INSIDE the test body, which costs most of the default 10s
+  // cap on a loaded machine and made this guard flake. Widening the cap keeps
+  // the laziness (and the isolation it buys the two assertions above) without
+  // the false red.
   it('declares no privacy dataSync snapshot category', async () => {
     // Imported lazily: dataSync pulls a broad service graph, and the two
     // assertions above must still run if that import ever gets heavier.
     const { getSupportedCategories } = await import('../dataSync.js');
     expect(getSupportedCategories().filter(mentionsPrivacy)).toEqual([]);
-  });
+  }, 30000);
 
   it('gives no privacy table a sync cursor or tombstone column', () => {
     // Sanity: if the filter ever matches nothing the assertions below are

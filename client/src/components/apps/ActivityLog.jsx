@@ -18,13 +18,17 @@ export default function ActivityLog({ steps, error, completed }) {
         const cfg = STATUS_CONFIG[s.status] || STATUS_CONFIG.running;
         const Icon = cfg.icon;
         return (
-          <div key={s.step} className={`flex items-start gap-2 px-2 py-1 rounded ${cfg.bg}`}>
+          <div key={s.step} className={`flex min-w-0 items-start gap-2 px-2 py-1 rounded ${cfg.bg}`}>
             <span className={`shrink-0 mt-0.5 ${cfg.color}`}>
               {s.status === 'running' ? <BrailleSpinner text="" className="text-xs" /> : Icon && <Icon size={14} />}
             </span>
-            <span className="text-xs text-gray-300">
+            <span className="min-w-0 text-xs text-gray-300">
               <span className="font-mono text-white">{s.step}</span>
-              {s.message && <span className="ml-2 text-gray-400">{s.message}</span>}
+              {s.message && (
+                <span className="mt-1 block max-h-40 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words font-mono text-[11px] text-gray-400">
+                  {s.message}
+                </span>
+              )}
             </span>
           </div>
         );

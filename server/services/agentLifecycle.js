@@ -279,10 +279,15 @@ async function runAgentSpawn(task) {
   // "in review" until the next daemon restart (issue #989). The release is a
   // no-op when the task carries no `metadata.app` or the marker is a real
   // `agent-*` id from a different live agent.
+  // The throwaway worktree this attempt cut (set once prepareAgentWorkspace
+  // returns one), so every setup failure after that point removes it. Without
+  // this each failed spawn left a full checkout behind: the task stayed pending
+  // and every retry cut another.
+  let spawnWorktree = null;
   const cleanupOnError = async (error) => {
     // The spawn-dedup guard is released by withSpawnDedupGuard's finally around
     // this whole body (see spawnAgentForTask) — cleanupOnError only owns the
-    // lane, tool-execution, claim, and app-review marker releases.
+    // lane, tool-execution, claim, app-review marker, and setup-worktree releases.
     release(agentId);
     errorExecution(toolExecution.id, { message: error });
     completeExecution(toolExecution.id, { success: false });
@@ -295,6 +300,14 @@ async function runAgentSpawn(task) {
     await releaseAppReviewMarker(task.metadata?.app).catch(err => {
       emitLog('warn', `Failed to release app review marker for ${task.metadata?.app}: ${err.message}`, { taskId: task.id });
     });
+    if (spawnWorktree) {
+      // No agent ever ran in it, so nothing in it is worth keeping.
+      const { removeWorktree } = await import('./worktreeManager.js');
+      const sourceWorkspace = task.metadata?.app ? await getAppWorkspace(task.metadata.app).catch(() => ROOT_DIR) : ROOT_DIR;
+      await removeWorktree(agentId, sourceWorkspace, spawnWorktree.branchName, { discardDirt: true }).catch((cleanupErr) => {
+        emitLog('warn', `Failed to remove the worktree of failed spawn ${agentId}: ${cleanupErr.message}`, { agentId, taskId: task.id });
+      });
+    }
   };
 
   // Acquire the federation lease BEFORE any spawn setup (issue #1563, addressing
@@ -417,12 +430,18 @@ async function runAgentSpawn(task) {
       return null;
     }
     const { provider, selectedModel, modelSelection } = resolution;
-    const isTui = isTuiProvider(provider);
     const executionProfile = task.metadata?.executionProfile;
     const publicReviewPosture = publicReviewPostureForProfile(executionProfile);
     const publicReviewNoTools = publicReviewPosture === PUBLIC_REVIEW_NO_TOOL_POSTURE;
     const publicReviewActions = executionProfile === PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE;
     const publicReview = Boolean(publicReviewPosture);
+    const isTui = isTuiProvider(provider);
+    // A public-content stage never runs as an interactive session: a TUI
+    // provider record is spawned headless through its vendor's enforced
+    // recipe (the same binary as its CLI sibling) — the recipe that makes it
+    // eligible in `providerVendors.js` — so the user's enabled TUI providers
+    // are legal stage choices without opening a PTY.
+    const spawnHeadless = publicReview || !isTui;
     if (publicReview) {
       const scanBlock = publicReviewScanBlock(task);
       if (scanBlock) {
@@ -465,7 +484,7 @@ async function runAgentSpawn(task) {
     // payload can be edited without the browser: the picker is a convenience,
     // never the enforcement. The helper owns the "no posture requested" case,
     // so an ordinary task (posture `null`) passes straight through (#5830).
-    const postureBlock = publicReviewProviderBlock(provider, publicReviewPosture, { tui: isTui });
+    const postureBlock = publicReviewProviderBlock(provider, publicReviewPosture);
     if (postureBlock) {
       const { reason, category } = postureBlock;
       await updateTask(task.id, {
@@ -522,6 +541,9 @@ async function runAgentSpawn(task) {
       return null;
     }
     const { workspacePath, resolvedAppName, worktreeInfo, jiraTicket, jiraBranchName, explicitWorktree } = prep;
+    if (worktreeInfo?.branchName && !worktreeInfo.existingBranch && !worktreeInfo.isPersistentWorktree) {
+      spawnWorktree = { branchName: worktreeInfo.branchName };
+    }
 
     if (publicReview) {
       const allowedPullRequestNumbers = publicReviewActions
@@ -649,7 +671,7 @@ async function runAgentSpawn(task) {
       workspacePath,
       appName: resolvedAppName
     });
-    const executionMode = isTui ? (dispatchUseRunner ? 'runner-tui' : 'tui') : dispatchUseRunner ? 'runner' : 'direct';
+    const executionMode = !spawnHeadless ? (dispatchUseRunner ? 'runner-tui' : 'tui') : dispatchUseRunner ? 'runner' : 'direct';
 
     // Register the agent with model info.
     //
@@ -896,8 +918,8 @@ async function runAgentSpawn(task) {
     // their deliberately bounded GPU concurrency posture.
     const maxConcurrentThreads = cloudSwarmThreadCapacity(runProvider, task.metadata?.swarmCount);
     const safetyProfile = publicReview ? executionProfile : null;
-    const cliConfig = isTui
-      ? buildTuiSpawnConfig(runProvider, selectedModel, { systemPromptFile, effort: taskEffort, maxConcurrentThreads, safetyProfile })
+    const cliConfig = !spawnHeadless
+      ? buildTuiSpawnConfig(runProvider, selectedModel, { systemPromptFile, effort: taskEffort, maxConcurrentThreads })
       : buildCliSpawnConfig(runProvider, selectedModel, cliSettingsEnv, { systemPromptFile, effort: taskEffort, maxConcurrentThreads, safetyProfile });
 
     emitLog('success', `Spawning agent for task ${task.id}`, {
@@ -920,7 +942,7 @@ async function runAgentSpawn(task) {
     // must NOT run here on the success path; the lane is released by the
     // agent-completion handler when the work finishes.
     handedOff = true;
-    if (isTui) {
+    if (!spawnHeadless) {
       return await spawnTuiAgent({
         agentId,
         task,

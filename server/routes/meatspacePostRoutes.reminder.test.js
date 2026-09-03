@@ -17,6 +17,17 @@ vi.mock('../services/meatspacePost.js', () => ({
   updatePostConfig: vi.fn(),
 }));
 
+// The route names each POST analytics/policy entry point at its declaring
+// module (#5690), so a mocked meatspacePost.js needs these mocked too —
+// otherwise the real siblings link against the mock and fail on the exports it
+// does not stub.
+vi.mock('../services/meatspacePostStats.js', () => ({ getPostStats: vi.fn() }));
+vi.mock('../services/meatspacePostRecommendations.js', () => ({ getPostRecommendations: vi.fn() }));
+vi.mock('../services/meatspacePostAdaptive.js', () => ({
+  resolveDrillConfig: vi.fn(),
+  getAdaptivePreview: vi.fn(),
+}));
+
 import * as postService from '../services/meatspacePost.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import meatspacePostRoutes from './meatspacePostRoutes.js';

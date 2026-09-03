@@ -340,7 +340,12 @@ export default function CreativeCommissionDetail() {
             <Sparkles className="w-6 h-6 text-port-accent shrink-0" />
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <h1 className="text-xl font-semibold text-gray-100 truncate">{commission.name}</h1>
+                <h1
+                  className="min-w-0 line-clamp-2 break-words text-xl font-semibold text-gray-100"
+                  title={commission.name}
+                >
+                  {commission.name}
+                </h1>
                 <span className={`text-[10px] uppercase px-1.5 py-0.5 rounded ${commission.enabled ? 'bg-port-success/20 text-port-success' : 'bg-gray-700 text-gray-400'}`}>
                   {commission.enabled ? 'Active' : 'Paused'}
                 </span>

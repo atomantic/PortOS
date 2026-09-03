@@ -171,6 +171,7 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
     isOperating,
     operationType,
     error: operationError,
+    errorCode: operationErrorCode,
     completed: operationCompleted,
     startUpdate,
   } = useAppOperation({ appId, onComplete: handleOperationComplete });
@@ -240,6 +241,16 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
     startUpdate(appId, appName, { syncFork: intent?.syncFork === true });
   };
 
+  // Retry a refused PortOS self-update with the acknowledgement its refusal
+  // code named (server/services/updatePreflight.js). The refusal happened
+  // before any operation actually started, so — unlike a real update
+  // failure — it's safe to clear the "reload before trying again" latch and
+  // let the user retry immediately (#5984).
+  const handleAcknowledgeAndRetry = (ackOptions) => {
+    setUpdateRequested(false);
+    startUpdate(appId, appName, ackOptions);
+  };
+
   return (
     <div className="rounded-xl border border-port-accent/30 bg-port-card p-4 sm:p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -272,6 +283,28 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
             completed={operationCompleted}
             completedMessage={operationType === 'update' ? 'Reload this page before starting another update.' : undefined}
           />
+          {/* Refusals PortOS's shared update preflight raises (server/services/updatePreflight.js)
+              carry an explicit acknowledgement the user can opt into and retry with. */}
+          {operationErrorCode === 'FORK_SYNC_REQUIRED' && (
+            <button
+              onClick={() => handleAcknowledgeAndRetry({ acknowledgeFork: true })}
+              disabled={isOperating || syncingFork}
+              className="mt-2 flex min-h-[40px] items-center gap-1.5 rounded-lg border border-port-border px-3 py-2 text-sm text-gray-300 hover:border-port-accent hover:text-white disabled:opacity-50"
+            >
+              <Download size={15} />
+              Update from fork as-is
+            </button>
+          )}
+          {operationErrorCode === 'PERSISTENT_MIND_IMAGES_IN_FLIGHT' && (
+            <button
+              onClick={() => handleAcknowledgeAndRetry({ acknowledgePersistentMindImageBackup: true })}
+              disabled={isOperating || syncingFork}
+              className="mt-2 flex min-h-[40px] items-center gap-1.5 rounded-lg border border-port-border px-3 py-2 text-sm text-gray-300 hover:border-port-accent hover:text-white disabled:opacity-50"
+            >
+              <Download size={15} />
+              Update anyway (back up first)
+            </button>
+          )}
         </div>
       )}
 

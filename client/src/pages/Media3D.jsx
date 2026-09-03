@@ -14,7 +14,7 @@ import useUrlParams from '../hooks/useUrlParams';
 import MediaImage from '../components/MediaImage';
 import { imageTo3dStatusMeta } from '../components/media/imageTo3dStatus';
 import ImageTo3dRenderOptions from '../components/media/ImageTo3dRenderOptions';
-import { renderOptionsBody } from '../lib/imageTo3dRenderOptions';
+import { renderOptionsBody, SUBJECT_SCALE_DEFAULT } from '../lib/imageTo3dRenderOptions';
 import { isTargetReady, unavailableReasonLabel } from '../lib/imageTo3dReasons';
 
 // Poll cadence while a render is in flight (a real TRELLIS.2 render is multi-minute).
@@ -44,6 +44,7 @@ export default function Media3D() {
   const [detail, setDetail] = useState('auto');
   const [alphaMode, setAlphaMode] = useState('');
   const [normalMap, setNormalMap] = useState(false);
+  const [subjectScale, setSubjectScale] = useState(SUBJECT_SCALE_DEFAULT);
   // Existing image-to-3D records (newest-first) so the page doubles as a library:
   // each links to its `/3d/:id` detail view.
   const [records, setRecords] = useState([]);
@@ -131,7 +132,9 @@ export default function Media3D() {
         name: nameFromImageFilename(selectedImage.filename),
         filename: selectedImage.filename,
         target: selectedTarget.id,
-        ...renderOptionsBody({ steps, seed, keyBackground, detail, alphaMode, normalMap }),
+        ...renderOptionsBody({
+          steps, seed, keyBackground, detail, alphaMode, normalMap, subjectScale,
+        }),
       },
       { silent: true },
     ).catch((err) => {
@@ -140,7 +143,7 @@ export default function Media3D() {
     });
     if (created && mountedRef.current) { setModelId(created.id); setGenerating(true); patchRecord(created); }
   }, [selectedImage, selectedTarget, steps, seed, keyBackground, detail, alphaMode, normalMap,
-    updateParams, mountedRef, patchRecord]);
+    subjectScale, updateParams, mountedRef, patchRecord]);
 
   // Why the Generate action is blocked, or null when it's ready to run. The runner
   // (POST create → on-device render → landed .glb) is wired, so the terminal state
@@ -257,6 +260,9 @@ export default function Media3D() {
             onSeedChange={setSeed}
             keyBackground={keyBackground}
             onKeyBackgroundChange={setKeyBackground}
+            subjectScale={subjectScale}
+            onSubjectScaleChange={setSubjectScale}
+            sourcePreviewUrl={selectedImage?.previewUrl || null}
             disabled={generating}
           />
 

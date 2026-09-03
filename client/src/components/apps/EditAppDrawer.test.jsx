@@ -244,6 +244,19 @@ describe('EditAppDrawer native launch target', () => {
   });
 });
 
+describe('EditAppDrawer update command', () => {
+  it('saves the explicitly configured app update routine', async () => {
+    renderDrawer();
+    await openTab('Commands');
+
+    fireEvent.change(screen.getByLabelText('Update Command'), { target: { value: 'npm run update' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
+    expect(api.updateApp.mock.calls[0][1].updateCommand).toBe('npm run update');
+  });
+});
+
 describe('EditAppDrawer required-field validation across tabs', () => {
   // The required Name/Repository Path inputs live on the General tab and are
   // unmounted while another tab is active, so browser `required` validation

@@ -11,7 +11,12 @@ const mock = vi.hoisted(() => ({
   portosOrigin: { isGithub: true, isUpstream: false, owner: 'example-owner' },
   assertEidoverseInstalled: vi.fn(),
   setEidoverseWorldsOrigin: vi.fn(),
+  riggingReady: false,
+  riggingThrows: false,
 }));
+
+const recordUserAction = vi.hoisted(() => vi.fn(async () => ({ id: 'evt' })));
+vi.mock('./userActions.js', () => ({ recordUserAction }));
 
 vi.mock('./settings.js', () => ({
   getSettings: vi.fn(async () => structuredClone(mock.settings)),
@@ -28,6 +33,16 @@ vi.mock('./datadog.js', () => ({
 
 vi.mock('./jira.js', () => ({
   hasConfiguredInstances: vi.fn(async () => mock.jiraConfigured),
+}));
+
+// The rigging detector probes a machine-local runtime rather than a config file, so
+// the real module would spawn a Blender import on a machine that happens to have the
+// env provisioned. Mocked here to keep the suite deterministic on any host.
+vi.mock('./rigging/readiness.js', () => ({
+  getRiggingReadiness: vi.fn(async () => {
+    if (mock.riggingThrows) throw new Error('probe exploded');
+    return { ready: mock.riggingReady, reason: mock.riggingReady ? null : 'runtime-not-installed' };
+  }),
 }));
 
 vi.mock('../lib/gitRemote.js', () => ({
@@ -66,6 +81,8 @@ describe('instance features', () => {
     mock.jiraConfigured = false;
     mock.datadogThrows = false;
     mock.eidoverseInstalled = false;
+    mock.riggingReady = false;
+    mock.riggingThrows = false;
     mock.portosOrigin = { isGithub: true, isUpstream: false, owner: 'example-owner' };
     mock.assertEidoverseInstalled.mockReset().mockResolvedValue({ installed: true });
     mock.setEidoverseWorldsOrigin.mockReset().mockResolvedValue({ appId: 'app-eidoverse' });
@@ -240,6 +257,38 @@ describe('instance features', () => {
       });
     });
 
+    // Rigging inverts the fail-open policy above, on purpose. Its detector probes a
+    // machine-local RUNTIME, not a config file: "we could not tell" there means the
+    // Blender module may simply not exist, and enabling the feature on such a host
+    // trades a named blocker for a spawn error the first time a user clicks.
+    it('enables rigging only when the runtime probe says it is ready', async () => {
+      mock.riggingReady = true;
+      expect((await detectFeatureConfiguration()).rigging).toBe(true);
+      expect(byId((await getInstanceFeatures()).features, 'rigging')).toMatchObject({
+        enabled: true,
+        source: 'auto',
+      });
+      expect(await isInstanceFeatureEnabled('rigging')).toBe(true);
+    });
+
+    it('keeps rigging off on an install with no runtime', async () => {
+      expect((await detectFeatureConfiguration()).rigging).toBe(false);
+      expect(byId((await getInstanceFeatures()).features, 'rigging')).toMatchObject({
+        enabled: false,
+        source: 'auto',
+      });
+    });
+
+    it('fails CLOSED when the rigging probe cannot answer', async () => {
+      mock.riggingThrows = true;
+      expect((await detectFeatureConfiguration()).rigging).toBe(false);
+      expect(byId((await getInstanceFeatures()).features, 'rigging')).toMatchObject({
+        enabled: false,
+        source: 'auto',
+      });
+      expect(await isInstanceFeatureEnabled('rigging')).toBe(false);
+    });
+
     // A feature with NO detector reads null for a different reason — nothing was
     // ever probed — so it must keep taking its shipped default, not fail open.
     it('reports no detection for a feature with no detector', async () => {
@@ -256,11 +305,22 @@ describe('instance features', () => {
 
     const { features } = await getInstanceFeatures();
     expect(Object.fromEntries(features.map((f) => [f.id, f.enabled])))
-      .toEqual({ post: true, datadog: true, jira: false, eidoverse: false, gsd: true, openclaw: true, health: true, facetime: false });
+      .toEqual({ post: true, datadog: true, jira: false, eidoverse: false, gsd: true, openclaw: true, health: true, rigging: false, facetime: false });
   });
 
   it('rejects an unknown feature id', async () => {
     await expect(updateInstanceFeature('nope', true)).rejects.toMatchObject({ status: 404 });
     expect(await isInstanceFeatureEnabled('nope')).toBe(false);
+  });
+
+  it('records instance-feature.toggle with { id, enabled } and skips settings.update', async () => {
+    await updateInstanceFeature('post', false);
+    expect(mock.updateSettingsWith).toHaveBeenCalledWith(expect.any(Function), { actor: 'user', skipUserAction: true });
+    expect(recordUserAction).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'instance-feature.toggle',
+      actor: 'user',
+      target: 'post',
+      payload: { id: 'post', enabled: false },
+    }));
   });
 });

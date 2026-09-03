@@ -156,11 +156,45 @@ describe('buildOpencodeEnvVars', () => {
     expect(buildOpencodeEnvVars({ command: 'claude' }, 'claude-opus-4')).toEqual({});
   });
 
-  it('returns empty object for OpenCode providers without ollamaBacked', () => {
+  // `OPENCODE_CONFIG_CONTENT` REPLACES the user's own ~/.config/opencode, so a
+  // hand-made plain `opencode` record that declares nothing must keep getting
+  // nothing — synthesizing a config would drop every provider it defines.
+  it('injects nothing for a namespace-less provider that stores no config', () => {
     expect(buildOpencodeEnvVars(
       { command: 'opencode', ollamaBacked: false },
       'anthropic/claude-sonnet',
     )).toEqual({});
+  });
+
+  // A namespace-less record that DOES ship a config is the harness's own catalog
+  // (the seeded OpenCode Zen wrappers): nothing to declare and no key to inject,
+  // but it still needs the `small_model` pin so OpenCode's own side work stays
+  // on the dispatched model instead of its built-in default.
+  it('declares no provider entry for a namespace-less OpenCode provider', () => {
+    const result = buildOpencodeEnvVars(
+      {
+        command: 'opencode',
+        envVars: { OPENCODE_CONFIG_CONTENT: '{"permission":"allow"}' },
+      },
+      'opencode/big-pickle',
+    );
+    const cfg = JSON.parse(result.OPENCODE_CONFIG_CONTENT);
+    expect(cfg).toEqual({ permission: 'allow', small_model: 'opencode/big-pickle' });
+    expect(cfg.provider).toBeUndefined();
+    // No gateway key env var rides along — OpenCode authenticates Zen itself.
+    expect(Object.keys(result)).toEqual(['OPENCODE_CONFIG_CONTENT']);
+  });
+
+  it('preserves a stored config and its small_model pin for a namespace-less provider', () => {
+    const stored = JSON.stringify({ permission: 'ask', small_model: 'opencode/mimo-v2.5-free' });
+    const result = buildOpencodeEnvVars(
+      { command: 'opencode', envVars: { OPENCODE_CONFIG_CONTENT: stored } },
+      'opencode/big-pickle',
+    );
+    expect(JSON.parse(result.OPENCODE_CONFIG_CONTENT)).toEqual({
+      permission: 'ask',
+      small_model: 'opencode/mimo-v2.5-free',
+    });
   });
 
   it('declares the run model (bare) under provider.ollama.models', () => {

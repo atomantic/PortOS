@@ -413,8 +413,7 @@ export default function CharacterSheet() {
 
   const hpPct = Math.max(0, Math.min(100, (char.hp / char.maxHp) * 100));
   // Level is age-derived now (#2673) — it no longer maps to an XP threshold, so the old
-  // "XP toward next level" bar is gone. XP survives as a plain cumulative stat here; the
-  // birthday-progress bar lives on the OpenWorld HUD badge (full page reframe is Slice 5).
+  // "XP toward next level" bar is gone. XP survives as a plain cumulative stat here.
   const birthdayPct = Number.isFinite(char.ageYears)
     ? Math.round((char.ageYears - Math.floor(char.ageYears)) * 100)
     : 0;

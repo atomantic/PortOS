@@ -98,8 +98,8 @@ import {
   ensureCursorTuiArgs,
   ensureCursorHeadlessArgs,
 } from './cursor.js';
+import { PROVIDER_TYPES } from './aiToolkit/constants.js';
 import {
-  isPublicReviewNoToolProfile,
   publicReviewPostureForProfile,
   PUBLIC_REVIEW_EXECUTION_PROFILE,
   PUBLIC_REVIEW_GATE_EXECUTION_PROFILE,
@@ -135,6 +135,15 @@ function defaultSpawnArgs(cliArgsFn, fallbackCommand) {
     stdinMode: 'prompt',
   });
 }
+
+/**
+ * A provider record that names a local binary PortOS can spawn headless. A
+ * public-review stage never runs interactively: a TUI record of the same
+ * vendor (`codex-tui`, `grok-tui`, …) is spawned through the vendor's headless
+ * recipe exactly like its CLI sibling, so the user's enabled TUI providers are
+ * legal stage choices. API/custom providers have no binary and no recipe.
+ */
+const isDirectBinaryProvider = (provider) => provider?.type === PROVIDER_TYPES.CLI || provider?.type === PROVIDER_TYPES.TUI;
 
 // ─── codex ──────────────────────────────────────────────────────────────────
 
@@ -274,11 +283,11 @@ const CODEX = {
     // enforced recipe when a stage selects them.
     [PUBLIC_REVIEW_NO_TOOL_POSTURE]: {
       spawnArgs: codexPublicReviewSpawnArgs,
-      matchProvider: (provider) => isCodexCommand(provider?.command) || provider?.id === CODEX_CLI_ID || provider?.id === 'codex-tui',
+      matchProvider: (provider) => isDirectBinaryProvider(provider) && (isCodexCommand(provider?.command) || provider?.id === CODEX_CLI_ID || provider?.id === 'codex-tui'),
     },
     [PUBLIC_REVIEW_ACTIONS_POSTURE]: {
       spawnArgs: codexPublicReviewActionsSpawnArgs,
-      matchProvider: (provider) => provider?.type === 'cli' && isCodexCommand(provider?.command),
+      matchProvider: (provider) => isDirectBinaryProvider(provider) && isCodexCommand(provider?.command),
     },
   },
 };
@@ -304,11 +313,11 @@ const ANTIGRAVITY = {
   publicReview: {
     [PUBLIC_REVIEW_NO_TOOL_POSTURE]: {
       spawnArgs: antigravityPublicReviewSpawnArgs,
-      matchProvider: (provider) => provider?.type === 'cli' && isAntigravityCommand(provider?.command),
+      matchProvider: (provider) => isDirectBinaryProvider(provider) && isAntigravityCommand(provider?.command),
     },
     [PUBLIC_REVIEW_ACTIONS_POSTURE]: {
       spawnArgs: antigravityPublicReviewActionsSpawnArgs,
-      matchProvider: (provider) => provider?.type === 'cli' && isAntigravityCommand(provider?.command),
+      matchProvider: (provider) => isDirectBinaryProvider(provider) && isAntigravityCommand(provider?.command),
     },
   },
 };
@@ -354,11 +363,11 @@ const GROK = {
   publicReview: {
     [PUBLIC_REVIEW_NO_TOOL_POSTURE]: {
       spawnArgs: grokPublicReviewSpawnArgs,
-      matchProvider: (provider) => provider?.type === 'cli' && isGrokCommand(provider?.command),
+      matchProvider: (provider) => isDirectBinaryProvider(provider) && isGrokCommand(provider?.command),
     },
     [PUBLIC_REVIEW_ACTIONS_POSTURE]: {
       spawnArgs: grokPublicReviewActionsSpawnArgs,
-      matchProvider: (provider) => provider?.type === 'cli' && isGrokCommand(provider?.command),
+      matchProvider: (provider) => isDirectBinaryProvider(provider) && isGrokCommand(provider?.command),
     },
   },
 };
@@ -462,7 +471,19 @@ function claudeSpawnArgs(provider, { effectiveModel, effort, systemPromptFile, s
   return { command, args, stdinMode: 'prompt', streamFormat: 'stream-json' };
 }
 
-const CLAUDE_PUBLIC_REVIEW_ARGS = [
+// Shared by both Claude postures: no MCP servers, no browser bridge, no
+// persisted session, no slash commands. `--bare` is NOT here: it also disables
+// OAuth/keychain auth, so it would break a subscription-authenticated cloud
+// Claude — `applyLeanClaudeArgs` adds it for the local Ollama wrapper only.
+const CLAUDE_PUBLIC_REVIEW_COMMON_ARGS = [
+  '--strict-mcp-config',
+  '--mcp-config', '{"mcpServers":{}}',
+  '--no-chrome',
+  '--no-session-persistence',
+  '--disable-slash-commands',
+];
+
+const CLAUDE_PUBLIC_REVIEW_NO_TOOL_ARGS = [
   '--permission-mode', 'plan',
   // The code-review model gets the cleared PR material in its prompt. Keep
   // both controls: `--restricted` removes the command/network-capable built-in
@@ -470,24 +491,48 @@ const CLAUDE_PUBLIC_REVIEW_ARGS = [
   // any tool schema to a local model that does not support tool calls.
   '--restricted',
   '--tools', '',
-  '--strict-mcp-config',
-  '--mcp-config', '{"mcpServers":{}}',
-  '--no-chrome',
-  '--no-session-persistence',
-  '--disable-slash-commands',
-  '--bare',
+  ...CLAUDE_PUBLIC_REVIEW_COMMON_ARGS,
 ];
 
-function claudePublicReviewArgs(provider, {
+// Claude Code's OS-level sandbox (seatbelt on macOS, bubblewrap on Linux) is a
+// settings switch rather than a flag; `--settings` accepts inline JSON. Inside
+// it, Bash runs without prompting but filesystem writes stay inside the working
+// tree and the empty domain allowlist denies every network request — in
+// `--print` mode a denied request is simply not executed, there is nobody to
+// approve it. The web tools are denied outright for the same reason.
+//
+// `sandbox.filesystem.allowWrite` (a real, current setting) does NOT reach a
+// PR that edits `.claude/skills`, `.claude/agents`, `.claude/commands`,
+// `.claude/hooks`, `.claude/workflows`, or `.mcp.json` — Claude Code's docs
+// state plainly that these are "protected paths" and "there is no way to
+// exempt one of them: an allowWrite entry ... doesn't lift the protection."
+// (docs.claude.com/en/docs/claude-code/sandboxing, "Protected paths"). The
+// only way to lift it is `sandbox.filesystem.disabled`, which turns off
+// filesystem isolation for every path — defeating the point of sandboxing an
+// untrusted PR's patch. So the Stage 3 review prompt (`pr-reviewer-review` in
+// taskPromptDefaults/prompts.js) is taught the `git apply --cached` +
+// index-verification fallback instead (#5963).
+const CLAUDE_SANDBOX_SETTINGS = JSON.stringify({
+  sandbox: { enabled: true, autoAllowBashIfSandboxed: true, network: { allowedDomains: [] } },
+});
+const CLAUDE_PUBLIC_REVIEW_ACTIONS_ARGS = [
+  '--permission-mode', 'acceptEdits',
+  '--settings', CLAUDE_SANDBOX_SETTINGS,
+  '--disallowedTools', 'WebFetch,WebSearch',
+  ...CLAUDE_PUBLIC_REVIEW_COMMON_ARGS,
+];
+
+const claudePublicReviewSpawnArgsFor = (postureArgs) => (provider, ctx) => claudePublicReviewArgs(postureArgs, provider, ctx);
+
+function claudePublicReviewArgs(postureArgs, provider, {
   effectiveModel,
   effort,
   systemPromptFile,
-  settingsEnv,
   tui = false,
 } = {}) {
   const providerId = provider?.id || 'claude-code';
   const args = [
-    ...CLAUDE_PUBLIC_REVIEW_ARGS,
+    ...postureArgs,
     ...(tui ? [] : ['--print', '--output-format', 'stream-json', '--verbose', '--include-partial-messages']),
   ];
   if (systemPromptFile) args.push('--append-system-prompt-file', systemPromptFile);
@@ -508,6 +553,8 @@ function claudePublicReviewArgs(provider, {
   };
 }
 
+const matchClaudeBinary = (provider) => isDirectBinaryProvider(provider) && isClaudeCommand(provider?.command);
+
 const CLAUDE = {
   id: 'claude',
   idFragment: null, // never matched by id.includes() — it's the outside-the-loop default
@@ -521,12 +568,14 @@ const CLAUDE = {
   publicReview: {
     // Claude is the historical always-true fallback row, so its posture
     // matcher must positively identify the binary — an unknown command must
-    // never inherit claude's flag set. There is deliberately no
-    // sandboxed-actions recipe: Claude Code has no OS-level sandbox flag, only
-    // permission modes, so it fails closed for the actions stage.
+    // never inherit claude's flag set.
     [PUBLIC_REVIEW_NO_TOOL_POSTURE]: {
-      spawnArgs: claudePublicReviewArgs,
-      matchProvider: (provider) => provider?.type === 'cli' && isClaudeCommand(provider?.command),
+      spawnArgs: claudePublicReviewSpawnArgsFor(CLAUDE_PUBLIC_REVIEW_NO_TOOL_ARGS),
+      matchProvider: matchClaudeBinary,
+    },
+    [PUBLIC_REVIEW_ACTIONS_POSTURE]: {
+      spawnArgs: claudePublicReviewSpawnArgsFor(CLAUDE_PUBLIC_REVIEW_ACTIONS_ARGS),
+      matchProvider: matchClaudeBinary,
     },
   },
 };
@@ -592,21 +641,13 @@ export function inferTuiCommand(id) {
   return CLAUDE.inferredCommand;
 }
 
-/** `applyCommandDefaults` (tuiHandshake.js): TUI posture-flag dispatch. */
-export function applyCommandDefaults(command, args, { safetyProfile = null } = {}) {
-  if (publicReviewPostureForProfile(safetyProfile) === PUBLIC_REVIEW_ACTIONS_POSTURE) {
-    throw new Error('The public-review-actions profile requires a supported direct CLI sandbox');
-  }
-  const vendor = PROVIDER_VENDORS.find((v) => (
-    (isPublicReviewNoToolProfile(safetyProfile) ? v.publicReviewTuiArgs : v.tuiArgs)
-      && v.matchCommand(command)
-  ));
-  if (isPublicReviewNoToolProfile(safetyProfile)) {
-    if (!vendor || typeof vendor.publicReviewTuiArgs !== 'function') {
-      throw new Error(`Provider command '${command}' has no enforced public-review posture`);
-    }
-    return vendor.publicReviewTuiArgs(args, { safetyProfile });
-  }
+/**
+ * `applyCommandDefaults` (tuiHandshake.js): interactive-session flag dispatch.
+ * Public-review stages never reach this — they always spawn headless through
+ * `buildVendorSpawnConfig`, which is where a posture is enforced.
+ */
+export function applyCommandDefaults(command, args) {
+  const vendor = PROVIDER_VENDORS.find((v) => v.tuiArgs && v.matchCommand(command));
   if (!vendor) return args;
   return vendor.tuiArgs(args);
 }
@@ -645,10 +686,12 @@ export function buildVendorSpawnConfig(provider, ctx) {
   const posture = publicReviewPostureForProfile(ctx?.safetyProfile);
   if (posture) {
     const recipe = publicReviewRecipe(provider, posture);
-    if (!recipe) {
+    if (recipe) return recipe.spawnArgs(provider, ctx);
+    // See supportsPublicReviewPosture for why the actions stage may fall
+    // through to the vendor's ordinary headless recipe and the gate may not.
+    if (!supportsPublicReviewPosture(provider, posture)) {
       throw new Error(`Provider '${providerLabel(provider)}' has no enforced ${posture} public-review posture`);
     }
-    return recipe.spawnArgs(provider, ctx);
   }
   const vendor = PROVIDER_VENDORS.find((v) => v.spawnArgs && matchesProvider(v, provider));
   return vendor.spawnArgs(provider, ctx);
@@ -660,13 +703,27 @@ export function buildVendorSpawnConfig(provider, ctx) {
  * offer a stage's eligible providers, so it must stay derived from the vendor
  * rows rather than from a hardcoded list of vendor names.
  *
- * Interactive (TUI) sessions and API/custom providers have no maintained
- * recipe: a generic read-only prompt is not enforcement, so they fail closed.
+ * API/custom providers have no maintained recipe: a generic read-only prompt
+ * is not enforcement, so they fail closed. A TUI record IS eligible — the
+ * stage spawns its binary headless through the vendor's enforced recipe, never
+ * as an interactive session (see `isDirectBinaryProvider`).
  */
-export function publicReviewPosturesForProvider(provider, { tui = false } = {}) {
-  if (tui || provider?.type !== 'cli') return [];
-  return PUBLIC_REVIEW_POSTURES.filter((posture) => Boolean(publicReviewRecipe(provider, posture)));
+export function publicReviewPosturesForProvider(provider) {
+  return PUBLIC_REVIEW_POSTURES.filter((posture) => supportsPublicReviewPosture(provider, posture));
 }
+
+/**
+ * The subset of `publicReviewPosturesForProvider` backed by a vendor-enforced
+ * recipe; the schedule UI uses the difference to say which actions-stage
+ * choices are OS-sandboxed and which rely on the worktree alone.
+ */
+export function enforcedPublicReviewPosturesForProvider(provider) {
+  return PUBLIC_REVIEW_POSTURES.filter((posture) => enforcesPublicReviewPosture(provider, posture));
+}
+
+const enforcesPublicReviewPosture = (provider, posture) => (
+  isDirectBinaryProvider(provider) && Boolean(publicReviewRecipe(provider, posture))
+);
 
 /**
  * Vendor ids that declare a maintained recipe for `posture`, for naming what a
@@ -677,10 +734,20 @@ export function publicReviewCapableVendorIds(posture) {
   return PROVIDER_VENDORS.filter((vendor) => vendor.publicReview?.[posture]?.spawnArgs).map((vendor) => vendor.id);
 }
 
-/** Whether `provider` has a maintained, enforced recipe for one posture. */
-export function supportsPublicReviewPosture(provider, posture, { tui = false } = {}) {
-  if (tui || provider?.type !== 'cli') return false;
-  return Boolean(publicReviewRecipe(provider, posture));
+/**
+ * Whether `provider` may run a stage with this posture.
+ *
+ * The no-tool gate requires a maintained recipe: only an enforced argv can
+ * hold a model tool-free. The sandboxed-actions stage is open to EVERY enabled
+ * binary (CLI/TUI) provider — a vendor recipe (Codex, Antigravity, Grok,
+ * Claude) adds an OS-level sandbox on top, but the stage's baseline isolation
+ * is the disposable worktree, the stripped child environment, and the
+ * deterministic coordinator owning all forge mutations. API providers have no
+ * binary to spawn and fail closed for both.
+ */
+export function supportsPublicReviewPosture(provider, posture) {
+  return enforcesPublicReviewPosture(provider, posture)
+    || (posture === PUBLIC_REVIEW_ACTIONS_POSTURE && isDirectBinaryProvider(provider));
 }
 
 /**
@@ -696,9 +763,9 @@ export function supportsPublicReviewPosture(provider, posture, { tui = false } =
  *
  * @returns {{ reason: string, category: string }|null}
  */
-export function publicReviewProviderBlock(provider, posture, { tui = false } = {}) {
+export function publicReviewProviderBlock(provider, posture) {
   if (!posture) return null;
-  if (supportsPublicReviewPosture(provider, posture, { tui })) return null;
+  if (supportsPublicReviewPosture(provider, posture)) return null;
   return {
     reason: `Provider '${providerLabel(provider)}' has no enforced ${posture} public-content review mode`,
     category: posture === PUBLIC_REVIEW_ACTIONS_POSTURE
@@ -708,13 +775,13 @@ export function publicReviewProviderBlock(provider, posture, { tui = false } = {
 }
 
 /** Whether a provider can run a tool-free public-content stage. */
-export function supportsPublicReviewProvider(provider, options) {
-  return supportsPublicReviewPosture(provider, PUBLIC_REVIEW_NO_TOOL_POSTURE, options);
+export function supportsPublicReviewProvider(provider) {
+  return supportsPublicReviewPosture(provider, PUBLIC_REVIEW_NO_TOOL_POSTURE);
 }
 
 /** Whether a provider can run the sandboxed final public-review stage. */
-export function supportsPublicReviewActionsProvider(provider, options) {
-  return supportsPublicReviewPosture(provider, PUBLIC_REVIEW_ACTIONS_POSTURE, options);
+export function supportsPublicReviewActionsProvider(provider) {
+  return supportsPublicReviewPosture(provider, PUBLIC_REVIEW_ACTIONS_POSTURE);
 }
 
 /**

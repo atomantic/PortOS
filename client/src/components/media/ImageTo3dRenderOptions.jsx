@@ -1,6 +1,7 @@
 import FormField from '../ui/FormField';
 import {
   ALPHA_MODE_PRESETS, DETAIL_PRESETS, SEED_MAX, STEPS_PRESETS,
+  SUBJECT_SCALE_DEFAULT, SUBJECT_SCALE_SLIDER_MIN, SUBJECT_SCALE_SLIDER_STEP,
 } from '../../lib/imageTo3dRenderOptions';
 
 // Per-run sampler knobs for image-to-3D generation, shared by the /3d
@@ -28,6 +29,8 @@ import {
 //  - detail: 'auto' = derive the pipeline tier from hardware, else a named tier.
 //  - alphaMode: '' = leave PortOS's force-opaque normalization on (the default);
 //    any explicit value turns it off so a transparent subject can stay transparent.
+//  - subjectScale: 1 = the source's own framing (the default); below 1 the server
+//    centers it on a square canvas at that fraction so extremities gain margin.
 
 const FIELD_LABEL_CLASS = 'mb-1 block text-xs text-gray-400';
 const FIELD_INPUT_CLASS = 'w-full rounded-md border border-port-border bg-port-bg px-2 py-1.5 text-xs text-gray-200 disabled:opacity-40';
@@ -45,12 +48,18 @@ export default function ImageTo3dRenderOptions({
   onAlphaModeChange,
   normalMap = true,
   onNormalMapChange,
+  subjectScale = SUBJECT_SCALE_DEFAULT,
+  onSubjectScaleChange,
+  // The gallery image this render will consume, so the framing slider can show what
+  // it is about to do. Optional: the /3d workspace has no source until one is picked.
+  sourcePreviewUrl = null,
   disabled = false,
   stepsSupported = true,
   detailSupported = true,
   alphaModeSupported = true,
   normalMapSupported = true,
 }) {
+  const framingPercent = Math.round(subjectScale * 100);
   return (
     <div className="flex flex-col gap-2">
       <div className="grid gap-3 sm:grid-cols-2">
@@ -174,6 +183,50 @@ export default function ImageTo3dRenderOptions({
             </label>
           </div>
         </div>
+      </div>
+      {/* Subject framing. The preview is the point of the control: a bare percentage
+          says nothing about whether THIS source already has margin, and the whole
+          reason to reframe is that a pose running to the edge loses its fingertips.
+          It mirrors the server's geometry exactly — a square box with the source
+          contained in a centered sub-box of `subjectScale` of its side — so no
+          round-trip is needed to show the framing the render will actually get. */}
+      <div className="flex items-center gap-3 rounded-md border border-port-border bg-port-bg/40 p-2">
+        <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded border border-port-border bg-port-bg">
+          {sourcePreviewUrl ? (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <img
+                src={sourcePreviewUrl}
+                alt={`Framing preview at ${framingPercent}% of the canvas`}
+                className="object-contain"
+                style={{ width: `${framingPercent}%`, height: `${framingPercent}%` }}
+              />
+            </div>
+          ) : (
+            <span className="flex h-full items-center justify-center px-1 text-center text-[10px] leading-tight text-gray-600">
+              No source
+            </span>
+          )}
+        </div>
+        <FormField
+          label={`Subject framing — ${framingPercent}%`}
+          labelClassName={FIELD_LABEL_CLASS}
+          className="min-w-0 flex-1"
+          hint={subjectScale === SUBJECT_SCALE_DEFAULT
+            ? 'Full frame — the source is sent exactly as it is.'
+            : 'Centered on a square canvas with margin around the subject, so outstretched hands and feet keep context.'}
+        >
+          <input
+            id="image-to-3d-subject-scale"
+            type="range"
+            min={SUBJECT_SCALE_SLIDER_MIN}
+            max={SUBJECT_SCALE_DEFAULT}
+            step={SUBJECT_SCALE_SLIDER_STEP}
+            value={subjectScale}
+            onChange={(e) => onSubjectScaleChange(Number(e.target.value))}
+            disabled={disabled}
+            className="w-full accent-port-accent disabled:opacity-40"
+          />
+        </FormField>
       </div>
       <p className="text-xs leading-relaxed text-gray-500">
         <span className="font-medium text-gray-400">Best source images:</span> one subject,

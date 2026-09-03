@@ -4,24 +4,6 @@ import { downloadBlob } from '../lib/downloadBlob.js';
 // Alerts
 export const getAlertsSummary = (options) => request('/alerts/summary', options);
 
-// Character sheet (age-based level / XP / HP / usage-derived skills + metrics grid).
-// `skills: false` / `metrics: false` skip the server's domain stat fan-out for each derived
-// registry — pass them from callers that only read the persisted fields or the level (e.g.
-// the polling OpenWorld XP HUD badge). Both default on, so a caller that wants the whole
-// sheet just calls getCharacter().
-export const getCharacter = ({ skills = true, metrics = true, ...options } = {}) => {
-  const params = new URLSearchParams();
-  if (!skills) params.set('skills', '0');
-  if (!metrics) params.set('metrics', '0');
-  // `metrics=1` must go on the wire EXPLICITLY when skills are off, because the server infers
-  // an absent `metrics` from `skills` (back-compat: a bare `?skills=0` predates the metrics
-  // grid and means "cheap sheet"). Without this, `{ skills: false }` would silently drop the
-  // metrics this wrapper's own default promises.
-  else if (!skills) params.set('metrics', '1');
-  const query = params.toString();
-  return request(`/character${query ? `?${query}` : ''}`, options);
-};
-
 // Health
 export const checkHealth = (options) => request('/system/health', options);
 export const getSystemHealth = (options) => request('/system/health/details', options);
@@ -40,6 +22,9 @@ export const triageSystemResources = (payload, options = {}) => request('/system
 export const getActiveProcessing = (options) => request('/system/processing', options);
 export const getNetworkExposure = (options) => request('/network-exposure/status', options);
 export const getCapabilities = (options) => request('/capabilities', options);
+// Machine-local hardware facts used for UI fit and recommendation surfaces.
+// This endpoint deliberately stays outside peer-synced health payloads.
+export const getSystemCapabilities = (options) => request('/system/capabilities', options);
 export const updateHealthThresholds = (thresholds, options = {}) => request('/system/health/thresholds', {
   method: 'PUT',
   body: JSON.stringify(thresholds),
@@ -67,6 +52,7 @@ export const syncPortosFork = (opts = {}, requestOpts = {}) => request('/update/
 // Settings
 export const getSettings = (options) => request('/settings', options);
 export const getInstanceFeatures = (options) => request('/settings/features', options);
+export const getCredentialInventory = (options) => request('/settings/credentials', options);
 export const updateInstanceFeature = (featureId, enabled, options = {}) => request(`/settings/features/${encodeURIComponent(featureId)}`, {
   method: 'PUT',
   body: JSON.stringify({ enabled }),

@@ -277,7 +277,7 @@ export default function Shell() {
               <ChevronDown size={12} className={`transition-transform ${folderDropdownOpen ? 'rotate-180' : ''}`} />
             </button>
             {folderDropdownOpen && (
-              <div className="absolute right-0 top-full mt-1 w-64 max-h-80 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-xl z-50">
+              <div className="absolute right-0 top-full mt-1 w-64 max-w-[calc(100vw-1rem)] max-h-80 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-xl z-50">
                 {appFolders.map(({ name, path }) => (
                   <button
                     key={name}

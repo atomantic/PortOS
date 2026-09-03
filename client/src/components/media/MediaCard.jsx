@@ -1,10 +1,11 @@
 import { memo, useState } from 'react';
-import { Trash2, Download, Film, Image as ImageIcon, Sparkles, Eye, EyeOff, Maximize2, Wand2, Star, MessageSquare, Pencil, Box } from 'lucide-react';
+import { Trash2, Download, Film, Image as ImageIcon, Sparkles, Eye, EyeOff, Maximize2, Wand2, Star, MessageSquare, Pencil, Box, Timer } from 'lucide-react';
 import MediaImage from '../MediaImage';
 import AddToCollectionMenu from './AddToCollectionMenu';
 import PinToMoodBoardMenu from './PinToMoodBoardMenu';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { loraDisplayName } from './normalize';
+import { formatDurationMs } from '../../utils/formatters';
 
 // Single card used everywhere a generated image/video appears in a grid:
 // the Image Gen page's recent gallery, the Video Gen page's recent renders,
@@ -118,6 +119,17 @@ function MediaCard({
           {item.numFrames && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{item.numFrames}f</span>}
           {item.fps && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{item.fps}fps</span>}
           {item.seed != null && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">seed {item.seed}</span>}
+          {/* How long this render took, once the queue picked it up (see the
+              renderMs contract in normalize.js). Absent renders no chip at all,
+              rather than a placeholder, so the row stays scannable. */}
+          {item.renderMs != null && (
+            <span
+              title="Render time — measured from when the queue started this job, so it excludes queue wait"
+              className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded inline-flex items-center gap-0.5"
+            >
+              <Timer className="w-2.5 h-2.5" aria-hidden="true" />{formatDurationMs(item.renderMs)}
+            </span>
+          )}
         </div>
         {Array.isArray(item.loraNames) && item.loraNames.length > 0 && (
           <div className="flex flex-wrap items-center gap-1 text-[9px]" title={item.loraNames.map(loraDisplayName).join(', ')}>

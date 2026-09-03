@@ -328,6 +328,9 @@ export default function App() {
           {/* Embeddings moved into Models with the rest of the model management
               (#4728) — it picks a model, not a preference. */}
           <Route path="settings/embeddings" element={<Navigate to="/models/embeddings" replace />} />
+          {/* Code Reviewer configuration moved into Models with the reviewer
+              runtimes it configures; keep the old URL working for bookmarks. */}
+          <Route path="settings/code-reviewers" element={<Navigate to="/models/code-reviewers" replace />} />
           {/* Spotify/YouTube sync feed the activity Timeline, which lives in
               Brain — moved alongside it so they show up in the same sidebar
               section as the data they populate. */}

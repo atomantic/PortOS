@@ -30,43 +30,36 @@
  * themselves, which is the documented path anyway.
  *
  * **The operator no longer types that UNC path themselves.** On Windows,
- * `services/vllmQwenManager.js` asks WSL for it (`lib/wslDistro.js`) and records
- * the answer through `recordVllmProjectDir` below, so every later read — the
- * once-a-minute readiness inspection, the Start button, a restarted server —
- * resolves the same directory the provisioning run actually used. The record is
- * one line in PortOS's own `.env`, kept HERE because "where does this project
- * live" is one question and one module should answer it.
+ * `services/vllmQwenManager.js` asks WSL for it (via the shared
+ * `services/wslProjectPlacement.js` loop) and records the answer through
+ * `recordVllmProjectDir` below, so every later read — the once-a-minute
+ * readiness inspection, the Start button, a restarted server — resolves the same
+ * directory the provisioning run actually used. The record is one line in
+ * PortOS's own `.env`; the mechanics of reading and writing it live in
+ * `lib/recordedProjectDir.js`, shared with the SGLang stack, and this module
+ * states only which variable names THIS project.
  */
 
-import { readFileSync } from 'fs';
 import { readdir, stat } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
 
-// From the leaf modules, not the `fileUtils.js` aggregate: several route suites
-// replace that whole aggregate with a small literal, and a module-level
-// `PATHS.root` read through it explodes at import time in a suite that never
-// touches this file.
-import { atomicWrite } from './fileCore.js';
-import { PATHS } from './paths.js';
-import { parseEnvContents, upsertEnvLine } from './vllmQwenProvision.js';
+import {
+  projectDirIsSettled,
+  readRecordedProjectDir,
+  recordProjectDir,
+  resolveRecordedProjectDir,
+} from './recordedProjectDir.js';
+// PORTOS_ENV_PATH is declared by portosEnv.js; recordedProjectDir.js imports it
+// for its own defaults but does not re-export it — and it cannot, because both
+// modules are `export *`'d from lib/index.js and a re-export would collide there.
+import { PORTOS_ENV_PATH } from './portosEnv.js';
 
 /** Operator override for where the compose project was cloned. */
 export const VLLM_PROJECT_DIR_ENV = 'VLLM_QWEN_PROJECT_DIR';
 
 /** The directory name upstream's README uses, inside whichever home holds it. */
 export const VLLM_PROJECT_LEAF = 'qwen-serving';
-
-/**
- * PortOS's own `.env` — where an auto-detected project directory is recorded.
- *
- * `installRoot`, not `root`: what is recorded here is machine-local runtime state
- * ("where this machine's WSL project lives"), so it belongs to the install and
- * not to whichever checkout loaded the code. A server booted from a CoS agent
- * worktree has no `.env` in its own tree (`lib/paths.js`, #1947), and anchoring
- * to `root` there would write a throwaway file the real install never reads.
- */
-export const PORTOS_ENV_PATH = join(PATHS.installRoot, '.env');
 
 /**
  * Operator override for the HuggingFace cache holding the weights — the answer
@@ -86,40 +79,27 @@ const resolveHome = (env) =>
 export const vllmDefaultProjectDir = (env = process.env) => join(resolveHome(env), VLLM_PROJECT_LEAF);
 
 /**
- * The project directory PortOS recorded for itself, or `''` when there is none.
+ * This stack's view of the shared `.env` record (`lib/recordedProjectDir.js`),
+ * keyed on `VLLM_QWEN_PROJECT_DIR`.
  *
- * Read from the file on every call rather than cached: the provisioning run
- * writes it, and the readiness poll that must start seeing the new directory
- * lives in the same process without a restart between them. PortOS has no
- * dotenv, so `.env` reaches `process.env` for nobody — a module that wants a
- * value out of it reads the file, the same way `services/localLlm.js` reads its
- * `LLM_BACKEND` marker.
+ * Named wrappers rather than call sites passing the key: "which variable names
+ * the vLLM project" is one fact, and it is stated here.
  *
  * @param {string} [envPath]
  * @returns {string}
  */
 export function readRecordedVllmProjectDir(envPath = PORTOS_ENV_PATH) {
-  let contents = '';
-  try { contents = readFileSync(envPath, 'utf8'); } catch { return ''; }
-  return parseEnvContents(contents).get(VLLM_PROJECT_DIR_ENV) || '';
+  return readRecordedProjectDir(VLLM_PROJECT_DIR_ENV, envPath);
 }
 
 /**
  * Remember where this project was placed, so nothing has to detect it twice.
  *
- * `upsertEnvLine` rather than an append: a file accumulating one line per
- * provisioning run is a config whose meaning depends on which reader opens it
- * (some take the first mention, some the last). Atomic, because PortOS's `.env`
- * also carries the database password and a half-written truncate is readable by
- * a concurrent boot.
- *
  * @param {string} dir
  * @param {string} [envPath]
  */
 export async function recordVllmProjectDir(dir, envPath = PORTOS_ENV_PATH) {
-  let contents = '';
-  try { contents = readFileSync(envPath, 'utf8'); } catch { /* no .env yet */ }
-  await atomicWrite(envPath, upsertEnvLine(contents, VLLM_PROJECT_DIR_ENV, dir));
+  return recordProjectDir(VLLM_PROJECT_DIR_ENV, dir, envPath);
 }
 
 /** Compose file names the upstream project may ship under. */
@@ -165,9 +145,7 @@ const isFile = (path) => stat(path).then((s) => s.isFile(), () => false);
  * earlier run must not quietly outlive it.
  */
 export function resolveVllmProjectDir(env = process.env, envPath = PORTOS_ENV_PATH) {
-  const configured = String(env?.[VLLM_PROJECT_DIR_ENV] || '').trim();
-  if (configured) return configured;
-  return readRecordedVllmProjectDir(envPath) || vllmDefaultProjectDir(env);
+  return resolveRecordedProjectDir(VLLM_PROJECT_DIR_ENV, () => vllmDefaultProjectDir(env), env, envPath);
 }
 
 /**
@@ -179,7 +157,7 @@ export function resolveVllmProjectDir(env = process.env, envPath = PORTOS_ENV_PA
  * not the other is invisible on any non-Windows machine.
  */
 export function vllmProjectDirIsSettled(env = process.env, envPath = PORTOS_ENV_PATH) {
-  return Boolean(String(env?.[VLLM_PROJECT_DIR_ENV] || '').trim() || readRecordedVllmProjectDir(envPath));
+  return projectDirIsSettled(VLLM_PROJECT_DIR_ENV, env, envPath);
 }
 
 /**

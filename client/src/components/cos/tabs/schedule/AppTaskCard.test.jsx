@@ -69,9 +69,11 @@ describe('AppTaskCard', () => {
     expect(screen.getByText(/^in /)).toBeTruthy();
   });
 
-  it('renders a clean Cron badge and next-run schedule description for cron tasks', () => {
+  it('renders a clean Scheduled badge and next-run schedule description for cron tasks', () => {
     renderCard({ type: 'cron', cronExpression: '0 6 * * 1-5' }, {}, 'layered-intelligence');
-    expect(screen.getByText('Cron')).toBeTruthy();
+    expect(screen.getByText('Scheduled')).toBeTruthy();
+    // Perpetual is an ORTHOGONAL badge, so a plain cron task never shows one.
+    expect(screen.queryByText('Perpetual')).toBeNull();
     expect(screen.getAllByTitle('Weekdays at 06:00 (0 6 * * 1-5)').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/^in .* · Weekdays at 06:00/)).toBeTruthy();
     expect(screen.getByText('layered-intelligence')).toBeTruthy();
@@ -80,6 +82,12 @@ describe('AppTaskCard', () => {
   it('shows "Manual trigger only" for on-demand tasks', () => {
     renderCard({ type: 'on-demand' });
     expect(screen.getByText('Manual trigger only')).toBeTruthy();
+  });
+
+  it('renders BOTH badges for a scheduled task that also drains perpetually', () => {
+    renderCard({ type: 'cron', cronExpression: '0 6 * * 1-5', perpetual: true });
+    expect(screen.getByText('Scheduled')).toBeTruthy();
+    expect(screen.getByText('Perpetual')).toBeTruthy();
   });
 
   it('shows "Paused" for disabled tasks', () => {

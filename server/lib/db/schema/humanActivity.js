@@ -25,4 +25,21 @@ export const humanActivityDdl = [
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_human_activity_dedupe ON human_activity_events (source, dedupe_key)`,
     `CREATE INDEX IF NOT EXISTS idx_human_activity_happened ON human_activity_events (happened_at)`,
+    // Source-scoped timeline reads (#5715). The dominant shape is
+    // `WHERE source = $1 [AND kind = ...] ORDER BY happened_at DESC LIMIT n`
+    // (listEvents in services/humanActivity.js), which neither index above
+    // serves: the dedupe index leads on `source` but carries no ordering, and
+    // the `happened_at` index orders but must filter every row on `source` — so
+    // a low-volume source behind a high-volume one walks past a large number of
+    // non-matching rows before it can fill LIMIT. Two indexes, not one: the
+    // kind-filtered read is a distinct shape, and `(source, kind, happened_at)`
+    // does not efficiently serve the source-only query for a source with many
+    // kinds. Mirrors the composites `user_action_events` already ships.
+    //
+    // Deliberately NOT `CONCURRENTLY`: ensureSchema() runs this DDL as part of
+    // the boot sequence, and CREATE INDEX CONCURRENTLY cannot run inside a
+    // transaction block. The table is machine-local and the boot-time build is
+    // bounded, so the blocking build is the correct trade here.
+    `CREATE INDEX IF NOT EXISTS idx_human_activity_source_happened ON human_activity_events (source, happened_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_human_activity_source_kind_happened ON human_activity_events (source, kind, happened_at DESC)`,
 ];

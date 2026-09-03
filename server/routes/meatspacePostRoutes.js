@@ -29,6 +29,11 @@ import {
   postProgressQuerySchema,
 } from '../lib/postValidation.js';
 import * as postService from '../services/meatspacePost.js';
+// Named at their declaring modules, not through a re-export off meatspacePost.js
+// (that convenience re-export closed a static import cycle — issue #5690).
+import { getPostStats } from '../services/meatspacePostStats.js';
+import { getPostRecommendations } from '../services/meatspacePostRecommendations.js';
+import { resolveDrillConfig, getAdaptivePreview } from '../services/meatspacePostAdaptive.js';
 import * as memoryService from '../services/meatspacePostMemory.js';
 import { generateLlmDrill, scoreLlmDrill } from '../services/meatspacePostLlm.js';
 import { evaluateRhetoricAttempt } from '../services/meatspacePostRhetoric.js';
@@ -119,7 +124,7 @@ router.post('/post/sessions', asyncHandler(async (req, res) => {
 router.get('/post/stats', asyncHandler(async (req, res) => {
   const rawDays = req.query.days != null ? parseInt(req.query.days, 10) : 30;
   const days = Number.isNaN(rawDays) ? 30 : rawDays > 0 ? Math.min(rawDays, 365) : 0;
-  const stats = await postService.getPostStats(days);
+  const stats = await getPostStats(days);
   res.json(stats);
 }));
 
@@ -150,7 +155,7 @@ router.get('/post/progress', asyncHandler(async (req, res) => {
 router.get('/post/recommendations', asyncHandler(async (req, res) => {
   const rawLimit = req.query.limit != null ? parseInt(req.query.limit, 10) : undefined;
   const limit = Number.isNaN(rawLimit) || rawLimit == null ? undefined : Math.max(1, Math.min(10, rawLimit));
-  const result = await postService.getPostRecommendations(limit != null ? { limit } : {});
+  const result = await getPostRecommendations(limit != null ? { limit } : {});
   res.json(result);
 }));
 
@@ -200,7 +205,7 @@ router.post('/post/drill', asyncHandler(async (req, res) => {
   // Adaptive difficulty (opt-in): when the Adaptive toggle is on, math drill
   // params are nudged from recent scored performance; otherwise config passes
   // through unchanged. Attaches an `adaptive` explainer when an adjustment ran.
-  const { config: effectiveConfig, adaptive, progression } = await postService.resolveDrillConfig(data.type, data.config);
+  const { config: effectiveConfig, adaptive, progression } = await resolveDrillConfig(data.type, data.config);
   const drill = postService.generateDrill(data.type, effectiveConfig);
   if (!drill) {
     throw new ServerError('Unknown drill type', { status: 400, code: 'INVALID_DRILL_TYPE' });
@@ -267,7 +272,7 @@ router.get('/post/review/reps', asyncHandler(async (req, res) => {
  * so the config UI can show what Adaptive will do before a session starts.
  */
 router.get('/post/adaptive-preview', asyncHandler(async (req, res) => {
-  const preview = await postService.getAdaptivePreview();
+  const preview = await getAdaptivePreview();
   res.json(preview);
 }));
 

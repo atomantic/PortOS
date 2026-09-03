@@ -172,7 +172,7 @@ export function createProgression(def) {
 //
 // Each ladder is an ordered list of generator-config knob objects: rung N's
 // object is spread into the drill's requested config at generation time (via
-// meatspacePost.js resolveDrillConfig), so climbing the ladder literally makes
+// meatspacePostAdaptive.js resolveDrillConfig), so climbing the ladder makes
 // the generated drill harder. `describe` turns a rung into a short label for
 // the config/preview badge. reaction-time is deliberately absent — it's a
 // measurement baseline, not a skill ladder.

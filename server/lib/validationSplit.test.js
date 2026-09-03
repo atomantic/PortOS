@@ -1,4 +1,8 @@
 import { describe, it, expect } from 'vitest';
+import { execSync } from 'node:child_process';
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as validation from './validation.js';
 import * as peerSyncValidation from './peerSyncValidation.js';
 import * as creativeDirectorValidation from './creativeDirectorValidation.js';
@@ -106,5 +110,89 @@ describe('validation.js transitional re-exports (issues #1151, #1831)', () => {
       expect(mod.validateRequest).toBeUndefined();
       expect(mod.parsePagination).toBeUndefined();
     }
+  });
+});
+
+// Issue #5730: `server/AGENTS.md` requires that *all* inputs be validated —
+// "an exported-but-unwired sub-schema creates false confidence". A Zod schema
+// exported from a validation module but referenced nowhere else in the repo
+// reads at review time as "this payload is validated" when nothing validates
+// it. This guard is the enforcement: a schema either runs on some input, or it
+// does not exist.
+describe('exported validation schemas are wired (#5730)', () => {
+  // Compat aliases and other deliberately-unwired exports. Adding a name here
+  // is a reviewed decision, not a way to silence the guard — say why.
+  const INTENTIONALLY_UNWIRED = new Set([
+    // Alias of digitalTwinMetaSchema kept for backwards compatibility with
+    // installs/forks that import the pre-rename name. Compat surface is not
+    // removed on unused-ness grounds.
+    'digitalTwinValidation.js:soulMetaSchema',
+  ]);
+
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+  const libDir = path.join(repoRoot, 'server/lib');
+  const BARREL = 'server/lib/index.js';
+  const IDENTIFIER = /[A-Za-z_$][A-Za-z0-9_$]*/g;
+  const EXPORTED_SCHEMA = /export\s+const\s+([A-Za-z0-9_$]+(?:Schema|Enum))\b/g;
+
+  const moduleFiles = readdirSync(libDir)
+    .filter((f) => (f.endsWith('Validation.js') || f === 'validation.js') && !f.endsWith('.test.js'))
+    .sort();
+
+  it('has validation modules to scan', () => {
+    expect(moduleFiles.length).toBeGreaterThan(20);
+  });
+
+  it('every exported *Schema/*Enum is referenced outside its own declaration', () => {
+    const tracked = execSync('git ls-files -z "*.js" "*.jsx" "*.mjs"', {
+      cwd: repoRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+    }).split('\0').filter(Boolean);
+
+    // One pass over the tree builds the identifier index. Per-module counts are
+    // kept (not just presence) so a schema's own `export const` line can be
+    // discounted; every other file only needs presence. The barrel is skipped
+    // entirely — it re-exports wholesale and would mark everything "used".
+    const moduleCounts = new Map(); // 'server/lib/x.js' -> Map(identifier -> count)
+    const externalIdentifiers = new Set();
+    for (const rel of tracked) {
+      if (rel === BARREL) continue;
+      const isModule = rel.startsWith('server/lib/')
+        && moduleFiles.includes(rel.slice('server/lib/'.length));
+      const tokens = readFileSync(path.join(repoRoot, rel), 'utf8').match(IDENTIFIER) || [];
+      if (isModule) {
+        const counts = new Map();
+        for (const token of tokens) counts.set(token, (counts.get(token) || 0) + 1);
+        moduleCounts.set(rel, counts);
+      } else {
+        for (const token of tokens) externalIdentifiers.add(token);
+      }
+    }
+
+    const unwired = [];
+    for (const file of moduleFiles) {
+      const rel = `server/lib/${file}`;
+      const source = readFileSync(path.join(repoRoot, rel), 'utf8');
+      for (const match of source.matchAll(EXPORTED_SCHEMA)) {
+        const name = match[1];
+        if (INTENTIONALLY_UNWIRED.has(`${file}:${name}`)) continue;
+        if (externalIdentifiers.has(name)) continue;
+        // > 1 means the module composes it into a sibling schema beyond the
+        // single occurrence on its own `export const` line.
+        if ((moduleCounts.get(rel)?.get(name) || 0) > 1) continue;
+        if ([...moduleCounts].some(([other, counts]) => other !== rel && counts.has(name))) continue;
+        unwired.push(`${file}:${name}`);
+      }
+    }
+
+    expect(unwired, 'exported but never referenced — wire these into the route/schema that should use them, delete them, or add a justified INTENTIONALLY_UNWIRED entry').toEqual([]);
+  });
+
+  it('every INTENTIONALLY_UNWIRED entry still names a real export', () => {
+    const missing = [...INTENTIONALLY_UNWIRED].filter((entry) => {
+      const [file, name] = entry.split(':');
+      if (!moduleFiles.includes(file)) return true;
+      return !new RegExp(`export\\s+const\\s+${name}\\b`).test(readFileSync(path.join(libDir, file), 'utf8'));
+    });
+    expect(missing, 'stale allowlist entries — the export was renamed or removed').toEqual([]);
   });
 });

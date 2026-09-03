@@ -150,6 +150,42 @@ describe('ConfigTab handleSave', () => {
   });
 });
 
+// #5857 — the button's own contract is owned by this component, so it is pinned
+// here against a direct render instead of through a full ChiefOfStaff page mount
+// whose fan-out of mocked reads is what made the page suite flake. The page test
+// keeps only the page-owned half (the toast + status-bubble result of the
+// handler this button invokes).
+describe('Force Evaluate button', () => {
+  it('invokes the page handler once per click and explains what it does', async () => {
+    const onEvaluate = vi.fn();
+    renderConfig({ onEvaluate });
+    await screen.findByText('Waiting for the next wake');
+
+    const button = screen.getByRole('button', { name: /Force Evaluate/i });
+    expect(button).toHaveAttribute('title', 'Immediately check for pending tasks and spawn eligible agents');
+
+    fireEvent.click(button);
+
+    expect(onEvaluate).toHaveBeenCalledTimes(1);
+    // Evaluating is the page's job — the button must not reach the API or toast
+    // on its own, or a failed evaluate would double-report.
+    expect(api.updateCosConfig).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('stays available while the settings editor is open', async () => {
+    const onEvaluate = vi.fn();
+    renderConfig({ onEvaluate });
+    await screen.findByText('Waiting for the next wake');
+
+    fireEvent.click(screen.getByRole('button', { name: /Edit settings/i }));
+
+    fireEvent.click(screen.getByRole('button', { name: /Force Evaluate/i }));
+    expect(onEvaluate).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('persistent mind profile', () => {
   it('starts disabled and saving its toggle sends a default-safe profile without starting a mind', async () => {
     api.updateCosConfig.mockResolvedValue({ success: true });

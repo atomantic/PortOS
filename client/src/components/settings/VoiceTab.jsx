@@ -411,7 +411,7 @@ export function VoiceTab() {
         </div>
         {faceTimeDirty && <p className="text-xs text-port-warning">Set and save both identity fields before FaceTime controls are available.</p>}
         {facetimeStatus && <ul className="text-xs text-gray-400">{Object.entries(facetimeStatus).map(([key, value]) => <li key={key}>{value.ok === 'ok' ? '✓' : '•'} {key}: {value.message}</li>)}</ul>}
-        {facetimeResult && <pre className="text-xs text-gray-400 whitespace-pre-wrap">{JSON.stringify(facetimeResult, null, 2)}</pre>}
+        {facetimeResult && <pre className="text-xs text-gray-400 whitespace-pre-wrap break-all">{JSON.stringify(facetimeResult, null, 2)}</pre>}
       </section>}
 
       <div className="flex items-start gap-3 bg-port-bg border border-port-border rounded-lg p-3">

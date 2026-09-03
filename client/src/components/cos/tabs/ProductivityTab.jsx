@@ -15,7 +15,7 @@ import {
   Award
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
-import { formatDateTime, formatDateNumeric } from '../../../utils/formatters';
+import { formatDateTime, formatDateNumeric, formatHourOfDay } from '../../../utils/formatters';
 import * as api from '../../../services/api';
 import DailyTrendsChart from '../DailyTrendsChart';
 
@@ -59,13 +59,6 @@ export default function ProductivityTab() {
 
   const toggleSection = useCallback((section) => {
     setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
-  }, []);
-
-  const formatHour = useCallback((hour) => {
-    const h = parseInt(hour, 10);
-    if (h === 0) return '12AM';
-    if (h === 12) return '12PM';
-    return h < 12 ? `${h}AM` : `${h - 12}PM`;
   }, []);
 
   const getSuccessRateColor = useCallback((rate) => {
@@ -200,7 +193,7 @@ export default function ProductivityTab() {
                     <div className="space-y-2 max-h-48 overflow-y-auto">
                       {sortedHourlyPatterns.map((p) => (
                         <div key={p.hour} className="flex items-center justify-between text-sm">
-                          <span className="text-gray-400 w-12">{formatHour(p.hour)}</span>
+                          <span className="text-gray-400 w-12">{formatHourOfDay(p.hour, { style: 'compact' })}</span>
                           <div className="flex-1 mx-2">
                             <div className="h-2 bg-port-border rounded-full overflow-hidden">
                               <div
@@ -268,7 +261,7 @@ export default function ProductivityTab() {
                         <div>
                           <div className="text-xs text-gray-500">Best Hour</div>
                           <div className="text-lg font-semibold text-port-accent">
-                            {formatHour(data.bestHour.hour)}
+                            {formatHourOfDay(data.bestHour.hour, { style: 'compact' })}
                           </div>
                           <div className="text-xs text-gray-400">
                             {data.bestHour.successRate}% success ({data.bestHour.tasks} tasks)

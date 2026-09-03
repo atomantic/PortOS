@@ -18,6 +18,8 @@
  * carrying every comment covering it, toned by the highest severity present.
  */
 
+import { escapeRegExp } from './textUtils.js';
+
 const SEVERITY_RANK = { high: 3, medium: 2, low: 1 };
 
 // Locate the `find` span to highlight/replace. `indexOf` alone targets the FIRST
@@ -49,7 +51,7 @@ export function locateFindSpan(text, find, anchorQuote) {
   const exact = locateFind(text, find, anchorQuote);
   if (exact !== -1) return { start: exact, end: exact + find.length };
 
-  const escaped = find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escaped = escapeRegExp(find);
   const re = new RegExp(escaped.replace(/\s+/g, '\\s+'), 'g');
   const anchorIdx = anchorQuote ? text.indexOf(anchorQuote) : -1;
   let best = null;

@@ -232,7 +232,7 @@ const diffSettings = (prev, next) => {
  * feature writes. Only `PUT /api/settings` passes `'user'`. `reloadSettings` does
  * not call this at all, so a backup restore is excluded by construction.
  */
-const save = async (settings, { actor = 'system' } = {}) => {
+const save = async (settings, { actor = 'system', skipUserAction = false } = {}) => {
   const cleaned = stripStoreKeys(settings);
   // Stamp `timezoneUpdatedAt` whenever the effective `timezone` actually
   // changes, so timezone-dependent schedulers can gate catch-up/re-evaluation
@@ -266,7 +266,7 @@ const save = async (settings, { actor = 'system' } = {}) => {
   // A no-op save writes no ledger row: the settings page PUTs the whole object
   // on every visit, and a log full of "changed nothing" rows would bury the
   // changes that matter.
-  if (change && change.keysChanged.length > 0) {
+  if (!skipUserAction && change && change.keysChanged.length > 0) {
     const happenedAt = new Date().toISOString();
     const changedKeys = change.keysChanged.join(',');
     await recordUserAction({

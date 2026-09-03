@@ -34,6 +34,7 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { trackedSourceFiles } from './test/trackedFiles.js';
+import { lineOf, maskComments, stringLiterals } from './test/classNameScan.js';
 
 const CLIENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -57,51 +58,6 @@ const ALLOWED = new Map([
   ],
 ]);
 
-/** Blank out `//` and block comments so a quoted example class isn't scanned as markup. */
-function maskComments(source) {
-  let out = '';
-  let i = 0;
-  while (i < source.length) {
-    const ch = source[i];
-    if (ch === '/' && source[i + 1] === '/') {
-      while (i < source.length && source[i] !== '\n') {
-        out += ' ';
-        i += 1;
-      }
-      continue;
-    }
-    if (ch === '/' && source[i + 1] === '*') {
-      while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) {
-        out += source[i] === '\n' ? '\n' : ' ';
-        i += 1;
-      }
-      out += '  ';
-      i += 2;
-      continue;
-    }
-    if (ch === '"' || ch === "'" || ch === '`') {
-      out += ch;
-      i += 1;
-      while (i < source.length && source[i] !== ch) {
-        if (source[i] === '\\') {
-          out += source.slice(i, i + 2);
-          i += 2;
-          continue;
-        }
-        out += source[i];
-        i += 1;
-      }
-      out += source[i] ?? '';
-      i += 1;
-      continue;
-    }
-    out += ch;
-    i += 1;
-  }
-  return out;
-}
-
-const STRING_LITERAL = /(['"`])((?:\\.|(?!\1)[\s\S])*?)\1/g;
 // A column count that is the phone default: no `variant:` in front of it. Global,
 // because a single class string can hold more than one bare token and the widest
 // one is the one that decides whether the layout is legible.
@@ -118,22 +74,11 @@ function widestBareColumnCount(value) {
   return widest;
 }
 
-function lineOf(source, index) {
-  return source.slice(0, index).split('\n').length;
-}
-
 function violationsIn(rawSource, file) {
   const source = maskComments(rawSource);
-  const found = [];
-  let match;
-  STRING_LITERAL.lastIndex = 0;
-  while ((match = STRING_LITERAL.exec(source))) {
-    const value = match[2];
-    if (widestBareColumnCount(value) < MIN_WIDE_COLUMNS) continue;
-    if (PREFIXED_GRID.test(value)) continue;
-    found.push(`${file}:${lineOf(source, match.index)} — "${value.trim()}"`);
-  }
-  return found;
+  return stringLiterals(source)
+    .filter(({ value }) => widestBareColumnCount(value) >= MIN_WIDE_COLUMNS && !PREFIXED_GRID.test(value))
+    .map(({ value, index }) => `${file}:${lineOf(source, index)} — "${value.trim()}"`);
 }
 
 const findViolations = (file) =>

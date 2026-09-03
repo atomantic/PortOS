@@ -13,8 +13,23 @@ vi.mock('./settings.js', () => ({
 // Same one-liner stub for the two backend managers — `getCodeReviewDefaults`
 // + `pickCodeReviewDefaults` don't touch them, only `runLocalCodeReview`
 // does, and those tests stub `global.fetch` directly.
+// The install's default AI provider, which the unconfigured reviewer fallback
+// now follows. Mutable holder so each test picks the vendor it is asserting on;
+// `null` reproduces an install with no provider (or an uninitialized toolkit).
+const mockedActiveProvider = { current: null }
+vi.mock('./providers.js', () => ({
+  getActiveProvider: () => Promise.resolve(mockedActiveProvider.current),
+}))
 vi.mock('./lmStudioManager.js', () => ({ getBaseUrl: () => 'http://localhost:1234' }))
-vi.mock('./ollamaManager.js', () => ({ getBaseUrl: () => 'http://localhost:11434' }))
+// Ollama's per-model `/api/show` capability probe, which the reviewer now
+// consults BEFORE attaching `reasoning_effort`. Default `null` = "probe could
+// not answer", the sentinel that keeps a test on the reactive 400-retry path;
+// individual tests set an authoritative array to drive the proactive one.
+const mockedOllamaCapabilities = { current: null }
+vi.mock('./ollamaManager.js', () => ({
+  getBaseUrl: () => 'http://localhost:11434',
+  getModelCapabilities: () => Promise.resolve(mockedOllamaCapabilities.current),
+}))
 // Reviewer-CLI-installed probe: stub the shared execFile-based helper so the
 // test controls per-binary results without touching the real PATH.
 const commandExistsMock = { impl: async () => true }
@@ -31,6 +46,7 @@ import {
   getReviewerCliInstalled,
   __resetCodeReviewDefaultsCache,
   __resetReviewerCliInstalledCache,
+  __resetThinkingUnsupportedCache,
 } from './codeReview.js'
 import { MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS } from '../lib/cosValidation.js'
 
@@ -45,8 +61,11 @@ const testDeps = {
 describe('codeReview helpers', () => {
   afterEach(() => {
     mockedSettings.current = {}
+    mockedActiveProvider.current = null
     __resetCodeReviewDefaultsCache()
     __resetReviewerCliInstalledCache()
+    __resetThinkingUnsupportedCache()
+    mockedOllamaCapabilities.current = null
     commandExistsMock.impl = async () => true
     vi.restoreAllMocks()
   })
@@ -165,6 +184,9 @@ describe('codeReview helpers', () => {
         antigravityModel: 'gemini-3.6-flash',
         grokModel: 'grok-code-fast-1',
         cursorModel: null,
+        opencodeModel: null,
+        kimiModel: null,
+        mtplxModel: null,
         ...NO_EFFORTS,
       })
     })
@@ -181,6 +203,64 @@ describe('codeReview helpers', () => {
     it('defaults usernames to an empty array when absent', () => {
       expect(pickCodeReviewDefaults({ codeReview: { reviewers: ['copilot'] } }).usernames).toEqual([])
     })
+
+    describe('unconfigured fallback follows the default AI provider', () => {
+      const claudeProvider = { id: 'claude-code-tui', command: 'claude', defaultModel: 'claude-opus-5', effort: 'high' }
+
+      it('reviews with the active provider, its model, and its effort', () => {
+        const out = pickCodeReviewDefaults(null, { activeProvider: claudeProvider })
+        expect(out.reviewers).toEqual(['claude'])
+        expect(out.claudeModel).toBe('claude-opus-5')
+        expect(out.claudeEffort).toBe('high')
+        // Only the derived reviewer gets pins — the rest stay at "its own default".
+        expect(out.codexModel).toBeNull()
+        expect(out.codexEffort).toBeNull()
+      })
+
+      it('leaves a configured chain alone', () => {
+        const out = pickCodeReviewDefaults(
+          { codeReview: { reviewers: ['copilot'] } },
+          { activeProvider: claudeProvider }
+        )
+        expect(out.reviewers).toEqual(['copilot'])
+        expect(out.claudeModel).toBeNull()
+      })
+
+      it('lets a stored pin win over the provider-derived one', () => {
+        const out = pickCodeReviewDefaults(
+          { codeReview: { claudeModel: 'claude-sonnet-5', claudeEffort: 'low' } },
+          { activeProvider: claudeProvider }
+        )
+        expect(out.reviewers).toEqual(['claude'])
+        expect(out.claudeModel).toBe('claude-sonnet-5')
+        expect(out.claudeEffort).toBe('low')
+      })
+
+      it('keeps copilot for a provider that maps to no reviewer', () => {
+        // A hosted API provider spawns no binary and is not a local backend.
+        const out = pickCodeReviewDefaults(null, { activeProvider: { id: 'openrouter', type: 'api', defaultModel: 'stealth/ox-alpha' } })
+        expect(out.reviewers).toEqual(['copilot'])
+      })
+
+      it('drops a configured-default sentinel rather than pinning it as a model', () => {
+        const out = pickCodeReviewDefaults(null, {
+          activeProvider: { id: 'antigravity-cli', command: 'agy', defaultModel: 'antigravity-configured-default' },
+        })
+        expect(out.reviewers).toEqual(['antigravity'])
+        // The sentinel means "whatever agy is configured for" — `agy --model
+        // antigravity-configured-default` is not a runnable invocation.
+        expect(out.antigravityModel).toBeNull()
+      })
+
+      it('drops an effort outside the derived reviewer\'s own ladder', () => {
+        // agy rejects `--effort max`, so a provider pinned there must not
+        // silently review at a level its CLI refuses.
+        const out = pickCodeReviewDefaults(null, {
+          activeProvider: { id: 'antigravity-cli', command: 'agy', defaultModel: 'gemini-3.6-flash', effort: 'max' },
+        })
+        expect(out.antigravityEffort).toBeNull()
+      })
+    })
   })
 
   describe('getCodeReviewDefaults', () => {
@@ -193,6 +273,14 @@ describe('codeReview helpers', () => {
       expect(out.ollamaModel).toBe('codellama')
       expect(out.stopMode).toBe('all')
     })
+
+    it('falls back to the active provider when nothing is configured', async () => {
+      mockedSettings.current = {}
+      mockedActiveProvider.current = { id: 'codex', command: 'codex', defaultModel: 'gpt-5.6-terra' }
+      const out = await getCodeReviewDefaults()
+      expect(out.reviewers).toEqual(['codex'])
+      expect(out.codexModel).toBe('gpt-5.6-terra')
+    })
   })
 
   describe('getReviewerCliInstalled', () => {
@@ -200,8 +288,8 @@ describe('codeReview helpers', () => {
       const probed = []
       commandExistsMock.impl = async (binary) => { probed.push(binary); return binary !== 'agy' }
       const out = await getReviewerCliInstalled()
-      expect(out).toEqual({ claude: true, antigravity: false, codex: true, grok: true, cursor: true })
-      expect(probed.sort()).toEqual(['agy', 'claude', 'codex', 'cursor-agent', 'grok'])
+      expect(out).toEqual({ claude: true, antigravity: false, codex: true, grok: true, cursor: true, opencode: true, kimi: true })
+      expect(probed.sort()).toEqual(['agy', 'claude', 'codex', 'cursor-agent', 'grok', 'kimi', 'opencode'])
     })
 
     it('caches the result within the TTL — a second call does not re-probe', async () => {
@@ -209,7 +297,7 @@ describe('codeReview helpers', () => {
       commandExistsMock.impl = async () => { calls += 1; return true }
       await getReviewerCliInstalled()
       await getReviewerCliInstalled()
-      expect(calls).toBe(5) // one probe per CLI reviewer, only on the first call
+      expect(calls).toBe(7) // one probe per CLI reviewer, only on the first call
     })
 
     it('probes with the longer 15s timeout these heavier agentic CLIs need', async () => {
@@ -603,6 +691,147 @@ describe('codeReview helpers', () => {
       expect(await runLocalClaimCommentReview({ backend: 'ollama', model: 'example-model', comments: oversized }))
         .toMatchObject({ ok: false, error: expect.stringContaining('per-comment safety limit') })
       expect(global.fetch).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('reasoning_effort downgrade for backends that reject thinking', () => {
+    // Real ollama 400 body shape (server/services/codeReview.js's regex
+    // matches on the message text, not the JSON envelope).
+    const thinkingRejectedBody = JSON.stringify({
+      error: { message: '"m" does not support thinking', type: 'invalid_request_error' },
+    })
+
+    // Default happy response; tests asserting the retry sequence override it.
+    beforeEach(() => {
+      global.fetch = vi.fn().mockResolvedValue(mockJsonResponse({ choices: [{ message: { content: 'No findings.' } }] }))
+    })
+
+    it('retries without reasoning_effort when the backend rejects thinking', async () => {
+      global.fetch = vi.fn()
+        .mockResolvedValueOnce(mockTextResponse(thinkingRejectedBody, { ok: false, status: 400 }))
+        .mockResolvedValueOnce(mockJsonResponse({ choices: [{ message: { content: 'No findings.' } }] }))
+
+      const r = await runLocalCodeReview({ backend: 'ollama', model: 'nonthinking-model', diff: 'd', effort: 'low' })
+
+      expect(global.fetch).toHaveBeenCalledTimes(2)
+      const secondBody = JSON.parse(global.fetch.mock.calls[1][1].body)
+      expect('reasoning_effort' in secondBody).toBe(false)
+      expect(r).toMatchObject({ ok: true, effort: null, effortUnsupported: true, findings: 'No findings.' })
+    })
+
+    it('does not retry a 400 that is unrelated to thinking', async () => {
+      global.fetch = vi.fn().mockResolvedValue(mockTextResponse('bad request: missing field', { ok: false, status: 400 }))
+
+      const r = await runLocalCodeReview({ backend: 'ollama', model: 'other-400-model', diff: 'd', effort: 'low' })
+
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+      expect(r.ok).toBe(false)
+      expect(r.error).toMatch(/API error 400/)
+    })
+
+    it('caches the downgrade for the same backend+model across sequential calls', async () => {
+      global.fetch = vi.fn()
+        .mockResolvedValueOnce(mockTextResponse(thinkingRejectedBody, { ok: false, status: 400 }))
+        .mockResolvedValueOnce(mockJsonResponse({ choices: [{ message: { content: 'No findings.' } }] }))
+        .mockResolvedValueOnce(mockJsonResponse({ choices: [{ message: { content: 'No findings.' } }] }))
+
+      await runLocalCodeReview({ backend: 'ollama', model: 'cached-model', diff: 'd1', effort: 'low' })
+      const second = await runLocalCodeReview({ backend: 'ollama', model: 'cached-model', diff: 'd2', effort: 'low' })
+
+      expect(global.fetch).toHaveBeenCalledTimes(3)
+      const thirdBody = JSON.parse(global.fetch.mock.calls[2][1].body)
+      expect('reasoning_effort' in thirdBody).toBe(false)
+      expect(second).toMatchObject({ ok: true, effort: null, effortUnsupported: true })
+    })
+
+    it('runLocalClaimCommentReview benefits from the same retry-and-downgrade', async () => {
+      global.fetch = vi.fn()
+        .mockResolvedValueOnce(mockTextResponse(thinkingRejectedBody, { ok: false, status: 400 }))
+        .mockResolvedValueOnce(mockJsonResponse({ choices: [{ message: { content: '{"claimant":null,"suspicious":false}' } }] }))
+
+      const r = await runLocalClaimCommentReview({
+        backend: 'ollama',
+        model: 'claim-nonthinking-model',
+        comments: [{ login: 'alice', type: 'User', body: 'Taking this', createdAt: '2026-01-01T00:00:00Z' }],
+        effort: 'low',
+      })
+
+      expect(global.fetch).toHaveBeenCalledTimes(2)
+      const secondBody = JSON.parse(global.fetch.mock.calls[1][1].body)
+      expect('reasoning_effort' in secondBody).toBe(false)
+      expect(r).toMatchObject({ ok: true, claimant: null, suspicious: false, effort: null, effortUnsupported: true })
+    })
+
+    it('omits reasoning_effort on the FIRST request when /api/show reports no thinking capability', async () => {
+      // The reactive retry alone re-uploads the whole diff on every fresh
+      // process (a claim run spawns one `node` per review call), so the
+      // capability probe has to prevent the doomed request, not just recover.
+      mockedOllamaCapabilities.current = ['completion', 'tools']
+
+      const r = await runLocalCodeReview({ backend: 'ollama', model: 'probed-nonthinking', diff: 'd', effort: 'low' })
+
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+      expect('reasoning_effort' in JSON.parse(global.fetch.mock.calls[0][1].body)).toBe(false)
+      expect(r).toMatchObject({ ok: true, effort: null, effortUnsupported: true })
+    })
+
+    it('still sends reasoning_effort when /api/show reports the thinking capability', async () => {
+      mockedOllamaCapabilities.current = ['completion', 'tools', 'thinking']
+
+      const r = await runLocalCodeReview({ backend: 'ollama', model: 'probed-thinking', diff: 'd', effort: 'low' })
+
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+      expect(JSON.parse(global.fetch.mock.calls[0][1].body).reasoning_effort).toBe('low')
+      expect(r).toMatchObject({ ok: true, effort: 'low' })
+      expect('effortUnsupported' in r).toBe(false)
+    })
+
+    it('treats an empty capability list as unknown, not as "no thinking"', async () => {
+      // Ollama answers `[]` for a model it reports no capabilities for at all.
+      // Collapsing that into "unsupported" would silently strip a level a
+      // reasoning model does accept, so it must fall through to the request.
+      mockedOllamaCapabilities.current = []
+
+      const r = await runLocalCodeReview({ backend: 'ollama', model: 'no-caps-reported', diff: 'd', effort: 'low' })
+
+      expect(JSON.parse(global.fetch.mock.calls[0][1].body).reasoning_effort).toBe('low')
+      expect(r).toMatchObject({ ok: true, effort: 'low' })
+    })
+
+    it('falls back to the 400-retry when the capability probe cannot answer', async () => {
+      mockedOllamaCapabilities.current = null
+      global.fetch = vi.fn()
+        .mockResolvedValueOnce(mockTextResponse(thinkingRejectedBody, { ok: false, status: 400 }))
+        .mockResolvedValueOnce(mockJsonResponse({ choices: [{ message: { content: 'No findings.' } }] }))
+
+      const r = await runLocalCodeReview({ backend: 'ollama', model: 'unprobeable', diff: 'd', effort: 'low' })
+
+      expect(global.fetch).toHaveBeenCalledTimes(2)
+      expect(r).toMatchObject({ ok: true, effort: null, effortUnsupported: true })
+    })
+
+    it('does not probe capabilities when no effort is pinned', async () => {
+      // Nothing to drop, so the round-trip would be pure cost — and a model
+      // that legitimately reports no thinking must not be flagged as a
+      // downgrade when the caller never asked for a level.
+      mockedOllamaCapabilities.current = ['completion']
+
+      const r = await runLocalCodeReview({ backend: 'ollama', model: 'unpinned', diff: 'd' })
+
+      expect('reasoning_effort' in JSON.parse(global.fetch.mock.calls[0][1].body)).toBe(false)
+      expect(r).toMatchObject({ ok: true, effort: null })
+      expect('effortUnsupported' in r).toBe(false)
+    })
+
+    it('does not probe ollama capabilities for a non-ollama backend', async () => {
+      // LM Studio ignores an unknown field rather than 400-ing, and has no
+      // equivalent probe — sending the level is still the right default.
+      mockedOllamaCapabilities.current = ['completion']
+
+      const r = await runLocalCodeReview({ backend: 'lmstudio', model: 'm', diff: 'd', effort: 'low' })
+
+      expect(JSON.parse(global.fetch.mock.calls[0][1].body).reasoning_effort).toBe('low')
+      expect(r).toMatchObject({ ok: true, effort: 'low' })
     })
   })
 })

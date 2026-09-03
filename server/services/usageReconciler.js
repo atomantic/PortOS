@@ -17,6 +17,18 @@
  *     candidate set is exact; each session file is then windowed by timestamp.
  *   Codex — rollouts are filed by date, so we scan the run's date directories
  *     and keep sessions whose `session_meta.cwd` matches.
+ *   Grok — sessions live under `encodeURIComponent(cwd)`, so that lookup is
+ *     exact too; turns are windowed by the event stream's own timestamps.
+ *   Antigravity — `history.jsonl` maps a workspace to a conversation id, and
+ *     the brain transcript it names carries per-step timestamps.
+ *
+ * The scan is NOT limited to the run's own provider family. A CoS task that
+ * ships a PR with `--review-with grok,antigravity` bash-launches those CLIs as
+ * children of the parent agent: they leave a session on disk but never become a
+ * PortOS run, so nothing else would ever account for that spend and the parent's
+ * chars/4 estimate cannot see it. Every family's store is therefore searched in
+ * the run's workspace and window, and each session is billed to ITS OWN
+ * configured provider (#5831) — never folded into the parent's row.
  *
  * When nothing matches (a provider that writes no transcript, an unreadable
  * home directory, an ambiguous window) the caller falls back to the existing
@@ -34,10 +46,16 @@ import { isFreeModelId, resolveModelRates } from '../lib/modelPricing.js';
 import {
   UNKNOWN_MODEL,
   claudeProjectSlug,
+  decodeGrokSessionDir,
+  parseAgyTranscript,
   parseClaudeTranscript,
   parseCodexRollout,
+  parseAgyHistory,
+  parseGrokChatHistory,
+  parseGrokTurns,
   totalTranscriptTokens
 } from '../lib/providerTranscriptUsage.js';
+import { familyForProvider } from '../lib/providerFamilies.js';
 import { markUsageRunReconciled, recordRunUsage } from './usage.js';
 
 // Widen the correlation window past the recorded run bounds: the CLI writes its
@@ -121,8 +139,28 @@ const cwdMatches = (transcriptCwd, workspacePath) => {
   return transcriptCwd.startsWith(`${workspacePath}/`);
 };
 
+/**
+ * Does a session that ran `[startMs, endMs]` overlap the run window `[from, to]`?
+ * Used only where a store has no per-message timestamps (grok's chat_history),
+ * so the session is placed by its own summary. A session with no readable start
+ * cannot be placed at all and is NOT billed — the same rule `inWindow` applies
+ * to a timestamp-less message, for the same reason: attributing it would hand
+ * the same tokens to every run that ever reads the file.
+ */
+const windowOverlaps = (startMs, endMs, from, to) => {
+  if (!Number.isFinite(startMs)) return false;
+  const end = Number.isFinite(endMs) ? Math.max(endMs, startMs) : startMs;
+  if (from != null && end < from) return false;
+  if (to != null && startMs > to) return false;
+  return true;
+};
+
 const CLAUDE_ID = /claude/i;
 const CODEX_ID = /codex/i;
+const GROK_ID = /grok/i;
+// `agy` is a three-letter binary name, so it needs word boundaries or it would
+// match inside an unrelated id; `antigravity` is the long form of the same CLI.
+const AGY_ID = /(^|[^a-z0-9])agy([^a-z0-9]|$)|antigravity/i;
 
 /**
  * Which model id to record for a measured bucket.
@@ -167,12 +205,16 @@ function attributedModel(recordedModel, transcriptModel, singleModel) {
 
 /**
  * Which transcript family a provider writes, or null for providers that write
- * none (ollama, LM Studio, agy, grok, any API provider). Keyed off the provider
- * id and command, mirroring `providerModels.js`'s predicates — but kept local so
- * this service stays reachable from the completion hook without pulling in the
+ * none (ollama, LM Studio, any API provider). Keyed off the provider id and
+ * command, mirroring `providerModels.js`'s predicates — but kept local so this
+ * service stays reachable from the completion hook without pulling in the
  * provider graph.
+ *
+ * The ids match `lib/providerFamilies.js`'s family ids on purpose: a sibling
+ * session found in a run's workspace is mapped back to an enabled provider
+ * through `familyForProvider`, so the two vocabularies have to agree.
  * @param {{ providerId?: string|null, command?: string|null }} run
- * @returns {'claude'|'codex'|null}
+ * @returns {'claude'|'codex'|'grok'|'agy'|null}
  */
 export function transcriptFamily({ providerId = null, command = null } = {}) {
   const haystack = `${providerId || ''} ${command || ''}`;
@@ -180,9 +222,17 @@ export function transcriptFamily({ providerId = null, command = null } = {}) {
   // but check codex first so a hypothetical `codex-claude` wrapper resolves to
   // the CLI that actually writes the rollout.
   if (CODEX_ID.test(haystack)) return 'codex';
+  if (GROK_ID.test(haystack)) return 'grok';
+  if (AGY_ID.test(haystack)) return 'agy';
   if (CLAUDE_ID.test(haystack)) return 'claude';
   return null;
 }
+
+/** Every family whose CLI writes a readable session store. */
+export const TRANSCRIPT_FAMILIES = ['claude', 'codex', 'grok', 'agy'];
+
+/** `reconcileRunUsage` returns one record or several — normalize to a list. */
+const asRecordList = (records) => (Array.isArray(records) ? records : [records]);
 
 /** List a directory, returning [] when it doesn't exist or can't be read. */
 const listDir = async (dir) => readdir(dir).catch(() => []);
@@ -226,11 +276,15 @@ function codexDateDirs(root, fromMs, toMs) {
  * @param {string} run.workspacePath cwd the run executed in
  * @param {string|null} run.startTime ISO
  * @param {string|null} run.endTime ISO
- * @param {'claude'|'codex'} run.family
+ * @param {'claude'|'codex'|'grok'|'agy'} run.family
  * @param {string} [run.home] override for tests
- * @returns {Promise<null|{ source: 'measured', family: string, sessions: number,
- *   model: string|null, messages: number, tokensIn: number, tokensOut: number,
- *   cacheReadTokens: number, cacheWriteTokens: number }>}
+ * @returns {Promise<null|{ source: 'measured'|'estimate'|'mixed', family: string,
+ *   sessions: number, model: string|null, messages: number, tokensIn: number,
+ *   tokensOut: number, cacheReadTokens: number, cacheWriteTokens: number,
+ *   byModel: object }>} `source` reflects what was actually read: grok is
+ *   measured from a completed turn but estimated from chat history when a run
+ *   died mid-turn, and Antigravity is always an estimate (it writes no token
+ *   counts anywhere).
  */
 export async function readMeasuredUsage({ workspacePath, startTime, endTime, family, home = homedir() } = {}) {
   if (!workspacePath || !family) return null;
@@ -257,8 +311,15 @@ export async function readMeasuredUsage({ workspacePath, startTime, endTime, fam
   // aggregate at the majority model.
   const byModel = new Map();
 
-  const fold = (parsed) => {
+  // How each folded session's counts were obtained. Grok can contribute both
+  // (a completed turn is measured; a killed session's chat_history is chars/4),
+  // and Antigravity is always an estimate — so the record's `source` is derived
+  // from what actually landed rather than assumed.
+  const sourcesSeen = new Set();
+
+  const fold = (parsed, source = 'measured') => {
     if (!parsed || totalTranscriptTokens(parsed) === 0) return;
+    sourcesSeen.add(source);
     totals.sessions += 1;
     totals.messages += parsed.messages || 0;
     totals.tokensIn += parsed.tokensIn || 0;
@@ -329,6 +390,87 @@ export async function readMeasuredUsage({ workspacePath, startTime, endTime, fam
       const parsed = parseClaudeTranscript(text, { from, to, exclude: excludeFor(path) });
       reserveFrom(path, parsed);
       fold(parsed);
+    }
+  } else if (family === 'grok') {
+    // `~/.grok/sessions/<encodeURIComponent(cwd)>/<session-id>/`. Decoding the
+    // folder name is an exact cwd lookup with no summary read, so an unrelated
+    // repo's sessions are never opened.
+    const sessionsRoot = join(home, '.grok', 'sessions');
+    for (const dirName of await listDir(sessionsRoot)) {
+      if (!cwdMatches(decodeGrokSessionDir(dirName), workspacePath)) continue;
+      const cwdDir = join(sessionsRoot, dirName);
+      for (const sessionId of await listDir(cwdDir)) {
+        const sessionDir = join(cwdDir, sessionId);
+        const updatesPath = join(sessionDir, 'updates.jsonl');
+        const updatesText = await tryReadFile(updatesPath);
+        // Sentinel, not truthiness: `turns > 0` means the session DID record
+        // billed turns, so it is measured even when this run's window share is
+        // zero. Falling through to the chars/4 estimate there would bill the
+        // same session twice, once per shape.
+        const parsed = updatesText
+          ? parseGrokTurns(updatesText, { from, to, exclude: excludeFor(updatesPath) })
+          : null;
+        if (parsed?.turns) {
+          reserveFrom(updatesPath, parsed);
+          fold(parsed, 'measured');
+          continue;
+        }
+
+        // No `turn_completed` at all — a run killed or interrupted mid-turn.
+        // chat_history.jsonl carries no timestamps, so the session is placed by
+        // summary.json and billed whole or not at all; the session-level claim
+        // is what stops two overlapping runs from each taking it.
+        const summary = await readJSONFile(join(sessionDir, 'summary.json'), null);
+        if (!summary) continue;
+        const startedMs = Date.parse(summary.created_at || '');
+        const endedMs = Date.parse(summary.last_active_at || summary.updated_at || summary.created_at || '');
+        if (!windowOverlaps(startedMs, endedMs, from, to)) continue;
+        const chatPath = join(sessionDir, 'chat_history.jsonl');
+        const chatText = await tryReadFile(chatPath);
+        if (!chatText) continue;
+        const claimKey = `${chatPath}:session`;
+        if (claimedMessages.has(claimKey)) continue;
+        const chat = parseGrokChatHistory(chatText);
+        const estimated = {
+          messages: chat.messages,
+          tokensIn: estimateTokensFromChars(chat.charsIn),
+          tokensOut: estimateTokensFromChars(chat.charsOut),
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0
+        };
+        if (totalTranscriptTokens(estimated) === 0) continue;
+        claimedMessages.add(claimKey);
+        reserved.push(claimKey);
+        const named = chat.model || summary.current_model_id || null;
+        const modelKey = named ?? UNKNOWN_MODEL;
+        fold({ ...estimated, models: named ? [named] : [], byModel: { [modelKey]: { ...estimated } } }, 'estimate');
+      }
+    }
+  } else if (family === 'agy') {
+    // Antigravity writes no token counts anywhere, so every row it produces is
+    // an honest chars/4 estimate. `history.jsonl` is the only cwd-keyed index;
+    // the brain transcript it points at carries the per-step timestamps that
+    // place the work inside a run's window.
+    const root = join(home, '.gemini', 'antigravity-cli');
+    const historyText = await tryReadFile(join(root, 'history.jsonl'));
+    for (const conversation of historyText ? parseAgyHistory(historyText) : []) {
+      if (!cwdMatches(conversation.workspace, workspacePath)) continue;
+      const transcriptPath = join(root, 'brain', conversation.conversationId, '.system_generated', 'logs', 'transcript.jsonl');
+      const text = await tryReadFile(transcriptPath);
+      if (!text) continue;
+      const parsed = parseAgyTranscript(text, { from, to, exclude: excludeFor(transcriptPath) });
+      const estimated = {
+        messages: parsed.messages,
+        tokensIn: estimateTokensFromChars(parsed.charsIn),
+        tokensOut: estimateTokensFromChars(parsed.charsOut),
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0
+      };
+      if (totalTranscriptTokens(estimated) === 0) continue;
+      reserveFrom(transcriptPath, parsed);
+      // No model is named anywhere in the transcript — the UNKNOWN_MODEL bucket
+      // lets the caller attribute it to the provider's own configured model.
+      fold({ ...estimated, models: [], byModel: { [UNKNOWN_MODEL]: { ...estimated } } }, 'estimate');
     }
   } else {
     const sessionsRoot = join(home, '.codex', 'sessions');
@@ -411,7 +553,89 @@ export async function readMeasuredUsage({ workspacePath, startTime, endTime, fam
   }
   totals.model = [...modelCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
   totals.byModel = Object.fromEntries(byModel);
+  totals.source = sourcesSeen.size === 1 ? [...sourcesSeen][0] : 'mixed';
   return totals;
+}
+
+/**
+ * Turn a `readMeasuredUsage` result into the per-model usage records
+ * `recordRunUsage` persists. `recordedModel` is what PortOS launched (or, for a
+ * sibling family, that provider's configured default) — used to name a bucket
+ * the transcript itself left unnamed.
+ *
+ * Returns an ARRAY when the transcript named models (one record per model, so
+ * each is priced at its own rate) and a single record when it named none —
+ * the shape `reconcileRunUsage` has always handed back, kept as-is so a caller
+ * destructuring one form keeps working.
+ *
+ * `role` marks each record `parent` (the run's own provider) or `sibling` (a
+ * nested CLI's session found in the same workspace and window). The historical
+ * backfill needs that split — a parent record REPLACES an earlier estimate,
+ * while a sibling record is a pure addition to a different provider's bucket —
+ * and provider ids alone can't express it. `recordRunUsage` reads only the
+ * count fields, so the marker never reaches usage.json.
+ */
+function recordsFromMeasured(providerId, recordedModel, measured, role) {
+  // A family that mixed a measured session with an estimated one reports
+  // `mixed` on every record it produced: the two shapes fold into the same
+  // per-model buckets, so no record can honestly claim to be purely measured.
+  const source = measured.source || 'measured';
+  const perModel = Object.entries(measured.byModel || {});
+  if (perModel.length > 0) {
+    return perModel.map(([model, bucket]) => ({
+      providerId,
+      role,
+      model: attributedModel(recordedModel ?? null, model, perModel.length === 1),
+      messages: bucket.messages || 0,
+      tokensIn: bucket.tokensIn,
+      tokensOut: bucket.tokensOut,
+      cacheReadTokens: bucket.cacheReadTokens,
+      cacheWriteTokens: bucket.cacheWriteTokens,
+      source
+    }));
+  }
+  return [{
+    providerId,
+    role,
+    // Prefer the model PortOS recorded (it carries the provider's own id shape,
+    // e.g. a Bedrock-prefixed id the pricing table resolves); fall back to the
+    // transcript's when PortOS captured none.
+    model: recordedModel ?? measured.model ?? null,
+    messages: measured.messages || 1,
+    tokensIn: measured.tokensIn,
+    tokensOut: measured.tokensOut,
+    cacheReadTokens: measured.cacheReadTokens,
+    cacheWriteTokens: measured.cacheWriteTokens,
+    source
+  }];
+}
+
+/**
+ * The enabled provider a sibling family's sessions should be billed to, or null
+ * when this install has none configured for that family.
+ *
+ * Null is the right answer for "no match" — inventing an `unknown grok` bucket
+ * would put spend on the cost report that no configured provider can explain.
+ * A `cli` record is preferred over a `tui` one (both drive the same binary, and
+ * a nested reviewer is always launched headless); `api` records are excluded
+ * outright because an API provider writes no local session file. Among several,
+ * the one whose configured model the transcript actually names wins, so an
+ * install with a light and a heavy grok provider attributes to the right one.
+ *
+ * @param {Array<object>} providers the install's provider records (`listProviders()`)
+ * @param {string} family a `TRANSCRIPT_FAMILIES` id
+ * @param {object} measured the `readMeasuredUsage` result, for its model names
+ */
+export function resolveFamilyProvider(providers, family, measured = null) {
+  const candidates = (providers || []).filter((provider) => (
+    provider?.enabled !== false && familyForProvider(provider) === family
+  ));
+  const byType = (type) => candidates.filter((provider) => provider.type === type);
+  const pool = byType('cli').length ? byType('cli') : byType('tui');
+  if (pool.length === 0) return null;
+  const named = new Set([measured?.model, ...Object.keys(measured?.byModel || {})]
+    .filter((model) => model && model !== UNKNOWN_MODEL));
+  return pool.find((provider) => named.has(provider.defaultModel)) ?? pool[0];
 }
 
 /**
@@ -420,80 +644,81 @@ export async function readMeasuredUsage({ workspacePath, startTime, endTime, fam
  * fail the run it describes — and always returns a usable record, so a run with
  * no transcript still contributes its estimate rather than recording nothing.
  *
+ * **The scan is not limited to the run's own provider family.** A CoS task that
+ * ships a PR with `--review-with grok,antigravity` bash-launches those CLIs as
+ * CHILDREN of the parent agent — slashdo's review loop never becomes a PortOS
+ * run of its own, so nothing else would ever record that spend, and the parent's
+ * chars/4 estimate cannot see it either. Every family's session store is
+ * therefore searched in the run's workspace and window, and each session is
+ * attributed to ITS OWN provider (#5831). The per-message claim ledger stays
+ * the exclusivity mechanism, so a nested session is billed exactly once no
+ * matter how many overlapping runs can see it.
+ *
  * @param {object} run PortOS run metadata (`providerId`, `model`,
  *   `workspacePath`, `startTime`, `endTime`)
  * @param {{ tokensIn: number, tokensOut: number }} estimate fallback counts
  * Returns a single record, or an ARRAY of them when the transcript names more
- * than one model (a mid-run `/model` switch or a fallback) — `recordRunUsage`
- * accepts either, and splitting is what keeps each model priced at its own rate.
+ * than one model (a mid-run `/model` switch or a fallback), or when a sibling
+ * family's session was found — `recordRunUsage` accepts either, and splitting is
+ * what keeps each model and each provider priced on its own row.
  *
- * @param {{ home?: string }} [opts]
- * @returns {Promise<{ providerId: string|null, model: string|null, messages: number,
- *   tokensIn: number, tokensOut: number, cacheReadTokens: number,
- *   cacheWriteTokens: number, source: 'measured'|'estimate' }
- *   | Array<object>>}
+ * @param {{ home?: string, providers?: Array<object>|null }} [opts] `providers`
+ *   enables the sibling scan; omitting it reconciles the parent family only
+ *   (which is what a caller with no access to the provider list should do).
+ * @returns {Promise<object|Array<object>>}
  */
-export async function reconcileRunUsage(run, estimate, { home = homedir() } = {}) {
-  const fallback = {
-    providerId: run?.providerId ?? null,
-    model: run?.model ?? null,
-    messages: 1,
-    tokensIn: Math.max(0, estimate?.tokensIn || 0),
-    tokensOut: Math.max(0, estimate?.tokensOut || 0),
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
-    source: 'estimate'
-  };
-
-  const family = transcriptFamily({ providerId: run?.providerId, command: run?.command });
-  if (!family) return fallback;
+export async function reconcileRunUsage(run, estimate, { home = homedir(), providers = null } = {}) {
+  const workspacePath = run?.workspacePath;
+  const startTime = run?.startTime;
+  const endTime = run?.endTime;
 
   // Best-effort: an unreadable home dir, a permissions error, or a CLI format
   // change must degrade to the estimate, never throw into the completion hook.
-  const measured = await readMeasuredUsage({
-    workspacePath: run?.workspacePath,
-    startTime: run?.startTime,
-    endTime: run?.endTime,
-    family,
-    home
-  }).catch((err) => {
-    console.error(`❌ Usage reconcile failed for ${run?.providerId}: ${err.message}`);
-    return null;
-  });
-  if (!measured) return fallback;
+  const readFamily = (family) => readMeasuredUsage({ workspacePath, startTime, endTime, family, home })
+    .catch((err) => {
+      console.error(`❌ Usage reconcile failed for ${run?.providerId} (${family}): ${err.message}`);
+      return null;
+    });
 
-  // A session can switch models mid-run, so split the record per model the
-  // transcript actually names — billing every token at the launch-time model
-  // would price a run that started on Opus and finished on Haiku entirely at
-  // Opus rates. `byModel` is authoritative when present; fall back to one
-  // aggregate record when the transcript named no model at all.
-  const perModel = Object.entries(measured.byModel || {});
-  if (perModel.length > 0) {
-    return perModel.map(([model, bucket]) => ({
+  const family = transcriptFamily({ providerId: run?.providerId, command: run?.command });
+  const measured = family ? await readFamily(family) : null;
+  const parent = measured
+    ? recordsFromMeasured(run?.providerId ?? null, run?.model ?? null, measured, 'parent')
+    : {
       providerId: run?.providerId ?? null,
-      model: attributedModel(run?.model ?? null, model, perModel.length === 1),
-      messages: bucket.messages || 0,
-      tokensIn: bucket.tokensIn,
-      tokensOut: bucket.tokensOut,
-      cacheReadTokens: bucket.cacheReadTokens,
-      cacheWriteTokens: bucket.cacheWriteTokens,
-      source: 'measured'
-    }));
+      role: 'parent',
+      model: run?.model ?? null,
+      messages: 1,
+      tokensIn: Math.max(0, estimate?.tokensIn || 0),
+      tokensOut: Math.max(0, estimate?.tokensOut || 0),
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      source: 'estimate'
+    };
+
+  const siblings = [];
+  for (const sibling of Array.isArray(providers) && providers.length ? TRANSCRIPT_FAMILIES : []) {
+    if (sibling === family) continue;
+    // Resolve BEFORE reading. No enabled provider for this family means the
+    // session is skipped rather than opened as an `unknown` bucket the cost
+    // report can't explain — and skipping it before the read matters: a read
+    // CLAIMS the messages it folded, so reading first and discarding after
+    // would strand those keys and stop a later, correctly-configured run from
+    // ever billing them.
+    if (!resolveFamilyProvider(providers, sibling)) continue;
+    const siblingUsage = await readFamily(sibling);
+    if (!siblingUsage) continue;
+    // Re-resolve now that the transcript's model names can break a tie between
+    // several configured providers of the same family.
+    const provider = resolveFamilyProvider(providers, sibling, siblingUsage);
+    if (!provider) continue;
+    siblings.push(...asRecordList(recordsFromMeasured(provider.id, provider.defaultModel ?? null, siblingUsage, 'sibling')));
+    console.log(`💸 Nested ${sibling} session billed to ${provider.id} for run ${run?.id || 'unknown'}`);
   }
 
-  return {
-    providerId: run?.providerId ?? null,
-    // Prefer the model PortOS recorded (it carries the provider's own id shape,
-    // e.g. a Bedrock-prefixed id the pricing table resolves); fall back to the
-    // transcript's when PortOS captured none.
-    model: run?.model ?? measured.model ?? null,
-    messages: measured.messages || 1,
-    tokensIn: measured.tokensIn,
-    tokensOut: measured.tokensOut,
-    cacheReadTokens: measured.cacheReadTokens,
-    cacheWriteTokens: measured.cacheWriteTokens,
-    source: 'measured'
-  };
+  // The parent's shape is preserved when nothing nested was found, so a caller
+  // that destructures a single record keeps working on every existing path.
+  return siblings.length ? [...asRecordList(parent), ...siblings] : parent;
 }
 
 /**
@@ -512,16 +737,25 @@ export async function reconcileRunUsage(run, estimate, { home = homedir() } = {}
  * @param {{ home?: string }} [opts] `home` overrides the transcript root (tests)
  * @returns {Promise<void>}
  */
-export async function recordCompletedRunUsage(metadata, output, { home = homedir() } = {}) {
+export async function recordCompletedRunUsage(metadata, output, { home = homedir(), providers = null } = {}) {
   if (!metadata?.providerId) return;
 
   const estimate = {
     tokensOut: estimateTokens(output),
     tokensIn: estimateTokensFromChars(metadata.promptLength)
   };
+  // The provider list enables the sibling-family scan (a nested `--review-with`
+  // grok/agy pass leaves a session but no PortOS run). Imported lazily and
+  // defensively: this module is also loaded inside the backfill worker thread,
+  // where the toolkit singleton is never initialized — that path is handed its
+  // providers through `workerData` instead, and must not drag the provider
+  // graph in at import time.
+  const resolved = providers ?? await import('./providers.js')
+    .then((module) => module.listProviders())
+    .catch(() => null);
   // One catch for the whole chain: whatever fails — reading a transcript or
   // persisting the record — usage accounting must not surface as a run failure.
-  await reconcileRunUsage(metadata, estimate, { home })
+  await reconcileRunUsage(metadata, estimate, { home, providers: resolved })
     .then(recordRunUsage)
     .then(async () => {
       if (!metadata?.id) return;

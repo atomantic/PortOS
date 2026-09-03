@@ -41,7 +41,7 @@ describe('ReviewerPicker', () => {
 
   it('shows the empty-state hint when no reviewers are selected', () => {
     render(<ReviewerPicker reviewers={[]} onChange={() => {}} />);
-    expect(screen.getByText(/none — defaults to Copilot/)).toBeInTheDocument();
+    expect(screen.getByText(/none — follows your default AI provider/)).toBeInTheDocument();
   });
 
   it('de-dupes a malformed list with duplicates (order-preserving)', () => {
@@ -308,11 +308,50 @@ describe('ReviewerPicker', () => {
       expect(screen.getByRole('option', { name: 'qwen2.5-coder:32b' })).toBeInTheDocument();
     });
 
-    it('renders a CLI reviewer as a free-text input so an env-specific id can be typed', () => {
+    it('renders a CLI reviewer as a dropdown of its catalog', () => {
       render(<ReviewerPicker reviewers={['claude']} modelOptions={modelOptions} onChange={() => {}} />);
+      expect(screen.getByLabelText('Model for Claude').tagName).toBe('SELECT');
+      expect(screen.getByRole('option', { name: 'claude-tier-a' })).toBeInTheDocument();
+    });
+
+    it('offers a CLI reviewer a Custom… escape that swaps in a free-text input', () => {
+      const onChange = vi.fn();
+      render(<ReviewerPicker reviewers={['claude']} modelOptions={modelOptions} onChange={onChange} />);
+      fireEvent.change(screen.getByLabelText('Model for Claude'), { target: { value: '[custom]' } });
       // An Ollama-backed / Bedrock-form claude id can't be enumerated, so the
-      // control must accept a typed value rather than only a pick.
+      // escape must accept a typed value rather than only a pick.
       expect(screen.getByLabelText('Model for Claude').tagName).toBe('INPUT');
+      // The sentinel is a UI mode, not an id — it must never be stored as a pin.
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it('does not offer the Custom… escape to a probed local backend', () => {
+      render(<ReviewerPicker reviewers={['ollama']} modelOptions={modelOptions} onChange={() => {}} />);
+      // Ollama's list is the daemon's own answer: an id it doesn't list isn't installed.
+      expect(screen.queryByRole('option', { name: 'Custom…' })).not.toBeInTheDocument();
+    });
+
+    it('leaving an empty Custom… field returns the cell to the dropdown', () => {
+      render(<ReviewerPicker reviewers={['claude']} modelOptions={modelOptions} onChange={() => {}} />);
+      fireEvent.change(screen.getByLabelText('Model for Claude'), { target: { value: '[custom]' } });
+      fireEvent.blur(screen.getByLabelText('Model for Claude'));
+      expect(screen.getByLabelText('Model for Claude').tagName).toBe('SELECT');
+    });
+
+    it('keeps the Custom… input mounted while a typed id is being edited', () => {
+      render(<ReviewerPicker reviewers={['claude']} modelOptions={modelOptions} onChange={() => {}} />);
+      fireEvent.change(screen.getByLabelText('Model for Claude'), { target: { value: '[custom]' } });
+      // Clearing the field to retype must not swap the control out mid-edit.
+      fireEvent.change(screen.getByLabelText('Model for Claude'), { target: { value: 'x' } });
+      fireEvent.change(screen.getByLabelText('Model for Claude'), { target: { value: '' } });
+      expect(screen.getByLabelText('Model for Claude').tagName).toBe('INPUT');
+    });
+
+    it('keeps a pin outside the catalog editable rather than unpickable', () => {
+      render(<ReviewerPicker reviewers={['claude']} reviewerModels={{ claude: 'llama3.1:70b' }} modelOptions={modelOptions} onChange={() => {}} />);
+      const control = screen.getByLabelText('Model for Claude');
+      expect(control.tagName).toBe('INPUT');
+      expect(control).toHaveValue('llama3.1:70b');
     });
 
     it('falls back to free-text when no options resolved (a closed empty select would be dead)', () => {
@@ -358,6 +397,7 @@ describe('ReviewerPicker', () => {
     it('treats a whitespace-only entry as a clear, not a pin', () => {
       const onChange = vi.fn();
       render(<ReviewerPicker reviewers={['codex']} reviewerModels={{ codex: 'gpt-tier-a' }} modelOptions={modelOptions} onChange={onChange} />);
+      fireEvent.change(screen.getByLabelText('Model for Codex'), { target: { value: '[custom]' } });
       fireEvent.change(screen.getByLabelText('Model for Codex'), { target: { value: '   ' } });
       expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewerModels: {} }));
     });
@@ -417,6 +457,7 @@ describe('ReviewerPicker', () => {
       // `foo]~opt` would close the selector early and leave slashdo reading the
       // rest as a suffix; the server drops such an id, so accepting it here would
       // show a pin that never persists.
+      fireEvent.change(screen.getByLabelText('Model for Codex'), { target: { value: '[custom]' } });
       fireEvent.change(screen.getByLabelText('Model for Codex'), { target: { value: 'foo]~opt' } });
       expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewerModels: { codex: 'foo~opt' } }));
     });
@@ -424,6 +465,7 @@ describe('ReviewerPicker', () => {
     it('keeps a space in a typed id (slashdo selectors are free-form)', () => {
       const onChange = vi.fn();
       render(<ReviewerPicker reviewers={['claude']} modelOptions={modelOptions} onChange={onChange} />);
+      fireEvent.change(screen.getByLabelText('Model for Claude'), { target: { value: '[custom]' } });
       fireEvent.change(screen.getByLabelText('Model for Claude'), { target: { value: 'Some Model (High)' } });
       expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewerModels: { claude: 'Some Model (High)' } }));
     });

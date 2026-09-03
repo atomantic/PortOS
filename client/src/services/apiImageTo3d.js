@@ -21,9 +21,10 @@ export const createImageTo3dModel = (input, options) =>
   });
 
 // Re-run the render for an existing record (status → generating again).
-// `input` carries the optional per-run knobs ({ steps, seed, keyBackground }) —
-// they apply to this run only: absent steps → the pipeline default, absent
-// seed → the server rolls a fresh random one, absent keyBackground → no keying.
+// `input` carries the optional per-run knobs ({ steps, seed, keyBackground,
+// subjectScale, … }) — they apply to this run only: absent steps → the pipeline
+// default, absent seed → the server rolls a fresh random one, absent keyBackground →
+// no keying, absent subjectScale → the source keeps its own framing.
 export const generateImageTo3dModel = (id, input = {}, options) =>
   request(`/image-to-3d/models/${encodeURIComponent(id)}/generate`, {
     method: 'POST',
@@ -50,3 +51,22 @@ export const imageTo3dAssetUrl = (id) =>
 // 404 — not a sign the record is broken). The GLB stays the thing the viewer loads.
 export const imageTo3dFullMeshUrl = (id) =>
   `/api/image-to-3d/models/${encodeURIComponent(id)}/full-mesh`;
+
+// The stored AR Quick Look artifact, served `inline` as `model/vnd.usdz+zip` —
+// the exact header pair Safari requires before it will open an `<a rel="ar">`
+// target in AR. Deliberately NOT the record's static `usdzPath`: that mount
+// leaves the content type to mime lookup, and this contract is the feature.
+export const imageTo3dUsdzUrl = (id) =>
+  `/api/image-to-3d/models/${encodeURIComponent(id)}/usdz`;
+
+// Persist a USDZ the VIEWER produced (three's USDZExporter over the scene it has
+// already decoded — PortOS ships no USD toolchain). Raw bytes, not JSON: the
+// explicit content type overrides apiCore's `application/json` default so the
+// server's `express.raw` parser claims the body.
+export const uploadImageTo3dUsdz = (id, bytes, options) =>
+  request(`/image-to-3d/models/${encodeURIComponent(id)}/usdz`, {
+    method: 'POST',
+    body: bytes,
+    headers: { 'Content-Type': 'model/vnd.usdz+zip' },
+    ...options,
+  });

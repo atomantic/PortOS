@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { generatePostDrill, submitPostSession, scorePostLlmDrill, submitTrainingRun } from '../services/api';
 import toast from '../components/ui/Toast';
+import { safeReadJsonSession, safeRemoveSession, safeWriteJsonSession } from '../lib/safeStorage.js';
 import { uuidv4 } from '../lib/uuid.js';
 import {
   LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, DRILL_TO_DOMAIN, countLlmCorrect,
@@ -23,11 +24,9 @@ const RESTORABLE_STATES = new Set(['drilling', 'between-drills', 'complete']);
 const newRunId = () => uuidv4();
 
 function loadRunSnapshot() {
-  if (typeof sessionStorage === 'undefined') return null;
-  const raw = sessionStorage.getItem(RUN_STORAGE_KEY);
-  if (!raw) return null;
-  let snap;
-  try { snap = JSON.parse(raw); } catch { return null; } // corrupt storage → start fresh
+  // Missing, inaccessible (Safari private mode) and corrupt all collapse to the
+  // fallback here, which the checks below already treat as "start fresh".
+  const snap = safeReadJsonSession(RUN_STORAGE_KEY, null);
   if (!snap || typeof snap !== 'object') return null;
   if (snap.state === 'saving') {
     // Both scored and training saves use stable client run/attempt ids, so an
@@ -39,7 +38,7 @@ function loadRunSnapshot() {
 }
 
 function clearRunSnapshot() {
-  if (typeof sessionStorage !== 'undefined') sessionStorage.removeItem(RUN_STORAGE_KEY);
+  safeRemoveSession(RUN_STORAGE_KEY);
 }
 
 function computeSessionScoreFromResults(results) {
@@ -219,8 +218,9 @@ export function usePostSession() {
     // refresh during generation. Keeping the last good snapshot lets a refresh
     // resume at the between-drills screen instead of dropping the whole run.
     if (state === STATES.LOADING) return;
-    if (typeof sessionStorage === 'undefined') return;
-    sessionStorage.setItem(RUN_STORAGE_KEY, JSON.stringify({
+    // Best-effort: this effect fires on every drill-state change, and a private-mode
+    // QuotaExceededError here used to take the whole training run down (#5689).
+    safeWriteJsonSession(RUN_STORAGE_KEY, {
       runId, state, drills, currentDrillIndex, currentDrill, currentQuestionIndex,
       answers, drillResults, sessionScore, isTraining, conditions, legacyTags, sessionPlan,
       benchmark,
@@ -231,7 +231,7 @@ export function usePostSession() {
       drillStartedAt: drillStartRef.current,
       runStartedAt: runStartedAtRef.current,
       runCompletedAt: runCompletedAtRef.current,
-    }));
+    });
   }, [runId, state, drills, currentDrillIndex, currentDrill, currentQuestionIndex, answers, drillResults, sessionScore, isTraining, conditions, legacyTags, sessionPlan, benchmark]);
 
   const startSession = useCallback(async (drillConfigs, training = false, sessionConditions = {}, plan = null, benchmarkMetadata = null) => {

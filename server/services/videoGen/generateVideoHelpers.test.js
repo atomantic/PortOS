@@ -142,7 +142,7 @@ describe('makeVideoGenLineHandler', () => {
 
   it('still surfaces the prompt-encode markers to the client as status frames', () => {
     handle('STAGE:encode-prompt');
-    expect(eventsOfType('status')).toContainEqual({ generationId: 'job-12345678', message: 'encode-prompt' });
+    expect(eventsOfType('status')).toContainEqual({ generationId: 'job-12345678', message: 'encode-prompt', phase: 'encode-prompt' });
   });
 
   it('repeats the job ETA on every progress frame, and omits it when absent (#3801)', () => {
@@ -170,8 +170,8 @@ describe('makeVideoGenLineHandler', () => {
 
   it('STATUS: → status SSE frame + status event, and an activity heartbeat', () => {
     expect(handle('STATUS:Generating I2V…')).toBe(true);
-    expect(sseFrames()).toContainEqual({ type: 'status', message: 'Generating I2V…' });
-    expect(eventsOfType('status')).toContainEqual({ generationId: 'job-12345678', message: 'Generating I2V…' });
+    expect(sseFrames()).toContainEqual({ type: 'status', message: 'Generating I2V…', phase: 'starting' });
+    expect(eventsOfType('status')).toContainEqual({ generationId: 'job-12345678', message: 'Generating I2V…', phase: 'starting' });
     expect(eventsOfType('activity')).toContainEqual({ generationId: 'job-12345678' });
   });
 
@@ -179,14 +179,14 @@ describe('makeVideoGenLineHandler', () => {
     expect(handle('STAGE:render:step:6:10:Sampling latents')).toBe(true);
     expect(sseFrames()).toContainEqual({ type: 'progress', progress: 0.6, message: 'Sampling latents', phase: 'render' });
     expect(eventsOfType('progress')).toContainEqual({
-      generationId: 'job-12345678', progress: 0.6, step: 6, totalSteps: 10, message: 'Sampling latents',
+      generationId: 'job-12345678', progress: 0.6, step: 6, totalSteps: 10, message: 'Sampling latents', phase: 'render',
     });
   });
 
   it('STAGE: heartbeat does NOT become bogus progress (regression: 20s → 2000%)', () => {
     expect(handle('STAGE:download-clip:heartbeat:20s')).toBe(true);
     // Heartbeat is a status line, never a progress frame.
-    expect(sseFrames()).toContainEqual({ type: 'status', message: 'download-clip: heartbeat 20s' });
+    expect(sseFrames()).toContainEqual({ type: 'status', message: 'download-clip: heartbeat 20s', phase: 'download-clip' });
     expect(sseFrames().some((f) => f.type === 'progress')).toBe(false);
   });
 
@@ -197,7 +197,7 @@ describe('makeVideoGenLineHandler', () => {
 
   it('bare STAGE: phase marker → status (no division-by-undefined progress)', () => {
     expect(handle('STAGE:load-pipeline')).toBe(true);
-    expect(sseFrames()).toContainEqual({ type: 'status', message: 'load-pipeline' });
+    expect(sseFrames()).toContainEqual({ type: 'status', message: 'load-pipeline', phase: 'load-pipeline' });
     expect(sseFrames().some((f) => f.type === 'progress')).toBe(false);
   });
 
@@ -218,7 +218,7 @@ describe('makeVideoGenLineHandler', () => {
     expect(handle('60%|██████    | 6/10 [00:30<00:20, 1.2s/it]')).toBe(true);
     expect(sseFrames()).toContainEqual({ type: 'progress', progress: 0.6, message: '60%|██████    | 6/10 [00:30<00:20, 1.2s/it]', phase: 'starting' });
     // The mediaJobQueue dispatcher emit must NOT carry the raw bar as message.
-    expect(eventsOfType('progress')).toContainEqual({ generationId: 'job-12345678', progress: 0.6 });
+    expect(eventsOfType('progress')).toContainEqual({ generationId: 'job-12345678', progress: 0.6, phase: 'starting' });
   });
 
   it('tqdm bar with byte sizes during download → formatted GB message', () => {

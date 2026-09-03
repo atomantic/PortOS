@@ -18,6 +18,7 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router';
 import { Plus, Sparkles, Trash2, Clock, Cpu, Pause, Play, Zap } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import EmptyState from '../components/EmptyState';
 import toast from '../components/ui/Toast';
 import Drawer from '../components/Drawer';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
@@ -148,19 +149,13 @@ export default function CreativeCommissions() {
       {loading ? (
         <PageSkeleton header="none" label="Loading commissions" cards={3} sidebar={false} />
       ) : sorted.length === 0 ? (
-        <div className="border border-dashed border-port-border rounded-lg p-10 text-center">
-          <Sparkles className="w-8 h-8 text-gray-600 mx-auto mb-3" />
-          <p className="text-gray-400 mb-1">No commissions yet</p>
-          <p className="text-gray-600 text-sm mb-4">
-            Create a standing brief like “every night at 2am, make me something surreal” and it runs unattended.
-          </p>
-          <button
-            onClick={() => navigate('/creative-commission/new')}
-            className="inline-flex items-center gap-2 bg-port-accent hover:bg-blue-600 text-white px-3 py-2 rounded text-sm font-medium"
-          >
-            <Plus className="w-4 h-4" /> New Commission
-          </button>
-        </div>
+        <EmptyState
+          icon={Sparkles}
+          title="No commissions yet"
+          message="Create a standing brief like “every night at 2am, make me something surreal” and it runs unattended."
+          actionTo="/creative-commission/new"
+          actionLabel="Create your first commission"
+        />
       ) : (
         <div className="space-y-2">
           {sorted.map((c) => (

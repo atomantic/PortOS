@@ -21,8 +21,10 @@ import { resolveAgentCliCwd } from '../lib/spawnCwd.js';
 import { doneSentinelName, doneSentinelPath as resolveDoneSentinelPath, parseSentinelPayload } from '../lib/agentSentinel.js';
 import { shouldAbandonForHostShutdown, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
 import { SENTINEL_COMPLETION_MARKER } from '../lib/agentOutputMarkers.js';
-import { PR_CREATION, prClaimWasVerified, resolvePrCompletion, resolvePrCreation } from '../lib/prDisposition.js';
+import { PR_CREATION, prClaimWasVerified, resolvePrCompletion, resolvePrCreation, leavesPrForHuman } from '../lib/prDisposition.js';
 import { canTypeSlashCommands, agentOwnsPrWorkflow } from '../lib/slashdoInvocation.js';
+import { mergeGateOwed, resolveMergeGateVerdict, buildMergeGateReprompt } from '../lib/mergeGateContract.js';
+import { probePrForBranch } from './prProbe.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { normalizeReviewers } from '../lib/validation.js';
 import * as git from './git.js';
@@ -66,7 +68,6 @@ import {
   SUBMIT_KEY,
 } from '../lib/tuiHandshake.js';
 import { injectTuiModelAndEffort } from '../lib/providerVendors.js';
-import { isPublicReviewNoToolProfile } from '../lib/agentExecutionProfiles.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { composeProviderEnv } from '../lib/cliChildEnv.js';
 import { cliProviderAuthDescriptor } from '../lib/processEnv.js';
@@ -195,15 +196,10 @@ export function buildTuiSpawnConfig(provider, model, {
   systemPromptFile = null,
   effort = null,
   maxConcurrentThreads = null,
-  safetyProfile = null,
   shell = resolveInteractiveShell(),
 } = {}) {
   const command = provider?.command || inferTuiCommand(provider?.id);
-  const baseArgs = applyCommandDefaults(
-    command,
-    isPublicReviewNoToolProfile(safetyProfile) ? [] : [...(provider?.args || [])],
-    { safetyProfile },
-  );
+  const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])]);
   // Model+effort injection (including the antigravity-validates-the-pair special
   // case) is shared with tuiHandshake.js#buildTuiInvocation via
   // providerVendors.js#injectTuiModelAndEffort, so the two spawn paths can't
@@ -582,9 +578,35 @@ export async function spawnTuiAgent({
   // Resolved from the shared helper, so this is byte-identical to the path the
   // prompt told the agent to write (see resolveSentinelPath).
   const doneSentinelPath = resolveDoneSentinelPath(cwd, agentId);
+  // Every TUI that is a real coding harness drives its own push → PR → review
+  // → merge, whether or not it can type `/do:pr` (#3733) — a Claude TUI runs
+  // the slashdo command, codex/antigravity/grok/OpenCode run the plain
+  // `git`/`gh` equivalent from the same prompt. Only a lean `--bare` session
+  // still hands the lifecycle back to PortOS. Computed once up front (rather
+  // than inside finish()) so the merge-gate contract check below and finish()
+  // itself read the same answer.
+  const taskOpenPR = isTruthyMetaFn(task.metadata?.openPR);
+  const agentOwnsPR = taskOpenPR && agentOwnsPrWorkflow({ providerType: PROVIDER_TYPES.TUI, leanMode });
+  // Does this run's own task shape say it owed a merge (#5876)? A run PortOS
+  // still backstops (no PR at all, or a lean session) or one whose prompt
+  // hands the PR to a human (JIRA, claim flow) never owed one, so the
+  // contract check below is inert for those — see mergeGateContract.js.
+  const mergeGateIsOwed = mergeGateOwed({ taskOpenPR, ownsPrWorkflow: agentOwnsPR, leaveOpen: leavesPrForHuman(task) });
   const promptPreview = prompt.replace(/\s+/g, ' ').slice(0, 100);
   const commandName = tuiConfig.command.split('/').pop();
   let finalized = false;
+  // Synchronous re-entrancy guard for finish() — see its own comment for why
+  // `finalized` alone isn't enough once the merge-gate check adds awaits
+  // before it (#5876).
+  let finishing = false;
+  // A finish() call's args, dropped by the `finishing` guard while an earlier
+  // call was still deciding whether to finalize — replayed if that call ends
+  // up NOT finalizing (see finish()'s own comments on both).
+  let pendingFinish = null;
+  // Caps the merge-gate re-prompt (#5876) at once per run — a local closure
+  // counter is enough: the check only ever runs from this same live process,
+  // and a fresh spawn (a real retry) starts a fresh closure with its own flag.
+  let mergeGateReprompted = false;
   let immediateFallbackAnalysis = null;
   const detectImmediateFallbackSignal = createImmediateFallbackSignalDetector();
   // Holds the wait-it-out window for a provider signal carrying a `graceMs`
@@ -715,9 +737,12 @@ export async function spawnTuiAgent({
   // different things in two places.
   const sentinelPresent = () => !!doneSentinelPath && existsSync(doneSentinelPath);
 
+  // Returns the sentinel's `summary` text (or null on a second call / no
+  // sentinel / an empty summary) — the merge-gate contract check below reads
+  // this same return value rather than re-reading the file a second time.
   const ingestDoneSentinel = async () => {
-    if (sentinelIngested) return;
-    if (!sentinelPresent()) return;
+    if (sentinelIngested) return null;
+    if (!sentinelPresent()) return null;
     sentinelIngested = true;
     const contents = await readFile(doneSentinelPath, 'utf8').catch(err => {
       console.error(`❌ ingestDoneSentinel readFile failed: ${err.message}`);
@@ -729,13 +754,76 @@ export async function spawnTuiAgent({
     // read mode-agnostically in finalizeAgent). A legacy plain-markdown sentinel
     // parses back as its own text, so this is a no-op change for existing types.
     const { summary } = parseSentinelPayload(contents);
-    if (!summary) return;
+    if (!summary) return null;
     // Shared constant, not a literal: `extractAgentSummary` anchors the PR-body
     // extraction on this exact line to tell the agent's summary apart from the
     // lifecycle telemetry above it. Reword it here only, and the noise returns.
     appendLine(SENTINEL_COMPLETION_MARKER);
     const truncated = summary.length > 4096 ? `${summary.slice(0, 4096)}\n…[truncated]` : summary;
     for (const line of truncated.split('\n')) appendLine(line);
+    return summary;
+  };
+
+  // Sentinel-file watcher. The agent's prompt instructs it to write
+  // .agent-done in the workspace after running /simplify + /do:pr and then
+  // stop (it does NOT `/quit` — that is a UI command it can't invoke). This
+  // watcher is the PRIMARY finalize path: it fires finish() shortly after the
+  // sentinel appears, and finish()'s own cleanup kills the still-running TUI
+  // session. The actual sentinel READ happens in finish() (via
+  // ingestDoneSentinel) so the resolution is captured no matter which path
+  // finalizes. A normal shell exit or explicit provider failure handles
+  // agents that do not write the sentinel.
+  //
+  // `watchForFile` is one-shot (it detects, closes itself, then calls back) —
+  // so a run whose merge-gate check re-prompts and deletes the sentinel to
+  // await a SECOND completion needs a brand-new watcher, not a re-trigger of
+  // this one. Factored out so both call sites build the exact same watcher.
+  const armSentinelWatcher = () => (doneSentinelPath ? watchForFile(doneSentinelPath, async () => {
+    if (finalized) return;
+    await finish({ success: true, exitCode: 0, reason: 'agent-signaled-done' });
+  }) : null);
+
+  /**
+   * Merge Gate contract check (#5876) — runs on a successful sentinel, before
+   * ANY teardown, for a run whose own task shape said it owed a merge. Asks
+   * the forge whether the PR this run opened actually landed and, if it is
+   * still open with no blocker stated in the agent's own summary, re-pastes
+   * one corrective nudge into the still-attached session instead of paying
+   * for a cold recovery agent (`agentRepoStateVerification.js`) to do the
+   * same merge later. See mergeGateContract.js for the decision table.
+   *
+   * @returns {Promise<boolean>} true when a re-prompt went out — the caller
+   *   must NOT finalize this call; false means finalize normally.
+   */
+  const checkMergeGateCompliance = async (summary) => {
+    if (!mergeGateIsOwed || mergeGateReprompted) return false;
+    const branchName = await git.getBranch(cwd).catch(() => null);
+    if (!branchName) return false;
+    const prProbe = await probePrForBranch(cwd, branchName).catch(() => null);
+    const verdict = resolveMergeGateVerdict({ prProbe, summary });
+    if (verdict !== 'needs-reprompt') return false;
+    if (!pasteController?.resubmit({ text: buildMergeGateReprompt(prProbe.prUrl || '<PR_URL>'), label: 'merge-gate contract nudge' })) {
+      // Session is already gone — nothing to nudge; fall through to finalize.
+      return false;
+    }
+    mergeGateReprompted = true;
+    // Reopen the completion window: a fresh `.agent-done` write after the
+    // nudge must be re-ingested (not silently skipped by the once-only guard)
+    // and needs a brand-new watcher — the original already closed itself on
+    // its first (this) detection.
+    sentinelIngested = false;
+    if (doneSentinelPath) await rm(doneSentinelPath).catch(() => {});
+    // Armed unconditionally — the sentinel is already gone, so a missing
+    // `activeAgents` entry (an anomaly this code doesn't otherwise expect)
+    // must not also leave the run with no watcher at all. `stopRunMachinery`
+    // reads it back off the map to tear it down at real finalize; if the
+    // entry is missing there too, the watcher self-closes on its next fire.
+    const newWatcher = armSentinelWatcher();
+    const agentData = activeAgents.get(agentId);
+    if (agentData) agentData.doneSentinelWatcher = newWatcher;
+    appendLine(`🔁 Merge Gate not finished (PR still OPEN, no blocker stated) — re-prompted the session (1 nudge only)`);
+    emitLog('warn', `🔁 Merge-gate contract nudge sent for ${agentId} — PR still OPEN with no stated blocker`, { agentId });
+    return true;
   };
 
   /**
@@ -764,7 +852,27 @@ export async function spawnTuiAgent({
   };
 
   const finish = async ({ success, exitCode = 0, error = null, reason = 'completed' }) => {
+    // `finalized` alone used to be the whole re-entrancy guard, safe because it
+    // was set SYNCHRONOUSLY as this function's first act. The merge-gate check
+    // below needs `ingestDoneSentinel`'s summary before it can decide whether
+    // to finalize at all, which pushes `finalized = true` past several awaits —
+    // wide enough for a second trigger (the shell exiting right after the
+    // sentinel appears) to also pass the `if (finalized)` gate before the first
+    // call sets it, double-firing `finalizeAgent`. `finishing` closes that
+    // window synchronously; `finalized` still means "truly done" and is what
+    // `pasteController.resubmit()` reads, so it must stay false while a
+    // re-prompt is still possible.
+    //
+    // A trigger dropped here while the first call is mid-decision is not
+    // discarded: it's the one call that could carry news the first call
+    // doesn't have (the shell exiting right in this window), so it's replayed
+    // once that call settles on "not finalizing after all" — see below.
     if (finalized) return;
+    if (finishing) {
+      pendingFinish = { success, exitCode, error, reason };
+      return;
+    }
+    finishing = true;
     // PortOS is going down. Whatever path got here — the PTY exiting under
     // TreeKill, a provider-signal failure, a paste that failed because the shell died —
     // the cause is the host restart, not the agent, so there is no outcome to
@@ -787,18 +895,43 @@ export async function spawnTuiAgent({
       await abandonForHostShutdown();
       return;
     }
+
+    // Ingest the .agent-done sentinel BEFORE any teardown decision, so its
+    // markdown summary lands in outputBuffer/output.txt regardless of WHICH
+    // path finalized the agent, AND so the merge-gate contract check right
+    // below reads the same text without a second file read. The completion
+    // workflow writes the sentinel and stops; the 2s doneSentinelWatcher is
+    // what normally calls finish(). Idempotent via `sentinelIngested`.
+    const sentinelSummary = await ingestDoneSentinel();
+
+    // Merge Gate contract check (#5876): only for a run that actually
+    // succeeded AND signaled that success via a real `.agent-done` summary —
+    // an ordinary clean exit with no sentinel (or one with an empty summary)
+    // is not the "the agent believes its Merge Gate is done" signal this
+    // reads; re-prompting THAT would paste into a shell whose TUI child may
+    // already be gone, parking the run on a nudge that can never land.
+    // Returns true (and this call does NOT finalize) exactly once, when the
+    // run owed a merge, the PR is open, and the summary names no blocker —
+    // see mergeGateContract.js for the full decision table.
+    if (success && sentinelSummary !== null && await checkMergeGateCompliance(sentinelSummary)) {
+      // Not finalizing — reopen the re-entrancy gate for the next completion
+      // signal the re-prompt is expected to produce. A trigger that arrived
+      // WHILE this call was deciding (dropped by the `finishing` guard above)
+      // is the only thing that could tell us the session actually died during
+      // that window, so replay it now rather than losing it — otherwise the
+      // run would sit waiting for a nudge with nothing left alive to receive it.
+      finishing = false;
+      if (pendingFinish) {
+        const replay = pendingFinish;
+        pendingFinish = null;
+        return finish(replay);
+      }
+      return;
+    }
+
     finalized = true;
 
     const agentData = stopRunMachinery();
-
-    // Ingest the .agent-done sentinel BEFORE draining, so its markdown summary
-    // lands in outputBuffer/output.txt regardless of WHICH path finalized the
-    // agent. The completion workflow writes the sentinel and stops; the 2s
-    // doneSentinelWatcher is what normally calls finish(). Reading it here
-    // (not just in the watcher) keeps the resolution captured even when shell exit
-    // finalizes first. Idempotent
-    // via `sentinelIngested`.
-    await ingestDoneSentinel();
 
     // Drain pending parsed lines AND raw chunks before the final state
     // writes so completion events don't beat the last output batch to disk.
@@ -858,15 +991,11 @@ export async function spawnTuiAgent({
       completionError: finalError,
     });
 
-    // Every TUI that is a real coding harness drives its own push → PR → review
-    // → merge, whether or not it can type `/do:pr` (#3733) — a Claude TUI runs
-    // the slashdo command, codex/antigravity/grok/OpenCode run the plain
-    // `git`/`gh` equivalent from the same prompt. Only a lean `--bare` session
-    // still hands the lifecycle back to PortOS. Derived from the same predicate
-    // the prompt builder used so neither side can believe the other owns the PR.
-    const taskOpenPR = isTruthyMetaFn(task.metadata?.openPR);
+    // `taskOpenPR` / `agentOwnsPR` are computed once, up front, near
+    // `doneSentinelPath` — the merge-gate contract check above reads the same
+    // answer this cleanup path does, so neither side can believe the other
+    // owns the PR (#3733).
     const taskReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
-    const agentOwnsPR = taskOpenPR && agentOwnsPrWorkflow({ providerType: PROVIDER_TYPES.TUI, leanMode });
     // …but PR-claim verification (#3358) stays keyed on the SLASH-command
     // predicate. A run PortOS still backstops (it re-checks the forge at cleanup
     // and opens the PR itself when the agent skipped it) must not be failed here
@@ -1620,19 +1749,7 @@ export async function spawnTuiAgent({
     }
   }, PROVIDER_SIGNAL_POLL_MS);
 
-  // Sentinel-file watcher. The agent's prompt instructs it to write
-  // .agent-done in the workspace after running /simplify + /do:pr and then
-  // stop (it does NOT `/quit` — that is a UI command it can't invoke). This
-  // watcher is the PRIMARY finalize path: it fires finish() shortly after the
-  // sentinel appears, and finish()'s own cleanup kills
-  // the still-running TUI session. The actual sentinel READ happens in finish()
-  // (via ingestDoneSentinel) so the resolution is captured no matter which path
-  // finalizes. A normal shell exit or explicit provider failure handles agents
-  // that do not write the sentinel.
-  const doneSentinelWatcher = doneSentinelPath ? watchForFile(doneSentinelPath, async () => {
-    if (finalized) return;
-    await finish({ success: true, exitCode: 0, reason: 'agent-signaled-done' });
-  }) : null;
+  const doneSentinelWatcher = armSentinelWatcher();
 
   activeAgents.set(agentId, {
     process: ptyProcess || { kill: () => shellService.killSession(sessionId) },

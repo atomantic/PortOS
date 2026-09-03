@@ -88,6 +88,8 @@ const isRetryableTransportError = (error) =>
  *   Where the verified result lands. Called per job so a PATHS proxy stays live.
  * @param {(ctx: object) => Promise<object>} config.finalize - Register the downloaded
  *   result locally; its return value is merged into the `completed` event payload.
+ *   Its ctx carries `renderStartedAtMs` (this install's ingestion instant) for
+ *   `renderTimingFields` — see the call site for what that span covers.
  */
 export function createRemoteMediaExecutor({
   kind,
@@ -472,6 +474,13 @@ export function createRemoteMediaExecutor({
       peerId: state.peerId,
       request,
       remoteJob: completed,
+      // Wall-clock render timing (#5878). Measured from THIS install's
+      // ingestion of the job — submission, the peer's own queue wait and
+      // render, download, verification — because that whole span is what the
+      // user waited through here. The peer's internal render time is not on
+      // the wire, and asking for it would be a status payload crossing the
+      // federation boundary.
+      renderStartedAtMs: state.renderStartedAtMs,
       ...downloaded,
     });
     return {
@@ -506,6 +515,17 @@ export function createRemoteMediaExecutor({
       standingRoute: marker.data.standingRoute === true,
       requestController: null,
       wake: null,
+      // The instant the media-job queue handed this job to us; `finalize` turns
+      // it into the record's render-timing fields (#5878).
+      //
+      // NOT stamped on a reconcile. That path re-enters `run()` after a restart
+      // for a job that was already submitted — `Date.now()` here would measure
+      // only the post-restart download-and-verify tail, so a 20-minute render
+      // interrupted by a `pm2 restart` would land claiming it took 8 seconds.
+      // The pre-restart instant is not recoverable (it lived in this in-memory
+      // state, not on the persisted marker), so report the honest unknown:
+      // `renderTimingFields(null)` yields `{}` and the card shows no duration.
+      renderStartedAtMs: marker.data.reconcile === true ? null : Date.now(),
     };
     activeJobs.set(params.jobId, state);
     try {

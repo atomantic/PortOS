@@ -591,17 +591,10 @@ export const writersRoomObjectUpdateSchema = z.object({
   notes: wrObjectTextField.optional(),
 }).strict();
 
-// Generic bible-entry schemas — re-exports of the writers-room schemas under
-// kind-neutral names so the Pipeline routes share the same validation
-// surface and funnel through the canonical sanitizer in storyBible.js.
-// `placeBibleCreateSchema` is the un-refined ZodObject (not the refined
-// `writersRoomPlaceCreateSchema`) so Pipeline can `.extend()` it.
-export const characterBibleCreateSchema = writersRoomCharacterCreateSchema;
-export const characterBibleUpdateSchema = writersRoomCharacterUpdateSchema;
-export const placeBibleCreateSchema = writersRoomPlaceCreateObject;
-export const placeBibleUpdateSchema = writersRoomPlaceUpdateSchema;
-export const objectBibleCreateSchema = writersRoomObjectCreateSchema;
-export const objectBibleUpdateSchema = writersRoomObjectUpdateSchema;
+// Every story-bible route validates through the `writersRoom*` schemas above;
+// there are no kind-neutral `*Bible*Schema` aliases beside them (#5730). If a
+// Pipeline route needs one, add it next to that caller —
+// `writersRoomPlaceCreateObject` is the un-refined ZodObject to `.extend()`.
 
 // =============================================================================
 // PROMPT STAGE CONFIG (server/routes/prompts.js PUT /:stage body)

@@ -76,14 +76,14 @@ export default function LifeEventsPanel({ events, onAdd, onToggle, onRemove }) {
                   <span className="text-[10px] text-gray-600">{event.type}</span>
                   <button
                     onClick={() => onToggle(event.id, !event.enabled)}
-                    className="text-gray-500 hover:text-white transition-colors p-0.5"
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center text-gray-500 hover:text-white transition-colors p-0.5"
                     title={event.enabled ? 'Disable' : 'Enable'} aria-label={event.enabled ? 'Disable' : 'Enable'}
                   >
                     {event.enabled ? <Eye size={12} /> : <EyeOff size={12} />}
                   </button>
                   <button
                     onClick={() => onRemove(event.id)}
-                    className="opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-gray-600 hover:text-port-error p-0.5"
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-gray-600 hover:text-port-error p-0.5"
                     title="Remove" aria-label="Remove"
                   >
                     <Trash2 size={12} />

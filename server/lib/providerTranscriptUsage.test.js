@@ -1,8 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
   claudeProjectSlug,
+  decodeGrokSessionDir,
+  parseAgyHistory,
+  parseAgyTranscript,
   parseClaudeTranscript,
   parseCodexRollout,
+  parseGrokChatHistory,
+  parseGrokTurns,
   totalTranscriptTokens,
   UNKNOWN_MODEL
 } from './providerTranscriptUsage.js';
@@ -449,5 +454,236 @@ describe('Codex message count under a window', () => {
       codexTokenCount({ timestamp: '2026-07-01T10:00:01.000Z', input: 1000, cached: 0, output: 60 })
     ].join('\n');
     expect(parseCodexRollout(text).messages).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Grok — ~/.grok/sessions/<encodeURIComponent(cwd)>/<session-id>/
+// ---------------------------------------------------------------------------
+
+const GROK_MODEL = 'example-grok-model';
+
+/** One `updates.jsonl` envelope carrying a completed turn. */
+const grokTurn = ({
+  promptId = 'prompt-1',
+  seconds = 1_800_000_000,
+  input = 15_000,
+  output = 1_800,
+  cachedRead = 11_000,
+  cacheCreation = 0,
+  reasoning = 800,
+  model = GROK_MODEL,
+  ms = null
+} = {}) => JSON.stringify({
+  timestamp: seconds,
+  method: '_x.ai/session/update',
+  params: {
+    sessionId: 'session-aaaa',
+    update: {
+      sessionUpdate: 'turn_completed',
+      prompt_id: promptId,
+      stop_reason: 'end_turn',
+      usage: {
+        inputTokens: input,
+        outputTokens: output,
+        totalTokens: input + output,
+        cachedReadTokens: cachedRead,
+        cacheCreationTokens: cacheCreation,
+        reasoningTokens: reasoning,
+        modelUsage: { [model]: { inputTokens: input, outputTokens: output } }
+      }
+    },
+    ...(ms == null ? {} : { _meta: { eventId: 'evt-1', agentTimestampMs: ms } })
+  }
+});
+
+/** A streaming chunk carrying CONTEXT-WINDOW OCCUPANCY, which is never billed. */
+const grokChunk = (totalTokens) => JSON.stringify({
+  timestamp: 1_800_000_000,
+  method: '_x.ai/session/update',
+  params: {
+    sessionId: 'session-aaaa',
+    update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hi' } },
+    _meta: { totalTokens }
+  }
+});
+
+describe('parseGrokTurns', () => {
+  it('bills a completed turn with the cache tier split out of input', () => {
+    const parsed = parseGrokTurns(grokTurn());
+    // `inputTokens` INCLUDES `cachedReadTokens`, so the fresh input is the
+    // difference; billing both whole would charge cache reads at full rate.
+    expect(parsed.tokensIn).toBe(4_000);
+    expect(parsed.cacheReadTokens).toBe(11_000);
+    // `reasoningTokens` is a SUBSET of `outputTokens`, never an addition.
+    expect(parsed.tokensOut).toBe(1_800);
+    expect(parsed.cacheWriteTokens).toBe(0);
+    expect(parsed.byModel[GROK_MODEL].tokensOut).toBe(1_800);
+    expect(parsed.model).toBe(GROK_MODEL);
+    expect(parsed.sessionId).toBe('session-aaaa');
+  });
+
+  it('never bills the _meta.totalTokens context-window occupancy', () => {
+    const parsed = parseGrokTurns([grokChunk(950_000), grokChunk(1_200_000)].join('\n'));
+    expect(totalTranscriptTokens(parsed)).toBe(0);
+    // Sentinel: no turn was recorded at all, so the caller falls back to chat
+    // history rather than reporting a measured zero.
+    expect(parsed.turns).toBe(0);
+  });
+
+  it('sums per-prompt turns without treating them as cumulative', () => {
+    const text = [
+      grokTurn({ promptId: 'p1', input: 10_000, cachedRead: 6_000, output: 500 }),
+      grokTurn({ promptId: 'p2', input: 4_000, cachedRead: 1_000, output: 100 })
+    ].join('\n');
+    const parsed = parseGrokTurns(text);
+    expect(parsed.tokensIn).toBe(4_000 + 3_000);
+    expect(parsed.tokensOut).toBe(600);
+    expect(parsed.countedKeys).toEqual(['p1', 'p2']);
+  });
+
+  it('converts a cumulative-for-the-session stream to per-turn deltas', () => {
+    // Every field non-decreasing across three or more turns is the cumulative
+    // signature. Summing the raw snapshots here would bill 60k input for a
+    // session that really used 30k — the #5831 double-count hazard.
+    const text = [
+      grokTurn({ promptId: 'p1', input: 10_000, cachedRead: 5_000, output: 100 }),
+      grokTurn({ promptId: 'p2', input: 20_000, cachedRead: 9_000, output: 300 }),
+      grokTurn({ promptId: 'p3', input: 30_000, cachedRead: 12_000, output: 400 })
+    ].join('\n');
+    const parsed = parseGrokTurns(text);
+    expect(parsed.tokensIn).toBe(30_000 - 12_000);
+    expect(parsed.tokensOut).toBe(400);
+    expect(parsed.cacheReadTokens).toBe(12_000);
+  });
+
+  it('windows turns by the epoch-seconds envelope timestamp', () => {
+    const text = [
+      grokTurn({ promptId: 'p1', seconds: 1_800_000_000, output: 111 }),
+      grokTurn({ promptId: 'p2', seconds: 1_800_003_600, output: 222 })
+    ].join('\n');
+    const parsed = parseGrokTurns(text, { from: 1_800_003_000_000, to: 1_800_004_000_000 });
+    expect(parsed.tokensOut).toBe(222);
+    expect(parsed.countedKeys).toEqual(['p2']);
+  });
+
+  it('prefers the millisecond _meta timestamp when present', () => {
+    // A 10-digit envelope `timestamp` is SECONDS; read as ms it lands in 1970
+    // and every window check fails.
+    const text = grokTurn({ promptId: 'p1', seconds: 1_800_000_000, ms: 1_800_000_000_500, output: 42 });
+    expect(parseGrokTurns(text, { from: 1_800_000_000_000, to: 1_800_000_001_000 }).tokensOut).toBe(42);
+  });
+
+  it('skips turns another run already claimed', () => {
+    const text = [
+      grokTurn({ promptId: 'p1', output: 111 }),
+      grokTurn({ promptId: 'p2', output: 222 })
+    ].join('\n');
+    const parsed = parseGrokTurns(text, { exclude: new Set(['p1']) });
+    expect(parsed.tokensOut).toBe(222);
+    expect(parsed.countedKeys).toEqual(['p2']);
+  });
+
+  it('tolerates a truncated trailing line from a session still being written', () => {
+    const text = `${grokTurn({ promptId: 'p1', output: 111 })}\n{"timestamp":18000000`;
+    expect(parseGrokTurns(text).tokensOut).toBe(111);
+  });
+});
+
+describe('parseGrokChatHistory', () => {
+  it('splits chars by role for the no-completed-turn fallback', () => {
+    const text = [
+      JSON.stringify({ type: 'user', content: [{ type: 'text', text: 'a'.repeat(40) }] }),
+      JSON.stringify({ type: 'assistant', content: 'b'.repeat(20), model_id: GROK_MODEL, tool_calls: [{ id: 't1', name: 'read', arguments: 'c'.repeat(8) }] }),
+      JSON.stringify({ type: 'reasoning', summary: [{ type: 'summary_text', text: 'd'.repeat(12) }], encrypted_content: 'e'.repeat(5000) }),
+      JSON.stringify({ type: 'tool_result', tool_call_id: 't1', content: 'f'.repeat(60) })
+    ].join('\n');
+    const parsed = parseGrokChatHistory(text);
+    expect(parsed.charsIn).toBe(100);
+    // `encrypted_content` is an opaque blob, not text — its 5000 chars say
+    // nothing about the tokens it stands for and must not inflate the estimate.
+    expect(parsed.charsOut).toBe(40);
+    expect(parsed.model).toBe(GROK_MODEL);
+    expect(parsed.messages).toBe(1);
+  });
+});
+
+describe('decodeGrokSessionDir', () => {
+  it('round-trips an encodeURIComponent-ed workspace path', () => {
+    const cwd = '/tmp/example-workspace/sub dir';
+    expect(decodeGrokSessionDir(encodeURIComponent(cwd))).toBe(cwd);
+  });
+
+  it('returns null for a folder name that is not valid percent-encoding', () => {
+    expect(decodeGrokSessionDir('%zz-not-encoded')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Antigravity — ~/.gemini/antigravity-cli/
+// ---------------------------------------------------------------------------
+
+const agyStep = ({ index = 0, type = 'GENERIC', createdAt = '2026-07-01T10:00:00Z', content = '', thinking = null, toolCalls = null }) => JSON.stringify({
+  step_index: index,
+  source: type === 'USER_INPUT' ? 'USER_EXPLICIT' : 'MODEL',
+  type,
+  status: 'DONE',
+  created_at: createdAt,
+  ...(content ? { content } : {}),
+  ...(thinking ? { thinking } : {}),
+  ...(toolCalls ? { tool_calls: toolCalls } : {})
+});
+
+describe('parseAgyTranscript', () => {
+  it('counts PLANNER_RESPONSE as output and every other step as input', () => {
+    const text = [
+      agyStep({ index: 0, type: 'USER_INPUT', content: 'u'.repeat(40) }),
+      agyStep({ index: 1, type: 'PLANNER_RESPONSE', content: 'p'.repeat(10), thinking: 't'.repeat(6), toolCalls: [{ name: 'ls', args: { path: '/tmp/example-workspace' } }] }),
+      // A tool RESULT carries `source: 'MODEL'` but the text is the tool's, and
+      // it is what the model reads next — so the split keys off `type`.
+      agyStep({ index: 2, type: 'VIEW_FILE', content: 'v'.repeat(100) })
+    ].join('\n');
+    const parsed = parseAgyTranscript(text);
+    expect(parsed.charsIn).toBe(140);
+    expect(parsed.charsOut).toBe(16 + JSON.stringify({ path: '/tmp/example-workspace' }).length);
+    expect(parsed.messages).toBe(1);
+    expect(parsed.countedKeys).toEqual(['step-0', 'step-1', 'step-2']);
+  });
+
+  it('windows steps by created_at and reports how many it saw', () => {
+    const text = [
+      agyStep({ index: 0, type: 'GENERIC', createdAt: '2026-07-01T09:00:00Z', content: 'a'.repeat(80) }),
+      agyStep({ index: 1, type: 'GENERIC', createdAt: '2026-07-01T10:00:00Z', content: 'b'.repeat(40) })
+    ].join('\n');
+    const parsed = parseAgyTranscript(text, {
+      from: Date.parse('2026-07-01T09:30:00Z'),
+      to: Date.parse('2026-07-01T10:30:00Z')
+    });
+    expect(parsed.charsIn).toBe(40);
+    // Sentinel: two steps were READ, this window's share is one of them —
+    // distinct from an unreadable transcript, which yields no result at all.
+    expect(parsed.steps).toBe(2);
+    expect(parsed.countedKeys).toEqual(['step-1']);
+  });
+
+  it('skips steps another run already claimed', () => {
+    const text = [
+      agyStep({ index: 0, content: 'a'.repeat(80) }),
+      agyStep({ index: 1, content: 'b'.repeat(40) })
+    ].join('\n');
+    expect(parseAgyTranscript(text, { exclude: new Set(['step-0']) }).charsIn).toBe(40);
+  });
+});
+
+describe('parseAgyHistory', () => {
+  it('keeps only the lines that name a conversation, once each', () => {
+    const text = [
+      JSON.stringify({ display: '/status', timestamp: 1_800_000_000_000, type: 'slash_command', workspace: '/tmp/example-workspace' }),
+      JSON.stringify({ display: 'do the thing', timestamp: 1_800_000_001_000, workspace: '/tmp/example-workspace', conversationId: 'conv-aaaa' }),
+      JSON.stringify({ display: 'again', timestamp: 1_800_000_002_000, workspace: '/tmp/example-workspace', conversationId: 'conv-aaaa' })
+    ].join('\n');
+    expect(parseAgyHistory(text)).toEqual([
+      { conversationId: 'conv-aaaa', workspace: '/tmp/example-workspace', timestamp: 1_800_000_001_000 }
+    ]);
   });
 });

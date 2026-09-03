@@ -248,6 +248,18 @@ describe('MediaCollections', () => {
     expect(screen.queryByText(/Every collection here is empty/)).not.toBeInTheDocument();
   });
 
+  it('gives the fresh-install empty state a call to action that focuses the create field', async () => {
+    const { listMediaCollections } = await import('../services/api');
+    listMediaCollections.mockResolvedValueOnce([]);
+    mockUnsortedItems = [];
+    renderPage();
+    const cta = await screen.findByRole('button', { name: 'Name your first collection' });
+    await userEvent.click(cta);
+    // Without the action the empty state is a dead end: the create form is
+    // above the list, so the button has to point back up at it.
+    expect(screen.getByLabelText('New collection name')).toHaveFocus();
+  });
+
   it('reports a failed search as a failed search, not as a fresh install', async () => {
     const { listMediaCollections } = await import('../services/api');
     listMediaCollections.mockResolvedValueOnce([]);

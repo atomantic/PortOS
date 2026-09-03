@@ -37,7 +37,8 @@ unmeasured number. If you bring one up on real hardware, write a dated note in
 1. Docker with the NVIDIA Container Toolkit. PortOS does not install either —
    they are host decisions with driver requirements it cannot judge.
 2. Create a project directory. PortOS looks in `~/sglang-qwen38` by default;
-   `SGLANG_QWEN_PROJECT_DIR` overrides it.
+   `SGLANG_QWEN_PROJECT_DIR` overrides it. **On Windows, do this inside your WSL2
+   distro** and let PortOS find it — see [Windows](#windows-the-project-lives-in-wsl2).
 3. Save the compose file below into it as `docker-compose.yml`.
 4. Pull the image and the weights **once, yourself** — roughly 20 GB:
 
@@ -49,6 +50,40 @@ unmeasured number. If you bring one up on real hardware, write a dated note in
    Gated repo? Put `HF_TOKEN=…` in a `.env` beside the compose file. Weights kept
    somewhere else entirely? Point `SGLANG_QWEN_WEIGHTS_DIR` at them, so the
    readiness check can see them.
+
+### Windows: the project lives in WSL2
+
+Docker Desktop's engine **is** a WSL2 VM. Prepare this project inside the distro
+— run the commands above there, not in PowerShell — so the compose file and the
+~20 GB of weights sit on the distro's own filesystem. A project on `C:\` is
+reached from inside that VM over a 9p share, which is slow in a way that is
+invisible until it has already cost the download.
+
+**You do not have to tell PortOS where that is.** A native-Win32 PortOS resolves
+the default `~/sglang-qwen38` to a *Windows* home, where the project is not — so
+before the Start button inspects anything, it asks WSL for the default distro's
+name and home (`wsl.exe -e sh -c 'echo "$WSL_DISTRO_NAME"; echo "$HOME"'`),
+checks that `\\wsl.localhost\<distro>\home\<user>` is readable from Windows, and
+records the resulting path in its own `.env`. Node reads that path and `docker
+compose` accepts it as a working directory, so the readiness poll, the Start
+button and the next server restart all resolve the same directory.
+
+It refuses only where it genuinely cannot answer the question — no WSL on the
+host, a default distro that belongs to a container engine (`docker-desktop`,
+recreated on a reset), or a `\\wsl.localhost` share Windows cannot read — and each
+refusal names that host's fix rather than a path template to fill in. Because
+there is no 1-click provisioning path for this stack, those refusals point back
+at this document: PortOS finds a project you prepared, it never creates one.
+
+Set `SGLANG_QWEN_PROJECT_DIR` only to overrule the detected placement, or when
+you prepared the project somewhere other than the default distro's home:
+
+```
+SGLANG_QWEN_PROJECT_DIR=\\wsl.localhost\<distro>\home\<user>\sglang-qwen38
+```
+
+An exported value wins over anything PortOS detected on an earlier run. On Linux
+the default is already correct.
 
 ## The compose file
 
@@ -147,7 +182,9 @@ button on the provider readiness checklist. That button only ever brings up an
 already-prepared project: it refuses on an unsupported card before it reaches
 docker, refuses when the compose file is missing, and refuses when it cannot
 confirm the weights are on disk. It never pulls the image and never downloads
-weights.
+weights. On Windows it first resolves the WSL2 placement described
+[above](#windows-the-project-lives-in-wsl2), so a project you prepared by hand
+inside the distro is found without any environment variable.
 
 ## Use it from an agent (OpenCode)
 

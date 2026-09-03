@@ -1067,13 +1067,23 @@ export async function finalizeAgent({
   return { success, prVerdict: effectivePrVerdict };
 }
 
-// Tail of the agent's raw PTY spool scanned by the transcript rescue. The
-// deliverable, when printed, is the LAST thing the model emits, and a reasoner
-// envelope is a few KB at most — but a repaint-heavy TUI spends most of its
-// bytes on escape sequences, so the window is generous relative to the payload.
-// Bounded for the same reason RAW_TAIL_ANALYSIS_BYTES is: raw.txt has no upper
+// Tail of the agent's transcript scanned by the rescue. The deliverable, when
+// printed, is the LAST thing the model emits, and a reasoner envelope is a few
+// KB at most — but a repaint-heavy TUI spends most of its bytes on escape
+// sequences, so the window is generous relative to the payload. Bounded for the
+// same reason RAW_TAIL_ANALYSIS_BYTES is: neither transcript file has an upper
 // size limit on a long run.
 const TRANSCRIPT_RESCUE_TAIL_BYTES = 256 * 1024;
+
+// Transcript spools, in the order the rescue reads them. A PTY/TUI run spools
+// its terminal to raw.txt; a direct CLI run (every public-review stage, and any
+// cli-typed provider) has ONLY output.txt, so reading raw.txt alone made the
+// tool-free Eligibility Gate's printed JSON invisible and a valid decision was
+// rejected as eligibility-response-invalid. Each source is tried until one
+// yields a payload rather than stopping at the first that merely EXISTS: a
+// repaint-heavy raw.txt can interleave the answer past reconstruction while the
+// parsed output.txt beside it still holds it intact.
+const TRANSCRIPT_RESCUE_FILES = ['raw.txt', 'output.txt'];
 
 /**
  * Recover a programmatic-I/O deliverable the agent PRINTED to its terminal
@@ -1097,11 +1107,14 @@ async function rescueTranscriptPayload({ agentId, taskType }) {
     const isPayload = await getTaskOutputPayloadPredicate(taskType);
     if (!isPayload) return null;
     const { PATHS, readFileTail } = await import('../lib/fileUtils.js');
-    const transcript = await readFileTail(join(PATHS.cosAgents, agentId, 'raw.txt'), TRANSCRIPT_RESCUE_TAIL_BYTES);
-    if (!transcript) return null;
     const { extractSentinelPayloadFromTranscript } = await import('../lib/agentSentinel.js');
-    const { payload } = await extractSentinelPayloadFromTranscript(transcript, isPayload);
-    return payload ?? null;
+    for (const file of TRANSCRIPT_RESCUE_FILES) {
+      const transcript = await readFileTail(join(PATHS.cosAgents, agentId, file), TRANSCRIPT_RESCUE_TAIL_BYTES);
+      if (!transcript) continue;
+      const { payload } = await extractSentinelPayloadFromTranscript(transcript, isPayload);
+      if (payload != null) return payload;
+    }
+    return null;
   } catch (err) {
     emitLog('warn', `⚠️ Transcript payload rescue failed for ${agentId} (${taskType}): ${err.message}`, { agentId });
     return null;

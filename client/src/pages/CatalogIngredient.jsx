@@ -482,7 +482,10 @@ export default function CatalogIngredient() {
             <Sparkles className="w-6 h-6 text-port-accent mt-1 flex-shrink-0" aria-hidden="true" />
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <h1 className="text-2xl font-bold text-white truncate">
+                <h1
+                  className="min-w-0 line-clamp-2 break-words text-2xl font-bold text-white"
+                  title={record.name || '(untitled)'}
+                >
                   {record.name || '(untitled)'}
                 </h1>
                 <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded border ${badgeClass}`}>

@@ -23,6 +23,7 @@ import { join } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { atomicWrite, PATHS } from '../../lib/fileUtils.js';
 import { stripPngC2PAChunk } from '../../lib/imageClean.js';
+import { omitRenderTiming } from '../../lib/renderTiming.js';
 import { removeCornerWatermark } from '../../lib/imageWatermark.js';
 import { applyLightRegen, computePixelDelta } from './regen.js';
 import { listCollections, addItem, ERR_DUPLICATE } from '../mediaCollections.js';
@@ -89,9 +90,17 @@ export async function persistVariant({
   const sidecarBase = outFilename.slice(0, -'.png'.length);
   const sidecarPath = join(PATHS.images, `${sidecarBase}.metadata.json`);
 
+  // Every caller builds `variantMeta` by spreading the SOURCE sidecar, which
+  // carries that render's own timing. A variant is a post-process of bytes that
+  // already exist — it never ran a render — so inheriting `renderMs` would make
+  // the gallery card claim a duration this image never took. Stripped here, in
+  // the one place that owns the variant sidecar write, so it holds for every
+  // current and future caller.
+  const untimedVariantMeta = omitRenderTiming(variantMeta);
+
   await Promise.all([
     writeFile(outPath, data),
-    atomicWrite(sidecarPath, variantMeta),
+    atomicWrite(sidecarPath, untimedVariantMeta),
   ]);
 
   const filedCollections = await autoFileCleanedToSourceCollections(sourceFilename, outFilename).catch((err) => {
@@ -102,7 +111,7 @@ export async function persistVariant({
   console.log(`${logLine}${filedCollections.length ? `, filed to ${filedCollections.length} collection(s)` : ''}`);
 
   return {
-    ...variantMeta,
+    ...untimedVariantMeta,
     filename: outFilename,
     path: `/data/images/${outFilename}`,
     ...(width != null ? { width } : {}),

@@ -65,6 +65,15 @@ export const INSTANCE_FEATURES = Object.freeze([
     defaultEnabled: true,
   }),
   Object.freeze({
+    id: 'rigging',
+    label: 'Character rigging',
+    description: 'Blender-backed rigging for generated 3D characters. Needs a provisioned Blender Python runtime on this machine.',
+    // Off until a runtime is actually present: the detector in
+    // services/instanceFeatures.js turns it on only when the probe says the Blender
+    // module imports, so a fresh install never advertises a capability it cannot run.
+    defaultEnabled: false,
+  }),
+  Object.freeze({
     id: 'facetime',
     label: 'FaceTime Audio',
     description: 'Machine-local FaceTime Audio call controls and setup checks.',

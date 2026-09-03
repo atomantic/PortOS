@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { ArrowUp, Brain, Check, CirclePause, CirclePlay, Cpu, Database, Eraser, ImagePlus, MessageCircle, PhoneCall, PhoneOff, RefreshCw, Settings2, Square, StickyNote, Upload, Wrench, X } from 'lucide-react';
 import { Link } from 'react-router';
+import { useAutoRefetch } from '../../../hooks/useAutoRefetch.js';
 import useMounted from '../../../hooks/useMounted';
 import { useSocket } from '../../../hooks/useSocket';
 import { uuidv4 } from '../../../lib/uuid.js';
@@ -314,16 +315,8 @@ export default function MindTab() {
   }, [runtimeMountedRef]);
 
   useEffect(() => { void loadHistory({ reset: true }); }, [loadHistory]);
-  useEffect(() => {
-    void loadRuntime();
-    const interval = setInterval(() => { void loadRuntime(); }, 10_000);
-    return () => clearInterval(interval);
-  }, [loadRuntime]);
-  useEffect(() => {
-    void loadVisibility();
-    const interval = setInterval(() => { void loadVisibility(); }, 30_000);
-    return () => clearInterval(interval);
-  }, [loadVisibility]);
+  useAutoRefetch(loadRuntime, 10_000, { pollOnly: true });
+  useAutoRefetch(loadVisibility, 30_000, { pollOnly: true });
 
   useEffect(() => {
     const refresh = () => {

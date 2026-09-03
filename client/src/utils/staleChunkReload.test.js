@@ -212,6 +212,23 @@ describe('reloadOnceForStaleChunk', () => {
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
+  it('does not reload at all when sessionStorage is unavailable (no reload loop)', async () => {
+    // Safari private mode / blocked storage: the accessor itself throws. The
+    // stored flag IS the anti-loop guard, so a storage that cannot persist it
+    // must not read back as "no reload attempted yet" — that would reload on
+    // every stale-chunk error, forever (#5689).
+    const boom = () => { throw new DOMException('The operation is insecure.', 'SecurityError'); };
+    vi.stubGlobal('sessionStorage', { getItem: boom, setItem: boom, removeItem: boom });
+    stubFetch();
+    const reload = stubReload();
+    vi.stubGlobal('caches', undefined);
+
+    expect(reloadOnceForStaleChunk()).toBe(false);
+    expect(reloadOnceForStaleChunk()).toBe(false);
+    await Promise.resolve();
+    expect(reload).not.toHaveBeenCalled();
+  });
+
   it('reloads again after a new build ships (guard is build-scoped)', async () => {
     stubSessionStorage();
     stubFetch();

@@ -4,7 +4,10 @@ import {
   ALWAYS_RUN_TESTS,
   buildCiTestPlan,
   forceFullReasonFor,
+  FULL_SUITE_SHARDS,
   isRouteOnlyAppDiff,
+  pythonReferencePattern,
+  shardIndexes,
   splitByRunner,
   WINDOWS_CONTRACT_TESTS,
 } from './ci-test-plan.js';
@@ -380,6 +383,121 @@ describe('CI test impact planner', () => {
 
     expect(plan.full).toBe(true);
     expect(plan.reason).toMatch(/deleted executable source/);
+  });
+
+  it('runs the parsing contracts for a python sidecar script instead of the full suite', () => {
+    const tracked = [
+      ...TRACKED,
+      'scripts/generate_ltx2.py',
+      'scripts/_runner_common.py',
+      'scripts/generate_ltx2.test.js',
+      'server/services/videoGen/runtimes.test.js',
+      'client/src/lib/videoRenderPhase.test.js',
+    ];
+    const pythonContractTests = {
+      'scripts/_runner_common.py': [
+        'scripts/generate_ltx2.test.js',
+        'server/services/videoGen/runtimes.test.js',
+        'client/src/lib/videoRenderPhase.test.js',
+        'server/lib/deleted.test.js',
+      ],
+    };
+
+    const plan = buildCiTestPlan(['scripts/_runner_common.py'], { trackedFiles: tracked, pythonContractTests });
+
+    expect(plan).toMatchObject({
+      full: false,
+      reason: 'python script parsing contracts',
+      server: { mode: 'files', sources: [] },
+      client: { mode: 'files', sources: [] },
+      windows: false,
+      smoke: false,
+      db: false,
+    });
+    expect(plan.server.files).toEqual(expect.arrayContaining([
+      'scripts/generate_ltx2.test.js',
+      'server/services/videoGen/runtimes.test.js',
+      'server/services/taskPromptDefaults.test.js',
+    ]));
+    expect(plan.server.files).not.toContain('server/lib/deleted.test.js');
+    expect(plan.client.files).toEqual(['client/src/lib/videoRenderPhase.test.js']);
+
+    // A JS source in the same diff keeps its own import-graph selection; the
+    // python contracts ride along as explicit files.
+    const mixed = buildCiTestPlan(['scripts/_runner_common.py', 'server/services/auth.js'], {
+      trackedFiles: tracked,
+      pythonContractTests,
+    });
+    expect(mixed.reason).toBe('Vitest related-test fallback');
+    expect(mixed.server).toMatchObject({ mode: 'related', sources: ['server/services/auth.js'] });
+    expect(mixed.server.files).toContain('scripts/generate_ltx2.test.js');
+    expect(mixed.smoke).toBe(true);
+  });
+
+  it('runs the generated-manifest drift tests whenever a server source changes', () => {
+    const tracked = [
+      ...TRACKED,
+      'server/routes/settings.js',
+      'scripts/generate-api-route-catalog.test.js',
+      'scripts/generate-prompt-stage-call-sites.test.js',
+    ];
+    const drift = ['scripts/generate-api-route-catalog.test.js', 'scripts/generate-prompt-stage-call-sites.test.js'];
+
+    // A new route on a scoped plan is exactly the case that shipped a stale catalog.
+    const route = buildCiTestPlan(['server/routes/settings.js'], { trackedFiles: tracked });
+    expect(route.full).toBe(false);
+    expect(route.server.files).toEqual(expect.arrayContaining(drift));
+    // Any server module can add a literal stage-key call site.
+    const service = buildCiTestPlan(['server/services/auth.js'], { trackedFiles: tracked });
+    expect(service.server.files).toEqual(expect.arrayContaining(drift));
+    // A client-only change has nothing to regenerate.
+    const client = buildCiTestPlan(['client/src/lib/catalogLinks.js'], { trackedFiles: tracked });
+    expect(client.server.files).not.toEqual(expect.arrayContaining(drift));
+  });
+
+  it('fails closed to the full suite for a python script nothing pins', () => {
+    // Per script: a pinned sibling in the same diff does not vouch for the orphan.
+    const plan = buildCiTestPlan(['scripts/generate_ltx2.py', 'scripts/orphan.py'], {
+      trackedFiles: [...TRACKED, 'scripts/generate_ltx2.py', 'scripts/orphan.py', 'scripts/generate_ltx2.test.js'],
+      pythonContractTests: { 'scripts/generate_ltx2.py': ['scripts/generate_ltx2.test.js'] },
+    });
+    expect(plan.full).toBe(true);
+    expect(plan.reason).toMatch(/python script with no parsing contract: scripts\/orphan\.py/);
+    // A python file outside scripts/ is still an unclassified artifact.
+    const nested = buildCiTestPlan(['server/tools/helper.py'], { trackedFiles: TRACKED });
+    expect(nested.reason).toMatch(/unclassified/);
+  });
+
+  it('matches the way tests name one python script, not every one', () => {
+    const re = new RegExp(pythonReferencePattern('scripts/generate_ltx2.py'));
+    expect(re.test("join(SCRIPTS, 'generate_ltx2.py')")).toBe(true);
+    expect(re.test('readFileSync("scripts/generate_ltx2.py", "utf8")')).toBe(true);
+    expect(re.test('"generate_ltx2.py"')).toBe(true);
+    expect(re.test("'generate_ltx2_cuda.py'")).toBe(false);
+    expect(re.test("'my_generate_ltx2.py'")).toBe(false);
+    expect(re.test("'generate_ltx2.pyc'")).toBe(false);
+    expect(re.test("'generate_ltx2xpy'")).toBe(false);
+  });
+
+  it('fans a full plan out across the configured shards and leaves a scoped plan on one', () => {
+    expect(shardIndexes('full', 3)).toEqual([1, 2, 3]);
+    expect(shardIndexes('related', 3)).toEqual([1]);
+    expect(shardIndexes('files', 3)).toEqual([1]);
+    expect(shardIndexes('skip', 3)).toEqual([1]);
+    for (const [runner, count] of Object.entries(FULL_SUITE_SHARDS)) {
+      expect(count, runner).toBeGreaterThan(1);
+    }
+
+    const full = buildCiTestPlan(['server/vitest.config.js'], { trackedFiles: TRACKED });
+    expect(full.shards).toEqual({
+      server: shardIndexes('full', FULL_SUITE_SHARDS.server),
+      client: shardIndexes('full', FULL_SUITE_SHARDS.client),
+      windows: shardIndexes('full', FULL_SUITE_SHARDS.windows),
+    });
+    const scoped = buildCiTestPlan(['server/services/auth.js'], { trackedFiles: TRACKED });
+    expect(scoped.shards).toEqual({ server: [1], client: [1], windows: [1] });
+    const docsOnly = buildCiTestPlan(['docs/README.md'], { trackedFiles: TRACKED });
+    expect(docsOnly.shards).toEqual({ server: [1], client: [1], windows: [1] });
   });
 
   it('falls back to full CI for unknown artifacts and wide changes', () => {

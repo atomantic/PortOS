@@ -47,9 +47,8 @@ export const hashPromptBody = (body, apiUrl = PORTOS_API_URL) => createHash('md5
   .digest('hex');
 
 /**
- * Build the full snapshot shape from the taskPromptDefaults exports. Key order
- * matches the committed integrity.snapshot.json so a regeneration produces a
- * clean diff.
+ * Build the full snapshot shape from the taskPromptDefaults exports. Keys are
+ * sorted (see sortedEntries) so a regeneration produces a clean, mergeable diff.
  */
 export const buildPromptIntegritySnapshot = ({
   DEFAULT_TASK_PROMPTS,
@@ -57,13 +56,21 @@ export const buildPromptIntegritySnapshot = ({
   REFERENCE_WATCH_AUDITED_VERSION,
   PREVIOUS_DEFAULT_PROMPTS,
 }, apiUrl = PORTOS_API_URL) => ({
-  DEFAULT_TASK_PROMPTS: Object.fromEntries(
+  DEFAULT_TASK_PROMPTS: sortedEntries(
     Object.entries(DEFAULT_TASK_PROMPTS).map(([key, body]) => [key, hashPromptBody(body, apiUrl)]),
   ),
-  PROMPT_VERSIONS,
+  PROMPT_VERSIONS: sortedEntries(Object.entries(PROMPT_VERSIONS)),
   REFERENCE_WATCH_AUDITED_VERSION,
-  PREVIOUS_DEFAULT_PROMPTS: Object.fromEntries(
+  PREVIOUS_DEFAULT_PROMPTS: sortedEntries(
     Object.entries(PREVIOUS_DEFAULT_PROMPTS)
       .map(([key, bodies]) => [key, bodies.map((body) => hashPromptBody(body, apiUrl))]),
   ),
 });
+
+// Sorted keys put unrelated additions on unrelated lines so parallel branches
+// merge cleanly (declaration order made every new prompt the last line of its
+// section — a conflict on every rebase). Byte order, not locale, so every
+// machine regenerates the same file.
+function sortedEntries(entries) {
+  return Object.fromEntries(entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+}

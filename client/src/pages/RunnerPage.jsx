@@ -23,7 +23,7 @@ export function RunnerPage() {
   const [providers, setProviders] = useState([]);
   const [selectedProvider, setSelectedProvider] = useState('');
   const [selectedModel, setSelectedModel] = useState('');
-  const [timeout, setTimeout] = useState(30);
+  const [timeoutMinutes, setTimeoutMinutes] = useState(30);
   const [allowedCommands, setAllowedCommands] = useState([]);
   const [screenshots, setScreenshots] = useState([]);
   const [continueContext, setContinueContext] = useState(null);
@@ -190,7 +190,7 @@ ${prompt.trim()}`;
       // ran in the PortOS directory instead of rejecting the misconfigured app
       // it was pointed at (#3180).
       workspaceName: selectedApp?.name,
-      timeout: timeout * 60 * 1000, // Convert minutes to milliseconds
+      timeout: timeoutMinutes * 60 * 1000, // Convert minutes to milliseconds
       screenshots: screenshots.map(s => s.path) // Include screenshot paths
     }).catch(err => ({ error: err.message }));
 
@@ -388,8 +388,8 @@ ${prompt.trim()}`;
               <Clock size={16} className="text-gray-400" />
               <select
                 aria-label="Timeout"
-                value={timeout}
-                onChange={(e) => setTimeout(Number(e.target.value))}
+                value={timeoutMinutes}
+                onChange={(e) => setTimeoutMinutes(Number(e.target.value))}
                 className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
               >
                 <option value={5}>5 min</option>
@@ -507,7 +507,7 @@ ${prompt.trim()}`;
           className="bg-port-bg border border-port-border rounded-lg p-3 sm:p-4 h-64 sm:h-80 overflow-auto font-mono text-xs sm:text-sm"
         >
           {output ? (
-            <pre className="text-gray-300 whitespace-pre-wrap">{output}</pre>
+            <pre className="text-gray-300 whitespace-pre-wrap break-all">{output}</pre>
           ) : (
             <div className="text-gray-500">Output will appear here...</div>
           )}

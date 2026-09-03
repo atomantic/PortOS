@@ -12,6 +12,16 @@ export const RUNNER_FAMILIES = Object.freeze({
   QWEN: 'qwen',
 });
 
+// Predicate: model runs through the generic diffusers runner script and so
+// shares the FLUX.2 venv's health check (isFlux2VenvHealthy in
+// server/lib/pythonSetup.js) — Z-Image, ERNIE, HiDream, and Qwen all dispatch
+// through that same shared torch venv rather than the mflux interpreter.
+// Mirror of server/lib/runners.js#usesDiffusersRunner.
+const DIFFUSERS_RUNNER_SET = new Set([
+  RUNNER_FAMILIES.Z_IMAGE, RUNNER_FAMILIES.ERNIE, RUNNER_FAMILIES.HIDREAM, RUNNER_FAMILIES.QWEN,
+]);
+export const usesDiffusersRunner = (model) => DIFFUSERS_RUNNER_SET.has(model?.runner);
+
 // Video-LoRA families — kept separate from the image RUNNER_FAMILIES so the
 // Civitai iteration (which only knows image baseModels) never sees them. Video
 // LoRAs are imported from HuggingFace. Mirror of server/lib/runners.js.

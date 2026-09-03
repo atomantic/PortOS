@@ -194,6 +194,28 @@ const mockSchedule = ({ tasks = {}, executions = {}, templates = [], onDemandReq
   readJSONFile.mockResolvedValue({ version: 2, tasks, executions, templates, onDemandRequests })
 }
 
+// loadSchedule merges DEFAULT_TASK_INTERVALS over whatever a fixture supplies,
+// and the shipped reconcile drains are enabled + perpetual — so they are due on
+// every tick. A case asserting on "which tasks are due" has to pause them
+// explicitly or its expectation reads them as noise.
+const PAUSED_SHIPPED_DRAINS = {
+  'branch-reconcile': { enabled: false },
+  'issue-reconcile': { enabled: false },
+}
+
+// The cron parser is mocked module-wide, so a case that wants a cron task
+// simply due (or simply on cooldown) states it here rather than hand-picking
+// wall-clock instants: no catch-up slot, and a next slot already past / still
+// ahead. Callers needing catch-up semantics still stub prevRun themselves.
+const cronDueNow = () => {
+  parseCronToPrevRun.mockReturnValue(null)
+  parseCronToNextRun.mockReturnValue(new Date(Date.now() - 60_000))
+}
+const cronNotDueYet = () => {
+  parseCronToPrevRun.mockReturnValue(null)
+  parseCronToNextRun.mockReturnValue(new Date(Date.now() + 60 * 60 * 1000))
+}
+
 // Resolve "the most recent 9 AM in the past, local time." Bare
 // `setHours(9, 0, 0, 0)` flakes in CI when the runner's wall-clock is
 // before 9 AM local (UTC CI fires at ~04:00 UTC daily) — today's 9 AM
@@ -222,15 +244,8 @@ describe('taskSchedule', () => {
   })
 
   describe('INTERVAL_TYPES', () => {
-    it('should define all expected interval types', () => {
-      expect(INTERVAL_TYPES.ROTATION).toBe('rotation')
-      expect(INTERVAL_TYPES.DAILY).toBe('daily')
-      expect(INTERVAL_TYPES.WEEKLY).toBe('weekly')
-      expect(INTERVAL_TYPES.ONCE).toBe('once')
-      expect(INTERVAL_TYPES.ON_DEMAND).toBe('on-demand')
-      expect(INTERVAL_TYPES.CUSTOM).toBe('custom')
-      expect(INTERVAL_TYPES.CRON).toBe('cron')
-      expect(INTERVAL_TYPES.PERPETUAL).toBe('perpetual')
+    it('is exactly the two cadence variants — perpetual is a flag, not a type', () => {
+      expect(INTERVAL_TYPES).toEqual({ ON_DEMAND: 'on-demand', CRON: 'cron' })
     })
   })
 
@@ -329,13 +344,14 @@ describe('taskSchedule', () => {
   })
 
   describe('user-action-review (operator-ledger automation proposals)', () => {
-    it('is registered install-wide with an on-demand + enabled default and a v1 prompt', () => {
+    it('is registered install-wide with an on-demand + enabled default and a v2 prompt', () => {
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('user-action-review');
       expect(INSTALL_WIDE_TASK_TYPES.has('user-action-review')).toBe(true);
       expect(TASK_TYPE_DESCRIPTIONS['user-action-review']).toContain('propose automations');
       expect(DEFAULT_TASK_INTERVALS['user-action-review']).toMatchObject({ type: INTERVAL_TYPES.ON_DEMAND, enabled: true });
-      expect(PROMPT_VERSIONS['user-action-review']).toBe(1);
+      expect(PROMPT_VERSIONS['user-action-review']).toBe(2);
       expect(DEFAULT_TASK_PROMPTS['user-action-review']).toContain('{userActionDelivery}');
+      expect(DEFAULT_TASK_PROMPTS['user-action-review']).toContain('{userActionDetectors}');
       // The prompt proposes; it must never instruct the agent to enact.
       expect(DEFAULT_TASK_PROMPTS['user-action-review']).toContain('NEVER change settings');
     });
@@ -377,18 +393,31 @@ describe('taskSchedule', () => {
       });
     });
 
-    it('honors a per-app numeric intervalMs override via the CUSTOM branch', async () => {
+    it('decodes a legacy per-app custom+intervalMs override into an hourly cron', async () => {
       const { getAppTaskTypeInterval, getAppTaskTypeIntervalMs } = await import('./apps.js');
+      cronDueNow();
       mockSchedule({
-        tasks: { 'layered-intelligence': { type: 'daily', enabled: true, providerId: null, model: null, prompt: null } },
+        tasks: { 'layered-intelligence': { type: 'on-demand', enabled: true, providerId: null, model: null, prompt: null } },
         executions: { 'task:layered-intelligence': { lastRun: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), count: 1, perApp: { 'app-1': { lastRun: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), count: 1 } } } }
       });
       getAppTaskTypeInterval.mockResolvedValue('custom');
-      getAppTaskTypeIntervalMs.mockResolvedValue(60 * 60 * 1000); // hourly → 2h since last run ⇒ due
+      getAppTaskTypeIntervalMs.mockResolvedValue(60 * 60 * 1000);
       const res = await shouldRunTask('layered-intelligence', 'app-1');
-      expect(res.shouldRun).toBe(true);
+      expect(res).toMatchObject({ shouldRun: true, reason: 'cron-due', cronExpression: '0 * * * *' });
       getAppTaskTypeInterval.mockResolvedValue(null);
       getAppTaskTypeIntervalMs.mockResolvedValue(null);
+    });
+
+    it('reads a per-app cron override string directly, overriding the global cadence', async () => {
+      const { getAppTaskTypeInterval } = await import('./apps.js');
+      cronDueNow();
+      mockSchedule({
+        tasks: { 'layered-intelligence': { type: 'on-demand', enabled: true, providerId: null, model: null, prompt: null } }
+      });
+      getAppTaskTypeInterval.mockResolvedValue('*/30 * * * *');
+      const res = await shouldRunTask('layered-intelligence', 'app-1');
+      expect(res).toMatchObject({ shouldRun: true, cronExpression: '*/30 * * * *' });
+      getAppTaskTypeInterval.mockResolvedValue(null);
     });
   });
 
@@ -477,14 +506,38 @@ describe('taskSchedule', () => {
       expect(schedule.tasks['security'].providerId).toBe('p1')
     })
 
-    it('preserves an existing paused cadence when loading new defaults', async () => {
+    it('normalizes a legacy cadence on read while preserving the paused state', async () => {
       mockSchedule({
-        tasks: { security: { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null } }
+        tasks: { security: { type: 'weekly', enabled: false, providerId: null, model: null, prompt: null } }
       })
 
       const schedule = await loadSchedule()
 
-      expect(schedule.tasks.security).toMatchObject({ type: INTERVAL_TYPES.WEEKLY, enabled: false })
+      // 'weekly' collapses to a Monday-07:00 cron; `enabled: false` is untouched.
+      expect(schedule.tasks.security).toMatchObject({
+        type: INTERVAL_TYPES.CRON, cronExpression: '0 7 * * 1', perpetual: false, enabled: false
+      })
+    })
+
+    it('collapses every retired cadence and keeps the perpetual flag orthogonal', async () => {
+      mockSchedule({
+        tasks: {
+          security: { type: 'rotation', enabled: true },
+          'code-quality': { type: 'once', enabled: true },
+          'test-coverage': { type: 'custom', intervalMs: 15 * 60 * 1000, enabled: true },
+          documentation: { type: 'perpetual', recheckCron: '0 3 * * *', enabled: true },
+          typing: { type: 'cron', cronExpression: '30 8 * * 2', perpetual: true, enabled: true },
+        }
+      })
+
+      const { tasks } = await loadSchedule()
+      expect(tasks.security).toMatchObject({ type: 'cron', cronExpression: '0 7 * * *', perpetual: false })
+      expect(tasks['code-quality']).toMatchObject({ type: 'on-demand', perpetual: false })
+      expect(tasks['code-quality'].cronExpression).toBeFalsy()
+      expect(tasks['test-coverage']).toMatchObject({ type: 'cron', cronExpression: '*/15 * * * *' })
+      expect(tasks.documentation).toMatchObject({ type: 'on-demand', perpetual: true, recheckCron: '0 3 * * *' })
+      // Already on the new model: left exactly as stored.
+      expect(tasks.typing).toMatchObject({ type: 'cron', cronExpression: '30 8 * * 2', perpetual: true })
     })
 
     it('should merge defaults for missing task types', async () => {
@@ -1059,7 +1112,7 @@ describe('taskSchedule', () => {
       expect(result.reason).toBe('disabled')
     })
 
-    it('should run rotation tasks immediately', async () => {
+    it('normalizes a retired rotation cadence to a daily cron on read', async () => {
       readJSONFile.mockResolvedValue({
         version: 2,
         tasks: {
@@ -1068,9 +1121,20 @@ describe('taskSchedule', () => {
         executions: {}
       })
 
-      const result = await shouldRunTask('code-quality')
-      expect(result.shouldRun).toBe(true)
-      expect(result.reason).toBe('rotation')
+      const interval = await getTaskInterval('code-quality')
+      expect(interval).toMatchObject({ type: 'cron', cronExpression: '0 7 * * *', perpetual: false })
+    })
+
+    it('never auto-runs a plain on-demand task, but drains one carrying the perpetual flag', async () => {
+      mockSchedule({
+        tasks: {
+          'ui-bugs': { type: 'on-demand', enabled: true, providerId: null, model: null, prompt: null },
+          'claim-issue': { type: 'on-demand', perpetual: true, enabled: true, providerId: null, model: null, prompt: null }
+        }
+      })
+
+      expect(await shouldRunTask('ui-bugs')).toMatchObject({ shouldRun: false, reason: 'on-demand-only' })
+      expect(await shouldRunTask('claim-issue')).toMatchObject({ shouldRun: true, reason: 'perpetual-drain' })
     })
 
     it('should not run on-demand tasks automatically', async () => {
@@ -1083,17 +1147,7 @@ describe('taskSchedule', () => {
       expect(result.reason).toBe('on-demand-only')
     })
 
-    it('should run once-type task on first run', async () => {
-      mockSchedule({
-        tasks: { 'accessibility': { type: 'once', enabled: true, providerId: null, model: null, prompt: null } }
-      })
-
-      const result = await shouldRunTask('accessibility')
-      expect(result.shouldRun).toBe(true)
-      expect(result.reason).toBe('once-first-run')
-    })
-
-    it('should not run once-type task after completion', async () => {
+    it('collapses a retired once cadence to a manual-only on-demand task, run count or not', async () => {
       mockSchedule({
         tasks: { 'accessibility': { type: 'once', enabled: true, providerId: null, model: null, prompt: null } },
         executions: { 'task:accessibility': { lastRun: '2025-01-01T00:00:00Z', count: 1, perApp: {} } }
@@ -1101,14 +1155,15 @@ describe('taskSchedule', () => {
 
       const result = await shouldRunTask('accessibility')
       expect(result.shouldRun).toBe(false)
-      expect(result.reason).toBe('once-completed')
+      // No 'once-completed' dead end — a manual trigger runs it again.
+      expect(result.reason).toBe('on-demand-only')
     })
 
     it('should skip weekday-only tasks on weekends', async () => {
       getLocalParts.mockReturnValue({ dayOfWeek: 0 }) // Sunday
 
       mockSchedule({
-        tasks: { 'pr-reviewer': { type: 'custom', intervalMs: 7200000, enabled: true, weekdaysOnly: true, providerId: null, model: null, prompt: null } }
+        tasks: { 'pr-reviewer': { type: 'cron', cronExpression: '0 */2 * * *', enabled: true, weekdaysOnly: true, providerId: null, model: null, prompt: null } }
       })
 
       const result = await shouldRunTask('pr-reviewer')
@@ -1128,41 +1183,44 @@ describe('taskSchedule', () => {
       expect(result.reason).toBe('disabled-for-app')
     })
 
-    it('should run daily task when enough time has passed', async () => {
+    it('runs a cron task once its slot has elapsed', async () => {
+      cronDueNow()
       const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
 
       // Explicit runAfter: [] overrides the feature-ideas default that depends on do-replan
       mockSchedule({
-        tasks: { 'feature-ideas': { type: 'daily', enabled: true, providerId: null, model: null, prompt: null, runAfter: [] } },
+        tasks: { 'feature-ideas': { type: 'cron', cronExpression: '0 7 * * *', enabled: true, providerId: null, model: null, prompt: null, runAfter: [] } },
         executions: { 'task:feature-ideas': { lastRun: twoDaysAgo, count: 1, perApp: {} } }
       })
 
       const result = await shouldRunTask('feature-ideas')
       expect(result.shouldRun).toBe(true)
-      expect(result.reason).toContain('daily-due')
+      expect(result.reason).toBe('cron-due')
     })
 
-    it('should not run daily task when in cooldown', async () => {
+    it('holds a cron task until its next slot', async () => {
+      cronNotDueYet()
       const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString()
 
       mockSchedule({
-        tasks: { 'feature-ideas': { type: 'daily', enabled: true, providerId: null, model: null, prompt: null, runAfter: [] } },
+        tasks: { 'feature-ideas': { type: 'cron', cronExpression: '0 7 * * *', enabled: true, providerId: null, model: null, prompt: null, runAfter: [] } },
         executions: { 'task:feature-ideas': { lastRun: oneHourAgo, count: 5, perApp: {} } }
       })
 
       const result = await shouldRunTask('feature-ideas')
       expect(result.shouldRun).toBe(false)
-      expect(result.reason).toContain('daily-cooldown')
+      expect(result.reason).toBe('cron-cooldown')
     })
 
     it('feature-ideas waits on do-replan when do-replan is enabled', async () => {
+      cronDueNow()
       const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
 
       // Default runAfter:['do-replan'] kicks in since the test doesn't override it
       mockSchedule({
         tasks: {
-          'feature-ideas': { type: 'daily', enabled: true, providerId: null, model: null, prompt: null },
-          'do-replan':     { type: 'weekly', enabled: true, providerId: null, model: null, prompt: null }
+          'feature-ideas': { type: 'cron', cronExpression: '0 7 * * *', enabled: true, providerId: null, model: null, prompt: null },
+          'do-replan':     { type: 'cron', cronExpression: '0 7 * * 1', enabled: true, providerId: null, model: null, prompt: null }
         },
         executions: { 'task:feature-ideas': { lastRun: twoDaysAgo, count: 1, perApp: {} } }
       })
@@ -1174,29 +1232,31 @@ describe('taskSchedule', () => {
     })
 
     it('feature-ideas runs when do-replan dependency is globally disabled', async () => {
+      cronDueNow()
       const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
 
       // do-replan is disabled — feature-ideas would otherwise wait forever, so the dep is skipped
       mockSchedule({
         tasks: {
-          'feature-ideas': { type: 'daily', enabled: true, providerId: null, model: null, prompt: null },
-          'do-replan':     { type: 'weekly', enabled: false, providerId: null, model: null, prompt: null }
+          'feature-ideas': { type: 'cron', cronExpression: '0 7 * * *', enabled: true, providerId: null, model: null, prompt: null },
+          'do-replan':     { type: 'cron', cronExpression: '0 7 * * 1', enabled: false, providerId: null, model: null, prompt: null }
         },
         executions: { 'task:feature-ideas': { lastRun: twoDaysAgo, count: 1, perApp: {} } }
       })
 
       const result = await shouldRunTask('feature-ideas')
       expect(result.shouldRun).toBe(true)
-      expect(result.reason).toContain('daily-due')
+      expect(result.reason).toBe('cron-due')
     })
 
     it('feature-ideas runs when do-replan dependency is disabled for the app', async () => {
+      cronDueNow()
       const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
 
       mockSchedule({
         tasks: {
-          'feature-ideas': { type: 'daily', enabled: true, providerId: null, model: null, prompt: null },
-          'do-replan':     { type: 'weekly', enabled: true, providerId: null, model: null, prompt: null }
+          'feature-ideas': { type: 'cron', cronExpression: '0 7 * * *', enabled: true, providerId: null, model: null, prompt: null },
+          'do-replan':     { type: 'cron', cronExpression: '0 7 * * 1', enabled: true, providerId: null, model: null, prompt: null }
         },
         executions: {
           'task:feature-ideas': { lastRun: twoDaysAgo, count: 1, perApp: { 'app-1': { lastRun: twoDaysAgo, count: 1 } } }
@@ -1209,7 +1269,7 @@ describe('taskSchedule', () => {
       try {
         const result = await shouldRunTask('feature-ideas', 'app-1')
         expect(result.shouldRun).toBe(true)
-        expect(result.reason).toContain('daily-due')
+        expect(result.reason).toBe('cron-due')
       } finally {
         if (originalIsTaskTypeEnabledForApp) {
           isTaskTypeEnabledForApp.mockImplementation(originalIsTaskTypeEnabledForApp)
@@ -1220,11 +1280,12 @@ describe('taskSchedule', () => {
     })
 
     it('feature-ideas ignores an enabled on-demand do-replan dependency', async () => {
+      cronDueNow()
       const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
 
       mockSchedule({
         tasks: {
-          'feature-ideas': { type: 'daily', enabled: true, providerId: null, model: null, prompt: null },
+          'feature-ideas': { type: 'cron', cronExpression: '0 7 * * *', enabled: true, providerId: null, model: null, prompt: null },
           'do-replan': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null }
         },
         executions: { 'task:feature-ideas': { lastRun: twoDaysAgo, count: 1, perApp: {} } }
@@ -1232,17 +1293,18 @@ describe('taskSchedule', () => {
 
       const result = await shouldRunTask('feature-ideas')
       expect(result.shouldRun).toBe(true)
-      expect(result.reason).toContain('daily-due')
+      expect(result.reason).toBe('cron-due')
     })
 
     it('feature-ideas runs when do-replan has run since its last run', async () => {
+      cronDueNow()
       const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
       const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
 
       mockSchedule({
         tasks: {
-          'feature-ideas': { type: 'daily', enabled: true, providerId: null, model: null, prompt: null },
-          'do-replan':     { type: 'weekly', enabled: true, providerId: null, model: null, prompt: null }
+          'feature-ideas': { type: 'cron', cronExpression: '0 7 * * *', enabled: true, providerId: null, model: null, prompt: null },
+          'do-replan':     { type: 'cron', cronExpression: '0 7 * * 1', enabled: true, providerId: null, model: null, prompt: null }
         },
         executions: {
           'task:feature-ideas': { lastRun: twoDaysAgo, count: 1, perApp: {} },
@@ -1252,7 +1314,7 @@ describe('taskSchedule', () => {
 
       const result = await shouldRunTask('feature-ideas')
       expect(result.shouldRun).toBe(true)
-      expect(result.reason).toContain('daily-due')
+      expect(result.reason).toBe('cron-due')
     })
 
     describe('cron catch-up', () => {
@@ -1352,17 +1414,20 @@ describe('taskSchedule', () => {
   describe('getDueTasks', () => {
     it('should return empty array when no tasks are enabled', async () => {
       mockSchedule({
-        tasks: { 'security': { type: 'weekly', enabled: false, providerId: null, model: null, prompt: null } }
+        tasks: { ...PAUSED_SHIPPED_DRAINS, 'security': { type: 'cron', cronExpression: '0 7 * * 1', enabled: false, providerId: null, model: null, prompt: null } }
       })
       const due = await getDueTasks()
       expect(due).toEqual([])
     })
 
-    it('should return enabled rotation tasks', async () => {
+    it('returns a due cron task and skips a disabled one', async () => {
+      parseCronToPrevRun.mockReturnValue(null)
+      parseCronToNextRun.mockReturnValue(new Date(Date.now() - 60_000))
       mockSchedule({
         tasks: {
-          'code-quality': { type: 'rotation', enabled: true, providerId: null, model: null, prompt: null },
-          'security': { type: 'weekly', enabled: false, providerId: null, model: null, prompt: null }
+          ...PAUSED_SHIPPED_DRAINS,
+          'code-quality': { type: 'cron', cronExpression: '0 7 * * *', enabled: true, providerId: null, model: null, prompt: null },
+          'security': { type: 'cron', cronExpression: '0 7 * * 1', enabled: false, providerId: null, model: null, prompt: null }
         }
       })
 
@@ -1375,50 +1440,39 @@ describe('taskSchedule', () => {
   describe('getNextTaskType', () => {
     it('should return null when no tasks are enabled', async () => {
       mockSchedule({
-        tasks: { 'security': { type: 'weekly', enabled: false, providerId: null, model: null, prompt: null } }
+        tasks: { ...PAUSED_SHIPPED_DRAINS, 'security': { type: 'cron', cronExpression: '0 7 * * 1', enabled: false, providerId: null, model: null, prompt: null } }
       })
       const result = await getNextTaskType()
       expect(result).toBeNull()
     })
 
-    it('should return rotation task', async () => {
+    it('returns null when only on-demand tasks are enabled — nothing is auto-queued', async () => {
       mockSchedule({
         tasks: {
-          'code-quality': { type: 'rotation', enabled: true, providerId: null, model: null, prompt: null },
-          'error-handling': { type: 'rotation', enabled: true, providerId: null, model: null, prompt: null }
+          ...PAUSED_SHIPPED_DRAINS,
+          'code-quality': { type: 'on-demand', enabled: true, providerId: null, model: null, prompt: null },
+          'error-handling': { type: 'on-demand', enabled: true, providerId: null, model: null, prompt: null }
         }
       })
 
-      const result = await getNextTaskType()
-      expect(result).toBeDefined()
-      expect(result.reason).toBe('rotation')
+      expect(await getNextTaskType()).toBeNull()
     })
 
-    it('should rotate to next task after last type', async () => {
-      mockSchedule({
-        tasks: {
-          'code-quality': { type: 'rotation', enabled: true, providerId: null, model: null, prompt: null },
-          'error-handling': { type: 'rotation', enabled: true, providerId: null, model: null, prompt: null }
-        }
-      })
-
-      const result = await getNextTaskType(null, 'code-quality')
-      expect(result.taskType).toBe('error-handling')
-    })
-
-    it('does not select a feature-disabled rotation task', async () => {
+    it('does not select a feature-disabled task', async () => {
       isInstanceFeatureEnabled.mockResolvedValue(false)
+      parseCronToPrevRun.mockReturnValue(null)
+      parseCronToNextRun.mockReturnValue(new Date(Date.now() - 60_000))
       mockSchedule({ tasks: {
-        'jira-sprint-manager': { type: INTERVAL_TYPES.ROTATION, enabled: true },
+        ...PAUSED_SHIPPED_DRAINS,
+        'jira-sprint-manager': { type: INTERVAL_TYPES.CRON, cronExpression: '0 7 * * *', enabled: true },
       } })
 
       expect(await getNextTaskType()).toBeNull()
     })
 
-    it('prefers a due cron task over a perpetually-ready weekly task', async () => {
-      // A weekly task with no execution record is perpetually 'ready' (weekly-due).
-      // A cron task firing right now should still win — explicit time-based schedules
-      // shouldn't get masked by loose interval-based ones.
+    it('prefers a due cron task over an always-ready perpetual drain', async () => {
+      // A user-pinned wall-clock schedule must fire at its slot even while a
+      // perpetual task is perpetually 'ready' (draining a backlog).
       const todayNineAm = recentNineAm()
       const tomorrowNineAm = new Date(todayNineAm.getTime() + 24 * 60 * 60 * 1000)
       const yesterdayNineAm = new Date(todayNineAm.getTime() - 24 * 60 * 60 * 1000)
@@ -1430,7 +1484,8 @@ describe('taskSchedule', () => {
 
       mockSchedule({
         tasks: {
-          'code-quality': { type: 'weekly', enabled: true, providerId: null, model: null, prompt: null, runAfter: [] },
+          ...PAUSED_SHIPPED_DRAINS,
+          'code-quality': { type: 'on-demand', perpetual: true, enabled: true, providerId: null, model: null, prompt: null, runAfter: [] },
           'plan-task':    { type: 'cron',   enabled: true, cronExpression: '0 9 * * *', providerId: null, model: null, prompt: null, createdAt: yesterdayNineAm.toISOString() }
         }
       })
@@ -1454,8 +1509,9 @@ describe('taskSchedule', () => {
 
       mockSchedule({
         tasks: {
+          ...PAUSED_SHIPPED_DRAINS,
           'pr-watcher':  { type: 'cron', enabled: true, cronExpression: '0 9 * * *', providerId: null, model: null, prompt: null, createdAt: yesterdayNineAm.toISOString() },
-          'claim-issue': { type: 'perpetual', enabled: true, providerId: null, model: null, prompt: null }
+          'claim-issue': { type: 'on-demand', perpetual: true, enabled: true, providerId: null, model: null, prompt: null }
         }
       })
 
@@ -1464,20 +1520,23 @@ describe('taskSchedule', () => {
       expect(unconstrained.taskType).toBe('pr-watcher')
 
       // perpetualOnly: the perpetual drain is returned instead.
-      const constrained = await getNextTaskType(null, '', { perpetualOnly: true })
+      const constrained = await getNextTaskType(null, { perpetualOnly: true })
       expect(constrained).not.toBeNull()
       expect(constrained.taskType).toBe('claim-issue')
       expect(constrained.reason).toBe('perpetual-drain')
     })
 
     it('perpetualOnly returns null when no perpetual task is due (app stays throttled)', async () => {
+      parseCronToPrevRun.mockReturnValue(null)
+      parseCronToNextRun.mockReturnValue(new Date(Date.now() - 60_000))
       mockSchedule({
         tasks: {
-          'code-quality':  { type: 'rotation', enabled: true, providerId: null, model: null, prompt: null },
-          'error-handling': { type: 'rotation', enabled: true, providerId: null, model: null, prompt: null }
+          ...PAUSED_SHIPPED_DRAINS,
+          'code-quality':  { type: 'cron', cronExpression: '0 7 * * *', enabled: true, providerId: null, model: null, prompt: null },
+          'error-handling': { type: 'on-demand', enabled: true, providerId: null, model: null, prompt: null }
         }
       })
-      const result = await getNextTaskType(null, '', { perpetualOnly: true })
+      const result = await getNextTaskType(null, { perpetualOnly: true })
       expect(result).toBeNull()
     })
   })
@@ -2038,10 +2097,10 @@ describe('taskSchedule', () => {
     // park + convergence signature + dispatch counter for a human and MUST NOT for
     // a refill — that reset is what let branch-reconcile re-dispatch all night.
     it('stamps origin: user by default and refill when the drain re-issues itself', async () => {
-      mockSchedule({ tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true } } })
+      mockSchedule({ tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true } } })
       expect((await triggerOnDemandTask('branch-reconcile', 'app-1')).origin).toBe(ON_DEMAND_ORIGINS.USER)
 
-      mockSchedule({ tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true } } })
+      mockSchedule({ tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true } } })
       const refill = await triggerOnDemandTask('branch-reconcile', 'app-1', { emit: false, origin: ON_DEMAND_ORIGINS.REFILL })
       expect(refill.origin).toBe(ON_DEMAND_ORIGINS.REFILL)
     })
@@ -2050,7 +2109,7 @@ describe('taskSchedule', () => {
     // operator action; the perpetual drain re-issues itself through this same
     // lane, and logging that would fill the ledger with events nobody performed.
     it('records a cos.schedule.trigger row for a human Run Now, and none for a refill', async () => {
-      mockSchedule({ tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true } } })
+      mockSchedule({ tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true } } })
       const request = await triggerOnDemandTask('branch-reconcile', 'app-1')
 
       expect(recordUserAction).toHaveBeenCalledTimes(1)
@@ -2065,13 +2124,13 @@ describe('taskSchedule', () => {
       expect(recordUserAction.mock.calls[0][0].actor).toBeUndefined()
 
       recordUserAction.mockClear()
-      mockSchedule({ tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true } } })
+      mockSchedule({ tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true } } })
       await triggerOnDemandTask('branch-reconcile', 'app-1', { emit: false, origin: ON_DEMAND_ORIGINS.REFILL })
       expect(recordUserAction).not.toHaveBeenCalled()
     })
 
     it('records nothing when the trigger is refused', async () => {
-      mockSchedule({ tasks: { 'branch-reconcile': { type: 'perpetual', enabled: false } } })
+      mockSchedule({ tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: false } } })
       expect((await triggerOnDemandTask('branch-reconcile', 'app-1')).error).toMatch(/disabled/i)
       expect(recordUserAction).not.toHaveBeenCalled()
     })
@@ -2080,7 +2139,7 @@ describe('taskSchedule', () => {
     // loop got in. One home, so the three queue consumers can't drift on it.
     describe('applyOnDemandRunResets', () => {
       const parked = (extra = {}) => ({
-        tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true } },
+        tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true } },
         executions: { 'task:branch-reconcile': { lastRun: null, count: 0, perApp: {
           'app-1': {
             lastRun: null, count: 0,
@@ -2210,7 +2269,7 @@ describe('taskSchedule', () => {
 
     describe('shouldRunTask', () => {
       it('is due (drain) when enabled and not parked', async () => {
-        mockSchedule({ tasks: { 'claim-issue': { type: 'perpetual', enabled: true } } })
+        mockSchedule({ tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } } })
         const result = await shouldRunTask('claim-issue')
         expect(result.shouldRun).toBe(true)
         expect(result.reason).toBe('perpetual-drain')
@@ -2219,7 +2278,7 @@ describe('taskSchedule', () => {
       it('is NOT due while parked in the future', async () => {
         const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
         mockSchedule({
-          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {}, parkedUntil: future, parkReason: 'no-actionable-issues', parkActionableCount: 0 } }
         })
         const result = await shouldRunTask('claim-issue')
@@ -2232,7 +2291,7 @@ describe('taskSchedule', () => {
       it('becomes due again (recheck) once the park elapses', async () => {
         const past = new Date(Date.now() - 60 * 1000).toISOString()
         mockSchedule({
-          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {}, parkedUntil: past } }
         })
         const result = await shouldRunTask('claim-issue')
@@ -2244,7 +2303,7 @@ describe('taskSchedule', () => {
         isTaskTypeEnabledForApp.mockResolvedValue(true)
         const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
         mockSchedule({
-          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0, parkedUntil: future } } } }
         })
         const result = await shouldRunTask('claim-issue', 'app-1')
@@ -2254,11 +2313,13 @@ describe('taskSchedule', () => {
     })
 
     describe('getNextTaskType', () => {
-      it('prioritizes a draining perpetual task over a due daily task', async () => {
+      it('picks a draining perpetual task when no cron task is due', async () => {
+        cronNotDueYet()
         mockSchedule({
           tasks: {
-            'claim-issue': { type: 'perpetual', enabled: true },
-            'security': { type: 'daily', enabled: true }
+            ...PAUSED_SHIPPED_DRAINS,
+            'claim-issue': { type: 'on-demand', perpetual: true, enabled: true },
+            'security': { type: 'cron', cronExpression: '0 7 * * *', enabled: true }
           }
         })
         const next = await getNextTaskType()
@@ -2266,17 +2327,47 @@ describe('taskSchedule', () => {
         expect(next.reason).toBe('perpetual-drain')
       })
 
-      it('does not pick a parked perpetual task — yields to the daily', async () => {
+      it('does not pick a parked perpetual task — yields to the due cron task', async () => {
+        cronDueNow()
         const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
         mockSchedule({
           tasks: {
-            'claim-issue': { type: 'perpetual', enabled: true },
-            'security': { type: 'daily', enabled: true }
+            ...PAUSED_SHIPPED_DRAINS,
+            'claim-issue': { type: 'on-demand', perpetual: true, enabled: true },
+            'security': { type: 'cron', cronExpression: '0 7 * * *', enabled: true }
           },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {}, parkedUntil: future } }
         })
         const next = await getNextTaskType()
         expect(next.taskType).toBe('security')
+      })
+
+      it('a cron+perpetual task parks on its own expression and stays out of the pick', async () => {
+        cronDueNow()
+        const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
+        mockSchedule({
+          tasks: {
+            ...PAUSED_SHIPPED_DRAINS,
+            'claim-issue': { type: 'cron', cronExpression: '0 7 * * *', perpetual: true, enabled: true }
+          },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {}, parkedUntil: future } }
+        })
+        // The cron slot is due, but the park outranks it — the drain is idle.
+        expect(await shouldRunTask('claim-issue')).toMatchObject({ shouldRun: false, reason: 'perpetual-parked' })
+        expect(await getNextTaskType()).toBeNull()
+      })
+
+      it('an ELAPSED park makes a cron+perpetual task due immediately, without waiting for the next slot', async () => {
+        cronNotDueYet()
+        const past = new Date(Date.now() - 60 * 1000).toISOString()
+        mockSchedule({
+          tasks: {
+            ...PAUSED_SHIPPED_DRAINS,
+            'claim-issue': { type: 'cron', cronExpression: '0 7 * * *', perpetual: true, enabled: true }
+          },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {}, parkedUntil: past } }
+        })
+        expect(await shouldRunTask('claim-issue')).toMatchObject({ shouldRun: true, reason: 'perpetual-recheck' })
       })
     })
 
@@ -2297,7 +2388,7 @@ describe('taskSchedule', () => {
         const nineAm = new Date('2026-01-02T09:00:00Z') // next 9am (future, well past `soon`)
         const soon = new Date(Date.now() + 30 * 60 * 1000).toISOString() // 30m out
         mockSchedule({
-          tasks: { 'claim-issue': { type: 'perpetual', enabled: true, recheckCron: '0 9 * * *' } },
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true, recheckCron: '0 9 * * *' } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {
             'app-1': { lastRun: null, count: 0, parkedUntil: nineAm.toISOString() },
             'app-2': { lastRun: null, count: 0, parkedUntil: soon }
@@ -2316,7 +2407,7 @@ describe('taskSchedule', () => {
         const past = new Date(Date.now() - 60 * 1000).toISOString()
         const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
         mockSchedule({
-          tasks: { 'claim-issue': { type: 'perpetual', enabled: true, recheckCron: '0 9 * * *' } },
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true, recheckCron: '0 9 * * *' } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {
             'app-1': { lastRun: null, count: 0, parkedUntil: past },   // recheck due now
             'app-2': { lastRun: null, count: 0, parkedUntil: future }
@@ -2331,7 +2422,7 @@ describe('taskSchedule', () => {
       it('treats an app mid-drain (park cleared) as ready even if a sibling app is parked', async () => {
         const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
         mockSchedule({
-          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {
             'app-1': { lastRun: null, count: 0 },                      // no park → draining
             'app-2': { lastRun: null, count: 0, parkedUntil: future }
@@ -2343,7 +2434,7 @@ describe('taskSchedule', () => {
       })
 
       it('keeps the global ready default for a never-run perpetual task (no per-app records)', async () => {
-        mockSchedule({ tasks: { 'claim-issue': { type: 'perpetual', enabled: true } } })
+        mockSchedule({ tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } } })
         const upcoming = await getUpcomingTasks(50)
         const claim = upcoming.find(t => t.taskType === 'claim-issue')
         expect(claim.status).toBe('ready')
@@ -2352,7 +2443,7 @@ describe('taskSchedule', () => {
 
     describe('parkPerpetual / perpetual park state', () => {
       it('parkPerpetual stamps parkedUntil + reason on the per-app record', async () => {
-        mockSchedule({ tasks: { 'claim-issue': { type: 'perpetual', enabled: true, recheckIntervalMs: 3600000 } } })
+        mockSchedule({ tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true, recheckIntervalMs: 3600000 } } })
         const record = await parkPerpetual('claim-issue', 'app-1', { reason: 'no-actionable-issues', actionableCount: 0, counts: { open: 40, inFlight: 2, filtered: 38 } })
         expect(record.parkedUntil).toBeTruthy()
         expect(record.parkReason).toBe('no-actionable-issues')
@@ -2363,7 +2454,7 @@ describe('taskSchedule', () => {
       it('getPerpetualParkInfo reads back the park record (and null when not parked)', async () => {
         const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
         mockSchedule({
-          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {
             'app-1': { lastRun: null, count: 0, parkedUntil: future, parkReason: 'no-actionable-issues', parkActionableCount: 0, parkCounts: { open: 40, inFlight: 2, filtered: 38 } },
             'app-2': { lastRun: null, count: 0 }
@@ -2383,7 +2474,7 @@ describe('taskSchedule', () => {
         const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
         const past = new Date(Date.now() - 60 * 60 * 1000).toISOString()
         mockSchedule({
-          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {
             'app-parked': { lastRun: null, count: 0, parkedUntil: future },
             'app-elapsed': { lastRun: null, count: 0, parkedUntil: past },
@@ -2405,7 +2496,7 @@ describe('taskSchedule', () => {
       // sibling test leaves it returning a year-2999 date.)
       it('parkPerpetual honours notLaterThan when the hold lifts before the recheck', async () => {
         parseCronToNextRun.mockReturnValue(null)
-        mockSchedule({ tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true, recheckIntervalMs: 7 * 24 * 3600000 } } })
+        mockSchedule({ tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true, recheckIntervalMs: 7 * 24 * 3600000 } } })
         const soon = new Date(Date.now() + 60 * 60 * 1000).toISOString()
         const record = await parkPerpetual('branch-reconcile', 'app-1', {
           reason: 'merged-branches-held-back', actionableCount: 0, signature: null,
@@ -2422,7 +2513,7 @@ describe('taskSchedule', () => {
       it('parkPerpetual publishes the SHORTENED time on the parked event, not the raw cadence', async () => {
         parseCronToNextRun.mockReturnValue(null)
         cosEvents.emit.mockClear()
-        mockSchedule({ tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true, recheckIntervalMs: 7 * 24 * 3600000 } } })
+        mockSchedule({ tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true, recheckIntervalMs: 7 * 24 * 3600000 } } })
         const soon = new Date(Date.now() + 60 * 60 * 1000).toISOString()
         const record = await parkPerpetual('branch-reconcile', 'app-1', {
           reason: 'merged-branches-held-back', actionableCount: 0, signature: null, notLaterThan: soon
@@ -2440,7 +2531,7 @@ describe('taskSchedule', () => {
         parseCronToNextRun.mockReturnValue(null)
         const soon = new Date(Date.now() + 60 * 60 * 1000).toISOString()
         mockSchedule({
-          tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true, recheckIntervalMs: 3600000 } },
+          tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true, recheckIntervalMs: 3600000 } },
           executions: { 'task:branch-reconcile': { lastRun: null, count: 0, perApp: {
             'app-1': { lastRun: null, count: 0, parkedUntil: soon, parkNotLaterThan: soon, parkReason: 'merged-branches-held-back' }
           } } }
@@ -2452,14 +2543,14 @@ describe('taskSchedule', () => {
 
       it('parkPerpetual drops parkNotLaterThan when no bound is given', async () => {
         parseCronToNextRun.mockReturnValue(null)
-        mockSchedule({ tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true, recheckIntervalMs: 3600000 } } })
+        mockSchedule({ tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true, recheckIntervalMs: 3600000 } } })
         const record = await parkPerpetual('branch-reconcile', 'app-1', { reason: 'no-in-flight-branches', actionableCount: 0, signature: null })
         expect(record.parkNotLaterThan).toBeUndefined()
       })
 
       it('parkPerpetual ignores a notLaterThan that is later than the recheck', async () => {
         parseCronToNextRun.mockReturnValue(null)
-        mockSchedule({ tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true, recheckIntervalMs: 3600000 } } })
+        mockSchedule({ tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true, recheckIntervalMs: 3600000 } } })
         const far = new Date(Date.now() + 30 * 24 * 3600000).toISOString()
         const record = await parkPerpetual('branch-reconcile', 'app-1', {
           reason: 'merged-branches-held-back', actionableCount: 0, signature: null, notLaterThan: far
@@ -2470,7 +2561,7 @@ describe('taskSchedule', () => {
       })
 
       it('parkPerpetual omits parkCounts when no breakdown is provided', async () => {
-        mockSchedule({ tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true, recheckIntervalMs: 3600000 } } })
+        mockSchedule({ tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true, recheckIntervalMs: 3600000 } } })
         const record = await parkPerpetual('branch-reconcile', 'app-1', { reason: 'no-in-flight-branches', actionableCount: 0, signature: null })
         expect(record.parkCounts).toBeUndefined()
       })
@@ -2482,7 +2573,7 @@ describe('taskSchedule', () => {
       it('recordPerpetualDispatch clears an existing park as it spends a dispatch', async () => {
         const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
         mockSchedule({
-          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {
             'app-1': { lastRun: null, count: 0, parkedUntil: future, parkReason: 'no-actionable-issues', perpetualDispatchCount: 2 }
           } } }
@@ -2495,7 +2586,7 @@ describe('taskSchedule', () => {
       it('resetPerpetualForManualRun drops the park, the convergence signature, AND the dispatch count', async () => {
         const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
         mockSchedule({
-          tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true } },
+          tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:branch-reconcile': { lastRun: null, count: 0, perApp: {
             'app-1': { lastRun: null, count: 0, parkedUntil: future, parkReason: 'no-progress', lastActionableSignature: 'a:NEEDS_PR:none', perpetualDispatchCount: 4 }
           } } }
@@ -2514,7 +2605,7 @@ describe('taskSchedule', () => {
 
       it('getPerpetualDrainState reads both brakes in one pass (and defaults them)', async () => {
         mockSchedule({
-          tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true } },
+          tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:branch-reconcile': { lastRun: null, count: 0, perApp: {
             'app-1': { lastRun: null, count: 0, lastActionableSignature: 'sig-1', perpetualDispatchCount: 3 }
           } } }
@@ -2527,7 +2618,7 @@ describe('taskSchedule', () => {
       it('recordPerpetualDispatch drops the park, records the signature, and spends one dispatch in ONE write', async () => {
         const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
         mockSchedule({
-          tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true } },
+          tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:branch-reconcile': { lastRun: null, count: 0, perApp: {
             'app-1': { lastRun: null, count: 0, parkedUntil: future, parkReason: 'no-progress', perpetualDispatchCount: 2 }
           } } }
@@ -2555,7 +2646,7 @@ describe('taskSchedule', () => {
       // CHANGED set, so it resets to 1.
       it('recordPerpetualDispatch resets signatureRepeatCount for the new signature', async () => {
         mockSchedule({
-          tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true } },
+          tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:branch-reconcile': { lastRun: null, count: 0, perApp: {
             'app-1': { lastRun: null, count: 0, lastActionableSignature: 'old-sig', signatureRepeatCount: 4 }
           } } }
@@ -2570,7 +2661,7 @@ describe('taskSchedule', () => {
       // future park path can forget, and a stale count caps the NEXT drain early.
       it('parkPerpetual clears the dispatch budget when handed dispatchCount: 0', async () => {
         mockSchedule({
-          tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true, recheckIntervalMs: 3600000 } },
+          tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true, recheckIntervalMs: 3600000 } },
           executions: { 'task:branch-reconcile': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0, perpetualDispatchCount: 4 } } } }
         })
         await parkPerpetual('branch-reconcile', 'app-1', { reason: 'drain-cap', actionableCount: 2, signature: null, dispatchCount: 0 })
@@ -2587,7 +2678,7 @@ describe('taskSchedule', () => {
       // the next window to cap early on a spend it never made.
       it('parkPerpetual zeroes the dispatch budget even when the caller omits dispatchCount', async () => {
         mockSchedule({
-          tasks: { 'claim-issue': { type: 'perpetual', enabled: true, recheckIntervalMs: 3600000 } },
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true, recheckIntervalMs: 3600000 } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0, perpetualDispatchCount: 4 } } } }
         })
         await parkPerpetual('claim-issue', 'app-1', { reason: 'churn-detected', actionableCount: 12 })
@@ -2597,14 +2688,14 @@ describe('taskSchedule', () => {
 
       it('resetPerpetualForManualRun is a no-op (false) when nothing is cached', async () => {
         mockSchedule({
-          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0 } } } }
         })
         expect(await resetPerpetualForManualRun('claim-issue', 'app-1')).toBe(false)
       })
 
       it('parkPerpetual stores the actionable signature it parked on', async () => {
-        mockSchedule({ tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true, recheckIntervalMs: 3600000 } } })
+        mockSchedule({ tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true, recheckIntervalMs: 3600000 } } })
         await parkPerpetual('branch-reconcile', 'app-1', { reason: 'no-progress', actionableCount: 2, signature: 'a:NEEDS_PR:none|b:IN_REVIEW:5' })
         const saved = JSON.parse(writeFile.mock.calls.at(-1)[1])
         expect(saved.executions['task:branch-reconcile'].perApp['app-1'].lastActionableSignature).toBe('a:NEEDS_PR:none|b:IN_REVIEW:5')
@@ -2612,7 +2703,7 @@ describe('taskSchedule', () => {
 
       it('parkPerpetual with signature:null clears a prior signature (idle park)', async () => {
         mockSchedule({
-          tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true, recheckIntervalMs: 3600000 } },
+          tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true, recheckIntervalMs: 3600000 } },
           executions: { 'task:branch-reconcile': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0, lastActionableSignature: 'old-sig' } } } }
         })
         await parkPerpetual('branch-reconcile', 'app-1', { reason: 'no-in-flight-branches', actionableCount: 0, signature: null })
@@ -2622,7 +2713,7 @@ describe('taskSchedule', () => {
 
       it('parkPerpetual increments signatureRepeatCount when the same finding is parked again', async () => {
         mockSchedule({
-          tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true, recheckIntervalMs: 3600000 } },
+          tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true, recheckIntervalMs: 3600000 } },
           executions: { 'task:branch-reconcile': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0, lastActionableSignature: 'a:NEEDS_PR:none' } } } }
         })
         await parkPerpetual('branch-reconcile', 'app-1', { reason: 'no-progress', actionableCount: 1, signature: 'a:NEEDS_PR:none' })
@@ -2633,7 +2724,7 @@ describe('taskSchedule', () => {
 
       it('parkPerpetual resets signatureRepeatCount when the finding changes', async () => {
         mockSchedule({
-          tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true, recheckIntervalMs: 3600000 } },
+          tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true, recheckIntervalMs: 3600000 } },
           executions: { 'task:branch-reconcile': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0, lastActionableSignature: 'old', signatureRepeatCount: 6 } } } }
         })
         await parkPerpetual('branch-reconcile', 'app-1', { reason: 'no-progress', actionableCount: 1, signature: 'new' })
@@ -2771,9 +2862,9 @@ describe('taskSchedule', () => {
         expect(removeByMetadata).toHaveBeenCalledWith('failureParkKey', 'security:app-1')
       })
 
-      it('shouldRunTask returns failure-parked for a parked ROTATION type', async () => {
+      it('shouldRunTask returns failure-parked for a parked type', async () => {
         mockSchedule({
-          tasks: { security: { type: 'rotation', enabled: true } },
+          tasks: { security: { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:security': { lastRun: null, count: 0, perApp: {
             'app-1': { lastRun: null, count: 0, consecutiveFailures: FAILURE_PARK_THRESHOLD, failureParkedAt: new Date().toISOString(), failureParkReason: 'auth-error' }
           } } }
@@ -2784,10 +2875,10 @@ describe('taskSchedule', () => {
         expect(res.failureParkReason).toBe('auth-error')
       })
 
-      it('shouldRunTask applies escalating failure-cooldown to ROTATION (otherwise always-run)', async () => {
+      it('shouldRunTask applies escalating failure-cooldown to an otherwise always-run perpetual drain', async () => {
         // 2 consecutive failures → backoff = base*4; last failure just now → in cooldown.
         mockSchedule({
-          tasks: { security: { type: 'rotation', enabled: true } },
+          tasks: { security: { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:security': { lastRun: null, count: 0, perApp: {
             'app-1': { lastRun: null, count: 0, consecutiveFailures: 2, lastFailureAt: new Date().toISOString(), lastErrorCategory: 'timeout' }
           } } }
@@ -2799,18 +2890,18 @@ describe('taskSchedule', () => {
         expect(res.failureBackoffMs).toBe(FAILURE_BACKOFF_BASE_MS * 4)
       })
 
-      it('shouldRunTask lets ROTATION run once the failure-cooldown has elapsed', async () => {
+      it('shouldRunTask lets a perpetual drain run once the failure-cooldown has elapsed', async () => {
         // 1 failure → backoff = base*2; last failure long ago → cooldown elapsed.
         const longAgo = new Date(Date.now() - (FAILURE_BACKOFF_CAP_MS + 60_000)).toISOString()
         mockSchedule({
-          tasks: { security: { type: 'rotation', enabled: true } },
+          tasks: { security: { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:security': { lastRun: null, count: 0, perApp: {
             'app-1': { lastRun: null, count: 0, consecutiveFailures: 1, lastFailureAt: longAgo }
           } } }
         })
         const res = await shouldRunTask('security', 'app-1')
         expect(res.shouldRun).toBe(true)
-        expect(res.reason).toBe('rotation')
+        expect(res.reason).toBe('perpetual-drain')
       })
 
       it('updateTaskInterval clears the failure ledger (config-change unpark)', async () => {
@@ -2834,7 +2925,7 @@ describe('taskSchedule', () => {
       it('re-derives an existing park when the recheck cadence changes', async () => {
         const farFuture = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
         mockSchedule({
-          tasks: { 'claim-issue': { type: 'perpetual', enabled: true, recheckIntervalMs: 30 * 24 * 60 * 60 * 1000 } },
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true, recheckIntervalMs: 30 * 24 * 60 * 60 * 1000 } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0, parkedUntil: farFuture } } } }
         })
         await updateTaskInterval('claim-issue', { recheckIntervalMs: 1000 })
@@ -2847,7 +2938,7 @@ describe('taskSchedule', () => {
 
       it('does not create a park when none exists', async () => {
         mockSchedule({
-          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0 } } } }
         })
         await updateTaskInterval('claim-issue', { recheckIntervalMs: 1000 })
@@ -2864,7 +2955,7 @@ describe('taskSchedule', () => {
         const soon = new Date(Date.now() + 60 * 1000).toISOString()
         const elapsed = new Date(Date.now() - 60 * 1000).toISOString()
         mockSchedule({
-          tasks: { 'claim-issue': { type: 'perpetual', enabled: true, recheckIntervalMs: 60 * 1000 } },
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true, recheckIntervalMs: 60 * 1000 } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {
             'app-future': { lastRun: null, count: 0, parkedUntil: soon },
             'app-elapsed': { lastRun: null, count: 0, parkedUntil: elapsed }
@@ -2888,17 +2979,17 @@ describe('taskSchedule', () => {
     })
 
     describe('getScheduleStatus per-app park aggregate', () => {
-      it('aggregates per-app parks into taskStatus.perpetual', async () => {
+      it('aggregates per-app parks into taskStatus.perpetualStatus', async () => {
         const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
         mockSchedule({
-          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {
             'app-1': { lastRun: null, count: 0, parkedUntil: future, parkReason: 'no-actionable-issues' },
             'app-2': { lastRun: null, count: 0 }
           } } }
         })
         const status = await getScheduleStatus()
-        const p = status.tasks['claim-issue'].perpetual
+        const p = status.tasks['claim-issue'].perpetualStatus
         expect(p).toMatchObject({ parkedAppCount: 1, trackedAppCount: 2, globalParked: false, nextRecheckAt: future, parkReason: 'no-actionable-issues' })
       })
     })
@@ -2910,7 +3001,7 @@ describe('taskSchedule', () => {
     // hadn't elapsed; eligibility folded in any global record carrying a park).
     describe('perpetual park aggregate — getScheduleStatus and getUpcomingTasks agree', () => {
       const perpetualOf = async (taskType = 'claim-issue') =>
-        (await getScheduleStatus()).tasks[taskType].perpetual
+        (await getScheduleStatus()).tasks[taskType].perpetualStatus
       const upcomingOf = async (taskType = 'claim-issue') =>
         (await getUpcomingTasks(50)).find(t => t.taskType === taskType)
 
@@ -2918,7 +3009,7 @@ describe('taskSchedule', () => {
         const soon = new Date(Date.now() + 30 * 60 * 1000).toISOString()
         const later = new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString()
         mockSchedule({
-          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {
             'app-1': { lastRun: null, count: 0, parkedUntil: later, parkReason: 'no-actionable-issues' },
             'app-2': { lastRun: null, count: 0, parkedUntil: soon, parkReason: 'no-progress' }
@@ -2935,7 +3026,7 @@ describe('taskSchedule', () => {
         const past = new Date(Date.now() - 60 * 1000).toISOString()
         const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
         mockSchedule({
-          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {
             'app-1': { lastRun: null, count: 0, parkedUntil: past, parkReason: 'stale' },
             'app-2': { lastRun: null, count: 0, parkedUntil: future, parkReason: 'no-actionable-issues' }
@@ -2950,7 +3041,7 @@ describe('taskSchedule', () => {
       it('an own-parked GLOBAL record (no per-app) is a tracked scope for both', async () => {
         const future = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
         mockSchedule({
-          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {}, parkedUntil: future, parkReason: 'no-actionable-issues' } }
         })
         const p = await perpetualOf()
@@ -2963,7 +3054,7 @@ describe('taskSchedule', () => {
       it('an ELAPSED global park is due now for both (no lingering nextRecheckAt)', async () => {
         const past = new Date(Date.now() - 60 * 1000).toISOString()
         mockSchedule({
-          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {}, parkedUntil: past, parkReason: 'no-actionable-issues' } }
         })
         const p = await perpetualOf()
@@ -2976,7 +3067,7 @@ describe('taskSchedule', () => {
         const globalPark = new Date(Date.now() + 10 * 60 * 1000).toISOString()
         const appPark = new Date(Date.now() + 60 * 60 * 1000).toISOString()
         mockSchedule({
-          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, parkedUntil: globalPark, parkReason: 'global-idle', perApp: {
             'app-1': { lastRun: null, count: 0, parkedUntil: appPark, parkReason: 'no-actionable-issues' }
           } } }
@@ -2990,7 +3081,7 @@ describe('taskSchedule', () => {
       })
 
       it('no tracked scope at all: status reports nothing parked and upcoming stays ready', async () => {
-        mockSchedule({ tasks: { 'claim-issue': { type: 'perpetual', enabled: true } } })
+        mockSchedule({ tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } } })
         const p = await perpetualOf()
         const claim = await upcomingOf()
         expect(p).toMatchObject({ globalParked: false, parkedAppCount: 0, trackedAppCount: 0, nextRecheckAt: null, parkReason: null })

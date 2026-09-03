@@ -90,6 +90,17 @@ describe('handlePipelineProgression', () => {
     expect(nextTask.metadata.effort).toBe('xhigh');
   });
 
+  it('does not carry the previous stage prompt into the next stage task', async () => {
+    // addTask promotes a multi-line description to metadata.prompt only when
+    // none is set, so an inherited prompt made stage 1+ run on stage 0's text.
+    const task = { id: 't', taskType: 'user', metadata: { prompt: 'stage-0 instructions\nmore', context: 'note', pipeline: runningPipeline() } };
+    await handlePipelineProgression(task, 'agent-1', true);
+    const [nextTask] = addTask.mock.calls[0];
+    expect(nextTask.metadata).not.toHaveProperty('prompt');
+    expect(nextTask.metadata.context).toBe('note');
+    expect(nextTask.description).toBe('do stage work in {appName}');
+  });
+
   it('leaves effort unset when the next stage has no effort pin', async () => {
     const task = { id: 't', taskType: 'user', metadata: { pipeline: runningPipeline() } };
     await handlePipelineProgression(task, 'agent-1', true);
@@ -180,6 +191,52 @@ describe('handlePipelineProgression — execution profile hand-off', () => {
     const task = { id: 't', taskType: 'user', metadata: { pipeline: runningPipeline() } };
     await handlePipelineProgression(task, 'agent-1', true);
     expect(addTask.mock.calls[0][0].metadata.executionProfile).toBeNull();
+  });
+
+  // The gate is pinned to a tool-free local model; the sandboxed review stage
+  // must not inherit it. An unpinned public-review stage resolves to the first
+  // eligible provider for ITS posture, so the previous stage's pins are dropped.
+  it('does not carry the previous stage\'s provider/model/effort into an unpinned public-review stage', async () => {
+    const task = {
+      id: 't',
+      taskType: 'user',
+      metadata: {
+        executionProfile: 'public-review-gate',
+        provider: 'claude-ollama',
+        providerId: 'claude-ollama',
+        model: 'gemma3:27b',
+        effort: 'medium',
+        pipeline: publicReviewPipeline([
+          { name: 'Eligibility Gate', executionProfile: 'public-review-gate', providerId: 'claude-ollama', model: 'gemma3:27b', effort: 'medium' },
+          { name: 'Code Review & Actions', executionProfile: 'public-review-actions' },
+        ]),
+      },
+    };
+    await handlePipelineProgression(task, 'agent-1', true);
+    const next = addTask.mock.calls[0][0].metadata;
+    expect(next.executionProfile).toBe('public-review-actions');
+    expect(next).not.toHaveProperty('provider');
+    expect(next).not.toHaveProperty('providerId');
+    expect(next).not.toHaveProperty('model');
+    expect(next).not.toHaveProperty('effort');
+  });
+
+  it('applies a public-review stage\'s own pins', async () => {
+    const task = {
+      id: 't',
+      taskType: 'user',
+      metadata: {
+        executionProfile: 'public-review-gate',
+        provider: 'claude-ollama',
+        model: 'gemma3:27b',
+        pipeline: publicReviewPipeline([
+          { name: 'Eligibility Gate', executionProfile: 'public-review-gate' },
+          { name: 'Code Review & Actions', executionProfile: 'public-review-actions', providerId: 'codex-tui', model: 'gpt-5.6', effort: 'high' },
+        ]),
+      },
+    };
+    await handlePipelineProgression(task, 'agent-1', true);
+    expect(addTask.mock.calls[0][0].metadata).toMatchObject({ provider: 'codex-tui', providerId: 'codex-tui', model: 'gpt-5.6', effort: 'high' });
   });
 });
 

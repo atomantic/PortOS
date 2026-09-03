@@ -19,8 +19,12 @@ try {
     : runLocalCodeReview;
   const result = await review({ ...request, model, effort });
   process.stdout.write(`${JSON.stringify(result)}\n`);
-  if (!result.ok) process.exitCode = 1;
+  if (!result.ok) {
+    process.stderr.write(`${result.error}\n`);
+    process.exitCode = 1;
+  }
 } catch (err) {
   process.stdout.write(`${JSON.stringify({ ok: false, error: err.message })}\n`);
+  process.stderr.write(`${err.message}\n`);
   process.exitCode = 1;
 }

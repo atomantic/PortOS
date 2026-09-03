@@ -274,7 +274,7 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
             <summary className="text-gray-400 cursor-pointer hover:text-white transition-colors">
               View context to be included
             </summary>
-            <pre className="mt-2 p-3 bg-port-bg border border-port-border rounded-lg text-gray-400 text-xs overflow-auto max-h-48 whitespace-pre-wrap">
+            <pre className="mt-2 p-3 bg-port-bg border border-port-border rounded-lg text-gray-400 text-xs overflow-auto max-h-48 whitespace-pre-wrap break-all">
               {initialContext}
             </pre>
           </details>

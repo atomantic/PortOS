@@ -6,6 +6,7 @@ import { execFileSync } from 'child_process';
 import { resolve } from 'path';
 
 import { resolveBundleNodeEnv } from './vite.buildEnv.js';
+import { CHUNK_GROUPS } from './vite.chunkGroups.js';
 
 const ANALYZE_BUNDLE = process.env.ANALYZE === 'true';
 const CONFIG_DIR = import.meta.dirname;
@@ -171,29 +172,11 @@ export default defineConfig(({ command, mode }) => {
           // id matches `test` into a named chunk. This replaces the legacy
           // `rollupOptions.output.manualChunks` function (still accepted via
           // rolldown's compat layer, but slated to drop in a future Vite). The
-          // groups below reproduce the same four vendor chunks as before.
-          // Note: use `[\\/]` (not `/`) for the path separator so the regexes
-          // also match on Windows.
+          // groups themselves are declared as package names in
+          // `vite.chunkGroups.js`, so a group naming an uninstalled package fails
+          // a test instead of silently grouping nothing.
           codeSplitting: {
-            groups: [
-              // Core React dependencies
-              { name: 'vendor-react', test: /[\\/]node_modules[\\/](react|react-dom|react-router)[\\/]/ },
-              // Socket dependencies
-              { name: 'vendor-realtime', test: /[\\/]node_modules[\\/]socket\.io-client[\\/]/ },
-              // Drag and drop library (only used in CoS)
-              { name: 'vendor-dnd', test: /[\\/]node_modules[\\/]@dnd-kit[\\/]/ },
-              // Icon library (largest dependency)
-              { name: 'vendor-icons', test: /[\\/]node_modules[\\/]lucide-react[\\/]/ },
-              // 3D stack — only pulled into lazy 3D pages (CyberCity, avatars,
-              // BrainGraph). Naming it gives the ~1 MB chunk a stable identity
-              // instead of an opaque `OrbitControls-*.js` and guarantees a single
-              // shared chunk across all 3D consumers.
-              { name: 'vendor-three', test: /[\\/]node_modules[\\/](three|@react-three|three-fenestra)[\\/]/ },
-              // Charting (recharts) — lazy chart pages only
-              { name: 'vendor-charts', test: /[\\/]node_modules[\\/](recharts|d3-[^\\/]+|victory-[^\\/]+)[\\/]/ },
-              // Terminal emulator (xterm) — Shell page only
-              { name: 'vendor-term', test: /[\\/]node_modules[\\/]@xterm[\\/]/ },
-            ]
+            groups: CHUNK_GROUPS.map(({ name, test }) => ({ name, test }))
           }
         }
       },

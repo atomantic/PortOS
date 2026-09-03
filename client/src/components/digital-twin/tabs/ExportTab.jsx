@@ -280,7 +280,7 @@ export default function ExportTab({ onRefresh: _onRefresh }) {
 
         <div className="flex-1 overflow-auto p-4">
           {exportResult ? (
-            <pre className="text-sm text-gray-300 whitespace-pre-wrap font-mono">
+            <pre className="text-sm text-gray-300 whitespace-pre-wrap break-all font-mono">
               {typeof exportResult.content === 'string'
                 ? exportResult.content
                 : JSON.stringify(exportResult.content, null, 2)}

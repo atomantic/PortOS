@@ -123,7 +123,9 @@ export default function AgentDetail() {
             {agent.avatar?.emoji || '🤖'}
           </div>
           <div className="flex-1 min-w-0">
-            <h1 className="text-xl font-bold text-white truncate">{agent.name}</h1>
+            <h1 className="line-clamp-2 break-words text-xl font-bold text-white" title={agent.name}>
+              {agent.name}
+            </h1>
             {agent.description && (
               <p className="text-sm text-gray-400 truncate">{agent.description}</p>
             )}

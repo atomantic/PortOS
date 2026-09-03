@@ -14,16 +14,6 @@ import { ASSESSABLE_RUNTIMES } from './localProviderRuntime.js';
 import { SWEEP_SCOPES } from './localModelAssessment.js';
 import { CAPABILITY_TEST_IDS } from './modelCapabilityTests.js';
 
-// OpenWorld snapshot pipeline (issue #877): how often to capture a city-state
-// frame and how many to retain. Validated as a settings slice on PUT /api/settings;
-// service-side defaults (DEFAULT_SNAPSHOT_CONFIG) fill any absent field so an
-// install with no `openWorldSnapshots` key still captures.
-export const openWorldSnapshotConfigSchema = z.object({
-  enabled: z.boolean().optional(),
-  intervalMinutes: z.number().int().min(1).max(1440).optional(),
-  maxSnapshots: z.number().int().min(10).max(100000).optional()
-});
-
 // iMessage ingestion config (#2151) — the `settings.imessage` slice. Sync is OFF
 // by default and only reads chat.db when enabled (needs macOS Full Disk Access).
 // Validated as a settings slice on PUT /api/settings; service-side DEFAULT_CONFIG
@@ -126,13 +116,6 @@ export const startTrainingRunSchema = z.object({
   // Override the caption identity-leak gate (see validateDatasetReady) and train
   // anyway — the UI sends this from the explicit "Train anyway" action.
   acknowledgeCaptionLeak: z.boolean().optional(),
-});
-
-// Query for GET /api/openworld/snapshots — `since` (ISO timestamp) and `limit`
-// (most-recent N) both arrive as strings on the query string.
-export const openWorldSnapshotsQuerySchema = z.object({
-  since: z.string().datetime().optional(),
-  limit: z.coerce.number().int().min(1).max(100000).optional()
 });
 
 // === Local LLM backends (Ollama / LM Studio) ===

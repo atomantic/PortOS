@@ -1,177 +1,103 @@
 {
   "DEFAULT_TASK_PROMPTS": {
-    "security": "8e58c1305a391ac765b0b13ab9615eb3",
-    "code-quality": "c34792a374dd9868e6381557da582dc1",
-    "test-coverage": "0d8359170529da12cd63356610b2e220",
-    "performance": "672bd3958b12afb0f382bcebb6dc3b33",
     "accessibility": "372916803f32b82da38a5b2130a54baf",
-    "console-errors": "2b6ed595287f0742bed9ecba6788afe6",
-    "dependency-updates": "1d59f04bea630a85a3085829db8599e7",
-    "documentation": "246be4932c277fa0ec0ab365beb3baad",
-    "ui-bugs": "def9ad96bd74ab397233f234d79a1974",
-    "mobile-responsive": "16d8e7f63a673a2de48994c0ac08ef3d",
-    "ux": "e03d03fc7c16faa5b5db93be2896b9ad",
-    "data-safety": "86b07f51abdbcbe7016f840b5bb0cd9b",
-    "simplify": "2a048214d1dd3b75bee9ae1a38fa1589",
-    "module-hygiene": "3b7671cd44f719d4b2116b96a279e6d0",
     "api-contract": "cf02b10a5993baf473e0d320771f26b6",
-    "react-lifecycle": "14b3816d1bcc10f0d7d6357e55cc5e69",
-    "observability": "fdb4d77df5891cfb653a5da2553ecf8a",
-    "copy": "6a0959e898d37fb4d4d7445dfc8008c9",
-    "feature-ideas": "804f62f1dadadbfa8a0bcd4aff16b2e8",
-    "plan-feature": "87f71a894757f89354da4e2119e07118",
-    "plan-task": "b85fe92999aa4ee4a8910320457c4242",
+    "branch-cleanup": "8fdeb4acc2749816a47ca318b6602721",
+    "branch-reconcile": "16479f4b64395103fd222dc9608830b1",
     "claim-issue": "78325cbcfb0e5698018fcd16b3aa8b49",
     "claim-issue-gitlab": "bb83608738b6517f3f05df116994a6fd",
     "claim-issue-jira": "b14a5dde5519fda59c2ba1ae7a3d8989",
-    "code-reviewer-review": "27ded42013f28e7d327d8f1cc624aac1",
+    "code-quality": "c34792a374dd9868e6381557da582dc1",
     "code-reviewer-implement": "2e10cac7c1e1cd021d06bfddb5c1eaf2",
-    "error-handling": "9afba2e99b90a8d5771c75e7f0615d96",
-    "typing": "1f2758ce0bb62d789a21aec241549531",
-    "release-check": "5a82eec9f86ad05185ed77a42dbfd9d4",
-    "stash-cleanup": "1c12bac5aac6bb27008c40981e7db08c",
-    "repo-sync": "0a648d35d43b023b758226b9c709c8ea",
-    "user-action-review": "945a716d446d26a03e2805d28bd1ae16",
-    "jira-sprint-manager": "3e63c8a3bdf0d5a05a30faaa2dc07980",
+    "code-reviewer-review": "27ded42013f28e7d327d8f1cc624aac1",
+    "console-errors": "2b6ed595287f0742bed9ecba6788afe6",
+    "copy": "6a0959e898d37fb4d4d7445dfc8008c9",
+    "data-safety": "86b07f51abdbcbe7016f840b5bb0cd9b",
+    "dependency-updates": "1d59f04bea630a85a3085829db8599e7",
     "do-replan": "35660eb7b43e4259a6a9253ed288a1db",
-    "jira-status-report": "9d374a9d8ccb92c5c8fd0aa9899e79a5",
-    "branch-cleanup": "8fdeb4acc2749816a47ca318b6602721",
-    "branch-reconcile": "16479f4b64395103fd222dc9608830b1",
+    "documentation": "246be4932c277fa0ec0ab365beb3baad",
+    "error-handling": "9afba2e99b90a8d5771c75e7f0615d96",
+    "feature-ideas": "804f62f1dadadbfa8a0bcd4aff16b2e8",
     "issue-reconcile": "6f33db6ad0b57c36909229694b78891a",
+    "jira-sprint-manager": "3e63c8a3bdf0d5a05a30faaa2dc07980",
+    "jira-status-report": "9d374a9d8ccb92c5c8fd0aa9899e79a5",
+    "mobile-responsive": "16d8e7f63a673a2de48994c0ac08ef3d",
+    "module-hygiene": "3b7671cd44f719d4b2116b96a279e6d0",
+    "observability": "fdb4d77df5891cfb653a5da2553ecf8a",
+    "performance": "672bd3958b12afb0f382bcebb6dc3b33",
+    "plan-feature": "87f71a894757f89354da4e2119e07118",
+    "plan-task": "b85fe92999aa4ee4a8910320457c4242",
     "pr-reviewer": "679680b3b382aeb6786df01c4d1a90c6",
-    "pr-reviewer-security": "a993798467b8d773b0e44b3e3d303bd0",
-    "pr-reviewer-eligibility": "7e35acefd33f05145544e2702d065bfd",
-    "pr-reviewer-review": "76d1d8265d4d56ae6a4c00d64e8787a8",
-    "reference-watch": "e0e20754700fb08d5159b8437d9c260b",
+    "pr-reviewer-eligibility": "ba358b2bb9380e2b7d9117969607231f",
+    "pr-reviewer-review": "913282777b12500e288d0550914999cd",
+    "pr-reviewer-security": "d1e99626b12939ee39ab38eaa7d23f59",
     "pr-watcher": "53ead8e26d396849bfa78f28550bd691",
-    "refresh-local-llm-catalog": "9741ca6a8419fcdea2743e3b64781a8b"
+    "react-lifecycle": "14b3816d1bcc10f0d7d6357e55cc5e69",
+    "reference-watch": "e0e20754700fb08d5159b8437d9c260b",
+    "refresh-local-llm-catalog": "9741ca6a8419fcdea2743e3b64781a8b",
+    "release-check": "5a82eec9f86ad05185ed77a42dbfd9d4",
+    "repo-sync": "0a648d35d43b023b758226b9c709c8ea",
+    "security": "8e58c1305a391ac765b0b13ab9615eb3",
+    "simplify": "2a048214d1dd3b75bee9ae1a38fa1589",
+    "stash-cleanup": "1c12bac5aac6bb27008c40981e7db08c",
+    "test-coverage": "0d8359170529da12cd63356610b2e220",
+    "typing": "1f2758ce0bb62d789a21aec241549531",
+    "ui-bugs": "def9ad96bd74ab397233f234d79a1974",
+    "user-action-review": "1a083430e43f60cdd586cfffbdebc583",
+    "ux": "e03d03fc7c16faa5b5db93be2896b9ad"
   },
   "PROMPT_VERSIONS": {
-    "do-replan": 2,
-    "feature-ideas": 11,
-    "plan-task": 18,
+    "accessibility": 2,
+    "api-contract": 1,
+    "branch-reconcile": 3,
     "claim-issue": 24,
     "claim-issue-gitlab": 22,
     "claim-issue-jira": 16,
-    "pr-reviewer": 4,
+    "code-quality": 3,
     "code-reviewer-a": 1,
     "code-reviewer-b": 1,
-    "reference-watch": 3,
-    "pr-watcher": 1,
-    "branch-reconcile": 3,
-    "issue-reconcile": 4,
-    "refresh-local-llm-catalog": 4,
-    "user-action-review": 1,
-    "plan-feature": 5,
-    "security": 2,
-    "code-quality": 3,
-    "test-coverage": 2,
-    "performance": 2,
-    "accessibility": 2,
     "console-errors": 2,
-    "error-handling": 2,
-    "typing": 2,
-    "dependency-updates": 4,
-    "documentation": 6,
-    "ui-bugs": 2,
-    "mobile-responsive": 2,
-    "ux": 1,
-    "data-safety": 1,
-    "simplify": 1,
-    "module-hygiene": 1,
-    "api-contract": 1,
-    "react-lifecycle": 1,
-    "observability": 1,
     "copy": 1,
-    "stash-cleanup": 2,
-    "repo-sync": 1,
-    "release-check": 13,
+    "data-safety": 1,
+    "dependency-updates": 4,
+    "do-replan": 2,
+    "documentation": 6,
+    "error-handling": 2,
+    "feature-ideas": 11,
+    "issue-reconcile": 4,
     "jira-sprint-manager": 1,
-    "jira-status-report": 1
+    "jira-status-report": 1,
+    "mobile-responsive": 2,
+    "module-hygiene": 1,
+    "observability": 1,
+    "performance": 2,
+    "plan-feature": 5,
+    "plan-task": 18,
+    "pr-reviewer": 4,
+    "pr-watcher": 1,
+    "react-lifecycle": 1,
+    "reference-watch": 3,
+    "refresh-local-llm-catalog": 4,
+    "release-check": 13,
+    "repo-sync": 1,
+    "security": 2,
+    "simplify": 1,
+    "stash-cleanup": 2,
+    "test-coverage": 2,
+    "typing": 2,
+    "ui-bugs": 2,
+    "user-action-review": 2,
+    "ux": 1
   },
   "REFERENCE_WATCH_AUDITED_VERSION": 3,
   "PREVIOUS_DEFAULT_PROMPTS": {
-    "do-replan": [
-      "59a57f1bb445138c30ab4fa23630c6f8"
+    "accessibility": [
+      "ce7377d0ac57cbf0526074cfb95e3803",
+      "b07cfe1e367411036ef1d4cc4b6e9d2e"
     ],
-    "feature-ideas": [
-      "abc098e3acf4eb6b9d1211680ec0440f",
-      "d67a9028aeb8bb8348453951f878501b",
-      "c6a399399245872401666d5c67c716cc",
-      "a4a4b4d7191ae58b82140295c3df5926",
-      "52b76c852fd00f15c50eb73ea0bc4340",
-      "5a0350fa6db8ac040fb638fdd4a31700",
-      "d076e19a6848f6452f4d1078b096ba4b",
-      "73cdc70f8d14fc909668054bbcee1259",
-      "0741418bd275b8953131155f8bc89460",
-      "d3282f16da29efe2d53595b3b34778bc"
-    ],
-    "plan-task": [
-      "4df36bed4974ff41f369c86828e7f94f",
-      "e7ff71a98468960cb4465741bd54e6aa",
-      "602b259b4d1a565a84219b3e244f0a7f",
-      "6bf6de4ca34035fcfbc09e8d98c66001",
-      "1197ece173b4fddb90f38710ee04661c",
-      "5d55c4255b557a495f79762a1deab8ba",
-      "5425306bf082b15b6a17f972557d4dd9",
-      "2189019880ee12a8ba4d7975e7afc646",
-      "dced853944c2cad8fc0c151dea71301a",
-      "8f5b69fd9336b17184e7f7989f97def5",
-      "808140457aff9ff344ddac426e0022ed",
-      "bbc5495a02102fd470d2a429eedfbe76",
-      "aa5d121b3cb25aa134e3a20e5f0186c6",
-      "2012a0da54bdbf441911a0eed05f0cb1",
-      "910802d67f3b5a785f068f4d90178543"
-    ],
-    "pr-reviewer": [
-      "9ceeed08f238b3787fc1201a0ce8e023",
-      "f64e5d8176a871304fa691df812cda61",
-      "add27b67daa6aa2c75717ac96a6bd625"
-    ],
-    "reference-watch": [
-      "f9322140bff7d3f603799c09ce468da9",
-      "722ca590fb4b6323c98850a176b9b309"
-    ],
-    "pr-watcher": [],
-    "claim-issue-jira": [
-      "496638ec099de9d57686a61a015a3c03",
-      "157cfc80c3d00bcbf3e97aae3998c372",
-      "4094d2a07cdc33179eedfaaecc2a6104",
-      "18de42dd948a14866df8acbc9668e368",
-      "3f5cc58943bc08cbbc00f836660ecdfc",
-      "97a3994ce4da2d2743bdffec110a7482",
-      "e3d1a2e884a2a49c306a586089f4f376",
-      "367c22d2587212c9c391f50d146948e8",
-      "927766326e492e4c9c2566534f465512",
-      "364ecf5feb38ec1f7ada50a7bcbf3199",
-      "52fd3506aad0b283be7234b608cf31ca",
-      "9d782972b20d6b721eb44d0673315cad",
-      "c66170bfcdee911f03e60261c4f503db",
-      "d5e2b6cf39c2acfebef9ee8e826a7e42",
-      "1407b5095c18524f02e6bf1ff45ad967"
-    ],
-    "claim-issue-gitlab": [
-      "fae92c45c89c65455930b4b06a1b88c4",
-      "271ad9c6efa9dce424103711292fd055",
-      "880dd7820ac90c689065e28cdca032fb",
-      "f85cef7bd97bd675c504655b673589d1",
-      "9a4f517a0af3200dcd54f71aa2b8d924",
-      "e01f8d7e6dd078ae94516e903ce864d1",
-      "c9888390df157b72741aafb9f2f9d8e4",
-      "d7b44882f4d47ae44d39989e29e5fe2b",
-      "4f323dddadb5c7f0047e35914ba80529",
-      "12d78a91126213f7c10e9a6725cdb464",
-      "8e8f795bb75e996b80992883983a3c08",
-      "da0a8fbb33ac274a3b2efd968e302a1a",
-      "d8fe2bf614b465ca46108ea3295d2ec5",
-      "7ff928b2560ed6bb1a96dbbc80142ed9",
-      "eed428fc96a8a58ee94d38e6e4896932",
-      "ed2c2c9c8cd6297340b3a92666cb2c5a",
-      "348ed6348b90dcc6eead03e06df049e9",
-      "1f9ec476dce71d04e588d17e72cd46c9",
-      "b5e24d2caefba4acc6fb09f6c09f2afd",
-      "745672581d766edff0ec585dd5b1ef5d",
-      "42fcfae41076d73b49050015fac0ae0e"
+    "branch-reconcile": [
+      "7ef2b5f7d8f05937d4912b26ad45f42e",
+      "ecb0621588a751b1383ecd89cf514382"
     ],
     "claim-issue": [
       "37949d1b1fa8d461a15658f8f4192d97",
@@ -198,31 +124,62 @@
       "9bf278ab141120625cd6faf854622f91",
       "688661e7e7b0b4b5af95288dd86a23e8"
     ],
-    "security": [
-      "b199739b21a8c45ed3778b2339ebf55f",
-      "d0f54c1fbe62d067b1a23ee0a9f3528c"
+    "claim-issue-gitlab": [
+      "fae92c45c89c65455930b4b06a1b88c4",
+      "271ad9c6efa9dce424103711292fd055",
+      "880dd7820ac90c689065e28cdca032fb",
+      "f85cef7bd97bd675c504655b673589d1",
+      "9a4f517a0af3200dcd54f71aa2b8d924",
+      "e01f8d7e6dd078ae94516e903ce864d1",
+      "c9888390df157b72741aafb9f2f9d8e4",
+      "d7b44882f4d47ae44d39989e29e5fe2b",
+      "4f323dddadb5c7f0047e35914ba80529",
+      "12d78a91126213f7c10e9a6725cdb464",
+      "8e8f795bb75e996b80992883983a3c08",
+      "da0a8fbb33ac274a3b2efd968e302a1a",
+      "d8fe2bf614b465ca46108ea3295d2ec5",
+      "7ff928b2560ed6bb1a96dbbc80142ed9",
+      "eed428fc96a8a58ee94d38e6e4896932",
+      "ed2c2c9c8cd6297340b3a92666cb2c5a",
+      "348ed6348b90dcc6eead03e06df049e9",
+      "1f9ec476dce71d04e588d17e72cd46c9",
+      "b5e24d2caefba4acc6fb09f6c09f2afd",
+      "745672581d766edff0ec585dd5b1ef5d",
+      "42fcfae41076d73b49050015fac0ae0e"
+    ],
+    "claim-issue-jira": [
+      "496638ec099de9d57686a61a015a3c03",
+      "157cfc80c3d00bcbf3e97aae3998c372",
+      "4094d2a07cdc33179eedfaaecc2a6104",
+      "18de42dd948a14866df8acbc9668e368",
+      "3f5cc58943bc08cbbc00f836660ecdfc",
+      "97a3994ce4da2d2743bdffec110a7482",
+      "e3d1a2e884a2a49c306a586089f4f376",
+      "367c22d2587212c9c391f50d146948e8",
+      "927766326e492e4c9c2566534f465512",
+      "364ecf5feb38ec1f7ada50a7bcbf3199",
+      "52fd3506aad0b283be7234b608cf31ca",
+      "9d782972b20d6b721eb44d0673315cad",
+      "c66170bfcdee911f03e60261c4f503db",
+      "d5e2b6cf39c2acfebef9ee8e826a7e42",
+      "1407b5095c18524f02e6bf1ff45ad967"
     ],
     "code-quality": [
       "62752723eba7a39aa94e010911923cc8",
       "b1cce8f89218844746746ceb576553c1"
     ],
-    "test-coverage": [
-      "ec70fb2b8e193b6a98bec2fbf337b190",
-      "c2b0f0dee5bc881239684e706ea88324"
-    ],
-    "performance": [
-      "c8224243c15f6897ee04be25d172f021",
-      "4fea5eb3585bdc150980934b289016bc"
-    ],
-    "accessibility": [
-      "ce7377d0ac57cbf0526074cfb95e3803",
-      "b07cfe1e367411036ef1d4cc4b6e9d2e"
+    "console-errors": [
+      "23b1a2e33cb414f27d4002b51d315e83",
+      "3e3f690729ead5e312927ae4bce330c0"
     ],
     "dependency-updates": [
       "020d66b93698341c556eca1eee851bee",
       "640a7c4214e6bdba2bbd5b9061d9d425",
       "3f461b1c111ba45b7fa5016883cfa54d",
       "7ed05444e2602f4895bdd1e5e0edcaa8"
+    ],
+    "do-replan": [
+      "59a57f1bb445138c30ab4fa23630c6f8"
     ],
     "documentation": [
       "b6540f4ba13832226fd0c85cf1955f99",
@@ -232,11 +189,70 @@
       "74aa8433896647e7815f9d6d9e4a56c8",
       "b375f95ae2274f03d06ba5ceff5705d8"
     ],
-    "ui-bugs": [
-      "01d2a7e034713195f33071f2c71a3c99"
+    "error-handling": [
+      "26225ac04f2f35feb61151b2e6474465"
+    ],
+    "feature-ideas": [
+      "abc098e3acf4eb6b9d1211680ec0440f",
+      "d67a9028aeb8bb8348453951f878501b",
+      "c6a399399245872401666d5c67c716cc",
+      "a4a4b4d7191ae58b82140295c3df5926",
+      "52b76c852fd00f15c50eb73ea0bc4340",
+      "5a0350fa6db8ac040fb638fdd4a31700",
+      "d076e19a6848f6452f4d1078b096ba4b",
+      "73cdc70f8d14fc909668054bbcee1259",
+      "0741418bd275b8953131155f8bc89460",
+      "d3282f16da29efe2d53595b3b34778bc"
+    ],
+    "issue-reconcile": [
+      "c57a39aaa118173a496f030f5878bfc1",
+      "c87d7adb57de208c069964760c9c6276",
+      "a30f5d76b980bc9016f576047c9d5bb1"
     ],
     "mobile-responsive": [
       "636bdc17fa39ed2f2e27623284c8e04c"
+    ],
+    "performance": [
+      "c8224243c15f6897ee04be25d172f021",
+      "4fea5eb3585bdc150980934b289016bc"
+    ],
+    "plan-feature": [
+      "9fbc2a2ded8f4533d1f0f6b9cb780b34",
+      "a707866783fd0d8c1037489f23ff66de",
+      "b20980c8eda2256060d09d4bca397244",
+      "3df6f0a46f2a524af1dc4f83dfdf0647"
+    ],
+    "plan-task": [
+      "4df36bed4974ff41f369c86828e7f94f",
+      "e7ff71a98468960cb4465741bd54e6aa",
+      "602b259b4d1a565a84219b3e244f0a7f",
+      "6bf6de4ca34035fcfbc09e8d98c66001",
+      "1197ece173b4fddb90f38710ee04661c",
+      "5d55c4255b557a495f79762a1deab8ba",
+      "5425306bf082b15b6a17f972557d4dd9",
+      "2189019880ee12a8ba4d7975e7afc646",
+      "dced853944c2cad8fc0c151dea71301a",
+      "8f5b69fd9336b17184e7f7989f97def5",
+      "808140457aff9ff344ddac426e0022ed",
+      "bbc5495a02102fd470d2a429eedfbe76",
+      "aa5d121b3cb25aa134e3a20e5f0186c6",
+      "2012a0da54bdbf441911a0eed05f0cb1",
+      "910802d67f3b5a785f068f4d90178543"
+    ],
+    "pr-reviewer": [
+      "9ceeed08f238b3787fc1201a0ce8e023",
+      "f64e5d8176a871304fa691df812cda61",
+      "add27b67daa6aa2c75717ac96a6bd625"
+    ],
+    "pr-watcher": [],
+    "reference-watch": [
+      "f9322140bff7d3f603799c09ce468da9",
+      "722ca590fb4b6323c98850a176b9b309"
+    ],
+    "refresh-local-llm-catalog": [
+      "525bd0077672bf2f8beec9c0124740c8",
+      "a9dce67bb9f0837ba904f3412b03637f",
+      "ca7324a0f2251a66b46ea534940c9da8"
     ],
     "release-check": [
       "655180dfbab22e11fab79072ac49c9d6",
@@ -252,38 +268,25 @@
       "64be10f6ac7bcf74d4fc257089fc179b",
       "644e5f2f6df1daf06f3792a81ba7a51a"
     ],
-    "branch-reconcile": [
-      "7ef2b5f7d8f05937d4912b26ad45f42e",
-      "ecb0621588a751b1383ecd89cf514382"
-    ],
-    "issue-reconcile": [
-      "c57a39aaa118173a496f030f5878bfc1",
-      "c87d7adb57de208c069964760c9c6276",
-      "a30f5d76b980bc9016f576047c9d5bb1"
-    ],
-    "refresh-local-llm-catalog": [
-      "525bd0077672bf2f8beec9c0124740c8",
-      "a9dce67bb9f0837ba904f3412b03637f",
-      "ca7324a0f2251a66b46ea534940c9da8"
-    ],
-    "plan-feature": [
-      "9fbc2a2ded8f4533d1f0f6b9cb780b34",
-      "a707866783fd0d8c1037489f23ff66de",
-      "b20980c8eda2256060d09d4bca397244",
-      "3df6f0a46f2a524af1dc4f83dfdf0647"
+    "security": [
+      "b199739b21a8c45ed3778b2339ebf55f",
+      "d0f54c1fbe62d067b1a23ee0a9f3528c"
     ],
     "stash-cleanup": [
       "f9de8b10937919ceb6656fbdb70179c4"
     ],
-    "console-errors": [
-      "23b1a2e33cb414f27d4002b51d315e83",
-      "3e3f690729ead5e312927ae4bce330c0"
-    ],
-    "error-handling": [
-      "26225ac04f2f35feb61151b2e6474465"
+    "test-coverage": [
+      "ec70fb2b8e193b6a98bec2fbf337b190",
+      "c2b0f0dee5bc881239684e706ea88324"
     ],
     "typing": [
       "d8fd1423cf2a523b528ed7d2d7a2bb55"
+    ],
+    "ui-bugs": [
+      "01d2a7e034713195f33071f2c71a3c99"
+    ],
+    "user-action-review": [
+      "945a716d446d26a03e2805d28bd1ae16"
     ]
   }
 }

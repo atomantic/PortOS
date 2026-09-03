@@ -181,6 +181,41 @@ export function modelAbuseContentFingerprint(kind, identity, content) {
     .digest('hex');
 }
 
+const normalizeIssueNumbers = (value) => Array.isArray(value)
+  ? [...new Set(value.filter((number) => Number.isInteger(number) && number > 0 && number <= 1_000_000))]
+    .sort((a, b) => a - b)
+    .slice(0, 50)
+  : [];
+
+/**
+ * The server-established facts the Eligibility Gate may rely on, in one
+ * validated shape. Unknown is deliberately false: a missing facts object is
+ * not approval. `maintainerTargeted` is set only by the pr-reviewer preflight
+ * for a per-PR "Review this PR" request and waives the linked-issue
+ * prerequisite; it is never inferred from PR text.
+ */
+export function normalizeEligibilityFacts(value) {
+  const facts = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return {
+    linkedIssueNumbers: normalizeIssueNumbers(facts.linkedIssueNumbers),
+    openLinkedIssueNumbers: normalizeIssueNumbers(facts.openLinkedIssueNumbers),
+    openerAssignedIssueNumbers: normalizeIssueNumbers(facts.openerAssignedIssueNumbers),
+    issueLookupComplete: facts.issueLookupComplete === true,
+    maintainerTargeted: facts.maintainerTargeted === true,
+  };
+}
+
+/**
+ * Whether the linked-open-issue prerequisite is waived for this PR. The
+ * server sets `maintainerTargeted` only for an explicit "Review this PR"
+ * request: that prerequisite bounds UNATTENDED spend on unsolicited PRs, and
+ * the request is the maintainer spending it. Both the eligibility gate and the
+ * pre-action recheck read the waiver from here so they cannot disagree.
+ */
+export function issuePrerequisiteWaived(facts) {
+  return normalizeEligibilityFacts(facts).maintainerTargeted;
+}
+
 const blockingFinding = (category, reason) => ({
   severity: 'blocking',
   category,
@@ -188,70 +223,179 @@ const blockingFinding = (category, reason) => ({
   reason
 });
 
-const hasModelTarget = (value) => /\b(?:agent|assistant|model|prompt|review(?:er)?|llm|ai)\b/i.test(value);
+// Words that address a downstream model or reviewer. Several checks below
+// require one of these NEAR the suspicious phrase, so ordinary application
+// text about agents, prompts, or payloads (this codebase is full of it) is
+// not itself a finding.
+const MODEL_TARGET_RE = /\b(?:agents?|assistants?|models?|llms?|ai|claude|codex|copilot|gemini|gpt|grok|reviewers?|bots?)\b/i;
 
 /**
- * High-confidence, content-only checks that run before the classifier. These
- * checks deliberately return generic explanations and never quote the source
+ * Code points that render as nothing, reorder what a human sees, or smuggle
+ * ASCII inside otherwise-invisible characters — a contributor cannot type these
+ * by accident, and every one of them reaches a model's tokenizer:
+ * zero-width spaces/joiners and bidi marks (U+200B–U+200F), bidi embedding /
+ * override controls (U+202A–U+202E, U+2066–U+2069 — "Trojan Source"), word
+ * joiner and invisible operators (U+2060–U+2064), line/paragraph separators
+ * (U+2028, U+2029), the BOM as a mid-text character (U+FEFF), Mongolian vowel
+ * separator and Hangul fillers (U+180E, U+115F, U+1160, U+3164, U+FFA0), the
+ * Unicode tag block used for ASCII smuggling (U+E0000–U+E007F), and the
+ * variation-selector supplement (U+E0100–U+E01EF).
+ */
+const HIDDEN_CODEPOINT_RE = /[\u115F\u1160\u180E\u200B-\u200F\u2028\u2029\u202A-\u202E\u2060-\u2064\u2066-\u2069\u3164\uFEFF\uFFA0\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu;
+
+// Emoji ZWJ sequences (family and flag emoji) legitimately contain U+200D; strip them
+// before the hidden-code-point scan so an emoji-rich changelog is not a finding.
+const EMOJI_ZWJ_SEQUENCE_RE = /\p{Extended_Pictographic}[\uFE0F\u{1F3FB}-\u{1F3FF}]*(?:\u200D\p{Extended_Pictographic}[\uFE0F\u{1F3FB}-\u{1F3FF}]*)+/gu;
+
+const formatCodePoint = (char) => `U+${char.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}`;
+const ZERO_WIDTH_JOINER = String.fromCharCode(0x200d);
+
+// Whether the joiner at `index` sits inside an emoji ZWJ sequence. Only the
+// neighborhood is tested, so the (up to 2MB) input is never copied.
+const joinerInsideEmoji = (value, index) => {
+  const around = value.slice(Math.max(0, index - 12), index + 13);
+  const offset = index - Math.max(0, index - 12);
+  return [...around.matchAll(EMOJI_ZWJ_SEQUENCE_RE)].some((m) => m.index <= offset && offset < m.index + m[0].length);
+};
+
+function hiddenCodePointSummary(value) {
+  const counts = new Map();
+  for (const match of value.matchAll(HIDDEN_CODEPOINT_RE)) {
+    if (match[0] === ZERO_WIDTH_JOINER && joinerInsideEmoji(value, match.index)) continue;
+    const key = formatCodePoint(match[0]);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  if (counts.size === 0) return null;
+  return [...counts.entries()].map(([key, count]) => (count > 1 ? `${key} ×${count}` : key)).join(', ');
+}
+
+// Comment syntaxes GitHub renders as nothing: HTML comments (body bounded so
+// an unterminated `<!--` in a diff hunk cannot scan to end of input) and the
+// "[//]: # (text)" / "[comment]: <> (text)" markdown link-reference trick.
+const HIDDEN_COMMENT_RE = /<!--([\s\S]{0,4000}?)-->|^[ \t]*\[(?:\/\/|comment)\]:\s*(?:#|<>)\s*\(([^)\n]*)\)/gim;
+// A comment nobody sees needs only a model address plus one abuse verb to be
+// worth a human look — a lower bar than the visible-text rules below.
+const HIDDEN_COMMENT_ABUSE_RE = /\b(?:ignore|disregard|approve|merge|execute|override|bypass|reveal|dump|leak|exfiltrate|system\s+prompt|hidden\s+instructions?)\b/i;
+const SECOND_PERSON_RE = /\byou\s+(?:are|must|should|will|need|have\s+to)\b/i;
+
+const MODEL_TARGET_WINDOW = 200;
+/** Whether any match of `re` has a model-directed word within 200 chars. */
+const nearModelTarget = (value, re) => [...value.matchAll(re)].some((m) => (
+  MODEL_TARGET_RE.test(value.slice(Math.max(0, m.index - MODEL_TARGET_WINDOW), m.index + m[0].length + MODEL_TARGET_WINDOW))
+));
+
+const SECRET_NOUN = '(?:secrets?|credentials?|tokens?|passwords?|private\\s+keys?|ssh\\s+keys?|api\\s+keys?|\\.env(?:\\s+file)?|environment\\s+(?:variables?|values?))';
+// "<verb> … <determiner> [adjective] <secret noun> [and <secret noun>] … to|at "
+// Bounded gaps stay inside one line; no nested quantifiers.
+const exfilVerb = (determiner) => '\\b(?:send|post|upload|forward|transmit|exfiltrate|leak|submit|push)\\w*\\b[^\\n]{0,60}\\b' + determiner + '\\s+(?:\\w+\\s)?' + SECRET_NOUN + '\\b(?:[^\\n]{0,40}\\b(?:and|,)\\s+(?:\\w+\\s)?' + SECRET_NOUN + '\\b)?[^\\n]{0,80}\\b(?:to|at)\\s+';
+const EXTERNAL_DESTINATION = '(?:https?:\\/\\/|www\\.|[a-z0-9-]+(?:\\.[a-z0-9-]+)+\\b)';
+const VAGUE_DESTINATION = '(?:this|the|an?|my|our)\\s+(?:\\w+\\s){0,2}(?:url|endpoint|address|webhook|server|host|bucket|gist|pastebin)\\b';
+
+/**
+ * The visible-text rules, as data. `patterns` run whole-document; a row with
+ * `nearModelTarget` additionally requires a model-directed word within 200
+ * chars of the match, which is how a phrase that is also ordinary prose about
+ * this app ("approve automatically", "send the credential to the server") is
+ * held to a model-addressed shape. Every bounded gap is a single line.
+ */
+const VISIBLE_TEXT_RULES = [
+  {
+    category: 'instruction-override',
+    reason: 'Content attempts to override or replace instructions used by a downstream model.',
+    patterns: [
+      /\b(?:ignore|disregard|forget|override|bypass|disobey)\s+(?:(?:all|any|the|your|every|of\s+your|my)\s+(?:(?:previous|prior|above|earlier|preceding|original|initial|system|developer|reviewer|safety|security)\s+){0,2}|(?:(?:previous|prior|above|earlier|preceding|original|initial|system|developer|reviewer|safety|security)\s+){1,2})(?:instructions?|rules?|prompts?|guidelines?|directives?|guardrails?|constraints?|polic(?:y|ies))\b/i,
+      /\b(?:system|developer)\s+(?:prompt|instructions?)\b[^\n]{0,60}\b(?:ignore|override|replace|bypass|disregard)\b/i,
+      /\byou\s+are\s+(?:now|no\s+longer)\s+(?:an?\s+|the\s+)?(?:\w+\s+){0,3}?(?:agent|assistant|model|reviewer|ai|bot|dan)\b/i,
+    ],
+  },
+  {
+    category: 'context-disclosure',
+    reason: 'Content attempts to extract private prompts, context, credentials, or local data from a downstream model.',
+    patterns: [
+      /\b(?:reveal|print|dump|show|disclose|leak|repeat|quote|output|display|echo)\w*\b[^\n]{0,60}\b(?:your\s+)?(?:system\s+prompt|developer\s+prompt|hidden\s+instructions?|initial\s+instructions?|original\s+instructions?|internal\s+instructions?)\b/i,
+      /\b(?:reveal|print|dump|show|disclose|leak|output|display|echo|exfiltrate)\w*\b[^\n]{0,40}\byour\s+(?:secrets?|credentials?|api\s+keys?|tokens?|passwords?|private\s+keys?|environment\s+variables?|\.env|ssh\s+keys?|context|memory)\b/i,
+      /\b(?:reveal|dump|disclose|leak|exfiltrate)\w*\b[^\n]{0,40}\b(?:the\s+)?(?:\.env(?:\s+file)?|environment\s+variables?|ssh\s+keys?|private\s+keys?)\b/i,
+    ],
+  },
+  {
+    category: 'encoded-instruction',
+    reason: 'Content contains an encoded or obfuscated instruction that must not reach a downstream model unchecked.',
+    patterns: [
+      /\b(?:decode|decrypt|deobfuscate|unescape|base64[-\s]?decode)\w*\b[^\n]{0,80}\b(?:follow|execute|run|obey|comply\s+with|apply|carry\s+out|act\s+on)\s+(?:the\s+|those\s+|these\s+|its\s+|them\s+as\s+|it\s+as\s+)?(?:instructions?|commands?|directives?|steps|prompts?|payload|(?:resulting|decoded)\s+(?:text|instructions?|commands?))\b/i,
+      /\b(?:base64|base\s*64|rot\s*13|hex(?:-|\s)?encoded|encoded|obfuscated|hidden|invisible|encrypted)\s+(?:instructions?|prompts?|commands?|directives?|payloads?)\b/i,
+    ],
+  },
+  {
+    category: 'download-execute',
+    reason: 'Content combines a remote-download mechanism with execution of the downloaded result.',
+    patterns: [
+      /\b(?:curl|wget|iwr|invoke-webrequest|certutil|bitsadmin)\b[^\n]{0,300}?\|\s*(?:sudo\s+)?(?:sh|bash|zsh|python3?|node|perl|pwsh|powershell)\b/i,
+      /\b(?:bash|sh|zsh)\s+-c\s+["'`$(]*\s*(?:curl|wget)\b/i,
+      /\b(?:curl|wget)\b[^\n]{0,200}\s(?:-o|-O|--output)\s[^\n]{0,120}?(?:&&|;)\s*(?:chmod\s+\+x|\.\/|sh\s|bash\s|python3?\s|node\s)/i,
+      // Prose form: "use curl to download X and run it".
+      /\b(?:curl|wget|download)\w*\b[^\n]{0,80}\b(?:and|then)\s+(?:run|execute|launch)\s+(?:it|them|the\s+(?:result|script|file|binary|output|installer))\b/i,
+    ],
+  },
+  {
+    category: 'secret-exfiltration',
+    reason: 'Content asks for credentials, private data, or environment values to be transmitted to an external destination.',
+    // An explicit external destination is a finding on its own.
+    patterns: [new RegExp(exfilVerb('(?:your|all|any|the|every)') + EXTERNAL_DESTINATION, 'i')],
+    // A vaguer destination ("the diagnostic endpoint") must address the
+    // reader's OWN secrets ("your token") with a model target nearby — so
+    // documentation of how this app's peers send the credential to the
+    // server is not one.
+    nearModelTarget: [new RegExp(exfilVerb('your') + VAGUE_DESTINATION, 'gi')],
+  },
+  {
+    category: 'reviewer-control',
+    reason: 'Content attempts to control a downstream review, approval, comment, label, or merge decision.',
+    patterns: [
+      /\b(?:you|the\s+(?:ai|automated|llm)\s+(?:reviewer|agent|assistant|model))\s+(?:must|have\s+to|need\s+to|are\s+(?:required|instructed|expected)\s+to)\s+(?:now\s+)?(?:approve|merge|accept|mark\s+(?:this|it)\s+(?:as\s+)?(?:safe|eligible|approved)|skip|ignore|bypass)\b/i,
+      /\b(?:mark|flag|treat|classify)\s+(?:this|the)\s+(?:pr|pull\s+request|change|patch|diff)\s+(?:as\s+)?(?:safe|eligible|approved|trusted|benign)\b/i,
+    ],
+    nearModelTarget: [/\b(?:approve|merge|accept|lgtm)\w*\b[^\n]{0,60}\b(?:immediately|automatically|without\s+(?:review|reading|approval|checking|running|changes|further)|regardless|no\s+matter|unconditionally|blindly)\b/gi],
+  },
+];
+
+/**
+ * High-confidence, content-only checks that run before (and, when the
+ * classifier is not installed, instead of) the classifier. They look for the
+ * two things a human reader can miss: content designed to hide from the human
+ * — invisible or direction-control code points, comments GitHub never renders
+ * — and obvious instructions that would be harmful if a model read them as
+ * its own. Every rule is shape-specific with single-line gaps, so a diff that
+ * merely mentions "payload" in one hunk and "agent" in another is not a
+ * finding. Findings carry generic explanations and never quote the source
  * text, so a finding cannot become another injection channel when displayed.
  */
 export function detectDeterministicModelAbuseSignals(value) {
   if (typeof value !== 'string' || !value) return [];
   const findings = [];
-  const add = (category, reason) => {
-    if (!findings.some((finding) => finding.category === category)) {
-      findings.push(blockingFinding(category, reason));
+
+  const hidden = hiddenCodePointSummary(value);
+  if (hidden) {
+    findings.push(blockingFinding('hidden-unicode', `Content contains invisible or direction-control Unicode (${hidden}) that a human reader would not see but a model would read.`));
+  }
+
+  const hiddenComment = [...value.matchAll(HIDDEN_COMMENT_RE)].some((match) => {
+    const body = match[1] ?? match[2] ?? '';
+    return HIDDEN_COMMENT_ABUSE_RE.test(body) && (MODEL_TARGET_RE.test(body) || SECOND_PERSON_RE.test(body));
+  });
+  if (hiddenComment) {
+    findings.push(blockingFinding('hidden-comment-instruction', 'Content hides a model-directed instruction inside a comment that the rendered pull request never shows a human.'));
+  }
+
+  for (const rule of VISIBLE_TEXT_RULES) {
+    if (
+      rule.patterns.some((re) => re.test(value))
+      || (rule.nearModelTarget || []).some((re) => nearModelTarget(value, re))
+    ) {
+      findings.push(blockingFinding(rule.category, rule.reason));
     }
-  };
-
-  if (
-    /\b(?:ignore|disregard|forget|override|bypass|disobey|replace)\b.{0,100}\b(?:previous|prior|above|system|developer|reviewer|safety|security|instructions?|rules?|prompt)\b/i.test(value)
-    || /\b(?:system|developer|reviewer)\s+(?:prompt|instructions?)\b.{0,100}\b(?:ignore|override|replace|bypass)\b/i.test(value)
-  ) {
-    add('instruction-override', 'Content attempts to override or replace instructions used by a downstream model.');
   }
 
-  const hasDownload = /\b(?:curl|wget|fetch|invoke-webrequest|certutil|bitsadmin|powershell\s+-c)\b/i.test(value);
-  const hasExecution = /\b(?:bash|sh|zsh|powershell|cmd(?:\.exe)?|python(?:3)?|node|chmod\s+\+x|execute|run|install)\b/i.test(value);
-  if (hasDownload && hasExecution) {
-    add('download-execute', 'Content combines a remote-download mechanism with instructions to execute or install the result.');
-  }
-
-  const hasExfiltration = /\b(?:exfiltrat|upload|send|post|forward|publish|leak|transmit)\w*\b/i.test(value);
-  const hasSecretTarget = /\b(?:secret|credential|token|password|private\s+key|ssh\s+key|api\s+key|environment|env(?:ironment)?\s+var|cookie|personal\s+data)\b/i.test(value);
-  if (hasExfiltration && hasSecretTarget) {
-    add('secret-exfiltration', 'Content asks a downstream model to disclose or transmit credentials, private data, or environment values.');
-  }
-
-  if (
-    /\b(?:reveal|print|dump|show|disclose|leak|repeat|quote)\w*\b.{0,100}\b(?:system\s+prompt|developer\s+prompt|hidden\s+instructions?|credentials?|secrets?|environment|private\s+files?)\b/i.test(value)
-    || /\b(?:system\s+prompt|developer\s+prompt|hidden\s+instructions?)\b.{0,100}\b(?:reveal|print|dump|show|disclose|leak)\w*\b/i.test(value)
-  ) {
-    add('context-disclosure', 'Content attempts to extract private prompts, context, credentials, or local data from a downstream model.');
-  }
-
-  if (
-    /\b(?:base64|base\s*64|hex(?:adecimal)?|rot\s*13|encoded?|decode|decrypt|obfuscat(?:e|ed|ion)|payload)\b/i.test(value)
-    && (hasModelTarget(value) || /\b(?:instruction|command|script|prompt)\w*\b/i.test(value))
-  ) {
-    add('encoded-instruction', 'Content contains an encoded or obfuscated instruction or payload that must not reach a downstream model unchecked.');
-  }
-
-  if (
-    /[\u200B-\u200D\u2060\uFEFF]/u.test(value)
-    && (hasModelTarget(value) || /\b(?:instruction|command|script|payload)\w*\b/i.test(value))
-  ) {
-    add('hidden-unicode', 'Content contains invisible Unicode alongside model-directed or executable content.');
-  }
-
-  if (
-    /\b(?:approve|approval|merge|request\s+changes|comment|label|review)\w*\b.{0,100}\b(?:automatically|without\s+(?:review|approval)|skip|bypass|force|ignore)\b/i.test(value)
-    && hasModelTarget(value)
-  ) {
-    add('reviewer-control', 'Content attempts to control a downstream review, approval, comment, label, or merge decision.');
-  }
-
-  return findings.slice(0, 8);
+  return findings;
 }
 
 function normalizeLabel(label) {

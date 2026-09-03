@@ -1,14 +1,13 @@
 /**
  * POST "what to practice next" orchestration.
  *
- * The public service re-exports this entry point. It imports the shared POST
- * helpers from that service so persistence and recommendation policy remain
- * independently testable without changing callers.
+ * Imports the shared POST helpers from the persistence service and the derived
+ * aggregates from the stats module, each named at its declaring module, so
+ * persistence and recommendation policy stay independently loadable.
  */
 import {
   getPostConfig,
   getPostSessions,
-  getPostStats,
   getMultiplicationProgress,
   getPowersProgress,
   getCognitiveProgress,
@@ -20,6 +19,7 @@ import {
   practicedTodayFromActivity,
   recentPracticeFromActivity,
 } from './meatspacePost.js';
+import { getPostStats } from './meatspacePostStats.js';
 import { orderByRecencyRotation } from '../lib/postRotation.js';
 import { MASTERY_DEFAULTS } from '../lib/postMultiplicationLadder.js';
 import { isMemoryItemEnabled, resolveTopicForDrillType } from '../lib/postTopics.js';

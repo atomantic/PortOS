@@ -34,6 +34,28 @@ describe('EmptyState', () => {
     expect(onAction).toHaveBeenCalledTimes(1);
   });
 
+  it('exposes the actionTo call to action as a link with an accessible name', () => {
+    renderWithRouter(
+      <EmptyState title="No boards yet" message="msg" actionTo="/mood-boards/new" actionLabel="Create your first board" />
+    );
+    // Role + name is the contract the converted index pages assert against —
+    // a conversion that drops actionLabel leaves a dead-end empty state.
+    const link = screen.getByRole('link', { name: 'Create your first board' });
+    expect(link.getAttribute('href')).toBe('/mood-boards/new');
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('exposes the onAction call to action as a button with an accessible name', () => {
+    const onAction = vi.fn();
+    renderWithRouter(
+      <EmptyState title="No sprites yet" message="msg" actionLabel="Create your first sprite" onAction={onAction} />
+    );
+    const btn = screen.getByRole('button', { name: 'Create your first sprite' });
+    expect(screen.queryByRole('link')).toBeNull();
+    fireEvent.click(btn);
+    expect(onAction).toHaveBeenCalledTimes(1);
+  });
+
   it('renders no action element when only a label is given', () => {
     const { container } = renderWithRouter(<EmptyState message="msg" actionLabel="Nowhere" />);
     expect(container.querySelector('a')).toBeNull();

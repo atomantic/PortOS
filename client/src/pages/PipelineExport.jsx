@@ -21,8 +21,13 @@ import {
   proseExportManuscriptUrl,
   proseExportEpubUrl,
   proseExportPdfUrl,
+  listMediaCollections,
+  listImageGallery,
+  listVideoHistory,
 } from '../services/api';
 import { useAsyncAction } from '../hooks/useAsyncAction';
+import { normalizeImage, normalizeVideo } from '../components/media/normalize';
+import AttributionList from '../components/media/AttributionList';
 
 // Kept in sync with server/lib/proseExportSettings.js (allow-lists + defaults).
 const TRIM_SIZE_OPTIONS = [
@@ -73,6 +78,7 @@ export default function PipelineExport() {
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState(emptyForm);
   const [savedForm, setSavedForm] = useState(emptyForm);
+  const [seriesAssets, setSeriesAssets] = useState([]);
 
   useEffect(() => {
     let canceled = false;
@@ -93,6 +99,34 @@ export default function PipelineExport() {
       .finally(() => { if (!canceled) setLoading(false); });
     return () => { canceled = true; };
   }, [seriesId, navigate]);
+
+  // Roll up licenses from the series media collection so a user about to
+  // publish can see the terms that applied when the pixels were made (#5638).
+  useEffect(() => {
+    let canceled = false;
+    Promise.all([
+      listMediaCollections({ silent: true }),
+      listImageGallery({ silent: true }),
+      listVideoHistory({ silent: true }),
+    ]).then(([collections, images, videos]) => {
+      if (canceled) return;
+      const list = Array.isArray(collections) ? collections : [];
+      const collection = list.find((c) => c.seriesId === seriesId || c.id === `sc-${seriesId}`);
+      if (!collection) { setSeriesAssets([]); return; }
+      const imagesByName = new Map((images || []).map((i) => [i.filename, i]));
+      const videosById = new Map((videos || []).map((v) => [v.id, v]));
+      const out = [];
+      for (const it of collection.items || []) {
+        if (it.kind === 'image' && imagesByName.has(it.ref)) {
+          out.push(normalizeImage(imagesByName.get(it.ref)));
+        } else if (it.kind === 'video' && videosById.has(it.ref)) {
+          out.push(normalizeVideo(videosById.get(it.ref)));
+        }
+      }
+      setSeriesAssets(out);
+    }).catch(() => { if (!canceled) setSeriesAssets([]); });
+    return () => { canceled = true; };
+  }, [seriesId]);
 
   const dirty = useMemo(
     () => JSON.stringify(form) !== JSON.stringify(savedForm),
@@ -269,6 +303,11 @@ export default function PipelineExport() {
           ))}
         </section>
       </div>
+
+      <AttributionList
+        records={seriesAssets}
+        className="mt-6 max-w-5xl bg-port-card border border-port-border rounded-lg px-3 py-2"
+      />
     </div>
   );
 }

@@ -16,12 +16,14 @@
  */
 
 import { Router } from 'express';
+import { logCosScheduleUpdate } from '../../services/userActionScheduleLog.js';
 import * as appsService from '../../services/apps.js';
 import { PORTOS_APP_ID } from '../../services/apps.js';
 import { sanitizeTaskMetadata, ISSUE_AUTHOR_FILTERS } from '../../lib/validation.js';
 import { listWorkItems } from '../../services/workItems.js';
 import { resolveClaimWorkMetadata, resolveClaimAuthorFilter } from '../../services/cosTaskGenerator.js';
 import { parseCronToNextRun } from '../../services/eventScheduler.js';
+import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../../services/taskScheduleConstants.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from '../../services/taskScheduleRegistry.js';
 import { summarizeOutcomeStats, computePostApprovalCompletion, computeProposalOutcomeMetrics, computeApprovalFunnel } from '../../services/layeredIntelligence.js';
@@ -47,6 +49,12 @@ router.put('/bulk-task-type/:taskType', asyncHandler(async (req, res) => {
   }
 
   const result = await appsService.bulkUpdateAppTaskTypeOverride(req.params.taskType, { enabled });
+  await logCosScheduleUpdate({
+    target: req.params.taskType,
+    patch: { enabled },
+    source: { route: `${req.baseUrl}${req.route?.path ?? ''}`, method: req.method },
+    extra: { bulk: true, appsUpdated: result.count },
+  });
   console.log(`📋 Bulk ${enabled ? 'enabled' : 'disabled'} task type ${req.params.taskType} for ${result.count} apps`);
   res.json({ success: true, taskType: req.params.taskType, enabled, appsUpdated: result.count });
 }));
@@ -189,13 +197,20 @@ router.put('/:id/task-types/all', loadApp, asyncHandler(async (req, res) => {
   if (!result) {
     throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
+  await logCosScheduleUpdate({
+    target: req.params.id,
+    patch: { enabled },
+    source: { route: `${req.baseUrl}${req.route?.path ?? ''}`, method: req.method },
+    extra: { all: true },
+  });
   console.log(`📋 ${enabled ? 'Enabled' : 'Disabled'} all task types for ${result.name}`);
   res.json({ success: true, appId: result.id, taskTypeOverrides: result.taskTypeOverrides || {} });
 }));
 
 // PUT /api/apps/:id/task-types/:taskType - Update a task type override for an app
 router.put('/:id/task-types/:taskType', asyncHandler(async (req, res) => {
-  const { enabled, interval, intervalMs, providerId, model, taskMetadata } = req.body;
+  const { enabled, intervalMs, providerId, model, taskMetadata } = req.body;
+  let { interval } = req.body;
   if (!SELF_IMPROVEMENT_TASK_TYPES.includes(req.params.taskType)) {
     throw new ServerError(`Unknown task type '${req.params.taskType}'`, { status: 400, code: 'INVALID_TASK_TYPE' });
   }
@@ -238,30 +253,45 @@ router.put('/:id/task-types/:taskType', asyncHandler(async (req, res) => {
     }
   }
 
-  // Validate interval against allowed values (also accepts 5-field cron expressions)
+  // A per-app cadence override is 'on-demand', a 5-field cron expression, or
+  // null (inherit the global). A retired name (rotation/daily/weekly/once/
+  // custom) from an older client is rewritten onto that model rather than
+  // rejected, so an install upgrading mid-session keeps working.
   if (interval !== undefined) {
-    // 'custom' pairs with a numeric intervalMs (handler-backed tasks with a
-    // sub-daily per-app cadence); the scheduler's CUSTOM branch reads intervalMs.
-    const allowedIntervals = ['rotation', 'daily', 'weekly', 'once', 'on-demand', 'custom'];
-    if (interval !== null && typeof interval === 'string') {
-      const isCron = interval.trim().split(/\s+/).length === 5;
-      if (!isCron && !allowedIntervals.includes(interval)) {
-        throw new ServerError('interval must be one of rotation|daily|weekly|once|on-demand|custom, a cron expression, or null', { status: 400, code: 'VALIDATION_ERROR' });
-      }
-      if (isCron) {
+    if (interval !== null && typeof interval !== 'string') {
+      throw new ServerError('interval must be a string or null', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    if (typeof interval === 'string') {
+      if (isCronExpression(interval)) {
         // Validate syntax and field ranges (parseCronToNextRun throws on invalid expressions)
         // Note: null return means no match within search window (e.g. leap day) -- not invalid
-        parseCronToNextRun(interval, new Date(), 'UTC');
+        parseCronToNextRun(interval.trim(), new Date(), 'UTC');
+        interval = interval.trim();
+      } else {
+        // An unrecognized string is rejected rather than decoded — silently
+        // reading it as 'on-demand' would stop the task running for this app.
+        if (!isKnownIntervalType(interval)) {
+          throw new ServerError(`interval must be '${INTERVAL_TYPES.ON_DEMAND}', a 5-field cron expression, or null`, { status: 400, code: 'VALIDATION_ERROR' });
+        }
+        const decoded = decodeIntervalType(interval, { intervalMs });
+        interval = decoded.type === INTERVAL_TYPES.CRON
+          ? decoded.cronExpression
+          : INTERVAL_TYPES.ON_DEMAND;
       }
-    } else if (interval !== null) {
-      throw new ServerError('interval must be a string or null', { status: 400, code: 'VALIDATION_ERROR' });
     }
   }
 
-  const result = await appsService.updateAppTaskTypeOverride(req.params.id, req.params.taskType, { enabled, interval, intervalMs, providerId, model, taskMetadata: sanitizedTaskMetadata });
+  const override = { enabled, interval, intervalMs, providerId, model, taskMetadata: sanitizedTaskMetadata };
+  const result = await appsService.updateAppTaskTypeOverride(req.params.id, req.params.taskType, override);
   if (!result) {
     throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
+  await logCosScheduleUpdate({
+    target: req.params.taskType,
+    patch: override,
+    source: { route: `${req.baseUrl}${req.route?.path ?? ''}`, method: req.method },
+    extra: { appId: result.id },
+  });
 
   const action = typeof enabled === 'boolean' ? (enabled ? 'Enabled' : 'Disabled') : 'Updated interval for';
   console.log(`📋 ${action} task type ${req.params.taskType} for ${result.name}`);

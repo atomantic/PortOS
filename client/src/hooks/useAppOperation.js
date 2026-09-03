@@ -80,6 +80,7 @@ export function useAppOperation({ onComplete, appId: scopeAppId } = {}) {
             type: op.type,
             steps: op.steps?.length ? op.steps : (current?.steps || []),
             error: null,
+            errorCode: null,
             completed: false
           };
         }
@@ -106,7 +107,7 @@ export function useAppOperation({ onComplete, appId: scopeAppId } = {}) {
         socket.emit('app:operations:list');
         return;
       }
-      patch(data, current => ({ ...current, error: data?.message || 'Operation failed' }));
+      patch(data, current => ({ ...current, error: data?.message || 'Operation failed', errorCode: data?.code || null }));
     };
 
     const onDone = (data) => {
@@ -158,7 +159,7 @@ export function useAppOperation({ onComplete, appId: scopeAppId } = {}) {
   const start = useCallback((type, appId, appName, options = {}) => {
     clearTimeout(clearTimersRef.current[appId]);
     delete clearTimersRef.current[appId];
-    setOperations(prev => ({ ...prev, [appId]: { appId, appName, type, steps: [], error: null, completed: false } }));
+    setOperations(prev => ({ ...prev, [appId]: { appId, appName, type, steps: [], error: null, errorCode: null, completed: false } }));
     socket.emit(type === 'update' ? 'app:update' : 'app:standardize', { appId, ...options });
   }, []);
 
@@ -176,6 +177,7 @@ export function useAppOperation({ onComplete, appId: scopeAppId } = {}) {
     isOperating: list.some(isLive),
     steps: primary?.steps || [],
     error: primary?.error ?? null,
+    errorCode: primary?.errorCode ?? null,
     completed: primary?.completed ?? false,
     operatingAppId: primary?.appId ?? null,
     operatingAppName: primary?.appName ?? null,

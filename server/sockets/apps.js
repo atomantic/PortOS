@@ -4,6 +4,8 @@ import * as appsService from '../services/apps.js';
 import { logAction } from '../services/history.js';
 import * as appUpdater from '../services/appUpdater.js';
 import * as appDeployer from '../services/appDeployer.js';
+import { checkPortosUpdatePreflight } from '../services/updatePreflight.js';
+import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import {
   appDeploySchema,
   appStandardizeSchema,
@@ -109,6 +111,26 @@ export const registerAppHandlers = (socket, io) => {
           message: `An ${inFlight.type} is already running for ${inFlight.appName}`
         });
         return;
+      }
+
+      // PortOS is itself a managed app, and updating it restarts the whole
+      // install — apply the same refusals POST /api/update/execute enforces
+      // (a live CoS agent, in-flight Persistent Mind image work, an
+      // unacknowledged fork) so App Management can't restart out from under
+      // them just because it dispatches through this socket instead (#5984).
+      // Emitted directly (not thrown) so only this error event fires — letting
+      // it fall to the outer catch below would also fire app:update:complete
+      // with success:false, which overwrites this message with a generic one
+      // client-side (useAppOperation's onDone patch).
+      if (app.id === PORTOS_APP_ID) {
+        const refusal = await checkPortosUpdatePreflight({
+          acknowledgeFork: data.acknowledgeFork === true,
+          acknowledgePersistentMindImageBackup: data.acknowledgePersistentMindImageBackup === true,
+        }).then(() => null, (err) => err);
+        if (refusal) {
+          socket.emit('app:update:error', { appId: app.id, code: refusal.code, message: refusal.message });
+          return;
+        }
       }
 
       console.log(`⬇️ Socket update started for ${app.name}`);

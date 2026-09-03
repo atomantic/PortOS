@@ -8,7 +8,7 @@ import { MAX_MONTHLY_COST } from './subscriptionSavings.js';
 import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 import { RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
 import {
-  grokVideoDurationSchema, cloudModelIdString, recordRenderPinFields, isSafeSubdirFilter,
+  grokVideoDurationSchema, cloudModelIdString, recordRenderPinFields, isSafeSubdirFilter, csvIdsParam,
 } from './sharedSchemas.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import { EFFORT_LEVELS } from './providerModels.js';
@@ -126,37 +126,6 @@ export const datadogSearchErrorsRequestSchema = z.object({
   }).optional()),
 });
 
-// Reference-repo entry. Each app can list upstream repos it watches for
-// clean-room reimplementation;
-// the `reference-watch` scheduled task fetches each one, finds commits since
-// `lastReviewedSha`, and appends slug-tagged `[ref-watch-…]` checklist items
-// to the app's PLAN.md for `/claim` / `plan-task` to pick up. `notes` is the
-// free-text "what we use from this repo" field — fed into the review prompt
-// so the agent knows which features in our app are load-bearing for the watch.
-export const referenceRepoSchema = z.object({
-  id: z.string().min(1).max(64),
-  name: z.string().min(1).max(120),
-  // Either a clonable URL (https://github.com/owner/repo or scp-style
-  // user@host:owner/repo.git) or a local filesystem path. The service
-  // detects remote URLs by matching `scheme://` or scp-style
-  // `user@host:path` (see isLocalPath in services/referenceRepos.js);
-  // anything else is treated as a local path.
-  repoUrl: z.string().min(1).max(500),
-  branch: z.string().max(120).optional().default('main'),
-  // 40-char hex SHA (case-insensitive), or null (no review yet). Validating
-  // hex here rather than just length means a bogus PATCH like 'g'.repeat(40)
-  // fails fast at the API instead of producing confusing git failures later.
-  lastReviewedSha: z.string().regex(/^[0-9a-f]{40}$/i, 'must be a 40-char hex SHA').nullable().optional(),
-  lastCheckedAt: z.string().datetime().nullable().optional(),
-  notes: z.string().max(4000).optional().default(''),
-  // Last action's outcome — used by the UI to highlight refs needing
-  // attention. 'needs-clone' means the managed clone hasn't been
-  // initialized yet (first run will populate it).
-  status: z.enum(['ok', 'checking', 'error', 'needs-clone']).optional().default('needs-clone'),
-  lastError: z.string().max(2000).nullable().optional(),
-  createdAt: z.string().datetime().optional()
-});
-
 // App schema for registration/update
 // Workspace Context (#902) — the only input is an app id (the apps-registry
 // key, or the fixed 'portos-default' baseline). Mirrors the apps-registry id
@@ -267,6 +236,10 @@ export const appSchema = z.object({
   // uiPort. See lib/tailscale-https.js for the helper apps use.
   tlsPort: z.number().int().min(1).max(65535).nullable().optional(),
   buildCommand: z.string().max(200).optional(),
+  // Explicit lifecycle hook for managed-app updates. PortOS runs its own
+  // update.sh/update.ps1; other apps must opt in instead of inheriting that
+  // lifecycle from their package.json.
+  updateCommand: z.string().trim().min(1).max(500).optional(),
   uiUrl: z.string().url().optional(),
   startCommands: z.array(z.string()).optional(),
   pm2ProcessNames: z.array(z.string()).optional(),
@@ -329,6 +302,20 @@ export const appSchema = z.object({
 // fails validation rather than slipping through and producing confusing
 // git failures downstream — matches the project convention used elsewhere
 // in this file.
+// Reference-repo entry. Each app can list upstream repos it watches for
+// clean-room reimplementation; the `reference-watch` scheduled task fetches
+// each one, finds commits since `lastReviewedSha`, and appends slug-tagged
+// `[ref-watch-…]` checklist items to the app's PLAN.md for `/claim` /
+// `plan-task` to pick up. `notes` is the free-text "what we use from this
+// repo" field — fed into the review prompt so the agent knows which features
+// in our app are load-bearing for the watch. `repoUrl` is either a clonable
+// URL (https://github.com/owner/repo or scp-style user@host:owner/repo.git)
+// or a local filesystem path; the service detects remote URLs by matching
+// `scheme://` or scp-style `user@host:path` (see isLocalPath in
+// services/referenceRepos.js) and treats anything else as a local path.
+// The persisted record's server-owned fields (id, status, lastError,
+// lastCheckedAt, lastKnownGoodSnapshot, createdAt) are stamped by
+// services/referenceRepos.js and never accepted from a request body.
 export const referenceRepoCreateSchema = z.object({
   name: z.string().trim().min(1).max(120),
   repoUrl: z.string().trim().min(1).max(500),
@@ -567,6 +554,20 @@ export const codexLoginStartSchema = z.object({
 // POST /api/providers/:id/vision-suite.
 export const providerVisionSuiteSchema = z.object({
   model: z.preprocess(emptyToUndefined, z.string().trim().min(1).max(256).optional()),
+});
+
+// POST /api/harnesses/action. Both values are TABLE KEYS, not free text: the
+// service rejects a `runtime` that names no row and an `action` outside this
+// enum before any child is spawned. This bounds the shape at the HTTP boundary
+// so a malformed query fails as a 400 rather than as a lookup miss mid-stream.
+export const harnessActionSchema = z.object({
+  runtime: z.string().trim().min(1).max(64),
+  action: z.enum(['install', 'update', 'uninstall']).optional().default('install'),
+});
+
+// POST /api/harnesses/models/refresh.
+export const harnessRefreshSchema = z.object({
+  runtime: z.string().trim().min(1).max(64),
 });
 
 // POST /api/uploads and POST /api/attachments. The shared upload helper
@@ -812,312 +813,6 @@ export const instanceFeatureIdSchema = z.enum([...INSTANCE_FEATURE_IDS]);
 
 export const instanceFeatureUpdateSchema = z.object({
   enabled: z.boolean(),
-}).strict();
-
-// =============================================================================
-// EIDOVERSE WORLD PROJECTION
-// =============================================================================
-
-// Eidoverse identities are currently name-based when no archipelago session is
-// present. Keep the PortOS-side contract deliberately conservative: names and
-// ids are durable world keys, while display metadata stays in the private
-// world log and never becomes a federation payload.
-const eidoverseWorldNameSchema = z.string().trim().min(1).max(64).regex(
-  /^[a-z0-9_-]+$/i,
-  'must contain only letters, numbers, hyphens, and underscores',
-);
-const eidoverseIdentitySchema = z.string().trim().min(1).max(64).regex(
-  /^[^\u0000-\u001f\u007f]+$/,
-  'must not contain control characters',
-);
-const eidoverseVector3Schema = z.array(z.number().finite()).length(3);
-const eidoverseAssetPathSchema = z.string().trim().min(1).max(512).refine((value) => {
-  const normalized = value.replaceAll('\\', '/');
-  return !normalized.startsWith('/')
-    && !normalized.includes('..')
-    && (/^eidoverse\//i.test(normalized) || /^store\//i.test(normalized));
-}, 'must be a relative Eidoverse library or store asset path');
-const eidoverseModelAssetOverrideSchema = eidoverseAssetPathSchema.refine((value) => (
-  (value.startsWith('eidoverse/assets/models/') && value.toLowerCase().endsWith('.glb'))
-  || /^store\/[A-Za-z0-9._/-]+$/.test(value)
-), 'must be a model-library GLB or an explicit local store asset');
-
-// These are the resource lanes that the deterministic PortOS projection may
-// materialize. Keep the list explicit: a recipe must opt into known data
-// families rather than accepting an arbitrary source key that the service
-// would not know how to sanitize.
-export const EIDOVERSE_PROJECTION_SOURCE_KEYS = Object.freeze([
-  'apps',
-  'agents',
-  'tasks',
-  'features',
-  'peers',
-  'health',
-  'productivity',
-  'activity',
-  'goals',
-  'memory',
-  'storage',
-  'jira',
-  'operations',
-]);
-
-const eidoverseProjectionIncludesSchema = z.object({
-  apps: z.boolean(),
-  agents: z.boolean(),
-  tasks: z.boolean(),
-  features: z.boolean(),
-  peers: z.boolean(),
-  health: z.boolean(),
-  productivity: z.boolean(),
-  activity: z.boolean(),
-  goals: z.boolean(),
-  memory: z.boolean(),
-  storage: z.boolean(),
-  jira: z.boolean(),
-  operations: z.boolean(),
-}).strict();
-
-const eidoverseProjectionAssetsSchema = z.object({
-  app: eidoverseAssetPathSchema,
-  agent: eidoverseAssetPathSchema,
-  task: eidoverseAssetPathSchema,
-  feature: eidoverseAssetPathSchema,
-  peer: eidoverseAssetPathSchema,
-  health: eidoverseAssetPathSchema,
-  productivity: eidoverseAssetPathSchema,
-  activity: eidoverseAssetPathSchema,
-  goal: eidoverseAssetPathSchema,
-  memory: eidoverseAssetPathSchema,
-  storage: eidoverseAssetPathSchema,
-  jira: eidoverseAssetPathSchema,
-  operations: eidoverseAssetPathSchema,
-}).strict();
-
-const eidoverseProjectionTerrainLayerSchema = z.object({
-  color: z.string().trim().min(1).max(32),
-  repeat: z.number().finite().positive().max(128),
-}).strict();
-
-const eidoverseProjectionTerrainSchema = z.object({
-  seed: z.string().trim().min(1).max(64),
-  size: z.number().finite().positive().max(512),
-  segments: z.number().int().min(2).max(512),
-  amplitude: z.number().finite().min(0).max(100),
-  flatRadius: z.number().finite().min(0).max(256),
-  layers: z.array(eidoverseProjectionTerrainLayerSchema).max(8),
-}).strict();
-
-const eidoverseProjectionRecipeV1Schema = z.object({
-  version: z.literal(1),
-  includes: eidoverseProjectionIncludesSchema,
-  limits: z.object({
-    apps: z.number().int().min(0).max(100),
-    agents: z.number().int().min(0).max(100),
-    tasks: z.number().int().min(0).max(100),
-    features: z.number().int().min(0).max(100),
-    peers: z.number().int().min(0).max(100),
-    health: z.number().int().min(0).max(100),
-    productivity: z.number().int().min(0).max(100),
-    activity: z.number().int().min(0).max(100),
-    goals: z.number().int().min(0).max(100),
-    memory: z.number().int().min(0).max(100),
-    storage: z.number().int().min(0).max(100),
-    jira: z.number().int().min(0).max(100),
-    operations: z.number().int().min(0).max(100),
-  }).strict(),
-  layout: z.object({
-    origin: eidoverseVector3Schema,
-    spacing: z.number().finite().min(2).max(100),
-    laneGap: z.number().finite().min(2).max(100),
-    columns: z.number().int().min(1).max(32),
-  }).strict(),
-  scale: z.object({
-    app: z.number().finite().positive().max(20),
-    agent: z.number().finite().positive().max(20),
-    task: z.number().finite().positive().max(20),
-    feature: z.number().finite().positive().max(20),
-    peer: z.number().finite().positive().max(20),
-    health: z.number().finite().positive().max(20),
-    productivity: z.number().finite().positive().max(20),
-    activity: z.number().finite().positive().max(20),
-    goal: z.number().finite().positive().max(20),
-    memory: z.number().finite().positive().max(20),
-    storage: z.number().finite().positive().max(20),
-    jira: z.number().finite().positive().max(20),
-    operations: z.number().finite().positive().max(20),
-  }).strict(),
-  assets: eidoverseProjectionAssetsSchema,
-  terrain: eidoverseProjectionTerrainSchema,
-}).strict();
-
-const eidoverseProjectionLimitsSchema = z.object(Object.fromEntries(
-  EIDOVERSE_PROJECTION_SOURCE_KEYS.map((key) => [key, z.number().int().min(0).max(100)]),
-)).strict();
-
-const eidoverseProjectionScaleSchema = z.object({
-  app: z.number().finite().positive().max(20),
-  agent: z.number().finite().positive().max(20),
-  task: z.number().finite().positive().max(20),
-  feature: z.number().finite().positive().max(20),
-  peer: z.number().finite().positive().max(20),
-  health: z.number().finite().positive().max(20),
-  productivity: z.number().finite().positive().max(20),
-  activity: z.number().finite().positive().max(20),
-  goal: z.number().finite().positive().max(20),
-  memory: z.number().finite().positive().max(20),
-  storage: z.number().finite().positive().max(20),
-  jira: z.number().finite().positive().max(20),
-  operations: z.number().finite().positive().max(20),
-}).strict();
-
-const eidoverseDistrictIdSchema = z.string().regex(/^[a-z0-9_-]{1,32}$/);
-
-const eidoverseAssetSlotSchema = z.object({
-  preferredPaths: z.array(eidoverseAssetPathSchema).max(8),
-  fallbackQueries: z.array(z.string().trim().min(1).max(80)).min(1).max(8),
-  requiredTokens: z.array(z.string().trim().min(1).max(40)).max(12),
-  excludedTokens: z.array(z.string().trim().min(1).max(40)).max(12),
-  maxBytes: z.number().int().positive().max(250_000_000),
-  format: z.literal('glb'),
-  animation: z.enum(['none', 'optional', 'required']),
-  sourcePolicy: z.literal('library-only'),
-  fallback: eidoverseAssetPathSchema,
-}).strict();
-
-const eidoverseAssetSlotsSchema = z.object({
-  nexus: eidoverseAssetSlotSchema,
-  app: eidoverseAssetSlotSchema,
-  agent: eidoverseAssetSlotSchema,
-  task: eidoverseAssetSlotSchema,
-  goal: eidoverseAssetSlotSchema,
-  memory: eidoverseAssetSlotSchema,
-  storage: eidoverseAssetSlotSchema,
-  peer: eidoverseAssetSlotSchema,
-  activity: eidoverseAssetSlotSchema,
-  district: eidoverseAssetSlotSchema,
-}).strict();
-
-const eidoverseResolvedAssetsSchema = z.record(z.string().trim().min(1).max(40), eidoverseAssetPathSchema)
-  .refine((assets) => Object.keys(assets).length <= 32, 'at most 32 asset slots may be configured');
-
-const eidoverseProjectionEnvironmentSchema = z.object({
-  terrain: eidoverseProjectionTerrainSchema,
-  sky: z.object({
-    system: z.literal('skymesh'),
-    hours: z.number().finite().min(0).max(24),
-    azimuth: z.number().finite().min(0).max(360),
-    sun: z.number().finite().min(0).max(2.5),
-    ambient: z.number().finite().min(0).max(2.5),
-    fill: z.number().finite().min(0).max(2.5),
-    exposure: z.number().finite().min(0.3).max(1.8),
-    fog: z.number().finite().min(0).max(3),
-    clouds: z.enum(['clear', 'cirrus', 'cumulus', 'stratus']),
-    weather: z.string().trim().min(1).max(40),
-  }).strict(),
-  grass: z.object({
-    species: z.string().trim().min(1).max(40),
-    width: z.number().finite().positive().max(256),
-    depth: z.number().finite().positive().max(256),
-    center: z.tuple([z.number().finite(), z.number().finite()]),
-    height: z.number().finite().positive().max(4),
-    color: z.string().trim().min(1).max(40),
-    density: z.number().finite().positive().max(2),
-  }).strict(),
-  lights: z.array(z.object({
-    id: z.string().regex(/^portos-design-v2-[A-Za-z0-9_-]{1,47}$/),
-    pos: eidoverseVector3Schema,
-    color: z.number().int().min(0).max(0xffffff),
-    intensity: z.number().finite().positive().max(100),
-    range: z.number().finite().positive().max(256),
-    keep: z.boolean(),
-    day: z.boolean(),
-  }).strict()).max(4),
-}).strict();
-
-const eidoverseProjectionRecipeV2Schema = z.object({
-  version: z.literal(2),
-  name: z.string().trim().min(1).max(80),
-  maxEntities: z.number().int().min(1).max(48),
-  includes: eidoverseProjectionIncludesSchema,
-  limits: eidoverseProjectionLimitsSchema,
-  scale: eidoverseProjectionScaleSchema,
-  districts: z.array(z.object({
-    id: eidoverseDistrictIdSchema,
-    label: z.string().trim().min(1).max(80),
-    direction: z.string().trim().min(1).max(40),
-    landmark: z.string().trim().min(1).max(80),
-    anchor: eidoverseVector3Schema,
-    sources: z.array(z.enum(EIDOVERSE_PROJECTION_SOURCE_KEYS)).min(1).max(8),
-    accent: z.string().regex(/^#[0-9a-f]{6}$/i),
-  }).strict()).min(1).max(12),
-  paths: z.array(z.object({
-    id: z.string().regex(/^[a-z0-9_-]{1,64}$/),
-    label: z.string().trim().min(1).max(100),
-    toDistrictId: eidoverseDistrictIdSchema,
-    nodes: z.array(eidoverseVector3Schema).min(1).max(8),
-  }).strict()).max(16),
-  environment: eidoverseProjectionEnvironmentSchema,
-  assetRecipe: z.object({ version: z.literal(2), slots: eidoverseAssetSlotsSchema }).strict(),
-  assets: eidoverseResolvedAssetsSchema,
-}).strict();
-
-export const eidoverseProjectionRecipeSchema = z.union([
-  eidoverseProjectionRecipeV1Schema,
-  eidoverseProjectionRecipeV2Schema,
-]);
-
-// This is intentionally an opaque, bounded argument bag at the HTTP boundary.
-// The PortOS service applies the narrower verb-specific checks immediately
-// before sending it to Eidoverse, which keeps this public schema forward-
-// compatible with the external world's evolving component vocabulary without
-// accepting unbounded payloads.
-const eidoverseAugmentArgsSchema = z.record(z.string().max(80), z.unknown()).superRefine((value, ctx) => {
-  if (JSON.stringify(value).length > 8192) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'arguments must be at most 8KB' });
-  }
-});
-
-export const EIDOVERSE_AUGMENT_VERBS = ['spawn', 'place', 'remove', 'comp', 'light', 'terrain', 'grass', 'sky', 'grant'];
-
-export const eidoverseWorldAugmentSchema = z.object({
-  operations: z.array(z.object({
-    verb: z.enum(EIDOVERSE_AUGMENT_VERBS),
-    args: eidoverseAugmentArgsSchema,
-  }).strict()).min(1).max(100),
-}).strict();
-
-export const eidoverseWorldSaySchema = z.object({
-  text: z.string().trim().min(1).max(2000),
-}).strict();
-
-export const eidoverseWorldConfigPatchSchema = z.object({
-  world: eidoverseWorldNameSchema.optional(),
-  humanName: eidoverseIdentitySchema.nullable().optional(),
-  humanAvatar: eidoverseAssetPathSchema.nullable().optional(),
-  cosId: eidoverseIdentitySchema.optional(),
-  cosAvatar: eidoverseAssetPathSchema.nullable().optional(),
-  cosEnabled: z.boolean().optional(),
-  recipe: eidoverseProjectionRecipeSchema.optional(),
-  assetOverrides: z.partialRecord(
-    z.enum([
-      'nexus', 'app', 'agent', 'task', 'goal', 'memory', 'storage', 'peer', 'activity', 'district',
-      // V1 used resource-kind keys. Keep accepting them so an upgraded install
-      // can round-trip its preserved custom paths while the V2 semantic slots
-      // become the preferred editing surface.
-      'feature', 'health', 'productivity', 'jira', 'operations',
-    ]),
-    eidoverseModelAssetOverrideSchema,
-  ).optional(),
-  refreshAssets: z.boolean().optional(),
-  reset: z.object({
-    scope: z.enum(['all', 'assets', 'district']),
-    districtId: eidoverseDistrictIdSchema.optional(),
-  }).strict().superRefine((value, ctx) => {
-    if (value.scope === 'district' && !value.districtId) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['districtId'], message: 'districtId is required for a district reset' });
-    }
-  }).optional(),
 }).strict();
 
 export const subdirFilterSchema = z.string()
@@ -1670,6 +1365,72 @@ export const userActionsListQuerySchema = z.object({
 });
 
 // =============================================================================
+// AGENT ACTIVITY LOG (server/routes/agentActivity.js)
+// =============================================================================
+
+// The activity log is a per-agent, per-day tree of JSON files under
+// `data/agents/activity/<agentId>/<YYYY-MM-DD>.json`. Two things follow:
+// `agentId` is interpolated into a filesystem path, so it is held to a bare
+// filename segment (`isSafeRecordId` on top of the charset, so `..` can't turn
+// a read into a traversal); and the read limits are CLAMPED here rather than in
+// the service, because every handler slices an already-loaded array — an
+// unbounded `limit` is a memory/response-size problem, not a query cost.
+const AGENT_ACTIVITY_MAX_LIMIT = 500;
+const agentActivityLimit = (defaultLimit) =>
+  z.coerce.number().int().min(1).max(AGENT_ACTIVITY_MAX_LIMIT).default(defaultLimit);
+// A blank query value (`?action=` from an unset form field) reads as absent
+// rather than as a 400 — it was `action || null` before this schema existed.
+const agentActivityAction = z.preprocess(emptyToUndefined, z.string().trim().min(1).max(64).optional());
+const agentActivityIds = csvIdsParam({ max: 50, maxIdLength: 128 });
+
+// GET /api/agents/activity
+export const agentActivityQuerySchema = z.object({
+  limit: agentActivityLimit(50),
+  agentIds: agentActivityIds,
+  action: agentActivityAction,
+}).strict();
+
+// GET /api/agents/activity/timeline — `before` is an infinite-scroll cursor the
+// client echoes back from a row's `timestamp`, so it is a full ISO instant.
+export const agentActivityTimelineQuerySchema = z.object({
+  limit: agentActivityLimit(50),
+  agentIds: agentActivityIds,
+  before: z.preprocess(emptyToUndefined, z.string().datetime().optional()),
+}).strict();
+
+export const agentActivityAgentParamsSchema = z.object({
+  agentId: z.string().trim().min(1).max(128)
+    .regex(/^[A-Za-z0-9._-]+$/, 'agentId must be alphanumeric with . _ -')
+    .refine(isSafeRecordId, 'agentId must be a bare filename segment'),
+}).strict();
+
+// GET /api/agents/activity/agent/:agentId — `date` stays a `YYYY-MM-DD` STRING
+// all the way to `getActivityFilePath`, which takes that form directly. Parsing
+// it to a Date first would re-derive the day in local time from a UTC midnight
+// and read the neighbouring file for anyone west of UTC.
+export const agentActivityAgentQuerySchema = z.object({
+  date: z.preprocess(emptyToUndefined, z.string().date().optional()),
+  limit: agentActivityLimit(100),
+  offset: z.coerce.number().int().min(0).default(0),
+  action: agentActivityAction,
+}).strict();
+
+// GET /api/agents/activity/agent/:agentId/stats — one file read per day, so the
+// window is capped at a year rather than left open.
+export const agentActivityStatsQuerySchema = z.object({
+  days: z.coerce.number().int().min(1).max(365).default(7),
+}).strict();
+
+// POST /api/agents/activity/cleanup — unlinks every activity file older than the
+// window. The floor is 1 day, NOT 0: `daysToKeep: 0` puts the cutoff at now and
+// deletes the whole archive, and a negative value reaches into future-dated
+// files. "Delete everything" is not a retention window; if it is ever wanted it
+// gets its own explicitly-named endpoint rather than riding this number.
+export const agentActivityCleanupSchema = z.object({
+  daysToKeep: z.coerce.number().int().min(1).max(3650).default(30),
+}).strict();
+
+// =============================================================================
 // CLIENT ERROR REPORT
 // =============================================================================
 
@@ -1808,6 +1569,11 @@ export const locationSettingsSchema = z.object({
   (d) => (d.lat == null) === (d.lon == null),
   { message: 'Provide both lat and lon, or neither.' },
 );
+
+// Durable "don't show this again" for the dashboard first-run card (#5640).
+// Top-level general-settings boolean — same record as timezone/location, never
+// localStorage. Absent means show; only an explicit true suppresses.
+export const hideFirstRunCardSchema = z.boolean();
 
 // Grok Imagegen settings slice (`imageGen.grok`) — the Grok Build CLI backend
 // (#2859). No model/effort knobs: grok's image tools run on xAI's fixed image
@@ -2076,3 +1842,4 @@ export * from './pipelineValidation.js';
 export * from './quotaBurnValidation.js';
 export * from './spriteValidation.js';
 export * from './agentContextValidation.js';
+export * from './eidoverseValidation.js';

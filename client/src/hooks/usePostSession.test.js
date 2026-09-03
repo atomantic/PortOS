@@ -839,6 +839,9 @@ describe('usePostSession — LLM training-log per-question breakdown (issue #211
 describe('usePostSession — refresh-safe run + idempotent submit (issue #2098)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Unstub FIRST: one case below replaces sessionStorage with a throwing stub,
+    // and a failure there would otherwise leave it installed for every test after.
+    vi.unstubAllGlobals();
     sessionStorage.clear();
   });
 
@@ -912,6 +915,37 @@ describe('usePostSession — refresh-safe run + idempotent submit (issue #2098)'
     const snap = JSON.parse(sessionStorage.getItem('post.activeRun'));
     expect(snap.state).toBe('between-drills');
     expect(snap.drillResults).toHaveLength(1);
+  });
+
+  it('keeps a training run alive when sessionStorage.setItem throws (private mode)', async () => {
+    // Safari private browsing: `sessionStorage` EXISTS, so the old
+    // `typeof sessionStorage === 'undefined'` half-guard passed and the very
+    // next setItem threw. That write runs in an effect on every drill-state
+    // change, so the throw killed the run mid-session (#5689).
+    const store = new Map();
+    vi.stubGlobal('sessionStorage', {
+      getItem: (k) => (store.has(k) ? store.get(k) : null),
+      setItem: () => { throw new DOMException('QuotaExceededError', 'QuotaExceededError'); },
+      removeItem: (k) => store.delete(k),
+      // The shared afterEach clears storage before this stub is removed.
+      clear: () => store.clear(),
+    });
+    generatePostDrill.mockResolvedValue({
+      type: 'doubling-chain', config: { startValue: 2, steps: 2 },
+      questions: [{ prompt: '2 x 2', expected: 4 }, { prompt: '4 x 2', expected: 8 }],
+    });
+
+    const { result } = renderHook(() => usePostSession());
+    await act(async () => {
+      await result.current.startSession([{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }]);
+    });
+    act(() => { result.current.submitAnswer('4'); });
+    act(() => { result.current.submitAnswer('8'); });
+
+    // The run advanced to the end despite every snapshot write failing; only
+    // refresh-resume is lost, which is exactly what an unwritable storage costs.
+    expect(result.current.state).toBe('complete');
+    expect(result.current.answers).toHaveLength(2);
   });
 
   it('restores a training run persisted mid-save for an idempotent retry', () => {

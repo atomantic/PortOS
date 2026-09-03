@@ -24,7 +24,9 @@ import RouteTabsHeader from '../ui/RouteTabsHeader';
 // own — no per-section flag to remember.
 export const TABS = [
   { id: '3d', label: '3D', to: '/models/3d' },
+  { id: 'code-reviewers', label: 'Code Reviewers', to: '/models/code-reviewers' },
   { id: 'embeddings', label: 'Embeddings', to: '/models/embeddings' },
+  { id: 'harnesses', label: 'Harnesses', to: '/models/harnesses' },
   { id: 'llms', label: 'LLMs', to: '/models/llms' },
   { id: 'loras', label: 'LoRAs', to: '/models/loras' },
   { id: 'media', label: 'Media', to: '/models/media' },

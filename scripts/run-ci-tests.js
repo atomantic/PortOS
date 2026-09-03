@@ -25,6 +25,18 @@ export function relatedInputs(sourceFiles, selectedFiles) {
   return [...new Set([...sourceFiles, ...selectedFiles])];
 }
 
+/**
+ * Vitest selector flags for this runner's slice of a full suite. `CI_SHARD` is
+ * `<index>/<count>` from the job matrix (ci.yml). A single shard passes nothing,
+ * so the one-runner invocation stays identical to a local `npm run test:ci`.
+ */
+export function shardArgs(shard) {
+  if (!shard) return [];
+  const match = /^(\d+)\/(\d+)$/.exec(shard);
+  if (!match) throw new Error(`CI_SHARD must look like <index>/<count>, got "${shard}"`);
+  return match[2] === '1' ? [] : [`--shard=${shard}`];
+}
+
 export function recordVitestDuration(scope, label, startedAt) {
   const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
   const line = `⏱ ${scope} ${label}: ${seconds}s`;
@@ -80,7 +92,9 @@ function main() {
   }
 
   if (mode === 'full') {
-    process.exit(spawnNpm(scope, 'test:ci', [], 'full suite'));
+    const shard = shardArgs(process.env.CI_SHARD);
+    const label = shard.length ? `full suite shard ${process.env.CI_SHARD}` : 'full suite';
+    process.exit(spawnNpm(scope, 'test:ci', shard, label));
   }
 
   if (mode === 'files') {

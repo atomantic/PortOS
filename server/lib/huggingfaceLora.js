@@ -21,6 +21,7 @@
 import { ServerError } from './errorHandler.js';
 import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES } from './runners.js';
 import { readResponseJson } from './readResponseJson.js';
+import { licenseFromHuggingFaceModel } from './assetProvenance.js';
 
 // Families the HF installer may stamp. Image runners plus video families —
 // the route schema and the family-override validator share this list.
@@ -358,6 +359,7 @@ export const buildHfLoraSidecar = ({ repo, revision, file, model, family, filena
     },
     previewImageUrl: null,
     source: 'huggingface',
+    license: licenseFromHuggingFaceModel(model),
     installedAt: new Date().toISOString(),
   };
 };

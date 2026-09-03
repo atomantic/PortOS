@@ -3,7 +3,7 @@ import {
   clamp, formatContextLength, formatDurationMin, formatDurationMs, formatEventDateTime, timeAgo, formatAgeDays,
   formatCooldown, formatCountdown, recommendedRamGb, parseTimeoutMs, formatDurationSec, middleTruncate,
   formatWeight, formatPercent, formatUsd, formatBytes,
-  formatDateNumeric, formatTimeOfDaySeconds, formatClockTime, formatWeekdayDate,
+  formatDateNumeric, formatTimeOfDaySeconds, formatClockTime, formatHourOfDay, formatWeekdayDate,
   formatMonthDay, formatMonthYear, formatWeekdayShort, formatWeekdayTime, formatDateFull, formatDateShort, formatDateTime,
   localDateKey, shiftISODate,
 } from './formatters.js';
@@ -525,6 +525,40 @@ describe('canonical date/time formatters (#3870)', () => {
     it('accepts an ISO string, not just a Date, and falls back on missing input', () => {
       expect(formatClockTime(at.toISOString())).toBe(formatClockTime(at));
       expect(formatClockTime(null)).toBe('');
+    });
+  });
+
+  describe('formatHourOfDay', () => {
+    // Each of the five components this replaced re-derived the noon/midnight
+    // wrap by hand; the table pins 0 → 12 AM and 12 → 12 PM for every style.
+    const cases = [
+      [0, '12 AM', '12AM', '12a', '12am'],
+      [1, '1 AM', '1AM', '1a', '1am'],
+      [11, '11 AM', '11AM', '11a', '11am'],
+      [12, '12 PM', '12PM', '12p', '12pm'],
+      [13, '1 PM', '1PM', '1p', '1pm'],
+      [23, '11 PM', '11PM', '11p', '11pm'],
+    ];
+
+    it.each(cases)('renders hour %i in every style', (hour, long, compact, tiny, lower) => {
+      expect(formatHourOfDay(hour)).toBe(long);
+      expect(formatHourOfDay(hour, { style: 'long' })).toBe(long);
+      expect(formatHourOfDay(hour, { style: 'compact' })).toBe(compact);
+      expect(formatHourOfDay(hour, { style: 'tiny' })).toBe(tiny);
+      expect(formatHourOfDay(hour, { style: 'lower' })).toBe(lower);
+    });
+
+    it('accepts a numeric string, as hour-keyed stats records supply', () => {
+      expect(formatHourOfDay('9', { style: 'compact' })).toBe('9AM');
+      expect(formatHourOfDay('15', { style: 'compact' })).toBe('3PM');
+    });
+
+    it('renders the fallback for missing or non-numeric input', () => {
+      expect(formatHourOfDay(null)).toBe('—');
+      expect(formatHourOfDay(undefined)).toBe('—');
+      expect(formatHourOfDay('')).toBe('—');
+      expect(formatHourOfDay('abc')).toBe('—');
+      expect(formatHourOfDay(null, { fallback: 'n/a' })).toBe('n/a');
     });
   });
 

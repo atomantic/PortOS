@@ -58,7 +58,7 @@ describe('ModelAbuseGuardPanel', () => {
   it('tracks each install stage separately from the chat catalog', async () => {
     await renderPanel();
 
-    expect(screen.getByText('Recommended safety layer · managed classifier')).toBeInTheDocument();
+    expect(screen.getByText('Optional second layer · managed classifier')).toBeInTheDocument();
     expect(screen.getByRole('list', { name: 'Abuse guard setup stages' })).toBeInTheDocument();
     expect(screen.getByTestId('abuse-guard-stage-huggingface-token')).toHaveAttribute('data-ready', 'true');
     expect(screen.getByTestId('abuse-guard-stage-python')).toHaveAttribute('data-ready', 'true');

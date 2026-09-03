@@ -2,7 +2,7 @@
  * Completion workflow, worktree, and sentinel prompt sections.
  */
 
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, normalizeReviewUsernames, resolveClaimReviewerConfig, buildReviewerPinNote, buildReviewerEffortNote, buildReviewWithArgs } from '../../lib/validation.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, normalizeReviewUsernames, resolveClaimReviewerConfig, buildReviewerPinNote, buildReviewerEffortNote, buildReviewWithArgs } from '../../lib/reviewerConfig.js';
 import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agentSentinel.js';
 import { canTypeSlashCommands, agentOwnsPrWorkflow } from '../../lib/slashdoInvocation.js';
 import { shellQuote } from '../../lib/shellQuote.js';
@@ -45,7 +45,12 @@ export function buildCompletionGuidelineBullet({
   isReadOnly, isTui, tuiCompletionCommand, slashdoFree = false,
   worktreeInfo, willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, discardWorktree = false, noCodeOutput = false,
   leavePrOpen = false, isPrFollowUp = false, claimFlow = false, noChangeSuccess = false, whenDone = null,
+  toolFreeReasoning = false,
 }) {
+  // Checked before every other contract: a tool-free stage cannot write a
+  // sentinel, call an API, or run a command, so any of the bullets below would
+  // send it chasing an output channel it does not have.
+  if (toolFreeReasoning) return TOOL_FREE_REASONING_BULLET;
   // A PR follow-up (review-loop or merge-only) already carries its own PRIMARY
   // OBJECTIVE section with the full procedure, and its cleanup runs with
   // `skipMerge`. The generic "your branch is merged back automatically" bullet
@@ -185,6 +190,23 @@ straight to your completion step and report that. If a PR is already **open**,
 finish/land that PR rather than opening a second one. Do NOT redo completed work,
 and do NOT revert its commits unless they are actually wrong.
 `;
+}
+
+const TOOL_FREE_REASONING_BULLET = '**You have no tools.** Do not try to run commands, read or write files, or call an API — none of that is available. Your entire deliverable is the final message of this reply: the exact JSON object described in your task instructions, and nothing after it. PortOS reads it from the transcript.';
+
+/**
+ * Completion block for a **tool-free reasoning** stage (pr-reviewer's
+ * Eligibility Gate). The CLI runs with every tool removed, so the sentinel and
+ * API-action contracts are impossible to satisfy; the only channel out is the
+ * reply itself, which PortOS parses for the task's JSON envelope.
+ */
+export function buildToolFreeReasoningCompletionSection() {
+  return [
+    '## Completion (Tool-Free Reasoning)',
+    TOOL_FREE_REASONING_BULLET,
+    '',
+    'Do not narrate a plan to apply the decision, and do not wait for anything after the JSON — the reply ends there.',
+  ].join('\n');
 }
 
 /**

@@ -61,6 +61,9 @@ vi.mock('./memoryBackend.js', () => ({
 vi.mock('./dataSync.js', () => ({
   getSnapshot: vi.fn().mockResolvedValue({ data: {}, checksum: 'abc' }),
   getChecksum: vi.fn().mockResolvedValue({ checksum: 'abc' }),
+  // null = "this category serves no manifest" (every category but `usage`),
+  // which is the signal to fetch the whole snapshot.
+  getManifest: vi.fn().mockResolvedValue(null),
   applyRemote: vi.fn().mockResolvedValue({ applied: false, count: 0 }),
   getSupportedCategories: vi.fn(() => ['goals', 'character', 'digitalTwin', 'meatspace'])
 }));
@@ -867,6 +870,128 @@ describe('syncOrchestrator', () => {
       await onPeerOnline(disabled);
       await vi.runOnlyPendingTimersAsync();
       expect(categoryUrls()).toHaveLength(0);
+    });
+  });
+
+  // #5759: `usage` is always dirty AND a map of per-instance slots, so the
+  // checksum short-circuit alone dragged every instance's digest across the
+  // wire whenever any one of them advanced.
+  describe('manifest-scoped snapshot pull (#5759)', () => {
+    const syncUrls = () => mockFetch.mock.calls.map((c) => c[0]).filter((url) => url.includes('/api/sync/'));
+    const urlFor = (leg) => syncUrls().find((url) => url.includes(`/usage/${leg}`));
+
+    // We already hold two instances; the source peer's own digest advanced.
+    const localManifest = {
+      data: { instances: { 'inst-a': '2026-09-01T10:00:00.000Z', 'inst-b': '2026-09-01T10:00:00.000Z' }, tombstones: [] },
+      checksum: 'local-manifest',
+    };
+    const remoteManifest = {
+      data: { instances: { 'inst-a': '2026-09-01T10:00:00.000Z', 'inst-b': '2026-09-01T12:00:00.000Z' }, tombstones: [] },
+      checksum: 'remote-manifest',
+      portosMeta: { portosVersion: '2.56.0', schemaVersions: {} },
+    };
+
+    let dataSync;
+    beforeEach(async () => {
+      dataSync = await import('./dataSync.js');
+      dataSync.getSupportedCategories.mockReturnValue(['usage']);
+      dataSync.getManifest.mockResolvedValue(localManifest);
+      dataSync.applyRemote.mockResolvedValue({ applied: true, count: 1 });
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/usage/checksum')) return { ok: true, json: async () => ({ checksum: 'remote-manifest' }) };
+        if (url.includes('/usage/manifest')) return { ok: true, json: async () => remoteManifest };
+        if (url.includes('/usage/snapshot')) return { ok: true, json: async () => ({ data: { instances: { 'inst-b': {} } }, checksum: 'remote-manifest' }) };
+        return { ok: true, json: async () => ({}) };
+      });
+    });
+
+    it('fetches only the slot whose capturedAt advanced', async () => {
+      await syncWithPeer({ ...mockPeer, syncCategories: { usage: true } });
+      expect(urlFor('manifest')).toBeTruthy();
+      // `inst-a` is level on both sides, so it must not ride the wire.
+      expect(urlFor('snapshot')).toContain('slots=inst-b');
+      expect(urlFor('snapshot')).not.toContain('inst-a');
+      // `?forPeer=` already opened the query string.
+      expect(urlFor('snapshot')).toContain('forPeer=our-inst-id&slots=');
+    });
+
+    it('caches the manifest checksum, not the snapshot response checksum', async () => {
+      // A digest landing between the two fetches would make the snapshot
+      // describe state we did not pull; caching that would skip it forever.
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/usage/checksum')) return { ok: true, json: async () => ({ checksum: 'remote-manifest' }) };
+        if (url.includes('/usage/manifest')) return { ok: true, json: async () => remoteManifest };
+        if (url.includes('/usage/snapshot')) return { ok: true, json: async () => ({ data: { instances: {} }, checksum: 'even-newer' }) };
+        return { ok: true, json: async () => ({}) };
+      });
+      const result = await syncWithPeer({ ...mockPeer, syncCategories: { usage: true } });
+      expect(result.usage.checksum).toBe('remote-manifest');
+    });
+
+    it('applies the tombstones without a snapshot fetch when no slot moved', async () => {
+      // A retirement advances no capturedAt, so the checksum moves and the
+      // manifest diff comes back empty — the tombstones still have to land.
+      const tombstones = [{ instanceId: 'inst-a', deletedAt: '2026-09-02T00:00:00.000Z' }];
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/usage/checksum')) return { ok: true, json: async () => ({ checksum: 'retired' }) };
+        if (url.includes('/usage/manifest')) return { ok: true, json: async () => ({ data: { instances: localManifest.data.instances, tombstones }, checksum: 'retired' }) };
+        return { ok: true, json: async () => ({}) };
+      });
+      await syncWithPeer({ ...mockPeer, syncCategories: { usage: true } });
+
+      expect(urlFor('snapshot')).toBeUndefined();
+      expect(dataSync.applyRemote).toHaveBeenCalledWith('usage', { instances: {}, tombstones }, expect.anything());
+    });
+
+    // Backward compatibility: the source peer runs the pre-manifest code and
+    // 404s the endpoint. The whole-snapshot leg is then exactly the old path.
+    it('falls back to the whole snapshot against a pre-manifest peer', async () => {
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/usage/checksum')) return { ok: true, json: async () => ({ checksum: 'remote-full' }) };
+        if (url.includes('/usage/manifest')) return { ok: false, status: 404, json: async () => ({}) };
+        if (url.includes('/usage/snapshot')) return { ok: true, json: async () => ({ data: { instances: { 'inst-a': {}, 'inst-b': {} } }, checksum: 'remote-full' }) };
+        return { ok: true, json: async () => ({}) };
+      });
+      const result = await syncWithPeer({ ...mockPeer, syncCategories: { usage: true } });
+
+      expect(urlFor('snapshot')).not.toContain('slots=');
+      expect(result.usage.checksum).toBe('remote-full');
+      expect(dataSync.applyRemote).toHaveBeenCalledWith('usage', { instances: { 'inst-a': {}, 'inst-b': {} } }, expect.anything());
+    });
+
+    // The slot cap bounds the request URL; without leaving the checksum
+    // unadvanced, the slots it dropped would sit behind a checksum that now
+    // matches and would never be fetched again.
+    it('leaves the checksum unadvanced when the diff exceeds the slot cap', async () => {
+      const { MAX_MANIFEST_SLOTS } = await import('../lib/syncManifest.js');
+      const instances = Object.fromEntries(
+        Array.from({ length: MAX_MANIFEST_SLOTS + 5 }, (_, i) => [`inst-${i}`, '2026-09-01T12:00:00.000Z']),
+      );
+      dataSync.getManifest.mockResolvedValue({ data: { instances: {}, tombstones: [] }, checksum: 'local' });
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/usage/checksum')) return { ok: true, json: async () => ({ checksum: 'wide' }) };
+        if (url.includes('/usage/manifest')) return { ok: true, json: async () => ({ data: { instances, tombstones: [] }, checksum: 'wide' }) };
+        if (url.includes('/usage/snapshot')) return { ok: true, json: async () => ({ data: { instances: {} }, checksum: 'wide' }) };
+        return { ok: true, json: async () => ({}) };
+      });
+      const result = await syncWithPeer({ ...mockPeer, syncCategories: { usage: true } });
+
+      expect(urlFor('snapshot').match(/inst-\d+/g)).toHaveLength(MAX_MANIFEST_SLOTS);
+      expect(result.usage.checksum).toBeNull();
+    });
+
+    // The other direction of the same compatibility rule: a category with no
+    // manifest must not pay for a manifest probe at all.
+    it('never probes for a manifest on a category that serves none', async () => {
+      dataSync.getSupportedCategories.mockReturnValue(['goals']);
+      dataSync.getManifest.mockResolvedValue(null);
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/goals/checksum')) return { ok: true, json: async () => ({ checksum: 'remote' }) };
+        if (url.includes('/goals/snapshot')) return { ok: true, json: async () => ({ data: { goals: [] }, checksum: 'remote' }) };
+        return { ok: true, json: async () => ({}) };
+      });
+      await syncWithPeer({ ...mockPeer, syncCategories: { goals: true } });
+      expect(syncUrls().some((url) => url.includes('/manifest'))).toBe(false);
     });
   });
 

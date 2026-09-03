@@ -49,15 +49,16 @@ router.get('/defaults', asyncHandler(async (_req, res) => {
 }))
 
 // POST /api/code-review/local — run a single review pass against the
-// configured local-LLM backend (LM Studio or Ollama) and return the findings
+// configured local-LLM backend (LM Studio, Ollama, or MTPLX) and return the findings
 // text the agent will act on. Synchronous: keeps the agent's `curl` step
 // simple — one request, one body back.
 router.post('/local', asyncHandler(async (req, res) => {
   const body = validateRequest(localReviewRequestSchema, req.body)
   const settings = await getSettings()
-  const configured = body.backend === 'lmstudio'
-    ? settings.codeReview?.lmstudioModel
-    : settings.codeReview?.ollamaModel
+  // Keyed off the roster's `<reviewer>Model` scalar rather than a per-backend
+  // branch, so a backend added to LOCAL_LLM_REVIEWERS reads its own configured
+  // model instead of silently inheriting another backend's.
+  const configured = settings.codeReview?.[`${body.backend}Model`]
   const model = body.model || configured
   // Per-request effort wins over the panel default; absent in both = omit the
   // field entirely so the model reasons however it normally would. The stored

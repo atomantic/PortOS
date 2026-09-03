@@ -22,6 +22,7 @@ const STEP_LABELS = {
   build: 'Building client',
   restart: 'Restarting PortOS',
   restarting: 'Restarting PortOS',
+  verify: 'Verifying PortOS is back',
   complete: 'Complete'
 };
 
@@ -29,6 +30,9 @@ function StepIndicator({ status }) {
   if (status === 'running') return <Loader size={14} className="text-port-accent animate-spin" />;
   if (status === 'done') return <Check size={14} className="text-port-success" />;
   if (status === 'error') return <XCircle size={14} className="text-port-error" />;
+  // The post-restart health check reports 'warning' when it could not confirm
+  // the server came back — the update finished, but the install may be down.
+  if (status === 'warning') return <AlertTriangle size={14} className="text-port-warning" />;
   return <span className="w-3.5 h-3.5 rounded-full border border-gray-600 inline-block" />;
 }
 

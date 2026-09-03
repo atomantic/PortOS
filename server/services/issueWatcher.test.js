@@ -34,6 +34,13 @@ vi.mock('./modelAbuseGuard.js', async (importOriginal) => ({
   runModelAbuseScan: (...args) => runModelAbuseScanMock(...args),
 }));
 
+const spawnPrRemediationFollowUpMock = vi.fn();
+const PR_REMEDIATION_SPAWN = { QUEUED: 'queued', ALREADY_QUEUED: 'already-queued', FAILED: 'failed' };
+vi.mock('./prRemediationFollowUp.js', () => ({
+  PR_REMEDIATION_SPAWN,
+  spawnPrRemediationFollowUp: (...args) => spawnPrRemediationFollowUpMock(...args),
+}));
+
 const apps = new Map();
 vi.mock('./apps.js', () => ({
   getAppById: vi.fn(async (id) => apps.get(id) || null),
@@ -55,6 +62,7 @@ import {
   MAX_PENDING_APPROVAL_TICKS,
   MAX_PENDING_ISSUE_COMMENT_TICKS,
 } from './issueWatcher.js';
+import { MAX_PR_REMEDIATION_ATTEMPTS } from '../lib/prHandbackPolicy.js';
 
 const APP = { id: 'app-1', name: 'Example App', repoPath: '/repos/example' };
 const DIFF = [
@@ -91,9 +99,11 @@ function pullRequest(overrides = {}) {
 }
 
 function installDefaultGhMock({
-  pr = pullRequest(), issueRows = [[]], commentRows = [[]], reviews = [[]], issueDetails = {},
+  pr = pullRequest(), issueRows = [[]], commentRows = [[]], reviews = [[]], issueDetails = {}, heldRuns = [],
 } = {}) {
   execGhMock.mockImplementation(async (args) => {
+    if (args[0] === 'api' && args.some((arg) => String(arg).includes('/actions/runs?'))) return JSON.stringify({ workflow_runs: heldRuns });
+    if (args[0] === 'api' && args.some((arg) => String(arg).includes('/actions/runs/'))) return '';
     if (args[0] === 'api' && args.includes('repos/o/r') && !args.some((arg) => String(arg).includes('/issues'))
       && !args.some((arg) => String(arg).includes('/pulls/')) && !args.some((arg) => String(arg).includes('/compare/'))) {
       return JSON.stringify({ owner: { login: 'owner', type: 'User' }, default_branch: 'main' });
@@ -331,7 +341,10 @@ describe('processTaskOutput', () => {
     expect(reviewCall).toBeTruthy();
     expect(JSON.parse(reviewCall[2].input)).toMatchObject({
       event: 'REQUEST_CHANGES',
-      comments: [{ path: 'src/example.js', line: 2, side: 'RIGHT', body: 'Validate input before this call.' }],
+      comments: [{
+        path: 'src/example.js', line: 2, side: 'RIGHT',
+        body: '⛔ **Blocking**\n\nValidate input before this call.',
+      }],
     });
     expect(mergePrMock).not.toHaveBeenCalled();
   });
@@ -448,6 +461,57 @@ describe('processTaskOutput', () => {
     expect(mergePrMock).not.toHaveBeenCalled();
   });
 
+  // The gate waived the linked-issue prerequisite for a maintainer-targeted
+  // run; the pre-action recheck must honor the same waiver, or a "Review this
+  // PR" request on a PR with no linked issue is reviewed by the model and then
+  // silently never posted.
+  it('still acts on a maintainer-targeted PR that has no linked issue', async () => {
+    installDefaultGhMock();
+    mergePrMock.mockResolvedValue({ success: true });
+    const targetedMetadata = {
+      issueWatcher: {
+        ...eligibilityMetadata.issueWatcher,
+        pullRequests: [{
+          ...eligibilityMetadata.issueWatcher.pullRequests[0],
+          eligibilityFacts: {
+            linkedIssueNumbers: [], openLinkedIssueNumbers: [], openerAssignedIssueNumbers: [],
+            issueLookupComplete: true, maintainerTargeted: true,
+          },
+        }],
+      },
+    };
+    const payload = {
+      issueComments: [],
+      pullRequests: [{
+        number: 7, headSha: 'a'.repeat(40), verdict: 'approve', summary: 'No material issues found.', findings: [],
+        rebaseRequired: false, ciPolicy: 'required',
+      }],
+    };
+
+    const result = await processTaskOutput({
+      appId: APP.id,
+      success: true,
+      payload,
+      task: { metadata: targetedMetadata },
+      requireEligibilityFacts: true,
+    });
+
+    expect(result).toMatchObject({ reviewed: 1, merged: 1 });
+    // The author identity is still rechecked.
+    targetedMetadata.issueWatcher.pullRequests[0].authorLogin = 'someone-else';
+    execGhMock.mockClear();
+    mergePrMock.mockClear();
+    const swapped = await processTaskOutput({
+      appId: APP.id,
+      success: true,
+      payload,
+      task: { metadata: targetedMetadata },
+      requireEligibilityFacts: true,
+    });
+    expect(swapped).toMatchObject({ reviewed: 0, merged: 0 });
+    expect(mergePrMock).not.toHaveBeenCalled();
+  });
+
   it('revalidates matching issue facts before approving and merging', async () => {
     installDefaultGhMock({
       issueDetails: {
@@ -505,7 +569,7 @@ describe('processTaskOutput', () => {
       event: 'APPROVE',
       comments: [{
         path: 'src/example.js', line: 2, side: 'RIGHT',
-        body: 'Consider making this helper name more specific in a follow-up.',
+        body: '💡 **Non-blocking**\n\nConsider making this helper name more specific in a follow-up.',
       }],
     });
     expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7);
@@ -638,6 +702,72 @@ describe('processTaskOutput', () => {
     expect(apps.get(APP.id).issueWatcherState.approvedPullRequests).toEqual([]);
   });
 
+  // GitHub holds a first-time fork contributor's workflow runs until a
+  // maintainer approves them. Left alone, an approved PR sits at zero checks
+  // for every sweep tick and is finally handed back as a notification — the
+  // exact hand-off the deterministic coordinator exists to make unnecessary.
+  // CI is released only AFTER the coordinator's own APPROVE, so an unreviewed
+  // or rejected PR never spends runner minutes.
+  it('approves a held workflow run after approving a fork PR, then merges once CI is green', async () => {
+    installDefaultGhMock({ pr: pullRequest({ statusCheckRollup: [] }), heldRuns: [{ id: 55 }] });
+    mergePrMock.mockResolvedValue({ success: true });
+    const payload = {
+      issueComments: [],
+      pullRequests: [{
+        number: 7, headSha: 'a'.repeat(40), verdict: 'approve', summary: 'Documentation-only and safe.', findings: [],
+        rebaseRequired: false, ciPolicy: 'required',
+      }],
+    };
+
+    const result = await processTaskOutput({ appId: APP.id, success: true, payload, task: { metadata } });
+
+    expect(result).toMatchObject({ reviewed: 1, merged: 0 });
+    const approveRun = execGhMock.mock.calls.find(([args]) => args.includes('repos/o/r/actions/runs/55/approve'));
+    expect(approveRun[0]).toContain('POST');
+    expect(mergePrMock).not.toHaveBeenCalled();
+
+    installDefaultGhMock({
+      pr: pullRequest({ statusCheckRollup: [{ conclusion: 'SUCCESS' }] }),
+      reviews: [[{ user: { login: 'owner' }, commit_id: 'a'.repeat(40), state: 'APPROVED' }]],
+    });
+    await buildTaskInput({ app: apps.get(APP.id) });
+    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7);
+  });
+
+  it('does not release CI for a PR it did not approve', async () => {
+    installDefaultGhMock({ pr: pullRequest({ statusCheckRollup: [] }), heldRuns: [{ id: 55 }] });
+    const payload = {
+      issueComments: [],
+      pullRequests: [{
+        number: 7, headSha: 'a'.repeat(40), verdict: 'request_changes', summary: 'Needs work.', findings: [],
+        rebaseRequired: false, ciPolicy: 'required',
+      }],
+    };
+
+    await processTaskOutput({ appId: APP.id, success: true, payload, task: { metadata } });
+
+    expect(execGhMock.mock.calls.some(([args]) => args.some((arg) => String(arg).includes('/actions/runs')))).toBe(false);
+  });
+
+  it('leaves a held workflow run alone when the PR edits a workflow file', async () => {
+    installDefaultGhMock({
+      pr: pullRequest({ statusCheckRollup: [], files: [{ path: '.github/workflows/ci.yml' }] }),
+      heldRuns: [{ id: 55 }],
+    });
+    const payload = {
+      issueComments: [],
+      pullRequests: [{
+        number: 7, headSha: 'a'.repeat(40), verdict: 'approve', summary: 'CI tweak.', findings: [],
+        rebaseRequired: false, ciPolicy: 'required',
+      }],
+    };
+
+    const result = await processTaskOutput({ appId: APP.id, success: true, payload, task: { metadata } });
+
+    expect(result).toMatchObject({ reviewed: 1, merged: 0 });
+    expect(execGhMock.mock.calls.some(([args]) => args.some((arg) => String(arg).includes('/actions/runs/')))).toBe(false);
+  });
+
   it('never waives an actively running check for a low-risk PR', async () => {
     installDefaultGhMock({ pr: pullRequest({ statusCheckRollup: [{ status: 'IN_PROGRESS', conclusion: null }] }) });
     const payload = {
@@ -735,6 +865,238 @@ describe('processTaskOutput', () => {
       type: 'agent_warning',
       link: pending.commentUrl,
       metadata: { appId: APP.id, issueWatcherCommentCount: 1 },
+    }));
+  });
+});
+
+// A reviewed PR the coordinator did not merge used to be left unowned: the
+// contributor got a review notification, PortOS kept polling, and the PR sat in
+// nobody's queue. These cover who picks it up.
+describe('handing back a PR the coordinator could not merge', () => {
+  const metadata = {
+    issueWatcher: {
+      cursor: '2026-08-30T02:00:00.000Z',
+      repoFullName: 'o/r',
+      issueComments: [],
+      pullRequests: [{
+        number: 7,
+        headSha: 'a'.repeat(40),
+        contentFingerprint: pullRequestContentFingerprint(pullRequest(), DIFF),
+      }],
+    },
+  };
+  const decision = (overrides = {}) => ({
+    issueComments: [],
+    pullRequests: [{
+      number: 7, headSha: 'a'.repeat(40), verdict: 'request_changes',
+      summary: 'The new call accepts untrusted input.',
+      findings: [{ path: 'src/example.js', line: 2, side: 'RIGHT', body: 'Validate input before this call.' }],
+      rebaseRequired: false, ciPolicy: 'required',
+      ...overrides,
+    }],
+  });
+  const run = (payload) => processTaskOutput({ appId: APP.id, success: true, payload, task: { metadata } });
+  const assignCalls = () => execGhMock.mock.calls
+    .filter(([args]) => args[0] === 'pr' && args[1] === 'edit' && args.includes('--add-assignee'));
+
+  const WRITABLE_FORK = { isCrossRepository: true, maintainerCanModify: true };
+  const LOCKED_FORK = { isCrossRepository: true, maintainerCanModify: false };
+
+  beforeEach(() => {
+    spawnPrRemediationFollowUpMock.mockReset();
+    spawnPrRemediationFollowUpMock.mockResolvedValue({
+      status: PR_REMEDIATION_SPAWN.QUEUED,
+      task: { id: 'sys-remediation-1' },
+    });
+  });
+
+  it('sends blocking findings to a remediation agent when the fork branch is writable', async () => {
+    installDefaultGhMock({ pr: pullRequest(WRITABLE_FORK) });
+
+    const result = await run(decision());
+
+    expect(result).toMatchObject({ reviewed: 1, merged: 0, handedBack: 1 });
+    expect(spawnPrRemediationFollowUpMock).toHaveBeenCalledWith(expect.objectContaining({
+      repoFullName: 'o/r',
+      writeAccess: 'fork-maintainer-modifiable',
+      pullRequest: expect.objectContaining({ number: 7, authorLogin: 'contributor' }),
+    }));
+    // The agent owns it now — assigning the contributor too would put the PR in
+    // two queues at once.
+    expect(assignCalls()).toHaveLength(0);
+    expect(apps.get(APP.id).issueWatcherState.prHandbacks).toEqual([
+      expect.objectContaining({ number: 7, disposition: 'remediate', attempts: 1, taskId: 'sys-remediation-1' }),
+    ]);
+  });
+
+  it('assigns the opener when the contributor did not allow maintainer edits', async () => {
+    installDefaultGhMock({ pr: pullRequest(LOCKED_FORK) });
+
+    const result = await run(decision());
+
+    expect(result).toMatchObject({ reviewed: 1, handedBack: 1 });
+    expect(spawnPrRemediationFollowUpMock).not.toHaveBeenCalled();
+    expect(assignCalls()[0][0]).toEqual(['pr', 'edit', '7', '--repo', 'github.com/o/r', '--add-assignee', 'contributor']);
+    expect(apps.get(APP.id).issueWatcherState.prHandbacks).toEqual([
+      expect.objectContaining({ number: 7, disposition: 'assign-opener', attempts: 0 }),
+    ]);
+  });
+
+  // An agent told to "implement the feedback" needs feedback it can implement.
+  // The posted review here asks the contributor to restate its findings.
+  it('assigns the opener rather than an agent when findings could not be anchored', async () => {
+    installDefaultGhMock({ pr: pullRequest(WRITABLE_FORK) });
+
+    await run(decision({
+      verdict: 'approve',
+      findings: [{ path: 'src/example.js', line: 99, side: 'RIGHT', body: 'Not a line in this diff.' }],
+    }));
+
+    expect(spawnPrRemediationFollowUpMock).not.toHaveBeenCalled();
+    expect(assignCalls()).toHaveLength(1);
+  });
+
+  it('leaves a deferred review with its opener', async () => {
+    installDefaultGhMock({ pr: pullRequest(WRITABLE_FORK) });
+
+    await run(decision({ verdict: 'defer', findings: [] }));
+
+    expect(spawnPrRemediationFollowUpMock).not.toHaveBeenCalled();
+    expect(assignCalls()).toHaveLength(1);
+  });
+
+  it('sends an approved PR with failing CI to a remediation agent', async () => {
+    installDefaultGhMock({ pr: pullRequest({ ...WRITABLE_FORK, statusCheckRollup: [{ conclusion: 'FAILURE' }] }) });
+
+    const result = await run(decision({ verdict: 'approve', findings: [] }));
+
+    expect(result).toMatchObject({ reviewed: 1, merged: 0, handedBack: 1 });
+    expect(spawnPrRemediationFollowUpMock).toHaveBeenCalledWith(expect.objectContaining({
+      reason: expect.stringContaining('CI is failing'),
+    }));
+  });
+
+  // The scheduled sweep re-observes the same PR. Without the per-revision
+  // ledger it would queue a fresh agent on every tick.
+  it('does not re-dispatch for a revision it already handed back', async () => {
+    apps.set(APP.id, {
+      ...APP,
+      issueWatcherState: {
+        prHandbacks: [{ number: 7, headSha: 'a'.repeat(40), disposition: 'remediate', attempts: 1 }],
+      },
+    });
+    installDefaultGhMock({ pr: pullRequest(WRITABLE_FORK) });
+
+    const result = await run(decision());
+
+    expect(result).toMatchObject({ reviewed: 1, handedBack: 0 });
+    expect(spawnPrRemediationFollowUpMock).not.toHaveBeenCalled();
+    expect(assignCalls()).toHaveLength(0);
+  });
+
+  it('stops spending agents on a PR that already used its attempt budget', async () => {
+    apps.set(APP.id, {
+      ...APP,
+      issueWatcherState: {
+        // A previous revision, so the per-revision guard above does not apply.
+        prHandbacks: [{ number: 7, headSha: 'c'.repeat(40), disposition: 'remediate', attempts: MAX_PR_REMEDIATION_ATTEMPTS }],
+      },
+    });
+    installDefaultGhMock({ pr: pullRequest(WRITABLE_FORK) });
+
+    await run(decision());
+
+    expect(spawnPrRemediationFollowUpMock).not.toHaveBeenCalled();
+    expect(assignCalls()).toHaveLength(1);
+  });
+
+  it('falls back to the opener when the remediation task could not be queued', async () => {
+    spawnPrRemediationFollowUpMock.mockResolvedValue({ status: PR_REMEDIATION_SPAWN.FAILED, task: null });
+    installDefaultGhMock({ pr: pullRequest(WRITABLE_FORK) });
+
+    await run(decision());
+
+    expect(assignCalls()).toHaveLength(1);
+    expect(apps.get(APP.id).issueWatcherState.prHandbacks).toEqual([
+      expect.objectContaining({ number: 7, disposition: 'assign-opener' }),
+    ]);
+  });
+
+  it('does not re-assign an opener who already holds the PR', async () => {
+    installDefaultGhMock({ pr: pullRequest({ ...LOCKED_FORK, assignees: [{ login: 'Contributor' }] }) });
+
+    await run(decision());
+
+    expect(assignCalls()).toHaveLength(0);
+  });
+
+  // An 'already queued' spawn means an agent OWNS the PR. Assigning the opener
+  // on top of it would put one PR in two queues and set a human to work against
+  // a running agent — and it must not burn an attempt, since no new agent ran.
+  it('leaves a PR with its in-flight agent instead of also assigning the opener', async () => {
+    spawnPrRemediationFollowUpMock.mockResolvedValue({
+      status: PR_REMEDIATION_SPAWN.ALREADY_QUEUED,
+      task: { id: 'sys-existing', duplicate: true },
+    });
+    installDefaultGhMock({ pr: pullRequest(WRITABLE_FORK) });
+
+    await run(decision());
+
+    expect(assignCalls()).toHaveLength(0);
+    expect(apps.get(APP.id).issueWatcherState.prHandbacks).toEqual([
+      expect.objectContaining({ number: 7, disposition: 'remediate', taskId: 'sys-existing', attempts: 0 }),
+    ]);
+  });
+
+  // The two hand-back writers (this pass and the merge poller) both own entries
+  // in this field and can be in flight together — the perpetual refill fires
+  // buildTaskInput on agent:completed, before the completing output hook has
+  // settled. A pass must merge its own entries onto whatever it lands on, never
+  // replace the field wholesale: a lost entry drops the same-revision dedup and
+  // re-spawns an agent for a PR one is already working.
+  it('merges its ledger entry onto a peer pass\' write instead of replacing it', async () => {
+    const peer = { number: 99, headSha: 'd'.repeat(40), disposition: 'remediate', attempts: 1 };
+    installDefaultGhMock({ pr: pullRequest(WRITABLE_FORK) });
+    // Land the peer entry mid-pass: after this pass seeded its tracker, before
+    // it reaches its own end-of-pass write.
+    spawnPrRemediationFollowUpMock.mockImplementation(async () => {
+      const current = apps.get(APP.id);
+      apps.set(APP.id, { ...current, issueWatcherState: { ...current.issueWatcherState, prHandbacks: [peer] } });
+      return { status: PR_REMEDIATION_SPAWN.QUEUED, task: { id: 'sys-remediation-1' } };
+    });
+
+    await run(decision());
+
+    const ledger = apps.get(APP.id).issueWatcherState.prHandbacks;
+    expect(ledger.map((entry) => entry.number).sort()).toEqual([7, 99]);
+    expect(ledger.find((entry) => entry.number === 99)).toMatchObject(peer);
+  });
+
+  it('hands over an approved PR whose merge polling ran out of ticks', async () => {
+    apps.set(APP.id, {
+      ...APP,
+      issueWatcherState: {
+        approvedPullRequests: [{
+          number: 7,
+          headSha: 'a'.repeat(40),
+          contentFingerprint: pullRequestContentFingerprint(pullRequest(WRITABLE_FORK), DIFF),
+          authorLogin: 'contributor',
+          url: 'https://github.com/o/r/pull/7',
+          ciPolicy: 'required',
+          rebaseRequired: false,
+          ticks: MAX_PENDING_APPROVAL_TICKS - 1,
+        }],
+      },
+    });
+    installDefaultGhMock({
+      pr: pullRequest({ ...WRITABLE_FORK, statusCheckRollup: [] }),
+      reviews: [[{ user: { login: 'owner' }, commit_id: 'a'.repeat(40), state: 'APPROVED' }]],
+    });
+
+    await buildTaskInput({ app: apps.get(APP.id) });
+
+    expect(spawnPrRemediationFollowUpMock).toHaveBeenCalledWith(expect.objectContaining({
+      reason: expect.stringContaining('stopped polling'),
     }));
   });
 });

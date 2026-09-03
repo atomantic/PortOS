@@ -307,3 +307,28 @@ describe('getRenderConfigForItem - video', () => {
   });
 });
 // @vitest-environment node
+
+// Render duration (#5878). The card and lightbox read `item.renderMs`, so a
+// normalizer that drops it silently removes the display with no test failure
+// anywhere else — and a non-numeric sidecar value must land as `null` rather
+// than being passed through to `formatDurationMs`.
+describe('render duration normalization', () => {
+  it('lifts a numeric renderMs off image and video records', () => {
+    expect(normalizeImage({ filename: 'a.png', renderMs: 42_000 }).renderMs).toBe(42_000);
+    expect(normalizeVideo({ id: 'v1', filename: 'a.mp4', renderMs: 42_000 }).renderMs).toBe(42_000);
+  });
+
+  it('reports null — not 0, not the raw value — when the record was never timed', () => {
+    // NaN is in this list deliberately: `typeof NaN === 'number'`, so a
+    // typeof-based guard admits it and formatDurationMs renders "NaNd NaNh".
+    for (const raw of [{}, { renderMs: null }, { renderMs: '42000' }, { renderMs: NaN }, { renderMs: Infinity }]) {
+      expect(normalizeImage({ filename: 'a.png', ...raw }).renderMs).toBeNull();
+      expect(normalizeVideo({ id: 'v1', filename: 'a.mp4', ...raw }).renderMs).toBeNull();
+    }
+  });
+
+  it('keeps renderMs out of the requeue config — it describes the past render, not the next one', () => {
+    const image = normalizeImage({ filename: 'a.png', modelId: 'flux', mode: 'local', renderMs: 42_000 });
+    expect(getRenderConfigForItem(image)).not.toHaveProperty('renderMs');
+  });
+});

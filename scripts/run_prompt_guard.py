@@ -76,8 +76,10 @@ def main() -> int:
                 return_attention_mask=True,
                 return_tensors="pt",
             )
+            # prepare_for_model returns unbatched [seq] tensors; the encoder
+            # indexes input_shape[1], so add the batch axis it expects.
             model_inputs = {
-                key: value
+                key: value.unsqueeze(0) if value.dim() == 1 else value
                 for key, value in encoded.items()
                 if key in {"input_ids", "attention_mask", "token_type_ids"}
             }

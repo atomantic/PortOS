@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router';
-import { Sparkles } from 'lucide-react';
+import { Bot, Sparkles } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import { FormField } from '../ui/FormField';
+import EmptyState from '../EmptyState';
 import * as api from '../../services/api';
 import { PERSONALITY_STYLES, DEFAULT_PERSONALITY, DEFAULT_AVATAR } from './constants';
 import { DEFAULT_AVATAR_COLOR } from '../../themes/portosThemes';
@@ -375,10 +376,13 @@ export default function AgentList() {
 
         {/* Agent Cards Grid */}
         {agents.length === 0 ? (
-          <div className="text-center py-12 text-gray-400">
-            <p className="text-lg mb-2">No agents yet</p>
-            <p className="text-sm">Create your first AI agent to get started</p>
-          </div>
+          <EmptyState
+            icon={Bot}
+            title="No agents yet"
+            message="An agent is a named personality that posts, replies, and runs on a schedule across your connected accounts."
+            actionLabel="Create your first agent"
+            onAction={() => setShowForm(true)}
+          />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {agents.map(agent => (

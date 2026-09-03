@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Network, Plus, Trash2, RefreshCw, Edit3, Check, X,
   Wifi, WifiOff, CircleDot,
@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Pill from '../components/ui/Pill';
+import EmptyState from '../components/EmptyState';
 import socket from '../services/socket';
 import {
   getInstances, updateSelfInstance, addPeer, updatePeer,
@@ -23,6 +24,7 @@ import {
 import PeerAppsList from '../components/instances/PeerAppsList';
 import PeerAgentsSection from '../components/instances/PeerAgentsSection';
 import { SchemaGapBadge } from '../components/instances/SchemaGapBadge';
+import { DEFAULT_PEER_PORT } from '../lib/ports.js';
 import PeerMediaProviderPanel from '../components/instances/PeerMediaProviderPanel';
 import UnattendedRenderRouting from '../components/instances/UnattendedRenderRouting';
 import BrainParityPanel from '../components/instances/BrainParityPanel';
@@ -202,9 +204,11 @@ function SelfCard({ self, onUpdate, syncStatus, tailnetInfo }) {
   );
 }
 
-function AddPeerForm({ onAdd }) {
+// Exported for focused tests (the port input's placeholder must advertise the
+// same default the form actually submits — see Instances.test.jsx).
+export function AddPeerForm({ onAdd, addressRef }) {
   const [address, setAddress] = useState('');
-  const [port, setPort] = useState('5555');
+  const [port, setPort] = useState(String(DEFAULT_PEER_PORT));
   const [name, setName] = useState('');
   const [showAuth, setShowAuth] = useState(false);
   const [username, setUsername] = useState('');
@@ -215,7 +219,7 @@ function AddPeerForm({ onAdd }) {
     e.preventDefault();
     if (!address.trim()) return;
     setAdding(true);
-    const data = { address: address.trim(), port: parseInt(port, 10) || 5555 };
+    const data = { address: address.trim(), port: parseInt(port, 10) || DEFAULT_PEER_PORT };
     if (name.trim()) data.name = name.trim();
     // Only attach credentials when a password was entered — username alone
     // (or neither) is treated as "no auth" by the server's sanitizer.
@@ -224,7 +228,7 @@ function AddPeerForm({ onAdd }) {
     setAdding(false);
     if (!result) return;
     setAddress('');
-    setPort('5555');
+    setPort(String(DEFAULT_PEER_PORT));
     setName('');
     setUsername('');
     setPassword('');
@@ -240,6 +244,7 @@ function AddPeerForm({ onAdd }) {
       </h3>
       <div className="flex flex-wrap gap-2">
         <input
+          ref={addressRef}
           aria-label="Peer address"
           value={address}
           onChange={e => setAddress(e.target.value)}
@@ -252,7 +257,7 @@ function AddPeerForm({ onAdd }) {
           aria-label="Peer port"
           value={port}
           onChange={e => setPort(e.target.value)}
-          placeholder="5554"
+          placeholder={String(DEFAULT_PEER_PORT)}
           type="number"
           min="1"
           max="65535"
@@ -1242,6 +1247,9 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityReport }) {
 }
 
 export default function Instances() {
+  // The Add Peer form is always on screen above the peer grid, so the empty
+  // state's call to action focuses its address field rather than opening one.
+  const peerAddressRef = useRef(null);
   const [self, setSelf] = useState(null);
   const [peers, setPeers] = useState([]);
   const [syncStatus, setSyncStatus] = useState(null);
@@ -1320,7 +1328,7 @@ export default function Instances() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <SelfCard self={self} onUpdate={fetchData} syncStatus={syncStatus} tailnetInfo={tailnetInfo} />
-        <AddPeerForm onAdd={fetchData} />
+        <AddPeerForm onAdd={fetchData} addressRef={peerAddressRef} />
       </div>
 
       {/* Outside the peer-count guard on purpose: removing the last peer must
@@ -1356,11 +1364,13 @@ export default function Instances() {
       )}
 
       {peers.length === 0 && (
-        <div className="text-center py-12 text-gray-500">
-          <Network size={48} className="mx-auto mb-4 opacity-30" />
-          <p>No peers registered yet.</p>
-          <p className="text-sm mt-1">Add a Tailscale IP address to connect to another PortOS instance.</p>
-        </div>
+        <EmptyState
+          icon={Network}
+          title="No peers registered yet"
+          message="Add another PortOS instance by its Tailscale IP address to federate records between your machines."
+          actionLabel="Add your first peer"
+          onAction={() => peerAddressRef.current?.focus()}
+        />
       )}
     </div>
   );

@@ -33,7 +33,9 @@ const FAKE_METRICS = [{ id: 'recordsCreated', label: 'Records Created', unit: 'c
 // registries were handed the SAME one (the whole point of #2676's read-once contract).
 const FAKE_READ = vi.hoisted(() => vi.fn());
 vi.mock('./jira.js', () => ({}));
-vi.mock('./cos.js', () => ({}));
+// character.js reaches cosTaskStore for the one symbol it uses (getAllTasks); syncTaskXP
+// is not exercised here, so the stub only has to satisfy the static import.
+vi.mock('./cosTaskStore.js', () => ({ getAllTasks: async () => ({ user: { tasks: [] }, cos: { tasks: [] } }) }));
 vi.mock('./characterSkills.js', () => ({
   getCharacterSkills: vi.fn(async () => FAKE_SKILLS),
 }));

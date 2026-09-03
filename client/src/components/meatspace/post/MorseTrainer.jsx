@@ -548,7 +548,7 @@ export default function MorseTrainer({ mode = null, onSelectMode, onExitMode, on
       <div className="flex items-center gap-3">
         <button
           onClick={onBack}
-          className="p-1.5 text-gray-400 hover:text-white bg-port-card border border-port-border rounded-lg transition-colors"
+          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-400 hover:text-white bg-port-card border border-port-border rounded-lg transition-colors"
           aria-label="Back"
         >
           <ArrowLeft size={16} />

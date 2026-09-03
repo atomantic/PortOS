@@ -34,14 +34,23 @@ const ACTION_CLASS = 'inline-flex items-center gap-1 px-2 py-1 rounded bg-port-a
  */
 export default function ProviderRuntimeStatus({ runtime, onInstall, optional = false, className = '' }) {
   if (!runtime) return null;
-  const { label, command, installed, installable, blockedReason, docsUrl, manageUrl } = runtime;
+  const { label, command, installed, installable, blockedReason, docsUrl, manageUrl, version } = runtime;
 
   if (installed) {
     return (
       <div className={`flex flex-wrap items-center gap-2 ${className}`}>
         <Pill tone="success" size="xs" icon={CheckCircle2} title={command ? `PortOS can run \`${command}\`.` : undefined}>
-          {label} installed
+          {label} installed{version ? ` · ${version}` : ''}
         </Pill>
+        {/* A card can say WHICH version is here, but not whether it is current or
+            how to move it — that needs the registry read and the lifecycle
+            actions the Harnesses page owns. Local-app runtimes keep their own
+            `manageUrl` (Models → LLMs). */}
+        {!manageUrl && (
+          <Link to="/models/harnesses" className="text-[11px] text-gray-500 hover:text-port-accent">
+            Manage harness
+          </Link>
+        )}
       </div>
     );
   }

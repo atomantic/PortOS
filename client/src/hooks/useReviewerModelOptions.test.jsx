@@ -29,6 +29,7 @@ const providers = [
   { id: 'grok-tui', type: 'tui', command: 'grok', models: ['stale-tui-id'] },
   { id: 'grok-cli', type: 'cli', command: 'grok', models: ['grok-configured-default', 'grok-code-fast-1'] },
   { id: 'cursor-cli', type: 'cli', command: 'cursor-agent', models: ['auto', 'gpt-5'] },
+  { id: 'mtplx', type: 'api', models: ['mtplx-qwen38-27b-optimized-speed'], defaultModel: 'mtplx-qwen38-27b-optimized-speed' },
 ];
 
 describe('useReviewerModelOptions', () => {
@@ -44,6 +45,21 @@ describe('useReviewerModelOptions', () => {
     for (const reviewer of MODEL_SELECTABLE_REVIEWERS) {
       expect(Array.isArray(result.current.optionsByReviewer[reviewer])).toBe(true);
     }
+  });
+
+  // A closed `<select>` is only honest for a backend whose installed list we
+  // actually probed. `mtplx` is a local backend we deliberately do NOT probe (its
+  // listing runs the `mtplx` wrapper, a cold-version venv bootstrap), so it must
+  // stay free-text — otherwise the user could not pin a checkpoint they pulled.
+  it('keeps every unprobed reviewer free-text, local backends included', async () => {
+    const { result } = renderHook(() => useReviewerModelOptions());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.freeText.lmstudio).toBe(false);
+    expect(result.current.freeText.ollama).toBe(false);
+    for (const reviewer of ['mtplx', 'opencode', 'kimi']) {
+      expect(result.current.freeText[reviewer], reviewer).toBe(true);
+    }
+    expect(result.current.optionsByReviewer.mtplx).toEqual(['mtplx-qwen38-27b-optimized-speed']);
   });
 
   it('publishes concrete provider defaults without exposing configured-default sentinels', async () => {

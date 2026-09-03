@@ -27,7 +27,8 @@ vi.mock('../services/settings.js', () => ({
   getSettings: () => Promise.resolve(settingsState),
 }));
 
-import { getPostProgress, getPostStats, benchmarkCompatibility, POST_BENCHMARK_PROTOCOL } from './meatspacePost.js';
+import { getPostProgress, benchmarkCompatibility, POST_BENCHMARK_PROTOCOL } from './meatspacePost.js';
+import { getPostStats } from './meatspacePostStats.js';
 import { getTrainingStats, getAllTrainingEntries } from './meatspacePostTraining.js';
 import { getUnifiedActivityStreak } from './postActivityStreak.js';
 import { postProgressQuerySchema } from '../lib/postValidation.js';

@@ -9,7 +9,11 @@ import GlbViewer from '../components/media/GlbViewer';
 import MediaImage from '../components/MediaImage';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import ImageTo3dRenderOptions from '../components/media/ImageTo3dRenderOptions';
-import { fieldsFromRun, renderOptionsBody, runWantsTransparency } from '../lib/imageTo3dRenderOptions';
+import RigPanel from '../components/media/RigPanel';
+import ArExportPanel from '../components/media/ArExportPanel';
+import {
+  fieldsFromRun, renderOptionsBody, runWantsTransparency, SUBJECT_SCALE_DEFAULT,
+} from '../lib/imageTo3dRenderOptions';
 import { imageTo3dStatusMeta } from '../components/media/imageTo3dStatus';
 import toast from '../components/ui/Toast';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -30,6 +34,10 @@ export default function Media3DDetail() {
   const [notFound, setNotFound] = useState(false);
   const [busy, setBusy] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  // The three.js graph GlbViewer has loaded, handed up so the AR panel can
+  // re-serialize the very scene on screen to USDZ. `null` until the GLB parses
+  // (and again when it unloads) — the export button stays disabled until then.
+  const [loadedScene, setLoadedScene] = useState(null);
   // Per-run knobs, seeded from the latest run once per id (NOT on every poll
   // tick — that would clobber in-progress edits). Seed stays blank by design:
   // see fieldsFromRun.
@@ -39,6 +47,7 @@ export default function Media3DDetail() {
   const [detail, setDetail] = useState('auto');
   const [alphaMode, setAlphaMode] = useState('');
   const [normalMap, setNormalMap] = useState(false);
+  const [subjectScale, setSubjectScale] = useState(SUBJECT_SCALE_DEFAULT);
   const optionsSeededFor = useRef(null);
 
   const load = useCallback(async ({ initial = false } = {}) => {
@@ -81,6 +90,7 @@ export default function Media3DDetail() {
     setDetail(fields.detail);
     setAlphaMode(fields.alphaMode);
     setNormalMap(fields.normalMap);
+    setSubjectScale(fields.subjectScale);
   }, [record]);
 
   const handleRegenerate = useCallback(async () => {
@@ -88,7 +98,7 @@ export default function Media3DDetail() {
     setBusy(true);
     const next = await generateImageTo3dModel(
       id,
-      renderOptionsBody({ steps, seed, keyBackground, detail, alphaMode, normalMap }),
+      renderOptionsBody({ steps, seed, keyBackground, detail, alphaMode, normalMap, subjectScale }),
       { silent: true },
     ).catch((err) => {
       toast.error(err?.message || 'Could not start the render.');
@@ -96,7 +106,8 @@ export default function Media3DDetail() {
     });
     if (mountedRef.current) setBusy(false);
     if (next && mountedRef.current) setRecord(next);
-  }, [busy, record?.status, id, steps, seed, keyBackground, detail, alphaMode, normalMap, mountedRef]);
+  }, [busy, record?.status, id, steps, seed, keyBackground, detail, alphaMode, normalMap,
+    subjectScale, mountedRef]);
 
   const handleDelete = useCallback(async () => {
     const ok = await deleteImageTo3dModel(id, { silent: true }).then(() => true).catch((err) => {
@@ -179,6 +190,9 @@ export default function Media3DDetail() {
           {Number.isInteger(latestRun?.seed) ? ` · seed ${latestRun.seed}` : ''}
           {Number.isInteger(latestRun?.steps) ? ` · ${latestRun.steps} steps` : ''}
           {latestRun?.sourceKeyed ? ' · background keyed' : ''}
+          {latestRun?.sourceFramed && Number.isFinite(latestRun?.subjectScale)
+            ? ` · framed at ${Math.round(latestRun.subjectScale * 100)}%`
+            : ''}
           {' '}· updated {timeAgo(record.updatedAt)}
         </p>
       </header>
@@ -201,6 +215,9 @@ export default function Media3DDetail() {
           normalMapSupported={record.supportsRenderOptions?.normalMap !== false}
           normalMap={normalMap}
           onNormalMapChange={setNormalMap}
+          subjectScale={subjectScale}
+          onSubjectScaleChange={setSubjectScale}
+          sourcePreviewUrl={record.sourceImage?.path || null}
           disabled={busy || isGenerating}
         />
       </div>
@@ -242,6 +259,7 @@ export default function Media3DDetail() {
                 src={meshSrc}
                 downloadHref={imageTo3dAssetUrl(record.id)}
                 forceOpaque={!renderedTransparent}
+                onSceneLoaded={setLoadedScene}
               />
               {/* The viewer loads the decimated GLB because that is what a browser
                   can render; the decoder's full mesh is an order of magnitude
@@ -267,6 +285,10 @@ export default function Media3DDetail() {
           )}
         </div>
       </section>
+
+      <ArExportPanel record={record} scene={loadedScene} onRecordChange={setRecord} />
+
+      <RigPanel record={record} onRecordChange={setRecord} />
     </div>
   );
 }

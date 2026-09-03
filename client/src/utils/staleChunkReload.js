@@ -1,3 +1,4 @@
+import { safeReadSession, safeWriteSession } from '../lib/safeStorage.js';
 import { sleep } from './sleep.js';
 
 // Cross-browser detection for stale dynamic-import chunk errors that happen
@@ -98,8 +99,19 @@ export const fetchServerBuildId = async () => {
 export const reloadOnceForStaleChunk = () => {
   const buildId = getCurrentBuildId();
   const flag = buildId ? `${buildId}` : '1';
-  if (sessionStorage.getItem(RELOAD_FLAG) === flag) return false;
-  sessionStorage.setItem(RELOAD_FLAG, flag);
+  // The stored flag IS the anti-loop guard, so it gets the sentinel treatment
+  // (root AGENTS.md): a storage that cannot persist must not read back as
+  // `no reload attempted yet`, which would reload on every stale-chunk error
+  // forever. Write, then read back — a mismatch means storage is unavailable
+  // (Safari private mode, blocked storage, disabled cookies) and the page stays
+  // put. The guarded helpers also keep the throw itself from taking out the very
+  // recovery path a stale bundle needs (#5689).
+  if (safeReadSession(RELOAD_FLAG) === flag) return false;
+  safeWriteSession(RELOAD_FLAG, flag);
+  if (safeReadSession(RELOAD_FLAG) !== flag) {
+    console.warn('🔄 Stale chunk detected but sessionStorage is unavailable — skipping reload to avoid a reload loop');
+    return false;
+  }
   console.warn(`🔄 Stale chunk detected (build ${buildId || 'unknown'}) — reloading to pick up new bundle`);
   // Purge the offline caches BEFORE reloading so the reload can't be handed the
   // stale shell/chunks back — but only when the server confirms a different

@@ -12,6 +12,7 @@ import {
 } from '../services/mediaJobQueue/index.js';
 import { assertMediaRoutingConfig } from '../services/federatedMedia/routingPolicy.js';
 import { assertConfiguredEidoverseInstalled, getInstanceFeatures, updateEidoverseWorldsRepo, updateEidoverseWorldsSource, updateInstanceFeature } from '../services/instanceFeatures.js';
+import { getCredentialInventory } from '../services/credentialInventory.js';
 import { installEidoverse } from '../services/eidoverse.js';
 import { ensureEidoverseHost } from '../services/eidoverseHost.js';
 import { isGitHubRepoUrl } from '../lib/repoUrl.js';
@@ -19,7 +20,7 @@ import { asyncHandler } from '../lib/errorHandler.js';
 import { isPlainObject } from '../lib/objects.js';
 import { agentContextSettingsSchema } from '../lib/agentContextValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
-import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, openWorldSnapshotConfigSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, usageApiBilledInstanceIdsSchema, validateRequest } from '../lib/validation.js';
+import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, usageApiBilledInstanceIdsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -169,6 +170,13 @@ router.get('/features', asyncHandler(async (_req, res) => {
   res.json(await getInstanceFeatures());
 }));
 
+// GET /api/settings/credentials
+// Presence + source only. Never a value or masked prefix — the page links out
+// to the existing per-integration tab to enter a secret.
+router.get('/credentials', asyncHandler(async (_req, res) => {
+  res.json(await getCredentialInventory());
+}));
+
 // POST /api/settings/features/eidoverse/install
 // Explicit consent boundary: no Eidoverse checkout or dependency install occurs
 // until the user presses Install in Settings > Features.
@@ -264,22 +272,14 @@ router.put('/', asyncHandler(async (req, res) => {
   if (req.body?.location !== undefined) {
     validateRequest(locationSettingsSchema, req.body.location);
   }
+  if (req.body?.hideFirstRunCard !== undefined) {
+    validateRequest(hideFirstRunCardSchema, req.body.hideFirstRunCard);
+  }
   if (req.body?.embeddings !== undefined) {
     validateRequest(settingsEmbeddingsSchema.partial(), req.body.embeddings);
   }
   if (req.body?.localLlm !== undefined) {
     validateRequest(localLlmSettingsSchema, req.body.localLlm);
-  }
-  // OpenWorld snapshot capture config — validate the slice when present so a
-  // malformed interval/cap can't reach disk and break the scheduler.
-  if (req.body?.openWorldSnapshots !== undefined) {
-    validateRequest(openWorldSnapshotConfigSchema.partial(), req.body.openWorldSnapshots);
-  }
-  // The settings slice predates the OpenWorld rename. Keep accepting the old
-  // property so an older client can still update capture settings safely.
-  const legacySnapshotSettingsKey = ['city', 'Snapshots'].join('');
-  if (req.body?.[legacySnapshotSettingsKey] !== undefined) {
-    validateRequest(openWorldSnapshotConfigSchema.partial(), req.body[legacySnapshotSettingsKey]);
   }
   // iMessage ingestion config (#2151) — validate the slice when present so a
   // malformed enabled/interval can't reach disk and break the sync scheduler.

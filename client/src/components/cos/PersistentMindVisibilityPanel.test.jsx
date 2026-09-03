@@ -34,7 +34,7 @@ describe('PersistentMindVisibilityPanel', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Delegated work is blocked');
     expect(screen.getByRole('link', { name: /manage permissions/i })).toHaveAttribute('href', '/cos/tools');
     expect(screen.getByRole('link', { name: /managed apps/i })).toHaveAttribute('href', '/apps');
-    expect(screen.getByRole('link', { name: /manage reviewers/i })).toHaveAttribute('href', '/settings/code-reviewers');
+    expect(screen.getByRole('link', { name: /manage reviewers/i })).toHaveAttribute('href', '/models/code-reviewers');
     expect(screen.getByRole('link', { name: /open app settings/i })).toHaveAttribute('href', '/apps/example-app/overview?edit=1&appTab=general');
   });
 

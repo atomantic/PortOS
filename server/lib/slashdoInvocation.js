@@ -58,7 +58,7 @@ export const SLASHDO_INLINE_BUDGET_CHARS = 24000;
  * prompt saving is — pruning to a single CLI reviewer measured -23% on `review`,
  * -27% on `pr`, -28% on `depfree`; the file pointer is the backstop for the rest.
  *
- * Keyed by the PortOS reviewer slug (`REVIEWER_VALUES` in `cosValidation.js`) so
+ * Keyed by the PortOS reviewer slug (`REVIEWER_VALUES` in `reviewerConfig.js`) so
  * the keep-set derives from already-resolved run settings. `copilot` and the
  * arbitrary-`@login` loop are GitHub-side; `claude`/`codex`/`antigravity`/`grok`/`cursor`
  * all share slashdo's one local-agent loop; `ollama`/`lmstudio` are the
@@ -85,14 +85,21 @@ export const SLASHDO_REVIEWER_INCLUDE_NAMES = Object.freeze(Object.values(SLASHD
 /**
  * Reviewer slugs that drive slashdo's shared local-agent (spawnable CLI) loop.
  *
- * Kept here rather than imported from cosValidation.js, which imports THIS
- * module — an import back would be a cycle. Exported so cosValidation.test.js
- * can pin it against `REVIEWER_CLI_BINARIES` (whose keys are the same roster);
- * a reviewer added to one and not the other is a drift the test catches.
+ * PortOS-only CLI reviewers (`opencode`, `kimi`) are members too: slashdo has no
+ * slug for them, but the include they'd need is the same generic spawn-a-CLI
+ * review procedure, and pruning it would leave PortOS's own inlined CLI Reviewer
+ * Procedure with nothing to point at. `lmstudio`/`mtplx` sit in
+ * LOCAL_MODEL_REVIEWERS for the same reason.
+ *
+ * Kept here rather than imported from reviewerConfig.js, whose importer
+ * cosValidation.js imports THIS module — an import back would be a cycle.
+ * Exported so reviewerConfig.test.js can pin it against `REVIEWER_CLI_BINARIES`
+ * (whose keys are the same roster); a reviewer added to one and not the other
+ * is a drift the test catches.
  */
-export const LOCAL_AGENT_REVIEWERS = new Set(['claude', 'codex', 'antigravity', 'grok', 'cursor']);
+export const LOCAL_AGENT_REVIEWERS = new Set(['claude', 'codex', 'antigravity', 'grok', 'cursor', 'opencode', 'kimi']);
 /** Reviewer slugs that drive slashdo's local-model (Ollama-style) loop. */
-const LOCAL_MODEL_REVIEWERS = new Set(['ollama', 'lmstudio']);
+const LOCAL_MODEL_REVIEWERS = new Set(['ollama', 'lmstudio', 'mtplx']);
 
 /**
  * Which reviewer-variant includes a run can never reach, given its resolved

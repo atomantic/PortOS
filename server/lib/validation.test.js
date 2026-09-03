@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  agentActivityAgentParamsSchema,
   processSchema,
   appSchema,
   appUpdateSchema,
@@ -38,6 +39,7 @@ import {
   storyboardSceneSchema,
   restoreRequestSchema,
   subdirFilterSchema,
+  eidoverseWorldConfigPatchSchema,
   isPaginationRequested,
   paginateArray,
   parseIndexParam,
@@ -564,6 +566,13 @@ describe('validation.js', () => {
       const app = { name: 'Test', repoPath: '/path', buildCommand: 123 };
       const result = appSchema.safeParse(app);
       expect(result.success).toBe(false);
+    });
+
+    it('accepts an explicit managed-app update command', () => {
+      const app = { name: 'Test', repoPath: '/path', updateCommand: 'npm run update' };
+      const result = appSchema.safeParse(app);
+      expect(result.success).toBe(true);
+      expect(result.data.updateCommand).toBe('npm run update');
     });
   });
 
@@ -1550,11 +1559,27 @@ describe('validation.js', () => {
         .toBe('--review-with ollama[qwen2.5:7b]~opt~max=1');
     });
 
-    it('never brackets copilot, a @username, or lmstudio (no slashdo slug takes one)', () => {
-      // lmstudio's model rides in the /api/code-review/local request body instead.
+    it('never brackets copilot or a @username, and drops a PortOS-only reviewer entirely', () => {
+      // lmstudio has no slashdo slug at all: emitting it would abort the command
+      // (unknown --review-with value), so it is dropped from the flag rather than
+      // bracketed. Its model rides in the /api/code-review/local request body.
       expect(buildReviewWithArgs(['copilot', 'lmstudio'], { usernames: ['Bot'], reviewerModels: {
         copilot: 'x', lmstudio: 'local-a', '@Bot': 'y',
-      } })).toBe('--review-with copilot,lmstudio,@Bot');
+      } })).toBe('--review-with copilot,@Bot');
+    });
+
+    it('still emits the copilot flag when a PortOS-only reviewer rides alongside it', () => {
+      // Suppression hands `--review-with` to the host's saved slashdo defaults.
+      // That is right for a bare default copilot (#2507) and wrong here: the user
+      // chose this pair, and only lmstudio's slug is unemittable.
+      expect(buildReviewWithArgs(['lmstudio', 'copilot'])).toBe('--review-with copilot');
+    });
+
+    it('emits no flag at all when every configured reviewer is PortOS-only', () => {
+      // `--review-with` with an empty value is as fatal to slashdo as an unknown
+      // slug; the surrounding prompt still names the reviewers and the Local
+      // Reviewer Procedure that runs them.
+      expect(buildReviewWithArgs(['mtplx', 'opencode'])).toBe('');
     });
 
     it('does not let a stray copilot pin force the suppressed lone-default flag on', () => {
@@ -2275,6 +2300,30 @@ describe('ad-hoc route schemas (#2521)', () => {
       expect(telegramForwardTypesSchema.safeParse({ forwardTypes: 'digest' }).success).toBe(false);
       expect(telegramForwardTypesSchema.safeParse({ forwardTypes: [1, 2] }).success).toBe(false);
       expect(telegramForwardTypesSchema.safeParse({}).success).toBe(false);
+    });
+  });
+
+  // Pins the transitional re-export added by the #5698 Eidoverse split: the
+  // schemas live in eidoverseValidation.js but must keep resolving through
+  // validation.js so no consumer has to change its import specifier.
+  describe('transitional eidoverse re-export', () => {
+    it('resolves eidoverseWorldConfigPatchSchema through validation.js', () => {
+      expect(typeof eidoverseWorldConfigPatchSchema?.safeParse).toBe('function');
+      expect(eidoverseWorldConfigPatchSchema.safeParse({ cosEnabled: true }).success).toBe(true);
+      expect(eidoverseWorldConfigPatchSchema.safeParse({ notAField: 1 }).success).toBe(false);
+    });
+  });
+
+  // The activity log builds a file path out of this id, so the schema — not the
+  // URL layer — is what has to refuse a non-segment (#5714).
+  describe('agentActivityAgentParamsSchema', () => {
+    it('accepts a bare filename segment', () => {
+      expect(agentActivityAgentParamsSchema.safeParse({ agentId: 'agent_a-1.v2' }).success).toBe(true);
+    });
+    it('refuses a dot segment or a path separator', () => {
+      for (const agentId of ['.', '..', '../etc', 'a/b', 'a\\b', 'a b', '']) {
+        expect(agentActivityAgentParamsSchema.safeParse({ agentId }).success).toBe(false);
+      }
     });
   });
 });

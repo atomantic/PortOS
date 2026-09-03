@@ -1,8 +1,5 @@
-import { spawn } from 'child_process';
 import { readFile, writeFile, mkdir, access } from 'fs/promises';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
-import { createRequire } from 'module';
+import { join } from 'path';
 // Dependency-light shared module (node builtins + pure arg builder only), so
 // importing it from this standalone process doesn't pull in the AI toolkit.
 // Lets the autofixer honor the user's configured CLI provider/model instead
@@ -23,9 +20,7 @@ import {
   revertDiffFromLive,
   runVerifyCommand,
 } from './sandbox.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+import { execPm2, DATA_DIR, AUTOFIXER_DIR, INDEX_FILE, loadApps } from './shared.js';
 
 // Prepend the guarded pm2 shim to this process's PATH as defense-in-depth. The
 // fix agent runs in an isolated worktree with a sanitized env and (for claude)
@@ -35,34 +30,10 @@ const __dirname = dirname(__filename);
 // preserves this guarded PATH into the agent's env.
 Object.assign(process.env, agentGuardEnv());
 
-// Resolve PM2 binary to avoid pm2.cmd on Windows (creates visible CMD windows)
-const require = createRequire(import.meta.url);
-const PM2_BIN = join(dirname(require.resolve('pm2/package.json')), 'bin', 'pm2');
-
-/** Execute a PM2 CLI command via node (bypasses pm2.cmd) */
-function execPm2(pm2Args) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [PM2_BIN, ...pm2Args], { windowsHide: true });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (d) => { stdout += d.toString(); });
-    child.stderr.on('data', (d) => { stderr += d.toString(); });
-    child.on('close', (code) => {
-      if (code !== 0) return reject(new Error(stderr || `pm2 exited with code ${code}`));
-      resolve({ stdout, stderr });
-    });
-    child.on('error', reject);
-  });
-}
-
-// Paths
-const DATA_DIR = join(__dirname, '../data');
-const APPS_FILE = join(DATA_DIR, 'apps.json');
+// Paths not shared with ui.js
 const PROVIDERS_FILE = join(DATA_DIR, 'providers.json');
 const SETTINGS_FILE = join(DATA_DIR, 'settings.json');
-const AUTOFIXER_DIR = join(DATA_DIR, 'autofixer');
 const SESSIONS_DIR = join(AUTOFIXER_DIR, 'sessions');
-const INDEX_FILE = join(AUTOFIXER_DIR, 'index.json');
 // Disposable worktrees for isolated repair runs (gitignored under data/).
 const WORKTREES_DIR = join(AUTOFIXER_DIR, 'worktrees');
 // Bound the agent-proposed patch before it can reach the live checkout.
@@ -74,13 +45,6 @@ const FIX_COOLDOWN = 30 * 60 * 1000; // 30 minutes
 const CHECK_INTERVAL = 15 * 60 * 1000; // 15 minutes
 let checkTimer = null;
 let shuttingDown = false;
-
-// Load apps from PortOS
-async function loadApps() {
-  const data = await readFile(APPS_FILE, 'utf8').catch(() => '{"apps":{}}');
-  const parsed = JSON.parse(data);
-  return Object.entries(parsed.apps || {}).map(([id, app]) => ({ id, ...app }));
-}
 
 // Parse JSON, returning `fallback` on read OR parse failure. A corrupt config
 // file (partial write, hand-edit) must not throw inside fixProcess — this runs

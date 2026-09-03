@@ -16,12 +16,8 @@ const RUNNABLE_PROVIDER_TYPES = Object.values(PROVIDER_TYPES);
 
 const INTERVAL_OPTIONS = [
   { value: null, label: 'Inherit Global' },
-  { value: 'rotation', label: 'Rotation' },
-  { value: 'daily', label: 'Daily' },
-  { value: 'weekly', label: 'Weekly' },
-  { value: 'once', label: 'Once' },
-  { value: 'on-demand', label: 'On-demand' },
-  { value: 'cron', label: 'Cron' }
+  { value: 'on-demand', label: 'On Demand' },
+  { value: 'cron', label: 'Scheduled' }
 ];
 
 export default function AutomationTab({ appId, appName }) {

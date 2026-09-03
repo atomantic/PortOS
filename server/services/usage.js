@@ -306,6 +306,15 @@ export function getReconciledUsageRunIds() {
   return Object.keys(usageData?.reconciledRuns || {});
 }
 
+/**
+ * Run ids whose NESTED-session (sibling-family) attribution has already landed.
+ * A separate marker from `reconciledRuns` on purpose: the sibling pass has to be
+ * able to run on a run whose own transcript was reconciled long ago (#5831).
+ */
+export function getSiblingReconciledUsageRunIds() {
+  return Object.keys(usageData?.siblingReconciledRuns || {});
+}
+
 export async function markUsageRunReconciled(runId) {
   if (!runId) return;
   if (!usageData) await loadUsage();
@@ -316,27 +325,47 @@ export async function markUsageRunReconciled(runId) {
 }
 
 /**
- * Replace historical per-run estimates with transcript measurements.
+ * Replace historical per-run estimates with transcript measurements, and add
+ * the nested-CLI sessions a run's own provider never accounted for.
  *
- * The original estimate is subtracted from the exact configured provider/model
- * bucket that received it, then the measured records are added. Flat day totals
- * are rebuilt from the provider split so report residual reconciliation cannot
- * resurrect the removed estimate as a synthetic legacy row.
+ * Two independent halves, each with its own idempotency marker:
+ *
+ *   PARENT (`estimate` + `measured`, keyed by `reconciledRuns`) — the original
+ *     estimate is subtracted from the exact configured provider/model bucket
+ *     that received it, then the measured records are added.
+ *   SIBLING (`siblings`, keyed by `siblingReconciledRuns`) — a nested reviewer
+ *     CLI's session is a pure ADDITION to ITS OWN provider's bucket. It has no
+ *     estimate to remove (nothing ever recorded it), and it must never land in
+ *     the parent's bucket — that is exactly the mis-attribution #5831 fixes.
+ *     A sibling-only correction therefore does not require a pre-existing day
+ *     bucket for the parent provider; the target bucket is created on demand.
+ *
+ * Flat day totals are rebuilt from the provider split so report residual
+ * reconciliation cannot resurrect the removed estimate as a synthetic legacy row.
  */
 export async function applyHistoricalUsageCorrections(corrections = []) {
   if (!usageData) await loadUsage();
   usageData.reconciledRuns ??= {};
+  // Additive: absent on every install that predates the sibling scan, which
+  // reads as "no run has had its nested sessions attributed yet".
+  usageData.siblingReconciledRuns ??= {};
   let corrected = 0;
   const correctedRunIds = [];
+  const pendingParent = (correction) => Boolean(correction?.measured)
+    && !usageData.reconciledRuns[correction.runId]
+    && Boolean(usageData.dailyActivity?.[correction.day]?.byProvider?.[correction.providerId]);
+  const pendingSiblings = (correction) => (correction?.siblings?.length > 0)
+    && !usageData.siblingReconciledRuns[correction.runId];
   const eligible = corrections.filter((correction) => {
     const { runId, day: dayKey, providerId } = correction || {};
-    return runId && !usageData.reconciledRuns[runId] && dayKey && providerId
-      && usageData.dailyActivity?.[dayKey]?.byProvider?.[providerId];
+    if (!runId || !dayKey || !providerId) return false;
+    return pendingParent(correction) || pendingSiblings(correction);
   });
   const providerScopes = new Map();
   const modelScopes = new Map();
   for (const [index, correction] of eligible.entries()) {
     if (index > 0 && index % BACKFILL_YIELD_INTERVAL === 0) await yieldToEventLoop();
+    if (!pendingParent(correction)) continue;
     const providerKey = `${correction.day}\u0000${correction.providerId}`;
     const providerDay = usageData.dailyActivity[correction.day].byProvider[correction.providerId];
     if (!providerScopes.has(providerKey)) {
@@ -353,59 +382,116 @@ export async function applyHistoricalUsageCorrections(corrections = []) {
     }
   }
 
-  for (const [index, correction] of eligible.entries()) {
-    if (index > 0 && index % BACKFILL_YIELD_INTERVAL === 0) await yieldToEventLoop();
-    const { runId, day: dayKey, providerId, model, estimate, measured } = correction || {};
-    const day = usageData.dailyActivity?.[dayKey];
-    const providerDay = day?.byProvider?.[providerId];
-
-    const measuredRecords = Array.isArray(measured) ? measured : [measured];
-    const measuredTotals = recordTotals(measuredRecords);
-    const oldModelDay = model ? providerDay.byModel?.[model] : null;
-
-    adjustCounts(providerDay, estimate, -1);
-    if (oldModelDay) {
-      adjustCounts(oldModelDay, estimate, -1);
+  // Add one usage record to its OWN provider's day bucket and to the flat
+  // all-time rollups. Shared by the parent swap and the sibling add — the only
+  // difference between them is which bucket `record.providerId` names.
+  const addRecord = (day, record) => {
+    const bucket = providerDayBucket(day, record.providerId);
+    const hadProviderCounts = hasUsageCounts(bucket);
+    adjustCounts(bucket, record, 1);
+    bucket.source = hadProviderCounts
+      ? mergeSource(bucket.source, record.source || 'measured')
+      : (record.source || 'measured');
+    if (record?.model) {
+      const target = modelDayBucket(bucket, record.model);
+      const hadCounts = hasUsageCounts(target);
+      adjustCounts(target, record, 1);
+      target.source = hadCounts
+        ? mergeSource(target.source, record.source || 'measured')
+        : (record.source || 'measured');
     }
-
-    for (const record of measuredRecords) {
-      adjustCounts(providerDay, record, 1);
-      if (record?.model) {
-        const target = modelDayBucket(providerDay, record.model);
-        const hadCounts = hasUsageCounts(target);
-        adjustCounts(target, record, 1);
-        target.source = hadCounts ? mergeSource(target.source, 'measured') : 'measured';
-      }
-    }
-
-    const delta = {
-      messages: measuredTotals.messages - (estimate?.messages || 0),
-      tokensIn: measuredTotals.tokensIn + measuredTotals.cacheReadTokens + measuredTotals.cacheWriteTokens
-        - (estimate?.tokensIn || 0),
-      tokensOut: measuredTotals.tokensOut - (estimate?.tokensOut || 0)
-    };
-    usageData.totalMessages = Math.max(0, (usageData.totalMessages || 0) + delta.messages);
-    usageData.totalTokens.input = Math.max(0, (usageData.totalTokens.input || 0) + delta.tokensIn);
-    usageData.totalTokens.output = Math.max(0, (usageData.totalTokens.output || 0) + delta.tokensOut);
-
-    const allProvider = usageData.byProvider?.[providerId];
-    if (allProvider) {
-      allProvider.messages = Math.max(0, (allProvider.messages || 0) + delta.messages);
-      allProvider.tokens = Math.max(0, (allProvider.tokens || 0) + delta.tokensOut);
-    }
-    if (model && usageData.byModel?.[model]) {
-      usageData.byModel[model].messages = Math.max(0, (usageData.byModel[model].messages || 0) - (estimate?.messages || 0));
-      usageData.byModel[model].tokens = Math.max(0, (usageData.byModel[model].tokens || 0) - (estimate?.tokensOut || 0));
-    }
-    for (const record of measuredRecords) {
-      if (!record?.model) continue;
+    usageData.totalMessages = Math.max(0, (usageData.totalMessages || 0) + (record.messages || 0));
+    usageData.totalTokens.input = Math.max(0, (usageData.totalTokens.input || 0)
+      + (record.tokensIn || 0) + (record.cacheReadTokens || 0) + (record.cacheWriteTokens || 0));
+    usageData.totalTokens.output = Math.max(0, (usageData.totalTokens.output || 0) + (record.tokensOut || 0));
+    usageData.byProvider[record.providerId] ??= { name: bucket.name, sessions: 0, messages: 0, tokens: 0 };
+    usageData.byProvider[record.providerId].messages += record.messages || 0;
+    usageData.byProvider[record.providerId].tokens += record.tokensOut || 0;
+    if (record?.model) {
       usageData.byModel[record.model] ??= { sessions: 0, messages: 0, tokens: 0 };
       usageData.byModel[record.model].messages += record.messages || 0;
       usageData.byModel[record.model].tokens += record.tokensOut || 0;
     }
+  };
+
+  for (const [index, correction] of eligible.entries()) {
+    if (index > 0 && index % BACKFILL_YIELD_INTERVAL === 0) await yieldToEventLoop();
+    const { runId, day: dayKey, providerId, model, estimate, measured } = correction || {};
+    const applyParent = pendingParent(correction);
+    const applySiblings = pendingSiblings(correction);
+    // A sibling-only correction can target a day that has no bucket for the
+    // PARENT provider (the run may predate provider/model breakdowns entirely),
+    // so the day itself is created on demand rather than required.
+    if (!usageData.dailyActivity[dayKey]) {
+      usageData.dailyActivity[dayKey] = { sessions: 0, messages: 0, tokens: 0, byProvider: {} };
+      cacheActivityDay(dayKey);
+    }
+    const day = usageData.dailyActivity[dayKey];
+
+    if (applyParent) {
+      const providerDay = day.byProvider[providerId];
+      const measuredRecords = Array.isArray(measured) ? measured : [measured];
+      const measuredTotals = recordTotals(measuredRecords);
+      const oldModelDay = model ? providerDay.byModel?.[model] : null;
+
+      adjustCounts(providerDay, estimate, -1);
+      if (oldModelDay) {
+        adjustCounts(oldModelDay, estimate, -1);
+      }
+
+      for (const record of measuredRecords) {
+        adjustCounts(providerDay, record, 1);
+        if (record?.model) {
+          const target = modelDayBucket(providerDay, record.model);
+          const hadCounts = hasUsageCounts(target);
+          adjustCounts(target, record, 1);
+          target.source = hadCounts ? mergeSource(target.source, 'measured') : 'measured';
+        }
+      }
+
+      const delta = {
+        messages: measuredTotals.messages - (estimate?.messages || 0),
+        tokensIn: measuredTotals.tokensIn + measuredTotals.cacheReadTokens + measuredTotals.cacheWriteTokens
+          - (estimate?.tokensIn || 0),
+        tokensOut: measuredTotals.tokensOut - (estimate?.tokensOut || 0)
+      };
+      usageData.totalMessages = Math.max(0, (usageData.totalMessages || 0) + delta.messages);
+      usageData.totalTokens.input = Math.max(0, (usageData.totalTokens.input || 0) + delta.tokensIn);
+      usageData.totalTokens.output = Math.max(0, (usageData.totalTokens.output || 0) + delta.tokensOut);
+
+      const allProvider = usageData.byProvider?.[providerId];
+      if (allProvider) {
+        allProvider.messages = Math.max(0, (allProvider.messages || 0) + delta.messages);
+        allProvider.tokens = Math.max(0, (allProvider.tokens || 0) + delta.tokensOut);
+      }
+      if (model && usageData.byModel?.[model]) {
+        usageData.byModel[model].messages = Math.max(0, (usageData.byModel[model].messages || 0) - (estimate?.messages || 0));
+        usageData.byModel[model].tokens = Math.max(0, (usageData.byModel[model].tokens || 0) - (estimate?.tokensOut || 0));
+      }
+      for (const record of measuredRecords) {
+        if (!record?.model) continue;
+        usageData.byModel[record.model] ??= { sessions: 0, messages: 0, tokens: 0 };
+        usageData.byModel[record.model].messages += record.messages || 0;
+        usageData.byModel[record.model].tokens += record.tokensOut || 0;
+      }
+      usageData.reconciledRuns[runId] = new Date().toISOString();
+    }
+
+    if (applySiblings) {
+      // Routed by `record.providerId`, never the run's provider: a nested grok
+      // review inside a Claude run is grok's spend. There is no estimate to
+      // remove — nothing ever recorded these tokens at all.
+      for (const record of correction.siblings) {
+        if (!record?.providerId) continue;
+        addRecord(day, record);
+      }
+    }
+    // Marked whenever this run's sibling pass actually ran — including a run
+    // whose only correction was the parent swap — so a second backfill can't
+    // add the same nested session twice.
+    if (correction.siblingScanned) usageData.siblingReconciledRuns[runId] = new Date().toISOString();
 
     rebuildDayTotals(day);
-    usageData.reconciledRuns[runId] = new Date().toISOString();
     corrected++;
     correctedRunIds.push(runId);
   }

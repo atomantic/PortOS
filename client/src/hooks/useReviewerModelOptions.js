@@ -1,8 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import * as api from '../services/api';
-import { filterSelectableModels, selectableModelsForProvider, isAntigravityProvider, isGrokBuildCli, antigravityModelEffortLevels } from '../utils/providers';
-import { LOCAL_LLM_REVIEWERS, MODEL_SELECTABLE_REVIEWERS } from '../components/cos/constants';
+import { filterSelectableModels, selectableModelsForProvider, isAntigravityProvider, isGrokBuildCli, isKimiProvider, antigravityModelEffortLevels } from '../utils/providers';
+import { MODEL_SELECTABLE_REVIEWERS } from '../components/cos/constants';
 import { reviewerEffortLevels, normalizeReviewerSlug } from '../lib/reviewerPins';
+import { LOCAL_LLM_BACKENDS } from '../lib/localLlmBackends';
+
+// Local backends whose installed-model list `/api/local-llm/status` actually
+// probes — the same roster the Runtimes/Model Library views render a catalog for,
+// reused so the two can't drift. `mtplx` is a local backend but is NOT in it: its
+// listing runs the `mtplx` wrapper, so it stays catalog-sourced and free-text.
+const PROBED_LOCAL_BACKENDS = LOCAL_LLM_BACKENDS.map((b) => b.id);
 
 /**
  * Selectable model ids per model-taking reviewer, for `ReviewerPicker`'s Model
@@ -13,21 +20,27 @@ import { reviewerEffortLevels, normalizeReviewerSlug } from '../lib/reviewerPins
  * Two sources, because the two reviewer kinds are different things:
  * - `lmstudio` / `ollama` ids come from `/api/local-llm/status`, so they reflect
  *   what's actually installed rather than a provider's stale stored `models`.
- * - `codex` / `claude` / `antigravity` / `grok` / `cursor` tiers come from the provider
- *   catalog (`/api/providers`) — these are CLI reviewers, not local backends, so
- *   there's nothing to probe.
+ * - Every other reviewer's tiers come from the provider catalog
+ *   (`/api/providers`). That includes `mtplx`: its installed checkpoints live
+ *   behind `/api/local-llm/mtplx/status`, which INVOKES the `mtplx` wrapper (a
+ *   several-hundred-MB venv bootstrap on a cold version — see
+ *   `server/lib/mtplxRuntime.js`), and a picker mount must never pay that. The
+ *   shipped provider's catalog plus a free-text field is the honest trade.
  *
  * The `claude` list spans BOTH usage modes: the `claude-code` provider tiers and
  * the installed Ollama ids (an Ollama-backed `claude` CLI, where `--model` selects
  * the local model). Deduped, order-preserving.
  *
- * `freeText` marks a reviewer whose picker must accept a typed id, not just a
- * pick: an Ollama-backed `claude` can run any locally-installed id, and a
+ * `freeText` marks a reviewer whose picker must ALSO accept a typed id, not only
+ * a pick: an Ollama-backed `claude` can run any locally-installed id, and a
  * Bedrock/Vertex install needs its environment's own id form, neither of which a
- * catalog can enumerate. Consumers render a `<datalist>` for those.
+ * catalog can enumerate. Those still render a dropdown of the catalog — the flag
+ * adds a "Custom…" escape to it (see `ReviewerPicker`'s Model cell); a reviewer
+ * marked `false` gets a closed list, because its options came from a live probe.
  *
  * `unavailable` distinguishes "backend is down" from "backend has no models" so
- * the empty state can say the useful thing. Absent = not a local backend.
+ * the empty state can say the useful thing. Absent = not probed (every reviewer
+ * outside PROBED_LOCAL_BACKENDS, `mtplx` included).
  * `loaded` flips once both fetches settle, so a consumer can tell "no options
  * yet" from "genuinely no options" (an empty list is a real answer, not a
  * pre-fetch placeholder).
@@ -121,6 +134,17 @@ export default function useReviewerModelOptions() {
       // regardless because grok, like every CLI reviewer, is free-text.
       grok: providerTiers((p) => p.id === 'grok-cli', isGrokBuildCli),
       cursor: providerTiers((p) => p.id === 'cursor-cli', (p) => p.id === 'cursor-tui'),
+      // Legitimately empty, for grok's documented reason: the shipped kimi
+      // provider carries only the configured-default sentinel, which
+      // `filterSelectableModels` strips. Free-text keeps the cell usable.
+      kimi: providerTiers((p) => p.id === 'kimi-cli', isKimiProvider),
+      // Deliberately NOT sourced from the `opencode-<backend>` presets. Those
+      // enumerate ids that only resolve under the `OPENCODE_CONFIG_CONTENT` a
+      // PortOS-spawned provider injects, and the reviewer runs a bare `opencode`
+      // against the user's OWN config — so listing them would offer picks that
+      // silently fail. `opencode -m` takes a `provider/model` id the user types.
+      opencode: [],
+      mtplx: providerTiers((p) => p.id === 'mtplx'),
     };
 
     const defaultModels = {
@@ -131,6 +155,9 @@ export default function useReviewerModelOptions() {
       antigravity: providerDefault(isAntigravityProvider),
       grok: providerDefault((p) => p.id === 'grok-cli', isGrokBuildCli),
       cursor: providerDefault((p) => p.id === 'cursor-cli', (p) => p.id === 'cursor-tui'),
+      kimi: providerDefault((p) => p.id === 'kimi-cli', isKimiProvider),
+      opencode: null,
+      mtplx: providerDefault((p) => p.id === 'mtplx'),
     };
 
     // The agy provider's RAW catalog — one id per effort tier
@@ -155,8 +182,11 @@ export default function useReviewerModelOptions() {
       optionsByReviewer,
       defaultModels,
       modelEffortLevels,
-      // A local backend's id list is authoritative (we probed it), so keep those
-      // pickers a closed `<select>`. Every CLI reviewer is free-text: `claude` for
+      // A PROBED backend's id list is authoritative, so keep those pickers a closed
+      // `<select>`. Gated on PROBED_LOCAL_BACKENDS rather than LOCAL_LLM_REVIEWERS
+      // because `mtplx` is a local backend we deliberately do NOT probe here — a
+      // closed select over its stored catalog would forbid a checkpoint the user
+      // has actually pulled. Every CLI reviewer is free-text too: `claude` for
       // the Ollama-backed / Bedrock-form cases above, `codex`/`antigravity`/`grok`/`cursor`
       // because their catalogs are stored snapshots that can lag a newly-released
       // tier — grok's shipped catalog holds no real id at all, so a typed id is the
@@ -164,7 +194,7 @@ export default function useReviewerModelOptions() {
       // server splits it). Derived from the rosters so a reviewer added to either
       // one can't silently default to the wrong control.
       freeText: Object.fromEntries(
-        MODEL_SELECTABLE_REVIEWERS.map((r) => [r, !LOCAL_LLM_REVIEWERS.includes(r)])
+        MODEL_SELECTABLE_REVIEWERS.map((r) => [r, !PROBED_LOCAL_BACKENDS.includes(r)])
       ),
       unavailable: {
         lmstudio: localStatus?.lmstudio?.available === false,

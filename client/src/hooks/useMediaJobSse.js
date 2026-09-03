@@ -22,15 +22,12 @@ import { safeParseJSON } from '../lib/genUtils';
  *
  * Handlers (all optional): `isCurrent` (staleness guard — a stale frame
  * closes the stream and is ignored), `onQueued`, `onStarted`, `onStage`,
- * `onStatus`, `onProgress`, `onPreview`, `onRenderMeta`, `onComplete`,
- * `onError`, `onCanceled`, `onConnectionError`.
+ * `onStatus`, `onProgress`, `onPreview`, `onComplete`, `onError`,
+ * `onCanceled`, `onConnectionError`.
  *
  * `preview` is the mediaJobQueue dispatcher's preview-ONLY frame — a runner
  * frame (`currentImage`) that arrived without a progress value, kept a distinct
- * type so a consumer's progress bar isn't disturbed by it. `render-meta`
- * carries the geometry the render actually resolved to (the requested edges
- * snapped to the model's resolution grid), which is what a preview stage must
- * size itself by. Both were dropped on the floor here before #4588.
+ * type so a consumer's progress bar isn't disturbed by it.
  *
  * `eventSourceRef` is exposed so callers can `close()` on cancel/unmount.
  */
@@ -45,7 +42,7 @@ export function useMediaJobSse(kind) {
   const attach = useCallback((jobId, handlers = {}) => {
     const {
       isCurrent = () => true,
-      onQueued, onStarted, onStage, onStatus, onProgress, onPreview, onRenderMeta,
+      onQueued, onStarted, onStage, onStatus, onProgress, onPreview,
       onComplete, onError, onCanceled, onConnectionError,
     } = handlers;
     return new Promise((resolve, reject) => {
@@ -64,7 +61,6 @@ export function useMediaJobSse(kind) {
           case 'status': onStatus?.(msg); break;
           case 'progress': onProgress?.(msg); break;
           case 'preview': onPreview?.(msg); break;
-          case 'render-meta': onRenderMeta?.(msg); break;
           case 'complete': {
             es.close();
             const value = onComplete?.(msg);

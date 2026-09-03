@@ -68,6 +68,7 @@ import {
   Database,
   Shield,
   ShieldCheck,
+  KeyRound,
   Lock,
   Wand2,
   Rocket,
@@ -102,6 +103,7 @@ import {
   Clapperboard,
   PersonStanding,
   Box,
+  Blocks,
   Boxes,
   Gamepad2,
   Waypoints,
@@ -283,6 +285,7 @@ export const NAV_PRESENTATION = {
   '/meatspace/settings': { icon: Settings },
   '/models/3d': { icon: Boxes },
   '/models/embeddings': { icon: Braces },
+  '/models/harnesses': { icon: Blocks },
   '/models/llms': { icon: Cpu },
   '/models/loras': { icon: Sparkles },
   '/models/media': { icon: HardDrive },
@@ -295,7 +298,8 @@ export const NAV_PRESENTATION = {
   '/api-reference/catalog': { icon: Braces },
   '/settings/autofixer': { icon: Wrench },
   '/settings/backup': { icon: Download },
-  '/settings/code-reviewers': { icon: ShieldCheck },
+  '/settings/credentials': { icon: KeyRound },
+  '/models/code-reviewers': { icon: ShieldCheck },
   '/settings/database': { icon: Database },
   '/settings/features': { icon: ListChecks },
   '/settings/general': { icon: Settings },
@@ -356,10 +360,19 @@ const SECTION_PRESENTATION = {
   POST: { icon: Zap, defaultTo: '/post/launcher' },
 };
 
-const SECTION_ORDER = [
+// Sidebar grouping is declared, never derived from array positions. The first
+// two lists are the alphabetical run of sections, split around the Goals row;
+// the third is the intentionally-last bucket that renders below the "More"
+// divider, so it is NOT alphabetical relative to the other two and can only be
+// declared. Adding a section means putting its name in the list it belongs to —
+// there are no indices to keep in sync.
+export const SECTIONS_BEFORE_GOALS = [
   'Brain', 'Calendar', 'Chief of Staff', 'Comms', 'Create', 'Dev Tools',
-  'Health', 'Models', 'Settings', 'Identity', 'POST',
 ];
+export const SECTIONS_AFTER_GOALS = ['Health', 'Models', 'Settings'];
+export const SECTIONS_BELOW_MORE = ['Identity', 'POST'];
+
+const SECTION_ORDER = [...SECTIONS_BEFORE_GOALS, ...SECTIONS_AFTER_GOALS, ...SECTIONS_BELOW_MORE];
 
 // These rows have no PortOS route, so a NAV_COMMANDS entry would be dishonest.
 // Keep them visibly marked as local-only instead of smuggling structural route
@@ -410,11 +423,11 @@ const navItems = [
   ...mainRows,
   { separator: true, localOnly: true },
   { ...appsCommand, dynamic: 'apps', defaultTo: appsCommand.to, children: [] },
-  ...SECTION_ORDER.slice(0, 6).map((section) => sectionRows[section]),
+  ...SECTIONS_BEFORE_GOALS.map((section) => sectionRows[section]),
   goalsRow,
-  ...SECTION_ORDER.slice(6, 9).map((section) => sectionRows[section]),
+  ...SECTIONS_AFTER_GOALS.map((section) => sectionRows[section]),
   { moreLabel: true, localOnly: true },
-  ...SECTION_ORDER.slice(9).map((section) => sectionRows[section]),
+  ...SECTIONS_BELOW_MORE.map((section) => sectionRows[section]),
 ];
 
 const SIDEBAR_KEY = 'portos-sidebar-collapsed';

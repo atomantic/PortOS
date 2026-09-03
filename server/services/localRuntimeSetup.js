@@ -60,6 +60,7 @@ import { describeMtplxRuntime } from '../lib/mtplxRuntime.js';
 import { listSlotstreamCachedModels } from '../lib/slotstreamModels.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 import { inspectSglangQwenProject, sglangStartBlockedReason } from '../lib/sglangQwenProject.js';
+import { ensureSglangProjectDir } from './sglangQwenManager.js';
 import { sglangUnsupportedReason } from '../lib/sglangQwenRecipe.js';
 import { getCudaCapability } from '../lib/cudaCapability.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
@@ -412,6 +413,12 @@ const SETUP_ROWS = Object.freeze({
       const cuda = await getCudaCapability().catch(() => null);
       const unsupported = sglangUnsupportedReason({ status: cuda?.status, gpus: cuda?.gpus });
       if (unsupported) return { success: false, error: unsupported };
+      // Before the inspection, because on a Windows host this is what decides
+      // WHICH directory gets inspected: the project is prepared by hand inside a
+      // WSL2 distro (Docker Desktop's engine IS that VM), and the default
+      // `%USERPROFILE%\sglang-qwen38` is a Windows path PortOS would find empty.
+      const misplaced = await ensureSglangProjectDir({ emit });
+      if (misplaced) return { success: false, error: misplaced };
       // Only ever brings up an ALREADY-prepared project — see
       // `lib/sglangQwenProject.js` for why each refusal exists.
       const project = await inspectSglangQwenProject();

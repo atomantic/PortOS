@@ -332,7 +332,7 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
                   />
                 ) : (
                   <div className="p-4 prose prose-invert prose-sm max-w-none">
-                    <pre className="whitespace-pre-wrap text-sm text-gray-300 font-mono leading-relaxed">
+                    <pre className="whitespace-pre-wrap break-words text-sm text-gray-300 font-mono leading-relaxed">
                       {selectedNote.body || selectedNote.content}
                     </pre>
                   </div>

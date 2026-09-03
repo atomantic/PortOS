@@ -240,7 +240,7 @@ export default function CreativeDirectorDetail() {
           <div className="flex items-center gap-3 min-w-0">
             <Link to="/creative-director" className="text-port-text-muted hover:text-port-text"><ArrowLeft className="w-4 h-4" /></Link>
             <div className="min-w-0">
-              <h1 className="text-xl font-semibold truncate">{project.name}</h1>
+              <h1 className="line-clamp-2 break-words text-xl font-semibold" title={project.name}>{project.name}</h1>
               <div className="text-xs text-port-text-muted truncate">
                 {project.id} • status: <span className="text-port-text">{project.status}</span>
               </div>

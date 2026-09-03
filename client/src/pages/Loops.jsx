@@ -12,6 +12,7 @@ import { formatDurationMs } from '../utils/formatters';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { clickableProps } from '../lib/a11yKeyboard.js';
+import EmptyState from '../components/EmptyState';
 
 const INTERVAL_PRESETS = [
   { label: '30s', value: '30s' },
@@ -40,9 +41,9 @@ function StatusBadge({ loop }) {
   );
 }
 
-function CreateLoopForm({ providers, onCreated }) {
+function CreateLoopForm({ providers, onCreated, promptRef }) {
   const [prompt, setPrompt] = useState('');
-  const [interval, setInterval] = useState('10m');
+  const [intervalPreset, setIntervalPreset] = useState('10m');
   const [customInterval, setCustomInterval] = useState('');
   const [name, setName] = useState('');
   const [providerId, setProviderId] = useState('');
@@ -59,7 +60,7 @@ function CreateLoopForm({ providers, onCreated }) {
     setCreating(true);
     const data = {
       prompt: prompt.trim(),
-      interval: customInterval || interval,
+      interval: customInterval || intervalPreset,
       name: name.trim() || undefined,
       cwd: cwd.trim() || undefined,
       providerId: providerId || undefined,
@@ -84,6 +85,7 @@ function CreateLoopForm({ providers, onCreated }) {
       </div>
 
       <textarea
+        ref={promptRef}
         aria-label="Loop prompt"
         value={prompt}
         onChange={e => setPrompt(e.target.value)}
@@ -100,9 +102,9 @@ function CreateLoopForm({ providers, onCreated }) {
               <button
                 key={p.value}
                 type="button"
-                onClick={() => { setInterval(p.value); setCustomInterval(''); }}
+                onClick={() => { setIntervalPreset(p.value); setCustomInterval(''); }}
                 className={`px-2 py-1 text-xs rounded border ${
-                  interval === p.value && !customInterval
+                  intervalPreset === p.value && !customInterval
                     ? 'border-port-accent bg-port-accent/20 text-port-accent'
                     : 'border-port-border text-gray-400 hover:border-gray-500'
                 }`}
@@ -274,7 +276,7 @@ function LoopCard({ loop, onAction, expandedId, onToggle }) {
         <div className="border-t border-port-border">
           <div className="px-4 py-2 bg-port-bg/30">
             <div className="text-xs text-gray-500 mb-1">Prompt</div>
-            <pre className="text-xs text-gray-300 whitespace-pre-wrap font-mono">{loop.prompt}</pre>
+            <pre className="text-xs text-gray-300 whitespace-pre-wrap break-words font-mono">{loop.prompt}</pre>
           </div>
 
           {loop.history?.length > 0 && (
@@ -339,6 +341,9 @@ const ACTION_MAP = {
 };
 
 export default function Loops() {
+  // The create form is always on screen above the list, so the empty state's
+  // call to action focuses its prompt field rather than opening anything.
+  const promptRef = useRef(null);
   const [loops, setLoops] = useState([]);
   const [providers, setProviders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -395,23 +400,26 @@ export default function Loops() {
         <div className="flex items-center gap-3 text-xs text-gray-400">
           {runningCount > 0 && <span className="text-port-success">{runningCount} active</span>}
           <span>{loops.length} total</span>
-          <button onClick={fetchLoops} className="p-1 rounded hover:bg-port-border" title="Refresh" aria-label="Refresh">
+          <button onClick={fetchLoops} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded hover:bg-port-border" title="Refresh" aria-label="Refresh">
             <RefreshCw size={14} />
           </button>
         </div>
       </div>
 
-      <CreateLoopForm providers={providers} onCreated={fetchLoops} />
+      <CreateLoopForm providers={providers} onCreated={fetchLoops} promptRef={promptRef} />
 
       {loading ? (
         <div className="flex items-center justify-center py-12 text-gray-500">
           <Loader2 size={20} className="animate-spin mr-2" /> Loading loops...
         </div>
       ) : loops.length === 0 ? (
-        <div className="text-center py-12 text-gray-500">
-          <RefreshCw size={32} className="mx-auto mb-2 opacity-30" />
-          <p className="text-sm">No loops yet. Create one above to get started.</p>
-        </div>
+        <EmptyState
+          icon={RefreshCw}
+          title="No loops yet"
+          message="A loop re-runs one prompt on a schedule with any AI provider. Describe the first one in the form above."
+          actionLabel="Describe your first loop"
+          onAction={() => promptRef.current?.focus()}
+        />
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4 items-start">
           {loops.map(loop => (

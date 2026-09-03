@@ -16,10 +16,10 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readdirSync, readFileSync } from 'fs';
+import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join, relative, resolve } from 'path';
-import { staticImportSpecifiers } from '../lib/staticImportGraph.js';
+import { buildStaticImportGraph, findImportCycles } from '../lib/staticImportGraph.js';
 
 const SERVICES_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -41,47 +41,17 @@ const CLUSTER = [
   'agentOrchestrator.js',
 ];
 
-// The static-import scan itself lives in `server/lib/staticImportGraph.js` so
-// this guard and the sprites sharp-free guard share ONE parser — two copies is
-// how a structural guard rots (a fix to one silently under-reports in the
-// other). It matches static `import`/`export … from` and bare side-effect
-// imports only, never `await import()` (deferred to call time, so it can't
-// produce a load-time cycle) and never a specifier inside a comment.
-// Every non-test `.js` under SERVICES_DIR, keyed by its path relative to that
-// directory (`agentLifecycle.js`, `agentTuiSpawning/outputSpooler.js`). The
-// walk recurses: scanning only top-level files left a hole big enough to drive
-// the cycle back through, because a subdirectory module can import back up
-// (`agentTuiSpawning/outputSpooler.js` → `../cosAgentLifecycle.js` is a live example),
-// so a cycle routed through one subdirectory hop was invisible to this guard.
-function listServiceFiles(dir = SERVICES_DIR, prefix = '') {
-  const out = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) out.push(...listServiceFiles(join(dir, entry.name), rel));
-    else if (entry.name.endsWith('.js') && !entry.name.includes('.test.')) out.push(rel);
-  }
-  return out;
-}
-
-function buildStaticGraph() {
-  const files = listServiceFiles();
-  const known = new Set(files);
-  const graph = new Map();
-  for (const file of files) {
-    const abs = join(SERVICES_DIR, file);
-    const deps = new Set();
-    for (const spec of staticImportSpecifiers(abs)) {
-      if (!spec.startsWith('.')) continue;
-      // Resolve relative to the importing file, then re-key against SERVICES_DIR
-      // so `./x.js` from a subdirectory and `../x.js` from a sibling land on the
-      // same node. Anything resolving outside the services dir is out of scope.
-      const rel = relative(SERVICES_DIR, resolve(dirname(abs), spec));
-      if (known.has(rel)) deps.add(rel);
-    }
-    graph.set(file, [...deps]);
-  }
-  return graph;
-}
+// The static-import scan, the services-directory graph build and the cycle walk
+// all live in `server/lib/staticImportGraph.js` so this guard and the
+// identity/digital-twin one (`twinImportCycles.test.js`) share ONE parser —
+// two copies is how a structural guard rots (a fix to one silently
+// under-reports in the other). It matches static `import`/`export … from` and
+// bare side-effect imports only, never `await import()` (deferred to call time,
+// so it can't produce a load-time cycle) and never a specifier inside a comment.
+// The walk recurses into subdirectories: a subdirectory module can import back
+// up (`agentTuiSpawning/outputSpooler.js` → `../cosAgentLifecycle.js` is a live
+// example), so a cycle routed through one subdirectory hop would otherwise be
+// invisible here.
 
 // Does `file` reach `mod` with a DEFERRED import? The static graph deliberately
 // ignores `import()` — correct for cycle detection, since a deferred import
@@ -150,32 +120,11 @@ const exportedNames = async (mod) => Object.keys(await MODULE_LOADERS[mod]());
 // carries this, not just the one that happens to run first today.
 const MODULE_LOAD_TIMEOUT_MS = 60_000;
 
-function findCycles(graph) {
-  const cycles = new Set();
-  const stack = [];
-  const state = new Map(); // 1 = on stack, 2 = done
-  const visit = (node) => {
-    state.set(node, 1);
-    stack.push(node);
-    for (const dep of graph.get(node) || []) {
-      if (state.get(dep) === 1) {
-        cycles.add(stack.slice(stack.indexOf(dep)).concat(dep).join(' -> '));
-      } else if (!state.has(dep)) {
-        visit(dep);
-      }
-    }
-    stack.pop();
-    state.set(node, 2);
-  };
-  for (const node of graph.keys()) if (!state.has(node)) visit(node);
-  return [...cycles];
-}
-
 describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
-  const graph = buildStaticGraph();
+  const graph = buildStaticImportGraph(SERVICES_DIR);
 
   it('has no static import cycle touching the agent-lifecycle cluster', () => {
-    const offending = findCycles(graph).filter(cycle => CLUSTER.some(m => cycle.includes(m)));
+    const offending = findImportCycles(graph).filter(cycle => CLUSTER.some(m => cycle.includes(m)));
     expect(offending, `static import cycle(s) reintroduced:\n${offending.join('\n')}`).toEqual([]);
   });
 
@@ -197,7 +146,7 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
     const backEdges = sections.filter(file => (graph.get(file) || []).includes('agentPromptBuilder.js'));
     expect(backEdges, `prompt sections must not import agentPromptBuilder.js: ${backEdges.join(', ')}`).toEqual([]);
 
-    const sectionCycles = findCycles(graph).filter(cycle => sections.some(file => cycle.split(' -> ').includes(file)));
+    const sectionCycles = findImportCycles(graph).filter(cycle => sections.some(file => cycle.split(' -> ').includes(file)));
     expect(sectionCycles, `prompt section cycle(s) introduced:\n${sectionCycles.join('\n')}`).toEqual([]);
   });
 
@@ -471,6 +420,25 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
     expect(importsDynamically('agents.js', 'subAgentSpawner.js'),
       'agents.js must not defer-import the spawner barrel — the facade is a static import now').toBe(false);
     expect(graph.get('agents.js')).toContain('agentOrchestrator.js');
+  });
+
+  it('keeps cos.js out of every static import cycle (#5684)', () => {
+    // cos.js re-exports cosState/cosTaskStore for backward compat with
+    // `import * as cos`. Two leaf services used to reach THROUGH that barrel for
+    // one symbol each (memoryEmbeddings -> getConfig, character -> getAllTasks),
+    // and because cos.js transitively reaches the CoS tool registry -> voice
+    // tools -> askService -> both of those leaves, each one-symbol forward closed
+    // a 7-module ring. Both now import the DECLARING module, which is the same
+    // rule the transition-caller guard above enforces for the agent cluster.
+    const offending = findImportCycles(graph).filter(cycle => cycle.split(' -> ').includes('cos.js'));
+    expect(offending, `cos.js is back in a static import cycle:\n${offending.join('\n')}`).toEqual([]);
+
+    // Name the two back-edges directly, so a reintroduced one-symbol import of
+    // the barrel fails with the reason rather than as an opaque ring.
+    expect(graph.get('memoryEmbeddings.js'), 'memoryEmbeddings must import getConfig from cosState.js').not.toContain('cos.js');
+    expect(graph.get('memoryEmbeddings.js')).toContain('cosState.js');
+    expect(graph.get('character.js'), 'character must import getAllTasks from cosTaskStore.js').not.toContain('cos.js');
+    expect(graph.get('character.js')).toContain('cosTaskStore.js');
   });
 
   it('no longer needs the dynamic-import workaround for handleOrphanedTask', () => {

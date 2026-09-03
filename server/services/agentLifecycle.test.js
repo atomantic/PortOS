@@ -328,7 +328,7 @@ describe('agentLifecycle — guard wiring', () => {
   // requested no posture. Pin the call so the caller cannot re-derive it from a
   // boolean support check and reintroduce the same collapse.
   it('asks the posture helper for the provider gate rather than re-deriving it', () => {
-    expect(AGENT_LIFECYCLE_SRC).toContain('const postureBlock = publicReviewProviderBlock(provider, publicReviewPosture, { tui: isTui })');
+    expect(AGENT_LIFECYCLE_SRC).toContain('const postureBlock = publicReviewProviderBlock(provider, publicReviewPosture)');
     expect(AGENT_LIFECYCLE_SRC).toMatch(/if \(postureBlock\) \{[\s\S]*?status: 'blocked'/);
     // The helper owns the blocked category too, so the gate cannot pick its own.
     expect(AGENT_LIFECYCLE_SRC).toContain('const { reason, category } = postureBlock;');
@@ -566,7 +566,7 @@ describe('runAgentSpawn source — handedOff pre-spawn vs post-handoff split', (
 describe('runAgentSpawn source — durable TUI ownership (#3202)', () => {
   it('routes TUI providers through the runner when it is available', () => {
     expect(RUN_SPAWN_BODY).toMatch(
-      /const executionMode = isTui \? \(dispatchUseRunner \? 'runner-tui' : 'tui'\)/
+      /const executionMode = !spawnHeadless \? \(dispatchUseRunner \? 'runner-tui' : 'tui'\)/
     );
     expect(RUN_SPAWN_BODY).toMatch(/spawnTuiAgent\(\{[\s\S]{0,1000}?useDurableRunner:\s*dispatchUseRunner/);
     expect(RUN_SPAWN_BODY).not.toMatch(/useRunner:\s*isTui\s*\?\s*false\s*:\s*useRunner/);

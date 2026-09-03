@@ -78,6 +78,11 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   listJobs: vi.fn(() => []),
 }));
 
+// /generate now records media.image.enqueue after enqueueJob (#5596). Mock the
+// ledger so this packing suite does not trip the test data-root guard (500).
+const recordUserAction = vi.hoisted(() => vi.fn(async () => ({ id: 'evt' })));
+vi.mock('../services/userActions.js', () => ({ recordUserAction }));
+
 let imageGenRoutes;
 let enqueueJob;
 

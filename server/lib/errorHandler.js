@@ -116,6 +116,56 @@ export function createServiceErrorMapper(statusMap, buildContext) {
   };
 }
 
+// Log-line budget for `error.context.details`. Five entries is enough to name
+// the offending fields on a typical 400; the char cap keeps a `pg_dump` stderr
+// blob (dbAdmin.js puts raw stderr in this field) from swallowing the log.
+const LOG_DETAIL_MAX_ENTRIES = 5;
+const LOG_DETAIL_MAX_CHARS = 300;
+
+const clampLogText = (value) => {
+  const flat = String(value).replace(/\s+/g, ' ').trim();
+  return flat.length > LOG_DETAIL_MAX_CHARS ? `${flat.slice(0, LOG_DETAIL_MAX_CHARS)}…` : flat;
+};
+
+const describeObjectEntries = (obj) => Object.entries(obj).map(([k, v]) => `${k}=${v}`).join('; ');
+
+const describeDetailEntry = (entry) => {
+  if (!entry || typeof entry !== 'object') return String(entry);
+  // `validate`/`validateRequest` pre-join the Zod path, but a caller passing raw
+  // issues through would leave an array — render it as dot notation, not CSV.
+  const path = Array.isArray(entry.path) ? entry.path.join('.') : entry.path;
+  const { message } = entry;
+  // Nullish, not truthy: a `message` of `0`/`false` is still a message.
+  if (path != null && message != null) return `${path}: ${message}`;
+  if (path != null || message != null) return String(message ?? path);
+  // Not a Zod-shaped issue — name its own fields rather than logging a bare '?'.
+  return describeObjectEntries(entry) || '?';
+};
+
+/**
+ * Render `error.context.details` as ONE readable log line.
+ *
+ * `validateRequest` sets `details` to the full mapped Zod issue array and
+ * `dbAdmin` sets it to raw command stderr, so serializing it as JSON emitted a
+ * multi-KB escaped blob per sub-500 — against the single-line logging
+ * convention and unreadable in PM2 logs. The field/message pairs are the useful
+ * part of a 400, so summarize rather than drop: the first few entries, then a
+ * `(+N more)` count. The `(+N more)` suffix is appended AFTER the char clamp so
+ * a long first entry can't hide how much was elided.
+ *
+ * Logging only — `buildErrorEnvelope`/`sanitizeContext` still carry the full
+ * structured `details` in the HTTP response body.
+ */
+const summarizeDetails = (details) => {
+  if (Array.isArray(details)) {
+    const shown = clampLogText(details.slice(0, LOG_DETAIL_MAX_ENTRIES).map(describeDetailEntry).join('; '));
+    const elided = details.length - LOG_DETAIL_MAX_ENTRIES;
+    return elided > 0 ? `${shown} (+${elided} more)` : shown;
+  }
+  if (details && typeof details === 'object') return clampLogText(describeObjectEntries(details));
+  return clampLogText(details);
+};
+
 export function asyncHandler(fn) {
   return (req, res, next) => {
     Promise.resolve(fn(req, res, next)).catch((err) => {
@@ -142,8 +192,10 @@ export function asyncHandler(fn) {
       } else if (error.status >= 500) {
         console.error(logMsg, error.stack ? error.stack : '');
       } else {
-        const details = error.context?.details;
-        console.error(details ? `${logMsg}: ${JSON.stringify(details)}` : logMsg);
+        // An empty `[]`/`{}` is truthy but summarizes to nothing — gate on the
+        // summary so the line can't end in a dangling colon.
+        const summary = error.context?.details ? summarizeDetails(error.context.details) : '';
+        console.error(summary ? `${logMsg}: ${summary}` : logMsg);
       }
 
       return sendErrorResponse(res, error, { io });

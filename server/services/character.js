@@ -17,7 +17,7 @@ import crypto from 'crypto';
 import path from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS, sleep } from '../lib/fileUtils.js';
 import * as jiraService from './jira.js';
-import * as cosService from './cos.js';
+import { getAllTasks } from './cosTaskStore.js';
 import { getBirthDateStrict } from './meatspace.js';
 import { getCharacterSkills } from './characterSkills.js';
 import { getCharacterMetrics } from './characterMetrics.js';
@@ -424,7 +424,7 @@ export async function syncJiraXP() {
 
 export async function syncTaskXP() {
   const character = await loadRawCharacter();
-  const { user: userTasks, cos: cosTasks } = await cosService.getAllTasks();
+  const { user: userTasks, cos: cosTasks } = await getAllTasks();
   let totalXP = 0;
   let taskCount = 0;
 

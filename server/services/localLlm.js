@@ -26,13 +26,14 @@
  */
 
 import { execFile } from '../lib/childProcess.js';import { promisify } from 'util'
-import { readFileSync, createWriteStream } from 'fs'
+import { createWriteStream } from 'fs'
 import { rm } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { pipeline } from 'stream/promises'
 import { Readable } from 'stream'
-import { PATHS, atomicWrite, ensureDir, pathExists, sleep } from '../lib/fileUtils.js'
+import { ensureDir, pathExists, sleep } from '../lib/fileUtils.js'
+import { readPortosEnvValue, upsertPortosEnvLine } from '../lib/portosEnv.js'
 import { ServerError } from '../lib/errorHandler.js'
 import { assessDownloadPreflight, diskInsufficientError, DOWNLOAD_VERDICTS } from '../lib/downloadPreflight.js'
 import { compareSemver } from '../lib/versionUtils.js'
@@ -52,7 +53,6 @@ import { getProviderById, getAllProviders, updateProvider, refreshProviderModels
 import { getSettings } from './settings.js'
 
 const execFileAsync = promisify(execFile)
-const ENV_PATH = join(PATHS.root, '.env')
 const DEFAULT_BACKEND = 'ollama'
 
 // `lms get` blocks until the download finishes — generous but finite so a
@@ -135,46 +135,23 @@ async function detectInstallSource(backend) {
 
 // ---- active-backend marker (.env LLM_BACKEND) --------------------------------
 
-function readEnv() {
-  const result = {}
-  let content = ''
-  try { content = readFileSync(ENV_PATH, 'utf8') } catch { return result }
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-    const idx = trimmed.indexOf('=')
-    if (idx === -1) continue
-    let value = trimmed.slice(idx + 1).trim()
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1)
-    }
-    result[trimmed.slice(0, idx).trim()] = value
-  }
-  return result
-}
-
 /**
- * The active local-LLM backend, read fresh from `.env` each call. `.env` wins
- * when valid; otherwise a valid `process.env` override wins (a stale/invalid
- * `.env` marker must not mask a valid runtime env override — validate each
- * source before falling through, don't `||` on mere presence).
+ * The active local-LLM backend, read fresh from `.env` each call.
+ *
+ * **Precedence (settled in `server/lib/portosEnv.js`):** an exported
+ * `process.env` value is this run's decision and wins; the `.env` record is
+ * durable memory and loses. Validate each source before falling through.
  */
 export function getBackend() {
-  const fromFile = readEnv().LLM_BACKEND
+  const fromEnv = process.env.LLM_BACKEND
+  if (isBackend(fromEnv)) return fromEnv
+  const fromFile = readPortosEnvValue('LLM_BACKEND')
   if (isBackend(fromFile)) return fromFile
-  if (isBackend(process.env.LLM_BACKEND)) return process.env.LLM_BACKEND
   return DEFAULT_BACKEND
 }
 
 async function writeBackend(backend) {
-  let content = ''
-  try { content = readFileSync(ENV_PATH, 'utf8') } catch { /* no .env yet */ }
-  if (/^LLM_BACKEND=/m.test(content)) {
-    content = content.replace(/^LLM_BACKEND=.*/m, `LLM_BACKEND=${backend}`)
-  } else {
-    content = `LLM_BACKEND=${backend}\n${content}`
-  }
-  await atomicWrite(ENV_PATH, content)
+  await upsertPortosEnvLine('LLM_BACKEND', backend)
 }
 
 /**

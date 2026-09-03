@@ -4,6 +4,9 @@
  * characters carry the reference/walk/publish workflows, which the kind hint
  * spells out before the record exists. The created record bubbles up so the page
  * can refresh the library and navigate into it.
+ *
+ * Open/closed is controlled by the page so the library's empty state can offer
+ * "create your first sprite" as its call to action.
  */
 
 import { useState } from 'react';
@@ -13,8 +16,7 @@ import { createSpriteRecord } from '../../services/apiSprites.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import { NEW_SPRITE_KINDS } from '../../lib/spriteRecordGroups.js';
 
-export default function NewSpritePanel({ onCreated }) {
-  const [open, setOpen] = useState(false);
+export default function NewSpritePanel({ onCreated, open, onOpenChange }) {
   const [name, setName] = useState('');
   const [id, setId] = useState('');
   const [kind, setKind] = useState('character');
@@ -25,7 +27,7 @@ export default function NewSpritePanel({ onCreated }) {
       kind,
       ...(id.trim() ? { id: id.trim() } : {}),
     }, { silent: true });
-    setOpen(false);
+    onOpenChange(false);
     setName('');
     setId('');
     setKind('character');
@@ -35,16 +37,16 @@ export default function NewSpritePanel({ onCreated }) {
   return (
     <>
       <button
-        onClick={() => setOpen(true)}
+        onClick={() => onOpenChange(true)}
         className="flex items-center gap-2 px-3 py-1.5 bg-port-card border border-port-border hover:border-port-accent text-gray-300 rounded text-sm"
       >
         <Plus className="w-4 h-4" /> New Sprite
       </button>
-      <Modal open={open} onClose={() => setOpen(false)} size="sm" ariaLabel="New sprite" closeOnBackdrop={false}>
+      <Modal open={open} onClose={() => onOpenChange(false)} size="sm" ariaLabel="New sprite" closeOnBackdrop={false}>
         <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-white">New sprite</h3>
-            <button onClick={() => setOpen(false)} aria-label="Close new sprite panel" className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-400 hover:text-white">
+            <button onClick={() => onOpenChange(false)} aria-label="Close new sprite panel" className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-400 hover:text-white">
               <X className="w-4 h-4" />
             </button>
           </div>

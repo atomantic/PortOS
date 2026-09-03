@@ -244,6 +244,31 @@ describe('UsagePage provider reset times', () => {
     expect(reset.className.split(/\s+/)).not.toContain('hidden');
     expect(reset.textContent).not.toContain(resetsAt);
   });
+
+  it('gives the Grok weekly reset its own full-width row on the cramped mobile card', async () => {
+    // Grok shares a mobile grid cell with Codex, so its card is the narrowest —
+    // the reset row must stack under "% used" (flex-col) rather than squeeze
+    // onto the same line (flex-row), which was clipping/overlapping it.
+    const resetsAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000 + 60_000).toISOString();
+    api.getProviderUsage.mockResolvedValue({
+      providers: [{
+        family: 'grok',
+        label: 'Grok',
+        supported: true,
+        limits: [{ key: 'weekly', label: 'Weekly', percentUsed: 8, percentRemaining: 92, resetsAt }],
+        activity: [],
+        approximate: true,
+        fetchedAt: new Date().toISOString()
+      }]
+    });
+
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+
+    const reset = await screen.findByText(/resets .*\(in 2d\)/);
+    expect(reset.className.split(/\s+/)).not.toContain('hidden');
+    const row = reset.parentElement;
+    expect(row.className.split(/\s+/)).toEqual(expect.arrayContaining(['flex-col', 'sm:flex-row']));
+  });
 });
 
 // The provider-quota section reads every provider on mount, well after the page

@@ -12,7 +12,7 @@
  * rows this suite inserts.
  */
 import { describe, it, expect, afterAll } from 'vitest';
-import { checkHealth, ensureSchema, close, query } from '../lib/db.js';
+import { checkHealth, ensureSchema, close, query, withTransaction } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { recordEvents, listEvents, getDaySummary, stripParticipantsForAccount } from './humanActivity.js';
 
@@ -236,5 +236,59 @@ describe.skipIf(!runDb)('stripParticipantsForAccount — send-as alias backfill 
     expect(calls).toHaveLength(1);
     const row = await fetchRow('alias-tx');
     expect(row.participants).toEqual([{ email: 'friend@x.io' }]);
+  });
+});
+
+// #5715 — the source-scoped composite is what keeps a low-volume source sitting
+// behind a high-volume one off a backwards walk of the whole `happened_at`
+// index. Assert the PLAN, not a timing: plan shape is deterministic in CI,
+// elapsed time is not.
+describe.skipIf(!runDb)('source-scoped read plan (#5715)', () => {
+  // On a near-empty shared test table a sequential scan is genuinely the
+  // cheapest plan, so an unmodified EXPLAIN would prove nothing about the index.
+  // Disabling seqscan for the transaction makes the choice Postgres faces on a
+  // real, large table — this composite vs. the plain `happened_at` index —
+  // observable here.
+  const explainWithoutSeqScan = (sql, params) => withTransaction(async (client) => {
+    await client.query('SET LOCAL enable_seqscan = off');
+    const res = await client.query(`EXPLAIN (FORMAT JSON) ${sql}`, params);
+    return res.rows[0]['QUERY PLAN'][0].Plan;
+  });
+
+  const planNodes = (node) => [node, ...(node.Plans || []).flatMap(planNodes)];
+
+  // The point of the composite is that the index supplies the ordering, so the
+  // LIMIT stops early. A bitmap scan feeding a Sort would still name the index
+  // while re-reading and sorting every matching row — the exact regression this
+  // pins — so assert an ordered Index Scan AND the absence of a Sort node.
+  const expectOrderedIndexScan = (plan, indexName) => {
+    const nodes = planNodes(plan);
+    expect(nodes.map((n) => n['Node Type'])).not.toContain('Sort');
+    expect(nodes.some((n) => /^Index (Only )?Scan$/.test(n['Node Type']) && n['Index Name'] === indexName))
+      .toBe(true);
+  };
+
+  it('uses idx_human_activity_source_happened for a source-scoped newest-first read', async () => {
+    await recordEvents([mk({ dedupeKey: 'plan-1' }), mk({ dedupeKey: 'plan-2' })]);
+    const plan = await explainWithoutSeqScan(
+      `SELECT * FROM human_activity_events
+       WHERE source = $1
+       ORDER BY happened_at DESC
+       LIMIT 50`,
+      [SOURCE],
+    );
+    expectOrderedIndexScan(plan, 'idx_human_activity_source_happened');
+  });
+
+  it('uses idx_human_activity_source_kind_happened when the read is also kind-scoped', async () => {
+    await recordEvents([mk({ dedupeKey: 'plan-kind-1' })]);
+    const plan = await explainWithoutSeqScan(
+      `SELECT * FROM human_activity_events
+       WHERE source = $1 AND kind = $2
+       ORDER BY happened_at DESC
+       LIMIT 50`,
+      [SOURCE, 'message.received'],
+    );
+    expectOrderedIndexScan(plan, 'idx_human_activity_source_kind_happened');
   });
 });

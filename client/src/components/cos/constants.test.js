@@ -13,6 +13,8 @@ import {
   MUSE_ROOT_MOTION_CLIPS,
   resolveMuseMotion,
   MODEL_CAPABLE_CLI_REVIEWERS,
+  REVIEWER_OPTIONS,
+  REVIEWER_VALUES,
   reviewerLabel,
   summarizeHealthIssues,
   healthIssueTone,
@@ -332,3 +334,21 @@ describe('hasProviderPin', () => {
 });
 
 // @vitest-environment node
+
+// REVIEWER_OPTIONS is UI copy DERIVED from the roster in `lib/reviewerPins.js`,
+// which the server suite pins against the server's own enum. Re-listing the slugs
+// here would put the picker back outside that gate, so the derivation is the
+// thing under test: same slugs, same order, and a loud module-load throw (rather
+// than a missing dropdown row) if a roster addition arrives without copy.
+describe('REVIEWER_OPTIONS derivation', () => {
+  it('offers exactly the roster the server validates against, in order', () => {
+    expect(REVIEWER_OPTIONS.map(o => o.value)).toEqual(REVIEWER_VALUES);
+  });
+
+  it('gives every reviewer a label and a description', () => {
+    for (const option of REVIEWER_OPTIONS) {
+      expect(option.label, option.value).toBeTruthy();
+      expect(option.description, option.value).toBeTruthy();
+    }
+  });
+});

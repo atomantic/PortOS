@@ -6,6 +6,7 @@ import LayeredIntelligenceOutcomes from './LayeredIntelligenceOutcomes';
 import { timeAgo } from '../../utils/formatters';
 import { formatLiReason, liReasonTone } from '../../utils/layeredIntelligenceReasons';
 import { INPUT_CLASS } from './constants';
+import { cronFromIntervalMs } from '../../utils/cronHelpers';
 
 // The self-improvement loop's per-app config surface. Field set mirrors the
 // server schema (server/lib/validation.js `layeredIntelligenceConfigSchema`)
@@ -171,18 +172,17 @@ export function buildLayeredIntelligenceUpdate(baseline, current) {
   return Object.keys(update).length > 0 ? update : null;
 }
 
+// Map a chosen intervalMs to the per-app override's { interval, intervalMs }
+// pair the scheduler understands. The per-app cadence is a 5-field cron string
+// (a space-containing `interval` is read directly as the expression), so the
+// numeric picker writes the derived expression — NOT the UI's 'cron' sentinel,
+// which only opens the editor and saves no cadence. `intervalMs` rides along so
+// the picker can re-select the slot the user chose.
 const DAY_MS = 24 * 60 * 60 * 1000;
-const WEEK_MS = 7 * DAY_MS;
 
-// Map a chosen intervalMs to the per-app override's { interval, intervalMs } pair
-// the scheduler understands: 'daily'/'weekly' for the standard cadences, else
-// 'custom' (the scheduler's CUSTOM branch reads the numeric intervalMs). Mirrors
-// the server migration's intervalFieldsFromMs.
 export function intervalFieldsFromMs(intervalMs) {
   const ms = typeof intervalMs === 'number' && intervalMs > 0 ? intervalMs : DAY_MS;
-  if (ms === DAY_MS) return { interval: 'daily', intervalMs: ms };
-  if (ms === WEEK_MS) return { interval: 'weekly', intervalMs: ms };
-  return { interval: 'custom', intervalMs: ms };
+  return { interval: cronFromIntervalMs(ms), intervalMs: ms };
 }
 
 /**

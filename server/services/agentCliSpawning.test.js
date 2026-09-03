@@ -56,6 +56,9 @@ vi.mock('./agentFinalization.js', () => ({
   finalizeAgent: vi.fn().mockResolvedValue(undefined),
   releaseAgentLane: vi.fn(),
 }));
+vi.mock('./agentCompletionCleanup.js', () => ({
+  handlePipelineProgression: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('./agentState.js', () => ({
   activeAgents: new Map(),
   userTerminatedAgents: new Set(),
@@ -677,6 +680,44 @@ describe('stream error containment', () => {
     });
   });
 
+  // ─── Fast-exiting child: events emitted during the post-spawn await (#5791) ─
+
+  it('does not drop stdout or close emitted while the post-spawn await is still yielding', async () => {
+    // The child's whole life cycle can land between spawn() and the point where
+    // the real stdout/stderr/close handler bodies are installed: the
+    // `updateAgent(agentId, { pid })` in between is real state-file I/O, so it
+    // yields for a macrotask, not just a microtask. A CLI that dies instantly
+    // (bad flag, instant auth refusal) exits inside that window — before the fix
+    // its output was lost and its `close` landed on nothing, leaving the run
+    // record, the execution lane and the activeAgents entry non-terminal until
+    // the orphan reaper eventually noticed.
+    const { activeAgents } = await import('./agentState.js');
+    const { finalizeAgent } = await import('./agentFinalization.js');
+    activeAgents.clear();
+    finalizeAgent.mockClear();
+    agentStateMocks.updateAgent.mockImplementationOnce(async () => {
+      // Emit from inside the same macrotask yield the real updateAgent creates.
+      await new Promise((r) => setImmediate(r));
+      fakeProcess.stdout.emit('data', Buffer.from(
+        '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"unknown flag --nope\\n"}}}\n'
+      ));
+      fakeProcess.emit('close', 2);
+    });
+
+    await expect(spawnDirectly(minimalArgs)).resolves.toBe('agent-test');
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: 'agent-test',
+      exitCode: 2,
+      success: false,
+      // The output the child managed to write before exiting is exactly what
+      // explains the failure, so it has to survive the buffering too.
+      outputBuffer: expect.stringContaining('unknown flag --nope'),
+    }));
+    expect(activeAgents.has('agent-test')).toBe(false);
+  });
+
   // ─── Lifecycle ledger — the first-output boundary (#4540) ─────────────────
 
   it('records ONE run.output on the first real byte, and never again', async () => {
@@ -1141,6 +1182,41 @@ describe('stream error containment', () => {
   // didn't have, and hand its worktree to cleanup, discarding the state a resume
   // needs. The run is abandoned instead, leaving the record `running` for the
   // next boot's orphan sweep to reconcile from the host-shutdown marker.
+  describe('pipeline progression on close', () => {
+    // The runner/TUI completion path advances a staged pipeline through
+    // runAgentCompletionCleanup; this direct path only ran finalize + worktree
+    // cleanup, so every directly-spawned stage (all public-review stages)
+    // completed without queuing its successor.
+    it('advances the pipeline before the worktree is cleaned up', async () => {
+      const { handlePipelineProgression } = await import('./agentCompletionCleanup.js');
+      handlePipelineProgression.mockClear();
+      const order = [];
+      handlePipelineProgression.mockImplementation(async () => { order.push('pipeline'); });
+      minimalArgs.cleanupWorktreeFn.mockImplementation(async () => { order.push('worktree'); });
+      const task = { id: 'task-1', description: 'stage', metadata: { pipeline: { status: 'running', currentStage: 1, stages: [{}, {}, {}] } } };
+
+      const spawnPromise = spawnDirectly({ ...minimalArgs, task });
+      await new Promise((r) => setTimeout(r, 10));
+      fakeProcess.emit('close', 0);
+      await spawnPromise.catch(() => {});
+      await new Promise((r) => setTimeout(r, 30));
+
+      expect(handlePipelineProgression).toHaveBeenCalledWith(task, 'agent-test', true);
+      expect(order).toEqual(['pipeline', 'worktree']);
+    });
+
+    it('does not touch pipeline progression for an ordinary task', async () => {
+      const { handlePipelineProgression } = await import('./agentCompletionCleanup.js');
+      handlePipelineProgression.mockClear();
+      const spawnPromise = spawnDirectly(minimalArgs);
+      await new Promise((r) => setTimeout(r, 10));
+      fakeProcess.emit('close', 0);
+      await spawnPromise.catch(() => {});
+      await new Promise((r) => setTimeout(r, 30));
+      expect(handlePipelineProgression).not.toHaveBeenCalled();
+    });
+  });
+
   describe('host restart (#3202)', () => {
     // The outer beforeEach re-sets implementations but not call history, and the
     // mocks are module-scoped — clear so "was it called" reads only this test.

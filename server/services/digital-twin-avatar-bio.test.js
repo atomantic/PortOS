@@ -91,13 +91,13 @@ vi.mock('./digital-twin-helpers.js', () => ({
 
 vi.mock('./digital-twin-meta.js', () => ({ loadMeta: vi.fn() }));
 vi.mock('./digital-twin-analysis.js', () => ({ getTraits: vi.fn() }));
-vi.mock('./identity.js', () => ({ getGoals: vi.fn() }));
+vi.mock('./identity/goals.js', () => ({ getGoals: vi.fn() }));
 vi.mock('./providers.js', () => ({ getProviderById: vi.fn() }));
 
 import { buildAvatarBio, polishAvatarBio } from './digital-twin-avatar-bio.js';
 import { loadMeta } from './digital-twin-meta.js';
 import { getTraits } from './digital-twin-analysis.js';
-import { getGoals } from './identity.js';
+import { getGoals } from './identity/goals.js';
 import { getProviderById } from './providers.js';
 import { callProviderAI } from './digital-twin-helpers.js';
 

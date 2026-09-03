@@ -87,7 +87,13 @@ vi.mock('../services/api', () => ({
 import { __resetInstanceFeatureCache } from '../hooks/useInstanceFeatures.js';
 
 import { NAV_COMMANDS } from '../../../server/lib/navManifest.js';
-import Layout, { isFullWidthRoute, NAV_PRESENTATION } from './Layout';
+import Layout, {
+  isFullWidthRoute,
+  NAV_PRESENTATION,
+  SECTIONS_BEFORE_GOALS,
+  SECTIONS_AFTER_GOALS,
+  SECTIONS_BELOW_MORE,
+} from './Layout';
 
 const LocationProbe = () => {
   const location = useLocation();
@@ -130,7 +136,7 @@ describe('Layout — manifest-derived sidebar structure', () => {
   it('covers all sub-tabs for Settings, Digital Twin, and Messages in NAV_PRESENTATION', () => {
     const settingsPaths = [
       '/settings/general', '/settings/ai-assignments', '/settings/api-access', '/settings/autofixer',
-      '/settings/backup', '/settings/code-reviewers', '/settings/database', '/settings/features',
+      '/settings/backup', '/settings/credentials', '/settings/database', '/settings/features',
       '/settings/security', '/settings/sharing',
       '/settings/telegram', '/settings/voice', '/settings/mortalloom',
       '/openclaw', '/prompts', '/ai'
@@ -484,5 +490,44 @@ describe('Layout — isFullWidthRoute classification', () => {
     ['/songbook', true], ['/', false],
   ])('%s -> %s', (pathname, expected) => {
     expect(isFullWidthRoute(pathname)).toBe(expected);
+  });
+});
+
+// The sidebar's section grouping used to be three numeric slices into a single
+// flat SECTION_ORDER array, so inserting a section at its alphabetical position
+// silently pushed a real section (e.g. Settings) past the "More" divider with
+// nothing to catch it. The groups are named lists now; this locks the two
+// invariants that made the slices fragile.
+describe('Layout — sidebar section grouping', () => {
+  const alphabetical = (list) => [...list].sort((a, b) => a.localeCompare(b));
+
+  // The two lists are one alphabetical run split by the standalone Goals row, so
+  // splicing that row's label back in at the split point must re-form a sorted
+  // list. That pins BOTH the ordering within each list and where the split sits:
+  // moving a section across the Goals boundary lands it out of order here, which
+  // per-list sort checks would happily accept.
+  it('reads as one alphabetical run through the standalone Goals row', () => {
+    const goalsLabel = NAV_COMMANDS.find((command) => command.path === '/goals/list').label;
+    const run = [...SECTIONS_BEFORE_GOALS, goalsLabel, ...SECTIONS_AFTER_GOALS];
+    expect(run).toEqual(alphabetical(run));
+  });
+
+  // SECTIONS_BELOW_MORE is deliberately NOT part of that run — it is the
+  // below-the-fold bucket — so it is exempt from the sort check but still has to
+  // be disjoint and complete.
+  it('groups every presented section exactly once', () => {
+    const grouped = [...SECTIONS_BEFORE_GOALS, ...SECTIONS_AFTER_GOALS, ...SECTIONS_BELOW_MORE];
+    expect(new Set(grouped).size).toBe(grouped.length);
+
+    // `Main` (Dashboard/Review/Eidoverse plus the dynamic Apps row) and `Goals`
+    // render as standalone top-level rows, not as collapsible section groups.
+    const UNGROUPED_SECTIONS = new Set(['Main', 'Goals']);
+    const sectionByPath = new Map(NAV_COMMANDS.map((command) => [command.path, command.section]));
+    const presented = new Set(
+      Object.keys(NAV_PRESENTATION)
+        .map((path) => sectionByPath.get(path))
+        .filter((section) => section && !UNGROUPED_SECTIONS.has(section)),
+    );
+    expect(alphabetical([...presented])).toEqual(alphabetical(grouped));
   });
 });

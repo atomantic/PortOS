@@ -18,6 +18,7 @@
 
 import { scrubSecretTokens } from '../lib/secretText.js';
 import { listUserActions } from './userActions.js';
+import { detectIdleLeftoverBranches, formatLeftoverBranchSnippet } from './userActionDetectors.js';
 
 export const USER_ACTIONS_SNIPPET_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const USER_ACTIONS_SNIPPET_MAX_CHARS = 1500;
@@ -92,12 +93,22 @@ export function buildPersistentMindUserActionsPrompt(events) {
  * lifecycle), so a failure logs once and renders as "no section".
  */
 export async function readPersistentMindUserActionsPrompt({ now = Date.now() } = {}) {
-  const events = await listUserActions({
-    from: new Date(now - USER_ACTIONS_SNIPPET_WINDOW_MS).toISOString(),
-    limit: SNIPPET_FETCH_LIMIT,
-  }).catch((error) => {
-    console.error(`❌ Persistent mind user-action snippet read failed: ${error.message}`);
-    return [];
-  });
-  return buildPersistentMindUserActionsPrompt(events);
+  const [events, findings] = await Promise.all([
+    listUserActions({
+      from: new Date(now - USER_ACTIONS_SNIPPET_WINDOW_MS).toISOString(),
+      limit: SNIPPET_FETCH_LIMIT,
+    }).catch((error) => {
+      console.error(`❌ Persistent mind user-action snippet read failed: ${error.message}`);
+      return [];
+    }),
+    detectIdleLeftoverBranches().catch((error) => {
+      console.error(`❌ Persistent mind leftover-branch detector failed: ${error.message}`);
+      return [];
+    }),
+  ]);
+  const eventsSection = buildPersistentMindUserActionsPrompt(events);
+  const detectorLines = formatLeftoverBranchSnippet(findings);
+  if (!eventsSection && !detectorLines) return '';
+  if (!eventsSection) return `# Recent user actions (last 24h)\n${detectorLines}`;
+  return detectorLines ? `${eventsSection}\n${detectorLines}` : eventsSection;
 }

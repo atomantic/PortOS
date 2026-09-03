@@ -5,10 +5,12 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import * as taskSchedule from '../services/taskSchedule.js';
+import { logCosScheduleUpdate } from '../services/userActionScheduleLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination } from '../lib/validation.js';
 import { promptSourceSchema, PROMPT_SOURCES } from '../lib/cosValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
+import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../services/taskScheduleConstants.js';
 
 const templateTaskSchema = z.object({
   name: z.string().min(1),
@@ -21,7 +23,7 @@ const templateTaskSchema = z.object({
 
 const router = Router();
 
-const SCHEDULE_FIELDS = ['type', 'enabled', 'intervalMs', 'cronExpression', 'providerId', 'model', 'effort', 'prompt', 'description', 'dataInputs', 'taskMetadata', 'runAfter',
+const SCHEDULE_FIELDS = ['type', 'perpetual', 'enabled', 'intervalMs', 'cronExpression', 'providerId', 'model', 'effort', 'prompt', 'description', 'dataInputs', 'taskMetadata', 'runAfter',
   // Perpetual (drain-until-done) recheck cadence: after a perpetual task drains
   // its backlog and parks, it re-probes its work-detector on this cadence.
   // `recheckCron` (5-field) takes precedence over `recheckIntervalMs`.
@@ -41,6 +43,28 @@ function pickScheduleSettings(body) {
   }
   if (settings.enabled !== undefined && typeof settings.enabled !== 'boolean') {
     throw new ServerError('enabled must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (settings.perpetual !== undefined && typeof settings.perpetual !== 'boolean') {
+    throw new ServerError('perpetual must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (settings.type !== undefined) {
+    // Reject an unrecognized string outright — decoding it would silently make
+    // an unreadable cadence 'on-demand', i.e. quietly stop the task running.
+    if (!isKnownIntervalType(settings.type)) {
+      throw new ServerError(`type must be one of ${Object.values(INTERVAL_TYPES).join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    // A client still on the previous release (or a peer machine mid-upgrade)
+    // may send a retired cadence name. Rewrite it onto the two-variant model
+    // rather than 400-ing, so an older UI keeps working through the upgrade.
+    const decoded = decodeIntervalType(settings.type, { intervalMs: settings.intervalMs });
+    settings.type = decoded.type;
+    if (decoded.perpetual && settings.perpetual === undefined) settings.perpetual = true;
+    if (decoded.type === INTERVAL_TYPES.CRON && !isCronExpression(settings.cronExpression) && decoded.cronExpression) {
+      settings.cronExpression = decoded.cronExpression;
+    }
+  }
+  if (settings.cronExpression !== undefined && settings.cronExpression !== null && !isCronExpression(settings.cronExpression)) {
+    throw new ServerError('cronExpression must be a 5-field cron expression (minute hour dayOfMonth month dayOfWeek) or null', { status: 400, code: 'VALIDATION_ERROR' });
   }
   if (settings.description !== undefined) {
     if (settings.description !== null && typeof settings.description !== 'string') {
@@ -144,6 +168,11 @@ router.put('/schedule/task/:taskType', asyncHandler(async (req, res) => {
     if (settings.runAfter.length === 0) settings.runAfter = null;
   }
   const result = await taskSchedule.updateTaskInterval(taskType, settings);
+  await logCosScheduleUpdate({
+    target: taskType,
+    patch: settings,
+    source: { route: `${req.baseUrl}${req.route?.path ?? ''}`, method: req.method },
+  });
   res.json({ success: true, taskType, interval: result });
 }));
 
@@ -242,15 +271,11 @@ router.get('/schedule/interval-types', (req, res) => {
   res.json({
     types: taskSchedule.INTERVAL_TYPES,
     descriptions: {
-      rotation: 'Runs as part of normal task rotation (default)',
-      daily: 'Runs once per day',
-      weekly: 'Runs once per week',
-      once: 'Runs once per app or globally, then stops',
       'on-demand': 'Only runs when manually triggered',
-      custom: 'Custom interval in milliseconds',
-      cron: 'Cron expression schedule (minute hour dayOfMonth month dayOfWeek)',
-      perpetual: 'Drains actionable work back-to-back until none remains, then rechecks on a cadence (recheckCron / recheckIntervalMs, default daily)'
-    }
+      cron: 'Scheduled on a cron expression (minute hour dayOfMonth month dayOfWeek)'
+    },
+    // `perpetual` is an orthogonal flag, not a type — it applies to either.
+    perpetual: 'Drains actionable work back-to-back until none remains, then rechecks on a cadence (its own cron expression when scheduled, else recheckCron / recheckIntervalMs, default daily)'
   });
 });
 

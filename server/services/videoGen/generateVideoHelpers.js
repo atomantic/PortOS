@@ -12,6 +12,7 @@ import { existsSync, statSync } from 'fs';
 import { broadcastSse } from '../../lib/sseUtils.js';
 import { generateThumbnail, optimizeForStreaming } from '../../lib/ffmpeg.js';
 import { formatBytes } from '../../lib/fileUtils.js';
+import { renderTimingFields } from '../../lib/renderTiming.js';
 import { videoGenEvents } from './events.js';
 
 /**
@@ -113,6 +114,16 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
   // a missed `started` event. Omitted entirely when there is no estimate — an
   // absent key, never `etaMs: 0`, which a UI would render as "done".
   const etaField = () => (Number.isFinite(job?.etaMs) ? { etaMs: job.etaMs } : {});
+  // Every status line goes out twice: on the videoGen job's own SSE stream, and
+  // on videoGenEvents for the mediaJobQueue dispatcher to forward to the page's
+  // stream. Both carry the phase the last STAGE: marker put us in — the client
+  // maps it to a named render step ("Loading model" / "Rendering" / …), and a
+  // bare STATUS line is often the ONLY thing a runner emits for minutes at a
+  // time, so without the phase it can only be shown as undifferentiated text.
+  const emitStatus = (message, extra = {}) => {
+    broadcastSse(job, { type: 'status', message, phase: currentPhase, ...extra });
+    videoGenEvents.emit('status', { generationId: jobId, message, phase: currentPhase, ...extra });
+  };
 
   return (raw) => {
     const line = raw.trim();
@@ -177,13 +188,11 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
     // Heartbeat for the queue's idle watchdog (see imageGen/local.js).
     videoGenEvents.emit('activity', { generationId: jobId });
     if (line.startsWith('STATUS:')) {
-      const message = line.slice(7);
-      broadcastSse(job, { type: 'status', message });
-      // Mirror status to videoGenEvents so the mediaJobQueue SSE dispatcher
-      // forwards it to the client. Without this, only STAGE: progress
-      // reaches the UI and long pre-render phases ("Loading pipeline…",
-      // "Generating I2V…") display nothing.
-      videoGenEvents.emit('status', { generationId: jobId, message });
+      // Mirrored to videoGenEvents by emitStatus so the mediaJobQueue SSE
+      // dispatcher forwards it to the client. Without that, only STAGE:
+      // progress reaches the UI and long pre-render phases ("Loading
+      // pipeline…", "Generating I2V…") display nothing.
+      emitStatus(line.slice(7));
       return true;
     }
     if (line.startsWith('STAGE:')) {
@@ -213,11 +222,8 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
       const tag = (parts[2] || '').toLowerCase();
       if (tag === 'heartbeat') {
         // Surface as a status message; the activity emit above already
-        // resets the queue watchdog. Mirror to videoGenEvents so the
-        // mediaJobQueue SSE dispatcher forwards it to the client.
-        const message = `${parts[1]}: heartbeat ${parts[3] || ''}`;
-        broadcastSse(job, { type: 'status', message });
-        videoGenEvents.emit('status', { generationId: jobId, message });
+        // resets the queue watchdog.
+        emitStatus(`${parts[1]}: heartbeat ${parts[3] || ''}`);
         return true;
       }
       if (tag === 'step') {
@@ -229,15 +235,12 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
         // it to the client instead of falling back to the synthesized
         // "Rendering step X/Y" (which hides useful labels like "Loading
         // model" emitted at stage boundaries).
-        videoGenEvents.emit('progress', { generationId: jobId, progress: step / total, step, totalSteps: total, message: label || undefined, ...etaField() });
+        videoGenEvents.emit('progress', { generationId: jobId, progress: step / total, step, totalSteps: total, message: label || undefined, phase: currentPhase, ...etaField() });
         return true;
       }
       // Bare phase marker (e.g. STAGE:load-pipeline, STAGE:from-pretrained) —
       // surface as a status line. No progress %, no division-by-undefined.
-      // Mirror to videoGenEvents for client forwarding.
-      const message = parts.slice(1).join(':');
-      broadcastSse(job, { type: 'status', message });
-      videoGenEvents.emit('status', { generationId: jobId, message });
+      emitStatus(parts.slice(1).join(':'));
       return true;
     }
     if (line.startsWith('DOWNLOAD:')) {
@@ -245,13 +248,11 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
       currentPhase = 'download';
       const rawText = line.slice(9);
       const byteInfo = parseByteProgress(rawText);
-      const message = formatDownloadMessage(rawText, byteInfo);
-      // Include downloadedBytes/totalBytes fields for clients that want numeric progress
-      const frame = { type: 'status', message, phase: currentPhase };
-      if (byteInfo.downloaded != null) frame.downloadedBytes = byteInfo.downloaded;
-      if (byteInfo.total != null) frame.totalBytes = byteInfo.total;
-      broadcastSse(job, frame);
-      videoGenEvents.emit('status', { generationId: jobId, message, ...byteInfo });
+      // Include downloadedBytes/totalBytes for clients that want numeric progress.
+      const bytes = {};
+      if (byteInfo.downloaded != null) bytes.downloadedBytes = byteInfo.downloaded;
+      if (byteInfo.total != null) bytes.totalBytes = byteInfo.total;
+      emitStatus(formatDownloadMessage(rawText, byteInfo), bytes);
       return true;
     }
     const m = line.match(/(\d+)%\|/);
@@ -273,7 +274,7 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
       // (`60%|██████    | 6/10 [00:30<00:20, ...]`) is terminal noise that
       // would clobber the last meaningful STATUS/STAGE line on every
       // percent update. Client renders the percentage separately.
-      videoGenEvents.emit('progress', { generationId: jobId, progress: pct, ...etaField() });
+      videoGenEvents.emit('progress', { generationId: jobId, progress: pct, phase: currentPhase, ...etaField() });
       return true;
     }
     return false;
@@ -568,14 +569,7 @@ export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename,
   // (a zero-duration sample would drag every estimate toward "instant").
   // The window measured is spawn → output finalized, i.e. what the user waits
   // through, including the thumbnail/faststart tail above.
-  const startMs = Number(startedAtMs);
-  const timing = Number.isFinite(startMs) && startMs > 0
-    ? {
-      renderMs: Date.now() - startMs,
-      renderStartedAt: new Date(startMs).toISOString(),
-      renderCompletedAt: new Date().toISOString(),
-    }
-    : {};
+  const timing = renderTimingFields(startedAtMs);
   await mutateHistory((history) => {
     history.unshift({
       ...meta,

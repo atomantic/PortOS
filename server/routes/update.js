@@ -3,80 +3,19 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { UPSTREAM_FULL_NAME } from '../lib/gitRemote.js';
-import { persistentMindImageWorkGuard } from '../lib/persistentMind.js';
 import * as updateChecker from '../services/updateChecker.js';
 import { executeUpdate } from '../services/updateExecutor.js';
-import { getActiveAgentIds, spawningTasks } from '../services/agentState.js';
-import { readPersistentMindStateForSafetyCheck, withStateLock } from '../services/cosState.js';
-import { filterLiveAgentIds } from '../services/cosAgentLifecycle.js';
+import { withStateLock } from '../services/cosState.js';
+import {
+  countActiveCosAgents,
+  agentsActiveError,
+  getPersistentMindImageWorkGuard,
+  persistentMindImageWorkError,
+  persistentMindStateUntrustedError,
+  checkPortosUpdatePreflight,
+} from '../services/updatePreflight.js';
 
 const router = Router();
-
-// Count CoS agents a PortOS restart (update.sh → pm2 restart) would disrupt:
-// live processes (direct + runner spawns) PLUS any task mid-spawn. During a
-// spawn the task sits in `spawningTasks` while its child process is created and
-// only THEN registered in the process maps (`withSpawnDedupGuard` holds the set
-// across the whole launch) — so an agent that has already spawned a process but
-// not yet registered it is invisible to getActiveAgentIds() alone. Summing both
-// includes every distinct in-flight task in the count (a live agent plus two
-// spawning tasks reads as 3, not 1). It can transiently over-report by 1 during
-// the sub-second overlap where a single launching agent sits in BOTH sets, but
-// the guard only needs `> 0` and the count is a near-exact upper bound shown in
-// an advisory notice — an occasional +1 mid-launch is preferable to dropping
-// the spawning tasks entirely.
-//
-// This still can't close the window where a NEW spawn begins AFTER a caller
-// reads this but before update.sh's pm2 restart. The route's post-lock re-check
-// below narrows it; fully closing it needs every CoS spawn engine to consult
-// updateInProgress (tracked in #4124) — the orphan reaper bounds the residual.
-//
-// The map ids are filtered through PortOS's own durable records first
-// (`filterLiveAgentIds`). Neither map is self-cleaning, and `syncRunnerAgents`
-// adopts whatever the CoS Runner still advertises — so a TUI the runner failed
-// to kill stayed "active" until the next PortOS restart, permanently blocking
-// the one action that would have cleared it. A restart cannot sever a run this
-// process has already finalized, so a finalized id must not gate the update.
-async function countActiveCosAgents() {
-  const live = await filterLiveAgentIds(getActiveAgentIds());
-  return live.length + spawningTasks.size;
-}
-
-// The 409 the update flow raises when a restart would sever a live/spawning
-// agent — shared by the fast-fail pre-check and the post-lock re-check.
-function agentsActiveError(n) {
-  return new ServerError(
-    `${n} CoS agent${n === 1 ? ' is' : 's are'} running — updating would restart PortOS and ` +
-    `sever ${n === 1 ? 'it' : 'them'}. Pause or wait for the agent${n === 1 ? '' : 's'} to finish, then update.`,
-    { status: 409, code: 'AGENTS_ACTIVE' }
-  );
-}
-
-const persistentMindImageWorkError = (guard) => {
-  const work = [
-    guard.queuedImageMessages > 0
-      ? `${guard.queuedImageMessages} queued image message${guard.queuedImageMessages === 1 ? '' : 's'}`
-      : null,
-    guard.activeImageMessage ? 'one active image turn' : null,
-  ].filter(Boolean).join(' and ');
-  return new ServerError(
-    `Persistent Mind has ${work}. Drain the image-bearing work, or create a backup and retry ` +
-    'with acknowledgePersistentMindImageBackup: true. Older source readers cannot preserve image references.',
-    { status: 409, code: 'PERSISTENT_MIND_IMAGES_IN_FLIGHT' },
-  );
-};
-
-async function getPersistentMindImageWorkGuard() {
-  const snapshot = await readPersistentMindStateForSafetyCheck();
-  if (!snapshot.trusted) {
-    return { safe: false, trusted: false, queuedImageMessages: 0, activeImageMessage: false };
-  }
-  return persistentMindImageWorkGuard(snapshot.persistentMind);
-}
-
-const persistentMindStateUntrustedError = () => new ServerError(
-  'Persistent Mind state could not be validated. Restore data/cos/state.json from backup before updating.',
-  { status: 409, code: 'PERSISTENT_MIND_STATE_UNTRUSTED' },
-);
 
 const ignoreSchema = z.object({
   version: z.string().min(1, 'version is required')
@@ -189,23 +128,17 @@ router.post('/sync-fork', asyncHandler(async (req, res) => {
 router.post('/execute', asyncHandler(async (req, res) => {
   const { acknowledgeFork, acknowledgePersistentMindImageBackup, reconcile } = validateRequest(executeSchema, req.body || {});
 
-  // Never restart PortOS out from under a live CoS agent. Both a normal update
-  // and a reconcile run update.sh, which pm2-restarts THIS server process and
-  // severs any in-flight agent (each agent's PTY/child process is a child of it).
-  // countActiveCosAgents() reflects exactly what a restart would kill (see its
-  // definition above). Fast-fail here so it covers reconcile, normal update, and
-  // both fork variants (all funnel through /execute) before doing the git/fork
-  // work below; a second re-check after the lock closes the window an agent
-  // could start in during that work.
-  const preCheck = await countActiveCosAgents();
-  if (preCheck > 0) throw agentsActiveError(preCheck);
-  const preImageCheck = await getPersistentMindImageWorkGuard();
-  if (!preImageCheck.trusted) throw persistentMindStateUntrustedError();
-  if (!preImageCheck.safe && !acknowledgePersistentMindImageBackup) {
-    throw persistentMindImageWorkError(preImageCheck);
-  }
-
-  const status = await updateChecker.getUpdateStatus();
+  // Never restart PortOS out from under a live CoS agent, in-flight Persistent
+  // Mind image work, or an unacknowledged fork. Both a normal update and a
+  // reconcile run update.sh, which pm2-restarts THIS server process and severs
+  // any in-flight agent (each agent's PTY/child process is a child of it).
+  // checkPortosUpdatePreflight() is shared with the App Management socket path
+  // (server/sockets/apps.js `app:update`) so both entry points refuse
+  // identically (#5984). Fast-fail here so it covers reconcile, normal update,
+  // and both fork variants (all funnel through /execute) before doing the
+  // git/fork work below; a second re-check after the lock (below) closes the
+  // window an agent could start in during that work.
+  const status = await checkPortosUpdatePreflight({ acknowledgeFork, acknowledgePersistentMindImageBackup });
 
   // Two distinct entry points:
   //   - Normal update: requires a known, newer release tag to update TO.
@@ -236,23 +169,6 @@ router.post('/execute', asyncHandler(async (req, res) => {
   // Validate tag is a well-formed semver release (e.g. "v1.27.0" or "v1.27.0-rc.1") to prevent option injection
   if (!/^v\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$/.test(tag)) {
     throw new ServerError('Invalid release tag format', { status: 400, code: 'INVALID_TAG' });
-  }
-
-  // Fork gate: update.sh pulls from origin, so running from an unsynced fork
-  // would silently no-op (or pull a stale version). Require either a recent
-  // fork sync of the upstream branch or an explicit acknowledgement that the
-  // user knows they're updating from their own origin.
-  const remote = status.remoteInfo;
-  if (remote?.isFork && !acknowledgeFork) {
-    // Reuse the freshness boolean the service already computed so the route
-    // and `status.forkSyncFresh` agree by construction (no duplicate math).
-    if (!status.forkSyncFresh) {
-      throw new ServerError(
-        `Running from a fork (${remote.fullName}). Sync your fork from ${status.upstream.fullName} ` +
-        `first, or re-submit with acknowledgeFork: true to update from your fork's origin as-is.`,
-        { status: 412, code: 'FORK_SYNC_REQUIRED' }
-      );
-    }
   }
 
   // Atomic check-and-set: rejects if already in progress, preventing concurrent updates

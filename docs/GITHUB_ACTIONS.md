@@ -213,10 +213,16 @@ The selected work is split across parallel jobs:
   the server on the same job when server source changed (the smoke path uses the
   file backend under `NODE_ENV=test` and does not need Postgres). The install
   and the native-addon rebuild are skipped when a `server/node_modules` cache is
-  restored and its trusted-rebuild mark checks out.
+  restored and its trusted-rebuild mark checks out. This job also runs
+  `npm ci --prefix autofixer` — uncached and never skipped, because resolving
+  that workspace's tracked lockfile *is* the check. It is the only CI step that
+  installs `autofixer/`, which `npm run setup` and `scripts/ensure-deps.js`
+  install on every user's machine; without it a lockfile that stopped resolving
+  shipped green and failed at setup time. (`browser/` gets no such step: zero
+  dependencies, and its lockfile is deliberately gitignored.)
 - **Client tests and build** — affected client tests; production build whenever
   client source changed; client lint on the same install so Biome does not pay a
-  second `npm ci`.
+  second `npm ci`. Lint, build, and the bundle budget run on shard 1 only.
 - **DB tests** — provisions only the isolated `portos_test` database and runs
   the serial DB suite when database-sensitive files changed.
 - **Windows server tests** — the same server selection, but only on full CI
@@ -230,6 +236,47 @@ The selected work is split across parallel jobs:
 - **Full CI Gate** — published only when the plan chose the complete suite, and
   mirrors `CI Gate`'s result. This is the check the release workflow looks for;
   see "Reusing the release PR's CI run" below.
+
+### Full-suite sharding
+
+A full plan is the slow case: on the 4-vCPU public runners the client suite
+alone took ~10 minutes (jsdom setup per file dominates — the 868-file run
+spent 489 s in `environment` against 384 s in `tests` — and its worker cap is
+two, see `scripts/vitestCiPool.js`), the Windows server suite ~10 minutes
+(module import is several times slower there), and the Linux server suite ~6
+minutes. Roughly half of all PR runs went full, so most PRs waited on the
+longest of those.
+
+The three test-runner jobs are therefore matrices. The impact job emits
+`server_shards`, `client_shards`, and `windows_shards` — `[1]` for a scoped
+plan and `[1..n]` for a full one, sized by `FULL_SUITE_SHARDS` in
+`scripts/ci-test-plan.js` (client 3, Windows 3, server 2) — and each job builds
+its matrix from that output. The decision has to be made in the planner: a
+job-level `if` cannot read the `matrix` context, so a job cannot skip its own
+extra shards. `scripts/run-ci-tests.js` turns `CI_SHARD=<index>/<count>` into
+Vitest's `--shard`, which slices the file list by path hash — every shard is a
+fixed, disjoint subset, and their union is the complete suite. A scoped plan
+never shards (its handful of files would trip Vitest's shard-count guard) and
+passes no flag at all, so its invocation stays identical to a local
+`npm run test:ci`. Once-only steps — smoke boot, lint, the client build, the
+bundle budget — pin themselves to shard 1. `CI Gate` sees a matrix job as one
+`needs` result, so nothing downstream changes; public-repo runner minutes are
+free, so the fan-out costs only concurrency.
+
+`scripts/run-ci-tests.test.js` pins the wiring: every runner job builds its
+matrix from the planner, hands `CI_SHARD` to the runner, and gates its
+once-only steps on shard 1.
+
+### Python sidecar scripts
+
+`scripts/*.py` (the LTX-2, MiniMax, FastVideo, and download sidecars) used to
+be "unclassified changed files" and forced the complete matrix on every edit.
+Vitest's import graph cannot reach into them, but ~45 suites pin their
+contracts by reading the `.py` source as text (argparse flags, MLX pins, model
+paths). The planner now resolves the suites naming each changed script with
+`git grep` (`pythonReferencePattern`) and runs exactly them in `files` mode,
+failing closed to the full suite for a script nothing names. A `.py` outside
+`scripts/` is still unclassified.
 
 Targeted `files` plans run the planner's exact test files once. `related` plans
 run `vitest related` once with changed behavioral source paths and the cheap
@@ -332,6 +379,14 @@ aggregate diagnostics and cache post-steps can complete normally.
 - Barrel/catalog guards are added when reusable `lib`, `hooks`, or `utils`
   directories change, and catalog-only barrels are excluded from import-graph
   expansion. JSX changes include the global accessibility convention guard.
+- Any server source change adds the two generated-manifest drift tests
+  (`generate-api-route-catalog`, `generate-prompt-stage-call-sites`). They
+  regenerate from the tree rather than importing what they scan, so no import
+  edge reaches them; before this rule a route added on a scoped plan could
+  merge with a stale catalog and turn every later full-plan PR red.
+- A `scripts/*.py` sidecar selects every test that names a python script
+  (`git grep`), in `files` mode, and falls back to the full suite when none do
+  — see "Python sidecar scripts" above.
 - A deleted executable source cannot be handed to `vitest related`, so that
   case fails closed to the complete suite.
 - Database adapters, DB scripts, and relevant migrations add the complete

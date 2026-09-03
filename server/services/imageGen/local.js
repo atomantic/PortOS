@@ -29,6 +29,7 @@ import { resolveFlux2Python, FLUX2_VENV_DEFAULT } from '../../lib/pythonSetup.js
 import { hfChildEnv } from '../hfToken.js';
 import { extractGatedRepo, isGatedRepoError } from '../../lib/hfErrors.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { renderTimingFields } from '../../lib/renderTiming.js';
 import { createLineReader } from '../../lib/streamLines.js';
 import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { prepareLocalMemory, gpuBlockersMessage } from '../localMemory.js';
@@ -43,7 +44,8 @@ import { getImageModels, isFlux2, isErnie, isHiDream, isQwen } from '../../lib/m
 import { isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { usesDiffusersRunner, flux2Bf16BaseRepo } from '../../lib/runners.js';
 import { weaveLoraTriggers } from '../../lib/loraTriggers.js';
-import { readTriggerWordsByFilename } from '../loras.js';
+import { provenanceForRender } from '../../lib/assetProvenance.js';
+import { readTriggerWordsByFilename, readLoraLicensesByFilename } from '../loras.js';
 
 // Read the registry lazily — callers below hit getImageModels() at request
 // time. A prior `IMAGE_MODELS = Object.fromEntries(getImageModels()...)`
@@ -329,6 +331,9 @@ export function buildSidecarMeta({
   // passes the map so this stays pure. Keyed rather than positional because the
   // valid-LoRA order is only known after the prefix-check below.
   loraTriggerWords = null,
+  // License map keyed by LoRA basename, read from sidecars by generateImage
+  // so this stays pure. Missing entries stamp license: null (unknown).
+  loraLicenses = null,
   initImagePath = null,
   initImageStrength = null,
   referenceImagePaths = [],
@@ -452,6 +457,23 @@ export function buildSidecarMeta({
     meta.renderPrompt = renderPrompt;
     meta.addedTriggerWords = addedTriggerWords;
   }
+  // Stamp the licenses known at THIS render. A later re-read of the LoRA
+  // sidecar or model card must not rewrite what was true when the pixels
+  // were made (#5638). Unknown stays null.
+  meta.provenance = provenanceForRender({
+    model: {
+      id: modelId,
+      name: model?.name || modelId,
+      license: model?.license,
+      repo: model?.repo,
+      disclosure: model?.disclosure,
+    },
+    loras: validLoraFilenames.map((filename) => ({
+      filename,
+      ...(loraLicenses?.[filename] || {}),
+    })),
+    capturedAt: meta.createdAt,
+  });
   return {
     meta,
     renderPrompt,
@@ -532,6 +554,9 @@ export function parseImageExecutionMarker(line) {
 }
 
 export async function generateImage({ pythonPath, prompt = '', negativePrompt = '', modelId = LOCAL_IMAGEGEN_DEFAULT_MODEL, width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], visualConditioning = null, jobId: providedJobId = null, cleanC2PA = false, denoise = false, regenOf = null, upscaleTo = null, outputTarget = null }) {
+  // The ingestion instant `renderTimingFields` measures from — the queue calls
+  // generateImage the moment it picks this job up. See lib/renderTiming.js.
+  const renderStartedAtMs = Date.now();
   // Empty prompt is allowed: img2img / edit / unconditional renders are driven
   // by the init image (or run unconditionally), so text isn't required. The
   // mflux/diffusers runners accept an empty `--prompt` — the regen pass (#912)
@@ -588,6 +613,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   // simply contributes nothing and the render is unchanged. A no-LoRA render
   // short-circuits inside the helper, so the common case does zero extra I/O.
   const loraTriggerWords = await readTriggerWordsByFilename([...loraFilenames, ...loraPaths]);
+  const loraLicenses = await readLoraLicensesByFilename([...loraFilenames, ...loraPaths]);
   const {
     meta,
     renderPrompt,
@@ -622,13 +648,14 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     visualConditioning,
     regenOf,
     loraTriggerWords,
+    loraLicenses,
     resolveInputPath: resolveImageInputPath,
     loraExists: existsSync,
   });
   if (addedTriggerWords.length) {
     console.log(`🔤 LoRA trigger words woven [${jobId.slice(0, 8)}]: ${addedTriggerWords.join(', ')}`);
   }
-  const job = { ...meta, clients: [], status: 'running' };
+  const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
   jobs.set(jobId, job);
 
   // Per-job stepwise output dir under the OS temp dir. mflux writes one PNG
@@ -1010,6 +1037,9 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       // result-fetch, so there's no gallery record to hydrate.
       const sidecar = join(outputDir, `${jobId}.metadata.json`);
       if (!skipSidecar) {
+        // Render timing is stamped onto `meta` (not spread at the write) so the
+        // sidecar and the `autoCleanGeneratedImage` rewrite below agree on it.
+        Object.assign(meta, renderTimingFields(job.renderStartedAtMs));
         await atomicWrite(sidecar, meta).catch(() => {});
         // Cleaners run BEFORE the SSE complete + completed events so subscribers
         // see the cleaned bytes. Local FLUX renders never carry C2PA chunks so

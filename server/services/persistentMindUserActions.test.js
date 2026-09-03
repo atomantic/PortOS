@@ -1,9 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ listUserActions: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  listUserActions: vi.fn(),
+  detectIdleLeftoverBranches: vi.fn(async () => []),
+}));
 vi.mock('./userActions.js', () => ({
   listUserActions: (...args) => mocks.listUserActions(...args),
 }));
+vi.mock('./userActionDetectors.js', async (importActual) => {
+  const actual = await importActual();
+  return {
+    ...actual,
+    detectIdleLeftoverBranches: (...args) => mocks.detectIdleLeftoverBranches(...args),
+  };
+});
 
 import {
   USER_ACTIONS_SNIPPET_MAX_CHARS,
@@ -101,5 +111,15 @@ describe('readPersistentMindUserActionsPrompt', () => {
   it('renders nothing instead of sinking the mind turn when the ledger read fails', async () => {
     mocks.listUserActions.mockRejectedValueOnce(new Error('database offline'));
     await expect(readPersistentMindUserActionsPrompt()).resolves.toBe('');
+  });
+
+  it('appends leftover-branch detector lines even when the 24h ledger is empty', async () => {
+    mocks.listUserActions.mockResolvedValueOnce([]);
+    mocks.detectIdleLeftoverBranches.mockResolvedValueOnce([{
+      appId: 'app-acme', leftoverCount: 2, lastUserReconcileAt: null, agentsIdle: true,
+    }]);
+    const prompt = await readPersistentMindUserActionsPrompt();
+    expect(prompt).toContain('# Recent user actions (last 24h)');
+    expect(prompt).toContain('leftover-branches: app app-acme has 2 local branches, agents idle, last manual reconcile never');
   });
 });

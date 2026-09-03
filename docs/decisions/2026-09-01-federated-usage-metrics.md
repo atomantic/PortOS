@@ -121,11 +121,20 @@ excluded on both privacy and payload grounds.
 - Peer rows are as fresh as the last 60s sync cycle, so each row states when its
   digest was captured rather than implying it is live.
 - `usage` is the first snapshot category that is **always dirty** — `saveUsage`
-  rewrites `usage.json` on every AI run — so it transfers the whole digest map
-  where every other category rests on a rarely-moving checksum. The payload is
-  bounded here (120-day wire rollup, all-time `byProvider`/`byModel` dropped,
-  no per-provider rows on fleet output); replacing the whole-payload transfer
-  with a `capturedAt` manifest + per-slot fetch is filed as **#5759**.
+  rewrites `usage.json` on every AI run — where every other category rests on a
+  rarely-moving checksum. The payload is bounded (120-day wire rollup, all-time
+  `byProvider`/`byModel` dropped, no per-provider rows on fleet output), and
+  since **#5759** the transfer is per-slot rather than whole-map: the category
+  serves a **manifest** at `/api/sync/usage/manifest` — `{ instances: {
+  <instanceId>: capturedAt }, tombstones }` — and that manifest, not the
+  payload, is what the category's checksum hashes. A puller diffs the remote
+  manifest against what it already holds and fetches only the advanced slots
+  via `/api/sync/usage/snapshot?slots=…`, so one machine burning tokens moves
+  one digest instead of N. Both legs degrade: a source peer too old to serve a
+  manifest 404s it and the puller falls back to the whole snapshot, and a
+  snapshot request with no `slots` serves everything — receivers merge per slot
+  under LWW either way, so a full payload is always applied idempotently. See
+  `server/lib/syncManifest.js` for the wire contract.
 - **The per-peer toggle governs the INBOUND direction.** Snapshot sync is
   pull-only, and `/api/sync/:category/snapshot` carries no per-peer category
   authorization for *any* category — the receiver-side gap that per-record pulls

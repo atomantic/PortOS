@@ -321,6 +321,31 @@ describe('<MusicDesigner>', () => {
     });
   });
 
+  // A blocked localStorage (Safari private mode, disabled cookies) throws from
+  // the accessor. The draft-id read happens in the component RENDER BODY, so
+  // before #5689 that throw was a render-phase exception and the whole Music
+  // Designer route unmounted — the user lost the page, not a preference.
+  describe('blocked storage', () => {
+    // `vi.stubGlobal`, not `vi.spyOn`: a method assigned onto jsdom's Storage
+    // proxy is swallowed as a stored key, so a spy never installs and the test
+    // would pass against the unguarded component it is meant to fail.
+    afterEach(() => { vi.unstubAllGlobals(); });
+
+    it('still renders the designer when every storage access throws', async () => {
+      const boom = () => { throw new DOMException('The operation is insecure.', 'SecurityError'); };
+      vi.stubGlobal('localStorage', {
+        getItem: boom, setItem: boom, removeItem: boom, clear: () => {},
+      });
+
+      renderAt('/music/generate');
+
+      // The route renders, and the draft is still created — storage only ever
+      // held the resume hint, so losing it costs the hint and nothing else.
+      expect(await screen.findByLabelText(/what do you want to hear/i)).toBeInTheDocument();
+      await waitFor(() => expect(api.createTrack).toHaveBeenCalled());
+    });
+  });
+
   describe('meta-prompt overrides', () => {
     it('sends a saved override as the template, and stops sending it once reset', async () => {
       api.getSettings.mockResolvedValue({ music: { designer: { describeTemplate: 'Be terse.' } } });

@@ -218,3 +218,25 @@ describe('speed-profile sample bucketing', () => {
     expect(estimateRenderMs({ history: [quality], ...target, speedProfileId: 'fast' })).toBeNull();
   });
 });
+
+// Derived history rows (#5878). These inherit their SOURCE's modelId and dials
+// but time something else — an ffmpeg upscale pass, a federated round-trip, a
+// chain total whose chunks are already samples. They carry a positive renderMs,
+// so nothing but this exclusion keeps them out of the least-squares fit.
+describe('timedRenderSamples excludes derived rows', () => {
+  const good = rec({ renderMs: 600_000 });
+
+  it.each([
+    ['an upscale (4x the work units, seconds of ffmpeg)', { upscaledFrom: 'src-id', width: 1536, height: 1024 }],
+    ['a federated render (peer hardware + network round-trip)', { federatedPeerId: 'peer-1' }],
+    ['a chained total (its chunks are already samples)', { chainedFrom: ['a', 'b'] }],
+    ['a hand-stitched clip', { stitchedFrom: ['a', 'b'] }],
+  ])('drops %s', (_label, over) => {
+    const derived = { ...rec({ renderMs: 20_000 }), ...over };
+    expect(timedRenderSamples([good, derived], MODEL)).toHaveLength(1);
+  });
+
+  it('keeps an ordinary local render', () => {
+    expect(timedRenderSamples([good], MODEL)).toHaveLength(1);
+  });
+});

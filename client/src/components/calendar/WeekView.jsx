@@ -7,7 +7,7 @@ import ChronotypeOverlay from './ChronotypeOverlay';
 import { buildSubcalendarColorMap, eventChipStyle } from './calendarUtils';
 import BrailleSpinner from '../BrailleSpinner';
 import { useThemeContext } from '../ThemeContext';
-import { formatMonthDay, formatWeekdayShort, formatDateShort } from '../../utils/formatters';
+import { formatMonthDay, formatWeekdayShort, formatDateShort, formatHourOfDay } from '../../utils/formatters';
 import useUrlParams from '../../hooks/useUrlParams';
 
 const START_HOUR = 6;
@@ -16,13 +16,6 @@ const HOURS = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => i + START_
 const PX_PER_HOUR = 80;
 const PX_PER_15MIN = PX_PER_HOUR / 4; // 20px per 15-min block
 const START_MINUTES = START_HOUR * 60;
-
-function formatHour(hour) {
-  if (hour === 0) return '12 AM';
-  if (hour < 12) return `${hour} AM`;
-  if (hour === 12) return '12 PM';
-  return `${hour - 12} PM`;
-}
 
 function getWeekStart(date) {
   const d = new Date(date);
@@ -253,7 +246,7 @@ export default function WeekView({ accounts }) {
             {HOURS.map(hour => (
               <div key={hour} className="flex border-b border-port-border/50 last:border-b-0" style={{ height: PX_PER_HOUR }}>
                 <div className="w-14 shrink-0 text-[10px] text-gray-500 text-right pr-1 -mt-1.5">
-                  {formatHour(hour)}
+                  {formatHourOfDay(hour)}
                 </div>
                 {weekDays.map((_, i) => (
                   <div key={i} className="flex-1 border-l border-port-border/50 flex flex-col">

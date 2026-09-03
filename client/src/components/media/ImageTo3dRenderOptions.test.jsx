@@ -48,10 +48,37 @@ describe('ImageTo3dRenderOptions', () => {
     expect(keying.closest('label')).toHaveAttribute('title', expect.stringMatching(/chroma backdrop/i));
   });
 
+  // The preview is the reason the control is a slider and not a number: a percentage
+  // alone says nothing about whether THIS source already has margin around its
+  // extremities, which is the only question the knob answers.
+  it('previews the framing against the actual source at the chosen scale', () => {
+    setup({ subjectScale: 0.65, onSubjectScaleChange: vi.fn(), sourcePreviewUrl: '/data/images/example.png' });
+    expect(screen.getByLabelText(/subject framing — 65%/i)).toHaveValue('0.65');
+    const preview = screen.getByRole('img', { name: /framing preview at 65%/i });
+    expect(preview).toHaveAttribute('src', '/data/images/example.png');
+    // Mirrors the server geometry: the source occupies `subjectScale` of the square.
+    expect(preview).toHaveStyle({ width: '65%', height: '65%' });
+  });
+
+  it('says the source passes through untouched at the default scale', () => {
+    setup({ onSubjectScaleChange: vi.fn(), sourcePreviewUrl: '/data/images/example.png' });
+    expect(screen.getByLabelText(/subject framing — 100%/i)).toHaveValue('1');
+    expect(screen.getByText(/full frame/i)).toBeInTheDocument();
+  });
+
+  it('still renders the framing slider before a source image is picked', () => {
+    // The /3d workspace mounts the options with no selection yet; the control must
+    // stay usable rather than vanishing until an image is chosen.
+    setup({ onSubjectScaleChange: vi.fn() });
+    expect(screen.getByLabelText(/subject framing/i)).toBeEnabled();
+    expect(screen.queryByRole('img')).toBeNull();
+  });
+
   it('disables everything when the whole form is disabled', () => {
-    setup({ disabled: true });
+    setup({ disabled: true, onSubjectScaleChange: vi.fn() });
     expect(screen.getByLabelText('Quality')).toBeDisabled();
     expect(screen.getByLabelText('Seed')).toBeDisabled();
+    expect(screen.getByLabelText(/subject framing/i)).toBeDisabled();
     // Both checkboxes, not just the keying one — `disabled` must reach every control.
     for (const box of screen.getAllByRole('checkbox')) expect(box).toBeDisabled();
   });

@@ -497,40 +497,57 @@ export async function processHostedUtterance(sessionId, {
   session.activeTurn = turn;
   session.turnPhase = 'thinking';
 
-  if (io) {
-    io.of('/fableloom-hosted').to(`session:${sessionId}`).emit('hosted:turn:phase', {
-      phase: 'thinking',
-      turnId: turn.id,
-    });
-  }
+  // This function holds `session` and `turn` across every provider await, but a
+  // teardown landing mid-turn (host "end", DELETE /sessions/:id, or the TTL
+  // sweep) aborts the controller, clears `activeTurn` and drops the map entry.
+  // Re-derive liveness at each boundary so no provider work starts — and no
+  // frame is emitted — after the terminal `hosted:session:ended` (#5786).
+  const isLive = () => !turn.abortController.signal.aborted
+    && activeSessions.get(sessionId) === session
+    && session.status === 'active'
+    && session.activeTurn === turn;
+
+  const emitIfLive = (event, payload) => {
+    if (io && isLive()) io.of('/fableloom-hosted').to(`session:${sessionId}`).emit(event, payload);
+  };
+
+  const abandonedResult = { ok: true, aborted: true, turnId: turn.id };
+  const abandonTurn = (stage) => {
+    console.log(`🛑 Hosted turn ${turn.id} abandoned during ${stage} — session no longer live`);
+    return abandonedResult;
+  };
+
+  emitIfLive('hosted:turn:phase', { phase: 'thinking', turnId: turn.id });
 
   try {
     let message = (textMessage || '').trim();
 
     // 1. Transcribe audio if supplied
-    if (audioBuffer && (!message || !message.length)) {
+    if (audioBuffer && !message) {
       let wavPayload = audioBuffer;
       if (audioBuffer instanceof Int16Array || (ArrayBuffer.isView(audioBuffer) && !(audioBuffer instanceof Buffer))) {
         const floatPcm = pcmToFloat(audioBuffer);
         wavPayload = pcmToWavBuffer(floatPcm, { sampleRate: 16000 });
       }
       const sttResult = await transcribe(wavPayload, { signal: turn.abortController.signal }).catch((err) => {
+        // A torn-down turn aborts this signal. That is a cancellation, not a
+        // successful empty transcription, and must not fall through as one.
+        if (turn.abortController.signal.aborted) return null;
         console.warn(`[HostedPlay] STT transcription failed: ${err.message}`);
         return { text: '' };
       });
+      if (!sttResult || !isLive()) return abandonTurn('transcription');
       message = (sttResult.text || '').trim();
     }
 
     // Check for echo / empty message
     if (!message || isEchoOfRecentTts(message, session.recentTts)) {
       session.turnPhase = 'listening';
-      if (io) {
-        io.of('/fableloom-hosted').to(`session:${sessionId}`).emit('hosted:turn:phase', {
-          phase: 'listening',
-          turnId: turn.id,
-          note: 'ignored-echo-or-empty',
-        });
-      }
+      emitIfLive('hosted:turn:phase', {
+        phase: 'listening',
+        turnId: turn.id,
+        note: 'ignored-echo-or-empty',
+      });
       return { ok: true, ignored: true };
     }
 
@@ -544,12 +561,11 @@ export async function processHostedUtterance(sessionId, {
     session.transcript.push(audienceItem);
     if (session.transcript.length > 50) session.transcript.shift();
 
-    if (io) {
-      io.of('/fableloom-hosted').to(`session:${sessionId}`).emit('hosted:turn:transcript', audienceItem);
-    }
+    emitIfLive('hosted:turn:transcript', audienceItem);
 
     // 2. Run LLM Play Turn
     const loom = await getLoom(session.loomId);
+    if (!isLive()) return abandonTurn('loom load');
     const episode = loom.episodes?.find((e) => e.id === session.episodeId) || null;
     const node = episode?.nodes?.find((n) => n.id === session.currentNodeId) || null;
 
@@ -558,12 +574,16 @@ export async function processHostedUtterance(sessionId, {
       playResult = await playTurn(session.loomId, session.episodeId, {
         nodeId: session.currentNodeId,
         message,
+        signal: turn.abortController.signal,
         transcript: session.transcript.map((t) => ({
           role: t.role === 'audience' ? 'reader' : 'narrator',
           text: t.text,
         })),
       });
     } catch (err) {
+      // A cancelled turn has no one left to narrate to — the authored fallback
+      // would only produce a reply for a room that already saw `ended`.
+      if (!isLive()) return abandonTurn('story turn');
       console.warn(`[HostedPlay] LLM turn error, using authored fallback: ${err?.message}`);
       playResult = {
         action: 'stay',
@@ -572,6 +592,7 @@ export async function processHostedUtterance(sessionId, {
         ended: false,
       };
     }
+    if (!isLive()) return abandonTurn('story turn');
 
     const narration = (playResult?.narration || '').trim() || "Let's continue.";
 
@@ -590,14 +611,8 @@ export async function processHostedUtterance(sessionId, {
     session.turnPhase = 'speaking';
     rememberTtsSentence(session.recentTts, narration);
 
-    if (io) {
-      io.of('/fableloom-hosted').to(`session:${sessionId}`).emit('hosted:turn:phase', {
-        phase: 'speaking',
-        turnId: turn.id,
-        text: narration,
-      });
-      io.of('/fableloom-hosted').to(`session:${sessionId}`).emit('hosted:turn:transcript', protagonistItem);
-    }
+    emitIfLive('hosted:turn:phase', { phase: 'speaking', turnId: turn.id, text: narration });
+    emitIfLive('hosted:turn:transcript', protagonistItem);
 
     // Resolve character voice
     let ttsAudio = null;
@@ -613,14 +628,17 @@ export async function processHostedUtterance(sessionId, {
         characterVoiceId: char?.voiceId,
         route: 'interactive',
       }).catch(() => null);
+      if (!isLive()) return abandonTurn('voice resolution');
       const { engine, voice } = parseVoiceId(resolved?.voiceId);
 
       const synth = await synthesize(narration, {
         engine: engine || undefined,
         profileId: resolved?.profileId || undefined,
         route: 'interactive',
+        signal: turn.abortController.signal,
         voice: voice || undefined,
       }).catch((err) => {
+        if (turn.abortController.signal.aborted) return null;
         console.warn(`[HostedPlay] Protagonist TTS synthesis failed: ${err.message}`);
         return null;
       });
@@ -630,10 +648,11 @@ export async function processHostedUtterance(sessionId, {
     } catch (err) {
       console.warn(`[HostedPlay] Protagonist TTS synthesis failed: ${err.message}`);
     }
+    if (!isLive()) return abandonTurn('speech synthesis');
 
     // 4. Dispatch Audio to designated Audio Target
-    if (io && ttsAudio) {
-      io.of('/fableloom-hosted').to(`session:${sessionId}`).emit('hosted:turn:tts', {
+    if (ttsAudio) {
+      emitIfLive('hosted:turn:tts', {
         audio: Buffer.isBuffer(ttsAudio) ? ttsAudio.toString('base64') : Buffer.from(ttsAudio).toString('base64'),
         mimeType: 'audio/wav',
         target: session.audioTarget,
@@ -650,36 +669,36 @@ export async function processHostedUtterance(sessionId, {
         session.activeHoldIndex = 0;
         session.turnPhase = 'idle';
 
-        if (io) {
-          io.of('/fableloom-hosted').to(`session:${sessionId}`).emit('hosted:story:transition', {
-            node: publicNode(targetNode, loom),
-            transitionId: playResult.transitionId,
-            playbackPhase: session.playbackPhase,
-          });
-        }
+        emitIfLive('hosted:story:transition', {
+          node: publicNode(targetNode, loom),
+          transitionId: playResult.transitionId,
+          playbackPhase: session.playbackPhase,
+        });
       }
     } else {
       // Stay on current node
       session.turnPhase = 'listening';
-      if (io) {
-        io.of('/fableloom-hosted').to(`session:${sessionId}`).emit('hosted:turn:phase', {
-          phase: 'listening',
-          turnId: turn.id,
-        });
-      }
+      emitIfLive('hosted:turn:phase', { phase: 'listening', turnId: turn.id });
     }
 
     session.activeTurn = null;
     return { ok: true, playResult };
   } catch (err) {
+    // A failure that lands after teardown has no room left to tell: the session
+    // already emitted its terminal frame, so log and swallow rather than
+    // emitting `hosted:error` behind it.
+    if (!isLive()) {
+      console.warn(`[HostedPlay] Hosted turn ${turn.id} failed after teardown: ${err?.message || err}`);
+      return abandonedResult;
+    }
+    // Emit BEFORE clearing `activeTurn` — clearing it first makes the turn
+    // non-live and would suppress the very error frame the client needs.
+    emitIfLive('hosted:error', {
+      code: err?.code || 'TURN_FAILED',
+      message: err?.message || String(err),
+    });
     session.turnPhase = 'idle';
     session.activeTurn = null;
-    if (io) {
-      io.of('/fableloom-hosted').to(`session:${sessionId}`).emit('hosted:error', {
-        code: err?.code || 'TURN_FAILED',
-        message: err?.message || String(err),
-      });
-    }
     throw err;
   }
 }

@@ -131,12 +131,8 @@ const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalInter
             className="bg-port-card border border-port-border rounded px-2 py-1.5 text-xs text-white min-w-[120px] min-h-[40px]"
           >
             <option value="">Inherit ({INTERVAL_LABELS[globalIntervalType] || globalIntervalType})</option>
-            <option value="rotation">Rotation</option>
-            <option value="daily">Daily</option>
-            <option value="weekly">Weekly</option>
-            <option value="once">Once</option>
             <option value="on-demand">On Demand</option>
-            <option value="cron">Cron</option>
+            <option value="cron">Scheduled</option>
           </select>
           {cronEditing ? (
             <CronInput

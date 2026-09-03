@@ -1,7 +1,7 @@
 import { request } from './apiCore.js';
 
 // Running Agents (Process Management)
-export const getRunningAgents = (options) => request('/agents', options);
+const getRunningAgents = (options) => request('/agents', options);
 const killRunningAgent = (pid) => request(`/agents/${pid}`, { method: 'DELETE' });
 // Legacy aliases
 export const getAgents = getRunningAgents;
@@ -289,11 +289,6 @@ export const updateCosTaskInterval = (taskType, settings, options = {}) => reque
 });
 
 export const triggerCosOnDemandTask = (taskType, appId = null, options = {}) => request('/cos/schedule/trigger', {
-  method: 'POST',
-  body: JSON.stringify({ taskType, appId }),
-  ...options
-});
-export const resetCosTaskHistory = (taskType, appId = null, options = {}) => request('/cos/schedule/reset', {
   method: 'POST',
   body: JSON.stringify({ taskType, appId }),
   ...options

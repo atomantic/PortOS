@@ -78,6 +78,9 @@ vi.mock('../services/imageTo3d/models.js', () => ({
   deleteModel: vi.fn(),
   getModelAsset: vi.fn(),
   getModelFullMesh: vi.fn(),
+  getModelUsdz: vi.fn(),
+  saveModelUsdz: vi.fn(),
+  USDZ_MAX_BYTES: 64 * 1024 * 1024,
 }));
 
 import * as targets from '../services/imageTo3d/targets.js';
@@ -497,6 +500,25 @@ describe('image-to-3d model records', () => {
     expect(bad.status).toBe(400);
   });
 
+  it('POST /models/:id/generate takes a subject scale in (0, 1] and 400s outside it', async () => {
+    models.startGeneration.mockResolvedValue({ id: 'image3d-1', status: 'generating' });
+    const ok = await request(makeApp())
+      .post('/api/image-to-3d/models/image3d-1/generate')
+      .send({ subjectScale: 0.65 });
+    expect(ok.status).toBe(202);
+    expect(models.startGeneration).toHaveBeenCalledWith('image3d-1', { options: { subjectScale: 0.65 } });
+
+    // 0 scales the subject out of existence; above 1 crops it — which is the exact
+    // failure the knob exists to prevent, so it must not be reachable by accident.
+    for (const subjectScale of [0, -0.5, 1.5]) {
+      // eslint-disable-next-line no-await-in-loop
+      const bad = await request(makeApp())
+        .post('/api/image-to-3d/models/image3d-1/generate')
+        .send({ subjectScale });
+      expect(bad.status, `subjectScale ${subjectScale}`).toBe(400);
+    }
+  });
+
   it('DELETE /models/:id soft-deletes', async () => {
     models.deleteModel.mockResolvedValue({ ok: true });
     const res = await request(makeApp()).delete('/api/image-to-3d/models/image3d-1');
@@ -544,6 +566,66 @@ describe('image-to-3d model records', () => {
     const res = await request(makeApp()).get('/api/image-to-3d/models/image3d-1/full-mesh');
     expect(res.status).toBe(404);
     expect(res.body?.error?.code || res.body?.code).toBe('FULL_MESH_MISSING');
+  });
+
+  // ── AR Quick Look (USDZ) ────────────────────────────────────────────────
+  // The bytes are produced in the browser, so the route's whole job is to accept a
+  // raw body past the app-wide JSON parser, persist it, and re-serve it with the
+  // exact content type + disposition AR Quick Look requires.
+
+  // A minimal stored-zip header — USDZ is an uncompressed zip, and the service
+  // gates on that magic rather than trusting the request's content type.
+  const ZIP_BYTES = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00]);
+
+  it('POST /models/:id/usdz accepts a raw USDZ body past the JSON parser', async () => {
+    models.saveModelUsdz.mockResolvedValue({
+      id: 'image3d-1', status: 'ready', usdzPath: '/data/image-to-3d/image3d-1/model.usdz',
+    });
+    const res = await request(makeApp())
+      .post('/api/image-to-3d/models/image3d-1/usdz')
+      .set('Content-Type', 'model/vnd.usdz+zip')
+      .send(ZIP_BYTES);
+    expect(res.status).toBe(201);
+    expect(res.body.usdzPath).toBe('/data/image-to-3d/image3d-1/model.usdz');
+    const [id, body] = models.saveModelUsdz.mock.calls.at(-1);
+    expect(id).toBe('image3d-1');
+    expect(Buffer.from(body).equals(ZIP_BYTES)).toBe(true);
+  });
+
+  it('POST /models/:id/usdz surfaces the service refusal for a non-USDZ payload', async () => {
+    const { ServerError } = await import('../lib/errorHandler.js');
+    models.saveModelUsdz.mockRejectedValue(
+      new ServerError('Payload is not a USDZ archive', { status: 400, code: 'USDZ_INVALID' }),
+    );
+    const res = await request(makeApp())
+      .post('/api/image-to-3d/models/image3d-1/usdz')
+      .set('Content-Type', 'application/octet-stream')
+      .send(Buffer.from('not a zip'));
+    expect(res.status).toBe(400);
+    expect(res.body?.error?.code || res.body?.code).toBe('USDZ_INVALID');
+  });
+
+  it('GET /models/:id/usdz serves inline with the AR Quick Look content type', async () => {
+    // `inline`, not `attachment`: Safari will not engage AR Quick Look on an
+    // attachment response, so this header pair IS the feature.
+    const tmp = join(tmpdir(), `it-usdz-${process.pid}.usdz`);
+    await writeFile(tmp, ZIP_BYTES);
+    models.getModelUsdz.mockResolvedValue({ path: tmp, filename: 'beacon.usdz' });
+    const res = await request(makeApp()).get('/api/image-to-3d/models/image3d-1/usdz');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/model\/vnd\.usdz\+zip/);
+    expect(res.headers['content-disposition']).toMatch(/^inline; filename="beacon\.usdz"$/);
+    await rm(tmp, { force: true });
+  });
+
+  it('GET /models/:id/usdz 404s when the model was never exported for AR', async () => {
+    const { ServerError } = await import('../lib/errorHandler.js');
+    models.getModelUsdz.mockRejectedValue(
+      new ServerError('not exported', { status: 404, code: 'USDZ_MISSING' }),
+    );
+    const res = await request(makeApp()).get('/api/image-to-3d/models/image3d-1/usdz');
+    expect(res.status).toBe(404);
+    expect(res.body?.error?.code || res.body?.code).toBe('USDZ_MISSING');
   });
 
   it('routes /full-mesh to its own handler with the record id', async () => {

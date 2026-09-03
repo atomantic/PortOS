@@ -12,6 +12,9 @@ const RUNTIMES = {
 
 const statusOf = (id, overrides) => ({ ...RUNTIMES[id], installed: false, method: 'npm', installable: true, blockedReason: null, ...overrides });
 
+// The SSE loop these routes drive lives in `services/harnessActionStream.js`
+// (shared with Models → Harnesses); it reads the same registry, so mocking the
+// registry still drives every branch through the real `/api/providers` route.
 const installer = vi.hoisted(() => ({
   getProviderRuntime: vi.fn(),
   getProviderRuntimeStatus: vi.fn(),
@@ -19,11 +22,14 @@ const installer = vi.hoisted(() => ({
   spawnRuntimeInstaller: vi.fn(),
   stopRuntimeInstaller: vi.fn(),
   describeRuntimeInstall: vi.fn(),
+  buildRuntimeActionCommand: vi.fn(),
+  RUNTIME_ACTIONS: ['install', 'update', 'uninstall'],
 }));
 
 vi.mock('../services/providerRuntimeInstaller.js', () => installer);
 
 import { createPortOSProviderRoutes } from './providers.js';
+import { __resetHarnessActionGuard } from '../services/harnessActionStream.js';
 
 const app = () => {
   const toolkit = { services: { providers: {} }, routes: { providers: Router() } };
@@ -47,8 +53,15 @@ const makeChild = () => {
 describe('Provider runtime installer routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The single-flight guard is module state shared with Models → Harnesses; a
+    // case that ends mid-stream would otherwise fail every later one with
+    // "another harness install is already running".
+    __resetHarnessActionGuard();
     installer.getProviderRuntime.mockImplementation((id) => RUNTIMES[id] || null);
     installer.describeRuntimeInstall.mockImplementation((id) => `npm install --global ${RUNTIMES[id]?.install?.package}`);
+    installer.buildRuntimeActionCommand.mockImplementation((id) => (RUNTIMES[id]
+      ? { command: 'npm', args: ['install', '--global', RUNTIMES[id].install.package] }
+      : null));
   });
 
   it('publishes every runtime status in one payload', async () => {
@@ -68,7 +81,7 @@ describe('Provider runtime installer routes', () => {
     installer.spawnRuntimeInstaller.mockReturnValueOnce(child);
 
     const responsePromise = request(app()).post('/api/providers/runtimes/install?runtime=codex').then((response) => response);
-    await vi.waitFor(() => expect(installer.spawnRuntimeInstaller).toHaveBeenCalledWith('codex'));
+    await vi.waitFor(() => expect(installer.spawnRuntimeInstaller).toHaveBeenCalledWith('codex', { action: 'install' }));
     child.stdout.end('added Codex\n');
     child.stderr.end();
     child.emit('close', 0);
@@ -171,7 +184,7 @@ describe('Provider runtime installer routes', () => {
     installer.spawnRuntimeInstaller.mockReturnValueOnce(child);
 
     const responsePromise = request(app()).post('/api/providers/opencode/install').then((response) => response);
-    await vi.waitFor(() => expect(installer.spawnRuntimeInstaller).toHaveBeenCalledWith('opencode'));
+    await vi.waitFor(() => expect(installer.spawnRuntimeInstaller).toHaveBeenCalledWith('opencode', { action: 'install' }));
     child.stdout.end();
     child.stderr.end();
     child.emit('close', 0);

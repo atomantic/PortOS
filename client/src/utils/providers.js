@@ -290,6 +290,18 @@ export const supportsPublicReviewPosture = (provider, posture) => {
 };
 
 /**
+ * Whether the SERVER runs `posture` on this provider through a vendor-enforced
+ * recipe (an OS sandbox for the actions stage), as opposed to merely allowing
+ * it. `publicReviewEnforcedPostures` is the server's subset; an older server
+ * that does not publish it only ever offered enforced providers, so its
+ * eligible set is taken as enforced.
+ */
+export const enforcesPublicReviewPosture = (provider, posture) => {
+  if (Array.isArray(provider?.publicReviewEnforcedPostures)) return provider.publicReviewEnforcedPostures.includes(posture);
+  return supportsPublicReviewPosture(provider, posture);
+};
+
+/**
  * Selection policy for a pr-reviewer stage.
  *
  * Provider eligibility is entirely server-derived. Model eligibility adds the
@@ -342,6 +354,20 @@ export const filterSelectableModels = (models) =>
  */
 export const isProviderHardwareCompatible = (provider) =>
   isHardwareCompatible(provider?.hardwareCompatibility);
+
+/**
+ * The providers a picker may offer: enabled, runnable on this hardware, and
+ * allowed by the caller's policy — plus the currently-selected id whatever its
+ * state, so a saved pin still renders instead of silently blanking. This is
+ * the single rule `ProviderModelSelector` renders from; a caller that lists
+ * "eligible" providers beside such a picker must derive the list from here so
+ * the note and the dropdown cannot disagree.
+ */
+export const selectableProviders = (providers, { selectedId = '', allowed = null } = {}) =>
+  (Array.isArray(providers) ? providers : []).filter((provider) => (
+    provider?.id === selectedId
+    || (provider?.enabled !== false && isProviderHardwareCompatible(provider) && (!allowed || allowed(provider)))
+  ));
 
 export const isProviderModelHardwareCompatible = (provider, model) =>
   isProviderHardwareCompatible(provider)

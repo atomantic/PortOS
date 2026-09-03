@@ -112,7 +112,7 @@ export default function ModelAbuseGuardPanel() {
           <ShieldCheck size={18} className="text-port-accent mt-0.5" aria-hidden="true" />
           <div>
             <h2 id="model-abuse-guard-heading" className="text-sm font-medium text-white">Model-abuse guard</h2>
-            <p className="text-xs text-port-accent mt-0.5">Recommended safety layer · managed classifier</p>
+            <p className="text-xs text-port-accent mt-0.5">Optional second layer · managed classifier</p>
           </div>
         </div>
         {overallReady ? (
@@ -124,7 +124,7 @@ export default function ModelAbuseGuardPanel() {
         )}
       </div>
       <p className="text-xs text-gray-300 max-w-3xl">
-        Llama Prompt Guard 2 86M screens complete external issues, comments, and pull-request diffs before they reach a reasoning agent. It is a pinned local classifier with no chat, tools, MCP, or repository access; flagged or inconclusive content is withheld.
+        The PR reviewer&apos;s Stage 1 always runs deterministic checks for content hidden from a human reader (invisible or direction-control Unicode, unrendered comments addressed to a model) and obvious model-directed harm. When installed, Llama Prompt Guard 2 86M additionally classifies each complete external PR before it reaches a reasoning agent. It is a pinned local classifier with no chat, tools, MCP, or repository access; flagged or inconclusive content is withheld.
       </p>
       <PromptGuardHfAccessNotice
         tokenPresent={tokenPresent}

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 vi.mock('../../services/apiLocalLlm.js', () => ({
@@ -109,6 +109,33 @@ describe('MemoryManagement', () => {
      // residency is unconfirmed.
     expect(screen.queryByText(/full unified memory is available/i)).not.toBeInTheDocument();
         });
+
+  // #5697 — this poll used to be a raw `useEffect` + `setInterval`, so it kept
+  // probing the local LLM / TTS / voice status endpoints every 5s from a tab
+  // nobody was looking at. It is the unconditional (always-`enabled`) half of
+  // the migration; MediaJobsQueue covers the gated half.
+  describe('hidden-tab polling', () => {
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('pauses the residency poll while the tab is hidden and re-fires on return', async () => {
+      render(<MemoryManagement />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(getLoadedLlmModels).toHaveBeenCalledTimes(1);
+
+      const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(getLoadedLlmModels).toHaveBeenCalledTimes(1);
+
+      visibility.mockReturnValue('visible');
+      await act(async () => {
+        document.dispatchEvent(new Event('visibilitychange'));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(getLoadedLlmModels).toHaveBeenCalledTimes(2);
+      visibility.mockRestore();
+    });
+  });
 
   it('keeps a backend disabled across a later failed poll', async () => {
           // The banner-suppression scenario IS a transient outage, so a failed poll

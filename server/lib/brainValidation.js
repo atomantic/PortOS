@@ -140,17 +140,6 @@ export const adminRecordSchema = z.object({
   updatedAt: z.string().datetime()
 });
 
-// Memory Record schema (journal entries, daily notes, personal memories)
-export const memoryRecordSchema = z.object({
-  id: z.string().guid(),
-  title: z.string().min(1).max(200),
-  content: z.string().max(10000).optional().default(''),
-  mood: z.string().max(50).optional(),
-  tags: z.array(z.string().max(50)).optional().default([]),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime()
-});
-
 // Meta/Settings schema
 export const brainSettingsSchema = z.object({
   version: z.number().int().positive().default(1),
@@ -162,29 +151,6 @@ export const brainSettingsSchema = z.object({
   defaultModel: z.string().default('gptoss-20b'),
   lastDailyDigest: z.string().datetime().optional(),
   lastWeeklyReview: z.string().datetime().optional()
-});
-
-// Digest Record schema
-export const digestRecordSchema = z.object({
-  id: z.string().guid(),
-  generatedAt: z.string().datetime(),
-  digestText: z.string().max(2000),
-  topActions: z.array(z.string().max(200)).max(3),
-  stuckThing: z.string().max(200),
-  smallWin: z.string().max(200),
-  ai: aiConfigSchema.optional()
-});
-
-// Weekly Review Record schema
-export const reviewRecordSchema = z.object({
-  id: z.string().guid(),
-  generatedAt: z.string().datetime(),
-  reviewText: z.string().max(3000),
-  whatHappened: z.array(z.string().max(200)).max(5),
-  biggestOpenLoops: z.array(z.string().max(200)).max(3),
-  suggestedActionsNextWeek: z.array(z.string().max(200)).max(3),
-  recurringTheme: z.string().max(500),
-  ai: aiConfigSchema.optional()
 });
 
 // --- Input schemas for API endpoints ---
@@ -556,17 +522,6 @@ export const linksQuerySchema = z.object({
 export const bucketColorEnum = z.enum([
   'accent', 'success', 'warning', 'error', 'purple', 'pink', 'cyan', 'slate'
 ]);
-
-// Bucket Record schema
-export const bucketRecordSchema = z.object({
-  id: z.string().guid(),
-  name: z.string().min(1).max(100),
-  color: bucketColorEnum.default('accent'),
-  icon: z.string().max(50).optional().default(''),
-  order: z.number().int().default(0),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime()
-});
 
 // Create Bucket input schema
 export const bucketInputSchema = z.object({

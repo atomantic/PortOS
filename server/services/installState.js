@@ -48,6 +48,10 @@ const DEP_WORKSPACES = ['.', 'client', 'server', 'autofixer'];
 // Directories never worth walking for client-source freshness.
 const WALK_SKIP_DIRS = new Set(['node_modules', 'dist', '.git']);
 
+// Files created by the host OS rather than consumed by the client build.
+// Keep this narrow: hidden files such as .env can be real Vite build inputs.
+const CLIENT_NON_BUILD_FILES = new Set(['.DS_Store']);
+
 // The tracked lockfile and npm's receipt (node_modules/.package-lock.json) are
 // written by the SAME `npm install`, milliseconds apart, in an order npm does
 // not guarantee. Only treat the lockfile as "newer" when it leads the receipt
@@ -115,10 +119,11 @@ async function isClientSourceNewer(rootDir, buildMtimeMs, { statMtime = statMtim
   const clientDir = join(rootDir, 'client');
   const stack = [];
 
-  // Every file directly under client/ is a build input or config (index.html,
-  // package.json, vite.config.js, postcss.config.js, tailwind/tsconfig, …).
-  // Stat them all rather than enumerating filenames, so a config-only change
-  // still marks the build stale without a list that rots as configs are added.
+  // Every non-OS-metadata file directly under client/ is a build input or config
+  // (index.html, package.json, vite.config.js, postcss.config.js,
+  // tailwind/tsconfig, …). Stat them all rather than enumerating filenames, so a
+  // config-only change still marks the build stale without a list that rots as
+  // configs are added.
   // Directories here are handled below: src/public are walked recursively;
   // node_modules/dist/.git are skipped.
   const rootEntries = await readdir(clientDir, { withFileTypes: true }).catch(() => []);
@@ -130,6 +135,7 @@ async function isClientSourceNewer(rootDir, buildMtimeMs, { statMtime = statMtim
       if (entry.name === 'src' || entry.name === 'public') stack.push(join(clientDir, entry.name));
       continue;
     }
+    if (CLIENT_NON_BUILD_FILES.has(entry.name)) continue;
     const m = await statMtime(join(clientDir, entry.name));
     if (m != null && m > buildMtimeMs) return true;
   }
@@ -142,6 +148,7 @@ async function isClientSourceNewer(rootDir, buildMtimeMs, { statMtime = statMtim
         if (!WALK_SKIP_DIRS.has(entry.name)) stack.push(join(dir, entry.name));
         continue;
       }
+      if (CLIENT_NON_BUILD_FILES.has(entry.name)) continue;
       const m = await statMtime(join(dir, entry.name));
       if (m != null && m > buildMtimeMs) return true;
     }

@@ -401,6 +401,31 @@ describe('isClientSourceNewer (real fs)', () => {
     expect(await __internal.isClientSourceNewer(rootDir, buildMs)).toBe(false);
   });
 
+  it('keeps the install in sync when only Finder metadata is newer than the build', async () => {
+    mkdirSync(join(rootDir, 'client', 'dist'), { recursive: true });
+    mkdirSync(join(rootDir, 'client', 'node_modules'), { recursive: true });
+    writeFileSync(join(rootDir, 'client', 'dist', 'index.html'), 'built');
+    writeFileSync(join(rootDir, 'client', 'node_modules', '.package-lock.json'), '{}');
+    writeFileSync(join(rootDir, 'client', '.DS_Store'), 'finder metadata');
+    writeFileSync(join(rootDir, 'client', 'src', '.DS_Store'), 'nested finder metadata');
+    setMtime(join(rootDir, 'client', 'dist', 'index.html'), BUILD);
+    setMtime(join(rootDir, 'client', 'node_modules', '.package-lock.json'), BUILD);
+    setMtime(join(rootDir, 'client', '.DS_Store'), BUILD + 1);
+    setMtime(join(rootDir, 'client', 'src', '.DS_Store'), BUILD + 1);
+
+    const state = await getInstallState({
+      rootDir,
+      boot: 'abc',
+      getCurrentCommit: async () => 'abc',
+      isAncestor: async () => false,
+      listPending: async () => [],
+      getSubmoduleState: async () => ({ stale: false, paths: [] }),
+    });
+
+    expect(state.staleBuild).toBe(false);
+    expect(state.outOfSync).toBe(false);
+  });
+
   it('detects a newer file under client/src', async () => {
     const p = join(rootDir, 'client', 'src', 'new.jsx');
     writeFileSync(p, 'x'); setMtime(p, BUILD + 100);

@@ -820,6 +820,38 @@ export async function pull(dir) {
 }
 
 /**
+ * Move a managed application's primary checkout onto origin's default branch
+ * and fast-forward it. This is intentionally non-destructive: unlike the
+ * Git-tab reset escape hatch it neither stashes nor discards local work.
+ *
+ * @param {string} dir
+ * @returns {Promise<{success: boolean, branch: string, output: string}>}
+ */
+export async function updateDefaultBranch(dir) {
+  await execGit(['fetch', 'origin'], dir);
+  const branch = await getDefaultBranch(dir, { strict: true });
+  if (!branch) throw new ServerError('could not determine origin default branch', { status: 400, code: 'NO_DEFAULT_BRANCH' });
+
+  const status = await getStatus(dir);
+  if (!status.clean) {
+    throw new ServerError('checkout has local changes; commit or stash them before updating', {
+      status: 409,
+      code: 'DIRTY_WORKTREE'
+    });
+  }
+
+  const currentBranch = await getBranch(dir);
+  let output = '';
+  if (currentBranch !== branch) {
+    const checkout = await execGit(['checkout', branch], dir);
+    output += checkout.stdout + checkout.stderr;
+  }
+  const pull = await execGit(['pull', '--ff-only', 'origin', branch], dir);
+  output += pull.stdout + pull.stderr;
+  return { success: true, branch, output };
+}
+
+/**
  * Sync branch - pull then push
  */
 export async function syncBranch(dir, branch = null) {

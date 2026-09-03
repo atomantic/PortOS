@@ -23,7 +23,7 @@ import {
   getEffectiveTier,
   recordFrame,
   resetRenderBudget,
-} from '../../utils/openWorldRenderBudget';
+} from '../../utils/renderBudget';
 
 const radians = (degrees = 0) => THREE.MathUtils.degToRad(degrees);
 const rotation = (degrees = [0, 0, 0]) => degrees.map(radians);
@@ -243,8 +243,8 @@ function SceneRefit({ growth, clipId }) {
 }
 
 // The preview owns only the R3F sampling boundary; the quality decisions stay in
-// openWorldRenderBudget so its warm-up, hysteresis, cooldown, and gap handling remain
-// deterministic and shared with OpenWorld.
+// renderBudget so its warm-up, hysteresis, cooldown, and gap handling remain
+// deterministic and reusable.
 function PreviewAdaptiveQuality({ enabled, resetToken, onTierChange }) {
   const stateRef = useRef(null);
   if (stateRef.current === null) stateRef.current = createRenderBudget('high', 0);

@@ -394,6 +394,23 @@ describe('buildSidecar', () => {
     expect(sc.previewImageUrl).toBe('p.jpg');
     expect(sc.file.sizeKB).toBe(102400);
     expect(typeof sc.installedAt).toBe('string');
+    expect(sc.license).toBeNull();
+  });
+  it('persists a Civitai license string and never infers one from allowCommercialUse', () => {
+    const licensed = buildSidecar({
+      model: { id: 1, name: 'Rail', license: 'CreativeML Open RAIL-M', allowCommercialUse: 'Sell' },
+      version: { id: 2, baseModel: 'Flux.1 D' },
+      file: {},
+      filename: 'lora-rail-v2.safetensors',
+    });
+    expect(licensed.license).toBe('CreativeML Open RAIL-M');
+    const commercialOnly = buildSidecar({
+      model: { id: 1, name: 'NoLicense', allowCommercialUse: 'Sell' },
+      version: { id: 2, baseModel: 'Flux.1 D' },
+      file: {},
+      filename: 'lora-nolicense-v2.safetensors',
+    });
+    expect(commercialOnly.license).toBeNull();
   });
   it('falls back when version has no settings/preview/trainedWords', () => {
     const sc = buildSidecar({

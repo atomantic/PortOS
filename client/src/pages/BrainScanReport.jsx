@@ -70,8 +70,13 @@ export default function BrainScanReport() {
             <ArrowLeft size={14} /> Brain Links
           </Link>
           <div className="flex items-center gap-2">
-            <FileText className="text-port-accent" size={24} />
-            <h1 className="truncate text-xl font-semibold text-white">{data.link.title}</h1>
+            <FileText className="shrink-0 text-port-accent" size={24} />
+            <h1
+              className="min-w-0 line-clamp-2 break-words text-xl font-semibold text-white"
+              title={data.link.title}
+            >
+              {data.link.title}
+            </h1>
           </div>
           <p className="mt-1 break-all text-xs text-gray-500">{data.link.url}</p>
         </div>

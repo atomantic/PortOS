@@ -773,8 +773,13 @@ export default function PipelineManuscriptEditor() {
             <Link to={`/pipeline/series/${seriesId}`} className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-white">
               <ArrowLeft size={14} /> Series
             </Link>
-            <FileText className="w-5 h-5 text-port-accent ml-2" />
-            <h1 className="text-xl font-bold text-white truncate">{series?.name || 'Manuscript'}</h1>
+            <FileText className="w-5 h-5 shrink-0 text-port-accent ml-2" />
+            <h1
+              className="min-w-0 line-clamp-2 break-words text-xl font-bold text-white"
+              title={series?.name || 'Manuscript'}
+            >
+              {series?.name || 'Manuscript'}
+            </h1>
 
             <div className="ml-auto flex items-center gap-2 flex-wrap">
               {/* View-mode toggle: Live (Grammarly) vs Review (annotated). */}

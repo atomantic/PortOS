@@ -39,6 +39,7 @@ vi.mock('./cos.js', () => ({
   addTask: vi.fn().mockResolvedValue(undefined),
   emitLog: vi.fn(),
   getTaskById: vi.fn().mockResolvedValue(null),
+  forceSpawnTask: vi.fn().mockResolvedValue({ success: true }),
   getAgent: vi.fn().mockResolvedValue(null),
   getAgentRecord: vi.fn().mockResolvedValue(null)
 }));
@@ -227,7 +228,7 @@ import { existsSync as existsSyncMock } from 'fs';
 // They used to be pulled through the `subAgentSpawner.js` barrel, which was
 // retired in #3450.
 import { cleanupAgentWorktree, spawnMergeRecoveryTask, spawnReviewLoopFollowUp, resolveResumePointer, resolveTaskResumePatch, recordTaskResumePointer, releaseRetryHold, resumePointerMetadata } from './agentWorktreeCleanup.js';
-import { getAgent, getAgentRecord, getTaskById, addTask, updateTask } from './cos.js';
+import { getAgent, getAgentRecord, getTaskById, addTask, forceSpawnTask, updateTask } from './cos.js';
 import { removeWorktree } from './worktreeManager.js';
 import { PATHS } from '../lib/fileUtils.js';
 import * as git from './git.js';
@@ -657,7 +658,7 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
     expect(addTask).toHaveBeenCalledTimes(1);
     const [followUp, taskType, opts] = addTask.mock.calls[0];
     expect(taskType).toBe('internal');
-    expect(opts).toEqual({ raw: true });
+    expect(opts).toEqual({ raw: true, suppressDequeue: false });
     expect(followUp.metadata.reviewLoopFollowUp).toBe(true);
     expect(followUp.metadata.reviewLoopPRUrl).toBe('https://github.com/test/repo/pull/42');
     expect(followUp.metadata.reviewLoopPRBranch).toBe('cos/task-abc123');
@@ -1640,6 +1641,7 @@ describe('spawnReviewLoopFollowUp', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     addTask.mockResolvedValue({ id: 'sys-rl-x' });
+    forceSpawnTask.mockResolvedValue({ success: true });
   });
 
   it('should not spawn when prUrl is missing', async () => {
@@ -1703,6 +1705,59 @@ describe('spawnReviewLoopFollowUp', () => {
       prUrl: 'https://github.com/o/r/pull/9', prBranch: 'cos/task-1/agent-1', sourceWorkspace: '/ws'
     });
     expect(addTask.mock.calls[0][0].metadata.app).toBe('example-app');
+  });
+
+  // Dispatch ownership: an autonomous follow-up belongs to the auto-run-gated
+  // dequeue, while an explicitly requested one must not wait for it.
+  it('leaves the spawn to the dequeue by default', async () => {
+    const result = await spawnReviewLoopFollowUp({
+      originalAgentId: 'agent-1',
+      originalTask: { id: 'task-1', metadata: {}, description: 'X' },
+      prUrl: 'https://github.com/o/r/pull/9', prBranch: 'cos/task-1/agent-1', sourceWorkspace: '/ws'
+    });
+    expect(addTask.mock.calls[0][2]).toMatchObject({ raw: true, suppressDequeue: false });
+    expect(forceSpawnTask).not.toHaveBeenCalled();
+    expect(result.dispatch).toBeUndefined();
+  });
+
+  it('force-spawns an immediate dispatch and suppresses the racing dequeue', async () => {
+    const result = await spawnReviewLoopFollowUp({
+      originalAgentId: null,
+      originalTask: { id: 'app-pr-widget-9', metadata: { app: 'widget' }, description: 'Resolve and merge PR #9 for Widget' },
+      prUrl: 'https://github.com/o/r/pull/9', prBranch: 'fix/save', sourceWorkspace: '/ws',
+      dispatch: 'immediate'
+    });
+    const [followUp, taskType, opts] = addTask.mock.calls[0];
+    expect(taskType).toBe('internal');
+    expect(opts).toMatchObject({ raw: true, suppressDequeue: true });
+    expect(forceSpawnTask).toHaveBeenCalledWith(followUp.id);
+    expect(result.dispatch).toEqual({ started: true, reason: null });
+  });
+
+  it('reports why an immediate dispatch did not start, leaving the task queued', async () => {
+    forceSpawnTask.mockResolvedValue({ error: 'No available agent slots (3/3)' });
+    const result = await spawnReviewLoopFollowUp({
+      originalAgentId: null,
+      originalTask: { id: 'app-pr-widget-9', metadata: { app: 'widget' }, description: 'Resolve and merge PR #9 for Widget' },
+      prUrl: 'https://github.com/o/r/pull/9', prBranch: 'fix/save', sourceWorkspace: '/ws',
+      dispatch: 'immediate'
+    });
+    expect(result.dispatch).toEqual({ started: false, reason: 'No available agent slots (3/3)' });
+  });
+
+  // A duplicate rejection persists nothing under the id we just minted, so
+  // force-spawning it would answer 'Task not found' for a follow-up that is in
+  // fact already queued. Report the record that exists instead.
+  it('returns the already-queued task on a duplicate rejection instead of force-spawning a phantom id', async () => {
+    addTask.mockResolvedValue({ id: 'sys-rl-existing', status: 'pending', duplicate: true });
+    const result = await spawnReviewLoopFollowUp({
+      originalAgentId: null,
+      originalTask: { id: 'app-pr-widget-9', metadata: { app: 'widget' }, description: 'Resolve and merge PR #9 for Widget' },
+      prUrl: 'https://github.com/o/r/pull/9', prBranch: 'fix/save', sourceWorkspace: '/ws',
+      dispatch: 'immediate'
+    });
+    expect(result).toMatchObject({ id: 'sys-rl-existing', duplicate: true });
+    expect(forceSpawnTask).not.toHaveBeenCalled();
   });
 });
 

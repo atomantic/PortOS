@@ -12,9 +12,9 @@
 import { join } from 'path';
 import { homedir } from 'os';
 import { tryReadFile } from '../lib/fileUtils.js';
-import { notificationEvents, NOTIFICATION_TYPES } from './notifications.js';
-import { getDomainAutonomyMode } from './cosState.js';
-import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
+import { notificationEvents } from './notifications.js';
+import { forwardNotification as forwardToTelegram } from './telegramForward.js';
+import { createTokenBucket } from '../lib/telegramRateLimit.js';
 
 const CHANNELS_DIR = join(homedir(), '.claude', 'channels', 'telegram');
 const ENV_FILE = join(CHANNELS_DIR, '.env');
@@ -28,53 +28,9 @@ let botUsername = null;
 let isActive = false;
 let notificationSubscription = null;
 
-// Rate limiter: token bucket (30 messages/minute)
-let tokenBucket = 30;
-let lastTokenRefill = Date.now();
-const BUCKET_MAX = 30;
-const REFILL_INTERVAL = 60000;
-
-// Emoji maps (shared with manual bot)
-const NOTIFICATION_EMOJI = {
-  [NOTIFICATION_TYPES.MEMORY_APPROVAL]: '🧠',
-  [NOTIFICATION_TYPES.TASK_APPROVAL]: '✅',
-  [NOTIFICATION_TYPES.CODE_REVIEW]: '🔍',
-  [NOTIFICATION_TYPES.HEALTH_ISSUE]: '⚠️',
-  [NOTIFICATION_TYPES.BRIEFING_READY]: '📋',
-  [NOTIFICATION_TYPES.AUTOBIOGRAPHY_PROMPT]: '📝',
-  [NOTIFICATION_TYPES.PLAN_QUESTION]: '❓',
-  [NOTIFICATION_TYPES.DAILY_POST_REMINDER]: '🧪'
-};
-
-const PRIORITY_EMOJI = {
-  low: '🟢',
-  medium: '🟡',
-  high: '🟠',
-  critical: '🔴'
-};
-
-function refillTokens() {
-  const now = Date.now();
-  if (now - lastTokenRefill >= REFILL_INTERVAL) {
-    tokenBucket = BUCKET_MAX;
-    lastTokenRefill = now;
-  }
-}
-
-function consumeToken() {
-  refillTokens();
-  if (tokenBucket <= 0) return false;
-  tokenBucket--;
-  return true;
-}
-
-function escapeHtml(text) {
-  if (!text) return '';
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
+// Rate limiter: token bucket (30 messages/minute). Per-transport instance —
+// see lib/telegramRateLimit.js for why it is not shared with the direct bot.
+const rateLimiter = createTokenBucket();
 
 /**
  * Read bot token from MCP plugin's .env file
@@ -168,21 +124,19 @@ export async function cleanup() {
 /**
  * Send a message via direct Bot API HTTP call
  */
-export async function sendMessage(text) {
+export async function sendMessage(text, opts = { parse_mode: 'HTML' }) {
   if (!botToken || !chatId) {
     return { success: false, error: !botToken ? 'No bot token' : 'No chat ID' };
   }
 
-  if (!consumeToken()) {
+  if (!rateLimiter.consume()) {
     console.log('📱 TG Bridge: rate limit reached, skipping message');
     return { success: false, error: 'Rate limit exceeded' };
   }
 
-  const result = await apiCall('sendMessage', {
-    chat_id: chatId,
-    text,
-    parse_mode: 'HTML'
-  });
+  // Spread the caller's options so parse_mode AND reply_markup (the memory
+  // approve/reject keyboard) reach the API call, not just the text.
+  const result = await apiCall('sendMessage', { chat_id: chatId, text, ...opts });
 
   return result
     ? { success: true }
@@ -221,48 +175,10 @@ export function updateCachedForwardTypes(forwardTypes) {
   cachedForwardTypes = forwardTypes;
 }
 
-/**
- * Forward a notification to Telegram via HTTP API
- */
-async function forwardNotification(notification) {
-  // Cached forward-type filter first (mirrors telegram.js): a filtered-out
-  // notification skips the state read, and dry-run only reports what execute
-  // would actually send.
-  if (Array.isArray(cachedForwardTypes) && cachedForwardTypes.length > 0) {
-    if (!cachedForwardTypes.includes(notification.type)) return;
-  }
-
-  // Per-domain autonomy gate (mirrors telegram.js): `off` suppresses outbound
-  // forwarding; `dry-run` logs what would have been sent without messaging.
-  const mode = await getDomainAutonomyMode('messages');
-  if (mode !== 'execute') {
-    if (mode === 'dry-run') {
-      console.log(`📨 [dry-run] Messages auto-send would forward notification: ${notification.type} — "${notification.title}"`);
-    }
-    return;
-  }
-
-  // Daily messages budget (#711, mirrors telegram.js): once today's auto-send
-  // count reaches the cap, suppress further forwarding for the rest of the day.
-  const budget = await getDomainBudgetStatus('messages');
-  if (!budget.withinBudget) {
-    console.log(`📨 Messages auto-send daily ${budget.exceeded} budget reached — suppressing forward: ${notification.type} — "${notification.title}"`);
-    return;
-  }
-
-  const emoji = NOTIFICATION_EMOJI[notification.type] || '🔔';
-  const priorityEmoji = PRIORITY_EMOJI[notification.priority] || '';
-  const lines = [`${emoji} <b>${escapeHtml(notification.title)}</b>`];
-  if (notification.description) lines.push(escapeHtml(notification.description));
-  if (notification.priority) lines.push(`Priority: ${priorityEmoji} ${notification.priority}`);
-
-  const startTime = Date.now();
-  await sendMessage(lines.join('\n'));
-  // Count the forward (and its wall-clock) against the messages daily budget
-  // (#711) so both the actions and minutes caps are enforced for this domain.
-  await recordDomainUsage('messages', { actions: 1, ms: Date.now() - startTime })
-    .catch(err => console.error(`❌ Failed to record messages budget usage: ${err.message}`));
-}
+// Forward a notification through the shared pipeline. An arrow (not a bound
+// reference) so the CURRENT cachedForwardTypes is read on every event.
+const forwardNotification = (notification) =>
+  forwardToTelegram(notification, { cachedForwardTypes, sendMessage });
 
 /**
  * Subscribe to notification events

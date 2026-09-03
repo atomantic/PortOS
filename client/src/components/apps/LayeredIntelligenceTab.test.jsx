@@ -184,11 +184,14 @@ describe('buildLayeredIntelligenceScheduleUpdate (per-app task override, #2322)'
     expect(buildLayeredIntelligenceScheduleUpdate(baseline, { ...baseline, enabled: true })).toEqual({ enabled: true });
   });
 
-  it('emits interval + intervalMs together, mapping to daily/weekly/custom', () => {
+  it('emits interval as a 5-field cron string alongside intervalMs', () => {
+    // The per-app override reads a space-containing `interval` as the cron
+    // expression, so the numeric picker must write the expression itself — never
+    // a retired cadence name, and never the UI's 'cron' editor sentinel.
     expect(buildLayeredIntelligenceScheduleUpdate(baseline, { ...baseline, intervalMs: 3600000 }))
-      .toEqual({ interval: 'custom', intervalMs: 3600000 });
+      .toEqual({ interval: '0 * * * *', intervalMs: 3600000 });
     expect(buildLayeredIntelligenceScheduleUpdate({ ...baseline, intervalMs: 3600000 }, { ...baseline, intervalMs: 7 * 86400000 }))
-      .toEqual({ interval: 'weekly', intervalMs: 7 * 86400000 });
+      .toEqual({ interval: '0 7 * * 1', intervalMs: 7 * 86400000 });
   });
 
   it('normalizes empty provider/model to null and only emits when changed', () => {
@@ -206,11 +209,12 @@ describe('buildLayeredIntelligenceScheduleUpdate (per-app task override, #2322)'
       .toEqual({ providerId: null, model: null });
   });
 
-  it('intervalFieldsFromMs maps standard cadences + falls back to daily', () => {
-    expect(intervalFieldsFromMs(86400000)).toEqual({ interval: 'daily', intervalMs: 86400000 });
-    expect(intervalFieldsFromMs(7 * 86400000)).toEqual({ interval: 'weekly', intervalMs: 7 * 86400000 });
-    expect(intervalFieldsFromMs(6 * 3600000)).toEqual({ interval: 'custom', intervalMs: 6 * 3600000 });
-    expect(intervalFieldsFromMs(0)).toEqual({ interval: 'daily', intervalMs: 86400000 });
+  it('intervalFieldsFromMs derives a cron expression + falls back to daily', () => {
+    expect(intervalFieldsFromMs(86400000)).toEqual({ interval: '0 7 * * *', intervalMs: 86400000 });
+    expect(intervalFieldsFromMs(7 * 86400000)).toEqual({ interval: '0 7 * * 1', intervalMs: 7 * 86400000 });
+    expect(intervalFieldsFromMs(6 * 3600000)).toEqual({ interval: '0 */6 * * *', intervalMs: 6 * 3600000 });
+    expect(intervalFieldsFromMs(900000)).toEqual({ interval: '*/15 * * * *', intervalMs: 900000 });
+    expect(intervalFieldsFromMs(0)).toEqual({ interval: '0 7 * * *', intervalMs: 86400000 });
   });
 });
 

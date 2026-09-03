@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import Pill from '../ui/Pill';
 import NetworkSetupGuide from '../NetworkSetupGuide.jsx';
+import { PORTS } from '../../lib/ports.js';
 import { useLocalStorageBool } from '../../hooks/useLocalStorageBool';
 
 export default function TailnetHelpBanner({ tailnetInfo, networkExposure }) {
@@ -67,9 +68,9 @@ export default function TailnetHelpBanner({ tailnetInfo, networkExposure }) {
             <p className="font-medium text-gray-300">Peer DNS after this machine is secure</p>
             <p className="mt-1">
               Use the suggested MagicDNS host on each peer below to switch federation from
-              <span className="font-mono text-gray-300"> http://{'<ip>'}:5555 </span>
+              <span className="font-mono text-gray-300"> http://{'<ip>'}:{PORTS.API} </span>
               to its browser-trusted
-              <span className="font-mono text-gray-300"> https://{'<host>'}.{tailnetInfo?.suffix || '<tailnet>'}.ts.net:5555</span>
+              <span className="font-mono text-gray-300"> https://{'<host>'}.{tailnetInfo?.suffix || '<tailnet>'}.ts.net:{PORTS.API}</span>
               {' '}address. “Use IP only” reverts that peer to its IP.
             </p>
           </div>

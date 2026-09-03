@@ -10,6 +10,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import toast from './ui/Toast';
+import { PORTS } from '../lib/ports.js';
 import {
   handleSelfRestart,
   PORTOS_APP_ID,
@@ -47,7 +48,7 @@ export default function NetworkSetupGuide({ networkExposure, compact = false }) 
 
   if (!setup || !Array.isArray(setup.steps)) return null;
 
-  const port = networkExposure?.bind?.port || 5555;
+  const port = networkExposure?.bind?.port || PORTS.API;
   const visibleSteps = compact
     ? [setup.nextStep || setup.steps.at(-1)].filter(Boolean)
     : setup.steps;

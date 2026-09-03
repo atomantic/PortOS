@@ -222,10 +222,10 @@ export default function BodyTab() {
                       <td className="py-1.5 px-2 text-right font-mono text-gray-300">{formatSph(exam.rightCylinder)}</td>
                       <td className="py-1.5 px-2 text-right font-mono text-gray-300">{exam.rightAxis != null ? `${exam.rightAxis}\u00B0` : '\u2014'}</td>
                       <td className="py-1.5 px-2 text-right">
-                        <div className="flex items-center justify-end gap-1">
+                        <div className="flex items-center justify-end gap-2">
                           <button
                             onClick={() => startEditEye(exam, realIdx)}
-                            className="p-1 text-gray-600 hover:text-port-accent transition-colors"
+                            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-600 hover:text-port-accent transition-colors"
                             title="Edit" aria-label="Edit"
                           >
                             <Pencil size={12} />
@@ -241,7 +241,7 @@ export default function BodyTab() {
                           ) : (
                             <button
                               onClick={() => requestDelete(realIdx)}
-                              className="p-1 text-gray-600 hover:text-port-error transition-colors"
+                              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-600 hover:text-port-error transition-colors"
                               title="Delete" aria-label="Delete"
                             >
                               <Trash2 size={12} />

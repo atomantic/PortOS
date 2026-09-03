@@ -84,6 +84,27 @@ describe('fableLoom hostedSession', () => {
     httpsEnabled: false,
   });
 
+  // A stub Socket.IO surface that records every namespace emit.
+  const makeIo = () => {
+    const emits = [];
+    return {
+      emits,
+      of: () => ({
+        to: (room) => ({
+          emit: (event, payload) => emits.push({ room, event, payload }),
+        }),
+      }),
+    };
+  };
+
+  // A promise the test resolves by hand, so one provider stage can be held
+  // pending across a teardown without any real timing.
+  const deferred = () => {
+    let settle;
+    const promise = new Promise((resolve, reject) => { settle = { resolve, reject }; });
+    return { promise, ...settle };
+  };
+
   beforeEach(() => {
     _resetHostedSessions();
     vi.restoreAllMocks();
@@ -281,6 +302,7 @@ describe('fableLoom hostedSession', () => {
         engine: 'qwen3-tts',
         profileId: 'voice-profile-1',
         route: 'interactive',
+        signal: expect.any(AbortSignal),
         voice: 'character-1',
       });
     });
@@ -311,6 +333,7 @@ describe('fableLoom hostedSession', () => {
         engine: 'kokoro',
         profileId: undefined,
         route: 'interactive',
+        signal: expect.any(AbortSignal),
         voice: 'af_heart',
       });
     });
@@ -343,22 +366,72 @@ describe('fableLoom hostedSession', () => {
       endHostedSession(session.id, { reason: 'user_ended' });
       expect(getHostedSession(session.id)).toBeNull();
     });
+
+    // #5786: the turn holds `session`/`turn` across every provider await, so a
+    // teardown landing mid-flight used to let the LLM and TTS run to completion
+    // and emit turn frames AFTER the room's terminal `hosted:session:ended`.
+    it('abandons a turn whose session is torn down mid story turn, emitting nothing after ended', async () => {
+      const io = makeIo();
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      await startHostedListening(session.id, { io });
+
+      const storyTurn = deferred();
+      vi.spyOn(weave, 'playTurn').mockImplementation(() => storyTurn.promise);
+
+      const pending = processHostedUtterance(session.id, {
+        textMessage: 'What is behind the trees?',
+        io,
+      });
+      await vi.waitFor(() => expect(weave.playTurn).toHaveBeenCalled());
+
+      endHostedSession(session.id, { reason: 'user_ended', io });
+      storyTurn.resolve({
+        action: 'move',
+        transitionId: 'tr-1',
+        narration: 'We shall enter the dark woods together.',
+        node: { id: 'node-2', title: 'Deep Woods' },
+      });
+
+      await expect(pending).resolves.toMatchObject({ aborted: true });
+      // The provider work downstream of the abandoned stage never ran…
+      expect(tts.synthesize).not.toHaveBeenCalled();
+      // …and `hosted:session:ended` is the last thing the room ever saw.
+      expect(io.emits.at(-1).event).toBe('hosted:session:ended');
+    });
+
+    it('treats an aborted transcription as a cancellation, not an empty utterance', async () => {
+      const io = makeIo();
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      await startHostedListening(session.id, { io });
+
+      const transcription = deferred();
+      stt.transcribe.mockImplementation((_audio, opts) => {
+        opts.signal.addEventListener('abort', () => transcription.reject(new Error('transcribe aborted')));
+        return transcription.promise;
+      });
+      vi.spyOn(weave, 'playTurn').mockResolvedValue({
+        action: 'stay',
+        narration: 'Still here.',
+        node: { id: 'node-start' },
+      });
+
+      const pending = processHostedUtterance(session.id, {
+        audioBuffer: Buffer.from('fake-audio-bytes'),
+        io,
+      });
+      await vi.waitFor(() => expect(stt.transcribe).toHaveBeenCalled());
+
+      endHostedSession(session.id, { reason: 'expired', io });
+
+      await expect(pending).resolves.toMatchObject({ aborted: true });
+      // An abort used to fall through the STT catch as `{ text: '' }`, which
+      // reads as a successfully-empty utterance rather than a cancellation.
+      expect(weave.playTurn).not.toHaveBeenCalled();
+      expect(io.emits.at(-1).event).toBe('hosted:session:ended');
+    });
   });
 
   describe('expired-session sweep', () => {
-    // A stub Socket.IO surface that records every namespace emit.
-    const makeIo = () => {
-      const emits = [];
-      return {
-        emits,
-        of: () => ({
-          to: (room) => ({
-            emit: (event, payload) => emits.push({ room, event, payload }),
-          }),
-        }),
-      };
-    };
-
     // Age a session past its TTL without waiting out 30 real minutes.
     const expire = (sessionId) => {
       const internal = _getInternalSession(sessionId);

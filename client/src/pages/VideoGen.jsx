@@ -52,8 +52,7 @@ import AdvancedParamsPanel from '../components/videoGen/AdvancedParamsPanel';
 import RuntimeFingerprint from '../components/videoGen/RuntimeFingerprint';
 import ModelDisclosure from '../components/videoGen/ModelDisclosure';
 import ModelRepairBanner from '../components/videoGen/ModelRepairBanner';
-import LiveVideoStage from '../components/videoGen/LiveVideoStage';
-import { resolveVideoStagePreview, VIDEO_STAGE_KIND } from '../lib/videoStagePreview';
+import RenderStatusCard from '../components/videoGen/RenderStatusCard';
 import VideoGenGallery from '../components/videoGen/VideoGenGallery';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import MediaPreview from '../components/media/MediaPreview';
@@ -64,7 +63,7 @@ import PromptFromMedia from '../components/media/PromptFromMedia';
 import { normalizeVideo } from '../components/media/normalize';
 import {
   Film, Sparkles, Settings as SettingsIcon, RefreshCw, AlertTriangle,
-  X, Type, Image as ImageIcon, GitBranch, ListPlus, Music, SlidersHorizontal,
+  X, Type, Image as ImageIcon, GitBranch, ListPlus, Music, SlidersHorizontal, MonitorOff,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
@@ -382,14 +381,15 @@ export default function VideoGen() {
   const [progress, setProgress] = useState(null);
   const [statusMsg, setStatusMsg] = useState('');
   const [error, setError] = useState(null);
-  // Main-stage preview state (#4588). `renderGeometry` is the server's
-  // RESOLVED width/height — the form's values are what we asked for, and
-  // videoGen snaps both edges down to the model's grid. Transient runner frames
-  // are intentionally ignored: they are not useful for judging a video render.
-  // `lastRender` is this session's finished clip, so the stage hands off to it
-  // instead of going blank when the render lands.
-  const [renderGeometry, setRenderGeometry] = useState(null);
-  const [lastRender, setLastRender] = useState(null);
+  // Live render status (#5872). `phase` is the runner's own STAGE: id, mapped
+  // to a named step by the status card — with the queue's own 'queued' as one
+  // more phase id, so waiting in line and running share one piece of state
+  // instead of a boolean every SSE handler has to remember to clear.
+  // `renderStartedAt` drives the elapsed clock, which is what makes a silent
+  // phase (an ~89 GB checkpoint streaming onto the GPU) legible as work rather
+  // than as a hang.
+  const [phase, setPhase] = useState(null);
+  const [renderStartedAt, setRenderStartedAt] = useState(null);
   const { attach, eventSourceRef } = useMediaJobSse('video');
   // Hold the reject() of the in-flight runGeneration Promise so cancel can
   // settle it. Without this, handleCancel() closes the EventSource but the
@@ -424,25 +424,41 @@ export default function VideoGen() {
   const attachJobEvents = (jobId, { isCurrent = () => true, settleResolve = () => {}, settleReject = () => {}, withToast = true } = {}) => {
     return attach(jobId, {
       isCurrent,
-      onQueued: (msg) => setStatusMsg(typeof msg.position === 'number' ? `Queued (position ${msg.position})` : 'Queued'),
-      onStarted: () => setStatusMsg('Starting render…'),
-      onRenderMeta: (msg) => setRenderGeometry({ width: msg.width, height: msg.height }),
-      onStatus: (msg) => setStatusMsg(msg.message),
+      onQueued: (msg) => {
+        setPhase('queued');
+        setStatusMsg(typeof msg.position === 'number' ? `Queued (position ${msg.position})` : 'Queued');
+      },
+      onStarted: () => {
+        // Out of the queue, but the runner hasn't named a phase yet — clear it
+        // rather than guessing, and let the card default to "Loading model".
+        setPhase(null);
+        // The clock starts HERE, not at submit: time spent waiting in the queue
+        // is not render time, and counting it would make the elapsed figure
+        // jump backwards on a reload (which reads the worker's own startedAt).
+        setRenderStartedAt((at) => at ?? Date.now());
+        setStatusMsg('Starting render…');
+      },
+      // `phase` is presence-guarded on the wire: a frame that carries none must
+      // leave the last known phase alone rather than reset the step list to
+      // "unknown" on every bare status line.
+      onStatus: (msg) => {
+        if (msg.phase) setPhase(msg.phase);
+        setStatusMsg(msg.message);
+      },
       onProgress: (msg) => {
         setProgress({ progress: msg.progress });
+        if (msg.phase) setPhase(msg.phase);
         // A bare tqdm percentage shouldn't blank the STATUS line that just
         // preceded it; only overwrite when the progress event carries text.
         if (msg.message) setStatusMsg(msg.message);
       },
-      onComplete: (msg) => {
+      onComplete: () => {
         setGenerating(false);
         setProgress({ progress: 1 });
+        setPhase(null);
         setStatusMsg('Complete');
-        // Hand the stage off from the conditioning media to the finished clip.
-        if (msg.result) setLastRender(msg.result);
         if (withToast) toast.success('Video generated');
         refreshHistory();
-        return msg.result;
       },
       onError: (msg) => {
         setError(msg.error);
@@ -452,6 +468,7 @@ export default function VideoGen() {
       },
       onCanceled: (msg) => {
         setGenerating(false);
+        setPhase(null);
         setStatusMsg(msg.reason || 'Canceled');
         if (withToast) toast(msg.reason || 'Render canceled');
         return new Error(msg.reason || 'Canceled');
@@ -479,10 +496,13 @@ export default function VideoGen() {
       // attachJobEvents runs.
       if (runTokenRef.current > 0 || eventSourceRef.current) return;
       applyResumedParams(job.params || {});
-      // The in-flight render's own geometry, not the form's — a reload has to
-      // size the stage by what the server resolved.
-      if (job.render) setRenderGeometry({ width: job.render.width, height: job.render.height });
       setGenerating(true);
+      setPhase(job.status === 'queued' ? 'queued' : null);
+      // The worker's own start time, so a reload keeps a truthful elapsed clock
+      // instead of restarting it and reading as a fresh render. A job still in
+      // the queue has no start time yet and gets no clock — the same rule the
+      // live path follows.
+      setRenderStartedAt(job.startedAt ? new Date(job.startedAt).getTime() : null);
       // Skip a forced setProgress(0) here — attachJobEvents will replay the
       // server's last SSE payload synchronously after EventSource open, and
       // a job mid-render would otherwise visibly flash 0% before jumping
@@ -648,29 +668,13 @@ export default function VideoGen() {
 
   const progressPct = progress?.progress != null ? Math.round(progress.progress * 100) : null;
 
-  // What the main stage shows right now (#4588). Memoized because the stage
-  // holds a pending descriptor by signature — a fresh object identity on every
-  // keystroke in the prompt box would otherwise churn its hold/return guard.
-  // Geometry prefers the server's resolved edges and falls back to the form's
-  // (a queued job, or a runtime that never reports them).
-  const extendSource = useMemo(
-    () => (extendFromVideoId ? history.find((v) => v.id === extendFromVideoId) || null : null),
-    [extendFromVideoId, history],
-  );
-  const stage = useMemo(() => resolveVideoStagePreview({
-    generating,
-    width: renderGeometry?.width ?? width,
-    height: renderGeometry?.height ?? height,
-    result: lastRender,
-    extendSource,
-    sourceImageFile, sourceUploadUrl,
-    lastImageFile, lastUploadUrl,
-    keyframes: keyframesActive ? keyframes : null,
-  }), [
-    generating, renderGeometry, width, height, lastRender, extendSource,
-    sourceImageFile, sourceUploadUrl, lastImageFile, lastUploadUrl, keyframesActive, keyframes,
-  ]);
-  const showStage = generating || stage.kind !== VIDEO_STAGE_KIND.EMPTY;
+  // Will this render put the display to sleep? Both halves are server-owned so
+  // the warning can't drift from the behaviour: the model says whether its
+  // runtime needs the mitigation, and /status says whether this install will
+  // actually apply it (macOS, and the user hasn't opted out).
+  const rendersSleepDisplay = !!status?.displaySleepOnRender
+    && !!currentModel?.sleepsDisplayDuringRender
+    && !remoteTarget.isRemote && !isGrok;
 
   // Run a single payload through the SSE pipeline. Returns a promise that
   // resolves when the job completes (or rejects on error / cancel). The
@@ -692,10 +696,11 @@ export default function VideoGen() {
     setProgress({ progress: 0 });
     setStatusMsg('Starting...');
     setError(null);
-    // Stale-job isolation: the previous run's geometry must not be shown as if
-    // it belonged to this one. `lastRender` deliberately survives so the stage
-    // keeps the finished clip until this run produces something of its own.
-    setRenderGeometry(null);
+    // Stale-job isolation: the previous run's phase and clock must not be shown
+    // as if they belonged to this one. The clock stays null until `started`
+    // lands, so it measures the render rather than the queue wait.
+    setPhase(null);
+    setRenderStartedAt(null);
 
     const myToken = ++runTokenRef.current;
     const isCurrent = () => myToken === runTokenRef.current;
@@ -869,19 +874,6 @@ export default function VideoGen() {
           </button>
         </div>
       </div>
-
-      {showStage && (
-        <LiveVideoStage
-          descriptor={stage}
-          generating={generating}
-          progressPct={progressPct}
-          statusMsg={statusMsg}
-          error={error}
-          // Hold while the lightbox is open — the user is watching a clip there,
-          // and swapping the stage under it is exactly the theft this guards.
-          held={!!preview}
-        />
-      )}
 
       <RuntimeFingerprint runtime={status?.runtime} />
 
@@ -1482,6 +1474,22 @@ export default function VideoGen() {
               </span>
             )}
           </div>
+
+          {/* Said BEFORE the button is pressed, not after the screen is already
+              dark. A user who first learns about the sleep by watching their
+              display go black reads it as a crash and wakes it — which puts
+              WindowServer back in contention with Metal and risks the GPU
+              watchdog panic the sleep exists to avoid. */}
+          {rendersSleepDisplay && !generating && (
+            <p className="flex items-start gap-1.5 text-[11px] text-port-warning">
+              <MonitorOff className="w-3.5 h-3.5 mt-px shrink-0" />
+              <span>
+                This model renders with your display asleep. The screen will go dark shortly
+                after you start — that is expected, and waking it can crash the render. Disable it
+                under Settings &rarr; Media Generation if you would rather keep the screen on.
+              </span>
+            </p>
+          )}
         </div>
 
         <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
@@ -1495,6 +1503,16 @@ export default function VideoGen() {
           />
         </div>
       </form>
+
+      <RenderStatusCard
+        generating={generating}
+        phase={phase}
+        progressPct={progressPct}
+        statusMsg={statusMsg}
+        error={error}
+        startedAt={renderStartedAt}
+        sleepsDisplay={rendersSleepDisplay}
+      />
 
       <MediaJobsQueue kind="video" />
 

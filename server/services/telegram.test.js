@@ -13,6 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { TELEGRAM_MAX_RAW_CHARS } from '../lib/telegramMessage.js';
 
 // Shared, mutable holder for the fake bot's captured handlers + spies. Reset in
 // beforeEach so each test sees a clean bot. `vi.hoisted` makes it available to
@@ -90,10 +91,13 @@ vi.mock('./domainUsage.js', () => ({
   recordDomainUsage: vi.fn(async () => {}),
 }));
 
+// `memory` is what peekMemory resolves to; held in a hoisted holder because
+// loadTelegram() calls vi.resetModules(), which re-evaluates this factory.
+const mem = vi.hoisted(() => ({ memory: null }));
 vi.mock('./memoryBackend.js', () => ({
   approveMemory: vi.fn(async () => ({ success: true })),
   rejectMemory: vi.fn(async () => ({ success: true })),
-  peekMemory: vi.fn(async () => null),
+  peekMemory: vi.fn(async () => mem.memory),
 }));
 
 // Mutable disk stand-in. `strictRead` is what `readJSONFileStrict` returns
@@ -134,6 +138,7 @@ describe('telegram service', () => {
   beforeEach(() => {
     cfg.settings = defaultSettings();
     fu.strictRead = null;
+    mem.memory = null;
     fu.writes = [];
     active = null;
     h.textHandlers = [];
@@ -263,6 +268,61 @@ describe('telegram service', () => {
       expect(h.answerCallbackQuery).toHaveBeenCalledWith('cb-1', { text: 'Unauthorized' });
       // The memory action must not run for an unauthorized chat.
       expect(h.editMessageText).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * Shared notification-forward pipeline (#5688).
+   *
+   * The message body is now built by lib/telegramMessage.js for BOTH transports.
+   * These mirror telegramBridge.test.js so a change that pleases one transport
+   * cannot silently regress the other.
+   */
+  describe('notification forwarding (#5688)', () => {
+    async function forward(notification) {
+      const telegram = await loadTelegramActive();
+      await telegram.init(false);
+      h.sendMessage.mockClear();
+      notifEmitter.emit('added', notification);
+      // Let the async forward chain (gates -> peekMemory -> send) settle.
+      for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+      return h.sendMessage.mock.calls[0];
+    }
+
+    it('attaches the memory approve/reject keyboard to a MEMORY_APPROVAL forward', async () => {
+      mem.memory = { summary: 'Remember the example project deadline' };
+      const call = await forward({
+        type: 'memory_approval',
+        title: 'Approve memory?',
+        description: 'ignored once the memory resolves',
+        priority: 'medium',
+        metadata: { memoryId: 'mem-1' },
+      });
+
+      expect(call, 'a memory approval must be forwarded').toBeDefined();
+      const [chatId, text, options] = call;
+      expect(chatId).toBe('42');
+      expect(text).toContain('Remember the example project deadline');
+      expect(text).not.toContain('ignored once the memory resolves');
+      expect(options.reply_markup.inline_keyboard[0]).toEqual([
+        { text: '✅ Approve', callback_data: 'mem_approve:mem-1' },
+        { text: '❌ Reject', callback_data: 'mem_reject:mem-1' },
+      ]);
+    });
+
+    it('truncates a body past the raw cap before escaping it', async () => {
+      // '&' sits exactly on the cut: escaping first would leave a split '&am'.
+      mem.memory = { content: `${'a'.repeat(TELEGRAM_MAX_RAW_CHARS - 1)}&${'b'.repeat(200)}` };
+      const call = await forward({
+        type: 'memory_approval',
+        title: 'Long one',
+        priority: 'low',
+        metadata: { memoryId: 'mem-2' },
+      });
+
+      const bodyLine = call[1].split('\n')[1];
+      expect(bodyLine.endsWith('&amp;…')).toBe(true);
+      expect(bodyLine).not.toContain('b');
     });
   });
 

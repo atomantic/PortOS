@@ -419,6 +419,30 @@ describe('cosTaskStore.addTask', () => {
       expect(reloaded.metadata.prompt).toBe(fullPrompt);
     });
 
+    it('keeps a multiline raw description as the prompt when a multiline context note rides along', async () => {
+      // The pr-reviewer generator hands over the stage instructions as the
+      // description and the security-scan summary as a multi-line context note.
+      // Reclassifying the note first made it the "explicit" prompt and dropped
+      // the instructions, so Stage 2 ran with no gate rules and no output contract.
+      const stagePrompt = '[Improvement: Example] PR Eligibility Gate (Stage 2)\n\n## Gate\n\nReturn JSON only.';
+      const scanNote = 'Security scan status: passed.\nReviewed 1 external pull request.';
+      const created = await addTask({
+        id: 'sys-stage-with-note',
+        status: 'pending',
+        priority: 'MEDIUM',
+        priorityValue: 2,
+        description: stagePrompt,
+        metadata: { context: scanNote },
+        section: 'pending',
+      }, 'internal', { raw: true });
+      expect(created.description).toBe('[Improvement: Example] PR Eligibility Gate (Stage 2)');
+      expect(created.metadata.prompt).toBe(stagePrompt);
+      expect(created.metadata.context).toBe(scanNote);
+      const reloaded = await getTaskById('sys-stage-with-note');
+      expect(reloaded.metadata.prompt).toBe(stagePrompt);
+      expect(reloaded.metadata.context).toBe(scanNote);
+    });
+
     it('preserves an explicitly empty prompt while normalizing a multiline raw description', async () => {
       const created = await addTask({
         id: 'sys-cleared-scheduled-prompt',

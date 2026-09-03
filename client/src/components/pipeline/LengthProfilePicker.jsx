@@ -99,7 +99,7 @@ export default function LengthProfilePicker({ issue, onChange, disabled = false 
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-1 w-72 bg-port-card border border-port-border rounded-lg shadow-lg z-30 p-1">
+        <div className="absolute right-0 mt-1 w-72 max-w-[calc(100vw-1rem)] bg-port-card border border-port-border rounded-lg shadow-lg z-30 p-1">
           {PRESET_ORDER.map((id) => {
             const preset = LENGTH_PROFILES[id];
             const active = profile === id;

@@ -59,7 +59,7 @@ export default function InboxTab({ onRefresh, settings }) {
   const [creative, setCreative] = useLocalStorageBool('brain.captureCreative', false);
   // A bare repo URL is cloned on capture, which unlocks the two post-clone
   // agent opt-ins (malware scan / repo study) — shared with Quick Capture.
-  const repoIntake = useRepoIntake(inputText);
+  const repoIntake = useRepoIntake(inputText, linkNote);
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showNeedsReview, setShowNeedsReview] = useState(true);

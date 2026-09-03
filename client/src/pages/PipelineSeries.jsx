@@ -231,8 +231,13 @@ export default function PipelineSeries() {
             <Link to="/pipeline" className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-white">
               <ArrowLeft size={14} /> All Series
             </Link>
-            <WorkflowIcon className="w-5 h-5 text-port-accent ml-2" />
-            <h1 className="text-xl font-bold text-white truncate">{series.name || 'Untitled series'}</h1>
+            <WorkflowIcon className="w-5 h-5 shrink-0 text-port-accent ml-2" />
+            <h1
+              className="min-w-0 line-clamp-2 break-words text-xl font-bold text-white"
+              title={series.name || 'Untitled series'}
+            >
+              {series.name || 'Untitled series'}
+            </h1>
             {series.writersRoomWorkId ? (
               <Link
                 to={`/writers-room/works/${encodeURIComponent(series.writersRoomWorkId)}`}

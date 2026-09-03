@@ -4,11 +4,13 @@ import {
   getHostedNamespace,
 } from './fableLoomHosted.js';
 import {
+  _getInternalSession,
   _resetHostedSessions,
   createHostedSession,
   getHostedSession,
 } from '../services/fableLoom/hostedSession.js';
 import * as records from '../services/fableLoom/records.js';
+import * as weave from '../services/fableLoom/weave.js';
 import * as networkExposure from '../lib/networkExposure.js';
 import * as tts from '../services/voice/tts.js';
 import * as stt from '../services/voice/stt.js';
@@ -33,6 +35,16 @@ describe('fableLoomHosted Socket.IO namespace', () => {
         isEnding: false,
         playbackAssets: { holdLoopVideoHistoryIds: ['vid-1'] },
         transitions: [{ id: 'tr-1', targetNodeId: 'node-2', intent: 'go next' }],
+      }, {
+        id: 'node-2',
+        title: 'Next',
+        prose: 'Second scene prose',
+        playbackMode: 'decision',
+        audienceConnection: 'connected',
+        protagonistPresence: 'offscreen',
+        isEnding: false,
+        playbackAssets: { holdLoopVideoHistoryIds: ['vid-2'] },
+        transitions: [],
       }],
     }],
   };
@@ -42,6 +54,29 @@ describe('fableLoomHosted Socket.IO namespace', () => {
   let connectionHandler;
   let mockNamespace;
   let roomEvents;
+
+  /**
+   * Socket.IO socket double. `listeners` and `emitted` hang off the returned
+   * object so a test can drive one handler and read that socket's own emissions
+   * without threading three values around.
+   */
+  const makeSocket = ({ role, sessionId, id = `${role}-sock` }) => {
+    const listeners = {};
+    const emitted = [];
+    return {
+      id,
+      hostedRole: role,
+      hostedSessionId: sessionId,
+      join: vi.fn(),
+      emit: vi.fn((event, data) => emitted.push({ event, data })),
+      on: vi.fn((event, fn) => { listeners[event] = fn; }),
+      removeAllListeners: vi.fn(),
+      listeners,
+      emitted,
+    };
+  };
+
+  const roomEvent = (event) => roomEvents.find((e) => e.event === event);
 
   beforeEach(() => {
     _resetHostedSessions();
@@ -165,57 +200,177 @@ describe('fableLoomHosted Socket.IO namespace', () => {
   });
 
   describe('socket event exchange', () => {
-    it('ignores audience mic controls from a host socket', async () => {
-      const { session } = await createHostedSession('loom-1', 'ep-1');
-      const listeners = {};
-      const socket = {
-        id: 'host-sock',
-        hostedRole: 'host',
-        hostedSessionId: session.id,
-        join: vi.fn(),
-        emit: vi.fn(),
-        on: vi.fn((event, fn) => { listeners[event] = fn; }),
-        removeAllListeners: vi.fn(),
-      };
+    let session;
+    let token;
+    let audience;
 
-      connectionHandler(socket);
-      await listeners['hosted:mic:start']();
+    /** Connect a second, host-role socket into the same session room. */
+    const connectHost = () => {
+      const host = makeSocket({ role: 'host', sessionId: session.id });
+      connectionHandler(host);
+      roomEvents.length = 0;
+      return host;
+    };
+
+    beforeEach(async () => {
+      ({ session, token } = await createHostedSession('loom-1', 'ep-1'));
+      // The LLM turn is stubbed by default so utterance tests assert the
+      // session state machine, not provider behaviour. Tests that care about
+      // the outcome override this.
+      vi.spyOn(weave, 'playTurn').mockResolvedValue({
+        action: 'stay',
+        narration: 'Nothing changes.',
+        node: { id: 'node-1' },
+        ended: false,
+      });
+      audience = makeSocket({ role: 'audience', sessionId: session.id });
+      connectionHandler(audience);
+      roomEvents.length = 0;
+    });
+
+    it('emits a sanitized session snapshot on connection', () => {
+      expect(audience.join).toHaveBeenCalledWith(`session:${session.id}`);
+      const sync = audience.emitted.find((e) => e.event === 'hosted:session:sync');
+      expect(sync).toBeDefined();
+      expect(sync.data).toMatchObject({
+        id: session.id,
+        loomId: 'loom-1',
+        episodeId: 'ep-1',
+        status: 'active',
+        currentNodeId: 'node-1',
+        playbackPhase: 'hold',
+        turnPhase: 'idle',
+        hasAudienceConnected: true,
+      });
+      // The snapshot must never carry the join credential in either form.
+      expect(sync.data.hashedToken).toBeUndefined();
+      expect(JSON.stringify(sync.data)).not.toContain(token);
+    });
+
+    it('ignores audience mic controls from a host socket', async () => {
+      const host = connectHost();
+      await host.listeners['hosted:mic:start']();
       expect(getHostedSession(session.id).turnPhase).toBe('idle');
     });
 
-    it('synchronizes session on connection and handles events', async () => {
-      const { session, token } = await createHostedSession('loom-1', 'ep-1');
-      const listeners = {};
-      const emitted = [];
+    it('advances to the transition target when the utterance matches its intent', async () => {
+      weave.playTurn.mockResolvedValue({
+        action: 'move',
+        transitionId: 'tr-1',
+        narration: 'Onward.',
+        node: { id: 'node-2' },
+        ended: false,
+      });
 
-      const socket = {
-        id: 'sock-1',
-        hostedRole: 'audience',
-        hostedSessionId: session.id,
-        join: vi.fn(),
-        emit: vi.fn((event, data) => emitted.push({ event, data })),
-        on: vi.fn((event, fn) => { listeners[event] = fn; }),
-        removeAllListeners: vi.fn(),
-      };
-
-      connectionHandler(socket);
-
-      expect(socket.join).toHaveBeenCalledWith(`session:${session.id}`);
-      expect(emitted.find((e) => e.event === 'hosted:session:sync')).toBeDefined();
-
-      // Trigger mic:start
-      expect(listeners['hosted:mic:start']).toBeDefined();
-      await listeners['hosted:mic:start']();
+      await audience.listeners['hosted:mic:start']();
       expect(getHostedSession(session.id).turnPhase).toBe('listening');
 
-      // Trigger mic:stop with text/audio
-      expect(listeners['hosted:turn:text']).toBeDefined();
-      await listeners['hosted:turn:text']({ text: 'go next' });
+      await audience.listeners['hosted:turn:text']({ text: 'go next' });
 
-      // Disconnect
-      expect(listeners.disconnect).toBeDefined();
-      listeners.disconnect();
-      expect(socket.removeAllListeners).toHaveBeenCalled();
+      expect(getHostedSession(session.id).currentNodeId).toBe('node-2');
+      expect(roomEvent('hosted:story:transition')?.data).toMatchObject({ transitionId: 'tr-1' });
+    });
+
+    it('stays on the current scene when the utterance matches no transition', async () => {
+      await audience.listeners['hosted:mic:start']();
+      await audience.listeners['hosted:turn:text']({ text: 'unrelated words' });
+
+      const state = getHostedSession(session.id);
+      expect(state.currentNodeId).toBe('node-1');
+      expect(state.turnPhase).toBe('listening');
+      expect(roomEvent('hosted:story:transition')).toBeUndefined();
+    });
+
+    it('emits hosted:error to the audience when the turn fails', async () => {
+      await audience.listeners['hosted:mic:start']();
+      records.getLoom.mockRejectedValueOnce(new Error('loom read failed'));
+
+      await audience.listeners['hosted:turn:text']({ text: 'go next' });
+
+      expect(audience.emitted.find((e) => e.event === 'hosted:error')?.data)
+        .toMatchObject({ code: 'TEXT_FAILED', message: 'loom read failed' });
+    });
+
+    it('ignores hosted:turn:text when the session is not listening', async () => {
+      await audience.listeners['hosted:turn:text']({ text: 'go next' });
+
+      expect(weave.playTurn).not.toHaveBeenCalled();
+      expect(getHostedSession(session.id).currentNodeId).toBe('node-1');
+      expect(audience.emitted.find((e) => e.event === 'hosted:error')).toBeUndefined();
+    });
+
+    it('buffers mic frames while listening and transcribes them on mic:stop', async () => {
+      await audience.listeners['hosted:mic:start']();
+      audience.listeners['hosted:mic:frame'](Buffer.from('aa'));
+      audience.listeners['hosted:mic:frame'](Buffer.from('bb'));
+      await audience.listeners['hosted:mic:stop']();
+
+      expect(stt.transcribe).toHaveBeenCalledWith(Buffer.from('aabb'), expect.anything());
+    });
+
+    it('ignores hosted:mic:stop when the session is not listening', async () => {
+      await audience.listeners['hosted:mic:stop'](Buffer.from('aa'));
+
+      expect(stt.transcribe).not.toHaveBeenCalled();
+      expect(getHostedSession(session.id).turnPhase).toBe('idle');
+    });
+
+    it('lets a host drive hosted:playback:update', () => {
+      const host = connectHost();
+
+      host.listeners['hosted:playback:update']({ phase: 'entry', activeHoldIndex: 1, nodeId: 'node-2' });
+
+      expect(roomEvent('hosted:playback:sync')?.data).toEqual({
+        phase: 'entry',
+        activeHoldIndex: 1,
+        nodeId: 'node-2',
+      });
+      expect(getHostedSession(session.id)).toMatchObject({
+        playbackPhase: 'entry',
+        activeHoldIndex: 1,
+        currentNodeId: 'node-2',
+      });
+    });
+
+    it('refuses hosted:playback:update from an audience socket', () => {
+      audience.listeners['hosted:playback:update']({ phase: 'entry', activeHoldIndex: 1, nodeId: 'node-2' });
+
+      expect(roomEvent('hosted:playback:sync')).toBeUndefined();
+      expect(getHostedSession(session.id)).toMatchObject({
+        playbackPhase: 'hold',
+        activeHoldIndex: 0,
+        currentNodeId: 'node-1',
+      });
+    });
+
+    it('returns the turn to listening on hosted:speech:done', () => {
+      _getInternalSession(session.id).turnPhase = 'speaking';
+
+      audience.listeners['hosted:speech:done']({});
+
+      expect(getHostedSession(session.id).turnPhase).toBe('listening');
+      expect(roomEvent('hosted:turn:phase')?.data).toMatchObject({ phase: 'listening' });
+    });
+
+    it('drops the in-flight turn on hosted:turn:abort', async () => {
+      await audience.listeners['hosted:mic:start']();
+      roomEvents.length = 0;
+
+      audience.listeners['hosted:turn:abort']();
+
+      expect(getHostedSession(session.id).turnPhase).toBe('idle');
+      expect(roomEvent('hosted:turn:phase')?.data).toMatchObject({ phase: 'idle', reason: 'client_aborted' });
+    });
+
+    it('releases the audience slot and tears down listeners on disconnect', () => {
+      audience.listeners.disconnect();
+
+      expect(audience.removeAllListeners).toHaveBeenCalled();
+      expect(roomEvent('hosted:peer:status')?.data).toMatchObject({
+        hasAudienceConnected: false,
+        disconnectedRole: 'audience',
+      });
+      expect(getHostedSession(session.id).hasAudienceConnected).toBe(false);
     });
   });
 });

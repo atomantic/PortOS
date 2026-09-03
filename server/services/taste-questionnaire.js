@@ -18,7 +18,7 @@ import { atomicWrite, ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.j
 import { resolveTextProvider, callProviderAISimple } from './aiProvider.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { buildPrompt } from './promptService.js';
-import { digitalTwinEvents } from './digital-twin.js';
+import { digitalTwinEvents } from './digital-twin-meta.js';
 
 const DIGITAL_TWIN_DIR = PATHS.digitalTwin;
 const TASTE_PROFILE_FILE = join(DIGITAL_TWIN_DIR, 'taste-profile.json');

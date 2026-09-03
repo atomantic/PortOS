@@ -1151,6 +1151,79 @@ describe('usage.js — historical transcript corrections (#3156)', () => {
     });
     expect(report.providers.some((provider) => provider.id === 'legacy')).toBe(false);
   });
+
+  // #5831 — a nested `--review-with grok` pass inside this Claude run. The
+  // tokens belong to grok, and the run's own measured Claude counts must not
+  // move a single token.
+  it('routes a sibling record to its own provider without touching the parent', async () => {
+    const parentCorrection = {
+      runId: 'run-example-1',
+      day: dayKey,
+      providerId,
+      model,
+      estimate: { messages: 1, tokensIn: 20, tokensOut: 50 },
+      measured: [{ providerId, model, messages: 2, tokensIn: 100, tokensOut: 200, cacheReadTokens: 1000, cacheWriteTokens: 10, source: 'measured' }],
+      siblings: [{
+        providerId: 'grok-cli',
+        role: 'sibling',
+        model: 'example-grok-model',
+        messages: 1,
+        tokensIn: 3000,
+        tokensOut: 700,
+        cacheReadTokens: 6000,
+        cacheWriteTokens: 0,
+        source: 'measured'
+      }],
+      siblingScanned: true
+    };
+
+    expect(await applyHistoricalUsageCorrections([parentCorrection])).toMatchObject({ corrected: 1 });
+    const day = getUsage().dailyActivity[dayKey];
+    expect(day.byProvider[providerId]).toMatchObject({ tokensIn: 100, tokensOut: 200, cacheReadTokens: 1000 });
+    expect(day.byProvider['grok-cli']).toMatchObject({
+      messages: 1,
+      tokensIn: 3000,
+      tokensOut: 700,
+      cacheReadTokens: 6000,
+      source: 'measured'
+    });
+    expect(day.byProvider['grok-cli'].byModel['example-grok-model']).toMatchObject({ tokensOut: 700 });
+    // Both halves are idempotent, under their own independent markers.
+    const afterFirst = structuredClone(getUsage());
+    expect(await applyHistoricalUsageCorrections([parentCorrection])).toMatchObject({ corrected: 0 });
+    expect(getUsage()).toEqual(afterFirst);
+  });
+
+  // The parent pass ran long ago, so there is no estimate left to remove and no
+  // reason to require a bucket for the parent provider on the target day.
+  it('applies a sibling-only correction on a day with no parent bucket', async () => {
+    const correction = {
+      runId: 'run-example-2',
+      day: '2026-07-05',
+      providerId,
+      model,
+      estimate: null,
+      measured: null,
+      siblings: [{
+        providerId: 'antigravity-cli',
+        role: 'sibling',
+        model: 'example-agy-model',
+        messages: 1,
+        tokensIn: 100,
+        tokensOut: 50,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        source: 'estimate'
+      }],
+      siblingScanned: true
+    };
+
+    expect(await applyHistoricalUsageCorrections([correction])).toMatchObject({ corrected: 1 });
+    const day = getUsage().dailyActivity['2026-07-05'];
+    expect(day.byProvider[providerId]).toBeUndefined();
+    expect(day.byProvider['antigravity-cli']).toMatchObject({ tokensIn: 100, tokensOut: 50, source: 'estimate' });
+    expect(day).toMatchObject({ messages: 1, tokensOut: 50, tokens: 50 });
+  });
 });
 
 

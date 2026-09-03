@@ -577,11 +577,17 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
   // NOTE and re-classifying a multi-line edit of it would overwrite the task's
   // real prompt. A producer that already wrote `metadata.prompt` wins over the
   // inference. See `server/lib/cosTaskPrompt.js` for the full contract.
-  const splitMetadata = splitTaskPromptFields(newTask.metadata);
-  if (splitMetadata !== newTask.metadata) newTask = { ...newTask, metadata: splitMetadata };
   // Markdown task rows are one-line records. Preserve every generated prompt
   // in the newline-safe metadata field before persistence, including raw
   // on-demand tasks that bypass the queue generator's normalization pass.
+  //
+  // This runs BEFORE the context reclassification below on purpose: a producer
+  // that hands over a multi-line description AND a multi-line context note (the
+  // pr-reviewer generator's security-scan summary) means the description is the
+  // prompt and the note is the note. Reclassifying first promoted the note to
+  // `prompt`, which then counted as an explicit producer prompt and silently
+  // discarded the stage instructions — Stage 2 ran with no gate rules and no
+  // output contract.
   if (typeof newTask.description === 'string' && newTask.description.includes('\n')) {
     newTask = {
       ...newTask,
@@ -594,6 +600,8 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
       },
     };
   }
+  const splitMetadata = splitTaskPromptFields(newTask.metadata);
+  if (splitMetadata !== newTask.metadata) newTask = { ...newTask, metadata: splitMetadata };
 
   // Add task to top or bottom based on position parameter
   if (taskData.position === 'top') {

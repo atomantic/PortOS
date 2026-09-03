@@ -36,6 +36,7 @@ import {
 } from './digital-twin-sync.js';
 import {
   getUsageSnapshot,
+  getUsageManifest,
   applyUsageRemote,
   USAGE_CHECKSUM_PATHS,
 } from './peerUsage.js';
@@ -770,7 +771,11 @@ const CATEGORIES = {
   mediaCollections: { getSnapshot: getMediaCollectionsSnapshot, applyRemote: applyMediaCollectionsRemote },
   videoHistory: { getSnapshot: getVideoHistorySnapshot, applyRemote: applyVideoHistoryRemote },
   storyBuilder: { getSnapshot: getStoryBuilderSnapshot, applyRemote: applyStoryBuilderRemote },
-  usage: { getSnapshot: getUsageSnapshot, applyRemote: applyUsageRemote }
+  // `getManifest` is optional and only `usage` has one: it is the only category
+  // that is BOTH always dirty (every recorded AI run rewrites usage.json) and a
+  // map of independently-advancing per-instance slots, so it is the only one
+  // where "one slot moved" was costing a whole-payload transfer (#5759).
+  usage: { getSnapshot: getUsageSnapshot, getManifest: getUsageManifest, applyRemote: applyUsageRemote }
 };
 
 // Map a snapshot CATEGORY to the `PORTOS_SCHEMA_VERSIONS` keys whose storage
@@ -951,13 +956,32 @@ export async function getChecksum(category, { forPeerId } = {}) {
     // cache-hit path above never uses `exclude`, so deferring it here saves
     // that I/O on every poll that hits the cache.
     const exclude = await resolveExcludeSet(category, forPeerId);
-    const snapshot = await cat.getSnapshot({ exclude });
-    setChecksumCache(cacheKey, { fingerprints, checksum: snapshot.checksum });
-    return { checksum: snapshot.checksum };
+    const { checksum } = await checksumSource(cat, exclude);
+    setChecksumCache(cacheKey, { fingerprints, checksum });
+    return { checksum };
   }
   const exclude = await resolveExcludeSet(category, forPeerId);
-  const snapshot = await cat.getSnapshot({ exclude });
-  return { checksum: snapshot.checksum };
+  return { checksum: (await checksumSource(cat, exclude)).checksum };
+}
+
+// A manifest-serving category hashes its MANIFEST, not its payload, so the
+// cheap map is enough to answer a checksum probe — no need to materialize every
+// digest just to throw them away.
+const checksumSource = (cat, exclude) => (cat.getManifest ? cat.getManifest() : cat.getSnapshot({ exclude }));
+
+/**
+ * The category's per-slot version map (`{ data: { instances: { <slotId>:
+ * <lwwTimestamp> }, ... }, checksum }`), or `null` for a category that doesn't
+ * serve one. Served at `/api/sync/:category/manifest` and read locally by the
+ * orchestrator as "what do we already hold?" — see `lib/syncManifest.js`.
+ */
+export async function getManifest(category) {
+  const cat = CATEGORIES[category];
+  if (!cat?.getManifest) return null;
+  // Same envelope a snapshot carries, so the receiver's schema-version gate
+  // still fires on the path where a manifest with no stale slots stands in for
+  // a snapshot fetch (a tombstone-only cycle).
+  return { ...(await cat.getManifest()), portosMeta: await buildPortosMeta() };
 }
 
 /**
@@ -970,12 +994,19 @@ export async function getChecksum(category, { forPeerId } = {}) {
  * category (legacy behavior), which the receiver applies idempotently. This
  * additive, ignore-if-unknown query param is what keeps the change
  * forward/backward compatible across independently-upgrading installs.
+ *
+ * `options.slots` (from `?slots=`) narrows a manifest-serving category to the
+ * per-instance slots the caller diffed as stale. Absent — every non-manifest
+ * category, and any older peer — serves the whole payload.
  */
-export async function getSnapshot(category, { forPeerId } = {}) {
+export async function getSnapshot(category, { forPeerId, slots } = {}) {
   const cat = CATEGORIES[category];
   if (!cat) return null;
   const exclude = await resolveExcludeSet(category, forPeerId);
-  const snap = await cat.getSnapshot({ exclude });
+  // `slots` narrows a manifest-serving category to the entries the caller says
+  // it is missing. Every other category ignores the option and serves the whole
+  // payload, exactly as before.
+  const snap = await cat.getSnapshot({ exclude, slots });
   // Stamp the sender's PortOS version + schema versions on every outbound
   // snapshot. Receivers compare against their own PORTOS_SCHEMA_VERSIONS in
   // `applyRemote` and reject ahead-mismatches before any data is merged.

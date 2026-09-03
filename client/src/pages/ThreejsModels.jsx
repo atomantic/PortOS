@@ -3,6 +3,7 @@ import { Box, ImagePlus, LoaderCircle, Sparkles } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import EmptyState from '../components/EmptyState';
 import MediaImage from '../components/MediaImage';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import useProviderModels from '../hooks/useProviderModels';
@@ -214,9 +215,13 @@ export default function ThreejsModels() {
         {loading ? (
           <PageSkeleton header="none" label="Loading model workspaces" layout="grid" cards={3} gridColsClass="sm:grid-cols-2 lg:grid-cols-3" />
         ) : models.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-port-border py-10 text-center text-sm text-gray-500">
-            No procedural models yet.
-          </div>
+          <EmptyState
+            icon={Box}
+            title="No procedural models yet"
+            message="Pick a gallery image, then generate a Three.js workspace from it. Each model gets its own editable scene."
+            actionLabel="Choose a source image"
+            onAction={() => setPickerOpen(true)}
+          />
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {models.map((model) => (

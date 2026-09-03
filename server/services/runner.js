@@ -408,6 +408,20 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
     env: childEnv
   });
 
+  // Claim the child's 'error' event in the SAME tick as spawn(). Everything
+  // between here and the terminal handlers below — stdin delivery, the
+  // external-run registration, the onRunStarted hook — can throw, and a throw
+  // there leaves a live registered child whose 'error' has no listener; Node
+  // re-throws an unhandled ChildProcess 'error' and kills the server process.
+  // Buffer until the real handler is wired, then replay it exactly once
+  // (same shape as `spawnDirectly` in agentCliSpawning.js).
+  let pendingSpawnError = null;
+  let handleSpawnError = null;
+  childProcess.on('error', (err) => {
+    if (handleSpawnError) handleSpawnError(err);
+    else pendingSpawnError = err;
+  });
+
   // Guard the stdin pipe BEFORE writing: a child that exits before reading it
   // (bad flag, missing CLI) emits EPIPE, and an unlistened stream 'error' out
   // here crashes the server. The 'error'/'close' handlers below settle the run.
@@ -422,8 +436,13 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
   // stopRun/isRunActive/deleteRun account for this host-spawned child process.
   toolkit.services.runner.registerExternalRun(runId, childProcess);
 
-  // Call hooks
-  runnerConfig.hooks?.onRunStarted?.({ runId, provider: provider.name, model: provider.defaultModel });
+  // Call hooks — isolated like every other hook invocation here: a throw would
+  // otherwise reject executeCliRun with the child already spawned and
+  // registered, leaving the run permanently non-terminal.
+  safeSettle(
+    () => runnerConfig.hooks?.onRunStarted?.({ runId, provider: provider.name, model: provider.defaultModel }),
+    `Run ${runId} onRunStarted hook`,
+  );
 
   // Set timeout (default 5 min, guard against undefined which would fire immediately)
   const effectiveTimeout = timeout ?? provider.timeout ?? 300000;
@@ -573,13 +592,18 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
     return finalizationPromise;
   };
 
-  childProcess.on('error', (err) => {
+  handleSpawnError = (err) => {
     void finalizeOnce({ exitCode: -1, spawnError: err });
-  });
+  };
 
   childProcess.on('close', (code, signal) => {
     void finalizeOnce({ exitCode: code, signal });
   });
+
+  // A failed spawn emits 'error' and commonly 'close' after it; finalizeOnce
+  // is idempotent, so replaying the buffered error here settles the run and
+  // the later 'close' is a no-op.
+  if (pendingSpawnError) handleSpawnError(pendingSpawnError);
 
   return runId;
 }

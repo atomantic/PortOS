@@ -9,6 +9,8 @@
  * identical to the server module or the picker's hint will contradict the render.
  */
 
+import { escapeRegExp } from './textUtils.js';
+
 // Only the FIRST trigger word of a LoRA activates it, per the server weave —
 // Civitai `trainedWords` routinely lists a dozen loosely-related tags.
 export const firstTriggerWord = (words) => {
@@ -16,8 +18,6 @@ export const firstTriggerWord = (words) => {
   const first = words.find((w) => typeof w === 'string' && w.trim());
   return first ? first.trim() : null;
 };
-
-const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // What counts as "inside a word" for the boundary assertions below. Unicode
 // letters/digits, not just ASCII, so a non-ASCII trigger or an accented prompt

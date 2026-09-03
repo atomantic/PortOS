@@ -27,3 +27,18 @@
 *.woff2 binary
 *.ttf binary
 *.eot binary
+
+# Sorted catalogs and barrels: one line per module, so concurrent branches
+# conflict on the same insertion hunk. `union` keeps both sides;
+# scripts/catalog-merge-union.test.js catches a doubled or resurrected line
+# and pins this list to the barrel list in scripts/ci-test-plan.js. Rationale
+# and rules: AGENTS.md "Module Organization".
+server/lib/README.md merge=union
+server/lib/index.js merge=union
+client/src/lib/README.md merge=union
+client/src/lib/index.js merge=union
+client/src/hooks/README.md merge=union
+client/src/hooks/index.js merge=union
+client/src/utils/README.md merge=union
+client/src/utils/index.js merge=union
+client/src/services/README.md merge=union

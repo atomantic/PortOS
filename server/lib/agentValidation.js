@@ -97,8 +97,6 @@ export const platformAccountSchema = z.object({
   platformData: z.record(z.unknown()).optional().default({})
 });
 
-export const platformAccountUpdateSchema = partialWithoutDefaults(platformAccountSchema);
-
 // Account registration (when creating new Moltbook account)
 export const accountRegistrationSchema = z.object({
   agentId: z.string().min(1),
@@ -317,7 +315,9 @@ export const moltworldQueueAddSchema = z.object({
 // FEATURE AGENT SCHEMAS
 // =============================================================================
 
-export const featureAgentStatusSchema = z.enum(['draft', 'active', 'paused', 'completed', 'error']);
+// A feature agent's `status` is server-owned — stamped by the start/pause/
+// complete routes, never accepted from a request body — so it has no request
+// schema (#5730).
 export const featureAgentScheduleModeSchema = z.enum(['continuous', 'interval']);
 export const featureAgentAutonomySchema = z.enum(['standby', 'assistant', 'manager', 'yolo']);
 export const featureAgentPrioritySchema = z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']);

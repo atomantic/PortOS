@@ -12,7 +12,14 @@ vi.mock('./usage.js', () => ({
     corrected: 1,
     correctedRunIds: ['run-example-1']
   }),
-  getReconciledUsageRunIds: vi.fn().mockReturnValue(['run-live'])
+  getReconciledUsageRunIds: vi.fn().mockReturnValue(['run-live']),
+  getSiblingReconciledUsageRunIds: vi.fn().mockReturnValue(['run-siblings-done'])
+}));
+
+vi.mock('./providers.js', () => ({
+  listProviders: vi.fn().mockResolvedValue([
+    { id: 'grok-cli', type: 'cli', command: 'grok', enabled: true, defaultModel: 'example-grok-model' }
+  ])
 }));
 
 const {
@@ -41,7 +48,7 @@ beforeEach(() => {
 
 describe('historical usage backfill job', () => {
   it('runs scanning off-thread and exposes progress through status', async () => {
-    const started = startHistoricalUsageBackfill({
+    const started = await startHistoricalUsageBackfill({
       runsDir: '/example/runs',
       home: '/example/home',
       WorkerClass: FakeWorker
@@ -52,8 +59,15 @@ describe('historical usage backfill job', () => {
     expect(worker.options.workerData).toMatchObject({
       runsDir: '/example/runs',
       home: '/example/home',
-      reconciledRunIds: ['run-live']
+      reconciledRunIds: ['run-live'],
+      // The sibling pass has its own marker so it can run on a run whose own
+      // transcript was reconciled long ago (#5831).
+      siblingReconciledRunIds: ['run-siblings-done']
     });
+    // The provider list is resolved on THIS thread: the worker never has an
+    // initialized toolkit, so a worker-side lookup would find no provider to
+    // attribute a nested session to.
+    expect(worker.options.workerData.providers).toHaveLength(1);
 
     worker.emit('message', { type: 'progress', progress: { processed: 2, total: 5, found: 1 } });
     await vi.waitFor(() => expect(getHistoricalUsageBackfillStatus()).toMatchObject({

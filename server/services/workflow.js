@@ -171,6 +171,7 @@ export async function getWorkflowGraph({ horizonHours = 24, from = new Date() } 
       enabled: !!info.enabled,
       schedule: {
         type: info.type,
+        perpetual: info.perpetual === true,
         intervalMs: info.intervalMs ?? null,
         effectiveIntervalMs: info.adjustedIntervalMs ?? info.intervalMs ?? null,
         cronExpression: info.cronExpression ?? null,
@@ -197,8 +198,8 @@ export async function getWorkflowGraph({ horizonHours = 24, from = new Date() } 
       runReason: info.status?.shouldRun === true ? (info.status.reason || null) : null,
       missedSlot: info.status?.missedSlot || null,
       pendingDeps: info.status?.pendingDeps || [],
-      nextRunAt: info.status?.nextRunAt || info.perpetual?.nextRecheckAt || null,
-      perpetual: info.perpetual || null,
+      nextRunAt: info.status?.nextRunAt || info.perpetualStatus?.nextRecheckAt || null,
+      perpetualStatus: info.perpetualStatus || null,
       // Per-app overrides so the timeline can expand a task row to show/edit
       // which apps run it (mirrors the Schedule tab's PerAppOverrideList).
       // `taskMetadata`/`managedAgentOptions` are the global defaults the
@@ -308,7 +309,7 @@ export function projectWorkflowTimeline(nodes, { start, end, timezone = 'UTC' })
 
   for (const node of nodes.filter(item => item.enabled)) {
     const schedule = node.schedule || {};
-    if (node.kind === 'task' && schedule.type === 'perpetual') {
+    if (node.kind === 'task' && schedule.perpetual) {
       projectPerpetual(node, startMs, endMs, timezone, occurrences, windows);
       continue;
     }
@@ -357,7 +358,9 @@ export function projectWorkflowTimeline(nodes, { start, end, timezone = 'UTC' })
       continue;
     }
 
-    projectIntervalTask(node, startMs, endMs, timezone, occurrences);
+    // Anything left is an on-demand task (or a cron task with an unusable
+    // expression): the scheduler promises it no wall-clock position, so it gets
+    // neither an occurrence nor a window.
   }
 
   occurrences.sort((a, b) => new Date(a.at) - new Date(b.at) || a.nodeId.localeCompare(b.nodeId));
@@ -412,7 +415,7 @@ function appendCronOccurrences({ node, expression, startMs, endMs, timezone, tar
 }
 
 function projectPerpetual(node, startMs, endMs, timezone, occurrences, windows) {
-  const perpetual = node.perpetual;
+  const perpetual = node.perpetualStatus;
   const allTrackedAppsParked = perpetual?.trackedAppCount > 0 && perpetual.parkedAppCount === perpetual.trackedAppCount;
   const draining = node.shouldRun && !perpetual?.globalParked && !allTrackedAppsParked && node.statusReason !== 'perpetual-parked';
   if (draining) {
@@ -426,7 +429,9 @@ function projectPerpetual(node, startMs, endMs, timezone, occurrences, windows) 
     });
   }
 
-  const recheckCron = node.schedule?.recheckCron;
+  // A cron+perpetual task rechecks on its own expression (computePerpetualRecheckAt
+  // derives the park from it); an on-demand one uses `recheckCron`.
+  const recheckCron = node.schedule?.cronExpression || node.schedule?.recheckCron;
   if (recheckCron) {
     appendCronOccurrences({
       node,
@@ -454,44 +459,6 @@ function projectPerpetual(node, startMs, endMs, timezone, occurrences, windows) 
       kind: 'recheck'
     });
   }
-}
-
-function projectIntervalTask(node, startMs, endMs, timezone, occurrences) {
-  const type = node.schedule?.type;
-  if (type === 'rotation' || type === 'on-demand') return;
-  if (type === 'once') {
-    if (node.shouldRun) occurrences.push(makeOccurrence(node, startMs, 'launch', dueNowExtra(node)));
-    return;
-  }
-
-  const cadence = node.schedule?.effectiveIntervalMs
-    || (type === 'weekly' ? 7 * DAY : type === 'daily' ? DAY : node.schedule?.intervalMs);
-  if (!cadence) return;
-
-  let nextMs;
-  if (node.shouldRun) {
-    // Emit the due-now marker explicitly (tagged) and project subsequent cadence
-    // slots strictly after now so the recurring slots aren't mislabelled due-now.
-    occurrences.push(makeOccurrence(node, startMs, 'launch', dueNowExtra(node)));
-    const anchor = node.nextRunAt ? new Date(node.nextRunAt).getTime() : NaN;
-    nextMs = Number.isFinite(anchor) && anchor > startMs ? anchor : startMs + cadence;
-  } else {
-    nextMs = node.nextRunAt ? new Date(node.nextRunAt).getTime() : NaN;
-    if (!Number.isFinite(nextMs)) {
-      const lastRunMs = node.lastRun ? new Date(node.lastRun).getTime() : NaN;
-      nextMs = Number.isFinite(lastRunMs) ? lastRunMs + cadence : startMs;
-    }
-  }
-  appendIntervalOccurrences({
-    node,
-    firstMs: nextMs,
-    cadence,
-    startMs,
-    endMs,
-    timezone,
-    target: occurrences,
-    kind: 'launch'
-  });
 }
 
 function projectIntervalJob(node, startMs, endMs, timezone, occurrences) {

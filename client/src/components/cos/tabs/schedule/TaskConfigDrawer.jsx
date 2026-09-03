@@ -27,7 +27,6 @@ export default function TaskConfigDrawer({
   onClose,
   onUpdate,
   onTrigger,
-  onReset,
   providers,
   activeProviderId,
   apps,
@@ -88,7 +87,6 @@ export default function TaskConfigDrawer({
               config={config}
               onUpdate={onUpdate}
               onTrigger={onTrigger}
-              onReset={onReset}
               category="appImprovement"
               providers={providers}
               activeProviderId={activeProviderId}

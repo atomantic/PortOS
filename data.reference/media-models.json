@@ -588,7 +588,7 @@
       },
       {
         "id": "fastmetal_1_3b_qad",
-        "name": "FastMetal 1.3B QAD (~3.5 GB download, 8+ GB RAM, 3-step)",
+        "name": "FastMetal 1.3B QAD (~13.4 GB download, 8+ GB RAM, 3-step)",
         "repo": "FastVideo/FastMetal-1.3B-QAD",
         "runtime": "fastvideo",
         "supportedModes": [
@@ -618,7 +618,7 @@
       },
       {
         "id": "fastmetal_5b_qad",
-        "name": "FastMetal 5B QAD (~10 GB download, 16+ GB RAM, 3-step)",
+        "name": "FastMetal 5B QAD (~19.5 GB download, 16+ GB RAM, 3-step)",
         "repo": "FastVideo/FastMetal-5B-QAD",
         "runtime": "fastvideo",
         "supportedModes": [
@@ -648,8 +648,27 @@
       },
       {
         "id": "fastmetal_14b_qad",
-        "name": "FastMetal 14B QAD (~25 GB download, 36+ GB RAM, 3-step)",
+        "name": "FastMetal 14B QAD (~27.1 GB download, 36+ GB RAM, 3-step)",
         "repo": "FastVideo/FastMetal-14B-QAD",
+        "repoFiles": [
+          "model_index.json",
+          "mlx_dit.json",
+          "mlx_dit.safetensors",
+          "scheduler/scheduler_config.json",
+          "text_encoder/config.json",
+          "text_encoder/model.safetensors.index.json",
+          "text_encoder/model-00001-of-00005.safetensors",
+          "text_encoder/model-00002-of-00005.safetensors",
+          "text_encoder/model-00003-of-00005.safetensors",
+          "text_encoder/model-00004-of-00005.safetensors",
+          "text_encoder/model-00005-of-00005.safetensors",
+          "tokenizer/special_tokens_map.json",
+          "tokenizer/spiece.model",
+          "tokenizer/tokenizer.json",
+          "tokenizer/tokenizer_config.json",
+          "vae/config.json",
+          "vae/diffusion_pytorch_model.safetensors"
+        ],
         "runtime": "fastvideo",
         "supportedModes": [
           "text"
@@ -672,8 +691,251 @@
             "name": "Apache-2.0",
             "url": "https://github.com/hao-ai-lab/FastVideo/blob/main/LICENSE"
           },
-          "estimatedDownloadGb": 42.3,
+          "estimatedDownloadGb": 27.1,
           "reviewedAt": "2026-09-02"
+        }
+      },
+      {
+        "id": "fasth3_dense_datafree_int8",
+        "name": "FastH3 Preview v1 Dense Data-Free — MLX INT8 (highest fidelity) (video + audio, ~144 GB download, 48+ GB RAM, 4-step)",
+        "repo": "FastVideo/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree",
+        "revision": "f624f08c6c279ab43534c003e556fc5b295b6558",
+        "runtime": "fastvideo",
+        "fastvideoFamily": "fasth3",
+        "fastvideoMlxFormat": "int8",
+        "supportedModes": [
+          "text"
+        ],
+        "defaultWidth": 832,
+        "defaultHeight": 480,
+        "defaultFrames": 124,
+        "frameOptions": [
+          124,
+          141,
+          158,
+          175,
+          192,
+          209,
+          226,
+          243,
+          260,
+          277,
+          294,
+          311,
+          328,
+          345
+        ],
+        "fpsOptions": [
+          24
+        ],
+        "resolutionStep": 32,
+        "resolutionOptions": [
+          {
+            "label": "832x480 (16:9 FastH3 default)",
+            "w": 832,
+            "h": 480
+          },
+          {
+            "label": "1280x720 (16:9 HD)",
+            "w": 1280,
+            "h": 720
+          }
+        ],
+        "memoryGb": 48,
+        "steps": 4,
+        "guidance": 1,
+        "samplerLocked": true,
+        "samplerNote": "FastH3 Preview v1 is a 4-step DMD2 model. This is FastVideo's own dense-attention checkpoint — it does not support VSA, whose routing weights the MLX runtime drops. The first render converts its transformer to an MLX INT8 DiT (a few minutes, once), after which the 66 GB bf16 transformer can be deleted. Renders video with audio at a fixed 24 fps.",
+        "supportsNegativePrompt": false,
+        "supportsTiling": false,
+        "supportsDisableAudio": false,
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/FastVideo/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree",
+          "weightsLicense": {
+            "name": "MiniMax H3 Community License",
+            "url": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/6818f6c32d12b210915e44ad56a4228c2608f160/LICENSE"
+          },
+          "runtimeLicense": {
+            "name": "Apache-2.0",
+            "url": "https://github.com/hao-ai-lab/FastVideo/blob/main/LICENSE"
+          },
+          "estimatedDownloadGb": 144,
+          "reviewedAt": "2026-09-02"
+        },
+        "termsGate": {
+          "id": "minimax-h3-community-license-2026-08-02",
+          "title": "MiniMax H3 eligibility and terms",
+          "summary": "MiniMax grants use only in its Applicable Territory. The license excludes the European Union, United Kingdom, Republic of Korea, and United States of America.",
+          "acknowledgement": "I confirm I am in the Applicable Territory and agree to the MiniMax H3 Community License and its Acceptable Use Policy.",
+          "licenseUrl": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/6818f6c32d12b210915e44ad56a4228c2608f160/LICENSE",
+          "excludedTerritories": [
+            "European Union",
+            "United Kingdom",
+            "Republic of Korea",
+            "United States of America"
+          ]
+        }
+      },
+      {
+        "id": "fasth3_dense_datafree_int6",
+        "name": "FastH3 Preview v1 Dense Data-Free — MLX INT6 (upstream default) (video + audio, ~144 GB download, 42+ GB RAM, 4-step)",
+        "repo": "FastVideo/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree",
+        "revision": "f624f08c6c279ab43534c003e556fc5b295b6558",
+        "runtime": "fastvideo",
+        "fastvideoFamily": "fasth3",
+        "fastvideoMlxFormat": "int6",
+        "supportedModes": [
+          "text"
+        ],
+        "defaultWidth": 832,
+        "defaultHeight": 480,
+        "defaultFrames": 124,
+        "frameOptions": [
+          124,
+          141,
+          158,
+          175,
+          192,
+          209,
+          226,
+          243,
+          260,
+          277,
+          294,
+          311,
+          328,
+          345
+        ],
+        "fpsOptions": [
+          24
+        ],
+        "resolutionStep": 32,
+        "resolutionOptions": [
+          {
+            "label": "832x480 (16:9 FastH3 default)",
+            "w": 832,
+            "h": 480
+          },
+          {
+            "label": "1280x720 (16:9 HD)",
+            "w": 1280,
+            "h": 720
+          }
+        ],
+        "memoryGb": 42,
+        "steps": 4,
+        "guidance": 1,
+        "samplerLocked": true,
+        "samplerNote": "FastH3 Preview v1 is a 4-step DMD2 model. This is FastVideo's own dense-attention checkpoint — it does not support VSA, whose routing weights the MLX runtime drops. The first render converts its transformer to an MLX INT6 DiT (a few minutes, once), after which the 66 GB bf16 transformer can be deleted. Renders video with audio at a fixed 24 fps.",
+        "supportsNegativePrompt": false,
+        "supportsTiling": false,
+        "supportsDisableAudio": false,
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/FastVideo/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree",
+          "weightsLicense": {
+            "name": "MiniMax H3 Community License",
+            "url": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/6818f6c32d12b210915e44ad56a4228c2608f160/LICENSE"
+          },
+          "runtimeLicense": {
+            "name": "Apache-2.0",
+            "url": "https://github.com/hao-ai-lab/FastVideo/blob/main/LICENSE"
+          },
+          "estimatedDownloadGb": 144,
+          "reviewedAt": "2026-09-02"
+        },
+        "termsGate": {
+          "id": "minimax-h3-community-license-2026-08-02",
+          "title": "MiniMax H3 eligibility and terms",
+          "summary": "MiniMax grants use only in its Applicable Territory. The license excludes the European Union, United Kingdom, Republic of Korea, and United States of America.",
+          "acknowledgement": "I confirm I am in the Applicable Territory and agree to the MiniMax H3 Community License and its Acceptable Use Policy.",
+          "licenseUrl": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/6818f6c32d12b210915e44ad56a4228c2608f160/LICENSE",
+          "excludedTerritories": [
+            "European Union",
+            "United Kingdom",
+            "Republic of Korea",
+            "United States of America"
+          ]
+        }
+      },
+      {
+        "id": "fasth3_dense_datafree_int4",
+        "name": "FastH3 Preview v1 Dense Data-Free — MLX INT4 (smallest) (video + audio, ~144 GB download, 36+ GB RAM, 4-step)",
+        "repo": "FastVideo/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree",
+        "revision": "f624f08c6c279ab43534c003e556fc5b295b6558",
+        "runtime": "fastvideo",
+        "fastvideoFamily": "fasth3",
+        "fastvideoMlxFormat": "int4",
+        "supportedModes": [
+          "text"
+        ],
+        "defaultWidth": 832,
+        "defaultHeight": 480,
+        "defaultFrames": 124,
+        "frameOptions": [
+          124,
+          141,
+          158,
+          175,
+          192,
+          209,
+          226,
+          243,
+          260,
+          277,
+          294,
+          311,
+          328,
+          345
+        ],
+        "fpsOptions": [
+          24
+        ],
+        "resolutionStep": 32,
+        "resolutionOptions": [
+          {
+            "label": "832x480 (16:9 FastH3 default)",
+            "w": 832,
+            "h": 480
+          },
+          {
+            "label": "1280x720 (16:9 HD)",
+            "w": 1280,
+            "h": 720
+          }
+        ],
+        "memoryGb": 36,
+        "steps": 4,
+        "guidance": 1,
+        "samplerLocked": true,
+        "samplerNote": "FastH3 Preview v1 is a 4-step DMD2 model. This is FastVideo's own dense-attention checkpoint — it does not support VSA, whose routing weights the MLX runtime drops. The first render converts its transformer to an MLX INT4 DiT (a few minutes, once), after which the 66 GB bf16 transformer can be deleted. Renders video with audio at a fixed 24 fps.",
+        "supportsNegativePrompt": false,
+        "supportsTiling": false,
+        "supportsDisableAudio": false,
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/FastVideo/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree",
+          "weightsLicense": {
+            "name": "MiniMax H3 Community License",
+            "url": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/6818f6c32d12b210915e44ad56a4228c2608f160/LICENSE"
+          },
+          "runtimeLicense": {
+            "name": "Apache-2.0",
+            "url": "https://github.com/hao-ai-lab/FastVideo/blob/main/LICENSE"
+          },
+          "estimatedDownloadGb": 144,
+          "reviewedAt": "2026-09-02"
+        },
+        "termsGate": {
+          "id": "minimax-h3-community-license-2026-08-02",
+          "title": "MiniMax H3 eligibility and terms",
+          "summary": "MiniMax grants use only in its Applicable Territory. The license excludes the European Union, United Kingdom, Republic of Korea, and United States of America.",
+          "acknowledgement": "I confirm I am in the Applicable Territory and agree to the MiniMax H3 Community License and its Acceptable Use Policy.",
+          "licenseUrl": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/6818f6c32d12b210915e44ad56a4228c2608f160/LICENSE",
+          "excludedTerritories": [
+            "European Union",
+            "United Kingdom",
+            "Republic of Korea",
+            "United States of America"
+          ]
         }
       },
       {
@@ -690,7 +952,6 @@
         "defaultHeight": 480,
         "defaultFrames": 124,
         "frameOptions": [
-          107,
           124,
           141,
           158,
@@ -704,8 +965,7 @@
           294,
           311,
           328,
-          345,
-          362
+          345
         ],
         "fpsOptions": [
           24

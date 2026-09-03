@@ -2,8 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
-import QuotaBurn, { SAVE_DEBOUNCE_MS } from './QuotaBurn';
-import { sleep } from '../utils/sleep';
+import QuotaBurn, { PENDING_POLL_MS, SAVE_DEBOUNCE_MS } from './QuotaBurn';
 
 vi.mock('../services/api', () => ({
   getQuotaBurn: vi.fn(),
@@ -88,6 +87,10 @@ const renderPage = (path = '/devtools/quota-burn') => render(
 
 const setupSaveUser = () => userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
 const flushSave = () => act(async () => { await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS); });
+// Past the debounce/poll window rather than up to its edge, so a "did not
+// happen" assertion runs AFTER the moment the thing would have happened.
+const pastSaveWindow = () => act(async () => { await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS + 100); });
+const pastPollWindow = () => act(async () => { await vi.advanceTimersByTimeAsync(PENDING_POLL_MS + 100); });
 
 // Mirrors UNSAVED_PATCH_KEY in the page — the session-scoped stash holding a
 // patch the server never accepted.
@@ -127,12 +130,14 @@ describe('QuotaBurn page', () => {
       expect(await screen.findByText(/reading quota…/)).toBeInTheDocument();
       expect(screen.getByLabelText(/Run the quota-burn loop automatically/)).toBeInTheDocument();
 
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(4000);
-      });
+      await pastPollWindow();
 
       expect(await screen.findByText(/62% left/)).toBeInTheDocument();
       expect(screen.queryByText(/reading quota…/)).not.toBeInTheDocument();
+      // Positive control for 'does NOT poll when nothing is pending': the poll
+      // DOES fire inside this window, so that test's silence means the guard
+      // held rather than that the window was too short to observe anything.
+      expect(api.getQuotaBurn).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
@@ -190,10 +195,14 @@ describe('QuotaBurn page', () => {
   });
 
   it('does NOT poll when nothing is pending', async () => {
+    // Past a full poll interval, not the 100ms of wall clock this used to
+    // wait: a re-arming timer first fires at PENDING_POLL_MS, so a shorter
+    // window passed whether or not `enabled: anyPending` was there at all.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     renderPage();
     await screen.findByText(/62% left/);
     // One load on mount, and no timer re-arming behind it.
-    await sleep(100);
+    await pastPollWindow();
     expect(api.getQuotaBurn).toHaveBeenCalledTimes(1);
   });
 
@@ -670,20 +679,26 @@ describe('QuotaBurn save races', () => {
   it('ignores a stash that is not a patch object', async () => {
     // A hand-edited or older-build entry must not be replayed — the PUT body is
     // an object, and anything else 400s the save the restore should rescue.
+    // Past the save debounce: a replayed stash PUTs at SAVE_DEBOUNCE_MS, so
+    // the 100ms of wall clock this used to wait passed with the shape guard
+    // deleted. 'restores a stashed patch on the next visit' is the positive
+    // control that a well-formed stash DOES save inside this same window.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     globalThis.sessionStorage.setItem(STASH_KEY, '"not-a-patch"');
     renderPage();
 
     expect(await screen.findByText(/62% left/)).toBeInTheDocument();
-    await sleep(100);
+    await pastSaveWindow();
     expect(api.saveQuotaBurn).not.toHaveBeenCalled();
   });
 
   it('ignores an empty stash rather than announcing a restore of nothing', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     globalThis.sessionStorage.setItem(STASH_KEY, '{}');
     renderPage();
 
     expect(await screen.findByText(/62% left/)).toBeInTheDocument();
-    await sleep(100);
+    await pastSaveWindow();
     expect(api.saveQuotaBurn).not.toHaveBeenCalled();
   });
 

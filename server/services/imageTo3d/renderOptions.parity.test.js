@@ -17,13 +17,19 @@ import {
   ALPHA_MODES,
   DETAIL_TIERS,
   RENDER_SEED_MAX,
+  DEFAULT_SUBJECT_SCALE,
   isValidRenderSteps,
+  isValidSubjectScale,
 } from './renderOptions.js';
 import {
   ALPHA_MODE_PRESETS as CLIENT_ALPHA_MODE_PRESETS,
   DETAIL_PRESETS as CLIENT_DETAIL_PRESETS,
   SEED_MAX as CLIENT_SEED_MAX,
   STEPS_PRESETS as CLIENT_STEPS_PRESETS,
+  SUBJECT_SCALE_DEFAULT as CLIENT_SUBJECT_SCALE_DEFAULT,
+  SUBJECT_SCALE_SLIDER_MIN as CLIENT_SUBJECT_SCALE_SLIDER_MIN,
+  SUBJECT_SCALE_SLIDER_STEP as CLIENT_SUBJECT_SCALE_SLIDER_STEP,
+  renderOptionsBody as clientRenderOptionsBody,
 } from '../../../client/src/lib/imageTo3dRenderOptions.js';
 
 describe('image-to-3D render-option parity (server bounds ↔ client mirror)', () => {
@@ -63,6 +69,27 @@ describe('image-to-3D render-option parity (server bounds ↔ client mirror)', (
     }
     // And nothing extra: count the quoted entries.
     expect((choices.match(/"/g) || []).length / 2).toBe(ALPHA_MODES.length);
+  });
+
+  it('the client subject-scale default is the server identity', () => {
+    // A drift here would reframe every render the user never asked to reframe.
+    expect(CLIENT_SUBJECT_SCALE_DEFAULT).toBe(DEFAULT_SUBJECT_SCALE);
+  });
+
+  it('every value the subject-scale slider can emit is one the server accepts', () => {
+    // Walk the slider's own min/step/max rather than sampling: a floating-point step
+    // that overshoots the server's closed upper bound would 400 the render only at
+    // the very end of the track, which is exactly where nobody tests by hand.
+    for (
+      let value = CLIENT_SUBJECT_SCALE_SLIDER_MIN;
+      value <= CLIENT_SUBJECT_SCALE_DEFAULT;
+      value += CLIENT_SUBJECT_SCALE_SLIDER_STEP
+    ) {
+      const emitted = clientRenderOptionsBody({
+        steps: '', seed: '', keyBackground: false, detail: 'auto', alphaMode: '', normalMap: false, subjectScale: value,
+      }).subjectScale;
+      expect(isValidSubjectScale(emitted), `slider value ${value}`).toBe(true);
+    }
   });
 
   it('every non-default client steps preset is a value the server accepts', () => {

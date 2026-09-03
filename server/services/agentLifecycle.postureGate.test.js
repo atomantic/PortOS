@@ -78,6 +78,7 @@ vi.mock('./agentWorktreeCleanup.js', () => ({
   cleanupAgentWorktree: vi.fn(),
   releaseRetryHold: vi.fn().mockResolvedValue({}),
 }));
+vi.mock('./worktreeManager.js', () => ({ removeWorktree: vi.fn().mockResolvedValue({ removed: true }) }));
 vi.mock('./agentCompletionCleanup.js', () => ({ runAgentCompletionCleanup: vi.fn() }));
 vi.mock('./agentSummaryExtraction.js', () => ({ extractFinalSummary: vi.fn() }));
 vi.mock('./agentManagement.js', () => ({ handleOrphanedTask: vi.fn() }));
@@ -108,14 +109,18 @@ vi.mock('./modelAbuseGuard.js', () => ({
 }));
 
 import { spawnAgentForTask } from './agentLifecycle.js';
+import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
+import { materializePublicReviewInput } from './modelAbuseGuard.js';
+import { removeWorktree } from './worktreeManager.js';
 import { resolveAgentProviderAndModel } from './agentProviderResolution.js';
 import { updateTask } from './cos.js';
 import { spawningTasks, runnerAgents } from './agentState.js';
 
 // The provider every install actually runs its CoS agents on, and the one named
-// in the #5866 outage: a TUI session has no maintained public-review recipe, so
-// it is exactly the provider the broken gate rejected for ordinary work.
+// in the #5866 outage: the broken gate rejected it for ordinary work.
 const CLAUDE_TUI = { id: 'claude-code-tui', type: 'tui', command: 'claude', envVars: {} };
+// A TUI record whose vendor declares no public-review recipe at all.
+const OPENCODE_TUI = { id: 'opencode-tui', type: 'tui', command: 'opencode', envVars: {} };
 
 /** Every `updateTask` call that wrote a public-review posture block. */
 const postureBlockWrites = () => vi.mocked(updateTask).mock.calls.filter(
@@ -129,6 +134,32 @@ beforeEach(() => {
   runnerAgents.clear();
   vi.mocked(resolveAgentProviderAndModel).mockResolvedValue({
     ok: true, provider: CLAUDE_TUI, selectedModel: 'sonnet', modelSelection: {},
+  });
+});
+
+describe('spawn setup failure after the worktree exists', () => {
+  // Every failed Stage 2 spawn used to leave its checkout behind: the task
+  // stayed pending and each retry cut another worktree.
+  it('removes the worktree this attempt cut', async () => {
+    vi.mocked(prepareAgentWorkspace).mockResolvedValueOnce({
+      outcome: 'ready',
+      workspacePath: '/tmp/worktrees/agent-x',
+      worktreeInfo: { worktreePath: '/tmp/worktrees/agent-x', branchName: 'cos/task-public-review/agent-x' },
+    });
+    vi.mocked(materializePublicReviewInput).mockRejectedValueOnce(new Error('The "cb" argument must be of type function'));
+
+    await spawnAgentForTask({
+      id: 'task-public-review',
+      metadata: {
+        executionProfile: 'public-review-gate',
+        pipeline: { securityScan: { completed: true, status: 'passed', safePrCount: 1 }, reviewInputKey: 'a'.repeat(64) },
+      },
+    });
+
+    expect(removeWorktree).toHaveBeenCalledTimes(1);
+    const [, , branchName, options] = vi.mocked(removeWorktree).mock.calls[0];
+    expect(branchName).toBe('cos/task-public-review/agent-x');
+    expect(options).toEqual({ discardDirt: true });
   });
 });
 
@@ -152,6 +183,9 @@ describe('public-review posture gate — spawn behavior (#5866)', () => {
   // fails closed on a provider with no maintained recipe. A fix for the above
   // that simply deleted the gate would pass every test but this one.
   it('still blocks a public-review stage whose provider has no enforced posture', async () => {
+    vi.mocked(resolveAgentProviderAndModel).mockResolvedValue({
+      ok: true, provider: OPENCODE_TUI, selectedModel: 'qwen', modelSelection: {},
+    });
     await spawnAgentForTask({
       id: 'task-public-review',
       metadata: {
@@ -166,8 +200,27 @@ describe('public-review posture gate — spawn behavior (#5866)', () => {
     expect(call).toBeDefined();
     const [, update] = call;
     expect(update.status).toBe('blocked');
-    expect(update.metadata.blockedReason).toContain("Provider 'claude-code-tui'");
+    expect(update.metadata.blockedReason).toContain("Provider 'opencode-tui'");
     expect(update.metadata.blockedReason).toContain('no-tool');
     expect(update.metadata.blockedCategory).toBe('public-review-provider-unsupported');
+  });
+
+  // The user's enabled providers are typically the TUI records. A public-content
+  // stage runs the same binary headless through the vendor's enforced recipe,
+  // so a TUI record of a recipe-bearing vendor passes the gate and must never
+  // be handed to the interactive PTY spawner.
+  it('spawns a public-review stage on a TUI provider headless, never as a PTY session', async () => {
+    const { buildTuiSpawnConfig, spawnTuiAgent } = await import('./agentTuiSpawning.js');
+    await spawnAgentForTask({
+      id: 'task-public-review-tui',
+      metadata: {
+        executionProfile: 'public-review-gate',
+        pipeline: { securityScan: { completed: true, status: 'passed', safePrCount: 1 } },
+      },
+    });
+
+    expect(postureBlockWrites()).toEqual([]);
+    expect(buildTuiSpawnConfig).not.toHaveBeenCalled();
+    expect(spawnTuiAgent).not.toHaveBeenCalled();
   });
 });

@@ -84,13 +84,14 @@ const detectVideoRuntime = (blob) => {
   if (/fastvideo|fastmetal|fasth3/i.test(blob)) {
     // FastH3 needs more than the venv: the row also has to declare
     // `fastvideoFamily: 'fasth3'` (a different entry script and argv shape),
-    // and the published packs are split across a components repo and a DiT
-    // pack — neither of which a single-repo self-service add can express. Say
-    // that instead of pointing at an install script that would not fix it.
+    // and an upstream bf16 snapshot additionally needs `fastvideoMlxFormat` or
+    // its DiT never becomes loadable — neither of which a self-service add,
+    // which only knows a repo id, can infer. Say that instead of pointing at
+    // an install script that would not fix it.
     if (/fasth3/i.test(blob)) {
       return {
         runtime: 'fastvideo',
-        refusal: 'needs a FastH3 registry row (its own entry script, and for the split packs a second download) that the self-service add flow cannot express — use the shipped FastH3 entry in Video Gen, or add it to data/media-models.json by hand',
+        refusal: 'needs a FastH3 registry row (its own entry script, and for an upstream snapshot the MLX format to convert its transformer to) that the self-service add flow cannot express — use a shipped FastH3 entry in Video Gen, or add it to data/media-models.json by hand',
       };
     }
     return { runtime: 'fastvideo', installHint: 'INSTALL_FASTVIDEO=1 bash scripts/setup-image-video.sh' };

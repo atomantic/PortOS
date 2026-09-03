@@ -255,7 +255,7 @@ const reportFor = (pr, diff, verdict) => ({
   securityFindings: Array.isArray(verdict.findings) ? verdict.findings : [],
   guardId: verdict.guardId || MODEL_ABUSE_GUARD.id,
   guardModel: verdict.model || MODEL_ABUSE_GUARD.name,
-  guardRevision: verdict.revision || MODEL_ABUSE_GUARD.revision,
+  guardRevision: verdict.revision ?? null,
   layers: verdict.layers || null,
   chunkCount: Number.isInteger(verdict.chunkCount) ? verdict.chunkCount : null,
   minBenignScore: Number.isFinite(verdict.minBenignScore) ? verdict.minBenignScore : null,
@@ -276,6 +276,10 @@ export async function runPrReviewerSecurityScan({ app, timeoutMs, target = null 
   const reviewedPrs = [];
   const reviewInputs = [];
   let hasFindings = false;
+  // Named by the verdicts, not the module constant: a scan that ran only the
+  // deterministic layer must not be recorded as classified by Prompt Guard.
+  let guardModel = MODEL_ABUSE_GUARD.name;
+  let guardRevision = MODEL_ABUSE_GUARD.revision;
   for (const pr of resolvedTarget.prs) {
     const diff = await execGh(['pr', 'diff', String(pr.number), '--repo', resolvedTarget.repoSpec]).catch(() => null);
     if (diff === null) return failure('security-scan-diff-unavailable', { reviewedPrs, scanKey });
@@ -290,6 +294,8 @@ export async function runPrReviewerSecurityScan({ app, timeoutMs, target = null 
     }
     const verdict = await runModelAbuseScan({ content, timeoutMs });
     if (!verdict.ok) return failure(verdict.code || 'security-scan-verdict-unavailable', { reviewedPrs, scanKey });
+    guardModel = verdict.model || guardModel;
+    guardRevision = verdict.revision ?? null;
 
     const report = reportFor(pr, diff, verdict);
     reviewedPrs.push(report);
@@ -319,8 +325,8 @@ export async function runPrReviewerSecurityScan({ app, timeoutMs, target = null 
     passed: !hasFindings,
     code: hasFindings ? 'security-scan-findings' : 'security-scan-passed',
     guardId: MODEL_ABUSE_GUARD.id,
-    guardModel: MODEL_ABUSE_GUARD.name,
-    guardRevision: MODEL_ABUSE_GUARD.revision,
+    guardModel,
+    guardRevision,
     repoFullName: resolvedTarget.repoFullName,
     defaultBranch: resolvedTarget.defaultBranch,
     scanKey,

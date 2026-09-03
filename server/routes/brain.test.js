@@ -5,6 +5,9 @@ import { ServerError } from '../lib/errorHandler.js';
 import brainRoutes from './brain.js';
 
 // Mock the brain service
+const recordUserAction = vi.hoisted(() => vi.fn(async () => ({ id: 'evt' })));
+vi.mock('../services/userActions.js', () => ({ recordUserAction }));
+
 vi.mock('../services/brain.js', () => ({
   // Capture & Inbox
   captureThought: vi.fn(),
@@ -331,6 +334,13 @@ describe('Brain Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body.inboxLog.id).toBe('inbox-001');
       expect(brainService.captureThought).toHaveBeenCalledWith('Test thought', undefined, undefined, { creative: undefined });
+      expect(recordUserAction).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'brain.capture',
+        target: 'inbox-001',
+        summary: 'captured thought',
+        payload: { id: 'inbox-001' },
+      }));
+      expect(JSON.stringify(recordUserAction.mock.calls[0][0])).not.toContain('Test thought');
     });
 
     it('should return 400 if text is missing', async () => {

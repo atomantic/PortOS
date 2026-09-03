@@ -17,7 +17,7 @@
 
 import { randomUUID } from 'crypto';
 import { join } from 'node:path';
-import { rm, access } from 'node:fs/promises';
+import { rm, access, writeFile } from 'node:fs/promises';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, resolveGalleryImage, ensureDir } from '../../lib/fileUtils.js';
 import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
@@ -64,7 +64,32 @@ const assetDiskPath = (id) => join(recordDir(id), 'model.glb');
  */
 const fullMeshDiskPath = (id) => join(recordDir(id), 'model.obj');
 /** Where a background-keyed copy of the source lands (never the gallery file). */
-const keyedSourcePath = (id) => join(recordDir(id), 'source-keyed.png');
+// The prepared (keyed and/or subject-framed) copy of the source. Filename retained
+// from when keying was the only preparation step, so upgrading an install doesn't
+// strand an orphan beside the new one in every existing record directory.
+const preparedSourcePath = (id) => join(recordDir(id), 'source-keyed.png');
+
+/**
+ * The value stored on `record.usdzPath` once an AR export exists — the static
+ * `/data` mount's path for it, and the record's "has been exported" marker.
+ * `null` (or, on records predating this feature, ABSENT — readers must treat the
+ * two the same, exactly like `rig`) means nobody has exported it yet.
+ *
+ * The 3D page still points its AR anchor at `GET /api/image-to-3d/models/:id/usdz`
+ * rather than at this path: AR Quick Look needs `model/vnd.usdz+zip` served
+ * `inline`, and only that route guarantees the pair.
+ */
+const usdzUrl = (id) => `/data/image-to-3d/${id}/model.usdz`;
+/**
+ * The AR Quick Look artifact, exported by the viewer from the SAME `model.glb`
+ * the 3D page loads and stored beside it.
+ *
+ * Deliberately NOT in backup's DEFAULT_EXCLUDES: it is a few megabytes (the
+ * viewer-grade GLB with 1024px textures, not the gigabyte `model.obj` sidecar),
+ * and re-deriving it needs a browser session with the model open — so it is
+ * cheaper to keep than to reproduce, exactly like the published `rig/` pair.
+ */
+const usdzDiskPath = (id) => join(recordDir(id), 'model.usdz');
 
 /**
  * Remove a record's render directory (the exported GLB + its folder). Used to
@@ -150,31 +175,41 @@ async function failGeneration(id, operationId, error) {
 
 async function executeRender({ id, operationId, adapter, sourcePath, caps, options }) {
   const outputPath = assetDiskPath(id);
-  // keyBackground is consumed here; the sampler knobs ride through to the
-  // adapter as-is, so a future knob added to the options shape flows without
-  // touching this call chain.
-  const { keyBackground, ...samplerOptions } = options;
+  // keyBackground and subjectScale are consumed here (they preprocess the SOURCE,
+  // and no runner takes them); the sampler knobs ride through to the adapter as-is,
+  // so a future knob added to the options shape flows without touching this call
+  // chain.
+  const { keyBackground, subjectScale, ...samplerOptions } = options;
   let lastPersistedPercent = -1;
   let heavyClaim = null;
   try {
     await ensureDir(recordDir(id));
-    // Key a solid background out of the source (into THIS record's render dir — the
-    // shared gallery file is never touched). Opt-in, because handing the pipeline an
-    // alpha channel makes it consume that INSTEAD OF running its own learned matte —
-    // see sourceKeying.js. Runs BEFORE the heavy-job claim: it is CPU-only
-    // preprocessing, so other heavy jobs shouldn't queue behind it and resident models
-    // shouldn't be evicted for it. Best-effort: a keying failure must never fail a
-    // render the model could still attempt raw.
-    const keyedPath = keyBackground
-      ? await prepareSourceImage({ sourcePath, targetPath: keyedSourcePath(id) })
+    // Preprocess the source (into THIS record's render dir — the shared gallery file
+    // is never touched): key a solid background out, and/or centre the subject on a
+    // square canvas so its extremities get margin. Both opt-in — keying because
+    // handing the pipeline an alpha channel makes it consume that INSTEAD OF running
+    // its own learned matte, framing because resampling a source that is already
+    // well-framed only costs detail. See sourceKeying.js. Runs BEFORE the heavy-job
+    // claim: it is CPU-only preprocessing, so other heavy jobs shouldn't queue behind
+    // it and resident models shouldn't be evicted for it. Best-effort: a preparation
+    // failure must never fail a render the model could still attempt raw.
+    const needsPreparedSource = keyBackground || subjectScale < 1;
+    const prepared = needsPreparedSource
+      ? await prepareSourceImage({
+        sourcePath, targetPath: preparedSourcePath(id), keyBackground, subjectScale,
+      })
         .catch((err) => {
-          console.error(`❌ Image-to-3D background keying failed for ${id}: ${err.message}`);
+          console.error(`❌ Image-to-3D source preparation failed for ${id}: ${err.message}`);
           return null;
         })
       : null;
-    if (keyedPath) console.log(`🎨 Image-to-3D keyed a solid background for ${id}`);
+    if (prepared?.keyed) console.log(`🎨 Image-to-3D keyed a solid background for ${id}`);
+    if (prepared?.framed) console.log(`🖼️ Image-to-3D framed ${id} at ${subjectScale} of the canvas`);
     // Record what the render actually consumed (best-effort, like percent below).
-    patchRun(id, operationId, { sourceKeyed: Boolean(keyedPath) });
+    patchRun(id, operationId, {
+      sourceKeyed: Boolean(prepared?.keyed),
+      sourceFramed: Boolean(prepared?.framed),
+    });
     heavyClaim = await claimHeavyLocalJob({ kind: 'image-to-3D generation', id: operationId });
     if (!heavyClaim.ok) {
       throw new ServerError(heavyClaim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: heavyClaim.holder } });
@@ -196,7 +231,7 @@ async function executeRender({ id, operationId, adapter, sourcePath, caps, optio
     // the kill handle so deleteModel can SIGTERM this render if the record is deleted
     // mid-flight.
     const { promise, kill } = adapter.run({
-      imagePath: keyedPath ?? sourcePath,
+      imagePath: prepared?.path ?? sourcePath,
       outputPath,
       env,
       // The per-run sampler knobs resolved in beginRender: `seed` is always a
@@ -237,6 +272,10 @@ async function executeRender({ id, operationId, adapter, sourcePath, caps, optio
         ...current,
         status: 'ready',
         assetPath: assetUrl(id),
+        // A new mesh invalidates the AR export derived from the OLD one. Cleared on
+        // success only: a FAILED render leaves model.glb untouched, so its USDZ is
+        // still a faithful copy of what the viewer shows and must survive.
+        usdzPath: null,
         error: null,
         generationOperationId: null,
         generatedAt: completedAt,
@@ -247,6 +286,8 @@ async function executeRender({ id, operationId, adapter, sourcePath, caps, optio
         }),
       };
     }, { includeDeleted: true });
+    await rm(usdzDiskPath(id), { force: true })
+      .catch((err) => console.error(`❌ Image-to-3D stale USDZ cleanup failed for ${id}: ${err.message}`));
     console.log(`🧊 Image-to-3D mesh ready: ${id}`);
   } catch (error) {
     console.error(`❌ Image-to-3D render failed for ${id}: ${cleanError(error)}`);
@@ -308,7 +349,7 @@ export async function createModel(input, { caps } = {}) {
   // render — createModel and startGeneration share `beginRender`, so the create
   // path does NOT re-resolve the gallery image, re-assert readiness, or re-fetch
   // the row it just wrote. `input` carries the optional per-run knobs
-  // (steps/seed/keyBackground); beginRender normalizes them.
+  // (steps/seed/keyBackground/subjectScale); beginRender normalizes them.
   return beginRender(created, adapter, sourcePath, hostCaps, input);
 }
 
@@ -373,6 +414,7 @@ async function beginRender(record, adapter, sourcePath, caps, requestOptions) {
           steps: options.steps,
           seed: options.seed,
           keyBackground: options.keyBackground,
+          subjectScale: options.subjectScale,
           // Recorded so the detail view can render the knobs this run actually
           // used — and so the viewer knows whether transparency was requested,
           // which decides if its force-opaque pass should apply.
@@ -433,6 +475,78 @@ export async function getModelFullMesh(id, { exists = pathExists } = {}) {
     );
   }
   return { path, filename: `${slugifyForFilename(model.name)}-full.obj` };
+}
+
+/**
+ * The largest USDZ the AR export route will accept.
+ *
+ * The viewer exports from the SAME viewer-grade GLB the page already rendered, so a
+ * legitimate payload is single-digit megabytes; the cap exists so a wrong/hostile
+ * body can't fill the record directory, not to shape a real export.
+ */
+export const USDZ_MAX_BYTES = 64 * 1024 * 1024;
+
+/** USDZ is a plain (stored, uncompressed) zip archive — every one starts `PK\x03\x04`. */
+const isZipArchive = (bytes) => bytes.length >= 4
+  && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
+
+/**
+ * Store the viewer's USDZ export for a ready record, beside its GLB.
+ *
+ * The bytes come from the CLIENT (three's USDZExporter over the already-loaded
+ * scene) rather than from a server-side converter, so they are validated here as
+ * untrusted input: ready record, non-empty, under the cap, and actually a zip.
+ * Re-exporting simply overwrites — the file is derived, so there is no version to
+ * preserve.
+ */
+export async function saveModelUsdz(id, bytes) {
+  const model = await store.getModel(id);
+  if (!model) throw new ServerError('Image-to-3D model not found', { status: 404, code: 'NOT_FOUND' });
+  if (model.status !== 'ready' || !model.assetPath) {
+    throw new ServerError('This model has no generated mesh yet', { status: 409, code: 'MODEL_NOT_READY' });
+  }
+  if (!bytes?.length) {
+    throw new ServerError('USDZ payload is empty', { status: 400, code: 'USDZ_INVALID' });
+  }
+  if (bytes.length > USDZ_MAX_BYTES) {
+    throw new ServerError(
+      `USDZ payload exceeds the ${Math.round(USDZ_MAX_BYTES / (1024 * 1024))} MB limit`,
+      { status: 413, code: 'USDZ_TOO_LARGE' },
+    );
+  }
+  if (!isZipArchive(bytes)) {
+    throw new ServerError('Payload is not a USDZ archive', { status: 400, code: 'USDZ_INVALID' });
+  }
+  await ensureDir(recordDir(id));
+  await writeFile(usdzDiskPath(id), bytes);
+  console.log(`🥽 Image-to-3D stored AR export for ${id} (${bytes.length} bytes)`);
+  return store.mutateModel(id, (current) => ({
+    ...current,
+    usdzPath: usdzUrl(id),
+    usdzGeneratedAt: new Date().toISOString(),
+  }));
+}
+
+/**
+ * Resolve a record's stored USDZ for download.
+ *
+ * Like `getModelFullMesh`, its absence is not an error state of the RECORD — a
+ * model nobody has exported for AR yet is perfectly healthy — so it probes disk
+ * rather than trusting `usdzPath` alone. That also covers the reverse skew: a
+ * record whose file was pruned out from under it still 404s instead of streaming a
+ * missing path.
+ */
+export async function getModelUsdz(id, { exists = pathExists } = {}) {
+  const model = await store.getModel(id);
+  if (!model) throw new ServerError('Image-to-3D model not found', { status: 404, code: 'NOT_FOUND' });
+  const path = usdzDiskPath(id);
+  if (!await exists(path)) {
+    throw new ServerError(
+      'This model has not been exported for AR yet. Open it in the 3D viewer and export it.',
+      { status: 404, code: 'USDZ_MISSING' },
+    );
+  }
+  return { path, filename: `${slugifyForFilename(model.name)}.usdz` };
 }
 
 export async function recoverInterruptedModels() {

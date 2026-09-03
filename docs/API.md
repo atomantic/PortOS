@@ -125,6 +125,16 @@ own wire contract in [FEDERATED_MEDIA_PROVIDERS.md](./FEDERATED_MEDIA_PROVIDERS.
 | GET | `/providers/opencode/installation` | **Legacy alias**, kept so a stale client bundle still renders: `{ installed, npmAvailable }` for the `opencode` runtime. New code uses `/providers/runtimes`. |
 | POST | `/providers/opencode/install` | **Legacy alias** for `/providers/runtimes/install?runtime=opencode`. |
 
+### Harnesses
+
+The coding-agent CLIs/TUIs PortOS drives (`opencode`, `claude`, `codex`, `agy`, `grok`, `kimi`, `cursor-agent`), managed as things in their own right rather than as a footnote on a provider card. Backs **Models → Harnesses**. Every response carries booleans, versions, and labels — never a resolved filesystem path, which would disclose the host account name.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/harnesses?fresh=1` | Every harness with its installed version, the latest published version (npm-backed rows only), whether an update is available, which lifecycle actions it supports, and the provider records riding on it. `version`/`latestVersion` are `null` for NOT KNOWN, never `0.0.0` — `updateAvailable` is set only on a definite "installed < latest", so an offline host shows no false staleness badge. `fresh=1` bypasses both the 60s runtime-status TTL and the 6h registry cache. |
+| POST | `/harnesses/action?runtime=<id>&action=install\|update\|uninstall` | Run one lifecycle action, streaming the child's output as SSE. `action` defaults to `install`. Update prefers the vendor's OWN updater (`opencode upgrade`, `claude update`) — the only path that refreshes the copy actually on PATH when the user installed it from Homebrew or a vendor script. Remove is offered only for npm-installed rows, and reports an error rather than success if the binary is still runnable afterwards. One action at a time process-wide (npm's global prefix is one directory); closing the stream cancels the child. Both values are table keys — nothing from the request reaches a shell word. |
+| POST | `/harnesses/models/refresh?runtime=<id>` | Re-read a harness's own model catalog (`opencode models`, `agy models`, `grok models`) and write it to every provider that draws from that catalog — i.e. a wrapper with no local-runtime marker and no `gatewayBacked`, since a gateway- or Ollama-backed wrapper serves ids the harness never lists. Answers `{ ok, models, updated }`. A probe that runs but parses to nothing is a **409**, not an empty write: a signed-out CLI must not blank every picker. |
+
 ### AI Runs
 
 | Method | Endpoint | Description |
@@ -252,11 +262,11 @@ Context tools remain read-only. Semantic reads and writes are independent, defau
 |--------|----------|-------------|
 | GET | `/cos/schedule` | Get full task schedule status |
 | GET | `/cos/upcoming` | Get upcoming scheduled tasks preview |
-| GET | `/cos/schedule/interval-types` | Get available interval types and descriptions |
+| GET | `/cos/schedule/interval-types` | Get the two cadence types (`on-demand`, `cron`) and their descriptions, plus the `perpetual` flag description |
 | GET | `/cos/schedule/due` | List all tasks due to run |
 | GET | `/cos/schedule/due/:appId` | List tasks due for specific app |
 | GET | `/cos/schedule/task/:taskType` | Get interval and schedule settings for a task type |
-| PUT | `/cos/schedule/task/:taskType` | Update schedule settings for a task type |
+| PUT | `/cos/schedule/task/:taskType` | Update schedule settings for a task type (`type`: `on-demand` \| `cron`; `cronExpression`: 5-field or null; `perpetual`: boolean drain flag, orthogonal to `type`) |
 | POST | `/cos/schedule/trigger` | Trigger an on-demand task run |
 | GET | `/cos/schedule/on-demand` | List pending on-demand task requests |
 | DELETE | `/cos/schedule/on-demand/:requestId` | Clear a pending on-demand request |
@@ -709,6 +719,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/browser` | Managed Chromium |
 | `/api/creative-commission` | Creative commissions |
 | `/api/midi-runtime` | MIDI runtime |
+| `/api/harnesses` | Coding-agent CLI/TUI harness lifecycle |
 
 ## WebSocket Events
 

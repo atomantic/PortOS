@@ -104,6 +104,20 @@ describe('ThreejsModels', () => {
     ));
   });
 
+  it('offers a call to action that opens the image picker when no models exist', async () => {
+    render(
+      <MemoryRouter initialEntries={['/media/threejs']}>
+        <ThreejsModels />
+      </MemoryRouter>
+    );
+    expect(await screen.findByText('No procedural models yet')).toBeInTheDocument();
+    const cta = screen.getByRole('button', { name: 'Choose a source image' });
+    fireEvent.click(cta);
+    // The picker only renders while open, so its appearance proves the action
+    // is wired — a conversion that dropped it would leave a dead-end block.
+    expect(await screen.findByRole('button', { name: 'Pick alternate beacon' })).toBeInTheDocument();
+  });
+
   it('hides the family picker rather than showing an empty select when the fetch fails', async () => {
     // Creation must still work — it simply gets the general-purpose prompt.
     listThreejsModelFamilies.mockRejectedValue(new Error('offline'));

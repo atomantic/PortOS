@@ -231,8 +231,20 @@ describe('buildHfLoraSidecar', () => {
     expect(sidecar.recommendedScale).toBe(1.0);
     expect(sidecar.civitai).toBeUndefined();
     expect(sidecar.file.downloadUrl).toContain('/resolve/main/lora.safetensors');
+    expect(sidecar.license).toBeNull();
   });
 
+  it('persists a HuggingFace card license when the model reports one', () => {
+    const sidecar = buildHfLoraSidecar({
+      repo: 'org/weights',
+      revision: null,
+      file: 'lora.safetensors',
+      family: VIDEO_LORA_FAMILIES.LTX_VIDEO,
+      filename: 'lora-org-weights-hf.safetensors',
+      model: { cardData: { license: 'apache-2.0' }, tags: ['ltxv'] },
+    });
+    expect(sidecar.license).toBe('apache-2.0');
+  });
   it('labels a V2 LoRA distinctly and uses its recommended scale', () => {
     const sidecar = buildHfLoraSidecar({
       repo: 'fal/ltx2.3-audio-reactive-lora',

@@ -8,6 +8,7 @@ import { PATHS, UUID_RE } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { safeUnder, generateThumbnail, upscaleVideo2x } from '../../lib/ffmpeg.js';
 import { loadHistory, mutateVideoHistory } from './history.js';
+import { omitRenderTiming, renderTimingFields } from '../../lib/renderTiming.js';
 
 const UPLOADED_HISTORY_ID_RE = /^upload-[a-f0-9]{8}$/i;
 
@@ -42,6 +43,10 @@ export async function upscaleHistoryItem(historyId) {
   const newId = randomUUID();
   const newFilename = `${newId}.mp4`;
   const newPath = join(PATHS.videos, newFilename);
+  // Wall-clock timing (#5878) for the pass the user actually waits through. An
+  // upscale gets its own gallery card, so the ffmpeg pass is a real cost worth
+  // reporting rather than leaving blank.
+  const renderStartedAtMs = Date.now();
   // Copy first, then upscale-in-place — keeps the upscaler's atomic-rename
   // contract intact and means a mid-process kill leaves the source clip
   // untouched.
@@ -57,7 +62,11 @@ export async function upscaleHistoryItem(historyId) {
   // tag with `upscaledFrom: <id>` + a reusable suffix on the prompt so the
   // gallery row reads as "<original prompt> (2×)".
   const newEntry = {
-    ...item,
+    // Strip before the spread rather than relying on the override below to win:
+    // `renderTimingFields` reports `{}` when it can't measure the span, and an
+    // override that contributes no keys would silently leave the SOURCE render's
+    // duration on a row that only ran an ffmpeg pass.
+    ...omitRenderTiming(item),
     id: newId,
     filename: newFilename,
     width: (Number(item.width) || 0) * 2,
@@ -69,6 +78,7 @@ export async function upscaleHistoryItem(historyId) {
     // Drop hidden so the upscaled version surfaces in the visible gallery
     // even when the source clip was hidden.
     hidden: false,
+    ...renderTimingFields(renderStartedAtMs),
   };
   // Serialized append (re-reads inside the mutator) so a concurrent
   // download/render write can't drop the upscaled entry.

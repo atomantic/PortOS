@@ -61,6 +61,9 @@ export default defineConfig({
       // (sandbox.js isolation/promotion primitives) whose adversarial tests run
       // under this node runner.
       '../autofixer/**/*.test.js',
+      // docs/deps-doc.test.js guards DEPS.md against dependency drift; it lives
+      // next to the document it checks rather than in server/.
+      '../docs/**/*.test.js',
     ],
     // The slashdo submodule ships its own node:test suites; vitest can't
     // parse them and the broad `../lib/**` glob would otherwise pick them up

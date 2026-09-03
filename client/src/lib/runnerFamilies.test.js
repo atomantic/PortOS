@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, flux2VariantFromModel, isVideoLoraFamily,
-  loraCompatKey, composeCompatKey, loraFamilyOf, videoLoraFamily,
+  loraCompatKey, composeCompatKey, loraFamilyOf, videoLoraFamily, usesDiffusersRunner,
 } from './runnerFamilies';
 
 // This is the client mirror of server/lib/runners.js. The server suite greps
@@ -52,6 +52,16 @@ describe('runnerFamilies mirror', () => {
     expect(loraFamilyOf({ runnerFamily: 'ltx-video' })).toBe('ltx-video');
     expect(loraFamilyOf({})).toBe(null);
     expect(loraFamilyOf(null)).toBe(null);
+  });
+
+  it('usesDiffusersRunner matches the shared-torch-venv families, not flux2/mflux', () => {
+    expect(usesDiffusersRunner({ runner: RUNNER_FAMILIES.Z_IMAGE })).toBe(true);
+    expect(usesDiffusersRunner({ runner: RUNNER_FAMILIES.ERNIE })).toBe(true);
+    expect(usesDiffusersRunner({ runner: RUNNER_FAMILIES.HIDREAM })).toBe(true);
+    expect(usesDiffusersRunner({ runner: RUNNER_FAMILIES.QWEN })).toBe(true);
+    expect(usesDiffusersRunner({ runner: RUNNER_FAMILIES.FLUX2 })).toBe(false);
+    expect(usesDiffusersRunner({ runner: RUNNER_FAMILIES.MFLUX })).toBe(false);
+    expect(usesDiffusersRunner(null)).toBe(false);
   });
 
   it('treats both video families as video, so an H3 LoRA deep-links to Video Gen', () => {

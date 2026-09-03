@@ -3,7 +3,8 @@
  * TUI instead of writing to `.agent-done` (#3640).
  *
  * Drives the real `dispatchTaskOutputHookOnce` against an on-disk agent dir
- * (raw.txt spool) and an on-disk workspace, so the "sentinel absent" branch and
+ * (the raw.txt PTY spool a TUI run writes, and the output.txt a CLI/direct run
+ * writes instead) and an on-disk workspace, so the "sentinel absent" branch and
  * the tail read are exercised end to end rather than stubbed.
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -79,14 +80,17 @@ const printedTranscript = (answer = REASONER_ANSWER, { echoSchema = false } = {}
 ].join('');
 
 let agentId = 0;
-const setupRun = ({ transcript, sentinel = null }) => {
+const setupRun = ({ transcript, sentinel = null, spool = 'raw.txt', output = null }) => {
   agentId += 1;
   const id = `agent-${agentId}`;
   const agentDir = join(TEMP_ROOT, 'cos/agents', id);
   const workspace = join(TEMP_ROOT, 'workspaces', id);
   mkdirSync(agentDir, { recursive: true });
   mkdirSync(workspace, { recursive: true });
-  if (transcript !== null) writeFileSync(join(agentDir, 'raw.txt'), transcript);
+  if (transcript !== null) writeFileSync(join(agentDir, spool), transcript);
+  // `output` writes a SECOND spool beside `transcript`, for the cases where a
+  // run has both files and only one of them carries the deliverable.
+  if (output !== null) writeFileSync(join(agentDir, 'output.txt'), output);
   // The sentinel filename is scoped to the agent instance (doneSentinelName).
   if (sentinel !== null) writeFileSync(join(workspace, `.agent-done-${id}`), sentinel);
   return { agentId: id, workspacePath: workspace };
@@ -114,6 +118,17 @@ describe('printed-payload transcript rescue (#3640)', () => {
 
     expect(hook).toHaveBeenCalledWith(expect.objectContaining({
       success: true,
+      payload: { analysis: 'Nothing worth proposing this cycle.', proposal: null, pause: null },
+    }));
+  });
+
+  it('reads output.txt when the run was a direct CLI spawn with no raw.txt spool', async () => {
+    // Every public-review stage spawns the CLI directly (stream-json to
+    // output.txt); only the PTY spawner writes raw.txt. Reading raw.txt alone
+    // rejected the tool-free Eligibility Gate's printed decision as invalid.
+    const hook = await runDispatch({ transcript: printedTranscript(), spool: 'output.txt' });
+
+    expect(hook).toHaveBeenCalledWith(expect.objectContaining({
       payload: { analysis: 'Nothing worth proposing this cycle.', proposal: null, pause: null },
     }));
   });
@@ -188,5 +203,28 @@ describe('printed-payload transcript rescue (#3640)', () => {
     const hook = await runDispatch({ transcript: null });
 
     expect(hook).toHaveBeenCalledWith(expect.objectContaining({ payload: null }));
+  });
+
+  // Both spools exist: a TUI run whose repaint-mangled raw.txt yields nothing
+  // must still reach the parsed output.txt beside it, so stopping at the first
+  // file that merely EXISTS is not enough.
+  it('falls through to output.txt when raw.txt holds no deliverable', async () => {
+    const hook = await runDispatch({
+      transcript: printedTranscript('{"tokens": 1200, "cost": 0.03}'),
+      output: printedTranscript(),
+    });
+
+    expect(hook).toHaveBeenCalledWith(expect.objectContaining({
+      payload: { analysis: 'Nothing worth proposing this cycle.', proposal: null, pause: null },
+    }));
+  });
+
+  it('prefers the raw PTY spool over output.txt when both carry a deliverable', async () => {
+    const hook = await runDispatch({
+      transcript: printedTranscript('{"analysis": "from raw spool", "proposal": null}'),
+      output: printedTranscript('{"analysis": "from parsed output", "proposal": null}'),
+    });
+
+    expect(hook.mock.calls[0][0].payload.analysis).toBe('from raw spool');
   });
 });

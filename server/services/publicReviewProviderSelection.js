@@ -25,6 +25,7 @@ import {
   publicReviewCapableVendorIds,
   publicReviewPostureForProfile,
   supportsPublicReviewPosture,
+  PUBLIC_REVIEW_ACTIONS_POSTURE,
 } from '../lib/providerVendors.js';
 
 /** The posture a task's execution profile requires, or null for a normal task. */
@@ -48,7 +49,7 @@ export async function eligiblePublicReviewProviders(posture, { providers = null 
   const list = providers || (await getAllProviders()).providers || [];
   return list.filter((provider) => (
     isEnabled(provider)
-    && supportsPublicReviewPosture(provider, posture, { tui: provider?.type === 'tui' })
+    && supportsPublicReviewPosture(provider, posture)
   ));
 }
 
@@ -73,7 +74,9 @@ export async function resolvePublicReviewProvider({ posture, pinnedProviderId = 
     return {
       ok: false,
       code: 'public-review-no-eligible-provider',
-      error: `No enabled AI provider on this install has a maintained '${posture}' public-review posture. Add or enable one of these CLI providers in Settings > Providers: ${publicReviewCapableVendorIds(posture).join(', ')}.`,
+      error: posture === PUBLIC_REVIEW_ACTIONS_POSTURE
+        ? `No enabled CLI or TUI provider on this install can run the '${posture}' public-review stage. Enable one in Settings > Providers.`
+        : `No enabled AI provider on this install has a maintained '${posture}' public-review posture. Add or enable one of these CLI providers in Settings > Providers: ${publicReviewCapableVendorIds(posture).join(', ')}.`,
     };
   }
   const pinned = pinnedProviderId ? eligible.find((provider) => provider.id === pinnedProviderId) : null;

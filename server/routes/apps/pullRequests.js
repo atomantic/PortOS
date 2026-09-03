@@ -7,7 +7,8 @@
  *
  * Neither POST route merges a user's PR directly. `/resolve` queues PortOS's
  * existing review-loop follow-up, which owns fetching feedback, fixing the
- * branch, waiting for checks, and merging. `/review` queues the `pr-reviewer`
+ * branch, waiting for checks, and merging — and starts it immediately, because
+ * pressing the button is the approval. `/review` queues the `pr-reviewer`
  * scheduled task narrowed to a single request, so the security-scan → review
  * pipeline that normally sweeps every external PR can be pointed at one.
  */
@@ -181,8 +182,9 @@ router.get('/:id/pull-requests', loadApp, asyncHandler(async (req, res) => {
 }));
 
 // POST /api/apps/:id/pull-requests/:number/resolve — queue the existing review
-// loop against a freshly-read open PR/MR. Re-reading before queueing prevents a
-// closed or replaced request from being attached to an agent by stale UI data.
+// loop against a freshly-read open PR/MR and start it now. Re-reading before
+// queueing prevents a closed or replaced request from being attached to an agent
+// by stale UI data.
 router.post('/:id/pull-requests/:number/resolve', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
   const { number } = validateRequest(pullRequestParamsSchema, req.params);
@@ -258,6 +260,11 @@ router.post('/:id/pull-requests/:number/resolve', loadApp, asyncHandler(async (r
     ...reviewOptions,
     reviewers,
     optionalReviewers,
+    // This button IS the user's approval — start the agent now instead of leaving
+    // the follow-up as a pending system task the autonomous dequeue only picks up
+    // while CoS auto-run is in `execute` and under its daily budget (which is why
+    // it had to be started by hand from the task page).
+    dispatch: 'immediate',
   });
   if (!task) {
     throw new ServerError('Could not queue the pull-request resolve agent', {
@@ -266,13 +273,23 @@ router.post('/:id/pull-requests/:number/resolve', loadApp, asyncHandler(async (r
     });
   }
 
-  console.log(`🚀 Queued PR resolve agent ${task.id} for app ${app.id} request #${number}`);
+  // `started` false means the task is persisted and queued but nothing is running
+  // it yet (no agent slots, daemon stopped/paused, runner unreachable) — report the
+  // reason rather than letting the UI claim an agent is on it. A duplicate has no
+  // dispatch of its own: whatever is already queued owns the run.
+  const started = task.dispatch?.started === true;
+  const queueReason = task.dispatch?.reason ?? null;
+  console.log(started
+    ? `🚀 Started PR resolve agent for task ${task.id} (app ${app.id} request #${number})`
+    : `⏳ Queued PR resolve task ${task.id} for app ${app.id} request #${number}${queueReason ? ` — ${queueReason}` : ''}`);
   res.status(task.duplicate ? 200 : 202).json({
     appId: app.id,
     appName: app.name,
     pullRequest: { ...pullRequest, agentAction: { taskId: task.id, status: task.status } },
     task: taskResponse(task),
     duplicate: task.duplicate === true,
+    started,
+    queueReason,
   });
 }));
 

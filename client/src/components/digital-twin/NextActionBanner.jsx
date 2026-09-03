@@ -246,7 +246,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
             </p>
             {prompt && (
               <div className="relative mb-3">
-                <pre className="text-xs text-gray-300 bg-port-bg border border-port-border rounded-lg p-3 pr-10 whitespace-pre-wrap max-h-32 overflow-y-auto">
+                <pre className="text-xs text-gray-300 bg-port-bg border border-port-border rounded-lg p-3 pr-10 whitespace-pre-wrap break-words max-h-32 overflow-y-auto">
                   {prompt}
                 </pre>
                 <button
@@ -389,7 +389,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
                 All enrichment questions answered. Copy this prompt into ChatGPT or Claude to dig deeper into <span className="text-white font-medium">{dimensionLabel}</span>:
               </p>
               <div className="relative">
-                <pre className="text-xs text-gray-300 bg-port-bg border border-port-border rounded-lg p-3 pr-10 whitespace-pre-wrap max-h-32 overflow-y-auto">
+                <pre className="text-xs text-gray-300 bg-port-bg border border-port-border rounded-lg p-3 pr-10 whitespace-pre-wrap break-words max-h-32 overflow-y-auto">
                   {buildContinuationPrompt(activeGap.dimension, activeGap)}
                 </pre>
                 <button

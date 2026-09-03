@@ -23,6 +23,7 @@ import {
   videoModelTermsGateId,
 } from '../lib/videoDisclosure.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
+import { recordUserAction } from '../services/userActions.js';
 import { checkPackages, isAllowedPython } from '../lib/pythonSetup.js';
 import {
   listVideoModels,
@@ -44,20 +45,19 @@ import { cleanupMultipartTemp } from '../services/videoGen/prepareParams.js';
 import { submitVideoGenJob } from '../services/videoGen/submitJob.js';
 import { VIDEO_GEN_LOCAL_ONLY_FIELDS } from '../services/videoGen/requestFields.js';
 import { attachSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
-import { repoForModel, getTextEncoderRepo, isHfRepoId } from '../lib/mediaModels.js';
+import { getTextEncoderRepo, isHfRepoId } from '../lib/mediaModels.js';
 import {
-  IC_LORA_MODE_VALUES, icLoraSpecForMode, icLoraRepos, listIcLoraWeights,
+  IC_LORA_MODE_VALUES, icLoraSpecForMode, listIcLoraWeights,
   icLoraWeightCandidates, findCachedIcLoraWeight,
 } from '../lib/icLoraWeights.js';
+import { publicTextEncoderOption } from '../lib/videoTextEncoders.js';
+import { DRAFT_DECODE_IDS } from '../lib/videoDraftDecoders.js';
+import { repairModelCache, repairCachedFile, summarizeVerify } from '../lib/hfCache.js';
 import {
-  downloadableVideoTextEncoders, downloadableVideoTextEncoder, publicTextEncoderOption,
-} from '../lib/videoTextEncoders.js';
-import { DRAFT_DECODE_IDS, downloadableVideoDraftDecoders } from '../lib/videoDraftDecoders.js';
-import {
-  inspectModelCache, verifyModelCache, repairModelCache, repairCachedFile,
-  verifyCachedRepoFiles, repairCachedRepoFiles, summarizeVerify, aggregateVerifies,
-  isSafeHfRepoRelativePath,
-} from '../lib/hfCache.js';
+  modelDownloadTargets, textEncoderDownloadTarget, textEncoderDownloadTargets,
+  verifyDownloadTarget, repairDownloadTarget, reposToVerify,
+  repoCacheStatus, modelCacheStatus, icLoraSpecFromParam, textEncoderFromParam,
+} from '../services/videoGen/modelCache.js';
 import { startHfDownloadStream } from '../services/hfDownloadStream.js';
 import { openSseStream } from '../lib/sseDownload.js';
 import { saveUploadedGalleryVideo } from '../services/videoUpload.js';
@@ -72,6 +72,7 @@ import {
   streamVideoRuntimeInstall,
 } from '../services/videoGen/runtimeInstaller.js';
 import { detectSystemCapabilities, withHardwareCompatibility } from '../lib/systemCapabilities.js';
+import { isDisplaySleepEnabled } from '../services/displayPower.js';
 
 const router = Router();
 
@@ -437,6 +438,13 @@ router.get('/status', asyncHandler(async (_req, res) => {
     // with a catch as defense-in-depth so a runtime-block failure can never
     // reject the whole /status response.
     runtime: await resolveRuntimeFingerprint().catch(() => null),
+    // Will a render on this install actually sleep the display? macOS-only, and
+    // the user can opt out (settings.videoGen.displaySleep). Paired with each
+    // model's `sleepsDisplayDuringRender`, this is what lets the UI warn BEFORE
+    // the screen goes dark — a user who is not warned reads it as a crash and
+    // wakes the display, re-introducing the exact GPU-watchdog contention the
+    // sleep is there to avoid.
+    displaySleepOnRender: isDisplaySleepEnabled(s.videoGen),
   });
 }));
 
@@ -521,142 +529,6 @@ router.get('/models', asyncHandler(async (_req, res) => {
   const { models } = await hardwareAwareVideoModels();
   res.json(models);
 }));
-
-// Resolve the repo set an integrity scan should cover. A specific `modelId`
-// scopes to that model's repo; no modelId scans every model repo plus the
-// shared text encoder.
-// One definition of "a valid `only` list" for every download target this file
-// builds — model repos, their required weights, and the substitutable prompt
-// conditioners. `owner` is only used to name the offender in the error, so a
-// conditioner entry can pass its own registry id.
-const safeOnlyList = (owner, files, label) => {
-  const only = Array.isArray(files) ? files.filter((file) => typeof file === 'string' && file.length > 0) : [];
-  if (only.some((file) => !isSafeHfRepoRelativePath(file))) {
-    throw new ServerError(
-      `${owner} has an unsafe ${label} path. Use repo-relative POSIX filenames only.`,
-      { status: 500, code: 'VIDEO_MODEL_MISCONFIGURED' },
-    );
-  }
-  return only;
-};
-
-const videoModelLabel = (model) => `Video model "${model?.id}"`;
-
-const modelDownloadTargets = (model) => {
-  const repo = repoForModel(model);
-  if (!repo) return [];
-  // `repoFiles` narrows the model's OWN repo to an explicit file list, the way
-  // `requiredWeights[].files` already does for a secondary repo. It is required
-  // — not an optimization — whenever the model's repo is an aggregate that
-  // holds more than the one component set the runner loads: MiniMax H3 ships
-  // its diffusers layout, a second transformer partition and the original
-  // non-diffusers layout in one ~498 GB repo, so the default whole-snapshot
-  // target would pull 3.5x what the render path can use. Absent (every other
-  // model) still means "snapshot the repo".
-  const targets = [{
-    repo,
-    revision: model?.revision || null,
-    only: safeOnlyList(videoModelLabel(model), model?.repoFiles, 'repo-file'),
-  }];
-  for (const dep of Array.isArray(model?.requiredWeights) ? model.requiredWeights : []) {
-    if (typeof dep?.repo !== 'string') continue;
-    const only = safeOnlyList(videoModelLabel(model), dep.files, 'required-weight');
-    if (only.length > 0) targets.push({ repo: dep.repo, revision: dep.revision || null, only });
-  }
-  // The model's preview-fidelity decoder (#5423), when it declares one. Scoped
-  // to its pinned file for the same reason every other entry here is — and
-  // listed under the MODEL rather than as a standalone target, because it is
-  // useless without the checkpoint it decodes for, so the download badge that
-  // offers it belongs beside that model's own.
-  for (const decoder of downloadableVideoDraftDecoders([model])) {
-    targets.push({
-      repo: decoder.repo,
-      revision: decoder.revision || null,
-      only: safeOnlyList(`Draft decoder "${decoder.id}"`, decoder.files, 'weight-file'),
-    });
-  }
-  return targets;
-};
-
-// One download target per substitutable prompt conditioner. Each names an
-// explicit file list inside a repo that holds more than the loader can use —
-// quantizations and generation tails in a repack, or the language layers past
-// the conditioning depth in an upstream checkpoint — so these are ALWAYS scoped
-// to `only: entry.files`. A repo-wide snapshot would pull ~130 GB of unusable
-// variants for the repack and ~10 GB of never-built layers for the upstream one.
-const textEncoderDownloadTarget = (entry) => ({
-  repo: entry.repo,
-  revision: entry.revision || null,
-  only: safeOnlyList(`Text encoder "${entry.id}"`, entry.files, 'weight-file'),
-});
-// Paired with its entry so the status lane can project the registry fields
-// (label, size) alongside the cache verdict without a second lookup.
-const textEncoderDownloadTargets = () => downloadableVideoTextEncoders()
-  .map((entry) => ({ entry, target: textEncoderDownloadTarget(entry) }));
-
-const targetKey = (target) => `${target.repo}@${target.revision || 'latest'}::${target.only.join(',')}`;
-const targetVerifyOptions = (target, deep) => ({
-  deep,
-  ...(target.revision ? { revision: target.revision } : {}),
-});
-const verifyDownloadTarget = (target, { deep = false } = {}) => target.only.length > 0
-  ? verifyCachedRepoFiles(target.repo, target.only, targetVerifyOptions(target, deep))
-  : verifyModelCache(target.repo, targetVerifyOptions(target, deep));
-const repairDownloadTarget = (target, { deep = false } = {}) => target.only.length > 0
-  ? repairCachedRepoFiles(target.repo, target.only, targetVerifyOptions(target, deep))
-  : repairModelCache(target.repo, targetVerifyOptions(target, deep));
-
-const reposToVerify = (modelId) => {
-  if (modelId) {
-    const m = listVideoModels().find((x) => x.id === modelId);
-    return m ? modelDownloadTargets(m) : [];
-  }
-  const targets = listVideoModels().flatMap(modelDownloadTargets);
-  const enc = getTextEncoderRepo();
-  if (isHfRepoId(enc)) targets.push({ repo: enc, only: [] });
-  // Substitutable prompt conditioners are single pinned files the render path
-  // depends on, so an unscoped scan must reach them too — a truncated one
-  // otherwise only surfaces as a load failure minutes into a render.
-  targets.push(...textEncoderDownloadTargets().map(({ target }) => target));
-  // IC-LoRA remix weights are separate HF pulls that the render path depends
-  // on, so an unscoped integrity scan must cover them too — otherwise a
-  // corrupt IC weight only surfaces as a garbled render.
-  targets.push(...icLoraRepos().map((repo) => ({ repo, only: [] })));
-  return [...new Map(targets.map((target) => [targetKey(target), target])).values()];
-};
-
-// Per-model download status — see /api/image-gen/models/status for the
-// shape contract. We also surface the active text-encoder repo so the
-// video form can warn when the Gemma encoder isn't downloaded yet (a
-// surprise multi-GB pull on top of the model itself).
-// Cache + integrity for one HF repo, in the `{ cached, sizeBytes, integrity }`
-// shape every download badge consumes. The integrity check only runs for a repo
-// that's actually downloaded — a not-yet-cached repo gets the Download badge,
-// not a Repair banner. Shared by all three lanes of /models/status below so the
-// badge semantics can't drift between models, the encoder, and IC weights.
-const repoCacheStatus = async (repo) => {
-  const { cached, sizeBytes } = await inspectModelCache(repo);
-  return { cached, sizeBytes, integrity: cached ? summarizeVerify(await verifyModelCache(repo)) : null };
-};
-
-const modelCacheStatus = async (model, cache = null) => {
-  const targets = modelDownloadTargets(model);
-  if (targets.length === 0) return { repo: null, cached: null, sizeBytes: 0, integrity: null };
-  const readTarget = (target) => {
-    if (!cache) return verifyDownloadTarget(target);
-    const key = targetKey(target);
-    if (!cache.has(key)) cache.set(key, verifyDownloadTarget(target));
-    return cache.get(key);
-  };
-  const verifies = await Promise.all(targets.map(readTarget));
-  return {
-    repo: targets[0].repo,
-    requiredRepos: [...new Set(targets.map((target) => target.repo))],
-    cached: verifies.every((verify) => verify.status === 'ok'),
-    sizeBytes: verifies.reduce((sum, verify) => sum + (verify.sizeBytes || 0), 0),
-    integrity: aggregateVerifies(verifies),
-  };
-};
 
 router.get('/models/status', asyncHandler(async (_req, res) => {
   // Text encoder is shared across all video renders. A registry entry with
@@ -788,17 +660,6 @@ router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
 // but are NOT listVideoModels() entries, so the model-id-keyed routes above
 // can't reach them. Keyed by the PortOS remix mode ('ic-control', …) so the
 // client uses the same identifier it puts in the render payload.
-const icLoraSpecFromParam = (mode) => {
-  const spec = icLoraSpecForMode(mode);
-  if (!spec) {
-    throw new ServerError(
-      `Unknown IC-LoRA remix mode: ${mode} (expected one of ${IC_LORA_MODE_VALUES.join(', ')})`,
-      { status: 404, code: 'IC_LORA_UNKNOWN_MODE' },
-    );
-  }
-  return spec;
-};
-
 // Download one IC weight. A spec with a `mirrorRepo` is fetched SINGLE-FILE and
 // only ever single-file: the official Ingredients repo is gated (an anonymous
 // pull 401s) and its un-gated mirror is the ~708 GB `DeepBeepMeep/LTX-2`
@@ -854,18 +715,6 @@ router.post('/ic-loras/:mode/repair', asyncHandler(async (req, res) => {
 // Distinct from the /text-encoder/* pair below, which is the SHARED LTX encoder
 // (one repo, install-wide, selected in the media-models registry). These are
 // per-model alternatives chosen per render.
-const textEncoderFromParam = (id) => {
-  const entry = downloadableVideoTextEncoder(id);
-  if (!entry) {
-    const known = downloadableVideoTextEncoders().map((e) => e.id);
-    throw new ServerError(
-      `Unknown text encoder: ${id}${known.length ? ` (expected one of ${known.join(', ')})` : ''}`,
-      { status: 404, code: 'VIDEO_TEXT_ENCODER_UNKNOWN' },
-    );
-  }
-  return entry;
-};
-
 // Always the entry's pinned file list, never a snapshot: these repos publish
 // more than the loader can read — INT8 ConvRot / NVFP4 quantizations and 50-63
 // generation tails in a repack, the language layers past the conditioning depth
@@ -937,7 +786,23 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
     await cleanupMultipartTemp(uploads);
     failValidation(parsed);
   }
-  res.json(await submitVideoGenJob(parsed.data, uploads));
+  const queued = await submitVideoGenJob(parsed.data, uploads);
+  try {
+    const happenedAt = new Date().toISOString();
+    await recordUserAction({
+      type: 'media.video.enqueue',
+      actor: 'user',
+      target: queued.jobId,
+      summary: 'enqueued video job',
+      payload: { jobId: queued.jobId },
+      source: { route: `${req.baseUrl}${req.route?.path ?? ''}`, method: req.method },
+      happenedAt,
+      dedupeKey: `media.video.enqueue:${queued.jobId}`,
+    });
+  } catch (error) {
+    console.error(`❌ Failed to record media.video.enqueue: ${error.message}`);
+  }
+  res.json(queued);
 }));
 
 // Currently-running video job (if any) so the page can re-attach after a
@@ -1048,13 +913,10 @@ router.get('/active', (_req, res) => {
       generationId: job.id,
       status: job.status,
       position: job.position,
-      // Geometry the running render actually resolved to (#4588). `params`
-      // carries what the form ASKED for; videoGen/local.js snaps both edges
-      // down to the model's resolution grid, so a page that reloads mid-render
-      // has to size its preview stage by this, not by the request. `null` when
-      // the run hasn't reported it yet (still queued, or a runner that never
-      // does) — an explicit "unknown", never a guessed default.
-      render: job.render || null,
+      // When the worker dequeued this job. A page that reloads mid-render needs
+      // it to keep showing a truthful elapsed clock; without it the render
+      // status card would restart from zero and read as a fresh start (#5872).
+      startedAt: job.startedAt || null,
       params: pickJobParams(job),
     },
   });
@@ -1094,6 +956,25 @@ router.post('/cancel', asyncHandler(async (req, res) => {
   res.json({ ok: false, reason: 'no active or queued video render' });
 }));
 
+// The ONE contract every `/history/:id*` route resolves its record id through
+// (#5713) — GET, DELETE, visibility and prompt all name the same stored row, so
+// they share one schema instead of three (loose / strict / none).
+//
+// It stays looser than `historyIdSchema` below on purpose: that UUID check suits
+// ids this install MINTS, but entries also arrive from a caller-supplied
+// download id and from federated peers, so a `.guid()` gate here would 400 rows
+// that are legitimately in the list. The charset bound is the floor — every
+// legitimate id is `[A-Za-z0-9._-]+`, and a value carrying a path segment or a
+// `..` can no longer parse, so `safeUnder()` two modules away in historyOps is
+// defense in depth rather than the only thing standing between a hostile id and
+// an unlink loop.
+const historyRecordIdSchema = z.string().trim().min(1).max(200)
+  .regex(/^[A-Za-z0-9._-]+$/, 'invalid history id');
+const updatePromptSchema = z.object({ prompt: z.string().max(8000) });
+// `hidden` is required: reading an absent body as `false` turned a malformed
+// request into a silent unhide.
+const visibilitySchema = z.object({ hidden: z.boolean() });
+
 router.get('/history', asyncHandler(async (_req, res) => {
   res.json(await loadHistory());
 }));
@@ -1104,18 +985,8 @@ router.get('/history', asyncHandler(async (_req, res) => {
 // `finalVideoId`, an EpisodeVideoStage final) has to ask the server which file
 // it points at. Before this route existed, every such surface pulled the WHOLE
 // history list to find one row.
-//
-// The id is validated loosely on purpose: `historyIdSchema`'s UUID check below
-// suits ids this install MINTS, but entries also arrive from a caller-supplied
-// download id and from federated peers, so a `.guid()` gate here would 400 rows
-// that are legitimately in the list. Nothing is interpolated into a path — the
-// value is only compared against stored ids — so a length-capped string is the
-// right bound.
-const historyLookupIdSchema = z.string().min(1).max(200);
-const updatePromptSchema = z.object({ prompt: z.string().max(8000) });
-
 router.get('/history/:id', asyncHandler(async (req, res) => {
-  const parsed = historyLookupIdSchema.safeParse(req.params.id);
+  const parsed = historyRecordIdSchema.safeParse(req.params.id);
   if (!parsed.success) failValidation(parsed);
   const entry = await getHistoryItem(parsed.data);
   if (!entry) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
@@ -1143,15 +1014,21 @@ router.post('/upload', asyncHandler(async (req, res) => {
 }));
 
 router.delete('/history/:id', asyncHandler(async (req, res) => {
-  res.json(await deleteHistoryItem(req.params.id));
+  const parsed = historyRecordIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  res.json(await deleteHistoryItem(parsed.data));
 }));
 
 router.post('/history/:id/visibility', asyncHandler(async (req, res) => {
-  res.json(await setHistoryItemHidden(req.params.id, !!req.body?.hidden));
+  const parsedId = historyRecordIdSchema.safeParse(req.params.id);
+  if (!parsedId.success) failValidation(parsedId);
+  const body = visibilitySchema.safeParse(req.body ?? {});
+  if (!body.success) failValidation(body);
+  res.json(await setHistoryItemHidden(parsedId.data, body.data.hidden));
 }));
 
 router.patch('/history/:id/prompt', asyncHandler(async (req, res) => {
-  const parsedId = historyLookupIdSchema.safeParse(req.params.id);
+  const parsedId = historyRecordIdSchema.safeParse(req.params.id);
   if (!parsedId.success) failValidation(parsedId);
   const body = updatePromptSchema.safeParse(req.body ?? {});
   if (!body.success) failValidation(body);
@@ -1159,9 +1036,10 @@ router.patch('/history/:id/prompt', asyncHandler(async (req, res) => {
 }));
 
 // Render jobs use UUID history ids, while shared-gallery uploads use an
-// `upload-<uuid8>` id. These mutating operations only resolve a stored history
-// record and subsequently derive the path from its guarded filename, so both
-// known id forms are valid here.
+// `upload-<uuid8>` id. These operations derive a NEW artifact path from the
+// resolved record (an anchor frame, an upscale, a stitch output) rather than
+// merely reading or mutating the row, so they hold the tighter of the two
+// contracts and accept only the two id forms this install can mint.
 const historyIdSchema = z.string().regex(
   /^(?:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}|upload-[a-f0-9]{8})$/i,
   'invalid history id',

@@ -22,6 +22,7 @@ import {
   StopCircle,
 } from 'lucide-react';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
+import { useAutoRefetch } from '../../hooks/useAutoRefetch.js';
 import BackendChipStrip from '../media/BackendChipStrip';
 import {
   cancelLoomEpisodeProductionBatch,
@@ -178,30 +179,30 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
     setActiveBatchRun(null);
   }, [productionIdentity]);
 
-  // Batch run polling
-  useEffect(() => {
-    if (!activeBatchRun || activeBatchRun.status !== 'in_progress') return undefined;
-    const interval = setInterval(() => {
-      getLoomEpisodeProductionBatch(
-        activeBatchRun.loomId,
-        activeBatchRun.episodeId,
-        activeBatchRun.id,
-        { silent: true },
-      )
-        .then((updated) => {
-          if (!updated) return;
-          if (`${updated.loomId}:${updated.episodeId}` !== productionIdentityRef.current) return;
-          setActiveBatchRun(updated);
-          if (updated.status === 'completed' || updated.status === 'canceled' || updated.status === 'failed') {
-            fetchPlan(mode);
-          }
-        })
-        .catch(() => {
-          // Polling is best-effort; the next interval can reattach to the run.
-        });
-    }, 2000);
-    return () => clearInterval(interval);
-  }, [activeBatchRun, mode]);
+  // Batch run polling. Only reached while a run is in progress, so the
+  // non-null read of activeBatchRun below is guarded by `enabled`.
+  const refreshBatchRun = () => getLoomEpisodeProductionBatch(
+    activeBatchRun.loomId,
+    activeBatchRun.episodeId,
+    activeBatchRun.id,
+    { silent: true },
+  )
+    .then((updated) => {
+      if (!updated) return;
+      if (`${updated.loomId}:${updated.episodeId}` !== productionIdentityRef.current) return;
+      setActiveBatchRun(updated);
+      if (updated.status === 'completed' || updated.status === 'canceled' || updated.status === 'failed') {
+        fetchPlan(mode);
+      }
+    })
+    .catch(() => {
+      // Polling is best-effort; the next tick can reattach to the run.
+    });
+  useAutoRefetch(refreshBatchRun, 2000, {
+    enabled: activeBatchRun?.status === 'in_progress',
+    immediate: false,
+    pollOnly: true,
+  });
 
   const [startBatch, startingBatch] = useAsyncAction(async () => {
     const requestedIdentity = productionIdentity;

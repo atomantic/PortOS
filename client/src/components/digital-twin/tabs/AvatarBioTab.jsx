@@ -263,7 +263,7 @@ export default function AvatarBioTab() {
                 <CopyButton getText={() => polished.content} />
               </div>
             </div>
-            <pre className="text-sm text-gray-300 whitespace-pre-wrap font-sans leading-relaxed">
+            <pre className="text-sm text-gray-300 whitespace-pre-wrap break-words font-sans leading-relaxed">
               {polished.content}
             </pre>
           </div>

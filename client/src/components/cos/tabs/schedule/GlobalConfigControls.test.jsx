@@ -23,7 +23,8 @@ vi.mock('../../ReviewerPicker', () => ({
 import GlobalConfigControls from './GlobalConfigControls';
 
 const BASE_CONFIG = {
-  type: 'daily',
+  type: 'cron',
+  cronExpression: '0 7 * * *',
   enabled: true,
   providerId: null,
   model: null,
@@ -32,14 +33,16 @@ const BASE_CONFIG = {
   status: {},
 };
 
-function renderControls({ taskMetadata, onUpdate = vi.fn(), taskType = 'feature-ideas', config: extraConfig = {}, setUpdating = () => {} } = {}) {
+// The real `onUpdate` (ScheduleTab's handleUpdateTask) is async, and several
+// handlers here attach a rejection handler to what it returns — so the default
+// mock must resolve a promise, not `undefined`.
+function renderControls({ taskMetadata, onUpdate = vi.fn(async () => {}), taskType = 'feature-ideas', config: extraConfig = {}, setUpdating = () => {} } = {}) {
   render(
     <GlobalConfigControls
       taskType={taskType}
       config={{ ...BASE_CONFIG, taskMetadata, ...extraConfig }}
       onUpdate={onUpdate}
       onTrigger={() => {}}
-      onReset={() => {}}
       providers={[]}
       apps={[]}
       updating={false}
@@ -263,5 +266,32 @@ describe('GlobalConfigControls — file issues only', () => {
     expect(onUpdate).toHaveBeenCalledWith('module-hygiene', {
       taskMetadata: { useWorktree: true, openPR: false, simplify: false, fileIssues: false },
     });
+  });
+});
+
+describe('GlobalConfigControls — cadence + perpetual', () => {
+  const cadenceSelect = () => screen.getByLabelText('Interval Type');
+
+  it('offers exactly the two cadence variants', () => {
+    renderControls();
+    expect([...cadenceSelect().options].map((o) => o.value)).toEqual(['on-demand', 'cron']);
+  });
+
+  it('toggling Perpetual writes only the flag, leaving the cron cadence intact', async () => {
+    const onUpdate = renderControls({ config: { perpetual: false } });
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Enable perpetual drain'));
+    });
+    expect(onUpdate).toHaveBeenCalledWith('feature-ideas', { perpetual: true });
+  });
+
+  it('shows a recheck-cadence control only for an ON-DEMAND perpetual task', () => {
+    renderControls({ config: { type: 'on-demand', cronExpression: null, perpetual: true } });
+    expect(screen.getByText('Recheck Cadence')).toBeInTheDocument();
+
+    cleanup();
+    // A cron+perpetual task rechecks on its OWN expression, so it needs none.
+    renderControls({ config: { type: 'cron', cronExpression: '0 7 * * *', perpetual: true } });
+    expect(screen.queryByText('Recheck Cadence')).not.toBeInTheDocument();
   });
 });

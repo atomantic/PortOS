@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { useEffect } from 'react';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router';
 import Media3DDetail from './Media3DDetail';
@@ -12,15 +13,29 @@ vi.mock('../services/api', () => ({
   deleteImageTo3dModel: (...a) => deleteImageTo3dModel(...a),
   imageTo3dAssetUrl: (id) => `/api/image-to-3d/models/${id}/asset`,
   imageTo3dFullMeshUrl: (id) => `/api/image-to-3d/models/${id}/full-mesh`,
+  imageTo3dUsdzUrl: (id) => `/api/image-to-3d/models/${id}/usdz`,
 }));
 
-// GlbViewer wraps a WebGL canvas jsdom can't render — stub to a marker echoing src.
+// GlbViewer wraps a WebGL canvas jsdom can't render — stub to a marker echoing
+// src. It also hands the loaded three.js graph up via `onSceneLoaded`, so the
+// stub fires that with a marker: the AR export button is disabled until it
+// arrives, and dropping that prop is an invisible regression otherwise.
 vi.mock('../components/media/GlbViewer', () => ({
-  default: ({ src, forceOpaque }) => (
-    <div data-testid="glb-viewer" data-force-opaque={String(forceOpaque)}>{src}</div>
-  ),
+  default: ({ src, forceOpaque, onSceneLoaded }) => {
+    useEffect(() => { onSceneLoaded?.({ marker: 'loaded-scene' }); }, [onSceneLoaded]);
+    return <div data-testid="glb-viewer" data-force-opaque={String(forceOpaque)}>{src}</div>;
+  },
+}));
+// The AR panel owns its own export/upload flow (covered by ArExportPanel.test.jsx);
+// stubbing it keeps this suite about the page — but it echoes whether the scene
+// reached it, which is the page's half of the contract.
+vi.mock('../components/media/ArExportPanel', () => ({
+  default: ({ scene }) => <div data-testid="ar-export-panel" data-has-scene={String(Boolean(scene))} />,
 }));
 vi.mock('../components/MediaImage', () => ({ default: ({ alt, src }) => <img alt={alt} src={src} /> }));
+// The rig panel owns its own readiness fetch + feature gate (covered by
+// RigPanel.test.jsx); stubbing it keeps this suite about the page.
+vi.mock('../components/media/RigPanel', () => ({ default: () => <div data-testid="rig-panel" /> }));
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 
 const record = (over = {}) => ({
@@ -58,6 +73,9 @@ describe('Media3DDetail', () => {
     );
     expect(screen.getByTestId('glb-viewer')).toHaveAttribute('data-force-opaque', 'true');
     expect(screen.getByAltText('Source image')).toBeInTheDocument();
+    // The viewer's loaded scene has to reach the AR panel or its export button
+    // stays permanently disabled — a prop chain no other assertion touches.
+    expect(await screen.findByTestId('ar-export-panel')).toHaveAttribute('data-has-scene', 'true');
   });
 
   it('surfaces the render error for a failed record', async () => {
@@ -99,7 +117,7 @@ describe('Media3DDetail', () => {
       // normalMap is sent explicitly rather than omitted. It defaults OFF (the bake
       // can lose a render outright), and stating it keeps the body honest about what
       // the run asked for even if that default ever moves.
-      { steps: 24, keyBackground: false, normalMap: false },
+      { steps: 24, keyBackground: false, normalMap: false, subjectScale: 1 },
       { silent: true },
     ));
   });
@@ -122,7 +140,7 @@ describe('Media3DDetail', () => {
     fireEvent.click(screen.getByRole('button', { name: /re-render/i }));
     await waitFor(() => expect(generateImageTo3dModel).toHaveBeenCalledWith(
       'image3d-1',
-      { steps: 48, keyBackground: false, normalMap: false },
+      { steps: 48, keyBackground: false, normalMap: false, subjectScale: 1 },
       { silent: true },
     ));
   });
@@ -147,7 +165,32 @@ describe('Media3DDetail', () => {
     fireEvent.click(screen.getByRole('button', { name: /re-render/i }));
     await waitFor(() => expect(generateImageTo3dModel).toHaveBeenCalledWith(
       'image3d-1',
-      { keyBackground: false, detail: 'fast', alphaMode: 'auto', normalMap: false },
+      { keyBackground: false, detail: 'fast', alphaMode: 'auto', normalMap: false, subjectScale: 1 },
+      { silent: true },
+    ));
+  });
+
+  it('carries the subject framing over and reports it on the finished run', async () => {
+    // A framing that produced a good mesh is exactly what a re-render wants to keep;
+    // and the meta line has to say the render was reframed, or the user cannot tell
+    // whether the last result came from the source's own framing or this knob.
+    getImageTo3dModel.mockResolvedValue(record({
+      runs: [{
+        operationId: 'op-1', status: 'completed', percent: 100,
+        subjectScale: 0.65, sourceFramed: true,
+      }],
+    }));
+    generateImageTo3dModel.mockResolvedValue(record({ status: 'generating' }));
+    renderAt();
+    await screen.findByText('Example Beacon');
+
+    await waitFor(() => expect(screen.getByLabelText(/subject framing — 65%/i)).toHaveValue('0.65'));
+    expect(screen.getByText(/framed at 65%/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /re-render/i }));
+    await waitFor(() => expect(generateImageTo3dModel).toHaveBeenCalledWith(
+      'image3d-1',
+      { keyBackground: false, normalMap: false, subjectScale: 0.65 },
       { silent: true },
     ));
   });

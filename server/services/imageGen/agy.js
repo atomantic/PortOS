@@ -28,6 +28,7 @@ import { atomicWrite, detectImageFormat, ensureDir, PATHS } from '../../lib/file
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { renderTimingFields } from '../../lib/renderTiming.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { buildNoImageReason } from './noImageReason.js';
@@ -218,6 +219,9 @@ export async function generateImage({
   cleanC2PA = false,
   denoise = false,
 }) {
+  // The ingestion instant `renderTimingFields` measures from — the queue calls
+  // generateImage the moment it picks this job up. See lib/renderTiming.js.
+  const renderStartedAtMs = Date.now();
   // Re-anchors every path to the approved image roots and caps at agy's
   // 3-image ImagePaths ceiling — see inputImages.js.
   const inputImages = resolveInputImages({
@@ -263,7 +267,7 @@ export async function generateImage({
     ...(visualConditioning ? { visualConditioning } : {}),
     createdAt: new Date().toISOString(),
   };
-  const job = { ...meta, clients: [], status: 'running' };
+  const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
   jobs.set(jobId, job);
   activeJobs.set(jobId, {
     ...meta,
@@ -378,7 +382,10 @@ async function runAgy(job, jobId, bin, args, {
         return finalizeError(job, jobId, proc, emptyFrame);
       }
       const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
-      await atomicWrite(sidecar, meta).catch(() => {});
+      // `job.renderStartedAtMs` is the queue-ingestion instant generateImage
+      // captured, so the spread measures the render itself — not the time the
+      // job spent queued behind other renders.
+      await atomicWrite(sidecar, { ...meta, ...renderTimingFields(job.renderStartedAtMs) }).catch(() => {});
       await autoCleanGeneratedImage({
         cleanC2PA,
         denoise,

@@ -405,6 +405,7 @@ export async function createApp(appData) {
     devUiPort: appData.devUiPort || null,
     apiPort: appData.apiPort || null,
     buildCommand: appData.buildCommand || undefined,
+    updateCommand: appData.updateCommand || undefined,
     startCommands: appData.startCommands || ['npm run dev'],
     pm2ProcessNames: appData.pm2ProcessNames || [appData.name.toLowerCase().replace(/\s+/g, '-')],
     nativeLaunch: appData.nativeLaunch || null,

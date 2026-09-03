@@ -6,6 +6,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import { usePrevious } from '../../hooks/usePrevious.js';
 import { useInstallStream } from '../../hooks/useInstallStream.js';
 import useMounted from '../../hooks/useMounted.js';
+import QueueInstallInvestigationButton from '../install/QueueInstallInvestigationButton';
 import { checkImageGenSetup, detectImageGenPython, createImageGenVenv } from '../../services/api';
 
 export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPackagesChanged }) {
@@ -83,6 +84,7 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
   // handling, unmount teardown, and auto-scroll.
   const {
     logs: installLog,
+    currentStage: installStage,
     done: installDone,
     error: installError,
     streamStarted: installStarted,
@@ -267,7 +269,7 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
               )}
               {(installing || installLog.length > 0) && (
                 <pre
-                  className="mt-3 max-h-48 overflow-y-auto text-[11px] font-mono text-gray-400 bg-black/40 border border-port-border rounded p-2 whitespace-pre-wrap"
+                  className="mt-3 max-h-48 overflow-y-auto text-[11px] font-mono text-gray-400 bg-black/40 border border-port-border rounded p-2 whitespace-pre-wrap break-all"
                 >
                   {installLog.map((e, i) => (
                     <div key={i} className={e.kind === 'error' ? 'text-port-error' : e.kind === 'success' ? 'text-port-success' : ''}>
@@ -276,6 +278,18 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
                   ))}
                   <div ref={logsEndRef} />
                 </pre>
+              )}
+              {installError && (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-port-error">Install failed — see the log above.</span>
+                  <QueueInstallInvestigationButton
+                    label="PortOS local Python packages"
+                    stage={installStage}
+                    error={installError}
+                    logs={installLog}
+                    surface="client/src/components/settings/LocalSetupPanel.jsx"
+                  />
+                </div>
               )}
             </>
           )}

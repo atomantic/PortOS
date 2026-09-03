@@ -13,7 +13,6 @@ import { ensureDir, expandHome } from '../lib/fileUtils.js';
 import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
 import { scaffoldVite } from './scaffoldVite.js';
 import { scaffoldExpress } from './scaffoldExpress.js';
-import { scaffoldIOS } from './scaffoldIOS.js';
 import { scaffoldXcode } from '../services/xcodeScaffold.js';
 import { toTargetName } from '../services/xcodeScripts.js';
 import { scaffoldPortOS } from './scaffoldPortOS.js';
@@ -286,7 +285,7 @@ async function scaffoldApp(req, res) {
   } else if (template === 'express-api') {
     await scaffoldExpress(repoPath, dirName, apiPort, addStep);
   } else if (template === 'ios-native') {
-    await scaffoldIOS(repoPath, name, dirName, addStep);
+    await scaffoldXcode(repoPath, name, dirName, addStep, { platforms: ['ios'] });
   } else if (template === 'xcode-multiplatform') {
     await scaffoldXcode(repoPath, name, dirName, addStep);
   } else if (template === 'portos-stack') {
@@ -561,12 +560,7 @@ Thumbs.db
   } else if (template === 'vite-express') {
     pm2Names = [`${dirName}-ui`, `${dirName}-api`];
     startCmds = ['npm run dev:all'];
-  } else if (template === 'ios-native') {
-    const tn = toTargetName(name);
-    pm2Names = [];
-    startCmds = [`open ${tn}.xcodeproj`];
-    buildCmd = `xcodebuild build -project ${tn}.xcodeproj -scheme ${tn} -destination 'platform=iOS Simulator,name=iPhone 16' CODE_SIGNING_ALLOWED=NO`;
-  } else if (template === 'xcode-multiplatform') {
+  } else if (template === 'ios-native' || template === 'xcode-multiplatform') {
     const tn = toTargetName(name);
     pm2Names = [];
     startCmds = [`open ${tn}.xcodeproj`];

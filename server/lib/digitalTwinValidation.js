@@ -21,15 +21,6 @@ export const documentCategoryEnum = z.enum([
   'creative'        // Aesthetic preferences, creative interests
 ]);
 
-// Test result enum
-export const testResultEnum = z.enum(['passed', 'partial', 'failed', 'pending']);
-
-// Values-alignment result enum (M34 P6)
-export const valuesTestResultEnum = z.enum(['aligned', 'partial', 'misaligned', 'pending']);
-
-// Adversarial-boundary result enum (M34 P6) — did the twin hold the line?
-export const adversarialTestResultEnum = z.enum(['held', 'partial', 'breached', 'pending']);
-
 // Export format enum
 // 'claude_md' is the pre-#4852 alias of 'agents_md' — kept so a persisted
 // preference on an existing install still validates.
@@ -143,18 +134,6 @@ export const multiTurnTestHistoryEntrySchema = z.object({
   inconsistent: z.number().int().min(0),
   total: z.number().int().min(0),
   timestamp: z.string().datetime()
-});
-
-// Individual test result schema
-export const testResultSchema = z.object({
-  testId: z.number().int().min(1),
-  testName: z.string(),
-  prompt: z.string(),
-  expectedBehavior: z.string(),
-  failureSignals: z.string(),
-  response: z.string().optional(),
-  result: testResultEnum,
-  reasoning: z.string().optional()
 });
 
 // Enrichment progress schema
@@ -549,44 +528,6 @@ export const importSourceEnum = z.enum([
   'ical'
 ]);
 
-// Goodreads book entry (parsed from CSV)
-export const goodreadsBookSchema = z.object({
-  title: z.string(),
-  author: z.string().optional(),
-  rating: z.number().min(0).max(5).optional(),
-  dateRead: z.string().optional(),
-  shelves: z.array(z.string()).optional(),
-  review: z.string().optional()
-});
-
-// Spotify track/artist entry (parsed from JSON export)
-export const spotifyEntrySchema = z.object({
-  trackName: z.string().optional(),
-  artistName: z.string(),
-  albumName: z.string().optional(),
-  playCount: z.number().int().optional(),
-  msPlayed: z.number().int().optional()
-});
-
-// Letterboxd film entry
-export const letterboxdFilmSchema = z.object({
-  title: z.string(),
-  year: z.number().int().optional(),
-  rating: z.number().min(0).max(5).optional(),
-  watchedDate: z.string().optional(),
-  review: z.string().optional(),
-  tags: z.array(z.string()).optional()
-});
-
-// Calendar event for pattern analysis
-export const calendarEventSchema = z.object({
-  summary: z.string(),
-  start: z.string(),
-  end: z.string().optional(),
-  recurring: z.boolean().optional(),
-  categories: z.array(z.string()).optional()
-});
-
 // Import data input (raw data to parse)
 export const importDataInputSchema = z.object({
   source: importSourceEnum,
@@ -602,28 +543,6 @@ export const analyzeAssessmentInputSchema = z.object({
   content: z.string().min(50, 'Assessment must be at least 50 characters'),
   providerId: z.string().min(1),
   model: z.string().min(1)
-});
-
-// Import analysis result
-export const importAnalysisResultSchema = z.object({
-  source: importSourceEnum,
-  itemCount: z.number().int(),
-  insights: z.object({
-    patterns: z.array(z.string()).optional(),
-    preferences: z.array(z.string()).optional(),
-    personalityInferences: z.object({
-      bigFive: bigFiveSchema.partial().optional(),
-      values: z.array(z.string()).optional(),
-      interests: z.array(z.string()).optional()
-    }).optional()
-  }),
-  suggestedDocuments: z.array(z.object({
-    filename: z.string(),
-    title: z.string(),
-    category: documentCategoryEnum,
-    content: z.string()
-  })).optional(),
-  rawSummary: z.string().optional()
 });
 
 // --- Taste Questionnaire Schemas ---

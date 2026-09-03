@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
 import { PersonStanding, LayoutGrid, Images, Scissors, Film } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import EmptyState from '../components/EmptyState';
 import toast from '../components/ui/Toast';
 import {
   listSpriteRecords, getSpriteRecord,
@@ -177,6 +178,18 @@ export default function Sprites() {
       const params = new URLSearchParams(prev);
       if (next) params.set('animationTypes', '1');
       else params.delete('animationTypes');
+      return params;
+    });
+  }, [setSearchParams]);
+  // Same deal for the "New Sprite" modal — library-wide, and now openable from
+  // two places (the header button and the empty-library call to action), so its
+  // open state belongs in the URL rather than inside the panel.
+  const newSpriteOpen = searchParams.get('newSprite') === '1';
+  const setNewSpriteOpen = useCallback((next) => {
+    setSearchParams((prev) => {
+      const params = new URLSearchParams(prev);
+      if (next) params.set('newSprite', '1');
+      else params.delete('newSprite');
       return params;
     });
   }, [setSearchParams]);
@@ -464,7 +477,11 @@ export default function Sprites() {
         >
           <Film className="w-4 h-4" /> Animation types
         </button>
-        <NewSpritePanel onCreated={(record) => { refresh(); navigate(`/sprites/${record.id}`); }} />
+        <NewSpritePanel
+          open={newSpriteOpen}
+          onOpenChange={setNewSpriteOpen}
+          onCreated={(record) => { refresh(); navigate(`/sprites/${record.id}`); }}
+        />
         {/* Re-import while a sprite is open must refresh the open detail too,
             not just the library list. */}
         <ImportPanel onImported={() => { refresh(); if (id) setRetryTick((t) => t + 1); }} />
@@ -482,9 +499,13 @@ export default function Sprites() {
                 gridColsClass="grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
               />
             ) : records.length === 0 ? (
-              <p className="text-sm text-gray-500">
-                No sprites yet. Import a production set from a sprite-pipeline checkout to get started.
-              </p>
+              <EmptyState
+                icon={PersonStanding}
+                title="No sprites yet"
+                message="Create a character or props sprite here, or import a production set from a sprite-pipeline checkout."
+                actionLabel="Create your first sprite"
+                onAction={() => setNewSpriteOpen(true)}
+              />
             ) : (
               <SpriteCatalog
                 records={records}

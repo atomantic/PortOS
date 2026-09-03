@@ -28,13 +28,12 @@ export default function QuickBrainCapture() {
   const isYoutube = useMemo(() => isYoutubeVideoUrl(input), [input]);
   // A bare repo URL is cloned on capture, which unlocks the two post-clone
   // agent opt-ins (malware scan / repo study).
-  const repoIntake = useRepoIntake(input);
-
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [ingestOpts, setIngestOpts] = useState(defaultIngestOptions);
   const [agentPrompt, setAgentPrompt] = useState('');
   const [tagsInput, setTagsInput] = useState('');
   const [linkNote, setLinkNote] = useState('');
+  const repoIntake = useRepoIntake(input, linkNote);
 
   // Server-side defaults for the checkboxes, so a user who always wants audio
   // sets it once in settings instead of every capture.

@@ -284,7 +284,7 @@ export function HistoryPage() {
                         <div>
                           <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Error</div>
                           <Banner tone="error" size="md">
-                            <pre className="text-sm font-mono whitespace-pre-wrap">
+                            <pre className="text-sm font-mono whitespace-pre-wrap break-all">
                               {entry.error}
                             </pre>
                           </Banner>
@@ -296,7 +296,7 @@ export function HistoryPage() {
                         <div>
                           <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Additional Details</div>
                           <div className="bg-port-card border border-port-border rounded-lg p-3">
-                            <pre className="text-xs text-gray-400 font-mono whitespace-pre-wrap">
+                            <pre className="text-xs text-gray-400 font-mono whitespace-pre-wrap break-all">
                               {JSON.stringify(
                                 Object.fromEntries(
                                   Object.entries(entry.details).filter(([k]) => !['command', 'output', 'runtime', 'exitCode'].includes(k))

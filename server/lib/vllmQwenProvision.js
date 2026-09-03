@@ -37,7 +37,7 @@
 import { randomBytes } from 'crypto';
 
 import { vllmExtraArgs } from './qwenAgentParsers.js';
-import { escapeRegExp } from './textUtils.js';
+import { parseEnvContents, upsertEnvLine } from './portosEnv.js';
 
 /** Bytes of entropy in a generated key — matches the doc's `openssl rand -hex 24`. */
 const API_KEY_BYTES = 24;
@@ -97,44 +97,10 @@ export function vllmEnvDefaults({ apiKey, wsl2 = false }) {
 }
 
 /**
- * Which keys a `.env` already mentions.
- *
- * Deliberately keyed on *mention*, not on truthiness: a commented-out key is
- * treated as absent (it is not in effect), while a key set to the empty string
- * is treated as present, because an operator who wrote `EXTRA_ARGS=` meant it.
- * Collapsing those two into one state is the footgun this module exists to
- * avoid — its whole contract is that it never overrules a decision already in
- * the file.
- *
- * @param {string} contents
- * @returns {Map<string, string>} key → value, with surrounding quotes stripped
- */
-export function parseEnvContents(contents) {
-  const found = new Map();
-  for (const line of String(contents || '').split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const idx = trimmed.indexOf('=');
-    if (idx <= 0) continue;
-    const key = trimmed.slice(0, idx).trim();
-    let value = trimmed.slice(idx + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    // First mention wins, matching how a shell sourcing the file top-to-bottom
-    // would NOT — but compose reads the last one. Either way the value is the
-    // operator's, and this module only needs to know it must not add the key.
-    if (!found.has(key)) found.set(key, value);
-  }
-  return found;
-}
-
-/**
  * Add lines to the end of a `.env`, or return it unchanged when there are none.
  *
  * The separator is the whole point: a file not ending in a newline would splice
  * the first new key onto the operator's last line and silently corrupt both.
- * Shared by the two writers below so that guard is written once.
  *
  * @param {string} base
  * @param {string[]} lines
@@ -147,32 +113,10 @@ function appendEnvLines(base, lines) {
   return `${text}${separator}${lines.join('\n')}\n`;
 }
 
-/**
- * Set ONE key, replacing the line that already declares it.
- *
- * The complement of `mergeEnvFileContents`: that one is additive by contract and
- * never overrules the operator, which is exactly wrong for a value PortOS owns
- * and re-derives (`vllmQwenProject.js`'s recorded project directory). Everything
- * else in the file is left byte for byte.
- *
- * The replacement is a FUNCTION, not a string. A value carrying one of
- * String.replace's special $-patterns would otherwise be expanded into the
- * surrounding text instead of written literally — `scripts/lib/envFile.js`
- * learned that on a password, and this is the same fix kept next to the parser
- * it belongs with.
- *
- * @param {string} contents
- * @param {string} key
- * @param {string} value
- * @returns {string}
- */
-export function upsertEnvLine(contents, key, value) {
-  const text = String(contents || '');
-  const pattern = new RegExp(`^${escapeRegExp(key)}=.*$`, 'm');
-  return pattern.test(text)
-    ? text.replace(pattern, () => `${key}=${value}`)
-    : appendEnvLines(text, [`${key}=${value}`]);
-}
+// Re-export parse helpers from the canonical server-side .env helper so
+// existing deep imports (`…/vllmQwenProvision.js`) keep working after the
+// collapse onto `portosEnv.js`. New code should import from `portosEnv.js`.
+export { parseEnvContents, upsertEnvLine } from './portosEnv.js';
 
 /**
  * Append the missing defaults to an existing `.env`, changing nothing else.

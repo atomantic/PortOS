@@ -6,6 +6,7 @@
  */
 
 import { isRunning } from './cos.js';
+import { getBootCommit, getInstallState } from './installState.js';
 import { fileInvestigationTask, __resetInvestigationCircuit } from './investigationTaskProducer.js';
 import { investigationFingerprint } from '../lib/investigationTasks.js';
 import { errorEvents } from '../lib/errorHandler.js';
@@ -532,8 +533,17 @@ async function createAIProviderInvestigationTask(error) {
   // Structured diagnostics ride on the task record so downstream telemetry can
   // break auto-fix outcomes out by tier / category / failure reason (#2328).
   const diagnostics = providerFixDiagnostics(error);
+  // A server that booted BEFORE the current checkout can keep reproducing a
+  // failure that is already fixed on disk — exactly what happened when a
+  // local-LLM playground timeout was filed a second time hours after its fix
+  // landed (#5771), costing a whole investigation agent to rediscover. Surface
+  // the boot-vs-HEAD gap in the task body so the agent checks that first.
+  // Skipped entirely when no boot commit was captured (tarball install, tests,
+  // any process that never called captureBootCommit): without it the comparison
+  // is meaningless, and skipping keeps this off the git/fs path in those cases.
+  const installState = getBootCommit() ? await getInstallState().catch(() => null) : null;
   // Build specialized context for AI provider errors
-  const context = buildAIProviderErrorContext(error, diagnostics);
+  const context = buildAIProviderErrorContext(error, diagnostics, installState);
 
   const taskData = {
     // Mirror the `|| 'Unknown'` fallbacks buildAIProviderErrorContext already
@@ -627,8 +637,12 @@ function shouldAutoFix(error) {
 
 /**
  * Build detailed context for AI provider execution errors
+ *
+ * @param {object} [installState] result of `getInstallState()`, when available —
+ *   only `runningStaleCode` / `bootCommit` / `currentCommit` are read, to warn
+ *   that the failing process predates the checkout being investigated.
  */
-function buildAIProviderErrorContext(error, diagnostics) {
+function buildAIProviderErrorContext(error, diagnostics, installState = null) {
   const ctx = error.context || {};
   const lines = [
     '# AI Provider Execution Failure',
@@ -643,6 +657,20 @@ function buildAIProviderErrorContext(error, diagnostics) {
     `- **Workspace:** ${ctx.workspaceName || ctx.workspacePath || 'N/A'}`,
     ''
   ];
+
+  // The running process is behind the on-disk checkout, so the failure may have
+  // been fixed since it booted. Named first (right under Run Details) because it
+  // changes what the whole investigation should do: read the diff before
+  // debugging, and restart rather than write code if the fix is already there.
+  if (installState?.runningStaleCode) {
+    const boot = (installState.bootCommit || '').slice(0, 7) || 'unknown';
+    const head = (installState.currentCommit || '').slice(0, 7) || 'unknown';
+    lines.push('## Deployed Build: STALE');
+    lines.push(`- **Booted at commit:** ${boot}`);
+    lines.push(`- **Checkout HEAD:** ${head}`);
+    lines.push(`- The running server started before the current checkout, so it does NOT include every fix on disk. Check \`git log ${boot}..${head}\` for a fix covering this failure before debugging it — if one exists, the remedy is a restart (\`npm run pm2:restart\`), not a code change.`);
+    lines.push('');
+  }
 
   // Fallback-tier diagnostics (issue #2328) — tells the investigating agent
   // which class of fix to try first before escalating to open-ended debugging.
@@ -693,12 +721,20 @@ function buildAIProviderErrorContext(error, diagnostics) {
   }
 
   lines.push('## Investigation Steps');
-  lines.push('1. Check if the AI provider is configured correctly in /devtools/providers');
-  lines.push('2. Verify API keys and endpoints are valid');
-  lines.push('3. Check server logs for additional context (pm2 logs portos-server)');
-  lines.push('4. If this is a CLI provider, verify the command is installed and accessible');
-  lines.push('5. Check for rate limiting or quota issues with the provider');
-  lines.push('6. Review the output tail for specific error messages');
+  const steps = [
+    'Check if the AI provider is configured correctly in /devtools/providers',
+    'Verify API keys and endpoints are valid',
+    'Check server logs for additional context (pm2 logs portos-server)',
+    'If this is a CLI provider, verify the command is installed and accessible',
+    'Check for rate limiting or quota issues with the provider',
+    'Review the output tail for specific error messages',
+  ];
+  // Numbered here rather than hardcoded so the stale-build step can lead the
+  // list without renumbering the rest by hand.
+  if (installState?.runningStaleCode) {
+    steps.unshift('Rule out the stale deployed build above — a fix already in the checkout only needs a restart');
+  }
+  steps.forEach((step, index) => lines.push(`${index + 1}. ${step}`));
 
   return lines.join('\n');
 }

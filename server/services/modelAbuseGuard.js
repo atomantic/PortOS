@@ -2,12 +2,15 @@
  * Local model-abuse screening service.
  *
  * This service is intentionally separate from the local chat completion path.
- * It runs deterministic checks and then a pinned Prompt Guard classifier in a
- * dedicated offline Python environment. The classifier receives no tools,
- * agent prompt, repository checkout, credentials, or network access.
+ * It runs deterministic hidden-content and model-abuse checks first, then —
+ * only when the operator installed it on Models → LLMs → Abuse Guard — the
+ * pinned Prompt Guard classifier in a dedicated offline Python environment. The
+ * classifier receives no tools, agent prompt, repository checkout,
+ * credentials, or network access.
  */
 
-import { chmod, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { chmod } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFile, spawn } from '../lib/childProcess.js';
@@ -33,6 +36,7 @@ import {
   detectDeterministicModelAbuseSignals,
   hasToolFreeTextCapability,
   modelAbuseGuardStageReadiness,
+  normalizeEligibilityFacts,
   normalizeModelAbuseGuardResult,
 } from '../lib/modelAbuseGuard.js';
 import { findCachedRepoFiles } from '../lib/hfCache.js';
@@ -57,6 +61,7 @@ const FALLBACK_GUARD_PYTHON = IS_WIN
   : join(homedir(), '.portos', 'venv-prompt-guard', 'bin', 'python3');
 const HELPER_SCRIPT = join(PATHS.root, 'scripts', 'run_prompt_guard.py');
 const RUNTIME_PROBE_TIMEOUT_MS = 30_000;
+const STDERR_TAIL_CHARS = 2_000;
 const MAX_SCAN_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_INSTALL_EVENT_CHARS = 300;
 const MAX_PUBLIC_REVIEW_SNAPSHOT_CHARS = MODEL_ABUSE_GUARD_MAX_INPUT_CHARS * 3;
@@ -70,6 +75,8 @@ let installInFlight = null;
 let installKill = null;
 
 const failure = (code, extra = {}) => ({ ok: false, passed: false, safe: false, code, ...extra });
+// What a report names as its guard model when only the deterministic layer ran.
+export const DETERMINISTIC_ONLY_GUARD_MODEL = 'Deterministic hidden-content checks (classifier not installed)';
 const publicReviewModelFailure = (code) => ({ ok: false, code });
 
 const isSha = (value) => typeof value === 'string' && /^[a-f0-9]{40}$/i.test(value);
@@ -78,29 +85,7 @@ const publicReviewInputPath = (scanKey) => isScanKey(scanKey)
   ? join(PUBLIC_REVIEW_INPUT_DIR, `${scanKey}.json`)
   : null;
 
-const normalizeIssueNumbers = (value) => Array.isArray(value)
-  ? [...new Set(value.filter((number) => Number.isInteger(number) && number > 0 && number <= 1_000_000))]
-    .sort((a, b) => a - b)
-    .slice(0, 50)
-  : [];
-
-const emptyEligibilityFacts = () => ({
-  linkedIssueNumbers: [],
-  openLinkedIssueNumbers: [],
-  openerAssignedIssueNumbers: [],
-  // Unknown is deliberately false. A missing facts object is not approval.
-  issueLookupComplete: false,
-});
-
-export function normalizeEligibilityFacts(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return emptyEligibilityFacts();
-  return {
-    linkedIssueNumbers: normalizeIssueNumbers(value.linkedIssueNumbers),
-    openLinkedIssueNumbers: normalizeIssueNumbers(value.openLinkedIssueNumbers),
-    openerAssignedIssueNumbers: normalizeIssueNumbers(value.openerAssignedIssueNumbers),
-    issueLookupComplete: value.issueLookupComplete === true,
-  };
-}
+export { normalizeEligibilityFacts };
 
 export function normalizePublicReviewInput(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
@@ -270,7 +255,11 @@ export async function materializePublicReviewPatches({ scanKey, workspacePath, a
     const filename = `PR-${pullRequest.number}.patch`;
     const relativePath = `${PUBLIC_REVIEW_PATCH_DIRNAME}/${filename}`;
     const destination = join(patchDir, filename);
-    await atomicWrite(destination, pullRequest.diff);
+    // The gh wrapper trims stdout, which drops the diff's final newline; git
+    // apply then rejects the file as "corrupt patch at line N". Restore it so
+    // the reviewer can apply the patch verbatim (the fingerprint is computed
+    // on the trimmed text upstream and is unaffected).
+    await atomicWrite(destination, pullRequest.diff.endsWith('\n') ? pullRequest.diff : `${pullRequest.diff}\n`);
     const restricted = await chmod(destination, 0o444).then(() => true).catch(() => false);
     if (!restricted) return false;
     patches.push({
@@ -334,10 +323,18 @@ function probeScript() {
   return `${imports}; print('{"ready":true}')`;
 }
 
-async function isRuntimeReady(pythonPath) {
+// A benign sentence the helper must classify end to end before the guard
+// reports ready. Importing the packages proves the venv, not the classifier:
+// a helper that loads the model and then dies on the first window (the
+// unbatched-tensor bug that failed every Stage 1 scan on transformers 4.57)
+// passed the import probe and only surfaced as a bare
+// `security-guard-process-failed` at scan time.
+const RUNTIME_CANARY_TEXT = 'The quick brown fox jumps over the lazy dog.';
+
+async function isRuntimeReady(pythonPath, modelDir = null) {
   if (!pythonPath) return false;
-  if (cachedRuntime?.pythonPath === pythonPath && cachedRuntime.ready === true) return true;
-  const ready = await execFileAsync(
+  if (cachedRuntime?.pythonPath === pythonPath && cachedRuntime.modelDir === modelDir && cachedRuntime.ready === true) return true;
+  const importsReady = await execFileAsync(
     pythonPath,
     ['-c', probeScript()],
     safeChildProcessOptions({
@@ -347,8 +344,17 @@ async function isRuntimeReady(pythonPath) {
     }),
   ).then(({ stdout }) => stdout.trim().split(/\r?\n/).pop() === '{"ready":true}')
     .catch(() => false);
-  if (ready) cachedRuntime = { pythonPath, ready: true };
+  const ready = importsReady && (!modelDir || await canaryPasses(pythonPath, modelDir));
+  if (ready) cachedRuntime = { pythonPath, modelDir, ready: true };
   return ready;
+}
+
+async function canaryPasses(pythonPath, modelDir) {
+  const result = await runClassifier({ pythonPath, modelDir, content: RUNTIME_CANARY_TEXT, timeoutMs: RUNTIME_PROBE_TIMEOUT_MS })
+    .catch(() => ({ ok: false }));
+  if (!result.ok) return false;
+  const verdict = normalizeModelAbuseGuardResult(result.parsed, { minBenignScore: MODEL_ABUSE_GUARD_MIN_BENIGN_SCORE });
+  return verdict.ok === true && verdict.safe === true;
 }
 
 /**
@@ -366,7 +372,7 @@ export async function getModelAbuseGuardStatus() {
   const modelCached = Array.isArray(files);
   const venvReady = Boolean(pythonPath);
   const pythonAvailable = Boolean(detectVenvBasePythonSync());
-  const runtimeReady = await isRuntimeReady(pythonPath);
+  const runtimeReady = await isRuntimeReady(pythonPath, modelCached && files[0] ? dirname(files[0]) : null);
   const { stages, ready } = modelAbuseGuardStageReadiness({
     huggingfaceTokenPresent,
     pythonAvailable,
@@ -455,6 +461,7 @@ export function cancelModelAbuseGuardInstall() {
 function runClassifier({ pythonPath, modelDir, content, timeoutMs }) {
   return new Promise((resolve) => {
     let stdout = '';
+    let stderr = '';
     let stderrSize = 0;
     let settled = false;
     let timer = null;
@@ -483,6 +490,9 @@ function runClassifier({ pythonPath, modelDir, content, timeoutMs }) {
     proc.stdout.on('data', appendStdout);
     proc.stderr.on('data', (chunk) => {
       stderrSize += chunk.length;
+      // Keep only a bounded tail: the helper never echoes its input, and the
+      // last line is the `Prompt Guard failed: <reason>` the operator needs.
+      stderr = (stderr + chunk.toString()).slice(-STDERR_TAIL_CHARS);
       if (stderrSize > MODEL_ABUSE_GUARD_MAX_OUTPUT_CHARS) {
         proc.kill('SIGTERM');
         finish({ ok: false, code: 'security-guard-output-too-large' });
@@ -493,6 +503,8 @@ function runClassifier({ pythonPath, modelDir, content, timeoutMs }) {
     proc.on('close', (code) => {
       if (settled) return;
       if (code !== 0) {
+        const reason = stderr.trim().split('\n').filter(Boolean).pop() || 'no stderr';
+        console.error(`❌ Prompt Guard helper exited with code ${code}: ${reason.slice(0, 300)}`);
         finish({ ok: false, code: 'security-guard-process-failed' });
         return;
       }
@@ -509,6 +521,24 @@ function runClassifier({ pythonPath, modelDir, content, timeoutMs }) {
 }
 
 /**
+ * A validated verdict from the deterministic layer alone — either it blocked
+ * (so the classifier was never asked) or the classifier is not installed.
+ */
+const deterministicVerdict = (findings, classifier) => ({
+  ok: true,
+  passed: findings.length === 0,
+  safe: findings.length === 0,
+  code: findings.length ? 'security-guard-deterministic-findings' : 'security-guard-passed',
+  guardId: MODEL_ABUSE_GUARD_ID,
+  model: DETERMINISTIC_ONLY_GUARD_MODEL,
+  revision: null,
+  findings,
+  chunkCount: null,
+  minBenignScore: null,
+  layers: { deterministic: findings.length ? 'blocked' : 'passed', classifier, verdict: 'validated' },
+});
+
+/**
  * Screen one untrusted external-content item. The return value is safe to
  * persist in a report or pass as metadata: it contains no source text and no
  * raw subprocess/model response.
@@ -519,27 +549,16 @@ export async function runModelAbuseScan({ content, timeoutMs = MODEL_ABUSE_GUARD
 
   const deterministicFindings = detectDeterministicModelAbuseSignals(content);
   if (deterministicFindings.length > 0) {
-    return {
-      ok: true,
-      passed: false,
-      safe: false,
-      code: 'security-guard-deterministic-findings',
-      guardId: MODEL_ABUSE_GUARD_ID,
-      model: MODEL_ABUSE_GUARD.name,
-      revision: MODEL_ABUSE_GUARD.revision,
-      findings: deterministicFindings,
-      chunkCount: null,
-      minBenignScore: null,
-      layers: { deterministic: 'blocked', classifier: 'not-run', verdict: 'validated' },
-    };
+    return deterministicVerdict(deterministicFindings, 'not-run');
   }
 
+  // The classifier is an OPTIONAL second layer, managed on Models → LLMs →
+  // Abuse Guard. The deterministic checks above are the boundary Stage 1
+  // exists for (content hidden from a human reader, obvious model-directed
+  // harm); an install that never provisioned the gated Prompt Guard weights
+  // still gets that boundary instead of a scan that can never complete.
   const status = await getModelAbuseGuardStatus();
-  if (!status.ready) return failure('security-guard-not-ready', {
-    guardId: MODEL_ABUSE_GUARD_ID,
-    model: MODEL_ABUSE_GUARD.name,
-    revision: MODEL_ABUSE_GUARD.revision,
-  });
+  if (!status.ready) return deterministicVerdict([], 'not-installed');
   const modelFiles = await findCachedRepoFiles(
     MODEL_ABUSE_GUARD.repository,
     MODEL_ABUSE_GUARD_REQUIRED_FILES,

@@ -411,7 +411,7 @@ export default function ListEnrichment({
                 className="w-full px-4 py-3 bg-port-bg border border-port-border rounded-lg text-white font-mono text-sm resize-y focus:outline-hidden focus:border-port-accent"
               />
             ) : (
-              <pre className="p-4 bg-port-bg rounded-lg text-sm text-gray-300 whitespace-pre-wrap overflow-auto max-h-96">
+              <pre className="p-4 bg-port-bg rounded-lg text-sm text-gray-300 whitespace-pre-wrap break-words overflow-auto max-h-96">
                 {documentContent}
               </pre>
             )}

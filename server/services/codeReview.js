@@ -1,5 +1,5 @@
 /**
- * Local-LLM code review backend for the Review Loop's `lmstudio` / `ollama`
+ * Local-LLM code review backend for the Review Loop's `lmstudio` / `ollama` / `mtplx`
  * reviewer kinds. The follow-up agent (a CLI like Claude / Antigravity / Codex)
  * POSTs the PR diff to `/api/code-review/local`; we feed it through the
  * configured backend's OpenAI-compatible `/v1/chat/completions` endpoint with
@@ -32,6 +32,7 @@ import {
   normalizeReviewerMaxRounds,
   resolveReviewerMaxRounds,
   reviewerEffortsFromDefaults,
+  codeReviewDefaultsFromProvider,
   resolveReviewerPins,
   normalizeReviewerEffort,
   prioritizeToolFreeReviewers,
@@ -39,17 +40,31 @@ import {
   MODEL_SELECTABLE_REVIEWERS,
 } from '../lib/validation.js'
 import { getSettings, settingsEvents } from './settings.js'
+import { getActiveProvider } from './providers.js'
 import { getBaseUrl as getLmStudioBaseUrl } from './lmStudioManager.js'
-import { getBaseUrl as getOllamaBaseUrl } from './ollamaManager.js'
+import {
+  getBaseUrl as getOllamaBaseUrl,
+  getModelCapabilities as getOllamaModelCapabilities,
+} from './ollamaManager.js'
 
-// Both LM Studio (`:1234`) and Ollama (`:11434`) ship OpenAI-compatible
-// `/v1/chat/completions`. Resolve through each manager's live `getBaseUrl()`
-// so a runtime `updateConfig({ baseUrl })` from the local-LLM tab takes
-// effect here too — otherwise the catalog UI and the reviewer would silently
-// desync when a user relocates their LM Studio install.
+// LM Studio (`:1234`), Ollama (`:11434`) and MTPLX (`:8000/v1`) all ship
+// OpenAI-compatible `/v1/chat/completions`. Resolve through each manager's live
+// endpoint accessor so a runtime `updateConfig({ baseUrl })` from the local-LLM
+// tab — or an MTPLX daemon relaunched on another port — takes effect here too;
+// otherwise the catalog UI and the reviewer would silently desync when a user
+// relocates their install.
+//
+// Every entry is awaited at the call site, which lets MTPLX's stay a DYNAMIC
+// import. That is deliberate: `mtplxServerManager.js` pulls in the managed-daemon
+// watcher and its PM2/filesystem graph, and this module is imported by the agent
+// spawn path — a static import would put that whole graph behind every one of its
+// importers (and did break suites that partially mock `lib/fileUtils.js`). The
+// review request is a one-off HTTP call, so paying the resolve lazily costs
+// nothing.
 const BACKEND_BASE_URLS = {
   lmstudio: () => getLmStudioBaseUrl(),
   ollama: () => getOllamaBaseUrl(),
+  mtplx: async () => (await import('./mtplxServerManager.js')).getMtplxServerEndpoint(),
 }
 
 export function isLocalLlmReviewer(backend) {
@@ -57,21 +72,50 @@ export function isLocalLlmReviewer(backend) {
 }
 
 /**
- * Resolve the global Code Review Defaults from `settings.codeReview`, falling
- * back to the hardcoded `['copilot']` / `all` / `false` defaults when the user
- * hasn't configured them yet. Filters out invalid enum values so a hand-edited
- * settings.json can't smuggle in bogus reviewer names. Returns a value-only
- * shape (no I/O) so the spawner and `GET /api/code-review/defaults` can share.
+ * The reviewer chain the user actually configured, with aliases mapped and
+ * unknown enum values dropped — empty when they have configured none.
+ *
+ * Its own function because "did the user choose a chain?" is asked twice and the
+ * two answers must agree exactly: `pickCodeReviewDefaults` uses it to decide
+ * whether to derive defaults from the active AI provider, and
+ * `getCodeReviewDefaults` uses it to decide whether it may memoize the result.
+ * A settings.json holding only junk (`reviewers: ['bogus']`) has configured
+ * nothing, and both callers have to see that the same way.
  */
-export function pickCodeReviewDefaults(settings) {
+function configuredReviewers(settings) {
+  const raw = settings && typeof settings === 'object' ? settings.codeReview : null
+  if (!Array.isArray(raw?.reviewers)) return []
+  return Array.from(new Set(raw.reviewers.map((r) => REVIEWER_ALIASES[r] || r).filter((r) => REVIEWER_VALUES.includes(r))))
+}
+
+/**
+ * Resolve the global Code Review Defaults from `settings.codeReview`, falling
+ * back to the install's own defaults when the user hasn't configured them yet.
+ * Filters out invalid enum values so a hand-edited settings.json can't smuggle
+ * in bogus reviewer names. Returns a value-only shape (no I/O) so the spawner
+ * and `GET /api/code-review/defaults` can share.
+ *
+ * `activeProvider` is the install's DEFAULT AI provider (the caller's, because
+ * this function does no I/O). With no configured reviewer chain the defaults
+ * follow that provider — its reviewer slug, its default model, its reasoning
+ * effort — rather than the hardcoded `copilot`, which reviews through a GitHub
+ * subscription the install may not have and ignores the agent the user already
+ * chose. `DEFAULT_REVIEWERS` remains the last resort, for a provider that maps
+ * to no reviewer (a hosted API provider) or none being set at all.
+ *
+ * A provider-derived model/effort is only a DEFAULT: a stored `<reviewer>Model`
+ * / `<reviewer>Effort` scalar still wins, so pinning one reviewer's model does
+ * not silently un-derive the rest.
+ */
+export function pickCodeReviewDefaults(settings, { activeProvider = null } = {}) {
   const raw = settings && typeof settings === 'object' ? settings.codeReview : null
   const effortDefaults = reviewerEffortsFromDefaults(raw)
-  const reviewersIn = Array.isArray(raw?.reviewers) ? raw.reviewers : null
-  const reviewers = reviewersIn
-    ? Array.from(new Set(reviewersIn.map((r) => REVIEWER_ALIASES[r] || r).filter((r) => REVIEWER_VALUES.includes(r))))
-    : []
+  const reviewers = configuredReviewers(settings)
+  // Only consulted when the user has configured no chain of their own — a saved
+  // chain is an explicit choice and must not be re-derived from the provider.
+  const derived = reviewers.length ? null : codeReviewDefaultsFromProvider(activeProvider)
   return {
-    reviewers: reviewers.length ? reviewers : [...DEFAULT_REVIEWERS],
+    reviewers: reviewers.length ? reviewers : (derived ? [derived.reviewer] : [...DEFAULT_REVIEWERS]),
     // Arbitrary GitHub reviewer usernames appended to `--review-with` to gate the
     // merge. Normalized so a hand-edited settings.json can't smuggle in unsafe
     // tokens. Empty array = none configured (distinct from the copilot fallback
@@ -100,7 +144,8 @@ export function pickCodeReviewDefaults(settings) {
     ...Object.fromEntries(
       MODEL_SELECTABLE_REVIEWERS.map((reviewer) => {
         const stored = raw?.[`${reviewer}Model`]
-        return [`${reviewer}Model`, typeof stored === 'string' && stored ? stored : null]
+        if (typeof stored === 'string' && stored) return [`${reviewer}Model`, stored]
+        return [`${reviewer}Model`, derived?.reviewer === reviewer ? derived.model : null]
       })
     ),
     // Per-reviewer reasoning-effort defaults. Unlike the model scalars above these
@@ -114,7 +159,10 @@ export function pickCodeReviewDefaults(settings) {
     // (an open-coded check missed the normalizer's case-folding, so a settings.json
     // holding `"High"` resolved one way here and another there).
     ...Object.fromEntries(
-      EFFORT_SELECTABLE_REVIEWERS.map((reviewer) => [`${reviewer}Effort`, effortDefaults[reviewer] ?? null])
+      EFFORT_SELECTABLE_REVIEWERS.map((reviewer) => [
+        `${reviewer}Effort`,
+        effortDefaults[reviewer] ?? (derived?.reviewer === reviewer ? derived.effort : null),
+      ])
     ),
   }
 }
@@ -129,16 +177,29 @@ export function pickCodeReviewDefaults(settings) {
  * cache invalidates on any `settings:updated` event so the panel's save
  * takes effect immediately without a restart.
  */
+let cachedSettings = null
 let cachedDefaults = null
-settingsEvents.on('settings:updated', () => { cachedDefaults = null })
+settingsEvents.on('settings:updated', () => { cachedSettings = null; cachedDefaults = null })
 
 /** Test-only: reset the memoized defaults cache to its uninitialized sentinel. */
-export function __resetCodeReviewDefaultsCache() { cachedDefaults = null }
+export function __resetCodeReviewDefaultsCache() { cachedSettings = null; cachedDefaults = null }
 
 export async function getCodeReviewDefaults() {
   if (cachedDefaults) return cachedDefaults
-  cachedDefaults = pickCodeReviewDefaults(await getSettings())
-  return cachedDefaults
+  if (!cachedSettings) cachedSettings = await getSettings()
+  const configured = configuredReviewers(cachedSettings).length > 0
+  // `getActiveProvider` needs an initialized AI toolkit, which an early-boot
+  // caller (or a unit-test process) may not have — a failed read just means no
+  // provider-derived default, never a failed resolve. It reads the toolkit's own
+  // in-memory provider cache, so an unconfigured install pays no disk I/O for it.
+  const activeProvider = configured ? null : await getActiveProvider().catch(() => null)
+  const defaults = pickCodeReviewDefaults(cachedSettings, { activeProvider })
+  // Only a settings-derived answer is memoized: `settings:updated` invalidates it
+  // completely. A provider-derived one has no such event — the active provider
+  // lives in its own store — so it is re-resolved per call rather than pinned to
+  // whichever vendor happened to be active when the cache was first filled.
+  if (configured) cachedDefaults = defaults
+  return defaults
 }
 
 /**
@@ -208,7 +269,7 @@ export async function resolveReviewLoopOptions(metadata, { normalize }) {
  * Per-reviewer CLI-binary install probe, keyed by reviewer slug (e.g.
  * `{ claude: true, antigravity: false, codex: true, grok: false, cursor: true }`). Only CLI
  * reviewers (`isCliReviewer`) are probed — `copilot` is a GitHub API review
- * and `lmstudio`/`ollama` route through `/api/code-review/local`, neither has
+ * and `lmstudio`/`ollama`/`mtplx` route through `/api/code-review/local`, neither has
  * a binary to find.
  *
  * TTL-cached (`authGate.js`'s inline Map+expiresAt pattern) rather than
@@ -264,6 +325,68 @@ function adaptiveFence(content) {
   return '`'.repeat(Math.max(3, ...(content.match(/`+/g) || ['']).map((run) => run.length + 1)))
 }
 
+// Ollama translates the OpenAI-compatible `reasoning_effort` field into its
+// own `thinking` parameter, and a model that never implements thinking 400s
+// on the whole request rather than ignoring the field. Ollama's `/api/show`
+// DOES answer that per model, so `modelRejectsThinking` resolves it BEFORE
+// the request and simply omits the field — the 400-retry further down stays
+// as the fail-safe for a backend with no such probe (LM Studio, MTPLX) or a
+// probe that could not answer. Resolving ahead matters because every reviewer
+// invocation from a claim/PR run is its own short-lived `node` process: a
+// purely reactive downgrade re-uploads the entire diff on every single call,
+// since the in-process cache below never survives to the next one.
+//
+// This map remembers which `backend:model` pairs are known thinking-less —
+// for the life of the process — so a multi-round review loop inside ONE
+// process pays neither the probe nor the retry twice.
+const thinkingUnsupportedModels = new Map()
+const thinkingCacheKey = (backend, model) => `${backend}:${model}`
+export function __resetThinkingUnsupportedCache() { thinkingUnsupportedModels.clear() }
+
+/**
+ * Does this `backend:model` reject `reasoning_effort`?
+ *
+ * `true` only when we KNOW it does — a cached prior downgrade, or an
+ * authoritative capability list that omits `thinking`. Ollama reports `null`
+ * when the per-model probe failed and `[]` when the daemon answered without
+ * reporting any capabilities; both mean *unknown*, not *unsupported*, so they
+ * fall through to the request (and its 400-retry) rather than silently
+ * dropping a level the model does in fact accept.
+ */
+async function modelRejectsThinking(backend, model) {
+  const cacheKey = thinkingCacheKey(backend, model)
+  if (thinkingUnsupportedModels.get(cacheKey) === true) return true
+  if (backend !== 'ollama') return false
+  const capabilities = await getOllamaModelCapabilities(model).catch(() => null)
+  if (!Array.isArray(capabilities) || capabilities.length === 0) return false
+  if (capabilities.includes('thinking')) return false
+  thinkingUnsupportedModels.set(cacheKey, true)
+  return true
+}
+
+async function sendChatCompletion(baseUrl, { model, messages, timeoutMs }, effortForRequest) {
+  const body = {
+    model,
+    messages,
+    temperature: 0.2,
+    stream: false,
+    ...(effortForRequest ? { reasoning_effort: effortForRequest } : {}),
+  }
+  const response = await fetchWithTimeout(`${baseUrl}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }, timeoutMs).catch((err) => ({ ok: false, _fetchError: err.message }))
+  if (response._fetchError !== undefined) {
+    return { ok: false, error: `request failed: ${response._fetchError}` }
+  }
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    return { ok: false, status: response.status, text }
+  }
+  return { ok: true, response }
+}
+
 async function runToolFreeLocalCompletion({ backend, model, messages, effort, timeoutMs, baseUrl: requestedBaseUrl = null }) {
   if (!isLocalLlmReviewer(backend)) {
     return { ok: false, error: `Unsupported reviewer backend: ${backend}` }
@@ -272,35 +395,35 @@ async function runToolFreeLocalCompletion({ backend, model, messages, effort, ti
     return { ok: false, error: `No model configured for ${backend} reviewer — set one on the Settings → Code Reviewers page.` }
   }
 
-  const resolvedEffort = normalizeReviewerEffort(effort, backend) || null
+  // Probe only when there is actually a level to drop — an unpinned effort
+  // sends no field either way, so a capability round-trip would buy nothing.
+  const requestedEffort = normalizeReviewerEffort(effort, backend) || null
+  let effortUnsupported = requestedEffort ? await modelRejectsThinking(backend, model) : false
+  let resolvedEffort = effortUnsupported ? null : requestedEffort
+
   // Local runtime records are normalized to the OpenAI `/v1` root, while the
   // legacy backend managers return the host root. Keep both forms compatible
   // with the one endpoint suffix below.
-  const baseUrl = String(requestedBaseUrl || BACKEND_BASE_URLS[backend]())
+  const baseUrl = String(requestedBaseUrl || await BACKEND_BASE_URLS[backend]())
     .replace(/\/+$/, '')
     .replace(/\/v\d+$/i, '')
-  const body = {
-    model,
-    messages,
-    temperature: 0.2,
-    stream: false,
-    ...(resolvedEffort ? { reasoning_effort: resolvedEffort } : {}),
-  }
-  const response = await fetchWithTimeout(`${baseUrl}/v1/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  }, timeoutMs).catch((err) => ({ ok: false, _fetchError: err.message }))
 
-  if (response._fetchError !== undefined) {
-    return { ok: false, backend, model, error: `${backend} request failed: ${response._fetchError}` }
-  }
-  if (!response.ok) {
-    const text = await response.text().catch(() => '')
-    return { ok: false, backend, model, error: `${backend} API error ${response.status}: ${text.slice(0, 300)}` }
+  let attempt = await sendChatCompletion(baseUrl, { model, messages, timeoutMs }, resolvedEffort)
+
+  if (!attempt.ok && attempt.status === 400 && resolvedEffort && /does not support thinking/i.test(attempt.text || '')) {
+    console.warn(`⚠️ ${backend} model ${model} ignores reasoning_effort — retried without it`)
+    thinkingUnsupportedModels.set(thinkingCacheKey(backend, model), true)
+    resolvedEffort = null
+    effortUnsupported = true
+    attempt = await sendChatCompletion(baseUrl, { model, messages, timeoutMs }, null)
   }
 
-  const data = await readResponseJson(response, { fallback: (raw) => ({ _nonJson: raw }) })
+  if (!attempt.ok) {
+    if (attempt.error) return { ok: false, backend, model, error: `${backend} ${attempt.error}` }
+    return { ok: false, backend, model, error: `${backend} API error ${attempt.status}: ${(attempt.text || '').slice(0, 300)}` }
+  }
+
+  const data = await readResponseJson(attempt.response, { fallback: (raw) => ({ _nonJson: raw }) })
   if (data?._nonJson !== undefined) {
     return { ok: false, backend, model, error: `${backend} returned a non-JSON response: ${data._nonJson.slice(0, 300)}` }
   }
@@ -308,7 +431,14 @@ async function runToolFreeLocalCompletion({ backend, model, messages, effort, ti
   if (!content || typeof content !== 'string') {
     return { ok: false, backend, model, error: `${backend} returned no content.` }
   }
-  return { ok: true, backend, model, effort: resolvedEffort, content: content.trim() }
+  return {
+    ok: true,
+    backend,
+    model,
+    effort: resolvedEffort,
+    ...(effortUnsupported ? { effortUnsupported: true } : {}),
+    content: content.trim(),
+  }
 }
 
 /**
@@ -317,14 +447,18 @@ async function runToolFreeLocalCompletion({ backend, model, messages, effort, ti
  * for surfacing the text findings to the agent driving the review loop.
  *
  * @param {Object} opts
- * @param {'lmstudio'|'ollama'} opts.backend
+ * @param {'lmstudio'|'ollama'|'mtplx'} opts.backend
  * @param {string} opts.model - Installed model id (e.g. `qwen2.5-coder:7b`).
  * @param {string} opts.diff - Unified diff text to review.
  * @param {string} [opts.effort] - Reasoning effort (`low`/`medium`/`high`), sent
  *   as the OpenAI-compatible `reasoning_effort` field. Omitted from the body
- *   entirely when unset or not a level this backend accepts — a non-reasoning
- *   model would otherwise get a field it has no answer for, and `absent` is the
- *   only spelling of "use the model's own default".
+ *   entirely when unset, when it is not a level this backend accepts, or when
+ *   THIS MODEL does not support thinking — the decision is per model, not per
+ *   backend, because one ollama daemon serves both kinds. A non-reasoning model
+ *   would otherwise get a field it has no answer for (ollama 400s the whole
+ *   request), and `absent` is the only spelling of "use the model's own
+ *   default". The response carries `effortUnsupported: true` when a pinned
+ *   level was dropped for that reason.
  * @param {number} [opts.timeoutMs=120000] - 2 min default — LM Studio cold-
  *   load of a large coder model regularly exceeds 30s but rarely 2 min.
  * @param {string} [opts.baseUrl] - Validated local OpenAI-compatible base URL;
@@ -362,7 +496,14 @@ export async function runLocalCodeReview({ backend, model, diff, effort = null, 
     ],
   })
   if (!result.ok) return result
-  return { ok: true, backend, model, effort: result.effort, findings: result.content }
+  return {
+    ok: true,
+    backend,
+    model,
+    effort: result.effort,
+    ...(result.effortUnsupported ? { effortUnsupported: true } : {}),
+    findings: result.content,
+  }
 }
 
 /**
@@ -437,6 +578,7 @@ export async function runLocalClaimCommentReview({ backend, model, comments, cur
     backend,
     model,
     effort: result.effort,
+    ...(result.effortUnsupported ? { effortUnsupported: true } : {}),
     claimant,
     suspicious: parsed.suspicious,
     reviewedCommentCount: normalizedComments.length,

@@ -860,14 +860,22 @@ describe('Provider Status Service', () => {
   });
 
   describe('init', () => {
+    // Fake time, not a real sleep: the recovery window under test is 1000ms and
+    // a real 1100ms sleep left only 100ms of slack on a loaded runner. Same
+    // pattern as the `stale recovery on read` describe below.
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
     it('should clean up expired statuses on init', async () => {
       // Mark provider unavailable with very short wait time
       await statusService.markUsageLimit('test-provider', {
         message: 'Test'
       });
 
-      // Wait for recovery time to pass
-      await new Promise(resolve => setTimeout(resolve, 1100));
+      // Advance past the 1000ms defaultUsageLimitWait recovery window. 1100 (not
+      // 1001) keeps the intent — "past the window" — legible; with fake time the
+      // extra 100ms is free.
+      await vi.advanceTimersByTimeAsync(1100);
 
       // Create new service and init (should clean up expired status)
       const newService = createProviderStatusService({
@@ -876,7 +884,16 @@ describe('Provider Status Service', () => {
         defaultUsageLimitWait: 1000
       });
 
-      await newService.init();
+      const loaded = await newService.init();
+
+      // init() itself must reset the expired entry in the cache it returns.
+      // Asserting only isAvailable() would pass even with the init cleanup
+      // deleted, because every reader re-applies the same recovery check on
+      // read (see server/lib/aiToolkit/AGENTS.md).
+      expect(loaded.providers['test-provider']).toMatchObject({
+        available: true,
+        reason: 'ok'
+      });
 
       // Provider should now be available
       expect(newService.isAvailable('test-provider')).toBe(true);

@@ -425,14 +425,43 @@ export async function spawnDirectly({
     env: childEnv
   });
 
-  // spawn() can hand back a handle with no pid or stdio when command lookup
-  // fails. Listen immediately so that failure cannot become an unhandled error
-  // while the async setup below is still yielding.
+  // Every child listener is registered HERE, in the same tick as spawn(), into
+  // forwarding shims that buffer until the real handler bodies exist further
+  // down (#5791). Those bodies close over state built by the async setup that
+  // follows — and that setup yields for real state-file I/O (`await
+  // updateAgent(..., { pid })`), not just a microtask. A CLI that starts and
+  // exits immediately (bad flag, instant auth refusal) emits its entire life
+  // cycle inside that window: without the shims its stdout/stderr is lost and
+  // its `close` lands on nothing, leaving the run record, the execution lane
+  // and the `activeAgents` entry non-terminal until the orphan reaper notices.
+  // Buffering rather than hoisting the handler bodies keeps the change local.
+  //
+  // spawn() can also hand back a handle with no pid or stdio when command
+  // lookup fails, hence the optional chaining on the stream registrations.
   let pendingSpawnError = null;
   let handleSpawnError = null;
+  // One ordered queue for both streams: buffering them separately would lose
+  // the relative order of interleaved stdout/stderr chunks in the transcript.
+  const pendingChildOutput = [];
+  let pendingClose = null;
+  let handleStdout = null;
+  let handleStderr = null;
+  let handleClose = null;
   claudeProcess.on('error', (err) => {
     if (handleSpawnError) void handleSpawnError(err);
     else pendingSpawnError = err;
+  });
+  claudeProcess.stdout?.on('data', (data) => {
+    if (handleStdout) handleStdout(data);
+    else pendingChildOutput.push({ stream: 'stdout', data });
+  });
+  claudeProcess.stderr?.on('data', (data) => {
+    if (handleStderr) handleStderr(data);
+    else pendingChildOutput.push({ stream: 'stderr', data });
+  });
+  claudeProcess.on('close', (code) => {
+    if (handleClose) void handleClose(code);
+    else pendingClose = { code };
   });
   // Same reasoning for the stdin pipe: a child that exits before reading it
   // emits EPIPE, and an unlistened stream 'error' out here would crash the
@@ -579,7 +608,7 @@ export async function spawnDirectly({
     }
   }, 3000);
 
-  claudeProcess.stdout.on('data', (data) => {
+  handleStdout = (data) => {
     try {
       const text = data.toString();
       // Detect fallback signals SYNCHRONOUSLY, before enqueuing any transcript
@@ -616,9 +645,9 @@ export async function spawnDirectly({
     } catch (err) {
       console.error(`❌ agentCli stdout handler failed: ${err.message}`);
     }
-  });
+  };
 
-  claudeProcess.stderr.on('data', (data) => {
+  handleStderr = (data) => {
     try {
       const text = data.toString();
       // Synchronous fallback detection before the serialized write (see stdout).
@@ -640,7 +669,7 @@ export async function spawnDirectly({
     } catch (err) {
       console.error(`❌ agentCli stderr handler failed: ${err.message}`);
     }
-  });
+  };
 
   handleSpawnError = async (err) => {
     // Runs outside the request lifecycle — an uncaught throw from the awaited
@@ -682,9 +711,8 @@ export async function spawnDirectly({
       activeAgents.delete(agentId);
     }
   };
-  if (pendingSpawnError) void handleSpawnError(pendingSpawnError);
 
-  claudeProcess.on('close', async (code) => {
+  handleClose = async (code) => {
     // Runs outside the request lifecycle — a throw from outputBatcher.flush,
     // analyzeAgentFailure, or finalizeAgent would re-escape this async handler
     // as an unhandled rejection and crash the process. The inner try/finally
@@ -879,6 +907,23 @@ export async function spawnDirectly({
       directPrClaimVerified = prClaimWasVerified(finalized?.prVerdict);
       noChangesToShip = finalized?.prVerdict?.noChangesToShip === true;
     } finally {
+      // Advance a staged pipeline exactly as the runner/TUI path does through
+      // runAgentCompletionCleanup. This path only ever ran finalize + worktree
+      // cleanup, so a stage that spawned directly — every public-review stage,
+      // any cli-typed provider — completed without queuing its successor: the
+      // pr-reviewer Eligibility Gate recorded its decision and the pipeline
+      // simply stopped. Before the worktree goes, since a stage precondition
+      // may read it. Lazy import for the same module-cycle reason as
+      // cleanupWorktreeFn; sanctioned try/catch — this is a child 'close'
+      // handler, not a request.
+      if (task?.metadata?.pipeline) {
+        try {
+          const { handlePipelineProgression } = await import('./agentCompletionCleanup.js');
+          await handlePipelineProgression(task, agentId, cleanupSuccess);
+        } catch (err) {
+          console.error(`❌ Pipeline progression failed for ${agentId}: ${err.message}`);
+        }
+      }
       const directPrCompletion = resolvePrCompletion(task.metadata);
       const directReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
       const reviewOptions = await resolveReviewLoopOptions(task.metadata, { normalize: normalizeReviewers, isTruthyMeta: isTruthyMetaFn });
@@ -958,7 +1003,22 @@ export async function spawnDirectly({
         activeAgents.delete(agentId);
       }
     }
-  });
+  };
+
+  // Replay whatever the child emitted while the async setup above was yielding
+  // (#5791). Output first, so the transcript is complete before a buffered
+  // terminal event finalizes the run — and it is enqueued onto
+  // `transcriptWriteTail` here, before either terminal handler's
+  // `drainTranscriptWrites()` captures that tail.
+  for (const { stream, data } of pendingChildOutput) {
+    if (stream === 'stderr') handleStderr(data);
+    else handleStdout(data);
+  }
+  pendingChildOutput.length = 0;
+  // A failed spawn emits 'error' AND then 'close'; the error path already
+  // finalizes the run, so replay exactly one terminal event, never both.
+  if (pendingSpawnError) void handleSpawnError(pendingSpawnError);
+  else if (pendingClose) void handleClose(pendingClose.code);
 
   return agentId;
 }

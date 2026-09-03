@@ -13,6 +13,7 @@
 import { useEffect, useState } from 'react';
 import { CheckCircle2, Loader2, AlertCircle, Download, X } from 'lucide-react';
 import { useInstallStream } from '../../hooks/useInstallStream';
+import InstallErrorFooter from '../install/InstallErrorFooter';
 import Modal from '../ui/Modal';
 
 const STAGES = [
@@ -197,27 +198,33 @@ export default function Flux2InstallModal({ open, onClose, onComplete }) {
                 </button>
               </div>
             </>
+          ) : error ? (
+            <InstallErrorFooter
+              message="⚠️ Installer hit an error — see logs above."
+              label="FLUX.2 Runtime"
+              stage={currentStage}
+              error={error}
+              logs={logs}
+              surface="client/src/components/imageGen/Flux2InstallModal.jsx"
+              onClose={handleClose}
+            />
           ) : (
             <>
               <span className="text-xs text-gray-400">
                 {done
                   ? '✅ FLUX.2 is ready. You can close this window.'
-                  : error
-                    ? '⚠️ Installer hit an error — see logs above.'
-                    : 'Downloading torch + diffusers from PyPI/git. ~3-10 minutes on first run.'}
+                  : 'Downloading torch + diffusers from PyPI/git. ~3-10 minutes on first run.'}
               </span>
               <button
                 onClick={handleClose}
-                disabled={!done && !error && !currentStage}
+                disabled={!done && !currentStage}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                   done
                     ? 'bg-port-success text-white hover:bg-port-success/80'
-                    : error
-                      ? 'bg-port-border text-white hover:bg-port-border/70'
-                      : 'bg-port-border text-gray-300 hover:bg-port-border/70 disabled:opacity-50'
+                    : 'bg-port-border text-gray-300 hover:bg-port-border/70 disabled:opacity-50'
                 }`}
               >
-                {done ? 'Done' : error ? 'Close' : 'Cancel'}
+                {done ? 'Done' : 'Cancel'}
               </button>
             </>
           )}

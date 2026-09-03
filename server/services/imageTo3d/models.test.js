@@ -4,6 +4,7 @@ import { posixPath } from '../../lib/testHelper.js';
 vi.mock('node:fs/promises', async (importOriginal) => ({
   ...(await importOriginal()),
   rm: vi.fn(() => Promise.resolve()),
+  writeFile: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock('../../lib/fileUtils.js', () => ({
@@ -65,7 +66,7 @@ vi.mock('./db.js', () => ({
   recoverInterruptedModels: vi.fn(),
 }));
 
-import { rm } from 'node:fs/promises';
+import { rm, writeFile } from 'node:fs/promises';
 import { ensureDir } from '../../lib/fileUtils.js';
 import { resolveTarget, renderOptionSupportFor } from './targets.js';
 import { isTrellis2Installed, runTrellis2Generate } from './trellis2.js';
@@ -73,7 +74,8 @@ import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { prepareSourceImage } from './sourceKeying.js';
 import * as store from './db.js';
 import {
-  createModel, startGeneration, getModelAsset, getModelFullMesh, recoverInterruptedModels, deleteModel,
+  createModel, startGeneration, getModelAsset, getModelFullMesh, getModelUsdz, saveModelUsdz,
+  USDZ_MAX_BYTES, recoverInterruptedModels, deleteModel,
 } from './models.js';
 
 const draftRecord = () => ({
@@ -163,6 +165,30 @@ describe('image-to-3D model orchestration', () => {
     expect(posixPath(current.assetPath)).toBe('/data/image-to-3d/image3d-example/model.glb');
     expect(current.generationOperationId).toBeNull();
     expect(current.runs.at(-1)).toMatchObject({ status: 'completed', percent: 100 });
+  });
+
+  // A new mesh makes the AR export a lie — it describes the geometry the render
+  // just replaced — so a successful re-render must drop both the record's pointer
+  // and the file. Cleared on SUCCESS only: a failed render leaves model.glb
+  // untouched, so its USDZ still matches and must survive.
+  it('clears a stale AR export when a re-render succeeds', async () => {
+    let current = {
+      ...draftRecord(),
+      status: 'ready',
+      assetPath: '/data/image-to-3d/image3d-example/model.glb',
+      usdzPath: '/data/image-to-3d/image3d-example/model.usdz',
+    };
+    store.getModel.mockImplementation(async () => current);
+    store.mutateModel.mockImplementation(async (_id, mutate) => {
+      const next = mutate(current);
+      if (next) current = next;
+      return current;
+    });
+
+    await startGeneration('image3d-example');
+    await vi.waitFor(() => expect(current.status).toBe('ready'));
+    expect(current.usdzPath).toBeNull();
+    expect(rm.mock.calls.some(([path]) => posixPath(path).endsWith('/image3d-example/model.usdz'))).toBe(true);
   });
 
   it('marks the record failed when the render throws', async () => {
@@ -332,6 +358,72 @@ describe('image-to-3D model orchestration', () => {
         .rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' });
     });
   });
+
+  // The AR export is produced by the BROWSER and posted back, so these bytes are
+  // untrusted input rather than something this process generated — the guards
+  // below are the whole reason the store is a service function and not a bare
+  // writeFile in the route.
+  describe('AR (USDZ) artifact', () => {
+    const ready = () => ({
+      ...draftRecord(),
+      status: 'ready',
+      name: 'My Beacon',
+      assetPath: '/data/image-to-3d/image3d-example/model.glb',
+    });
+    const zip = (extra = 0) => Buffer.concat([
+      Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+      Buffer.alloc(extra),
+    ]);
+
+    it('stores the export beside the GLB and records its served path', async () => {
+      store.getModel.mockResolvedValueOnce(ready());
+      store.mutateModel.mockImplementationOnce(async (_id, mutate) => mutate(ready()));
+      const next = await saveModelUsdz('image3d-example', zip(64));
+      expect(posixPath(writeFile.mock.calls[0][0]))
+        .toMatch(/image-to-3d\/image3d-example\/model\.usdz$/);
+      expect(next.usdzPath).toBe('/data/image-to-3d/image3d-example/model.usdz');
+      expect(next.usdzGeneratedAt).toEqual(expect.any(String));
+    });
+
+    it('refuses a payload that is not a zip archive', async () => {
+      // USDZ is a stored zip; anything else would be served to AR Quick Look as a
+      // valid-looking file that silently fails to open on the device.
+      store.getModel.mockResolvedValueOnce(ready());
+      await expect(saveModelUsdz('image3d-example', Buffer.from('not a usdz')))
+        .rejects.toMatchObject({ status: 400, code: 'USDZ_INVALID' });
+      expect(writeFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses an empty body and one past the size cap', async () => {
+      store.getModel.mockResolvedValue(ready());
+      await expect(saveModelUsdz('image3d-example', Buffer.alloc(0)))
+        .rejects.toMatchObject({ status: 400, code: 'USDZ_INVALID' });
+      await expect(saveModelUsdz('image3d-example', zip(USDZ_MAX_BYTES)))
+        .rejects.toMatchObject({ status: 413, code: 'USDZ_TOO_LARGE' });
+      expect(writeFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses to store an export for a record with no rendered mesh', async () => {
+      store.getModel.mockResolvedValueOnce({ ...draftRecord(), status: 'generating' });
+      await expect(saveModelUsdz('image3d-example', zip()))
+        .rejects.toMatchObject({ status: 409, code: 'MODEL_NOT_READY' });
+    });
+
+    it('404s a record that has never been exported for AR', async () => {
+      // Unlike the GLB, an absent USDZ says nothing about the record's health —
+      // it just means nobody has opened this model in the viewer and exported it.
+      store.getModel.mockResolvedValueOnce(ready());
+      await expect(getModelUsdz('image3d-example', { exists: async () => false }))
+        .rejects.toMatchObject({ status: 404, code: 'USDZ_MISSING' });
+    });
+
+    it('serves the stored export with a slugged filename', async () => {
+      store.getModel.mockResolvedValueOnce(ready());
+      const artifact = await getModelUsdz('image3d-example', { exists: async () => true });
+      expect(posixPath(artifact.path)).toMatch(/image-to-3d\/image3d-example\/model\.usdz$/);
+      expect(artifact.filename).toBe('my-beacon.usdz');
+    });
+  });
 });
 
 describe('render options and source keying', () => {
@@ -418,7 +510,9 @@ describe('render options and source keying', () => {
   });
 
   it('a keyed source image is what the render consumes', async () => {
-    prepareSourceImage.mockImplementation(async ({ targetPath }) => targetPath);
+    prepareSourceImage.mockImplementation(async ({ targetPath }) => ({
+      path: targetPath, keyed: true, framed: false,
+    }));
 
     await createModel({ name: 'Beacon', filename: 'example.png', keyBackground: true });
     await vi.waitFor(() => expect(current.status).toBe('ready'));

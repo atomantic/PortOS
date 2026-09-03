@@ -21,6 +21,7 @@ const { ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');
 const { CODEX_ERROR_CODES } = await import('../lib/codexAccount.js');
 const { CODEX_TURN_ERROR_CODES } = await import('../lib/codexTurn.js');
 const {
+  __codexActiveTurnCount,
   __resetCodexAppServer,
   benchCodexTextTransport,
   getCodexAccountReadiness,
@@ -202,6 +203,52 @@ describe('running a text turn', () => {
     // Cancellation is surfaced without dispatching the turn at all, so Stop
     // neither spends quota nor waits out a `turn/start` round trip.
     expect(child.lastRequest('turn/start')).toBeUndefined();
+  });
+
+  it('gives up on a thread/start the app-server never answers, instead of waiting out its deadline', async () => {
+    // Before #5778 the abort listener was registered only AFTER `thread/start`
+    // answered, so a Stop raised here was invisible for the full
+    // REQUEST_TIMEOUT_MS against a stalled app-server. The reply is withheld for
+    // the whole test and no clock is advanced, so the only way to pass is to
+    // reject on the abort itself rather than on the RPC deadline.
+    const controller = new AbortController();
+    const promise = runCodexTextTurn({ prompt: 'long one', signal: controller.signal });
+    await handshake();
+    await awaitRequest(child, 'thread/start', () => {});
+
+    controller.abort();
+
+    await expect(promise).rejects.toMatchObject({ code: CODEX_TURN_ERROR_CODES.turnInterrupted });
+    // No thread id was ever read, so no turn may be dispatched — and nothing is
+    // left registered to strand an accumulator or misroute later events.
+    expect(child.lastRequest('turn/start')).toBeUndefined();
+    expect(__codexActiveTurnCount()).toBe(0);
+  });
+
+  it('interrupts a turn the app-server accepts after the caller has already stopped', async () => {
+    // The compensating path, and the reason a plain race is not enough: bailing
+    // out before the `turn/start` response is read means `acc.turnId` is never
+    // set, so the `finally` cannot interrupt. Without this, a turn Codex DID
+    // accept would keep generating — and burning subscription quota — with
+    // nothing telling it to stop.
+    const controller = new AbortController();
+    const promise = runCodexTextTurn({ prompt: 'long one', signal: controller.signal });
+    await handshake();
+    await awaitRequest(child, 'thread/start', { thread: { id: 'thread-1' } });
+    const pendingStart = await awaitRequest(child, 'turn/start', () => {});
+
+    controller.abort();
+
+    await expect(promise).rejects.toMatchObject({ code: CODEX_TURN_ERROR_CODES.turnInterrupted });
+    expect(__codexActiveTurnCount()).toBe(0);
+    // Nothing to interrupt yet: the turn has no id until its response lands.
+    expect(child.lastRequest('turn/interrupt')).toBeUndefined();
+
+    // The app-server answers only now — it did accept the turn.
+    child.reply(pendingStart, { turn: { id: 'turn-late', items: [], status: 'inProgress' } });
+
+    await vi.waitFor(() => expect(child.lastRequest('turn/interrupt')).toBeTruthy());
+    expect(child.lastRequest('turn/interrupt').params).toEqual({ threadId: 'thread-1', turnId: 'turn-late' });
   });
 
   it('carries a quota failure out as a usage-limit category', async () => {

@@ -22,6 +22,9 @@
  *  - `normalMap: false` (the default) → skip the normal-map bake. Opt in to recover
  *    shading detail the decimation discards, accepting the hard-crash risk noted
  *    below.
+ *  - `subjectScale: 1` (the default) → hand the pipeline the source at its own
+ *    framing. Below 1, centre the subject on a square canvas at that fraction so a
+ *    pose that runs to the edge gains margin around its extremities.
  */
 
 import { randomInt } from 'node:crypto';
@@ -88,13 +91,43 @@ export const isValidRenderSteps = (value) => intInRange(value, RENDER_STEPS_MIN,
 export const isValidRenderSeed = (value) => intInRange(value, 0, RENDER_SEED_MAX);
 
 /**
+ * Subject framing: the fraction of the square output canvas the source image is
+ * scaled to occupy, centered, before the decoder sees it.
+ *
+ * `1` is the identity — no canvas, no resize, the source passes through byte for
+ * byte — and it is the default, so no existing render changes behaviour. Below 1
+ * the source is resized so its longest side is `subjectScale x canvasSize` and
+ * composited centered on the square canvas, which is what buys a full-body pose
+ * with outstretched limbs the empty margin its extremities need to survive
+ * reconstruction: a subject running to the edge of the frame hands the decoder
+ * zero context beyond the fingertips, and fingertips are what come back clipped.
+ *
+ * The range is open at zero and closed at one: 0 would scale the subject out of
+ * existence, and above 1 would crop it, which is the failure this option exists
+ * to avoid rather than a framing anyone wants.
+ */
+export const SUBJECT_SCALE_MIN_EXCLUSIVE = 0;
+export const SUBJECT_SCALE_MAX = 1;
+export const DEFAULT_SUBJECT_SCALE = 1;
+
+/** Whether a value is a usable subject scale — a finite number in (0, 1]. */
+export const isValidSubjectScale = (value) => (
+  typeof value === 'number'
+  && Number.isFinite(value)
+  && value > SUBJECT_SCALE_MIN_EXCLUSIVE
+  && value <= SUBJECT_SCALE_MAX
+);
+
+/**
  * Normalize a request's options into the per-run shape. Invalid/absent values
  * collapse to the unset sentinel (`null`) rather than throwing — the route
  * schema is the loud gate; this is the internal-caller normalizer.
  * @param {{steps?: number|null, seed?: number|null, keyBackground?: boolean,
- *          detail?: string, alphaMode?: string|null, normalMap?: boolean}} [input]
+ *          detail?: string, alphaMode?: string|null, normalMap?: boolean,
+ *          subjectScale?: number}} [input]
  * @returns {{steps: number|null, seed: number|null, keyBackground: boolean,
- *            detail: string, alphaMode: string|null, normalMap: boolean}}
+ *            detail: string, alphaMode: string|null, normalMap: boolean,
+ *            subjectScale: number}}
  */
 export function normalizeRenderOptions(input = {}) {
   return {
@@ -126,6 +159,13 @@ export function normalizeRenderOptions(input = {}) {
     // An earlier revision defaulted this ON and claimed it "cannot fail a render".
     // That was false as written, and it was the claim the opt-out decision rested on.
     normalMap: input.normalMap === true,
+    // Defaults to the identity (`1` = no reframing), so every render that predates
+    // this knob keeps handing the decoder its untouched source. Collapses to the
+    // default rather than null for the same reason `detail` collapses to 'auto': it
+    // is a real, choosable value, and a run entry recording `1` is what happened.
+    subjectScale: isValidSubjectScale(input.subjectScale)
+      ? input.subjectScale
+      : DEFAULT_SUBJECT_SCALE,
   };
 }
 

@@ -19,7 +19,7 @@ import {
  * one documented conversion point rather than a hand-rolled loop in each consumer.
  *
  * Server mirror: `reviewerModelsFromDefaults` / `reviewerEffortsFromDefaults` in
- * `server/lib/cosValidation.js`.
+ * `server/lib/reviewerConfig.js`.
  */
 
 /**

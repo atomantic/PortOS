@@ -170,3 +170,20 @@ describe('MediaCard', () => {
     expect(screen.queryByRole('button', { name: 'Send to 3D' })).toBeNull();
   });
 });
+
+// Render duration (#5878) — the card is where a user compares "which of these
+// backends is actually fast". The chip must be humanized, not raw ms, and must
+// disappear entirely for a record that was never timed rather than rendering a
+// placeholder or a misleading "0s".
+describe('MediaCard render-time chip', () => {
+  it('humanizes renderMs', () => {
+    render(<MediaCard item={{ ...imageItem, renderMs: 92_000 }} />);
+    expect(screen.getByText('1m 32s')).toBeInTheDocument();
+    expect(screen.queryByText('92000')).not.toBeInTheDocument();
+  });
+
+  it('renders no chip when the record carries no render time', () => {
+    const { container } = render(<MediaCard item={{ ...imageItem, renderMs: null }} />);
+    expect(container.querySelector('[title^="Render time"]')).toBeNull();
+  });
+});

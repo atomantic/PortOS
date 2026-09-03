@@ -9,6 +9,7 @@ export * from './apiWorkspaceContexts.js';
 export * from './apiReferenceRepos.js';
 export * from './apiPorts.js';
 export * from './apiScaffold.js';
+export * from './apiHarnesses.js';
 export * from './apiProviders.js';
 export * from './apiPrompts.js';
 export * from './apiRuns.js';
@@ -84,10 +85,10 @@ export * from './apiImporter.js';
 export * from './apiStoryBuilder.js';
 export * from './apiVoice.js';
 export * from './apiAuth.js';
-export * from './apiOpenWorld.js';
 export * from './apiPrivacy.js';
 export * from './apiQuotaBurn.js';
 export * from './apiRapidReader.js';
+export * from './apiRigging.js';
 
 // Default export for simplified imports (get/post/put/delete helpers)
 export { default } from './apiCore.js';

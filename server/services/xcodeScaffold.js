@@ -12,37 +12,40 @@ import {
 
 const execAsync = promisify(exec);
 
+/** Every platform this scaffolder knows how to emit, in `project.yml` order. */
+const XCODE_PLATFORMS = ['ios', 'macos', 'watchos'];
+
+/** `options.deploymentTarget` line per platform. */
+const DEPLOYMENT_TARGET_LINES = {
+  ios: '    iOS: "17.0"',
+  macos: '    macOS: "14.0"',
+  watchos: '    watchOS: "10.0"',
+};
+
+const appIconContents = platform => `{
+  "images": [{"idiom": "universal", "platform": "${platform}", "size": "1024x1024"}],
+  "info": {"version": 1, "author": "xcode"}
+}`;
+
+const EMPTY_ASSET_CATALOG = '{"info":{"version":1,"author":"xcode"}}';
+
 /**
- * Scaffold a multi-platform Xcode project (iOS + macOS + watchOS)
- * with XcodeGen, deploy script, and screenshot automation.
+ * Build `project.yml` from a shared preamble plus one target block per platform.
+ * Target blocks only carry `# --- ... ---` headers in a multi-target project —
+ * a single-platform project has nothing to disambiguate.
  */
-export async function scaffoldXcode(repoPath, name, dirName, addStep) {
-  const bundleId = toBundleId(name);
-  const teamId = XCODE_TEAM_ID;
-  const targetName = toTargetName(name);
-  const watchTarget = `${targetName}_Watch`;
+function buildProjectYml({ targetName, watchTarget, bundleId, teamId, platforms, multi }) {
+  const deploymentTargets = XCODE_PLATFORMS
+    .filter(p => platforms.includes(p))
+    .map(p => DEPLOYMENT_TARGET_LINES[p])
+    .join('\n');
+  const sharedSource = multi ? '\n      - path: Shared' : '';
+  const uiTestScheme = multi ? `\n        - ${targetName}UITests` : '';
 
-  // project.yml — XcodeGen source of truth with iOS, macOS, and watchOS targets
-  await writeFile(join(repoPath, 'project.yml'), `name: ${targetName}
-options:
-  bundleIdPrefix: ${XCODE_BUNDLE_PREFIX}
-  deploymentTarget:
-    iOS: "17.0"
-    macOS: "14.0"
-    watchOS: "10.0"
-  xcodeVersion: "16.0"
-  generateEmptyDirectories: true
+  const blocks = [];
+  const addBlock = (label, body) => blocks.push(multi ? `  # --- ${label} ---\n${body}` : body);
 
-settings:
-  base:
-    DEVELOPMENT_TEAM: ${teamId}
-    MARKETING_VERSION: "1.0.0"
-    CURRENT_PROJECT_VERSION: 1
-    SWIFT_VERSION: "5.9"
-
-targets:
-  # --- iOS Target ---
-  ${targetName}:
+  addBlock('iOS Target', `  ${targetName}:
     type: application
     platform: iOS
     sources:
@@ -50,8 +53,7 @@ targets:
         excludes:
           - Preview Content/PreviewAssets.xcassets
       - path: ${targetName}/Preview Content/PreviewAssets.xcassets
-        buildPhase: none
-      - path: Shared
+        buildPhase: none${sharedSource}
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ${bundleId}
@@ -65,11 +67,10 @@ targets:
         GENERATE_INFOPLIST_FILE: true
     scheme:
       testTargets:
-        - ${targetName}Tests
-        - ${targetName}UITests
+        - ${targetName}Tests${uiTestScheme}`);
 
-  # --- macOS Target ---
-  ${targetName} macOS:
+  if (platforms.includes('macos')) {
+    addBlock('macOS Target', `  ${targetName} macOS:
     type: application
     platform: macOS
     sources:
@@ -86,10 +87,11 @@ targets:
         PRODUCT_NAME: ${targetName}
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
-        GENERATE_INFOPLIST_FILE: true
+        GENERATE_INFOPLIST_FILE: true`);
+  }
 
-  # --- watchOS Target ---
-  ${watchTarget}:
+  if (platforms.includes('watchos')) {
+    addBlock('watchOS Target', `  ${watchTarget}:
     type: application
     platform: watchOS
     sources:
@@ -103,10 +105,10 @@ targets:
         GENERATE_INFOPLIST_FILE: true
     dependencies:
       - target: ${targetName}
-        embed: false
+        embed: false`);
+  }
 
-  # --- Unit Tests ---
-  ${targetName}Tests:
+  addBlock('Unit Tests', `  ${targetName}Tests:
     type: bundle.unit-test
     platform: iOS
     sources:
@@ -118,10 +120,10 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: ${bundleId}Tests
         GENERATE_INFOPLIST_FILE: true
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/${targetName}.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/${targetName}"
-        BUNDLE_LOADER: "$(TEST_HOST)"
+        BUNDLE_LOADER: "$(TEST_HOST)"`);
 
-  # --- UI Tests (screenshot automation) ---
-  ${targetName}UITests:
+  if (multi) {
+    addBlock('UI Tests (screenshot automation)', `  ${targetName}UITests:
     type: bundle.ui-testing
     platform: iOS
     sources:
@@ -132,69 +134,34 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ${bundleId}UITests
         GENERATE_INFOPLIST_FILE: true
-        TEST_TARGET_NAME: ${targetName}
-`);
+        TEST_TARGET_NAME: ${targetName}`);
+  }
 
-  // Create source directories
-  const srcDir = join(repoPath, targetName);
-  const sharedDir = join(repoPath, 'Shared');
-  const watchDir = join(repoPath, watchTarget);
-  const previewDir = join(srcDir, 'Preview Content');
-  const testsDir = join(repoPath, `${targetName}Tests`);
-  const uiTestsDir = join(repoPath, `${targetName}UITests`);
+  return `name: ${targetName}
+options:
+  bundleIdPrefix: ${XCODE_BUNDLE_PREFIX}
+  deploymentTarget:
+${deploymentTargets}
+  xcodeVersion: "16.0"
+  generateEmptyDirectories: true
 
-  await ensureDirs([srcDir, sharedDir, watchDir, previewDir, testsDir, uiTestsDir]);
+settings:
+  base:
+    DEVELOPMENT_TEAM: ${teamId}
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: 1
+    SWIFT_VERSION: "5.9"
 
-  // Info.plist (iOS)
-  await writeFile(join(srcDir, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict/>
-</plist>
-`);
-
-  // macOS entitlements
-  await writeFile(join(repoPath, `${targetName}-macOS.entitlements`), `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>com.apple.security.app-sandbox</key>
-  <true/>
-  <key>com.apple.security.network.client</key>
-  <true/>
-</dict>
-</plist>
-`);
-
-  // Shared module (cross-platform models/logic)
-  await writeFile(join(sharedDir, 'AppConstants.swift'), `import Foundation
-
-enum AppConstants {
-    static let appName = "${targetName}"
-    static let bundleId = "${bundleId}"
+targets:
+${blocks.join('\n\n')}
+`;
 }
-`);
 
-  // iOS/macOS App entry point (multi-platform)
-  await writeFile(join(srcDir, `${targetName}App.swift`), `import SwiftUI
-
-@main
-struct ${targetName}App: App {
-    var body: some Scene {
-        WindowGroup {
-            ContentView()
-        }
-        #if os(macOS)
-        .defaultSize(width: 900, height: 600)
-        #endif
-    }
-}
-`);
-
-  // ContentView with platform conditionals
-  await writeFile(join(srcDir, 'ContentView.swift'), `import SwiftUI
+/**
+ * `ContentView.swift` — the multi-platform variant renders through the `Shared`
+ * module's `AppConstants`, so it is only valid when `Shared` is emitted.
+ */
+const buildContentView = ({ name, multi }) => (multi ? `import SwiftUI
 
 struct ContentView: View {
     var body: some View {
@@ -234,10 +201,208 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
+` : `import SwiftUI
+
+struct ContentView: View {
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                Image(systemName: "app.fill")
+                    .font(.system(size: 60))
+                    .foregroundStyle(.blue)
+
+                Text("${name}")
+                    .font(.largeTitle)
+                    .fontWeight(.bold)
+
+                Text("Built with PortOS")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .navigationTitle("${name}")
+        }
+    }
+}
 `);
 
-  // watchOS App
-  await writeFile(join(watchDir, `${watchTarget}App.swift`), `import SwiftUI
+function buildAgentInstructions({ name, bundleId, teamId, targetName, platforms, multi }) {
+  const platformVersions = [
+    platforms.includes('ios') && 'iOS 17.0+',
+    platforms.includes('macos') && 'macOS 14.0+',
+    platforms.includes('watchos') && 'watchOS 10.0+',
+  ].filter(Boolean).join(', ');
+
+  const summary = multi
+    ? `Multi-platform native app built with SwiftUI (${platforms.map(p => ({ ios: 'iOS', macos: 'macOS', watchos: 'watchOS' })[p]).join(' + ')}) and XcodeGen.`
+    : 'iOS native app built with SwiftUI and XcodeGen.';
+
+  const macBuild = platforms.includes('macos') ? `
+
+# Build macOS
+xcodebuild build -project ${targetName}.xcodeproj -scheme "${targetName} macOS" \\
+  CODE_SIGNING_ALLOWED=NO` : '';
+
+  const deployFlags = multi
+    ? `./deploy.sh              # every platform the project has a scheme for (default)
+./deploy.sh --ios        # iOS only
+./deploy.sh --macos      # macOS only
+./deploy.sh --watch      # watchOS only (standalone watch apps)
+./deploy.sh --all        # explicit "all available" (same as default)
+./deploy.sh --skip-tests # skip tests for faster iteration`
+    : `./deploy.sh              # full: tests + archive + upload
+./deploy.sh --skip-tests # skip tests for faster iteration`;
+
+  const screenshots = multi ? `
+
+## Screenshot Automation
+
+\`\`\`bash
+./take_screenshots.sh              # iOS/iPad, all languages
+./take_screenshots.sh en           # single language
+./take_screenshots.sh --iphone-only${platforms.includes('macos') ? `
+./take_screenshots_macos.sh        # macOS screenshots` : ''}
+\`\`\`
+
+Screenshots are saved to \`screenshots/{locale}/{device}/\` for upload to App Store Connect.` : '';
+
+  return `# ${name}
+
+${summary}
+
+## Tech Stack
+
+- **SwiftUI** + **SwiftData** (${platformVersions})
+- **XcodeGen** for project generation (\`project.yml\` is the source of truth, not the \`.xcodeproj\`)
+- Bundle ID: \`${bundleId}\`, Team: \`${teamId}\`
+
+## Build Commands
+
+\`\`\`bash
+# Generate Xcode project (required after changing project.yml)
+xcodegen generate
+
+# Build${multi ? ' iOS' : ''}
+xcodebuild build -project ${targetName}.xcodeproj -scheme ${targetName} \\
+  -destination 'platform=iOS Simulator,name=iPhone 16' CODE_SIGNING_ALLOWED=NO${macBuild}
+
+# Run tests
+xcodebuild test -project ${targetName}.xcodeproj -scheme ${targetName} \\
+  -only-testing:${targetName}Tests \\
+  -destination 'platform=iOS Simulator,name=iPhone 16' CODE_SIGNING_ALLOWED=NO
+\`\`\`
+
+## TestFlight Deployment
+
+Local deploy via \`./deploy.sh\`:
+
+\`\`\`bash
+${deployFlags}
+\`\`\`
+
+Requires \`.env\` file with App Store Connect API credentials (see \`.env.example\`).${screenshots}
+`;
+}
+
+/**
+ * Scaffold an Xcode project with XcodeGen, a deploy script and (for
+ * multi-platform projects) screenshot automation.
+ *
+ * `platforms` selects which targets are emitted — `['ios']` reproduces the
+ * `ios-native` template, the default reproduces `xcode-multiplatform`. iOS is
+ * always emitted: it hosts the unit-test target every variant ships.
+ */
+export async function scaffoldXcode(repoPath, name, dirName, addStep, { platforms = XCODE_PLATFORMS } = {}) {
+  const bundleId = toBundleId(name);
+  const teamId = XCODE_TEAM_ID;
+  const targetName = toTargetName(name);
+  const watchTarget = `${targetName}_Watch`;
+  const hasMacos = platforms.includes('macos');
+  const hasWatchos = platforms.includes('watchos');
+  // A second platform is what pulls in the `Shared` module, the UI-test target
+  // and the screenshot automation — iOS on its own needs none of them.
+  const multi = hasMacos || hasWatchos;
+
+  await writeFile(
+    join(repoPath, 'project.yml'),
+    buildProjectYml({ targetName, watchTarget, bundleId, teamId, platforms, multi })
+  );
+
+  // Source directories
+  const srcDir = join(repoPath, targetName);
+  const sharedDir = join(repoPath, 'Shared');
+  const watchDir = join(repoPath, watchTarget);
+  const previewDir = join(srcDir, 'Preview Content');
+  const testsDir = join(repoPath, `${targetName}Tests`);
+  const uiTestsDir = join(repoPath, `${targetName}UITests`);
+
+  await ensureDirs([
+    srcDir,
+    multi && sharedDir,
+    hasWatchos && watchDir,
+    previewDir,
+    testsDir,
+    multi && uiTestsDir,
+  ].filter(Boolean));
+
+  // Info.plist (iOS). The iOS-only template ships a microphone usage string;
+  // the multi-platform one leaves the dictionary empty.
+  await writeFile(join(srcDir, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+${multi ? '<dict/>' : `<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>This app needs microphone access for audio recording.</string>
+</dict>`}
+</plist>
+`);
+
+  if (hasMacos) {
+    await writeFile(join(repoPath, `${targetName}-macOS.entitlements`), `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.app-sandbox</key>
+  <true/>
+  <key>com.apple.security.network.client</key>
+  <true/>
+</dict>
+</plist>
+`);
+  }
+
+  if (multi) {
+    // Shared module (cross-platform models/logic)
+    await writeFile(join(sharedDir, 'AppConstants.swift'), `import Foundation
+
+enum AppConstants {
+    static let appName = "${targetName}"
+    static let bundleId = "${bundleId}"
+}
+`);
+  }
+
+  // App entry point
+  await writeFile(join(srcDir, `${targetName}App.swift`), `import SwiftUI
+
+@main
+struct ${targetName}App: App {
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+        }${hasMacos ? `
+        #if os(macOS)
+        .defaultSize(width: 900, height: 600)
+        #endif` : ''}
+    }
+}
+`);
+
+  await writeFile(join(srcDir, 'ContentView.swift'), buildContentView({ name, multi }));
+
+  if (hasWatchos) {
+    await writeFile(join(watchDir, `${watchTarget}App.swift`), `import SwiftUI
 
 @main
 struct ${watchTarget}App: App {
@@ -249,7 +414,7 @@ struct ${watchTarget}App: App {
 }
 `);
 
-  await writeFile(join(watchDir, 'WatchContentView.swift'), `import SwiftUI
+    await writeFile(join(watchDir, 'WatchContentView.swift'), `import SwiftUI
 
 struct WatchContentView: View {
     var body: some View {
@@ -264,24 +429,21 @@ struct WatchContentView: View {
     }
 }
 `);
+  }
 
   // Asset catalogs
   await ensureDir(join(srcDir, 'Assets.xcassets', 'AppIcon.appiconset'));
-  await writeFile(join(srcDir, 'Assets.xcassets', 'Contents.json'), '{"info":{"version":1,"author":"xcode"}}');
-  await writeFile(join(srcDir, 'Assets.xcassets', 'AppIcon.appiconset', 'Contents.json'), `{
-  "images": [{"idiom": "universal", "platform": "ios", "size": "1024x1024"}],
-  "info": {"version": 1, "author": "xcode"}
-}`);
+  await writeFile(join(srcDir, 'Assets.xcassets', 'Contents.json'), EMPTY_ASSET_CATALOG);
+  await writeFile(join(srcDir, 'Assets.xcassets', 'AppIcon.appiconset', 'Contents.json'), appIconContents('ios'));
 
-  await ensureDir(join(watchDir, 'Assets.xcassets', 'AppIcon.appiconset'));
-  await writeFile(join(watchDir, 'Assets.xcassets', 'Contents.json'), '{"info":{"version":1,"author":"xcode"}}');
-  await writeFile(join(watchDir, 'Assets.xcassets', 'AppIcon.appiconset', 'Contents.json'), `{
-  "images": [{"idiom": "universal", "platform": "watchos", "size": "1024x1024"}],
-  "info": {"version": 1, "author": "xcode"}
-}`);
+  if (hasWatchos) {
+    await ensureDir(join(watchDir, 'Assets.xcassets', 'AppIcon.appiconset'));
+    await writeFile(join(watchDir, 'Assets.xcassets', 'Contents.json'), EMPTY_ASSET_CATALOG);
+    await writeFile(join(watchDir, 'Assets.xcassets', 'AppIcon.appiconset', 'Contents.json'), appIconContents('watchos'));
+  }
 
   await ensureDir(join(previewDir, 'PreviewAssets.xcassets'));
-  await writeFile(join(previewDir, 'PreviewAssets.xcassets', 'Contents.json'), '{"info":{"version":1,"author":"xcode"}}');
+  await writeFile(join(previewDir, 'PreviewAssets.xcassets', 'Contents.json'), EMPTY_ASSET_CATALOG);
 
   // Unit tests
   await writeFile(join(testsDir, `${targetName}Tests.swift`), `import XCTest
@@ -294,8 +456,9 @@ final class ${targetName}Tests: XCTestCase {
 }
 `);
 
-  // UI Tests with screenshot stubs
-  await writeFile(join(uiTestsDir, 'ScreenshotTests.swift'), `import XCTest
+  if (multi) {
+    // UI Tests with screenshot stubs
+    await writeFile(join(uiTestsDir, 'ScreenshotTests.swift'), `import XCTest
 
 final class ScreenshotTests: XCTestCase {
 
@@ -370,82 +533,32 @@ final class ScreenshotTests: XCTestCase {
     }
 }
 `);
+  }
 
-  // .env.example
+  // Shared Xcode deployment assets
   await writeFile(join(repoPath, '.env.example'), XCODE_ENV_EXAMPLE);
 
   // Scripts (from generators in xcodeScripts service)
-  await writeFile(join(repoPath, 'deploy.sh'), generateDeployScript(targetName, bundleId));
-  await writeFile(join(repoPath, 'take_screenshots.sh'), generateScreenshotScript(targetName, bundleId));
-  await writeFile(join(repoPath, 'take_screenshots_macos.sh'), generateMacScreenshotScript(targetName, bundleId));
+  const scripts = [
+    ['deploy.sh', generateDeployScript(targetName, bundleId)],
+    multi && ['take_screenshots.sh', generateScreenshotScript(targetName, bundleId)],
+    hasMacos && ['take_screenshots_macos.sh', generateMacScreenshotScript(targetName, bundleId)],
+  ].filter(Boolean);
 
+  for (const [file, contents] of scripts) {
+    await writeFile(join(repoPath, file), contents);
+  }
   if (process.platform !== 'win32') {
-    await Promise.all([
-      chmod(join(repoPath, 'deploy.sh'), 0o755),
-      chmod(join(repoPath, 'take_screenshots.sh'), 0o755),
-      chmod(join(repoPath, 'take_screenshots_macos.sh'), 0o755),
-    ]);
+    await Promise.all(scripts.map(([file]) => chmod(join(repoPath, file), 0o755)));
   }
 
   // AGENTS.md (+ the Claude Code bridge)
-  await writeAgentInstructions(repoPath, `# ${name}
+  await writeAgentInstructions(
+    repoPath,
+    buildAgentInstructions({ name, bundleId, teamId, targetName, platforms, multi })
+  );
 
-Multi-platform native app built with SwiftUI (iOS + macOS + watchOS) and XcodeGen.
-
-## Tech Stack
-
-- **SwiftUI** + **SwiftData** (iOS 17.0+, macOS 14.0+, watchOS 10.0+)
-- **XcodeGen** for project generation (\`project.yml\` is the source of truth, not the \`.xcodeproj\`)
-- Bundle ID: \`${bundleId}\`, Team: \`${teamId}\`
-
-## Build Commands
-
-\`\`\`bash
-# Generate Xcode project (required after changing project.yml)
-xcodegen generate
-
-# Build iOS
-xcodebuild build -project ${targetName}.xcodeproj -scheme ${targetName} \\
-  -destination 'platform=iOS Simulator,name=iPhone 16' CODE_SIGNING_ALLOWED=NO
-
-# Build macOS
-xcodebuild build -project ${targetName}.xcodeproj -scheme "${targetName} macOS" \\
-  CODE_SIGNING_ALLOWED=NO
-
-# Run tests
-xcodebuild test -project ${targetName}.xcodeproj -scheme ${targetName} \\
-  -only-testing:${targetName}Tests \\
-  -destination 'platform=iOS Simulator,name=iPhone 16' CODE_SIGNING_ALLOWED=NO
-\`\`\`
-
-## TestFlight Deployment
-
-Local deploy via \`./deploy.sh\`:
-
-\`\`\`bash
-./deploy.sh              # every platform the project has a scheme for (default)
-./deploy.sh --ios        # iOS only
-./deploy.sh --macos      # macOS only
-./deploy.sh --watch      # watchOS only (standalone watch apps)
-./deploy.sh --all        # explicit "all available" (same as default)
-./deploy.sh --skip-tests # skip tests for faster iteration
-\`\`\`
-
-Requires \`.env\` file with App Store Connect API credentials (see \`.env.example\`).
-
-## Screenshot Automation
-
-\`\`\`bash
-./take_screenshots.sh              # iOS/iPad, all languages
-./take_screenshots.sh en           # single language
-./take_screenshots.sh --iphone-only
-./take_screenshots_macos.sh        # macOS screenshots
-\`\`\`
-
-Screenshots are saved to \`screenshots/{locale}/{device}/\` for upload to App Store Connect.
-`);
-
-  addStep('Create multi-platform Xcode project', 'done');
+  addStep(multi ? 'Create multi-platform Xcode project' : 'Create iOS project', 'done');
 
   // Run xcodegen if available
   const { stderr: xgenErr } = await execAsync('xcodegen generate', { cwd: repoPath })

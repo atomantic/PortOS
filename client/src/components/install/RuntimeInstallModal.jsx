@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react';
 import { CheckCircle2, Loader2, AlertCircle, Download, X } from 'lucide-react';
 import { useInstallStream } from '../../hooks/useInstallStream';
 import Modal from '../ui/Modal';
+import InstallErrorFooter from './InstallErrorFooter';
 
 const MAX_LOG_LINES = 1000;
 
@@ -36,11 +37,16 @@ export default function RuntimeInstallModal({
   streamMethod = 'GET',
   // Chatty installers keep the rendered log stable by batching lines.
   flushMs = 100,
+  // The footer line once the stream completes. Defaults to "is ready", which is
+  // true of an install — and false of a REMOVAL, where it would sit directly
+  // under a log line saying the runtime was just deleted. A caller whose action
+  // is not an install passes its own.
+  doneText,
 }) {
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const query = new URLSearchParams({ runtime: runtime ?? '', ...(params || {}) });
   const url = open && runtime ? `${installUrlBase}?${query}` : null;
-  const { logs, done, error, streamStarted, logsEndRef, close } = useInstallStream(
+  const { logs, currentStage, done, error, streamStarted, logsEndRef, close } = useInstallStream(
     url,
     { enabled: open && !!runtime, onComplete, maxLogLines: MAX_LOG_LINES, flushMs, method: streamMethod },
   );
@@ -134,26 +140,32 @@ export default function RuntimeInstallModal({
                 </button>
               </div>
             </>
+          ) : error ? (
+            <InstallErrorFooter
+              message="Installer hit an error - see logs above."
+              label={label || runtime}
+              stage={currentStage}
+              error={error}
+              logs={logs}
+              surface="client/src/components/install/RuntimeInstallModal.jsx"
+              onClose={handleClose}
+            />
           ) : (
             <>
               <span className="text-xs text-gray-400">
                 {done
-                  ? `${label || runtime} is ready. You can close this window.`
-                  : error
-                    ? 'Installer hit an error - see logs above.'
-                    : description}
+                  ? (doneText || `${label || runtime} is ready.`) + ' You can close this window.'
+                  : description}
               </span>
               <button
                 onClick={handleClose}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                   done
                     ? 'bg-port-success text-white hover:bg-port-success/80'
-                    : error
-                      ? 'bg-port-border text-white hover:bg-port-border/70'
-                      : 'bg-port-border text-gray-300 hover:bg-port-border/70'
+                    : 'bg-port-border text-gray-300 hover:bg-port-border/70'
                 }`}
               >
-                {done ? 'Done' : error ? 'Close' : 'Cancel'}
+                {done ? 'Done' : 'Cancel'}
               </button>
             </>
           )}

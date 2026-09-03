@@ -101,6 +101,20 @@ describe('db/schema barrel + composer (#2832)', () => {
     expect(firstTrigIdx).toBeGreaterThan(fnIdx);
   });
 
+  // #5715 — the source-scoped composites are the only indexes serving
+  // `WHERE source = $1 [AND kind = ...] ORDER BY happened_at DESC LIMIT n`.
+  // Pin both, including the DESC ordering, so a future rewrite of the DDL array
+  // can't silently drop one back to a sequential-ish index walk.
+  it('humanActivityDdl ships the source-scoped happened_at composites', () => {
+    const ddl = schema.humanActivityDdl.join('\n');
+    expect(ddl).toContain(
+      'CREATE INDEX IF NOT EXISTS idx_human_activity_source_happened ON human_activity_events (source, happened_at DESC)',
+    );
+    expect(ddl).toContain(
+      'CREATE INDEX IF NOT EXISTS idx_human_activity_source_kind_happened ON human_activity_events (source, kind, happened_at DESC)',
+    );
+  });
+
   it('buildAuditTriggers emits a DROP + CREATE pair per audited table', () => {
     const triggers = buildAuditTriggers();
     expect(triggers.length).toBe(auditedTables.length * 2);

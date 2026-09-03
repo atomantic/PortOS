@@ -256,14 +256,14 @@ export default function OverviewTab({ project, onProjectUpdate, onAsyncWorkQueue
       {project.styleSpec && (
         <section className="bg-port-card border border-port-border rounded p-4">
           <h2 className="text-sm font-semibold text-port-text-muted uppercase tracking-wide mb-2">Style spec</h2>
-          <pre className="whitespace-pre-wrap text-sm text-port-text font-mono">{project.styleSpec}</pre>
+          <pre className="whitespace-pre-wrap break-words text-sm text-port-text font-mono">{project.styleSpec}</pre>
         </section>
       )}
 
       {project.userStory && (
         <section className="bg-port-card border border-port-border rounded p-4">
           <h2 className="text-sm font-semibold text-port-text-muted uppercase tracking-wide mb-2">User-supplied story</h2>
-          <pre className="whitespace-pre-wrap text-sm text-port-text font-mono">{project.userStory}</pre>
+          <pre className="whitespace-pre-wrap break-words text-sm text-port-text font-mono">{project.userStory}</pre>
         </section>
       )}
 

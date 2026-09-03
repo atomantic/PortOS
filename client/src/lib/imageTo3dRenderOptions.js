@@ -1,6 +1,7 @@
 /**
  * Pure helpers for the image-to-3D per-run render options (steps / seed /
- * background keying) — the client mirror of the server's accepted bounds.
+ * background keying / subject framing) — the client mirror of the server's accepted
+ * bounds.
  *
  * `SEED_MAX` is a hand-maintained mirror of the server's `RENDER_SEED_MAX`
  * (`server/services/imageTo3d/renderOptions.js`) pinned by
@@ -14,6 +15,25 @@
  */
 
 export const SEED_MAX = 2147483647;
+
+/**
+ * Subject framing — the client mirror of the server's `subjectScale` bounds, pinned
+ * by the same parity suite.
+ *
+ * `SUBJECT_SCALE_DEFAULT` is the identity: the source goes to the decoder at its own
+ * framing, which is what every render did before this control existed. Below it, the
+ * server centres the source on a square canvas at that fraction, leaving margin for
+ * the extremities that otherwise reach the decoder flush with the edge and come back
+ * clipped.
+ *
+ * The slider FLOOR is deliberately tighter than the server's open-at-zero bound: the
+ * server accepts anything in (0, 1] because an API caller may have a reason to, but a
+ * subject shrunk below a third of the frame is throwing away resolution the decoder
+ * needs more than it needs margin, so the UI doesn't offer it.
+ */
+export const SUBJECT_SCALE_DEFAULT = 1;
+export const SUBJECT_SCALE_SLIDER_MIN = 0.35;
+export const SUBJECT_SCALE_SLIDER_STEP = 0.05;
 
 /** The steps presets: the pipeline's own default, and two slower/higher-detail
  * tiers. Values stay strings because they live in <select> state. */
@@ -62,7 +82,9 @@ export const ALPHA_MODE_PRESETS = [
  * seed → the server rolls a fresh random one for that run. Range/int validation
  * is the server's job — the route 400s with a readable message.
  */
-export function renderOptionsBody({ steps, seed, keyBackground, detail, alphaMode, normalMap }) {
+export function renderOptionsBody({
+  steps, seed, keyBackground, detail, alphaMode, normalMap, subjectScale,
+}) {
   return {
     ...(steps !== '' && { steps: Number(steps) }),
     ...(seed !== '' && { seed: Number(seed) }),
@@ -77,6 +99,12 @@ export function renderOptionsBody({ steps, seed, keyBackground, detail, alphaMod
     // that the wire body states what the run asked for, and a future default flip
     // must not silently change what an existing client means.
     normalMap,
+    // Sent always, for the same reason as `normalMap`. Guarded rather than trusted:
+    // the server's range is open at zero, so a NaN or 0 out of a mis-parsed slider
+    // would 400 the render instead of quietly meaning "don't reframe".
+    subjectScale: typeof subjectScale === 'number' && subjectScale > 0 && subjectScale <= 1
+      ? subjectScale
+      : SUBJECT_SCALE_DEFAULT,
   };
 }
 
@@ -103,6 +131,12 @@ export function fieldsFromRun(run) {
     alphaMode: typeof run?.alphaMode === 'string' ? run.alphaMode : '',
     // A run predating the field has none; default to OFF, matching the server.
     normalMap: typeof run?.normalMap === 'boolean' ? run.normalMap : false,
+    // Carries over like `steps` — a deliberate framing choice, not per-run randomness.
+    // A run predating the field falls back to the identity, matching the server.
+    subjectScale: typeof run?.subjectScale === 'number'
+      && run.subjectScale > 0 && run.subjectScale <= 1
+      ? run.subjectScale
+      : SUBJECT_SCALE_DEFAULT,
   };
 }
 

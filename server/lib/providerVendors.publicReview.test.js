@@ -8,6 +8,7 @@ import {
 } from './agentExecutionProfiles.js';
 import {
   buildVendorSpawnConfig,
+  enforcedPublicReviewPosturesForProvider,
   publicReviewPosturesForProvider,
   publicReviewProviderBlock,
   supportsPublicReviewProvider,
@@ -36,9 +37,19 @@ describe('public-review provider postures', () => {
     expect(publicReviewPosturesForProvider(codex)).toEqual([PUBLIC_REVIEW_NO_TOOL_POSTURE, PUBLIC_REVIEW_ACTIONS_POSTURE]);
     expect(publicReviewPosturesForProvider(antigravity)).toEqual([PUBLIC_REVIEW_NO_TOOL_POSTURE, PUBLIC_REVIEW_ACTIONS_POSTURE]);
     expect(publicReviewPosturesForProvider(grok)).toEqual([PUBLIC_REVIEW_NO_TOOL_POSTURE, PUBLIC_REVIEW_ACTIONS_POSTURE]);
-    // Claude Code has permission modes but no OS-level sandbox flag, so it is
-    // deliberately tool-free-only and fails closed for the actions stage.
-    expect(publicReviewPosturesForProvider(localClaude)).toEqual([PUBLIC_REVIEW_NO_TOOL_POSTURE]);
+    expect(publicReviewPosturesForProvider(localClaude)).toEqual([PUBLIC_REVIEW_NO_TOOL_POSTURE, PUBLIC_REVIEW_ACTIONS_POSTURE]);
+  });
+
+  // The actions stage is open to every enabled binary provider; the ENFORCED
+  // list is the subset with a vendor sandbox recipe, which is what the schedule
+  // UI reports beside the picker.
+  it('distinguishes a vendor-sandboxed actions stage from a worktree-only one', () => {
+    const opencode = { id: 'opencode', type: 'cli', command: 'opencode' };
+    expect(publicReviewPosturesForProvider(opencode)).toEqual([PUBLIC_REVIEW_ACTIONS_POSTURE]);
+    expect(enforcedPublicReviewPosturesForProvider(opencode)).toEqual([]);
+    expect(enforcedPublicReviewPosturesForProvider(codex)).toEqual([PUBLIC_REVIEW_NO_TOOL_POSTURE, PUBLIC_REVIEW_ACTIONS_POSTURE]);
+    expect(enforcedPublicReviewPosturesForProvider(localClaude)).toEqual([PUBLIC_REVIEW_NO_TOOL_POSTURE, PUBLIC_REVIEW_ACTIONS_POSTURE]);
+    expect(enforcedPublicReviewPosturesForProvider({ ...codex, type: 'api' })).toEqual([]);
   });
 
   // Regression (#5830): the spawn gate passes the posture a STAGE requires,
@@ -50,7 +61,7 @@ describe('public-review provider postures', () => {
     expect(publicReviewProviderBlock(codex, undefined)).toBeNull();
     // The transport is irrelevant when nothing is being enforced: a TUI session
     // and an api provider run ordinary tasks all day.
-    expect(publicReviewProviderBlock({ ...codex, type: 'tui' }, null, { tui: true })).toBeNull();
+    expect(publicReviewProviderBlock({ ...codex, type: 'tui' }, null)).toBeNull();
     expect(publicReviewProviderBlock({ ...codex, type: 'api' }, null)).toBeNull();
   });
 
@@ -60,28 +71,49 @@ describe('public-review provider postures', () => {
 
     // claude has permission modes but no sandbox flag — tool-free only.
     expect(publicReviewProviderBlock(localClaude, PUBLIC_REVIEW_NO_TOOL_POSTURE)).toBeNull();
-    expect(publicReviewProviderBlock(localClaude, PUBLIC_REVIEW_ACTIONS_POSTURE)).toEqual({
+    expect(publicReviewProviderBlock({ ...localClaude, type: 'api' }, PUBLIC_REVIEW_ACTIONS_POSTURE)).toEqual({
       reason: "Provider 'claude-ollama' has no enforced sandboxed-actions public-content review mode",
       category: 'public-review-actions-provider-unsupported',
     });
 
-    // A TUI session has no enforced argv, whatever its vendor row declares.
-    expect(publicReviewProviderBlock({ ...codex, type: 'tui' }, PUBLIC_REVIEW_NO_TOOL_POSTURE, { tui: true })).toEqual({
-      reason: "Provider 'codex-cli' has no enforced no-tool public-content review mode",
-      category: 'public-review-provider-unsupported',
+    // A TUI record of a recipe-bearing vendor is spawned headless through
+    // that recipe, so it is as eligible as its CLI sibling. An api provider
+    // has no binary to spawn and no recipe.
+    expect(publicReviewProviderBlock({ ...codex, id: 'codex-tui', type: 'tui' }, PUBLIC_REVIEW_NO_TOOL_POSTURE)).toBeNull();
+    expect(publicReviewProviderBlock({ ...codex, id: 'codex-tui', type: 'tui' }, PUBLIC_REVIEW_ACTIONS_POSTURE)).toBeNull();
+    expect(publicReviewProviderBlock({ id: 'grok', type: 'api', command: undefined }, PUBLIC_REVIEW_ACTIONS_POSTURE)).toEqual({
+      reason: "Provider 'grok' has no enforced sandboxed-actions public-content review mode",
+      category: 'public-review-actions-provider-unsupported',
     });
   });
 
-  it('fails closed for transports and vendors with no maintained recipe', () => {
-    // A TUI session and an HTTP api provider have no enforced argv at all.
-    expect(publicReviewPosturesForProvider({ ...codex, type: 'tui' }, { tui: true })).toEqual([]);
+  // The user's enabled providers are commonly the TUI records (the CLI
+  // siblings switched off), and a stage runs the same binary headless either
+  // way — so a TUI record carries its vendor's postures.
+  it('derives the same postures for a TUI record of a recipe-bearing vendor', () => {
+    expect(publicReviewPosturesForProvider({ ...codex, id: 'codex-tui', type: 'tui' })).toEqual([PUBLIC_REVIEW_NO_TOOL_POSTURE, PUBLIC_REVIEW_ACTIONS_POSTURE]);
+    expect(publicReviewPosturesForProvider({ ...grok, id: 'grok-tui', type: 'tui' })).toEqual([PUBLIC_REVIEW_NO_TOOL_POSTURE, PUBLIC_REVIEW_ACTIONS_POSTURE]);
+    expect(publicReviewPosturesForProvider({ ...localClaude, id: 'claude-ollama-tui', type: 'tui' })).toEqual([PUBLIC_REVIEW_NO_TOOL_POSTURE, PUBLIC_REVIEW_ACTIONS_POSTURE]);
+    // The headless recipe, not the TUI argv, is what the stage spawns.
+    const config = buildVendorSpawnConfig({ ...codex, id: 'codex-tui', type: 'tui', args: ['--full-auto'] }, {
+      effectiveModel: 'gpt-5.6',
+      safetyProfile: PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
+    });
+    expect(config.args).toEqual(expect.arrayContaining(['exec', '--sandbox', 'workspace-write']));
+    expect(config.args).not.toContain('--full-auto');
+  });
+
+  it('fails closed for the no-tool gate on transports and vendors with no maintained recipe', () => {
+    // An HTTP api provider has no binary to spawn and no enforced argv.
     expect(publicReviewPosturesForProvider({ ...codex, type: 'api' })).toEqual([]);
-    // An unknown command must never inherit claude's always-true fallback row.
-    expect(publicReviewPosturesForProvider({ id: 'custom', type: 'cli', command: 'custom-agent' })).toEqual([]);
-    // opencode/kimi/cursor have no maintained no-tool or sandbox recipe yet.
-    expect(publicReviewPosturesForProvider({ id: 'opencode', type: 'cli', command: 'opencode' })).toEqual([]);
+    // opencode/kimi/cursor have no maintained no-tool recipe, so they can run
+    // only the actions stage. An unknown command must never inherit claude's
+    // always-true fallback row for the gate either.
+    expect(publicReviewPosturesForProvider({ id: 'opencode-tui', type: 'tui', command: 'opencode' })).toEqual([PUBLIC_REVIEW_ACTIONS_POSTURE]);
+    expect(publicReviewPosturesForProvider({ id: 'custom', type: 'cli', command: 'custom-agent' })).toEqual([PUBLIC_REVIEW_ACTIONS_POSTURE]);
     expect(supportsPublicReviewProvider({ id: 'kimi', type: 'cli', command: 'kimi' })).toBe(false);
-    expect(supportsPublicReviewActionsProvider(localClaude)).toBe(false);
+    expect(supportsPublicReviewActionsProvider(localClaude)).toBe(true);
+    expect(supportsPublicReviewActionsProvider({ ...localClaude, type: 'api' })).toBe(false);
   });
 
   it('builds the final reviewer with the bounded Codex sandbox and no provider args', () => {
@@ -162,9 +194,50 @@ describe('public-review provider postures', () => {
     expect(actions.args).not.toContain('plan');
   });
 
-  it('rejects the action profile for a provider with no maintained sandbox', () => {
-    expect(() => buildVendorSpawnConfig(localClaude, {
-      effectiveModel: 'safe-model',
+  it('builds the Claude actions stage inside its OS sandbox, not under skip-permissions', () => {
+    const config = buildVendorSpawnConfig({ ...localClaude, args: ['--dangerously-skip-permissions'] }, {
+      effectiveModel: 'qwen3.8:27b',
+      effort: 'high',
+      systemPromptFile: '/tmp/example-system.md',
+      safetyProfile: PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
+    });
+    expect(config.command).toBe('claude');
+    expect(config.streamFormat).toBe('stream-json');
+    expect(config.args).toEqual(expect.arrayContaining([
+      '--permission-mode', 'acceptEdits', '--settings', '--strict-mcp-config', '--print',
+      '--append-system-prompt-file', '/tmp/example-system.md', '--model', 'qwen3.8:27b', '--effort', 'high',
+    ]));
+    const settings = JSON.parse(config.args[config.args.indexOf('--settings') + 1]);
+    expect(settings.sandbox).toMatchObject({ enabled: true, autoAllowBashIfSandboxed: true, network: { allowedDomains: [] } });
+    expect(config.args[config.args.indexOf('--disallowedTools') + 1]).toBe('WebFetch,WebSearch');
+    expect(config.args).not.toContain('--dangerously-skip-permissions');
+    expect(config.args).not.toContain('--restricted');
+    expect(config.args).not.toContain('plan');
+    expect(config.args).toContain('--bare');
+    const cloud = buildVendorSpawnConfig({ id: 'claude-code', type: 'cli', command: 'claude' }, {
+      safetyProfile: PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
+    });
+    expect(cloud.args).not.toContain('--bare');
+    const cloudGate = buildVendorSpawnConfig({ id: 'claude-code', type: 'cli', command: 'claude' }, {
+      safetyProfile: PUBLIC_REVIEW_GATE_EXECUTION_PROFILE,
+    });
+    expect(cloudGate.args).not.toContain('--bare');
+    expect(cloudGate.args).toContain('--restricted');
+  });
+
+  it('runs a vendor with no sandbox recipe through its ordinary headless recipe for the actions stage only', () => {
+    const opencode = { id: 'opencode-tui', type: 'tui', command: 'opencode', args: ['--agent', 'build'] };
+    const config = buildVendorSpawnConfig(opencode, {
+      effectiveModel: 'x',
+      safetyProfile: PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
+    });
+    expect(config.command).toBe('opencode');
+    expect(config.args[0]).toBe('run');
+    expect(() => buildVendorSpawnConfig(opencode, {
+      effectiveModel: 'x',
+      safetyProfile: PUBLIC_REVIEW_GATE_EXECUTION_PROFILE,
+    })).toThrow(/no enforced no-tool public-review posture/);
+    expect(() => buildVendorSpawnConfig({ ...opencode, type: 'api' }, {
       safetyProfile: PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
     })).toThrow(/no enforced sandboxed-actions public-review posture/);
   });

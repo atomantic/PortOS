@@ -112,6 +112,14 @@ export const MINIMAX_H3_CUDA_OFFLOAD_PROFILES = Object.freeze([
 export const FASTVIDEO_VENV_PYTHON = join(homedir(), '.portos', 'fastvideo', '.venv', 'bin', 'python3');
 export const FASTVIDEO_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_fastvideo.py');
 export const FASTVIDEO_REPO_DIR = join(homedir(), '.portos', 'fastvideo');
+// FastH3's two derived-artifact roots, declared here for the same reason the
+// H3 shim and prompt-embedding roots above are: the server owns WHERE they
+// live so it can name, report and reclaim them, and the helper owns only the
+// layout underneath. Both are plain caches the user can delete at any time —
+// but the converted DiT is multi-GB per (snapshot, format), so leaving PortOS
+// with no name for it is what makes it unreclaimable.
+export const FASTVIDEO_MLX_CHECKPOINT_DIR = join(homedir(), '.portos', 'fastvideo', 'mlx-checkpoints');
+export const FASTVIDEO_PROMPT_CACHE_DIR = join(homedir(), '.portos', 'fastvideo', 'prompt-cache');
 
 // LTX-2.5 on CUDA — the official Lightricks ltx-core / ltx-pipelines runtime.
 export const LTX25_CUDA_REPO_DIR = join(homedir(), '.portos', 'ltx-2.5-cuda');

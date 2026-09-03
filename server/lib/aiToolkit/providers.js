@@ -203,20 +203,20 @@ const PRIOR_CODEX_MODEL_CATALOGS = [
 ];
 const ANTIGRAVITY_MODEL_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
 // agy exposes a per-session `--model` flag and lists its catalog via
-// `agy models`. This is the shipped fallback list (agy 2026-08) used to seed a
+// `agy models`. This is the shipped fallback list (agy 2026-09) used to seed a
 // fresh install and when the live `agy models` probe can't run; the AI Providers
 // "Refresh models" button replaces it with whatever the installed binary
 // reports, which is the authoritative list for that user's plan.
 const ANTIGRAVITY_MODELS = [
+  'gemini-3.8-flash-high',
+  'gemini-3.8-flash-medium',
+  'gemini-3.8-flash-low',
   'gemini-3.7-flash-high',
   'gemini-3.7-flash-medium',
   'gemini-3.7-flash-low',
   'gemini-3.6-flash-high',
   'gemini-3.6-flash-medium',
   'gemini-3.6-flash-low',
-  'gemini-3.5-flash-high',
-  'gemini-3.5-flash-medium',
-  'gemini-3.5-flash-low',
   'gemini-3.1-pro-high',
   'gemini-3.1-pro-low',
   'claude-sonnet-4-6',
@@ -233,6 +233,24 @@ const PRIOR_ANTIGRAVITY_MODEL_CATALOGS = [
   // Prior 2026-07 catalog without gemini-3.7
   [
     ANTIGRAVITY_CONFIGURED_DEFAULT,
+    'gemini-3.6-flash-high',
+    'gemini-3.6-flash-medium',
+    'gemini-3.6-flash-low',
+    'gemini-3.5-flash-high',
+    'gemini-3.5-flash-medium',
+    'gemini-3.5-flash-low',
+    'gemini-3.1-pro-high',
+    'gemini-3.1-pro-low',
+    'claude-sonnet-4-6',
+    'claude-opus-4-6-thinking',
+    'gpt-oss-120b-medium',
+  ],
+  // Prior 2026-08 catalog with gemini-3.5, without gemini-3.8
+  [
+    ANTIGRAVITY_CONFIGURED_DEFAULT,
+    'gemini-3.7-flash-high',
+    'gemini-3.7-flash-medium',
+    'gemini-3.7-flash-low',
     'gemini-3.6-flash-high',
     'gemini-3.6-flash-medium',
     'gemini-3.6-flash-low',

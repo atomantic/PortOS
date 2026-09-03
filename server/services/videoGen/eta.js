@@ -105,11 +105,38 @@ const speedBucket = (id) => (id == null || id === '' ? DEFAULT_SPEED_BUCKET : St
  * the user at render time, and ordinary variance next to the slope difference
  * this split exists to capture.
  */
+
+/**
+ * A timed row whose `renderMs` does NOT measure "this model rendering these
+ * work units on this machine", and so must never train the cost model — even
+ * though it carries a `modelId` and a positive `renderMs` and would otherwise
+ * sail through the filter below. Each is a derived record that inherits its
+ * source's model and dials while measuring something else entirely:
+ *
+ *  - `upscaledFrom` — the row keeps the source's `steps`/`numFrames` but DOUBLES
+ *    width and height (4× the work units), while its duration is an ffmpeg 2×
+ *    pass measured in seconds. Large x, tiny y: the single worst sample the
+ *    least-squares fit could be handed.
+ *  - `federatedPeerId` — rendered on a PEER's hardware, and the span includes
+ *    submission, that peer's own queue wait, download and verification. It
+ *    describes the federation round-trip, not this machine's throughput.
+ *  - `chainedFrom` / `stitchedFrom` — the chain's chunk rows are themselves
+ *    timed samples, so the stitched total would double-count them.
+ *
+ * Keyed on the discriminators the rows already carry rather than on a tag the
+ * writers have to remember to set: a future derived-record path is excluded the
+ * moment it stamps one of these, and until then the estimator is the one place
+ * that decides what a valid sample is.
+ */
+const DERIVED_RECORD_KEYS = ['upscaledFrom', 'federatedPeerId', 'chainedFrom', 'stitchedFrom'];
+const isDerivedRecord = (e) => DERIVED_RECORD_KEYS.some((key) => e[key] != null);
+
 export const timedRenderSamples = (history, modelId, speedProfileId = null) => {
   if (!Array.isArray(history)) return [];
   const wantBucket = speedBucket(speedProfileId);
   return history
     .filter((e) => e && e.modelId === modelId && speedBucket(e.speedProfileId) === wantBucket
+      && !isDerivedRecord(e)
       && Number.isFinite(Number(e.renderMs)) && Number(e.renderMs) > 0)
     .map((e) => ({
       workUnits: renderWorkUnits(e),

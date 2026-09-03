@@ -11,7 +11,7 @@ const pinScalars = (source) => Object.fromEntries([
   ...EFFORT_SELECTABLE_REVIEWERS.map((reviewer) => [`${reviewer}Effort`, source?.[`${reviewer}Effort`] || null]),
 ]);
 
-// Resolved "Code Review Defaults" (Settings → Code Reviewers) — used by TaskAddForm
+// Resolved "Code Review Defaults" (Models → Code Reviewers) — used by TaskAddForm
 // and ScheduleTab's per-task-type config to seed the picker's fallback state
 // instead of the hardcoded `['copilot']`. Returned shape mirrors the server's
 // `getCodeReviewDefaults()` so a consumer can rely on the same field names

@@ -28,6 +28,7 @@ import { buildCompactionSection, buildTaskBlock, reconcileSplitContext } from '.
 import { applySlashdoInvocation } from './promptSections/slashdo.js';
 import { manualForgeCli, resolveManualForgeCli } from './promptSections/forge.js';
 import { buildPlannerAttributionSection } from './promptSections/plannerAttribution.js';
+import { isPublicReviewNoToolProfile, isPublicReviewRestrictedProfile } from '../lib/agentExecutionProfiles.js';
 import {
   DISCARD_WORKTREE_NOTE,
   buildActionOutputCompletionSection,
@@ -38,6 +39,7 @@ import {
   NO_CHANGE_AUDIT_GUIDANCE,
   buildProgrammaticOutputCompletionSection,
   buildReadOnlyCompletionSection,
+  buildToolFreeReasoningCompletionSection,
   buildResumeSection,
   buildSentinelWriteSteps,
   buildTuiCompletionSection,
@@ -409,6 +411,13 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // `pending` BEFORE this flag existed (persisted across an upgrade) are still
   // recognized without a metadata migration.
   const noCodeOutput = isTruthyMetaFn(task.metadata?.noCodeOutput) || isCreativeDirectorTask;
+  // A tool-free public-review stage has no sentinel, API, or command to reach
+  // for: its reply IS the deliverable. Wins over every other completion contract.
+  const toolFreeReasoning = isPublicReviewNoToolProfile(task.metadata?.executionProfile);
+  // The sandboxed review stage has tools and a discarded worktree; its output
+  // is the JSON payload in the sentinel, not an API action — so it takes the
+  // programmatic-output contract ahead of the no-code one.
+  const sentinelPayloadOutput = isPublicReviewRestrictedProfile(task.metadata?.executionProfile) && !toolFreeReasoning;
   const noChangeSuccess = isTruthyMetaFn(task.metadata?.noChangeSuccess);
   const isWorktreeOnExistingBranch = isPrBranchWorktree(task, worktreeInfo);
   const worktreeCommitNote = worktreeInfo
@@ -511,7 +520,11 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
   // worktree disposal (`discardWorktree`) pick the reasoning-payload contract.
   // A task doing external work during the run must not be told the sentinel is
   // its output channel.
-  const tuiCompletionSection = noCodeOutput
+  const tuiCompletionSection = toolFreeReasoning
+    ? buildToolFreeReasoningCompletionSection()
+    : sentinelPayloadOutput
+    ? buildProgrammaticOutputCompletionSection(sentinelPath)
+    : noCodeOutput
     ? buildActionOutputCompletionSection({ isTui, sentinelPath })
     : discardWorktree
       ? buildProgrammaticOutputCompletionSection(sentinelPath)
@@ -736,9 +749,9 @@ ${(() => {
   const bullet = buildCompletionGuidelineBullet({
     isReadOnly: isTruthyMetaFn(task.metadata?.readOnly), whenDone,
     isTui, tuiCompletionCommand, slashdoFree: isTui && !canRunSlashCommands,
-    worktreeInfo, willOpenPR, prCompletion, discardWorktree, noCodeOutput, noChangeSuccess,
+    worktreeInfo, willOpenPR, prCompletion, discardWorktree, noCodeOutput: noCodeOutput && !sentinelPayloadOutput, noChangeSuccess,
     leavePrOpen: leavesPrForHuman(task),
-    isPrFollowUp: isReviewLoopFollowUp, claimFlow,
+    isPrFollowUp: isReviewLoopFollowUp, claimFlow, toolFreeReasoning,
   });
   return bullet ? `- ${bullet}` : '';
 })()}
@@ -748,7 +761,9 @@ ${(() => {
 - **NEVER use \`git stash\`** in any form (\`git stash push\`, \`git stash pop\`, etc.). This is a multi-agent system — stashing can silently destroy or corrupt another agent's or the user's in-progress work. Work around uncommitted changes instead. (Note: the backend may use \`--autostash\` in user-triggered pull operations — that is safe because those are single-user UI actions, not concurrent agent operations.)
 - **Only commit files YOU changed** for this task. Never use \`git add -A\` or \`git add .\` — always stage specific files by name.
 ${noChangeSuccess ? `- **No-change audits may exit cleanly.** ${NO_CHANGE_AUDIT_GUIDANCE}` : ''}
-${noCodeOutput
+${toolFreeReasoning
+  ? `- **No git at all.** You have no tools; the Completion section above is the whole contract.`
+  : noCodeOutput && !sentinelPayloadOutput
   ? `- **Do NOT commit, push, or open a PR.** This task changes no code — its result is delivered by the API call or command described above. Without this, a no-worktree task of this shape was told to \`/do:push\` **directly to the branch it is standing on**, which for a task running in the app's live checkout is its default branch.`
   : discardWorktree
   ? `- **Do NOT commit, push, or open a PR.** This worktree is discarded on exit — your only output is the completion sentinel (see the Completion section above).`
@@ -833,6 +848,8 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // derive from a CD task's `creativeDirector` marker so pre-upgrade `pending`
   // tasks (queued before this flag existed) are recognized without a migration.
   const noCodeOutput = isTruthyMetaFn(task.metadata?.noCodeOutput) || !!task.metadata?.creativeDirector;
+  const toolFreeReasoning = isPublicReviewNoToolProfile(task.metadata?.executionProfile);
+  const sentinelPayloadOutput = isPublicReviewRestrictedProfile(task.metadata?.executionProfile) && !toolFreeReasoning;
   const noChangeSuccess = isTruthyMetaFn(task.metadata?.noChangeSuccess);
   const isReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
   const isWorktreeOnExistingBranch = isPrBranchWorktree(task, worktreeInfo);
@@ -1004,7 +1021,11 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // matters in production — every `tui`/`cli` provider returns from the light
   // path above and never reaches the other two, so a fix applied only there is
   // no fix at all for anything a subscription-quota job can run.
-  if (noCodeOutput) {
+  if (toolFreeReasoning) {
+    // No tools at all: the reply is the deliverable (see the full path's
+    // tuiCompletionSection ternary for the same precedence).
+    contractSections.push(buildToolFreeReasoningCompletionSection());
+  } else if (noCodeOutput && !sentinelPayloadOutput) {
     contractSections.push(buildActionOutputCompletionSection({
       isTui,
       sentinelPath: resolveSentinelPath(worktreeInfo, workspaceDir, agentId),

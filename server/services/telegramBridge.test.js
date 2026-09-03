@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { homedir } from 'os';
+import { TELEGRAM_MAX_RAW_CHARS } from '../lib/telegramMessage.js';
 import { join } from 'path';
 
 const ENV_FILE = join(homedir(), '.claude', 'channels', 'telegram', '.env');
@@ -27,6 +28,15 @@ vi.mock('../lib/fileUtils.js', () => ({
 let mockMessagesMode = 'execute';
 vi.mock('./cosState.js', () => ({
   getDomainAutonomyMode: vi.fn(async () => mockMessagesMode)
+}));
+
+// The shared forward pipeline (services/telegramForward.js) resolves the pending
+// memory for a MEMORY_APPROVAL notification. Mocked so the bridge suite never
+// touches the real memory backend (Postgres) — `mockApprovalMemory` is what
+// peekMemory returns.
+let mockApprovalMemory = null;
+vi.mock('./memoryBackend.js', () => ({
+  peekMemory: vi.fn(async () => mockApprovalMemory)
 }));
 
 // The bridge also reads the messages daily budget; keep it always-within-budget
@@ -114,6 +124,7 @@ describe('telegramBridge service', () => {
     updateCachedForwardTypes(null);
     mockMessagesMode = 'execute';
     mockMessagesWithinBudget = true;
+    mockApprovalMemory = null;
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -335,6 +346,61 @@ describe('telegramBridge service', () => {
         ).toHaveLength(0);
         await cleanup();
       }
+    });
+
+    // #5688 — the bridge was a copy-paste of the direct bot and had silently
+    // dropped the approval keyboard and the length cap. Both now come from the
+    // one shared pipeline, so these pin the parity from the bridge side.
+    it('attaches the memory approve/reject keyboard to a MEMORY_APPROVAL forward (#5688)', async () => {
+      mockApprovalMemory = { summary: 'Remember the example project deadline' };
+      seedCredentials();
+      const fetchSpy = mockTelegramFetch();
+      vi.stubGlobal('fetch', fetchSpy);
+      await init();
+      fetchSpy.mockClear();
+
+      notificationEvents.emit('added', {
+        type: NOTIFICATION_TYPES.MEMORY_APPROVAL,
+        title: 'Approve memory?',
+        description: 'ignored once the memory resolves',
+        priority: PRIORITY_LEVELS.MEDIUM,
+        metadata: { memoryId: 'mem-1' }
+      });
+      await flush();
+
+      const sendCall = fetchSpy.mock.calls.find(([url]) => url.endsWith('/sendMessage'));
+      expect(sendCall, 'a memory approval must still be forwarded').toBeDefined();
+      const body = JSON.parse(sendCall[1].body);
+      expect(body.text).toContain('Remember the example project deadline');
+      // A pre-serialized string would reach Telegram as a literal string, so the
+      // keyboard must survive as a real object through the HTTP body.
+      expect(body.reply_markup.inline_keyboard[0]).toEqual([
+        { text: '✅ Approve', callback_data: 'mem_approve:mem-1' },
+        { text: '❌ Reject', callback_data: 'mem_reject:mem-1' }
+      ]);
+    });
+
+    it('truncates a body past the raw cap before escaping it (#5688)', async () => {
+      // '&' sits exactly on the cut: escaping first would leave a split '&am'.
+      mockApprovalMemory = { content: `${'a'.repeat(TELEGRAM_MAX_RAW_CHARS - 1)}&${'b'.repeat(200)}` };
+      seedCredentials();
+      const fetchSpy = mockTelegramFetch();
+      vi.stubGlobal('fetch', fetchSpy);
+      await init();
+      fetchSpy.mockClear();
+
+      notificationEvents.emit('added', {
+        type: NOTIFICATION_TYPES.MEMORY_APPROVAL,
+        title: 'Long one',
+        priority: PRIORITY_LEVELS.LOW,
+        metadata: { memoryId: 'mem-2' }
+      });
+      await flush();
+
+      const sendCall = fetchSpy.mock.calls.find(([url]) => url.endsWith('/sendMessage'));
+      const bodyLine = JSON.parse(sendCall[1].body).text.split('\n')[1];
+      expect(bodyLine.endsWith('&amp;…')).toBe(true);
+      expect(bodyLine).not.toContain('b');
     });
 
     it('suppresses forwarding when the messages daily budget is exhausted (#711)', async () => {

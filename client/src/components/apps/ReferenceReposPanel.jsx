@@ -63,7 +63,7 @@ export default function ReferenceReposPanel({ appId, appName }) {
   // failure doesn't blank the list — stale-but-valid is far better UX
   // than "no refs configured" appearing when the server hiccups.
   const [fetchError, setFetchError] = useState(null);
-  const fetch = useCallback(async () => {
+  const loadRefs = useCallback(async () => {
     setRefreshing(true);
     const res = await api.listReferenceRepos(appId).catch((e) => ({ __error: e?.message || 'Failed to load references' }));
     if (res && res.__error) {
@@ -77,8 +77,8 @@ export default function ReferenceReposPanel({ appId, appName }) {
   }, [appId]);
 
   useEffect(() => {
-    fetch();
-  }, [fetch]);
+    loadRefs();
+  }, [loadRefs]);
 
   useEffect(() => {
     let cancelled = false;
@@ -93,7 +93,7 @@ export default function ReferenceReposPanel({ appId, appName }) {
     if (!created) return;
     toast.success(`Added "${created.name}"`);
     setShowAdd(false);
-    fetch();
+    loadRefs();
   };
 
   // Two-click delete per AGENTS.md "no window.confirm". First click arms the
@@ -134,13 +134,13 @@ export default function ReferenceReposPanel({ appId, appName }) {
       // ones (they may not be; the failed check might've been triggered
       // by upstream HEAD moving).
       setSnapshots((prev) => { const n = { ...prev }; delete n[ref.id]; return n; });
-      fetch();
+      loadRefs();
       return;
     }
     setSnapshots((prev) => ({ ...prev, [ref.id]: snap }));
     if (snap.stale) {
       toast.error(`${ref.name}: latest check failed — showing the saved result from ${formatDateTime(snap.fetchedAt)}. Retry before relying on it.`);
-      fetch();
+      loadRefs();
       return;
     }
     const commitMsg = `${ref.name}: ${snap.commitCount} new commit${snap.commitCount === 1 ? '' : 's'}`;
@@ -155,7 +155,7 @@ export default function ReferenceReposPanel({ appId, appName }) {
     } else {
       toast.success(commitMsg);
     }
-    fetch();
+    loadRefs();
   };
 
   const handleMarkReviewed = async (ref) => {
@@ -175,7 +175,7 @@ export default function ReferenceReposPanel({ appId, appName }) {
     if (!ok) return;
     toast.success(`Marked ${ref.name} reviewed up to ${sha.slice(0, 8)}`);
     setSnapshots((prev) => { const n = { ...prev }; delete n[ref.id]; return n; });
-    fetch();
+    loadRefs();
   };
 
   const handleSaveNotes = async (ref, nextNotes) => {
@@ -187,7 +187,7 @@ export default function ReferenceReposPanel({ appId, appName }) {
       .catch((e) => { toast.error(e.message || 'Update failed'); return false; });
     if (!ok) return;
     setEditingNotesId(null);
-    fetch();
+    loadRefs();
   };
 
   if (initialLoading) {

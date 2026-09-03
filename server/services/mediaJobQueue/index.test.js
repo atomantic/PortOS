@@ -507,78 +507,39 @@ describe('mediaJobQueue', () => {
     await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'completed');
   });
 
-  it('forwards the resolved render geometry, isolated per job and out of the replay slot', async () => {
-    // #4588: a live preview stage must size itself by the geometry the render
-    // RESOLVED to (videoGen snaps both edges down to the model's grid), not by
-    // what the form submitted. The queue's own `started` SSE frame is broadcast
-    // before the gen run begins, so the geometry rides its own frame type.
-    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'geometry', width: 720, height: 484 } });
+  it('forwards the runner phase on status and progress frames (#5872)', async () => {
+    // A local video render is silent for minutes at a time — FastH3 streams an
+    // ~89 GB INT4 DiT before its first denoise step and reports no numeric
+    // progress while it does. The phase id is the ONLY thing that lets the page
+    // say what it is doing, so it has to survive the dispatcher on both frame
+    // types. Presence-guarded: a frame that carries no phase must not stamp one.
+    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'what are you doing' } });
     await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
     await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'running');
 
     const frames = [];
-    const makeRes = (sink) => ({
+    expect(mediaJobQueue.attachSseClient(job.jobId, {
       writeHead: () => {},
       write: (msg) => {
         for (const line of msg.split('\n')) {
-          if (line.startsWith('data: ')) sink.push(JSON.parse(line.slice(6)));
+          if (line.startsWith('data: ')) frames.push(JSON.parse(line.slice(6)));
         }
       },
       end: () => {},
       req: { on: () => {} },
+    })).toBe(true);
+
+    videoGenEvents.emit('status', {
+      generationId: job.jobId, message: 'Loading the FastVideo pipeline · 2m45s elapsed', phase: 'load-pipeline',
     });
-    expect(mediaJobQueue.attachSseClient(job.jobId, makeRes(frames))).toBe(true);
+    await waitFor(() => frames.some((f) => f.type === 'status' && f.phase === 'load-pipeline'));
 
-    // A `started` event for an unrelated render must not stamp this job.
-    videoGenEvents.emit('started', { generationId: 'some-other-job', width: 1920, height: 1080 });
-    // Neither must a runner that reports no usable geometry — absent/zero edges
-    // emit no frame at all rather than a ratio the client has to defend against.
-    videoGenEvents.emit('started', { generationId: job.jobId, totalSteps: 30 });
-    videoGenEvents.emit('started', { generationId: job.jobId, width: 0, height: 480 });
-    expect(frames.some((f) => f.type === 'render-meta')).toBe(false);
-    expect(mediaJobQueue.getJob(job.jobId)?.render).toBeUndefined();
+    videoGenEvents.emit('progress', { generationId: job.jobId, progress: 0.25, phase: 'sampling' });
+    await waitFor(() => frames.some((f) => f.type === 'progress' && f.phase === 'sampling'));
 
-    videoGenEvents.emit('started', { generationId: job.jobId, totalSteps: 30, width: 704, height: 480 });
-    await waitFor(() => frames.some((f) => f.type === 'render-meta'));
-    expect(frames.find((f) => f.type === 'render-meta')).toEqual({ type: 'render-meta', width: 704, height: 480 });
-    // Persisted on the job so a reload recovers it — the SSE entry keeps only
-    // ONE replay frame and it must hold what the run is doing.
-    expect(mediaJobQueue.getJob(job.jobId).render).toEqual({ width: 704, height: 480 });
-
-    videoGenEvents.emit('progress', { generationId: job.jobId, progress: 0.25 });
-    await waitFor(() => frames.some((f) => f.type === 'progress'));
-
-    // A client that attaches AFTER the geometry was announced (the normal case
-    // — the geometry lands before the submitting page's EventSource is even
-    // open) still gets it, replayed from the job rather than from the single
-    // retained slot, which keeps holding the frame that says what the run is
-    // doing.
-    const replayed = [];
-    expect(mediaJobQueue.attachSseClient(job.jobId, makeRes(replayed))).toBe(true);
-    expect(replayed).toHaveLength(2);
-    expect(replayed[0]).toMatchObject({ type: 'progress', progress: 0.25 });
-    expect(replayed[1]).toEqual({ type: 'render-meta', width: 704, height: 480 });
-
-    // A chained render emits `started` per CHUNK, under ids the queue ignores,
-    // so its geometry rides the outer progress frames instead — same handler,
-    // same dedupe, no second frame for an unchanged geometry.
-    videoGenEvents.emit('progress', { generationId: job.jobId, progress: 0.3, width: 704, height: 480 });
-    videoGenEvents.emit('progress', { generationId: job.jobId, progress: 0.4, width: 1280, height: 704 });
-    await waitFor(() => frames.filter((f) => f.type === 'render-meta').length === 2);
-    expect(frames.filter((f) => f.type === 'render-meta').at(-1))
-      .toEqual({ type: 'render-meta', width: 1280, height: 704 });
-    expect(mediaJobQueue.getJob(job.jobId).render).toEqual({ width: 1280, height: 704 });
-
-    // Restore the original geometry for the persistence assertion below.
-    videoGenEvents.emit('progress', { generationId: job.jobId, progress: 0.5, width: 704, height: 480 });
-    await waitFor(() => mediaJobQueue.getJob(job.jobId).render?.width === 704);
-
-    // Survives a server restart too — the geometry is part of the persisted
-    // projection, not just in-memory state.
-    await waitFor(() => {
-      const data = JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf-8'));
-      return data.jobs.find((j) => j.id === job.jobId)?.render?.width === 704;
-    });
+    videoGenEvents.emit('status', { generationId: job.jobId, message: 'no phase here' });
+    await waitFor(() => frames.some((f) => f.message === 'no phase here'));
+    expect('phase' in frames.find((f) => f.message === 'no phase here')).toBe(false);
 
     videoGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.mp4` });
     await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'completed');

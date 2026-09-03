@@ -421,7 +421,7 @@ export default function WordplayTrainer({ onBack, onContinue, config, onConfigUp
     return (
       <div className="max-w-2xl mx-auto space-y-6 px-4">
         <div className="flex items-center gap-3">
-          <button aria-label="Back" onClick={onBack} className="p-1.5 hover:bg-port-card rounded-lg transition-colors">
+          <button aria-label="Back" onClick={onBack} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 hover:bg-port-card rounded-lg transition-colors">
             <ArrowLeft size={20} className="text-gray-400" />
           </button>
           <h2 className="text-xl font-bold text-white">Wordplay Training</h2>
@@ -676,7 +676,7 @@ function ModeHeader({ modeInfo, onBack }) {
   const Icon = modeInfo?.icon || Link;
   return (
     <div className="flex items-center gap-3">
-      <button aria-label="Back" onClick={onBack} className="p-1.5 hover:bg-port-card rounded-lg transition-colors">
+      <button aria-label="Back" onClick={onBack} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 hover:bg-port-card rounded-lg transition-colors">
         <ArrowLeft size={20} className="text-gray-400" />
       </button>
       <div className={`p-1.5 rounded-lg ${modeInfo?.bgColor || 'bg-purple-500/20'}`}>

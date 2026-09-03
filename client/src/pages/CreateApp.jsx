@@ -82,6 +82,7 @@ export default function CreateApp() {
   const [devUiPort, setDevUiPort] = useState('');
   const [apiPort, setApiPort] = useState('');
   const [buildCommand, setBuildCommand] = useState('');
+  const [updateCommand, setUpdateCommand] = useState('');
   const [startCommands, setStartCommands] = useState('');
   const [pm2Names, setPm2Names] = useState('');
   const [pm2Status, setPm2Status] = useState(null);
@@ -234,6 +235,7 @@ export default function CreateApp() {
       devUiPort: devUiPort ? parseInt(devUiPort, 10) : null,
       apiPort: apiPort ? parseInt(apiPort, 10) : null,
       buildCommand: buildCommand || undefined,
+      updateCommand: updateCommand || undefined,
       startCommands: startCommands ? startCommands.split('\n').filter(Boolean) : [],
       pm2ProcessNames: isNonPm2
         ? []
@@ -423,6 +425,21 @@ export default function CreateApp() {
                     </p>
                   </div>
                 )}
+
+                <div>
+                  <label htmlFor="update-command" className="block text-sm text-gray-400 mb-1">Update Command</label>
+                  <input
+                    id="update-command"
+                    type="text"
+                    value={updateCommand}
+                    onChange={(e) => setUpdateCommand(e.target.value)}
+                    placeholder="npm run update"
+                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden font-mono text-sm"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Optional. Updates otherwise only check out the origin default branch and restart. A <code>portos:update</code> package script is also recognized.
+                  </p>
+                </div>
 
                 <div>
                   <label htmlFor="build-command" className="block text-sm text-gray-400 mb-1">Build Command</label>

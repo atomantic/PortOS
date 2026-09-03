@@ -1150,9 +1150,15 @@ const transcriptDigest = (transcript) =>
  * (`transitionId`), there is no intent to map, so the move resolves straight
  * off the graph — no provider call, no latency, no spend. Free text goes
  * through the play stage, which either matches a path or answers in-world.
+ *
+ * `signal` lets a caller whose turn can be torn down mid-flight (the hosted QR
+ * session, #5786) stop the turn from SPENDING on a reader nobody is listening
+ * to any more. The stage runner has no mid-call cancellation, so this is a
+ * boundary guard, not a mid-flight abort: the record load above is a real await,
+ * and an abort landing inside it means the provider call is never made.
  */
 export async function playTurn(loomId, episodeId, {
-  nodeId, message, transitionId, transcript = [], providerId, model, effort,
+  nodeId, message, transitionId, transcript = [], providerId, model, effort, signal,
 } = {}) {
   const loom = await requireLoom(loomId);
   const episode = findEpisode(loom, episodeId);
@@ -1189,6 +1195,13 @@ export async function playTurn(loomId, episodeId, {
     t.triggers.length ? `  example phrasings: ${t.triggers.join('; ')}` : null,
     t.description ? `  leads to: ${t.description}` : null,
   ].filter(Boolean).join('\n')).join('\n');
+
+  if (signal?.aborted) {
+    throw new ServerError('Play turn was cancelled before the provider call', {
+      status: 499,
+      code: 'TURN_ABORTED',
+    });
+  }
 
   const { content, runId } = await runStagedLLM('fableloom-play-turn', {
     storyContext: storyContext(loom, episode),

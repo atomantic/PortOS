@@ -9,6 +9,7 @@ import { createHash } from 'crypto';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { rebuildTrusted } from './trusted-rebuilds.js';
+import { isDirectlyInvoked } from './lib/directInvocation.js';
 // Node refuses to spawn npm's `.cmd` shim under `shell:false` (CVE-2024-27980),
 // so every npm spawn goes through this wrap. Safe to import before `npm install`
 // has ever run — bufferedSpawn's whole import graph is Node builtins only.
@@ -31,7 +32,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 // `git pull` + `npm start` path, which has no pull context to diff against.
 const HASH_FILE = join(ROOT, 'data', 'deps-hashes.json');
 
-const WORKSPACES = [
+export const WORKSPACES = [
   { dir: ROOT, label: 'root' },
   { dir: join(ROOT, 'client'), label: 'client' },
   { dir: join(ROOT, 'server'), label: 'server' },
@@ -62,21 +63,6 @@ function saveHashes(hashes) {
   }
 }
 
-// True only when the lockfile is gitignored (the per-install client/server
-// locks). A tracked root lockfile is kept — it's consistent with package.json.
-function lockfileIsGitignored(dir) {
-  try {
-    execFileSync('git', ['check-ignore', '-q', join(dir, 'package-lock.json')], {
-      cwd: ROOT,
-      stdio: 'ignore',
-      windowsHide: true
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // Filesystem fallback for the no-baseline case (first run after this feature
 // lands, or a fresh manual checkout): npm writes node_modules/.package-lock.json
 // at the end of every install, so its mtime is the last-install time. If
@@ -95,15 +81,14 @@ function manifestNewerThanInstall(dir) {
   }
 }
 
-function cleanWorkspaceDeps(dir) {
+// Wipe `node_modules` ONLY. Every workspace lockfile ensure-deps touches (root,
+// client, server, autofixer) is tracked, so `npm install` re-resolves from the
+// committed lock — which is the state we want. Deleting it would let a clean
+// reinstall silently float transitive versions past the `overrides` pins.
+export function cleanWorkspaceDeps(dir) {
   try {
     rmSync(join(dir, 'node_modules'), { recursive: true, force: true });
   } catch { /* best effort */ }
-  if (lockfileIsGitignored(dir)) {
-    try {
-      rmSync(join(dir, 'package-lock.json'), { force: true });
-    } catch { /* best effort */ }
-  }
 }
 
 // The trusted install-script allowlist lives in scripts/trusted-rebuilds.js —
@@ -140,73 +125,79 @@ function install(dir, label) {
   }
 }
 
-const storedHashes = loadHashes();
-let hashesDirty = false;
-let needed = false;
+// Import-safe driver: the module exposes its helpers to scripts/ensure-deps.test.js,
+// and only performs installs when run as `node scripts/ensure-deps.js`.
+function main() {
+  const storedHashes = loadHashes();
+  let hashesDirty = false;
+  let needed = false;
 
-for (const { dir, label } of WORKSPACES) {
-  const currentHash = pkgHash(dir);
-  const nodeModulesMissing = !existsSync(join(dir, 'node_modules'));
-  const storedHash = storedHashes[label];
-  // With a stored baseline, a differing hash means the manifest moved since the
-  // last install. Without one (first run after this feature lands, or a fresh
-  // manual checkout), fall back to the install-marker mtime so a `git pull` +
-  // `npm start` that changed package.json over a present node_modules is still
-  // caught — instead of silently seeding the stale tree.
-  const depsChanged = storedHash != null
-    ? currentHash != null && storedHash !== currentHash
-    : !nodeModulesMissing && manifestNewerThanInstall(dir);
+  for (const { dir, label } of WORKSPACES) {
+    const currentHash = pkgHash(dir);
+    const nodeModulesMissing = !existsSync(join(dir, 'node_modules'));
+    const storedHash = storedHashes[label];
+    // With a stored baseline, a differing hash means the manifest moved since the
+    // last install. Without one (first run after this feature lands, or a fresh
+    // manual checkout), fall back to the install-marker mtime so a `git pull` +
+    // `npm start` that changed package.json over a present node_modules is still
+    // caught — instead of silently seeding the stale tree.
+    const depsChanged = storedHash != null
+      ? currentHash != null && storedHash !== currentHash
+      : !nodeModulesMissing && manifestNewerThanInstall(dir);
 
-  if (nodeModulesMissing || depsChanged) {
-    if (depsChanged) {
-      // Clean whenever the manifest changed — even if node_modules is already
-      // gone — so the stale gitignored lockfile is removed and npm resolves the
-      // tree from scratch instead of reusing the old per-install lock.
-      console.log(`🧹 ${label} package.json changed since last install — clean reinstall...`);
-      cleanWorkspaceDeps(dir);
-    } else {
-      console.log(`📦 Missing node_modules for ${label} — installing...`);
+    if (nodeModulesMissing || depsChanged) {
+      if (depsChanged) {
+        // Clean whenever the manifest changed — even if node_modules is already
+        // gone — so npm rebuilds the tree from the committed lockfile instead of
+        // layering onto a tree resolved against the previous manifest.
+        console.log(`🧹 ${label} package.json changed since last install — clean reinstall...`);
+        cleanWorkspaceDeps(dir);
+      } else {
+        console.log(`📦 Missing node_modules for ${label} — installing...`);
+      }
+      if (!install(dir, label)) process.exit(1);
+      needed = true;
     }
+
+    if (currentHash != null && storedHashes[label] !== currentHash) {
+      storedHashes[label] = currentHash;
+      hashesDirty = true;
+    }
+  }
+
+  // Verify critical packages exist even if node_modules dirs were present
+  // Grouped by workspace to avoid redundant installs
+  const criticalPackages = [
+    { dir: ROOT, label: 'root', pkg: 'pm2/package.json' },
+    { dir: join(ROOT, 'client'), label: 'client', pkg: 'vite/bin/vite.js' },
+    { dir: join(ROOT, 'server'), label: 'server', pkg: 'express/package.json' },
+    { dir: join(ROOT, 'server'), label: 'server', pkg: 'pg/package.json' },
+  ];
+
+  const criticalByDir = new Map();
+  for (const { dir, label, pkg } of criticalPackages) {
+    if (!criticalByDir.has(dir)) criticalByDir.set(dir, { label, pkgs: [] });
+    criticalByDir.get(dir).pkgs.push(pkg);
+  }
+
+  for (const [dir, { label, pkgs }] of criticalByDir) {
+    const missing = pkgs.filter(pkg => !existsSync(join(dir, 'node_modules', ...pkg.split('/'))));
+    if (!missing.length) continue;
+
+    console.log(`📦 Missing ${missing.map(p => p.split('/')[0]).join(', ')} in ${label} — reinstalling deps...`);
     if (!install(dir, label)) process.exit(1);
     needed = true;
+
+    const stillMissing = pkgs.filter(pkg => !existsSync(join(dir, 'node_modules', ...pkg.split('/'))));
+    if (stillMissing.length) {
+      console.error(`❌ Still missing in ${label} after reinstall: ${stillMissing.map(p => p.split('/')[0]).join(', ')}`);
+      process.exit(1);
+    }
   }
 
-  if (currentHash != null && storedHashes[label] !== currentHash) {
-    storedHashes[label] = currentHash;
-    hashesDirty = true;
-  }
+  if (hashesDirty) saveHashes(storedHashes);
+
+  if (needed) console.log('✅ Dependencies verified');
 }
 
-// Verify critical packages exist even if node_modules dirs were present
-// Grouped by workspace to avoid redundant installs
-const criticalPackages = [
-  { dir: ROOT, label: 'root', pkg: 'pm2/package.json' },
-  { dir: join(ROOT, 'client'), label: 'client', pkg: 'vite/bin/vite.js' },
-  { dir: join(ROOT, 'server'), label: 'server', pkg: 'express/package.json' },
-  { dir: join(ROOT, 'server'), label: 'server', pkg: 'pg/package.json' },
-];
-
-const criticalByDir = new Map();
-for (const { dir, label, pkg } of criticalPackages) {
-  if (!criticalByDir.has(dir)) criticalByDir.set(dir, { label, pkgs: [] });
-  criticalByDir.get(dir).pkgs.push(pkg);
-}
-
-for (const [dir, { label, pkgs }] of criticalByDir) {
-  const missing = pkgs.filter(pkg => !existsSync(join(dir, 'node_modules', ...pkg.split('/'))));
-  if (!missing.length) continue;
-
-  console.log(`📦 Missing ${missing.map(p => p.split('/')[0]).join(', ')} in ${label} — reinstalling deps...`);
-  if (!install(dir, label)) process.exit(1);
-  needed = true;
-
-  const stillMissing = pkgs.filter(pkg => !existsSync(join(dir, 'node_modules', ...pkg.split('/'))));
-  if (stillMissing.length) {
-    console.error(`❌ Still missing in ${label} after reinstall: ${stillMissing.map(p => p.split('/')[0]).join(', ')}`);
-    process.exit(1);
-  }
-}
-
-if (hashesDirty) saveHashes(storedHashes);
-
-if (needed) console.log('✅ Dependencies verified');
+if (isDirectlyInvoked(import.meta.url)) main();

@@ -645,6 +645,33 @@ describe('imageGen local.buildSidecarMeta', () => {
     expect(meta.referenceImageStrengths).toEqual([0.85, 0.5]);
   });
 
+  it('stamps model+LoRA provenance at finalize and never guesses a license', () => {
+    const { meta } = buildSidecarMeta({
+      ...baseMetaInput,
+      model: { id: 'flux2-klein-9b', name: 'FLUX.2 Klein 9B', repo: 'org/flux2', steps: 8, guidance: 0 },
+      loraFilenames: ['style.safetensors'],
+      loraLicenses: { 'style.safetensors': { license: 'openrail', sourceUrl: 'https://civitai.com/models/1', name: 'Style' } },
+    });
+    expect(meta.provenance.schemaVersion).toBe(1);
+    expect(meta.provenance.capturedAt).toBe('2024-01-01T00:00:00.000Z');
+    expect(meta.provenance.sources).toEqual([
+      {
+        kind: 'model',
+        id: 'flux2-klein-9b',
+        name: 'FLUX.2 Klein 9B',
+        license: null,
+        sourceUrl: 'https://huggingface.co/org/flux2',
+      },
+      {
+        kind: 'lora',
+        id: 'style.safetensors',
+        name: 'Style',
+        license: 'openrail',
+        sourceUrl: 'https://civitai.com/models/1',
+      },
+    ]);
+  });
+
   it('persists FableLoom visual-conditioning provenance without rewriting it', () => {
     const visualConditioning = {
       version: 1, compilerVersion: '1.0.0', status: 'locked', assets: [{ role: 'character-neutral', filename: 'aria.png' }],

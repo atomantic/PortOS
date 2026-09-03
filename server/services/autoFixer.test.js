@@ -13,6 +13,15 @@ vi.mock('./cos.js', () => ({
   getAllTasks: vi.fn().mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } }),
 }));
 
+// installState reaches out to git/fs; stub it so the stale-deployed-build
+// branch is driven from the test rather than from this checkout's real HEAD.
+vi.mock('./installState.js', () => ({
+  getBootCommit: vi.fn(() => null),
+  getInstallState: vi.fn(async () => null),
+}));
+
+const installState = await import('./installState.js');
+
 const cos = await import('./cos.js');
 const {
   noteFallbackHandled,
@@ -779,5 +788,78 @@ describe('autoFixer — escalateProviderFailure dedupe clears on task-creation f
     const second = await (await import('./autoFixer.js')).escalateProviderFailure(err);
     expect(second).toBeTruthy();
     expect(cos.addTask).toHaveBeenCalledTimes(2);
+  });
+});
+
+// A server still running code from before the current checkout can keep
+// reproducing a failure that is already fixed on disk — a local-LLM playground
+// timeout was filed a second time hours after #5771 fixed it, and the
+// investigation agent had to rediscover that from scratch. The task body now
+// says so up front.
+describe('autoFixer — stale deployed build in the investigation body', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    cos.addTask.mockClear();
+    cos.isRunning.mockReturnValue(false);
+    installState.getBootCommit.mockReturnValue(null);
+    installState.getInstallState.mockClear();
+    installState.getInstallState.mockResolvedValue(null);
+    clearPendingAutoFixTasks();
+    _resetAutoFixerForTests();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    clearPendingAutoFixTasks();
+    _resetAutoFixerForTests();
+  });
+
+  it('names the boot-vs-HEAD gap and leads the steps with ruling it out', async () => {
+    installState.getBootCommit.mockReturnValue('aaaaaaa1111111111111111111111111111111a');
+    installState.getInstallState.mockResolvedValue({
+      runningStaleCode: true,
+      bootCommit: 'aaaaaaa1111111111111111111111111111111a',
+      currentCommit: 'bbbbbbb2222222222222222222222222222222b',
+    });
+
+    emitProviderFailure({ provider: 'Ollama', model: 'm-1' });
+    await vi.advanceTimersByTimeAsync(5500);
+
+    const { context } = getPendingAutoFixTasks()[0];
+    expect(context).toContain('## Deployed Build: STALE');
+    expect(context).toContain('git log aaaaaaa..bbbbbbb');
+    expect(context).toContain('1. Rule out the stale deployed build');
+    // The pre-existing steps keep their order, just renumbered behind it.
+    expect(context).toContain('2. Check if the AI provider is configured correctly');
+    expect(context).toContain('7. Review the output tail for specific error messages');
+  });
+
+  it('omits the section — and never probes git — when the build is current', async () => {
+    installState.getBootCommit.mockReturnValue('aaaaaaa1111111111111111111111111111111a');
+    installState.getInstallState.mockResolvedValue({
+      runningStaleCode: false,
+      bootCommit: 'aaaaaaa1111111111111111111111111111111a',
+      currentCommit: 'aaaaaaa1111111111111111111111111111111a',
+    });
+
+    emitProviderFailure({ provider: 'Ollama', model: 'm-1' });
+    await vi.advanceTimersByTimeAsync(5500);
+
+    const { context } = getPendingAutoFixTasks()[0];
+    expect(context).not.toContain('Deployed Build');
+    expect(context).toContain('1. Check if the AI provider is configured correctly');
+  });
+
+  // No captured boot commit (tarball install, or any process that never called
+  // captureBootCommit) makes the comparison meaningless — skip the git/fs work
+  // entirely rather than filing an "unknown..unknown" section.
+  it('skips the install-state probe when no boot commit was captured', async () => {
+    installState.getBootCommit.mockReturnValue(null);
+
+    emitProviderFailure({ provider: 'Ollama', model: 'm-1' });
+    await vi.advanceTimersByTimeAsync(5500);
+
+    expect(installState.getInstallState).not.toHaveBeenCalled();
+    expect(getPendingAutoFixTasks()[0].context).not.toContain('Deployed Build');
   });
 });

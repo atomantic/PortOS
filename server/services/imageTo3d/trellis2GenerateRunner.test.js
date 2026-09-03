@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { trellis2GenerateRunnerScript } from './trellis2.js';
 import { trellis2FillHolesScript } from './trellis2MeshQuality.js';
-import { resolveTestPython } from '../../lib/testHelper.js';
+import { PY_SUBPROCESS_TIMEOUT_MS, PY_TEST_TIMEOUT_MS, resolveTestPython } from '../../lib/testHelper.js';
 
 // Probe for an interpreter that actually runs rather than assuming `python3`:
 // on Windows that name is absent and `python` is a Store alias stub that exists
@@ -81,7 +81,12 @@ describe.skipIf(!pyBin)('trellis2GenerateRunner', () => {
   const run = (args, { env = {} } = {}) => execFileSync(
     pyBin,
     [trellis2GenerateRunnerScript(), ...args],
-    { encoding: 'utf8', cwd: dir, env: { ...process.env, PYTHONPATH: join(dir, 'stub'), ...env } },
+    {
+      encoding: 'utf8',
+      cwd: dir,
+      env: { ...process.env, PYTHONPATH: join(dir, 'stub'), ...env },
+      timeout: PY_SUBPROCESS_TIMEOUT_MS,
+    },
   );
 
   const resultOf = (output) => JSON.parse(
@@ -110,7 +115,7 @@ describe.skipIf(!pyBin)('trellis2GenerateRunner', () => {
 
     expect(run(['--', join(dir, 'generate.py'), '--texture-size', '4096']).trim())
       .toBe('local-import-ok:4096');
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('sets PYTORCH_ENABLE_MPS_FALLBACK before anything can import torch', () => {
     // Regression guard, and the bug it guards is not hypothetical: this adapter
@@ -124,7 +129,7 @@ describe.skipIf(!pyBin)('trellis2GenerateRunner', () => {
     const r = resultOf(run(['--decimation-target', '1000000', '--', join(dir, 'generate.py'), 'a.png']));
     expect(r.mps_fallback_at_o_voxel_import).toBe('1');
     expect(r.mps_fallback_now).toBe('1');
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('lets an explicit caller env win over the preamble defaults', () => {
     // setdefault, not assignment — otherwise the adapter would silently override a
@@ -135,7 +140,7 @@ describe.skipIf(!pyBin)('trellis2GenerateRunner', () => {
       { env: { PYTORCH_ENABLE_MPS_FALLBACK: '0' } },
     ));
     expect(r.mps_fallback_at_o_voxel_import).toBe('0');
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('passes upstream arguments through untouched after the `--` separator', () => {
     writeStubs();
@@ -144,7 +149,7 @@ describe.skipIf(!pyBin)('trellis2GenerateRunner', () => {
       '--texture-size', '2048', '--seed', '7', '--steps', '24',
     ]));
     expect(r).toMatchObject({ image: 'shoe.png', texture_size: 2048, seed: 7, steps: 24 });
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('leaves upstream’s 200K clamp alone when no target is requested', () => {
     // Backward compatibility: an install that asks for nothing must render
@@ -153,7 +158,7 @@ describe.skipIf(!pyBin)('trellis2GenerateRunner', () => {
     const r = resultOf(run(['--', join(dir, 'generate.py'), 'a.png']));
     expect(r.to_glb[0].exported).toBe(200000);
     expect(r.to_glb[0].decimation_target).toBe(200000);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('retargets BOTH the simplify ratio and to_glb’s own decimation target', () => {
     // The two halves are separately necessary. Patching only the ratio hands
@@ -165,7 +170,7 @@ describe.skipIf(!pyBin)('trellis2GenerateRunner', () => {
     expect(r.simplify[0][1]).toBeCloseTo(1 - (1000000 / 22746188), 6);
     expect(r.to_glb[0].decimation_target).toBe(1000000);
     expect(r.to_glb[0].exported).toBe(1000000);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('raises a retuned upstream clamp instead of silently letting it win', () => {
     // An equality check against 200000 would no-op here and to_glb would re-decimate
@@ -176,7 +181,7 @@ describe.skipIf(!pyBin)('trellis2GenerateRunner', () => {
     const out = run(['--decimation-target', '1000000', '--', join(dir, 'generate.py'), 'a.png']);
     expect(out).toMatch(/not the expected 200,000/);
     expect(resultOf(out).to_glb[0].decimation_target).toBe(1000000);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('never lowers a target that is already above ours', () => {
     // Only ever raises: a caller asking for MORE than we would must not be cut down.
@@ -185,7 +190,7 @@ describe.skipIf(!pyBin)('trellis2GenerateRunner', () => {
       FAKE_GENERATE.replace('min(200000, len(faces))', '5000000'));
     const r = resultOf(run(['--decimation-target', '1000000', '--', join(dir, 'generate.py'), 'a.png']));
     expect(r.to_glb[0].decimation_target).toBe(5000000);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('no-ops the simplify call when the mesh is already under target', () => {
     // The fixture must be SMALLER than the target for this to exercise the
@@ -203,7 +208,7 @@ describe.skipIf(!pyBin)('trellis2GenerateRunner', () => {
     // wrapper returned the input untouched rather than decimating.
     expect(r.simplify).toEqual([]);
     expect(r.to_glb[0].exported).toBe(150000);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('still decimates when the mesh is over target', () => {
     // The other side of that branch, so neither direction can regress silently.
@@ -214,7 +219,7 @@ describe.skipIf(!pyBin)('trellis2GenerateRunner', () => {
     ));
     expect(r.simplify).toHaveLength(1);
     expect(r.to_glb[0].exported).toBe(100000);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('refuses to raise the target on a degraded install, and says why', () => {
     // The KDTree fallback's xatlas unwrap hangs on large meshes, so raising the
@@ -223,7 +228,7 @@ describe.skipIf(!pyBin)('trellis2GenerateRunner', () => {
     const out = run(['--decimation-target', '1000000', '--', join(dir, 'generate.py'), 'a.png']);
     expect(out).toMatch(/Metal bake backend unavailable/);
     expect(resultOf(out).to_glb[0].exported).toBe(200000);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('forwards the exporter knobs upstream never passes', () => {
     writeStubs();
@@ -239,14 +244,14 @@ describe.skipIf(!pyBin)('trellis2GenerateRunner', () => {
       mesh_cluster_refine_iterations: 2,
       mesh_cluster_smooth_strength: 0.5,
     });
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('passes no exporter knobs at all when none are requested', () => {
     writeStubs();
     const r = resultOf(run(['--', join(dir, 'generate.py'), 'a.png']));
     expect(r.to_glb[0]).not.toHaveProperty('remesh');
     expect(r.to_glb[0]).not.toHaveProperty('alpha_mode');
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('captures the pre-decimation mesh for the normal bake without --decimation-target', () => {
     // --normal-map used to silently no-op unless --decimation-target happened to be
@@ -257,7 +262,7 @@ describe.skipIf(!pyBin)('trellis2GenerateRunner', () => {
     expect(out).not.toMatch(/no pre-decimation mesh was captured/);
     // Bake runs against the stub's fake mesh and fails; that must not fail the render.
     expect(resultOf(out).to_glb).toHaveLength(1);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('never fails the render when the normal bake throws', () => {
     // The mesh and its base colour are already correct by then — a normal map is an
@@ -268,7 +273,7 @@ describe.skipIf(!pyBin)('trellis2GenerateRunner', () => {
       '--', join(dir, 'generate.py'), 'a.png']);
     expect(out).toMatch(/normal map bake failed|normal map:/);
     expect(resultOf(out).to_glb[0].exported).toBe(1000000);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('fails loudly when --fill-holes is asked for but the gate is absent', () => {
     // Must not degrade to "render without hole filling" — that is exactly the
@@ -281,12 +286,12 @@ describe.skipIf(!pyBin)('trellis2GenerateRunner', () => {
     );
     expect(() => run(['--fill-holes', '--', join(dir, 'generate.py'), 'a.png']))
       .toThrow(/unconditional mps_compat stub|still carries/);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('rejects an invocation with no upstream script', () => {
     writeStubs();
     expect(() => run(['--decimation-target', '1000'])).toThrow(/requires the upstream generate.py path/);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 });
 
 describe.skipIf(!pyBin)('trellis2RestoreFillHoles', () => {
@@ -308,7 +313,8 @@ describe.skipIf(!pyBin)('trellis2RestoreFillHoles', () => {
     '',
   ].join('\n');
 
-  const patch = () => execFileSync(pyBin, [trellis2FillHolesScript(), dir], { encoding: 'utf8' });
+  const patch = () => execFileSync(pyBin, [trellis2FillHolesScript(), dir],
+    { encoding: 'utf8', timeout: PY_SUBPROCESS_TIMEOUT_MS });
 
   // Python's `write_text` translates \n to the platform line ending, so the patched
   // file is CRLF on Windows while Node's readFileSync returns the raw bytes. A
@@ -333,7 +339,7 @@ describe.skipIf(!pyBin)('trellis2RestoreFillHoles', () => {
     // Default-off is the safety property: absent the env var, behaviour is
     // identical to the hard stub.
     expect(out).toMatch(/if not os\.environ\.get\('PORTOS_TRELLIS2_FILL_HOLES'\):\n\s+return/);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('leaves remove_faces and simplify stubbed', () => {
     // Deliberate: neither has the independent at-scale evidence fill_holes has,
@@ -343,7 +349,7 @@ describe.skipIf(!pyBin)('trellis2RestoreFillHoles', () => {
     const out = readNormalized();
     expect(out).toMatch(/def remove_faces\(self, face_mask\):\n\s+return\n/);
     expect(out).toMatch(/def simplify\(self, target=1000000\):\n\s+return\n/);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('finds the stub when the interpreter default codec is not UTF-8', () => {
     // The Windows-only failure this pins: UPSTREAM_STUB contains an en dash, and a
@@ -355,10 +361,11 @@ describe.skipIf(!pyBin)('trellis2RestoreFillHoles', () => {
     const out = execFileSync(pyBin, [trellis2FillHolesScript(), dir], {
       encoding: 'utf8',
       env: { ...process.env, PYTHONUTF8: '0', LC_ALL: 'C', LANG: 'C' },
+      timeout: PY_SUBPROCESS_TIMEOUT_MS,
     });
     expect(out).toMatch(/now gated/);
     expect(readNormalized()).toContain('PORTOS_TRELLIS2_FILL_HOLES');
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('finds and replaces the stub in a CRLF file', () => {
     // The Windows condition, reproduced on any platform. The patcher matches
@@ -369,7 +376,7 @@ describe.skipIf(!pyBin)('trellis2RestoreFillHoles', () => {
     patch();
     expect(readNormalized()).toContain('PORTOS_TRELLIS2_FILL_HOLES');
     expect(readNormalized()).not.toContain('return  # Skip');
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('is idempotent, so it is safe as a repeated repair step', () => {
     writeFileSync(basePath(), STUBBED);
@@ -377,15 +384,15 @@ describe.skipIf(!pyBin)('trellis2RestoreFillHoles', () => {
     const once = readNormalized();
     expect(patch()).toMatch(/already present/);
     expect(readNormalized()).toBe(once);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('fails loudly rather than no-op’ing when upstream’s stub text changes', () => {
     // A silent no-op would leave --fill-holes appearing to work and doing nothing.
     writeFileSync(basePath(), 'class Mesh:\n    def fill_holes(self):\n        pass\n');
     expect(() => patch()).toThrow(/expected mps_compat's fill_holes stub/);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('fails when the target file is missing entirely', () => {
     expect(() => patch()).toThrow(/not found/);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 });

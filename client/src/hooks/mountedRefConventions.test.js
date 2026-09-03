@@ -77,6 +77,7 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { trackedSourceFiles } from '../test/trackedFiles.js';
+import { escapeRegExp } from '../lib/textUtils.js';
 
 const CLIENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -88,14 +89,12 @@ const HOOK_FILE = 'src/hooks/useMounted.js';
 // correct) pattern, so it is intentionally out of scope.
 const TRUE_SEEDED_REF = /const\s+([A-Za-z_$][\w$]*)\s*=\s*useRef\(\s*true\s*\)/g;
 
-// Ref names may legally contain `$`, which is a regex anchor — interpolating one
-// raw would silently make the pattern unmatchable and pass the offender.
-const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
 // `=` and `||=` both count as re-arming. Matching only `=` would report a ref
 // re-armed with `ref.current ||= true` as broken — a false positive that would
-// push someone to "fix" already-correct code.
-const assignsRe = (name, value) => new RegExp(`\\b${escapeRe(name)}\\.current\\s*(?:\\|\\|)?=\\s*${value}\\b`);
+// push someone to "fix" already-correct code. The name is escaped because ref
+// names may legally contain `$`, which is a regex anchor — interpolating one raw
+// would silently make the pattern unmatchable and pass the offender.
+const assignsRe = (name, value) => new RegExp(`\\b${escapeRegExp(name)}\\.current\\s*(?:\\|\\|)?=\\s*${value}\\b`);
 
 const USE_EFFECT_OPEN = /\buseEffect\s*\(/g;
 

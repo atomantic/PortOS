@@ -34,7 +34,8 @@ import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
 import { inspectModelCache, findCachedRepoFile, findCachedRepoFiles } from '../../lib/hfCache.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { describeRenderConditioning, RENDER_INPUTS_VERSION } from './generateVideoHelpers.js';
-import { readTriggerWordsByFilename } from '../loras.js';
+import { readTriggerWordsByFilename, readLoraLicensesByFilename } from '../loras.js';
+import { provenanceForRender } from '../../lib/assetProvenance.js';
 import { weaveLoraTriggers } from '../../lib/loraTriggers.js';
 import { isLtx2FamilyRuntime } from '../../lib/runners.js';
 import {
@@ -51,6 +52,7 @@ import {
   routesToWindowsHelper,
   byovRuntimeExpectedRevision,
   isByovRuntimeCurrent,
+  runtimeUsesMlx,
 } from './runtimes.js';
 import { getSettings } from '../settings.js';
 import { loadHistory, saveHistory, mutateVideoHistory, getHistoryItem } from './history.js';
@@ -132,6 +134,16 @@ const decorateVideoModel = (m) => (m ? {
   // (lib/videoDraftDecoders.js). Empty for every model that declares no draft
   // decoder, so the client renders no control instead of a one-entry select.
   draftDecodeOptions: publicVideoDraftDecodeOptions(m),
+  // Does a render on this model put the display to sleep? An MLX render must
+  // (spawnWatch.js sleeps it so WindowServer stops contending with Metal and
+  // tripping the Apple GPU watchdog), and a user who is not told that reads the
+  // dark screen as a crash and wakes it — which is the failure the sleep exists
+  // to prevent. Decorated here rather than derived client-side so the warning
+  // and the behaviour can never disagree about which runtimes do it. Whether it
+  // will ACTUALLY happen also depends on the platform and the user's opt-out,
+  // which are per-install facts reported once on /status as
+  // `displaySleepOnRender`.
+  sleepsDisplayDuringRender: runtimeUsesMlx(m.runtime),
 } : m);
 
 export const resolveVideoModel = (modelId) =>
@@ -399,6 +411,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // orchestrator's per-chunk beats (`chunkPrompts`) get the tokens too — each
   // chunk re-enters through this function with its own prompt.
   const triggerWordsByLora = await readTriggerWordsByFilename(resolvedLoras.map((l) => l.filename));
+  const loraLicenses = await readLoraLicensesByFilename(resolvedLoras.map((l) => l.filename));
   const { prompt: renderPrompt, added: addedTriggerWords } = weaveLoraTriggers(
     prompt,
     resolvedLoras.map((l) => triggerWordsByLora[l.filename]),
@@ -701,6 +714,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     resolvedIcReferencePaths = clipPaths;
   }
 
+  const createdAt = new Date().toISOString();
   const meta = {
     id: jobId,
     prompt,
@@ -725,7 +739,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // override the user has since deselected.
     ...(resolvedTextEncoder ? { textEncoderId: resolvedTextEncoder.id } : {}),
     filename,
-    createdAt: new Date().toISOString(),
+    createdAt,
     // History mode reflects the EFFECTIVE mode — buildLtx2Args infers fflf
     // from `keyframes` even when caller omitted `mode`, so without this the
     // history entry would say 'text' for a multi-keyframe render.
@@ -797,6 +811,20 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       loraFilenames: resolvedLoras.map((l) => l.filename),
       loraScales: resolvedLoras.map((l) => l.strength),
     } : {}),
+    provenance: provenanceForRender({
+      model: {
+        id: modelId,
+        name: model?.name || modelId,
+        license: model?.license,
+        repo: model?.repo,
+        disclosure: model?.disclosure,
+      },
+      loras: resolvedLoras.map((l) => ({
+        filename: l.filename,
+        ...(loraLicenses[l.filename] || {}),
+      })),
+      capturedAt: createdAt,
+    }),
     // Provenance for the trigger weave (#4665). `prompt` above stays the user's
     // own text, so Remix re-derives triggers from whatever LoRAs are selected
     // then instead of compounding this render's clause; these two record what
