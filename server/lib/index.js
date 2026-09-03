@@ -318,6 +318,7 @@ export * from './rrfRanking.js';
 export * from './vectorMath.js';
 
 // === Extraction & parsing ===
+export * from './clientApiPaths.js';
 export * from './htmlToText.js';
 export * from './jsonExtract.js';
 export * from './taskParser.js';
