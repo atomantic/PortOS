@@ -95,6 +95,7 @@ export * from './diffWords.js';
 export * from './dndTransform.js';
 export * from './downloadBlob.js';
 export * from './extensionErrors.js';
+export * from './firstRunMissions.js';
 export * from './genUtils.js';
 export * from './repoUrl.js';
 export * from './healthProvenance.js';

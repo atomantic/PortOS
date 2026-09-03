@@ -7,6 +7,7 @@ import LayoutEditor from '../components/dashboard/LayoutEditor';
 import DashboardGrid, { readingOrderIds, reconcileGrid, synthesizeGrid } from '../components/dashboard/DashboardGrid.jsx';
 import { WIDGETS_BY_ID, FALLBACK_LAYOUT } from '../components/dashboard/widgetRegistry.jsx';
 import WidgetSkeleton from '../components/dashboard/WidgetSkeleton';
+import FirstRunCard from '../components/onboarding/FirstRunCard.jsx';
 import { DASHBOARD_LAYOUT_CHANGED, INSTANCE_FEATURES_CHANGED } from '../constants/events.js';
 import { ChevronsDownUp, GripHorizontal, Monitor, Move, Save, X } from 'lucide-react';
 import * as api from '../services/api';
@@ -429,6 +430,7 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
+      <FirstRunCard />
       <div className="flex flex-row items-center justify-between gap-2 sm:gap-4">
         <h2 className="flex items-center gap-2.5 text-2xl font-bold text-white">
           Dashboard

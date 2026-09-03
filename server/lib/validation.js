@@ -1507,6 +1507,11 @@ export const locationSettingsSchema = z.object({
   { message: 'Provide both lat and lon, or neither.' },
 );
 
+// Durable "don't show this again" for the dashboard first-run card (#5640).
+// Top-level general-settings boolean — same record as timezone/location, never
+// localStorage. Absent means show; only an explicit true suppresses.
+export const hideFirstRunCardSchema = z.boolean();
+
 // Grok Imagegen settings slice (`imageGen.grok`) — the Grok Build CLI backend
 // (#2859). No model/effort knobs: grok's image tools run on xAI's fixed image
 // backend, so only the enable gate, binary path, default aspect ratio, and

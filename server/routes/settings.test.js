@@ -681,3 +681,23 @@ describe('Settings routes — credential inventory', () => {
     expect(JSON.stringify(res.body)).not.toMatch(/hf_|sk-|ghp_/);
   });
 });
+
+describe('Settings routes — hideFirstRunCard (#5640)', () => {
+  beforeEach(() => {
+    store = {};
+    vi.clearAllMocks();
+  });
+
+  it('accepts a boolean durable suppress on the general settings record', async () => {
+    const res = await request(buildApp()).put('/api/settings').send({ hideFirstRunCard: true });
+    expect(res.status).toBe(200);
+    expect(res.body.hideFirstRunCard).toBe(true);
+  });
+
+  it('rejects a non-boolean hideFirstRunCard', async () => {
+    const res = await request(buildApp()).put('/api/settings').send({ hideFirstRunCard: 'yes' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+});
+
