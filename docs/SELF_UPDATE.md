@@ -120,17 +120,27 @@ your private branch is what makes your customizations live; there is no separate
 
 ### After rebasing, reinstall and rebuild
 
-`update.sh` always finishes on `main`, so it cannot do this half for you:
+`update.sh` / `update.ps1` always finish on `main`, so they cannot do this half for you:
 
 ```bash
-git checkout main && ./update.sh
+git checkout main && ./update.sh            # .\update.ps1 on Windows
 git checkout <your-branch> && git rebase main
-for d in . client server autofixer; do (cd "$d" && npm install); done
+for d in . client server autofixer; do (cd "$d" && npm install --no-save); done
+node scripts/trusted-rebuilds.js server
 npm run build && npm run pm2:restart
 ```
 
-Order matters. `npm install` rewrites `client/package.json`, so building before installing leaves
-the build stale again.
+**Use `--no-save`, not a bare `npm install`.** `--no-save` is what `safe_install` in `update.sh`
+and `scripts/ensure-deps.js` run, for two reasons that both bite a fork: a bare install rewrites
+`client/package.json` and the lockfiles, which dirties your private branch and re-stales a build
+you just made (`client/package.json` is a `staleBuild` input — see below); and an older npm can
+strip newer lockfile metadata it does not understand. `--no-save` still honors `package-lock.json`.
+
+`scripts/trusted-rebuilds.js` is not optional for the server. Every workspace `.npmrc` sets
+`ignore-scripts=true`, so the server's native addons (`node-pty` and friends) are never built by
+the install itself — skip the rebuild and the shell and TUI features crash on a missing binding.
+
+Order matters: install before you build, so the build sees the deps it compiles against.
 
 **A clean rebase makes the install look broken.** Checking out a branch based on an older `main`
 rewinds the working tree, and the rebase rolls it forward, so every touched file gets a new mtime.
