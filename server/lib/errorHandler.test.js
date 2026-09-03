@@ -469,6 +469,72 @@ describe('errorHandler.js', () => {
       // status→code derivation still runs even without an io channel.
       expect(res.json.mock.calls[0][0].code).toBe('NOT_FOUND');
     });
+
+    // `validateRequest` sets `context.details` to the full mapped Zod issue
+    // array, so JSON.stringify-ing it emitted a multi-KB blob per 400 —
+    // against the single-line logging convention. The log line must summarize;
+    // the RESPONSE body must still carry every entry.
+    it('summarizes a long details array into one line without stringifying it', async () => {
+      const { req, res } = makeReqRes(null);
+      const details = Array.from({ length: 12 }, (_, i) => ({
+        path: `body.field${i}`,
+        message: 'Required'
+      }));
+
+      await asyncHandler(async () => {
+        throw new ServerError('Validation failed', {
+          status: 400,
+          code: 'VALIDATION_ERROR',
+          context: { details }
+        });
+      })(req, res, vi.fn());
+      await flushMicrotasks();
+
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      const [line, ...extraArgs] = errorSpy.mock.calls[0];
+      expect(extraArgs).toEqual([]);
+      expect(line).not.toContain('\n');
+      expect(line).not.toContain('[{');
+      expect(line).not.toContain('"path"');
+      expect(line).toContain('body.field0: Required');
+      expect(line).toContain('body.field4: Required');
+      expect(line).not.toContain('body.field5');
+      expect(line).toContain('(+7 more)');
+
+      // Logging-only change: the envelope still carries the full array.
+      expect(res.json.mock.calls[0][0].context.details).toEqual(details);
+    });
+
+    // dbAdmin puts raw pg_dump/pg_restore stderr in the same field.
+    it('collapses a multi-line string details value to one truncated line', async () => {
+      const { req, res } = makeReqRes(null);
+      const details = `pg_dump: error: connection to server failed\n${'x'.repeat(500)}\ntrailing`;
+
+      await asyncHandler(async () => {
+        throw new ServerError('Export failed', { status: 400, context: { details } });
+      })(req, res, vi.fn());
+      await flushMicrotasks();
+
+      const line = errorSpy.mock.calls[0][0];
+      expect(line).not.toContain('\n');
+      expect(line).toContain('pg_dump: error: connection to server failed');
+      expect(line).not.toContain('trailing');
+      expect(line.endsWith('…')).toBe(true);
+    });
+
+    // The 500 branch logs the stack, not `details` — it must stay untouched.
+    it('leaves the 500 stack branch alone', async () => {
+      const { req, res } = makeReqRes(null);
+      const error = new ServerError('boom', { status: 500, context: { details: [{ path: 'a', message: 'b' }] } });
+
+      await asyncHandler(async () => { throw error; })(req, res, vi.fn());
+      await flushMicrotasks();
+
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      const [line, stack] = errorSpy.mock.calls[0];
+      expect(line).not.toContain('a: b');
+      expect(stack).toBe(error.stack);
+    });
   });
 
   describe('sendErrorResponse', () => {

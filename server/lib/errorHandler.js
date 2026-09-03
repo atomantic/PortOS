@@ -116,6 +116,50 @@ export function createServiceErrorMapper(statusMap, buildContext) {
   };
 }
 
+// Log-line budget for `error.context.details`. Five entries is enough to name
+// the offending fields on a typical 400; the char cap keeps a `pg_dump` stderr
+// blob (dbAdmin.js puts raw stderr in this field) from swallowing the log.
+const LOG_DETAIL_MAX_ENTRIES = 5;
+const LOG_DETAIL_MAX_CHARS = 300;
+
+const clampLogText = (value) => {
+  const flat = String(value).replace(/\s+/g, ' ').trim();
+  return flat.length > LOG_DETAIL_MAX_CHARS ? `${flat.slice(0, LOG_DETAIL_MAX_CHARS)}…` : flat;
+};
+
+const describeDetailEntry = (entry) => {
+  if (!entry || typeof entry !== 'object') return String(entry);
+  const { path, message } = entry;
+  if (path && message) return `${path}: ${message}`;
+  return String(message || path || '?');
+};
+
+/**
+ * Render `error.context.details` as ONE readable log line.
+ *
+ * `validateRequest` sets `details` to the full mapped Zod issue array and
+ * `dbAdmin` sets it to raw command stderr, so serializing it as JSON emitted a
+ * multi-KB escaped blob per sub-500 — against the single-line logging
+ * convention and unreadable in PM2 logs. The field/message pairs are the useful
+ * part of a 400, so summarize rather than drop: the first few entries, then a
+ * `(+N more)` count. The `(+N more)` suffix is appended AFTER the char clamp so
+ * a long first entry can't hide how much was elided.
+ *
+ * Logging only — `buildErrorEnvelope`/`sanitizeContext` still carry the full
+ * structured `details` in the HTTP response body.
+ */
+const summarizeDetails = (details) => {
+  if (Array.isArray(details)) {
+    const shown = clampLogText(details.slice(0, LOG_DETAIL_MAX_ENTRIES).map(describeDetailEntry).join('; '));
+    const elided = details.length - LOG_DETAIL_MAX_ENTRIES;
+    return elided > 0 ? `${shown} (+${elided} more)` : shown;
+  }
+  if (details && typeof details === 'object') {
+    return clampLogText(Object.entries(details).map(([k, v]) => `${k}=${v}`).join('; '));
+  }
+  return clampLogText(details);
+};
+
 export function asyncHandler(fn) {
   return (req, res, next) => {
     Promise.resolve(fn(req, res, next)).catch((err) => {
@@ -143,7 +187,7 @@ export function asyncHandler(fn) {
         console.error(logMsg, error.stack ? error.stack : '');
       } else {
         const details = error.context?.details;
-        console.error(details ? `${logMsg}: ${JSON.stringify(details)}` : logMsg);
+        console.error(details ? `${logMsg}: ${summarizeDetails(details)}` : logMsg);
       }
 
       return sendErrorResponse(res, error, { io });
