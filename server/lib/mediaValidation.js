@@ -179,6 +179,13 @@ export const localLlmSlotstreamStartSchema = z.object({
 // no "download whatever" default for a transfer this size.
 const slotstreamModelSchema = z.string().trim().min(1).max(200);
 export const localLlmSlotstreamDownloadSchema = z.object({ model: slotstreamModelSchema });
+// Cancelling the checkpoint download in progress. `model` is optional because
+// only one checkpoint transfers at a time — an omitted model means "whatever is
+// running", which is what the card's Cancel button next to the one progress bar
+// actually knows.
+export const localLlmSlotstreamCancelSchema = z.object({
+  model: slotstreamModelSchema.optional().nullable(),
+});
 // MTPLX model catalog. `mtplx forge discover` is upstream's own index of
 // MTPLX-branded MTP checkpoints; an empty query means its default listing.
 export const localLlmMtplxSearchSchema = z.object({

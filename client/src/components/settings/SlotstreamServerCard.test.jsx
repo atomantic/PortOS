@@ -15,6 +15,7 @@ const renderCard = (status, props = {}) => {
     onStop: vi.fn(),
     onInstall: vi.fn(),
     onDownloadModel: vi.fn(),
+    onCancelDownload: vi.fn(),
   };
   render(
     <SlotstreamServerCard status={status} loading={false} busy={false} actionInProgress={null} {...handlers} {...props} />,
@@ -110,6 +111,22 @@ describe('SlotstreamServerCard', () => {
     fireEvent.change(screen.getByLabelText('Add a checkpoint'), { target: { value: 'small-moe' } });
     expect(screen.getByRole('button', { name: /Download checkpoint/ })).toBeDisabled();
     expect(screen.getByText('5 GB of 20 GB (25%)')).toBeInTheDocument();
+  });
+
+  // Without this the only way out of a 100 GB+ transfer that is slow rather
+  // than stalled was to wait out the 20-minute idle watchdog.
+  it('offers a cancel beside the bar while a checkpoint is transferring', () => {
+    const handlers = renderCard(
+      { installed: true, running: false, supported: true, cachedModels: [], catalog: CATALOG },
+      { download: { model: 'someone/small-moe', received: 5 * 1024 ** 3, total: 20 * 1024 ** 3 } },
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Cancel/ }));
+    expect(handlers.onCancelDownload).toHaveBeenCalledWith('someone/small-moe');
+  });
+
+  it('hides the cancel when nothing is transferring', () => {
+    renderCard({ installed: true, running: false, supported: true, cachedModels: [], catalog: CATALOG });
+    expect(screen.queryByRole('button', { name: /Cancel/ })).not.toBeInTheDocument();
   });
 
   it('offers a download while the server is running, so a second checkpoint needs no stop', () => {

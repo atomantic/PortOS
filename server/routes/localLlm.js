@@ -36,6 +36,7 @@ import {
   localLlmMtplxStartSchema,
   localLlmSlotstreamStartSchema,
   localLlmSlotstreamDownloadSchema,
+  localLlmSlotstreamCancelSchema,
   localLlmMtplxSearchSchema,
   localLlmMtplxPullSchema,
   localLlmMtplxRemoveSchema,
@@ -52,7 +53,7 @@ import {
 } from '../services/llamaServerManager.js'
 import { MTPLX_APP, getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx } from '../services/mtplxServerManager.js'
 import { SLOTSTREAM_APP, getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream } from '../services/slotstreamServerManager.js'
-import { downloadSlotstreamModel, previewSlotstreamDownload } from '../services/slotstreamModelManager.js'
+import { cancelSlotstreamModelDownload, downloadSlotstreamModel, previewSlotstreamDownload } from '../services/slotstreamModelManager.js'
 import { searchMtplxCatalog, pullMtplxModel, previewMtplxPull, removeMtplxModel } from '../services/mtplxModelManager.js'
 import { saveProcessList } from '../services/pm2.js'
 import { getSpecDecodePresetStatus, downloadSpecDecodeModel, previewSpecDecodeDownload, cancelSpecDecodeModelDownload } from '../services/specDecodeModels.js'
@@ -931,6 +932,16 @@ router.post('/slotstream/models/download', asyncHandler(async (req, res) => {
   // probes remember as "Slotstream has no checkpoint".
   if (result.success) resetProviderReadinessCache()
   res.json(result)
+}))
+
+// POST /api/local-llm/slotstream/models/download/cancel — a checkpoint download
+// is server-owned so it survives navigation, but a 100 GB+ transfer that is
+// merely SLOW never trips the idle watchdog, and waiting one out is the only
+// other way to release the single transfer slot. Partial files are kept, so a
+// later download resumes rather than restarting.
+router.post('/slotstream/models/download/cancel', asyncHandler(async (req, res) => {
+  const { model } = validateRequest(localLlmSlotstreamCancelSchema, req.body)
+  res.json({ success: true, cancelled: cancelSlotstreamModelDownload({ model }) })
 }))
 
 // POST /api/local-llm/save-startup — `pm2 save`, so the PM2-managed local

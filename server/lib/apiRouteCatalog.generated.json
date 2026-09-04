@@ -9088,6 +9088,14 @@
     },
     {
       "method": "POST",
+      "path": "/api/local-llm/slotstream/models/download/cancel",
+      "mountPath": "/api/local-llm",
+      "sources": [
+        "server/routes/localLlm.js"
+      ]
+    },
+    {
+      "method": "POST",
       "path": "/api/local-llm/slotstream/start",
       "mountPath": "/api/local-llm",
       "sources": [
@@ -17521,8 +17529,8 @@
   ],
   "stats": {
     "mounts": 147,
-    "operations": 2170,
-    "declarations": 2178,
+    "operations": 2171,
+    "declarations": 2179,
     "sourceFiles": 230
   }
 }

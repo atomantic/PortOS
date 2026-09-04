@@ -7,7 +7,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import { formatBytes } from '../../utils/formatters';
 import useDownloadPreflightConfirm from '../../hooks/useDownloadPreflightConfirm';
 import useLocalLlmStatus from '../../hooks/useLocalLlmStatus';
-import { migrateLocalLlmBackend, controlOllamaService, patchSettingsSlice, getLlamaServerStatus, getLlamaServerUpdateStatus, startLlamaServer, stopLlamaServer, installLlamaServer, upgradeLlamaServer, downloadSpecDecodeModel, cancelSpecDecodeModelDownload, previewLocalLlmDownload, controlLmStudioService, getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx, searchMtplxModels, pullMtplxModel, removeMtplxModel, getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream, downloadSlotstreamModel, saveRuntimeStartupList } from '../../services/api';
+import { migrateLocalLlmBackend, controlOllamaService, patchSettingsSlice, getLlamaServerStatus, getLlamaServerUpdateStatus, startLlamaServer, stopLlamaServer, installLlamaServer, upgradeLlamaServer, downloadSpecDecodeModel, cancelSpecDecodeModelDownload, previewLocalLlmDownload, controlLmStudioService, getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx, searchMtplxModels, pullMtplxModel, removeMtplxModel, getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream, downloadSlotstreamModel, cancelSlotstreamModelDownload, saveRuntimeStartupList } from '../../services/api';
 import socket from '../../services/socket';
 import SpecDecodeWeightRow from './SpecDecodeWeightRow.jsx';
 import RuntimeServersCard from './RuntimeServersCard.jsx';
@@ -358,6 +358,15 @@ export default function LocalLlmRuntimesView() {
     preview: () => previewLocalLlmDownload({ kind: 'slotstream', model }, { silent: true }),
     run: () => startSlotstreamDownload(model),
   });
+  // A 100 GB+ transfer that is merely SLOW never trips the idle watchdog, so
+  // without this the only way out was to wait it out. The bar comes down on the
+  // 'cancelled' frame the server emits, not here.
+  const cancelSlotstreamDownload = (model) => runAction(
+    'slotstream-download-cancel',
+    () => cancelSlotstreamModelDownload(model ?? null, { silent: true }),
+    (r) => (r?.cancelled ? 'Cancelling checkpoint download…' : 'No checkpoint download is running'),
+    { onError: (err) => toast.error(err?.message || 'Could not cancel the checkpoint download') },
+  );
   const runtimeStopSlotstream = () => runAction(
     'runtime-stop-slotstream',
     () => stopSlotstreamServer(),
@@ -733,6 +742,7 @@ export default function LocalLlmRuntimesView() {
           onStop={runtimeStopSlotstream}
           onInstall={runtimeInstallSlotstream}
           onDownloadModel={slotstreamDownloadModel}
+          onCancelDownload={cancelSlotstreamDownload}
           download={slotstreamDownload}
         />
       </div>

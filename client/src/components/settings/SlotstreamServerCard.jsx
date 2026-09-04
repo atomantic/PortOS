@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { HardDrive, RefreshCw, Save, Square, Download, Terminal } from 'lucide-react';
+import { HardDrive, RefreshCw, Save, Square, Download, Terminal, X } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import ProgressBar from '../ui/ProgressBar';
 import { formatBytes } from '../../utils/formatters';
@@ -23,12 +23,28 @@ const btnClass = 'flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium ro
  * resolving pass before that has none, which is the shared bar's indeterminate
  * case rather than a misleading 0%.
  */
-function DownloadProgress({ download }) {
+function DownloadProgress({ download, onCancel, cancelling }) {
   const { received = 0, total = 0, message } = download;
   const pct = total > 0 ? (received / total) * 100 : null;
   return (
     <div className="space-y-1">
-      <ProgressBar percent={pct} track="border" label={`Downloading ${download.model || 'checkpoint'}`} />
+      <div className="flex items-center gap-2">
+        <div className="flex-1 min-w-0">
+          <ProgressBar percent={pct} track="border" label={`Downloading ${download.model || 'checkpoint'}`} />
+        </div>
+        {onCancel && (
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={cancelling}
+            className={`${btnClass} bg-port-warning/20 hover:bg-port-warning/30 text-port-warning shrink-0`}
+            title="Stop this transfer — what has landed is kept, so downloading again resumes"
+          >
+            {cancelling ? <BrailleSpinner /> : <X size={13} />}
+            Cancel
+          </button>
+        )}
+      </div>
       <p className="text-[11px] text-gray-500">
         {pct === null
           ? (message || 'Downloading…')
@@ -49,6 +65,7 @@ export default function SlotstreamServerCard({
   onStop,
   onInstall,
   onDownloadModel,
+  onCancelDownload,
   download,
 }) {
   const [model, setModel] = useState('');
@@ -265,7 +282,13 @@ export default function SlotstreamServerCard({
           <p className="text-[11px] text-gray-500">
             Streaming only pays off on a mixture-of-experts checkpoint, where a few experts per token are read from SSD — so this is a curated list, not a Hugging Face search. PortOS shows the size and free disk before the transfer starts.
           </p>
-          {download && <DownloadProgress download={download} />}
+          {download && (
+            <DownloadProgress
+              download={download}
+              onCancel={onCancelDownload ? () => onCancelDownload(download.model) : null}
+              cancelling={actionInProgress === 'slotstream-download-cancel'}
+            />
+          )}
         </div>
       )}
 

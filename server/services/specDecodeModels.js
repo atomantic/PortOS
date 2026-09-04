@@ -20,6 +20,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import {
   assessDownloadPreflight,
   assertDownloadFits,
+  createDownloadSlot,
   probeRemoteSize,
   siblingDownloadMeta,
   streamResumableDownload,
@@ -34,23 +35,17 @@ import {
   specDecodeSource,
 } from '../lib/specDecodePresets.js';
 
-// Progress frames are throttled to this interval so a fast link can't flood the
-// socket with a frame per chunk.
-const PROGRESS_INTERVAL_MS = 250;
-
-// A download that is still receiving bytes may legitimately run for hours, but
-// a silent connection is never useful: it holds the one transfer slot and
-// leaves every later click permanently queued. Keep this intentionally
-// generous and configurable for slow Hugging Face/CDN handshakes.
-const IDLE_STALL_TIMEOUT_MS = (() => {
-  const raw = Number(process.env.SPEC_DECODE_IDLE_STALL_MS);
-  return Number.isFinite(raw) && raw > 0 ? raw : 20 * 60 * 1000;
-})();
-
 // Downloads in flight, keyed by RESOLVED destination path (two presets can name
 // the same base model, and both must show the one transfer rather than starting
-// a second copy of it).
-const inFlight = new Map();
+// a second copy of it). The stall timeout stays intentionally generous and
+// env-configurable for slow Hugging Face/CDN handshakes.
+const downloadSlot = createDownloadSlot({
+  codePrefix: 'SPEC',
+  idleStallEnvVar: 'SPEC_DECODE_IDLE_STALL_MS',
+  stalledMessage: (minutes) => (
+    `Download stalled — no bytes received for ${minutes} minute${minutes === 1 ? '' : 's'}; cancelled so another model can download`
+  ),
+});
 
 /**
  * Absolute path a launcher field refers to. Relative paths resolve against the
@@ -70,7 +65,7 @@ const describeEntry = async (presetId, role) => {
   if (!entry?.path) return null;
   const destPath = resolveSpecModelPath(entry.path);
   const stats = await stat(destPath).catch(() => null);
-  const active = inFlight.get(destPath);
+  const active = downloadSlot.get(destPath);
   return {
     role,
     path: entry.path,
@@ -172,18 +167,15 @@ const hfDownloadHttpError = (res) => {
   throw new ServerError(`Hugging Face download failed: ${res.status} ${res.statusText}`, { status: 502, code: 'HF_DOWNLOAD_FAILED' });
 };
 
-const streamToFile = async ({ url, headers, destPath, onBytes, signal, onIdleStall, expectedSha256, isCancelled }) => (
+const streamToFile = async ({ url, headers, destPath, onBytes, expectedSha256, slot }) => (
   streamResumableDownload({
     url,
     headers,
     destPath,
     onBytes,
-    signal,
-    onIdleStall,
-    idleStallTimeoutMs: IDLE_STALL_TIMEOUT_MS,
     expectedSha256,
-    isCancelled,
     onHttpError: hfDownloadHttpError,
+    ...slot.downloadOptions(),
   })
 );
 
@@ -213,21 +205,6 @@ const resolveSpecDownloadPlan = async ({ source, destPath, token, signal }) => {
   return { file, url, headers, meta, preflight };
 };
 
-const downloadAbortError = (state) => {
-  if (state.abortReason === 'cancelled') {
-    return new ServerError('Download cancelled', { status: 409, code: 'SPEC_DOWNLOAD_CANCELLED' });
-  }
-  const minutes = Math.round(IDLE_STALL_TIMEOUT_MS / 60000);
-  return new ServerError(
-    `Download stalled — no bytes received for ${minutes} minute${minutes === 1 ? '' : 's'}; cancelled so another model can download`,
-    { status: 504, code: 'SPEC_DOWNLOAD_STALLED' },
-  );
-};
-
-const throwIfAborted = (state) => {
-  if (state.controller.signal.aborted) throw downloadAbortError(state);
-};
-
 /**
  * Download one preset role's GGUF into the path the launcher expects.
  *
@@ -250,36 +227,30 @@ export async function downloadSpecDecodeModel({ presetId, role, onProgress = () 
   if (existing) {
     return { success: true, alreadyDownloaded: true, path: source.path, sizeBytes: existing.size };
   }
-  if (inFlight.has(destPath)) {
-    throw new ServerError(`${source.path} is already downloading`, { status: 409, code: 'SPEC_DOWNLOAD_IN_FLIGHT' });
-  }
   // Claim the slot BEFORE the first await. Resolving the repo on Hugging Face
   // takes a round trip, and a second click (or a second tab) landing inside that
-  // window would clear the check above and start a parallel multi-gigabyte
+  // window would clear the in-flight check and start a parallel multi-gigabyte
   // transfer of the same file. Everything after this point runs inside the
   // try/finally so the claim is always released.
-  const state = {
-    presetId,
-    role,
-    received: 0,
-    total: 0,
-    controller: new AbortController(),
-    abortReason: null,
-  };
-  inFlight.set(destPath, state);
+  const slot = downloadSlot.claim(destPath, {
+    busyMessage: `${source.path} is already downloading`,
+    meta: { presetId, role },
+  });
 
-  let lastEmit = 0;
+  const emitProgress = slot.throttle((received, total) => {
+    onProgress({ event: 'progress', presetId, role, path: source.path, received, total });
+  });
   try {
     const token = await getHfToken();
-    throwIfAborted(state);
+    slot.throwIfAborted();
     onProgress({ event: 'start', presetId, role, path: source.path, message: `Resolving ${source.repo} on Hugging Face…` });
     const plan = await resolveSpecDownloadPlan({
       source,
       destPath,
       token,
-      signal: state.controller.signal,
+      signal: slot.signal,
     });
-    throwIfAborted(state);
+    slot.throwIfAborted();
     assertDownloadFits(plan.preflight);
     console.log(`⬇️  Downloading speculative-decoding weights ${source.repo}/${plan.file} → ${source.path}`);
     const { bytes } = await streamToFile({
@@ -287,36 +258,27 @@ export async function downloadSpecDecodeModel({ presetId, role, onProgress = () 
       headers: plan.headers,
       destPath,
       expectedSha256: plan.meta.sha256,
-      signal: state.controller.signal,
-      isCancelled: () => state.abortReason === 'cancelled',
-      onIdleStall: () => {
-        state.abortReason = 'stalled';
-        state.controller.abort();
-      },
+      slot,
       onBytes: (received, total) => {
-        state.received = received;
-        state.total = total;
-        const now = Date.now();
-        if (now - lastEmit < PROGRESS_INTERVAL_MS) return;
-        lastEmit = now;
-        onProgress({ event: 'progress', presetId, role, path: source.path, received, total });
+        slot.track(received, total);
+        emitProgress(received, total);
       },
     });
     onProgress({ event: 'complete', presetId, role, path: source.path, received: bytes, total: bytes, message: `${source.path} downloaded` });
     console.log(`✅ Speculative-decoding weights ready: ${source.path} (${bytes} bytes)`);
     return { success: true, path: source.path, repo: source.repo, file: plan.file, sizeBytes: bytes };
   } catch (err) {
-    const error = state.abortReason ? downloadAbortError(state) : err;
-    const event = state.abortReason === 'cancelled' ? 'cancelled' : 'error';
+    const error = slot.wrapError(err);
+    const event = slot.cancelled ? 'cancelled' : 'error';
     onProgress({ event, presetId, role, path: source.path, message: error.message });
-    if (state.abortReason === 'cancelled') {
+    if (slot.cancelled) {
       console.log(`⏹️ Speculative-decoding download cancelled: ${source.path}`);
     } else {
       console.error(`❌ Speculative-decoding download failed for ${source.path}: ${error.message}`);
     }
     throw error;
   } finally {
-    inFlight.delete(destPath);
+    slot.release();
   }
 }
 
@@ -370,24 +332,11 @@ export function cancelSpecDecodeModelDownload({ presetId, role }) {
   }
   const source = specDecodeSource(presetId, role);
   if (!source) return false;
-  const state = inFlight.get(resolveSpecModelPath(source.path));
-  if (!state) return false;
-  state.abortReason = 'cancelled';
-  state.controller.abort();
-  return true;
+  return downloadSlot.cancel(resolveSpecModelPath(source.path));
 }
 
 /** True while a curated GGUF download is writing `destPath` (or its `.partial`). */
-export function isSpecDecodeDownloadInFlight(destPath) {
-  if (!destPath) return false;
-  if (inFlight.has(destPath)) return true;
-  if (String(destPath).endsWith('.partial')) {
-    return inFlight.has(destPath.slice(0, -'.partial'.length));
-  }
-  return false;
-}
+export const isSpecDecodeDownloadInFlight = (destPath) => downloadSlot.isInFlight(destPath);
 
 /** Clears in-flight download bookkeeping (used by test suites). */
-export function _resetSpecDecodeDownloadsForTests() {
-  inFlight.clear();
-}
+export const _resetSpecDecodeDownloadsForTests = () => downloadSlot.reset();

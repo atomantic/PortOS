@@ -25,6 +25,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import {
   assessDownloadPreflight,
   assertDownloadFits,
+  createDownloadSlot,
   partialPathFor,
   siblingDownloadMeta,
   streamResumableDownload,
@@ -42,24 +43,34 @@ import { getHfToken } from './hfToken.js';
 
 export { SLOTSTREAM_CATALOG };
 
-/** Frames are throttled so a fast link can't put one socket emit per chunk on the wire. */
-const PROGRESS_INTERVAL_MS = 250;
-
-/**
- * A silent connection is never useful — it holds the one download slot while
- * every later press queues behind it. Generous, because a checkpoint this size
- * legitimately runs for hours while it IS receiving bytes.
- */
-const IDLE_STALL_TIMEOUT_MS = (() => {
-  const raw = Number(process.env.SLOTSTREAM_IDLE_STALL_MS);
-  return Number.isFinite(raw) && raw > 0 ? raw : 20 * 60 * 1000;
-})();
-
 /** A metadata lookup that only blocks the confirm modal needs its own bound. */
 const METADATA_FETCH_TIMEOUT_MS = 15_000;
 
-/** Downloads in flight, keyed by checkpoint directory. */
-const inFlight = new Map();
+/**
+ * The one download slot, keyed by checkpoint directory.
+ *
+ * `exclusive`: these are 100 GB+ reads of the same disk, and the card renders a
+ * single progress bar fed by a single `slotstream:download` event — two
+ * concurrent transfers would interleave frames on it and the first terminal
+ * frame would tear down the other's bar. `matchNested`: the orphaned-partial
+ * sweep asks about a SHARD one level below the checkpoint directory, so the
+ * predicate has to match a path under a claimed key, not only the key itself.
+ *
+ * The stall watchdog is generous — a checkpoint this size legitimately runs for
+ * hours while it IS receiving bytes — and env-overridable.
+ */
+const downloadSlot = createDownloadSlot({
+  codePrefix: 'SLOTSTREAM',
+  idleStallEnvVar: 'SLOTSTREAM_IDLE_STALL_MS',
+  exclusive: true,
+  matchNested: true,
+  // A cancel here abandons a 100 GB+ multi-shard transfer, not one file: the
+  // whole point of stopping a slow-but-alive download is to pick it back up, so
+  // the shard in flight keeps its `.partial` the way a stall already does.
+  // (Spec-decode deliberately discards instead — one GGUF the user gave up on.)
+  keepPartialOnCancel: true,
+  cancelledMessage: 'Download cancelled. Its progress is kept: pressing download again resumes from where it stopped.',
+});
 
 const cacheDirFor = (cacheDir) => cacheDir || slotstreamCacheDir();
 
@@ -214,27 +225,24 @@ export async function downloadSlotstreamModel({ model = null, cacheDir, onProgre
   // the same disk, and the card renders a single progress bar fed by a single
   // `slotstream:download` event — two concurrent transfers would interleave
   // frames on it and the first terminal frame would tear down the other's bar.
-  if (inFlight.size > 0) {
-    throw new ServerError(
-      inFlight.has(modelDir)
-        ? `${repo} is already downloading.`
-        : 'Another Slotstream checkpoint is already downloading — PortOS fetches one at a time.',
-      { status: 409, code: 'SLOTSTREAM_DOWNLOAD_IN_FLIGHT' },
-    );
-  }
   // Claim the slot BEFORE the first await: resolving the repo is a round trip,
-  // and a second press landing inside that window would clear the check above
-  // and start a parallel copy of the same 100 GB+ transfer.
-  const state = { repo, controller: new AbortController(), stalled: false };
-  inFlight.set(modelDir, state);
+  // and a second press landing inside that window would clear the in-flight
+  // check and start a parallel copy of the same 100 GB+ transfer.
+  const slot = downloadSlot.claim(modelDir, {
+    busyMessage: `${repo} is already downloading.`,
+    otherBusyMessage: 'Another Slotstream checkpoint is already downloading — PortOS fetches one at a time.',
+    meta: { repo },
+  });
 
   const label = slotstreamCatalogEntry(repo)?.label || repo;
-  let lastEmit = 0;
+  const emitProgress = slot.throttle(onProgress);
   try {
     const token = await getHfToken();
     const headers = buildHfAuthHeaders(token);
     onProgress({ event: 'start', model: repo, message: `Resolving ${repo} on Hugging Face…` });
-    const plan = await planRepoDownload({ repo, token, signal: state.controller.signal, cacheDir });
+    slot.throwIfAborted();
+    const plan = await planRepoDownload({ repo, token, signal: slot.signal, cacheDir });
+    slot.throwIfAborted();
     const carried = plan.finishedBytes + plan.partialBytes;
     assertDownloadFits(await assessDownloadPreflight({
       destPath: plan.modelDir,
@@ -267,24 +275,18 @@ export async function downloadSlotstreamModel({ model = null, cacheDir, onProgre
         headers,
         destPath: entry.destPath,
         expectedSha256: entry.sha256,
-        signal: state.controller.signal,
-        idleStallTimeoutMs: IDLE_STALL_TIMEOUT_MS,
-        onIdleStall: () => {
-          state.stalled = true;
-          state.controller.abort();
-        },
         onHttpError: hfDownloadHttpError,
+        ...slot.downloadOptions(),
         onBytes: (received) => {
-          const now = Date.now();
-          if (now - lastEmit < PROGRESS_INTERVAL_MS) return;
-          lastEmit = now;
-          onProgress({
+          // Clamped: a file whose size the Hub never reported contributes
+          // nothing to `total` but real bytes as it lands, which would
+          // otherwise walk the bar past 100%.
+          const done = Math.min(plan.totalBytes, completedBytes + Math.max(0, received - resumedFrom));
+          slot.track(done, plan.totalBytes);
+          emitProgress({
             event: 'progress',
             model: repo,
-            // Clamped: a file whose size the Hub never reported contributes
-            // nothing to `total` but real bytes as it lands, which would
-            // otherwise walk the bar past 100%.
-            received: Math.min(plan.totalBytes, completedBytes + Math.max(0, received - resumedFrom)),
+            received: done,
             total: plan.totalBytes,
             message: `Downloading ${entry.file}`,
           });
@@ -310,43 +312,45 @@ export async function downloadSlotstreamModel({ model = null, cacheDir, onProgre
       sizeBytes: plan.totalBytes,
     };
   } catch (err) {
-    const error = state.stalled ? stalledError() : err;
-    console.error(`❌ Slotstream checkpoint download failed for ${repo}: ${error.message}`);
-    onProgress({ event: 'error', model: repo, message: error.message });
-    return { success: false, model: repo, error: error.message, code: error.code || null };
+    const error = slot.wrapError(err);
+    if (slot.cancelled) {
+      console.log(`⏹️ Slotstream checkpoint download cancelled: ${repo}`);
+    } else {
+      console.error(`❌ Slotstream checkpoint download failed for ${repo}: ${error.message}`);
+    }
+    // A cancel is not a failure the user needs a red toast for, but the bar
+    // still has to come down — the card clears on any terminal frame, and
+    // 'cancelled' is what tells it which happened.
+    onProgress({
+      event: slot.cancelled ? 'cancelled' : 'error',
+      model: repo,
+      message: error.message,
+    });
+    return { success: false, model: repo, cancelled: slot.cancelled, error: error.message, code: error.code || null };
   } finally {
-    inFlight.delete(modelDir);
+    slot.release();
   }
 }
 
 /**
- * The watchdog's abort reaches the catch as a generic AbortError, which says
- * nothing useful; this is what the user is told instead. There is deliberately
- * no user-facing cancel yet — the stall watchdog is the only thing that aborts
- * a transfer, so `state.stalled` is the only reason this fires.
+ * Stop the checkpoint download in progress. Returns false when none is running.
+ *
+ * A 100 GB+ transfer that is merely SLOW rather than silent never trips the idle
+ * watchdog, so without this the only way out was to wait it out. The partial
+ * files are kept — `streamResumableDownload` discards only the shard it was
+ * mid-write on — so pressing download again resumes.
+ *
+ * `model` is optional: the slot holds one transfer at a time, so an omitted
+ * model cancels whatever is running. A named model that is NOT the running one
+ * cancels nothing rather than stopping someone else's transfer.
  */
-function stalledError() {
-  const minutes = Math.round(IDLE_STALL_TIMEOUT_MS / 60000);
-  return new ServerError(
-    `Download stalled — no bytes received for ${minutes} minute${minutes === 1 ? '' : 's'}, so it was abandoned. Its progress is kept: pressing download again resumes from where it stopped.`,
-    { status: 504, code: 'SLOTSTREAM_DOWNLOAD_STALLED' },
-  );
+export function cancelSlotstreamModelDownload({ model = null, cacheDir } = {}) {
+  if (model == null) return downloadSlot.entries().some(([key]) => downloadSlot.cancel(key));
+  return downloadSlot.cancel(slotstreamModelPath(requireRepo(model), { cacheDir }));
 }
 
 /** True while a checkpoint download is writing under `path` (or its `.partial`). */
-export function isSlotstreamDownloadInFlight(path) {
-  if (!path || inFlight.size === 0) return false;
-  const target = String(path);
-  for (const modelDir of inFlight.keys()) {
-    // `sep`, not `/`: the sweep hands us paths built with `join`, so on Windows
-    // a hardcoded slash would never match and the GC would be free to unlink a
-    // shard that is still transferring.
-    if (target === modelDir || target.startsWith(`${modelDir}${sep}`)) return true;
-  }
-  return false;
-}
+export const isSlotstreamDownloadInFlight = (path) => downloadSlot.isInFlight(path);
 
 /** Clears in-flight download bookkeeping (used by test suites). */
-export function _resetSlotstreamDownloadsForTests() {
-  inFlight.clear();
-}
+export const _resetSlotstreamDownloadsForTests = () => downloadSlot.reset();

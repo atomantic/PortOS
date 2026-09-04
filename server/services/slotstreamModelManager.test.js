@@ -7,6 +7,7 @@ vi.mock('./hfToken.js', () => ({ getHfToken: async () => null }));
 
 const { listSlotstreamCachedModels } = await import('../lib/slotstreamModels.js');
 const {
+  cancelSlotstreamModelDownload,
   downloadSlotstreamModel,
   previewSlotstreamDownload,
   isSlotstreamDownloadInFlight,
@@ -204,6 +205,55 @@ describe('downloadSlotstreamModel', () => {
 
     release();
     expect((await first).success).toBe(true);
+  });
+
+  // Before the shared download slot, Slotstream had no cancel at all: the idle
+  // watchdog was the only thing that could abort a transfer, so a 100 GB+ pull
+  // that was merely SLOW could only be waited out.
+  it('cancels a running checkpoint download and keeps its partial for a resume', async () => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      const href = String(url);
+      if (href.startsWith('https://huggingface.co/api/models/')) return metadataResponse();
+      if (href.endsWith('/config.json')) {
+        return new Response(CONFIG, { status: 200, headers: { 'content-length': String(CONFIG.length) } });
+      }
+      // The shard streams its first chunk, then hangs until the cancel aborts it.
+      const body = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(SHARD.slice(0, 512)));
+          gate.then(() => controller.error(new Error('aborted')));
+        },
+      });
+      return new Response(body, { status: 200, headers: { 'content-length': String(SHARD.length) } });
+    }));
+
+    const frames = [];
+    const download = downloadSlotstreamModel({ model: REPO, cacheDir, onProgress: (f) => frames.push(f) });
+    // Wait until the shard is genuinely mid-write: the slot is claimed before
+    // the metadata round trip, so an in-flight check alone would cancel before
+    // any bytes exist and prove nothing about what a cancel preserves.
+    const shardPartial = join(cacheDir, DIR_NAME, 'model.safetensors.partial');
+    await vi.waitFor(async () => expect((await readFile(shardPartial, 'utf8')).length).toBeGreaterThan(0));
+
+    expect(cancelSlotstreamModelDownload({ model: REPO, cacheDir })).toBe(true);
+    release();
+    const result = await download;
+
+    expect(result.success).toBe(false);
+    expect(result.cancelled).toBe(true);
+    expect(result.code).toBe('SLOTSTREAM_DOWNLOAD_CANCELLED');
+    expect(frames.at(-1).event).toBe('cancelled');
+    expect(isSlotstreamDownloadInFlight(join(cacheDir, DIR_NAME))).toBe(false);
+    // The bytes that landed are kept, so pressing download again resumes rather
+    // than restarting a multi-gigabyte shard from zero.
+    expect((await readFile(shardPartial, 'utf8')).length).toBeGreaterThan(0);
+  });
+
+  it('reports no cancellation when nothing is downloading', () => {
+    expect(cancelSlotstreamModelDownload({ model: REPO, cacheDir })).toBe(false);
+    expect(cancelSlotstreamModelDownload()).toBe(false);
   });
 
   it('protects a live shard from the orphaned-partial sweep', async () => {
