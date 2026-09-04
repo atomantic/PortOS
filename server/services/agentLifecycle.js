@@ -45,6 +45,7 @@ import { spawnAgentViaRunner, getRunnerHealth, classifyRunnerSpawnFailure, RUNNE
 import { MAX_TOTAL_SPAWNS, normalizeReviewers } from '../lib/validation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
 import { isRetryHeld } from '../lib/taskRetryHold.js';
+import { PROVIDER_CONFIG_BLOCKED_CATEGORY } from '../lib/taskBlockCategories.js';
 import { ensureDir, PATHS, sleep, tryReadFile } from '../lib/fileUtils.js';
 import { createToolExecution, startExecution, completeExecution, errorExecution } from './toolStateMachine.js';
 import { determineLane, acquire, release } from './executionLanes.js';
@@ -417,7 +418,7 @@ async function runAgentSpawn(task) {
           metadata: {
             ...task.metadata,
             blockedReason: resolution.error,
-            blockedCategory: 'provider-config',
+            blockedCategory: PROVIDER_CONFIG_BLOCKED_CATEGORY,
             blockedAt: new Date().toISOString()
           }
         }, task.taskType || 'user').catch(() => {});

@@ -1177,6 +1177,24 @@ describe('cosTaskStore.updateTask', () => {
     expect(blocked.metadata.resumeWorktreePath).toBe('/w/agent-x');
   });
 
+  // Same for a permanent provider-config block (#6193): the resolved provider is
+  // `api`-type and has no file-writing harness, so the task waits for the user to
+  // add a CLI provider. Dropping the pointer means the revived task starts on a
+  // fresh branch and orphans the worktree its dead agent left behind.
+  it('keeps the resume pointer through a provider-config block', async () => {
+    await addTask({ description: 'unrunnable provider', id: 'task-provider-config' }, 'user');
+    await updateTask('task-provider-config', {
+      metadata: { existingBranch: 'cos/b', resumedFromAgentId: 'agent-x', resumeWorktreePath: '/w/agent-x' }
+    }, 'user');
+    const blocked = await updateTask('task-provider-config', {
+      status: 'blocked',
+      metadata: { blockedCategory: 'provider-config' }
+    }, 'user');
+    expect(blocked.metadata.existingBranch).toBe('cos/b');
+    expect(blocked.metadata.resumedFromAgentId).toBe('agent-x');
+    expect(blocked.metadata.resumeWorktreePath).toBe('/w/agent-x');
+  });
+
   // An `existingBranch` with no `resumedFromAgentId` beside it was never written
   // by the resume mechanism — it is the task's OWN configuration. A merge
   // follow-up is the producer: it exists to land the PR on that branch. Stripping
@@ -1626,7 +1644,10 @@ describe('cosTaskStore — stale failure-artifact reaper (#2619)', () => {
       // The workspace blocks are an open decision too: the task waits for the
       // user to fix the app's Repository Path, so auto-completing it at 14 days
       // would silently retire work nobody decided to drop.
-      for (const cat of ['user-terminated', 'agent-paused', 'challenge-escalation', 'app-unresolved', 'workspace-invalid']) {
+      // `provider-config` is the same shape: an `api`-only provider can't run an
+      // agent, and only the user can fix that — so a 14-day flip to `completed`
+      // would report undropped work as done and federate that lie to every peer.
+      for (const cat of ['user-terminated', 'agent-paused', 'challenge-escalation', 'app-unresolved', 'workspace-invalid', 'provider-config']) {
         expect(blockedFailureAgeMs(blocked(cat, daysAgo(30)), NOW)).toBeNull();
         expect(isReapableBlockedFailure(blocked(cat, daysAgo(30)), { now: NOW })).toBe(false);
       }
@@ -1639,8 +1660,8 @@ describe('cosTaskStore — stale failure-artifact reaper (#2619)', () => {
     });
 
     it('falls back to lastFailureAt then updatedAt when blockedAt is absent', () => {
-      expect(blockedFailureAgeMs({ status: 'blocked', metadata: { blockedCategory: 'provider-config', lastFailureAt: daysAgo(20) } }, NOW)).toBe(20 * 24 * 60 * 60 * 1000);
-      expect(blockedFailureAgeMs({ status: 'blocked', metadata: { blockedCategory: 'provider-config', updatedAt: daysAgo(20) } }, NOW)).toBe(20 * 24 * 60 * 60 * 1000);
+      expect(blockedFailureAgeMs({ status: 'blocked', metadata: { blockedCategory: 'max-spawns', lastFailureAt: daysAgo(20) } }, NOW)).toBe(20 * 24 * 60 * 60 * 1000);
+      expect(blockedFailureAgeMs({ status: 'blocked', metadata: { blockedCategory: 'max-spawns', updatedAt: daysAgo(20) } }, NOW)).toBe(20 * 24 * 60 * 60 * 1000);
     });
 
     it('never reaps an undated block (cannot prove it is old)', () => {
@@ -1711,6 +1732,23 @@ describe('cosTaskStore — stale failure-artifact reaper (#2619)', () => {
       const after = await getUserTasks();
       expect(after.tasks.find(t => t.id === 'task-fresh').status).toBe('blocked');
       expect(after.tasks.find(t => t.id === 'task-stop').status).toBe('blocked');
+    });
+
+    // A provider-config block never self-revives — it waits for the user to add a
+    // CLI provider — so the reaper must leave it alone no matter how old it gets.
+    // Flipping it to `completed` with `resolution: 'auto-expired'` would report
+    // work nobody dropped as done, and federate that to every peer (#6193).
+    it('never auto-expires a provider-config block, however stale', async () => {
+      await addTask({ description: 'api-only provider pinned', id: 'task-pc-old', priority: 'HIGH' }, 'user', { now: NOW });
+      await updateTask('task-pc-old', { status: 'blocked', metadata: { blockedCategory: 'provider-config', blockedAt: daysAgo(90) } }, 'user', { now: NOW });
+      const res = await sweepResolvedFailureTasks({ now: NOW });
+      expect(res.reaped).toBe(0);
+      expect(res.staleBlocks).toBe(0);
+      const task = (await getUserTasks()).tasks.find(t => t.id === 'task-pc-old');
+      expect(task.status).toBe('blocked');
+      expect(task.metadata.blockedCategory).toBe('provider-config');
+      expect(task.metadata.resolution).toBeUndefined();
+      expect(task.metadata.autoExpiredReason).toBeUndefined();
     });
 
     it('flips an investigation whose originating task has completed', async () => {

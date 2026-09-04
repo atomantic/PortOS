@@ -32,6 +32,7 @@ import { dirname, join } from 'path';
 import { spawningTasks, runnerAgents } from './agentState.js';
 import { withSpawnDedupGuard, withMapEntryCleanup, withUpdateInProgressGuard, SPAWN_DEDUP_SKIP, SPAWN_UPDATE_SKIP } from './agentGuards.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
+import { PROVIDER_CONFIG_BLOCKED_CATEGORY, PAUSED_BLOCKED_CATEGORIES, USER_DECISION_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const AGENT_LIFECYCLE_SRC = readFileSync(join(__dirname, 'agentLifecycle.js'), 'utf-8');
@@ -619,7 +620,22 @@ describe('runAgentSpawn source — permanent provider-config failure blocks the 
     const body = AGENT_LIFECYCLE_SRC.slice(idx, idx + 2000);
     expect(body, 'gates the block on resolution.permanent').toMatch(/if\s*\(resolution\.permanent\)/);
     expect(body, 'flips the task to blocked').toMatch(/status:\s*'blocked'/);
-    expect(body, 'tags the block category').toMatch(/blockedCategory:\s*'provider-config'/);
+    // The category is the SHARED constant, not a hand-written literal: the pause
+    // and reaper-exemption sets in lib/taskBlockCategories.js key on the same
+    // value, and a stamp-site literal is exactly how those three drift apart.
+    expect(body, 'tags the block category from the shared constant').toMatch(/blockedCategory:\s*PROVIDER_CONFIG_BLOCKED_CATEGORY,/);
+    expect(body, 'does not re-hardcode the literal').not.toMatch(/blockedCategory:\s*'provider-config'/);
+    expect(AGENT_LIFECYCLE_SRC, 'imports the shared constant').toMatch(/import \{[^}]*PROVIDER_CONFIG_BLOCKED_CATEGORY[^}]*\} from '\.\.\/lib\/taskBlockCategories\.js'/);
+  });
+
+  // The block only does its job if the vocabulary module agrees it is a config
+  // PAUSE (keeps the resume pointer) and a user DECISION (exempt from the 14-day
+  // auto-expiry). Pin both memberships here, at the stamp site, so removing one
+  // fails beside the code that depends on it.
+  it('the stamped category is a config pause the reaper leaves alone', () => {
+    expect(PROVIDER_CONFIG_BLOCKED_CATEGORY).toBe('provider-config');
+    expect(PAUSED_BLOCKED_CATEGORIES.has(PROVIDER_CONFIG_BLOCKED_CATEGORY), 'keeps its resume pointer').toBe(true);
+    expect(USER_DECISION_BLOCKED_CATEGORIES.has(PROVIDER_CONFIG_BLOCKED_CATEGORY), 'never auto-expired to completed').toBe(true);
   });
 
   it('blocks BEFORE releasing the lease so a federated peer cannot be clobbered', () => {

@@ -18,6 +18,16 @@
 import { AGENT_PAUSED_CATEGORY } from './taskPauseHold.js';
 
 /**
+ * A PERMANENT provider-config failure: the task's resolved provider cannot run
+ * an agent at all (today, an `api`-type provider pinned to or resolved for an
+ * agent task — it has no file-writing harness). Stamped by `runAgentSpawn`
+ * (services/agentLifecycle.js) and read by both sets below, so it lives here
+ * rather than as a third hand-written literal — exactly the drift this module
+ * exists to prevent.
+ */
+export const PROVIDER_CONFIG_BLOCKED_CATEGORY = 'provider-config';
+
+/**
  * Pauses a TIMER clears, not a person: the task carries a `cooldownUntil` and the
  * cooldown sweeper (`unblockExpiredCooldowns`, cosTaskGenerator.js) flips it back
  * to `pending` once that stamp passes.
@@ -46,7 +56,14 @@ export const TIMED_COOLDOWN_BLOCKED_CATEGORIES = new Set([
 export const PAUSED_BLOCKED_CATEGORIES = new Set([
   ...TIMED_COOLDOWN_BLOCKED_CATEGORIES,
   'app-unresolved',    // the task's app has no usable Repository Path
-  'workspace-invalid'  // the resolved workspace isn't a usable directory
+  'workspace-invalid', // the resolved workspace isn't a usable directory
+  // A CONFIG pause, NOT a timed one: nothing stamps a `cooldownUntil` for it and
+  // no sweeper revives it — the user adds a CLI provider (or re-pins the task)
+  // and unblocks it by hand. It therefore belongs here and in the user-decision
+  // set, but never in TIMED_COOLDOWN_BLOCKED_CATEGORIES. Without this membership
+  // the revived task restarts on a fresh branch and orphans the worktree its dead
+  // agent left behind.
+  PROVIDER_CONFIG_BLOCKED_CATEGORY
 ]);
 
 /**
@@ -54,18 +71,25 @@ export const PAUSED_BLOCKED_CATEGORIES = new Set([
  * artifact — the reaper leaves these alone. Everything else with a
  * `blockedCategory` is a failure-path block and therefore reapable.
  *
- * The workspace blocks are an open user decision, not a stale failure: the task
- * is waiting for the app's Repository Path to be fixed, and auto-completing it
- * at 14 days would silently retire work nobody decided to drop. (The TIMED pause
- * categories stay reapable — they revive themselves in minutes, so one still
- * sitting there after 14 days IS stale.)
+ * The CONFIG pauses are an open user decision, not a stale failure: the task is
+ * waiting for the app's Repository Path to be fixed, or for a provider that can
+ * actually run an agent, and auto-completing it at 14 days would silently retire
+ * work nobody decided to drop. (The TIMED pause categories stay reapable — they
+ * revive themselves in minutes, so one still sitting there after 14 days IS
+ * stale.)
  */
 export const USER_DECISION_BLOCKED_CATEGORIES = new Set([
   'user-terminated',      // user explicitly stopped the agent
   AGENT_PAUSED_CATEGORY,  // user paused; resumable on demand
   'challenge-escalation', // parked awaiting the user's arbitration
   'app-unresolved',
-  'workspace-invalid'
+  'workspace-invalid',
+  // Same shape: a config error only the user can clear. Exempt from the 14-day
+  // `sweepResolvedFailureTasks` auto-expiry (cosTaskStore.js), which would
+  // otherwise flip it to `completed` with `resolution: 'auto-expired'` and
+  // federate that false `completed` to every peer — silently reporting work
+  // nobody decided to drop as done.
+  PROVIDER_CONFIG_BLOCKED_CATEGORY
 ]);
 
 /**
