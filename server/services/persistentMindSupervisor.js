@@ -522,6 +522,21 @@ function quietSelfWake(turnId, quietPeriodMs = PERSISTENT_MIND_LIMITS.MAX_QUIET_
   };
 }
 
+/**
+ * Hand a claimed wake back to durable state when its turn is abandoned.
+ *
+ * An interrupted temporary thinking session is an uncertain consumed attempt:
+ * the abort races whatever the provider already started, and no durable record
+ * can say whether that call was billed. Every such wake is retired rather than
+ * requeued, so resuming it stays an explicit user decision; an ordinary message
+ * or self-wake keeps its free automatic retry.
+ */
+const releaseClaimedWake = (mind, wake) => (
+  persistentMindWakeConsumesAttempt(wake)
+    ? holdPersistentMindWake(mind, wake)
+    : requeuePersistentMindWake(mind, wake)
+);
+
 async function interruptActiveTurn(reason, status, { retry = false, expectedTurnId = null } = {}) {
   const result = await mutateMindState((mind) => {
     if (expectedTurnId && mind.activeTurn?.id !== expectedTurnId) {
@@ -529,15 +544,7 @@ async function interruptActiveTurn(reason, status, { retry = false, expectedTurn
     }
     const interrupted = Boolean(mind.activeTurn);
     let next = mind;
-    if (mind.activeTurn) {
-      // An interrupted temporary thinking session is an uncertain consumed
-      // attempt: the abort races whatever the provider already started, and no
-      // durable record can say whether that call was billed. Retire it instead
-      // of requeueing, so resuming it stays an explicit user decision.
-      next = persistentMindWakeConsumesAttempt(mind.activeTurn.wake)
-        ? holdPersistentMindWake(next, mind.activeTurn.wake)
-        : requeuePersistentMindWake(next, mind.activeTurn.wake);
-    }
+    if (mind.activeTurn) next = releaseClaimedWake(next, mind.activeTurn.wake);
     const failureCount = retry ? next.failureCount + 1 : next.failureCount;
     return {
       mind: {
@@ -580,6 +587,8 @@ async function interruptActiveTurn(reason, status, { retry = false, expectedTurn
 async function parkActiveTurn(turnId, reason, status = 'waiting', { retryAt = null, consumedAttempt = false } = {}) {
   const result = await mutateMindState((mind) => {
     if (mind.activeTurn?.id !== turnId) return { mind, value: false };
+    // A refusal decided before the provider span opened spent nothing, so it
+    // requeues even for a temporary session.
     const held = consumedAttempt && persistentMindWakeConsumesAttempt(mind.activeTurn.wake);
     const next = held
       ? holdPersistentMindWake(mind, mind.activeTurn.wake)
@@ -1141,7 +1150,7 @@ export async function setPersistentMindEnabled(enabled) {
     const changedToDisabled = !enabled && (mind.enabled || Boolean(mind.activeTurn));
     const interruptedTurnId = !enabled ? mind.activeTurn?.id || null : null;
     let next = mind;
-    if (!enabled && mind.activeTurn) next = requeuePersistentMindWake(next, mind.activeTurn.wake);
+    if (!enabled && mind.activeTurn) next = releaseClaimedWake(next, mind.activeTurn.wake);
     return {
       mind: {
         ...next,
@@ -1239,7 +1248,7 @@ export async function stopPersistentMind({ waitForTurn = false } = {}) {
     const wasStarted = mind.started;
     const interruptedTurnId = mind.activeTurn?.id || null;
     let next = mind;
-    if (mind.activeTurn) next = requeuePersistentMindWake(next, mind.activeTurn.wake);
+    if (mind.activeTurn) next = releaseClaimedWake(next, mind.activeTurn.wake);
     return {
       mind: {
         ...next,
@@ -1540,7 +1549,7 @@ export async function initializePersistentMindSupervisor() {
     let next = mind;
     const orphanedTurnId = mind.activeTurn?.id || null;
     if (mind.activeTurn) {
-      next = requeuePersistentMindWake(next, mind.activeTurn.wake);
+      next = releaseClaimedWake(next, mind.activeTurn.wake);
       const failureCount = next.failureCount + 1;
       next = {
         ...next,

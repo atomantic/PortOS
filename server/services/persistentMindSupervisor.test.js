@@ -859,4 +859,56 @@ describe('persistent mind supervisor', () => {
     await supervisor.drainPersistentMind();
     expect(run).toHaveBeenCalledTimes(1);
   });
+
+  it('retires, never replays, a temporary session abandoned by a restart, a stop, or a disable', async () => {
+    withDeepPreset();
+    const temporaryTurn = (turnId, messageId) => ({
+      id: turnId,
+      wake: {
+        kind: 'message',
+        message: { id: messageId, text: 'Deep pass please.', thinkingPresetId: 'deep', createdAt: new Date().toISOString() },
+      },
+      startedAt: new Date().toISOString(),
+      heartbeatAt: new Date().toISOString(),
+    });
+    const startedWith = (turn) => {
+      mock.root.persistentMind = {
+        ...createDefaultPersistentMindState(),
+        enabled: true,
+        started: true,
+        status: 'thinking',
+        activeTurn: turn,
+      };
+    };
+    await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run: vi.fn() });
+
+    // A hard crash leaves started:true on disk, so boot recovery — not the
+    // state normalizer — owns this one.
+    startedWith(temporaryTurn('mind-turn-crash', 'paid-crash'));
+    await supervisor.initializePersistentMindSupervisor();
+    expect(mock.root.persistentMind.queuedMessages).toEqual([]);
+    expect(mock.root.persistentMind.recentMessageIds).toEqual(['paid-crash']);
+
+    startedWith(temporaryTurn('mind-turn-stop', 'paid-stop'));
+    await supervisor.stopPersistentMind();
+    expect(mock.root.persistentMind.queuedMessages).toEqual([]);
+    expect(mock.root.persistentMind.recentMessageIds).toEqual(['paid-stop']);
+
+    startedWith(temporaryTurn('mind-turn-disable', 'paid-disable'));
+    await supervisor.setPersistentMindEnabled(false);
+    expect(mock.root.persistentMind.queuedMessages).toEqual([]);
+    expect(mock.root.persistentMind.recentMessageIds).toEqual(['paid-disable']);
+
+    // An ordinary message keeps its free automatic recovery on every path.
+    const ordinaryTurn = {
+      id: 'mind-turn-plain',
+      wake: { kind: 'message', message: { id: 'plain-1', text: 'Ordinary.', createdAt: new Date().toISOString() } },
+      startedAt: new Date().toISOString(),
+      heartbeatAt: new Date().toISOString(),
+    };
+    startedWith(ordinaryTurn);
+    await supervisor.stopPersistentMind();
+    expect(mock.root.persistentMind.queuedMessages.map((item) => item.id)).toEqual(['plain-1']);
+    expect(mock.root.persistentMind.recentMessageIds).toEqual([]);
+  });
 });

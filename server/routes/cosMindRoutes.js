@@ -82,8 +82,14 @@ const messageSchema = z.object({
   text: messageText,
   images: z.array(imageReference).max(PERSISTENT_MIND_LIMITS.MAX_MESSAGE_IMAGES).optional(),
   // "Send with another model": one saved preset, for this message's single turn
-  // only. Absent means the mind's unchanged default route.
-  thinkingPresetId: persistentMindThinkingPresetSchema.shape.id.optional(),
+  // only. Absent, empty, and null all mean the same thing here — the mind's
+  // unchanged default route — so a composer that clears its picker does not
+  // have to omit the key to say "no override".
+  thinkingPresetId: z.union([
+    persistentMindThinkingPresetSchema.shape.id,
+    z.literal(''),
+    z.null(),
+  ]).optional(),
 }).strict().superRefine((value, ctx) => {
   const images = Array.isArray(value.images) ? value.images : [];
   const ids = images.map((image) => typeof image === 'string' ? image : image.attachmentId);
