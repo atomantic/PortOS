@@ -225,6 +225,50 @@ describe('killProcessTree', () => {
     killProcessTree(ptyLike, 'SIGKILL');
     expect(ptyLike.kill).toHaveBeenCalledWith('SIGKILL');
   });
+
+  // A bare `{ pid }` — a detached job this process holds no handle to at all
+  // (spawnDetached's reparented job, reapDetached's pid-file orphan). The
+  // platform is INJECTED, so both branches are asserted on any host.
+  it('tree-kills a bare { pid } target on Windows', () => {
+    const tk = makeFakeChild();
+    spawnMock.mockReturnValueOnce(tk);
+    killProcessTree({ pid: 8080 }, 'SIGKILL', {}, true);
+    // Without this, a pid-only cancel fell through to the node-pty branch and
+    // threw `child.kill is not a function` — or, worse, silently killed only
+    // the job leaf and orphaned everything it spawned (#6170).
+    expect(spawnMock).toHaveBeenCalledWith(
+      'taskkill', ['/T', '/F', '/PID', '8080'],
+      expect.objectContaining({ stdio: 'ignore' })
+    );
+  });
+
+  it('maps processGroup onto the same tree-kill on Windows, which has no process groups', () => {
+    const tk = makeFakeChild();
+    spawnMock.mockReturnValueOnce(tk);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    killProcessTree({ pid: 8081 }, 'SIGTERM', { processGroup: true }, true);
+    expect(spawnMock).toHaveBeenCalledWith('taskkill', ['/T', '/F', '/PID', '8081'], expect.anything());
+    // `process.kill(-pid)` means nothing on Windows — the win32 branch has to
+    // win the race with the process-group branch, whatever the flag says.
+    expect(killSpy).not.toHaveBeenCalled();
+    killSpy.mockRestore();
+  });
+
+  it('signals a bare { pid } target off Windows, group first then the pid', () => {
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    killProcessTree({ pid: 8082 }, 'SIGKILL', { processGroup: true }, false);
+    expect(killSpy).toHaveBeenCalledWith(-8082, 'SIGKILL');
+    killSpy.mockReset();
+    killProcessTree({ pid: 8083 }, 'SIGKILL', {}, false);
+    expect(killSpy).toHaveBeenCalledWith(8083, 'SIGKILL');
+    killSpy.mockRestore();
+  });
+
+  it('swallows ESRCH for a bare { pid } target that already exited', () => {
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => { throw new Error('ESRCH'); });
+    expect(() => killProcessTree({ pid: 8084 }, 'SIGKILL', {}, false)).not.toThrow();
+    killSpy.mockRestore();
+  });
 });
 
 describe('resolveWindowsExecutable', () => {

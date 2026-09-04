@@ -127,7 +127,7 @@ export default function FirstRunCard() {
           disabled={busy}
           aria-label="Dismiss for this session"
           title="Dismiss for this session"
-          className="p-1 rounded text-gray-500 hover:text-white hover:bg-port-border/60 disabled:opacity-50 min-h-[32px] min-w-[32px]"
+          className="inline-flex items-center justify-center p-1 rounded text-gray-500 hover:text-white hover:bg-port-border/60 disabled:opacity-50 min-h-[44px] min-w-[44px]"
         >
           <X size={14} />
         </button>

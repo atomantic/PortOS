@@ -4,6 +4,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const npmGlobalBin = vi.hoisted(() => ({ adoptNpmGlobalBinDir: vi.fn(async () => null) }));
 vi.mock('../lib/npmGlobalBin.js', () => npmGlobalBin);
 
+// `opencode models` reads a cache file this module primes over the network.
+// Unmocked, the suite would fetch a multi-megabyte catalog and overwrite the
+// developer's real `~/.cache/opencode/models.json`.
+const opencodeCatalog = vi.hoisted(() => ({
+  primeOpencodeCatalogCache: vi.fn(async () => ({ primed: true, reason: 'stubbed' })),
+}));
+vi.mock('../lib/opencodeCatalogCache.js', () => opencodeCatalog);
+
 const providerService = vi.hoisted(() => ({
   // `listProviders()` resolves the records as an ARRAY — the envelope
   // (`{ activeProvider, providers: [...] }`) is `getAllProviders`'s shape, and
@@ -46,6 +54,7 @@ beforeEach(() => {
   __resetLatestVersionCache();
   providerService.listProviders.mockResolvedValue(Object.values(providers));
   providerService.updateProvider.mockClear();
+  opencodeCatalog.primeOpencodeCatalogCache.mockClear();
 });
 
 // `usesHarnessCatalog` keys on the ABSENCE of a backend marker, so the class it
@@ -195,6 +204,26 @@ describe('refreshHarnessModels', () => {
     await refreshHarnessModels('opencode', { run, ...found });
 
     expect(run).toHaveBeenCalledWith('/example/opencode', ['models'], expect.anything());
+  });
+
+  // `opencode models` prints from an on-disk catalog OpenCode refreshes on its
+  // own, silently and — on a host whose IPv6 default route goes nowhere — not at
+  // all. Without this step the button re-reads a catalog frozen weeks ago and
+  // still reports success, so a model another machine already lists never
+  // appears here.
+  it('primes the OpenCode catalog before probing, and only for OpenCode', async () => {
+    const run = vi.fn(async (command, args) => (args[0] === 'models' ? OPENCODE_MODELS : '1.18.27'));
+
+    await refreshHarnessModels('opencode', { run, ...found });
+    expect(opencodeCatalog.primeOpencodeCatalogCache).toHaveBeenCalledTimes(1);
+
+    // Every other harness enumerates its models live; there is no file to prime,
+    // and reaching for OpenCode's would be writing a cache nothing here reads.
+    await refreshHarnessModels('grok', {
+      run: async (command, args) => (args[0] === 'models' ? 'Available models:\n  - grok-4.5\n' : 'grok 1.0.13'),
+      ...found,
+    });
+    expect(opencodeCatalog.primeOpencodeCatalogCache).toHaveBeenCalledTimes(1);
   });
 
   it('writes the harness catalog only to providers that draw from it', async () => {

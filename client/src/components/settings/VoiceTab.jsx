@@ -726,7 +726,7 @@ export function VoiceTab() {
             className="w-4 h-4 mt-0.5 shrink-0"
           />
           <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
-            <span className="text-sm text-white">Enable tools (brain, goals, PM2, feeds, time…)</span>
+            <span className="text-sm text-white">Enable tools (brain, goals, PM2, feeds, time, driving the page — click/fill/select/check…)</span>
             <span className="text-xs text-gray-500">
               Needs a tool-use-capable model (Qwen2.5, Hermes-3, etc.).
             </span>

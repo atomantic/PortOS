@@ -18,12 +18,14 @@ import {
   MessageSquare,
   ExternalLink,
   Terminal,
+  Hourglass,
   Send,
   GitBranch,
   GitPullRequest,
   Sparkles,
   RefreshCw,
-  Copy
+  Copy,
+  Target
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import OutputBlocks from '../OutputBlocks';
@@ -100,6 +102,52 @@ function TranscriptTruncationNotice({ transcript }) {
           ? `Showing the last ${count.toLocaleString()} ${count === 1 ? 'line' : 'lines'} — the full transcript${size} is on disk in the agent's output.txt.`
           : `The tail of this transcript held no readable lines — the full transcript${size} is on disk in the agent's output.txt.`}
       </span>
+    </div>
+  );
+}
+
+// Goal-fidelity verdict (#5994) — did this run build what the task asked for?
+// Distinct from the quality reviewers, which never see the request. Rendered
+// whatever the verdict: a `ship` is the evidence the gate ran, and its absence
+// is what tells the reader the run was never judged against its objective.
+//
+// `missing` / `unrequested` are model-authored text derived from an untrusted
+// diff, so they render as plain list items — never a link, path, or command.
+const GOAL_FIDELITY_TONE = {
+  ship: { border: 'border-port-success/30', text: 'text-port-success', label: 'Delivers the objective' },
+  'fix-first': { border: 'border-port-warning/30', text: 'text-port-warning', label: 'Delivers it, with gaps' },
+  rethink: { border: 'border-port-error/40', text: 'text-port-error', label: 'Does not deliver the objective' }
+};
+
+function GoalFidelityPanel({ review }) {
+  const tone = GOAL_FIDELITY_TONE[review?.verdict];
+  if (!tone) return null;
+  return (
+    <div className={`mt-2 bg-port-bg/50 border rounded p-2.5 ${tone.border}`}>
+      <div className={`text-[11px] flex items-center gap-1 ${tone.text}`}>
+        <Target size={10} aria-hidden="true" />
+        Goal fidelity: {tone.label}
+        <span className="text-gray-500">
+          ({review.verdict}{review.model ? ` · ${review.model}` : ''}{review.diffTruncated ? ' · partial diff' : ''})
+        </span>
+      </div>
+      {review.missing?.length > 0 && (
+        <div className="mt-1.5 text-xs text-gray-400">
+          <span className="text-gray-500">Asked for but missing:</span>
+          <ul className="list-disc list-inside">
+            {review.missing.map((item, i) => <li key={i}>{item}</li>)}
+          </ul>
+        </div>
+      )}
+      {review.unrequested?.length > 0 && (
+        <div className="mt-1.5 text-xs text-gray-400">
+          <span className="text-gray-500">Not asked for:</span>
+          <ul className="list-disc list-inside">
+            {review.unrequested.map((item, i) => <li key={i}>{item}</li>)}
+          </ul>
+        </div>
+      )}
+      {review.evidence && <p className="mt-1.5 text-xs text-gray-400">{review.evidence}</p>}
     </div>
   );
 }
@@ -329,6 +377,43 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
   ), [inactive, fullOutput, liveOutput, agent.output]);
   const lastOutput = output.length > 0 ? output[output.length - 1]?.line : null;
 
+  // Why this run has NO "Open Shell" link. Scoped to the one case where the user
+  // configured a TUI provider and got no shell anyway: a public-review stage
+  // runs headless unless it is the sandboxed-actions stage on a provider whose
+  // vendor declares an attachable recipe. An ordinary headless CLI agent gets no
+  // chip — nobody expected a shell there, and one on every card would be the
+  // noise this exists to remove.
+  //
+  // `executionMode` is the authority on which way the run actually spawned, and
+  // it is stamped at registration while `tuiSessionId` only lands once the PTY
+  // attaches. An ATTACHABLE public-review stage therefore passes through a
+  // window where the session id is still null — without this second condition
+  // the card would spend that window asserting the stage runs headless, then
+  // silently swap the claim for an "Open Shell" link (same reason the ordinary
+  // TUI case is excluded below).
+  const noShellReason = !agent.metadata?.tuiSessionId
+    && agent.metadata?.executionMode !== 'tui'
+    && agent.metadata?.publicReviewPosture
+    ? 'No shell: this public-review stage runs headless — either it is a tool-free reasoning stage, or its provider has no attachable sandbox recipe — so the screened PR content stays inside the sandboxed child. Watch the live output below to see what it is doing.'
+    : null;
+
+  // Why this run can be silent for minutes and still be perfectly healthy: its
+  // prompt is large and its model server is on this machine, so the whole
+  // prefill happens before the child emits its first line (#6117). Only shown
+  // when the server actually stamped a long-prefill budget — an absent stamp is
+  // "no estimate" (a cloud run, or a pre-upgrade record), never "instant".
+  const prefillBudget = agent.metadata?.localPromptBudget?.longPrefill
+    && Number.isFinite(agent.metadata.localPromptBudget.prefillMs)
+    ? agent.metadata.localPromptBudget
+    : null;
+  const prefillLabel = prefillBudget ? formatDurationMs(prefillBudget.prefillMs) : null;
+  const prefillReason = prefillBudget
+    ? `Large prompt (~${(prefillBudget.promptTokens ?? 0).toLocaleString()} tokens) on a local model server — expect roughly ${prefillLabel} of silent prefill before the first line of output. The run is working, not wedged.${
+      prefillBudget.expectedDurationMs
+        ? ` Its duration estimate was raised to ~${formatDurationMs(prefillBudget.expectedDurationMs)} to cover it.`
+        : ''}`
+    : null;
+
   // Extract recent tool activity (last few tool lines) for live display
   const recentActivity = useMemo(() => {
     if (inactive || output.length === 0) return [];
@@ -410,7 +495,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                 event.stopPropagation();
                 copyToClipboard(agent.id, 'Agent ID copied to clipboard');
               }}
-              className="p-1 rounded text-gray-500 hover:bg-port-border/60 hover:text-white transition-colors shrink-0"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded text-gray-500 hover:bg-port-border/60 hover:text-white transition-colors shrink-0"
               title="Copy agent ID"
               aria-label="Copy agent ID"
             >
@@ -544,7 +629,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
               ) : (
                 <button
                   onClick={() => requestDelete(agent.id)}
-                  className="p-1 text-gray-500 hover:text-port-error transition-colors"
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
                   aria-label="Remove agent"
                 >
                   <Trash2 size={14} aria-hidden="true" />
@@ -615,6 +700,24 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
               <span>Open Shell</span>
               <span className="font-mono text-[10px] text-port-on-success">{agent.metadata.tuiSessionId.slice(0, 6)}</span>
             </Link>
+          )}
+          {!inactive && noShellReason && (
+            <span
+              className="flex items-center gap-1 px-2 py-0.5 rounded bg-port-border/40 text-gray-400 whitespace-nowrap"
+              title={noShellReason}
+            >
+              <Terminal size={10} aria-hidden="true" className="shrink-0" />
+              <span>No shell</span>
+            </span>
+          )}
+          {!inactive && prefillReason && (
+            <span
+              className="flex items-center gap-1 px-2 py-0.5 rounded bg-port-warning/20 text-port-warning whitespace-nowrap"
+              title={prefillReason}
+            >
+              <Hourglass size={10} aria-hidden="true" className="shrink-0" />
+              <span>Long prefill ~{prefillLabel}</span>
+            </span>
           )}
           {!remote && (
             <button
@@ -766,6 +869,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
               disabled={sendingBtw || !btwInput.trim()}
               className="flex items-center gap-1.5 px-3 py-1 text-xs bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 rounded transition-colors disabled:opacity-50 min-h-[32px]"
               title="Send BTW message to agent (pastes into the live Claude Code TUI session)"
+              data-voice-guard="confirm"
             >
               {sendingBtw ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <Send size={12} aria-hidden="true" />}
               BTW
@@ -851,6 +955,8 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
           </div>
         )}
 
+        {agent.result?.goalFidelity && <GoalFidelityPanel review={agent.result.goalFidelity} />}
+
         {completed && (agent.metadata?.taskSummary || agent.metadata?.malwareScan?.reportUrl) && (
           <div className="mt-2 bg-port-bg/50 border border-port-border/50 rounded p-2.5">
             <div className="text-[11px] text-gray-500 mb-1 flex items-center gap-1">
@@ -879,7 +985,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                 <button
                   onClick={() => submitFeedback('positive')}
                   disabled={submittingFeedback}
-                  className={`p-1.5 rounded transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center ${
+                  className={`min-h-[44px] min-w-[44px] flex items-center justify-center p-1.5 rounded transition-colors ${
                     feedbackState === 'positive'
                       ? 'bg-port-success/30 text-port-success'
                       : 'text-gray-500 hover:text-port-success hover:bg-port-success/10'
@@ -893,7 +999,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                 <button
                   onClick={() => submitFeedback('negative')}
                   disabled={submittingFeedback}
-                  className={`p-1.5 rounded transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center ${
+                  className={`min-h-[44px] min-w-[44px] flex items-center justify-center p-1.5 rounded transition-colors ${
                     feedbackState === 'negative'
                       ? 'bg-port-error/30 text-port-error'
                       : 'text-gray-500 hover:text-port-error hover:bg-port-error/10'
@@ -906,7 +1012,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                 </button>
                 <button
                   onClick={() => setShowFeedbackComment(!showFeedbackComment)}
-                  className="p-1.5 rounded text-gray-500 hover:text-white hover:bg-port-border/50 transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center"
+                  className="min-h-[44px] min-w-[44px] flex items-center justify-center p-1.5 rounded text-gray-500 hover:text-white hover:bg-port-border/50 transition-colors"
                   title={feedbackState ? 'Add feedback detail' : 'Add feedback comment'}
                   aria-label={feedbackState ? 'Add feedback detail' : 'Add feedback comment'}
                   aria-expanded={showFeedbackComment}

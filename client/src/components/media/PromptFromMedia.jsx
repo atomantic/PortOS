@@ -244,7 +244,7 @@ export default function PromptFromMedia({
               <button
                 type="button"
                 onClick={() => { setSource(null); setResult(null); }}
-                className="p-1.5 text-gray-400 hover:text-white min-h-[36px] min-w-[36px] flex items-center justify-center"
+                className="min-h-[44px] min-w-[44px] flex items-center justify-center p-1.5 text-gray-400 hover:text-white"
                 aria-label="Clear selected media"
               >
                 <X className="w-3.5 h-3.5" />

@@ -172,3 +172,54 @@ excluded on both privacy and payload grounds.
   far smaller depth budget than native `JSON.stringify` — so a digest deep
   enough to pass `atomicWrite` but blow that recursion would otherwise 500 the
   snapshot endpoint for every peer, permanently and across restarts.
+
+## Amendment (2026-09-03): subscription-quota readings ride the same category
+
+A subscription is **one account across every federated instance**, but each
+install can only read the quota panel of its own local CLI. So every
+subscription card on the Usage page was a partial view of a shared allowance,
+captioned with the CLI's own wording — "Local sessions only — does not include
+other devices or claude.ai." That caption was accurate and useless: the
+federation already carries this user's other devices.
+
+**Each instance's last quota reading now rides the `usage` category alongside
+its usage digest**, and the cards are unified before they render
+([`server/lib/fleetQuotas.js`](../../server/lib/fleetQuotas.js)).
+
+- **Two merge rules, because the halves mean different things.** `limits` (the
+  meters) are account-wide — every machine reads the same server-side allowance,
+  just at a different moment — so the FRESHEST reading per limit key wins;
+  summing them would multiply one allowance by the number of machines that
+  looked at it. `activity` (requests/sessions) is per-machine, which is exactly
+  what the provider's caption is about, so those SUM. `metrics[]` is left local:
+  its values are prose (`"3 renders · 24h"`), not addends.
+- **A card this machine could not read is filled from a peer that could** — a
+  logged-out CLI or a scrape still in flight stops reporting a failure once
+  another instance has read the same account.
+- **Only families this install has enabled get a card.** A peer running a
+  provider we don't is that machine's business; a meter for a plan the viewer
+  can't spend would be noise.
+- **API-billed instances are excluded.** The existing per-row Subscriptions
+  toggle already marks fleet members that pay API rates rather than riding the
+  viewer's plans; those meter a different account, so folding their readings in
+  would be a wrong number rather than a fuller one.
+- **A single-machine install is unchanged, caption included.** With nothing to
+  combine, claiming otherwise would be worse than the wording this replaces —
+  so the local note says only that no other instance has reported yet.
+
+Mechanically, the readings live in an in-memory stale-while-revalidate cache
+(a reading costs a 10-20s CLI/TUI spawn), which cannot be federated: it dies
+with the process, and this category's checksum is invalidated by FILE
+fingerprints. So `services/providerQuotaShare.js` persists them to
+`data/provider-quotas.json` — added to `USAGE_CHECKSUM_PATHS`, and folded into
+the entry's `capturedAt` so a quota refresh with no new AI runs still advances
+the slot a peer pulls. The write is skipped when a card's *claim* is unchanged
+(comparing whole cards would rewrite the file on every page poll, since some
+adapters stamp the clock on read).
+
+Nothing here reads a provider: the AI Provider Usage Policy still holds, because
+this only records and forwards what a user-triggered reading already produced.
+Privacy is unchanged in kind — a quota card carries provider ids, percentages,
+reset times and the publishing instance's name; no prompts, no transcripts, no
+PII. The peer payload is rebuilt to the wire shape on arrival for the same
+recursion-depth reason the usage digest is.

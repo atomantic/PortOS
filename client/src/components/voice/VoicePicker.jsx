@@ -183,7 +183,7 @@ export default function VoicePicker({
         disabled={!value || previewing || disabled}
         title={value ? `Audition ${value}` : 'Pick a voice to audition'}
         aria-label={value ? `Audition ${value}` : 'Audition voice'}
-        className="shrink-0 p-1 rounded text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed"
+        className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center shrink-0 p-1 rounded text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed"
       >
         {previewing ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
       </button>

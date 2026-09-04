@@ -275,9 +275,20 @@ export async function fileProposalToForge({
   return { success: true, number: numMatch ? Number(numMatch[1]) : null, url };
 }
 
-/** Apply the blocking label to an existing issue (pause). Returns `{ success }`. */
+/**
+ * Apply the blocking label to an existing issue (pause). Returns `{ success }`.
+ *
+ * The lazy `ensureForgeLabels` first is load-bearing, not defensive: both
+ * `gh issue edit --add-label` and `glab issue update --label` fail the WHOLE
+ * call with a 422 when the repo has never defined the named label, and this is
+ * the only path that applies `LI_BLOCKING_LABEL` — so on any install where the
+ * Layered Intelligence loop has not yet FILED an issue (the other caller of
+ * `ensureForgeLabels`), the very first pause would fail. Creation is idempotent
+ * and its failures are swallowed there.
+ */
 export async function applyBlockingLabel({ cli, cwd, env, number, exec = runCli } = {}) {
   if (!Number.isInteger(number)) return { success: false, error: 'no issue number' };
+  await ensureForgeLabels({ cli, cwd, env, exec });
   const args = cli === 'glab'
     ? ['issue', 'update', String(number), '--label', LI_BLOCKING_LABEL]
     : ['issue', 'edit', String(number), '--add-label', LI_BLOCKING_LABEL];

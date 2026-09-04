@@ -18,10 +18,15 @@ const pyBin = resolveTestPython();
 // called with and models the one behaviour that matters: `to_glb` decimates down to
 // whatever `decimation_target` it receives. Without that modelling, the test could
 // not tell a working override from one that gets silently undone at the bake.
+// `range`, never `list(range(...))`: the adapter and both stubs only ever take
+// `len()` of a face collection, and the real fixture is a 22.7M-face decoder
+// mesh. Materializing that as a Python list cost ~300ms of allocation per test
+// — nine tenths of this suite's wall time — for a number `len(range(n))`
+// answers in O(1).
 const STUB_FAST_SIMPLIFICATION = `CALLS = []
 def simplify(points, faces, ratio=None, **kw):
     CALLS.append((len(faces), round(ratio, 6)))
-    return points, list(range(max(1, int(round(len(faces) * (1.0 - ratio))))))
+    return points, range(max(1, int(round(len(faces) * (1.0 - ratio)))))
 `;
 
 const stubPostprocess = ({ backend = 'metal', hasDr = true }) => `import os
@@ -52,7 +57,7 @@ p.add_argument("--texture-size", type=int, choices=[512, 1024, 2048], default=10
 p.add_argument("--seed", type=int, default=42)
 p.add_argument("--steps", type=int, default=None)
 a = p.parse_args()
-faces = list(range(int(os.environ.get("FIXTURE_FACES", "22746188"))))
+faces = range(int(os.environ.get("FIXTURE_FACES", "22746188")))
 target = min(200000, len(faces))
 v, f = fast_simplification.simplify(['v'], faces, 1.0 - (target / len(faces)))
 o_voxel.postprocess.to_glb(faces=f, decimation_target=target, texture_size=a.texture_size)
@@ -259,7 +264,10 @@ describe.skipIf(!pyBin)('trellis2GenerateRunner', () => {
     // the CLI expressed that dependency.
     writeStubs();
     const out = run(['--normal-map', '--', join(dir, 'generate.py'), 'a.png']);
-    expect(out).not.toMatch(/no pre-decimation mesh was captured/);
+    // Match the message the runner ACTUALLY prints when nothing was captured.
+    // This assertion previously named a wording the adapter had already dropped,
+    // so it passed even with the capture ripped out entirely.
+    expect(out).not.toMatch(/normal map skipped/);
     // Bake runs against the stub's fake mesh and fails; that must not fail the render.
     expect(resultOf(out).to_glb).toHaveLength(1);
   }, PY_TEST_TIMEOUT_MS);

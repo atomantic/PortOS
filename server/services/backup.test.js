@@ -1098,29 +1098,40 @@ describe('getState and saveState', () => {
     writeLog = [];
 
     // `vi.doMock` is NOT hoisted, so the factory can close over `tmpRoot` and
-    // `writeLog`. Only PATHS.data and atomicWrite are overridden — readJSONFile,
-    // ensureDir and the rest stay real.
+    // `writeLog`. makePathsProxy rather than a hand-rolled `PATHS: { ...actual.PATHS,
+    // data: tmpRoot }`: spelling one member by hand re-roots only `data`, leaving
+    // every other data-derived member (`backup`'s siblings, `imageRefs`, …) aimed
+    // at the live install — the #3683/#6176 partial-redirect trap. `overrides`
+    // carries the atomicWrite spy, which is why this stays a doMock at all.
     vi.doMock('../lib/fileUtils.js', async (importOriginal) => {
       const actual = await importOriginal();
-      return {
-        ...actual,
-        PATHS: { ...actual.PATHS, data: tmpRoot },
-        // Bracket the real write with log markers and a delay, so an unqueued
-        // read-merge-write would visibly interleave (start/start/end/end).
-        atomicWrite: async (filePath, data) => {
-          writeLog.push(`start:${data?.status}`);
-          await new Promise((r) => setTimeout(r, 10));
-          const result = await actual.atomicWrite(filePath, data);
-          writeLog.push(`end:${data?.status}`);
-          return result;
-        }
-      };
+      return makePathsProxy(actual, {
+        dataRoot: () => tmpRoot,
+        overrides: {
+          // Bracket the real write with log markers and a delay, so an unqueued
+          // read-merge-write would visibly interleave (start/start/end/end).
+          atomicWrite: async (filePath, data) => {
+            writeLog.push(`start:${data?.status}`);
+            await new Promise((r) => setTimeout(r, 10));
+            const result = await actual.atomicWrite(filePath, data);
+            writeLog.push(`end:${data?.status}`);
+            return result;
+          },
+        },
+      });
     });
     backup = await import('./backup.js');
   });
 
   afterEach(async () => {
-    vi.doUnmock('../lib/fileUtils.js');
+    // Re-register the FILE-LEVEL redirect instead of calling `vi.doUnmock`.
+    // `doUnmock` drops the hoisted `vi.mock` at the top of this file too, so
+    // every suite AFTER this one resolved PATHS.data to the install's real
+    // data/ tree — and `runBackup lifecycle` below then rewrote the
+    // developer's genuine data/backup/state.json on every run (#6176; the
+    // runtime write guard is what surfaced it).
+    vi.doMock('../lib/fileUtils.js', async (importOriginal) =>
+      makePathsProxy(await importOriginal(), { dataRoot: testDataRoot }));
     vi.resetModules();
     const { rm } = await import('fs/promises');
     if (tmpRoot) await rm(tmpRoot, { recursive: true, force: true });

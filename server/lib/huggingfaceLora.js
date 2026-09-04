@@ -31,6 +31,17 @@ export const HF_LORA_FAMILIES = Object.freeze([
 ]);
 
 export const HF_API = 'https://huggingface.co/api/models';
+
+/**
+ * `owner/name` — the only shape PortOS hands to an HF download or an argv slot.
+ *
+ * Each segment must START alphanumeric, so neither `owner/..` (which a path
+ * walk would follow out of a cache directory) nor a leading `-` (which an
+ * argument parser would read as a flag) can get through. One definition because
+ * two copies of a security rule drift: the MTPLX pull/remove schema and the
+ * Slotstream checkpoint catalog both validate against this.
+ */
+export const HF_REPO_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const HF_HOSTS = new Set(['huggingface.co', 'www.huggingface.co']);
 
 // Parse any HuggingFace ref shape into `{ repo, revision, file }`:
@@ -119,15 +130,20 @@ export const buildHfResolveUrl = (repo, revision, file) =>
 // Fetch model metadata from the public HF API. Returns the parsed JSON with
 // `siblings` (file list), `tags`, and `cardData` (carries `base_model`).
 // fetchImpl is injectable for tests.
-// The `blobs=true` expand isn't needed — siblings carry rfilename, and we
-// size-rank via the resolve HEAD only if multiple LoRA files tie.
-export const fetchHuggingfaceModel = async (repo, { token, revision, fetchImpl = fetch, signal } = {}) => {
+// The LoRA picker doesn't need `blobs=true` — siblings carry rfilename, and it
+// size-ranks via the resolve HEAD only if multiple LoRA files tie. Pass
+// `blobs: true` when the caller needs per-file SIZES up front instead: a
+// whole-repo download has to total them before it can preflight the disk, and
+// one HEAD per file across a 30-shard checkpoint is 30 round trips for numbers
+// this expand already carries.
+export const fetchHuggingfaceModel = async (repo, { token, revision, fetchImpl = fetch, signal, blobs = false } = {}) => {
   if (!/^[^/\s]+\/[^/\s]+$/.test(String(repo))) {
     throw new ServerError(`Invalid HuggingFace repo id: ${repo}`, { status: 400, code: 'HF_BAD_URL' });
   }
-  const url = revision
+  const path = revision
     ? `${HF_API}/${repo}/revision/${encodeURIComponent(revision)}`
     : `${HF_API}/${repo}`;
+  const url = blobs ? `${path}?blobs=true` : path;
   const res = await fetchImpl(url, { headers: { Accept: 'application/json', ...buildHfAuthHeaders(token) }, signal });
   if (!res.ok) {
     if (res.status === 404) {

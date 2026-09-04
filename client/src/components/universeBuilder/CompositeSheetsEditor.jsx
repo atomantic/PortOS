@@ -103,7 +103,7 @@ export default function CompositeSheetsEditor({
                 : 'Lock all composite boards — Expand will preserve them'}
               aria-label={allSheetsLocked ? 'Unlock all composite boards' : 'Lock all composite boards'}
               aria-pressed={allSheetsLocked}
-              className={`p-1 rounded ${
+              className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded ${
                 allSheetsLocked
                   ? 'text-port-accent hover:bg-port-accent/20'
                   : 'text-gray-500 hover:text-gray-300'
@@ -292,12 +292,12 @@ function SheetRow({
   );
   const body = <div className="text-xs text-gray-400 line-clamp-3">{sheet.prompt}</div>;
   const actions = (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-2">
       {onRender && (
         <button
           onClick={onRender}
           disabled={!canRender}
-          className="p-1 text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed rounded"
+          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed rounded"
           title={canRender ? 'Render this board' : 'Save the world and configure a render backend to enable'} aria-label={canRender ? 'Render this board' : 'Save the world and configure a render backend to enable'}
         >
           <Play size={14} />
@@ -305,7 +305,7 @@ function SheetRow({
       )}
       <button
         onClick={onToggleLock}
-        className={`p-1 rounded ${sheet.locked ? 'text-port-accent hover:bg-port-accent/20' : 'text-gray-500 hover:text-gray-300'}`}
+        className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded ${sheet.locked ? 'text-port-accent hover:bg-port-accent/20' : 'text-gray-500 hover:text-gray-300'}`}
         title={sheet.locked ? 'Locked — AI expand will preserve this board' : 'Lock this board against AI expand'} aria-label={sheet.locked ? 'Locked — AI expand will preserve this board' : 'Lock this board against AI expand'}
         aria-pressed={!!sheet.locked}
       >
@@ -313,14 +313,14 @@ function SheetRow({
       </button>
       <button
         onClick={onStartEdit}
-        className="p-1 text-gray-400 hover:text-port-accent rounded"
+        className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-accent rounded"
         title="Edit" aria-label="Edit"
       >
         <Edit3 size={14} />
       </button>
       <button
         onClick={onRemove}
-        className="p-1 text-gray-400 hover:text-port-error rounded"
+        className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-error rounded"
         title="Remove" aria-label="Remove"
       >
         <X size={14} />

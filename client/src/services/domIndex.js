@@ -213,6 +213,14 @@ export const buildIndex = ({ includeText = false } = {}) => {
 
   for (const el of raw) {
     if (elements.length >= MAX_ELEMENTS) break;
+    // `data-voice-guard` resolves from the nearest annotated ancestor, not
+    // just the element itself, so marking a container covers every control
+    // inside it (issue #5907) — otherwise excluding a widget would mean
+    // annotating each of its buttons and missing the next one added. A
+    // control marked `exclude` never reaches the voice index at all; checked
+    // before classify/visibility so it costs nothing else below.
+    const guard = el.closest('[data-voice-guard]')?.getAttribute('data-voice-guard');
+    if (guard === 'exclude') continue;
     const kind = classify(el);
     if (!kind) continue;
     if (!isVisible(el)) continue;
@@ -225,6 +233,10 @@ export const buildIndex = ({ includeText = false } = {}) => {
     el.setAttribute('data-voice-ref', String(ref));
 
     const entry = { ref, kind, label };
+    // Carried onto the entry so the server's confirmation gate can require
+    // confirmation for this control regardless of its label — see
+    // `requiresConfirmation` in confirmGate.js.
+    if (guard === 'confirm') entry.guard = 'confirm';
 
     if (kind === 'tab') {
       if (el.getAttribute('aria-selected') === 'true') entry.active = true;

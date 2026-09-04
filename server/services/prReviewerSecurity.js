@@ -17,7 +17,10 @@ import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import {
   MODEL_ABUSE_GUARD,
   MODEL_ABUSE_GUARD_MAX_INPUT_CHARS,
+  linkedIssueIntentContent,
+  linkedIssueIntentFingerprint,
   modelAbuseContentFingerprint,
+  normalizeLinkedIssues,
 } from '../lib/modelAbuseGuard.js';
 import { runModelAbuseScan } from './modelAbuseGuard.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
@@ -57,18 +60,29 @@ export function extractLinkedIssueNumbers(pr, repoFullName) {
   ])].sort((a, b) => a - b).slice(0, MAX_LINKED_ISSUES);
 }
 
+/**
+ * Resolve the issue facts that admit a PR, plus the intent evidence a reviewer
+ * needs to answer "does this diff do what the issue asked?". Only OPEN linked
+ * issues contribute intent — a closed issue is not a live requirement, and the
+ * pre-action recheck recomputes the fingerprint from the same open set.
+ */
 async function resolveEligibilityFacts(pr, repoFullName, hostname) {
   const linkedIssueNumbers = extractLinkedIssueNumbers(pr, repoFullName);
   if (linkedIssueNumbers.length === 0) {
     return {
-      linkedIssueNumbers: [],
-      openLinkedIssueNumbers: [],
-      openerAssignedIssueNumbers: [],
-      issueLookupComplete: true,
+      facts: {
+        linkedIssueNumbers: [],
+        openLinkedIssueNumbers: [],
+        openerAssignedIssueNumbers: [],
+        issueLookupComplete: true,
+        intentFingerprint: null,
+      },
+      linkedIssues: [],
     };
   }
   const openLinkedIssueNumbers = [];
   const openerAssignedIssueNumbers = [];
+  const openIssues = [];
   let issueLookupComplete = true;
   for (const issueNumber of linkedIssueNumbers) {
     const raw = await execGh([
@@ -82,6 +96,7 @@ async function resolveEligibilityFacts(pr, repoFullName, hostname) {
     const isIssue = !issue.pull_request;
     if (isIssue && String(issue.state).toLowerCase() === 'open') {
       openLinkedIssueNumbers.push(issueNumber);
+      openIssues.push({ number: issueNumber, title: issue.title, body: issue.body });
       const assignedLogins = Array.isArray(issue.assignees)
         ? issue.assignees.map((assignee) => String(assignee?.login || '').toLowerCase()).filter(Boolean)
         : [];
@@ -90,11 +105,16 @@ async function resolveEligibilityFacts(pr, repoFullName, hostname) {
       }
     }
   }
+  const linkedIssues = normalizeLinkedIssues(openIssues);
   return {
-    linkedIssueNumbers,
-    openLinkedIssueNumbers,
-    openerAssignedIssueNumbers,
-    issueLookupComplete,
+    facts: {
+      linkedIssueNumbers,
+      openLinkedIssueNumbers,
+      openerAssignedIssueNumbers,
+      issueLookupComplete,
+      intentFingerprint: linkedIssueIntentFingerprint(linkedIssues),
+    },
+    linkedIssues,
   };
 }
 
@@ -187,10 +207,10 @@ export async function listExternalOpenPullRequests(app) {
   }
 
   const externalPrs = listedPrs.filter((pr) => String(pr.authorLogin).toLowerCase() !== String(selfLogin).toLowerCase());
-  const prs = await mapWithConcurrency(externalPrs, ELIGIBILITY_LOOKUP_CONCURRENCY, async (pr) => ({
-    ...pr,
-    eligibilityFacts: await resolveEligibilityFacts(pr, repoFullName, hostname),
-  }));
+  const prs = await mapWithConcurrency(externalPrs, ELIGIBILITY_LOOKUP_CONCURRENCY, async (pr) => {
+    const { facts, linkedIssues } = await resolveEligibilityFacts(pr, repoFullName, hostname);
+    return { ...pr, eligibilityFacts: facts, linkedIssues };
+  });
 
   return {
     ok: true,
@@ -288,7 +308,17 @@ export async function runPrReviewerSecurityScan({ app, timeoutMs, target = null 
     }
     if (!diff.trim()) return failure('security-scan-empty-diff', { reviewedPrs, scanKey });
 
-    const content = contentFor(pr, diff);
+    // The linked issue's own text is contributor-authored public content, and it
+    // is about to be quoted to a downstream reviewer as the requirement the diff
+    // is judged against. It crosses the boundary in the same pass as the PR — an
+    // injected issue body flags the PR rather than reaching a reviewer as the
+    // thing it is supposed to trust. The verdict is one status for the whole
+    // PR, so a second classifier subprocess per PR would buy nothing: findings
+    // are deliberately generic either way. Freshness stays anchored on both
+    // halves separately — the diff by `contentFingerprint`, the issue text by
+    // `eligibilityFacts.intentFingerprint`.
+    const intentContent = linkedIssueIntentContent(pr.linkedIssues);
+    const content = intentContent ? `${contentFor(pr, diff)}\n\n${intentContent}` : contentFor(pr, diff);
     if (content.length > SECURITY_SCAN_MAX_DIFF_CHARS) {
       return failure('security-scan-input-too-large', { reviewedPrs, scanKey });
     }
@@ -312,6 +342,7 @@ export async function runPrReviewerSecurityScan({ app, timeoutMs, target = null 
       headSha: pr.headRefOid,
       baseRefName: resolvedTarget.defaultBranch,
       eligibilityFacts: pr.eligibilityFacts,
+      linkedIssues: pr.linkedIssues || [],
       behindBy: null,
       files: [],
       additions: 0,

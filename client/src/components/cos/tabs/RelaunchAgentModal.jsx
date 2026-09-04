@@ -6,17 +6,28 @@ import Modal from '../../ui/Modal';
 import AppContextPicker from '../../AppContextPicker';
 import ProviderModelSelector from '../../ProviderModelSelector';
 import { FormField } from '../../ui/FormField';
+import CollapsibleText from '../../ui/CollapsibleText';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import { effortAwareModelOptions, seedModelEffort } from '../../../utils/providers';
+import { agentResumeMessage } from '../../../lib/agentResumeOutcome';
 
 // What each relaunch outcome actually did. The server reuses `resumeAgent`'s
-// modes (agentManagement.js): only `requeued` restarts the work — `already-active`
-// and `superseded` deliberately queue NOTHING, so an unmapped mode must not fall
-// through to a message claiming the task was relaunched.
+// modes (agentManagement.js): only `requeued` and `new-task` put work back on the
+// queue — `already-active` and `superseded` deliberately queue NOTHING, so those
+// carry no `running` wording and an unmapped mode falls through to the plain
+// fallback rather than a message claiming the task was relaunched. See
+// `agentResumeMessage` for the queued-vs-running contract.
 const RELAUNCH_MESSAGES = {
-  requeued: 'Relaunched — the task is queued again on its preserved worktree',
-  'already-active': 'Its task is already queued or running — nothing new was created',
-  superseded: 'A later agent now holds this task paused — that pause was left intact',
+  requeued: {
+    queued: 'Relaunched — the task is queued again on its preserved worktree',
+    running: 'Relaunched — the task is running again on its preserved worktree',
+  },
+  'new-task': {
+    queued: 'Relaunched — a replacement task is queued',
+    running: 'Relaunched — a replacement task is running',
+  },
+  'already-active': { queued: 'Its task is already queued or running — nothing new was created' },
+  superseded: { queued: 'A later agent now holds this task paused — that pause was left intact' },
 };
 
 /**
@@ -31,7 +42,7 @@ const RELAUNCH_MESSAGES = {
  * because it is mounted from two places (the agent card and the in-progress task
  * card) and the server's mode enum should have exactly one client reader.
  */
-export default function RelaunchAgentModal({ agent, providers, apps, onDone, onClose }) {
+export default function RelaunchAgentModal({ agent, providers, providersLoaded = true, apps, onDone, onClose }) {
   const currentProvider = agent?.metadata?.providerId || agent?.metadata?.provider || '';
   const taskDescription = agent?.metadata?.taskDescription || agent?.taskId || 'Current task';
 
@@ -71,7 +82,7 @@ export default function RelaunchAgentModal({ agent, providers, apps, onDone, onC
       app: formData.app || undefined,
       context: formData.note.trim() || undefined
     }, { silent: true });
-    toast.success(RELAUNCH_MESSAGES[result?.mode] || 'Relaunched');
+    toast.success(agentResumeMessage(result, RELAUNCH_MESSAGES, 'Relaunched'));
     onDone?.(result);
     onClose();
     return result;
@@ -104,10 +115,24 @@ export default function RelaunchAgentModal({ agent, providers, apps, onDone, onC
 
       <div className="mb-4 p-3 bg-port-bg border border-port-border rounded-lg">
         <div className="text-sm text-gray-400 mb-1">Current task</div>
-        <div className="text-white">{taskDescription}</div>
+        {/* A task description is the agent's whole prompt — routinely hundreds of
+            lines. Rendered in full it pushes the provider/model selects and the
+            Relaunch button off a phone screen, so it opens clamped. Expanding
+            swaps in a height-capped scroll box rather than unclamping in place:
+            the point of the dialog is the controls below it, and an expanded
+            prompt must not bury them again. */}
+        <CollapsibleText
+          id={`relaunch-task-${agent?.id || 'current'}`}
+          text={taskDescription}
+          lines={3}
+          className="text-white"
+          expandedContent={taskDescription}
+          expandedClassName="max-h-48 overflow-y-auto whitespace-pre-wrap"
+        />
         <div className="text-sm text-gray-400 mt-2">
-          This stops the running agent and requeues the same task on the worktree it leaves
-          behind — no second agent, and nothing to clean up afterward.
+          This stops the running agent and restarts the same task on the worktree it leaves
+          behind — no second agent, and nothing to clean up afterward. It starts right away
+          when an agent slot is free, and stays queued until one is otherwise.
         </div>
       </div>
 
@@ -138,6 +163,7 @@ export default function RelaunchAgentModal({ agent, providers, apps, onDone, onC
           emptyModelOption="Default model"
           alwaysShowModel
           highlightToolUse
+          loading={!providersLoaded}
         />
 
         <FormField label="Additional Instructions (optional)">

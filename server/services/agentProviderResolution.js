@@ -16,7 +16,9 @@
 import { emitLog } from './cosEvents.js';
 import { getActiveProvider, getAllProviders, getProviderById } from './providers.js';
 import { isProviderAvailable, getFallbackProvider, getProviderStatus } from './providerStatus.js';
-import { selectModelForTask } from './agentModelSelection.js';
+import { selectModelForRole, selectModelForTask } from './agentModelSelection.js';
+import { modelPinIsOffered } from '../lib/localProviderRuntime.js';
+import { PRIMARY_ORCHESTRATION_ROLE, roleAssignment } from '../lib/orchestrationProfile.js';
 import { publicReviewPostureForTask, resolvePublicReviewProvider } from './publicReviewProviderSelection.js';
 
 /**
@@ -62,12 +64,44 @@ async function resolvePublicReviewAgentProvider(task, posture) {
       providerId: provider.id,
     });
   }
-  // A model pin only survives when it was chosen FOR this provider; otherwise
-  // fall back to the provider's own default rather than handing one vendor's
-  // model id to another (the failure mode documented in the ordinary path).
-  const modelSelection = await selectModelForTask(task, provider);
+  // A model pin only survives when it was chosen FOR this provider AND that
+  // provider still offers it; otherwise fall back to the provider's own default
+  // rather than handing one vendor's model id to another (the failure mode
+  // documented in the ordinary path). Matching the provider alone is not
+  // enough: a stage pin outlives edits to that provider's own `models` list,
+  // and a retired id reaches the CLI as a model it cannot serve, so the stage
+  // spawns, produces no output, and is retried. The ordinary path guards this
+  // at its list check, by a different rule (it exempts any user pin outright).
+  // Three other sites still hand-roll a raw `models.includes` — see #6151.
   const pinnedModel = task.metadata?.model;
-  const selectedModel = pinnedModel && task.metadata?.provider === provider.id
+  const pinnedForThisProvider = Boolean(pinnedModel) && task.metadata?.provider === provider.id;
+  // `modelPinIsOffered` owns which provider records may invalidate a pin at all
+  // — an empty catalog and a local daemon's cached snapshot are both
+  // pass-throughs (see its doc comment).
+  const honorPin = pinnedForThisProvider && modelPinIsOffered(provider, pinnedModel);
+  const pinRejected = pinnedForThisProvider && !honorPin;
+  // Strip a pin that will NOT be honored, BEFORE model selection.
+  // `selectModelForTask` returns `metadata.model` verbatim as its
+  // highest-priority answer, so leaving it on the task defeats both guards
+  // above: a REJECTED pin came straight back while the warning below promised a
+  // default the run never used, and a pin belonging to a DIFFERENT provider
+  // (`pinnedForThisProvider` false, after the posture swap above chose someone
+  // else) was handed to the new provider — the exact cross-vendor leak this
+  // function's header says it prevents. Both are the same "will not be honored"
+  // case, so both strip here.
+  const modelSelection = await selectModelForTask(
+    pinnedModel && !honorPin ? { ...task, metadata: { ...task.metadata, model: null } } : task,
+    provider,
+  );
+  if (pinRejected) {
+    emitLog('warn', `Public-review stage model "${pinnedModel}" is not offered by provider "${provider.id}" — using its default instead`, {
+      taskId: task.id,
+      requestedModel: pinnedModel,
+      providerId: provider.id,
+      validModels: provider.models,
+    });
+  }
+  const selectedModel = honorPin
     ? pinnedModel
     : (modelSelection.model || provider.defaultModel || null);
   emitLog('info', `Public-review stage (${posture}) resolved to provider ${provider.id}${selectedModel ? ` model ${selectedModel}` : ''}`, {
@@ -86,7 +120,13 @@ async function resolveOrdinaryProviderAndModel(task) {
   // whole point of pinning. The pinned provider then runs through the same
   // availability/fallback logic below as any other resolved provider.
   let provider = null;
-  const userProviderId = task.metadata?.provider;
+  // An orchestration profile (#5992) pins the top-level agent's provider under
+  // the architect role — that agent is the one that plans and delegates. It is
+  // read as an ordinary provider pin so it inherits the whole chain below
+  // (availability, fallback swap, the model-pin invalidation a swap triggers)
+  // rather than growing a second, subtly-different resolution path. Null on a
+  // `direct` task, so the metadata pin stays authoritative as before.
+  const userProviderId = roleAssignment(task, PRIMARY_ORCHESTRATION_ROLE)?.provider || task.metadata?.provider;
   let userProviderMissing = false;
   if (userProviderId) {
     const userProvider = await getProviderById(userProviderId);
@@ -188,8 +228,10 @@ async function resolveOrdinaryProviderAndModel(task) {
     };
   }
 
-  // Select optimal model for this task (async to allow learning-based suggestions)
-  const modelSelection = await selectModelForTask(task, provider);
+  // Select optimal model for this task (async to allow learning-based suggestions).
+  // Routed through the ARCHITECT role so an orchestrated task's planning model
+  // wins here; with no profile this is `selectModelForTask` unchanged.
+  const modelSelection = await selectModelForRole(task, PRIMARY_ORCHESTRATION_ROLE, provider);
   let selectedModel = modelSelection.model;
 
   // A configured "Fallback Model" pin (from the provider- or task-level

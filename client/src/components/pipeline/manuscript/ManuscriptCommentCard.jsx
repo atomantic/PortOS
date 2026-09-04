@@ -365,7 +365,7 @@ export default function ManuscriptCommentCard({
               <button
                 type="button"
                 onClick={nav.onPrev}
-                className="p-0.5 rounded hover:text-white hover:bg-port-border/60"
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-0.5 rounded hover:text-white hover:bg-port-border/60"
                 aria-label="Previous open note"
                 title="Previous open note"
               >
@@ -375,7 +375,7 @@ export default function ManuscriptCommentCard({
               <button
                 type="button"
                 onClick={nav.onNext}
-                className="p-0.5 rounded hover:text-white hover:bg-port-border/60"
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-0.5 rounded hover:text-white hover:bg-port-border/60"
                 aria-label="Next open note"
                 title="Next open note"
               >

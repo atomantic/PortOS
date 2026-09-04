@@ -63,6 +63,23 @@ export function planSlotstreamMemory({ totalBytes, overrideGb } = {}) {
 }
 
 /**
+ * Whether a cache subdirectory holds something a start could actually serve.
+ *
+ * A `.partial` (or its `.etag` sidecar) means a download is running or was
+ * abandoned mid-file, so the directory is NOT a checkpoint yet — listing it
+ * would clear the card's empty-cache warning and offer `--model` a directory
+ * that exits before binding a port. A directory with no completed file at all
+ * is the same story. A hand-placed checkpoint never carries a `.partial`, so
+ * this cannot hide one.
+ */
+async function isServableCheckpoint(dir) {
+  const entries = await readdir(dir).catch(() => null);
+  if (!entries) return false;
+  const complete = entries.filter((name) => !name.endsWith('.partial') && !name.endsWith('.partial.etag'));
+  return complete.length > 0 && complete.length === entries.length;
+}
+
+/**
  * Cached checkpoints on disk.
  *
  * Each subdirectory of the cache is one checkpoint; the directory name is the
@@ -84,6 +101,7 @@ export async function listSlotstreamCachedModels({ cacheDir } = {}) {
     const full = join(dir, name);
     const info = await stat(full).catch(() => null);
     if (!info?.isDirectory()) continue;
+    if (!(await isServableCheckpoint(full))) continue;
     models.push({ id: name, path: full });
   }
   return { models, error: null };

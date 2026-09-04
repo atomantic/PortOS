@@ -8,7 +8,7 @@ import { FormField } from '../../ui/FormField';
 import EffortSelect from '../EffortSelect';
 import { effectiveModelFor, effortAwareModelOptions, effortSurvivingModel, seedModelEffort } from '../../../utils/providers';
 
-export default function ResumeAgentModal({ agent, taskType = 'user', providers, apps, onSubmit, onClose }) {
+export default function ResumeAgentModal({ agent, taskType = 'user', providers, providersLoaded = true, apps, onSubmit, onClose }) {
   // A paused agent resumes IN PLACE: its own task is requeued on the worktree its
   // run left behind. Everything else (a completed/failed run, whose task is long
   // settled) can only be continued by queueing a new task.
@@ -232,9 +232,14 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
                 value={formData.provider}
                 onChange={e => setFormData({ ...formData, provider: e.target.value, model: '', effort: '' })}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
+                disabled={!providersLoaded}
               >
-                <option value="">Auto (default)</option>
-                {providers?.filter(p => p.enabled).map(p => (
+                {/* Mid-fetch, `providers` is empty — say so instead of rendering a
+                    picker whose only option looks like a broken control. */}
+                {providersLoaded
+                  ? <option value="">Auto (default)</option>
+                  : <option value="">Loading providers…</option>}
+                {providersLoaded && providers?.filter(p => p.enabled).map(p => (
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
               </select>
@@ -250,9 +255,9 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
                   effort: effortSurvivingModel(selectedProvider, e.target.value, d.effort),
                 }))}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
-                disabled={!formData.provider}
+                disabled={!providersLoaded || !formData.provider}
               >
-                <option value="">{formData.provider ? 'Select model...' : 'Select provider first'}</option>
+                <option value="">{!providersLoaded ? 'Loading providers…' : formData.provider ? 'Select model...' : 'Select provider first'}</option>
                 {availableModels.map(m => (
                   <option key={m} value={m}>{m.replace('claude-', '').replace(/-\d+$/, '')}</option>
                 ))}

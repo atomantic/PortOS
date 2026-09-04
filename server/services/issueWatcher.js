@@ -3,9 +3,11 @@
  *
  * The gather pass does the forge work that does not need a model: it reads only
  * activity newer than the per-app cursor, assigns explicit volunteer comments
- * on currently-unassigned issues, finds external PRs without an owner review on
- * their current head, and supplies bounded diffs to one reasoning agent. The
- * output pass validates that agent's structured decisions against fresh forge
+ * on currently-unassigned issues and writes the shared volunteer-claim markers
+ * (`in-progress` on, contributor invitations off — see `volunteerClaimLabels` in
+ * lib/dispatchLabels.js, which the claim prompt's handoff renders too), finds external
+ * PRs without an owner review on their current head, and supplies bounded diffs
+ * to one reasoning agent. The output pass validates that agent's structured decisions against fresh forge
  * state before it replies, posts inline reviews, updates stale branches, or
  * merges. No model is asked to discover/filter forge records or execute a forge
  * mutation itself.
@@ -18,6 +20,7 @@ import {
   detectDeterministicModelAbuseSignals,
   modelAbuseContentFingerprint,
 } from '../lib/modelAbuseGuard.js';
+import { IN_PROGRESS_LABEL, dispatchLabelSpec, volunteerClaimLabels } from '../lib/dispatchLabels.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import {
   MAX_REVIEW_BODY_CHARS,
@@ -28,12 +31,15 @@ import {
 } from '../lib/prReviewReport.js';
 import { githubApiHost, githubRepoSpec } from '../lib/workTracker.js';
 import { MAX_PR_REMEDIATION_ATTEMPTS, PR_HANDBACK, PR_REVIEW_OUTCOME, resolveHandbackDisposition, resolvePullRequestWriteAccess } from '../lib/prHandbackPolicy.js';
+import { forkHeadFromGithubPr } from '../lib/forkHead.js';
 import { getAppById, updateApp } from './apps.js';
 import { execGh, ensureForgeReachable } from './github.js';
 import { mergePR, resolveForgeForRepo } from './git.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 import { normalizeEligibilityFacts, runModelAbuseScan } from './modelAbuseGuard.js';
-import { issuePrerequisiteWaived } from '../lib/modelAbuseGuard.js';
+import { issuePrerequisiteWaived, linkedIssueIntentFingerprint } from '../lib/modelAbuseGuard.js';
+
+const IN_PROGRESS_LABEL_SPEC = dispatchLabelSpec(IN_PROGRESS_LABEL);
 
 const GH_TIMEOUT_MS = 60_000;
 const LIST_LIMIT = 100;
@@ -43,6 +49,9 @@ const MAX_TOTAL_DIFF_CHARS = MAX_DIFF_CHARS * MAX_PULL_REQUESTS_PER_RUN;
 const MAX_ISSUE_COMMENTS_PER_RUN = 25;
 const MAX_ISSUE_CONTEXT_CHARS = 40_000;
 const MAX_PENDING_ISSUE_COMMENTS = 250;
+// How many carried-over issues `pruneClosedIssueComments` re-reads at once. Each
+// read forks a gh child, and the queue it walks is capped at 250 entries.
+const ISSUE_STATE_PROBE_BATCH = 10;
 // One entry per PR, so this only grows with the count of external PRs that were
 // reviewed and did not merge. Bounded anyway: the ledger lives in app state,
 // which is read on every gather pass.
@@ -61,6 +70,9 @@ let stateWriteTail = Promise.resolve();
 const text = (value, max = 8_000) => typeof value === 'string' ? value.trim().slice(0, max) : '';
 const fullText = (value) => typeof value === 'string' ? value : '';
 const sameLogin = (a, b) => Boolean(a && b) && String(a).toLowerCase() === String(b).toLowerCase();
+// GitHub reports issue state as `open`/`closed`; normalize once so every caller
+// that gates on "still actionable" agrees, including on a missing state field.
+const isOpenIssue = (issue) => String(issue?.state || '').toLowerCase() === 'open';
 const MODEL_ABUSE_REPORT_LIMIT = 100;
 
 function flattenPages(value) {
@@ -245,13 +257,72 @@ async function getRepositoryIdentity(ctx) {
   return ownerLogin ? { ownerLogin } : null;
 }
 
+/**
+ * Take an unassigned issue on a volunteer's behalf, writing the shared
+ * volunteer-claim forge state: set the assignee, stamp `in-progress`, and
+ * retire the contributor invitations.
+ *
+ * The policy itself lives in `volunteerClaimLabels()` (lib/dispatchLabels.js)
+ * because the claim agent's Phase 1 handoff resolves the SAME event — a human
+ * comment asking for an unassigned issue — and must leave the same state, so
+ * which path ran first cannot change the outcome.
+ *
+ * The assignee is what actually removes the issue from the autonomous claim
+ * queue — `perpetualWork.js#isActionableIssue` already rejects any issue held
+ * by someone other than this install's login. The label is for the humans and
+ * the UI: it is what the Issues tab hides on, and it keeps a volunteer-claimed
+ * issue reading the same as an agent-claimed one.
+ *
+ * ONE combined edit is the fast path for assign + add-label. `gh issue edit
+ * --add-label` fails the WHOLE call when the repo has never defined the label,
+ * so the fallback splits it — assign alone (the half that must not be lost on a
+ * fork), create the label, then apply it. `--add-assignee` is idempotent, so the
+ * retry is safe whether or not the combined attempt got as far as assigning. The
+ * label is created without `--force` so an install that recolored it keeps its
+ * color.
+ *
+ * The invitation release is ALWAYS a separate edit per label, never folded into
+ * the combined call: `--remove-label` fails the whole call when a named label is
+ * absent from the issue, which is the common case (most issues carry neither),
+ * and that failure would take the assignment down with it.
+ *
+ * Returns whether the ASSIGNMENT landed, never whether the labels did: missing
+ * labels leave stale advertising a later pass can repair, while a missing
+ * assignment means the volunteer's comment still needs an answer and must go on
+ * to the reasoning agent.
+ */
 async function assignVolunteer(ctx, issueNumber, login) {
-  return runGh(['issue', 'edit', String(issueNumber), '--repo', ctx.repoSpec, '--add-assignee', login], ctx)
+  const edit = (...flags) => runGh(['issue', 'edit', String(issueNumber), '--repo', ctx.repoSpec, ...flags], ctx);
+  const { add, remove } = volunteerClaimLabels();
+  const assignFlags = ['--add-assignee', login];
+  const labelFlags = add.flatMap((label) => ['--add-label', label]);
+  // Serialized, not Promise.all: two concurrent edits of the same issue is a
+  // race with no upside. An issue carrying neither invitation is the common
+  // case, and gh reports that absence as an error — never log it as a failure.
+  const releaseInvitations = async () => {
+    for (const label of remove) await edit('--remove-label', label).catch(() => null);
+  };
+
+  if (await edit(...assignFlags, ...labelFlags).then(() => true, () => false)) {
+    await releaseInvitations();
+    return true;
+  }
+
+  const assigned = await edit(...assignFlags)
     .then(() => true)
     .catch((err) => {
       console.error(`❌ issue-watcher: could not assign issue #${issueNumber} to ${login}: ${err.message}`);
       return false;
     });
+  if (!assigned) return false;
+  await runGh(['label', 'create', IN_PROGRESS_LABEL_SPEC.name, '--repo', ctx.repoSpec,
+    '--color', IN_PROGRESS_LABEL_SPEC.color, '--description', IN_PROGRESS_LABEL_SPEC.description], ctx)
+    .catch(() => null);
+  await edit(...labelFlags).catch((err) => {
+    console.error(`❌ issue-watcher: could not mark issue #${issueNumber} ${IN_PROGRESS_LABEL}: ${err.message}`);
+  });
+  await releaseInvitations();
+  return true;
 }
 
 /**
@@ -374,6 +445,9 @@ async function applyPullRequestHandback({
         headSha,
         headRefName: pr.headRefName,
         authorLogin: login,
+        // Where that head branch lives when the PR came from a fork — the
+        // remediation worktree has no `origin/<branch>` to attach to otherwise.
+        forkHead: forkHeadFromGithubPr(pr),
       },
       writeAccess,
       reason,
@@ -450,15 +524,56 @@ async function gatherIssueComments(ctx, { since, ownerLogin }) {
   return { ok: true, comments, assignments };
 }
 
+/**
+ * Drop pending comments whose issue has closed since it was gathered.
+ *
+ * The gather query is `state=open`, so a fresh comment always belongs to an open
+ * issue — but `state.pendingIssueComments` carries a comment forward across runs
+ * until the reasoning agent returns a decision for it, and nothing re-checked
+ * the issue in between. The output pass DOES re-check (`readCurrentIssueComment`
+ * returns null for a non-open issue), so a comment on an issue closed in the
+ * meantime could never be handled: it burned a slot in every prompt — the agent
+ * dutifully reasoning about an issue already resolved — for
+ * MAX_PENDING_ISSUE_COMMENT_TICKS runs, then raised a HIGH-priority "needs
+ * attention" notification for work that no longer existed.
+ *
+ * Only entries this run did NOT gather are re-read; the freshly gathered ones
+ * came from the `state=open` list moments ago. A read failure keeps the entry —
+ * an unreachable forge is not evidence that an issue closed.
+ *
+ * The reads run concurrently in bounded batches: every `runJson` spawns a `gh`
+ * subprocess, and the pending queue holds up to MAX_PENDING_ISSUE_COMMENTS
+ * entries, so an unbounded `Promise.all` over it would fork hundreds of children
+ * at once.
+ */
+async function pruneClosedIssueComments(ctx, items, freshIssueNumbers) {
+  const carried = [...new Set(items.map((item) => item.issueNumber))]
+    .filter((number) => !freshIssueNumbers.has(number));
+  if (carried.length === 0) return items;
+  const closed = new Set();
+  for (let start = 0; start < carried.length; start += ISSUE_STATE_PROBE_BATCH) {
+    const batch = carried.slice(start, start + ISSUE_STATE_PROBE_BATCH);
+    const issues = await Promise.all(batch.map((number) => (
+      runJson(apiArgs(ctx, `repos/${ctx.repoFullName}/issues/${number}`), ctx)
+    )));
+    batch.forEach((number, index) => {
+      if (issues[index] && !isOpenIssue(issues[index])) closed.add(number);
+    });
+  }
+  return closed.size === 0 ? items : items.filter((item) => !closed.has(item.issueNumber));
+}
+
 async function readPullRequest(ctx, number) {
   return runJson([
     'pr', 'view', String(number), '--repo', ctx.repoSpec,
     // `isCrossRepository`/`maintainerCanModify` decide who owns a PR the
     // coordinator did not merge: with write access on the head branch PortOS
     // lands it itself, without it the PR goes to the opener's queue
-    // (`prHandbackPolicy.js`). `assignees` keeps that assignment idempotent
-    // across scheduled sweeps.
-    '--json', 'number,title,body,url,state,isDraft,author,assignees,labels,files,additions,deletions,baseRefName,baseRefOid,headRefName,headRefOid,isCrossRepository,maintainerCanModify,mergeable,mergeStateStatus,statusCheckRollup',
+    // (`prHandbackPolicy.js`). `headRepository`/`headRepositoryOwner` are where
+    // a fork's head branch actually lives, which is what lets the remediation
+    // agent's worktree attach to it at all (#6064). `assignees` keeps that
+    // assignment idempotent across scheduled sweeps.
+    '--json', 'number,title,body,url,state,isDraft,author,assignees,labels,files,additions,deletions,baseRefName,baseRefOid,headRefName,headRefOid,isCrossRepository,maintainerCanModify,headRepository,headRepositoryOwner,mergeable,mergeStateStatus,statusCheckRollup',
   ], ctx);
 }
 
@@ -517,11 +632,11 @@ async function eligibilityFactsStillCurrent(ctx, pr, target) {
   )));
   if (issues.some((issue, index) => issue?.number !== expected.linkedIssueNumbers[index])) return false;
 
-  const openLinkedIssueNumbers = issues
-    .filter((issue) => !issue.pull_request && String(issue.state || '').toLowerCase() === 'open')
-    .map((issue) => issue.number);
-  const openerAssignedIssueNumbers = issues
-    .filter((issue) => !issue.pull_request && String(issue.state || '').toLowerCase() === 'open')
+  const openIssues = issues.filter((issue) => (
+    !issue.pull_request && isOpenIssue(issue)
+  ));
+  const openLinkedIssueNumbers = openIssues.map((issue) => issue.number);
+  const openerAssignedIssueNumbers = openIssues
     .filter((issue) => Array.isArray(issue.assignees) && issue.assignees.some((assignee) => (
       sameLogin(assignee?.login, authorLogin)
     )))
@@ -532,10 +647,20 @@ async function eligibilityFactsStillCurrent(ctx, pr, target) {
     openerAssignedIssueNumbers,
     issueLookupComplete: true,
   });
-  return sameNumberList(expected.linkedIssueNumbers, actual.linkedIssueNumbers)
-    && sameNumberList(expected.openLinkedIssueNumbers, actual.openLinkedIssueNumbers)
-    && sameNumberList(expected.openerAssignedIssueNumbers, actual.openerAssignedIssueNumbers)
-    && expected.issueLookupComplete === actual.issueLookupComplete;
+  if (!sameNumberList(expected.linkedIssueNumbers, actual.linkedIssueNumbers)
+    || !sameNumberList(expected.openLinkedIssueNumbers, actual.openLinkedIssueNumbers)
+    || !sameNumberList(expected.openerAssignedIssueNumbers, actual.openerAssignedIssueNumbers)
+    || expected.issueLookupComplete !== actual.issueLookupComplete) return false;
+
+  // The gate judged the diff against the issue text as it read at scan time. A
+  // requirement that was rewritten since is a different requirement, so the old
+  // verdict no longer covers it. Facts recorded before intent was screened
+  // carry no fingerprint and keep their previous meaning.
+  if (!expected.intentFingerprint) return true;
+  const currentIntent = linkedIssueIntentFingerprint(openIssues.map((issue) => ({
+    number: issue.number, title: issue.title, body: issue.body,
+  })));
+  return currentIntent === expected.intentFingerprint;
 }
 
 async function readBehindBy(ctx, pr) {
@@ -996,7 +1121,11 @@ export async function buildTaskInput({ app } = {}) {
       pendingById.set(key, { ...item, ticks: existing?.ticks || item.ticks || 0 });
     }
   }
-  const allPendingIssueComments = [...pendingById.values()];
+  const allPendingIssueComments = await pruneClosedIssueComments(
+    ctx,
+    [...pendingById.values()],
+    new Set(issueResult.comments.map((item) => item.issueNumber)),
+  );
   const pendingIssueComments = allPendingIssueComments.slice(-MAX_PENDING_ISSUE_COMMENTS);
   if (allPendingIssueComments.length > pendingIssueComments.length) {
     console.warn(`⚠️ issue-watcher: dropped ${allPendingIssueComments.length - pendingIssueComments.length} oldest pending issue comment(s) for ${app.name} to preserve queue progress.`);
@@ -1105,7 +1234,7 @@ async function readCurrentIssueComment(ctx, item) {
     runJson(apiArgs(ctx, `repos/${ctx.repoFullName}/issues/${item.issueNumber}`), ctx),
     runJson(apiArgs(ctx, `repos/${ctx.repoFullName}/issues/${item.issueNumber}/comments/${item.commentId}`), ctx),
   ]);
-  if (!issue || String(issue.state || '').toLowerCase() !== 'open' || !comment || comment.id !== item.commentId) return null;
+  if (!isOpenIssue(issue) || !comment || comment.id !== item.commentId) return null;
   return {
     ...item,
     issueTitle: fullText(issue.title),

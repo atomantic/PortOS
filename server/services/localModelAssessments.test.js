@@ -78,29 +78,32 @@ vi.mock('./specDecodeModels.js', () => ({
   getSpecDecodePresetStatus: (...args) => getSpecDecodePresetStatus(...args),
 }));
 
-const listModels = vi.fn();
-vi.mock('./localLlm.js', () => ({ listModels: (...args) => listModels(...args) }));
+// The managed-backend listing carries its own "empty vs unreadable" sentinel
+// (`{ models, error }`), so these tests drive that shape directly rather than
+// re-deriving it from a manager error getter. Its composition is covered in
+// localLlm.test.js.
+const listManagedBackendModels = vi.fn();
+const managedModels = (models, error = null) => ({ models, error });
+vi.mock('./localLlm.js', () => ({
+  listManagedBackendModels: (...args) => listManagedBackendModels(...args),
+}));
 
 const getLoadedModels = vi.fn();
-const getOllamaListError = vi.fn();
 const ollamaVersion = vi.fn(async () => '0.0.0-test');
 // Ollama's tuning knobs are daemon environment, so applying one restarts the
 // daemon. Default to "it worked" and let a test override to assert the refusal path.
 const restartOllamaWithEnv = vi.fn(async () => ({ applied: true, reason: 'restarted' }));
 vi.mock('./ollamaManager.js', () => ({
   getLoadedModels: (...args) => getLoadedModels(...args),
-  getLastInstalledModelsError: () => getOllamaListError(),
   // Recorded with each assessment so a backend UPDATE can later be detected as
   // staleness — see localModelAssessmentStore.captureEnvironment.
   getVersion: (...args) => ollamaVersion(...args),
   restartWithEnv: (...args) => restartOllamaWithEnv(...args),
 }));
 
-const getLmStudioListError = vi.fn();
 // LM Studio's knobs are load-time, so applying one reloads the model via `lms load`.
 const loadLmStudioModelWithArgs = vi.fn(async () => ({ success: true }));
 vi.mock('./lmStudioManager.js', () => ({
-  getLastListError: () => getLmStudioListError(),
   loadModelWithArgs: (...args) => loadLmStudioModelWithArgs(...args),
 }));
 
@@ -128,10 +131,8 @@ afterAll(() => rmSync(tempRoot, { recursive: true, force: true }));
 beforeEach(() => {
   rmSync(join(tempRoot, 'local-llm'), { recursive: true, force: true });
   runLocalLlmTest.mockReset();
-  listModels.mockReset().mockResolvedValue([{ id: 'example-model:7b', params: '7B' }]);
+  listManagedBackendModels.mockReset().mockResolvedValue(managedModels([{ id: 'example-model:7b', params: '7B' }]));
   getLoadedModels.mockReset().mockResolvedValue([{ id: 'example-model:7b', name: 'example-model:7b', size: 5 * 2 ** 30 }]);
-  getOllamaListError.mockReset().mockReturnValue(null);
-  getLmStudioListError.mockReset().mockReturnValue(null);
   runEndpointLlmTest.mockReset();
   probeOpenAiModels.mockReset().mockResolvedValue({ reachable: true, models: [], error: null });
   getLlamaServerEndpoint.mockReset().mockResolvedValue('http://127.0.0.1:5568/v1');
@@ -237,7 +238,7 @@ describe('loadAssessments / getAssessmentReport (read path)', () => {
   // unanswered question — listing it here offered a Measure button that could
   // only ever spend a provider call to prove it fails.
   it('leaves embedding models out of the not-yet-measured list', async () => {
-    listModels.mockImplementation(async (backend) => (backend === 'ollama'
+    listManagedBackendModels.mockImplementation(async (backend) => managedModels(backend === 'ollama'
       ? [{ id: 'example-model:7b', params: '7B' }, { id: 'all-minilm:latest' }, { id: 'nomic-embed-text:latest' }]
       : []));
     const report = await svc.getAssessmentReport();
@@ -249,7 +250,7 @@ describe('loadAssessments / getAssessmentReport (read path)', () => {
   // The backend's own capability metadata outranks the name heuristic in both
   // directions, so a chat model that merely LOOKS like an embedding one stays.
   it('keeps a model the backend reports as chat-capable', async () => {
-    listModels.mockImplementation(async (backend) => (backend === 'ollama'
+    listManagedBackendModels.mockImplementation(async (backend) => managedModels(backend === 'ollama'
       ? [{ id: 'all-minilm:latest', capabilities: ['completion'] }]
       : []));
     const report = await svc.getAssessmentReport();
@@ -258,19 +259,19 @@ describe('loadAssessments / getAssessmentReport (read path)', () => {
 
   it('flags a backend whose model list could not be read, even though it returned []', async () => {
     // Both managers cache an EMPTY list on a failed read instead of throwing, so
-    // the manager's own error getter is the only signal that separates "no
-    // models installed" from "the list could not be read".
-    listModels.mockImplementation(async (backend) => (backend === 'lmstudio' ? [] : [{ id: 'example-model:7b', params: '7B' }]));
-    getLmStudioListError.mockReturnValue('LM Studio is unavailable');
+    // the accompanying `error` is the only signal that separates "no models
+    // installed" from "the list could not be read".
+    listManagedBackendModels.mockImplementation(async (backend) => (backend === 'lmstudio'
+      ? managedModels([], 'LM Studio is unavailable')
+      : managedModels([{ id: 'example-model:7b', params: '7B' }])));
     const report = await svc.getAssessmentReport();
     expect(report.listErrors).toEqual(['lmstudio']);
   });
 
   it('still flags a backend when the model list throws outright', async () => {
-    listModels.mockImplementation(async (backend) => {
-      if (backend === 'ollama') throw new Error('Ollama unreachable');
-      return [];
-    });
+    listManagedBackendModels.mockImplementation(async (backend) => (backend === 'ollama'
+      ? managedModels(null, 'Ollama unreachable')
+      : managedModels([])));
     expect((await svc.getAssessmentReport()).listErrors).toEqual(['ollama']);
   });
 
@@ -283,7 +284,7 @@ describe('loadAssessments / getAssessmentReport (read path)', () => {
     // `400 "<model>" does not support chat` — a failed run that also fires the
     // provider-failure hook and files a CoS investigation task. Offering a
     // Measure button for one, or sweeping it, is work that cannot succeed.
-    listModels.mockImplementation(async (backend) => (backend === 'ollama'
+    listManagedBackendModels.mockImplementation(async (backend) => managedModels(backend === 'ollama'
       ? [{ id: 'example-model:7b', params: '7B' }, { id: 'nomic-embed-text:latest', params: '137M' }]
       : []));
     const report = await svc.getAssessmentReport();
@@ -506,7 +507,7 @@ describe('uninstalled models', () => {
     runLocalLlmTest.mockResolvedValue(okRun());
     await svc.runAssessment({ backend: 'ollama', modelId: 'example-model:7b', contextTokens: [512, 4096] });
 
-    listModels.mockResolvedValue([]);
+    listManagedBackendModels.mockResolvedValue(managedModels([]));
     const report = await svc.getAssessmentReport();
     // It can no longer run, so it must not be ranked — but the measurement stays
     // on disk so a re-install doesn't cost another run.
@@ -521,8 +522,7 @@ describe('uninstalled models', () => {
 
     // An unreadable list returning [] must not be read as "everything was
     // uninstalled" — that is the same failed-read-as-empty mistake.
-    listModels.mockResolvedValue([]);
-    getOllamaListError.mockReturnValue('Ollama is unavailable');
+    listManagedBackendModels.mockResolvedValue(managedModels([], 'Ollama is unavailable'));
     const report = await svc.getAssessmentReport();
     expect(report.ranked.map((r) => r.modelId)).toEqual(['example-model:7b']);
     expect(report.uninstalled).toEqual([]);

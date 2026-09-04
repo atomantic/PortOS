@@ -27,6 +27,7 @@ import { join } from 'path';
 import { getProject, updateProject, updateScene, updateRun, recordRun } from './local.js';
 import { enqueueTreatmentTask } from './agentBridge.js';
 import { advanceAfterPlanStepSettled } from './planAdvance.js';
+import { registerCreativeDirectorProjectStarter } from './projectStartSink.js';
 import { dispatchSceneEvaluation } from './sceneEvaluator.js';
 import { runSceneRender } from './sceneRunner.js';
 import { runStitch } from './stitchRunner.js';
@@ -611,6 +612,13 @@ export async function startCreativeDirectorProject(projectId) {
   if (project?.directive) return advanceAfterPlanStepSettled(projectId);
   return advanceAfterSceneSettled(projectId);
 }
+
+// Wire the pipeline-facing seam (#5920). `pipeline/episodeVideo.js` starts the CD
+// project it just built through `projectStartSink.js` rather than importing this
+// module, which is what keeps the two halves out of one import cycle. Registering
+// here (rather than at a call site) means every importer of the completion hook
+// arms the seam — see the sink's header for why boot imports this module.
+registerCreativeDirectorProjectStarter(startCreativeDirectorProject);
 
 // Test-only: clear the module-level in-memory dedup sets so suites that leave
 // a seed-frame defer armed (deferred but never fired the settle event) don't

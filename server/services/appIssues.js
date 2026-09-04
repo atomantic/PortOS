@@ -44,6 +44,10 @@ const truncateBody = (body) => {
 /**
  * Normalize a raw `gh issue list --json` row into the common issue shape.
  * GitHub labels carry a hex `color` with no `#`; the UI needs it prefixed.
+ *
+ * `gh` has no scalar comment-count field — its `comments` field is the full
+ * comment array — so the count is derived here and the bodies are dropped
+ * rather than shipped to a UI that only renders a number.
  */
 function normalizeGithubIssue(issue) {
   return {
@@ -64,6 +68,7 @@ function normalizeGithubIssue(issue) {
     author: issue.author?.login || null,
     milestone: issue.milestone?.title || null,
     updatedAt: issue.updatedAt || null,
+    commentCount: Array.isArray(issue.comments) ? issue.comments.length : 0,
   };
 }
 
@@ -72,7 +77,8 @@ function normalizeGithubIssue(issue) {
  * `iid` and assignees/author on `username`. Labels are plain strings on current
  * `glab`, but the object form is tolerated too — the JSON label shape has varied
  * across glab versions, and a silently-dropped label list is worse than an
- * unused branch.
+ * unused branch. GitLab counts discussion in `user_notes_count` (system notes
+ * excluded), which is already the scalar the UI wants.
  */
 function normalizeGitlabIssue(issue) {
   return {
@@ -92,6 +98,7 @@ function normalizeGitlabIssue(issue) {
     author: issue.author?.username || null,
     milestone: issue.milestone?.title || null,
     updatedAt: issue.updated_at || null,
+    commentCount: Number.isFinite(issue.user_notes_count) ? issue.user_notes_count : 0,
   };
 }
 
@@ -120,7 +127,7 @@ async function fetchGithubIssues(repoSpec, apiHost) {
   const raw = await execGh([
     'issue', 'list', '--repo', repoSpec, '--state', 'open',
     '--limit', String(GH_LIST_LIMIT),
-    '--json', 'number,title,body,labels,assignees,author,milestone,url,updatedAt',
+    '--json', 'number,title,body,labels,assignees,author,milestone,url,updatedAt,comments',
   ]).catch((err) => {
     console.error(`❌ app-issues: gh issue list failed for ${repoSpec}: ${err.message}`);
     return null;

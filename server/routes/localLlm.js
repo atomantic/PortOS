@@ -35,6 +35,7 @@ import {
   localLlmLmStudioServiceSchema,
   localLlmMtplxStartSchema,
   localLlmSlotstreamStartSchema,
+  localLlmSlotstreamDownloadSchema,
   localLlmMtplxSearchSchema,
   localLlmMtplxPullSchema,
   localLlmMtplxRemoveSchema,
@@ -51,6 +52,7 @@ import {
 } from '../services/llamaServerManager.js'
 import { MTPLX_APP, getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx } from '../services/mtplxServerManager.js'
 import { SLOTSTREAM_APP, getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream } from '../services/slotstreamServerManager.js'
+import { cancelSlotstreamModelDownload, downloadSlotstreamModel, previewSlotstreamDownload } from '../services/slotstreamModelManager.js'
 import { searchMtplxCatalog, pullMtplxModel, previewMtplxPull, removeMtplxModel } from '../services/mtplxModelManager.js'
 import { saveProcessList } from '../services/pm2.js'
 import { getSpecDecodePresetStatus, downloadSpecDecodeModel, previewSpecDecodeDownload, cancelSpecDecodeModelDownload } from '../services/specDecodeModels.js'
@@ -327,6 +329,10 @@ router.post('/download-preflight', asyncHandler(async (req, res) => {
   }
   if (body.kind === 'mtplx') {
     res.json(await previewMtplxPull({ model: body.model }))
+    return
+  }
+  if (body.kind === 'slotstream') {
+    res.json(await previewSlotstreamDownload({ model: body.model }))
     return
   }
   res.json(await previewInstallModel(body.backend, body.modelId))
@@ -909,6 +915,32 @@ router.post('/slotstream/install', asyncHandler(async (req, res) => {
   resetProviderReadinessCache()
   emit('complete', 'Slotstream installed')
   res.json(result)
+}))
+
+// POST /api/local-llm/slotstream/models/download — fetch one checkpoint into
+// Slotstream's cache. Byte progress streams over `slotstream:download`, which
+// is what the card's bar trusts: a 100 GB+ transfer outlives the request that
+// started it, so a terminal frame — not the HTTP response — is what clears the
+// bar and re-reads the cache. A start still never downloads anything; this is
+// the explicit, separate action that does.
+router.post('/slotstream/models/download', asyncHandler(async (req, res) => {
+  const { model } = validateRequest(localLlmSlotstreamDownloadSchema, req.body)
+  const io = req.app.get('io')
+  const result = await downloadSlotstreamModel({ model, onProgress: (frame) => io?.emit('slotstream:download', frame) })
+  // A cache that just went from empty to servable is exactly what the readiness
+  // probes remember as "Slotstream has no checkpoint".
+  if (result.success) resetProviderReadinessCache()
+  res.json(result)
+}))
+
+// POST /api/local-llm/slotstream/models/download/cancel — a checkpoint download
+// is server-owned so it survives navigation, but a 100 GB+ transfer that is
+// merely SLOW never trips the idle watchdog, and waiting one out is the only
+// other way to release the single transfer slot. Partial files are kept, so a
+// later download resumes rather than restarting.
+router.post('/slotstream/models/download/cancel', asyncHandler(async (req, res) => {
+  const { model } = validateRequest(localLlmSlotstreamDownloadSchema, req.body)
+  res.json({ success: true, cancelled: cancelSlotstreamModelDownload({ model }) })
 }))
 
 // POST /api/local-llm/save-startup — `pm2 save`, so the PM2-managed local

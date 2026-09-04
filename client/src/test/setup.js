@@ -2,6 +2,7 @@ import '@testing-library/jest-dom/vitest';
 import { afterEach } from 'vitest';
 import { cleanup, configure } from '@testing-library/react';
 import { installTestStorage } from './storagePolyfill.js';
+import { installFormValidityFix } from './formValidityPolyfill.js';
 
 // testing-library defaults asyncUtilTimeout to 1000ms. Several views debounce at
 // 500ms and a couple wait on a debounce plus a retry, so under parallel-worker CPU
@@ -12,10 +13,14 @@ import { installTestStorage } from './storagePolyfill.js';
 configure({ asyncUtilTimeout: 3000 });
 
 // Guarantee a working localStorage/sessionStorage before any test runs, regardless
-// of how jsdom exposes Storage in this environment. See storagePolyfill.js / #1438.
+// of how the environment exposes Storage. See storagePolyfill.js / #1438.
 installTestStorage();
 
-// jsdom doesn't implement Element.prototype.scrollIntoView; components call it
+// Make constraint validation match a browser so implicit form submission isn't
+// swallowed by a float-modulo step check. See formValidityPolyfill.js / #6144.
+installFormValidityFix();
+
+// The test DOM doesn't implement Element.prototype.scrollIntoView; components call it
 // (often from a requestAnimationFrame callback that can fire AFTER a test unmounts),
 // and the resulting unhandled error fails the whole run despite passing assertions
 // (#2958). Stub it once, guarded so it never clobbers a real implementation — on real
@@ -24,7 +29,7 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {};
 }
 
-// Stub jsdom missing media/canvas methods to eliminate stderr noise in test runs
+// Stub the media/canvas methods the test DOM omits, to eliminate stderr noise in test runs
 if (typeof HTMLMediaElement !== 'undefined') {
   HTMLMediaElement.prototype.play = () => Promise.resolve();
   HTMLMediaElement.prototype.pause = () => {};

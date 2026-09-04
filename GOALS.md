@@ -42,7 +42,7 @@ AI agents should be capable of operating fully autonomously across all connected
 
 ### 9. Knowledge Legacy
 
-Preserve personal knowledge, identity, decision-making patterns, creative output, and life story beyond a single lifetime. The autobiography system, genome data, behavioral profiles, captured memories, written work, and built worlds form a durable record — not just of what you built, but of who you are and how you think.
+Preserve personal knowledge, identity, decision-making patterns, creative output, and life story beyond a single lifetime. The autobiography system, genome data, behavioral profiles, captured memories, written work, and built worlds form a durable record — not just of what you built, but of who you are and how you think. PortOS itself is the backup of record (local data + automatic snapshots); download/export buttons exist only for sharing or handoff to other tools (e.g. Sharing buckets, Legacy Bundle), never as a parallel backup mechanism.
 
 ### 10. Anywhere Access on Private Network
 

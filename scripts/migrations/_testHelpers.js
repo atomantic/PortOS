@@ -10,6 +10,10 @@
  *     with `makeSeededProviderTierMigration`. Every fixture is derived from the
  *     migration's own `targets` table, so a bump's test is a `describe` + one
  *     call and still asserts the full conservative contract.
+ *   - `runAdditiveProviderInsertMigrationTests` — additive provider-model
+ *     inserts built with `makeAdditiveProviderInsertMigration` (family 7b).
+ *     Same shape: a `describe` + one call, with fixtures derived from the
+ *     migration's own `targets` array.
  */
 
 import { it, expect, beforeEach, afterEach } from 'vitest';
@@ -376,5 +380,130 @@ export function runSeededProviderTierMigrationTests({ migration, targets, prefix
       expect(await migration.up({ rootDir })).toMatchObject({ ok: false, reason: 'bad-shape' });
       expect(raw()).toBe(before);
     }
+  });
+}
+
+// ---- additive provider-model insert migrations (family 7b) ----
+
+/**
+ * Standard suite for a migration built with `makeAdditiveProviderInsertMigration`.
+ * A migration's `*.test.js` collapses to a `describe` + a single
+ * `runAdditiveProviderInsertMigrationTests({ migration, targets, prefix })` call.
+ *
+ *   - `migration` — the migration's default export (`{ up }`).
+ *   - `targets`   — the SAME `targets` array passed to the factory
+ *     (`[{ id, retired, current }, …]`). Every fixture is derived from it, so
+ *     the suite covers each target the migration actually ships.
+ *   - `prefix`    — `mkdtempSync` directory name (`'migration-337-'`), so a
+ *     debugger leaves a recognizable sandbox in the temp dir.
+ */
+export function runAdditiveProviderInsertMigrationTests({ migration, targets, prefix }) {
+  let rootDir;
+  let providersPath;
+
+  beforeEach(() => {
+    rootDir = mkdtempSync(join(tmpdir(), prefix));
+    mkdirSync(join(rootDir, 'data'), { recursive: true });
+    providersPath = join(rootDir, 'data', 'providers.json');
+  });
+
+  afterEach(() => {
+    rmSync(rootDir, { recursive: true, force: true });
+  });
+
+  const write = (providers) => writeFileSync(providersPath, JSON.stringify({ providers }, null, 2) + '\n');
+  const read = () => JSON.parse(readFileSync(providersPath, 'utf-8')).providers;
+  const raw = () => readFileSync(providersPath, 'utf-8');
+
+  it('declares at least one target', () => {
+    expect(targets.length).toBeGreaterThan(0);
+    for (const { retired, current } of targets) {
+      expect(retired).not.toBe(current);
+    }
+  });
+
+  it('inserts each target\'s current id right after its retired id on a curated list, leaving pointers alone', async () => {
+    write(Object.fromEntries(targets.map(({ id, retired }) => [
+      id,
+      { models: ['unrelated-tier', retired, 'sibling-tier'], defaultModel: 'unrelated-tier', mediumModel: retired },
+    ])));
+
+    const result = await migration.up({ rootDir });
+
+    expect(result).toMatchObject({ ok: true, reason: 'updated', updated: targets.length });
+    const out = read();
+    for (const { id, retired, current } of targets) {
+      expect(out[id].models).toEqual(['unrelated-tier', retired, current, 'sibling-tier']);
+      // Additive: the retired id and every tier pointer survive untouched.
+      expect(out[id].defaultModel).toBe('unrelated-tier');
+      expect(out[id].mediumModel).toBe(retired);
+    }
+  });
+
+  it('never offers one target\'s current id on a different target\'s record', async () => {
+    const distinct = targets.filter(({ current }, i) => targets.findIndex((t) => t.current === current) === i);
+    if (distinct.length < 2) return; // nothing to cross-check when every target shares one id
+    write(Object.fromEntries(targets.map(({ id, retired }) => [id, { models: [retired] }])));
+
+    await migration.up({ rootDir });
+
+    const out = read();
+    for (const { id, current } of targets) {
+      for (const other of distinct) {
+        if (other.current === current) continue;
+        expect(out[id].models).not.toContain(other.current);
+      }
+    }
+  });
+
+  it('is a no-op on an already-current record and on a second run', async () => {
+    const [first, ...rest] = targets;
+    write(Object.fromEntries([
+      [first.id, { models: [first.retired, first.current] }],
+      ...rest.map(({ id, retired }) => [id, { models: [retired] }]),
+    ]));
+
+    const before = raw();
+    const firstRun = await migration.up({ rootDir });
+    expect(firstRun.updated).toBe(rest.length);
+    if (rest.length > 0) expect(raw()).not.toBe(before); // the repairable targets did get written once
+
+    // A record repaired on the first run is untouched by a second — no
+    // duplicate insert — and the already-current record was never touched.
+    const secondRun = await migration.up({ rootDir });
+    expect(secondRun).toMatchObject({ ok: true, reason: 'already-current', updated: 0 });
+    for (const { id, retired, current } of targets) {
+      expect(read()[id].models).toEqual([retired, current]);
+    }
+  });
+
+  it('leaves providers outside the target set untouched', async () => {
+    const unrelated = { id: 'unrelated-provider', models: ['some-configured-default'], defaultModel: 'some-configured-default' };
+    write({
+      ...Object.fromEntries(targets.map(({ id, retired }) => [id, { models: [retired] }])),
+      'unrelated-provider': unrelated,
+    });
+
+    await migration.up({ rootDir });
+
+    expect(read()['unrelated-provider']).toEqual(unrelated);
+  });
+
+  it('skips a missing or malformed providers file without throwing', async () => {
+    expect(await migration.up({ rootDir })).toMatchObject({ ok: false, reason: 'no-file' });
+
+    writeFileSync(providersPath, '{not json');
+    expect(await migration.up({ rootDir })).toMatchObject({ ok: false, reason: 'unreadable' });
+
+    writeFileSync(providersPath, JSON.stringify({ activeProvider: 'x' }, null, 2) + '\n');
+    expect(await migration.up({ rootDir })).toMatchObject({ ok: false, reason: 'bad-shape' });
+  });
+
+  it('skips a record whose models field is not an array', async () => {
+    const [first] = targets;
+    write({ [first.id]: { models: first.retired, defaultModel: first.retired } });
+
+    expect((await migration.up({ rootDir })).updated).toBe(0);
+    expect(read()[first.id].models).toBe(first.retired);
   });
 }

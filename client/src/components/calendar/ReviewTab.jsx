@@ -111,7 +111,7 @@ export default function ReviewTab() {
       {/* Date Navigation */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <button aria-label="Previous" onClick={() => changeDate(-1)} className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white">
+          <button aria-label="Previous" onClick={() => changeDate(-1)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white">
             <ChevronLeft size={18} />
           </button>
           <input
@@ -121,7 +121,7 @@ export default function ReviewTab() {
             aria-label="Review date"
             className="bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-port-accent"
           />
-          <button aria-label="Next" onClick={() => changeDate(1)} className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white">
+          <button aria-label="Next" onClick={() => changeDate(1)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white">
             <ChevronRight size={18} />
           </button>
           {!isToday && (
@@ -240,11 +240,11 @@ export default function ReviewTab() {
                     </div>
 
                     {!isReviewed && !isEditing && (
-                      <div className="flex items-center gap-1 shrink-0">
+                      <div className="flex items-center gap-2 shrink-0">
                         <button
                           onClick={() => handleConfirm(event, true)}
                           disabled={confirming === eventId}
-                          className="p-1.5 rounded hover:bg-port-success/20 text-gray-500 hover:text-port-success transition-colors"
+                          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-success/20 text-gray-500 hover:text-port-success transition-colors"
                           title="Confirm - it happened" aria-label="Confirm - it happened"
                         >
                           <Check size={16} />
@@ -252,7 +252,7 @@ export default function ReviewTab() {
                         <button
                           onClick={() => handleConfirm(event, false)}
                           disabled={confirming === eventId}
-                          className="p-1.5 rounded hover:bg-red-500/20 text-gray-500 hover:text-red-400 transition-colors"
+                          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-red-500/20 text-gray-500 hover:text-red-400 transition-colors"
                           title="Skip - didn't happen" aria-label="Skip - didn't happen"
                         >
                           <X size={16} />

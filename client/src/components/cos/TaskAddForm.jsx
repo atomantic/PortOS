@@ -37,7 +37,7 @@ const readTaskDescriptionDraft = (defaultApp) => {
   };
 };
 
-export default function TaskAddForm({ providers, apps, onTaskAdded, compact = false, defaultExpanded = false, defaultApp = '' }) {
+export default function TaskAddForm({ providers, providersLoaded = true, apps, onTaskAdded, compact = false, defaultExpanded = false, defaultApp = '' }) {
   const [initialDraft] = useState(() => readTaskDescriptionDraft(defaultApp));
   const [newTask, setNewTask] = useState(() => {
     return {
@@ -180,12 +180,16 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
 
   // If the pinned provider isn't a valid coding option (e.g. a saved template
   // pinned an `api` provider that's now filtered out of the dropdown), reset to
-  // "Auto" so the visible select and the submitted value can't diverge.
+  // "Auto" so the visible select and the submitted value can't diverge. Gated on
+  // `providersLoaded`: mid-fetch, `enabledProviders` is always empty, so without
+  // the gate this would wipe out a legitimately pinned provider (a draft/template
+  // restored before the list has arrived) before it ever gets a chance to match.
   useEffect(() => {
+    if (!providersLoaded) return;
     if (newTask.provider && !enabledProviders.some(p => p.id === newTask.provider)) {
       setNewTask(t => ({ ...t, provider: '', model: '', effort: '', temperature: '', thinking: '' }));
     }
-  }, [enabledProviders, newTask.provider]);
+  }, [enabledProviders, newTask.provider, providersLoaded]);
 
   // Check if selected app has JIRA configured
   const selectedApp = useMemo(() =>
@@ -948,9 +952,12 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               value={newTask.provider}
               onChange={e => setNewTask(t => ({ ...t, provider: e.target.value, model: '', effort: '', temperature: '', thinking: '' }))}
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
+              disabled={!providersLoaded}
             >
-              <option value="">Auto (default)</option>
-              {enabledProviders.map(p => (
+              {providersLoaded
+                ? <option value="">Auto (default)</option>
+                : <option value="">Loading providers…</option>}
+              {providersLoaded && enabledProviders.map(p => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
@@ -1104,7 +1111,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
                 <button
                   type="button"
                   onClick={() => removeAttachment(a.id)}
-                  className="ml-1 p-0.5 text-gray-500 hover:text-port-error transition-colors"
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center ml-1 p-0.5 text-gray-500 hover:text-port-error transition-colors"
                   aria-label={`Remove attachment ${a.originalName}`}
                 >
                   <X size={14} aria-hidden="true" />

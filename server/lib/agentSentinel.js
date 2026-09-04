@@ -91,11 +91,12 @@ export function parseSentinelPayload(contents) {
   if (!trimmed) return { summary: '', payload: null };
 
   // Only a JSON OBJECT counts as structured. `safeJSONParse` with allowArray:false
-  // returns the object, or null for a plain markdown summary / bare JSON
-  // scalar/array / malformed content — so a legacy sentinel round-trips as text
-  // (repo convention: reuse safeJSONParse, no bare try/catch).
+  // rejects a root array and returns null for malformed content, but still parses
+  // a bare scalar (`"42"`, `"true"`) — so guard for a genuine object here too, or
+  // a legacy sentinel that happens to be a lone number/string/bool would crash on
+  // the `'payload' in parsed` check below instead of round-tripping as text.
   const parsed = safeJSONParse(trimmed, null, { allowArray: false });
-  if (parsed) {
+  if (parsed && typeof parsed === 'object') {
     const summary = typeof parsed.summary === 'string' ? parsed.summary : '';
     const payload = 'payload' in parsed ? parsed.payload : null;
     return { summary, payload };

@@ -34,8 +34,8 @@ vi.mock('sharp', () => ({
 import {
   buildDatasetImagePrompt, deriveVariationAxes, getDatasetVariationAxes,
   normalizeCropProposals, proposeCropRegions, sliceReferenceSheet,
-  extractSubjectSignaturePhrases,
 } from './loraDatasetGenerate.js';
+import { extractSubjectSignaturePhrases } from './loraDatasetSubject.js';
 import { getDataset, updateDataset } from './loraDatasets.js';
 import { getUniverse } from './universeBuilder.js';
 

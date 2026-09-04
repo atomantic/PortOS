@@ -48,4 +48,15 @@ describe('MiniCharacterCoSAvatar', () => {
       '/api/avatar/model.glb?variant=mini-female-d',
     ));
   });
+
+  // A rigged record probes through the same variant namespace — the avatar
+  // route resolves `rigged-<modelId>` to the record's animated GLB, so the
+  // stage needs no special case for record-backed characters.
+  it('keys the canvas guard on the rigged variant url for an animated record', async () => {
+    render(<MiniCharacterCoSAvatar variant="rigged-image3d-1" coverage={null} />);
+    await waitFor(() => expect(screen.getByTestId('canvas-guard')).toHaveAttribute(
+      'data-reset-key',
+      '/api/avatar/model.glb?variant=rigged-image3d-1',
+    ));
+  });
 });

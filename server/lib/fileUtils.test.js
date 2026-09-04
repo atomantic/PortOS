@@ -33,7 +33,6 @@ import {
   ensureDir,
   pathExists,
   expandHome,
-  isValidJSON,
   listDirectoryByExtension,
   safeJSONParse,
   safeJSONLParse,
@@ -127,56 +126,6 @@ async function withUnreadableFile(err, fn) {
 }
 
 describe('fileUtils', () => {
-  describe('isValidJSON', () => {
-    it('should return true for valid JSON object', () => {
-      expect(isValidJSON('{"key": "value"}')).toBe(true);
-    });
-
-    it('should return true for valid JSON array when allowed', () => {
-      expect(isValidJSON('[1, 2, 3]')).toBe(true);
-    });
-
-    it('should return false for JSON array when not allowed', () => {
-      expect(isValidJSON('[1, 2, 3]', { allowArray: false })).toBe(false);
-    });
-
-    it('should return false for empty string', () => {
-      expect(isValidJSON('')).toBe(false);
-    });
-
-    it('should return false for whitespace-only string', () => {
-      expect(isValidJSON('   ')).toBe(false);
-    });
-
-    it('should return false for null', () => {
-      expect(isValidJSON(null)).toBe(false);
-    });
-
-    it('should return false for undefined', () => {
-      expect(isValidJSON(undefined)).toBe(false);
-    });
-
-    it('should return false for string not starting with { or [', () => {
-      expect(isValidJSON('hello')).toBe(false);
-    });
-
-    it('should return false for incomplete object (missing end)', () => {
-      expect(isValidJSON('{"key":')).toBe(false);
-    });
-
-    it('should return false for incomplete array (missing end)', () => {
-      expect(isValidJSON('[1, 2')).toBe(false);
-    });
-
-    it('should handle whitespace around valid JSON', () => {
-      expect(isValidJSON('  {"key": "value"}  ')).toBe(true);
-    });
-
-    it('should handle nested objects', () => {
-      expect(isValidJSON('{"outer": {"inner": "value"}}')).toBe(true);
-    });
-  });
-
   describe('safeJSONParse', () => {
     it('should parse valid JSON object', () => {
       const result = safeJSONParse('{"key": "value"}', {});
@@ -223,6 +172,23 @@ describe('fileUtils', () => {
       expect(result).toEqual({});
     });
 
+    it('should still reject a root array under allowArray: false when defaultValue is not an array', () => {
+      const result = safeJSONParse('["a", "b"]', { fallback: true }, { allowArray: false });
+      expect(result).toEqual({ fallback: true });
+    });
+
+    it('should parse a top-level scalar string', () => {
+      expect(safeJSONParse('"hello"', null)).toBe('hello');
+    });
+
+    it('should parse a top-level scalar number', () => {
+      expect(safeJSONParse('123', null)).toBe(123);
+    });
+
+    it('should parse a top-level scalar boolean', () => {
+      expect(safeJSONParse('true', null)).toBe(true);
+    });
+
     it('should log warning when logError is true', () => {
       const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       safeJSONParse('invalid', {}, { logError: true });
@@ -245,7 +211,6 @@ describe('fileUtils', () => {
     });
 
     it('should handle syntax error in structurally valid JSON', () => {
-      // Passes structural check but fails JSON.parse
       const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const result = safeJSONParse('{"key": undefined}', { fallback: true }, { logError: true });
       expect(result).toEqual({ fallback: true });

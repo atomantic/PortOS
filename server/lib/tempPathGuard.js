@@ -23,34 +23,14 @@
  *    itself is not an acceptable target: `destroyGitSandbox(tmpdir())` would
  *    recursively delete the whole system temp directory.
  */
-import { realpathSync } from 'fs';
 import { tmpdir } from 'os';
-import { basename, dirname, isAbsolute, join, resolve, sep } from 'path';
-
-/**
- * The path the filesystem would really act on: realpath of the deepest existing
- * ancestor, plus the not-yet-created tail (a fixture's `scratch/primary` does
- * not exist yet, and a path component that does not exist cannot be a symlink).
- */
-function canonicalize(resolved) {
-  const tail = [];
-  let existing = resolved;
-  for (;;) {
-    try {
-      return join(realpathSync(existing), ...tail);
-    } catch {
-      const parent = dirname(existing);
-      if (parent === existing) return resolved; // hit the root; nothing resolved
-      tail.unshift(basename(existing));
-      existing = parent;
-    }
-  }
-}
+import { isAbsolute, resolve, sep } from 'path';
+import { canonicalizePath } from './pathContainment.js';
 
 function tempRoots() {
   // Read `tmpdir()` on every call: TMPDIR is per-process env, and tests stub it.
   const raw = resolve(tmpdir());
-  return [...new Set([raw, canonicalize(raw)])];
+  return [...new Set([raw, canonicalizePath(raw)])];
 }
 
 // Windows paths compare case-insensitively, and a TEMP env var spelled with
@@ -73,7 +53,7 @@ function isStrictlyUnder(child, parent) {
 export function isTempPath(target) {
   if (typeof target !== 'string' || target.length === 0 || !isAbsolute(target)) return false;
   if (target.split(/[\\/]+/).includes('..')) return false;
-  const canonical = canonicalize(resolve(target));
+  const canonical = canonicalizePath(target);
   return tempRoots().some((root) => isStrictlyUnder(canonical, root));
 }
 

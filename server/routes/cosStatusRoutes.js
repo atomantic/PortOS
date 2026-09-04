@@ -11,6 +11,7 @@ import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { z } from 'zod';
 import { DOMAIN_IDS, DOMAIN_MODES } from '../lib/domainAutonomy.js';
+import { AVATAR_VARIANT_PATTERN, RIGGED_VARIANT_PREFIX } from '../lib/avatarVariants.js';
 import { BUDGET_LIMIT_FIELDS } from '../lib/domainBudgets.js';
 import { persistentMindCapabilitiesSchema } from '../lib/persistentMindCapabilities.js';
 import { persistentMindProfileSchema } from '../lib/persistentMindProfile.js';
@@ -40,7 +41,16 @@ export const cosConfigSchema = z.object({
   selfImprovementEnabled: z.boolean().optional(),
   appImprovementEnabled: z.boolean().optional(),
   improvementEnabled: z.boolean().optional(),
-  avatarStyle: z.enum(['svg', 'ascii', 'cyber', 'sigil', 'esoteric', 'nexus', 'muse', 'miniMaleC', 'miniFemaleD']).optional(),
+  // Built-in styles plus selectable rigged records (`rigged-<modelId>`, #5894).
+  // The record half reuses the avatar variant charset (no slashes, no dots —
+  // the same traversal guard `server/routes/avatar.js` enforces), so unknown
+  // spellings still 400 here instead of persisting a style nothing can render.
+  avatarStyle: z.union([
+    z.enum(['svg', 'ascii', 'cyber', 'sigil', 'esoteric', 'nexus', 'muse', 'miniMaleC', 'miniFemaleD']),
+    z.string().startsWith(RIGGED_VARIANT_PREFIX).refine(
+      (value) => AVATAR_VARIANT_PATTERN.test(value.slice(RIGGED_VARIANT_PREFIX.length)),
+    ),
+  ]).optional(),
   dynamicAvatar: z.boolean().optional(),
   alwaysOn: z.boolean().optional(),
   appReviewCooldownMs: z.number().int().min(0).optional(),

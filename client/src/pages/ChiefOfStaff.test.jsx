@@ -30,6 +30,7 @@ const api = vi.hoisted(() => ({
   getCosLearningDurations: vi.fn(),
   getCosPopularTemplates: vi.fn(),
   getCodeReviewDefaults: vi.fn(),
+  getRiggedAvatars: vi.fn(),
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 const socketStub = vi.hoisted(() => ({ connected: false, on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
@@ -59,6 +60,18 @@ vi.mock('../hooks/useProviderModels', () => ({
     selectedProviderId: '',
     selectedModel: '',
   }),
+}));
+// The rigged avatar stage pulls three.js through a lazy chunk — stub the
+// module so this suite asserts the wiring (variant + coverage reach the
+// stage), not the 3D render.
+vi.mock('../components/cos/MiniCharacterCoSAvatar', () => ({
+  default: ({ variant, coverage }) => (
+    <div
+      data-testid="rigged-avatar"
+      data-variant={variant}
+      data-covered={(coverage?.coveredStates || []).join(',')}
+    />
+  ),
 }));
 
 const { default: ChiefOfStaff, SPEAKING_MS } = await import('./ChiefOfStaff');
@@ -100,6 +113,7 @@ beforeEach(() => {
   api.getCosLearningDurations.mockResolvedValue(null);
   api.getCosPopularTemplates.mockResolvedValue([]);
   api.getCodeReviewDefaults.mockResolvedValue({});
+  api.getRiggedAvatars.mockResolvedValue({ records: [] });
   localLlm.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
   localLlm.getToolUseModels.mockResolvedValue({ models: [] });
 });
@@ -861,5 +875,45 @@ describe('ChiefOfStaff Issues card', () => {
     for (const card of await issueCards()) {
       expect(card).toHaveAttribute('title', memoryWarning.message);
     }
+  });
+});
+
+describe('Rigged avatar style', () => {
+  it('renders a rigged record on the mini-character stage with its coverage', async () => {
+    api.getCosStatus.mockResolvedValue({
+      running: true,
+      config: { ...config, avatarStyle: 'rigged-image3d-1' },
+      stats: {},
+    });
+    api.getRiggedAvatars.mockResolvedValue({
+      records: [{
+        id: 'image3d-1',
+        name: 'Example Dancer',
+        variant: 'rigged-image3d-1',
+        clip: 'Dance',
+        coverage: { coveredStates: ['ideating'], missingStates: ['coding'], complete: false },
+      }],
+    });
+    await renderSettledAt('tasks');
+
+    const avatar = await screen.findByTestId('rigged-avatar');
+    expect(avatar).toHaveAttribute('data-variant', 'rigged-image3d-1');
+    expect(avatar).toHaveAttribute('data-covered', 'ideating');
+  });
+
+  it('still renders the stage when the rigged record is gone', async () => {
+    api.getCosStatus.mockResolvedValue({
+      running: true,
+      config: { ...config, avatarStyle: 'rigged-image3d-gone' },
+      stats: {},
+    });
+    api.getRiggedAvatars.mockResolvedValue({ records: [] });
+    await renderSettledAt('tasks');
+
+    // No coverage to hand over (null), but the variant URL still probes —
+    // a deleted record shows the stage's missing-model hint, not a crash.
+    const avatar = await screen.findByTestId('rigged-avatar');
+    expect(avatar).toHaveAttribute('data-variant', 'rigged-image3d-gone');
+    expect(avatar).toHaveAttribute('data-covered', '');
   });
 });

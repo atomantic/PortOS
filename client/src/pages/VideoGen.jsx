@@ -25,9 +25,9 @@
  *
  * Form state, the URL-param prefill paths, the mode/backend transitions, and
  * `buildGeneratePayload()` live in `useVideoGenForm` (issue #3291) — this page
- * owns the fetching (status/models/history/gallery), the SSE run pipeline, the
- * the rendering. The durable server queue owns queued work; each render target
- * drains through its own lane.
+ * owns the fetching (status/model-context/history/gallery), the SSE run
+ * pipeline, and the rendering. The durable server queue owns queued work;
+ * each render target drains through its own lane.
  *
  * "Add to queue" submits immediately to the durable server queue. That is
  * important for mixed-target work: a Grok submission can start in its cloud
@@ -82,7 +82,7 @@ import { useVideoGenForm } from '../hooks/useVideoGenForm.js';
 import { useFederatedMediaTarget } from '../hooks/useFederatedMediaTarget';
 import RemoteMediaTargetPicker from '../components/federatedMedia/RemoteMediaTargetPicker';
 import {
-  getVideoGenStatus, generateVideo, cancelVideoGen,
+  getVideoGenStatus, getVideoGenModelContext, generateVideo, cancelVideoGen,
   listVideoHistory, deleteVideoHistoryItem, setVideoHidden,
   upscaleVideo,
   patchSettingsSlice,
@@ -98,7 +98,6 @@ import ResolutionField from '../components/media/ResolutionField';
 import { VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, IC_LORA_MODES } from '../lib/videoGenParams.js';
 import { finishTargetForRecord, isDeliveryVideoModel } from '../lib/videoFinish.js';
 import { peerModelRequiresInput } from '../lib/federatedMediaReadiness.js';
-import { readCachedVideoGenStatus, writeCachedVideoGenStatus } from '../lib/videoGenStatusCache.js';
 const MODES = [
   { id: 'text',   label: 'Text',   icon: Type,       desc: 'Text-to-video' },
   { id: 'image',  label: 'Image',  icon: ImageIcon,  desc: 'Image-to-video (start frame)' },
@@ -121,12 +120,16 @@ export default function VideoGen() {
     refreshGrokEnabled();
   };
 
-  // Paint the model picker from the previous /status answer while the live
-  // probe runs. The cached entry carries `stale: true` and holds nothing but
-  // the model-shaping fields (see lib/videoGenStatusCache.js); connectivity UI
-  // below gates on `statusFresh`.
-  const [status, setStatus] = useState(readCachedVideoGenStatus);
+  // `/status` owns connectivity ONLY. It shells out to python on every call
+  // (~1-2s), so nothing the form needs to render may wait on it.
+  const [status, setStatus] = useState(null);
+  // The model list plus the numbers its auto-select reads, off the probe-free
+  // `/model-context`. Fetched alongside /status on mount, it lands first — so
+  // the Model picker paints on a cold load instead of holding a placeholder
+  // through the interpreter probe.
+  const [modelContext, setModelContext] = useState(null);
   const [statusLoading, setStatusLoading] = useState(true);
+  const [modelContextLoading, setModelContextLoading] = useState(true);
   // Grok Build CLI video backend (#2859 phase 2) — surfaced only when the
   // user enabled Grok in Settings → Image Gen (one toggle covers image +
   // video). 'local' keeps every existing flow untouched.
@@ -134,7 +137,7 @@ export default function VideoGen() {
   // The jobId of the render this tab's Generate button currently owns —
   // threaded into cancelVideoGen so cancellation is job-scoped.
   const activeJobIdRef = useRef(null);
-  const [models, setModels] = useState(() => status?.models || []);
+  const models = useMemo(() => modelContext?.models || [], [modelContext]);
   const refreshGrokEnabled = useCallback(() => {
     getSettings({ silent: true })
       .then((sv) => setGrokEnabled(sv?.imageGen?.grok?.enabled === true))
@@ -189,7 +192,7 @@ export default function VideoGen() {
     icStrength, setIcStrength, icSkipStage2, setIcSkipStage2,
     applyRemix, applyFinish, applyResumedParams, buildGeneratePayload,
   } = useVideoGenForm({
-    models, status, availableLoras, grokEnabled,
+    models, modelContext, availableLoras, grokEnabled,
     remoteSubmissionFields: remoteTarget.isRemote ? remoteTarget.submissionFields : null,
   });
 
@@ -403,19 +406,28 @@ export default function VideoGen() {
   const refreshStatus = useCallback(() => {
     setStatusLoading(true);
     getVideoGenStatus()
-      .then((s) => {
-        setStatus(s);
-        setModels(s.models || []);
-        writeCachedVideoGenStatus(s);
-      })
+      .then(setStatus)
       .catch(() => setStatus({ connected: false, reason: 'Status check failed' }))
       .finally(() => setStatusLoading(false));
   }, []);
 
+  // Kept separate from refreshStatus so the picker never inherits the python
+  // probe's latency. A failure leaves `modelContext` null, which reads exactly
+  // like "no model to offer" — the Model field takes itself away rather than
+  // holding a placeholder forever.
+  const refreshModelContext = useCallback(() => {
+    setModelContextLoading(true);
+    getVideoGenModelContext({ silent: true })
+      .then(setModelContext)
+      .catch(() => {})
+      .finally(() => setModelContextLoading(false));
+  }, []);
+
   useEffect(() => {
     refreshStatus();
+    refreshModelContext();
     return () => eventSourceRef.current?.close();
-  }, [refreshStatus, eventSourceRef]);
+  }, [refreshStatus, refreshModelContext, eventSourceRef]);
 
   // SSE subscriber shared by the in-flight POST path and the mount-time
   // resume path. `withToast: false` on resume suppresses the success/error
@@ -811,16 +823,13 @@ export default function VideoGen() {
   // `byovRuntimeMissing` for those models. Without this, a user who installed
   // ONLY a BYOV runtime via the modal would stay stuck behind a "not
   // configured" error from the unrelated legacy probe.
-  // A cached entry says nothing about python health, so the connectivity UI
-  // waits for the live probe rather than reporting the interpreter state of
-  // whenever the last visit happened.
-  const statusFresh = !!status && !status.stale;
   // The Model field renders as soon as there is anything to say — the list, or
-  // the fact that it is still being probed. Only a finished probe that named no
-  // model at all takes the field away.
+  // the fact that it is still being fetched. Only a finished fetch that named
+  // no model at all takes the field away. That fetch no longer waits on the
+  // python probe, so on a cold load the list itself is normally what lands.
   const modelsLoading = models.length === 0;
-  const modelFieldVisible = !modelsLoading || statusLoading;
-  const notConnected = statusFresh && status.connected === false && !needsByovProbe;
+  const modelFieldVisible = !modelsLoading || modelContextLoading;
+  const notConnected = !!status && status.connected === false && !needsByovProbe;
 
   // A federated render answers to the PEER’s readiness, not to this machine’s
   // runtime gates — none of the local probes below describe the hardware it
@@ -834,7 +843,7 @@ export default function VideoGen() {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-2 text-xs">
-        {statusFresh ? (
+        {status ? (
           <span
             className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full border ${
               status.connected
@@ -859,7 +868,7 @@ export default function VideoGen() {
           <button
             onClick={refreshStatus}
             disabled={statusLoading}
-            className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50 disabled:opacity-50"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50 disabled:opacity-50"
             title="Refresh status" aria-label="Refresh status"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${statusLoading ? 'animate-spin' : ''}`} />
@@ -877,7 +886,7 @@ export default function VideoGen() {
 
       <RuntimeFingerprint runtime={status?.runtime} />
 
-      {statusFresh && status.connected === false && (() => {
+      {status && status.connected === false && (() => {
         const missingCount = status.missingPackages?.length || 0;
         const hasPath = !!status.pythonPath;
         return (
@@ -1392,7 +1401,7 @@ export default function VideoGen() {
             backend={backend}
             backendDisclosures={status?.backendDisclosures}
             model={isGrok ? null : currentModel}
-            systemMemoryGb={status?.systemMemoryGb}
+            systemMemoryGb={modelContext?.systemMemoryGb}
           />
 
           {!isGrok && (
@@ -1563,10 +1572,11 @@ export default function VideoGen() {
         onClose={() => setInstallModalOpen(false)}
         onComplete={() => {
           refreshByovStatus();
-          // The capability probe is part of /video-gen/status's model
-          // decoration. Refresh it after install/repair so H3's LoRA picker
-          // and warning react without a manual page reload.
+          // The capability probe decorates the model list, and the install
+          // also moves python health. Refresh both after install/repair so
+          // H3's LoRA picker and warning react without a manual page reload.
           refreshStatus();
+          refreshModelContext();
         }}
       />
     </div>

@@ -128,12 +128,12 @@ function CatalogCard({ record, thumbPath, onOpen, onRenamed, onDeleted }) {
       {/* Always-visible (not hover-gated — hover doesn't exist on touch) action
           icons in the corner, siblings of the card button so the markup stays
           valid. */}
-      <div className="absolute top-1.5 right-1.5 flex gap-1">
+      <div className="absolute top-1.5 right-1.5 flex gap-2">
         <button
           type="button"
           onClick={startRename}
           aria-label={`Rename ${record.name}`}
-          className="p-1.5 rounded bg-port-card/90 border border-port-border text-gray-300 hover:text-white hover:border-port-accent"
+          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded bg-port-card/90 border border-port-border text-gray-300 hover:text-white hover:border-port-accent"
         >
           <Pencil className="w-3.5 h-3.5" />
         </button>
@@ -141,7 +141,7 @@ function CatalogCard({ record, thumbPath, onOpen, onRenamed, onDeleted }) {
           type="button"
           onClick={startDelete}
           aria-label={`Delete ${record.name}`}
-          className="p-1.5 rounded bg-port-card/90 border border-port-border text-gray-300 hover:text-port-error hover:border-port-error"
+          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded bg-port-card/90 border border-port-border text-gray-300 hover:text-port-error hover:border-port-error"
         >
           <Trash2 className="w-3.5 h-3.5" />
         </button>

@@ -13,6 +13,7 @@ import { PORTS } from './ports.js';
 import { ASSESSABLE_RUNTIMES } from './localProviderRuntime.js';
 import { SWEEP_SCOPES } from './localModelAssessment.js';
 import { CAPABILITY_TEST_IDS } from './modelCapabilityTests.js';
+import { HF_REPO_ID_RE } from './huggingfaceLora.js';
 
 // iMessage ingestion config (#2151) — the `settings.imessage` slice. Sync is OFF
 // by default and only reads chat.db when enabled (needs macOS Full Disk Access).
@@ -172,6 +173,12 @@ export const localLlmSlotstreamStartSchema = z.object({
   model: z.string().trim().max(300).optional().nullable(),
   memoryGb: z.coerce.number().min(6).max(512).optional().nullable(),
 });
+// A checkpoint download. `model` is a curated catalog id (`qwen3-30b-a3b-4bit`)
+// or a Hugging Face repo id — the service resolves which, and refuses anything
+// that is neither. Unlike a start, this one field is never optional: PortOS has
+// no "download whatever" default for a transfer this size.
+const slotstreamModelSchema = z.string().trim().min(1).max(200);
+export const localLlmSlotstreamDownloadSchema = z.object({ model: slotstreamModelSchema });
 // MTPLX model catalog. `mtplx forge discover` is upstream's own index of
 // MTPLX-branded MTP checkpoints; an empty query means its default listing.
 export const localLlmMtplxSearchSchema = z.object({
@@ -183,7 +190,7 @@ export const localLlmMtplxSearchSchema = z.object({
 // the same one the provider-readiness checklist pulls — so the two surfaces
 // cannot fetch different weights. A named model must be a Hugging Face repo id.
 const mtplxRepoIdSchema = z.string().trim().min(1).max(200).regex(
-  /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/,
+  HF_REPO_ID_RE,
   'model must be a Hugging Face repo id (owner/name)',
 );
 export const localLlmMtplxPullSchema = z.object({
@@ -244,6 +251,10 @@ export const localLlmDownloadPreflightSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('mtplx'),
     model: mtplxRepoIdSchema.optional().nullable(),
+  }),
+  z.object({
+    kind: z.literal('slotstream'),
+    model: slotstreamModelSchema,
   }),
   z.object({
     kind: z.literal('install'),

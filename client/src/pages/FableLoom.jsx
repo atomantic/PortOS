@@ -234,6 +234,7 @@ export default function FableLoom() {
               label="Plan AI provider"
               disabled={creating || providersLoading}
               modelDisabled={creating || providersLoading}
+              loading={providersLoading}
               emptyProviderOption="Default (series-plan stage or active provider)"
               emptyModelOption="Default model"
               alwaysShowModel={!!planRoute.providerId}
@@ -304,7 +305,7 @@ export default function FableLoom() {
                         type="button"
                         aria-label={`Delete ${loom.name}`}
                         onClick={() => del.requestDelete(loom.id)}
-                        className="text-port-text-muted hover:text-port-error p-1"
+                        className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center text-port-text-muted hover:text-port-error p-1"
                       >
                         <Trash2 size={15} />
                       </button>

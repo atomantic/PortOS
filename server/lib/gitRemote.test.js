@@ -193,15 +193,27 @@ describe('getOriginInfo', () => {
     });
   });
 
-  it('does NOT classify as fork when the repo name differs (renamed/unrelated)', async () => {
-    // Someone might fork-and-rename, or point origin at an unrelated GitHub
-    // repo. Treating that as a fork would invoke `gh repo sync` and fail.
+  it('classifies as fork by owner alone, regardless of repo name (#5931)', async () => {
+    // A fork renamed on GitHub (`<owner>/PortOS` -> `<owner>/PortOS-Fork`) still IS the
+    // PortOS checkout — GitHub's slug redirect keeps `git`/`gh repo sync` working, and a
+    // strict repo-name match silently dropped the fork panel, the sync-fork route, and
+    // the divergence check the moment someone renamed. The tradeoff: an origin genuinely
+    // unrelated to PortOS also classifies as a fork now — an acceptable false positive
+    // whose failure mode is a clear `gh repo sync` error, not four silently missing
+    // features.
     execGit.mockResolvedValue({ stdout: 'git@github.com:alice/MyCustomOS.git\n', stderr: '', exitCode: 0 });
     const info = await getOriginInfo();
     expect(info.isGithub).toBe(true);
-    expect(info.isFork).toBe(false);
+    expect(info.isFork).toBe(true);
     expect(info.isUpstream).toBe(false);
     expect(info.fullName).toBe('alice/MyCustomOS');
+  });
+
+  it('classifies a renamed fork of PortOS itself as a fork', async () => {
+    execGit.mockResolvedValue({ stdout: 'git@github.com:alice/PortOS-Fork.git\n', stderr: '', exitCode: 0 });
+    const info = await getOriginInfo();
+    expect(info.isFork).toBe(true);
+    expect(info.isUpstream).toBe(false);
   });
 
   it('classifies upstream even when origin URL carries a port', async () => {

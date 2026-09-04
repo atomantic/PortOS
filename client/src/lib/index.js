@@ -61,7 +61,6 @@ export * from './slashdoCatalog.js';
 export * from './videoFinish.js';
 export * from './videoGenParams.js';
 export * from './videoGenResolutions.js';
-export * from './videoGenStatusCache.js';
 export * from './videoGenSubmission.js';
 export * from './videoReferenceModes.js';
 export * from './videoRenderPhase.js';
@@ -76,6 +75,7 @@ export * from './goalFeatureMap.js';
 
 // === Generic UI / collection utilities ===
 export * from './a11yKeyboard.js';
+export * from './agentResumeOutcome.js';
 export * from './appIdentity.js';
 export * from './applyManuscriptEdits.js';
 export * from './assessmentTuningNotice.js';

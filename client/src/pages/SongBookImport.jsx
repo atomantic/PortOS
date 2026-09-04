@@ -11,7 +11,8 @@
  *   stored until the user reviews and Saves.
  *
  * Below either tab: a draft form (title/artist/instrument/stage/tags) → Save →
- * createSong → navigate to the new song's viewer.
+ * createSong → navigate to the new song's viewer. PageHeader carries a second
+ * Save so the primary action stays above the fold on a phone.
  */
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -230,10 +231,25 @@ export default function SongBookImport() {
         title="Import Song"
         subtitle="Paste a tab or fetch one from a URL, review, then save"
         actions={(
-          <Link to="/songbook" className={btnClass}>
-            <ArrowLeft size={15} />
-            SongBook
-          </Link>
+          <>
+            <Link to="/songbook" className={btnClass}>
+              <ArrowLeft size={15} />
+              <span className="hidden sm:inline">SongBook</span>
+            </Link>
+            {/* The form's own Save sits below a tall textarea + preview — on a
+                phone that is ~1000px down. This header copy keeps the primary
+                action above the fold from any scroll position (#6001). */}
+            <button
+              type="button"
+              onClick={() => save()}
+              disabled={saving || !contentText.trim()}
+              title={saveHint || undefined}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg bg-port-accent text-white hover:bg-port-accent/90 disabled:opacity-50"
+            >
+              <Save size={15} />
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          </>
         )}
       />
 

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
+import { requestCreativeDirectorProjectStart } from '../creativeDirector/projectStartSink.js';
 
 const fileStore = new Map();
 
@@ -35,8 +36,11 @@ vi.mock('../creativeDirector/local.js', () => ({
   }),
 }));
 
-vi.mock('../creativeDirector/completionHook.js', () => ({
-  startCreativeDirectorProject: vi.fn(async () => undefined),
+// #5920 — the CD project is started through the sink, not a direct import of
+// completionHook.js, which is what keeps pipeline/* and creativeDirector/* out of
+// one static import cycle.
+vi.mock('../creativeDirector/projectStartSink.js', () => ({
+  requestCreativeDirectorProjectStart: vi.fn(async () => undefined),
 }));
 
 let mockVideoModels = [
@@ -279,6 +283,9 @@ describe('pipeline episodeVideo helper', () => {
     // restore the picker state — defaults applied since no overrides given.
     expect(refreshed.stages.episodeVideo.aspectRatio).toBe('16:9');
     expect(refreshed.stages.episodeVideo.quality).toBe('standard');
+    // The stage is only useful if the CD project actually starts advancing; the
+    // start is fire-and-forget, so nothing downstream would notice it going missing.
+    expect(requestCreativeDirectorProjectStart).toHaveBeenCalledWith(result.cdProjectId);
   });
 
   it('startEpisodeVideoForIssue persists user-overridden aspectRatio + quality on the stage', async () => {

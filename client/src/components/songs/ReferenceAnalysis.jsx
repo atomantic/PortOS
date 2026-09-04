@@ -796,7 +796,7 @@ export default function ReferenceAnalysis({
                     />
                     <span>s</span>
                   </div>
-                  <button type="button" onClick={() => updateSegment(idx, { startMs: currentMs() })} title="Set start from playhead" aria-label="Set segment start from playhead" className="p-1 text-gray-500 hover:text-port-accent">
+                  <button type="button" onClick={() => updateSegment(idx, { startMs: currentMs() })} title="Set start from playhead" aria-label="Set segment start from playhead" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-accent">
                     <Flag size={14} />
                   </button>
                   <div className="flex items-center gap-1 text-xs text-gray-400">
@@ -809,10 +809,10 @@ export default function ReferenceAnalysis({
                     />
                     <span>s</span>
                   </div>
-                  <button type="button" onClick={() => updateSegment(idx, { endMs: currentMs() })} title="Set end from playhead" aria-label="Set segment end from playhead" className="p-1 text-gray-500 hover:text-port-accent">
+                  <button type="button" onClick={() => updateSegment(idx, { endMs: currentMs() })} title="Set end from playhead" aria-label="Set segment end from playhead" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-accent">
                     <FlagOff size={14} />
                   </button>
-                  <button type="button" onClick={() => playSegment(seg)} title="Play this segment" aria-label="Play segment" className="p-1 text-gray-500 hover:text-port-accent">
+                  <button type="button" onClick={() => playSegment(seg)} title="Play this segment" aria-label="Play segment" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-accent">
                     <Play size={14} />
                   </button>
                   <span className="text-xs text-gray-600 flex-1 min-w-[60px]">{layerLabel(seg.layerId)}</span>
@@ -843,7 +843,7 @@ export default function ReferenceAnalysis({
                     {extracting ? <Loader2 size={14} className="animate-spin" /> : (isStacked(seg) ? <Layers size={14} /> : <Wand2 size={14} />)}
                     {isStacked(seg) ? ' Extract from mix' : ' Extract part'}
                   </button>
-                  <button type="button" onClick={() => removeSegment(idx)} aria-label="Remove segment" className="p-1.5 text-gray-500 hover:text-port-error">
+                  <button type="button" onClick={() => removeSegment(idx)} aria-label="Remove segment" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-error">
                     <Trash2 size={15} />
                   </button>
                 </div>
@@ -862,7 +862,7 @@ export default function ReferenceAnalysis({
                       />
                       <span>s</span>
                     </div>
-                    <button type="button" onClick={() => commitBacking(idx, 'bgStartMs', currentMs())} title="Set backing start from playhead" aria-label="Set backing start from playhead" className="p-1 text-gray-500 hover:text-port-accent">
+                    <button type="button" onClick={() => commitBacking(idx, 'bgStartMs', currentMs())} title="Set backing start from playhead" aria-label="Set backing start from playhead" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-accent">
                       <Flag size={14} />
                     </button>
                     <div className="flex items-center gap-1 text-xs text-gray-400">
@@ -875,10 +875,10 @@ export default function ReferenceAnalysis({
                       />
                       <span>s</span>
                     </div>
-                    <button type="button" onClick={() => commitBacking(idx, 'bgEndMs', currentMs())} title="Set backing end from playhead" aria-label="Set backing end from playhead" className="p-1 text-gray-500 hover:text-port-accent">
+                    <button type="button" onClick={() => commitBacking(idx, 'bgEndMs', currentMs())} title="Set backing end from playhead" aria-label="Set backing end from playhead" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-accent">
                       <FlagOff size={14} />
                     </button>
-                    <button type="button" onClick={() => playSegment({ startMs: seg.bgStartMs, endMs: seg.bgEndMs })} title="Play the backing reference" aria-label="Play backing reference" className="p-1 text-gray-500 hover:text-port-accent">
+                    <button type="button" onClick={() => playSegment({ startMs: seg.bgStartMs, endMs: seg.bgEndMs })} title="Play the backing reference" aria-label="Play backing reference" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-accent">
                       <Play size={14} />
                     </button>
                     <span className="text-xs text-gray-600">the layers already present, just before the voice enters</span>

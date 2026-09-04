@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import {
   Activity,
@@ -32,6 +32,7 @@ import {
 } from '../constants';
 import ProviderModelSelector from '../../ProviderModelSelector';
 import useProviderModels from '../../../hooks/useProviderModels';
+import { coverageSummary, isRiggedAvatarStyle, riggedRecordForStyle } from '../../../hooks/useAvatarCapabilities';
 import { timeAgo } from '../../../utils/formatters';
 
 const DOMAIN_MODE_COLORS = {
@@ -222,7 +223,7 @@ function PersistentMindStatus({ mind, loaded, error }) {
   );
 }
 
-export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle }) {
+export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, riggedAvatars = [] }) {
   const {
     providers,
     availableModels,
@@ -272,6 +273,37 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle })
 
   useEffect(() => { void refreshBudgetUsage(); }, [refreshBudgetUsage]);
   useAutoRefetch(refreshMindStatus, 15_000, { pollOnly: true });
+
+  // Built-in styles plus the install's verified animated records (#5894). A
+  // record entry carries its state coverage in the label, so what the
+  // character can and cannot do is visible BEFORE it is picked.
+  const avatarOptions = useMemo(() => ([
+    ...Object.entries(AVATAR_STYLE_LABELS).map(([value, label]) => ({ value, label })),
+    ...(Array.isArray(riggedAvatars) ? riggedAvatars : [])
+      .filter((record) => record?.variant)
+      .map((record) => ({
+        value: record.variant,
+        label: `${record.name} (rigged 3D) — ${coverageSummary(record.coverage)}`,
+      })),
+  ]), [riggedAvatars]);
+
+  const avatarLabel = (style) => {
+    if (AVATAR_STYLE_LABELS[style]) return AVATAR_STYLE_LABELS[style];
+    const record = riggedRecordForStyle(riggedAvatars, style);
+    return record ? `${record.name} (rigged 3D)` : style;
+  };
+
+  // Honest coverage note for the staged value: which states the character
+  // covers, what the rest fall back to — or a warning when the record the
+  // saved style points at is gone.
+  const stagedRiggedNote = useMemo(() => {
+    if (!isRiggedAvatarStyle(formData.avatarStyle)) return null;
+    const record = riggedRecordForStyle(riggedAvatars, formData.avatarStyle);
+    if (!record) return 'That animated record is no longer available — pick another avatar.';
+    const covered = record.coverage?.coveredStates || [];
+    const fallback = record.clip ? `Other states play ${record.clip}.` : '';
+    return `${coverageSummary(record.coverage)}. Covered: ${covered.join(', ') || 'none'}. ${fallback}`.trim();
+  }, [formData.avatarStyle, riggedAvatars]);
 
   const handleCancel = () => {
     setFormData(getDefaultFormData(config, avatarStyle));
@@ -434,9 +466,12 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle })
           <SectionHeading icon={Palette} title="Appearance" description="Set the default avatar and whether active work may choose a matching style." />
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
-          <ConfigRow label="Default avatar" description="Visual style used by the CoS panel." value={AVATAR_STYLE_LABELS[formData.avatarStyle] || formData.avatarStyle} editing={editing} type="select" inputValue={formData.avatarStyle} options={Object.entries(AVATAR_STYLE_LABELS).map(([value, label]) => ({ value, label }))} onChange={(value) => setFormData((current) => ({ ...current, avatarStyle: value }))} />
+          <ConfigRow label="Default avatar" description="Visual style used by the CoS panel." value={avatarLabel(formData.avatarStyle)} editing={editing} type="select" inputValue={formData.avatarStyle} options={avatarOptions} onChange={(value) => setFormData((current) => ({ ...current, avatarStyle: value }))} />
           <ConfigRow label="Dynamic avatar" description="Switch style based on task type, provider, or priority." value={formData.dynamicAvatar ? 'Enabled' : 'Disabled'} editing={editing} type="checkbox" inputValue={formData.dynamicAvatar} onChange={(value) => setFormData((current) => ({ ...current, dynamicAvatar: value }))} />
         </div>
+        {stagedRiggedNote && (
+          <p className="text-xs leading-relaxed text-port-text-muted">{stagedRiggedNote}</p>
+        )}
       </section>
 
       <section className="space-y-3" aria-labelledby="embeddings-heading">

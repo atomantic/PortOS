@@ -47,13 +47,21 @@ describe('PracticeLogger', () => {
     expect(screen.getByText(/1 session ·/)).toBeTruthy();
   });
 
+  it('renders each rating hint visibly for touch users, not hover-only', () => {
+    render(<PracticeLogger song={song()} />);
+    expect(screen.getByText('Fell apart — regress a stage and practice again today')).toBeTruthy();
+    expect(screen.getByText('Got through it — hold the stage, review sooner')).toBeTruthy();
+    expect(screen.getByText('Played it with hesitation — advance a stage')).toBeTruthy();
+    expect(screen.getByText('Played it clean — advance a stage, review later')).toBeTruthy();
+  });
+
   it('posts the grade and hands the updated record back — no client-side scheduling', async () => {
     const updated = { ...song(), stage: 'learned', practice: { nextReview: future(), sessions: 1 } };
     practiceSong.mockResolvedValue(updated);
     const onLogged = vi.fn();
     render(<PracticeLogger song={song()} onLogged={onLogged} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Solid' }));
+    fireEvent.click(screen.getByRole('button', { name: /Solid/ }));
 
     await waitFor(() => expect(onLogged).toHaveBeenCalledWith(updated));
     // The grade is the ONLY thing sent; the server owns stage + schedule.
@@ -64,7 +72,7 @@ describe('PracticeLogger', () => {
   it('sends the low grade for a failed run', async () => {
     practiceSong.mockResolvedValue({ ...song(), stage: 'learning', practice: { nextReview: new Date().toISOString() } });
     render(<PracticeLogger song={song()} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Struggled' }));
+    fireEvent.click(screen.getByRole('button', { name: /Struggled/ }));
     await waitFor(() => expect(practiceSong).toHaveBeenCalledWith('song-1', 0, { silent: true }));
   });
 
@@ -73,7 +81,7 @@ describe('PracticeLogger', () => {
     const onLogged = vi.fn();
     render(<PracticeLogger song={song()} onLogged={onLogged} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Clean' }));
+    fireEvent.click(screen.getByRole('button', { name: /Clean/ }));
 
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
     expect(onLogged).not.toHaveBeenCalled();

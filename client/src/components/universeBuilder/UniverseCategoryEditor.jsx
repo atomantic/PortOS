@@ -172,12 +172,12 @@ export function CategoryEditor({
           {humanizeCategory(category)}
           <span className="ml-2 text-xs text-gray-500">{variations.length}</span>
         </h3>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-2">
           {onRenderCategory && (
             <button
               onClick={onRenderCategory}
               disabled={!canRender || variations.length === 0}
-              className="p-1 text-port-accent hover:bg-port-accent/20 disabled:opacity-30 disabled:cursor-not-allowed rounded"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-port-accent hover:bg-port-accent/20 disabled:opacity-30 disabled:cursor-not-allowed rounded"
               title={variations.length === 0 ? 'Add variations first' : 'Render this category'}
               aria-label="Render this category"
             >
@@ -188,7 +188,7 @@ export function CategoryEditor({
             <div className="relative" ref={assignWrapRef}>
               <button
                 onClick={() => setAssignOpen((v) => !v)}
-                className="p-1 text-port-accent hover:bg-port-accent/20 rounded"
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-port-accent hover:bg-port-accent/20 rounded"
                 title="Move this bucket into a canon trunk (variations stay in place)"
                 aria-label="Assign bucket to a canon trunk"
                 aria-haspopup="menu"
@@ -226,7 +226,7 @@ export function CategoryEditor({
               <button
                 onClick={() => setGenOpen((v) => !v)}
                 disabled={generating}
-                className="p-1 text-port-accent hover:bg-port-accent/20 disabled:opacity-30 disabled:cursor-not-allowed rounded"
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-port-accent hover:bg-port-accent/20 disabled:opacity-30 disabled:cursor-not-allowed rounded"
                 title="Ask the LLM for more variations in this category"
                 aria-label="Generate more variations"
                 aria-haspopup="menu"
@@ -286,7 +286,7 @@ export function CategoryEditor({
                 : 'Lock all variations — Expand / Generate will preserve them'}
               aria-label={allLocked ? 'Unlock all variations' : 'Lock all variations'}
               aria-pressed={allLocked}
-              className={`p-1 rounded ${
+              className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded ${
                 allLocked
                   ? 'text-port-accent hover:bg-port-accent/20'
                   : 'text-gray-500 hover:text-gray-300'
@@ -298,7 +298,7 @@ export function CategoryEditor({
           {canRemove && (
             <button
               onClick={onRemove}
-              className="p-1 text-gray-400 hover:text-port-error rounded"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-error rounded"
               title="Remove category" aria-label="Remove category"
             >
               <Trash2 size={14} />
@@ -483,7 +483,7 @@ function VariationCard({
   const title = <div className="min-w-0 text-sm text-white font-medium break-words">{v.label}</div>;
   const body = <div className="text-xs text-gray-400 line-clamp-2 mt-1">{v.prompt}</div>;
   const actions = (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-2">
       {onPromote && (
         <div className="relative" ref={pickerIdx === idx ? pickerWrapRef : null}>
           <button
@@ -495,7 +495,7 @@ function VariationCard({
               runPromote(idx, v);
             }}
             disabled={!canPromote || promotingIdx !== null}
-            className="p-1 text-gray-400 hover:text-port-success disabled:opacity-30 disabled:cursor-not-allowed rounded"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-success disabled:opacity-30 disabled:cursor-not-allowed rounded"
             title={promoteTitle} aria-label={promoteTitle}
             aria-haspopup={requiresTargetKind ? 'menu' : undefined}
             aria-expanded={requiresTargetKind ? pickerIdx === idx : undefined}
@@ -530,7 +530,7 @@ function VariationCard({
         <button
           onClick={() => onRenderVariation(v)}
           disabled={!canRender}
-          className="p-1 text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed rounded"
+          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed rounded"
           title={canRender ? 'Render this variation' : 'Save the world and configure a render backend to enable'} aria-label={canRender ? 'Render this variation' : 'Save the world and configure a render backend to enable'}
         >
           <Play size={14} />
@@ -538,7 +538,7 @@ function VariationCard({
       )}
       <button
         onClick={toggleLock}
-        className={`p-1 rounded ${locked ? 'text-port-accent hover:bg-port-accent/20' : 'text-gray-500 hover:text-gray-300'}`}
+        className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded ${locked ? 'text-port-accent hover:bg-port-accent/20' : 'text-gray-500 hover:text-gray-300'}`}
         title={locked ? 'Locked — AI expand will preserve this variation' : 'Lock this variation against AI expand'} aria-label={locked ? 'Locked — AI expand will preserve this variation' : 'Lock this variation against AI expand'}
         aria-pressed={locked}
       >
@@ -546,14 +546,14 @@ function VariationCard({
       </button>
       <button
         onClick={startEdit}
-        className="p-1 text-gray-400 hover:text-port-accent rounded"
+        className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-accent rounded"
         title="Edit" aria-label="Edit"
       >
         <Edit3 size={14} />
       </button>
       <button
         onClick={remove}
-        className="p-1 text-gray-400 hover:text-port-error rounded"
+        className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-error rounded"
         title="Remove" aria-label="Remove"
       >
         <X size={14} />

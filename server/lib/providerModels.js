@@ -4,6 +4,8 @@
  */
 
 import { gatewayIdForProvider, isGatewayNamespace } from './providerGateways.js';
+import { isLocalInstanceEndpoint } from './localEndpoint.js';
+import { isPlainObject } from './objects.js';
 
 export const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
@@ -601,6 +603,20 @@ export function isOpencodeCommand(command) {
   return commandBasename(command) === 'opencode';
 }
 
+/**
+ * The OpenCode agent a `no-tool` public-review stage runs as (`opencode run
+ * --agent …`). `plan` is OpenCode's OWN built-in read-only agent, chosen over a
+ * PortOS-declared one so the stage never depends on a custom agent definition
+ * being accepted by whatever OpenCode version is installed.
+ *
+ * It is a belt, not the braces: `hardenOpencodeConfigForNoTool`
+ * (`opencodeConfig.js`) still empties this agent's tool map, so a future
+ * OpenCode that widens `plan` cannot widen the stage. Lives HERE rather than
+ * beside that function because `providerVendors.js` — which passes the flag —
+ * must not import `opencodeConfig.js`; doing so pulls `ports.js` in behind it
+ * and breaks a suite that partially mocks it.
+ */
+export const OPENCODE_PUBLIC_REVIEW_AGENT = 'plan';
 
 /**
  * OpenCode addresses models as `provider/model` (e.g. `ollama/qwen2.5:7b`). The
@@ -657,6 +673,107 @@ export function getOpencodeLocalProviderNamespace(provider) {
   // carrying both a local marker and a gateway marker keeps its legacy local
   // outcome, exactly as the old if-chain did with `orcarouterBacked`.
   return gatewayIdForProvider(provider);
+}
+
+/**
+ * The namespace above, but only when it names a LOCAL daemon — a hosted gateway
+ * (`providerGateways.js`) is an OpenCode namespace and a remote API, so every
+ * consumer asking "is there a daemon on this machine behind this provider?"
+ * has to exclude it.
+ *
+ * That exclusion was hand-written at three sites (`isLocalBackedClaude` in
+ * `cliChildEnv.js`, `localRuntimeKind` in `localProviderRuntime.js`, and the
+ * OpenCode public-review recipe in `providerVendors.js`), which is one more
+ * than the `orcarouterBacked` → `providerGateways.js` sweep was meant to leave
+ * behind — so the composed predicate lives here, beside the namespace resolver
+ * it wraps.
+ *
+ * @param {object|null|undefined} provider
+ * @returns {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|null}
+ */
+export function localRuntimeNamespace(provider) {
+  const namespace = getOpencodeLocalProviderNamespace(provider);
+  return namespace && !isGatewayNamespace(namespace) ? namespace : null;
+}
+
+/**
+ * Parse a stored `OPENCODE_CONFIG_CONTENT` value, or null when it is absent or
+ * no longer valid JSON (a hand-edited config tells us nothing, so every caller
+ * falls back to its own default rather than guessing).
+ *
+ * Shared because four call sites read the same variable and must agree on what
+ * counts as unusable: `opencodeConfig.js`'s merge base, `localProviderRuntime.js`'s
+ * endpoint lookup, `cliChildEnv.js`'s public-review allowlist, and the locality
+ * predicate below.
+ *
+ * @param {unknown} value
+ * @returns {object|null}
+ */
+export function parseOpencodeConfigContent(value) {
+  if (typeof value !== 'string' || value === '') return null;
+  try {
+    const parsed = JSON.parse(value);
+    return isPlainObject(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Every provider endpoint an OpenCode config object declares is on this machine.
+ *
+ * This is the ONE rule two public-review sites must not disagree about, which is
+ * why it lives here rather than being spelled out at each of them:
+ *
+ *   - `providerVendors.js` decides whether an OpenCode wrapper may run the
+ *     tool-free gate at all;
+ *   - `cliChildEnv.js` decides whether `OPENCODE_CONFIG_CONTENT` survives the
+ *     public-review env allowlist.
+ *
+ * If the first says yes and the second says no, the stage still spawns — but
+ * with the hardened config stripped, so OpenCode falls back to reading the
+ * user's own `~/.config/opencode`, tools and MCP servers and all, while every
+ * signal still reports an enforced tool-free gate. A remote `baseURL` inside an
+ * otherwise `ollamaBacked` provider is exactly that shape, and the marker alone
+ * cannot see it.
+ *
+ * `requireDeclaration` is the one place the two callers legitimately differ, and
+ * it is about PROVENANCE, not locality:
+ *
+ *   - A provider RECORD storing a config with no `provider` entry has relocated
+ *     nothing — the builder still adds the canonical per-namespace entry, all of
+ *     which are loopback — so that is vacuously local (the default).
+ *   - The env allowlist sees a bare string that may be ambient rather than the
+ *     config PortOS just built for this spawn. A value declaring no endpoint is
+ *     not one we produced for an eligible provider, so it passes
+ *     `requireDeclaration: true` and is dropped with every other inherited var.
+ *
+ * The locality rule itself — every declared endpoint is on this machine — is
+ * identical for both, which is what keeps eligibility and the allowlist in step.
+ * Absent config (`null`) is never local: there is nothing to keep.
+ *
+ * @param {object|null|undefined} config - a parsed OpenCode config
+ * @param {{requireDeclaration?: boolean}} [options]
+ * @returns {boolean}
+ */
+export function opencodeConfigIsLocalOnly(config, { requireDeclaration = false } = {}) {
+  if (!isPlainObject(config)) return false;
+  const declared = isPlainObject(config.provider) ? Object.values(config.provider) : [];
+  if (declared.length === 0) return !requireDeclaration;
+  return declared.every((entry) => isLocalInstanceEndpoint(entry?.options?.baseURL));
+}
+
+/**
+ * The same question asked of a PROVIDER RECORD, before its config has been
+ * built. A record storing no config — or an unparseable one, which the builder
+ * discards too — runs against those same canonical defaults.
+ *
+ * @param {object|null|undefined} provider
+ * @returns {boolean}
+ */
+export function opencodeProviderIsLocalOnly(provider) {
+  const stored = parseOpencodeConfigContent(provider?.envVars?.OPENCODE_CONFIG_CONTENT);
+  return stored === null || opencodeConfigIsLocalOnly(stored);
 }
 
 /**

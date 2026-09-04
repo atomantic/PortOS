@@ -136,7 +136,7 @@ const newId = () => `track-${++sequence}`;
 // the record's single locked main. That is the registry difference under test.
 async function characterWithEastAnchor(id) {
   await records.createRecord({ kind: 'character', name: 'Placeholder Hero' }, id);
-  await lockAllAnchors(TEST_ROOT, id, { lockReference, directions: ['east'] });
+  await lockAllAnchors(TEST_ROOT, id, { lockReference, directions: ['east'], records });
   return id;
 }
 

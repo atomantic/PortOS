@@ -168,23 +168,26 @@ writeJson('providers.json', {
   },
 });
 
+// Durable user config lives in its own file (#6182); state.json holds only the
+// runtime records.
+writeJson('cos/config.json', {
+  userTasksFile,
+  cosTasksFile,
+  healthCheckIntervalMs: 900000,
+  maxConcurrentAgents: 3,
+  maxConcurrentAgentsPerProject: 2,
+  maxProcessMemoryMb: 2048,
+  maxTotalProcesses: 50,
+  autoStart: false,
+  alwaysOn: false,
+  selfImprovementEnabled: true,
+  dynamicAvatar: true,
+  avatarStyle: 'svg',
+});
+
 writeJson('cos/state.json', {
   running: false,
   paused: false,
-  config: {
-    userTasksFile,
-    cosTasksFile,
-    healthCheckIntervalMs: 900000,
-    maxConcurrentAgents: 3,
-    maxConcurrentAgentsPerProject: 2,
-    maxProcessMemoryMb: 2048,
-    maxTotalProcesses: 50,
-    autoStart: false,
-    alwaysOn: false,
-    selfImprovementEnabled: true,
-    dynamicAvatar: true,
-    avatarStyle: 'svg',
-  },
   stats: {
     tasksCompleted: 18,
     totalRuntime: 8940000,

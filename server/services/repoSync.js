@@ -811,6 +811,7 @@ export async function syncRepo(repo, { activeAgentIds = new Set() } = {}) {
     });
     if (result) {
       for (const branch of result.cleaned || []) performed.push(`deleted merged branch/worktree ${branch}`);
+      for (const branch of result.reapedSuperseded || []) performed.push(`reaped superseded branch/worktree ${branch} (backed up)`);
       for (const entry of result.inFlight || []) {
         escalations.push({
           kind: ESCALATION_KINDS.IN_FLIGHT_BRANCH,

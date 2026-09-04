@@ -8,8 +8,8 @@
  * replacement before accepting; accept applies the selected edits through the
  * serialized stage-write path (which snapshots the prior text into runHistory).
  *
- * Read this alongside manuscriptReview.js (where the comment + fix persist) and
- * arcPlanner.js (which owns the completeness pass that creates the comments).
+ * Read this alongside manuscriptComments.js (where the comment store persists)
+ * and arcPlanner.js (which owns the completeness pass that creates the comments).
  */
 
 import { randomUUID, createHash } from 'crypto';
@@ -18,7 +18,7 @@ import { planManuscriptPass, estimateTokens } from '../../lib/contextBudget.js';
 import { getSeries, MANUSCRIPT_TYPES } from './series.js';
 import { getIssue, updateStageWithLatest, updateStagesWithLatest } from './issues.js';
 import { collectManuscriptSections, stageVersionsOf, sectionsCorpus, manuscriptSectionHeader } from './arcPlanner.js';
-import { getComment, updateComment } from './manuscriptReview.js';
+import { getComment, updateComment } from './manuscriptComments.js';
 import { escapeRegExp } from '../../lib/textUtils.js';
 
 export const ERR_VALIDATION = 'PIPELINE_MANUSCRIPT_FIX_VALIDATION';

@@ -18,3 +18,19 @@ export const rigImageTo3dModel = (id, input = {}, options) =>
     body: JSON.stringify(input),
     ...options,
   });
+
+// The animation clips this install has locally (user-dropped GLB files), plus which
+// CoS states they cover. Read-only and cheap — safe to call on every rigged-record view.
+export const listRiggingClips = (options) => request('/rigging/clips', options);
+
+// Retarget one locally-held clip onto a model's published rig. `mode: 'diagnostic'`
+// (the server default) measures the proposed head-zone cleanup and motion without
+// writing anything; `mode: 'write'` applies the same proposal and may refuse if it is
+// over cap. Resolves with the updated model record — a refusal arrives as an error
+// carrying the server's measured sentence, same contract as `rigImageTo3dModel`.
+export const retargetImageTo3dModel = (id, input = {}, options) =>
+  request(`/rigging/models/${encodeURIComponent(id)}/retarget`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+    ...options,
+  });

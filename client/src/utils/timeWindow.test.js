@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 import { describe, it, expect, beforeEach } from 'vitest';
 import { isInTimeWindow, isValidTimeString, MORNING_DEFAULT_WINDOW, pickActiveLayoutId, recordManualLayoutPick, TIME_STRING_RE } from './timeWindow.js';
 

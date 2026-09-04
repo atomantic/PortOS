@@ -197,6 +197,43 @@ describe('UsagePage per-provider refresh', () => {
   });
 });
 
+describe('UsagePage federated quota readings', () => {
+  const fleetCard = {
+    family: 'claude',
+    label: 'Claude Code',
+    supported: true,
+    limits: [{ key: 'week', label: 'Weekly', percentUsed: 65, percentRemaining: 35 }],
+    activity: [],
+    approximate: true,
+    fetchedAt: '2026-09-03T11:00:00.000Z',
+    note: 'Across 2 federated instances (this machine, Example Box) — meters show the freshest reading across them.',
+    fleet: {
+      count: 2,
+      instances: [
+        { instanceId: 'inst-self', name: null, self: true, fetchedAt: '2026-09-03T10:00:00.000Z' },
+        { instanceId: 'inst-peer', name: 'Example Box', self: false, fetchedAt: '2026-09-03T11:00:00.000Z' },
+      ],
+    },
+  };
+
+  it('says the card spans instances and names which ones', async () => {
+    api.getProviderUsage.mockResolvedValue({ providers: [fleetCard] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+
+    const pill = await screen.findByText('2 instances');
+    expect(pill.closest('[title]').getAttribute('title')).toContain('Example Box');
+    expect(screen.getByText(fleetCard.note)).toBeInTheDocument();
+  });
+
+  it('shows no fleet pill on a single-machine install', async () => {
+    api.getProviderUsage.mockResolvedValue({ providers: [{ ...fleetCard, fleet: undefined, note: 'This machine only — other federated instances have not reported a reading yet.' }] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+
+    await screen.findByText('Claude Code');
+    expect(screen.queryByText(/^\d+ instances$/)).not.toBeInTheDocument();
+  });
+});
+
 describe('arrangeQuotaCells', () => {
   const q = (family) => ({ family, label: family });
 

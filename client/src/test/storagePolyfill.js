@@ -7,6 +7,15 @@
 // absent, any test whose `beforeEach` calls `localStorage.clear()` dies with
 // "Cannot read properties of undefined (reading 'clear')". Installing a guaranteed
 // in-memory Storage removes that environmental dependency. See issue #1438.
+//
+// setup.js installs the shim unconditionally (`force`), because a *present* Storage
+// is not automatically a usable one either: happy-dom backs `localStorage` with a
+// Proxy that turns any property definition into a stored item, so `vi.spyOn(
+// window.localStorage, 'setItem')` cannot be undone and `vi.restoreAllMocks()`
+// leaks the throwing stub into every later test in the file (#6144). The shim is a
+// plain object, so a spy on it restores like any other. Storage identity is not
+// otherwise observable — nothing in the app reads `instanceof Storage`, and the
+// 'storage' event listeners take a synthetic event from the test.
 
 export const createMemoryStorage = () => {
   let store = new Map();
@@ -50,11 +59,12 @@ export const storageWorks = (candidate) => {
   return ok;
 };
 
-// Ensure `globalThis[name]` (and `window[name]`, which jsdom aliases) is a working
-// Storage. Returns true when it installed a shim, false when the environment's own
-// Storage already worked. Idempotent.
-export const ensureStorage = (name, root = globalThis) => {
-  if (storageWorks(root[name])) return false;
+// Ensure `globalThis[name]` (and `window[name]`, which the environment may alias) is
+// a working Storage. Returns true when it installed a shim, false when the
+// environment's own Storage already worked and was left alone. Idempotent.
+// `force` skips the probe and installs the shim regardless — see the header.
+export const ensureStorage = (name, root = globalThis, { force = false } = {}) => {
+  if (!force && storageWorks(root[name])) return false;
   const shim = createMemoryStorage();
   Object.defineProperty(root, name, { value: shim, configurable: true, writable: true });
   // jsdom may expose `window` and `globalThis` as distinct objects; alias the shim
@@ -68,6 +78,6 @@ export const ensureStorage = (name, root = globalThis) => {
 };
 
 export const installTestStorage = () => {
-  ensureStorage('localStorage');
-  ensureStorage('sessionStorage');
+  ensureStorage('localStorage', globalThis, { force: true });
+  ensureStorage('sessionStorage', globalThis, { force: true });
 };

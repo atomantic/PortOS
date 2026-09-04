@@ -106,7 +106,7 @@ export default function IcLoraPanel({
                 onClick={() => onRemoveReferenceImage(i)}
                 disabled={referenceImageFiles.length <= minRefs}
                 aria-label={`Remove reference ${i + 1}`}
-                className="mt-1 p-1 text-gray-400 hover:text-port-error disabled:opacity-30 disabled:cursor-not-allowed"
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center mt-1 p-1 text-gray-400 hover:text-port-error disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 <X className="w-3.5 h-3.5" />
               </button>

@@ -42,8 +42,13 @@
 
 import { withSpawnCwdEnv } from './spawnCwd.js';
 import { buildOpencodeEnvVars } from './opencodeConfig.js';
-import { getOpencodeLocalProviderNamespace, isClaudeCommand } from './providerModels.js';
-import { isGatewayNamespace } from './providerGateways.js';
+import {
+  localRuntimeNamespace,
+  isClaudeCommand,
+  parseOpencodeConfigContent,
+  opencodeConfigIsLocalOnly,
+} from './providerModels.js';
+import { isLocalInstanceEndpoint } from './localEndpoint.js';
 import { agentGuardEnv } from './agentGuard/index.js';
 import { buildSafeCliBaseEnv } from './processEnv.js';
 import { isPublicReviewNoToolProfile, isPublicReviewRestrictedProfile } from './agentExecutionProfiles.js';
@@ -55,6 +60,24 @@ import { isPublicReviewNoToolProfile, isPublicReviewRestrictedProfile } from './
 // ceiling only for a Claude harness pointed at a LOCAL daemon. A value in
 // provider.envVars still wins below.
 const CLAUDE_LOCAL_MAX_OUTPUT_TOKENS = '65536';
+
+// Claude Code cancels a request whose first byte has not arrived within 300s
+// (`API_TIMEOUT_MS` is the override) and paints `API error · Retrying in 0s ·
+// attempt 1/10`. Against a LOCAL daemon that ceiling is shorter than the
+// PREFILL: a public-review Stage 3 prompt inlines the whole screened envelope
+// and routinely runs to ~100K tokens (#6117), which a model server on this box
+// chews through in tens of minutes, not seconds. Every attempt was therefore
+// cancelled mid-prefill — the daemon logged `500 | 6m0s | POST /v1/messages` —
+// and the retry re-sent the same prompt, so a healthy run looked frozen at
+// attempt 1/10 forever while never emitting a token.
+//
+// `localPromptBudget.js` already predicts that prefill for the run card; this is
+// the harness half of the same fact. The ceiling exists to bound a retry storm,
+// not to budget a healthy run: a request that never answers still ends, because
+// the child prints nothing and the run's own supervision reaps it. Cloud Claude
+// answers in seconds and keeps the stock 300s. A value in provider.envVars still
+// wins below.
+const CLAUDE_LOCAL_API_TIMEOUT_MS = '3600000';
 
 /**
  * True for a Claude Code harness talking to a local OpenAI/Anthropic-compatible
@@ -70,14 +93,30 @@ const CLAUDE_LOCAL_MAX_OUTPUT_TOKENS = '65536';
  * `localRuntimeKind` makes.
  */
 function isLocalBackedClaude(provider) {
-  const namespace = getOpencodeLocalProviderNamespace(provider);
-  return !!namespace && !isGatewayNamespace(namespace) && isClaudeCommand(provider?.command);
+  return !!localRuntimeNamespace(provider) && isClaudeCommand(provider?.command);
 }
+
+/**
+ * Every knob `claudeLocalEnvDefaults` composes for a local-backed Claude
+ * harness.
+ *
+ * Named once because the two public-review allowlists below have to let all of
+ * them through, and an allowlist that carries the wrapper's ENDPOINT but not its
+ * TUNING is the worst of both: the stage reaches the local daemon and then runs
+ * it on Claude Code's cloud-shaped ceilings. That is how Stage 3 — the stage
+ * carrying the ~100K-token review envelope — sat behind a 300s first-byte
+ * timeout it could never meet. Keep in lockstep with `claudeLocalEnvDefaults`;
+ * `cliChildEnv.test.js` fails when a knob it emits is missing from either list.
+ */
+const CLAUDE_LOCAL_TUNING_ENV_KEYS = [
+  'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'API_TIMEOUT_MS', 'MAX_THINKING_TOKENS',
+];
 
 function claudeLocalEnvDefaults(provider) {
   if (!isLocalBackedClaude(provider)) return {};
   return {
     CLAUDE_CODE_MAX_OUTPUT_TOKENS: CLAUDE_LOCAL_MAX_OUTPUT_TOKENS,
+    API_TIMEOUT_MS: CLAUDE_LOCAL_API_TIMEOUT_MS,
     // Claude Code omits the Anthropic-compatible `thinking` field when this is
     // zero, which Ollama maps to Qwen's non-thinking mode. Do not set a value
     // when enabled: Claude retains its normal adaptive budget.
@@ -111,9 +150,23 @@ function claudeLocalEnvDefaults(provider) {
  *   per-call model — `provider.defaultModel` is always declared regardless.
  * @param {object|null} [options.extra] - layered last, so it overrides every
  *   other layer including `provider.envVars` (TERM/COLORTERM for a PTY).
+ * @param {string|null} [options.safetyProfile] - a public-review execution
+ *   profile, which hardens the OpenCode config (see `buildOpencodeEnvVars`).
  * @returns {object} a fresh object holding only these layers
  */
-export function composeProviderEnv({ before = null, provider = null, model = null, extra = null } = {}) {
+export function composeProviderEnv({ before = null, provider = null, model = null, extra = null, safetyProfile = null } = {}) {
+  // `authOnly` marks an identity-only view of a provider — `cliProviderAuthDescriptor`'s
+  // `{ id, command, <local marker> }`, with no `envVars`, `models`, `defaultModel`,
+  // or `thinking`. It exists so the CoS runner can keep that provider's ambient
+  // auth allowlist (`buildSafeCliBaseEnv`, which still receives it); it is NOT a
+  // record to generate env from. Every generator below sits ABOVE `before` in
+  // layer order, so running one on a partial view overwrites the complete value
+  // PortOS already composed and POSTed. That is how a runner-owned OpenCode
+  // agent lost its declared-models map: rebuilt empty from the descriptor,
+  // `--model ollama/<id>` stopped resolving, and OpenCode silently fell back to
+  // the first model in its own catalog (a hosted OpenCode Zen model) instead of
+  // the local model the run was dispatched with.
+  if (provider?.authOnly) return { ...(before || {}), ...(extra || {}) };
   return {
     ...(before || {}),
     ...claudeLocalEnvDefaults(provider),
@@ -122,14 +175,17 @@ export function composeProviderEnv({ before = null, provider = null, model = nul
     // local providers (an empty object for everyone else) so the injected
     // namespaced `--model` isn't rejected as "not valid" — see #2190. It lands
     // after provider.envVars to override the provider's STATIC
-    // OPENCODE_CONFIG_CONTENT, which it was built from.
-    ...buildOpencodeEnvVars(provider, model),
+    // OPENCODE_CONFIG_CONTENT, which it was built from. `safetyProfile` also
+    // reaches it because OpenCode's tool posture lives in that config — see
+    // `hardenOpencodeConfigForNoTool`.
+    ...buildOpencodeEnvVars(provider, model, { safetyProfile }),
     ...(extra || {}),
   };
 }
 
-// Public contributor content is run through a no-tools local Claude wrapper.
-// Keep only runtime essentials plus the local Anthropic-compatible endpoint;
+// Public contributor content is run through a no-tools local harness — a Claude
+// or an OpenCode wrapper pointed at a loopback daemon.
+// Keep only runtime essentials plus the local model endpoint;
 // in particular, never pass forge, cloud, SSH, auth, or arbitrary provider env
 // vars into the child. This is a second boundary in addition to the CLI argv.
 const PUBLIC_REVIEW_ENV_KEYS = new Set([
@@ -139,7 +195,7 @@ const PUBLIC_REVIEW_ENV_KEYS = new Set([
   'SystemRoot', 'SystemDrive', 'ComSpec', 'PATHEXT', 'USERPROFILE', 'APPDATA',
   'LOCALAPPDATA', 'ProgramData', 'ProgramFiles', 'HOMEDRIVE', 'HOMEPATH',
   'ANTHROPIC_BASE_URL', 'ANTHROPIC_SMALL_FAST_MODEL',
-  'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'MAX_THINKING_TOKENS',
+  ...CLAUDE_LOCAL_TUNING_ENV_KEYS,
 ]);
 
 // A Claude CLI pointed at a LOCAL Anthropic-compatible runtime (the Ollama and
@@ -148,20 +204,40 @@ const PUBLIC_REVIEW_ENV_KEYS = new Set([
 // disables the keychain — so without the token the CLI exits "Not logged in"
 // before reading the prompt. Keep the credential only for a loopback base URL;
 // against any other host it is a real cloud credential and stays stripped.
+// `isLocalInstanceEndpoint` (localEndpoint.js) is the tree-wide answer to "is
+// this endpoint on the machine PortOS runs on?" — the same predicate
+// `localRuntimeForProvider` uses to decide a provider HAS a local daemon.
+// Reused here rather than re-typed so a credential boundary cannot classify a
+// host differently from the runtime resolver; it also counts the bind-all
+// addresses (`0.0.0.0`, `::`) as local, which they are.
 const LOCAL_ANTHROPIC_CREDENTIAL_KEYS = ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY'];
-const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
 function localAnthropicCredentialEnv(env) {
-  let hostname;
-  try {
-    hostname = new URL(env?.ANTHROPIC_BASE_URL).hostname.toLowerCase();
-  } catch {
-    return {};
-  }
-  if (!LOOPBACK_HOSTNAMES.has(hostname) && !hostname.startsWith('127.')) return {};
+  if (!isLocalInstanceEndpoint(env?.ANTHROPIC_BASE_URL)) return {};
   return Object.fromEntries(LOCAL_ANTHROPIC_CREDENTIAL_KEYS
     .filter((key) => env[key] != null)
     .map((key) => [key, env[key]]));
+}
+
+/**
+ * An OpenCode run carries its whole configuration — provider endpoint, declared
+ * models, and (under a `no-tool` profile) its entire tool posture — in
+ * `OPENCODE_CONFIG_CONTENT`, so stripping it does not harden the child, it just
+ * points it at the user's own `~/.config/opencode` instead. Keep it, on the same
+ * terms as the local Anthropic credential above: only when every endpoint it
+ * declares is loopback. A config naming a hosted gateway carries that gateway's
+ * API key, which is a real cloud credential and stays stripped — leaving an
+ * OpenCode wrapper front-ending a gateway ineligible for these stages, which is
+ * why `providerVendors.js` scopes the OpenCode recipe to local namespaces.
+ */
+function opencodeLocalConfigEnv(env) {
+  const raw = env?.OPENCODE_CONFIG_CONTENT;
+  // `requireDeclaration` marks this as the provenance-checking caller: a value
+  // declaring no endpoint is not a config PortOS built for an eligible provider,
+  // so it is dropped with every other inherited env var.
+  return opencodeConfigIsLocalOnly(parseOpencodeConfigContent(raw), { requireDeclaration: true })
+    ? { OPENCODE_CONFIG_CONTENT: raw }
+    : {};
 }
 
 function allowlistEnv(env, keys) {
@@ -170,6 +246,7 @@ function allowlistEnv(env, keys) {
       value != null && (keys.has(key) || key.startsWith('LC_'))
     ))),
     ...localAnthropicCredentialEnv(env),
+    ...opencodeLocalConfigEnv(env),
   };
 }
 
@@ -193,6 +270,10 @@ const PUBLIC_REVIEW_ACTIONS_ENV_KEYS = new Set([
   // The local Claude wrappers are eligible for this stage too; without the
   // endpoint they would talk to the cloud (or, with `--bare`, to nothing).
   'ANTHROPIC_BASE_URL', 'ANTHROPIC_SMALL_FAST_MODEL',
+  // ...and the tuning composed for that wrapper, for the reason spelled out on
+  // the constant. These are numeric harness knobs carrying no credential, so
+  // keeping them widens no boundary this list exists to hold.
+  ...CLAUDE_LOCAL_TUNING_ENV_KEYS,
 ]);
 
 export function buildPublicReviewActionsCliEnv(env = {}) {
@@ -235,7 +316,7 @@ export function buildCliChildEnv({
   safetyProfile = null,
 } = {}) {
   const composed = withSpawnCwdEnv(
-    { ...buildSafeCliBaseEnv(baseEnv, provider), ...composeProviderEnv({ before, provider, model, extra }) },
+    { ...buildSafeCliBaseEnv(baseEnv, provider), ...composeProviderEnv({ before, provider, model, extra, safetyProfile }) },
     cwd,
   );
 

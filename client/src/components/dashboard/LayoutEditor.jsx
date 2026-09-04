@@ -327,9 +327,9 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
                         {meta?.label ?? id}
                         {!meta && <span className="ml-2 text-xs text-port-warning">(unknown — skipped)</span>}
                       </span>
-                      <button onClick={() => move(idx, -1)} disabled={idx === 0} className="p-1 rounded text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:text-gray-400" aria-label="Move up"><ArrowUp size={14} /></button>
-                      <button onClick={() => move(idx, 1)} disabled={idx === widgets.length - 1} className="p-1 rounded text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:text-gray-400" aria-label="Move down"><ArrowDown size={14} /></button>
-                      <button onClick={() => remove(id)} className="p-1 rounded text-gray-400 hover:text-port-error" aria-label="Remove widget"><Trash2 size={14} /></button>
+                      <button onClick={() => move(idx, -1)} disabled={idx === 0} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:text-gray-400" aria-label="Move up"><ArrowUp size={14} /></button>
+                      <button onClick={() => move(idx, 1)} disabled={idx === widgets.length - 1} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded text-gray-400 hover:text-white disabled:opacity-30 disabled:hover:text-gray-400" aria-label="Move down"><ArrowDown size={14} /></button>
+                      <button onClick={() => remove(id)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded text-gray-400 hover:text-port-error" aria-label="Remove widget"><Trash2 size={14} /></button>
                     </li>
                   );
                 })}

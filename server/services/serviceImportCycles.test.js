@@ -14,7 +14,7 @@
  * (facade re-export rules, deferred-import bans) because those check properties a
  * general acyclicity walk does not.
  *
- * **A shrinking baseline, not a hard zero.** Five cyclic components are live
+ * **A shrinking baseline, not a hard zero.** Three cyclic components are live
  * today; fixing them all in one PR would be un-reviewable, so each is recorded
  * below against the issue that removes it, and the assertions run BOTH ways:
  * a component that is not in the baseline fails (no new cycles from today), and
@@ -28,8 +28,8 @@
  * which only ask "is this empty?", and useless as a baseline: the same untouched
  * graph would produce a different list on another machine. Strongly-connected
  * components are a property of the edges alone, so this list means the same thing
- * everywhere. It is also the truer picture — the DFS walk names 8 modules in the
- * autopilot ring; the component is 22.
+ * everywhere. It is also the truer picture — for the autopilot/creativeDirector
+ * cycle #5920 removed, the DFS walk named 8 modules; the component was 22.
  *
  * Static edges only. `await import()` is deferred to call time and cannot
  * produce a load-time cycle, so breaking a cycle by deferring an import does not
@@ -48,43 +48,7 @@ const SERVICES_DIR = dirname(fileURLToPath(import.meta.url));
 // assertion below fails while a fixed entry is still listed, which is what stops
 // this list from becoming a wish.
 const KNOWN_CYCLIC_COMPONENTS = [
-  // #5920 — the seriesAutopilot barrel and the creativeDirector completion hook
-  // each re-enter the other's half; 22 modules end up mutually reachable.
-  {
-    issue: 5920,
-    members: [
-      'creative/toolRegistry.js',
-      'creative/tools/pipeline.js',
-      'creativeDirector/agentBridge.js',
-      'creativeDirector/completionHook.js',
-      'creativeDirector/planAdvance.js',
-      'creativeDirector/sceneEvaluator.js',
-      'creativeDirector/sceneRunner.js',
-      'pipeline/autoRunner.js',
-      'pipeline/episodeVideo.js',
-      'pipeline/seriesAutopilot.js',
-      'pipeline/seriesAutopilot/arcSteps.js',
-      'pipeline/seriesAutopilot/childRuns.js',
-      'pipeline/seriesAutopilot/dispatch.js',
-      'pipeline/seriesAutopilot/dryRun.js',
-      'pipeline/seriesAutopilot/editorialSteps.js',
-      'pipeline/seriesAutopilot/observer.js',
-      'pipeline/seriesAutopilot/orchestrator.js',
-      'pipeline/seriesAutopilot/revisionSteps.js',
-      'pipeline/seriesAutopilot/selfImprove.js',
-      'pipeline/seriesAutopilot/session.js',
-      'pipeline/seriesAutopilot/unlockPass.js',
-      'pipeline/seriesAutopilot/visualSteps.js',
-    ],
-  },
-  // #5917 — caption resolution and subject derivation import each other.
-  { issue: 5917, members: ['loraDatasetCaption.js', 'loraDatasetGenerate.js'] },
-  // #5918 — the fixer reaches back for the review-comment store accessors.
-  { issue: 5918, members: ['pipeline/manuscriptFix.js', 'pipeline/manuscriptReview.js'] },
   // #5919 — the receive path reaches subscription state back through the barrel.
-  { issue: 5919, members: ['sharing/peerSync.js', 'sharing/peerSyncReceive.js'] },
-  // #5916 — routing imports the metrics reset; metrics imports routing's predicates.
-  { issue: 5916, members: ['taskLearning/metrics.js', 'taskLearning/routing.js'] },
 ];
 
 // A component as one comparable string. Members arrive sorted from

@@ -62,6 +62,7 @@ export * from './apiUniverseBuilder.js';
 export * from './apiAuthors.js';
 export * from './apiArtists.js';
 export * from './apiAlbums.js';
+export * from './apiAvatar.js';
 export * from './apiTracks.js';
 export * from './apiVideoDownload.js';
 export * from './apiMusic.js';

@@ -1,21 +1,30 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PATHS } from '../lib/fileUtils.js';
-import {
-  materializePublicReviewInput,
-  materializePublicReviewPatches,
-  writePublicReviewInputSnapshot,
-  PUBLIC_REVIEW_INPUT_FILENAME,
-  PUBLIC_REVIEW_PATCH_DIRNAME,
-  PUBLIC_REVIEW_PATCH_MANIFEST_FILENAME,
-} from './modelAbuseGuard.js';
+import { PUBLIC_REVIEW_INPUT_FILENAME, PUBLIC_REVIEW_PATCH_DIRNAME } from '../lib/agentScratchPaths.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 // Runs against the real filesystem on purpose: the materializers were only ever
 // exercised through mocks, which is how a callback-style `chmod` from `node:fs`
 // (throws synchronously when called without a callback) shipped and failed every
 // Stage 2 spawn with "The \"cb\" argument must be of type function".
+//
+// Real filesystem, but not the INSTALL's filesystem: the snapshot writer lands
+// under `PATHS.cos`, so without this redirect the suite deposited
+// `public-review-inputs/<scanKey>.json` in the developer's live data/ tree —
+// swept up by the afterEach only when nothing above it threw (#6176).
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-public-review-data-') }));
+afterAll(cleanupTempDataRoots);
+
+const { PATHS } = await import('../lib/fileUtils.js');
+const {
+  materializePublicReviewInput,
+  materializePublicReviewPatches,
+  writePublicReviewInputSnapshot,
+  PUBLIC_REVIEW_PATCH_MANIFEST_FILENAME,
+} = await import('./modelAbuseGuard.js');
 const scanKey = 'a'.repeat(64);
 const headSha = 'b'.repeat(40);
 const pullRequests = [{

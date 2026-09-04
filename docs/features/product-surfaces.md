@@ -72,7 +72,7 @@ Submit tasks, manage durable autonomous agents, schedule recurring automations, 
 | **AI Providers & Model Runner** | `/ai` | Multi-provider configuration supporting CLI agents (Claude Code, Codex, Antigravity, OpenCode), cloud APIs (OpenAI, Anthropic, Gemini, Grok), and local endpoints (Ollama, LM Studio, vLLM, SGLang). | [Claude on Ollama](./claude-ollama.md) |
 | **Prompt Manager** | `/prompts` | Reusable prompt template library, variable substitution engine, prompt versioning, and auto-upgrade migrations. | [Prompt Manager](./prompt-manager.md) |
 | **Runs & Run Events Ledger** | `/cos/runs`, `/cos/run-events` | Comprehensive ledger of past and in-flight AI runs, lifecycle event replay, and orphaned process recovery. | — |
-| **Code Reviewers** | `/settings/code-reviewers` | Configurable multi-reviewer chain (Copilot, Claude, Antigravity, Codex, Grok, Cursor, OpenCode, Kimi, LM Studio, Ollama, MTPLX) with stop conditions, max rounds, per-reviewer model/effort pins, and dispute workflows. | — |
+| **Code Reviewers** | `/settings/code-reviewers` | Configurable multi-reviewer chain (Copilot, Claude, Antigravity, Codex, Grok, Cursor, OpenCode, Kimi, LM Studio, Ollama, MTPLX) with stop conditions, max rounds, per-reviewer model/effort pins, dispute workflows, and the goal-fidelity gate that re-reads a finished CoS run's diff against the task's stated objective (`ship` / `fix-first` / `rethink`). | — |
 
 ---
 

@@ -14,14 +14,20 @@ import { execGh, ensureForgeReachable } from './github.js';
 import { execGlabJson } from './gitlab.js';
 import { resolveAppForgeTarget } from '../lib/workTracker.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
+import { forkHeadFromGithubPr } from '../lib/forkHead.js';
 
 const GH_LIST_LIMIT = 200;
 const GL_PER_PAGE = 100;
 
+// `isCrossRepository`/`maintainerCanModify`/`headRepository*` are what make an
+// EXTERNAL contribution actionable: a fork PR's head branch has no
+// `origin/<headRefName>`, so anything that attaches a worktree to it needs the
+// fork's own address (#6064). They are free on this same call.
 const GH_PR_FIELDS = [
   'number', 'title', 'author', 'url', 'createdAt', 'updatedAt', 'isDraft',
   'headRefName', 'baseRefName', 'reviewDecision', 'mergeStateStatus',
-  'mergeable', 'statusCheckRollup', 'labels'
+  'mergeable', 'statusCheckRollup', 'labels',
+  'isCrossRepository', 'maintainerCanModify', 'headRepository', 'headRepositoryOwner'
 ].join(',');
 
 const baseResult = {
@@ -70,6 +76,12 @@ function normalizeGithubPullRequest(pr) {
     checks: Array.isArray(pr?.statusCheckRollup)
       ? pr.statusCheckRollup.filter(Boolean).map(check => normalizeCheck(check))
       : [],
+    // Strict booleans, or null when the forge didn't answer — the same
+    // fail-closed reading `resolvePullRequestWriteAccess` expects, so this row
+    // can be handed to it without inventing a write-access answer.
+    isCrossRepository: typeof pr?.isCrossRepository === 'boolean' ? pr.isCrossRepository : null,
+    maintainerCanModify: typeof pr?.maintainerCanModify === 'boolean' ? pr.maintainerCanModify : null,
+    forkHead: forkHeadFromGithubPr(pr),
   };
 }
 
@@ -111,6 +123,13 @@ function normalizeGitlabPullRequest(mr) {
         .filter(label => typeof label === 'string' && label)
       : [],
     checks: normalizeGitlabPipeline(mr),
+    // Shape parity with the GitHub row, deliberately unanswered: `glab` reports
+    // a fork MR through project ids, not a clone URL, so there is no fork
+    // address to hand a worktree. Null (not false) so nothing reads an
+    // unimplemented lookup as "this head is ours to push to".
+    isCrossRepository: null,
+    maintainerCanModify: null,
+    forkHead: null,
   };
 }
 

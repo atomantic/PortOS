@@ -26,6 +26,7 @@ import { isRetryHoldOwner, clearedRetryHoldMetadata } from '../lib/taskRetryHold
 import { resolveTaskTargetBranch, shouldStripTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
 import { detectForgeCli } from '../lib/gitForge.js';
+import { normalizeForkHead } from '../lib/forkHead.js';
 import { PR_COMPLETIONS, PR_COMPLETION_VALUES, PR_CREATION, leavesPrForHuman, prClaimWasVerified } from '../lib/prDisposition.js';
 import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, prioritizeToolFreeReviewers } from '../lib/reviewerConfig.js';
 
@@ -811,7 +812,12 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata }
  *
  * The follow-up task uses an isolated worktree attached to the existing PR branch
  * through its canonical `reviewLoopPRBranch`, so it can fix-and-push without
- * trampling concurrent agents.
+ * trampling concurrent agents. `forkHead` is where that branch lives when the PR
+ * came from a FORK — such a head has no `origin/<branch>` for the attach to
+ * resolve, so without it the follow-up is queued and then blocked at workspace
+ * prep for exactly the PRs external contributors open (#6064). Persisted beside
+ * the branch name and threaded back out by `agentWorkspacePrep`; a same-repo PR
+ * passes null and nothing changes.
  *
  * `dispatch` decides WHO starts the task:
  *   `'queue'`     (default) — the autonomous lane. The task is persisted and the
@@ -834,7 +840,7 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata }
  * whether an agent actually started or the task is still waiting (no slots,
  * daemon stopped, …) rather than guessing.
  */
-export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, sourceWorkspace, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, reviewerEfforts = null, leaveOpen = false, dispatch = 'queue' }) {
+export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, forkHead = null, sourceWorkspace, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, reviewerEfforts = null, leaveOpen = false, dispatch = 'queue' }) {
   if (!prUrl || !prBranch) return null;
   if (prCompletion === PR_COMPLETIONS.LEAVE_OPEN) return null;
 
@@ -959,6 +965,10 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
       reviewLoopLeaveOpen: leaveOpen,
       reviewLoopPRUrl: prUrl,
       reviewLoopPRBranch: prBranch,
+      // Fork coordinates for that branch, or null for a same-repo head. The
+      // shared reader is `resolveTaskForkHead`, so this key is the generic
+      // `forkHead` rather than a review-loop-specific one.
+      forkHead: normalizeForkHead(forkHead),
       reviewLoopPRNumber: parsedPr?.number ?? null,
       reviewLoopPRHost: parsedPr?.host ?? null,
       reviewLoopPROwner: parsedPr?.owner ?? null,

@@ -1164,6 +1164,102 @@ describe('ollamaManager.restartWithEnv', () => {
     expect(options.env.OLLAMA_CONTEXT_LENGTH).toBe('131072')
   })
 
+  // A context-window reload (e.g. Claude Code spawn needing numCtx 131072) must
+  // compose on top of an active tuning's launch knobs (OLLAMA_FLASH_ATTENTION,
+  // OLLAMA_KV_CACHE_TYPE) instead of wiping them, and the tuning's undo
+  // bookkeeping must survive so clearLaunchEnv() can restore the untuned state.
+  it('preserves an active tuning across ensureContextWindow on a spawned process', async () => {
+    const state = { up: false, probesBeforeStop: 0 }
+    stubReachable({ get reachable() { return state.up || state.probesBeforeStop-- > 0 } })
+    const spawn = await stubSpawnRestart(state)
+    const { ensureContextWindow, restartWithEnv } = await loadManager()
+
+    await restartWithEnv({ OLLAMA_FLASH_ATTENTION: '1', OLLAMA_KV_CACHE_TYPE: 'q8_0' })
+    state.up = false
+    state.probesBeforeStop = 3
+
+    const reload = await ensureContextWindow(131072)
+    expect(reload).toMatchObject({ applied: true, reason: 'restarted', contextLength: 131072 })
+
+    const lastSpawn = spawn.mock.calls[spawn.mock.calls.length - 1]
+    expect(lastSpawn[2].env.OLLAMA_FLASH_ATTENTION).toBe('1')
+    expect(lastSpawn[2].env.OLLAMA_KV_CACHE_TYPE).toBe('q8_0')
+    expect(lastSpawn[2].env.OLLAMA_CONTEXT_LENGTH).toBe('131072')
+
+    // Clearing the tuning removes tuning keys and preserves the context window
+    state.up = false
+    state.probesBeforeStop = 2
+    expect(await restartWithEnv({})).toMatchObject({ applied: null })
+    const clearedSpawn = spawn.mock.calls[spawn.mock.calls.length - 1]
+    expect(clearedSpawn[2].env.OLLAMA_FLASH_ATTENTION).toBeUndefined()
+    expect(clearedSpawn[2].env.OLLAMA_KV_CACHE_TYPE).toBeUndefined()
+    expect(clearedSpawn[2].env.OLLAMA_CONTEXT_LENGTH).toBe('131072')
+  })
+
+  it('preserves an active tuning and its undo bookkeeping across a service context-window reload', async () => {
+    restorePlatform = pinPlatform('darwin')
+    stubReachable({ reachable: true })
+    const calls = []
+    execMock.impl = (cmd, args, opts, cb) => {
+      const a = (args || []).join(' ')
+      calls.push(`${cmd} ${a}`)
+      if (cmd === 'brew' && a === '--version') return cb(null, { stdout: 'Homebrew 4.0.0', stderr: '' })
+      if (cmd === 'brew' && a === 'services list') return cb(null, { stdout: 'ollama started testuser plist\n', stderr: '' })
+      if (cmd === 'ps') return cb(null, { stdout: '101 /usr/local/bin/ollama serve\n', stderr: '' })
+      if (cmd === 'launchctl') return cb(null, { stdout: '', stderr: '' })
+      if (cmd === 'brew' && a === 'services restart ollama') return cb(null, { stdout: '', stderr: '' })
+      return cb(new Error(`unexpected exec: ${cmd} ${a}`))
+    }
+
+    const { ensureContextWindow, restartWithEnv } = await loadManager()
+    // 1. Apply tuning: flash attention + kv cache quantization
+    await restartWithEnv({ OLLAMA_FLASH_ATTENTION: '1', OLLAMA_KV_CACHE_TYPE: 'q8_0' })
+
+    // 2. Context window reload arrives for an agent spawn
+    calls.length = 0
+    const reloaded = await ensureContextWindow(131072)
+    expect(reloaded).toMatchObject({ applied: true, reason: 'service-restarted' })
+
+    // Both tuning knobs and the new context window are passed to the daemon
+    expect(calls).toContain('launchctl setenv OLLAMA_FLASH_ATTENTION 1')
+    expect(calls).toContain('launchctl setenv OLLAMA_KV_CACHE_TYPE q8_0')
+    expect(calls).toContain('launchctl setenv OLLAMA_CONTEXT_LENGTH 131072')
+    expect(calls).not.toContain('launchctl unsetenv OLLAMA_FLASH_ATTENTION')
+    expect(calls).not.toContain('launchctl unsetenv OLLAMA_KV_CACHE_TYPE')
+
+    // 3. Undo bookkeeping survived: clearing the tuning restores the baseline
+    // context window while unsetting the tuning keys
+    calls.length = 0
+    const cleared = await restartWithEnv({})
+    expect(cleared).toMatchObject({ applied: null })
+    expect(calls).toContain('launchctl unsetenv OLLAMA_FLASH_ATTENTION')
+    expect(calls).toContain('launchctl unsetenv OLLAMA_KV_CACHE_TYPE')
+    expect(calls).toContain('launchctl setenv OLLAMA_CONTEXT_LENGTH 131072')
+  })
+
+  it('preserves an active tuning when ensureContextWindow starts an offline daemon', async () => {
+    const state = { up: false, probesBeforeStop: 0 }
+    stubReachable({ get reachable() { return state.up || state.probesBeforeStop-- > 0 } })
+    const spawn = await stubSpawnRestart(state)
+    const { ensureContextWindow, restartWithEnv } = await loadManager()
+
+    await restartWithEnv({ OLLAMA_FLASH_ATTENTION: '1', OLLAMA_KV_CACHE_TYPE: 'q8_0' })
+
+    // Daemon goes down
+    state.up = false
+    state.probesBeforeStop = 0
+
+    // Calling ensureContextWindow when the daemon is unreachable should still
+    // preserve the tuning knobs and start the daemon with them
+    const result = await ensureContextWindow(131072)
+    expect(result).toMatchObject({ applied: true, contextLength: 131072 })
+
+    const lastSpawn = spawn.mock.calls[spawn.mock.calls.length - 1]
+    expect(lastSpawn[2].env.OLLAMA_FLASH_ATTENTION).toBe('1')
+    expect(lastSpawn[2].env.OLLAMA_KV_CACHE_TYPE).toBe('q8_0')
+    expect(lastSpawn[2].env.OLLAMA_CONTEXT_LENGTH).toBe('131072')
+  })
+
   // The domain outlives the daemon, so a stopped Ollama is no reason to leave
   // the variables in it — the next login-launched one would inherit them.
   it('unsets exported variables even when Ollama is already down', async () => {

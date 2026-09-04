@@ -87,7 +87,17 @@ function packagesWithInstallHooks(label) {
   return found;
 }
 
-describe('ignore-scripts guard', () => {
+/** A workspace's .npmrc settings, comments and blank lines stripped. */
+function npmrcSettings(label) {
+  const npmrc = join(workspaceDir(label), '.npmrc');
+  expect(existsSync(npmrc), `${label}/.npmrc is missing — npm does not inherit the root .npmrc for this workspace's install path`).toBe(true);
+  return readFileSync(npmrc, 'utf8')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'));
+}
+
+describe('workspace .npmrc guards', () => {
   it('discovers every installable workspace', () => {
     // Sanity-check the discovery itself: if it silently returned only the root,
     // every per-workspace assertion below would vacuously pass.
@@ -103,13 +113,19 @@ describe('ignore-scripts guard', () => {
   // re-grants every dependency in it an install-time code-execution slot — the
   // vector the Aug 2026 keyv/cacheable worm used via a preinstall hook.
   it.each(WORKSPACES)('%s/.npmrc pins ignore-scripts=true', (label) => {
-    const npmrc = join(workspaceDir(label), '.npmrc');
-    expect(existsSync(npmrc), `${label}/.npmrc is missing — npm does not inherit the root .npmrc for this workspace's install path`).toBe(true);
-    const lines = readFileSync(npmrc, 'utf8')
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith('#'));
-    expect(lines, `${label}/.npmrc must set ignore-scripts=true`).toContain('ignore-scripts=true');
+    expect(npmrcSettings(label), `${label}/.npmrc must set ignore-scripts=true`).toContain('ignore-scripts=true');
+  });
+
+  // `npm install` performs an advisory lookup AFTER it has finished writing
+  // node_modules, and BLOCKS on it: a stalled request costs fetch-timeout (300s)
+  // times fetch-retries (2) before npm moves on. On 2026-09-03 that endpoint began
+  // accepting the TLS handshake and never answering, which cost a measured 153s per
+  // workspace — four workspaces per managed install path — for a summary that goes
+  // to a log file. Same local-prefix rule as above: the root file does not cover
+  // `cd client && npm install`, so a workspace missing this line silently reopens
+  // the stall for every install path at once.
+  it.each(WORKSPACES)('%s/.npmrc pins audit=false', (label) => {
+    expect(npmrcSettings(label), `${label}/.npmrc must set audit=false`).toContain('audit=false');
   });
 });
 

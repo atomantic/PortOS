@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 import { typeSettled } from '../test/settledInput';
@@ -269,6 +269,56 @@ describe('MediaCollections', () => {
     renderPage('/media/collections?q=zzzz');
     expect(await screen.findByText(/No collections match that search/)).toBeInTheDocument();
     expect(screen.queryByText(/No collections yet/)).not.toBeInTheDocument();
+  });
+
+  it('reports a failed collections fetch instead of claiming there are none', async () => {
+    const { listMediaCollections } = await import('../services/api');
+    listMediaCollections.mockRejectedValueOnce(new Error('Server error (500)'));
+    renderPage();
+    expect(await screen.findByText(/Couldn't load collections/)).toBeInTheDocument();
+    expect(screen.getByText('Server error (500)')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    // The onboarding copy would tell the user their collections never existed.
+    expect(screen.queryByText(/No collections yet/)).not.toBeInTheDocument();
+    // …and the synthetic bucket would hand them their whole library as unfiled.
+    expect(screen.queryByText('Unsorted')).not.toBeInTheDocument();
+    expect(screen.queryByText(/No collections match that search/)).not.toBeInTheDocument();
+  });
+
+  it('owns the failure UI, so the shared request() toast stays silent', async () => {
+    const { listMediaCollections } = await import('../services/api');
+    listMediaCollections.mockRejectedValueOnce(new Error('Server error (500)'));
+    renderPage();
+    await screen.findByRole('button', { name: 'Retry' });
+    expect(listMediaCollections).toHaveBeenCalledWith({ silent: true });
+  });
+
+  it('recovers the grid when Retry succeeds', async () => {
+    const { listMediaCollections } = await import('../services/api');
+    listMediaCollections.mockRejectedValueOnce(new Error('Server error (500)'));
+    const user = userEvent.setup();
+    renderPage('/media/collections?empty=1');
+    await user.click(await screen.findByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Alpha')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(/Couldn't load collections/)).not.toBeInTheDocument());
+  });
+
+  it('keeps the last good grid when a later refresh fails', async () => {
+    const { listMediaCollections, deleteMediaCollection } = await import('../services/api');
+    const user = userEvent.setup();
+    renderPage('/media/collections?empty=1');
+    await screen.findByText('Alpha');
+    // A failed delete calls refresh() — the recovery path that re-reads the
+    // list. If that read fails, the collections already on screen must survive
+    // rather than collapsing back into the sentinel and blanking the grid.
+    deleteMediaCollection.mockRejectedValueOnce(new Error('Delete failed'));
+    listMediaCollections.mockRejectedValueOnce(new Error('Server error (500)'));
+    // Scope to the Alpha card — every card renders the same delete label, and
+    // indexing a match list would silently target whichever row sorted first.
+    const alphaCard = screen.getByTitle('Alpha').closest('.bg-port-card');
+    await user.click(within(alphaCard).getByRole('button', { name: 'Delete collection' }));
+    expect(await screen.findByText(/Couldn't load collections/)).toBeInTheDocument();
+    expect(screen.getByText('Beta')).toBeInTheDocument();
   });
 
   it('offers the three sort options', async () => {

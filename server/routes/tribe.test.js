@@ -12,6 +12,7 @@ errorEvents.on('error', () => {});
 vi.mock('../services/tribe.js', () => ({
   listPeople: vi.fn(),
   getCareSummary: vi.fn(),
+  checkDuplicateTribeIdentifiers: vi.fn(),
   getPerson: vi.fn(),
   createPerson: vi.fn(),
   updatePerson: vi.fn(),
@@ -67,6 +68,16 @@ describe('Tribe Routes', () => {
     expect(response.status).toBe(200);
     expect(response.body.overdueCount).toBe(1);
     expect(tribe.getCareSummary).toHaveBeenCalledWith(50); // clamped from 999
+  });
+
+  it('returns the duplicate-identifiers report', async () => {
+    const report = { emails: [{ identifier: 'a@x.com', people: [{ id: 'p1', name: 'Ada' }, { id: 'p2', name: 'Bea' }] }], phones: [] };
+    tribe.checkDuplicateTribeIdentifiers.mockResolvedValue(report);
+
+    const response = await request(app).get('/api/tribe/duplicate-identifiers');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(report);
   });
 
   it('creates a person and emits tribe changes', async () => {

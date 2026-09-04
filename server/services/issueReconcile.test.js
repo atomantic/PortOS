@@ -3,13 +3,15 @@
  *
  * - issueNumberFromRef / bodyReferencesIssue / prReferencesIssue — the boundary-
  *   safe reference matchers (no `issue-222` matching inside `issue-2220`).
- * - classifyIssue / classifyIssues — the pure ZOMBIE/LIVE/STALLED state machine.
+ * - classifyIssue / classifyIssues — the pure ZOMBIE/LIVE/ABANDONED/STALLED state machine.
  * - reconcile / gatherIssueState — end-to-end over mocked gh/glab + git: an
  *   in-progress issue with a merged PR/MR and no live claim is a ZOMBIE; an open
  *   PR/MR or a live claim branch or an active agent keeps it LIVE. Runs the SAME
  *   assertions against both the GitHub (`gh`) and GitLab (`glab`) forge gatherers.
  * - zombieSignature / formatZombiesForPrompt — the convergence signature and the
  *   forge- + autoClose-aware prompt body.
+ * - releaseAbandonedClaims — the deterministic releaser for a stale volunteer
+ *   claim, the one WRITE this module performs (#6112).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -43,6 +45,7 @@ import {
   isJiraStartedStatus, isJiraShippedStatus,
   classifyIssue, classifyIssues, reconcile, gatherIssueState,
   zombieSignature, formatZombiesForPrompt,
+  releaseAbandonedClaims, daysSince, FOREIGN_CLAIM_STALE_DAYS,
 } from './issueReconcile.js';
 import { execGit } from '../lib/execGit.js';
 import { execGh } from './github.js';
@@ -167,6 +170,55 @@ describe('classifyIssue', () => {
   it('no merged PR and no live claim → STALLED', () => {
     expect(classifyIssue({ hasMergedPr: false, hasLiveClaim: false, hasActiveAgent: false })).toBe('STALLED');
   });
+  // The narrow, automatable slice of STALLED: a claim nothing here owns the
+  // release of, sitting untouched long enough that a contributor still working
+  // would have shown a branch, a PR, or a comment.
+  it('a stale foreign claim with nothing shipped → ABANDONED', () => {
+    expect(classifyIssue({
+      hasMergedPr: false, hasLiveClaim: false, hasActiveAgent: false,
+      hasForeignClaim: true, staleDays: FOREIGN_CLAIM_STALE_DAYS,
+    })).toBe('ABANDONED');
+  });
+  it('a foreign claim younger than the threshold stays STALLED', () => {
+    expect(classifyIssue({
+      hasMergedPr: false, hasLiveClaim: false, hasActiveAgent: false,
+      hasForeignClaim: true, staleDays: FOREIGN_CLAIM_STALE_DAYS - 1,
+    })).toBe('STALLED');
+  });
+  // Absent is not zero: a forge that reported no update time must not read as
+  // "updated at the epoch" and release a claim made this morning.
+  it('an unresolvable stale-day count never satisfies the gate', () => {
+    expect(classifyIssue({
+      hasMergedPr: false, hasLiveClaim: false, hasActiveAgent: false,
+      hasForeignClaim: true, staleDays: null,
+    })).toBe('STALLED');
+  });
+  // Our own claim's release is owned by the claim flow's Phase 6/7 and by the
+  // zombie heal — racing them could unassign a run live on a peer.
+  it('an ancient claim held by this install stays STALLED', () => {
+    expect(classifyIssue({
+      hasMergedPr: false, hasLiveClaim: false, hasActiveAgent: false,
+      hasForeignClaim: false, staleDays: 365,
+    })).toBe('STALLED');
+  });
+  it('a live claim wins over the abandoned gate', () => {
+    expect(classifyIssue({
+      hasMergedPr: false, hasLiveClaim: true, hasActiveAgent: false,
+      hasForeignClaim: true, staleDays: 999,
+    })).toBe('LIVE');
+  });
+});
+
+describe('daysSince', () => {
+  it('counts whole elapsed days', () => {
+    expect(daysSince(daysAgo(20), NOW)).toBe(20);
+    expect(daysSince(daysAgo(0.5), NOW)).toBe(0);
+  });
+  it('returns null — not 0 — for an absent or unparseable timestamp', () => {
+    expect(daysSince('', NOW)).toBeNull();
+    expect(daysSince(undefined, NOW)).toBeNull();
+    expect(daysSince('not a date', NOW)).toBeNull();
+  });
 });
 
 describe('classifyIssues', () => {
@@ -181,15 +233,28 @@ describe('classifyIssues', () => {
 
 // --- end-to-end gather/reconcile over mocked gh + git ---
 
-/** Wire execGh's three list calls (issue / merged pr / open pr) by argv shape. */
-function mockGh({ issues = [], merged = [], open = [] }) {
+/**
+ * Wire execGh's list calls (issue / merged pr / open pr) plus the `api user`
+ * identity probe by argv shape. `owner` is the login gh reports; passing null
+ * simulates a gh that could not answer, which must never read as "every
+ * assignee is somebody else".
+ */
+function mockGh({ issues = [], merged = [], open = [], owner = 'atomantic' }) {
   execGh.mockImplementation(async (argv) => {
     if (argv[0] === 'issue' && argv[1] === 'list') return JSON.stringify(issues);
     if (argv[0] === 'pr' && argv.includes('merged')) return JSON.stringify(merged);
     if (argv[0] === 'pr' && argv.includes('open')) return JSON.stringify(open);
+    if (argv[0] === 'api' && argv[1] === 'user') {
+      if (owner === null) throw new Error('gh: not authenticated');
+      return owner;
+    }
     return '[]';
   });
 }
+
+/** An ISO timestamp `days` in the past, relative to a fixed `now`. */
+const NOW = Date.parse('2026-09-01T00:00:00Z');
+const daysAgo = (days) => new Date(NOW - days * 24 * 60 * 60 * 1000).toISOString();
 
 describe('reconcile', () => {
   it('flags an in-progress issue whose PR merged with no live claim as a ZOMBIE', async () => {
@@ -278,8 +343,10 @@ describe('reconcile', () => {
     // rather than defaulting a bare OWNER/REPO to github.com.
     getOriginInfo.mockResolvedValue({ isGithub: false, host: 'github.acme.example', fullName: 'acme/app' });
     readOriginRemoteUrl.mockResolvedValue('git@github.acme.example:acme/app.git');
+    // Assigned, so the identity probe actually fires (it is skipped when no
+    // in-progress issue is held by anyone).
     mockGh({
-      issues: [{ number: 42, title: 't', labels: [{ name: 'in-progress' }], assignees: [], url: 'u' }],
+      issues: [{ number: 42, title: 't', labels: [{ name: 'in-progress' }], assignees: [{ login: 'someone' }], url: 'u' }],
       merged: [{ number: 50, headRefName: 'x', body: 'Refs #42' }],
       open: [],
     });
@@ -289,8 +356,14 @@ describe('reconcile', () => {
     expect(result.forge).toBe('github');
     expect(result.fullName).toBe('acme/app');
     expect(result.zombies.map((z) => z.number)).toEqual([42]);
-    const repoArgs = execGh.mock.calls.map((c) => c[0][c[0].indexOf('--repo') + 1]);
-    expect(repoArgs.every((r) => r === 'github.acme.example/acme/app')).toBe(true);
+    // Every repo-targeting call carries the host-qualified selector, and the
+    // identity probe — which takes no `--repo` — carries the same host, so it
+    // resolves the ENTERPRISE login rather than a github.com one.
+    const argvs = execGh.mock.calls.map(([argv]) => argv);
+    expect(argvs.filter((a) => a.includes('--repo'))
+      .every((a) => a[a.indexOf('--repo') + 1] === 'github.acme.example/acme/app')).toBe(true);
+    expect(argvs.find((a) => a[0] === 'api' && a[1] === 'user'))
+      .toEqual(expect.arrayContaining(['--hostname', 'github.acme.example']));
   });
 
   it('scans a custom-hostname self-hosted forge when the app pins workTracker (issue #3767)', async () => {
@@ -312,8 +385,8 @@ describe('reconcile', () => {
     const result = await reconcile('/repo', { app: { repoPath: '/repo', workTracker: 'github' } });
     expect(result.forge).toBe('github');
     expect(result.zombies.map((z) => z.number)).toEqual([42]);
-    const repoArgs = execGh.mock.calls.map((c) => c[0][c[0].indexOf('--repo') + 1]);
-    expect(repoArgs.every((r) => r === 'git.example-corp.com/acme/widget')).toBe(true);
+    expect(execGh.mock.calls.map(([argv]) => argv).filter((a) => a.includes('--repo'))
+      .every((a) => a[a.indexOf('--repo') + 1] === 'git.example-corp.com/acme/widget')).toBe(true);
   });
 
   it('scans a custom-hostname self-hosted GitLab when the app pins workTracker (issue #3767)', async () => {
@@ -609,6 +682,115 @@ describe('reconcile (JIRA tracker)', () => {
     const result = await reconcile('/repo');
     expect(result.forge).toBe('github');
     expect(fetchMyCurrentSprintTickets).not.toHaveBeenCalled();
+  });
+});
+
+// #6112 — `in-progress` had three appliers and only two releasers. A volunteer
+// assigned by the issue-watcher (or by the claim prompt's handoff) who never
+// opened a PR matched STALLED on every pass, indefinitely.
+describe('abandoned volunteer claims', () => {
+  const staleIssue = (overrides = {}) => ({
+    number: 2220, title: 'Fix the thing', url: 'https://example.com/i/2220',
+    labels: [{ name: 'in-progress' }], assignees: [{ login: 'volunteer-a' }],
+    updatedAt: daysAgo(FOREIGN_CLAIM_STALE_DAYS + 6), ...overrides,
+  });
+
+  it('classifies a stale non-owner claim with nothing shipped as ABANDONED', async () => {
+    mockGh({ issues: [staleIssue()], merged: [], open: [] });
+    const result = await reconcile('/repo', { now: NOW });
+    expect(result.abandoned.map((a) => a.number)).toEqual([2220]);
+    expect(result.stalled).toHaveLength(0);
+    expect(result.repoSpec).toBe('github.com/atomantic/PortOS');
+  });
+
+  // A scheduler tick over a repo with no held in-progress issue has nothing to
+  // classify as foreign, so it must not spend a `gh api user` call to find that out.
+  it('does not probe the viewer identity when no in-progress issue is assigned', async () => {
+    mockGh({ issues: [staleIssue({ assignees: [] })], merged: [], open: [] });
+    await reconcile('/repo', { now: NOW });
+    expect(execGh.mock.calls.some(([argv]) => argv[0] === 'api' && argv[1] === 'user')).toBe(false);
+  });
+
+  it('leaves a claim held by this install STALLED, however old', async () => {
+    mockGh({ issues: [staleIssue({ assignees: [{ login: 'AtomAntic' }] })], merged: [], open: [] });
+    const result = await reconcile('/repo', { now: NOW });
+    expect(result.abandoned).toHaveLength(0);
+    expect(result.stalled.map((sIssue) => sIssue.number)).toEqual([2220]);
+  });
+
+  it('leaves an unassigned in-progress issue STALLED — there is no claim to release', async () => {
+    mockGh({ issues: [staleIssue({ assignees: [] })], merged: [], open: [] });
+    const result = await reconcile('/repo', { now: NOW });
+    expect(result.abandoned).toHaveLength(0);
+    expect(result.stalled).toHaveLength(1);
+  });
+
+  // The load-bearing degrade: an unresolved identity must not read as "every
+  // assignee is a foreigner" and unassign a live claim on an auth blip.
+  it('never abandons anything when gh cannot resolve the viewer login', async () => {
+    mockGh({ issues: [staleIssue()], merged: [], open: [], owner: null });
+    const result = await reconcile('/repo', { now: NOW });
+    expect(result.ownerLogin).toBeNull();
+    expect(result.abandoned).toHaveLength(0);
+    expect(result.stalled).toHaveLength(1);
+  });
+
+  // GitLab resolves no owner login on purpose: both flows that CREATE a
+  // volunteer claim are gh-only, so there is nothing here to release.
+  it('never abandons a GitLab issue', async () => {
+    getOriginInfo.mockResolvedValue({ isGithub: false, host: 'gitlab.com', fullName: 'g/p' });
+    readOriginRemoteUrl.mockResolvedValue('git@gitlab.com:g/p.git');
+    execGlabJson.mockImplementation(async (argv) => (argv[0] === 'issue'
+      ? { rows: [{ iid: 7, title: 't', labels: ['in-progress'], assignees: [{ username: 'volunteer-a' }], web_url: 'u', updated_at: daysAgo(400) }], reason: 'ok' }
+      : { rows: [], reason: 'ok' }));
+    const result = await reconcile('/repo', { now: NOW });
+    expect(result.forge).toBe('gitlab');
+    expect(result.abandoned).toHaveLength(0);
+    expect(result.stalled).toHaveLength(1);
+  });
+});
+
+describe('releaseAbandonedClaims', () => {
+  const abandoned = [{ number: 2220, title: 't', url: 'u', assignees: ['volunteer-a'], staleDays: 20 }];
+  const ctx = { forge: 'github', repoSpec: 'github.com/o/r', fullName: 'o/r' };
+
+  it('comments, then strips the marker and the stale assignee in one edit', async () => {
+    execGh.mockResolvedValue('');
+    const released = await releaseAbandonedClaims(abandoned, ctx);
+    expect(released).toBe(1);
+    const [commentArgs, editArgs] = execGh.mock.calls.map(([argv]) => argv);
+    expect(commentArgs.slice(0, 4)).toEqual(['issue', 'comment', '2220', '--repo']);
+    expect(commentArgs.at(-1)).toContain('20 days');
+    expect(editArgs).toEqual([
+      'issue', 'edit', '2220', '--repo', 'github.com/o/r',
+      '--remove-label', 'in-progress', '--remove-assignee', 'volunteer-a',
+    ]);
+  });
+
+  // The comment is courtesy; the release is the point. A repo with issue
+  // comments locked must still get its marker back.
+  it('still releases when the courtesy comment fails', async () => {
+    execGh.mockImplementation(async (argv) => {
+      if (argv[1] === 'comment') throw new Error('HTTP 403');
+      return '';
+    });
+    expect(await releaseAbandonedClaims(abandoned, ctx)).toBe(1);
+  });
+
+  it('reports zero when the edit itself fails, so the next pass retries', async () => {
+    execGh.mockImplementation(async (argv) => {
+      if (argv[1] === 'edit') throw new Error('HTTP 500');
+      return '';
+    });
+    expect(await releaseAbandonedClaims(abandoned, ctx)).toBe(0);
+  });
+
+  it('writes nothing for a non-GitHub forge or an empty set', async () => {
+    execGh.mockResolvedValue('');
+    expect(await releaseAbandonedClaims(abandoned, { ...ctx, forge: 'gitlab' })).toBe(0);
+    expect(await releaseAbandonedClaims([], ctx)).toBe(0);
+    expect(await releaseAbandonedClaims(abandoned, { ...ctx, repoSpec: null })).toBe(0);
+    expect(execGh).not.toHaveBeenCalled();
   });
 });
 

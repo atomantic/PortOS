@@ -8,7 +8,7 @@ import { join } from 'path';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { createPgFileFacade, resolvePgBackend } from '../lib/pgFileFacade.js';
-import { isTestRunner } from '../lib/db.js';
+import { isTestRunner } from '../lib/runtimeEnv.js';
 import {
   getScoredSession as getScoredSessionDb,
   listScoredSessions as listScoredSessionsDb,

@@ -37,6 +37,11 @@ const beginAppOperation = (io, app, type) => {
   return operation;
 };
 
+// A PortOS self-update deliberately leaves its operation registered: the
+// process is about to be replaced, so the map dies with it. A test driving that
+// path has no process boundary, so it needs a way back to an empty set.
+export const __resetAppOperations = () => activeAppOperations.clear();
+
 const endAppOperation = (io, appId) => {
   if (!activeAppOperations.delete(appId)) return;
   io.emit('app:operations:active', activeOperationsPayload());
@@ -93,6 +98,7 @@ export const registerAppHandlers = (socket, io) => {
 
   socket.on('app:update', async (rawData) => {
     let operatingAppId = null;
+    let result = null;
     try {
       const data = validateSocketData(appUpdateSchema, rawData, socket, 'app:update');
       if (!data) return;
@@ -143,9 +149,17 @@ export const registerAppHandlers = (socket, io) => {
       };
 
       let failure = null;
-      const result = await appUpdater.updateApp(app, emit, { syncFork: data.syncFork === true }).catch(err => {
+      result = await appUpdater.updateApp(app, emit, {
+        syncFork: data.syncFork === true,
+        acknowledgeFork: data.acknowledgeFork === true,
+        acknowledgePersistentMindImageBackup: data.acknowledgePersistentMindImageBackup === true,
+      }).catch(err => {
         failure = err;
-        io.emit('app:update:error', { appId: app.id, message: err.message });
+        // Refusals raised inside the update (the PortOS launcher's post-lock
+        // re-check, say) carry the same acknowledgement codes the pre-check
+        // emits above — the panel's retry buttons key on `code`, so dropping it
+        // here would leave a refusal the user could have acted on inert.
+        io.emit('app:update:error', { appId: app.id, code: err.code || null, message: err.message });
         return null;
       });
 
@@ -155,17 +169,24 @@ export const registerAppHandlers = (socket, io) => {
       await logAction('update', app.id, app.name, { steps: result?.steps ?? [] }, result?.success === true, failure?.message ?? null);
       appsService.notifyAppsChanged('update', app.id);
 
-      if (result) {
+      if (result?.selfUpdateStarted) {
+        // update.sh will `pm2 delete` THIS process partway through, so there is
+        // no completion to report and nothing after the restart to clear the
+        // operation. Leaving it registered (the map dies with the process) is
+        // what keeps the row rendering the script's STEP: frames right up to
+        // the moment the server goes down.
+        console.log(`♻️ PortOS self-update handed off — update.sh will restart this process`);
+      } else if (result) {
         io.emit('app:update:complete', { appId: app.id, success: result.success, steps: result.steps });
         console.log(`✅ Socket update complete for ${app.name}`);
       }
     } catch (err) {
       const message = err?.message ?? String(err);
       console.error(`❌ Socket handler error [app:update]: ${message}`);
-      io.emit('app:update:error', { appId: operatingAppId, message });
+      io.emit('app:update:error', { appId: operatingAppId, code: err?.code || null, message });
       io.emit('app:update:complete', { appId: operatingAppId, success: false, steps: [] });
     } finally {
-      if (operatingAppId) endAppOperation(io, operatingAppId);
+      if (operatingAppId && !result?.selfUpdateStarted) endAppOperation(io, operatingAppId);
     }
   });
 

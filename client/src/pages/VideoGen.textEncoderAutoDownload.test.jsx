@@ -17,6 +17,7 @@ import {
   resetVideoGenMockState,
   state,
   videoGenModel,
+  videoGenModelContext,
   videoGenStatus,
   videoGenTermsGate,
 } from '../test/videoGenPageMocks.jsx';
@@ -44,6 +45,7 @@ describe('VideoGen substitute text-encoder auto-download', () => {
   beforeEach(() => {
     resetVideoGenMockState();
     state.getVideoGenStatus.mockResolvedValue(videoGenStatus([MODEL]));
+    state.getVideoGenModelContext.mockResolvedValue(videoGenModelContext([MODEL]));
     // The substitute is never resident: what these cases pin down is the
     // request, and a cached encoder would short-circuit it.
     state.getModelStatus = (id) => (String(id).startsWith('__text_encoder_option__:')

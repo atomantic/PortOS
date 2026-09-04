@@ -293,7 +293,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                         onClick={() => toggleExpand(account.id)}
                         aria-label={isExpanded ? `Collapse calendars for ${account.name}` : `Expand calendars for ${account.name}`}
                         aria-expanded={isExpanded}
-                        className="p-0.5 text-gray-500 hover:text-white"
+                        className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-0.5 text-gray-500 hover:text-white"
                       >
                         {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                       </button>

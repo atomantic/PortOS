@@ -57,6 +57,7 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite } from '../../server/lib/fileUtils.js';
+import { readCosConfig } from './_lib.js';
 
 // The task header line, per `server/lib/taskParser.js`. Both spellings — with
 // and without the AUTO/APPROVAL flag — since internal tasks carry it and the
@@ -76,17 +77,12 @@ const QUEUE_FILES = [
 
 /**
  * Repo-relative paths of the queue files, honouring an install that moved them
- * in `data/cos/state.json` (`config.cosTasksFile` / `config.userTasksFile` — the
- * same values `cosTaskStore` reads). Migrating only the defaults would record
- * this migration as applied while the live queue stayed stranded.
+ * in its CoS config (`cosTasksFile` / `userTasksFile` — the same values
+ * `cosTaskStore` reads). Migrating only the defaults would record this
+ * migration as applied while the live queue stayed stranded.
  */
 async function queuePaths(rootDir) {
-  const raw = await readFile(join(rootDir, 'data', 'cos', 'state.json'), 'utf-8').catch(() => null);
-  // A truncated/corrupted state.json (left behind by a prior crash) must not
-  // abort this migration and every one after it — fall back to the defaults
-  // exactly as a missing file already does.
-  const parsed = raw ? (() => { try { return JSON.parse(raw); } catch { return null; } })() : null;
-  const config = parsed?.config ?? {};
+  const config = await readCosConfig({ rootDir, label: 'migration 262' });
   return QUEUE_FILES.map(({ configKey, file }) => (
     typeof config[configKey] === 'string' && config[configKey] ? config[configKey] : file
   ));

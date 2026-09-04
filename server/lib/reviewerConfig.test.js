@@ -34,6 +34,9 @@ import {
   PORTOS_ONLY_REVIEWERS,
   DEFAULT_REVIEWERS,
   REVIEW_STOP_MODES,
+  REVIEWER_OVERRIDE_KEYS,
+  REVIEWER_LIST_OVERRIDE_KEYS,
+  hasReviewerOverride,
   DEFAULT_REVIEW_STOP_MODE,
   MAX_REVIEW_USERNAMES,
   MAX_REVIEWER_MAX_ROUNDS,
@@ -437,6 +440,26 @@ describe('client mirror of the reviewer vocabulary', () => {
     expect(client.MAX_REVIEW_USERNAMES).toBe(MAX_REVIEW_USERNAMES);
   });
 
+  // The override roster decides two things that must agree: the picker's "Use
+  // system Code Review Defaults" reset (client) removes exactly these keys, and
+  // the claim-reviewer lookup (server) calls a task an override when any is
+  // present. A key on one side only means the reset leaves a pin behind while
+  // the lookup keeps reporting `task-override` for a task the user just cleared.
+  it('matches the server reviewer-override key rosters and predicate', async () => {
+    const client = await import('../../client/src/lib/reviewerPins.js');
+    expect(client.REVIEWER_OVERRIDE_KEYS).toEqual([...REVIEWER_OVERRIDE_KEYS]);
+    expect(client.REVIEWER_LIST_OVERRIDE_KEYS).toEqual([...REVIEWER_LIST_OVERRIDE_KEYS]);
+    // The predicate too, not just the roster: "presence, not truthiness" is the
+    // half that is easy to get wrong, and a client copy that used `||` would
+    // silently disagree about whether an explicitly-cleared pin is an override.
+    for (const metadata of [
+      { reviewers: ['codex'] }, { optionalReviewers: [] }, { reviewerModels: {} },
+      { reviewStopMode: 'on-clean' }, { reviewerApplies: true }, { claimFlow: true }, null, [],
+    ]) {
+      expect(client.hasReviewerOverride(metadata)).toBe(hasReviewerOverride(metadata));
+    }
+  });
+
   // Stop modes: the client rows carry UI copy, but their `value`s are the enum
   // the save is validated against. An extra row 400s the whole task update.
   it('matches the server review stop modes', async () => {
@@ -787,5 +810,44 @@ describe('codeReviewDefaultsFromProvider', () => {
   it('returns null when the provider maps to no reviewer', () => {
     expect(codeReviewDefaultsFromProvider({ id: 'openrouter', type: 'api' })).toBeNull();
     expect(codeReviewDefaultsFromProvider(null)).toBeNull();
+  });
+});
+
+// `hasReviewerOverride` is what a claim-reviewer lookup reports as its `source`,
+// and the user acts on that answer ("clear the override" vs "change the
+// defaults"). The interesting cases are the ones truthiness gets wrong.
+describe('hasReviewerOverride', () => {
+  it('reports an override for any key that can change the resolved list', async () => {
+    for (const key of REVIEWER_LIST_OVERRIDE_KEYS) {
+      expect(hasReviewerOverride({ [key]: undefined })).toBe(true);
+    }
+  });
+
+  it('ignores the two slashdo run flags — a claim has no flag string to put them in', () => {
+    // `resolveReviewerConfig` never reads them, so a task whose only reviewer key
+    // is a stop-mode resolves its whole list from the defaults. Calling that an
+    // override sends the user to clear a pin that is not supplying what they see.
+    expect(REVIEWER_OVERRIDE_KEYS).toContain('reviewStopMode');
+    expect(hasReviewerOverride({ reviewStopMode: 'on-clean', reviewerApplies: true })).toBe(false);
+  });
+
+  it('treats an explicitly EMPTY pin as an override — it clears the defaults value', () => {
+    // `[]`/`{}` are the shape a user gets by unmarking every optional reviewer or
+    // clearing every model pin. Gating on truthiness would call that "unset" and
+    // send them to the Code Reviewers panel, which is not where the value they
+    // are seeing comes from.
+    expect(hasReviewerOverride({ optionalReviewers: [] })).toBe(true);
+    expect(hasReviewerOverride({ reviewerModels: {} })).toBe(true);
+  });
+
+  it('reports no override for task metadata that only carries non-reviewer options', () => {
+    expect(hasReviewerOverride({ useWorktree: false, openPR: false, claimFlow: true, simplify: true })).toBe(false);
+    expect(hasReviewerOverride({ reviewLoop: true, issueAuthorFilter: 'owner' })).toBe(false);
+  });
+
+  it('reports no override for a non-object', () => {
+    for (const value of [null, undefined, [], 'reviewers', 7]) {
+      expect(hasReviewerOverride(value)).toBe(false);
+    }
   });
 });

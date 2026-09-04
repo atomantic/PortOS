@@ -574,12 +574,12 @@ export default function CanonCard({
   // accent-on-locked styling for the lock toggle. Keeps the canon section
   // visually consistent with the bucket cards above it.
   const actions = (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-2">
       <button
         type="button"
         onClick={onRender}
         disabled={!description.trim() || !!inFlightJobId}
-        className="p-1 text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed rounded"
+        className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed rounded"
         title={description.trim()
           ? `Render a canonical reference image for ${entry.name}`
           : 'Add a description first'}
@@ -592,7 +592,7 @@ export default function CanonCard({
           type="button"
           onClick={() => onRenderCleanPlate(entry)}
           disabled={!description.trim() || !!inFlightJobId}
-          className="p-1 text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed rounded"
+          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed rounded"
           title={description.trim()
             ? `Render an empty-location plate for ${entry.name} — no people, edge-to-edge`
             : 'Add a description first'}
@@ -606,7 +606,7 @@ export default function CanonCard({
           type="button"
           onClick={() => onDescribeImages(entry)}
           disabled={blockedByLock}
-          className="p-1 text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed rounded"
+          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed rounded"
           title={blockedByLock
             ? `Unlock ${entry.name} to apply a generated description`
             : `Describe ${entry.name} from a reference image (or several) using a vision model`}
@@ -620,7 +620,7 @@ export default function CanonCard({
           type="button"
           onClick={() => onCorrectFromImage(entry)}
           disabled={blockedByLock}
-          className="p-1 text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed rounded"
+          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed rounded"
           title={blockedByLock
             ? `Unlock ${entry.name} to apply a corrective reference`
             : `Correct ${entry.name}'s description from a reference image and pin it for future renders`}
@@ -634,7 +634,7 @@ export default function CanonCard({
           type="button"
           onClick={() => onRefine(entry.id)}
           disabled={refining || refineDisabled || blockedByLock}
-          className="p-1 text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed rounded"
+          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed rounded"
           title={blockedByLock
             ? `Unlock ${entry.name} to refine`
             : `AI: rewrite ${entry.name}'s description so they render distinct from every other character`}
@@ -648,7 +648,7 @@ export default function CanonCard({
           type="button"
           onClick={() => onToggleLock(entry.id, !locked)}
           disabled={togglingLock}
-          className={`p-1 rounded ${locked ? 'text-port-accent hover:bg-port-accent/20' : 'text-gray-500 hover:text-gray-300'}`}
+          className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded ${locked ? 'text-port-accent hover:bg-port-accent/20' : 'text-gray-500 hover:text-gray-300'}`}
           title={locked
             ? `Unlock ${entry.name} so refine / differentiate / re-extract can modify it`
             : `Lock ${entry.name} so AI passes don't rewrite it`}
@@ -665,7 +665,7 @@ export default function CanonCard({
         <button
           type="button"
           onClick={() => onRemove(entry.id)}
-          className="p-1 text-gray-400 hover:text-port-error rounded"
+          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-error rounded"
           title={`Remove ${entry.name} from this universe's canon — rendered images and any Catalog entry are kept`}
           aria-label={`Remove ${entry.name}`}
         >

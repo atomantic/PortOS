@@ -7,6 +7,8 @@ import useProviderModels from '../../hooks/useProviderModels';
 import useReviewerModelOptions from '../../hooks/useReviewerModelOptions';
 import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../../lib/reviewerModels';
 import { CodeReviewDefaultsProvider, useCodeReviewDefaults } from '../../hooks/useCodeReviewDefaults';
+import useClaimReviewers from '../../hooks/useClaimReviewers';
+import ClaimReviewerSource from './ClaimReviewerSource';
 import { isProcessProvider } from '../../utils/providers';
 import WorkItemPicker from './WorkItemPicker';
 import * as api from '../../services/api';
@@ -30,6 +32,11 @@ const enabledProcessProviderFilter = (p) => Boolean(p?.enabled) && isProcessProv
  */
 function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, onQueued }) {
   const codeReviewDefaults = useCodeReviewDefaults();
+  // What a claim actually resolves for this app — the claim-work override layer
+  // the defaults above cannot see. Only `/do:next` reads reviewers server-side,
+  // so no other command pays for the lookup. `installed` still comes from the
+  // defaults, which is why both are fetched.
+  const claimReviewers = useClaimReviewers(command === 'next' ? appId : null);
   // Resolved model lists for the reviewer table's Model column (the picker never
   // fetches — see its `modelOptions` prop).
   const reviewerModelOptions = useReviewerModelOptions();
@@ -42,19 +49,22 @@ function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, o
 
   const [effort, setEffort] = useState('');
   const [simplify, setSimplify] = useState(true);
-  // Seeded from the install's Code Review Defaults for display. `reviewDirty`
-  // gates whether they're SENT — see the component doc.
+  // Seeded from what the RUN will resolve for display. `review` staying null is
+  // what gates whether the fields are SENT — see the component doc.
   const [review, setReview] = useState(null);
-  // The defaults carry per-reviewer models and efforts as `<reviewer>Model` /
-  // `<reviewer>Effort` scalars; the picker takes the token-keyed maps, so fold them
-  // in for the seeded (untouched) display.
+  // Seeded display for an untouched picker. It has to show the reviewers the RUN
+  // would resolve, which is not the Code Review Defaults whenever a claim-work
+  // override is in play (see `GET /apps/:id/claim-reviewers`). The defaults are
+  // the fallback for the window before the lookup lands and for one that failed —
+  // they carry per-reviewer pins as `<reviewer>Model` / `<reviewer>Effort`
+  // scalars, which the picker takes as token-keyed maps.
   const seededReview = useMemo(
-    () => ({
+    () => claimReviewers ?? {
       ...codeReviewDefaults,
       reviewerModels: reviewerModelsFromDefaults(codeReviewDefaults),
       reviewerEfforts: reviewerEffortsFromDefaults(codeReviewDefaults),
-    }),
-    [codeReviewDefaults]
+    },
+    [claimReviewers, codeReviewDefaults]
   );
   const reviewValue = review ?? seededReview;
 
@@ -171,6 +181,15 @@ function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, o
                 The claim flow opens and merges its own PR, so these reviewers gate that merge (slashdo <code>--review-with</code>).
                 {!review && ' Leave them untouched to use this app’s configured reviewers.'}
               </p>
+              {/* Which layer supplied the seeded list. A claim-work override wins
+                  over Models → Code Reviewers silently, so a user who changed the
+                  install default and sees a different chain here has to be told
+                  where it came from. */}
+              {!review && claimReviewers?.source === 'task-override' && (
+                <p className="text-xs text-port-warning">
+                  Seeded<ClaimReviewerSource source={claimReviewers.source} />
+                </p>
+              )}
             </>
           )}
         </section>

@@ -254,3 +254,29 @@ describe('reviewerConfig transitional re-export shim (#5702)', () => {
     }
   });
 });
+
+describe('createCosTaskSchema isInvestigation (#6043)', () => {
+  it('survives validation instead of being stripped, in both the boolean and form-string shapes', () => {
+    expect(createCosTaskSchema.parse({ description: 'x', isInvestigation: true }).isInvestigation).toBe(true);
+    expect(createCosTaskSchema.parse({ description: 'x', isInvestigation: 'true' }).isInvestigation).toBe(true);
+    expect(createCosTaskSchema.parse({ description: 'x', isInvestigation: false }).isInvestigation).toBe(false);
+    expect(createCosTaskSchema.parse({ description: 'x', isInvestigation: 'false' }).isInvestigation).toBe(false);
+  });
+
+  it('is absent by default, so an ordinary task stays outside the investigation machinery', () => {
+    expect(createCosTaskSchema.parse({ description: 'x' }).isInvestigation).toBeUndefined();
+  });
+
+  it('rejects a non-boolean rather than coercing a truthy string into the marker', () => {
+    expect(createCosTaskSchema.safeParse({ description: 'x', isInvestigation: 'yes' }).success).toBe(false);
+  });
+
+  it('never accepts a client-supplied fingerprint — the server derives it', () => {
+    const parsed = createCosTaskSchema.parse({
+      description: 'x',
+      isInvestigation: true,
+      investigationFingerprint: 'auth-error:provider-failure:Example CLI',
+    });
+    expect(parsed).not.toHaveProperty('investigationFingerprint');
+  });
+});

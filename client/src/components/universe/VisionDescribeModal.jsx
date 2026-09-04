@@ -246,7 +246,7 @@ export default function VisionDescribeModal({
                     onClick={() => removeImage(imageKey(img))}
                     title="Remove image"
                     aria-label="Remove image"
-                    className="absolute -top-1.5 -right-1.5 bg-port-bg border border-port-border rounded-full p-0.5 text-gray-400 hover:text-port-error"
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center absolute -top-1.5 -right-1.5 bg-port-bg border border-port-border rounded-full p-0.5 text-gray-400 hover:text-port-error"
                   >
                     <X size={11} />
                   </button>

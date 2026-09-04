@@ -10,7 +10,10 @@
  *   - isTestDatabase()  — names a DB safe for destructive tests.
  *   - isTestRunner()    — detects the runner via NODE_ENV=test OR the VITEST env
  *                         var (set in every vitest worker), so a worktree run
- *                         that left NODE_ENV unset is still gated.
+ *                         that left NODE_ENV unset is still gated. Now declared in
+ *                         lib/runtimeEnv.js (the file guards need it too, and must
+ *                         not import `pg`), still covered here because these DB
+ *                         guards are what it was introduced for.
  *   - checkHealth()     — reports "disconnected" under the test runner on a real
  *                         DB so every db-backed suite skips via its existing branch.
  *   - query()           — hard backstop: throws on ANY row write — INSERT/UPDATE/
@@ -34,7 +37,8 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { readdirSync, openSync, readSync, closeSync, existsSync } from 'node:fs';
 import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isTestDatabase, isTestRunner, checkHealth, query, assertWriteAllowed } from './db.js';
+import { isTestDatabase, checkHealth, query, assertWriteAllowed } from './db.js';
+import { isTestRunner } from './runtimeEnv.js';
 import { DB_TEST_INCLUDE } from '../vitest.config.db.js';
 
 // NODE_ENV is 'test' throughout (vitest default); we vary PGDATABASE / TEST_DB_OK.

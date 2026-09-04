@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync, readFileSync
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createHash } from 'crypto';
-import { mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
+import { makePathsProxy, mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
 
 function sha256Hex(buf) {
   return createHash('sha256').update(buf).digest('hex');
@@ -25,20 +25,14 @@ function sha256Hex(buf) {
 const tempData = mkdtempSync(join(tmpdir(), 'portos-sharing-roundtrip-data-'));
 let tempBucket;
 
-vi.mock('../../lib/fileUtils.js', async () => {
-  const actual = await vi.importActual('../../lib/fileUtils.js');
-  return new Proxy(actual, {
-    get(target, prop) {
-      if (prop === 'PATHS') return {
-        ...actual.PATHS,
-        data: tempData,
-        images: join(tempData, 'images'),
-        videos: join(tempData, 'videos'),
-      };
-      return target[prop];
-    },
-  });
-});
+// makePathsProxy, not a hand-rolled one: this suite listed `data`/`images`/
+// `videos` by hand, so `PATHS.imageRefs` — added later — still resolved to the
+// install's live `data/image-refs`, and the importer's copyAssetsLocally
+// created it and copied bundled reference sheets there on every run (#6176).
+// The shared helper re-roots EVERY member that lives under `data/`, so a member
+// added tomorrow is covered without touching this file.
+vi.mock('../../lib/fileUtils.js', async () =>
+  makePathsProxy(await vi.importActual('../../lib/fileUtils.js'), { dataRoot: tempData }));
 
 // Stub instances.getInstanceId so the exporter doesn't try to read the
 // real identity.json. Returns a fixed id for assertions.

@@ -182,9 +182,15 @@ describe('resetGitWorktreeSandbox', () => {
 
     await resetGitWorktreeSandbox(dest, initialHead);
 
+    // Parse porcelain into worktree entries and assert only `dest` itself
+    // remains, rather than substring-matching 'wt-a'/'wt-b' against the raw
+    // listing — that substring can coincidentally appear inside dest's own
+    // random mkdtemp() suffix (~3.2% chance per prefix) and false-fail (#6059).
+    // Counting entries also sidesteps comparing absolute paths directly,
+    // which git can respell on Windows (see the assertPath test above, #6003).
     const listing = (await execGit(['worktree', 'list', '--porcelain'], dest)).stdout;
-    expect(listing).not.toContain('wt-a');
-    expect(listing).not.toContain('wt-b');
+    const worktreeEntries = listing.split(/\r?\n/).filter((line) => line.startsWith('worktree '));
+    expect(worktreeEntries).toHaveLength(1);
     expect((await execGit(['branch', '--format=%(refname:short)'], dest)).stdout.trim()).toBe('main');
     expect((await execGit(['rev-parse', 'HEAD'], dest)).stdout.trim()).toBe(initialHead);
   });

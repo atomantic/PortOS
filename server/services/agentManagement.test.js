@@ -54,7 +54,8 @@ vi.mock('./cos.js', () => ({
   getTaskById: vi.fn(),
   getAllTasks: vi.fn(),
   reviveBlockedTask: vi.fn().mockResolvedValue(true),
-  evaluateTasks: vi.fn().mockResolvedValue(undefined)
+  evaluateTasks: vi.fn().mockResolvedValue(undefined),
+  forceSpawnTask: vi.fn().mockResolvedValue({ success: true })
 }));
 
 vi.mock('./cosEvents.js', () => ({
@@ -122,7 +123,7 @@ import { getAgents, updateAgent, getAgentRecord, readAgentRecordOrUnreadable, AG
 import { updateRun, getProject } from './creativeDirector/local.js';
 import { advanceAfterPlanStepSettled } from './creativeDirector/planAdvance.js';
 import { advanceAfterSceneSettled } from './creativeDirector/completionHook.js';
-import { updateTask, addTask, getTaskById, getAllTasks, reviveBlockedTask } from './cos.js';
+import { updateTask, addTask, getTaskById, getAllTasks, reviveBlockedTask, forceSpawnTask } from './cos.js';
 import { pauseAgentViaRunner, terminateAgentViaRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
 import * as shellService from './shell.js';
 import { readHostShutdownMarker, clearHostShutdownMarker } from '../lib/hostShutdown.js';
@@ -922,6 +923,8 @@ describe('resumeAgent — requeues the paused agent\'s own task', () => {
       resumedFromAgentId: 'agent-paused-1',
       resumeWorktreePath: '/tmp/worktrees/agent-paused-1',
     });
+    forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-abc' });
+    getAgents.mockResolvedValue([]);
   });
 
   it('flips the SAME task back to pending — no new task', async () => {
@@ -1129,6 +1132,63 @@ describe('resumeAgent — requeues the paused agent\'s own task', () => {
     getTaskById.mockResolvedValue(null);
     await expect(resumeAgent('agent-paused-1')).resolves.toMatchObject({ mode: 'new-task' });
   });
+
+  // The requeue only makes the task ELIGIBLE, and the automatic dequeue admits
+  // system tasks only under CoS auto-run — so without an explicit dispatch a
+  // resumed task sits `pending` until the user opens the task list and presses
+  // Run, which is the two-step both Resume and Relaunch exist to avoid.
+  it('force-spawns the requeued task instead of leaving it pending', async () => {
+    const result = await resumeAgent('agent-paused-1');
+
+    expect(forceSpawnTask).toHaveBeenCalledWith('task-abc');
+    expect(result).toMatchObject({ spawned: true, spawnHold: null });
+  });
+
+  it('reports the refusal instead of claiming a resume that never started', async () => {
+    // A full pool / paused daemon / unreachable runner all mean "stays queued".
+    // Reporting `spawned: true` there is what would send the user to a task list
+    // showing a pending task after a toast that said it was running.
+    forceSpawnTask.mockResolvedValue({ error: 'No available agent slots (3/3)' });
+
+    await expect(resumeAgent('agent-paused-1')).resolves.toMatchObject({
+      mode: 'requeued', spawned: false, spawnHold: 'No available agent slots (3/3)',
+    });
+  });
+
+  it('treats a task the racing dequeue already claimed as started, not as held', async () => {
+    // `completeAgent` schedules a dequeue that can claim the task first; the
+    // force-spawn then refuses because it is no longer `pending`. That is the
+    // resume working, so the result must not report a hold.
+    forceSpawnTask.mockImplementation(async () => {
+      getTaskById.mockResolvedValue({ ...PAUSED_TASK, status: 'in_progress' });
+      return { error: 'Task is in_progress, not pending' };
+    });
+
+    await expect(resumeAgent('agent-paused-1')).resolves.toMatchObject({ spawned: true, spawnHold: null });
+  });
+
+  // A spawn registers its agent as `running` BEFORE it flips the task off
+  // `pending`, and the refusal that lands in that window is forceSpawnTask's own
+  // holder guard. Reading the task status alone still sees `pending` there, so
+  // the resume would report a hold for a run that is already under way — the
+  // exact mis-report this dispatch exists to avoid.
+  it('treats a task claimed mid-spawn as started, even while it still reads pending', async () => {
+    forceSpawnTask.mockImplementation(async () => {
+      getAgents.mockResolvedValue([{ id: 'agent-new-1', status: 'running', taskId: 'task-abc' }]);
+      return { error: 'Agent agent-new-1 is already running this task' };
+    });
+
+    await expect(resumeAgent('agent-paused-1')).resolves.toMatchObject({ spawned: true, spawnHold: null });
+  });
+
+  it('does not dispatch a mode that deliberately queued nothing', async () => {
+    // `already-active` means some other path already put the work in flight —
+    // force-spawning here is the duplicate agent classifyResume exists to prevent.
+    getTaskById.mockResolvedValue({ ...PAUSED_TASK, status: 'in_progress', metadata: { context: 'original context' } });
+
+    await expect(resumeAgent('agent-paused-1')).resolves.toMatchObject({ mode: 'already-active', spawned: false });
+    expect(forceSpawnTask).not.toHaveBeenCalled();
+  });
 });
 
 // ─── relaunchAgent ────────────────────────────────────────────────────────────
@@ -1171,6 +1231,8 @@ describe('relaunchAgent — moves a running agent\'s task onto another provider'
     getAgentRecord.mockImplementation(async () => ({ ...LIVE_AGENT, status: paused ? 'paused' : 'running' }));
     getTaskById.mockResolvedValue(PAUSED_TASK);
     reviveBlockedTask.mockResolvedValue({ metadata: {} });
+    forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-abc' });
+    getAgents.mockResolvedValue([]);
   });
 
   it('requeues the SAME task with the new provider/model/effort — no second task', async () => {
@@ -1245,6 +1307,21 @@ describe('relaunchAgent — moves a running agent\'s task onto another provider'
     const { metadata } = reviveBlockedTask.mock.calls[0][1];
     expect(metadata).not.toHaveProperty('model');
     expect(metadata.effort).toBe('max');
+  });
+
+  // Relaunch is a pause plus a resume, so the immediate dispatch is inherited from
+  // `resumeAgent` rather than repeated here (its own refusal/race handling is
+  // covered in the resume suite above). This locks the inheritance: a relaunch that
+  // stopped passing the dispatch outcome through would silently go back to leaving
+  // the task pending for a user to run by hand.
+  it('starts the requeued task and passes the dispatch outcome through', async () => {
+    runnerAgents.set('agent-live-1', { taskId: 'task-abc', runId: 'run-1' });
+    pauseAgentViaRunner.mockResolvedValue({ success: true });
+
+    const result = await relaunchAgent('agent-live-1', { provider: 'codex' });
+
+    expect(forceSpawnTask).toHaveBeenCalledWith('task-abc');
+    expect(result).toMatchObject({ relaunched: true, spawned: true, spawnHold: null });
   });
 
   it('refuses an agent that is not running, and one that does not exist', async () => {

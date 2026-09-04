@@ -106,11 +106,11 @@ export default function DraftsTab({ accounts }) {
                   <span className="text-xs text-port-accent-2">AI generated</span>
                 )}
               </div>
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-2">
                 {draft.status === 'draft' && draft.sendVia !== 'review' && (
                   <button
                     onClick={() => handleApprove(draft.id)}
-                    className="p-1 text-gray-400 hover:text-port-success transition-colors"
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-success transition-colors"
                     title="Approve" aria-label="Approve"
                   >
                     <Check size={16} />
@@ -123,8 +123,9 @@ export default function DraftsTab({ accounts }) {
                 {draft.status === 'approved' && draft.sendVia !== 'review' && (
                   <button
                     onClick={() => handleSend(draft.id)}
-                    className="p-1 text-gray-400 hover:text-port-accent transition-colors"
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-accent transition-colors"
                     title="Send" aria-label="Send"
+                    data-voice-guard="confirm"
                   >
                     <Send size={16} />
                   </button>
@@ -136,7 +137,7 @@ export default function DraftsTab({ accounts }) {
                     </span>
                     <button
                       onClick={() => handleCopy(draft)}
-                      className="p-1 text-gray-400 hover:text-port-accent transition-colors"
+                      className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-accent transition-colors"
                       title="Copy message"
                       aria-label="Copy message"
                     >
@@ -150,7 +151,7 @@ export default function DraftsTab({ accounts }) {
                 {(['draft', 'pending_review', 'failed'].includes(draft.status) || draft.sendVia === 'review') && (
                   <button
                     onClick={() => requestDelete(draft.id)}
-                    className="p-1 text-gray-400 hover:text-port-error transition-colors"
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-error transition-colors"
                     title="Delete" aria-label="Delete"
                   >
                     <Trash2 size={16} />

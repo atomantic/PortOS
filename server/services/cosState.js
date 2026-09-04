@@ -4,11 +4,12 @@
  * Shared state management for Chief of Staff services.
  */
 
-import { readFile, writeFile, readdir, rm } from 'fs/promises';
+import { readFile, readdir, rm, rename } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, basename } from 'path';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
-import { ensureDirs, safeJSONParse, PATHS, atomicWrite } from '../lib/fileUtils.js';
+import { ensureDirs, safeJSONParse, readJSONFileStrict, PATHS, atomicWrite } from '../lib/fileUtils.js';
+import { isPlainObject } from '../lib/objects.js';
 import { normalizeDomainAutonomy, getDomainMode } from '../lib/domainAutonomy.js';
 import { normalizeDomainBudgets } from '../lib/domainBudgets.js';
 import { createDefaultPersistentMindState, normalizePersistentMindState } from '../lib/persistentMind.js';
@@ -18,6 +19,16 @@ import { createDefaultPersistentMindPrompt, normalizePersistentMindPrompt } from
 import { DEFAULT_ALWAYS_APPROVE_KINDS } from './taskLearning/safetyKind.js';
 
 export const STATE_FILE = join(PATHS.cos, 'state.json');
+// Durable user configuration lives in its own file (#6182). state.json is
+// rewritten on every agent status change and every batched output flush; config
+// is written only when the user changes a setting. Splitting them keeps the hot
+// path from re-serializing ~180 KB of settings it never touched, and keeps
+// damage to the runtime file away from settings that are near-impossible to
+// reconstruct. This retires the `config.last-known-good.json` sidecar, which
+// mirrored the config slice out of state.json precisely because the two shared
+// a file — config.json IS the low-frequency copy now, so a second one would
+// only add a way for the two to disagree. Migration 339 removes the sidecar.
+export const CONFIG_FILE = join(PATHS.cos, 'config.json');
 export const AGENTS_DIR = join(PATHS.cos, 'agents');
 export const REPORTS_DIR = PATHS.reports;
 export const SCRIPTS_DIR = PATHS.scripts;
@@ -33,6 +44,11 @@ export const ROOT_DIR = PATHS.root;
 // reason. The queue additionally silences its tail so one rejected write can't
 // poison subsequent waiters (a strict improvement over the prior mutex).
 export const withStateLock = createFileWriteQueue();
+
+// Config gets its OWN tail, so a settings read or write never queues behind the
+// runtime-record writes that dominate state.json (#6182). Same
+// `(fn) => Promise` contract as `withStateLock`.
+export const withConfigLock = createFileWriteQueue();
 
 export const DEFAULT_CONFIG = {
   userTasksFile: 'data/TASKS.md',
@@ -112,7 +128,6 @@ export const DEFAULT_STATE = {
   paused: false,
   pausedAt: null,
   pauseReason: null,
-  config: DEFAULT_CONFIG,
   stats: {
     tasksCompleted: 0,
     totalRuntime: 0,
@@ -129,12 +144,174 @@ export async function ensureDirectories() {
   await ensureDirs([PATHS.data, PATHS.cos, AGENTS_DIR, REPORTS_DIR, SCRIPTS_DIR]);
 }
 
-function isValidJSON(str) {
-  if (!str || !str.trim()) return false;
-  const trimmed = str.trim();
-  if (!(trimmed.startsWith('{') && trimmed.endsWith('}'))) return false;
-  if (trimmed.includes('}{')) return false;
-  return true;
+/**
+ * Parse a persisted CoS state file, returning the object or `null` when the
+ * bytes are not a JSON object.
+ *
+ * Never front this with a structural heuristic. The one this replaced rejected
+ * any file containing the byte pair `}{` anywhere — a guess at a double-append
+ * corruption that fires on perfectly VALID JSON as soon as a stored string
+ * holds those two characters (an agent prompt quoting `{value}{ — project}`,
+ * a diff carrying JSX). Each false positive discarded the whole file and
+ * silently reset the user's config to DEFAULT_CONFIG. `JSON.parse` rejects a
+ * genuine `{…}{…}` concatenation on its own, so the guess protected nothing.
+ */
+function parseStateFile(content, context = 'CoS state') {
+  const parsed = safeJSONParse(content, null, { allowArray: false, logError: true, context });
+  return isPlainObject(parsed) ? parsed : null;
+}
+
+/**
+ * Apply the stored config over DEFAULT_CONFIG, running the legacy-key
+ * migrations first. Shared by the normal load path and the corrupt-file
+ * recovery path so a recovered config is normalized identically.
+ */
+function mergeStoredConfig(storedConfig) {
+  // `isPlainObject` before the spread, not `|| {}`: spreading a string yields
+  // one key per character, so a `"config": "…"` in a hand-edited state file
+  // would merge character indices over DEFAULT_CONFIG instead of being ignored.
+  const persistedConfig = isPlainObject(storedConfig) ? { ...storedConfig } : {};
+
+  // Migrate legacy split flags before merging defaults — DEFAULT_CONFIG.improvementEnabled = true
+  // would otherwise shadow a v1 file that only set selfImprovementEnabled/appImprovementEnabled.
+  if (persistedConfig.improvementEnabled === undefined &&
+      (persistedConfig.selfImprovementEnabled !== undefined || persistedConfig.appImprovementEnabled !== undefined)) {
+    persistedConfig.improvementEnabled =
+      persistedConfig.selfImprovementEnabled || persistedConfig.appImprovementEnabled;
+  }
+
+  // Drop the retired `evaluationIntervalMs` key on read. CoS evaluation became
+  // event-driven (the periodic evaluateTasks() timer was removed), so the field
+  // no longer exists in DEFAULT_CONFIG or the (strict) update schema. Upgraded
+  // installs still carry it in state.json; stripping it here keeps GET /config
+  // from re-emitting a key the strict PUT schema would now reject on a full
+  // round-trip, and purges it from disk on the next saveState.
+  delete persistedConfig.evaluationIntervalMs;
+  // The global four-level autonomy preset was only a UI shortcut that rewrote
+  // independent capacity/work-generation fields. Domain guardrails now own the
+  // actual off/dry-run/execute policy, so do not keep re-emitting this inert key
+  // from upgraded state files. Per-job autonomyLevel remains a separate contract.
+  delete persistedConfig.autonomyLevel;
+  delete persistedConfig.comprehensiveAppImprovement;
+  delete persistedConfig.immediateExecution;
+
+  return {
+    ...DEFAULT_CONFIG,
+    ...persistedConfig,
+    persistentMindCapabilities: normalizePersistentMindCapabilities(persistedConfig.persistentMindCapabilities),
+    persistentMindProfile: normalizePersistentMindProfile(persistedConfig.persistentMindProfile),
+    persistentMindPrompt: normalizePersistentMindPrompt(persistedConfig.persistentMindPrompt),
+  };
+}
+
+/**
+ * Quarantine an unreadable JSON file next to itself and prune all but the three
+ * most recent quarantined copies, so the lost bytes stay inspectable.
+ *
+ * `remove` moves the file instead of copying it, so it leaves the active path.
+ * config.json needs that: it is written only when the user changes a setting,
+ * so a copy would leave the corrupt original to be re-read, re-warned about,
+ * and re-quarantined on every boot. state.json deliberately keeps the copy —
+ * the next runtime write overwrites it within seconds, and
+ * `readStateForSafetyCheck()` reports an unreadable file as `trusted: false`
+ * ("could not establish what is there"); removing it would turn that into
+ * "known empty" and let the update gate restart out from under a live agent.
+ */
+async function quarantineCorruptFile(filePath, content, label, { remove = false } = {}) {
+  const backupPath = `${filePath}.corrupted.${Date.now()}`;
+  const moved = remove && await rename(filePath, backupPath).then(() => true).catch(() => false);
+  if (!moved) await atomicWrite(backupPath, content).catch(() => {});
+  console.log(`📝 Backed up corrupted ${label} to ${backupPath}`);
+  const dir = dirname(filePath);
+  const prefix = `${basename(filePath)}.corrupted.`;
+  const files = await readdir(dir).catch(() => []);
+  const corrupted = files.filter(f => f.startsWith(prefix)).sort().reverse();
+  for (const old of corrupted.slice(3)) {
+    await rm(join(dir, old)).catch(() => {});
+  }
+  if (corrupted.length > 3) {
+    console.log(`🗑️ Cleaned up ${corrupted.length - 3} old corrupted ${label} backups`);
+  }
+}
+
+/**
+ * Fall back to default runtime state after an unreadable state.json, backing
+ * the bad bytes up first. Config is unaffected — it lives in its own file, so
+ * there is nothing to recover here that state.json could have taken with it.
+ */
+async function recoverFromUnreadableState(content) {
+  console.log(`⚠️ Corrupted or empty state file at ${STATE_FILE}, returning default state`);
+  await quarantineCorruptFile(STATE_FILE, content, 'CoS state');
+  return structuredClone(DEFAULT_STATE);
+}
+
+// In-memory config cache. Every mutation goes through `withConfigLock` +
+// `saveConfig`, so the cache stays consistent.
+let configCache = null;
+
+/**
+ * Read the raw persisted config object, and say where it came from.
+ *
+ * Prefers `data/cos/config.json`. `readJSONFileStrict` carries the Windows
+ * swap-window retry, so a read landing between `atomicWrite`'s temp write and
+ * its rename reports the real file rather than "absent" — reporting absent here
+ * would fall through to the legacy path and, on an already-split install, hand
+ * back DEFAULT_CONFIG. `ok: false` is present-but-unreadable, which is the only
+ * case that quarantines.
+ *
+ * Falls back to the `config` slice a legacy `state.json` still carries (a peer
+ * that has not upgraded, a restored pre-split backup) so an un-migrated install
+ * never boots on bare defaults.
+ */
+async function readPersistedConfig() {
+  const { ok, value } = await readJSONFileStrict(CONFIG_FILE, null, { allowArray: false, logError: true });
+  if (ok && isPlainObject(value)) return { config: value, fromConfigFile: true };
+  if (!ok) {
+    console.log(`⚠️ Corrupted or empty config file at ${CONFIG_FILE}, falling back to legacy/default config`);
+    const content = await readFile(CONFIG_FILE, 'utf-8').catch(() => '');
+    await quarantineCorruptFile(CONFIG_FILE, content, 'CoS config', { remove: true });
+  }
+  // Back-compat read. Deliberately does NOT quarantine or rewrite state.json —
+  // loadState() owns that file's recovery.
+  if (!existsSync(STATE_FILE)) return { config: null, fromConfigFile: false };
+  const stateContent = await readFile(STATE_FILE, 'utf-8');
+  const state = parseStateFile(stateContent, 'CoS state (legacy config)');
+  const legacy = state?.config;
+  return { config: isPlainObject(legacy) ? legacy : null, fromConfigFile: false };
+}
+
+/**
+ * Load the durable user configuration.
+ */
+export async function loadConfig() {
+  if (configCache) return configCache;
+  await ensureDirectories();
+  const { config, fromConfigFile } = await readPersistedConfig();
+  configCache = mergeStoredConfig(config);
+  // Recovering settings out of a legacy state.json is a READ; nothing has
+  // written them to their own file yet. `saveState` strips `config` from
+  // state.json on the very next runtime write, so leaving the recovery in
+  // memory would destroy those settings on the next restart. Complete the split
+  // here — migration 339's job, done lazily for the installs it cannot reach (a
+  // restored pre-split backup on a machine that already recorded it as applied).
+  if (config && !fromConfigFile) {
+    console.log(`📦 Recovered CoS config from a legacy state.json — writing ${CONFIG_FILE}`);
+    await atomicWrite(CONFIG_FILE, configCache);
+  }
+  return configCache;
+}
+
+/**
+ * Persist the durable user configuration to its own file. Keeps any live
+ * `loadState()` result pointing at the same object so a state reader taken
+ * before the write does not go stale.
+ */
+export async function saveConfig(config) {
+  await ensureDirectories();
+  configCache = config;
+  if (stateCache) stateCache.config = config;
+  await atomicWrite(CONFIG_FILE, config);
+  return config;
 }
 
 // In-memory state cache — avoids re-reading state.json from disk on every call.
@@ -159,11 +336,11 @@ export function canQueueImprovementTasks(state) {
 }
 
 /**
- * Get current configuration
+ * Get current configuration. Reads the config file's own cache — it no longer
+ * queues behind, or deserializes, the runtime records in state.json.
  */
 export async function getConfig() {
-  const state = await loadState();
-  return state.config;
+  return loadConfig();
 }
 
 export async function loadState() {
@@ -171,75 +348,29 @@ export async function loadState() {
 
   await ensureDirectories();
 
+  // Config is its own file now, so it survives every state.json failure path.
+  const config = await loadConfig();
+
   if (!existsSync(STATE_FILE)) {
-    stateCache = structuredClone(DEFAULT_STATE);
+    stateCache = Object.assign(structuredClone(DEFAULT_STATE), { config });
     return stateCache;
   }
 
   const content = await readFile(STATE_FILE, 'utf-8');
+  const state = parseStateFile(content);
 
-  if (!isValidJSON(content)) {
-    console.log(`⚠️ Corrupted or empty state file at ${STATE_FILE}, returning default state`);
-    const backupPath = `${STATE_FILE}.corrupted.${Date.now()}`;
-    await writeFile(backupPath, content).catch(() => {});
-    console.log(`📝 Backed up corrupted state to ${backupPath}`);
-    // Cleanup old corrupted backups (keep only 3 most recent)
-    const cosDir = dirname(STATE_FILE);
-    const files = await readdir(cosDir).catch(() => []);
-    const corrupted = files
-      .filter(f => f.startsWith('state.json.corrupted.'))
-      .sort()
-      .reverse();
-    for (const old of corrupted.slice(3)) {
-      await rm(join(cosDir, old)).catch(() => {});
-    }
-    if (corrupted.length > 3) {
-      console.log(`🗑️ Cleaned up ${corrupted.length - 3} old corrupted state backups`);
-    }
-    stateCache = structuredClone(DEFAULT_STATE);
-    return stateCache;
-  }
-
-  const state = safeJSONParse(content, null, { logError: true, context: 'CoS state' });
   if (!state) {
-    stateCache = structuredClone(DEFAULT_STATE);
+    stateCache = Object.assign(await recoverFromUnreadableState(content), { config });
     return stateCache;
   }
-
-  // Migrate legacy split flags before merging defaults — DEFAULT_CONFIG.improvementEnabled = true
-  // would otherwise shadow a v1 file that only set selfImprovementEnabled/appImprovementEnabled.
-  const persistedConfig = state.config || {};
-  if (persistedConfig.improvementEnabled === undefined &&
-      (persistedConfig.selfImprovementEnabled !== undefined || persistedConfig.appImprovementEnabled !== undefined)) {
-    persistedConfig.improvementEnabled =
-      persistedConfig.selfImprovementEnabled || persistedConfig.appImprovementEnabled;
-  }
-
-  // Drop the retired `evaluationIntervalMs` key on read. CoS evaluation became
-  // event-driven (the periodic evaluateTasks() timer was removed), so the field
-  // no longer exists in DEFAULT_CONFIG or the (strict) update schema. Upgraded
-  // installs still carry it in state.json; stripping it here keeps GET /config
-  // from re-emitting a key the strict PUT schema would now reject on a full
-  // round-trip, and purges it from disk on the next saveState.
-  delete persistedConfig.evaluationIntervalMs;
-  // The global four-level autonomy preset was only a UI shortcut that rewrote
-  // independent capacity/work-generation fields. Domain guardrails now own the
-  // actual off/dry-run/execute policy, so do not keep re-emitting this inert key
-  // from upgraded state files. Per-job autonomyLevel remains a separate contract.
-  delete persistedConfig.autonomyLevel;
-  delete persistedConfig.comprehensiveAppImprovement;
-  delete persistedConfig.immediateExecution;
 
   stateCache = {
     ...DEFAULT_STATE,
     ...state,
-    config: {
-      ...DEFAULT_CONFIG,
-      ...persistedConfig,
-      persistentMindCapabilities: normalizePersistentMindCapabilities(persistedConfig.persistentMindCapabilities),
-      persistentMindProfile: normalizePersistentMindProfile(persistedConfig.persistentMindProfile),
-      persistentMindPrompt: normalizePersistentMindPrompt(persistedConfig.persistentMindPrompt),
-    },
+    // Always the config file's copy — a legacy `config` slice still sitting in
+    // state.json was already folded in by `readPersistedConfig()`, and must
+    // never shadow the (newer) config file on an install carrying both.
+    config,
     stats: { ...DEFAULT_STATE.stats, ...state.stats },
     persistentMind: normalizePersistentMindState(state.persistentMind),
     agents: state.agents ?? {}
@@ -257,11 +388,8 @@ async function readStateForSafetyCheck() {
   await ensureDirectories();
   if (!existsSync(STATE_FILE)) return { trusted: true, state: null };
   const content = await readFile(STATE_FILE, 'utf-8');
-  if (!isValidJSON(content)) return { trusted: false, state: null };
-  const state = safeJSONParse(content, null, { logError: true, context: 'CoS state safety check' });
-  if (!state || typeof state !== 'object' || Array.isArray(state)) {
-    return { trusted: false, state: null };
-  }
+  const state = parseStateFile(content);
+  if (!state) return { trusted: false, state: null };
   return { trusted: true, state };
 }
 
@@ -280,14 +408,29 @@ export async function readAgentsStateForSafetyCheck() {
   const agents = state?.agents;
   return {
     trusted,
-    agents: trusted && agents && typeof agents === 'object' && !Array.isArray(agents) ? agents : null,
+    agents: trusted && isPlainObject(agents) ? agents : null,
   };
 }
 
+/**
+ * Persist the runtime records. `config` is NOT this function's to write — it is
+ * owned by `saveConfig()` / `updateConfig()` and lives in its own file.
+ *
+ * The cached state is re-anchored on the authoritative config object first, so
+ * a caller that passed a state carrying a stale config (a shallow copy taken
+ * before a concurrent `updateConfig`) or no config at all (a hand-built object)
+ * can neither publish that copy nor leave `stateCache.config` undefined for the
+ * next `state.config.…` reader. A caller wanting to CHANGE a setting must call
+ * `updateConfig()`; `state.config` is a read-only view.
+ */
 export async function saveState(state) {
   await ensureDirectories();
+  state.config = await loadConfig();
   stateCache = state;
-  await atomicWrite(STATE_FILE, state);
+  // Config lives in its own file; never re-serialize it onto the hot path.
+  const persisted = { ...state };
+  delete persisted.config;
+  await atomicWrite(STATE_FILE, persisted);
 }
 
 // Resolve a single domain's autonomy mode (off | dry-run | execute) without

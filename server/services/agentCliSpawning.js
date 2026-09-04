@@ -26,6 +26,7 @@ import { normalizeReviewers } from '../lib/validation.js';
 import { resolveReviewLoopOptions } from './codeReview.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
+import { createStreamingAnsiStripper } from '../lib/ansiStrip.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
@@ -533,6 +534,18 @@ export async function spawnDirectly({
   const isStreamJson = cliConfig.streamFormat === 'stream-json';
   const streamParser = isStreamJson ? createStreamJsonParser() : null;
   const codexStderrFormatter = provider.id === 'codex' ? createCodexStderrFormatter(prompt) : null;
+  // A headless CLI still colors its progress output: `opencode run` emits bare
+  // `\x1B[0m` resets around its status line. Those bytes reached output.txt and
+  // the live tail verbatim, and the browser drops only the ESC itself — so the
+  // card rendered `[stderr] [0m` and a working agent was indistinguishable from
+  // a wedged one. Strip per stream (each stripper is stateful, buffering an
+  // escape split across two `data` chunks) BEFORE the fallback-signal detector,
+  // which matches on provider text that color codes would otherwise break up.
+  // A stream-json stdout is NDJSON, which escapes an ESC into its six-character
+  // JSON form and never carries the raw byte — so the busiest stdout stream in
+  // the system skips the scan entirely.
+  const stripStdoutAnsi = isStreamJson ? (text) => text : createStreamingAnsiStripper();
+  const stripStderrAnsi = createStreamingAnsiStripper();
   let immediateFallbackAnalysis = null;
   const detectImmediateFallbackSignal = createImmediateFallbackSignalDetector();
 
@@ -610,7 +623,8 @@ export async function spawnDirectly({
 
   handleStdout = (data) => {
     try {
-      const text = data.toString();
+      const raw = data.toString();
+      const text = stripStdoutAnsi(raw);
       // Detect fallback signals SYNCHRONOUSLY, before enqueuing any transcript
       // mutation — a blocked earlier write must never delay killing the provider
       // on a usage-limit signal (#2384).
@@ -618,7 +632,9 @@ export async function spawnDirectly({
       // Serialize the transcript body so two `data` events can't interleave their
       // awaits and reorder output.txt / the batched live tail.
       enqueueTranscriptWrite(async () => {
-        await recordFirstOutput('cli-stdout', text.length);
+        // Raw length, not stripped: a chunk that was ONLY color codes is still
+        // proof the child is alive, and reporting 0 would read as "no output yet".
+        await recordFirstOutput('cli-stdout', raw.length);
         if (!hasStartedWorking) {
           hasStartedWorking = true;
           await updateAgent(agentId, { metadata: { phase: 'working' } });
@@ -636,7 +652,11 @@ export async function spawnDirectly({
           outputBatcher.push(lines);
           await writeFile(outputFile, outputBuffer).catch(() => {});
         } else {
-          // Non-stream providers: emit raw stdout as before
+          // Non-stream providers: emit stdout as-is once decolored. A chunk that
+          // was purely terminal control has nothing left to show. Unlike stderr
+          // below, whitespace is NOT dropped here — a blank line is legitimate
+          // formatting when it isn't wearing an `[stderr]` tag.
+          if (!text) return;
           outputBuffer += text;
           await writeFile(outputFile, outputBuffer).catch(() => {});
           outputBatcher.push(text);
@@ -649,11 +669,12 @@ export async function spawnDirectly({
 
   handleStderr = (data) => {
     try {
-      const text = data.toString();
+      const raw = data.toString();
+      const text = stripStderrAnsi(raw);
       // Synchronous fallback detection before the serialized write (see stdout).
       stopForImmediateFallbackSignal(`[stderr] ${text}`);
       enqueueTranscriptWrite(async () => {
-        await recordFirstOutput('cli-stderr', text.length);
+        await recordFirstOutput('cli-stderr', raw.length);
         // Codex stderr: show thinking + tool names, skip config dump and command output
         if (codexStderrFormatter) {
           const lines = codexStderrFormatter.processChunk(text);
@@ -662,6 +683,10 @@ export async function spawnDirectly({
           await writeFile(outputFile, outputBuffer).catch(() => {});
           return;
         }
+        // A chunk that decolors down to whitespace was pure terminal control
+        // (`opencode run` emits a bare reset per progress redraw). Tagging it
+        // `[stderr]` would add one blank noise line to the tail per redraw.
+        if (!text.trim()) return;
         outputBuffer += `[stderr] ${text}`;
         await writeFile(outputFile, outputBuffer).catch(() => {});
         outputBatcher.push(`[stderr] ${text}`);

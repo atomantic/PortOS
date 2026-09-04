@@ -4,15 +4,10 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { UPSTREAM_FULL_NAME } from '../lib/gitRemote.js';
 import * as updateChecker from '../services/updateChecker.js';
-import { executeUpdate } from '../services/updateExecutor.js';
-import { withStateLock } from '../services/cosState.js';
+import { startPortosSelfUpdate } from '../services/portosSelfUpdate.js';
 import {
   countActiveCosAgents,
-  agentsActiveError,
   getPersistentMindImageWorkGuard,
-  persistentMindImageWorkError,
-  persistentMindStateUntrustedError,
-  checkPortosUpdatePreflight,
 } from '../services/updatePreflight.js';
 
 const router = Router();
@@ -128,120 +123,18 @@ router.post('/sync-fork', asyncHandler(async (req, res) => {
 router.post('/execute', asyncHandler(async (req, res) => {
   const { acknowledgeFork, acknowledgePersistentMindImageBackup, reconcile } = validateRequest(executeSchema, req.body || {});
 
-  // Never restart PortOS out from under a live CoS agent, in-flight Persistent
-  // Mind image work, or an unacknowledged fork. Both a normal update and a
-  // reconcile run update.sh, which pm2-restarts THIS server process and severs
-  // any in-flight agent (each agent's PTY/child process is a child of it).
-  // checkPortosUpdatePreflight() is shared with the App Management socket path
-  // (server/sockets/apps.js `app:update`) so both entry points refuse
-  // identically (#5984). Fast-fail here so it covers reconcile, normal update,
-  // and both fork variants (all funnel through /execute) before doing the
-  // git/fork work below; a second re-check after the lock (below) closes the
-  // window an agent could start in during that work.
-  const status = await checkPortosUpdatePreflight({ acknowledgeFork, acknowledgePersistentMindImageBackup });
-
-  // Two distinct entry points:
-  //   - Normal update: requires a known, newer release tag to update TO.
-  //   - Reconcile (issue #1779): finishes a bare `git pull` by running update.sh
-  //     even with no newer release. It must be gated on the install ACTUALLY
-  //     being out of sync — branch on `reconcile` first so a cached release tag
-  //     can't let `reconcile: true` force update.sh on an in-sync install (or
-  //     target a stale release). update.sh pulls main regardless of the tag, so
-  //     the tag here is purely for logging; prefer the current version.
-  let tag;
-  if (reconcile) {
-    if (!status.installState) {
-      // installState is best-effort (.catch(() => null) in getUpdateStatus); a
-      // transient git/fs hiccup shouldn't read as "already in sync".
-      throw new ServerError('Could not determine install state — try again', { status: 503, code: 'INSTALL_STATE_UNAVAILABLE' });
-    }
-    if (!status.installState.outOfSync) {
-      throw new ServerError('Install is already in sync — nothing to reconcile', { status: 400, code: 'ALREADY_IN_SYNC' });
-    }
-    tag = `v${status.currentVersion}`;
-  } else {
-    if (!status.latestRelease?.tag) {
-      throw new ServerError('No release available to update to', { status: 400, code: 'NO_RELEASE' });
-    }
-    tag = status.latestRelease.tag;
-  }
-
-  // Validate tag is a well-formed semver release (e.g. "v1.27.0" or "v1.27.0-rc.1") to prevent option injection
-  if (!/^v\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$/.test(tag)) {
-    throw new ServerError('Invalid release tag format', { status: 400, code: 'INVALID_TAG' });
-  }
-
-  // Atomic check-and-set: rejects if already in progress, preventing concurrent updates
-  const acquired = await updateChecker.setUpdateInProgress(true);
-  if (!acquired) {
-    throw new ServerError('Update already in progress', { status: 409, code: 'UPDATE_IN_PROGRESS' });
-  }
-
-  // Re-check after acquiring the lock: an agent (e.g. a scheduled/autopilot
-  // spawn) may have started live during the git/fork awaits between the
-  // fast-fail pre-check and here. If so, release the lock and reject rather than
-  // restart out from under it. A spawn that begins AFTER this, during update.sh
-  // itself, is closed from the spawn side: the lock we just acquired flips
-  // `updateChecker.isUpdateInProgress()`, which subAgentSpawner's `task:ready`
-  // listener and `spawnAgentForTask` both check, holding the task as `pending`
-  // until after the restart (issue #4124).
-  const postLock = await countActiveCosAgents();
-  if (postLock > 0) {
-    await updateChecker.setUpdateInProgress(false);
-    throw agentsActiveError(postLock);
-  }
-  const postLockImageCheck = await withStateLock(() => getPersistentMindImageWorkGuard()).catch(async (error) => {
-    await updateChecker.setUpdateInProgress(false);
-    throw error;
-  });
-  if (!postLockImageCheck.trusted || (!postLockImageCheck.safe && !acknowledgePersistentMindImageBackup)) {
-    await updateChecker.setUpdateInProgress(false);
-    if (!postLockImageCheck.trusted) throw persistentMindStateUntrustedError();
-    throw persistentMindImageWorkError(postLockImageCheck);
-  }
-
-  const io = req.app.get('io');
-
-  // Start update in background, stream progress via socket
-  const emit = (step, stepStatus, message) => {
-    if (io) {
-      io.emit('portos:update:step', { step, status: stepStatus, message, timestamp: Date.now() });
-    }
-  };
-
-  // Don't await — respond immediately, progress streams via socket.
-  // The update script runs `git pull --rebase` to get the latest code,
-  // so the actual post-update version may differ from `tag` if new commits
-  // landed after the release. The script writes the true version to
-  // data/update-complete.json, which the server reads on boot.
-  //
-  // For a reconcile, hand the updater the workspaces whose installed deps are
-  // stale (per installState's receipt check) so it force-reinstalls exactly
-  // those — a bare `git pull` (possibly already restarted) leaves the scripts'
-  // commit-diff dependency detection empty. 'root' maps to update.sh's '.' token.
-  const forceCleanWorkspaces = reconcile
-    ? (status.installState.staleDeps?.workspaces || [])
-        .filter(w => w.stale)
-        .map(w => (w.name === 'root' ? '.' : w.name))
-    : undefined;
-  executeUpdate(tag, emit, { forceCleanWorkspaces }).then(result => {
-    // Note: this .then() may never fire if the update script's PM2 restart
-    // kills this server process first. The client handles this by polling
-    // /api/system/health after receiving the 'restart' step.
-    if (io) {
-      if (result.success) {
-        io.emit('portos:update:complete', { success: true, newVersion: result.version || tag.replace(/^v/, ''), versionKnown: !!result.version });
-      } else {
-        io.emit('portos:update:error', { message: result.errorMessage ?? 'Update failed', step: result.failedStep ?? 'unknown' });
-      }
-    }
-  }).catch(err => {
-    if (io) {
-      io.emit('portos:update:error', { message: err.message, step: 'unknown' });
-    }
+  // Every refusal, the update lock, and the fire-and-forget launch live in
+  // `portosSelfUpdate` — shared with App Management's Git tab so both entry
+  // points into update.sh behave identically (#5984, and the Git tab hang the
+  // shared launcher was extracted to fix).
+  const { started, tag } = await startPortosSelfUpdate({
+    io: req.app.get('io'),
+    acknowledgeFork,
+    acknowledgePersistentMindImageBackup,
+    mode: reconcile ? 'reconcile' : 'release',
   });
 
-  res.json({ started: true, tag });
+  res.json({ started, tag });
 }));
 
 export default router;

@@ -15,6 +15,7 @@ import { EFFORT_LEVELS } from './providerModels.js';
 import { isValidSlashdoCommand } from './slashdoInvocation.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import { PUBLIC_REVIEW_EXECUTION_PROFILES } from './agentExecutionProfiles.js';
+import { ORCHESTRATION_MODES, ORCHESTRATION_ROLES } from './orchestrationProfile.js';
 import { AGENT_RUN_EVENT_KINDS, RUN_EVENT_READ_LIMITS } from './agentRunEvents.js';
 import { recurrenceRuleSchema } from './recurrenceValidation.js';
 import { TASK_DATA_INPUT_DEFINITIONS, TASK_DATA_INPUT_IDS } from './taskDataInputCatalog.js';
@@ -122,6 +123,28 @@ const claimOverrideContextSchema = z.preprocess(
   z.string().max(CLAIM_OVERRIDE_CONTEXT_MAX_CHARS).optional()
 );
 
+// Orchestrated execution (#5992). `direct` — the default — is today's behavior:
+// one provider, one model, one effort for the whole run. `orchestrated` splits it
+// into architect / implementer / reviewer roles, each with its own provider+model,
+// and hands the architect the six-part spec contract a context-free delegated lane
+// needs. '' from a form's "Default" option → undefined so no mode is persisted;
+// on update ''/null survives as null so the store can clear the pin
+// (absent-vs-cleared, AGENTS.md).
+const orchestrationRoleSchema = z.object({
+  provider: z.string().trim().min(1).max(120).optional(),
+  model: z.string().trim().min(1).max(300).optional(),
+  // Per-role reasoning effort. The architect's own rung for its planning pass;
+  // for the implementer it is the DEFAULT a spec's `REASONING:` line overrides.
+  effort: z.enum(EFFORT_LEVELS).optional(),
+}).strict();
+
+export const orchestrationProfileSchema = z.object(
+  Object.fromEntries(ORCHESTRATION_ROLES.map(role => [role, orchestrationRoleSchema.optional()]))
+).strict();
+
+const orchestrationModeInputSchema = z.preprocess(emptyToUndefined, z.enum(ORCHESTRATION_MODES).optional());
+const orchestrationModeUpdateSchema = z.preprocess(emptyToNull, z.enum(ORCHESTRATION_MODES).nullable().optional());
+
 export const createCosTaskSchema = z.object({
   description: z.string().min(1),
   diagnostics: cosTaskDiagnosticsSchema.optional(),
@@ -134,6 +157,8 @@ export const createCosTaskSchema = z.object({
   model: z.string().optional(),
   provider: z.string().optional(),
   effort: effortInputSchema,
+  orchestrationMode: orchestrationModeInputSchema,
+  orchestrationProfile: orchestrationProfileSchema.optional(),
   temperature: taskTemperatureInputSchema,
   thinking: z.boolean().optional(),
   app: z.string().optional(),
@@ -150,6 +175,18 @@ export const createCosTaskSchema = z.object({
   jiraTicketId: z.string().optional(),
   jiraTicketUrl: z.string().optional(),
   useWorktree: z.preprocess(
+    v => v === 'true' ? true : v === 'false' ? false : v,
+    z.boolean().optional()
+  ),
+  // Marks a task the user queued as an INVESTIGATION (#6043) — today the
+  // installer-failure "Queue agent to investigate" button. The flag is all a
+  // client may supply: the route derives the dedup fingerprint server-side
+  // (`clientInvestigationFingerprint`) and applies `CLIENT_INVESTIGATION_DELIVERY`,
+  // so a client can neither hand-craft a key that collides with an auto-filed
+  // investigation nor pick its own delivery posture. Without this field Zod
+  // stripped the flag, leaving UI-queued repairs outside the investigation
+  // dedup, the circuit breaker, and the meta-cascade guard.
+  isInvestigation: z.preprocess(
     v => v === 'true' ? true : v === 'false' ? false : v,
     z.boolean().optional()
   ),
@@ -259,6 +296,8 @@ export const updateCosTaskSchema = z.object({
   model: z.string().optional(),
   provider: z.string().optional(),
   effort: effortUpdateSchema,
+  orchestrationMode: orchestrationModeUpdateSchema,
+  orchestrationProfile: orchestrationProfileSchema.nullable().optional(),
   temperature: taskTemperatureUpdateSchema,
   thinking: z.boolean().nullable().optional(),
   app: z.string().optional(),
@@ -556,6 +595,26 @@ export const codeReviewSettingsSchema = z.object({
     `${reviewer}Effort`,
     z.preprocess(v => normalizeReviewerEffort(v, reviewer), z.string().optional()),
   ])),
+  // Goal-fidelity gate (#5994) — the second, objective-aware review that runs at
+  // agent completion and asks whether the diff delivers what the task asked for.
+  // Its own block rather than another `<reviewer>*` scalar because it is a
+  // DIFFERENT review with a different question, and the user must be able to run
+  // it on a model other than whatever reviews code quality.
+  //
+  // `backend` is restricted to the local-LLM set: the gate runs inside
+  // `finalizeAgent`, in the server process, and the CLI reviewers are invoked by
+  // the follow-up agent from a prompt with no server-side entry point. `model` /
+  // `effort` go through the same per-reviewer normalizers as the scalars above,
+  // keyed on that backend, so an unusable value clears rather than persisting a
+  // pin no request would carry. All four absent = inherit the quality chain's own
+  // local reviewer (see `resolveGoalFidelityConfig`); `enabled: false` is the
+  // explicit off switch.
+  goalFidelity: z.object({
+    enabled: z.boolean().optional(),
+    backend: z.preprocess(emptyToUndefined, z.enum(LOCAL_LLM_REVIEWERS).optional()),
+    model: z.string().max(MAX_REVIEWER_MODEL_LENGTH).optional(),
+    effort: z.preprocess(emptyToUndefined, z.string().optional()),
+  }).strict().optional(),
 }).strict();
 
 // =============================================================================

@@ -171,7 +171,11 @@ export function sanitizeAnalysis(parsed) {
 async function loadDoc(issueId) {
   const content = await tryReadFile(docPath(issueId));
   if (content === null) return null;
-  return safeJSONParse(content, null, { allowArray: false, logError: true, context: docPath(issueId) });
+  const parsed = safeJSONParse(content, null, { allowArray: false, logError: true, context: docPath(issueId) });
+  // `allowArray: false` only rejects a root array — a bare JSON scalar
+  // (corrupted doc) still parses, and callers spread this into a response
+  // object, so guard for a genuine object here.
+  return parsed && typeof parsed === 'object' ? parsed : null;
 }
 
 async function saveDoc(doc) {

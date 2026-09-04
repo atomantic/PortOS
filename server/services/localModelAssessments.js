@@ -98,16 +98,12 @@ import {
 import { getMtplxServerEndpoint, getMtplxServerStatus, relaunchMtplxServerWithTuning } from './mtplxServerManager.js';
 import { getSlotstreamServerEndpoint } from './slotstreamServerManager.js';
 import { getSpecDecodePresetStatus } from './specDecodeModels.js';
-import { listModels } from './localLlm.js';
+import { listManagedBackendModels } from './localLlm.js';
 import {
   getLoadedModels as getLoadedOllamaModels,
-  getLastInstalledModelsError as getOllamaListError,
   restartWithEnv as restartOllamaWithEnv,
 } from './ollamaManager.js';
-import {
-  getLastListError as getLmStudioListError,
-  loadModelWithArgs as loadLmStudioModelWithArgs,
-} from './lmStudioManager.js';
+import { loadModelWithArgs as loadLmStudioModelWithArgs } from './lmStudioManager.js';
 
 // Re-exported so the store split stays an implementation detail for callers that
 // only ever wanted "the assessments feature".
@@ -212,7 +208,7 @@ export async function runtimeApiKey(runtime) {
  * did.
  *
  * The two paths differ in what "installed" even means. A managed backend has a
- * durable catalog on disk (`listModels`), so its list survives the daemon being
+ * durable catalog on disk (`listManagedBackendModels`), so its list survives the daemon being
  * down. An endpoint runtime has no catalog at all — its models are whatever the
  * running process reports from `GET /v1/models`, so a stopped daemon means "no
  * models listable", which is an ERROR, never an empty catalog. Collapsing those
@@ -253,15 +249,10 @@ export async function durableRuntimeModels(runtime) {
 }
 
 export async function listRuntimeModels(runtime) {
-  if (MANAGED_ASSESSMENT_BACKENDS.includes(runtime)) {
-    const models = await listModels(runtime).catch((err) => ({ error: err?.message || 'model list failed' }));
-    if (!Array.isArray(models)) return { models: null, error: models.error };
-    // Both managers cache an EMPTY list on a failed read rather than throwing,
-    // so `[]` alone cannot distinguish "no models" from "the list could not be
-    // read". Each manager's own error getter is the authoritative signal.
-    const error = runtime === 'ollama' ? getOllamaListError() : getLmStudioListError();
-    return { models, error: error || null };
-  }
+  // `listManagedBackendModels` carries the "empty vs unreadable" sentinel for
+  // these two backends (both managers cache `[]` on a failed read), so this
+  // path and every other consumer of that distinction agree.
+  if (MANAGED_ASSESSMENT_BACKENDS.includes(runtime)) return listManagedBackendModels(runtime);
 
   const endpoint = await runtimeEndpoint(runtime);
   if (!endpoint) return { models: null, error: 'no endpoint is configured for this runtime', offline: true };

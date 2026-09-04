@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { createSeries } from '../../pipeline/series.js';
 import { generateSeriesConcept } from '../../pipeline/seriesGenerate.js';
 import { generateStage } from '../../pipeline/textStages.js';
-import { startSeriesAutopilot } from '../../pipeline/seriesAutopilot.js';
+import { startSeriesAutopilot } from '../../pipeline/seriesAutopilot/orchestrator.js';
 import {
   renderComicCover,
   renderComicBackCover,

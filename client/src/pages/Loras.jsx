@@ -1357,7 +1357,7 @@ function LoraCard({ lora, onDelete, onMeasured, deleting, deleteConfirm }) {
             <button
               onClick={runEffectCheck}
               disabled={checkingEffect}
-              className="text-gray-400 hover:text-gray-200 p-1.5 rounded hover:bg-port-bg disabled:opacity-50 disabled:cursor-not-allowed"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center text-gray-400 hover:text-gray-200 p-1.5 rounded hover:bg-port-bg disabled:opacity-50 disabled:cursor-not-allowed"
               title={`Check whether ${displayName} actually changes a render`}
               aria-label={`Check effect of ${displayName}`}
             >
@@ -1365,7 +1365,7 @@ function LoraCard({ lora, onDelete, onMeasured, deleting, deleteConfirm }) {
             </button>
             <button
               onClick={() => deleteConfirm.requestDelete(lora.filename)}
-              className="text-port-error hover:text-port-error/80 p-1.5 rounded hover:bg-port-error/10"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center text-port-error hover:text-port-error/80 p-1.5 rounded hover:bg-port-error/10"
               title={`Delete ${displayName}`} aria-label={`Delete ${displayName}`}
             >
               <Trash2 size={14} />

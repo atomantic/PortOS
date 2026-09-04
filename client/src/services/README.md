@@ -45,7 +45,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiCommands.js` | CLI command dispatch. |
 | `apiDashboard.js` | Dashboard state. |
 | `apiDatabase.js` | Database introspection. |
-| `apiLocalLlm.js` | Local LLM backends (Ollama / LM Studio): status (incl. installed models), catalog, model install/delete, the managed Prompt Guard model-abuse classifier lifecycle, backend install (Homebrew/script), switch/migrate, playground test/compare, and measured per-model assessments (run + persisted results + intent ranking + the server-side "measure everything" sweep). Also the PM2-managed runtime servers (llama.cpp, MTPLX, Slotstream) and MTPLX's checkpoint catalog — `searchMtplxModels` / `pullMtplxModel` / `removeMtplxModel`, so weights are managed in-app rather than from a terminal. |
+| `apiLocalLlm.js` | Local LLM backends (Ollama / LM Studio): status (incl. installed models), catalog, model install/delete, the managed Prompt Guard model-abuse classifier lifecycle, backend install (Homebrew/script), switch/migrate, playground test/compare, and measured per-model assessments (run + persisted results + intent ranking + the server-side "measure everything" sweep). Also the PM2-managed runtime servers (llama.cpp, MTPLX, Slotstream) and their checkpoint catalogs — `searchMtplxModels` / `pullMtplxModel` / `removeMtplxModel` and `downloadSlotstreamModel` / `cancelSlotstreamModelDownload`, so weights are managed in-app rather than from a terminal. |
 | `apiGit.js` | Git operations. |
 | `apiGithub.js` | GitHub repo metadata. |
 | `apiHistory.js` | Historical logs / runs. |
@@ -82,7 +82,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiMeatspace.js` | MeatSpace health, genome, POST, memory-practice, and atomic POST training-run APIs. |
 | `apiMortalLoom.js` | Mortality tracking. |
 | `apiMoodBoard.js` | Mood boards (inspiration canvas + items). |
-| `apiTribe.js` | Tribe people (relationship rings + contacts). |
+| `apiTribe.js` | Tribe people (relationship rings + contacts), plus `getTribeDuplicateIdentifiers()` (`GET /tribe/duplicate-identifiers`): a non-blocking report of emails/phones shared by more than one person. |
 | `apiTimeline.js` | Human-activity timeline: `/timeline/day`. |
 | `apiCalendar.js` | Calendar events. |
 | `apiMessages.js` | Messages / notifications + iMessage manager (#2413). |
@@ -150,4 +150,5 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `uiInteract.js` | Execute voice `ui_click` / `ui_fill` / `ui_select` against live DOM. |
 | `domIndex.js` | DOM indexer for voice accessibility mode. |
 | `staleBuildToast.jsx` | Sticky toast shown when server's build id differs from client's. |
-| `apiRigging.js` | Character rigging. `getRiggingReadiness()` (`GET /rigging/readiness`): whether this install's Blender runtime is provisioned, the resolved interpreter, the module version, the install command when it is not, and the auto-skin threshold defaults. `rigImageTo3dModel(id, body)` (`POST /rigging/models/:id`): auto-skin a rendered mesh behind the measured weight-coverage gate, resolving with the updated model record. |
+| `apiRigging.js` | Character rigging. `getRiggingReadiness()` (`GET /rigging/readiness`): whether this install's Blender runtime is provisioned, the resolved interpreter, the module version, the install command when it is not, and the auto-skin threshold defaults. `rigImageTo3dModel(id, body)` (`POST /rigging/models/:id`): auto-skin a rendered mesh behind the measured weight-coverage gate, resolving with the updated model record. `listRiggingClips()` (`GET /rigging/clips`): the locally-held animation clip library plus CoS-state coverage. `retargetImageTo3dModel(id, body)` (`POST /rigging/models/:id/retarget`): apply a clip to a published rig in `diagnostic` (measure only) or `write` mode, resolving with the updated model record. |
+| `apiAvatar.js` | Avatar surfaces. `getRiggedAvatars()` (`GET /avatar/rigged`): the install's verified animated records, each with its `?variant=` spelling, serving URL, retargeted clip name, and server-computed CoS-state coverage. |

@@ -1149,12 +1149,12 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityReport }) {
             </div>
           )}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={handleSync}
             disabled={syncing || peer.status !== 'online'}
-            className="p-1.5 text-gray-500 hover:text-port-accent transition-colors disabled:opacity-40 disabled:hover:text-gray-500"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-accent transition-colors disabled:opacity-40 disabled:hover:text-gray-500"
             title={peer.status === 'online' ? 'Sync now' : 'Peer offline — cannot sync'}
             aria-label={peer.status === 'online' ? 'Sync now' : 'Peer offline — cannot sync'}
           >
@@ -1163,7 +1163,7 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityReport }) {
           <button
             onClick={handleProbe}
             disabled={probing}
-            className="p-1.5 text-gray-500 hover:text-white transition-colors disabled:opacity-50"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-white transition-colors disabled:opacity-50"
             title="Probe now" aria-label="Probe now"
           >
             <RefreshCw size={14} className={probing ? 'animate-spin' : ''} />
@@ -1183,7 +1183,7 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityReport }) {
           ) : (
             <button
               onClick={() => setConfirmRemove(true)}
-              className="p-1.5 text-gray-600 hover:text-port-error transition-colors"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-600 hover:text-port-error transition-colors"
               title="Remove peer" aria-label="Remove peer"
             >
               <Trash2 size={14} />

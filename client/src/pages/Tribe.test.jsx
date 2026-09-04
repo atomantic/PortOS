@@ -7,6 +7,9 @@ vi.mock('../services/api', () => ({
   // OutreachQueue (care tab) fetches unanswered threads on mount (#2158).
   getTribeOutreach: vi.fn(() => Promise.resolve({ threads: [] })),
   createTribeTouchpoint: vi.fn(),
+  // Non-blocking duplicate-identifier report (#5908); defaults to clean so
+  // tests unrelated to it never see the banner.
+  getTribeDuplicateIdentifiers: vi.fn(() => Promise.resolve({ emails: [], phones: [] })),
 }));
 
 vi.mock('../services/socket', () => ({
@@ -162,5 +165,45 @@ describe('Tribe care filter', () => {
       { silent: true },
     ));
     expect(await screen.findByText('Last 2026-01-01')).toBeTruthy();
+  });
+});
+
+describe('Tribe shared-identifier banner (#5908)', () => {
+  beforeEach(() => {
+    api.getTribePeople.mockClear();
+    api.getTribePeople.mockResolvedValue({ people: PEOPLE });
+    api.getTribeDuplicateIdentifiers.mockReset();
+    window.localStorage.clear();
+  });
+
+  it('renders nothing when the report comes back clean', async () => {
+    api.getTribeDuplicateIdentifiers.mockResolvedValue({ emails: [], phones: [] });
+    renderAt('/tribe');
+    await screen.findByText('Example Person');
+    expect(screen.queryByText(/shared contact info/i)).toBeNull();
+  });
+
+  it('names the colliding people for a shared email', async () => {
+    api.getTribeDuplicateIdentifiers.mockResolvedValue({
+      emails: [{ identifier: 'shared@example.com', people: [{ id: 'p1', name: 'Example Person' }, { id: 'p2', name: 'Sample Neighbor' }] }],
+      phones: [],
+    });
+    renderAt('/tribe');
+
+    expect(await screen.findByText(/shared contact info/i)).toBeTruthy();
+    expect(screen.getByText('shared@example.com')).toBeTruthy();
+    expect(screen.getByText(/Example Person and Sample Neighbor/)).toBeTruthy();
+  });
+
+  it('dismisses on click and does not reappear until the next fetch', async () => {
+    api.getTribeDuplicateIdentifiers.mockResolvedValue({
+      emails: [{ identifier: 'shared@example.com', people: [{ id: 'p1', name: 'Example Person' }, { id: 'p2', name: 'Sample Neighbor' }] }],
+      phones: [],
+    });
+    renderAt('/tribe');
+    await screen.findByText(/shared contact info/i);
+
+    fireEvent.click(screen.getByRole('button', { name: /dismiss shared contact info/i }));
+    expect(screen.queryByText(/shared contact info/i)).toBeNull();
   });
 });

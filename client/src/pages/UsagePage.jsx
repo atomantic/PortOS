@@ -1,11 +1,11 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router';
-import { RefreshCw, Clock, AlertTriangle, DatabaseZap } from 'lucide-react';
+import { RefreshCw, Clock, AlertTriangle, DatabaseZap, Network } from 'lucide-react';
 import * as api from '../services/api';
 import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import Pill from '../components/ui/Pill';
-import { formatCompactCount, formatCompactCountOrDash as formatNumber, formatUsd, timeUntil } from '../utils/formatters';
+import { formatCompactCount, formatCompactCountOrDash as formatNumber, formatUsd, timeAgo, timeUntil } from '../utils/formatters';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import SubscriptionSavingsCard from '../components/usage/SubscriptionSavingsCard';
@@ -84,6 +84,21 @@ function StatTile({ label, value, detail }) {
   );
 }
 
+// A subscription is one account across every federated instance, but each
+// instance can only read its own CLI's panel. When peers have contributed a
+// reading, say so on the card and name them — the meters are the freshest
+// reading across the fleet and the activity counts are summed, which is a
+// different claim than "what this box saw".
+function FleetSourcesPill({ fleet }) {
+  if (!fleet || fleet.count < 2) return null;
+  const describe = (i) => `${i.self ? 'this machine' : (i.name || i.instanceId)}${i.self || !i.fetchedAt ? '' : ` (read ${timeAgo(i.fetchedAt)})`}`;
+  return (
+    <Pill tone="context" size="xs" icon={Network} className="hidden sm:inline-flex shrink-0" title={fleet.instances.map(describe).join(' · ')}>
+      {fleet.count} instances
+    </Pill>
+  );
+}
+
 // One subscription-quota card per enabled provider family. Providers with no
 // queryable usage surface (supported: false) render a muted note, never an
 // error; a supported adapter that failed transiently shows a soft warning.
@@ -96,6 +111,7 @@ function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled }) {
           {quota.plan && quota.plan !== 'unknown' && (
             <Pill tone="context" size="xs" className="hidden sm:inline-flex">{quota.plan}</Pill>
           )}
+          <FleetSourcesPill fleet={quota.fleet} />
           {/* Per-card refresh: every family's reading is its own multi-second
               CLI/TUI scrape, so re-reading one provider must not respawn all
               of them. */}

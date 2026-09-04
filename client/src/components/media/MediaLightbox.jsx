@@ -592,12 +592,12 @@ function SettingsPane({
     <aside className={asideClasses} onClick={(e) => e.stopPropagation()}>
       <header className="flex items-center justify-between p-3 border-b border-port-border">
         <span className="text-xs uppercase tracking-wide text-gray-400">{isVideo ? 'Video' : 'Image'} settings</span>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-2">
           {onAnnotationChange && (
             <button
               type="button"
               onClick={() => onAnnotationChange({ starred: !starred })}
-              className={`p-1.5 rounded ${starred ? 'bg-port-warning/90 text-black' : 'text-gray-400 hover:text-white hover:bg-port-border/50'}`}
+              className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded ${starred ? 'bg-port-warning/90 text-black' : 'text-gray-400 hover:text-white hover:bg-port-border/50'}`}
               aria-label={starred ? 'Unfavorite' : 'Favorite'}
               title={starred ? 'Unfavorite (s)' : 'Favorite (s)'}
             >
@@ -642,7 +642,7 @@ function SettingsPane({
               <button
                 type="button"
                 onClick={() => copy(item.prompt, 'Prompt')}
-                className="p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
                 title="Copy prompt" aria-label="Copy prompt"
               >
                 <Copy className="w-3 h-3" />
@@ -684,7 +684,7 @@ function SettingsPane({
               <button
                 type="button"
                 onClick={() => copy(item.negativePrompt, 'Negative prompt')}
-                className="p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
                 title="Copy negative prompt" aria-label="Copy negative prompt"
               >
                 <Copy className="w-3 h-3" />
@@ -735,7 +735,7 @@ function SettingsPane({
                       <button
                         type="button"
                         onClick={() => copy(String(v), k)}
-                        className="p-0.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
+                        className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-0.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
                         title={`Copy ${k.toLowerCase()}`} aria-label={`Copy ${k.toLowerCase()}`}
                       >
                         <Copy className="w-3 h-3" />

@@ -53,6 +53,45 @@ export function createTempDataRoot(prefix = 'portos-test-') {
 }
 
 /**
+ * A temp data root allocated on FIRST USE and memoized per prefix.
+ *
+ * `vi.mock` is hoisted above every `const` in the file, so a suite whose SUT is
+ * reached through a static `import` trips the mock factory while a
+ * `const TEST_DATA_ROOT = createTempDataRoot(...)` is still in its temporal dead
+ * zone — a `ReferenceError` at collection time. Passing this function as
+ * `makePathsProxy`'s `dataRoot` sidesteps that: the root is created the first
+ * time the Proxy reads `PATHS`, which is always after module evaluation.
+ *
+ * Memoized per prefix so every read in one file gets the SAME root (a fresh dir
+ * per read would scatter a suite's writes across directories), and so two
+ * suites naming different prefixes never share one.
+ *
+ * Pair with `afterAll(cleanupTempDataRoots)`.
+ *
+ *     vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+ *       makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-foo-') }));
+ *     afterAll(cleanupTempDataRoots);
+ *
+ * @param {string} prefix - mkdtemp prefix, also the memo key
+ * @returns {string} absolute path to this prefix's temp root
+ */
+const lazyRoots = new Map();
+export function lazyTempDataRoot(prefix = 'portos-test-') {
+  let root = lazyRoots.get(prefix);
+  if (!root) {
+    root = createTempDataRoot(prefix);
+    lazyRoots.set(prefix, root);
+  }
+  return root;
+}
+
+/** Remove every root `lazyTempDataRoot` handed out in this worker. */
+export function cleanupTempDataRoots() {
+  for (const root of lazyRoots.values()) rmSync(root, { recursive: true, force: true });
+  lazyRoots.clear();
+}
+
+/**
  * Build the Proxy returned from a `vi.mock('../lib/fileUtils.js', ...)`
  * factory. Pass the already-resolved `actual` (from `vi.importActual`) and
  * the `dataRoot` you want `PATHS.data` to point at.

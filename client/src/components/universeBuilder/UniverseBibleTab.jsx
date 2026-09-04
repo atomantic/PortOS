@@ -24,7 +24,7 @@ function LockButton({ field, locked, onToggle, label }) {
     <button
       type="button"
       onClick={() => onToggle(field)}
-      className={`p-1 rounded -mr-1 transition-colors ${
+      className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded -mr-1 transition-colors ${
         isLocked
           ? 'bg-port-accent/20 text-port-accent ring-1 ring-port-accent/50 hover:bg-port-accent/30'
           : 'text-gray-600 hover:text-gray-300 hover:bg-white/5'
@@ -252,7 +252,7 @@ export default function BibleTab({
                     onClick={() => setRefineImage(null)}
                     title="Remove reference image"
                     aria-label="Remove reference image"
-                    className="absolute -top-1.5 -right-1.5 bg-port-bg border border-port-border rounded-full p-0.5 text-gray-400 hover:text-port-error"
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center absolute -top-1.5 -right-1.5 bg-port-bg border border-port-border rounded-full p-0.5 text-gray-400 hover:text-port-error"
                   >
                     <X size={11} />
                   </button>

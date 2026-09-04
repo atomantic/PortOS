@@ -15,8 +15,12 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdir, writeFile, readFile, rm } from 'fs/promises';
 import { createHash } from 'crypto';
-import { lockAllAnchors, expectCarriesCorrection } from './spriteTestFixtures.js';
+import {
+  capSharpThreads, lockAllAnchors, lockAllAnchorsReal, expectCarriesCorrection, normalizeManifestForComparison,
+} from './spriteTestFixtures.js';
 
+const restoreSharpThreads = capSharpThreads();
+afterAll(restoreSharpThreads);
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-walk-test-'));
 
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
@@ -181,7 +185,7 @@ vi.mock('../mediaJobQueue/index.js', async (importOriginal) => ({
 
 const records = await import('./records.js');
 const { listSpriteAssets } = await import('./paths.js');
-const { lockReference } = await import('./reference.js');
+const { lockReference, loadManifest } = await import('./reference.js');
 const {
   getWalkState, startWalkGeneration, attachTuiWalkResult, approveWalkDirection, rerunWalkPostprocess, unlockWalkSet,
   reopenWalkDirection, invalidateWalkDirectionForAnchorRevision,
@@ -196,7 +200,7 @@ const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 
 async function characterWithLockedAnchors(id, directions = ['east']) {
   await records.createRecord({ kind: 'character', name: 'Walker' }, id);
-  await lockAllAnchors(TEST_ROOT, id, { lockReference, directions });
+  await lockAllAnchors(TEST_ROOT, id, { lockReference, directions, records });
   return id;
 }
 
@@ -335,6 +339,67 @@ async function importedCharacter(id, perDirection) {
   }));
   return runIds;
 }
+
+// #6180 — characterWithLockedAnchors materializes every locked character from
+// a single real-locked prototype (spriteTestFixtures.js's lockAllAnchors)
+// instead of re-running the real lock pipeline per test. This is the
+// acceptance gate for that refactor: it proves a materialized character is
+// indistinguishable from one the real pipeline built, for both the full
+// anchor set and a partial one — the partial case is the one where the
+// reset-to-pending logic could silently drift from a real partial lock.
+describe('lockAllAnchors fixture materialization (#6180)', () => {
+  it('matches the real lock pipeline byte-for-byte (file names, PNG bytes, manifest, record state) after id normalization', async () => {
+    const realId = newId();
+    await records.createRecord({ kind: 'character', name: 'Walker' }, realId);
+    await lockAllAnchorsReal(TEST_ROOT, realId, { lockReference, directions: ANCHOR_DIRECTIONS });
+    const fastId = await characterWithLockedAnchors(newId(), ANCHOR_DIRECTIONS);
+
+    const [realAssets, fastAssets] = await Promise.all([
+      listSpriteAssets(realId, { subdir: 'reference', metadata: false }),
+      listSpriteAssets(fastId, { subdir: 'reference', metadata: false }),
+    ]);
+    const idNormalizedNames = (id, assets) => assets.map((a) => a.path.split(id).join('<id>')).sort();
+    expect(idNormalizedNames(fastId, fastAssets)).toEqual(idNormalizedNames(realId, realAssets));
+
+    for (const asset of realAssets.filter((a) => a.path.endsWith('.png'))) {
+      const fastRel = asset.path.split(realId).join(fastId);
+      const [realBytes, fastBytes] = await Promise.all([
+        readFile(join(TEST_ROOT, 'sprites', realId, asset.path)),
+        readFile(join(TEST_ROOT, 'sprites', fastId, fastRel)),
+      ]);
+      expect(fastBytes.equals(realBytes)).toBe(true);
+    }
+
+    const [realManifest, fastManifest] = await Promise.all([loadManifest(realId), loadManifest(fastId)]);
+    expect(normalizeManifestForComparison(fastManifest, fastId))
+      .toEqual(normalizeManifestForComparison(realManifest, realId));
+
+    const [realRecord, fastRecord] = await Promise.all([records.getRecord(realId), records.getRecord(fastId)]);
+    expect(fastRecord.chromaKey).toBe(realRecord.chromaKey);
+    expect(fastRecord.status).toBe(realRecord.status);
+  });
+
+  it('resets an anchor outside the requested set to the exact seeded-pending shape a fresh partial lock would leave', async () => {
+    const realId = newId();
+    await records.createRecord({ kind: 'character', name: 'Walker' }, realId);
+    await lockAllAnchorsReal(TEST_ROOT, realId, { lockReference, directions: ['east'] });
+    const fastId = await characterWithLockedAnchors(newId(), ['east']);
+
+    const [realManifest, fastManifest] = await Promise.all([loadManifest(realId), loadManifest(fastId)]);
+    expect(normalizeManifestForComparison(fastManifest, fastId))
+      .toEqual(normalizeManifestForComparison(realManifest, realId));
+
+    const west = fastManifest.anchors.find((a) => a.direction === 'west');
+    expect(west.status).toBe('pending');
+    expect(west.path).toBeUndefined();
+    expect(west.sha256).toBeUndefined();
+    expect(fastManifest.status).toBe('in-progress');
+
+    const [realRecord, fastRecord] = await Promise.all([records.getRecord(realId), records.getRecord(fastId)]);
+    expect(fastRecord.status).toBe(realRecord.status);
+    expect(fastRecord.status).toBe('reference');
+  });
+});
 
 describe('named-track isolation', () => {
   it('does not surface or reprocess a scanner run through the walk workflow', async () => {

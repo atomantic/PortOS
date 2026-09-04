@@ -19,10 +19,15 @@ vi.mock('./localModelAssessmentStore.js', () => ({
   getMeasuredFits: async (backend) => measured[backend] || {},
 }));
 // Forces assessDownloadPreflight's verdict on its NEXT call only, then
-// reverts to real behavior (real statfs) — so a two-model migrateBackend
-// test can make model #1's preflight fail without also failing model #2's,
-// and the other ~14 installModel/migrateBackend call sites in this file
-// that never set `once` are unaffected.
+// reverts to a fake-abundant statfs — so a two-model migrateBackend test can
+// make model #1's preflight fail without also failing model #2's, and the
+// other ~14 installModel/migrateBackend call sites in this file that never
+// set `once` are unaffected. The statfs itself is faked (not real) so these
+// tests never depend on how much free space the machine running them
+// actually has — a real disk under a curated model's advertised size (e.g.
+// the 16.5GB Qwen3.8-27B GGUF) would otherwise force every plain-install
+// test into a false DISK_INSUFFICIENT.
+const { ABUNDANT_STATFS } = vi.hoisted(() => ({ ABUNDANT_STATFS: async () => ({ bavail: 1024 ** 4, bsize: 1 }) }));
 const preflightOverride = vi.hoisted(() => ({ once: null, lastCall: null }));
 vi.mock('../lib/downloadPreflight.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -30,7 +35,7 @@ vi.mock('../lib/downloadPreflight.js', async (importOriginal) => {
     ...actual,
     assessDownloadPreflight: async (opts) => {
       preflightOverride.lastCall = opts;
-      const real = await actual.assessDownloadPreflight(opts);
+      const real = await actual.assessDownloadPreflight({ ...opts, statfsImpl: ABUNDANT_STATFS });
       if (!preflightOverride.once) return real;
       const verdict = preflightOverride.once;
       preflightOverride.once = null;
@@ -56,6 +61,7 @@ const mocks = vi.hoisted(() => ({
     deleteModel: vi.fn(async (id) => ({ success: true, modelId: id })),
     getLoadedModels: vi.fn(async () => []),
     getLastLoadedModelsError: vi.fn(() => null),
+    getLastInstalledModelsError: vi.fn(() => null),
     getModelsDir: vi.fn(() => '/tmp/portos-ollama-models'),
     getStatus: vi.fn(async () => ({ available: true, baseUrl: 'x', version: '1', modelCount: 0, models: [] })),
     startServer: vi.fn(async () => ({ success: true, running: true })),
@@ -944,5 +950,38 @@ describe('localLlm', () => {
       expect(s.ollama.recommendations.editorial.id).toBe('gemma4:9b');
       expect(s.ollama.recommendations.editorial.ruledOutByMeasurement).toEqual(['qwen3.6:35b']);
     });
+  });
+});
+
+// Both managers cache an EMPTY array on a failed read rather than throwing, so
+// `[]` alone cannot say whether the backend has no models or could not be asked.
+// Callers that fall back to a stored list (the persistent-mind task catalog) and
+// callers that report the failure (the assessment report) both key on `error`.
+describe('listManagedBackendModels', () => {
+  it('reports a read backend with no models as a genuinely empty list', async () => {
+    mocks.ollama.getInstalledModels.mockResolvedValueOnce([]);
+    expect(await svc.listManagedBackendModels('ollama')).toEqual({ models: [], error: null });
+  });
+
+  // The failed read still surfaces the empty array the manager is holding — the
+  // `error` is what separates it from the genuinely-empty case above, so a
+  // caller keying on `models.length` alone would still get this wrong.
+  it('separates an unreadable list from an empty one', async () => {
+    mocks.lmstudio.getAvailableModels.mockResolvedValueOnce([]);
+    mocks.lmstudio.getLastListError.mockReturnValueOnce('LM Studio is unavailable');
+    expect(await svc.listManagedBackendModels('lmstudio'))
+      .toEqual({ models: [], error: 'LM Studio is unavailable' });
+  });
+
+  it('reports a listing that threw outright, with no models', async () => {
+    mocks.ollama.getInstalledModels.mockRejectedValueOnce(new Error('Ollama unreachable'));
+    expect(await svc.listManagedBackendModels('ollama'))
+      .toEqual({ models: null, error: 'Ollama unreachable' });
+  });
+
+  it('refuses an unknown backend rather than answering an empty catalog', async () => {
+    const result = await svc.listManagedBackendModels('not-a-backend');
+    expect(result.models).toBeNull();
+    expect(result.error).toMatch(/unknown backend/);
   });
 });

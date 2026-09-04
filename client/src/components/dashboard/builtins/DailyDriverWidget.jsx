@@ -118,7 +118,7 @@ export default function DailyDriverWidget({ dashboardState }) {
           disabled={dismissing}
           aria-label="Dismiss for today"
           title="Dismiss for today"
-          className="ml-auto p-1 rounded text-gray-500 hover:text-white hover:bg-port-border/60 disabled:opacity-50"
+          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center ml-auto p-1 rounded text-gray-500 hover:text-white hover:bg-port-border/60 disabled:opacity-50"
         >
           <X size={14} />
         </button>

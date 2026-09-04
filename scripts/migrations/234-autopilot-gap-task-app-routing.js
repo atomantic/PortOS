@@ -48,6 +48,7 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite } from '../../server/lib/fileUtils.js';
+import { readCosConfig } from './_lib.js';
 
 // The task header line, per `server/lib/taskParser.js`. Both spellings — with
 // and without the AUTO/APPROVAL flag — since internal tasks carry it and the
@@ -64,14 +65,13 @@ const STRANDED = [
 ];
 
 /**
- * Repo-relative path of a queue file, honouring an install that moved it in
- * `data/cos/state.json` (`config.userTasksFile` / `config.cosTasksFile` — the
- * same values `cosTaskStore` reads). Migrating only the defaults would record
- * this migration as applied while the live queue stayed stranded.
+ * Repo-relative path of a queue file, honouring an install that moved it in its
+ * CoS config (`userTasksFile` / `cosTasksFile` — the same values `cosTaskStore`
+ * reads). Migrating only the defaults would record this migration as applied
+ * while the live queue stayed stranded.
  */
 async function queuePaths(rootDir) {
-  const raw = await readFile(join(rootDir, 'data', 'cos', 'state.json'), 'utf-8').catch(() => null);
-  const config = raw ? JSON.parse(raw)?.config ?? {} : {};
+  const config = await readCosConfig({ rootDir, label: 'migration 234' });
   return STRANDED.map((producer) => ({
     ...producer,
     file: typeof config[producer.configKey] === 'string' && config[producer.configKey]

@@ -107,7 +107,7 @@ export default function RoundEditForm({
                     aria-label="Section label"
                     className="flex-1 bg-port-bg border border-port-border rounded-lg px-3 py-1.5 text-sm text-white focus:border-port-accent focus:outline-none"
                   />
-                  <button type="button" onClick={() => removeSection(s.id)} className="p-1.5 text-gray-500 hover:text-port-error" aria-label="Remove section">
+                  <button type="button" onClick={() => removeSection(s.id)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-error" aria-label="Remove section">
                     <Trash2 size={15} />
                   </button>
                 </div>
@@ -177,7 +177,7 @@ export default function RoundEditForm({
                     aria-label="Layer voice"
                     className="w-32 bg-port-bg border border-port-border rounded-lg px-3 py-1.5 text-sm text-white focus:border-port-accent focus:outline-none"
                   />
-                  <button type="button" onClick={() => removeLayer(l.id)} className="p-1.5 text-gray-500 hover:text-port-error" aria-label="Remove layer">
+                  <button type="button" onClick={() => removeLayer(l.id)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-error" aria-label="Remove layer">
                     <Trash2 size={15} />
                   </button>
                 </div>
@@ -275,7 +275,7 @@ export default function RoundEditForm({
                     aria-label="Reference URL"
                     className="flex-1 min-w-0 bg-port-bg border border-port-border rounded-lg px-3 py-1.5 text-sm text-white focus:border-port-accent focus:outline-none"
                   />
-                  <button type="button" onClick={() => removeReference(r.id)} className="p-1.5 text-gray-500 hover:text-port-error shrink-0" aria-label="Remove reference">
+                  <button type="button" onClick={() => removeReference(r.id)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-error shrink-0" aria-label="Remove reference">
                     <Trash2 size={15} />
                   </button>
                 </div>

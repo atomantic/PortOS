@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('./execGit.js', () => ({ execGit: vi.fn() }));
 
 import { execGit } from './execGit.js';
-import { commitsSince, committedDuringRun, toEpochMs } from './gitCommitProbe.js';
+import { commitsSince, committedDuringRun, runWindowDiff, toEpochMs } from './gitCommitProbe.js';
 
 const SINCE = Date.parse('2026-08-08T18:23:30.000Z');
 
@@ -103,5 +103,64 @@ describe('committedDuringRun (#3637)', () => {
   it('is false when the run committed nothing', async () => {
     vi.mocked(execGit).mockResolvedValue({ exitCode: 0, stdout: '0\n', stderr: '' });
     expect(await committedDuringRun('/tmp/ws', SINCE)).toBe(false);
+  });
+});
+
+describe('runWindowDiff (#5994)', () => {
+  const baseOk = { exitCode: 0, stdout: `${'b'.repeat(40)}\n`, stderr: '' };
+
+  it('diffs the newest pre-window commit against HEAD, so a multi-commit run reads as one change', async () => {
+    vi.mocked(execGit)
+      .mockResolvedValueOnce(baseOk)
+      .mockResolvedValueOnce({ exitCode: 0, stdout: 'diff --git a/a.js b/a.js\n+ok\n', stderr: '' });
+
+    expect(await runWindowDiff('/tmp/ws', SINCE)).toEqual({
+      diff: 'diff --git a/a.js b/a.js\n+ok\n',
+      base: 'b'.repeat(40),
+      truncated: false,
+      reason: null,
+    });
+    // The window is resolved on committer date, exactly as `commitsSince` filters
+    // on it — the two probes must never disagree about which commits are the run's.
+    expect(execGit).toHaveBeenNthCalledWith(1,
+      ['rev-list', '-n', '1', '--before=2026-08-08T18:23:30.000Z', 'HEAD'],
+      '/tmp/ws',
+      { ignoreExitCode: true, timeout: 10_000 }
+    );
+    expect(execGit).toHaveBeenNthCalledWith(2,
+      ['diff', '--no-color', '--no-ext-diff', `${'b'.repeat(40)}..HEAD`],
+      '/tmp/ws',
+      { ignoreExitCode: true, timeout: 30_000 }
+    );
+  });
+
+  it('distinguishes "the run changed nothing" from "git could not answer"', async () => {
+    vi.mocked(execGit).mockResolvedValueOnce(baseOk).mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' });
+    expect(await runWindowDiff('/tmp/ws', SINCE)).toMatchObject({ diff: '', reason: null });
+
+    vi.clearAllMocks();
+    vi.mocked(execGit).mockResolvedValueOnce(baseOk).mockResolvedValueOnce({ exitCode: 128, stdout: '', stderr: 'bad revision' });
+    expect(await runWindowDiff('/tmp/ws', SINCE)).toMatchObject({ diff: null, reason: 'could not read the run window diff' });
+  });
+
+  it('declines (never throws) with a reason for an unusable window, an unresolvable base, and a rejecting git', async () => {
+    expect(await runWindowDiff('', SINCE)).toMatchObject({ diff: null, reason: 'no workspace path' });
+    expect(await runWindowDiff('/tmp/ws', NaN)).toMatchObject({ diff: null, reason: 'no run window' });
+    expect(await runWindowDiff('/tmp/ws', 1e16)).toMatchObject({ diff: null, reason: 'unusable run window' });
+
+    vi.mocked(execGit).mockResolvedValueOnce({ exitCode: 0, stdout: '\n', stderr: '' });
+    expect(await runWindowDiff('/tmp/ws', SINCE)).toMatchObject({ diff: null, reason: 'no commit predates the run window' });
+
+    vi.clearAllMocks();
+    vi.mocked(execGit).mockRejectedValue(new Error('timed out'));
+    expect(await runWindowDiff('/tmp/ws', SINCE)).toMatchObject({ diff: null, reason: 'could not resolve the run window base commit' });
+  });
+
+  it('truncates and flags an oversized diff rather than handing a fixed-window model more than it can read', async () => {
+    vi.mocked(execGit).mockResolvedValueOnce(baseOk).mockResolvedValueOnce({ exitCode: 0, stdout: 'x'.repeat(500), stderr: '' });
+    const result = await runWindowDiff('/tmp/ws', SINCE, { maxChars: 100 });
+    expect(result.truncated).toBe(true);
+    expect(result.diff).toContain('[diff truncated]');
+    expect(result.diff.length).toBeLessThan(200);
   });
 });

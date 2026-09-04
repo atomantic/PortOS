@@ -8,6 +8,8 @@
  * The implementation is split by concern:
  *   - store.js                — shared persistence, cache, mutex, pure helpers
  *   - metrics.js              — recording completions + rebuilding aggregates
+ *   - reset.js                — destructive per-task-type reset leaf (imported by
+ *                               metrics + routing; owns no cycle)
  *   - routing.js              — heuristic routing, cooldown, skip, confidence
  *   - safetyKind.js           — outward-facing/irreversible safety-kind classifier
  *   - correlationQuality.js   — enriched-signal ↔ outcome correlation window
@@ -48,13 +50,17 @@ export {
   computeLatencySplit,
   recordFailureSignature,
   recordEnvironmentalFailure,
-  purgeEnvironmentalFailuresForType,
   ENVIRONMENTAL_ERROR_CATEGORIES,
-  resetTaskTypeLearning,
   recalculateModelTierMetrics,
   recalculateDurationStats,
   getWindowedStats
 } from './metrics.js';
+
+export {
+  purgeEnvironmentalFailuresForType,
+  resetTaskTypeLearning,
+  removeTaskTypeFromLearningData
+} from './reset.js';
 
 export {
   getTaskTypePriorityMultiplier,

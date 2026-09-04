@@ -97,14 +97,17 @@ export * from './seriesAutopilot/orchestrator.js';
 // Export internals for tests. Pulled back together from their new home modules
 // so the existing `__testing` import contract survives the #2842 split.
 //
-// The properties MUST be lazy getters, not eagerly-read values. `session.js`
-// reaches this barrel through a real import cycle
-// (session → autoRunner → episodeVideo → completionHook → planAdvance →
-// seriesAutopilot), so evaluating `providerOverrideOpts` at module-evaluation
-// time throws a TDZ ReferenceError on any cold import of a focused module. The
-// getters defer each read until a test actually touches the key, by which point
-// every binding is initialized. Behavior for callers is unchanged — `__testing`
-// is still a plain object whose keys resolve to the same functions.
+// The properties are lazy getters, not eagerly-read values. They were forced by a
+// real import cycle (session → autoRunner → episodeVideo → completionHook →
+// planAdvance → seriesAutopilot), which made evaluating `providerOverrideOpts` at
+// module-evaluation time a TDZ ReferenceError on any cold import of a focused
+// module. #5920 removed that cycle — `episodeVideo.js` now starts a Creative
+// Director project through `creativeDirector/projectStartSink.js` instead of
+// importing the completion hook — but the getters stay: they cost nothing, they
+// keep the cold-import guard in `seriesAutopilotColdImport.test.js` honest, and a
+// future edge must not silently reintroduce the crash. Behavior for callers is
+// unchanged — `__testing` is still a plain object whose keys resolve to the same
+// functions.
 import * as state from './seriesAutopilot/state.js';
 import * as convergence from './seriesAutopilot/convergence.js';
 import * as session from './seriesAutopilot/session.js';

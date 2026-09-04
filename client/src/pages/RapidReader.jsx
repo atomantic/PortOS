@@ -325,7 +325,14 @@ export default function RapidReaderPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
               <label className="text-xs text-gray-400"><span className="sr-only">Shelf title</span><input value={saveTitle} onChange={(event) => setSaveTitle(event.target.value)} placeholder="Title to save" className="w-full min-h-10 bg-port-bg border border-port-border rounded-md px-3" /></label>
               <button type="button" disabled={savingShelf || !documentText || !saveTitle.trim()} onClick={saveToShelf} className="inline-flex justify-center items-center gap-1 min-h-10 border border-port-accent/50 text-port-accent rounded-md disabled:opacity-40"><Save size={14} /> Save to shelf</button>
-              <label className="sm:col-span-2 text-xs text-gray-400 flex flex-col sm:flex-row gap-2"><span className="sr-only">URL to add to shelf</span><input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com/article" className="flex-1 min-h-10 bg-port-bg border border-port-border rounded-md px-3" /><button type="button" disabled={fetchingShelf || !url.trim()} onClick={fetchToShelf} className="min-h-10 px-3 border border-port-accent/50 text-port-accent rounded-md disabled:opacity-40">Fetch URL to shelf</button></label>
+              {/* The Fetch button is a sibling of the field, not a child of its
+                  <label>: a <button> is a labelable element, so nesting it made the
+                  label a candidate name source for the button as well as the input. */}
+              <div className="sm:col-span-2 text-xs text-gray-400 flex flex-col sm:flex-row gap-2">
+                <label htmlFor="rapid-reader-shelf-url" className="sr-only">URL to add to shelf</label>
+                <input id="rapid-reader-shelf-url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com/article" className="flex-1 min-h-10 bg-port-bg border border-port-border rounded-md px-3" />
+                <button type="button" disabled={fetchingShelf || !url.trim()} onClick={fetchToShelf} className="min-h-10 px-3 border border-port-accent/50 text-port-accent rounded-md disabled:opacity-40">Fetch URL to shelf</button>
+              </div>
             </div>
           </div>
 

@@ -1,8 +1,15 @@
 /**
- * Run-window commit probe — the single machine-checkable "did this run commit
- * anything?" primitive (#3637).
+ * Run-window git probes — the machine-checkable "what did this run leave
+ * behind?" primitives (#3637).
  *
- * It replaced the `[task-<id>]` commit-marker grep that used to live in
+ * Two questions share one window definition, so they share one module: `did it
+ * commit anything?` (the success criterion) and `what did it commit?` (the
+ * accumulated diff the goal-fidelity review reads, #5994). Splitting them would
+ * duplicate the "commits stamped inside the window are this run's" rule, and a
+ * drift between the two would mean the gate reviewed a different set of commits
+ * than the criterion counted.
+ *
+ * `commitsSince` replaced the `[task-<id>]` commit-marker grep that used to live in
  * `agentRunTracking.js`: nothing in PortOS ever emitted that marker (the root
  * AGENTS.md requires human-readable commit subjects, so stamping an opaque task
  * id into every permanent commit was never an option), so the criterion was
@@ -79,4 +86,66 @@ export function toEpochMs(startedAt) {
  */
 export async function committedDuringRun(workspacePath, sinceMs) {
   return (await commitsSince(workspacePath, sinceMs)) > 0;
+}
+
+/**
+ * The ACCUMULATED diff of everything this run committed — the base being the
+ * newest commit that predates the run window, so a run that landed five commits
+ * is reviewed as the one change it actually made rather than five partial ones.
+ *
+ * Non-throwing, like its siblings, and every failure is a REASON rather than an
+ * empty diff. That distinction is the whole point: `''` would read as "this run
+ * changed nothing", and a consumer gating on the diff must never confuse a git
+ * that could not answer with a run that did nothing.
+ *
+ * `--before` resolves the base off COMMITTER date, matching `commitsSince`'s
+ * `--since` — so the two probes always agree on which commits belong to the run.
+ * A repo whose entire history falls inside the window has no such base; that is
+ * reported rather than diffed against the empty tree, because on a real
+ * workspace it means the window is wrong, not that the run wrote the repo.
+ *
+ * @param {string} workspacePath
+ * @param {number} sinceMs - epoch ms marking the start of the run window
+ * @param {Object} [options]
+ * @param {number} [options.maxChars] - hard cap on the returned text; the diff
+ *   is truncated (and flagged) rather than returned whole, because the caller
+ *   feeds it to a model with a fixed context window.
+ * @returns {Promise<{diff: string|null, base: string|null, truncated: boolean, reason: string|null}>}
+ */
+export async function runWindowDiff(workspacePath, sinceMs, { maxChars = 60_000 } = {}) {
+  const decline = (reason) => ({ diff: null, base: null, truncated: false, reason });
+  if (!workspacePath || typeof workspacePath !== 'string') return decline('no workspace path');
+  if (!Number.isFinite(sinceMs)) return decline('no run window');
+  const since = new Date(sinceMs);
+  if (Number.isNaN(since.getTime())) return decline('unusable run window');
+
+  const baseResult = await execGit(
+    ['rev-list', '-n', '1', `--before=${since.toISOString()}`, 'HEAD'],
+    workspacePath,
+    { ignoreExitCode: true, timeout: 10_000 },
+  ).catch(() => null);
+  if (!baseResult || baseResult.exitCode !== 0) return decline('could not resolve the run window base commit');
+  const base = baseResult.stdout.trim();
+  if (!base) return decline('no commit predates the run window');
+
+  // `--no-ext-diff` so a user's configured external difftool can't replace the
+  // unified text (or block on a GUI); `--no-color` so escape codes don't reach
+  // a model reading it as source.
+  const diffResult = await execGit(
+    ['diff', '--no-color', '--no-ext-diff', `${base}..HEAD`],
+    workspacePath,
+    { ignoreExitCode: true, timeout: 30_000 },
+  ).catch(() => null);
+  if (!diffResult || diffResult.exitCode !== 0) return decline('could not read the run window diff');
+
+  const diff = diffResult.stdout;
+  if (!diff.trim()) return { diff: '', base, truncated: false, reason: null };
+  // The cap bounds what the CALLER receives, marker included — a consumer that
+  // re-checks the length against the same constant would otherwise reject the
+  // very text this function handed it.
+  if (diff.length > maxChars) {
+    const marker = '\n…[diff truncated]';
+    return { diff: `${diff.slice(0, Math.max(0, maxChars - marker.length))}${marker}`, base, truncated: true, reason: null };
+  }
+  return { diff, base, truncated: false, reason: null };
 }

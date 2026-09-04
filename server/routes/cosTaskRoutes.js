@@ -16,6 +16,8 @@ import { getSlashdoWorkflow, slashdoWorkflowAppliesTo, SLASHDO_COMMAND_NAMES } f
 import { NON_PM2_TYPES } from '../services/streamingDetect.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import { recordUserAction } from '../services/userActions.js';
+import { fileInvestigationTask } from '../services/investigationTaskProducer.js';
+import { CLIENT_INVESTIGATION_DELIVERY, clientInvestigationFingerprint } from '../lib/investigationTasks.js';
 import {
   createCosTaskSchema,
   slashdoTaskSchema,
@@ -44,8 +46,9 @@ const enhanceTaskSchema = z.object({
 // operator action that happened.
 const TASK_CREATE_PAYLOAD_FIELDS = [
   'prompt', 'description', 'context', 'provider', 'model', 'effort', 'app',
+  'orchestrationMode', 'orchestrationProfile',
   'useWorktree', 'openPR', 'prCompletion', 'planOnly', 'reviewLoop', 'reviewers',
-  'approvalRequired',
+  'approvalRequired', 'isInvestigation',
   // The one create field with an open shape (`cosTaskDiagnosticsSchema` is a
   // passthrough), so it is both the most informative thing to keep and the reason
   // `recordUserAction` redacts credential-shaped keys at all.
@@ -405,16 +408,32 @@ router.post('/tasks/jira-ticket', asyncHandler(async (req, res) => {
 router.post('/tasks', asyncHandler(async (req, res) => {
   const parsed = createCosTaskSchema.safeParse(req.body);
   if (!parsed.success) failValidation(parsed);
-  const { type, ...taskData } = parsed.data;
+  const { type, isInvestigation, ...taskData } = parsed.data;
   if (taskData.targetInstanceId) await assertAssignableInstance(taskData.targetInstanceId);
   const preparedTask = await preparePlanOnlyTask(taskData);
-  const result = await cos.addTask(preparedTask, type);
+  // A UI-queued investigation (#6043) goes through the SAME producer as an
+  // auto-filed one, so it lands with the markers the shared machinery reads —
+  // `metadata.isInvestigation` (recognized by `isInvestigationTask`, which is
+  // also the meta-cascade guard, so its own failure can't spawn an
+  // investigation of itself) and a server-derived fingerprint (dedup + the loop
+  // policy) — and contributes to the shared storm counter. The client supplies
+  // only the flag: it never names the fingerprint or the delivery posture.
+  const delivery = isInvestigation ? CLIENT_INVESTIGATION_DELIVERY : null;
+  const result = delivery
+    ? (await fileInvestigationTask(
+      { ...preparedTask, fingerprint: clientInvestigationFingerprint(preparedTask) },
+      { taskType: type, delivery }
+    )).task
+    : await cos.addTask(preparedTask, type);
 
   if (result?.duplicate) {
     throw new ServerError(`A task with this description is already ${result.status}`, { status: 409, code: 'DUPLICATE_TASK' });
   }
 
-  await logTaskCreated(req, result, preparedTask);
+  // Log the posture the task actually FILED with, not just the submitted fields:
+  // the delivery and the investigation marker are applied here, so a ledger row
+  // built from `preparedTask` alone would omit them for a UI-queued repair.
+  await logTaskCreated(req, result, { ...preparedTask, ...delivery, isInvestigation });
   res.json(result);
 }));
 
@@ -434,6 +453,10 @@ router.put('/tasks/:id', asyncHandler(async (req, res) => {
   if (fields.model !== undefined) updates.model = fields.model;
   if (fields.provider !== undefined) updates.provider = fields.provider;
   if (fields.effort !== undefined) updates.effort = fields.effort;
+  // Orchestrated execution (#5992). `null` is the explicit clear the schema
+  // preserves — the store re-normalizes and drops the key (absent-vs-cleared).
+  if (fields.orchestrationMode !== undefined) updates.orchestrationMode = fields.orchestrationMode;
+  if (fields.orchestrationProfile !== undefined) updates.orchestrationProfile = fields.orchestrationProfile;
   if (fields.temperature !== undefined) updates.temperature = fields.temperature;
   if (fields.thinking !== undefined) updates.thinking = fields.thinking;
   if (fields.app !== undefined) updates.app = fields.app;

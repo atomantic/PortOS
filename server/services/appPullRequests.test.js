@@ -79,6 +79,66 @@ describe('listAppPullRequests', () => {
     });
   });
 
+  it('surfaces where a fork PR\'s head branch lives, so a worktree can attach to it (#6064)', async () => {
+    // A cross-repository head has no `origin/<headRefName>`; without these
+    // coordinates every "work on this PR's branch" action fails at workspace
+    // prep, which is every external contribution.
+    execGh.mockResolvedValue(JSON.stringify([{
+      number: 21,
+      title: 'Contributed fix',
+      url: 'https://github.com/acme/widget/pull/21',
+      author: { login: 'contributor' },
+      headRefName: 'contributor/fix-thing',
+      baseRefName: 'main',
+      isCrossRepository: true,
+      maintainerCanModify: true,
+      headRepository: { name: 'widget', nameWithOwner: 'contributor/widget' },
+      headRepositoryOwner: { login: 'contributor' },
+    }]));
+
+    const result = await listAppPullRequests(APP);
+
+    expect(execGh.mock.calls[0][0].join(' ')).toContain('isCrossRepository');
+    expect(result.pullRequests[0]).toMatchObject({
+      isCrossRepository: true,
+      maintainerCanModify: true,
+      // Composed from the PR's OWN origin, so a GitHub Enterprise fork resolves
+      // to that host rather than github.com.
+      forkHead: { remoteUrl: 'https://github.com/contributor/widget.git', ownerLogin: 'contributor' },
+    });
+  });
+
+  it('leaves fork coordinates null for a same-repo head, which origin already resolves', async () => {
+    execGh.mockResolvedValue(JSON.stringify([{
+      number: 22,
+      title: 'In-repo fix',
+      url: 'https://github.com/acme/widget/pull/22',
+      headRefName: 'fix/in-repo',
+      isCrossRepository: false,
+      maintainerCanModify: false,
+      headRepository: { name: 'widget', nameWithOwner: 'acme/widget' },
+      headRepositoryOwner: { login: 'acme' },
+    }]));
+
+    const result = await listAppPullRequests(APP);
+
+    expect(result.pullRequests[0]).toMatchObject({ isCrossRepository: false, forkHead: null });
+  });
+
+  it('reports an unanswered head relationship as null, never as false', async () => {
+    // An older `gh`, or a partial read: `resolvePullRequestWriteAccess` reads
+    // this row and must land on UNKNOWN rather than on "this head is ours".
+    execGh.mockResolvedValue(JSON.stringify([{
+      number: 23, title: 'Old gh', url: 'https://github.com/acme/widget/pull/23', headRefName: 'x',
+    }]));
+
+    const result = await listAppPullRequests(APP);
+
+    expect(result.pullRequests[0]).toMatchObject({
+      isCrossRepository: null, maintainerCanModify: null, forkHead: null,
+    });
+  });
+
   it('keeps an answered empty GitHub list distinct from a failed read', async () => {
     execGh.mockResolvedValue('[]');
 

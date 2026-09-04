@@ -500,7 +500,7 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // FableLoom restores the authored story graph, playback configuration, and
   // story-level render preferences.
   // Universe/series ids are structural links and stay on the live record.
-  fableLoom: ['name', 'logline', 'premise', 'styleNotes', 'format', 'playSettings', 'renderSettings', 'seriesPlan', 'participationMode', 'audienceCommunicationMedium', 'episodes'],
+  fableLoom: ['name', 'logline', 'premise', 'styleNotes', 'format', 'playSettings', 'renderSettings', 'seriesPlan', 'productionStatus', 'protagonistCharacterId', 'protagonistWardrobeId', 'protagonistWardrobeLocked', 'participationMode', 'audienceCommunicationMedium', 'episodes'],
   // Writers Room exercises (#1645): the user-authored sprint fields the merge can
   // restore through `restoreExercise` — the appended prose + the sprint config.
   // Server-owned / structural fields are excluded (`id`/`createdAt`/`startedAt`/

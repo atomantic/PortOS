@@ -35,7 +35,7 @@ import { getUserTimezone } from './userTimezone.js';
 import { getSettings } from './settings.js';
 import { findOrOpenPage, listCdpPages, isAuthPage, evaluateOnPage } from './browserService.js';
 import { shortSummary } from './humanActivity.js';
-import { youtubeVideoIdFromUrl } from './youtubeImport.js';
+import { youtubeVideoIdFromUrl } from '../lib/youtubeUrl.js';
 
 // ---------------------------------------------------------------------------
 // Constants

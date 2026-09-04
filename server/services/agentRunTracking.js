@@ -5,7 +5,7 @@
  */
 
 import { join } from 'path';
-import { writeFile, mkdir } from 'fs/promises';
+import { mkdir } from 'fs/promises';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { recordSession } from './usage.js';
 import { recordCompletedRunUsage } from './usageReconciler.js';
@@ -59,8 +59,8 @@ export async function createAgentRun({ agentId, task, model, provider, workspace
   };
 
   await atomicWrite(join(runDir, 'metadata.json'), metadata);
-  await writeFile(join(runDir, 'prompt.txt'), task.description || '');
-  await writeFile(join(runDir, 'output.txt'), '');
+  await atomicWrite(join(runDir, 'prompt.txt'), task.description || '');
+  await atomicWrite(join(runDir, 'output.txt'), '');
 
   // Record usage session for CoS agent
   recordSession(provider.id, provider.name, model || provider.defaultModel).catch(err => {
@@ -149,7 +149,7 @@ export async function completeAgentRun(runId, output, exitCode, duration, errorA
   // Persist output first so endTime remains the durable completion marker. If
   // this write fails, the still-open metadata lets recovery retry the whole
   // operation; once metadata lands, every run artifact is already complete.
-  await writeFile(join(runDir, 'output.txt'), output || '');
+  await atomicWrite(join(runDir, 'output.txt'), output || '');
   await atomicWrite(metaPath, metadata);
 
   // Record usage for every completed CoS agent run: failed and interrupted

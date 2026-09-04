@@ -267,6 +267,65 @@ describe('Default Avatar Style dropdown', () => {
   });
 });
 
+describe('Rigged avatar records in the Default Avatar dropdown', () => {
+  const riggedAvatars = [{
+    id: 'image3d-1',
+    name: 'Example Dancer',
+    variant: 'rigged-image3d-1',
+    assetUrl: '/api/avatar/model.glb?variant=rigged-image3d-1',
+    clip: 'Dance',
+    coverage: {
+      availableClips: ['Dance'],
+      coverageByState: {
+        thinking: { covered: false, clip: null },
+        ideating: { covered: true, clip: 'Dance' },
+      },
+      coveredStates: ['ideating'],
+      missingStates: ['thinking'],
+      complete: false,
+    },
+  }];
+
+  it('offers verified animated records alongside the built-in styles', async () => {
+    renderConfig({ config: { ...config, avatarStyle: 'svg' }, riggedAvatars });
+    await screen.findByText('Waiting for the next wake');
+
+    fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
+
+    const select = screen.getByRole('combobox', { name: 'Default avatar' });
+    const labels = [...select.options].map((option) => option.text);
+    expect(labels).toContain('Digital (SVG)');
+    expect(labels.some((label) => label.includes('Example Dancer') && label.includes('rigged 3D'))).toBe(true);
+  });
+
+  it('shows the coverage note when a rigged record is staged', async () => {
+    renderConfig({ config: { ...config, avatarStyle: 'svg' }, riggedAvatars });
+    await screen.findByText('Waiting for the next wake');
+
+    fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
+
+    const select = screen.getByRole('combobox', { name: 'Default avatar' });
+    fireEvent.change(select, { target: { value: 'rigged-image3d-1' } });
+
+    expect(await screen.findByText(/Covered: ideating/)).toBeInTheDocument();
+    expect(screen.getByText(/Other states play Dance/)).toBeInTheDocument();
+
+    api.updateCosConfig.mockResolvedValue({ success: true });
+    fireEvent.click(screen.getByRole('button', { name: /Save/i }));
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ avatarStyle: 'rigged-image3d-1' }),
+      { silent: true },
+    ));
+  });
+
+  it('warns when the saved rigged record is no longer offered', async () => {
+    renderConfig({ config: { ...config, avatarStyle: 'rigged-image3d-gone' }, riggedAvatars });
+    await screen.findByText('Waiting for the next wake');
+
+    expect(screen.getByText(/no longer available/)).toBeInTheDocument();
+  });
+});
+
 describe('persistent mind status', () => {
   it('shows the live supervisor state and links to the full mind workspace', async () => {
     renderConfig();

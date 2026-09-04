@@ -49,10 +49,29 @@ describe('listSlotstreamCachedModels', () => {
   it('lists checkpoint directories and ignores files', async () => {
     dir = join(tmpdir(), `portos-slotstream-cache-${Date.now()}`);
     await mkdir(join(dir, 'qwen-moe'), { recursive: true });
+    await writeFile(join(dir, 'qwen-moe', 'model.safetensors'), 'weights');
     await writeFile(join(dir, 'notes.txt'), 'not a checkpoint');
     const cache = await listSlotstreamCachedModels({ cacheDir: dir });
     expect(cache.error).toBeNull();
     expect(cache.models).toEqual([expect.objectContaining({ id: 'qwen-moe' })]);
+  });
+
+  it('hides a directory a download has not finished filling', async () => {
+    // Reporting one would clear the card's empty-cache warning and offer
+    // `--model` a directory that exits before it binds a port.
+    dir = join(tmpdir(), `portos-slotstream-cache-partial-${Date.now()}`);
+    await mkdir(join(dir, 'in-progress'), { recursive: true });
+    await writeFile(join(dir, 'in-progress', 'config.json'), '{}');
+    await writeFile(join(dir, 'in-progress', 'model.safetensors.partial'), 'half');
+    await mkdir(join(dir, 'abandoned'), { recursive: true });
+    await writeFile(join(dir, 'abandoned', 'model.safetensors.partial'), 'half');
+    await mkdir(join(dir, 'empty'), { recursive: true });
+    await mkdir(join(dir, 'complete'), { recursive: true });
+    await writeFile(join(dir, 'complete', 'model.safetensors'), 'weights');
+
+    const cache = await listSlotstreamCachedModels({ cacheDir: dir });
+    expect(cache.error).toBeNull();
+    expect(cache.models.map((m) => m.id)).toEqual(['complete']);
   });
 });
 

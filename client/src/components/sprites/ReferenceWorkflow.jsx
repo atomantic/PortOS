@@ -662,7 +662,7 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
                       type="button"
                       onClick={clearSource}
                       aria-label="Remove reference image"
-                      className="shrink-0 p-1 text-gray-400 hover:text-white"
+                      className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center shrink-0 p-1 text-gray-400 hover:text-white"
                     >
                       <X className="h-4 w-4" />
                     </button>

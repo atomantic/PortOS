@@ -33,6 +33,7 @@ import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import { commandOutput } from '../lib/commandExists.js';
 import { compareHarnessVersions, parseHarnessModels, parseNpmLatestVersion } from '../lib/harnessOutput.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
+import { primeOpencodeCatalogCache } from '../lib/opencodeCatalogCache.js';
 import { getOpencodeLocalProviderNamespace, isConfiguredDefaultModel } from '../lib/providerModels.js';
 import { providerRuntimeKey } from '../lib/providerPrerequisites.js';
 import { createStaleWhileRevalidate } from '../lib/staleWhileRevalidate.js';
@@ -267,6 +268,17 @@ export async function refreshHarnessModels(id, { run = commandOutput, ...probeDe
   const status = await getProviderRuntimeStatus(runtime.id, { ...probeDeps, probeCommand: run });
   if (!status?.installed) {
     return { ok: false, reason: `${runtime.label} is not installed on this host.`, models: [], updated: [] };
+  }
+
+  // `opencode models` prints from an on-disk catalog OpenCode refreshes on its
+  // own — silently, and not at all on a host where its fetch fails (see
+  // `lib/opencodeCatalogCache.js`). Without this the button faithfully re-reads
+  // a catalog frozen weeks ago and reports success, while the same account on
+  // another machine lists models this one has never heard of. Best-effort by
+  // design: a refusal or a failed fetch leaves the probe below unchanged.
+  if (runtime.id === 'opencode') {
+    const catalog = await primeOpencodeCatalogCache();
+    console.log(`📚 ${runtime.label} catalog: ${catalog.primed ? 'refreshed' : 'left alone'} — ${catalog.reason}`);
   }
 
   // Resolve and `prepareCliSpawn` exactly as the version probe does. An

@@ -728,7 +728,7 @@ export default function VoiceWidget() {
                 onClick={handleClear}
                 title="Clear conversation"
                 aria-label="Clear conversation"
-                className="p-1 rounded text-gray-400 hover:text-port-error hover:bg-port-error/10"
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded text-gray-400 hover:text-port-error hover:bg-port-error/10"
               >
                 <Trash2 size={12} />
               </button>
@@ -842,7 +842,7 @@ export default function VoiceWidget() {
               onClick={() => setCollapsed((c) => !c)}
               title={collapsed ? 'Show conversation' : 'Hide conversation'}
               aria-label={collapsed ? 'Show conversation' : 'Hide conversation'}
-              className="p-1.5 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70"
             >
               {collapsed ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
             </button>

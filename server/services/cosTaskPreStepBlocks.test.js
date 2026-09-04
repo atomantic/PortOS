@@ -31,6 +31,24 @@ const PRESTEP_SRC = readFileSync(join(__dirname, 'cosTaskPreStepBlocks.js'), 'ut
 // break it nor silently disarm it.
 const LAYER_SRC = `${GEN_SRC}\n${PRESTEP_SRC}`;
 
+// #6112 — an abandoned volunteer claim is released deterministically, and the
+// release must happen BEFORE the "no zombies → park" early return. A repo whose
+// only stuck issues are abandoned claims has zero zombies on every pass, so a
+// release ordered after the park would never run at all.
+describe('issue-reconcile releases abandoned claims before it can park', () => {
+  it('calls the releaser ahead of every parking / dispatch return', () => {
+    const start = PRESTEP_SRC.indexOf('export async function resolveIssueReconcileBlock');
+    const body = PRESTEP_SRC.slice(start, PRESTEP_SRC.indexOf('\n}', start));
+    const releaseIdx = body.indexOf('releaseAbandonedClaims(result.abandoned');
+    expect(releaseIdx, 'the pre-step must release abandoned claims').toBeGreaterThan(-1);
+    expect(releaseIdx).toBeLessThan(body.indexOf("reason: 'no-zombie-issues'"));
+    expect(releaseIdx).toBeLessThan(body.indexOf('resolveReconcileDrainGate('));
+    // But never before the null guard: a transient/unsupported scan has no
+    // `abandoned` set to read, and must skip without writing to the forge.
+    expect(body.indexOf('if (!result) return { skip: true };')).toBeLessThan(releaseIdx);
+  });
+});
+
 // The {issueAuthorFilter} directive is shared by the scheduled claim-work router
 // AND the manual /do:next button (buildClaimWorkTask), so it is a standalone
 // pure helper. These exercise it directly rather than via source string.

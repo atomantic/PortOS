@@ -46,7 +46,7 @@ import { pendingCosActionReservations } from './cosAdmissionReservations.js';
 import { useRunner } from './agentState.js';
 
 // Shared state management (extracted to avoid circular deps)
-import { loadState, saveState, withStateLock, ensureDirectories, isImprovementEnabled, canQueueImprovementTasks, SCRIPTS_DIR, isDaemonRunning, setDaemonRunning } from './cosState.js';
+import { loadState, saveState, withStateLock, loadConfig, saveConfig, withConfigLock, ensureDirectories, isImprovementEnabled, canQueueImprovementTasks, SCRIPTS_DIR, isDaemonRunning, setDaemonRunning } from './cosState.js';
 
 // Events and logging (canonical source: cosEvents.js)
 import { cosEvents, emitLog } from './cosEvents.js';
@@ -172,7 +172,11 @@ import {
   registerPersistentMindTurnAdapter,
   unregisterPersistentMindTurnAdapter,
 } from './persistentMindSupervisor.js';
-import { createPersistentMindTurnAdapter } from './persistentMindAdapter.js';
+// `./persistentMindAdapter.js` is imported lazily where the daemon registers the
+// adapter, NOT here. It pulls in the whole CoS tool registry — and through it the
+// voice tool surface, ask service and image-gen backends — a graph the daemon only
+// executes once it is actually running, but that a static edge instantiated in
+// every suite importing cos.js for an unrelated helper.
 
 export {
   getPersistentMindState,
@@ -227,22 +231,24 @@ export { getConfig } from './cosState.js';
  */
 export async function updateConfig(updates) {
   let persistentMindWakeCadenceChanged = false;
-  const config = await withStateLock(async () => {
-    const state = await loadState();
+  // Config has its own file and its own tail (#6182) — a settings write no
+  // longer serializes behind the runtime-record writes in state.json.
+  const config = await withConfigLock(async () => {
+    const current = await loadConfig();
     // domainAutonomy is a partial-friendly map: a PATCH that names only one
     // domain must merge over the others rather than replace the whole object.
     // Capture the prior map BEFORE the spread clobbers it, then normalize the
     // merge so an unknown/invalid stored value resolves to the `execute` default.
-    const priorDomainAutonomy = state.config.domainAutonomy;
+    const priorDomainAutonomy = current.domainAutonomy;
     // Same for domainBudgets — a PATCH naming one domain (or one cap on one
     // domain) must merge field-by-field over the rest, not replace the map.
-    const priorDomainBudgets = state.config.domainBudgets;
-    const priorPersistentMindCapabilities = state.config.persistentMindCapabilities;
-    const priorPersistentMindProfile = state.config.persistentMindProfile;
-    const priorPersistentMindPrompt = state.config.persistentMindPrompt;
-    state.config = { ...state.config, ...updates };
+    const priorDomainBudgets = current.domainBudgets;
+    const priorPersistentMindCapabilities = current.persistentMindCapabilities;
+    const priorPersistentMindProfile = current.persistentMindProfile;
+    const priorPersistentMindPrompt = current.persistentMindPrompt;
+    const next = { ...current, ...updates };
     if (updates.domainAutonomy !== undefined) {
-      state.config.domainAutonomy = normalizeDomainAutonomy({
+      next.domainAutonomy = normalizeDomainAutonomy({
         ...priorDomainAutonomy,
         ...updates.domainAutonomy
       });
@@ -252,7 +258,7 @@ export async function updateConfig(updates) {
       for (const [id, caps] of Object.entries(updates.domainBudgets)) {
         mergedBudgets[id] = { ...(priorDomainBudgets?.[id] || {}), ...caps };
       }
-      state.config.domainBudgets = normalizeDomainBudgets(mergedBudgets);
+      next.domainBudgets = normalizeDomainBudgets(mergedBudgets);
     }
     if (updates.persistentMindProfile !== undefined) {
       const nextPersistentMindProfile = mergePersistentMindProfile(
@@ -261,22 +267,21 @@ export async function updateConfig(updates) {
       );
       persistentMindWakeCadenceChanged = nextPersistentMindProfile.wakeIntervalMinutes
         !== normalizePersistentMindProfile(priorPersistentMindProfile).wakeIntervalMinutes;
-      state.config.persistentMindProfile = nextPersistentMindProfile;
+      next.persistentMindProfile = nextPersistentMindProfile;
     }
     if (updates.persistentMindCapabilities !== undefined) {
-      state.config.persistentMindCapabilities = mergePersistentMindCapabilities(
+      next.persistentMindCapabilities = mergePersistentMindCapabilities(
         priorPersistentMindCapabilities,
         updates.persistentMindCapabilities,
       );
     }
     if (updates.persistentMindPrompt !== undefined) {
-      state.config.persistentMindPrompt = mergePersistentMindPrompt(
+      next.persistentMindPrompt = mergePersistentMindPrompt(
         priorPersistentMindPrompt,
         updates.persistentMindPrompt,
       );
     }
-    await saveState(state);
-    return state.config;
+    return saveConfig(next);
   });
   const improveKeys = ['improvementEnabled', 'selfImprovementEnabled', 'appImprovementEnabled'];
   const improvePatch = Object.fromEntries(
@@ -512,6 +517,7 @@ async function runStart() {
   emitLog('info', 'Running initial task evaluation...');
   await evaluateTasks({ initialStartup: true });
   await runHealthCheck();
+  const { createPersistentMindTurnAdapter } = await import('./persistentMindAdapter.js');
   await registerPersistentMindTurnAdapter(createPersistentMindTurnAdapter());
   await initializePersistentMindSupervisor();
 

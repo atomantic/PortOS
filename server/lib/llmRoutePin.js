@@ -30,7 +30,7 @@
 
 import { z } from 'zod';
 import { EFFORT_LEVELS } from './providerModels.js';
-import { trimTo } from './storyBible.js';
+import { trimTo } from './textUtils.js';
 
 /** Field caps for a pin — the one source of truth for both the door check
  *  (`llmRoutePinSchema`) and the sanitizer, so they can never drift. */

@@ -32,9 +32,9 @@
  *   6. An `<img>` with no `alt`, which is announced by its `src` — a hashed
  *      filename or a blob URL. `alt=""` is the correct spelling for a
  *      decorative image and passes; only the omission is the bug.
- *   7. An icon-only `<button>` in the MeatSpace health-logging tree sized to
- *      its bare icon (`p-1` around a 12-14px glyph = a 22px target) instead of
- *      the 44px floor the rest of the app enforces.
+ *   7. An icon-only `<button>` sized to its bare icon (`p-1` around a
+ *      12-14px glyph = a 22px target) instead of the 44px floor the rest of
+ *      the app enforces.
  *
  * Scoped to git-tracked `.jsx` under `client/src` so an untracked scratch file
  * can't fail the suite.
@@ -3266,7 +3266,7 @@ describe('a11y conventions', () => {
     expect(offenders, `Close button under the 44px touch-target minimum — add min-h-[44px] min-w-[44px] + flex items-center justify-center (see Drawer.jsx:106):\n${offenders.join('\n')}`).toEqual([]);
   });
 
-  it("meets the 44px touch-target minimum on the MeatSpace log-row icon buttons (#5703)", () => {
+  it("meets the 44px touch-target minimum on icon-only buttons (#5703, #5904)", () => {
     // The MeatSpace tabs are the app's most phone-centric surface — a drink or
     // a nicotine entry is logged one-handed — and their inline row controls
     // kept shipping as a bare `p-1`/`p-1.5` around a 12-14px icon: a 22-26px
@@ -3277,14 +3277,18 @@ describe('a11y conventions', () => {
     // `inline-flex items-center justify-center`), never the icon: icon size is
     // what sets the log row's density, and growing it would reflow the tables.
     //
-    // Two scopings, both deliberate. `components/meatspace/` rather than the
-    // whole tree: the same shape survives in a handful of desktop-first views,
-    // and widening here would turn one regression guard into a tree-wide sweep.
-    // And only the `p-0.5`/`p-1`/`p-1.5` shape, rather than every icon button
-    // missing an explicit min: one that reaches 44px through generous padding
-    // (`p-3` around a 20px glyph), or that carries no padding class at all, is a
-    // different question, and folding it in would make the guard report dozens
-    // of controls this change never looked at.
+    // Scoped to the whole tree since #5904 swept the same shape outside
+    // MeatSpace. Only the `p-0.5`/`p-1`/`p-1.5` shape counts, rather than every
+    // icon button missing an explicit min: one that reaches 44px through
+    // generous padding (`p-3` around a 20px glyph), or that carries no padding
+    // class at all, is a different question, and folding it in would make the
+    // guard report dozens of controls this change never looked at.
+    //
+    // Sibling-owned SongBook surfaces are excluded — a parallel change owns
+    // that tree and sweeps its own buttons.
+    const isSiblingOwned = (file) => file === "src/pages/SongBook.jsx"
+      || file === "src/pages/SongBookViewer.jsx"
+      || file.startsWith("src/components/songbook/");
     const TIGHT_PADDING = /(?:^|\s)p-(?:0\.5|1|1\.5)(?:\s|$)/;
     const offendersIn = (file, src) => {
       const out = [];
@@ -3312,11 +3316,11 @@ describe('a11y conventions', () => {
     // from client/), not this file's location — assert the filter really
     // selected the tree, so a change to the walker's path shape fails loudly
     // here instead of turning the rule into a vacuous pass over zero files.
-    const scanned = trackedJsxFiles().filter((file) => file.startsWith("src/components/meatspace/"));
-    expect(scanned.length, "no MeatSpace sources matched — has trackedJsxFiles() changed its path shape?").toBeGreaterThan(20);
+    const scanned = trackedJsxFiles().filter((file) => !isSiblingOwned(file));
+    expect(scanned.length, "no client sources matched — has trackedJsxFiles() changed its path shape?").toBeGreaterThan(500);
 
     const offenders = [];
     for (const file of scanned) offenders.push(...offendersIn(file, rawSourceOf(file)));
-    expect(offenders, `MeatSpace icon-only <button> under the 44px touch-target minimum — add min-h-[44px] min-w-[44px] inline-flex items-center justify-center and leave the icon size alone:\n${offenders.join("\n")}`).toEqual([]);
+    expect(offenders, `Icon-only <button> under the 44px touch-target minimum — add min-h-[44px] min-w-[44px] inline-flex items-center justify-center and leave the icon size alone:\n${offenders.join("\n")}`).toEqual([]);
   });
 });

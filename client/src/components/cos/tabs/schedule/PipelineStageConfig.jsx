@@ -23,13 +23,16 @@ import {
 // Which providers on THIS install the stage's picker actually offers. The
 // posture half is server-published (`publicReviewPostures`, derived from the
 // vendor rows — no vendor names on the client); the rest is the picker's own
-// visibility rule, reused so the "eligible" note can never list a provider
-// the dropdown hides (switched off, hardware-incompatible), which is what left
-// Stage 3 looking unconfigurable.
+// visibility rule, reused so the notes below can never name a provider the
+// dropdown hides (switched off, hardware-incompatible). The eligible set is
+// not re-listed in the copy — the dropdown already IS that list.
 const eligibleProvidersFor = (providers, policy) =>
   selectableProviders(providers, { allowed: policy.provider });
 
 const providerNames = (providers) => providers.map((p) => p.name || p.id).join(', ');
+
+// Constant now that the eligible set is left to the dropdown.
+const NO_TOOL_STAGE_NOTE = "Tool-free stage. A local model must additionally report no tool-calling capability; a cloud model is held tool-free by the provider's own enforced flags. Leave the provider unset to use the first eligible one. It returns only a binary allowlist; the final stage never receives rejected content.";
 
 // Every enabled CLI/TUI provider can run the actions stage; the note says which
 // of them the server additionally wraps in the vendor's own OS sandbox, so a
@@ -39,23 +42,27 @@ const actionsStageNote = (eligibleProviders) => {
   const sandboxed = eligibleProviders.filter(isSandboxed);
   const worktreeOnly = eligibleProviders.filter((p) => !isSandboxed(p));
   const isolation = worktreeOnly.length === 0
-    ? ['Each runs headless inside its vendor\'s maintained OS sandbox.']
+    ? ['Every selectable provider runs headless inside its vendor\'s maintained OS sandbox.']
     : [
       sandboxed.length > 0 && `OS-sandboxed by the vendor's own recipe: ${providerNames(sandboxed)}.`,
       `Headless with standard permissions, isolated by the disposable worktree only: ${providerNames(worktreeOnly)}.`,
     ].filter(Boolean);
   return [
-    `Sandboxed stage. Eligible on this install: ${providerNames(eligibleProviders)}.`,
+    'Sandboxed stage.',
     ...isolation,
     'PortOS passes the selected provider, model, and thinking effort through, with no forge credential or configuration overlays; the deterministic coordinator owns comments, issue filing, CI triggers, and merges.',
   ].join(' ');
 };
 
-export default function PipelineStageConfig({ taskType, config, providers, onUpdate, updating, setUpdating }) {
+export default function PipelineStageConfig({ taskType, config, providers, providersLoaded = true, onUpdate, updating, setUpdating }) {
   const stages = pipelineStages(config);
   const needsSecurityModelPolicy = taskType === 'pr-reviewer';
+  // Every public-review stage — not just the tool-free gate — resolves a local
+  // provider's models from the daemon, so the fetch follows the postures rather
+  // than the task type.
+  const hasPublicReviewStage = stages.some((stage) => stagePublicReviewPosture(stage));
   const { ollama, lmstudio, capabilitiesByBackend, loading: localModelsLoading } = useLocalModels({
-    enabled: needsSecurityModelPolicy,
+    enabled: needsSecurityModelPolicy || hasPublicReviewStage,
   });
   // One policy per posture. The provider half is server-derived; the model half
   // adds the authoritative no-tool capability check only for a local runtime,
@@ -157,15 +164,29 @@ export default function PipelineStageConfig({ taskType, config, providers, onUpd
           const localBackend = localBackendForProvider(stageProvider);
           const localModelIds = localBackend === 'ollama' ? ollama : localBackend === 'lmstudio' ? lmstudio : [];
           // A LOCAL provider's installed-model list is the source of truth (its
-          // stored catalog is stale, and only an installed model has a probeable
-          // capability report). Every other provider uses its own catalog, so a
-          // cloud CLI stage can pick any model that provider offers.
-          const stageModels = isNoToolStage && localBackend
-            ? localModelIds.map(id => ({
-              id,
-              name: id,
-              capabilities: capabilitiesByBackend?.[localBackend]?.[id],
-            }))
+          // stored catalog is a cached snapshot, and only an installed model has
+          // a probeable capability report). That holds for the sandboxed actions
+          // stage as much as the tool-free gate — offering the stale catalog
+          // there let a stage be pinned to a model the daemon no longer serves,
+          // and hid one that had just been pulled. Every other provider uses its
+          // own catalog, so a cloud CLI stage can pick any model it offers.
+          //
+          // `useLocalModels` reports BOTH "not fetched yet" and "daemon said
+          // nothing" as `[]`, so an empty list is not evidence the daemon serves
+          // no models. The two stages part ways on what to do about that. The
+          // tool-free gate must stay strict: its policy needs a probeable
+          // capability report, and a model with none is not selectable at all,
+          // so an empty list correctly offers nothing. The actions stage has no
+          // such gate, so it falls back to the record's catalog — otherwise a
+          // stopped daemon (or the in-flight window) renders an empty picker and
+          // drops the stage's own saved pin out of the dropdown.
+          const localStageModels = localModelIds.map(id => ({
+            id,
+            name: id,
+            capabilities: capabilitiesByBackend?.[localBackend]?.[id],
+          }));
+          const stageModels = posture && localBackend && (isNoToolStage || localStageModels.length > 0)
+            ? localStageModels
             : effortAwareModelOptions(stageProvider, stage.model);
           const selectionPolicy = posture ? selectionPolicies[posture] : undefined;
           const stageProviderId = stage.providerId || '';
@@ -203,6 +224,7 @@ export default function PipelineStageConfig({ taskType, config, providers, onUpd
               )}
               {!isSecurityStage && (
                 <ProviderModelSelector
+                  loading={!providersLoaded}
                   providers={providers || []}
                   selectedProviderId={stageProviderId}
                   selectedModel={stageModel}
@@ -232,12 +254,17 @@ export default function PipelineStageConfig({ taskType, config, providers, onUpd
                 <p className="text-xs text-gray-500 mt-2">
                   {localModelsLoading
                     ? 'Loading installed local model capability reports…'
-                    : `Tool-free stage. Eligible on this install: ${eligibleProviders.map((p) => p.name || p.id).join(', ')}. A local model must additionally report no tool-calling capability; a cloud model is held tool-free by the provider's own enforced flags. Leave the provider unset to use the first eligible one. It returns only a binary allowlist; the final stage never receives rejected content.`}
+                    : NO_TOOL_STAGE_NOTE}
                 </p>
               )}
               {isActionsStage && eligibleProviders?.length > 0 && (
                 <p className="text-xs text-gray-500 mt-2">
-                  {actionsStageNote(eligibleProviders)}
+                  {/* On a local provider this stage's model list comes from the
+                      daemon too, so say so while it loads rather than leaving an
+                      empty dropdown with a note that reads as if it were ready. */}
+                  {localBackend && localModelsLoading
+                    ? 'Loading installed local models…'
+                    : actionsStageNote(eligibleProviders)}
                 </p>
               )}
             </div>

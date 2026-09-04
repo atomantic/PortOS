@@ -104,11 +104,16 @@ describe('BrowseTab iCloud force save', () => {
     renderTab();
     fireEvent.click(screen.getByText('Example Source'));
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    // Clicking Edit swaps the button row for the Save/Cancel pair — under
+    // full-suite contention that re-render doesn't always land before the
+    // next synchronous query runs, so wait for it here rather than assuming
+    // it's already mounted at every clickSave() call site (#6051).
+    await screen.findByRole('button', { name: /Save/ });
   };
 
   const clickSave = async () => {
     const before = api.updateNote.mock.calls.length;
-    fireEvent.click(screen.getByRole('button', { name: /Save/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Save/ }));
     await waitFor(() => expect(api.updateNote.mock.calls.length).toBe(before + 1));
   };
 

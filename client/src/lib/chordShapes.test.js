@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 // Node-env-safe (no browser APIs) — this suite also runs in the server CI job.
 import { describe, it, expect } from 'vitest';
 import {

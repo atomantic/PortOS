@@ -175,7 +175,11 @@ export function sanitizeJudge(parsed) {
 async function loadSnapshot(issueId) {
   const content = await tryReadFile(snapshotPath(issueId));
   if (content === null) return null;
-  return safeJSONParse(content, null, { allowArray: false, logError: true, context: snapshotPath(issueId) });
+  const parsed = safeJSONParse(content, null, { allowArray: false, logError: true, context: snapshotPath(issueId) });
+  // `allowArray: false` only rejects a root array — a bare JSON scalar
+  // (corrupted snapshot) still parses, and callers spread this into a
+  // response object, so guard for a genuine object here.
+  return parsed && typeof parsed === 'object' ? parsed : null;
 }
 
 async function saveSnapshot(snapshot) {

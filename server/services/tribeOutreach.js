@@ -261,17 +261,52 @@ export function groupUnansweredThreads(events, { now = Date.now(), staleAfterMs 
   return out;
 }
 
+// Detection-pass cache (#6025). The scan reads up to EVENT_CAP rows per scope
+// across the timeline's largest table, and its verdict changes only when new
+// messages land — but the dashboard alert widget polls every 120s and the Tribe
+// page hits the same detection on mount, so back-to-back callers used to each pay
+// for a full re-scan. One entry (keyed by detection window, holding the UNSLICED
+// thread list so any `limit` is served from it) is enough: the callers differ only
+// in `limit`. Caching the promise also collapses concurrent callers onto one pass.
+export const DETECTION_CACHE_TTL_MS = 120000;
+let detectionCache = null; // { key, expiresAt, promise }
+
+/** Drop the cached detection pass (tests, and any caller that must see fresh state). */
+export function invalidateUnansweredThreadsCache() {
+  detectionCache = null;
+}
+
 /**
  * Detect unanswered inbound threads from Tribe people via the activity timeline.
  * No LLM — pure timeline + Tribe reads. Returns [] on any read failure (a nudge
  * source that quietly yields nothing beats one that throws into the alert sweep).
+ *
+ * Results are cached for DETECTION_CACHE_TTL_MS per detection window; a failed
+ * pass is never cached.
  */
 export async function findUnansweredTribeThreads({
   withinDays = DEFAULT_WITHIN_DAYS,
   staleAfterHours = DEFAULT_STALE_HOURS,
   limit = DEFAULT_LIMIT,
 } = {}) {
-  const [{ listEvents }, { loadResolverContext, enrichActivityEvent }, { listAccounts }] = await Promise.all([
+  const key = `${withinDays}:${staleAfterHours}`;
+  const now = Date.now();
+  if (!detectionCache || detectionCache.key !== key || detectionCache.expiresAt <= now) {
+    const entry = { key, expiresAt: now + DETECTION_CACHE_TTL_MS, promise: null };
+    entry.promise = detectUnansweredTribeThreads({ withinDays, staleAfterHours })
+      .catch((err) => {
+        if (detectionCache === entry) detectionCache = null;
+        throw err;
+      });
+    detectionCache = entry;
+  }
+  const threads = await detectionCache.promise;
+  return threads.slice(0, Math.max(0, limit));
+}
+
+/** One full detection pass — the uncached, unsliced scan behind the cache above. */
+async function detectUnansweredTribeThreads({ withinDays, staleAfterHours }) {
+  const [{ listEvents }, { loadResolverContext, enrichActivityEvent, createHandleResolver }, { listAccounts }] = await Promise.all([
     import('./humanActivity.js'),
     import('./identityResolve.js'),
     import('./messageAccounts.js'),
@@ -345,6 +380,10 @@ export async function findUnansweredTribeThreads({
   // invisible, so its inbound must not surface (and its sent turns must not vouch
   // for another account's thread).
   const tagged = sent.filter((ev) => !ev.metadata?.isReaction && isTwoWay(ev));
+  // One memoized resolver for the whole pass (#6025): a busy 1:1 thread repeats
+  // the same counterpart handle across every one of its inbound turns, and the
+  // uncached path re-ran the handle regexes + Tribe/Contacts match for each.
+  const resolveHandleOnce = createHandleResolver(ctx);
   for (const ev of received) {
     if (ev.metadata?.isReaction) continue;
     if (!isTwoWay(ev)) continue;
@@ -356,7 +395,7 @@ export async function findUnansweredTribeThreads({
     // Resolve the SENDER to a Tribe person via the event's counterpart handle
     // ONLY (a 1:1 received event's `metadata.handle` IS the sender, which
     // `enrichActivityEvent` resolves). An unresolved sender is skipped, not guessed.
-    const enriched = enrichActivityEvent(ev, ctx);
+    const enriched = enrichActivityEvent(ev, ctx, resolveHandleOnce);
     const personId = enriched.personId || null;
     if (!personId) continue;
     const ring = ringById.get(personId);
@@ -369,7 +408,8 @@ export async function findUnansweredTribeThreads({
     staleAfterMs: staleAfterHours * HOUR_MS,
     withinMs,
   });
-  return threads.slice(0, Math.max(0, limit));
+  console.log(`🤝 Outreach scan: ${threads.length} unanswered thread(s) from ${received.length} inbound turn(s) in ${Date.now() - now}ms`);
+  return threads;
 }
 
 // Map one timeline event to a synthetic message (buildThreadContext /

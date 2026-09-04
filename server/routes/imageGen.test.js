@@ -1,7 +1,25 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import express from 'express';
 import { pinPlatform, request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+
+// The annotated-regen path stages its init-image snapshot under PATHS.imageRefs
+// (imageGen.js's `ensureDir(PATHS.imageRefs)` + init-<uuid>.png write). Without
+// this redirect the suite wrote that snapshot into the developer's live data/
+// tree on every run of the "stages the flattened annotation" case (#6176).
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-imagegen-') }));
+// `fileUtils.js` re-exports pathSafety.js's resolvers (resolveGalleryImage,
+// resolveImageInputPath, …), but those read PATHS from `paths.js` directly —
+// the fileUtils.js mock above never touches that binding. Mirror the same
+// temp root here too, so the runner's own re-validation of the staged init
+// path (`fileUtils.resolveImageInputPath`) agrees with where the write above
+// actually landed.
+vi.mock('../lib/paths.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-imagegen-') }));
+afterAll(cleanupTempDataRoots);
+
 import imageGenRoutes from './imageGen.js';
 import * as fileUtils from '../lib/fileUtils.js';
 import * as regen from '../services/imageGen/regen.js';

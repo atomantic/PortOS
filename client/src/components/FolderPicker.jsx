@@ -134,7 +134,7 @@ export default function FolderPicker({ value, onChange, defaultPath }) {
             <button
               type="button"
               onClick={() => handleNavigate('~')}
-              className="p-1 text-gray-500 hover:text-white shrink-0"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-white shrink-0"
               title="Home directory" aria-label="Home directory"
             >
               <Home size={16} />

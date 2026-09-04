@@ -40,7 +40,7 @@ function mergeOnDemandRequest(schedule, request) {
 // passed down — same convention as TasksTab/AgentsTab — so this tab's provider/
 // model pickers stay live without standing up a second independent poll of the
 // same data.
-export default function ScheduleTab({ apps, providers, activeProviderId }) {
+export default function ScheduleTab({ apps, providers, providersLoaded, activeProviderId }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [schedule, setSchedule] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -185,6 +185,7 @@ export default function ScheduleTab({ apps, providers, activeProviderId }) {
         tasks={tasks}
         apps={apps}
         providers={providers}
+        providersLoaded={providersLoaded}
         activeProviderId={activeProviderId}
         onTrigger={handleTriggerAppImprovement}
         onUpdate={handleUpdateTask}
@@ -208,6 +209,7 @@ export default function ScheduleTab({ apps, providers, activeProviderId }) {
         onUpdate={handleUpdateTask}
         onTrigger={handleTriggerAppImprovement}
         providers={providers}
+        providersLoaded={providersLoaded}
         activeProviderId={activeProviderId}
         apps={apps}
         onUpdateOverride={handleUpdateOverride}

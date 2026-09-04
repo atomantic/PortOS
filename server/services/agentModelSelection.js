@@ -11,6 +11,7 @@ import { suggestModelTier } from './taskLearning.js';
 // mirrors the exact same classification the completion records under.
 import { classifyUntypedTask } from './taskLearning/store.js';
 import { taskContextBlock } from '../lib/cosTaskPrompt.js';
+import { ORCHESTRATION_ROLES, roleAssignment } from '../lib/orchestrationProfile.js';
 
 /**
  * Extract task type key for learning lookup.
@@ -47,6 +48,42 @@ export function extractTaskTypeKey(task) {
  * - Learning-based model suggestions from historical success rates
  * - Automatic upgrades when task type has <60% success rate
  */
+/**
+ * Select the model for ONE ROLE of an orchestrated run (#5992).
+ *
+ * An orchestration profile pins architect / implementer / reviewer separately so
+ * the planning pass can run on a strong model while the mechanical editing runs
+ * on a cheap one. A role that pins a model wins outright — it is a user choice,
+ * exactly like `metadata.model`, and the complexity heuristics and learning
+ * store below have no role dimension to reason about it with.
+ *
+ * Everything else falls through to `selectModelForTask`, so a `direct` task, an
+ * unpinned role, or an unknown role all resolve exactly as they did before this
+ * existed.
+ *
+ * @param {object} task
+ * @param {string} role - one of ORCHESTRATION_ROLES
+ * @param {object} provider - resolved provider config
+ * @param {object} [agent]
+ * @returns {Promise<object>} the same selection shape `selectModelForTask` returns
+ */
+export async function selectModelForRole(task, role, provider, agent = {}) {
+  const assignment = ORCHESTRATION_ROLES.includes(role) ? roleAssignment(task, role) : null;
+  if (assignment?.model) {
+    console.log(`🎼 Orchestrated ${role} model: ${assignment.model}`);
+    return {
+      model: assignment.model,
+      tier: 'user-specified',
+      reason: `orchestration-role-${role}`,
+      orchestrationRole: role,
+      userProvider: assignment.provider || task.metadata?.provider || null,
+      ...(assignment.effort ? { orchestrationEffort: assignment.effort } : {}),
+    };
+  }
+  const selection = await selectModelForTask(task, provider, agent);
+  return assignment ? { ...selection, orchestrationRole: role, ...(assignment.effort ? { orchestrationEffort: assignment.effort } : {}) } : selection;
+}
+
 export async function selectModelForTask(task, provider, agent = {}) {
   const desc = (task.description || '').toLowerCase();
   // Prompt payload + human note (#4153) — complexity scales with everything the

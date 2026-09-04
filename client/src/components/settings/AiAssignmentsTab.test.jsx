@@ -155,10 +155,17 @@ describe('AiAssignmentsTab tool-use warning', () => {
 });
 
 describe('AiAssignmentsTab provider chips', () => {
-  // TabPills renders the count in its own span right after the label, so the
-  // accessible name of a chip is 'Ollama1' — and a zero count renders no span
-  // at all, leaving a bare 'Ollama'.
-  const chip = (label, count = '') => screen.getByRole('button', { name: `${label}${count}` });
+  // TabPills renders the count in its own span right after the label, and a zero
+  // count renders no span at all (leaving a bare 'Ollama'). Whether the two join
+  // with a space depends on what the test DOM reports for the span's `display`:
+  // dom-accessibility-api inserts one for anything it does not see as inline, so
+  // happy-dom — which serves no UA defaults and reports `''` — gives 'Ollama 1'
+  // where jsdom's `'inline'` gave 'Ollama1' (#6144). A real browser blockifies the
+  // flex item and also spaces it, so match on the name with whitespace collapsed
+  // rather than pinning one engine's join.
+  const squash = (text) => text.replace(/\s+/g, '');
+  const chipName = (label, count = '') => (name) => squash(name) === squash(`${label}${count}`);
+  const chip = (label, count = '') => screen.getByRole('button', { name: chipName(label, count) });
 
   // Rendered per test rather than in a beforeEach: the mount's async load has to
   // settle inside the test body, or the suite's act(...) guard fails it.
@@ -173,7 +180,7 @@ describe('AiAssignmentsTab provider chips', () => {
 
   it('filters the table to one provider when its chip is clicked, and clears on a second click', async () => {
     renderRows();
-    const ollama = await screen.findByRole('button', { name: 'Ollama1' });
+    const ollama = await screen.findByRole('button', { name: chipName('Ollama', 1) });
 
     await userEvent.click(ollama);
     expect(ollama).toHaveAttribute('aria-pressed', 'true');
@@ -188,14 +195,14 @@ describe('AiAssignmentsTab provider chips', () => {
 
   it('gives rows with no provider their own chip', async () => {
     renderRows();
-    await userEvent.click(await screen.findByRole('button', { name: 'Default / unset1' }));
+    await userEvent.click(await screen.findByRole('button', { name: chipName('Default / unset', 1) }));
     expect(screen.getByText('Charlie row')).toBeInTheDocument();
     expect(screen.queryByText('Alpha row')).not.toBeInTheDocument();
   });
 
   it('clears the filter from the All chip', async () => {
     renderRows();
-    await userEvent.click(await screen.findByRole('button', { name: 'Ollama1' }));
+    await userEvent.click(await screen.findByRole('button', { name: chipName('Ollama', 1) }));
     await userEvent.click(chip('All', 3));
     expect(screen.getByText('Bravo row')).toBeInTheDocument();
     expect(screen.getByText('Charlie row')).toBeInTheDocument();
@@ -206,7 +213,7 @@ describe('AiAssignmentsTab provider chips', () => {
     // numbers stop matching the table; and a selection the search zeroes out
     // must stay on screen or there is no way to undo it.
     renderRows();
-    await userEvent.click(await screen.findByRole('button', { name: 'Ollama1' }));
+    await userEvent.click(await screen.findByRole('button', { name: chipName('Ollama', 1) }));
     await userEvent.type(screen.getByLabelText('Search assignments'), 'Bravo');
 
     expect(chip('OpenAI', 1)).toBeInTheDocument();

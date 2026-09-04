@@ -78,7 +78,9 @@ function makeFileBackend() {
     // pre-#1017 file behavior) so listWorks can drop the work without masking
     // the issue and direct callers get an actionable error, not a raw SyntaxError.
     const parsed = safeJSONParse(content, null, { allowArray: false, logError: true, context: path });
-    if (parsed === null) {
+    // `allowArray: false` only rejects a root array — a bare JSON scalar
+    // (corrupted manifest) still parses, so also check the shape here.
+    if (parsed === null || typeof parsed !== 'object') {
       console.warn(`⚠️ wr: corrupted manifest at ${path} (work ${workId})`);
       throw new ServerError(`Corrupted writers-room manifest for ${workId}`, {
         status: 500, code: 'CORRUPTED_MANIFEST', context: { workId },

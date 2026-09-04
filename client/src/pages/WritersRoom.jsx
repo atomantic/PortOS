@@ -134,7 +134,7 @@ export default function WritersRoom() {
         <div className="flex items-center gap-2 px-3 py-1.5 border-b border-port-border bg-port-card">
           <button
             onClick={toggleLibrary}
-            className="p-1 text-gray-400 hover:text-white transition-colors"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-white transition-colors"
             title="Show library"
             aria-label="Show library"
           >

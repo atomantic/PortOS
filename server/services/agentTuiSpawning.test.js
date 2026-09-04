@@ -6,6 +6,7 @@ import { join } from 'path';
 
 vi.mock('./shell.js', () => ({
   createShellSession: vi.fn(),
+  spawnCommandSession: vi.fn(),
   writeToSession: vi.fn(),
   pasteToSession: vi.fn(),
   killSession: vi.fn(),
@@ -229,6 +230,10 @@ import { existsSync } from 'fs';
 import { readFile, rm } from 'fs/promises';
 import { execFile } from '../lib/childProcess.js';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
+import {
+  PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
+  PUBLIC_REVIEW_GATE_EXECUTION_PROFILE,
+} from '../lib/agentExecutionProfiles.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
 import { spawnTuiSessionViaRunner, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from './cosRunnerClient.js';
 import * as shellService from './shell.js';
@@ -270,6 +275,60 @@ describe('agent TUI spawning', () => {
   // on a Bedrock box launched with a rewritten, unroutable model id. Both copies
   // now delegate to `resolveInjectedTuiModel`; re-inlining the mapper here would
   // break this test.
+  // #6062 — Stage 3 (`sandboxed-actions`) may run attachable. When it does, its
+  // argv MUST come from the vendor's maintained recipe, never the generic
+  // assembly below: that path forwards `provider.args` and runs
+  // `applyCommandDefaults`, either of which can hand a contributor-controlled
+  // review a `--dangerously-skip-permissions` session.
+  it('builds an actions-posture TUI session from the vendor recipe, not the generic argv', () => {
+    const config = buildTuiSpawnConfig({
+      id: 'claude-tui',
+      type: 'tui',
+      command: 'claude',
+      args: ['--dangerously-skip-permissions'],
+    }, 'sonnet', { safetyProfile: PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE, effort: 'high' });
+
+    expect(config.command).toBe('claude');
+    expect(config.args).toEqual(expect.arrayContaining([
+      '--permission-mode', 'acceptEdits', '--settings', '--disallowedTools',
+      '--strict-mcp-config', '--disable-slash-commands', '--model', 'sonnet',
+    ]));
+    // The saved arg is dropped, and the headless output flags are gone so the
+    // PTY actually gets an interactive session to attach to.
+    expect(config.args).not.toContain('--dangerously-skip-permissions');
+    expect(config.args).not.toContain('--print');
+    expect(config.args).not.toContain('--output-format');
+    // The command LINE is still rendered by the shared renderer, so it names the
+    // binary and carries the recipe. Asserted by CONTENT, not by prefix: the
+    // rendering is shell-dialect specific (cmd.exe/PowerShell quote the command
+    // token itself), so a `startsWith('claude ')` here passes on POSIX and fails
+    // on a Windows runner.
+    expect(config.commandLine).toContain('claude');
+    expect(config.commandLine).toContain('--permission-mode');
+    expect(config.commandLine).toContain('acceptEdits');
+  });
+
+  it('fails closed rather than opening an actions-posture PTY with no maintained recipe', () => {
+    // Reaching this is a routing bug (`agentLifecycle` asks
+    // `supportsTuiPublicReviewActionsProvider` first) — but the fallback tier
+    // would emit codex's headless `exec` argv, which in a PTY neither accepts a
+    // pasted prompt nor enforces anything.
+    expect(() => buildTuiSpawnConfig({ id: 'codex-tui', type: 'tui', command: 'codex' }, 'gpt-5.6', {
+      safetyProfile: PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
+    })).toThrow(/cannot run an attachable sandboxed-actions session/);
+    expect(() => buildTuiSpawnConfig({ id: 'claude-tui', type: 'tui', command: 'claude' }, 'sonnet', {
+      safetyProfile: PUBLIC_REVIEW_GATE_EXECUTION_PROFILE,
+    })).toThrow(/cannot run an attachable no-tool session/);
+  });
+
+  it('leaves the ordinary TUI argv untouched when no posture is requested', () => {
+    const config = buildTuiSpawnConfig({
+      id: 'claude-tui', type: 'tui', command: 'claude', args: ['--dangerously-skip-permissions'],
+    }, 'sonnet');
+    expect(config.args).toContain('--dangerously-skip-permissions');
+    expect(config.args).not.toContain('--settings');
+  });
+
   it('does not Bedrock-map a cursor TUI model id that merely contains "claude"', () => {
     process.env.CLAUDE_CODE_USE_BEDROCK = '1';
     const config = buildTuiSpawnConfig({
@@ -597,6 +656,7 @@ describe('spawnTuiAgent runtime', () => {
       laneName,
       leanMode: overrides.leanMode ?? false,
       useDurableRunner: overrides.useDurableRunner ?? false,
+      safetyProfile: overrides.safetyProfile ?? null,
       ...helpers,
     });
   }
@@ -633,8 +693,23 @@ describe('spawnTuiAgent runtime', () => {
       return SESSION_ID;
     });
 
+    // The direct-PTY path a public-content stage takes (#6159). Real shell.js
+    // has no readiness probe there — the CLI *is* the PTY — so
+    // createAgentTuiSession opens the paste gate itself before the spawn; the
+    // mock therefore does NOT invoke onInitialCommandSent.
+    vi.mocked(shellService.spawnCommandSession).mockImplementation((_command, _args, opts) => {
+      capturedOnData = opts.onData;
+      capturedOnExit = opts.onExit;
+      return SESSION_ID;
+    });
+
     vi.mocked(shellService.getSessionProcess).mockReturnValue(null);
     vi.mocked(shellService.getSession).mockReturnValue({ id: SESSION_ID });
+    // Restore the liveness probe's "assume alive" default. `clearAllMocks` clears
+    // call history but KEEPS implementations, so a test that makes the probe
+    // report "no live child" would otherwise leak that verdict into whichever
+    // test runs next and strand it at the paste gate.
+    vi.mocked(execFile).mockImplementation((_file, _args, _opts, cb) => cb(new Error('not mocked')));
     vi.mocked(spawnTuiSessionViaRunner).mockImplementation(async (options) => {
       capturedOnData = options.onData;
       capturedOnExit = options.onExit;
@@ -715,6 +790,121 @@ describe('spawnTuiAgent runtime', () => {
     // Drive the shell-exit path so the completion chain settles and no timer leaks.
     await capturedOnExit({ exitCode: 0, killed: false });
     await completeDone;
+  });
+
+  // #6062 — the attachable Stage 3. The PTY child must get the SAME allowlisted
+  // environment its headless sibling would; a TUI Stage 3 running with the
+  // server's own inherited environment would be a real regression, not a
+  // cosmetic one — the whole posture assumes no forge credential is reachable.
+  //
+  // #6159 closed the residual that allowlist could not: the stage no longer runs
+  // inside a login shell at all, so the operator's rc file never executes between
+  // the allowlist and the provider.
+  it('spawns an actions-posture stage as its own PTY with the allowlisted env, never inside a login shell', async () => {
+    let resolveComplete;
+    const completeDone = new Promise((r) => { resolveComplete = r; });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
+    process.env.PORTOS_TEST_6062_SECRET = 'must-not-reach-the-review';
+
+    runSpawn({
+      provider: { id: 'claude-tui', name: 'Local Claude TUI', type: 'tui', command: 'claude', envVars: {} },
+      safetyProfile: PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
+      tuiConfig: { command: 'claude', args: ['--permission-mode', 'plan'], commandLine: 'claude --permission-mode plan', promptDelayMs: 100 },
+    });
+    await flushMicrotasks();
+
+    // No login shell is created at all — that is what makes an rc-file export
+    // unreachable, and no env assertion on its own can prove it.
+    expect(shellService.createShellSession).not.toHaveBeenCalled();
+    const [command, args, opts] = vi.mocked(shellService.spawnCommandSession).mock.calls[0];
+    // The PTY's process is the provider binary from the vendor recipe.
+    expect(command).toBe('claude');
+    expect(args).toEqual(['--permission-mode', 'plan']);
+    expect(opts.env.PORTOS_TEST_6062_SECRET).toBeUndefined();
+    expect(opts.env.GH_TOKEN).toBeUndefined();
+    // …while the variables the stage legitimately needs survive.
+    expect(opts.env.PATH).toBeTruthy();
+    expect(opts.env.HOME).toBeTruthy();
+    // The forge credential is never even read out of the keychain for this stage.
+    expect(gitService.resolveForgeTokenEnv).not.toHaveBeenCalled();
+
+    delete process.env.PORTOS_TEST_6062_SECRET;
+    await capturedOnExit({ exitCode: 0, killed: false });
+    await completeDone;
+  });
+
+  it('keeps the ordinary TUI session on the shell service\u2019s own base env', async () => {
+    let resolveComplete;
+    const completeDone = new Promise((r) => { resolveComplete = r; });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
+
+    runSpawn();
+    await flushMicrotasks();
+
+    // The operator's rc file is a FEATURE for an ordinary coding agent — it is
+    // where their toolchain (nvm, pyenv, PATH edits) comes from. #6159 removes
+    // the hosting shell only for the restricted posture, and `env` stays a
+    // DELTA that createShellSession unions onto its own base: the regression
+    // this guards is flipping every agent session onto the public-review
+    // allowlist, which would strip the toolchain vars a coding agent needs.
+    expect(shellService.spawnCommandSession).not.toHaveBeenCalled();
+    const opts = vi.mocked(shellService.createShellSession).mock.calls[0][1];
+    expect(opts.initialCommand).toBe('codex');
+    expect(opts.waitForPromptReady).toBe(true);
+
+    await capturedOnExit({ exitCode: 0, killed: false });
+    await completeDone;
+  });
+
+  // #6159 — the direct PTY loses both affordances the login shell supplied:
+  // shell.js's readiness probe (which fired onInitialCommandSent, opening the
+  // paste gate) and the shell's bracketed-paste OFF that the input-ready tracker
+  // waited for. It also invalidates the "does this pid have a live child?" guard,
+  // because the pid IS the CLI. If any of those were left wired for the shell
+  // shape, the prompt would never be delivered — silently, on a live stage.
+  it('still delivers the prompt for a direct actions-posture PTY, with no shell probe or paste-mode OFF', async () => {
+    // Truthy pid AND a probe that reports no child of it — exactly the state
+    // that trips `tui-exited-early` on the login-shell path.
+    vi.mocked(shellService.getSessionProcess).mockReturnValue({ pid: 4242 });
+    vi.mocked(execFile).mockImplementation((_file, _args, _opts, cb) => cb(null, '1\n1\n999\n'));
+
+    runSpawn({
+      provider: { id: 'claude-tui', name: 'Local Claude TUI', type: 'tui', command: 'claude', envVars: {} },
+      safetyProfile: PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
+      tuiConfig: { command: 'claude', args: [], commandLine: 'claude', promptDelayMs: 100 },
+    });
+    await flushMicrotasks();
+
+    // The TUI owns the PTY from byte zero: its composer turns bracketed-paste ON
+    // with no preceding shell OFF.
+    await capturedOnData(Buffer.from('\x1b[?2004hClaude Code v2.1.186\n'));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+
+    const pasteWrites = vi.mocked(shellService.writeToSession).mock.calls
+      .filter(([, data]) => typeof data === 'string' && data.includes('\x1b[200~'));
+    expect(pasteWrites).toHaveLength(1);
+
+    await capturedOnExit({ exitCode: 0, killed: false });
+  });
+
+  it('refuses to route a public-content stage through the shared CoS runner', async () => {
+    // The runner builds its own child env from ITS ambient environment
+    // (`/spawn-tui` → `buildCliChildEnv` with no profile), so a restricted stage
+    // routed through it would silently lose the allowlist. `agentLifecycle`
+    // forces every such stage direct-only; this keeps that true by construction.
+    const spawned = runSpawn({
+      provider: { id: 'claude-tui', name: 'Local Claude TUI', type: 'tui', command: 'claude', envVars: {} },
+      safetyProfile: PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
+      useDurableRunner: true,
+    });
+    await flushMicrotasks();
+
+    expect(spawnTuiSessionViaRunner).not.toHaveBeenCalled();
+    expect(shellService.createShellSession).not.toHaveBeenCalled();
+    expect(shellService.spawnCommandSession).not.toHaveBeenCalled();
+    await expect(spawned).resolves.toBeNull();
   });
 
   it('makes the login shell exit with the TUI command instead of lingering after it exits', async () => {

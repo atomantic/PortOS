@@ -22,8 +22,14 @@ const grantCapabilities = () => {
   window.HTMLMediaElement.prototype.setSinkId = () => Promise.resolve();
   navigator.mediaDevices = { enumerateDevices: vi.fn(), getUserMedia: vi.fn() };
   // Mirrors the real API: the returned promise settles with the CALLBACK's
-  // result, so a held lock never resolves it.
-  navigator.locks = { request: vi.fn((_name, _options, fn) => Promise.resolve(fn(true))) };
+  // result, so a held lock never resolves it. `defineProperty` rather than a plain
+  // assignment — `navigator.locks` is a getter-only accessor in some DOM
+  // implementations, where assigning to it throws (#6144).
+  Object.defineProperty(navigator, 'locks', {
+    value: { request: vi.fn((_name, _options, fn) => Promise.resolve(fn(true))) },
+    configurable: true,
+    writable: true,
+  });
 };
 
 const devices = [

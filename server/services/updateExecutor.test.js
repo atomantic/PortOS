@@ -2,10 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { pinPlatform } from '../lib/testHelper.js';
 
-vi.mock('../lib/childProcess.js', () => ({
-  spawn: vi.fn()
-}));
-
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
   PATHS: { root: '/mock', data: '/mock/data' }
@@ -22,18 +18,17 @@ vi.mock('fs/promises', () => ({
 }));
 
 vi.mock('./updateChecker.js', () => ({
-  recordUpdateResult: vi.fn().mockResolvedValue(undefined)
+  recordUpdateResult: vi.fn().mockResolvedValue(undefined),
+  getCurrentVersion: vi.fn().mockResolvedValue('1.0.0')
 }));
 
-import { spawn } from '../lib/childProcess.js';
 import { spawnDetached, isDetachedRunning } from '../lib/detachedSpawn.js';
 import { readFile } from 'fs/promises';
-import { recordUpdateResult } from './updateChecker.js';
+import { getCurrentVersion, recordUpdateResult } from './updateChecker.js';
 import { executeUpdate } from './updateExecutor.js';
 
 // The spawnDetached handle deliberately has NO unref (its launcher already
-// unref'd) — executeUpdate must use `child.unref?.()`. Only the win32
-// plain-spawn test adds a real ChildProcess-style unref to its mock.
+// unref'd), so executeUpdate must never call one.
 function createMockChild() {
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
@@ -41,6 +36,12 @@ function createMockChild() {
   child.pid = 12345;
   return child;
 }
+
+// A run that reports no progress at all is treated as "the script never ran"
+// (#6169), so any test asserting a SUCCESSFUL update has to look like a real
+// one and emit at least one STEP line before closing.
+const emitStep = (child, line = 'STEP:git-pull:running:Pulling latest changes\n') =>
+  child.stdout.emit('data', Buffer.from(line));
 
 // executeUpdate awaits spawnDetached before wiring its event listeners, so
 // tests must flush the microtask/immediate queue after calling it and before
@@ -55,12 +56,11 @@ async function startUpdate(...args) {
   return { promise };
 }
 
-// executeUpdate branches on process.platform, and every test below except the
-// first asserts the POSIX (spawnDetached) launch path. Pin the platform so
-// they exercise that path on a Windows host too — otherwise they take the
-// powershell branch, the cleared spawn() mock returns undefined, and each one
-// hangs to the timeout. Safe here: updateExecutor.js and its (mocked) deps
-// load no native addon that picks its binary from process.platform.
+// executeUpdate picks its interpreter from process.platform, and every test
+// below except the win32 one asserts the bash/update.sh command. Pin the
+// platform so they see that on a Windows host too. Safe here: updateExecutor.js
+// and its (mocked) deps load no native addon that picks a binary from
+// process.platform.
 let restorePlatform = () => {};
 
 afterEach(() => restorePlatform());
@@ -70,29 +70,40 @@ beforeEach(() => {
   vi.clearAllMocks();
   // Default: marker file not found (tests that need it override this)
   readFile.mockRejectedValue(new Error('ENOENT'));
+  getCurrentVersion.mockResolvedValue('1.0.0');
   // Default: no prior update script still running
   isDetachedRunning.mockResolvedValue(false);
 });
 
 describe('executeUpdate', () => {
-  it('spawns powershell on Windows (plain spawn, not spawnDetached)', async () => {
+  // Windows goes through spawnDetached too — its supervisor launcher is what
+  // makes update.ps1 survive. The plain `spawn(..., { detached: true })` this
+  // replaced meant DETACHED_PROCESS, which denies powershell a console:
+  // update.ps1 exited 0 within ~100ms without running a line, and pm2's
+  // `taskkill /T` would have killed an attached one mid-update anyway (#6169).
+  it('launches powershell through spawnDetached on win32', async () => {
     // Re-pin over the file-level linux default; the file-level afterEach still
     // restores the pristine descriptor, so a failure here can't leak win32.
     pinPlatform('win32');
     const child = createMockChild();
-    child.unref = vi.fn();
-    spawn.mockReturnValue(child);
+    spawnDetached.mockResolvedValue(child);
 
     const { promise } = await startUpdate('v1.0.0', () => {});
+    emitStep(child);
     child.emit('close', 0);
-    await promise;
+    const result = await promise;
 
-    expect(spawn).toHaveBeenCalledWith(
+    expect(result.success).toBe(true);
+    expect(spawnDetached).toHaveBeenCalledWith(
       'powershell',
       expect.arrayContaining(['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File']),
-      expect.any(Object)
+      expect.objectContaining({ controlDir: expect.stringContaining('update-detached') })
     );
-    expect(spawnDetached).not.toHaveBeenCalled();
+    // The still-running guard covers Windows too now that the script survives there.
+    expect(isDetachedRunning).toHaveBeenCalledWith(
+      expect.stringContaining('update-detached'),
+      { executable: 'powershell', args: expect.any(Array) }
+    );
   });
 
   // Regression for the reconcile "shuts down but never restarts" failure: a
@@ -105,10 +116,10 @@ describe('executeUpdate', () => {
     spawnDetached.mockResolvedValue(child);
 
     const { promise } = await startUpdate('v1.0.0', () => {});
+    emitStep(child);
     child.emit('close', 0);
     await promise;
 
-    expect(spawn).not.toHaveBeenCalled();
     expect(isDetachedRunning).toHaveBeenCalledWith(
       expect.stringContaining('update-detached'),
       {
@@ -132,6 +143,7 @@ describe('executeUpdate', () => {
     spawnDetached.mockResolvedValue(child);
 
     const { promise } = await startUpdate('v1.0.0', () => {});
+    emitStep(child);
     child.emit('close', 0);
     const result = await promise;
 
@@ -153,7 +165,6 @@ describe('executeUpdate', () => {
     expect(result.success).toBe(false);
     expect(result.failedStep).toBe('starting');
     expect(spawnDetached).not.toHaveBeenCalled();
-    expect(spawn).not.toHaveBeenCalled();
     expect(recordUpdateResult).toHaveBeenCalledWith(
       expect.objectContaining({ success: false, log: expect.stringContaining('still running') })
     );
@@ -179,19 +190,64 @@ describe('executeUpdate', () => {
     expect(emits.some(e => e[0] === 'git-pull' && e[1] === 'done')).toBe(true);
   });
 
-  it('records update result on success with tag fallback when marker missing', async () => {
+  // Marker missing usually means the restarted server already consumed it, so
+  // the version that stands is the one on disk — the triggering tag is only
+  // what the update AIMED at, and stamping it produced a "Success" line naming
+  // a release the install was never running (#6169).
+  it('records the on-disk version, not the triggering tag, when the marker is missing', async () => {
     const child = createMockChild();
     spawnDetached.mockResolvedValue(child);
+    getCurrentVersion.mockResolvedValue('2.0.0');
 
-    const { promise } = await startUpdate('v1.0.0', () => {});
+    const { promise } = await startUpdate('v9.9.9', () => {});
+    emitStep(child);
     child.emit('close', 0);
     const result = await promise;
 
     expect(result.success).toBe(true);
-    expect(result.version).toBe('1.0.0');
+    expect(result.version).toBe('2.0.0');
     expect(recordUpdateResult).toHaveBeenCalledWith(
-      expect.objectContaining({ version: '1.0.0', success: true })
+      expect.objectContaining({ version: '2.0.0', success: true })
     );
+  });
+
+  // The failure this whole change exists for: a launch that never executed the
+  // script exits 0 with no output whatsoever. Both update scripts emit
+  // `git-pull:running` before touching anything, so silence means no update ran
+  // — recording it as a success left the UI offering the same release forever.
+  it('records a failure when the script exits 0 without reporting any progress', async () => {
+    const child = createMockChild();
+    spawnDetached.mockResolvedValue(child);
+
+    const emits = [];
+    const { promise } = await startUpdate('v2.0.0', (...args) => emits.push(args));
+    child.emit('close', 0);
+    const result = await promise;
+
+    expect(result.success).toBe(false);
+    expect(result.errorMessage).toMatch(/never ran/);
+    expect(recordUpdateResult).toHaveBeenCalledWith(
+      expect.objectContaining({ version: '2.0.0', success: false, log: expect.stringContaining('never ran') })
+    );
+    expect(emits.some(e => e[0] === 'complete')).toBe(false);
+    expect(emits.some(e => e[1] === 'error')).toBe(true);
+  });
+
+  // 'starting' is synthetic — it only means "we launched the script". The first
+  // real step proves that, so it must not keep spinning for the whole update.
+  it('closes out the synthetic starting step once the script reports progress', async () => {
+    const child = createMockChild();
+    spawnDetached.mockResolvedValue(child);
+
+    const emits = [];
+    const { promise } = await startUpdate('v1.0.0', (...args) => emits.push(args));
+    emitStep(child);
+    emitStep(child, 'STEP:git-pull:done:Latest changes pulled\n');
+    child.emit('close', 0);
+    await promise;
+
+    const startingStatuses = emits.filter(e => e[0] === 'starting').map(e => e[1]);
+    expect(startingStatuses).toEqual(['running', 'done']);
   });
 
   it('records failure on non-zero exit code', async () => {
@@ -234,6 +290,7 @@ describe('executeUpdate', () => {
     readFile.mockResolvedValue(JSON.stringify({ version: '2.0.0', completedAt: '2026-01-01T00:00:00Z' }));
 
     const { promise } = await startUpdate('v1.0.0', () => {});
+    emitStep(child);
     child.emit('close', 0);
     const result = await promise;
 

@@ -154,6 +154,25 @@ describe('app pull-request routes', () => {
     });
   });
 
+  it('threads a fork PR\'s head coordinates through to the follow-up (#6064)', async () => {
+    // Resolve is offered on ANY open PR, and a fork head has no
+    // `origin/<branch>`: without these the agent is queued and then blocked at
+    // workspace prep for exactly the PRs external contributors open.
+    const forkHead = { remoteUrl: 'https://github.com/contributor/widget.git', ownerLogin: 'contributor' };
+    listAppPullRequests.mockResolvedValue({
+      ...listResult(),
+      pullRequests: [{ ...PULL_REQUEST, headBranch: 'contributor/fix-thing', isCrossRepository: true, forkHead }],
+    });
+
+    const response = await request(app).post('/api/apps/app-001/pull-requests/17/resolve');
+
+    expect(response.status).toBe(202);
+    expect(spawnReviewLoopFollowUp).toHaveBeenCalledWith(expect.objectContaining({
+      prBranch: 'contributor/fix-thing',
+      forkHead,
+    }));
+  });
+
   // Pressing the button IS the approval. Without an immediate dispatch the
   // follow-up is an auto-approved SYSTEM task, which the dequeue only spawns while
   // CoS auto-run is in `execute` and under budget — so it sat pending until the

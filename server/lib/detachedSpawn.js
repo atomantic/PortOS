@@ -32,6 +32,14 @@
 // we rely on Node's `detached` for the new session plus reparent-to-init from
 // the double-fork — no external launcher binary needed.)
 //
+// Windows has no `sh` and no reparent-to-init, so it reaches the same place by
+// a different route — a launcher that exits and leaves a supervisor behind (see
+// the block above `WINDOWS_SUPERVISOR`). Both arms write the same control dir
+// and hand back the same handle, so this module has exactly ONE code path per
+// caller; the platforms differ only in how a cancel reaches the job's
+// descendants — a process-group signal on POSIX, `taskkill /T /F` on Windows
+// (#6170).
+//
 // The returned object is ChildProcess-LIKE — it exposes `pid`, `stdout`,
 // `stderr` (EventEmitters emitting `data`/`end`), `on('close', (code,
 // signal))`, `on('error', err)`, `kill(signal)`, `killed`, `exitCode`,
@@ -52,6 +60,7 @@ import { promisify } from 'util';
 import { killProcessTree } from './bufferedSpawn.js';
 import { ensureDir, sleep } from './fileUtils.js';
 import { safeChildProcessOptions } from './processEnv.js';
+import { quoteForShell } from './shellCd.js';
 import { withSpawnCwdEnv } from './spawnCwd.js';
 
 const execFileAsync = promisify(execFile);
@@ -70,7 +79,39 @@ const PID_TIMEOUT_MS = 10000;
 const REAP_GRACE_MS = 12000;
 const GROUP_KILL_MARKER = 'kill-process-group';
 
+const isAlive = (pid) => {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+};
+
+// Signal a detached job we hold no child handle for — the reparented POSIX
+// double-fork job, the Windows supervisor's job, and the boot-time orphan
+// reaper's pid-file target all reach their process only by number.
+//
+// Windows has neither process groups nor real signals, so `process.kill(pid,
+// …)` there is a TerminateProcess of the job LEAF: whatever the runner spawned
+// (the ffmpeg mux a CUDA video runtime shells out to, a model download) is
+// orphaned still holding the output file and GPU memory. `taskkill /T /F` is
+// the only tree there, so both the plain and the `killProcessGroup` form of a
+// cancel collapse onto it — which is what gives a Windows job the same
+// descendants-die-with-it guarantee POSIX gets from the negative pid (#4171,
+// #6170). Note taskkill ignores the requested signal and force-kills, so a
+// SIGTERM cancel is not graceful there; that is killProcessTree's documented
+// Windows contract.
 const signalPid = (pid, signal, killProcessGroup = false) => {
+  const isWindows = process.platform === 'win32';
+  if (isWindows) {
+    // Signal 0 is an existence PROBE, not a kill — answer it instead of
+    // force-killing the tree.
+    if (signal === 0 || signal === '0') return isAlive(pid);
+    // `taskkill /T /F` is destructive and Windows recycles PIDs freely, so it
+    // must never fire at a job that already exited — a late escalation (the
+    // reaper's grace-deadline SIGKILL) would tree-kill whatever inherited the
+    // number. Node's own `kill` is safe there because a ChildProcess holds a
+    // process HANDLE; taskkill only gets the pid.
+    if (!isAlive(pid)) return false;
+    killProcessTree({ pid }, signal, { processGroup: killProcessGroup }, isWindows);
+    return true;
+  }
   if (killProcessGroup) {
     try {
       process.kill(-pid, signal);
@@ -88,12 +129,68 @@ const signalPid = (pid, signal, killProcessGroup = false) => {
   }
 };
 
+// The signal a win32 cancel ASKED for, remembered on the handle so the tailer
+// can report the death the way Node would — see createDetachedHandle below.
+const KILL_SIGNAL = Symbol('detachedKillSignal');
+
 // `wait` reports a signal-terminated child as 128+signum. Invert os signal
 // constants once so we can decode that back into Node's ('code', 'signal')
 // close convention (exactly one of the two is non-null).
 const SIGNAL_BY_NUMBER = Object.fromEntries(
   Object.entries(osConstants.signals).map(([name, num]) => [num, name])
 );
+
+/**
+ * Build the ChildProcess-like handle shared by spawnDetached and
+ * reattachDetached, with `kill` wired to the platform's cancel semantics.
+ *
+ * `kill()` accepts a NUMBER while `close` reports NAMES, and an unknown signal
+ * must still throw `ERR_UNKNOWN_SIGNAL` rather than silently force-killing a
+ * tree — so the signal is decoded and validated exactly as ChildProcess.kill()
+ * does before anything is dispatched.
+ *
+ * On Windows the dispatch is `taskkill /T /F`, which terminates the job OUT OF
+ * BAND: the supervisor then records whatever ordinary non-zero status Windows
+ * left behind, and the tailer would report `close(1, null)` where Node's own
+ * `kill()` reported `close(null, 'SIGKILL')`. Callers classify a cancel on
+ * exactly that signal — videoGen's watchdog-success check keeps a finished
+ * .mp4 only when `signal === 'SIGKILL'`, and `describeSignalDeath` reads it for
+ * the failure reason — so remember the signal we ASKED for and let the tailer
+ * stamp it. That records the request without waiting to confirm the tree died
+ * from it, which is precisely what libuv does for a native kill (it stamps
+ * exit_signal at request time). POSIX needs none of this: the supervisor's
+ * `wait` status carries the real signal, decoded as 128+signum below.
+ */
+function createDetachedHandle({ pid = null, killProcessGroup = false } = {}) {
+  const handle = new EventEmitter();
+  handle.stdout = new EventEmitter();
+  handle.stderr = new EventEmitter();
+  handle.pid = pid;
+  handle.killed = false;
+  handle.exitCode = null;
+  handle.signalCode = null;
+  handle[KILL_SIGNAL] = null;
+  handle.kill = (signal = 'SIGTERM') => {
+    const isProbe = signal === 0 || signal === '0';
+    const signalName = typeof signal === 'number' ? SIGNAL_BY_NUMBER[signal] : signal;
+    // Validate BEFORE anything is dispatched or recorded, so a typo throws with
+    // the handle untouched — as ChildProcess.kill() leaves a child untouched.
+    if (!isProbe && (!signalName || !(signalName in osConstants.signals))) {
+      const err = new TypeError(`Unknown signal: ${signal}`);
+      err.code = 'ERR_UNKNOWN_SIGNAL';
+      throw err;
+    }
+    handle.killed = true;
+    if (!handle.pid) return false;
+    const dispatched = signalPid(handle.pid, signal, killProcessGroup);
+    // Only a kill that actually went out gets stamped: a probe is not a death,
+    // and a refused dispatch (the job already exited) must leave the status the
+    // supervisor recorded alone.
+    if (dispatched && !isProbe && process.platform === 'win32') handle[KILL_SIGNAL] = signalName;
+    return dispatched;
+  };
+  return handle;
+}
 
 // Double-fork launcher. argv: <controlDir> <bin> <bin-args…> — passed as
 // positional params (NOT interpolated into the script string) so paths/args
@@ -112,6 +209,136 @@ d="$1"; shift
   printf '%s' "$?" > "$d/exit"
 } &
 `;
+
+// ─── Windows equivalent of the double-fork ───────────────────────────────────
+//
+// Windows has no `sh` and no reparent-to-init, but pm2 kills an app there with
+// `taskkill /pid <app> /T /F`, which walks the SAME parent→child tree the POSIX
+// launcher escapes — so a plain child of portos-server dies with it exactly as
+// it does on POSIX. The escape is a launcher that exits immediately, leaving
+// the supervisor with a dead parent and therefore outside the server's tree:
+//
+//   server ──spawn──▶ launcher powershell   (exits in ~200ms)
+//                          │ Process.Start
+//                          ▼
+//                     supervisor powershell  (parent already gone, so
+//                          │                  `taskkill /T` from the server
+//                          ▼                  never reaches it)
+//                       job process
+//
+// The supervisor redirects the job's stdout/stderr into the control dir and
+// records its pid and exit status there, so the shared tailer below streams a
+// Windows job exactly as it streams a POSIX one.
+//
+// Reading the job spec from `job.json` (rather than interpolating it into the
+// script) keeps paths with spaces, quotes, or `$` out of PowerShell's parser.
+// `$null = $p.Handle` caches the process handle BEFORE the wait: without it
+// `Start-Process -PassThru` hands back an object whose `ExitCode` reads back
+// empty once the process is gone, and the tailer would never see a status.
+//
+// `-NoNewWindow` (NOT `-WindowStyle Hidden`) is what keeps this off Windows'
+// default-terminal handoff: only `-NoNewWindow` sets `CreateNoWindow`, while
+// `-WindowStyle Hidden` merely passes SW_HIDE and still allocates a console
+// host — condition 3 of docs/WINDOWS_CONSOLE.md. The job inherits the
+// supervisor's own (window-less) console, so it still HAS one and a console
+// host like powershell runs normally.
+//
+// The catch must write the `exit` sentinel and must NOT touch stdout/stderr.log:
+// `Start-Process`'s redirect holds both under an exclusive lock for as long as
+// the job lives, so a throw AFTER a successful launch (a faulting
+// `WaitForExit`, a sharing violation on the pid write) would fail on its own
+// error write and never reach the sentinel — leaving the tailer polling
+// forever, `executeUpdate`'s promise unsettled, and the update lock wedged
+// until its 30-minute stale timeout. Before the launch nothing holds the log,
+// so a launch failure is reported there where the caller's stderr stream sees
+// it; after it, the error goes to a file of its own.
+const WINDOWS_SUPERVISOR = `$dir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$started = $false
+try {
+  $ErrorActionPreference = 'Stop'
+  $job = Get-Content -LiteralPath (Join-Path $dir 'job.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+  $params = @{
+    FilePath               = $job.bin
+    RedirectStandardOutput = (Join-Path $dir 'stdout.log')
+    RedirectStandardError  = (Join-Path $dir 'stderr.log')
+    NoNewWindow            = $true
+    PassThru               = $true
+  }
+  if ($job.arguments) { $params.ArgumentList = $job.arguments }
+  if ($job.cwd) { $params.WorkingDirectory = $job.cwd }
+  $p = Start-Process @params
+  $started = $true
+  $null = $p.Handle
+  [System.IO.File]::WriteAllText((Join-Path $dir 'pid'), "$($p.Id)")
+  $p.WaitForExit()
+  # ExitCode is a SIGNED int, so a status at or above 0x80000000 (0xC0000005 and
+  # the rest of the NTSTATUS crash codes) reads back negative. Node's own
+  # ChildProcess reports those UNSIGNED, and the POSIX arm passes the shell wait
+  # status straight through; mask back to that so a caller classifying a crash
+  # by its code sees the same number on either platform.
+  # The L suffix is required: PowerShell types a bare 0xFFFFFFFF as Int32 -1,
+  # and masking against -1 is the identity, silently leaving the value negative.
+  $code = [int64]$p.ExitCode -band 0xFFFFFFFFL
+  [System.IO.File]::WriteAllText((Join-Path $dir 'exit'), "$code")
+} catch {
+  $errFile = if ($started) { 'supervisor-error.log' } else { 'stderr.log' }
+  try { [System.IO.File]::WriteAllText((Join-Path $dir $errFile), $_.Exception.ToString()) } catch { }
+  [System.IO.File]::WriteAllText((Join-Path $dir 'exit'), '1')
+}
+`;
+
+// Quote one argv entry for a Windows command line (CommandLineToArgvW rules).
+// Windows PowerShell 5.1 runs on .NET Framework, whose ProcessStartInfo has
+// only the flat `Arguments` string — no `ArgumentList` — so a single correctly
+// quoted string is the only faithful way to carry an argv containing spaces.
+const quoteWindowsArg = (arg) => {
+  const s = String(arg);
+  if (s.length > 0 && !/[\s"]/.test(s)) return s;
+  // Backslashes are literal EXCEPT in the run immediately before a quote (the
+  // embedded ones and the closing one), where each must be doubled.
+  return `"${s.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, '$1$1')}"`;
+};
+
+/**
+ * Write the control dir's job spec + supervisor script and launch the
+ * short-lived launcher that starts the supervisor outside our process tree.
+ * The supervisor is started with an explicit `CreateNoWindow`, not through
+ * `Start-Process`, so this hop out of the console-less PM2 fork can never
+ * trigger Windows' default-terminal handoff — see docs/WINDOWS_CONSOLE.md.
+ * (The supervisor's own launch of the job passes `-NoNewWindow` for the same
+ * reason; `-WindowStyle Hidden` would NOT set `CreateNoWindow`.)
+ */
+async function launchWindowsSupervisor({ controlDir, bin, args, env, cwd }) {
+  const supervisorPath = join(controlDir, 'supervisor.ps1');
+  // Independent files — write them together rather than serializing two
+  // round-trips in front of every launch.
+  await Promise.all([
+    writeFile(join(controlDir, 'job.json'), JSON.stringify({
+      bin,
+      arguments: args.map(quoteWindowsArg).join(' '),
+      cwd: cwd || null,
+    }), 'utf8'),
+    writeFile(supervisorPath, WINDOWS_SUPERVISOR, 'utf8'),
+  ]);
+  const supervisorArgs = `-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ${quoteWindowsArg(supervisorPath)}`;
+  const startSupervisor = [
+    '$psi = New-Object System.Diagnostics.ProcessStartInfo;',
+    "$psi.FileName = 'powershell';",
+    `$psi.Arguments = ${quoteForShell(supervisorArgs, 'powershell')};`,
+    '$psi.UseShellExecute = $false;',
+    '$psi.CreateNoWindow = $true;',
+    '[void][System.Diagnostics.Process]::Start($psi)',
+  ].join(' ');
+  return spawn('powershell', [
+    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', startSupervisor,
+  ], {
+    // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). The supervisor
+    // and the job both inherit this environment.
+    env: withSpawnCwdEnv(env ?? process.env, cwd),
+    cwd,
+    stdio: 'ignore',
+  });
+}
 
 /**
  * Build the log-tailer for a spawnDetached control dir. Holds a persistent fd
@@ -183,10 +410,22 @@ function createLogTailer(handle, { controlDir, pollMs, cleanup }) {
     let code = null;
     let signal = null;
     if (Number.isFinite(status)) {
-      if (status > 128 && SIGNAL_BY_NUMBER[status - 128]) signal = SIGNAL_BY_NUMBER[status - 128];
+      // 128+signum is a POSIX `wait` convention. On Windows 129-255 are
+      // ordinary exit statuses a program may return for its own reasons, so
+      // decoding one of them as a signal would invent a death that never
+      // happened. (Crash codes like 0xC0000005 land far above this range.)
+      if (process.platform !== 'win32' && status > 128 && SIGNAL_BY_NUMBER[status - 128]) signal = SIGNAL_BY_NUMBER[status - 128];
       else code = status;
     } else {
       code = 1; // exit file missing/garbled — treat as generic failure
+    }
+    // A Windows cancel went out through `taskkill /T /F`, out of band of the
+    // job's own exit, so re-stamp the signal it asked for (set only on win32 —
+    // see createDetachedHandle). A CLEAN exit is left alone: a cancel that
+    // raced completion by microseconds means the job really did finish.
+    if (handle[KILL_SIGNAL] && signal === null && code !== 0) {
+      code = null;
+      signal = handle[KILL_SIGNAL];
     }
     handle.exitCode = code;
     handle.signalCode = signal;
@@ -235,7 +474,8 @@ function createLogTailer(handle, { controlDir, pollMs, cleanup }) {
  * @param {boolean} [opts.killProcessGroup] - signal `-pid` on cancel/reap so a
  *   group-leader wrapper and every runtime child terminate together. The job is
  *   responsible for establishing its own process group before spawning children.
- *   POSIX-only — the win32 fallback's `kill` always tree-kills, group or not.
+ *   POSIX-only in mechanism: Windows has no process group, and its cancel is
+ *   always the `taskkill /T /F` tree, group flag or not.
  * @returns {Promise<object>} ChildProcess-like handle (resolves once the PID is known)
  */
 export async function spawnDetached(bin, args = [], {
@@ -243,88 +483,11 @@ export async function spawnDetached(bin, args = [], {
 } = {}) {
   if (!controlDir) throw new Error('spawnDetached requires a controlDir');
 
-  // Windows has no POSIX `sh` for the double-fork, and pm2's process management
-  // there is taskkill-based rather than the PPID-walk this works around. Fall
-  // back to a normal child process: a real ChildProcess already satisfies the
-  // handle contract (pid / stdout / stderr / on('close',code,signal) / kill /
-  // exitCode / signalCode), so callers are unaffected. Surviving a pm2 restart
-  // is a POSIX-only guarantee; Windows keeps its prior spawn semantics apart
-  // from `kill`, which is replaced with a tree-kill below.
-  if (process.platform === 'win32') {
-    const child = spawn(bin, args, { env: withSpawnCwdEnv(env ?? process.env, cwd), cwd, stdio: ['ignore', 'pipe', 'pipe'] });
-    // A bare `child.kill()` terminates ONLY the runner. Windows has no process
-    // group for the POSIX `-pid` trick `killProcessGroup` relies on, so whatever
-    // the runner spawned (the ffmpeg mux a CUDA video runtime shells out to, a
-    // model download) survives as an orphan still holding the output file and
-    // GPU memory. Delegate to the shared tree-killer instead — `taskkill /T /F`
-    // on Windows, the POSIX group signal elsewhere (#4171). Note `taskkill /T /F`
-    // ignores the requested signal and force-kills, so a SIGTERM cancel is not
-    // graceful here; that is killProcessTree's documented Windows contract.
-    const nativeKill = child.kill.bind(child);
-    // What we hand killProcessTree: inherits from `child` (so `pid` reads
-    // through and `instanceof ChildProcess` still holds — the taskkill branch is
-    // gated on it) but exposes Node's own kill, so killProcessTree's POSIX
-    // fall-through can never re-enter the override below.
-    const treeKillTarget = Object.create(child, { kill: { value: nativeKill } });
-    // `taskkill` terminates the tree OUT OF BAND, so libuv never records an
-    // exit_signal and the child reports `close(1, null)` where Node's own
-    // `kill()` reported `close(null, 'SIGKILL')`. Callers classify on exactly
-    // that signal — videoGen's watchdog-success test keeps a finished .mp4 only
-    // when `signal === 'SIGKILL'`, and `describeSignalDeath` reads it for the
-    // failure reason — so re-stamp the signal we asked for onto the terminal
-    // events, matching both a native kill and the POSIX handle's decoded close.
-    // A concurrent clean exit (code 0) is left alone: the job really did finish.
-    // The stamp records the signal we ASKED for without waiting to confirm the
-    // tree died from it — exactly what Node's own `kill()` does (libuv stamps
-    // exit_signal at request time), and the guard above already refuses to fire
-    // at an exited child, so the only ambiguity left is a nonzero exit racing
-    // our kill by microseconds. Both readings mean "cancelled", so no async
-    // taskkill-completion plumbing is warranted here.
-    let killSignal = null;
-    const nativeEmit = child.emit.bind(child);
-    child.emit = (event, ...rest) => {
-      if (killSignal && (event === 'close' || event === 'exit') && rest[1] == null && rest[0] !== 0) {
-        child.exitCode = null;
-        child.signalCode = killSignal;
-        return nativeEmit(event, null, killSignal);
-      }
-      return nativeEmit(event, ...rest);
-    };
-    child.kill = (signal = 'SIGTERM') => {
-      // `taskkill /T /F` is destructive and Windows recycles PIDs freely, so it
-      // must never fire at a child that already exited — a late escalation
-      // (killWithEscalation's 8s SIGKILL) would tree-kill whatever inherited the
-      // number. Node's own kill is safe there because it holds a process HANDLE,
-      // not a pid; taskkill only gets the pid.
-      if (!child.pid || child.exitCode !== null || child.signalCode !== null) return false;
-      // Signal 0 is an existence PROBE, not a kill — hand it to Node so callers
-      // keep that meaning instead of force-killing the tree.
-      if (signal === 0 || signal === '0') return nativeKill(signal);
-      // Decode and validate the signal exactly as ChildProcess.kill() does:
-      // `kill()` also accepts a NUMBER while `close` reports NAMES (stamping a
-      // raw 9 would break every `signal === 'SIGKILL'` comparison), and an
-      // unknown signal must still throw ERR_UNKNOWN_SIGNAL rather than silently
-      // force-killing the tree. SIGNAL_BY_NUMBER is the same inverted table the
-      // POSIX handle decodes `wait` statuses with.
-      const signalName = typeof signal === 'number' ? SIGNAL_BY_NUMBER[signal] : signal;
-      if (!signalName || !(signalName in osConstants.signals)) return nativeKill(signal);
-      killSignal = signalName;
-      child.killed = true;
-      killProcessTree(treeKillTarget, signalName, { processGroup: true });
-      return true;
-    };
-    return child;
-  }
+  const isWindows = process.platform === 'win32';
 
-  const handle = new EventEmitter();
-  handle.stdout = new EventEmitter();
-  handle.stderr = new EventEmitter();
-  handle.pid = null;
-  handle.killed = false;
-  handle.exitCode = null;
-  handle.signalCode = null;
-  // Default no-op so a setup failure (below) returns a usable handle.
-  handle.kill = () => false;
+  // `kill` reports false until the supervisor records a PID, so a setup failure
+  // (below) still returns a usable handle.
+  const handle = createDetachedHandle({ killProcessGroup });
 
   const pidFile = join(controlDir, 'pid');
   const exitFile = join(controlDir, 'exit');
@@ -354,21 +517,28 @@ export async function spawnDetached(bin, args = [], {
   // Launch the double-fork. `detached` gives the outer sh its own session;
   // `stdio: 'ignore'` because all job output is redirected to files by the
   // launcher; `.unref()` so the server never waits on the (instantly-exiting)
-  // outer sh.
-  const launcher = spawn('sh', ['-c', LAUNCHER, 'sh', controlDir, bin, ...args], {
-    // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193).
-    env: withSpawnCwdEnv(env ?? process.env, cwd),
-    cwd,
-    detached: true,
-    stdio: 'ignore',
-  });
+  // outer sh. Windows takes the supervisor launcher instead — see its header
+  // block above for why `detached` cannot appear on that arm.
   // The outer sh exits in ~1ms; a spawn error (e.g. no `sh`) is the only real
   // launcher failure. Capture it so the deferred kickoff below surfaces it as
   // the handle's 'error' AFTER the caller has attached listeners — emitting it
-  // synchronously here could throw as an unhandled 'error'.
+  // synchronously here could throw as an unhandled 'error'. The Windows path
+  // writes two control files before it spawns, so it can fail with a rejection
+  // too; route that into the same slot rather than letting it reject
+  // spawnDetached, for the reason ensureControlDir above spells out.
   let launcherSpawnError = null;
-  launcher.on('error', (err) => { launcherSpawnError = err; });
-  launcher.unref();
+  const launcher = isWindows
+    ? await launchWindowsSupervisor({ controlDir, bin, args, env, cwd })
+      .catch((err) => { launcherSpawnError = err; return null; })
+    : spawn('sh', ['-c', LAUNCHER, 'sh', controlDir, bin, ...args], {
+      // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193).
+      env: withSpawnCwdEnv(env ?? process.env, cwd),
+      cwd,
+      detached: true,
+      stdio: 'ignore',
+    });
+  launcher?.on('error', (err) => { launcherSpawnError = err; });
+  launcher?.unref();
 
   // Tail the on-disk log files and watch for the supervisor's exit sentinel,
   // streaming new bytes as stdout/stderr 'data' and emitting 'close' on exit.
@@ -405,14 +575,6 @@ export async function spawnDetached(bin, args = [], {
     }
   };
 
-  // Signal the reparented job by PID, or by its persisted opt-in process group
-  // when the wrapper owns runtime descendants that must never outlive it.
-  handle.kill = (signal = 'SIGTERM') => {
-    handle.killed = true;
-    if (!handle.pid) return false;
-    return signalPid(handle.pid, signal, killProcessGroup);
-  };
-
   await awaitPid();
 
   // Kick off tailing (or the launch-failure path) AFTER returning, so the
@@ -429,10 +591,6 @@ export async function spawnDetached(bin, args = [], {
 
   return handle;
 }
-
-const isAlive = (pid) => {
-  try { process.kill(pid, 0); return true; } catch { return false; }
-};
 
 /**
  * Cheap boot-time probe: is there a detached child worth re-attaching to under
@@ -490,9 +648,10 @@ export async function isReattachable(controlDir) {
  * @returns {Promise<object|null>} ChildProcess-like handle, or null if not reattachable
  */
 export async function reattachDetached(controlDir, { pollMs = DEFAULT_POLL_MS, cleanup = false } = {}) {
-  // Detached survival is a POSIX-only guarantee (see spawnDetached's win32
-  // fallback) — there is never a reparented orphan to re-attach to on Windows.
-  if (process.platform === 'win32') return null;
+  // No platform gate: whether there is a survivor to re-attach to is a fact
+  // about the CONTROL DIR, and the pid/exit probe below already answers it.
+  // Every platform now writes those files (#6169, #6170), so a Windows job is
+  // re-attachable on exactly the same evidence a POSIX one is.
   const pidRaw = await readFile(join(controlDir, 'pid'), 'utf8').catch(() => '');
   const pid = Number.parseInt(pidRaw, 10);
   if (!Number.isFinite(pid) || pid <= 0) return null;
@@ -502,19 +661,9 @@ export async function reattachDetached(controlDir, { pollMs = DEFAULT_POLL_MS, c
   // (the RESULT line was never written). Let the caller reap+fail.
   if (!exitWritten && !isAlive(pid)) return null;
 
-  const handle = new EventEmitter();
-  handle.stdout = new EventEmitter();
-  handle.stderr = new EventEmitter();
-  handle.pid = pid;
-  handle.killed = false;
-  handle.exitCode = null;
-  handle.signalCode = null;
-  // Mirror spawnDetached's exact PID/group behavior so cancel/stall paths work
-  // identically on a re-attached run.
-  handle.kill = (signal = 'SIGTERM') => {
-    handle.killed = true;
-    return signalPid(pid, signal, killProcessGroup);
-  };
+  // Mirrors spawnDetached's exact PID/group/tree-kill behavior, so cancel and
+  // stall paths work identically on a re-attached run.
+  const handle = createDetachedHandle({ pid, killProcessGroup });
 
   const { tick } = createLogTailer(handle, { controlDir, pollMs, cleanup });
   // Defer the first tick so the caller's synchronous .on('data'|'close'|'error')
@@ -562,7 +711,57 @@ const processCommandMatches = (command, { executable, args }) => {
   return actualArgs === args.map(String).join(' ');
 };
 
+// Split a Windows command line into its executable and the rest. The image path
+// is quoted whenever it contains a space, which is the common case for
+// `C:\Program Files\…` — a plain whitespace split would take `C:\Program` as
+// the executable and leave `Files\nodejs\node.exe` in the arguments.
+const splitWindowsCommand = (command) => {
+  if (command.startsWith('"')) {
+    const end = command.indexOf('"', 1);
+    if (end === -1) return { executable: command.slice(1), rest: '' };
+    return { executable: command.slice(1, end), rest: command.slice(end + 1).trim() };
+  }
+  const space = command.search(/\s/);
+  if (space === -1) return { executable: command, rest: '' };
+  return { executable: command.slice(0, space), rest: command.slice(space).trim() };
+};
+
+// The win32 counterpart of processCommandMatches. `tasklist` reports only the
+// image name, and PortOS runs many `node.exe` processes at once (the pm2 daemon,
+// the server, the autofixer, the browser, every agent CLI) — so an image-only
+// check would accept any of them as the job and leave the control dir blocked
+// for good. Read the full command line instead, so the caller's `args` mean here
+// what they mean on POSIX: `appUpdater` passes `{ executable: node, args: [the
+// dashboard script] }` precisely to tell its handoff apart from that crowd.
+//
+// The comparison can be exact rather than fuzzy because we built the launched
+// command line ourselves: `Start-Process` quotes the bin and appends the
+// `quoteWindowsArg`-joined argument string verbatim, so re-quoting the expected
+// argv reproduces it byte for byte.
+//
+// One PowerShell SPAWN per call. Fine for the one-per-launch probes that reach
+// it today; a fan-out or polled caller must instead take a single
+// `Get-CimInstance Win32_Process` snapshot and match every PID against it.
+const processMatchesWin32 = async (pid, { executable, args }) => {
+  const { stdout } = await execFileAsync('powershell', [
+    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
+    // `pid` is already parsed by Number.parseInt and range-checked by every
+    // caller, so it cannot carry anything but digits into this filter.
+    `$p = Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' -ErrorAction SilentlyContinue; if ($p) { [Console]::Out.WriteLine($p.CommandLine) }`,
+  ], safeChildProcessOptions({ timeout: 5000 }));
+  const command = stdout.trim();
+  // The process exited between the liveness probe and here, or Windows refused
+  // the query — either way this is not our job.
+  if (!command) return false;
+  const actual = splitWindowsCommand(command);
+  const normalize = (value) => basename(value).toLowerCase().replace(/\.exe$/, '');
+  if (normalize(actual.executable) !== normalize(executable)) return false;
+  if (!Array.isArray(args)) return true;
+  return actual.rest === args.map(quoteWindowsArg).join(' ');
+};
+
 const processMatches = async (pid, expectedProcess) => {
+  if (process.platform === 'win32') return processMatchesWin32(pid, expectedProcess);
   const { stdout } = await execFileAsync(
     'ps', ['-ww', '-p', String(pid), '-o', 'command='], safeChildProcessOptions({ timeout: 5000 })
   ).catch((err) => {
@@ -597,6 +796,10 @@ export async function isDetachedRunning(controlDir, expectedProcess = null) {
  * with it). SIGTERM first so the trainer/render checkpoints, then escalate to
  * SIGKILL after the grace window — turning a restart from a mid-op SIGINT
  * crash into a clean checkpointed stop the existing resume path recovers from.
+ * On Windows both rungs are the same `taskkill /T /F` (no real signals there,
+ * and `process.kill` was already an unconditional TerminateProcess of the job
+ * LEAF), so the reap is not graceful — but it now takes the job's descendants
+ * with it instead of orphaning them (#6170).
  * This is the fallback when reattachDetached can't (or shouldn't) re-attach —
  * e.g. a render lane with no re-attach path, or a probe that came back
  * non-reattachable. A caller that CAN re-attach (LoRA training, #1332) should
@@ -645,15 +848,16 @@ export async function reapDetached(controlDir, { graceMs = REAP_GRACE_MS, pollMs
  * new job starts (every dir present then is an orphan from the prior process).
  *
  * @param {string} parentDir - the `.detached` parent (e.g. PATHS.videos/.detached)
+ * @param {object} [opts] - forwarded to reapDetached (graceMs, pollMs)
  * @returns {Promise<{reaped: number, scanned: number}>}
  */
-export async function reapAndCleanDetachedDirs(parentDir) {
+export async function reapAndCleanDetachedDirs(parentDir, opts = {}) {
   const entries = await readdir(parentDir).catch(() => []);
   let reaped = 0;
   for (const name of entries) {
     const dir = join(parentDir, name);
     // eslint-disable-next-line no-await-in-loop
-    const res = await reapDetached(dir).catch(() => ({ reaped: false }));
+    const res = await reapDetached(dir, opts).catch(() => ({ reaped: false }));
     if (res.reaped) reaped += 1;
     // eslint-disable-next-line no-await-in-loop
     await rm(dir, { recursive: true, force: true }).catch(() => {});

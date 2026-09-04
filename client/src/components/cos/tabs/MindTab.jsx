@@ -706,7 +706,7 @@ export default function MindTab() {
                 {messageImages.map((image) => (
                   <li key={image.attachmentId} className="relative h-16 w-16 overflow-hidden rounded-lg border border-port-border bg-port-bg">
                     <MindImage image={image} className="h-full w-full object-cover" />
-                    <button type="button" onClick={() => void removeMessageImage(image)} disabled={submitting || messageImagesUploading} aria-label={`Remove ${image.originalName}`} className="absolute right-1 top-1 rounded-full bg-port-bg/90 p-1 text-port-text shadow disabled:opacity-50">
+                    <button type="button" onClick={() => void removeMessageImage(image)} disabled={submitting || messageImagesUploading} aria-label={`Remove ${image.originalName}`} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center absolute right-1 top-1 rounded-full bg-port-bg/90 p-1 text-port-text shadow disabled:opacity-50">
                       <X size={12} aria-hidden="true" />
                     </button>
                   </li>

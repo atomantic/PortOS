@@ -140,7 +140,7 @@ export default function MoodBoards() {
                     onClick={() => setConfirmingId(board.id)}
                     title="Delete board"
                     aria-label={`Delete ${board.name}`}
-                    className="p-1.5 text-gray-500 hover:text-port-error transition-colors"
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-error transition-colors"
                   >
                     <Trash2 className="w-4 h-4" aria-hidden="true" />
                   </button>

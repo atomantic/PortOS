@@ -247,7 +247,7 @@ export function DatabaseTab() {
           <button
             onClick={loadStatus}
             disabled={dbLoading}
-            className="p-1.5 text-gray-400 hover:text-white transition-colors"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-400 hover:text-white transition-colors"
             title="Refresh status" aria-label="Refresh status"
           >
             <RefreshCw size={14} className={dbLoading ? 'animate-spin' : ''} />

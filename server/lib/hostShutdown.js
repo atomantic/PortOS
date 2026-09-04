@@ -122,13 +122,13 @@ export async function writeHostShutdownMarker({ agentIds = [], signal = null } =
  * `agentIds` is ALWAYS an array of non-empty strings — that's the one field
  * with a production consumer, and boot recovery runs before everything else, so
  * a truncated/garbled marker has to degrade to "no agents were interrupted"
- * rather than throw. `allowArray: false` does the rest of the shape check:
- * `readJSONFile` already rejects an unparseable file AND any root that isn't a
- * `{…}` object, so a falsy result is the only failure left to test for.
+ * rather than throw. `allowArray: false` only rejects an unparseable file or a
+ * root array; a bare JSON scalar (a truncated/garbled marker) still parses, so
+ * this also checks `typeof raw === 'object'` before treating it as a marker.
  */
 export async function readHostShutdownMarker() {
   const raw = await readJSONFile(hostShutdownMarkerPath(), null, { logError: false, allowArray: false });
-  if (!raw) return null;
+  if (!raw || typeof raw !== 'object') return null;
   return { ...raw, agentIds: Array.isArray(raw.agentIds) ? raw.agentIds.filter(isNonEmptyString) : [] };
 }
 

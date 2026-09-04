@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 import { describe, expect, it } from 'vitest';
 import { BufferAttribute, BufferGeometry, Group, Mesh, MeshStandardMaterial, Points } from 'three';
 import { countSceneTriangles, supportsArQuickLook } from './usdzExport.js';

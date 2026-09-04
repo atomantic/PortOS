@@ -30,6 +30,7 @@
  */
 import { readFile } from 'fs/promises';
 import { collectZipEntries, isZipUpload } from '../lib/zipStream.js';
+import { youtubeVideoIdFromUrl } from '../lib/youtubeUrl.js';
 import { shortSummary, recordEvents, localDayKey } from './humanActivity.js';
 import { getUserTimezone } from './userTimezone.js';
 
@@ -39,22 +40,9 @@ import { getUserTimezone } from './userTimezone.js';
 // extraction and dedupe-key construction.
 // ---------------------------------------------------------------------------
 
-// Extract the 11-char YouTube video id from any of the URL shapes YouTube emits:
-//   watch?v=ID · youtu.be/ID · /shorts/ID · /embed/ID · /v/ID · music.youtube.com
-// Returns the id or null. The trailing charset is bounded so a garbage query
-// string can't smuggle a giant "id" into the dedupe key.
-export function youtubeVideoIdFromUrl(url) {
-  if (!url) return null;
-  const s = String(url).trim();
-  const vParam = /[?&]v=([A-Za-z0-9_-]{6,20})/.exec(s);
-  if (vParam) return vParam[1];
-  // `/live/` is the permalink shape a finished livestream keeps — Takeout watch
-  // records for streams carry it, and the brain ingest accepts it, so it must
-  // resolve to an id here rather than being silently dropped as unrecognized.
-  const pathId = /(?:youtu\.be\/|\/shorts\/|\/embed\/|\/live\/|\/v\/)([A-Za-z0-9_-]{6,20})/.exec(s);
-  if (pathId) return pathId[1];
-  return null;
-}
+// Video-id extraction is the canonical rule in `lib/youtubeUrl.js` — re-exported
+// here so the importer's long-standing public surface keeps working (#6014).
+export { youtubeVideoIdFromUrl };
 
 // Resolve a Takeout watch timestamp to a UTC ISO string, or null if unparseable.
 // Takeout's `time` is ISO-8601 with a `Z` (or an explicit offset), so a plain

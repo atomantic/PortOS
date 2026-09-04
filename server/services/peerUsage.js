@@ -33,7 +33,9 @@ import { compareNewerWins, parseTsMs } from '../lib/lwwTimestamp.js';
 import { mergeTombstones, normalizeTombstones, recordTombstone, isTombstoned } from '../lib/tombstones.js';
 import { canonicalSnapshotChecksum } from '../lib/snapshotChecksum.js';
 import { roundCents } from '../lib/subscriptionSavings.js';
+import { sanitizeQuotaCards } from '../lib/fleetQuotas.js';
 import { buildUsageDigest, buildUsageReport, getUsage, USAGE_FILE } from './usage.js';
+import { readLocalQuotaCards, PROVIDER_QUOTAS_FILE } from './providerQuotaShare.js';
 
 const PEER_USAGE_FILE = join(PATHS.data, 'peer-usage.json');
 
@@ -180,6 +182,9 @@ function sanitizeEntry(entry, expectedId) {
     name: isNonEmptyStr(entry.name) ? entry.name.slice(0, 120) : expectedId,
     capturedAt: entry.capturedAt,
     usage: sanitizeDigest(entry.usage),
+    // Optional: a peer running an older build publishes no quota readings, and
+    // the fleet quota view simply has one fewer contributor.
+    quotas: sanitizeQuotaCards(entry.quotas),
   };
 }
 
@@ -195,12 +200,21 @@ function selfDigest(usageData) {
   return digestMemo.digest;
 }
 
-/** This instance's own live entry, rebuilt from `usage.json` on every read. */
+/**
+ * This instance's own live entry, rebuilt from `usage.json` (and the last quota
+ * readings) on every read.
+ *
+ * `capturedAt` is the LWW stamp AND the manifest fingerprint, so it has to move
+ * whenever anything in the entry does — a quota refresh that left it pinned to
+ * `usage.lastUpdated` would never be pulled by a peer.
+ */
 async function buildSelfEntry() {
   const { instanceId, name } = await readSelfIdentity();
   if (!instanceId) return null;
   const usage = selfDigest(getUsage());
-  return { instanceId, name: name || instanceId, capturedAt: usage.lastUpdated, usage };
+  const { quotas, capturedAt: quotasAt } = await readLocalQuotaCards();
+  const capturedAt = compareNewerWins(quotasAt, usage.lastUpdated) ? quotasAt : usage.lastUpdated;
+  return { instanceId, name: name || instanceId, capturedAt, usage, quotas };
 }
 
 /**
@@ -444,6 +458,23 @@ export async function getFleetUsage({ from = null, to = null, providers = [], ap
 }
 
 /**
+ * Every OTHER instance's last-known subscription-quota readings, for unifying
+ * them with this machine's cards (`lib/fleetQuotas.js`).
+ *
+ * `excludeInstanceIds` drops instances the viewer marked as paying API rates
+ * rather than riding their subscriptions — the same toggle the Across
+ * Instances card uses. Those machines meter a different account, so folding
+ * their readings into these meters would be a wrong number, not a fuller one.
+ */
+export async function getFleetQuotaEntries({ excludeInstanceIds = [] } = {}) {
+  const { peers } = await entriesWithSelf();
+  const excluded = new Set(Array.isArray(excludeInstanceIds) ? excludeInstanceIds : []);
+  return peers
+    .filter((e) => !excluded.has(e.instanceId) && e.quotas?.length)
+    .map(({ instanceId, name, capturedAt, quotas }) => ({ instanceId, name, capturedAt, quotas }));
+}
+
+/**
  * Retire an instance's usage digest — called when the user removes that peer.
  *
  * A plain delete is not enough: our snapshot forwards every digest we hold, so a
@@ -468,6 +499,6 @@ export async function forgetInstanceUsage(instanceId) {
 // Files whose fingerprint invalidates the category's checksum cache. The
 // instances file is in the set because the manifest is keyed by this instance's
 // ID — a re-identified machine must re-checksum even when no counter moved.
-export const USAGE_CHECKSUM_PATHS = [USAGE_FILE, PEER_USAGE_FILE, dataPath('instances.json')];
+export const USAGE_CHECKSUM_PATHS = [USAGE_FILE, PEER_USAGE_FILE, PROVIDER_QUOTAS_FILE, dataPath('instances.json')];
 
 export { PEER_USAGE_FILE };

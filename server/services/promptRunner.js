@@ -28,7 +28,11 @@
 
 import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun, patchRunMetadata, finalizeRunRecord } from './runner.js';
 import { getActiveProvider, getProviderById, getAllProviders } from './providers.js';
-import { executeTuiRun } from './tuiPromptRunner.js';
+// `./tuiPromptRunner.js` (which drags node-pty in through `./shell.js`) and
+// `./providerExecutionReadiness.js` are imported lazily on the branches that
+// actually execute a run — see their call sites below. promptRunner.js is reached
+// by ~160 suites that only build or classify a run, and a static edge instantiated
+// both subtrees in every one of them.
 import { ServerError } from '../lib/errorHandler.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { analyzeError, ERROR_CATEGORIES, isRunCanceledError } from '../lib/aiToolkit/errorDetection.js';
@@ -39,7 +43,6 @@ import { createSingleFlight } from '../lib/singleFlight.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import { isCreativeRunSource, withCreativeLatitude } from '../lib/creativeLatitude.js';
 import { DEFAULT_OUTPUT_RESERVE_TOKENS, estimateTokens } from '../lib/contextBudget.js';
-import { ensureProviderReadyForExecution } from './providerExecutionReadiness.js';
 
 // The fallback-lifecycle notifiers live in services/autoFixer.js, which
 // transitively pulls in services/cos.js (PM2 + fs + sockets). Importing it
@@ -1266,10 +1269,12 @@ async function executeProviderRunOnce({
     // providers spawn OpenCode directly, so they need the same hook here or
     // MTPLX remains stopped until after the TUI has already failed its request.
     if (effectiveProvider.type === PROVIDER_TYPES.TUI) {
-      const ready = await ensureProviderReadyForExecution(effectiveProvider).catch((err) => ({
-        success: false,
-        error: err.message,
-      }));
+      const ready = await import('./providerExecutionReadiness.js')
+        .then(({ ensureProviderReadyForExecution }) => ensureProviderReadyForExecution(effectiveProvider))
+        .catch((err) => ({
+          success: false,
+          error: err.message,
+        }));
       if (!ready.success) {
         const message = ready.error || 'Provider readiness check failed';
         await finalizeRunRecord({
@@ -1400,7 +1405,9 @@ async function executeProviderRunOnce({
     } else if (effectiveProvider.type === PROVIDER_TYPES.TUI) {
       // `source` (e.g. 'pipeline-manuscript-completeness') labels the live,
       // interactive view this TUI run surfaces in the Shell page.
-      executeTuiRun({ runId, provider: providerForRun, prompt, workspacePath: effectiveCwd, onData, onComplete, onReady: onRunReady, timeout: effectiveTimeout, label: source }).catch(safeReject);
+      import('./tuiPromptRunner.js')
+        .then(({ executeTuiRun }) => executeTuiRun({ runId, provider: providerForRun, prompt, workspacePath: effectiveCwd, onData, onComplete, onReady: onRunReady, timeout: effectiveTimeout, label: source }))
+        .catch(safeReject);
     } else {
       safeReject(new Error(`Unsupported provider type: ${effectiveProvider.type}`));
     }

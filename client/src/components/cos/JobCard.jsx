@@ -384,11 +384,11 @@ export default function JobCard({
           </div>
         </div>
 
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-2">
           <button
             onClick={() => onTrigger(job.id)}
             disabled={editing || triggering}
-            className={`p-1.5 transition-colors text-gray-500 ${editing || triggering ? 'opacity-50 cursor-not-allowed' : 'hover:text-port-accent'}`}
+            className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 transition-colors text-gray-500 ${editing || triggering ? 'opacity-50 cursor-not-allowed' : 'hover:text-port-accent'}`}
             title={editing ? 'Save changes before running job' : triggering ? 'Triggering job' : 'Run now'}
             aria-label={editing ? 'Save changes before running job' : triggering ? 'Triggering job' : 'Run now'}
           >
@@ -396,7 +396,7 @@ export default function JobCard({
           </button>
           <button
             onClick={startEditing}
-            className="p-1.5 text-gray-500 hover:text-white transition-colors"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-white transition-colors"
             title="Edit"
             aria-label="Edit"
           >
@@ -404,7 +404,7 @@ export default function JobCard({
           </button>
           <button
             onClick={() => setExpanded(!expanded)}
-            className="p-1.5 text-gray-500 hover:text-white transition-colors"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-white transition-colors"
             title={expanded ? 'Collapse' : 'Expand'}
             aria-label={expanded ? 'Collapse' : 'Expand'}
           >

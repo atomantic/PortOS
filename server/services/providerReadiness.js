@@ -21,6 +21,9 @@
  *                 already answering, which proves it another way)
  *   2. server   — the endpoint the provider points at answers `GET /v1/models`
  *   3. model    — the provider's default model is one the endpoint serves
+ *   4. catalog  — every OTHER model the provider offers is one the endpoint
+ *                 serves, so a task or pipeline stage cannot pin an id that
+ *                 only fails once the agent has already spawned
  *
  * Checks are reported in fix order, each with what to do about it. Only
  * local-daemon providers get a report at all (`localProviderRuntime.js` decides
@@ -164,16 +167,43 @@ function findCommandCached(command) {
 }
 
 /**
- * The model id the endpoint would be asked for: the provider's default with any
- * OpenCode `<namespace>/` prefix stripped, since that prefix addresses the
- * OpenCode provider entry and never reaches the daemon's own model list.
- * Returns null when the provider selects no specific model.
+ * One model id as the daemon's own listing spells it: trimmed, with any OpenCode
+ * `<namespace>/` prefix stripped, since that prefix addresses the OpenCode
+ * provider entry and never reaches the daemon's model list. `null` for anything
+ * that does not name a model (blank, non-string, or a "use the CLI's own
+ * default" sentinel).
  */
-export function servedModelId(provider, kind) {
-  const model = provider?.defaultModel;
+function bareModelId(model, kind) {
   if (typeof model !== 'string' || model.trim() === '' || isConfiguredDefaultModel(model)) return null;
   const trimmed = model.trim();
   return trimmed.startsWith(`${kind}/`) ? trimmed.slice(kind.length + 1) : trimmed;
+}
+
+/**
+ * The model id the endpoint would be asked for — the provider's default.
+ * Returns null when the provider selects no specific model.
+ */
+export function servedModelId(provider, kind) {
+  return bareModelId(provider?.defaultModel, kind);
+}
+
+/**
+ * The model ids this provider OFFERS beyond its pinned default — the catalog a
+ * task or a pipeline stage picks a model out of.
+ *
+ * The pin is excluded because `modelCheck` already covers it; what is left is
+ * the part of the provider nothing was checking. A provider that pins NO model
+ * (the shipped OpenCode local wrappers all ship `defaultModel: null`) had no
+ * model check at all, so its whole catalog could name ids the daemon has not
+ * served since the day they were pulled — and every run dispatched onto one
+ * died at spawn with no output instead of failing resolution up front (#6125).
+ */
+function offeredModelIds(provider, kind) {
+  const pinned = servedModelId(provider, kind);
+  const ids = (Array.isArray(provider?.models) ? provider.models : [])
+    .map((model) => bareModelId(model, kind))
+    .filter((id) => id !== null && id !== pinned);
+  return [...new Set(ids)];
 }
 
 /**
@@ -266,27 +296,33 @@ function serverCheck(runtime, { installed, result, setup, weights = 'unknown' })
 }
 
 /**
+ * The `detail`/`fixHint` a model-facing check reports when the endpoint never
+ * answered, or answered unreadably. Shared by both such checks so a listing
+ * PortOS could not read is reported as unknown, never as missing — the user
+ * chases the check that IS actionable.
+ */
+function unreadableListing(runtime, probeError, weights, setup) {
+  // A server that answered 401 IS responding — "until the server responds"
+  // would send the user to start a container that is already up, when the
+  // actual fix is to paste its key onto this provider.
+  const detail = probeError === 'authentication required'
+    ? `${runtime.label} refused the model listing without an API key — paste the server's key on this provider.`
+    : weightsDetail(runtime, weights) || 'Cannot be checked until the server responds.';
+  // An unservable cache is the ONE unknown here that has a fix: the download
+  // that makes a start possible at all.
+  const fixHint = weightsBlockStart(weights) ? setupHint(setup, 'provisions') : null;
+  return { detail, fixHint };
+}
+
+/**
  * The `model` check — does the running daemon serve what this provider asks
  * for? This is the alias mismatch: `llama-server --alias dflash` against a
  * provider pinned to `dspark` fails HERE rather than inside a dead agent run.
- *
- * `served` is null when the endpoint never answered (or answered unreadably),
- * which says nothing about the model — reported as unknown, never as missing,
- * so the user chases the check that IS actionable.
  */
 function modelCheck(runtime, wanted, served, probeError = null, { weights = 'unknown', setup = null } = {}) {
   const label = `Model \`${wanted}\` available`;
   if (!Array.isArray(served)) {
-    // A server that answered 401 IS responding — "until the server responds"
-    // would send the user to start a container that is already up, when the
-    // actual fix is to paste its key onto this provider.
-    const detail = probeError === 'authentication required'
-      ? `${runtime.label} refused the model listing without an API key — paste the server's key on this provider.`
-      : weightsDetail(runtime, weights) || 'Cannot be checked until the server responds.';
-    // An unservable cache is the ONE unknown here that has a fix: the download
-    // that makes a start possible at all.
-    const fixHint = weightsBlockStart(weights) ? setupHint(setup, 'provisions') : null;
-    return { id: 'model', label, ok: null, detail, fixHint };
+    return { id: 'model', label, ok: null, ...unreadableListing(runtime, probeError, weights, setup) };
   }
   if (served.includes(wanted)) {
     return { id: 'model', label, ok: true, detail: `${runtime.label} is serving \`${wanted}\`.`, fixHint: null };
@@ -325,6 +361,55 @@ function modelCheck(runtime, wanted, served, probeError = null, { weights = 'unk
     // The id a one-click relaunch would put on the launch line, or null when
     // this runtime has no label of its own to change.
     renameTo,
+  };
+}
+
+/**
+ * The `catalog` check — can this provider dispatch the models it OFFERS?
+ *
+ * `modelCheck` above validates the pin. This validates everything else in the
+ * provider's `models` list, which is what a task or a pipeline stage actually
+ * picks from. Without it a provider that pins nothing (every shipped OpenCode
+ * local wrapper) passed readiness while its whole catalog named ids the daemon
+ * stopped serving — a stage pinned to one spawned, produced no output, and died
+ * at spawn time rather than failing resolution up front (#6125).
+ *
+ * `servesOneModel` runtimes are graded leniently on purpose: llama.cpp, MTPLX,
+ * vLLM, SGLang and Slotstream run ONE checkpoint per process, so a catalog
+ * listing the other presets is normal configuration rather than rot. One
+ * servable id is all such a provider ever needs. A multi-model daemon (Ollama,
+ * LM Studio) serves everything it holds at once, so there any unservable id is
+ * a real pin waiting to fail.
+ */
+function catalogCheck(runtime, offered, served, probeError = null, { weights = 'unknown', setup = null, pinned = null } = {}) {
+  const label = `Offered models available (${offered.length})`;
+  if (!Array.isArray(served)) {
+    return { id: 'catalog', label, ok: null, ...unreadableListing(runtime, probeError, weights, setup) };
+  }
+  const unserved = offered.filter((id) => !served.includes(id));
+  const ok = runtime.servesOneModel ? unserved.length < offered.length : unserved.length === 0;
+  if (ok) {
+    const detail = unserved.length === 0
+      ? `${runtime.label} is serving every model this provider offers.`
+      : `${runtime.label} is serving ${offered.length - unserved.length} of them; it runs one model per process, so the rest are presets nothing was started under.`;
+    return { id: 'catalog', label, ok: true, detail, fixHint: null };
+  }
+  const listed = unserved.slice(0, 3).map((id) => `\`${id}\``).join(', ');
+  const more = unserved.length > 3 ? ` +${unserved.length - 3} more` : '';
+  // "every run fails" is only true when the pin cannot carry the provider
+  // either — otherwise the provider still runs, and only a stage that pinned one
+  // of these ids dies.
+  const nothingDispatchable = unserved.length === offered.length && !(pinned && served.includes(pinned));
+  const detail = nothingDispatchable
+    ? `${runtime.label} serves none of them (${listed}${more}), so every run dispatched onto this provider fails before producing output.`
+    : `${runtime.label} does not serve ${listed}${more}, so a task or stage pinned to one of those fails at spawn.`;
+  return {
+    id: 'catalog',
+    label,
+    ok: false,
+    detail,
+    fixHint: `Refresh this provider's models so it only offers ids the server serves${runtime.manageUrl ? ', or pull the missing ones from Models → LLMs.' : `. ${runtime.modelsHint}`}`,
+    unservedModels: unserved,
   };
 }
 
@@ -386,6 +471,8 @@ export async function getProviderReadiness(provider, deps = {}) {
   // `probeEndpoint` returns `models: null` on every unreachable path, so this
   // needs no second reachability test.
   if (wanted) checks.push(modelCheck(runtime, wanted, result.models, result.error, { weights, setup }));
+  const offered = offeredModelIds(provider, runtime.kind);
+  if (offered.length > 0) checks.push(catalogCheck(runtime, offered, result.models, result.error, { weights, setup, pinned: wanted }));
 
   return {
     kind: runtime.kind,

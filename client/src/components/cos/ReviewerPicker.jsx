@@ -65,10 +65,10 @@ const CUSTOM_MODEL_OPTION = '[custom]';
  *
  * `modelOptions` is the resolved model-picker data, shaped like
  * `useReviewerModelOptions()`'s return: `{ optionsByReviewer, defaultModels,
- * freeText, unavailable, loaded }`. Callers keep owning their own
- * `api.getLocalLlmStatus` / `api.getProviders` fetches (that's what the hook is
- * for) — passing nothing degrades every Model cell to a free-text input, which is
- * still fully usable, rather than hiding the column.
+ * freeText, unavailable, providerDisabled, loaded }`. Callers keep owning their
+ * own `api.getLocalLlmStatus` / `api.getProviders` fetches (that's what the hook
+ * is for) — passing nothing degrades every Model cell to a free-text input, which
+ * is still fully usable, rather than hiding the column.
  *
  * `showRunFlags={false}` hides the stop-mode select and the "reviewer applies
  * fixes" checkbox for surfaces that can't honor them — the `/do:next` claim
@@ -79,11 +79,16 @@ const CUSTOM_MODEL_OPTION = '[custom]';
  * `installed` is a per-reviewer-slug install probe from the Code Review
  * Defaults endpoint (`GET /api/code-review/defaults`'s `installed` field,
  * #3606) — `{ claude: true, antigravity: false, ... }`. Only an explicit
- * `false` renders a "not installed" badge; `undefined` (not a CLI reviewer,
- * or the caller didn't fetch it) renders nothing. Warn-only: a reviewer stays
- * selectable and selected even when flagged not-installed, since the CLI
- * check is local-machine-only and a federated peer (or a later install) may
- * satisfy it.
+ * `false` counts as missing; `undefined` (not a CLI reviewer, or the caller
+ * didn't fetch it) says nothing.
+ *
+ * Together with `modelOptions.providerDisabled`, that decides which reviewers
+ * the **Add** row offers up front: one whose CLI is missing here, or whose
+ * provider records are all switched off, is folded behind a `+N unavailable`
+ * toggle. Warn-only either way — the toggle reveals them with a badge and they
+ * stay selectable, and an ALREADY-SELECTED reviewer always renders its row
+ * (badged), since both checks are local-machine-only and the reviewer list is
+ * federation-wide config a peer may satisfy.
  */
 export default function ReviewerPicker({
   reviewers = [],
@@ -108,6 +113,9 @@ export default function ReviewerPicker({
   // pin maps use. Purely presentational — nothing is stored until an id is typed,
   // so this never has to round-trip through `onChange`.
   const [customModelTokens, setCustomModelTokens] = useState(() => new Set());
+  // Whether the Add row also lists the reviewers this machine can't run (see
+  // `hiddenAddable`). Presentational only — nothing about it is stored.
+  const [showUnavailable, setShowUnavailable] = useState(false);
   const isCustomModel = (token) => customModelTokens.has(token.toLowerCase());
   const setCustomModel = (token, on) => setCustomModelTokens((prev) => {
     const next = new Set(prev);
@@ -122,7 +130,7 @@ export default function ReviewerPicker({
   // the active provider's own reviewer (falling back to copilot when that
   // provider maps to none) — see `codeReviewDefaultsFromProvider`.
   const selected = Array.isArray(reviewers) ? [...new Set(reviewers.map(normalizeReviewerValue))] : [];
-  const available = REVIEWER_OPTIONS.filter(o => !selected.includes(o.value));
+  const addable = REVIEWER_OPTIONS.filter(o => !selected.includes(o.value));
   const hasNonCopilot = selected.some(r => r !== 'copilot');
   const selectedUsernames = normalizeReviewUsernames(usernames);
   const atMaxUsernames = selectedUsernames.length >= MAX_REVIEW_USERNAMES;
@@ -165,20 +173,53 @@ export default function ReviewerPicker({
   // normally does", so clearing the select DELETES the key rather than writing `''`.
   const effortsMap = asMap(reviewerEfforts);
   const efforts = keyedLookup(effortsMap);
-  // Only an explicit `false` counts — `undefined` covers both "not a CLI
-  // reviewer" (copilot/lmstudio/ollama/@username) and "caller didn't fetch
-  // `installed`", neither of which should render a warning badge.
-  const notInstalled = (token) => installed?.[token] === false;
-  const renderInstalledBadge = (token) => notInstalled(token) && (
-    <Pill
-      tone="warning"
-      size="xs"
-      className="shrink-0"
-      title={`${reviewerLabel(token)}'s CLI binary wasn't found on this machine. It still runs (federation-wide config), but the review loop here will report it unsatisfied until it's installed.`}
-    >
-      not installed
-    </Pill>
-  );
+  // Why this reviewer can't run here, or null when nothing says it can't.
+  //
+  // Two independent signals, both warn-only and both reported only when the
+  // caller actually fetched them — a reviewer stays selectable and selected
+  // either way, since the checks are local-machine-only and a federated peer
+  // (or a later install / a flip in Settings) may satisfy them:
+  //
+  // - `installed[token] === false` — the CLI binary isn't on PATH. Only an
+  //   explicit `false` counts; `undefined` covers both "not a CLI reviewer"
+  //   (copilot/@username) and "caller didn't fetch `installed`".
+  // - `providerDisabled[token]` — every provider record fronting that binary is
+  //   switched off on this install, so the user has said they don't use it. A
+  //   `/api/providers` that failed or hasn't landed reports nothing (see the
+  //   hook), so this never fires on a slow page.
+  const unavailability = (token) => {
+    if (installed?.[token] === false) {
+      return {
+        label: 'not installed',
+        title: `${reviewerLabel(token)}'s CLI binary wasn't found on this machine. It still runs (federation-wide config), but the review loop here will report it unsatisfied until it's installed.`
+      };
+    }
+    if (modelOptions?.providerDisabled?.[token]) {
+      return {
+        label: 'disabled',
+        title: `${reviewerLabel(token)}'s provider records are all switched off in Settings → AI Providers, so this machine isn't set up to use it. Adding it still works — the review loop spawns its CLI directly, and a federated peer may have it enabled.`
+      };
+    }
+    return null;
+  };
+  const renderUnavailableBadge = (token) => {
+    const reason = unavailability(token);
+    return reason && (
+      <Pill tone="warning" size="xs" className="shrink-0" title={reason.title}>
+        {reason.label}
+      </Pill>
+    );
+  };
+  // The Add row lists what this machine can actually run, so a reviewer whose
+  // CLI is missing or whose providers are all switched off is folded behind a
+  // count instead of padding the row with things the review loop would report
+  // unsatisfied. HIDDEN, not dropped: the checks are local-machine-only and the
+  // reviewer list is federation-wide config, so the toggle reveals them (badged)
+  // rather than making a peer's reviewer unconfigurable from here.
+  const hiddenAddable = addable.filter(opt => unavailability(opt.value));
+  const addOptions = showUnavailable
+    ? addable
+    : addable.filter(opt => !hiddenAddable.includes(opt));
 
   const emit = (next) => onChange?.({
     reviewers: selected,
@@ -586,7 +627,7 @@ export default function ReviewerPicker({
                   </div>
                   <span className="flex items-center gap-1 min-w-0 col-span-2 sm:col-span-1">
                     <span className="text-xs text-gray-300 truncate">{reviewerLabel(value)}</span>
-                    {renderInstalledBadge(value)}
+                    {renderUnavailableBadge(value)}
                   </span>
                   <span className={CELL_LABEL_CLASS}>Model</span>
                   <div className="min-w-0">{renderModelCell(value)}</div>
@@ -630,10 +671,10 @@ export default function ReviewerPicker({
         </details>
       )}
 
-      {available.length > 0 && (
+      {addable.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-xs text-gray-600 mr-1">Add:</span>
-          {available.map(opt => (
+          {addOptions.map(opt => (
             <button
               key={opt.value}
               type="button"
@@ -644,9 +685,23 @@ export default function ReviewerPicker({
             >
               <Plus size={11} />
               {opt.label}
-              {renderInstalledBadge(opt.value)}
+              {renderUnavailableBadge(opt.value)}
             </button>
           ))}
+          {hiddenAddable.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowUnavailable(!showUnavailable)}
+              className="px-1.5 py-0.5 text-xs text-gray-600 hover:text-gray-300 underline decoration-dotted"
+              title={showUnavailable
+                ? 'Hide the reviewers whose CLI is missing or whose providers are switched off on this machine'
+                : `Show ${hiddenAddable.length} reviewer${hiddenAddable.length === 1 ? '' : 's'} whose CLI isn't installed here or whose providers are all switched off — still addable for a federated peer that has them`}
+            >
+              {showUnavailable
+                ? 'hide unavailable'
+                : `+${hiddenAddable.length} unavailable`}
+            </button>
+          )}
         </div>
       )}
 

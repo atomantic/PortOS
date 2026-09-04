@@ -626,7 +626,7 @@ export default function MoodBoardDetail() {
                           onClick={() => setAnalyzeItemId(item.id)}
                           title={item.analysis ? 'View AI analysis' : 'Analyze with AI'}
                           aria-label={item.analysis ? 'View AI analysis' : 'Analyze with AI'}
-                          className={`p-1 transition-colors ${item.analysis ? 'text-port-accent hover:text-port-accent/80' : 'text-gray-500 hover:text-white'}`}
+                          className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 transition-colors ${item.analysis ? 'text-port-accent hover:text-port-accent/80' : 'text-gray-500 hover:text-white'}`}
                         >
                           <ScanEye className="w-3.5 h-3.5" aria-hidden="true" />
                         </button>
@@ -636,7 +636,7 @@ export default function MoodBoardDetail() {
                         onClick={() => setConfirmingItemId(item.id)}
                         title="Remove item"
                         aria-label="Remove item"
-                        className="p-1 text-gray-500 hover:text-port-error transition-colors"
+                        className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
                       >
                         <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
                       </button>
@@ -692,7 +692,7 @@ export default function MoodBoardDetail() {
                   <button
                     type="button"
                     onClick={() => copyToClipboard(analyzeItem.analysis.prompt, 'Analysis prompt copied')}
-                    className="p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
                     aria-label="Copy saved analysis prompt"
                   >
                     <Copy className="w-3.5 h-3.5" aria-hidden="true" />

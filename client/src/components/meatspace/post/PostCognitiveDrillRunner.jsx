@@ -669,13 +669,13 @@ function DigitSpanRunner({ drill, drillIndex, drillCount, onComplete, isTraining
         <span className="text-rose-400 font-semibold">{direction === 'backward' ? 'in reverse' : 'in order'}</span>.
       </p>
 
-      <div className="text-center py-10 min-h-[8rem] flex items-center justify-center">
+      <div className="text-center py-6 sm:py-10 min-h-[6rem] sm:min-h-[8rem] flex items-center justify-center">
         {phase === 'show' ? (
           // Reserve the slot with a non-breaking space in the blank gaps so the
           // digit's line box never collapses — otherwise the flex container
           // shrinks between flashes and the form below jumps up (issue: digit
           // flashing shifts layout).
-          <div className="text-7xl font-mono font-bold text-white tabular-nums leading-none">
+          <div className="text-6xl sm:text-7xl font-mono font-bold text-white tabular-nums leading-none">
             {shownIdx >= 0 ? digits[shownIdx] : ' '}
           </div>
         ) : feedback ? (
@@ -684,18 +684,18 @@ function DigitSpanRunner({ drill, drillIndex, drillCount, onComplete, isTraining
               ? <Check size={40} className="text-port-success" />
               : <X size={40} className="text-port-error" />}
             <div className="text-sm text-gray-400">Expected</div>
-            <div className="text-3xl font-mono font-bold text-port-success tracking-widest">{feedback.expected}</div>
+            <div className="text-2xl sm:text-3xl font-mono font-bold text-port-success tracking-widest">{feedback.expected}</div>
             {!feedback.correct && feedback.answered && (
-              <div className="text-lg font-mono text-port-error line-through">{feedback.answered}</div>
+              <div className="text-base sm:text-lg font-mono text-port-error line-through">{feedback.answered}</div>
             )}
           </div>
         ) : (
-          <div className="text-xl text-gray-500">Recall the {direction === 'backward' ? 'reversed ' : ''}sequence</div>
+          <div className="text-lg sm:text-xl text-gray-500">Recall the {direction === 'backward' ? 'reversed ' : ''}sequence</div>
         )}
       </div>
 
       {phase === 'recall' && !feedback && (
-        <form onSubmit={handleSubmit} className="flex gap-3">
+        <form onSubmit={handleSubmit} className="flex gap-2 sm:gap-3 items-center">
           <input
             ref={inputRef}
             type="text"
@@ -706,9 +706,9 @@ function DigitSpanRunner({ drill, drillIndex, drillCount, onComplete, isTraining
             placeholder="Digits"
             aria-label="Your answer"
             autoFocus
-            className="flex-1 bg-port-bg border border-port-border rounded-lg px-4 py-3 text-2xl font-mono text-white text-center tracking-widest placeholder-gray-600 focus:border-rose-400 focus:outline-none"
+            className="flex-1 min-w-0 bg-port-bg border border-port-border rounded-lg px-3 py-2.5 sm:px-4 sm:py-3 text-xl sm:text-2xl font-mono text-white text-center tracking-widest placeholder-gray-600 focus:border-rose-400 focus:outline-none"
           />
-          <button type="submit" className="px-6 py-3 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 font-medium rounded-lg transition-colors">
+          <button type="submit" className="shrink-0 px-4 py-2.5 sm:px-6 sm:py-3 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 font-medium rounded-lg transition-colors">
             Enter
           </button>
         </form>

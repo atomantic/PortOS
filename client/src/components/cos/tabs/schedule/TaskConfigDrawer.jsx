@@ -16,8 +16,9 @@ import PerAppOverrideList from './PerAppOverrideList';
 //   - Stage config      — per-stage provider/model (only when the task has a
 //                         pipeline; count = number of stages)
 //   - Global defaults   — schedule/provider/prompt controls (always present)
-//   - Per-app overrides — per-app enablement (only when there are active apps;
-//                         count = number of active apps)
+//   - Per-app options   — turns the task on/off per app, plus that app's
+//                         optional per-app settings (only when there are
+//                         active apps; count = number of active apps)
 // The active tab lives in the `taskTab` URL param so it survives reload and is
 // shareable. TaskHeader (identity + badges) stays at the top of every tab.
 export default function TaskConfigDrawer({
@@ -28,6 +29,7 @@ export default function TaskConfigDrawer({
   onUpdate,
   onTrigger,
   providers,
+  providersLoaded,
   activeProviderId,
   apps,
   onUpdateOverride,
@@ -44,11 +46,11 @@ export default function TaskConfigDrawer({
   const hasOverrides = activeApps.length > 0;
 
   // Tabs are dynamic: a task without a pipeline hides Stage config, and an
-  // install with no active apps hides Per-app overrides — never an empty tab.
+  // install with no active apps hides Per-app options — never an empty tab.
   const tabs = [
     hasStages && { id: 'stages', label: 'Stage config', count: stages.length },
     { id: 'global', label: 'Global defaults' },
-    hasOverrides && { id: 'overrides', label: 'Per-app overrides', count: activeApps.length },
+    hasOverrides && { id: 'overrides', label: 'Per-app options', count: activeApps.length },
   ].filter(Boolean);
   const tabIds = tabs.map(t => t.id);
   const defaultTab = hasStages ? 'stages' : 'global';
@@ -75,6 +77,7 @@ export default function TaskConfigDrawer({
               taskType={taskType}
               config={config}
               providers={providers}
+              providersLoaded={providersLoaded}
               onUpdate={onUpdate}
               updating={updating}
               setUpdating={setUpdating}
@@ -89,6 +92,7 @@ export default function TaskConfigDrawer({
               onTrigger={onTrigger}
               category="appImprovement"
               providers={providers}
+              providersLoaded={providersLoaded}
               activeProviderId={activeProviderId}
               apps={apps}
               updating={updating}
@@ -105,6 +109,7 @@ export default function TaskConfigDrawer({
               config={config}
               apps={apps}
               providers={providers}
+              providersLoaded={providersLoaded}
               onUpdateOverride={onUpdateOverride}
               onBulkToggleOverride={onBulkToggleOverride}
             />

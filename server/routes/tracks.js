@@ -39,8 +39,9 @@ import {
   isSupportedMusicUpload, assertSafeMusicFilename, MUSIC_UPLOAD_MAX_BYTES,
 } from '../services/pipeline/musicLibrary.js';
 import {
-  startYoutubeImport, attachImportSseClient, cancelYoutubeImport, YOUTUBE_URL_RE,
+  startYoutubeImport, attachImportSseClient, cancelYoutubeImport,
 } from '../services/trackYoutubeImport.js';
+import { YOUTUBE_VIDEO_URL_RE, YOUTUBE_URL_INVALID_MESSAGE } from '../lib/youtubeUrl.js';
 import { generateChiptuneScore, renderChiptuneTrack, publishChiptuneTrack } from '../services/chiptune.js';
 
 const router = Router();
@@ -102,7 +103,7 @@ const attachSchema = z.object({
 });
 
 const youtubeImportSchema = z.object({
-  url: z.string().trim().regex(YOUTUBE_URL_RE, 'Not a recognized YouTube URL (expected youtube.com/watch, youtu.be, or m.youtube.com)'),
+  url: z.string().trim().regex(YOUTUBE_VIDEO_URL_RE, YOUTUBE_URL_INVALID_MESSAGE),
 });
 
 // Reuse the pipeline audio stage's multipart upload contract (50MB, audio MIME).

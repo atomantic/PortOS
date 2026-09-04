@@ -572,9 +572,13 @@ async function clearSnapshot(seriesId) {
 export async function getSeriesReview(seriesId) {
   assertValidSeriesId(seriesId);
   const content = await tryReadFile(snapshotPath(seriesId));
-  const verdict = content === null
+  const parsed = content === null
     ? null
     : safeJSONParse(content, null, { allowArray: false, logError: true, context: snapshotPath(seriesId) });
+  // `allowArray: false` only rejects a root array — a bare JSON scalar
+  // (corrupt snapshot) still parses, so guard for a genuine object before
+  // treating it as a verdict.
+  const verdict = parsed && typeof parsed === 'object' ? parsed : null;
   const [fix, review, currentHash] = await Promise.all([
     getFixAvailability(),
     // `null` = the findings store couldn't be read (distinct from a store with no

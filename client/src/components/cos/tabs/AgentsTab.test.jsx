@@ -191,6 +191,52 @@ describe('AgentsTab resume routing', () => {
     expect(toast.success).not.toHaveBeenCalledWith(expect.stringMatching(/resume task/i));
   });
 
+  // The server force-spawns the resumed task when a slot is free, so "queued" is the
+  // exception, not the rule — and a "queued" toast for a run that already started
+  // reads as the Resume click not having taken.
+  it('says the resumed task is running when the server started it', async () => {
+    const user = userEvent.setup();
+    api.resumeCosAgent.mockResolvedValue({ success: true, taskId: 'task-abc', mode: 'requeued', spawned: true });
+    renderTab([pausedAgent]);
+    await act(async () => {});
+
+    await user.click(screen.getByRole('button', { name: 'Resume agent-paused' }));
+    await user.click(screen.getByRole('button', { name: 'Submit resume' }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/running again/i)));
+  });
+
+  it('names why a resumed task stayed queued instead of leaving the user to hunt for it', async () => {
+    const user = userEvent.setup();
+    api.resumeCosAgent.mockResolvedValue({
+      success: true, taskId: 'task-abc', mode: 'requeued',
+      spawned: false, spawnHold: 'No available agent slots (3/3)',
+    });
+    renderTab([pausedAgent]);
+    await act(async () => {});
+
+    await user.click(screen.getByRole('button', { name: 'Resume agent-paused' }));
+    await user.click(screen.getByRole('button', { name: 'Submit resume' }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/No available agent slots \(3\/3\)/)));
+  });
+
+  // `new-task` is the mode where the paused task was gone, so a REPLACEMENT was
+  // queued — and it is force-spawned like any other. Without its own entry it fell
+  // through to the generic "Created resume task", which says nothing about whether
+  // the replacement actually started.
+  it('says a replacement task is running when the server started that too', async () => {
+    const user = userEvent.setup();
+    api.resumeCosAgent.mockResolvedValue({ success: true, taskId: 'task-new', mode: 'new-task', created: true, spawned: true });
+    renderTab([pausedAgent]);
+    await act(async () => {});
+
+    await user.click(screen.getByRole('button', { name: 'Resume agent-paused' }));
+    await user.click(screen.getByRole('button', { name: 'Submit resume' }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/replacement task is running/i)));
+  });
+
   // The default has to be safe by construction, not by keeping a copy of the server's
   // mode enum in sync — a future non-creating mode this build has no wording for must
   // not regress to announcing a task that was never queued.

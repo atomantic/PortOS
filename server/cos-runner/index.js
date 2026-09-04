@@ -24,6 +24,7 @@ import { commandExists } from '../lib/commandExists.js';
 import { adoptNpmGlobalBinDir } from '../lib/npmGlobalBin.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
+import { createStreamingAnsiStripper } from '../lib/ansiStrip.js';
 import { createStreamJsonParser } from './streamJsonParser.js';
 import { loadState, saveState, withState } from './runnerState.js';
 import { getProcessStats, checkProcessRunning } from './processStats.js';
@@ -504,6 +505,13 @@ app.post('/spawn', async (req, res) => {
     rawStreamBuffer: '',
     streamParser,
     codexStderrFormatter,
+    // Per-stream ANSI strippers, mirroring spawnDirectly's headless path — the
+    // same providers land here when the run is dispatched through the runner, so
+    // without these the `[stderr] [0m` noise reproduces on that half of the
+    // dispatch matrix. Stateful: each buffers an escape split across two chunks.
+    // A stream-json stdout is NDJSON with no raw ESC byte, so it skips the scan.
+    stripStdoutAnsi: isStreamJson ? (text) => text : createStreamingAnsiStripper(),
+    stripStderrAnsi: createStreamingAnsiStripper(),
     workspacePath: cwd
   });
 
@@ -518,8 +526,8 @@ app.post('/spawn', async (req, res) => {
 
   // Handle stdout
   claudeProcess.stdout.on('data', (data) => {
-    const text = data.toString();
     const agent = activeAgents.get(agentId);
+    const text = agent?.stripStdoutAnsi ? agent.stripStdoutAnsi(data.toString()) : data.toString();
 
     if (agent?.streamParser) {
       // Parse stream-json and emit extracted text lines (cap buffer at 512KB for error analysis)
@@ -533,7 +541,11 @@ app.post('/spawn', async (req, res) => {
         emitToServer('agent:output', { agentId, text: line + '\n' });
       }
     } else {
-      // Non-stream providers: emit raw stdout as before
+      // Non-stream providers: emit stdout as-is once decolored. A chunk that was
+      // purely terminal control has nothing left to show. Unlike stderr below,
+      // whitespace is NOT dropped here — a blank line is legitimate formatting
+      // when it isn't wearing an `[stderr]` tag.
+      if (!text) return;
       if (agent) {
         agent.outputBuffer += text;
       }
@@ -544,8 +556,9 @@ app.post('/spawn', async (req, res) => {
   // Handle stderr
   claudeProcess.stderr.on('data', (data) => {
     const agent = activeAgents.get(agentId);
+    const decolored = agent?.stripStderrAnsi ? agent.stripStderrAnsi(data.toString()) : data.toString();
     if (agent?.codexStderrFormatter) {
-      const lines = agent.codexStderrFormatter.processChunk(data.toString());
+      const lines = agent.codexStderrFormatter.processChunk(decolored);
       for (const line of lines) {
         agent.outputBuffer += line + '\n';
         emitToServer('agent:output', { agentId, text: line + '\n' });
@@ -553,7 +566,11 @@ app.post('/spawn', async (req, res) => {
       return;
     }
 
-    const text = `[stderr] ${data.toString()}`;
+    // A chunk that decolors down to whitespace was pure terminal control
+    // (`opencode run` emits a bare reset per progress redraw). Tagging it
+    // `[stderr]` would add one blank noise line to the tail per redraw.
+    if (!decolored.trim()) return;
+    const text = `[stderr] ${decolored}`;
     if (agent) agent.outputBuffer += text;
     emitToServer('agent:output', { agentId, text });
   });

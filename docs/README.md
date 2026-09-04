@@ -25,7 +25,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | Dev setup (PostgreSQL required), code conventions |
 | [GITHUB_ACTIONS.md](./GITHUB_ACTIONS.md) | CI and release workflows |
 | [VERSIONING.md](./VERSIONING.md) | SemVer + release process (`/do:release`) |
-| [SELF_UPDATE.md](./SELF_UPDATE.md) | Fork-aware self-update flow — release polling, `FORK_SYNC_REQUIRED`, fork sync |
+| [SELF_UPDATE.md](./SELF_UPDATE.md) | Fork-aware self-update flow — release polling, `FORK_SYNC_REQUIRED`, fork sync, running a customized fork |
 | [MANAGED_APP_UPDATES.md](./MANAGED_APP_UPDATES.md) | Safe managed-app update default and the opt-in app lifecycle contract |
 | [DEPS.md](./DEPS.md) | Dependency audit — every third-party package and its verdict |
 | [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) | Common runtime issues, known issues |
@@ -39,7 +39,7 @@ Start with the [product surface map](./features/product-surfaces.md) for a compl
 
 App management: [app-wizard](./features/app-wizard.md) · [autofixer](./features/autofixer.md) · [browser](./features/browser.md) · [error-handling](./features/error-handling.md) · [jira-sprint-manager](./features/jira-sprint-manager.md)
 
-Chief of Staff: [chief-of-staff](./features/chief-of-staff.md) · [cos-agent-runner](./features/cos-agent-runner.md) · [cos-enhancement](./features/cos-enhancement.md) · [agent-context](./features/agent-context.md) · [agent-skills](./features/agent-skills.md) · [memory-system](./features/memory-system.md) · [claude-ollama](./features/claude-ollama.md) · [fleet-llm-host](./features/fleet-llm-host.md) · [mtplx](./features/mtplx.md) · [dflash2](./features/dflash2.md) ([DSpark vs DFlash 2](./research/2026-08-19-dspark-vs-dflash2.md)) · [qwen38-rtx3090](./features/qwen38-rtx3090.md) ([3090 bring-up](./research/2026-08-21-qwen38-rtx3090-vllm.md)) · [sglang-qwen38](./features/sglang-qwen38.md) ([SGLang Hopper/Blackwell evaluation](./research/2026-08-21-sglang-qwen38-27b.md)) · [prompt-manager](./features/prompt-manager.md)
+Chief of Staff: [chief-of-staff](./features/chief-of-staff.md) · [cos-agent-runner](./features/cos-agent-runner.md) · [cos-enhancement](./features/cos-enhancement.md) · [agent-context](./features/agent-context.md) · [agent-skills](./features/agent-skills.md) · [memory-system](./features/memory-system.md) · [claude-ollama](./features/claude-ollama.md) · [fleet-llm-host](./features/fleet-llm-host.md) · [mtplx](./features/mtplx.md) · [slotstream](./features/slotstream.md) · [dflash2](./features/dflash2.md) ([DSpark vs DFlash 2](./research/2026-08-19-dspark-vs-dflash2.md)) · [qwen38-rtx3090](./features/qwen38-rtx3090.md) ([3090 bring-up](./research/2026-08-21-qwen38-rtx3090-vllm.md)) · [sglang-qwen38](./features/sglang-qwen38.md) ([SGLang Hopper/Blackwell evaluation](./research/2026-08-21-sglang-qwen38-27b.md)) · [prompt-manager](./features/prompt-manager.md)
 
 Identity & self: [digital-twin](./features/digital-twin.md) · [identity-system](./features/identity-system.md) · [soul-system](./features/soul-system.md) · [privacy-center](./features/privacy-center.md) · [post](./features/post.md) (insights design spike: [plans/2026-06-03](./plans/2026-06-03-cross-domain-insights-engine.md))
 

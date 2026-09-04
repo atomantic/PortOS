@@ -121,9 +121,18 @@ export async function resolveAutoInvestigationApproval(fingerprint, { now = Date
  *
  * @param {{ fingerprint: string, description: string, affectedTasks?: string[] }} args
  *   plus any further `addTask` fields (priority, context, diagnostics)
+ * @param {{ now?: number, taskType?: string, delivery?: object }} [opts] `taskType`
+ *   and `delivery` are the two axes a USER-queued investigation differs on
+ *   (#6043): it belongs in the user queue and its PR waits for the human who
+ *   asked for it. Both default to the unattended auto-filed posture. `delivery`
+ *   is applied AFTER the caller's fields on purpose — an investigation's
+ *   isolation and PR posture are set by policy, not by the submitter.
  * @returns {Promise<{ task: object|null, approvalRequired: boolean, loopReason: string|null }>}
  */
-export async function fileInvestigationTask({ fingerprint, description, affectedTasks = [], ...extra } = {}, { now = Date.now() } = {}) {
+export async function fileInvestigationTask(
+  { fingerprint, description, affectedTasks = [], ...extra } = {},
+  { now = Date.now(), taskType = 'internal', delivery = INVESTIGATION_TASK_DELIVERY } = {}
+) {
   const verdict = await resolveAutoInvestigationApproval(fingerprint, { now });
   const body = verdict.loopProse
     ? `${description}\n\n## Why this is held for you\n${verdict.loopProse}`
@@ -131,7 +140,7 @@ export async function fileInvestigationTask({ fingerprint, description, affected
 
   const task = await addTask({
     ...extra,
-    ...INVESTIGATION_TASK_DELIVERY,
+    ...delivery,
     description: body,
     approvalRequired: verdict.approvalRequired,
     approvalReason: verdict.approvalReason,
@@ -141,7 +150,7 @@ export async function fileInvestigationTask({ fingerprint, description, affected
     isInvestigation: true,
     investigationFingerprint: fingerprint,
     ...(affectedTasks.length > 0 && { affectedTasks })
-  }, 'internal');
+  }, taskType);
 
   if (!task?.duplicate) noteInvestigationFiled(now);
   return { task, approvalRequired: verdict.approvalRequired, loopReason: verdict.loopReason };

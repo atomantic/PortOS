@@ -255,6 +255,10 @@ router.post('/:id/pull-requests/:number/resolve', loadApp, asyncHandler(async (r
     originalTask,
     prUrl: pullRequest.url,
     prBranch: pullRequest.headBranch,
+    // Null for a same-repo head. A FORK PR's head branch has no
+    // `origin/<branch>`, so without this the follow-up is queued and then
+    // blocked at workspace prep — which is every external contribution (#6064).
+    forkHead: pullRequest.forkHead,
     sourceWorkspace: app.repoPath,
     prCompletion: PR_COMPLETIONS.REVIEW_THEN_MERGE,
     ...reviewOptions,

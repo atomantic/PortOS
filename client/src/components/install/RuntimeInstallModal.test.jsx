@@ -67,7 +67,13 @@ describe('RuntimeInstallModal failure footer', () => {
     expect(task.prompt).toContain('fatal: could not build');
     // No `app` — the installer code lives in PortOS, which is the server default.
     expect(task.app).toBeUndefined();
-    expect(task).toMatchObject({ useWorktree: true, openPR: true });
+    // The investigation marker (#6043) is the ONLY posture the client sends: the
+    // server recognizes it, derives the dedup fingerprint, and applies the
+    // worktree/PR delivery, so this button can no longer drift out of step with
+    // the auto-filed investigation posture.
+    expect(task).toMatchObject({ isInvestigation: true });
+    expect(task).not.toHaveProperty('useWorktree');
+    expect(task).not.toHaveProperty('openPR');
     // useAsyncAction owns the failure toast, so the request must not toast too.
     expect(options).toMatchObject({ silent: true });
 

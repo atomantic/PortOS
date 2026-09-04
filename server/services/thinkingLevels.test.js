@@ -4,6 +4,7 @@ import {
   AUTO_THRESHOLDS,
   TASK_TYPE_LEVELS,
   resolveThinkingLevel,
+  resolveStepEffort,
   suggestLevel,
   suggestLevelFromContext,
   getModelForLevel,
@@ -341,5 +342,49 @@ describe('Thinking Levels Service', () => {
       expect(levels).not.toBe(levels2); // Different object references
       expect(levels.off).toEqual(levels2.off); // Same content
     });
+  });
+});
+
+describe('resolveStepEffort — per-delegated-step reasoning (#5992)', () => {
+  const orchestrated = (profile) => ({
+    metadata: { orchestrationMode: 'orchestrated', orchestrationProfile: profile },
+  });
+
+  it('prefers the rung the architect wrote into the spec over the role default', () => {
+    expect(resolveStepEffort({
+      spec: 'OBJECTIVE: ship it\nREASONING: xhigh',
+      task: orchestrated({ implementer: { effort: 'low' } }),
+      role: 'implementer',
+      runEffort: 'medium',
+    })).toEqual({ effort: 'xhigh', source: 'spec' });
+  });
+
+  it('falls back to the role default, then the run effort, then nothing', () => {
+    const task = orchestrated({ implementer: { effort: 'low' } });
+    expect(resolveStepEffort({ task, role: 'implementer', runEffort: 'medium' }))
+      .toEqual({ effort: 'low', source: 'role' });
+    expect(resolveStepEffort({ task, role: 'reviewer', runEffort: 'medium' }))
+      .toEqual({ effort: 'medium', source: 'run' });
+    expect(resolveStepEffort({ task, role: 'reviewer' }))
+      .toEqual({ effort: null, source: 'default' });
+  });
+
+  it('errors on an unsupported rung rather than downgrading it to a supported one', () => {
+    const result = resolveStepEffort({
+      spec: 'REASONING: galaxy-brain',
+      task: orchestrated({ implementer: { effort: 'low' } }),
+      role: 'implementer',
+      runEffort: 'medium',
+    });
+    expect(result.error).toContain('galaxy-brain');
+    expect(result.effort).toBeUndefined();
+  });
+
+  it('ignores a profile the task has not switched into orchestrated mode', () => {
+    expect(resolveStepEffort({
+      task: { metadata: { orchestrationProfile: { implementer: { effort: 'low' } } } },
+      role: 'implementer',
+      runEffort: 'medium',
+    })).toEqual({ effort: 'medium', source: 'run' });
   });
 });

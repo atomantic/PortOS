@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { providerModelLabel } from '../../../../utils/providers';
 import AppOverrideRow from './AppOverrideRow';
 
-export default function PerAppOverrideList({ taskType, config, apps, providers, onUpdateOverride, onBulkToggleOverride }) {
+export default function PerAppOverrideList({ taskType, config, apps, providers, providersLoaded = true, onUpdateOverride, onBulkToggleOverride }) {
   const [bulkUpdating, setBulkUpdating] = useState(false);
   const activeApps = apps?.filter(app => !app.archived) || [];
   const appOverrides = config.appOverrides || {};
@@ -26,12 +26,20 @@ export default function PerAppOverrideList({ taskType, config, apps, providers, 
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-2">
-        <h4 className="text-sm font-medium text-gray-400">Per-App Overrides</h4>
+      <div className="flex items-start justify-between gap-3 mb-2">
+        <div className="min-w-0">
+          <h4 className="text-sm font-medium text-gray-400">Per-App Options</h4>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Each app&apos;s toggle turns <span className="font-mono text-gray-400">{taskType}</span> on or off for that app —
+            an app stays off until you switch it on here, whatever the rest of the row says. The other controls are
+            optional: leave one on <em>Inherit</em> and it follows the global defaults.
+          </p>
+        </div>
         <button
           onClick={handleBulkToggle}
           disabled={bulkUpdating}
-          className={`text-xs px-2 py-1 rounded transition-colors ${
+          title={`${allEnabled ? 'Stop' : 'Start'} running ${taskType} for every active app`}
+          className={`text-xs px-2 py-1 rounded transition-colors shrink-0 ${
             bulkUpdating ? 'opacity-50 cursor-not-allowed' : ''
           } ${
             allEnabled
@@ -41,7 +49,7 @@ export default function PerAppOverrideList({ taskType, config, apps, providers, 
                 : 'text-port-accent hover:bg-port-accent/10'
           }`}
         >
-          {allEnabled ? 'Disable All' : 'Enable All'}
+          {allEnabled ? 'Disable for all apps' : 'Enable for all apps'}
         </button>
       </div>
       <div className="border border-port-border rounded-lg divide-y divide-port-border/50">
@@ -58,6 +66,7 @@ export default function PerAppOverrideList({ taskType, config, apps, providers, 
             doWorkRequiresWorktree={config.doWorkRequiresWorktree}
             inheritedProviderText={inheritedProviderText}
             providers={providers}
+            providersLoaded={providersLoaded}
             override={appOverrides[app.id]}
             onUpdate={onUpdateOverride}
           />

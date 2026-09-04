@@ -8,10 +8,10 @@
  */
 
 import { randomUUID } from 'crypto';
-import { mkdir, readFile, unlink, writeFile } from 'fs/promises';
+import { mkdir, readFile, unlink } from 'fs/promises';
 import { existsSync, readFileSync, unlinkSync } from 'fs';
 import { dirname, join } from 'path';
-import { PATHS, sleep } from './fileUtils.js';
+import { PATHS, sleep, writeFileGuarded } from './fileUtils.js';
 
 export const HEAVY_LOCAL_JOB_CLAIM_PATH = join(PATHS.data, 'heavy-local-job.claim.json');
 export const HEAVY_LOCAL_JOB_STALE_MS = 24 * 60 * 60 * 1000;
@@ -95,7 +95,7 @@ export async function claimHeavyLocalJob({
 
   for (;;) {
     try {
-      await writeFile(claimPath, JSON.stringify(ours), { flag: 'wx' });
+      await writeFileGuarded(claimPath, JSON.stringify(ours), { flag: 'wx' });
       heldClaims.set(claimPath, token);
       installExitCleanup();
       let released = false;
@@ -110,7 +110,7 @@ export async function claimHeavyLocalJob({
           const current = await readHolder(claimPath);
           if (current?.token !== token) return;
           ours.pid = childPid;
-          await writeFile(claimPath, JSON.stringify(ours));
+          await writeFileGuarded(claimPath, JSON.stringify(ours));
           heldClaims.delete(claimPath);
         },
         async release() {

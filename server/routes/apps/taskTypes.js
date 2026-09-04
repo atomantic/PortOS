@@ -6,6 +6,7 @@
  *   GET  /:id/task-types             → { taskTypeOverrides }
  *   GET  /:id/work-tracker           → { tracker info }
  *   GET  /:id/work-items             → { tracker, items, reason }
+ *   GET  /:id/claim-reviewers        → { source, reviewers, csv, … }
  *   GET  /:id/layered-intelligence           → { config, isPortos }
  *   GET  /:id/layered-intelligence/outcomes  → { stats, execution, metrics, approvalFunnel, rejections, recent }
  *   PUT  /:id/task-types/all         → { success, taskTypeOverrides }
@@ -21,7 +22,7 @@ import * as appsService from '../../services/apps.js';
 import { PORTOS_APP_ID } from '../../services/apps.js';
 import { sanitizeTaskMetadata, ISSUE_AUTHOR_FILTERS } from '../../lib/validation.js';
 import { listWorkItems } from '../../services/workItems.js';
-import { resolveClaimWorkMetadata, resolveClaimAuthorFilter } from '../../services/cosTaskGenerator.js';
+import { resolveClaimWorkMetadata, resolveClaimAuthorFilter, resolveAppClaimReviewers } from '../../services/cosTaskGenerator.js';
 import { parseCronToNextRun } from '../../services/eventScheduler.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../../services/taskScheduleConstants.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
@@ -94,6 +95,40 @@ router.get('/:id/work-items', loadApp, asyncHandler(async (req, res) => {
   const issueExcludeLabels = claimMetadata?.issueExcludeLabels ?? [];
   const result = await listWorkItems(app, { issueAuthorFilter, issueExcludeLabels });
   res.json({ appId: app.id, appName: app.name, issueAuthorFilter, ...result });
+}));
+
+// GET /api/apps/:id/claim-reviewers - The reviewers a `/do:next` claim will
+// ACTUALLY run for this app. Resolved by `resolveAppClaimReviewers`, the same
+// function `buildClaimWorkTask` fills the claim prompt's `{reviewers}` token
+// from, so a preview cannot report a chain the run won't use.
+//
+// It exists because the two layers disagree in practice: a claim resolves the
+// claim-work task metadata FIRST and only falls back to the install-wide Code
+// Review Defaults, so a stale override there ran codex + claude long after the
+// user had moved the panel to antigravity — while every reviewer control on
+// screen, seeded from `GET /api/code-review/defaults`, showed antigravity.
+// `source` names the layer that won so the UI can send the user to the right one.
+//
+// Read-only: metadata + settings reads, no claim markers, no LLM call.
+router.get('/:id/claim-reviewers', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
+  const { overridden, reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts, csv } =
+    await resolveAppClaimReviewers(app);
+  // Spelled out rather than spread: `resolveClaimReviewerConfig` also carries
+  // `stopMode` / `reviewerApplies`, which a claim flow has no flag string to put
+  // them in — publishing them would advertise a contract this route can't keep.
+  res.json({
+    appId: app.id,
+    appName: app.name,
+    source: overridden ? 'task-override' : 'defaults',
+    reviewers,
+    usernames,
+    optionalReviewers,
+    reviewerMaxRounds,
+    reviewerModels,
+    reviewerEfforts,
+    csv
+  });
 }));
 
 // GET /api/apps/:id/layered-intelligence - Effective Layered Intelligence config

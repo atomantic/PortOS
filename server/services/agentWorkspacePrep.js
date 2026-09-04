@@ -38,6 +38,7 @@ import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranch
 import { resolveSpawnCwd, usesCreativeDirectorScratchCwd, creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
+import { resolveTaskForkHead } from '../lib/forkHead.js';
 import { getAppWorkspace, getAppDataForTask, createJiraTicketForTask } from './agentPromptBuilder.js';
 import { INVESTIGATION_TASK_DELIVERY, isInvestigationTask } from '../lib/investigationTasks.js';
 
@@ -135,6 +136,7 @@ async function prepareRequestedWorktree({
   workspacePath,
   task,
   existingBranch,
+  forkHead,
   allowSharedWorkspaceFallback,
 }) {
   // Detecting the base branch and resolving the branch holder are independent
@@ -181,6 +183,10 @@ async function prepareRequestedWorktree({
   const worktreeInfo = takeover?.worktreeInfo || await createWorktree(agentId, workspacePath, task.id, {
     baseBranch: detectedBase || undefined,
     existingBranch: existingBranch || undefined,
+    // Only consulted when `existingBranch` names a FORK PR's head, which has no
+    // `origin/<branch>` to attach to (#6064). Null for every other task, which
+    // is the behavior that predates it.
+    forkHead: forkHead || undefined,
     planId: task.metadata?.planId || undefined
   }).catch(err => {
     worktreeError = err;
@@ -340,6 +346,9 @@ export async function prepareAgentWorkspace({ agentId, task }) {
   // detection returns `proceed` once the dead agent is gone) and silently
   // abandons the work the pointer was recorded to save.
   const existingBranch = resolveTaskTargetBranch(task.metadata);
+  // Where that branch lives when the task points at a fork PR's head — read
+  // here rather than inside the worktree layer, which has no forge client.
+  const forkHead = resolveTaskForkHead(task.metadata);
   const wantsWorktree = explicitWorktree || !!existingBranch;
 
   if (!isReadOnly) {
@@ -476,6 +485,7 @@ export async function prepareAgentWorkspace({ agentId, task }) {
       workspacePath,
       task,
       existingBranch,
+      forkHead,
       allowSharedWorkspaceFallback: !isReadOnly && !explicitWorktree,
     });
     if (worktreeOutcome.outcome !== 'ready') return worktreeOutcome;

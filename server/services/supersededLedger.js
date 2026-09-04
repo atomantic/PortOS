@@ -20,14 +20,17 @@
  * unreadable, or malformed ledger yields no entries, which restores the old
  * re-analyze-everything behavior rather than silently hiding a branch.
  *
- * DELIBERATELY NOT auto-reap. A superseded branch's uncommitted work is
- * redundant, not worthless, and deleting a worktree is irreversible. The
- * expensive part of the loop is the *analysis*, so caching the verdict removes
- * the cost while the destructive step stays a human action.
+ * Caching the verdict removes the cost of re-analysis; it does not retire the
+ * branch. `reapSupersededBranches` (branchReconcile.js) does that, gated on a
+ * recoverable backup written by `supersededBackup.js` — a superseded branch's
+ * uncommitted work is redundant, not worthless, so it is preserved before the
+ * worktree is removed. What reaches `formatSupersededForPrompt` is therefore not
+ * the whole superseded set but the leftovers the reap could not take this cycle.
  */
 
 import { PATHS, tryReadFile, safeJSONParse, atomicWrite } from '../lib/fileUtils.js';
 import { join } from 'node:path';
+import { isAgentScratchPath } from '../lib/agentScratchPaths.js';
 
 export const LEDGER_VERSION = 1;
 
@@ -35,7 +38,7 @@ export const LEDGER_VERSION = 1;
 export const ledgerPath = (cosDir = PATHS.cos) => join(cosDir, 'branch-reconcile-verdicts.json');
 
 /** Order-independent set equality over two path lists. Pure. */
-const sameSet = (a = [], b = []) => {
+export const sameSet = (a = [], b = []) => {
   if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
   const left = new Set(a);
   return b.every((x) => left.has(x)) && left.size === new Set(b).size;
@@ -121,8 +124,31 @@ export function isVerdictFresh(entry, branch, { replacedByPresent = true, repoPa
   if (!replacedByPresent) return false;
   if (!entry.tip || entry.tip !== branch.tip) return false;
   if (!sameSet(entry.collisionPaths, branch.collisionPaths)) return false;
-  return sameSet(entry.dirtyPaths || [], branch.dirtyPaths || []);
+  return sameDirtyPaths(entry.dirtyPaths, branch.dirtyPaths);
 }
+
+/**
+ * Do a ledger entry's recorded dirty paths still describe the branch's live ones?
+ *
+ * Subtracts PortOS's own runtime scratch from BOTH sides. A verdict recorded
+ * before `classifyWorktreeDirt` learned to subtract that scratch lists it among
+ * its dirty paths while the live side no longer does; comparing raw would expire
+ * every such entry and re-pay the coordinator analysis the ledger exists to
+ * avoid. Nothing else changes — a live list never contains scratch.
+ *
+ * Exported because `reapSupersededBranches` re-checks the same pairing before it
+ * deletes anything: comparing raw there would pass the partition and then hold
+ * the branch forever as "verdict-does-not-match-branch", which is the accumulation
+ * this whole path exists to end.
+ *
+ * @param {string[]} recorded
+ * @param {string[]} live
+ * @returns {boolean}
+ */
+export const sameDirtyPaths = (recorded = [], live = []) => sameSet(
+  (recorded || []).filter((path) => !isAgentScratchPath(path)),
+  (live || []).filter((path) => !isAgentScratchPath(path))
+);
 
 /**
  * Split the in-flight set into branches still worth analyzing and branches whose
@@ -153,18 +179,18 @@ export function partitionSuperseded(inFlight, entries, replacedByPresent = () =>
 }
 
 /**
- * Render the cached-superseded set for the coordinator prompt. These branches are
- * NOT work — they are named so the coordinator doesn't re-discover them, and so
- * the reap commands are one copy away for the human who authorizes them.
+ * Render the still-standing superseded set for the coordinator prompt. These
+ * branches are NOT work — they are named so the coordinator doesn't re-discover
+ * them, and so a held-back reap is visible rather than silent.
  * @param {object[]} superseded - partitionSuperseded()'s `superseded`
  * @returns {string}
  */
 export function formatSupersededForPrompt(superseded) {
   if (!superseded?.length) return '';
   const lines = [
-    `## Already verified SUPERSEDED — awaiting reap (${superseded.length}) — DO NOT ANALYZE`,
+    `## Already verified SUPERSEDED — reap held back (${superseded.length}) — DO NOT ANALYZE`,
     '',
-    'Each branch below was analyzed by an earlier run and confirmed superseded: the default branch already solves its problem, so merging it would REGRESS shipped work. The verdict is cached and still valid (branch tip, uncommitted change set, and collision paths all unchanged; the replacing commits are still on the default branch). Do not read these worktrees, do not re-derive the verdict, do not commit, rebase, resolve, or merge anything on them. They are listed only so you can report them — reaping is a human action.',
+    'Each branch below was analyzed by an earlier run and confirmed superseded: the default branch already solves its problem, so merging it would REGRESS shipped work. The verdict is cached and still valid (branch tip, uncommitted change set, and collision paths all unchanged; the replacing commits are still on the default branch). PortOS reaps a verified-superseded branch itself, after backing it up — these are the ones this cycle could NOT take, because something still holds them: a locked worktree, a live CoS agent, a claim tree inside its idle window, or a tip that moved after the verdict was recorded. Do not read these worktrees, do not re-derive the verdict, do not commit, rebase, resolve, or merge anything on them. Report them; the next cycle reaps whatever has since been released.',
     ''
   ];
   for (const b of superseded) {
@@ -174,8 +200,7 @@ export function formatSupersededForPrompt(superseded) {
     if (v.replacedBy?.length) lines.push(`- Replaced on the default branch by: ${v.replacedBy.map((s) => `\`${s}\``).join(', ')}${v.replacedByNote ? ` — ${v.replacedByNote}` : ''}`);
     if (v.backupPatch) lines.push(`- Uncommitted work backed up at: \`${v.backupPatch}\``);
     if (b.worktreePath) {
-      lines.push('- Reap (destructive — report these commands, do NOT run them):');
-      lines.push(`  \`git worktree remove --force ${b.worktreePath} && git branch -D ${b.branch}\``);
+      lines.push(`- Worktree still on disk: \`${b.worktreePath}\` — PortOS reaps it once its hold lifts. Do NOT run the removal yourself.`);
     }
     lines.push('');
   }

@@ -173,10 +173,11 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
     error: operationError,
     errorCode: operationErrorCode,
     completed: operationCompleted,
+    restarting,
     startUpdate,
   } = useAppOperation({ appId, onComplete: handleOperationComplete });
   const updating = isOperating && operationType === 'update';
-  const operationBusy = isOperating;
+  const operationBusy = isOperating || restarting;
 
   useEffect(() => {
     if (updating) setUpdateRequested(true);
@@ -273,7 +274,7 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
         </button>
       </div>
 
-      {(isOperating || operationError || operationCompleted) && (
+      {(isOperating || restarting || operationError || operationCompleted) && (
         <div className="mt-4">
           <AppOperationBanner
             appName={appName}
@@ -282,6 +283,7 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
             error={operationError}
             completed={operationCompleted}
             completedMessage={operationType === 'update' ? 'Reload this page before starting another update.' : undefined}
+            restarting={restarting}
           />
           {/* Refusals PortOS's shared update preflight raises (server/services/updatePreflight.js)
               carry an explicit acknowledgement the user can opt into and retry with. */}

@@ -1071,6 +1071,21 @@ describe('grok sessions', () => {
     expect(record.model).toBe(GROK_MODEL);
   });
 
+  it('ignores a flat prompt_history.jsonl file sitting beside the session-id directories', async () => {
+    // Grok drops this file directly in the cwd-keyed folder, as a SIBLING of
+    // the per-session-id directories it also writes there (#6218) — treating
+    // every entry as a session id previously crashed the ENTRIES loop with
+    // ENOTDIR trying to read `<file>/summary.json`.
+    await writeGrokSession({ updates: [grokTurnLine({ ms: IN_WINDOW_MS })] });
+    await writeFile(
+      join(home, '.grok', 'sessions', encodeURIComponent(WORKSPACE), 'prompt_history.jsonl'),
+      'not a session directory'
+    );
+    const [record] = await reconcileRunUsage(grokRun, { tokensIn: 1, tokensOut: 1 }, { home });
+    expect(record.source).toBe('measured');
+    expect(record.tokensOut).toBe(1_800);
+  });
+
   it('estimates from chat history when the run died before any turn completed', async () => {
     await writeGrokSession({
       summary: {

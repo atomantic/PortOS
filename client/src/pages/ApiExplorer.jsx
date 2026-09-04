@@ -142,7 +142,7 @@ function CatalogView() {
                   </div>
                   <p className="mt-1 text-xs text-gray-500">{operation.summary} · {operation.access}</p>
                 </div>
-                <button type="button" onClick={() => copyToClipboard(`${operation.method} ${operation.path}`, 'Operation copied')} className="p-1.5 text-gray-500 hover:text-white" aria-label={`Copy ${operation.method} ${operation.path}`}>
+                <button type="button" onClick={() => copyToClipboard(`${operation.method} ${operation.path}`, 'Operation copied')} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-white" aria-label={`Copy ${operation.method} ${operation.path}`}>
                   <Copy size={13} />
                 </button>
               </div>
@@ -279,7 +279,7 @@ function EventCatalogView() {
                   </details>
                 )}
               </div>
-              <button type="button" onClick={() => copyToClipboard(event.event, 'Event copied')} className="p-1.5 text-gray-500 hover:text-white" aria-label={`Copy ${event.event}`}><Copy size={13} /></button>
+              <button type="button" onClick={() => copyToClipboard(event.event, 'Event copied')} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-white" aria-label={`Copy ${event.event}`}><Copy size={13} /></button>
             </div>
           </div>
         ))}

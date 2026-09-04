@@ -213,7 +213,7 @@ function OutlineBeat({
                       {possibleTargets.map((target) => <option key={target.key} value={target.key}>{target.title || target.key}</option>)}
                     </select>
                   </div>
-                  <button type="button" onClick={() => onRemovePath(transitionIndex)} className="mt-2 p-1 text-port-text-muted hover:text-port-error" aria-label={`Remove path ${transitionIndex + 1} from ${scene.title || scene.key}`}>
+                  <button type="button" onClick={() => onRemovePath(transitionIndex)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center mt-2 p-1 text-port-text-muted hover:text-port-error" aria-label={`Remove path ${transitionIndex + 1} from ${scene.title || scene.key}`}>
                     <Trash2 size={14} />
                   </button>
                 </div>
@@ -373,6 +373,7 @@ export default function LoomEpisodeOutlinePlanner({
         layout="stacked"
         disabled={busy || generating || saving || validating || reviewing || expanding}
         modelDisabled={busy || generating || saving || validating || reviewing || expanding}
+        loading={providersLoading}
         emptyProviderOption="Default (outline stage or active provider)"
         emptyModelOption="Default model"
         alwaysShowModel={!!route.providerId}

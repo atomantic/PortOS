@@ -6,6 +6,15 @@
  * declared vs declared-and-checked).
  */
 
+// The goal-fidelity gate (#5994) reaches a local model at completion. Pinned OFF
+// here so these tests exercise the path they are about without depending on the
+// developer's own reviewer settings — and so a machine that HAS a local reviewer
+// configured never has its suite dispatch a real review request.
+vi.mock('./codeReview.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getGoalFidelityConfig: vi.fn(async () => null),
+}));
+
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('./agentRunTracking.js', () => ({

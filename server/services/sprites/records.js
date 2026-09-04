@@ -14,7 +14,7 @@
  * #2895's scope); the tombstone trio on the record keeps peer-sync additive.
  */
 
-import { isTestRunner } from '../../lib/db.js';
+import { isTestRunner } from '../../lib/runtimeEnv.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { createRecordStoreBackendSelector } from '../../lib/pgFileFacade.js';
 import { listSpriteAssets } from './paths.js';

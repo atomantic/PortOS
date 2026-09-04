@@ -9,8 +9,7 @@ import { parseCommandArgs, validateCommand } from '../lib/commandSecurity.js';
 import { isDetachedRunning, spawnDetached } from '../lib/detachedSpawn.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
-import { executeUpdate } from './updateExecutor.js';
-import { setUpdateInProgress } from './updateChecker.js';
+import { startPortosSelfUpdate } from './portosSelfUpdate.js';
 import { syncManagedAppFork } from './managedAppRepositories.js';
 
 const CMD_TIMEOUT_MS = 5 * 60 * 1000;
@@ -61,6 +60,9 @@ async function startDashboardHandoff(app) {
   const handoff = await spawnDetached(
     process.execPath,
     [scriptPath],
+    // spawnDetached leaves this process's tree on every platform — pm2 kills on
+    // Windows with `taskkill /T`, which walks the same parent tree the POSIX
+    // double-fork escapes, so without it the handoff dies with portos-server.
     { cwd: app.repoPath, controlDir: DASHBOARD_OPEN_CONTROL_DIR, cleanup: true },
   ).catch((err) => {
     console.error(`⚠️ Dashboard auto-open could not start: ${err.message}`);
@@ -112,15 +114,21 @@ function isSamePath(a, b) {
  * whose lifecycle does not resemble PortOS.
  *
  * PortOS itself is a managed app, and its comprehensive update.sh/update.ps1
- * lifecycle is delegated to `updateExecutor` — which also owns the restart and
- * the dashboard handoff for that case. See the app-update step in `_doUpdate`.
+ * lifecycle is delegated to `portosSelfUpdate` — the same launcher the Update
+ * page uses — which owns the restart and the dashboard handoff for that case.
+ * That branch resolves as soon as the detached script is RUNNING and reports
+ * `selfUpdateStarted`, because this process does not outlive the script's
+ * `pm2 delete`.
  *
  * @param {object} app - The app object (must have repoPath, pm2ProcessNames, pm2Home)
  * @param {function} emit - Callback (step, status, message) for progress updates
- * @param {{syncFork?: boolean}} options
- * @returns {Promise<{success: boolean, steps: object[]}>}
+ * @param {object} [options]
+ * @param {boolean} [options.syncFork] - fast-forward the origin fork first
+ * @param {boolean} [options.acknowledgeFork] - PortOS preflight acknowledgement
+ * @param {boolean} [options.acknowledgePersistentMindImageBackup] - PortOS preflight acknowledgement
+ * @returns {Promise<{success: boolean, steps: object[], selfUpdateStarted?: boolean}>}
  */
-export async function updateApp(app, emit, { syncFork = false } = {}) {
+export async function updateApp(app, emit, options = {}) {
   const dir = app.repoPath;
   if (updatingApps.has(dir)) {
     return { success: false, steps: [{ step: 'lock', success: false, message: 'Update already in progress' }] };
@@ -128,13 +136,17 @@ export async function updateApp(app, emit, { syncFork = false } = {}) {
   updatingApps.add(dir);
 
   try {
-    return await _doUpdate(app, emit, { syncFork });
+    return await _doUpdate(app, emit, options);
   } finally {
     updatingApps.delete(dir);
   }
 }
 
-async function _doUpdate(app, emit, { syncFork }) {
+async function _doUpdate(app, emit, {
+  syncFork = false,
+  acknowledgeFork = false,
+  acknowledgePersistentMindImageBackup = false,
+}) {
   const dir = app.repoPath;
   const steps = [];
   const packageManager = app.type === 'bun' ? 'bun' : 'npm';
@@ -214,39 +226,30 @@ async function _doUpdate(app, emit, { syncFork }) {
     emit('app-update', 'running', 'Running the app update routine...');
     if (detachSelfUpdate) {
       // PortOS is itself a managed app, so an App Management update reaches
-      // update.sh through THIS path — and the script's own
-      // `pm2 delete ecosystem.config.cjs` step tree-kills portos-server.
-      // PM2 walks PPID, so an attached spawn dies with the server it just
-      // deleted, taking the in-flight `pm2 delete` with it and never reaching
-      // the closing `pm2 start`: the install is left headless, with only the
-      // entries declared after portos-cos still online (#5976).
+      // update.sh through THIS path. `portosSelfUpdate` owns everything about
+      // launching that script — including why nothing may await it — and this
+      // returns the moment it is running. Read that module before changing this.
       //
-      // updateExecutor already owns the double-fork launch that survives that,
-      // plus the STEP: progress parsing that maps straight onto this emit
-      // contract, the still-running-script guard and recordUpdateResult — so
-      // delegate rather than keeping a second detached-spawn implementation
-      // in sync here. The version is only a logging/fallback label; the true
-      // post-update version comes from the script's completion marker.
-      // Acquiring the update flag is what holds CoS agent spawns off a process
-      // update.sh is about to `pm2 delete` (#4124) — `subAgentSpawner`,
-      // `agentLifecycle` and `persistentMindSupervisor` all gate on it. It is
-      // also the atomic lock `POST /api/update/execute` takes, so the two entry
-      // points into update.sh cannot launch it concurrently.
-      const acquired = await setUpdateInProgress(true);
-      if (!acquired) throw new Error('A PortOS update is already in progress');
-      const version = typeof pkg?.version === 'string' ? pkg.version : 'unknown';
-      // Every outcome executeUpdate REPORTS clears the flag again through
-      // recordUpdateResult; a rejection from the launcher itself reports none.
-      const outcome = await executeUpdate(version, emit).catch(async (err) => {
-        await setUpdateInProgress(false);
-        throw err;
+      // `refresh`, not `reconcile`: the git-pull step above already advanced
+      // this checkout, so the out-of-sync gate would only be re-asking whether
+      // the pull we just did happened.
+      //
+      // No `io`: App Management renders the run from its own `app:update:step`
+      // frames (`onStep`), so mirroring the whole stream onto
+      // `portos:update:*` as well would double the fan-out for no new reader.
+      await startPortosSelfUpdate({
+        acknowledgeFork,
+        acknowledgePersistentMindImageBackup,
+        preflightAlreadyRun: true,
+        mode: 'refresh',
+        onStep: emit,
       });
-      if (!outcome.success) {
-        throw new Error(outcome.errorMessage || `PortOS update failed at step "${outcome.failedStep || 'unknown'}"`);
-      }
-    } else {
-      await runCommand(command.baseCommand, command.args, dir);
+      const launched = 'PortOS update running — this process restarts as part of it';
+      emit('app-update', 'running', launched);
+      steps.push({ step: 'app-update', success: true, message: launched });
+      return { success: true, steps, selfUpdateStarted: true };
     }
+    await runCommand(command.baseCommand, command.args, dir);
     emit('app-update', 'done', 'App update routine complete');
     steps.push({ step: 'app-update', success: true });
   }

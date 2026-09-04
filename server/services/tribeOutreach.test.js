@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import { groupUnansweredThreads, generateOutreachDraft, findUnansweredTribeThreads, buildTwoWayGate, outreachTemplateForSource } from './tribeOutreach.js';
+import { groupUnansweredThreads, generateOutreachDraft, findUnansweredTribeThreads, buildTwoWayGate, outreachTemplateForSource, invalidateUnansweredThreadsCache, DETECTION_CACHE_TTL_MS } from './tribeOutreach.js';
 
 // generateOutreachDraft / findUnansweredTribeThreads dynamically import these —
 // mock them so the draft-side logic (idempotent reuse, anchoring the reply to the
@@ -9,14 +9,14 @@ vi.mock('./tribe.js', () => ({ getPerson: vi.fn() }));
 vi.mock('./humanActivity.js', () => ({ listEvents: vi.fn() }));
 vi.mock('./messageEvaluator.js', () => ({ generateReplyBody: vi.fn() }));
 vi.mock('./messageDrafts.js', () => ({ createDraft: vi.fn(), listDrafts: vi.fn() }));
-vi.mock('./identityResolve.js', () => ({ loadResolverContext: vi.fn(), enrichActivityEvent: vi.fn() }));
+vi.mock('./identityResolve.js', () => ({ loadResolverContext: vi.fn(), enrichActivityEvent: vi.fn(), createHandleResolver: vi.fn() }));
 vi.mock('./messageAccounts.js', () => ({ listAccounts: vi.fn() }));
 
 import { getPerson } from './tribe.js';
 import { listEvents } from './humanActivity.js';
 import { generateReplyBody } from './messageEvaluator.js';
 import { createDraft, listDrafts } from './messageDrafts.js';
-import { loadResolverContext, enrichActivityEvent } from './identityResolve.js';
+import { loadResolverContext, enrichActivityEvent, createHandleResolver } from './identityResolve.js';
 import { listAccounts } from './messageAccounts.js';
 
 // `groupUnansweredThreads` is the pure detection core — no DB, no LLM. These
@@ -271,22 +271,28 @@ describe('outreachTemplateForSource (#2796)', () => {
   });
 });
 
+// Shared detector setup for the findUnansweredTribeThreads suites below.
+// findUnansweredTribeThreads() reads Date.now() directly (no injectable `now`), so
+// pin the clock to NOW — otherwise the fixtures' ages drift with wall-clock time
+// and the daysAgo(3) inbound falls outside the 14-day window once real time passes
+// NOW+14d (this test began failing at 2026-07-29T12:00Z). Only Date is faked; the
+// code under test uses no real timers. The detection cache (#6025) is module-level,
+// so it must be dropped between tests or the second suite reads the first's result.
+const primeDetector = () => {
+  vi.clearAllMocks();
+  invalidateUnansweredThreadsCache();
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(NOW);
+  // One tribe person, resolved from the inbound's handle.
+  loadResolverContext.mockResolvedValue({ people: [{ id: 'p1', ring: 'tribe', name: 'Alex' }] });
+  enrichActivityEvent.mockReturnValue({ personId: 'p1', displayName: 'Alex' });
+  createHandleResolver.mockImplementation(() => vi.fn());
+};
+
 describe('findUnansweredTribeThreads — per-account email querying (#2820)', () => {
   const RECENT = new Date(NOW - 3600000).toISOString();
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-    // findUnansweredTribeThreads() reads Date.now() directly (no injectable
-    // `now`), so pin the clock to NOW — otherwise the fixtures' ages drift with
-    // wall-clock time and the daysAgo(3) inbound falls outside the 14-day window
-    // once real time passes NOW+14d (this test began failing at 2026-07-29T12:00Z).
-    // Only Date is faked; the code under test uses no real timers.
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(NOW);
-    // One tribe person, resolved from the inbound's handle.
-    loadResolverContext.mockResolvedValue({ people: [{ id: 'p1', ring: 'tribe', name: 'Alex' }] });
-    enrichActivityEvent.mockReturnValue({ personId: 'p1', displayName: 'Alex' });
-  });
+  beforeEach(primeDetector);
 
   afterEach(() => {
     vi.useRealTimers();
@@ -334,6 +340,60 @@ describe('findUnansweredTribeThreads — per-account email querying (#2820)', ()
     const gmailCalls = listEvents.mock.calls.map(([a]) => a).filter((a) => a.source === 'gmail');
     expect(gmailCalls.every((a) => a.accountId === 'acct-opted')).toBe(true);
     expect(gmailCalls.length).toBeGreaterThan(0);
+  });
+});
+
+describe('findUnansweredTribeThreads — detection cache + handle memoization (#6025)', () => {
+  beforeEach(primeDetector);
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // Several unanswered 1:1 turns from the SAME counterpart handle, in distinct
+  // conversations (so each surfaces as its own thread).
+  const inboundFrom = (n) => ({
+    kind: 'message.received',
+    source: 'imessage',
+    happenedAt: daysAgo(3),
+    summary: `ping ${n}`,
+    metadata: { chatGuid: `chat-${n}`, handle: '+15550001' },
+  });
+  const mockTimeline = (events) => {
+    listAccounts.mockResolvedValue([]);
+    listEvents.mockImplementation(async ({ source, kind }) => (
+      source === 'imessage' && kind === 'message.received' ? events : []
+    ));
+  };
+
+  it('shares ONE memoizing resolver across the pass so a repeated handle is matched once', async () => {
+    mockTimeline([inboundFrom(1), inboundFrom(2), inboundFrom(3)]);
+
+    const threads = await findUnansweredTribeThreads();
+
+    expect(threads).toHaveLength(3);
+    expect(createHandleResolver).toHaveBeenCalledTimes(1);
+    const resolver = createHandleResolver.mock.results[0].value;
+    expect(enrichActivityEvent).toHaveBeenCalledTimes(3);
+    for (const call of enrichActivityEvent.mock.calls) expect(call[2]).toBe(resolver);
+  });
+
+  it('serves a repeat call from cache and re-scans only once the TTL lapses', async () => {
+    mockTimeline([inboundFrom(1), inboundFrom(2)]);
+
+    const first = await findUnansweredTribeThreads();
+    const queries = listEvents.mock.calls.length;
+    expect(queries).toBeGreaterThan(0);
+
+    // The dashboard poll and the Tribe page ask for different limits — both are
+    // served from the one cached (unsliced) detection result.
+    const cached = await findUnansweredTribeThreads({ limit: 1 });
+    expect(listEvents.mock.calls.length).toBe(queries);
+    expect(cached).toEqual(first.slice(0, 1));
+
+    vi.setSystemTime(NOW + DETECTION_CACHE_TTL_MS + 1);
+    await findUnansweredTribeThreads();
+    expect(listEvents.mock.calls.length).toBeGreaterThan(queries);
   });
 });
 

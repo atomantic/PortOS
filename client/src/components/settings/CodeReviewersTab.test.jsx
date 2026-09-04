@@ -109,4 +109,51 @@ describe('CodeReviewersTab', () => {
       expect(api.updateSettings).toHaveBeenCalled();
     });
   });
+
+  // The goal-fidelity gate (#5994) — the second review, which asks whether a
+  // finished run delivered the objective rather than whether the code is good.
+  it('round-trips the goal-fidelity gate, and defaults an absent block to on', async () => {
+    api.getCodeReviewDefaults.mockResolvedValue({
+      reviewers: ['ollama'],
+      usernames: [],
+      optionalReviewers: [],
+      reviewerMaxRounds: {},
+      stopMode: 'all',
+      reviewerApplies: false,
+    });
+    api.updateSettings.mockResolvedValue({});
+
+    render(<CodeReviewersTab />);
+    const checkbox = await screen.findByLabelText(/Check finished runs against the task objective/);
+    // An install that has never saved the block must read as ON — persisting a
+    // stored `false` here would silently switch off a gate nobody turned off.
+    expect(checkbox).toBeChecked();
+
+    fireEvent.change(screen.getByLabelText('Local model runtime'), { target: { value: 'lmstudio' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save defaults' }));
+
+    await waitFor(() => expect(api.updateSettings).toHaveBeenCalled());
+    const [payload] = api.updateSettings.mock.calls[0];
+    expect(payload.codeReview.goalFidelity).toEqual({ enabled: true, backend: 'lmstudio' });
+  });
+
+  it('sends an explicit off switch, and drops the unset pins rather than persisting empty ones', async () => {
+    api.getCodeReviewDefaults.mockResolvedValue({
+      reviewers: ['ollama'],
+      usernames: [],
+      optionalReviewers: [],
+      reviewerMaxRounds: {},
+      stopMode: 'all',
+      reviewerApplies: false,
+      goalFidelity: { enabled: true, backend: null, model: null, effort: null },
+    });
+    api.updateSettings.mockResolvedValue({});
+
+    render(<CodeReviewersTab />);
+    fireEvent.click(await screen.findByLabelText(/Check finished runs against the task objective/));
+    fireEvent.click(screen.getByRole('button', { name: 'Save defaults' }));
+
+    await waitFor(() => expect(api.updateSettings).toHaveBeenCalled());
+    expect(api.updateSettings.mock.calls[0][0].codeReview.goalFidelity).toEqual({ enabled: false });
+  });
 });

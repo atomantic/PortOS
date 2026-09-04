@@ -1,42 +1,14 @@
 /** JSON, JSONL, and cached-store file IO helpers. */
 import { existsSync } from 'fs';
-import { appendFile, open, readFile, readdir, stat } from 'fs/promises';
+import { open, readFile, readdir, stat } from 'fs/promises';
 import { basename, dirname } from 'path';
-import { atomicWrite, ensureDir, sleep } from './fileCore.js';
+import { appendFileGuarded, atomicWrite, ensureDir, sleep } from './fileCore.js';
 import { createFileWriteQueue } from './fileWriteQueue.js';
 
 const isWindows = () => process.platform === 'win32';
 const WIN_RETRY_ATTEMPTS = 5;
 const WIN_RETRY_DELAY_MS = 10;
 const WIN_READ_LOCK_CODES = ['EPERM', 'EACCES', 'EBUSY'];
-
-/**
- * Check if a string is potentially valid JSON.
- * Performs quick structural validation before parsing.
- *
- * @param {string} str - String to validate
- * @param {Object} options - Validation options
- * @param {boolean} [options.allowArray=true] - Allow array JSON (default: true)
- * @returns {boolean} True if the string appears to be valid JSON
- *
- * @example
- * isValidJSON('{"key": "value"}') // true
- * isValidJSON('[1, 2, 3]') // true
- * isValidJSON('') // false
- * isValidJSON('{"incomplete":') // false
- */
-export function isValidJSON(str, { allowArray = true } = {}) {
-  if (!str || !str.trim()) return false;
-  const trimmed = str.trim();
-
-  // Check for basic JSON structure (object or array)
-  const isObject = trimmed.startsWith('{') && trimmed.endsWith('}');
-  const isArray = trimmed.startsWith('[') && trimmed.endsWith(']');
-
-  if (!isObject && !(allowArray && isArray)) return false;
-
-  return true;
-}
 
 /**
  * Index of the first JSON array token in `str`, or -1 when it holds none.
@@ -97,17 +69,22 @@ export function safeJSONParse(str, defaultValue = null, { allowArray = true, log
     str = extractJSONArray(str);
   }
 
-  if (!isValidJSON(str, { allowArray })) {
+  if (!str || !str.trim()) {
     if (logError && str) {
       console.warn(`Invalid JSON${context ? ` in ${context}` : ''}: empty or malformed content`);
     }
     return defaultValue;
   }
 
-  // Attempt actual parse - the validation above catches structural issues
-  // but syntax errors like trailing commas still need handling
   try {
-    return JSON.parse(str);
+    const parsed = JSON.parse(str);
+    if (!allowArray && Array.isArray(parsed)) {
+      if (logError) {
+        console.warn(`Invalid JSON${context ? ` in ${context}` : ''}: array not allowed`);
+      }
+      return defaultValue;
+    }
+    return parsed;
   } catch (err) {
     if (logError) {
       console.warn(`Failed to parse JSON${context ? ` in ${context}` : ''}: ${err.message}`);
@@ -495,7 +472,7 @@ export async function appendJSONLine(filePath, value) {
     throw new TypeError('appendJSONLine value must be JSON-serializable');
   }
   await ensureDir(dirname(filePath));
-  await appendFile(filePath, serialized + '\n');
+  await appendFileGuarded(filePath, serialized + '\n');
 }
 
 /**

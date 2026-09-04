@@ -1,3 +1,12 @@
+// The goal-fidelity gate (#5994) reaches a local model at completion. Pinned OFF
+// here so these tests exercise the path they are about without depending on the
+// developer's own reviewer settings — and so a machine that HAS a local reviewer
+// configured never has its suite dispatch a real review request.
+vi.mock('./codeReview.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getGoalFidelityConfig: vi.fn(async () => null),
+}));
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
@@ -29,6 +38,7 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MANAGEMENT_SOURCE = readFileSync(join(__dirname, 'agentManagement.js'), 'utf8');
 const LIFECYCLE_SOURCE = readFileSync(join(__dirname, 'agentLifecycle.js'), 'utf8');
+const FINALIZATION_SOURCE = readFileSync(join(__dirname, 'agentFinalization.js'), 'utf8');
 const TASK = {
   id: 'sys-example',
   taskType: 'internal',
@@ -211,5 +221,33 @@ describe('recovery path wiring (#3182)', () => {
     const body = LIFECYCLE_SOURCE.slice(start, start + 2_000);
     expect(body.indexOf('dispatchRecoveredTaskOutputHook({')).toBeGreaterThan(-1);
     expect(body.indexOf('dispatchRecoveredTaskOutputHook({')).toBeLessThan(body.indexOf('await completeAgent(agentId'));
+  });
+});
+
+// #6124: the escalation the old `hookRejected && success` guard could not reach.
+// The pr-reviewer stage that produced no output exited NON-zero with no captured
+// error, so the run was already `success === false` and the permanent verdict
+// never applied — the task consumed its retries and the pipeline re-spawned.
+describe('permanent output-hook rejection (#6124)', () => {
+  const block = (() => {
+    const start = FINALIZATION_SOURCE.indexOf('const hookRejected = !terminatedByUser');
+    return FINALIZATION_SOURCE.slice(start, FINALIZATION_SOURCE.indexOf('const validationPassed = await evaluateSuccessCriteria', start));
+  })();
+
+  it('escalates a permanent rejection on a run that had ALREADY failed', () => {
+    expect(block).toContain("hookOutcome?.permanent === true");
+    expect(block).toContain('if (hookRejected && (success || escalatePermanent)) {');
+    expect(block).toContain('...(hookPermanent && { permanent: true })');
+  });
+
+  it('leaves a NAMED failure cause on its ordinary retry path', () => {
+    // A rate-limited or unauthenticated run also writes no output; blocking it
+    // permanently would strand work that a retry would have completed.
+    expect(block).toContain("errorAnalysis.category !== 'unknown'");
+    expect(block).toContain('&& !causeNamed');
+  });
+
+  it('never re-resolves a decision that already blocked (no duplicate investigation task)', () => {
+    expect(block).toContain("taskUpdate?.status !== 'blocked'");
   });
 });

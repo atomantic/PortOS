@@ -22,11 +22,26 @@
  *      032 / 058 / 153 / 206 each hand-copied. Those four stay frozen; the
  *      factory is for the next RETIREMENT bump. It expresses id→id retirement
  *      only: `idMap` maps 1:1 over `oldModels`, and `swapTierPointers` moves
- *      EVERY pointer off a retired id. An ADDITIVE change — appending a model
- *      while keeping the old one listed, or re-pointing some tiers but not all
- *      (292, 294) — does not fit, and hand-rolls on `readProvidersDoc` instead.
+ *      EVERY pointer off a retired id. This is a **pristine-list rewrite** —
+ *      only an EXACT match of the prior seeded `models` array qualifies, so a
+ *      curated list is left alone rather than reset.
+ *   7b. Additive provider-model inserts — `makeAdditiveProviderInsertMigration`
+ *       (337 is the first and, so far, only member) is the opposite policy for
+ *       the SAME `data/providers.json` targets: it runs against a list the user
+ *       may have curated, so it never rewrites or drops anything — it only
+ *       splices `current` in immediately after `retired` when `retired` is
+ *       listed and `current` is not, regardless of what else the list holds.
+ *       Tier pointers are left alone (a curated list is exactly where
+ *       re-pointing would override a deliberate choice). Reach for family 7
+ *       when retiring an id from the shipped seed; reach for 7b when a later
+ *       tier needs to be OFFERED without disturbing whatever the user already
+ *       has listed.
+ *   8. CoS config reads — `readCosConfig` resolves the durable CoS settings a
+ *      migration needs to honour an install-specific path, across both the
+ *      pre- and post-339 layouts (`data/cos/state.json`'s `config` slice and
+ *      `data/cos/config.json`).
  *
- * Families 5 and 7 both target `data/providers.json` and share its
+ * Families 5, 7, and 7b all target `data/providers.json` and share its
  * read → parse → shape-guard preamble via `readProvidersDoc`; each still owns
  * its own log copy and result shape.
  *
@@ -668,6 +683,43 @@ export async function writeMediaRegistry(path, config) {
   await atomicWrite(path, `${JSON.stringify(config, null, 2)}\n`);
 }
 
+// ---- CoS config readers ----
+
+/**
+ * Read the durable CoS user configuration a migration needs to resolve an
+ * install-specific path (`userTasksFile` / `cosTasksFile` are the ones that
+ * matter today). Returns `{}` when there is nothing usable — every caller
+ * already falls back to the shipped defaults.
+ *
+ * Config moved out of `data/cos/state.json` into `data/cos/config.json` in
+ * migration 339. Both are consulted, config file first, so this resolves
+ * correctly whether the reading migration runs before or after that split (and
+ * on an install restored from a pre-split backup).
+ *
+ * Deliberately tolerant: a truncated/corrupt file left by a prior crash must
+ * not abort the reading migration and every one after it — the state loader
+ * owns quarantining and repairing those files.
+ */
+export async function readCosConfig({ rootDir, label = 'migration' }) {
+  for (const relPath of ['data/cos/config.json', 'data/cos/state.json']) {
+    const raw = await readFile(join(rootDir, relPath), 'utf-8').catch(() => null);
+    if (raw === null) continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      // Not necessarily the final answer — the next source in the list may
+              // still carry a usable config, so this says only what was skipped.
+              console.warn(`⚠️ ${label}: invalid JSON in ${relPath}; ignoring it`);
+      continue;
+    }
+    // config.json IS the config; state.json nests it under `config`.
+    const config = relPath.endsWith('config.json') ? parsed : parsed?.config;
+    if (config && typeof config === 'object' && !Array.isArray(config)) return config;
+  }
+  return {};
+}
+
 // ---- brain seed-record migration family ----
 //
 // `scripts/setup-data.js` copies `data.reference/` wholesale, so a FRESH install
@@ -1075,6 +1127,84 @@ export function makeSeededProviderTierMigration({ targets, tierLabel }) {
     const summary = touched.map((id) => `${id} (default: ${providers[id].defaultModel})`).join(', ');
     console.log(`📝 ${PROVIDERS_REL_PATH}: updated ${summary} → ${tierLabel}`);
     return { ok: true, reason: 'bumped', touched, alreadyCurrent, customized };
+  }
+
+  return { up };
+}
+
+// ---- additive provider-model insert migration family (7b) ----
+//
+// The opposite policy from family 7, for the same `data/providers.json`
+// targets: family 7 rewrites a PRISTINE seeded list wholesale; this one splices
+// a new id into a list the user may have curated, touching nothing else.
+// 337 is the first member and the shell every future "offer a model without
+// disturbing what's already listed" migration should reach for instead of
+// hand-copying it a fourth time.
+
+/**
+ * Build an additive provider-model insert migration's `up()`. Returns `{ up }`,
+ * so a migration collapses to
+ * `export default makeAdditiveProviderInsertMigration({ targets, label })`
+ * over a small data table.
+ *
+ *   - `targets` — `[{ id, retired, current }, …]`, one entry per provider
+ *     record this migration can touch. `retired` and `current` are per-target
+ *     (not shared across the table) so sibling records that spell the same
+ *     tier differently — e.g. a Bedrock record's region-qualified id versus the
+ *     bare CLI id — each get their own exact strings; inserting one target's
+ *     `current` onto another target's record would offer an id that record's
+ *     environment cannot resolve.
+ *   - `label` — the human name of the tier being offered, used in the log
+ *     copy (`"offered ${label} on …"`, `"${label} already current"`).
+ *
+ * For each target: if `retired` is listed in the record's `models` and
+ * `current` is not, `current` is spliced in immediately after `retired` —
+ * `retired` itself, every other entry, and every tier pointer are left
+ * exactly as found. A record already listing `current`, or never listing
+ * `retired`, is untouched — which makes a second run, and a fresh install
+ * already seeded with `current`, both no-ops.
+ *
+ * Resolves to `{ ok, reason: 'no-file' | 'unreadable' | 'bad-shape' |
+ * 'already-current' | 'updated', updated }`.
+ */
+export function makeAdditiveProviderInsertMigration({ targets, label }) {
+  async function up({ rootDir }) {
+    const doc = await readProvidersDoc({ rootDir });
+    if (!doc.ok) {
+      if (doc.reason === 'no-file') console.log(`📄 ${PROVIDERS_REL_PATH} not present — skipping (fresh install seeds ${label} from data.reference)`);
+      else if (doc.reason === 'unreadable') console.log(`⚠️ ${PROVIDERS_REL_PATH}: invalid JSON, skipping (${doc.err.message})`);
+      else console.log(`⚠️ ${PROVIDERS_REL_PATH}: unexpected shape, skipping`);
+      return { ok: false, reason: doc.reason, updated: 0 };
+    }
+
+    const { config, providers, path: providersPath } = doc;
+    const touched = [];
+
+    for (const { id, retired, current } of targets) {
+      const provider = providers[id];
+      if (!provider || !Array.isArray(provider.models)) continue;
+      const at = provider.models.indexOf(retired);
+      // Nothing to repair unless the retired id is listed AND the current one
+      // isn't: an already-current record (seeded, or bumped by a prior run) is
+      // a no-op, and a record that never listed the retired tier is not this
+      // migration's concern.
+      if (at === -1 || provider.models.includes(current)) continue;
+      provider.models = [
+        ...provider.models.slice(0, at + 1),
+        current,
+        ...provider.models.slice(at + 1),
+      ];
+      touched.push(id);
+    }
+
+    if (touched.length === 0) {
+      console.log(`✅ ${PROVIDERS_REL_PATH}: ${label} already current — no change`);
+      return { ok: true, reason: 'already-current', updated: 0 };
+    }
+
+    await writeJsonAtomic(providersPath, config);
+    console.log(`📝 ${PROVIDERS_REL_PATH}: offered ${label} on ${touched.join(', ')}`);
+    return { ok: true, reason: 'updated', updated: touched.length };
   }
 
   return { up };

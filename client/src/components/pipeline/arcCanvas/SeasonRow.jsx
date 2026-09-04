@@ -196,7 +196,7 @@ export default function SeasonRow({ series, season, seasons, issues, onSeriesUpd
             <button
               type="button"
               onClick={() => setCollapsed(!collapsed)}
-              className="text-gray-500 hover:text-white p-0.5"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center text-gray-500 hover:text-white p-0.5"
               aria-label={collapsed ? 'Expand volume / season' : 'Collapse volume / season'}
             >
               {collapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
@@ -239,7 +239,7 @@ export default function SeasonRow({ series, season, seasons, issues, onSeriesUpd
                     type="button"
                     onClick={() => setDeleteMode('confirm')}
                     disabled={seasonLocked}
-                    className="p-1.5 text-gray-500 hover:text-port-error disabled:opacity-40 disabled:hover:text-gray-500"
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-error disabled:opacity-40 disabled:hover:text-gray-500"
                     aria-label={`Delete volume / season ${season.title}`}
                     title={seasonLocked
                       ? 'Volume is locked — unlock to delete'

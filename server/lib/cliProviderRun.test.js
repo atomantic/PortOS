@@ -74,6 +74,26 @@ describe('pickCliProvider', () => {
     const result = pickCliProvider({ ollama: providers.ollama }, {});
     expect(result.error).toMatch(/No enabled CLI provider/);
   });
+
+  // A locally-backed provider's `models` array is a cached snapshot; the daemon
+  // is the authority. Judging the pin against the record drops a model the user
+  // just pulled and silently downgrades the run to the provider's default.
+  it('honors a model pin on a local-runtime provider whose cached list omits it', () => {
+    const local = cli('grok-ollama', {
+      command: 'grok', ollamaBacked: true,
+      models: ['qwen3-coder:30b'], defaultModel: 'qwen3-coder:30b',
+    });
+    const { model } = pickCliProvider([local], { providerId: 'grok-ollama', model: 'gemma3:27b' });
+    expect(model).toBe('gemma3:27b');
+  });
+
+  // A provider that enumerates nothing has no catalog to validate against, so
+  // the pin stands rather than collapsing to the provider default.
+  it('honors a model pin on a provider that enumerates no models', () => {
+    const bare = cli('bare-cli', { defaultModel: 'configured-default' });
+    const { model } = pickCliProvider([bare], { providerId: 'bare-cli', model: 'anything-goes' });
+    expect(model).toBe('anything-goes');
+  });
 });
 
 describe('runCliProviderPrompt', () => {

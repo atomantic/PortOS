@@ -54,6 +54,7 @@ describe('listAppIssues — GitHub', () => {
       milestone: { title: 'v2' },
       createdAt: '2026-01-01T00:00:00Z',
       updatedAt: '2026-01-02T00:00:00Z',
+      comments: [{ body: 'me too' }, { body: 'on it' }],
     }]));
 
     const result = await listAppIssues(APP);
@@ -72,6 +73,7 @@ describe('listAppIssues — GitHub', () => {
       author: 'carol',
       milestone: 'v2',
       updatedAt: '2026-01-02T00:00:00Z',
+      commentCount: 2,
     }]);
   });
 
@@ -90,6 +92,20 @@ describe('listAppIssues — GitHub', () => {
     expect(argv).toContain('--repo');
     expect(argv[argv.indexOf('--repo') + 1]).toBe('github.com/acme/widget');
     expect(argv[argv.indexOf('--state') + 1]).toBe('open');
+  });
+
+  it('asks gh for comments and ships only the count — gh has no scalar count field', async () => {
+    execGh.mockResolvedValue(JSON.stringify([
+      { number: 1, title: 'discussed', labels: [], assignees: [], comments: [{ body: 'a novel-length reply' }] },
+      { number: 2, title: 'quiet', labels: [], assignees: [], comments: [] },
+      { number: 3, title: 'field absent', labels: [], assignees: [] },
+    ]));
+    const result = await listAppIssues(APP);
+    const argv = execGh.mock.calls[0][0];
+    expect(argv[argv.indexOf('--json') + 1].split(',')).toContain('comments');
+    expect(result.issues.map(i => i.commentCount)).toEqual([1, 0, 0]);
+    // The bodies stay on the server — the tab renders a number, not a thread.
+    expect(result.issues[0].comments).toBeUndefined();
   });
 
   it('an ANSWERED empty list is a definitive "no open issues", not a transient', async () => {
@@ -143,6 +159,7 @@ describe('listAppIssues — GitLab', () => {
       milestone: { title: 'Sprint 3' },
       created_at: '2026-02-01T00:00:00Z',
       updated_at: '2026-02-02T00:00:00Z',
+      user_notes_count: 4,
     }] });
 
     const result = await listAppIssues(APP);
@@ -155,6 +172,7 @@ describe('listAppIssues — GitLab', () => {
       assignees: ['dana'],
       author: 'erin',
       milestone: 'Sprint 3',
+      commentCount: 4,
     });
     expect(result.issues[0].labels).toEqual([
       { name: 'feature', color: null, description: '' },
@@ -164,6 +182,13 @@ describe('listAppIssues — GitLab', () => {
     expect(execGlabJson.mock.calls[0][1]).toBe('/repo');
     // execGlabJson owns the output flag (lib/glabArgs.js); callers pass none.
     expect(execGlabJson.mock.calls[0][0]).toEqual(['issue', 'list', '--per-page', '100']);
+  });
+
+  it('an older glab that omits user_notes_count reports 0 comments, never NaN', async () => {
+    useGitlabOrigin();
+    execGlabJson.mockResolvedValue({ reason: 'ok', rows: [{ iid: 8, title: 'no count field', labels: [], assignees: [] }] });
+    const result = await listAppIssues(APP);
+    expect(result.issues[0].commentCount).toBe(0);
   });
 
   it('a failed glab call (CLI missing / unauthenticated / timed out) is transient', async () => {

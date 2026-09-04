@@ -23,7 +23,7 @@
  *    checked first, before any emptiness check.
  */
 
-import { CHECK_SEVERITIES } from './checkRegistry.js';
+import { CHECK_SEVERITIES } from './checkInfra/taxonomy.js';
 
 // Transparent severity penalty weights (mirrors editorialScore.SEVERITY_WEIGHTS,
 // which now re-exports this). A draft starts at 100 and loses points per OPEN

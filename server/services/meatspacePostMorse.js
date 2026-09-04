@@ -52,11 +52,15 @@ function clampLevel(level) {
 }
 
 async function loadMorseProgress() {
-  const data = await readJSONFile(
+  const raw = await readJSONFile(
     MORSE_FILE,
     { kochLevel: null, settings: null, rounds: [] },
     { allowArray: false },
   );
+  // `allowArray: false` only rejects a root array — a bare JSON scalar
+  // (corrupted file) still parses, and the field assignments below would
+  // throw on one, so fall back to a fresh object rather than that scalar.
+  const data = raw && typeof raw === 'object' ? raw : { kochLevel: null, settings: null, rounds: [] };
   if (!Array.isArray(data.rounds)) data.rounds = [];
   // Preserve the "never set" sentinel: anything that isn't a real number stays
   // null so adopt-once keeps working across older/partial files.

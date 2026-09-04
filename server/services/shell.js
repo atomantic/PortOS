@@ -1,5 +1,6 @@
 import * as pty from 'node-pty';
 import os from 'os';
+import { basename } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 import { scheduleSubmitEnters, SUBMIT_KEY } from '../lib/tuiHandshake.js';
@@ -7,6 +8,8 @@ import { buildCdCommand } from '../lib/shellCd.js';
 import { resolveInteractiveShell } from '../lib/interactiveShellResolver.js';
 import { buildRunThenExitCommand } from '../lib/shellExit.js';
 import { buildReadinessProbe } from '../lib/shellReadinessProbe.js';
+import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
+import { findCommandOnPath } from '../lib/processEnv.js';
 
 // Store active shell sessions (persist across socket reconnects)
 const shellSessions = new Map();
@@ -127,53 +130,64 @@ function getDefaultShell() {
 }
 
 /**
- * Create a new shell session
+ * True — and warns — when the service already holds its ceiling of PTYs it
+ * spawned itself. Only ever called in the refusal position, so the log lives
+ * here rather than being spelled out at each spawn entry point.
+ *
+ * Only sessions this service spawned count. External views (one-shot TUI runs
+ * registered via registerExternalSession) are governed by their own runner and
+ * must not consume a slot.
  */
-export function createShellSession(socket, options = {}) {
-  // Only user-spawned interactive shells count toward the cap. External views
-  // (one-shot TUI runs registered via registerExternalSession) are governed by
-  // their own runner and must not consume a shell slot.
-  const interactiveCount = [...shellSessions.values()].filter(s => !s.external).length;
-  if (interactiveCount >= MAX_TOTAL_SESSIONS) {
-    console.warn(`🐚 Max total sessions reached (${MAX_TOTAL_SESSIONS})`);
-    socket?.emit?.('shell:error', { error: `Max ${MAX_TOTAL_SESSIONS} shell sessions. Kill an existing session first.` });
-    return null;
+function refusedForSessionCap() {
+  let owned = 0;
+  for (const session of shellSessions.values()) {
+    if (!session.external) owned += 1;
   }
+  if (owned < MAX_TOTAL_SESSIONS) return false;
+  console.warn(`🐚 Max total sessions reached (${MAX_TOTAL_SESSIONS})`);
+  return true;
+}
 
-  const sessionId = uuidv4();
-  const shell = options.shell || getDefaultShell();
-  const cwd = options.cwd || os.homedir();
-  const cols = options.cols || 80;
-  const rows = options.rows || 24;
+// Every PTY this service opens is a 256-color terminal.
+const TERM_ENV = { TERM: 'xterm-256color', COLORTERM: 'truecolor' };
 
-  console.log(`🐚 Creating shell session ${sessionId.slice(0, 8)} (${shell})`);
+/**
+ * The non-env half of the `pty.spawn` options both entry points use, so the
+ * terminal name and the geometry defaults are stated once.
+ *
+ * `env` is deliberately NOT assembled here. Each caller wraps its own env in
+ * `withSpawnCwdEnv` at its own `pty.spawn` call, which keeps the #3193 PWD pin
+ * visible at every spawn site — and keeps `lib/spawnCwd.test.js` counting pins
+ * one-for-one against spawns, instead of one shared pin covering both.
+ */
+function ptyTerminalOptions({ cwd, cols, rows }) {
+  return {
+    name: 'xterm-256color',
+    cols: cols || 80,
+    rows: rows || 24,
+    cwd
+  };
+}
 
-  let ptyProcess;
-  try {
-    ptyProcess = pty.spawn(shell, [], {
-      name: 'xterm-256color',
-      cols,
-      rows,
-      cwd,
-      // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). An interactive
-      // login shell rewrites PWD itself at startup, but a non-login shell may
-      // not, and an agent-TUI session injects its CLI command into this shell.
-      env: withSpawnCwdEnv({
-        ...buildSafeEnv(), // filters process.env to prevent leaking inherited secrets (e.g. shell-inherited API keys)
-        // options.env is the caller's explicit opt-in env (e.g. TUI provider API keys for codex/claude).
-        // Callers are responsible for not passing vars they don't want visible inside attachable shells.
-        // Single-user/single-instance deployment (Tailscale-only) makes this acceptable.
-        ...(options.env || {}),
-        TERM: 'xterm-256color',
-        COLORTERM: 'truecolor'
-      }, cwd)
-    });
-  } catch (err) {
-    console.error(`❌ Failed to spawn PTY: ${err.message}`);
-    socket?.emit?.('shell:error', { error: `Failed to spawn shell: ${err.message}` });
-    return null;
-  }
-
+/**
+ * Put a PTY in the session registry and wire its output (and, for a PTY this
+ * service owns, its exit) — so every attachable session, however it was
+ * started, has the same record shape and the same 50KB re-attach ring buffer.
+ *
+ * Three callers, differing only in the process behind the PTY:
+ *   - `createShellSession` — an interactive login shell
+ *   - `spawnCommandSession` — the launched command itself
+ *   - `registerExternalSession` — a PTY spawned elsewhere (`external: true`)
+ *
+ * `shell` is the hosting shell binary, or `null` when the PTY *is* the launched
+ * command. Everything that injects a command line into a session reads it (see
+ * `changeSessionDirectory`), so a null value is the load-bearing signal that
+ * there is no shell to type at.
+ *
+ * `external` sessions skip the exit wiring: their lifecycle belongs to whoever
+ * spawned them, which ends the session through `unregisterExternalSession`.
+ */
+function adoptPtySession(sessionId, ptyProcess, options = {}) {
   // Buffer recent output for re-attach (last 50KB)
   const outputBuffer = [];
   let bufferSize = 0;
@@ -184,11 +198,12 @@ export function createShellSession(socket, options = {}) {
     _id: sessionId.slice(0, 8),
     hookQueue: Promise.resolve(),
     pty: ptyProcess,
-    socket,
-    cwd,
+    socket: options.socket || null,
+    cwd: options.cwd || null,
     // The spawned shell binary — kept so cd-style commands injected later can be
     // written in the dialect this session actually speaks (see changeSessionDirectory).
-    shell,
+    // Null for a direct command session: there is no shell reading those lines.
+    shell: options.shell || null,
     createdAt: Date.now(),
     label: options.label || null,
     kind: options.kind || 'shell',
@@ -196,6 +211,9 @@ export function createShellSession(socket, options = {}) {
     command: options.command || null,
     onData: options.onData || null,
     onExit: options.onExit || null,
+    // Keeps the session out of the interactive cap count and out of Shell's
+    // auto-attach — you opt into watching a run by clicking its tab.
+    ...(options.external ? { external: true } : {}),
     outputBuffer,
     bufferSize: () => bufferSize
   });
@@ -212,6 +230,11 @@ export function createShellSession(socket, options = {}) {
     session?.socket?.emit('shell:output', { sessionId, data });
     if (session) runHook('onData', session, session.onData, data);
   });
+
+  // An external PTY's lifecycle belongs to whoever spawned it — it ends the
+  // session through unregisterExternalSession — so registering an exit listener
+  // here would delete the record out from under that owner.
+  if (options.external) return;
 
   // Handle pty exit
   //
@@ -230,6 +253,50 @@ export function createShellSession(socket, options = {}) {
     if (session) runHook('onExit', session, session.onExit, { exitCode, signal: signal ?? null });
     broadcastSessionList();
   });
+}
+
+/**
+ * Create a new shell session
+ */
+export function createShellSession(socket, options = {}) {
+  if (refusedForSessionCap()) {
+    socket?.emit?.('shell:error', { error: `Max ${MAX_TOTAL_SESSIONS} shell sessions. Kill an existing session first.` });
+    return null;
+  }
+
+  const sessionId = uuidv4();
+  const shell = options.shell || getDefaultShell();
+  const cwd = options.cwd || os.homedir();
+
+  console.log(`🐚 Creating shell session ${sessionId.slice(0, 8)} (${shell})`);
+
+  let ptyProcess;
+  try {
+    ptyProcess = pty.spawn(shell, [], {
+      ...ptyTerminalOptions({ cwd, cols: options.cols, rows: options.rows }),
+      // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). An interactive
+      // login shell rewrites PWD itself at startup, but a non-login shell may
+      // not, and an agent-TUI session injects its CLI command into this shell.
+      env: withSpawnCwdEnv({
+        // `options.env` is a DELTA here — this base is always unioned underneath
+        // it. A caller that has already narrowed its environment to a strict
+        // allowlist must use `spawnCommandSession` instead, which unions nothing
+        // (and gets no rc file either — see its docstring).
+        ...buildSafeEnv(), // filters process.env to prevent leaking inherited secrets (e.g. shell-inherited API keys)
+        // options.env is the caller's explicit opt-in env (e.g. TUI provider API keys for codex/claude).
+        // Callers are responsible for not passing vars they don't want visible inside attachable shells.
+        // Single-user/single-instance deployment (Tailscale-only) makes this acceptable.
+        ...(options.env || {}),
+        ...TERM_ENV
+      }, cwd)
+    });
+  } catch (err) {
+    console.error(`❌ Failed to spawn PTY: ${err.message}`);
+    socket?.emit?.('shell:error', { error: `Failed to spawn shell: ${err.message}` });
+    return null;
+  }
+
+  adoptPtySession(sessionId, ptyProcess, { ...options, socket, cwd, shell });
 
   // Starting a fresh shell means the user moved on from whatever they were
   // viewing — release any TUI-run views they held so those runs resume normal
@@ -341,6 +408,88 @@ export function createShellSession(socket, options = {}) {
 }
 
 /**
+ * Spawn `command` AS the PTY — no hosting shell — and register it as an
+ * ordinary attachable session.
+ *
+ * Why this exists next to `createShellSession`: that function's PTY is an
+ * interactive login shell into which a command is later typed, so the
+ * operator's own rc file (`.zshrc`, `.bash_profile`, …) runs BEFORE the command
+ * and can re-export anything it likes. For a public-content review stage whose
+ * whole posture is a strict environment allowlist, that rc file is a hole no
+ * allowlist can close (#6159). Here the launched binary is the PTY's own
+ * process, so `env` is exactly what the child gets.
+ *
+ * `env` is the COMPLETE environment, not a delta: nothing is unioned underneath
+ * it (`buildSafeEnv` is deliberately not consulted), because the callers that
+ * need this have already narrowed the environment themselves.
+ *
+ * Ordinary agent TUI sessions keep the login shell — the operator's rc file is
+ * a feature there, not a leak — so this is not a drop-in replacement for
+ * `createShellSession`.
+ *
+ * Unlike `createShellSession`, every failure here THROWS rather than returning
+ * null. The caller is a spawner that records a cause on the agent record, and a
+ * bare null would make "the binary isn't installed" and "the session cap is
+ * full" indistinguishable — both then get filed as a generic host problem.
+ *
+ * @param {string} command - the binary to run (bare name or path)
+ * @param {string[]} [args]
+ * @param {object} [options] - { cwd, env, cols, rows, label, kind, agentId, command, onData, onExit }
+ * @returns {string} sessionId
+ * @throws when the session cap is reached, the command is not on the child's
+ *   PATH, or the PTY will not open
+ */
+export function spawnCommandSession(command, args = [], options = {}) {
+  if (refusedForSessionCap()) {
+    throw new Error(`Max ${MAX_TOTAL_SESSIONS} shell sessions are already open; kill one before starting another`);
+  }
+
+  const sessionId = uuidv4();
+  const cwd = options.cwd || os.homedir();
+  // No buildSafeEnv union — see the docstring. The caller owns this env whole.
+  // PWD is still pinned to the spawn cwd (#3193): a directly-launched CLI reads
+  // it (OpenCode resolves its project root from it) and no shell will fix it up.
+  const childEnv = withSpawnCwdEnv({ ...(options.env || {}), ...TERM_ENV }, cwd);
+
+  // Resolve the executable BEFORE spawning. A PTY has no shell to print
+  // "command not found": on POSIX node-pty forks and `execvp` fails in the
+  // child, which exits 1 with an EMPTY screen, so an output-driven probe can
+  // never see it and the run finalizes as a bare exit-1 with no cause. Resolve
+  // against the CHILD's PATH — a caller's env may replace PATH with only the
+  // provider's own bin dir. Same pre-flight `tuiPromptRunner` and the CoS
+  // runner's `/spawn-tui` do; `basename` keeps the resolved path, which can
+  // embed the local account name, out of the message.
+  const executable = findCommandOnPath(command, { env: childEnv, cwd });
+  if (!executable) {
+    throw new Error(`Command executable unavailable: ${basename(command)} is not on the PATH for this session. Install it or update the configured command.`);
+  }
+  // Launch the path the pre-flight actually RESOLVED, not the bare name — the
+  // CoS runner's /spawn-tui does the same, and for the same reason. The two
+  // resolvers do not agree on Windows: `findCommandOnPath` unquotes a PATH
+  // entry, maps an empty one to cwd, resolves relative entries, and searches
+  // all of PATHEXT, while `prepareCliSpawn`'s own lookup does none of that. Re-
+  // resolving the bare name could therefore fall through to a bare
+  // extensionless `claude`, which ConPTY cannot launch — a blank PTY and a bare
+  // exit-1, the exact failure this pre-flight exists to prevent.
+  //
+  // prepareCliSpawn still runs: a resolved `.cmd`/`.bat` shim must launch
+  // through cmd.exe (never the user's shell — that wrapper runs no profile),
+  // and it owns the shared argument-escaping contract. On POSIX it is a no-op
+  // and the binary is spawned directly.
+  const { command: ptyCommand, args: ptyArgs } = prepareCliSpawn(executable, args, childEnv);
+
+  console.log(`🐚 Creating command session ${sessionId.slice(0, 8)} (${basename(command)})`);
+  const ptyProcess = pty.spawn(ptyCommand, ptyArgs, {
+    ...ptyTerminalOptions({ cwd, cols: options.cols, rows: options.rows }),
+    env: childEnv
+  });
+
+  adoptPtySession(sessionId, ptyProcess, { ...options, cwd, shell: null });
+  broadcastSessionList();
+  return sessionId;
+}
+
+/**
  * A socket can stay bound to multiple sessions (the registry allows it), but a
  * user views one at a time. `isExternalSessionAttached` keys off socket binding,
  * so without this a TUI run stays "watched" (and its completion stays paused)
@@ -390,39 +539,19 @@ function releaseExternalViews(socket, exceptId = null) {
 export function registerExternalSession(sessionId, ptyProcess, options = {}) {
   if (shellSessions.has(sessionId)) return sessionId;
 
-  // Mirror createShellSession's 50KB re-attach ring buffer so a viewer who
-  // opens the run mid-stream still sees the recent screen state.
-  const outputBuffer = [];
-  let bufferSize = 0;
-  const MAX_BUFFER = 50 * 1024;
-
-  shellSessions.set(sessionId, {
-    _id: sessionId.slice(0, 8),
-    hookQueue: Promise.resolve(),
-    pty: ptyProcess,
-    socket: null,
-    cwd: options.cwd || null,
-    createdAt: Date.now(),
-    label: options.label || null,
+  // Same record and same 50KB re-attach ring buffer every other session gets, so
+  // a viewer who opens the run mid-stream sees the recent screen state — the
+  // only differences are `external` and that the exit wiring stays with the
+  // owner (see adoptPtySession).
+  adoptPtySession(sessionId, ptyProcess, {
+    ...options,
     kind: options.kind || 'tui-run',
-    agentId: options.agentId || null,
-    command: options.command || null,
-    onData: null,
-    onExit: null,
     external: true,
-    outputBuffer,
-    bufferSize: () => bufferSize
-  });
-
-  ptyProcess.onData((data) => {
-    outputBuffer.push(data);
-    bufferSize += data.length;
-    while (bufferSize > MAX_BUFFER && outputBuffer.length > 1) {
-      bufferSize -= outputBuffer.shift().length;
-    }
-    // Re-read the session each time — the attached socket changes as viewers
-    // come and go; a null socket (no viewer) just drops the emit.
-    shellSessions.get(sessionId)?.socket?.emit('shell:output', { sessionId, data });
+    // The PTY is not ours to type a command line into, and its hooks belong to
+    // the process that spawned it.
+    shell: null,
+    onData: null,
+    onExit: null
   });
 
   console.log(`🐚 Registered external TUI session ${sessionId.slice(0, 8)} (${options.label || options.command || 'tui'})`);
@@ -610,17 +739,18 @@ export function submitToSession(sessionId, line) {
  *
  * @param {string} sessionId
  * @param {string} dirPath
- * @returns {boolean} false when the session is unknown or is an external TUI run
+ * @returns {boolean} false when the session is unknown, or has no hosting shell
  */
 export function changeSessionDirectory(sessionId, dirPath) {
   const session = shellSessions.get(sessionId);
   if (!session) return false;
-  // An external (TUI-run) session has no shell reading that line: the bytes land in
+  // A session with no hosting shell — an external (TUI-run) view, or a direct
+  // `spawnCommandSession` PTY — has nothing reading that line: the bytes land in
   // the agent as typed text and the trailing Enter posts them as a message. Refuse
   // rather than type into someone else's run — socket.js turns this into an error the
   // Shell page shows. Its `cwd` also stays pinned to the repo the RUN was spawned in,
   // which is what workspaceContext groups runs by.
-  if (session.external) return false;
+  if (session.external || !session.shell) return false;
   if (!submitToSession(sessionId, buildCdCommand(dirPath, session.shell))) return false;
   // Track the cd optimistically so the Shell tab label and the Workspace Contexts
   // widget follow the session instead of staying pinned to its spawn directory.

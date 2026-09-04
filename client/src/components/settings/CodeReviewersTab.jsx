@@ -4,6 +4,7 @@ import toast from '../ui/Toast';
 import Banner from '../ui/Banner';
 import * as api from '../../services/api';
 import ReviewerPicker from '../cos/ReviewerPicker';
+import GoalFidelityControls from './GoalFidelityControls';
 import useReviewerModelOptions from '../../hooks/useReviewerModelOptions';
 import { reviewerModelsFromDefaults, reviewerModelsToDefaults, reviewerEffortsFromDefaults, reviewerEffortsToDefaults } from '../../lib/reviewerModels';
 import {
@@ -39,6 +40,7 @@ export default function CodeReviewersTab() {
   const [reviewerEfforts, setReviewerEfforts] = useState({});
   const [stopMode, setStopMode] = useState(DEFAULT_REVIEW_STOP_MODE);
   const [reviewerApplies, setReviewerApplies] = useState(false);
+  const [goalFidelity, setGoalFidelity] = useState({ enabled: true, backend: null, model: null, effort: null });
   const [installed, setInstalled] = useState({});
   const modelOptions = useReviewerModelOptions();
 
@@ -60,6 +62,14 @@ export default function CodeReviewersTab() {
           setReviewerEfforts(reviewerEffortsFromDefaults(defaults));
           setStopMode(defaults.stopMode || DEFAULT_REVIEW_STOP_MODE);
           setReviewerApplies(defaults.reviewerApplies === true);
+          // `enabled` defaults ON, so an absent block must read as on — not as a
+          // stored `false` the next save would then persist.
+          setGoalFidelity({
+            enabled: defaults.goalFidelity?.enabled !== false,
+            backend: defaults.goalFidelity?.backend || null,
+            model: defaults.goalFidelity?.model || null,
+            effort: defaults.goalFidelity?.effort || null,
+          });
           setInstalled(defaults.installed && typeof defaults.installed === 'object' && !Array.isArray(defaults.installed) ? defaults.installed : {});
         } else {
           setLoadError(true);
@@ -90,6 +100,15 @@ export default function CodeReviewersTab() {
       reviewerApplies,
       ...reviewerModelsToDefaults(reviewerModels),
       ...reviewerEffortsToDefaults(reviewerEfforts),
+      // Absent keys are dropped rather than sent as null: the schema treats an
+      // absent scalar as "inherit", and persisting an explicit null would be a
+      // pin the resolver can't tell from a deliberate one.
+      goalFidelity: {
+        enabled: goalFidelity.enabled,
+        ...(goalFidelity.backend ? { backend: goalFidelity.backend } : {}),
+        ...(goalFidelity.model ? { model: goalFidelity.model } : {}),
+        ...(goalFidelity.effort ? { effort: goalFidelity.effort } : {}),
+      },
     };
     const ok = await api.updateSettings({ codeReview: payload }, { silent: true })
       .then(() => true)
@@ -153,6 +172,13 @@ export default function CodeReviewersTab() {
               setStopMode(s);
               setReviewerApplies(a);
             }}
+          />
+
+          <GoalFidelityControls
+            value={goalFidelity}
+            modelOptions={modelOptions}
+            disabled={saving || loadError}
+            onChange={setGoalFidelity}
           />
 
           <div className="flex justify-end">

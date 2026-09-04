@@ -567,6 +567,35 @@ describe('videoGen routes', () => {
     });
   });
 
+  describe('GET /model-context', () => {
+    it('serves the model list and its auto-select numbers without probing python', async () => {
+      const { checkPackages } = await import('../lib/pythonSetup.js');
+      checkPackages.mockClear();
+
+      const r = await request(app).get('/api/video-gen/model-context');
+      expect(r.status).toBe(200);
+      // The picker's whole input set, in one probe-free answer.
+      expect(r.body.models.map((m) => m.id)).toEqual(['ltx2_unified']);
+      expect(r.body.defaultModel).toBe('ltx2_unified');
+      expect(typeof r.body.systemMemoryGb).toBe('number');
+      expect(r.body.systemMemoryGb).toBeGreaterThan(0);
+      expect(typeof r.body.fflfLtx2PixelBudget).toBe('number');
+      expect(r.body.fflfLtx2PixelBudget).toBeGreaterThan(0);
+      // The point of the route: no interpreter subprocess in the request path.
+      expect(checkPackages).not.toHaveBeenCalled();
+    });
+
+    it('agrees with /status on every field the two share', async () => {
+      const [context, status] = await Promise.all([
+        request(app).get('/api/video-gen/model-context'),
+        request(app).get('/api/video-gen/status'),
+      ]);
+      for (const field of ['models', 'defaultModel', 'systemMemoryGb', 'fflfLtx2PixelBudget']) {
+        expect(status.body[field]).toEqual(context.body[field]);
+      }
+    });
+  });
+
   describe('GET /models/:modelId/download — restricted terms', () => {
     const h3CheckpointFiles = ['LICENSE', 'FL2VA/model_index.json', 'FL2VA/video_vae/source/model.safetensors'];
     const h3 = {

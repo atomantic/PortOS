@@ -897,6 +897,13 @@ export const visionLocalModelFilter = (id, provider, visionIdsByProvider = null)
  * claimed as local. This one only labels UI, so it stays a cheap regex; if it
  * ever gates an action, take the server's rules with it.
  *
+ * The pr-reviewer stage pickers (`PipelineStageConfig.jsx`) are downstream of
+ * this, the sandboxed actions stage included — but they only choose which model
+ * list to SHOW. The pin a stage saves is re-validated at spawn time by
+ * `modelPinIsOffered` (server/lib/localProviderRuntime.js), so a
+ * misclassification here degrades to a confusing dropdown, never to a model the
+ * provider was not allowed to run.
+ *
  * @param {{id?:string,endpoint?:string,name?:string}} provider
  * @returns {'ollama'|'lmstudio'|null}
  */

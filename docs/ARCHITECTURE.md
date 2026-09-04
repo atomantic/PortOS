@@ -103,8 +103,6 @@ PortOS/
 │   ├── browser-config.json    # Browser CDP/health configuration
 │   ├── TASKS.md               # User task file
 │   ├── COS-TASKS.md           # System task file
-│   ├── GOALS.md               # Repository mission and goals
-│   ├── docs/GOALS_OPERATIONAL.md # Operational CoS goals
 │   ├── cos/                   # CoS state and agents
 │   │   ├── state.json         # Daemon state
 │   │   └── agents/            # Agent outputs
@@ -145,7 +143,9 @@ PortOS/
 │   └── agent-personalities/   # Agent personality configs
 │
 ├── docs/                      # Documentation
+│   └── GOALS_OPERATIONAL.md   # Operational CoS goals
 ├── .github/workflows/         # CI/CD
+├── GOALS.md                   # Repository mission and goals
 └── ecosystem.config.cjs       # PM2 configuration
 ```
 

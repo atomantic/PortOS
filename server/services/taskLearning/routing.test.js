@@ -11,7 +11,7 @@ import {
   getPerformanceSummary
 } from './routing.js';
 import { loadLearningData } from './store.js';
-import { resetTaskTypeLearning } from './metrics.js';
+import { resetTaskTypeLearning } from './reset.js';
 
 // Stub ONLY the persistence + log surface of the store; every pure helper
 // (computeEffectiveSuccessRate, computeWindowedStats, isSandboxedTaskType, …)
@@ -20,7 +20,7 @@ vi.mock('./store.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, loadLearningData: vi.fn(), emitLog: vi.fn() };
 });
-vi.mock('./metrics.js', () => ({ resetTaskTypeLearning: vi.fn() }));
+vi.mock('./reset.js', () => ({ resetTaskTypeLearning: vi.fn() }));
 
 // deriveFailureSignalAvoidance is the pure "routing consumes the enriched
 // failure signatures" core added for issue #2329. It takes learning data + a

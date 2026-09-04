@@ -31,7 +31,7 @@ Scaffold a new project from template:
 ### Steps
 
 1. **Basic Info**: Name, description
-2. **Template**: Select template (vite+express, node-server, static)
+2. **Template**: Select template (portos-stack, vite-express, vite-react, express-api, ios-native, xcode-multiplatform)
 3. **Location**: Parent directory for new repo
 4. **Ports**: Allocate from available range
 5. **Git Setup**:
@@ -57,6 +57,8 @@ Scaffold a new project from template:
 | POST /api/apps | Register existing app |
 | POST /api/scaffold | Create new app from template |
 | GET /api/scaffold/templates | List available templates |
+| GET /api/scaffold/directories | Browse directories for the location picker |
+| POST /api/scaffold/templates/create | Create an app from a template (user-friendly wrapper around POST /api/scaffold) |
 | POST /api/detect/port | Detect process on port |
 | POST /api/detect/repo | Validate repo path, detect type |
 

@@ -11,6 +11,10 @@ import { parseHumanReset } from '../lib/quotaReset.js';
 import { readFileTail } from '../lib/fileUtils.js';
 import { getSettings } from './settings.js';
 import { getImageGenQuota, IMAGE_GEN_FAMILY } from './imageGenQuota.js';
+import { mergeFleetQuotaCards } from '../lib/fleetQuotas.js';
+import { getFleetQuotaEntries } from './peerUsage.js';
+import { recordLocalQuotaCards } from './providerQuotaShare.js';
+import { getApiBilledInstanceIds } from './usageFleetBilling.js';
 import { enabledCloudImageModes } from './imageGen/modes.js';
 
 /**
@@ -583,7 +587,10 @@ async function fetchClaudeQuota({ wait = WAIT.CACHED } = {}) {
     limits: data.limits,
     activity: data.activity,
     approximate: data.approximate,
-    note: data.approximate ? 'Local sessions only — does not include other devices or claude.ai.' : null,
+    // The CLI's own caption is about ONE machine's sessions. It stands only
+    // until a federated peer contributes its reading — `mergeFleetQuotaCards`
+    // replaces it with what was actually combined.
+    note: data.approximate ? 'This machine only — other federated instances have not reported a reading yet.' : null,
     fetchedAt: data.fetchedAt
   };
 }
@@ -647,8 +654,36 @@ const fetchFamilyQuota = (family, { wait, providers }) =>
  * for exactly the one the user clicked instead of respawning every provider's
  * TUI. A family id that isn't enabled resolves to an empty list — the caller
  * reads that as "this card is gone", not as an error.
+ *
+ * The reading this machine takes is only ever part of the answer: a
+ * subscription is one account across every federated instance. Each card is
+ * therefore unified with what peers published for the same family before it is
+ * returned — see `lib/fleetQuotas.js` for the two merge rules.
  */
 export async function getProviderQuotas({ wait = WAIT.CACHED, family = null } = {}) {
+  const cards = await readProviderQuotas({ wait, family });
+  // Publish this machine's reading to the fleet and fold in every peer's. The
+  // two are independent — the peer read excludes our own slot — so they
+  // overlap. Recording is awaited rather than fired off so a caller that
+  // immediately re-reads (the page's per-card Refresh) sees its own reading.
+  const [, peerEntries] = await Promise.all([
+    recordLocalQuotaCards(cards).catch((err) => {
+      console.error(`❌ Could not record local quota readings: ${err?.message || err}`);
+    }),
+    getApiBilledInstanceIds()
+      .then((excludeInstanceIds) => getFleetQuotaEntries({ excludeInstanceIds }))
+      .catch((err) => {
+        // A federation read that fails must not take the cards down with it — a
+        // this-machine-only card is a smaller loss than an empty usage page.
+        console.error(`❌ Could not read federated quota readings: ${err?.message || err}`);
+        return [];
+      }),
+  ]);
+  return mergeFleetQuotaCards(cards, peerEntries);
+}
+
+/** The local readings, before any federated merge. */
+async function readProviderQuotas({ wait, family }) {
   const result = await getAllProviders();
   const providers = Array.isArray(result) ? result : (result?.providers || []);
   const enabled = providers.filter((p) => p?.enabled && p.ollamaBacked !== true && p.mtplxBacked !== true && p.llamaBacked !== true && p.vllmBacked !== true && p.sglangBacked !== true);

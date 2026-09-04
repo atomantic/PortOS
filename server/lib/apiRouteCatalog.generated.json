@@ -967,6 +967,14 @@
       ]
     },
     {
+      "method": "GET",
+      "path": "/api/apps/:id/claim-reviewers",
+      "mountPath": "/api/apps",
+      "sources": [
+        "server/routes/apps/taskTypes.js"
+      ]
+    },
+    {
       "method": "POST",
       "path": "/api/apps/:id/detect-icon",
       "mountPath": "/api/apps",
@@ -1497,6 +1505,14 @@
     {
       "method": "HEAD",
       "path": "/api/avatar/model.glb",
+      "mountPath": "/api/avatar",
+      "sources": [
+        "server/routes/avatar.js"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/avatar/rigged",
       "mountPath": "/api/avatar",
       "sources": [
         "server/routes/avatar.js"
@@ -9072,6 +9088,22 @@
     },
     {
       "method": "POST",
+      "path": "/api/local-llm/slotstream/models/download",
+      "mountPath": "/api/local-llm",
+      "sources": [
+        "server/routes/localLlm.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/local-llm/slotstream/models/download/cancel",
+      "mountPath": "/api/local-llm",
+      "sources": [
+        "server/routes/localLlm.js"
+      ]
+    },
+    {
+      "method": "POST",
       "path": "/api/local-llm/slotstream/start",
       "mountPath": "/api/local-llm",
       "sources": [
@@ -15736,6 +15768,14 @@
     },
     {
       "method": "GET",
+      "path": "/api/tribe/duplicate-identifiers",
+      "mountPath": "/api/tribe",
+      "sources": [
+        "server/routes/tribe.js"
+      ]
+    },
+    {
+      "method": "GET",
       "path": "/api/tribe/outreach",
       "mountPath": "/api/tribe",
       "sources": [
@@ -16449,6 +16489,14 @@
     {
       "method": "POST",
       "path": "/api/video-gen/last-frame/:id",
+      "mountPath": "/api/video-gen",
+      "sources": [
+        "server/routes/videoGen.js"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/video-gen/model-context",
       "mountPath": "/api/video-gen",
       "sources": [
         "server/routes/videoGen.js"
@@ -17497,8 +17545,8 @@
   ],
   "stats": {
     "mounts": 147,
-    "operations": 2167,
-    "declarations": 2175,
+    "operations": 2173,
+    "declarations": 2181,
     "sourceFiles": 230
   }
 }

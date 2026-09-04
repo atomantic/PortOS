@@ -219,6 +219,15 @@ describe('AppTaskCard', () => {
       expect(screen.queryByLabelText('Thinking effort')).toBeNull();
     });
 
+    it('says the provider list is still loading instead of offering a lone bare Default', () => {
+      // Proves the card actually threads the flag; the label/disable rule itself
+      // is ProviderModelSelector's (see its own suite).
+      renderCardWithPins({}, { providers: [], providersLoaded: false });
+      const provider = screen.getByLabelText('Provider');
+      expect(within(provider).getByRole('option', { name: 'Loading providers…' })).toBeTruthy();
+      expect(provider.disabled).toBe(true);
+    });
+
     it('hides a disabled provider from the picker unless the task is pinned to it', () => {
       const withDisabled = [...providers, { id: 'retired', name: 'Retired CLI', enabled: false }];
       renderCardWithPins({}, { providers: withDisabled });

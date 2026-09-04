@@ -318,6 +318,26 @@ describe('validation.js', () => {
       expect(codeReviewSettingsSchema.safeParse({ reviewers: ['bogus'] }).success).toBe(false)
     })
 
+    // The goal-fidelity gate (#5994) is its own block, not another
+    // `<reviewer>*` scalar: it is a different review, on a model the user picks
+    // independently of the quality chain.
+    it('accepts the goal-fidelity block and rejects a backend it cannot call server-side', () => {
+      const ok = codeReviewSettingsSchema.safeParse({
+        goalFidelity: { enabled: true, backend: 'ollama', model: 'qwen3:8b', effort: 'low' },
+      })
+      expect(ok.success).toBe(true)
+      expect(ok.data.goalFidelity).toEqual({ enabled: true, backend: 'ollama', model: 'qwen3:8b', effort: 'low' })
+
+      // A CLI reviewer is invoked by the follow-up agent from a prompt and has no
+      // server-side entry point, so the completion gate could never run it.
+      expect(codeReviewSettingsSchema.safeParse({ goalFidelity: { backend: 'codex' } }).success).toBe(false)
+      expect(codeReviewSettingsSchema.safeParse({ goalFidelity: { unknownField: 1 } }).success).toBe(false)
+      // An empty select is an absent pin, not a stored empty string.
+      const cleared = codeReviewSettingsSchema.safeParse({ goalFidelity: { enabled: false, backend: '', effort: '' } })
+      expect(cleared.success).toBe(true)
+      expect(cleared.data.goalFidelity).toEqual({ enabled: false })
+    })
+
     it('rejects an unknown stopMode', () => {
       expect(codeReviewSettingsSchema.safeParse({ stopMode: 'nope' }).success).toBe(false)
     })

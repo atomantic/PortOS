@@ -230,7 +230,7 @@ function ConversationDetail({
           <button
             type="button"
             onClick={onBack}
-            className="md:hidden rounded border border-port-border p-1.5 hover:border-port-accent"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center md:hidden rounded border border-port-border p-1.5 hover:border-port-accent"
             aria-label="Back to conversations"
           >
             <ChevronLeft size={16} />
@@ -373,7 +373,7 @@ function ConversationDetail({
               <button
                 type="button"
                 onClick={() => deleteEvent(ev.id)}
-                className="shrink-0 self-start rounded p-1.5 text-gray-500 hover:bg-port-error/15 hover:text-port-error"
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center shrink-0 self-start rounded p-1.5 text-gray-500 hover:bg-port-error/15 hover:text-port-error"
                 aria-label="Delete event from PortOS"
                 title="Delete from PortOS only"
               >

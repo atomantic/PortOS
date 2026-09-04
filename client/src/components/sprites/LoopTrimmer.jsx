@@ -285,21 +285,21 @@ export default function LoopTrimmer({
             <button
               onClick={() => step(-1)}
               aria-label="Previous frame"
-              className="p-1.5 bg-port-bg border border-port-border rounded text-gray-300 hover:border-port-accent"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 bg-port-bg border border-port-border rounded text-gray-300 hover:border-port-accent"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
             <button
               onClick={() => setPlaying((p) => !p)}
               aria-label={playing ? 'Pause' : 'Play'}
-              className="p-1.5 bg-port-bg border border-port-border rounded text-gray-300 hover:border-port-accent"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 bg-port-bg border border-port-border rounded text-gray-300 hover:border-port-accent"
             >
               {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
             </button>
             <button
               onClick={() => step(1)}
               aria-label="Next frame"
-              className="p-1.5 bg-port-bg border border-port-border rounded text-gray-300 hover:border-port-accent"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 bg-port-bg border border-port-border rounded text-gray-300 hover:border-port-accent"
             >
               <ChevronRight className="w-4 h-4" />
             </button>

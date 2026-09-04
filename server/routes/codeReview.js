@@ -9,7 +9,9 @@ const router = Router()
 
 // Body shape for POST /api/code-review/local. `model` and `effort` are optional —
 // when omitted (or empty) we fall back to the model / reasoning effort configured
-// on the Code Review Defaults panel. The diff is sent as-is; agents can pipe
+// on the Code Review Defaults panel, and with no configured model either, to the
+// model the backend itself reports serving when that is unambiguous (see
+// `resolveServedModel`). The diff is sent as-is; agents can pipe
 // `gh pr diff <N>` straight into it without preprocessing.
 // `effort` is checked against the ladder for the REQUESTED backend rather than a
 // flat union of every local level: the two backends are separate identities in
@@ -74,8 +76,11 @@ router.post('/local', asyncHandler(async (req, res) => {
     timeoutMs: body.timeoutMs,
   })
   if (!result.ok) {
+    // A model neither the request, the panel, nor the backend's own listing could
+    // supply is the caller's config gap (400) — the 502 bucket is for a reviewer
+    // that was actually asked and failed.
     throw new ServerError(result.error || 'Code review failed', {
-      status: 502,
+      status: result.code === 'NO_MODEL' ? 400 : 502,
       context: { backend: result.backend, model: result.model }
     })
   }

@@ -118,18 +118,19 @@ export async function suggestTribeImports({ limit = 50 } = {}) {
   const tribeIndex = buildPersonMatchIndex(people);
   const { contacts, index: contactIndex } = await loadContactIndex();
 
-  // Pull recent-ish imessage events for handle frequency (cap to keep it cheap).
-  const events = await humanActivity.listEvents({ source: 'imessage', limit: 2000 });
+  // Recent-ish imessage handle frequency, counted in SQL (#6026) rather than
+  // pulling up to 2,000 full event rows across the wire to count in Node.
+  const handleRows = await humanActivity.countEventsByHandle({ source: 'imessage', eventLimit: 2000 });
   const handleCounts = new Map();
-  for (const ev of events) {
-    const h = ev.metadata?.handle;
-    if (!h) continue;
+  for (const { handle: h, eventCount } of handleRows) {
     const key = normalizePhone(h) || normalizeIdentifier(h);
     if (!key) continue;
     // Skip handles already in Tribe.
     const id = identityFromHandle(h);
     if (matchPerson(id, tribeIndex)) continue;
-    handleCounts.set(key, (handleCounts.get(key) || 0) + 1);
+    // Two raw handles (e.g. "+15551234567" vs "5551234567") can normalize to
+    // the same key — sum rather than let the later one clobber the count.
+    handleCounts.set(key, (handleCounts.get(key) || 0) + eventCount);
   }
 
   // Also surface contacts with phones/emails not in Tribe (even without iMessage).

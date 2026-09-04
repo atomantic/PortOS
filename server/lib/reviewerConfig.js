@@ -178,6 +178,46 @@ export function describeReviewerCli(reviewer) {
 export const REVIEW_STOP_MODES = ['all', 'on-findings', 'on-clean'];
 export const DEFAULT_REVIEW_STOP_MODE = 'all';
 
+// The task-metadata keys that TOGETHER form a task-local reviewer override —
+// everything the picker writes, and so everything its "Use system Code Review
+// Defaults" reset has to remove. A key missing here leaves a pin behind after a
+// reset the user believes cleared it.
+// Mirrored in client/src/lib/reviewerPins.js.
+export const REVIEWER_OVERRIDE_KEYS = Object.freeze([
+  // Legacy singular, still stored on schedules saved before the list existed.
+  'reviewer',
+  'reviewers',
+  'usernames',
+  'optionalReviewers',
+  'reviewerMaxRounds',
+  'reviewerModels',
+  'reviewerEfforts',
+  'reviewStopMode',
+  'reviewerApplies',
+]);
+
+// The subset `resolveReviewerConfig` actually READS. `reviewStopMode` and
+// `reviewerApplies` are deliberately absent: they are slashdo run flags, and a
+// claim flow has no flag string to put them in (the claim prompt gets a reviewer
+// CSV), so neither can change which reviewers a claim runs. Keying the reported
+// `source` on the full roster would label a task `task-override` for a stop-mode
+// the user set years ago and then send them to clear an "override" that is not
+// supplying the list they are looking at.
+export const REVIEWER_LIST_OVERRIDE_KEYS = Object.freeze(
+  REVIEWER_OVERRIDE_KEYS.filter((key) => key !== 'reviewStopMode' && key !== 'reviewerApplies')
+);
+
+/**
+ * Does this task metadata pin any part of the reviewer list itself (as opposed
+ * to a run flag)? Key PRESENCE is the signal, not truthiness: an explicitly
+ * empty `optionalReviewers: []` or `reviewerModels: {}` is a real override — it
+ * clears the defaults' value — so collapsing it into "nothing configured" would
+ * report the wrong source.
+ */
+export function hasReviewerOverride(metadata) {
+  return isPlainObject(metadata) && REVIEWER_LIST_OVERRIDE_KEYS.some((key) => key in metadata);
+}
+
 // Arbitrary GitHub reviewer usernames (e.g. `@CodeReviewbot`) requested as PR
 // reviewers to gate merging — a class distinct from the fixed REVIEWER_VALUES
 // enum (which either invoke a CLI, hit the local-LLM endpoint, or request the

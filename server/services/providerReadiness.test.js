@@ -197,13 +197,77 @@ describe('getProviderReadiness', () => {
     expect(checkById(readiness, 'model').ok).toBe(true);
   });
 
-  it('omits the model check when the provider pins no model', async () => {
+  it('omits both model checks when the provider pins and offers nothing', async () => {
     const readiness = await getProviderReadiness(
       { id: 'opencode-ollama', command: 'opencode', ollamaBacked: true, defaultModel: null },
       { findCommand: () => '/usr/local/bin/ollama', probe: reachable(['llama3:8b']) },
     );
     expect(readiness.checks.map((check) => check.id)).toEqual(['runtime', 'server']);
     expect(readiness.ready).toBe(true);
+  });
+
+  it('fails a pin-less provider whose whole offered catalog is gone from the daemon', async () => {
+    // #6125: the shipped OpenCode local wrappers pin no default, so readiness
+    // ran no model check at all and reported ready while every model the
+    // provider offered had been removed from the daemon — each run spawned,
+    // produced nothing, and died. The catalog is the pin a stage picks from.
+    const readiness = await getProviderReadiness(
+      {
+        id: 'opencode-ollama-tui',
+        command: 'opencode',
+        ollamaBacked: true,
+        defaultModel: null,
+        models: ['ollama/example-coder:30b', 'example-chat:12b'],
+      },
+      { findCommand: () => '/usr/local/bin/ollama', probe: reachable(['other-model:8b']) },
+    );
+    const catalog = checkById(readiness, 'catalog');
+    expect(catalog.ok).toBe(false);
+    expect(catalog.label).toBe('Offered models available (2)');
+    // Namespace-stripped, so the ids read as the daemon spells them.
+    expect(catalog.unservedModels).toEqual(['example-coder:30b', 'example-chat:12b']);
+    expect(catalog.detail).toContain('serves none of them');
+    expect(readiness.ready).toBe(false);
+  });
+
+  it('names only the offered models a multi-model daemon stopped serving', async () => {
+    const readiness = await getProviderReadiness(
+      {
+        id: 'opencode-ollama-tui',
+        command: 'opencode',
+        ollamaBacked: true,
+        defaultModel: 'example-chat:12b',
+        models: ['example-chat:12b', 'example-coder:30b'],
+      },
+      { findCommand: () => '/usr/local/bin/ollama', probe: reachable(['example-chat:12b']) },
+    );
+    // The pin is the `model` check's job; `catalog` covers what is left.
+    expect(checkById(readiness, 'model').ok).toBe(true);
+    const catalog = checkById(readiness, 'catalog');
+    expect(catalog.unservedModels).toEqual(['example-coder:30b']);
+    expect(catalog.detail).toContain('fails at spawn');
+    expect(readiness.ready).toBe(false);
+  });
+
+  it('accepts a one-model-per-process runtime that is running one of its presets', async () => {
+    // llama.cpp serves a single checkpoint per process, so the other presets in
+    // the catalog were never separate downloads — grading them as missing would
+    // send the user after weights they already have.
+    const readiness = await getProviderReadiness(
+      llamaProvider({ defaultModel: null, models: ['dflash', 'dspark'] }),
+      { findCommand: () => '/opt/homebrew/bin/llama-server', probe: reachable(['dflash']) },
+    );
+    expect(checkById(readiness, 'catalog').ok).toBe(true);
+    expect(readiness.ready).toBe(true);
+  });
+
+  it('leaves the catalog check unknown — never failed — while the server is down', async () => {
+    const readiness = await getProviderReadiness(
+      llamaProvider({ defaultModel: null, models: ['dflash', 'dspark'] }),
+      { findCommand: () => '/opt/homebrew/bin/llama-server', probe: unreachable() },
+    );
+    expect(checkById(readiness, 'catalog').ok).toBeNull();
+    expect(readiness.ready).toBe(false);
   });
 
   it('probes the endpoint the provider configures, not the canonical default', async () => {

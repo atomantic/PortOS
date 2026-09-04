@@ -76,17 +76,17 @@ export default function MidiVisualization({ url, filename, model }) {
               onClick={toggle}
               disabled={status !== 'ready'}
               aria-label={playing ? 'Pause playback' : 'Play synth preview'}
-              className="p-1 rounded text-port-accent hover:bg-port-border/50 disabled:opacity-40"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded text-port-accent hover:bg-port-border/50 disabled:opacity-40"
               title={playing ? 'Pause (space)' : 'Play a synth preview (space)'}
             >
               {playing ? <Pause size={13} /> : <Play size={13} />}
             </button>
             <button type="button" onClick={() => setZoom((z) => clampZoom(z / ZOOM_STEP))} aria-label="Zoom out"
-              className="p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50" title="Zoom out (-)">
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50" title="Zoom out (-)">
               <ZoomOut size={13} />
             </button>
             <button type="button" onClick={() => setZoom((z) => clampZoom(z * ZOOM_STEP))} aria-label="Zoom in"
-              className="p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50" title="Zoom in (+)">
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50" title="Zoom in (+)">
               <ZoomIn size={13} />
             </button>
             <button type="button" onClick={() => setZoom(MIN_ZOOM)} aria-label="Fit to width"
@@ -107,7 +107,7 @@ export default function MidiVisualization({ url, filename, model }) {
             <span className="flex-1" />
             <button type="button" onClick={() => setExpanded((v) => !v)}
               aria-label={expanded ? 'Compact height' : 'Expanded height'}
-              className="p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
               title={expanded ? 'Compact height' : 'Expanded height'}>
               {expanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
             </button>

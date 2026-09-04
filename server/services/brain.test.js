@@ -107,7 +107,10 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   }),
   PATHS: { data: '/tmp/portos-test', cos: '/tmp/portos-test/cos', reports: '/tmp/portos-test/reports', scripts: '/tmp/portos-test/scripts', root: '/tmp/portos-test' },
   atomicWrite: vi.fn().mockResolvedValue(undefined),
-  ensureDirs: vi.fn().mockResolvedValue(undefined)
+  ensureDirs: vi.fn().mockResolvedValue(undefined),
+  // cosState's config reader; `ok: true, value: null` is "no config file yet",
+  // which resolves to DEFAULT_CONFIG — what this suite's autonomy gate expects.
+  readJSONFileStrict: vi.fn().mockResolvedValue({ ok: true, value: null }),
 }));
 
 // recoverStuckClassifications() resolves this instance's id to skip peer-origin

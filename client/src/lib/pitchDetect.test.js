@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   detectFrequency,
@@ -358,15 +360,21 @@ describe('createPitchTracker — emit throttle', () => {
     getFloatTimeDomainData: (out) => { for (let i = 0; i < out.length; i++) out[i] = 0.5 * Math.sin((2 * Math.PI * A4 * i) / SAMPLE_RATE); },
   });
 
+  // Fake timers (which also mock performance.now) make this deterministic:
+  // advancing 120ms of virtual time always fires exactly 120 ticks on the
+  // unthrottled tracker, no matter how loaded the machine running the suite
+  // is. A real-timer wait here previously let CPU contention starve the
+  // unthrottled setTimeout(intervalMs: 1) loop down to the same tick count
+  // as the throttled one, flaking the inequality below.
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
   it('throttles emits to ~updateHz for a steady tone (vs every frame unthrottled)', async () => {
-    // Real timers here: the throttle keys on wall-clock time (performance.now), so
-    // this asserts a robust inequality (throttled ≪ unthrottled) rather than an
-    // exact count.
     const unthrottled = [];
     const throttled = [];
     const t1 = createPitchTracker(steady(), { intervalMs: 1, onUpdate: (u) => unthrottled.push(u) });
     const t2 = createPitchTracker(steady(), { intervalMs: 1, updateHz: 12, onUpdate: (u) => throttled.push(u) });
-    await new Promise((r) => setTimeout(r, 120));
+    await vi.advanceTimersByTimeAsync(120);
     t1.stop();
     t2.stop();
     // A steady note has no material change after acquisition, so the throttle caps

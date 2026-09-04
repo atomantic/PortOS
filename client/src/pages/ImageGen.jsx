@@ -186,6 +186,13 @@ export default function ImageGen() {
   // updater React skips once unmounted — an implementation detail to guard
   // against, not to rely on.)
   const mountedRef = useMounted();
+  // Per-target pick sequence: two overlapping upload picks both survive the
+  // EXIF-normalization await, read the same stale preview ref, and each mint a
+  // url — only the last setState survives, orphaning the loser's url. Each
+  // handler bumps its slot's counter and bails when superseded, BEFORE minting,
+  // so a losing pick never creates a url (same token idiom as
+  // statusRequestToken below).
+  const pickSeqRef = useRef({ init: 0, refs: [] });
   const [initImageStrength, setInitImageStrength] = useState(0.4);
   // Visual gallery picker target: null (closed), { kind: 'init' }, or
   // { kind: 'reference', slot: i }. The search/browse alternative to the plain
@@ -550,13 +557,18 @@ export default function ImageGen() {
   const handlePickInitImage = async (e) => {
     const raw = e.target.files?.[0];
     if (!raw) return;
+    const myPick = ++pickSeqRef.current.init;
     const file = await normalizeImageOrientation(raw);
     if (!mountedRef.current) return;
+    // A newer pick started while this one normalized — it owns the slot now.
+    // Bail before minting so this pick never creates an unreachable url.
+    if (myPick !== pickSeqRef.current.init) return;
     revokeIfBlob(initImagePreviewRef.current);
     setInitImage({ source: 'upload', file, name: file.name, previewUrl: URL.createObjectURL(file) });
     // Default the output resolution to the uploaded image's dimensions, clamped
     // to the server's edge/pixel caps so a large phone photo doesn't 400 on Generate.
     const dims = await readImageDimensions(file);
+    if (myPick !== pickSeqRef.current.init) return;
     const clamped = dims && clampImageDimensions(dims.width, dims.height);
     if (clamped) { setWidth(clamped.width); setHeight(clamped.height); }
   };
@@ -582,8 +594,13 @@ export default function ImageGen() {
   const handlePickReferenceImage = async (slotIndex, e) => {
     const raw = e.target.files?.[0];
     if (!raw) return;
+    const seqs = pickSeqRef.current.refs;
+    const myPick = seqs[slotIndex] = (seqs[slotIndex] ?? 0) + 1;
     const file = await normalizeImageOrientation(raw);
     if (!mountedRef.current) return;
+    // Superseded by a newer pick on this slot — bail before minting so the
+    // losing pick never creates an unreachable url.
+    if (myPick !== pickSeqRef.current.refs[slotIndex]) return;
     // Mint the url OUTSIDE the updater. StrictMode invokes a functional updater
     // twice in dev, and a url created inside it on the discarded pass is never
     // stored — so it can never be revoked. (The revoke stays inside, where it
@@ -1305,7 +1322,7 @@ export default function ImageGen() {
           <button
             onClick={() => refreshStatus(effectiveMode, modelId)}
             disabled={statusLoading}
-            className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50 disabled:opacity-50"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50 disabled:opacity-50"
             title="Refresh status" aria-label="Refresh status"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${statusLoading ? 'animate-spin' : ''}`} />

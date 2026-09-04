@@ -235,7 +235,7 @@ export function ApiAccessTab() {
                 <button
                   type="button"
                   onClick={() => copyToClipboard(exampleCurl(card, baseUrl), 'Example copied')}
-                  className="absolute top-2 right-2 p-1.5 rounded bg-port-border hover:bg-port-border/70 text-white"
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center absolute top-2 right-2 p-1.5 rounded bg-port-border hover:bg-port-border/70 text-white"
                   aria-label="Copy example request"
                   title="Copy example request"
                 >

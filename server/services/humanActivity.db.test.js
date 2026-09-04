@@ -14,7 +14,7 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import { checkHealth, ensureSchema, close, query, withTransaction } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
-import { recordEvents, listEvents, getDaySummary, stripParticipantsForAccount } from './humanActivity.js';
+import { recordEvents, listEvents, getDaySummary, stripParticipantsForAccount, countEventsByHandle } from './humanActivity.js';
 
 let dbReady = false;
 let skipReason = '';
@@ -290,5 +290,31 @@ describe.skipIf(!runDb)('source-scoped read plan (#5715)', () => {
       [SOURCE, 'message.received'],
     );
     expectOrderedIndexScan(plan, 'idx_human_activity_source_kind_happened');
+  });
+});
+
+describe.skipIf(!runDb)('countEventsByHandle — SQL-aggregated handle frequency (#6026)', () => {
+  it('groups and counts events per metadata.handle without loading full rows', async () => {
+    await recordEvents([
+      mk({ dedupeKey: 'handle-a-1', metadata: { handle: '+15551112222' } }),
+      mk({ dedupeKey: 'handle-a-2', metadata: { handle: '+15551112222' } }),
+      mk({ dedupeKey: 'handle-a-3', metadata: { handle: '+15551112222' } }),
+      mk({ dedupeKey: 'handle-b-1', metadata: { handle: '+15553334444' } }),
+      // No handle in metadata — must not surface as a spurious group.
+      mk({ dedupeKey: 'handle-none' }),
+    ]);
+    const rows = await countEventsByHandle({ source: SOURCE, eventLimit: 2000 });
+    const byHandle = new Map(rows.map((r) => [r.handle, r.eventCount]));
+    expect(byHandle.get('+15551112222')).toBe(3);
+    expect(byHandle.get('+15553334444')).toBe(1);
+    expect(byHandle.has('')).toBe(false);
+    expect(byHandle.has(undefined)).toBe(false);
+    // Ranked most-frequent first.
+    expect(rows[0].handle).toBe('+15551112222');
+  });
+
+  it('returns nothing for a source with no matching events', async () => {
+    const rows = await countEventsByHandle({ source: `${SOURCE}-empty` });
+    expect(rows).toEqual([]);
   });
 });

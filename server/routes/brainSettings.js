@@ -10,6 +10,7 @@ import { getProviderById } from '../services/providers.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { settingsUpdateInputSchema } from '../lib/brainValidation.js';
+import { modelPinIsOffered } from '../lib/localProviderRuntime.js';
 
 const router = Router();
 
@@ -47,21 +48,18 @@ router.put('/settings', asyncHandler(async (req, res) => {
       });
     }
 
-    // Validate model exists in provider's models
-    if (modelId) {
-      if (!provider.models || provider.models.length === 0) {
-        throw new ServerError(`Provider "${effectiveProviderId}" has no models configured`, {
-          status: 400,
-          code: 'NO_MODELS'
-        });
-      }
-      if (!provider.models.includes(modelId)) {
-        throw new ServerError(`Model "${modelId}" not found in provider "${effectiveProviderId}"`, {
-          status: 400,
-          code: 'INVALID_MODEL',
-          context: { availableModels: provider.models }
-        });
-      }
+    // Validate the model against the provider's catalog — but only where that
+    // catalog is authoritative. `modelPinIsOffered` subsumes the old
+    // "no models configured" branch (an empty catalog validates nothing) and
+    // additionally passes a locally-backed provider through: its `models` array
+    // is a cached snapshot while the daemon on this machine is the authority,
+    // so rejecting here 400s a model the user just pulled and can serve.
+    if (modelId && !modelPinIsOffered(provider, modelId)) {
+      throw new ServerError(`Model "${modelId}" not found in provider "${effectiveProviderId}"`, {
+        status: 400,
+        code: 'INVALID_MODEL',
+        context: { availableModels: provider.models }
+      });
     }
   }
 

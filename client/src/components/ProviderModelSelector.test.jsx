@@ -406,3 +406,32 @@ describe('ProviderModelSelector', () => {
     });
   });
 });
+
+describe('ProviderModelSelector — provider list still loading', () => {
+  it('names the in-flight fetch instead of offering the empty sentinel as the only choice', () => {
+    // Mid-fetch `providers` is [], so "Default (active provider)" would be the
+    // select's only option — a slow control that reads as a broken one.
+    renderSelector({ providers: [], selectedProviderId: '', emptyProviderOption: 'Default (active provider)', loading: true });
+    const provider = screen.getByLabelText('Provider');
+    expect([...provider.options].map((o) => o.textContent)).toEqual(['Loading providers…']);
+    expect(provider.disabled).toBe(true);
+  });
+
+  it('says so even when the caller forces a selection, since there is nothing else to show', () => {
+    renderSelector({ providers: [], selectedProviderId: '', loading: true });
+    expect(screen.getByRole('option', { name: 'Loading providers…' })).toBeTruthy();
+  });
+
+  it('disables the model select too, so a pin cannot be retargeted against a list that has not arrived', () => {
+    renderSelector({ loading: true });
+    expect(screen.getByLabelText('Model').disabled).toBe(true);
+  });
+
+  it('restores the caller\'s own sentinel once the list settles', () => {
+    renderSelector({ selectedProviderId: '', emptyProviderOption: 'Default (active provider)' });
+    const provider = screen.getByLabelText('Provider');
+    expect(screen.getByRole('option', { name: 'Default (active provider)' })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: 'Loading providers…' })).toBeNull();
+    expect(provider.disabled).toBe(false);
+  });
+});

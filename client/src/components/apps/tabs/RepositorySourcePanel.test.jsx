@@ -347,3 +347,24 @@ describe('managed app repository sources', () => {
     expect(screen.getByRole('button', { name: 'Update app' })).toBeInTheDocument();
   });
 });
+
+describe('PortOS self-update restart handoff', () => {
+  it('swaps the banner copy to the restart notice once useAppOperation reports it', async () => {
+    // The detection itself lives in useAppOperation (see its own suite). What
+    // this panel owes the user is telling them the page will come back rather
+    // than leaving "Stopping PortOS apps..." on screen with no explanation.
+    useAppOperation.mockReturnValue({
+      steps: [{ step: 'pm2-stop', status: 'running', message: 'Stopping PortOS apps...' }],
+      isOperating: true, operationType: 'update', error: null, errorCode: null, completed: false,
+      restarting: true,
+      startUpdate: vi.fn(),
+    });
+    render(<RepositorySourcePanel appId="portos-default" appName="PortOS" />);
+
+    expect(await screen.findByText(
+      'PortOS is restarting — this page reloads once it answers again.',
+    )).toBeInTheDocument();
+    // Every action stays locked while the install is coming back.
+    expect(screen.getByRole('button', { name: 'Check sources' })).toBeDisabled();
+  });
+});

@@ -6,7 +6,7 @@
  */
 
 import pg from 'pg';
-import { buildUpgradeDdl, buildCatalogDdl } from './db/schema/index.js';
+import { isTestRunner } from './runtimeEnv.js';
 
 const { Pool } = pg;
 
@@ -63,25 +63,6 @@ export function isTestDatabase() {
   if (process.env.TEST_DB_OK === '1') return true;
   const db = process.env.PGDATABASE || 'portos';
   return /_test$/.test(db) || db === 'portos_test';
-}
-
-/**
- * Are we executing under a test runner?
- *
- * `NODE_ENV === 'test'` alone is not reliable: a suite run from a CoS-agent
- * worktree (or any wrapper that sets NODE_ENV=development / leaves it unset)
- * still executes test code, and the backend selectors that key off NODE_ENV
- * (e.g. seriesStore's `useFileBackend()`) then quietly choose the *Postgres*
- * backend — so the test writes land in the real `portos` DB with the guard
- * below disarmed. Vitest always sets `process.env.VITEST` in every worker
- * process, so OR-ing it in arms the guard regardless of how NODE_ENV was
- * (mis)configured. This is the signal that actually closed the 2026-06-14
- * fixture leak into prod.
- *
- * @returns {boolean}
- */
-export function isTestRunner() {
-  return process.env.NODE_ENV === 'test' || process.env.VITEST != null;
 }
 
 // Guard ALL row writes — not just deletions. The original guard only blocked
@@ -359,6 +340,18 @@ export async function ensureSchema() {
 }
 
 async function ensureSchemaImpl() {
+  // The DDL composer is imported lazily, not at module load. `db.js` is reached
+  // by ~400 server test files through pgFileFacade.js, and eagerly importing
+  // ./db/schema/index.js pulled its 17 per-domain DDL modules into every one of
+  // those import graphs — ~7k module instantiations per suite run, for
+  // statement arrays only this function ever reads (#6009). Resolved BEFORE the
+  // advisory lock below, so no other booting process waits on a module load,
+  // and once per boot inside a path already awaiting Postgres, so it costs
+  // nothing at runtime. vi.mock('./db/schema/index.js') still intercepts it —
+  // the mock registry covers dynamic imports too, which is what
+  // lib/db.test.js's bad-DDL injection relies on.
+  const { buildUpgradeDdl, buildCatalogDdl } = await import('./db/schema/index.js');
+
   // ⚠️ Boot CREATE INDEX lock window. Every `CREATE INDEX IF NOT EXISTS` below
   // (and in the catalogDDL block, incl. the HNSW vector index on catalog_scraps)
   // runs as a plain, non-CONCURRENT build. The FIRST time an index materializes

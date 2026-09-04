@@ -454,6 +454,7 @@ function SeriesAiEditor({ loom, dirty, onLoomUpdate }) {
         layout="stacked"
         disabled={busy || loading}
         modelDisabled={busy || loading}
+        loading={loading}
         emptyProviderOption="Default (series-plan stage or active provider)"
         emptyModelOption="Default model"
         alwaysShowModel={!!route.providerId}
@@ -772,9 +773,9 @@ function PlanCollection({
               placeholder={sideQuests ? 'Side quest title' : 'Plot point title'}
               onChange={(event) => onUpdate(item.id, { title: event.target.value })}
             />
-            <button type="button" aria-label={`Move ${title.toLowerCase()} ${index + 1} up`} disabled={index === 0} onClick={() => onMove(index, -1)} className="p-1 text-port-text-muted hover:text-port-text disabled:opacity-30"><ChevronUp size={15} /></button>
-            <button type="button" aria-label={`Move ${title.toLowerCase()} ${index + 1} down`} disabled={index === items.length - 1} onClick={() => onMove(index, 1)} className="p-1 text-port-text-muted hover:text-port-text disabled:opacity-30"><ChevronDown size={15} /></button>
-            <button type="button" aria-label={`Remove ${title.toLowerCase()} ${index + 1}`} onClick={() => onRemove(item.id)} className="p-1 text-port-text-muted hover:text-port-error"><Trash2 size={15} /></button>
+            <button type="button" aria-label={`Move ${title.toLowerCase()} ${index + 1} up`} disabled={index === 0} onClick={() => onMove(index, -1)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-port-text-muted hover:text-port-text disabled:opacity-30"><ChevronUp size={15} /></button>
+            <button type="button" aria-label={`Move ${title.toLowerCase()} ${index + 1} down`} disabled={index === items.length - 1} onClick={() => onMove(index, 1)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-port-text-muted hover:text-port-text disabled:opacity-30"><ChevronDown size={15} /></button>
+            <button type="button" aria-label={`Remove ${title.toLowerCase()} ${index + 1}`} onClick={() => onRemove(item.id)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-port-text-muted hover:text-port-error"><Trash2 size={15} /></button>
           </div>
           <textarea
             aria-label={`${title} ${index + 1} description`}

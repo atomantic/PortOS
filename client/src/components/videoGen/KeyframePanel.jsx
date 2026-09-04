@@ -72,7 +72,7 @@ export default function KeyframePanel({
                 onClick={() => onRemoveKeyframe(i)}
                 disabled={keyframes.length <= 2}
                 aria-label={`Remove keyframe ${i + 1}`}
-                className="mt-5 p-1 text-gray-400 hover:text-port-error disabled:opacity-30 disabled:cursor-not-allowed"
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center mt-5 p-1 text-gray-400 hover:text-port-error disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 <X className="w-3.5 h-3.5" />
               </button>

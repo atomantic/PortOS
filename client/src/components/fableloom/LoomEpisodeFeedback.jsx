@@ -104,6 +104,7 @@ export default function LoomEpisodeFeedback({
         layout="stacked"
         disabled={disabled || submitting || providersLoading}
         modelDisabled={disabled || submitting || providersLoading}
+        loading={providersLoading}
         emptyProviderOption="Default (feedback stage or active provider)"
         emptyModelOption="Default model"
         alwaysShowModel={!!route.providerId}

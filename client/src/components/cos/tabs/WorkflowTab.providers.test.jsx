@@ -61,7 +61,7 @@ const renderTab = async (providers) => {
   await act(async () => {
     render(<MemoryRouter><WorkflowTab apps={APPS} providers={providers} /></MemoryRouter>);
   });
-  const expand = await screen.findByRole('button', { name: /show app overrides for ux/i });
+  const expand = await screen.findByRole('button', { name: /show per-app options for ux/i });
   fireEvent.click(expand);
 };
 

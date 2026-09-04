@@ -145,7 +145,11 @@ async function loadAnalysis(workId, id) {
     throw err;
   });
   if (content === null) return null;
-  return safeJSONParse(content, null, { allowArray: false, logError: true, context: analysisPath(workId, id) });
+  const parsed = safeJSONParse(content, null, { allowArray: false, logError: true, context: analysisPath(workId, id) });
+  // `allowArray: false` only rejects a root array — a bare JSON scalar
+  // (corrupted analysis) still parses, and callers spread this into a
+  // response object, so guard for a genuine object here.
+  return parsed && typeof parsed === 'object' ? parsed : null;
 }
 
 async function saveAnalysis(workId, snapshot) {
@@ -247,7 +251,9 @@ async function migrateLegacyAnalyses(workId) {
     const content = await tryReadFile(path);
     if (content === null) return null;
     const parsed = safeJSONParse(content, null, { allowArray: false, logError: true, context: path });
-    return parsed ? { id, snapshot: parsed } : null;
+    // `allowArray: false` only rejects a root array — a bare JSON scalar
+    // (corrupted legacy file) still parses, so also guard the shape here.
+    return parsed && typeof parsed === 'object' ? { id, snapshot: parsed } : null;
   }))).filter(Boolean);
 
   const latestPerKind = new Map();

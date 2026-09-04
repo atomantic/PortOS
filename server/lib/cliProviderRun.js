@@ -7,9 +7,10 @@
  * process and the Google Calendar MCP sync — stop hardcoding `claude -p` and
  * instead honor the configured provider/model like every other AI call.
  *
- * Imports only node builtins + the pure arg builder, so the separate-process
- * autofixer (its own minimal package, only `express` installed) can import it
- * without dragging in the AI toolkit or data layer.
+ * Imports only node builtins + pure `server/lib` helpers (the arg builder and
+ * the local-runtime classifier), so the separate-process autofixer (its own
+ * minimal package, only `express` installed) can import it without dragging in
+ * the AI toolkit or data layer.
  *
  * For full-featured in-process runs (fallback chains, run records, SSE) use
  * `runPromptThroughProvider` in `promptRunner.js` instead. This helper is the
@@ -20,6 +21,7 @@ import { spawn } from './childProcess.js';
 import { buildCliArgs, prepareCliPrompt } from './cliProviderArgs.js';
 import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn, guardChildStdin } from './bufferedSpawn.js';
 import { buildCliChildEnv } from './cliChildEnv.js';
+import { modelPinIsOffered } from './localProviderRuntime.js';
 
 // How much stderr to hand back to callers. Enough to carry a rate-limit banner
 // or a stack's first frames, short enough to embed in an error message or a
@@ -58,8 +60,11 @@ export function pickCliProvider(providers, config = {}) {
   // Honor the requested model only when the provider actually offers it;
   // otherwise fall back to the provider's own default so a stale stored model
   // (e.g. left over from a different provider) can't pin a nonexistent id.
-  const offered = Array.isArray(provider.models) ? provider.models : [];
-  const resolvedModel = model && offered.includes(model) ? model : (provider.defaultModel || null);
+  // `modelPinIsOffered` owns that rule — including the two pass-throughs a bare
+  // `includes` gets wrong: a provider that enumerates NO models has nothing to
+  // validate against, and a locally-backed one carries only a cached snapshot
+  // while the daemon on this machine is the authority.
+  const resolvedModel = model && modelPinIsOffered(provider, model) ? model : (provider.defaultModel || null);
 
   return { provider, model: resolvedModel };
 }

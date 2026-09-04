@@ -10,11 +10,11 @@
  * write — so one lagging peer stalled local writes once per sync cycle (#5441).
  */
 
-import { readFile, appendFile, stat } from 'fs/promises';
+import { readFile, stat } from 'fs/promises';
 import { existsSync, createReadStream } from 'fs';
 import { join } from 'path';
 import { createMutex } from '../lib/asyncMutex.js';
-import { ensureDir, safeJSONParse, PATHS, atomicWrite } from '../lib/fileUtils.js';
+import { appendFileGuarded, ensureDir, safeJSONParse, PATHS, atomicWrite } from '../lib/fileUtils.js';
 
 const DATA_DIR = PATHS.brain;
 const SYNC_LOG_FILE = join(DATA_DIR, 'sync_log.jsonl');
@@ -106,7 +106,7 @@ async function ensureIndex() {
  */
 async function writeIndexedLines(lines) {
   const payload = (pendingNewline ? '\n' : '') + lines.map(({ text }) => text).join('\n') + '\n';
-  await appendFile(SYNC_LOG_FILE, payload).catch((err) => {
+  await appendFileGuarded(SYNC_LOG_FILE, payload).catch((err) => {
     indexLoaded = false;
     throw err;
   });

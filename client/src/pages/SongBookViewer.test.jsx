@@ -377,6 +377,9 @@ E|--3-----|`;
       const statuses = screen.getAllByRole('status');
       expect(statuses.some((status) => status.textContent === 'Transpose 0 semitones')).toBe(true);
       expect(screen.getByRole('button', { name: /Transpose up \(currently 0 semitones\)/ })).toBeTruthy();
+      // Visible offset stays numeric-only so the control keeps its compact width (#5999).
+      const transposeStatus = statuses.find((status) => status.textContent === 'Transpose 0 semitones');
+      expect(transposeStatus.querySelector('span:not(.sr-only)').textContent).toBe('0');
 
       fireEvent.click(screen.getByRole('button', { name: /Transpose up \(currently 0/ }));
       expect(screen.getAllByRole('status').some((status) => status.textContent === 'Transpose +1 semitones')).toBe(true);
@@ -779,11 +782,13 @@ K:  o - - - - - o -`;
   });
 
   describe('fit-to-duration autoscroll preset (#4100)', () => {
-    // jsdom lays nothing out, so the scroll container reports 0/0 — stub the two
+    // The test DOM lays nothing out, so the scroll container reports 0/0 — stub the two
     // metrics the preset measures. 2000 tall in a 500 viewport = 1500px of travel.
     const stubScrollMetrics = (scrollHeight, clientHeight) => {
-      const sh = vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockReturnValue(scrollHeight);
-      const ch = vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(clientHeight);
+      // HTMLElement, not Element: `clientHeight` is declared on HTMLElement in some
+      // DOM implementations, and vi.spyOn only walks *up* the prototype chain (#6144).
+      const sh = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(scrollHeight);
+      const ch = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(clientHeight);
       return () => { sh.mockRestore(); ch.mockRestore(); };
     };
 

@@ -207,13 +207,21 @@ export const MAX_OUTPUT_BYTES = 64 * 1024;
  * object, so without this the flag would stay `false` for the process's
  * entire lifetime and those guards would never engage on Windows.
  *
- * The win32 branch is gated on `instanceof ChildProcess` — some callers (the
- * aiToolkit runner's `stopRun`, via `registerExternalRun`) pass this a
- * killable that isn't a `child_process` spawn at all, e.g. a node-pty `IPty`
- * TUI session, which also exposes `.kill()`/`.pid`. A raw `taskkill` against
- * a pty's pid bypasses node-pty's own Windows teardown (releasing its native
- * ConPTY handle), leaking it — so any non-ChildProcess killable always uses
- * its own `.kill()` instead, on every platform.
+ * The win32 branch is gated on the target OWNING a `.kill()` of its own — some
+ * callers (the aiToolkit runner's `stopRun`, via `registerExternalRun`) pass
+ * this a killable that isn't a `child_process` spawn at all, e.g. a node-pty
+ * `IPty` TUI session, which also exposes `.kill()`/`.pid`. A raw `taskkill`
+ * against a pty's pid bypasses node-pty's own Windows teardown (releasing its
+ * native ConPTY handle), leaking it — so any non-ChildProcess killable that
+ * brings its own `.kill()` always uses it instead, on every platform.
+ *
+ * A bare `{ pid }` target is the third shape: a process this server never held
+ * a handle to at all — `spawnDetached`'s Windows supervisor job, and the orphan
+ * `reapDetached` finds through a control dir's pid file — so there is no
+ * `.kill()` to prefer and the pid is the only address it has. It takes the same
+ * tree-kill a ChildProcess does, which is what gives a detached Windows job the
+ * "the runner's ffmpeg/python descendants die with it" guarantee POSIX gets
+ * from a process-group signal (#4171, #6170).
  *
  * node-pty's Windows backend additionally throws `Signals not supported on
  * windows.` for ANY signal argument, so `kill(signal)` against a pty there never
@@ -251,14 +259,17 @@ export const MAX_OUTPUT_BYTES = 64 * 1024;
  * this rather than `child.kill()`, or on Windows only the `cmd.exe` shim dies
  * and the real CLI child is orphaned.
  *
- * @param {import('child_process').ChildProcess} child
+ * @param {import('child_process').ChildProcess|{pid: number, kill?: Function}} child - a ChildProcess, any killable exposing `.pid`/`.kill()`, or a bare `{ pid }`
  * @param {NodeJS.Signals} [signal] - POSIX signal to send (default `SIGTERM`); ignored on Windows
  * @param {{processGroup?: boolean}} [opts] - POSIX: signal the child's process group (it must have been spawned `detached`)
  * @param {boolean} [isWin32] - platform override, injected so the Windows branches are testable off Windows (same shape as `resolveWindowsExecutable`)
  */
 export function killProcessTree(child, signal = 'SIGTERM', { processGroup = false } = {}, isWin32 = IS_WIN32) {
   const isChildProcess = child instanceof ChildProcess;
-  if (isWin32 && child.pid && isChildProcess) {
+  // A target with no `.kill()` of its own is addressable only by pid — nothing
+  // to prefer over the platform's own tree/group kill below.
+  const isPidOnly = !isChildProcess && typeof child.kill !== 'function';
+  if (isWin32 && child.pid && (isChildProcess || isPidOnly)) {
     child.killed = true;
     spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore' })
       .on('error', () => {})
@@ -268,6 +279,15 @@ export function killProcessTree(child, signal = 'SIGTERM', { processGroup = fals
   if (processGroup && child.pid) {
     try { process.kill(-child.pid, signal); return; }
     catch { /* ESRCH — the group is already gone; fall through to the pid */ }
+  }
+  if (isPidOnly) {
+    // POSIX, pid-only: the group signal above either landed or the group is
+    // gone, so this is the plain per-pid signal — swallowing ESRCH exactly as
+    // the group attempt does, since a target that already exited is not a
+    // failure to report.
+    try { process.kill(child.pid, signal); }
+    catch { /* ESRCH — already gone */ }
+    return;
   }
   if (isWin32 && !isChildProcess) {
     // node-pty rejects the signal outright on Windows (see the note above);

@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 import { describe, expect, it } from 'vitest';
 import { slugifyUniverseName, universeMarkdownFilename } from './universeMarkdownFilename.js';
 import { UNIVERSE_MARKDOWN_FILENAME_CASES } from './universeMarkdownFilename.cases.js';

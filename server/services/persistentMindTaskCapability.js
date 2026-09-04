@@ -18,11 +18,13 @@ import { canonicalStringify } from '../lib/objects.js';
 import { antigravityBaseModels, effortLevelsForProvider, filterSelectableModels } from '../lib/providerModels.js';
 import { PR_COMPLETIONS } from '../lib/prDisposition.js';
 import { sha256Text } from '../lib/fileUtils.js';
+import { MANAGED_ASSESSMENT_BACKENDS, localRuntimeKind } from '../lib/localProviderRuntime.js';
 import { resolveAppWorkTracker } from '../lib/workTracker.js';
 import { getActiveApps, getAppWorkTracker } from './apps.js';
 import { loadState } from './cosState.js';
 import { addTask, getTaskById } from './cosTaskStore.js';
 import { getProviderPrerequisiteReadinessMap } from './providerPrerequisites.js';
+import { listManagedBackendModels } from './localLlm.js';
 import { listProviders } from './providers.js';
 import {
   assessPersistentMindWorkspaceReadiness,
@@ -71,11 +73,49 @@ const boundedReadinessReasonCodes = (value) => (Array.isArray(value) ? value : [
   .filter((code) => typeof code === 'string' && /^[a-z][a-zA-Z0-9-]{0,49}$/.test(code))
   .slice(0, 10);
 
-const selectableModelIds = (provider) => {
-  const stored = filterSelectableModels(antigravityBaseModels(provider?.models))
-    .filter((model) => typeof model === 'string' && model.trim()
-      && model.trim().length <= PERSISTENT_MIND_TASK_LIMITS.modelChars)
-    .map((model) => model.trim());
+/**
+ * The ids a LOCAL provider can actually be dispatched against, from the daemon
+ * rather than the record.
+ *
+ * A provider backed by Ollama or LM Studio carries a `models` array that is only
+ * a cached snapshot — the daemon on this machine is the authority, and every
+ * model picker in PortOS already offers what it reports. Building the persistent
+ * mind's allowed-model list from the record instead means a model the user
+ * pulled after the record was last refreshed is rejected as "not configured",
+ * even though it is installed and serving.
+ *
+ * `null` (not readable) must NOT collapse to `[]` (no models installed): both
+ * managers cache an empty array on a failed read, so a daemon that is merely
+ * down would otherwise wipe every model off the catalog. `listManagedBackendModels`
+ * carries that sentinel; when it reports one, the caller keeps the record's list.
+ *
+ * Other local runtimes (llama.cpp, MTPLX, vLLM, SGLang, Slotstream) have no
+ * cached catalog inside PortOS — reading them means a live `GET /v1/models`
+ * probe, which this catalog builder runs on every wake and must not pay for.
+ * They keep the record's list.
+ *
+ * @returns {Promise<string[]|null>} `null` when no daemon list applies or it
+ *   could not be read.
+ */
+const daemonModelIds = async (provider) => {
+  // `localRuntimeKind`, not `localBackendForProvider`: the marker-based lookup is
+  // what resolves a `claude-ollama`-shaped provider, which carries `ollamaBacked`
+  // without naming Ollama in its id, name, or endpoint.
+  const backend = localRuntimeKind(provider);
+  if (!MANAGED_ASSESSMENT_BACKENDS.includes(backend)) return null;
+  const { models, error } = await listManagedBackendModels(backend)
+    .catch(() => ({ models: null, error: 'model list failed' }));
+  if (error || !Array.isArray(models)) return null;
+  return models.map((model) => model?.id).filter((id) => typeof id === 'string' && id.trim());
+};
+
+const boundedModelIds = (models) => filterSelectableModels(antigravityBaseModels(models))
+  .filter((model) => typeof model === 'string' && model.trim()
+    && model.trim().length <= PERSISTENT_MIND_TASK_LIMITS.modelChars)
+  .map((model) => model.trim());
+
+const selectableModelIds = async (provider) => {
+  const stored = boundedModelIds((await daemonModelIds(provider)) ?? provider?.models);
   const configuredDefault = filterSelectableModels([provider?.defaultModel])[0];
   const withDefault = typeof configuredDefault === 'string' && configuredDefault.trim()
     && configuredDefault.trim().length <= PERSISTENT_MIND_TASK_LIMITS.modelChars
@@ -84,9 +124,9 @@ const selectableModelIds = (provider) => {
   return [...new Set(withDefault)].slice(0, MAX_CATALOG_MODELS);
 };
 
-const providerCatalogEntry = (provider, capabilities) => {
+const providerCatalogEntry = async (provider, capabilities) => {
   const policy = normalizePersistentMindCapabilities(capabilities);
-  const models = selectableModelIds(provider)
+  const models = (await selectableModelIds(provider))
     .filter((model) => isPersistentMindTaskModelAllowed(capabilities, provider.id, model));
   if ((policy.taskModelAllowlist.length > 0 || policy.taskModelAllowlistInvalid) && models.length === 0) return null;
   return {
@@ -137,9 +177,9 @@ export async function readPersistentMindTaskCatalog({ allowedAppIds, includeAllA
     // The tools settings page needs to see revoked apps so it can restore them;
     // the model-facing catalog remains narrowed to the granted set.
     apps: includeAllApps || !allowed ? appCatalog : appCatalog.filter((app) => allowed.has(app.id)),
-    providers: candidates
+    providers: (await Promise.all(candidates
       .filter((provider) => readiness[provider.id]?.status === 'ready')
-      .map((provider) => providerCatalogEntry(provider, capabilities))
+      .map((provider) => providerCatalogEntry(provider, capabilities))))
       .filter(Boolean),
     providerReadiness: providerReadinessSummary(candidates, readiness),
   };
@@ -246,7 +286,7 @@ const validateChoice = async (request, apps, providers, capabilities) => {
     cwd: app.repoPath,
   }))[provider.id];
   if (providerReadiness?.status !== 'ready') return { error: readinessError(provider.id, providerReadiness) };
-  const models = selectableModelIds(provider);
+  const models = await selectableModelIds(provider);
   if (request.model && !models.includes(request.model)) {
     return { error: `Model '${request.model}' is not configured for provider '${request.providerId}'` };
   }

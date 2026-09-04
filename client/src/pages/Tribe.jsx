@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import {
+  AlertTriangle,
   Calendar,
   Clock,
   Copy,
@@ -24,6 +25,7 @@ import {
 import * as api from '../services/api';
 import socket from '../services/socket';
 import BrailleSpinner from '../components/BrailleSpinner';
+import Banner from '../components/ui/Banner';
 import PageHeader from '../components/PageHeader';
 import { localDateStr } from '../components/meatspace/constants';
 import toast from '../components/ui/Toast';
@@ -493,7 +495,7 @@ function MemoryLinksPanel({ personId }) {
                 onClick={() => unlinkMemory(link.memoryId)}
                 title="Unlink memory"
                 aria-label="Unlink memory"
-                className="shrink-0 rounded p-1 text-gray-500 hover:text-rose-300"
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center shrink-0 rounded p-1 text-gray-500 hover:text-rose-300"
               >
                 <X size={14} aria-hidden="true" />
               </button>
@@ -931,6 +933,10 @@ export default function Tribe() {
   // record a pending request and let the effect retry once the form mounts
   // instead of consuming the tick against an unmounted form.
   const pendingFocusRef = useRef(false);
+  // Non-blocking duplicate-identifier report (#5908) — `null` until the first
+  // fetch resolves, so "nothing yet" never briefly renders as "confirmed clean".
+  const [duplicates, setDuplicates] = useState(null);
+  const [duplicatesDismissed, setDuplicatesDismissed] = useState(false);
 
   const selectedId = draft.id;
 
@@ -981,10 +987,14 @@ export default function Tribe() {
     let cancelled = false;
     const isCancelled = () => cancelled;
     loadContacts(isCancelled);
+    const loadDuplicates = () => api.getTribeDuplicateIdentifiers({ silent: true })
+      .then((report) => { if (!isCancelled()) setDuplicates(report); })
+      .catch(() => { if (!isCancelled()) setDuplicates({ emails: [], phones: [] }); });
+    loadDuplicates();
     // Mutations broadcast `tribe:changed` from the server; reconcile against
     // server truth (covers other tabs/devices and the GREATEST last-contact
     // merge that optimistic updates can't predict).
-    const handleChanged = () => loadContacts(isCancelled);
+    const handleChanged = () => { loadContacts(isCancelled); loadDuplicates(); };
     socket.on('tribe:changed', handleChanged);
     return () => {
       cancelled = true;
@@ -1136,6 +1146,8 @@ export default function Tribe() {
     setStatusFilter(DEFAULT_STATUS);
   };
 
+  const duplicateGroups = [...(duplicates?.emails || []), ...(duplicates?.phones || [])];
+
   const actions = (
     <button
       type="button"
@@ -1187,6 +1199,35 @@ export default function Tribe() {
             />
             <StatTile icon={Heart} label="Capacity" value={`${tribeCount}/150`} detail="village horizon" />
           </div>
+
+          {duplicateGroups.length > 0 && !duplicatesDismissed && (
+            <Banner
+              tone="warning"
+              icon={AlertTriangle}
+              title="Shared contact info"
+              actions={(
+                <button
+                  type="button"
+                  onClick={() => setDuplicatesDismissed(true)}
+                  aria-label="Dismiss shared contact info notice"
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded text-port-warning/70 hover:text-port-warning"
+                >
+                  <X size={14} aria-hidden="true" />
+                </button>
+              )}
+            >
+              {/* Non-blocking report (#5908): the same email/phone is on file for more
+                  than one person, so a routine sync can silently re-target every later
+                  touchpoint from one to the other. Naming it is the whole feature — this
+                  never merges or edits anyone automatically. */}
+              {duplicateGroups.map((group) => (
+                <div key={group.identifier}>
+                  <span className="font-mono">{group.identifier}</span> is on file for{' '}
+                  {group.people.map((p) => p.name).join(' and ')}.
+                </div>
+              ))}
+            </Banner>
+          )}
 
           {activeTab === 'circle' && (
             <div className="grid gap-4 xl:grid-cols-[310px_minmax(0,1fr)_minmax(330px,420px)]">

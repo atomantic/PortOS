@@ -1026,6 +1026,91 @@ describe('ui_click — destructive confirmation gate', () => {
   });
 });
 
+// #5907 — data-voice-guard="confirm" gates a control regardless of its label,
+// on the tools that were previously ungated (ui_check, ui_fill) as well as
+// ui_click. "Send to Catalog" / "Send to Video" / "Send text" / "Send Ctrl+C
+// interrupt" are the un-annotated labels the wider "send" regex would have
+// false-positived on had this been fixed by widening DESTRUCTIVE_LABEL_RE
+// instead — they must click without a prompt.
+describe('data-voice-guard annotation gates ui_click / ui_check / ui_fill (#5907)', () => {
+  const makeState = () => ({
+    ui: {
+      elements: [
+        { ref: 1, kind: 'button', label: 'Send', guard: 'confirm' },
+        { ref: 2, kind: 'button', label: 'Send to Catalog' },
+        { ref: 3, kind: 'button', label: 'Send to Video' },
+        { ref: 4, kind: 'button', label: 'Send text' },
+        { ref: 5, kind: 'button', label: 'Send Ctrl+C interrupt' },
+        { ref: 6, kind: 'checkbox', label: 'Auto-publish', guard: 'confirm' },
+        { ref: 7, kind: 'checkbox', label: 'Keep drafts' },
+        { ref: 8, kind: 'input', label: 'Additional context for the agent', guard: 'confirm' },
+        { ref: 9, kind: 'input', label: 'Search' },
+      ],
+    },
+  });
+
+  it('gates a guard="confirm" click regardless of its non-destructive label', async () => {
+    const state = makeState();
+    const r = await dispatchTool('ui_click', { label: 'Send' }, { state, sideEffects: [] });
+    expect(r.confirmation_required).toBe(true);
+    expect(state.pendingDestructive.tool).toBe('ui_click');
+  });
+
+  it.each(['Send to Catalog', 'Send to Video', 'Send text', 'Send Ctrl+C interrupt'])(
+    'clicks unannotated "%s" without a prompt',
+    async (label) => {
+      const state = makeState();
+      const sideEffects = [];
+      const r = await dispatchTool('ui_click', { label }, { state, sideEffects });
+      expect(r.confirmation_required).toBeUndefined();
+      expect(sideEffects).toHaveLength(1);
+    },
+  );
+
+  it('gates a guard="confirm" checkbox and stashes a replayable ui_check pending record', async () => {
+    const state = makeState();
+    const r = await dispatchTool('ui_check', { label: 'Auto-publish', checked: true }, { state, sideEffects: [] });
+    expect(r.confirmation_required).toBe(true);
+    expect(state.pendingDestructive.tool).toBe('ui_check');
+    expect(state.pendingDestructive.args).toEqual({ label: 'Auto-publish', checked: true });
+  });
+
+  it('checks an unannotated, non-destructive checkbox without a prompt', async () => {
+    const state = makeState();
+    const sideEffects = [];
+    const r = await dispatchTool('ui_check', { label: 'Keep drafts', checked: false }, { state, sideEffects });
+    expect(r.confirmation_required).toBeUndefined();
+    expect(sideEffects).toHaveLength(1);
+    expect(sideEffects[0].checked).toBe(false);
+  });
+
+  it('gates a guard="confirm" fill and stashes a replayable ui_fill pending record', async () => {
+    const state = makeState();
+    const r = await dispatchTool(
+      'ui_fill',
+      { label: 'Additional context for the agent', value: 'stop what you are doing' },
+      { state, sideEffects: [] },
+    );
+    expect(r.confirmation_required).toBe(true);
+    expect(state.pendingDestructive.tool).toBe('ui_fill');
+    expect(state.pendingDestructive.args).toEqual({
+      label: 'Additional context for the agent',
+      value: 'stop what you are doing',
+    });
+  });
+
+  // ui_fill deliberately never gates on the destructive-label heuristic —
+  // text entry is reversible — only on an explicit guard annotation.
+  it('fills an unannotated field immediately, even with a destructive-sounding value', async () => {
+    const state = makeState();
+    const sideEffects = [];
+    const r = await dispatchTool('ui_fill', { label: 'Search', value: 'delete everything' }, { state, sideEffects });
+    expect(r.confirmation_required).toBeUndefined();
+    expect(sideEffects).toHaveLength(1);
+    expect(sideEffects[0].value).toBe('delete everything');
+  });
+});
+
 // image_generate uses imageGen.generateImage under the hood; mocked
 // above. The codexEnabledRef toggle drives the disabled-gate test.
 describe("image_generate", () => {

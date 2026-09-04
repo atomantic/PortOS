@@ -610,7 +610,7 @@ export default function LinksTab({ onRefresh }) {
         {search && (
           <button
             onClick={() => setSearch('')}
-            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-500 hover:text-white transition-colors"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-500 hover:text-white transition-colors"
             title="Clear search" aria-label="Clear search"
           >
             <X size={14} />
@@ -760,17 +760,17 @@ export default function LinksTab({ onRefresh }) {
                     )}
                   </div>
 
-                  <div className="flex items-center gap-1 shrink-0">
+                  <div className="flex items-center gap-2 shrink-0">
                     <button
                       onClick={() => handleEdit(link)}
-                      className="p-1.5 text-gray-400 hover:text-white transition-colors"
+                      className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-400 hover:text-white transition-colors"
                       title="Edit" aria-label="Edit"
                     >
                       <Edit2 size={14} />
                     </button>
                     <button
                       onClick={() => setConfirmingDeleteId(link.id)}
-                      className="p-1.5 text-gray-400 hover:text-port-error transition-colors"
+                      className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-400 hover:text-port-error transition-colors"
                       title="Delete" aria-label="Delete"
                     >
                       <Trash2 size={14} />

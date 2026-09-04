@@ -77,7 +77,7 @@ export function useMediaAnnotations() {
     return () => socket.off('media:annotation:updated', onUpdate);
   }, []);
 
-  const updateAnnotation = useCallback(async (key, patch) => {
+  const updateAnnotation = useCallback(async (key, patch, { silent = false } = {}) => {
     // Snapshot prior state synchronously from the ref — state updaters in
     // React 18 concurrent mode can be deferred or retried, so mutating an
     // outer `let prior` from inside `setAnnotations((prev) => { ... })` is
@@ -103,8 +103,10 @@ export function useMediaAnnotations() {
       else next[key] = nextEntry;
       return next;
     });
+    let failed = false;
     const res = await setMediaAnnotation(key, patch, { silent: true }).catch((err) => {
-      toast.error(err?.message || 'Failed to save annotation');
+      failed = true;
+      if (!silent) toast.error(err?.message || 'Failed to save annotation');
       setAnnotations((prev) => {
         const reverted = { ...prev };
         if (prior) reverted[key] = prior;
@@ -113,7 +115,10 @@ export function useMediaAnnotations() {
       });
       return null;
     });
-    return res?.entry ?? null;
+    // `entry` is legitimately `null` on a real success too (the server clears
+    // the entry entirely once both `starred` and `note` are empty) — `ok` is
+    // the only reliable success signal, entry alone can't disambiguate.
+    return { ok: !failed, entry: res?.entry ?? null };
   }, []);
 
   // Reads prior starred state from the ref so the callback's identity stays

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   DESTRUCTIVE_LABEL_RE,
   isDestructiveLabel,
+  requiresConfirmation,
   isAffirmative,
   isNegative,
   buildPending,
@@ -41,6 +42,29 @@ describe('isDestructiveLabel', () => {
     // (no gate) means a destructive click fires silently. We pick narrow matching.
     expect(DESTRUCTIVE_LABEL_RE.test('Clear filters')).toBe(true);
     expect(DESTRUCTIVE_LABEL_RE.test('Cleared session')).toBe(false);
+  });
+});
+
+describe('requiresConfirmation', () => {
+  it('gates on the destructive-label heuristic when unannotated (#5907)', () => {
+    expect(requiresConfirmation({ label: 'Delete' })).toBe(true);
+    expect(requiresConfirmation({ label: 'Save' })).toBe(false);
+  });
+
+  it('gates a data-voice-guard="confirm" control regardless of its label', () => {
+    expect(requiresConfirmation({ label: 'Send', guard: 'confirm' })).toBe(true);
+  });
+
+  it('does not gate an unmarked, non-destructive label', () => {
+    expect(requiresConfirmation({ label: 'Send to Catalog' })).toBe(false);
+    expect(requiresConfirmation({ label: 'Send to Video' })).toBe(false);
+    expect(requiresConfirmation({ label: 'Send text' })).toBe(false);
+    expect(requiresConfirmation({ label: 'Send Ctrl+C interrupt' })).toBe(false);
+  });
+
+  it('handles a missing entry without throwing', () => {
+    expect(requiresConfirmation(null)).toBe(false);
+    expect(requiresConfirmation(undefined)).toBe(false);
   });
 });
 

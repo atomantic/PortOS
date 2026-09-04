@@ -1,6 +1,6 @@
 /**
- * Single-video YouTube URL detection — MIRROR of `YOUTUBE_INGEST_URL_RE` in
- * `server/services/youtubeIngest.js` (authoritative there).
+ * Single-video YouTube URL detection — MIRROR of `YOUTUBE_VIDEO_URL_RE` in
+ * `server/lib/youtubeUrl.js` (authoritative there).
  *
  * The Quick Capture box swaps its whole submit path (brain capture → YouTube
  * ingest) based on this predicate, and reveals the ingest options panel from it,
@@ -15,7 +15,7 @@
 const SINGLE_VIDEO_RE =
   /^https?:\/\/(www\.|m\.|music\.)?(youtube\.com\/(watch\?[^\s#]*\bv=[\w-]{6,}|shorts\/[\w-]{6,}|live\/[\w-]{6,}|embed\/[\w-]{6,})|youtu\.be\/[\w-]{6,})/i;
 
-/** The video id in a YouTube URL, or null. Mirrors `youtubeVideoIdFromUrl` server-side. */
+/** The video id in a YouTube URL, or null. Mirrors `youtubeVideoIdFromUrl` in `server/lib/youtubeUrl.js`. */
 export function youtubeVideoId(url) {
   if (!url) return null;
   const s = String(url).trim();

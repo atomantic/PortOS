@@ -2,7 +2,7 @@
 // named stage of the current pipeline issue. These only work on a
 // /pipeline/issues/... page; off-page calls return a friendly error.
 
-import { NAVIGABLE_STAGE_IDS as PIPELINE_STAGE_IDS } from '../../pipeline/issues.js';
+import { NAVIGABLE_STAGE_IDS as PIPELINE_STAGE_IDS } from '../../pipeline/issuesShared.js';
 
 // Pipeline stage navigation — fires on "next stage", "previous stage",
 // "back to prose", "open the storyboards", "open prose", "open teleplay",

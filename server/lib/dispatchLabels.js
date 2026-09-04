@@ -12,6 +12,11 @@
  * Contributor labels (`good first issue`, `help wanted`) are a third, equally
  * optional axis: apply them when the work is actually onboarding-shaped, not
  * because `model` happened to be `light`.
+ *
+ * The WORKFLOW labels below (`epic`, `decomposed`, `in-progress`) are not hints
+ * at all — they are state every claim/reconcile flow reads and writes. They live
+ * here because `dispatchLabelSpec` is what lazily creates any of them on a repo
+ * that has never defined it.
  */
 
 import { shellQuote } from './shellQuote.js';
@@ -80,14 +85,26 @@ export const EPIC_DECOMPOSED_LABEL = 'decomposed';
  */
 export const EPIC_LABEL = 'epic';
 
+/**
+ * The claim marker: 'this issue is claimed and being worked'. Written by every
+ * flow that takes ownership of an issue — a CoS claim, and the issue-watcher's
+ * deterministic volunteer assignment — and read as a hard skip by the claim
+ * queue (`perpetualWork.js#NON_ACTIONABLE_ISSUE_LABELS`) and by the zombie scan
+ * in `issueReconcile.js`. One spelling here so an assigning flow and a
+ * releasing flow can never drift apart.
+ */
+export const IN_PROGRESS_LABEL = 'in-progress';
+
 export const WORKFLOW_LABEL_COLORS = Object.freeze({
   [EPIC_DECOMPOSED_LABEL]: 'BFD4F2',
   [EPIC_LABEL]: 'B60205',
+  [IN_PROGRESS_LABEL]: 'FFA500',
 });
 
 export const WORKFLOW_LABEL_DESCRIPTIONS = Object.freeze({
   [EPIC_DECOMPOSED_LABEL]: 'Epic already split into per-slice child issues',
   [EPIC_LABEL]: 'Umbrella/tracking issue — shipped as per-slice children, never as one PR',
+  [IN_PROGRESS_LABEL]: 'Claimed and being worked',
 });
 
 /**
@@ -354,6 +371,51 @@ export function formatContributorLabelReleaseCommands(issueRef, { cli = 'gh' } =
   return CONTRIBUTOR_LABELS.map((label) => (cli === 'glab'
     ? `glab issue update ${issueRef} --unlabel ${shellQuote(label)} 2>/dev/null`
     : `gh issue edit ${issueRef} --remove-label ${shellQuote(label)} 2>/dev/null`));
+}
+
+/**
+ * The forge state a VOLUNTEER claim writes — one policy, shared by both paths
+ * that observe the same event (a human comment on an unassigned issue saying
+ * they intend to do the work): the issue-watcher's deterministic gather pass
+ * (`issueWatcher.js#assignVolunteer`) and the claim agent's Phase 1 handoff.
+ *
+ * A volunteer claim IS a claim: assignee + `in-progress` + the contributor
+ * invitations retired. `in-progress` is what the Issues tab hides on and what
+ * makes a volunteer-held issue read the same as an agent-held one, and the
+ * invitations are stale the moment somebody takes the work — the same reasoning
+ * `formatContributorLabelReleaseCommands` already encodes for an autonomous
+ * claim. Before this existed the two paths disagreed (the watcher stamped
+ * `in-progress` and left the invitations up; the prompt did the exact opposite),
+ * so which path ran first decided the resulting forge state.
+ *
+ * Returns plain label names, so a programmatic caller (`gh issue edit`, the
+ * GitLab equivalent) and a prompt renderer can share the decision without
+ * sharing a shell dialect. The assignee is NOT here — it is a login, not a
+ * label, and every caller already has it.
+ */
+export function volunteerClaimLabels() {
+  return { add: [IN_PROGRESS_LABEL], remove: [...CONTRIBUTOR_LABELS] };
+}
+
+/**
+ * `volunteerClaimLabels()` rendered as the shell text a claim prompt's handoff
+ * step runs, after it has verified the assignment. Ordered add-then-release so
+ * the issue is never momentarily un-advertised AND unclaimed.
+ *
+ * The `in-progress` add is preceded by its lazy `label create`: `--add-label`
+ * fails the WHOLE call on a repo that has never defined the label, which on a
+ * fresh fork would silently drop the marker. Every command is best-effort — a
+ * handoff whose assignment already landed must not abort on label bookkeeping.
+ *
+ * `issueRef` is inserted verbatim as shell text (e.g. `"${CANDIDATE}"`).
+ */
+export function formatVolunteerClaimCommands(issueRef, { cli = 'gh' } = {}) {
+  const { add } = volunteerClaimLabels();
+  const creates = add.map((label) => formatLabelCreateCommand(label, { cli })).filter(Boolean);
+  const adds = add.map((label) => (cli === 'glab'
+    ? `glab issue update ${issueRef} --label ${shellQuote(label)} 2>/dev/null`
+    : `gh issue edit ${issueRef} --add-label ${shellQuote(label)} 2>/dev/null`));
+  return [...creates, ...adds, ...formatContributorLabelReleaseCommands(issueRef, { cli })];
 }
 
 /** Dispatch hints + contributor labels for one GitHub/GitLab issue. */

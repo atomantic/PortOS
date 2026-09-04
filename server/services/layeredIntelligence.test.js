@@ -2931,11 +2931,20 @@ describe('forge I/O (injected exec)', () => {
     expect(res.error).toContain('boom');
   });
 
-  it('applyBlockingLabel adds the blocking label via gh edit', async () => {
+  // The label must be CREATED before it is applied: both forges 422 the whole
+  // `--add-label` call on a repo that has never defined it, and this is the only
+  // path that applies the blocking label — so on an install where the loop has
+  // not yet filed an issue, the first pause would fail without the lazy create.
+  it('applyBlockingLabel creates the blocking label before adding it', async () => {
     const exec = vi.fn().mockResolvedValue({ code: 0, stdout: '' });
     const res = await applyBlockingLabel({ cli: 'gh', cwd: '/x', number: 42, exec });
     expect(res.success).toBe(true);
-    expect(exec.mock.calls[0][1]).toEqual(expect.arrayContaining(['edit', '42', '--add-label', LI_BLOCKING_LABEL]));
+    const args = exec.mock.calls.map(([, a]) => a);
+    const createdAt = args.findIndex((a) => a[0] === 'label' && a[1] === 'create' && a[2] === LI_BLOCKING_LABEL);
+    const editedAt = args.findIndex((a) => a[0] === 'issue' && a[1] === 'edit' && a[2] === '42');
+    expect(createdAt).toBeGreaterThanOrEqual(0);
+    expect(editedAt).toBeGreaterThan(createdAt);
+    expect(args[editedAt]).toEqual(expect.arrayContaining(['edit', '42', '--add-label', LI_BLOCKING_LABEL]));
   });
 
   it('applyBlockingLabel rejects a non-integer number', async () => {

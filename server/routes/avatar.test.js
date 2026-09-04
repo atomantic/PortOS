@@ -13,14 +13,21 @@ vi.mock('fs/promises', () => ({
   stat: vi.fn()
 }));
 
-vi.mock('../lib/fileUtils.js', () => ({
-  PATHS: { data: '/mock/data' },
+vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  PATHS: { data: '/mock/data', imageTo3d: '/mock/image-to-3d' },
   pathExists: vi.fn()
+}));
+
+vi.mock('../services/imageTo3d/db.js', () => ({
+  getModel: vi.fn(),
+  listModels: vi.fn(),
 }));
 
 import { createReadStream } from 'fs';
 import { stat } from 'fs/promises';
 import { pathExists } from '../lib/fileUtils.js';
+import { getModel, listModels } from '../services/imageTo3d/db.js';
 import avatarRoutes from './avatar.js';
 
 const buildApp = () => {
@@ -141,6 +148,85 @@ describe('avatar routes', () => {
       expect(ok.headers['content-type']).toBe('model/gltf-binary');
       const bad = await request(buildApp()).head('/api/avatar/model.glb?variant=../secret');
       expect(bad.status).toBe(404);
+    });
+  });
+
+  describe('rigged record variants', () => {
+    const readyRecord = {
+      id: 'image3d-record-1',
+      name: 'Example Character',
+      retarget: { status: 'ready', retargetId: 'retarget-run-1', clip: 'Idle' },
+    };
+
+    it('serves a ready record animated GLB through the rigged spelling', async () => {
+      getModel.mockResolvedValue(readyRecord);
+      pathExists.mockResolvedValue(true);
+      createReadStream.mockReturnValue(Readable.from([Buffer.from('ANIMATED-GLB')]));
+      const res = await request(buildApp()).get('/api/avatar/model.glb?variant=rigged-image3d-record-1');
+      expect(res.status).toBe(200);
+      expect(res.text).toBe('ANIMATED-GLB');
+      // The resolved path stays inside the record's retarget publish dir.
+      expect(createReadStream).toHaveBeenCalledWith(joinPath(
+        '/mock/image-to-3d', 'image3d-record-1', 'retarget', 'retarget-run-1', 'character.animated.glb',
+      ));
+    });
+
+    it('HEAD honors a ready rigged spelling', async () => {
+      getModel.mockResolvedValue(readyRecord);
+      stat.mockResolvedValue({ size: 7 });
+      const res = await request(buildApp()).head('/api/avatar/model.glb?variant=rigged-image3d-record-1');
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toBe('model/gltf-binary');
+    });
+
+    it('404s a rigged spelling for unknown, unready, and traversal ids alike', async () => {
+      pathExists.mockResolvedValue(false);
+      // Unknown record.
+      getModel.mockResolvedValue(null);
+      const missing = await request(buildApp()).get('/api/avatar/model.glb?variant=rigged-image3d-nope');
+      expect(missing.status).toBe(404);
+      expect(missing.body.error).toMatch(/animated character/i);
+      // Rig-only record (no verified retarget yet) — never a half-animated file.
+      getModel.mockResolvedValue({ id: 'image3d-record-2', retarget: { status: 'retargeting' } });
+      const unready = await request(buildApp()).get('/api/avatar/model.glb?variant=rigged-image3d-record-2');
+      expect(unready.status).toBe(404);
+      // Traversal inside the rigged namespace never reaches the record lookup.
+      getModel.mockClear();
+      const traversal = await request(buildApp()).get('/api/avatar/model.glb?variant=rigged-../secret');
+      expect(traversal.status).toBe(404);
+      expect(getModel).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /rigged', () => {
+    it('lists only ready records with their clip coverage attached', async () => {
+      listModels.mockResolvedValue([
+        { id: 'image3d-animated-1', name: 'Example Dancer', retarget: { status: 'ready', retargetId: 'retarget-1', clip: 'Dance' } },
+        { id: 'image3d-rig-only-1', name: 'Not Yet', rig: { status: 'ready' }, retarget: null },
+        { id: 'image3d-failed-1', name: 'Failed', retarget: { status: 'failed' } },
+      ]);
+      const res = await request(buildApp()).get('/api/avatar/rigged');
+      expect(res.status).toBe(200);
+      expect(res.body.records).toHaveLength(1);
+      expect(res.body.records[0]).toMatchObject({
+        id: 'image3d-animated-1',
+        name: 'Example Dancer',
+        variant: 'rigged-image3d-animated-1',
+        assetUrl: '/api/avatar/model.glb?variant=rigged-image3d-animated-1',
+        clip: 'Dance',
+      });
+      // The single retargeted clip drives the coverage answer: Dance covers
+      // ideating, everything else honestly reports missing.
+      expect(res.body.records[0].coverage.coveredStates).toContain('ideating');
+      expect(res.body.records[0].coverage.missingStates.length).toBeGreaterThan(0);
+      expect(res.body.records[0].coverage.complete).toBe(false);
+    });
+
+    it('answers an empty list when no record is animated yet', async () => {
+      listModels.mockResolvedValue([]);
+      const res = await request(buildApp()).get('/api/avatar/rigged');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ records: [] });
     });
   });
 });

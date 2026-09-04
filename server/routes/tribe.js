@@ -117,6 +117,13 @@ router.get('/care', asyncHandler(async (req, res) => {
   res.json(summary);
 }));
 
+// Report of emails/phones shared by more than one person (#5908). `tribe_people` has
+// no uniqueness on those columns, so a routine sync can silently re-target a shared
+// identifier from one person to the other. Detection only — never merges or writes.
+router.get('/duplicate-identifiers', asyncHandler(async (req, res) => {
+  res.json(await tribe.checkDuplicateTribeIdentifiers());
+}));
+
 // Unanswered inbound threads from Tribe people, detected from the activity
 // timeline (#2158). Detection only — NO LLM. Feeds the Tribe Outreach panel and
 // mirrors the `tribe_unanswered` proactive alert.

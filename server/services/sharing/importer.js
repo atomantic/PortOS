@@ -22,10 +22,10 @@
  */
 
 import { join, basename } from 'path';
-import { copyFile, readdir } from 'fs/promises';
+import { readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { EventEmitter } from 'events';
-import { PATHS, ensureDir, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
+import { PATHS, copyFileGuarded, ensureDir, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { isSafeRecordId } from '../../lib/validation.js';
 import { getBucket, bucketBlobPath, bucketBlobSidecarPath, bucketRecordsDir, bucketRecordPath, imageSidecarName, isHexHash } from './buckets.js';
 import { readManifest, markProcessed, readCursor, hasBeenProcessed, forgetProcessed } from './manifest.js';
@@ -298,12 +298,12 @@ async function copyAssetsLocally(bucketPath, assetRefs) {
     }
     available.push({ kind, ref: filename });
     if (!existsSync(targetPath)) {
-      await copyFile(blobPath, targetPath);
+      await copyFileGuarded(blobPath, targetPath);
       copied.push({ kind, ref: filename });
     }
     if (sidecarPath && existsSync(sidecarPath)) {
       const sidecarTarget = join(targetDir, imageSidecarName(filename));
-      if (!existsSync(sidecarTarget)) await copyFile(sidecarPath, sidecarTarget);
+      if (!existsSync(sidecarTarget)) await copyFileGuarded(sidecarPath, sidecarTarget);
     }
   }));
   return { copied, available, missing };

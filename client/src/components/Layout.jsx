@@ -1238,7 +1238,7 @@ export default function Layout() {
             <button
               type="button"
               onClick={() => setCollapsed(true)}
-              className="hidden lg:flex p-1 text-gray-500 hover:text-white transition-colors"
+              className="min-h-[44px] min-w-[44px] items-center justify-center hidden lg:flex p-1 text-gray-500 hover:text-white transition-colors"
               title="Collapse sidebar"
               aria-label="Collapse sidebar"
             >

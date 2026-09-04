@@ -46,8 +46,7 @@ import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
 import { createPgFileFacade, resolvePgBackend } from '../lib/pgFileFacade.js';
-import { isTestRunner } from '../lib/db.js';
-import { resolveCodeRootForModule, resolveInstallRoot } from '../lib/dataRoot.js';
+import { isTestRunner, isVitestRunner } from '../lib/runtimeEnv.js';
 import { isUserActionActor, isUserActionType } from '../lib/userActionTypes.js';
 import { insertUserActionEvent, listUserActionEvents, pruneUserActionEvents } from './userActionsDb.js';
 
@@ -56,13 +55,13 @@ import { insertUserActionEvent, listUserActionEvents, pruneUserActionEvents } fr
 // pre-mock value and crash any suite whose fileUtils stub omits PATHS.data.
 const eventsFile = () => join(PATHS.data, 'user-action-events.json');
 
-// The REAL repo data/ dir, computed independently of the (possibly test-mocked)
-// `PATHS` import above via the same resolveCodeRootForModule/resolveInstallRoot
-// technique lib/paths.js itself uses (both go through the shared helper, so
-// they can't silently drift apart) — so a suite that redirects PATHS.data to a
-// temp root can't accidentally spoof this comparison too. `dataRoot.js` reads
-// its own env var directly rather than through anything a PATHS mock would touch.
-const REAL_REPO_DATA_DIR = join(resolveInstallRoot(resolveCodeRootForModule(import.meta.url)), 'data');
+// `isInsideRealDataRoot` (and its pathContainment.js closure) is loaded ONLY
+// under the test runner, the same shape `fileCore.js`'s `loadGuard` uses for
+// #6176's write guard — this file is reached by enough suites that a static
+// import pushed importScoping.test.js's tree-wide budget over its ceiling.
+// The module promise is memoized, so the dynamic import resolves once per worker.
+let realDataRootGuard = null;
+const loadRealDataRootGuard = () => (realDataRootGuard ??= import('../lib/testDataIsolation.js'));
 
 /**
  * Structural guard against the bug class in #3683/#3687/#5605: a suite that
@@ -77,13 +76,18 @@ const REAL_REPO_DATA_DIR = join(resolveInstallRoot(resolveCodeRootForModule(impo
  *
  * Reads are guarded as well as writes: the live ledger holds machine-local
  * operator records (ADR docs/decisions/2026-08-08-privacy-records-machine-local.md),
- * so an untethered suite must not pull them into the test process either.
+ * so an untethered suite must not pull them into the test process either. That
+ * read half is why this stays a local guard rather than folding into #6176's
+ * write backstop; the real-root derivation itself is shared with it, so the two
+ * can't disagree about which tree is live.
  *
  * @param {string} attempted what the file backend was about to do, e.g.
  *   `'recordUserAction attempted a write of'`
  */
-function assertTestDataRootRedirected(attempted) {
-  if (!isTestRunner() || PATHS.data !== REAL_REPO_DATA_DIR) return;
+async function assertTestDataRootRedirected(attempted) {
+  if (!isVitestRunner()) return;
+  const { isInsideRealDataRoot } = await loadRealDataRootGuard();
+  if (!isInsideRealDataRoot(eventsFile())) return;
   throw new Error(
     `${attempted} user-action-events.json in the repo's real data/ tree. ` +
       'This suite exercises the user-action ledger but never redirected ' +
@@ -327,7 +331,7 @@ function makeFileBackend() {
       // BEFORE this guard ever ran, silently no-op'ing past it with no throw —
       // and by then loadFileEvents() had already read the real ledger into the
       // test process regardless. Running the guard first closes both holes.
-      assertTestDataRootRedirected('recordUserAction attempted a file-backend write of');
+      await assertTestDataRootRedirected('recordUserAction attempted a file-backend write of');
       const events = await loadFileEvents();
       if (events.some((row) => row.type === event.type && row.dedupeKey === event.dedupeKey)) return null;
       await ensureDir(PATHS.data);
@@ -338,7 +342,7 @@ function makeFileBackend() {
       // Same guard as the write path: an un-redirected suite must not get to READ
       // the developer's live ledger either — those rows are machine-local operator
       // records (docs/decisions/2026-08-08-privacy-records-machine-local.md).
-      assertTestDataRootRedirected('listUserActions attempted a file-backend read of');
+      await assertTestDataRootRedirected('listUserActions attempted a file-backend read of');
       const events = await loadFileEvents();
       return events
         .filter((event) => matchesFilters(event, filters))

@@ -88,6 +88,33 @@ const hardwareAwareVideoModels = async () => {
   };
 };
 
+// The model list plus the three numbers that decide which entry the picker
+// auto-selects. Deliberately free of any python probe: /status shells out to
+// the interpreter on every call (~1-2s) and the Model field used to wait on it,
+// so `/model-context` serves the same fields off the registry and the cached
+// hardware probe alone. /status keeps returning them for its other readers —
+// this is the single builder both routes share, so the two can't drift.
+const videoModelContext = async () => {
+  const { capabilities, models } = await hardwareAwareVideoModels();
+  return {
+    // Each entry carries its optional `disclosure` block (provenance, weights/
+    // runtime licenses, pinned-snapshot download size) straight off the
+    // registry — absent for custom models, which the UI renders as Unknown.
+    models,
+    defaultModel: defaultVideoModelId(capabilities),
+    // Total system memory in GB — the client uses this to auto-select the
+    // highest-memory mode-compatible model that fits on this machine.
+    // Rounded to nearest GB; sub-GB precision isn't useful for the
+    // model-size comparison and reads more cleanly in the UI.
+    systemMemoryGb: Math.round(os.totalmem() / 1024 ** 3),
+    // Effective FFLF/ltx2 stage-2 pixel-frame budget (honors
+    // FFLF_LTX2_PIXEL_BUDGET). The multi-keyframe picker mirrors the
+    // back-solve so it can reject out-of-budget keyframe indices before
+    // submit instead of letting the worker 400 mid-render.
+    fflfLtx2PixelBudget: resolveFflfLtx2PixelBudget(),
+  };
+};
+
 // M4A files are stored in an MP4 container. Browsers and OS file pickers
 // label them inconsistently: Safari uses `video/mp4`, Chrome/Firefox use
 // `audio/mp4`, and some platforms emit `audio/x-m4a` or `audio/aac`.
@@ -400,18 +427,17 @@ router.get('/status', asyncHandler(async (_req, res) => {
   const s = await getSettings();
   const py = s.imageGen?.local?.pythonPath || null;
   const { connected, reason, missing, pythonVersion } = await resolveLocalPythonHealth(py);
-  const { capabilities, models } = await hardwareAwareVideoModels();
   res.json({
     connected,
     pythonPath: py,
     pythonVersion: pythonVersion || null,
     reason,
     missingPackages: missing,
-    // Each entry carries its optional `disclosure` block (provenance, weights/
-    // runtime licenses, pinned-snapshot download size) straight off the
-    // registry — absent for custom models, which the UI renders as Unknown.
-    models,
-    defaultModel: defaultVideoModelId(capabilities),
+    // `models` / `defaultModel` / `systemMemoryGb` / `fflfLtx2PixelBudget` —
+    // kept here for the callers that already read them off /status. The Video
+    // Gen page takes them from GET /model-context instead, so its Model picker
+    // never waits on the python probe above.
+    ...(await videoModelContext()),
     // Server-owned execution + policy scope per render backend (#3674). The
     // client renders these strings verbatim so the wording can't drift between
     // the two surfaces.
@@ -419,16 +445,6 @@ router.get('/status', asyncHandler(async (_req, res) => {
     // Authoritative list of bring-your-own-venv runtimes — lets the client
     // gate the install-banner probe without hardcoding the same Set.
     byovRuntimes: Object.keys(BYOV_RUNTIME_INFO),
-    // Total system memory in GB — the client uses this to auto-select the
-    // highest-memory mode-compatible model that fits on this machine.
-    // Rounded to nearest GB; sub-GB precision isn't useful for the
-    // model-size comparison and reads more cleanly in the UI.
-    systemMemoryGb: Math.round(os.totalmem() / 1024 ** 3),
-    // Effective FFLF/ltx2 stage-2 pixel-frame budget (honors
-    // FFLF_LTX2_PIXEL_BUDGET). The multi-keyframe picker mirrors the
-    // back-solve so it can reject out-of-budget keyframe indices before
-    // submit instead of letting the worker 400 mid-render.
-    fflfLtx2PixelBudget: resolveFflfLtx2PixelBudget(),
     // Runtime fingerprint — host chip/os + resolved ltx/mlx/torch versions per
     // installed BYOV runtime — so the UI can show the exact numerical stack and
     // bug reports for garbled/"mosaic" output carry the version info that makes
@@ -528,6 +544,14 @@ async function resolveLocalPythonHealth(py) {
 router.get('/models', asyncHandler(async (_req, res) => {
   const { models } = await hardwareAwareVideoModels();
   res.json(models);
+}));
+
+// Everything the Model picker needs to render AND auto-select, with no python
+// probe in the way. A sibling route rather than a wrapper around /models so the
+// bare-array shape that route has always returned stays intact for its existing
+// callers (and for an older client talking to a newer server).
+router.get('/model-context', asyncHandler(async (_req, res) => {
+  res.json(await videoModelContext());
 }));
 
 router.get('/models/status', asyncHandler(async (_req, res) => {

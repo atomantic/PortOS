@@ -10,7 +10,7 @@
  */
 
 import { loadLearningData, emitLog, isSandboxedTaskType, computeEffectiveSuccessRate, computeWindowedStats, isSkipCandidate, DEFAULT_WINDOW_MAX_AGE_MS, ENVIRONMENTAL_ERROR_CATEGORIES } from './store.js';
-import { resetTaskTypeLearning } from './metrics.js';
+import { resetTaskTypeLearning } from './reset.js';
 import { computeCorrelationQuality, isCorrelationProven } from './correlationQuality.js';
 
 /**

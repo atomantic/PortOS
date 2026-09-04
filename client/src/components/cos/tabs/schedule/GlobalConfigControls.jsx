@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import useFieldDraft from '../../../../hooks/useFieldDraft';
 import { RotateCcw, AlertCircle } from 'lucide-react';
 import CronInput from '../../../CronInput';
-import { AGENT_OPTIONS, BRANCHES_PER_AGENT_DEFAULT, BRANCHES_PER_AGENT_OPTIONS, BRANCHES_PER_AGENT_TASK_TYPES, DEFAULT_REVIEW_STOP_MODE, IMPLICIT_PR_COMPLETION, PR_AUTHOR_FILTER_OPTIONS, PR_COMPLETION_OPTIONS, pinnedPrCompletion, prCompletionOption, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, SWARM_COUNT_OPTIONS, SWARM_TASK_TYPES } from '../../constants';
+import { AGENT_OPTIONS, BRANCHES_PER_AGENT_DEFAULT, BRANCHES_PER_AGENT_OPTIONS, BRANCHES_PER_AGENT_TASK_TYPES, DEFAULT_REVIEW_STOP_MODE, REVIEWER_OVERRIDE_KEYS as REVIEW_CONFIG_KEYS, IMPLICIT_PR_COMPLETION, PR_AUTHOR_FILTER_OPTIONS, PR_COMPLETION_OPTIONS, pinnedPrCompletion, prCompletionOption, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, SWARM_COUNT_OPTIONS, SWARM_TASK_TYPES } from '../../constants';
 import ReviewerPicker from '../../ReviewerPicker';
 import Banner from '../../../ui/Banner';
 import InfoTooltip from '../../../ui/InfoTooltip';
@@ -25,22 +25,16 @@ import { INTERVAL_DESCRIPTIONS, PERPETUAL_DESCRIPTION, toggleMetadataField, pipe
 // runs (no app) land on the server-side fallback.
 const PR_COMPLETION_INHERIT_HINT = `Uses the target app's "After opening PR" default (Apps → Edit App), or "${prCompletionOption(IMPLICIT_PR_COMPLETION)?.label}" when it has none.`;
 
-// These fields are the task-local reviewer-loop override. Removing them lets
-// the picker and server resolver fall back to the install-wide Code Review
-// Defaults without changing the task's PR policy or other agent options.
-const REVIEW_CONFIG_KEYS = [
-  'reviewer',
-  'reviewers',
-  'usernames',
-  'optionalReviewers',
-  'reviewerMaxRounds',
-  'reviewerModels',
-  'reviewerEfforts',
-  'reviewStopMode',
-  'reviewerApplies',
-];
+// The task-local reviewer-loop override is REVIEWER_OVERRIDE_KEYS (imported as
+// REVIEW_CONFIG_KEYS above). Removing those keys lets the picker and the server
+// resolver fall back to the install-wide Code Review Defaults without changing
+// the task's PR policy or other agent options.
+//
+// Deliberately the WIDE roster, not `hasReviewerOverride`'s list-bearing subset:
+// the reset clears the two run flags too, so gating its visibility on the subset
+// would leave a stop-mode-only override on screen with no control that removes it.
 
-export default function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, category: _category, providers, activeProviderId, apps, updating, setUpdating, allTaskTypes, improvementDisabled, dataInputCatalog }) {
+export default function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, category: _category, providers, providersLoaded = true, activeProviderId, apps, updating, setUpdating, allTaskTypes, improvementDisabled, dataInputCatalog }) {
   const reviewDefaults = useCodeReviewDefaults();
   // Resolved model lists for the reviewer table's Model column (the picker itself
   // never fetches — see its `modelOptions` prop).
@@ -230,9 +224,18 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
   // Reviewers only run under review-then-merge, so the picker hides for the two
   // policies that never reach them — but an unpinned ('') task may still inherit
   // review-then-merge from its app, so that keeps it.
-  const reviewersApply = config.taskMetadata?.openPR
-    ? prCompletion === '' || prCompletion === 'review-then-merge'
-    : !!config.taskMetadata?.reviewLoop;
+  //
+  // A claimFlow task is unconditional: its PROMPT opens and merges its own PR and
+  // runs the reviewers itself, so the resolved list is operative no matter what
+  // `openPR` / `reviewLoop` say (both are false in the shipped claim metadata).
+  // Without this the picker — and the "Use system Code Review Defaults" reset
+  // beside it — never render for claim-work, leaving a reviewer override that
+  // every claim obeys with no control anywhere that can clear it.
+  const reviewersApply = config.taskMetadata?.claimFlow
+    ? true
+    : config.taskMetadata?.openPR
+      ? prCompletion === '' || prCompletion === 'review-then-merge'
+      : !!config.taskMetadata?.reviewLoop;
 
   // `selectedProvider` / `availableModels` come from useTaskModelPins above — it
   // resolves the pin against the active provider, lists Antigravity's BASE models
@@ -389,10 +392,12 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
             <select
               value={selectedProviderId}
               onChange={(e) => handleProviderChange(e.target.value)}
-              disabled={updating}
+              disabled={updating || !providersLoaded}
               className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
             >
-              <option value="">{defaultProviderLabel}</option>
+              {/* Mid-fetch the list is empty, so "Default (active provider)" would
+                  be this select's only option — a slow control that reads broken. */}
+              <option value="">{providersLoaded ? defaultProviderLabel : 'Loading providers…'}</option>
               {providers?.map(provider => (
                 <option key={provider.id} value={provider.id}>{provider.name}</option>
               ))}
@@ -404,7 +409,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
             <select
               value={selectedModel}
               onChange={(e) => handleModelChange(e.target.value)}
-              disabled={updating}
+              disabled={updating || !providersLoaded}
               className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
             >
               {/* `availableModels` already carries a pin the provider no longer

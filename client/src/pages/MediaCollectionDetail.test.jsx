@@ -10,6 +10,8 @@ const mockListImageGallery = vi.fn();
 const mockListVideoHistory = vi.fn();
 const mockListMediaCollections = vi.fn();
 const mockGetMediaCollection = vi.fn();
+const mockAddMediaCollectionItem = vi.fn();
+const mockRemoveMediaCollectionItem = vi.fn();
 
 vi.mock('../services/api', () => ({
   listImageGallery: (...args) => mockListImageGallery(...args),
@@ -17,8 +19,8 @@ vi.mock('../services/api', () => ({
   listMediaCollections: (...args) => mockListMediaCollections(...args),
   getMediaCollection: (...args) => mockGetMediaCollection(...args),
   updateMediaCollection: vi.fn(),
-  addMediaCollectionItem: vi.fn(),
-  removeMediaCollectionItem: vi.fn(),
+  addMediaCollectionItem: (...args) => mockAddMediaCollectionItem(...args),
+  removeMediaCollectionItem: (...args) => mockRemoveMediaCollectionItem(...args),
   deleteImage: vi.fn(),
   deleteVideoHistoryItem: vi.fn(),
   pullMissingMetadata: (...args) => mockPullMissingMetadata(...args),
@@ -32,11 +34,13 @@ vi.mock('../components/ui/Toast', () => ({
   }),
 }));
 
+const mockUpdateAnnotation = vi.fn();
+
 vi.mock('../hooks/useMediaAnnotations', () => ({
   useMediaAnnotations: () => ({
     annotations: {},
     toggleStar: vi.fn(),
-    updateAnnotation: vi.fn(),
+    updateAnnotation: (...args) => mockUpdateAnnotation(...args),
     getCardProps: () => ({}),
   }),
 }));
@@ -62,8 +66,14 @@ vi.mock('../components/media/MediaPreview', () => ({
   default: () => null,
 }));
 
+// Stands in for the popover's collection rows: one clickable destination so a
+// test can drive bulkMoveOrCopy end to end.
 vi.mock('../components/media/BulkTargetPicker', () => ({
-  default: () => null,
+  default: ({ onPick }) => (
+    <button type="button" onClick={() => onPick('col-target', 'Target Collection')}>
+      pick target
+    </button>
+  ),
 }));
 
 vi.mock('../components/sharing/ShareToButton', () => ({
@@ -132,6 +142,9 @@ beforeEach(() => {
   mockListMediaCollections.mockResolvedValue([REAL_COLLECTION]);
   mockGetMediaCollection.mockResolvedValue(REAL_COLLECTION);
   mockPullMissingMetadata.mockResolvedValue({ attempted: 1, recovered: 1 });
+  mockUpdateAnnotation.mockResolvedValue({ ok: true, entry: null });
+  mockAddMediaCollectionItem.mockResolvedValue({ id: 'col-target', name: 'Target Collection', items: [] });
+  mockRemoveMediaCollectionItem.mockResolvedValue(REAL_COLLECTION);
 });
 
 // ── Unsorted view tests ───────────────────────────────────────────────────────
@@ -237,5 +250,165 @@ describe('MediaCollectionDetail — regular collection view', () => {
     renderReal();
     await waitFor(() => screen.getByText('My Collection'));
     expect(screen.queryByRole('button', { name: /pull missing prompts/i })).toBeNull();
+  });
+});
+
+// ── bulkStar (#6018): must not report false success when items fail ──────────
+
+describe('MediaCollectionDetail — bulkStar', () => {
+  const THREE_ITEM_COLLECTION = {
+    ...REAL_COLLECTION,
+    items: [
+      { kind: 'image', ref: IMAGE_A.filename, addedAt: '2024-01-02' },
+      { kind: 'image', ref: IMAGE_B.filename, addedAt: '2024-01-01' },
+      { kind: 'video', ref: VIDEO_C.id, addedAt: '2024-01-03' },
+    ],
+  };
+
+  beforeEach(() => {
+    mockGetMediaCollection.mockResolvedValue(THREE_ITEM_COLLECTION);
+  });
+
+  async function enterSelectModeAndSelectAll(user) {
+    await waitFor(() => screen.getByRole('button', { name: /^select$/i }));
+    await user.click(screen.getByRole('button', { name: /^select$/i }));
+    await user.click(screen.getByRole('button', { name: /select all/i }));
+  }
+
+  it('toasts a single success message when every item succeeds', async () => {
+    mockUpdateAnnotation.mockResolvedValue({ ok: true, entry: null });
+    const user = userEvent.setup();
+    renderReal();
+    await enterSelectModeAndSelectAll(user);
+
+    await user.click(screen.getByRole('button', { name: /^star$/i }));
+
+    await waitFor(() => expect(mockUpdateAnnotation).toHaveBeenCalledTimes(3));
+    expect(mockUpdateAnnotation.mock.calls.every(([, , opts]) => opts?.silent === true)).toBe(true);
+    expect(toast.success).toHaveBeenCalledWith('Favorited 3 items');
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('toasts a single failure message with no success toast when every item fails', async () => {
+    mockUpdateAnnotation.mockResolvedValue({ ok: false, entry: null });
+    const user = userEvent.setup();
+    renderReal();
+    await enterSelectModeAndSelectAll(user);
+
+    await user.click(screen.getByRole('button', { name: /^star$/i }));
+
+    await waitFor(() => expect(mockUpdateAnnotation).toHaveBeenCalledTimes(3));
+    expect(toast.error).toHaveBeenCalledWith('Failed to favorite items');
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('toasts a single consolidated message on partial failure (no contradictory success toast)', async () => {
+    mockUpdateAnnotation
+      .mockResolvedValueOnce({ ok: true, entry: null })
+      .mockResolvedValueOnce({ ok: false, entry: null })
+      .mockResolvedValueOnce({ ok: true, entry: null });
+    const user = userEvent.setup();
+    renderReal();
+    await enterSelectModeAndSelectAll(user);
+
+    await user.click(screen.getByRole('button', { name: /^star$/i }));
+
+    await waitFor(() => expect(mockUpdateAnnotation).toHaveBeenCalledTimes(3));
+    expect(toast.error).toHaveBeenCalledWith('Favorited 2 items; 1 failed');
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+});
+
+// ── bulkMoveOrCopy (#6017): a move whose removal half fails is NOT a success ──
+
+describe('MediaCollectionDetail — bulkMoveOrCopy move/remove failures', () => {
+  const KEY_A = `image:${IMAGE_A.filename}`;
+  const KEY_B = `image:${IMAGE_B.filename}`;
+  const KEY_C = `video:${VIDEO_C.id}`;
+
+  const THREE_ITEM_COLLECTION = {
+    ...REAL_COLLECTION,
+    items: [
+      { kind: 'image', ref: IMAGE_A.filename, addedAt: '2024-01-02' },
+      { kind: 'image', ref: IMAGE_B.filename, addedAt: '2024-01-01' },
+      { kind: 'video', ref: VIDEO_C.id, addedAt: '2024-01-03' },
+    ],
+  };
+  // The server state after the only successful removal in the partial test.
+  const AFTER_B_REMOVED = {
+    ...REAL_COLLECTION,
+    items: [
+      { kind: 'video', ref: VIDEO_C.id, addedAt: '2024-01-03' },
+      { kind: 'image', ref: IMAGE_A.filename, addedAt: '2024-01-02' },
+    ],
+  };
+
+  beforeEach(() => {
+    mockGetMediaCollection.mockResolvedValue(THREE_ITEM_COLLECTION);
+  });
+
+  async function selectAllAndMove(user) {
+    await waitFor(() => screen.getByRole('button', { name: /^select$/i }));
+    await user.click(screen.getByRole('button', { name: /^select$/i }));
+    await user.click(screen.getByRole('button', { name: /select all/i }));
+    await user.click(screen.getByRole('button', { name: /move…/i }));
+    await user.click(screen.getByRole('button', { name: /pick target/i }));
+  }
+
+  it('toasts a plain success and exits select mode when every removal succeeds', async () => {
+    const user = userEvent.setup();
+    renderReal();
+    await selectAllAndMove(user);
+
+    await waitFor(() => expect(mockRemoveMediaCollectionItem).toHaveBeenCalledTimes(3));
+    expect(toast.success).toHaveBeenCalledWith('Moved 3 to "Target Collection"');
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(screen.queryByText(/of 3 selected/)).toBeNull();
+  });
+
+  it('reports the removal failure instead of a false success when every removal fails', async () => {
+    mockRemoveMediaCollectionItem.mockRejectedValue(new Error('boom'));
+    const user = userEvent.setup();
+    renderReal();
+    await selectAllAndMove(user);
+
+    await waitFor(() => expect(mockRemoveMediaCollectionItem).toHaveBeenCalledTimes(3));
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith(
+      'Copied 3 to "Target Collection", but 3 could not be removed from "My Collection"',
+    );
+    // Nothing left the source collection, and the half-moved items stay
+    // selected so the user can retry.
+    await waitFor(() => expect(screen.getByText('3')).toBeInTheDocument());
+    expect(screen.getByText(/of 3 selected/)).toBeInTheDocument();
+  });
+
+  it('counts add and removal failures separately and narrows the selection to the failed items', async () => {
+    // Removal order follows the rendered (newest-first) order: C, A, B.
+    mockAddMediaCollectionItem.mockImplementation((_targetId, { ref }) => (
+      ref === VIDEO_C.id
+        ? Promise.reject(new Error('add failed'))
+        : Promise.resolve({ id: 'col-target', name: 'Target Collection', items: [] })
+    ));
+    mockRemoveMediaCollectionItem.mockImplementation((_id, key) => (
+      key === KEY_A ? Promise.reject(new Error('boom')) : Promise.resolve(AFTER_B_REMOVED)
+    ));
+    const user = userEvent.setup();
+    renderReal();
+    await selectAllAndMove(user);
+
+    await waitFor(() => expect(mockRemoveMediaCollectionItem).toHaveBeenCalledTimes(2));
+    // The video never got added, so it is never removed.
+    const removedKeys = mockRemoveMediaCollectionItem.mock.calls.map(([, key]) => key);
+    expect(removedKeys).toEqual([KEY_A, KEY_B]);
+    expect(removedKeys).not.toContain(KEY_C);
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith(
+      'Copied 2 to "Target Collection", but 1 could not be removed from "My Collection"; 1 failed to add',
+    );
+    // setCollection reconciled to the last authoritative server state (B gone),
+    // and only the item whose removal failed stays selected.
+    await waitFor(() => expect(screen.getByText(/of 2 selected/)).toBeInTheDocument());
+    expect(screen.queryByText(IMAGE_B.filename)).toBeNull();
   });
 });

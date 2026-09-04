@@ -40,7 +40,7 @@ export default function AssetPromptSection({ recordId, path }) {
         <button
           type="button"
           onClick={() => copyToClipboard(data.prompt, 'Prompt copied')}
-          className="p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
+          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
           title="Copy prompt"
           aria-label="Copy prompt"
         >

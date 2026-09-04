@@ -66,7 +66,7 @@ On GitHub Actions, `CI=true` caps the server Vitest runner at `maxWorkers: 4`
 `client/vitest.config.js`). Standard Linux runners for public repositories are
 [4 vCPU / 16GB](https://docs.github.com/en/actions/reference/runners/github-hosted-runners);
 uncapped forks oversubscribe those cores during transform. Local `npm test`
-is unbounded. The jsdom-heavy client retains its proven two-worker override:
+is unbounded. The DOM-heavy client retains its proven two-worker override:
 four workers made its async rendering assertions timing-dependent under CI
 contention. File-level parallelism stays on; the DB suite already serializes
 files because those tests share one Postgres.
@@ -78,6 +78,85 @@ wipes `node_modules`, so a restore ordered ahead of it is lost.
 writes Vitest wall time to the job summary so later runs can be compared
 against the pre-change full-suite job wall on `main` (2026-08-16, run
 `31951919659`): server ~300s, client+build ~467s, Windows ~463s.
+
+### Test environment cost (happy-dom, and skipping the DOM entirely)
+
+`environment` — the per-file cost of constructing the DOM the test runs in — was
+the single largest phase of the client suite. On the 2026-08-16 full run it was
+`environment 489s` against `tests 384s`: building jsdom cost more than running
+the assertions. Two levers cut it, and both are now applied.
+
+**Lever 1 — don't build a DOM you don't need.** A test file that never touches
+the DOM opts out with a `// @vitest-environment node` pragma on line 1, and pays
+~0ms instead of ~0.35s (local) / ~0.7s (CI runner) for its environment. Every
+file under `client/src/{lib,utils,services}` that passes in `node` carries the
+pragma. Measured on the 36 files converted in that sweep (#6008):
+
+| environment | wall |
+| --- | --- |
+| jsdom: 12.69s | 1.76s |
+| node: 0.002s | 0.74s |
+
+When adding a test under `client/src/{lib,utils,services}`, default to the
+pragma and only drop it if the file (or the module it imports) genuinely needs
+`document`/`window`. The 13 files in that tree that legitimately keep a DOM do
+so because the *module under test* reaches for a browser global — e.g.
+`apiApps.js` navigates via `window.location`, `webglSupport.js` calls
+`document.createElement('canvas')`.
+
+**Lever 2 — a cheaper DOM.** `client/vitest.config.js` runs on happy-dom
+(#6144). Full-suite figures for the 834 files, Node 24, same machine, same
+assertions:
+
+| environment | wall |
+| --- | --- |
+| jsdom 30.0.1: 236.86s | 55.68s |
+| happy-dom 20.14.0: 83.65s | 34.83s |
+
+A 65% cut to the environment phase and a 37% cut to wall. jsdom is no longer a
+dependency, so `// @vitest-environment jsdom` is not available as a per-file
+escape hatch — a divergence gets fixed in the test, the way the six below were.
+
+**What differs, when a test breaks after touching the DOM.** happy-dom is not
+bug-compatible with jsdom, and the gaps all showed up as tests rather than as
+product failures. Two are patched centrally in `client/src/test/`, so they never
+need handling again; the rest are per-site idioms worth copying.
+
+Patched in setup:
+
+- **Constraint validation.** happy-dom computes `stepMismatch` as a raw float
+  modulo against `step`, ignoring the step base — so
+  `<input type="range" min="0" max="1" step="0.05" value="0.35">` reports
+  invalid. One invalid control makes the form's `checkValidity()` false, and
+  implicit submission is then dropped *silently*: clicking a `type="submit"`
+  button runs no handler and raises nothing.
+  `client/src/test/formValidityPolyfill.js` restores the browser behaviour.
+- **Storage identity.** happy-dom backs `localStorage` with a Proxy that turns a
+  property definition into a stored item, so `vi.spyOn(window.localStorage,
+  'setItem')` cannot be undone and leaks a throwing stub into every later test in
+  the file. `installTestStorage()` now replaces Storage with the plain in-memory
+  shim unconditionally.
+
+Per-site idioms:
+
+- **`getComputedStyle` returns no UA defaults.** An unstyled `<span>` reports
+  `display: ""`, and `dom-accessibility-api` joins non-inline text with a space —
+  so a `TabPills` chip's accessible name is `'Ollama 1'`, not jsdom's
+  `'Ollama1'`. A real browser blockifies the flex item and also spaces it. Match
+  a whitespace-tolerant regex rather than pinning one engine.
+- **No `SVGAnimatedString`.** `svgEl.className` is a plain string, so `.baseVal`
+  is `undefined`. Assert on `getAttribute('class')`, which works everywhere.
+- **`clientHeight` is declared on `HTMLElement`, not `Element`**, and
+  `vi.spyOn` only walks *up* the prototype chain. Spy on `HTMLElement.prototype`.
+- **`WheelEvent` does not extend `MouseEvent`**, so modifier keys passed to the
+  constructor are dropped. `Object.defineProperty(event, 'shiftKey', …)` after
+  construction works in both.
+- **Some `navigator` members are getter-only** (`navigator.locks`), where a plain
+  assignment throws. Use `Object.defineProperty`.
+- **A `<label>` reports itself as the label of *any* labelable descendant**, not
+  just its control — so a `<button>` nested inside a field's `<label>` takes the
+  label's text as its accessible name. Pair `htmlFor`/`id` and keep the button a
+  sibling, which is the convention anyway.
 
 ### Reusing the server install
 
@@ -240,7 +319,7 @@ The selected work is split across parallel jobs:
 ### Full-suite sharding
 
 A full plan is the slow case: on the 4-vCPU public runners the client suite
-alone took ~10 minutes (jsdom setup per file dominates — the 868-file run
+alone took ~10 minutes (DOM setup per file dominated — the 868-file run
 spent 489 s in `environment` against 384 s in `tests` — and its worker cap is
 two, see `scripts/vitestCiPool.js`), the Windows server suite ~10 minutes
 (module import is several times slower there), and the Linux server suite ~6

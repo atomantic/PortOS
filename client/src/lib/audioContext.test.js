@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 // The shared-context helpers, with an emphasis on the two iOS Safari failures
 // they exist for: a context parked in `'interrupted'` and an audio session left
 // ambient (silenced by the hardware ring/silent switch).

@@ -396,7 +396,7 @@ export default function RuntimeServersCard({
         <button
           onClick={onRefresh}
           disabled={loading}
-          className="p-1.5 text-gray-400 hover:text-white transition-colors"
+          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-400 hover:text-white transition-colors"
           title="Refresh runtime server status"
           aria-label="Refresh runtime server status"
         >

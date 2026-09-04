@@ -27,7 +27,11 @@ import { getProject, updateProject, updatePlanStep, recordRun, updateRun } from 
 import { enqueuePlanTask } from './agentBridge.js';
 import { dispatchCreativeTool } from '../creative/toolRegistry.js';
 import { listJobs, mediaJobEvents } from '../mediaJobQueue/index.js';
-import { autopilotEvents, isAutopilotActive, AUTOPILOT_TERMINAL_TYPES } from '../pipeline/seriesAutopilot.js';
+// Import the modules that DECLARE these, not the `seriesAutopilot.js` barrel that
+// forwards them (#5920): a barrel re-entry from outside the package pulls the whole
+// autopilot cluster in and is what closed the old import cycle through this file.
+import { autopilotEvents, AUTOPILOT_TERMINAL_TYPES } from '../pipeline/seriesAutopilot/state.js';
+import { isAutopilotActive } from '../pipeline/seriesAutopilot/session.js';
 import { getSeries } from '../pipeline/series.js';
 import { MAX_REPLAN_ROUNDS, PLAN_STEP_TERMINAL_SUCCESS } from '../../lib/creativeDirectorPresets.js';
 import { blockedStageReason, closeDeliverableStreak, exhaustedDeliverableStreak } from './deliverableGate.js';

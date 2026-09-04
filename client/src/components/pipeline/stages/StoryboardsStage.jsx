@@ -519,7 +519,7 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
                 <button
                   type="button"
                   onClick={() => removeScene(i)}
-                  className="text-gray-500 hover:text-port-error p-1"
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center text-gray-500 hover:text-port-error p-1"
                   aria-label="Remove scene"
                 >
                   <Trash2 size={14} />
@@ -773,7 +773,7 @@ function ShotList({
                 <button
                   type="button"
                   onClick={() => onRemoveShot(j)}
-                  className="text-gray-500 hover:text-port-error p-1 mt-0.5"
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center text-gray-500 hover:text-port-error p-1 mt-0.5"
                   aria-label="Remove shot"
                 >
                   <Trash2 size={12} />

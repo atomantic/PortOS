@@ -123,7 +123,7 @@ export default function UniverseStyleReferences({
                     <button
                       type="button"
                       onClick={() => onRemove?.(reference.id)}
-                      className="shrink-0 rounded p-1 text-gray-500 hover:bg-white/5 hover:text-port-error"
+                      className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center shrink-0 rounded p-1 text-gray-500 hover:bg-white/5 hover:text-port-error"
                       aria-label={`Remove ${reference.title}`}
                       title="Remove art reference"
                     >

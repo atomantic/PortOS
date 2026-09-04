@@ -1707,6 +1707,33 @@ describe('spawnReviewLoopFollowUp', () => {
     expect(addTask.mock.calls[0][0].metadata.app).toBe('example-app');
   });
 
+  it('persists fork coordinates so the follow-up can attach a worktree to a fork PR head (#6064)', async () => {
+    // A fork head has no `origin/<branch>`, so without these the follow-up is
+    // queued and then blocked at workspace prep. The key is the generic
+    // `forkHead` that `resolveTaskForkHead` reads for every producer.
+    await spawnReviewLoopFollowUp({
+      originalAgentId: 'agent-1',
+      originalTask: { id: 'task-1', metadata: {}, description: 'X' },
+      prUrl: 'https://github.com/o/r/pull/9',
+      prBranch: 'contributor/fix-thing',
+      forkHead: { remoteUrl: 'https://github.com/contributor/r.git', ownerLogin: 'contributor' },
+      sourceWorkspace: '/ws',
+    });
+    expect(addTask.mock.calls[0][0].metadata).toMatchObject({
+      reviewLoopPRBranch: 'contributor/fix-thing',
+      forkHead: { remoteUrl: 'https://github.com/contributor/r.git', ownerLogin: 'contributor' },
+    });
+  });
+
+  it('stores null fork coordinates for a same-repo PR branch', async () => {
+    await spawnReviewLoopFollowUp({
+      originalAgentId: 'agent-1',
+      originalTask: { id: 'task-1', metadata: {}, description: 'X' },
+      prUrl: 'https://github.com/o/r/pull/9', prBranch: 'cos/task-1/agent-1', sourceWorkspace: '/ws',
+    });
+    expect(addTask.mock.calls[0][0].metadata.forkHead).toBeNull();
+  });
+
   // Dispatch ownership: an autonomous follow-up belongs to the auto-run-gated
   // dequeue, while an explicitly requested one must not wait for it.
   it('leaves the spawn to the dequeue by default', async () => {

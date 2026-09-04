@@ -5,6 +5,7 @@ import CoSAvatarOrbitControls from './CoSAvatarOrbitControls';
 import CoSBackgroundCamera from './CoSBackgroundCamera';
 import CoSCanvasGuard from './CoSCanvasGuard';
 import useClonedGltf, { GltfPrimitive } from '../../hooks/useClonedGltf';
+import { resolvePlaybackClip } from '../../hooks/useAvatarCapabilities';
 import { fitModelToHeight } from '../../utils/modelFit';
 
 // Kenney Mini Characters (CC0) ship 32 named clips. We map the CoS agent
@@ -39,7 +40,7 @@ function buildModelUrl(variant) {
   return variant ? `/api/avatar/model.glb?variant=${encodeURIComponent(variant)}` : '/api/avatar/model.glb';
 }
 
-function MiniCharacter({ state, speaking, variant }) {
+function MiniCharacter({ state, speaking, variant, coverage = null }) {
   const url = useMemo(() => buildModelUrl(variant), [variant]);
   const group = useRef();
   const { scene, actions, names } = useClonedGltf(url);
@@ -52,13 +53,14 @@ function MiniCharacter({ state, speaking, variant }) {
     fitModelToHeight(scene, { targetHeight: TARGET_HEIGHT, feetOnGround: true, yOffset: GROUND_Y });
   }, [scene]);
 
-  // Resolve the active clip for this state, falling back gracefully.
+  // Resolve the active clip for this state, falling back gracefully. With a
+  // coverage report (a rigged record, #5894) the covered clip wins when the
+  // GLB carries it, else playback degrades to a clip the character actually
+  // has — an uncovered state never freezes the frame or pretends coverage.
   const cfg = STATE_CLIP_MAP[state] || FALLBACK;
-  const clipName = useMemo(() => {
-    if (names.includes(cfg.clip)) return cfg.clip;
-    if (names.includes('idle')) return 'idle';
-    return names[0];
-  }, [names, cfg.clip]);
+  const clipName = useMemo(() => (
+    resolvePlaybackClip(names, { state, coverage, fallbacks: [cfg.clip, 'idle'] })
+  ), [names, state, coverage, cfg.clip]);
 
   // Crossfade between clips on state change.
   const prevClip = useRef(null);
@@ -107,14 +109,14 @@ function StageLighting({ color }) {
   );
 }
 
-function Scene({ state, speaking, background, variant }) {
+function Scene({ state, speaking, background, variant, coverage = null }) {
   const stateConfig = AGENT_STATES[state] || AGENT_STATES.sleeping;
   const color = stateConfig.color;
   return (
     <>
       <CoSBackgroundCamera enabled={background} z={3.6} />
       <StageLighting color={color} />
-      <MiniCharacter state={state} speaking={speaking} variant={variant} />
+      <MiniCharacter state={state} speaking={speaking} variant={variant} coverage={coverage} />
       <CoSAvatarOrbitControls />
     </>
   );
@@ -148,8 +150,10 @@ function LoadingPlaceholder({ background = false }) {
   );
 }
 
-// `variant` is wired by the per-character style wrappers (MiniCharMaleC, etc.).
-export default function MiniCharacterCoSAvatar({ state, speaking, background = false, variant = 'mini-male-c' }) {
+// `variant` is wired by the per-character style wrappers (MiniCharMaleC, etc.)
+// or a `rigged-<modelId>` spelling for an animated record (ChiefOfStaff passes
+// that record's coverage so playback falls back to a present clip).
+export default function MiniCharacterCoSAvatar({ state, speaking, background = false, variant = 'mini-male-c', coverage = null }) {
   const [modelPresent, setModelPresent] = useState(null);
   const url = useMemo(() => buildModelUrl(variant), [variant]);
 
@@ -177,7 +181,7 @@ export default function MiniCharacterCoSAvatar({ state, speaking, background = f
         gl={{ alpha: true, antialias: true }}
       >
         <Suspense fallback={null}>
-          <Scene state={state} speaking={speaking} background={background} variant={variant} />
+          <Scene state={state} speaking={speaking} background={background} variant={variant} coverage={coverage} />
         </Suspense>
       </Canvas>
     </CoSCanvasGuard>

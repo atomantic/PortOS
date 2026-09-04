@@ -28,7 +28,7 @@
  * resolved copy on disk rather than pasted (`buildSlashdoSection`'s `bodyPath`).
  */
 import { isClaudeProvider, isOpencodeProvider } from './providerModels.js';
-import { inferTuiCommand } from './tuiHandshake.js';
+import { inferTuiCommand } from './providerVendors.js';
 import { PROVIDER_TYPES } from './aiToolkit/constants.js';
 
 /** slashdo's command namespace — `commands/do/<cmd>.md` in the submodule. */

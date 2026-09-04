@@ -213,7 +213,11 @@ async function loadSnapshot(workId, id) {
     throw err;
   });
   if (content === null) return null;
-  return safeJSONParse(content, null, { allowArray: false, logError: true, context: snapshotPath(workId, id) });
+  const parsed = safeJSONParse(content, null, { allowArray: false, logError: true, context: snapshotPath(workId, id) });
+  // `allowArray: false` only rejects a root array — a bare JSON scalar
+  // (corrupted snapshot) still parses, and callers use this as a manifest,
+  // so guard for a genuine object here.
+  return parsed && typeof parsed === 'object' ? parsed : null;
 }
 
 export async function getSnapshot(workId, id) {

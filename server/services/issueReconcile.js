@@ -33,6 +33,15 @@
  * confirm remaining scope before healing. JIRA tickets normalize into the SAME
  * common shape (KEY → `number`, `status` carried for the signature).
  *
+ * A second, narrower stuck state is handled WITHOUT the coordinator: an
+ * ABANDONED issue — `in-progress`, held by a non-owner (a human volunteer the
+ * claim prompt or the issue-watcher handed it to), nothing shipped, and
+ * untouched for FOREIGN_CLAIM_STALE_DAYS. Every flow that STAMPS `in-progress`
+ * must own a path that releases it; the volunteer flows had none, so such an
+ * issue matched STALLED on every pass forever. `releaseAbandonedClaims` is the
+ * releaser, and it is the one write this module performs (see its doc for why it
+ * skips the agent).
+ *
  * The scheduler runs the deterministic scan here (gh/glab + git only — no LLM),
  * then hands the zombie set to a coordinator CoS agent that reads each issue + its
  * merged PR/MR and applies the partial-ship hybrid (close + file a scoped
@@ -54,6 +63,7 @@ import { execGit } from '../lib/execGit.js';
 import { execGh, ensureForgeReachable } from './github.js';
 import { execGlabJson } from './gitlab.js';
 import { fetchMyCurrentSprintTickets } from './jira.js';
+import { IN_PROGRESS_LABEL } from '../lib/dispatchLabels.js';
 import { resolveAppForgeTarget, resolveRepoForgeTarget } from '../lib/workTracker.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 
@@ -62,9 +72,36 @@ const GH_LIST_LIMIT = 200;
 // glab paginates via `--per-page`; its practical max page is 100.
 const GL_PER_PAGE = 100;
 
-// The `in-progress` label = "claimed and being worked". Kept as a constant so
-// the scan, the classifier docs, and any future config share one spelling.
-export const IN_PROGRESS_LABEL = 'in-progress';
+/**
+ * How long a FOREIGN claim — an issue held by somebody other than this install's
+ * own account, i.e. a human volunteer the claim prompt or the issue-watcher
+ * handed it to — may sit `in-progress` with nothing shipped before the marker is
+ * released.
+ *
+ * `in-progress` is applied by three flows and, until this existed, released by
+ * only two of them: a volunteer who is assigned and then never opens a PR
+ * matched STALLED on every pass, forever. Two weeks is long enough that a
+ * contributor working at a normal human pace is never interrupted (any push to a
+ * `claim/issue-<num>` branch or an open PR reads as LIVE long before then), and
+ * short enough that an abandoned claim rejoins the queue in the same month.
+ *
+ * This deliberately does NOT cover a claim held by this install's own account:
+ * an agent claim's release is owned by the claim flow's own Phase 6/7 and by the
+ * zombie heal, and racing them here could unassign a run that is mid-flight on
+ * a peer whose branch has not been pushed yet.
+ */
+export const FOREIGN_CLAIM_STALE_DAYS = 14;
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/** Whole days since an ISO timestamp, or null when it is absent/unparseable. */
+export function daysSince(iso, now = Date.now()) {
+  const ms = Date.parse(iso || '');
+  if (!Number.isFinite(ms)) return null;
+  return Math.floor((now - ms) / MS_PER_DAY);
+}
+
+const normalizeLogin = (value) => String(value || '').trim().toLowerCase();
 
 /**
  * Extract the issue number a git ref claims, or null. Recognizes both claim
@@ -169,16 +206,28 @@ export function prReferencesIssue(pr, num) {
 
 /**
  * Pure classifier: map one issue's facts to a reconcile state. First match wins.
- *   ZOMBIE  — merged PR/MR shipped for it, no live claim, no active agent → heal
- *   LIVE    — an open PR/MR / claim branch / active agent still owns it     → leave
- *   STALLED — no merged PR/MR and no live claim (claimed but nothing shipped)→ report
+ *   ZOMBIE    — merged PR/MR shipped for it, no live claim, no active agent → heal
+ *   LIVE      — an open PR/MR / claim branch / active agent still owns it   → leave
+ *   ABANDONED — a foreign (volunteer) claim, nothing shipped, untouched for
+ *               FOREIGN_CLAIM_STALE_DAYS                                    → release
+ *   STALLED   — no merged PR/MR and no live claim (claimed but nothing shipped)→ report
  * Only issues that already carry `in-progress` are ever passed in.
- * @param {{ hasMergedPr:boolean, hasLiveClaim:boolean, hasActiveAgent:boolean }} input
- * @returns {'ZOMBIE'|'LIVE'|'STALLED'}
+ *
+ * ABANDONED is deliberately narrower than STALLED on both axes that make a
+ * release safe to automate: the claim is held by somebody who is not this
+ * install (so no local flow owns its release), and it has been untouched long
+ * enough that a contributor still working on it would have shown a branch, a PR,
+ * or at minimum a comment. A stale-day count that could not be resolved
+ * (`null` — the forge did not report an update time) never satisfies the gate;
+ * absent is not zero.
+ * @param {{ hasMergedPr:boolean, hasLiveClaim:boolean, hasActiveAgent:boolean,
+ *   hasForeignClaim?:boolean, staleDays?:number|null }} input
+ * @returns {'ZOMBIE'|'LIVE'|'ABANDONED'|'STALLED'}
  */
-export function classifyIssue({ hasMergedPr, hasLiveClaim, hasActiveAgent }) {
+export function classifyIssue({ hasMergedPr, hasLiveClaim, hasActiveAgent, hasForeignClaim, staleDays }) {
   if (hasLiveClaim || hasActiveAgent) return 'LIVE';
   if (hasMergedPr) return 'ZOMBIE';
+  if (hasForeignClaim && Number.isFinite(staleDays) && staleDays >= FOREIGN_CLAIM_STALE_DAYS) return 'ABANDONED';
   return 'STALLED';
 }
 
@@ -239,6 +288,25 @@ async function getLiveClaimTicketKeys(repoPath) {
 }
 
 /**
+ * The login `gh` is authenticated as on `apiHost`, lowercased, or null when we
+ * could not ask. `--hostname` is required: without it `gh api` targets
+ * github.com regardless of cwd and resolves the wrong identity on an enterprise
+ * repo (mirrors prWatcher.js).
+ *
+ * Null rather than `''` is load-bearing — see `hasForeignClaim` in
+ * `gatherIssueState`: an unresolved identity must never read as "every assignee
+ * is somebody else", which is what would let a gh blip unassign a live claim.
+ */
+async function ghViewerLogin(apiHost) {
+  const args = ['api', 'user', '--jq', '.login', ...(apiHost ? ['--hostname', apiHost] : [])];
+  const login = await execGh(args).catch((err) => {
+    console.error(`❌ issue-reconcile: could not resolve the gh login${apiHost ? ` on ${apiHost}` : ''}: ${err.message}`);
+    return '';
+  });
+  return normalizeLogin(login) || null;
+}
+
+/**
  * Normalize a raw GitHub issue (from `gh issue list --json`) into the common
  * shape the forge-agnostic gatherer consumes.
  */
@@ -249,6 +317,7 @@ function normalizeGithubIssue(issue) {
     url: issue.url || '',
     labels: Array.isArray(issue.labels) ? issue.labels.map((l) => l.name).filter(Boolean) : [],
     assignees: Array.isArray(issue.assignees) ? issue.assignees.map((a) => a.login).filter(Boolean) : [],
+    updatedAt: issue.updatedAt || '',
   };
 }
 
@@ -263,7 +332,7 @@ function normalizeGithubIssue(issue) {
  * a fork+upstream checkout; `fullName` is the plain `OWNER/REPO` for display.
  * @param {string} repoSpec - host-qualified `HOST/OWNER/REPO` selector for gh
  * @param {string} fullName - plain `OWNER/REPO`, returned for display/logging
- * @returns {Promise<{forge:'github', fullName:string, inProgress:object[], mergedPrs:object[], openPrs:object[]}|null>}
+ * @returns {Promise<{forge:'github', fullName:string, repoSpec:string, ownerLogin:string|null, inProgress:object[], mergedPrs:object[], openPrs:object[]}|null>}
  */
 async function getGithubState(repoSpec, fullName, apiHost = null) {
   // Probe before the three list calls (#3358): without it an unreachable gh
@@ -279,7 +348,7 @@ async function getGithubState(repoSpec, fullName, apiHost = null) {
   const [issuesRaw, mergedRaw, openRaw] = await Promise.all([
     ghList(['issue', 'list', '--repo', repoSpec, '--state', 'open',
       '--label', IN_PROGRESS_LABEL, '--limit', String(GH_LIST_LIMIT),
-      '--json', 'number,title,labels,assignees,url'], 'gh issue list'),
+      '--json', 'number,title,labels,assignees,url,updatedAt'], 'gh issue list'),
     ghList(['pr', 'list', '--repo', repoSpec, '--state', 'merged',
       '--limit', String(GH_LIST_LIMIT),
       '--json', 'number,headRefName,body,url,mergedAt'], 'gh pr list --state merged'),
@@ -304,6 +373,16 @@ async function getGithubState(repoSpec, fullName, apiHost = null) {
   return {
     forge: 'github',
     fullName,
+    // Carried through so `releaseAbandonedClaims` targets the same host-qualified
+    // selector this scan read from, rather than re-resolving it.
+    repoSpec,
+    // Only probed when some in-progress issue is actually assigned — the common
+    // empty case must not spend a `gh api user` call every scheduler tick. Null
+    // (not '') when gh could not answer OR was not asked: an unresolved login
+    // must never read as "every assignee is foreign" and unassign real people.
+    ownerLogin: inProgressRaw.some((issue) => issue?.assignees?.length)
+      ? await ghViewerLogin(apiHost)
+      : null,
     inProgress: inProgressRaw.map(normalizeGithubIssue),
     mergedPrs,
     openPrs,
@@ -326,6 +405,7 @@ function normalizeGitlabIssue(issue) {
     assignees: Array.isArray(issue.assignees)
       ? issue.assignees.map((a) => a?.username).filter(Boolean)
       : [],
+    updatedAt: issue.updated_at || '',
   };
 }
 
@@ -381,6 +461,13 @@ async function getGitlabState(repoPath, fullName) {
   return {
     forge: 'gitlab',
     fullName,
+    // No owner login, deliberately: `hasForeignClaim` (gatherIssueState) stays
+    // false without one, so a GitLab issue is never classified ABANDONED. Both
+    // flows that CREATE a volunteer claim — issueWatcher.js#assignVolunteer and
+    // the claim-issue prompt's Phase 1 handoff — are `gh`-only, so a foreign
+    // `in-progress` claim here has no PortOS applier and needs no PortOS
+    // releaser. Wire this up alongside a GitLab volunteer-claim path, not before.
+    ownerLogin: null,
     inProgress: issues.rows.map(normalizeGitlabIssue),
     mergedPrs: merged.rows.map(normalizeGitlabMr),
     openPrs: open.rows.map(normalizeGitlabMr),
@@ -488,9 +575,9 @@ async function getJiraState(_repoPath, jira) {
  *   one whose agent is still running. `jira` — routes to the JIRA gatherer.
  *   `app` — the managed-app record, whose `workTracker` pin lets a self-hosted
  *   forge on a non-matching hostname still resolve (see `getForgeState`).
- * @returns {Promise<{forge:string, fullName:string, issues:object[]}|null>}
+ * @returns {Promise<{forge:string, fullName:string, repoSpec:string|null, ownerLogin:string|null, issues:object[]}|null>}
  */
-export async function gatherIssueState(repoPath, { activeAgentIssueNums = new Set(), jira = null, app = null } = {}) {
+export async function gatherIssueState(repoPath, { activeAgentIssueNums = new Set(), jira = null, app = null, now = Date.now() } = {}) {
   const isJira = Boolean(jira?.instanceId && jira?.projectKey);
   const [state, liveClaimIds] = await Promise.all([
     isJira ? getJiraState(repoPath, jira) : getForgeState(repoPath, app),
@@ -500,6 +587,7 @@ export async function gatherIssueState(repoPath, { activeAgentIssueNums = new Se
 
   const issues = state.inProgress.map((issue) => {
     const id = issue.number;
+    const assignees = Array.isArray(issue.assignees) ? issue.assignees : [];
     // "shipped" analog: a merged PR/MR (forges) OR an In-Review status (JIRA).
     const mergedPr = isJira
       ? null
@@ -513,7 +601,7 @@ export async function gatherIssueState(repoPath, { activeAgentIssueNums = new Se
       title: issue.title || '',
       url: issue.url || '',
       labels: Array.isArray(issue.labels) ? issue.labels : [],
-      assignees: Array.isArray(issue.assignees) ? issue.assignees : [],
+      assignees,
       // JIRA carries its status so the convergence signature (and the prompt) can
       // reflect it; forges leave it undefined.
       ...(isJira ? { status: issue.status || '' } : {}),
@@ -523,33 +611,102 @@ export async function gatherIssueState(repoPath, { activeAgentIssueNums = new Se
       // trackers), OR an active CoS agent — any means "still being worked".
       hasLiveClaim: Boolean(openPr) || liveClaimIds.has(id),
       hasActiveAgent: activeAgentIssueNums.has(id),
+      // Held by at least one account that is not this install's. Requires a
+      // RESOLVED owner login — with `ownerLogin` null (gh/glab could not answer)
+      // this stays false, so an identity blip can never release a live claim.
+      hasForeignClaim: Boolean(state.ownerLogin)
+        && assignees.length > 0
+        && assignees.every((login) => normalizeLogin(login) !== state.ownerLogin),
+      staleDays: daysSince(issue.updatedAt, now),
     };
   });
-  return { forge: state.forge, fullName: state.fullName, issues };
+  return {
+    forge: state.forge,
+    fullName: state.fullName,
+    repoSpec: state.repoSpec ?? null,
+    ownerLogin: state.ownerLogin ?? null,
+    issues,
+  };
 }
 
 /**
  * Full reconcile: gather → classify → split. Returns the zombie set (for the
- * coordinator agent) plus stalled/live for reporting. Pure-ish (delegates all
- * I/O to gatherIssueState).
+ * coordinator agent), the abandoned set (for `releaseAbandonedClaims`), plus
+ * stalled/live for reporting. Pure-ish (delegates all I/O to gatherIssueState).
  *
  * @param {string} [repoPath=PATHS.root]
  * @param {{ activeAgentIssueNums?: Set<number|string>, jira?: { instanceId:string, projectKey:string }, app?: object }} [opts]
- * @returns {Promise<{ forge:string, fullName:string, zombies:object[], stalled:object[], live:object[] }|null>}
+ * @returns {Promise<{ forge:string, fullName:string, repoSpec:string|null, ownerLogin:string|null,
+ *   zombies:object[], abandoned:object[], stalled:object[], live:object[] }|null>}
  *   null on unsupported remote (not GitHub/GitLab, no JIRA config) / transient
  *   failure (skip, don't park).
  */
-export async function reconcile(repoPath = PATHS.root, { activeAgentIssueNums = new Set(), jira = null, app = null } = {}) {
-  const gathered = await gatherIssueState(repoPath, { activeAgentIssueNums, jira, app });
+export async function reconcile(repoPath = PATHS.root, { activeAgentIssueNums = new Set(), jira = null, app = null, now = Date.now() } = {}) {
+  const gathered = await gatherIssueState(repoPath, { activeAgentIssueNums, jira, app, now });
   if (!gathered) return null;
   const classified = classifyIssues(gathered.issues);
   return {
     forge: gathered.forge,
     fullName: gathered.fullName,
+    repoSpec: gathered.repoSpec,
+    ownerLogin: gathered.ownerLogin,
     zombies: classified.filter((c) => c.state === 'ZOMBIE'),
+    abandoned: classified.filter((c) => c.state === 'ABANDONED'),
     stalled: classified.filter((c) => c.state === 'STALLED'),
     live: classified.filter((c) => c.state === 'LIVE'),
   };
+}
+
+/**
+ * Release the `in-progress` marker (and the stale assignee) on an ABANDONED
+ * foreign claim, so a volunteer who took an issue and never shipped stops
+ * holding it forever.
+ *
+ * This is the ONLY effectful WRITE in this module, and it is deliberate: the
+ * whole point of the ABANDONED classification is that it needs no model to
+ * decide — the facts (no merged PR, no open PR, no claim branch, no agent, a
+ * non-owner assignee, untouched for FOREIGN_CLAIM_STALE_DAYS) are already the
+ * decision. Routing it through the coordinator agent would spend an LLM call to
+ * re-derive them. The zombie path stays with the coordinator because a partial
+ * ship needs someone to read the merged PR and judge what remains.
+ *
+ * Both markers go in ONE `gh issue edit` — every issue here is already known to
+ * carry `in-progress` (the list was label-filtered) and to have at least one
+ * assignee, so neither removal is the "label absent, whole call fails" case that
+ * forces per-label edits elsewhere. The explanatory comment is posted FIRST so a
+ * release is never silent, and a failed comment does not block the release.
+ *
+ * GitHub-only: `getGitlabState` resolves no owner login, so no GitLab or JIRA
+ * issue is ever classified ABANDONED (see the note there).
+ *
+ * @param {object[]} abandoned - classified issues in the ABANDONED state
+ * @param {{ forge:string, repoSpec:string, fullName:string }} ctx
+ * @returns {Promise<number>} how many issues were actually released
+ */
+export async function releaseAbandonedClaims(abandoned, { forge, repoSpec, fullName }) {
+  if (forge !== 'github' || !repoSpec || !abandoned?.length) return 0;
+  let released = 0;
+  for (const issue of abandoned) {
+    const number = String(issue.number);
+    await execGh(['issue', 'comment', number, '--repo', repoSpec, '--body',
+      `Releasing the \`${IN_PROGRESS_LABEL}\` claim: this issue has had no linked pull request, no claim branch, and no activity for ${issue.staleDays} days. It is back in the queue — comment again to pick it up.`])
+      .catch((err) => {
+        console.error(`❌ issue-reconcile: could not comment on abandoned #${number} in ${fullName}: ${err.message}`);
+      });
+    const unassign = issue.assignees.flatMap((login) => ['--remove-assignee', login]);
+    const ok = await execGh(['issue', 'edit', number, '--repo', repoSpec,
+      '--remove-label', IN_PROGRESS_LABEL, ...unassign])
+      .then(() => true)
+      .catch((err) => {
+        console.error(`❌ issue-reconcile: could not release abandoned #${number} in ${fullName}: ${err.message}`);
+        return false;
+      });
+    if (ok) {
+      released += 1;
+      console.log(`🔓 issue-reconcile released #${number} in ${fullName}: claim stale ${issue.staleDays}d, nothing shipped`);
+    }
+  }
+  return released;
 }
 
 /**

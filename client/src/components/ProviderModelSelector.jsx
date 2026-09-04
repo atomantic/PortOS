@@ -23,6 +23,14 @@
  * @param {function} props.onModelChange - Called with model string
  * @param {string} [props.label] - Label text (default: "Provider")
  * @param {boolean} [props.disabled] - Disable both selectors
+ * @param {boolean} [props.loading] - The caller's provider list hasn't settled
+ *   yet. An empty `providers` is ambiguous — "still fetching" and "none
+ *   configured" both render a picker whose only choice is the
+ *   `emptyProviderOption` ("Default (active provider)", "Inherit (…)"), which
+ *   reads as a broken control rather than a slow one. Pass `true` while the
+ *   fetch is in flight to disable the selects and say so instead. This is the
+ *   same settle-gate the `annotateToolUse` scan below uses on its own fetch,
+ *   applied to the list the caller owns.
  * @param {boolean} [props.modelDisabled] - Disable only the model selector (e.g.
  *   when the selected provider has no models). Composes with `disabled`.
  * @param {boolean} [props.compact] - Hide labels for inline/toolbar use
@@ -95,6 +103,7 @@ export default function ProviderModelSelector({
   onModelChange,
   label = 'Provider',
   disabled = false,
+  loading = false,
   modelDisabled = false,
   compact = false,
   emptyProviderOption,
@@ -200,12 +209,17 @@ export default function ProviderModelSelector({
           id={providerSelectId}
           value={selectedProviderId}
           onChange={(e) => onProviderChange(e.target.value)}
-          disabled={disabled}
+          disabled={disabled || loading}
           title={compact ? label : undefined}
           aria-label={compact ? label : undefined}
           className={SELECT_CLASS}
         >
-          {emptyProviderOption != null && <option value="">{emptyProviderOption}</option>}
+          {/* Rendered even when the caller forces a selection: mid-fetch there
+              is nothing else to offer, and a genuinely empty select reads as the
+              same broken control. */}
+          {loading
+            ? <option value="">Loading providers…</option>
+            : emptyProviderOption != null && <option value="">{emptyProviderOption}</option>}
           {visibleProviders.map((p) => {
             const hardwareUnavailable = !isProviderHardwareCompatible(p);
             const policyDisallowed = Boolean(providerAllowed && !providerAllowed(p));
@@ -227,7 +241,7 @@ export default function ProviderModelSelector({
             id={modelSelectId}
             value={selectedModel}
             onChange={(e) => handleModelChange(e.target.value)}
-            disabled={disabled || modelDisabled}
+            disabled={disabled || modelDisabled || loading}
             title={compact ? 'Model' : undefined}
             aria-label={compact ? 'Model' : undefined}
             className={SELECT_CLASS}
@@ -271,7 +285,7 @@ export default function ProviderModelSelector({
             model={effectiveModel}
             value={effort || ''}
             onChange={onEffortChange}
-            disabled={disabled}
+            disabled={disabled || loading}
             optionFilter={effortAllowed}
             className={SELECT_CLASS}
           />

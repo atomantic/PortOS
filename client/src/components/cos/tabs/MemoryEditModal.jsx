@@ -217,7 +217,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
                     type="button"
                     onClick={() => handleRemoveTag(tag)}
                     aria-label="Delete"
-                    className="p-1 min-w-[24px] min-h-[24px] flex items-center justify-center text-gray-500 hover:text-port-error transition-colors"
+                    className="min-h-[44px] min-w-[44px] flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
                   >
                     <Trash2 size={14} />
                   </button>

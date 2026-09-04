@@ -34,7 +34,7 @@ import { buildHfAuthHeaders, buildHfResolveUrl, HF_API } from '../lib/huggingfac
 import { isEmbeddingModel } from '../lib/localModelHeuristics.js'
 import { commandExists } from '../lib/commandExists.js'
 import {
-  OLLAMA_AGENT_MIN_CONTEXT, resolveOllamaContextLength, withOllamaContextEnv
+  OLLAMA_AGENT_MIN_CONTEXT, OLLAMA_CONTEXT_ENV_VAR, resolveOllamaContextLength, withOllamaContextEnv
 } from '../lib/ollamaContext.js'
 import { compareSemver } from '../lib/versionUtils.js'
 import { isSafeHfRepoRelativePath } from '../lib/hfCache.js'
@@ -640,7 +640,19 @@ async function getRuntimeContextLength(selectedModel = null) {
 async function ensureContextWindow(contextLength, selectedModel = null) {
   const target = Number(contextLength) > 0 ? Math.floor(Number(contextLength)) : null
   if (!target) return { applied: false, reason: 'not-configured', contextLength: null }
-  const env = withOllamaContextEnv({}, target)
+
+  // Compose the context-window env ON TOP OF the currently applied launch env
+  // instead of replacing it, so a reload preserves knobs (e.g.
+  // OLLAMA_FLASH_ATTENTION, OLLAMA_KV_CACHE_TYPE) that are not about the window.
+  // `appliedLaunchEnvValues` outlives `appliedLaunchEnv` specifically to answer
+  // "what has PortOS put in front of Ollama that has not been cleared yet", so
+  // an active tuning is preserved even if the daemon was temporarily down.
+  // When a tuning is active mid-sweep, preserving its knobs keeps the sweep's
+  // measurements comparable rather than demoting the daemon to untuned
+  // mid-sweep, while allowing the context window to expand for the harness.
+  const baseEnv = appliedLaunchEnvValues ? { ...appliedLaunchEnvValues } : {}
+  const env = withOllamaContextEnv(baseEnv, target)
+
   if (!(await checkOllamaAvailable(true))) {
     return { ...(await restartWithEnv(env, { tuning: false })), contextLength: target }
   }
@@ -817,10 +829,23 @@ async function restartWithEnv(env, { tuning = true } = {}) {
   // by construction), so anything written up front would be wiped mid-call.
   //
   // A restart that did not happen changed nothing, so the bookkeeping must not
-  // move either. A non-tuning restart that DID happen is the install's real
-  // configuration changing, which leaves nothing to undo.
-  if (result.applied === false) preTuningEnv = before
-  else preTuningEnv = tuning ? captured : null
+  // move either.
+  //
+  // When a non-tuning restart (`tuning: false`, e.g. `ensureContextWindow`) occurs
+  // while a tuning is active (`before !== null`), preserve the pre-tuning undo
+  // baseline rather than clearing it, but update its context window so that a
+  // later `clearLaunchEnv()` restores the untuned daemon with the new context
+  // length rather than reverting it. If no tuning was active (`before === null`),
+  // `preTuningEnv` remains `null`.
+  if (result.applied === false) {
+    preTuningEnv = before
+  } else if (tuning) {
+    preTuningEnv = captured
+  } else if (before) {
+    preTuningEnv = withOllamaContextEnv(before, env[OLLAMA_CONTEXT_ENV_VAR])
+  } else {
+    preTuningEnv = null
+  }
   return result
 }
 

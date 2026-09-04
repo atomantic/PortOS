@@ -449,7 +449,7 @@ export default function Review() {
                 </span>
                 <button
                   onClick={() => setBriefingFullscreen(prev => !prev)}
-                  className="p-1 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-white/5"
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-white/5"
                   title={briefingFullscreen ? 'Exit fullscreen' : 'Fullscreen'} aria-label={briefingFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
                 >
                   {briefingFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
@@ -609,7 +609,7 @@ function QueueRow({ item, onDrill, onDismiss, onResolve, onPromoteAsk, resolving
           </p>
         )}
       </div>
-      <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
+      <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
         {item.action && onResolve && (
           <button
             onClick={() => onResolve(item)}
@@ -657,14 +657,14 @@ function QueueRow({ item, onDrill, onDismiss, onResolve, onPromoteAsk, resolving
         )}
         <button
           onClick={() => onDrill(item)}
-          className="p-1.5 text-gray-500 hover:text-port-accent transition-colors"
+          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-accent transition-colors"
           title="Open" aria-label="Open"
         >
           <ArrowRight size={16} />
         </button>
         <button
           onClick={() => onDismiss(item.id)}
-          className="p-1.5 text-gray-500 hover:text-port-warning transition-colors"
+          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-warning transition-colors"
           title="Dismiss from queue (this session)" aria-label="Dismiss from queue (this session)"
         >
           <X size={16} />
@@ -811,11 +811,11 @@ function ReviewItem({ item, config, idScope, isEditing, onComplete, onDismiss, o
       </div>
 
       {isPending && !isEditing && (
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
           {item.type === 'todo' && (
             <button
               onClick={onStartEdit}
-              className="p-1.5 text-gray-500 hover:text-white transition-colors"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-white transition-colors"
               title="Edit" aria-label="Edit"
             >
               <Pencil size={14} />
@@ -823,21 +823,21 @@ function ReviewItem({ item, config, idScope, isEditing, onComplete, onDismiss, o
           )}
           <button
             onClick={() => onComplete(item.id)}
-            className="p-1.5 text-gray-500 hover:text-port-success transition-colors"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-success transition-colors"
             title={item.type === 'alert' ? 'Accept' : 'Complete'} aria-label={item.type === 'alert' ? 'Accept' : 'Complete'}
           >
             <CheckCircle2 size={16} />
           </button>
           <button
             onClick={() => onDismiss(item.id)}
-            className="p-1.5 text-gray-500 hover:text-port-warning transition-colors"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-warning transition-colors"
             title={item.type === 'alert' ? 'Reject' : 'Dismiss'} aria-label={item.type === 'alert' ? 'Reject' : 'Dismiss'}
           >
             <X size={16} />
           </button>
           <button
             onClick={() => onDelete(item.id)}
-            className="p-1.5 text-gray-500 hover:text-port-error transition-colors"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-error transition-colors"
             title="Delete" aria-label="Delete"
           >
             <Trash2 size={14} />

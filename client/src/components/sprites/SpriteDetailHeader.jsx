@@ -63,7 +63,7 @@ export default function SpriteDetailHeader({ record, onRenamed, onDeleted }) {
               type="button"
               onClick={startRename}
               aria-label={`Rename ${record.name}`}
-              className="shrink-0 p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center shrink-0 p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
             >
               <Pencil className="w-4 h-4" />
             </button>
@@ -71,7 +71,7 @@ export default function SpriteDetailHeader({ record, onRenamed, onDeleted }) {
               type="button"
               onClick={startDelete}
               aria-label={`Delete ${record.name}`}
-              className="shrink-0 p-1 rounded text-gray-400 hover:text-port-error hover:bg-port-border/50"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center shrink-0 p-1 rounded text-gray-400 hover:text-port-error hover:bg-port-border/50"
             >
               <Trash2 className="w-4 h-4" />
             </button>

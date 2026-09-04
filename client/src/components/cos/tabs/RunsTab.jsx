@@ -331,7 +331,7 @@ export default function RunsTab() {
                       {run.success === false && (
                         <button
                           onClick={(e) => { e.stopPropagation(); setLogModalRun(run); }}
-                          className="p-1 text-gray-500 hover:text-port-accent transition-colors sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 sm:focus-visible:opacity-100"
+                          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-accent transition-colors sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 sm:focus-visible:opacity-100"
                           title="View system logs"
                           aria-label="View system logs"
                           data-testid={`view-logs-${run.id}`}
@@ -342,7 +342,7 @@ export default function RunsTab() {
                       {run.success !== null && (
                         <button
                           onClick={(e) => handleResume(run, e)}
-                          className="p-1 text-gray-500 hover:text-port-accent transition-colors sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 sm:focus-visible:opacity-100"
+                          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-accent transition-colors sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 sm:focus-visible:opacity-100"
                           title="Resume run" aria-label="Resume run"
                           data-testid={`resume-run-${run.id}`}
                         >
@@ -353,7 +353,7 @@ export default function RunsTab() {
                         <button
                           onClick={(e) => handleStop(run.id, e)}
                           disabled={stoppingIds.has(run.id)}
-                          className="p-1 text-gray-500 hover:text-port-error transition-colors disabled:opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 sm:focus-visible:opacity-100"
+                          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors disabled:opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 sm:focus-visible:opacity-100"
                           title={stoppingIds.has(run.id) ? 'Stopping run' : 'Stop run'}
                           aria-label={stoppingIds.has(run.id) ? 'Stopping run' : 'Stop run'}
                           data-testid={`stop-run-${run.id}`}
@@ -363,7 +363,7 @@ export default function RunsTab() {
                       )}
                       <button
                         onClick={(e) => handleDelete(run.id, e)}
-                        className="p-1 text-gray-500 hover:text-port-error transition-colors sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 sm:focus-visible:opacity-100"
+                        className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 sm:focus-visible:opacity-100"
                         title="Delete run" aria-label="Delete run"
                         data-testid={`delete-run-${run.id}`}
                       >

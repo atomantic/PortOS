@@ -53,7 +53,7 @@ export default function Apps() {
     setLoading(false);
   }, []);
 
-  const { operations, isOperating, startUpdate, startStandardize, dismiss } = useAppOperation({ onComplete: fetchApps });
+  const { operations, isOperating, restarting, startUpdate, startStandardize, dismiss } = useAppOperation({ onComplete: fetchApps });
 
   useEffect(() => {
     fetchApps();
@@ -254,6 +254,7 @@ export default function Apps() {
           steps={op.steps}
           error={op.error}
           completed={op.completed}
+          restarting={restarting && op.appId === api.PORTOS_APP_ID}
           onDismiss={op.error || op.completed ? () => dismiss(op.appId) : null}
         />
       ))}

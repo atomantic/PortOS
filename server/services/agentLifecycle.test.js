@@ -32,6 +32,7 @@ import { dirname, join } from 'path';
 import { spawningTasks, runnerAgents } from './agentState.js';
 import { withSpawnDedupGuard, withMapEntryCleanup, withUpdateInProgressGuard, SPAWN_DEDUP_SKIP, SPAWN_UPDATE_SKIP } from './agentGuards.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
+import { PROVIDER_CONFIG_BLOCKED_CATEGORY, PAUSED_BLOCKED_CATEGORIES, USER_DECISION_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const AGENT_LIFECYCLE_SRC = readFileSync(join(__dirname, 'agentLifecycle.js'), 'utf-8');
@@ -619,7 +620,22 @@ describe('runAgentSpawn source — permanent provider-config failure blocks the 
     const body = AGENT_LIFECYCLE_SRC.slice(idx, idx + 2000);
     expect(body, 'gates the block on resolution.permanent').toMatch(/if\s*\(resolution\.permanent\)/);
     expect(body, 'flips the task to blocked').toMatch(/status:\s*'blocked'/);
-    expect(body, 'tags the block category').toMatch(/blockedCategory:\s*'provider-config'/);
+    // The category is the SHARED constant, not a hand-written literal: the pause
+    // and reaper-exemption sets in lib/taskBlockCategories.js key on the same
+    // value, and a stamp-site literal is exactly how those three drift apart.
+    expect(body, 'tags the block category from the shared constant').toMatch(/blockedCategory:\s*PROVIDER_CONFIG_BLOCKED_CATEGORY,/);
+    expect(body, 'does not re-hardcode the literal').not.toMatch(/blockedCategory:\s*'provider-config'/);
+    expect(AGENT_LIFECYCLE_SRC, 'imports the shared constant').toMatch(/import \{[^}]*PROVIDER_CONFIG_BLOCKED_CATEGORY[^}]*\} from '\.\.\/lib\/taskBlockCategories\.js'/);
+  });
+
+  // The block only does its job if the vocabulary module agrees it is a config
+  // PAUSE (keeps the resume pointer) and a user DECISION (exempt from the 14-day
+  // auto-expiry). Pin both memberships here, at the stamp site, so removing one
+  // fails beside the code that depends on it.
+  it('the stamped category is a config pause the reaper leaves alone', () => {
+    expect(PROVIDER_CONFIG_BLOCKED_CATEGORY).toBe('provider-config');
+    expect(PAUSED_BLOCKED_CATEGORIES.has(PROVIDER_CONFIG_BLOCKED_CATEGORY), 'keeps its resume pointer').toBe(true);
+    expect(USER_DECISION_BLOCKED_CATEGORIES.has(PROVIDER_CONFIG_BLOCKED_CATEGORY), 'never auto-expired to completed').toBe(true);
   });
 
   it('blocks BEFORE releasing the lease so a federated peer cannot be clobbered', () => {
@@ -736,6 +752,17 @@ describe('runAgentSpawn source — instance provenance + claim ordering (#1563)'
     expect(metaSlice).toContain('configOpenPR: isTruthyMeta(task.metadata?.openPR)');
     expect(metaSlice).toContain('configClaimFlow: isClaimFlowTask(task, isTruthyMeta)');
     expect(metaSlice.indexOf('configClaimFlow')).toBeGreaterThan(metaSlice.indexOf('configOpenPR'));
+  });
+
+  it('projects the public-review posture so the UI can explain the missing shell link', () => {
+    // `spawnHeadless` forces a public-review stage headless even on a TUI
+    // provider — unless it is the sandboxed-actions stage on a vendor with an
+    // attachable recipe (#6062) — so its card usually gets no "Open Shell"
+    // link. Without this projection the card cannot tell that apart from a PTY
+    // that failed to attach, and the run reads as wedged.
+    const registerIdx = RUN_SPAWN_BODY.indexOf('registerAgent(agentId, task.id, {');
+    const metaSlice = RUN_SPAWN_BODY.slice(registerIdx, RUN_SPAWN_BODY.indexOf('\n  });', registerIdx));
+    expect(metaSlice).toMatch(/^\s*publicReviewPosture,$/m);
   });
 });
 
@@ -856,5 +883,39 @@ describe('runAgentSpawn source — taskType normalization + claim-miss guard (is
     const body = RUN_SPAWN_BODY.slice(warnIdx, warnIdx + 400);
     expect(body).toMatch(/emitLog\('warn'/);
     expect(body).toContain('updateResult.error');
+  });
+});
+
+// #6117: a public-review Stage 3 dispatch inlines the whole screened envelope —
+// ~100K tokens — and a model server on this box spends minutes prefilling it
+// before the child emits a line. Nothing compared the assembled prompt against
+// the endpoint it was aimed at, so the run's duration estimate carried none of
+// that cost and the card was indistinguishable from a wedged run. The budget has
+// no behavioral seam inside runAgentSpawn, so pin the two orderings that make it
+// correct.
+describe('runAgentSpawn source — local prompt/prefill budget (#6117)', () => {
+  it('measures the FULLY assembled prompt, after the public-review envelope is appended', () => {
+    // Measuring `basePrompt` would miss the envelope, which IS the ~100K tokens.
+    const promptIdx = RUN_SPAWN_BODY.indexOf('formatPublicReviewInputPrompt(publicReviewPromptData)');
+    const planIdx = RUN_SPAWN_BODY.indexOf('planLocalPromptBudget({');
+    expect(promptIdx, 'the public-review envelope must still be appended to the prompt').toBeGreaterThan(-1);
+    expect(planIdx, '`planLocalPromptBudget({` must exist inside runAgentSpawn').toBeGreaterThan(-1);
+    expect(promptIdx, 'the budget must be planned AFTER the envelope is appended').toBeLessThan(planIdx);
+  });
+
+  it('only asks the question for an endpoint on this machine, and never refuses the dispatch', () => {
+    // A cloud provider prefills in seconds and must take no async hop; and the
+    // decision on this issue was explicitly to RAISE the estimate rather than
+    // block a provider the user deliberately configured.
+    expect(RUN_SPAWN_BODY).toMatch(/const\s+localEndpoint\s*=\s*localEndpointOfProvider\(provider\)\s*;/);
+    expect(RUN_SPAWN_BODY).toMatch(/localEndpoint\s*\r?\n?\s*\?\s*planLocalPromptBudget\(\{/);
+    expect(RUN_SPAWN_BODY, 'the budget must never turn into a blocked task')
+      .not.toMatch(/localPromptBudget[\s\S]{0,200}blockedReason/);
+  });
+
+  it('stamps the budget onto the agent record so the card can explain the silence', () => {
+    const registerIdx = AGENT_LIFECYCLE_SRC.indexOf('registerAgent(agentId, task.id, {');
+    const metaSlice = AGENT_LIFECYCLE_SRC.slice(registerIdx, AGENT_LIFECYCLE_SRC.indexOf('\n  });', registerIdx));
+    expect(metaSlice).toMatch(/\blocalPromptBudget,/);
   });
 });

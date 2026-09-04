@@ -26,7 +26,7 @@
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { sanitizeTaskMetadata, PIPELINE_STAGE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, resolveClaimReviewerConfig, reviewerConfigMetadata } from '../lib/validation.js';
+import { sanitizeTaskMetadata, PIPELINE_STAGE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, resolveClaimReviewerConfig, reviewerConfigMetadata, hasReviewerOverride } from '../lib/validation.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { MODEL_ABUSE_GUARD_ID, normalizeEligibilityFacts } from '../lib/modelAbuseGuard.js';
 import { isPlainObject } from '../lib/objects.js';
@@ -334,6 +334,53 @@ export function resolveClaimAuthorFilter(explicit, metadata) {
 }
 
 /**
+ * The reviewer bundle a claim will run: an explicit option wins per field, then
+ * the app's configured `claim-work` metadata, then the Code Review Defaults. One
+ * resolver for the whole bundle (list + usernames + `~opt` set + the three keyed
+ * pins), so the CSV the prompt names and the `reviewers` the task PERSISTS cannot
+ * disagree. Local-LLM reviewers stay in the operative list; the claim prompt's
+ * appended Local Reviewer Procedure tells the agent how to invoke PortOS's review
+ * service rather than silently replacing the user's configured reviewer.
+ *
+ * Shared with `resolveAppClaimReviewers` (and through it the claim-reviewer
+ * lookup route) precisely so a change to this precedence reaches the preview the
+ * UI shows and the run it previews at the same time — the two drifting apart is
+ * the whole defect that lookup exists to close.
+ */
+function claimReviewersFrom(metadata, codeReviewDefaults, explicit = {}) {
+  const { reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts } = explicit;
+  return resolveClaimReviewerConfig({
+    ...metadata,
+    reviewers: reviewers !== undefined ? (Array.isArray(reviewers) ? reviewers : [reviewers]) : metadata?.reviewers,
+    usernames: usernames ?? metadata?.usernames,
+    optionalReviewers: optionalReviewers ?? metadata?.optionalReviewers,
+    reviewerMaxRounds: reviewerMaxRounds ?? metadata?.reviewerMaxRounds,
+    reviewerModels: reviewerModels ?? metadata?.reviewerModels,
+    reviewerEfforts: reviewerEfforts ?? metadata?.reviewerEfforts
+  }, codeReviewDefaults, codeReviewDefaults?.reviewers);
+}
+
+/**
+ * What a `/do:next` claim would resolve for `app` right now, without queuing one:
+ * the reviewer bundle plus `overridden`, which says whether the claim-work task
+ * metadata supplied any of the list (so the UI can send the user to the override
+ * rather than to the Code Reviewers panel that isn't in play).
+ *
+ * Reads the same two layers `buildClaimWorkTask` does and hands them to the same
+ * `claimReviewersFrom`, so the preview cannot report a chain the run won't use.
+ */
+export async function resolveAppClaimReviewers(app) {
+  // Independent reads — the resolver needs both, but neither depends on the other.
+  const [{ metadata }, codeReviewDefaults] = await Promise.all([
+    resolveClaimWorkMetadata(app),
+    // A settings read failure means "no configured defaults", never a failed
+    // lookup: the task metadata layer wins over them anyway.
+    getCodeReviewDefaults().catch(() => null)
+  ]);
+  return { ...claimReviewersFrom(metadata, codeReviewDefaults), overridden: hasReviewerOverride(metadata) };
+}
+
+/**
  * Build a one-off "claim the next work item" task for `app`, routed by the app's
  * configured workTracker — the manual (Slashdo `/do:next` button) counterpart to
  * the scheduled `claim-work` router below. Resolves the tracker, delegates to the
@@ -399,22 +446,9 @@ export async function buildClaimWorkTask(app, {
 
   const resolvedAuthorFilter = resolveClaimAuthorFilter(issueAuthorFilter, metadata);
 
-  // Reviewers: an explicit option wins per field, then the app's configured
-  // claim-work metadata, then the Code Review Defaults. One resolver for the
-  // whole bundle (list + usernames + `~opt` set + the three keyed pins), so the
-  // CSV the prompt names and the `reviewers` this task PERSISTS below cannot
-  // disagree. Local-LLM reviewers stay in the operative list; an appended
-  // procedure below tells the claim agent how to invoke PortOS's review service
-  // instead of silently replacing the user's configured reviewer.
-  const claimReviewers = resolveClaimReviewerConfig({
-    ...metadata,
-    reviewers: reviewers !== undefined ? (Array.isArray(reviewers) ? reviewers : [reviewers]) : metadata.reviewers,
-    usernames: usernames ?? metadata.usernames,
-    optionalReviewers: optionalReviewers ?? metadata.optionalReviewers,
-    reviewerMaxRounds: reviewerMaxRounds ?? metadata.reviewerMaxRounds,
-    reviewerModels: reviewerModels ?? metadata.reviewerModels,
-    reviewerEfforts: reviewerEfforts ?? metadata.reviewerEfforts
-  }, codeReviewDefaults, codeReviewDefaults?.reviewers);
+  const claimReviewers = claimReviewersFrom(metadata, codeReviewDefaults, {
+    reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts
+  });
   const {
     reviewers: reviewersList,
     reviewerModels: promptReviewerModels,
@@ -469,10 +503,10 @@ export async function buildClaimWorkTask(app, {
 }
 
 /**
- * Resolve the reviewer prompt pieces for the claim flow exactly as
- * buildClaimWorkTask does (including local-LLM reviewers). Mirrors the
- * scheduled claim-work resolution so the JIRA play button honors the user's
- * reviewer choice.
+ * Resolve the reviewer prompt pieces for the claim flow as buildClaimWorkTask
+ * does on its default (no-explicit-option) path (including local-LLM
+ * reviewers). Mirrors the scheduled claim-work resolution so the JIRA play
+ * button honors the user's reviewer choice.
  *
  * Returns each piece separately because they travel differently: `csv` fills the
  * template's `{reviewers}` placeholder, `effortBlock` is appended prose (the
@@ -480,14 +514,15 @@ export async function buildClaimWorkTask(app, {
  * reads the CSV's `~effort=` suffix), and `taskMetadata` is PERSISTED so the
  * prompt builder resolves the same list back off the task record (#4770).
  */
-async function resolveClaimReviewerPrompt() {
-  const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
-  // No task record exists yet for the play button, so the whole bundle resolves
-  // from the Code Review Defaults: the reviewer list, the `@user` tokens that
-  // gate the merge, the `~opt` set, the `~max=<n>` caps, and the model/effort
-  // pins (which resolve together — an agy model id can carry its effort as a
-  // suffix, so the bracket and the appended instruction can't disagree).
-  const config = resolveClaimReviewerConfig({}, codeReviewDefaults, codeReviewDefaults?.reviewers);
+async function resolveClaimReviewerPrompt(app) {
+  const [{ metadata }, codeReviewDefaults] = await Promise.all([
+    resolveClaimWorkMetadata(app),
+    getCodeReviewDefaults().catch(() => null)
+  ]);
+  // The app's configured claim-work metadata layers over the Code Review
+  // Defaults through the same claimReviewersFrom the scheduled path uses —
+  // resolving from the defaults alone would silently drop a pinned override.
+  const config = claimReviewersFrom(metadata, codeReviewDefaults);
   const { reviewers: list, reviewerModels, reviewerEfforts, csv } = config;
   return {
     csv,
@@ -522,10 +557,10 @@ export async function buildJiraTicketTask(app, ticketKey) {
   // null (unnormalizable) key can only come from a direct service caller.
   const key = normalizeWorkItemRef(ticketKey);
 
-  // Independent reads (prompt body + Code Review Defaults) — fetch concurrently.
+  // Independent reads (prompt body + claim reviewers) — fetch concurrently.
   const [template, { csv: reviewersCsv, taskMetadata: reviewerMetadata, effortBlock, localReviewerBlock }] = await Promise.all([
     getTaskPrompt('claim-issue-jira'),
-    resolveClaimReviewerPrompt(),
+    resolveClaimReviewerPrompt(app),
   ]);
   const prompt = template
     .replace(/\{appName\}/g, app.name)
@@ -2053,8 +2088,22 @@ async function findActiveSecurityScanTask(appId, scanKey) {
  * hook's strict envelope check) is scoped to that one PR by construction rather
  * than by a prompt asking the agent to ignore the rest.
  */
-async function runPrReviewerSecurityPreflight(taskType, app, metadata, targetPullRequest = null) {
+async function runPrReviewerSecurityPreflight(taskType, app, metadata, targetPullRequest = null, taskSchedule = null) {
   if (taskType !== 'pr-reviewer') return { skipped: false };
+
+  // A churn park has to be a STOP, not just a log line (#6124). pr-reviewer runs
+  // on the ON_DEMAND cadence, and `shouldRunTask` only reads `parkedUntil` on a
+  // `perpetual` interval — so the park `observeAgentChurn` stamps when a stage
+  // loops ("parked ${type} so the loop stops burning quota") gated nothing, and
+  // the drain regenerated a fresh task seconds later. Ask here, the one place
+  // every pr-reviewer run is built, and ask BEFORE the security scan so a parked
+  // type does not keep paying for the preflight it is only going to discard.
+  // A human "Run" is unaffected: applyOnDemandRunResets clears the park for a
+  // USER-origin request before it reaches generation.
+  if (taskSchedule && await taskSchedule.isPerpetualParkActive(taskType, app.id)) {
+    emitLog('info', `Skipping pr-reviewer for ${app.name}: parked until its recheck cadence`, { appId: app.id, analysisType: taskType });
+    return { skipped: true, reason: 'parked' };
+  }
 
   const stages = metadata.pipeline?.stages;
   const securityStage = stages?.[0];
@@ -2811,7 +2860,7 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
 
   if (taskType === 'pr-reviewer') ensurePrReviewerPipeline(metadata);
   initializePipelineMetadata(metadata);
-  const securityPreflight = await runPrReviewerSecurityPreflight(taskType, app, metadata, targetPullRequest);
+  const securityPreflight = await runPrReviewerSecurityPreflight(taskType, app, metadata, targetPullRequest, taskSchedule);
   if (securityPreflight.skipped) return null;
   if (!skipPreconditions && shouldSkipForPrecondition(metadata, app, taskType)) return null;
 

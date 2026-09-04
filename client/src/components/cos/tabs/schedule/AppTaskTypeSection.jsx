@@ -3,7 +3,7 @@ import { Search, X } from 'lucide-react';
 import AppTaskCard from './AppTaskCard';
 import { TASK_FILTERS, DEFAULT_FILTER_ID, taskSortKey } from './scheduleConstants';
 
-export default function AppTaskTypeSection({ tasks, apps, providers, activeProviderId, onTrigger, onUpdate, onSelectTask, improvementDisabled, filter, onFilterChange }) {
+export default function AppTaskTypeSection({ tasks, apps, providers, providersLoaded, activeProviderId, onTrigger, onUpdate, onSelectTask, improvementDisabled, filter, onFilterChange }) {
   const [search, setSearch] = useState('');
   const taskEntries = Object.entries(tasks || {});
 
@@ -47,7 +47,7 @@ export default function AppTaskTypeSection({ tasks, apps, providers, activeProvi
         </div>
       </div>
       <p className="text-sm text-gray-400">
-        Tasks that analyze and improve PortOS and managed apps. Click a card to configure schedule and per-app overrides.
+        Tasks that analyze and improve PortOS and managed apps. Click a card to configure its schedule and to turn it on or off per app.
       </p>
 
       <div className="relative max-w-sm">
@@ -65,7 +65,7 @@ export default function AppTaskTypeSection({ tasks, apps, providers, activeProvi
             type="button"
             onClick={() => setSearch('')}
             aria-label="Clear filter"
-            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-500 hover:text-white"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-500 hover:text-white"
           >
             <X size={14} />
           </button>
@@ -90,6 +90,7 @@ export default function AppTaskTypeSection({ tasks, apps, providers, activeProvi
               config={config}
               apps={apps}
               providers={providers}
+              providersLoaded={providersLoaded}
               activeProviderId={activeProviderId}
               onTrigger={onTrigger}
               onUpdate={onUpdate}

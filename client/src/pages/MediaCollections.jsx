@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { Plus, FolderOpen, Inbox, Trash2, Image as ImageIcon, Film, Search } from 'lucide-react';
+import { Plus, FolderOpen, Inbox, Trash2, Image as ImageIcon, Film, Search, AlertTriangle } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import Banner from '../components/ui/Banner';
 import EmptyState from '../components/EmptyState';
 import toast from '../components/ui/Toast';
 import {
@@ -69,7 +70,13 @@ export default function MediaCollections() {
   const nameInputRef = useRef(null);
   const navigate = useNavigate();
   const [searchParams, updateParams] = useUrlParams();
-  const [collections, setCollections] = useState([]);
+  // `null` = collections were never successfully fetched (initial state, or a
+  // first-load failure); `[]` = the server really has none. Collapsing the two
+  // is what let a failed fetch render the "No collections yet" onboarding copy
+  // and hand every image/video in the library to the synthetic "Unsorted"
+  // bucket, reading as "all my collections were deleted" (#6019).
+  const [collections, setCollections] = useState(null);
+  const [collectionsError, setCollectionsError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
@@ -82,12 +89,28 @@ export default function MediaCollections() {
 
   const refresh = async () => {
     setLoading(true);
+    // The collections leg resolves to an array on success and to an
+    // `{ error }` envelope on failure, so the failure survives `Promise.all`
+    // as data instead of being flattened into an indistinguishable `[]`.
+    // `silent: true` because this page owns the failure UI below — the shared
+    // `request()` toast would fade and leave the banner as the only signal.
     const [cols, images, videos] = await Promise.all([
-      listMediaCollections().catch(() => []),
+      listMediaCollections({ silent: true }).then(
+        (list) => (Array.isArray(list) ? list : []),
+        (err) => ({ error: err?.message || 'The collections list could not be loaded.' }),
+      ),
       listImageGallery().catch(() => []),
       listVideoHistory().catch(() => []),
     ]);
-    setCollections(Array.isArray(cols) ? cols : []);
+    if (Array.isArray(cols)) {
+      setCollections(cols);
+      setCollectionsError(null);
+    } else {
+      // Deliberately leave `collections` alone: the sentinel on a first-load
+      // failure, or the last good list on a refresh failure. Either way the
+      // grid never claims the library is unfiled.
+      setCollectionsError(cols.error);
+    }
     setImagesByName(new Map((images || []).map((i) => [i.filename, i])));
     setVideosById(new Map((videos || []).map((v) => [v.id, v])));
     setLoading(false);
@@ -105,7 +128,10 @@ export default function MediaCollections() {
     });
     setCreating(false);
     if (created) {
-      setCollections((prev) => [...prev, created]);
+      // Only extend a list we actually have — fabricating one from a single
+      // record while the fetch is still failed would clear the sentinel and
+      // resurrect the "everything is unsorted" lie.
+      setCollections((prev) => (prev ? [...prev, created] : prev));
       setName('');
       toast.success(`Created "${created.name}"`);
       // Open the new collection instead of dropping the user back on the grid.
@@ -119,7 +145,7 @@ export default function MediaCollections() {
   };
 
   const handleDelete = async (collection) => {
-    setCollections((prev) => prev.filter((c) => c.id !== collection.id));
+    setCollections((prev) => (prev ? prev.filter((c) => c.id !== collection.id) : prev));
     await deleteMediaCollection(collection.id, { silent: true }).catch((err) => {
       toast.error(err.message || 'Delete failed');
       refresh();
@@ -128,12 +154,15 @@ export default function MediaCollections() {
 
   const images = useMemo(() => Array.from(imagesByName.values()), [imagesByName]);
   const videos = useMemo(() => Array.from(videosById.values()), [videosById]);
+  // Without a known collection list there is nothing to diff media against, so
+  // every item would look unfiled. Skip the synthetic bucket entirely.
   const unsorted = useMemo(
-    () => buildUnsortedCollection(collections, images, videos),
+    () => (collections ? buildUnsortedCollection(collections, images, videos) : null),
     [collections, images, videos],
   );
 
   const enriched = useMemo(() => {
+    if (!collections) return [];
     // Pinned synthetic "Unsorted" entry first, then real collections.
     const all = [unsorted, ...collections];
     return all.map((c) => {
@@ -263,9 +292,32 @@ export default function MediaCollections() {
         </label>
       </div>
 
+      {collectionsError && (
+        <Banner
+          tone="error"
+          size="md"
+          icon={AlertTriangle}
+          title="Couldn't load collections"
+          actions={(
+            <button
+              type="button"
+              onClick={refresh}
+              disabled={loading}
+              className="px-2.5 py-1 bg-port-error/20 hover:bg-port-error/40 text-port-error rounded text-xs disabled:opacity-40"
+            >
+              Retry
+            </button>
+          )}
+        >
+          <div className="break-words">{collectionsError}</div>
+          {/* A read failed — say so, or the missing grid reads as data loss. */}
+          <div className="opacity-80">Nothing was deleted; the list just couldn't be read.</div>
+        </Banner>
+      )}
+
       {loading ? (
         <PageSkeleton header="none" label="Loading collections" cards={4} sidebar={false} />
-      ) : (
+      ) : collections ? (
         <div className="space-y-2">
           {/* Precedence chain, not independent gates. First run wins only when
               no search is active — gated on the REAL collections, since the
@@ -368,7 +420,7 @@ export default function MediaCollections() {
             </div>
           )}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

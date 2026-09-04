@@ -43,7 +43,7 @@ vi.mock('./issues.js', () => ({
   })),
 }));
 
-vi.mock('./manuscriptReview.js', () => ({
+vi.mock('./manuscriptComments.js', () => ({
   getComment: vi.fn(async (_seriesId, id) => mockComments.get(id) || null),
   updateComment: vi.fn(async (_seriesId, id, patch) => {
     const cur = mockComments.get(id);

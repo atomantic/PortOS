@@ -164,6 +164,13 @@ export function formatPublicReviewInputPrompt(snapshot) {
 }
 
 /**
+ * Whether a value is a sha256 hex digest — the shape every fingerprint field
+ * on this boundary takes (content fingerprints, scan keys, intent
+ * fingerprints), so a validator cannot drift from what the hashes above emit.
+ */
+export const isSha256Hex = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value);
+
+/**
  * Fingerprint the exact public content that crossed the abuse boundary. This
  * belongs beside the scanner contract so every caller uses the same identity
  * and cannot accidentally downgrade freshness to a commit-SHA-only check.
@@ -181,18 +188,86 @@ export function modelAbuseContentFingerprint(kind, identity, content) {
     .digest('hex');
 }
 
+const isIssueNumber = (value) => Number.isInteger(value) && value > 0 && value <= 1_000_000;
+
 const normalizeIssueNumbers = (value) => Array.isArray(value)
-  ? [...new Set(value.filter((number) => Number.isInteger(number) && number > 0 && number <= 1_000_000))]
+  ? [...new Set(value.filter(isIssueNumber))]
     .sort((a, b) => a - b)
     .slice(0, 50)
   : [];
+
+// The filed issue's own text is what "does this PR do what was asked?" is
+// judged against, so it is bounded the way every other public input is: a
+// linked-issue list is evidence, never a channel for unbounded contributor
+// prose.
+export const LINKED_ISSUE_MAX_COUNT = 10;
+export const LINKED_ISSUE_TITLE_MAX_CHARS = 300;
+export const LINKED_ISSUE_BODY_MAX_CHARS = 8_000;
+
+/**
+ * The intent evidence for one PR: the open issues it links, reduced to number,
+ * title, and description. `truncated` is carried per issue so a reviewer can
+ * tell a complete requirement from a clipped one rather than judging a diff
+ * against half a sentence.
+ */
+export function normalizeLinkedIssues(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const issues = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const { number } = raw;
+    if (!isIssueNumber(number) || seen.has(number)) continue;
+    const title = typeof raw.title === 'string' ? raw.title : '';
+    const body = typeof raw.body === 'string' ? raw.body : '';
+    seen.add(number);
+    issues.push({
+      number,
+      title: title.slice(0, LINKED_ISSUE_TITLE_MAX_CHARS),
+      body: body.slice(0, LINKED_ISSUE_BODY_MAX_CHARS),
+      truncated: title.length > LINKED_ISSUE_TITLE_MAX_CHARS || body.length > LINKED_ISSUE_BODY_MAX_CHARS,
+    });
+  }
+  return issues.sort((a, b) => a.number - b.number).slice(0, LINKED_ISSUE_MAX_COUNT);
+}
+
+/**
+ * The exact linked-issue text that crosses the model-abuse boundary. Composed
+ * from the NORMALIZED list so the scanned string, the fingerprint, and the
+ * envelope a reviewer reads are the same bytes.
+ */
+export function linkedIssueIntentContent(issues) {
+  return normalizeLinkedIssues(issues).map((issue) => [
+    `Linked issue #${issue.number} title:`,
+    issue.title,
+    `Linked issue #${issue.number} description:`,
+    issue.body,
+  ].join('\n\n')).join('\n\n');
+}
+
+/**
+ * Stable identity for a PR's screened intent evidence. A linked issue that is
+ * closed, retitled, rewritten, or swapped after the gate judged the change
+ * produces a different value, so an old allowlist cannot survive an intent it
+ * was never evaluated against. `null` means there is no intent evidence at
+ * all — never treat that as a match.
+ */
+export function linkedIssueIntentFingerprint(issues) {
+  const normalized = normalizeLinkedIssues(issues);
+  const content = linkedIssueIntentContent(normalized);
+  if (!content) return null;
+  return modelAbuseContentFingerprint('linked-issue-intent', {
+    numbers: normalized.map((issue) => issue.number),
+  }, content);
+}
 
 /**
  * The server-established facts the Eligibility Gate may rely on, in one
  * validated shape. Unknown is deliberately false: a missing facts object is
  * not approval. `maintainerTargeted` is set only by the pr-reviewer preflight
  * for a per-PR "Review this PR" request and waives the linked-issue
- * prerequisite; it is never inferred from PR text.
+ * prerequisite; it is never inferred from PR text. `intentFingerprint` pins the
+ * screened issue text the gate judged the diff against.
  */
 export function normalizeEligibilityFacts(value) {
   const facts = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -202,6 +277,7 @@ export function normalizeEligibilityFacts(value) {
     openerAssignedIssueNumbers: normalizeIssueNumbers(facts.openerAssignedIssueNumbers),
     issueLookupComplete: facts.issueLookupComplete === true,
     maintainerTargeted: facts.maintainerTargeted === true,
+    intentFingerprint: isSha256Hex(facts.intentFingerprint) ? facts.intentFingerprint.toLowerCase() : null,
   };
 }
 

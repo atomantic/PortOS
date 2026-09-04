@@ -7,7 +7,7 @@ import ProviderModelSelector from '../../../ProviderModelSelector';
 //
 // `highlightToolUse` is on because a scheduled task IS an agent run: a task
 // pinned to a local model that can't call tools narrates instead of working.
-export default function TaskModelQuickControls({ pins, providers, disabled = false }) {
+export default function TaskModelQuickControls({ pins, providers, loading = false, disabled = false }) {
   const {
     providerId, model, effort, effectiveProviderId, defaultProviderLabel,
     availableModels, saving, changeProvider, changeModel, changeEffort,
@@ -30,6 +30,7 @@ export default function TaskModelQuickControls({ pins, providers, disabled = fal
         alwaysShowModel
         compact
         highlightToolUse
+        loading={loading}
         disabled={disabled || saving}
       />
     </div>

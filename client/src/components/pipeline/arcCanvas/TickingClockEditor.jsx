@@ -140,7 +140,7 @@ export default function TickingClockEditor({ clock, disabled, onChange }) {
                     onClick={() => removeReminder(idx)}
                     disabled={disabled}
                     aria-label={`Remove reminder ${idx + 1}`}
-                    className="p-1 text-gray-500 hover:text-port-error disabled:opacity-50"
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error disabled:opacity-50"
                   >
                     <Trash2 size={12} />
                   </button>

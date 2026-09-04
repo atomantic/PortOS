@@ -17,11 +17,14 @@ import {
 const HEAD_SHA = 'a'.repeat(40);
 const CONTENT_FINGERPRINT = 'b'.repeat(64);
 
+const INTENT_FINGERPRINT = 'c'.repeat(64);
+
 const eligibleFacts = {
   linkedIssueNumbers: [101],
   openLinkedIssueNumbers: [101],
   openerAssignedIssueNumbers: [101],
   issueLookupComplete: true,
+  intentFingerprint: INTENT_FINGERPRINT,
 };
 
 function eligibilityTask(overrides = {}) {
@@ -190,6 +193,27 @@ describe('pr-reviewer eligibility output', () => {
     expect(result.taskMetadata.prReviewerEligibility.rejectedNumbers).toEqual([12]);
   });
 
+  // The gate's whole intent judgment rests on the screened issue text. No
+  // fingerprint means none reached it, so an `eligible` answer was a guess.
+  it('forces a model-positive decision false when no screened issue intent reached the gate', async () => {
+    const task = eligibilityTask();
+    task.metadata.issueWatcher.pullRequests[0].eligibilityFacts = {
+      ...eligibleFacts,
+      intentFingerprint: null,
+    };
+
+    const result = await processTaskOutput({
+      appId: 'app-example',
+      success: true,
+      payload: decisionPayload(),
+      task,
+    });
+
+    expect(result).toMatchObject({ accepted: true, terminal: true });
+    expect(result.taskMetadata.prReviewerEligibility.eligibleNumbers).toEqual([]);
+    expect(result.taskMetadata.prReviewerEligibility.rejectedNumbers).toEqual([12]);
+  });
+
   it('does not trust open or assigned issue IDs that are not linked to the PR', async () => {
     const task = eligibilityTask();
     task.metadata.issueWatcher.pullRequests[0].eligibilityFacts = {
@@ -253,6 +277,47 @@ describe('pr-reviewer output routing', () => {
       ...args,
       requireEligibilityFacts: true,
     }, { execGh: expect.any(Function) });
+  });
+
+  it('fails a stage PERMANENTLY when its agent wrote no parseable output', async () => {
+    // #6124: an empty run used to be retried through a fresh task id, so the
+    // stage re-spawned ~20 times in five minutes while the churn park only logged.
+    await expect(processTaskOutput({ appId: 'app-example', success: false, payload: null, task: eligibilityTask() }))
+      .resolves.toEqual({
+        action: 'no-op',
+        accepted: false,
+        permanent: true,
+        reason: 'stage-produced-no-output',
+        message: 'The pr-reviewer eligibility stage agent finished without writing any parseable output',
+      });
+  });
+
+  it('fails an exit-zero actions stage permanently too, without consulting issue-watcher', async () => {
+    const task = {
+      metadata: {
+        pipeline: {
+          currentStage: 2,
+          stages: [{ role: 'security' }, { role: 'eligibility' }, { role: 'actions' }],
+        },
+      },
+    };
+
+    issueWatcherMock.processTaskOutput.mockClear();
+    const outcome = await processTaskOutput({ appId: 'app-example', success: true, payload: null, task }, { execGh: vi.fn() });
+
+    expect(outcome).toMatchObject({ accepted: false, permanent: true, reason: 'stage-produced-no-output' });
+    expect(issueWatcherMock.processTaskOutput).not.toHaveBeenCalled();
+  });
+
+  it('keeps a RETRYABLE rejection for a payload that arrived but failed validation', async () => {
+    // Only "no payload at all" is permanent — a malformed envelope may parse on
+    // a re-run, so it must not block the task on its first failure.
+    const outcome = await processTaskOutput({
+      appId: 'app-example', success: true, payload: { eligible: true, decisions: 'nope' }, task: eligibilityTask(),
+    });
+
+    expect(outcome.accepted).toBe(false);
+    expect(outcome.permanent).toBeUndefined();
   });
 
   it('recognizes both the binary gate envelope and the action envelope', () => {

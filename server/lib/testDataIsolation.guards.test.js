@@ -26,8 +26,18 @@
  * a data-rooted member (`PATHS.missions`, `PATHS.brain`, …) with no redirect.
  * 50 of the ~1300 scoped test files do that, nearly all of them safely, because
  * they replace the service graph wholesale and never reach a real `readdir`; a
- * static rule there would be a 50-entry allowlist. That spelling is covered
- * **empirically** instead, by the two-run probe #3687 introduced:
+ * static rule there would be a 50-entry allowlist.
+ *
+ * ## Both halves of that spelling are now covered
+ *
+ * WRITES are covered at RUNTIME by `lib/testDataIsolation.js` (#6176), which
+ * refuses a write landing in the real root from the shared primitives — read its
+ * header for what is and is not yet routed through them.
+ *
+ * READS are still covered **empirically**, by the two-run probe #3687 introduced.
+ * That split is not arbitrary: a read leak changes whether assertions pass, which
+ * is exactly what lets a probe see it, and exactly why the silent write half
+ * needed a guard instead.
  *
  *   1. Run the server suite on a checkout with an empty `data/`; record failures.
  *   2. Plant probe records in every `data/` subdirectory a service enumerates —
@@ -39,8 +49,8 @@
  *
  * That audit found 2 leakers across 1301 files — `missions.test.js` (fixed in
  * #3687) and nothing the static rule below doesn't already catch. Re-run it when
- * touching this area; it is the ground truth, and this rule is the cheap
- * always-on approximation of it.
+ * touching this area; it is the ground truth for reads, and this rule is the
+ * cheap always-on approximation of it.
  *
  * A test that genuinely needs a data root uses `createTempDataRoot()` +
  * `makePathsProxy()` from `lib/mockPathsDataRoot.js`.
@@ -71,7 +81,13 @@ const SELF = relative(REPO_ROOT, fileURLToPath(import.meta.url)).split(sep).join
 //     premise is the live install: it enumerates the user's own screenshots to
 //     feed a real vision model, and skips itself when the directory is absent.
 // A future false positive belongs here too — with a sentence saying why it's safe.
+//   - testDataIsolation.test.js is the RUNTIME guard's own contract test. It has
+//     to name the real root — proving the guard refuses a write there is the
+//     whole point — and it can never write into it: every assertion about a real
+//     path asserts that the call REJECTS, and the one case that writes bytes
+//     targets a temp root. (#6176)
 const ALLOWED = new Set([
+  'server/lib/testDataIsolation.test.js',
   'server/services/creativeDirectorPrompts.test.js',
   'server/services/visionTest.integration.test.js',
 ]);

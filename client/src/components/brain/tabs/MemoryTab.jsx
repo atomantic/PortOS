@@ -674,11 +674,11 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
             </div>
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-2">
             {(activeType === 'projects' || activeType === 'ideas' || activeType === 'admin') && record.status !== 'done' && (
               <button
                 onClick={() => handleMarkDone(record)}
-                className="p-1.5 text-gray-400 hover:text-port-success rounded hover:bg-port-success/20"
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-400 hover:text-port-success rounded hover:bg-port-success/20"
                 title="Mark done" aria-label="Mark done"
               >
                 <CheckCircle2 size={14} />
@@ -686,7 +686,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
             )}
             <button
               onClick={() => handleSendToCatalog(record)}
-              className="p-1.5 text-gray-400 hover:text-port-accent-2 rounded hover:bg-port-accent-2/20"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-400 hover:text-port-accent-2 rounded hover:bg-port-accent-2/20"
               title="Send to Catalog"
               aria-label="Send to Catalog"
             >
@@ -694,14 +694,14 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
             </button>
             <button
               onClick={() => startEdit(record)}
-              className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-port-border/50"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-400 hover:text-white rounded hover:bg-port-border/50"
               title="Edit" aria-label="Edit"
             >
               <Edit2 size={14} />
             </button>
             <button
               onClick={() => requestDelete(record.id)}
-              className="p-1.5 text-gray-400 hover:text-port-error rounded hover:bg-port-error/20"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-400 hover:text-port-error rounded hover:bg-port-error/20"
               title="Delete" aria-label="Delete"
             >
               <Trash2 size={14} />

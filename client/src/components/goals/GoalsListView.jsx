@@ -88,7 +88,7 @@ function GoalRow({ goal, depth, expandedIds, onToggle, onSelect, selectedId, onA
         {hasChildren ? (
           <button
             onClick={(e) => { e.stopPropagation(); onToggle(goal.id); }}
-            className="p-0.5 text-gray-500 hover:text-white shrink-0"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-0.5 text-gray-500 hover:text-white shrink-0"
             title={expanded ? 'Collapse' : 'Expand'} aria-label={expanded ? 'Collapse' : 'Expand'}
           >
             {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
@@ -153,7 +153,7 @@ function GoalRow({ goal, depth, expandedIds, onToggle, onSelect, selectedId, onA
 
         <button
           onClick={(e) => { e.stopPropagation(); onAddChild(goal.id); }}
-          className="p-1 text-gray-600 hover:text-port-accent shrink-0"
+          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-600 hover:text-port-accent shrink-0"
           title="Add sub-goal" aria-label="Add sub-goal"
         >
           <Plus className="w-3.5 h-3.5" />

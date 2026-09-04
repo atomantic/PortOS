@@ -73,6 +73,8 @@ import { getAppById, getAppWorkTracker } from '../services/apps.js';
 import { resolveManagedAppIssueTarget } from '../services/managedAppRepositories.js';
 import cosTaskRoutes from './cosTaskRoutes.js';
 import { listUserActions } from '../services/userActions.js';
+import { __resetInvestigationCircuit } from '../services/investigationTaskProducer.js';
+import { clientInvestigationFingerprint } from '../lib/investigationTasks.js';
 
 const SELF = 'self-instance-id';
 const PEER = 'peer-instance-id';
@@ -95,6 +97,9 @@ beforeEach(() => {
     { instanceId: PEER, name: 'render-box', isSelf: false },
   ]);
   cos.addTask.mockImplementation(async (taskData) => ({ id: 'task-1', ...taskData }));
+  cos.getAllTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } });
+  // The producer's storm counter is module state shared across this file's cases.
+  __resetInvestigationCircuit();
   cos.updateTask.mockResolvedValue({ id: 'task-1' });
   getAppById.mockResolvedValue({ id: 'portos-default', name: 'PortOS', repoPath: '/example/portos' });
   resolveManagedAppIssueTarget.mockResolvedValue({
@@ -127,6 +132,141 @@ describe('POST /api/cos/tasks — targetInstanceId (#4520)', () => {
     expect(res.status).toBe(200);
     expect(getAssignableInstances).not.toHaveBeenCalled();
     expect(cos.addTask.mock.calls[0][0].targetInstanceId).toBeUndefined();
+  });
+});
+
+describe('CoS task routes — orchestration profiles (#5992)', () => {
+  const PROFILE = { architect: { provider: 'claude-code', model: 'opus', effort: 'xhigh' }, implementer: { model: 'haiku' } };
+
+  it('passes the mode + profile through to addTask', async () => {
+    const res = await request(buildApp())
+      .post('/api/cos/tasks')
+      .send({ description: 'refactor the resolver', orchestrationMode: 'orchestrated', orchestrationProfile: PROFILE });
+    expect(res.status).toBe(200);
+    expect(cos.addTask).toHaveBeenCalledWith(
+      expect.objectContaining({ orchestrationMode: 'orchestrated', orchestrationProfile: PROFILE }),
+      'user'
+    );
+  });
+
+  it('rejects an unknown role rather than persisting an assignment nothing reads', async () => {
+    const res = await request(buildApp())
+      .post('/api/cos/tasks')
+      .send({ description: 'x', orchestrationProfile: { saboteur: { model: 'evil' } } });
+    expect(res.status).toBe(400);
+    expect(cos.addTask).not.toHaveBeenCalled();
+  });
+
+  it('rejects an effort rung outside the supported ladder', async () => {
+    const res = await request(buildApp())
+      .post('/api/cos/tasks')
+      .send({ description: 'x', orchestrationProfile: { architect: { effort: 'galaxy-brain' } } });
+    expect(res.status).toBe(400);
+  });
+
+  it('re-pins and clears the mode on update', async () => {
+    const app = buildApp();
+    const flip = await request(app).put('/api/cos/tasks/task-1').send({ orchestrationMode: 'orchestrated' });
+    expect(flip.status).toBe(200);
+    expect(cos.updateTask.mock.calls[0][1]).toHaveProperty('orchestrationMode', 'orchestrated');
+
+    cos.updateTask.mockClear();
+    const clear = await request(app).put('/api/cos/tasks/task-1').send({ orchestrationMode: '' });
+    expect(clear.status).toBe(200);
+    expect(cos.updateTask.mock.calls[0][1]).toHaveProperty('orchestrationMode', null);
+  });
+
+  it('leaves the pins untouched when the patch omits them', async () => {
+    const res = await request(buildApp()).put('/api/cos/tasks/task-1').send({ description: 'new title' });
+    expect(res.status).toBe(200);
+    expect(cos.updateTask.mock.calls[0][1]).not.toHaveProperty('orchestrationMode');
+    expect(cos.updateTask.mock.calls[0][1]).not.toHaveProperty('orchestrationProfile');
+  });
+});
+
+describe('POST /api/cos/tasks — client-queued investigations (#6043)', () => {
+  const INSTALL_FAILURE = 'Fix Example Runtime installer failure at the download stage';
+
+  it('files through the investigation producer with the markers the shared machinery reads', async () => {
+    const res = await request(buildApp())
+      .post('/api/cos/tasks')
+      .send({ description: INSTALL_FAILURE, isInvestigation: true });
+
+    expect(res.status).toBe(200);
+    expect(cos.addTask).toHaveBeenCalledWith(expect.objectContaining({
+      description: INSTALL_FAILURE,
+      // Recognized by isInvestigationTask() — which is also the meta-cascade
+      // guard, so a failure of THIS task cannot file an investigation of itself.
+      isInvestigation: true,
+      // Server-derived: the request named no fingerprint.
+      investigationFingerprint: clientInvestigationFingerprint({ description: INSTALL_FAILURE }),
+    }), 'user');
+  });
+
+  it('applies the review-then-merge delivery posture rather than the unattended merge-on-green', async () => {
+    await request(buildApp())
+      .post('/api/cos/tasks')
+      .send({ description: INSTALL_FAILURE, isInvestigation: true });
+
+    expect(cos.addTask).toHaveBeenCalledWith(expect.objectContaining({
+      useWorktree: true,
+      openPR: true,
+      prCompletion: 'review-then-merge',
+    }), 'user');
+  });
+
+  it('ignores a client-supplied fingerprint, so a client cannot collide with an auto-filed investigation', async () => {
+    await request(buildApp())
+      .post('/api/cos/tasks')
+      .send({
+        description: INSTALL_FAILURE,
+        isInvestigation: true,
+        investigationFingerprint: 'auth-error:provider-failure:Example CLI',
+      });
+
+    const filed = cos.addTask.mock.calls[0][0];
+    expect(filed.investigationFingerprint).toBe(clientInvestigationFingerprint({ description: INSTALL_FAILURE }));
+    expect(filed.investigationFingerprint).not.toBe('auth-error:provider-failure:Example CLI');
+  });
+
+  it('gives two different install failures different dedup keys, and the same failure one key', async () => {
+    const app = buildApp();
+    await request(app).post('/api/cos/tasks').send({ description: INSTALL_FAILURE, isInvestigation: true });
+    await request(app).post('/api/cos/tasks').send({ description: 'Fix Other Runtime installer failure', isInvestigation: true });
+
+    const [first, second] = cos.addTask.mock.calls.map(call => call[0].investigationFingerprint);
+    expect(first).not.toBe(second);
+    expect(clientInvestigationFingerprint({ description: INSTALL_FAILURE })).toBe(first);
+  });
+
+  it('leaves an ordinary task untouched by the investigation path', async () => {
+    await request(buildApp()).post('/api/cos/tasks').send({ description: 'Render the opening shot' });
+    const filed = cos.addTask.mock.calls[0][0];
+    expect(filed).not.toHaveProperty('isInvestigation');
+    expect(filed).not.toHaveProperty('investigationFingerprint');
+  });
+
+  it('records the posture it actually filed with in the operator ledger, not just the submitted fields', async () => {
+    await request(buildApp())
+      .post('/api/cos/tasks')
+      .send({ description: INSTALL_FAILURE, isInvestigation: true });
+
+    const [event] = await listUserActions({ type: 'cos.task.create' });
+    expect(event.payload).toMatchObject({
+      isInvestigation: true,
+      useWorktree: true,
+      openPR: true,
+      prCompletion: 'review-then-merge',
+    });
+  });
+
+  it('still reports the store duplicate as a 409 so the button can say the task already exists', async () => {
+    cos.addTask.mockResolvedValue({ id: 'task-1', status: 'pending', duplicate: true });
+    const res = await request(buildApp())
+      .post('/api/cos/tasks')
+      .send({ description: INSTALL_FAILURE, isInvestigation: true });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('DUPLICATE_TASK');
   });
 });
 

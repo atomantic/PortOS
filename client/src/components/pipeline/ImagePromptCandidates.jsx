@@ -59,7 +59,7 @@ export default function ImagePromptCandidates({ candidates, onApply, onDismiss, 
           <button
             type="button"
             onClick={onDismiss}
-            className="text-gray-500 hover:text-gray-300 p-0.5"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center text-gray-500 hover:text-gray-300 p-0.5"
             aria-label="Dismiss candidates"
           >
             <X size={12} />

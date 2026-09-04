@@ -34,6 +34,11 @@ const VALID_PROMPT_TABS = ['stages', 'variables', 'job-skills'];
 // when the fetch settles.
 const PAGE_SUBTITLE = 'Customize AI prompts for backend operations';
 
+// Every editable field of a prompt variable, so the dirty check and the blank
+// form can't drift apart when a field is added.
+const VAR_FORM_FIELDS = ['key', 'name', 'category', 'content'];
+const BLANK_VAR_FORM = Object.freeze({ key: '', name: '', category: '', content: '' });
+
 export default function PromptManager() {
   const [searchParams, setSearchParams] = useSearchParams();
   const rawTab = searchParams.get('tab');
@@ -87,9 +92,68 @@ export default function PromptManager() {
   const [stageTemplate, setStageTemplate] = useState('');
   const [stageConfig, setStageConfig] = useState({});
   const [preview, setPreview] = useState('');
+  // The last template/config the server confirmed (loaded or saved). Kept as
+  // full copies rather than a boolean flag so typing an edit and undoing it
+  // back to the original stops counting as dirty — a stale flag would nag on a
+  // no-op edit. Mirrors the job-skill guard below (#3939).
+  const [savedStageTemplate, setSavedStageTemplate] = useState('');
+  const [savedStageConfig, setSavedStageConfig] = useState({});
+  // The stage the user clicked while holding unsaved edits, awaiting confirmation.
+  const [pendingStage, setPendingStage] = useState(null);
+  // Config is compared by serialization, not identity: every editor control
+  // rebuilds the object with a spread, so `!==` would read as dirty on a
+  // re-render that changed nothing. Every mutation spreads the previous object,
+  // so key order is stable and a newly added key (a timeout override) reads as
+  // the real change it is.
+  const isStageDirty = Boolean(selectedStage)
+    && (stageTemplate !== savedStageTemplate || JSON.stringify(stageConfig) !== JSON.stringify(savedStageConfig));
+  // Names the open stage the way the list row does, so the discard question
+  // quotes the label the user actually clicked rather than its raw key.
+  const openStageLabel = stages[selectedStage]?.name || selectedStage;
+  // `saveStage` resumes after an await holding the values its closure captured
+  // at click time, so it reads the live selection/edits through this ref to tell
+  // "still the same editor" from "the user moved on mid-flight".
+  const stageLiveRef = useRef({ selected: selectedStage, template: stageTemplate, config: stageConfig });
+  stageLiveRef.current = { selected: selectedStage, template: stageTemplate, config: stageConfig };
+  // A clean editor has nothing to discard, so an armed row disarms itself the
+  // moment the edit is undone or saved — leaving the name parked would re-arm
+  // that row out of nowhere the next time the user typed.
+  useEffect(() => {
+    if (!isStageDirty) setPendingStage(null);
+  }, [isStageDirty]);
 
   // Variable editing (selection is URL-driven — see selectedVar above)
-  const [varForm, setVarForm] = useState({ key: '', name: '', category: '', content: '' });
+  const [varForm, setVarForm] = useState(BLANK_VAR_FORM);
+  // The last form the server confirmed (loaded or saved). Kept as a full copy
+  // rather than a boolean flag so typing an edit and undoing it back to the
+  // original stops counting as dirty. Mirrors the stage/job-skill guards.
+  const [savedVarForm, setSavedVarForm] = useState(BLANK_VAR_FORM);
+  // The variable slot the user asked to open while holding unsaved edits,
+  // awaiting confirmation: `{ key }`, where a null key is the blank "+" form.
+  // An object rather than a bare key so "new variable" is a real pending value
+  // instead of colliding with "nothing pending".
+  const [pendingVar, setPendingVar] = useState(null);
+  // Create mode counts too: a typed-but-unsaved draft is exactly the work the
+  // "+" button and a list click would otherwise throw away, so the baseline is
+  // the blank form rather than a `selectedVar` gate.
+  const isVarDirty = VAR_FORM_FIELDS.some((f) => varForm[f] !== savedVarForm[f]);
+  // Names the open editor the way its list row does, so the discard question
+  // quotes the label the user is actually looking at — the list still shows the
+  // stored name while an unsaved rename sits in the form. A create-mode draft
+  // has no row yet, so it falls back to its typed key.
+  const openVarLabel = selectedVar
+    ? (variables[selectedVar]?.name || selectedVar)
+    : (varForm.name || varForm.key || 'New Variable');
+  // `saveVariable` resumes after an await holding the values its closure
+  // captured at click time, so it reads the live selection through this ref to
+  // tell "still the same editor" from "the user moved on mid-flight".
+  const varLiveRef = useRef(selectedVar);
+  varLiveRef.current = selectedVar;
+  // A clean editor has nothing to discard, so an armed row disarms itself the
+  // moment the edit is undone or saved.
+  useEffect(() => {
+    if (!isVarDirty) setPendingVar(null);
+  }, [isVarDirty]);
 
   // Stage creation
   const [creatingStage, setCreatingStage] = useState(false);
@@ -169,7 +233,11 @@ export default function PromptManager() {
   // Fetch the URL-selected stage's template + config. Keyed on selectedStage so
   // a deep link / reload restores the open editor; a cleared param resets it.
   useEffect(() => {
-    if (!selectedStage) { setStageTemplate(''); setStageConfig({}); setPreview(''); return; }
+    if (!selectedStage) {
+      setStageTemplate(''); setStageConfig({}); setPreview('');
+      setSavedStageTemplate(''); setSavedStageConfig({});
+      return;
+    }
     let cancelled = false;
     getPrompt(selectedStage, { silent: true })
       .then(res => {
@@ -188,6 +256,10 @@ export default function PromptManager() {
         const timeout = parseTimeoutMs(res.timeout);
         if (timeout !== null) cfg.timeout = timeout;
         setStageConfig(cfg);
+        // Baseline the freshly loaded values in the same tick as the editor
+        // state, so the dirty check can never see one without the other.
+        setSavedStageTemplate(res.template || '');
+        setSavedStageConfig(cfg);
         setPreview('');
       })
       .catch(() => {});
@@ -196,15 +268,58 @@ export default function PromptManager() {
 
   const saveStage = async () => {
     setSaving(true);
-    const payload = { template: stageTemplate, ...stageConfig };
+    const sentFor = selectedStage;
+    const sentTemplate = stageTemplate;
+    const sentConfig = stageConfig;
+    const payload = { template: sentTemplate, ...sentConfig };
     // Explicitly null provider when in tier mode so server clears any previous value
     if (!payload.provider) payload.provider = null;
-    const ok = await savePrompt(selectedStage, payload, { silent: true })
+    const ok = await savePrompt(sentFor, payload, { silent: true })
       .then(() => true)
       .catch((err) => { toast.error('Failed to save stage: ' + err.message); return false; });
     if (!ok) { setSaving(false); return; }
     setSaving(false);
+    toast.success(`Stage "${openStageLabel}" saved`);
+    // Re-baseline only while the same stage is still open: a save that lands
+    // after the user moved on would otherwise stamp the outgoing stage's text
+    // as the incoming one's saved state. Edits typed while the PUT was open
+    // stay dirty, which is correct — the server never saw them.
+    if (sentFor === stageLiveRef.current.selected) {
+      setSavedStageTemplate(sentTemplate);
+      setSavedStageConfig(sentConfig);
+    }
     await loadData();
+  };
+
+  // Switching stages replaces the editor's template and config, so unsaved
+  // edits must be confirmed away first (#6021). The clicked stage parks in
+  // `pendingStage` and an inline confirm row takes over its list slot — no
+  // window.confirm.
+  const requestStage = (name) => {
+    if (name === selectedStage) {
+      // Re-clicking the open stage is how a user backs out of the prompt from
+      // the list side; leaving it armed would strand the row mid-question.
+      setPendingStage(null);
+      return;
+    }
+    if (isStageDirty) {
+      setPendingStage(name);
+      return;
+    }
+    switchStage(name);
+  };
+
+  // Editor state is cleared in the same tick as the selection, not left to the
+  // `selectedStage` effect — otherwise the frame between the two renders the
+  // OUTGOING stage's text and dirty badges under the incoming stage's row.
+  const switchStage = (name) => {
+    setPendingStage(null);
+    setStageTemplate('');
+    setStageConfig({});
+    setSavedStageTemplate('');
+    setSavedStageConfig({});
+    setPreview('');
+    setSelectedStage(name);
   };
 
   const previewStage = async () => {
@@ -224,43 +339,89 @@ export default function PromptManager() {
   useEffect(() => {
     if (!selectedVar) {
       varHydratedRef.current = null;
-      setVarForm({ key: '', name: '', category: '', content: '' });
+      setVarForm(BLANK_VAR_FORM);
+      setSavedVarForm(BLANK_VAR_FORM);
       return;
     }
     if (variables[selectedVar] && varHydratedRef.current !== selectedVar) {
       const v = variables[selectedVar];
-      setVarForm({ key: selectedVar, name: v.name || '', category: v.category || '', content: v.content || '' });
+      const loaded = { key: selectedVar, name: v.name || '', category: v.category || '', content: v.content || '' };
+      setVarForm(loaded);
+      // Baselined in the same tick as the editor state, so the dirty check can
+      // never see one without the other.
+      setSavedVarForm(loaded);
       varHydratedRef.current = selectedVar;
     }
   }, [selectedVar, variables]);
 
+  // Saving an existing variable used to deselect it and blank the editor, which
+  // read as a crash rather than a success (#6023). The editor now stays open on
+  // what was just saved, and a create adopts the new key as the selection.
   const saveVariable = async () => {
     setSaving(true);
-    const ok = await (selectedVar
-      ? savePromptVariable(selectedVar, varForm, { silent: true })
-      : createPromptVariable(varForm, { silent: true }))
+    const sentFor = selectedVar;
+    const sentForm = varForm;
+    const ok = await (sentFor
+      ? savePromptVariable(sentFor, sentForm, { silent: true })
+      : createPromptVariable(sentForm, { silent: true }))
       .then(() => true)
       .catch((err) => { toast.error('Failed to save variable: ' + err.message); return false; });
     if (!ok) { setSaving(false); return; }
     setSaving(false);
-    setSelectedVar(null);
-    setVarForm({ key: '', name: '', category: '', content: '' });
+    const label = sentForm.name || sentForm.key;
+    toast.success(`Variable "${label}" ${sentFor ? 'saved' : 'created'}`);
+    // Re-baseline only while the same editor is still open: a save that lands
+    // after the user moved on would otherwise stamp the outgoing variable's
+    // text as the incoming one's saved state. Edits typed while the request was
+    // open stay dirty, which is correct — the server never saw them.
+    if (sentFor === varLiveRef.current) {
+      setSavedVarForm(sentForm);
+      // Claim the hydration slot ahead of the refresh, so neither the reload
+      // nor the selection change re-hydrates over what the user is looking at.
+      if (!sentFor) varHydratedRef.current = sentForm.key;
+    }
     await loadData();
+    // The URL adopts a newly created key only once the refreshed list holds it,
+    // or the editor flashes its "variable could not be found" panel on the way.
+    if (!sentFor && varLiveRef.current === null) setSelectedVar(sentForm.key);
   };
 
   const deleteVariable = async (key) => {
+    const label = variables[key]?.name || key;
     const ok = await deletePromptVariable(key, { silent: true })
       .then(() => true)
       .catch((err) => { toast.error('Failed to delete variable: ' + err.message); return false; });
     if (!ok) return;
-    if (selectedVar === key) setSelectedVar(null);
+    toast.success(`Variable "${label}" deleted`);
+    if (selectedVar === key) switchVariable(null);
     await loadData();
   };
 
-  const newVariable = () => {
-    setSelectedVar(null);
-    setVarForm({ key: '', name: '', category: '', content: '' });
+  // Opening another variable (or the blank "+" form) replaces the editor, so
+  // unsaved edits must be confirmed away first (#6023). The requested slot
+  // parks in `pendingVar` and an inline confirm row takes over its place in the
+  // list — no window.confirm.
+  const requestVariable = (key) => {
+    // Re-clicking the open variable is how a user backs out of the prompt from
+    // the list side; leaving it armed would strand the row mid-question. The
+    // "+" (null key) is exempt: in create mode it still resets the draft.
+    if (key !== null && key === selectedVar) { setPendingVar(null); return; }
+    if (isVarDirty) { cancelVarDelete(); setPendingVar({ key }); return; }
+    switchVariable(key);
   };
+
+  // Editor state is cleared in the same tick as the selection, not left to the
+  // `selectedVar` effect — otherwise the frame between the two renders the
+  // OUTGOING variable's text and dirty badge under the incoming variable's row.
+  const switchVariable = (key) => {
+    setPendingVar(null);
+    varHydratedRef.current = null;
+    setVarForm(BLANK_VAR_FORM);
+    setSavedVarForm(BLANK_VAR_FORM);
+    setSelectedVar(key);
+  };
+
+  const newVariable = () => requestVariable(null);
 
   const createStage = async () => {
     setSaving(true);
@@ -283,6 +444,11 @@ export default function PromptManager() {
       variables: [],
       template: ''
     });
+    toast.success(`Stage "${payload.name || payload.stageName}" created`);
+    // Through `switchStage`, not a bare selection change, so the new stage
+    // opens against a cleared baseline instead of inheriting the previously
+    // open stage's saved template/config.
+    switchStage(payload.stageName);
     await loadData();
   };
 
@@ -313,6 +479,7 @@ export default function PromptManager() {
     if (selectedStage === stageName) {
       setSelectedStage(null);
     }
+    toast.success(`Stage "${stageName}" deleted`);
     await loadData();
   };
 
@@ -526,7 +693,7 @@ export default function PromptManager() {
               <h3 className="text-sm font-medium text-gray-400">Prompt Stages</h3>
               <button
                 onClick={() => setCreatingStage(true)}
-                className="p-1 text-port-accent hover:text-port-accent/80"
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-port-accent hover:text-port-accent/80"
                 title="New Stage" aria-label="New Stage"
               >
                 <Plus size={16} />
@@ -602,9 +769,26 @@ export default function PromptManager() {
                     {open && (
                       <div className="space-y-1 pl-2">
                         {groupStages.map(([name, config]) => (
+                          // The dirty check is part of the render condition, not
+                          // just of arming: undoing the edit back to the saved
+                          // values while the row is armed leaves nothing to
+                          // discard, so the question must go.
+                          (pendingStage === name && isStageDirty) ? (
+                            <InlineConfirmRow
+                              key={name}
+                              className="rounded-lg"
+                              question={`Discard unsaved changes to "${openStageLabel}"?`}
+                              confirmText="Discard"
+                              cancelText="Keep editing"
+                              aria-label={`Confirm discarding unsaved changes to ${openStageLabel}`}
+                              autoFocus
+                              onConfirm={() => switchStage(name)}
+                              onCancel={() => setPendingStage(null)}
+                            />
+                          ) : (
                           <button
                             key={name}
-                            onClick={() => setSelectedStage(name)}
+                            onClick={() => requestStage(name)}
                             className={`w-full text-left px-3 py-2 rounded-lg text-sm ${
                               selectedStage === name
                                 ? 'bg-port-accent/20 text-port-accent'
@@ -618,9 +802,15 @@ export default function PromptManager() {
                                   System
                                 </Pill>
                               )}
+                              {selectedStage === name && isStageDirty && (
+                                <span className="shrink-0 text-[10px] px-1.5 py-0.5 bg-port-warning/20 text-port-warning rounded uppercase font-semibold">
+                                  Unsaved
+                                </span>
+                              )}
                             </div>
                             <div className="text-xs text-gray-500 truncate">{config.description}</div>
                           </button>
+                          )
                         ))}
                       </div>
                     )}
@@ -648,7 +838,12 @@ export default function PromptManager() {
               <>
                 <div className="bg-port-card border border-port-border rounded-xl p-4">
                   <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-medium text-white">{stageConfig.name}</h3>
+                    <div>
+                      <h3 className="text-lg font-medium text-white">{stageConfig.name}</h3>
+                      {isStageDirty && (
+                        <div className="text-xs text-port-warning mt-1">Unsaved changes</div>
+                      )}
+                    </div>
                     <div className="flex gap-2">
                       <button
                         onClick={previewStage}
@@ -781,14 +976,42 @@ export default function PromptManager() {
               <button
                 onClick={newVariable}
                 aria-label="Add variable"
-                className="p-1 text-port-accent hover:text-port-accent/80"
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-port-accent hover:text-port-accent/80"
               >
                 <Plus size={16} />
               </button>
             </div>
             <div className="space-y-1">
+              {/* The "+" has no list row of its own, so its discard question
+                  takes the top of the list. The dirty check is part of the
+                  render condition, not just of arming: undoing the edit while
+                  the row is armed leaves nothing to discard. */}
+              {pendingVar && pendingVar.key === null && isVarDirty && (
+                <InlineConfirmRow
+                  className="rounded-lg"
+                  question={`Discard unsaved changes to "${openVarLabel}"?`}
+                  confirmText="Discard"
+                  cancelText="Keep editing"
+                  aria-label={`Confirm discarding unsaved changes to ${openVarLabel}`}
+                  autoFocus
+                  onConfirm={() => switchVariable(null)}
+                  onCancel={() => setPendingVar(null)}
+                />
+              )}
               {Object.entries(variables).sort(([a], [b]) => a.localeCompare(b)).map(([key, v]) => (
-                isConfirmingVar(key) ? (
+                (pendingVar && pendingVar.key === key && isVarDirty) ? (
+                  <InlineConfirmRow
+                    key={key}
+                    className="rounded-lg"
+                    question={`Discard unsaved changes to "${openVarLabel}"?`}
+                    confirmText="Discard"
+                    cancelText="Keep editing"
+                    aria-label={`Confirm discarding unsaved changes to ${openVarLabel}`}
+                    autoFocus
+                    onConfirm={() => switchVariable(key)}
+                    onCancel={() => setPendingVar(null)}
+                  />
+                ) : isConfirmingVar(key) ? (
                   <InlineConfirmRow
                     key={key}
                     className="rounded-lg"
@@ -809,16 +1032,23 @@ export default function PromptManager() {
                     }`}
                   >
                     <button
-                      onClick={() => setSelectedVar(key)}
+                      onClick={() => requestVariable(key)}
                       className="flex-1 text-left"
                     >
-                      <div className="font-medium">{v.name || key}</div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium truncate">{v.name || key}</span>
+                        {selectedVar === key && isVarDirty && (
+                          <span className="shrink-0 text-[10px] px-1.5 py-0.5 bg-port-warning/20 text-port-warning rounded uppercase font-semibold">
+                            Unsaved
+                          </span>
+                        )}
+                      </div>
                       <div className="text-xs text-gray-500">{v.category || 'uncategorized'}</div>
                     </button>
                     <button
-                      onClick={() => requestVarDelete(key)}
+                      onClick={() => { setPendingVar(null); requestVarDelete(key); }}
                       aria-label={`Delete variable ${v.name || key}`}
-                      className="p-1 text-gray-500 hover:text-port-error"
+                      className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error"
                     >
                       <Trash2 size={14} />
                     </button>
@@ -833,16 +1063,21 @@ export default function PromptManager() {
             {selectedVar && !variables[selectedVar] ? (
               <div className="bg-port-card border border-port-border rounded-xl p-12 text-center text-gray-500">
                 That variable could not be found — it may have been deleted.{' '}
-                <button onClick={() => setSelectedVar(null)} className="text-port-accent hover:underline">
+                <button onClick={() => switchVariable(null)} className="text-port-accent hover:underline">
                   New variable
                 </button>
               </div>
             ) : (
             <div className="bg-port-card border border-port-border rounded-xl p-4">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-white">
-                  {selectedVar ? `Edit: ${selectedVar}` : 'New Variable'}
-                </h3>
+                <div>
+                  <h3 className="text-lg font-medium text-white">
+                    {selectedVar ? `Edit: ${selectedVar}` : 'New Variable'}
+                  </h3>
+                  {isVarDirty && (
+                    <div className="text-xs text-port-warning mt-1">Unsaved changes</div>
+                  )}
+                </div>
                 <button
                   onClick={saveVariable}
                   disabled={saving || !varForm.key || !varForm.content}

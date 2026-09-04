@@ -1,21 +1,20 @@
 /**
  * Mirror parity test for the YouTube single-video URL rule.
  *
- * Authoritative: `YOUTUBE_INGEST_URL_RE` + `youtubeVideoIdFromUrl` (server).
+ * Authoritative: `isYoutubeVideoUrl` + `youtubeVideoIdFromUrl` (`server/lib/youtubeUrl.js`).
  * Mirror:        `isYoutubeVideoUrl` + `youtubeVideoId` (client).
  *
  * Quick Capture swaps its ENTIRE submit path on the client predicate — a looser
  * client offers ingest options for a URL the server will reject with a 400, and
  * a tighter one silently files a real video as a plain link. Unlike the
  * bareUrl mirror (which compares declaration source text), this compares
- * BEHAVIOR: the two live in differently-shaped modules — the server's id parser
- * is shared with the Takeout importer — so a text diff would fail on structure
+ * BEHAVIOR: the two live in differently-shaped modules — the client copy also
+ * carries the ingest-options table — so a text diff would fail on structure
  * rather than on drift.
  */
 
 import { describe, it, expect } from 'vitest';
-import { YOUTUBE_INGEST_URL_RE } from '../services/youtubeIngest.js';
-import { youtubeVideoIdFromUrl } from '../services/youtubeImport.js';
+import { isYoutubeVideoUrl as serverAccepts, youtubeVideoIdFromUrl } from './youtubeUrl.js';
 import { isYoutubeVideoUrl, youtubeVideoId } from '../../client/src/lib/youtubeUrl.js';
 
 const CASES = [
@@ -38,11 +37,6 @@ const CASES = [
   'not a url',
   '',
 ];
-
-// The server's own answer, assembled from its two halves exactly the way
-// assertYoutubeIngestUrl does.
-const serverAccepts = (url) =>
-  typeof url === 'string' && YOUTUBE_INGEST_URL_RE.test(url) && !!youtubeVideoIdFromUrl(url);
 
 describe('youtubeUrl server↔client mirror parity', () => {
   it.each(CASES)('agrees on whether %j is a single-video YouTube URL', (url) => {

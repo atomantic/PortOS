@@ -34,6 +34,7 @@ import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 import { isAppleSilicon, isPortInUse } from '../lib/platform.js';
 import { PORTS } from '../lib/ports.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
+import { SLOTSTREAM_CATALOG } from '../lib/slotstreamCatalog.js';
 import {
   listSlotstreamCachedModels,
   pickSlotstreamCachedModel,
@@ -171,6 +172,10 @@ export async function getSlotstreamServerStatus() {
     cachedModels: (cache.models || []).map((m) => m?.id).filter(Boolean),
     cacheDir: slotstreamCacheDir(),
     cacheError: cache.error,
+    // The download menu rides on the status payload rather than a route of its
+    // own: it is three frozen rows, so a second fetch (and a second cache to
+    // keep in step with the cached-checkpoint list beside it) would buy nothing.
+    catalog: SLOTSTREAM_CATALOG,
   };
 }
 

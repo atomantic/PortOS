@@ -3,7 +3,10 @@ import { EventEmitter } from 'events';
 import { safeJSONParse, PATHS, atomicWrite, tryReadFile, tryReadFileStrict } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { canonicalStringify, isPlainObject, POLLUTING_KEYS } from '../lib/objects.js';
-import { recordUserAction } from './userActions.js';
+// `./userActions.js` is imported lazily at its single call site below, NOT here.
+// It reaches the DB schema/query layer, and settings.js is imported by nearly
+// every service — a static edge instantiated that subtree in ~200 suites that
+// never write a ledger row.
 
 // POLLUTING_KEYS (`__proto__`/`constructor`/`prototype`) is the project-wide
 // prototype-pollution denylist (defined in server/lib/objects.js). Without it,
@@ -269,6 +272,7 @@ const save = async (settings, { actor = 'system', skipUserAction = false } = {})
   if (!skipUserAction && change && change.keysChanged.length > 0) {
     const happenedAt = new Date().toISOString();
     const changedKeys = change.keysChanged.join(',');
+    const { recordUserAction } = await import('./userActions.js');
     await recordUserAction({
       type: 'settings.update',
       actor,

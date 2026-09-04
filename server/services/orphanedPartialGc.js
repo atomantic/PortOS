@@ -14,14 +14,17 @@
 
 import { dirname } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
-import { sweepOrphanedPartials, ORPHANED_PARTIAL_MAX_AGE_MS } from '../lib/downloadPreflight.js';
+import { isAnyDownloadInFlight, sweepOrphanedPartials, ORPHANED_PARTIAL_MAX_AGE_MS } from '../lib/downloadPreflight.js';
 import { SPEC_DECODE_PRESETS, SPEC_MODEL_ROLES } from '../lib/specDecodePresets.js';
-import {
-  resolveSpecModelPath,
-  isSpecDecodeDownloadInFlight,
-} from './specDecodeModels.js';
+import { resolveSpecModelPath } from './specDecodeModels.js';
 import { getModelsDir as getOllamaModelsDir } from './ollamaManager.js';
 import { getModelsDir as getLmStudioModelsDir } from './lmStudioManager.js';
+import { slotstreamCacheDir } from '../lib/slotstreamModels.js';
+// Side-effect import: constructing the module is what registers its download
+// slot with `isAnyDownloadInFlight`, and an unregistered slot's live shards are
+// unprotected from the sweep below. `orphanedPartialGc.test.js` fails if a
+// module calling `createDownloadSlot` stops being reachable from here.
+import './slotstreamModelManager.js';
 import { createSweepScheduler } from './sweepScheduler.js';
 
 export { ORPHANED_PARTIAL_MAX_AGE_MS };
@@ -44,6 +47,10 @@ export async function collectPartialSweepDirs() {
   }
   dirs.add(getOllamaModelsDir());
   dirs.add(await getLmStudioModelsDir());
+  // Slotstream writes one directory per checkpoint, each holding ~30 shards, so
+  // an abandoned pull can strand tens of gigabytes of `.partial` a level down —
+  // the sweep is recursive, so naming the cache root covers every checkpoint.
+  dirs.add(slotstreamCacheDir());
   return [...dirs];
 }
 
@@ -57,11 +64,11 @@ export async function sweepOrphanedDownloadPartials({
   dirs = null,
 } = {}) {
   const targets = dirs || await collectPartialSweepDirs();
-  return sweepOrphanedPartials(targets, {
-    now,
-    maxAgeMs,
-    isProtected: (path) => isSpecDecodeDownloadInFlight(path),
-  });
+  // One predicate for every runtime: each download slot registers itself, so a
+  // path that claims a slot is protected without a clause added here. (A path
+  // that claims none — `loras.js`, which writes into `PATHS.loras` above — is
+  // not; migrating it is issue #6190.)
+  return sweepOrphanedPartials(targets, { now, maxAgeMs, isProtected: isAnyDownloadInFlight });
 }
 
 const runSweep = async () => {

@@ -47,6 +47,7 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite } from '../../server/lib/fileUtils.js';
+import { readCosConfig } from './_lib.js';
 import { isPromptPayload, TASK_PROMPT_KEY, TASK_CONTEXT_KEY } from '../../server/lib/cosTaskPrompt.js';
 
 // The task header line, per `server/lib/taskParser.js`. Both spellings — with
@@ -171,24 +172,13 @@ export function splitPromptMetadata(markdown, { stamp }) {
 }
 
 /**
- * Repo-relative path of a queue file, honouring an install that moved it in
- * `data/cos/state.json` (`config.userTasksFile` / `config.cosTasksFile` — the
- * same values `cosTaskStore` reads). Migrating only the defaults would record
- * this migration as applied while the live queue stayed unsplit.
+ * Repo-relative path of a queue file, honouring an install that moved it in its
+ * CoS config (`userTasksFile` / `cosTasksFile` — the same values `cosTaskStore`
+ * reads). Migrating only the defaults would record this migration as applied
+ * while the live queue stayed unsplit.
  */
 async function queuePaths(rootDir) {
-  const raw = await readFile(join(rootDir, 'data', 'cos', 'state.json'), 'utf-8').catch(() => null);
-  let config = {};
-  if (raw) {
-    try {
-      config = JSON.parse(raw)?.config ?? {};
-    } catch {
-      // State recovery is intentionally tolerant elsewhere. A malformed
-      // optional config file must not prevent this migration from splitting
-      // the default queues and letting the normal state loader repair it.
-      console.warn('⚠️ migration 270: invalid CoS state; using default task queue paths');
-    }
-  }
+  const config = await readCosConfig({ rootDir, label: 'migration 270' });
   return QUEUE_FILES.map(({ configKey, file }) => (
     typeof config[configKey] === 'string' && config[configKey] ? config[configKey] : file
   ));

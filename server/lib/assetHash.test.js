@@ -1,16 +1,23 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { mkdir, rm, writeFile, readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
-import { sidecarPathForImage, getOrComputeImageSha256, sidecarGenParamsHash } from './assetHash.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from './mockPathsDataRoot.js';
 
-// PATHS.images is resolved at module-load from fileUtils and we deliberately
-// do NOT monkey-patch it — the absent-file tests use a tmpdir-rooted dir for
-// negative cases, but the positive sha256-compute / cache / invalidate tests
-// write fixtures into the REAL PATHS.images dir under a unique
-// `portos-assethash-test-*` token so the sidecar resolver hits a real
-// callsite. Each test wraps in try/finally to clean up the fixture even on
-// assertion failure (see the body of each `it()` below).
+// The positive sha256-compute / cache / invalidate cases need the sidecar
+// resolver to hit a REAL callsite — i.e. a path it derives from `PATHS.images`
+// itself, not one the test hands it. They used to get that by writing fixtures
+// into the install's live `data/images`, which is the write-leak class #6176
+// closed at runtime: a stray failure between the write and the try/finally
+// cleanup left `portos-assethash-test-*` fixtures in the user's image library.
+// Redirecting the data root keeps the callsite exactly as honest — the helper
+// still resolves through `PATHS.images` — while pointing it somewhere
+// disposable.
+vi.mock('./fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-assethash-') }));
+afterAll(cleanupTempDataRoots);
+
+const { sidecarPathForImage, getOrComputeImageSha256, sidecarGenParamsHash } = await import('./assetHash.js');
 
 let imageDir;
 
@@ -23,13 +30,7 @@ afterEach(async () => {
   await rm(imageDir, { recursive: true, force: true });
 });
 
-// The helpers above use PATHS.images from fileUtils. Rather than monkey-patch
-// that, we test the sidecar-key invariant directly with a controlled writePath
-// that lives under PATHS.images (using a unique-name token so cleanup is
-// scoped). This keeps the tests honest about real-world callsites.
-//
-// We re-import PATHS so each test resolves to the real images dir.
-import { PATHS } from './fileUtils.js';
+const { PATHS } = await import('./fileUtils.js');
 
 describe('assetHash', () => {
   describe('sidecarPathForImage', () => {
@@ -66,8 +67,8 @@ describe('assetHash', () => {
     });
 
     it('computes + persists sha256 in sidecar on first call', async () => {
-      // Use a name in the real PATHS.images dir so the sidecar write hits a
-      // real location. Token makes cleanup easy.
+      // A name under the (redirected) PATHS.images dir, so the sidecar write
+      // hits a path the helper derived rather than one the test supplied.
       const token = `portos-assethash-test-${Date.now()}-${Math.random()}.png`;
       const imagePath = join(PATHS.images, token);
       const sidecarPath = sidecarPathForImage(imagePath);
@@ -84,8 +85,8 @@ describe('assetHash', () => {
         expect(sidecarJson.sha256.value).toBe(result.hash);
         expect(sidecarJson.sha256.size).toBe(11);
       } finally {
-        // try/finally so a thrown assertion above doesn't leave the
-        // portos-assethash-test-* fixture in PATHS.images.
+        // try/finally so a thrown assertion above doesn't leave the fixture
+        // behind for the sibling cases that enumerate PATHS.images.
         await rm(imagePath, { force: true });
         await rm(sidecarPath, { force: true });
       }

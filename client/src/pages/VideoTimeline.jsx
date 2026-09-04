@@ -118,7 +118,7 @@ export default function VideoTimeline() {
                     <button
                       type="button"
                       onClick={() => handleDelete(project)}
-                      className="p-1 text-gray-500 hover:text-port-error transition-colors"
+                      className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
                       title="Delete project" aria-label="Delete project"
                     >
                       <Trash2 className="w-4 h-4" />

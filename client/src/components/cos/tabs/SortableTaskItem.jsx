@@ -3,7 +3,7 @@ import { useSortable } from '@dnd-kit/sortable';
 import { dndTransformToCss } from '../../../lib/dndTransform';
 import TaskItem from './TaskItem';
 
-export default function SortableTaskItem({ task, selected = false, onRefresh, providers, durations, apps, instances }) {
+export default function SortableTaskItem({ task, selected = false, onRefresh, providers, providersLoaded, durations, apps, instances }) {
   const [isEditing, setIsEditing] = useState(false);
   const {
     attributes,
@@ -28,6 +28,7 @@ export default function SortableTaskItem({ task, selected = false, onRefresh, pr
         selected={selected}
         onRefresh={onRefresh}
         providers={providers}
+        providersLoaded={providersLoaded}
         durations={durations}
         apps={apps}
         instances={instances}

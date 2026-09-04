@@ -114,26 +114,25 @@ export function isTopLevelEntryName(name) {
 /**
  * True when `candidatePath` resolves to a location strictly inside `dir`.
  *
- * Uses the same anchored-prefix containment idiom as `makePathResolver`
- * (`resolvePath(dir) + PATH_SEP`): appending the platform separator to the
- * resolved root means a sibling directory whose name merely *starts with* the
- * root (e.g. `/data/uploads-evil` vs `/data/uploads`) can't slip past a bare
- * `startsWith(root)` check. This is stricter than the `resolvedPath.startsWith(DIR)`
- * guard the upload/attachment/screenshot routes used before. The root itself is
- * NOT reported as "inside" (there's no trailing separator on the bare root),
- * which is the desired behavior for file-containment checks.
+ * The root itself is NOT reported as "inside", which is the desired behavior
+ * for file containment. `pathContainment.js` owns the root-inclusive variant
+ * (`isPathAtOrInsideDir`) for guards that police a whole tree; the two are
+ * deliberately separate declarations rather than one importing the other,
+ * because that module is a leaf `fileCore.js` reaches and this one drags
+ * `errorHandler`/`paths` — see the budget in `importScoping.test.js`.
+ *
+ * Uses an anchored-prefix idiom (`resolvePath(dir) + PATH_SEP`): appending the
+ * platform separator means a sibling whose name merely *starts with* the root
+ * (`/data/uploads-evil` vs `/data/uploads`) can't slip past a bare
+ * `startsWith(root)` check.
  *
  * Comparison is case-INSENSITIVE on Windows and macOS, whose filesystems are.
  * A bare `startsWith` there reports `C:\\Users\\Foo\\wt` as outside
  * `C:\\Users\\foo`, even though both name the same directory — so a managed
  * worktree read as `worktree-unmanaged-location` and was silently never reaped.
- * Git is a live source of such spellings: `git worktree list` reports paths the
- * way git normalized them (drive-letter case, 8.3 short names like
- * `C:\\Users\\RUNNER~1`), which need not match how PortOS spelled the root.
  * Case-folding only ever makes containment recognize paths that ARE the same
  * file on that platform; it can never admit a path from outside the root, so
- * the security posture is unchanged. Linux stays case-sensitive, where two
- * spellings really are two different directories.
+ * the security posture is unchanged. Linux stays case-sensitive.
  *
  * @param {string} dir - the containing directory (absolute or relative)
  * @param {string} candidatePath - the path to test

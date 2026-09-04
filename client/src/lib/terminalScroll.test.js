@@ -208,7 +208,11 @@ describe('attachTerminalWheelScroll', () => {
     const xtermListener = vi.fn();
     term.element.addEventListener('wheel', xtermListener);
     const detach = attachTerminalWheelScroll(term);
-    const event = new WheelEvent('wheel', { deltaY: -120, shiftKey: true, bubbles: true, cancelable: true });
+    const event = new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true });
+    // WheelEvent inherits its modifier state from MouseEvent, and not every DOM
+    // implementation carries `shiftKey` through the WheelEvent constructor — pin it
+    // on the instance so the shift branch is actually the one exercised (#6144).
+    Object.defineProperty(event, 'shiftKey', { value: true });
     term.element.dispatchEvent(event);
     expect(term.input).not.toHaveBeenCalled();
     expect(xtermListener).toHaveBeenCalledTimes(1);

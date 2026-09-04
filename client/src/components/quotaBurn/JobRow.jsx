@@ -110,7 +110,7 @@ export default function JobRow({
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          className="p-1 text-gray-400 hover:text-white"
+          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-white"
           onClick={toggleExpand}
           aria-label={isExpanded ? `Collapse step ${index + 1}` : `Expand step ${index + 1}`}
           title={isExpanded ? 'Collapse step' : 'Expand step'}

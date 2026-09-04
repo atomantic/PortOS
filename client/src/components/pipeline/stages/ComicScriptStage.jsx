@@ -1022,7 +1022,7 @@ function PageRow({
             <button
               type="button"
               onClick={onArmDelete}
-              className="p-1 text-gray-500 hover:text-port-error"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error"
               aria-label={`Delete page ${pageIndex + 1}`}
               title="Delete page"
             >

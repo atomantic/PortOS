@@ -6,6 +6,7 @@ import {
   displayLabel,
   enrichConversationRow,
   enrichActivityEvent,
+  createHandleResolver,
 } from './identityResolve.js';
 
 describe('identityResolve', () => {
@@ -72,5 +73,25 @@ describe('identityResolve', () => {
     expect(ev.personId).toBe('p1');
     expect(ev.participants[0].name).toBe('Tribe Friend');
     expect(ev.participants[0].personId).toBe('p1');
+  });
+
+  // #6025: bulk callers (the outreach scan) hand enrichActivityEvent one memoizing
+  // resolver so a repeated counterpart handle is matched once, not once per event.
+  it('memoizes repeated handles and enriches identically through an injected resolver', () => {
+    const resolver = createHandleResolver(ctx);
+    expect(resolver('+15551234567')).toBe(resolver('+15551234567'));
+    expect(resolver('+15559876543').displayName).toBe('Contact Only');
+
+    let injectedCalls = 0;
+    const counting = (h) => { injectedCalls += 1; return resolver(h); };
+    const event = {
+      title: '+15551234567',
+      metadata: { handle: '+15551234567' },
+      participants: [{ phone: '+15551234567' }],
+    };
+    // The injected resolver is used for every lookup, and the enrichment is
+    // byte-identical to the uncached default path.
+    expect(enrichActivityEvent(event, ctx, counting)).toEqual(enrichActivityEvent(event, ctx));
+    expect(injectedCalls).toBeGreaterThan(0);
   });
 });

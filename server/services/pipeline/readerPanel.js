@@ -48,7 +48,11 @@ const snapshotPath = (seriesId) => join(panelDir(), `${seriesId}.json`);
 async function loadSnapshot(seriesId) {
   const content = await tryReadFile(snapshotPath(seriesId));
   if (content === null) return null;
-  return safeJSONParse(content, null, { allowArray: false, logError: true, context: snapshotPath(seriesId) });
+  const parsed = safeJSONParse(content, null, { allowArray: false, logError: true, context: snapshotPath(seriesId) });
+  // `allowArray: false` only rejects a root array — a bare JSON scalar
+  // (corrupted snapshot) still parses, and callers spread this into a
+  // response object, so guard for a genuine object here.
+  return parsed && typeof parsed === 'object' ? parsed : null;
 }
 
 async function saveSnapshot(snapshot) {

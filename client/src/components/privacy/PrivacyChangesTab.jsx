@@ -50,7 +50,7 @@ function OrgRow({ org, status, eventId, hasReplacement, onChanged }) {
         <span className="text-sm text-white truncate">{org.orgName}</span>
         {org.contactEmail && <span className="ml-2 text-[11px] text-gray-500">{org.contactEmail}</span>}
       </div>
-      <div className="flex items-center gap-1 shrink-0">
+      <div className="flex items-center gap-2 shrink-0">
         {org.website && isHttpUrl(org.website) && (
           <a href={org.website} target="_blank" rel="noreferrer" title="Open website" aria-label="Open website"
             className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50">
@@ -63,20 +63,20 @@ function OrgRow({ org, status, eventId, hasReplacement, onChanged }) {
               <button
                 onClick={() => act(() => draftChangeUpdateEmail(eventId, org.orgId, { silent: true }), 'Draft added to Comms queue')}
                 disabled={busy} title="Draft update email" aria-label="Draft update email"
-                className="p-1.5 rounded text-gray-400 hover:text-port-accent hover:bg-port-border/50 disabled:opacity-50">
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded text-gray-400 hover:text-port-accent hover:bg-port-border/50 disabled:opacity-50">
                 <Mail size={14} />
               </button>
             )}
             <button
               onClick={() => act(() => markChangeOrgUpdated(eventId, org.orgId, { silent: true }), 'Marked updated')}
               disabled={busy} title="Mark updated" aria-label="Mark updated"
-              className="p-1.5 rounded text-gray-400 hover:text-port-success hover:bg-port-border/50 disabled:opacity-50">
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded text-gray-400 hover:text-port-success hover:bg-port-border/50 disabled:opacity-50">
               <Check size={15} />
             </button>
             <button
               onClick={() => act(() => markChangeOrgRemoved(eventId, org.orgId, { silent: true }), 'Marked removed')}
               disabled={busy} title="Mark removed (org dropped this data)" aria-label="Mark removed"
-              className="p-1.5 rounded text-gray-400 hover:text-port-error hover:bg-port-border/50 disabled:opacity-50">
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded text-gray-400 hover:text-port-error hover:bg-port-border/50 disabled:opacity-50">
               <Ban size={15} />
             </button>
           </>

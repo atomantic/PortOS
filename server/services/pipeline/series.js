@@ -19,7 +19,7 @@ import { sanitizeCharacterArcList } from '../../lib/seriesCharacterArc.js';
 import { sanitizeStyleGuide } from '../../lib/styleGuide.js';
 import { sanitizeProseExportSettings } from '../../lib/proseExportSettings.js';
 import { sanitizeSeverityWeights, sanitizeBlockingSeverities } from '../../lib/editorial/severityConfig.js';
-import { CHECK_SEVERITIES } from '../../lib/editorial/checkRegistry.js';
+import { CHECK_SEVERITIES } from '../../lib/editorial/checkInfra/taxonomy.js';
 import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
 import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
 import { persistedRenderPinFields } from '../../lib/renderTargets.js';

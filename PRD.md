@@ -22,7 +22,7 @@ Reused verbatim (condensed to objective statements) from [GOALS.md](./GOALS.md)'
 6. **Developer Productivity Toolkit** — shell, git, browser control, and process tooling available from any device.
 7. **Self-Improving Intelligence** — the system tunes its own routing/metrics from observed outcomes rather than staying static.
 8. **Full Digital Autonomy** — agents can act across connected platforms (voice, Telegram, messaging, social) around the clock.
-9. **Knowledge Legacy** — personal knowledge, identity, and creative output are preserved as a durable, exportable record.
+9. **Knowledge Legacy** — personal knowledge, identity, and creative output are preserved as a durable, local record. PortOS itself is the backup of record (data lives on the user's hardware and is covered by automatic snapshots — see `docs/BACKUP.md`), so per-domain backup-style exports are out of scope; download/export buttons exist only for sharing or handoff to other tools (Sharing buckets, Legacy Bundle, format-specific creative deliverables).
 10. **Anywhere Access on Private Network** — every feature is reachable from any device on the user's Tailnet, with no public exposure.
 11. **Health & Longevity** — health data (MeatSpace) is tracked and made actionable via mortality/longevity-aware goal scoring.
 12. **Personal Productivity & Life Management** — calendar, goals, and communications are unified with the same tooling that manages digital projects.
@@ -208,6 +208,7 @@ Reused verbatim (condensed to objective statements) from [GOALS.md](./GOALS.md)'
 | NR-7 | The system MUST NOT treat leakage of a free, non-monetary third-party API key (e.g. CivitAI) to an unintended host as a security finding requiring host-allowlisting or key-stripping. | Won't-fix precedent (#2200): worst case is quota abuse against a free service, borne by that service — no monetary loss or meaningful security consequence. Does not extend to paid/quota-billed providers or money-bearing/destructive-action keys, which retain full hardening requirements. |
 | NR-8 | The system MUST NOT send an AI-drafted outbound message (email, social post) without explicit user review-and-approve, regardless of how confident the draft is. | Full digital autonomy (Goal 8) extends to task execution, not to irreversible outward-facing communication acting under the user's identity without a human gate. |
 | NR-9 | The system MUST NOT instruct the user to run a shell/terminal command in order to complete a workflow PortOS can perform itself — including installing or removing a runtime, and searching for, downloading, or deleting a model. Blocked-state copy points at the in-app control, not at a command line. | PortOS is the control surface for the machine; sending the user to a terminal for one step of an otherwise-managed lifecycle is a dead end that breaks remote/mobile use (Anywhere Access) and leaves the app's own state stale. **Carve-out:** genuinely privileged one-time host setup PortOS deliberately refuses to perform (`pm2 startup`, `sudo` fan-control helpers, `gcloud auth login`) may be named as an operator step — the refusal must be deliberate and documented, not a gap in the UI. |
+| NR-10 | The system MUST NOT add per-domain backup-style export endpoints (e.g. a generic "export my Brain/memories/thoughts to file" download) as a durability or backup story. | PortOS is a locally hosted app that is itself the user's backup of record — data lives on the user's hardware and is covered by automatic snapshots (`docs/BACKUP.md`). Download/export buttons exist only for sharing or handoff to other tools (Sharing buckets, Legacy Bundle, format-specific creative deliverables), never as a parallel backup mechanism. |
 
 ---
 
@@ -222,6 +223,7 @@ Reused verbatim (condensed to objective statements) from [GOALS.md](./GOALS.md)'
 - **Federated peer-to-peer sharing beyond bucket-based Sharing** — direct P2P distribution between instances is a secondary goal, not yet built.
 - **Federated media-provider routing for image/video generation** — the queued-job delegation contract (FR-52/FR-53) is implemented and live for audio/music generation today; extending the same provider/consumer contract to image and video generation is tracked separately (issue #4348), not yet built.
 - **User-directed assignment of a CoS task to a specific federated peer instance** — task coordination across peers is currently opportunistic only (first peer to see a synced task claims it via the existing lease mechanism); an explicit "run this task on instance X" control is a decided, ready-to-work follow-up (issue #4520), not yet implemented.
+- **Per-domain backup-style exports** — PortOS is locally hosted and is itself the backup of record (automatic snapshots); exports exist only for sharing or handoff to other tools, per NR-10.
 
 ---
 

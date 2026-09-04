@@ -55,7 +55,9 @@ describe('TimelineBlock — remove control', () => {
     expect(remove.className).toContain('lg:opacity-0');
     expect(remove.className).not.toContain('sm:opacity-0');
     expect(remove).toHaveAttribute('title', 'Remove from timeline');
-    expect(remove.querySelector('svg').className.baseVal).toContain('w-3 h-3');
+    // `getAttribute` rather than `.className.baseVal`: an SVG element's className
+    // is an SVGAnimatedString only where the environment implements one (#6144).
+    expect(remove.querySelector('svg').getAttribute('class')).toContain('w-3 h-3');
   });
 
   it('removes without starting a drag or selecting the parent timeline block', () => {
@@ -161,7 +163,7 @@ describe('LaneBlock — free-floating overlay/bed placement', () => {
     expect(screen.queryByText('gone.png')).not.toBeInTheDocument();
   });
 
-  it('provides a 28px remove target without selecting a normal-width block', () => {
+  it('provides a 44px remove target without selecting a normal-width block', () => {
     const onSelect = vi.fn();
     const onRemove = vi.fn();
     render(
@@ -169,8 +171,8 @@ describe('LaneBlock — free-floating overlay/bed placement', () => {
     );
 
     const remove = screen.getByRole('button', { name: 'Remove logo.png from timeline' });
-    expect(remove.className).toContain('min-w-[28px]');
-    expect(remove.className).toContain('min-h-[28px]');
+    expect(remove.className).toContain('min-w-[44px]');
+    expect(remove.className).toContain('min-h-[44px]');
 
     fireEvent.pointerDown(remove);
     fireEvent.click(remove);

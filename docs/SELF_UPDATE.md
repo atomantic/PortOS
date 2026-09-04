@@ -2,7 +2,7 @@
 
 How PortOS notices a new release and updates itself. PortOS is distributed software — many people run it, and a large share run it from a **personal fork**, so every step here is fork-aware. Breaking that assumption produces silent no-op updates.
 
-Code: `server/services/updateChecker.js`, `server/services/updateExecutor.js`, `server/services/appUpdater.js`, `server/routes/update.js`, `server/lib/gitRemote.js`, `server/lib/detachedSpawn.js`, `update.sh` / `update.ps1`, `scripts/verify-server-health.js`, `client/src/components/apps/tabs/UpdateTab.jsx`.
+Code: `server/services/updateChecker.js`, `server/services/portosSelfUpdate.js`, `server/services/updateExecutor.js`, `server/services/appUpdater.js`, `server/routes/update.js`, `server/lib/gitRemote.js`, `server/lib/detachedSpawn.js`, `update.sh` / `update.ps1`, `scripts/verify-server-health.js`, `client/src/components/apps/tabs/UpdateTab.jsx`, `client/src/hooks/usePortosRestartWatch.js`, `client/src/hooks/useAppOperation.js`.
 
 ## Release polling always targets upstream
 
@@ -69,9 +69,34 @@ To prevent that confusion, `POST /api/update/execute` rejects fork runs with **4
 
 `update.sh` deletes and restarts every PortOS PM2 entry. PM2's TreeKill walks **PPID**, so a script left attached to `portos-server` is killed by its own `pm2 delete` step — mid-list, before it can run the closing `pm2 start` — and the install is left headless. `spawnDetached`'s double-fork (`server/lib/detachedSpawn.js`) is what reparents the script to init so it survives; `executeUpdate()` in `server/services/updateExecutor.js` is the single launcher that applies it, along with the `STEP:` progress parsing, the still-running-script guard, and `recordUpdateResult()`.
 
-**PortOS is also a managed app**, so an update started from **App Management** reaches `update.sh` through `appUpdater.js` rather than `routes/update.js`. That path delegates to `executeUpdate()` for the PortOS record instead of spawning the script itself — a second detached-spawn implementation would be one more thing to keep in sync, and the attached one it replaced produced exactly the headless failure above (#5976). `appUpdater` also **skips its own `restart` step** for that case: the script runs `pm2 start ecosystem.config.cjs` itself, so restarting on top of it would be redundant and would race the script.
+**Windows needs the same escape, and cannot get it from `detached: true`.** PM2 kills there with `taskkill /pid <app> /T /F`, which walks the identical parent→child tree, so an attached `update.ps1` dies at `pm2-stop` exactly as an attached `update.sh` would. But Node's `detached: true` maps to **`DETACHED_PROCESS`** on Windows, which denies the child a console — and a console host like `powershell.exe` given no console exits **0 within ~100ms without running a single line**. That combination is why the in-app update silently did nothing on Windows while reporting a successful update to the target release (#6169): the script never ran, `executeUpdate` saw exit 0, and stamped the triggering tag onto a "Success" result. So on Windows `spawnDetached` launches a short-lived PowerShell launcher that `Process.Start`s a **supervisor** (with `CreateNoWindow`, per [WINDOWS_CONSOLE.md](WINDOWS_CONSOLE.md)) and exits. The supervisor's parent is then gone, so `taskkill /T` from the server never reaches it; it redirects the script's output into the control dir and records its pid and exit status there, so the same tailer streams `STEP:` progress on both platforms. This is the *only* win32 path — it shipped in #6169 behind a `windowsDetached` opt-in, because the plain-spawn fallback beside it handed back a real `ChildProcess` whose `kill` tree-killed the job's own descendants and the supervisor path could then only signal the job's pid; #6170 routed the supervisor handle's `kill` (and the boot-time orphan reaper) through the same `taskkill /T /F`, which removed the trade-off and with it the option.
 
-Both entry points take the same atomic `setUpdateInProgress(true)` lock before launching, so they cannot run `update.sh` concurrently — and because that flag is what `subAgentSpawner`, `agentLifecycle` and `persistentMindSupervisor` gate on, holding it also stops a CoS agent from being spawned into a process the script is about to `pm2 delete` (#4124).
+Two guards keep a launch that did nothing from being reported as an update:
+
+- A run that exits 0 having emitted **no `STEP:` line at all** is recorded as a failure, not a success — both scripts emit `git-pull:running` before touching anything, so silence means the script never ran.
+- When `data/update-complete.json` is missing (usually because the restarted server already consumed it), the recorded version comes from **package.json on disk**, never from the triggering tag: the tag is only what the update aimed at.
+
+**PortOS is also a managed app**, so an update started from **App Management**'s Git tab reaches `update.sh` through `appUpdater.js` rather than `routes/update.js`. Both entry points call the same `startPortosSelfUpdate()` (`server/services/portosSelfUpdate.js`), which owns the whole lifecycle: the preflight refusals, the atomic `setUpdateInProgress(true)` lock, the post-lock re-check, and the `executeUpdate()` launch. They differ only in `mode`:
+
+| Surface | Mode | Gate |
+|---|---|---|
+| Update page — "Update Now" | `release` | needs a newer release tag |
+| Update page — "Reconcile Now" | `reconcile` | needs `installState.outOfSync` |
+| App Management — "Update app" | `refresh` | none; the caller has already advanced the checkout onto its origin default branch |
+
+`refresh` exists because App Management moves HEAD before handing off. Gating it on out-of-sync would only re-ask whether the pull it just did happened — and that same pull makes `update.sh`'s own `git pull` a no-op, so the script's commit-diff dependency detection sees nothing. The launcher therefore passes `installState`'s stale workspaces through as `forceCleanWorkspaces` for both non-release modes, which is what keeps deps from surviving the update (#1779).
+
+The socket path runs `checkPortosUpdatePreflight` itself before it pulls — a refusal must land before the checkout moves, and its `code` is what the panel's acknowledge-and-retry buttons key on — then passes `preflightAlreadyRun` so the launcher reads a fresh `getUpdateStatus()` (post-pull, for the stale workspaces) without re-running guards that already answered. The post-lock re-check is authoritative for both callers either way.
+
+Because the lock is taken in one place, the two entry points cannot run `update.sh` concurrently — and because that flag is what `subAgentSpawner`, `agentLifecycle` and `persistentMindSupervisor` gate on, holding it also stops a CoS agent from being spawned into a process the script is about to `pm2 delete` (#4124).
+
+`appUpdater` also **skips its own `restart` step** for that case: the script runs `pm2 start ecosystem.config.cjs` itself, so restarting on top of it would be redundant and would race the script.
+
+### Nothing awaits the script, on either side
+
+`startPortosSelfUpdate()` resolves as soon as the detached script is RUNNING. It cannot report the outcome, because `update.sh` `pm2 delete`s this server partway through and the process awaiting it dies there — an awaited launch simply never runs its own completion code. The Git tab used to await it, which is why it hung: `app:update:complete` never fired, the operation was never cleared, and the row sat on "Stopping PortOS apps..." forever while the update finished fine in the background. So `appUpdater` returns `{ selfUpdateStarted: true }` at the launch, and `server/sockets/apps.js` deliberately **leaves the operation registered** and emits no completion — the map dies with the process, and the remaining `STEP:` frames keep rendering right up to the moment the server goes down.
+
+The client half of that contract is `usePortosRestartWatch` (`client/src/hooks/usePortosRestartWatch.js`). **App Management surfaces do not wire it themselves** — `useAppOperation` owns it and exposes `restarting`, so every caller of `startUpdate` inherits the baseline capture and the restart detection and a new surface cannot regress to the hang by forgetting them. The Update page, which does not go through an app operation, uses the hook directly. It arms on the update stream's `restart` step, on `portos:update:complete`, or on a socket `disconnect` **confirmed unreachable** (a raw disconnect is not proof — PortOS is commonly used remotely over Tailscale, and a network blip fires one too). Once armed it polls `/api/system/health` and reloads on a version change, a down→up dip, or an uptime reset below the pre-update peak — three signals, because a reconcile often lands the same version and its restart can be too fast to sample the down window.
 
 A PortOS record carrying a custom `updateCommand`, or a `repoPath` that is not this checkout, keeps the ordinary attached path — delegating there would silently run `update.sh` instead of the configured command. That decision is logged rather than silent, since the attached path is the one that failed. The `repoPath` comparison resolves symlinks and case-folds on macOS/Windows: `repoPath` is user-editable and not force-synced, so a trailing slash or a different spelling must not be mistaken for a different checkout. Non-PortOS managed apps are unaffected and still get their own PM2 restart from `appUpdater`. The dashboard handoff it starts before that restart is PortOS-only — it opens the PortOS dashboard, so it would be meaningless after another app's update.
 
@@ -104,6 +129,49 @@ When `isFork` is true, `UpdateTab` replaces the single "Update Now" button with 
 | Update from Fork As-Is | `execute` with `acknowledgeFork: true` |
 
 Keep these three behaviors distinct. Collapsing them strips the user's agency over what touches their GitHub fork.
+
+## Running a customized fork
+
+The `UpdateTab` fork panel states this in short form. The full loop is here, because that panel is
+the only other place it exists and it renders only when `isFork` is true.
+
+Keep `main` a clean mirror of upstream and never commit to it — that is what keeps `gh repo sync`
+fast-forward and avoids 409 `FORK_DIVERGED`. Private changes live on their own branch, rebased
+onto `main` after each sync. Anything shareable goes upstream as a PR instead, so you carry less
+forward each time.
+
+**PM2 boots whatever is checked out**, so the branch you are on is the code that runs. Staying on
+your private branch is what makes your customizations live; there is no separate step.
+
+### After rebasing, reinstall and rebuild
+
+`update.sh` / `update.ps1` always finish on `main`, so they cannot do this half for you:
+
+```bash
+git checkout main && ./update.sh            # .\update.ps1 on Windows
+git checkout <your-branch> && git rebase main
+for d in . client server autofixer; do (cd "$d" && npm install --no-save); done
+node scripts/trusted-rebuilds.js server
+npm run build && npm run pm2:restart
+```
+
+**Use `--no-save`, not a bare `npm install`.** `--no-save` is what `safe_install` in `update.sh`
+and `scripts/ensure-deps.js` run, for two reasons that both bite a fork: a bare install rewrites
+`client/package.json` and the lockfiles, which dirties your private branch and re-stales a build
+you just made (`client/package.json` is a `staleBuild` input — see below); and an older npm can
+strip newer lockfile metadata it does not understand. `--no-save` still honors `package-lock.json`.
+
+`scripts/trusted-rebuilds.js` is not optional for the server. Every workspace `.npmrc` sets
+`ignore-scripts=true`, so the server's native addons (`node-pty` and friends) are never built by
+the install itself — skip the rebuild and the shell and TUI features crash on a missing binding.
+
+Order matters: install before you build, so the build sees the deps it compiles against.
+
+**A clean rebase makes the install look broken.** Checking out a branch based on an older `main`
+rewinds the working tree, and the rebase rolls it forward, so every touched file gets a new mtime.
+`getInstallState()` (`server/services/installState.js`) compares mtimes, so it reports a stale
+build and stale deps in all four workspaces even though no dependency changed and no build input
+was edited. The reinstall and rebuild above clear it.
 
 ## Image-bearing Persistent Mind work must drain before source transitions
 

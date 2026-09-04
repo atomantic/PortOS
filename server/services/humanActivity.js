@@ -575,6 +575,34 @@ export async function listConversations({ source, q, limit } = {}) {
 }
 
 /**
+ * Rank `metadata.handle` values by recent event frequency for one source,
+ * aggregated in SQL rather than loaded into Node. `eventLimit` bounds the
+ * same recency window a caller would otherwise pass to `listEvents` before
+ * counting client-side — only the handle column crosses the wire, and
+ * Postgres does the GROUP BY instead of a per-row Map in Node.
+ */
+export async function countEventsByHandle({ source, eventLimit } = {}) {
+  if (!source) return [];
+  await ensureReady();
+  const cap = Math.min(Math.max(Number(eventLimit) || 2000, 1), 5000);
+  const result = await query(
+    `SELECT handle, COUNT(*)::int AS event_count
+     FROM (
+       SELECT metadata->>'handle' AS handle
+       FROM human_activity_events
+       WHERE source = $1
+       ORDER BY happened_at DESC
+       LIMIT $2
+     ) recent
+     WHERE handle IS NOT NULL AND handle <> ''
+     GROUP BY handle
+     ORDER BY event_count DESC`,
+    [String(source), cap],
+  );
+  return result.rows.map((row) => ({ handle: row.handle, eventCount: Number(row.event_count) || 0 }));
+}
+
+/**
  * Source-level stats for a manager UI: total events, conversation count, date
  * range. Cheap aggregates over the machine-local activity store.
  */

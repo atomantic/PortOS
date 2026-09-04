@@ -34,13 +34,14 @@ vi.mock('../../services/workItems.js', () => ({
 }));
 vi.mock('../../services/cosTaskGenerator.js', async (importActual) => ({
   ...(await importActual()),
-  resolveClaimWorkMetadata: vi.fn()
+  resolveClaimWorkMetadata: vi.fn(),
+  resolveAppClaimReviewers: vi.fn()
 }));
 
 import * as appsService from '../../services/apps.js';
 import { listOutcomesResult } from '../../services/layeredIntelligenceOutcomes.js';
 import { listWorkItems } from '../../services/workItems.js';
-import { resolveClaimWorkMetadata } from '../../services/cosTaskGenerator.js';
+import { resolveClaimWorkMetadata, resolveAppClaimReviewers } from '../../services/cosTaskGenerator.js';
 
 describe('Apps Task-Type Routes', () => {
   let app;
@@ -112,6 +113,61 @@ describe('Apps Task-Type Routes', () => {
       const response = await request(app).get('/api/apps/app-999/work-items');
       expect(response.status).toBe(404);
       expect(listWorkItems).not.toHaveBeenCalled();
+    });
+  });
+
+  // The route's own job is narrow: map the resolver's `overridden` boolean to the
+  // `source` label the UI acts on, and publish only the fields a claim flow can
+  // honor. The reviewer RESOLUTION it previews (layer precedence, copilot guard,
+  // emitted CSV) belongs to `resolveAppClaimReviewers`, which the claim builder
+  // shares — covered in cosTaskGenerator.test.js and reviewerConfig.test.js.
+  describe('GET /api/apps/:id/claim-reviewers', () => {
+    const RESOLVED = {
+      reviewers: ['codex', 'claude'], usernames: [], optionalReviewers: [],
+      reviewerMaxRounds: {}, reviewerModels: {}, reviewerEfforts: {}, csv: 'codex,claude',
+      // resolveClaimReviewerConfig also carries these two, and a claim flow has no
+      // slashdo flag string to put them in — the route must not publish them.
+      stopMode: 'all', reviewerApplies: false
+    };
+
+    beforeEach(() => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'App' });
+    });
+
+    it('reports `task-override` so the UI sends the user to the override, not the defaults panel', async () => {
+      // The #6202 shape: the install default had been moved to `antigravity`, but a
+      // claim-work override saved months earlier still named codex + claude, so
+      // every manual claim reviewed with those while every reviewer control on
+      // screen showed `antigravity`.
+      resolveAppClaimReviewers.mockResolvedValue({ ...RESOLVED, overridden: true });
+
+      const response = await request(app).get('/api/apps/app-001/claim-reviewers');
+
+      expect(response.status).toBe(200);
+      expect(resolveAppClaimReviewers).toHaveBeenCalledWith({ id: 'app-001', name: 'App' });
+      expect(response.body).toMatchObject({
+        appId: 'app-001', source: 'task-override', reviewers: ['codex', 'claude'], csv: 'codex,claude'
+      });
+    });
+
+    it('reports `defaults` when nothing overrode them', async () => {
+      resolveAppClaimReviewers.mockResolvedValue({
+        ...RESOLVED, overridden: false, reviewers: ['antigravity'], csv: 'antigravity[gemini-3.8-flash]'
+      });
+
+      const response = await request(app).get('/api/apps/app-001/claim-reviewers');
+
+      expect(response.body.source).toBe('defaults');
+      expect(response.body.csv).toBe('antigravity[gemini-3.8-flash]');
+    });
+
+    it('does not publish the run flags a claim flow has nowhere to put', async () => {
+      resolveAppClaimReviewers.mockResolvedValue({ ...RESOLVED, overridden: false });
+
+      const response = await request(app).get('/api/apps/app-001/claim-reviewers');
+
+      expect(response.body.stopMode).toBeUndefined();
+      expect(response.body.reviewerApplies).toBeUndefined();
     });
   });
 

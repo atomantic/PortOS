@@ -311,7 +311,7 @@ export default function SongRecordings({ recordings = [], layers = [], onChange,
               <button
                 type="button"
                 onClick={() => toggleMute(r.id)}
-                className={`p-1 shrink-0 ${r.muted ? 'text-gray-600 hover:text-gray-400' : 'text-port-accent hover:text-port-accent/80'}`}
+                className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 shrink-0 ${r.muted ? 'text-gray-600 hover:text-gray-400' : 'text-port-accent hover:text-port-accent/80'}`}
                 aria-label={r.muted ? 'Unmute take' : 'Mute take'}
                 title={r.muted ? 'Muted — excluded from layered play' : 'Audible in layered play'}
               >
@@ -350,7 +350,7 @@ export default function SongRecordings({ recordings = [], layers = [], onChange,
                   onClick={() => toggleReview(r.id)}
                   aria-pressed={reviewId === r.id}
                   title={reviewId === r.id ? 'Hide saved grading' : 'Show this take’s grading on the staff'}
-                  className={`p-1 shrink-0 ${reviewId === r.id ? 'text-port-accent' : 'text-gray-500 hover:text-port-accent'}`}
+                  className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 shrink-0 ${reviewId === r.id ? 'text-port-accent' : 'text-gray-500 hover:text-port-accent'}`}
                   aria-label="Review take grading"
                 >
                   <Target size={15} />
@@ -358,7 +358,7 @@ export default function SongRecordings({ recordings = [], layers = [], onChange,
               )}
               {/* Solo listen to one take */}
               <audio controls preload="none" src={getUploadUrl(r.filename)} className="h-8 max-w-[160px] hidden sm:block" />
-              <button type="button" onClick={() => removeRecording(r.id)} className="p-1.5 text-gray-500 hover:text-port-error shrink-0" aria-label="Remove take">
+              <button type="button" onClick={() => removeRecording(r.id)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-error shrink-0" aria-label="Remove take">
                 <Trash2 size={15} />
               </button>
             </li>

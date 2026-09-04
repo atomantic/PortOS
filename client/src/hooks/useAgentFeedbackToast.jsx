@@ -94,10 +94,10 @@ function AgentFeedbackToast({ t, agentData, onFeedback }) {
       {/* Feedback buttons */}
       <div className="flex items-center gap-2 pt-1 border-t border-port-border/30">
         <span className="text-xs text-gray-500">Was this helpful?</span>
-        <div className="flex gap-1 ml-auto">
+        <div className="flex gap-2 ml-auto">
           <button
             onClick={() => onFeedback(agentId, 'positive', t.id)}
-            className="p-1.5 rounded bg-green-500/20 hover:bg-green-500/30 text-green-400 transition-colors"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded bg-green-500/20 hover:bg-green-500/30 text-green-400 transition-colors"
             title="Helpful"
             aria-label="Mark as helpful"
           >
@@ -105,7 +105,7 @@ function AgentFeedbackToast({ t, agentData, onFeedback }) {
           </button>
           <button
             onClick={() => onFeedback(agentId, 'negative', t.id)}
-            className="p-1.5 rounded bg-red-500/20 hover:bg-red-500/30 text-red-400 transition-colors"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded bg-red-500/20 hover:bg-red-500/30 text-red-400 transition-colors"
             title="Not helpful"
             aria-label="Mark as not helpful"
           >

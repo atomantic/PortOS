@@ -1,9 +1,9 @@
 /** Upload staging, validation, persistence, and local-file serving helpers. */
-import { copyFile, readFile, stat, unlink, writeFile } from 'fs/promises';
+import { readFile, stat, unlink } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { join, resolve as resolvePath } from 'path';
 import { ServerError } from './errorHandler.js';
-import { atomicWrite, ensureDir, pathExists } from './fileCore.js';
+import { copyFileGuarded, ensureDir, pathExists, writeFileGuarded } from './fileCore.js';
 import { detectImageFormat, getFileExtension, getMimeType, RISKY_MIME_TYPES, sanitizeFilename } from './mimeTypes.js';
 import { PATHS } from './paths.js';
 import { assertSafeFilename, isPathInsideDir } from './pathSafety.js';
@@ -29,7 +29,7 @@ export async function importFileToDir(tempPath, originalName, destDir, { extensi
   await ensureDir(destDir);
   const filename = `${randomUUID().slice(0, 8)}-${sanitizeFilename(originalName)}`;
   const dest = join(destDir, filename);
-  await copyFile(tempPath, dest);
+  await copyFileGuarded(tempPath, dest);
   await unlink(tempPath).catch(() => {});
   const s = await stat(dest).catch(() => null);
   return { filename, sizeBytes: s?.size ?? 0 };
@@ -111,7 +111,10 @@ export async function saveImageUpload(dir, { filename, data }, { maxBytes }) {
   }
 
   await ensureDir(dir);
-  await writeFile(filePath, buffer);
+  // writeFileGuarded, not atomicWrite: the stored name is clamped to NAME_MAX
+  // just above, and atomicWrite's `.<pid>.<ts>.<uuid>.tmp` suffix would push the
+  // temp file past it (#6176).
+  await writeFileGuarded(filePath, buffer);
 
   return { filename: fname, filePath, size: buffer.length, format: detected.format, mime: detected.mime };
 }
@@ -159,7 +162,7 @@ export async function saveBase64Upload(dir, { filename, data }, { allowedExtensi
     throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
   }
 
-  await writeFile(filePath, buffer);
+  await writeFileGuarded(filePath, buffer);
 
   return { id, filename: fname, filePath, buffer, size: buffer.length, mime: getMimeType(getFileExtension(fname)) };
 }

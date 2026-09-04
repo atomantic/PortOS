@@ -5,9 +5,14 @@
  * stitch loop, but reuses the Creative Director machinery instead of
  * duplicating it. We create a CD project with `autoAcceptScenes: true` so
  * no LLM evaluator round-trip runs (the Pipeline already had the human
- * vetting the storyboard scenes), then call into CD's existing
- * `advanceAfterSceneSettled` to kick off the first render. CD's own
- * sceneRunner / completionHook / stitchRunner take it from there.
+ * vetting the storyboard scenes), then ask CD to start the project. CD's own
+ * completionHook / sceneRunner / stitchRunner take it from there.
+ *
+ * That start goes through `creativeDirector/projectStartSink.js` rather than a
+ * direct import of the completion hook (#5920): a static edge pipeline → CD closed
+ * a 22-module import cycle, because CD's tool registry starts a Series Autopilot in
+ * the other direction. The sink is a leaf both halves can depend on; the hook
+ * registers the concrete starter on it.
  *
  * The CD project id is persisted on the issue's `stages.episodeVideo` so
  * the UI can poll `/api/creative-director/:id` to render progress and
@@ -18,7 +23,7 @@ import { getIssue, updateStage, assertStageUnlocked } from './issues.js';
 import { getSeries } from './series.js';
 import { getSeriesCanon } from './seriesCanon.js';
 import { createProject as createCDProject, setTreatment as setCDTreatment } from '../creativeDirector/local.js';
-import { startCreativeDirectorProject } from '../creativeDirector/completionHook.js';
+import { requestCreativeDirectorProjectStart } from '../creativeDirector/projectStartSink.js';
 import { getDefaultVideoModelId, getVideoModels } from '../../lib/mediaModels.js';
 import { buildPlaceByKey } from '../../lib/scenePrompt.js';
 import { getSettings } from '../settings.js';
@@ -232,7 +237,7 @@ export async function startEpisodeVideoForIssue(issueId, options = {}) {
   // Kick off the orchestrator — fire-and-forget so the route can return
   // immediately. Failures land on the CD project's `failureReason` field
   // and surface via the UI's CD project poll, not via this Promise.
-  startCreativeDirectorProject(project.id).catch((err) =>
+  requestCreativeDirectorProjectStart(project.id).catch((err) =>
     console.log(`⚠️ Pipeline episode CD start failed for ${project.id}: ${err.message}`),
   );
 

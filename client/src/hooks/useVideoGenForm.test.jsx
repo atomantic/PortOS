@@ -67,13 +67,13 @@ const H3_REF2VA = {
   defaultFrames: 124,
 };
 const MODELS = [MLX, LTX2];
-const STATUS = { connected: true, defaultModel: MLX.id };
+const MODEL_CONTEXT = { defaultModel: MLX.id };
 
-const render = ({ models = MODELS, status = STATUS, availableLoras = [], grokEnabled = false, url = '/media/video' } = {}) => {
+const render = ({ models = MODELS, modelContext = MODEL_CONTEXT, availableLoras = [], grokEnabled = false, url = '/media/video' } = {}) => {
   const wrapper = ({ children }) => <MemoryRouter initialEntries={[url]}>{children}</MemoryRouter>;
   return renderHook(
     (props) => useVideoGenForm(props),
-    { wrapper, initialProps: { models, status, availableLoras, grokEnabled } },
+    { wrapper, initialProps: { models, modelContext, availableLoras, grokEnabled } },
   );
 };
 
@@ -94,7 +94,7 @@ describe('useVideoGenForm', () => {
     vi.unstubAllGlobals();
   });
 
-  it('seeds the model from status.defaultModel without clobbering a URL pick', async () => {
+  it('seeds the model from modelContext.defaultModel without clobbering a URL pick', async () => {
     const { result } = render();
     await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
 
@@ -324,7 +324,7 @@ describe('useVideoGenForm', () => {
   it('clears sampler overrides on an automatic mode-compatible model fallback', async () => {
     const { result } = render({
       models: [WAN_T2V, WAN_TI2V],
-      status: { connected: true, defaultModel: WAN_T2V.id },
+      modelContext: { defaultModel: WAN_T2V.id },
     });
     await waitFor(() => expect(result.current.modelId).toBe(WAN_T2V.id));
     act(() => {
@@ -340,7 +340,7 @@ describe('useVideoGenForm', () => {
   it('does not submit chunks for a T2V-only Wan profile', async () => {
     const { result } = render({
       models: [WAN_T2V],
-      status: { connected: true, defaultModel: WAN_T2V.id },
+      modelContext: { defaultModel: WAN_T2V.id },
     });
     await waitFor(() => expect(result.current.modelId).toBe(WAN_T2V.id));
     act(() => {
@@ -353,7 +353,7 @@ describe('useVideoGenForm', () => {
   it('normalizes MiniMax H3 to its fixed temporal and sampler contract', async () => {
     const { result } = render({
       models: [MLX, H3],
-      status: { connected: true, defaultModel: MLX.id },
+      modelContext: { defaultModel: MLX.id },
     });
     await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
     act(() => {
@@ -388,7 +388,7 @@ describe('useVideoGenForm', () => {
   // Substitutable prompt conditioner (#4081).
   describe('text encoder selection', () => {
     const renderWithH3 = async () => {
-      const rendered = render({ models: [MLX, H3], status: { connected: true, defaultModel: MLX.id } });
+      const rendered = render({ models: [MLX, H3], modelContext: { defaultModel: MLX.id } });
       await waitFor(() => expect(rendered.result.current.modelId).toBe(MLX.id));
       act(() => rendered.result.current.handleModelChange(H3.id));
       await waitFor(() => expect(rendered.result.current.modelId).toBe(H3.id));
@@ -398,7 +398,7 @@ describe('useVideoGenForm', () => {
     // An empty list is what hides the picker; a model with substitutions
     // exposes them straight off the server-decorated entry.
     it('exposes only the selected model’s options', async () => {
-      const { result } = render({ models: [MLX, H3], status: { connected: true, defaultModel: MLX.id } });
+      const { result } = render({ models: [MLX, H3], modelContext: { defaultModel: MLX.id } });
       await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
       expect(result.current.textEncoderOptions).toEqual([]);
       act(() => result.current.handleModelChange(H3.id));
@@ -465,7 +465,7 @@ describe('useVideoGenForm', () => {
   it('preserves H3 native 32px-grid geometry in the submitted payload', async () => {
     const { result } = render({
       models: [MLX, H3],
-      status: { connected: true, defaultModel: MLX.id },
+      modelContext: { defaultModel: MLX.id },
     });
     await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
     act(() => result.current.handleModelChange(H3.id));
@@ -482,7 +482,7 @@ describe('useVideoGenForm', () => {
   it('offers MiniMax H3 image mode, chaining and a non-advisory last frame', async () => {
     const { result } = render({
       models: [MLX, H3],
-      status: { connected: true, defaultModel: MLX.id },
+      modelContext: { defaultModel: MLX.id },
     });
     await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
     act(() => {
@@ -791,7 +791,7 @@ describe('useVideoGenForm', () => {
   it('moves a fixed-profile remix to an editable model while preserving its restored controls', async () => {
     const { result } = render({
       models: [MLX, H3],
-      status: { connected: true, defaultModel: MLX.id },
+      modelContext: { defaultModel: MLX.id },
     });
     await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
 
@@ -818,7 +818,7 @@ describe('useVideoGenForm', () => {
   it('uses the same editable-model fallback for a cross-page Remix handoff', async () => {
     const { result } = render({
       models: [MLX, H3],
-      status: { connected: true, defaultModel: MLX.id },
+      modelContext: { defaultModel: MLX.id },
       url: `/media/video?modelId=${H3.id}&numFrames=124&steps=9&guidanceScale=0`,
     });
 
@@ -938,10 +938,10 @@ describe('useVideoGenForm — i2v reference mode (#4874)', () => {
     lastFrameAnchored: true, supportedModes: RUNTIME_MODES,
   };
   const LTX25_MODELS = [LTX25, LTX2];
-  const LTX25_STATUS = { connected: true, defaultModel: LTX25.id };
+  const LTX25_MODEL_CONTEXT = { defaultModel: LTX25.id };
 
   const inImageMode = async (opts = {}) => {
-    const { result } = render({ models: LTX25_MODELS, status: LTX25_STATUS, ...opts });
+    const { result } = render({ models: LTX25_MODELS, modelContext: LTX25_MODEL_CONTEXT, ...opts });
     await act(async () => { result.current.handleModeChange('image'); });
     return result;
   };
@@ -982,7 +982,7 @@ describe('useVideoGenForm — i2v reference mode (#4874)', () => {
       (props) => useVideoGenForm(props),
       {
         wrapper: ({ children }) => <MemoryRouter initialEntries={['/media/video']}>{children}</MemoryRouter>,
-        initialProps: { models: [], status: LTX25_STATUS, availableLoras: [], grokEnabled: false },
+        initialProps: { models: [], modelContext: LTX25_MODEL_CONTEXT, availableLoras: [], grokEnabled: false },
       },
     );
     await act(async () => {
@@ -990,7 +990,7 @@ describe('useVideoGenForm — i2v reference mode (#4874)', () => {
     });
     expect(result.current.i2vReferenceMode).toBe('inspire');
 
-    rerender({ models: LTX25_MODELS, status: LTX25_STATUS, availableLoras: [], grokEnabled: false });
+    rerender({ models: LTX25_MODELS, modelContext: LTX25_MODEL_CONTEXT, availableLoras: [], grokEnabled: false });
     await waitFor(() => expect(result.current.currentModel?.id).toBe(LTX25.id));
     expect(result.current.i2vReferenceMode).toBe('inspire');
   });

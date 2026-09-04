@@ -528,7 +528,7 @@ export default function AccountsTab() {
                   <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                     <button
                       onClick={() => handleEdit(account)}
-                      className="p-1.5 text-gray-400 hover:text-white rounded transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center"
+                      className="min-h-[44px] min-w-[44px] flex items-center justify-center p-1.5 text-gray-400 hover:text-white rounded transition-colors"
                       title="Edit" aria-label="Edit"
                     >
                       <Edit3 className="w-4 h-4" />

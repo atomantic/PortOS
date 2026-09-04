@@ -74,8 +74,8 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `tailwindcss` | 1 | KEEP | styling | |
 | `@vitejs/plugin-react` | 1 | KEEP | build | |
 | `vite` | 1 | KEEP | build | |
-| `vitest` | 1 | KEEP | client test runner | jsdom environment |
-| `jsdom` | 1 | KEEP | test DOM | Paired with vitest |
+| `vitest` | 1 | KEEP | client test runner | happy-dom environment |
+| `happy-dom` | 1 | KEEP | test DOM | Paired with vitest. Replaced `jsdom` in #6144 — same suite, ~65% less time in `environment` |
 | `@testing-library/jest-dom` | 1 | KEEP | test matchers | |
 | `@testing-library/dom` | 1 | KEEP | DOM test utilities | Foundation for the client Testing Library stack |
 | `@testing-library/react` | 1 | KEEP | component tests | |
@@ -181,3 +181,11 @@ These exist purely to force-bump transitive deps; revisit if `npm audit` flags n
 `ignore-scripts=true` is pinned in **every** workspace's own `.npmrc` (root, `client/`, `server/`, `autofixer/`, `browser/`) — not just the repo root. The list is not maintained by hand: `discoverWorkspaces()` in `scripts/trusted-rebuilds.js` globs every top-level directory carrying a `package.json`, and the test asserts each discovered one has the setting — so a workspace added later is caught rather than silently unguarded. npm resolves the project `.npmrc` from the *local prefix* and never walks up the directory tree, so a root-only setting does not cover `cd client && npm install` or `npm ci --prefix server` (what CI runs). Deleting any workspace `.npmrc` silently re-grants every dependency in that workspace an install-time code-execution slot — the vector the Shai-Hulud worm used.
 
 Packages that legitimately need an install script are named explicitly in the allowlist in `scripts/trusted-rebuilds.js`, the single source consumed by `npm run setup`, `scripts/ensure-deps.js`, `setup.ps1`, `update.sh` / `update.ps1`, and CI. `scripts/trusted-rebuilds.test.js` fails if a workspace `.npmrc` loses the setting, or if a dependency appears with an install hook that nobody has explicitly decided about. Because CI caches `server/node_modules` between jobs, `scripts/trusted-rebuild-stamp.js` writes a mark into the tree in the same step that rebuilds it and checks that mark after a cache restore — a tree cached before the rebuild is otherwise indistinguishable from a good one, since the allowlisted packages all ship prebuilt bindings and import fine either way.
+
+## Inline Audit Policy
+
+`audit=false` is pinned in the same five `.npmrc` files, enforced by the same discovered-workspace test. This turns off only the advisory lookup `npm install` performs *after* it has already resolved and written `node_modules` — it does not change what gets installed.
+
+It is off because it is a hang risk on the path that matters least. The lookup only prints a summary, but npm **blocks** on it, and a request that stalls costs `fetch-timeout` (300s by default) times `fetch-retries` (2) before npm gives up. On 2026-09-03 the endpoint began completing the TLS handshake and then never sending a byte; a warm root install that takes 0.15s took **153.88s**, of which 0.22s was CPU and the rest was a socket wait. Every managed install path runs four workspace installs in sequence (`update.sh`, `update.ps1`, `setup.ps1`, `npm run setup`, `scripts/ensure-deps.js`), so a self-update stalled for roughly ten minutes on a report written to `data/update.log`. PortOS is distributed software that self-updates on machines nobody is watching, so a third-party endpoint must not be able to wedge the update path for something advisory.
+
+Nothing is lost. Dependency safety here is enforced statically rather than by a live network call: direct dependencies are pinned to exact versions and the `overrides` blocks are pinned too, both asserted by `server/dependency-overrides.test.js` — which deliberately replaced an `npm audit` shell-out because "audit needs the network and its output drifts". CI never ran `npm audit` either. Run `npm audit` directly when you want the report; the periodic dependency audits recorded in this document are where it belongs.

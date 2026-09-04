@@ -27,6 +27,7 @@ import { detectSkillTemplates, getAgentInstructionsContext, loadSkillTemplates }
 import { buildCompactionSection, buildTaskBlock, reconcileSplitContext } from './promptSections/taskContext.js';
 import { applySlashdoInvocation } from './promptSections/slashdo.js';
 import { manualForgeCli, resolveManualForgeCli } from './promptSections/forge.js';
+import { buildOrchestrationDoctrineSection } from './promptSections/orchestrationDoctrine.js';
 import { buildPlannerAttributionSection } from './promptSections/plannerAttribution.js';
 import { isPublicReviewNoToolProfile, isPublicReviewRestrictedProfile } from '../lib/agentExecutionProfiles.js';
 import {
@@ -58,6 +59,7 @@ export {
   loadSkillTemplate,
   loadSkillTemplates,
 } from './promptSections/instructions.js';
+export { buildOrchestrationDoctrineSection } from './promptSections/orchestrationDoctrine.js';
 export { buildPlannerAttributionSection } from './promptSections/plannerAttribution.js';
 export { buildCompactionSection, buildTaskBlock, reconcileSplitContext } from './promptSections/taskContext.js';
 export {
@@ -377,6 +379,9 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   const plannerAttributionSection = skipDevContext
     ? ''
     : buildPlannerAttributionSection({ providerId, model: providerModel });
+  // Architect doctrine for an orchestrated run (#5992). '' for every direct-mode
+  // task, which is the default, so this is inert unless a profile is configured.
+  const orchestrationSection = buildOrchestrationDoctrineSection(task);
   // Fetch independent context sections in parallel
   const [memorySection, agentInstructionsSection, digitalTwinSection] = await Promise.all([
     skipDevContext
@@ -695,7 +700,7 @@ ${task.metadata.jiraBranch ? 'Commit your changes to this branch. Do NOT switch 
   }).catch(() => null);
 
   if (promptData?.prompt) {
-    return `${promptData.prompt}${plannerAttributionSection ? `\n\n${plannerAttributionSection}` : ''}\n\n${UNATTENDED_RUN_RULE}${uiAuditRuntimeSection ? `\n\n${uiAuditRuntimeSection}` : ''}\n\n${PM2_SAFETY_RULE}`;
+    return `${promptData.prompt}${orchestrationSection ? `\n\n${orchestrationSection}` : ''}${plannerAttributionSection ? `\n\n${plannerAttributionSection}` : ''}\n\n${UNATTENDED_RUN_RULE}${uiAuditRuntimeSection ? `\n\n${uiAuditRuntimeSection}` : ''}\n\n${PM2_SAFETY_RULE}`;
   }
 
   const taskBlock = buildTaskBlock(task, { screenshotsAsList: false });
@@ -713,7 +718,7 @@ ${taskBlock.attachments}
 ${worktreeSection}
 ${pipelineSection}
 ${jiraSection}
-${plannerAttributionSection ? `${plannerAttributionSection}\n` : ''}${simplifySection}
+${orchestrationSection ? `${orchestrationSection}\n` : ''}${plannerAttributionSection ? `${plannerAttributionSection}\n` : ''}${simplifySection}
 ${tuiCompletionSection}
 ${reviewLoopSection}
 ${reviewLoopFollowUpSection}
@@ -981,6 +986,13 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // and a model cannot name itself.
   const lightPlannerSection = buildPlannerAttributionSection({ providerId, model: providerModel, forgeCli: resolvedForgeCli });
   if (lightPlannerSection) contractSections.push(lightPlannerSection);
+
+  // --- Orchestrated execution ---------------------------------------------
+  // Sits directly after planner attribution and before the worktree/completion
+  // contract: it reframes the whole run (specs, not code), so it has to land
+  // before the sections that tell the agent how to finish one. '' when direct.
+  const lightOrchestrationSection = buildOrchestrationDoctrineSection(task);
+  if (lightOrchestrationSection) contractSections.push(lightOrchestrationSection);
 
   // --- Worktree ----------------------------------------------------------
   if (worktreeInfo) {

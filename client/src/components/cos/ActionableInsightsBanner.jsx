@@ -244,7 +244,7 @@ export default function ActionableInsightsBanner({ insights, onTaskUnblocked, on
           )}
           <button
             onClick={() => handleDismiss(primaryInsight.type)}
-            className="p-1.5 text-gray-500 hover:text-gray-300 hover:bg-white/5 rounded transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center p-1.5 text-gray-500 hover:text-gray-300 hover:bg-white/5 rounded transition-colors"
             title="Dismiss" aria-label="Dismiss"
           >
             <X size={14} />

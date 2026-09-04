@@ -5,7 +5,7 @@
  * Provides semantic search capabilities for the memory system.
  */
 
-import { DEFAULT_MEMORY_CONFIG } from './memoryBackend.js';
+import { DEFAULT_MEMORY_CONFIG } from './memoryConfig.js';
 import { getProviderById } from './providers.js';
 import { getConfig as getCosConfig } from './cosState.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';

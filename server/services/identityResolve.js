@@ -108,6 +108,29 @@ export async function loadResolverContext() {
 }
 
 /**
+ * Memoizing `resolveHandle` bound to ONE context (#6025).
+ *
+ * `resolveHandle` is pure for a given ctx but not cheap — it runs the handle
+ * regexes, phone/email normalization, a Tribe index match and a Contacts lookup
+ * on every call. Bulk callers (the outreach scan, timeline enrichment) hit the
+ * same handful of handles thousands of times per pass, so hand them one resolver
+ * whose Map collapses that to once per distinct handle.
+ *
+ * The cache lives as long as the returned function — build one per pass so it
+ * can never outlive the ctx it resolves against.
+ */
+export function createHandleResolver(ctx) {
+  const cache = new Map();
+  return (handle) => {
+    const key = handle == null ? '' : String(handle);
+    if (cache.has(key)) return cache.get(key);
+    const res = resolveHandle(key, ctx);
+    cache.set(key, res);
+    return res;
+  };
+}
+
+/**
  * Resolve many handles with one shared context (avoids N Tribe loads).
  */
 export function resolveHandles(handles = [], ctx) {
@@ -153,15 +176,21 @@ export function enrichConversationRow(row, ctx) {
 
 /**
  * Enrich activity events: attach counterpart displayName on participants + title.
+ *
+ * `resolve` optionally overrides how a handle is resolved — pass a
+ * `createHandleResolver(ctx)` when enriching many events so repeated handles are
+ * resolved once instead of once per event (#6025). Defaults to an uncached
+ * `resolveHandle` against `ctx`.
  */
-export function enrichActivityEvent(event, ctx) {
+export function enrichActivityEvent(event, ctx, resolve) {
   if (!event) return event;
+  const resolveOne = resolve || ((h) => resolveHandle(h, ctx));
   const handle = event.metadata?.handle || '';
-  const res = resolveHandle(handle, ctx);
+  const res = resolveOne(handle);
   const participants = (event.participants || []).map((p) => {
     const key = p.phone || p.email || '';
     if (!key) return p;
-    const pr = resolveHandle(key, ctx);
+    const pr = resolveOne(key);
     if (!pr.displayName) return p;
     return {
       ...p,

@@ -62,6 +62,16 @@ const normalize = (text) => {
 
 export const isDestructiveLabel = (label) => DESTRUCTIVE_LABEL_RE.test(label || '');
 
+// The label heuristic above is a backstop, not the only way a control can
+// require confirmation: `data-voice-guard="confirm"` (client/src/services/
+// domIndex.js) annotates a control whose outbound effect the label alone
+// doesn't name — "Send" on a drafts row, "BTW" pasting into a live agent
+// session — so it is gated regardless of what it's called and however it
+// gets relabeled later. `entry` is a UI index entry (buildIndex output),
+// carrying `guard` only when the client annotated the element.
+export const requiresConfirmation = (entry) =>
+  entry?.guard === 'confirm' || isDestructiveLabel(entry?.label);
+
 export const isAffirmative = (text) => AFFIRM_RE.test(normalize(text));
 export const isNegative = (text) => NEGATIVE_RE.test(normalize(text));
 

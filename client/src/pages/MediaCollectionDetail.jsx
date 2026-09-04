@@ -227,11 +227,21 @@ export default function MediaCollectionDetail() {
   const bulkStar = async (starred) => {
     if (selectedItems.length === 0) return;
     setBulkBusy(true);
+    let successCount = 0;
+    let failedCount = 0;
     for (const it of selectedItems) {
-      await updateAnnotation(it.key, { starred });
+      const { ok } = await updateAnnotation(it.key, { starred }, { silent: true });
+      if (ok) successCount++; else failedCount++;
     }
     setBulkBusy(false);
-    toast.success(`${starred ? 'Favorited' : 'Unfavorited'} ${selectedItems.length} item${selectedItems.length === 1 ? '' : 's'}`);
+    const verb = starred ? 'Favorited' : 'Unfavorited';
+    if (failedCount === 0) {
+      toast.success(`${verb} ${successCount} item${successCount === 1 ? '' : 's'}`);
+    } else if (successCount === 0) {
+      toast.error(`Failed to ${starred ? 'favorite' : 'unfavorite'} items`);
+    } else {
+      toast.error(`${verb} ${successCount} item${successCount === 1 ? '' : 's'}; ${failedCount} failed`);
+    }
   };
 
   const bulkRemove = async () => {
@@ -266,6 +276,11 @@ export default function MediaCollectionDetail() {
       });
       if (r && r !== 'dupe') { added++; placedKeys.add(it.key); }
     }
+    // A move is two writes: add to the target, then remove from here. When the
+    // second half fails the item now lives in BOTH collections — that is a
+    // half-completed move, not a success, so track those keys separately from
+    // the add failures and keep them selected for a retry.
+    const removeFailedKeys = new Set();
     if (mode === 'move' && placedKeys.size > 0) {
       if (isUnsorted) {
         // Source is synthetic — placing items in any real collection takes
@@ -276,18 +291,34 @@ export default function MediaCollectionDetail() {
         for (const it of selectedItems) {
           if (!placedKeys.has(it.key)) continue;
           const r = await removeMediaCollectionItem(collection.id, it.key, { silent: true }).catch(() => null);
-          if (r) lastOk = r;
+          if (r) lastOk = r; else removeFailedKeys.add(it.key);
         }
+        // The last successful removal carries the authoritative server state,
+        // so a partial failure still reconciles the items that did move out.
         if (lastOk) setCollection(lastOk);
       }
     }
     setBulkBusy(false);
-    exitSelectMode();
+    if (removeFailedKeys.size > 0) {
+      // Stay in select mode with only the half-moved items selected so the
+      // user can re-run the move (or remove) on exactly what failed.
+      setSelected(removeFailedKeys);
+    } else {
+      exitSelectMode();
+    }
     const verb = mode === 'move' ? (isUnsorted ? 'Filed' : 'Moved') : 'Copied';
     const note = dupes > 0 ? ` (${dupes} already there)` : '';
     const stranded = selectedItems.length - added - dupes;
-    if (stranded > 0) toast.error(`${verb} ${added} to "${targetName}"${note}; ${stranded} failed`);
-    else toast.success(`${verb} ${added} to "${targetName}"${note}`);
+    const addNote = stranded > 0 ? `; ${stranded} failed to add` : '';
+    if (removeFailedKeys.size > 0) {
+      // Deliberately says "Copied" — calling a half-completed move a "Move"
+      // is the false success this branch exists to prevent.
+      toast.error(`Copied ${added} to "${targetName}"${note}, but ${removeFailedKeys.size} could not be removed from "${collection.name}"${addNote}`);
+    } else if (stranded > 0) {
+      toast.error(`${verb} ${added} to "${targetName}"${note}; ${stranded} failed`);
+    } else {
+      toast.success(`${verb} ${added} to "${targetName}"${note}`);
+    }
   };
 
   // Remix / SendToVideo / Continue / Clean share a single implementation
@@ -514,7 +545,7 @@ export default function MediaCollectionDetail() {
               type="button"
               onClick={exitSelectMode}
               disabled={bulkBusy}
-              className="p-1 text-gray-400 hover:text-white disabled:opacity-40"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-white disabled:opacity-40"
               title="Exit select mode"
               aria-label="Exit select mode"
             >

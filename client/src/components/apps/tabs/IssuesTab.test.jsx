@@ -29,6 +29,9 @@ vi.mock('../../../services/api', () => ({
   getAppIssues: vi.fn(),
   createSlashdoTask: vi.fn(),
   getProviders: vi.fn(),
+  // The tab reads the reviewers a claim will actually run so it can name them
+  // (and say whether a claim-work override supplied them).
+  getAppClaimReviewers: vi.fn(),
 }));
 
 import * as api from '../../../services/api';
@@ -77,6 +80,10 @@ beforeEach(() => {
   api.getAppIssues.mockResolvedValue(okPayload([ISSUE]));
   api.createSlashdoTask.mockResolvedValue({ id: 'task-1' });
   api.getProviders.mockResolvedValue({ providers: [] });
+  api.getAppClaimReviewers.mockResolvedValue({
+    source: 'defaults', reviewers: ['antigravity'], usernames: [], optionalReviewers: [],
+    reviewerMaxRounds: {}, reviewerModels: {}, reviewerEfforts: {}, csv: 'antigravity',
+  });
 });
 
 afterEach(() => {
@@ -129,6 +136,22 @@ describe('IssuesTab', () => {
     const chip = await screen.findByTitle('No forge color');
     expect(chip.style.color).toBe('');
     expect(chip.className).toContain('text-gray-300');
+  });
+
+  it('shows a comment count only for issues that have comments', async () => {
+    api.getAppIssues.mockResolvedValue(okPayload([
+      { ...ISSUE, number: 42, title: 'Crash on save', commentCount: 3 },
+      { ...ISSUE, number: 43, title: 'Add CSV export', commentCount: 1 },
+      { ...ISSUE, number: 44, title: 'Untouched', commentCount: 0 },
+    ]));
+    await renderTab();
+
+    await screen.findByText('Crash on save');
+    // Spelled out rather than a bare digit beside an icon, so the count reads
+    // the same to a screen reader as its `opened by …` / `updated …` siblings.
+    expect(screen.getByText(/3 comments/)).toBeInTheDocument();
+    expect(screen.getByText(/1 comment$/)).toBeInTheDocument();
+    expect(screen.queryByText(/0 comment/)).not.toBeInTheDocument();
   });
 
   it('keeps the description collapsed until the user expands it', async () => {
@@ -249,6 +272,42 @@ describe('IssuesTab', () => {
       resolveClaim({ id: 'task-1', status: 'pending' });
     });
     expect(screen.getByRole('link', { name: /Active/ })).toBeInTheDocument();
+  });
+
+  // This tab offers no reviewer picker, so before it named them the reviewer
+  // chain a Claim would run was invisible here — and it is not the Code
+  // Reviewers panel's list whenever a claim-work override exists. That gap sent
+  // claims to codex + claude for weeks after the install default had been moved.
+  it('names the reviewers a Claim will run, and blames the claim-work override that supplied them', async () => {
+    api.getAppClaimReviewers.mockResolvedValue({
+      source: 'task-override', reviewers: ['codex', 'claude'], usernames: [], optionalReviewers: [],
+      reviewerMaxRounds: {}, reviewerModels: {}, reviewerEfforts: {}, csv: 'codex,claude',
+    });
+
+    await renderTab();
+
+    expect(await screen.findByText('codex,claude')).toBeInTheDocument();
+    expect(screen.getByText(/claim-work/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Chief of Staff/ })).toHaveAttribute('href', '/cos/schedule');
+  });
+
+  it('points at the Code Reviewers panel when no override is in play', async () => {
+    await renderTab();
+
+    expect(await screen.findByText('antigravity')).toBeInTheDocument();
+    expect(screen.queryByText(/claim-work/)).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Code Reviewers/ })).toHaveAttribute('href', '/models/code-reviewers');
+  });
+
+  it('says nothing about reviewers when the lookup failed, rather than implying none are configured', async () => {
+    // "couldn't ask" and "nothing configured" must not collapse — an empty chain
+    // rendered here would read as a claim that merges with no review at all.
+    api.getAppClaimReviewers.mockRejectedValue(new Error('offline'));
+
+    await renderTab();
+
+    expect(await screen.findByText('Crash on save')).toBeInTheDocument();
+    expect(screen.queryByText('Reviewed by')).not.toBeInTheDocument();
   });
 
   it('sends the page-level provider/model/effort pin along with a claim', async () => {

@@ -1,18 +1,58 @@
 import { useEffect, useState } from 'react';
-import { HardDrive, RefreshCw, Save, Square, Download, Terminal } from 'lucide-react';
+import { HardDrive, RefreshCw, Save, Square, Download, Terminal, X } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
+import ProgressBar from '../ui/ProgressBar';
+import { formatBytes } from '../../utils/formatters';
 
 /**
  * Slotstream launcher — the same shape as the MTPLX launcher above it: a PM2
  * process (`portos-slotstream`) PortOS starts, stops, logs, and can idle-stop.
  *
- * Weights are a later, explicit user action. A start never fetches them. The
- * memory plan (target / peak / warm decode) is shown here rather than hidden,
- * and an explicit memory-cap override is saved onto the launch line an
- * on-demand start replays.
+ * Weights are a later, explicit user action. A start never fetches them — but
+ * the download IS in the app, from the picker below, because the alternative
+ * was telling the user to hand-assemble a 100 GB+ checkpoint directory in the
+ * middle of a lifecycle PortOS manages end to end. The memory plan (target /
+ * peak / warm decode) is shown here rather than hidden, and an explicit
+ * memory-cap override is saved onto the launch line an on-demand start replays.
  */
 
 const btnClass = 'flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg transition-colors disabled:opacity-50';
+
+/**
+ * A download reports byte counters as soon as the first shard moves; the
+ * resolving pass before that has none, which is the shared bar's indeterminate
+ * case rather than a misleading 0%.
+ */
+function DownloadProgress({ download, onCancel, cancelling }) {
+  const { received = 0, total = 0, message } = download;
+  const pct = total > 0 ? (received / total) * 100 : null;
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-2">
+        <div className="flex-1 min-w-0">
+          <ProgressBar percent={pct} track="border" label={`Downloading ${download.model || 'checkpoint'}`} />
+        </div>
+        {onCancel && (
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={cancelling}
+            className={`${btnClass} bg-port-warning/20 hover:bg-port-warning/30 text-port-warning shrink-0`}
+            title="Stop this transfer — what has landed is kept, so downloading again resumes"
+          >
+            {cancelling ? <BrailleSpinner /> : <X size={13} />}
+            Cancel
+          </button>
+        )}
+      </div>
+      <p className="text-[11px] text-gray-500">
+        {pct === null
+          ? (message || 'Downloading…')
+          : `${formatBytes(received)} of ${formatBytes(total)} (${Math.round(pct)}%)`}
+      </p>
+    </div>
+  );
+}
 
 export default function SlotstreamServerCard({
   status,
@@ -24,8 +64,12 @@ export default function SlotstreamServerCard({
   onStart,
   onStop,
   onInstall,
+  onDownloadModel,
+  onCancelDownload,
+  download,
 }) {
   const [model, setModel] = useState('');
+  const [downloadModel, setDownloadModel] = useState('');
   const [port, setPort] = useState('');
   const [memoryGb, setMemoryGb] = useState('');
   const [seeded, setSeeded] = useState(false);
@@ -49,6 +93,9 @@ export default function SlotstreamServerCard({
   const emptyCache = Boolean(status?.installed) && cached.length === 0 && !status?.cacheError;
   const external = status?.running && status?.managed === false;
   const plan = status?.memoryPlan;
+  const catalog = status?.catalog || [];
+  const downloading = Boolean(download);
+  const selectedEntry = catalog.find((entry) => entry.id === downloadModel) || null;
 
   const launchPayload = () => ({
     model: model || null,
@@ -66,7 +113,7 @@ export default function SlotstreamServerCard({
         <button
           onClick={onRefresh}
           disabled={loading}
-          className="p-1 text-gray-400 hover:text-white transition-colors"
+          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-white transition-colors"
           title="Refresh Slotstream status"
           aria-label="Refresh Slotstream status"
         >
@@ -128,7 +175,7 @@ export default function SlotstreamServerCard({
         <div className="bg-port-bg border border-port-border rounded-lg p-3 space-y-3">
           {emptyCache ? (
             <p className="text-xs text-port-warning">
-              No checkpoint is cached, so a start would exit before it binds a port. A start never downloads weights — place a checkpoint directory in <code className="text-gray-300">{status.cacheDir || '~/.slotstream/models'}</code>, then start Slotstream again.
+              No checkpoint is cached, so a start would exit before it binds a port. A start never downloads weights — pick one below and download it, or place a checkpoint directory in <code className="text-gray-300">{status.cacheDir || '~/.slotstream/models'}</code> yourself.
             </p>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -197,6 +244,51 @@ export default function SlotstreamServerCard({
             {actionInProgress === 'runtime-save-slotstream-launch' ? <BrailleSpinner /> : <Save size={13} />}
             Save configuration
           </button>
+        </div>
+      )}
+
+      {status?.installed && status?.supported !== false && catalog.length > 0 && onDownloadModel && (
+        <div className="bg-port-bg border border-port-border rounded-lg p-3 space-y-2">
+          <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2 sm:items-end">
+            <div className="space-y-1">
+              <label htmlFor="slotstream-download" className="block text-xs text-gray-400">Add a checkpoint</label>
+              <select
+                id="slotstream-download"
+                value={downloadModel}
+                onChange={(e) => setDownloadModel(e.target.value)}
+                className="w-full bg-port-card border border-port-border rounded px-2 py-1.5 text-xs text-white"
+              >
+                <option value="">Choose a mixture-of-experts checkpoint…</option>
+                {catalog.map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.label} — {entry.params}, ~{formatBytes(entry.approxBytes)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button
+              onClick={() => onDownloadModel(downloadModel)}
+              disabled={busy || downloading || !downloadModel}
+              className={`${btnClass} bg-port-accent/20 hover:bg-port-accent/30 text-port-accent shrink-0`}
+              title="Check the size and free disk, then download this checkpoint"
+            >
+              {actionInProgress === 'slotstream-download' ? <BrailleSpinner /> : <Download size={13} />}
+              Download checkpoint
+            </button>
+          </div>
+          {selectedEntry && (
+            <p className="text-[11px] text-gray-500">{selectedEntry.note}</p>
+          )}
+          <p className="text-[11px] text-gray-500">
+            Streaming only pays off on a mixture-of-experts checkpoint, where a few experts per token are read from SSD — so this is a curated list, not a Hugging Face search. PortOS shows the size and free disk before the transfer starts.
+          </p>
+          {download && (
+            <DownloadProgress
+              download={download}
+              onCancel={onCancelDownload ? () => onCancelDownload(download.model) : null}
+              cancelling={actionInProgress === 'slotstream-download-cancel'}
+            />
+          )}
         </div>
       )}
 

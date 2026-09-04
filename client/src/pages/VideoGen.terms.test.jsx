@@ -7,6 +7,7 @@ import {
   resetVideoGenMockState,
   state,
   videoGenModel,
+  videoGenModelContext,
   videoGenStatus,
   videoGenTermsGate,
 } from '../test/videoGenPageMocks.jsx';
@@ -33,6 +34,7 @@ describe('VideoGen MiniMax H3 orchestration', () => {
     state.generateVideo.mockResolvedValue({ jobId: 'job-1' });
     state.repair.mockResolvedValue({ ok: true });
     state.getVideoGenStatus.mockResolvedValue(videoGenStatus([H3_ONE, H3_TWO]));
+    state.getVideoGenModelContext.mockResolvedValue(videoGenModelContext([H3_ONE, H3_TWO]));
     state.attach.mockImplementation(async (_jobId, handlers) => {
       handlers.onComplete({ result: { filename: 'example.mp4' } });
       return { filename: 'example.mp4' };
@@ -98,10 +100,14 @@ describe('VideoGen MiniMax H3 orchestration', () => {
   it('refreshes the model capability payload after runtime setup completes', async () => {
     await renderVideoGenPage();
     await waitFor(() => expect(screen.getByLabelText('Model')).toHaveValue(H3_ONE.id));
-    const before = state.getVideoGenStatus.mock.calls.length;
+    const beforeStatus = state.getVideoGenStatus.mock.calls.length;
+    const beforeContext = state.getVideoGenModelContext.mock.calls.length;
 
     await act(async () => { await state.runtimeInstallComplete(); });
 
-    await waitFor(() => expect(state.getVideoGenStatus).toHaveBeenCalledTimes(before + 1));
+    // The install moves BOTH halves: the hardware decoration on the model list
+    // and the python health the connectivity banner reads.
+    await waitFor(() => expect(state.getVideoGenModelContext).toHaveBeenCalledTimes(beforeContext + 1));
+    expect(state.getVideoGenStatus).toHaveBeenCalledTimes(beforeStatus + 1);
   });
 });

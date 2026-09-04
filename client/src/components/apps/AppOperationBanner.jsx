@@ -12,7 +12,7 @@ const LABELS = {
  * app list rather than inside the expanded row so collapsing the row — or
  * returning to /apps mid-operation — still shows what is running (#3435).
  */
-export default function AppOperationBanner({ appName, type, steps, error, completed, onDismiss, completedMessage }) {
+export default function AppOperationBanner({ appName, type, steps, error, completed, onDismiss, completedMessage, restarting = false }) {
   const labels = LABELS[type] || LABELS.update;
   const name = appName || 'app';
   const heading = error ? `${labels.failed} ${name}` : completed ? `${labels.done} ${name}` : `${labels.running} ${name}…`;
@@ -44,13 +44,15 @@ export default function AppOperationBanner({ appName, type, steps, error, comple
               ? error
               : completed
                 ? completedMessage || 'You can start another operation now.'
-                : 'This keeps running if you collapse the row or leave the page.'}
+                : restarting
+                  ? 'PortOS is restarting — this page reloads once it answers again.'
+                  : 'This keeps running if you collapse the row or leave the page.'}
           </div>
         </div>
         {onDismiss && (
           <button
             onClick={onDismiss}
-            className="shrink-0 p-1 rounded text-gray-400 hover:text-white focus:outline-hidden focus:ring-2 focus:ring-port-accent"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center shrink-0 p-1 rounded text-gray-400 hover:text-white focus:outline-hidden focus:ring-2 focus:ring-port-accent"
             aria-label={`Dismiss ${name} operation status`}
           >
             <X size={16} aria-hidden="true" />

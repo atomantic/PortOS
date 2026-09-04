@@ -1,4 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+
+// serve-model takes the MACHINE-WIDE heavy-local-job claim, whose path is
+// derived from PATHS.data at module load. Without this redirect the suite wrote
+// that claim into the developer's live data/ tree — briefly gating their real
+// local renders, and stranding the file whenever a case failed mid-claim
+// (#6176).
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-readiness-') }));
+afterAll(cleanupTempDataRoots);
 import express, { Router } from 'express';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { request } from '../lib/testHelper.js';

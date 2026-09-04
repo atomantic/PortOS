@@ -1177,6 +1177,24 @@ describe('cosTaskStore.updateTask', () => {
     expect(blocked.metadata.resumeWorktreePath).toBe('/w/agent-x');
   });
 
+  // Same for a permanent provider-config block (#6193): the resolved provider is
+  // `api`-type and has no file-writing harness, so the task waits for the user to
+  // add a CLI provider. Dropping the pointer means the revived task starts on a
+  // fresh branch and orphans the worktree its dead agent left behind.
+  it('keeps the resume pointer through a provider-config block', async () => {
+    await addTask({ description: 'unrunnable provider', id: 'task-provider-config' }, 'user');
+    await updateTask('task-provider-config', {
+      metadata: { existingBranch: 'cos/b', resumedFromAgentId: 'agent-x', resumeWorktreePath: '/w/agent-x' }
+    }, 'user');
+    const blocked = await updateTask('task-provider-config', {
+      status: 'blocked',
+      metadata: { blockedCategory: 'provider-config' }
+    }, 'user');
+    expect(blocked.metadata.existingBranch).toBe('cos/b');
+    expect(blocked.metadata.resumedFromAgentId).toBe('agent-x');
+    expect(blocked.metadata.resumeWorktreePath).toBe('/w/agent-x');
+  });
+
   // An `existingBranch` with no `resumedFromAgentId` beside it was never written
   // by the resume mechanism — it is the task's OWN configuration. A merge
   // follow-up is the producer: it exists to land the PR on that branch. Stripping
@@ -1626,7 +1644,10 @@ describe('cosTaskStore — stale failure-artifact reaper (#2619)', () => {
       // The workspace blocks are an open decision too: the task waits for the
       // user to fix the app's Repository Path, so auto-completing it at 14 days
       // would silently retire work nobody decided to drop.
-      for (const cat of ['user-terminated', 'agent-paused', 'challenge-escalation', 'app-unresolved', 'workspace-invalid']) {
+      // `provider-config` is the same shape: an `api`-only provider can't run an
+      // agent, and only the user can fix that — so a 14-day flip to `completed`
+      // would report undropped work as done and federate that lie to every peer.
+      for (const cat of ['user-terminated', 'agent-paused', 'challenge-escalation', 'app-unresolved', 'workspace-invalid', 'provider-config']) {
         expect(blockedFailureAgeMs(blocked(cat, daysAgo(30)), NOW)).toBeNull();
         expect(isReapableBlockedFailure(blocked(cat, daysAgo(30)), { now: NOW })).toBe(false);
       }
@@ -1639,8 +1660,8 @@ describe('cosTaskStore — stale failure-artifact reaper (#2619)', () => {
     });
 
     it('falls back to lastFailureAt then updatedAt when blockedAt is absent', () => {
-      expect(blockedFailureAgeMs({ status: 'blocked', metadata: { blockedCategory: 'provider-config', lastFailureAt: daysAgo(20) } }, NOW)).toBe(20 * 24 * 60 * 60 * 1000);
-      expect(blockedFailureAgeMs({ status: 'blocked', metadata: { blockedCategory: 'provider-config', updatedAt: daysAgo(20) } }, NOW)).toBe(20 * 24 * 60 * 60 * 1000);
+      expect(blockedFailureAgeMs({ status: 'blocked', metadata: { blockedCategory: 'max-spawns', lastFailureAt: daysAgo(20) } }, NOW)).toBe(20 * 24 * 60 * 60 * 1000);
+      expect(blockedFailureAgeMs({ status: 'blocked', metadata: { blockedCategory: 'max-spawns', updatedAt: daysAgo(20) } }, NOW)).toBe(20 * 24 * 60 * 60 * 1000);
     });
 
     it('never reaps an undated block (cannot prove it is old)', () => {
@@ -1711,6 +1732,23 @@ describe('cosTaskStore — stale failure-artifact reaper (#2619)', () => {
       const after = await getUserTasks();
       expect(after.tasks.find(t => t.id === 'task-fresh').status).toBe('blocked');
       expect(after.tasks.find(t => t.id === 'task-stop').status).toBe('blocked');
+    });
+
+    // A provider-config block never self-revives — it waits for the user to add a
+    // CLI provider — so the reaper must leave it alone no matter how old it gets.
+    // Flipping it to `completed` with `resolution: 'auto-expired'` would report
+    // work nobody dropped as done, and federate that to every peer (#6193).
+    it('never auto-expires a provider-config block, however stale', async () => {
+      await addTask({ description: 'api-only provider pinned', id: 'task-pc-old', priority: 'HIGH' }, 'user', { now: NOW });
+      await updateTask('task-pc-old', { status: 'blocked', metadata: { blockedCategory: 'provider-config', blockedAt: daysAgo(90) } }, 'user', { now: NOW });
+      const res = await sweepResolvedFailureTasks({ now: NOW });
+      expect(res.reaped).toBe(0);
+      expect(res.staleBlocks).toBe(0);
+      const task = (await getUserTasks()).tasks.find(t => t.id === 'task-pc-old');
+      expect(task.status).toBe('blocked');
+      expect(task.metadata.blockedCategory).toBe('provider-config');
+      expect(task.metadata.resolution).toBeUndefined();
+      expect(task.metadata.autoExpiredReason).toBeUndefined();
     });
 
     it('flips an investigation whose originating task has completed', async () => {
@@ -1878,13 +1916,35 @@ describe('cosTaskStore.resolveTaskChallengeWithRecheck (#2471)', () => {
     expect(mock.reviewCalls[0].model).toBe('coder-7b');
   });
 
-  it('returns RECHECK_NO_MODEL (config problem, not 502) when no model is configured', async () => {
+  // The model read is keyed off `<backend>Model`, not an ollama-or-lmstudio
+  // ternary — that ternary handed a third local backend LM STUDIO's model id.
+  it("reads the re-check model from the challenged backend's own scalar", async () => {
+    const id = await seedChallenged('mtplx');
+    mock.reviewDefaults = { lmstudioModel: 'wrong-model', mtplxModel: 'mtplx-model' };
+    mock.review = { ok: true, model: 'mtplx-model', findings: 'No findings.' };
+    await resolveTaskChallengeWithRecheck(id, { recheck: { backend: 'mtplx', diff: 'diff' } });
+    expect(mock.reviewCalls[0].model).toBe('mtplx-model');
+  });
+
+  it('leaves an unconfigured model to the reviewer, which resolves it from the backend', async () => {
     const id = await seedChallenged();
     mock.reviewDefaults = { lmstudioModel: null, ollamaModel: null };
+    mock.review = { ok: true, model: 'served-by-the-daemon', findings: 'No findings.' };
+    const resolved = await resolveTaskChallengeWithRecheck(id, { recheck: { backend: 'ollama', diff: 'diff' } });
+    expect(mock.reviewCalls[0].model).toBeNull();
+    expect(resolved.status).toBe('pending');
+    // The record names the model that actually produced the verdict, not `null`.
+    expect(resolved.metadata.challengeResolution.note).toContain('served-by-the-daemon');
+  });
+
+  it('returns RECHECK_NO_MODEL (config problem, not 502) when nothing can name a model', async () => {
+    const id = await seedChallenged();
+    mock.reviewDefaults = { lmstudioModel: null, ollamaModel: null };
+    mock.review = { ok: false, code: 'NO_MODEL', error: 'No model configured for ollama reviewer and ollama is serving no models — set one on the Settings → Code Reviewers page.' };
     const result = await resolveTaskChallengeWithRecheck(id, { recheck: { backend: 'ollama', diff: 'diff' } });
     expect(result.code).toBe('RECHECK_NO_MODEL');
-    // No reviewer call attempted without a model.
-    expect(mock.reviewCalls.length).toBe(0);
+    // Surfaced verbatim: the reviewer's message says WHICH gap it is.
+    expect(result.error).toMatch(/No model configured/);
   });
 
   it('returns RECHECK_FAILED when the reviewer is unreachable', async () => {

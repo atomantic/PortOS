@@ -565,8 +565,22 @@ export async function buildFableLoomAssetManifest(loom) {
   for (const entry of await Promise.all(imageNames.map((name) => hashImageForManifest(name)))) {
     if (entry) dedup.set(`${entry.kind}:${entry.filename}`, entry);
   }
+  // Typed playback assets (hold loops, transition exit clips, and an explicit
+  // entry clip) live under node.playbackAssets alongside the legacy single
+  // node.videoHistoryId — all reference on-disk <id>.mp4 files under
+  // PATHS.videos and must all be advertised, or a receiving peer never
+  // requests them and playback breaks post-sync (#6006).
   const videoIds = [...new Set(
-    nodes.map((node) => (isStr(node?.videoHistoryId) ? node.videoHistoryId : null)).filter(Boolean),
+    nodes.flatMap((node) => {
+      const ids = [node?.videoHistoryId, node?.playbackAssets?.entryVideoHistoryId];
+      if (Array.isArray(node?.playbackAssets?.holdLoopVideoHistoryIds)) {
+        ids.push(...node.playbackAssets.holdLoopVideoHistoryIds);
+      }
+      if (node?.playbackAssets?.exitByTransition && typeof node.playbackAssets.exitByTransition === 'object') {
+        ids.push(...Object.values(node.playbackAssets.exitByTransition));
+      }
+      return ids.filter(isStr);
+    }),
   )];
   if (videoIds.length > 0) {
     const entries = await Promise.all(videoIds.map((id) =>

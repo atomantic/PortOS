@@ -16,10 +16,33 @@
  * dynamically at spawn time, declaring the provider's configured models (+ the
  * model being run) under
  * `provider.<local-backend>.models` with bare ids.
+ *
+ * **The custom-provider shape above is still the supported one** — re-verified
+ * against OpenCode 1.18.27, where a config carrying the models map round-trips a
+ * local Ollama model fine. What CHANGED is the diagnostic: the same undeclared
+ * model that used to say "Model ollama/… is not valid" now fails as an opaque
+ *
+ *     {"name":"UnknownError","data":{"message":"Unexpected server error…"}}
+ *
+ * so a config missing the map reads like a broken provider rather than a
+ * misconfigured one. It cost #6125 an investigation; do not re-derive it. Two
+ * OTHER failures land in the same "spawns, ~12s, no output" shape and are NOT
+ * this one — `model '<id>' not found` (the daemon no longer holds that model,
+ * which `services/providerReadiness.js` now reports up front) and
+ * `<id> does not support tools` (a non-tool-capable model, which the
+ * `_fetchOllamaToolCapableModels` refresh filters out of the provider's list).
  */
 
-import { getOpencodeLocalProviderNamespace, isOpencodeCommand, prefixOpencodeModel } from './providerModels.js';
+import {
+  getOpencodeLocalProviderNamespace,
+  isOpencodeCommand,
+  prefixOpencodeModel,
+  parseOpencodeConfigContent,
+  OPENCODE_PUBLIC_REVIEW_AGENT,
+} from './providerModels.js';
 import { PROVIDER_GATEWAYS, PROVIDER_GATEWAY_IDS, gatewayById, isGatewayNamespace } from './providerGateways.js';
+import { isPublicReviewNoToolProfile } from './agentExecutionProfiles.js';
+import { isPlainObject } from './objects.js';
 import { PORTS } from './ports.js';
 
 const LLAMA_SERVER_BASE_URL = `http://127.0.0.1:${PORTS.LLAMA_SERVER}/v1`;
@@ -160,6 +183,69 @@ const THINKING_STYLE = {
   ...Object.fromEntries(PROVIDER_GATEWAY_IDS.map((id) => [id, null])),
 };
 
+const asObject = (value) => (isPlainObject(value) ? value : {});
+
+/**
+ * The three OpenCode permissions that open an interactive gate: `question` (the
+ * "Should I …? 1. Yes 2. No" selector), and `plan_enter` / `plan_exit` (the plan
+ * agent's hand-back to a human). OpenCode denies all three in its OWN built-in
+ * agent defaults, and `opencode run` re-denies them explicitly, precisely
+ * because nothing can answer them without a person at the terminal.
+ *
+ * PortOS's config re-ENABLED them. A root `permission` is merged LAST into the
+ * agent ruleset and resolved with `findLast`, so the blanket `permission:
+ * "allow"` PortOS writes (and that every seeded provider record stores) wins
+ * over the vendor denial for every key including these. A denied permission
+ * also hides its tool from the model entirely (OpenCode's `visibleTools`), so
+ * allowing it is what put the `question` tool back into the schema handed to a
+ * local model — an unattended issues-watcher run on `qwen3-coder:30b` then
+ * called it and parked on "Should I review these issue comments and PRs?" with
+ * nobody there to press a key, burning its whole session. The
+ * UNATTENDED_RUN_RULE in `services/agentPromptBuilder.js` tells the agent not
+ * to ask; this makes asking unreachable.
+ *
+ * Every PortOS OpenCode spawn is unattended, so these stay denied
+ * unconditionally — this is an enforcement boundary, not a default. The rest of
+ * the blanket allow is kept: PortOS agents must not stall on an edit/bash
+ * approval either.
+ */
+const INTERACTIVE_GATE_DENIALS = Object.freeze({
+  question: 'deny',
+  plan_enter: 'deny',
+  plan_exit: 'deny',
+});
+
+/**
+ * Re-apply {@link INTERACTIVE_GATE_DENIALS} on top of whatever root permission a
+ * config carries. OpenCode accepts a string shorthand there (`"allow"`), which
+ * it decodes to `{'*': <action>}`; that expansion happens here so the denials
+ * have an object to be appended to.
+ *
+ * **Key order is the enforcement, not cosmetics.** OpenCode flattens the block
+ * to a rule list in key order and resolves a permission with `findLast`, where a
+ * `'*'` KEY matches every permission name — so the last rule wins outright,
+ * specificity notwithstanding, and the denials only bind while they sit after
+ * the wildcard. Overwriting a gate key in place would keep that key's ORIGINAL
+ * position, so a stored `{ question: 'allow', '*': 'allow' }` would emit
+ * `{ question: 'deny', '*': 'allow' }` and the trailing wildcard would allow
+ * `question` right back. The gate keys are therefore DROPPED from the base and
+ * re-appended, which puts them last whatever order the base used.
+ *
+ * Mutates and returns `config`; callers pass a config they already own.
+ *
+ * @param {object} config
+ * @returns {object} the same config
+ */
+function denyInteractiveGates(config) {
+  const current = config.permission;
+  const base = typeof current === 'string' ? { '*': current } : asObject(current);
+  const kept = Object.fromEntries(
+    Object.entries(base).filter(([key]) => !Object.hasOwn(INTERACTIVE_GATE_DENIALS, key)),
+  );
+  config.permission = { ...kept, ...INTERACTIVE_GATE_DENIALS };
+  return config;
+}
+
 const numberInRange = (value, min, max) => {
   if (value === null || value === undefined || value === '') return undefined;
   const n = Number(value);
@@ -226,6 +312,11 @@ export function buildAgentGeneration(generation, providerKey) {
  * is invented), identical to the shipped base. When `base` is absent/unusable,
  * the canonical endpoint for the selected local runtime is used.
  *
+ * The one field that is NOT purely preserved is the root `permission`: the
+ * interactive-gate denials are re-applied over it (see `denyInteractiveGates`),
+ * because a PortOS spawn has no human to answer a gate. Everything else the
+ * base sets there survives.
+ *
  * NOT the whole config: `small_model` is applied downstream by
  * `buildOpencodeEnvVars`, which is the only caller that knows THIS run's single
  * model (this one takes a list). A config built here alone is unpinned.
@@ -269,6 +360,78 @@ export function buildOpencodeConfig(models, base = null, providerKey = 'ollama',
       ...build,
     };
   }
+  return denyInteractiveGates(config);
+}
+
+// `'*'` is OpenCode's documented wildcard for a tool map; `deny` is its hard
+// permission refusal (as opposed to `ask`, which in a headless `opencode run`
+// would simply hang).
+//
+// At the ROOT the string shorthand is used rather than the per-action object:
+// it denies EVERY permission category, including any OpenCode adds later, where
+// naming `edit`/`bash`/`webfetch` explicitly would silently leave a new one at
+// its default. The shorthand is the same form the shipped provider records
+// already store (`{"permission":"allow"}`), so it is known-good. Per-agent
+// entries keep the explicit object, which is the shape documented there.
+const DENY_ALL_TOOLS = Object.freeze({ '*': false });
+const DENY_ALL_PERMISSIONS = 'deny';
+const DENY_ALL_AGENT_PERMISSIONS = Object.freeze({ edit: 'deny', bash: 'deny', webfetch: 'deny' });
+
+/**
+ * Harden an OpenCode config for the `no-tool` public-review posture.
+ *
+ * OpenCode has no argv equivalent of codex's `--sandbox read-only` or claude's
+ * `--restricted --tools ''` — its tool posture lives entirely in the config —
+ * so THIS is the vendor's enforced recipe, and `providerVendors.js` pairs it
+ * with `run --agent plan`. Four controls, none of them redundant with another:
+ *
+ *   1. the root `permission` denies every category, covering any agent the
+ *      config never names;
+ *   2. every agent gets the same denials plus an emptied tool map — per-agent
+ *      settings OVERRIDE the root block, and OpenCode's built-in `build` and
+ *      `plan` agents carry tool maps of their own, so hardening only the root
+ *      would leave those definitions in force;
+ *   3. every declared model is marked `tool_call: false`, so OpenCode never
+ *      advertises a tool schema to a local model in the first place;
+ *   4. MCP servers and plugins are cleared, and session sharing and autoupdate
+ *      are switched off, so nothing reaches the network on the side.
+ *
+ * A user's stored config is otherwise PRESERVED (base URLs, models, generation
+ * settings) — this only overwrites the fields that carry the posture. Mutates
+ * and returns `config`; callers pass a config they already own.
+ *
+ * @param {object} config
+ * @returns {object} the same config, hardened
+ */
+function hardenOpencodeConfigForNoTool(config) {
+  if (!isPlainObject(config)) return config;
+  config.permission = DENY_ALL_PERMISSIONS;
+  config.tools = { ...DENY_ALL_TOOLS };
+  const agents = asObject(config.agent);
+  const agentNames = new Set([...Object.keys(agents), 'build', OPENCODE_PUBLIC_REVIEW_AGENT]);
+  // `buildAgentGeneration` writes the stage's temperature / topP / thinking /
+  // reasoningEffort onto `agent.build` — OpenCode's default agent — but this
+  // profile runs `--agent plan`. Seed the review agent from `build` so the
+  // stage's configured effort actually reaches the model that runs, instead of
+  // silently falling back to the backend default. An explicit `agent.plan` in
+  // the user's own config still wins (it is spread after).
+  const generationSource = asObject(agents.build);
+  config.agent = Object.fromEntries([...agentNames].map((name) => [name, {
+    ...(name === OPENCODE_PUBLIC_REVIEW_AGENT ? generationSource : {}),
+    ...asObject(agents[name]),
+    tools: { ...DENY_ALL_TOOLS },
+    permission: { ...DENY_ALL_AGENT_PERMISSIONS },
+  }]));
+  for (const entry of Object.values(asObject(config.provider))) {
+    const models = asObject(entry?.models);
+    for (const [id, model] of Object.entries(models)) {
+      models[id] = { ...asObject(model), tool_call: false };
+    }
+  }
+  config.mcp = {};
+  config.plugin = [];
+  config.share = 'disabled';
+  config.autoupdate = false;
   return config;
 }
 
@@ -304,9 +467,12 @@ export function buildOpencodeConfigContent(models, base = null, providerKey = 'o
  *
  * @param {{command?:string, ollamaBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, gatewayBacked?:string, orcarouterBacked?:boolean, models?:string[], defaultModel?:string|null, apiKey?:string, orcarouterApiKey?:string, envVars?:object}} provider
  * @param {string|null|undefined} model - the model being run (may differ from defaultModel)
+ * @param {{safetyProfile?:string|null}} [options] - a `no-tool` public-review
+ *   profile applies `hardenOpencodeConfigForNoTool`, which IS OpenCode's
+ *   enforced tool-free recipe (it has no argv equivalent).
  * @returns {{OPENCODE_CONFIG_CONTENT?: string}} env vars to merge
  */
-export function buildOpencodeEnvVars(provider, model) {
+export function buildOpencodeEnvVars(provider, model, { safetyProfile = null } = {}) {
   const providerKey = getOpencodeLocalProviderNamespace(provider);
   if (!isOpencodeCommand(provider?.command)) {
     return {};
@@ -314,15 +480,7 @@ export function buildOpencodeEnvVars(provider, model) {
   // Parse the provider's stored config as the base so any user customization
   // (custom baseURL, permission, hand-maintained models) is preserved rather
   // than clobbered by the hardcoded localhost default.
-  const stored = provider?.envVars?.OPENCODE_CONFIG_CONTENT;
-  let base = null;
-  if (typeof stored === 'string' && stored.length > 0) {
-    try {
-      base = JSON.parse(stored);
-    } catch {
-      base = null; // unparseable stored config → fall back to the canonical default
-    }
-  }
+  const base = parseOpencodeConfigContent(provider?.envVars?.OPENCODE_CONFIG_CONTENT);
   // A record with NO namespace and NO stored config is a hand-made plain
   // `opencode` provider: it has always run against the user's own
   // `~/.config/opencode`, and `OPENCODE_CONFIG_CONTENT` REPLACES that file
@@ -377,6 +535,10 @@ export function buildOpencodeEnvVars(provider, model) {
       apiKey,
     };
   }
+  // LAST, so it overrides every field composed above — including a stored
+  // `permission: "allow"` and the `tool_call: true` the models map is built
+  // with. This is the enforcement boundary, not a default.
+  if (isPublicReviewNoToolProfile(safetyProfile)) hardenOpencodeConfigForNoTool(config);
   return {
     OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
     ...(apiKey && gateway ? { [gateway.apiKeyEnv]: apiKey } : {}),

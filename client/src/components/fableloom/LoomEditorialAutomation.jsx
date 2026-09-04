@@ -255,6 +255,7 @@ export default function LoomEditorialAutomation({ loom, dirty, onLoomUpdate }) {
           label="Editorial AI route"
           disabled={busy || providersLoading}
           modelDisabled={busy || providersLoading}
+          loading={providersLoading}
           emptyProviderOption="Default (editorial stage or active provider)"
           emptyModelOption="Default model"
           alwaysShowModel={!!route.providerId}

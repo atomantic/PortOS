@@ -77,7 +77,7 @@ export default function RoundEditor() {
         <button
           type="button"
           onClick={() => navigate("/rounds")}
-          className="p-1 text-gray-400 hover:text-white transition-colors"
+          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-white transition-colors"
           title="Back to Rounds"
           aria-label="Back to Rounds"
         >

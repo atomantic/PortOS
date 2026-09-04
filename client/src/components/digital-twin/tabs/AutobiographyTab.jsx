@@ -559,7 +559,7 @@ export default function AutobiographyTab({ onRefresh }) {
                             </button>
                             <button
                               onClick={() => setNarrative(null)}
-                              className="p-0.5 text-gray-500 hover:text-white"
+                              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-0.5 text-gray-500 hover:text-white"
                               aria-label="Dismiss narrative"
                             >
                               <X size={12} />

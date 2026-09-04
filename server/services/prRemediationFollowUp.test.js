@@ -14,6 +14,7 @@ const PULL_REQUEST = {
   headRefName: 'contributor/update',
   baseRefName: 'main',
   authorLogin: 'contributor',
+  forkHead: { remoteUrl: 'https://github.com/contributor/r.git', ownerLogin: 'contributor' },
 };
 
 const spawn = (overrides = {}) => spawnPrRemediationFollowUp({
@@ -40,9 +41,10 @@ describe('spawnPrRemediationFollowUp', () => {
     expect(task).toMatchObject({
       app: APP.id,
       priority: 'HIGH',
-      // PortOS cannot attach a worktree to a fork branch, so the agent makes its
-      // own; the PR already exists, so cleanup must not open a second one.
-      useWorktree: false,
+      // PortOS provisions the worktree and attaches it to the PR's own head
+      // branch — including a fork head, via `forkHead` (#6064). The PR already
+      // exists, so cleanup must not open a second one.
+      useWorktree: true,
       openPR: false,
       metadata: {
         prRemediationFollowUp: true,
@@ -50,6 +52,8 @@ describe('spawnPrRemediationFollowUp', () => {
         prRemediationRepoFullName: 'o/r',
         prRemediationAuthorLogin: 'contributor',
         prRemediationWriteAccess: 'fork-maintainer-modifiable',
+        existingBranch: 'contributor/update',
+        forkHead: { remoteUrl: 'https://github.com/contributor/r.git', ownerLogin: 'contributor' },
       },
     });
     // The first line carries the PR number so addTask's per-app dedup keeps a
@@ -57,12 +61,17 @@ describe('spawnPrRemediationFollowUp', () => {
     expect(task.description).toContain('#7');
   });
 
-  it('tells the agent to check the PR out in a throwaway worktree and merge it', async () => {
+  it('tells the agent the branch is already checked out rather than to fetch it itself', async () => {
+    // The prose worktree procedure was the workaround for a worktree layer that
+    // could not attach to a fork head. Now that it can (#6064), leaving the
+    // instructions in place would have the agent build a SECOND worktree.
     await spawn();
 
     const { context } = addTaskMock.mock.calls[0][0];
-    expect(context).toContain('gh pr checkout 7 --repo o/r');
-    expect(context).toContain('worktree add --detach');
+    expect(context).toContain('ALREADY in an isolated worktree');
+    expect(context).not.toContain('gh pr checkout');
+    expect(context).not.toContain('worktree add');
+    expect(context).not.toContain('worktree remove');
     expect(context).toContain('gh pr merge 7 --repo o/r --merge');
     // Push rights on a fork are not permission to delete the contributor's
     // branch — the shared merge gate must be asked for `deleteBranch: false`.
@@ -85,6 +94,16 @@ describe('spawnPrRemediationFollowUp', () => {
     const fork = addTaskMock.mock.calls[0][0].context;
     expect(fork).toContain('@contributor left the head branch writable by maintainers');
     expect(fork).toContain('lives in their FORK');
+    expect(fork).toContain('already tracks that fork');
+  });
+
+  it('carries no fork remote for a same-repo head, which origin already resolves', async () => {
+    await spawn({ pullRequest: { ...PULL_REQUEST, forkHead: null }, writeAccess: 'own-repo' });
+
+    expect(addTaskMock.mock.calls[0][0].metadata).toMatchObject({
+      existingBranch: 'contributor/update',
+      forkHead: null,
+    });
   });
 
   // The screened title/body/diff stay on the far side of the Stage 1 boundary:
@@ -121,6 +140,9 @@ describe('spawnPrRemediationFollowUp', () => {
     ['no repository', { repoFullName: '' }],
     ['no PR number', { pullRequest: { ...PULL_REQUEST, number: null } }],
     ['no author to hand back to', { pullRequest: { ...PULL_REQUEST, authorLogin: '  ' } }],
+    // Without the branch name there is nothing for the worktree to check out,
+    // and cutting a fresh branch would put the fixes where the PR never sees them.
+    ['no head branch to attach a worktree to', { pullRequest: { ...PULL_REQUEST, headRefName: '' } }],
   ])('refuses to queue with %s', async (_label, overrides) => {
     expect(await spawn(overrides)).toEqual({ status: PR_REMEDIATION_SPAWN.FAILED, task: null });
     expect(addTaskMock).not.toHaveBeenCalled();

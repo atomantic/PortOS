@@ -32,6 +32,58 @@ export const INVESTIGATION_TASK_DELIVERY = Object.freeze({
   prCompletion: PR_COMPLETIONS.MERGE_ON_GREEN,
 });
 
+// Delivery for an investigation a USER queued from the UI (#6043) — the
+// installer-failure "Queue agent to investigate" button today. Same isolation as
+// the unattended posture above, but the PR waits for a review instead of merging
+// on green: `merge-on-green` exists because an auto-filed investigation has
+// nobody watching it, and that reason is gone the moment a human clicked the
+// button. They are here to look at the fix, so let them.
+export const CLIENT_INVESTIGATION_DELIVERY = Object.freeze({
+  useWorktree: true,
+  openPR: true,
+  prCompletion: PR_COMPLETIONS.REVIEW_THEN_MERGE,
+});
+
+// `kind` segment reserved for client-queued investigations. Auto-filed keys take
+// their kind from an analysis/self-improvement/task type, so this value keeps the
+// two populations in separate fingerprint namespaces: a client can neither
+// collide with an auto-filed investigation's dedup key nor evict it.
+export const CLIENT_INVESTIGATION_KIND = 'ui-investigation';
+
+// Longest subject slug folded into a client fingerprint. The key is stored on
+// every matching task and compared on every dedup scan, so it stays short enough
+// to read in a log line while keeping distinct install failures distinct.
+const CLIENT_INVESTIGATION_SUBJECT_MAX = 80;
+
+/** Lowercase `a-z0-9-` slug of a free-text subject, bounded. Pure. */
+function investigationSubjectSlug(text) {
+  return String(text ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, CLIENT_INVESTIGATION_SUBJECT_MAX)
+    .replace(/-+$/, '');
+}
+
+/**
+ * The dedup key for an investigation queued from the UI, derived ENTIRELY from
+ * what the client submitted — never from a client-supplied fingerprint. Two
+ * clicks on the same failing installer produce the same key (so the queued task
+ * participates in dedup and the loop policy), while a different failure produces
+ * a different one. Pure.
+ *
+ * `app` narrows the key the way an auto-filed key's `scope` segment does; absent
+ * — the install button's case — means PortOS itself.
+ */
+export function clientInvestigationFingerprint({ description, app } = {}) {
+  const subject = investigationSubjectSlug(description);
+  const appSlug = investigationSubjectSlug(app);
+  return investigationFingerprint({
+    kind: CLIENT_INVESTIGATION_KIND,
+    scope: appSlug ? `${appSlug}/${subject}` : subject,
+  });
+}
+
 // Task metadata survives a markdown round-trip, so booleans come back as the
 // strings 'true'/'false'. Local to keep this module import-free of the services
 // layer, where the generic `isTruthyMeta` lives.

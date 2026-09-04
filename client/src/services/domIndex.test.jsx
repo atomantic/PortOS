@@ -50,3 +50,84 @@ describe('domIndex buildIndex — lazy vs eager text', () => {
     expect(text).toMatch(/Three tasks pending/);
   });
 });
+
+// #5907 — data-voice-guard is the one way to keep a control out of the voice
+// index entirely ("exclude"), or to require confirmation on it regardless of
+// its label ("confirm"), carried onto the index entry for the server-side
+// confirmGate to read.
+describe('domIndex buildIndex — data-voice-guard', () => {
+  beforeEach(() => {
+    document.body.innerHTML = `
+      <main>
+        <button data-voice-guard="exclude">Secret internal control</button>
+        <button data-voice-guard="confirm">Send</button>
+        <button>Save</button>
+      </main>
+    `;
+    makeVisible();
+  });
+
+  it('never indexes an exclude-guarded control', () => {
+    const idx = buildIndex();
+    expect(idx.elements.some((e) => e.label === 'Secret internal control')).toBe(false);
+  });
+
+  it('does not assign a data-voice-ref to an excluded control', () => {
+    buildIndex();
+    const excluded = document.querySelector('button[data-voice-guard="exclude"]');
+    expect(excluded.hasAttribute('data-voice-ref')).toBe(false);
+  });
+
+  it('carries guard: "confirm" onto the indexed entry', () => {
+    const idx = buildIndex();
+    const send = idx.elements.find((e) => e.label === 'Send');
+    expect(send.guard).toBe('confirm');
+  });
+
+  it('leaves an unannotated control with no guard field', () => {
+    const idx = buildIndex();
+    const save = idx.elements.find((e) => e.label === 'Save');
+    expect(save.guard).toBeUndefined();
+  });
+});
+
+// The annotation resolves from the nearest annotated ancestor so a container
+// covers everything inside it — annotating each descendant by hand would miss
+// whichever control gets added next.
+describe('domIndex buildIndex — data-voice-guard on a container', () => {
+  beforeEach(() => {
+    document.body.innerHTML = `
+      <main>
+        <div data-voice-guard="exclude">
+          <button>Widget stop</button>
+        </div>
+        <div data-voice-guard="confirm">
+          <button>Publish</button>
+          <div data-voice-guard="exclude"><button>Nested opt-out</button></div>
+        </div>
+        <button>Save</button>
+      </main>
+    `;
+    makeVisible();
+  });
+
+  it('excludes every control inside an exclude-marked container', () => {
+    const idx = buildIndex();
+    expect(idx.elements.some((e) => e.label === 'Widget stop')).toBe(false);
+  });
+
+  it('carries guard: "confirm" onto a control inside a confirm-marked container', () => {
+    const idx = buildIndex();
+    expect(idx.elements.find((e) => e.label === 'Publish').guard).toBe('confirm');
+  });
+
+  it('lets a nested annotation win over its ancestor', () => {
+    const idx = buildIndex();
+    expect(idx.elements.some((e) => e.label === 'Nested opt-out')).toBe(false);
+  });
+
+  it('leaves a control outside every annotated container unguarded', () => {
+    const idx = buildIndex();
+    expect(idx.elements.find((e) => e.label === 'Save').guard).toBeUndefined();
+  });
+});

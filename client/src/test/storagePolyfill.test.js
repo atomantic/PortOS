@@ -87,6 +87,17 @@ describe('storagePolyfill', () => {
       expect(root.localStorage).not.toBe(before);
     });
 
+    it('installs over a working Storage when forced (the setup.js path)', () => {
+      // happy-dom's Proxy-backed Storage survives the probe but cannot be un-spied,
+      // so setup.js replaces it outright rather than trusting it (#6144).
+      const existing = createMemoryStorage();
+      existing.setItem('keep', 'me');
+      const root = { localStorage: existing };
+      expect(ensureStorage('localStorage', root, { force: true })).toBe(true);
+      expect(root.localStorage).not.toBe(existing);
+      expect(storageWorks(root.localStorage)).toBe(true);
+    });
+
     it('leaves a working Storage untouched (idempotent, no clobber)', () => {
       const existing = createMemoryStorage();
       existing.setItem('keep', 'me');
@@ -109,8 +120,8 @@ describe('storagePolyfill', () => {
     it('guarantees both local AND session storage are working (idempotent)', () => {
       // The actual entry point setup.js calls. Asserting it directly catches a
       // refactor that dropped the sessionStorage line — the ensureStorage cases above
-      // would still pass. It targets the live globals (already installed by setup.js),
-      // so this re-invocation must be a no-op that leaves both keys working.
+      // would still pass. It targets the live globals, and re-installs a fresh shim
+      // over each (the forced path), so both keys must still be working after.
       expect(() => installTestStorage()).not.toThrow();
       expect(storageWorks(globalThis.localStorage)).toBe(true);
       expect(storageWorks(globalThis.sessionStorage)).toBe(true);

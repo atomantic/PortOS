@@ -14,9 +14,11 @@ import { readdir, rm, stat } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, isPathInsideDir, PATHS, sleep, tryReadFile } from '../lib/fileUtils.js';
 import { DONE_SENTINEL_NAME, doneSentinelName } from '../lib/agentSentinel.js';
+import { AGENT_SCRATCH_PATHS, matchesScratchRoot } from '../lib/agentScratchPaths.js';
 import { execGit } from '../lib/execGit.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
+import { forkRemoteName, normalizeForkHead } from '../lib/forkHead.js';
 import { isHumanClaimWorktree, worktreeAgentId, worktreeOwnershipReason } from '../lib/worktreeOwnership.js';
 import { ensureInstanceId } from './instances.js';
 
@@ -269,11 +271,20 @@ async function enforceUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePat
  * Classify a `git status --porcelain` blob into real changes vs auto-generated
  * lockfile churn. Pure (testable) — callers decide what to do with the result.
  *
+ * PortOS's own runtime scratch (`AGENT_SCRATCH_PATHS` — the public-review input
+ * bundle and its patch directory) is subtracted for EVERY caller, not passed in
+ * per call. It is written by PortOS into the worktree and never committed, so a
+ * tree holding only that is finished work by every consumer's definition; making
+ * each one learn the names is how two `pr-reviewer` worktrees survived
+ * `removeWorktree`, `reapMergedWorktrees` and branch-reconcile in turn.
+ *
  * @param {string} porcelain - raw `git status --porcelain` stdout
  * @param {object} [options]
- * @param {string[]} [options.ignoredPaths] - runtime-only paths that must not
- *   preserve a completed worktree. They are still removed only when the rest of
- *   the tree is safe to remove.
+ * @param {string[]} [options.ignoredPaths] - ADDITIONAL runtime-only paths that
+ *   must not preserve a completed worktree — for names this module cannot know
+ *   statically, notably one run's own `.agent-done-<agentId>` sentinel. Matched
+ *   as roots: a directory entry also covers everything under it. They are still
+ *   removed only when the rest of the tree is safe to remove.
  * @returns {{ clean: boolean, lockfileOnly: boolean, lockfilePaths: string[], realChangePaths: string[], hasRealChanges: boolean }}
  *   - clean: no changes at all
  *   - lockfileOnly: every change is an auto-generated lockfile (safe to discard)
@@ -285,12 +296,12 @@ async function enforceUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePat
  *   - hasRealChanges: at least one non-lockfile change (worktree must be preserved)
  */
 export function classifyWorktreeDirt(porcelain, { ignoredPaths = [] } = {}) {
-  const ignored = new Set(ignoredPaths);
+  const ignored = [...AGENT_SCRATCH_PATHS, ...ignoredPaths];
   const toPath = (line) => line.replace(/^\s*\S+\s+/, '').split(' -> ').pop();
   const lines = (porcelain || '').split('\n')
     .map(l => l.trim())
     .filter(Boolean)
-    .filter(line => !ignored.has(toPath(line)));
+    .filter(line => !matchesScratchRoot(toPath(line), ignored));
   if (lines.length === 0) {
     return { clean: true, lockfileOnly: false, lockfilePaths: [], realChangePaths: [], hasRealChanges: false };
   }
@@ -343,6 +354,67 @@ export function shouldRefuseDefaultBranchMerge(currentBranch, defaultBranch) {
 }
 
 /**
+ * Point a deterministic remote at the fork that holds a cross-repository PR's
+ * head branch, fetch that branch, and hand back the remote's name.
+ *
+ * A fork PR's branch has no `origin/<branch>` — the forge exposes its tip only
+ * as the read-only `refs/pull/<n>/head`, which cannot be pushed back to — so a
+ * worktree attach needs a second address for it. The coordinates arrive from a
+ * caller that already read the PR (`normalizeForkHead`); this layer never calls
+ * a forge, which is why it takes a URL rather than a PR number.
+ *
+ * The remote is named from the OWNER, not from the run, so a second review
+ * round or a retried remediation reuses it instead of accumulating one remote
+ * per attach — and so teardown can leave it alone, which is what makes that
+ * reuse free. An existing remote pointing somewhere else is re-pointed rather
+ * than treated as a conflict.
+ *
+ * Returns `null` for every unusable outcome (no coordinates, remote wouldn't
+ * take, fetch failed, ref still missing afterwards) so the caller falls through
+ * to its existing origin-only error instead of attaching to a ref it cannot
+ * verify.
+ *
+ * @param {string} sourceWorkspace - the parent git repository
+ * @param {unknown} forkHead - `{ remoteUrl, ownerLogin }` from the PR read
+ * @param {string} branchName - the PR's head branch, as named in the fork
+ * @returns {Promise<string|null>} the fork remote's name, or null
+ */
+async function ensureForkRemote(sourceWorkspace, forkHead, branchName) {
+  const coordinates = normalizeForkHead(forkHead);
+  if (!coordinates) return null;
+  const remoteName = forkRemoteName(coordinates.ownerLogin);
+  if (!remoteName) return null;
+
+  // Three outcomes, not two: `null` is "no such remote" (add it), an equal URL
+  // is "already correct" (touch nothing), and a different URL is a stale remote
+  // from a contributor who renamed or moved their fork (re-point it).
+  const existingUrl = await execGit(['remote', 'get-url', remoteName], sourceWorkspace, { ignoreExitCode: true })
+    .then(r => (r.exitCode === 0 ? (r.stdout || '').trim() : null))
+    .catch(() => null);
+  const remoteOp = existingUrl === null
+    ? ['remote', 'add', remoteName, coordinates.remoteUrl]
+    : (existingUrl === coordinates.remoteUrl ? null : ['remote', 'set-url', remoteName, coordinates.remoteUrl]);
+  if (remoteOp) {
+    const pointed = await execGit(remoteOp, sourceWorkspace).then(() => true).catch(err => {
+      console.log(`⚠️ Could not point ${remoteName} at the fork holding ${branchName}: ${err.message}`);
+      return false;
+    });
+    if (!pointed) return null;
+  }
+
+  await execGit(['fetch', remoteName, branchName], sourceWorkspace).catch(err => {
+    console.log(`⚠️ Fork fetch of ${remoteName}/${branchName} failed: ${err.message}`);
+  });
+  // Verify rather than trust the fetch's exit code: a fetch that reported
+  // success but left no remote-tracking ref would otherwise send `worktree add`
+  // at a start point git resolves somewhere else entirely.
+  const refExists = await execGit(['rev-parse', '--verify', `${remoteName}/${branchName}`], sourceWorkspace, { ignoreExitCode: true })
+    .then(r => r.exitCode === 0)
+    .catch(() => false);
+  return refExists ? remoteName : null;
+}
+
+/**
  * Create a git worktree for an agent.
  *
  * Creates a new branch and worktree directory that the agent can work in
@@ -355,12 +427,18 @@ export function shouldRefuseDefaultBranchMerge(currentBranch, defaultBranch) {
  * branch instead of creating a new one — used for the Copilot review-loop follow-up
  * agent that needs to address comments on a PR branch the previous agent just pushed.
  *
+ * That branch is resolved local → `origin/<branch>` → `options.forkHead`. The third
+ * step is what makes an EXTERNAL contribution reachable: a fork PR's head has no
+ * `origin/<branch>` at all, so without it every "work on this PR's branch" path
+ * failed at workspace prep for exactly the PRs external contributors open (#6064).
+ *
  * @param {string} agentId - The agent identifier (used for branch/directory naming)
  * @param {string} sourceWorkspace - The original git repository path
  * @param {string} taskId - Task identifier (included in branch name for traceability)
  * @param {object} options - Optional configuration
  * @param {string} options.baseBranch - Branch to base the worktree on (auto-detected if omitted)
  * @param {string} options.existingBranch - Pre-existing branch to attach (creates from origin/<branch> if no local copy)
+ * @param {{remoteUrl: string, ownerLogin: string}} options.forkHead - Where `existingBranch` lives when it is a FORK PR's head, which has no `origin/<branch>`. Consulted only after the local and origin lookups both miss; omitting it preserves today's exact behavior, error message included.
  * @param {string} options.planId - PLAN.md item slug ID — when provided, spliced into the branch name as `cos/<taskId>/<planId>/<agentId>` so other agents can detect this item is in flight by scanning branches/PRs
  * @returns {{ worktreePath: string, branchName: string, baseBranch: string|null, existingBranch?: boolean }} paths for the new worktree
  */
@@ -412,17 +490,32 @@ async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options 
       const remoteExists = await execGit(['rev-parse', '--verify', `origin/${branchName}`], sourceWorkspace, { ignoreExitCode: true })
         .then((r) => r.exitCode === 0)
         .catch(() => false);
-      if (!remoteExists) {
+      // Third and last resolve step: a FORK PR's head lives in the contributor's
+      // repository, so `origin/<branch>` legitimately does not exist. Reached
+      // only when the caller supplied coordinates AND the two lookups above
+      // missed, so a caller that passes no `forkHead` still gets the exact
+      // error below rather than a new code path (#6064).
+      const forkRemote = remoteExists ? null : await ensureForkRemote(sourceWorkspace, options.forkHead, branchName);
+      if (!remoteExists && !forkRemote) {
         throw new Error(`Cannot attach worktree to ${branchName}: branch missing locally and origin/${branchName} unavailable${fetchSucceeded ? '' : ' (fetch failed)'}`);
       }
-      // Use -B (force-create) so we don't fail if a stale local ref exists; track origin.
+      // The start point decides the branch's upstream, and on the fork path that
+      // is the whole point: tracking `<fork-remote>/<branch>` is what sends a
+      // later `git push` to the CONTRIBUTOR's fork. Tracking origin here would
+      // push their commits into the upstream repository instead — the #4172
+      // failure mode, one remote over.
+      const startPoint = forkRemote ? `${forkRemote}/${branchName}` : `origin/${branchName}`;
+      // Use -B (force-create) so we don't fail if a stale local ref exists.
       // Attach path re-uses an existing branch, so no orphan-branch cleanup on failure.
-      await addWorktreeWithRetry(['worktree', 'add', '-B', branchName, worktreePath, `origin/${branchName}`], sourceWorkspace);
+      await addWorktreeWithRetry(['worktree', 'add', '-B', branchName, worktreePath, startPoint], sourceWorkspace);
+      if (forkRemote) console.log(`🍴 Attached ${branchName} from fork remote ${forkRemote} (no origin/${branchName})`);
     }
     // Re-attaching a branch a PREVIOUS run created — which, before #4172, may
     // have been left tracking `refs/heads/main`. Repair it before the agent (and
-    // its `/do:pr`) touches it. Tracking `origin/<branchName>` is the healthy
-    // shape here and passes untouched.
+    // its `/do:pr`) touches it. The guard's invariant is on the `merge` REF, not
+    // on the remote, so `origin/<branchName>` and `<fork-remote>/<branchName>`
+    // both pass untouched — which is required: dropping the fork upstream would
+    // aim a config-derived push back at origin.
     await enforceUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePath, { deleteBranch: false });
     console.log(`🌳 Created worktree for ${agentId} at ${worktreePath} on existing branch ${branchName}`);
     return { worktreePath, branchName, baseBranch: null, existingBranch: true, instanceId };

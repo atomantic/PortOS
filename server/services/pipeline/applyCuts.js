@@ -19,7 +19,7 @@
 import { randomUUID } from 'crypto';
 import { updateStagesWithLatest } from './issues.js';
 import { collectManuscriptSections } from './arcPlanner.js';
-import { SAFE_CUT_TYPES, CUT_TYPES } from '../../lib/editorial/checkRegistry.js';
+import { SAFE_CUT_TYPES, CUT_TYPES } from '../../lib/editorial/checkInfra/craftStages.js';
 import {
   MIN_ANCHOR_CHARS,
   locateCutSpan,

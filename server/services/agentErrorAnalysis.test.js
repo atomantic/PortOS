@@ -206,6 +206,45 @@ describe('analyzeAgentFailure — ERROR_PATTERNS classification', () => {
     expect(analysis.actionable).toBe(true);
   });
 
+  // Real incident (agent-a12b1837): the attachable Stage 3 pr-reviewer recipe
+  // carried `--no-session-persistence`, which Claude Code accepts only under
+  // `--print`. The CLI exited at argv-parse time — three seconds in, before the
+  // prompt was pasted — so the ONLY thing in the PTY transcript was the shell's
+  // echo of PortOS's own launch command, and the loose MCP sweep classified the
+  // run off `--mcp-config '{"mcpServers":{}}'` as an "MCP server error". Three
+  // retries, three bogus diagnoses. Both halves are asserted here: the flag
+  // rejection is recognised, and the echoed argv alone is not an MCP failure.
+  it('classifies a CLI argv rejection as cli-config-invalid and names the flag', () => {
+    const echoedArgv = "claude --permission-mode acceptEdits --settings '{\"sandbox\":{\"enabled\":true}}' "
+      + "--disallowedTools 'WebFetch,WebSearch' --strict-mcp-config --mcp-config '{\"mcpServers\":{}}' "
+      + '--no-chrome --no-session-persistence --disable-slash-commands --model qwen3-coder:30b --bare; exit $?';
+    const output = [echoedArgv, 'Error: --no-session-persistence can only be used with --print mode.'].join('\n');
+
+    const analysis = analyzeAgentFailure(output, { id: 't' }, 'qwen3-coder:30b', { completionReason: 'shell-exit' });
+
+    expect(analysis.category).toBe('cli-config-invalid');
+    expect(analysis.actionable).toBe(true);
+    expect(analysis.origin).toBe('runner');
+    expect(analysis.rejectedCliFlag).toBe('--no-session-persistence');
+    expect(analysis.suggestedFix).toContain('--print mode');
+    expect(analysis.suggestedFix).toContain('providerVendors.js');
+  });
+
+  it('does not read PortOS\'s own empty --mcp-config argv as an MCP outage', () => {
+    // The echoed launch line WITHOUT the rejection under it — nothing here is a
+    // failure, so it must fall through to the generic bucket rather than being
+    // filed as an MCP server error off the `"mcpServers"` key or the flag names.
+    const echoedArgv = "claude --strict-mcp-config --mcp-config '{\"mcpServers\":{}}' --no-chrome "
+      + '--disable-slash-commands --model qwen3-coder:30b --bare; exit $?';
+
+    expect(analyzeAgentFailure(withLead(echoedArgv), { id: 't' }, 'x').category).not.toBe('mcp-error');
+  });
+
+  it('still classifies a genuine MCP server failure', () => {
+    const analysis = analyzeAgentFailure(withLead('MCP server "notes" failed to connect: connection refused'), { id: 't' }, 'x');
+    expect(analysis.category).toBe('mcp-error');
+  });
+
   it('classifies a 404 model-not-found error as actionable', () => {
     const analysis = analyzeAgentFailure(withLead('API Error: 404 - model: claude-4-ultra not found'), { id: 't' }, 'claude-4-ultra');
     expect(analysis.category).toBe('model-not-found');
@@ -471,6 +510,35 @@ describe('resolveFailedTaskDecision', () => {
       expect(decision.status).toBe('blocked');
     });
 
+  });
+
+  // #6124: an empty pr-reviewer stage burned MAX_TASK_RETRIES spawns and then
+  // regenerated, because "the agent wrote nothing" was classified as an ordinary
+  // retryable failure. A permanent failure re-fails identically, so it blocks now.
+  describe('permanent failures', () => {
+    const noOutput = {
+      actionable: false,
+      permanent: true,
+      category: 'stage-produced-no-output',
+      message: 'The pr-reviewer eligibility stage agent finished without writing any parseable output',
+    };
+
+    it('blocks on the FIRST failure and files no investigation task', () => {
+      const decision = resolveFailedTaskDecision(task(), noOutput, { agentId: 'agent-z', now: HOLD_NOW });
+      expect(decision.status).toBe('blocked');
+      expect(decision.investigationAnalysis).toBeNull();
+      expect(decision.metadataUpdates.failureCount).toBe(1);
+      expect(decision.metadataUpdates.blockedCategory).toBe('stage-produced-no-output');
+      expect(decision.metadataUpdates.blockedReason).toBe(noOutput.message);
+      // No retry hold: there is no retry to release.
+      expect(decision.metadataUpdates.retryPendingCleanup).toBeUndefined();
+    });
+
+    it('outranks the actionable branch so no investigation agent is spawned either', () => {
+      const decision = resolveFailedTaskDecision(task(), { ...noOutput, actionable: true });
+      expect(decision.status).toBe('blocked');
+      expect(decision.investigationAnalysis).toBeNull();
+    });
   });
 
   describe('non-actionable errors with retry tracking', () => {

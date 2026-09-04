@@ -179,7 +179,7 @@ export default function AppearanceTab({ onRefresh }) {
                   onClick={clearImage}
                   disabled={analyzing}
                   aria-label="Remove photo"
-                  className="absolute top-2 right-2 p-1.5 bg-port-bg/90 border border-port-border rounded-full text-gray-300 hover:text-white disabled:opacity-50"
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center absolute top-2 right-2 p-1.5 bg-port-bg/90 border border-port-border rounded-full text-gray-300 hover:text-white disabled:opacity-50"
                 >
                   <X size={16} />
                 </button>

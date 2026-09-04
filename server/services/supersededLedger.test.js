@@ -225,7 +225,7 @@ describe('formatSupersededForPrompt', () => {
     expect(formatSupersededForPrompt(undefined)).toBe('');
   });
 
-  it('names the branch, the replacing commits, the backup and the reap commands', () => {
+  it('names the branch, the replacing commits, the backup and the worktree still on disk', () => {
     const out = formatSupersededForPrompt([{
       ...branch(),
       verdict: entry({
@@ -240,13 +240,18 @@ describe('formatSupersededForPrompt', () => {
     expect(out).toContain('honor the video backend pin');
     expect(out).toContain('fff999');
     expect(out).toContain('agent-dead.patch');
-    expect(out).toContain('git worktree remove --force /repo/data/cos/worktrees/agent-dead');
-    expect(out).toContain('git branch -D cos/task-x/agent-dead');
+    expect(out).toContain('/repo/data/cos/worktrees/agent-dead');
   });
 
-  it('tells the agent the reap is a human action, not something to run', () => {
+  // The reap is PortOS's own deterministic step now (reapSupersededBranches), so
+  // a branch reaching this block is one the reap could not take. Handing the
+  // coordinator a copy-pasteable `worktree remove` would race that step and skip
+  // the backup it is gated on.
+  it('never hands the agent removal commands to run', () => {
     const out = formatSupersededForPrompt([{ ...branch(), verdict: entry() }]);
-    expect(out).toMatch(/do NOT run them/i);
+    expect(out).not.toMatch(/git worktree remove/);
+    expect(out).not.toMatch(/git branch -D/);
+    expect(out).toMatch(/PortOS reaps/i);
   });
 });
 

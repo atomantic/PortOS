@@ -41,7 +41,23 @@ vi.mock('../mediaJobQueue/index.js', () => ({
   mediaJobEvents: { on: vi.fn(), off: vi.fn() },
 }));
 
-const { handleCreativeDirectorCompletion, advanceAfterSceneSettled, __resetInflightState } = await import('./completionHook.js');
+const { handleCreativeDirectorCompletion, advanceAfterSceneSettled, startCreativeDirectorProject, __resetInflightState } = await import('./completionHook.js');
+
+import { hasCreativeDirectorProjectStarter, registerCreativeDirectorProjectStarter } from './projectStartSink.js';
+
+// #5920: `pipeline/episodeVideo.js` starts a CD project through the sink instead of
+// importing this module, so importing this module MUST arm the sink. Nothing else
+// registers a starter — if this side effect is ever dropped, every pipeline episode
+// silently stops advancing, and only this assertion notices.
+describe('registers the pipeline-facing project starter (#5920)', () => {
+  it('arms the project-start sink on import', () => {
+    expect(hasCreativeDirectorProjectStarter()).toBe(true);
+    // And it is THIS module's starter, not some other registrant: re-registering the
+    // same function is the sink's one idempotent case, so a no-throw here is an
+    // identity check on what is wired.
+    expect(() => registerCreativeDirectorProjectStarter(startCreativeDirectorProject)).not.toThrow();
+  });
+});
 
 const planTask = (runId = 'run-1') => ({
   id: 'task-1',

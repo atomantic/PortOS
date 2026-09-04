@@ -11,6 +11,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { EventEmitter } from 'events';
 import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { cosEvents } from './cosEvents.js';
+import { GOAL_FIDELITY_HOLD_EVENT, formatGoalFidelitySummary } from '../lib/goalFidelity.js';
 
 const DATA_DIR = join(PATHS.data, 'review');
 const ITEMS_FILE = join(DATA_DIR, 'items.json');
@@ -274,6 +275,36 @@ cosEvents.on('memory:approval-needed', (data) => {
       metadata: { referenceId: mem.id, category: 'memory-approval', agentId: data?.agentId, taskId: data?.taskId }
     }).catch(err => console.error(`❌ Failed to create review alert: ${err.message}`));
   }
+});
+
+// Goal-fidelity hold (#5994): a run that shipped clean, reviewed code which does
+// something other than what the task asked for. It is recorded as needs-attention
+// on the agent card, but the card is only seen by someone already looking at
+// /cos/agents — and "the agent built the wrong thing" is precisely the outcome
+// that has to reach the human who was not watching. So it also raises a Review
+// Hub alert, keyed on the agent id so `createItem`'s 24h dedup collapses a
+// re-finalized run rather than filing the hold twice.
+//
+// The named items are model-authored text derived from an untrusted diff, so
+// they are rendered as description prose and never as a link, path, or command.
+cosEvents.on(GOAL_FIDELITY_HOLD_EVENT, (data) => {
+  const review = data?.review;
+  if (!review?.verdict) return;
+  const named = [...(review.missing || []), ...(review.unrequested || [])];
+  createItem({
+    type: 'alert',
+    title: `Goal-fidelity hold: run ${data?.agentId || 'unknown'} may have built the wrong thing`,
+    description: named.length
+      ? `${formatGoalFidelitySummary(review)} — ${named.slice(0, 5).join('; ')}`
+      : formatGoalFidelitySummary(review),
+    metadata: {
+      referenceId: data?.agentId,
+      category: 'goal-fidelity',
+      agentId: data?.agentId,
+      taskId: data?.taskId,
+      verdict: review.verdict
+    }
+  }).catch(err => console.error(`❌ Failed to create goal-fidelity review alert: ${err.message}`));
 });
 
 async function updateStatusByReferenceId(referenceId, status) {

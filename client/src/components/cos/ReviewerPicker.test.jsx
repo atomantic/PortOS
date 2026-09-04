@@ -32,10 +32,66 @@ describe('ReviewerPicker', () => {
       expect(screen.queryByText('not installed')).not.toBeInTheDocument();
     });
 
-    it('flags an unselected reviewer in the Add row too', () => {
+    it('flags an unselected reviewer once the Add row reveals it', async () => {
+      const user = userEvent.setup();
       render(<ReviewerPicker reviewers={['copilot']} installed={{ antigravity: false }} onChange={() => {}} />);
-      const addButton = screen.getByRole('button', { name: /Antigravity/ });
-      expect(addButton).toHaveTextContent('not installed');
+      await user.click(screen.getByRole('button', { name: /1 unavailable/ }));
+      expect(screen.getByRole('button', { name: /Antigravity/ })).toHaveTextContent('not installed');
+    });
+  });
+
+  // The Add row lists what this machine can actually run. Hidden, not dropped:
+  // both signals are local-machine-only and the reviewer list is
+  // federation-wide config, so a peer's reviewer stays configurable from here.
+  describe('unavailable reviewers in the Add row', () => {
+    const modelOptions = { providerDisabled: { kimi: true, cursor: true } };
+
+    it('hides a missing CLI and an all-off provider behind one count', () => {
+      render(
+        <ReviewerPicker
+          reviewers={['copilot']}
+          installed={{ antigravity: false }}
+          modelOptions={modelOptions}
+          onChange={() => {}}
+        />
+      );
+      expect(screen.getByRole('button', { name: /3 unavailable/ })).toBeInTheDocument();
+      for (const hidden of [/Antigravity/, /Kimi/, /Cursor Agent/]) {
+        expect(screen.queryByRole('button', { name: hidden })).not.toBeInTheDocument();
+      }
+      // An available reviewer is still offered up front.
+      expect(screen.getByRole('button', { name: /Codex/ })).toBeInTheDocument();
+    });
+
+    it('reveals them, badged with which signal fired, and adds them normally', async () => {
+      const onChange = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <ReviewerPicker
+          reviewers={['copilot']}
+          installed={{ antigravity: false }}
+          modelOptions={modelOptions}
+          onChange={onChange}
+        />
+      );
+      await user.click(screen.getByRole('button', { name: /3 unavailable/ }));
+      expect(screen.getByRole('button', { name: /Kimi/ })).toHaveTextContent('disabled');
+      expect(screen.getByRole('button', { name: /Antigravity/ })).toHaveTextContent('not installed');
+      await user.click(screen.getByRole('button', { name: /Kimi/ }));
+      expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewers: ['copilot', 'kimi'] }));
+    });
+
+    it('keeps an already-selected unavailable reviewer visible, badged', () => {
+      render(
+        <ReviewerPicker reviewers={['kimi']} modelOptions={modelOptions} onChange={() => {}} />
+      );
+      expect(screen.getByText('Kimi').parentElement).toHaveTextContent('disabled');
+    });
+
+    it('offers the whole roster when neither signal was fetched', () => {
+      render(<ReviewerPicker reviewers={['copilot']} onChange={() => {}} />);
+      expect(screen.queryByRole('button', { name: /unavailable/ })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Kimi/ })).toBeInTheDocument();
     });
   });
 

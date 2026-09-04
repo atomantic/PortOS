@@ -167,7 +167,9 @@ describe('PortOS update preflight parity — route vs. socket', () => {
     appUpdaterUpdateApp.mockResolvedValue({ success: true, steps: [] });
     const { fireUpdate: fireAckUpdate } = makeSocketHarness();
     await fireAckUpdate({ appId: PORTOS_APP_ID, acknowledgeFork: true });
-    expect(appUpdaterUpdateApp).toHaveBeenCalledWith(portosApp, expect.any(Function), { syncFork: false });
+    expect(appUpdaterUpdateApp).toHaveBeenCalledWith(portosApp, expect.any(Function), {
+      syncFork: false, acknowledgeFork: true, acknowledgePersistentMindImageBackup: false,
+    });
   });
 
   it('a non-PortOS app is never subject to the PortOS preflight', async () => {

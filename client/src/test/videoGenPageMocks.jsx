@@ -42,6 +42,11 @@ export const state = {
   peers: [],
   /** `getVideoGenStatus`; a spy so a suite can defer it, count calls or vary the payload. */
   getVideoGenStatus: vi.fn(),
+  /**
+   * `getVideoGenModelContext`; the probe-free half the Model picker reads (#5835).
+   * A spy for the same reasons — a suite defers it to assert the page mid-flight.
+   */
+  getVideoGenModelContext: vi.fn(),
   generateVideo: vi.fn(),
   attach: vi.fn(),
   eventSourceRef: { current: null },
@@ -61,7 +66,7 @@ export const state = {
   universeStyle: DEFAULT_UNIVERSE_STYLE,
 };
 
-const SPIES = ['getVideoGenStatus', 'generateVideo', 'attach', 'start', 'startWhenIdle', 'repair', 'cancel', 'refresh'];
+const SPIES = ['getVideoGenStatus', 'getVideoGenModelContext', 'generateVideo', 'attach', 'start', 'startWhenIdle', 'repair', 'cancel', 'refresh'];
 
 /** Restore every documented default, including fresh spies. Call it first in `beforeEach`. */
 export function resetVideoGenMockState() {
@@ -105,6 +110,19 @@ export const videoGenTermsGate = (termsId) => ({
   licenseUrl: 'https://example.com/license',
 });
 
+/**
+ * A `/model-context` payload over `models` — the model list plus the three
+ * shaping numbers the picker's auto-select reads, with no python probe behind
+ * them. The first model is the default unless overridden.
+ */
+export const videoGenModelContext = (models, overrides = {}) => ({
+  models,
+  defaultModel: models[0]?.id ?? null,
+  systemMemoryGb: 128,
+  fflfLtx2PixelBudget: 8_000_000,
+  ...overrides,
+});
+
 /** A `/status` payload over `models`; the first model is the default unless overridden. */
 export const videoGenStatus = (models, overrides = {}) => ({
   connected: true,
@@ -122,6 +140,7 @@ vi.mock('../services/api', () => ({
   // a media provider the picker renders nothing and every local path is unchanged.
   getInstances: vi.fn(async () => ({ peers: state.peers })),
   getVideoGenStatus: (...args) => state.getVideoGenStatus(...args),
+  getVideoGenModelContext: (...args) => state.getVideoGenModelContext(...args),
   generateVideo: (...args) => state.generateVideo(...args),
   cancelVideoGen: vi.fn(async () => ({})),
   listVideoHistory: vi.fn(async () => []),

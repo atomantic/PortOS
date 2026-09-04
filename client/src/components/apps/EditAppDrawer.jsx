@@ -470,7 +470,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
                         <button
                           type="button"
                           onClick={() => copyToClipboard(tlsResult.snippet, 'Snippet copied')}
-                          className="absolute top-1 right-1 p-1 bg-port-border/60 hover:bg-port-border rounded"
+                          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center absolute top-1 right-1 p-1 bg-port-border/60 hover:bg-port-border rounded"
                           aria-label="Copy snippet"
                         >
                           <Copy size={12} />

@@ -31,7 +31,7 @@ export default function OverviewTab({ app, onRefresh }) {
   const onComplete = useMemo(() => () => onRefresh(), [onRefresh]);
   // Scoped to this app: the shared hook otherwise reports whichever operation
   // is running, which would stream another app's steps into this tab.
-  const { steps, isOperating, operationType, error, completed, startUpdate, startStandardize } = useAppOperation({ onComplete, appId: app?.id });
+  const { steps, isOperating, operationType, error, completed, restarting, startUpdate, startStandardize } = useAppOperation({ onComplete, appId: app?.id });
   const updating = isOperating && operationType === 'update';
   const standardizing = isOperating && operationType === 'standardize';
 
@@ -306,11 +306,11 @@ export default function OverviewTab({ app, onRefresh }) {
         </button>
         <button
           onClick={handleUpdate}
-          disabled={isOperating}
+          disabled={isOperating || restarting}
           className="px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
         >
           <Download size={14} className={updating ? 'animate-bounce' : ''} />
-          {updating ? 'Updating...' : 'Update'}
+          {updating ? 'Updating...' : restarting ? 'Restarting...' : 'Update'}
         </button>
         <button
           onClick={handleRefreshConfig}

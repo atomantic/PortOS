@@ -19,13 +19,13 @@ import { buildInstallFailureTask } from '../../lib/installFailureTask';
 import { addCosTask } from '../../services/api';
 import toast from '../ui/Toast';
 
-// Unattended repair work, same posture as `INVESTIGATION_TASK_DELIVERY`
-// (`server/lib/investigationTasks.js`): keep it out of the user's checkout and
-// send it through the PR gate. It deliberately stops short of that constant's
-// `prCompletion: merge-on-green`, and carries no `isInvestigation` marker —
-// `createCosTaskSchema` has no such field, so a client-queued task sits outside
-// the investigation dedup/circuit-breaker machinery. Tracked in #6043.
-const INSTALL_INVESTIGATION_DELIVERY = { useWorktree: true, openPR: true };
+// The task's identity as an investigation (#6043) is the only posture flag sent:
+// the server recognizes `isInvestigation`, derives the dedup fingerprint itself,
+// and applies `CLIENT_INVESTIGATION_DELIVERY` (`server/lib/investigationTasks.js`)
+// — worktree-isolated, PR-gated, reviewed rather than merged on green because a
+// human asked for this one. Keeping the delivery server-side is what stops this
+// button from drifting out of step with the auto-filed posture again.
+const INSTALL_INVESTIGATION_MARKER = { isInvestigation: true };
 
 export default function QueueInstallInvestigationButton({
   label,
@@ -47,7 +47,7 @@ export default function QueueInstallInvestigationButton({
     // The description is deterministic per installer + stage, so retrying the
     // same failing install and clicking again hits the store's duplicate guard
     // (409 DUPLICATE_TASK). A task already exists — not a failure to report.
-    const duplicateMessage = await addCosTask({ ...task, ...INSTALL_INVESTIGATION_DELIVERY }, { silent: true })
+    const duplicateMessage = await addCosTask({ ...task, ...INSTALL_INVESTIGATION_MARKER }, { silent: true })
       .then(() => null)
       .catch((err) => {
         // The server names the existing task's status ("already pending" /

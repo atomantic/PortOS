@@ -219,7 +219,7 @@ export default function LoomHostedSessionModal({
                 <button
                   onClick={handleCopyLink}
                   aria-label="Copy hosted play join link"
-                  className="p-1.5 rounded text-port-muted hover:text-port-text hover:bg-port-card transition-colors shrink-0"
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded text-port-muted hover:text-port-text hover:bg-port-card transition-colors shrink-0"
                   title="Copy link"
                 >
                   <Copy className="w-4 h-4" />

@@ -7,6 +7,7 @@ import {
   resetVideoGenMockState,
   state,
   videoGenModel,
+  videoGenModelContext,
   videoGenStatus,
   videoGenTermsGate,
 } from '../test/videoGenPageMocks.jsx';
@@ -20,6 +21,7 @@ describe('VideoGen compose-while-busy', () => {
   beforeEach(() => {
     resetVideoGenMockState();
     state.getVideoGenStatus.mockResolvedValue(videoGenStatus([MODEL]));
+    state.getVideoGenModelContext.mockResolvedValue(videoGenModelContext([MODEL]));
     state.modelStatuses = { [MODEL.id]: { id: MODEL.id, repo: MODEL.repo, cached: true, sizeBytes: 100 } };
     state.generateVideo.mockReturnValue(new Promise(() => {}));
     state.attach.mockReturnValue(new Promise(() => {}));

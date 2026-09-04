@@ -189,7 +189,10 @@ export async function migrateWritersRoomToDB() {
     const content = await readFile(manifestPath, 'utf-8').catch(() => null);
     if (content === null) continue;
     const manifest = safeJSONParse(content, null, { allowArray: false, logError: true, context: manifestPath });
-    if (!manifest) continue; // corrupted manifest — skip, leave on disk untouched
+    // `allowArray: false` only rejects a root array — a bare JSON scalar
+    // still parses, so also guard for a genuine object before treating the
+    // manifest as valid.
+    if (!manifest || typeof manifest !== 'object') continue; // corrupted manifest — skip, leave on disk untouched
     if (await importWork(manifest)) workCount += 1;
     importedManifestPaths.push(manifestPath);
   }

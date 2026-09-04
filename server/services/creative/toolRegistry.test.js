@@ -60,7 +60,7 @@ vi.mock('../writersRoom/evaluator.js', () => ({ runAnalysis: vi.fn(async () => (
 vi.mock('../pipeline/series.js', () => ({ createSeries: vi.fn(async () => ({ id: 'ser1' })) }));
 vi.mock('../pipeline/seriesGenerate.js', () => ({ generateSeriesConcept: vi.fn(async () => ({ name: 'C' })) }));
 vi.mock('../pipeline/textStages.js', () => ({ generateStage: vi.fn(async () => ({ stage: 'st' })) }));
-vi.mock('../pipeline/seriesAutopilot.js', () => ({ startSeriesAutopilot: vi.fn(async () => ({ runId: 'ap1' })) }));
+vi.mock('../pipeline/seriesAutopilot/orchestrator.js', () => ({ startSeriesAutopilot: vi.fn(async () => ({ runId: 'ap1' })) }));
 vi.mock('../pipeline/visualStages.js', () => ({
   renderComicCover: vi.fn(async () => ({ jobId: 'cov1', variant: 'proof' })),
   renderComicBackCover: vi.fn(async () => ({ jobId: 'bcov1', variant: 'proof' })),
@@ -82,7 +82,7 @@ import { dispatchTool as dispatchVoiceTool } from '../voice/tools.js';
 import { getDomainBudgetStatus, recordDomainUsage } from '../domainUsage.js';
 import { createSeries } from '../pipeline/series.js';
 import { generateStage } from '../pipeline/textStages.js';
-import { startSeriesAutopilot } from '../pipeline/seriesAutopilot.js';
+import { startSeriesAutopilot } from '../pipeline/seriesAutopilot/orchestrator.js';
 import { renderComicCover, renderVolumeCover, renderComicPage, refineComicPageRender } from '../pipeline/visualStages.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { getProject } from '../creativeDirector/local.js';

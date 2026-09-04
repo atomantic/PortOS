@@ -8,7 +8,7 @@
  * scripts-state.json into jobs.
  */
 
-import { writeFile, rename, readdir } from 'fs/promises'
+import { rename, readdir } from 'fs/promises'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { ensureDir, PATHS, readJSONFile, atomicWrite, tryReadFile } from '../../lib/fileUtils.js'
@@ -59,22 +59,22 @@ async function syncSkillTemplatesFromSample() {
     const existingContent = await tryReadFile(destPath)
     if (!existingContent) {
       // Case a: fresh install — seed file and record shipped snapshot
-      await writeFile(destPath, sampleContent)
-      await writeFile(shippedPath, sampleContent)
+      await atomicWrite(destPath, sampleContent)
+      await atomicWrite(shippedPath, sampleContent)
       console.log(`📝 Seeded missing skill template: ${file}`)
       continue
     }
     if (existingContent === sampleContent) {
       // Case b: file already matches sample — ensure .shipped is current
       const shippedContent = await tryReadFile(shippedPath)
-      if (shippedContent !== sampleContent) await writeFile(shippedPath, sampleContent)
+      if (shippedContent !== sampleContent) await atomicWrite(shippedPath, sampleContent)
       continue
     }
     const shippedContent = await tryReadFile(shippedPath)
     if (existingContent === shippedContent) {
       // Case c: file matches last-shipped snapshot but sample has changed — safe to update
-      await writeFile(destPath, sampleContent)
-      await writeFile(shippedPath, sampleContent)
+      await atomicWrite(destPath, sampleContent)
+      await atomicWrite(shippedPath, sampleContent)
       console.log(`🔄 Updated unmodified skill template: ${file}`)
     } else {
       // Case d: for installs upgrading from a pre-.shipped release, any existing

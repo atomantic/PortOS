@@ -74,6 +74,14 @@ describe('isSafeBranchUpstream', () => {
     expect(isSafeBranchUpstream('feature/x', 'feature/x')).toBe(true);
   });
 
+  it('accepts a branch tracking a FORK remote, because the invariant is on the REF (#6064)', () => {
+    // A fork PR's head is attached from `fork-<owner>/<branch>`, so its upstream
+    // is `remote=fork-contributor, merge=refs/heads/<branch>`. Judging the
+    // REMOTE instead of the ref would have this guard "repair" that away — and a
+    // config-derived push would then land the contributor's commits on origin.
+    expect(isSafeBranchUpstream('contributor/fix-thing', 'refs/heads/contributor/fix-thing')).toBe(true);
+  });
+
   it('rejects the default branch — the ref a config-derived push must never resolve to', () => {
     expect(isSafeBranchUpstream('cos/task/agent', 'refs/heads/main')).toBe(false);
   });

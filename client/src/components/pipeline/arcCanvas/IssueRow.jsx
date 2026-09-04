@@ -110,7 +110,7 @@ export default function IssueRow({ issue, seasons, onIssuesUpdate }) {
           <button
             type="button"
             onClick={() => setConfirmingDelete(true)}
-            className="p-1 rounded border border-port-border bg-port-card text-gray-500 hover:text-port-error opacity-70 group-hover:opacity-100 focus:opacity-100"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded border border-port-border bg-port-card text-gray-500 hover:text-port-error opacity-70 group-hover:opacity-100 focus:opacity-100"
             aria-label={`Delete ${issue.title}`}
             title="Delete issue / episode"
           >

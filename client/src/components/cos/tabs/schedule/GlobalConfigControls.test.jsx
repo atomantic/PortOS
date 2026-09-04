@@ -111,6 +111,17 @@ describe('GlobalConfigControls — After opening PR', () => {
     expect(screen.getByTestId('reviewer-picker')).toBeInTheDocument();
   });
 
+  it('keeps the reviewer picker for a claim flow, whose shipped metadata sets neither flag', () => {
+    // A claim PROMPT opens and merges its own PR and runs the reviewers itself,
+    // so the resolved list is operative even though `openPR` and `reviewLoop` are
+    // both false — which is exactly the shipped `claim-work` metadata. Hiding the
+    // picker here leaves a reviewer override that every claim obeys with no
+    // control anywhere that can clear it, while the claim surfaces tell the user
+    // to come here and do precisely that.
+    renderControls({ taskType: 'claim-work', taskMetadata: { useWorktree: false, openPR: false, claimFlow: true } });
+    expect(screen.getByTestId('reviewer-picker')).toBeInTheDocument();
+  });
+
   it('resets the task review override while preserving unrelated task metadata', () => {
     const onUpdate = renderControls({
       taskMetadata: {

@@ -31,6 +31,26 @@ vi.mock('./imageGenQuota.js', () => ({
   } : null))
 }));
 
+// The federation layer `getProviderQuotas` folds in reads AND WRITES this
+// machine's real `data/` store: `getFleetQuotaEntries` returns whatever peers
+// have published, and `recordLocalQuotaCards` persists the cards it was handed
+// to `data/provider-quotas.json` (then invalidates the `usage` sync checksum, so
+// peers pull it). Unmocked, that made this suite non-hermetic in both
+// directions — it read a developer's live peer readings into assertions that
+// expect `limits: []`, and it wrote these fixtures' fake agy/grok cards over
+// their genuine ones. Green in CI only because CI has no peer data.
+// The merge and the store have their own coverage (lib/fleetQuotas.test.js,
+// services/peerUsage.test.js); this file's boundary is local card assembly.
+vi.mock('./peerUsage.js', () => ({
+  getFleetQuotaEntries: vi.fn().mockResolvedValue([])
+}));
+vi.mock('./providerQuotaShare.js', () => ({
+  recordLocalQuotaCards: vi.fn().mockResolvedValue(null)
+}));
+vi.mock('./usageFleetBilling.js', () => ({
+  getApiBilledInstanceIds: vi.fn().mockResolvedValue([])
+}));
+
 import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';

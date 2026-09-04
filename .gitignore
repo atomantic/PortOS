@@ -63,6 +63,11 @@ Thumbs.db
 /.agent-done
 /.agent-done-*
 
+# Public-review input bundle PortOS materializes into a reviewer's worktree
+# (see server/lib/agentScratchPaths.js) — pipeline state, never work product
+/PORTOS_PUBLIC_REVIEW_INPUT.json
+/.portos-public-review/
+
 # BTW messages (ephemeral agent context, cleaned up after ingestion)
 BTW.md
 

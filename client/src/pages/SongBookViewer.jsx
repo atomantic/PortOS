@@ -944,7 +944,9 @@ export default function SongBookViewer() {
                   <Minus size={16} />
                 </button>
                 <span className="min-w-[3.5rem] text-center text-sm text-gray-300 font-mono" title="Transpose (semitones)" role="status" aria-live="polite" aria-atomic="true">
-                  Transpose {transpose > 0 ? `+${transpose}` : transpose} semitones
+                  <span className="sr-only">Transpose </span>
+                  <span>{transpose > 0 ? `+${transpose}` : transpose}</span>
+                  <span className="sr-only"> semitones</span>
                 </span>
                 <button type="button" onClick={() => setTranspose(transpose + 1)} className={ctrlBtnClass} aria-label={`Transpose up (currently ${transpose > 0 ? '+' : ''}${transpose} semitones)`} title="Transpose up (])">
                   <Plus size={16} />

@@ -194,7 +194,7 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
               type="button"
               onClick={() => refreshCheck(pythonPath)}
               disabled={checking}
-              className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50 disabled:opacity-50"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50 disabled:opacity-50"
               title="Re-check" aria-label="Re-check"
             >
               <RefreshCw size={14} className={checking ? 'animate-spin' : ''} />

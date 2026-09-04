@@ -141,7 +141,7 @@ function getSuccessRateStyle(rate) {
   return { bg: 'bg-port-error/15', text: 'text-port-error', label: 'low' };
 }
 
-export default function TaskItem({ task, agent = null, isSystem, spawning = false, selected = false, onRefresh, onTaskUnblocked, providers, durations, dragHandleProps, apps, instances = null, onEditingChange }) {
+export default function TaskItem({ task, agent = null, isSystem, spawning = false, selected = false, onRefresh, onTaskUnblocked, providers, providersLoaded, durations, dragHandleProps, apps, instances = null, onEditingChange }) {
   // System tasks are persisted in COS-TASKS.md. Every task
   // mutation must name that source; otherwise the API's user-queue default
   // searches TASKS.md and reports the system task as missing.
@@ -402,7 +402,17 @@ export default function TaskItem({ task, agent = null, isSystem, spawning = fals
           : requiresApproval ? 'border-yellow-500/50' : 'border-port-border'
       }`}
     >
-      <div className="flex items-start gap-3">
+      {/* The icon rail and the task body cannot share a row on a phone: up to
+          five 44px targets leave the body ~120px wide, so the task id breaks a
+          few characters per line and every badge lands on its own row. The
+          rail's `basis-full` under `sm` is what drops it onto its own wrapped
+          line, leaving the handle, the status glyph and the body together on the
+          first; `sm:basis-auto` + `sm:flex-nowrap` put them back on one row above
+          it. Sizing the BODY instead (a `basis-64` that pushes the rail off the
+          line) reads the same at 390px but strands the two 16px glyphs alone on
+          row 1 once they no longer fit beside it — at 360px and below, and at
+          390px on any row that also carries a drag handle. */}
+      <div className="flex items-start gap-3 flex-wrap sm:flex-nowrap">
         {/* Drag handle - only show for user tasks. */}
         {dragHandleProps && !isSystem && (
           <button
@@ -432,7 +442,7 @@ export default function TaskItem({ task, agent = null, isSystem, spawning = fals
         </button>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1 flex-wrap">
-            <span className="text-sm font-mono text-gray-500">{task.id}</span>
+            <span className="text-sm font-mono text-gray-500 min-w-0 break-words">{task.id}</span>
             {task.metadata?.app && apps?.find(a => a.id === task.metadata.app)?.name && (
               <span className="px-1.5 py-0.5 text-xs bg-port-accent/20 text-port-accent rounded shrink-0" title={task.metadata.app}>
                 {apps.find(a => a.id === task.metadata.app).name}
@@ -733,7 +743,7 @@ export default function TaskItem({ task, agent = null, isSystem, spawning = fals
         {/* Action buttons. Keep the delete confirmation here, next to the trash
             icon, rather than at the bottom of the card — a task with a lot of
             context would otherwise push the confirm row far below the fold. */}
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex flex-wrap items-center justify-end gap-1 sm:gap-2 shrink-0 ml-auto basis-full sm:basis-auto">
           {!editing && (
             isConfirming(task.id) ? (
               <ConfirmButtonPair
@@ -758,7 +768,7 @@ export default function TaskItem({ task, agent = null, isSystem, spawning = fals
                       if (result?.success) toast.success(`Spawning ${task.id}`);
                       if (onRefresh) onRefresh();
                     }}
-                    className="p-1 text-gray-500 hover:text-port-success transition-colors"
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-success transition-colors"
                     title="Process now"
                     aria-label="Process task now"
                   >
@@ -771,7 +781,7 @@ export default function TaskItem({ task, agent = null, isSystem, spawning = fals
                   <button
                     type="button"
                     onClick={() => setRelaunching(true)}
-                    className="p-1 text-gray-500 hover:text-port-accent transition-colors"
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-accent transition-colors"
                     title="Relaunch on a different provider or model"
                     aria-label={`Relaunch task ${task.id} on a different provider or model`}
                   >
@@ -798,7 +808,7 @@ export default function TaskItem({ task, agent = null, isSystem, spawning = fals
                 {task.status !== 'blocked' && task.status !== 'completed' && (
                   <button
                     onClick={handleMarkBlocked}
-                    className="p-1 text-gray-500 hover:text-port-error transition-colors"
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
                     title="Mark as blocked"
                     aria-label="Mark task as blocked"
                   >
@@ -807,7 +817,7 @@ export default function TaskItem({ task, agent = null, isSystem, spawning = fals
                 )}
                 <button
                   onClick={() => setEditing(true)}
-                  className="p-1 text-gray-500 hover:text-white transition-colors"
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-white transition-colors"
                   title="Edit"
                   aria-label="Edit task"
                 >
@@ -815,7 +825,7 @@ export default function TaskItem({ task, agent = null, isSystem, spawning = fals
                 </button>
                 <button
                   onClick={() => requestDelete(task.id)}
-                  className="p-1 text-gray-500 hover:text-port-error transition-colors"
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
                   title="Delete"
                   aria-label="Delete task"
                 >
@@ -831,6 +841,7 @@ export default function TaskItem({ task, agent = null, isSystem, spawning = fals
         <RelaunchAgentModal
           agent={agent}
           providers={providers}
+          providersLoaded={providersLoaded}
           apps={apps}
           onDone={onRefresh}
           onClose={() => setRelaunching(false)}

@@ -250,22 +250,22 @@ function LoopCard({ loop, onAction, expandedId, onToggle }) {
           </div>
         </div>
 
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-2">
           {loop.isRunning ? (
             <>
-              <button onClick={e => { e.stopPropagation(); onAction('trigger', loop.id); }} className="p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-accent" title="Run now" aria-label="Run now">
+              <button onClick={e => { e.stopPropagation(); onAction('trigger', loop.id); }} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-accent" title="Run now" aria-label="Run now">
                 <Zap size={14} />
               </button>
-              <button onClick={e => { e.stopPropagation(); onAction('stop', loop.id); }} className="p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-warning" title="Stop" aria-label="Stop">
+              <button onClick={e => { e.stopPropagation(); onAction('stop', loop.id); }} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-warning" title="Stop" aria-label="Stop">
                 <Square size={14} />
               </button>
             </>
           ) : (
-            <button onClick={e => { e.stopPropagation(); onAction('resume', loop.id); }} className="p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-success" title="Resume" aria-label="Resume">
+            <button onClick={e => { e.stopPropagation(); onAction('resume', loop.id); }} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-success" title="Resume" aria-label="Resume">
               <Play size={14} />
             </button>
           )}
-          <button onClick={e => { e.stopPropagation(); onAction('delete', loop.id); }} className="p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-error" title="Delete" aria-label="Delete">
+          <button onClick={e => { e.stopPropagation(); onAction('delete', loop.id); }} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-error" title="Delete" aria-label="Delete">
             <Trash2 size={14} />
           </button>
           {expanded ? <ChevronDown size={14} className="text-gray-500" /> : <ChevronRight size={14} className="text-gray-500" />}

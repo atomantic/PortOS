@@ -364,7 +364,11 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // scene records whether that protagonist is on-screen or speaking through a
   // side-device off-screen. A v3 peer would silently strip those fields on a
   // whole-record round trip and could restore wardrobe drift or put a removed
-  // protagonist back into a scene.
+  // protagonist back into a scene. v4 ALSO introduced per-episode beat outlines
+  // (`episode.storyOutline`) and the series delivery plan
+  // (`seriesPlan.deliveryOptions` / `.interEpisodeVoicemails` /
+  // `.nextSeasonTeaser`) — a v3 peer strips both, so the receiver restores them
+  // from the local record rather than treating the omission as a delete.
   // v5 = one loom-level render format pins the aspect ratio and concrete
   // dimensions shared by storyboard stills and motion clips; plot points and
   // scenes gained durable playable-challenge kinds/phase mappings; and durable

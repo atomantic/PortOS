@@ -13,7 +13,7 @@ const {
   resolveAutoInvestigationApproval,
   __resetInvestigationCircuit,
 } = await import('./investigationTaskProducer.js');
-const { INVESTIGATION_CIRCUIT_MAX_CREATIONS, INVESTIGATION_CIRCUIT_WINDOW_MS } = await import('../lib/investigationTasks.js');
+const { INVESTIGATION_CIRCUIT_MAX_CREATIONS, INVESTIGATION_CIRCUIT_WINDOW_MS, CLIENT_INVESTIGATION_DELIVERY } = await import('../lib/investigationTasks.js');
 
 const emptyBacklog = () => getAllTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } });
 
@@ -122,5 +122,51 @@ describe('resolveAutoInvestigationApproval', () => {
 
     expect(verdict.loopReason).toBe('repeat-fingerprint');
     expect(getAllTasks).not.toHaveBeenCalled();
+  });
+});
+
+describe('fileInvestigationTask — a user-queued investigation (#6043)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    addTask.mockResolvedValue({ id: 'task-1' });
+    emptyBacklog();
+    __resetInvestigationCircuit();
+  });
+
+  it('lands in the user queue with the client delivery posture, keeping the shared markers', async () => {
+    await fileInvestigationTask(
+      { fingerprint: 'unknown:ui-investigation:fix-example-runtime-installer-failure', description: 'Fix Example Runtime installer failure' },
+      { taskType: 'user', delivery: CLIENT_INVESTIGATION_DELIVERY }
+    );
+
+    expect(addTask).toHaveBeenCalledWith({
+      description: 'Fix Example Runtime installer failure',
+      useWorktree: true,
+      openPR: true,
+      prCompletion: 'review-then-merge',
+      approvalRequired: false,
+      approvalReason: null,
+      isInvestigation: true,
+      investigationFingerprint: 'unknown:ui-investigation:fix-example-runtime-installer-failure',
+    }, 'user');
+  });
+
+  it('contributes to the shared storm counter, so UI-queued repairs are visible to the circuit', async () => {
+    await fileInvestigationTask(
+      { fingerprint: 'unknown:ui-investigation:x', description: 'Fix it' },
+      { taskType: 'user', delivery: CLIENT_INVESTIGATION_DELIVERY }
+    );
+    expect(recentInvestigationCreations()).toBe(1);
+  });
+
+  it('sets the delivery posture by policy — a caller cannot pick its own', async () => {
+    await fileInvestigationTask(
+      { fingerprint: 'unknown:ui-investigation:x', description: 'Fix it', useWorktree: false, openPR: false, prCompletion: 'merge-on-green' },
+      { taskType: 'user', delivery: CLIENT_INVESTIGATION_DELIVERY }
+    );
+    expect(addTask).toHaveBeenCalledWith(
+      expect.objectContaining({ useWorktree: true, openPR: true, prCompletion: 'review-then-merge' }),
+      'user'
+    );
   });
 });

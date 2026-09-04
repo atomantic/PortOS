@@ -255,7 +255,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
                     setCopied(true);
                     setTimeout(() => setCopied(false), 2000);
                   }}
-                  className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-white bg-port-bg rounded"
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center absolute top-2 right-2 p-1.5 text-gray-400 hover:text-white bg-port-bg rounded"
                   title="Copy prompt" aria-label="Copy prompt"
                 >
                   {copied ? <Check size={14} className="text-port-success" /> : <Copy size={14} />}
@@ -398,7 +398,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
                     setCopied(true);
                     setTimeout(() => setCopied(false), 2000);
                   }}
-                  className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-white bg-port-bg rounded"
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center absolute top-2 right-2 p-1.5 text-gray-400 hover:text-white bg-port-bg rounded"
                   title="Copy prompt" aria-label="Copy prompt"
                 >
                   {copied ? <Check size={14} className="text-port-success" /> : <Copy size={14} />}

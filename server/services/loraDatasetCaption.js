@@ -33,7 +33,7 @@ import { getSettings } from './settings.js';
 import { listVisionModels } from './localLlm.js';
 import { isVisionModel } from '../lib/localModelHeuristics.js';
 import { getDataset, updateDataset, datasetImagePath } from './loraDatasets.js';
-import { loadDatasetSubject, extractSubjectSignaturePhrases } from './loraDatasetGenerate.js';
+import { loadDatasetSubject, extractSubjectSignaturePhrases } from './loraDatasetSubject.js';
 
 /**
  * Build the vision-captioning instruction. A LoRA binds whatever the captions

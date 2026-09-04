@@ -121,6 +121,7 @@ export * from './useInstallStream.js';
 export * from './useProcessLogs.js';
 export * from './useOpenClawStream.js';
 export * from './usePipelineProgress.js';
+export * from './usePortosRestartWatch.js';
 export * from './useReaderPanel.js';
 export * from './useSeriesEditorial.js';
 export * from './useImageTo3dTargets.js';
@@ -129,6 +130,7 @@ export * from './useStoryStepRuns.jsx';
 export * from './useModelDownloadStatus.js';
 
 // === Media (annotations, completion, attachments) ===
+export * from './useAvatarCapabilities.js';
 export * from './useMediaAnnotations.js';
 export * from './useSpritePendingRenders.js';
 export { default as useSpriteRecordCrud } from './useSpriteRecordCrud.js';
@@ -136,6 +138,7 @@ export * from './useMediaCompletionRefresh.js';
 export * from './useOpenClawAttachments.js';
 
 // === Settings-derived shared state ===
+export { default as useClaimReviewers } from './useClaimReviewers.js';
 export * from './useCodeReviewDefaults.jsx';
 export { default as useCatalogTypes } from './useCatalogTypes.jsx';
 export * from './useCatalogTypes.jsx';

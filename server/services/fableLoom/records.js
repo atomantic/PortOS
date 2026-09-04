@@ -633,6 +633,53 @@ export async function deleteLoom(id) {
   emitRecordDeleted('fableLoom', id);
 }
 
+// Episode beat outlines arrived with schema v4, alongside the series delivery
+// plan. A <=v3 sender round-trips the record through an outline-unaware
+// sanitizer, so an absent outline there means "cannot represent" rather than
+// "the author deleted it" — restore the local one whole. A v4 sender knows the
+// outline but not the v5 plot-point/challenge mapping on its scenes, so its
+// outline wins except for those two per-scene fields.
+const preserveLegacyStoryOutline = (episode, localEpisode, senderVersion) => {
+  if (!episode.storyOutline) {
+    return senderVersion < 4 && localEpisode?.storyOutline
+      ? { storyOutline: localEpisode.storyOutline }
+      : {};
+  }
+  if (senderVersion >= 5) return {};
+  const localScenes = new Map((localEpisode?.storyOutline?.scenes || [])
+    .map((scene) => [scene.key, scene]));
+  return {
+    storyOutline: {
+      ...episode.storyOutline,
+      scenes: episode.storyOutline.scenes.map((scene) => ({
+        ...scene,
+        ...(localScenes.has(scene.key) ? {
+          plotPointId: localScenes.get(scene.key).plotPointId,
+          challengePhase: localScenes.get(scene.key).challengePhase,
+        } : {}),
+      })),
+    },
+  };
+};
+
+// The series delivery plan (overnight voicemails, inter-episode voicemails, and
+// the next-season teaser) also arrived with v4. `sanitizeSeriesPlan` omits the
+// three keys entirely when a record predates the feature, so a <=v3 sender that
+// omits them means "cannot represent" and the local plan must survive. A v4+
+// sender that omits them describes a record with genuinely no delivery plan.
+const preserveLegacyDeliveryPlan = (remotePlan, localPlan, senderVersion) => (
+  senderVersion < 4
+    && localPlan
+    && Object.prototype.hasOwnProperty.call(localPlan, 'deliveryOptions')
+    && !Object.prototype.hasOwnProperty.call(remotePlan || {}, 'deliveryOptions')
+    ? {
+      deliveryOptions: localPlan.deliveryOptions,
+      interEpisodeVoicemails: localPlan.interEpisodeVoicemails,
+      nextSeasonTeaser: localPlan.nextSeasonTeaser,
+    }
+    : {}
+);
+
 // An older peer cannot represent newer scene production fields. When that
 // peer wins whole-record LWW after an unrelated edit, retain the local fields
 // on nodes that still exist instead of letting its unaware sanitizer clear
@@ -662,6 +709,7 @@ const preserveLegacyVisualProduction = (remote, local, senderVersion) => {
     } : {}),
     seriesPlan: senderVersion < 5 ? {
       ...remote.seriesPlan,
+      ...preserveLegacyDeliveryPlan(remote.seriesPlan, local.seriesPlan, senderVersion),
       plotPoints: (remote.seriesPlan?.plotPoints || []).map((item) => ({
         ...item,
         ...(localPlotPoints.has(item.id) ? { kind: localPlotPoints.get(item.id).kind } : {}),
@@ -675,22 +723,9 @@ const preserveLegacyVisualProduction = (remote, local, senderVersion) => {
     episodes: remote.episodes.map((episode) => {
       const localEpisode = localEpisodes.get(episode.id);
       const localNodes = new Map((localEpisode?.nodes || []).map((node) => [node.id, node]));
-      const localOutlineScenes = new Map((localEpisode?.storyOutline?.scenes || [])
-        .map((scene) => [scene.key, scene]));
       return {
         ...episode,
-        ...(senderVersion < 5 && episode.storyOutline ? {
-          storyOutline: {
-            ...episode.storyOutline,
-            scenes: episode.storyOutline.scenes.map((scene) => ({
-              ...scene,
-              ...(localOutlineScenes.has(scene.key) ? {
-                plotPointId: localOutlineScenes.get(scene.key).plotPointId,
-                challengePhase: localOutlineScenes.get(scene.key).challengePhase,
-              } : {}),
-            })),
-          },
-        } : {}),
+        ...preserveLegacyStoryOutline(episode, localEpisode, senderVersion),
         nodes: episode.nodes.map((node) => {
           const localNode = localNodes.get(node.id);
           return localNode ? {

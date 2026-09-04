@@ -929,6 +929,107 @@ describe('stream error containment', () => {
     expect(usageIdx).toBeGreaterThan(firstIdx);
   });
 
+  // A headless CLI still colors its progress feed. `opencode run` wraps its
+  // status line in bare SGR resets, and those bytes used to reach the transcript
+  // verbatim — the browser drops only the ESC, so the agent card rendered
+  // `[stderr] [0m` and a working agent read as a wedged one.
+  describe('ANSI decoloring of headless CLI output', () => {
+    const textArgs = () => ({
+      ...minimalArgs,
+      cliConfig: { command: 'opencode', args: ['run'], stdinMode: 'prompt', streamFormat: 'text' },
+    });
+
+    const emittedLines = () =>
+      agentStateMocks.appendAgentOutputLines.mock.calls.flatMap(([, batch]) => batch);
+
+    // The shared mock accumulates across the whole file; these assertions are
+    // about the exact transcript ONE run produced.
+    beforeEach(() => agentStateMocks.appendAgentOutputLines.mockClear());
+
+    it('strips color codes from stdout and stderr instead of leaking them into the transcript', async () => {
+      const spawnPromise = spawnDirectly(textArgs());
+      await new Promise((r) => setTimeout(r, 10));
+
+      fakeProcess.stdout.emit('data', Buffer.from('\x1B[32mbuilding\x1B[0m\n'));
+      fakeProcess.stderr.emit('data', Buffer.from('\x1B[0m> build · some-model\n'));
+      await new Promise((r) => setTimeout(r, 30));
+
+      fakeProcess.emit('close', 0);
+      await spawnPromise.catch(() => {});
+
+      const lines = emittedLines();
+      expect(lines).toContain('building\n');
+      expect(lines).toContain('[stderr] > build · some-model\n');
+      expect(lines.join('')).not.toMatch(/\x1B|\[0m|\[32m/);
+    });
+
+    it('reassembles an escape sequence split across two chunks rather than leaking its tail', async () => {
+      const spawnPromise = spawnDirectly(textArgs());
+      await new Promise((r) => setTimeout(r, 10));
+
+      // The reset straddles the chunk boundary: a per-chunk strip would emit `2m…`.
+      fakeProcess.stdout.emit('data', Buffer.from('ready\x1B['));
+      await new Promise((r) => setTimeout(r, 20));
+      fakeProcess.stdout.emit('data', Buffer.from('32mgreen\n'));
+      await new Promise((r) => setTimeout(r, 20));
+
+      fakeProcess.emit('close', 0);
+      await spawnPromise.catch(() => {});
+
+      expect(emittedLines().join('')).toBe('readygreen\n');
+    });
+
+    it('drops a chunk that was ONLY terminal control rather than tagging a blank [stderr] line', async () => {
+      const spawnPromise = spawnDirectly(textArgs());
+      await new Promise((r) => setTimeout(r, 10));
+
+      fakeProcess.stderr.emit('data', Buffer.from('\x1B[0m'));
+      fakeProcess.stdout.emit('data', Buffer.from('\x1B[0m'));
+      await new Promise((r) => setTimeout(r, 30));
+
+      fakeProcess.emit('close', 0);
+      await spawnPromise.catch(() => {});
+
+      expect(emittedLines()).not.toContain('[stderr] ');
+      expect(emittedLines().some((line) => line.trim() === '')).toBe(false);
+    });
+
+    it('still records a colors-only chunk as run output — it is proof the child is alive', async () => {
+      // Counting the DECOLORED length would report zero bytes and file a run that
+      // was steadily redrawing its progress line as having produced nothing.
+      appendRunEvent.mockClear();
+      const spawnPromise = spawnDirectly(textArgs());
+      await new Promise((r) => setTimeout(r, 10));
+
+      fakeProcess.stderr.emit('data', Buffer.from('\x1B[0m'));
+      await new Promise((r) => setTimeout(r, 30));
+
+      const outputs = appendRunEvent.mock.calls.map(([e]) => e).filter((e) => e.kind === 'run.output');
+      expect(outputs).toHaveLength(1);
+      expect(outputs[0].data).toMatchObject({ source: 'cli-stderr' });
+
+      fakeProcess.emit('close', 0);
+      await spawnPromise.catch(() => {});
+    });
+
+    it('detects a fallback signal that the CLI printed with color codes inside it', async () => {
+      // The detector matches provider prose; an SGR pair mid-sentence used to
+      // split the phrase and let a usage-limit signal through unnoticed.
+      killProcessTree.mockClear();
+      const spawnPromise = spawnDirectly(textArgs());
+      await new Promise((r) => setTimeout(r, 10));
+
+      fakeProcess.stdout.emit('data', Buffer.from('\x1B[33mNow using \x1B[1mextra usage\x1B[0m\n'));
+
+      expect(killProcessTree).toHaveBeenCalledTimes(1);
+      fakeProcess.killed = true;
+
+      await new Promise((r) => setTimeout(r, 20));
+      fakeProcess.emit('close', 143);
+      await spawnPromise.catch(() => {});
+    });
+  });
+
   it('routes the CLI command through prepareCliSpawn and spawns its resolved+wrapped result (#2243)', async () => {
     // The reported bug: on Windows a bare `opencode`/`claude` .cmd shim can't be
     // spawned directly under shell:false → ENOENT (-4058) → startup-failure.

@@ -6,7 +6,7 @@ vi.mock('./taskLearning.js', () => ({
   suggestModelTier: vi.fn()
 }));
 
-import { selectModelForTask, extractTaskTypeKey } from './agentModelSelection.js';
+import { selectModelForRole, selectModelForTask, extractTaskTypeKey } from './agentModelSelection.js';
 import { suggestModelTier } from './taskLearning.js';
 import { EXTERNAL_UNTYPED_TASK_TYPE } from './taskLearning/store.js';
 
@@ -77,5 +77,71 @@ describe('extractTaskTypeKey — spawn-time key mirror (issue #2333)', () => {
     expect(extractTaskTypeKey({ description: 'organize the weekly digest' })).toBe(EXTERNAL_UNTYPED_TASK_TYPE);
     // Never the legacy 'unknown' sink.
     expect(extractTaskTypeKey({})).not.toBe('unknown');
+  });
+});
+
+describe('selectModelForRole — orchestration profiles (#5992)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const orchestratedTask = (profile) => ({
+    ...benignTask,
+    metadata: { orchestrationMode: 'orchestrated', orchestrationProfile: profile },
+  });
+
+  it('honors the role model pin over the complexity heuristics', async () => {
+    suggestModelTier.mockResolvedValue(null);
+    const result = await selectModelForRole(
+      orchestratedTask({ implementer: { model: 'cheap-model', provider: 'codex' } }),
+      'implementer',
+      PROVIDER
+    );
+    expect(result.model).toBe('cheap-model');
+    expect(result.tier).toBe('user-specified');
+    expect(result.reason).toBe('orchestration-role-implementer');
+    expect(result.userProvider).toBe('codex');
+    expect(suggestModelTier).not.toHaveBeenCalled();
+  });
+
+  it('falls through to selectModelForTask for a role the profile does not pin', async () => {
+    suggestModelTier.mockResolvedValue(null);
+    const task = orchestratedTask({ architect: { model: 'opus' } });
+    const direct = await selectModelForTask(task, PROVIDER);
+    const role = await selectModelForRole(task, 'reviewer', PROVIDER);
+    expect(role.model).toBe(direct.model);
+    expect(role.reason).toBe(direct.reason);
+    expect(role.orchestrationRole).toBeUndefined();
+  });
+
+  it('carries a role effort default forward even when only the model falls through', async () => {
+    suggestModelTier.mockResolvedValue(null);
+    const result = await selectModelForRole(
+      orchestratedTask({ reviewer: { effort: 'low' } }),
+      'reviewer',
+      PROVIDER
+    );
+    expect(result.model).toBe(PROVIDER.defaultModel);
+    expect(result.orchestrationRole).toBe('reviewer');
+    expect(result.orchestrationEffort).toBe('low');
+  });
+
+  it('is byte-identical to selectModelForTask on a direct-mode task, profile or not', async () => {
+    suggestModelTier.mockResolvedValue(null);
+    const task = {
+      ...benignTask,
+      metadata: { orchestrationProfile: { architect: { model: 'opus' } } },
+    };
+    expect(await selectModelForRole(task, 'architect', PROVIDER))
+      .toEqual(await selectModelForTask(task, PROVIDER));
+  });
+
+  it('ignores an unknown role rather than treating it as unpinned config', async () => {
+    suggestModelTier.mockResolvedValue(null);
+    const result = await selectModelForRole(
+      orchestratedTask({ architect: { model: 'opus' } }),
+      'saboteur',
+      PROVIDER
+    );
+    expect(result.model).toBe(PROVIDER.defaultModel);
+    expect(result.orchestrationRole).toBeUndefined();
   });
 });

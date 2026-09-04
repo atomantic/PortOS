@@ -238,6 +238,18 @@ const asRecordList = (records) => (Array.isArray(records) ? records : [records])
 const listDir = async (dir) => readdir(dir).catch(() => []);
 
 /**
+ * Subdirectory names only, returning [] when `dir` doesn't exist or can't be
+ * read. Grok drops a flat `prompt_history.jsonl` file directly inside a
+ * cwd-keyed folder, as a SIBLING of the per-session-id directories — a plain
+ * `listDir` there hands that filename to callers expecting a session id, which
+ * then fails `ENOTDIR` trying to read `<file>/summary.json` (#6218).
+ */
+const listSubdirs = async (dir) => {
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+  return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+};
+
+/**
  * Every date directory (`YYYY/MM/DD`) a run could have written a Codex rollout
  * into. A run spanning midnight (or a UTC/local boundary) touches two days, so
  * the window's start and end days are both included.
@@ -399,7 +411,7 @@ export async function readMeasuredUsage({ workspacePath, startTime, endTime, fam
     for (const dirName of await listDir(sessionsRoot)) {
       if (!cwdMatches(decodeGrokSessionDir(dirName), workspacePath)) continue;
       const cwdDir = join(sessionsRoot, dirName);
-      for (const sessionId of await listDir(cwdDir)) {
+      for (const sessionId of await listSubdirs(cwdDir)) {
         const sessionDir = join(cwdDir, sessionId);
         const updatesPath = join(sessionDir, 'updates.jsonl');
         const updatesText = await tryReadFile(updatesPath);

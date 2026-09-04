@@ -8,6 +8,11 @@ export const getTribePeople = (options = {}) => {
   return request(`/tribe/people${qs ? `?${qs}` : ''}`, { silent: options.silent });
 };
 
+// Emails/phones shared by more than one person (#5908) — a non-blocking report,
+// never a merge. Read-only and cheap: safe to call on every Tribe page load.
+export const getTribeDuplicateIdentifiers = (options = {}) =>
+  request('/tribe/duplicate-identifiers', { silent: options.silent });
+
 export const getTribeCareSummary = (options = {}) => {
   const params = new URLSearchParams();
   if (options.limit) params.set('limit', String(options.limit));

@@ -65,6 +65,7 @@ import { PATHS, expandHome } from './fileUtils.js';
 import { isPlainObject } from './objects.js';
 import {
   LEGACY_VIDEO_KEYS,
+  VIDEO_BUCKET_CUDA,
   VIDEO_BUCKETS,
   VIDEO_DEFAULT_KEYS,
   activeVideoBucket,
@@ -1372,6 +1373,57 @@ const dropRetiredEntries = (list) => (
   Array.isArray(list) ? list.filter((entry) => !isRetired(entry)) : list
 );
 
+// The ordered load-time upgrade chain a video bucket's persisted entries run
+// through before the apply*/sanitize* decorators in `videoEntries` touch them.
+//
+// This list IS the order. Every row is the same shape — a whole-list rewrite
+// that only touches an entry still matching what PortOS itself shipped — so
+// adding the next upgrader is appending a row rather than adding a paren level
+// to one nested expression, and the ordering constraints below are stated where
+// a reader — and the ordering guard in `mediaModels.test.js` — can see them,
+// instead of being implied by nesting depth.
+//
+// `buckets` limits a row to the video buckets it applies to; a row without one
+// runs for every bucket.
+const VIDEO_REGISTRY_UPGRADES = Object.freeze([
+  // FIRST, unconditionally: a withdrawn model has to leave before any later row
+  // spends work on it, and before the apply* decorators would hand it a
+  // disclosure, a Finish edge, a speed profile or a draft decoder on its way out.
+  Object.freeze({ name: 'dropRetiredEntries', apply: dropRetiredEntries }),
+  Object.freeze({ name: 'upgradeMiniMaxH3OutputControls', apply: upgradeMiniMaxH3OutputControls }),
+  Object.freeze({ name: 'upgradeLtx25AudioControls', apply: upgradeLtx25AudioControls }),
+  // MUST stay ahead of `applyVideoDisclosures`, which only fills an ABSENT
+  // disclosure block: this row corrects the stale `estimatedDownloadGb` inside
+  // an already-persisted one, and the decorator would never revisit it.
+  Object.freeze({ name: 'upgradeFastMetalDownloadSizes', apply: upgradeFastMetalDownloadSizes }),
+  Object.freeze({ name: 'backfillRuntime', apply: backfillRuntime }),
+  // CUDA-only, and in this order: the legacy `ltx_video` row is repointed at the
+  // `cuda_video` runtime first, then the LTX-2.5 memory floor is raised.
+  Object.freeze({
+    name: 'upgradeLegacyCudaLtxRuntime',
+    apply: upgradeLegacyCudaLtxRuntime,
+    buckets: [VIDEO_BUCKET_CUDA],
+  }),
+  Object.freeze({
+    name: 'upgradeLtx25CudaMemoryFloor',
+    apply: upgradeLtx25CudaMemoryFloor,
+    buckets: [VIDEO_BUCKET_CUDA],
+  }),
+]);
+
+// Exported for the ordering guard in mediaModels.test.js: the chain's
+// order is load-bearing (see the constraints above), so a reorder has to be a
+// deliberate edit to a named list rather than an invisible re-nesting.
+export const VIDEO_REGISTRY_UPGRADE_NAMES = Object.freeze(
+  VIDEO_REGISTRY_UPGRADES.map((upgrade) => upgrade.name),
+);
+
+// Run one bucket's persisted entries through the chain above.
+const applyVideoRegistryUpgrades = (entries, bucket) => VIDEO_REGISTRY_UPGRADES.reduce(
+  (list, { apply, buckets }) => (buckets && !buckets.includes(bucket) ? list : apply(list)),
+  entries,
+);
+
 // Repoint a platform default that named a model this load just retired. Falls
 // through to the original id when the successor isn't installed either — then
 // getDefaultVideoModelId()'s "unknown default → first available" warning is the
@@ -1471,24 +1523,22 @@ const normalizeRegistry = (parsed) => {
     list: [...shippedImageIds, ...imageResult.newlyShipped],
   };
 
+  // VIDEO_REGISTRY_UPGRADES runs first: it is the ordered chain of load-time
+  // twins of the registry migrations, and its own ordering constraints are
+  // stated row by row up there.
+  //
   // applyVideoDisclosures is the load-time twin of migration 237: installs
   // that persisted their registry before `disclosure` existed pick it up
   // here without waiting for the migration, and both paths share the same
-  // preservation guards (user value wins, forked repo keeps Unknown).
-  // dropRetiredEntries is the same arrangement for the retirement migrations,
-  // and runs
-  // FIRST so a withdrawn model isn't handed a disclosure or a Finish edge on
-  // its way out. sanitizeFinishProfiles runs LAST (after the backfill and
+  // preservation guards (user value wins, forked repo keeps Unknown). It only
+  // fills an ABSENT block, which is why the upgrade chain — not a decorator —
+  // is where a stale persisted disclosure gets corrected.
+  // sanitizeFinishProfiles runs LAST (after the backfill and
   // after the user's own entries are merged in) so an edge that points at a
   // model this install deleted — or a hand-edited typo — is dropped with a
   // warning instead of surfacing a Finish button targeting nothing.
-  const videoEntries = (entries, { upgradeLegacyCudaLtx = false } = {}) => {
-    const normalized = backfillRuntime(upgradeFastMetalDownloadSizes(upgradeLtx25AudioControls(
-      upgradeMiniMaxH3OutputControls(dropRetiredEntries(entries)),
-    )));
-    const upgraded = upgradeLegacyCudaLtx
-      ? upgradeLtx25CudaMemoryFloor(upgradeLegacyCudaLtxRuntime(normalized))
-      : normalized;
+  const videoEntries = (entries, bucket) => {
+    const upgraded = applyVideoRegistryUpgrades(entries, bucket);
     const decorated = sanitizeFinishProfiles(applyVideoFinishProfiles(applyVideoDisclosures(upgraded)));
     // applyVideoSpeedProfiles is the load-time twin of migration 295, and
     // sanitizeSpeedProfiles is its sibling of sanitizeFinishProfiles: a
@@ -1510,9 +1560,7 @@ const normalizeRegistry = (parsed) => {
     return sanitizeMiniMaxH3MemoryProfiles(applyMiniMaxH3MemoryProfiles(withDraftDecode));
   };
   const normalizedBuckets = Object.fromEntries(
-    VIDEO_BUCKETS.map((bucket) => [bucket, videoEntries(bucketResults[bucket].entries, {
-      upgradeLegacyCudaLtx: bucket === 'cuda',
-    })]),
+    VIDEO_BUCKETS.map((bucket) => [bucket, videoEntries(bucketResults[bucket].entries, bucket)]),
   );
 
   // Spread the user's own `video` keys but NOT the legacy bucket spellings: the

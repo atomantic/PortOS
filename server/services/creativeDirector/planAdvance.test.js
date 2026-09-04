@@ -222,10 +222,12 @@ vi.mock('../mediaJobQueue/index.js', () => ({
   listJobs: (...a) => mockListJobs(...a),
   mediaJobEvents: { on: vi.fn(), off: vi.fn() },
 }));
-vi.mock('../pipeline/seriesAutopilot.js', () => ({
+vi.mock('../pipeline/seriesAutopilot/state.js', () => ({
   autopilotEvents: ap.autopilotEvents,
-  isAutopilotActive: () => ap.ctl.active,
   AUTOPILOT_TERMINAL_TYPES: ap.AUTOPILOT_TERMINAL_TYPES,
+}));
+vi.mock('../pipeline/seriesAutopilot/session.js', () => ({
+  isAutopilotActive: () => ap.ctl.active,
 }));
 vi.mock('../pipeline/series.js', () => ({
   getSeries: async () => ap.ctl.marker && { autopilot: ap.ctl.marker },

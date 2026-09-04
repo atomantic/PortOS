@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 // The analysis-mic helper: what it asks the browser for, and how honestly it
 // reports what the browser actually did. The rest of audioRecorder.js is Web
 // Audio / MediaRecorder plumbing exercised through its component callers.

@@ -19,7 +19,7 @@
 
 import { join } from 'path';
 import { execGit } from '../lib/execGit.js';
-import { emitLog } from './cosEvents.js';
+import { cosEvents, emitLog } from './cosEvents.js';
 // The DEFINING module, not a barrel (#3450) — see the note in
 // `agentManagement.js`. This module is a LEAF that both transition modules
 // import, which puts it inside the facade's closure, so the facade is out of
@@ -34,7 +34,16 @@ import { completeExecution, errorExecution } from './toolStateMachine.js';
 import { resolveFailedTaskUpdate, resolveTypeFailureSignal } from './agentErrorAnalysis.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { appendRunEvent } from './agentRunEventLog.js';
-import { committedDuringRun } from '../lib/gitCommitProbe.js';
+import { committedDuringRun, runWindowDiff } from '../lib/gitCommitProbe.js';
+import {
+  GOAL_FIDELITY_CATEGORY,
+  GOAL_FIDELITY_HOLD_EVENT,
+  MAX_FIDELITY_DIFF_CHARS,
+  formatGoalFidelitySummary,
+  goalFidelityHoldsRun,
+  taskObjective,
+} from '../lib/goalFidelity.js';
+import { getGoalFidelityConfig, runLocalGoalFidelityReview } from './codeReview.js';
 import { SKIP_LEARNING_VERDICT } from '../lib/learningVerdict.js';
 import { detectPrimaryCheckoutDrift, PRIMARY_CHECKOUT_MUTATED_ESCALATION, PRIMARY_CHECKOUT_MUTATED_REASON } from '../lib/primaryCheckoutGuard.js';
 import { canRunTaskOutputHookWithoutPayload, getTaskOutputPayloadPredicate, isProgrammaticIoTaskType, resolveTaskHookType, declaresNoCommitCriterion } from './taskTypeHooks.js';
@@ -483,6 +492,82 @@ function prVerificationAnalysis(verdict) {
 }
 
 /**
+ * Goal-fidelity completion gate (#5994).
+ *
+ * Every other check on this path proves the run PRODUCED something: the commit
+ * probe proves commits exist, `verifyPrClaim` proves a change request was
+ * opened, the reviewer chain proves the diff is decent code. None of them can
+ * prove it is the change that was ASKED for — the reviewers are handed a diff
+ * with no objective attached, by design. So a run can be clean, reviewed, green
+ * in CI, and quietly deliver something else.
+ *
+ * This reads the accumulated run-window diff against the TASK's own stated
+ * objective, in a fresh context. Fresh context is the mechanism: a reviewer
+ * given the agent's transcript inherits the assumptions that produced the drift,
+ * so the objective comes from the task record and nothing else.
+ *
+ * Fail-OPEN throughout. Every decline path — gate off, no local backend, no
+ * objective, no readable diff, a reviewer that errored or answered with prose —
+ * returns a result carrying NO verdict, and the caller leaves the run's outcome
+ * exactly as it found it. A gate that could hold a run because a local model was
+ * down would be worse than no gate: it would convert an ollama restart into a
+ * queue of runs marked needs-attention.
+ *
+ * @returns {Promise<{verdict: string|null, review: Object|null, error: string|null}>}
+ */
+async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
+  const none = (error = null) => ({ verdict: null, review: null, error });
+  if (!workspacePath || !task?.id) return none();
+  const objective = taskObjective(task);
+  if (!objective) return none();
+  const config = await getGoalFidelityConfig().catch(() => null);
+  if (!config) return none();
+
+  const { diff, reason, truncated } = await runWindowDiff(workspacePath, startedAt, { maxChars: MAX_FIDELITY_DIFF_CHARS });
+  // `reason` = git could not answer; `''` = the run committed nothing. Both skip
+  // the review, and neither is a finding: a run with no diff is judged by the
+  // commit criterion, which is the check that actually owns that question.
+  if (reason || !diff) return none();
+
+  const result = await runLocalGoalFidelityReview({
+    backend: config.backend,
+    model: config.model,
+    effort: config.effort,
+    objective,
+    diff,
+  }).catch(err => ({ ok: false, error: err.message }));
+  if (!result?.ok) return none(result?.error || 'goal-fidelity review returned no verdict');
+  return {
+    verdict: result.verdict,
+    review: {
+      verdict: result.verdict,
+      missing: result.missing,
+      unrequested: result.unrequested,
+      evidence: result.evidence,
+      backend: result.backend,
+      model: result.model,
+      ...(truncated ? { diffTruncated: true } : {}),
+      checkedAt: new Date().toISOString(),
+    },
+    error: null,
+  };
+}
+
+/** `errorAnalysis` for a run held by the goal-fidelity gate. */
+function goalFidelityAnalysis(review) {
+  const named = [...(review.missing || []), ...(review.unrequested || [])];
+  return {
+    category: GOAL_FIDELITY_CATEGORY,
+    message: `${formatGoalFidelitySummary(review)} — the diff does not deliver the task's stated objective`,
+    actionable: false,
+    origin: 'goal-fidelity-review',
+    suggestedFix: named.length
+      ? `Re-read the task against the change and reconcile: ${named.slice(0, 3).join('; ')}.`
+      : 'Re-read the task against the change: the review found the work does something other than what was asked.',
+  };
+}
+
+/**
  * Hard bound on output-hook dispatch (#2727). The hook is only awaited BEFORE
  * `completeAgent` so its verdict can be recorded — but `status: 'running'` is what
  * the CoS concurrency gate counts (`cos.js`, default 3 slots), and that flips in
@@ -832,6 +917,38 @@ export async function finalizeAgent({
     });
   }
 
+  // #5994: the run shipped — but did it ship what was asked? Runs only on a run
+  // that would otherwise be recorded a success, for the same reason the drift
+  // downgrade does: on a run that already failed, the original analysis is the
+  // better diagnosis, and re-judging it against the objective would replace a
+  // real cause with a symptom. Bounded by the reviewer's own request timeout and
+  // the diff probe's git timeouts — it holds the agent's CoS concurrency slot for
+  // its duration, which is why it is skipped entirely unless the user configured
+  // a local backend for it.
+  const fidelity = success
+    ? await evaluateGoalFidelity({ task, workspacePath, startedAt: runStartedAt })
+      .catch(err => {
+        emitLog('warn', `⚠️ Goal-fidelity review failed for ${agentId}: ${err.message}`, { agentId });
+        return { verdict: null, review: null, error: err.message };
+      })
+    : { verdict: null, review: null, error: null };
+  const fidelityDowngrade = goalFidelityHoldsRun(fidelity.review);
+  if (fidelity.review) {
+    emitLog(fidelityDowngrade ? 'warn' : 'info', `${fidelityDowngrade ? '🎯' : '✅'} ${formatGoalFidelitySummary(fidelity.review)} for ${agentId}`, {
+      agentId, taskId: task?.id, verdict: fidelity.verdict
+    });
+  } else if (fidelity.error) {
+    emitLog('warn', `⚠️ Goal-fidelity review returned no verdict for ${agentId}: ${fidelity.error}`, { agentId, taskId: task?.id });
+  }
+  if (fidelityDowngrade) {
+    success = false;
+    errorAnalysis = goalFidelityAnalysis(fidelity.review);
+    // The Review Hub bridges this into a review alert: a run held because it
+    // built the wrong thing is exactly the case a human has to look at, and the
+    // named missing/unrequested items are what make the hold actionable.
+    cosEvents.emit(GOAL_FIDELITY_HOLD_EVENT, { agentId, taskId: task?.id, review: fidelity.review });
+  }
+
   if (success && isTruthyMetaFn) {
     await persistSimplifySummaries(agentId, task, outputBuffer, isTruthyMetaFn);
   }
@@ -889,12 +1006,28 @@ export async function finalizeAgent({
     task.metadata = { ...task.metadata, ...hookMetadata };
   }
   const hookRejected = !terminatedByUser && hookResult?.ran && hookOutcome?.accepted === false;
-  if (hookRejected && success) {
+  // A PERMANENT hook rejection (#6124) — the stage produced no parseable output
+  // at all — re-fails identically on every retry, so it blocks instead of
+  // burning MAX_TASK_RETRIES spawns and (for a pipeline whose generator keys its
+  // dedup on a live task) re-generating behind them. Honoured only when the run
+  // named no other cause: an exit-0 run, or a failure whose category is the
+  // `unknown` that an empty run produces. A run that failed for a NAMED reason
+  // (rate-limit, auth-error, a killed provider) keeps its ordinary retries —
+  // that output is missing because the environment misbehaved, not because the
+  // stage can never produce one.
+  const causeNamed = !success && errorAnalysis?.category && errorAnalysis.category !== 'unknown';
+  const hookPermanent = hookRejected && hookOutcome?.permanent === true && !causeNamed;
+  // When the run had already failed, `taskUpdate` holds its retry decision. Only
+  // escalate a decision that is still retrying — a task this run already blocked
+  // is terminal, and re-resolving it would file a second investigation task.
+  const escalatePermanent = hookPermanent && !success && taskUpdate?.status !== 'blocked';
+  if (hookRejected && (success || escalatePermanent)) {
     success = false;
     errorAnalysis = {
       category: hookOutcome.reason || 'output-hook-rejected',
       message: hookOutcome.message || 'The scheduled task output was rejected by its validation hook',
       actionable: false,
+      ...(hookPermanent && { permanent: true }),
       origin: 'task-output-hook',
     };
     taskUpdate = await resolveFailedTaskUpdate(task, errorAnalysis, agentId);
@@ -935,20 +1068,28 @@ export async function finalizeAgent({
   // reason the PR downgrade does, and outranks it: the run may well have opened
   // its PR fine and still mutated the primary, and THAT is the thing a human has
   // to act on.
+  // A goal-fidelity hold (#5994) sits below both: a branch-jack and a missing PR
+  // are facts about what the run did to the repo, while this is a judgement about
+  // what it built — and when a run both missed its PR and drifted, the missing PR
+  // is the more concrete thing to act on first.
   const finalError = driftDowngrade
     ? drift.message
     : !prVerdict.ok
       ? prVerdict.message
-      : hookRejected
-        ? errorAnalysis?.message || error
-        : error;
+      : fidelityDowngrade
+        ? errorAnalysis?.message
+        : hookRejected
+          ? errorAnalysis?.message || error
+          : error;
   const finalCompletionReason = driftDowngrade
     ? PRIMARY_CHECKOUT_MUTATED_REASON
     : !prVerdict.ok
       ? prVerdict.category
-      : hookRejected
-        ? errorAnalysis?.category || completionReason
-        : completionReason;
+      : fidelityDowngrade
+        ? GOAL_FIDELITY_CATEGORY
+        : hookRejected
+          ? errorAnalysis?.category || completionReason
+          : completionReason;
 
   await completeAgent(agentId, {
     success,
@@ -957,6 +1098,10 @@ export async function finalizeAgent({
     duration,
     outputLength: outputBuffer?.length ?? 0,
     errorAnalysis,
+    // Recorded whatever the verdict — a `ship` is the evidence that the gate ran
+    // and cleared the run, which is what makes a run with no `goalFidelity` block
+    // legible as "never judged" rather than "judged fine".
+    ...(fidelity.review ? { goalFidelity: fidelity.review } : {}),
     ...(finalError !== undefined ? { error: finalError } : {}),
     ...(finalCompletionReason !== undefined ? { completionReason: finalCompletionReason } : {}),
   });
@@ -965,7 +1110,7 @@ export async function finalizeAgent({
     // Pass the downgrade explicitly: this run exited 0, so the run record would
     // otherwise keep saying "success" for the one run we just concluded did not
     // land its PR (#3358).
-    await completeAgentRun(runId, outputBuffer, exitCode, duration, errorAnalysis, prVerdict.ok && !driftDowngrade ? null : false);
+    await completeAgentRun(runId, outputBuffer, exitCode, duration, errorAnalysis, prVerdict.ok && !driftDowngrade && !fidelityDowngrade ? null : false);
   }
 
   // LI hand-off execution verdict (#2779): stamp the per-proposal execution outcome into

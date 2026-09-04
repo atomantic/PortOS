@@ -122,6 +122,12 @@ import videoTimelineRoutes from './routes/videoTimeline.js';
 import mediaJobsRoutes from './routes/mediaJobs.js';
 import federatedMediaRoutes from './routes/federatedMedia.js';
 import creativeDirectorRoutes from './routes/creativeDirector.js';
+// Side-effect import (#5920): evaluating the completion hook is what registers the
+// Creative Director project starter on `creativeDirector/projectStartSink.js`, the
+// seam `pipeline/episodeVideo.js` starts a CD project through. The route module
+// above already pulls it in, but the pipeline must not depend on THAT staying true —
+// an unregistered sink throws, so arm it explicitly at boot.
+import './services/creativeDirector/completionHook.js';
 import creativeCommissionRoutes from './routes/creativeCommissions.js';
 import gamesRoutes from './routes/games.js';
 import fableLoomRoutes from './routes/fableLoom.js';

@@ -10,8 +10,12 @@ import toast from '../components/ui/Toast';
 const getPrompts = vi.fn();
 const getPrompt = vi.fn();
 const getPromptUsage = vi.fn();
+const savePrompt = vi.fn();
 const deletePrompt = vi.fn();
+const createPrompt = vi.fn();
 const getPromptVariables = vi.fn();
+const createPromptVariable = vi.fn();
+const savePromptVariable = vi.fn();
 const deletePromptVariable = vi.fn();
 const getJobSkills = vi.fn(() => Promise.resolve({ skills: [] }));
 const getJobSkill = vi.fn(() => Promise.resolve({}));
@@ -21,14 +25,14 @@ const previewJobSkill = vi.fn();
 vi.mock('../services/apiPrompts', () => ({
   getPrompts: (...a) => getPrompts(...a),
   getPrompt: (...a) => getPrompt(...a),
-  createPrompt: vi.fn(),
-  savePrompt: vi.fn(),
+  createPrompt: (...a) => createPrompt(...a),
+  savePrompt: (...a) => savePrompt(...a),
   deletePrompt: (...a) => deletePrompt(...a),
   previewPrompt: vi.fn(),
   getPromptUsage: (...a) => getPromptUsage(...a),
   getPromptVariables: (...a) => getPromptVariables(...a),
-  createPromptVariable: vi.fn(),
-  savePromptVariable: vi.fn(),
+  createPromptVariable: (...a) => createPromptVariable(...a),
+  savePromptVariable: (...a) => savePromptVariable(...a),
   deletePromptVariable: (...a) => deletePromptVariable(...a),
   getJobSkills: (...a) => getJobSkills(...a),
   getJobSkill: (...a) => getJobSkill(...a),
@@ -74,6 +78,8 @@ const currentSearch = () => screen.getByTestId('location-search').textContent;
 // individual suites override only what they assert on.
 beforeEach(() => {
   getPromptVariables.mockReset().mockResolvedValue({ variables: {} });
+  createPromptVariable.mockReset().mockResolvedValue({ success: true });
+  savePromptVariable.mockReset().mockResolvedValue({ success: true });
   deletePromptVariable.mockReset().mockResolvedValue({ success: true });
 });
 
@@ -381,6 +387,56 @@ describe('PromptManager delete demotion', () => {
 
 // #3935: the row trash icon used to fire DELETE on the first click, so a
 // mis-click on a 14px target destroyed the variable with no undo.
+describe('PromptManager stage save/create/delete feedback (#6022)', () => {
+  beforeEach(() => {
+    getPrompts.mockReset().mockResolvedValue({ stages: STAGES, systemStages: SYSTEM_STAGES });
+    getPrompt.mockReset().mockResolvedValue({ name: 'Pipeline — Comic Book Script', template: 'body', variables: [] });
+    getPromptUsage.mockReset().mockResolvedValue({
+      isSystemStage: false, usedBy: [], referencedBy: [], canDelete: true,
+    });
+    savePrompt.mockReset().mockResolvedValue({ success: true });
+    createPrompt.mockReset().mockResolvedValue({ success: true, stageName: 'my-new-stage' });
+    deletePrompt.mockReset().mockResolvedValue({ success: true });
+    toast.error.mockReset();
+    toast.success.mockReset();
+  });
+
+  it('confirms a successful stage save with a named toast', async () => {
+    renderPage('/prompts?stage=pipeline-comic-script');
+    await screen.findByText('Prompt Stages');
+    await screen.findByRole('button', { name: /^save$/i });
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Stage "Pipeline — Comic Book Script" saved'));
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('confirms stage creation with a named toast and deep-links straight to the new stage', async () => {
+    renderPage('/prompts');
+    await screen.findByText('Prompt Stages');
+
+    fireEvent.click(screen.getByRole('button', { name: 'New Stage' }));
+    fireEvent.change(screen.getByPlaceholderText('my-stage'), { target: { value: 'my-new-stage' } });
+    fireEvent.change(screen.getByPlaceholderText('Pipeline — My Stage'), { target: { value: 'My New Stage' } });
+    fireEvent.click(screen.getByRole('button', { name: /create stage/i }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Stage "My New Stage" created'));
+    await waitFor(() => expect(currentSearch()).toContain('stage=my-new-stage'));
+  });
+
+  it('confirms a successful stage delete with a named toast', async () => {
+    renderPage('/prompts?stage=pipeline-comic-script');
+    await screen.findByText('Prompt Stages');
+
+    fireEvent.click(await screen.findByRole('button', { name: /^delete$/i }));
+    expect(await screen.findByText('Delete Stage?')).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: /^delete$/i }).at(-1));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Stage "pipeline-comic-script" deleted'));
+  });
+});
+
 describe('PromptManager variable deletion', () => {
   const VARIABLES = {
     'tone-guide': { name: 'Tone Guide', category: 'style', content: 'stay wry' },
@@ -437,6 +493,166 @@ describe('PromptManager variable deletion', () => {
 
     expect(screen.queryByText('Delete "Tone Guide"?')).toBeNull();
     expect(screen.getByText('Delete "House Style"?')).toBeTruthy();
+  });
+});
+
+// Saving a variable used to deselect it and blank the editor with no toast, so
+// a successful save read as a crash; switching variables threw unsaved edits
+// away silently (#6023).
+describe('PromptManager variable editing', () => {
+  const VARIABLES = {
+    'tone-guide': { name: 'Tone Guide', category: 'style', content: 'stay wry' },
+    'house-style': { name: 'House Style', category: 'style', content: 'oxford comma' },
+  };
+
+  beforeEach(() => {
+    getPrompts.mockReset().mockResolvedValue({ stages: STAGES, systemStages: SYSTEM_STAGES });
+    getPromptVariables.mockResolvedValue({ variables: VARIABLES });
+    toast.success.mockReset();
+  });
+
+  const contentBox = () => screen.getByPlaceholderText('Variable content...');
+  const saveButton = () => screen.getByRole('button', { name: /^save$/i });
+
+  // Waits on the hydrated CONTENT, not just the heading: the heading renders
+  // from the URL param a commit before the effect fills the form, so keying off
+  // it makes every later assertion a race against an empty editor.
+  const openVariable = async (key = 'tone-guide') => {
+    renderPage(`/prompts?tab=variables&var=${key}`);
+    await screen.findByDisplayValue(VARIABLES[key].content);
+  };
+
+  it('keeps the saved variable open in the editor and confirms with a toast', async () => {
+    await openVariable();
+    // Re-stub AFTER the mount load, so only the post-save refetch carries the
+    // extra sibling — staging it with mockResolvedValueOnce instead would bake
+    // in an assumption about how many times the page loads before the save.
+    getPromptVariables.mockResolvedValue({ variables: { ...VARIABLES, 'aside-voice': { name: 'Aside Voice', content: 'wink' } } });
+
+    fireEvent.change(contentBox(), { target: { value: 'stay dry' } });
+    fireEvent.click(saveButton());
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Variable "Tone Guide" saved'));
+    expect(savePromptVariable).toHaveBeenCalledWith(
+      'tone-guide', expect.objectContaining({ content: 'stay dry' }), { silent: true },
+    );
+    // The refetch still carries the PRE-save content, so the editor must NOT be
+    // re-hydrated from it, deselected, or blanked. The toast fires BEFORE that
+    // refetch, so waiting on it asserts ahead of the very state change under
+    // test — the sibling above is what makes the refresh's arrival observable,
+    // and #6023 slips through this test unnoticed without it (#6189).
+    await screen.findByText('Aside Voice');
+    expect(currentSearch()).toContain('var=tone-guide');
+    expect(screen.getByText('Edit: tone-guide')).toBeTruthy();
+    expect(contentBox().value).toBe('stay dry');
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
+  });
+
+  it('selects the created variable in the URL and confirms with a toast', async () => {
+    // The list only holds the new key after the post-create refetch, which is
+    // what the URL waits for.
+    getPromptVariables
+      .mockResolvedValueOnce({ variables: VARIABLES })
+      .mockResolvedValue({ variables: { ...VARIABLES, 'aside-voice': { name: 'Aside Voice', content: 'wink' } } });
+    renderPage('/prompts?tab=variables');
+    await screen.findByText('Tone Guide');
+
+    fireEvent.change(screen.getByPlaceholderText('variableKey'), { target: { value: 'aside-voice' } });
+    fireEvent.change(contentBox(), { target: { value: 'wink' } });
+    fireEvent.click(saveButton());
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Variable "aside-voice" created'));
+    expect(createPromptVariable).toHaveBeenCalledWith(
+      expect.objectContaining({ key: 'aside-voice', content: 'wink' }), { silent: true },
+    );
+    // Both halves in ONE barrier: neither settles last on its own (#6189).
+    // The post-create refetch re-runs the hydration effect while the selection
+    // is still null, which resets the form to BLANK — the URL adopts the new key
+    // only afterwards, and re-hydrating from the refetched record is a further
+    // commit still. So waiting on the URL alone reads a blanked textarea. But
+    // waiting on the textarea alone is a barrier already open, since it holds
+    // 'wink' from the typing above, leaving the URL as the racing read instead.
+    await waitFor(() => {
+      expect(currentSearch()).toContain('var=aside-voice');
+      expect(contentBox().value).toBe('wink');
+    });
+    expect(screen.getByText('Edit: aside-voice')).toBeTruthy();
+  });
+
+  it('confirms a delete with a toast', async () => {
+    renderPage('/prompts?tab=variables');
+    await screen.findByText('Tone Guide');
+
+    fireEvent.click(screen.getByLabelText('Delete variable Tone Guide'));
+    fireEvent.click(within(screen.getByLabelText('Confirm delete variable Tone Guide'))
+      .getByRole('button', { name: /^delete$/i }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Variable "Tone Guide" deleted'));
+  });
+
+  it('asks before another variable replaces unsaved edits', async () => {
+    await openVariable();
+    fireEvent.change(contentBox(), { target: { value: 'stay dry' } });
+
+    fireEvent.click(screen.getByText('House Style'));
+
+    // Parked, not switched: the discard question takes over the clicked row.
+    expect(screen.getByText('Discard unsaved changes to "Tone Guide"?')).toBeTruthy();
+    expect(currentSearch()).toContain('var=tone-guide');
+    expect(contentBox().value).toBe('stay dry');
+  });
+
+  it('keeps the edits when the discard prompt is cancelled', async () => {
+    await openVariable();
+    fireEvent.change(contentBox(), { target: { value: 'stay dry' } });
+    fireEvent.click(screen.getByText('House Style'));
+
+    fireEvent.click(screen.getByRole('button', { name: /^keep editing$/i }));
+
+    expect(screen.queryByText('Discard unsaved changes to "Tone Guide"?')).toBeNull();
+    expect(currentSearch()).toContain('var=tone-guide');
+    expect(contentBox().value).toBe('stay dry');
+    expect(screen.getByText('House Style')).toBeTruthy();
+  });
+
+  it('switches to the clicked variable once the discard is confirmed', async () => {
+    await openVariable();
+    fireEvent.change(contentBox(), { target: { value: 'stay dry' } });
+    fireEvent.click(screen.getByText('House Style'));
+
+    fireEvent.click(screen.getByRole('button', { name: /^discard$/i }));
+
+    await screen.findByDisplayValue('oxford comma');
+    expect(currentSearch()).toContain('var=house-style');
+    expect(screen.getByText('Edit: house-style')).toBeTruthy();
+  });
+
+  it('asks before the add button discards an unsaved draft', async () => {
+    await openVariable();
+    fireEvent.change(contentBox(), { target: { value: 'stay dry' } });
+
+    fireEvent.click(screen.getByLabelText('Add variable'));
+
+    expect(screen.getByText('Discard unsaved changes to "Tone Guide"?')).toBeTruthy();
+    expect(currentSearch()).toContain('var=tone-guide');
+
+    fireEvent.click(screen.getByRole('button', { name: /^discard$/i }));
+
+    await screen.findByText('New Variable');
+    expect(currentSearch()).not.toContain('var=');
+    expect(contentBox().value).toBe('');
+  });
+
+  it('does not ask when the edit is undone back to the saved value', async () => {
+    await openVariable();
+    fireEvent.change(contentBox(), { target: { value: 'stay dry' } });
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+
+    fireEvent.change(contentBox(), { target: { value: 'stay wry' } });
+    fireEvent.click(screen.getByText('House Style'));
+
+    expect(screen.queryByText('Discard unsaved changes to "Tone Guide"?')).toBeNull();
+    await waitFor(() => expect(currentSearch()).toContain('var=house-style'));
   });
 });
 
@@ -841,5 +1057,151 @@ describe('PromptManager page header', () => {
     const headings = screen.getAllByRole('heading', { level: 1 });
     expect(headings).toHaveLength(1);
     expect(headings[0]).toHaveAccessibleName('Prompt Manager');
+  });
+});
+
+// Clicking another stage used to overwrite the editor outright, silently
+// discarding whatever template/config edits the user had in flight (#6021).
+// Mirrors the job-skill guard above (#3939).
+describe('PromptManager stage unsaved-edit guard', () => {
+  beforeEach(() => {
+    getPrompts.mockReset().mockResolvedValue({ stages: STAGES, systemStages: SYSTEM_STAGES });
+    getPrompt.mockReset().mockImplementation((name) => Promise.resolve({
+      name: STAGES[name]?.name || name,
+      description: STAGES[name]?.description,
+      template: `${name} template`,
+      variables: [],
+    }));
+    savePrompt.mockReset().mockResolvedValue({ success: true });
+    getPromptUsage.mockReset().mockResolvedValue({
+      isSystemStage: false, usedBy: [], referencedBy: [], canDelete: true,
+    });
+    toast.error.mockReset();
+    toast.success.mockReset();
+  });
+
+  const templateBox = () => screen.getByLabelText('Template');
+
+  // A deep link expands the group holding the open stage, so the sibling row
+  // under test is on screen without any manual disclosure click.
+  const openDirtyEditor = async () => {
+    renderPage('/prompts?stage=pipeline-prose-draft');
+    await screen.findByDisplayValue('pipeline-prose-draft template');
+    fireEvent.change(templateBox(), { target: { value: 'edited by hand' } });
+    await screen.findByText('Unsaved changes');
+  };
+
+  it('marks the stage editor dirty once the template is modified', async () => {
+    renderPage('/prompts?stage=pipeline-prose-draft');
+    await screen.findByDisplayValue('pipeline-prose-draft template');
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
+    expect(screen.queryByText('Unsaved')).toBeNull();
+
+    fireEvent.change(templateBox(), { target: { value: 'edited by hand' } });
+
+    // Header badge and the list-row badge on the open stage.
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+    expect(screen.getByText('Unsaved')).toBeTruthy();
+  });
+
+  it('marks the editor dirty on a config-only change', async () => {
+    renderPage('/prompts?stage=pipeline-prose-draft');
+    await screen.findByDisplayValue('pipeline-prose-draft template');
+
+    fireEvent.change(screen.getByLabelText('Model tier'), { target: { value: 'quick' } });
+
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+  });
+
+  it('treats an edit reverted to the loaded template as clean again', async () => {
+    await openDirtyEditor();
+
+    fireEvent.change(templateBox(), { target: { value: 'pipeline-prose-draft template' } });
+
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
+  });
+
+  it('asks before discarding unsaved edits when another stage is clicked', async () => {
+    await openDirtyEditor();
+
+    fireEvent.click(screen.getByText('Pipeline — Comic Book Script'));
+
+    expect(screen.getByText('Discard unsaved changes to "Pipeline — Prose Draft"?')).toBeTruthy();
+    // Nothing switched yet: the URL, the fetch, and the typed text all hold.
+    expect(currentSearch()).toContain('stage=pipeline-prose-draft');
+    expect(getPrompt).not.toHaveBeenCalledWith('pipeline-comic-script', { silent: true });
+    expect(screen.getByDisplayValue('edited by hand')).toBeTruthy();
+  });
+
+  it('keeps the edits when the discard prompt is cancelled', async () => {
+    await openDirtyEditor();
+    fireEvent.click(screen.getByText('Pipeline — Comic Book Script'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+
+    expect(screen.queryByText(/Discard unsaved changes/)).toBeNull();
+    expect(screen.getByDisplayValue('edited by hand')).toBeTruthy();
+    expect(currentSearch()).toContain('stage=pipeline-prose-draft');
+  });
+
+  it('switches stages after the discard is confirmed', async () => {
+    await openDirtyEditor();
+    fireEvent.click(screen.getByText('Pipeline — Comic Book Script'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+
+    await waitFor(() => expect(currentSearch()).toContain('stage=pipeline-comic-script'));
+    await screen.findByDisplayValue('pipeline-comic-script template');
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
+  });
+
+  it('switches without prompting once the edits are saved', async () => {
+    await openDirtyEditor();
+
+    // Exact match: the dirty list row is labelled "… Unsaved", which /save/i
+    // would also match.
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(savePrompt).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText('Unsaved changes')).toBeNull());
+
+    fireEvent.click(screen.getByText('Pipeline — Comic Book Script'));
+
+    expect(screen.queryByText(/Discard unsaved changes/)).toBeNull();
+    await waitFor(() => expect(currentSearch()).toContain('stage=pipeline-comic-script'));
+  });
+
+  it('drops the armed prompt when the edit is undone back to the saved template', async () => {
+    await openDirtyEditor();
+    fireEvent.click(screen.getByText('Pipeline — Comic Book Script'));
+    expect(screen.getByText(/Discard unsaved changes/)).toBeTruthy();
+
+    fireEvent.change(templateBox(), { target: { value: 'pipeline-prose-draft template' } });
+
+    expect(screen.queryByText(/Discard unsaved changes/)).toBeNull();
+    // The row the question had taken over comes back.
+    expect(screen.getByText('Pipeline — Comic Book Script')).toBeTruthy();
+  });
+
+  it('backs out of the prompt when the already-open stage is re-clicked', async () => {
+    await openDirtyEditor();
+    fireEvent.click(screen.getByText('Pipeline — Comic Book Script'));
+
+    // By role, not text: the editor heading renders the same label.
+    fireEvent.click(screen.getByRole('button', { name: /Pipeline — Prose Draft/ }));
+
+    expect(screen.queryByText(/Discard unsaved changes/)).toBeNull();
+    expect(currentSearch()).toContain('stage=pipeline-prose-draft');
+    expect(screen.getByDisplayValue('edited by hand')).toBeTruthy();
+  });
+
+  it('does not prompt when a clean editor switches stages', async () => {
+    renderPage('/prompts?stage=pipeline-prose-draft');
+    await screen.findByDisplayValue('pipeline-prose-draft template');
+
+    fireEvent.click(await screen.findByText('Pipeline — Comic Book Script'));
+
+    expect(screen.queryByText(/Discard unsaved changes/)).toBeNull();
+    await waitFor(() => expect(currentSearch()).toContain('stage=pipeline-comic-script'));
+    await screen.findByDisplayValue('pipeline-comic-script template');
   });
 });

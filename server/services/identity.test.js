@@ -1,4 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+
 import {
   extractSleepMarkers,
   extractCaffeineMarkers,
@@ -16,6 +18,23 @@ import {
 // fs/promises with a simple path-keyed in-memory store; makeFsPromisesStore()
 // supplies the rename/unlink/mkdir the real atomicWrite needs so the temp→final
 // move lands in the same store the reads come from.
+afterAll(cleanupTempDataRoots);
+
+// Every integration block below installs BOTH halves of the isolation: the
+// in-memory fs above, and a redirected data root. Nothing here reaches a disk
+// either way, but the runtime write guard (#6176) judges the PATH and cannot
+// see that the filesystem underneath is a fake — and naming a disposable root
+// means a future edit that drops the fs/promises mock can't quietly start
+// writing into the developer's live data. Registered with `doMock` rather than
+// a file-level `vi.mock` so each `vi.resetModules()` below rebuilds a FRESH
+// store; a hoisted mock would hand every test the first one, and the goal CRUD
+// cases would then accumulate each other's records.
+function mockIdentityStorage() {
+  vi.doMock('fs/promises', makeFsPromisesStore);
+  vi.doMock('../lib/fileUtils.js', async () =>
+    makePathsProxy(await vi.importActual('../lib/fileUtils.js'), { dataRoot: () => lazyTempDataRoot('portos-identity-') }));
+}
+
 function makeFsPromisesStore() {
   const store = {};
   return {
@@ -600,7 +619,7 @@ describe('Integration: deriveChronotype', () => {
     vi.resetModules();
 
     // Mock fs/promises
-    vi.doMock('fs/promises', makeFsPromisesStore);
+    mockIdentityStorage();
 
     // Mock genome service
     vi.doMock('./genome.js', () => ({
@@ -689,7 +708,7 @@ describe('Integration: getIdentityStatus', () => {
   beforeEach(async () => {
     vi.resetModules();
 
-    vi.doMock('fs/promises', makeFsPromisesStore);
+    mockIdentityStorage();
 
     vi.doMock('./genome.js', () => ({
       getGenomeSummary: vi.fn(async () => ({
@@ -726,7 +745,7 @@ describe('Integration: getIdentityStatus', () => {
   it('should show genome as active when markers exist', async () => {
     vi.resetModules();
 
-    vi.doMock('fs/promises', makeFsPromisesStore);
+    mockIdentityStorage();
 
     vi.doMock('./genome.js', () => ({
       getGenomeSummary: vi.fn(async () => ({
@@ -780,7 +799,7 @@ describe('Integration: deriveLongevity', () => {
   beforeEach(async () => {
     vi.resetModules();
 
-    vi.doMock('fs/promises', makeFsPromisesStore);
+    mockIdentityStorage();
 
     vi.doMock('./genome.js', () => ({
       getGenomeSummary: vi.fn(async () => ({
@@ -856,7 +875,7 @@ describe('Integration: Goal CRUD', () => {
   beforeEach(async () => {
     vi.resetModules();
 
-    vi.doMock('fs/promises', makeFsPromisesStore);
+    mockIdentityStorage();
 
     vi.doMock('./genome.js', () => ({
       getGenomeSummary: vi.fn(async () => ({
@@ -1049,7 +1068,7 @@ describe('Integration: Goal Tree', () => {
   beforeEach(async () => {
     vi.resetModules();
 
-    vi.doMock('fs/promises', makeFsPromisesStore);
+    mockIdentityStorage();
 
     vi.doMock('./genome.js', () => ({
       getGenomeSummary: vi.fn(async () => ({
@@ -1107,7 +1126,7 @@ describe('Integration: Progress Log', () => {
   beforeEach(async () => {
     vi.resetModules();
 
-    vi.doMock('fs/promises', makeFsPromisesStore);
+    mockIdentityStorage();
 
     vi.doMock('./genome.js', () => ({
       getGenomeSummary: vi.fn(async () => ({
@@ -1168,7 +1187,7 @@ describe('Integration: Calendar Linking', () => {
   beforeEach(async () => {
     vi.resetModules();
 
-    vi.doMock('fs/promises', makeFsPromisesStore);
+    mockIdentityStorage();
 
     vi.doMock('./genome.js', () => ({
       getGenomeSummary: vi.fn(async () => ({
@@ -1252,7 +1271,7 @@ describe('Integration: applyGoalOrganization', () => {
   beforeEach(async () => {
     vi.resetModules();
 
-    vi.doMock('fs/promises', makeFsPromisesStore);
+    mockIdentityStorage();
 
     vi.doMock('./genome.js', () => ({
       getGenomeSummary: vi.fn(async () => ({
@@ -1409,7 +1428,7 @@ describe('Integration: organizeGoals', () => {
   beforeEach(async () => {
     vi.resetModules();
 
-    vi.doMock('fs/promises', makeFsPromisesStore);
+    mockIdentityStorage();
 
     vi.doMock('./genome.js', () => ({
       getGenomeSummary: vi.fn(async () => ({
@@ -1485,7 +1504,7 @@ describe('Integration: organizeGoals', () => {
   it('should throw when no AI provider is available', async () => {
     vi.resetModules();
 
-    vi.doMock('fs/promises', makeFsPromisesStore);
+    mockIdentityStorage();
 
     vi.doMock('./genome.js', () => ({
       getGenomeSummary: vi.fn(async () => ({

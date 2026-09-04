@@ -115,8 +115,13 @@ describe('completeAgentRun idempotency', () => {
   it('writes the transcript before stamping the terminal metadata', async () => {
     vi.resetModules();
     const order = [];
-    const atomicWrite = vi.fn().mockImplementation(() => { order.push('metadata'); });
-    const writeFile = vi.fn().mockImplementation(() => { order.push('output'); });
+    // Both artifacts are written with atomicWrite (#6176 routed output.txt off
+    // the raw writeFile), so the ordering is read off the PATH, not off which
+    // primitive was called.
+    const atomicWrite = vi.fn().mockImplementation((filePath) => {
+      order.push(String(filePath).endsWith('metadata.json') ? 'metadata' : 'output');
+    });
+    const writeFile = vi.fn();
     vi.doMock('../lib/fileUtils.js', async (importOriginal) => ({
       ...(await importOriginal()),
       readJSONFile: vi.fn().mockResolvedValue({

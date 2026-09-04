@@ -1205,6 +1205,25 @@ describe('emitRunStarted — payload-flattening contract', () => {
       model: 'gpt-4',
     })).not.toThrow();
   });
+
+  it('contains a throwing onRunStarted hook instead of rejecting the TUI spawn path (#6002)', () => {
+    // emitRunStarted fires after the PTY is already registered in the
+    // active-run map (tuiPromptRunner.js), so a throw here would reject the
+    // spawn with a live PTY and no terminal settlement — the same orphaned
+    // shape #5792 closed for the CLI path.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    setAIToolkit(fakeToolkit(), {
+      dataDir: '/tmp/test-runner',
+      hooks: { onRunStarted: () => { throw new Error('tui started hook boom'); } },
+    });
+    expect(() => emitRunStarted({
+      runId: 'r-tui-throw',
+      provider: { name: 'codex', defaultModel: 'gpt-5' },
+      model: 'gpt-4o',
+    })).not.toThrow();
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('onRunStarted hook threw during recovery'));
+    errorSpy.mockRestore();
+  });
 });
 
 describe('executeCliRun — workspace validation (#3180)', () => {

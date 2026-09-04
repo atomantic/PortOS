@@ -318,7 +318,7 @@ export default function AlbumsManager() {
                   ) : form.coverImageUrl ? (
                     <div className="relative">
                       <img src={form.coverImageUrl} alt="Album cover" className="w-28 h-28 rounded object-cover border border-port-border bg-port-bg" />
-                      <button type="button" onClick={() => setCover('')} title="Remove cover" aria-label="Remove cover" className="absolute -top-2 -right-2 p-1 rounded-full bg-port-bg border border-port-border text-gray-400 hover:text-port-error">
+                      <button type="button" onClick={() => setCover('')} title="Remove cover" aria-label="Remove cover" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center absolute -top-2 -right-2 p-1 rounded-full bg-port-bg border border-port-border text-gray-400 hover:text-port-error">
                         <X size={12} />
                       </button>
                     </div>
@@ -368,9 +368,9 @@ export default function AlbumsManager() {
                           <span className="text-[11px] text-gray-500 w-5 text-right">{idx + 1}.</span>
                           <span className="flex-1 min-w-0 truncate text-sm text-gray-200">{t ? t.title : <span className="text-gray-500 italic">(missing track)</span>}</span>
                           {t?.durationSec ? <span className="text-[11px] text-gray-500">{formatTimecode(t.durationSec)}</span> : null}
-                          <button type="button" onClick={() => moveTrack(idx, -1)} disabled={idx === 0} className="p-1 text-gray-500 hover:text-white disabled:opacity-30" aria-label="Move up"><ArrowUp size={13} /></button>
-                          <button type="button" onClick={() => moveTrack(idx, 1)} disabled={idx === form.trackIds.length - 1} className="p-1 text-gray-500 hover:text-white disabled:opacity-30" aria-label="Move down"><ArrowDown size={13} /></button>
-                          <button type="button" onClick={() => removeTrack(tid)} className="p-1 text-gray-500 hover:text-port-error" aria-label="Remove track"><X size={13} /></button>
+                          <button type="button" onClick={() => moveTrack(idx, -1)} disabled={idx === 0} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-white disabled:opacity-30" aria-label="Move up"><ArrowUp size={13} /></button>
+                          <button type="button" onClick={() => moveTrack(idx, 1)} disabled={idx === form.trackIds.length - 1} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-white disabled:opacity-30" aria-label="Move down"><ArrowDown size={13} /></button>
+                          <button type="button" onClick={() => removeTrack(tid)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error" aria-label="Remove track"><X size={13} /></button>
                         </li>
                       );
                     })}

@@ -4,14 +4,13 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 const mock = vi.hoisted(() => ({
-  // updateExecutor resolves update.sh from PATHS.root, so the delegation is
-  // gated on the app record pointing at this checkout — point it at the
+  // The shared launcher resolves update.sh from PATHS.root, so the delegation
+  // is gated on the app record pointing at this checkout — point it at the
   // per-test temp repo instead.
   paths: { root: '' },
   updateDefaultBranch: vi.fn(),
   spawn: vi.fn(),
-  executeUpdate: vi.fn(),
-  setUpdateInProgress: vi.fn(),
+  startPortosSelfUpdate: vi.fn(),
   dashboardOpen: vi.fn(),
   dashboardRunning: vi.fn(),
   dashboardHandle: { on: vi.fn() },
@@ -29,8 +28,7 @@ vi.mock('../lib/bufferedSpawn.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, bufferedSpawnOrThrow: mock.spawn };
 });
-vi.mock('./updateExecutor.js', () => ({ executeUpdate: mock.executeUpdate }));
-vi.mock('./updateChecker.js', () => ({ setUpdateInProgress: mock.setUpdateInProgress }));
+vi.mock('./portosSelfUpdate.js', () => ({ startPortosSelfUpdate: mock.startPortosSelfUpdate }));
 vi.mock('../lib/detachedSpawn.js', () => ({
   isDetachedRunning: mock.dashboardRunning,
   spawnDetached: mock.dashboardOpen,
@@ -51,8 +49,7 @@ describe('managed app updates', () => {
     await writeFile(join(repo, 'client', 'package.json'), JSON.stringify({}));
     mock.updateDefaultBranch.mockResolvedValue({ branch: 'main', output: 'Already up to date' });
     mock.spawn.mockResolvedValue({ stdout: '', stderr: '' });
-    mock.executeUpdate.mockResolvedValue({ success: true, version: '9.9.9' });
-    mock.setUpdateInProgress.mockResolvedValue(true);
+    mock.startPortosSelfUpdate.mockResolvedValue({ started: true, tag: 'v9.9.9' });
     mock.dashboardRunning.mockResolvedValue(false);
     mock.dashboardOpen.mockResolvedValue(mock.dashboardHandle);
     mock.restart.mockResolvedValue({ success: true });
@@ -109,11 +106,13 @@ describe('managed app updates', () => {
     );
   });
 
-  it('launches PortOS\'s own update through the detached executor, never the attached spawn', async () => {
+  it('hands PortOS\'s own update to the shared launcher and returns without awaiting update.sh', async () => {
     // PortOS is a managed app, so App Management updates route through here —
     // and update.sh's `pm2 delete` tree-kills the server that would be this
     // spawn's PPID parent, taking the script down mid-delete (#5976). The
-    // detached launcher in updateExecutor is what survives it.
+    // shared launcher owns the detached spawn that survives it, the preflight
+    // and the update lock; this path must not re-roll any of them, and must
+    // not await a script that outlives the process awaiting it.
     await writeFile(join(repo, 'update.sh'), '#!/bin/sh\nexit 0\n');
     await writeFile(join(repo, 'update.ps1'), 'exit 0\n');
     await writeFile(join(repo, 'package.json'), JSON.stringify({ version: '2.56.0' }));
@@ -125,17 +124,27 @@ describe('managed app updates', () => {
       type: 'express',
       repoPath: repo,
       pm2ProcessNames: ['portos-server', 'portos-cos', 'portos-browser'],
-    }, emit);
+    }, emit, { acknowledgeFork: true });
 
-    expect(result.success).toBe(true);
-    expect(mock.executeUpdate).toHaveBeenCalledWith('2.56.0', emit);
+    expect(result).toMatchObject({ success: true, selfUpdateStarted: true });
+    // `refresh`, because the git-pull step above already moved the checkout —
+    // a reconcile's out-of-sync gate would only be re-asking whether that pull
+    // happened. No `io`: App Management renders the run from `onStep`, and
+    // mirroring the same frames onto portos:update:* would double the fan-out.
+    expect(mock.startPortosSelfUpdate).toHaveBeenCalledWith({
+      acknowledgeFork: true,
+      acknowledgePersistentMindImageBackup: false,
+      preflightAlreadyRun: true,
+      mode: 'refresh',
+      onStep: emit,
+    });
     expect(mock.spawn).not.toHaveBeenCalled();
-    // The flag CoS spawn gates read (#4124) has to be up before the script that
-    // deletes portos-cos starts, not after.
-    expect(mock.setUpdateInProgress).toHaveBeenCalledWith(true);
-    expect(mock.setUpdateInProgress.mock.invocationCallOrder[0])
-      .toBeLessThan(mock.executeUpdate.mock.invocationCallOrder[0]);
-    expect(emit).toHaveBeenCalledWith('app-update', 'done', 'App update routine complete');
+    // Never "done": the script is still running, and claiming completion is
+    // what let the Git tab clear its progress row mid-update.
+    expect(emit).not.toHaveBeenCalledWith('app-update', 'done', expect.anything());
+    expect(emit).toHaveBeenCalledWith(
+      'app-update', 'running', 'PortOS update running — this process restarts as part of it',
+    );
   });
 
   it('leaves the PM2 restart to update.sh instead of double-restarting PortOS', async () => {
@@ -158,10 +167,13 @@ describe('managed app updates', () => {
     expect(mock.dashboardOpen).not.toHaveBeenCalled();
   });
 
-  it('surfaces a failed PortOS update instead of reporting success', async () => {
+  it('surfaces a refused PortOS update instead of reporting success', async () => {
+    // Only the LAUNCH is awaited, so the failures this path can still report
+    // are the launcher's own refusals (preflight, the lock, a spawn that never
+    // started) — not a step the script failed at after the process was gone.
     await writeFile(join(repo, 'update.sh'), '#!/bin/sh\nexit 1\n');
     await writeFile(join(repo, 'update.ps1'), 'exit 1\n');
-    mock.executeUpdate.mockResolvedValue({ success: false, failedStep: 'npm-install', errorMessage: 'Update failed at step "npm-install" (exit code 1)' });
+    mock.startPortosSelfUpdate.mockRejectedValue(new Error('1 CoS agent is running'));
 
     await expect(updateApp({
       id: 'portos-default',
@@ -169,15 +181,16 @@ describe('managed app updates', () => {
       type: 'express',
       repoPath: repo,
       pm2ProcessNames: ['portos-server'],
-    }, vi.fn())).rejects.toThrow('Update failed at step "npm-install" (exit code 1)');
+    }, vi.fn())).rejects.toThrow('1 CoS agent is running');
   });
 
-  it('refuses to launch a second update while one already holds the flag', async () => {
-    // The same atomic lock POST /api/update/execute takes — the two entry points
-    // into update.sh must not launch it concurrently.
+  it('propagates the shared launcher\'s "already in progress" refusal', async () => {
+    // The atomic lock now lives in the launcher, shared with
+    // POST /api/update/execute — the two entry points into update.sh must not
+    // launch it concurrently, and this path must not swallow that refusal.
     await writeFile(join(repo, 'update.sh'), '#!/bin/sh\nexit 0\n');
     await writeFile(join(repo, 'update.ps1'), 'exit 0\n');
-    mock.setUpdateInProgress.mockResolvedValue(false);
+    mock.startPortosSelfUpdate.mockRejectedValue(new Error('Update already in progress'));
 
     await expect(updateApp({
       id: 'portos-default',
@@ -186,8 +199,6 @@ describe('managed app updates', () => {
       repoPath: repo,
       pm2ProcessNames: ['portos-server'],
     }, vi.fn())).rejects.toThrow(/already in progress/i);
-
-    expect(mock.executeUpdate).not.toHaveBeenCalled();
   });
 
   it('still delegates when the record spells this checkout differently', async () => {
@@ -205,7 +216,7 @@ describe('managed app updates', () => {
       pm2ProcessNames: ['portos-server'],
     }, vi.fn());
 
-    expect(mock.executeUpdate).toHaveBeenCalled();
+    expect(mock.startPortosSelfUpdate).toHaveBeenCalled();
     expect(mock.spawn).not.toHaveBeenCalled();
   });
 
@@ -225,7 +236,7 @@ describe('managed app updates', () => {
       pm2ProcessNames: ['portos-server'],
     }, vi.fn());
 
-    expect(mock.executeUpdate).not.toHaveBeenCalled();
+    expect(mock.startPortosSelfUpdate).not.toHaveBeenCalled();
     expect(mock.spawn).toHaveBeenCalled();
     expect(mock.restart).toHaveBeenCalledWith('portos-server', undefined);
   });
@@ -244,7 +255,7 @@ describe('managed app updates', () => {
       pm2ProcessNames: ['example-app'],
     }, vi.fn());
 
-    expect(mock.executeUpdate).not.toHaveBeenCalled();
+    expect(mock.startPortosSelfUpdate).not.toHaveBeenCalled();
     expect(mock.spawn).toHaveBeenCalled();
     expect(mock.restart).toHaveBeenCalledWith('example-app', undefined);
   });
@@ -264,7 +275,7 @@ describe('managed app updates', () => {
       pm2ProcessNames: ['portos-server'],
     }, vi.fn());
 
-    expect(mock.executeUpdate).not.toHaveBeenCalled();
+    expect(mock.startPortosSelfUpdate).not.toHaveBeenCalled();
     expect(mock.spawn).toHaveBeenCalledWith('npm', ['run', 'update'], expect.objectContaining({ cwd: repo }));
     expect(mock.restart).toHaveBeenCalledWith('portos-server', undefined);
     // This path still restarts PortOS itself, so it still owns the dashboard

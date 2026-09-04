@@ -411,7 +411,10 @@ export function parseTraitsResponse(response) {
   }
 
   const parsed = safeJSONParse(jsonStr, null, { allowArray: false });
-  if (!parsed) {
+  // A fenced ```json block can wrap a bare scalar (e.g. the model responds
+  // with just `42`) — `allowArray: false` only rejects a root array, so guard
+  // for a genuine object before treating it as a traits response.
+  if (!parsed || typeof parsed !== 'object') {
     return { error: 'Failed to parse traits response - invalid JSON', rawResponse: response };
   }
 

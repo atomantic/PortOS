@@ -27,6 +27,7 @@ import { providerPinPatch } from './constants';
  * @param {string}   props.label          Provider-select label (also its aria-label when compact).
  * @param {string}   [props.inheritLabel] What a blank pin resolves to, e.g. `Inherit (claude-code)`.
  * @param {boolean}  [props.disabled]
+ * @param {boolean}  [props.loading]     Provider list not settled yet — see ProviderModelSelector.
  * @param {boolean}  [props.compact]      Hide labels for inline/table use.
  * @param {'row'|'stacked'} [props.layout]
  */
@@ -38,6 +39,7 @@ export default function AppProviderPin({
   label,
   inheritLabel = 'Use default provider',
   disabled = false,
+  loading = false,
   compact = false,
   layout = 'row'
 }) {
@@ -67,6 +69,7 @@ export default function AppProviderPin({
       emptyModelOption="Default model"
       alwaysShowModel
       disabled={disabled}
+      loading={loading}
       compact={compact}
       layout={layout}
     />

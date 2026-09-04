@@ -19,7 +19,7 @@ import {
 } from './storyBible.js';
 import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from './aiToolkit/constants.js';
 import { EFFORT_LEVELS } from './providerModels.js';
-import { CHECK_SCOPES, CHECK_SEVERITIES } from './editorial/checkRegistry.js';
+import { CHECK_SCOPES, CHECK_SEVERITIES } from './editorial/checkInfra/taxonomy.js';
 import { SHOT_TYPES, SCREEN_DIRECTIONS } from './shotGrammar.js';
 
 // =============================================================================

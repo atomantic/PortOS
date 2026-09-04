@@ -65,10 +65,10 @@ describe('TaskConfigDrawer tabbed layout', () => {
     renderDrawer();
     expect(screen.getByRole('tab', { name: /Stage config/ })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /Global defaults/ })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /Per-app overrides/ })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Per-app options/ })).toBeInTheDocument();
     // Counts surface: 2 stages, 1 active (non-archived) app.
     expect(screen.getByRole('tab', { name: /Stage config/ })).toHaveTextContent('2');
-    expect(screen.getByRole('tab', { name: /Per-app overrides/ })).toHaveTextContent('1');
+    expect(screen.getByRole('tab', { name: /Per-app options/ })).toHaveTextContent('1');
   });
 
   it('opens on Stage config and mounts only the active tab section', () => {
@@ -78,13 +78,13 @@ describe('TaskConfigDrawer tabbed layout', () => {
     expect(screen.queryByTestId('override-list')).not.toBeInTheDocument();
   });
 
-  it('switches to Global defaults and Per-app overrides on tab click', () => {
+  it('switches to Global defaults and Per-app options on tab click', () => {
     renderDrawer();
     fireEvent.click(screen.getByRole('tab', { name: /Global defaults/ }));
     expect(screen.getByTestId('global-config')).toHaveTextContent('global:do:next');
     expect(screen.queryByTestId('stage-config')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('tab', { name: /Per-app overrides/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /Per-app options/ }));
     expect(screen.getByTestId('override-list')).toHaveTextContent('overrides:do:next');
     expect(screen.queryByTestId('global-config')).not.toBeInTheDocument();
   });
@@ -106,9 +106,9 @@ describe('TaskConfigDrawer tabbed layout', () => {
     expect(screen.getByTestId('global-config')).toBeInTheDocument();
   });
 
-  it('hides the Per-app overrides tab when there are no active apps', () => {
+  it('hides the Per-app options tab when there are no active apps', () => {
     renderDrawer({ apps: [{ id: 'a', name: 'A', archived: true }] });
-    expect(screen.queryByRole('tab', { name: /Per-app overrides/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /Per-app options/ })).not.toBeInTheDocument();
   });
 
   it('renders nothing when config is not yet loaded', () => {

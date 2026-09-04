@@ -1,4 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+
+// runTraining takes the machine-wide heavy-local-job claim, whose path is
+// derived from PATHS.data at module load. Without this redirect the suite wrote
+// (and briefly held) the claim in the developer's LIVE data/ tree — a file that
+// gates their real local renders, stranded there whenever a case failed before
+// the release (#6176).
+vi.mock('../../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-caption-leak-') }));
+afterAll(cleanupTempDataRoots);
 
 // Regression guard for the caption-leak gate's SECOND call site. The gate is
 // re-checked when the queued job actually stages (runTraining), not just at

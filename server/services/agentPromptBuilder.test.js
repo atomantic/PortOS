@@ -318,6 +318,33 @@ describe('sandboxed public-review actions stage completion', () => {
     expect(prompt).not.toMatch(/## Completion \(No Code Output\)/);
     expect(prompt).not.toMatch(/## Completion \(Tool-Free Reasoning\)/);
   });
+
+  // #6062 made this stage attachable on a TUI provider whose vendor declares an
+  // attachable recipe. A TUI run finalizes on the `.agent-done` watcher and
+  // `dispatchTaskOutputHook` reads the payload from that same file, so the
+  // contract only holds if the posture — not the provider type — decides it.
+  // Were the TUI arm to win here, an attachable Stage 3 would be told to run
+  // `/simplify` + `/do:pr` in a discarded worktree and its decision payload
+  // would have to be scraped back out of repaint-heavy PTY output.
+  it('gives the same sentinel-payload contract on a TUI provider as on a headless one', () => {
+    const task = () => makeTask({
+      metadata: { noCodeOutput: true, discardWorktree: true, openPR: false, executionProfile: 'public-review-actions' },
+    });
+    // Same provider record, spawned two ways — so the ONLY variable is the
+    // spawn mode, which is exactly the thing that must not move the contract.
+    const headless = buildLightContextPrompt(task(), '/repo', null, isTruthyMeta, {
+      providerType: 'cli', providerId: 'claude-code', providerCommand: 'claude',
+    });
+    const tui = buildLightContextPrompt(task(), '/repo', null, isTruthyMeta, {
+      providerType: 'tui', providerId: 'claude-code', providerCommand: 'claude',
+    });
+    expect(tui).toMatch(/exact payload format described in your task instructions/);
+    expect(tui).toMatch(/\.agent-done/);
+    // The TUI push/PR workflow must stay suppressed — the worktree is discarded.
+    expect(tui).not.toMatch(/## Completion Workflow/);
+    expect(tui).not.toMatch(/YOU run the Completion Workflow/);
+    expect(tui).toBe(headless);
+  });
 });
 
 describe('no-code / API-action task completion (CD agents must NOT be told to /do:push)', () => {

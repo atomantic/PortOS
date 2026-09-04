@@ -9,7 +9,7 @@
  * response, and eligibility reasons can never cross into the action stage.
  */
 
-import { MODEL_ABUSE_GUARD_ID, issuePrerequisiteWaived, normalizeEligibilityFacts } from '../lib/modelAbuseGuard.js';
+import { MODEL_ABUSE_GUARD_ID, isSha256Hex, issuePrerequisiteWaived, normalizeEligibilityFacts } from '../lib/modelAbuseGuard.js';
 import { PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE, PUBLIC_REVIEW_GATE_EXECUTION_PROFILE } from '../lib/agentExecutionProfiles.js';
 import { createPrReviewerDefaultStages } from './taskScheduleRegistry.js';
 import {
@@ -18,7 +18,6 @@ import {
 } from './issueWatcher.js';
 
 const HEAD_SHA_RE = /^[a-f0-9]{40}$/i;
-const CONTENT_FINGERPRINT_RE = /^[a-f0-9]{64}$/i;
 const MAX_REASON_CHARS = 2_000;
 
 const roleForPromptKey = (promptKey) => ({
@@ -87,7 +86,7 @@ function normalizedExpectedPullRequests(task) {
   const pullRequests = [];
   for (const item of expected.pullRequests) {
     if (!Number.isInteger(item?.number) || item.number < 1 || seen.has(item.number)) return null;
-    if (!HEAD_SHA_RE.test(item.headSha) || !CONTENT_FINGERPRINT_RE.test(item.contentFingerprint)) return null;
+    if (!HEAD_SHA_RE.test(item.headSha) || !isSha256Hex(item.contentFingerprint)) return null;
     if (typeof item.authorLogin !== 'string' || !item.authorLogin.trim()) return null;
     seen.add(item.number);
     pullRequests.push({
@@ -106,6 +105,15 @@ function eligibilityFactsAllow(facts) {
   // The model's own quality verdict still applies to a waived PR.
   if (issuePrerequisiteWaived(facts)) return true;
   if (!facts.issueLookupComplete) return false;
+  // "Related to a filed issue" is only half the bar: the gate also has to have
+  // judged the diff against what that issue actually asks for. No screened
+  // issue text reached it, no intent verdict is possible, so the answer is no —
+  // a model that answered `eligible` without the requirement in front of it
+  // guessed. A fact set the current preflight built always carries this
+  // whenever the open/assigned check below passes, so in practice this rejects
+  // a set persisted before intent screening existed, or one that never came
+  // from the preflight at all.
+  if (!facts.intentFingerprint) return false;
   const linked = new Set(facts.linkedIssueNumbers);
   const open = new Set(facts.openLinkedIssueNumbers);
   return facts.openerAssignedIssueNumbers.some((number) => linked.has(number) && open.has(number));
@@ -128,6 +136,29 @@ function validateEligibilityDecision(raw, expected) {
 
 function invalidEligibility(reason, message = 'The eligibility gate did not return a complete validated decision set') {
   return { action: 'no-op', accepted: false, reason, message };
+}
+
+/**
+ * A stage agent that finished having written NO parseable deliverable at all
+ * (#6124). This is NOT the same as a payload the validator rejected: there is
+ * nothing to re-read, so the identical stage re-dispatches into the identical
+ * empty result — the shape that burned ~20 spawns in five minutes while the
+ * churn park logged that it had stopped the loop.
+ *
+ * `permanent: true` is the posture `resolvePublicReviewAgentProvider` already
+ * uses when no provider can enforce the stage's contract: surface a blocked
+ * task carrying the reason instead of retrying it. Finalization only honours
+ * the flag when the run named no other cause (see agentFinalization), so a
+ * rate-limited or unauthenticated run still gets its ordinary retries.
+ */
+function stageProducedNoOutput(role) {
+  return {
+    action: 'no-op',
+    accepted: false,
+    permanent: true,
+    reason: 'stage-produced-no-output',
+    message: `The pr-reviewer ${role || 'pipeline'} stage agent finished without writing any parseable output`,
+  };
 }
 
 function processEligibilityTaskOutput({ appId, success, payload, task } = {}) {
@@ -218,6 +249,11 @@ export function isTaskOutputPayload(payload) {
 
 export async function processTaskOutput(args = {}, deps) {
   const role = prReviewerStageRole(args.task?.metadata?.pipeline?.stages?.[args.task?.metadata?.pipeline?.currentStage ?? 0]);
+  // Checked before the role switch: every stage of this pipeline delivers its
+  // result as a parsed sentinel payload, so "no payload at all" is the same
+  // permanent failure whichever stage produced it, and answering it here keeps
+  // the per-role validators about the CONTENT of a payload that exists.
+  if (args.payload == null) return stageProducedNoOutput(role);
   if (role === 'eligibility') return processEligibilityTaskOutput(args);
   if (role === 'actions') return processIssueWatcherOutput({ ...args, requireEligibilityFacts: true }, deps);
   return invalidEligibility('unsupported-pr-review-stage');

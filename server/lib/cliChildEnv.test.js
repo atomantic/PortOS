@@ -4,6 +4,7 @@ import { posixPath } from './testHelper.js';
 import { buildCliChildEnv, buildPublicReviewCliEnv, composeProviderEnv } from './cliChildEnv.js';
 import { PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE, PUBLIC_REVIEW_EXECUTION_PROFILE } from './agentExecutionProfiles.js';
 import { cliProviderAuthDescriptor } from './processEnv.js';
+import { supportsPublicReviewProvider } from './providerVendors.js';
 import { AGENT_GUARD_BIN } from './agentGuard/index.js';
 import { collectServerSources, readServerSource } from './testHelper.js';
 import { readFileSync } from 'node:fs';
@@ -64,8 +65,9 @@ describe('buildCliChildEnv — layering', () => {
     expect(declaredModels(env).sort()).toEqual(['llama3.1:8b', 'qwen2.5:7b']);
     // Non-conflicting provider vars survive.
     expect(env.API_KEY).toBe('from-provider');
-    // The stored base is merged, not clobbered.
-    expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT).permission).toBe('deny');
+    // The stored base is merged, not clobbered — the string shorthand expands
+    // so the unattended interactive-gate denials can ride alongside it.
+    expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT).permission['*']).toBe('deny');
   });
 
   it('declares the MTPLX models map for a marked OpenCode provider', () => {
@@ -178,6 +180,79 @@ describe('buildCliChildEnv — public-review profile', () => {
   });
 });
 
+describe('buildCliChildEnv — public-review profile, OpenCode harness', () => {
+  // OpenCode is the natural way to drive a local Ollama model, and its whole
+  // tool posture lives in OPENCODE_CONFIG_CONTENT — stripping the variable does
+  // not harden the child, it points it back at the user's own
+  // ~/.config/opencode. It survives on the same loopback terms as the local
+  // Anthropic credential.
+  it('hardens the OpenCode config and carries it through the allowlist', () => {
+    const env = buildCliChildEnv({
+      baseEnv: { PATH: '/usr/bin', GH_TOKEN: 'ambient' },
+      provider: OLLAMA_OPENCODE,
+      model: 'qwen2.5:7b',
+      cwd: '/tmp/public-review',
+      safetyProfile: PUBLIC_REVIEW_EXECUTION_PROFILE,
+    });
+
+    // One posture marker is enough here — `opencodeConfig.test.js` owns the
+    // full matrix. What this test uniquely proves is that the hardened config
+    // survives the allowlist while the credentials beside it do not.
+    expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT).tools).toEqual({ '*': false });
+    expect(env).not.toHaveProperty('GH_TOKEN');
+    expect(env).not.toHaveProperty('API_KEY');
+  });
+
+  it('leaves the ordinary (non-public-review) OpenCode config tool-enabled', () => {
+    const env = buildCliChildEnv({ provider: OLLAMA_OPENCODE, model: 'qwen2.5:7b', cwd: '/tmp/work' });
+    const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT);
+    expect(config.permission['*']).toBe('deny'); // the provider's stored value, untouched
+    expect(config.provider.ollama.models['qwen2.5:7b'].tool_call).toBe(true);
+    expect(config).not.toHaveProperty('tools');
+  });
+
+  // The load-bearing invariant: whatever the vendor row declares eligible for
+  // the gate must keep its hardened config through this allowlist. If the two
+  // sides ever disagree, the stage spawns with the config stripped — OpenCode
+  // then reads the user's own ~/.config/opencode, tools intact, while every
+  // signal still reports an enforced tool-free gate.
+  it('keeps the config for exactly the providers the vendor row makes eligible', () => {
+    const relocated = {
+      ...OLLAMA_OPENCODE,
+      type: 'tui',
+      envVars: {
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({
+          provider: { ollama: { options: { baseURL: 'http://192.0.2.10:11434/v1' } } },
+        }),
+      },
+    };
+    const eligible = { ...OLLAMA_OPENCODE, type: 'tui' };
+    for (const provider of [eligible, relocated]) {
+      const env = buildCliChildEnv({
+        provider,
+        model: 'qwen2.5:7b',
+        cwd: '/tmp/public-review',
+        safetyProfile: PUBLIC_REVIEW_EXECUTION_PROFILE,
+      });
+      expect(
+        Object.hasOwn(env, 'OPENCODE_CONFIG_CONTENT'),
+        provider === eligible ? 'eligible provider kept its config' : 'off-box provider was stripped',
+      ).toBe(supportsPublicReviewProvider(provider));
+    }
+  });
+
+  it('strips a config declaring a non-loopback endpoint, key and all', () => {
+    const gatewayConfig = JSON.stringify({
+      provider: { openrouter: { options: { baseURL: 'https://openrouter.ai/api/v1', apiKey: 'cloud-secret' } } },
+    });
+    expect(buildPublicReviewCliEnv({ PATH: '/usr/bin', OPENCODE_CONFIG_CONTENT: gatewayConfig }))
+      .not.toHaveProperty('OPENCODE_CONFIG_CONTENT');
+    // A config that no longer parses tells us nothing about the endpoint.
+    expect(buildPublicReviewCliEnv({ OPENCODE_CONFIG_CONTENT: '{not json' }))
+      .not.toHaveProperty('OPENCODE_CONFIG_CONTENT');
+  });
+});
+
 describe('buildCliChildEnv — public-review profile, cloud endpoint', () => {
   it('strips the Anthropic credential when the base URL is not loopback', () => {
     const env = buildPublicReviewCliEnv({
@@ -242,6 +317,31 @@ describe('buildCliChildEnv — public-review-actions profile', () => {
     });
     expect(env).toMatchObject({ ANTHROPIC_BASE_URL: 'http://localhost:11434', ANTHROPIC_AUTH_TOKEN: 'ollama', ANTHROPIC_SMALL_FAST_MODEL: 'small:7b' });
     expect(env).not.toHaveProperty('GH_TOKEN');
+  });
+
+  // An allowlist carrying the wrapper's ENDPOINT but not its TUNING is the worst
+  // of both: the stage reaches the local daemon and then runs it on Claude Code's
+  // cloud-shaped ceilings — a 32K output cap and a 300s first-byte timeout that a
+  // ~100K-token prefill can never meet. Derived from what composeProviderEnv
+  // actually emits rather than a copy of the key list, so a knob added to
+  // `claudeLocalEnvDefaults` and forgotten in an allowlist fails here.
+  it('lets every local-Claude tuning knob through both public-review allowlists', () => {
+    const envVars = { ANTHROPIC_BASE_URL: 'http://localhost:11434', ANTHROPIC_AUTH_TOKEN: 'ollama' };
+    // Maximally-configured so every conditional knob is emitted.
+    const provider = { command: 'claude', ollamaBacked: true, thinking: false, envVars };
+    const tuning = Object.keys(composeProviderEnv({ provider })).filter((key) => !(key in envVars));
+    expect(tuning.length).toBeGreaterThan(0);
+
+    for (const safetyProfile of [PUBLIC_REVIEW_EXECUTION_PROFILE, PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE]) {
+      const env = buildCliChildEnv({
+        baseEnv: { PATH: '/usr/bin', GH_TOKEN: 'forge-secret' },
+        provider,
+        cwd: '/tmp/public-review',
+        safetyProfile,
+      });
+      for (const key of tuning) expect(env, `${safetyProfile} dropped ${key}`).toHaveProperty(key);
+      expect(env).not.toHaveProperty('GH_TOKEN');
+    }
   });
 });
 
@@ -315,6 +415,23 @@ describe('composeProviderEnv — delta for sites that do not spawn directly', ()
     expect(composeProviderEnv({
       provider: { command: 'opencode', ollamaBacked: true, envVars: {} },
     }).CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBeUndefined();
+  });
+
+  // The 300s default is a first-byte deadline, and a local daemon spends longer
+  // than that PREFILLING a ~100K-token review envelope before it can emit one.
+  // Every attempt was cancelled mid-prefill and re-sent, so the run sat at
+  // `API error · Retrying … attempt 1/10` forever without ever being unhealthy.
+  it('raises the Claude request timeout past a local prefill, never for a cloud model', () => {
+    const localClaude = { command: '/usr/local/bin/claude', ollamaBacked: true, envVars: {} };
+    expect(composeProviderEnv({ provider: localClaude }).API_TIMEOUT_MS).toBe('3600000');
+    expect(composeProviderEnv({
+      provider: { ...localClaude, envVars: { API_TIMEOUT_MS: '900000' } },
+    }).API_TIMEOUT_MS).toBe('900000');
+
+    expect(composeProviderEnv({ provider: { command: 'claude', envVars: {} } }).API_TIMEOUT_MS).toBeUndefined();
+    expect(composeProviderEnv({
+      provider: { command: 'opencode', ollamaBacked: true, envVars: {} },
+    }).API_TIMEOUT_MS).toBeUndefined();
   });
 
   it('disables Claude/Ollama thinking when the provider requests it', () => {
@@ -475,7 +592,31 @@ describe('buildCliChildEnv — per-call-site composition', () => {
     });
   });
 
+  it('cos-runner/index.js: an auth-only descriptor never regenerates a layer over the POSTed delta', () => {
+    // The full two-hop shape every runner-owned spawn really takes: PortOS
+    // composes the delta from the FULL provider record, then POSTs it alongside
+    // `cliProviderAuthDescriptor`'s identity-only view. Regenerating any layer
+    // from that partial view lands ABOVE `before`, so it replaces the complete
+    // value with a worse one — the OpenCode config rebuilt with an empty models
+    // map, which stops `--model ollama/<id>` resolving and drops the run onto
+    // OpenCode's own catalog. Asserted on the composed env, not on one key, so
+    // a future generative layer added to composeProviderEnv is covered too.
+    const envVars = composeProviderEnv({ provider: OLLAMA_OPENCODE, model: 'qwen3-coder:30b' });
+    const env = buildCliChildEnv({
+      baseEnv: { PATH: '/usr/bin' },
+      before: envVars,
+      provider: cliProviderAuthDescriptor(OLLAMA_OPENCODE),
+      cwd: '/workspace',
+    });
+
+    expect(declaredModels(env)).toContain('qwen3-coder:30b');
+    expect(env).toEqual({ ...envVars, PATH: '/usr/bin', PWD: '/workspace' });
+  });
+
   it('retains ambient auth for the selected provider when the runner supplies its descriptor', () => {
+    // The descriptor's other half: inert for composition (above), but still the
+    // input `buildSafeCliBaseEnv` picks the ambient-auth allowlist from — which
+    // is the whole reason the runner is POSTed one.
     const provider = { id: 'codex', command: 'codex', envVars: { OPENAI_API_KEY: 'not serialized' } };
     const env = buildCliChildEnv({
       baseEnv: { PATH: '/usr/bin', OPENAI_API_KEY: 'ambient-key' },

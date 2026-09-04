@@ -22,12 +22,12 @@ vi.mock('./providerStatus.js', () => ({
   getFallbackProvider: vi.fn(),
   getProviderStatus: vi.fn(),
 }));
-vi.mock('./agentModelSelection.js', () => ({ selectModelForTask: vi.fn() }));
+vi.mock('./agentModelSelection.js', () => ({ selectModelForTask: vi.fn(), selectModelForRole: vi.fn() }));
 
 import { resolveAgentProviderAndModel } from './agentProviderResolution.js';
 import { getActiveProvider, getAllProviders, getProviderById } from './providers.js';
 import { isProviderAvailable, getFallbackProvider, getProviderStatus } from './providerStatus.js';
-import { selectModelForTask } from './agentModelSelection.js';
+import { selectModelForRole, selectModelForTask } from './agentModelSelection.js';
 
 const TASK = { id: 'task-1', metadata: {} };
 
@@ -36,6 +36,10 @@ beforeEach(() => {
   // Sensible defaults: provider present + available, plain model selection.
   isProviderAvailable.mockReturnValue(true);
   selectModelForTask.mockResolvedValue({ model: 'm-default', tier: 'medium', reason: 'default' });
+  // The ordinary path resolves through the ARCHITECT role (#5992); with no
+  // profile that is `selectModelForTask` verbatim, which is what the real
+  // module does and what every selection assertion below is written against.
+  selectModelForRole.mockImplementation((task, _role, provider, agent) => selectModelForTask(task, provider, agent));
 });
 
 describe('resolveAgentProviderAndModel', () => {
@@ -371,13 +375,81 @@ describe('resolveAgentProviderAndModel — public-review stages', () => {
     expect(r).toMatchObject({ ok: true, provider: { id: 'codex-cli' } });
   });
 
+  // `selectModelForTask`'s real precedence: `task.metadata.model` wins outright
+  // over everything else. The suite's flat `m-default` default cannot observe a
+  // pin that leaks through it, so the tests below that assert a pin was DROPPED
+  // install this instead — otherwise they pass no matter what the code does.
+  const useRealisticModelSelection = () => selectModelForTask.mockImplementation(async (task, provider) => (
+    task?.metadata?.model
+      ? { model: task.metadata.model, tier: 'user-specified', reason: 'user-preference' }
+      : { model: provider?.defaultModel || 'm-default', tier: 'medium', reason: 'default' }
+  ));
+
   it('keeps a model pin only on the provider it was chosen for', async () => {
+    useRealisticModelSelection();
     getAllProviders.mockResolvedValue({ providers: [CODEX, GROK], activeProvider: null });
     await expect(resolveAgentProviderAndModel(gateTask({ provider: 'grok-cli', model: 'grok-4' })))
       .resolves.toMatchObject({ provider: { id: 'grok-cli' }, selectedModel: 'grok-4' });
     // Pinned for a DIFFERENT provider — falls back to that provider's own model.
+    // The posture swap above landed on codex-cli, and grok's model id must not
+    // ride along with it; leaving the pin on the task let `selectModelForTask`
+    // hand it straight back, so the swap silently kept the foreign model.
     await expect(resolveAgentProviderAndModel(gateTask({ provider: 'opencode', model: 'grok-4' })))
       .resolves.toMatchObject({ provider: { id: 'codex-cli' }, selectedModel: 'm-default' });
+  });
+
+  // A stage pin outlives edits to the provider's own model list: the live
+  // pr-reviewer gate sat pinned to an id its provider no longer offered, so
+  // every run spawned a CLI that could not serve the model, produced no
+  // output, and was retried — matching the provider is not enough on its own.
+  it('drops a model pin the matching provider no longer offers', async () => {
+    const CURATED = { id: 'grok-cli', type: 'cli', command: 'grok', models: ['grok-4'], defaultModel: 'grok-4' };
+    getAllProviders.mockResolvedValue({ providers: [CURATED], activeProvider: null });
+
+    // Still listed → honored.
+    await expect(resolveAgentProviderAndModel(gateTask({ provider: 'grok-cli', model: 'grok-4' })))
+      .resolves.toMatchObject({ provider: { id: 'grok-cli' }, selectedModel: 'grok-4' });
+
+    // Retired from the list → the provider's own selection wins instead.
+    await expect(resolveAgentProviderAndModel(gateTask({ provider: 'grok-cli', model: 'grok-3-retired' })))
+      .resolves.toMatchObject({ provider: { id: 'grok-cli' }, selectedModel: 'm-default' });
+  });
+
+  // The drop above has to survive model selection, which is where it used to
+  // be undone: `selectModelForTask` answers `metadata.model` verbatim as its
+  // highest-priority tier, so a resolution that left the rejected pin on the
+  // task got the same id back and spawned the CLI with it — while logging that
+  // it was "using its default instead". The mock is given the real precedence
+  // here on purpose; the flat `m-default` default cannot observe the bug.
+  it('does not let model selection hand the rejected pin back', async () => {
+    useRealisticModelSelection();
+    const CURATED = { id: 'grok-cli', type: 'cli', command: 'grok', models: ['grok-4'], defaultModel: 'grok-4' };
+    getAllProviders.mockResolvedValue({ providers: [CURATED], activeProvider: null });
+
+    const r = await resolveAgentProviderAndModel(gateTask({ provider: 'grok-cli', model: 'grok-3-retired' }));
+    expect(r.selectedModel).toBe('grok-4');
+  });
+
+  // A LOCAL runtime's `models` array is a cached snapshot of what the daemon
+  // had; the daemon itself is the authority, and the stage picker offers what
+  // it reports. Judging the pin against the snapshot rejected a model that was
+  // installed and serving — the live pr-reviewer gate logged "not offered by
+  // provider" for a freshly pulled Ollama model on every dispatch.
+  it('honors a model pin on a local-runtime provider whose cached list omits it', async () => {
+    const LOCAL = {
+      id: 'grok-ollama', type: 'cli', command: 'grok', ollamaBacked: true,
+      models: ['qwen3-coder:30b'], defaultModel: 'qwen3-coder:30b',
+    };
+    getAllProviders.mockResolvedValue({ providers: [LOCAL], activeProvider: null });
+    await expect(resolveAgentProviderAndModel(gateTask({ provider: 'grok-ollama', model: 'gemma3:27b' })))
+      .resolves.toMatchObject({ provider: { id: 'grok-ollama' }, selectedModel: 'gemma3:27b' });
+  });
+
+  // A provider that enumerates no models is a pass-through, so the pin stands.
+  it('honors a model pin on a provider that enumerates no models', async () => {
+    getAllProviders.mockResolvedValue({ providers: [GROK], activeProvider: null });
+    await expect(resolveAgentProviderAndModel(gateTask({ provider: 'grok-cli', model: 'anything-goes' })))
+      .resolves.toMatchObject({ provider: { id: 'grok-cli' }, selectedModel: 'anything-goes' });
   });
 
   it('blocks PERMANENTLY when no enabled provider can enforce the posture', async () => {
@@ -401,5 +473,43 @@ describe('resolveAgentProviderAndModel — public-review stages', () => {
     getAllProviders.mockResolvedValue({ providers: [{ id: 'ollama', type: 'api' }], activeProvider: { id: 'ollama' } });
     await expect(resolveAgentProviderAndModel({ id: 't', metadata: { executionProfile: 'public-review-actions' } }))
       .resolves.toMatchObject({ ok: false, permanent: true });
+  });
+});
+
+describe('orchestration profiles (#5992)', () => {
+  it('resolves the architect provider pin instead of the active provider', async () => {
+    const architectProvider = { id: 'p-architect', type: 'cli', defaultModel: 'm-architect', models: ['m-architect'] };
+    getProviderById.mockResolvedValue(architectProvider);
+    getActiveProvider.mockResolvedValue({ id: 'p-active', type: 'cli', defaultModel: 'm-active' });
+    selectModelForRole.mockResolvedValue({ model: 'm-architect', tier: 'user-specified', reason: 'orchestration-role-architect' });
+
+    const result = await resolveAgentProviderAndModel({
+      id: 'task-orchestrated',
+      metadata: {
+        orchestrationMode: 'orchestrated',
+        orchestrationProfile: { architect: { provider: 'p-architect', model: 'm-architect' } },
+      },
+    });
+
+    expect(getProviderById).toHaveBeenCalledWith('p-architect');
+    expect(result.ok).toBe(true);
+    expect(result.provider.id).toBe('p-architect');
+    expect(result.selectedModel).toBe('m-architect');
+  });
+
+  it('leaves a direct-mode task on its own metadata provider pin', async () => {
+    getProviderById.mockResolvedValue({ id: 'p-pinned', type: 'cli', defaultModel: 'm-pinned' });
+    getActiveProvider.mockResolvedValue({ id: 'p-active', type: 'cli', defaultModel: 'm-active' });
+
+    const result = await resolveAgentProviderAndModel({
+      id: 'task-direct',
+      metadata: {
+        provider: 'p-pinned',
+        orchestrationProfile: { architect: { provider: 'p-architect' } },
+      },
+    });
+
+    expect(getProviderById).toHaveBeenCalledWith('p-pinned');
+    expect(result.provider.id).toBe('p-pinned');
   });
 });

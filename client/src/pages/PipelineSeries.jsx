@@ -204,7 +204,7 @@ export default function PipelineSeries() {
           <button
             type="button"
             onClick={toggleSidebar}
-            className="hidden lg:flex absolute left-0 top-2 z-20 p-1.5 text-gray-500 hover:text-white transition-colors rounded-r-md hover:bg-port-card bg-port-card/60 border border-l-0 border-port-border"
+            className="min-h-[44px] min-w-[44px] items-center justify-center hidden lg:flex absolute left-0 top-2 z-20 p-1.5 text-gray-500 hover:text-white transition-colors rounded-r-md hover:bg-port-card bg-port-card/60 border border-l-0 border-port-border"
             title="Show series bible"
             aria-label="Expand series bible sidebar"
           >
@@ -351,7 +351,7 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
         <button
           type="button"
           onClick={onCollapse}
-          className="hidden lg:inline-flex p-1.5 rounded text-gray-500 hover:text-white hover:bg-port-bg"
+          className="min-h-[44px] min-w-[44px] items-center justify-center hidden lg:inline-flex p-1.5 rounded text-gray-500 hover:text-white hover:bg-port-bg"
           title="Collapse bible sidebar"
           aria-label="Collapse bible sidebar"
         >

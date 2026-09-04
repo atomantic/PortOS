@@ -384,7 +384,7 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
             type="button"
             onClick={() => { refresh(); loadRecord(); }}
             title="Refresh sync status + reload record" aria-label="Refresh sync status + reload record"
-            className="p-1 text-gray-500 hover:text-gray-300 rounded"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-gray-300 rounded"
           >
             <RefreshCw className="w-3.5 h-3.5" />
           </button>

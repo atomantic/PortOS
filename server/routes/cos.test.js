@@ -125,6 +125,10 @@ vi.mock('../services/cosTaskGenerator.js', async (importActual) => ({
 vi.mock('../services/apps.js', () => ({
   getAppById: vi.fn(),
   getAppWorkTracker: vi.fn(),
+  // buildJiraTicketTask layers the app's claim-work metadata over the Code
+  // Review Defaults (#6210), so the route exercises getAppTaskTypeOverrides
+  // through it — default to no per-app override.
+  getAppTaskTypeOverrides: vi.fn(async () => ({})),
   PORTOS_APP_ID: 'portos-default'
 }));
 

@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   getAppWorkTracker: vi.fn(),
   resolveAppWorkTracker: vi.fn(),
   getProviderPrerequisiteReadinessMap: vi.fn(),
+  listManagedBackendModels: vi.fn(),
   workspacePreflight: vi.fn(),
   assessWorkspaceReadiness: vi.fn(),
 }));
@@ -27,6 +28,9 @@ vi.mock('./cosTaskStore.js', () => ({
   getTaskById: (...args) => mocks.getTaskById(...args),
 }));
 vi.mock('./providers.js', () => ({ listProviders: vi.fn(async () => mocks.providers) }));
+vi.mock('./localLlm.js', () => ({
+  listManagedBackendModels: (...args) => mocks.listManagedBackendModels(...args),
+}));
 vi.mock('./providerPrerequisites.js', () => ({
   getProviderPrerequisiteReadinessMap: (...args) => mocks.getProviderPrerequisiteReadinessMap(...args),
 }));
@@ -69,6 +73,7 @@ beforeEach(() => {
   mocks.resolveAppWorkTracker.mockResolvedValue({ resolved: 'plan' });
   mocks.getTaskById.mockImplementation(async () => mocks.existing);
   mocks.addTask.mockResolvedValue({ id: 'sys-mind-stable', status: 'pending', autoApproved: true });
+  mocks.listManagedBackendModels.mockResolvedValue({ models: null, error: 'no daemon in tests' });
   mocks.getProviderPrerequisiteReadinessMap.mockImplementation((providers) => Object.fromEntries(
     providers.map((provider) => [provider.id, { status: 'ready', reasonCodes: [] }]),
   ));
@@ -143,6 +148,60 @@ describe('persistent mind CoS-task capability', () => {
     });
     expect(result).toMatchObject({ success: true });
     expect(mocks.addTask).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5-mini' }), 'internal');
+  });
+
+  // A local provider's `models` array is a cached snapshot; the daemon on this
+  // machine is the authority, and every other model picker already offers what
+  // it reports. Building this catalog from the record rejects a model the user
+  // pulled after the record was last refreshed, as "not configured".
+  it('sources a local-runtime provider\'s models from the daemon, not its cached list', async () => {
+    mocks.providers = [{
+      id: 'grok-ollama', name: 'Grok (Ollama)', type: 'cli', enabled: true, command: 'grok',
+      ollamaBacked: true, models: ['qwen3-coder:30b'], defaultModel: 'qwen3-coder:30b',
+    }];
+    mocks.listManagedBackendModels.mockResolvedValue({
+      models: [{ id: 'qwen3-coder:30b' }, { id: 'gemma3:27b' }], error: null,
+    });
+
+    const catalog = await readPersistentMindTaskCatalog();
+    expect(catalog.providers[0].models.map((model) => model.id))
+      .toEqual(['qwen3-coder:30b', 'gemma3:27b']);
+    expect(mocks.listManagedBackendModels).toHaveBeenCalledWith('ollama');
+
+    const [result] = await executePersistentMindTaskRequests({
+      taskRequests: [taskRequest({ providerId: 'grok-ollama', model: 'gemma3:27b', effort: undefined })],
+      turnId: 'turn-daemon-model',
+      wake: { kind: 'message', message: { id: 'message-daemon-model' } },
+    });
+    expect(result).toMatchObject({ success: true });
+    expect(mocks.addTask).toHaveBeenCalledWith(expect.objectContaining({ model: 'gemma3:27b' }), 'internal');
+  });
+
+  // `null` (list unreadable) must not collapse to `[]` (nothing installed) — a
+  // daemon that is merely down would otherwise wipe the provider off the catalog.
+  it('keeps the record list when the daemon list cannot be read', async () => {
+    mocks.providers = [{
+      id: 'grok-ollama', name: 'Grok (Ollama)', type: 'cli', enabled: true, command: 'grok',
+      ollamaBacked: true, models: ['qwen3-coder:30b'], defaultModel: 'qwen3-coder:30b',
+    }];
+    mocks.listManagedBackendModels.mockResolvedValue({ models: [], error: 'daemon not running' });
+
+    const catalog = await readPersistentMindTaskCatalog();
+    // Asserting the call as well as the result: without it this passes just as
+    // green against a build that never consults the daemon at all.
+    expect(mocks.listManagedBackendModels).toHaveBeenCalledWith('ollama');
+    expect(catalog.providers[0].models.map((model) => model.id)).toEqual(['qwen3-coder:30b']);
+  });
+
+  // A cloud provider enumerates its own catalog, so a retired id is still refused.
+  it('still refuses a retired model on a non-local provider', async () => {
+    const [result] = await executePersistentMindTaskRequests({
+      taskRequests: [taskRequest({ model: 'gpt-4' })],
+      turnId: 'turn-retired-model',
+      wake: { kind: 'message', message: { id: 'message-retired-model' } },
+    });
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('not configured') });
+    expect(mocks.addTask).not.toHaveBeenCalled();
   });
 
   it('filters the model-facing catalog while retaining all apps for the settings inventory', async () => {

@@ -651,7 +651,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/messages` | Messages (email) integration |
 | `/api/digital-twin/social-accounts`, `/api/digital-twin/identity`, `/api/digital-twin/autobiography` | Digital-twin sub-domains |
 | `/api/meatspace` | MeatSpace (health, POST, genome) |
-| `/api/lmstudio`, `/api/local-llm` | Local LLM backends and the local runtime servers PortOS can start/stop (Ollama, LM Studio, `llama-server`, MTPLX, Slotstream — the last three as PM2 processes; `POST /api/local-llm/save-startup` is `pm2 save`), plus MTPLX's checkpoint catalog — `GET /api/local-llm/mtplx/models/search`, `POST .../models/pull` (byte progress on the `mtplx:download` socket event), `POST .../models/remove`. Slotstream lifecycle is `GET /api/local-llm/slotstream/status`, `POST .../start` (never downloads weights), `POST .../stop`, `POST .../install`. |
+| `/api/lmstudio`, `/api/local-llm` | Local LLM backends and the local runtime servers PortOS can start/stop (Ollama, LM Studio, `llama-server`, MTPLX, Slotstream — the last three as PM2 processes; `POST /api/local-llm/save-startup` is `pm2 save`), plus MTPLX's checkpoint catalog — `GET /api/local-llm/mtplx/models/search`, `POST .../models/pull` (byte progress on the `mtplx:download` socket event), `POST .../models/remove`. Slotstream lifecycle is `GET /api/local-llm/slotstream/status` (which also carries the curated checkpoint catalog), `POST .../start` (never downloads weights), `POST .../stop`, `POST .../install`, and `POST /api/local-llm/slotstream/models/download` — the separate, explicit action that fetches a checkpoint, with byte progress on the `slotstream:download` socket event. |
 | `/api/code-review` | Code review runs |
 | `/api/voice`, `/api/voice/public` | Voice assistant |
 | `/api/api-docs` | Generated HTTP/event catalogs, OpenAPI 3.0.3 documents, AsyncAPI 3 document, and the minimized semantic tool resource |
@@ -869,6 +869,7 @@ curl -X POST http://localhost:5555/api/apps \
 curl -X POST http://localhost:5555/api/runs \
   -H "Content-Type: application/json" \
   -d '{
+    "providerId": "claude-code",
     "prompt": "List all files in the current directory",
     "workspacePath": "/path/to/workspace"
   }'

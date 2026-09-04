@@ -1591,3 +1591,41 @@ describe('video bucket selection is an MLX/CUDA axis, not an OS one', () => {
     expect(reg.video.mlx.map((m) => m.id)).not.toContain('user-cuda');
   });
 });
+
+// The load-time upgrade chain's ORDER is load-bearing — `upgradeFastMetalDownloadSizes`
+// has to precede `applyVideoDisclosures` (which only fills an ABSENT disclosure), and
+// `dropRetiredEntries` has to run first so a withdrawn model is not decorated on its
+// way out. Pinning the list here makes a reorder a deliberate two-file edit rather
+// than a silently-shipped behavior change.
+describe('video registry upgrade chain', () => {
+  it('runs the upgraders in the order the constraints require', async () => {
+    const { VIDEO_REGISTRY_UPGRADE_NAMES } = await import('./mediaModels.js');
+    expect([...VIDEO_REGISTRY_UPGRADE_NAMES]).toEqual([
+      'dropRetiredEntries',
+      'upgradeMiniMaxH3OutputControls',
+      'upgradeLtx25AudioControls',
+      'upgradeFastMetalDownloadSizes',
+      'backfillRuntime',
+      'upgradeLegacyCudaLtxRuntime',
+      'upgradeLtx25CudaMemoryFloor',
+    ]);
+  });
+
+  // The two CUDA-only rows must stay off the MLX bucket: `ltx_video` is a legacy
+  // diffusers CUDA row, and re-pointing an MLX entry of the same id at the
+  // `cuda_video` runtime would break its dispatch.
+  it('applies the CUDA-only upgraders to the cuda bucket only', async () => {
+    writeFileSync(registryFile, JSON.stringify({
+      video: {
+        mlx: [{ id: 'ltx_video', name: 'LTX Video' }],
+        cuda: [{ id: 'ltx_video', name: 'LTX Video' }],
+      },
+    }, null, 2));
+
+    const { loadMediaModels } = await import('./mediaModels.js');
+    const registry = loadMediaModels();
+
+    expect(registry.video.mlx.find((m) => m.id === 'ltx_video').runtime).toBeUndefined();
+    expect(registry.video.cuda.find((m) => m.id === 'ltx_video').runtime).toBe('cuda_video');
+  });
+});

@@ -181,6 +181,78 @@ describe('conflictJournalResolver', () => {
     expect(restored.episodes[0]).toMatchObject({ id: 'ep-local', title: 'Local opening' });
   });
 
+  it('restore-all restores FableLoom protagonist continuity fields (#6010 parity)', async () => {
+    // Only the protagonist fields diverge from the live record — isolates the
+    // restore from mutateLoom's own (unrelated, intentional) rule that clears
+    // productionStatus whenever editorial content — which protagonist fields
+    // are themselves part of — actually changes.
+    const loom = await fableLoomSvc.createLoom({ name: 'Remote story', premise: 'Remote premise' });
+    const entryId = await seedEntry(loom.id, {
+      ...loom,
+      protagonistCharacterId: 'char-local',
+      protagonistWardrobeId: 'wardrobe-local',
+      protagonistWardrobeLocked: true,
+    }, 'fableLoom');
+
+    await resolver.resolveConflict(entryId, { action: 'restore-all' });
+    const restored = await fableLoomSvc.getLoom(loom.id);
+    expect(restored).toMatchObject({
+      protagonistCharacterId: 'char-local',
+      protagonistWardrobeId: 'wardrobe-local',
+      protagonistWardrobeLocked: true,
+    });
+  });
+
+  it('restore-all restores FableLoom productionStatus when nothing else diverged (#6010 parity)', async () => {
+    const loom = await fableLoomSvc.createLoom({ name: 'Remote story', premise: 'Remote premise' });
+    const entryId = await seedEntry(loom.id, {
+      ...loom,
+      productionStatus: { editorialApprovedAt: '2026-05-01T00:00:00Z', editorialApprovalSource: 'manual', deliveryApprovedAt: null },
+    }, 'fableLoom');
+
+    await resolver.resolveConflict(entryId, { action: 'restore-all' });
+    const restored = await fableLoomSvc.getLoom(loom.id);
+    expect(restored.productionStatus).toMatchObject({ editorialApprovedAt: '2026-05-01T00:00:00Z', editorialApprovalSource: 'manual' });
+  });
+
+  it('merge-fields accepts FableLoom protagonist and production-status fields previously rejected as not restorable (#6010 parity)', async () => {
+    const loom = await fableLoomSvc.createLoom({ name: 'Keep me', premise: 'Keep premise' });
+    const entryId = await seedEntry(loom.id, {
+      ...loom,
+      name: 'IGNORED local name',
+      productionStatus: { editorialApprovedAt: '2026-05-01T00:00:00Z', editorialApprovalSource: 'manual', deliveryApprovedAt: null },
+      protagonistCharacterId: 'char-merge',
+      protagonistWardrobeId: 'wardrobe-merge',
+      protagonistWardrobeLocked: true,
+    }, 'fableLoom');
+
+    // Before the fix, each of these fields was outside RESTORABLE_FIELDS.fableLoom
+    // and merge-fields rejected them with ERR_VALIDATION ("Not restorable: ...").
+    await resolver.resolveConflict(entryId, {
+      action: 'merge-fields',
+      fields: ['protagonistCharacterId', 'protagonistWardrobeId', 'protagonistWardrobeLocked'],
+    });
+    const afterProtagonist = await fableLoomSvc.getLoom(loom.id);
+    expect(afterProtagonist).toMatchObject({
+      protagonistCharacterId: 'char-merge',
+      protagonistWardrobeId: 'wardrobe-merge',
+      protagonistWardrobeLocked: true,
+    });
+    expect(afterProtagonist.name).toBe('Keep me'); // untouched — not in the merge-fields selection
+
+    // productionStatus merged via a fresh entry: the protagonist merge above
+    // just changed editorial content, which clears productionStatus by design
+    // (mutateLoom's approval-invalidation rule) — merging it in the same call
+    // would immediately be wiped by that unrelated rule, not by this fix.
+    const statusEntryId = await seedEntry(loom.id, {
+      ...afterProtagonist,
+      productionStatus: { editorialApprovedAt: '2026-05-01T00:00:00Z', editorialApprovalSource: 'manual', deliveryApprovedAt: null },
+    }, 'fableLoom');
+    await resolver.resolveConflict(statusEntryId, { action: 'merge-fields', fields: ['productionStatus'] });
+    const afterStatus = await fableLoomSvc.getLoom(loom.id);
+    expect(afterStatus.productionStatus).toMatchObject({ editorialApprovedAt: '2026-05-01T00:00:00Z', editorialApprovalSource: 'manual' });
+  });
+
   it('discard marks resolved without touching the record', async () => {
     const u = await universeSvc.createUniverse({ name: 'X', starterPrompt: 'REMOTE' });
     const entryId = await seedEntry(u.id, { id: u.id, name: 'X', starterPrompt: 'local' });

@@ -66,10 +66,12 @@ import {
   extractVerifiablePromptPrefix,
   isPasteConfirmed,
   SUBMIT_KEY,
+  detectMissingTuiBinary,
 } from '../lib/tuiHandshake.js';
-import { injectTuiModelAndEffort } from '../lib/providerVendors.js';
+import { buildVendorSpawnConfig, injectTuiModelAndEffort, supportsTuiPublicReviewPosture } from '../lib/providerVendors.js';
+import { isPublicReviewRestrictedProfile, publicReviewPostureForProfile } from '../lib/agentExecutionProfiles.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
-import { composeProviderEnv } from '../lib/cliChildEnv.js';
+import { buildCliChildEnv, composeProviderEnv } from '../lib/cliChildEnv.js';
 import { cliProviderAuthDescriptor } from '../lib/processEnv.js';
 import { ensureOllamaAgentContext } from './ollamaAgentContext.js';
 import { isOllamaBackedProvider } from './providers.js';
@@ -92,10 +94,37 @@ const PROVIDER_SIGNAL_POLL_MS = 5000;
 // The filename is per agent instance — see doneSentinelName in ../lib/agentSentinel.js.
 
 /**
- * Thin wrapper around `shellService.createShellSession` for the agent TUI
- * path. Centralizes the agent-side defaults (kind, label, initialCommand)
- * and pairs the returned session id with its underlying pty process so
- * callers don't have to make a second `getSessionProcess` call inline.
+ * What kind of PTY a TUI run gets. Resolved ONCE per run and threaded, rather
+ * than re-derived wherever it matters: two consumers wire the prompt handshake
+ * BEFORE the spawn happens, and a predicate that silently disagreed with the
+ * branch actually taken fails by never delivering the prompt — no error, on a
+ * live run.
+ *
+ *   'runner'      — the CoS Runner owns the PTY, in another process.
+ *   'direct'      — this process pty.spawns the provider binary itself.
+ *   'login-shell' — an interactive login shell with the CLI typed into it.
+ *
+ * A public-content stage is `direct` because a login shell would run the
+ * operator's rc file inside its allowlisted environment (#6159). It is never
+ * `runner`: the runner builds its own child env, which would drop that
+ * allowlist, so `agentLifecycle.js` forces those stages direct-only and
+ * `createAgentTuiSession` fails closed if one arrives anyway.
+ *
+ * This is a separate axis from `isPublicReviewRestrictedProfile` itself, which
+ * answers a different question (is the env COMPLETE or a delta?) — the runner
+ * case is the proof they are not the same axis.
+ */
+export function resolveTuiLaunchShape({ useDurableRunner = false, safetyProfile = null } = {}) {
+  if (useDurableRunner) return 'runner';
+  return isPublicReviewRestrictedProfile(safetyProfile) ? 'direct' : 'login-shell';
+}
+
+/**
+ * Open the agent TUI's PTY and pair the returned session id with its underlying
+ * pty process, so callers don't have to make a second `getSessionProcess` call
+ * inline. Centralizes the agent-side defaults (kind, label, initialCommand).
+ *
+ * Which of the three PTY shapes it opens is `resolveTuiLaunchShape`'s call.
  *
  * Returns `{ sessionId, ptyProcess, pid }`. When the shell service fails
  * to create the session, `sessionId` is null and the caller is expected
@@ -111,12 +140,49 @@ export async function createAgentTuiSession({
   forgeTokenEnv = {},
   doneSentinelPath = null,
   useDurableRunner = false,
+  safetyProfile = null,
   onData,
   onExit,
   onInitialCommandSent,
 }) {
-  const env = { ...composeProviderEnv({ before: forgeTokenEnv, provider, model }), ...agentGuardEnv() };
-  if (useDurableRunner) {
+  const restricted = isPublicReviewRestrictedProfile(safetyProfile);
+  // A public-content stage's PTY starts from the SAME environment its headless
+  // sibling gets — no forge credential, no SSH config, no cloud key, no
+  // arbitrary provider var — so it calls the very builder the headless path
+  // uses rather than re-deriving the profile→allowlist mapping here.
+  //
+  // The two branches produce DIFFERENT KINDS of value, which is why they route
+  // to different spawn entry points below. `buildCliChildEnv` returns a COMPLETE
+  // environment, so a restricted stage goes to `spawnCommandSession`, which
+  // unions nothing underneath it — and which is also what removes the login
+  // shell, so the operator's rc file can no longer run between this allowlist
+  // and the provider and re-export whatever it likes (#6159). The ordinary
+  // branch is a DELTA: `createShellSession` unions it onto `buildSafeEnv`.
+  const env = restricted
+    ? buildCliChildEnv({ before: forgeTokenEnv, provider, model, cwd, guard: true, safetyProfile })
+    : { ...composeProviderEnv({ before: forgeTokenEnv, provider, model }), ...agentGuardEnv() };
+  // How this session identifies itself in the Shell UI and the session registry.
+  // Identical for all three spawn shapes below — an attached human sees the same
+  // tab whichever one opened the PTY.
+  const sessionOptions = {
+    cwd,
+    kind: 'agent-tui',
+    agentId,
+    label: `${provider.name} ${agentId}`,
+    command: tuiConfig.commandLine,
+  };
+  const launchShape = resolveTuiLaunchShape({ useDurableRunner, safetyProfile });
+  let sessionId;
+  if (launchShape === 'runner') {
+    // The CoS runner is a shared long-lived process and builds its own child
+    // env from ITS ambient environment (`/spawn-tui` → `buildCliChildEnv`
+    // without a profile), so a public-content stage routed through it would
+    // silently lose the allowlist resolved above. `agentLifecycle.js` forces
+    // every such stage direct-only (`dispatchUseRunner`); fail closed here so
+    // that stays true by construction rather than by remembering it.
+    if (restricted) {
+      throw new Error(`Public-content stage cannot spawn via the CoS runner (profile '${safetyProfile}')`);
+    }
     // The runner launches the TUI command directly (there is no intermediate
     // login-shell readiness probe), so output can arrive before the spawn HTTP
     // response. Open the readiness gate before handing off to avoid discarding
@@ -134,55 +200,70 @@ export async function createAgentTuiSession({
       onData,
       onExit,
     });
-    shellService.registerExternalSession(session.sessionId, session.ptyProcess, {
-      cwd,
-      kind: 'agent-tui',
-      agentId,
-      label: `${provider.name} ${agentId}`,
-      command: tuiConfig.commandLine,
-    });
+    shellService.registerExternalSession(session.sessionId, session.ptyProcess, sessionOptions);
+    // The runner owns this PTY, so it already returns the pty/pid pair the tail
+    // below would otherwise have to look up locally.
     return session;
   }
 
-  // This shell exists only to host the CoS TUI. `exitWithCommand` makes it
-  // follow the TUI's lifetime and preserve the TUI exit status; otherwise the
-  // login shell returns to its prompt when the provider exits and the spawner
-  // cannot observe completion until the wall-clock backstop fires. The wrapper
-  // is dialect-specific, so shell.js renders it once it knows which shell the
-  // session got (see lib/shellExit.js).
-  const sessionId = shellService.createShellSession(null, {
-    cwd,
-    initialCommand: tuiConfig.commandLine,
-    exitWithCommand: true,
-    kind: 'agent-tui',
-    agentId,
-    label: `${provider.name} ${agentId}`,
-    command: tuiConfig.commandLine,
-    // Wait until the shell can actually RUN commands before injecting the CLI
-    // command — a fixed delay races a heavy interactive shell and the launched
-    // TUI can fall straight back to a half-loaded prompt (see shell.js
-    // waitForPromptReady, which proves readiness with a round-trip probe).
-    waitForPromptReady: true,
-    // Fires when the CLI command is actually injected. We start observing
-    // claude's input-readiness only after this so the readiness probe's own
-    // shell activity can't prematurely open the paste gate.
-    onInitialCommandSent,
-    // A DELTA, not a full env — buildSafeEnv inside createShellSession supplies
-    // the base and shell.js does the PWD pin. composeProviderEnv owns the layer
-    // order (forgeTokenEnv before provider.envVars so an explicit provider
-    // GH_TOKEN still wins; the OpenCode declared-models map after it, overriding
-    // the static config). forgeTokenEnv has to be threaded in explicitly because
-    // buildSafeEnv strips GH_TOKEN from the inherited env (resolveForgeTokenEnv).
+  if (launchShape === 'direct') {
+    // Launch the vendor recipe AS the PTY — no hosting shell, so no rc file runs
+    // between the allowlist above and the provider (#6159). `env` is already the
+    // COMPLETE environment, which is what `spawnCommandSession` takes.
     //
-    // agentGuardEnv() is spread last so the pm2 shim wins over any provider PATH.
-    // It reads PATH from process.env rather than the composed env — correct here
-    // and NOT what buildCliChildEnv's `guard` does, because this is an overlay
-    // whose real base env is assembled downstream. Only AI agent sessions get
-    // the shim; the user's own Shell page does not.
-    env,
-    onData,
-    onExit,
-  });
+    // `spawnCommandSession` resolves the executable before it spawns and throws
+    // `Command executable unavailable: …` when it cannot — which the caller's
+    // catch maps to `command-not-found`. That pre-flight has to live in the
+    // launcher: a PTY has no shell to print "command not found", so handleData's
+    // output-driven probe can never fire on this path.
+    //
+    // No shell readiness probe fires `onInitialCommandSent` here, so open the
+    // paste gate before the spawn — exactly as the runner branch above does —
+    // or the TUI's first bracketed-paste/input-ready bytes are discarded.
+    onInitialCommandSent?.();
+    sessionId = shellService.spawnCommandSession(tuiConfig.command, tuiConfig.args, {
+      ...sessionOptions,
+      env,
+      onData,
+      onExit,
+    });
+  } else {
+    // This shell exists only to host the CoS TUI. `exitWithCommand` makes it
+    // follow the TUI's lifetime and preserve the TUI exit status; otherwise the
+    // login shell returns to its prompt when the provider exits and the spawner
+    // cannot observe completion until the wall-clock backstop fires. The wrapper
+    // is dialect-specific, so shell.js renders it once it knows which shell the
+    // session got (see lib/shellExit.js).
+    sessionId = shellService.createShellSession(null, {
+      ...sessionOptions,
+      initialCommand: tuiConfig.commandLine,
+      exitWithCommand: true,
+      // Wait until the shell can actually RUN commands before injecting the CLI
+      // command — a fixed delay races a heavy interactive shell and the launched
+      // TUI can fall straight back to a half-loaded prompt (see shell.js
+      // waitForPromptReady, which proves readiness with a round-trip probe).
+      waitForPromptReady: true,
+      // Fires when the CLI command is actually injected. We start observing
+      // claude's input-readiness only after this so the readiness probe's own
+      // shell activity can't prematurely open the paste gate.
+      onInitialCommandSent,
+      // A DELTA, not a full env — buildSafeEnv inside createShellSession supplies
+      // the base and shell.js does the PWD pin. composeProviderEnv owns the layer
+      // order (forgeTokenEnv before provider.envVars so an explicit provider
+      // GH_TOKEN still wins; the OpenCode declared-models map after it, overriding
+      // the static config). forgeTokenEnv has to be threaded in explicitly because
+      // buildSafeEnv strips GH_TOKEN from the inherited env (resolveForgeTokenEnv).
+      //
+      // agentGuardEnv() is spread last so the pm2 shim wins over any provider PATH.
+      // It reads PATH from process.env rather than the composed env — correct here
+      // and NOT what buildCliChildEnv's `guard` does, because this is an overlay
+      // whose real base env is assembled downstream. Only AI agent sessions get
+      // the shim; the user's own Shell page does not.
+      env,
+      onData,
+      onExit,
+    });
+  }
 
   if (!sessionId) {
     return { sessionId: null, ptyProcess: null, pid: null };
@@ -196,8 +277,38 @@ export function buildTuiSpawnConfig(provider, model, {
   systemPromptFile = null,
   effort = null,
   maxConcurrentThreads = null,
+  safetyProfile = null,
   shell = resolveInteractiveShell(),
 } = {}) {
+  // A public-content stage's argv is the vendor's maintained recipe, never the
+  // generic assembly below — that path forwards `provider.args` and applies
+  // `applyCommandDefaults`, either of which can hand a contributor-controlled
+  // review a saved `--dangerously-skip-permissions`. `tui: true` tells the
+  // recipe to drop only the flags that require `--print` and keep every
+  // enforcement flag. Fail closed when the pairing declares no attachable recipe: the
+  // caller is supposed to have asked `supportsTuiPublicReviewPosture` first, so
+  // reaching this is a routing bug and must not silently open a PTY whose
+  // posture is decorative.
+  const posture = publicReviewPostureForProfile(safetyProfile);
+  if (posture) {
+    if (!supportsTuiPublicReviewPosture(provider, posture)) {
+      throw new Error(`Provider '${provider?.id || provider?.command || 'unknown'}' cannot run an attachable ${posture} session`);
+    }
+    const recipe = buildVendorSpawnConfig(provider, {
+      effectiveModel: model,
+      effort,
+      maxConcurrentThreads,
+      systemPromptFile,
+      safetyProfile,
+      tui: true,
+    });
+    return {
+      command: recipe.command,
+      args: recipe.args,
+      commandLine: formatShellCommandLine(recipe.command, recipe.args, shell),
+      promptDelayMs: provider?.tuiPromptDelayMs || DEFAULT_TUI_PROMPT_DELAY_MS,
+    };
+  }
   const command = provider?.command || inferTuiCommand(provider?.id);
   const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])]);
   // Model+effort injection (including the antigravity-validates-the-pair special
@@ -242,7 +353,7 @@ function createPasteRetryController({
   agentId,
   sessionId,
   pid,
-  useDurableRunner,
+  directLaunch,
   prompt,
   tuiConfig,
   mcpBoot,
@@ -334,11 +445,12 @@ function createPasteRetryController({
     // `^[[200~ …` session. If the shell has no live child, the command is gone:
     // fail loudly with whatever it printed instead of pasting into the shell.
     //
-    // Runner mode has no launch shell — the TUI IS the PTY process — so "does
-    // this pid have a live child?" is the wrong question (claude may have zero
-    // children at paste time) and a TUI exit kills the PTY, firing onExit. Skip
-    // the probe there.
-    if (!useDurableRunner && !(await shellHasLiveChild(pid))) {
+    // A direct launch — runner mode, or a public-content stage spawned as its
+    // own PTY (#6159) — has no launch shell: the TUI IS the PTY process. "Does
+    // this pid have a live child?" is then the wrong question (claude may have
+    // zero children at paste time) and a TUI exit kills the PTY, firing onExit.
+    // Skip the probe there.
+    if (!directLaunch && !(await shellHasLiveChild(pid))) {
       if (isFinalized()) return; // a real onExit may have finalized during the probe await
       await finishStartupFailure(
         'tui-exited-early',
@@ -554,7 +666,16 @@ export async function spawnTuiAgent({
   isTruthyMetaFn,
   leanMode = false,
   useDurableRunner = false,
+  // The public-content execution profile this run enforces (null for an
+  // ordinary agent task). Threaded through to the session so the PTY child
+  // gets the same allowlisted environment its headless sibling would.
+  safetyProfile = null,
 }) {
+  // The SAME call `createAgentTuiSession` branches on — resolved here because
+  // the prompt handshake below is wired before the spawn happens. Everything
+  // that is not a login shell has the provider binary as its own PTY process,
+  // which is what both consumers below actually depend on.
+  const directLaunch = resolveTuiLaunchShape({ useDurableRunner, safetyProfile }) !== 'login-shell';
   const outputFile = join(agentDir, 'output.txt');
   // Raw PTY bytes spool to disk continuously rather than accumulate in-memory.
   // A chatty TUI (token-tick repaints, status lines) emits hundreds of chunks
@@ -680,11 +801,11 @@ export async function spawnTuiAgent({
   // paste into a startup banner, a trust menu, or a returned shell prompt.
   // agy enables bracketed paste on alt-screen entry, before its composer (and
   // before its trust gate) exists, so it needs the extra composer-footer gate.
-  // The durable runner pty.spawns the TUI directly (no launch shell), so the
-  // tracker must not wait for a shell paste-mode OFF that will never come.
+  // A direct launch pty.spawns the TUI itself (no launch shell), so the tracker
+  // must not wait for a shell paste-mode OFF that will never come.
   const inputReady = createInputReadyTracker({
     ...(isAntigravityCommand(tuiConfig.command) ? { readyTextPattern: AGY_INPUT_READY_PATTERN } : {}),
-    directLaunch: useDurableRunner,
+    directLaunch,
   });
   let trustAccepted = false;
   let autoModeDeclined = false;
@@ -1297,8 +1418,10 @@ export async function spawnTuiAgent({
       }
 
       if (!promptSentAt) {
-        const lowerStripped = stripped.toLowerCase();
-        if (lowerStripped.includes('command not found') && lowerStripped.includes(commandName.toLowerCase())) {
+        // Only the login-shell path can reach this: it is the shell PRINTING
+        // "command not found". A direct PTY resolves the executable before it
+        // spawns (createAgentTuiSession), because there is no shell to print it.
+        if (detectMissingTuiBinary(stripped, commandName)) {
           // finish() uses try/finally internally: finalizeAgent errors re-throw after
           // cleanup, so finish() can reject. The outer try/catch in handleData already
           // handles any such rejection via emitLog — no additional .catch() needed here.
@@ -1331,17 +1454,23 @@ export async function spawnTuiAgent({
     // record as a completed run. finish() intercepts that case — see its
     // host-shutdown guard (#3202).
     const code = typeof exitCode === 'number' ? exitCode : killed ? 130 : 0;
-    // A signal-terminated shell reports the wait-status exit code — 0 for a
+    // A signal-terminated process reports the wait-status exit code — 0 for a
     // plain SIGTERM/SIGHUP — so `code === 0` alone cannot mean "finished
     // normally". Treat any signal as an abnormal end. This is the backstop for
     // the case the host-shutdown guard can't cover: a SIGKILL'd or crashed
     // portos-server never runs its shutdown handler, so the flag is never set,
     // yet the agent's PTY still dies with us (#3202).
+    //
+    // The reading holds for BOTH session shapes. A login shell carried its
+    // hosted CLI's status out via the run-then-exit wrapper; a direct PTY
+    // (#6159) simply IS the CLI, so the code and signal are the CLI's own.
+    // Reason codes stay `shell-*`: that is what COMPLETION_REASON_ANALYSES
+    // registers.
     const signaled = !!signal;
     const outcome = killed
-      ? { error: 'TUI shell session was killed', reason: 'shell-killed' }
+      ? { error: 'TUI session was killed', reason: 'shell-killed' }
       : signaled
-        ? { error: `TUI shell session was terminated by signal ${signal} — the run was cut short, not completed`, reason: 'shell-signaled' }
+        ? { error: `TUI session was terminated by signal ${signal} — the run was cut short, not completed`, reason: 'shell-signaled' }
         : { error: null, reason: 'shell-exit' };
     await finish({ success: code === 0 && !killed && !signaled, exitCode: code, ...outcome });
   };
@@ -1349,8 +1478,10 @@ export async function spawnTuiAgent({
   // Repo-owner-pinned GH_TOKEN for the agent's own `gh pr create` (see
   // resolveForgeTokenEnv). Resolved here since createAgentTuiSession is sync.
   // Skip when the provider supplies its own GH_TOKEN/GITHUB_TOKEN so its explicit
-  // credential wins.
-  const forgeTokenEnv = providerSuppliesGithubToken(provider)
+  // credential wins — and skip for a public-content stage, which must never hold
+  // a forge credential (the allowlist in createAgentTuiSession strips it anyway;
+  // not resolving it means it is never read out of the keychain to begin with).
+  const forgeTokenEnv = providerSuppliesGithubToken(provider) || isPublicReviewRestrictedProfile(safetyProfile)
     ? {}
     : await git.resolveForgeTokenEnv(cwd);
 
@@ -1395,6 +1526,7 @@ export async function spawnTuiAgent({
       forgeTokenEnv,
       doneSentinelPath,
       useDurableRunner,
+      safetyProfile,
       onData: handleData,
       onExit: handleExit,
       onInitialCommandSent: () => { commandInjected = true; },
@@ -1406,7 +1538,11 @@ export async function spawnTuiAgent({
     // PTY. Distinguish that deterministic configuration failure from a runner
     // outage/refusal so it is blocked with the existing actionable
     // command-not-found guidance rather than retried as a transient rejection.
-    const reason = useDurableRunner && /^Command executable unavailable:/i.test(message)
+    //
+    // A LOCAL direct PTY raises the SAME failure with the same prefix — see the
+    // pre-spawn resolve in createAgentTuiSession's restricted branch (#6159) —
+    // so the test is no longer gated on the runner.
+    const reason = /^Command executable unavailable:/i.test(message)
       ? 'command-not-found'
       : useDurableRunner ? 'spawn-rejected' : 'spawn-error';
     if (useDurableRunner) {
@@ -1544,7 +1680,7 @@ export async function spawnTuiAgent({
     agentId,
     sessionId,
     pid,
-    useDurableRunner,
+    directLaunch,
     prompt,
     tuiConfig,
     mcpBoot,

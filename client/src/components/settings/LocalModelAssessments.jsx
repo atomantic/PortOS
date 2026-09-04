@@ -409,13 +409,13 @@ function RankedRow({ entry, runtimeLabel, onRemeasure, onDelete, onSweepTunings,
             </p>
           )}
         </div>
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
           <button
             onClick={() => onRemeasure(entry)}
             disabled={busy}
             title="Measure again (and adjust tuning)"
             aria-label={`Measure ${entry.modelId} again`}
-            className="p-1.5 text-gray-400 hover:text-white transition-colors disabled:opacity-50"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-400 hover:text-white transition-colors disabled:opacity-50"
           >
             <RefreshCw size={13} />
           </button>
@@ -428,7 +428,7 @@ function RankedRow({ entry, runtimeLabel, onRemeasure, onDelete, onSweepTunings,
               disabled={busy}
               title={`Measure this model under ${sweepVariants} launch configurations and rank them`}
               aria-label={`Sweep tunings for ${entry.modelId}`}
-              className="p-1.5 text-gray-400 hover:text-white transition-colors disabled:opacity-50"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-400 hover:text-white transition-colors disabled:opacity-50"
             >
               <SlidersHorizontal size={13} />
             </button>
@@ -438,7 +438,7 @@ function RankedRow({ entry, runtimeLabel, onRemeasure, onDelete, onSweepTunings,
             disabled={busy}
             title="Discard this measurement"
             aria-label={`Discard the measurement for ${entry.modelId}`}
-            className="p-1.5 text-gray-400 hover:text-port-error transition-colors disabled:opacity-50"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-400 hover:text-port-error transition-colors disabled:opacity-50"
           >
             <Trash2 size={13} />
           </button>

@@ -4,7 +4,7 @@
     "api-contract": "cf02b10a5993baf473e0d320771f26b6",
     "branch-cleanup": "8fdeb4acc2749816a47ca318b6602721",
     "branch-reconcile": "16479f4b64395103fd222dc9608830b1",
-    "claim-issue": "78325cbcfb0e5698018fcd16b3aa8b49",
+    "claim-issue": "5600fde65e31874bd96c3ad83ce72a92",
     "claim-issue-gitlab": "bb83608738b6517f3f05df116994a6fd",
     "claim-issue-jira": "b14a5dde5519fda59c2ba1ae7a3d8989",
     "code-quality": "c34792a374dd9868e6381557da582dc1",
@@ -28,8 +28,8 @@
     "plan-feature": "87f71a894757f89354da4e2119e07118",
     "plan-task": "b85fe92999aa4ee4a8910320457c4242",
     "pr-reviewer": "679680b3b382aeb6786df01c4d1a90c6",
-    "pr-reviewer-eligibility": "ba358b2bb9380e2b7d9117969607231f",
-    "pr-reviewer-review": "913282777b12500e288d0550914999cd",
+    "pr-reviewer-eligibility": "a5652f7bcb7e2e50b1cfb9a54a6fabe0",
+    "pr-reviewer-review": "f1dbfcf76971b30b4ee34b2cde73c40c",
     "pr-reviewer-security": "d1e99626b12939ee39ab38eaa7d23f59",
     "pr-watcher": "53ead8e26d396849bfa78f28550bd691",
     "react-lifecycle": "14b3816d1bcc10f0d7d6357e55cc5e69",
@@ -50,7 +50,7 @@
     "accessibility": 2,
     "api-contract": 1,
     "branch-reconcile": 3,
-    "claim-issue": 24,
+    "claim-issue": 25,
     "claim-issue-gitlab": 22,
     "claim-issue-jira": 16,
     "code-quality": 3,
@@ -122,7 +122,8 @@
       "6a9bebb3f31b7c1b0a0728def0fe5b3c",
       "af99e76b4881d1a18234eff0d58d49a4",
       "9bf278ab141120625cd6faf854622f91",
-      "688661e7e7b0b4b5af95288dd86a23e8"
+      "688661e7e7b0b4b5af95288dd86a23e8",
+      "78325cbcfb0e5698018fcd16b3aa8b49"
     ],
     "claim-issue-gitlab": [
       "fae92c45c89c65455930b4b06a1b88c4",

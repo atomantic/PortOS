@@ -188,3 +188,40 @@ describe('cos-runner durable TUI ownership (#3202)', () => {
     expect(RUNNER_SRC).toMatch(/io\.emit\('tui:exit',[\s\S]{0,350}?\.\.\.\(outputTail \? \{ outputTail \} : \{\}\)/);
   });
 });
+
+// The runner is the second headless spawner: the same providers land here when a
+// task is dispatched with `useRunner`, and its stdout/stderr handlers are a twin
+// of spawnDirectly's. `opencode run` colors its progress line, and those raw
+// escapes reached the agent card as `[stderr] [0m` noise — a working agent read
+// as a wedged one. The behavioral coverage lives in agentCliSpawning.test.js
+// against the real handlers; this pins that the runner twin was not left behind.
+describe('cos-runner output — ANSI decoloring parity with spawnDirectly', () => {
+  it('imports the shared streaming stripper rather than rolling its own regex', () => {
+    expect(RUNNER_SRC).toMatch(
+      /import\s*\{[^}]*\bcreateStreamingAnsiStripper\b[^}]*\}\s*from\s*'\.\.\/lib\/ansiStrip\.js';/
+    );
+  });
+
+  it('gives each agent its own stdout/stderr strippers, skipping NDJSON stdout', () => {
+    // Per agent, not per module: the stripper buffers an escape split across two
+    // chunks, so one shared instance would interleave two agents' tails.
+    expect(RUNNER_SRC).toMatch(
+      /stripStdoutAnsi:\s*isStreamJson\s*\?\s*\(text\)\s*=>\s*text\s*:\s*createStreamingAnsiStripper\(\)/
+    );
+    expect(RUNNER_SRC).toMatch(/stripStderrAnsi:\s*createStreamingAnsiStripper\(\)/);
+  });
+
+  it('decolors both streams before they reach the buffer, formatter, or socket', () => {
+    expect(RUNNER_SRC).toMatch(/agent\?\.stripStdoutAnsi\s*\?\s*agent\.stripStdoutAnsi\(data\.toString\(\)\)/);
+    expect(RUNNER_SRC).toMatch(/agent\?\.stripStderrAnsi\s*\?\s*agent\.stripStderrAnsi\(data\.toString\(\)\)/);
+    // The codex formatter must see the decolored text too — it matches prose that
+    // an SGR pair would otherwise split.
+    expect(RUNNER_SRC).toMatch(/codexStderrFormatter\.processChunk\(decolored\)/);
+    // And the `[stderr]` tag is built from the decolored chunk, never the raw one.
+    expect(RUNNER_SRC).toMatch(/const text = `\[stderr\] \$\{decolored\}`/);
+  });
+
+  it('drops a chunk that was only terminal control instead of emitting a blank line', () => {
+    expect(RUNNER_SRC).toMatch(/if \(!decolored\.trim\(\)\) return;/);
+  });
+});

@@ -225,6 +225,20 @@ describe('migration 270 up()', () => {
     await expect(migration.up({ rootDir, now: STAMP })).resolves.toMatchObject({ ok: true, split: 1 });
 
     expect(parseTasksMarkdown(await readFile(cosTasks(), 'utf-8'))[0].metadata.prompt).toBe(AGENT_BODY);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('invalid CoS state'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('invalid JSON in data/cos/state.json'));
+  });
+
+  // Config moved to its own file in migration 339. A fresh install runs 270
+  // against that shape, so the relocated queue must still resolve from there.
+  it('honours a relocated queue file recorded in data/cos/config.json', async () => {
+    await mkdir(join(rootDir, 'data', 'cos'), { recursive: true });
+    await writeFile(
+      join(rootDir, 'data', 'cos', 'config.json'),
+      JSON.stringify({ cosTasksFile: 'data/cos/MY-TASKS.md' })
+    );
+    const moved = join(rootDir, 'data', 'cos', 'MY-TASKS.md');
+    await writeFile(moved, queue(task('sys-1', { context: AGENT_BODY })));
+    await expect(migration.up({ rootDir, now: STAMP })).resolves.toMatchObject({ ok: true, split: 1 });
+    expect(parseTasksMarkdown(await readFile(moved, 'utf-8'))[0].metadata.prompt).toBe(AGENT_BODY);
   });
 });

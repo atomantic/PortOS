@@ -29,6 +29,7 @@
 
 import sharp from 'sharp';
 import { copyFile } from 'fs/promises';
+import { tryReadFile } from '../../lib/fileUtils.js';
 import { hexToRgb, keyChannelSplit, keyShareFn } from './chromaKey.js';
 import { describeFrameStats, isDegenerateFrame } from '../../lib/imageFrameStats.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -85,9 +86,17 @@ export async function assertFrameHasContent(src) {
 }
 
 export async function analyzeForeground(src, maskKeyHex) {
-  await assertFrameHasContent(src);
+  // Read a path ONCE and hand the same bytes to the content gate and the decode
+  // it guards, the read-once-verify-in-memory seam the compiler already keeps
+  // (atlas.js): passing the path twice re-reads the file between the check and
+  // the use, and also defeats `describeFrameStats`'s content-addressed memo,
+  // which only keys on buffers (a path is not content). A read that fails falls
+  // through to the path unchanged so sharp still raises its own decode error —
+  // the existing INVALID_IMAGE surface, not a new ENOENT.
+  const source = Buffer.isBuffer(src) ? src : (await tryReadFile(src, null)) ?? src;
+  await assertFrameHasContent(source);
   const key = hexToRgb(maskKeyHex);
-  const { data, info } = await sharp(src)
+  const { data, info } = await sharp(source)
     .flatten({ background: { r: 255, g: 255, b: 255 } })
     .raw()
     .toBuffer({ resolveWithObject: true });

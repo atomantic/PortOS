@@ -59,17 +59,18 @@ export default function PracticeLogger({ song, onLogged, className = '' }) {
         </span>
       </div>
 
-      <div className="flex flex-wrap gap-2" role="group" aria-label="Log a practice run">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2" role="group" aria-label="Log a practice run">
         {SONG_PRACTICE_RATINGS.map((rating) => (
           <button
             key={rating.quality}
             type="button"
             onClick={() => logPractice(rating.quality)}
             disabled={logging}
-            title={rating.hint}
-            className="flex-1 min-w-[84px] min-h-[44px] px-3 py-2 text-sm rounded-lg border border-port-border text-gray-300 hover:text-white hover:border-port-accent/50 hover:bg-port-border/50 disabled:opacity-50"
+            aria-label={rating.label}
+            className="min-h-[48px] px-2.5 py-2 text-left sm:text-center rounded-lg border border-port-border text-gray-300 hover:text-white hover:border-port-accent/50 hover:bg-port-border/50 disabled:opacity-50 flex flex-col justify-center"
           >
-            {rating.label}
+            <span className="text-xs sm:text-sm font-semibold text-white">{rating.label}</span>
+            <span className="text-[10px] text-gray-400 font-normal leading-tight mt-0.5">{rating.hint}</span>
           </button>
         ))}
       </div>

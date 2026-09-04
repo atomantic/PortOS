@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
+  CLIENT_INVESTIGATION_DELIVERY,
+  CLIENT_INVESTIGATION_KIND,
   INVESTIGATION_HEADLINE_PREFIX,
+  INVESTIGATION_TASK_DELIVERY,
+  clientInvestigationFingerprint,
   MAX_AUTO_RETRIES_PER_TASK,
   RETRY_SKIP_REASONS,
   autoRetryCount,
@@ -193,5 +197,53 @@ describe('autoRetryCount / autoRetryMetadata', () => {
       autoRetriedByInvestigation: 'sys-inv',
       autoRetriedAt: new Date(1_700_000_000_000).toISOString(),
     });
+  });
+});
+
+describe('clientInvestigationFingerprint (#6043)', () => {
+  const INSTALL_FAILURE = 'Fix Example Runtime installer failure at the download stage';
+
+  it('is deterministic for the same submitted failure — that is what makes dedup work', () => {
+    expect(clientInvestigationFingerprint({ description: INSTALL_FAILURE }))
+      .toBe(clientInvestigationFingerprint({ description: INSTALL_FAILURE }));
+  });
+
+  it('separates two different install failures', () => {
+    expect(clientInvestigationFingerprint({ description: INSTALL_FAILURE }))
+      .not.toBe(clientInvestigationFingerprint({ description: 'Fix Example Runtime installer failure at the verify stage' }));
+  });
+
+  it('scopes by app the way an auto-filed key does', () => {
+    expect(clientInvestigationFingerprint({ description: INSTALL_FAILURE, app: 'Example App' }))
+      .not.toBe(clientInvestigationFingerprint({ description: INSTALL_FAILURE }));
+  });
+
+  it('keeps the client namespace out of reach of an auto-filed key', () => {
+    // Auto-filed keys take their `kind` from an analysis / self-improvement /
+    // task type, never this reserved value — so a client-derived key can neither
+    // match an auto-filed investigation in the dedup scan nor evict it.
+    const key = clientInvestigationFingerprint({ description: INSTALL_FAILURE });
+    expect(key.split(':')[1]).toBe(CLIENT_INVESTIGATION_KIND);
+    expect(buildInvestigationFingerprint(
+      { taskType: CLIENT_INVESTIGATION_KIND, metadata: {} },
+      { category: 'unknown' }
+    )).not.toBe(key);
+  });
+
+  it('survives a description of nothing but punctuation rather than emitting a bare separator', () => {
+    expect(clientInvestigationFingerprint({ description: '!!! ---' })).toBe(`unknown:${CLIENT_INVESTIGATION_KIND}:none`);
+    expect(clientInvestigationFingerprint()).toBe(`unknown:${CLIENT_INVESTIGATION_KIND}:none`);
+  });
+});
+
+describe('investigation delivery postures', () => {
+  it('isolates a client-queued investigation exactly like an unattended one', () => {
+    expect(CLIENT_INVESTIGATION_DELIVERY.useWorktree).toBe(INVESTIGATION_TASK_DELIVERY.useWorktree);
+    expect(CLIENT_INVESTIGATION_DELIVERY.openPR).toBe(INVESTIGATION_TASK_DELIVERY.openPR);
+  });
+
+  it('reviews the client-queued PR instead of merging it on green — a human is present', () => {
+    expect(INVESTIGATION_TASK_DELIVERY.prCompletion).toBe('merge-on-green');
+    expect(CLIENT_INVESTIGATION_DELIVERY.prCompletion).toBe('review-then-merge');
   });
 });

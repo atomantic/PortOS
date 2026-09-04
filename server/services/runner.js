@@ -3,9 +3,9 @@
  * Re-exports toolkit runner service functions with local overrides
  */
 import { spawn } from '../lib/childProcess.js';
-import { writeFile, readFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { join } from 'path';
-import { atomicWrite, ensureDir, tryReadFile, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, tryReadFile, writeFileGuarded, PATHS } from '../lib/fileUtils.js';
 import { resolveSpawnCwd } from '../lib/spawnCwd.js';
 import { hasModelFlag, extractBakedModel } from '../lib/providerModels.js';
 import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
@@ -13,7 +13,8 @@ import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { createImmediateFallbackSignalDetector, ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
 import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { isHostShuttingDown } from '../lib/hostShutdown.js';
-import { ensureOllamaAgentContext } from './ollamaAgentContext.js';
+// `./ollamaAgentContext.js` (and the ollama daemon manager behind it) is imported
+// lazily inside the predicate-gated branch below, NOT here — see that call site.
 import { isOllamaBackedProvider } from './providers.js';
 import {
   setAIToolkitInstance,
@@ -109,7 +110,7 @@ export async function finalizeRunRecord({ runId, output, exitCode, success, erro
   const outputPath = join(runDir, 'output.txt');
   const metadataPath = join(runDir, 'metadata.json');
 
-  await writeFile(outputPath, output).catch(() => {});
+  await writeFileGuarded(outputPath, output).catch(() => {});
 
   const metadataStr = await readFile(metadataPath, 'utf-8').catch(() => '{}');
   let metadata = {};
@@ -244,11 +245,16 @@ export async function resolveRunCwd({ runId, workspacePath, label, startTime = D
  * run tracking sees TUI runs as active.
  */
 export function emitRunStarted({ runId, provider, model }) {
-  runnerConfig.hooks?.onRunStarted?.({
-    runId,
-    provider: provider?.name || provider?.id,
-    model: model ?? provider?.defaultModel,
-  });
+  // Fire-and-forget lifecycle notification — a throwing hook must not take
+  // down the already-registered PTY run (same orphaned-run shape as #5792).
+  safeSettle(
+    () => runnerConfig.hooks?.onRunStarted?.({
+      runId,
+      provider: provider?.name || provider?.id,
+      model: model ?? provider?.defaultModel,
+    }),
+    `Run ${runId} onRunStarted hook`,
+  );
 }
 
 /**
@@ -379,9 +385,12 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
   // hold the daemon at the provider's configured window (or warn) first. See
   // services/ollamaAgentContext.js.
   // Gated on the predicate here (not just inside the helper) so a cloud-provider
-  // run — the overwhelmingly common case — takes no async hop at all.
+  // run — the overwhelmingly common case — takes no async hop at all, and the
+  // import sits INSIDE that gate so it never instantiates the daemon manager's
+  // subtree either. ~160 suites reach runner.js and none of them run ollama.
   const ollamaContext = isOllamaBackedProvider(provider)
-    ? await ensureOllamaAgentContext(provider, { model: provider.defaultModel ?? null })
+    ? await import('./ollamaAgentContext.js')
+      .then(({ ensureOllamaAgentContext }) => ensureOllamaAgentContext(provider, { model: provider.defaultModel ?? null }))
     : null;
   if (ollamaContext?.warning) onData?.(`${ollamaContext.warning}\n`);
 
@@ -512,7 +521,7 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
       await cleanupVisionFiles().catch((error) => console.error(`❌ Failed to clean CLI vision files: ${error.message}`));
       if (spawnError) console.error(`❌ Run ${runId} spawn error: ${spawnError.message}`);
 
-      await writeFile(outputPath, output);
+      await writeFileGuarded(outputPath, output);
 
       metadata.endTime = new Date().toISOString();
       metadata.duration = Date.now() - startTime;

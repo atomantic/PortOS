@@ -492,6 +492,84 @@ describe('loom CRUD', () => {
     });
   });
 
+  // Beat outlines and the series delivery plan both arrived with fableLoom
+  // wire schema v4, so a v3 sender omitting them means "cannot represent" while
+  // a v4 sender omitting them means the author cleared them.
+  const seedDeliveryAndOutlineLoom = async () => {
+    let loom = await makeLoom({ name: 'Local delivery plan' });
+    loom = await addEpisode(loom.id, { title: 'Pilot' });
+    const episodeId = loom.episodes[0].id;
+    loom = await addNode(loom.id, episodeId, { title: 'The keypad' });
+    const nodeId = loom.episodes[0].nodes[0].id;
+    loom = await updateLoom(loom.id, {
+      seriesPlan: {
+        storyArc: 'The courier crosses the first blockade.',
+        plotPoints: [],
+        sideQuests: [],
+        deliveryOptions: { overnightVoicemails: true, nextSeasonTeaser: true },
+        interEpisodeVoicemails: [{
+          id: 'voicemail-1',
+          fromEpisodeId: episodeId,
+          toEpisodeId: null,
+          title: 'Between blockades',
+          transcript: 'Call the courier when the lights go out.',
+        }],
+        nextSeasonTeaser: { title: 'Season two', transcript: 'The blockade moves north.' },
+      },
+    });
+    loom = await updateEpisode(loom.id, episodeId, {
+      storyOutline: {
+        startKey: nodeId,
+        scenes: [{
+          key: nodeId, title: 'The keypad', summary: 'The planted code becomes actionable.',
+          isEnding: true, transitions: [],
+        }],
+        validation: { status: 'draft', issues: [] },
+      },
+    });
+    return loom;
+  };
+
+  const stripDeliveryAndOutline = (loom, name) => ({
+    ...loom,
+    name,
+    updatedAt: '2099-01-01T00:00:00.000Z',
+    seriesPlan: { storyArc: loom.seriesPlan.storyArc, plotPoints: [], sideQuests: [] },
+    episodes: loom.episodes.map(({ storyOutline: _outline, ...episode }) => episode),
+  });
+
+  it('preserves the delivery plan and beat outline when a v3 peer wins an unrelated LWW edit', async () => {
+    const loom = await seedDeliveryAndOutlineLoom();
+    const remoteV3 = stripDeliveryAndOutline(loom, 'Renamed by v3 peer');
+
+    await mergeLoomsFromSync([remoteV3], { senderSchemaVersions: { fableLoom: 3 } });
+
+    const merged = await getLoom(loom.id);
+    expect(merged.name).toBe('Renamed by v3 peer');
+    expect(merged.seriesPlan).toMatchObject({
+      deliveryOptions: { overnightVoicemails: true, nextSeasonTeaser: true },
+      interEpisodeVoicemails: [{
+        id: 'voicemail-1', transcript: 'Call the courier when the lights go out.',
+      }],
+      nextSeasonTeaser: { title: 'Season two', transcript: 'The blockade moves north.' },
+    });
+    expect(merged.episodes[0].storyOutline).toEqual(loom.episodes[0].storyOutline);
+  });
+
+  it('lets a v4 peer clear the delivery plan and beat outline it fully understands', async () => {
+    const loom = await seedDeliveryAndOutlineLoom();
+    const remoteV4 = stripDeliveryAndOutline(loom, 'Renamed by v4 peer');
+
+    await mergeLoomsFromSync([remoteV4], { senderSchemaVersions: { fableLoom: 4 } });
+
+    const merged = await getLoom(loom.id);
+    expect(merged.name).toBe('Renamed by v4 peer');
+    expect(merged.seriesPlan.deliveryOptions).toBeUndefined();
+    expect(merged.seriesPlan.interEpisodeVoicemails).toBeUndefined();
+    expect(merged.seriesPlan.nextSeasonTeaser).toBeUndefined();
+    expect(merged.episodes[0].storyOutline).toBeUndefined();
+  });
+
   it('journals divergent story edits and can restore the authored snapshot', async () => {
     const local = await makeLoom({ name: 'Local story', premise: 'Local premise' });
     const base = { ...local, name: 'Shared story', premise: 'Shared premise' };

@@ -209,10 +209,13 @@ export default function AutomationTab({ appId, appName }) {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <div>
-            <h3 className="text-lg font-semibold text-white">Task Type Overrides</h3>
-            <p className="text-sm text-gray-500">Per-app automation preferences for CoS task scheduling</p>
+            <h3 className="text-lg font-semibold text-white">Scheduled Task Options</h3>
+            <p className="text-sm text-gray-500">
+              Each toggle turns that CoS scheduled task on or off for this app. The controls beside it are optional —
+              leave one on <em>Inherit</em> and it follows the global schedule defaults.
+            </p>
           </div>
-          <ToggleSwitch enabled={allEnabled} onChange={handleToggleAll} size="sm" activeColor="bg-port-success" ariaLabel={allEnabled ? 'Disable all automations' : 'Enable all automations'} />
+          <ToggleSwitch enabled={allEnabled} onChange={handleToggleAll} size="sm" activeColor="bg-port-success" ariaLabel={allEnabled ? 'Disable every scheduled task for this app' : 'Enable every scheduled task for this app'} />
         </div>
         <button
           onClick={fetchData}
@@ -253,7 +256,24 @@ export default function AutomationTab({ appId, appName }) {
               <div key={taskType} className="bg-port-card border border-port-border rounded-lg p-3 space-y-2">
                 {/* Row 1: name + toggle + configure + run now */}
                 <div className="flex items-center gap-3">
-                  <ToggleSwitch enabled={isEnabled} onChange={() => handleToggle(taskType, isEnabled)} size="sm" activeColor="bg-port-success" />
+                  {/* Labelled "Enabled", not "Run" — the row already has a Run
+                      (trigger now) button, and this switch is the on/off state
+                      that gates both the schedule and that button. */}
+                  <span
+                    className="flex items-center gap-1.5 shrink-0"
+                    title={isEnabled
+                      ? `${taskType} runs for this app on the schedule below. Turn off to stop scheduling it.`
+                      : `${taskType} does not run for this app. Turn on to schedule it.`}
+                  >
+                    <span className="text-[10px] uppercase tracking-wide text-gray-500">Enabled</span>
+                    <ToggleSwitch
+                      enabled={isEnabled}
+                      onChange={() => handleToggle(taskType, isEnabled)}
+                      size="sm"
+                      activeColor="bg-port-success"
+                      ariaLabel={`${taskType} enabled for this app: ${isEnabled ? 'on' : 'off'}`}
+                    />
+                  </span>
                   <div className="flex-1 min-w-0">
                     <span className="text-white font-mono text-xs">{taskType}</span>
                     <div className="text-xs text-gray-500">{effectiveLabel}{intervalSuffix}</div>
@@ -261,7 +281,7 @@ export default function AutomationTab({ appId, appName }) {
                   <button
                     onClick={() => setExpandedTaskType(prev => prev === taskType ? null : taskType)}
                     aria-expanded={isExpanded}
-                    aria-label={`${isExpanded ? 'Hide' : 'Show'} provider and model overrides for ${taskType}`}
+                    aria-label={`${isExpanded ? 'Hide' : 'Show'} provider and model options for ${taskType}`}
                     className="px-2 py-1 bg-port-border/60 text-gray-300 hover:bg-port-border rounded text-xs inline-flex items-center gap-1 shrink-0"
                   >
                     {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}

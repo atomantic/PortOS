@@ -4,7 +4,7 @@
 // rest gate on UI_INTENT_RE. ui_click runs a destructive-action confirm gate.
 
 import { resolveNavCommand } from '../../../lib/navManifest.js';
-import { isDestructiveLabel, buildPending } from '../confirmGate.js';
+import { requiresConfirmation, buildPending } from '../confirmGate.js';
 import { UI_KINDS, findUiElement } from './shared.js';
 
 // Loose on purpose — false positives are cheap (one extra tool), false
@@ -154,12 +154,14 @@ export const UI_TOOLS = [
       const hit = findUiElement(ctx, label, kind);
       if (!hit.entry) return hit.err;
       // Destructive-action confirmation gate. If the resolved label looks
-      // destructive (delete/remove/discard/reset/clear), stash a pending
-      // record on the per-session state and ask the LLM to prompt the user
-      // for spoken confirmation. The next user turn is intercepted by
-      // pipeline.js → resolvePending() which either re-issues the click or
-      // cancels. Skip if the caller already confirmed (re-issue path).
-      if (ctx.state && !ctx.confirmed && isDestructiveLabel(hit.entry.label)) {
+      // destructive (delete/remove/discard/reset/clear) OR the control was
+      // annotated `data-voice-guard="confirm"` (an outbound effect the label
+      // alone doesn't name), stash a pending record on the per-session state
+      // and ask the LLM to prompt the user for spoken confirmation. The next
+      // user turn is intercepted by pipeline.js → resolvePending() which
+      // either re-issues the click or cancels. Skip if the caller already
+      // confirmed (re-issue path).
+      if (ctx.state && !ctx.confirmed && requiresConfirmation(hit.entry)) {
         ctx.state.pendingDestructive = buildPending({
           tool: 'ui_click',
           args: { label: hit.entry.label, kind: hit.entry.kind },
@@ -192,7 +194,26 @@ export const UI_TOOLS = [
     execute: async ({ label, value } = {}, ctx = {}) => {
       const hit = findUiElement(ctx, label, ['input', 'textarea']);
       if (!hit.entry) return hit.err;
-      ctx.sideEffects?.push({ type: 'ui:fill', target: { ref: hit.entry.ref, label: hit.entry.label }, value: String(value ?? '') });
+      // Filling gates ONLY on an explicit `data-voice-guard="confirm"`
+      // annotation, never on the destructive-label heuristic: text entry is
+      // reversible and the client already scrolls the field into view, so a
+      // blanket fill gate would just be noise. An unmarked field behaves
+      // exactly as before this change.
+      const filledValue = String(value ?? '');
+      if (ctx.state && !ctx.confirmed && hit.entry.guard === 'confirm') {
+        ctx.state.pendingDestructive = buildPending({
+          tool: 'ui_fill',
+          args: { label: hit.entry.label, value: filledValue },
+          target: { ref: hit.entry.ref, label: hit.entry.label, kind: hit.entry.kind },
+        });
+        return {
+          ok: true,
+          confirmation_required: true,
+          label: hit.entry.label,
+          summary: `That field needs confirmation before I fill it — confirm by saying "yes" or "confirm" to fill ${hit.entry.label}, or "cancel" to skip.`,
+        };
+      }
+      ctx.sideEffects?.push({ type: 'ui:fill', target: { ref: hit.entry.ref, label: hit.entry.label }, value: filledValue });
       return { ok: true, label: hit.entry.label, summary: `Filled ${hit.entry.label}.` };
     },
   },
@@ -230,8 +251,25 @@ export const UI_TOOLS = [
     execute: async ({ label, checked } = {}, ctx = {}) => {
       const hit = findUiElement(ctx, label, ['checkbox', 'radio']);
       if (!hit.entry) return hit.err;
-      ctx.sideEffects?.push({ type: 'ui:check', target: { ref: hit.entry.ref, label: hit.entry.label }, checked: !!checked });
-      return { ok: true, label: hit.entry.label, checked: !!checked, summary: `${checked ? 'Checked' : 'Unchecked'} ${hit.entry.label}.` };
+      const wantChecked = !!checked;
+      // Same gate as ui_click: destructive label OR an explicit
+      // `data-voice-guard="confirm"` annotation.
+      if (ctx.state && !ctx.confirmed && requiresConfirmation(hit.entry)) {
+        ctx.state.pendingDestructive = buildPending({
+          tool: 'ui_check',
+          args: { label: hit.entry.label, checked: wantChecked },
+          target: { ref: hit.entry.ref, label: hit.entry.label, kind: hit.entry.kind },
+        });
+        return {
+          ok: true,
+          confirmation_required: true,
+          label: hit.entry.label,
+          checked: wantChecked,
+          summary: `That looks destructive — confirm by saying "yes" or "confirm" to ${wantChecked ? 'check' : 'uncheck'} ${hit.entry.label}, or "cancel" to skip.`,
+        };
+      }
+      ctx.sideEffects?.push({ type: 'ui:check', target: { ref: hit.entry.ref, label: hit.entry.label }, checked: wantChecked });
+      return { ok: true, label: hit.entry.label, checked: wantChecked, summary: `${checked ? 'Checked' : 'Unchecked'} ${hit.entry.label}.` };
     },
   },
 ];

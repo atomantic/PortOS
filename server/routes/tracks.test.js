@@ -53,8 +53,9 @@ vi.mock('../services/albums/index.js', () => ({
   getAlbum: vi.fn(async () => null),
   updateAlbum: vi.fn(async (id, patch) => ({ id, ...patch })),
 }));
+// The URL rule is NOT mocked: it lives in `lib/youtubeUrl.js` and the route
+// imports it from there, so these cases exercise the real accept/reject regex.
 vi.mock('../services/trackYoutubeImport.js', () => ({
-  YOUTUBE_URL_RE: /^https?:\/\/(www\.|m\.)?(youtube\.com\/watch\?[^\s#]*\bv=[\w-]{6,}|youtu\.be\/[\w-]{6,})/i,
   startYoutubeImport: vi.fn(async () => ({ jobId: 'job-1' })),
   attachImportSseClient: vi.fn(() => true),
   cancelYoutubeImport: vi.fn(() => true),
@@ -128,6 +129,17 @@ describe('tracks routes', () => {
     it('POST /import/youtube accepts a youtu.be short link', async () => {
       const r = await request(app).post('/api/tracks/import/youtube').send({ url: 'https://youtu.be/dQw4w9WgXcQ' });
       expect(r.status).toBe(202);
+    });
+
+    it.each([
+      'https://music.youtube.com/watch?v=dQw4w9WgXcQ',
+      'https://www.youtube.com/shorts/dQw4w9WgXcQ',
+      'https://www.youtube.com/live/dQw4w9WgXcQ',
+      'https://www.youtube.com/embed/dQw4w9WgXcQ',
+    ])('POST /import/youtube accepts %s (#6014 — the drifted regex rejected these)', async (url) => {
+      const r = await request(app).post('/api/tracks/import/youtube').send({ url });
+      expect(r.status).toBe(202);
+      expect(ytImport.startYoutubeImport).toHaveBeenCalledWith(url);
     });
 
     it('POST /import/youtube rejects a non-YouTube URL (never reaches the service)', async () => {

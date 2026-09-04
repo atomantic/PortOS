@@ -15,7 +15,7 @@ import { emitLog } from './cosEvents.js';
 // that declares it; a barrel would be a third answer to "where does completeAgent
 // live", which is the thing this sequencing keeps removing.
 import { completeAgent, updateAgent, getAgents, getAgentRecord, AGENT_RECORD_UNREADABLE, isLiveAgentRecord, readAgentRecordOrUnreadable } from './cosAgentLifecycle.js';
-import { updateTask, addTask, getTaskById, reviveBlockedTask, evaluateTasks } from './cos.js';
+import { updateTask, addTask, getTaskById, reviveBlockedTask, evaluateTasks, forceSpawnTask } from './cos.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, pauseMetadata, isAgentPausedTask, isResumablePausedTask, registerPauseReleaseAdapter } from '../lib/taskPauseHold.js';
 import { terminateAgentViaRunner, killAgentViaRunner, pauseAgentViaRunner, getAgentStatsFromRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
 import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
@@ -429,11 +429,79 @@ export async function resumeAgent(agentId, overrides = {}) {
     agentId, taskId: resumed.taskId, branchName: resumed.branchName, mode: resumed.mode
   });
 
+  // Dispatched AFTER the retirement above, for the same reason that retirement is
+  // last: the task has to be `pending` and pointed at its resume branch before
+  // anything can spawn it.
+  const dispatch = await dispatchResumedTask(resumed);
+
   // `created` says whether anything was queued, so a caller doesn't have to keep its
   // own copy of the mode enum to know — a client that guesses would go on announcing
   // "created a resume task" for a future non-creating mode, which is the exact false
   // claim this change exists to delete.
-  return { success: true, agentId, created: mode === 'new-task', ...resumed };
+  return { success: true, agentId, created: mode === 'new-task', ...resumed, ...dispatch };
+}
+
+/**
+ * Start the resumed task NOW, when the agent pool has room for it.
+ *
+ * The requeue alone only makes the task ELIGIBLE. What actually spawns it is the
+ * automatic dequeue `completeAgent` schedules, and that path admits pending USER
+ * tasks plus auto-approved system tasks under CoS auto-run in `execute` mode — so
+ * a resumed internal task on an install with auto-run off, or one still awaiting
+ * approval, sat `pending` until the user opened the task list and pressed Run.
+ * That turns the one-click Resume/Relaunch into a two-step, on the exact screen
+ * the user just acted from.
+ *
+ * This sits in `resumeAgent` rather than in `relaunchAgent` because relaunch is
+ * defined as a pause plus a resume — it inherits the dispatch through that
+ * composition, so the rule has one address. It does NOT sit deeper, in
+ * `reviveBlockedTask` or the `tasks:changed` unblock listener, because those are
+ * shared with the autonomous revival paths (investigation retry, orphan cooldown,
+ * completion cleanup), and force-spawning there would strip the auto-run gate that
+ * deliberately withholds unattended spawns. Both doors into here are a human
+ * clicking a button, which is what makes the explicit dispatch correct.
+ *
+ * It goes through `forceSpawnTask`, the same door "Run now" uses, and inherits its
+ * refusals rather than restating them. Best-effort by design: a stopped/paused
+ * daemon, an unreachable runner, a task needing approval, and a full agent pool all
+ * mean "leave it queued", which is the pre-existing behavior. The refusal is
+ * reported as `spawnHold` so the dialog can say which, instead of toasting a resume
+ * that silently didn't start.
+ */
+async function dispatchResumedTask({ taskId, mode }) {
+  // `already-active` and `superseded` queue nothing on purpose — the task is
+  // either already in flight or owned by a later pause, and dispatching it here
+  // is exactly the duplicate spawn `classifyResume` exists to prevent.
+  if (!taskId || (mode !== 'requeued' && mode !== 'new-task')) return { spawned: false, spawnHold: null };
+
+  const result = await forceSpawnTask(taskId).catch(err => ({ error: err?.message || String(err) }));
+  if (result?.success) return { spawned: true, spawnHold: null };
+
+  // The dequeue `completeAgent` schedules races this call, so a refusal can mean
+  // "already claimed" rather than "held". Read the state back and treat a real
+  // claim as started — string-matching the refusal would drift the moment
+  // forceSpawnTask reworded one of them.
+  //
+  // BOTH halves are load-bearing. A spawn registers its agent as `running`
+  // BEFORE it flips the task off `pending` (the window `forceSpawnTask`'s own
+  // holder guard exists for), so mid-spawn the task still reads `pending` while
+  // the run is genuinely under way — and the refusal that lands there is that
+  // holder guard, so checking only the task status would report a hold for a
+  // task that is already running. The holder half is only reachable while that
+  // guard is refusing, i.e. while the holder is young enough to be mid-spawn:
+  // an older, zombie holder is superseded by `forceSpawnTask` instead, so this
+  // can't read a dead agent's record as a live run.
+  const [task, agents] = await Promise.all([
+    getTaskById(taskId).catch(() => null),
+    getAgents().catch(() => []),
+  ]);
+  const heldByRunningAgent = agents.some(agent =>
+    agent.status === 'running' && (agent.taskId === taskId || agent.metadata?.taskId === taskId));
+  if (task?.status === 'in_progress' || heldByRunningAgent) return { spawned: true, spawnHold: null };
+
+  const spawnHold = result?.error || 'Task could not be spawned';
+  emitLog('info', `⏳ Resumed task ${taskId} stays queued — ${spawnHold}`, { taskId });
+  return { spawned: false, spawnHold };
 }
 
 /**
@@ -485,6 +553,10 @@ export async function relaunchAgent(agentId, overrides = {}) {
     emitLog('warn', `⚠️ Relaunch of ${agentId} proceeded before its process exited — its worktree may not survive`, { agentId });
   }
 
+  // `resumeAgent` already force-spawned the requeued task where it could
+  // (`dispatchResumedTask`), so `spawned`/`spawnHold` ride along in `resumed` —
+  // relaunch inherits the immediate dispatch through the composition rather than
+  // repeating it.
   const resumed = await resumeAgent(agentId, resumeOverrides);
   emitLog('info', `🔁 Relaunched agent ${agentId} — ${pauseReason}`, {
     agentId, taskId: resumed.taskId, mode: resumed.mode

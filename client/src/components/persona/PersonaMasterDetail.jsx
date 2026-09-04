@@ -262,7 +262,7 @@ export default function PersonaMasterDetail({
                   ) : form[portrait.imageKey] ? (
                     <div className="relative shrink-0">
                       <img src={form[portrait.imageKey]} alt={`${singular} ${portrait.label.toLowerCase()}`} className="w-20 h-20 rounded object-cover border border-port-border bg-port-bg" />
-                      <button type="button" onClick={() => setImage('')} title={`Remove ${portrait.label.toLowerCase()}`} aria-label={`Remove ${portrait.label.toLowerCase()}`} className="absolute -top-2 -right-2 p-1 rounded-full bg-port-bg border border-port-border text-gray-400 hover:text-port-error"><X size={12} /></button>
+                      <button type="button" onClick={() => setImage('')} title={`Remove ${portrait.label.toLowerCase()}`} aria-label={`Remove ${portrait.label.toLowerCase()}`} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center absolute -top-2 -right-2 p-1 rounded-full bg-port-bg border border-port-border text-gray-400 hover:text-port-error"><X size={12} /></button>
                     </div>
                   ) : (
                     <div className="w-20 h-20 rounded border border-dashed border-port-border bg-port-bg flex items-center justify-center text-gray-600 shrink-0"><ImageIcon size={20} aria-hidden="true" /></div>

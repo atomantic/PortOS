@@ -9,7 +9,7 @@ import TaskModelQuickControls from './TaskModelQuickControls';
 // One scheduled task rendered as a status-rich card. Browsing plus the common
 // "retarget the model and run it" loop happen here; the rest of the
 // configuration lives in the slide-over drawer (opened via Configure).
-export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfigure, onUpdate, providers, activeProviderId, improvementDisabled }) {
+export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfigure, onUpdate, providers, providersLoaded = true, activeProviderId, improvementDisabled }) {
   // Owned here, not in the controls, so Run can gate on the same `saving` flag —
   // it reads the server-side config, so a run fired mid-write uses the old pins.
   const pins = useTaskModelPins({ taskType, config, providers, activeProviderId, onUpdate });
@@ -80,7 +80,7 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
           Provider/model is set per stage ({stageCount}) — configure
         </button>
       ) : (
-        <TaskModelQuickControls pins={pins} providers={providers} />
+        <TaskModelQuickControls pins={pins} providers={providers} loading={!providersLoaded} />
       ))}
 
       {/* Footer actions */}

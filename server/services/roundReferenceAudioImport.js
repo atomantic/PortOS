@@ -26,17 +26,34 @@ import { resolveYtDlpBinaries, downloadAudioToTempMp3, cleanupYtDlpTemp } from '
 export const REFERENCE_AUDIO_MAX_BYTES = 60 * 1024 * 1024; // 60MB
 export const REFERENCE_AUDIO_MAX_DURATION_SEC = 20 * 60; // 20 minutes
 
-// jobId -> { clients, lastPayload, process }
+// jobId -> { clients, lastPayload, process, canceled }
 const importJobs = new Map();
 
 export const attachReferenceAudioSseClient = (jobId, res) => attachSse(importJobs, jobId, res);
 
-/** Cancel an in-flight import. Returns false if the job is unknown or already finished. */
+// The job map is module-private, which left cancelReferenceAudioImport
+// untestable. Exposing it lets a test register a fake job and actually run the
+// cancel — same rationale as videoDownload.js's __testing export.
+export const __testing = { importJobs };
+
+/**
+ * Cancel an in-flight import. Returns false if the job is unknown or already
+ * cancelled.
+ *
+ * `job.process` is transient — it is null while the job is awaiting setup and
+ * again during post-processing (runYtDlp clears it on exit) — so cancellation
+ * is recorded as a `job.canceled` flag the kickoff re-checks at each phase
+ * boundary, and the child is only signalled when one is actually running.
+ */
 export function cancelReferenceAudioImport(jobId) {
   const job = importJobs.get(jobId);
-  if (!job || !job.process) return false;
+  // The job lingers in the map after it ends (closeJobAfterDelay evicts it on
+  // a timer), so a terminal status — not just the flag — is what makes a cancel
+  // for an already-finished import report false.
+  if (!job || job.canceled || job.status !== 'running') return false;
+  job.canceled = true;
   const proc = job.process;
-  killWithEscalation(proc, { label: 'yt-dlp reference audio', stillRunning: () => job.process === proc });
+  if (proc) killWithEscalation(proc, { label: 'yt-dlp reference audio', stillRunning: () => job.process === proc });
   return true;
 }
 
@@ -56,12 +73,27 @@ export async function startReferenceAudioImport(url) {
 
   const jobId = randomUUID();
   const tempPrefix = `portos-refaudio-${jobId}`;
-  const job = { id: jobId, status: 'running', clients: [], process: null };
+  const job = { id: jobId, status: 'running', clients: [], process: null, canceled: false };
   importJobs.set(jobId, job);
   console.log(`🎧 Reference-audio import ${shortId(jobId)} — ${url}`);
 
   (async () => {
+    // Cancel can land in three windows: before the spawn, while yt-dlp runs
+    // (the core reports `canceled`), or during post-processing after the child
+    // has exited. Only the middle one is the core's to detect — `job.process`
+    // is null in the other two, so the flag is what carries them. The guard is
+    // re-run at each phase boundary rather than only after the download, so
+    // adding an await ahead of the spawn can't silently reopen window one.
+    const abortIfCanceled = async (canceled = job.canceled) => {
+      if (!canceled) return false;
+      console.log(`🛑 Reference-audio import ${shortId(jobId)} cancelled`);
+      broadcastSse(job, { type: 'canceled' });
+      await cleanupYtDlpTemp(tempPrefix);
+      return true;
+    };
+
     try {
+      if (await abortIfCanceled()) return;
       const result = await downloadAudioToTempMp3({
         url, ytDlp, ffmpeg, tempPrefix,
         maxBytes: REFERENCE_AUDIO_MAX_BYTES,
@@ -70,11 +102,10 @@ export async function startReferenceAudioImport(url) {
         registerProcess: (proc) => { job.process = proc; },
       });
 
-      if (result.outcome === 'canceled') {
-        console.log(`🛑 Reference-audio import ${shortId(jobId)} cancelled`);
-        broadcastSse(job, { type: 'canceled' });
-        return;
-      }
+      // The core reports `canceled` only for a kill we issued, so the two
+      // signals normally agree — check both so an externally-killed child
+      // still ends as a cancel rather than a failure.
+      if (await abortIfCanceled(job.canceled || result.outcome === 'canceled')) return;
       if (result.outcome === 'failed') {
         throw new Error(result.reason);
       }
@@ -93,6 +124,7 @@ export async function startReferenceAudioImport(url) {
       // the core handed off and no longer owns.
       await cleanupYtDlpTemp(tempPrefix);
     } finally {
+      job.status = 'done';
       closeJobAfterDelay(importJobs, jobId);
     }
   })();

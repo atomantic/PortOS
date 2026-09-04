@@ -22,7 +22,10 @@ const { assertPublicHttpUrl } = await import('../lib/safeUrlFetch.js');
 const { broadcastSse } = await import('../lib/sseUtils.js');
 const { resolveYtDlpBinaries, downloadAudioToTempMp3, cleanupYtDlpTemp } = await import('./ytdlpAudioImport.js');
 const { importFileToUploads } = await import('../lib/fileUtils.js');
-const { startReferenceAudioImport } = await import('./roundReferenceAudioImport.js');
+const { killWithEscalation } = await import('../lib/killWithEscalation.js');
+const {
+  startReferenceAudioImport, cancelReferenceAudioImport, __testing,
+} = await import('./roundReferenceAudioImport.js');
 
 // Let the detached kickoff IIFE run to its terminal broadcast.
 const flush = async () => {
@@ -87,5 +90,63 @@ describe('startReferenceAudioImport — outcomes', () => {
     await flush();
     expect(broadcastSse).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ type: 'canceled' }));
     expect(importFileToUploads).not.toHaveBeenCalled();
+  });
+});
+
+describe('cancelReferenceAudioImport', () => {
+  it('returns false for an unknown job id', () => {
+    expect(cancelReferenceAudioImport('nope')).toBe(false);
+    expect(killWithEscalation).not.toHaveBeenCalled();
+  });
+
+  it('records the cancel and returns true even when no child has spawned yet', () => {
+    const job = { id: 'j1', status: 'running', clients: [], process: null, canceled: false };
+    __testing.importJobs.set('j1', job);
+    expect(cancelReferenceAudioImport('j1')).toBe(true);
+    expect(job.canceled).toBe(true);
+    expect(killWithEscalation).not.toHaveBeenCalled();
+    __testing.importJobs.delete('j1');
+  });
+
+  it('returns false once the job has finished, while it lingers in the map', () => {
+    // closeJobAfterDelay evicts on a timer, so a finished job is still present —
+    // cancelling it must not report an accepted cancel to the client.
+    __testing.importJobs.set('j3', { id: 'j3', status: 'done', clients: [], process: null, canceled: false });
+    expect(cancelReferenceAudioImport('j3')).toBe(false);
+    __testing.importJobs.delete('j3');
+  });
+
+  it('signals a running child and refuses a second cancel', () => {
+    const proc = { pid: 4321 };
+    const job = { id: 'j2', status: 'running', clients: [], process: proc, canceled: false };
+    __testing.importJobs.set('j2', job);
+    expect(cancelReferenceAudioImport('j2')).toBe(true);
+    expect(killWithEscalation).toHaveBeenCalledWith(proc, expect.objectContaining({ label: 'yt-dlp reference audio' }));
+    expect(cancelReferenceAudioImport('j2')).toBe(false);
+    expect(killWithEscalation).toHaveBeenCalledOnce();
+    __testing.importJobs.delete('j2');
+  });
+});
+
+describe('startReferenceAudioImport — cancellation windows', () => {
+  it('emits canceled and persists nothing when cancelled after the download finished', async () => {
+    // The child has already exited by post-processing time (job.process is back
+    // to null), so only the canceled flag can carry the cancel.
+    // An assertion thrown inside the detached kickoff would be swallowed by its
+    // catch, so record the result and assert it out here.
+    let canceledOk = null;
+    downloadAudioToTempMp3.mockImplementationOnce(async () => {
+      const jobId = [...__testing.importJobs.keys()].pop();
+      canceledOk = cancelReferenceAudioImport(jobId);
+      return { outcome: 'complete', outPath: '/tmp/x.mp3', title: 'Clip' };
+    });
+
+    await startReferenceAudioImport('https://example.com/clip');
+    await flush();
+
+    expect(canceledOk).toBe(true);
+    expect(broadcastSse).toHaveBeenCalledWith(expect.anything(), { type: 'canceled' });
+    expect(importFileToUploads).not.toHaveBeenCalled();
+    expect(cleanupYtDlpTemp).toHaveBeenCalled();
   });
 });

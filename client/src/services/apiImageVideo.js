@@ -165,6 +165,13 @@ export const getVideoGenStatus = (options = {}) => request('/video-gen/status', 
 export const listVideoModels = ({ includeUnavailable = false, ...options } = {}) =>
   request('/video-gen/models', options)
     .then((models) => filterHardwareCompatibleModels(models, { includeUnavailable }));
+// `{ models, defaultModel, systemMemoryGb, fflfLtx2PixelBudget }` — the model
+// list plus the numbers its auto-select reads, with no python probe behind it.
+// getVideoGenStatus() returns the same fields, but only after shelling out to
+// the interpreter; fetch this alongside it so the Model picker paints first.
+export const getVideoGenModelContext = (options = {}) =>
+  request('/video-gen/model-context', options)
+    .then((ctx) => ({ ...ctx, models: filterHardwareCompatibleModels(ctx?.models) }));
 // `{ models: [...], textEncoder: { repo, cached, sizeBytes } }`. Same shape
 // contract as the image variant + a text-encoder block since the active
 // encoder is a separate multi-GB pull.

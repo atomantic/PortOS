@@ -148,7 +148,7 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
           </button>
           <button
             onClick={() => { loadTags(); setShowTags(!showTags); }}
-            className={`p-1.5 rounded ${showTags ? 'text-port-accent' : 'text-gray-500 hover:text-white'}`}
+            className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded ${showTags ? 'text-port-accent' : 'text-gray-500 hover:text-white'}`}
             title="Tags" aria-label="Tags"
           >
             <Tag size={14} />
@@ -238,7 +238,7 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
               <button
                 onClick={() => { setSelectedNote(null); updateNoteParam(null, { replace: true }); }}
                 aria-label="Back to list"
-                className="p-1 rounded hover:bg-port-card text-gray-400 hover:text-white md:hidden"
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded hover:bg-port-card text-gray-400 hover:text-white md:hidden"
               >
                 <ArrowLeft size={16} />
               </button>
@@ -269,7 +269,7 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
                     <button
                       onClick={() => { setEditing(false); setNoteContent(selectedNote.content); }}
                       aria-label="Cancel"
-                      className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white"
+                      className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white"
                     >
                       <X size={16} />
                     </button>
@@ -285,7 +285,7 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
                 )}
                 <button
                   onClick={() => setConfirmDelete(selectedNote.path)}
-                  className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-port-error"
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-port-error"
                   title="Delete note" aria-label="Delete note"
                 >
                   <Trash2 size={14} />

@@ -785,7 +785,9 @@ describe('socket.js — initSocket', () => {
       await socket.handlers['app:update']({ appId: APP.id, syncFork: true });
       await flush();
       expect(vi.mocked(runAppUpdate)).toHaveBeenCalledTimes(2);
-      expect(vi.mocked(runAppUpdate).mock.calls.at(-1)[2]).toEqual({ syncFork: true });
+      expect(vi.mocked(runAppUpdate).mock.calls.at(-1)[2]).toEqual({
+        syncFork: true, acknowledgeFork: false, acknowledgePersistentMindImageBackup: false,
+      });
     });
 
     // The HTTP route that used to own these two calls is gone; the socket is the

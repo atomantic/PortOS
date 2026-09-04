@@ -7,7 +7,7 @@ import { MemoryRouter } from 'react-router';
 // init image plus all four reference slots without needing a FLUX.2 install.
 const MODEL = { id: 'dev', name: 'FLUX.1 Dev', runner: 'mflux', steps: 20, guidance: 3.5 };
 
-const state = vi.hoisted(() => ({ created: [], revoked: [], fileSeq: 0 }));
+const state = vi.hoisted(() => ({ created: [], createdFiles: [], revoked: [], fileSeq: 0 }));
 
 const nextFile = () => new File(['x'], `photo-${++state.fileSeq}.jpg`, { type: 'image/jpeg' });
 
@@ -139,12 +139,14 @@ describe('ImageGen object-URL lifecycle', () => {
 
   beforeEach(() => {
     state.created = [];
+    state.createdFiles = [];
     state.revoked = [];
     state.fileSeq = 0;
     restore = [
-      stub(URL, 'createObjectURL', vi.fn(() => {
+      stub(URL, 'createObjectURL', vi.fn((file) => {
         const url = `blob:portos/${state.created.length + 1}`;
         state.created.push(url);
+        state.createdFiles.push(file?.name ?? '');
         return url;
       })),
       stub(URL, 'revokeObjectURL', vi.fn((url) => { state.revoked.push(url); })),
@@ -282,5 +284,56 @@ describe('ImageGen object-URL lifecycle', () => {
     await act(async () => { unmount(); });
 
     expect(state.revoked).toEqual([blobUrl]);
+  });
+
+  // Two picks that overlap in the EXIF-normalization await must not each mint
+  // a url: only the last setState survives, so the loser's url would be
+  // unreachable from state, the clear path, and the unmount sweep.
+  it('creates exactly one url when two init picks overlap, keeping the last pick', async () => {
+    // Defer only the normalization calls (two-arg form); the dims probe
+    // (one-arg form) keeps its immediate fallback so it can't hold a handler.
+    const pending = [];
+    window.createImageBitmap = vi.fn((...args) => (args.length === 2
+      ? new Promise((_, reject) => { pending.push(() => reject(new Error('no decoder'))); })
+      : Promise.reject(new Error('no decoder'))));
+
+    await mount();
+    await click('pick-init');
+    await click('pick-init');
+    expect(pending).toHaveLength(2);
+    expect(state.created).toEqual([]);
+
+    await act(async () => {
+      pending.forEach((fail) => fail());
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    await waitFor(() => expect(state.created).toHaveLength(1));
+    expect(state.createdFiles).toEqual(['photo-2.jpg']);
+    expect(liveUrls()).toHaveLength(1);
+    expect(screen.getByTestId('init-url')).toHaveTextContent(state.created[0]);
+  });
+
+  it('creates exactly one url when two picks overlap on one reference slot, keeping the last pick', async () => {
+    const pending = [];
+    window.createImageBitmap = vi.fn(() => new Promise((_, reject) => {
+      pending.push(() => reject(new Error('no decoder')));
+    }));
+
+    await mount();
+    await click('pick-ref-0');
+    await click('pick-ref-0');
+    expect(pending).toHaveLength(2);
+    expect(state.created).toEqual([]);
+
+    await act(async () => {
+      pending.forEach((fail) => fail());
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    await waitFor(() => expect(state.created).toHaveLength(1));
+    expect(state.createdFiles).toEqual(['photo-2.jpg']);
+    expect(liveUrls()).toHaveLength(1);
+    expect(screen.getByTestId('ref-url-0')).toHaveTextContent(state.created[0]);
   });
 });

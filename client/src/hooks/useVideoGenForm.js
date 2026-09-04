@@ -53,12 +53,14 @@ const editableRemixModel = (models, defaultModelId) => {
  * that clear now-irrelevant inputs, the derived model/keyframe/IC gates, and
  * `buildGeneratePayload()` — the single client-side source of truth for the
  * shape `server/routes/videoGen.js` validates. `VideoGen.jsx` keeps the
- * fetching (status/models/history/gallery), the SSE run pipeline, the batch
- * queue, and the rendering.
+ * fetching (status/model-context/history/gallery), the SSE run pipeline, the
+ * batch queue, and the rendering.
  *
  * The caller supplies the fetched context the form has to react to:
- *   - `models` / `status` — from `getVideoGenStatus()`; drive the model
- *     dropdown, the default-model seed, and the mode-compatibility fallback.
+ *   - `models` / `modelContext` — from `getVideoGenModelContext()`; drive the
+ *     model dropdown, the default-model seed, and the mode-compatibility
+ *     fallback. Deliberately NOT `getVideoGenStatus()`: that route shells out
+ *     to python, and the picker must not wait on the interpreter probe.
  *   - `availableLoras` — the installed LoRA library, for name resolution.
  *   - `grokEnabled` — the Settings → Image Gen toggle that reveals the
  *     Local/Grok backend switch.
@@ -69,7 +71,7 @@ const editableRemixModel = (models, defaultModelId) => {
  *     wire accepts — kept here rather than in the page so there stays exactly
  *     one builder for what `server/routes/videoGen.js` validates.
  */
-export function useVideoGenForm({ models, status, availableLoras, grokEnabled, remoteSubmissionFields = null }) {
+export function useVideoGenForm({ models, modelContext, availableLoras, grokEnabled, remoteSubmissionFields = null }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const incomingSourceImage = searchParams.get('sourceImageFile');
   const incomingAudioFilename = searchParams.get('audioFilename');
@@ -163,11 +165,11 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
       });
     return () => { cancelled = true; };
   }, [incomingAudioFilename, setSearchParams]);
-  // Seed the model dropdown from the server's default once /status lands,
-  // without clobbering a Remix/deep-link/user pick that already set it.
+  // Seed the model dropdown from the server's default once the model context
+  // lands, without clobbering a Remix/deep-link/user pick that already set it.
   useEffect(() => {
-    if (status?.defaultModel) setModelId((prev) => prev || status.defaultModel);
-  }, [status?.defaultModel]);
+    if (modelContext?.defaultModel) setModelId((prev) => prev || modelContext.defaultModel);
+  }, [modelContext?.defaultModel]);
 
   // Re-sync when ImageGen pipes a new image via ?sourceImageFile=...
   useEffect(() => {
@@ -370,7 +372,8 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
   //     server would 400 on submit; we proactively swap to a compatible model.
   // a2v fallback preference: highest-memory model that fits this machine
   // (leaving headroom for the OS + text encoder) > the largest if none fit.
-  // Other modes: status.defaultModel (if compatible) > first compatible model.
+  // Other modes: the context's defaultModel (if compatible) > first
+  // compatible model.
   useEffect(() => {
     if (!modelId || models.length === 0) return;
     const current = models.find((m) => m.id === modelId);
@@ -385,13 +388,13 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
       // so the user can at least try, and the install banner / OOM surfaces
       // the real constraint instead of a silent dropdown change.
       const reserveGb = 16;
-      // typeof === 'number' (not `status?.systemMemoryGb ? ...`) so a server
-      // legitimately reporting a tiny number (0 GB after rounding on a
-      // sub-GB box) flows through the `fits` check and lands on the
-      // smallest model. The truthiness shortcut would collapse 0 with
-      // "absent" and pick the LARGEST model on a tiny machine.
-      const budget = typeof status?.systemMemoryGb === 'number'
-        ? Math.max(0, status.systemMemoryGb - reserveGb)
+      // typeof === 'number' (not `modelContext?.systemMemoryGb ? ...`) so a
+      // server legitimately reporting a tiny number (0 GB after rounding on a
+      // sub-GB box) flows through the `fits` check and lands on the smallest
+      // model. The truthiness shortcut would collapse 0 with "absent" and pick
+      // the LARGEST model on a tiny machine.
+      const budget = typeof modelContext?.systemMemoryGb === 'number'
+        ? Math.max(0, modelContext.systemMemoryGb - reserveGb)
         : Number.POSITIVE_INFINITY;
       const sortedDesc = [...visibleModels].sort(
         (a, b) => videoModelMemoryGb(b) - videoModelMemoryGb(a),
@@ -399,18 +402,18 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
       const fits = sortedDesc.find((m) => videoModelMemoryGb(m) <= budget);
       fallback = (fits || sortedDesc[sortedDesc.length - 1])?.id || '';
     } else {
-      const defaultModel = models.find((m) => m.id === status?.defaultModel);
+      const defaultModel = models.find((m) => m.id === modelContext?.defaultModel);
       if (defaultModel && isModelAllowedForMode(defaultModel, mode)) {
         fallback = defaultModel.id;
       } else {
-        fallback = visibleModels[0]?.id || status?.defaultModel || models[0]?.id || '';
+        fallback = visibleModels[0]?.id || modelContext?.defaultModel || models[0]?.id || '';
       }
     }
     if (!fallback || fallback === modelId) return;
     // Toast only for the stale-id case (model removed from catalog). The
     // mode-incompatibility swap is expected behavior after a mode change —
     // no need to surface it. Name the destination model so users on a2v
-    // don't think they landed on `status.defaultModel` (they may not have —
+    // don't think they landed on `modelContext.defaultModel` (they may not have —
     // a2v picks the largest-fits model, which is often a dgrauet entry).
     if (!current && staleModelToastRef.current !== modelId) {
       staleModelToastRef.current = modelId;
@@ -418,7 +421,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
       toast(`Original model "${modelId}" is no longer available — switched to "${fallbackName}"`);
     }
     applyModelSelection(fallback);
-  }, [modelId, models, status?.defaultModel, status?.systemMemoryGb, mode, visibleModels, applyModelSelection]);
+  }, [modelId, models, modelContext?.defaultModel, modelContext?.systemMemoryGb, mode, visibleModels, applyModelSelection]);
 
   const currentModel = models.find((m) => m.id === modelId);
 
@@ -435,9 +438,9 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
     setNumFrames(frames);
   }, [audioDurationSec, currentModel, fps, mode]);
 
-  // A source model can reach this hook either through a URL handoff before
-  // /status has populated `models`, or from the in-page gallery after it has.
-  // Resolve both cases here. The fallback is deliberately limited to models
+  // A source model can reach this hook either through a URL handoff before the
+  // model context has populated `models`, or from the in-page gallery after it
+  // has. Resolve both cases here. The fallback is deliberately limited to models
   // that can run a text remix and expose all restored prompt/sampler controls;
   // if no such model is installed we leave the source selected rather than
   // silently changing a faithful re-render.
@@ -445,7 +448,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
     if (!remixSourceModel || models.length === 0) return;
     const source = models.find((model) => model.id === remixSourceModel.id);
     if (source && !remixSourceModel.preserveConditioning && !hasEditableRemixControls(source)) {
-      const target = editableRemixModel(models, status?.defaultModel);
+      const target = editableRemixModel(models, modelContext?.defaultModel);
       if (target) {
         setModelId(target.id);
         setRemixModelFallback({
@@ -459,7 +462,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
       setRemixModelFallback(null);
     }
     setRemixSourceModel(null);
-  }, [remixSourceModel, models, status?.defaultModel]);
+  }, [remixSourceModel, models, modelContext?.defaultModel]);
 
   // Until the user deliberately chooses a size, model changes carry their own
   // native default canvas. This is material for H3: the shared 768x512 default
@@ -712,7 +715,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled, r
     keyframesActive,
     mode,
     numFrames,
-    pixelBudget: status?.fflfLtx2PixelBudget,
+    pixelBudget: modelContext?.fflfLtx2PixelBudget,
     sourceImageFile,
     sourceImageUpload,
     width,

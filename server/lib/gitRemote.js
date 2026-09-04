@@ -151,10 +151,13 @@ export function classifyOriginRemote(originUrl, {
   const ownerMatchesUpstream = parsed.owner.toLowerCase() === upstreamOwner.toLowerCase();
   const repoMatchesUpstream = parsed.repo.toLowerCase() === upstreamRepo.toLowerCase();
   const isUpstream = isGithub && ownerMatchesUpstream && repoMatchesUpstream;
-  // Strict fork: same repo name, different owner, on GitHub. A renamed
-  // GitHub repo (different name) doesn't count — `gh repo sync` would fail
-  // and the fork-aware UI would mislead the user.
-  const isFork = isGithub && repoMatchesUpstream && !ownerMatchesUpstream;
+  // Fork: different owner than upstream, on GitHub — regardless of repo name.
+  // A renamed fork (`<owner>/PortOS` -> `<owner>/PortOS-Fork`) still IS the
+  // PortOS checkout; requiring the name to match `repoMatchesUpstream` made
+  // `isFork` silently go false on rename, taking the fork panel, the
+  // sync-fork route, and the divergence check with it while `git`/`gh repo
+  // sync` kept working fine through GitHub's slug redirect (#5931).
+  const isFork = isGithub && !ownerMatchesUpstream;
 
   return {
     hasOrigin: true,

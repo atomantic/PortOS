@@ -270,7 +270,7 @@ ${prompt.trim()}`;
             </div>
             <button
               onClick={() => setContinueContext(null)}
-              className="p-1 text-gray-400 hover:text-white"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-white"
               title="Dismiss context"
               aria-label="Dismiss context"
             >

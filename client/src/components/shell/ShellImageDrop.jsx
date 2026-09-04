@@ -176,7 +176,7 @@ export default function ShellImageDrop({ onSend, placement = 'below' }) {
               </div>
               <button
                 onClick={clearFile}
-                className="p-1 text-gray-400 hover:text-white transition-colors"
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-white transition-colors"
                 title="Remove image"
                 aria-label="Remove image"
               >

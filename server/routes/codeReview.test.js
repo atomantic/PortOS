@@ -183,6 +183,24 @@ describe('POST /api/code-review/local', () => {
     )
   })
 
+  // A model neither the request, the panel, nor the backend's own listing could
+  // supply is the caller's config gap, not a reviewer that was asked and failed —
+  // an agent retrying a 502 would retry forever against an unset setting.
+  it('returns 400 when the service could not resolve a model', async () => {
+    codeReviewSvc.runLocalCodeReview.mockResolvedValue({
+      ok: false,
+      code: 'NO_MODEL',
+      error: 'No model configured for mtplx reviewer and mtplx is serving no models — set one on the Settings → Code Reviewers page.',
+    })
+
+    const res = await request(makeApp())
+      .post('/api/code-review/local')
+      .send({ backend: 'mtplx', diff: 'diff --git a b' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toMatch(/No model configured/)
+  })
+
   it('returns 502 when the service returns { ok: false }', async () => {
     codeReviewSvc.runLocalCodeReview.mockResolvedValue({
       ok: false,

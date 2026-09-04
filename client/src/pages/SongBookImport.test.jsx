@@ -49,6 +49,24 @@ describe('SongBookImport', () => {
     expect(body.content.text).toBe('&lt; C   G   Am');
   });
 
+  it('the header Save action saves the draft and is gated on content (#6001)', async () => {
+    // The form's own Save sits below the textarea + preview — off-screen on a
+    // phone — so the header copy is the one that has to work above the fold.
+    clipboard.readClipboard.mockResolvedValue('C   G   Am');
+    renderPage();
+    const headerSave = screen.getByRole('button', { name: 'Save' });
+    expect(headerSave.disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Paste' }));
+    await screen.findByLabelText('Pasted tab content');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' }).disabled).toBe(false));
+
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Example Song' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.createSong).toHaveBeenCalledTimes(1));
+    expect(api.createSong.mock.calls[0][0].title).toBe('Example Song');
+  });
+
   it('clamps ChordPro meta before sending: out-of-range capo dropped, long key sliced to 20', async () => {
     const sheet = '{key: ThisKeyNameIsWayTooLongForTheSchema}\n{capo: 13}\nC   G   Am\nInvented lyric line';
     renderPage();

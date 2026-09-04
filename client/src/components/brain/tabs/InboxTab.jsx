@@ -424,7 +424,7 @@ export default function InboxTab({ onRefresh, settings }) {
             <button
               type="button"
               onClick={() => { fetchInbox(); onRefresh?.(); }}
-              className="p-1 text-gray-400 hover:text-white transition-colors"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-white transition-colors"
               title="Refresh inbox"
               aria-label="Refresh inbox"
             >
@@ -471,7 +471,7 @@ export default function InboxTab({ onRefresh, settings }) {
                             rows={3}
                             autoFocus
                           />
-                          <div className="flex flex-col gap-1">
+                          <div className="flex flex-col gap-2">
                             <button
                               onClick={() => handleSaveEdit(entry.id)}
                               className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center text-port-success hover:bg-port-success/20 rounded transition-colors"
@@ -491,7 +491,7 @@ export default function InboxTab({ onRefresh, settings }) {
                       ) : (
                         <>
                           <p className="text-white flex-1">{entry.capturedText}</p>
-                          <div className="flex gap-1">
+                          <div className="flex gap-2">
                             <button
                               onClick={() => handleEdit(entry)}
                               className="p-1 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-400 hover:text-white transition-colors"
@@ -645,17 +645,17 @@ export default function InboxTab({ onRefresh, settings }) {
                           rows={3}
                           autoFocus
                         />
-                        <div className="flex flex-col gap-1">
+                        <div className="flex flex-col gap-2">
                           <button
                             onClick={() => handleSaveEdit(entry.id)}
-                            className="p-1 text-port-success hover:bg-port-success/20 rounded transition-colors"
+                            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-port-success hover:bg-port-success/20 rounded transition-colors"
                             title="Save changes" aria-label="Save changes"
                           >
                             <Save size={14} />
                           </button>
                           <button
                             onClick={handleCancelEdit}
-                            className="p-1 text-gray-400 hover:bg-port-border/50 rounded transition-colors"
+                            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:bg-port-border/50 rounded transition-colors"
                             title="Cancel editing" aria-label="Cancel editing"
                           >
                             <X size={14} />
@@ -665,17 +665,17 @@ export default function InboxTab({ onRefresh, settings }) {
                     ) : (
                       <>
                         <p className="text-white flex-1">{entry.capturedText}</p>
-                        <div className="flex gap-1">
+                        <div className="flex gap-2">
                           <button
                             onClick={() => handleEdit(entry)}
-                            className="p-1 text-gray-400 hover:text-white transition-colors"
+                            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-white transition-colors"
                             title="Edit text" aria-label="Edit text"
                           >
                             <Edit2 size={14} />
                           </button>
                           <button
                             onClick={() => setConfirmingDeleteId(entry.id)}
-                            className="p-1 text-gray-400 hover:text-port-error transition-colors"
+                            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-error transition-colors"
                             title="Delete entry" aria-label="Delete entry"
                           >
                             <Trash2 size={14} />
@@ -763,7 +763,7 @@ export default function InboxTab({ onRefresh, settings }) {
                       <div className="flex gap-1">
                         <button
                           onClick={() => setConfirmingDeleteId(entry.id)}
-                          className="p-1 text-gray-400 hover:text-port-error transition-colors"
+                          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-error transition-colors"
                           title="Delete entry" aria-label="Delete entry"
                         >
                           <Trash2 size={14} />
@@ -909,7 +909,7 @@ export default function InboxTab({ onRefresh, settings }) {
                         <div className="flex gap-1">
                           <button
                             onClick={() => setConfirmingDeleteId(entry.id)}
-                            className="p-1 text-gray-500 hover:text-port-error transition-colors"
+                            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
                             title="Delete entry" aria-label="Delete entry"
                           >
                             <Trash2 size={14} />

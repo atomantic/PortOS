@@ -1,6 +1,8 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
+import { PORTOS_APP_ID } from '../lib/appIdentity.js';
+import { usePortosRestartWatch } from './usePortosRestartWatch.js';
 
 const CLEAR_DELAY_MS = 5000;
 
@@ -27,11 +29,27 @@ const isLive = (op) => !!op && !op.completed && !op.error;
  *
  * `appId` scopes a single-app surface (an app's Overview tab) to its own
  * operation; omit it on the multi-app list, which reports every operation.
+ *
+ * PortOS is itself a managed app, and updating it runs its own update.sh —
+ * which pm2-deletes this server partway through, so `app:update:complete` never
+ * arrives and the operation stays "in flight" forever. That case is handled
+ * HERE rather than at each surface: every caller of `startUpdate` inherits the
+ * baseline capture, the restart detection, and the `restarting` flag, so a new
+ * surface cannot regress to the hang by forgetting to wire them.
  */
 export function useAppOperation({ onComplete, appId: scopeAppId } = {}) {
   const [operations, setOperations] = useState({});
   const clearTimersRef = useRef({});
   const onCompleteRef = useRef(onComplete);
+
+  // A surface scoped to another app can never see a PortOS update, so it
+  // registers no listeners at all.
+  const watchable = !scopeAppId || scopeAppId === PORTOS_APP_ID;
+  const portosOperation = operations[PORTOS_APP_ID];
+  const { polling: restarting, captureBaseline, arm } = usePortosRestartWatch({
+    enabled: watchable,
+    active: watchable && portosOperation?.type === 'update' && isLive(portosOperation),
+  });
 
   useEffect(() => { onCompleteRef.current = onComplete; });
 
@@ -95,7 +113,16 @@ export function useAppOperation({ onComplete, appId: scopeAppId } = {}) {
       });
     };
 
-    const onStep = (data) => patch(data, current => ({ ...current, steps: mergeStep(current.steps, data) }));
+    const onStep = (data) => {
+      // The last frame that can reach us from a PortOS self-update: the script's
+      // own `pm2 delete` kills this server moments later. Gated on `watchable`
+      // for the same reason the subscriptions are — `app:update:step` is a
+      // broadcast, so without it a surface scoped to some OTHER app would arm
+      // the watch (and reload the page) off a PortOS update it has no part in.
+      if (watchable && data?.appId === PORTOS_APP_ID && data.status !== 'error'
+        && (data.step === 'restart' || data.step === 'restarting')) arm();
+      patch(data, current => ({ ...current, steps: mergeStep(current.steps, data) }));
+    };
 
     const onError = (data) => {
       // A refused duplicate dispatch says nothing about the run already in
@@ -154,14 +181,20 @@ export function useAppOperation({ onComplete, appId: scopeAppId } = {}) {
       socket.off('app:standardize:complete', onDone);
       socket.off('connect', requestActive);
     };
-  }, [scopeAppId, drop]);
+  }, [arm, watchable, scopeAppId, drop]);
 
   const start = useCallback((type, appId, appName, options = {}) => {
     clearTimeout(clearTimersRef.current[appId]);
     delete clearTimersRef.current[appId];
     setOperations(prev => ({ ...prev, [appId]: { appId, appName, type, steps: [], error: null, errorCode: null, completed: false } }));
+    // Record the running server's version and uptime while it can still answer —
+    // the restart watch compares against them. Deliberately NOT awaited: nothing
+    // reads the baseline for at least a second, and blocking the dispatch on a
+    // health round-trip is visible latency on every click (PortOS is normally
+    // driven remotely over Tailscale).
+    if (type === 'update' && appId === PORTOS_APP_ID) captureBaseline();
     socket.emit(type === 'update' ? 'app:update' : 'app:standardize', { appId, ...options });
-  }, []);
+  }, [captureBaseline]);
 
   const startUpdate = useCallback((appId, appName, options = {}) => start('update', appId, appName, options), [start]);
   const startStandardize = useCallback((appId, appName) => start('standardize', appId, appName), [start]);
@@ -175,6 +208,9 @@ export function useAppOperation({ onComplete, appId: scopeAppId } = {}) {
     // Derived, not a separate flag: a stale `isOperating` was how the old hook
     // let a finished operation keep every row's buttons disabled.
     isOperating: list.some(isLive),
+    // PortOS is restarting itself out from under this page; it reloads when the
+    // server answers again.
+    restarting,
     steps: primary?.steps || [],
     error: primary?.error ?? null,
     errorCode: primary?.errorCode ?? null,

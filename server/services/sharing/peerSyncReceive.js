@@ -51,7 +51,7 @@ import {
   pullMissingAssetsFromPeer,
   pullMissingWorkBodies,
 } from './peerSyncAssets.js';
-import { findPeerSubscription, subscribePeer } from './peerSync.js';
+import { findPeerSubscription, subscribePeer } from './peerSubscriptions.js';
 import {
   makeErr,
   isNonEmptyStr,
