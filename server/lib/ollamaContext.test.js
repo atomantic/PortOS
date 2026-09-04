@@ -9,6 +9,24 @@ import {
   resolveOllamaContextLength,
   withOllamaContextEnv
 } from './ollamaContext.js'
+import { readFileSync } from 'node:fs'
+
+// Read, not `import … with { type: 'json' }` — the repo avoids JSON import
+// attributes (see promptSystemStages.js).
+const SHIPPED_PROVIDERS = JSON.parse(readFileSync(new URL('../../data.reference/providers.json', import.meta.url), 'utf8'))
+
+// The Ollama-backed Claude harnesses speak to the daemon directly, so the ONLY
+// window they ever get is the one `ensureOllamaAgentContext` reloads the daemon
+// at — i.e. whatever `resolveOllamaContextLength` returns for their seeded
+// record. Shipping them without a `numCtx` left Ollama's VRAM auto-pick in
+// charge, which on a large-VRAM machine is a 262K window whose prefill decays
+// as the KV cache grows (#6191).
+const CLAUDE_OLLAMA_HARNESS_IDS = ['claude-ollama', 'claude-ollama-tui']
+
+// A pr-reviewer Stage 3 prompt was measured at ~98K tokens, so the seeded window
+// must clear that envelope with headroom — a window BELOW it turns a slow run
+// into a refused one (`exceed_context_size_error`).
+const STAGE_3_PROMPT_ENVELOPE = 100_000
 
 describe('resolveOllamaContextLength', () => {
   it('prefers the provider numCtx over the ambient env', () => {
@@ -132,4 +150,18 @@ describe('isSameOllamaDaemon', () => {
     expect(isSameOllamaDaemon('http://localhost:11434', null)).toBe(false)
     expect(isSameOllamaDaemon('http://', 'http://localhost:11434')).toBe(false)
   })
+})
+
+describe('shipped Claude Ollama harness seeds', () => {
+  for (const id of CLAUDE_OLLAMA_HARNESS_IDS) {
+    it(`${id} resolves to a window above the Stage 3 envelope with no ambient env`, () => {
+      const provider = SHIPPED_PROVIDERS.providers[id]
+      expect(provider, `data.reference/providers.json is missing ${id}`).toBeDefined()
+      // Empty env on purpose: the seed alone must be enough, because an install
+      // that never set OLLAMA_CONTEXT_LENGTH is the default case.
+      const resolved = resolveOllamaContextLength(provider, {})
+      expect(resolved, `${id} must pin a numCtx — without one Ollama's VRAM auto-pick stands`).not.toBeNull()
+      expect(resolved).toBeGreaterThan(STAGE_3_PROMPT_ENVELOPE)
+    })
+  }
 })
