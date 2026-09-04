@@ -19,13 +19,22 @@ import sharp from 'sharp';
 import { mkdir, writeFile, readFile, rm } from 'fs/promises';
 import { createHash } from 'crypto';
 import {
+  capSharpThreads,
   lockAllAnchors as lockAllAnchorsFixture,
   placeCandidate,
   trackSpan as fullSpan,
   writeWalkFramePng,
 } from './spriteTestFixtures.js';
 
+capSharpThreads();
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-atlas-test-'));
+
+// The narrowest walk span a compile will accept: the walk track's registry row
+// declares a 6–16 frame range and `resolveTrackUniformity` refuses anything
+// outside it, so 6 is the floor — still enough for varyArm to vary the
+// silhouette and for a mid-strip index to exist. Tests that pin the production
+// 9-column grid keep WALK_PHASES instead (#6004).
+const NARROW_WALK_FRAMES = 6;
 
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -271,10 +280,10 @@ async function finalizedAmbientPlace() {
   return id;
 }
 
-async function finalizedCharacter() {
+async function finalizedCharacter(walkOptions) {
   const id = newId();
   await lockAllAnchors(id);
-  await buildFinalizedWalkSet(id);
+  await buildFinalizedWalkSet(id, walkOptions);
   return id;
 }
 
@@ -334,14 +343,20 @@ describe('compileAtlas', () => {
   it('compiles an approved four-frame scanner span beside the walk span', async () => {
     const id = newId();
     await lockAllAnchors(id);
-    await buildFinalizedWalkSet(id, { frameCount: 12, fps: 10 });
+    // A narrow walk span: this test is about where the scanner span LANDS
+    // beside the walk span, and that placement is frame-count-parametric
+    // (atlasGrid.test.js pins the arithmetic). The 12-frame walk has its own
+    // test below, so a wide walk here only buys 48 more compiled cells (#6004).
+    await buildFinalizedWalkSet(id, { frameCount: NARROW_WALK_FRAMES, fps: 10 });
     await buildFinalizedScannerSet(id);
     const result = await compileAtlas(id);
     const manifest = JSON.parse(await readFile(join(TEST_ROOT, 'sprites', id, result.manifestPath), 'utf8'));
     expect(manifest.geometry.columns).toEqual([
-      'idle', ...walkPhaseLabels(12), 'scanner-00', 'scanner-01', 'scanner-02', 'scanner-03',
+      'idle', ...walkPhaseLabels(NARROW_WALK_FRAMES),
+      'scanner-00', 'scanner-01', 'scanner-02', 'scanner-03',
     ]);
-    expect(manifest.geometry.tracks.scanner).toMatchObject({ start: 13, count: 4, rows: 8 });
+    expect(manifest.geometry.tracks.scanner)
+      .toMatchObject({ start: NARROW_WALK_FRAMES + 1, count: 4, rows: 8 });
     expect(manifest.geometry.scannerFrameCount).toBe(4);
     expect(manifest.scannerSetSha256).toMatch(/^[0-9a-f]{64}$/);
     for (const row of manifest.directions) {
@@ -379,7 +394,7 @@ describe('compileAtlas', () => {
     it('still compiles an approved scanner set beside the walk span', async () => {
       const id = newId();
       await lockAllAnchors(id);
-      await buildFinalizedWalkSet(id, { frameCount: 12, fps: 10 });
+      await buildFinalizedWalkSet(id, { frameCount: NARROW_WALK_FRAMES, fps: 10 });
       await buildFinalizedScannerSet(id);
       await installUserStore();
 
@@ -388,9 +403,11 @@ describe('compileAtlas', () => {
       // Identical geometry to the compiled-row era: span order, column labels and
       // frame count all still resolve from the (now stored) row.
       expect(manifest.geometry.columns).toEqual([
-        'idle', ...walkPhaseLabels(12), 'scanner-00', 'scanner-01', 'scanner-02', 'scanner-03',
+        'idle', ...walkPhaseLabels(NARROW_WALK_FRAMES),
+        'scanner-00', 'scanner-01', 'scanner-02', 'scanner-03',
       ]);
-      expect(manifest.geometry.tracks.scanner).toMatchObject({ start: 13, count: 4, rows: 8 });
+      expect(manifest.geometry.tracks.scanner)
+        .toMatchObject({ start: NARROW_WALK_FRAMES + 1, count: 4, rows: 8 });
       expect(manifest.geometry.scannerFrameCount).toBe(4);
     });
 
@@ -430,7 +447,7 @@ describe('compileAtlas', () => {
     };
     const id = newId();
     await lockAllAnchors(id);
-    await buildFinalizedWalkSet(id, { frameCount: 8, fps: 10 });
+    await buildFinalizedWalkSet(id, { frameCount: NARROW_WALK_FRAMES, fps: 10 });
     await buildFinalizedScannerSet(id, {
       trackId,
       frameCount: 3,
@@ -441,9 +458,10 @@ describe('compileAtlas', () => {
     const first = await compileAtlas(id, { tracks: customTracks });
     const manifest = JSON.parse(await readFile(join(TEST_ROOT, 'sprites', id, first.manifestPath), 'utf8'));
     expect(manifest.geometry.columns).toEqual([
-      'idle', ...WALK_PHASES, 'jetpack-00', 'jetpack-01', 'jetpack-02',
+      'idle', ...walkPhaseLabels(NARROW_WALK_FRAMES), 'jetpack-00', 'jetpack-01', 'jetpack-02',
     ]);
-    expect(manifest.geometry.tracks.jetpack).toEqual({ start: 9, count: 3, rows: 8 });
+    expect(manifest.geometry.tracks.jetpack)
+      .toEqual({ start: NARROW_WALK_FRAMES + 1, count: 3, rows: 8 });
     expect(manifest.geometry.jetpackFrameCount).toBe(3);
     expect(manifest.trackSets.jetpack.setSha256).toMatch(/^[0-9a-f]{64}$/);
     for (const row of manifest.directions) {
@@ -549,6 +567,9 @@ describe('compileAtlas', () => {
     const id = newId();
     await lockAllAnchors(id);
     await buildFinalizedWalkSet(id, {
+      // The registry floor, still covering varyArm's full four-offset cycle —
+      // the widths still differ, which is the condition the guard below needs.
+      frameCount: NARROW_WALK_FRAMES,
       varyArm: true,
       alignment: { cellSize: 40, targetPivot: [20, 35] },
     });
@@ -579,7 +600,11 @@ describe('compileAtlas', () => {
   it('ignores a speck below the sole when grounding a compiled cell', async () => {
     const id = newId();
     await lockAllAnchors(id);
-    await buildFinalizedWalkSet(id, { speckFrames: [2], alignment: { cellSize: 40, targetPivot: [20, 35] } });
+    await buildFinalizedWalkSet(id, {
+      frameCount: NARROW_WALK_FRAMES,
+      speckFrames: [2],
+      alignment: { cellSize: 40, targetPivot: [20, 35] },
+    });
     const result = await compileAtlas(id);
     const manifest = JSON.parse(await readFile(join(TEST_ROOT, 'sprites', id, result.manifestPath), 'utf8'));
 
@@ -619,7 +644,7 @@ describe('compileAtlas', () => {
   });
 
   it('recompiles a set whose pointer still describes the pre-#2986 scanner grid', async () => {
-    const id = await finalizedCharacter();
+    const id = await finalizedCharacter({ frameCount: NARROW_WALK_FRAMES });
     const first = await compileAtlas(id);
 
     // Simulate a pointer written by the old compiler: same walk set, same cell
@@ -640,20 +665,25 @@ describe('compileAtlas', () => {
     const again = await compileAtlas(id);
     expect(again.created).toBe(true);
     expect(again.version).toBe(first.version + 1);
-    expect(again.geometry.columns).toEqual(['idle', ...WALK_PHASES]);
-    expect(again.geometry.widthPx).toBe(DEFAULT_ATLAS_GEOMETRY.cellSize * 9);
+    expect(again.geometry.columns).toEqual(['idle', ...walkPhaseLabels(NARROW_WALK_FRAMES)]);
+    expect(again.geometry.widthPx)
+      .toBe(DEFAULT_ATLAS_GEOMETRY.cellSize * (NARROW_WALK_FRAMES + 1));
 
     // A track-set change can leave the column list identical. Repartition the
     // now-current pointer and prove that semantic grid drift also versions.
     const repartitioned = JSON.parse(await readFile(pointerAbs, 'utf8'));
-    expect(repartitioned.geometry.tracks).toEqual({ idle: fullSpan(0, 1), walk: fullSpan(1, 8) });
+    expect(repartitioned.geometry.tracks)
+      .toEqual({ idle: fullSpan(0, 1), walk: fullSpan(1, NARROW_WALK_FRAMES) });
     repartitioned.atlasSha256 = 'f'.repeat(64);
     repartitioned.geometry = {
       ...repartitioned.geometry,
+      // The same columns split differently — idle, a shortened walk, and a
+      // scanner span taking the rest — so the spans still tile the grid and only
+      // the SEMANTIC drift can be what triggers the recompile below.
       tracks: {
         idle: { start: 0, count: 1 },
-        walk: { start: 1, count: 4 },
-        scanner: { start: 5, count: 4 },
+        walk: { start: 1, count: 3 },
+        scanner: { start: 4, count: NARROW_WALK_FRAMES - 3 },
       },
     };
     await writeFile(pointerAbs, JSON.stringify(repartitioned));
@@ -661,8 +691,9 @@ describe('compileAtlas', () => {
     const trackChanged = await compileAtlas(id);
     expect(trackChanged.created).toBe(true);
     expect(trackChanged.version).toBe(again.version + 1);
-    expect(trackChanged.geometry.columns).toEqual(['idle', ...WALK_PHASES]);
-    expect(trackChanged.geometry.tracks).toEqual({ idle: fullSpan(0, 1), walk: fullSpan(1, 8) });
+    expect(trackChanged.geometry.columns).toEqual(['idle', ...walkPhaseLabels(NARROW_WALK_FRAMES)]);
+    expect(trackChanged.geometry.tracks)
+      .toEqual({ idle: fullSpan(0, 1), walk: fullSpan(1, NARROW_WALK_FRAMES) });
   });
 
   it('stays idempotent for current and legacy geometry descriptors', async () => {
@@ -670,7 +701,7 @@ describe('compileAtlas', () => {
     // span, so a pointer written before it would compare unequal and re-run the
     // entire pixel pipeline on every compile, forever, for every existing
     // install. Absent must normalize to full height on the way in.
-    const id = await finalizedCharacter();
+    const id = await finalizedCharacter({ frameCount: NARROW_WALK_FRAMES });
     const first = await compileAtlas(id);
 
     const unchanged = await compileAtlas(id);
@@ -705,7 +736,7 @@ describe('compileAtlas', () => {
     // post-encode sha compare, so a test that only checked that would pass even
     // with the legacy fallback deleted — i.e. while the pixel pipeline ran in
     // full on every compile, which is the exact regression this guards.
-    const grid = buildAtlasGrid([{ id: 'walk', frameCount: WALK_PHASES.length }]);
+    const grid = buildAtlasGrid([{ id: 'walk', frameCount: NARROW_WALK_FRAMES }]);
     expect(compiledGridUpToDate(pointer.geometry, { ...DEFAULT_ATLAS_GEOMETRY, ...grid })).toBe(true);
 
     const withoutTracks = await compileAtlas(id);
@@ -778,7 +809,7 @@ describe('compileAtlas', () => {
   });
 
   it('refuses an unapproved direction', async () => {
-    const id = await finalizedCharacter();
+    const id = await finalizedCharacter({ frameCount: NARROW_WALK_FRAMES });
     const setAbs = join(TEST_ROOT, 'sprites', id, `walk/${id}-walk-set-v1.json`);
     const walkSet = JSON.parse(await readFile(setAbs, 'utf8'));
     walkSet.directions.north.status = 'rejected';
@@ -787,12 +818,13 @@ describe('compileAtlas', () => {
   });
 
   it('honors geometry overrides at normal and 2x source density', async () => {
-    const id = await finalizedCharacter();
+    const id = await finalizedCharacter({ frameCount: NARROW_WALK_FRAMES });
+    const columnCount = NARROW_WALK_FRAMES + 1;
     const normal = await compileAtlas(id, {
       geometry: { cellSize: 64, pivot: [32, 56], targetMaxHeight: 44, targetMaxWidth: 52 },
     });
     const normalMeta = await sharp(join(TEST_ROOT, 'sprites', id, normal.atlasPath)).metadata();
-    expect(normalMeta.width).toBe(64 * 9);
+    expect(normalMeta.width).toBe(64 * columnCount);
     expect(normalMeta.height).toBe(64 * 8);
 
     const dense = await compileAtlas(id, {
@@ -804,12 +836,12 @@ describe('compileAtlas', () => {
       },
     });
     const denseMeta = await sharp(join(TEST_ROOT, 'sprites', id, dense.atlasPath)).metadata();
-    expect(denseMeta.width).toBe(192 * 9);
+    expect(denseMeta.width).toBe(192 * columnCount);
     expect(denseMeta.height).toBe(192 * 8);
   });
 
   it('refuses an imported legacy walk set with an explicit code (not a tamper error)', async () => {
-    const id = await finalizedCharacter();
+    const id = await finalizedCharacter({ frameCount: NARROW_WALK_FRAMES });
     const setAbs = join(TEST_ROOT, 'sprites', id, `walk/${id}-walk-set-v1.json`);
     const walkSet = JSON.parse(await readFile(setAbs, 'utf8'));
     walkSet.selectionPath = `art-source/sprites/${id}/walk/${id}-walk-selection-v1.json`;
@@ -823,7 +855,7 @@ describe('compileAtlas', () => {
   // must still be refused for the directions that have NOT been re-derived —
   // and must name them, since the remedy is applied one direction at a time.
   it('names the directions still packaged by the source pipeline', async () => {
-    const id = await finalizedCharacter();
+    const id = await finalizedCharacter({ frameCount: NARROW_WALK_FRAMES });
     const setAbs = join(TEST_ROOT, 'sprites', id, `walk/${id}-walk-set-v1.json`);
     const walkSet = JSON.parse(await readFile(setAbs, 'utf8'));
     walkSet.directions.north.runManifest = `art-source/sprites/${id}/${walkSet.directions.north.runManifest}`;
@@ -836,7 +868,9 @@ describe('compileAtlas', () => {
   });
 
   it('self-heals a deleted atlas without overwriting an immutable version', async () => {
-    const id = await finalizedCharacter();
+    // Version bookkeeping only — no column assertions — so this compiles the
+    // narrow span three times rather than the full production grid (#6004).
+    const id = await finalizedCharacter({ frameCount: NARROW_WALK_FRAMES });
     const first = await compileAtlas(id);
     rmSync(join(TEST_ROOT, 'sprites', id, first.atlasPath));
     const again = await compileAtlas(id);
@@ -858,7 +892,7 @@ describe('compileAtlas', () => {
   });
 
   it('rejects geometry whose content bounds cannot fit the cell', async () => {
-    const id = await finalizedCharacter();
+    const id = await finalizedCharacter({ frameCount: NARROW_WALK_FRAMES });
     await expect(compileAtlas(id, { geometry: { cellSize: 64, targetMaxWidth: 64 } }))
       .rejects.toMatchObject({ status: 400, code: 'INVALID_GEOMETRY' });
   });

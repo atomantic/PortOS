@@ -20,6 +20,22 @@ import sharp from 'sharp';
 import { mkdir, writeFile } from 'fs/promises';
 import { SPRITE_DIRECTIONS } from './prompts.js';
 
+/**
+ * Cap libvips at one thread per call, for a suite whose images are all tiny.
+ *
+ * Every sprite fixture and every compiled atlas cell is a 40–192px image, so a
+ * Sharp call's cost is its per-call overhead, not its pixel count — and the
+ * thread pool's setup/join IS most of that overhead at this size. CI already
+ * saturates each runner with several Vitest workers, so the pool only
+ * oversubscribes the box on top of that; the sprite suites measured markedly
+ * less system time with it capped (#6004). Called explicitly by the suites that
+ * want it rather than run on import, so importing a fixture never silently
+ * reconfigures a worker that later runs an unrelated, image-heavy suite.
+ */
+export function capSharpThreads() {
+  sharp.concurrency(1);
+}
+
 // Sharp PNG encoding is the expensive part; the same raw pixels show up in
 // dozens of tests. Cache the encoded buffer per unique pixel config and
 // `writeFile` it — still a real PNG, just not re-encoded every time.
