@@ -568,6 +568,28 @@ export async function resolveIssueReconcileBlock(app, taskType, metadata, taskSc
   if (releasedCount) {
     emitLog('info', `🔓 issue-reconcile ${app.name}: released ${releasedCount} abandoned claim(s) back to the queue`, { appId: app.id, analysisType: taskType });
   }
+  // Also deterministic, also no model needed: an issue labeled `blocked` on a
+  // genuine dependency (`Blocked by #N` convention — portos-file-issue skill)
+  // whose blocker(s) have all since closed is unlabeled here, not gated behind
+  // the zombie coordinator. gatherBlockedIssueState resolves its own forge
+  // target and returns null for anything but GitHub/GitLab (JIRA included —
+  // it has no equivalent scan), so no forge pre-check is needed here.
+  const { gatherBlockedIssueState, unblockIssues } = await import('./blockedIssueReconcile.js');
+  const blockedState = await gatherBlockedIssueState(app.repoPath, { app }).catch((err) => {
+    emitLog('warn', `issue-reconcile could not scan blocked issues for ${app.name}: ${err.message}`, { appId: app.id });
+    return null;
+  });
+  if (blockedState?.ready.length) {
+    const unblockedCount = await unblockIssues(blockedState.ready, {
+      forge: blockedState.forge, repoSpec: blockedState.repoSpec, fullName: blockedState.fullName, repoPath: app.repoPath,
+    }).catch((err) => {
+      emitLog('warn', `issue-reconcile could not unblock issues for ${app.name}: ${err.message}`, { appId: app.id });
+      return 0;
+    });
+    if (unblockedCount) {
+      emitLog('info', `🔓 issue-reconcile ${app.name}: removed the \`blocked\` label from ${unblockedCount} issue(s) whose dependency closed`, { appId: app.id, analysisType: taskType });
+    }
+  }
   if (result.stalled.length) {
     // In-progress issues with NO merged PR and NO live claim — a different stuck
     // state issue-reconcile deliberately does NOT auto-heal. Surface them.

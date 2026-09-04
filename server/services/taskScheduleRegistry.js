@@ -310,6 +310,12 @@ export const DEFAULT_TASK_INTERVALS = {
   // issue-state mutation is its whole deliverable — hence the shared
   // non-committing-coordinator posture above. On-demand by default — a manual
   // Run is the explicit consent to mutate issue state; a cadence is opt-in.
+  //
+  // The SAME deterministic pre-step also unblocks `blocked` issues: one whose
+  // body names its dependency via `Blocked by #N` (portos-file-issue skill) has
+  // its label removed, with no coordinator dispatch, once every named blocker
+  // is closed (blockedIssueReconcile.js). Like releaseAbandonedClaims, this
+  // needs no model and runs every pass regardless of whether any zombie exists.
   'issue-reconcile':     { type: INTERVAL_TYPES.ON_DEMAND, perpetual: true, enabled: true, providerId: null, model: null, prompt: null, recheckCron: '0 4 * * *', drainDispatchCap: PERPETUAL_DRAIN_DISPATCH_CAP, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA, autoClose: true } },
   'console-errors':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
   'dependency-updates':  { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null },
@@ -595,7 +601,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'claim-work': "Ship the next work item from the app's configured tracker (PLAN.md, GitHub/GitLab issues, or JIRA), routed automatically",
   'accessibility': 'Accessibility audit — file issues or implement fixes',
   'branch-reconcile': "Finish this machine's in-flight local branches: clean up merged ones, open PRs, resolve conflicts, drive review, auto-merge when green",
-  'issue-reconcile': "Heal zombie issues: open + in-progress but their PR already merged with no live claim — close + file a scoped follow-up when work remains, or release the claim so the queue re-picks it",
+  'issue-reconcile': "Heal zombie issues (open + in-progress but their PR already merged with no live claim — close + file a scoped follow-up or release the claim) and auto-unblock: remove the `blocked` label once every issue named in its `Blocked by #N` line has closed",
   'dependency-updates': 'Land or resolve open Dependabot/Renovate PRs, then update the dependencies they missed',
   'release-check': 'Check for release readiness',
   'error-handling': 'Failure-path audit — file issues or implement fixes',
