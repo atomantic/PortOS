@@ -16,6 +16,10 @@ import { createDefaultPersistentMindState, normalizePersistentMindState } from '
 import { createDefaultPersistentMindCapabilities, normalizePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
 import { createDefaultPersistentMindProfile, normalizePersistentMindProfile } from '../lib/persistentMindProfile.js';
 import { createDefaultPersistentMindPrompt, normalizePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
+import {
+  createDefaultPersistentMindThinkingPresets,
+  normalizePersistentMindThinkingPresets,
+} from '../lib/persistentMindThinkingPresets.js';
 import { DEFAULT_ALWAYS_APPROVE_KINDS } from './taskLearning/safetyKind.js';
 
 export const STATE_FILE = join(PATHS.cos, 'state.json');
@@ -88,6 +92,7 @@ export const DEFAULT_CONFIG = {
   // Persisting a profile is not consent to wake the mind. Fresh and upgraded
   // installs stay disabled until the user explicitly starts it.
   persistentMindProfile: createDefaultPersistentMindProfile(),
+  persistentMindThinkingPresets: createDefaultPersistentMindThinkingPresets(),
   persistentMindPrompt: createDefaultPersistentMindPrompt(),
   // Action grants are independent of the provider profile. Existing and fresh
   // conversation-only installs never gain task-creation authority on upgrade.
@@ -207,6 +212,7 @@ function mergeStoredConfig(storedConfig) {
     ...persistedConfig,
     persistentMindCapabilities: normalizePersistentMindCapabilities(persistedConfig.persistentMindCapabilities),
     persistentMindProfile: normalizePersistentMindProfile(persistedConfig.persistentMindProfile),
+    persistentMindThinkingPresets: normalizePersistentMindThinkingPresets(persistedConfig.persistentMindThinkingPresets),
     persistentMindPrompt: normalizePersistentMindPrompt(persistedConfig.persistentMindPrompt),
   };
 }

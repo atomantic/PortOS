@@ -19,6 +19,7 @@ import { AVATAR_STYLE_IDS } from '../../client/src/lib/avatarStyles.js';
 import { BUDGET_LIMIT_FIELDS } from '../lib/domainBudgets.js';
 import { persistentMindCapabilitiesSchema } from '../lib/persistentMindCapabilities.js';
 import { persistentMindProfileSchema } from '../lib/persistentMindProfile.js';
+import { persistentMindThinkingPresetsSchema } from '../lib/persistentMindThinkingPresets.js';
 import { persistentMindPromptSchema } from '../lib/persistentMindPrompt.js';
 
 const router = Router();
@@ -71,6 +72,9 @@ export const cosConfigSchema = z.object({
   // A durable reasoning route for the persistent mind. It is separate from
   // `alwaysOn`: saving or enabling this profile never starts background work.
   persistentMindProfile: persistentMindProfileSchema.optional(),
+  // Saved alternates one message may borrow for a single turn. Storing them
+  // changes nothing about the route the mind wakes on by default.
+  persistentMindThinkingPresets: persistentMindThinkingPresetsSchema.optional(),
   persistentMindPrompt: persistentMindPromptSchema.optional(),
   // Separate opt-in action grant: an enabled reasoning profile does not imply
   // authority to create and execute agent tasks.

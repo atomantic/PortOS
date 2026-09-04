@@ -39,6 +39,7 @@ import { normalizeDomainBudgets, remainingActionBudget } from '../lib/domainBudg
 import { mergePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
 import { mergePersistentMindProfile, normalizePersistentMindProfile } from '../lib/persistentMindProfile.js';
 import { mergePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
+import { mergePersistentMindThinkingPresets } from '../lib/persistentMindThinkingPresets.js';
 import { getDomainBudgetStatus } from './domainUsage.js';
 import { pendingCosActionReservations } from './cosAdmissionReservations.js';
 // Dependency-free leaf holding the shared agent maps + the runner-mode flag,
@@ -246,6 +247,7 @@ export async function updateConfig(updates) {
     const priorPersistentMindCapabilities = current.persistentMindCapabilities;
     const priorPersistentMindProfile = current.persistentMindProfile;
     const priorPersistentMindPrompt = current.persistentMindPrompt;
+    const priorPersistentMindThinkingPresets = current.persistentMindThinkingPresets;
     const next = { ...current, ...updates };
     if (updates.domainAutonomy !== undefined) {
       next.domainAutonomy = normalizeDomainAutonomy({
@@ -273,6 +275,12 @@ export async function updateConfig(updates) {
       next.persistentMindCapabilities = mergePersistentMindCapabilities(
         priorPersistentMindCapabilities,
         updates.persistentMindCapabilities,
+      );
+    }
+    if (updates.persistentMindThinkingPresets !== undefined) {
+      next.persistentMindThinkingPresets = mergePersistentMindThinkingPresets(
+        priorPersistentMindThinkingPresets,
+        updates.persistentMindThinkingPresets,
       );
     }
     if (updates.persistentMindPrompt !== undefined) {

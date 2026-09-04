@@ -17,6 +17,7 @@ import {
   PERSISTENT_MIND_LIMITS,
   PERSISTENT_MIND_IMAGE_EXTENSIONS,
   createDefaultPersistentMindState,
+  holdPersistentMindWake,
   isPersistentMindAttachmentId,
   normalizePersistentMindAttachment,
   normalizePersistentMindMessageImage,
@@ -25,6 +26,7 @@ import {
   persistentMindMessageFingerprint,
   persistentMindBackoffMs,
   persistentMindTurnIsStale,
+  persistentMindWakeConsumesAttempt,
   publicPersistentMindAttachment,
   requeuePersistentMindWake,
   takeNextPersistentMindWake,
@@ -46,11 +48,15 @@ import { acquireLocalEndpointProviderSlot } from './cosLocalEndpointSlots.js';
 import { acquireCosActionReservation, acquireCosGlobalSlot } from './cosAdmissionReservations.js';
 import { appendMindEvent } from './agentRunEventLog.js';
 import { preparePersistentMindContext } from './persistentMindContext.js';
-import { resolvePersistentMindProfile } from './persistentMindProfile.js';
+import { resolvePersistentMindProfile, resolvePersistentMindThinkingSession } from './persistentMindProfile.js';
 import { isUpdateInProgress } from './updateChecker.js';
 import { publicPersistentMindState } from '../lib/persistentMindPublic.js';
 import { normalizePersistentMindProfile, persistentMindWakeIntervalMs } from '../lib/persistentMindProfile.js';
 import { getProviderById } from './providers.js';
+import {
+  findPersistentMindThinkingPreset,
+  PERSISTENT_MIND_THINKING_PRESET_LIMITS,
+} from '../lib/persistentMindThinkingPresets.js';
 import {
   imageCapabilityAllowsAttempt,
   resolvePersistentMindImageCapability,
@@ -134,12 +140,13 @@ const claimedAttachmentsForMessage = (mind, messageId) => mind.pendingAttachment
   ))
   .map(({ attachment }) => attachment);
 
-const messageFromAttachments = ({ id, text, createdAt, attachments }) => ({
+const messageFromAttachments = ({ id, text, createdAt, attachments, thinkingPresetId }) => ({
   id,
   text,
   ...(attachments.length > 0 ? {
     images: attachments.map(normalizePersistentMindMessageImage).filter(Boolean),
   } : {}),
+  ...(thinkingPresetId ? { thinkingPresetId } : {}),
   createdAt,
 });
 
@@ -522,7 +529,15 @@ async function interruptActiveTurn(reason, status, { retry = false, expectedTurn
     }
     const interrupted = Boolean(mind.activeTurn);
     let next = mind;
-    if (mind.activeTurn) next = requeuePersistentMindWake(next, mind.activeTurn.wake);
+    if (mind.activeTurn) {
+      // An interrupted temporary thinking session is an uncertain consumed
+      // attempt: the abort races whatever the provider already started, and no
+      // durable record can say whether that call was billed. Retire it instead
+      // of requeueing, so resuming it stays an explicit user decision.
+      next = persistentMindWakeConsumesAttempt(mind.activeTurn.wake)
+        ? holdPersistentMindWake(next, mind.activeTurn.wake)
+        : requeuePersistentMindWake(next, mind.activeTurn.wake);
+    }
     const failureCount = retry ? next.failureCount + 1 : next.failureCount;
     return {
       mind: {
@@ -554,10 +569,21 @@ async function interruptActiveTurn(reason, status, { retry = false, expectedTurn
   return { state: result.state, interrupted: result.value?.interrupted === true };
 }
 
-async function parkActiveTurn(turnId, reason, status = 'waiting', retryAt = null) {
+/**
+ * Return a claimed turn to the queue with a visible reason.
+ *
+ * `consumedAttempt` says the provider span had already opened, so a temporary
+ * thinking session must not be replayed automatically. Every refusal decided
+ * before that point — an unresolvable route, an unavailable adapter, a busy
+ * local endpoint — spent nothing and still requeues normally.
+ */
+async function parkActiveTurn(turnId, reason, status = 'waiting', { retryAt = null, consumedAttempt = false } = {}) {
   const result = await mutateMindState((mind) => {
-    if (mind.activeTurn?.id !== turnId) return { mind };
-    const next = requeuePersistentMindWake(mind, mind.activeTurn.wake);
+    if (mind.activeTurn?.id !== turnId) return { mind, value: false };
+    const held = consumedAttempt && persistentMindWakeConsumesAttempt(mind.activeTurn.wake);
+    const next = held
+      ? holdPersistentMindWake(mind, mind.activeTurn.wake)
+      : requeuePersistentMindWake(mind, mind.activeTurn.wake);
     const failureCount = next.failureCount + 1;
     return {
       mind: {
@@ -569,6 +595,7 @@ async function parkActiveTurn(turnId, reason, status = 'waiting', retryAt = null
         lastError: reason,
         nextEligibleWakeAt: retryAt || new Date(Date.now() + persistentMindBackoffMs(failureCount)).toISOString(),
       },
+      value: held,
     };
   });
   await appendMindEvent({
@@ -576,7 +603,7 @@ async function parkActiveTurn(turnId, reason, status = 'waiting', retryAt = null
     mindId: result.state.mindId,
     turnId,
     eventId: `mind-failed:${turnId}:${status}`,
-    data: { status, error: reason, retryAt },
+    data: { status, error: reason, retryAt, consumedAttempt: result.value === true },
   });
   emitMindStatus(result.state);
   return result.state;
@@ -623,6 +650,7 @@ async function claimNextTurn() {
         wakeKind: result.value.wake.kind,
         wakeId: result.value.wake.id || null,
         messageId: result.value.wake.message?.id || null,
+        thinkingPresetId: result.value.wake.message?.thinkingPresetId || null,
         reason: result.value.wake.reason || null,
       },
     });
@@ -745,6 +773,7 @@ async function completeTurn(turnId, result, generation) {
       providerId: result?.providerId || null,
       model: result?.model || null,
       effort: result?.effort || null,
+      thinkingPresetId: result?.thinkingPresetId || null,
       summaryText: typeof result?.summary === 'string' ? result.summary : null,
     },
   });
@@ -864,10 +893,22 @@ async function runOnePersistentMindTurn() {
     let release = () => {};
     let runStartedAt = null;
     try {
-      // The profile is resolved before an adapter can run. This is a read-only
+      // The route is resolved before an adapter can run. This is a read-only
       // catalog/status check: no alternate provider, model pull, or generation
       // is allowed while deciding whether the pinned mind can wake.
-      const profile = await resolvePersistentMindProfile(root.config?.persistentMindProfile);
+      //
+      // A message the user explicitly sent with another model resolves its saved
+      // preset here instead of the home profile. Only that one message carries
+      // it: the next ordinary message and every scheduled wake read the
+      // unchanged default, because the selection lives on the message rather
+      // than in config. A preset that has since been removed, retired, or
+      // narrowed is a refusal — never a silent return to the default route.
+      const thinkingPresetId = turn.wake.kind === 'message'
+        ? turn.wake.message.thinkingPresetId || null
+        : null;
+      const profile = thinkingPresetId
+        ? await resolvePersistentMindThinkingSession({ presetId: thinkingPresetId, config: root.config })
+        : await resolvePersistentMindProfile(root.config?.persistentMindProfile);
       if (!profile.ok) {
         await parkActiveTurn(turn.id, profile.error, 'degraded');
         return;
@@ -877,7 +918,7 @@ async function runOnePersistentMindTurn() {
       const adapterPrepared = await turnAdapter.prepare({ wake: turn.wake, signal: controller.signal, profile });
       if (!await turnCanContinue(turn.id, generation, controller.signal)) return;
       if (!adapterPrepared?.ok || !adapterPrepared.provider) {
-        await parkActiveTurn(turn.id, adapterPrepared?.error || 'Persistent mind provider is unavailable', 'degraded', adapterPrepared?.retryAt || null);
+        await parkActiveTurn(turn.id, adapterPrepared?.error || 'Persistent mind provider is unavailable', 'degraded', { retryAt: adapterPrepared?.retryAt || null });
         return;
       }
       // Existing adapters only named their transport provider; missing model or
@@ -947,6 +988,7 @@ async function runOnePersistentMindTurn() {
           providerId: prepared.provider.id,
           model: prepared.model || null,
           effort: prepared.effort || null,
+          thinkingPresetId,
           contextChars: context.chars,
           contextSummaryState: context.summaryState,
         },
@@ -992,6 +1034,7 @@ async function runOnePersistentMindTurn() {
           providerId: prepared.provider.id,
           model: prepared.model || null,
           effort: prepared.effort || null,
+          thinkingPresetId,
           summaryText: typeof result?.summary === 'string' ? result.summary : null,
           responseChars: typeof result?.output === 'string' ? result.output.length : null,
           success: true,
@@ -1002,13 +1045,14 @@ async function runOnePersistentMindTurn() {
         providerId: prepared.provider.id,
         model: prepared.model || null,
         effort: prepared.effort || null,
+        thinkingPresetId,
       }, generation);
     } catch (error) {
       if (generation === runtimeGeneration) {
         const message = controller.signal.aborted
           ? String(controller.signal.reason || 'Persistent mind turn interrupted')
           : errorMessage(error);
-        await parkActiveTurn(turn.id, message, 'interrupted');
+        await parkActiveTurn(turn.id, message, 'interrupted', { consumedAttempt: runStartedAt != null });
         emitLog('warn', `Persistent mind turn interrupted: ${message}`, { turnId: turn.id });
       }
     } finally {
@@ -1226,20 +1270,46 @@ export async function stopPersistentMind({ waitForTurn = false } = {}) {
   return { success: true };
 }
 
-export async function enqueuePersistentMindMessage({ id = randomUUID(), text, images, createdAt = nowIso() } = {}) {
+export async function enqueuePersistentMindMessage({
+  id = randomUUID(),
+  text,
+  images,
+  thinkingPresetId,
+  createdAt = nowIso(),
+} = {}) {
   const messageId = typeof id === 'string' ? id.trim().slice(0, 200) : '';
   const messageText = normalizeMessageText(text);
   const attachmentIds = normalizeRequestedAttachmentIds(images);
+  const presetId = typeof thinkingPresetId === 'string'
+    ? thinkingPresetId.trim().slice(0, PERSISTENT_MIND_THINKING_PRESET_LIMITS.ID_MAX)
+    : '';
   if (!messageId || attachmentIds === null || (!messageText && attachmentIds.length === 0)) {
     return attachmentFailure('Message id and text or at least one image are required', { code: 'VALIDATION_ERROR' });
   }
-  if (attachmentIds.length > 0) {
+  if (presetId || attachmentIds.length > 0) {
     const root = await loadState();
     const profile = normalizePersistentMindProfile(root.config?.persistentMindProfile);
-    const provider = profile.providerId ? await getProviderById(profile.providerId) : null;
-    const imageCapability = await resolvePersistentMindImageCapability({ provider, model: profile.model });
-    if (!imageCapabilityAllowsAttempt(imageCapability, provider)) {
-      return attachmentFailure(imageCapability.reason, { code: 'IMAGE_CAPABILITY_UNSUPPORTED', status: 422 });
+    // Admission reads the saved preset list only — a lookup, never a provider
+    // call, model pull, or generation. Selecting a model must stay free.
+    const preset = presetId
+      ? findPersistentMindThinkingPreset(root.config?.persistentMindThinkingPresets, presetId)
+      : null;
+    if (presetId && !preset) {
+      return attachmentFailure(`Temporary thinking preset "${presetId}" is not available`, {
+        code: 'THINKING_PRESET_UNAVAILABLE',
+        status: 422,
+      });
+    }
+    if (attachmentIds.length > 0) {
+      // Images are checked against the route this message will actually take,
+      // so a text-only alternate cannot accept an image it can never read.
+      const routeProviderId = preset ? preset.providerId : profile.providerId;
+      const routeModel = preset ? preset.model : profile.model;
+      const provider = routeProviderId ? await getProviderById(routeProviderId) : null;
+      const imageCapability = await resolvePersistentMindImageCapability({ provider, model: routeModel });
+      if (!imageCapabilityAllowsAttempt(imageCapability, provider)) {
+        return attachmentFailure(imageCapability.reason, { code: 'IMAGE_CAPABILITY_UNSUPPORTED', status: 422 });
+      }
     }
   }
   const messageCreatedAt = typeof createdAt === 'string' && Number.isFinite(Date.parse(createdAt))
@@ -1262,6 +1332,7 @@ export async function enqueuePersistentMindMessage({ id = randomUUID(), text, im
     const requestedFingerprint = persistentMindMessageFingerprint({
       text: messageText,
       images: attachmentIds,
+      thinkingPresetId: presetId,
     });
     const recentFingerprint = mind.recentMessageFingerprints.find((entry) => entry.id === messageId)?.fingerprint;
     const existingImageIds = existingMessage
@@ -1295,6 +1366,15 @@ export async function enqueuePersistentMindMessage({ id = randomUUID(), text, im
           }),
         };
       }
+      if (existingMessage && (existingMessage.thinkingPresetId || '') !== presetId) {
+        return {
+          mind,
+          value: attachmentFailure('A retry must use the same Persistent Mind thinking preset', {
+            code: 'IDEMPOTENCY_CONFLICT',
+            status: 409,
+          }),
+        };
+      }
       if (!sameAttachmentIds(existingImageIds, attachmentIds)) {
         return {
           mind,
@@ -1317,6 +1397,7 @@ export async function enqueuePersistentMindMessage({ id = randomUUID(), text, im
             text: messageText,
             createdAt: messageCreatedAt,
             attachments: resolved.attachments,
+            thinkingPresetId: presetId,
           }),
         },
       };
@@ -1364,6 +1445,7 @@ export async function enqueuePersistentMindMessage({ id = randomUUID(), text, im
       text: messageText,
       createdAt: messageCreatedAt,
       attachments: resolved.attachments,
+      thinkingPresetId: presetId,
     });
     return {
       mind: {
@@ -1389,6 +1471,7 @@ export async function enqueuePersistentMindMessage({ id = randomUUID(), text, im
         messageId,
         displayText: acceptedMessage.text,
         textChars: acceptedMessage.text.length,
+        thinkingPresetId: acceptedMessage.thinkingPresetId || null,
         imageCount: Array.isArray(acceptedMessage.images) ? acceptedMessage.images.length : 0,
         images: Array.isArray(acceptedMessage.images)
           ? acceptedMessage.images.map(normalizePersistentMindMessageImage).filter(Boolean)

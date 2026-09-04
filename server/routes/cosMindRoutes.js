@@ -19,6 +19,10 @@ import {
   parsePersistentMindCursor,
 } from '../lib/persistentMindTrajectory.js';
 import { normalizePersistentMindProfile } from '../lib/persistentMindProfile.js';
+import {
+  normalizePersistentMindThinkingPresets,
+  persistentMindThinkingPresetSchema,
+} from '../lib/persistentMindThinkingPresets.js';
 import { normalizePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
 import { publicPersistentMindState } from '../lib/persistentMindPublic.js';
 import { validateRequest } from '../lib/validation.js';
@@ -77,6 +81,9 @@ const messageSchema = z.object({
   id: idempotencyId,
   text: messageText,
   images: z.array(imageReference).max(PERSISTENT_MIND_LIMITS.MAX_MESSAGE_IMAGES).optional(),
+  // "Send with another model": one saved preset, for this message's single turn
+  // only. Absent means the mind's unchanged default route.
+  thinkingPresetId: persistentMindThinkingPresetSchema.shape.id.optional(),
 }).strict().superRefine((value, ctx) => {
   const images = Array.isArray(value.images) ? value.images : [];
   const ids = images.map((image) => typeof image === 'string' ? image : image.attachmentId);
@@ -181,6 +188,7 @@ router.get('/mind', asyncHandler(async (req, res) => {
       thinkingInterface: profile.thinkingInterface,
       wakeIntervalMinutes: profile.wakeIntervalMinutes,
     },
+    thinkingPresets: normalizePersistentMindThinkingPresets(root.config?.persistentMindThinkingPresets),
     capabilities,
     harness: persistentMindHarnessInfo(provider),
     imageCapability,

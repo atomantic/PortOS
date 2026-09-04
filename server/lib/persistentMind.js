@@ -11,8 +11,9 @@ import { PERSISTENT_MIND_ID } from './persistentMindTrajectory.js';
 import { MAX_SCREENSHOT_BYTES } from './uploadLimits.js';
 import { sanitizeFilename } from './mimeTypes.js';
 import { isSafeFilename } from './pathSafety.js';
+import { asPersistentMindThinkingPresetId } from './persistentMindThinkingPresets.js';
 
-export const PERSISTENT_MIND_SCHEMA_VERSION = 5;
+export const PERSISTENT_MIND_SCHEMA_VERSION = 6;
 
 export const PERSISTENT_MIND_IMAGE_EXTENSIONS = Object.freeze(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
 export const PERSISTENT_MIND_IMAGE_MIME_TYPES = Object.freeze({
@@ -173,17 +174,27 @@ export function normalizePersistentMindMessageImage(value) {
   };
 }
 
-/** Hash the bounded message content used to validate retries after completion. */
+/**
+ * Hash the bounded message content used to validate retries after completion.
+ *
+ * A temporary thinking-session selection is part of the content: retrying the
+ * same text on a different (possibly account-billed) model is a different
+ * request, not the same one. The key is omitted entirely when no override was
+ * chosen so fingerprints recorded before temporary sessions existed still match
+ * byte-for-byte, and an in-flight idempotent retry survives the upgrade.
+ */
 export function persistentMindMessageFingerprint(value) {
   const images = Array.isArray(value?.images)
     ? value.images.map((image) => (typeof image === 'string' ? image : image?.attachmentId))
       .map(asAttachmentId)
       .filter(Boolean)
     : [];
+  const thinkingPresetId = asPersistentMindThinkingPresetId(value?.thinkingPresetId);
   return createHash('sha256')
     .update(JSON.stringify({
       text: asBoundedString(value?.text, PERSISTENT_MIND_LIMITS.MAX_MESSAGE_CHARS),
       images,
+      ...(thinkingPresetId ? { thinkingPresetId } : {}),
     }))
     .digest('hex');
 }
@@ -217,10 +228,15 @@ const sanitizeMessage = (value) => {
     if (images.length >= PERSISTENT_MIND_LIMITS.MAX_MESSAGE_IMAGES) break;
   }
   if (!id || (!text && images.length === 0)) return null;
+  const thinkingPresetId = asPersistentMindThinkingPresetId(value?.thinkingPresetId);
   return {
     id,
     text,
     ...(images.length > 0 ? { images } : {}),
+    // Absent on every ordinary message. Kept on the durable queued/active record
+    // so a requeue or a restart replays the route the user actually chose,
+    // instead of quietly answering on the home profile.
+    ...(thinkingPresetId ? { thinkingPresetId } : {}),
     createdAt: asIso(value?.createdAt) || new Date(0).toISOString(),
   };
 };
@@ -358,9 +374,24 @@ export function normalizePersistentMindState(raw) {
   if (!started && activeTurn) {
     if (activeTurn.wake.kind === 'message') {
       const message = activeTurn.wake.message;
-      if (!seenQueued.has(message.id) && !recentMessageIds.includes(message.id)) {
-        queuedMessages.unshift(message);
-        if (queuedMessages.length > PERSISTENT_MIND_LIMITS.MAX_QUEUED_MESSAGES) queuedMessages.pop();
+      if (!recentMessageIds.includes(message.id)) {
+        if (message.thinkingPresetId) {
+          // A temporary session may already have spent a billed call before the
+          // process stopped, and nothing on disk can say whether it did.
+          // Recovering it as queued work would silently repeat that spend on the
+          // next boot, so it is recorded as consumed and left for the user to
+          // resend deliberately.
+          const queuedIndex = queuedMessages.findIndex((queued) => queued.id === message.id);
+          if (queuedIndex >= 0) queuedMessages.splice(queuedIndex, 1);
+          recentMessageIds.push(message.id);
+          recentMessageFingerprints.push({
+            id: message.id,
+            fingerprint: persistentMindMessageFingerprint(message),
+          });
+        } else if (!seenQueued.has(message.id)) {
+          queuedMessages.unshift(message);
+          if (queuedMessages.length > PERSISTENT_MIND_LIMITS.MAX_QUEUED_MESSAGES) queuedMessages.pop();
+        }
       }
     } else if (!selfWake) {
       selfWake = activeTurn.wake;
@@ -462,6 +493,41 @@ export function takeNextPersistentMindWake(raw, now = Date.now()) {
   const dueAt = state.selfWake.notBefore ? Date.parse(state.selfWake.notBefore) : now;
   if (Number.isFinite(dueAt) && dueAt > now) return { state, wake: null, dueAt };
   return { state: { ...state, selfWake: null }, wake: state.selfWake, dueAt: now };
+}
+
+/**
+ * Does abandoning this wake risk repeating work the user may already be billed for?
+ *
+ * Only an explicitly selected temporary thinking session does: it is the one
+ * route the user opted into per-message, and it may sit on an account-backed
+ * provider. The home profile is the mind's ordinary heartbeat, so a self-wake
+ * or an ordinary message still requeues and retries as before.
+ */
+export function persistentMindWakeConsumesAttempt(wake) {
+  return wake?.kind === 'message' && Boolean(wake.message?.thinkingPresetId);
+}
+
+/**
+ * Retire a wake WITHOUT requeueing it, recording its id and fingerprint so an
+ * idempotent client retry reads as a completed duplicate rather than as new
+ * work. Resuming a temporary session is then an explicit user decision (a fresh
+ * message id), never an automatic replay.
+ */
+export function holdPersistentMindWake(raw, wake) {
+  const state = normalizePersistentMindState(raw);
+  const sanitized = sanitizeWake(wake);
+  if (sanitized?.kind !== 'message') return state;
+  const { id } = sanitized.message;
+  return {
+    ...state,
+    queuedMessages: state.queuedMessages.filter((message) => message.id !== id),
+    recentMessageIds: [...state.recentMessageIds.filter((entry) => entry !== id), id]
+      .slice(-PERSISTENT_MIND_LIMITS.MAX_RECENT_MESSAGE_IDS),
+    recentMessageFingerprints: [
+      ...state.recentMessageFingerprints.filter((entry) => entry.id !== id),
+      { id, fingerprint: persistentMindMessageFingerprint(sanitized.message) },
+    ].slice(-PERSISTENT_MIND_LIMITS.MAX_RECENT_MESSAGE_IDS),
+  };
 }
 
 export function requeuePersistentMindWake(raw, wake) {

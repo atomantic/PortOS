@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   PERSISTENT_MIND_LIMITS,
   createDefaultPersistentMindState,
+  holdPersistentMindWake,
+  persistentMindMessageFingerprint,
+  persistentMindWakeConsumesAttempt,
   nextPersistentMindWakeAt,
   normalizePersistentMindState,
   persistentMindBackoffMs,
@@ -266,5 +269,67 @@ describe('persistent mind state', () => {
     });
     expect(Object.keys(smuggled.callHistory[0]).sort()).toEqual(['at', 'reason', 'source']);
     expect(normalizePersistentMindState({ callHistory: [{ reason: 'no timestamp' }, { at: 'not-a-date' }] }).callHistory).toEqual([]);
+  });
+
+  it('keeps a message-level temporary thinking session durable and out of the default route', () => {
+    const message = { id: 'message-1', text: 'Try the deep model.', thinkingPresetId: 'deep', createdAt: iso(1) };
+    const state = normalizePersistentMindState({ enabled: true, started: true, queuedMessages: [message] });
+    expect(state.queuedMessages[0].thinkingPresetId).toBe('deep');
+
+    // Hand-edited or downgraded state cannot smuggle in an unusable selection.
+    expect(normalizePersistentMindState({
+      enabled: true, started: true, queuedMessages: [{ ...message, thinkingPresetId: '../escape' }],
+    }).queuedMessages[0].thinkingPresetId).toBeUndefined();
+
+    // The selection is content: the same text on another model is a different
+    // request, but a message without one must hash exactly as it always did.
+    expect(persistentMindMessageFingerprint(message))
+      .not.toBe(persistentMindMessageFingerprint({ ...message, thinkingPresetId: 'fast' }));
+    expect(persistentMindMessageFingerprint({ id: 'message-1', text: 'Try the deep model.' }))
+      .toBe(persistentMindMessageFingerprint({ id: 'message-1', text: 'Try the deep model.', thinkingPresetId: '' }));
+  });
+
+  it('never automatically replays a temporary session whose provider span may already have opened', () => {
+    const temporary = { kind: 'message', message: { id: 'paid-1', text: 'Deep pass please.', thinkingPresetId: 'deep', createdAt: iso(1) } };
+    const ordinary = { kind: 'message', message: { id: 'plain-1', text: 'Ordinary.', createdAt: iso(1) } };
+    expect(persistentMindWakeConsumesAttempt(temporary)).toBe(true);
+    expect(persistentMindWakeConsumesAttempt(ordinary)).toBe(false);
+    expect(persistentMindWakeConsumesAttempt({ kind: 'self', id: 'wake-1' })).toBe(false);
+
+    const base = { enabled: true, started: true };
+    // An ordinary interrupted message still retries on its own.
+    expect(requeuePersistentMindWake(base, ordinary).queuedMessages.map((m) => m.id)).toEqual(['plain-1']);
+
+    const held = holdPersistentMindWake(base, temporary);
+    expect(held.queuedMessages).toEqual([]);
+    expect(held.recentMessageIds).toEqual(['paid-1']);
+    expect(held.recentMessageFingerprints).toEqual([
+      { id: 'paid-1', fingerprint: persistentMindMessageFingerprint(temporary.message) },
+    ]);
+    // The recorded fingerprint is the one an idempotent same-id retry computes,
+    // so the retry reads as a completed duplicate instead of new paid work.
+    expect(held.recentMessageFingerprints[0].fingerprint)
+      .not.toBe(persistentMindMessageFingerprint({ ...temporary.message, thinkingPresetId: 'fast' }));
+  });
+
+  it('retires, rather than requeues, a temporary session that a restart found mid-turn', () => {
+    const message = { id: 'paid-1', text: 'Deep pass please.', thinkingPresetId: 'deep', createdAt: iso(1) };
+    const recovered = normalizePersistentMindState({
+      enabled: true,
+      started: false,
+      activeTurn: { id: 'mind-turn-1', wake: { kind: 'message', message }, startedAt: iso(1) },
+    });
+    expect(recovered.activeTurn).toBeNull();
+    expect(recovered.queuedMessages).toEqual([]);
+    expect(recovered.recentMessageIds).toEqual(['paid-1']);
+
+    // An ordinary message keeps its free, automatic restart recovery.
+    const ordinary = normalizePersistentMindState({
+      enabled: true,
+      started: false,
+      activeTurn: { id: 'mind-turn-2', wake: { kind: 'message', message: { id: 'plain-1', text: 'Ordinary.', createdAt: iso(1) } }, startedAt: iso(1) },
+    });
+    expect(ordinary.queuedMessages.map((item) => item.id)).toEqual(['plain-1']);
+    expect(ordinary.recentMessageIds).toEqual([]);
   });
 });
