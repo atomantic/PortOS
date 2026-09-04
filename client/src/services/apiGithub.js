@@ -4,6 +4,7 @@ import { request } from './apiCore.js';
 // `options` lets a caller suppress request()'s auto-toast with `{ silent: true }`
 // when it already renders its own error UI.
 export const getGitHubRepos = (options = {}) => request('/github/repos', options);
+export const getGitHubStatus = (options = {}) => request('/github/status', options);
 export const syncGitHubRepos = (options = {}) => request('/github/repos/sync', { method: 'POST', ...options });
 export const updateGitHubRepo = (fullName, data, options = {}) =>
   request(`/github/repos/${encodeURIComponent(fullName)}`, { method: 'PUT', body: JSON.stringify(data), ...options });

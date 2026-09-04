@@ -1,7 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
+import { Link } from 'react-router';
 import toast from '../components/ui/Toast';
 import {
   getGitHubRepos,
+  getGitHubStatus,
   syncGitHubRepos,
   updateGitHubRepo,
   getGitHubSecrets,
@@ -16,6 +18,15 @@ import Modal from '../components/ui/Modal';
 import { FormField } from '../components/ui/FormField';
 
 const FILTERS = ['all', 'npm', 'secrets', 'archived'];
+const GITHUB_LOGIN_COMMAND = 'gh auth login --hostname github.com --web --clipboard';
+const GITHUB_SWITCH_COMMAND = 'gh auth switch --hostname github.com';
+const UNAVAILABLE_AUTH_STATUS = Object.freeze({
+  authenticated: false,
+  status: 'unavailable',
+  login: null,
+  remedy: 'PortOS could not check GitHub authentication. Retry before syncing or changing repositories.',
+  githubUser: null,
+});
 
 export default function GitHub() {
   const [repos, setRepos] = useState({});
@@ -23,6 +34,8 @@ export default function GitHub() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState(null);
+  const [repoListTruncated, setRepoListTruncated] = useState(false);
+  const [authStatus, setAuthStatus] = useState(null);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
   const [sort, setSort] = useState('recent'); // 'recent' | 'alpha'
@@ -41,12 +54,15 @@ export default function GitHub() {
 
   const loadData = async () => {
     setLoading(true);
-    const [reposData, secretsData] = await Promise.all([
-      getGitHubRepos().catch(() => ({})),
-      getGitHubSecrets().catch(() => ({}))
+    const [reposData, secretsData, statusData] = await Promise.all([
+      getGitHubRepos({ silent: true }).catch(() => ({})),
+      getGitHubSecrets({ silent: true }).catch(() => ({})),
+      getGitHubStatus({ silent: true }).catch(() => UNAVAILABLE_AUTH_STATUS)
     ]);
     setRepos(reposData || {});
     setSecrets(secretsData || {});
+    setAuthStatus(statusData);
+    setLastSync(statusData?.lastRepoSync || null);
     setLoading(false);
   };
 
@@ -59,7 +75,13 @@ export default function GitHub() {
     if (result) {
       setRepos(result.repos || {});
       setLastSync(result.lastRepoSync);
-      toast.success(`Synced ${Object.keys(result.repos || {}).length} repos`);
+      setAuthStatus(prev => prev ? { ...prev, githubUser: result.githubUser } : prev);
+      setRepoListTruncated(result.truncated === true);
+      if (result.truncated) {
+        toast.warning(`Loaded the first ${Object.keys(result.repos || {}).length} repositories. Narrower or paginated sync is not available yet.`);
+      } else {
+        toast.success(`Synced ${Object.keys(result.repos || {}).length} repos`);
+      }
     }
     setSyncing(false);
   };
@@ -158,6 +180,20 @@ export default function GitHub() {
   }, [repos, search, filter, sort]);
 
   const secretEntries = Object.entries(secrets);
+  const authStatusUnavailable = ['unavailable', 'unreachable', 'error'].includes(authStatus?.status);
+  const authStatusNotInstalled = authStatus?.status === 'not-installed';
+  const environmentCredential = authStatus?.credentialSource === 'env';
+  const cachedAccountMatches = authStatus?.authenticated === true
+    && typeof authStatus.login === 'string'
+    && typeof authStatus.githubUser === 'string'
+    && authStatus.login.toLowerCase() === authStatus.githubUser.toLowerCase();
+  const authHeading = authStatusUnavailable
+    ? 'GitHub status unavailable'
+    : authStatusNotInstalled
+      ? 'GitHub CLI required'
+      : environmentCredential
+        ? 'GitHub environment credential rejected'
+        : 'GitHub sign-in required';
 
   if (loading) {
     return <PageSkeleton label="Loading GitHub repos" padded titleWidthClass="w-44" showAction={false} cards={3} />;
@@ -166,6 +202,46 @@ export default function GitHub() {
   return (
     <div className="p-4 sm:p-6">
       <h1 className="text-xl sm:text-2xl font-bold text-white mb-6">GitHub Repos</h1>
+
+      {!authStatus?.authenticated && (
+        <section className="mb-6 rounded-lg border border-port-warning/30 bg-port-warning/10 p-4" aria-label="GitHub account">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="font-semibold text-white">{authHeading}</h2>
+              {!authStatusUnavailable && !authStatusNotInstalled && !environmentCredential && (
+                <p className="mt-1 text-sm text-gray-300">
+                  Sign in through PortOS Shell, complete GitHub's browser prompt, then return here and reload.
+                </p>
+              )}
+              {authStatus?.remedy && (
+                <p className="mt-1 text-xs text-gray-500">{authStatus.remedy}</p>
+              )}
+              {authStatus?.githubUser && !cachedAccountMatches && (
+                <p className="mt-2 text-xs text-port-warning">
+                  The repositories below are cached from @{authStatus.githubUser}. Sign in and sync to replace them; repository actions stay disabled.
+                </p>
+              )}
+            </div>
+            {!authStatusUnavailable && !environmentCredential && authStatus?.status !== 'not-installed' && (
+              <Link
+                to={`/shell?cmd=${encodeURIComponent(GITHUB_LOGIN_COMMAND)}`}
+                className="inline-flex min-h-[44px] shrink-0 items-center justify-center rounded bg-port-accent px-4 py-2 text-sm font-medium text-white hover:bg-port-accent/80 sm:min-h-0"
+              >
+                Sign in with GitHub
+              </Link>
+            )}
+            {authStatusUnavailable && (
+              <button
+                type="button"
+                onClick={loadData}
+                className="inline-flex min-h-[44px] shrink-0 items-center justify-center rounded bg-port-accent px-4 py-2 text-sm font-medium text-white hover:bg-port-accent/80 sm:min-h-0"
+              >
+                Retry
+              </button>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* Archive Confirmation Modal */}
       <Modal
@@ -209,21 +285,71 @@ export default function GitHub() {
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6 items-start">
         {/* Repo List */}
         <div className="bg-port-card rounded-lg border border-port-border p-4 sm:p-6 min-w-0">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+          <div className="flex flex-col gap-3 mb-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
               <h2 className="text-lg font-bold text-white">Repositories</h2>
               {lastSync && (
                 <span className="text-xs text-gray-500">Last sync: {timeAgo(lastSync)}</span>
               )}
             </div>
-            <button
-              onClick={handleSync}
-              disabled={syncing}
-              className="px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded text-sm disabled:opacity-50"
-            >
-              {syncing ? 'Syncing...' : 'Sync Repos'}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              {authStatus?.authenticated && environmentCredential && (
+                <span className="inline-flex min-h-[36px] min-w-0 max-w-full items-center gap-2 rounded border border-port-border bg-port-bg px-3 text-xs text-gray-300">
+                  <span className="h-2 w-2 rounded-full bg-port-success" aria-hidden="true" />
+                  <span className="max-w-28 truncate font-mono text-white sm:max-w-40" title={`@${authStatus.login}`}>
+                    @{authStatus.login}
+                  </span>
+                  <span className="hidden text-gray-500 sm:inline">via environment</span>
+                </span>
+              )}
+              {authStatus?.authenticated && !environmentCredential && (
+                <details className="relative min-w-0 max-w-full">
+                  <summary
+                    aria-label={`GitHub account @${authStatus.login}`}
+                    className="inline-flex min-h-[36px] min-w-0 max-w-full cursor-pointer list-none items-center gap-2 rounded border border-port-border bg-port-bg px-3 text-xs text-gray-300 hover:text-white [&::-webkit-details-marker]:hidden"
+                  >
+                    <span className="h-2 w-2 rounded-full bg-port-success" aria-hidden="true" />
+                    <span className="max-w-28 truncate font-mono text-white sm:max-w-40" title={`@${authStatus.login}`}>
+                      @{authStatus.login}
+                    </span>
+                    <span aria-hidden="true">&#9662;</span>
+                  </summary>
+                  <div className="absolute left-0 z-20 mt-2 w-52 rounded-lg border border-port-border bg-port-card p-1 shadow-xl sm:left-auto sm:right-0">
+                    <Link
+                      to={`/shell?cmd=${encodeURIComponent(GITHUB_LOGIN_COMMAND)}`}
+                      className="flex min-h-[44px] items-center rounded px-3 py-2 text-sm text-gray-300 hover:bg-port-border/50 hover:text-white"
+                    >
+                      Add GitHub account
+                    </Link>
+                    <Link
+                      to={`/shell?cmd=${encodeURIComponent(GITHUB_SWITCH_COMMAND)}`}
+                      className="flex min-h-[44px] items-center rounded px-3 py-2 text-sm text-gray-300 hover:bg-port-border/50 hover:text-white"
+                    >
+                      Switch GitHub account
+                    </Link>
+                  </div>
+                </details>
+              )}
+              <button
+                onClick={handleSync}
+                disabled={syncing || authStatus?.authenticated !== true}
+                className="rounded bg-port-accent px-4 py-2 text-sm text-white hover:bg-port-accent/80 disabled:opacity-50"
+              >
+                {syncing ? 'Syncing...' : 'Sync Repos'}
+              </button>
+            </div>
           </div>
+
+          {authStatus?.authenticated && environmentCredential && (
+            <p className="mb-4 text-xs text-gray-500">
+              Environment credentials override stored gh accounts. Update or remove GH_TOKEN/GITHUB_TOKEN to change accounts.
+            </p>
+          )}
+          {authStatus?.authenticated && authStatus?.githubUser && !cachedAccountMatches && (
+            <p className="mb-4 text-xs text-port-warning">
+              The repositories below are cached from @{authStatus.githubUser}. Their actions are disabled until you sync @{authStatus.login}.
+            </p>
+          )}
 
           {/* Search + Filter */}
           <div className="flex flex-col sm:flex-row gap-2 mb-4">
@@ -264,6 +390,11 @@ export default function GitHub() {
             {repoList.length} repo{repoList.length !== 1 ? 's' : ''}
             {filter !== 'all' ? ` (filtered)` : ''}
           </p>
+          {repoListTruncated && (
+            <p className="mb-3 text-xs text-port-warning" role="status">
+              GitHub returned the 200-repository limit. This list may be incomplete; cached entries were preserved.
+            </p>
+          )}
 
           {Object.keys(repos).length === 0 ? (
             <div className="text-center py-8">
@@ -331,6 +462,7 @@ export default function GitHub() {
                           type="checkbox"
                           checked={!!repo.flags?.npmProject}
                           onChange={() => handleToggleNpm(repo.fullName, repo.flags?.npmProject)}
+                          disabled={!cachedAccountMatches}
                           className="w-4 h-4 rounded border-gray-600 bg-port-bg text-port-accent focus:ring-port-accent"
                         />
                         <span className="text-xs text-gray-400">NPM</span>
@@ -338,7 +470,7 @@ export default function GitHub() {
                     )}
                     <button
                       onClick={() => handleArchiveClick(repo.fullName, repo.isArchived)}
-                      disabled={archiving === repo.fullName}
+                      disabled={archiving === repo.fullName || !cachedAccountMatches}
                       className={`px-2 py-1 text-xs rounded ${
                         repo.isArchived
                           ? 'bg-port-success/20 text-port-success hover:bg-port-success/30 border border-port-success/30'
@@ -376,7 +508,7 @@ export default function GitHub() {
                     </div>
                     <button
                       onClick={() => handleSyncSecret(name)}
-                      disabled={syncingSecret === name || !meta.hasValue}
+                      disabled={syncingSecret === name || !meta.hasValue || !cachedAccountMatches}
                       className="self-start px-3 py-1 text-sm bg-port-accent hover:bg-port-accent/80 text-white rounded disabled:opacity-50"
                     >
                       {syncingSecret === name ? 'Syncing...' : 'Sync to Repos'}
@@ -407,7 +539,7 @@ export default function GitHub() {
               </FormField>
               <button
                 onClick={handleSaveSecret}
-                disabled={savingSecret || !newSecretName.trim() || !newSecretValue}
+                disabled={savingSecret || !newSecretName.trim() || !newSecretValue || !cachedAccountMatches}
                 className="px-4 py-2 bg-port-success hover:bg-port-success/80 text-white rounded text-sm disabled:opacity-50"
               >
                 {savingSecret ? 'Saving...' : 'Save Secret'}
@@ -422,12 +554,12 @@ export default function GitHub() {
           <div className="bg-port-card rounded-lg border border-port-border p-4 sm:p-6">
             <h2 className="text-base font-bold text-white mb-3">How it works</h2>
             <div className="space-y-2 text-xs sm:text-sm text-gray-300">
-              <p>1. Click "Sync Repos" to fetch your GitHub repos via <code>gh repo list</code></p>
+              <p>1. Sign in above, then click "Sync Repos" to fetch repositories owned by the active GitHub account</p>
               <p>2. Toggle "NPM" on repos that publish to npm &mdash; this auto-adds NPM_TOKEN to their managed secrets</p>
               <p>3. Add secrets (like NPM_TOKEN) with their values &mdash; values are stored locally, never in the browser</p>
               <p>4. Click "Sync to Repos" to push secrets to all flagged repos via <code>gh secret set</code></p>
               <p className="text-gray-500 mt-2">
-                Requires <code>gh</code> CLI authenticated with repo and admin:org scope.
+                Uses the account authenticated in the <code>gh</code> CLI. Repository access is required to sync private repos and secrets.
               </p>
             </div>
           </div>

@@ -8,6 +8,8 @@ const mock = vi.hoisted(() => ({
   spotifyStatus: { hasCredentials: false, hasTokens: false },
   stackerAccounts: [],
   openclawConfig: {},
+  githubAuth: { authenticated: false, status: 'not-authenticated' },
+  getGitHubAuthStatus: vi.fn(),
 }));
 
 vi.mock('./settings.js', () => ({
@@ -34,6 +36,10 @@ vi.mock('./stackerNews.js', () => ({
   listAccounts: vi.fn(async () => mock.stackerAccounts),
 }));
 
+vi.mock('./github.js', () => ({
+  getGitHubAuthStatus: mock.getGitHubAuthStatus,
+}));
+
 vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -57,6 +63,8 @@ describe('credentialInventory', () => {
     mock.spotifyStatus = { hasCredentials: false, hasTokens: false };
     mock.stackerAccounts = [];
     mock.openclawConfig = {};
+    mock.githubAuth = { authenticated: false, status: 'not-authenticated' };
+    mock.getGitHubAuthStatus.mockImplementation(async () => mock.githubAuth);
   });
 
   it('reports settings over env when both are set, without echoing the value', async () => {
@@ -100,6 +108,105 @@ describe('credentialInventory', () => {
     });
     expect(byId(credentials, 'huggingface')).toMatchObject({ configured: true, source: 'cli' });
     expect(JSON.stringify({ credentials })).not.toContain('hf_cliTokenMustNotLeak');
+  });
+
+  it('reports a usable GitHub CLI login as configured', async () => {
+    mock.githubAuth = { authenticated: true, status: 'ok', login: 'example-user' };
+    const { credentials } = await getCredentialInventory({
+      settings: {},
+      env: {},
+      envFile: new Map(),
+    });
+    expect(byId(credentials, 'github')).toMatchObject({ configured: true, source: 'cli' });
+    expect(JSON.stringify({ credentials })).not.toContain('example-user');
+  });
+
+  it('does not report a rejected GitHub environment token as configured', async () => {
+    mock.githubAuth = {
+      authenticated: false,
+      status: 'not-authenticated',
+      credentialSource: 'env',
+    };
+    const { credentials } = await getCredentialInventory({
+      settings: {},
+      env: { GH_TOKEN: 'fake-invalid-token' },
+      envFile: new Map(),
+    });
+
+    expect(byId(credentials, 'github')).toMatchObject({ configured: false, source: 'none' });
+  });
+
+  it('preserves the environment source after validating a working GitHub token', async () => {
+    mock.githubAuth = {
+      authenticated: true,
+      status: 'ok',
+      login: 'example-user',
+      credentialSource: 'env',
+    };
+    const { credentials } = await getCredentialInventory({
+      settings: {},
+      env: { GH_TOKEN: 'fake-valid-token' },
+      envFile: new Map(),
+    });
+
+    expect(byId(credentials, 'github')).toMatchObject({ configured: true, source: 'env' });
+    expect(mock.getGitHubAuthStatus).toHaveBeenCalledWith({ env: { GH_TOKEN: 'fake-valid-token' } });
+  });
+
+  it('reports the credential actually used when an unconsumed .env token exists', async () => {
+    mock.githubAuth = {
+      authenticated: true,
+      status: 'ok',
+      login: 'example-user',
+      credentialSource: 'cli',
+    };
+    const env = {};
+    const { credentials } = await getCredentialInventory({
+      settings: {},
+      env,
+      envFile: new Map([['GH_TOKEN', 'fake-unconsumed-token']]),
+    });
+
+    expect(byId(credentials, 'github')).toMatchObject({ configured: true, source: 'cli' });
+    expect(mock.getGitHubAuthStatus).toHaveBeenCalledWith({ env });
+  });
+
+  it('preserves known credential presence when GitHub verification is unavailable', async () => {
+    mock.githubAuth = {
+      authenticated: false,
+      status: 'unreachable',
+      credentialSource: 'env',
+    };
+    const { credentials } = await getCredentialInventory({
+      settings: {},
+      env: { GH_TOKEN: 'fake-present-token' },
+      envFile: new Map(),
+    });
+
+    expect(byId(credentials, 'github')).toMatchObject({
+      configured: true,
+      source: 'env',
+      verification: 'unavailable',
+    });
+  });
+
+  it('reports an unknown state instead of not configured when CLI verification fails', async () => {
+    mock.githubAuth = {
+      authenticated: false,
+      status: 'error',
+      credentialSource: 'cli',
+    };
+    const { credentials } = await getCredentialInventory({
+      settings: {},
+      env: {},
+      envFile: new Map(),
+    });
+
+    expect(byId(credentials, 'github')).toMatchObject({
+      configured: null,
+      source: 'none',
+      verification: 'unavailable',
+    });
   });
 
   it('names the instance feature that stays dark without a JIRA token', async () => {

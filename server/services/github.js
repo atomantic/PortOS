@@ -3,11 +3,19 @@ import { join } from 'path';
 import { atomicWrite, readJSONFile, PATHS, ensureDir, safeJSONParse } from '../lib/fileUtils.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { createMutex } from '../lib/asyncMutex.js';
 import { getSettings, updateSettings } from './settings.js';
 
 const DATA_DIR = PATHS.data;
 const REPOS_FILE = join(DATA_DIR, 'github-repos.json');
 const CONCURRENCY = 3;
+const GITHUB_HOST = 'github.com';
+const GITHUB_ENV_TOKEN_KEYS = ['GH_TOKEN', 'GITHUB_TOKEN'];
+const REPO_SYNC_LIMIT = 200;
+const SECRET_SYNC_TIMEOUT_MS = 30000;
+const queueDataWrite = createFileWriteQueue();
+const withGitHubMutation = createMutex();
 
 let cache = null;
 let cacheTimestamp = 0;
@@ -17,7 +25,7 @@ const defaultData = () => ({
   repos: {},
   secrets: {},
   lastRepoSync: null,
-  githubUser: 'atomantic'
+  githubUser: null
 });
 
 async function load() {
@@ -36,7 +44,37 @@ async function save(data) {
   cacheTimestamp = Date.now();
 }
 
+/** Test seam — drops the short-lived persisted-data cache. */
+export function __resetGitHubDataCache() {
+  cache = null;
+  cacheTimestamp = 0;
+}
+
 const DEFAULT_EXEC_GH_TIMEOUT_MS = 60000;
+const githubDotComEnv = (baseEnv = process.env) => ({ ...baseEnv, GH_HOST: GITHUB_HOST });
+const githubEnvironmentToken = (env = process.env) => (
+  GITHUB_ENV_TOKEN_KEYS.map((key) => env[key]).find((value) => typeof value === 'string' && value.trim())?.trim() || null
+);
+const githubCredentialSource = (env = process.env) => (
+  githubEnvironmentToken(env)
+    ? 'env'
+    : 'cli'
+);
+const githubPinnedEnv = (token, baseEnv = process.env) => {
+  const env = githubDotComEnv(baseEnv);
+  delete env.GITHUB_TOKEN;
+  env.GH_TOKEN = token;
+  return env;
+};
+
+const repoOwner = (fullName) => typeof fullName === 'string' ? fullName.split('/')[0] : null;
+const repoBelongsToAccount = (repo, login) => (
+  typeof login === 'string'
+  && repoOwner(repo?.fullName)?.toLowerCase() === login.toLowerCase()
+);
+const reposForAccount = (data, login = data.githubUser) => Object.fromEntries(
+  Object.entries(data.repos || {}).filter(([, repo]) => repoBelongsToAccount(repo, login))
+);
 
 /**
  * Execute a gh CLI command safely using spawn. `gh` hits the network, so a
@@ -49,6 +87,7 @@ const DEFAULT_EXEC_GH_TIMEOUT_MS = 60000;
  */
 export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = null, env = null, input = null } = {}) {
   return new Promise((resolve, reject) => {
+    const operation = 'gh command';
     const baseEnv = env || process.env;
     const child = spawn('gh', args, {
       shell: false,
@@ -61,8 +100,8 @@ export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = nul
       timedOut = true;
       // setTimeout callback boundary — guard so a kill() throw can't crash
       // the process (e.g. the child already exited between checks).
-      try { child.kill('SIGKILL'); } catch (err) { console.error(`❌ execGh: failed to kill timed-out 'gh ${args.join(' ')}': ${err.message}`); }
-      reject(new Error(`gh ${args.join(' ')} timed out after ${timeoutMs}ms`));
+      try { child.kill('SIGKILL'); } catch (err) { console.error(`❌ execGh: failed to kill timed-out ${operation}: ${err.message}`); }
+      reject(new Error(`${operation} timed out after ${timeoutMs}ms`));
     }, timeoutMs);
     child.stdout.on('data', (d) => { stdout += d.toString(); });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
@@ -70,7 +109,10 @@ export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = nul
       if (timedOut) return;
       clearTimeout(timer);
       if (code !== 0) {
-        reject(new Error(stderr.trim() || `gh exited with code ${code}`));
+        const error = new Error(stderr.trim() || `gh exited with code ${code}`);
+        error.ghExitCode = code;
+        error.ghStderr = stderr.trim();
+        reject(error);
       } else {
         resolve(stdout.trim());
       }
@@ -113,48 +155,85 @@ async function runWithConcurrency(tasks, limit) {
  * Sync repos from GitHub using gh CLI
  */
 export async function syncRepos() {
-  const data = await load();
-  const owner = data.githubUser || 'atomantic';
-  const raw = await execGh([
-    'repo', 'list', owner, '--limit', '200',
-    '--json', 'name,nameWithOwner,description,pushedAt,isArchived,isPrivate,isFork,parent,licenseInfo'
-  ]);
-  const remoteRepos = JSON.parse(raw);
+  return withGitHubMutation(async () => {
+    const auth = await getPinnedGitHubAuth();
+    if (!auth.authenticated || !auth.login) {
+      throw new ServerError(auth.remedy || 'Sign in to GitHub before syncing repositories.', {
+        status: 401,
+        code: 'GITHUB_NOT_AUTHENTICATED'
+      });
+    }
+    const owner = auth.login;
+    const raw = await execGh([
+      'repo', 'list', owner, '--limit', String(REPO_SYNC_LIMIT),
+      '--json', 'name,nameWithOwner,description,pushedAt,isArchived,isPrivate,isFork,parent,licenseInfo'
+    ], DEFAULT_EXEC_GH_TIMEOUT_MS, { env: auth.env });
+    const remoteRepos = JSON.parse(raw);
+    const { data, removed, listingMayBeTruncated } = await queueDataWrite(async () => {
+      const current = await load();
+      const remoteNames = new Set();
 
-  // Build set of remote repo names to detect deletions
-  const remoteNames = new Set();
+      for (const repo of remoteRepos) {
+        const fullName = repo.nameWithOwner;
+        remoteNames.add(fullName);
+        const existing = current.repos[fullName] || {};
+        current.repos[fullName] = {
+          name: repo.name,
+          fullName,
+          description: repo.description || '',
+          isArchived: repo.isArchived,
+          isPrivate: repo.isPrivate,
+          isFork: repo.isFork,
+          forkSource: repo.parent ? `${repo.parent.owner.login}/${repo.parent.name}` : null,
+          pushedAt: repo.pushedAt,
+          license: repo.licenseInfo?.name || null,
+          flags: existing.flags || {},
+          managedSecrets: existing.managedSecrets || [],
+          lastSecretSync: existing.lastSecretSync || null
+        };
+      }
 
-  for (const repo of remoteRepos) {
-    const fullName = repo.nameWithOwner;
-    remoteNames.add(fullName);
-    const existing = data.repos[fullName] || {};
-    data.repos[fullName] = {
-      name: repo.name,
-      fullName,
-      description: repo.description || '',
-      isArchived: repo.isArchived,
-      isPrivate: repo.isPrivate,
-      isFork: repo.isFork,
-      forkSource: repo.parent ? `${repo.parent.owner.login}/${repo.parent.name}` : null,
-      pushedAt: repo.pushedAt,
-      license: repo.licenseInfo?.name || null,
-      flags: existing.flags || {},
-      managedSecrets: existing.managedSecrets || [],
-      lastSecretSync: existing.lastSecretSync || null
+      const listingMayBeTruncated = remoteRepos.length >= REPO_SYNC_LIMIT;
+      const removed = listingMayBeTruncated
+        ? []
+        : Object.entries(current.repos)
+          .filter(([, repo]) => repoBelongsToAccount(repo, owner) && !remoteNames.has(repo.fullName))
+          .map(([fullName]) => fullName);
+      for (const fullName of removed) delete current.repos[fullName];
+
+      current.lastRepoSync = new Date().toISOString();
+      current.githubUser = owner;
+      await save(current);
+      return { data: current, removed, listingMayBeTruncated };
+    });
+    const removedMsg = removed.length ? `, removed ${removed.length} deleted` : '';
+    console.log(`🔄 Synced ${remoteRepos.length} repos from GitHub${removedMsg}`);
+    if (listingMayBeTruncated) {
+      console.log(`⚠️ GitHub repo list reached ${REPO_SYNC_LIMIT}; unmatched cached repos were preserved`);
+    }
+    return {
+      ...data,
+      repos: reposForAccount(data, owner),
+      truncated: listingMayBeTruncated,
     };
-  }
+  });
+}
 
-  // Remove repos that no longer exist on GitHub
-  const removed = Object.keys(data.repos).filter(name => !remoteNames.has(name));
-  for (const name of removed) {
-    delete data.repos[name];
+async function requireActiveCachedAccount(data) {
+  const auth = await getPinnedGitHubAuth();
+  if (!auth.authenticated || !auth.login) {
+    throw new ServerError(auth.remedy || 'Sign in to GitHub before changing repositories.', {
+      status: 401,
+      code: 'GITHUB_NOT_AUTHENTICATED'
+    });
   }
-
-  data.lastRepoSync = new Date().toISOString();
-  await save(data);
-  const removedMsg = removed.length ? `, removed ${removed.length} deleted` : '';
-  console.log(`🔄 Synced ${remoteRepos.length} repos from GitHub${removedMsg}`);
-  return data;
+  if (!data.githubUser || data.githubUser.toLowerCase() !== auth.login.toLowerCase()) {
+    throw new ServerError('The cached repositories belong to a different GitHub account. Sync repositories before making changes.', {
+      status: 409,
+      code: 'GITHUB_ACCOUNT_MISMATCH'
+    });
+  }
+  return auth;
 }
 
 /**
@@ -162,70 +241,84 @@ export async function syncRepos() {
  */
 export async function getRepos() {
   const data = await load();
-  return data.repos;
+  return reposForAccount(data);
 }
 
 /**
  * Update repo flags and managed secrets
  */
 export async function updateRepoFlags(fullName, updates) {
-  const data = await load();
-  const repo = data.repos[fullName];
-  if (!repo) throw new ServerError(`Repo not found: ${fullName}`, { status: 404, code: 'REPO_NOT_FOUND' });
-
-  if (updates.flags) {
-    repo.flags = { ...repo.flags, ...updates.flags };
-
-    // Auto-manage NPM_TOKEN based on npmProject flag
-    if (updates.flags.npmProject === true && !repo.managedSecrets.includes('NPM_TOKEN')) {
-      repo.managedSecrets.push('NPM_TOKEN');
-    } else if (updates.flags.npmProject === false) {
-      repo.managedSecrets = repo.managedSecrets.filter(s => s !== 'NPM_TOKEN');
+  return queueDataWrite(async () => {
+    const data = await load();
+    const repo = data.repos[fullName];
+    if (!repo || !repoBelongsToAccount(repo, data.githubUser)) {
+      throw new ServerError(`Repo not found: ${fullName}`, { status: 404, code: 'REPO_NOT_FOUND' });
     }
-  }
 
-  if (updates.managedSecrets) {
-    repo.managedSecrets = updates.managedSecrets;
-  }
+    if (updates.flags) {
+      repo.flags = { ...repo.flags, ...updates.flags };
 
-  await save(data);
-  return repo;
+      // Auto-manage NPM_TOKEN based on npmProject flag
+      if (updates.flags.npmProject === true && !repo.managedSecrets.includes('NPM_TOKEN')) {
+        repo.managedSecrets.push('NPM_TOKEN');
+      } else if (updates.flags.npmProject === false) {
+        repo.managedSecrets = repo.managedSecrets.filter(s => s !== 'NPM_TOKEN');
+      }
+    }
+
+    if (updates.managedSecrets) {
+      repo.managedSecrets = updates.managedSecrets;
+    }
+
+    await save(data);
+    return repo;
+  });
 }
 
 /**
  * Set a secret value and sync to all repos with it in managedSecrets
  */
 export async function setSecret(name, value) {
-  // Store value in settings.json (never returned to client)
-  const settings = await getSettings();
-  const secrets = settings.secrets || {};
-  secrets[name] = value;
-  await updateSettings({ secrets });
+  return withGitHubMutation(async () => {
+    const accountData = await load();
+    await requireActiveCachedAccount(accountData);
 
-  // Update metadata in github-repos.json
-  const data = await load();
-  data.secrets[name] = {
-    hasValue: true,
-    updatedAt: new Date().toISOString()
-  };
-  await save(data);
+    // Store value in settings.json (never returned to client)
+    const settings = await getSettings();
+    const secrets = settings.secrets || {};
+    secrets[name] = value;
+    await updateSettings({ secrets });
 
-  // Sync to repos
-  const result = await syncSecretToRepos(name);
-  return result;
+    // Update metadata in github-repos.json
+    await queueDataWrite(async () => {
+      const data = await load();
+      data.secrets[name] = {
+        hasValue: true,
+        updatedAt: new Date().toISOString()
+      };
+      await save(data);
+    });
+
+    return syncSecretToReposNow(name);
+  });
 }
 
 /**
  * Sync a secret to all repos that have it in managedSecrets
  */
 export async function syncSecretToRepos(name) {
+  return withGitHubMutation(() => syncSecretToReposNow(name));
+}
+
+async function syncSecretToReposNow(name) {
+  const data = await load();
+  const auth = await requireActiveCachedAccount(data);
   const settings = await getSettings();
   const value = settings.secrets?.[name];
   if (!value) throw new ServerError(`No value stored for secret: ${name}`, { status: 400, code: 'SECRET_NOT_CONFIGURED' });
 
-  const data = await load();
   const targetRepos = Object.values(data.repos).filter(
-    r => r.managedSecrets.includes(name) && !r.isArchived
+    r => repoBelongsToAccount(r, auth.login) && r.managedSecrets?.includes(name) && !r.isArchived
   );
 
   if (targetRepos.length === 0) {
@@ -238,7 +331,7 @@ export async function syncSecretToRepos(name) {
   const succeeded = new Set();
 
   const tasks = targetRepos.map(repo => async () => {
-    const result = await syncOneSecret(name, value, repo.fullName);
+    const result = await syncOneSecret(name, value, repo.fullName, auth.env);
     if (result.success) {
       synced++;
       succeeded.add(repo.fullName);
@@ -250,13 +343,16 @@ export async function syncSecretToRepos(name) {
 
   await runWithConcurrency(tasks, CONCURRENCY);
 
-  // Update last sync timestamp only on repos where sync succeeded
-  for (const fullName of succeeded) {
-    if (data.repos[fullName]) {
-      data.repos[fullName].lastSecretSync = new Date().toISOString();
+  await queueDataWrite(async () => {
+    const current = await load();
+    if (current.githubUser?.toLowerCase() !== auth.login.toLowerCase()) return;
+    for (const fullName of succeeded) {
+      if (current.repos[fullName]) {
+        current.repos[fullName].lastSecretSync = new Date().toISOString();
+      }
     }
-  }
-  await save(data);
+    await save(current);
+  });
 
   console.log(`🔑 Secret ${name} synced to ${synced} repos (${failed} failed)`);
   return { synced, failed, errors };
@@ -265,44 +361,43 @@ export async function syncSecretToRepos(name) {
 /**
  * Sync a single secret to a single repo via stdin pipe
  */
-function syncOneSecret(name, value, fullName) {
-  return new Promise((resolve) => {
-    const child = spawn('gh', ['secret', 'set', name, '--repo', fullName], {
-      shell: false
-    });
-    let stderr = '';
-    child.stderr.on('data', (d) => { stderr += d.toString(); });
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolve({ success: true });
-      } else {
-        resolve({ success: false, error: stderr.trim() || `exit code ${code}` });
-      }
-    });
-    child.on('error', (err) => {
-      resolve({ success: false, error: err.message });
-    });
-    child.stdin.write(value);
-    child.stdin.end();
-  });
+async function syncOneSecret(name, value, fullName, env) {
+  return execGh(
+    ['secret', 'set', name, '--repo', fullName],
+    SECRET_SYNC_TIMEOUT_MS,
+    { env, input: value },
+  ).then(
+    () => ({ success: true }),
+    (error) => ({ success: false, error: error.message }),
+  );
 }
 
 /**
  * Archive or unarchive a repo on GitHub
  */
 export async function setRepoArchived(fullName, archived) {
-  const cmd = archived ? 'archive' : 'unarchive';
-  await execGh(['repo', cmd, fullName, '--yes']);
+  return withGitHubMutation(async () => {
+    const data = await load();
+    if (!data.repos[fullName] || !repoBelongsToAccount(data.repos[fullName], data.githubUser)) {
+      throw new ServerError(`Repo not found: ${fullName}`, { status: 404, code: 'REPO_NOT_FOUND' });
+    }
+    const auth = await requireActiveCachedAccount(data);
+    const cmd = archived ? 'archive' : 'unarchive';
+    await execGh(['repo', cmd, fullName, '--yes'], DEFAULT_EXEC_GH_TIMEOUT_MS, { env: auth.env });
 
-  // Update local cache
-  const data = await load();
-  if (data.repos[fullName]) {
-    data.repos[fullName].isArchived = archived;
-    await save(data);
-  }
+    const updated = await queueDataWrite(async () => {
+      const current = await load();
+      if (!current.repos[fullName] || current.githubUser?.toLowerCase() !== auth.login.toLowerCase()) {
+        return { ...data.repos[fullName], isArchived: archived };
+      }
+      current.repos[fullName].isArchived = archived;
+      await save(current);
+      return current.repos[fullName];
+    });
 
-  console.log(`📦 ${archived ? 'Archived' : 'Unarchived'} ${fullName}`);
-  return data.repos[fullName] || { fullName, isArchived: archived };
+    console.log(`📦 ${archived ? 'Archived' : 'Unarchived'} ${fullName}`);
+    return updated;
+  });
 }
 
 /**
@@ -317,9 +412,11 @@ export async function getSecrets() {
  * Get sync status summary
  */
 export async function getStatus() {
-  const data = await load();
-  const repos = Object.values(data.repos);
+  const [data, auth] = await Promise.all([load(), getGitHubAuthStatus()]);
+  const repos = Object.values(reposForAccount(data));
   return {
+    ...auth,
+    githubUser: data.githubUser || null,
     lastRepoSync: data.lastRepoSync,
     totalRepos: repos.length,
     activeRepos: repos.filter(r => !r.isArchived).length,
@@ -497,6 +594,62 @@ export async function checkGhHealth({ force = false, timeoutMs = GH_PROBE_TIMEOU
   };
   ghHealthCache.set(key, { health, at: now });
   return health;
+}
+
+/**
+ * Resolve the account the GitHub CLI will actually use. A successful `api user`
+ * is stronger than merely finding a token: it proves the credential works and
+ * gives repo sync the owner it must query. The login is returned only to the
+ * local UI; the credential inventory reduces this to presence/source.
+ */
+export async function getGitHubAuthStatus({ env = process.env } = {}) {
+  const credentialSource = githubCredentialSource(env);
+  const attempt = await execGh(
+    ['api', 'user', '--hostname', GITHUB_HOST, '--jq', '.login'],
+    GH_PROBE_TIMEOUT_MS,
+    { env: githubDotComEnv(env) },
+  )
+    .then((login) => ({ login, error: null }))
+    .catch((error) => ({ login: null, error }));
+  if (attempt.login) {
+    return { authenticated: true, status: 'ok', login: attempt.login, credentialSource, remedy: null };
+  }
+
+  const classified = attempt.error?.ghExitCode !== undefined
+    ? classifyGhProbe({ code: attempt.error.ghExitCode, stderr: attempt.error.ghStderr })
+    : attempt.error?.code
+      ? classifyGhProbe({ spawnError: attempt.error })
+      : classifyGhProbe({ code: null, stderr: attempt.error?.message });
+  const status = classified.status === 'ok' ? 'error' : classified.status;
+  return {
+    authenticated: false,
+    status,
+    login: null,
+    credentialSource,
+    remedy: credentialSource === 'env' && status === 'not-authenticated'
+      ? 'GH_TOKEN or GITHUB_TOKEN is set but GitHub rejected it. Update or remove that environment credential before using gh auth login.'
+      : ghRemedy(status),
+  };
+}
+
+async function getPinnedGitHubAuth() {
+  const baseEnv = { ...process.env };
+  const environmentToken = githubEnvironmentToken(baseEnv);
+  const status = await getGitHubAuthStatus({
+    env: environmentToken ? githubPinnedEnv(environmentToken, baseEnv) : baseEnv,
+  });
+  if (!status.authenticated || !status.login) return status;
+
+  const token = environmentToken || await execGh([
+    'auth', 'token', '--user', status.login, '--hostname', GITHUB_HOST,
+  ], GH_PROBE_TIMEOUT_MS, { env: githubDotComEnv(baseEnv) }).catch(() => null);
+  if (!token) {
+    throw new ServerError('Could not pin the active GitHub credential. Re-authenticate with gh and try again.', {
+      status: 503,
+      code: 'GITHUB_CREDENTIAL_UNAVAILABLE'
+    });
+  }
+  return { ...status, env: githubPinnedEnv(token, baseEnv) };
 }
 
 /** Test seam — drops the memoized probe results. */

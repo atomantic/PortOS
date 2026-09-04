@@ -71,6 +71,7 @@ export function CredentialsTab() {
       <div className="space-y-3">
         {credentials.map((credential) => {
           const configured = credential.configured === true;
+          const verificationUnavailable = credential.verification === 'unavailable';
           return (
             <div
               key={credential.id}
@@ -82,11 +83,19 @@ export function CredentialsTab() {
                   <p className="text-sm text-gray-400 mt-1">{credential.unlocks}</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className={`inline-flex items-center min-h-[28px] px-2 rounded text-xs ${configured ? 'bg-emerald-500/15 text-emerald-300' : 'bg-port-border/60 text-gray-400'}`}>
-                    {configured ? 'Configured' : 'Not configured'}
+                  <span className={`inline-flex items-center min-h-[28px] px-2 rounded text-xs ${
+                    verificationUnavailable
+                      ? 'bg-amber-500/15 text-amber-300'
+                      : configured
+                        ? 'bg-emerald-500/15 text-emerald-300'
+                        : 'bg-port-border/60 text-gray-400'
+                  }`}>
+                    {verificationUnavailable ? 'Could not verify' : configured ? 'Configured' : 'Not configured'}
                   </span>
                   <span className="inline-flex items-center min-h-[28px] px-2 rounded text-xs bg-port-bg text-gray-400">
-                    {SOURCE_LABEL[credential.source] || SOURCE_LABEL.none}
+                    {verificationUnavailable && credential.source === 'none'
+                      ? 'Status unknown'
+                      : SOURCE_LABEL[credential.source] || SOURCE_LABEL.none}
                   </span>
                   {credential.tier && credential.tier !== 'none' && (
                     <span className="inline-flex items-center min-h-[28px] px-2 rounded text-xs bg-port-bg text-gray-500">
