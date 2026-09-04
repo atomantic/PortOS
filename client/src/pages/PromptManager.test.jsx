@@ -557,9 +557,13 @@ describe('PromptManager variable editing', () => {
     expect(createPromptVariable).toHaveBeenCalledWith(
       expect.objectContaining({ key: 'aside-voice', content: 'wink' }), { silent: true },
     );
-    await waitFor(() => expect(currentSearch()).toContain('var=aside-voice'));
+    // The URL selection and the editor's hydration from the post-create
+    // refetch are separate effects, so `var=aside-voice` landing in the URL
+    // does not prove the editor has content yet. Wait on the value — the last
+    // thing to settle — and the URL assertion comes along for free.
+    await waitFor(() => expect(contentBox().value).toBe('wink'));
+    expect(currentSearch()).toContain('var=aside-voice');
     expect(screen.getByText('Edit: aside-voice')).toBeTruthy();
-    expect(contentBox().value).toBe('wink');
   });
 
   it('confirms a delete with a toast', async () => {

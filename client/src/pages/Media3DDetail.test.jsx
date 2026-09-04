@@ -75,7 +75,11 @@ describe('Media3DDetail', () => {
     expect(screen.getByAltText('Source image')).toBeInTheDocument();
     // The viewer's loaded scene has to reach the AR panel or its export button
     // stays permanently disabled — a prop chain no other assertion touches.
-    expect(await screen.findByTestId('ar-export-panel')).toHaveAttribute('data-has-scene', 'true');
+    // The panel mounts before the scene reaches it, so wait on the ATTRIBUTE:
+    // findByTestId resolves on the node and leaves the prop still in flight.
+    await waitFor(() =>
+      expect(screen.getByTestId('ar-export-panel')).toHaveAttribute('data-has-scene', 'true'),
+    );
   });
 
   it('surfaces the render error for a failed record', async () => {
