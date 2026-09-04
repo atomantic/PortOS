@@ -524,6 +524,10 @@ describe('PromptManager variable editing', () => {
 
   it('keeps the saved variable open in the editor and confirms with a toast', async () => {
     await openVariable();
+    // Re-stub AFTER the mount load, so only the post-save refetch carries the
+    // extra sibling — staging it with mockResolvedValueOnce instead would bake
+    // in an assumption about how many times the page loads before the save.
+    getPromptVariables.mockResolvedValue({ variables: { ...VARIABLES, 'aside-voice': { name: 'Aside Voice', content: 'wink' } } });
 
     fireEvent.change(contentBox(), { target: { value: 'stay dry' } });
     fireEvent.click(saveButton());
@@ -532,8 +536,12 @@ describe('PromptManager variable editing', () => {
     expect(savePromptVariable).toHaveBeenCalledWith(
       'tone-guide', expect.objectContaining({ content: 'stay dry' }), { silent: true },
     );
-    // The refetch below returns the pre-save fixture; the editor must NOT be
-    // re-hydrated from it, deselected, or blanked.
+    // The refetch still carries the PRE-save content, so the editor must NOT be
+    // re-hydrated from it, deselected, or blanked. The toast fires BEFORE that
+    // refetch, so waiting on it asserts ahead of the very state change under
+    // test — the sibling above is what makes the refresh's arrival observable,
+    // and #6023 slips through this test unnoticed without it (#6189).
+    await screen.findByText('Aside Voice');
     expect(currentSearch()).toContain('var=tone-guide');
     expect(screen.getByText('Edit: tone-guide')).toBeTruthy();
     expect(contentBox().value).toBe('stay dry');
@@ -557,12 +565,17 @@ describe('PromptManager variable editing', () => {
     expect(createPromptVariable).toHaveBeenCalledWith(
       expect.objectContaining({ key: 'aside-voice', content: 'wink' }), { silent: true },
     );
-    // The URL selection and the editor's hydration from the post-create
-    // refetch are separate effects, so `var=aside-voice` landing in the URL
-    // does not prove the editor has content yet. Wait on the value — the last
-    // thing to settle — and the URL assertion comes along for free.
-    await waitFor(() => expect(contentBox().value).toBe('wink'));
-    expect(currentSearch()).toContain('var=aside-voice');
+    // Both halves in ONE barrier: neither settles last on its own (#6189).
+    // The post-create refetch re-runs the hydration effect while the selection
+    // is still null, which resets the form to BLANK — the URL adopts the new key
+    // only afterwards, and re-hydrating from the refetched record is a further
+    // commit still. So waiting on the URL alone reads a blanked textarea. But
+    // waiting on the textarea alone is a barrier already open, since it holds
+    // 'wink' from the typing above, leaving the URL as the racing read instead.
+    await waitFor(() => {
+      expect(currentSearch()).toContain('var=aside-voice');
+      expect(contentBox().value).toBe('wink');
+    });
     expect(screen.getByText('Edit: aside-voice')).toBeTruthy();
   });
 
