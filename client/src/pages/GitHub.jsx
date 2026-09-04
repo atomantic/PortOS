@@ -63,6 +63,7 @@ export default function GitHub() {
     setSecrets(secretsData || {});
     setAuthStatus(statusData);
     setLastSync(statusData?.lastRepoSync || null);
+    setRepoListTruncated(statusData?.lastRepoSyncTruncated === true);
     setLoading(false);
   };
 
@@ -75,14 +76,21 @@ export default function GitHub() {
     if (result) {
       setRepos(result.repos || {});
       setLastSync(result.lastRepoSync);
-      setAuthStatus(prev => prev ? { ...prev, githubUser: result.githubUser } : prev);
       setRepoListTruncated(result.truncated === true);
       if (result.truncated) {
-        toast.warning(`Loaded the first ${Object.keys(result.repos || {}).length} repositories. Narrower or paginated sync is not available yet.`);
+        toast.warning('GitHub returned its repository listing limit. Some repositories may be missing; cached entries were preserved.');
       } else {
         toast.success(`Synced ${Object.keys(result.repos || {}).length} repos`);
       }
     }
+    // Re-derive auth status from the server regardless of outcome — a sync
+    // is the freshest signal about which account is actually authenticated.
+    // Patching only `githubUser` in place left `login` stale (inverting the
+    // account-mismatch banner after a legitimate account switch), and a
+    // failed sync's 401/409 was otherwise dropped, leaving a stale
+    // `authenticated: true` state that kept every mutating control enabled.
+    const statusData = await getGitHubStatus({ silent: true }).catch(() => null);
+    if (statusData) setAuthStatus(statusData);
     setSyncing(false);
   };
 

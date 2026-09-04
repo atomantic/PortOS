@@ -25,6 +25,7 @@ const defaultData = () => ({
   repos: {},
   secrets: {},
   lastRepoSync: null,
+  lastRepoSyncTruncated: false,
   githubUser: null
 });
 
@@ -165,11 +166,23 @@ export async function syncRepos() {
     }
     const owner = auth.login;
     const raw = await execGh([
-      'repo', 'list', owner, '--limit', String(REPO_SYNC_LIMIT),
+      // Ask for one more than REPO_SYNC_LIMIT so the boundary case (the
+      // account owns exactly REPO_SYNC_LIMIT repos) is distinguishable from
+      // an actually-truncated listing: the extra row, if present, IS the
+      // truncation signal.
+      'repo', 'list', owner, '--limit', String(REPO_SYNC_LIMIT + 1),
       '--json', 'name,nameWithOwner,description,pushedAt,isArchived,isPrivate,isFork,parent,licenseInfo'
     ], DEFAULT_EXEC_GH_TIMEOUT_MS, { env: auth.env });
-    const remoteRepos = JSON.parse(raw);
-    const { data, removed, listingMayBeTruncated } = await queueDataWrite(async () => {
+    const parsedRepos = safeJSONParse(raw, null);
+    if (!Array.isArray(parsedRepos)) {
+      throw new ServerError('GitHub returned an unreadable repository listing. Try syncing again.', {
+        status: 502,
+        code: 'GITHUB_LISTING_UNPARSEABLE'
+      });
+    }
+    const listingMayBeTruncated = parsedRepos.length > REPO_SYNC_LIMIT;
+    const remoteRepos = listingMayBeTruncated ? parsedRepos.slice(0, REPO_SYNC_LIMIT) : parsedRepos;
+    const { data, removed, missingFromRemote } = await queueDataWrite(async () => {
       const current = await load();
       const remoteNames = new Set();
 
@@ -193,21 +206,39 @@ export async function syncRepos() {
         };
       }
 
-      const listingMayBeTruncated = remoteRepos.length >= REPO_SYNC_LIMIT;
-      const removed = listingMayBeTruncated
+      // A zero-exit `gh repo list` is only authoritative for what THIS
+      // credential can see — a token that lost `repo` scope still exits 0
+      // with a valid (non-truncated) listing of public repos only. Deleting
+      // on that answer would destroy a private repo's flags/managedSecrets
+      // for no reason but a scope change. Only drop cached rows that carry
+      // no user configuration; anything else is stamped, not deleted, so a
+      // real deletion still eventually clears once nothing is left to lose.
+      const candidates = listingMayBeTruncated
         ? []
         : Object.entries(current.repos)
-          .filter(([, repo]) => repoBelongsToAccount(repo, owner) && !remoteNames.has(repo.fullName))
-          .map(([fullName]) => fullName);
-      for (const fullName of removed) delete current.repos[fullName];
+          .filter(([, repo]) => repoBelongsToAccount(repo, owner) && !remoteNames.has(repo.fullName));
+      const removed = [];
+      const missingFromRemote = [];
+      for (const [fullName, repo] of candidates) {
+        const hasUserState = repo.managedSecrets?.length > 0 || Object.keys(repo.flags || {}).length > 0;
+        if (hasUserState) {
+          repo.missingFromRemote = new Date().toISOString();
+          missingFromRemote.push(fullName);
+        } else {
+          delete current.repos[fullName];
+          removed.push(fullName);
+        }
+      }
 
       current.lastRepoSync = new Date().toISOString();
+      current.lastRepoSyncTruncated = listingMayBeTruncated;
       current.githubUser = owner;
       await save(current);
-      return { data: current, removed, listingMayBeTruncated };
+      return { data: current, removed, missingFromRemote };
     });
     const removedMsg = removed.length ? `, removed ${removed.length} deleted` : '';
-    console.log(`🔄 Synced ${remoteRepos.length} repos from GitHub${removedMsg}`);
+    const missingMsg = missingFromRemote.length ? `, flagged ${missingFromRemote.length} missing-with-config` : '';
+    console.log(`🔄 Synced ${remoteRepos.length} repos from GitHub${removedMsg}${missingMsg}`);
     if (listingMayBeTruncated) {
       console.log(`⚠️ GitHub repo list reached ${REPO_SYNC_LIMIT}; unmatched cached repos were preserved`);
     }
@@ -248,6 +279,7 @@ export async function getRepos() {
  * Update repo flags and managed secrets
  */
 export async function updateRepoFlags(fullName, updates) {
+  await requireActiveCachedAccount(await load());
   return queueDataWrite(async () => {
     const data = await load();
     const repo = data.repos[fullName];
@@ -299,6 +331,10 @@ export async function setSecret(name, value) {
       await save(data);
     });
 
+    // Call the unwrapped `*Now` form, not `syncSecretToRepos` — `setSecret` is
+    // already inside `withGitHubMutation`, and the mutex is non-reentrant with
+    // no timeout, so re-entering it here would deadlock every GitHub mutation
+    // for the life of the process.
     return syncSecretToReposNow(name);
   });
 }
@@ -388,7 +424,14 @@ export async function setRepoArchived(fullName, archived) {
     const updated = await queueDataWrite(async () => {
       const current = await load();
       if (!current.repos[fullName] || current.githubUser?.toLowerCase() !== auth.login.toLowerCase()) {
-        return { ...data.repos[fullName], isArchived: archived };
+        // The archive/unarchive call above already ran against GitHub, but the
+        // account changed underneath us before we could persist it — report
+        // the mismatch rather than returning an unpersisted "success" that
+        // would silently drift from the cache on the next load.
+        throw new ServerError('The repository cache changed accounts during this action. Sync repositories to refresh.', {
+          status: 409,
+          code: 'GITHUB_ACCOUNT_MISMATCH'
+        });
       }
       current.repos[fullName].isArchived = archived;
       await save(current);
@@ -418,6 +461,7 @@ export async function getStatus() {
     ...auth,
     githubUser: data.githubUser || null,
     lastRepoSync: data.lastRepoSync,
+    lastRepoSyncTruncated: data.lastRepoSyncTruncated === true,
     totalRepos: repos.length,
     activeRepos: repos.filter(r => !r.isArchived).length,
     npmProjects: repos.filter(r => r.flags?.npmProject).length,
@@ -597,10 +641,18 @@ export async function checkGhHealth({ force = false, timeoutMs = GH_PROBE_TIMEOU
 }
 
 /**
- * Resolve the account the GitHub CLI will actually use. A successful `api user`
- * is stronger than merely finding a token: it proves the credential works and
- * gives repo sync the owner it must query. The login is returned only to the
- * local UI; the credential inventory reduces this to presence/source.
+ * Resolve the account the GitHub CLI will actually use ON GITHUB.COM. A
+ * successful `api user` is stronger than merely finding a token: it proves
+ * the credential works and gives repo sync the owner it must query. The login
+ * is returned only to the local UI; the credential inventory reduces this to
+ * presence/source.
+ *
+ * Unlike `checkGhHealth`/`probeGh` below (which accept a `hostname` for a
+ * GitHub Enterprise forge), this repo-sync feature is intentionally
+ * github.com-only — the UI it backs links directly to `https://github.com/…`
+ * and lists the account's own personal/org repos, not a per-project managed
+ * host. Do not thread an enterprise hostname through here without also
+ * reworking that UI.
  */
 export async function getGitHubAuthStatus({ env = process.env } = {}) {
   const credentialSource = githubCredentialSource(env);
@@ -642,7 +694,17 @@ async function getPinnedGitHubAuth() {
 
   const token = environmentToken || await execGh([
     'auth', 'token', '--user', status.login, '--hostname', GITHUB_HOST,
-  ], GH_PROBE_TIMEOUT_MS, { env: githubDotComEnv(baseEnv) }).catch(() => null);
+  ], GH_PROBE_TIMEOUT_MS, { env: githubDotComEnv(baseEnv) })
+    // `--user` on `gh auth token` is a relatively recent flag. PortOS installs
+    // upgrade independently, so an older local `gh` is a normal state, not an
+    // edge case — fall back to the unqualified form, which still resolves to
+    // the single active account `getGitHubAuthStatus` just verified.
+    .catch(() => execGh(
+      ['auth', 'token', '--hostname', GITHUB_HOST],
+      GH_PROBE_TIMEOUT_MS,
+      { env: githubDotComEnv(baseEnv) },
+    ))
+    .catch(() => null);
   if (!token) {
     throw new ServerError('Could not pin the active GitHub credential. Re-authenticate with gh and try again.', {
       status: 503,

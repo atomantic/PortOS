@@ -394,6 +394,27 @@ describe('GitHub repository sync account selection', () => {
     expect(mock.spawn.mock.calls[2][2].env.GITHUB_TOKEN).toBeUndefined();
   });
 
+  it('falls back to the unqualified token command on a gh build without --user', async () => {
+    vi.stubEnv('GH_TOKEN', '');
+    vi.stubEnv('GITHUB_TOKEN', '');
+    mock.spawn.mockImplementation((_command, args) => {
+      if (args[0] === 'api') return childReturning('example-user');
+      // Older gh: `auth token --user <login>` fails, but the unqualified form
+      // (single active account) still resolves.
+      if (args.includes('--user')) return childFailing('unknown flag: --user');
+      if (args[0] === 'auth') return childReturning('fake-pinned-token');
+      return childReturning('[]');
+    });
+
+    await syncRepos();
+
+    expect(mock.spawn.mock.calls[2][1]).toEqual(['auth', 'token', '--hostname', 'github.com']);
+    expect(mock.spawn.mock.calls[3][2].env).toMatchObject({
+      GH_HOST: 'github.com',
+      GH_TOKEN: 'fake-pinned-token',
+    });
+  });
+
   it('refuses to push secrets while cached repositories belong to another account', async () => {
     vi.stubEnv('GH_TOKEN', 'fake-example-token');
     mock.readJSONFile.mockResolvedValue({
@@ -437,6 +458,25 @@ describe('GitHub repository sync account selection', () => {
       code: 'GITHUB_ACCOUNT_MISMATCH',
     });
     expect(mock.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses to update flags on a cached repository owned by another account', async () => {
+    vi.stubEnv('GH_TOKEN', 'fake-example-token');
+    mock.spawn.mockImplementation(() => childReturning('example-user'));
+
+    await expect(updateRepoFlags('legacy-owner/old-repo', { flags: { npmProject: true } })).rejects.toMatchObject({
+      status: 409,
+      code: 'GITHUB_ACCOUNT_MISMATCH',
+    });
+  });
+
+  it('refuses to update flags while gh is not authenticated', async () => {
+    mock.spawn.mockImplementation(() => childFailing('You are not logged in. Run gh auth login.'));
+
+    await expect(updateRepoFlags('legacy-owner/old-repo', { flags: { npmProject: true } })).rejects.toMatchObject({
+      status: 401,
+      code: 'GITHUB_NOT_AUTHENTICATED',
+    });
   });
 
   it('refuses to archive a repository that is not in the authenticated account cache', async () => {
@@ -542,7 +582,19 @@ describe('GitHub repository sync account selection', () => {
     vi.useRealTimers();
   });
 
-  it('does not delete cached repositories when the GitHub listing reaches its limit', async () => {
+  const listedRepos = (count) => Array.from({ length: count }, (_, index) => ({
+    name: `repo-${index}`,
+    nameWithOwner: `example-user/repo-${index}`,
+    description: '',
+    pushedAt: null,
+    isArchived: false,
+    isPrivate: false,
+    isFork: false,
+    parent: null,
+    licenseInfo: null,
+  }));
+
+  it('does not delete cached repositories when the GitHub listing is actually truncated', async () => {
     vi.stubEnv('GH_TOKEN', 'fake-example-token');
     mock.readJSONFile.mockResolvedValue({
       repos: {
@@ -557,24 +609,107 @@ describe('GitHub repository sync account selection', () => {
       lastRepoSync: null,
       githubUser: 'example-user',
     });
-    const listed = Array.from({ length: 200 }, (_, index) => ({
-      name: `repo-${index}`,
-      nameWithOwner: `example-user/repo-${index}`,
-      description: '',
-      pushedAt: null,
-      isArchived: false,
-      isPrivate: false,
-      isFork: false,
-      parent: null,
-      licenseInfo: null,
-    }));
+    // The service now asks for REPO_SYNC_LIMIT + 1 so the extra row IS the
+    // truncation signal — 201 here, not 200.
+    const listed = listedRepos(201);
     mock.spawn.mockImplementation((_command, args) => (
       args[0] === 'api' ? childReturning('example-user') : childReturning(JSON.stringify(listed))
     ));
 
     const result = await syncRepos();
 
+    expect(result.truncated).toBe(true);
     expect(result.repos['example-user/keep-me']).toBeTruthy();
+    expect(Object.keys(result.repos)).toHaveLength(201); // 200 listed + 1 preserved
+  });
+
+  it('does not treat exactly REPO_SYNC_LIMIT repos as truncated', async () => {
+    vi.stubEnv('GH_TOKEN', 'fake-example-token');
+    mock.readJSONFile.mockResolvedValue({
+      repos: {
+        'example-user/deleted-on-github': {
+          name: 'deleted-on-github',
+          fullName: 'example-user/deleted-on-github',
+          flags: {},
+          managedSecrets: [],
+        },
+      },
+      secrets: {},
+      lastRepoSync: null,
+      githubUser: 'example-user',
+    });
+    const listed = listedRepos(200);
+    mock.spawn.mockImplementation((_command, args) => (
+      args[0] === 'api' ? childReturning('example-user') : childReturning(JSON.stringify(listed))
+    ));
+
+    const result = await syncRepos();
+
+    // Exactly 200 repos is a complete listing, not a truncated one — a repo
+    // that genuinely no longer exists on GitHub is still pruned.
+    expect(result.truncated).toBe(false);
+    expect(result.repos['example-user/deleted-on-github']).toBeUndefined();
+    expect(Object.keys(result.repos)).toHaveLength(200);
+  });
+
+  it('preserves a cached repo with configured flags or secrets when a scope-degraded credential omits it, but still prunes an unconfigured one', async () => {
+    vi.stubEnv('GH_TOKEN', 'fake-example-token');
+    mock.readJSONFile.mockResolvedValue({
+      repos: {
+        // Not returned by the (scope-limited) listing below, but carries user
+        // configuration — must be preserved, not deleted, even though the
+        // listing is NOT truncated.
+        'example-user/private-configured': {
+          name: 'private-configured',
+          fullName: 'example-user/private-configured',
+          flags: { npmProject: true },
+          managedSecrets: ['NPM_TOKEN'],
+        },
+        // Also missing from the listing, but carries no configuration — a
+        // real deletion (or an unconfigured repo made private by the same
+        // scope loss) is still pruned rather than accumulating forever.
+        'example-user/private-unconfigured': {
+          name: 'private-unconfigured',
+          fullName: 'example-user/private-unconfigured',
+          flags: {},
+          managedSecrets: [],
+        },
+      },
+      secrets: {},
+      lastRepoSync: null,
+      githubUser: 'example-user',
+    });
+    // A credential that lost `repo` scope still exits 0 with a valid, public-
+    // only, NON-truncated listing.
+    mock.spawn.mockImplementation((_command, args) => (
+      args[0] === 'api' ? childReturning('example-user') : childReturning('[]')
+    ));
+
+    const result = await syncRepos();
+
+    expect(result.truncated).toBe(false);
+    expect(result.repos['example-user/private-configured']).toMatchObject({
+      flags: { npmProject: true },
+      managedSecrets: ['NPM_TOKEN'],
+    });
+    expect(result.repos['example-user/private-unconfigured']).toBeUndefined();
+    const persisted = JSON.parse(mock.atomicWrite.mock.calls.at(-1)[1]);
+    expect(persisted.repos['example-user/private-configured'].missingFromRemote).toEqual(expect.any(String));
+  });
+
+  it('rejects an unparseable repository listing instead of throwing a bare SyntaxError', async () => {
+    vi.stubEnv('GH_TOKEN', 'fake-example-token');
+    mock.readJSONFile.mockResolvedValue({
+      repos: {}, secrets: {}, lastRepoSync: null, githubUser: 'example-user',
+    });
+    mock.spawn.mockImplementation((_command, args) => (
+      args[0] === 'api' ? childReturning('example-user') : childReturning('not json')
+    ));
+
+    await expect(syncRepos()).rejects.toMatchObject({
+      status: 502,
+      code: 'GITHUB_LISTING_UNPARSEABLE',
+    });
   });
 
   it('preserves another account\'s repository configuration across account switches', async () => {
@@ -610,6 +745,7 @@ describe('GitHub repository sync account selection', () => {
 
   it('serializes concurrent updates to the shared repository cache', async () => {
     let releaseFirstWrite;
+    vi.stubEnv('GH_TOKEN', 'fake-example-token');
     mock.readJSONFile.mockResolvedValue({
       repos: {
         'example-user/example-repo': {
@@ -623,6 +759,7 @@ describe('GitHub repository sync account selection', () => {
       lastRepoSync: null,
       githubUser: 'example-user',
     });
+    mock.spawn.mockImplementation(() => childReturning('example-user'));
     mock.atomicWrite
       .mockImplementationOnce(() => new Promise((resolve) => { releaseFirstWrite = resolve; }))
       .mockResolvedValue(undefined);
