@@ -15,7 +15,13 @@
  * What this migration deliberately does NOT do:
  *
  *   - **It never overwrites a window the user picked.** Only a record with no
- *     usable `numCtx` is stamped.
+ *     usable `numCtx` is stamped — and the whole migration stands down when
+ *     `OLLAMA_CONTEXT_LENGTH` is set, because `resolveOllamaContextLength`
+ *     ranks a record's `numCtx` ABOVE that env var. Stamping over a
+ *     deliberately small machine-wide window is the one way this migration
+ *     could make an install worse: past what VRAM allows Ollama does not fail,
+ *     it offloads layers to CPU. For the same reason a small-VRAM install
+ *     should lower this value rather than inherit it.
  *   - **It never touches a record repointed at another binary.** Keyed on the
  *     `ollamaBacked` marker plus the `claude` command, matching
  *     `isOllamaBackedProvider` + the harness these defaults describe, so a
@@ -37,6 +43,9 @@ import { readProvidersDoc, writeJsonAtomic } from './_lib.js';
 
 const NUM_CTX = 131072;
 const CLAUDE_COMMAND = 'claude';
+// Ollama's own machine-wide knob, spelled out rather than imported: a migration
+// is a frozen snapshot and must not drift when `lib/ollamaContext.js` changes.
+const OLLAMA_CONTEXT_ENV_VAR = 'OLLAMA_CONTEXT_LENGTH';
 
 // Logged relative, never as `doc.path` — that is an absolute path carrying the
 // operator's home directory, and a boot line is the wrong place to print it.
@@ -73,7 +82,15 @@ const needsNumCtx = (provider) => {
 };
 
 export default {
-  async up({ rootDir }) {
+  async up({ rootDir, env = process.env }) {
+    // A set env var is the user having already chosen this machine's window.
+    // Checked before the read so the file is never touched in that case.
+    const ambient = usableNumCtx(env?.[OLLAMA_CONTEXT_ENV_VAR]);
+    if (ambient) {
+      console.log(`🪟 ${OLLAMA_CONTEXT_ENV_VAR}=${ambient} is already set — leaving the Claude Ollama records on that window`);
+      return { ok: true, reason: 'ambient-context-length', updated: 0 };
+    }
+
     const doc = await readProvidersDoc({ rootDir });
     if (!doc.ok) {
       const why = SKIP_REASONS[doc.reason] ?? 'could not be read';

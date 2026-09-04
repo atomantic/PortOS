@@ -151,6 +151,12 @@ next run, because a CLI/TUI harness talks to Ollama directly and nothing else
 can raise it. `OLLAMA_CONTEXT_LENGTH` in the environment works as a machine-wide
 fallback.
 
+The shipped `claude-ollama` / `claude-ollama-tui` records already pin 128K, so
+this usually bites the OpenCode Ollama harnesses or a record whose window was
+cleared. Note the precedence: a record's **Local num_ctx** wins over
+`OLLAMA_CONTEXT_LENGTH`, so on a machine where 128K does not fit, lower it on
+the record rather than only in the environment.
+
 Two caveats:
 
 - **Check the model still fits.** A larger window means a larger KV cache. Past
