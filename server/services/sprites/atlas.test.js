@@ -26,15 +26,9 @@ import {
   writeWalkFramePng,
 } from './spriteTestFixtures.js';
 
-capSharpThreads();
+const restoreSharpThreads = capSharpThreads();
+afterAll(restoreSharpThreads);
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-atlas-test-'));
-
-// The narrowest walk span a compile will accept: the walk track's registry row
-// declares a 6–16 frame range and `resolveTrackUniformity` refuses anything
-// outside it, so 6 is the floor — still enough for varyArm to vary the
-// silhouette and for a mid-strip index to exist. Tests that pin the production
-// 9-column grid keep WALK_PHASES instead (#6004).
-const NARROW_WALK_FRAMES = 6;
 
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -61,7 +55,9 @@ const records = await import('./records.js');
 const { lockReference, loadManifest } = await import('./reference.js');
 const { compileAtlas, getAtlasState, ATLAS_COLUMNS, DEFAULT_ATLAS_GEOMETRY } = await import('./atlas.js');
 const { SPRITE_DIRECTIONS } = await import('./prompts.js');
-const { WALK_PHASES, walkPhaseLabels, WALK_FPS } = await import('./walkPostprocess.js');
+const {
+  WALK_PHASES, walkPhaseLabels, WALK_FPS, WALK_MIN_FRAME_COUNT,
+} = await import('./walkPostprocess.js');
 const { buildAtlasGrid, compiledGridUpToDate } = await import('./atlasGrid.js');
 const { getAnimationTrack, SCANNER_TRACK, AMBIENT_TRACK } = await import('./animationTracks.js');
 // #3152 — `scanner`/`ambient` are seeded STORE rows, so the compiler's real table
@@ -71,6 +67,14 @@ const {
   animationTrackStorePath, animationTrackSeedPath,
 } = await import('./animationTrackStore.js');
 const EFFECTIVE_TRACKS = getEffectiveAnimationTracks();
+
+// The narrowest walk span a compile will accept: `resolveTrackUniformity`
+// refuses a direction outside the walk track's authoring range, so this tracks
+// the registry's floor rather than restating it — raising the floor adapts these
+// tests instead of breaking a dozen of them. Still wide enough for varyArm to
+// vary the silhouette and for a mid-strip index to exist; tests that pin the
+// production 9-column grid keep WALK_PHASES instead (#6004).
+const NARROW_WALK_FRAMES = WALK_MIN_FRAME_COUNT;
 
 let seq = 0;
 const newId = () => `atlas-char-${++seq}`;
@@ -677,13 +681,14 @@ describe('compileAtlas', () => {
     repartitioned.atlasSha256 = 'f'.repeat(64);
     repartitioned.geometry = {
       ...repartitioned.geometry,
-      // The same columns split differently — idle, a shortened walk, and a
-      // scanner span taking the rest — so the spans still tile the grid and only
-      // the SEMANTIC drift can be what triggers the recompile below.
+      // The same columns split differently — idle, a walk span one column
+      // short, and a scanner taking the column it gave up — so the spans still
+      // tile the grid at any walk width and only the SEMANTIC drift can be what
+      // triggers the recompile below.
       tracks: {
         idle: { start: 0, count: 1 },
-        walk: { start: 1, count: 3 },
-        scanner: { start: 4, count: NARROW_WALK_FRAMES - 3 },
+        walk: { start: 1, count: NARROW_WALK_FRAMES - 1 },
+        scanner: { start: NARROW_WALK_FRAMES, count: 1 },
       },
     };
     await writeFile(pointerAbs, JSON.stringify(repartitioned));
