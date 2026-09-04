@@ -363,7 +363,7 @@ export default function LocalLlmRuntimesView() {
   // 'cancelled' frame the server emits, not here.
   const cancelSlotstreamDownload = (model) => runAction(
     'slotstream-download-cancel',
-    () => cancelSlotstreamModelDownload(model ?? null, { silent: true }),
+    () => cancelSlotstreamModelDownload(model, { silent: true }),
     (r) => (r?.cancelled ? 'Cancelling checkpoint download…' : 'No checkpoint download is running'),
     { onError: (err) => toast.error(err?.message || 'Could not cancel the checkpoint download') },
   );

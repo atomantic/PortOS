@@ -36,7 +36,6 @@ import {
   localLlmMtplxStartSchema,
   localLlmSlotstreamStartSchema,
   localLlmSlotstreamDownloadSchema,
-  localLlmSlotstreamCancelSchema,
   localLlmMtplxSearchSchema,
   localLlmMtplxPullSchema,
   localLlmMtplxRemoveSchema,
@@ -940,7 +939,7 @@ router.post('/slotstream/models/download', asyncHandler(async (req, res) => {
 // other way to release the single transfer slot. Partial files are kept, so a
 // later download resumes rather than restarting.
 router.post('/slotstream/models/download/cancel', asyncHandler(async (req, res) => {
-  const { model } = validateRequest(localLlmSlotstreamCancelSchema, req.body)
+  const { model } = validateRequest(localLlmSlotstreamDownloadSchema, req.body)
   res.json({ success: true, cancelled: cancelSlotstreamModelDownload({ model }) })
 }))
 

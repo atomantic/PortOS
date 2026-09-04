@@ -49,12 +49,11 @@ const METADATA_FETCH_TIMEOUT_MS = 15_000;
 /**
  * The one download slot, keyed by checkpoint directory.
  *
- * `exclusive`: these are 100 GB+ reads of the same disk, and the card renders a
- * single progress bar fed by a single `slotstream:download` event — two
- * concurrent transfers would interleave frames on it and the first terminal
- * frame would tear down the other's bar. `matchNested`: the orphaned-partial
- * sweep asks about a SHARD one level below the checkpoint directory, so the
- * predicate has to match a path under a claimed key, not only the key itself.
+ * `exclusive`, because these are 100 GB+ reads of the same disk and the card
+ * renders a single progress bar fed by a single `slotstream:download` event:
+ * two concurrent transfers would interleave frames on it, and the first
+ * terminal frame would tear down the other's bar. Keying on the DIRECTORY also
+ * gets the sweep the right answer for a shard one level inside it.
  *
  * The stall watchdog is generous — a checkpoint this size legitimately runs for
  * hours while it IS receiving bytes — and env-overridable.
@@ -63,13 +62,11 @@ const downloadSlot = createDownloadSlot({
   codePrefix: 'SLOTSTREAM',
   idleStallEnvVar: 'SLOTSTREAM_IDLE_STALL_MS',
   exclusive: true,
-  matchNested: true,
   // A cancel here abandons a 100 GB+ multi-shard transfer, not one file: the
   // whole point of stopping a slow-but-alive download is to pick it back up, so
   // the shard in flight keeps its `.partial` the way a stall already does.
   // (Spec-decode deliberately discards instead — one GGUF the user gave up on.)
   keepPartialOnCancel: true,
-  cancelledMessage: 'Download cancelled. Its progress is kept: pressing download again resumes from where it stopped.',
 });
 
 const cacheDirFor = (cacheDir) => cacheDir || slotstreamCacheDir();
@@ -221,10 +218,6 @@ export async function previewSlotstreamDownload({ model = null, cacheDir } = {})
 export async function downloadSlotstreamModel({ model = null, cacheDir, onProgress = () => {} } = {}) {
   const repo = requireRepo(model);
   const modelDir = slotstreamModelPath(repo, { cacheDir });
-  // ONE checkpoint at a time, not one per checkpoint: these are 100 GB+ reads of
-  // the same disk, and the card renders a single progress bar fed by a single
-  // `slotstream:download` event — two concurrent transfers would interleave
-  // frames on it and the first terminal frame would tear down the other's bar.
   // Claim the slot BEFORE the first await: resolving the repo is a round trip,
   // and a second press landing inside that window would clear the in-flight
   // check and start a parallel copy of the same 100 GB+ transfer.
@@ -235,18 +228,27 @@ export async function downloadSlotstreamModel({ model = null, cacheDir, onProgre
   });
 
   const label = slotstreamCatalogEntry(repo)?.label || repo;
-  const emitProgress = slot.throttle(onProgress);
   try {
     const token = await getHfToken();
     const headers = buildHfAuthHeaders(token);
     onProgress({ event: 'start', model: repo, message: `Resolving ${repo} on Hugging Face…` });
     slot.throwIfAborted();
     const plan = await planRepoDownload({ repo, token, signal: slot.signal, cacheDir });
-    slot.throwIfAborted();
     const carried = plan.finishedBytes + plan.partialBytes;
     assertDownloadFits(await assessDownloadPreflight({
       destPath: plan.modelDir,
       expectedBytes: Math.max(0, plan.totalBytes - carried),
+    }));
+
+    // Primitives, not a built frame: `onBytes` runs once per stream chunk, so
+    // constructing the object and its message before the throttle would
+    // allocate millions of frames per checkpoint to discard all but ~4 a second.
+    const emitProgress = slot.throttle((received, file) => onProgress({
+      event: 'progress',
+      model: repo,
+      received,
+      total: plan.totalBytes,
+      message: `Downloading ${file}`,
     }));
 
     console.log(`⬇️  Slotstream checkpoint download started: ${repo} (${plan.files.length} files, ${plan.totalBytes} bytes)`);
@@ -283,13 +285,7 @@ export async function downloadSlotstreamModel({ model = null, cacheDir, onProgre
           // otherwise walk the bar past 100%.
           const done = Math.min(plan.totalBytes, completedBytes + Math.max(0, received - resumedFrom));
           slot.track(done, plan.totalBytes);
-          emitProgress({
-            event: 'progress',
-            model: repo,
-            received: done,
-            total: plan.totalBytes,
-            message: `Downloading ${entry.file}`,
-          });
+          emitProgress(done, entry.file);
         },
       });
       completedBytes += Math.max(0, bytes - resumedFrom);
@@ -333,19 +329,14 @@ export async function downloadSlotstreamModel({ model = null, cacheDir, onProgre
 }
 
 /**
- * Stop the checkpoint download in progress. Returns false when none is running.
+ * Stop the named checkpoint's download. Returns false when it is not running.
  *
  * A 100 GB+ transfer that is merely SLOW rather than silent never trips the idle
- * watchdog, so without this the only way out was to wait it out. The partial
- * files are kept — `streamResumableDownload` discards only the shard it was
- * mid-write on — so pressing download again resumes.
- *
- * `model` is optional: the slot holds one transfer at a time, so an omitted
- * model cancels whatever is running. A named model that is NOT the running one
- * cancels nothing rather than stopping someone else's transfer.
+ * watchdog, so without this the only way out was to wait it out. The bytes
+ * already moved are kept, so pressing download again resumes rather than
+ * restarting.
  */
-export function cancelSlotstreamModelDownload({ model = null, cacheDir } = {}) {
-  if (model == null) return downloadSlot.entries().some(([key]) => downloadSlot.cancel(key));
+export function cancelSlotstreamModelDownload({ model, cacheDir } = {}) {
   return downloadSlot.cancel(slotstreamModelPath(requireRepo(model), { cacheDir }));
 }
 

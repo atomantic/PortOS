@@ -522,31 +522,32 @@ function rejectDownloadStatus(res) {
 // Keeping one copy per service is how they drift: Slotstream shipped with
 // `'cancelled'` branches nothing could ever set, because the cancel lived in
 // the caller instead of the slot. Here the cancel comes WITH the slot, and the
-// GC gets one predicate per slot rather than one more `||` clause per runtime.
+// GC gets one predicate for every slot rather than one more `||` clause per
+// runtime.
 
 /** Progress frames are throttled to this interval so a fast link can't emit one frame per chunk. */
-export const DEFAULT_PROGRESS_INTERVAL_MS = 250;
+const PROGRESS_INTERVAL_MS = 250;
 
 /**
  * A download still receiving bytes may legitimately run for hours, but a silent
  * connection is never useful: it holds a transfer slot and leaves every later
  * press queued. Generous by default, per-runtime overridable by env.
  */
-export const DEFAULT_IDLE_STALL_TIMEOUT_MS = 20 * 60 * 1000;
-
-const positiveNumber = (value) => {
-  const raw = Number(value);
-  return Number.isFinite(raw) && raw > 0 ? raw : null;
-};
+const IDLE_STALL_TIMEOUT_MS = 20 * 60 * 1000;
 
 /**
  * Every slot ever created, so one predicate can answer for all of them.
  *
- * The orphaned-partial GC used to OR one `isXDownloadInFlight` per runtime, which
- * meant a new download path was unprotected until somebody remembered to add
- * that clause. Registering here makes protection the default and forgetting it
- * impossible — the only thing a new runtime must still do is BE LOADED, which
- * `orphanedPartialGc.test.js` pins.
+ * The orphaned-partial GC used to OR one `isXDownloadInFlight` per runtime, so a
+ * migrated download path stayed unprotected until somebody remembered to add
+ * that clause. Registering here removes that step for every path that claims a
+ * slot; what such a path must still do is BE LOADED, which
+ * `orphanedPartialGc.test.js` pins. (A path that claims no slot — `loras.js`
+ * today — is still unprotected; issue #6190 migrates it.)
+ *
+ * Call `createDownloadSlot` at MODULE scope only: this Set is add-only, so a
+ * per-request slot would grow it for the process's lifetime and slow
+ * `isAnyDownloadInFlight`, which the sweep calls once per `.partial` it finds.
  */
 const downloadSlots = new Set();
 
@@ -558,9 +559,10 @@ export function isAnyDownloadInFlight(path) {
   return false;
 }
 
-const defaultStalledMessage = (minutes) => (
-  `Download stalled — no bytes received for ${minutes} minute${minutes === 1 ? '' : 's'}, so it was abandoned. Its progress is kept: pressing download again resumes from where it stopped.`
-);
+const positiveNumber = (value) => {
+  const raw = Number(value);
+  return Number.isFinite(raw) && raw > 0 ? raw : null;
+};
 
 /**
  * One transfer-slot registry for a family of downloads.
@@ -568,70 +570,44 @@ const defaultStalledMessage = (minutes) => (
  * @param {object} opts
  * @param {string} opts.codePrefix        Error-code namespace: `<PREFIX>_DOWNLOAD_IN_FLIGHT` / `_STALLED` / `_CANCELLED`.
  * @param {string} [opts.idleStallEnvVar] Env var overriding the stall timeout (ms).
- * @param {number} [opts.idleStallTimeoutMs] Fallback stall timeout when the env var is unset/invalid.
- * @param {number} [opts.progressIntervalMs] Progress-frame throttle interval.
  * @param {boolean} [opts.exclusive]      When true, ANY active download blocks a claim on a different key.
- * @param {boolean} [opts.matchNested]    When true, `isInFlight` also matches paths BELOW a claimed key (a directory of shards).
  * @param {(minutes: number) => string} [opts.stalledMessage] Message for the typed stalled error.
- * @param {string} [opts.cancelledMessage] Message for the typed cancelled error.
  * @param {boolean} [opts.keepPartialOnCancel] Keep the `.partial` a cancel interrupted, so a later attempt resumes it.
  */
 export function createDownloadSlot({
   codePrefix,
   idleStallEnvVar = null,
-  idleStallTimeoutMs = DEFAULT_IDLE_STALL_TIMEOUT_MS,
-  progressIntervalMs = DEFAULT_PROGRESS_INTERVAL_MS,
   exclusive = false,
-  matchNested = false,
-  stalledMessage = defaultStalledMessage,
-  cancelledMessage = 'Download cancelled',
+  stalledMessage = (minutes) => (
+    `Download stalled — no bytes received for ${minutes} minute${minutes === 1 ? '' : 's'}, so it was abandoned. Its progress is kept: pressing download again resumes from where it stopped.`
+  ),
   keepPartialOnCancel = false,
 } = {}) {
   const stallMs = (idleStallEnvVar ? positiveNumber(process.env[idleStallEnvVar]) : null)
-    ?? positiveNumber(idleStallTimeoutMs)
-    ?? DEFAULT_IDLE_STALL_TIMEOUT_MS;
+    ?? IDLE_STALL_TIMEOUT_MS;
   const inFlight = new Map();
 
-  const stalledError = () => {
-    const minutes = Math.round(stallMs / 60000);
-    return new ServerError(stalledMessage(minutes), {
-      status: 504,
-      code: `${codePrefix}_DOWNLOAD_STALLED`,
-    });
-  };
-
-  const cancelledError = () => new ServerError(cancelledMessage, {
-    status: 409,
-    code: `${codePrefix}_DOWNLOAD_CANCELLED`,
-  });
-
   const abortErrorFor = (record) => {
-    if (record.abortReason === 'cancelled') return cancelledError();
-    if (record.abortReason === 'stalled') return stalledError();
+    if (record.abortReason === 'cancelled') {
+      return new ServerError(
+        keepPartialOnCancel
+          ? 'Download cancelled. Its progress is kept: pressing download again resumes from where it stopped.'
+          : 'Download cancelled',
+        { status: 409, code: `${codePrefix}_DOWNLOAD_CANCELLED` },
+      );
+    }
+    if (record.abortReason === 'stalled') {
+      return new ServerError(stalledMessage(Math.round(stallMs / 60000)), {
+        status: 504,
+        code: `${codePrefix}_DOWNLOAD_STALLED`,
+      });
+    }
     return null;
   };
 
-  const cancelRecord = (record) => {
-    if (!record) return false;
-    record.abortReason = 'cancelled';
-    record.controller.abort();
-    return true;
-  };
-
   const slot = {
-    idleStallTimeoutMs: stallMs,
-    progressIntervalMs,
-    stalledError,
-    cancelledError,
-
-    /** How many transfers this slot is currently running. */
-    get size() { return inFlight.size; },
-
     /** Public state of the transfer on `key`, or null. Reflects live byte counters. */
     get: (key) => inFlight.get(key)?.state ?? null,
-
-    /** Every live transfer's public state — for a status surface listing them. */
-    entries: () => [...inFlight.entries()].map(([key, record]) => [key, record.state]),
 
     /**
      * Reserve `key`. Call this BEFORE the first await of the download: resolving
@@ -652,7 +628,6 @@ export function createDownloadSlot({
         );
       }
       const record = {
-        key,
         controller: new AbortController(),
         abortReason: null,
         state: { received: 0, total: 0, ...meta },
@@ -661,11 +636,8 @@ export function createDownloadSlot({
 
       let lastEmit = 0;
       return {
-        key,
-        state: record.state,
         signal: record.controller.signal,
         get cancelled() { return record.abortReason === 'cancelled'; },
-        get stalled() { return record.abortReason === 'stalled'; },
 
         /** Record byte counters so a status read can report this transfer's progress. */
         track(received, total) {
@@ -673,34 +645,41 @@ export function createDownloadSlot({
           if (Number.isFinite(total)) record.state.total = total;
         },
 
-        /** Wrap a progress emitter so it fires at most once per interval. */
+        /**
+         * Wrap a progress emitter so it fires at most once per interval.
+         *
+         * Fixed arity, and the caller passes the PRIMITIVES it already has —
+         * building the frame belongs inside `fn`, which runs ~4 times a second
+         * rather than once per stream chunk.
+         */
         throttle(fn) {
-          return (...args) => {
+          return (a, b) => {
             const now = Date.now();
-            if (now - lastEmit < progressIntervalMs) return;
+            if (now - lastEmit < PROGRESS_INTERVAL_MS) return;
             lastEmit = now;
-            fn(...args);
+            fn(a, b);
           };
         },
 
         /**
          * The abort/stall bundle `streamResumableDownload` takes. Spread it into
          * the call so a slot's cancel and watchdog cannot be wired only halfway.
+         *
+         * `isCancelled` is what tells the stream to DISCARD the `.partial` it was
+         * mid-write on, so a slot that resumes on the next attempt omits it and
+         * the bytes already moved survive the cancel.
          */
         downloadOptions() {
           return {
             signal: record.controller.signal,
             idleStallTimeoutMs: stallMs,
-            // `isCancelled` is what tells the stream to DISCARD the `.partial`
-            // it was mid-write on. A slot that resumes on the next attempt
-            // withholds it, so the bytes already moved survive the cancel.
-            isCancelled: keepPartialOnCancel
-              ? () => false
-              : () => record.abortReason === 'cancelled',
             onIdleStall: () => {
               record.abortReason = 'stalled';
               record.controller.abort();
             },
+            ...(keepPartialOnCancel
+              ? {}
+              : { isCancelled: () => record.abortReason === 'cancelled' }),
           };
         },
 
@@ -709,15 +688,12 @@ export function createDownloadSlot({
          * surfaces as a generic `AbortError`, which tells the user nothing.
          */
         wrapError: (err) => abortErrorFor(record) || err,
-        abortError: () => abortErrorFor(record),
 
         /** Throw the typed abort error if this slot was aborted while awaiting. */
         throwIfAborted() {
-          if (record.controller.signal.aborted) throw abortErrorFor(record) || cancelledError();
+          const aborted = abortErrorFor(record);
+          if (aborted) throw aborted;
         },
-
-        /** Cancel THIS transfer (from inside the owning call). */
-        cancel: () => cancelRecord(record),
 
         release() {
           // Only drop our own record: a later claim on the same key must not be
@@ -728,12 +704,19 @@ export function createDownloadSlot({
     },
 
     /** Cancel the transfer on `key`. False when none is active. */
-    cancel: (key) => cancelRecord(inFlight.get(key)),
+    cancel(key) {
+      const record = inFlight.get(key);
+      if (!record) return false;
+      record.abortReason = 'cancelled';
+      record.controller.abort();
+      return true;
+    },
 
     /**
      * True while a transfer is writing `path` — its destination, its `.partial`,
-     * or (with `matchNested`) anything under a claimed directory. This is what
-     * the orphaned-partial GC asks before unlinking.
+     * or anything under a claimed directory (Slotstream claims one checkpoint
+     * DIRECTORY and writes ~30 shards inside it). This is what the
+     * orphaned-partial GC asks before unlinking.
      */
     isInFlight(path) {
       if (!path || inFlight.size === 0) return false;
@@ -741,11 +724,11 @@ export function createDownloadSlot({
       if (inFlight.has(target)) return true;
       const dest = destPathForPartial(target);
       if (dest !== target && inFlight.has(dest)) return true;
-      if (!matchNested) return false;
       for (const key of inFlight.keys()) {
         // `sep`, not `/`: the sweep hands us paths built with `join`, so on
         // Windows a hardcoded slash would never match and the GC would be free
-        // to unlink a shard that is still transferring.
+        // to unlink a shard that is still transferring. A file-keyed slot has
+        // no children, so this is simply never true for one.
         if (target.startsWith(`${key}${sep}`)) return true;
       }
       return false;

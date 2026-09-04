@@ -65,8 +65,9 @@ export async function sweepOrphanedDownloadPartials({
 } = {}) {
   const targets = dirs || await collectPartialSweepDirs();
   // One predicate for every runtime: each download slot registers itself, so a
-  // new weight-download path is protected the moment it exists rather than when
-  // somebody remembers to add a clause here.
+  // path that claims a slot is protected without a clause added here. (A path
+  // that claims none — `loras.js`, which writes into `PATHS.loras` above — is
+  // not; migrating it is issue #6190.)
   return sweepOrphanedPartials(targets, { now, maxAgeMs, isProtected: isAnyDownloadInFlight });
 }
 

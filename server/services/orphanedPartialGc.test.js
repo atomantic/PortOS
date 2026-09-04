@@ -1,17 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, mkdir, readdir, rm, utimes, writeFile } from 'fs/promises';
-import { readFileSync, readdirSync } from 'fs';
 import { tmpdir } from 'os';
-import { dirname, join, resolve } from 'path';
-import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 import { staticImportClosure } from '../lib/staticImportGraph.js';
+import { SERVER_DIR, collectServerSources, readServerSource } from '../lib/testHelper.js';
 
 vi.mock('./hfToken.js', () => ({ getHfToken: async () => null }));
 
 const { sweepOrphanedDownloadPartials } = await import('./orphanedPartialGc.js');
 const { downloadSlotstreamModel, _resetSlotstreamDownloadsForTests } = await import('./slotstreamModelManager.js');
 
-const SERVER_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const GC_ENTRY = join(SERVER_DIR, 'services', 'orphanedPartialGc.js');
 
 const REPO = 'mlx-community/Qwen3-30B-A3B-4bit';
@@ -47,8 +45,8 @@ describe('sweepOrphanedDownloadPartials', () => {
 
   // The regression this uniquely catches: the sweep used to consult one
   // `isXDownloadInFlight` clause per runtime, so a runtime whose clause nobody
-  // added had its live transfer unlinked mid-write. The shared predicate makes
-  // protection automatic — this proves it covers a slot the GC never names.
+  // added had its live transfer unlinked mid-write. This proves the shared
+  // predicate covers a slot the GC never names.
   it('protects a shard a live Slotstream download is writing, without naming Slotstream', async () => {
     const shardPartial = join(sweepDir, DIR_NAME, 'model.safetensors.partial');
     let release;
@@ -84,27 +82,19 @@ describe('sweepOrphanedDownloadPartials', () => {
   });
 });
 
-const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
-const serverSourceFiles = (dir = SERVER_DIR, out = []) => {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.isDirectory()) {
-      if (SKIP_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
-      serverSourceFiles(join(dir, entry.name), out);
-    } else if (entry.name.endsWith('.js') && !entry.name.endsWith('.test.js')) {
-      out.push(join(dir, entry.name));
-    }
-  }
-  return out;
-};
-
 describe('download-slot registration', () => {
   // `isAnyDownloadInFlight` can only answer for slots that have been
   // CONSTRUCTED, and a module's slot is constructed when the module is loaded.
-  // So the one thing a new weight-download path must still do is be reachable
-  // from the GC — which is exactly the wiring the shared predicate was meant to
-  // stop people forgetting. Assert it structurally rather than by convention.
+  // So what a slot-claiming download path must still do is be reachable from
+  // the GC — the one piece of wiring the shared predicate does not remove.
+  // Assert it structurally rather than by convention.
+  //
+  // Timed out generously: this reads every non-test source under `server/`, the
+  // same full-tree scan `importScoping.test.js` documents as slow on CI.
   it('reaches every module that creates a download slot', () => {
-    const owners = serverSourceFiles().filter((file) => readFileSync(file, 'utf8').includes('createDownloadSlot('));
+    const owners = collectServerSources()
+      .filter((rel) => readServerSource(rel).includes('createDownloadSlot('))
+      .map((rel) => join(SERVER_DIR, rel));
     // Positive control: a resolver gap must not make this guard look clean.
     expect(owners.length).toBeGreaterThanOrEqual(2);
 
@@ -114,5 +104,5 @@ describe('download-slot registration', () => {
       if (owner.endsWith(join('lib', 'downloadPreflight.js'))) continue;
       expect(reached.has(owner), `${owner} creates a download slot but orphanedPartialGc.js never loads it, so its live transfers are unprotected`).toBe(true);
     }
-  });
+  }, 60000);
 });

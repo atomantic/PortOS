@@ -335,8 +335,6 @@ export function cancelSpecDecodeModelDownload({ presetId, role }) {
   return downloadSlot.cancel(resolveSpecModelPath(source.path));
 }
 
-/** True while a curated GGUF download is writing `destPath` (or its `.partial`). */
-export const isSpecDecodeDownloadInFlight = (destPath) => downloadSlot.isInFlight(destPath);
 
 /** Clears in-flight download bookkeeping (used by test suites). */
 export const _resetSpecDecodeDownloadsForTests = () => downloadSlot.reset();

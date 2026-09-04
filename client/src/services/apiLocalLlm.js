@@ -110,12 +110,12 @@ export const installSlotstream = () =>
 export const downloadSlotstreamModel = (model) =>
   request('/local-llm/slotstream/models/download', { method: 'POST', body: JSON.stringify({ model }) });
 
-// Stop the checkpoint download in progress. `model` is optional — one transfers
-// at a time — and the partial files are kept, so a later download resumes.
+// Stop the named checkpoint's download. The bytes already moved are kept, so a
+// later download resumes rather than restarting.
 export const cancelSlotstreamModelDownload = (model, options) =>
   request('/local-llm/slotstream/models/download/cancel', {
     method: 'POST',
-    body: JSON.stringify({ model: model ?? null }),
+    body: JSON.stringify({ model }),
     ...options,
   });
 

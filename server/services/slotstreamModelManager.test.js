@@ -253,7 +253,6 @@ describe('downloadSlotstreamModel', () => {
 
   it('reports no cancellation when nothing is downloading', () => {
     expect(cancelSlotstreamModelDownload({ model: REPO, cacheDir })).toBe(false);
-    expect(cancelSlotstreamModelDownload()).toBe(false);
   });
 
   it('protects a live shard from the orphaned-partial sweep', async () => {
