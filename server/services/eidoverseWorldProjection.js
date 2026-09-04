@@ -21,6 +21,11 @@ import {
   resolveEidoverseDesign,
   stableEidoverseUnit,
 } from '../lib/eidoverseWorldDesign.js';
+import {
+  buildEidoverseLabel,
+  EIDOVERSE_LABEL_COMPONENT_TYPE,
+  safeWorldText,
+} from '../lib/eidoverseWorldLabels.js';
 
 const LEGACY_PROJECTION_ID_PREFIX = 'portos-projection-';
 const PROJECTION_ID_PREFIX = EIDOVERSE_PROJECTION_PREFIX;
@@ -68,11 +73,6 @@ const DISTRICT_SCALE = Object.freeze({
 
 export const DEFAULT_EIDOVERSE_PROJECTION_RECIPE = EIDOVERSE_WORLD_DESIGN_V2;
 
-const safeText = (value, fallback = '', max = 160) => {
-  if (typeof value !== 'string') return fallback;
-  const clean = value.replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
-  return clean ? clean.slice(0, max) : fallback;
-};
 const shortHash = (value) => createHash('sha256').update(String(value)).digest('hex').slice(0, 12);
 
 function mergeRecipe(recipe) {
@@ -159,7 +159,7 @@ function entityPosition(sourceId, sourceKey, districts) {
 
 function worldSignal(kind, sourceKey, item, districts) {
   const district = districtForSource(districts, sourceKey);
-  const sourceIdentity = safeText(item?.id, '', 160) || canonicalStringify(item);
+  const sourceIdentity = safeWorldText(item?.id, '', 160) || canonicalStringify(item);
   const resourceKey = `${kind}-${shortHash(`${kind}:${sourceIdentity}`)}`;
   const metrics = {};
   for (const [key, value] of Object.entries(item || {}).slice(0, 20)) {
@@ -252,6 +252,19 @@ function nexusStatusLight(light, source, existing) {
   return { ...light, color: 0xa78bfa, intensity: 20 };
 }
 
+/**
+ * The single place a `comp.label` verb is minted. Initial projection, ordinary
+ * updates, and stale-resource retention all route through here, so a rendered
+ * plaque can never drift from the `comp.portos` payload it describes. Returns
+ * `null` when the entity already carries exactly this label, which is what
+ * keeps a no-op projection from emitting label verbs.
+ */
+function labelOperation({ prior, id, component, layer }) {
+  const label = buildEidoverseLabel(component);
+  if (equal(prior ?? null, label)) return null;
+  return { layer, verb: 'comp', args: { id, type: EIDOVERSE_LABEL_COMPONENT_TYPE, data: label } };
+}
+
 function upsertModel({
   operations,
   stateEntities,
@@ -294,6 +307,11 @@ function upsertModel({
   const priorComponents = respawned ? undefined : existing.comp;
   if (!equal(priorComponents?.[COMPONENT_TYPE], component)) {
     operations.push({ layer, verb: 'comp', args: { id, type: COMPONENT_TYPE, data: component } });
+    if (existing) updated += 1;
+  }
+  const labelOp = labelOperation({ prior: priorComponents?.[EIDOVERSE_LABEL_COMPONENT_TYPE], id, component, layer });
+  if (labelOp) {
+    operations.push(labelOp);
     if (existing) updated += 1;
   }
   if (!equal(priorComponents?.motion ?? null, motion)) {
@@ -489,8 +507,8 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
         // World title and host identity only — never a record, a machine name,
         // an address, or a filesystem path.
         meta: {
-          title: safeText(meta.title, effectiveRecipe.name, 120),
-          hostId: safeText(meta.hostId, '', 64) || null,
+          title: safeWorldText(meta.title, effectiveRecipe.name, 120),
+          hostId: safeWorldText(meta.hostId, '', 64) || null,
         },
       },
       layer: 'infrastructure',
@@ -610,6 +628,16 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
         };
         if (!equal(existing?.comp?.[COMPONENT_TYPE], staleComponent)) {
           operations.push({ layer: 'live', verb: 'comp', args: { id, type: COMPONENT_TYPE, data: staleComponent } });
+          updated += 1;
+        }
+        const staleLabelOp = labelOperation({
+          prior: existing?.comp?.[EIDOVERSE_LABEL_COMPONENT_TYPE],
+          id,
+          component: staleComponent,
+          layer: 'live',
+        });
+        if (staleLabelOp) {
+          operations.push(staleLabelOp);
           updated += 1;
         }
         const staleMotion = {

@@ -456,6 +456,7 @@ export * from './dispatchLabels.js';
 export * from './domainAutonomy.js';
 export * from './domainBudgets.js';
 export * from './eidoverseWorldDesign.js';
+export * from './eidoverseWorldLabels.js';
 export * from './errorHandler.js';
 export * from './extensionErrors.js';
 export * from './fetchErrorChain.js';

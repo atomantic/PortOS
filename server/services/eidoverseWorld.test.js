@@ -7,6 +7,7 @@ import {
 } from './eidoverseWorld.js';
 import { eidoverseProjectionRecipeSchema } from '../lib/validation.js';
 import { EIDOVERSE_META_ENTITY_ID, EIDOVERSE_WORLD_DESIGN_VERSION } from '../lib/eidoverseWorldDesign.js';
+import { EIDOVERSE_LABEL_VISIBILITIES } from '../lib/eidoverseWorldLabels.js';
 
 const APP_FALLBACK = DEFAULT_EIDOVERSE_PROJECTION_RECIPE.assetRecipe.slots.app.fallback;
 
@@ -783,15 +784,28 @@ describe('Eidoverse world self-description', () => {
       currentState,
     });
     expect(renamed.operations.filter(({ args }) => args?.id === EIDOVERSE_META_ENTITY_ID))
-      .toEqual([{
-        layer: 'infrastructure',
-        verb: 'comp',
-        args: {
-          id: EIDOVERSE_META_ENTITY_ID,
-          type: 'portos',
-          data: expect.objectContaining({ meta: { title: 'Renamed Garden', hostId: meta.hostId } }),
+      .toEqual([
+        {
+          layer: 'infrastructure',
+          verb: 'comp',
+          args: {
+            id: EIDOVERSE_META_ENTITY_ID,
+            type: 'portos',
+            data: expect.objectContaining({ meta: { title: 'Renamed Garden', hostId: meta.hostId } }),
+          },
         },
-      }]);
+        // Renaming the world renames its plaque in the same pass, so the two
+        // can never describe different worlds.
+        {
+          layer: 'infrastructure',
+          verb: 'comp',
+          args: {
+            id: EIDOVERSE_META_ENTITY_ID,
+            type: 'label',
+            data: expect.objectContaining({ name: 'Renamed Garden', visibility: 'always' }),
+          },
+        },
+      ]);
   });
 
   // A managed entity the plan no longer wants is swept by the reconciliation
@@ -811,5 +825,147 @@ describe('Eidoverse world self-description', () => {
       verb: 'remove',
       args: { id: EIDOVERSE_META_ENTITY_ID },
     });
+  });
+});
+
+// Values a live install genuinely holds — invented here, never observed. The
+// append-only world log is replicated to a renderer PortOS does not run, so a
+// record title, a machine name, an address, or a repository path reaching a
+// label is a privacy incident, not a cosmetic bug.
+const PRIVATE_FIXTURE_VALUES = [
+  'Acme Payroll Sync',
+  'Ship the Q3 invoice run',
+  'host-XXXX.example.ts.net',
+  '192.0.2.10',
+  '/Users/example-user/github.com/acme/private-notes',
+  'alice@example.com',
+];
+
+const privateSource = () => ({
+  ...emptySources(),
+  apps: [{
+    id: 'app-acme-payroll',
+    label: 'Acme Payroll Sync',
+    status: 'online',
+    installPath: '/Users/example-user/github.com/acme/private-notes',
+    host: 'host-XXXX.example.ts.net',
+    restarts: 2,
+  }],
+  tasks: [{
+    id: 'task-invoice',
+    title: 'Ship the Q3 invoice run',
+    prompt: 'Ship the Q3 invoice run',
+    status: 'running',
+  }],
+  peers: [{ id: 'peer-lab', label: 'host-XXXX.example.ts.net', address: '192.0.2.10', status: 'online' }],
+  memory: [{ id: 'memory-inbox', owner: 'alice@example.com', status: 'active', entries: 12 }],
+  health: { id: 'overview', status: 'healthy' },
+});
+
+const labelOps = (plan) => plan.operations.filter(({ verb, args }) => verb === 'comp' && args.type === 'label');
+
+const labelFor = (plan, id) => labelOps(plan).find(({ args }) => args.id === id)?.args.data;
+
+describe('Eidoverse projection labels', () => {
+  it('names every owned landmark, walkway, world identity and live indicator by what it represents', () => {
+    const plan = buildProjectionPlan({ source: appSource(), meta: { title: 'Example Garden', hostId: 'hst_0123456789ab' } });
+    const district = labelFor(plan, 'portos-design-v2-infra-apps');
+    const pathNode = labelOps(plan).find(({ args }) => args.id.startsWith('portos-design-v2-path-'))?.args.data;
+    const worldMeta = labelFor(plan, EIDOVERSE_META_ENTITY_ID);
+    const signal = labelFor(plan, signalSpawn(plan, 'app').args.id);
+
+    // Landmarks read from across a district; the walkway markers that lead to
+    // them are numerous, so only landmarks and the world identity float.
+    expect(district).toMatchObject({ name: 'App Terraces', visibility: 'always' });
+    expect(district.description).toContain('service pylons');
+    expect(district.description).toContain('apps');
+    expect(pathNode).toMatchObject({ visibility: 'inspect' });
+    expect(pathNode.name).toBe('Nexus to App Terraces');
+    expect(worldMeta).toMatchObject({ name: 'Example Garden', visibility: 'always' });
+    expect(signal).toMatchObject({ visibility: 'nearby' });
+    expect(signal.name).toMatch(/^Managed app [0-9a-f]{6}$/);
+    expect(signal.description).toContain('App Terraces');
+    expect(signal.description).toContain('an app this install manages');
+
+    // Every managed model carries one, and none of them describes the
+    // decorative asset that happens to stand in for it.
+    const managedSpawns = plan.operations
+      .filter(({ verb, args }) => verb === 'spawn' && args.id.startsWith('portos-design-v2-'))
+      .map(({ args }) => args.id);
+    expect(labelOps(plan).map(({ args }) => args.id).sort()).toEqual(managedSpawns.sort());
+    expect(labelOps(plan).every(({ args }) => !/\.glb|assets\/models/.test(JSON.stringify(args.data)))).toBe(true);
+    // A visibility the renderer does not know is a label it silently drops.
+    expect(labelOps(plan).every(({ args }) => EIDOVERSE_LABEL_VISIBILITIES.includes(args.data.visibility))).toBe(true);
+  });
+
+  it('keeps record contents, machine identity, addresses and paths out of every projected payload', () => {
+    const plan = buildProjectionPlan({
+      source: privateSource(),
+      meta: { title: 'Example Garden', hostId: 'hst_0123456789ab' },
+    });
+    const serialized = JSON.stringify(plan.operations);
+
+    for (const value of PRIVATE_FIXTURE_VALUES) {
+      expect(serialized).not.toContain(value);
+    }
+    // The labels are still useful: they name the category and its district.
+    expect(labelOps(plan).length).toBeGreaterThan(0);
+    expect(labelOps(plan).map(({ args }) => args.data.name)).toEqual(
+      expect.arrayContaining([expect.stringContaining('Federated peer')]),
+    );
+  });
+
+  it('emits no label verbs for an unchanged world and never duplicates a label', () => {
+    const first = buildProjectionPlan({ source: appSource(), meta: { title: 'Example Garden', hostId: 'hst_0123456789ab' } });
+    const currentState = snapshotFromPlan(first, { foldModelDefaults: true });
+    const second = buildProjectionPlan({
+      source: appSource(),
+      meta: { title: 'Example Garden', hostId: 'hst_0123456789ab' },
+      currentState,
+    });
+
+    expect(labelOps(second)).toEqual([]);
+    const ids = labelOps(first).map(({ args }) => args.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('labels only PortOS-owned entities and drops the label when the world reset sweeps them', () => {
+    const first = buildProjectionPlan({ source: appSource() });
+    const currentState = snapshotFromPlan(first, { foldModelDefaults: true });
+    currentState.entities['example-manual-model'] = {
+      id: 'example-manual-model',
+      lib: 'store/example-manual-model',
+      pos: [1, 0, 1],
+      comp: { label: { name: 'Authored by a visitor', visibility: 'always' } },
+    };
+    const next = buildProjectionPlan({ source: appSource(), currentState });
+
+    expect(next.operations.some(({ args }) => args?.id === 'example-manual-model')).toBe(false);
+    // A managed entity is removed whole, so its label leaves with it — PortOS
+    // never issues a bare label delete against someone else's entity.
+    expect(first.operations.filter(({ verb }) => verb === 'remove')).toEqual([]);
+  });
+
+  it('explains why a retained indicator is stale once its source goes away', () => {
+    const created = buildProjectionPlan({ source: appSource(), currentState: currentEnvironment() });
+    const appSpawn = signalSpawn(created, 'app');
+    const entityId = appSpawn.args.id;
+    const currentComponent = created.operations.find((operation) => (
+      operation.verb === 'comp' && operation.args.id === entityId && operation.args.type === 'portos'
+    )).args.data;
+    const unavailable = buildProjectionPlan({
+      source: { ...emptySources(), apps: null },
+      currentState: {
+        ...currentEnvironment(),
+        entities: {
+          [entityId]: {
+            ...appSpawn.args,
+            comp: { portos: currentComponent, label: labelFor(created, entityId) },
+          },
+        },
+      },
+    });
+
+    expect(labelFor(unavailable, entityId).description).toContain('data is stale');
   });
 });
