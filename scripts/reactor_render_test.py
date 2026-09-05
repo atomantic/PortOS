@@ -53,10 +53,11 @@ class FakeReactor:
     def on_raw_frame(self, callback):
         self.callbacks[self.kind] = callback
 
-    def frame(self, index):
+    def frame(self, index, size=(2, 2)):
         # Nonzero PTS origin, and integer microseconds like the decoded SDK track.
         timestamp = 9_000_000 + int(index * 1_000_000 / 24)
-        self.callbacks["video"](bytes([index]) * 16, 2, 2, index, timestamp, None)
+        width, height = size
+        self.callbacks["video"](bytes([index]) * (width * height * 4), width, height, index, timestamp, None)
 
     async def send_command(self, name, data):
         self.commands.append((name, data))
@@ -115,6 +116,58 @@ class CaptureLifecycleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1], {"type": "complete", "clipId": "example-clip", "seconds": 6.0})
         self.assertTrue(reactor.disconnected)
         self.assertFalse(Path(str(self.output) + ".capture").exists())
+        spawn.assert_awaited_once()
+
+    async def test_canvas_opens_on_the_requested_aspect_and_rejects_one_fast_h3_cannot_render(self):
+        reactor = FakeReactor()
+
+        async def encode(*command, **kwargs):
+            self.output.write_bytes(b"example-mp4")
+            return SimpleNamespace(returncode=0, wait=AsyncMock(return_value=0))
+
+        self.params["aspect"] = "9:16"
+        await self.run_capture(reactor, AsyncMock(side_effect=encode))
+        self.assertEqual(reactor.commands[0], ("set_canvas", {"aspect": "9:16"}))
+        # An unrenderable aspect must fail before a paid session is constructed.
+        with patch.object(self.runner, "Reactor") as factory:
+            with self.assertRaises(ValueError):
+                await self.runner.render({**self.params, "aspect": "21:9"})
+            factory.assert_not_called()
+
+    async def test_mid_stream_resolution_change_never_reaches_the_encoder(self):
+        # A renegotiated WebRTC track delivers a differently-sized BGRA buffer.
+        # ffmpeg is told ONE -video_size, so keeping both shifts the stride for
+        # every later frame and the clip decodes as noise (or black) while its
+        # audio plays fine — the "audio but no visuals" report.
+        reactor = FakeReactor()
+
+        async def drain_with_resize(delay):
+            for index in reactor.delivered[2:]:
+                reactor.frame(index)
+                if index in (60, 61):
+                    # A renegotiated track: a differently-sized buffer landing
+                    # between two good frames, at a timestamp inside the clip,
+                    # so the hold-across-gaps loop would otherwise select it.
+                    timestamp = 9_000_000 + int(index * 1_000_000 / 24) + 20_000
+                    reactor.callbacks["video"](bytes([200]) * 64, 4, 4, index, timestamp, None)
+
+        reactor.drain = drain_with_resize
+
+        async def encode(*command, **kwargs):
+            self.assertEqual(command[command.index("-video_size") + 1], "2x2")
+            video = Path(command[command.index("-i") + 1]).read_bytes()
+            self.assertEqual(len(video), 144 * 2 * 2 * 4)
+            self.assertNotIn(bytes([200]) * 64, video)
+            # The scratch dir is removed on success, so read it here.
+            capture = json.loads(Path(str(self.output) + ".capture/capture.json").read_text())
+            self.assertEqual(capture["size"], [2, 2])
+            self.assertEqual(capture["frames"], 116)
+            self.output.write_bytes(b"example-mp4")
+            return SimpleNamespace(returncode=0, wait=AsyncMock(return_value=0))
+
+        spawn = AsyncMock(side_effect=encode)
+        events = await self.run_capture(reactor, spawn)
+        self.assertEqual(events[-1]["type"], "complete")
         spawn.assert_awaited_once()
 
     async def test_capture_just_below_eighty_percent_disconnects_without_encoding_or_retrying(self):

@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   REACTOR_MAX_PROMPT_LENGTH, REACTOR_CLIP_FPS, REACTOR_MIN_CLIP_SECONDS,
   REACTOR_MAX_CLIP_SECONDS, REACTOR_CLIP_LENGTHS, REACTOR_DEFAULT_CLIP_LENGTH,
+  REACTOR_CANVASES, REACTOR_ASPECTS, REACTOR_DEFAULT_ASPECT,
+  reactorCanvas, nearestReactorAspect,
   reactorClipLengthLabel,
 } from './reactorVideoClip.js';
 
@@ -31,6 +33,38 @@ describe('reactorVideoClip', () => {
     expect(Number.isInteger(REACTOR_MAX_CLIP_SECONDS * REACTOR_CLIP_FPS)).toBe(true);
   });
 
+  // fast-h3 renders at a 768px short edge on every canvas, so a canvas whose
+  // short edge drifted would be a resolution PortOS asks for and the API does
+  // not render.
+  it('offers only canvases fast-h3 renders, each on a 768px short edge', () => {
+    expect(REACTOR_ASPECTS).toEqual(['16:9', '4:3', '1:1', '9:16']);
+    for (const canvas of REACTOR_CANVASES) {
+      expect(Math.min(canvas.width, canvas.height)).toBe(768);
+      expect(canvas.label).toContain(`${canvas.width}\u00d7${canvas.height}`);
+    }
+    expect(REACTOR_ASPECTS).toContain(REACTOR_DEFAULT_ASPECT);
+    expect(reactorCanvas('9:16')).toMatchObject({ width: 768, height: 1344 });
+  });
+
+  // The whole bug: a portrait starting frame used to open a 1344x768 session.
+  it('derives the canvas closest to a starting frame, and never guesses one it cannot measure', () => {
+    expect(nearestReactorAspect(3024, 4032)).toBe('9:16');
+    expect(nearestReactorAspect(1080, 1920)).toBe('9:16');
+    expect(nearestReactorAspect(1920, 1080)).toBe('16:9');
+    expect(nearestReactorAspect(1000, 1000)).toBe('1:1');
+    expect(nearestReactorAspect(1600, 1200)).toBe('4:3');
+    for (const bad of [[0, 100], [100, 0], [NaN, 100], [undefined, undefined], [-16, -9]]) {
+      expect(nearestReactorAspect(...bad)).toBe(REACTOR_DEFAULT_ASPECT);
+    }
+  });
+
+  // An unknown aspect must land on a real canvas rather than `undefined`, or
+  // the caller reads `.width` off nothing while fitting a frame.
+  it('falls back to the default canvas for an aspect it does not render', () => {
+    expect(reactorCanvas('21:9')).toMatchObject({ aspect: REACTOR_DEFAULT_ASPECT });
+    expect(reactorCanvas(undefined)).toMatchObject({ aspect: REACTOR_DEFAULT_ASPECT });
+  });
+
   it('names the endpoints so the odd numbers read as bounds, not typos', () => {
     expect(reactorClipLengthLabel(REACTOR_MIN_CLIP_SECONDS)).toBe('5.167 seconds (min)');
     expect(reactorClipLengthLabel(REACTOR_MAX_CLIP_SECONDS)).toBe('14.375 seconds (max)');
@@ -53,6 +87,15 @@ describe('reactorVideoClip client mirror', () => {
     expect([...clientMirror.REACTOR_CLIP_LENGTHS]).toEqual([...REACTOR_CLIP_LENGTHS]);
     for (const seconds of REACTOR_CLIP_LENGTHS) {
       expect(clientMirror.reactorClipLengthLabel(seconds)).toBe(reactorClipLengthLabel(seconds));
+    }
+    // The canvas picker builds from the mirror, so a canvas that drifted would
+    // offer a resolution the service refuses (or omit one it renders).
+    expect(clientMirror.REACTOR_DEFAULT_ASPECT).toBe(REACTOR_DEFAULT_ASPECT);
+    expect([...clientMirror.REACTOR_ASPECTS]).toEqual([...REACTOR_ASPECTS]);
+    expect(clientMirror.REACTOR_CANVASES.map((c) => ({ ...c })))
+      .toEqual(REACTOR_CANVASES.map((c) => ({ ...c })));
+    for (const [w, h] of [[3024, 4032], [1920, 1080], [768, 768], [0, 0]]) {
+      expect(clientMirror.nearestReactorAspect(w, h)).toBe(nearestReactorAspect(w, h));
     }
   });
 });

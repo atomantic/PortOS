@@ -14,7 +14,9 @@ import { getSettings } from '../settings.js';
 import {
   REACTOR_MAX_PROMPT_LENGTH, REACTOR_MAX_CLIP_ID_LENGTH,
   REACTOR_MIN_CLIP_SECONDS, REACTOR_MAX_CLIP_SECONDS, REACTOR_DEFAULT_CLIP_LENGTH,
+  REACTOR_ASPECTS, reactorCanvas,
 } from '../../lib/reactorVideoClip.js';
+import { prepareReactorStartingFrame } from '../../lib/reactorStartingFrame.js';
 
 export const REACTOR_API_BASE = 'https://api.reactor.inc';
 export const REACTOR_MODEL_ID = 'fast-h3';
@@ -93,7 +95,7 @@ export const cancelAll = () => {
 };
 
 export function validateReactorRequest({
-  prompt, continueFromClipId, sourceImagePath, seconds = REACTOR_DEFAULT_CLIP_LENGTH, seed,
+  prompt, continueFromClipId, sourceImagePath, seconds = REACTOR_DEFAULT_CLIP_LENGTH, seed, aspect,
 }) {
   if (typeof prompt !== 'string' || !prompt.trim() || prompt.trim().length > REACTOR_MAX_PROMPT_LENGTH) {
     throw new ServerError(`Reactor prompts must contain 1–${REACTOR_MAX_PROMPT_LENGTH} characters; shorten the shot prompt before rendering`, { status: 400, code: 'VALIDATION_ERROR' });
@@ -115,11 +117,19 @@ export function validateReactorRequest({
   if (seed != null && seed !== '' && (!Number.isSafeInteger(Number(seed)) || Number(seed) < 0)) {
     throw new ServerError('Reactor seed must be a non-negative integer', { status: 400, code: 'VALIDATION_ERROR' });
   }
+  // An absent aspect is the request to DERIVE the canvas from the starting
+  // frame (see lib/reactorStartingFrame.js) — a text render falls back to the
+  // default there. An unrecognized one is rejected rather than silently
+  // rendered on 16:9, which is how every render used to land there.
+  if (aspect != null && aspect !== '' && !REACTOR_ASPECTS.includes(aspect)) {
+    throw new ServerError(`Reactor canvas aspect must be one of ${REACTOR_ASPECTS.join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
   return {
     prompt: prompt.trim(),
     seconds: Number(seconds),
     ...(continueFromClipId ? { continueFromClipId } : {}),
     ...(seed != null && seed !== '' ? { seed: Number(seed) } : {}),
+    ...(aspect ? { aspect } : {}),
   };
 }
 
@@ -189,10 +199,10 @@ function captureClip(entry, input, pythonPath, job, jobId) {
 
 export async function generateVideo({
   settings, prompt = '', negativePrompt,
-  continueFromClipId, seconds, seed,
+  continueFromClipId, seconds, seed, aspect,
   sourceImagePath = null, jobId: providedJobId = null,
 }) {
-  const request = validateReactorRequest({ prompt, continueFromClipId, sourceImagePath, seconds, seed });
+  const request = validateReactorRequest({ prompt, continueFromClipId, sourceImagePath, seconds, seed, aspect });
   const pythonPath = process.env.REACTOR_PYTHON_PATH || join(PATHS.data, 'venvs', 'reactor', ...(process.platform === 'win32' ? ['Scripts', 'python.exe'] : ['bin', 'python']));
   const runtime = await stat(pythonPath).catch(() => null);
   if (!runtime?.isFile()) { throw new ServerError('Reactor runtime is missing. Run npm run setup:reactor, or set REACTOR_PYTHON_PATH', { status: 400, code: 'REACTOR_RUNTIME_MISSING' }); }
@@ -248,20 +258,26 @@ export async function generateVideo({
 }
 
 async function runReactorVideo(job, jobId, {
-  apiKey, prompt, seconds, seed, continueFromClipId, pythonPath, sourceImagePath, outputPath, filename, meta,
+  apiKey, prompt, seconds, seed, aspect, continueFromClipId, pythonPath, sourceImagePath, outputPath, filename, meta,
 }) {
   const entry = { aborted: false, stop: null };
   activeRequests.set(jobId, entry);
+  // Declared outside the try so the finally can still delete a fitted frame
+  // whose render failed after it was written.
+  let frame = { aspect, canvas: reactorCanvas(aspect), framePath: sourceImagePath, fittedPath: null };
   try {
+    // Resolved before the token is minted, so a starting frame PortOS could not
+    // fit costs nothing on the reactor side.
+    frame = await prepareReactorStartingFrame(sourceImagePath, aspect, outputPath);
     const { jwt } = await mintReactorToken(apiKey);
     if (entry.aborted) return finalizeCanceled(job, jobId);
     const result = await captureClip(entry, {
-      jwt, prompt, seconds, seed, continueFromClipId, sourceImagePath, outputPath,
+      jwt, prompt, seconds, seed, continueFromClipId, aspect: frame.aspect, sourceImagePath: frame.framePath, outputPath,
     }, pythonPath, job, jobId);
     if (entry.aborted) return finalizeCanceled(job, jobId);
     const output = await stat(outputPath).catch(() => null);
     if (!output?.isFile() || !output.size) throw new Error('Reactor completed without a playable output file');
-    await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta: { ...meta, clipId: result.clipId, seconds: result.seconds }, actualSeed: seed ?? null, mutateHistory: mutateVideoHistory });
+    await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta: { ...meta, aspect: frame.aspect, width: frame.canvas.width, height: frame.canvas.height, clipId: result.clipId, seconds: result.seconds }, actualSeed: seed ?? null, mutateHistory: mutateVideoHistory });
     closeJobAfterDelay(jobs, jobId);
   } catch (err) {
     await rm(outputPath, { force: true }).catch(() => {});
@@ -273,6 +289,7 @@ async function runReactorVideo(job, jobId, {
       : '';
     finalizeError(job, jobId, entry.aborted ? 'Canceled' : `Reactor video generation failed: ${err?.message || 'unknown error'}${continuationHint}`, { force: true });
   } finally {
+    if (frame.fittedPath) await rm(frame.fittedPath, { force: true }).catch(() => {});
     if (entry.aborted) await rm(outputPath, { force: true }).catch(() => {});
     activeRequests.delete(jobId);
     activeJobs.delete(jobId);

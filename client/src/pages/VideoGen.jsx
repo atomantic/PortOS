@@ -212,6 +212,7 @@ export default function VideoGen() {
     backend, isGrok, isFal, isReactor, handleBackendChange, grokDuration, setGrokDuration,
     falDuration, setFalDuration, falModelId, setFalModelId,
     reactorClipId, setReactorClipId, reactorSeconds, setReactorSeconds, reactorSeed, setReactorSeed,
+    reactorAspect, setReactorAspect,
     mode, handleModeChange,
     prompt, setPrompt, envelopedPrompt, negativePrompt, setNegativePrompt, stylePreset, setStylePreset,
     selectedUniverse, setSelectedUniverse, remixModelFallback,
@@ -1581,6 +1582,8 @@ export default function VideoGen() {
               onSecondsChange={setReactorSeconds}
               seed={reactorSeed}
               onSeedChange={setReactorSeed}
+              aspect={reactorAspect}
+              onAspectChange={setReactorAspect}
             />
           ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">

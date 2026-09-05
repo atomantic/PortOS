@@ -18,6 +18,7 @@ import {
 import { grokVideoDurationSchema } from '../lib/sharedSchemas.js';
 import {
   REACTOR_MAX_CLIP_ID_LENGTH, REACTOR_MIN_CLIP_SECONDS, REACTOR_MAX_CLIP_SECONDS,
+  REACTOR_ASPECTS,
 } from '../lib/reactorVideoClip.js';
 import { MIN_CONTEXT_FRAMES, MAX_CONTEXT_FRAMES } from '../lib/videoContinuity.js';
 import { I2V_REFERENCE_MODES } from '../lib/videoReferenceModes.js';
@@ -283,6 +284,16 @@ const generateBodySchema = z.object({
   reactorSeed: z.preprocess(
     (v) => (v == null || v === '' ? undefined : Number(v)),
     optionalNum(0, 2 ** 32 - 1, 'reactorSeed'),
+  ),
+  // fast-h3 session canvas — a `set_canvas` aspect, NOT width/height: every
+  // canvas holds a 768px short edge so the aspect is the whole choice. Omitted
+  // means "derive it from the starting frame" (the picker's Auto entry), which
+  // is what keeps a portrait image off the 1344x768 canvas every render used to
+  // open with. Multipart bodies arrive as strings, so the empty-string sentinel
+  // has to read as omitted rather than as an invalid enum value.
+  reactorAspect: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.enum(REACTOR_ASPECTS).optional(),
   ),
   prompt: z.string().min(1).max(8000),
   negativePrompt: z.string().max(8000).optional(),
@@ -920,10 +931,11 @@ const ACTIVE_JOB_PARAM_FIELDS = [
   // 'grok' discriminator for them) and the clip duration — both plain
   // values, safe to echo for the reloading page's form restore.
   'videoMode', 'duration',
-  // reactor.inc jobs (#6214): the clip to chain from and the clip length —
-  // both plain scalars (no filesystem path), safe to echo for the reloading
-  // page's form restore. `seed` above already covers reactor's seed field.
-  'continueFromClipId', 'seconds',
+  // reactor.inc jobs (#6214): the clip to chain from, the clip length, and the
+  // fast-h3 session canvas — all plain scalars (no filesystem path), safe to
+  // echo for the reloading page's form restore. `seed` above already covers
+  // reactor's seed field.
+  'continueFromClipId', 'seconds', 'aspect',
   // loras are { filename, scale } basenames (no server filesystem paths), so
   // they're safe to echo back for the resuming picker to repopulate.
   'loras',

@@ -12,6 +12,7 @@ import {
 } from '../test/videoGenPageMocks.jsx';
 import {
   REACTOR_MAX_PROMPT_LENGTH, REACTOR_MIN_CLIP_SECONDS, REACTOR_MAX_CLIP_SECONDS,
+  REACTOR_ASPECTS,
 } from '../lib/reactorVideoClip.js';
 
 // A local model that DOES take a negative prompt, so "the box is gone" can only
@@ -108,6 +109,32 @@ describe('VideoGen reactor.inc lane', () => {
     fireEvent.change(lengths, { target: { value: String(REACTOR_MAX_CLIP_SECONDS) } });
     fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'a fox watches the rain' } });
     expect((await submit()).reactorSeconds).toBe(REACTOR_MAX_CLIP_SECONDS);
+  });
+
+  // fast-h3's resolution IS its session canvas, and the canvas is an aspect
+  // (every one has a 768px short edge). Sending nothing is the Auto entry: the
+  // server derives the canvas from the starting frame instead of opening the
+  // 16:9 session that squeezed a portrait image into a landscape render.
+  it('offers the fast-h3 canvases and defaults to deriving one from the frame', async () => {
+    await renderVideoGenPage();
+    await selectReactor();
+
+    const canvas = screen.getByLabelText('Canvas');
+    expect(canvas.tagName).toBe('SELECT');
+    expect([...canvas.options].map((option) => option.value)).toEqual(['', ...REACTOR_ASPECTS]);
+    expect(canvas.value).toBe('');
+
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'a fox watches the rain' } });
+    expect((await submit()).reactorAspect).toBeUndefined();
+  });
+
+  it('submits the canvas the user picked over the derived one', async () => {
+    await renderVideoGenPage();
+    await selectReactor();
+
+    fireEvent.change(screen.getByLabelText('Canvas'), { target: { value: '9:16' } });
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'a fox watches the rain' } });
+    expect((await submit()).reactorAspect).toBe('9:16');
   });
 
   // The clip id is stamped on every finished reactor render precisely so a

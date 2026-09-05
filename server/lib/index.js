@@ -144,6 +144,7 @@ export * from './contextBudget.js';
 export * from './cursor.js';
 export * from './grok.js';
 export * from './grokVideoClip.js';
+export * from './reactorStartingFrame.js';
 export * from './reactorVideoClip.js';
 export * from './heavyJobClaim.js';
 export * from './hfErrors.js';

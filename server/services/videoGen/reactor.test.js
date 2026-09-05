@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter, once } from 'events';
-import { mkdir, rm, writeFile } from 'fs/promises';
+import { mkdir, rm, stat, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -71,11 +71,44 @@ describe('Reactor SDK adapter', () => {
       // Continuation and a starting frame both say "begin from this picture",
       // so accepting both would leave the winner up to the SDK.
       { continueFromClipId: 'clip-example', sourceImagePath: '/example/first-frame.png' },
+      // A canvas fast-h3 cannot open must fail here rather than silently
+      // rendering on 16:9 — the shape of the original bug.
+      { aspect: '21:9' },
     ]) {
       await expect(reactor.generateVideo({ prompt: 'A gate', ...options })).rejects.toBeTruthy();
     }
     expect(fetch).not.toHaveBeenCalled();
     expect(mocks.spawn).not.toHaveBeenCalled();
+  });
+
+  // fast-h3 FITS a starting frame to whatever canvas the session opened with,
+  // and PortOS pinned 16:9 for every render — which is why a portrait image
+  // came back as a clip with clean audio and no usable picture.
+  it('opens a portrait session for a portrait frame and uploads it pre-cropped', async () => {
+    const sourceImagePath = join(root, 'portrait.png');
+    const sharp = (await import('sharp')).default;
+    await sharp({ create: { width: 900, height: 1600, channels: 3, background: '#204080' } }).png().toFile(sourceImagePath);
+    const job = await started({ sourceImagePath });
+    expect(input.aspect).toBe('9:16');
+    // The upload is the fitted copy, not the oversized original.
+    expect(input.sourceImagePath).toBe(`${input.outputPath}.start.png`);
+    await writeFile(input.outputPath, 'example-video');
+    child.stdout.emit('data', Buffer.from('{"type":"complete","clipId":"clip-example","seconds":6}\n'));
+    child.emit('close', 0);
+    await vi.waitFor(() => expect(mocks.finalize).toHaveBeenCalledWith(expect.objectContaining({
+      jobId: job.jobId,
+      meta: expect.objectContaining({ aspect: '9:16', width: 768, height: 1344 }),
+    })));
+    // The fitted copy is scratch, not a render output left beside the clip.
+    await expect(stat(input.sourceImagePath)).rejects.toBeTruthy();
+  });
+
+  it('opens the canvas the request named, over the one the frame implies', async () => {
+    const sourceImagePath = join(root, 'explicit.png');
+    const sharp = (await import('sharp')).default;
+    await sharp({ create: { width: 900, height: 1600, channels: 3, background: '#204080' } }).png().toFile(sourceImagePath);
+    await started({ sourceImagePath, aspect: '1:1' });
+    expect(input.aspect).toBe('1:1');
   });
 
   // The clip id is stamped on every completed reactor history record precisely
