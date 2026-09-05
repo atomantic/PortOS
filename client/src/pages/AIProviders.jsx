@@ -11,7 +11,7 @@ import useLocalModels from '../hooks/useLocalModels';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import EmptyState from '../components/EmptyState';
 import Banner from '../components/ui/Banner';
-import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
+import ModelsTabsHeader from '../components/models/ModelsTabsHeader';
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import OverflowMenu from '../components/ui/OverflowMenu';
@@ -661,7 +661,7 @@ export default function AIProviders() {
     return (
       <div className="flex flex-col h-full">
         <PageHeader icon={Bot} title="AI Providers" />
-        <SettingsTabsHeader activeTab="providers" />
+        <ModelsTabsHeader activeTab="providers" />
         <div className="flex-1 overflow-auto p-4">
           <PageSkeleton header="none" label="Loading providers" layout="grid" cards={4} />
         </div>
@@ -710,7 +710,7 @@ export default function AIProviders() {
         )}
       />
 
-      <SettingsTabsHeader activeTab="providers" />
+      <ModelsTabsHeader activeTab="providers" />
 
       <div className="flex-1 overflow-auto p-4 space-y-6">
 

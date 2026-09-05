@@ -48,8 +48,8 @@ vi.mock('../services/socket', () => ({
 vi.mock('../hooks/useLocalModels', () => ({
   default: () => localModels.value,
 }));
-vi.mock('../components/settings/SettingsTabsHeader', () => ({
-  default: () => <div data-testid="settings-tabs-header" />,
+vi.mock('../components/models/ModelsTabsHeader', () => ({
+  default: ({ activeTab }) => <div data-testid="models-tabs-header" data-active-tab={activeTab} />,
 }));
 vi.mock('../components/install/RuntimeInstallModal', () => ({
   // `params` becomes the setup request's query string, so the test can assert
@@ -277,7 +277,15 @@ describe('AIProviders page load error handling', () => {
     expect(screen.getByRole('menuitem', { name: /Compare local models/ })).toHaveAttribute('href', '/models/performance');
   });
 
-  // The page hosts SettingsTabsHeader; before #5653 it also hand-rolled a
+  it('uses the Models child navigation after Providers moves out of Settings', async () => {
+    api.getProviders.mockResolvedValue({ providers: [], activeProvider: null });
+
+    renderPage();
+
+    expect(await screen.findByTestId('models-tabs-header')).toHaveAttribute('data-active-tab', 'providers');
+  });
+
+  // The page hosts ModelsTabsHeader; before #5653 it also hand-rolled a
   // `Settings` title bar above it, so every render stacked two h1s and pushed
   // the first provider card off a phone viewport.
   it('renders exactly one h1, naming the page rather than the settings section', async () => {

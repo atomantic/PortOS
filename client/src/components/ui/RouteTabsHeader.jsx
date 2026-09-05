@@ -2,7 +2,7 @@ import { useNavigate } from 'react-router';
 import TabPills from './TabPills';
 
 // Above this many tabs, a phone-width pill row is a horizontal scroll nobody
-// finds the far end of. Six fits 375px; nine (Models) does not.
+// finds the far end of. Six fits 375px; larger sections such as Models do not.
 const MOBILE_DROPDOWN_THRESHOLD = 6;
 
 const selectIdFor = (ariaLabel) => `${String(ariaLabel || 'section').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-select`;
@@ -16,8 +16,8 @@ const selectIdFor = (ariaLabel) => `${String(ariaLabel || 'section').toLowerCase
  * from ⌘K and voice — the URL is the source of truth for what is open
  * (`client/src/AGENTS.md`).
  *
- * Each section owns its own `TABS` array (`{ id, label, to }`) and passes it in;
- * the navigation shim is the same for all of them. Sections may include a tab
+ * Each section passes a `{ id, label, to }` tab list; section wrappers may
+ * derive that list from the shared nav manifest. Sections may include a tab
  * whose `to` lives outside their route prefix (Models → Playground) — the id
  * still selects it, so the host page passes its own `activeTab`.
  *

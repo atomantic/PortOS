@@ -1,6 +1,6 @@
 // Single source of truth for PortOS navigation. Consumed by the sidebar,
 // server/services/voice/tools.js#ui_navigate, and the Cmd+K palette.
-// Entry: { id, path, label, section, aliases?, keywords?, previousPaths?, preservePreviousPathSuffix? }.
+// Entry: { id, path, label, section, tabId?, aliases?, keywords?, previousPaths?, preservePreviousPathSuffix? }.
 // See AGENTS.md "Command Palette & Voice Nav" for the contract.
 //
 // `previousPaths` lists every path this page has ANSWERED TO BEFORE — including
@@ -84,8 +84,8 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.media.settings', path: '/media/image?settings=1', label: 'Media Gen Settings', section: 'Create', aliases: ['media-settings', 'image-gen-settings', 'sd-settings', 'video-gen-settings'] },
   { id: 'nav.writers-room', path: '/writers-room', label: 'Writers Room', section: 'Create', aliases: ['writers-room', 'writersroom', 'writer', 'write', 'studio', 'novel'], keywords: ['prose', 'screenplay', 'story', 'draft', 'manuscript', 'literary', 'novel', 'short story'] },
   { id: 'nav.writers-room.guide', path: '/writers-room/guide', label: 'Writers Room Guide', section: 'Create', aliases: ['writers-room-guide', 'writing-guide', 'writing-rules', 'word-count', 'length-targets'], keywords: ['microfiction', 'flash fiction', 'short story', 'novelette', 'novella', 'novel length', 'word count', 'character count', 'book length', 'craft', 'writing advice', 'emotional roadmap', 'documentation', 'help'] },
-  { id: 'nav.settings.prompts', path: '/prompts', label: 'Prompts', section: 'Settings', aliases: ['prompts'] },
-  { id: 'nav.settings.providers', path: '/ai', label: 'Providers', section: 'Models', aliases: ['providers', 'ai-providers'] },
+  { id: 'nav.settings.prompts', path: '/prompts', label: 'Prompts', section: 'Settings', tabId: 'prompts', aliases: ['prompts'] },
+  { id: 'nav.settings.providers', path: '/ai', label: 'Providers', section: 'Models', tabId: 'providers', aliases: ['providers', 'ai-providers'] },
   { id: 'nav.settings.fleet-llm', path: '/ai/fleet', label: 'Fleet LLM Setup', section: 'Settings', aliases: ['fleet-llm', 'gpu-host', 'remote-ai-provider'], keywords: ['3090', 'tailscale', 'vllm', 'qwen', 'coding model', 'dedicated host'] },
 
   { id: 'nav.brain.inbox', path: '/brain/inbox', label: 'Inbox', section: 'Brain', aliases: ['brain', 'brain-inbox', 'inbox'] },
@@ -168,7 +168,7 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.devtools.jira-reports', path: '/devtools/jira/reports', label: 'JIRA Reports', section: 'Dev Tools', feature: 'jira', aliases: ['jira-reports'] },
   { id: 'nav.devtools.quota-burn', path: '/devtools/quota-burn', label: 'Quota Burn', section: 'Dev Tools', aliases: ['quota-burn', 'burn-quota', 'quota'], keywords: ['subscription', 'usage', 'reset window', 'spend quota', 'claude', 'codex', 'grok', 'agy', 'burn'] },
   { id: 'nav.shell', path: '/shell', label: 'Shell', section: 'Dev Tools', aliases: ['shell', 'terminal'] },
-  { id: 'nav.devtools.usage', path: '/devtools/usage', label: 'Usage', section: 'Models', aliases: ['devtools-usage'] },
+  { id: 'nav.devtools.usage', path: '/devtools/usage', label: 'Usage', section: 'Models', tabId: 'usage', aliases: ['devtools-usage'] },
   { id: 'nav.devtools.video-download', path: '/devtools/video-download', label: 'Video Downloader', section: 'Dev Tools', aliases: ['video-download', 'video-downloader', 'download-video'], keywords: ['youtube', 'x.com', 'twitter', 'yt-dlp', 'download', 'clip'] },
   { id: 'nav.workspace-contexts', path: '/workspace-contexts', label: 'Workspaces', section: 'Dev Tools', aliases: ['workspaces', 'workspace-contexts', 'project-contexts', 'project-switcher'], keywords: ['project', 'context', 'switch project', 'branch', 'shell', 'tasks', 'restore', 'working context'] },
 
@@ -261,44 +261,44 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.post.wordplay.double-meaning', path: '/post/wordplay/double-meaning', label: 'Double Meaning', section: 'POST', aliases: ['wordplay-double-meaning', 'double-meaning', 'double meaning'], keywords: ['homonym', 'two meanings', 'pun'] },
   { id: 'nav.post.wordplay.idiom-twist', path: '/post/wordplay/idiom-twist', label: 'Idiom Twist', section: 'POST', aliases: ['wordplay-idiom-twist', 'idiom-twist', 'idiom twist'], keywords: ['idiom', 'phrase', 'twist', 'domain swap'] },
 
-  { id: 'nav.settings.ai-assignments', path: '/settings/ai-assignments', label: 'AI Assignments', section: 'Settings', aliases: ['ai-assignments', 'assignments', 'settings-ai-assignments', 'ai-inventory'], keywords: ['provider', 'model', 'pin', 'inventory', 'migration', 'llm'] },
-  { id: 'nav.settings.api-access', path: '/settings/api-access', label: 'API Access', section: 'Settings', aliases: ['api-access', 'settings-api-access', 'public-api', 'swagger', 'openapi'], keywords: ['rest', 'external', 'tts api', 'sdapi', 'voice api', 'docs', 'curl', 'expose', 'passwordless', 'auth gating'] },
+  { id: 'nav.settings.ai-assignments', path: '/settings/ai-assignments', label: 'AI Assignments', section: 'Settings', tabId: 'ai-assignments', aliases: ['ai-assignments', 'assignments', 'settings-ai-assignments', 'ai-inventory'], keywords: ['provider', 'model', 'pin', 'inventory', 'migration', 'llm'] },
+  { id: 'nav.settings.api-access', path: '/settings/api-access', label: 'API Access', section: 'Settings', tabId: 'api-access', aliases: ['api-access', 'settings-api-access', 'public-api', 'swagger', 'openapi'], keywords: ['rest', 'external', 'tts api', 'sdapi', 'voice api', 'docs', 'curl', 'expose', 'passwordless', 'auth gating'] },
   { id: 'nav.devtools.api-explorer', path: '/api-reference/catalog', label: 'API Explorer', section: 'Dev Tools', aliases: ['api-explorer', 'api-reference', 'swagger-ui', 'rest-reference'], keywords: ['openapi', 'rest', 'endpoints', 'routes', 'agent tools', 'contracts', 'developer docs'] },
-  { id: 'nav.settings.autofixer', path: '/settings/autofixer', label: 'Autofixer', section: 'Settings', aliases: ['autofixer', 'settings-autofixer', 'auto-fixer'], keywords: ['crash', 'fix', 'pm2', 'repair', 'ai provider', 'restart'] },
-  { id: 'nav.settings.backup', path: '/settings/backup', label: 'Backup', section: 'Settings', aliases: ['backup', 'settings-backup'] },
-  { id: 'nav.settings.credentials', path: '/settings/credentials', label: 'Credentials', section: 'Settings', aliases: ['settings-credentials', 'credentials', 'api-keys', 'tokens'], keywords: ['configured', 'unconfigured', 'env', 'huggingface', 'civitai', 'jira', 'datadog', 'telegram'] },
-  { id: 'nav.settings.database', path: '/settings/database', label: 'Database', section: 'Settings', aliases: ['settings-database', 'database'] },
-  { id: 'nav.settings.features', path: '/settings/features', label: 'Features', section: 'Settings', aliases: ['settings-features', 'instance-features', 'feature-usage'], keywords: ['enabled', 'disabled', 'instance', 'optional', 'participation', 'metrics', 'reminders'] },
-  { id: 'nav.settings.general', path: '/settings/general', label: 'General', section: 'Settings', aliases: ['settings', 'settings-general', 'general'] },
+  { id: 'nav.settings.autofixer', path: '/settings/autofixer', label: 'Autofixer', section: 'Settings', tabId: 'autofixer', aliases: ['autofixer', 'settings-autofixer', 'auto-fixer'], keywords: ['crash', 'fix', 'pm2', 'repair', 'ai provider', 'restart'] },
+  { id: 'nav.settings.backup', path: '/settings/backup', label: 'Backup', section: 'Settings', tabId: 'backup', aliases: ['backup', 'settings-backup'] },
+  { id: 'nav.settings.credentials', path: '/settings/credentials', label: 'Credentials', section: 'Settings', tabId: 'credentials', aliases: ['settings-credentials', 'credentials', 'api-keys', 'tokens'], keywords: ['configured', 'unconfigured', 'env', 'huggingface', 'civitai', 'jira', 'datadog', 'telegram'] },
+  { id: 'nav.settings.database', path: '/settings/database', label: 'Database', section: 'Settings', tabId: 'database', aliases: ['settings-database', 'database'] },
+  { id: 'nav.settings.features', path: '/settings/features', label: 'Features', section: 'Settings', tabId: 'features', aliases: ['settings-features', 'instance-features', 'feature-usage'], keywords: ['enabled', 'disabled', 'instance', 'optional', 'participation', 'metrics', 'reminders'] },
+  { id: 'nav.settings.general', path: '/settings/general', label: 'General', section: 'Settings', tabId: 'general', aliases: ['settings', 'settings-general', 'general'] },
   // Local-model management is its own top-level section (#4736), which grew to
   // cover every KIND of model this install manages (#4728) — image/video
   // checkpoints, LoRAs and their training datasets, embeddings, and the
   // image-to-3D runtimes. Several ids keep a `nav.settings.*` / `nav.media.*`
   // prefix: they are opaque and stored in palette history, so renaming them
   // would orphan those entries — only the path, label and section move.
-  { id: 'nav.models.3d', path: '/models/3d', label: '3D', section: 'Models', aliases: ['3d-runtimes', 'image-to-3d-runtimes', 'trellis-install', 'pixal3d-install'], keywords: ['trellis', 'pixal3d', 'install', 'repair', 'runtime', 'mesh', 'image to 3d', 'on-device'] },
-  { id: 'nav.models.code-reviewers', path: '/models/code-reviewers', label: 'Code Reviewers', section: 'Models', previousPaths: ['/settings/code-reviewers'], aliases: ['code-reviewers', 'settings-code-reviewers', 'code-review', 'review-defaults', 'reviewers'], keywords: ['review loop', 'reviewer chain', 'codex', 'copilot', 'ollama', 'stop mode', 'max rounds', 'defaults'] },
-  { id: 'nav.models.harnesses', path: '/models/harnesses', label: 'Harnesses', section: 'Models', aliases: ['harnesses', 'harness', 'agent-harnesses', 'coding-clis', 'cli-harnesses'], keywords: ['opencode', 'claude code', 'codex', 'antigravity', 'agy', 'grok', 'kimi', 'cursor', 'install cli', 'update cli', 'upgrade', 'version', 'refresh models'] },
-  { id: 'nav.settings.embeddings', path: '/models/embeddings', label: 'Embeddings', section: 'Models', previousPaths: ['/settings/embeddings'], aliases: ['settings-embeddings', 'embeddings', 'embedding'], keywords: ['vector', 'pgvector', 'semantic search', 'nomic', 'ollama', 'lm studio'] },
-  { id: 'nav.settings.local-llm', path: '/models/llms', label: 'LLMs', section: 'Models', previousPaths: ['/settings/local-llm'], aliases: ['local-llm', 'local-llms', 'llms', 'models-llms', 'ollama', 'lm-studio', 'lmstudio'], keywords: ['ollama', 'lm studio', 'local model', 'local llm', 'gguf', 'pull model', 'install model', 'migrate', 'switch backend', 'llama.cpp'] },
+  { id: 'nav.models.3d', path: '/models/3d', label: '3D', section: 'Models', tabId: '3d', aliases: ['3d-runtimes', 'image-to-3d-runtimes', 'trellis-install', 'pixal3d-install'], keywords: ['trellis', 'pixal3d', 'install', 'repair', 'runtime', 'mesh', 'image to 3d', 'on-device'] },
+  { id: 'nav.models.code-reviewers', path: '/models/code-reviewers', label: 'Code Reviewers', section: 'Models', tabId: 'code-reviewers', previousPaths: ['/settings/code-reviewers'], aliases: ['code-reviewers', 'settings-code-reviewers', 'code-review', 'review-defaults', 'reviewers'], keywords: ['review loop', 'reviewer chain', 'codex', 'copilot', 'ollama', 'stop mode', 'max rounds', 'defaults'] },
+  { id: 'nav.models.harnesses', path: '/models/harnesses', label: 'Harnesses', section: 'Models', tabId: 'harnesses', aliases: ['harnesses', 'harness', 'agent-harnesses', 'coding-clis', 'cli-harnesses'], keywords: ['opencode', 'claude code', 'codex', 'antigravity', 'agy', 'grok', 'kimi', 'cursor', 'install cli', 'update cli', 'upgrade', 'version', 'refresh models'] },
+  { id: 'nav.settings.embeddings', path: '/models/embeddings', label: 'Embeddings', section: 'Models', tabId: 'embeddings', previousPaths: ['/settings/embeddings'], aliases: ['settings-embeddings', 'embeddings', 'embedding'], keywords: ['vector', 'pgvector', 'semantic search', 'nomic', 'ollama', 'lm studio'] },
+  { id: 'nav.settings.local-llm', path: '/models/llms', label: 'LLMs', section: 'Models', tabId: 'llms', previousPaths: ['/settings/local-llm'], aliases: ['local-llm', 'local-llms', 'llms', 'models-llms', 'ollama', 'lm-studio', 'lmstudio'], keywords: ['ollama', 'lm studio', 'local model', 'local llm', 'gguf', 'pull model', 'install model', 'migrate', 'switch backend', 'llama.cpp'] },
   { id: 'nav.models.llms.abuse', path: '/models/llms/abuse', label: 'Abuse Guard', section: 'Models', aliases: ['abuse-guard', 'model-abuse', 'model-abuse-guard', 'prompt-guard', 'prompt guard'], keywords: ['classifier', 'prompt injection', 'security scan', 'llama prompt guard', 'install guard'] },
-  { id: 'nav.media.loras', path: '/models/loras', label: 'LoRAs', section: 'Models', previousPaths: ['/media/loras'], aliases: ['loras', 'lora', 'lora-manager', 'civitai'], keywords: ['lora', 'civitai', 'fine-tune', 'style adapter', 'realstagram', 'photoreal', 'flux lora'] },
-  { id: 'nav.media.training', path: '/models/training', label: 'Training', section: 'Models', previousPaths: ['/media/training', '/media/training/:datasetId'], aliases: ['training', 'lora-training', 'train-lora', 'datasets', 'character-lora'], keywords: ['fine-tune', 'dataset', 'caption', 'dreambooth', 'character consistency', 'train', 'flux lora'] },
-  { id: 'nav.media.models', path: '/models/media', label: 'Media', section: 'Models', previousPaths: ['/media/models', '/media-models'], aliases: ['media-models', 'image-models', 'video-models', 'huggingface'], keywords: ['hf cache', 'model storage', 'disk', 'add model', 'install model', 'custom model'] },
-  { id: 'nav.models.performance', path: '/models/performance', label: 'Performance', section: 'Models', aliases: ['model-performance', 'performance', 'assessments', 'model-assessments', 'benchmark-models', 'tuning'], keywords: ['measure', 'assessment', 'benchmark', 'throughput', 'chars per second', 'ttft', 'context', 'tuning', 'llama.cpp', 'mtplx', 'vllm', 'which model', 'fastest model'] },
+  { id: 'nav.media.loras', path: '/models/loras', label: 'LoRAs', section: 'Models', tabId: 'loras', previousPaths: ['/media/loras'], aliases: ['loras', 'lora', 'lora-manager', 'civitai'], keywords: ['lora', 'civitai', 'fine-tune', 'style adapter', 'realstagram', 'photoreal', 'flux lora'] },
+  { id: 'nav.media.training', path: '/models/training', label: 'Training', section: 'Models', tabId: 'training', previousPaths: ['/media/training', '/media/training/:datasetId'], aliases: ['training', 'lora-training', 'train-lora', 'datasets', 'character-lora'], keywords: ['fine-tune', 'dataset', 'caption', 'dreambooth', 'character consistency', 'train', 'flux lora'] },
+  { id: 'nav.media.models', path: '/models/media', label: 'Media', section: 'Models', tabId: 'media', previousPaths: ['/media/models', '/media-models'], aliases: ['media-models', 'image-models', 'video-models', 'huggingface'], keywords: ['hf cache', 'model storage', 'disk', 'add model', 'install model', 'custom model'] },
+  { id: 'nav.models.performance', path: '/models/performance', label: 'Performance', section: 'Models', tabId: 'performance', aliases: ['model-performance', 'performance', 'assessments', 'model-assessments', 'benchmark-models', 'tuning'], keywords: ['measure', 'assessment', 'benchmark', 'throughput', 'chars per second', 'ttft', 'context', 'tuning', 'llama.cpp', 'mtplx', 'vllm', 'which model', 'fastest model'] },
   // Absorbed the Dev Tools 'Model Resources' page (#4728), so its aliases and
   // keywords live here — 'model resources' and 'downloaded models' must keep
   // resolving after the fold.
-  { id: 'nav.models.status', path: '/models/status', label: 'Status', section: 'Models', previousPaths: ['/system-resources/models'], aliases: ['model-status', 'models-status', 'memory-management', 'resident-models', 'model-resources', 'loaded-models', 'downloaded-models', 'model-memory'], keywords: ['memory', 'resident', 'loaded', 'unload', 'ram', 'vram', 'free memory', 'what is loaded', 'ollama', 'lm studio', 'hugging face', 'lora', 'delete model', 'disk'] },
-  { id: 'nav.settings.local-llm-playground', path: '/local-llm/playground', label: 'Playground', section: 'Models', aliases: ['llm-playground', 'playground', 'model-playground', 'compare-models'], keywords: ['ollama', 'lm studio', 'compare', 'benchmark', 'chat', 'test model', 'ttft', 'tokens per second', 'local llm'] },
-  { id: 'nav.settings.mortalloom', path: '/settings/mortalloom', label: 'MortalLoom', section: 'Settings', feature: 'health', aliases: ['settings-mortalloom', 'mortalloom'] },
-  { id: 'nav.settings.openclaw', path: '/openclaw', label: 'OpenClaw', section: 'Settings', feature: 'openclaw', aliases: ['openclaw', 'settings-openclaw'], keywords: ['operator', 'chat', 'agent', 'runtime', 'sessions', 'streaming'] },
-  { id: 'nav.settings.orchestration', path: '/settings/orchestration', label: 'Orchestration Profiles', section: 'Settings', aliases: ['orchestration', 'orchestration-profiles', 'cos-orchestration', 'agent-roles'], keywords: ['orchestration', 'roles', 'architect', 'implementer', 'reviewer', 'profiles', 'cos', 'reasoning'] },
-  { id: 'nav.settings.security', path: '/settings/security', label: 'Security', section: 'Settings', aliases: ['settings-security', 'login-password', 'auth-password', 'password-settings'], keywords: ['password', 'login', 'auth', 'sign-in', 'lock', 'tailnet', 'sidecar'] },
+  { id: 'nav.models.status', path: '/models/status', label: 'Status', section: 'Models', tabId: 'status', previousPaths: ['/system-resources/models'], aliases: ['model-status', 'models-status', 'memory-management', 'resident-models', 'model-resources', 'loaded-models', 'downloaded-models', 'model-memory'], keywords: ['memory', 'resident', 'loaded', 'unload', 'ram', 'vram', 'free memory', 'what is loaded', 'ollama', 'lm studio', 'hugging face', 'lora', 'delete model', 'disk'] },
+  { id: 'nav.settings.local-llm-playground', path: '/local-llm/playground', label: 'Playground', section: 'Models', tabId: 'playground', aliases: ['llm-playground', 'playground', 'model-playground', 'compare-models'], keywords: ['ollama', 'lm studio', 'compare', 'benchmark', 'chat', 'test model', 'ttft', 'tokens per second', 'local llm'] },
+  { id: 'nav.settings.mortalloom', path: '/settings/mortalloom', label: 'MortalLoom', section: 'Settings', tabId: 'mortalloom', feature: 'health', aliases: ['settings-mortalloom', 'mortalloom'] },
+  { id: 'nav.settings.openclaw', path: '/openclaw', label: 'OpenClaw', section: 'Settings', tabId: 'openclaw', feature: 'openclaw', aliases: ['openclaw', 'settings-openclaw'], keywords: ['operator', 'chat', 'agent', 'runtime', 'sessions', 'streaming'] },
+  { id: 'nav.settings.orchestration', path: '/settings/orchestration', label: 'Orchestration Profiles', section: 'Settings', tabId: 'orchestration', aliases: ['orchestration', 'orchestration-profiles', 'cos-orchestration', 'agent-roles'], keywords: ['orchestration', 'roles', 'architect', 'implementer', 'reviewer', 'profiles', 'cos', 'reasoning'] },
+  { id: 'nav.settings.security', path: '/settings/security', label: 'Security', section: 'Settings', tabId: 'security', aliases: ['settings-security', 'login-password', 'auth-password', 'password-settings'], keywords: ['password', 'login', 'auth', 'sign-in', 'lock', 'tailnet', 'sidecar'] },
   { id: 'nav.capabilities', path: '/capabilities', label: 'Setup', section: 'Settings', aliases: ['setup', 'onboarding', 'walkthrough', 'capabilities', 'capability-map', 'integrations'], keywords: ['first run', 'status', 'setup', 'checklist', 'tailscale', 'https', 'dns', 'providers', 'connected systems', 'integrations', 'health overview'] },
-  { id: 'nav.settings.sharing', path: '/settings/sharing', label: 'Sharing', section: 'Settings', aliases: ['settings-sharing', 'sharing-settings'], keywords: ['display name', 'bio', 'attribution', 'identity', 'source'] },
-  { id: 'nav.settings.telegram', path: '/settings/telegram', label: 'Telegram', section: 'Settings', aliases: ['settings-telegram', 'telegram'] },
-  { id: 'nav.settings.voice', path: '/settings/voice', label: 'Voice', section: 'Settings', aliases: ['settings-voice', 'voice', 'voice-settings'], keywords: ['mic', 'microphone', 'speech', 'tts', 'whisper', 'kokoro'] },
+  { id: 'nav.settings.sharing', path: '/settings/sharing', label: 'Sharing', section: 'Settings', tabId: 'sharing', aliases: ['settings-sharing', 'sharing-settings'], keywords: ['display name', 'bio', 'attribution', 'identity', 'source'] },
+  { id: 'nav.settings.telegram', path: '/settings/telegram', label: 'Telegram', section: 'Settings', tabId: 'telegram', aliases: ['settings-telegram', 'telegram'] },
+  { id: 'nav.settings.voice', path: '/settings/voice', label: 'Voice', section: 'Settings', tabId: 'voice', aliases: ['settings-voice', 'voice', 'voice-settings'], keywords: ['mic', 'microphone', 'speech', 'tts', 'whisper', 'kokoro'] },
   { id: 'nav.settings.facetime', path: '/settings/voice', label: 'FaceTime Audio', section: 'Settings', feature: 'facetime', aliases: ['facetime', 'facetime-audio', 'call-settings'], keywords: ['facetime', 'audio call', 'call', 'hang up', 'blackhole'] },
   { id: 'nav.settings.call-host', path: '/voice/call-host', label: 'Call Host', section: 'Settings', feature: 'facetime', aliases: ['call-host', 'voice-call-host', 'facetime-call-host', 'audio-bridge', 'meeting-capture', 'capture-audio'], keywords: ['facetime', 'call audio', 'blackhole', 'bridge', 'attach', 'microphone', 'speaker', 'call host', 'meeting capture', 'transcribe meeting', 'record meeting'] },
 
@@ -339,6 +339,45 @@ export const NAV_COMMANDS = RAW_NAV_COMMANDS.map((cmd) => {
   return feature ? { ...cmd, feature } : cmd;
 });
 
+// `tabId` marks the destinations that participate in their section's shared
+// child navigation. It deliberately lives beside the route's section and
+// label, rather than in a page component, so moving a destination between
+// sidebar sections moves its child-nav entry with it. Commands without a
+// `tabId` are still valid navigation destinations, but are nested drill-downs
+// or workflow overlays rather than section-level tabs.
+export const getSectionNavTabs = (section) => NAV_COMMANDS
+  .filter((command) => command.section === section && command.tabId)
+  .sort((a, b) => a.label.localeCompare(b.label) || a.path.localeCompare(b.path))
+  .map(({ tabId, label, path, feature }) => ({
+    id: tabId,
+    label,
+    to: path,
+    ...(feature ? { feature } : {}),
+  }));
+
+const normalizedNavPath = (pathname) => {
+  const barePath = String(pathname || '').split(/[?#]/)[0];
+  if (!barePath || barePath === '/') return '/';
+  return barePath.replace(/\/+$/, '');
+};
+
+const pathContainsNavRoute = (pathname, routePath) => (
+  pathname === routePath || pathname.startsWith(`${routePath}/`)
+);
+
+// Find the section whose tab owns a routed page. Longest-match keeps nested
+// views (for example `/models/llms/abuse`) on their parent tab, and intentionally
+// ignores workflow commands such as `/ai/fleet` that do not carry a `tabId`.
+export const getNavSectionForPath = (pathname) => {
+  const normalizedPath = normalizedNavPath(pathname);
+  return NAV_COMMANDS
+    .filter((command) => command.tabId && pathContainsNavRoute(
+      normalizedPath,
+      normalizedNavPath(command.path),
+    ))
+    .sort((a, b) => normalizedNavPath(b.path).length - normalizedNavPath(a.path).length)[0]?.section || null;
+};
+
 // Every feature id this manifest gates on, for the registry-drift guard.
 export const NAV_FEATURE_IDS = [...new Set(NAV_COMMANDS.map((c) => c.feature).filter(Boolean))].sort();
 
@@ -350,8 +389,22 @@ for (const cmd of NAV_COMMANDS) {
   if (!cmd.path.startsWith('/')) {
     throw new Error(`navManifest: path must start with / — got "${cmd.path}" for ${cmd.id}`);
   }
+  if (cmd.tabId !== undefined && (typeof cmd.tabId !== 'string' || !cmd.tabId.trim())) {
+    throw new Error(`navManifest: tabId must be a non-empty string — got "${cmd.tabId}" for ${cmd.id}`);
+  }
   if (seenIds.has(cmd.id)) throw new Error(`navManifest: duplicate id ${cmd.id}`);
   seenIds.add(cmd.id);
+}
+
+const tabIdsBySection = new Map();
+for (const command of NAV_COMMANDS) {
+  if (!command.tabId) continue;
+  const sectionIds = tabIdsBySection.get(command.section) || new Set();
+  if (sectionIds.has(command.tabId)) {
+    throw new Error(`navManifest: duplicate tabId "${command.tabId}" in section ${command.section}`);
+  }
+  sectionIds.add(command.tabId);
+  tabIdsBySection.set(command.section, sectionIds);
 }
 
 // Alias collisions resolve to the first-declared entry; ordering is load-bearing.

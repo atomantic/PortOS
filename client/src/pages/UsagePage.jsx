@@ -10,6 +10,7 @@ import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import SubscriptionSavingsCard from '../components/usage/SubscriptionSavingsCard';
 import FleetUsageCard from '../components/usage/FleetUsageCard';
+import ModelsTabsHeader from '../components/models/ModelsTabsHeader';
 
 // How often to re-ask while a provider's quota reading is still being taken. A
 // CLI/TUI scrape is a 10-20s spawn, so this is a handful of polls, not a loop.
@@ -1031,6 +1032,7 @@ function InternalUsageMetrics() {
 export function UsagePage() {
   return (
     <div className="space-y-6">
+      <ModelsTabsHeader activeTab="usage" />
       <ProviderQuotaSection />
       <InternalUsageMetrics />
     </div>

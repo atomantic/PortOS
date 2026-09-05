@@ -45,9 +45,9 @@ const PANEL_MARKER = {
   training: 'training panel',
 };
 
-// Playground is the one destination the header lists that this page does not
-// serve — it predates the section and keeps its own `/local-llm/playground` path.
-const EXTERNAL_TAB_IDS = ['playground'];
+// These destinations belong to Models in the sidebar but keep their own route
+// shells, so their pages render the shared header directly.
+const EXTERNAL_TAB_IDS = ['playground', 'providers', 'usage'];
 const ownTabs = TABS.filter((t) => !EXTERNAL_TAB_IDS.includes(t.id));
 
 const renderAt = (path) => render(
@@ -113,7 +113,7 @@ describe('Models', () => {
   });
 
   // The tab bar collapses to a `<select>` under `sm`, so every destination has to
-  // be reachable there too — nine tabs no longer fit a phone-width pill row.
+  // be reachable there too — this section is now too wide for a phone pill row.
   it('mirrors every destination into the mobile select', () => {
     renderAt('/models/performance');
     const select = screen.getByRole('combobox', { name: 'Models sections' });
