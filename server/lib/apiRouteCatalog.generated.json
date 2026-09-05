@@ -4352,6 +4352,14 @@
       ]
     },
     {
+      "method": "DELETE",
+      "path": "/api/cos/mind/thinking-request",
+      "mountPath": "/api/cos",
+      "sources": [
+        "server/routes/cosMindRoutes.js"
+      ]
+    },
+    {
       "method": "GET",
       "path": "/api/cos/mind/tools",
       "mountPath": "/api/cos",
@@ -17626,8 +17634,8 @@
   ],
   "stats": {
     "mounts": 148,
-    "operations": 2183,
-    "declarations": 2191,
+    "operations": 2184,
+    "declarations": 2192,
     "sourceFiles": 231
   }
 }

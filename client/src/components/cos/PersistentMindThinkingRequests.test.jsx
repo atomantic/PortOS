@@ -1,0 +1,25 @@
+import { expect, it, vi } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+const api = vi.hoisted(() => ({ updateCosConfig: vi.fn(), cancelPersistentMindThinkingRequest: vi.fn() }));
+vi.mock('../../services/api', () => api);
+import PersistentMindThinkingRequests from './PersistentMindThinkingRequests.jsx';
+it('preserves edits on a status refresh, saves only the separate grant, and cancels a pending request', async () => {
+  const user = userEvent.setup();
+  const catalog = { presets: [{ id: 'local', label: 'Local pass', providerId: 'example-local', model: 'example-model' }], pending: { label: 'Local pass', reason: 'Try once' } };
+  const capabilities = { chooseThinkingPreset: false, thinkingPresetAllowlist: [], createTasks: true };
+  const onSaved = vi.fn(); const onCancelled = vi.fn();
+  const props = { catalog, capabilities, onSaved, onCancelled };
+  const view = render(<PersistentMindThinkingRequests {...props} />);
+  await user.click(screen.getByLabelText('Allow preset requests'));
+  await user.click(screen.getByLabelText(/Local pass —/));
+  view.rerender(<PersistentMindThinkingRequests {...props} capabilities={{ ...capabilities }} />);
+  expect(screen.getByLabelText('Allow preset requests')).toBeChecked();
+  api.updateCosConfig.mockResolvedValue({ persistentMindCapabilities: { ...capabilities, chooseThinkingPreset: true, thinkingPresetAllowlist: ['local'] } });
+  await user.click(screen.getByRole('button', { name: 'Save local thinking access' }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  expect(api.updateCosConfig).toHaveBeenCalledWith({ persistentMindCapabilities: { chooseThinkingPreset: true, thinkingPresetAllowlist: ['local'] } }, { silent: true });
+  api.cancelPersistentMindThinkingRequest.mockResolvedValue({ ok: true });
+  await user.click(screen.getByRole('button', { name: 'Cancel pending request' }));
+  await waitFor(() => expect(onCancelled).toHaveBeenCalled());
+});

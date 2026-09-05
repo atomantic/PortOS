@@ -1,3 +1,4 @@
+import { getPersistentMindThinkingRequestCatalog, cancelPersistentMindThinkingRequest } from '../services/persistentMindThinkingRequests.js';
 /** Persistent Chief-of-Staff mind conversation and lifecycle routes. */
 
 import { Router } from 'express';
@@ -204,12 +205,17 @@ router.get('/mind', asyncHandler(async (req, res) => {
       thinkingInterface: profile.thinkingInterface,
       wakeIntervalMinutes: profile.wakeIntervalMinutes,
     },
+    thinkingRequests: await getPersistentMindThinkingRequestCatalog({ human: true }),
     thinkingPresets: normalizePersistentMindThinkingPresets(root.config?.persistentMindThinkingPresets),
     capabilities,
     harness: persistentMindHarnessInfo(provider),
     imageCapability,
     autonomyMode: getDomainMode(root.config, 'cos'),
   });
+}));
+
+router.delete('/mind/thinking-request', asyncHandler(async (_req, res) => {
+  res.json(await cancelPersistentMindThinkingRequest());
 }));
 
 router.get('/mind/context', asyncHandler(async (_req, res) => {

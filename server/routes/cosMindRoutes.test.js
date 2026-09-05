@@ -184,7 +184,7 @@ describe('persistent mind routes', () => {
         thinkingInterface: 'text',
         wakeIntervalMinutes: 30,
       },
-      capabilities: { schemaVersion: 5, createTasks: true, manageMind: false, manageEidoverse: false, callUser: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
+      capabilities: { schemaVersion: 6, createTasks: true, manageMind: false, manageEidoverse: false, callUser: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
       harness: { type: 'api', recommendation: 'recommended' },
       imageCapability: { status: 'unknown' },
       autonomyMode: 'execute',
@@ -278,8 +278,8 @@ describe('persistent mind routes', () => {
         expect.objectContaining({ name: 'eidoverse.status', granted: false, input_schema: expect.any(Object) }),
         expect.objectContaining({ name: 'cos.create-task', granted: true }),
       ]),
-      schemaVersion: 5,
-      capabilities: { schemaVersion: 5, createTasks: true, manageMind: false, manageEidoverse: false, callUser: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
+      schemaVersion: 6,
+      capabilities: { schemaVersion: 6, createTasks: true, manageMind: false, manageEidoverse: false, callUser: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
       boundaries: expect.arrayContaining([expect.stringMatching(/arbitrary shell/i)]),
       tools: expect.arrayContaining([
         expect.objectContaining({ id: 'cos.create-task', capability: 'createTasks', granted: true, defaultEnabled: false }),
@@ -293,7 +293,7 @@ describe('persistent mind routes', () => {
         providers: [{ id: 'codex' }],
       },
     });
-    expect(res.body.tools[0].guardrails).toEqual(expect.arrayContaining([
+    expect(res.body.tools.find((tool) => tool.id === 'cos.create-task').guardrails).toEqual(expect.arrayContaining([
       expect.stringMatching(/isolated-worktree/i),
     ]));
   });

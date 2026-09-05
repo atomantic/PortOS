@@ -283,6 +283,12 @@ export async function updateConfig(updates) {
         updates.persistentMindThinkingPresets,
       );
     }
+    if (updates.persistentMindCapabilities?.thinkingPresetAllowlist !== undefined) {
+      const { approvePersistentMindThinkingPresets } = await import('./persistentMindThinkingRequests.js');
+      next.persistentMindCapabilities.thinkingPresetGrants = await approvePersistentMindThinkingPresets(
+        next, next.persistentMindCapabilities.thinkingPresetAllowlist,
+      );
+    }
     if (updates.persistentMindPrompt !== undefined) {
       next.persistentMindPrompt = mergePersistentMindPrompt(
         priorPersistentMindPrompt,
@@ -291,6 +297,10 @@ export async function updateConfig(updates) {
     }
     return saveConfig(next);
   });
+  if (updates.persistentMindCapabilities !== undefined || updates.persistentMindThinkingPresets !== undefined) {
+    const { cancelPersistentMindThinkingRequest } = await import('./persistentMindThinkingRequests.js');
+    await cancelPersistentMindThinkingRequest({ ifRevoked: true });
+  }
   const improveKeys = ['improvementEnabled', 'selfImprovementEnabled', 'appImprovementEnabled'];
   const improvePatch = Object.fromEntries(
     improveKeys.filter((key) => Object.prototype.hasOwnProperty.call(updates, key)).map((key) => [key, updates[key]]),

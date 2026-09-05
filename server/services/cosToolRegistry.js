@@ -22,6 +22,7 @@ import {
   eidoverseWorldAugmentSchema,
   eidoverseWorldSaySchema,
 } from '../lib/validation.js';
+import { persistentMindThinkingRequestSchema } from '../lib/persistentMindThinkingPresets.js';
 import { USER_ACTION_ACTORS, USER_ACTION_TYPES } from '../lib/userActionTypes.js';
 import { dispatchTool, getToolSpecs, getToolSpecsForIntent } from './voice/tools.js';
 import { executePersistentMindTaskRequests } from './persistentMindTaskCapability.js';
@@ -254,7 +255,16 @@ const eidoverseSayTool = Object.freeze({
 });
 
 const eidoverseTools = [eidoverseStatusTool, eidoverseProjectTool, eidoverseAugmentTool, eidoverseSayTool];
-const toolCatalog = (intent) => [taskTool, mindCleanupTool, userActionsQueryTool, ...eidoverseTools, ...voiceTools(intent)];
+const thinkingTools = ['mind.thinking-presets', 'mind.request-thinking-preset'].map((name, index) => ({
+  type: 'portos_tool', name, version: COS_TOOL_SCHEMA_VERSION,
+  providerName: providerToolName(name), aliases: [],
+  description: index ? 'Request one approved local preset for the next self-directed wake, without changing this turn or the default.' : 'List exact approved local thinking presets, current/default route and switching limits.',
+  input_schema: zodToOpenApiSchema(index ? persistentMindThinkingRequestSchema : z.object({}).strict()),
+  output_schema: objectOutputSchema,
+  policy: { scopes: ['mind'], requiredCapabilities: ['chooseThinkingPreset'], sideEffect: index ? 'write' : 'read', idempotent: true, async: false, confirmation: 'capability-grant' },
+  adapter: { kind: index ? 'thinking-request' : 'thinking-catalog' },
+}));
+const toolCatalog = (intent) => [...thinkingTools, taskTool, mindCleanupTool, userActionsQueryTool, ...eidoverseTools, ...voiceTools(intent)];
 const toolCalls = new Map();
 const toolCallFingerprints = new Map();
 
@@ -262,6 +272,7 @@ const normalizeToolCapabilities = (raw) => ({
   ...normalizePortosSemanticToolGrants(raw),
   createTasks: raw?.createTasks === true,
   manageMind: raw?.manageMind === true,
+  chooseThinkingPreset: raw?.chooseThinkingPreset === true,
 });
 
 const publicTool = (tool, { scope, capabilities }) => ({
@@ -379,6 +390,12 @@ const validateArguments = (tool, args) => {
 };
 
 const executeAdapter = async (tool, args, context) => {
+  if (tool.adapter.kind.startsWith('thinking-')) {
+    const { getPersistentMindThinkingRequestCatalog, requestPersistentMindThinkingPreset } = await import('./persistentMindThinkingRequests.js');
+    return tool.adapter.kind === 'thinking-catalog'
+      ? getPersistentMindThinkingRequestCatalog()
+      : requestPersistentMindThinkingPreset(args, context);
+  }
   if (tool.adapter.kind === 'voice-tool') {
     return dispatchTool(tool.adapter.legacyName, args, { sideEffects: [], signal: context.signal });
   }
@@ -511,7 +528,7 @@ export const executeCosToolCall = async ({ call, authority, context = {} }) => {
   }
 
   const promise = Promise.resolve()
-    .then(() => executeAdapter(tool, args, context))
+    .then(() => executeAdapter(tool, args, { ...context, requestId: parsedCall.requestId }))
     .then(
       (result) => normalizeAdapterResult({ parsedCall, tool, result }),
       (error) => ({
