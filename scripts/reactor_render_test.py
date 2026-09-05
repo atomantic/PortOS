@@ -113,7 +113,7 @@ class CaptureLifecycleTest(unittest.IsolatedAsyncioTestCase):
         spawn = AsyncMock(side_effect=encode)
         events = await self.run_capture(reactor, spawn)
         self.assertEqual([name for name, _ in reactor.commands], ["set_canvas", "enqueue", "play"])
-        self.assertEqual(events[-1], {"type": "complete", "clipId": "example-clip", "seconds": 6.0})
+        self.assertEqual(events[-1], {"type": "complete", "clipId": "example-clip", "seconds": 6.0, "frames": 116})
         self.assertTrue(reactor.disconnected)
         self.assertFalse(Path(str(self.output) + ".capture").exists())
         spawn.assert_awaited_once()
@@ -192,6 +192,41 @@ class CaptureLifecycleTest(unittest.IsolatedAsyncioTestCase):
         encoder.kill.assert_called_once()
         self.assertEqual(encoder.wait.await_count, 3)
         self.assertTrue(reactor.disconnected)
+
+    async def test_absent_timestamps_use_receive_time_instead_of_repeating_the_final_frame(self):
+        reactor = FakeReactor()
+        original = reactor.frame
+        clock = [0]
+
+        def frame(index, size=(2, 2)):
+            clock[0] = 9_000_000_000 + round(index * 1_000_000_000 / 24)
+            callback = reactor.callbacks["video"]
+            reactor.callbacks["video"] = lambda data, w, h, fid, pts, ud: callback(data, w, h, fid, 0, ud)
+            original(index, size)
+            reactor.callbacks["video"] = callback
+
+        reactor.frame = frame
+
+        async def encode(*command, **kwargs):
+            video = Path(command[command.index("-i") + 1]).read_bytes()
+            self.assertEqual(video[:16], bytes(16))
+            self.assertGreater(len(set(video[::16])), 100)
+            self.output.write_bytes(b"example-mp4")
+            return SimpleNamespace(returncode=0, wait=AsyncMock(return_value=0))
+
+        with patch.object(self.runner.time, "monotonic_ns", side_effect=lambda: clock[0]):
+            await self.run_capture(reactor, AsyncMock(side_effect=encode))
+
+    async def test_invalid_buffers_fail_without_encoding_even_when_an_integer_matches_the_size(self):
+        for buffer in (16, bytes(15), bytes(20)):
+            with self.subTest(buffer=type(buffer).__name__):
+                reactor = FakeReactor()
+                reactor.frame = lambda index, size=(2, 2): reactor.callbacks["video"](buffer, 2, 2, index, 0, None)
+                spawn = AsyncMock()
+                with self.assertRaisesRegex(RuntimeError, "Invalid Reactor video frame buffer"):
+                    await self.run_capture(reactor, spawn)
+                spawn.assert_not_awaited()
+                self.assertTrue(reactor.disconnected)
 
     async def test_invalid_request_never_constructs_a_session(self):
         with patch.object(self.runner, "Reactor") as factory:

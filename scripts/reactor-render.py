@@ -10,6 +10,7 @@ import math
 import signal
 import sys
 import shutil
+import time
 from pathlib import Path
 
 from reactor_sdk import Reactor
@@ -53,7 +54,7 @@ async def render(params):
     finished = asyncio.Event()
     state = {
         "active": False, "frames": 0, "error": None, "size": None, "audio": None,
-        "videoBuffers": [], "audioBuffers": [], "timestamps": [], "sizes": [],
+        "videoBuffers": [], "audioBuffers": [], "timestamps": [], "sizes": [], "arrivals": [],
     }
 
     def on_message(message):
@@ -81,9 +82,19 @@ async def render(params):
         with raw_video.open("wb") as video, raw_audio.open("wb") as audio:
             def on_video(bgra, width, height, frame_id, timestamp_us, user_data):
                 if state["active"] and len(state["videoBuffers"]) < 370:
+                    # memoryview rejects integer pointers instead of bytes(int)'s
+                    # silent allocation of that many zero bytes.
+                    try:
+                        frame = memoryview(bgra).tobytes()
+                    except (TypeError, ValueError):
+                        frame = b""
+                    if width <= 0 or height <= 0 or len(frame) != width * height * 4:
+                        state["error"] = "Invalid Reactor video frame buffer"
+                        return
+                    state["arrivals"].append(time.monotonic_ns() // 1000)
                     state["timestamps"].append(timestamp_us)
                     state["sizes"].append((width, height))
-                    state["videoBuffers"].append(bytes(bgra))
+                    state["videoBuffers"].append(frame)
 
             def on_audio(pcm, num_samples, sample_rate, num_channels):
                 if state["active"]:
@@ -139,6 +150,11 @@ async def render(params):
                 state["size"] = dominant
                 state["frames"] = len(keep)
                 timestamps = [state["timestamps"][index] for index in keep]
+                # SDK timestamp_us=0 means no metadata, not presentation time.
+                # Resampling equal timestamps selects the final (often black)
+                # frame for the entire clip. Use receive time in that case.
+                if any(t <= 0 for t in timestamps) or any(b <= a for a, b in zip(timestamps, timestamps[1:])):
+                    timestamps = [state["arrivals"][index] for index in keep]
                 # Rebinding frees the discarded buffers here rather than at the
                 # `del` below, which the 370-frame ceiling makes worth doing.
                 frames = [frames[index] for index in keep]
@@ -157,7 +173,7 @@ async def render(params):
                 raise RuntimeError(state["error"])
         phase = "capture"
         expected = clip.get("frames", round(seconds * 24))
-        (scratch_path / "capture.json").write_text(json.dumps({"frames": state["frames"], "expected": expected, "size": state["size"], "audio": state["audio"], "clipId": clip["clip_id"]}))
+        (scratch_path / "capture.json").write_text(json.dumps({"frames": state["frames"], "expected": expected, "size": state["size"], "audio": state["audio"], "clipId": clip["clip_id"], "timestampUnique": len(set(state["timestamps"]))}))
         emit("status", message=f"Captured {state['frames']} of {expected} frames; audio={bool(state['audio'])}")
         if state["frames"] < expected * 0.8 or not state["audio"]:
             raise RuntimeError(f"Incomplete stream capture: {state['frames']} of {expected} video frames")
@@ -183,10 +199,12 @@ async def render(params):
                     await encoder.wait()
         if encoder.returncode or not output.is_file() or output.stat().st_size == 0:
             raise RuntimeError("Could not encode the captured Reactor clip")
+        emit("status", message="Capture timestamp diagnostic", unique=len(set(state["timestamps"])))
         shutil.rmtree(scratch_path)
-        emit("complete", clipId=clip["clip_id"], seconds=expected / 24)
+        emit("complete", clipId=clip["clip_id"], seconds=expected / 24, frames=state["frames"])
     except Exception as error:
-        emit("error", phase=phase, errorType=type(error).__name__)
+        emit("error", phase=phase, errorType=type(error).__name__,
+             **({"code": "INVALID_FRAME_BUFFER"} if state["error"] == "Invalid Reactor video frame buffer" else {}))
         raise
     finally:
         try:
