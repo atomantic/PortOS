@@ -2,6 +2,7 @@ import { once } from 'node:events';
 import { createServer, request as httpRequest } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
+import { PORTS } from '../lib/ports.js';
 import { createEidoverseHost } from './eidoverseHost.js';
 
 // The bridge reaches the world config through a deferred `await import()`, so
@@ -32,6 +33,21 @@ const listen = async (server) => {
 
 const closeServer = (server) => new Promise((resolve, reject) => {
   server.close((error) => (error ? reject(error) : resolve()));
+});
+
+// `fetch` refuses to set Host, and Host is the whole input to the origin the
+// bridge derives — so the raw client is the only way to ask these questions.
+const rawGet = (port, path, hostHeader) => new Promise((settle, reject) => {
+  const probe = httpRequest({ host: '127.0.0.1', port, path, headers: { host: hostHeader } }, (response) => {
+    let body = '';
+    response.setEncoding('utf8');
+    response.on('data', (chunk) => { body += chunk; });
+    response.on('end', () => (response.statusCode === 200
+      ? settle(body)
+      : reject(new Error(`unexpected status ${response.statusCode}`))));
+  });
+  probe.once('error', reject);
+  probe.end();
 });
 
 afterEach(async () => {
@@ -188,6 +204,36 @@ describe('Eidoverse host bridge', () => {
     expect(upstreamRequests).toEqual([]);
   });
 
+  // The Host header is a real input matrix, and each shape below reaches a
+  // different branch of the parse. An origin the browser would not have
+  // produced is worse than none: it never matches, so the frame bridge is
+  // silently dormant with nothing to point at.
+  it.each([
+    ['[::1]:5563', '5599', 'http://[::1]:5599'],
+    ['[::1]', '5599', 'http://[::1]:5599'],
+    ['host-alpha.example-tailnet.ts.net', '5599', 'http://host-alpha.example-tailnet.ts.net:5599'],
+    // Unset PORT falls back to the port PortOS actually serves on.
+    ['host-alpha.example-tailnet.ts.net', undefined, `http://host-alpha.example-tailnet.ts.net:${PORTS.API}`],
+  ])('derives the parent origin from Host %s', async (hostHeader, port, expected) => {
+    const upstreamPort = await listen(createServer((_req, res) => {
+      res.writeHead(200);
+      res.end('sequencer');
+    }));
+    const bridge = createEidoverseHost({
+      targetPort: upstreamPort,
+      listenHost: '127.0.0.1',
+      listenPort: 0,
+      certDir: null,
+    });
+    bridges.push(bridge);
+    if (port === undefined) vi.stubEnv('PORT', '');
+    else vi.stubEnv('PORT', port);
+
+    const host = await bridge.start();
+    expect(JSON.parse(await rawGet(host.port, '/embed-config', hostHeader)))
+      .toEqual({ parentOrigin: expected });
+  });
+
   it('names no embedder when the request carries no usable host', async () => {
     const upstreamPort = await listen(createServer((_req, res) => {
       res.writeHead(200);
@@ -202,27 +248,10 @@ describe('Eidoverse host bridge', () => {
     bridges.push(bridge);
 
     const host = await bridge.start();
-    // `fetch` refuses to set Host, so the raw client is the only way to ask.
     // A repaired origin would be a silent mismatch at handshake time: the
     // browser compares with ===, so an unusable host must resolve to "nobody".
-    const answer = await new Promise((settle, reject) => {
-      const probe = httpRequest({
-        host: '127.0.0.1',
-        port: host.port,
-        path: '/embed-config',
-        headers: { host: 'not a hostname' },
-      }, (response) => {
-        let body = '';
-        response.setEncoding('utf8');
-        response.on('data', (chunk) => { body += chunk; });
-        response.on('end', () => settle({ status: response.statusCode, body }));
-      });
-      probe.once('error', reject);
-      probe.end();
-    });
-
-    expect(answer.status).toBe(200);
-    expect(JSON.parse(answer.body)).toEqual({ parentOrigin: null });
+    expect(JSON.parse(await rawGet(host.port, '/embed-config', 'not a hostname')))
+      .toEqual({ parentOrigin: null });
   });
 
   it('refuses to write through the descriptor path, and reports an unreadable descriptor honestly', async () => {
