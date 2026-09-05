@@ -442,11 +442,18 @@ export default function VideoGen() {
   // The ref (not the stripped param) is what makes this one-shot: the strip is
   // an async router update, so a completion refresh landing in the same tick
   // would otherwise re-apply the handoff over edits the user has since made.
+  // It records the settled ID rather than a boolean, so a SECOND handoff
+  // arriving on the same mount is still honored.
   const remixHandoffId = searchParams.get('remix');
-  const remixHandoffAppliedRef = useRef(false);
+  const settledRemixHandoffRef = useRef(null);
   // null while nothing is wrong; otherwise 'error' (the history fetch failed,
   // retryable) or 'missing' (history loaded and holds no such record).
   const [remixHandoffProblem, setRemixHandoffProblem] = useState(null);
+  // Set when the fetch failed under a pending handoff. The restore then waits
+  // for an explicit Retry instead of riding in on the next background refresh:
+  // a render completing minutes later would otherwise replay the handoff over
+  // a form the user has been editing since the banner appeared.
+  const [remixHandoffBlocked, setRemixHandoffBlocked] = useState(false);
   const consumeRemixHandoff = useCallback(() => {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
@@ -455,18 +462,23 @@ export default function VideoGen() {
     }, { replace: true });
   }, [setSearchParams]);
   useEffect(() => {
-    if (!remixHandoffId || remixHandoffAppliedRef.current) return;
+    // No handoff in the URL — including right after this one consumed its own.
+    // Clearing the settled id here is what lets the NEXT handoff through, even
+    // when it names the same record.
+    if (!remixHandoffId) { settledRemixHandoffRef.current = null; return; }
+    if (settledRemixHandoffRef.current === remixHandoffId || remixHandoffBlocked) return;
     // Still fetching: say nothing. Reporting "no such record" here would be a
     // lie every time the page is opened faster than the history round trip.
     if (historyLoad === 'loading') return;
     if (historyLoad === 'error') {
-      // Keep the param so Retry can resolve it once the fetch succeeds, and
-      // leave the ref unset so the retry actually re-runs this effect.
+      // Keep the param so Retry can resolve it, and leave the handoff unsettled
+      // so that retry actually re-runs this effect.
       setRemixHandoffProblem('error');
+      setRemixHandoffBlocked(true);
       return;
     }
     const record = history.find((v) => String(v.id) === remixHandoffId);
-    remixHandoffAppliedRef.current = true;
+    settledRemixHandoffRef.current = remixHandoffId;
     if (record) {
       applyRemix(record);
       setRemixHandoffProblem(null);
@@ -474,21 +486,21 @@ export default function VideoGen() {
       setRemixHandoffProblem('missing');
     }
     consumeRemixHandoff();
-  }, [remixHandoffId, historyLoad, history, applyRemix, consumeRemixHandoff]);
+  }, [remixHandoffId, historyLoad, history, remixHandoffBlocked, applyRemix, consumeRemixHandoff]);
   // Back to 'loading' first, so a retry that fails again still moves the state
-  // ('loading' → 'error') and re-runs the effect above. Re-setting 'error' onto
-  // 'error' is a no-op React bails on, which would leave the banner dismissed
-  // after a second failure.
+  // ('loading' → 'error') and re-runs the effect above.
   const retryRemixHandoff = useCallback(() => {
     setHistoryLoad('loading');
     setRemixHandoffProblem(null);
+    setRemixHandoffBlocked(false);
     refreshHistory();
   }, [refreshHistory]);
   const dismissRemixHandoff = useCallback(() => {
-    remixHandoffAppliedRef.current = true;
+    settledRemixHandoffRef.current = remixHandoffId;
     setRemixHandoffProblem(null);
+    setRemixHandoffBlocked(false);
     consumeRemixHandoff();
-  }, [consumeRemixHandoff]);
+  }, [remixHandoffId, consumeRemixHandoff]);
 
   // Finish a draft (#3696): same restore as Remix, but switched to the delivery
   // model the draft's registry entry declares. Prefill only — the user presses

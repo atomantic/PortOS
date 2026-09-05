@@ -192,6 +192,22 @@ describe('VideoGen cross-page Remix handoff', () => {
     expect(screen.queryByText(/Couldn't load your render history/)).toBeNull();
   });
 
+  it('waits for Retry rather than restoring from a background refresh after a failure', async () => {
+    state.listVideoHistory.mockRejectedValueOnce(new Error('offline'));
+    await renderVideoGenPage(`/media/video?remix=${RECORD.id}`);
+    await screen.findByText(/Couldn't load your render history/);
+
+    // The banner can sit for as long as the user leaves it there, and the form
+    // is live the whole time. A render finishing in the background re-fetches
+    // history — the stranded handoff must not ride in on it and wipe the form.
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'a kite over a field' } });
+    state.listVideoHistory.mockResolvedValue([RECORD]);
+    await act(async () => { await state.completionRefresh.onVideoCompleted(); });
+
+    expect(screen.getByLabelText('Prompt')).toHaveValue('a kite over a field');
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+  });
+
   it('reports an actionable missing-record state when the load holds no such record', async () => {
     state.listVideoHistory.mockResolvedValue([LEGACY_RECORD]);
     await renderVideoGenPage('/media/video?remix=vid-deleted');
