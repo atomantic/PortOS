@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import {
   ArrowUpRight,
@@ -27,7 +27,7 @@ import {
 } from '../../services/apiModelComparison';
 import Modal from '../ui/Modal';
 import ComparisonResearch from './ComparisonResearch';
-import { withEstimatedCosts } from '../../lib/effortCostEstimate';
+import { EFFORT_LADDER, withEstimatedCosts } from '../../lib/effortCostEstimate';
 
 const COLORS = [
   '#2563eb', // blue (GPT-5.6 Sol)
@@ -59,21 +59,16 @@ const METRICS = [
   'quota',
 ];
 
+// Where each effort sits on a model's curve. The ladder itself comes from the
+// estimator so the two can't drift; the rest are the model-level configurations
+// that are not points on it, plus the aliases the sources use.
 const EFFORT_ORDER = {
   'non-reasoning': 0,
   none: 0,
   unspecified: 0.5,
-  minimal: 1,
-  low: 2,
-  medium: 3,
-  high: 4,
-  xhigh: 5,
-  very_high: 5,
-  max: 6,
-  // Claude Code's ultracode mode sits above max effort; no benchmark publishes
-  // it yet, so this only decides where such a point lands on the curve.
-  ultracode: 7,
-  reasoning: 8,
+  ...Object.fromEntries(EFFORT_LADDER.map((effort, index) => [effort, index + 1])),
+  very_high: EFFORT_LADDER.indexOf('xhigh') + 1,
+  reasoning: EFFORT_LADDER.length + 1,
 };
 
 const STALE_MS = 30 * 86400000;
@@ -100,6 +95,17 @@ export default function ModelComparison() {
   const [syncing, setSyncing] = useState(false);
 
   const load = useCallback(() => getModelComparison({ silent: true }), []);
+
+  const showEstimates = params.get('estimates') !== '0';
+  // Estimating costs walks the whole catalog, and the model filter input below
+  // re-renders on every keystroke — memoize so typing doesn't redo the pass.
+  const estimatedRows = useMemo(() => {
+    const observations = catalog?.observations || [];
+    return showEstimates ? withEstimatedCosts(observations) : observations;
+  }, [catalog, showEstimates]);
+  // Models the user's own providers can dispatch. Everything else in the index
+  // is available behind "All models" but is not what the page opens on.
+  const availableSet = useMemo(() => new Set(catalog?.availableModels || []), [catalog]);
 
   useEffect(() => {
     let active = true;
@@ -245,26 +251,26 @@ export default function ModelComparison() {
   // Cost spans four orders of magnitude across the catalog, so a linear axis
   // stacks every affordable model on the y-axis. Log is the readable default.
   const scale = params.get('scale') === 'linear' ? 'linear' : 'log';
-  const showEstimates = params.get('estimates') !== '0';
-  // Models the user's own providers can dispatch. Everything else in the index
-  // is available behind "All models" but is not what the page opens on.
-  const availableModels = catalog.availableModels || [];
-  const showAllModels = params.get('allModels') === '1' || !availableModels.length;
+  const showAllModels = params.get('allModels') === '1' || availableSet.size === 0;
 
-  const catalogRows = showEstimates ? withEstimatedCosts(catalog.observations) : catalog.observations;
-  const models = [
-    ...new Set(catalogRows.filter(row => showAllModels || availableModels.includes(row.model)).map(row => row.model)),
-  ].sort();
-  const providers = [...new Set(catalogRows.map(row => row.provider))].sort();
-  const efforts = [...new Set(catalogRows.map(row => row.effort))].sort();
+  // Scope once, then derive every list from the scoped rows — so the provider
+  // and effort pills can't offer values that have nothing left to plot.
+  const scoped = showAllModels ? estimatedRows : estimatedRows.filter(row => availableSet.has(row.model));
+  const models = [...new Set(scoped.map(row => row.model))].sort();
+  const providers = [...new Set(scoped.map(row => row.provider))].sort();
+  const efforts = [...new Set(scoped.map(row => row.effort))].sort();
 
-  const visible = catalogRows.filter(
+  const hidden = {
+    provider: new Set(params.getAll('hideProvider')),
+    model: new Set(params.getAll('hideModel')),
+    effort: new Set(params.getAll('hideEffort')),
+  };
+  const visible = scoped.filter(
     row =>
       row.benchmark === benchmark &&
-      (showAllModels || availableModels.includes(row.model)) &&
-      !params.getAll('hideProvider').includes(row.provider) &&
-      !params.getAll('hideModel').includes(row.model) &&
-      !params.getAll('hideEffort').includes(row.effort)
+      !hidden.provider.has(row.provider) &&
+      !hidden.model.has(row.model) &&
+      !hidden.effort.has(row.effort)
   );
 
   const rows = visible.map(row => {
@@ -286,18 +292,18 @@ export default function ModelComparison() {
       displayName,
       x: cost,
       y: row.quality?.value,
-      costEstimated: mode === 'benchmark' && !row.costPerTask && Boolean(row.estimatedCostPerTask),
+      costEstimated: mode === 'benchmark' && row.costEstimated === true,
       label: `${row.model} (${row.effort})${row.responseSeconds ? ` · ${row.responseSeconds.value}s` : ''}`,
     };
   });
 
   const plotted = rows.filter(row => Number.isFinite(row.x) && Number.isFinite(row.y) && (scale !== 'log' || row.x > 0));
 
-  const estimatedCount = plotted.filter(row => row.costEstimated).length;
-
   // Count models that have 2 or more effort points plotted
+  let estimatedCount = 0;
   const multiEffortModelCounts = new Map();
   for (const row of plotted) {
+    if (row.costEstimated) estimatedCount += 1;
     multiEffortModelCounts.set(row.model, (multiEffortModelCounts.get(row.model) || 0) + 1);
   }
   const reasoningCurveModels = [...multiEffortModelCounts.entries()]
@@ -374,17 +380,15 @@ export default function ModelComparison() {
       {error && <p role="alert" className="text-port-error">{error}</p>}
 
       {/* Sync Modal */}
-      {/* Modal owns only the backdrop and the panel box — the panel's surface,
-          border and heading are the caller's, so `panelClassName` is what keeps
-          the dialog from rendering transparent over the page beneath it. */}
+      {/* Modal owns only the backdrop and the panel box; the surface and heading
+          are the caller's. Without them the dialog renders transparent. */}
       <Modal
         open={syncModalOpen}
         onClose={() => setSyncModalOpen(false)}
         size="sm"
         ariaLabelledBy="aa-sync-title"
-        panelClassName="bg-port-card border border-port-border rounded-xl shadow-2xl"
       >
-        <div className="p-5 space-y-4">
+        <div className="bg-port-card border border-port-border rounded-xl shadow-2xl p-5 space-y-4">
           <h3 id="aa-sync-title" className="text-base font-semibold tracking-tight">
             Sync Artificial Analysis data
           </h3>
@@ -526,7 +530,7 @@ export default function ModelComparison() {
             type="checkbox"
             className="accent-port-accent size-4 shrink-0"
             checked={showAllModels}
-            disabled={!availableModels.length}
+            disabled={availableSet.size === 0}
             onChange={e => changeParam('allModels', e.target.checked ? '1' : '0')}
           />
           All models (not just yours)

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
-import { catalogSlugForProviderModel, providerCatalogSlugs } from './comparisonModelScope.js';
+import { canonicalCatalogModelSlug, catalogSlugForProviderModel, providerCatalogSlugs } from './comparisonModelScope.js';
 
 const root = join(import.meta.dirname, '../..');
 
@@ -34,6 +34,19 @@ describe('catalogSlugForProviderModel', () => {
   it('returns empty for routing policies and non-model entries', () => {
     for (const entry of ['auto', 'openrouter/auto', 'antigravity-configured-default', 'composer-2.5', '', null]) {
       expect(catalogSlugForProviderModel(entry)).toBe('');
+    }
+  });
+});
+
+describe('canonicalCatalogModelSlug', () => {
+  it('dots a trailing all-digit version pair', () => {
+    expect(canonicalCatalogModelSlug('claude-fable-5-1')).toBe('claude-fable-5.1');
+    expect(canonicalCatalogModelSlug('claude-sonnet-4-6')).toBe('claude-sonnet-4.6');
+  });
+
+  it('leaves a build date, a parameter count and a plain name alone', () => {
+    for (const slug of ['deepseek-r1-0528', 'qwen3-235b-a22b-2507', 'gpt-5.6-sol', 'llama-2-chat-70b']) {
+      expect(canonicalCatalogModelSlug(slug)).toBe(slug);
     }
   });
 });

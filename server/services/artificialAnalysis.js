@@ -1,6 +1,7 @@
 import { ServerError } from '../lib/errorHandler.js';
 import { modelComparisonImportSchema } from '../lib/validation.js';
 import { importModelComparison } from './modelComparison.js';
+import { canonicalCatalogModelSlug } from '../lib/comparisonModelScope.js';
 
 export const KNOWN_EFFORTS = ['non-reasoning', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode'];
 
@@ -33,7 +34,7 @@ export function parseModelNameAndEffort(rawName) {
     }
   }
 
-  const modelSlug = slugify(name);
+  const modelSlug = canonicalCatalogModelSlug(slugify(name));
   return { baseName: name, modelSlug, effort, configDetail };
 }
 
@@ -69,14 +70,6 @@ export function transformAAModelsToObservations(models, options = {}) {
       }
     }
 
-    // The id predates the dotted slug and stays frozen (it is the merge key on
-    // every install), but the model must read 'claude-fable-5.1' like the other
-    // efforts or max plots as its own one-point series instead of the top of
-    // Fable 5.1's reasoning curve.
-    if (modelSlug === 'claude-fable-5.1' && effort === 'max') {
-      id = 'aa-v4.2-anthropic-claude-fable-5-1-max';
-    }
-
     let finalId = id;
     let counter = 1;
     while (seenIds.has(finalId)) {
@@ -97,23 +90,12 @@ export function transformAAModelsToObservations(models, options = {}) {
       },
     } : null;
 
-    let costVal = m.artificial_analysis_intelligence_index_cost?.cost_per_task?.total_cost;
-    // Known benchmark curve values for OpenAI reasoning models when omitted from AA free cost_per_task
-    if (costVal == null) {
-      if (modelSlug === 'gpt-5.6-terra') {
-        if (effort === 'low') costVal = 0.089;
-        if (effort === 'medium') costVal = 0.124;
-      } else if (modelSlug === 'gpt-5.6-luna') {
-        if (effort === 'low') costVal = 0.012;
-        if (effort === 'medium') costVal = 0.018;
-        if (effort === 'high') costVal = 0.024;
-      } else if (modelSlug === 'gpt-5.5') {
-        if (effort === 'low') costVal = 0.258;
-        if (effort === 'medium') costVal = 0.495;
-        if (effort === 'high') costVal = 0.798;
-        if (effort === 'xhigh') costVal = 1.172;
-      }
-    }
+    // AA omits cost_per_task for most sub-max effort rows, and a stored value
+    // carries an AA source url + methodology — so a hand-entered figure would
+    // persist, federate and re-sync as something AA published. The gap is filled
+    // at render time instead (`client/src/lib/effortCostEstimate.js`), where it
+    // is drawn and labelled as an estimate.
+    const costVal = m.artificial_analysis_intelligence_index_cost?.cost_per_task?.total_cost;
 
     const costPerTask = Number.isFinite(costVal) ? {
       value: Math.round(costVal * 10000) / 10000,

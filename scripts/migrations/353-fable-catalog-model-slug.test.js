@@ -28,6 +28,16 @@ it('renames the dashed Fable slug while leaving its id and every other row alone
   expect(observations[0].id).toBe('aa-v4.2-anthropic-claude-fable-5-1-max');
 });
 
+it('leaves a build date or parameter count that only looks like a version', async () => {
+  const path = await withCatalog([
+    { id: 'a', model: 'deepseek-r1-0528', effort: 'unspecified' },
+    { id: 'b', model: 'qwen3-235b-a22b-2507', effort: 'reasoning' },
+  ]);
+  const before = await readFile(path, 'utf8');
+  expect(await migration.up({ rootDir })).toMatchObject({ skipped: 'already normalized' });
+  expect(await readFile(path, 'utf8')).toBe(before);
+});
+
 it('is a no-op on an already-normalized catalog and on an install with none', async () => {
   const path = await withCatalog([{ id: 'x', model: 'claude-fable-5.1', effort: 'max' }]);
   const before = await readFile(path, 'utf8');

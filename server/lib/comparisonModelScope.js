@@ -24,13 +24,15 @@
  * that maps to no catalog slug simply contributes nothing to the scope.
  */
 
-// Effort and mode suffixes a harness appends to a model id. Stripped from the
-// tail repeatedly, so `claude-opus-5-thinking-xhigh` reduces to `claude-opus-5`.
-const SUFFIXES = ['thinking', 'reasoning', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'free', 'contributor', 'spark'];
+import { isConfiguredDefaultModel } from './providerModels.js';
 
-// Local-runtime quantization / packaging suffixes — same weights as the
-// benchmarked model, so they resolve to the same catalog slug.
+// Effort and mode suffixes a harness appends to a model id, plus the
+// local-runtime quantization/packaging suffixes that name the same weights as
+// the benchmarked model. Stripped as one repeated tail, so
+// `claude-opus-5-thinking-xhigh` reduces to `claude-opus-5`.
+const SUFFIXES = ['thinking', 'reasoning', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'free', 'contributor', 'spark'];
 const QUANTIZATIONS = ['4bit', '8bit', 'fp8', 'mxfp4', 'awq', 'gguf', 'optimized-speed'];
+const TAIL = new RegExp(`(?:-(?:${[...QUANTIZATIONS, ...SUFFIXES].join('|')}))+$`);
 
 // Namespace prefixes that address a gateway or region rather than the model.
 const PREFIXES = ['us.anthropic.', 'global.anthropic.', 'anthropic.', 'us.', 'global.'];
@@ -54,34 +56,38 @@ const ALIASES = new Map([
   ['claude-fable-5-1', 'claude-fable-5.1'],
 ]);
 
-// Provider entries that name a routing policy or a local runtime rather than a
-// benchmarked model.
-const NOT_A_MODEL = /^(auto|.*\/auto|.*-configured-default|composer-.*|big-pickle|stealth\/.*|mtplx-.*|dflash|.*-dflash2)$/i;
+// Routing policies and local runtime aliases that name no benchmarked model.
+// The "use the CLI's own default" sentinels are owned by providerModels.js.
+const NOT_A_MODEL = /^(auto|.*\/auto|composer-.*|big-pickle|stealth\/.*|mtplx-.*|dflash|.*-dflash2)$/i;
+
+/**
+ * The catalog's own spelling of a model slug.
+ *
+ * Sources spell a version with either a dash or a dot — Artificial Analysis
+ * minted Fable 5.1's max row as `claude-fable-5-1` and its other efforts as
+ * `claude-fable-5.1`, which split one reasoning curve into two series. Only a
+ * trailing all-digit pair is a version, so `qwen3-235b-a22b-2507` and
+ * `deepseek-r1-0528` are left alone.
+ *
+ * Applied both where the sync mints a slug and where a migration repairs stored
+ * rows, so the two cannot disagree about what a model is called.
+ */
+export function canonicalCatalogModelSlug(slug) {
+  if (typeof slug !== 'string' || !slug) return '';
+  return slug.replace(/-(\d+)-(\d+)$/, '-$1.$2');
+}
 
 /** Normalize one provider model id to a catalog model slug, or '' if it is not one. */
 export function catalogSlugForProviderModel(modelId) {
   if (typeof modelId !== 'string' || !modelId) return '';
   let slug = modelId.trim().toLowerCase();
-  if (NOT_A_MODEL.test(slug)) return '';
+  if (isConfiguredDefaultModel(slug) || NOT_A_MODEL.test(slug)) return '';
 
   slug = slug.replace(/\[[^\]]*\]$/, ''); // context-window marker, e.g. [1m]
-  for (const prefix of PREFIXES) if (slug.startsWith(prefix)) { slug = slug.slice(prefix.length); break; }
+  const prefix = PREFIXES.find(candidate => slug.startsWith(candidate));
+  if (prefix) slug = slug.slice(prefix.length);
   slug = slug.slice(slug.lastIndexOf('/') + 1); // vendor / gateway namespace
-
-  let trimmed = true;
-  while (trimmed) {
-    trimmed = false;
-    for (const suffix of [...QUANTIZATIONS, ...SUFFIXES]) {
-      if (slug.endsWith(`-${suffix}`)) {
-        slug = slug.slice(0, -(suffix.length + 1));
-        trimmed = true;
-      }
-    }
-  }
-
-  // `claude-sonnet-4-6` / `claude-fable-5-1` spell a version with a dash; the
-  // index spells it with a dot. Only a trailing single-digit pair is a version.
-  slug = slug.replace(/-(\d+)-(\d+)$/, '-$1.$2');
+  slug = canonicalCatalogModelSlug(slug.replace(TAIL, ''));
   return ALIASES.get(slug) || slug;
 }
 

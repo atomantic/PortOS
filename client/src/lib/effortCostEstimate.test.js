@@ -48,7 +48,7 @@ describe('withEstimatedCosts', () => {
 
   it('leaves published costs untouched and unflagged', () => {
     const published = withEstimatedCosts(catalog).find(entry => entry.id === 'anchored-max');
-    expect(published.costEstimated).toBe(false);
+    expect(published.costEstimated).toBeUndefined();
     expect(published.costPerTask.value).toBe(10);
     expect(published.estimatedCostPerTask).toBeUndefined();
   });
@@ -57,13 +57,13 @@ describe('withEstimatedCosts', () => {
     const orphan = withEstimatedCosts([...catalog, row('unpriced', 'low', null)]).find(
       entry => entry.id === 'unpriced-low'
     );
-    expect(orphan.costEstimated).toBe(false);
+    expect(orphan.costEstimated).toBeUndefined();
   });
 
   it('keeps families on separate benchmarks apart', () => {
     const other = { ...row('anchored', 'low', null), benchmark: 'Other Index v1' };
     const estimated = withEstimatedCosts([...catalog, other]).filter(entry => entry.benchmark === 'Other Index v1');
-    expect(estimated[0].costEstimated).toBe(false);
+    expect(estimated[0].costEstimated).toBeUndefined();
   });
 
   it('does not estimate model-level configurations that are not points on the ladder', () => {
@@ -71,6 +71,6 @@ describe('withEstimatedCosts', () => {
     const estimated = withEstimatedCosts([...catalog, nonLadder]).find(
       entry => entry.effort === 'non-reasoning'
     );
-    expect(estimated.costEstimated).toBe(false);
+    expect(estimated.costEstimated).toBeUndefined();
   });
 });

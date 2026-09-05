@@ -25,6 +25,8 @@ import { readFile, writeFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { providerCatalogSlugs } from '../server/lib/comparisonModelScope.js';
+import { filterSelectableModels } from '../server/lib/providerModels.js';
+import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const seedPath = join(root, 'data.reference/model-comparison.json');
@@ -40,35 +42,34 @@ export const FRONTIER_ANCHORS = ['claude-fable-5.1', 'claude-fable-5'];
 export async function inScopeModels() {
   const providers = JSON.parse(await readFile(providersPath, 'utf8'));
   const inventory = Object.values(providers.providers || {}).map(provider => ({
-    models: (provider.models || []).map(model => (typeof model === 'string' ? model : model?.id)),
+    models: filterSelectableModels((provider.models || []).map(model => (typeof model === 'string' ? model : model?.id))),
   }));
   const scope = providerCatalogSlugs(inventory);
   for (const model of FRONTIER_ANCHORS) scope.add(model);
   return scope;
 }
 
+/** `{ pruned, originalCount }` from a single read of the seed. */
 export async function prunedSeed() {
   const scope = await inScopeModels();
   const catalog = JSON.parse(await readFile(seedPath, 'utf8'));
   return {
-    ...catalog,
-    observations: catalog.observations.filter(row => scope.has(row.model)),
+    pruned: { ...catalog, observations: catalog.observations.filter(row => scope.has(row.model)) },
+    originalCount: catalog.observations.length,
   };
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
-if (isMain) {
-  const pruned = await prunedSeed();
-  const current = JSON.parse(await readFile(seedPath, 'utf8'));
+if (isDirectlyInvoked(import.meta.url)) {
+  const { pruned, originalCount } = await prunedSeed();
   const models = new Set(pruned.observations.map(row => row.model)).size;
   if (process.argv.includes('--check')) {
-    if (current.observations.length !== pruned.observations.length) {
-      console.error(`❌ Seed carries ${current.observations.length} observations; ${pruned.observations.length} are in provider scope`);
+    if (originalCount !== pruned.observations.length) {
+      console.error(`❌ Seed carries ${originalCount} observations; ${pruned.observations.length} are in provider scope`);
       process.exit(1);
     }
     console.log(`✅ Seed is in scope: ${pruned.observations.length} observations across ${models} models`);
   } else {
     await writeFile(seedPath, `${JSON.stringify(pruned, null, 2)}\n`);
-    console.log(`✂️  Pruned seed to ${pruned.observations.length} observations across ${models} models (was ${current.observations.length})`);
+    console.log(`✂️  Pruned seed to ${pruned.observations.length} observations across ${models} models (was ${originalCount})`);
   }
 }

@@ -16,7 +16,7 @@ describe('model comparison seed scope', () => {
   });
 
   it('is already pruned — the checked-in seed equals the pruned seed', async () => {
-    const [seed, pruned] = await Promise.all([readSeed(), prunedSeed()]);
+    const [seed, { pruned }] = await Promise.all([readSeed(), prunedSeed()]);
     expect(seed.observations.length).toBe(pruned.observations.length);
   });
 

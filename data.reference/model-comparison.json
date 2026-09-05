@@ -183,14 +183,7 @@
           "methodology": "Artificial Analysis Intelligence Index v4.2 composite score."
         }
       },
-      "costPerTask": {
-        "value": 0.012,
-        "source": {
-          "url": "https://artificialanalysis.ai/models/gpt-5-6-luna-low",
-          "retrievedAt": "2026-09-05T00:00:00Z",
-          "methodology": "Artificial Analysis Intelligence Index v4.2; cost per task evaluation."
-        }
-      },
+      "costPerTask": null,
       "inputPerMillion": {
         "value": 0.2,
         "source": {
@@ -515,14 +508,7 @@
           "methodology": "Artificial Analysis Intelligence Index v4.2 composite score."
         }
       },
-      "costPerTask": {
-        "value": 1.172,
-        "source": {
-          "url": "https://artificialanalysis.ai/models/gpt-5-5",
-          "retrievedAt": "2026-09-05T00:00:00Z",
-          "methodology": "Artificial Analysis Intelligence Index v4.2; cost per task evaluation."
-        }
-      },
+      "costPerTask": null,
       "inputPerMillion": {
         "value": 5,
         "source": {
@@ -946,14 +932,7 @@
           "methodology": "Artificial Analysis Intelligence Index v4.2 composite score."
         }
       },
-      "costPerTask": {
-        "value": 0.124,
-        "source": {
-          "url": "https://artificialanalysis.ai/models/gpt-5-6-terra-medium",
-          "retrievedAt": "2026-09-05T00:00:00Z",
-          "methodology": "Artificial Analysis Intelligence Index v4.2; cost per task evaluation."
-        }
-      },
+      "costPerTask": null,
       "inputPerMillion": {
         "value": 2,
         "source": {
@@ -2094,14 +2073,7 @@
           "methodology": "Artificial Analysis Intelligence Index v4.2 composite score."
         }
       },
-      "costPerTask": {
-        "value": 0.018,
-        "source": {
-          "url": "https://artificialanalysis.ai/models/gpt-5-6-luna-medium",
-          "retrievedAt": "2026-09-05T00:00:00Z",
-          "methodology": "Artificial Analysis Intelligence Index v4.2; cost per task evaluation."
-        }
-      },
+      "costPerTask": null,
       "inputPerMillion": {
         "value": 0.2,
         "source": {
@@ -2352,14 +2324,7 @@
           "methodology": "Artificial Analysis Intelligence Index v4.2 composite score."
         }
       },
-      "costPerTask": {
-        "value": 0.495,
-        "source": {
-          "url": "https://artificialanalysis.ai/models/gpt-5-5-medium",
-          "retrievedAt": "2026-09-05T00:00:00Z",
-          "methodology": "Artificial Analysis Intelligence Index v4.2; cost per task evaluation."
-        }
-      },
+      "costPerTask": null,
       "inputPerMillion": {
         "value": 5,
         "source": {
@@ -3702,14 +3667,7 @@
           "methodology": "Artificial Analysis Intelligence Index v4.2 composite score."
         }
       },
-      "costPerTask": {
-        "value": 0.024,
-        "source": {
-          "url": "https://artificialanalysis.ai/models/gpt-5-6-luna-high",
-          "retrievedAt": "2026-09-05T00:00:00Z",
-          "methodology": "Artificial Analysis Intelligence Index v4.2; cost per task evaluation."
-        }
-      },
+      "costPerTask": null,
       "inputPerMillion": {
         "value": 0.2,
         "source": {
@@ -3914,14 +3872,7 @@
           "methodology": "Artificial Analysis Intelligence Index v4.2 composite score."
         }
       },
-      "costPerTask": {
-        "value": 0.798,
-        "source": {
-          "url": "https://artificialanalysis.ai/models/gpt-5-5-high",
-          "retrievedAt": "2026-09-05T00:00:00Z",
-          "methodology": "Artificial Analysis Intelligence Index v4.2; cost per task evaluation."
-        }
-      },
+      "costPerTask": null,
       "inputPerMillion": {
         "value": 5,
         "source": {
@@ -4511,14 +4462,7 @@
           "methodology": "Artificial Analysis Intelligence Index v4.2 composite score."
         }
       },
-      "costPerTask": {
-        "value": 0.258,
-        "source": {
-          "url": "https://artificialanalysis.ai/models/gpt-5-5-low",
-          "retrievedAt": "2026-09-05T00:00:00Z",
-          "methodology": "Artificial Analysis Intelligence Index v4.2; cost per task evaluation."
-        }
-      },
+      "costPerTask": null,
       "inputPerMillion": {
         "value": 5,
         "source": {
@@ -4684,14 +4628,7 @@
           "methodology": "Artificial Analysis Intelligence Index v4.2 composite score."
         }
       },
-      "costPerTask": {
-        "value": 0.089,
-        "source": {
-          "url": "https://artificialanalysis.ai/models/gpt-5-6-terra-low",
-          "retrievedAt": "2026-09-05T00:00:00Z",
-          "methodology": "Artificial Analysis Intelligence Index v4.2; cost per task evaluation."
-        }
-      },
+      "costPerTask": null,
       "inputPerMillion": {
         "value": 2,
         "source": {
