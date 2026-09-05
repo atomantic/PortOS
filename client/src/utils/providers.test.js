@@ -2081,7 +2081,7 @@ describe('isFleetHostConfigured', () => {
     peerId: 'peer-1',
     peerName: 'Workstation GPU',
     peerHost: 'workstation.tailnet.ts.net',
-    peerAddress: '100.64.0.15',
+    peerAddress: '192.168.1.50',
     endpoint: 'http://workstation.tailnet.ts.net:18022/v1',
     model: 'qwen3.8-27b',
     serving: true,
@@ -2110,8 +2110,8 @@ describe('isFleetHostConfigured', () => {
       { id: 'p1', endpoint: 'http://workstation.tailnet.ts.net:18022/v1' },
     ];
     expect(isFleetHostConfigured({ peerHost: 'workstation.tailnet.ts.net' }, providers)).toBe(true);
-    expect(isFleetHostConfigured({ peerAddress: '100.64.0.15' }, [
-      { id: 'p2', endpoint: 'http://100.64.0.15:18022/v1' },
+    expect(isFleetHostConfigured({ peerAddress: '192.168.1.50' }, [
+      { id: 'p2', endpoint: 'http://192.168.1.50:18022/v1' },
     ])).toBe(true);
   });
 

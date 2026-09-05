@@ -71,7 +71,7 @@ describe('fleet peer host discovery', () => {
   it('discovers online peers running a federated host', async () => {
     state.peers = [
       { id: 'peer-1', name: 'Workstation GPU', host: 'gpu.ts.net', status: 'online', enabled: true },
-      { id: 'peer-2', name: 'Laptop', address: '100.64.0.2', status: 'online', enabled: true },
+      { id: 'peer-2', name: 'Laptop', address: '192.168.1.50', status: 'online', enabled: true },
     ];
     state.peerResponses.set('https://gpu.ts.net:5555/api/providers/fleet-host', async () => ({
       ok: true,
@@ -84,7 +84,7 @@ describe('fleet peer host discovery', () => {
         queue: { active: 0, queued: 0 },
       }),
     }));
-    state.peerResponses.set('http://100.64.0.2:5555/api/providers/fleet-host', async () => ({
+    state.peerResponses.set('http://192.168.1.50:5555/api/providers/fleet-host', async () => ({
       ok: true,
       json: async () => ({ serving: false, enabled: false }),
     }));

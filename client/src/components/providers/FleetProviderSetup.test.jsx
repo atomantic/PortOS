@@ -12,7 +12,7 @@ vi.mock('../../services/apiProviders', () => api);
 
 const peers = [
   { id: 'peer-1', name: 'Workstation GPU', host: 'workstation.tailnet.ts.net', enabled: true },
-  { id: 'peer-2', name: 'MacBook', address: '100.64.0.2', enabled: true },
+  { id: 'peer-2', name: 'MacBook', address: '192.168.1.50', enabled: true },
 ];
 
 beforeEach(() => {
