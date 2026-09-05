@@ -2,7 +2,15 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { NAV_COMMANDS, NAV_FEATURE_IDS, SECTION_FEATURE, getNavAliasMap, resolveNavCommand } from './navManifest.js';
+import {
+  NAV_COMMANDS,
+  NAV_FEATURE_IDS,
+  SECTION_FEATURE,
+  getNavAliasMap,
+  getNavSectionForPath,
+  getSectionNavTabs,
+  resolveNavCommand,
+} from './navManifest.js';
 import { INSTANCE_FEATURE_IDS } from './instanceFeatureRegistry.js';
 import { PORTOS_APP_ID } from './appIdentity.js';
 
@@ -19,6 +27,8 @@ const SETTINGS_PAGE = path.join(REPO_ROOT, 'client/src/pages/Settings.jsx');
 //                   where the page's own tabs are the entries whose path is exactly
 //                   `<prefix>` or under `<prefix>/`; entries pointing elsewhere
 //                   (e.g. Settings' "Prompts" → /prompts) are cross-links, not tabs.
+//   kind 'section' — the header exports a generated `TABS` list sourced from
+//                   the nav manifest; `section` identifies the manifest group.
 //   kind 'switch' — the page has no tab array; its tabs are a `switch (<switchVar>)`
 //                   render-dispatch plus the `{ <switchVar> = '<id>' }` destructuring
 //                   default (POST). Reading the switch directly means the guard
@@ -35,8 +45,8 @@ const TABBED_PAGES = [
   { prefix: '/privacy', file: 'client/src/pages/Privacy.jsx', kind: 'ids', constName: 'TABS' },
   { prefix: '/messages', file: 'client/src/pages/Messages.jsx', kind: 'ids', constName: 'TABS' },
   { prefix: '/wiki', file: 'client/src/pages/Wiki.jsx', kind: 'ids', constName: 'TABS' },
-  { prefix: '/settings', file: 'client/src/components/settings/SettingsTabsHeader.jsx', kind: 'links', constName: 'TABS' },
-  { prefix: '/models', file: 'client/src/components/models/ModelsTabsHeader.jsx', kind: 'links', constName: 'TABS',
+  { prefix: '/settings', section: 'Settings', file: 'client/src/components/settings/SettingsTabsHeader.jsx', kind: 'section', constName: 'TABS' },
+  { prefix: '/models', section: 'Models', file: 'client/src/components/models/ModelsTabsHeader.jsx', kind: 'section', constName: 'TABS',
     nestedIdSources: [
       { parent: 'llms', file: 'client/src/components/settings/LocalLlmTab.jsx', constName: 'LLM_NAV_SUBROUTES' },
     ] },
@@ -104,13 +114,14 @@ function extractConstIds(filePath, constName) {
 }
 
 // The set of absolute tab paths a page serves under its own prefix.
-function extractTabPaths(filePath, { kind, constName, switchVar, prefix, nestedIdSources, allowBasePrefix }) {
+function extractTabPaths(filePath, { kind, constName, switchVar, prefix, section, nestedIdSources, allowBasePrefix }) {
   const src = fs.readFileSync(filePath, 'utf8');
   const nested = (nestedIdSources || []).flatMap(({ parent, file, constName: c }) =>
     extractConstIds(path.join(REPO_ROOT, file), c).map((id) => `${prefix}/${parent}/${id}`));
   if (kind === 'switch') {
     return [...extractSwitchTabs(src, switchVar).map((id) => `${prefix}/${id}`), ...nested];
   }
+  if (kind === 'section') return [...getSectionNavTabs(section).map((tab) => tab.to), ...nested];
   const block = extractConstArrayBlock(src, constName);
   if (kind === 'ids') {
     const ids = [...block.matchAll(/id:\s*['"]([^'"]+)['"]/g)].map((m) => `${prefix}/${m[1]}`);
@@ -161,6 +172,38 @@ describe('navManifest — persistent mind dashboard', () => {
   it('maps both former Mind Tools routes onto the embedded tools panel', () => {
     const tools = NAV_COMMANDS.find((command) => command.id === 'nav.cos.mind-tools');
     expect(tools?.previousPaths).toEqual(['/cos/tools', '/cos/mind/tools']);
+  });
+});
+
+describe('nav contract — generated section child navigation', () => {
+  const headers = [
+    ['Settings', 'client/src/components/settings/SettingsTabsHeader.jsx'],
+    ['Models', 'client/src/components/models/ModelsTabsHeader.jsx'],
+  ];
+
+  it.each(headers)('%s header reads its tabs from navManifest', (section, file) => {
+    const source = fs.readFileSync(path.join(REPO_ROOT, file), 'utf8');
+    expect(source).toMatch(new RegExp(`getSectionNavTabs\\(['"]${section}['"]\\)`));
+  });
+
+  it('keeps moved Providers and Usage destinations in the Models child nav', () => {
+    expect(getSectionNavTabs('Models').filter((tab) => ['providers', 'usage'].includes(tab.id))).toEqual([
+      { id: 'providers', label: 'Providers', to: '/ai' },
+      { id: 'usage', label: 'Usage', to: '/devtools/usage' },
+    ]);
+    expect(getSectionNavTabs('Settings').some((tab) => tab.id === 'providers')).toBe(false);
+  });
+
+  it.each([
+    ['/ai', 'Models'],
+    ['/ai/edit/example-provider', 'Models'],
+    ['/ai/fleet', 'Models'],
+    ['/devtools/usage', 'Models'],
+    ['/models/llms/abuse', 'Models'],
+    ['/settings/general', 'Settings'],
+    ['/prompts', 'Settings'],
+  ])('resolves %s to the %s section', (pathname, section) => {
+    expect(getNavSectionForPath(pathname)).toBe(section);
   });
 });
 
@@ -325,9 +368,17 @@ describe('nav contract — tabbed pages match their tab constants', () => {
       // section served at the bare prefix, e.g. /sharing → buckets) or anything
       // under `<prefix>/`. Compare on the bare path so deep-link query/hash
       // variants (e.g. /media/image?settings=1) normalize first.
+      const hasNestedSources = (page.nestedIdSources || []).length > 0;
       const navPaths = NAV_COMMANDS
-        .map((c) => c.path.split(/[?#]/)[0])
-        .filter((p) => p === prefix || p.startsWith(`${prefix}/`));
+        .filter((c) => {
+          const barePath = c.path.split(/[?#]/)[0];
+          if (page.section) {
+            return c.section === page.section
+              && (c.tabId || (hasNestedSources && (barePath === prefix || barePath.startsWith(`${prefix}/`))));
+          }
+          return barePath === prefix || barePath.startsWith(`${prefix}/`);
+        })
+        .map((c) => c.path.split(/[?#]/)[0]);
 
       // Read inside it() bodies (not at describe time) so a moved/renamed source
       // file surfaces as a focused test failure rather than aborting the entire
@@ -358,15 +409,15 @@ describe('nav contract — tabbed pages match their tab constants', () => {
 // Providers → /ai) point off /settings, so the `links` extractor already drops
 // them — the two filtered sets are therefore expected to match exactly.
 describe('nav contract — Settings tab bar header ↔ page switch parity', () => {
-  const SETTINGS_HEADER = 'client/src/components/settings/SettingsTabsHeader.jsx';
   const SETTINGS_PAGE = 'client/src/pages/Settings.jsx';
 
-  // Header tab ids that live under /settings/<id> (cross-links already filtered).
-  // Require the trailing slash so a hypothetical bare `to: '/settings'` index entry
-  // can't slice to '' and surface as a cryptic missing/orphan '' rather than a tab.
-  const headerTabIds = () => extractTabPaths(path.join(REPO_ROOT, SETTINGS_HEADER), {
-    kind: 'links', constName: 'TABS', prefix: '/settings',
-  }).filter((p) => p.startsWith('/settings/')).map((p) => p.slice('/settings/'.length));
+  // Header tab ids that live under /settings/<id> (cross-links already filtered
+  // by the generated section list). Require the trailing slash so a hypothetical
+  // bare `/settings` index entry cannot surface as a cryptic empty tab id.
+  const headerTabIds = () => getSectionNavTabs('Settings')
+    .map((tab) => tab.to)
+    .filter((p) => p.startsWith('/settings/'))
+    .map((p) => p.slice('/settings/'.length));
 
   const switchCaseIds = () => extractSwitchCases(
     fs.readFileSync(path.join(REPO_ROOT, SETTINGS_PAGE), 'utf8'), 'activeTab',

@@ -553,7 +553,8 @@ const EXACT_FULL_WIDTH_PATHS = [
   // OpenClaw lives under the Settings nav group; it's a full-bleed
   // chat surface (sidebar + message pane) that owns its own internal
   // scroll, so it needs the bare full-width main like the other
-  // Settings pages (/ai, /prompts, /settings/*).
+  // Full-width Settings pages (/prompts, /settings/*) and the Models Providers
+  // page at /ai.
   '/openclaw',
   '/prompts',
   '/review',

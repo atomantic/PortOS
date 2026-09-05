@@ -36,8 +36,10 @@ const MediaModels = lazyWithReload(() => import('./MediaModels'));
  *   - **LoRAs** — installed image/video adapters.
  *   - **Media** — image/video checkpoints and the Hugging Face cache.
  *   - **Performance** — measured assessments and launch-tuning comparison.
+ *   - **Providers** — configured AI provider connections and model catalogs.
  *   - **Status** — residency plus the downloaded-model inventory.
  *   - **Training** — LoRA fine-tuning datasets and runs.
+ *   - **Usage** — provider quota and PortOS AI usage accounting.
  *
  * What deliberately stayed OUT is output rather than weights: Three.js Models is
  * a gallery of generated meshes, and `/3d` is the render flow that consumes the

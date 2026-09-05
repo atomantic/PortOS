@@ -35,6 +35,10 @@ describe('Settings — Instance Features tab', () => {
     expect(TABS.some(t => t.id === 'code-reviewers')).toBe(false);
   });
 
+  it('does not list Providers after it moved to Models', () => {
+    expect(TABS.some(t => t.id === 'providers')).toBe(false);
+  });
+
   it('is listed in the settings sub-nav', () => {
     const tab = TABS.find(t => t.id === 'features');
     expect(tab?.to).toBe('/settings/features');
