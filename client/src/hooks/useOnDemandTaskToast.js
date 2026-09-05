@@ -24,6 +24,18 @@ const PARK_REASON_LABELS = {
   'no-detector': 'no work detector for this task'
 };
 
+// pr-reviewer's on-demand skip reasons (server: runPrReviewerSecurityPreflight in
+// cosTaskGenerator.js). An unlisted code falls back to the raw string rather than
+// the generic "nothing to do" — the reason IS the actionable detail here, since a
+// per-PR "Review this PR" trigger names a specific PR the maintainer wants reviewed.
+const PR_REVIEWER_REASON_LABELS = {
+  'parked': 'paused after repeated failures — it will retry on its normal cadence',
+  'no-external-open-prs': 'no open external pull requests to review',
+  'target-pull-request-not-reviewable': "that pull request isn't eligible right now (not open against the default branch, or authored by a trusted collaborator)",
+  'security-scan-report-pending': 'a security scan for this pull request is already in progress',
+  'security-guard-not-ready': "the local model-abuse classifier (Settings → Models → LLMs → Abuse Guard) isn't ready — finish or repair its setup, then try again",
+};
+
 /**
  * Global subscriber that toasts when a user-initiated on-demand task run
  * produced no work. The server emits `cos:schedule:on-demand-empty` ONLY for
@@ -64,6 +76,13 @@ export function useOnDemandTaskToast() {
       if (data?.outcome === 'idle') {
         if (data?.taskType === 'layered-intelligence' && data?.reason) {
           toast(`${task}${scope}: ${formatLiReason({ action: 'skipped', reason: data.reason })}.`, {
+            duration: 8000,
+            icon: '⚠️'
+          });
+          return;
+        }
+        if (data?.taskType === 'pr-reviewer' && data?.reason) {
+          toast(`${task}${scope}: ${PR_REVIEWER_REASON_LABELS[data.reason] || data.reason}.`, {
             duration: 8000,
             icon: '⚠️'
           });
