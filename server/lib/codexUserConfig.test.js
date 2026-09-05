@@ -74,6 +74,14 @@ describe('parseCodexRoutingOverride', () => {
       .toEqual({ overridden: true, keys: ['openai_base_url'], baseUrl: null });
   });
 
+  // A single-line triple-quoted value would otherwise match the empty basic
+  // string `""` and report a base URL of '' — present but blank, which is the
+  // absent-vs-empty collapse the sentinel rule forbids.
+  it('reads a single-line triple-quoted base URL rather than reporting a blank one', () => {
+    expect(parseCodexRoutingOverride('openai_base_url = """http://127.0.0.1:9999/v1"""'))
+      .toEqual({ overridden: true, keys: ['openai_base_url'], baseUrl: 'http://127.0.0.1:9999/v1' });
+  });
+
   it('is empty for an empty file', () => {
     expect(parseCodexRoutingOverride('')).toEqual({ overridden: false, keys: [], baseUrl: null });
   });

@@ -43,9 +43,17 @@ export const CODEX_ROUTING_KEYS = Object.freeze(['openai_base_url', 'model_provi
 const KEY_ASSIGNMENT = /^\s*(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_.-]+))\s*=\s*(.*)$/;
 const TABLE_HEADER = /^\s*\[/;
 
-/** Strip a TOML scalar's surrounding quotes; a non-string value returns null. */
+/**
+ * Strip a TOML scalar's surrounding quotes; a non-string value returns null.
+ *
+ * Triple quotes come FIRST, or a single-line `"""http://…"""` matches the
+ * empty basic string `""` and reports a base URL of `''` — present but blank,
+ * which is the "absent vs empty" collapse the repo's sentinel rule forbids.
+ */
 const stringValue = (raw) => {
   const trimmed = String(raw ?? '').trim();
+  const tripled = /^"""([\s\S]*)"""$|^'''([\s\S]*)'''$/.exec(trimmed);
+  if (tripled) return tripled[1] ?? tripled[2];
   const quoted = /^"([^"]*)"|^'([^']*)'/.exec(trimmed);
   return quoted ? (quoted[1] ?? quoted[2]) : null;
 };
