@@ -16,6 +16,7 @@ import {
   matchCharactersInText, matchObjectsInText, matchPlacesInText,
 } from '../../lib/scenePrompt.js';
 import { resolveFableLoomProtagonistPresence } from '../../lib/fableLoomPlayback.js';
+import { REACTOR_MAX_PROMPT_LENGTH } from '../../lib/reactorVideoClip.js';
 import {
   mergeNegativePromptTokens, stripStyleClause, universeVisualStyleTokens,
 } from '../../lib/universeVisualStyle.js';
@@ -396,7 +397,7 @@ export async function compileFableLoomVisualRequest({
       node.visualCanon?.shotNotes,
       bindings.protagonistPresence === 'offscreen' && `Keep ${protagonistName} off-screen.`,
     ]).join('\n');
-    if (positive.length > 800) throw new ServerError('Reactor requires a complete shot prompt within 800 characters. Shorten the shot direction or split the dialogue; no render was queued.', { status: 422, code: 'FABLELOOM_REACTOR_PROMPT_TOO_LONG' });
+    if (positive.length > REACTOR_MAX_PROMPT_LENGTH) throw new ServerError(`Reactor requires a complete shot prompt within ${REACTOR_MAX_PROMPT_LENGTH} characters. Shorten the shot direction or split the dialogue; no render was queued.`, { status: 422, code: 'FABLELOOM_REACTOR_PROMPT_TOO_LONG' });
   }
   const identityAvoid = bindings.boundCharacters.flatMap(({ character }) => character.identityPack?.avoid || []);
   const negativePrompt = mergeNegativePromptTokens([

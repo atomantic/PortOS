@@ -11,10 +11,13 @@ import { videoGenEvents } from './events.js';
 import { finalizeGeneratedVideo } from './generateVideoHelpers.js';
 import { mutateVideoHistory } from './history.js';
 import { getSettings } from '../settings.js';
+import {
+  REACTOR_MAX_PROMPT_LENGTH, REACTOR_MAX_CLIP_ID_LENGTH,
+  REACTOR_MIN_CLIP_SECONDS, REACTOR_MAX_CLIP_SECONDS, REACTOR_DEFAULT_CLIP_LENGTH,
+} from '../../lib/reactorVideoClip.js';
 
 export const REACTOR_API_BASE = 'https://api.reactor.inc';
 export const REACTOR_MODEL_ID = 'fast-h3';
-export const REACTOR_MAX_PROMPT_LENGTH = 800;
 
 const REACTOR_TOKEN_TIMEOUT_MS = 15_000;
 const REACTOR_RENDER_TIMEOUT_MS = (() => {
@@ -89,18 +92,35 @@ export const cancelAll = () => {
   return true;
 };
 
-export function validateReactorRequest({ prompt, continueFromClipId, seconds = 6, seed }) {
+export function validateReactorRequest({
+  prompt, continueFromClipId, sourceImagePath, seconds = REACTOR_DEFAULT_CLIP_LENGTH, seed,
+}) {
   if (typeof prompt !== 'string' || !prompt.trim() || prompt.trim().length > REACTOR_MAX_PROMPT_LENGTH) {
-    throw new ServerError('Reactor prompts must contain 1–800 characters; shorten the shot prompt before rendering', { status: 400, code: 'VALIDATION_ERROR' });
+    throw new ServerError(`Reactor prompts must contain 1–${REACTOR_MAX_PROMPT_LENGTH} characters; shorten the shot prompt before rendering`, { status: 400, code: 'VALIDATION_ERROR' });
   }
-  if (continueFromClipId) throw new ServerError('Reactor clip continuity requires the same active session; use a starting image for independent renders', { status: 400, code: 'REACTOR_SESSION_CONTINUITY_UNSUPPORTED' });
-  if (!Number.isFinite(Number(seconds)) || Number(seconds) < 5.167 || Number(seconds) > 14.375) {
-    throw new ServerError('Reactor duration must be between 5.167 and 14.375 seconds', { status: 400, code: 'VALIDATION_ERROR' });
+  if (continueFromClipId) {
+    // A clip id addresses a clip fast-h3 already rendered, so continuation and
+    // a starting frame are two ways to say the same thing — accepting both
+    // would leave which one wins up to the SDK.
+    if (sourceImagePath) {
+      throw new ServerError('Reactor renders continue from a clip OR start from an image, not both; clear one before rendering', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    if (typeof continueFromClipId !== 'string' || continueFromClipId.length > REACTOR_MAX_CLIP_ID_LENGTH) {
+      throw new ServerError('Reactor clip id must be a string identifying a previous Reactor render', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+  }
+  if (!Number.isFinite(Number(seconds)) || Number(seconds) < REACTOR_MIN_CLIP_SECONDS || Number(seconds) > REACTOR_MAX_CLIP_SECONDS) {
+    throw new ServerError(`Reactor duration must be between ${REACTOR_MIN_CLIP_SECONDS} and ${REACTOR_MAX_CLIP_SECONDS} seconds`, { status: 400, code: 'VALIDATION_ERROR' });
   }
   if (seed != null && seed !== '' && (!Number.isSafeInteger(Number(seed)) || Number(seed) < 0)) {
     throw new ServerError('Reactor seed must be a non-negative integer', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  return { prompt: prompt.trim(), seconds: Number(seconds), ...(seed != null && seed !== '' ? { seed: Number(seed) } : {}) };
+  return {
+    prompt: prompt.trim(),
+    seconds: Number(seconds),
+    ...(continueFromClipId ? { continueFromClipId } : {}),
+    ...(seed != null && seed !== '' ? { seed: Number(seed) } : {}),
+  };
 }
 
 function captureClip(entry, input, pythonPath, job, jobId) {
@@ -172,7 +192,7 @@ export async function generateVideo({
   continueFromClipId, seconds, seed,
   sourceImagePath = null, jobId: providedJobId = null,
 }) {
-  const request = validateReactorRequest({ prompt, continueFromClipId, seconds, seed });
+  const request = validateReactorRequest({ prompt, continueFromClipId, sourceImagePath, seconds, seed });
   const pythonPath = process.env.REACTOR_PYTHON_PATH || join(PATHS.data, 'venvs', 'reactor', ...(process.platform === 'win32' ? ['Scripts', 'python.exe'] : ['bin', 'python']));
   const runtime = await stat(pythonPath).catch(() => null);
   if (!runtime?.isFile()) { throw new ServerError('Reactor runtime is missing. Run npm run setup:reactor, or set REACTOR_PYTHON_PATH', { status: 400, code: 'REACTOR_RUNTIME_MISSING' }); }
@@ -228,14 +248,16 @@ export async function generateVideo({
 }
 
 async function runReactorVideo(job, jobId, {
-  apiKey, prompt, seconds, seed, pythonPath, sourceImagePath, outputPath, filename, meta,
+  apiKey, prompt, seconds, seed, continueFromClipId, pythonPath, sourceImagePath, outputPath, filename, meta,
 }) {
   const entry = { aborted: false, stop: null };
   activeRequests.set(jobId, entry);
   try {
     const { jwt } = await mintReactorToken(apiKey);
     if (entry.aborted) return finalizeCanceled(job, jobId);
-    const result = await captureClip(entry, { jwt, prompt, seconds, seed, sourceImagePath, outputPath }, pythonPath, job, jobId);
+    const result = await captureClip(entry, {
+      jwt, prompt, seconds, seed, continueFromClipId, sourceImagePath, outputPath,
+    }, pythonPath, job, jobId);
     if (entry.aborted) return finalizeCanceled(job, jobId);
     const output = await stat(outputPath).catch(() => null);
     if (!output?.isFile() || !output.size) throw new Error('Reactor completed without a playable output file');
@@ -243,7 +265,13 @@ async function runReactorVideo(job, jobId, {
     closeJobAfterDelay(jobs, jobId);
   } catch (err) {
     await rm(outputPath, { force: true }).catch(() => {});
-    finalizeError(job, jobId, entry.aborted ? 'Canceled' : `Reactor video generation failed: ${err?.message || 'unknown error'}`, { force: true });
+    // A continuation names a clip reactor rendered in an EARLIER session, and
+    // reactor decides whether it still holds it. Say so on the failure rather
+    // than leaving the user re-reading a prompt that was never the problem.
+    const continuationHint = continueFromClipId
+      ? ' — reactor may no longer hold that clip; clear "Continue from clip" and render fresh, or start from an image'
+      : '';
+    finalizeError(job, jobId, entry.aborted ? 'Canceled' : `Reactor video generation failed: ${err?.message || 'unknown error'}${continuationHint}`, { force: true });
   } finally {
     if (entry.aborted) await rm(outputPath, { force: true }).catch(() => {});
     activeRequests.delete(jobId);

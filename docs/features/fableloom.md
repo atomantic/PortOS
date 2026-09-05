@@ -382,5 +382,13 @@ Keep preview batches small before authorizing an episode render. Each request
 uses its reference image and a prompt of at most 800 characters; longer prompts
 are rejected rather than silently losing dialogue. Reactor accepts 5.167–14.375
 seconds and snaps durations to its frame grid. Local interactive voice profiles
-are independent of Reactor's generated audio. Cross-request clip chaining is not
-supported because Reactor clip IDs belong to the session that generated them.
+are independent of Reactor's generated audio.
+
+Clip chaining is best effort. Every finished Reactor render stores the clip ID
+Reactor assigned it, and a later render can pass that ID back as
+`continue_from_clip_id` — the Video Gen form offers the stored IDs as a picker,
+and continuous-video episodes chain "continue" cuts the same way. Each render
+opens its own session, so whether an earlier clip is still addressable is
+Reactor's decision: a rejected ID fails that render with a message naming the
+continuation (episodes re-establish the shot fresh instead). A continuation and
+a starting image are mutually exclusive.

@@ -64,11 +64,41 @@ describe('Reactor SDK adapter', () => {
   });
 
   it('rejects unsupported requests before minting or spending', async () => {
-    for (const options of [{ prompt: 'x'.repeat(801) }, { seconds: 5 }, { seconds: 15 }, { continueFromClipId: 'old-session-clip' }]) {
+    for (const options of [
+      { prompt: 'x'.repeat(801) },
+      { seconds: 5 },
+      { seconds: 15 },
+      // Continuation and a starting frame both say "begin from this picture",
+      // so accepting both would leave the winner up to the SDK.
+      { continueFromClipId: 'clip-example', sourceImagePath: '/example/first-frame.png' },
+    ]) {
       await expect(reactor.generateVideo({ prompt: 'A gate', ...options })).rejects.toBeTruthy();
     }
     expect(fetch).not.toHaveBeenCalled();
     expect(mocks.spawn).not.toHaveBeenCalled();
+  });
+
+  // The clip id is stamped on every completed reactor history record precisely
+  // so a later render can chain off it; forwarding it as continue_from_clip_id
+  // is what makes that stored id worth anything.
+  it('forwards a stored clip id as the continuation the SDK understands', async () => {
+    await started({ continueFromClipId: 'clip-example' });
+    expect(input).toMatchObject({ continueFromClipId: 'clip-example' });
+    expect(input.sourceImagePath).toBeFalsy();
+  });
+
+  // A continuation names a clip reactor rendered in an earlier session, and
+  // reactor owns whether it still holds it — a failure there must not read as
+  // "your prompt was bad".
+  it('says the clip may be gone when a continuation fails', async () => {
+    const job = await started({ continueFromClipId: 'clip-example' });
+    const failed = once(videoGenEvents, 'failed');
+    child.stdout.emit('data', Buffer.from('{"type":"error","phase":"enqueue","errorType":"RuntimeError"}\n'));
+    child.emit('close', 1);
+    const [event] = await failed;
+    expect(event.generationId).toBe(job.jobId);
+    expect(event.error).toContain('Continue from clip');
+    expect(mocks.finalize).not.toHaveBeenCalled();
   });
 
   it('fails missing runtime before minting a token', async () => {

@@ -97,6 +97,10 @@ import { loomEpisodeToDraftScenes } from '../lib/episodeSceneImport.js';
 import LoraPicker from '../components/imageGen/LoraPicker';
 import { VIDEO_RESOLUTIONS, resolutionOptionsForModel } from '../lib/videoGenResolutions';
 import { GROK_VIDEO_DURATIONS } from '../lib/grokVideoClip.js';
+import { REACTOR_MAX_PROMPT_LENGTH } from '../lib/reactorVideoClip.js';
+import { styledVideoPrompt } from '../lib/videoGenSubmission.js';
+import ReactorPanel from '../components/videoGen/ReactorPanel';
+import { timeAgo } from '../utils/formatters';
 import ResolutionField from '../components/media/ResolutionField';
 import { VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, IC_LORA_MODES } from '../lib/videoGenParams.js';
 import { finishTargetForRecord, isDeliveryVideoModel } from '../lib/videoFinish.js';
@@ -994,10 +998,43 @@ export default function VideoGen() {
   const modelFieldVisible = !modelsLoading || modelContextLoading;
   const notConnected = !!status && status.connected === false && !needsByovProbe;
 
+  // reactor.inc rejects a prompt over 800 characters outright, and the limit
+  // applies to what PortOS SUBMITS — style presets prefix the user's text, so
+  // the counter measures the same string buildVideoGenSubmission builds rather
+  // than the textarea. Gating Generate on it turns a post-click 400 into a
+  // number the user can watch while writing.
+  const submittedPromptLength = useMemo(
+    () => (isReactor
+      ? styledVideoPrompt(prompt, { negativePrompt, stylePreset, selectedUniverse }).length
+      : prompt.length),
+    [isReactor, prompt, negativePrompt, stylePreset, selectedUniverse],
+  );
+  const promptOverLimit = isReactor && submittedPromptLength > REACTOR_MAX_PROMPT_LENGTH;
+
+  // Only grok folds a negative prompt into its request (as an "Avoid:" line);
+  // fal's queue body and reactor's enqueue command have no such field, and a
+  // CFG-distilled local model ignores one. Hide the box rather than showing a
+  // dead field that quietly does nothing.
+  // A federated render is the peer's model to judge, so the local selection's
+  // gate must not hide a field that lane does submit.
+  const negativePromptSupported = isGrok || remoteTarget.isRemote
+    || (!isFal && !isReactor && currentModel?.supportsNegativePrompt !== false);
+
+  // Every completed reactor render stamps its fast-h3 clip id on the history
+  // record; those ids are the only thing continue_from_clip_id can address, so
+  // the picker is built from them rather than asking the user to know one.
+  const reactorContinuableClips = useMemo(() => visibleHistory
+    .filter((v) => v.clipId && String(v.modelId || '').startsWith('reactor:'))
+    .slice(0, 50)
+    .map((v) => ({
+      clipId: v.clipId,
+      label: `${(v.prompt || v.filename || v.clipId).slice(0, 60)} · ${timeAgo(v.createdAt, 'unknown')}`,
+    })), [visibleHistory]);
+
   // A federated render answers to the PEER’s readiness, not to this machine’s
   // runtime gates — none of the local probes below describe the hardware it
   // will actually run on.
-  const canEnqueue = prompt.trim() && !remixHandoffPending && (remoteTarget.isRemote
+  const canEnqueue = prompt.trim() && !remixHandoffPending && !promptOverLimit && (remoteTarget.isRemote
     ? remoteBlocked === null
     : (isGrok || isFal || isReactor || (!notConnected && !extendModeBlocked
       && !a2vModeBlocked && !icLoraModeBlocked && !byovGateBlocked
@@ -1274,7 +1311,7 @@ export default function VideoGen() {
             value={stylePreset?.id || ''}
             onChange={setStylePreset}
           />
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className={`grid grid-cols-1 gap-3 ${negativePromptSupported ? 'md:grid-cols-2' : ''}`}>
             <FormField label="Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
               <AutoSizeTextarea
                 value={prompt}
@@ -1283,19 +1320,38 @@ export default function VideoGen() {
                 className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[80px]"
                 placeholder="Describe the video you want to generate..."
               />
+              {/* The count is the SUBMITTED length, so a style preset that
+                  pushes a short-looking prompt past reactor's cap is visible
+                  here instead of surfacing as a 400 after Generate. */}
+              <p className={`mt-1 text-[11px] leading-snug ${promptOverLimit ? 'text-port-error' : 'text-gray-500'}`}>
+                {isReactor
+                  ? `${submittedPromptLength} / ${REACTOR_MAX_PROMPT_LENGTH} characters`
+                  : `${submittedPromptLength} characters`}
+              </p>
+              {/* Only crossing the cap is worth announcing; the count itself
+                  changes on every keystroke and would be pure noise. */}
+              {promptOverLimit && (
+                <p className="mt-1 text-[11px] text-port-error leading-snug" role="status">
+                  Reactor will reject this — shorten the prompt. Style presets count toward the limit.
+                </p>
+              )}
+              {!negativePromptSupported && !isFal && !isReactor && (
+                <p className="mt-1 text-[11px] text-gray-500 leading-snug">
+                  This model does not use a negative prompt.
+                </p>
+              )}
             </FormField>
-            <FormField label="Negative Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-              <AutoSizeTextarea
-                value={negativePrompt}
-                onChange={(e) => setNegativePrompt(e.target.value)}
-                disabled={!isGrok && !isFal && !isReactor && currentModel?.supportsNegativePrompt === false}
-                rows={3}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[80px]"
-                placeholder={!isGrok && !isFal && !isReactor && currentModel?.supportsNegativePrompt === false
-                  ? 'This CFG-distilled model does not use a negative prompt.'
-                  : 'What to avoid...'}
-              />
-            </FormField>
+            {negativePromptSupported && (
+              <FormField label="Negative Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+                <AutoSizeTextarea
+                  value={negativePrompt}
+                  onChange={(e) => setNegativePrompt(e.target.value)}
+                  rows={3}
+                  className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[80px]"
+                  placeholder="What to avoid..."
+                />
+              </FormField>
+            )}
           </div>
 
           {/* Keep Enhance live while a render is in flight so the next clip
@@ -1305,8 +1361,8 @@ export default function VideoGen() {
             kind="video"
             prompt={prompt}
             setPrompt={setPrompt}
-            negativePrompt={negativePrompt}
-            setNegativePrompt={setNegativePrompt}
+            negativePrompt={negativePromptSupported ? negativePrompt : ''}
+            setNegativePrompt={negativePromptSupported ? setNegativePrompt : undefined}
             renderConfig={{ stylePreset: stylePreset?.id, mode, model: modelId }}
           />
 
@@ -1504,41 +1560,16 @@ export default function VideoGen() {
               </p>
             </div>
           ) : isReactor ? (
-            <div className="grid grid-cols-2 gap-3">
-              <FormField label="Continue from clip" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-                <input
-                  type="text"
-                  value={reactorClipId}
-                  onChange={(e) => setReactorClipId(e.target.value)}
-                  placeholder="clip id (optional)"
-                  className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-                />
-              </FormField>
-              <FormField label="Clip length (sec)" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-                <input
-                  type="number"
-                  min={1}
-                  max={60}
-                  value={reactorSeconds}
-                  onChange={(e) => setReactorSeconds(e.target.value)}
-                  placeholder="model default"
-                  className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-                />
-              </FormField>
-              <FormField label="Seed" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-                <input
-                  type="number"
-                  min={0}
-                  value={reactorSeed}
-                  onChange={(e) => setReactorSeed(e.target.value)}
-                  placeholder="random"
-                  className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-                />
-              </FormField>
-              <p className="col-span-2 text-[11px] text-gray-500 leading-snug">
-                Renders on reactor.inc's fast-h3 API — near-realtime with native frame-accurate chaining via "Continue from clip". Counts against your reactor.inc balance.
-              </p>
-            </div>
+            <ReactorPanel
+              clipId={reactorClipId}
+              onClipIdChange={setReactorClipId}
+              continuableClips={reactorContinuableClips}
+              imageModeActive={mode === 'image'}
+              seconds={reactorSeconds}
+              onSecondsChange={setReactorSeconds}
+              seed={reactorSeed}
+              onSeedChange={setReactorSeed}
+            />
           ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             {/* The peer advertises its own models; the local list would name
@@ -1819,7 +1850,7 @@ export default function VideoGen() {
             kindDefault="both"
             applyKind="video"
             setPrompt={setPrompt}
-            setNegativePrompt={setNegativePrompt}
+            setNegativePrompt={negativePromptSupported ? setNegativePrompt : undefined}
             alwaysOpen
           />
         </div>

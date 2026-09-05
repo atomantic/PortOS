@@ -31,6 +31,9 @@ async def render(params):
     if not params.get("jwt") or not params.get("outputPath"):
         raise ValueError("Session token and output path are required")
     source = params.get("sourceImagePath")
+    continue_from = (params.get("continueFromClipId") or "").strip()
+    if source and continue_from:
+        raise ValueError("A clip continuation and a starting frame are mutually exclusive")
     if source and not Path(source).is_file():
         raise ValueError("Starting frame is missing")
     output = Path(params["outputPath"])
@@ -85,6 +88,12 @@ async def render(params):
             request = {"prompt": prompt, "seconds": seconds}
             if params.get("seed") is not None:
                 request["seed"] = int(params["seed"])
+            if continue_from:
+                # Frame-accurate continuation of a clip fast-h3 already
+                # rendered (its id is stamped on the PortOS history record).
+                # Reactor owns clip retention, so an id it no longer holds
+                # fails here in "enqueue" rather than rendering a fresh shot.
+                request["continue_from_clip_id"] = continue_from
             if source:
                 phase = "uploading"
                 request["starting_frame"] = await reactor.upload_file(source)
