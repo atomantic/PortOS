@@ -13,6 +13,7 @@ export default function useEidoverseFrame(hostUrl, objects = [], onTravel = null
   const objectsRef = useRef(objects);
   objectsRef.current = objects;
   const sessionRef = useRef(null);
+  const departureRef = useRef(null);
   const [loaded, setLoaded] = useState({ id: 0, url: null });
   const [connection, setConnection] = useState({ status: 'checking', capabilities: {} });
   const [labelVisibility, setLabelVisibility] = useState('off');
@@ -21,6 +22,7 @@ export default function useEidoverseFrame(hostUrl, objects = [], onTravel = null
 
   const onFrameLoad = useCallback(() => {
     sessionRef.current = null;
+    if (frameRef.current?.getAttribute('src') === 'about:blank') return;
     setConnection({ status: 'checking', capabilities: {} });
     setLoaded((current) => ({ id: current.id + 1, url: hostUrl }));
   }, [hostUrl]);
@@ -42,13 +44,15 @@ export default function useEidoverseFrame(hostUrl, objects = [], onTravel = null
       const data = event.data;
       if (data.type === 'eidoverse:ready') {
         clearTimeout(timer);
-        session.capabilities = Object.fromEntries(['objectLabels', 'portosNavigation', 'labelPreferences']
+        session.capabilities = Object.fromEntries(['objectLabels', 'portosNavigation', 'labelPreferences', 'worldDeparture', 'objectInteraction']
           .map((key) => [key, data.capabilities?.[key] === 1]));
         setConnection({ status: 'ready', capabilities: session.capabilities });
         if (session.capabilities.labelPreferences) source.postMessage({
           type: 'portos:label-preference', version: EIDOVERSE_FRAME_VERSION, nonce,
           labelVisibility: preferenceRef.current,
         }, origin);
+      } else if (data.type === 'eidoverse:departed' && session.capabilities.worldDeparture) {
+        departureRef.current?.(data.ok === true);
       } else if (data.type === 'eidoverse:navigate' && session.capabilities.portosNavigation) {
         const target = eidoverseNavigationTarget(data, objectsRef.current);
         if (!target) return;
@@ -66,9 +70,51 @@ export default function useEidoverseFrame(hostUrl, objects = [], onTravel = null
     return () => {
       clearTimeout(timer);
       window.removeEventListener('message', receive);
+      departureRef.current?.(false);
       if (sessionRef.current === session) sessionRef.current = null;
     };
   }, [hostUrl, loaded, navigate]);
+
+  const leaveWorld = useCallback(async () => {
+    const session = sessionRef.current;
+    const element = frameRef.current;
+    if (!element) return;
+    if (session?.capabilities.worldDeparture) {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => finish(false), 5000);
+        const finish = (ok) => {
+          clearTimeout(timer);
+          departureRef.current = null;
+          if (ok) resolve();
+          else reject(new Error('Could not leave the current world. Reload it before trying again.'));
+        };
+        departureRef.current = finish;
+        session.source.postMessage({ type: 'portos:depart', version: EIDOVERSE_FRAME_VERSION,
+          nonce: session.nonce }, session.origin);
+      });
+    }
+    // Retire even legacy renderers before navigating. A page retained in the
+    // browser's back/forward cache must not keep its old world alive.
+    await new Promise((resolve, reject) => {
+      const onLoad = () => { clearTimeout(timer); resolve(); };
+      const timer = setTimeout(() => {
+        element.removeEventListener('load', onLoad);
+        reject(new Error('The previous world is still closing. Reload before trying again.'));
+      }, 3000);
+      element.addEventListener('load', onLoad, { once: true });
+      element.src = 'about:blank';
+    });
+  }, []);
+
+  useEffect(() => {
+    const restore = (event) => {
+      if (event.persisted && hostUrl && frameRef.current?.getAttribute('src') === 'about:blank') {
+        frameRef.current.src = hostUrl;
+      }
+    };
+    window.addEventListener('pageshow', restore);
+    return () => window.removeEventListener('pageshow', restore);
+  }, [hostUrl]);
 
   const changeLabelVisibility = useCallback((value) => {
     if (!EIDOVERSE_LABEL_PREFERENCES.includes(value)) return;
@@ -83,5 +129,5 @@ export default function useEidoverseFrame(hostUrl, objects = [], onTravel = null
     }
   }, []);
 
-  return { frameRef, onFrameLoad, connection, labelVisibility, changeLabelVisibility };
+  return { frameRef, onFrameLoad, connection, labelVisibility, changeLabelVisibility, leaveWorld };
 }

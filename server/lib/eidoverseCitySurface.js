@@ -1,6 +1,7 @@
 /** Deterministic paving and physical signs, uploaded through Eidoverse's GLB door. */
 import { createHash } from 'node:crypto';
 import { eidoverseDistrictPoint, eidoverseDistrictYaw } from './eidoverseCityLayout.js';
+import { appendEidoverseIslandLandscape } from './eidoverseIslandLandscape.js';
 
 // A small architectural stencil. Geometry, not a font download or raster asset.
 const GLYPHS = {
@@ -25,9 +26,10 @@ const linearColor = (hex) => [1, 3, 5].map((start) => {
   return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
 });
 
-function surfaceGeometry(districts) {
+function surfaceGeometry(districts, landscape) {
   const groups = [{ positions: [], normals: [], colors: [], indices: [] },
     { positions: [], normals: [], colors: [], indices: [] }];
+  if (landscape) groups.push({ positions: [], normals: [], colors: [], indices: [] });
   let districtFrame = null;
   const quad = (points, normal, color, material = 0) => {
     if (districtFrame) {
@@ -67,6 +69,17 @@ function surfaceGeometry(districts) {
     floor(-8.4, -12.4, 8.4, -3.4, 0.02, '#d0c7b1');
     const distance = Math.hypot(district.anchor[0], district.anchor[2]);
     floor(-1.8, 3, 1.8, Math.max(4, distance - 30), 0.025, '#e1d9c3');
+    // District-colored edges lead from the promenade to an unobstructed door.
+    for (const side of [-1, 1]) {
+      floor(side * 1.8 - 0.06, -3.5, side * 1.8 + 0.06, Math.max(4, distance - 30), 0.032, district.accent);
+      for (let step = 0; step < 5; step += 1) {
+        floor(side * 2.4 - 0.2, step * 1.3, side * 2.4 + 0.2, step * 1.3 + 0.65, 0.033, '#f0eadb');
+      }
+    }
+    // A shallow entry canopy and accent fascia give the halls a human scale.
+    const canopyY = district.id === 'nexus' ? 3.2 : 2.45;
+    floor(-3, -4.2, 3, -2.8, canopyY, '#c6b994');
+    sign(-3, canopyY - 0.12, 3, canopyY, -2.8, district.accent);
     // Low flower beds and timber seats frame the gathering terrace.
     for (const side of [-1, 1]) {
       ring(side * 8.5, 7, 0, 1.6, 0.03, '#527449', 20);
@@ -99,23 +112,24 @@ function surfaceGeometry(districts) {
     });
   }
   districtFrame = null;
+  if (landscape) appendEidoverseIslandLandscape(quad);
   return groups;
 }
 
-/** Minimal standard glTF 2.0: two meshes, vertex colors, no external resources. */
-export function buildEidoverseCitySurface(districts) {
+/** Standard glTF 2.0: vertex colors and island scenery, no external resources. */
+export function buildEidoverseCitySurface(districts, { landscape = true } = {}) {
   if (!Array.isArray(districts) || !districts.length || districts.length > 12
     || districts.some(({ anchor }) => !Array.isArray(anchor) || anchor.length !== 3
       || anchor.some((n) => !Number.isFinite(n) || Math.abs(n) > 10_000))) {
     throw new RangeError('City districts need finite anchors within 10,000 metres.');
   }
   const ordered = [...districts].sort((a, b) => a.id.localeCompare(b.id));
-  const geometry = surfaceGeometry(ordered);
+  const geometry = surfaceGeometry(ordered, landscape);
   const chunks = [], bufferViews = [], accessors = [];
   let byteOffset = 0;
   const attribute = (values, components, integer = false) => {
     const bytes = Buffer.alloc(values.length * 4);
-    values.forEach((value, index) => integer ? bytes.writeUInt32LE(value, index * 4) : bytes.writeFloatLE(value, index * 4));
+    values.forEach((value, index) => { if (integer) bytes.writeUInt32LE(value, index * 4); else bytes.writeFloatLE(value, index * 4); });
     const min = Array(components).fill(Infinity), max = Array(components).fill(-Infinity);
     values.forEach((value, index) => { const axis = index % components; const encoded = integer ? value : Math.fround(value); min[axis] = Math.min(min[axis], encoded); max[axis] = Math.max(max[axis], encoded); });
     chunks.push(bytes);
@@ -130,9 +144,11 @@ export function buildEidoverseCitySurface(districts) {
     indices: attribute(group.indices, 1, true), material,
   }] }));
   const gltf = { asset: { version: '2.0', generator: 'PortOS Commons' }, scene: 0,
-    scenes: [{ nodes: [0, 1] }], nodes: [{ mesh: 0, name: 'Paving' }, { mesh: 1, name: 'District signs' }], meshes,
+    scenes: [{ nodes: geometry.map((_, index) => index) }],
+    nodes: geometry.map((_, mesh) => ({ mesh, name: ['Island and Commons', 'District signs', 'Ocean'][mesh] })), meshes,
     materials: [{ pbrMetallicRoughness: { baseColorFactor: [1, 1, 1, 1], metallicFactor: 0, roughnessFactor: 1 } },
-      { pbrMetallicRoughness: { baseColorFactor: [1, 1, 1, 1], metallicFactor: 0, roughnessFactor: 1 }, extensions: { KHR_materials_unlit: {} } }],
+      { pbrMetallicRoughness: { baseColorFactor: [1, 1, 1, 1], metallicFactor: 0, roughnessFactor: 1 }, extensions: { KHR_materials_unlit: {} } },
+      { pbrMetallicRoughness: { baseColorFactor: [1, 1, 1, 1], metallicFactor: 0.15, roughnessFactor: 0.38 } }],
     extensionsUsed: ['KHR_materials_unlit'], buffers: [{ byteLength: byteOffset }], bufferViews, accessors };
   const json = Buffer.from(JSON.stringify(gltf));
   const jsonLength = Math.ceil(json.length / 4) * 4;

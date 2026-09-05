@@ -6,8 +6,9 @@ import { safeRemoveStorage, safeWriteStorage } from '../lib/safeStorage';
 
 const hostUrl = 'https://world.example.com/';
 const objects = [{ id: 'portos-design-v2-signal-app-example', route: '/apps' }];
-function Harness({ projected = objects, onTravel } = {}) {
+function Harness({ projected = objects, onTravel, capture } = {}) {
   const frame = useEidoverseFrame(hostUrl, projected, onTravel);
+  capture?.(frame);
   const location = useLocation();
   return <>
     <iframe title="Test renderer" ref={frame.frameRef} onLoad={frame.onFrameLoad} />
@@ -28,6 +29,43 @@ afterEach(() => {
 });
 
 describe('hosted Eidoverse frame navigation', () => {
+  it('waits for the current renderer departure acknowledgement before retiring its frame', async () => {
+    let frame;
+    render(<MemoryRouter><Harness capture={(value) => { frame = value; }} /></MemoryRouter>);
+    const iframe = screen.getByTitle('Test renderer');
+    const source = iframe.contentWindow;
+    const post = vi.spyOn(source, 'postMessage').mockImplementation(() => {});
+    fireEvent.load(iframe);
+    const { nonce } = post.mock.calls.at(-1)[0];
+    send(source, { type: 'eidoverse:ready', version: 1, nonce, capabilities: { worldDeparture: 1 } });
+    const done = vi.fn();
+    const leaving = frame.leaveWorld().then(done);
+    expect(post.mock.calls.at(-1)[0]).toEqual({ type: 'portos:depart', version: 1, nonce });
+    send(source, { type: 'eidoverse:departed', version: 1, nonce: 'stale', ok: true });
+    expect(done).not.toHaveBeenCalled();
+    send(source, { type: 'eidoverse:departed', version: 1, nonce, ok: true });
+    await act(async () => { await Promise.resolve(); });
+    fireEvent.load(iframe);
+    await act(async () => leaving);
+    expect(done).toHaveBeenCalledOnce();
+    expect(iframe.getAttribute('src')).toBe('about:blank');
+  });
+
+  it('refuses travel when the current renderer cannot confirm departure', async () => {
+    vi.useFakeTimers();
+    let frame;
+    render(<MemoryRouter><Harness capture={(value) => { frame = value; }} /></MemoryRouter>);
+    const iframe = screen.getByTitle('Test renderer');
+    const source = iframe.contentWindow;
+    const post = vi.spyOn(source, 'postMessage').mockImplementation(() => {});
+    fireEvent.load(iframe);
+    const { nonce } = post.mock.calls.at(-1)[0];
+    send(source, { type: 'eidoverse:ready', version: 1, nonce, capabilities: { worldDeparture: 1 } });
+    const result = frame.leaveWorld().catch(error => error.message);
+    await act(async () => { vi.advanceTimersByTime(5000); });
+    expect(await result).toMatch(/Could not leave/);
+    expect(iframe.getAttribute('src')).not.toBe('about:blank');
+  });
   it('resolves a pod through the local legend rather than a destination claimed by the frame', () => {
     const onTravel = vi.fn();
     const pod = { id: 'example-pod', route: '/eidoverse', travelPeerId: 'peer-example' };

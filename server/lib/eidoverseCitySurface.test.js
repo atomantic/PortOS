@@ -10,7 +10,7 @@ describe('Commons portable GLB', () => {
     const first = buildEidoverseCitySurface(EIDOVERSE_WORLD_DESIGN_V3.districts);
     expect(buildEidoverseCitySurface([...EIDOVERSE_WORLD_DESIGN_V3.districts].reverse())).toEqual(first);
     const { bytes } = first;
-    expect(bytes.length).toBeLessThan(1_000_000);
+    expect(bytes.length).toBeLessThan(1_500_000);
     expect(bytes.readUInt32LE(0)).toBe(0x46546c67);
     expect(bytes.readUInt32LE(4)).toBe(2);
     expect(bytes.readUInt32LE(8)).toBe(bytes.length);
@@ -20,6 +20,16 @@ describe('Commons portable GLB', () => {
     expect(bytes.readUInt32LE(24 + jsonLength)).toBe(0x004e4942);
     expect(gltf.buffers).toEqual([{ byteLength: bytes.length - binStart }]);
     expect(gltf.images).toBeUndefined();
+    const land = gltf.accessors[gltf.meshes[0].primitives[0].attributes.POSITION];
+    const ocean = gltf.accessors[gltf.meshes[2].primitives[0].attributes.POSITION];
+    expect(land.max[1]).toBeGreaterThan(200); // Mountain silhouettes beyond town.
+    expect(ocean.max[0]).toBeGreaterThan(7000); // No nearby rectangular stage edge.
+    expect(ocean.min[0]).toBeLessThan(-7000);
+    expect(ocean.max[1]).toBeLessThan(0); // Water cannot cover the arrival plaza.
+    const legacy = buildEidoverseCitySurface(EIDOVERSE_WORLD_DESIGN_V3.districts, { landscape: false });
+    const legacyJson = JSON.parse(legacy.bytes.subarray(20, 20 + legacy.bytes.readUInt32LE(12)).toString());
+    expect(legacyJson.meshes).toHaveLength(2); // Older collision grids keep their compact scene.
+    expect(legacy.bytes.length).toBeLessThan(1_000_000);
     for (const mesh of gltf.meshes) for (const primitive of mesh.primitives) {
       const positions = gltf.accessors[primitive.attributes.POSITION];
       expect(positions.count).toBeGreaterThan(0);

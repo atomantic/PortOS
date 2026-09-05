@@ -71,7 +71,7 @@ describe('Eidoverse PortOS projection plan', () => {
     expect(first.summary).toMatchObject({
       designVersion: 3,
       liveEntityCount: 2,
-      infrastructureCount: 76,
+      infrastructureCount: 83,
       sourceAvailability: { apps: true, agents: true, health: true, environment: true },
     });
     expect(first.operations).toEqual(expect.arrayContaining([
@@ -92,7 +92,7 @@ describe('Eidoverse PortOS projection plan', () => {
 
   it('builds a bounded walkable city and retains it without repeat writes', () => {
     const first = buildProjectionPlan({ source: appSource() });
-    const structures = first.operations.filter(({ verb, args }) => verb === 'comp' && args.type === 'structure');
+    const structures = first.operations.filter(({ verb, args }) => verb === 'comp' && args.type === 'structure' && args.id.includes('-hall-'));
     expect(structures).toHaveLength(8);
     for (const { args } of structures) {
       expect(JSON.stringify(args.data).length).toBeLessThan(8192);
@@ -100,6 +100,16 @@ describe('Eidoverse PortOS projection plan', () => {
       expect(args.data.levels[0].apertures.some((edge) => edge[3] === 'arch')).toBe(true);
     }
     const state = snapshotFromPlan(first, { foldModelDefaults: true });
+    // Rooftop landmarks must clear both the entrance and the sign, including
+    // the bottom of animated landmarks at the lowest point of their bob.
+    for (const district of DEFAULT_EIDOVERSE_PROJECTION_RECIPE.districts.filter(({ id }) => id !== 'apps')) {
+      const hall = state.entities[`portos-design-v2-city-hall-${district.id}`];
+      const landmark = state.entities[`portos-design-v2-infra-${district.id}`];
+      const roof = hall.pos[1] + hall.comp.structure.wallH + 0.26;
+      expect(landmark.pos[1] - (landmark.comp?.motion?.amp || 0)).toBeGreaterThan(roof);
+      const dx = landmark.pos[0] - district.anchor[0], dz = landmark.pos[2] - district.anchor[2];
+      expect(Math.hypot(dx, dz)).toBeCloseTo(8);
+    }
     state.entities['visitor-building'] = { lib: 'store/example.glb', comp: { structure: { levels: [] } } };
     const next = buildProjectionPlan({ source: appSource(), currentState: state });
     expect(next.operations).toEqual([]);

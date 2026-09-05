@@ -721,10 +721,11 @@ describe('Eidoverse private-world lifecycle', () => {
     mocks.appStatuses = [{ id: 'app-example', name: 'Example private title', overallStatus: 'online' }];
     fetch.mockImplementationOnce(async () => Response.json({
       sha: 'example-label-build', commitTime: '2026-01-01T00:00:00.000Z',
-      capabilities: { objectLabels: 1, portosNavigation: 1, labelPreferences: 99 },
+      capabilities: { objectLabels: 1, portosNavigation: 1, labelPreferences: 99, largeWorldColliders: 1 },
     }));
     const first = await world.projectEidoverseWorld();
-    expect(first.design.reconciliation.runtimeVersion.capabilities).toEqual({ objectLabels: 1, portosNavigation: 1, labelPreferences: null });
+    expect(first.design.reconciliation.runtimeVersion.capabilities).toEqual({ objectLabels: 1, portosNavigation: 1, labelPreferences: null, largeWorldColliders: 1 });
+    expect(first.design.assetResolutions.citySurface.bytes).toBeGreaterThan(1_000_000);
     const object = first.summary.objects.find(({ kind }) => kind === 'app');
     expect(object).toBeDefined();
     await world.updateEidoverseWorldConfig({ labelAliases: { [object.resourceKey]: 'Example tower' } });
@@ -748,6 +749,28 @@ describe('Eidoverse private-world lifecycle', () => {
     expect((await world.getEidoverseWorldStatus()).design.labelAliases).toEqual({ [object.resourceKey]: 'Example tower' });
     await world.updateEidoverseWorldConfig({ reset: { scope: 'district', districtId: 'apps' } });
     expect((await world.getEidoverseWorldStatus()).design.labelAliases).toEqual({});
+  });
+
+  it.each(['district anchor', 'terrain'])('preserves custom %s geometry on a landscape-capable runtime', async (customization) => {
+    const recipe = structuredClone(world.DEFAULT_EIDOVERSE_PROJECTION_RECIPE);
+    if (customization === 'district anchor') recipe.districts.find(({ id }) => id === 'apps').anchor = [50, 0, 50];
+    else recipe.environment.terrain.flatRadius = 100;
+    await world.updateEidoverseWorldConfig({ recipe });
+    fetch.mockImplementationOnce(async () => Response.json({
+      sha: 'example-landscape-build', commitTime: '2026-01-01T00:00:00.000Z',
+      capabilities: { largeWorldColliders: 1 },
+    }));
+
+    const result = await world.projectEidoverseWorld();
+
+    expect(result.design.reconciliation.runtimeVersion.capabilities.largeWorldColliders).toBe(1);
+    expect(result.recipe.districts).toEqual(recipe.districts);
+    expect(result.recipe.environment.terrain).toEqual(recipe.environment.terrain);
+    const upload = fetch.mock.calls.find(([input]) => new URL(String(input)).pathname === '/upload');
+    const bytes = upload[1].body;
+    const gltf = JSON.parse(bytes.subarray(20, 20 + bytes.readUInt32LE(12)).toString());
+    expect(gltf.meshes).toHaveLength(2); // No raised coast or ocean overlays custom land.
+    expect(result.design.assetResolutions.citySurface.bytes).toBeLessThan(1_000_000);
   });
 
   it('preflights and locks recipe assets before completing a V2 reconciliation', async () => {

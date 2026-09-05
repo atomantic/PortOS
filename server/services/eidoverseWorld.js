@@ -1237,7 +1237,8 @@ async function preflightEidoverseProtocol({ signal } = {}) {
     });
   }
   return {
-    capabilities: eidoverseLabelCapabilities(version),
+    capabilities: { ...eidoverseLabelCapabilities(version),
+      largeWorldColliders: version.capabilities?.largeWorldColliders === 1 ? 1 : null },
     sha: safeText(version.sha, 'unknown', 80),
     commitTime: safeText(version.commitTime, 'unknown', 80),
   };
@@ -1332,7 +1333,17 @@ async function prepareCityAssetLock(resolutions, config, runtimeVersion, { signa
   const overrides = config.design?.userOverrides?.assets || {};
   const measured = await measureAssetLocks(resolutions, overrides, config.design?.assetResolutions || {}, { signal });
   if (!overrides.citySurface) {
-    const surface = buildEidoverseCitySurface(config.recipe.districts);
+    // The authored coast fits the shipped footprint. Preserve customized land
+    // and district positions rather than raising scenery through their halls.
+    const defaultDistricts = DEFAULT_EIDOVERSE_PROJECTION_RECIPE.districts;
+    const fitsLandscape = config.recipe.districts.length === defaultDistricts.length
+      && config.recipe.districts.every(({ id, anchor }) => canonicalStringify(anchor)
+        === canonicalStringify(defaultDistricts.find((district) => district.id === id)?.anchor))
+      && canonicalStringify(config.recipe.environment.terrain)
+        === canonicalStringify(DEFAULT_EIDOVERSE_PROJECTION_RECIPE.environment.terrain);
+    const surface = buildEidoverseCitySurface(config.recipe.districts, {
+      landscape: runtimeVersion?.capabilities?.largeWorldColliders === 1 && fitsLandscape,
+    });
     const head = await waitWithSignal(fetch(libraryUrl(`/library/${surface.path}`), { method: 'HEAD', signal }), signal);
     if (head.status === 404) {
       const response = await waitWithSignal(fetch(libraryUrl('/upload', { by: 'portos', name: 'PortOS Commons paving and signs' }), {
