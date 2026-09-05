@@ -190,6 +190,20 @@ describe('execGh backoffKey', () => {
     expect(spawn).toHaveBeenCalledTimes(1); // second call never spawned a child
   });
 
+  it('records a child error only once when close follows it', async () => {
+    const failing = makeChild();
+    spawn.mockReturnValueOnce(failing);
+    const first = execGh(['pr', 'list'], 5000, { backoffKey: 'github.com/o/r' });
+    failing.emit('error', new Error('spawn gh ENOENT'));
+    await expect(first).rejects.toThrow(/ENOENT/);
+
+    // ChildProcess emits close after error; it must not settle this invocation again.
+    failing.emit('close', 0);
+    await expect(execGh(['pr', 'list'], 5000, { backoffKey: 'github.com/o/r' }))
+      .rejects.toThrow(/backing off/);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
   it('spawns again once the backoff window elapses', async () => {
     const failing = makeChild();
     spawn.mockReturnValueOnce(failing);

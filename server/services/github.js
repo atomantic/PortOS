@@ -136,7 +136,12 @@ export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = nul
     let stdout = '';
     let stderr = '';
     let timedOut = false;
-    const settle = (ok) => { if (backoffKey !== null) recordGhCallOutcome(backoffKey, ok); };
+    let settled = false;
+    const settle = (ok) => {
+      if (settled) return;
+      settled = true;
+      if (backoffKey !== null) recordGhCallOutcome(backoffKey, ok);
+    };
     const timer = setTimeout(() => {
       timedOut = true;
       // setTimeout callback boundary — guard so a kill() throw can't crash

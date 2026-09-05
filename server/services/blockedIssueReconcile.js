@@ -78,7 +78,7 @@ async function getGithubBlockedState(repoSpec, apiHost, fullName) {
   const forge = await ensureForgeReachable('blocked-issue-reconcile', { hostname: apiHost });
   if (!forge.ok) return null;
 
-  const ghList = (args, what) => execGh(args).catch((err) => {
+  const ghList = (args, what) => execGh(args, undefined, { backoffKey: repoSpec }).catch((err) => {
     console.error(`❌ blocked-issue-reconcile: ${what} failed for ${repoSpec}: ${err.message}`);
     return null;
   });

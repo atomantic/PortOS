@@ -120,6 +120,10 @@ describe('gatherBlockedIssueState (GitHub)', () => {
     const result = await gatherBlockedIssueState('/repo');
     expect(result.forge).toBe('github');
     expect(result.ready).toEqual([]);
+    expect(execGhMock.mock.calls.slice(0, 2).map(([, , options]) => options)).toEqual([
+      { backoffKey: 'github.com/atomantic/PortOS' },
+      { backoffKey: 'github.com/atomantic/PortOS' },
+    ]);
   });
 
   it('resolves a blocked issue whose named blocker is now closed', async () => {

@@ -216,7 +216,7 @@ describe('merge-only PR watcher', () => {
     expect(execGhMock).toHaveBeenCalledWith([
       'pr', 'view', '88', '--repo', 'github.com/o/r',
       '--json', 'state,mergeStateStatus,statusCheckRollup'
-    ]);
+    ], undefined, { backoffKey: 'github.com/o/r' });
   });
 
   it.each([
@@ -369,7 +369,11 @@ describe('getSelfLogin', () => {
     expect(execGhMock).toHaveBeenCalledTimes(1);
     // --hostname is required: without it `gh api` hits github.com regardless of
     // cwd and would resolve the wrong identity on an enterprise repo.
-    expect(execGhMock).toHaveBeenCalledWith(['api', 'user', '--hostname', 'github.com', '--jq', '.login']);
+    expect(execGhMock).toHaveBeenCalledWith(
+      ['api', 'user', '--hostname', 'github.com', '--jq', '.login'],
+      undefined,
+      { backoffKey: 'github.com' }
+    );
   });
 
   it('caches each host independently — a different login per host', async () => {
@@ -451,6 +455,9 @@ describe('checkPullRequests trusted maintenance boundary', () => {
     expect((await checkPullRequests(app)).newPrs).toHaveLength(1);
     expect(execGhMock.mock.calls.filter(([a]) => a[0] === 'api').every(([a]) => a.includes('github.enterprise.example'))).toBe(true);
     expect(execGhMock.mock.calls.filter(([a]) => a.includes('--repo')).every(([a]) => a.includes('github.enterprise.example/example/project'))).toBe(true);
+    expect(execGhMock.mock.calls
+      .filter(([a]) => a[0] === 'repo' || (a[0] === 'pr' && a[1] === 'list'))
+      .every(([, , options]) => options?.backoffKey === 'github.enterprise.example/example/project')).toBe(true);
     forge([rawPr(10, 'collaborator')], { permission: 'read' });
     expect((await checkPullRequests(app)).newPrs).toEqual([]);
     execGhMock.mockImplementation(async args => args[0] === 'repo' ? 'main' : args[0] === 'pr' ? JSON.stringify([rawPr(10, 'collaborator')]) : Promise.reject(new Error('unavailable')));

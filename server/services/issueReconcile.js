@@ -323,7 +323,7 @@ async function getGithubState(repoSpec, fullName, apiHost = null) {
   const forge = await ensureForgeReachable('issue-reconcile', { hostname: apiHost });
   if (!forge.ok) return null;
 
-  const ghList = (args, what) => execGh(args).catch((err) => {
+  const ghList = (args, what) => execGh(args, undefined, { backoffKey: repoSpec }).catch((err) => {
     console.error(`❌ issue-reconcile: ${what} failed for ${fullName}: ${err.message}`);
     return null;
   });
