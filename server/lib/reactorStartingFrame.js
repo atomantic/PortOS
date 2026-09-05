@@ -24,6 +24,16 @@
  * default canvas — reactor accepts more container formats than sharp does, and
  * refusing a render PortOS merely failed to measure would be worse than letting
  * reactor fit it.
+ *
+ * EXIF orientation is load-bearing here, not a refinement. A phone camera
+ * writes its sensor buffer unrotated and records the display rotation in an
+ * EXIF tag, so a portrait iPhone photo is stored 4032x3024 — LANDSCAPE — with
+ * `orientation: 6`. `sharp.metadata()` reports those raw dimensions no matter
+ * how it was constructed, so measuring without consulting the tag derives a
+ * landscape canvas for a portrait photo (the exact failure this module exists
+ * to prevent), and cropping without applying it centre-crops a sideways
+ * buffer. Both halves must honour it: `readImageSize` swaps the axes, and the
+ * resize decodes through `autoOrient`.
  */
 import { rm } from 'node:fs/promises';
 import sharp from 'sharp';
@@ -31,14 +41,26 @@ import {
   REACTOR_DEFAULT_ASPECT, nearestReactorAspect, reactorCanvas,
 } from './reactorVideoClip.js';
 
-/** `{ width, height }` of an image, or `null` when it could not be measured. */
+/** EXIF orientations 5-8 transpose the image, so its displayed axes are swapped. */
+const EXIF_SWAPS_AXES = (orientation) => Number(orientation) >= 5 && Number(orientation) <= 8;
+
+/**
+ * An image's DISPLAYED size — `{ width, height, oriented }` — or `null` when it
+ * could not be measured. `oriented` is true when EXIF asks for a transform, so
+ * a caller knows the bytes on disk are not what a viewer sees.
+ */
 export const readImageSize = async (path) => {
   const meta = await sharp(path).metadata().catch(() => null);
-  const width = Number(meta?.width);
-  const height = Number(meta?.height);
-  return Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0
-    ? { width, height }
-    : null;
+  const raw = { width: Number(meta?.width), height: Number(meta?.height) };
+  if (!Number.isFinite(raw.width) || !Number.isFinite(raw.height) || raw.width <= 0 || raw.height <= 0) return null;
+  const swap = EXIF_SWAPS_AXES(meta?.orientation);
+  return {
+    width: swap ? raw.height : raw.width,
+    height: swap ? raw.width : raw.height,
+    // Orientation 1 is the identity; anything else (including the flips, 2-4)
+    // still needs the re-encode, so this is not just the axis-swap set.
+    oriented: Number(meta?.orientation) > 1,
+  };
 };
 
 /**
@@ -61,10 +83,13 @@ export async function prepareReactorStartingFrame(sourceImagePath, requestedAspe
     || (size ? nearestReactorAspect(size.width, size.height) : REACTOR_DEFAULT_ASPECT);
   const canvas = reactorCanvas(aspect);
   const passthrough = { aspect, canvas, framePath: sourceImagePath, fittedPath: null };
-  // Unmeasurable, or already exactly the canvas: nothing to gain from a re-encode.
-  if (!size || (size.width === canvas.width && size.height === canvas.height)) return passthrough;
+  // Unmeasurable, or already exactly the canvas: nothing to gain from a
+  // re-encode. An image awaiting an EXIF transform is NOT "already the canvas"
+  // even when its displayed size matches — uploading those bytes hands reactor
+  // a sideways frame.
+  if (!size || (!size.oriented && size.width === canvas.width && size.height === canvas.height)) return passthrough;
   const fittedPath = `${outputPath}.start.png`;
-  const written = await sharp(sourceImagePath)
+  const written = await sharp(sourceImagePath, { autoOrient: true })
     .resize({ width: canvas.width, height: canvas.height, fit: 'cover', position: 'centre' })
     .png()
     .toFile(fittedPath)
