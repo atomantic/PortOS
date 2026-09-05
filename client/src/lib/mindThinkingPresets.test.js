@@ -70,8 +70,20 @@ describe('mindTurnOutcome / mindTurnElapsedMs', () => {
     expect(mindTurnElapsedMs({ turnId: 't', startedAt: '2026-09-01T00:00:00.000Z', calls: [] })).toBeNull();
   });
 
-  it('falls back to the last receipt when the turn carries no terminal status', () => {
-    const turn = { turnId: 't', status: 'thinking', calls: [{ outcome: 'completed', elapsedMs: 40 }, { outcome: 'denied', elapsedMs: 2 }] };
+  it('keeps an in-flight multi-round turn running after an early round completes', () => {
+    // A turn spans bounded tool rounds. Round 0 reporting `completed` is not a
+    // finished turn, and the caller renders the answer as terminal.
+    const turn = { turnId: 't', status: 'thinking', completedAt: null, calls: [{ outcome: 'completed', elapsedMs: 40 }] };
+    expect(mindTurnOutcome(turn)).toBe('running');
+  });
+
+  it('falls back to the last receipt once the turn has finished', () => {
+    const turn = {
+      turnId: 't',
+      status: 'thinking',
+      completedAt: '2026-09-01T00:00:00.000Z',
+      calls: [{ outcome: 'completed', elapsedMs: 40 }, { outcome: 'denied', elapsedMs: 2 }],
+    };
     expect(mindTurnOutcome(turn)).toBe('denied');
     expect(mindTurnElapsedMs(turn)).toBe(42);
   });

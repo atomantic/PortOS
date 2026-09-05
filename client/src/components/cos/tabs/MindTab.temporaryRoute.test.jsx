@@ -215,6 +215,54 @@ describe('MindTab temporary thinking sessions', () => {
     expect(second.thinkingPreset).toEqual(first.thinkingPreset);
   });
 
+  it('retires the frozen route when Return to default is used after a failed send', async () => {
+    const user = userEvent.setup();
+    api.sendPersistentMindMessage.mockRejectedValueOnce(new Error('Network unavailable'));
+    renderTab();
+    await composerLoaded();
+
+    await user.selectOptions(screen.getByLabelText('Send with another model'), 'deep-think');
+    await user.type(screen.getByLabelText('Message'), 'Reason carefully.');
+    await user.click(screen.getByRole('button', { name: 'Send with Deep think' }));
+    await waitFor(() => expect(screen.getByText(/Network unavailable/)).toBeTruthy());
+
+    // The route panel's Return to default must retire the frozen draft route,
+    // not merely drop the URL param — otherwise the retry below re-submits the
+    // paid route the user just stepped away from, under the reused id.
+    const panel = screen.getByRole('region', { name: 'Thinking route' });
+    await user.click(within(panel).getByRole('button', { name: /Return to default/ }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toBeTruthy());
+    await user.click(screen.getByRole('button', { name: 'Send message' }));
+
+    await waitFor(() => expect(api.sendPersistentMindMessage).toHaveBeenCalledTimes(2));
+    const [first] = api.sendPersistentMindMessage.mock.calls[0];
+    const [second] = api.sendPersistentMindMessage.mock.calls[1];
+    expect(second.thinkingPresetId).toBeUndefined();
+    expect(second.thinkingPreset).toBeUndefined();
+    // A different route is a different request, so it cannot wear the same key.
+    expect(second.id).not.toBe(first.id);
+  });
+
+  it('warns that an in-flight session will be refused once its preset is deleted', async () => {
+    api.getPersistentMind.mockResolvedValue(response({
+      thinkingPresets: { schemaVersion: 1, presets: [] },
+      state: {
+        ...response().state,
+        status: 'thinking',
+        activeTurnId: 'turn-1',
+        activeRoute: { providerId: 'example-cloud', model: 'example-large', effort: 'high' },
+        activeThinkingSession: {
+          presetId: 'deep-think', label: 'Deep think', providerId: 'example-cloud', model: 'example-large', effort: 'high', resolvable: true,
+        },
+      },
+    }));
+    renderTab();
+
+    const panel = await screen.findByRole('region', { name: 'Thinking route' });
+    await waitFor(() => expect(within(panel).getByText(/has been removed since this message was accepted/)).toBeTruthy());
+  });
+
   it('shows the actual running route beside the default and cancels through the lifecycle API', async () => {
     const user = userEvent.setup();
     api.getPersistentMind.mockResolvedValue(response({

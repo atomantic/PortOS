@@ -883,7 +883,7 @@ export default function MindTab() {
             presets={thinkingPresets}
             turnExecutions={turnExecutions}
             selectedPresetId={selectedPresetId}
-            onReturnToDefault={clearPresetSelection}
+            onReturnToDefault={() => selectPreset(null)}
             onCancelSession={() => runLifecycle('pause')}
             cancelPending={lifecyclePending === 'pause'}
             onInspectSession={inspectSession}

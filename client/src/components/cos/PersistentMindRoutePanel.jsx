@@ -47,11 +47,16 @@ export default function PersistentMindRoutePanel({
   const activeProvider = activeRoute?.providerId
     ? providers.find((provider) => provider.id === activeRoute.providerId) || null
     : null;
-  // Editing a preset while a message that selected it is still in flight is a
-  // refusal, not a route swap — the server re-validates the accepted route
-  // against the saved one. Say so here rather than letting the turn fail with
-  // no explanation on the page that offered the edit.
+  // Editing or deleting a preset while a message that selected it is still in
+  // flight is a refusal, not a route swap — the server re-validates the
+  // accepted route against the saved list. Say so here rather than letting the
+  // turn fail with no explanation on the page that offered the edit.
+  //
+  // `presets` is safe to read as authoritative: it arrives in the same payload
+  // as `session`, so a session can never be visible against a not-yet-loaded
+  // list.
   const savedPreset = session ? findMindThinkingPreset(presets, session.presetId) : null;
+  const presetRemoved = Boolean(session?.resolvable && !savedPreset);
   const routeDrifted = Boolean(session?.resolvable && savedPreset && !sameMindRoute(session, savedPreset));
   const lastTemporary = temporaryMindTurns(turnExecutions).slice(-1)[0] || null;
   const queuedTemporary = state?.queuedTemporaryMessageCount || 0;
@@ -88,6 +93,7 @@ export default function PersistentMindRoutePanel({
           Borrowing <span className="font-medium">{session.label || session.presetId}</span> for this turn only.
           {!session.resolvable && ' Its saved route is no longer valid, so this turn will be refused rather than answered on another model.'}
           {routeDrifted && ' That preset has been edited since this message was accepted, so this turn will be refused — send a new message to authorize its new route.'}
+          {presetRemoved && ' That preset has been removed since this message was accepted, so this turn will be refused rather than answered on another model.'}
         </p>
       )}
 

@@ -203,15 +203,19 @@ const TERMINAL_TURN_STATUSES = Object.freeze(['completed', 'failed', 'denied', '
 
 /**
  * Terminal outcome of one turn, from its own status when it has one and
- * otherwise from its last receipt. A turn that is still running reads as
- * `running`, never as a silent success.
+ * otherwise from its last receipt.
+ *
+ * A turn that has not finished reads as `running` REGARDLESS of its receipts.
+ * A turn spans bounded tool rounds, so round 0 can report `completed` while
+ * the turn is still working — consulting the last receipt first would call an
+ * in-flight turn finished, and the caller renders that as a terminal outcome.
  */
 export function mindTurnOutcome(turn) {
   if (TERMINAL_TURN_STATUSES.includes(turn?.status)) return turn.status;
-  const calls = Array.isArray(turn?.calls) ? turn.calls : [];
+  if (!turn?.completedAt) return 'running';
+  const calls = Array.isArray(turn.calls) ? turn.calls : [];
   const last = calls[calls.length - 1];
-  if (TERMINAL_TURN_STATUSES.includes(last?.outcome)) return last.outcome;
-  return turn?.completedAt ? 'completed' : 'running';
+  return TERMINAL_TURN_STATUSES.includes(last?.outcome) ? last.outcome : 'completed';
 }
 
 /**
