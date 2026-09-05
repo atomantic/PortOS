@@ -432,6 +432,21 @@ describe('episode outline AI review', () => {
     expect(prompt).not.toContain('Series arc:');
   });
 
+  it('cold-reads complete dramatic groups after camera cuts are split', async () => {
+    const { loomId, episodeId } = await setup();
+    await mutateLoom(loomId, (loom) => {
+      const ep = loom.episodes[0];
+      ep.nodes = Array.from({ length: 9 }, (_, index) => ({ id: `shot-${index}`, title: `Shot ${index}`, prose: `Action ${index}`, playbackMode: 'cut', isEnding: index === 8, shot: { dramaticSceneId: index < 4 ? 'opening' : index < 6 ? 'interruption' : index < 8 ? 'consequence' : 'later', durationSeconds: 8 }, transitions: index < 8 ? [{ targetNodeId: `shot-${index + 1}`, intent: 'continue' }] : [] }));
+      ep.startNodeId = 'shot-0';
+      ep.storyOutline = { startKey: 'shot-0', scenes: ep.nodes.map((node) => ({ key: node.id, title: node.title, summary: node.prose, playbackMode: 'cut', isEnding: node.isEnding, transitions: node.transitions.map((t) => ({ targetKey: t.targetNodeId, intent: t.intent })) })) };
+      return loom;
+    });
+    runStagedLLM.mockResolvedValueOnce({ content: { summary: 'Opening reviewed.', risks: ['Clarify the consequence.'] } });
+    await reviewEpisodeOutline(loomId, episodeId);
+    const opening = JSON.parse(runStagedLLM.mock.calls[0][1].outlineDigest);
+    expect(opening.map((beat) => beat.key)).toEqual(Array.from({ length: 8 }, (_, index) => `shot-${index}`));
+  });
+
   it('does not treat a missing opening verdict as approval', async () => {
     const { loomId, episodeId } = await setup();
     runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-run' });

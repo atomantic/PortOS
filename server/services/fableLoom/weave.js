@@ -925,9 +925,14 @@ export async function reviewEpisodeOutline(loomId, episodeId, { providerId, mode
     // A full bible gives the reviewer knowledge the audience has not earned.
     // Follow the opening path, withholding synopsis, canon and later payoffs.
     const opening = [];
+    const openingGroups = new Set();
+    const groupByKey = new Map(episode.nodes.map((node) => [node.id, node.shot?.dramaticSceneId || node.id]));
     const byKey = new Map(episode.storyOutline.scenes.map((scene) => [scene.key, scene]));
     let beat = byKey.get(episode.storyOutline.startKey);
-    while (beat && opening.length < 3 && !opening.some((item) => item.key === beat.key)) {
+    while (beat && !opening.some((item) => item.key === beat.key)) {
+      const group = groupByKey.get(beat.key) || beat.key;
+      if (!openingGroups.has(group) && openingGroups.size >= 3) break;
+      openingGroups.add(group);
       opening.push({ key: beat.key, title: beat.title, summary: beat.summary });
       if (beat.playbackMode === 'decision') break;
       beat = byKey.get(beat.transitions[0]?.targetKey);
