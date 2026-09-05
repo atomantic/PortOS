@@ -15,26 +15,57 @@ export const primaryRepositorySource = (sources = []) =>
 
 export const repositoryForkDiverged = (source) => source?.forkVsUpstream?.state === 'diverged';
 
-/** Can this checkout's origin fork be fast-forwarded from canonical upstream? */
-export const repositoryForkNeedsSync = (source) => Boolean(source?.origin?.isFork)
-  && (source?.forkVsUpstream?.behind || 0) > 0
-  && !repositoryForkDiverged(source);
+/**
+ * Would a push to this checkout's origin fork be accepted? `canPush` is
+ * tri-state: an unknown answer (no forge metadata) stays offerable, and only an
+ * explicit "no" retracts the sync affordance.
+ */
+export const repositoryForkPushable = (source) => Boolean(source?.origin?.isFork)
+  && source?.origin?.canPush !== false;
+
+/**
+ * Can a managed update fast-forward this checkout's origin fork from canonical
+ * upstream? The server owns the rule (`isForkSyncable` in
+ * `server/services/managedAppRepositories.js`) because the same rule decides
+ * `updateAvailable`; the client reads its answer rather than re-deriving it.
+ */
+export const repositoryForkNeedsSync = (source) => Boolean(source?.forkSyncable)
+  && (source?.forkVsUpstream?.behind || 0) > 0;
+
+/**
+ * Why an out-of-date fork is not something an update can fix, or null when it
+ * is (or when the fork is current). The Git tab still reports the drift — it is
+ * true and worth knowing — but must say plainly that no button here clears it.
+ */
+export function describeForkUnsyncable(source) {
+  if ((source?.forkVsUpstream?.behind || 0) === 0) return null;
+  if (repositoryForkNeedsSync(source)) return null;
+  if (repositoryForkDiverged(source)) {
+    return 'The fork has its own commits, so it cannot be fast-forwarded; reconcile them on GitHub first.';
+  }
+  if (source?.origin?.canPush === false) {
+    return `PortOS can read ${source.origin.fullName || 'this fork'} but cannot push to it, so it cannot fast-forward it from upstream. Updating still pulls this checkout from the fork.`;
+  }
+  return 'PortOS updates companion checkouts from their own origin, so it cannot fast-forward this fork from upstream.';
+}
 
 /** `countText(2, 'commit')` → "2 commits". One phrasing for both update surfaces. */
 export const countText = (count, noun) => `${count} ${noun}${count === 1 ? '' : 's'}`;
 
 /**
  * One human clause per checkout that is behind something an update would pull
- * it forward from. Empty when the whole source stack is current.
+ * it forward from — so a fork only counts when PortOS may fast-forward it.
+ * Empty when nothing an update could move is behind.
  */
 export function describeRepositorySourcesBehind(sources = []) {
   const clauses = [];
   for (const source of sources) {
     const label = source?.label || 'checkout';
     const localBehind = source?.localVsOrigin?.behind || 0;
-    const forkBehind = source?.forkVsUpstream?.behind || 0;
     if (localBehind > 0) clauses.push(`${label} is ${countText(localBehind, 'commit')} behind its origin`);
-    if (forkBehind > 0) clauses.push(`the ${label} fork is ${countText(forkBehind, 'commit')} behind upstream`);
+    if (repositoryForkNeedsSync(source)) {
+      clauses.push(`the ${label} fork is ${countText(source.forkVsUpstream.behind, 'commit')} behind upstream`);
+    }
   }
   return clauses;
 }

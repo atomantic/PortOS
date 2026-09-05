@@ -49,12 +49,23 @@ managed as a version-visible sidecar, not pinned as a PortOS submodule.
 That topology is only visible to someone who goes looking for it, so freshness
 is also reported where a user actually lives. Opening **Eidoverse** runs the
 same repository-source check once per visit and, when a checkout or its fork is
-behind, raises an advisory above the world naming what is behind and offering
-the same one-click managed update. Dismissing it silences that revision only —
-the next Eidoverse release raises it again. The check is scoped to this page
-rather than added to the global PortOS update banner because it costs a
-`git fetch` on both checkouts plus GitHub fork metadata, which is not a price
-every screen should pay.
+behind something the update can pull it forward from, raises an advisory above
+the world naming what is behind and offering the same one-click managed update.
+Dismissing it silences that revision only — the next Eidoverse release raises it
+again. The check is scoped to this page rather than added to the global PortOS
+update banner because it costs a `git fetch` on both checkouts plus GitHub fork
+metadata, which is not a price every screen should pay.
+
+The advisory reports only drift an update can actually clear. The Video checkout
+is cloned from a third party's *fork* of the canonical project, and PortOS can
+read that fork but never push to it — so when it falls behind its own upstream,
+neither `gh repo sync` nor a pull from its origin can move it, and an advisory
+raised for that drift would never clear. PortOS therefore counts a fork toward
+"update available" only when it is the application checkout's own fork, the
+credential can push to it, and it has not diverged (`isForkSyncable` in
+`server/services/managedAppRepositories.js`, surfaced to the client as each
+source's `forkSyncable`). The drift is still reported on the app's **Git** tab,
+where the card explains why no button there clears it.
 
 ## Runtime and data ownership
 

@@ -11,9 +11,11 @@ import {
 import * as api from '../../../services/api';
 import {
   countText,
+  describeForkUnsyncable,
   primaryRepositorySource,
   repositoryForkDiverged,
   repositoryForkNeedsSync,
+  repositoryForkPushable,
 } from '../../../lib/managedAppSources';
 import BrailleSpinner from '../../BrailleSpinner';
 import Modal from '../../ui/Modal';
@@ -40,7 +42,10 @@ function sourceStatus(source) {
   if (source.forkVsUpstream?.state === 'diverged') {
     return { tone: 'error', label: 'Fork diverged' };
   }
-  const forkBehind = source.forkVsUpstream?.behind || 0;
+  // A fork PortOS may fast-forward is actionable drift; one it can only read is
+  // context, not a call to action, so it must not colour the badge as if a
+  // button here would clear it.
+  const forkBehind = repositoryForkNeedsSync(source) ? source.forkVsUpstream.behind : 0;
   const localBehind = source.localVsOrigin?.behind || 0;
   if (forkBehind > 0 && localBehind > 0) {
     return { tone: 'attention', label: 'Fork and checkout behind' };
@@ -70,6 +75,7 @@ function RepositoryCard({ source }) {
   const upstreamName = source.upstream?.fullName || 'canonical upstream';
   const local = source.localVsOrigin;
   const fork = source.forkVsUpstream;
+  const unsyncable = describeForkUnsyncable(source);
 
   return (
     <section className="rounded-xl border border-port-border bg-port-bg/50 p-4" data-testid={`repository-source-${source.id}`}>
@@ -123,6 +129,7 @@ function RepositoryCard({ source }) {
               Fork is {countText(fork.behind, 'commit')} behind and {countText(fork.ahead, 'commit')} ahead of {upstreamName}.
             </p>
           )}
+          {unsyncable && <p className="text-xs text-gray-500">{unsyncable}</p>}
           {source.remoteError && (
             <p className="flex items-start gap-1.5 text-xs text-port-warning">
               <AlertTriangle size={13} className="mt-0.5 shrink-0" />
@@ -336,7 +343,7 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
               {updateSummary}
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {primary?.origin?.isFork && (
+              {repositoryForkPushable(primary) && (
                 <button
                   onClick={handleSyncOnly}
                   disabled={syncingFork || operationBusy || updateRequested || forkDiverged}
