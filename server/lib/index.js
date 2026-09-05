@@ -220,6 +220,7 @@ export * from './tuiUsageScrape.js';
 export * from './borderKey.js';
 export * from './boundedStateMap.js';
 export * from './collectionStore.js';
+export * from './comparisonModelScope.js';
 export * from './conflictJournal.js';
 export * from './projectStoreKit.js';
 export * from './createKeyCachedQueue.js';

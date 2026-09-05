@@ -2,7 +2,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { modelComparisonImportSchema } from '../lib/validation.js';
 import { importModelComparison } from './modelComparison.js';
 
-export const KNOWN_EFFORTS = ['non-reasoning', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+export const KNOWN_EFFORTS = ['non-reasoning', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode'];
 
 export function slugify(text) {
   return String(text || '')
@@ -22,7 +22,7 @@ export function parseModelNameAndEffort(rawName) {
     const inside = parenMatch[2].trim();
     configDetail = inside;
 
-    const effortMatch = inside.match(/\b(minimal|low|medium|high|xhigh|very_high|max|non-reasoning)\b/i);
+    const effortMatch = inside.match(/\b(minimal|low|medium|high|xhigh|very_high|max|ultracode|non-reasoning)\b/i);
     if (effortMatch) {
       effort = effortMatch[1].toLowerCase();
       if (effort === 'very_high') effort = 'xhigh';
@@ -45,7 +45,7 @@ const EXISTING_CATALOG_IDENTITIES = new Map([
   ['aa-v4.2-openai-gpt-5.6-terra-max', { provider: 'OpenAI', model: 'gpt-5.6-terra', effort: 'max', configuration: 'Published API model; max reasoning effort' }],
   ['aa-v4.2-openai-gpt-5.6-luna-max', { provider: 'OpenAI', model: 'gpt-5.6-luna', effort: 'max', configuration: 'Published API model; max reasoning effort' }],
   ['aa-v4.2-google-gemini-3.8-flash-high', { provider: 'Google', model: 'gemini-3.8-flash', effort: 'high', configuration: 'Published API model; high reasoning effort' }],
-  ['aa-v4.2-anthropic-claude-fable-5-1-max', { provider: 'Anthropic', model: 'claude-fable-5-1', effort: 'max', configuration: 'Adaptive reasoning, max effort, default fallback; published evaluation configuration' }],
+  ['aa-v4.2-anthropic-claude-fable-5-1-max', { provider: 'Anthropic', model: 'claude-fable-5.1', effort: 'max', configuration: 'Adaptive reasoning, max effort, default fallback; published evaluation configuration' }],
 ]);
 
 export function transformAAModelsToObservations(models, options = {}) {
@@ -69,6 +69,10 @@ export function transformAAModelsToObservations(models, options = {}) {
       }
     }
 
+    // The id predates the dotted slug and stays frozen (it is the merge key on
+    // every install), but the model must read 'claude-fable-5.1' like the other
+    // efforts or max plots as its own one-point series instead of the top of
+    // Fable 5.1's reasoning curve.
     if (modelSlug === 'claude-fable-5.1' && effort === 'max') {
       id = 'aa-v4.2-anthropic-claude-fable-5-1-max';
     }

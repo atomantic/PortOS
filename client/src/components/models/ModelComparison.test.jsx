@@ -122,3 +122,46 @@ it('opens the Artificial Analysis sync modal and syncs observations', async () =
   await screen.findByText(/Sync successful! Updated 636 models/);
   expect(api.syncArtificialAnalysis).toHaveBeenCalledWith({ apiKey: 'test-key-123' }, { silent: true });
 });
+
+it('opens on a log cost axis and scopes the chart to the providers models', async () => {
+  const scoped = [
+    { ...observation, id: 'mine', model: 'claude-opus-5', effort: 'max', quality: metric(54), costPerTask: metric(4.2) },
+    { ...observation, id: 'theirs', model: 'palm-2', effort: 'unspecified', quality: metric(20), costPerTask: metric(0.01) },
+  ];
+  api.getModelComparison.mockResolvedValue({
+    schemaVersion: 1,
+    observations: scoped,
+    inventory: [],
+    availableModels: ['claude-opus-5'],
+  });
+
+  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
+  await act(async () => {});
+
+  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-scale', 'log');
+  expect(screen.getByRole('button', { name: 'Toggle claude-opus-5' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Toggle palm-2' })).toBeNull();
+
+  fireEvent.click(screen.getByLabelText('All models (not just yours)'));
+  expect(screen.getByRole('button', { name: 'Toggle palm-2' })).toBeTruthy();
+});
+
+it('plots an unpublished effort cost as a flagged estimate that can be turned off', async () => {
+  const curve = [
+    { ...observation, id: 'c-low', model: 'gpt-5.6-sol', effort: 'low', quality: metric(41), costPerTask: metric(0.2) },
+    { ...observation, id: 'c-max', model: 'gpt-5.6-sol', effort: 'max', quality: metric(51), costPerTask: metric(1.2) },
+    { ...observation, id: 'f-low', model: 'claude-fable-5.1', effort: 'low', quality: metric(48), costPerTask: null },
+    { ...observation, id: 'f-max', model: 'claude-fable-5.1', effort: 'max', quality: metric(57), costPerTask: metric(6.1) },
+  ];
+  api.getModelComparison.mockResolvedValue({ schemaVersion: 1, observations: curve, inventory: [] });
+
+  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
+  await act(async () => {});
+
+  await screen.findByText(/1 estimated cost/);
+  expect(screen.getByTestId('scatter-claude-fable-5.1')).toHaveAttribute('data-points', '2');
+
+  fireEvent.click(screen.getByLabelText('Estimate unpublished costs'));
+  expect(screen.getByTestId('scatter-claude-fable-5.1')).toHaveAttribute('data-points', '1');
+  expect(screen.queryByText(/· 1 estimated cost/)).toBeNull();
+});
