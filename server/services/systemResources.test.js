@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('./modelDeduplication.js', () => ({ scanModelDuplicates: vi.fn(async () => ({ pinokioDetected: false, items: [], totalReclaimableBytes: 0 })) }));
+
 vi.mock('fs/promises', async (importOriginal) => ({
   ...(await importOriginal()),
   statfs: vi.fn(async () => ({ blocks: 1000, bsize: 100, bavail: 250 })),
