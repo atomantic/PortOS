@@ -360,8 +360,12 @@ export async function compileFableLoomVisualRequest({
   // early-token weighting a diffusion model gives style.
   const universeStyle = universeVisualStyleTokens(universe).embrace.join(', ');
   const authoredBody = stripStyleClause(authoredPrompt, universeStyle);
+  const protagonistName = (universe.characters || []).find((character) => character.id === bindings.protagonistId)?.name || 'the canonical protagonist';
+  const visibleCast = bindings.boundCharacters.map(({ character }) => character.name).filter(Boolean);
   const protagonistFraming = bindings.protagonistPresence === 'offscreen'
-    ? 'Framing constraint: the canonical protagonist is speaking through the communicator off-screen. The camera is the remote witness: show the obstacle or environment the protagonist cannot see around a corner, beyond a bend, at a distance, or otherwise outside their sightline. The communicator stays on the protagonist\'s person and completely out of frame; never use a standalone comms device as the subject. Do not show their face, body, silhouette, or duplicate presence in this storyboard image.'
+    ? visibleCast.length
+      ? `Framing constraint: keep ${protagonistName} off-screen. Show the explicitly bound cast (${visibleCast.join(', ')}) in the authored composition. Their close-ups remain visible even while the protagonist speaks off-screen; do not replace them with an empty environment. Do not show ${protagonistName} or a standalone communicator.`
+      : `Framing constraint: ${protagonistName}, the canonical protagonist, is speaking through the communicator off-screen. The camera is the remote witness: show the obstacle or environment the protagonist cannot see around a corner, beyond a bend, at a distance, or otherwise outside their sightline. The communicator stays on the protagonist's person and completely out of frame; never use a standalone comms device as the subject. Do not show their face, body, silhouette, or duplicate presence in this storyboard image.`
     : '';
   const positive = compact([
     universeStyle && `Universe style: ${universeStyle}`,
@@ -378,7 +382,7 @@ export async function compileFableLoomVisualRequest({
   const identityAvoid = bindings.boundCharacters.flatMap(({ character }) => character.identityPack?.avoid || []);
   const negativePrompt = mergeNegativePromptTokens([
     authoredNegativePrompt,
-    bindings.protagonistPresence === 'offscreen' ? 'visible canonical protagonist, protagonist face, protagonist body, protagonist silhouette, standalone communicator, comms device close-up, radio prop hero shot' : '',
+    bindings.protagonistPresence === 'offscreen' ? `visible ${protagonistName}, ${protagonistName} face, ${protagonistName} body, ${protagonistName} silhouette, standalone communicator, comms device close-up, radio prop hero shot` : '',
     universeVisualStyleTokens(universe).avoid,
     identityAvoid,
   ]).join(', ').slice(0, 8000);

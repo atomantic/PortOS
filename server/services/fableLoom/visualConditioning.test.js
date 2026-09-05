@@ -202,10 +202,10 @@ describe('FableLoom visual conditioning compiler', () => {
     });
 
     expect(result.prompt).not.toContain('Character: Aria');
-    expect(result.prompt).toContain('canonical protagonist is speaking through the communicator off-screen');
+    expect(result.prompt).toContain('Aria, the canonical protagonist, is speaking through the communicator off-screen');
     expect(result.prompt).toContain('show the obstacle or environment the protagonist cannot see');
     expect(result.prompt).toContain('never use a standalone comms device as the subject');
-    expect(result.negativePrompt).toContain('visible canonical protagonist');
+    expect(result.negativePrompt).toContain('visible Aria');
     expect(result.negativePrompt).toContain('standalone communicator');
     expect(result.visualConditioning.bindings).toMatchObject({
       protagonist: { characterId: 'char-a', wardrobeId: 'wardrobe-red', presence: 'offscreen' },
@@ -214,6 +214,23 @@ describe('FableLoom visual conditioning compiler', () => {
     expect(result.visualConditioning.omitted).toContainEqual({
       role: 'character', bindingId: 'char-a', reason: 'protagonist-offscreen',
     });
+  });
+
+  it('keeps another character visible while the canonical protagonist is off-screen', async () => {
+    const loom = loomWith({ mode: 'draft', characterAppearances: [{ characterId: 'char-b', referenceImage: 'bex-neutral.png' }] });
+    loom.protagonistCharacterId = 'char-a';
+    loom.episodes[0].nodes.at(-1).protagonistPresence = 'offscreen';
+    const result = await compileFableLoomVisualRequest({
+      tag: { loomId: loom.id, episodeId: 'episode-1', nodeId: 'shot' }, kind: 'image',
+      capability: fableLoomImageCapabilities({ mode: 'codex', inputBudget: 4 }),
+      authoredPrompt: 'Close-up of Bex telling a story.', ...deps(loom),
+    });
+    expect(result.prompt).toContain('keep Aria off-screen');
+    expect(result.prompt).toContain('Show the explicitly bound cast (Bex)');
+    expect(result.prompt).not.toContain('show the obstacle or environment');
+    expect(result.negativePrompt).toContain('visible Aria');
+    expect(result.negativePrompt).not.toContain('visible Bex');
+    expect(result.referenceImagePaths).toContain('/approved/bex-neutral.png');
   });
 
   it('fails a locked render when a backend cannot preserve the bound cast', async () => {
