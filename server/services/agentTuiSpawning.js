@@ -314,7 +314,7 @@ export function buildTuiSpawnConfig(provider, model, {
     };
   }
   const command = provider?.command || inferTuiCommand(provider?.id);
-  const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])]);
+  const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])], provider);
   // Model+effort injection (including the antigravity-validates-the-pair special
   // case) is shared with tuiHandshake.js#buildTuiInvocation via
   // providerVendors.js#injectTuiModelAndEffort, so the two spawn paths can't

@@ -695,6 +695,10 @@ export function createProviderService(config = {}) {
         // non-allowlisted) endpoint — see endpointGuard.js. Only
         // persisted when true so existing keyless/local providers stay clean.
         ...(providerData.allowCustomEndpoint === true ? { allowCustomEndpoint: true } : {}),
+        // Codex 'ignore my ~/.codex/config.toml' pin. Only persisted when true so
+        // every existing record stays byte-identical and an older install
+        // reading this file sees nothing new.
+        ...(providerData.ignoreUserConfig === true ? { ignoreUserConfig: true } : {}),
         envVars: providerData.envVars || {},
         secretEnvVars: providerData.secretEnvVars || [],
         headlessArgs: providerData.headlessArgs || [],

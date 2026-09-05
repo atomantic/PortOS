@@ -963,7 +963,7 @@ export { applyCommandDefaults };
  */
 export function buildTuiInvocation(provider, model) {
   const command = provider?.command || inferTuiCommand(provider?.id);
-  const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])]);
+  const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])], provider);
   const effort = provider?.effort || null;
   return {
     command,

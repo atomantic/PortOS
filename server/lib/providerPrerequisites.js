@@ -38,7 +38,7 @@
 import { PROVIDER_TYPES } from './aiToolkit/constants.js';
 import { CODEX_ACCOUNT_STATUS, isCodexSubscriptionProvider } from './codexAccount.js';
 import { isLocalInstanceHost } from './localProviderRuntime.js';
-import { commandBasename } from './providerModels.js';
+import { commandBasename, isCodexProvider } from './providerModels.js';
 import { gatewayForProvider } from './providerGateways.js';
 
 /**
@@ -190,6 +190,33 @@ const codexAccountFinding = (provider, readiness) => {
 };
 
 /**
+ * The 'your own Codex config is re-pointing this provider' notice, or `null`.
+ *
+ * An ADVISORY, not a prerequisite: it never lands in `missing`, never reaches
+ * {@link ROUTING_BLOCKING_CODES}, and never makes a card read NEEDS SETUP.
+ * Pointing Codex at a local bridge is a legitimate choice — the only failure is
+ * PortOS reporting a ChatGPT account's readiness and quota for work that
+ * account never served. So: report it, and offer the opt-out (the provider's
+ * `ignoreUserConfig` flag, which appends `--ignore-user-config` at spawn).
+ *
+ * Silent once the provider already ignores the user config, since then the file
+ * describes nothing PortOS runs. Silent on a `null` snapshot too — that is
+ * NOT DETERMINED, and accusing an install whose config could not be read would
+ * be exactly the false report this exists to prevent.
+ */
+const codexRoutingAdvisory = (provider, routing) => {
+  if (!routing?.overridden || !isCodexProvider(provider)) return null;
+  if (provider?.ignoreUserConfig === true) return null;
+  return {
+    code: 'codexRoutingOverridden',
+    label: 'Codex model routing is overridden by your own ~/.codex/config.toml',
+    keys: [...routing.keys],
+    // Machine-local: for the local UI only. Never log it, never federate it.
+    baseUrl: routing.baseUrl || null,
+  };
+};
+
+/**
  * Which prerequisites `provider` is missing, and whether it is runnable at all.
  *
  * @param {object} provider — raw or sanitized provider record
@@ -203,9 +230,12 @@ const codexAccountFinding = (provider, readiness) => {
  *   id, does the sibling API provider of that id hold the key an OpenCode
  *   wrapper inherits at spawn time? `false` covers both "no key" and "sibling
  *   deleted"; `null`/absent is "cannot tell".
- * @returns {{met: boolean, missing: {code: string, label: string}[]}}
+ * @param {object|null} [options.codexRouting] — the user's `~/.codex/config.toml`
+ *   routing snapshot from `lib/codexUserConfig.js`, or `null` for NOT
+ *   DETERMINED. Produces an ADVISORY only (see {@link codexRoutingAdvisory}).
+ * @returns {{met: boolean, missing: {code: string, label: string}[], advisories: object[]}}
  */
-export const providerPrerequisites = (provider, { runtime = null, gatewayKeySet = null, codexAccount = null } = {}) => {
+export const providerPrerequisites = (provider, { runtime = null, gatewayKeySet = null, codexAccount = null, codexRouting = null } = {}) => {
   const missing = [];
 
   if (runtime && runtime.installed === false) {
@@ -229,7 +259,15 @@ export const providerPrerequisites = (provider, { runtime = null, gatewayKeySet 
   const codexFinding = codexAccountFinding(provider, codexAccount);
   if (codexFinding) missing.push(codexFinding);
 
-  return { met: missing.length === 0, missing };
+  // Advisories are a SEPARATE list on purpose: everything in `missing` blocks
+  // something (a card's bucket, a strict readiness verdict), and this must
+  // block nothing.
+  const routingAdvisory = codexRoutingAdvisory(provider, codexRouting);
+  return {
+    met: missing.length === 0,
+    missing,
+    advisories: routingAdvisory ? [routingAdvisory] : [],
+  };
 };
 
 /**

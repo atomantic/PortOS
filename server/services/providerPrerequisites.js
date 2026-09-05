@@ -35,6 +35,7 @@
 
 import { blocksRouting, describeMissingPrerequisites, providerPrerequisites, providerRuntimeKey } from '../lib/providerPrerequisites.js';
 import { PROVIDER_GATEWAYS } from '../lib/providerGateways.js';
+import { readCodexRoutingOverride } from '../lib/codexUserConfig.js';
 import { inferTuiCommand } from '../lib/providerVendors.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
 import { peekCodexAccountReadiness } from './codexAppServer.js';
@@ -108,6 +109,10 @@ const forProvider = (provider, runtimes, gatewayKeySet) => providerPrerequisites
   runtime: runtimes?.[providerRuntimeKey(provider) ?? ''] ?? null,
   gatewayKeySet,
   codexAccount: peekCodexAccountReadiness(),
+  // A short-TTL read of a small local file — no spawn, no network, no LLM.
+  // Advisory only: it never reaches `missing`, so it cannot change routing or
+  // a readiness verdict.
+  codexRouting: readCodexRoutingOverride(),
 });
 
 const effectiveProcessCommand = (provider) => {

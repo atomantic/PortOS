@@ -201,6 +201,11 @@ export function createPortOSProviderRoutes(aiToolkit) {
         ...presentProvider(provider, capabilities),
         prerequisitesMet: prerequisites[provider.id]?.met ?? true,
         missingPrerequisites: prerequisites[provider.id]?.missing ?? [],
+        // NON-blocking notices — today only 'this install's own ~/.codex/config.toml
+        // re-points Codex model routing'. Kept OUT of `missingPrerequisites` so a
+        // legitimate user choice never buckets a card as NEEDS SETUP; the card
+        // renders it as a badge and caveats the subscription quota with it.
+        prerequisiteAdvisories: prerequisites[provider.id]?.advisories ?? [],
         ...(isCodexSubscriptionProvider(provider) ? { codexAccount, codexModelCatalog } : {}),
       })),
       runnerAllowedCommands: RUNNER_ALLOWED_COMMANDS

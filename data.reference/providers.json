@@ -71,6 +71,7 @@
       "timeout": 300000,
       "enabled": true,
       "textTransport": "codex-app-server",
+      "ignoreUserConfig": false,
       "envVars": {}
     },
     "antigravity-cli": {
@@ -102,6 +103,7 @@
       "timeout": 600000,
       "enabled": false,
       "textTransport": "codex-app-server",
+      "ignoreUserConfig": false,
       "envVars": {},
       "tuiPromptDelayMs": 2500
     },

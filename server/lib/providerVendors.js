@@ -156,12 +156,27 @@ const isDirectBinaryProvider = (provider) => provider?.type === PROVIDER_TYPES.C
 
 // ─── codex ──────────────────────────────────────────────────────────────────
 
+// The opt-in that pins a Codex run to the account PortOS believes it is using.
+// A third-party bridge re-points Codex by writing top-level routing keys into
+// `~/.codex/config.toml`, and codex honors that file on every invocation — so
+// without this flag PortOS's runs, reviewer rounds and autofixer repairs route
+// wherever that file says while the provider card reports a ChatGPT account.
+// Default OFF (an absent flag is today's behavior); the AI Providers page badges
+// the override and offers the toggle. Same flag the public-review recipes
+// already pass, so no new Codex surface is introduced here.
+const codexIgnoreUserConfigArgs = (provider, existingArgs = []) => (
+  provider?.ignoreUserConfig === true && !existingArgs.includes('--ignore-user-config')
+    ? ['--ignore-user-config']
+    : []
+);
+
 function codexCliArgs(baseArgs, { model, effort, provider }) {
   // Detect an existing leading `exec` in user/legacy args so we don't end up
   // running `codex exec --full-auto exec -` after migration of legacy
   // configs that already pinned an `exec` subcommand.
   const hasExec = baseArgs.includes('exec');
   const args = hasExec ? [...baseArgs] : [...baseArgs, 'exec'];
+  args.push(...codexIgnoreUserConfigArgs(provider, args));
   args.push(...buildCodexStartupArgs(baseArgs));
   if (model) {
     args.push('--model', model);
@@ -178,6 +193,7 @@ function codexSpawnArgs(provider, { effectiveModel, effort, maxConcurrentThreads
   const args = [
     'exec',
     '--dangerously-bypass-approvals-and-sandbox',
+    ...codexIgnoreUserConfigArgs(provider),
     ...buildCodexStartupArgs(),
     ...buildCodexAgentThreadArgs(maxConcurrentThreads),
   ];
@@ -779,10 +795,13 @@ export function inferTuiCommand(id) {
  * friends append `--dangerously-skip-permissions`-class defaults, which would
  * undo the recipe.)
  */
-export function applyCommandDefaults(command, args) {
+export function applyCommandDefaults(command, args, provider = null) {
   const vendor = PROVIDER_VENDORS.find((v) => v.tuiArgs && v.matchCommand(command));
   if (!vendor) return args;
-  return vendor.tuiArgs(args);
+  // `provider` is optional and only some vendors read it (codex, for the
+  // `ignoreUserConfig` pin) — a vendor that ignores the second argument keeps
+  // behaving exactly as before.
+  return vendor.tuiArgs(args, provider);
 }
 
 /**

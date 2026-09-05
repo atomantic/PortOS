@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
-import { filterHardwareCompatibleProviderModels, filterGenerationModels, isEmbeddingModel, isProviderHardwareCompatible, isProviderModelHardwareCompatible, mergeModelLists, configuredDefaultIn, localBackendForProvider, modelOptionLabel, isProcessProvider, isLocalEndpoint, effectiveModelContextWindow, isRunnerAllowedCommand, effortLevelsForProvider, isOllamaBackedProvider, gatewayForProvider, isClaudeCommandProvider, generationControlsFor } from '../../utils/providers';
+import { filterHardwareCompatibleProviderModels, filterGenerationModels, isEmbeddingModel, isProviderHardwareCompatible, isProviderModelHardwareCompatible, mergeModelLists, configuredDefaultIn, localBackendForProvider, modelOptionLabel, isProcessProvider, isLocalEndpoint, effectiveModelContextWindow, isRunnerAllowedCommand, effortLevelsForProvider, isOllamaBackedProvider, gatewayForProvider, isClaudeCommandProvider, generationControlsFor, isCodexProvider } from '../../utils/providers';
 import Banner from '../ui/Banner';
 import {
   formatDurationMs,
@@ -55,6 +55,7 @@ export default function ProviderForm({ provider, onClose, onSave, onEditProvider
     endpoint: provider?.endpoint || '',
     apiKey: '',
     allowCustomEndpoint: provider?.allowCustomEndpoint === true,
+    ignoreUserConfig: provider?.ignoreUserConfig === true,
     models: provider?.models || [],
     hardwareRequirements: provider?.hardwareRequirements,
     modelHardwareRequirements: provider?.modelHardwareRequirements,
@@ -356,6 +357,9 @@ export default function ProviderForm({ provider, onClose, onSave, onEditProvider
       delete data.textTransportEnabled;
       delete data.textTransportReadRiskAcknowledged;
     }
+    // `--ignore-user-config` is a Codex flag. Never stamp it onto a record
+    // running another vendor's binary, where it would be a stored lie.
+    if (!isCodexProvider({ ...provider, ...data, id: provider?.id })) delete data.ignoreUserConfig;
 
     // Only send apiKey if user entered a new value (avoid overwriting existing key with empty string)
     if (!data.apiKey && provider) {
@@ -593,6 +597,26 @@ export default function ProviderForm({ provider, onClose, onSave, onEditProvider
                     </label>
                   </FormField>
                 </>
+              )}
+
+              {isCodexProvider({ ...provider, ...formData, id: provider?.id }) && isProcessProvider(formData) && (
+                <FormField label="Codex user config">
+                  <label htmlFor="ignoreUserConfig" className="flex items-start gap-2 cursor-pointer">
+                    <input
+                      id="ignoreUserConfig"
+                      type="checkbox"
+                      checked={formData.ignoreUserConfig}
+                      onChange={(e) => setFormData(prev => ({ ...prev, ignoreUserConfig: e.target.checked }))}
+                      className="mt-1"
+                    />
+                    <span className="text-sm text-gray-300">
+                      Ignore <code>~/.codex/config.toml</code> when PortOS runs this provider
+                      (<code>--ignore-user-config</code>). Leave off to keep today’s behavior. Turn it on when a
+                      third-party bridge has re-pointed Codex model routing and you want PortOS runs pinned to
+                      the account this card reports on.
+                    </span>
+                  </label>
+                </FormField>
               )}
 
               <label className="flex items-center gap-2">
