@@ -45,6 +45,18 @@ describe('Provider Service', () => {
     expect(provider).toMatchObject({ temperature: 0.6, thinking: false });
   });
 
+  it('preserves the lmstudioBacked marker through creation', async () => {
+    // `createProvider` has an EXPLICIT field list (unlike `updateProvider`'s
+    // spread), so a backend marker it does not name is silently dropped — the
+    // record then resolves no namespace, OpenCode falls through to its own
+    // built-in provider, and model refresh probes the harness instead of the
+    // LM Studio server.
+    const provider = await providerService.createProvider({
+      name: 'Local LM Studio', type: 'cli', command: 'opencode', lmstudioBacked: true,
+    });
+    expect(provider.lmstudioBacked).toBe(true);
+  });
+
   it('should get all providers', async () => {
     await providerService.createProvider({
       name: 'Test Provider 1',

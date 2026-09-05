@@ -217,6 +217,40 @@
       "secretEnvVars": [],
       "tuiPromptDelayMs": 2500
     },
+    "opencode-lmstudio": {
+      "id": "opencode-lmstudio",
+      "name": "OpenCode LM Studio (local model)",
+      "type": "cli",
+      "command": "opencode",
+      "args": ["run"],
+      "models": [],
+      "defaultModel": null,
+      "lmstudioBacked": true,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {
+        "OPENCODE_CONFIG_CONTENT": "{\"permission\":\"allow\",\"provider\":{\"lmstudio\":{\"npm\":\"@ai-sdk/openai-compatible\",\"name\":\"LM Studio (local)\",\"options\":{\"baseURL\":\"http://localhost:1234/v1\"}}}}"
+      },
+      "secretEnvVars": [],
+      "headlessArgs": []
+    },
+    "opencode-lmstudio-tui": {
+      "id": "opencode-lmstudio-tui",
+      "name": "OpenCode LM Studio TUI (local model)",
+      "type": "tui",
+      "command": "opencode",
+      "args": [],
+      "models": [],
+      "defaultModel": null,
+      "lmstudioBacked": true,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {
+        "OPENCODE_CONFIG_CONTENT": "{\"permission\":\"allow\",\"provider\":{\"lmstudio\":{\"npm\":\"@ai-sdk/openai-compatible\",\"name\":\"LM Studio (local)\",\"options\":{\"baseURL\":\"http://localhost:1234/v1\"}}}}"
+      },
+      "secretEnvVars": [],
+      "tuiPromptDelayMs": 2500
+    },
     "opencode-mtplx": {
       "id": "opencode-mtplx",
       "name": "OpenCode MTPLX (local MTP)",

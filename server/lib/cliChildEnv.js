@@ -164,7 +164,7 @@ function claudeLocalEnvDefaults(provider) {
  * @param {object} options
  * @param {object|null} [options.before] - layered first, so `provider.envVars`
  *   overrides it (forgeTokenEnv, claudeSettingsEnv).
- * @param {{command?:string, envVars?:object, models?:string[], defaultModel?:string|null, ollamaBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, gatewayBacked?:string, orcarouterBacked?:boolean, thinking?:boolean}|null} [options.provider]
+ * @param {{command?:string, envVars?:object, models?:string[], defaultModel?:string|null, ollamaBacked?:boolean, lmstudioBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, gatewayBacked?:string, orcarouterBacked?:boolean, thinking?:boolean}|null} [options.provider]
  * @param {string|null} [options.model] - the model being run this invocation,
  *   unioned into the OpenCode declared-models map. Omit when the site has no
  *   per-call model — `provider.defaultModel` is always declared regardless.

@@ -62,6 +62,10 @@ describe('localRuntimeKind', () => {
     expect(localRuntimeKind({ command: 'opencode', ollamaBacked: true })).toBe('ollama');
     // claude-ollama is not an OpenCode provider but is still Ollama-backed.
     expect(localRuntimeKind({ command: 'claude', ollamaBacked: true })).toBe('ollama');
+    // The marker is what makes a RENAMED LM Studio wrapper still resolve. The
+    // name/endpoint fallback below would miss this record entirely — it carries
+    // neither an `lmstudio` id/name nor a :1234 endpoint of its own.
+    expect(localRuntimeKind({ command: 'opencode', name: 'Coding box', lmstudioBacked: true })).toBe('lmstudio');
   });
 
   it('treats OrcaRouter as remote, not a local daemon', () => {
@@ -191,6 +195,7 @@ describe('localRuntimeForProvider', () => {
     expect(LOCAL_RUNTIMES.llama.defaultBaseUrl).toBe(opencodeLocalBaseUrl('llama'));
     expect(LOCAL_RUNTIMES.ollama.defaultBaseUrl).toBe(opencodeLocalBaseUrl('ollama'));
     expect(LOCAL_RUNTIMES.mtplx.defaultBaseUrl).toBe(opencodeLocalBaseUrl('mtplx'));
+    expect(LOCAL_RUNTIMES.lmstudio.defaultBaseUrl).toBe(opencodeLocalBaseUrl('lmstudio'));
     expect(LOCAL_RUNTIMES.vllm.defaultBaseUrl).toBe(opencodeLocalBaseUrl('vllm'));
     expect(LOCAL_RUNTIMES.slotstream.defaultBaseUrl).toBe(`http://127.0.0.1:${PORTS.SLOTSTREAM}/v1`);
     expect(LOCAL_RUNTIMES.slotstream.defaultBaseUrl).not.toMatch(/11434/);

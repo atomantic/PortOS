@@ -675,6 +675,10 @@ export function createProviderService(config = {}) {
         // MTPLX's native MTP runtime is a separate local OpenAI-compatible
         // backend. Preserve this marker so OpenCode receives the `mtplx/`
         // namespace and model refresh probes its local endpoint.
+        // LM Studio is a local backend PortOS already manages; preserve the
+        // marker so OpenCode receives the `lmstudio/` namespace and model
+        // refresh probes the LM Studio server rather than the harness.
+        ...(providerData.lmstudioBacked === true ? { lmstudioBacked: true } : {}),
         ...(providerData.mtplxBacked === true ? { mtplxBacked: true } : {}),
         ...(providerData.llamaBacked === true ? { llamaBacked: true } : {}),
         // The local vLLM container is a third distinct local backend: preserve
@@ -1206,6 +1210,15 @@ export function createProviderService(config = {}) {
      * @returns {Promise<string[]>}
      */
     async _fetchMtplxModels(provider) {
+      return this._refreshAPIProviderModels(provider);
+    },
+
+    /**
+     * Fetch the downloaded catalog from the local LM Studio server for its
+     * harness wrappers. Refresh-only, like every other local fetcher here: it
+     * never starts LM Studio, downloads a model, or issues a completion.
+     */
+    async _fetchLmstudioModels(provider) {
       return this._refreshAPIProviderModels(provider);
     },
 

@@ -443,8 +443,8 @@ const codexEffortLevelsForModel = (model) => CODEX_ULTRA_MODELS.has(String(model
 
 /**
  * True when an OpenCode process provider runs against one of the local
- * OpenAI-compatible backends (Ollama / MTPLX / llama.cpp / vLLM) or a hosted
- * gateway (OrcaRouter / OpenRouter)
+ * OpenAI-compatible backends (Ollama / LM Studio / MTPLX / llama.cpp / vLLM) or
+ * a hosted gateway (OrcaRouter / OpenRouter)
  * rather than a vendor cloud model. MIRROR of `isOpencodeProvider(p) &&
  * getOpencodeLocalProviderNamespace(p)` in server/lib/providerModels.js, which
  * is exactly what gates the effort ladder there — so a backend marker missing
@@ -911,7 +911,7 @@ export const isToolUseModel = (id) =>
  * @returns {{toolCapable:boolean}|null}
  */
 export const localToolUseHint = (id, provider, toolUseIdsByProvider = null) =>
-  (localBackendForProvider(provider) || isOllamaBackedProvider(provider) || provider?.mtplxBacked === true || provider?.llamaBacked === true || provider?.vllmBacked === true || provider?.sglangBacked === true)
+  (localBackendForProvider(provider) || isOllamaBackedProvider(provider) || provider?.lmstudioBacked === true || provider?.mtplxBacked === true || provider?.llamaBacked === true || provider?.vllmBacked === true || provider?.sglangBacked === true)
     && typeof id === 'string' && id.length > 0
     ? { toolCapable: toolUseIdsByProvider?.[provider?.id]?.has(id) === true || isToolUseModel(id) }
     : null;
@@ -1580,7 +1580,12 @@ export const isClaudeCommandProvider = (provider) => commandBasename(provider?.c
  */
 export const generationControlsFor = (provider) => {
   const gateway = isGatewayBackedProvider(provider);
+  // LM Studio forwards temperature/top_p like any OpenAI-compatible endpoint,
+  // but reasoning there belongs to the LOADED model instance — see
+  // THINKING_STYLE.lmstudio on the server, which resolves to no toggle.
+  const lmstudio = provider?.lmstudioBacked === true;
   const local = isOllamaBackedProvider(provider)
+    || lmstudio
     || provider?.llamaBacked === true
     || provider?.mtplxBacked === true
     || provider?.vllmBacked === true
@@ -1601,7 +1606,8 @@ export const generationControlsFor = (provider) => {
       ? { temperature: false, topP: false, thinking: true }
       : null;
   }
-  return { temperature: true, topP: true, thinking: !gateway };
+  // LM Studio joins the gateways in having no forwardable thinking signal.
+  return { temperature: true, topP: true, thinking: !gateway && !lmstudio };
 };
 
 // Environment variables whose names are conventionally credentials. The

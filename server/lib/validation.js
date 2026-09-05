@@ -496,6 +496,10 @@ export const providerSchema = z.object({
   defaultModel: z.string().nullable().optional(),
   timeout: z.number().int().min(AI_RUN_TIMEOUT_MIN_MS).max(AI_RUN_TIMEOUT_MAX_MS).optional(),
   enabled: z.boolean().optional(),
+  // Marks a harness wrapper whose backend is the LM Studio server on this
+  // machine. Unlike the containers below, its context window and reasoning are
+  // chosen when the model instance is LOADED, so PortOS forwards neither.
+  lmstudioBacked: z.boolean().optional(),
   // Kept in schema parity with aiToolkit's provider schema. Marks OpenCode
   // wrappers for a separately started local MTPLX native-MTP server.
   mtplxBacked: z.boolean().optional(),

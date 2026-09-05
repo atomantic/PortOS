@@ -147,6 +147,13 @@ export const providerSchema = z.object({
   // local Ollama daemon — the "Claude Ollama" pattern. Drives model refresh to
   // pull tool-use-capable Ollama models instead of the static Anthropic list.
   ollamaBacked: z.boolean().optional(),
+  // Marks a harness wrapper (OpenCode, and Codex via its native `--oss
+  // --local-provider lmstudio`) whose backend is the LM Studio server on this
+  // machine. Distinct from `ollamaBacked`: a different daemon, a different port,
+  // and — unlike Ollama — a context window that is fixed when the model is
+  // LOADED rather than settable per request, so PortOS prepares nothing before a
+  // spawn (see `localRuntimeNamespace` in ../providerModels.js).
+  lmstudioBacked: z.boolean().optional(),
   // Marks an OpenCode CLI/TUI wrapper for a separately started MTPLX native-MTP
   // server. This is intentionally distinct from `ollamaBacked`: model weights
   // and runtime protocol configuration are not interchangeable.

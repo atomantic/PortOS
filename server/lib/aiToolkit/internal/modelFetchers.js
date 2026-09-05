@@ -63,6 +63,18 @@ export const MODEL_FETCHERS = [
     fetch: '_fetchOllamaToolCapableModels',
   },
   {
+    key: 'lmstudio',
+    // LM Studio publishes the models it has downloaded through the same
+    // OpenAI-compatible `/v1/models` contract as every other local daemon here,
+    // so an `lmstudioBacked` harness wrapper probes that endpoint rather than
+    // running `opencode models` / `codex` (which would inventory the harness).
+    // It authenticates nothing on loopback, so the wrapper's `apiKey` is blank
+    // and `_refreshAPIProviderModels` simply omits the Bearer header.
+    cliMatch: (p) => p?.lmstudioBacked === true,
+    tuiMatch: (p) => p?.lmstudioBacked === true,
+    fetch: '_fetchLmstudioModels',
+  },
+  {
     key: 'mtplx',
     // MTPLX exposes the selected native-MTP model through its OpenAI-compatible
     // endpoint. Its OpenCode CLI/TUI variants need that endpoint probe rather

@@ -165,6 +165,7 @@ describe('effortLevelsForProvider (server mirror)', () => {
     ['OpenCode MTPLX', { id: 'opencode-mtplx', command: 'opencode', mtplxBacked: true }, ['low', 'medium', 'high']],
     ['OpenCode vLLM TUI', { id: 'opencode-vllm-tui', command: 'opencode', vllmBacked: true }, ['low', 'medium', 'high']],
     ['OpenCode SGLang TUI', { id: 'opencode-sglang-tui', command: 'opencode', sglangBacked: true }, ['low', 'medium', 'high']],
+    ['OpenCode LM Studio', { id: 'opencode-lmstudio', command: 'opencode', lmstudioBacked: true }, ['low', 'medium', 'high']],
     ['OpenCode with no local backend', { id: 'opencode', command: 'opencode' }, null],
     // grok DOES have an effort control (`--reasoning-effort`, aliased `--effort`);
     // its ladder stops at xhigh, which is why it is not simply CLAUDE's.
@@ -209,6 +210,11 @@ describe('generationControlsFor', () => {
     // nothing reads. Sampling was never forwardable on a Claude harness either,
     // which would have left the block rendering one inert select.
     ['Claude SGLang TUI', { id: 'claude-sglang-tui', command: 'claude', sglangBacked: true }, null],
+    // LM Studio forwards temperature/top_p like any OpenAI-compatible endpoint,
+    // but reasoning is a property of the LOADED model instance there — no
+    // per-request field carries it, so the toggle would pin a value nothing
+    // reads (THINKING_STYLE.lmstudio is null on the server).
+    ['OpenCode LM Studio', { id: 'opencode-lmstudio', command: 'opencode', lmstudioBacked: true }, { temperature: true, topP: true, thinking: false }],
     ['native Ollama API', { id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1' }, { temperature: true, topP: true, thinking: true }],
     // OrcaRouter proxies cloud models that own their own reasoning switch.
     ['OpenCode OrcaRouter', { id: 'opencode-orcarouter', command: 'opencode', orcarouterBacked: true }, { temperature: true, topP: true, thinking: false }],
@@ -1206,6 +1212,7 @@ describe('supportsModelRefresh', () => {
       'cursor-cli',
       'cursor-tui', 'grok', 'lmstudio', 'mtplx', 'nvidia-kimi', 'ollama',
       'opencode-llama-tui',
+      'opencode-lmstudio', 'opencode-lmstudio-tui',
       'opencode-mtplx', 'opencode-mtplx-tui', 'opencode-ollama',
       'opencode-ollama-tui', 'opencode-openrouter', 'opencode-openrouter-tui',
       'opencode-orcarouter', 'opencode-orcarouter-tui',
