@@ -92,6 +92,23 @@ The `selectModelForTask` function routes tasks to appropriate model tiers:
 | persistentMindThinkingPresets.presets | [] | Saved named alternates (exact provider/model/effort) one message may borrow for a single turn. Empty by default; storing one changes nothing about the route the mind wakes on |
 | avatarStyle | svg | Default CoS UI avatar style (`svg`, `ascii`, `core`, the 3D styles, or a `rigged-<modelId>` record) |
 
+### Temporary thinking sessions in the Mind UI
+
+Saved alternates are managed in **Mind → Models** (`/cos/mind?panel=models`). Adding, editing, previewing, or removing a preset writes only `persistentMindThinkingPresets` through `PATCH /api/cos/config` — it never starts a turn, never resumes a paused mind, never infers, and never downloads a model. A list PATCH replaces the whole array, because a merge cannot express "remove this one entry" and would resurrect a deleted preset.
+
+The composer's **Send with another model** picker arms one preset for the **next single message**, and nothing else:
+
+- The armed preset lives in the URL (`?preset=<id>`), so it is shareable and reload-safe. Previewing shows the exact provider/model/effort plus whether the route is machine-local, account-backed, or unclassifiable — an unclassifiable route is treated as billable.
+- **Pressing send is the authorization.** It covers that one message, including its bounded tool rounds and its summary. The selection clears on acceptance, so the next message and every scheduled wake use the unchanged home profile.
+- The route is frozen with the draft: a duplicate click or a transport retry re-submits the same id **and** the same route, because the server's retry fingerprint covers both. Changing the armed preset mints a new id instead.
+- A preset that disappears is refused, never substituted — the composer blocks the send rather than answering on the default profile the user was stepping away from.
+- Attached images are validated against the borrowed route, not the default one, so a text-only alternate refuses the message instead of dropping the image.
+- A paused mind stays paused: the message queues on the selected route and runs only when the user resumes it.
+
+**Mind → Thinking route** (the sidebar card) shows the default profile beside the route the current turn is *actually* taking, warns when a preset was edited after its message was accepted, and offers **Return to default**. **Cancel this session** goes through the existing pause lifecycle, which retires a temporary session rather than requeueing it — a cancelled temporary turn never replays itself.
+
+**Mind → Models** also lists the per-session receipts (`?turn=<turnId>`): preset, actual route, elapsed time, run and turn ids, outcome, and usage/cost. Telemetry a provider never reported renders as *unknown*, never as zero — "free" and "not measured" are different claims.
+
 Temporary thinking messages retain the exact accepted provider, model, and effort. Changing or revoking a preset refuses the pending session; a label-only rename preserves its route. Revoked selections and interruptions after inference may have begun require a fresh message to run again. Temporary provider outages before inference leave the accepted message queued. Matching transport retries keep the original selection even after revocation. Older queued temporary messages without a recorded route retain their content but require explicit resubmission.
 
 ## API Endpoints

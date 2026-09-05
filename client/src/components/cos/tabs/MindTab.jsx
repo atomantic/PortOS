@@ -4,6 +4,7 @@ import { ArrowUp, Brain, Check, CirclePause, CirclePlay, Cpu, Database, Eraser, 
 import { Link } from 'react-router';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch.js';
 import useMounted from '../../../hooks/useMounted';
+import useProviderModels from '../../../hooks/useProviderModels';
 import { useSocket } from '../../../hooks/useSocket';
 import { uuidv4 } from '../../../lib/uuid.js';
 import * as api from '../../../services/api';
@@ -16,9 +17,14 @@ import TabPills from '../../ui/TabPills';
 import PersistentMindContextPanel from '../PersistentMindContextPanel';
 import PersistentMindMaintenancePanel from '../PersistentMindMaintenancePanel';
 import PersistentMindProfileControls from '../PersistentMindProfileControls';
+import PersistentMindRoutePanel from '../PersistentMindRoutePanel';
 import PersistentMindRuntimePanel, { PersistentMindThoughtStatus } from '../PersistentMindRuntimePanel';
+import PersistentMindSessions from '../PersistentMindSessions';
+import PersistentMindTemporaryRoute from '../PersistentMindTemporaryRoute';
+import PersistentMindThinkingPresets from '../PersistentMindThinkingPresets';
 import PersistentMindVisibilityPanel from '../PersistentMindVisibilityPanel';
 import PersistentMindTools from '../../../pages/PersistentMindTools';
+import { findMindThinkingPreset } from '../../../lib/mindThinkingPresets.js';
 import { readFileAsBase64, UPLOAD_IMAGE_ACCEPT, validateImageFile } from '../../../utils/fileUpload';
 
 const PAGE_LIMIT = 200;
@@ -26,12 +32,17 @@ const MAX_BACKFILL_PAGES = 5;
 const MAX_VISIBLE_EVENTS = PAGE_LIMIT * MAX_BACKFILL_PAGES;
 const MAX_MESSAGE_IMAGES = 8;
 const MAX_MESSAGE_IMAGE_BYTES = 10 * 1024 * 1024;
-const MIND_PANELS = new Set(['context', 'memories', 'maintenance', 'tools', 'settings']);
+// Stable empties: these feed child props and effect dependencies, so a fresh
+// literal on every render would re-fire work that has nothing new to do.
+const NO_PRESETS = Object.freeze([]);
+const NO_TURN_EXECUTIONS = Object.freeze([]);
+const MIND_PANELS = new Set(['context', 'memories', 'maintenance', 'tools', 'models', 'settings']);
 const MIND_PANEL_TABS = [
   { id: 'context', label: 'Context', icon: Brain },
   { id: 'memories', label: 'Memories', icon: Database },
   { id: 'maintenance', label: 'Cleanup', icon: Eraser },
   { id: 'tools', label: 'Tools', icon: Wrench },
+  { id: 'models', label: 'Models', icon: Cpu },
   { id: 'settings', label: 'Settings', icon: Settings2 },
 ];
 
@@ -154,6 +165,13 @@ export default function MindTab() {
   const legacyView = searchParams.get('view');
   const requestedPanel = searchParams.get('panel') || (legacyView === 'setup' ? 'settings' : legacyView);
   const activePanel = MIND_PANELS.has(requestedPanel) ? requestedPanel : null;
+  // Composer selection, preset editor, and inspected session all live in the
+  // URL: an armed alternate model is shareable and survives a reload, and
+  // clearing it after a send is one navigation rather than hidden state that
+  // could drift from what the next message will actually use.
+  const selectedPresetId = searchParams.get('preset') || null;
+  const editingPresetId = searchParams.get('presetEdit');
+  const selectedTurnId = searchParams.get('turn') || null;
   const socket = useSocket();
   const [events, setEvents] = useState(null);
   const [mind, setMind] = useState(null);
@@ -174,6 +192,7 @@ export default function MindTab() {
   const [lifecycleError, setLifecycleError] = useState(null);
   const [profileSaving, setProfileSaving] = useState(false);
   const [capabilitiesSaving, setCapabilitiesSaving] = useState(false);
+  const [presetsSaving, setPresetsSaving] = useState(false);
   const [contextRefreshKey, setContextRefreshKey] = useState(0);
   const [visitedPanels, setVisitedPanels] = useState(() => new Set(activePanel ? [activePanel] : []));
   const [showActivity, setShowActivity] = useState(false);
@@ -188,6 +207,9 @@ export default function MindTab() {
   // the audio itself is carried by /voice/call-host in another tab.
   const [callState, setCallState] = useState(null);
   const [hangingUp, setHangingUp] = useState(false);
+  // Read-only catalog: it classifies a route as machine-local or
+  // account-backed before the user commits. Never a provider probe.
+  const { providers } = useProviderModels({ allowDefault: true, silent: true });
   const cursorRef = useRef(null);
   const loadPendingRef = useRef(false);
   const deferredLoadRef = useRef(false);
@@ -200,6 +222,10 @@ export default function MindTab() {
   const runtimeMountedRef = useMounted();
   const messageDraftIdRef = useRef(null);
   const messageDraftImagesRef = useRef(null);
+  // `undefined` = the in-flight draft has not frozen a route yet; `null` = it
+  // deliberately froze "no preset". A plain null would conflate the two and let
+  // a retry silently re-resolve a selection the user had since changed.
+  const messageDraftPresetRef = useRef(undefined);
   const annotationDraftIdRef = useRef(null);
   const messageListRef = useRef(null);
   const stickToBottomRef = useRef(true);
@@ -241,6 +267,8 @@ export default function MindTab() {
           capabilities: response.capabilities,
           imageCapability: response.imageCapability,
           autonomyMode: response.autonomyMode,
+          thinkingPresets: response.thinkingPresets?.presets || NO_PRESETS,
+          turnExecutions: response.turnExecutions || NO_TURN_EXECUTIONS,
         });
         page += 1;
         needsMore = response.hasMore === true && !sawGap;
@@ -388,20 +416,52 @@ export default function MindTab() {
     event.preventDefault();
     const trimmed = messageText.trim();
     if ((!trimmed && messageImages.length === 0) || submitting || messageImagesUploading) return;
+    // A selection whose preset has since disappeared is refused here rather
+    // than sent without it: falling through to the home profile would answer on
+    // exactly the model the user was deliberately stepping away from.
+    if (selectedPresetId && !selectedPreset) {
+      setSubmitError('That thinking preset is no longer saved. Choose another or return to the default profile.');
+      return;
+    }
     const id = messageDraftIdRef.current || mintId('message');
     messageDraftIdRef.current = id;
     const images = messageDraftImagesRef.current || messageImages;
     messageDraftImagesRef.current = images;
+    // The route is frozen with the draft, so a duplicate click or a transport
+    // retry re-submits the id AND the route the user approved — the server's
+    // fingerprint covers both, so a changed selection would otherwise read as a
+    // different, separately-billable request under a reused id.
+    if (messageDraftPresetRef.current === undefined) {
+      messageDraftPresetRef.current = selectedPreset
+        ? {
+          id: selectedPreset.id,
+          label: selectedPreset.label,
+          providerId: selectedPreset.providerId,
+          model: selectedPreset.model,
+          effort: selectedPreset.effort || '',
+        }
+        : null;
+    }
+    const thinkingPreset = messageDraftPresetRef.current;
     setSubmitting(true);
     setSubmitError(null);
     try {
-      await api.sendPersistentMindMessage({ id, text: trimmed, ...(images.length > 0 ? { images: images.map((image) => image.attachmentId) } : {}) }, { silent: true });
+      await api.sendPersistentMindMessage({
+        id,
+        text: trimmed,
+        ...(images.length > 0 ? { images: images.map((image) => image.attachmentId) } : {}),
+        ...(thinkingPreset ? { thinkingPresetId: thinkingPreset.id, thinkingPreset } : {}),
+      }, { silent: true });
       stickToBottomRef.current = true;
       appendLocalInput({ id, content: trimmed, inputKind: 'message', images });
       setMessageText('');
       setMessageImages([]);
       messageDraftIdRef.current = null;
       messageDraftImagesRef.current = null;
+      messageDraftPresetRef.current = undefined;
+      // One message, one authorization: the composer returns to the default
+      // route so the next message and every scheduled wake use the home profile.
+      if (thinkingPreset) clearPresetSelection();
       await loadHistory();
       stickToBottomRef.current = true;
       void loadRuntime();
@@ -433,10 +493,15 @@ export default function MindTab() {
     }
   };
 
+  const resetMessageDraft = () => {
+    messageDraftIdRef.current = null;
+    messageDraftImagesRef.current = null;
+    messageDraftPresetRef.current = undefined;
+  };
+
   const changeMessageText = (next) => {
     if (submitError) {
-      messageDraftIdRef.current = null;
-      messageDraftImagesRef.current = null;
+      resetMessageDraft();
       setSubmitError(null);
     }
     setMessageText(next);
@@ -444,8 +509,7 @@ export default function MindTab() {
 
   const changeMessageImages = (next) => {
     if (submitError) {
-      messageDraftIdRef.current = null;
-      messageDraftImagesRef.current = null;
+      resetMessageDraft();
       setSubmitError(null);
     }
     setMessageImages(next);
@@ -565,19 +629,31 @@ export default function MindTab() {
     .filter(([key, value]) => key !== 'schemaVersion' && value === true).length;
   const { status: imageCapabilityStatus, guidance: imageCapabilityGuidance } = imageCapability(mind);
   const imageAttachmentsUnavailable = imageCapabilityStatus === 'unsupported';
-  const setupSaving = profileSaving || capabilitiesSaving;
+  const setupSaving = profileSaving || capabilitiesSaving || presetsSaving;
   const conversationItems = buildConversationItems(events || [], showActivity);
+  const thinkingPresets = mind?.thinkingPresets || NO_PRESETS;
+  const turnExecutions = mind?.turnExecutions || NO_TURN_EXECUTIONS;
+  const selectedPreset = findMindThinkingPreset(thinkingPresets, selectedPresetId);
+  // Panel-scoped selections (the open preset editor, the inspected session) are
+  // dropped whenever the panel they render in goes away; the composer's armed
+  // preset is NOT — it belongs to the message being written, not to a panel.
+  const clearPanelSelections = (params) => {
+    params.delete('presetEdit');
+    params.delete('turn');
+  };
   const openPanel = (panel) => setSearchParams((current) => {
     const next = new URLSearchParams(current);
     next.set('panel', panel);
     next.delete('view');
     next.delete('event');
+    clearPanelSelections(next);
     return next;
   });
   const closePanel = () => setSearchParams((current) => {
     const next = new URLSearchParams(current);
     next.delete('panel');
     next.delete('view');
+    clearPanelSelections(next);
     return next;
   });
   const selectEvent = (eventId) => setSearchParams((current) => {
@@ -585,6 +661,33 @@ export default function MindTab() {
     next.set('event', eventId);
     next.delete('panel');
     next.delete('view');
+    clearPanelSelections(next);
+    return next;
+  });
+  const setMindParam = (key, value) => setSearchParams((current) => {
+    const next = new URLSearchParams(current);
+    if (value === null) next.delete(key);
+    else next.set(key, value);
+    return next;
+  });
+  const clearPresetSelection = () => setMindParam('preset', null);
+  // Changing the armed route retires the in-flight draft id: the server's retry
+  // fingerprint covers the selection, so reusing one id across two routes is a
+  // different request wearing the same idempotency key.
+  const selectPreset = (presetId) => {
+    if (submitting) return;
+    resetMessageDraft();
+    setSubmitError(null);
+    setMindParam('preset', presetId || null);
+  };
+  const inspectSession = (turnId) => setSearchParams((current) => {
+    const next = new URLSearchParams(current);
+    next.set('panel', 'models');
+    next.delete('view');
+    next.delete('event');
+    next.delete('presetEdit');
+    if (turnId === null) next.delete('turn');
+    else next.set('turn', turnId);
     return next;
   });
   const closeSelectedEvent = () => setSearchParams((current) => {
@@ -717,6 +820,16 @@ export default function MindTab() {
                 ))}
               </ul>
             )}
+            <PersistentMindTemporaryRoute
+              presets={thinkingPresets}
+              providers={providers}
+              selectedPresetId={selectedPresetId}
+              onSelectPreset={selectPreset}
+              onManagePresets={() => openPanel('models')}
+              disabled={submitting}
+              paused={isPaused}
+              imageCount={messageImages.length}
+            />
             <div className="flex items-end gap-2 rounded-[1.35rem] border border-port-border bg-port-bg p-1.5 pl-3 focus-within:border-port-accent/70 focus-within:ring-1 focus-within:ring-port-accent/30">
               <FilePickerButton
                 accept={UPLOAD_IMAGE_ACCEPT}
@@ -731,7 +844,7 @@ export default function MindTab() {
               </FilePickerButton>
               <label htmlFor="mind-input-text" className="sr-only">Message</label>
               <textarea id="mind-input-text" value={messageText} onChange={(event) => changeMessageText(event.target.value)} onKeyDown={handleMessageKeyDown} maxLength={8000} rows={1} className="min-h-[36px] max-h-32 flex-1 resize-y bg-transparent py-2 text-sm leading-5 text-port-text outline-none placeholder:text-port-text-muted" placeholder="Message Persistent Mind" />
-              <button type="submit" disabled={(!messageText.trim() && messageImages.length === 0) || submitting || messageImagesUploading} aria-label={submitting ? 'Sending message' : submitError ? 'Retry' : 'Send message'} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-port-accent text-white transition-colors hover:bg-port-accent/85 disabled:cursor-not-allowed disabled:bg-port-border disabled:text-port-text-muted">
+              <button type="submit" disabled={(!messageText.trim() && messageImages.length === 0) || submitting || messageImagesUploading} aria-label={submitting ? 'Sending message' : submitError ? 'Retry' : selectedPreset ? `Send with ${selectedPreset.label}` : 'Send message'} title={selectedPreset ? `Send this one message with ${selectedPreset.label}` : undefined} className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white transition-colors disabled:cursor-not-allowed disabled:bg-port-border disabled:text-port-text-muted ${selectedPreset ? 'bg-port-warning hover:bg-port-warning/85' : 'bg-port-accent hover:bg-port-accent/85'}`}>
                 {submitting ? <RefreshCw size={17} className="animate-spin" aria-hidden="true" /> : <ArrowUp size={19} strokeWidth={2.5} aria-hidden="true" />}
               </button>
             </div>
@@ -762,6 +875,19 @@ export default function MindTab() {
               </button>
             )}
           </section>
+
+          <PersistentMindRoutePanel
+            profile={mind?.profile}
+            state={state}
+            providers={providers}
+            presets={thinkingPresets}
+            turnExecutions={turnExecutions}
+            selectedPresetId={selectedPresetId}
+            onReturnToDefault={clearPresetSelection}
+            onCancelSession={() => runLifecycle('pause')}
+            cancelPending={lifecyclePending === 'pause'}
+            onInspectSession={inspectSession}
+          />
 
           <div className="grid grid-cols-2 gap-2 xl:grid-cols-1">
             <MindStateButton icon={Brain} label="Context" value={runtime?.context?.approximateTokens == null ? 'Unavailable' : `~${runtime.context.approximateTokens.toLocaleString()} tokens`} detail={`${runtime?.context?.chars?.toLocaleString() || '—'} characters`} onClick={() => openPanel('context')} />
@@ -815,6 +941,22 @@ export default function MindTab() {
         </div>}
         {(visitedPanels.has('tools') || activePanel === 'tools') && <div hidden={activePanel !== 'tools'}>
           <PersistentMindTools onCapabilitiesChange={(capabilities) => setMind((current) => current ? { ...current, capabilities } : current)} onSavingChange={setCapabilitiesSaving} />
+        </div>}
+        {(visitedPanels.has('models') || activePanel === 'models') && <div hidden={activePanel !== 'models'} className="space-y-6">
+          <PersistentMindThinkingPresets
+            presets={thinkingPresets}
+            disabled={!mind}
+            editingPresetId={editingPresetId}
+            onEditPreset={(id) => setMindParam('presetEdit', id)}
+            onSaved={(presets) => setMind((current) => current ? { ...current, thinkingPresets: presets } : current)}
+            onSavingChange={setPresetsSaving}
+          />
+          <PersistentMindSessions
+            turnExecutions={turnExecutions}
+            providers={providers}
+            selectedTurnId={selectedTurnId}
+            onSelectTurn={(turnId) => setMindParam('turn', turnId)}
+          />
         </div>}
         {(visitedPanels.has('settings') || activePanel === 'settings') && <section hidden={activePanel !== 'settings'} aria-labelledby="mind-profile-heading" className="rounded border border-port-border bg-port-card p-4">
           <div className="mb-3">
