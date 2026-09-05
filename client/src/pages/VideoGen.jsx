@@ -336,8 +336,29 @@ export default function VideoGen() {
   // after `previewItems` below so the resolver can match against it.
   const [showHidden, setShowHidden] = useState(false);
 
+  // 'loading' until the first fetch settles, then 'loaded' or 'error'. A
+  // sentinel rather than `history.length` — the Remix handoff below has to tell
+  // "history is still in flight / failed to load" apart from "history loaded
+  // and has no such record", and an empty array is a legitimate loaded state.
+  //
+  // The mount fetch and the completion refresh share this one sentinel, so the
+  // handoff also needs to know whether ANOTHER fetch is still running before it
+  // trusts an 'error': a transient failure on a background refresh must not
+  // strand a handoff that the in-flight mount fetch is about to satisfy. The
+  // count is a ref because only the effects read it, and they run after commit.
+  const [historyLoad, setHistoryLoad] = useState('loading');
+  const historyInFlightRef = useRef(0);
+  // `silent` — this page owns the failure UI (the Remix banner below, and the
+  // gallery simply staying empty), so the shared toast would double it.
   const refreshHistory = useCallback(() => {
-    listVideoHistory().then((items) => setHistory(Array.isArray(items) ? items : [])).catch(() => {});
+    historyInFlightRef.current += 1;
+    return listVideoHistory({ silent: true })
+      .then((items) => {
+        setHistory(Array.isArray(items) ? items : []);
+        setHistoryLoad('loaded');
+      })
+      .catch(() => setHistoryLoad('error'))
+      .finally(() => { historyInFlightRef.current -= 1; });
   }, []);
   useMediaCompletionRefresh({ onVideoCompleted: refreshHistory });
   useEffect(() => { refreshHistory(); }, [refreshHistory]);
@@ -422,6 +443,91 @@ export default function VideoGen() {
     applyRemix(raw);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [applyRemix]);
+
+  // Cross-page Remix (#6290). Media History (and every other MediaPreview
+  // surface) hands this page a RECORD ID rather than a render-settings bundle,
+  // so the restore runs through the same `applyRemix` the in-page gallery uses
+  // — one implementation that knows every field the record carries, instead of
+  // a URL enumeration that silently dropped the encoder, speed profile, draft
+  // decode and LoRAs. `history` is the unfiltered load, so a hidden record
+  // resolves too.
+  //
+  // One ref carries the whole "has this handoff been dealt with?" question, and
+  // it holds the handoff ID rather than a boolean, so a SECOND handoff arriving
+  // on the same mount is still honored. It is what makes the restore one-shot —
+  // not the stripped parameter, which lands on an async router update a
+  // completion refresh in the same tick could beat, re-applying the handoff over
+  // edits the user has made since.
+  //
+  // A FAILED fetch settles the handoff too, deliberately: the restore then waits
+  // for the explicit Retry (which clears the ref) instead of riding in on the
+  // next background refresh, since a render completing minutes later would
+  // otherwise replay it over a form the user has been editing the whole time.
+  const remixHandoffId = searchParams.get('remix');
+  const settledRemixHandoffRef = useRef(null);
+  // null while nothing is wrong; otherwise 'error' (the history fetch failed,
+  // retryable) or 'missing' (history loaded and holds no such record).
+  const [remixHandoffProblem, setRemixHandoffProblem] = useState(null);
+  // The restore waits on a history round trip, so unlike the old URL bundle
+  // (applied synchronously on mount) there is a window in which the form still
+  // holds the page defaults and is about to be replaced wholesale. Announce it
+  // and hold Generate: rendering here would spend GPU time on the defaults while
+  // the user believes they are looking at the clip's settings. The window runs
+  // from the parameter appearing until the handoff either restores (which strips
+  // it) or reports a problem — which also covers the wait on a sibling fetch
+  // below, with no second sentinel. Retry re-enters it by clearing the problem.
+  const remixHandoffPending = !!remixHandoffId && !remixHandoffProblem;
+  const consumeRemixHandoff = useCallback(() => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('remix');
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+  useEffect(() => {
+    // No handoff in the URL — including right after this one consumed its own.
+    // Clearing the settled id here is what lets the NEXT handoff through, even
+    // when it names the same record.
+    if (!remixHandoffId) { settledRemixHandoffRef.current = null; return; }
+    if (settledRemixHandoffRef.current === remixHandoffId) return;
+    // Still fetching: say nothing. Reporting "no such record" here would be a
+    // lie every time the page is opened faster than the history round trip.
+    // Any banner still up belongs to a previous handoff, so it goes.
+    if (historyLoad === 'loading') { setRemixHandoffProblem(null); return; }
+    // The sentinel is shared with the completion refresh, so an 'error' may
+    // belong to a background fetch that failed alongside the one this handoff is
+    // actually waiting on. Keep waiting while any fetch is still running, or a
+    // transient blip on the sibling would strand a handoff the in-flight request
+    // is about to satisfy.
+    if (historyLoad === 'error' && historyInFlightRef.current > 0) return;
+    settledRemixHandoffRef.current = remixHandoffId;
+    if (historyLoad === 'error') {
+      // Keep the param in the URL — Retry resolves this same handoff.
+      setRemixHandoffProblem('error');
+      return;
+    }
+    const record = history.find((v) => String(v.id) === remixHandoffId);
+    if (record) {
+      applyRemix(record);
+      setRemixHandoffProblem(null);
+    } else {
+      setRemixHandoffProblem('missing');
+    }
+    consumeRemixHandoff();
+  }, [remixHandoffId, historyLoad, history, applyRemix, consumeRemixHandoff]);
+  // Back to 'loading' first, so a retry that fails again still moves the state
+  // ('loading' → 'error') and re-runs the effect above.
+  const retryRemixHandoff = useCallback(() => {
+    settledRemixHandoffRef.current = null;
+    setHistoryLoad('loading');
+    setRemixHandoffProblem(null);
+    refreshHistory();
+  }, [refreshHistory]);
+  const dismissRemixHandoff = useCallback(() => {
+    settledRemixHandoffRef.current = remixHandoffId;
+    setRemixHandoffProblem(null);
+    consumeRemixHandoff();
+  }, [remixHandoffId, consumeRemixHandoff]);
 
   // Finish a draft (#3696): same restore as Remix, but switched to the delivery
   // model the draft's registry entry declares. Prefill only — the user presses
@@ -892,7 +998,7 @@ export default function VideoGen() {
   // A federated render answers to the PEER’s readiness, not to this machine’s
   // runtime gates — none of the local probes below describe the hardware it
   // will actually run on.
-  const canEnqueue = prompt.trim() && (remoteTarget.isRemote
+  const canEnqueue = prompt.trim() && !remixHandoffPending && (remoteTarget.isRemote
     ? remoteBlocked === null
     : (isGrok || isFal || isReactor || (!notConnected && !extendModeBlocked
       && !a2vModeBlocked && !icLoraModeBlocked && !byovGateBlocked
@@ -1041,6 +1147,47 @@ export default function VideoGen() {
 
       <form onSubmit={handleGenerate} className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
         <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
+          {/* A cross-page Remix that could not be restored (#6290). Silence
+              would be the worst outcome here: the user pressed Remix, landed on
+              a form holding whatever it held before, and would start a render
+              with the wrong settings believing they were the clip's. */}
+          {remixHandoffPending && (
+            <p role="status" className="rounded-lg border border-port-border bg-port-bg px-3 py-2 text-xs text-gray-400">
+              Restoring this render's settings — the form below is about to be replaced with them.
+            </p>
+          )}
+          {remixHandoffProblem && (
+            <div
+              role="status"
+              className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-3 text-xs text-port-warning flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2"
+            >
+              <div>
+                {remixHandoffProblem === 'error'
+                  ? "Couldn't load your render history, so this clip's settings weren't restored."
+                  : 'That render is no longer in your history, so its settings could not be restored.'}
+                {' '}The form still holds its previous values.
+              </div>
+              <div className="flex items-center gap-2 self-start sm:self-auto">
+                {remixHandoffProblem === 'error' && (
+                  <button
+                    type="button"
+                    onClick={retryRemixHandoff}
+                    className="whitespace-nowrap inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/80"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Retry
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={dismissRemixHandoff}
+                  className="text-gray-400 hover:text-gray-200 text-xs"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
           {!isGrok && !isFal && !isReactor && byovRuntimeMissing && (
             <div className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-3 text-xs text-port-warning flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
               <div>

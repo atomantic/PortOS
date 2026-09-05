@@ -546,6 +546,27 @@ export function useVideoGenForm({
     [availableLoras, loraFamily],
   );
 
+  // `applyRemix` resolves each restored LoRA's DISPLAY NAME out of the installed
+  // library at apply time, falling back to the raw filename. The cross-page
+  // Remix handoff (#6290) can apply before that library has landed — the page
+  // fetches the LoRA list and the history list as independent mount effects with
+  // no ordering — so re-resolve once it arrives, or the picker sits on
+  // `lora-example-v7.safetensors` for the session. Filename and scale (what the
+  // payload is built from) are untouched; only the label is filled in.
+  useEffect(() => {
+    if (!availableLoras.length) return;
+    setSelectedLoras((prev) => {
+      let changed = false;
+      const next = prev.map((selected) => {
+        const name = availableLoras.find((l) => l.filename === selected.filename)?.name;
+        if (!name || name === selected.name) return selected;
+        changed = true;
+        return { ...selected, name };
+      });
+      return changed ? next : prev;
+    });
+  }, [availableLoras]);
+
   // Installed video LoRAs bucketed by family, regardless of the selected model.
   // One pass instead of one filter per family, and the source for the
   // "why is the picker gone" hint below.
