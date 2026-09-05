@@ -44,6 +44,7 @@ import {
 import { cleanupMultipartTemp } from '../services/videoGen/prepareParams.js';
 import { submitVideoGenJob } from '../services/videoGen/submitJob.js';
 import { resolveReactorApiKey, mintReactorToken } from '../services/videoGen/reactor.js';
+import { isVideoModeUsable, VIDEO_GEN_MODE } from '../services/videoGen/modes.js';
 import { VIDEO_GEN_LOCAL_ONLY_FIELDS } from '../services/videoGen/requestFields.js';
 import { attachSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { getTextEncoderRepo, isHfRepoId } from '../lib/mediaModels.js';
@@ -489,6 +490,14 @@ router.get('/status', asyncHandler(async (_req, res) => {
     // wakes the display, re-introducing the exact GPU-watchdog contention the
     // sleep is there to avoid.
     displaySleepOnRender: isDisplaySleepEnabled(s.videoGen),
+    // Backend usability for the two metered-API video providers (#6213/#6214).
+    // Computed server-side through the SAME resolver `isVideoModeUsable` uses
+    // to gate an actual render, so a key set only via FAL_KEY/REACTOR_API_KEY
+    // env var (no Settings-form entry) still surfaces the backend switcher —
+    // the client can't see env vars, and re-deriving "has a key" from the
+    // settings object alone missed that case entirely.
+    falEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.FAL),
+    reactorEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.REACTOR),
   });
 }));
 

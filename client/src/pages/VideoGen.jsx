@@ -118,9 +118,11 @@ export default function VideoGen() {
   const openSettings = () => setSearchParams(prev => { const n = new URLSearchParams(prev); n.set('settings', '1'); return n; });
   const closeSettings = () => {
     setSearchParams(prev => { const n = new URLSearchParams(prev); n.delete('settings'); return n; });
-    // The drawer hosts the Grok enable toggle — re-read it so the
-    // Local/Grok backend switch appears/disappears without a reload.
+    // The drawer hosts the Grok enable toggle plus the fal.ai/reactor.inc API
+    // key fields — re-read both so the backend switch appears/disappears
+    // without a reload.
     refreshGrokEnabled();
+    refreshStatus();
   };
 
   // Episode Composer (#6228) — multi-scene continuous-video authoring, opened
@@ -166,23 +168,20 @@ export default function VideoGen() {
   // user enabled Grok in Settings → Image Gen (one toggle covers image +
   // video). 'local' keeps every existing flow untouched.
   const [grokEnabled, setGrokEnabled] = useState(false);
-  // fal.ai queue REST video backend (#6213) — surfaced only when an API key is
-  // configured (Settings → Video Gen, or the FAL_KEY env var).
-  const [falEnabled, setFalEnabled] = useState(false);
-  // reactor.inc fast-h3 video backend (#6214) — same usability gate shape as
-  // fal.ai above.
-  const [reactorEnabled, setReactorEnabled] = useState(false);
+  // fal.ai (#6213) / reactor.inc (#6214) usability comes off GET /status
+  // instead of the raw settings object — the server-side `isVideoModeUsable`
+  // it's computed from also honors the FAL_KEY/REACTOR_API_KEY env vars, which
+  // the client can't see, so a key set only via env var (no Settings-form
+  // entry) still surfaces the backend switcher below.
+  const falEnabled = status?.falEnabled === true;
+  const reactorEnabled = status?.reactorEnabled === true;
   // The jobId of the render this tab's Generate button currently owns —
   // threaded into cancelVideoGen so cancellation is job-scoped.
   const activeJobIdRef = useRef(null);
   const models = useMemo(() => modelContext?.models || [], [modelContext]);
   const refreshGrokEnabled = useCallback(() => {
     getSettings({ silent: true })
-      .then((sv) => {
-        setGrokEnabled(sv?.imageGen?.grok?.enabled === true);
-        setFalEnabled(Boolean(sv?.videoGen?.fal?.apiKey));
-        setReactorEnabled(Boolean(sv?.videoGen?.reactor?.apiKey));
-      })
+      .then((sv) => setGrokEnabled(sv?.imageGen?.grok?.enabled === true))
       .catch(() => {});
   }, []);
   useEffect(() => { refreshGrokEnabled(); }, [refreshGrokEnabled]);
