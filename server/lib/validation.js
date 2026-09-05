@@ -1903,7 +1903,7 @@ export const modelComparisonImportSchema = z.object({
   value.observations.forEach((row, index) => {
     if (ids.has(row.id)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['observations', index, 'id'], message: 'Duplicate observation id' });
     ids.add(row.id);
-    if (!row.quality && !row.costPerTask && !row.inputPerMillion && !row.outputPerMillion && !row.responseSeconds && !row.tokensPerSecond && !row.quota) {
+    if (!row.quality && !row.costPerTask && !row.inputPerMillion && !row.outputPerMillion && !row.reasoningPerMillion && !row.responseSeconds && !row.tokensPerSecond && !row.quota) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['observations', index], message: 'At least one sourced metric is required' });
     }
   });

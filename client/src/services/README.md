@@ -52,6 +52,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiLogs.js` | PM2 system logs: fetch a process's recent log tail (process list comes from `apiCommands.getProcessesList`). |
 | `apiPorts.js` | Port scan/detect wrappers (no current UI callers; module kept for the catalog). |
 | `apiHarnesses.js` | Coding-agent harness (CLI/TUI) inventory for Models → Harnesses: installed vs latest version, the providers riding on each, and the model-catalog refresh. Install/update/remove is an SSE stream driven by `RuntimeInstallModal`, not a call here. |
+| `apiModelComparison.js` | Sourced model comparison catalog, provider discovery and validated observation import. |
 | `apiProviders.js` | AI provider configuration, plus provider-runtime (CLI) install readiness for the per-card Install buttons, and the Codex / ChatGPT-subscription account calls (`getCodexAccount`, `startCodexLogin`, `cancelCodexLogin`, `codexLogout`) — sign-in STATE only, never a token. |
 | `apiPrompts.js` | Prompt Manager: stage templates, variables, and job-skill templates (providers list reuses `apiProviders.getProviders`). |
 | `apiReferenceRepos.js` | Per-app reference-repo registry. |
@@ -153,5 +154,3 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `staleBuildToast.jsx` | Sticky toast shown when server's build id differs from client's. |
 | `apiRigging.js` | Character rigging. `getRiggingReadiness()` (`GET /rigging/readiness`): whether this install's Blender runtime is provisioned, the resolved interpreter, the module version, the install command when it is not, and the auto-skin threshold defaults. `rigImageTo3dModel(id, body)` (`POST /rigging/models/:id`): auto-skin a rendered mesh behind the measured weight-coverage gate, resolving with the updated model record. `listRiggingClips()` (`GET /rigging/clips`): the locally-held animation clip library plus CoS-state coverage. `retargetImageTo3dModel(id, body)` (`POST /rigging/models/:id/retarget`): apply a clip to a published rig in `diagnostic` (measure only) or `write` mode, resolving with the updated model record. |
 | `apiAvatar.js` | Avatar surfaces. `getRiggedAvatars()` (`GET /avatar/rigged`): the install's verified animated records, each with its `?variant=` spelling, serving URL, retargeted clip name, and server-computed CoS-state coverage. |
-
-| `apiModelComparison.js` | Sourced model comparison catalog and validated observation import. |

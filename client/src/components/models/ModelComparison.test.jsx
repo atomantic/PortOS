@@ -24,12 +24,14 @@ beforeEach(() => {
 it('shows missing evidence, filters models and estimates token costs without inventing reasoning prices or local cost', async () => {
   render(<MemoryRouter><ModelComparison /></MemoryRouter>);
   await act(async () => {});
-  await screen.findByText('1 plotted · 1 missing quality or cost · lower cost and higher score are preferable');
+  await screen.findByText('1 plotted · 1 missing quality or cost');
   fireEvent.click(screen.getByText(/Evidence & sources/));
   fireEvent.click(screen.getByText('Show or hide providers, models & effort'));
   expect(screen.getAllByText(/E2E unknown/)).toHaveLength(2);
   expect(screen.getAllByText(/Stale/).length).toBeGreaterThan(0);
-  fireEvent.click(screen.getByLabelText('example-model'));
+  fireEvent.click(screen.getByRole('button', { name: 'Toggle example-model' }));
+  expect(screen.getByRole('button', { name: 'Toggle example-model' })).toHaveAttribute('aria-pressed', 'false');
+  expect(screen.getByLabelText('example-model')).not.toBeChecked();
   expect(screen.getByText('No comparable points for these filters. Adjust filters or refresh the research catalog.')).toBeTruthy();
   fireEvent.click(screen.getByLabelText('example-model'));
   fireEvent.change(screen.getByLabelText('Cost basis'), { target: { value: 'scenario' } });

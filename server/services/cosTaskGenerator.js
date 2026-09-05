@@ -61,6 +61,7 @@ import {
 import { TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { isReconcileDrainTaskType } from './taskScheduleConstants.js';
+import { requiresInstallWideTarget } from './taskScheduleRegistry.js';
 import {
   appendClaimOverrideContext,
   appendPrefetchedIssueContext,
@@ -2852,6 +2853,9 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   const { updateAppActivity } = await import('./appActivity.js');
   const taskSchedule = await import('./taskSchedule.js');
   const { getTaskPrompt, getStagePrompt } = await import('./taskPromptService.js');
+
+  // Also protect requests queued before the target-scope gate was installed.
+  if (requiresInstallWideTarget(taskType)) return null;
 
   // NOTE: `updateAppActivity` + the "Generating improvement task" log are
   // intentionally deferred until AFTER every gate returns non-null (see end

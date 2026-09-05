@@ -79,3 +79,12 @@ it('rejects unsourced or malformed imports and refuses to overwrite an unreadabl
   await expect(importModelComparison({ schemaVersion: 1, observations: [observation] })).rejects.toThrow();
   expect(await readFile(join(dir, 'model-comparison.json'), 'utf8')).toBe(future);
 });
+
+it('imports an observation when reasoning pricing is its only known metric', async () => {
+  const row = { ...observation, id: 'example-reasoning-only', reasoningPerMillion: observation.outputPerMillion };
+  for (const key of ['quality', 'costPerTask', 'inputPerMillion', 'outputPerMillion', 'responseSeconds', 'tokensPerSecond', 'quota']) row[key] = null;
+  const response = await request(app).post('/comparison/import').send({ schemaVersion: 1, observations: [row] });
+  expect(response.status).toBe(200);
+  const stored = (await request(app).get('/comparison')).body.observations.find(item => item.id === row.id);
+  expect(stored).toEqual(row);
+});

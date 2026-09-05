@@ -38,14 +38,14 @@ export default function ComparisonResearch() {
       setMessage('Research queued in CoS. Follow the run there, then reload comparison data after it completes.');
     }).catch(err => setError(err.message)).finally(() => setBusy(false));
   };
-  return <section className="bg-port-card border border-port-border rounded p-4 space-y-3" aria-label="Refresh model research">
-    <h3 className="font-semibold">Refresh model research with CoS</h3>
-    <p className="text-sm text-port-text-muted">Choose a browsing-capable provider and model. Running research uses that provider’s quota or API budget. The task checks current sources and configured model gaps; it never runs model benchmarks. New providers and local models are considered on the next research run.</p>
+  return <section className="bg-port-card border border-port-border rounded-2xl p-5 space-y-4" aria-label="Refresh model research">
+    <h3 className="font-semibold text-lg">Refresh model research with CoS</h3>
+    <p className="text-sm text-port-text-muted leading-relaxed">Choose a browsing-capable provider and model. Running research uses that provider’s quota or API budget. The task checks current sources and configured model gaps; it never runs model benchmarks. New providers and local models are considered on the next research run.</p>
     <div className="flex flex-wrap gap-3 items-end">
-      <label htmlFor="research-provider">Research provider<br /><select id="research-provider" className="bg-port-bg border border-port-border rounded p-2" value={draft.providerId} disabled={busy || !saved} onChange={e => setDraft({ providerId: e.target.value, model: '' })}><option value="">Choose provider</option>{providers.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-      <label htmlFor="research-model">Research model<br /><select id="research-model" className="bg-port-bg border border-port-border rounded p-2" value={draft.model} disabled={busy || !saved} onChange={e => setDraft(previous => ({ ...previous, model: e.target.value }))}><option value="">Choose model</option>{provider?.models?.map(model => <option key={model} value={model}>{model}</option>)}</select></label>
-      <button className="px-3 py-2 rounded border border-port-border disabled:opacity-50" onClick={save} disabled={busy || !valid || (!dirty && saved?.enabled)}>Save research settings</button>
-      <button className="px-3 py-2 rounded bg-port-accent text-white disabled:opacity-50" onClick={run} disabled={busy || dirty || !valid || !saved?.enabled}>Run research now</button>
+      <label className="text-sm min-w-0 max-w-full" htmlFor="research-provider">Research provider<br /><select id="research-provider" className="bg-port-bg border border-port-border rounded-lg p-2.5 mt-2 max-w-full" value={draft.providerId} disabled={busy || !saved} onChange={e => setDraft({ providerId: e.target.value, model: '' })}><option value="">Choose provider</option>{providers.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <label className="text-sm min-w-0 max-w-full" htmlFor="research-model">Research model<br /><select id="research-model" className="bg-port-bg border border-port-border rounded-lg p-2.5 mt-2 max-w-full" value={draft.model} disabled={busy || !saved} onChange={e => setDraft(previous => ({ ...previous, model: e.target.value }))}><option value="">Choose model</option>{provider?.models?.map(model => <option key={model} value={model}>{model}</option>)}</select></label>
+      <button className="px-4 py-2.5 text-sm rounded-lg border border-port-border disabled:opacity-50" onClick={save} disabled={busy || !valid || (!dirty && saved?.enabled)}>Save research settings</button>
+      <button className="px-4 py-2.5 text-sm rounded-lg bg-port-accent text-port-on-accent disabled:opacity-50" onClick={run} disabled={busy || dirty || !valid || !saved?.enabled}>Run research now</button>
     </div>
     <p className="text-sm">Cadence: {saved?.type === 'cron' ? saved.cronExpression : 'On demand'}. <Link className="text-port-accent underline" to="/cos/schedule">Edit cadence, effort, prompt and view status in CoS Schedule</Link>.</p>
     {message && <p role="status">{message}</p>}{error && <p role="alert" className="text-port-error">{error}</p>}

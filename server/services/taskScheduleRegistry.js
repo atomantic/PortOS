@@ -215,6 +215,12 @@ export function requiresManagedAppTarget(taskType) {
   return MANAGED_APP_TARGET_TASK_TYPES.has(taskType);
 }
 
+// Unlike repo-sync, model research has no meaningful per-app variant: its
+// catalog and API live in the PortOS install, never another app's checkout.
+export function requiresInstallWideTarget(taskType) {
+  return taskType === 'model-comparison-refresh';
+}
+
 // The pr-reviewer pipeline is a trust boundary, not three interchangeable
 // prompt tabs. Keep the shipped role/profile pairing in one place so the
 // scheduler, migration, generator, and UI can all recognize the same stages.

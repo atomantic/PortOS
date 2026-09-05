@@ -1960,6 +1960,17 @@ describe('taskSchedule', () => {
       loadState.mockResolvedValue({ config: { improvementEnabled: true } })
     })
 
+    it('keeps model research global for both scheduled and manual dispatch', async () => {
+      mockSchedule({ tasks: { 'model-comparison-refresh': { type: INTERVAL_TYPES.CRON, cronExpression: '* * * * *', enabled: true } } })
+      parseCronToNextRun.mockReturnValue(new Date(Date.now() - 1000))
+
+      expect(await shouldRunTask('model-comparison-refresh', 'app-1')).toMatchObject({ shouldRun: false, reason: 'requires-install-wide-target' })
+      expect((await triggerOnDemandTask('model-comparison-refresh', 'app-1')).error).toMatch(/requires an install-wide target/i)
+      expect((await getOnDemandRequests()).filter(r => r.taskType === 'model-comparison-refresh')).toHaveLength(0)
+      expect((await shouldRunTask('model-comparison-refresh')).shouldRun).toBe(true)
+      expect(await triggerOnDemandTask('model-comparison-refresh')).toMatchObject({ taskType: 'model-comparison-refresh', appId: null })
+    })
+
     it('should reject and not persist when master Improve is disabled', async () => {
       mockSchedule({
         tasks: { 'feature-ideas': { type: 'weekly', enabled: true } }
