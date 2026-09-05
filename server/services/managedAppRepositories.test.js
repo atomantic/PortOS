@@ -6,6 +6,7 @@ const mock = vi.hoisted(() => ({
   readRemoteUrl: vi.fn(),
   execGit: vi.fn(),
   fetchOrigin: vi.fn(),
+  isFetchFresh: vi.fn(),
   resolveForgeForRepo: vi.fn(),
   execGh: vi.fn(),
 }));
@@ -22,6 +23,7 @@ vi.mock('../lib/gitRemote.js', async (importOriginal) => ({
 vi.mock('./git.js', () => ({
   execGitSafe: mock.execGit,
   fetchOrigin: mock.fetchOrigin,
+  isFetchFresh: mock.isFetchFresh,
   resolveForgeForRepo: mock.resolveForgeForRepo,
 }));
 vi.mock('./github.js', () => ({ execGh: mock.execGh }));
@@ -54,6 +56,7 @@ describe('managed app repository topology', () => {
     mock.getOriginInfo.mockResolvedValue(forkOrigin);
     mock.readRemoteUrl.mockResolvedValue(null);
     mock.fetchOrigin.mockResolvedValue(true);
+    mock.isFetchFresh.mockReturnValue(false);
     mock.resolveForgeForRepo.mockResolvedValue({ env: { GH_TOKEN: 'test-token' } });
     mock.execGh.mockImplementation(async (args) => {
       if (args[1] === 'repos/example-owner/example-app') {
@@ -128,6 +131,19 @@ describe('managed app repository topology', () => {
       expect.objectContaining({ cwd: REPO }),
     );
     expect(JSON.stringify(result)).not.toContain(REPO);
+    expect(mock.fetchOrigin).toHaveBeenCalledWith(REPO);
+  });
+
+  // The Eidoverse page runs this read on every visit, so an ungated fetch would
+  // be a network hop per mount for refs that were just refreshed.
+  it('skips the network fetch for refs already refreshed inside the freshness window', async () => {
+    mock.isFetchFresh.mockReturnValue(true);
+
+    const result = await getManagedAppRepositorySources(app);
+
+    expect(mock.fetchOrigin).not.toHaveBeenCalled();
+    expect(result.sources[0]).toMatchObject({ remoteFresh: true, remoteError: null });
+    expect(result.updateAvailable).toBe(true);
   });
 
   it('resolves upstream by default while honoring an explicit origin choice', async () => {

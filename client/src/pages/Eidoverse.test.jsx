@@ -6,6 +6,7 @@ import { MemoryRouter } from 'react-router';
 
 vi.mock('../services/api', () => ({
   getApp: vi.fn(),
+  getAppRepositorySources: vi.fn(),
   getEidoverseWorldProjectionStatus: vi.fn(),
   getEidoverseWorldStatus: vi.fn(),
   getInstanceFeatures: vi.fn(),
@@ -119,6 +120,7 @@ describe('Eidoverse hosted page', () => {
     vi.clearAllMocks();
     api.getInstanceFeatures.mockResolvedValue(featureResponse());
     api.getApp.mockResolvedValue({ id: setup.appId, overallStatus: 'online' });
+    api.getAppRepositorySources.mockResolvedValue({ updateAvailable: false, sources: [] });
     api.startApp.mockResolvedValue({ success: true, results: {} });
     api.startEidoverseHost.mockResolvedValue({ running: true, protocol: 'http', port: 5563 });
     api.getEidoverseWorldStatus.mockResolvedValue(worldResponse);
@@ -300,6 +302,32 @@ describe('Eidoverse hosted page', () => {
     await screen.findByTitle('Eidoverse Worlds');
     expect(api.startApp).toHaveBeenCalledWith('app-eidoverse', { silent: true });
     expect(api.startEidoverseHost).toHaveBeenCalledAfter(api.startApp);
+  });
+
+  it('raises the out-of-date advisory here, where a user living in the world will see it', async () => {
+    api.getAppRepositorySources.mockResolvedValue({
+      updateAvailable: true,
+      sources: [{
+        id: 'primary',
+        label: 'Eidoverse Worlds',
+        origin: { hasOrigin: true, isFork: false, isUpstream: true, head: 'a'.repeat(40) },
+        localVsOrigin: { ahead: 0, behind: 2, state: 'behind' },
+      }],
+    });
+    renderPage();
+
+    await screen.findByTitle('Eidoverse Worlds');
+    expect(api.getAppRepositorySources).toHaveBeenCalledWith('app-eidoverse', { silent: true });
+    expect(await screen.findByText(/Eidoverse Worlds is 2 commits behind its origin/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Update Eidoverse/ })).toBeInTheDocument();
+  });
+
+  it('never checks freshness for an install that has no Eidoverse yet', async () => {
+    api.getInstanceFeatures.mockResolvedValue(featureResponse({ installed: false, appId: 'app-eidoverse' }));
+    renderPage();
+
+    await screen.findByRole('link', { name: 'Open Features' });
+    expect(api.getAppRepositorySources).not.toHaveBeenCalled();
   });
 
   it('sends an uninstalled user to Features', async () => {

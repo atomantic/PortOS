@@ -12,6 +12,7 @@ import PageHeader from '../components/PageHeader';
 import BrailleSpinner from '../components/BrailleSpinner';
 import useEidoverseFrame from '../hooks/useEidoverseFrame';
 import EidoverseWorldDrawer from '../components/eidoverse/EidoverseWorldDrawer';
+import EidoverseUpdateBanner from '../components/eidoverse/EidoverseUpdateBanner';
 import {
   EIDOVERSE_SOURCE_KIND as SOURCE_KIND,
   eidoverseResetAssetSlotsForDistrict,
@@ -203,6 +204,9 @@ export default function Eidoverse() {
     const isCurrent = () => requestGeneration.current === generation;
     const updatePhase = (next) => { if (isCurrent()) setPhase(next); };
 
+    // `appId` deliberately survives this reset: an update dispatched from
+    // <EidoverseUpdateBanner> re-prepares the page on completion, and clearing
+    // the id here would unmount that banner mid-report and drop its re-check.
     setPhase('loading');
     setError('');
     setHostUrl('');
@@ -523,6 +527,10 @@ export default function Eidoverse() {
         actions={actions}
         className="bg-port-bg"
       />
+
+      {appId && phase !== 'setup' && (
+        <EidoverseUpdateBanner appId={appId} onUpdated={prepare} />
+      )}
 
       {phase === 'ready' && (
         <main className="relative min-h-0 flex-1 overflow-hidden bg-port-bg">

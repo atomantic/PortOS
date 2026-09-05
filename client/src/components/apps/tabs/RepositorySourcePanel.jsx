@@ -9,6 +9,12 @@ import {
   Server,
 } from 'lucide-react';
 import * as api from '../../../services/api';
+import {
+  countText,
+  primaryRepositorySource,
+  repositoryForkDiverged,
+  repositoryForkNeedsSync,
+} from '../../../lib/managedAppSources';
 import BrailleSpinner from '../../BrailleSpinner';
 import Modal from '../../ui/Modal';
 import toast from '../../ui/Toast';
@@ -56,8 +62,6 @@ function sourceStatus(source) {
   }
   return { tone: 'current', label: 'Current' };
 }
-
-const countText = (count, noun) => `${count} ${noun}${count === 1 ? '' : 's'}`;
 
 function RepositoryCard({ source }) {
   const status = sourceStatus(source);
@@ -198,12 +202,10 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
   }, [load, refreshKey]);
 
   const sources = status?.sources || [];
-  const primary = sources.find((source) => source.id === 'primary') || sources[0] || null;
+  const primary = primaryRepositorySource(sources);
   const companions = sources.filter((source) => source !== primary);
-  const forkDiverged = primary?.forkVsUpstream?.state === 'diverged';
-  const forkNeedsSync = primary?.origin?.isFork
-    && (primary.forkVsUpstream?.behind || 0) > 0
-    && !forkDiverged;
+  const forkDiverged = repositoryForkDiverged(primary);
+  const forkNeedsSync = repositoryForkNeedsSync(primary);
   const remoteUnknown = sources.some((source) => (
     !source.remoteFresh
     || (source.origin?.hasOrigin && source.origin.isUpstream == null)

@@ -143,6 +143,7 @@ export * from './editorialHealth.js';
 export * from './episodeSceneImport.js';
 export * from './lookaheadTransport.js';
 export * from './lossSparkline.js';
+export * from './managedAppSources.js';
 export * from './metronome.js';
 export * from './mindThinkingPresets.js';
 export * from './navFeatures.js';
