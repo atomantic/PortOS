@@ -626,3 +626,19 @@ describe('POST /api/update/sync-fork', () => {
     expect(updateChecker.getRemoteInfo).not.toHaveBeenCalled();
   });
 });
+
+describe('POST /api/update/check', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('marks the check manual so it bypasses the unattended scheduler\'s gh backoff', async () => {
+    // A user who explicitly clicks "check now" must get a real attempt, not a
+    // silent rejection from a cooldown the background 30-min poller armed on
+    // its own after an earlier unattended failure.
+    updateChecker.checkForUpdate.mockResolvedValue(baseStatus());
+    const res = await request(makeApp()).post('/api/update/check').send({});
+    expect(res.status).toBe(200);
+    expect(updateChecker.checkForUpdate).toHaveBeenCalledWith({ manual: true });
+  });
+});
