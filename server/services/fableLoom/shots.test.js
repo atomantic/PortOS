@@ -31,6 +31,25 @@ async function setup() {
   return { loom, ep, groups };
 }
 describe('timed shot autopilot', () => {
+  it('grounds both planning and review in existing shot geography and camera context', async () => {
+    const { loom, ep, groups } = await setup();
+    const visual = {
+      imagePrompt: 'A blue gate at screen left, courier beside a brass lamp at screen right.',
+      videoPrompt: 'The courier turns toward the blue gate; the lamp stays on the desk.',
+      cameraMovement: 'static',
+      shot: { dramaticSceneId: 'example-scene', dramaticSceneTitle: 'At the gate', durationSeconds: 8, framing: 'Wide from the courtyard' },
+    };
+    const updated = await updateNode(loom.id, ep, groups[0].sceneId, visual);
+    runStagedLLM.mockResolvedValueOnce({ content: { groups } }).mockResolvedValueOnce({ content: { summary: 'Connected shots.', risks: [] } });
+    await runEpisodeShotAutopilot(loom.id, ep);
+    for (const [, variables] of runStagedLLM.mock.calls) {
+      const source = JSON.parse(variables.source);
+      expect(source.startNodeId).toBe(updated.episodes[0].startNodeId);
+      expect(source.scenes[0]).toMatchObject(visual);
+      expect(source.scenes[0].transitions.map(t => t.targetNodeId)).toEqual(groups.slice(1).map(g => g.sceneId));
+    }
+    expect((await getLoom(loom.id)).episodes).toEqual(updated.episodes);
+  });
   it('applies a reviewed split with preserved choices, quiet loop and untouched later episode', async () => {
     const { loom, ep, groups } = await setup();
     groups[0].shots[0].durationSeconds = 9;

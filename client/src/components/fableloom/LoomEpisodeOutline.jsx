@@ -10,6 +10,7 @@
 
 import { useMemo } from 'react';
 import { ArrowRight, ChevronRight, Flag, Play, Waypoints } from 'lucide-react';
+import LoomReferenceReview from './LoomReferenceReview';
 import { sceneProseClass } from './fieldStyles';
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
@@ -87,6 +88,7 @@ function SceneBlock({ node, number, episode, format, byId, onSelectNode }) {
 
         <div className="space-y-3 border-t border-port-border p-4">
           {onSelectNode && <button type="button" className="min-h-11 text-sm text-port-accent hover:underline" aria-label={`Edit ${node.shot ? 'shot' : 'scene'}: ${node.title || 'Untitled scene'}`} onClick={() => onSelectNode(node.id)}>Edit {node.shot ? 'shot' : 'scene'}</button>}
+          <LoomReferenceReview episode={episode} node={node} onSelectNode={onSelectNode} />
           {node.prose?.trim() ? (
             <div className={`${sceneProseClass(format)} text-port-text`}>
               {node.prose}

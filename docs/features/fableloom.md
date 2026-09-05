@@ -24,7 +24,8 @@ then drafts and reviews each episode outline in order with bounded retries.
 Plan edits can synchronize existing episode synopses while preserving episode
 titles and scene graphs. Advice for later prose expansion does not force another
 outline rewrite. The first episode also receives a cold opening review: only its
-first three beats are supplied, without synopsis, canon or later payoffs. Missing
+first three dramatic groups are supplied (or three beats before shot splitting),
+stopping at the first decision, without synopsis, canon or later payoffs. Missing
 immediate motivation, orientation or understandable personal stakes blocks planning
 before the full contextual review. A missing verdict is not approval.
 Each outline scene represents one camera-cut beat, not a complete dramatic scene.
@@ -361,3 +362,18 @@ In the episode outline editor, **Preview shot split** drafts and reviews a camer
 A dramatic scene groups multiple shot nodes. Each shot records its framing and a 5–10 second intended duration. Dialogue is budgeted at 2.2 words per second with 1.5 seconds reserved for pauses/action. The editor shows overflow and production batches refuse oversized timed shots. This is a planning estimate; spoken delivery still needs review. A decision's question is staged before a quiet loop, which can repeat while the viewer chooses. The server preserves the existing branch targets and outcomes when splitting.
 
 Draft visual bindings can select a character image from the gallery. This fixed identity anchor accompanies subsequent shots and branches without changing the Universe's approved identity pack. Locked production continues to require approved canon; selecting a draft reference does not approve it. Draft anchors travel with the FableLoom asset manifest when sharing is enabled.
+
+### Reactor video previews
+
+Reactor FastH3 uses a live SDK session: upload the storyboard image, enqueue one
+shot, play it once, capture its video and native audio, then disconnect. Install
+the pinned SDK with `npm run setup:reactor` (Python 3.11+ and ffmpeg required).
+`REACTOR_PYTHON_PATH` can select an existing SDK environment. Installation is
+explicit; starting PortOS never installs or opens a Reactor session.
+
+Keep preview batches small before authorizing an episode render. Each request
+uses its reference image and a prompt of at most 800 characters; longer prompts
+are rejected rather than silently losing dialogue. Reactor accepts 5.167–14.375
+seconds and snaps durations to its frame grid. Local interactive voice profiles
+are independent of Reactor's generated audio. Cross-request clip chaining is not
+supported because Reactor clip IDs belong to the session that generated them.

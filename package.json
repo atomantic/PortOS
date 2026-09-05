@@ -29,6 +29,7 @@
     "migrations": "node scripts/run-migrations.js",
     "setup": "node scripts/checkNodeVersion.js && node scripts/checkNpmVersion.js && git submodule update --init --recursive && npm install --no-save && npm install --no-save --prefix client && npm install --no-save --prefix server && npm install --no-save --prefix autofixer && node scripts/trusted-rebuilds.js server && node scripts/setup-data.js && node scripts/setup-db.js && node scripts/setup-llm.js && node scripts/setup-browser.js && node scripts/setup-cert.js && node scripts/setup-guide.js",
     "setup:data": "node scripts/setup-data.js",
+    "setup:reactor": "node scripts/setup-reactor.js",
     "setup:db": "node scripts/setup-db.js",
     "setup:db:test": "npm run setup:db:test --prefix server",
     "test:db": "npm run test:db --prefix server",

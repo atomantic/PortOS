@@ -24,7 +24,7 @@ import { resolveCharacterLoras } from '../characterLoraResolver.js';
 import { getSeries } from '../pipeline/series.js';
 import { getLoom } from './records.js';
 
-export const FABLELOOM_VISUAL_COMPILER_VERSION = '1.0.0';
+export const FABLELOOM_VISUAL_COMPILER_VERSION = '1.1.0';
 
 const byId = (list) => new Map((Array.isArray(list) ? list : []).filter((item) => item?.id).map((item) => [item.id, item]));
 const text = (value) => (typeof value === 'string' ? value.trim() : '');
@@ -367,10 +367,17 @@ export async function compileFableLoomVisualRequest({
       ? `Framing constraint: keep ${protagonistName} off-screen. Show the explicitly bound cast (${visibleCast.join(', ')}) in the authored composition. Their close-ups remain visible even while the protagonist speaks off-screen; do not replace them with an empty environment. Do not show ${protagonistName} or a standalone communicator.`
       : `Framing constraint: ${protagonistName}, the canonical protagonist, is speaking through the communicator off-screen. The camera is the remote witness: show the obstacle or environment the protagonist cannot see around a corner, beyond a bend, at a distance, or otherwise outside their sightline. The communicator stays on the protagonist's person and completely out of frame; never use a standalone comms device as the subject. Do not show their face, body, silhouette, or duplicate presence in this storyboard image.`
     : '';
-  const positive = compact([
+  let positive = compact([
     universeStyle && `Universe style: ${universeStyle}`,
     placePrompt, ...characterPrompts, ...objectPrompts,
     protagonistFraming,
+    'Presentation: no subtitles, captions, dialogue lettering, speech balloons, or text overlays. Dialogue is spoken audio only; never draw the script into the image.',
+    node.shot?.framing && `Current camera framing: ${node.shot.framing}`,
+    kind === 'image' && allocation.accepted.some((asset) => asset.role === 'temporal-predecessor') && (
+      node.shot?.dramaticSceneId && node.shot.dramaticSceneId === temporal.node?.shot?.dramaticSceneId
+        ? `Same dramatic scene: use the preceding image as the set continuity reference. Preserve room geometry, window and doorway positions, furniture, props, lighting, wardrobe, character positions and screen direction. Apply the current camera framing with physically plausible parallax; do not redesign the room or copy the previous composition when a new angle is specified. Previous framing: ${temporal.node.shot.framing || 'see reference'}.`
+        : 'The preceding image is temporal context. Preserve recurring identities and props, but follow the current authored location and camera framing; do not copy the previous location across an intentional scene change.'
+    ),
     allocation.accepted.filter((asset) => asset.role === 'character-draft-reference').map((asset) => {
       const character = bindings.boundCharacters.find((binding) => binding.character.id === asset.bindingId)?.character;
       return `Character reference ${asset.filename}: preserve ${character?.name || 'the bound character'} identity, face, hair or fur, clothing and accessories. Use the authored shot for staging; do not copy reference scene events or other figures.`;
@@ -379,9 +386,22 @@ export async function compileFableLoomVisualRequest({
     kind === 'video' && node.shot && `Shot duration: ${node.shot.durationSeconds} seconds. Play only this shot's current script, preserving each named speaker's voice: ${node.prose}`,
     node.visualCanon?.shotNotes && `Shot continuity: ${node.visualCanon.shotNotes}`,
   ]).join('\n\n').slice(0, 8000);
+  if (kind === 'video' && capability.backend === 'reactor') {
+    if (!allocation.accepted.some((asset) => asset.role === 'storyboard-first-frame')) throw new ServerError('Review and approve the current storyboard reference before rendering with Reactor.', { status: 422, code: 'FABLELOOM_REACTOR_REFERENCE_REQUIRED' });
+    positive = compact([
+      'Animate this reference as one continuous shot. Preserve its cast, room, props, lighting and screen direction. No subtitles, captions, speech balloons or text overlays. Dialogue is audio only.',
+      node.shot?.framing,
+      authoredBody || node.videoPrompt,
+      node.prose && `Script: ${node.prose}`,
+      node.visualCanon?.shotNotes,
+      bindings.protagonistPresence === 'offscreen' && `Keep ${protagonistName} off-screen.`,
+    ]).join('\n');
+    if (positive.length > 800) throw new ServerError('Reactor requires a complete shot prompt within 800 characters. Shorten the shot direction or split the dialogue; no render was queued.', { status: 422, code: 'FABLELOOM_REACTOR_PROMPT_TOO_LONG' });
+  }
   const identityAvoid = bindings.boundCharacters.flatMap(({ character }) => character.identityPack?.avoid || []);
   const negativePrompt = mergeNegativePromptTokens([
     authoredNegativePrompt,
+    'subtitles, captions, dialogue lettering, speech balloons, text overlays',
     bindings.protagonistPresence === 'offscreen' ? `visible ${protagonistName}, ${protagonistName} face, ${protagonistName} body, ${protagonistName} silhouette, standalone communicator, comms device close-up, radio prop hero shot` : '',
     universeVisualStyleTokens(universe).avoid,
     identityAvoid,

@@ -1,30 +1,11 @@
-/**
- * Video Gen — Reactor.inc `fast-h3` video generation API provider (#6214).
- *
- * A cloud-only, near-realtime (~1.0x) video backend with native
- * clip-to-clip chaining (`continue_from_clip_id`), unlike the local
- * runtimes or the fal.ai/grok queue backends. Mirrors `videoGen/fal.js`'s
- * job-map/SSE contract (cloud lane, no local child process) so
- * `mediaJobQueue` can dispatch to it the same way.
- *
- * Auth flow: PortOS never hands the caller the raw `REACTOR_API_KEY` — it
- * mints a short-lived, scoped session JWT server-side (`mintReactorToken`,
- * also exposed at `GET /api/video-gen/reactor/token`) and uses that JWT to
- * submit/poll/cancel. Flow: POST the prompt (plus optional
- * `continue_from_clip_id` and a base64-encoded starting frame) to
- * `api.reactor.inc/v1/fast-h3/generate`, poll the returned status URL until
- * COMPLETED, then download the resulting MP4 and hand it to the shared
- * `finalizeGeneratedVideo` helper — same streaming optimization, thumbnail,
- * and history entry as every other video backend.
- */
-
+/** Reactor FastH3 renders one bounded SDK/WebRTC session per job. */
 import { randomUUID } from 'crypto';
-import { readFile, writeFile } from 'fs/promises';
+import { stat, rm } from 'fs/promises';
+import { spawn } from 'child_process';
 import { join } from 'path';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
-import { detectImageFormat } from '../../lib/mimeTypes.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { videoGenEvents } from './events.js';
 import { finalizeGeneratedVideo } from './generateVideoHelpers.js';
@@ -36,22 +17,14 @@ export const REACTOR_MODEL_ID = 'fast-h3';
 export const REACTOR_MAX_PROMPT_LENGTH = 800;
 
 const REACTOR_TOKEN_TIMEOUT_MS = 15_000;
-const REACTOR_SUBMIT_TIMEOUT_MS = 30_000;
-const REACTOR_POLL_TIMEOUT_MS = 15_000;
-const REACTOR_POLL_INTERVAL_MS = 3000;
-const REACTOR_DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000;
-// A cloud render can queue behind other tenants before it starts — generously
-// bounded, same order of magnitude as fal's and grok's render caps.
 const REACTOR_RENDER_TIMEOUT_MS = (() => {
   const n = Number(process.env.REACTOR_VIDEO_TIMEOUT_MS);
   return Number.isFinite(n) && n > 0 ? n : 20 * 60 * 1000;
 })();
 
-// Per-job state — keyed by jobId (cloud lane allows parallel renders). Same
-// client shape as videoGen/fal.js so attachSseClient/broadcastSse work.
+// Per-job state uses the common cloud-lane SSE contract.
 const jobs = new Map();
-// Tracks the reactor.inc request so cancel() can both stop our poll loop and
-// ask reactor.inc to cancel the queued/running render.
+// Cancellation terminates the SDK session process and its remote connection.
 const activeRequests = new Map();
 const activeJobs = new Map();
 
@@ -85,14 +58,14 @@ export async function mintReactorToken(apiKey) {
   }
   const res = await fetchWithTimeout(`${REACTOR_API_BASE}/tokens`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    headers: { 'Reactor-API-Key': apiKey, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      authorization_details: [{ type: `reactor/${REACTOR_MODEL_ID}`, max_sessions: 1 }],
+      authorization_details: [{ type: 'session', resources: { models: { match: [`reactor/${REACTOR_MODEL_ID}`] } }, constraints: { max_sessions: 1 } }],
     }),
   }, REACTOR_TOKEN_TIMEOUT_MS);
   const payload = await res.json().catch(() => null);
   if (!res.ok || !payload?.jwt) {
-    const reason = payload?.detail ? JSON.stringify(payload.detail) : `HTTP ${res.status}`;
+    const reason = `HTTP ${res.status}`;
     throw new ServerError(`reactor.inc token minting failed: ${reason}`, { status: 502, code: 'REACTOR_TOKEN_FAILED' });
   }
   return { jwt: payload.jwt, expiresAt: payload.expires_at || null };
@@ -105,12 +78,7 @@ export const cancel = (jobId) => {
   const entry = activeRequests.get(jobId);
   if (!entry) return false;
   entry.aborted = true;
-  if (entry.cancelUrl && entry.jwt) {
-    fetchWithTimeout(entry.cancelUrl, {
-      method: 'PUT',
-      headers: { Authorization: `Bearer ${entry.jwt}` },
-    }, REACTOR_POLL_TIMEOUT_MS).catch(() => {});
-  }
+  entry.stop?.('Canceled');
   return true;
 };
 
@@ -121,45 +89,82 @@ export const cancelAll = () => {
   return true;
 };
 
-async function toDataUri(imagePath) {
-  const buf = await readFile(imagePath);
-  const detected = detectImageFormat(buf);
-  const mime = detected?.mime || 'image/png';
-  return `data:${mime};base64,${buf.toString('base64')}`;
-}
-
-function buildRequestBody({ prompt, continueFromClipId, startingFrameDataUri, seconds, seed }) {
-  const body = { prompt: prompt.trim().slice(0, REACTOR_MAX_PROMPT_LENGTH) };
-  if (continueFromClipId) body.continue_from_clip_id = continueFromClipId;
-  if (startingFrameDataUri) body.starting_frame = startingFrameDataUri;
-  if (seconds) body.seconds = Number(seconds);
-  if (seed !== undefined && seed !== null && seed !== '') body.seed = Number(seed);
-  return body;
-}
-
-async function submitReactorJob({ jwt, body }) {
-  const res = await fetchWithTimeout(`${REACTOR_API_BASE}/v1/${REACTOR_MODEL_ID}/generate`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${jwt}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  }, REACTOR_SUBMIT_TIMEOUT_MS);
-  const payload = await res.json().catch(() => null);
-  if (!res.ok || !payload?.clip_id) {
-    const reason = payload?.detail ? JSON.stringify(payload.detail) : `HTTP ${res.status}`;
-    throw new ServerError(`reactor.inc rejected the request: ${reason}`, { status: 502, code: 'REACTOR_SUBMIT_FAILED' });
+export function validateReactorRequest({ prompt, continueFromClipId, seconds = 6, seed }) {
+  if (typeof prompt !== 'string' || !prompt.trim() || prompt.trim().length > REACTOR_MAX_PROMPT_LENGTH) {
+    throw new ServerError('Reactor prompts must contain 1–800 characters; shorten the shot prompt before rendering', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  return payload;
+  if (continueFromClipId) throw new ServerError('Reactor clip continuity requires the same active session; use a starting image for independent renders', { status: 400, code: 'REACTOR_SESSION_CONTINUITY_UNSUPPORTED' });
+  if (!Number.isFinite(Number(seconds)) || Number(seconds) < 5.167 || Number(seconds) > 14.375) {
+    throw new ServerError('Reactor duration must be between 5.167 and 14.375 seconds', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (seed != null && seed !== '' && (!Number.isSafeInteger(Number(seed)) || Number(seed) < 0)) {
+    throw new ServerError('Reactor seed must be a non-negative integer', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  return { prompt: prompt.trim(), seconds: Number(seconds), ...(seed != null && seed !== '' ? { seed: Number(seed) } : {}) };
 }
 
-async function pollReactorStatus({ statusUrl, jwt }) {
-  const res = await fetchWithTimeout(statusUrl, {
-    headers: { Authorization: `Bearer ${jwt}` },
-  }, REACTOR_POLL_TIMEOUT_MS);
-  if (res.status === 401) {
-    throw new ServerError('reactor.inc session expired', { status: 401, code: 'REACTOR_TOKEN_EXPIRED' });
-  }
-  if (!res.ok) throw new ServerError(`reactor.inc status check failed: HTTP ${res.status}`, { status: 502, code: 'REACTOR_STATUS_FAILED' });
-  return res.json();
+function captureClip(entry, input, pythonPath, job, jobId) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(pythonPath, [join(PATHS.root, 'scripts', 'reactor-render.py')], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    let buffer = '';
+    let outputBytes = 0;
+    let complete = null;
+    let failure = null;
+    let killTimer;
+    let stopping = false;
+    const stop = (reason) => {
+      if (stopping) return;
+      stopping = true;
+      failure ||= new Error(reason);
+      child.kill('SIGTERM');
+      killTimer = setTimeout(() => child.kill('SIGKILL'), 5000);
+      killTimer.unref?.();
+    };
+    entry.stop = stop;
+    const timeout = setTimeout(() => stop('Reactor render timed out'), REACTOR_RENDER_TIMEOUT_MS);
+    timeout.unref?.();
+    const countOutput = (chunk) => {
+      outputBytes += Buffer.byteLength(chunk);
+      if (outputBytes > 1024 * 1024) stop('Reactor renderer exceeded its output limit');
+    };
+    child.stdout.on('data', (chunk) => {
+      countOutput(chunk);
+      if (failure) return;
+      buffer += chunk.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const message = JSON.parse(line);
+          if (message.type === 'complete' && typeof message.clipId === 'string' && Number.isFinite(message.seconds)) complete = message;
+          if (message.type === 'error' && /^[a-z]+$/.test(message.phase) && /^[A-Za-z]+$/.test(message.errorType)) failure = new Error(`Reactor ${message.phase} failed (${message.errorType})`);
+          if (message.type === 'status') {
+            if (typeof message.message === 'string' && /^Captured [0-9.]+ of [0-9.]+ frames; audio=(True|False)$/.test(message.message)) console.log(`🎬 ${message.message}`);
+            broadcastSse(job, { type: 'status', message: 'Reactor session rendering…' });
+            videoGenEvents.emit('activity', { generationId: jobId });
+          }
+        } catch {
+          stop('Reactor renderer returned malformed output');
+        }
+      }
+    });
+    // SDK diagnostics can contain credentials or local paths. Bound and discard them.
+    child.stderr.on('data', countOutput);
+    child.stdin.on('error', () => stop('Could not send request to Reactor renderer'));
+    child.on('error', () => {
+      failure ||= new Error('Could not start Reactor renderer; run the Reactor runtime setup');
+    });
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      clearTimeout(killTimer);
+      entry.stop = null;
+      if (failure || code !== 0 || !complete) reject(failure || new Error('Reactor renderer failed before completing a clip; check the installed SDK runtime'));
+      else resolve(complete);
+    });
+    child.stdin.end(JSON.stringify(input));
+    if (entry.aborted) stop('Canceled');
+  });
 }
 
 export async function generateVideo({
@@ -167,6 +172,10 @@ export async function generateVideo({
   continueFromClipId, seconds, seed,
   sourceImagePath = null, jobId: providedJobId = null,
 }) {
+  const request = validateReactorRequest({ prompt, continueFromClipId, seconds, seed });
+  const pythonPath = process.env.REACTOR_PYTHON_PATH || join(PATHS.data, 'venvs', 'reactor', ...(process.platform === 'win32' ? ['Scripts', 'python.exe'] : ['bin', 'python']));
+  const runtime = await stat(pythonPath).catch(() => null);
+  if (!runtime?.isFile()) { throw new ServerError('Reactor runtime is missing. Run npm run setup:reactor, or set REACTOR_PYTHON_PATH', { status: 400, code: 'REACTOR_RUNTIME_MISSING' }); }
   await ensureDir(PATHS.videos);
   const renderStartedAtMs = Date.now();
 
@@ -206,7 +215,7 @@ export async function generateVideo({
   broadcastSse(job, { type: 'status', message: 'Minting reactor.inc session…' });
 
   runReactorVideo(job, jobId, {
-    apiKey, prompt, continueFromClipId, seconds, seed, sourceImagePath, outputPath, filename, meta,
+    apiKey, ...request, pythonPath, sourceImagePath, outputPath, filename, meta,
   }).catch((err) => {
     console.log(`❌ reactor video run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
   });
@@ -219,76 +228,26 @@ export async function generateVideo({
 }
 
 async function runReactorVideo(job, jobId, {
-  apiKey, prompt, continueFromClipId, seconds, seed, sourceImagePath, outputPath, filename, meta,
+  apiKey, prompt, seconds, seed, pythonPath, sourceImagePath, outputPath, filename, meta,
 }) {
-  const entry = { jwt: null, aborted: false, cancelUrl: null };
+  const entry = { aborted: false, stop: null };
   activeRequests.set(jobId, entry);
-  const deadline = Date.now() + REACTOR_RENDER_TIMEOUT_MS;
   try {
-    let { jwt } = await mintReactorToken(apiKey);
-    entry.jwt = jwt;
+    const { jwt } = await mintReactorToken(apiKey);
     if (entry.aborted) return finalizeCanceled(job, jobId);
-
-    const startingFrameDataUri = sourceImagePath ? await toDataUri(sourceImagePath) : null;
-    const body = buildRequestBody({
-      prompt, continueFromClipId, startingFrameDataUri, seconds, seed,
-    });
-    broadcastSse(job, { type: 'status', message: 'Submitting to reactor.inc…' });
-    const submitted = await submitReactorJob({ jwt, body });
-    entry.cancelUrl = submitted.cancel_url || `${REACTOR_API_BASE}/v1/${REACTOR_MODEL_ID}/clips/${submitted.clip_id}/cancel`;
-    const statusUrl = submitted.status_url || `${REACTOR_API_BASE}/v1/${REACTOR_MODEL_ID}/clips/${submitted.clip_id}`;
-
-    while (Date.now() < deadline) {
-      if (entry.aborted) return finalizeCanceled(job, jobId);
-      videoGenEvents.emit('activity', { generationId: jobId });
-      // A 20-minute render can outlive a short-lived session JWT — re-mint
-      // once and retry rather than failing a render that's still in flight.
-      let status;
-      try {
-        status = await pollReactorStatus({ statusUrl, jwt });
-      } catch (err) {
-        if (err?.code !== 'REACTOR_TOKEN_EXPIRED') throw err;
-        ({ jwt } = await mintReactorToken(apiKey));
-        entry.jwt = jwt;
-        status = await pollReactorStatus({ statusUrl, jwt });
-      }
-      if (status.status === 'completed') {
-        const videoUrl = status.video_url || status.output?.video_url;
-        if (!videoUrl) {
-          return finalizeError(job, jobId, 'reactor.inc completed but returned no video URL');
-        }
-        broadcastSse(job, { type: 'status', message: 'Downloading video…' });
-        const videoRes = await fetchWithTimeout(videoUrl, {}, REACTOR_DOWNLOAD_TIMEOUT_MS);
-        if (!videoRes.ok) {
-          return finalizeError(job, jobId, `reactor.inc video download failed: HTTP ${videoRes.status}`);
-        }
-        const buffer = Buffer.from(await videoRes.arrayBuffer());
-        await writeFile(outputPath, buffer);
-
-        activeRequests.delete(jobId);
-        activeJobs.delete(jobId);
-        await finalizeGeneratedVideo({
-          job,
-          jobId,
-          outputPath,
-          filename,
-          meta: { ...meta, clipId: status.clip_id || null },
-          actualSeed: seed ?? null,
-          mutateHistory: mutateVideoHistory,
-        });
-        closeJobAfterDelay(jobs, jobId);
-        return;
-      }
-      if (status.status === 'failed') {
-        return finalizeError(job, jobId, `reactor.inc render failed: ${status.error || 'unknown error'}`);
-      }
-      broadcastSse(job, { type: 'status', message: status.status === 'processing' ? 'Rendering…' : 'Queued…' });
-      await new Promise((r) => setTimeout(r, REACTOR_POLL_INTERVAL_MS));
-    }
+    const result = await captureClip(entry, { jwt, prompt, seconds, seed, sourceImagePath, outputPath }, pythonPath, job, jobId);
     if (entry.aborted) return finalizeCanceled(job, jobId);
-    return finalizeError(job, jobId, `reactor.inc did not finish within ${Math.round(REACTOR_RENDER_TIMEOUT_MS / 1000)}s`);
+    const output = await stat(outputPath).catch(() => null);
+    if (!output?.isFile() || !output.size) throw new Error('Reactor completed without a playable output file');
+    await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta: { ...meta, clipId: result.clipId, seconds: result.seconds }, actualSeed: seed ?? null, mutateHistory: mutateVideoHistory });
+    closeJobAfterDelay(jobs, jobId);
   } catch (err) {
-    finalizeError(job, jobId, `reactor.inc video generation failed: ${err?.message || err}`);
+    await rm(outputPath, { force: true }).catch(() => {});
+    finalizeError(job, jobId, entry.aborted ? 'Canceled' : `Reactor video generation failed: ${err?.message || 'unknown error'}`, { force: true });
+  } finally {
+    if (entry.aborted) await rm(outputPath, { force: true }).catch(() => {});
+    activeRequests.delete(jobId);
+    activeJobs.delete(jobId);
   }
 }
 
@@ -306,7 +265,4 @@ const finalizeError = (job, jobId, reason, { force = false } = {}) => {
 };
 
 // Test-only handles.
-export const _internals = {
-  buildRequestBody,
-  toDataUri,
-};
+export const _internals = { validateRequest: validateReactorRequest };

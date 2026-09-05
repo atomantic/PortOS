@@ -86,7 +86,14 @@ export async function runEpisodeShotAutopilot(id, episodeId, { providerId, model
   const status = operationId ? startAIOp({ op: 'fableloom-shots', label: 'Planning timed shots', operationId, localOnly: true, silent: true }) : null;
   const universe = loom.universeId ? await getUniverse(loom.universeId) : null;
   const cast = (universe?.characters || []).map(({ id, name, physicalDescription }) => ({ id, name, physicalDescription }));
-  const source = JSON.stringify({ cast, synopsis: episode.synopsis, scenes: episode.nodes.map((node) => ({ id: node.id, title: node.title, prose: node.prose, playbackMode: node.playbackMode, protagonistPresence: node.protagonistPresence, visibleCharacterIds: (node.visualCanon?.characterAppearances || []).map((appearance) => appearance.characterId), challengePhase: node.challengePhase, transitions: node.transitions.map(({ targetNodeId, intent }) => ({ targetNodeId, intent })) })) });
+  const source = JSON.stringify({ cast, synopsis: episode.synopsis, startNodeId: episode.startNodeId, scenes: episode.nodes.map((node) => ({
+    id: node.id, title: node.title, prose: node.prose, playbackMode: node.playbackMode,
+    shot: node.shot, imagePrompt: node.imagePrompt, videoPrompt: node.videoPrompt, cameraMovement: node.cameraMovement,
+    referenceImage: node.image, visualCanon: node.visualCanon,
+    protagonistPresence: node.protagonistPresence,
+    visibleCharacterIds: (node.visualCanon?.characterAppearances || []).map((appearance) => appearance.characterId),
+    challengePhase: node.challengePhase, transitions: node.transitions.map(({ targetNodeId, intent }) => ({ targetNodeId, intent })),
+  })) });
   const route = { returnsJson: true, ...(providerId ? { providerOverride: providerId } : {}), ...(model ? { modelOverride: model } : {}), ...(effort ? { effortOverride: effort } : {}) };
   const execute = (stage, variables) => runStagedLLM(stage, variables, { ...route, source: stage,
     onRunCreated: (runId) => status?.update('running', 'Planning and checking short shots…', { runId }),

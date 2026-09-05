@@ -28,6 +28,7 @@ import {
 import { fieldClass, labelClass, sceneFieldClass } from './fieldStyles';
 import { isTeleplayFormat } from './loomFormats';
 import LoomSceneMedia from './LoomSceneMedia';
+import LoomReferenceReview from './LoomReferenceReview';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import { FABLELOOM_CAMERA_MOVEMENTS } from '../../../../server/lib/fableLoomCameraMovements.js';
 import {
@@ -705,6 +706,7 @@ export default function LoomNodeEditor({
         </div>
       </div>
 
+      <LoomReferenceReview episode={episode} node={{ ...node, shot: form.shot, visualCanon: form.visualCanon }} />
       <div>
         <span className="mb-1 block text-xs font-medium text-port-text-muted">Scene media</span>
         <LoomSceneMedia
