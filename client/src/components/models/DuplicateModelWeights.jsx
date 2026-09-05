@@ -18,14 +18,22 @@ export default function DuplicateModelWeights({ duplicates, locked, onRefresh })
     busyRef.current = true;
     setBusy(true);
     const pairs = pending.map(({ sourcePath, targetPath }) => ({ sourcePath, targetPath }));
-    const outcome = await rectifyModelDuplicates({ pairs, mode: 'hardlink' }, { silent: true })
-      .then((value) => ({ value }), (error) => ({ error }));
-    setPending(null);
-    if (outcome.error) toast.error(outcome.error.message || 'Could not link model weights');
-    else {
-      setCompleted((previous) => new Set([...previous, ...pairs.map((pair) => pair.targetPath)]));
-      toast.success(`Linked model weights · ${formatBytes(outcome.value.reclaimedBytes)} reclaimed`);
+    let reclaimedBytes = 0;
+    let failure = null;
+    for (let offset = 0; offset < pairs.length; offset += 200) {
+      const batch = pairs.slice(offset, offset + 200);
+      const outcome = await rectifyModelDuplicates({ pairs: batch, mode: 'hardlink' }, { silent: true })
+        .then((value) => ({ value }), (error) => ({ error }));
+      if (outcome.error) {
+        failure = outcome.error;
+        break;
+      }
+      reclaimedBytes += outcome.value.reclaimedBytes;
+      setCompleted((previous) => new Set([...previous, ...batch.map((pair) => pair.targetPath)]));
     }
+    setPending(null);
+    if (failure) toast.error(failure.message || 'Could not link model weights');
+    else toast.success(`Linked model weights · ${formatBytes(reclaimedBytes)} reclaimed`);
     // Refresh even on failure: a batch may have completed earlier replacements.
     await onRefresh();
     busyRef.current = false;

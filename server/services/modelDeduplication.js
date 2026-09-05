@@ -85,6 +85,12 @@ export async function scanModelDuplicates({ roots } = {}) {
   if (!roots) return { pinokioDetected: false, items: [], totalReclaimableBytes: 0 };
   const local = await inventory(roots.local);
   const external = await inventory(roots.external);
+  const candidates = new Map();
+  for (const file of local) {
+    const key = `${file.name}:${file.info.size}`;
+    if (!candidates.has(key)) candidates.set(key, []);
+    candidates.get(key).push(file);
+  }
   const hashes = new Map();
   const hash = (file) => {
     const key = identity(file.info);
@@ -95,8 +101,7 @@ export async function scanModelDuplicates({ roots } = {}) {
   const seen = new Set();
   for (const target of external) {
     if (seen.has(target.real)) continue;
-    for (const source of local) {
-      if (source.info.size !== target.info.size || source.name !== target.name) continue;
+    for (const source of candidates.get(`${target.name}:${target.info.size}`) || []) {
       const alreadyLinked = identity(source.info) === identity(target.info);
       if (!alreadyLinked && await hash(source) !== await hash(target)) continue;
       // A target with other hardlink names cannot release blocks by replacing
