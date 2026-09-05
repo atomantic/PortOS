@@ -13,6 +13,7 @@ import { randomUUID } from 'crypto';
 import { mkdir, readFile, readdir, stat } from 'fs/promises';
 import { join } from 'path';
 import { getDomainMode } from '../lib/domainAutonomy.js';
+import { isPersistentMindCallDenial } from '../lib/persistentMindTrajectory.js';
 import {
   PERSISTENT_MIND_LIMITS,
   PERSISTENT_MIND_IMAGE_EXTENSIONS,
@@ -47,6 +48,10 @@ import { schedule, cancel } from './eventScheduler.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 import { acquireLocalEndpointProviderSlot } from './cosLocalEndpointSlots.js';
 import { acquireCosActionReservation, acquireCosGlobalSlot } from './cosAdmissionReservations.js';
+import {
+  createPersistentMindCallBoundary,
+  persistentMindCapabilityGrantFingerprint,
+} from './persistentMindCallGuard.js';
 import { appendMindEvent } from './agentRunEventLog.js';
 import { preparePersistentMindContext } from './persistentMindContext.js';
 import { resolvePersistentMindProfile, resolvePersistentMindThinkingSession } from './persistentMindProfile.js';
@@ -900,6 +905,7 @@ async function runOnePersistentMindTurn() {
     activeAbortController = controller;
     let release = () => {};
     let runStartedAt = null;
+    let callBoundary = null;
     try {
       // The route is resolved before an adapter can run. This is a read-only
       // catalog/status check: no alternate provider, model pull, or generation
@@ -971,11 +977,12 @@ async function runOnePersistentMindTurn() {
       if (!await turnCanContinue(turn.id, generation, controller.signal)) return;
       // Preparation and slot admission may wait. A preset revoked during those
       // waits must be refused before even a context-summary call can begin.
+      const admissionRoot = await loadState();
       if (thinkingPresetId) {
         const admissionProfile = await resolvePersistentMindThinkingSession({
           presetId: thinkingPresetId,
           selection: turn.wake.message.thinkingPreset,
-          config: (await loadState()).config,
+          config: admissionRoot.config,
         });
         if (!await turnCanContinue(turn.id, generation, controller.signal)) return;
         if (!admissionProfile.ok) {
@@ -983,10 +990,36 @@ async function runOnePersistentMindTurn() {
           return;
         }
       }
-      // One accounted provider span covers both optional context summarization
-      // and the turn itself. A local adapter must not bypass endpoint capacity
-      // merely because its first inference happens while context is prepared.
+      // The span opens BEFORE context preparation, so a local adapter cannot
+      // bypass endpoint capacity merely because its first inference happens
+      // while context is assembled.
+      //
+      // The turn keeps the ONE global slot, action reservation and endpoint slot
+      // it was admitted with; the boundary below acquires nothing further. What
+      // it does is re-check — before the summary call, before the turn call, and
+      // before every tool round — that the route, authorization, lifecycle,
+      // grants and remaining budget still permit one more provider call, and
+      // account each attempt (failures included) against the domain ledger.
       runStartedAt = Date.now();
+      callBoundary = createPersistentMindCallBoundary({
+        mindId: mind.mindId,
+        turnId: turn.id,
+        route: {
+          providerId: prepared.provider.id,
+          providerType: prepared.provider.type || null,
+          model: prepared.model || null,
+          effort: prepared.effort || null,
+          thinkingPresetId,
+          thinkingPresetLabel: profile.presetLabel || null,
+          temporary: profile.temporary === true,
+        },
+        thinkingPresetId,
+        // The ACCEPTED preset snapshot the message carries (#6283) — never the
+        // mutable preset id, which the user can repoint mid-turn.
+        thinkingSelection: thinkingPresetId ? turn.wake.message.thinkingPreset : null,
+        capabilityFingerprint: persistentMindCapabilityGrantFingerprint(admissionRoot.config?.persistentMindCapabilities),
+        signal: controller.signal,
+      });
       const context = await preparePersistentMindContext({
         mindId: mind.mindId,
         identity: prepared.identity ?? turnAdapter.identity ?? 'One supervised persistent Chief of Staff mind.',
@@ -1002,6 +1035,7 @@ async function runOnePersistentMindTurn() {
               effort: prepared.effort || null,
               signal: controller.signal,
               heartbeat: () => heartbeat(turn.id, generation),
+              callBoundary: callBoundary.call,
             })
           : null,
       });
@@ -1031,6 +1065,7 @@ async function runOnePersistentMindTurn() {
         signal: controller.signal,
         heartbeat: () => heartbeat(turn.id, generation),
         context,
+        callBoundary: callBoundary.call,
         recordCapabilityEvent: ({ kind, id, data } = {}) => {
           const eventKind = kind === 'result' ? 'mind.capability.result' : 'mind.capability.request';
           const capabilityId = typeof id === 'string' && id ? id : randomUUID();
@@ -1076,15 +1111,27 @@ async function runOnePersistentMindTurn() {
       }, generation);
     } catch (error) {
       if (generation === runtimeGeneration) {
+        const denied = isPersistentMindCallDenial(error);
         const message = controller.signal.aborted
           ? String(controller.signal.reason || 'Persistent mind turn interrupted')
           : errorMessage(error);
-        await parkActiveTurn(turn.id, message, 'interrupted', { consumedAttempt: runStartedAt != null });
-        emitLog('warn', `Persistent mind turn interrupted: ${message}`, { turnId: turn.id });
+        // A refusal already named its own cause and the status it belongs
+        // under; only a revoked temporary route retires the wake, exactly as
+        // the pre-turn resolution does.
+        await parkActiveTurn(turn.id, message, (denied && error.deniedStatus) || 'interrupted', {
+          consumedAttempt: runStartedAt != null,
+          retireWake: denied && error.requiresResubmission === true,
+        });
+        emitLog('warn', `Persistent mind turn ${denied ? 'refused a further provider call' : 'interrupted'}: ${message}`, { turnId: turn.id });
       }
     } finally {
       release();
-      if (runStartedAt != null) {
+      // The boundary accounts every provider call it admitted, so the turn adds
+      // nothing on top — that would double-count the span it already recorded.
+      // A turn that opened the span and never reached a provider still costs one
+      // action, or a turn that always aborts just before its first call would
+      // retry against the budget for free.
+      if (runStartedAt != null && (callBoundary?.accountedCalls() ?? 0) === 0) {
         await recordDomainUsage('cos', { actions: 1, ms: Date.now() - runStartedAt }).catch((error) => {
           console.error(`❌ Failed to record persistent mind usage: ${error.message}`);
         });

@@ -196,6 +196,62 @@ describe('persistent mind routes', () => {
     expect(JSON.stringify(res.body)).not.toContain('secret-value');
   });
 
+  it('exposes per-call execution receipts for completed and failed turns without their message bodies', async () => {
+    mocks.readPersistentMindEvents.mockResolvedValue({
+      events: [], cursor: null, gap: false, hasMore: false,
+      snapshot: {
+        messages: [{ messageId: 'private', text: 'must not leak' }],
+        turns: [
+          // A turn from before receipts existed contributes no row at all.
+          { id: 'turn-old', status: 'completed', providerId: 'demo', model: 'demo-model', calls: [] },
+          {
+            id: 'turn-temp',
+            status: 'failed',
+            startedAt: '2026-08-27T12:00:00.000Z',
+            completedAt: '2026-08-27T12:00:05.000Z',
+            providerId: 'demo-alt',
+            model: 'alt-model',
+            effort: 'max',
+            thinkingPresetId: 'preset-deep',
+            calls: [
+              {
+                purpose: 'turn', round: 0, runId: 'run-1', providerId: 'demo-alt', model: 'alt-model',
+                effort: 'max', thinkingPresetId: 'preset-deep', thinkingPresetLabel: 'Deep think',
+                temporaryRoute: true, elapsedMs: 900, outcome: 'completed',
+                usage: { state: 'unknown', source: 'unavailable', inputTokens: null, outputTokens: null, totalTokens: null, costUsd: null },
+              },
+              {
+                purpose: 'tool-round', round: 1, runId: null, providerId: 'demo-alt', model: 'alt-model',
+                effort: 'max', thinkingPresetId: 'preset-deep', thinkingPresetLabel: 'Deep think',
+                temporaryRoute: true, elapsedMs: null, outcome: 'denied', reason: 'CoS actions budget exhausted',
+                usage: { state: 'unknown', source: 'unavailable', inputTokens: null, outputTokens: null, totalTokens: null, costUsd: null },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const res = await get('/mind');
+    expect(res.status).toBe(200);
+    expect(res.body.turnExecutions).toHaveLength(1);
+    expect(res.body.turnExecutions[0]).toMatchObject({
+      turnId: 'turn-temp',
+      status: 'failed',
+      providerId: 'demo-alt',
+      model: 'alt-model',
+      effort: 'max',
+      thinkingPresetId: 'preset-deep',
+    });
+    expect(res.body.turnExecutions[0].calls.map((call) => [call.purpose, call.outcome, call.elapsedMs])).toEqual([
+      ['turn', 'completed', 900],
+      ['tool-round', 'denied', null],
+    ]);
+    expect(res.body.turnExecutions[0].calls[0].usage).toMatchObject({ state: 'unknown', totalTokens: null });
+    expect(res.body).not.toHaveProperty('snapshot');
+    expect(JSON.stringify(res.body)).not.toContain('must not leak');
+  });
+
   it('exposes the editable prompt, owned memories, derived rollups, and exact context preview', async () => {
     const res = await get('/mind/context');
     expect(res.status).toBe(200);

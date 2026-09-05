@@ -26,6 +26,7 @@ import {
 } from '../lib/persistentMindThinkingPresets.js';
 import { normalizePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
 import { publicPersistentMindState } from '../lib/persistentMindPublic.js';
+import { publicPersistentMindTurnExecutions } from '../lib/persistentMindTrajectory.js';
 import { validateRequest } from '../lib/validation.js';
 import { readPersistentMindEvents, readPersistentMindHistory } from '../services/agentRunEventLog.js';
 import { loadState } from '../services/cosState.js';
@@ -187,9 +188,13 @@ router.get('/mind', asyncHandler(async (req, res) => {
   const capabilities = normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities);
   const provider = profile.providerId ? await getProviderById(profile.providerId) : null;
   const imageCapability = await resolvePersistentMindImageCapability({ provider, model: profile.model });
-  const { snapshot: _snapshot, ...publicHistory } = history;
+  // The full replay projection carries message bodies; only the per-turn
+  // execution receipts (route, run ids, elapsed time, outcome, usage) are safe
+  // to serve, and they are what answers 'what did this turn actually spend'.
+  const { snapshot, ...publicHistory } = history;
   res.json({
     ...publicHistory,
+    turnExecutions: publicPersistentMindTurnExecutions(snapshot),
     state: publicPersistentMindState(state),
     profile: {
       enabled: profile.enabled,

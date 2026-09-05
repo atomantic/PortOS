@@ -41,6 +41,7 @@ const {
   promotePersistentMindMemory,
   readPersistentMindRollups,
 } = await import('./persistentMindContext.js');
+const { buildPersistentMindCallDenial } = await import('../lib/persistentMindTrajectory.js');
 
 const ROLLUPS = join(CONTEXT_DIR, 'persistent-mind-rollups.json');
 
@@ -120,6 +121,25 @@ describe('persistent mind rollups', () => {
     expect(summarize).toHaveBeenCalledTimes(1);
     expect(mock.history).toHaveLength(3);
     expect(rollup).toMatchObject({ status: 'failed', summary: null, error: 'summary provider unavailable' });
+  });
+
+  it('leaves the range unattempted when the per-call boundary refuses the summary', async () => {
+    mock.history = [event(1), event(2), event(3)];
+    const summarize = vi.fn(async () => {
+      throw buildPersistentMindCallDenial({ reason: 'CoS actions budget exhausted', status: 'waiting' });
+    });
+
+    const first = await preparePersistentMindContext({ recentEventLimit: 1, summarize });
+    const second = await preparePersistentMindContext({ recentEventLimit: 1, summarize });
+
+    // No rollup was sealed, so the next turn still retries the same range —
+    // a refused call never reached a provider and never summarized anything.
+    expect(await readPersistentMindRollups()).toEqual([]);
+    expect(summarize).toHaveBeenCalledTimes(2);
+    expect(first.summaryState).toBe('unavailable');
+    expect(second.summaryState).toBe('unavailable');
+    expect(mock.appendMindEvent).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'mind.summary' }));
+    expect(mock.history).toHaveLength(3);
   });
 
   it('rejects an empty or whitespace-only summary as a failed attempt', async () => {
