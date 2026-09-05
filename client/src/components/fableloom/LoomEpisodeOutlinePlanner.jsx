@@ -1,3 +1,4 @@
+import LoomShotPlanner from './LoomShotPlanner';
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, CircleAlert, Loader2, Save, Sparkles, Trash2 } from 'lucide-react';
 import ProviderModelSelector from '../ProviderModelSelector';
@@ -468,6 +469,7 @@ export default function LoomEpisodeOutlinePlanner({
           ) : null}
         </>
       )}
+      <LoomShotPlanner key={episode.id} loom={loom} episode={episode} route={routeBody} guidance={guidance} disabled={busy || dirty || generating || saving || validating || reviewing || expanding} onLoomUpdate={(next) => { onLoomUpdate(next); setOutline(cloneOutline(next.episodes.find((item) => item.id === episode.id)?.storyOutline)); setValidation(null); }} />
       <LoomAiRunStatus run={generateRun.run} />
       <LoomAiRunStatus run={reviewRun.run} />
     </section>

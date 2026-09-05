@@ -98,6 +98,25 @@ describe('FableLoom visual conditioning compiler', () => {
     expect(JSON.stringify(result.visualConditioning)).not.toContain('/approved/');
   });
 
+  it('uses the explicit draft character anchor without changing approved canon', async () => {
+    const loom = loomWith({ ...lockedBinding, mode: 'draft', characterAppearances: [{ characterId: 'char-a', referenceImage: 'draft-anchor.png' }] });
+    const result = await compileFableLoomVisualRequest({
+      tag: { loomId: loom.id, episodeId: 'episode-1', nodeId: 'shot' }, kind: 'image',
+      capability: fableLoomImageCapabilities({ mode: 'codex', inputBudget: 4 }),
+      authoredPrompt: 'A cautious arrival', ...deps(loom),
+    });
+    expect(result.referenceImagePaths).toContain('/approved/draft-anchor.png');
+    expect(result.visualConditioning.status).not.toBe('locked');
+    const locked = loomWith({ ...lockedBinding, characterAppearances: [{ characterId: 'char-a', referenceImage: 'draft-anchor.png' }] });
+    const approved = await compileFableLoomVisualRequest({
+      tag: { loomId: locked.id, episodeId: 'episode-1', nodeId: 'shot' }, kind: 'image',
+      capability: fableLoomImageCapabilities({ mode: 'codex', inputBudget: 6 }),
+      authoredPrompt: 'A cautious arrival', ...deps(locked),
+    });
+    expect(approved.referenceImagePaths).not.toContain('/approved/draft-anchor.png');
+    expect(approved.referenceImagePaths).toContain('/approved/aria-neutral.png');
+  });
+
   it('renders curated style tokens once and never the writing-stage styleNotes', async () => {
     const loom = loomWith(lockedBinding);
     const result = await compileFableLoomVisualRequest({

@@ -23,3 +23,5 @@ intent to a transition and moves them through the graph until an ending.
 Pure graph analysis (validation, BFS layering, prompt rendering) lives in
 `server/lib/fableLoomGraph.js`. Federation uses the opt-in per-record
 `fableLoom` category, conflict-journal recovery, and scene-media asset manifests.
+
+| `shots.js` | Episode-scoped shot autopilot, reviewable 5–10 second plans, deterministic branch-preserving application and stale-plan protection. |

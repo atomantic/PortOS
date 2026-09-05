@@ -304,11 +304,16 @@ export async function compileFableLoomVisualRequest({
         : 'convergent scene needs an explicit incoming temporal source');
     }
     const characterAssets = [];
-    for (const { character } of bindings.boundCharacters) {
+    for (const { character, appearance } of bindings.boundCharacters) {
+      const draftReference = !locked && appearance?.referenceImage ? resolveAsset(appearance.referenceImage) : null;
       const resolved = imageAssetsForCharacter(character, locked, resolveAsset);
       if (locked && resolved.readiness.status !== 'ready') failures.push(`${character.name} identity package is ${resolved.readiness.status}`);
       if (locked && resolved.primary.length === 0) failures.push(`${character.name} approved identity assets are unavailable`);
       omitted.push(...resolved.unavailable);
+      if (draftReference) {
+        resolved.primary = [publicAsset(draftReference, 'character-draft-reference', character.id)];
+        resolved.supplemental = [];
+      }
       characterAssets.push(resolved);
     }
     // Guarantee each cast member's primary approved identity anchor is
@@ -362,7 +367,12 @@ export async function compileFableLoomVisualRequest({
     universeStyle && `Universe style: ${universeStyle}`,
     placePrompt, ...characterPrompts, ...objectPrompts,
     protagonistFraming,
+    allocation.accepted.filter((asset) => asset.role === 'character-draft-reference').map((asset) => {
+      const character = bindings.boundCharacters.find((binding) => binding.character.id === asset.bindingId)?.character;
+      return `Character reference ${asset.filename}: preserve ${character?.name || 'the bound character'} identity, face, hair or fur, clothing and accessories. Use the authored shot for staging; do not copy reference scene events or other figures.`;
+    }).join('\n'),
     authoredBody || (kind === 'video' ? node.videoPrompt || node.prose : node.imagePrompt),
+    kind === 'video' && node.shot && `Shot duration: ${node.shot.durationSeconds} seconds. Play only this shot's current script, preserving each named speaker's voice: ${node.prose}`,
     node.visualCanon?.shotNotes && `Shot continuity: ${node.visualCanon.shotNotes}`,
   ]).join('\n\n').slice(0, 8000);
   const identityAvoid = bindings.boundCharacters.flatMap(({ character }) => character.identityPack?.avoid || []);

@@ -353,3 +353,11 @@ as Games / Creative Director:
 - The link is soft in both directions — deleting a series is never blocked by a
   loom pointing at it, and the loom editor's series backlink renders **no chip**
   (rather than a dead link) once the series is gone.
+
+### Timed shots before media
+
+In the episode outline editor, **Preview shot split** drafts and reviews a camera-cut plan without replacing the episode. **Run shot autopilot** applies the plan after deterministic timing/graph checks and an explicit editorial pass. Both use the selected provider, model, and effort. A changed source invalidates a preview; failed reviews leave the episode intact. Applying replaces that episode's scene media bindings, so finish this stage before generating images.
+
+A dramatic scene groups multiple shot nodes. Each shot records its framing and a 5–10 second intended duration. Dialogue is budgeted at 2.2 words per second with 1.5 seconds reserved for pauses/action. The editor shows overflow and production batches refuse oversized timed shots. This is a planning estimate; spoken delivery still needs review. A decision's question is staged before a quiet loop, which can repeat while the viewer chooses. The server preserves the existing branch targets and outcomes when splitting.
+
+Draft visual bindings can select a character image from the gallery. This fixed identity anchor accompanies subsequent shots and branches without changing the Universe's approved identity pack. Locked production continues to require approved canon; selecting a draft reference does not approve it. Draft anchors travel with the FableLoom asset manifest when sharing is enabled.

@@ -228,6 +228,7 @@ const visualCanonSchema = z.object({
   characterAppearances: z.array(z.object({
     characterId: refId.unwrap(),
     wardrobeId: refId.unwrap().nullable().optional(),
+    referenceImage: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*\.(png|jpg|jpeg|webp)$/i).nullable().optional(),
     expression: z.string().max(LOOM_LIMITS.VISUAL_NOTE_MAX).optional(),
     continuityNotes: z.string().max(LOOM_LIMITS.VISUAL_NOTE_MAX).optional(),
   })).max(LOOM_LIMITS.VISUAL_BINDINGS_MAX).optional(),
@@ -291,7 +292,13 @@ export const interactionWindowSchema = z.object({
   holdLoopRotation: z.enum(FABLELOOM_HOLD_ROTATION_MODES).optional(),
 }).nullable();
 
+export const shotMetadataSchema = z.object({
+  dramaticSceneId: z.string().min(1).max(80), dramaticSceneTitle: z.string().max(300),
+  durationSeconds: z.number().min(5).max(10), framing: z.string().max(500),
+});
+
 const nodeFields = {
+  shot: shotMetadataSchema.nullable().optional(),
   title: z.string().max(LOOM_LIMITS.NODE_TITLE_MAX).optional(),
   prose: z.string().max(LOOM_LIMITS.PROSE_MAX).optional(),
   plotPointId: z.string().max(LOOM_LIMITS.OUTLINE_KEY_MAX).nullable().optional(),
@@ -448,3 +455,15 @@ export const productionBatchCreateSchema = z.object({
 });
 
 export const continuityReviewSchema = z.object({});
+
+export const shotDraftSchema = z.object({
+  visibleCharacterIds: z.array(z.string().min(1).max(80)).max(32).optional(),
+  protagonistPresence: z.enum(['onscreen', 'offscreen']).optional(),
+  title: z.string().min(1).max(300), durationSeconds: z.number().min(5).max(10),
+  action: z.string().min(1).max(1200), framing: z.string().min(1).max(500),
+  dialogue: z.array(z.object({ speaker: z.string().min(1).max(70), text: z.string().min(1).max(500) })).max(6),
+  imagePrompt: z.string().min(1).max(2000), videoPrompt: z.string().min(1).max(4000),
+});
+export const shotGroupsSchema = z.array(z.object({ sceneId: z.string().min(1).max(80), shots: z.array(shotDraftSchema).min(1).max(40) })).min(1).max(200);
+export const shotAutopilotSchema = outlineGenerateSchema.extend({ maxRounds: z.number().int().min(1).max(3).optional(), apply: z.boolean().optional() });
+export const shotApplySchema = z.object({ sourceFingerprint: z.string().length(64), groups: shotGroupsSchema });

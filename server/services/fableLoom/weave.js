@@ -1191,6 +1191,7 @@ export const publicNode = (node, loom = null) => ({
   id: node.id,
   title: node.title,
   prose: node.prose,
+  ...(node.shot ? { shot: node.shot } : {}),
   image: node.image,
   videoHistoryId: node.videoHistoryId,
   playbackAssets: node.playbackAssets || null,
