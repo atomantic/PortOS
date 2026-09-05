@@ -59,10 +59,10 @@ export default function FleetHostSetup({ compact = false, onConfigured }) {
             <section className="rounded-lg border border-port-border p-3 space-y-3 text-sm">
               <p>Reserve this GPU for Qwen. Setup reuses prepared weights, fills in missing runtime settings, keeps the container loaded, and creates a local API provider. A new install can download about 30 GB.</p>
               <p className="text-xs text-gray-400">One active generation across all clients; up to 16 requests wait for at most two minutes. Disconnecting cancels the request. Requests are held in memory and are not replayed after a restart. Other GPU models must be unloaded first. Setup disables competing local providers so they do not reload automatically.</p>
-              <button type="button" disabled={installing || status.setupRunning || status.serving} onClick={() => setInstalling(true)} className={actionClass}>
-                {status.serving ? 'Model host is serving' : 'Set up dedicated host · download if needed'}
+              <button type="button" disabled={installing || status.setupRunning} onClick={() => setInstalling(true)} className={actionClass}>
+                {status.serving ? 'Reapply recommended host setup' : 'Set up dedicated host · download if needed'}
               </button>
-              <p className="text-xs text-gray-400">Docker and its GPU drivers must be installed. PortOS can start Docker Desktop, but an engine failure, driver installation or Windows restart may need an action on the host. Enable Docker startup with Windows for reboot recovery.</p>
+              <p className="text-xs text-gray-400">Docker and its GPU drivers must be installed. PortOS can start Docker Desktop, but an engine failure, driver installation or Windows restart may need an action on the host. Setup registers PortOS recovery at Windows login. Keep Docker startup with Windows enabled.</p>
             </section>
           )}
           {status.enabled && (

@@ -1,3 +1,4 @@
+vi.mock('./fleetLlmStartup.js', () => ({ installFleetHostLoginTask: async () => ({ success: true }), isFleetHostLoginTaskInstalled: async () => true }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({ providers: [], writes: [], enabled: '', specs: { platform: 'win32', cuda: { gpus: [{ name: 'NVIDIA RTX 3090', vramGb: 24 }] } } }));
 vi.mock('../lib/systemCapabilities.js', () => ({ detectSystemCapabilities: async () => state.specs }));

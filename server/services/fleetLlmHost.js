@@ -10,6 +10,8 @@ import { commandOutput } from '../lib/commandExists.js';
 import { inspectVllmQwenProject } from '../lib/vllmQwenProject.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
+import { installFleetHostLoginTask, isFleetHostLoginTaskInstalled } from './fleetLlmStartup.js';
+import { ensureFleetDockerIntegration } from './fleetLlmDocker.js';
 import { createFleetLlmGateway } from './fleetLlmGateway.js';
 
 const ENABLED_KEY = 'PORTOS_FLEET_LLM_ENABLED';
@@ -57,9 +59,10 @@ export async function stopFleetLlmHost() {
 }
 
 export async function getFleetLlmHostStatus() {
-  const [specs, tailnet, docker] = await Promise.all([
+  const [specs, tailnet, docker, loginTask] = await Promise.all([
     detectSystemCapabilities(), getTailscaleStatus(),
     commandOutput('docker', ['version', '--format', '{{.Server.Version}}'], { timeoutMs: 5000 }),
+    isFleetHostLoginTaskInstalled(),
   ]);
   const recommendation = recommendFleetLlmHost(specs);
   const host = recommendation.supported && docker ? await readHostEnv().catch(() => null) : null;
@@ -76,6 +79,7 @@ export async function getFleetLlmHostStatus() {
       { id: 'weights', label: 'Prepared model and API key', ok: host ? host.project.hasWeights : null },
       { id: 'runtime', label: 'Qwen model loaded', ok: probe ? Boolean(probe.models?.includes(MODEL)) : null },
       { id: 'tailnet', label: 'Tailscale connected', ok: tailnet.running },
+      ...(specs.platform === 'win32' ? [{ id: 'startup', label: 'Windows login recovery registered', ok: loginTask }] : []),
       { id: 'gateway', label: 'Shared API queue listening', ok: Boolean(gateway) },
     ],
   };
@@ -106,6 +110,7 @@ async function configure({ emit, isCancelled }) {
   if (!docker) throw new Error('Docker engine is not responding. Open Docker Desktop and restart the engine, then retry. If its runtime socket is stuck, restart Windows. Prepared weights will be reused.');
   const misplaced = await ensureVllmProjectDir({ emit });
   if (misplaced) throw new Error(misplaced);
+  await ensureFleetDockerIntegration(await inspectVllmQwenProject(), { emit });
   const prepared = await provisionVllmQwenProject({ emit, isCancelled });
   if (!prepared.success) throw new Error(prepared.error);
   if (isCancelled()) throw new Error('Setup cancelled before starting the model.');
@@ -130,6 +135,8 @@ async function configure({ emit, isCancelled }) {
   emit('Starting the prepared image with one generation slot and a private runtime port. Cold startup can take 5–7 minutes.');
   const started = await runStreamingCommand('docker', ['compose', '-f', project.composeFile, '-f', override, '--profile', 'single', 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'single'], emit, { cwd: project.dir, env: { PORT: String(PORTS.VLLM_QWEN) }, timeoutMs: 60000 });
   if (!started.success) throw new Error(started.error);
+  const loginTask = await installFleetHostLoginTask();
+  if (!loginTask.success) throw new Error('The model started, but Windows login startup could not be configured: ' + loginTask.error);
   await upsertPortosEnvLine(ENABLED_KEY, '1');
   await startFleetLlmHost();
   const { getAllProviders, createProvider, updateProvider } = await import('./providers.js');
