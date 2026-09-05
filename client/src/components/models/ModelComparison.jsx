@@ -320,7 +320,9 @@ export default function ModelComparison() {
   };
 
   const selectReasoningOnly = () => {
-    const allKnown = catalog.observations.filter(r => r.benchmark === benchmark);
+    // Counted over the same scoped rows the pills list, so the button's count
+    // and the models it leaves selected agree.
+    const allKnown = scoped.filter(r => r.benchmark === benchmark);
     const countMap = new Map();
     for (const r of allKnown) countMap.set(r.model, (countMap.get(r.model) || 0) + 1);
     const toHide = models.filter(m => (countMap.get(m) || 0) < 2);
