@@ -35,7 +35,12 @@ const toast = vi.hoisted(() => ({
 }));
 
 vi.mock('../services/api', () => api);
-vi.mock('../services/apiProviders', () => ({ getFleetLlmHost: vi.fn(() => new Promise(() => {})), revealFleetLlmHostKey: vi.fn() }));
+vi.mock('../services/apiProviders', () => ({
+  getFleetLlmHost: vi.fn(() => new Promise(() => {})),
+  getFleetPeerHosts: vi.fn(() => new Promise(() => {})),
+  revealFleetLlmHostKey: vi.fn(),
+  revealFleetPeerHostKey: vi.fn(),
+}));
 vi.mock('../components/ui/Toast', () => ({
   default: toast,
 }));

@@ -167,6 +167,14 @@ export function createPortOSProviderRoutes(aiToolkit) {
     const { getFleetLlmHostStatus } = await import('../services/fleetLlmHost.js');
     res.set('Cache-Control', 'no-store').json(await getFleetLlmHostStatus());
   }));
+  router.get('/fleet-peer-hosts', asyncHandler(async (req, res) => {
+    const { getFleetPeerHosts } = await import('../services/fleetLlmHost.js');
+    res.set('Cache-Control', 'no-store').json(await getFleetPeerHosts());
+  }));
+  router.post('/fleet-peer-hosts/:peerId/key', asyncHandler(async (req, res) => {
+    const { revealFleetPeerHostKey } = await import('../services/fleetLlmHost.js');
+    res.set('Cache-Control', 'no-store').json(await revealFleetPeerHostKey(req.params.peerId));
+  }));
   // Explicit reveal; secrets are never included in status, URLs or install logs.
   router.post('/fleet-host/key', asyncHandler(async (req, res) => {
     const { revealFleetLlmKey } = await import('../services/fleetLlmHost.js');

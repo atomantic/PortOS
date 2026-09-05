@@ -217,10 +217,10 @@ export default function AIProviders() {
   useEffect(() => { loadRuntimes(); }, [loadRuntimes]);
 
   useEffect(() => {
-    if (!fleetSetupOpen) return;
+    if (!fleetSetupOpen || typeof api.getInstances !== 'function') return;
     api.getInstances({ silent: true })
-      .then((data) => setFleetPeers(Array.isArray(data?.peers) ? data.peers : []))
-      .catch(() => setFleetPeers([]));
+      ?.then((data) => setFleetPeers(Array.isArray(data?.peers) ? data.peers : []))
+      ?.catch(() => setFleetPeers([]));
   }, [fleetSetupOpen]);
 
   useEffect(() => {
@@ -714,7 +714,7 @@ export default function AIProviders() {
 
       <div className="flex-1 overflow-auto p-4 space-y-6">
 
-      <FleetHostSetup compact />
+      <FleetHostSetup compact providers={providers} />
 
       {/* Sample Providers Panel */}
       {showSamples && (

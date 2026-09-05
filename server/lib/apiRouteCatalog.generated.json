@@ -13969,6 +13969,22 @@
       ]
     },
     {
+      "method": "GET",
+      "path": "/api/providers/fleet-peer-hosts",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/providers/fleet-peer-hosts/:peerId/key",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
+      ]
+    },
+    {
       "method": "POST",
       "path": "/api/providers/opencode/install",
       "mountPath": "/api/providers",

@@ -58,6 +58,7 @@ import {
   isCodexSubscriptionProvider,
   supportsModelRefresh,
   isAntigravityProvider,
+  isFleetHostConfigured,
   effortLevelsForProvider,
   generationControlsFor,
   resolveCliEffort,
@@ -2074,3 +2075,71 @@ describe('publicReviewSelectionPolicy', () => {
     expect(policy.model('grok-4', GROK)).toBe(true);
   });
 });
+
+describe('isFleetHostConfigured', () => {
+  const host = {
+    peerId: 'peer-1',
+    peerName: 'Workstation GPU',
+    peerHost: 'workstation.tailnet.ts.net',
+    peerAddress: '192.168.1.50',
+    endpoint: 'http://workstation.tailnet.ts.net:18022/v1',
+    model: 'qwen3.8-27b',
+    serving: true,
+  };
+
+  it('returns false for empty host or empty providers', () => {
+    expect(isFleetHostConfigured(null, [])).toBe(false);
+    expect(isFleetHostConfigured(host, [])).toBe(false);
+    expect(isFleetHostConfigured(host, null)).toBe(false);
+  });
+
+  it('matches provider by exact endpoint', () => {
+    const providers = [
+      { id: 'p1', endpoint: 'http://workstation.tailnet.ts.net:18022/v1' },
+    ];
+    expect(isFleetHostConfigured(host, providers)).toBe(true);
+
+    const providersWithSlash = [
+      { id: 'p1', endpoint: 'http://workstation.tailnet.ts.net:18022/v1/' },
+    ];
+    expect(isFleetHostConfigured(host, providersWithSlash)).toBe(true);
+  });
+
+  it('matches provider by peerHost hostname or peerAddress', () => {
+    const providers = [
+      { id: 'p1', endpoint: 'http://workstation.tailnet.ts.net:18022/v1' },
+    ];
+    expect(isFleetHostConfigured({ peerHost: 'workstation.tailnet.ts.net' }, providers)).toBe(true);
+    expect(isFleetHostConfigured({ peerAddress: '192.168.1.50' }, [
+      { id: 'p2', endpoint: 'http://192.168.1.50:18022/v1' },
+    ])).toBe(true);
+  });
+
+  it('matches OpenCode TUI provider by OPENCODE_CONFIG_CONTENT baseURL', () => {
+    const providers = [
+      {
+        id: 'p-tui',
+        type: 'tui',
+        envVars: {
+          OPENCODE_CONFIG_CONTENT: JSON.stringify({
+            provider: {
+              vllm: {
+                options: { baseURL: 'http://workstation.tailnet.ts.net:18022/v1' },
+              },
+            },
+          }),
+        },
+      },
+    ];
+    expect(isFleetHostConfigured(host, providers)).toBe(true);
+  });
+
+  it('returns false when no provider points to the host', () => {
+    const providers = [
+      { id: 'other', endpoint: 'http://other.tailnet.ts.net:18022/v1' },
+      { id: 'local', endpoint: 'http://127.0.0.1:11434' },
+    ];
+    expect(isFleetHostConfigured(host, providers)).toBe(false);
+  });
+});
+
