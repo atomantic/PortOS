@@ -719,10 +719,12 @@ export function localRuntimeNamespace(provider) {
  * rejects, and forwarding nothing would silently run the record against the
  * OpenAI cloud — which is why `codexUnsupportedLocalRuntime` below exists.
  *
- * `lmstudio` is absent because PortOS has no LM Studio backing marker yet; the
- * row lands with the marker, not before it.
+ * Both of Codex's values are mapped: `lmstudio` joined the axis with the
+ * `lmstudioBacked` marker (#6309). The remaining three (mtplx / vllm / sglang)
+ * have no Codex spelling at all, which is what `codexUnsupportedLocalRuntime`
+ * below is for.
  */
-export const CODEX_OSS_LOCAL_PROVIDERS = Object.freeze({ ollama: 'ollama' });
+export const CODEX_OSS_LOCAL_PROVIDERS = Object.freeze({ ollama: 'ollama', lmstudio: 'lmstudio' });
 
 /**
  * The first Codex CLI release that ships `--oss` / `--local-provider`. Used

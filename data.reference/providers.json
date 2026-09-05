@@ -124,6 +124,23 @@
       "secretEnvVars": [],
       "headlessArgs": []
     },
+    "codex-lmstudio": {
+      "id": "codex-lmstudio",
+      "name": "Codex LM Studio (local model)",
+      "type": "cli",
+      "command": "codex",
+      "args": [],
+      "endpoint": "http://localhost:1234/v1",
+      "models": [],
+      "defaultModel": null,
+      "lmstudioBacked": true,
+      "numCtx": 32768,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": [],
+      "headlessArgs": []
+    },
     "claude-code-tui": {
       "id": "claude-code-tui",
       "name": "Claude Code TUI",
@@ -226,6 +243,7 @@
       "models": [],
       "defaultModel": null,
       "lmstudioBacked": true,
+      "numCtx": 32768,
       "timeout": 600000,
       "enabled": false,
       "envVars": {
@@ -243,6 +261,7 @@
       "models": [],
       "defaultModel": null,
       "lmstudioBacked": true,
+      "numCtx": 32768,
       "timeout": 600000,
       "enabled": false,
       "envVars": {

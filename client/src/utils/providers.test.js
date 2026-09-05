@@ -1208,7 +1208,8 @@ describe('supportsModelRefresh', () => {
     expect(withButton).toEqual([
       'antigravity-cli', 'antigravity-tui', 'cerebras', 'claude-code',
       'claude-code-bedrock', 'claude-ollama', 'claude-ollama-tui',
-      'claude-sglang', 'claude-sglang-tui', 'codex', 'codex-ollama', 'codex-tui',
+      'claude-sglang', 'claude-sglang-tui', 'codex', 'codex-lmstudio',
+      'codex-ollama', 'codex-tui',
       'cursor-cli',
       'cursor-tui', 'grok', 'lmstudio', 'mtplx', 'nvidia-kimi', 'ollama',
       'opencode-llama-tui',

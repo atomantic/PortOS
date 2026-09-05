@@ -40,7 +40,7 @@ const SHIPPED_REFRESHABLE = [
   // LM Studio publishes its downloaded catalog on the same OpenAI-compatible
   // `/v1/models` endpoint the bare `lmstudio` API record already refreshes from,
   // so the `lmstudioBacked` wrappers refresh through it too.
-  'opencode-lmstudio', 'opencode-lmstudio-tui',
+  'opencode-lmstudio', 'opencode-lmstudio-tui', 'codex-lmstudio',
   // SGLang publishes its served catalog through the same OpenAI-compatible
   // `/v1/models` contract as the vLLM pair, so its wrappers refresh too.
   'opencode-sglang', 'opencode-sglang-tui',

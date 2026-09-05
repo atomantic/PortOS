@@ -141,6 +141,47 @@ describe('the public-review recipe keeps its posture AND gains the backing', () 
   });
 });
 
+// Codex's SECOND `--local-provider` value. It shipped unmapped because PortOS
+// had no LM Studio backing marker; with `lmstudioBacked` on the axis (#6309) the
+// table row is the whole change, and everything below has to follow from it —
+// including the `codexLocalRuntime` finding no longer firing, which is the same
+// switch that decides whether the record routes at all.
+describe('the lmstudio marker rides the same seam as ollama', () => {
+  const codexLmstudio = { id: 'codex-lmstudio', type: 'cli', command: 'codex', args: [], lmstudioBacked: true };
+  const lmstudioTriple = ['--oss', '--local-provider', 'lmstudio'];
+  const hasLmstudioTriple = (args) => {
+    const i = args.indexOf('--oss');
+    return i !== -1 && args.slice(i, i + 3).join(' ') === lmstudioTriple.join(' ');
+  };
+
+  it('maps the marker onto codex\'s own value rather than reporting it unsupported', () => {
+    expect(codexOssLocalProvider(codexLmstudio)).toBe('lmstudio');
+    expect(codexUnsupportedLocalRuntime(codexLmstudio)).toBeNull();
+  });
+
+  it('carries the flags on the ordinary and the public-review argv', () => {
+    expect(hasLmstudioTriple(buildVendorCliArgs(codexLmstudio, [], { model: 'qwen3-coder-30b', effort: null }))).toBe(true);
+    expect(hasLmstudioTriple(buildVendorSpawnConfig(codexLmstudio, { effectiveModel: 'qwen3-coder-30b' }).args)).toBe(true);
+    const review = buildVendorSpawnConfig(codexLmstudio, {
+      effectiveModel: 'qwen3-coder-30b',
+      safetyProfile: PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
+    }).args;
+    expect(review.slice(0, 6)).toEqual([
+      'exec', '--sandbox', 'workspace-write', '--approve-for-me', '--ephemeral', '--ignore-user-config',
+    ]);
+    expect(hasLmstudioTriple(review)).toBe(true);
+  });
+
+  it('raises neither the unsupported-runtime nor the ChatGPT-account finding', () => {
+    expect(providerPrerequisites(codexLmstudio, { codexOssSupport: { supported: true } }).missing).toEqual([]);
+    expect(isCodexSubscriptionProvider(codexLmstudio)).toBe(false);
+    expect(providerPrerequisites(codexLmstudio, {
+      codexAccount: { status: 'signed-out' },
+      codexOssSupport: { supported: true },
+    }).missing).toEqual([]);
+  });
+});
+
 describe('prerequisites fail closed and legibly', () => {
   it('reports nothing while the flag probe has not answered', () => {
     // `null` is NOT PROBED — an unprobed CLI must never take a working provider

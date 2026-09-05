@@ -1535,6 +1535,7 @@ export const isGatewayBackedProvider = (provider) => gatewayForProvider(provider
  */
 export const localRuntimeNamespace = (provider) => {
   if (provider?.ollamaBacked === true) return 'ollama';
+  if (provider?.lmstudioBacked === true) return 'lmstudio';
   if (provider?.mtplxBacked === true) return 'mtplx';
   if (provider?.llamaBacked === true) return 'llama';
   if (provider?.vllmBacked === true) return 'vllm';
