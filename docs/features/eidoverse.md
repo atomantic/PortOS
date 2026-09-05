@@ -559,8 +559,11 @@ The Commons island extends into an irregular grassy shoreline, a sandy beach,
 an eight-kilometre ocean horizon, and distant mountain islands. This is bounded
 authored scenery, not an infinite terrain-streaming or swimming system. It uses
 the same portable generated GLB as the city, without texture downloads or AI
-calls. Renderers advertising `largeWorldColliders: 1` receive the larger scene;
-older runtimes retain the compact city until upgraded. The renderer indexes
+calls. Renderers advertising `largeWorldColliders: 1` receive the larger scene
+for the default terrain and district layout. Customized terrain or district
+positions retain the compact city so scenery cannot cover authored buildings;
+custom labels and assets remain supported. Older runtimes also retain the
+compact city until upgraded. The renderer indexes
 large landscape colliders once and uses their triangle BVH for local queries.
 
 Worlds already supports `use {id, action}` and authored server-side behaviors.
