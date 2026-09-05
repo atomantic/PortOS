@@ -371,6 +371,7 @@ const episodeOutlineFingerprint = (loom, episode) => JSON.stringify({
 
 const outlineStructuralAnalysis = (loom, episode) => {
   const structural = analyzeStoryOutline(episode.storyOutline, {
+    nodes: episode.nodes,
     participationMode: loom.participationMode,
     requireAudienceIntroduction: requiresAudienceIntroduction(loom, episode),
     challenges: fableLoomEpisodeChallenges(loom, episode.id),
