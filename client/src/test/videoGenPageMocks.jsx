@@ -78,8 +78,10 @@ export const state = {
   galleryProps: null,
   /** `useMediaCompletionRefresh`'s options, so a suite can fire a completion refresh. */
   completionRefresh: null,
-  /** `listLorasFull` — the installed library the LoRA picker resolves names against. */
+  /** The library `listLorasFull` resolves to by default; the LoRA picker reads names from it. */
   availableLoras: [],
+  /** `listLorasFull`; a spy so a suite can defer it and land the library AFTER history. */
+  listLorasFull: vi.fn(),
   /**
    * The mounted router's `navigate`, for a suite that needs a SECOND in-place
    * navigation — a URL handoff arriving while the page is already mounted,
@@ -88,7 +90,7 @@ export const state = {
   navigate: null,
 };
 
-const SPIES = ['getVideoGenStatus', 'getVideoGenModelContext', 'generateVideo', 'attach', 'start', 'startWhenIdle', 'repair', 'cancel', 'refresh', 'listVideoHistory'];
+const SPIES = ['getVideoGenStatus', 'getVideoGenModelContext', 'generateVideo', 'attach', 'start', 'startWhenIdle', 'repair', 'cancel', 'refresh', 'listVideoHistory', 'listLorasFull'];
 
 /** Restore every documented default, including fresh spies. Call it first in `beforeEach`. */
 export function resetVideoGenMockState() {
@@ -108,6 +110,7 @@ export function resetVideoGenMockState() {
   state.navigate = null;
   for (const key of SPIES) state[key].mockReset();
   state.listVideoHistory.mockResolvedValue([]);
+  state.listLorasFull.mockImplementation(async () => state.availableLoras);
 }
 
 /** A video model as `GET /api/video-gen/status` reports it. */
@@ -182,7 +185,7 @@ vi.mock('../services/api', () => ({
   getActiveVideoJob: vi.fn(async () => ({ activeJob: state.activeJob })),
   getSettings: vi.fn(async () => ({ imageGen: { grok: { enabled: false } } })),
   getVideoGenRuntimeStatus: vi.fn(async () => ({ installed: true, ready: true, current: true })),
-  listLorasFull: vi.fn(async () => state.availableLoras),
+  listLorasFull: (...args) => state.listLorasFull(...args),
   // The prompt-enhancement controls mount useProviderModels, which fetches the
   // provider list from a mount effect. Unmocked it throws out of a passive
   // effect — the tests still pass, but the unhandled rejection fails the run.

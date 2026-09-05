@@ -171,6 +171,23 @@ describe('VideoGen cross-page Remix handoff', () => {
     expect(restored.chunkPrompts).toEqual([]);
   });
 
+  it('labels a restored LoRA even when the library lands after the record does', async () => {
+    // The page fetches history and the LoRA library as independent mount
+    // effects. A cross-page Remix restores as soon as HISTORY settles, so on
+    // this ordering the names have nothing to resolve against yet — and a
+    // one-shot resolve would leave the picker showing the raw filename.
+    let settleLoras;
+    state.listLorasFull.mockReturnValue(new Promise((resolve) => { settleLoras = resolve; }));
+    await renderVideoGenPage(`/media/video?remix=${RECORD.id}`);
+    await waitFor(() => expect(screen.getByLabelText('Prompt')).toHaveValue(RECORD.prompt));
+
+    await act(async () => { settleLoras([LORA]); });
+
+    await waitFor(() => expect(state.loraPicker?.selected).toEqual([
+      { filename: LORA.filename, name: LORA.name, scale: 0.7 },
+    ]));
+  });
+
   it('says nothing about a missing record while the history fetch is still in flight', async () => {
     let settleHistory;
     state.listVideoHistory.mockReturnValue(new Promise((resolve) => { settleHistory = resolve; }));
