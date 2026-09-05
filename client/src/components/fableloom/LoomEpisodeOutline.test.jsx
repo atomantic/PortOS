@@ -50,6 +50,8 @@ describe('LoomEpisodeOutline', () => {
 
     const firstScene = screen.getByTestId('outline-scene-node-1');
     await user.click(firstScene.querySelector('summary'));
+    await user.click(screen.getByRole('button', { name: 'Edit scene: Threshold' }));
+    expect(onSelectNode).toHaveBeenLastCalledWith('node-1');
     await user.click(screen.getByRole('button', { name: /Scene 2: The Chamber/ }));
     expect(onSelectNode).toHaveBeenCalledWith('node-2');
   });
