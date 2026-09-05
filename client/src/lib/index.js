@@ -47,6 +47,7 @@ export * from './imageTo3dRenderOptions.js';
 export * from './importerDeepLink.js';
 export * from './installFailureTask.js';
 export * from './letteringDensity.js';
+export * from './isSafeHref.js';
 export * from './issueLength.js';
 export * from './musicDuration.js';
 export * from './muscriptorModels.js';
