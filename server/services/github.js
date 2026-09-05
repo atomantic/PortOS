@@ -96,13 +96,13 @@ function ghBackoffActive(key, now = Date.now()) {
   return Boolean(entry && now < entry.retryAfter);
 }
 
-function recordGhCallOutcome(key, ok, now = Date.now()) {
+function recordGhCallOutcome(key, ok, maxMs = GH_BACKOFF_MAX_MS, now = Date.now()) {
   if (ok) {
     ghCallBackoff.delete(key);
     return;
   }
   const failures = (ghCallBackoff.get(key)?.failures || 0) + 1;
-  const delay = Math.min(GH_BACKOFF_BASE_MS * 2 ** (failures - 1), GH_BACKOFF_MAX_MS);
+  const delay = Math.min(GH_BACKOFF_BASE_MS * 2 ** (failures - 1), maxMs);
   ghCallBackoff.set(key, { failures, retryAfter: now + delay });
 }
 
@@ -120,9 +120,14 @@ export function __resetGhCallBackoff() {
  * cleared on normal exit so it never fires for a completed run. `input`, when
  * supplied, is written to stdin (used by structured `gh api --input -` calls).
  * `backoffKey`, when supplied, opts this call into the consecutive-failure
- * backoff above — see the comment there for why it's opt-in.
+ * backoff above — see the comment there for why it's opt-in. `backoffMaxMs`
+ * overrides the default cap: it MUST exceed the calling scheduler's own tick
+ * interval, or the cooldown always expires before the next tick and never
+ * actually suppresses a retry — a real attempt fires every tick regardless of
+ * `backoffKey` (#3358-style silent no-op, caught in review on the updateChecker
+ * caller: its 30-min interval exceeds the 15-min default cap).
  */
-export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = null, env = null, input = null, backoffKey = null } = {}) {
+export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = null, env = null, input = null, backoffKey = null, backoffMaxMs = GH_BACKOFF_MAX_MS } = {}) {
   if (backoffKey !== null && ghBackoffActive(backoffKey)) {
     return Promise.reject(new Error(`gh command backing off for ${backoffKey} after repeated failures`));
   }
@@ -143,7 +148,7 @@ export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = nul
     const settle = (ok) => {
       if (settled) return;
       settled = true;
-      if (backoffKey !== null) recordGhCallOutcome(backoffKey, ok);
+      if (backoffKey !== null) recordGhCallOutcome(backoffKey, ok, backoffMaxMs);
     };
     const timer = setTimeout(() => {
       timedOut = true;
