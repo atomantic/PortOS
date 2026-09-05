@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, modelComparisonImportSchema, modelComparisonDiscoverySchema } from '../lib/validation.js';
+import { validateRequest, modelComparisonImportSchema, modelComparisonDiscoverySchema, modelComparisonSyncSchema } from '../lib/validation.js';
 import { getModelComparison, importModelComparison } from '../services/modelComparison.js';
+import { syncArtificialAnalysisCatalog } from '../services/artificialAnalysis.js';
 import { canRefreshModels } from '../lib/aiToolkit/internal/modelFetchers.js';
 import { effortLevelsForProvider, filterSelectableModels } from '../lib/providerModels.js';
 
@@ -30,6 +31,10 @@ export function createModelComparisonRoutes(providerService) {
   }));
   router.post('/import', asyncHandler(async (req, res) => {
     res.json(await importModelComparison(validateRequest(modelComparisonImportSchema, req.body)));
+  }));
+  router.post('/sync-aa', asyncHandler(async (req, res) => {
+    const { apiKey } = validateRequest(modelComparisonSyncSchema, req.body || {});
+    res.json(await syncArtificialAnalysisCatalog({ apiKey }));
   }));
   return router;
 }

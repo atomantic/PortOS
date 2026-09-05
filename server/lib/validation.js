@@ -1910,3 +1910,4 @@ export const modelComparisonImportSchema = z.object({
 });
 
 export const modelComparisonDiscoverySchema = z.object({ providerId: z.string().min(1).max(200) }).strict();
+export const modelComparisonSyncSchema = z.object({ apiKey: z.string().min(1).max(200).optional() }).strict();

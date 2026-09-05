@@ -6,12 +6,25 @@ import ComparisonResearch from './ComparisonResearch';
 import * as api from '../../services/apiModelComparison';
 import * as agents from '../../services/apiAgents';
 
-vi.mock('../../services/apiModelComparison', () => ({ getModelComparison: vi.fn(), importModelComparison: vi.fn(), discoverComparisonModels: vi.fn() }));
+vi.mock('../../services/apiModelComparison', () => ({
+  getModelComparison: vi.fn(),
+  importModelComparison: vi.fn(),
+  discoverComparisonModels: vi.fn(),
+  syncArtificialAnalysis: vi.fn(),
+}));
 vi.mock('../../services/apiProviders', () => ({ getProviders: vi.fn().mockResolvedValue({ providers: [{ id: 'example', name: 'Example research', models: ['example-model', 'other-model'] }] }) }));
 vi.mock('../../services/apiAgents', () => ({ getCosSchedule: vi.fn(), updateCosTaskInterval: vi.fn(), triggerCosOnDemandTask: vi.fn() }));
 vi.mock('recharts', () => ({
-  ResponsiveContainer: ({ children }) => <div>{children}</div>, ScatterChart: ({ children }) => <div>{children}</div>,
-  Scatter: () => null, CartesianGrid: () => null, LabelList: () => null, Tooltip: () => null, XAxis: () => null, YAxis: () => null,
+  ResponsiveContainer: ({ children }) => <div>{children}</div>,
+  ScatterChart: ({ children }) => <div>{children}</div>,
+  Scatter: ({ name, data, line }) => (
+    <div data-testid={`scatter-${name}`} data-has-line={!!line} data-points={data?.length} />
+  ),
+  CartesianGrid: () => null,
+  LabelList: () => null,
+  Tooltip: () => null,
+  XAxis: ({ scale }) => <div data-testid="xaxis" data-scale={scale} />,
+  YAxis: () => null,
 }));
 const source = { url: 'https://example.com/benchmark', retrievedAt: '2026-01-01T00:00:00Z', methodology: 'Example v1' };
 const metric = value => ({ value, source });
@@ -58,4 +71,54 @@ it('gates research on saved settings and confirms the queued task', async () => 
   fireEvent.click(run);
   await screen.findByText(/Research queued in CoS/);
   expect(agents.triggerCosOnDemandTask).toHaveBeenCalledWith('model-comparison-refresh', null, { silent: true });
+});
+
+it('connects reasoning effort points with line and allows toggling line style and scale', async () => {
+  const multiObs = [
+    { ...observation, id: 'm-low', model: 'gpt-5.6-sol', effort: 'low', quality: metric(41), costPerTask: metric(0.23) },
+    { ...observation, id: 'm-med', model: 'gpt-5.6-sol', effort: 'medium', quality: metric(46), costPerTask: metric(0.37) },
+    { ...observation, id: 'm-high', model: 'gpt-5.6-sol', effort: 'high', quality: metric(48), costPerTask: metric(0.61) },
+    { ...observation, id: 'single', model: 'single-model', effort: 'high', quality: metric(30), costPerTask: metric(0.1) },
+  ];
+  api.getModelComparison.mockResolvedValue({ schemaVersion: 1, observations: multiObs, inventory: [] });
+
+  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
+  await act(async () => {});
+
+  await screen.findByText(/1 reasoning curves/);
+  const solScatter = screen.getByTestId('scatter-gpt-5.6-sol');
+  expect(solScatter).toHaveAttribute('data-has-line', 'true');
+  expect(solScatter).toHaveAttribute('data-points', '3');
+
+  const singleScatter = screen.getByTestId('scatter-single-model');
+  expect(singleScatter).toHaveAttribute('data-has-line', 'false');
+
+  // Test toggling lines off
+  fireEvent.click(screen.getByLabelText('Connect effort lines'));
+  expect(screen.getByTestId('scatter-gpt-5.6-sol')).toHaveAttribute('data-has-line', 'false');
+
+  // Test scale toggle
+  fireEvent.change(screen.getByLabelText('Cost scale'), { target: { value: 'log' } });
+  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-scale', 'log');
+
+  // Test quick filter reasoning curves
+  fireEvent.click(screen.getByText(/Reasoning curves \(1\)/));
+  expect(screen.getByRole('button', { name: 'Toggle single-model' })).toHaveAttribute('aria-pressed', 'false');
+  expect(screen.getByRole('button', { name: 'Toggle gpt-5.6-sol' })).toHaveAttribute('aria-pressed', 'true');
+});
+
+it('opens the Artificial Analysis sync modal and syncs observations', async () => {
+  api.syncArtificialAnalysis.mockResolvedValue({ success: true, observations: 636, total: 636 });
+
+  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
+  await act(async () => {});
+
+  fireEvent.click(screen.getByRole('button', { name: /Sync from Artificial Analysis/i }));
+  expect(screen.getByLabelText(/Artificial Analysis API Key/i)).toBeTruthy();
+
+  fireEvent.change(screen.getByLabelText(/Artificial Analysis API Key/i), { target: { value: 'test-key-123' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Start Sync' }));
+
+  await screen.findByText(/Sync successful! Updated 636 models/);
+  expect(api.syncArtificialAnalysis).toHaveBeenCalledWith({ apiKey: 'test-key-123' }, { silent: true });
 });

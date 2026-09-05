@@ -2,7 +2,7 @@
 
 Open **Models → Comparison** (`/models/comparison`) to compare sourced provider/model/effort configurations. The chart separates benchmark versions and offers published benchmark cost per task or an explicit uncached token workload estimate. Provider, model and effort filters are bookmarkable query parameters. The table is the accessible equivalent of the chart and retains missing-data rows.
 
-The initial catalog contains seven current, rounded public configurations across OpenAI, Google and Anthropic from Artificial Analysis, accessed September 5, 2026. It is deliberately incomplete: missing efforts, providers and local models require research, not interpolation. The attachment that inspired this feature used an earlier Intelligence Index version and is not a data source.
+The catalog contains comprehensive public configurations across major providers (OpenAI, Google, Anthropic, Meta, DeepSeek, Mistral, Alibaba, etc.) from Artificial Analysis, accessed September 5, 2026. Models with multiple evaluated reasoning efforts are connected along effort curves, with standardized end-to-end response times and configurable linear or logarithmic cost scaling.
 
 ## Sources and interpretation
 
@@ -31,6 +31,7 @@ Endpoints (relative to the configured PortOS API origin):
 - `GET /api/providers/comparison` → `{ schemaVersion: 1, observations, inventory }`. Inventory contains only provider IDs/names/types, discovery capability, model IDs and supported effort labels. No credentials or endpoints.
 - `POST /api/providers/comparison/discover` with `{ "providerId": "example-provider" }` → current `{ providerId, models: [{ model, efforts }] }`. Explicit discovery only; failures remain visible.
 - `POST /api/providers/comparison/import` accepts `{ schemaVersion: 1, observations: [...] }`. GET's `inventory` field is not an import field. The UI also accepts this JSON as a file.
+- `POST /api/providers/comparison/sync-aa` with optional `{ "apiKey": "..." }` → fetches model metadata directly from the Artificial Analysis API, normalizes observations, and imports them.
 
 Use the actual configured origin, optional authentication and trusted local HTTP mirror described in `PORTS.md`; do not hardcode an install address. Never put credentials in a catalog, command argument, source URL, output report or repository file. Existing authenticated PortOS tooling can perform the POST. Direct local file replacement bypasses import preservation checks and is not the research workflow.
 
