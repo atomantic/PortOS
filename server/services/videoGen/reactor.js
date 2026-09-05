@@ -1,7 +1,7 @@
 /** Reactor FastH3 renders one bounded SDK/WebRTC session per job. */
 import { randomUUID } from 'crypto';
 import { stat, rm } from 'fs/promises';
-import { spawn } from 'child_process';
+import { spawn } from '../../lib/childProcess.js';
 import { join } from 'path';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -105,7 +105,7 @@ export function validateReactorRequest({ prompt, continueFromClipId, seconds = 6
 
 function captureClip(entry, input, pythonPath, job, jobId) {
   return new Promise((resolve, reject) => {
-    const child = spawn(pythonPath, [join(PATHS.root, 'scripts', 'reactor-render.py')], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawn(pythonPath, [join(PATHS.root, 'scripts', 'reactor-render.py')], { stdio: ['pipe', 'pipe', 'pipe'] });
     let buffer = '';
     let outputBytes = 0;
     let complete = null;

@@ -6,7 +6,7 @@ import { tmpdir } from 'os';
 
 const root = join(tmpdir(), `reactor-test-${process.pid}`);
 const mocks = vi.hoisted(() => ({ spawn: vi.fn(), finalize: vi.fn(), settings: vi.fn() }));
-vi.mock('child_process', () => ({ spawn: mocks.spawn }));
+vi.mock('../../lib/childProcess.js', async (importOriginal) => ({ ...await importOriginal(), spawn: mocks.spawn }));
 vi.mock('./generateVideoHelpers.js', () => ({ finalizeGeneratedVideo: mocks.finalize }));
 vi.mock('../settings.js', () => ({ getSettings: mocks.settings }));
 vi.mock('../../lib/fileUtils.js', async () => {
