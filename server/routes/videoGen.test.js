@@ -445,6 +445,52 @@ describe('videoGen routes', () => {
       expect(off.body.displaySleepOnRender).toBe(false);
     });
 
+    // #6304-follow-up — falEnabled/reactorEnabled must reflect the SAME
+    // resolver a render is gated on (isVideoModeUsable), which honors the
+    // FAL_KEY/REACTOR_API_KEY env vars. Re-deriving "has a key" from the raw
+    // settings object client-side missed the env-var case entirely, so a key
+    // set only via env var never surfaced the backend switcher.
+    it('reports fal/reactor usable when a settings key is stored', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({
+        imageGen: { local: { pythonPath: '/usr/bin/python3' } },
+        videoGen: { fal: { apiKey: 'settings-fal-key' }, reactor: { apiKey: 'settings-reactor-key' } },
+      });
+      const r = await request(app).get('/api/video-gen/status');
+      expect(r.body.falEnabled).toBe(true);
+      expect(r.body.reactorEnabled).toBe(true);
+    });
+
+    it('reports fal/reactor usable from FAL_KEY/REACTOR_API_KEY env vars with no settings key', async () => {
+      const prevFal = process.env.FAL_KEY;
+      const prevReactor = process.env.REACTOR_API_KEY;
+      process.env.FAL_KEY = 'env-fal-key';
+      process.env.REACTOR_API_KEY = 'env-reactor-key';
+      try {
+        const r = await request(app).get('/api/video-gen/status');
+        expect(r.body.falEnabled).toBe(true);
+        expect(r.body.reactorEnabled).toBe(true);
+      } finally {
+        if (prevFal === undefined) delete process.env.FAL_KEY; else process.env.FAL_KEY = prevFal;
+        if (prevReactor === undefined) delete process.env.REACTOR_API_KEY; else process.env.REACTOR_API_KEY = prevReactor;
+      }
+    });
+
+    it('reports fal/reactor unusable when neither a settings key nor an env var is present', async () => {
+      const prevFal = process.env.FAL_KEY;
+      const prevReactor = process.env.REACTOR_API_KEY;
+      delete process.env.FAL_KEY;
+      delete process.env.REACTOR_API_KEY;
+      try {
+        const r = await request(app).get('/api/video-gen/status');
+        expect(r.body.falEnabled).toBe(false);
+        expect(r.body.reactorEnabled).toBe(false);
+      } finally {
+        if (prevFal !== undefined) process.env.FAL_KEY = prevFal;
+        if (prevReactor !== undefined) process.env.REACTOR_API_KEY = prevReactor;
+      }
+    });
+
     it('passes each model entry through with its registry disclosure block', async () => {
       videoGenService.listVideoModels.mockReturnValueOnce([
         {
