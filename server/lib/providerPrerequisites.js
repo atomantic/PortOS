@@ -38,7 +38,14 @@
 import { PROVIDER_TYPES } from './aiToolkit/constants.js';
 import { CODEX_ACCOUNT_STATUS, isCodexSubscriptionProvider } from './codexAccount.js';
 import { isLocalInstanceHost } from './localProviderRuntime.js';
-import { commandBasename, isCodexProvider } from './providerModels.js';
+import {
+  CODEX_OSS_LOCAL_PROVIDERS,
+  CODEX_OSS_MIN_VERSION,
+  codexOssLocalProvider,
+  codexUnsupportedLocalRuntime,
+  commandBasename,
+  isCodexProvider,
+} from './providerModels.js';
 import { gatewayForProvider } from './providerGateways.js';
 
 /**
@@ -217,6 +224,33 @@ const codexRoutingAdvisory = (provider, routing) => {
 };
 
 /**
+ * The local-backing findings for a codex record, in the order a user should act
+ * on them. Both are DEFINITE negatives — the marker is on the record, or the
+ * installed binary was probed and answered — so both block routing: spawning
+ * either one would run the OpenAI cloud model the user thought they had
+ * replaced, or die on an unknown flag mid-run.
+ *
+ * `support: null` is NOT PROBED and produces nothing, per the sentinel rule at
+ * the top of this file.
+ */
+const codexLocalBackingFindings = (provider, codexOssSupport) => {
+  if (!isProcessProvider(provider) || !isCodexProvider(provider)) return [];
+  const unsupportedRuntime = codexUnsupportedLocalRuntime(provider);
+  if (unsupportedRuntime) {
+    return [{
+      code: 'codexLocalRuntime',
+      label: `Codex cannot run against ${unsupportedRuntime} — it serves ${Object.keys(CODEX_OSS_LOCAL_PROVIDERS).join(' / ')} only`,
+    }];
+  }
+  if (!codexOssLocalProvider(provider)) return [];
+  if (codexOssSupport?.supported !== false) return [];
+  return [{
+    code: 'codexOss',
+    label: `Codex CLI ${CODEX_OSS_MIN_VERSION}+ is required to run a local model (--oss)`,
+  }];
+};
+
+/**
  * Which prerequisites `provider` is missing, and whether it is runnable at all.
  *
  * @param {object} provider — raw or sanitized provider record
@@ -235,7 +269,13 @@ const codexRoutingAdvisory = (provider, routing) => {
  *   DETERMINED. Produces an ADVISORY only (see {@link codexRoutingAdvisory}).
  * @returns {{met: boolean, missing: {code: string, label: string}[], advisories: object[]}}
  */
-export const providerPrerequisites = (provider, { runtime = null, gatewayKeySet = null, codexAccount = null, codexRouting = null } = {}) => {
+export const providerPrerequisites = (provider, {
+  runtime = null,
+  gatewayKeySet = null,
+  codexAccount = null,
+  codexRouting = null,
+  codexOssSupport = null,
+} = {}) => {
   const missing = [];
 
   if (runtime && runtime.installed === false) {
@@ -258,6 +298,7 @@ export const providerPrerequisites = (provider, { runtime = null, gatewayKeySet 
 
   const codexFinding = codexAccountFinding(provider, codexAccount);
   if (codexFinding) missing.push(codexFinding);
+  missing.push(...codexLocalBackingFindings(provider, codexOssSupport));
 
   // Advisories are a SEPARATE list on purpose: everything in `missing` blocks
   // something (a card's bucket, a strict readiness verdict), and this must
@@ -294,7 +335,7 @@ export const describeMissingPrerequisites = (missing) =>
  * out of the chain, so they stay presentation-only. The provider card may
  * report those credentials separately without changing the routing gate.
  */
-export const ROUTING_BLOCKING_CODES = Object.freeze(['runtime']);
+export const ROUTING_BLOCKING_CODES = Object.freeze(['runtime', 'codexOss', 'codexLocalRuntime']);
 
 /**
  * Is any of these findings severe enough to skip the provider when routing?

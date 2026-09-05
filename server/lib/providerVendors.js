@@ -82,6 +82,7 @@ import {
   ensureCodexTuiArgs,
   CODEX_COMMAND,
   CODEX_CLI_ID,
+  buildCodexOssArgs,
 } from './codex.js';
 import {
   ANTIGRAVITY_COMMAND,
@@ -178,6 +179,10 @@ function codexCliArgs(baseArgs, { model, effort, provider }) {
   const args = hasExec ? [...baseArgs] : [...baseArgs, 'exec'];
   args.push(...codexIgnoreUserConfigArgs(provider, args));
   args.push(...buildCodexStartupArgs(baseArgs));
+  // The local-model backing, when the record carries a runtime marker codex can
+  // serve. Emitted from the marker rather than from provider args so a wrapper
+  // stays declarative — see buildCodexOssArgs in codex.js.
+  args.push(...buildCodexOssArgs(provider, baseArgs));
   if (model) {
     args.push('--model', model);
   }
@@ -195,6 +200,7 @@ function codexSpawnArgs(provider, { effectiveModel, effort, maxConcurrentThreads
     '--dangerously-bypass-approvals-and-sandbox',
     ...codexIgnoreUserConfigArgs(provider),
     ...buildCodexStartupArgs(),
+    ...buildCodexOssArgs(provider),
     ...buildCodexAgentThreadArgs(maxConcurrentThreads),
   ];
   if (effectiveModel) {
@@ -227,6 +233,11 @@ function codexPublicReviewArgs(provider, { effectiveModel, effort, maxConcurrent
     '--ephemeral',
     '--ignore-user-config',
     ...buildCodexStartupArgs(),
+    // The backing is orthogonal to the posture: a local-backed record reviews
+    // untrusted public code under the SAME sandbox ladder, with the tokens
+    // generated on-box. `--ignore-user-config` does not strip it — the pair is
+    // argv, not config.
+    ...buildCodexOssArgs(provider),
     ...buildCodexAgentThreadArgs(maxConcurrentThreads),
   ];
   if (effectiveModel) {
@@ -291,7 +302,11 @@ const CODEX = {
   idFragment: 'codex',
   inferredCommand: CODEX_COMMAND,
   matchCommand: isCodexCommand,
-  matchCliProvider: (provider) => provider?.id === CODEX_CLI_ID,
+  // Id OR command: the shipped `codex` record is not the only one that must
+  // build codex argv any more — a local-backed wrapper (`codex-ollama`) carries
+  // its own id, and an id-only match would drop it through to `claude`'s
+  // fallback row and spawn `claude --print` against the codex binary.
+  matchCliProvider: (provider) => provider?.id === CODEX_CLI_ID || isCodexCommand(provider?.command),
   tuiArgs: ensureCodexTuiArgs,
   cliArgs: codexCliArgs,
   spawnArgs: codexSpawnArgs,
@@ -794,13 +809,19 @@ export function inferTuiCommand(id) {
  * (That is load-bearing for the attachable case: `ensureAntigravityTuiArgs` and
  * friends append `--dangerously-skip-permissions`-class defaults, which would
  * undo the recipe.)
+ *
+ * `provider` carries the record-level facts a command name cannot — the codex
+ * `ignoreUserConfig` pin and its local-runtime backing. Passing it here keeps
+ * BOTH TUI spawn paths on one injection point, which is the whole reason this
+ * dispatcher exists (see the `injectTuiModelAndEffort` note below for what
+ * happened the last time an argv rule lived in only one of them).
  */
 export function applyCommandDefaults(command, args, provider = null) {
   const vendor = PROVIDER_VENDORS.find((v) => v.tuiArgs && v.matchCommand(command));
   if (!vendor) return args;
   // `provider` is optional and only some vendors read it (codex, for the
-  // `ignoreUserConfig` pin) — a vendor that ignores the second argument keeps
-  // behaving exactly as before.
+  // `ignoreUserConfig` pin and the local-runtime backing) — a vendor that
+  // ignores the second argument keeps behaving exactly as before.
   return vendor.tuiArgs(args, provider);
 }
 

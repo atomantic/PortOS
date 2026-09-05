@@ -190,7 +190,12 @@ describe('blocksRouting', () => {
   });
 
   it('pins the routing-blocking set so widening it is a deliberate edit', () => {
-    expect([...ROUTING_BLOCKING_CODES]).toEqual(['runtime']);
+    // Every member is an UNARGUABLE negative — no credential, env var, or
+    // config file makes it go away. `codexOss` (the probed binary does not
+    // accept --oss) and `codexLocalRuntime` (the record is marked with a local
+    // runtime codex cannot serve) qualify for the same reason the missing
+    // binary does; the credential findings still do not.
+    expect([...ROUTING_BLOCKING_CODES]).toEqual(['runtime', 'codexOss', 'codexLocalRuntime']);
   });
 });
 

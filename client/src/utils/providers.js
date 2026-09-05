@@ -109,7 +109,12 @@ export const isGrokProvider = (provider) => {
  */
 export const isCodexSubscriptionProvider = (provider) =>
   (provider?.type === 'cli' || provider?.type === 'tui')
-  && commandBasename(provider?.command) === 'codex';
+  && commandBasename(provider?.command) === 'codex'
+  // A local-runtime-backed codex record (`codex --oss --local-provider ollama`)
+  // generates its tokens on this machine and authenticates against nothing, so
+  // it must not be painted "No ChatGPT account is signed in" — or parked in
+  // UNKNOWN waiting on an account read that will never matter.
+  && localRuntimeNamespace(provider) === null;
 
 /**
  * The 'your own ~/.codex/config.toml is re-pointing this provider' advisory the
@@ -449,12 +454,7 @@ const codexEffortLevelsForModel = (model) => CODEX_ULTRA_MODELS.has(String(model
 export const isOpencodeLocalProvider = (provider) =>
   (['opencode', 'opencode-tui'].includes(String(provider?.id || '').toLowerCase())
     || commandBasename(provider?.command) === 'opencode')
-  && (provider?.ollamaBacked === true
-    || provider?.mtplxBacked === true
-    || provider?.llamaBacked === true
-    || provider?.vllmBacked === true
-    || provider?.sglangBacked === true
-    || isGatewayBackedProvider(provider));
+  && (localRuntimeNamespace(provider) !== null || isGatewayBackedProvider(provider));
 
 /**
  * Antigravity base-model ↔ effort-suffix split — MIRROR of
@@ -1521,6 +1521,26 @@ export const gatewayForProvider = (provider) => {
 
 /** True when a provider is an OpenCode wrapper front-ending any hosted gateway. */
 export const isGatewayBackedProvider = (provider) => gatewayForProvider(provider) !== null;
+
+/**
+ * The LOCAL daemon namespace a provider is marked with, or null. Structural
+ * markers only — a hosted gateway is an OpenCode namespace and a remote API, so
+ * it is deliberately NOT one of these.
+ *
+ * MIRROR of `localRuntimeNamespace` in server/lib/providerModels.js — keep in
+ * lockstep. The order matters: a malformed record carrying two markers keeps its
+ * legacy Ollama outcome on both sides.
+ * @param {{ollamaBacked?:boolean,mtplxBacked?:boolean,llamaBacked?:boolean,vllmBacked?:boolean,sglangBacked?:boolean}|null|undefined} provider
+ * @returns {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|null}
+ */
+export const localRuntimeNamespace = (provider) => {
+  if (provider?.ollamaBacked === true) return 'ollama';
+  if (provider?.mtplxBacked === true) return 'mtplx';
+  if (provider?.llamaBacked === true) return 'llama';
+  if (provider?.vllmBacked === true) return 'vllm';
+  if (provider?.sglangBacked === true) return 'sglang';
+  return null;
+};
 
 /**
  * True when a provider launches the Claude Code binary, whatever backend it is

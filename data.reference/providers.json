@@ -107,6 +107,23 @@
       "envVars": {},
       "tuiPromptDelayMs": 2500
     },
+    "codex-ollama": {
+      "id": "codex-ollama",
+      "name": "Codex Ollama (local model)",
+      "type": "cli",
+      "command": "codex",
+      "args": [],
+      "endpoint": "http://localhost:11434",
+      "models": [],
+      "defaultModel": null,
+      "ollamaBacked": true,
+      "numCtx": 131072,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": [],
+      "headlessArgs": []
+    },
     "claude-code-tui": {
       "id": "claude-code-tui",
       "name": "Claude Code TUI",

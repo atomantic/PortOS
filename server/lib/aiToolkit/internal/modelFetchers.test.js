@@ -26,6 +26,10 @@ const SHIPPED_REFRESHABLE = [
   // one MODEL_FETCHERS row covers all of them (internal/gateways.js).
   'opencode-openrouter', 'opencode-openrouter-tui', 'openrouter',
   'codex', 'codex-tui',
+  // The local-backed Codex wrapper resolves through the OLLAMA row, not codex's:
+  // `ollamaBacked` sits in the first pass, and the tool-capable local catalog is
+  // exactly what its harness needs — the static OpenAI list would be wrong.
+  'codex-ollama',
   // OpenCode Zen's API record is an ordinary OpenAI-compatible endpoint, so it
   // refreshes through the same `/models` probe. Its CLI/TUI wrappers do NOT:
   // they carry no namespace marker at all, which is what makes OpenCode resolve

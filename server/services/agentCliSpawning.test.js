@@ -456,17 +456,21 @@ describe('buildCliSpawnConfig', () => {
       expect(config.args[config.args.indexOf('--effort') + 1]).toBe('high');
     });
 
-    it('never emits the claude-shaped --effort for a renamed codex provider (detection and emission agree)', () => {
-      // id !== 'codex' routes this into the default (claude-style) branch, but
-      // the effort arg shape must still follow the binary, not the branch.
+    it('routes a renamed codex provider through the codex recipe, effort shape included', () => {
+      // The vendor registry used to match codex by provider ID alone, so any
+      // record but the shipped `codex` fell through to claude's
+      // unconditionally-true row — claude-shaped argv on the codex binary, with
+      // only the effort pair keyed off the command. Now the whole recipe follows
+      // the binary (#6305, which needed a SECOND codex record to build codex argv).
       const config = buildCliSpawnConfig(
-        { id: 'my-codex', command: '/opt/homebrew/bin/codex' },
+        { id: 'my-codex', command: '/opt/tools/codex' },
         null,
         {},
         { effort: 'xhigh' },
       );
+      expect(config.args[0]).toBe('exec');
       expect(config.args).not.toContain('--effort');
-      expect(config.args[config.args.indexOf('-c') + 1]).toBe('model_reasoning_effort=xhigh');
+      expect(config.args.join(' ')).toContain('-c model_reasoning_effort=xhigh');
     });
 
     it('respects a user-baked --effort pin in provider args (mirrors the --model rule)', () => {

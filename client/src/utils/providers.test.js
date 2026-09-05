@@ -1202,7 +1202,8 @@ describe('supportsModelRefresh', () => {
     expect(withButton).toEqual([
       'antigravity-cli', 'antigravity-tui', 'cerebras', 'claude-code',
       'claude-code-bedrock', 'claude-ollama', 'claude-ollama-tui',
-      'claude-sglang', 'claude-sglang-tui', 'codex', 'codex-tui', 'cursor-cli',
+      'claude-sglang', 'claude-sglang-tui', 'codex', 'codex-ollama', 'codex-tui',
+      'cursor-cli',
       'cursor-tui', 'grok', 'lmstudio', 'mtplx', 'nvidia-kimi', 'ollama',
       'opencode-llama-tui',
       'opencode-mtplx', 'opencode-mtplx-tui', 'opencode-ollama',
@@ -1611,6 +1612,22 @@ describe('credentialSource', () => {
     const renamed = { id: 'codex', type: 'cli', command: 'opencode', envVars: { CUSTOM_API_KEY: '' } };
     expect(isCodexSubscriptionProvider(renamed)).toBe(false);
     expect(credentialSource(renamed)).toEqual({ kind: 'env', ref: 'CUSTOM_API_KEY' });
+  });
+
+  it('exempts a local-backed Codex record from the ChatGPT subscription contract', () => {
+    // `codex --oss --local-provider ollama` generates its tokens on this machine
+    // and authenticates against nothing, so the account is not one of its
+    // prerequisites — without this the card claims "No ChatGPT account is signed
+    // in" and, worse, parks in UNKNOWN awaiting a read that never matters.
+    // MIRROR of server/lib/codexAccount.js#isCodexSubscriptionProvider.
+    const local = SHIPPED_PROVIDERS.providers['codex-ollama'];
+    expect(local.ollamaBacked).toBe(true);
+    expect(isCodexSubscriptionProvider(local)).toBe(false);
+    expect(isCodexSubscriptionProvider(SHIPPED_PROVIDERS.providers.codex)).toBe(true);
+    // An enabled copy: a codex-command card whose account read came back with
+    // no verdict parks in UNKNOWN, which this record must never reach.
+    const enabled = { ...local, enabled: true, missingPrerequisites: [] };
+    expect(providerCardState(enabled, { codexAccount: null }).state).toBe(PROVIDER_CARD_STATE.READY);
   });
 
   it('lets a wrapper carrying its own key stand down from inheritance', () => {

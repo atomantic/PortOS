@@ -704,6 +704,59 @@ export function localRuntimeNamespace(provider) {
 }
 
 /**
+ * The Codex CLI's own `--local-provider` values, mapped from PortOS's
+ * local-runtime marker axis (`localRuntimeNamespace` in providerModels.js).
+ *
+ * Codex 0.153.0+ ships `--oss` / `--local-provider <lmstudio|ollama>`, so
+ * running the Codex harness on a local model is a pair of flags rather than a
+ * rewrite of the user's `~/.codex/config.toml` — the flags are per-invocation
+ * and leave every other `codex` run on the machine untouched.
+ *
+ * Deliberately a TABLE, not a passthrough: PortOS's marker axis carries five
+ * local runtimes (ollama / mtplx / llama / vllm / sglang) and Codex serves two
+ * of them by name. Forwarding an unmapped namespace would hand codex a value it
+ * rejects, and forwarding nothing would silently run the record against the
+ * OpenAI cloud — which is why `codexUnsupportedLocalRuntime` below exists.
+ *
+ * `lmstudio` is absent because PortOS has no LM Studio backing marker yet; the
+ * row lands with the marker, not before it.
+ */
+export const CODEX_OSS_LOCAL_PROVIDERS = Object.freeze({ ollama: 'ollama' });
+
+/**
+ * The first Codex CLI release that ships `--oss` / `--local-provider`. Used
+ * only to NAME the requirement in a prerequisite finding — the gate itself is a
+ * `codex exec --help` flag probe (`services/codexOssSupport.js`), because a
+ * version string is a proxy for the contract and the help text IS the contract.
+ */
+export const CODEX_OSS_MIN_VERSION = '0.153.0';
+
+/**
+ * The `--local-provider` value for `provider`, or `null` when this record is not
+ * backed by a local runtime Codex can serve.
+ * @param {object|null|undefined} provider
+ * @returns {string|null}
+ */
+export function codexOssLocalProvider(provider) {
+  const namespace = localRuntimeNamespace(provider);
+  return (namespace && CODEX_OSS_LOCAL_PROVIDERS[namespace]) || null;
+}
+
+/**
+ * The local runtime this codex record is marked with but Codex cannot serve
+ * (`vllm`, `sglang`, …), or `null`. A definite negative: the marker is on the
+ * record, and no credential or config makes `--local-provider vllm` exist. The
+ * prerequisite layer turns it into a finding rather than letting the row spawn
+ * against the OpenAI cloud while the card claims it is local.
+ * @param {object|null|undefined} provider
+ * @returns {string|null}
+ */
+export function codexUnsupportedLocalRuntime(provider) {
+  const namespace = localRuntimeNamespace(provider);
+  return namespace && !CODEX_OSS_LOCAL_PROVIDERS[namespace] ? namespace : null;
+}
+
+/**
  * Parse a stored `OPENCODE_CONFIG_CONTENT` value, or null when it is absent or
  * no longer valid JSON (a hand-edited config tells us nothing, so every caller
  * falls back to its own default rather than guessing).
