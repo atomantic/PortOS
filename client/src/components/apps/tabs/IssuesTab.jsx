@@ -600,7 +600,7 @@ export default function IssuesTab({ appId, appName }) {
         )}
         <div className="space-y-1">
           <label htmlFor={overrideContextId} className="block text-xs text-gray-400">
-            Override context or instructions <span className="text-gray-600">(optional)</span>
+            Extra context <span className="text-gray-600">(optional)</span>
           </label>
           <textarea
             id={overrideContextId}
