@@ -29,9 +29,9 @@ describe('migration 323 — Eidoverse World Design V2', () => {
     expect(await readState()).toMatchObject({
       schemaVersion: 3,
       world: 'example-world',
-      selectedDesignVersion: 2,
+      selectedDesignVersion: 3,
       lastAppliedDesignVersion: 1,
-      pendingDesignVersion: 2,
+      pendingDesignVersion: 3,
       reconciliation: { status: 'pending', checkpoint: 'migration-complete' },
     });
   });
@@ -52,7 +52,7 @@ describe('migration 323 — Eidoverse World Design V2', () => {
     expect(await readState()).toMatchObject({
       extraLocalField: { preserve: true },
       userOverrides: { includes: { jira: false }, limits: { apps: 2 } },
-      recipe: { version: 2, includes: { jira: false }, limits: { apps: 2 } },
+      recipe: { version: 3, includes: { jira: false }, limits: { apps: 2 } },
     });
   });
 

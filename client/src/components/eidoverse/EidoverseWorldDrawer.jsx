@@ -109,7 +109,7 @@ export default function EidoverseWorldDrawer({
         <p className="text-xs font-medium uppercase tracking-[0.18em] text-port-accent">World Design V{design.selectedVersion || recipeDraft?.version}</p>
         <h3 className="mt-1 text-lg font-semibold text-white">{design.name || recipeDraft?.name}</h3>
         <p className="mt-2 text-sm leading-6 text-gray-400">
-          A luminous systems garden where PortOS apps, agents, goals, memory, data, peers, and activity each have a legible home.
+          A walkable commons of a grassy arrival park, inward-facing halls, and workspaces for PortOS apps, agents, goals, memory, data, peers, and activity.
         </p>
       </div>
       <section className="rounded-xl border border-port-border bg-port-bg p-4">
@@ -136,7 +136,7 @@ export default function EidoverseWorldDrawer({
             <option value="off">Off — hide floating labels</option>
           </select>
         </label>
-        <p className="mt-2 text-xs text-gray-400">Labels appear above objects in the world. Click or tap a label to learn what it represents. Saved in this browser; turning labels off keeps already-open details available.</p>
+        <p className="mt-2 text-xs text-gray-400">Labels appear above objects in the world. Click or tap a label to learn what it represents. Off at the start of each visit. Use Labels in the toolbar when you want to inspect objects; turning labels off keeps already-open details available.</p>
         {!frameConnection?.capabilities?.labelPreferences && (
           <p className="mt-1 text-xs text-gray-400">The preference will apply when a compatible renderer connects.</p>
         )}
@@ -289,7 +289,7 @@ export default function EidoverseWorldDrawer({
     <div className="space-y-5">
       <section className="rounded-xl border border-port-border bg-port-bg p-4">
         <h3 className="font-medium text-white">Dawn atmosphere</h3>
-        <p className="mt-1 text-xs leading-5 text-gray-500">Lightweight skymesh, three authored lights, restrained fog, and sparse wind grass.</p>
+        <p className="mt-1 text-xs leading-5 text-gray-500">Lightweight skymesh, three authored lights, restrained fog, and a grassy meeting park.</p>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           {[
             ['hours', 'Sun hour', 0, 24, 0.1],
@@ -555,7 +555,7 @@ export default function EidoverseWorldDrawer({
       open={open}
       onClose={onClose}
       title="PortOS World Design"
-      subtitle={`${design.name || 'Luminous Systems Garden'} · recipe V${design.assetRecipeVersion || 2}`}
+      subtitle={`${design.name || 'PortOS Commons'} · recipe V${design.assetRecipeVersion || 3}`}
       size="lg"
       tabs={TABS}
       activeTab={activeTab}

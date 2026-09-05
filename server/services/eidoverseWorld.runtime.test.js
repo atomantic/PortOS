@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { homedir, hostname, userInfo } from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -203,11 +204,19 @@ beforeEach(async () => {
       { path: slot.preferredPaths[0], size: Math.min(slot.maxBytes, 1_000_000) },
       { path: slot.fallback, size: 1_000_000 },
     ]);
+  const uploadedAssets = new Set();
   vi.stubGlobal('fetch', vi.fn(async (input, init) => {
     const url = new URL(String(input));
     if (url.pathname === '/version') return Response.json({ sha: 'example-build', commitTime: '2026-01-01T00:00:00.000Z' });
     if (url.pathname === '/library-list') return Response.json(libraryFiles);
     if (url.pathname === '/library-models') return Response.json([]);
+    if (url.pathname === '/geom') return Response.json({ bbox: { min: [-1, 0, -1], max: [1, 2, 1] } });
+    if (url.pathname === '/upload') {
+      const path = `store/${createHash('sha256').update(init.body).digest('hex').slice(0, 16)}.glb`;
+      uploadedAssets.add(`/library/${path}`);
+      return Response.json({ path });
+    }
+    if (/^\/library\/store\/[0-9a-f]{16}\.glb$/.test(url.pathname) && !uploadedAssets.has(url.pathname)) return new Response(null, { status: 404 });
     if (url.pathname.startsWith('/library/')) return new Response(init?.method === 'HEAD' ? null : '', { status: 200 });
     return new Response(null, { status: 404 });
   }));
@@ -242,7 +251,7 @@ describe('Eidoverse private-world lifecycle', () => {
     });
     expect(fetch).not.toHaveBeenCalled();
     expect(mocks.sent).toEqual([]);
-    expect(mocks.persistedState.pendingDesignVersion).toBe(2);
+    expect(mocks.persistedState.pendingDesignVersion).toBe(3);
   });
 
   it('reconciles a migrated V1 world through the normal online boot path', async () => {
@@ -264,7 +273,7 @@ describe('Eidoverse private-world lifecycle', () => {
     ]));
     expect(mocks.persistedState).toMatchObject({
       schemaVersion: 3,
-      lastAppliedDesignVersion: 2,
+      lastAppliedDesignVersion: 3,
       pendingDesignVersion: null,
       migrationReport: { status: 'applied' },
       reconciliation: { status: 'complete', checkpoint: 'projection-committed' },
@@ -279,7 +288,7 @@ describe('Eidoverse private-world lifecycle', () => {
     const progress = await world.getEidoverseWorldProjectionStatus();
 
     expect(progress).toMatchObject({
-      design: { selectedVersion: 2, pendingVersion: 2 },
+      design: { selectedVersion: 3, pendingVersion: 3 },
       projection: { lastRunAt: null },
     });
     expect(mocks.appStatusReads).toBe(0);
@@ -292,7 +301,7 @@ describe('Eidoverse private-world lifecycle', () => {
     mocks.persistedState.migrationReport = {
       status: 'ready',
       fromDesignVersion: 1,
-      toDesignVersion: 2,
+      toDesignVersion: 3,
     };
     mocks.featureEnabled = false;
 
@@ -302,7 +311,7 @@ describe('Eidoverse private-world lifecycle', () => {
     });
     expect(fetch).not.toHaveBeenCalled();
     expect(mocks.sent).toEqual([]);
-    expect(mocks.persistedState.pendingDesignVersion).toBe(2);
+    expect(mocks.persistedState.pendingDesignVersion).toBe(3);
   });
 
   it('leaves a prepared boot-time design update pending without starting an offline runtime', async () => {
@@ -311,7 +320,7 @@ describe('Eidoverse private-world lifecycle', () => {
     mocks.persistedState.migrationReport = {
       status: 'ready',
       fromDesignVersion: 1,
-      toDesignVersion: 2,
+      toDesignVersion: 3,
     };
     mocks.eidoverseStatus.runtimeStatus = 'stopped';
 
@@ -321,7 +330,7 @@ describe('Eidoverse private-world lifecycle', () => {
     });
     expect(fetch).not.toHaveBeenCalled();
     expect(mocks.sent).toEqual([]);
-    expect(mocks.persistedState.pendingDesignVersion).toBe(2);
+    expect(mocks.persistedState.pendingDesignVersion).toBe(3);
   });
 
   it('marks a persisted in-flight projection as interrupted before boot reconciliation', async () => {
@@ -346,7 +355,7 @@ describe('Eidoverse private-world lifecycle', () => {
       operationCount: 20,
       appliedOperations: 5,
     });
-    expect(mocks.persistedState.pendingDesignVersion).toBe(2);
+    expect(mocks.persistedState.pendingDesignVersion).toBe(3);
     expect(fetch).not.toHaveBeenCalled();
     expect(mocks.sent).toEqual([]);
   });
@@ -401,7 +410,7 @@ describe('Eidoverse private-world lifecycle', () => {
 
     expect(updated.design.userOverrides).toEqual({});
     expect(updated.recipe).toMatchObject({
-      version: 2,
+      version: 3,
       limits: {
         apps: world.DEFAULT_EIDOVERSE_PROJECTION_RECIPE.limits.apps,
         tasks: world.DEFAULT_EIDOVERSE_PROJECTION_RECIPE.limits.tasks,
@@ -420,7 +429,7 @@ describe('Eidoverse private-world lifecycle', () => {
     recipe.name = 'Example Systems Garden';
     recipe.maxEntities = 12;
     recipe.districts[0].label = 'Example Nexus';
-    recipe.paths[0].label = 'Example Route';
+    recipe.paths = [{ id: 'example-route', label: 'Example Route', toDistrictId: 'apps', nodes: [[1, 0, 1]] }];
 
     const updated = await world.updateEidoverseWorldConfig({ recipe });
 
@@ -694,7 +703,7 @@ describe('Eidoverse private-world lifecycle', () => {
     expect(metaComp?.args.data).toMatchObject({
       kind: 'world-meta',
       managedBy: 'portos',
-      designVersion: 2,
+      designVersion: 3,
       meta: { title: expect.any(String), hostId: expect.stringMatching(/^hst_[0-9a-f]{12}$/) },
     });
     expect(JSON.stringify(metaComp.args.data)).not.toContain(mocks.self.instanceId);
@@ -737,26 +746,26 @@ describe('Eidoverse private-world lifecycle', () => {
   it('preflights and locks recipe assets before completing a V2 reconciliation', async () => {
     const result = await world.projectEidoverseWorld();
 
-    const expectedSlots = ['nexus', 'app', 'agent', 'task', 'goal', 'memory', 'storage', 'peer', 'activity', 'district'];
+    const expectedSlots = ['nexus', 'app', 'agent', 'task', 'goal', 'memory', 'storage', 'peer', 'activity', 'district', 'desk', 'barrel', 'tree', 'citySurface'];
     expect(Object.keys(result.design.assetResolutions)).toEqual(expectedSlots);
     expect(Object.keys(mocks.persistedState.assetResolutions)).toEqual(expectedSlots);
-    expect(fetch.mock.calls.filter(([input]) => String(input).includes('/library/eidoverse/'))).toHaveLength(10);
+    expect(fetch.mock.calls.filter(([input]) => String(input).includes('/library/eidoverse/'))).toHaveLength(13);
     expect(result.summary.assetCatalogFingerprint).toEqual(expect.any(String));
 
     expect(result).toMatchObject({
       success: true,
-      summary: { designVersion: 2, maxLiveEntities: 48, assetRecipeVersion: 2 },
+      summary: { designVersion: 3, maxLiveEntities: 48, assetRecipeVersion: 3 },
       design: {
-        selectedVersion: 2,
-        lastAppliedVersion: 2,
+        selectedVersion: 3,
+        lastAppliedVersion: 3,
         pendingVersion: null,
         reconciliation: { status: 'complete', checkpoint: 'projection-committed' },
       },
     });
-    expect(Object.keys(result.design.assetResolutions)).toHaveLength(10);
+    expect(Object.keys(result.design.assetResolutions)).toHaveLength(14);
     expect(mocks.persistedState).toMatchObject({
       schemaVersion: 3,
-      lastAppliedDesignVersion: 2,
+      lastAppliedDesignVersion: 3,
       pendingDesignVersion: null,
       reconciliation: { status: 'complete' },
     });
@@ -772,7 +781,7 @@ describe('Eidoverse private-world lifecycle', () => {
     await world.projectEidoverseWorld();
     expect(fetch.mock.calls.filter(([input]) => String(input).includes('/library-list'))).toHaveLength(0);
     expect(fetch.mock.calls.filter(([input]) => String(input).includes('/library-models'))).toHaveLength(0);
-    expect(fetch.mock.calls.filter(([input]) => String(input).includes('/library/eidoverse/'))).toHaveLength(10);
+    expect(fetch.mock.calls.filter(([input]) => String(input).includes('/library/eidoverse/'))).toHaveLength(13);
 
     await expect(world.reconcilePendingEidoverseWorld()).resolves.toEqual({ reconciled: false, reason: 'current' });
   });
@@ -822,6 +831,28 @@ describe('Eidoverse private-world lifecycle', () => {
     }
   });
 
+  it('measures and uploads the shared city once, then reuses its assets', async () => {
+    const first = await world.projectEidoverseWorld();
+    expect(first.design.assetResolutions.citySurface).toMatchObject({ strategy: 'generated', userOverride: false });
+    expect(fetch.mock.calls.filter(([input]) => new URL(String(input)).pathname === '/upload')).toHaveLength(1);
+    expect(fetch.mock.calls.some(([input]) => new URL(String(input)).pathname === '/geom')).toBe(true);
+    fetch.mockClear();
+    await world.projectEidoverseWorld();
+    expect(fetch.mock.calls.filter(([input]) => ['/geom', '/upload'].includes(new URL(String(input)).pathname))).toEqual([]);
+  });
+
+  it('keeps the prior world authoritative if model geometry is invalid', async () => {
+    await world.ensureEidoverseWorldConfig();
+    mocks.persistedState.lastAppliedDesignVersion = 2;
+    const original = fetch.getMockImplementation();
+    fetch.mockImplementation((input, init) => new URL(String(input)).pathname === '/geom'
+      ? Promise.resolve(Response.json({ bbox: { min: [0, 0, 0], max: [0, 0, 0] } }))
+      : original(input, init));
+    await expect(world.projectEidoverseWorld()).rejects.toMatchObject({ code: 'EIDOVERSE_ASSET_GEOMETRY_INVALID' });
+    expect(mocks.persistedState.lastAppliedDesignVersion).toBe(2);
+    expect(mocks.sent.some(({ type }) => type === 'verb')).toBe(false);
+  });
+
   it('excludes a catalog-listed asset whose bytes disappeared and locks a verified fallback', async () => {
     const slots = world.DEFAULT_EIDOVERSE_PROJECTION_RECIPE.assetRecipe.slots;
     const appPreferred = slots.app.preferredPaths[0];
@@ -834,6 +865,7 @@ describe('Eidoverse private-world lifecycle', () => {
       if (url.pathname === '/version') return Response.json({ sha: 'example-build', commitTime: '2026-01-01T00:00:00.000Z' });
       if (url.pathname === '/library-list') return Response.json(libraryFiles);
       if (url.pathname === '/library-models') return Response.json([]);
+      if (url.pathname === '/geom') return Response.json({ bbox: { min: [-1, 0, -1], max: [1, 2, 1] } });
       if (url.pathname === `/library/${appPreferred}` && init?.method === 'HEAD') return new Response(null, { status: 404 });
       if (url.pathname.startsWith('/library/')) return new Response(null, { status: 200 });
       return new Response(null, { status: 404 });
@@ -872,7 +904,7 @@ describe('Eidoverse private-world lifecycle', () => {
     expect(mocks.sent.some(({ type }) => type === 'verb')).toBe(false);
     expect(mocks.persistedState).toMatchObject({
       lastAppliedDesignVersion: null,
-      pendingDesignVersion: 2,
+      pendingDesignVersion: 3,
       reconciliation: { status: 'failed' },
     });
   });
@@ -886,7 +918,7 @@ describe('Eidoverse private-world lifecycle', () => {
     });
     expect(mocks.sent.some(({ type }) => type === 'verb')).toBe(false);
     expect(mocks.persistedState).toMatchObject({
-      pendingDesignVersion: 2,
+      pendingDesignVersion: 3,
       reconciliation: {
         status: 'failed',
         errorCode: 'EIDOVERSE_WORLD_UNAVAILABLE',
@@ -911,7 +943,7 @@ describe('Eidoverse private-world lifecycle', () => {
     expect(mocks.sent.some(({ type }) => type === 'verb')).toBe(false);
     expect(mocks.persistedState).toMatchObject({
       lastAppliedDesignVersion: 1,
-      pendingDesignVersion: 2,
+      pendingDesignVersion: 3,
       reconciliation: {
         status: 'failed',
         errorCode: 'EIDOVERSE_ASSET_RECIPE_UNRESOLVED',
@@ -953,7 +985,7 @@ describe('Eidoverse private-world lifecycle', () => {
     expect(reset.design.userOverrides.assets?.app).toBeUndefined();
     expect(reset.design.assetResolutions.app).toBeUndefined();
     expect(reset.design.assetResolutions.agent).toBeTruthy();
-    expect(reset.design.pendingVersion).toBe(2);
+    expect(reset.design.pendingVersion).toBe(3);
 
     const nexusReset = await world.updateEidoverseWorldConfig({ reset: { scope: 'district', districtId: 'nexus' } });
     expect(nexusReset.design.userOverrides.assets?.operations).toBeUndefined();
@@ -1011,7 +1043,7 @@ describe('Eidoverse private-world lifecycle', () => {
     }));
     expect(mocks.persistedState).toMatchObject({
       lastAppliedDesignVersion: null,
-      pendingDesignVersion: 2,
+      pendingDesignVersion: 3,
       reconciliation: {
         status: 'failed',
         checkpoint: 'compensation-complete',

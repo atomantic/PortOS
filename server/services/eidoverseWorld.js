@@ -8,6 +8,8 @@
  * external checkout or calls an AI provider.
  */
 
+import { buildEidoverseCitySurface } from '../lib/eidoverseCitySurface.js';
+import { eidoverseModelBounds } from '../lib/eidoverseCityLayout.js';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
@@ -1275,6 +1277,62 @@ async function persistAssetLock(resolutions, runtimeVersion) {
   });
 }
 
+async function measureAssetLocks(resolutions, overrides, existing, { signal } = {}) {
+  const locks = { ...resolutions };
+  for (const [slot, path] of Object.entries(overrides)) {
+    if (locks[slot]?.path === path) continue;
+    locks[slot] = { slot, path, userOverride: true };
+  }
+  const byPath = new Map();
+  for (const lock of [...Object.values(existing), ...Object.values(locks)]) {
+    const bounds = eidoverseModelBounds(lock?.bounds);
+    if (bounds) byPath.set(lock.path, Promise.resolve(bounds));
+  }
+  for (const lock of Object.values(locks)) {
+    if (byPath.has(lock.path)) continue;
+    byPath.set(lock.path, fetchLibraryJson('/geom', { lib: lock.path }, { signal }).then((geometry) => {
+      const bounds = eidoverseModelBounds(geometry?.bbox);
+      if (!bounds) throw new ServerError('Eidoverse returned invalid model bounds. Update its model geometry and retry.', {
+        status: 503, code: 'EIDOVERSE_ASSET_GEOMETRY_INVALID',
+      });
+      return bounds;
+    }));
+  }
+  return Object.fromEntries(await Promise.all(Object.entries(locks).map(async ([slot, lock]) =>
+    [slot, { ...lock, bounds: await byPath.get(lock.path) }])));
+}
+
+async function prepareCityAssetLock(resolutions, config, runtimeVersion, { signal } = {}) {
+  const overrides = config.design?.userOverrides?.assets || {};
+  const measured = await measureAssetLocks(resolutions, overrides, config.design?.assetResolutions || {}, { signal });
+  if (!overrides.citySurface) {
+    const surface = buildEidoverseCitySurface(config.recipe.districts);
+    const head = await waitWithSignal(fetch(libraryUrl(`/library/${surface.path}`), { method: 'HEAD', signal }), signal);
+    if (head.status === 404) {
+      const response = await waitWithSignal(fetch(libraryUrl('/upload', { by: 'portos', name: 'PortOS Commons paving and signs' }), {
+        method: 'POST', headers: { 'content-type': 'model/gltf-binary' }, body: surface.bytes, signal,
+      }), signal);
+      if (!response.ok) throw new ServerError(`Eidoverse could not accept the Commons scene asset (HTTP ${response.status}).`, {
+        status: 503, code: 'EIDOVERSE_CITY_ASSET_UNAVAILABLE',
+      });
+      const uploaded = await response.json();
+      if (uploaded?.path !== surface.path) throw new ServerError('Eidoverse returned an unexpected Commons asset address.', {
+        status: 503, code: 'EIDOVERSE_CITY_ASSET_INVALID',
+      });
+      await verifyLibraryAsset(surface.path, { signal });
+    } else if (!head.ok) {
+      throw new ServerError(`Eidoverse could not verify the Commons scene asset (HTTP ${head.status}).`, {
+        status: 503, code: 'EIDOVERSE_CITY_ASSET_UNAVAILABLE',
+      });
+    }
+    measured.citySurface = { slot: 'citySurface', path: surface.path, bytes: surface.bytes.length,
+      designVersion: EIDOVERSE_WORLD_DESIGN_VERSION, assetRecipeVersion: EIDOVERSE_ASSET_RECIPE_VERSION,
+      recipeFingerprint: surface.fingerprint, strategy: 'generated', source: 'generated',
+      shippedDefault: true, userOverride: false };
+  }
+  return persistAssetLock(measured, runtimeVersion);
+}
+
 async function resolveAndLockAssets(config, { signal } = {}) {
   const runtimeVersion = await preflightEidoverseProtocol({ signal });
   const existing = config.design?.assetResolutions || {};
@@ -1303,7 +1361,7 @@ async function resolveAndLockAssets(config, { signal } = {}) {
     });
   }
   if (lockInspection.current && unavailablePaths.size === 0) {
-    return persistAssetLock(lockInspection.resolutions, runtimeVersion);
+    return prepareCityAssetLock(lockInspection.resolutions, config, runtimeVersion, { signal });
   }
 
   const files = await fetchLibraryJson('/library-list', { dir: 'eidoverse/assets/models' }, { signal });
@@ -1368,7 +1426,7 @@ async function resolveAndLockAssets(config, { signal } = {}) {
   };
   const result = await resolveVerified();
 
-  return persistAssetLock(result.resolutions, runtimeVersion);
+  return prepareCityAssetLock(result.resolutions, config, runtimeVersion, { signal });
 }
 
 function createVerbPacing() {
@@ -1655,7 +1713,10 @@ export async function projectEidoverseWorld({ signal, compact = false } = {}) {
         // Preflight verifies legacy kind overrides too, even though only the
         // semantic slots have durable resolution locks.
         ...Object.fromEntries(Object.entries(lockedConfig.design.userOverrides?.assets || {})
-          .map(([slot, path]) => [slot, { path, userOverride: true }])),
+          .map(([slot, path]) => [slot, {
+            ...(lockedConfig.design.assetResolutions[slot]?.path === path ? lockedConfig.design.assetResolutions[slot] : {}),
+            path, userOverride: true,
+          }])),
       },
       currentState: presence.snapshot?.state || {},
       meta: { title: lockedConfig.design.name, hostId },

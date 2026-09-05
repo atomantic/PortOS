@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  EIDOVERSE_ASSET_RECIPE_V2,
+  EIDOVERSE_ASSET_RECIPE_V3,
   EIDOVERSE_WORLD_DESIGN_V1,
   EIDOVERSE_WORLD_DESIGN_V2,
+  EIDOVERSE_WORLD_DESIGN_V3,
   EIDOVERSE_WORLD_DESIGNS,
   extractEidoverseDesignOverrides,
   inspectEidoverseAssetResolutionLocks,
@@ -10,7 +11,7 @@ import {
   resolveEidoverseAssetRecipe,
 } from './eidoverseWorldDesign.js';
 
-const catalog = () => Object.values(EIDOVERSE_ASSET_RECIPE_V2.slots).flatMap((slot) => [
+const catalog = () => Object.values(EIDOVERSE_ASSET_RECIPE_V3.slots).flatMap((slot) => [
   { path: slot.preferredPaths[0], size: Math.min(slot.maxBytes, 10_000_000) },
   { path: slot.fallback, size: 4_000_000 },
 ]);
@@ -18,9 +19,9 @@ const catalog = () => Object.values(EIDOVERSE_ASSET_RECIPE_V2.slots).flatMap((sl
 describe('Eidoverse World Design V2', () => {
   it('keeps the shipped migration baselines deeply immutable', () => {
     expect(Object.isFrozen(EIDOVERSE_WORLD_DESIGN_V1.assets)).toBe(true);
-    expect(Object.isFrozen(EIDOVERSE_ASSET_RECIPE_V2.slots.app.preferredPaths)).toBe(true);
+    expect(Object.isFrozen(EIDOVERSE_ASSET_RECIPE_V3.slots.app.preferredPaths)).toBe(true);
     expect(Object.isFrozen(EIDOVERSE_WORLD_DESIGN_V2.environment.lights[0])).toBe(true);
-    expect(EIDOVERSE_WORLD_DESIGNS).toEqual({ 1: EIDOVERSE_WORLD_DESIGN_V1, 2: EIDOVERSE_WORLD_DESIGN_V2 });
+    expect(EIDOVERSE_WORLD_DESIGNS).toEqual({ 1: EIDOVERSE_WORLD_DESIGN_V1, 2: EIDOVERSE_WORLD_DESIGN_V2, 3: EIDOVERSE_WORLD_DESIGN_V3 });
   });
 
   it('upgrades untouched V1 leaves to V2 without manufacturing overrides', () => {
@@ -31,13 +32,29 @@ describe('Eidoverse World Design V2', () => {
     expect(migrated.compatible).toBe(true);
     expect(migrated.state).toMatchObject({
       schemaVersion: 3,
-      selectedDesignVersion: 2,
+      selectedDesignVersion: 3,
       lastAppliedDesignVersion: 1,
-      pendingDesignVersion: 2,
+      pendingDesignVersion: 3,
       userOverrides: {},
-      recipe: { version: 2, name: 'Luminous Systems Garden' },
+      recipe: { version: 3, name: 'PortOS Commons' },
     });
     expect(migrated.report).toMatchObject({ status: 'ready', preservedOverrides: [] });
+  });
+
+  it('upgrades the shipped V2 design while retaining explicit customization and the last applied version', () => {
+    const pristine = migrateEidoverseWorldState({ schemaVersion: 3, selectedDesignVersion: 2,
+      lastAppliedDesignVersion: 2, recipe: EIDOVERSE_WORLD_DESIGN_V2 });
+    expect(pristine.state.userOverrides).toEqual({});
+    expect(pristine.state.recipe).toEqual(EIDOVERSE_WORLD_DESIGN_V3);
+    expect(pristine.state).toMatchObject({ lastAppliedDesignVersion: 2, pendingDesignVersion: 3 });
+    const customized = migrateEidoverseWorldState({ schemaVersion: 3, selectedDesignVersion: 2,
+      lastAppliedDesignVersion: 2, migrationReport: { unsupportedOverrides: { customExtension: 'retained' }, ignoredLegacyLayout: ['districts'], removedMachineDerivedIdentity: true }, userOverrides: { name: 'Example Commons', includes: { apps: false },
+        assets: { app: 'store/example-custom.glb' } }, labelAliases: { 'app-0123456789ab': 'Example alias' } });
+    expect(customized.state.recipe).toMatchObject({ name: 'Example Commons', includes: { apps: false },
+      assets: { app: 'store/example-custom.glb' }, version: 3 });
+    expect(customized.state.migrationReport).toMatchObject({ unsupportedOverrides: { customExtension: 'retained' }, ignoredLegacyLayout: ['districts'], removedMachineDerivedIdentity: true, toDesignVersion: 3 });
+    expect(customized.state.labelAliases).toEqual({ 'app-0123456789ab': 'Example alias' });
+    expect(migrateEidoverseWorldState(customized.state).state).toEqual(customized.state);
   });
 
   it('preserves customized V1 leaves while inheriting new V2 defaults', () => {
@@ -55,7 +72,7 @@ describe('Eidoverse World Design V2', () => {
       assets: { app: 'store/example-local-model' },
     });
     expect(migrated.state.recipe).toMatchObject({
-      version: 2,
+      version: 3,
       limits: { apps: 3, agents: EIDOVERSE_WORLD_DESIGN_V2.limits.agents },
       assets: { app: 'store/example-local-model' },
     });
@@ -97,9 +114,9 @@ describe('Eidoverse World Design V2', () => {
     });
     expect(migrated.state.recipe.environment.terrain).toMatchObject({
       seed: 'example-custom',
-      size: EIDOVERSE_WORLD_DESIGN_V2.environment.terrain.size,
-      segments: EIDOVERSE_WORLD_DESIGN_V2.environment.terrain.segments,
-      layers: EIDOVERSE_WORLD_DESIGN_V2.environment.terrain.layers,
+      size: EIDOVERSE_WORLD_DESIGN_V3.environment.terrain.size,
+      segments: EIDOVERSE_WORLD_DESIGN_V3.environment.terrain.segments,
+      layers: EIDOVERSE_WORLD_DESIGN_V3.environment.terrain.layers,
     });
   });
 
@@ -209,7 +226,7 @@ describe('Eidoverse World Design V2', () => {
     });
     expect(migrateEidoverseWorldState({
       schemaVersion: 2,
-      selectedDesignVersion: 2,
+      selectedDesignVersion: 3,
       assetRecipeVersion: 99,
     })).toMatchObject({
       compatible: false,
@@ -225,19 +242,19 @@ describe('Eidoverse World Design V2', () => {
     });
 
     expect(first.missing).toEqual([]);
-    expect(Object.keys(first.resolutions)).toHaveLength(10);
+    expect(Object.keys(first.resolutions)).toHaveLength(13);
     expect(second).toEqual(first);
     expect(Object.values(first.resolutions).every(({ path }) => path.startsWith('eidoverse/assets/models/'))).toBe(true);
     expect(first.resolutions.storage.path).not.toBe(first.resolutions.app.path);
     expect(first.resolutions.app).toMatchObject({
-      designVersion: 2,
-      assetRecipeVersion: 2,
+      designVersion: 3,
+      assetRecipeVersion: 3,
       slot: 'app',
       strategy: 'preferred',
       shippedDefault: true,
       userOverride: false,
     });
-    expect(JSON.stringify(EIDOVERSE_ASSET_RECIPE_V2)).not.toMatch(/\.glb\s*data:|base64/i);
+    expect(JSON.stringify(EIDOVERSE_ASSET_RECIPE_V3)).not.toMatch(/\.glb\s*data:|base64/i);
   });
 
   it('invalidates only a slot whose recipe fingerprint changed', () => {
@@ -299,21 +316,21 @@ describe('Eidoverse World Design V2', () => {
   });
 
   it('uses deterministic search results when a preferred library path is absent', () => {
-    const appSlot = EIDOVERSE_ASSET_RECIPE_V2.slots.app;
+    const appSlot = EIDOVERSE_ASSET_RECIPE_V3.slots.app;
     const searchedPath = 'eidoverse/assets/models/example_server_console.glb';
     const withoutApp = catalog().filter(({ path }) => (
       path !== appSlot.preferredPaths[0] && path !== appSlot.fallback
     ));
     const result = resolveEidoverseAssetRecipe({
       files: withoutApp,
-      searchResults: { 'computer server': [{ path: searchedPath, size: 2_000_000 }] },
+      searchResults: { 'retro computer': [{ path: searchedPath, size: 2_000_000 }] },
     });
 
     expect(result.resolutions.app).toMatchObject({ path: searchedPath, source: 'query' });
   });
 
   it('accepts renamed search hits without substring-matching excluded whole tokens', () => {
-    const taskSlot = EIDOVERSE_ASSET_RECIPE_V2.slots.task;
+    const taskSlot = EIDOVERSE_ASSET_RECIPE_V3.slots.task;
     const renamedPath = 'eidoverse/assets/models/example_cargo_pod_blue.glb';
     const withoutTask = catalog().filter(({ path }) => (
       path !== taskSlot.preferredPaths[0] && path !== taskSlot.fallback
@@ -327,7 +344,7 @@ describe('Eidoverse World Design V2', () => {
   });
 
   it('keeps catalog entries with unknown sizes and records nullable lock bytes', () => {
-    const appPath = EIDOVERSE_ASSET_RECIPE_V2.slots.app.preferredPaths[0];
+    const appPath = EIDOVERSE_ASSET_RECIPE_V3.slots.app.preferredPaths[0];
     const files = catalog().map((candidate) => (
       candidate.path === appPath ? { path: candidate.path } : candidate
     ));
@@ -341,7 +358,7 @@ describe('Eidoverse World Design V2', () => {
   });
 
   it('uses a safe catalog GLB as a last resort after semantic searches are exhausted', () => {
-    const taskSlot = EIDOVERSE_ASSET_RECIPE_V2.slots.task;
+    const taskSlot = EIDOVERSE_ASSET_RECIPE_V3.slots.task;
     const files = catalog().filter(({ path }) => (
       path !== taskSlot.preferredPaths[0] && path !== taskSlot.fallback
     ));
@@ -355,7 +372,7 @@ describe('Eidoverse World Design V2', () => {
   });
 
   it('searches before accepting an explicit fallback asset', () => {
-    const appSlot = EIDOVERSE_ASSET_RECIPE_V2.slots.app;
+    const appSlot = EIDOVERSE_ASSET_RECIPE_V3.slots.app;
     const files = catalog().filter(({ path }) => path !== appSlot.preferredPaths[0]);
     const beforeSearch = resolveEidoverseAssetRecipe({ files });
     const afterSearch = resolveEidoverseAssetRecipe({

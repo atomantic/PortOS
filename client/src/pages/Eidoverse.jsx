@@ -6,6 +6,7 @@ import {
   RotateCcw,
   Settings,
   SlidersHorizontal,
+  Tags,
 } from 'lucide-react';
 import { Link } from 'react-router';
 import PageHeader from '../components/PageHeader';
@@ -467,6 +468,16 @@ export default function Eidoverse() {
     <>
       {phase === 'ready' && (
         <>
+          <button
+            type="button"
+            aria-label="Show object labels"
+            aria-pressed={frame.labelVisibility !== 'off'}
+            onClick={() => frame.changeLabelVisibility(frame.labelVisibility === 'off' ? 'nearby' : 'off')}
+            title="Toggle object labels for this visit"
+            className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent hover:text-white aria-pressed:border-port-accent aria-pressed:text-port-accent"
+          >
+            <Tags size={16} aria-hidden="true" />Labels
+          </button>
           <button
             type="button"
             aria-label="Refresh world"

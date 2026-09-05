@@ -151,6 +151,12 @@ describe('Eidoverse hosted page', () => {
     expect(screen.getByRole('button', { name: 'Refresh world' }))
       .toHaveAttribute('aria-label', 'Refresh world');
     expect(screen.getByRole('button', { name: 'Refresh world' })).not.toHaveClass('port-media-overlay');
+    const labels = screen.getByRole('button', { name: 'Show object labels' });
+    expect(labels).toHaveAttribute('aria-pressed', 'false');
+    await user.click(labels);
+    expect(labels).toHaveAttribute('aria-pressed', 'true');
+    await user.click(labels);
+    expect(labels).toHaveAttribute('aria-pressed', 'false');
     expect(screen.queryByText('Your PortOS, made spatial')).not.toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'PortOS district legend' })).not.toBeInTheDocument();
     expect(screen.queryByText('12/48 live signals')).not.toBeInTheDocument();

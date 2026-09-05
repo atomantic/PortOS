@@ -519,3 +519,6 @@ export * from './testDataIsolation.js';
 export * from './testHelper.js';
 
 export * from './videoFailure.js';
+
+export * from './eidoverseCityLayout.js';
+export * from './eidoverseCitySurface.js';

@@ -136,6 +136,43 @@ local Agent Tools (MCP) controls; generic PortOS write access does not imply it.
 This makes both the human and CoS roles durable in the Eidoverse world rather
 than browser-session conveniences.
 
+## World Design V3: PortOS Commons
+
+Commons arranges eight inward-facing halls around a grassy arrival park.
+A broad circular promenade and short paths link rounded gathering terraces;
+trees, planted beds, and timber seating soften the edges. The center stays
+clear for pedestrian agents, Persistent Mind avatars, and human guests.
+Buildings use Eidoverse's existing `comp.structure` grammar: tiled floors,
+glass frontage, open archways, walls, and roofs, with native collision.
+A deterministic GLB adds walking surfaces, decorative seating, and physical
+district signs through Eidoverse's ordinary content-addressed upload API.
+Each install reuses the verified recipe-derived asset on later projections.
+
+Library geometry summaries are measured once per resolved path and retained
+in the asset locks. Placement compensates model-origin offsets and fits a
+semantic size envelope; native structure anchors and the city surface retain
+their authored coordinates. Desktop computers sit at the measured desk height.
+
+The portable recipe resolves desks, retro terminals, crates, barrels, palms,
+and streetlights from each install's own library. Furniture stays inside the
+buildings or beside entrances. Arcade computers sit on individual desks, with the first eight workstations
+inside the hall and overflow on its terrace. Other bounded live signals occupy
+distinct bays beside the entrance aisle, sharing the existing 48-signal budget. Decorative furniture
+has no floating label. Semantic landmarks and signals keep their optional
+annotations, hidden at the start of each visit until the user activates the
+Labels toolbar toggle or chooses a label mode in World controls.
+
+V1 and V2 defaults remain immutable migration baselines. The V3 migration
+preserves explicit overrides, aliases, and the last successfully applied
+version. Changed asset slots invalidate their resolution fingerprints;
+unchanged locks remain reusable. Existing managed identifiers stay stable,
+obsolete trail markers are retired by normal reconciliation, and unrelated
+visitor-built entities remain untouched. Failure compensation restores native
+structure components through the existing component rollback path.
+
+No Eidoverse framework change is required. Physical signs are authored scene geometry; camera-facing clickable labels are
+a separate, optional renderer capability. Building room labels describe topology and do not render signs.
+
 ## World Design V2: Luminous Systems Garden
 
 PortOS ships a versioned world-design recipe, not a one-instance scene. World
@@ -445,8 +482,9 @@ allowed. URLs, query strings, encoded/relative paths, record payloads, and
 unknown entities cannot navigate. No URL proxy is exposed.
 
 The Eidoverse framework leaves object labels off by default. PortOS explicitly enables
-them through its trusted frame session, defaulting to `all-nearby` when this browser
-has no saved preference. Existing saved choices, including `off`, are preserved.
+them through its trusted frame session only after the user enables Labels. Each
+visit starts with `off`; an older stored always-on preference does not enable
+an overlay. The toggle and World controls change only this visit's view.
 Labels are positioned over their objects; clicking or tapping one opens its semantic
 name and description, with Open in PortOS supplied only by our fork. The old detached
 object dropdown and armed inspection buttons are removed.

@@ -21,7 +21,7 @@ describe('Eidoverse alias state migration', () => {
     await writeFile(path, JSON.stringify({ schemaVersion: 2, userOverrides, assetResolutions, world: 'example-world' }));
     await expect(migration.up({ rootDir })).resolves.toEqual({ updated: 1 });
     const state = JSON.parse(await readFile(path, 'utf8'));
-    expect(state).toMatchObject({ schemaVersion: 3, selectedDesignVersion: 2, labelAliases: {}, userOverrides, assetResolutions });
+    expect(state).toMatchObject({ schemaVersion: 3, selectedDesignVersion: 3, labelAliases: {}, userOverrides, assetResolutions });
     expect(state.recipe).toMatchObject({ name: 'Example garden', assets: { app: 'store/example-custom' }, limits: { apps: 2 } });
     const aliases = { 'app-0123456789ab': 'Example tower' };
     await writeFile(path, JSON.stringify({ ...state, labelAliases: aliases }));

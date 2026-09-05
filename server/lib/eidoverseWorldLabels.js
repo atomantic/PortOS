@@ -36,10 +36,7 @@ export function eidoverseLabelCapabilities(version) {
 
 const MAX_NAME_CHARS = 72;
 const MAX_DESCRIPTION_CHARS = 240;
-// Landmarks are large and read from across a district; indicators and the
-// world-identity marker are small, so their plaques sit just above the model.
-const LANDMARK_OFFSET = Object.freeze([0, 4, 0]);
-const MARKER_OFFSET = Object.freeze([0, 1.5, 0]);
+// Omit a fixed offset: the optional renderer anchors labels to actual geometry.
 
 /**
  * The one sanitizer for text PortOS writes into a world: control characters
@@ -103,7 +100,6 @@ function districtLabel(component) {
       enabled.length ? `projecting ${enabled.join(', ')}` : 'no sources enabled',
     ].join('. ')}.`,
     visibility: 'always',
-    offset: LANDMARK_OFFSET,
   });
 }
 
@@ -123,7 +119,6 @@ function worldMetaLabel(component) {
     name: component.meta?.title,
     description: 'This world is projected by PortOS. Every landmark and indicator in it is generated from aggregate signals, never from record contents.',
     visibility: 'always',
-    offset: MARKER_OFFSET,
   });
 }
 
@@ -141,7 +136,6 @@ function signalLabel(component) {
       `status is ${safeWorldText(component.status, 'unknown', 24)} and ${freshness}`,
     ].join('. ')}.`,
     visibility: 'nearby',
-    offset: MARKER_OFFSET,
   });
 }
 
