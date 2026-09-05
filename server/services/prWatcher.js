@@ -68,7 +68,11 @@ export async function getSelfLogin(host) {
   if (_selfLoginCache.has(host)) return _selfLoginCache.get(host);
   // `--hostname` is required: without it `gh api` targets github.com regardless
   // of cwd, resolving the wrong identity for an enterprise repo.
-  const login = await execGh(['api', 'user', '--hostname', host, '--jq', '.login']).catch((err) => {
+  const login = await execGh(
+    ['api', 'user', '--hostname', host, '--jq', '.login'],
+    undefined,
+    { backoffKey: host }
+  ).catch((err) => {
     // Log rather than swallow (#3358): without this a firewalled/unauthenticated
     // gh is indistinguishable from "this host has no login", and every self/others
     // gate silently stops firing with nothing in the log to explain it.
@@ -97,7 +101,11 @@ export function __resetSelfLoginCache() {
  * cwd-based auto-detection would resolve ambiguously. Returns null on failure.
  */
 async function getDefaultBranch(repoSpec) {
-  const name = await execGh(['repo', 'view', repoSpec, '--json', 'defaultBranchRef', '-q', '.defaultBranchRef.name'])
+  const name = await execGh(
+    ['repo', 'view', repoSpec, '--json', 'defaultBranchRef', '-q', '.defaultBranchRef.name'],
+    undefined,
+    { backoffKey: repoSpec }
+  )
     .catch((err) => {
       console.error(`❌ pr-watcher: could not resolve the default branch for ${repoSpec}: ${err.message}`);
       return null;
@@ -117,7 +125,7 @@ async function listOpenPullRequests(repoSpec, baseBranch) {
     '--base', baseBranch, '--state', 'open',
     '--limit', String(PR_LIST_LIMIT),
     '--json', 'number,title,author,url,createdAt,updatedAt,isDraft,headRefName,headRefOid,mergeStateStatus,statusCheckRollup'
-  ]).catch((err) => {
+  ], undefined, { backoffKey: repoSpec }).catch((err) => {
     console.error(`❌ pr-watcher: gh pr list failed for ${repoSpec}: ${err.message}`);
     return null;
   });
@@ -281,7 +289,7 @@ async function readPendingPullRequest(repoSpec, prNumber) {
   const raw = await execGh([
     'pr', 'view', String(prNumber), '--repo', repoSpec,
     '--json', 'state,mergeStateStatus,statusCheckRollup'
-  ]).catch(() => null);
+  ], undefined, { backoffKey: repoSpec }).catch(() => null);
   const parsed = raw === null ? null : safeJSONParse(raw, null);
   return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
 }

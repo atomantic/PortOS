@@ -44,9 +44,12 @@ router.get('/status', asyncHandler(async (req, res) => {
   res.json({ ...status, activeCosAgents, persistentMindImages });
 }));
 
-// POST /api/update/check — triggers manual check
+// POST /api/update/check — triggers manual check. `manual: true` bypasses the
+// unattended scheduler's gh backoff — a user who explicitly asked for a check
+// must get a real attempt, not a silent rejection from a cooldown the
+// background poller armed on its own.
 router.post('/check', asyncHandler(async (req, res) => {
-  const result = await updateChecker.checkForUpdate();
+  const result = await updateChecker.checkForUpdate({ manual: true });
   res.json(result);
 }));
 

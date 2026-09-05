@@ -367,6 +367,19 @@ describe('reconcile', () => {
       .toEqual(expect.arrayContaining(['--hostname', 'github.acme.example']));
   });
 
+  it('keys every periodic GitHub read by its repository selector', async () => {
+    mockGh({ issues: [], merged: [], open: [] });
+
+    const result = await gatherIssueState('/repo');
+
+    expect(result).not.toBeNull();
+    const periodicReads = execGh.mock.calls.filter(([argv]) => argv[0] === 'issue' || argv[0] === 'pr');
+    expect(periodicReads).toHaveLength(3);
+    for (const [, , options] of periodicReads) {
+      expect(options).toEqual({ backoffKey: 'github.com/atomantic/PortOS' });
+    }
+  });
+
   it('scans a custom-hostname self-hosted forge when the app pins workTracker (issue #3767)', async () => {
     // Neither `github.*` nor `gitlab.*` — no hostname heuristic can classify a
     // self-hosted forge, so the app's own pin is the only signal. Without the
