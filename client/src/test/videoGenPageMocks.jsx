@@ -1,12 +1,12 @@
 /**
  * Shared mock scaffold for the VideoGen page suites.
  *
- * Five suites (`pages/VideoGen.terms`, `.federatedTarget`, `.composeWhileBusy`,
- * `.textEncoderAutoDownload`, `.modelLoading`) each used to carry a near-verbatim
- * ~140-line copy of the same 25 `vi.mock` registrations, the same `state` object,
- * the same model fixture and the same `renderPage()` helper. Every endpoint or
- * hook the page started calling had to be added in five places, or four suites
- * broke at once.
+ * Six suites (`pages/VideoGen.terms`, `.federatedTarget`, `.composeWhileBusy`,
+ * `.textEncoderAutoDownload`, `.modelLoading`, `.remix`) each used to carry a
+ * near-verbatim ~140-line copy of the same 25 `vi.mock` registrations, the same
+ * `state` object, the same model fixture and the same `renderPage()` helper.
+ * Every endpoint or hook the page started calling had to be added in five
+ * places, or four suites broke at once.
  *
  * **Importing this module registers the mocks** — that is the whole point, and it
  * is what the vitest hoisting rules allow. `vi.mock` is hoisted to the top of the
@@ -34,7 +34,7 @@ const DEFAULT_UNIVERSE_STYLE = {
 };
 
 /**
- * Every knob the five suites vary. Mutated in `beforeEach`; read lazily by the
+ * Every knob the suites vary. Mutated in `beforeEach`; read lazily by the
  * mock factories below, so a reassignment takes effect on the next render.
  */
 export const state = {
@@ -64,9 +64,25 @@ export const state = {
   /** `RuntimeInstallModal`'s `onComplete`, captured so a suite can fire it. */
   runtimeInstallComplete: null,
   universeStyle: DEFAULT_UNIVERSE_STYLE,
+  /** `GET /api/video-gen/history`; a spy so a suite can defer it, reject it, or seed records. */
+  listVideoHistory: vi.fn(),
+  /**
+   * Last props handed to the panels below, captured by mocks that still render
+   * NOTHING — the five older suites assert over the DOM, so a probe element
+   * here would change what they see. The Remix suite reads the restored
+   * sampler/LoRA values and drives the in-page Remix through
+   * `galleryProps.onRemix`, which is the page's real gallery handler.
+   */
+  advancedParams: null,
+  loraPicker: null,
+  galleryProps: null,
+  /** `useMediaCompletionRefresh`'s options, so a suite can fire a completion refresh. */
+  completionRefresh: null,
+  /** `listLorasFull` — the installed library the LoRA picker resolves names against. */
+  availableLoras: [],
 };
 
-const SPIES = ['getVideoGenStatus', 'getVideoGenModelContext', 'generateVideo', 'attach', 'start', 'startWhenIdle', 'repair', 'cancel', 'refresh'];
+const SPIES = ['getVideoGenStatus', 'getVideoGenModelContext', 'generateVideo', 'attach', 'start', 'startWhenIdle', 'repair', 'cancel', 'refresh', 'listVideoHistory'];
 
 /** Restore every documented default, including fresh spies. Call it first in `beforeEach`. */
 export function resetVideoGenMockState() {
@@ -78,7 +94,13 @@ export function resetVideoGenMockState() {
   state.runtimeInstallComplete = null;
   state.universeStyle = DEFAULT_UNIVERSE_STYLE;
   state.eventSourceRef.current = null;
+  state.advancedParams = null;
+  state.loraPicker = null;
+  state.galleryProps = null;
+  state.completionRefresh = null;
+  state.availableLoras = [];
   for (const key of SPIES) state[key].mockReset();
+  state.listVideoHistory.mockResolvedValue([]);
 }
 
 /** A video model as `GET /api/video-gen/status` reports it. */
@@ -143,7 +165,7 @@ vi.mock('../services/api', () => ({
   getVideoGenModelContext: (...args) => state.getVideoGenModelContext(...args),
   generateVideo: (...args) => state.generateVideo(...args),
   cancelVideoGen: vi.fn(async () => ({})),
-  listVideoHistory: vi.fn(async () => []),
+  listVideoHistory: (...args) => state.listVideoHistory(...args),
   deleteVideoHistoryItem: vi.fn(async () => ({})),
   setVideoHidden: vi.fn(async () => ({})),
   extractLastFrame: vi.fn(async () => ({})),
@@ -153,7 +175,7 @@ vi.mock('../services/api', () => ({
   getActiveVideoJob: vi.fn(async () => ({ activeJob: state.activeJob })),
   getSettings: vi.fn(async () => ({ imageGen: { grok: { enabled: false } } })),
   getVideoGenRuntimeStatus: vi.fn(async () => ({ installed: true, ready: true, current: true })),
-  listLorasFull: vi.fn(async () => []),
+  listLorasFull: vi.fn(async () => state.availableLoras),
   // The prompt-enhancement controls mount useProviderModels, which fetches the
   // provider list from a mount effect. Unmocked it throws out of a passive
   // effect — the tests still pass, but the unhandled rejection fails the run.
@@ -186,7 +208,9 @@ vi.mock('../hooks/useModelDownloadStatus', () => ({
 vi.mock('../hooks/useMediaJobSse', () => ({
   useMediaJobSse: () => ({ attach: state.attach, eventSourceRef: state.eventSourceRef }),
 }));
-vi.mock('../hooks/useMediaCompletionRefresh', () => ({ useMediaCompletionRefresh: vi.fn() }));
+vi.mock('../hooks/useMediaCompletionRefresh', () => ({
+  useMediaCompletionRefresh: (options) => { state.completionRefresh = options; },
+}));
 vi.mock('../hooks/useMediaAnnotations', () => ({
   useMediaAnnotations: () => ({ annotations: {}, updateAnnotation: vi.fn(), getCardProps: vi.fn(() => ({})) }),
 }));
@@ -232,13 +256,19 @@ vi.mock('../components/videoGen/KeyframePanel', () => ({ default: () => null }))
 vi.mock('../components/videoGen/AudioPanel', () => ({ default: () => null }));
 vi.mock('../components/videoGen/ExtendPanel', () => ({ default: () => null }));
 vi.mock('../components/videoGen/IcLoraPanel', () => ({ default: () => null }));
-vi.mock('../components/videoGen/AdvancedParamsPanel', () => ({ default: () => null }));
+vi.mock('../components/videoGen/AdvancedParamsPanel', () => ({
+  default: (props) => { state.advancedParams = props; return null; },
+}));
 vi.mock('../components/videoGen/RuntimeFingerprint', () => ({ default: () => null }));
-vi.mock('../components/videoGen/VideoGenGallery', () => ({ default: () => null }));
+vi.mock('../components/videoGen/VideoGenGallery', () => ({
+  default: (props) => { state.galleryProps = props; return null; },
+}));
 vi.mock('../components/media/MediaPreview', () => ({ default: () => null }));
 vi.mock('../components/media/StylePresetPicker', () => ({ default: () => null }));
 vi.mock('../components/media/MediaJobsQueue', () => ({ default: () => null }));
-vi.mock('../components/imageGen/LoraPicker', () => ({ default: () => null }));
+vi.mock('../components/imageGen/LoraPicker', () => ({
+  default: (props) => { state.loraPicker = props; return null; },
+}));
 vi.mock('../components/media/ResolutionField', () => ({ default: () => null }));
 
 let VideoGen = null;
@@ -253,13 +283,16 @@ export async function loadVideoGenPage() {
   return VideoGen;
 }
 
-/** Mount the page on its own route, flushing the mount effects. */
-export async function renderVideoGenPage() {
+/**
+ * Mount the page on its own route, flushing the mount effects. `entry` overrides
+ * the location so a suite can exercise a URL handoff (`/media/video?remix=<id>`).
+ */
+export async function renderVideoGenPage(entry = '/media/video') {
   if (!VideoGen) throw new Error('await loadVideoGenPage() at module scope before rendering');
   let view;
   await act(async () => {
     view = render(
-      <MemoryRouter initialEntries={['/media/video']}>
+      <MemoryRouter initialEntries={[entry]}>
         <VideoGen />
       </MemoryRouter>,
     );

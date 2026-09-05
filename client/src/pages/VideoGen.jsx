@@ -336,9 +336,17 @@ export default function VideoGen() {
   // after `previewItems` below so the resolver can match against it.
   const [showHidden, setShowHidden] = useState(false);
 
-  const refreshHistory = useCallback(() => {
-    listVideoHistory().then((items) => setHistory(Array.isArray(items) ? items : [])).catch(() => {});
-  }, []);
+  // 'loading' until the first fetch settles, then 'loaded' or 'error'. A
+  // sentinel rather than `history.length` — the Remix handoff below has to tell
+  // "history is still in flight / failed to load" apart from "history loaded
+  // and has no such record", and an empty array is a legitimate loaded state.
+  const [historyLoad, setHistoryLoad] = useState('loading');
+  const refreshHistory = useCallback(() => listVideoHistory()
+    .then((items) => {
+      setHistory(Array.isArray(items) ? items : []);
+      setHistoryLoad('loaded');
+    })
+    .catch(() => setHistoryLoad('error')), []);
   useMediaCompletionRefresh({ onVideoCompleted: refreshHistory });
   useEffect(() => { refreshHistory(); }, [refreshHistory]);
 
@@ -422,6 +430,65 @@ export default function VideoGen() {
     applyRemix(raw);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [applyRemix]);
+
+  // Cross-page Remix (#6290). Media History (and every other MediaPreview
+  // surface) hands this page a RECORD ID rather than a render-settings bundle,
+  // so the restore runs through the same `applyRemix` the in-page gallery uses
+  // — one implementation that knows every field the record carries, instead of
+  // a URL enumeration that silently dropped the encoder, speed profile, draft
+  // decode and LoRAs. `history` is the unfiltered load, so a hidden record
+  // resolves too.
+  //
+  // The ref (not the stripped param) is what makes this one-shot: the strip is
+  // an async router update, so a completion refresh landing in the same tick
+  // would otherwise re-apply the handoff over edits the user has since made.
+  const remixHandoffId = searchParams.get('remix');
+  const remixHandoffAppliedRef = useRef(false);
+  // null while nothing is wrong; otherwise 'error' (the history fetch failed,
+  // retryable) or 'missing' (history loaded and holds no such record).
+  const [remixHandoffProblem, setRemixHandoffProblem] = useState(null);
+  const consumeRemixHandoff = useCallback(() => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('remix');
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+  useEffect(() => {
+    if (!remixHandoffId || remixHandoffAppliedRef.current) return;
+    // Still fetching: say nothing. Reporting "no such record" here would be a
+    // lie every time the page is opened faster than the history round trip.
+    if (historyLoad === 'loading') return;
+    if (historyLoad === 'error') {
+      // Keep the param so Retry can resolve it once the fetch succeeds, and
+      // leave the ref unset so the retry actually re-runs this effect.
+      setRemixHandoffProblem('error');
+      return;
+    }
+    const record = history.find((v) => String(v.id) === remixHandoffId);
+    remixHandoffAppliedRef.current = true;
+    if (record) {
+      applyRemix(record);
+      setRemixHandoffProblem(null);
+    } else {
+      setRemixHandoffProblem('missing');
+    }
+    consumeRemixHandoff();
+  }, [remixHandoffId, historyLoad, history, applyRemix, consumeRemixHandoff]);
+  // Back to 'loading' first, so a retry that fails again still moves the state
+  // ('loading' → 'error') and re-runs the effect above. Re-setting 'error' onto
+  // 'error' is a no-op React bails on, which would leave the banner dismissed
+  // after a second failure.
+  const retryRemixHandoff = useCallback(() => {
+    setHistoryLoad('loading');
+    setRemixHandoffProblem(null);
+    refreshHistory();
+  }, [refreshHistory]);
+  const dismissRemixHandoff = useCallback(() => {
+    remixHandoffAppliedRef.current = true;
+    setRemixHandoffProblem(null);
+    consumeRemixHandoff();
+  }, [consumeRemixHandoff]);
 
   // Finish a draft (#3696): same restore as Remix, but switched to the delivery
   // model the draft's registry entry declares. Prefill only — the user presses
@@ -1041,6 +1108,42 @@ export default function VideoGen() {
 
       <form onSubmit={handleGenerate} className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
         <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
+          {/* A cross-page Remix that could not be restored (#6290). Silence
+              would be the worst outcome here: the user pressed Remix, landed on
+              a form holding whatever it held before, and would start a render
+              with the wrong settings believing they were the clip's. */}
+          {remixHandoffProblem && (
+            <div
+              role="status"
+              className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-3 text-xs text-port-warning flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2"
+            >
+              <div>
+                {remixHandoffProblem === 'error'
+                  ? "Couldn't load your render history, so this clip's settings weren't restored."
+                  : 'That render is no longer in your history, so its settings could not be restored.'}
+                {' '}The form still holds its previous values.
+              </div>
+              <div className="flex items-center gap-2 self-start sm:self-auto">
+                {remixHandoffProblem === 'error' && (
+                  <button
+                    type="button"
+                    onClick={retryRemixHandoff}
+                    className="whitespace-nowrap inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/80"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Retry
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={dismissRemixHandoff}
+                  className="text-gray-400 hover:text-gray-200 text-xs"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
           {!isGrok && !isFal && !isReactor && byovRuntimeMissing && (
             <div className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-3 text-xs text-port-warning flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
               <div>
