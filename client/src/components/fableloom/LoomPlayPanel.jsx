@@ -759,7 +759,9 @@ function SceneScriptCard({
         )}
         {!node.isEnding && node.protagonistPresence === 'offscreen' && (
           <p className="mt-1 text-xs text-port-accent">
-            Protagonist off-screen — keep this decision loop running while the audience conversation happens on the side device.
+            {automaticCut
+              ? 'Protagonist off-screen during this camera cut.'
+              : 'Protagonist off-screen — keep this decision loop running while the audience conversation happens on the side device.'}
           </p>
         )}
     </article>
