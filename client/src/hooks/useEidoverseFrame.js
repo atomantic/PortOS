@@ -6,15 +6,6 @@ import {
   eidoverseNavigationTarget,
   isEidoverseFrameMessage,
 } from '../lib/eidoverseFrame';
-import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
-
-const PREFERENCE_KEY = 'portos-eidoverse-label-visibility';
-const readPreference = () => {
-  const stored = safeReadStorage(PREFERENCE_KEY);
-  // PortOS opts into world annotations; the standalone framework defaults off.
-  return EIDOVERSE_LABEL_PREFERENCES.includes(stored) ? stored : 'all-nearby';
-};
-
 export default function useEidoverseFrame(hostUrl, objects = []) {
   const frameRef = useRef(null);
   const objectsRef = useRef(objects);
@@ -22,7 +13,7 @@ export default function useEidoverseFrame(hostUrl, objects = []) {
   const sessionRef = useRef(null);
   const [loaded, setLoaded] = useState({ id: 0, url: null });
   const [connection, setConnection] = useState({ status: 'checking', capabilities: {} });
-  const [labelVisibility, setLabelVisibility] = useState(readPreference);
+  const [labelVisibility, setLabelVisibility] = useState('off');
   const preferenceRef = useRef(labelVisibility);
   const navigate = useNavigate();
 
@@ -78,7 +69,6 @@ export default function useEidoverseFrame(hostUrl, objects = []) {
     if (!EIDOVERSE_LABEL_PREFERENCES.includes(value)) return;
     preferenceRef.current = value;
     setLabelVisibility(value);
-    safeWriteStorage(PREFERENCE_KEY, value);
     const session = sessionRef.current;
     if (session?.capabilities.labelPreferences) {
       session.source.postMessage({

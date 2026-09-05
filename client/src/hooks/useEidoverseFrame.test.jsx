@@ -36,7 +36,7 @@ describe('hosted Eidoverse frame navigation', () => {
     fireEvent.load(frame);
     const [hello, origin] = post.mock.calls.at(-1);
     expect(origin).toBe('https://world.example.com');
-    expect(hello).toMatchObject({ type: 'portos:connect', version: 1, labelVisibility: 'all-nearby' });
+    expect(hello).toMatchObject({ type: 'portos:connect', version: 1, labelVisibility: 'off' });
     expect(Object.keys(hello).sort()).toEqual(['capabilities', 'labelVisibility', 'nonce', 'type', 'version']);
     const navigation = { type: 'eidoverse:navigate', version: 1, nonce: hello.nonce, entityId: objects[0].id, route: '/apps' };
     send(source, navigation); // No handshake yet.
@@ -77,8 +77,8 @@ describe('hosted Eidoverse frame navigation', () => {
     expect(screen.getByLabelText('Route')).toHaveTextContent('/apps');
   });
 
-  it('preserves an explicit saved opt-out when a new renderer connects', () => {
-    safeWriteStorage('portos-eidoverse-label-visibility', 'off');
+  it('starts hidden even if an older visit saved always-on labels', () => {
+    safeWriteStorage('portos-eidoverse-label-visibility', 'all-nearby');
     mount();
     const iframe = screen.getByTitle('Test renderer');
     const post = vi.spyOn(iframe.contentWindow, 'postMessage').mockImplementation(() => {});

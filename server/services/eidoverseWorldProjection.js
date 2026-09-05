@@ -5,6 +5,7 @@
  * identical environment, infrastructure, live, ambient, and cleanup verbs.
  */
 
+import { eidoverseCityArchitecture, eidoverseCityFurniture, eidoverseCitySignalPosition, eidoverseModelPlacement, eidoverseDistrictPoint, eidoverseDistrictYaw, eidoverseDesktopHeight } from '../lib/eidoverseCityLayout.js';
 import { createHash } from 'node:crypto';
 import { canonicalStringify } from '../lib/objects.js';
 import {
@@ -14,7 +15,7 @@ import {
   EIDOVERSE_META_ENTITY_ID,
   EIDOVERSE_PROJECTION_PREFIX,
   EIDOVERSE_WORLD_DESIGN_V1,
-  EIDOVERSE_WORLD_DESIGN_V2,
+  EIDOVERSE_WORLD_DESIGN_V3,
   EIDOVERSE_WORLD_DESIGN_VERSION,
   extractEidoverseDesignOverrides,
   migrateEidoverseWorldState,
@@ -59,7 +60,7 @@ const DISTRICT_ASSET_SLOT = Object.freeze({
 });
 // Just off the nexus and clear of every nexus->district path lane, whose first
 // node sits at 27% of the district anchor.
-const META_ENTITY_POS = Object.freeze([2.4, 0.08, 2.4]);
+const META_ENTITY_POS = Object.freeze([-2.4, 0.08, 2.4]);
 const DISTRICT_SCALE = Object.freeze({
   nexus: 1.15,
   apps: 1.1,
@@ -71,7 +72,7 @@ const DISTRICT_SCALE = Object.freeze({
   activity: 0.72,
 });
 
-export const DEFAULT_EIDOVERSE_PROJECTION_RECIPE = EIDOVERSE_WORLD_DESIGN_V2;
+export const DEFAULT_EIDOVERSE_PROJECTION_RECIPE = EIDOVERSE_WORLD_DESIGN_V3;
 
 const shortHash = (value) => createHash('sha256').update(String(value)).digest('hex').slice(0, 12);
 
@@ -137,25 +138,6 @@ function districtForSource(districts, sourceKey) {
     || EIDOVERSE_DISTRICTS_V2[0];
 }
 
-function entityPosition(sourceId, sourceKey, districts) {
-  const district = districtForSource(districts, sourceKey);
-  if (district.id === 'activity') {
-    const along = (stableEidoverseUnit(`${district.id}:${sourceId}:along`) * 2 - 1) * 9;
-    const bend = Math.sin(along / 4.5) * 1.8;
-    return [
-      Number((district.anchor[0] + along).toFixed(2)),
-      district.anchor[1] + 0.2,
-      Number((district.anchor[2] + bend).toFixed(2)),
-    ];
-  }
-  const angle = stableEidoverseUnit(`${district.id}:${sourceId}:angle`) * Math.PI * 2;
-  const radius = 5.5 + stableEidoverseUnit(`${district.id}:${sourceId}:radius`) * 7.5;
-  return [
-    Number((district.anchor[0] + Math.cos(angle) * radius).toFixed(2)),
-    district.anchor[1],
-    Number((district.anchor[2] + Math.sin(angle) * radius).toFixed(2)),
-  ];
-}
 
 function worldSignal(kind, sourceKey, item, districts) {
   const district = districtForSource(districts, sourceKey);
@@ -261,6 +243,7 @@ function nexusStatusLight(light, source, existing) {
  */
 function labelOperation({ prior, id, component, layer, lib, labelContext }) {
   const { aliases, objects, recipe, assetResolutions } = labelContext;
+  if (['architecture', 'furniture'].includes(component.kind)) return null;
   const label = buildEidoverseLabel(component, aliases[component.resourceKey]);
   const kind = component.kind === 'district'
     ? (component.districtId === 'nexus' ? 'operations' : null)
@@ -300,12 +283,17 @@ function upsertModel({
   pos,
   yaw = 0,
   scale = 1,
+  modelSize = 2,
+  normalizeModel = true,
   collide = 'box',
   component,
   motion = null,
+  structure = null,
   layer = 'live',
   motionLayer = 'ambient',
 }) {
+  const measuredAsset = Object.values(labelContext.assetResolutions).find((asset) => asset?.path === lib);
+  if (!structure && normalizeModel) ({ pos, yaw, scale } = eidoverseModelPlacement({ bounds: measuredAsset?.bounds, pos, yaw, scale, size: modelSize }));
   const existing = stateEntities[id];
   desiredIds.add(id);
   let created = 0;
@@ -331,6 +319,10 @@ function upsertModel({
     updated += 1;
   }
   const priorComponents = respawned ? undefined : existing.comp;
+  if (!equal(priorComponents?.structure ?? null, structure)) {
+    operations.push({ layer, verb: 'comp', args: { id, type: 'structure', data: structure } });
+    if (existing) updated += 1;
+  }
   if (!equal(priorComponents?.[COMPONENT_TYPE], component)) {
     operations.push({ layer, verb: 'comp', args: { id, type: COMPONENT_TYPE, data: component } });
     if (existing) updated += 1;
@@ -406,6 +398,32 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
     }
   }
 
+  let cityEntityCount = 0;
+  if (effectiveRecipe.assets.citySurface) {
+    const delta = upsertModel({ operations, labelContext, stateEntities, desiredIds,
+      id: `${EIDOVERSE_MANAGED_PREFIX}city-surface`, lib: effectiveRecipe.assets.citySurface,
+      pos: [0, 0, 0], normalizeModel: false, collide: null,
+      component: { schemaVersion: 1, managedBy: 'portos', designVersion: EIDOVERSE_WORLD_DESIGN_VERSION,
+        kind: 'architecture', districtId: 'nexus' }, layer: 'infrastructure' });
+    created += delta.created; updated += delta.updated; removed += delta.removed;
+    cityEntityCount += 1;
+  }
+  for (const item of [...eidoverseCityArchitecture(districts), ...eidoverseCityFurniture(districts, assetResolutions)]) {
+    const delta = upsertModel({ operations, labelContext, stateEntities, desiredIds,
+      id: `${EIDOVERSE_MANAGED_PREFIX}city-${item.key}`,
+      lib: assetPathFor(effectiveRecipe, null, item.slot || 'task'),
+      pos: item.pos, yaw: item.yaw || 0, scale: item.scale || 1, modelSize: item.size || 2, collide: item.structure ? null : 'box',
+      structure: item.structure || null,
+      component: { schemaVersion: 1, managedBy: 'portos', designVersion: EIDOVERSE_WORLD_DESIGN_VERSION,
+        kind: item.structure ? 'architecture' : 'furniture', districtId: item.districtId },
+      layer: 'infrastructure',
+    });
+    created += delta.created;
+    updated += delta.updated;
+    removed += delta.removed;
+    cityEntityCount += 1;
+  }
+
   for (const district of districts) {
     const id = `${EIDOVERSE_MANAGED_PREFIX}infra-${district.id}`;
     const enabledSources = district.sources.filter((key) => effectiveRecipe.includes[key]);
@@ -456,8 +474,10 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
       desiredIds,
       id,
       lib: assetPathFor(effectiveRecipe, district.id === 'nexus' ? 'operations' : null, districtSlot),
-      pos: district.anchor,
-      yaw: stableEidoverseUnit(`${district.id}:yaw`) * Math.PI * 2,
+      pos: eidoverseDistrictPoint(district, district.id === 'nexus' ? 5 : (district.id === 'apps' ? -5 : 0),
+        district.id === 'apps' ? eidoverseDesktopHeight(assetResolutions) : 0, district.id === 'apps' ? 3 : -2),
+      yaw: eidoverseDistrictYaw(district) + (district.id === 'federation' ? Math.PI / 2 : 0),
+      modelSize: ({ nexus: 7, apps: 0.7, agents: 2.5, goals: 3.2, memory: 2.4, data: 2.8, federation: 10, activity: 3.5 })[district.id] || 2,
       scale: Number((districtScale * (1 + Math.min(affordances.length, 3) * 0.035)).toFixed(3)),
       component,
       motion: ['agents', 'goals', 'memory'].includes(district.id)
@@ -628,6 +648,10 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
         if (!id.startsWith(`${PROJECTION_ID_PREFIX}${kind}-`)) continue;
         if (!retainedStaleIds.has(id)) continue;
         desiredIds.add(id);
+        if (kind === 'app') {
+          const deskId = `${EIDOVERSE_MANAGED_PREFIX}city-desk-${id.slice(PROJECTION_ID_PREFIX.length)}`;
+          if (stateEntities[deskId]) { desiredIds.add(deskId); cityEntityCount += 1; }
+        }
         const priorComponent = existing?.comp?.[COMPONENT_TYPE] || {};
         const priorMetrics = priorComponent.metrics || {};
         const district = districtForSource(districts, sourceKey);
@@ -673,7 +697,7 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
           operations.push(staleLabelOp);
           updated += 1;
         }
-        const staleMotion = {
+        const staleMotion = kind === 'app' ? null : {
           type: 'bob', amp: 0.12, period: 6,
           phase: Number((stableEidoverseUnit(`${id}:stale`) * Math.PI * 2).toFixed(4)),
         };
@@ -687,15 +711,26 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
     if (!slot) continue;
     for (const signal of selectedSignals.get(kind) || []) {
       const id = projectionEntityId(kind, signal.id);
-      const pos = entityPosition(signal.id, sourceKey, districts);
+      const district = districtForSource(districts, sourceKey);
+      const pos = eidoverseCitySignalPosition(district, districtCounts[district.id], kind === 'app');
+      if (kind === 'app') {
+        const desk = upsertModel({ operations, labelContext, stateEntities, desiredIds,
+          id: `${EIDOVERSE_MANAGED_PREFIX}city-desk-${id.slice(PROJECTION_ID_PREFIX.length)}`, lib: assetPathFor(effectiveRecipe, null, 'desk'), pos: [...pos],
+          yaw: eidoverseDistrictYaw(district), modelSize: 2.25,
+          component: { schemaVersion: 1, managedBy: 'portos', designVersion: EIDOVERSE_WORLD_DESIGN_VERSION,
+            kind: 'furniture', districtId: district.id }, layer: 'live' });
+        created += desk.created; updated += desk.updated; removed += desk.removed;
+        cityEntityCount += 1;
+        pos[1] += eidoverseDesktopHeight(assetResolutions) - 0.1;
+      }
       if (kind === 'goal' && typeof signal.metrics.progress === 'number') {
         pos[1] += 1.5 + Math.max(0, Math.min(100, signal.metrics.progress)) * 0.055;
       }
       const scaleVariation = 0.92 + stableEidoverseUnit(`${signal.id}:scale`) * 0.16;
       const statusScale = signal.severity === 'error' ? 1.22 : (signal.severity === 'attention' ? 1.1 : 1);
-      if (signal.severity === 'error') pos[1] += 1.6;
-      else if (signal.severity === 'attention') pos[1] += 0.7;
-      const shouldMove = signal.severity !== 'normal' || ['agent', 'activity', 'goal', 'jira', 'memory'].includes(kind);
+      if (kind !== 'app' && signal.severity === 'error') pos[1] += 1.6;
+      else if (kind !== 'app' && signal.severity === 'attention') pos[1] += 0.7;
+      const shouldMove = kind !== 'app' && (signal.severity !== 'normal' || ['agent', 'activity', 'goal', 'jira', 'memory'].includes(kind));
       const delta = upsertModel({
         operations,
         labelContext,
@@ -704,7 +739,8 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
         id,
         lib: assetPathFor(effectiveRecipe, kind, slot),
         pos,
-        yaw: stableEidoverseUnit(`${signal.id}:yaw`) * Math.PI * 2,
+        yaw: eidoverseDistrictYaw(district),
+        modelSize: kind === 'app' ? 0.7 : 1.5,
         scale: Number(((effectiveRecipe.scale[kind] || 1) * scaleVariation * statusScale).toFixed(3)),
         component: signal,
         motion: shouldMove ? {
@@ -744,7 +780,7 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
       designVersion: EIDOVERSE_WORLD_DESIGN_VERSION,
       liveEntityCount,
       maxLiveEntities: liveEntityLimit,
-      infrastructureCount: districts.length + pathNodeCount + metaEntityCount,
+      infrastructureCount: districts.length + pathNodeCount + metaEntityCount + cityEntityCount,
       districtCounts,
       sourceAvailability,
       truncated: Object.keys(droppedBySource).length > 0,

@@ -11,8 +11,8 @@ import { createHash } from 'node:crypto';
 import { canonicalStringify, deepMerge } from './objects.js';
 
 export const EIDOVERSE_WORLD_STATE_SCHEMA_VERSION = 3;
-export const EIDOVERSE_WORLD_DESIGN_VERSION = 2;
-export const EIDOVERSE_ASSET_RECIPE_VERSION = 2;
+export const EIDOVERSE_WORLD_DESIGN_VERSION = 3;
+export const EIDOVERSE_ASSET_RECIPE_VERSION = 3;
 export const EIDOVERSE_MAX_LIVE_ENTITIES = 48;
 export const EIDOVERSE_LIBRARY_MODEL_ROOT = 'eidoverse/assets/models/';
 export const EIDOVERSE_MANAGED_PREFIX = 'portos-design-v2-';
@@ -97,7 +97,7 @@ const assetSlot = ({ preferredPaths, fallbackQueries, requiredTokens, excludedTo
 // Paths are preferences, not bundled payloads. Queries allow a future library
 // to satisfy the same semantic role even when its filenames evolve.
 export const EIDOVERSE_ASSET_RECIPE_V2 = Object.freeze({
-  version: EIDOVERSE_ASSET_RECIPE_VERSION,
+  version: 2,
   slots: {
     nexus: assetSlot({
       preferredPaths: [`${MODEL_ROOT}scifi_perimeter_watchtower_standalone_or_with_wall_middle_four_way.glb`],
@@ -176,14 +176,14 @@ export const EIDOVERSE_DISTRICTS_V2 = Object.freeze([
 export const EIDOVERSE_ASSET_SLOTS_BY_DISTRICT = Object.freeze({
   // Include retired V1 kind keys as well as V2 semantic slots. A scoped reset
   // must clear hidden preserved overrides that can still win assetPathFor().
-  nexus: ['nexus', 'health', 'operations', 'feature', 'district'],
-  apps: ['app'],
-  agents: ['agent', 'task'],
-  goals: ['goal', 'jira'],
-  memory: ['memory'],
-  data: ['storage'],
-  federation: ['peer'],
-  activity: ['activity', 'productivity'],
+  nexus: ['nexus', 'health', 'operations', 'feature', 'district', 'activity', 'tree'],
+  apps: ['app', 'desk', 'activity', 'tree'],
+  agents: ['agent', 'task', 'desk', 'app', 'barrel', 'activity', 'tree'],
+  goals: ['goal', 'jira', 'desk', 'app', 'activity', 'tree'],
+  memory: ['memory', 'activity', 'tree'],
+  data: ['storage', 'app', 'desk', 'barrel', 'task', 'activity', 'tree'],
+  federation: ['peer', 'barrel', 'task', 'activity', 'tree'],
+  activity: ['activity', 'productivity', 'tree'],
 });
 
 export const EIDOVERSE_PATHS_V2 = Object.freeze(EIDOVERSE_DISTRICTS_V2
@@ -200,7 +200,7 @@ export const EIDOVERSE_PATHS_V2 = Object.freeze(EIDOVERSE_DISTRICTS_V2
   })));
 
 export const EIDOVERSE_WORLD_DESIGN_V2 = Object.freeze({
-  version: EIDOVERSE_WORLD_DESIGN_VERSION,
+  version: 2,
   name: 'Luminous Systems Garden',
   maxEntities: EIDOVERSE_MAX_LIVE_ENTITIES,
   includes: Object.fromEntries(EIDOVERSE_SOURCE_KEYS.map((key) => [key, true])),
@@ -241,6 +241,71 @@ export const EIDOVERSE_WORLD_DESIGN_V2 = Object.freeze({
   assets: {},
 });
 
+// V2 remains frozen as the exact migration baseline. V3 uses the framework's
+// existing structure component; the shared architecture contains no user data.
+export const EIDOVERSE_ASSET_RECIPE_V3 = {
+  version: 3,
+  slots: {
+    ...EIDOVERSE_ASSET_RECIPE_V2.slots,
+    app: { ...EIDOVERSE_ASSET_RECIPE_V2.slots.app,
+      preferredPaths: [`${MODEL_ROOT}scif_cyberpunk_crt_retro_computer_monitor_screen_keyboard_tower.glb`],
+      fallbackQueries: ['retro computer', 'computer terminal'], requiredTokens: ['computer'], maxBytes: 44_000_000 },
+    storage: { ...EIDOVERSE_ASSET_RECIPE_V2.slots.storage,
+      preferredPaths: [`${MODEL_ROOT}single_loose_computer_server.glb`],
+      fallbackQueries: ['computer server'], requiredTokens: ['server'] },
+    task: { ...EIDOVERSE_ASSET_RECIPE_V2.slots.task,
+      preferredPaths: [`${MODEL_ROOT}crate_large_blue.glb`] },
+    desk: assetSlot({
+      preferredPaths: [`${MODEL_ROOT}scifi_art_deco_office_desk.glb`],
+      fallbackQueries: ['office desk'], requiredTokens: ['desk'], maxBytes: 24_000_000,
+      fallback: `${MODEL_ROOT}crate_large_blue.glb`,
+    }),
+    barrel: assetSlot({
+      preferredPaths: [`${MODEL_ROOT}scifi_barrels_single.glb`],
+      fallbackQueries: ['barrel'], requiredTokens: ['barrel'], maxBytes: 16_000_000,
+      fallback: `${MODEL_ROOT}crate_large_blue.glb`,
+    }),
+    tree: assetSlot({
+      preferredPaths: [`${MODEL_ROOT}palm_date_tree_tropical_deseert_oasis_plant.glb`],
+      fallbackQueries: ['palm tree'], requiredTokens: ['tree'], maxBytes: 24_000_000,
+      fallback: `${MODEL_ROOT}stylized_yucca_joshua_tree_desert_cactus_plant.glb`,
+    }),
+  },
+};
+
+export const EIDOVERSE_WORLD_DESIGN_V3 = {
+  ...structuredClone(EIDOVERSE_WORLD_DESIGN_V2),
+  version: 3,
+  name: 'PortOS Commons',
+  districts: EIDOVERSE_DISTRICTS_V2.map((district) => ({
+    ...district,
+    anchor: ({
+      nexus: [-44, 0, 0], apps: [-31.11, 0, -31.11], agents: [0, 0, -44],
+      goals: [31.11, 0, -31.11], memory: [44, 0, 0], data: [31.11, 0, 31.11],
+      federation: [-31.11, 0, 31.11], activity: [0, 0, 44],
+    })[district.id],
+    label: ({ apps: 'App Arcade', memory: 'Memory Library', data: 'Data Depot', federation: 'Federation Terminal', activity: 'Activity Exchange' })[district.id] || district.label,
+    landmark: ({ nexus: 'civic spire', apps: 'console arcade', agents: 'workshop courtyard', goals: 'beacon hall', memory: 'reading hall', data: 'storage depot', federation: 'arrival gate', activity: 'exchange hall' })[district.id],
+    direction: ({ nexus: 'West', memory: 'East', data: 'Southeast', activity: 'South' })[district.id] || district.direction,
+  })),
+  // A pedestrian promenade links inward-facing halls around the arrival park.
+  paths: [],
+  environment: {
+    ...structuredClone(EIDOVERSE_WORLD_DESIGN_V2.environment),
+    sky: { ...structuredClone(EIDOVERSE_WORLD_DESIGN_V2.environment.sky), hours: 10, fog: 0.16, exposure: 1.15 },
+    terrain: {
+      seed: 'portos-commons-v3', size: 180, segments: 96,
+      amplitude: 0.7, flatRadius: 65,
+      layers: [{ color: '#527044', repeat: 32 }, { color: '#738459', repeat: 18 }],
+    },
+    grass: {
+      species: 'grass', width: 38, depth: 38, center: [0, 0],
+      height: 0.24, color: 'emerald', density: 0.7,
+    },
+  },
+  assetRecipe: EIDOVERSE_ASSET_RECIPE_V3,
+};
+
 const EIDOVERSE_V2_DEFAULT_CHANGES = Object.freeze([
   { area: 'Composition', from: 'uniform resource lanes', to: 'eight semantic districts and circulation paths' },
   { area: 'Atmosphere', from: 'terrain only', to: 'warm dawn sky, authored light, restrained fog, and sparse grass' },
@@ -251,6 +316,7 @@ const EIDOVERSE_V2_DEFAULT_CHANGES = Object.freeze([
 export const EIDOVERSE_WORLD_DESIGNS = Object.freeze({
   1: EIDOVERSE_WORLD_DESIGN_V1,
   2: EIDOVERSE_WORLD_DESIGN_V2,
+  3: EIDOVERSE_WORLD_DESIGN_V3,
 });
 
 function freezeWorldContract(value) {
@@ -269,6 +335,8 @@ freezeWorldContract(EIDOVERSE_DISTRICTS_V2);
 freezeWorldContract(EIDOVERSE_ASSET_SLOTS_BY_DISTRICT);
 freezeWorldContract(EIDOVERSE_PATHS_V2);
 freezeWorldContract(EIDOVERSE_WORLD_DESIGN_V2);
+freezeWorldContract(EIDOVERSE_ASSET_RECIPE_V3);
+freezeWorldContract(EIDOVERSE_WORLD_DESIGN_V3);
 freezeWorldContract(EIDOVERSE_WORLD_DESIGNS);
 
 const isObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -289,9 +357,9 @@ function diffLeaves(value, baseline) {
 }
 
 export function resolveEidoverseDesign(userOverrides = {}, assetResolutions = {}) {
-  const resolved = mergeDesign(EIDOVERSE_WORLD_DESIGN_V2, userOverrides);
+  const resolved = mergeDesign(EIDOVERSE_WORLD_DESIGN_V3, userOverrides);
   resolved.version = EIDOVERSE_WORLD_DESIGN_VERSION;
-  resolved.assetRecipe = clone(EIDOVERSE_ASSET_RECIPE_V2);
+  resolved.assetRecipe = clone(EIDOVERSE_ASSET_RECIPE_V3);
   resolved.assets = { ...(resolved.assets || {}) };
   for (const [slot, resolution] of Object.entries(assetResolutions || {})) {
     const path = typeof resolution === 'string' ? resolution : resolution?.path;
@@ -310,7 +378,8 @@ export function extractEidoverseDesignOverrides(recipe) {
   for (const section of ['name', 'maxEntities', 'includes', 'limits', 'scale', 'districts', 'paths', 'environment']) {
     if (recipe[section] !== undefined) candidate[section] = clone(recipe[section]);
   }
-  return diffLeaves(mergeDesign(EIDOVERSE_WORLD_DESIGN_V2, candidate), EIDOVERSE_WORLD_DESIGN_V2) || {};
+  const baseline = EIDOVERSE_WORLD_DESIGNS[recipe.version] || EIDOVERSE_WORLD_DESIGN_V3;
+  return diffLeaves(mergeDesign(baseline, candidate), baseline) || {};
 }
 
 const validLibraryPath = (path) => typeof path === 'string'
@@ -504,7 +573,13 @@ export function migrateEidoverseWorldState(raw, { now = new Date().toISOString()
       ? input.userOverrides
       : extractEidoverseDesignOverrides(input.recipe);
     const assetResolutions = isObject(input.assetResolutions) ? input.assetResolutions : {};
-    const report = removedMachineDerivedIdentity
+    const upgradingDesign = Number(input.selectedDesignVersion ?? input.recipe?.version ?? 2) < 3;
+    const report = upgradingDesign
+      ? { ...(input.migrationReport || {}),
+          ...(removedMachineDerivedIdentity ? { removedMachineDerivedIdentity: true } : {}),
+          status: 'ready', fromDesignVersion: Number(input.selectedDesignVersion ?? input.recipe?.version ?? 2),
+          toDesignVersion: 3, preservedOverrides: Object.keys(userOverrides), at: now }
+      : removedMachineDerivedIdentity
       ? {
         ...(input.migrationReport || {}),
         status: input.migrationReport?.status || 'applied',
@@ -519,6 +594,7 @@ export function migrateEidoverseWorldState(raw, { now = new Date().toISOString()
         schemaVersion: EIDOVERSE_WORLD_STATE_SCHEMA_VERSION,
         labelAliases: normalizeEidoverseLabelAliases(input.labelAliases),
         selectedDesignVersion: EIDOVERSE_WORLD_DESIGN_VERSION,
+        ...(upgradingDesign ? { pendingDesignVersion: 3 } : {}),
         assetRecipeVersion: EIDOVERSE_ASSET_RECIPE_VERSION,
         userOverrides,
         assetResolutions,
@@ -629,7 +705,7 @@ function addCatalogCandidate(catalog, candidate) {
 export function inspectEidoverseAssetResolutionLocks({ existing = {}, overrides = {} } = {}) {
   const resolutions = {};
   const invalidated = [];
-  for (const [slotName, slot] of Object.entries(EIDOVERSE_ASSET_RECIPE_V2.slots)) {
+  for (const [slotName, slot] of Object.entries(EIDOVERSE_ASSET_RECIPE_V3.slots)) {
     const lock = isObject(existing[slotName]) ? existing[slotName] : null;
     const overridePath = overrides[slotName];
     const hasOverride = isValidEidoverseAssetOverridePath(overridePath);
@@ -672,7 +748,7 @@ export function resolveEidoverseAssetRecipe({
     .digest('hex').slice(0, 16);
   const resolutions = {};
   const missing = [];
-  for (const [slotName, slot] of Object.entries(EIDOVERSE_ASSET_RECIPE_V2.slots)) {
+  for (const [slotName, slot] of Object.entries(EIDOVERSE_ASSET_RECIPE_V3.slots)) {
     const recipeFingerprint = contractFingerprint(slot);
     const overridePath = overrides[slotName];
     const locked = isObject(existing[slotName]) ? existing[slotName] : { path: existing[slotName] };
@@ -685,6 +761,7 @@ export function resolveEidoverseAssetRecipe({
       catalogFingerprint: prior?.catalogFingerprint || fingerprint,
       recipeFingerprint,
       bytes: prior?.bytes ?? bytes,
+      ...(prior?.bounds ? { bounds: clone(prior.bounds) } : {}),
       strategy,
       // `source` is retained for the V2 UI and pre-metadata lock readers.
       source: strategy,

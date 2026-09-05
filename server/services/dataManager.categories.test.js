@@ -37,7 +37,7 @@ const DATA_DIR_PATTERNS = [
   /\bdataPath\(\s*'([a-z0-9._-]+)'/g,
   /PATHS\.data,\s*'([a-z0-9._-]+)'/g,
   /\$\{PATHS\.data\}\/([a-z0-9._-]+)/g,
-  /,\s*'data',\s*'([a-z0-9._-]+)'/g
+  /\b(?:join|resolve)\(\s*[^,;]+,\s*'data',\s*'([a-z0-9._-]+)'/g
 ];
 
 // `join(PATHS.data, TYPE)` — the collection-store idiom, where the directory
@@ -100,6 +100,19 @@ function discoverDataDirs() {
 }
 
 describe('dataManager CATEGORIES coverage (#3285)', () => {
+  it('discovers literal data paths without treating domain-name arrays as paths', () => {
+    const source = `
+      const a = join(rootDir, 'data', 'example-one');
+      const b = path.resolve(
+        tmpdir(),
+        'data', 'example-two'
+      );
+      const districts = ['agents', 'data', 'federation'];
+    `;
+    expect(DATA_DIR_PATTERNS.flatMap((pattern) => [...source.matchAll(pattern)].map((match) => match[1])))
+      .toEqual(['example-one', 'example-two']);
+  });
+
   it('classifies every top-level data/ directory the codebase can create', () => {
     const discovered = discoverDataDirs();
     expect(discovered.size).toBeGreaterThan(20); // discovery itself must not silently break

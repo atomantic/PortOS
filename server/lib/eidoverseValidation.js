@@ -189,6 +189,9 @@ const eidoverseAssetSlotsSchema = z.object({
   peer: eidoverseAssetSlotSchema,
   activity: eidoverseAssetSlotSchema,
   district: eidoverseAssetSlotSchema,
+  desk: eidoverseAssetSlotSchema.optional(),
+  barrel: eidoverseAssetSlotSchema.optional(),
+  tree: eidoverseAssetSlotSchema.optional(),
 }).strict();
 
 const eidoverseResolvedAssetsSchema = z.record(z.string().trim().min(1).max(40), eidoverseAssetPathSchema)
@@ -229,7 +232,7 @@ const eidoverseProjectionEnvironmentSchema = z.object({
 }).strict();
 
 const eidoverseProjectionRecipeV2Schema = z.object({
-  version: z.literal(2),
+  version: z.union([z.literal(2), z.literal(3)]),
   name: z.string().trim().min(1).max(80),
   maxEntities: z.number().int().min(1).max(48),
   includes: eidoverseProjectionIncludesSchema,
@@ -251,7 +254,7 @@ const eidoverseProjectionRecipeV2Schema = z.object({
     nodes: z.array(eidoverseVector3Schema).min(1).max(8),
   }).strict()).max(16),
   environment: eidoverseProjectionEnvironmentSchema,
-  assetRecipe: z.object({ version: z.literal(2), slots: eidoverseAssetSlotsSchema }).strict(),
+  assetRecipe: z.object({ version: z.union([z.literal(2), z.literal(3)]), slots: eidoverseAssetSlotsSchema }).strict(),
   assets: eidoverseResolvedAssetsSchema,
 }).strict();
 
@@ -295,6 +298,7 @@ export const eidoverseWorldConfigPatchSchema = z.object({
   assetOverrides: z.partialRecord(
     z.enum([
       'nexus', 'app', 'agent', 'task', 'goal', 'memory', 'storage', 'peer', 'activity', 'district',
+      'desk', 'barrel', 'tree',
       // V1 used resource-kind keys. Keep accepting them so an upgraded install
       // can round-trip its preserved custom paths while the V2 semantic slots
       // become the preferred editing surface.

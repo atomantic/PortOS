@@ -117,6 +117,9 @@ describe('Eidoverse world routes', () => {
     const payload = {
       assetOverrides: {
         app: 'store/example-local-asset',
+        desk: 'store/example-desk',
+        barrel: 'store/example-barrel',
+        tree: 'store/example-tree',
         operations: 'eidoverse/assets/models/example-legacy-operations.glb',
       },
     };

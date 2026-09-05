@@ -10,7 +10,7 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, safeJSONParse } from '../../server/lib/fileUtils.js';
-import { migrateEidoverseWorldState, EIDOVERSE_WORLD_STATE_SCHEMA_VERSION } from '../../server/lib/eidoverseWorldDesign.js';
+import { migrateEidoverseWorldState, EIDOVERSE_WORLD_DESIGN_VERSION, EIDOVERSE_WORLD_STATE_SCHEMA_VERSION } from '../../server/lib/eidoverseWorldDesign.js';
 
 export default {
   async up({ rootDir }) {
@@ -32,7 +32,7 @@ export default {
       console.warn(`⚠️ migration 323: skipped incompatible Eidoverse world state (${reason}); the feature will surface repair or update guidance when opened`);
       return { updated: 0, reason };
     }
-    if (state.schemaVersion === EIDOVERSE_WORLD_STATE_SCHEMA_VERSION && state.selectedDesignVersion === 2
+    if (state.schemaVersion === EIDOVERSE_WORLD_STATE_SCHEMA_VERSION && state.selectedDesignVersion === EIDOVERSE_WORLD_DESIGN_VERSION
       && JSON.stringify(migration.state) === JSON.stringify(state)) {
       return { updated: 0, reason: 'already-applied' };
     }

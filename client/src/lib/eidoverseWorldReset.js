@@ -15,14 +15,14 @@ export const EIDOVERSE_SOURCE_KIND = Object.freeze({
 });
 
 export const EIDOVERSE_RESET_ASSET_SLOTS = Object.freeze({
-  nexus: Object.freeze(['nexus', 'health', 'operations', 'feature', 'district']),
-  apps: Object.freeze(['app']),
-  agents: Object.freeze(['agent', 'task']),
-  goals: Object.freeze(['goal', 'jira']),
-  memory: Object.freeze(['memory']),
-  data: Object.freeze(['storage']),
-  federation: Object.freeze(['peer']),
-  activity: Object.freeze(['activity', 'productivity']),
+  nexus: Object.freeze(['nexus', 'health', 'operations', 'feature', 'district', 'activity', 'tree']),
+  apps: Object.freeze(['app', 'desk', 'activity', 'tree']),
+  agents: Object.freeze(['agent', 'task', 'desk', 'app', 'barrel', 'activity', 'tree']),
+  goals: Object.freeze(['goal', 'jira', 'desk', 'app', 'activity', 'tree']),
+  memory: Object.freeze(['memory', 'activity', 'tree']),
+  data: Object.freeze(['storage', 'app', 'desk', 'barrel', 'task', 'activity', 'tree']),
+  federation: Object.freeze(['peer', 'barrel', 'task', 'activity', 'tree']),
+  activity: Object.freeze(['activity', 'productivity', 'tree']),
 });
 
 const CUSTOM_DISTRICT_ASSET_SLOTS = Object.freeze(['district']);
