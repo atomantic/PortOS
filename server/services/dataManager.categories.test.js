@@ -104,7 +104,7 @@ describe('dataManager CATEGORIES coverage (#3285)', () => {
     const source = `
       const a = join(rootDir, 'data', 'example-one');
       const b = path.resolve(
-        process.cwd(),
+        tmpdir(),
         'data', 'example-two'
       );
       const districts = ['agents', 'data', 'federation'];
