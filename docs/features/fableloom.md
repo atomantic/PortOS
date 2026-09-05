@@ -371,6 +371,13 @@ the pinned SDK with `npm run setup:reactor` (Python 3.11+ and ffmpeg required).
 `REACTOR_PYTHON_PATH` can select an existing SDK environment. Installation is
 explicit; starting PortOS never installs or opens a Reactor session.
 
+The outline and shot editor show incoming reference images beside the current
+shot, including every incoming branch at a convergence. Review room geometry,
+lighting, props, wardrobe and camera direction together, then approve the current
+storyboard. FableLoom Reactor renders require that approved first frame even in
+draft mode. Prompt instructions exclude subtitles and dialogue overlays, but
+generated previews still need visual review.
+
 Keep preview batches small before authorizing an episode render. Each request
 uses its reference image and a prompt of at most 800 characters; longer prompts
 are rejected rather than silently losing dialogue. Reactor accepts 5.167–14.375

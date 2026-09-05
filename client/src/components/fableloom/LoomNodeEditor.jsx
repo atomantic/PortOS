@@ -707,6 +707,18 @@ export default function LoomNodeEditor({
       </div>
 
       <LoomReferenceReview episode={episode} node={{ ...node, shot: form.shot, visualCanon: form.visualCanon }} />
+            {form.visualCanon && node.image && (
+              <label className="flex items-center gap-2 text-xs" htmlFor="loom-node-storyboard-approved">
+                <input
+                  id="loom-node-storyboard-approved"
+                  aria-label="Approve storyboard image for video"
+                  type="checkbox"
+                  checked={form.visualCanon.storyboardImageApproved === true}
+                  onChange={(event) => updateVisualCanon({ storyboardImageApproved: event.target.checked })}
+                />
+                Approve the current storyboard image as this shot's video first frame
+              </label>
+            )}
       <div>
         <span className="mb-1 block text-xs font-medium text-port-text-muted">Scene media</span>
         <LoomSceneMedia
@@ -953,18 +965,7 @@ export default function LoomNodeEditor({
               />
             </FormField>
 
-            {node.image && (
-              <label className="flex items-center gap-2 text-xs" htmlFor="loom-node-storyboard-approved">
-                <input
-                  id="loom-node-storyboard-approved"
-                  aria-label="Approve storyboard image for video"
-                  type="checkbox"
-                  checked={form.visualCanon.storyboardImageApproved === true}
-                  onChange={(event) => updateVisualCanon({ storyboardImageApproved: event.target.checked })}
-                />
-                Approve the current storyboard image as this shot's video first frame
-              </label>
-            )}
+
           </div>
         )}
       </div>
