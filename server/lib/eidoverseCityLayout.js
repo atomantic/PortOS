@@ -16,6 +16,11 @@ export function eidoverseDesktopHeight(assets = {}) {
   return 0.1 + (size ? 2.25 * size[1] / Math.max(...size) : 1.05);
 }
 
+/** Roof slab top, shared by the hall, its plinth, and its landmark. */
+export function eidoverseCityRoofHeight(district) {
+  return (district.id === 'nexus' ? 5.2 : 3.8) + 0.26;
+}
+
 function hall(label, width = 8, height = 3.8) {
   const tiles = [];
   const walls = [];
@@ -38,11 +43,20 @@ function hall(label, width = 8, height = 3.8) {
 
 /** Each building is one bounded component, including its navigable doorways. */
 export function eidoverseCityArchitecture(districts) {
-  return districts.map((district) => ({
+  return districts.flatMap((district) => [{
     key: `hall-${district.id}`, districtId: district.id,
     pos: district.anchor, yaw: eidoverseDistrictYaw(district), structure: hall(district.label, district.id === 'nexus' ? 6 : 8,
       district.id === 'nexus' ? 5.2 : 3.8),
-  }));
+  }, ...(district.id === 'apps' ? [] : [{
+    key: `plinth-${district.id}`, districtId: district.id,
+    pos: eidoverseDistrictPoint(district, 0, eidoverseCityRoofHeight(district), -8),
+    yaw: eidoverseDistrictYaw(district),
+    structure: { tile: 1, wallH: 0.25, slabT: 0.15,
+      levels: [{ y: 0, tiles: [[-2, -2], [-1, -2], [0, -2], [1, -2],
+        [-2, -1], [-1, -1], [0, -1], [1, -1], [-2, 0], [-1, 0], [0, 0], [1, 0],
+        [-2, 1], [-1, 1], [0, 1], [1, 1]],
+      walls: [-2, -1, 0, 1].flatMap((n) => [[0, n, -2], [0, n, 2], [1, -2, n], [1, 2, n]]) }] },
+  }])]);
 }
 
 /** Furniture sits beside entrances; the forecourt and street stay unobstructed. */

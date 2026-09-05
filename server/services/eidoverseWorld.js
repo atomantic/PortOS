@@ -1237,7 +1237,8 @@ async function preflightEidoverseProtocol({ signal } = {}) {
     });
   }
   return {
-    capabilities: eidoverseLabelCapabilities(version),
+    capabilities: { ...eidoverseLabelCapabilities(version),
+      largeWorldColliders: version.capabilities?.largeWorldColliders === 1 ? 1 : null },
     sha: safeText(version.sha, 'unknown', 80),
     commitTime: safeText(version.commitTime, 'unknown', 80),
   };
@@ -1332,7 +1333,9 @@ async function prepareCityAssetLock(resolutions, config, runtimeVersion, { signa
   const overrides = config.design?.userOverrides?.assets || {};
   const measured = await measureAssetLocks(resolutions, overrides, config.design?.assetResolutions || {}, { signal });
   if (!overrides.citySurface) {
-    const surface = buildEidoverseCitySurface(config.recipe.districts);
+    const surface = buildEidoverseCitySurface(config.recipe.districts, {
+      landscape: runtimeVersion?.capabilities?.largeWorldColliders === 1,
+    });
     const head = await waitWithSignal(fetch(libraryUrl(`/library/${surface.path}`), { method: 'HEAD', signal }), signal);
     if (head.status === 404) {
       const response = await waitWithSignal(fetch(libraryUrl('/upload', { by: 'portos', name: 'PortOS Commons paving and signs' }), {

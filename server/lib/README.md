@@ -550,3 +550,6 @@ pm` default, `NPM_CONFIG_PREFIX`, nvm/Volta) installed `codex` successfully and 
 | `eidoverseCityLayout.js` | Portable native building components, curated furniture placement, visitor chambers, and ordered signal bays for PortOS Commons. |
 | `eidoverseCitySurface.js` | Deterministic GLB pedestrian paths, gathering terraces, and physical district signs, generated without AI and stored through Eidoverse's content-addressed upload API. |
 | `fableLoomShots.js` | Short-shot grouping, spoken-dialogue timing estimates and 5–10 second render validation. |
+| `eidoverseCityLayout.js` | Native halls, rooftop landmark clearance and plinths, curated furniture, visitor chambers, and ordered signal bays for PortOS Commons. |
+| `eidoverseCitySurface.js` | Deterministic GLB island scenery, pedestrian paths, gathering terraces, and physical district signs, stored through Eidoverse's content-addressed upload API. |
+| `eidoverseIslandLandscape.js` | `appendEidoverseIslandLandscape` appends deterministic coastline, ocean, and distant mountain-island geometry to the Commons asset. |

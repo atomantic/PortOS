@@ -538,7 +538,7 @@ export default function Eidoverse() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-port-bg">
-      <EidoverseTravel travelRef={travelRef} enabled={Boolean(hostUrl)} objects={worldState?.projection?.lastSummary?.objects || []}
+      <EidoverseTravel travelRef={travelRef} beforeDeparture={frame.leaveWorld} enabled={Boolean(hostUrl)} objects={worldState?.projection?.lastSummary?.objects || []}
         onDestinationsChange={() => {
           if (projectionStatus === 'running' || draftDirty) return false;
           if (worldState?.recipe?.includes?.peers !== false) void runProjection().catch(() => {});

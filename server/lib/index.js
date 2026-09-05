@@ -525,3 +525,4 @@ export * from './videoFailure.js';
 export * from './eidoverseCityLayout.js';
 export * from './eidoverseCitySurface.js';
 export * from './fableLoomShots.js';
+export * from './eidoverseIslandLandscape.js';

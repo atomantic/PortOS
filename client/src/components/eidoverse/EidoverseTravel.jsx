@@ -3,7 +3,7 @@ import { useAutoRefetch } from '../../hooks/useAutoRefetch';
 import useMounted from '../../hooks/useMounted';
 import { departEidoverse, getEidoverseDestinations } from '../../services/api';
 
-export default function EidoverseTravel({ travelRef, enabled, objects = [], onDestinationsChange }) {
+export default function EidoverseTravel({ travelRef, enabled, objects = [], onDestinationsChange, beforeDeparture }) {
   const [destinations, setDestinations] = useState([]);
   const [pending, setPending] = useState(null);
   const [error, setError] = useState('');
@@ -38,7 +38,9 @@ export default function EidoverseTravel({ travelRef, enabled, objects = [], onDe
     const current = generation.current;
     setPending(peerId);
     setError('');
-    await departEidoverse(peerId, { silent: true }).then(({ url }) => {
+    await departEidoverse(peerId, { silent: true }).then(async ({ url }) => {
+      if (!mounted.current || generation.current !== current) return;
+      await beforeDeparture?.();
       if (mounted.current && generation.current === current) window.location.assign(url);
     }).catch((failure) => {
       if (mounted.current && generation.current === current) setError(failure.message || 'Guest travel failed.');
@@ -46,14 +48,14 @@ export default function EidoverseTravel({ travelRef, enabled, objects = [], onDe
       busy.current = false;
       if (mounted.current) setPending(null);
     });
-  }, [enabled, mounted]);
+  }, [enabled, mounted, beforeDeparture]);
   useEffect(() => {
     travelRef.current = depart;
     return () => { travelRef.current = null; };
   }, [depart, travelRef]);
   if (!enabled) return null;
   return <div className="flex flex-wrap items-center gap-2 border-b border-port-border px-4 py-2 text-sm">
-    <span className="text-gray-400">Teleport to</span>
+    <span className="text-gray-400">Federation Terminal · Use a pod in-world or choose a destination</span>
     {destinations.map((destination) => <button key={destination.peerId} type="button" disabled={Boolean(pending)}
       onClick={() => depart(destination.peerId)} className="min-h-10 rounded-lg border border-port-border px-3 hover:border-port-accent disabled:opacity-50">
       {pending === destination.peerId ? 'Opening guest visit…' : destination.label}

@@ -5,7 +5,7 @@
  * identical environment, infrastructure, live, ambient, and cleanup verbs.
  */
 
-import { eidoverseCityTravelPod, eidoverseCityArchitecture, eidoverseCityFurniture, eidoverseCitySignalPosition, eidoverseModelPlacement, eidoverseDistrictPoint, eidoverseDistrictYaw, eidoverseDesktopHeight } from '../lib/eidoverseCityLayout.js';
+import { eidoverseCityRoofHeight, eidoverseCityTravelPod, eidoverseCityArchitecture, eidoverseCityFurniture, eidoverseCitySignalPosition, eidoverseModelPlacement, eidoverseDistrictPoint, eidoverseDistrictYaw, eidoverseDesktopHeight } from '../lib/eidoverseCityLayout.js';
 import { createHash } from 'node:crypto';
 import { canonicalStringify } from '../lib/objects.js';
 import {
@@ -476,10 +476,11 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
       desiredIds,
       id,
       lib: assetPathFor(effectiveRecipe, district.id === 'nexus' ? 'operations' : null, districtSlot),
-      pos: eidoverseDistrictPoint(district, district.id === 'nexus' ? 5 : (district.id === 'apps' ? -5 : 0),
-        district.id === 'apps' ? eidoverseDesktopHeight(assetResolutions) : 0, district.id === 'apps' ? 3 : -2),
+      pos: eidoverseDistrictPoint(district, district.id === 'apps' ? -5 : 0,
+        district.id === 'apps' ? eidoverseDesktopHeight(assetResolutions) : eidoverseCityRoofHeight(district) + 0.56 + (['agents', 'goals', 'memory'].includes(district.id) ? 0.3 : 0),
+        district.id === 'apps' ? 3 : -8),
       yaw: eidoverseDistrictYaw(district) + (district.id === 'federation' ? Math.PI / 2 : 0),
-      modelSize: ({ nexus: 7, apps: 0.7, agents: 2.5, goals: 3.2, memory: 2.4, data: 2.8, federation: 10, activity: 3.5 })[district.id] || 2,
+      modelSize: ({ nexus: 4.5, apps: 0.7, agents: 2.5, goals: 3.2, memory: 2.4, data: 2.8, federation: 5, activity: 3.5 })[district.id] || 2,
       scale: Number((districtScale * (1 + Math.min(affordances.length, 3) * 0.035)).toFixed(3)),
       component,
       motion: ['agents', 'goals', 'memory'].includes(district.id)

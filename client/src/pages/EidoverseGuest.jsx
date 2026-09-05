@@ -7,6 +7,7 @@ export default function EidoverseGuest() {
   const [hostUrl, setHostUrl] = useState(null);
   const [error, setError] = useState('');
   const [left, setLeft] = useState(false);
+  const [leaving, setLeaving] = useState(false);
   const frame = useEidoverseFrame(hostUrl);
   useEffect(() => {
     const controller = new AbortController();
@@ -30,7 +31,14 @@ export default function EidoverseGuest() {
   return <main className="flex h-dvh flex-col bg-port-bg text-white">
     <header className="flex flex-wrap items-center justify-between gap-3 border-b border-port-border px-4 py-3">
       <div><h1 className="font-semibold">Eidoverse guest visit</h1><p className="text-sm text-gray-400">Visitor access · Chat is visible to people and agents in this world</p></div>
-      {!left && <button type="button" className="min-h-10 rounded-lg border border-port-border px-3" onClick={() => {
+      {!left && <button type="button" disabled={leaving} className="min-h-10 rounded-lg border border-port-border px-3" onClick={async () => {
+        setLeaving(true);
+        const departed = await frame.leaveWorld().then(() => true).catch((failure) => {
+          setError(failure.message);
+          setLeaving(false);
+          return false;
+        });
+        if (!departed) return;
         setLeft(true);
         setHostUrl(null);
         if (window.history.length > 1) window.history.back();

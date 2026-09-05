@@ -721,10 +721,11 @@ describe('Eidoverse private-world lifecycle', () => {
     mocks.appStatuses = [{ id: 'app-example', name: 'Example private title', overallStatus: 'online' }];
     fetch.mockImplementationOnce(async () => Response.json({
       sha: 'example-label-build', commitTime: '2026-01-01T00:00:00.000Z',
-      capabilities: { objectLabels: 1, portosNavigation: 1, labelPreferences: 99 },
+      capabilities: { objectLabels: 1, portosNavigation: 1, labelPreferences: 99, largeWorldColliders: 1 },
     }));
     const first = await world.projectEidoverseWorld();
-    expect(first.design.reconciliation.runtimeVersion.capabilities).toEqual({ objectLabels: 1, portosNavigation: 1, labelPreferences: null });
+    expect(first.design.reconciliation.runtimeVersion.capabilities).toEqual({ objectLabels: 1, portosNavigation: 1, labelPreferences: null, largeWorldColliders: 1 });
+    expect(first.design.assetResolutions.citySurface.bytes).toBeGreaterThan(1_000_000);
     const object = first.summary.objects.find(({ kind }) => kind === 'app');
     expect(object).toBeDefined();
     await world.updateEidoverseWorldConfig({ labelAliases: { [object.resourceKey]: 'Example tower' } });

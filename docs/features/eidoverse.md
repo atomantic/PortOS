@@ -144,6 +144,11 @@ trees, planted beds, and timber seating soften the edges. The center stays
 clear for pedestrian agents, Persistent Mind avatars, and human guests.
 Buildings use Eidoverse's existing `comp.structure` grammar: tiled floors,
 glass frontage, open archways, walls, and roofs, with native collision.
+Large district landmarks sit on rooftop plinths behind the frontage. Their
+measured bottom and animation clearance keep the entrance and physical sign
+visible. Accent-edged paths and shallow entrance canopies connect each hall
+to the promenade. These geometry changes reconcile through the existing V3
+projection without resetting user overrides or visitor-authored objects.
 A deterministic GLB adds walking surfaces, decorative seating, and physical
 district signs through Eidoverse's ordinary content-addressed upload API.
 Each install reuses the verified recipe-derived asset on later projections.
@@ -503,12 +508,21 @@ The Federation Terminal gives every connected, guest-capable peer a walk-in
 visitor chamber. Chambers are infrastructure rather than sampled health signals,
 so the live signal cap cannot silently omit a destination. Inspect a chamber
 and choose **Teleport as guest**, or use the destination buttons above the world.
+With an `objectInteraction: 1` renderer, approach a visible pod within three
+metres and press **E**, or tap its action prompt. This works with labels hidden.
 The local controls name the destination; the authored chamber uses an opaque
 reference rather than writing machine names into the world log. Destination
 changes refresh the projection while the page is open and its draft is saved.
 
 Departure checks the saved peer and its current capabilities, admits a fresh
-visitor identity, and opens that host's `/eidoverse/guest` page. The guest shell
+visitor identity, and opens that host's `/eidoverse/guest` page. Before navigation, PortOS
+requires the departing renderer's `worldDeparture: 1` acknowledgement
+when supported: presence and reconnect attempts stop, then the socket closes.
+PortOS waits for a blank replacement frame before navigating in the same tab;
+older renderers use that frame teardown as their compatibility path. Returning
+through browser history restores the home frame. This moves the human visitor;
+the install's resident CoS presence continues to belong to its home world.
+The guest shell
 loads its renderer without owner controls or private PortOS bootstrap requests,
 including when the destination uses the optional instance password. An existing
 Eidoverse browser login cannot replace the guest identity. **Leave world** returns
@@ -538,3 +552,24 @@ never automatically exports stored conversation history or private records.
 Incoming chat makes no AI call and is never an instruction or permission grant.
 The [guest-conversation ADR](../decisions/2026-09-05-eidoverse-guest-chat.md)
 documents this narrowly scoped exception to the machine-local record policy.
+
+### Object controls
+
+The Commons island extends into an irregular grassy shoreline, a sandy beach,
+an eight-kilometre ocean horizon, and distant mountain islands. This is bounded
+authored scenery, not an infinite terrain-streaming or swimming system. It uses
+the same portable generated GLB as the city, without texture downloads or AI
+calls. Renderers advertising `largeWorldColliders: 1` receive the larger scene;
+older runtimes retain the compact city until upgraded. The renderer indexes
+large landscape colliders once and uses their triangle BVH for local queries.
+
+Worlds already supports `use {id, action}` and authored server-side behaviors.
+The renderer's contextual control exposes a primary `comp.interaction` action
+or a sole existing reaction. Switches can use a behavior to emit an ordinary
+logged `light` or `comp` change; the world remains authoritative and late joiners
+see the resulting state. PortOS pods use the validated frame bridge instead of
+sending a world verb or embedding destination URLs in scene data. Keyboard
+repeat, chat focus, overlays, distance, and occlusion suppress accidental use.
+The renderer implementation and a toggle-lamp example live in the separate
+Worlds repository. Controller support is tracked in
+[Worlds #11](https://github.com/atomantic/eidoverse-worlds/issues/11).
