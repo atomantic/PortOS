@@ -378,7 +378,7 @@ export default function LoomEpisodeOutlinePlanner({
         emptyModelOption="Default model"
         alwaysShowModel={!!route.providerId}
       />
-      {selectedProvider ? <p className="text-xs text-port-text-muted">Uses {selectedProvider.name}{effectiveModelFor(selectedProvider, route.model) ? ` (${effectiveModelFor(selectedProvider, route.model)})` : ''} for outline actions.</p> : null}
+      {selectedProvider ? <p className="text-xs text-port-text-muted">Uses {selectedProvider.name}{effectiveModelFor(selectedProvider, route.model) ? ` (${effectiveModelFor(selectedProvider, route.model)})` : ''}{route.effort ? ` at ${route.effort} effort` : ''} for outline and expansion actions.</p> : null}
 
       {!outline ? (
         <button
@@ -440,7 +440,7 @@ export default function LoomEpisodeOutlinePlanner({
           {onExpand ? (
             <button
               type="button"
-              onClick={onExpand}
+              onClick={() => onExpand(routeBody)}
               disabled={busy || dirty || !canExpand || saving || generating || validating || reviewing || expanding}
               className="flex w-full items-center justify-center gap-2 rounded bg-port-accent px-3 py-2 text-sm text-white disabled:opacity-50"
             >

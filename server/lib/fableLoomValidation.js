@@ -404,6 +404,7 @@ export const playthroughReviewSchema = z.object({
 });
 
 export const editorialAutopilotStartSchema = z.object({
+  mode: z.enum(['series', 'planning']).optional(),
   maxRounds: z.number().int().min(1).max(LOOM_LIMITS.EDITORIAL_AUTOPILOT_ROUNDS_MAX).optional(),
   maxPaths: z.number().int().min(1).max(FABLELOOM_PLAYTEST_LIMITS.MAX_PATHS).optional(),
   // Opt-in post-mortem over content-free run counters. A confident PortOS

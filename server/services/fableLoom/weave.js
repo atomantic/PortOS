@@ -144,7 +144,12 @@ const playRouting = (loom, perCall) => resolveLlmRoutePin(loom.playSettings, per
 export async function buildCanonDigest(loom) {
   if (!loom.universeId) return '';
   const universe = await getUniverse(loom.universeId).catch(() => null);
-  return universe ? renderCanonForPrompt(universe) : '';
+  if (!universe) return '';
+  const protagonist = universe.characters?.find((character) => character.id === loom.protagonistCharacterId);
+  return [
+    protagonist ? `Verified Universe protagonist: id=${protagonist.id}; name=${protagonist.name}.` : '',
+    renderCanonForPrompt(universe),
+  ].filter(Boolean).join('\n');
 }
 
 const seriesPlanContext = (loom, episode) => {
@@ -159,8 +164,8 @@ const seriesPlanContext = (loom, episode) => {
       const assignment = item.episodeId ? ` [planned for ${episodeLabels.get(item.episodeId) || item.episodeId}]` : ' [unassigned]';
       const challenge = fableLoomPlotPointKind(item) === 'challenge';
       return [
-        `Plot point ${index + 1} id=${item.id} kind=${challenge ? 'challenge' : 'beat'}${assignment}: ${item.title || 'Untitled'}${item.description ? ` — ${trimTo(item.description, 700)}` : ''}`,
-        challenge
+        `Plot point ${index + 1} id=${item.id} kind=${challenge ? 'challenge' : 'beat'}${assignment}: ${item.title || 'Untitled'}${item.description ? ` — ${item.description}` : ''}`,
+        challenge && (!episode || item.episodeId === episode.id)
           ? 'PLAYABLE CHALLENGE CONTRACT: map this exact plot-point id onto separate outline/teleplay beats with challengePhase values setup, decision, success, failure, and recovery. The setup must lead to the decision loop; the decision must reach both success and failure; both outcomes must continue to recovery/payoff. Failure continues with a visible cost rather than resetting or dead-ending.'
           : '',
       ].filter(Boolean).join('\n');
@@ -170,7 +175,7 @@ const seriesPlanContext = (loom, episode) => {
     .map((item) => {
       const start = item.startEpisodeId ? episodeLabels.get(item.startEpisodeId) || item.startEpisodeId : 'unassigned';
       const end = item.endEpisodeId ? episodeLabels.get(item.endEpisodeId) || item.endEpisodeId : 'unassigned';
-      return `Side quest (${item.status}; starts ${start}; ends ${end}): ${item.title || 'Untitled'}${item.description ? ` — ${trimTo(item.description, 300)}` : ''}`;
+      return `Side quest (${item.status}; starts ${start}; ends ${end}): ${item.title || 'Untitled'}${item.description ? ` — ${item.description}` : ''}`;
     });
   const delivery = plan.deliveryOptions || {};
   const deliveryLines = [];
@@ -189,7 +194,7 @@ const seriesPlanContext = (loom, episode) => {
     }
   }
   return [
-    plan.storyArc ? `Series arc: ${trimTo(plan.storyArc, 4000)}` : '',
+    plan.storyArc ? `Series arc: ${plan.storyArc}` : '',
     ...plotPoints,
     ...sideQuests,
     ...deliveryLines,
@@ -214,32 +219,32 @@ const protagonistContinuityContext = (loom) => [
   'Every scene must declare protagonist presence. Off-screen protagonist scenes are valid: use them for direct communicator conversations with the audience and keep the protagonist out of the storyboard image. For an off-screen helper scene, frame the obstacle or space the protagonist cannot see — around a corner, beyond a bend, at a distance, or otherwise outside their sightline. The communicator stays on the protagonist\'s person and out of frame; never make a standalone comms device the subject of the storyboard image.',
 ];
 
-const storyContext = (loom, episode) => [
+const storyContext = (loom, episode, { includeSeriesPlan = true } = {}) => [
   `Story: ${loom.name}`,
   `Scene format: ${loomFormatLabel(loom.format)}`,
   `Audience participation: ${audienceContract(loom, episode)}`,
   ...protagonistContinuityContext(loom),
   loom.logline ? `Logline: ${loom.logline}` : '',
   loom.premise ? `Premise: ${loom.premise}` : '',
-  ...seriesPlanContext(loom, episode),
-  episode ? `Episode ${episode.number}: ${episode.title || 'Untitled'}` : '',
+  ...(includeSeriesPlan ? seriesPlanContext(loom, episode) : []),
+  episode ? `CURRENT EPISODE ONLY: Episode ${episode.number}: ${episode.title || 'Untitled'} (id=${episode.id}). Other episode assignments are continuity context, not scenes to write here. Stop at this episode's ending; do not dramatize later episode plot points or challenge payoffs.` : '',
   episode?.synopsis ? `Synopsis: ${episode.synopsis}` : '',
 ].filter(Boolean).join('\n');
 
 const seriesPlanDigest = (loom) => JSON.stringify({
-  storyArc: trimTo(loom.seriesPlan?.storyArc, 6000),
+  storyArc: loom.seriesPlan?.storyArc || '',
   plotPoints: (loom.seriesPlan?.plotPoints || []).map((item) => ({
-    ...item, description: trimTo(item.description, 400),
+    ...item, description: item.description || '',
   })),
   sideQuests: (loom.seriesPlan?.sideQuests || []).map((item) => ({
-    ...item, description: trimTo(item.description, 400),
+    ...item, description: item.description || '',
   })),
   deliveryOptions: loom.seriesPlan?.deliveryOptions || null,
   interEpisodeVoicemails: (loom.seriesPlan?.interEpisodeVoicemails || []).map((item) => ({
-    ...item, transcript: trimTo(item.transcript, 500),
+    ...item, transcript: item.transcript || '',
   })),
   nextSeasonTeaser: loom.seriesPlan?.nextSeasonTeaser
-    ? { ...loom.seriesPlan.nextSeasonTeaser, transcript: trimTo(loom.seriesPlan.nextSeasonTeaser.transcript, 500) }
+    ? { ...loom.seriesPlan.nextSeasonTeaser, transcript: loom.seriesPlan.nextSeasonTeaser.transcript || '' }
     : null,
   protagonistCharacterId: loom.protagonistCharacterId || null,
   protagonistWardrobeId: loom.protagonistWardrobeId || null,
@@ -248,7 +253,7 @@ const seriesPlanDigest = (loom) => JSON.stringify({
     id,
     number,
     title,
-    synopsis: trimTo(synopsis, 300),
+    synopsis: synopsis || '',
     beatOutline: storyOutline ? describeStoryOutlineForPrompt(storyOutline) : '(missing)',
   })),
 }, null, 2);
@@ -369,6 +374,8 @@ const outlineStructuralAnalysis = (loom, episode) => {
     participationMode: loom.participationMode,
     requireAudienceIntroduction: requiresAudienceIntroduction(loom, episode),
     challenges: fableLoomEpisodeChallenges(loom, episode.id),
+    plotPoints: loom.seriesPlan?.plotPoints,
+    episodeId: episode.id,
   });
   const teleplaySync = analyzeStoryOutlineTeleplaySync(episode, episode.storyOutline, {
     participationMode: loom.participationMode,
@@ -425,6 +432,8 @@ export async function generateEpisodeOutline(loomId, episodeId, {
     participationMode: loom.participationMode,
     requireAudienceIntroduction: requiresAudienceIntroduction(loom, episode),
     challenges: fableLoomEpisodeChallenges(loom, episode.id),
+    plotPoints: loom.seriesPlan?.plotPoints,
+    episodeId: episode.id,
   });
   const draft = {
     ...outline,
@@ -494,6 +503,8 @@ export async function weaveEpisode(loomId, episodeId, {
       participationMode: loom.participationMode,
       requireAudienceIntroduction: requiresAudienceIntroduction(loom, episode),
       challenges: fableLoomEpisodeChallenges(loom, episode.id),
+      plotPoints: loom.seriesPlan?.plotPoints,
+      episodeId: episode.id,
     })
     : null;
   const currentOutlineErrors = expandFromOutline
@@ -560,8 +571,15 @@ export async function weaveEpisode(loomId, episodeId, {
     const outlineScene = remappedOutlineByNodeId.get(node.id);
     return outlineScene ? {
       ...node,
+      title: outlineScene.title,
+      endingLabel: outlineScene.endingLabel || '',
       plotPointId: outlineScene.plotPointId || null,
       challengePhase: outlineScene.challengePhase || null,
+      transitions: node.transitions.map((transition) => {
+        const paths = outlineScene.transitions.filter((path) => path.targetKey === transition.targetNodeId);
+        const planned = paths.find((path) => path.intent === transition.intent) || (paths.length === 1 ? paths[0] : null);
+        return { ...transition, intent: planned?.intent || transition.intent };
+      }),
     } : node;
   });
   const remappedOutlineValidation = remappedOutline
@@ -569,6 +587,8 @@ export async function weaveEpisode(loomId, episodeId, {
       participationMode: loom.participationMode,
       requireAudienceIntroduction: requiresAudienceIntroduction(loom, episode),
       challenges: fableLoomEpisodeChallenges(loom, episode.id),
+      plotPoints: loom.seriesPlan?.plotPoints,
+      episodeId: episode.id,
     })
     : null;
   const expandedOutline = remappedOutline
@@ -893,7 +913,7 @@ const analysisStrings = (value) => (Array.isArray(value) ? value : [])
   .slice(0, 12);
 
 /** Read-only story-editor pass over one episode's beat outline. */
-export async function reviewEpisodeOutline(loomId, episodeId, { providerId, model, effort, operationId } = {}) {
+export async function reviewEpisodeOutline(loomId, episodeId, { providerId, model, effort, operationId, planningGate = false } = {}) {
   const loom = await requireLoom(loomId);
   const episode = findEpisode(loom, episodeId);
   if (!episode.storyOutline) {
@@ -902,7 +922,7 @@ export async function reviewEpisodeOutline(loomId, episodeId, { providerId, mode
   const structural = outlineStructuralAnalysis(loom, episode);
   const canonDigest = await buildCanonDigest(loom);
   const { content, runId } = await runLoomAi('fableloom-review-episode-outline', {
-    storyContext: storyContext(loom, episode),
+    storyContext: [storyContext(loom, episode), planningGate ? 'PLANNING GATE: Put only present contradictions, missing required beats, illegible choices, or unearned consequences that require changing this outline in risks. Put execution advice for the later teleplay (for example how to avoid too much dialogue) in recommendations. Do not require finished dialogue or images at outline stage. An outline with no remaining concrete blockers should return an empty risks array.' : ''].filter(Boolean).join('\n'),
     canonDigest: canonDigest || '(none)',
     episodeSequence: episodeSequenceDigest(loom, episode.id),
     outlineDigest: describeStoryOutlineForPrompt(episode.storyOutline),
@@ -935,7 +955,7 @@ export async function generateSeriesPlan(loomId, { providerId, model, effort, op
   const sourceFingerprint = seriesPlanGenerationFingerprint(loom);
   const canonDigest = await buildCanonDigest(loom);
   const { content, runId } = await runLoomAi('fableloom-generate-series-plan', {
-    storyContext: storyContext(loom),
+    storyContext: storyContext(loom, undefined, { includeSeriesPlan: false }),
     canonDigest: canonDigest || '(none — invent only what the premise needs)',
     seriesPlanJson: seriesPlanDigest(loom),
   }, { providerId, model, effort, operationId }, {
@@ -968,11 +988,11 @@ export async function generateSeriesPlan(loomId, { providerId, model, effort, op
 }
 
 /** Read-only story-editor pass over the arc, tentpole beats, side quests, and episode outline. */
-export async function reviewSeriesPlan(loomId, { providerId, model, effort, operationId } = {}) {
+export async function reviewSeriesPlan(loomId, { providerId, model, effort, operationId, planningOnly = false } = {}) {
   const loom = await requireLoom(loomId);
   const canonDigest = await buildCanonDigest(loom);
   const { content, runId } = await runLoomAi('fableloom-review-series-plan', {
-    storyContext: storyContext(loom),
+    storyContext: [storyContext(loom, undefined, { includeSeriesPlan: false }), planningOnly ? 'PRE-OUTLINE REVIEW: Evaluate the arc, challenge design and episode assignments. Missing or stale episode outlines are expected at this stage and will be drafted or repaired next; do not report their absence as a plan defect. Keep plot-point notes concise; episode beat outlines have their own fields.' : ''].filter(Boolean).join('\n'),
     canonDigest: canonDigest || '(none)',
     seriesPlanJson: seriesPlanDigest(loom),
   }, { providerId, model, effort, operationId }, {
@@ -1018,7 +1038,7 @@ export async function reviewSeriesTeleplay(loomId, { providerId, model, effort, 
     return `Episode ${episode.episodeNumber}:\n${issues}`;
   }).join('\n');
   const { content, runId } = await runLoomAi('fableloom-review-series-teleplay', {
-    storyContext: storyContext(loom),
+    storyContext: storyContext(loom, undefined, { includeSeriesPlan: false }),
     canonDigest: canonDigest || '(none)',
     seriesPlanJson: seriesPlanDigest(loom),
     teleplayDigest: seriesTeleplayDigest(loom),
@@ -1049,7 +1069,7 @@ export async function feedbackSeriesPlan(loomId, {
   const loom = await requireLoom(loomId);
   const canonDigest = await buildCanonDigest(loom);
   const { content, runId } = await runLoomAi('fableloom-feedback-series-plan', {
-    storyContext: storyContext(loom),
+    storyContext: storyContext(loom, undefined, { includeSeriesPlan: false }),
     canonDigest: canonDigest || '(none)',
     seriesPlanJson: seriesPlanDigest(loom),
     feedback: instruction,
@@ -1062,7 +1082,8 @@ export async function feedbackSeriesPlan(loomId, {
   }
   const hasPlanEdit = (hasOwn(content, 'storyArc') && typeof content.storyArc === 'string')
     || Array.isArray(content.plotPointEdits) || Array.isArray(content.plotPointOrder)
-    || Array.isArray(content.sideQuestEdits) || Array.isArray(content.sideQuestOrder);
+    || Array.isArray(content.sideQuestEdits) || Array.isArray(content.sideQuestOrder)
+    || Array.isArray(content.episodeSynopsisEdits);
   if (!hasPlanEdit) throw aiShapeError('The model returned no usable series-plan edits');
 
   const updated = await mutateLoom(loomId, (current) => {
@@ -1074,6 +1095,13 @@ export async function feedbackSeriesPlan(loomId, {
     plan.sideQuests = applyPlanItemEdits(plan.sideQuests, content.sideQuestEdits, content.sideQuestOrder, {
       prefix: 'quest', fields: ['title', 'description', 'status', 'startEpisodeId', 'endEpisodeId'],
     });
+    for (const edit of (Array.isArray(content.episodeSynopsisEdits) ? content.episodeSynopsisEdits : [])) {
+      const episode = current.episodes.find((item) => item.id === edit?.id);
+      if (episode && typeof edit.synopsis === 'string') {
+        episode.synopsis = edit.synopsis;
+        episode.updatedAt = new Date().toISOString();
+      }
+    }
     current.seriesPlan = plan;
     return current;
   });

@@ -8,7 +8,7 @@ vi.mock('../../hooks/useProviderModels', () => ({ default: () => ({ providers: [
 vi.mock('../../hooks/useFableLoomAiRun', () => ({
   default: () => ({ run: null, begin: () => '00000000-0000-4000-8000-000000000001', fail: vi.fn() }),
 }));
-vi.mock('../ProviderModelSelector', () => ({ default: () => <div data-testid="outline-route">Outline AI route</div> }));
+vi.mock('../ProviderModelSelector', () => ({ default: ({ onProviderChange, onModelChange, onEffortChange }) => <button type="button" onClick={() => { onProviderChange('writer'); onModelChange('example-model'); onEffortChange('low'); }}>Select outline route</button> }));
 
 vi.mock('../../services/api', () => ({
   generateLoomEpisodeOutline: vi.fn(),
@@ -49,8 +49,9 @@ describe('LoomEpisodeOutlinePlanner', () => {
     expect(screen.getByText('Signal')).toBeInTheDocument();
     const expand = screen.getByRole('button', { name: 'Expand validated outline to teleplay' });
     expect(expand).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Select outline route' }));
     await user.click(expand);
-    expect(onExpand).toHaveBeenCalledTimes(1);
+    expect(onExpand).toHaveBeenCalledWith({ providerId: 'writer', model: 'example-model', effort: 'low' });
   });
 
   it('saves edited log-lines before the deterministic validation request', async () => {

@@ -306,12 +306,70 @@ async function runRound(run, guidance) {
   return runRound(run, guidanceFromFindings(residual, playtest.review?.summary));
 }
 
+// Planning is an explicit, bounded phase: finish the series contract before
+// drafting any episode, and never expand a teleplay or approve production here.
+async function runPlanning(run) {
+  const { reviewSeriesPlan, feedbackSeriesPlan, generateEpisodeOutline, reviewEpisodeOutline, validateEpisodeOutline } = await import('./weave.js');
+  const { analyzeSeriesStoryOutlines } = await import('../../lib/fableLoomOutline.js');
+  const options = routeOptions(run);
+  const initial = await requireLoomForRun(run.loomId);
+  if (run.cancelRequested) return finishCanceled(run);
+  if (!initial.seriesPlan?.storyArc?.trim() || (initial.seriesPlan?.plotPoints || []).some((item) => !initial.episodes.some((episode) => episode.id === item.episodeId))) {
+    return finishPaused(run, 'planning-required', 'Save the story arc and assign every plot point and challenge to an episode before starting planning autopilot.');
+  }
+  touch(run, { round: 1, currentStep: 'review-plan', stepIndex: 1, stepLabel: 'Review series plan', message: 'Checking the series arc and challenge assignments before drafting episode outlines…' });
+  const review = await reviewSeriesPlan(run.loomId, { ...options, planningOnly: true });
+  if (run.cancelRequested) return finishCanceled(run);
+  const planFindings = review.analysis.risks;
+  if (planFindings.length) {
+    touch(run, { currentStep: 'repair-plan', stepLabel: 'Refine series plan', message: 'Resolving planning findings before episode outlines…' });
+    await feedbackSeriesPlan(run.loomId, { ...options, feedback: trimTo(`Resolve these planning findings before scene production. Preserve the episode count and ids. Map every challenge to its intended episode with setup, decision, success, failure and recovery. Do not expand scenes.\n${planFindings.join('\n')}`, 4000) });
+    if (run.cancelRequested) return finishCanceled(run);
+  }
+  let loom = await requireLoomForRun(run.loomId);
+  const unmapped = (loom.seriesPlan?.plotPoints || []).filter((item) => item.kind === 'challenge' && !loom.episodes.some((episode) => episode.id === item.episodeId));
+  if (!loom.seriesPlan?.storyArc?.trim() || unmapped.length) {
+    return finishPaused(run, 'planning-required', 'Save a story arc and assign every challenge to an episode before drafting outlines.');
+  }
+  for (const [index, episode] of loom.episodes.entries()) {
+    let guidance = 'Follow the complete series plan. Each outline scene is a camera-cut beat, not a whole dramatic scene. Preserve each assigned challenge id and represent setup, decision, success, failure and recovery as separate beats. Keep branches purposeful and fail forward. Draft only the outline, never full scene prose.';
+    for (let attempt = 1; attempt <= run.maxRounds; attempt += 1) {
+      touch(run, { round: attempt, currentStep: 'outline-episode', stepIndex: index + 2, stepLabel: `Plan episode ${episode.number}`, message: `Planning episode ${episode.number} of ${loom.episodes.length} · attempt ${attempt}/${run.maxRounds}…` });
+      const current = await requireLoomForRun(run.loomId);
+      const existing = current.episodes.find((candidate) => candidate.id === episode.id);
+      const generated = attempt === 1 && existing?.storyOutline?.scenes?.length
+        ? await validateEpisodeOutline(run.loomId, episode.id)
+        : await generateEpisodeOutline(run.loomId, episode.id, { ...options, guidance });
+      if (run.cancelRequested) return finishCanceled(run);
+      const errors = generated.validation?.issues?.filter((issue) => issue.severity === 'error') || [];
+      const checked = errors.length ? null : await reviewEpisodeOutline(run.loomId, episode.id, { ...options, planningGate: true });
+      if (run.cancelRequested) return finishCanceled(run);
+      const findings = [...errors.map((issue) => issue.message), ...(checked?.analysis?.risks || [])];
+      run.residualFindings = findings.map((problem) => ({ severity: 'high', category: 'structure', episodeId: episode.id, problem }));
+      if (!findings.length) {
+        await validateEpisodeOutline(run.loomId, episode.id);
+        break;
+      }
+      if (attempt === run.maxRounds) return finishPaused(run, 'round-limit', `Episode ${episode.number} still has planning findings. No teleplay or media was generated.`);
+      guidance = trimTo(`Revise the outline to resolve these findings while preserving the series plan and challenge contracts:\n${findings.join('\n')}`, 4000);
+    }
+  }
+  loom = await requireLoomForRun(run.loomId);
+  const validation = analyzeSeriesStoryOutlines(loom);
+  run.residualFindings = validation.issues.filter((issue) => issue.severity === 'error').map((issue) => ({ ...issue, problem: issue.message }));
+  if (!validation.stats.ready) return finishPaused(run, 'planning-required', 'The complete beat arc still needs corrections before expansion. No teleplay or media was generated.');
+  return touch(run, { status: 'completed', currentStep: null, stepLabel: null, stepIndex: run.stepCount, message: 'Series planning complete. All episode outlines are ready; choose the episode to expand next.', completedAt: nowIso() });
+}
+
 /** Start and detach a bounded editor/reviewer run. */
 export async function startFableLoomEditorialAutopilot(loomId, {
-  maxRounds, maxPaths, providerId, model, effort, selfImprove,
+  maxRounds, maxPaths, providerId, model, effort, selfImprove, mode = 'series',
 } = {}) {
   cleanStaleRuns();
-  await requireLoomForRun(loomId);
+  const loom = await requireLoomForRun(loomId);
+  if (mode === 'planning' && (!loom.episodes?.length || loom.episodes.some((episode) => episode.nodes?.length))) {
+    throw new ServerError('Planning autopilot requires episode slots with no expanded scenes. Add the planned episodes first.', { status: 409, code: 'PLANNING_SCOPE_REQUIRED' });
+  }
   const currentId = latestRunByLoom.get(loomId);
   const current = currentId ? runs.get(currentId) : null;
   if (current && ['running', 'canceling'].includes(current.status)) {
@@ -329,12 +387,13 @@ export async function startFableLoomEditorialAutopilot(loomId, {
   const run = {
     id: `editorial-${randomUUID()}`,
     loomId,
+    mode,
     status: 'running',
     currentStep: 'starting',
     round: 0,
     maxRounds: boundedRounds(maxRounds),
     stepIndex: 0,
-    stepCount: boundedRounds(maxRounds) * 2,
+    stepCount: mode === 'planning' ? loom.episodes.length + 2 : boundedRounds(maxRounds) * 2,
     stepLabel: 'Starting',
     correctionAttempt: 0,
     responseCorrections: 0,
@@ -364,7 +423,7 @@ export async function startFableLoomEditorialAutopilot(loomId, {
   };
   runs.set(run.id, run);
   latestRunByLoom.set(loomId, run.id);
-  void runRound(run, '')
+  void (mode === 'planning' ? runPlanning(run) : runRound(run, ''))
     .catch((error) => (run.cancelRequested ? finishCanceled(run) : finishFailed(run, error)))
     .catch((error) => {
       console.error(`❌ FableLoom editorial autopilot terminal handling failed: ${error.message}`);

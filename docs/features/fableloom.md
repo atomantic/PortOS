@@ -8,6 +8,29 @@ decision nodes loop while the viewer chooses a path or gives free-text
 feedback—when that story's audience role permits it. A loom holds one or more ordered episodes, and the Play surface can
 rehearse the same experience at any of those three production stages.
 
+## Planning a series
+
+The series editor has separate, linkable sections for the arc, plot points and
+challenges, side quests, episode outlines, AI editing, and viewer handoffs.
+Save remains visible while the selected section scrolls. Plot points and side
+quests show compact expandable summaries; adding an item opens it and focuses
+its title without changing the order of existing beats. Drafts survive section
+changes.
+
+Create the intended episode slots and assign plot points and playable challenges
+before starting **Plan the series before writing scenes** in the AI editor.
+This explicit autopilot mode reviews the plan first, repairs concrete findings,
+then drafts and reviews each episode outline in order with bounded retries.
+Plan edits can synchronize existing episode synopses while preserving episode
+titles and scene graphs. Advice for later prose expansion does not force another
+outline rewrite.
+Each outline scene represents one camera-cut beat, not a complete dramatic scene.
+Plot points assigned to another episode cannot be expanded into the current
+episode. Deterministic validation must pass across the complete arc. Planning does not
+expand scenes, render media, or set editorial production approval. Choose the
+episode to expand afterward; later episodes may remain outlines for human review.
+The complete-teleplay editor/playtest mode remains available separately.
+
 ## Concepts
 
 | Term | Meaning |

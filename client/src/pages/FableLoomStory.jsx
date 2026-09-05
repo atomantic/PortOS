@@ -16,7 +16,7 @@
  * content off-screen.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ArrowLeft, BookOpenText, ListTree, PencilLine, Plus, Settings, Sparkles, Trash2, Waypoints, Workflow as WorkflowIcon, X } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -797,6 +797,7 @@ function EpisodeSetupDrawer({ open, onClose, loom, episode, onLoomUpdate, onFeed
   const { run: aiRun, begin: beginAiRun, fail: failAiRun } = useFableLoomAiRun();
   const del = useConfirmDelete();
   const expansionConfirm = useConfirmDelete();
+  const expansionRouteRef = useRef({});
   const hasScenes = episode.nodes.length > 0;
 
   // Sync from the record on episode switch ONLY — re-syncing on every server
@@ -820,6 +821,7 @@ function EpisodeSetupDrawer({ open, onClose, loom, episode, onLoomUpdate, onFeed
   const [runWeave, weaving] = useAsyncAction(async () => {
     const operationId = beginAiRun();
     const result = await weaveLoomEpisode(loom.id, episode.id, {
+      ...expansionRouteRef.current,
       guidance: form.guidance,
       replace: hasScenes,
       expandFromOutline: true,
@@ -833,7 +835,8 @@ function EpisodeSetupDrawer({ open, onClose, loom, episode, onLoomUpdate, onFeed
     onClose();
   }, { errorMessage: 'Weave failed' });
 
-  const requestWeave = () => {
+  const requestWeave = (route = {}) => {
+    expansionRouteRef.current = route;
     if (hasScenes) {
       expansionConfirm.requestDelete(episode.id);
       return;

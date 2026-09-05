@@ -18,6 +18,7 @@ const isText = (value) => typeof value === 'string' && value.trim().length > 0;
 
 export const OUTLINE_ISSUE_CODES = Object.freeze({
   NO_SCENES: 'NO_SCENES',
+  WRONG_EPISODE_PLOT_POINT: 'WRONG_EPISODE_PLOT_POINT',
   MISSING_START: 'MISSING_START',
   START_NOT_FOUND: 'START_NOT_FOUND',
   NO_ENDINGS: 'NO_ENDINGS',
@@ -176,7 +177,7 @@ const outlineIssue = (issues, code, severity, message, extra = {}) => {
 
 /** Deterministic validation for the log-line graph, independent of an LLM. */
 export function analyzeStoryOutline(outline, {
-  participationMode = 'protagonist', requireAudienceIntroduction = false, challenges = [],
+  participationMode = 'protagonist', requireAudienceIntroduction = false, challenges = [], plotPoints = [], episodeId = null,
 } = {}) {
   const scenes = asArray(outline?.scenes);
   const byKey = new Map(scenes.map((scene) => [scene.key, scene]));
@@ -246,6 +247,10 @@ export function analyzeStoryOutline(outline, {
   for (const scene of scenes) {
     const transitions = asArray(scene.transitions);
     const label = scene.title || scene.key || 'Untitled beat';
+    const assignedPlot = asArray(plotPoints).find((item) => item.id === scene.plotPointId);
+    if (episodeId && assignedPlot?.episodeId && assignedPlot.episodeId !== episodeId) {
+      push(OUTLINE_ISSUE_CODES.WRONG_EPISODE_PLOT_POINT, 'error', `"${label}" uses a plot point assigned to another episode. Keep that payoff in its assigned episode.`, { sceneKey: scene.key });
+    }
     if (!isText(scene.summary)) {
       push(OUTLINE_ISSUE_CODES.EMPTY_SUMMARY, 'error', `"${label}" has no scene log-line.`, { sceneKey: scene.key });
     }
@@ -499,6 +504,8 @@ export function analyzeSeriesStoryOutlines(loom, { replacingEpisodeId = null } =
       participationMode: loom?.participationMode,
       requireAudienceIntroduction: index === 0,
       challenges: fableLoomEpisodeChallenges(loom, episode.id),
+      plotPoints: loom?.seriesPlan?.plotPoints,
+      episodeId: episode.id,
     });
     validation.issues.forEach((issue) => {
       push(issue.code, issue.severity, `Episode ${episode.number || index + 1}: ${issue.message}`, {

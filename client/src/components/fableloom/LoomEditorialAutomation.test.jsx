@@ -146,6 +146,37 @@ describe('LoomEditorialAutomation', () => {
     expect(screen.getByText(/safely rejected 3 invalid editor responses; no invalid changes were applied/i)).toBeInTheDocument();
   });
 
+  it('restores the active run configuration when reopening the editor', async () => {
+    api.getLoomEditorialAutopilotStatus.mockResolvedValue({ run: {
+      id: 'active-planning-run', status: 'running', mode: 'planning', maxRounds: 2, round: 1,
+      route: { providerId: 'codex', model: 'gpt-5', effort: 'low' }, selfImproveEnabled: false,
+    } });
+    renderPanel();
+    await waitFor(() => expect(screen.getByLabelText('Autopilot stage')).toHaveValue('planning'));
+    expect(screen.getByLabelText('Editorial AI route')).toHaveValue('codex');
+    expect(screen.getByLabelText('Autopilot rounds')).toHaveValue('2');
+    expect(screen.getByLabelText('Thinking effort')).toHaveValue('low');
+    expect(screen.getByText('Runs will use Codex (gpt-5) at low effort.')).toBeInTheDocument();
+  });
+
+  it('starts an unexpanded series in planning mode without claiming production approval', async () => {
+    const user = userEvent.setup();
+    const planned = { ...loom, episodes: [{ ...loom.episodes[0], nodes: [] }] };
+    api.getLoom.mockResolvedValue(planned);
+    api.startLoomEditorialAutopilot.mockResolvedValue({
+      id: 'planning-run', loomId: loom.id, mode: 'planning', status: 'completed', round: 1, maxRounds: 3,
+      message: 'Outlines are ready.', rounds: [], residualFindings: [],
+    });
+    renderPanel({ loom: planned });
+    expect(await screen.findByLabelText('Autopilot stage')).toHaveValue('planning');
+    await user.click(screen.getByRole('button', { name: 'Start editor autopilot' }));
+    await waitFor(() => expect(api.startLoomEditorialAutopilot).toHaveBeenCalledWith(
+      loom.id, { maxRounds: 3, mode: 'planning' }, { silent: true },
+    ));
+    expect(await screen.findByText('Series planning is ready for scene expansion')).toBeInTheDocument();
+    expect(screen.queryByText('Series clears the current editorial gates')).not.toBeInTheDocument();
+  });
+
   it('opts a run into approval-gated FableLoom workflow diagnosis', async () => {
     const user = userEvent.setup();
     api.startLoomEditorialAutopilot.mockResolvedValue({
