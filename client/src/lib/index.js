@@ -144,6 +144,7 @@ export * from './episodeSceneImport.js';
 export * from './lookaheadTransport.js';
 export * from './lossSparkline.js';
 export * from './metronome.js';
+export * from './mindThinkingPresets.js';
 export * from './navFeatures.js';
 export * from './midiChords.js';
 export * from './midiNotes.js';
