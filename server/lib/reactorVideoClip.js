@@ -51,3 +51,54 @@ export const reactorClipLengthLabel = (seconds) => (
     : seconds === REACTOR_MAX_CLIP_SECONDS ? `${seconds} seconds (max)`
       : `${seconds} seconds`
 );
+
+/**
+ * The canvases fast-h3 renders, in `set_canvas`'s own `aspect` vocabulary.
+ *
+ * Every one holds a 768px SHORT edge — the model's native resolution — so the
+ * aspect string is the whole choice and the pixel size falls out of it. PortOS
+ * pinned `16:9` for every render before #6336, which is why a portrait starting
+ * frame came back as a clip with audio and no usable picture: reactor fits the
+ * starting frame to the SESSION canvas, so a 9:16 photo squeezed into a 1344×768
+ * session had almost nothing left to animate.
+ *
+ * Ordered widest-first so a picker reads landscape → square → portrait.
+ */
+export const REACTOR_CANVASES = Object.freeze([
+  Object.freeze({ aspect: '16:9', width: 1344, height: 768, label: 'Landscape 16:9 · 1344×768' }),
+  Object.freeze({ aspect: '4:3', width: 1024, height: 768, label: 'Standard 4:3 · 1024×768' }),
+  Object.freeze({ aspect: '1:1', width: 768, height: 768, label: 'Square 1:1 · 768×768' }),
+  Object.freeze({ aspect: '9:16', width: 768, height: 1344, label: 'Portrait 9:16 · 768×1344' }),
+]);
+
+/** Just the aspect strings — the closed set `set_canvas` accepts. */
+export const REACTOR_ASPECTS = Object.freeze(REACTOR_CANVASES.map((c) => c.aspect));
+
+/** Canvas a text-only render (or an unreadable starting frame) falls back to. */
+export const REACTOR_DEFAULT_ASPECT = '16:9';
+
+/** Canvas record for an aspect string; the default canvas for anything else. */
+export const reactorCanvas = (aspect) => (
+  REACTOR_CANVASES.find((c) => c.aspect === aspect)
+  || REACTOR_CANVASES.find((c) => c.aspect === REACTOR_DEFAULT_ASPECT)
+);
+
+/**
+ * The fast-h3 canvas closest to a starting frame's own shape, compared in log
+ * space so "twice as wide as the canvas" and "half as wide" score the same
+ * distance. Ties keep the earlier (wider) canvas. Anything unmeasurable —
+ * a missing dimension, a zero, a NaN — answers the default rather than
+ * pretending to have derived one.
+ */
+export const nearestReactorAspect = (width, height) => {
+  const w = Number(width);
+  const h = Number(height);
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return REACTOR_DEFAULT_ASPECT;
+  const target = Math.log(w / h);
+  let best = null;
+  for (const canvas of REACTOR_CANVASES) {
+    const distance = Math.abs(Math.log(canvas.width / canvas.height) - target);
+    if (best === null || distance < best.distance) best = { aspect: canvas.aspect, distance };
+  }
+  return best.aspect;
+};

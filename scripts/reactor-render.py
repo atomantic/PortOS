@@ -14,6 +14,13 @@ from pathlib import Path
 
 from reactor_sdk import Reactor
 
+# The canvases fast-h3 renders, mirroring server/lib/reactorVideoClip.js. Every
+# one holds a 768px short edge, so `set_canvas`'s aspect string is the whole
+# choice. Pinning "16:9" for every render is what squeezed a portrait starting
+# frame into a landscape session and returned a clip with audio and no picture.
+CANVASES = {"16:9": (1344, 768), "4:3": (1024, 768), "1:1": (768, 768), "9:16": (768, 1344)}
+DEFAULT_ASPECT = "16:9"
+
 
 def emit(kind, **fields):
     print(json.dumps({"type": kind, **fields}), flush=True)
@@ -30,6 +37,9 @@ async def render(params):
         raise ValueError("A prompt of 1–800 characters and duration of 5.167–14.375 seconds are required")
     if not params.get("jwt") or not params.get("outputPath"):
         raise ValueError("Session token and output path are required")
+    aspect = params.get("aspect") or DEFAULT_ASPECT
+    if aspect not in CANVASES:
+        raise ValueError(f"Canvas aspect must be one of {', '.join(CANVASES)}")
     source = params.get("sourceImagePath")
     continue_from = (params.get("continueFromClipId") or "").strip()
     if source and continue_from:
@@ -43,7 +53,7 @@ async def render(params):
     finished = asyncio.Event()
     state = {
         "active": False, "frames": 0, "error": None, "size": None, "audio": None,
-        "videoBuffers": [], "audioBuffers": [], "timestamps": [],
+        "videoBuffers": [], "audioBuffers": [], "timestamps": [], "sizes": [],
     }
 
     def on_message(message):
@@ -72,9 +82,8 @@ async def render(params):
             def on_video(bgra, width, height, frame_id, timestamp_us, user_data):
                 if state["active"] and len(state["videoBuffers"]) < 370:
                     state["timestamps"].append(timestamp_us)
-                    state["size"] = (width, height)
+                    state["sizes"].append((width, height))
                     state["videoBuffers"].append(bytes(bgra))
-                    state["frames"] += 1
 
             def on_audio(pcm, num_samples, sample_rate, num_channels):
                 if state["active"]:
@@ -84,7 +93,7 @@ async def render(params):
             reactor.tracks.with_direction("recvonly").with_kind("video").one().on_raw_frame(on_video)
             reactor.tracks.with_direction("recvonly").with_kind("audio").one().on_raw_frame(on_audio)
             phase = "canvas"
-            await reactor.send_command("set_canvas", {"aspect": "16:9"})
+            await reactor.send_command("set_canvas", {"aspect": aspect})
             request = {"prompt": prompt, "seconds": seconds}
             if params.get("seed") is not None:
                 request["seed"] = int(params["seed"])
@@ -114,11 +123,26 @@ async def render(params):
             await asyncio.sleep(0.5)
             state["active"] = False
             frames = state.pop("videoBuffers")
+            sizes = state.pop("sizes")
             expected = int(clip.get("frames", round(seconds * 24)))
-            # WebRTC may skip decoded frames. Keep presentation time (and audio
-            # sync) by holding the previous frame across timestamp gaps.
+            # A WebRTC track may renegotiate its resolution mid-stream. Every
+            # BGRA buffer is then a different length while ffmpeg is told ONE
+            # -video_size, so a single odd-sized frame shifts the stride for
+            # everything after it and the muxed clip decodes as noise or black
+            # while its audio plays fine. Keep only the resolution that carried
+            # the most frames; the hold-across-gaps loop below covers the rest.
             if frames:
-                timestamps = state["timestamps"]
+                # Ties resolve to the larger frame, so the choice is stable
+                # rather than set-iteration order.
+                dominant = max(set(sizes), key=lambda wh: (sizes.count(wh), wh[0] * wh[1]))
+                keep = [index for index, wh in enumerate(sizes) if wh == dominant]
+                state["size"] = dominant
+                state["frames"] = len(keep)
+                timestamps = [state["timestamps"][index] for index in keep]
+                # Rebinding frees the discarded buffers here rather than at the
+                # `del` below, which the 370-frame ceiling makes worth doing.
+                frames = [frames[index] for index in keep]
+            if frames:
                 first = timestamps[0]
                 cursor = 0
                 for index in range(expected):

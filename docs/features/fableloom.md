@@ -384,6 +384,16 @@ are rejected rather than silently losing dialogue. Reactor accepts 5.167–14.37
 seconds and snaps durations to its frame grid. Local interactive voice profiles
 are independent of Reactor's generated audio.
 
+FastH3's resolution is its **session canvas**, chosen as an aspect rather than a
+width/height pair: `16:9` (1344×768), `4:3` (1024×768), `1:1` (768×768) or `9:16`
+(768×1344) — every canvas holds a 768px short edge, so the aspect is the whole
+choice. Reactor *fits* a starting frame to whatever canvas the session opened
+with, so the canvas has to match the image. The Video Gen **Canvas** picker
+defaults to **Auto**, which derives the canvas from the starting frame's own
+shape and then centre-crops that frame to the canvas's exact pixel size before
+upload; a text render falls back to 16:9. Pick a canvas explicitly to override
+the derived one — the frame is cropped to it, so anything outside is discarded.
+
 Clip chaining is best effort. Every finished Reactor render stores the clip ID
 Reactor assigned it, and a later render can pass that ID back as
 `continue_from_clip_id` — the Video Gen form offers the stored IDs as a picker,

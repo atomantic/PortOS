@@ -27,6 +27,9 @@ export function useVideoGenFieldState({
   const [reactorClipId, setReactorClipId] = useState('');
   const [reactorSeconds, setReactorSeconds] = useState(REACTOR_DEFAULT_CLIP_LENGTH);
   const [reactorSeed, setReactorSeed] = useState('');
+  // '' is the picker's Auto entry: submit no aspect and let the server derive
+  // the fast-h3 canvas from the starting frame (text renders fall back to 16:9).
+  const [reactorAspect, setReactorAspect] = useState('');
   const [mode, setMode] = useState(incomingAudioFilename ? 'a2v' : (incomingSourceImage ? 'image' : 'text'));
   const [prompt, setPrompt] = useState(incomingPrompt || '');
   const [negativePrompt, setNegativePrompt] = useState(incomingNegativePrompt || '');
@@ -93,6 +96,7 @@ export function useVideoGenFieldState({
     reactorClipId, setReactorClipId,
     reactorSeconds, setReactorSeconds,
     reactorSeed, setReactorSeed,
+    reactorAspect, setReactorAspect,
     guidanceScale, setGuidanceScale,
     height, setHeight,
     i2vReferenceMode, setI2vReferenceMode,

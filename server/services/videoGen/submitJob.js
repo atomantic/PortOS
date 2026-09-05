@@ -233,6 +233,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
       continueFromClipId: body.reactorClipId,
       seconds: body.reactorSeconds,
       seed: body.reactorSeed,
+      aspect: body.reactorAspect,
       sourceImagePath,
       uploadedTempPath,
       ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),

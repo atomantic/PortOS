@@ -34,3 +34,47 @@ export const reactorClipLengthLabel = (seconds) => (
     : seconds === REACTOR_MAX_CLIP_SECONDS ? `${seconds} seconds (max)`
       : `${seconds} seconds`
 );
+
+/**
+ * The canvases fast-h3 renders. The aspect string is the whole choice — every
+ * canvas holds a 768px short edge, so the pixel size falls out of it. Reactor
+ * FITS a starting frame to the session canvas, so picking the canvas that
+ * matches the image is what keeps a portrait photo from being squeezed into a
+ * landscape session. Widest-first so the picker reads landscape → portrait.
+ */
+export const REACTOR_CANVASES = Object.freeze([
+  Object.freeze({ aspect: '16:9', width: 1344, height: 768, label: 'Landscape 16:9 · 1344×768' }),
+  Object.freeze({ aspect: '4:3', width: 1024, height: 768, label: 'Standard 4:3 · 1024×768' }),
+  Object.freeze({ aspect: '1:1', width: 768, height: 768, label: 'Square 1:1 · 768×768' }),
+  Object.freeze({ aspect: '9:16', width: 768, height: 1344, label: 'Portrait 9:16 · 768×1344' }),
+]);
+
+/** Just the aspect strings — the closed set `set_canvas` accepts. */
+export const REACTOR_ASPECTS = Object.freeze(REACTOR_CANVASES.map((c) => c.aspect));
+
+/** Canvas a text-only render (or an unreadable starting frame) falls back to. */
+export const REACTOR_DEFAULT_ASPECT = '16:9';
+
+/** Canvas record for an aspect string; the default canvas for anything else. */
+export const reactorCanvas = (aspect) => (
+  REACTOR_CANVASES.find((c) => c.aspect === aspect)
+  || REACTOR_CANVASES.find((c) => c.aspect === REACTOR_DEFAULT_ASPECT)
+);
+
+/**
+ * The fast-h3 canvas closest to a starting frame's own shape, compared in log
+ * space so twice-as-wide and half-as-wide score the same distance. Ties keep
+ * the earlier (wider) canvas; anything unmeasurable answers the default.
+ */
+export const nearestReactorAspect = (width, height) => {
+  const w = Number(width);
+  const h = Number(height);
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return REACTOR_DEFAULT_ASPECT;
+  const target = Math.log(w / h);
+  let best = null;
+  for (const canvas of REACTOR_CANVASES) {
+    const distance = Math.abs(Math.log(canvas.width / canvas.height) - target);
+    if (best === null || distance < best.distance) best = { aspect: canvas.aspect, distance };
+  }
+  return best.aspect;
+};

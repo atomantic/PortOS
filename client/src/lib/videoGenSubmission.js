@@ -45,7 +45,7 @@ export function envelopVideoPrompt(text, {
 
 export function buildVideoGenSubmission({
   isGrok, grokDuration, isFal, falDuration, falModelId,
-  isReactor, reactorClipId, reactorSeconds, reactorSeed, remoteSubmissionFields,
+  isReactor, reactorClipId, reactorSeconds, reactorSeed, reactorAspect, remoteSubmissionFields,
   displaySleepEnabled,
   prompt, negativePrompt, stylePreset, selectedUniverse,
   width, height, mode, sourceImageFile, sourceImageUpload,
@@ -117,8 +117,12 @@ export function buildVideoGenSubmission({
       // and reactor.js's own buildRequestBody already preserve 0 correctly,
       // so only the client-side send needs the nullish check).
       reactorSeed: reactorSeed === '' || reactorSeed === null || reactorSeed === undefined ? undefined : reactorSeed,
-      // No width/height: unlike grok/fal, reactor.js reads no dimension
-      // field — submitJob's reactor lane never forwards them.
+      // No width/height: fast-h3's resolution is its session CANVAS, and every
+      // canvas holds a 768px short edge, so the aspect string is the whole
+      // choice. '' is the picker's Auto entry — sending nothing asks the server
+      // to derive the canvas from the starting frame instead of opening the
+      // 16:9 session that squeezed a portrait image into a landscape render.
+      reactorAspect: reactorAspect || undefined,
       mode: mode === 'image' ? 'image' : 'text',
       sourceImageFile: mode === 'image' ? (sourceImageFile || '') : '',
       sourceImage: mode === 'image' ? (sourceImageUpload || '') : '',

@@ -13,8 +13,14 @@
  * - **Clip length** offers only lengths fast-h3 renders (see
  *   `lib/reactorVideoClip.js`) — the accepted range neither starts nor ends on
  *   a round number, so a number box mostly offered a way to type a rejected one.
+ * - **Canvas** is fast-h3's resolution control, and it is an ASPECT rather than
+ *   a width/height pair: every canvas holds a 768px short edge, so the aspect
+ *   string is the whole choice. Auto is the default because reactor FITS a
+ *   starting frame to whatever canvas the session opened with — pinning 16:9,
+ *   as every render did before, is what turned a portrait input into a clip
+ *   with clean audio and nothing worth watching.
  */
-import { REACTOR_CLIP_LENGTHS, reactorClipLengthLabel } from '../../lib/reactorVideoClip.js';
+import { REACTOR_CANVASES, REACTOR_CLIP_LENGTHS, reactorClipLengthLabel } from '../../lib/reactorVideoClip.js';
 import { FormField } from '../ui/FormField';
 
 export default function ReactorPanel({
@@ -26,6 +32,8 @@ export default function ReactorPanel({
   onSecondsChange,
   seed,
   onSeedChange,
+  aspect,
+  onAspectChange,
 }) {
   const fieldClass = 'w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50';
   const continuationBlocked = imageModeActive || continuableClips.length === 0;
@@ -61,6 +69,20 @@ export default function ReactorPanel({
           ))}
         </select>
       </FormField>
+      <FormField label="Canvas" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+        <select
+          value={aspect}
+          onChange={(e) => onAspectChange(e.target.value)}
+          className={fieldClass}
+        >
+          <option value="">
+            {imageModeActive ? 'Auto — match starting image' : 'Auto — landscape 16:9'}
+          </option>
+          {REACTOR_CANVASES.map((canvas) => (
+            <option key={canvas.aspect} value={canvas.aspect}>{canvas.label}</option>
+          ))}
+        </select>
+      </FormField>
       <FormField label="Seed" labelClassName="block text-xs font-medium text-gray-400 mb-1">
         <input
           type="number"
@@ -75,6 +97,11 @@ export default function ReactorPanel({
         Renders on reactor.inc&apos;s fast-h3 API — near-realtime, and every finished clip can be
         continued frame-accurately by picking it above. Reactor decides how long it keeps a clip
         continuable, so an older one may come back rejected. Counts against your reactor.inc balance.
+      </p>
+      <p className="col-span-2 text-[11px] text-gray-500 leading-snug">
+        {imageModeActive
+          ? 'A starting image is centre-cropped to the canvas before it is sent, so pick the canvas that matches its shape — Auto does that for you. Cropping to a canvas the image does not fit throws away everything outside it.'
+          : 'Every canvas renders at a 768px short edge; the aspect is the whole resolution choice.'}
       </p>
     </div>
   );

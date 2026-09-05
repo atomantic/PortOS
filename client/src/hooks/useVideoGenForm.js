@@ -106,6 +106,7 @@ export function useVideoGenForm({
     reactorClipId, setReactorClipId,
     reactorSeconds, setReactorSeconds,
     reactorSeed, setReactorSeed,
+    reactorAspect, setReactorAspect,
     guidanceScale, setGuidanceScale,
     height, setHeight,
     i2vReferenceMode, setI2vReferenceMode,
@@ -1219,6 +1220,7 @@ export function useVideoGenForm({
       if (p.continueFromClipId) setReactorClipId(p.continueFromClipId);
       if (p.seconds) setReactorSeconds(p.seconds);
       if (p.seed !== undefined && p.seed !== null) setReactorSeed(p.seed);
+      if (p.aspect) setReactorAspect(p.aspect);
     } else if (p.mode) setMode(p.mode);
     if (p.chunks && p.chunks > 1) setChunks(p.chunks);
     // 0 is a real restored value ("last frame only"), so this can't gate on
@@ -1292,7 +1294,7 @@ export function useVideoGenForm({
   // stays pure so all three backend contracts can be tested independently.
   const submissionState = {
     isGrok, grokDuration, isFal, falDuration, falModelId,
-    isReactor, reactorClipId, reactorSeconds, reactorSeed, remoteSubmissionFields,
+    isReactor, reactorClipId, reactorSeconds, reactorSeed, reactorAspect, remoteSubmissionFields,
     displaySleepEnabled,
     prompt, negativePrompt, stylePreset, selectedUniverse,
     width, height, mode, sourceImageFile, sourceImageUpload,
@@ -1316,6 +1318,7 @@ export function useVideoGenForm({
     reactorClipId, setReactorClipId,
     reactorSeconds, setReactorSeconds,
     reactorSeed, setReactorSeed,
+    reactorAspect, setReactorAspect,
     mode, handleModeChange,
     // Prompt + style
     prompt, setPrompt,
