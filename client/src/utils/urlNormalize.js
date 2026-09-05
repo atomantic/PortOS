@@ -11,18 +11,22 @@
 //                   (LinksTab's quick-add guard). FeedsTab/QuickBrainCapture
 //                   prepend unconditionally for non-scheme input.
 
+import { isSafeHref } from '../lib/isSafeHref.js';
+
 const URL_SCHEME_PATTERN = /^(https?:\/\/|git@)/i;
 const DOMAIN_PATTERN = /^\S+\.\S+$/;
 
 /**
  * True when a stored/user value is an explicit http(s) URL — the only scheme
  * safe to render as a clickable link (rejects javascript:/data: so a stored
- * URL can't smuggle a script into an href).
+ * URL can't smuggle a script into an href). Alias of `isSafeHref` from
+ * `client/src/lib/isSafeHref.js` (which mirrors `server/lib/isSafeHref.js`) —
+ * kept here so existing importers of `isHttpUrl` don't need to change.
  *
  * @param {string} url
  * @returns {boolean}
  */
-export const isHttpUrl = (url) => /^https?:\/\//i.test(url || '');
+export const isHttpUrl = isSafeHref;
 
 /**
  * True only for a syntactically valid HTTPS URL. Use this for provider-issued
