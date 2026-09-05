@@ -47,7 +47,7 @@ export default function ComparisonResearch() {
       <button className="px-4 py-2.5 text-sm rounded-lg border border-port-border disabled:opacity-50" onClick={save} disabled={busy || !valid || (!dirty && saved?.enabled)}>Save research settings</button>
       <button className="px-4 py-2.5 text-sm rounded-lg bg-port-accent text-port-on-accent disabled:opacity-50" onClick={run} disabled={busy || dirty || !valid || !saved?.enabled}>Run research now</button>
     </div>
-    <p className="text-sm">Cadence: {saved?.type === 'cron' ? saved.cronExpression : 'On demand'}. <Link className="text-port-accent underline" to="/cos/schedule">Edit cadence, effort, prompt and view status in CoS Schedule</Link>.</p>
+    <p className="text-sm">Cadence: {saved?.type === 'cron' ? saved.cronExpression : 'On demand'}. <Link className="text-port-accent-text underline" to="/cos/schedule">Edit cadence, effort, prompt and view status in CoS Schedule</Link>.</p>
     {message && <p role="status">{message}</p>}{error && <p role="alert" className="text-port-error">{error}</p>}
   </section>;
 }
