@@ -46,6 +46,16 @@ pulls the independent Video checkout from its own origin and branch, installs
 Worlds' frozen Bun dependencies, and restarts only Eidoverse. Video is therefore
 managed as a version-visible sidecar, not pinned as a PortOS submodule.
 
+That topology is only visible to someone who goes looking for it, so freshness
+is also reported where a user actually lives. Opening **Eidoverse** runs the
+same repository-source check once per visit and, when a checkout or its fork is
+behind, raises an advisory above the world naming what is behind and offering
+the same one-click managed update. Dismissing it silences that revision only —
+the next Eidoverse release raises it again. The check is scoped to this page
+rather than added to the global PortOS update banner because it costs a
+`git fetch` on both checkouts plus GitHub fork metadata, which is not a price
+every screen should pay.
+
 ## Runtime and data ownership
 
 The managed app uses port `8940` and starts with the Bun executable found or

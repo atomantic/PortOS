@@ -3,7 +3,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { pathExists, safeJSONParse } from '../lib/fileUtils.js';
 import { getOriginInfo, parseGitRemoteUrl, readRemoteUrl } from '../lib/gitRemote.js';
 import { githubApiHost, hostToWorkTracker, isGithubHost } from '../lib/workTracker.js';
-import { execGitSafe, fetchOrigin, resolveForgeForRepo } from './git.js';
+import { execGitSafe, fetchOrigin, isFetchFresh, resolveForgeForRepo } from './git.js';
 import { execGh } from './github.js';
 
 const GH_TIMEOUT_MS = 60_000;
@@ -156,12 +156,20 @@ async function inspectCheckout({ id, label, repoPath }) {
   const branch = branchName && branchName !== 'HEAD' ? branchName : null;
   const head = headResult.exitCode === 0 ? headResult.stdout.trim() : null;
   const clean = worktreeResult.exitCode === 0 ? worktreeResult.stdout.trim().length === 0 : null;
-  const fetchResult = topology.origin.hasOrigin
-    ? await fetchOrigin(repoPath).then(
-      () => ({ fresh: true, error: topology.error }),
-      () => ({ fresh: false, error: 'Could not refresh the origin repository' }),
-    )
-    : { fresh: false, error: topology.error };
+  // Skip the network hop when this checkout's remote refs were already
+  // refreshed inside the freshness window — the refs really are current, so
+  // `fresh: true` stays truthful. This read used to be reachable only from the
+  // app's Git tab; the Eidoverse page now runs it on every visit, where an
+  // ungated fetch would cost two `git fetch`es per mount (twice that under
+  // React StrictMode) for an answer that cannot have changed.
+  const fetchResult = !topology.origin.hasOrigin
+    ? { fresh: false, error: topology.error }
+    : isFetchFresh(repoPath)
+      ? { fresh: true, error: topology.error }
+      : await fetchOrigin(repoPath).then(
+        () => ({ fresh: true, error: topology.error }),
+        () => ({ fresh: false, error: 'Could not refresh the origin repository' }),
+      );
 
   const originRef = branch ? `refs/remotes/origin/${branch}` : null;
   const [originHeadResult, countsResult] = originRef
