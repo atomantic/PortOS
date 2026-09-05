@@ -9,6 +9,7 @@
  */
 
 import os from 'os';
+import { scanModelDuplicates } from './modelDeduplication.js';
 import { statfs } from 'fs/promises';
 import { join } from 'path';
 import { z } from 'zod';
@@ -373,6 +374,7 @@ export async function buildSystemResourceReport() {
     browserDownloadsBytes,
     cosTasks,
     cosStatus,
+    modelDuplicates,
   ] = await Promise.all([
     statfs('/').catch(() => null),
     getDataOverview({ strict: true }).catch(() => null),
@@ -396,6 +398,7 @@ export async function buildSystemResourceReport() {
     dirSize(PATHS.browserDownloads, { strict: true }).catch(() => null),
     cos.getAllTasks().catch(() => null),
     cos.getStatus().catch(() => null),
+    scanModelDuplicates().catch(() => ({ pinokioDetected: null, items: [], totalReclaimableBytes: 0, error: 'Duplicate model scan unavailable' })),
   ]);
 
   const filesystem = filesystemFrom(diskStats);
@@ -548,6 +551,7 @@ export async function buildSystemResourceReport() {
     },
     queues: { media: mediaQueue, agents: agentQueue },
     cleanupCandidates,
+    modelDuplicates,
     sourceErrors,
     disabledSources,
   };

@@ -1,6 +1,10 @@
 import { request, API_BASE, throwApiError } from './apiCore.js';
 import { downloadBlob } from '../lib/downloadBlob.js';
 
+export const rectifyModelDuplicates = (payload, options = {}) => request('/system-resources/duplicates/rectify', {
+  method: 'POST', body: JSON.stringify(payload), ...options,
+});
+
 // Alerts
 export const getAlertsSummary = (options) => request('/alerts/summary', options);
 

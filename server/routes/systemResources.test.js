@@ -3,6 +3,9 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
+vi.mock('../services/modelDeduplication.js', () => ({ rectifyModelDuplicates: vi.fn() }));
+const deduplication = await import('../services/modelDeduplication.js');
+
 const lifecycle = vi.hoisted(() => ({ onDisconnect: null, stopRun: vi.fn(async () => true) }));
 
 vi.mock('../services/systemResources.js', () => ({
@@ -95,4 +98,38 @@ describe('system resources routes', () => {
     expect(extra.status).toBe(400);
     expect(resources.triageSystemResources).not.toHaveBeenCalled();
   });
+});
+
+it('validates duplicate requests and replaces a verified weight through the route', async () => {
+  const fs = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const actual = await vi.importActual('../services/modelDeduplication.js');
+  const root = await fs.realpath(await fs.mkdtemp(join(tmpdir(), 'dedupe-route-')));
+  const local = join(root, 'local');
+  const external = join(root, 'pinokio');
+  await fs.mkdir(local);
+  await fs.mkdir(external);
+  const sourcePath = join(local, 'example.gguf');
+  const targetPath = join(external, 'example.gguf');
+  const bytes = Buffer.alloc(10 * 1024 * 1024, 3);
+  await fs.writeFile(sourcePath, bytes);
+  await fs.writeFile(targetPath, bytes);
+  deduplication.rectifyModelDuplicates.mockImplementation((pairs) => actual.rectifyModelDuplicates(pairs, {
+    roots: { local: [local], external: [external] },
+  }));
+  const app = makeApp();
+  const invalid = await request(app).post('/api/system-resources/duplicates/rectify').send({ pairs: [] });
+  expect(invalid.status).toBe(400);
+  const escaped = await request(app).post('/api/system-resources/duplicates/rectify').send({
+    pairs: [{ sourcePath, targetPath: join(root, 'outside.gguf') }],
+  });
+  expect(escaped.status).toBe(400);
+  const result = await request(app).post('/api/system-resources/duplicates/rectify').send({
+    pairs: [{ sourcePath, targetPath }],
+  });
+  expect(result.status).toBe(200);
+  expect(result.body.success).toBe(true);
+  expect((await fs.stat(sourcePath)).ino).toBe((await fs.stat(targetPath)).ino);
+  await fs.rm(root, { recursive: true, force: true });
 });
