@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import LoomReferenceReview from './LoomReferenceReview';
-vi.mock('../MediaImage', () => ({ default: (props) => <img {...props} /> }));
+vi.mock('../MediaImage', () => ({ default: (props) => <img {...props} alt={props.alt} /> }));
 
 it('compares graph predecessors rather than array neighbors and includes each converging path', async () => {
   const current = { id: 'current', title: 'Meeting', image: 'meeting.png', shot: { framing: 'Reverse close-up', durationSeconds: 8 }, visualCanon: { continuitySourceNodeId: 'left', shotNotes: 'Keep the window behind the desk.' } };
