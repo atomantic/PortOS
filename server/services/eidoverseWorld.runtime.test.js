@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   writes: 0,
   worlds: new Map(),
   socketUrls: [],
+  sockets: [],
+  nextSeq: 0,
   sent: [],
   deferredVerbAcks: [],
   deferVerbAcks: 0,
@@ -82,6 +84,7 @@ vi.mock('ws', () => {
       this.identity = null;
       this.world = null;
       mocks.socketUrls.push(String(url));
+      mocks.sockets.push(this);
       queueMicrotask(() => {
         this.readyState = FakeWebSocket.OPEN;
         this.emit('open');
@@ -108,7 +111,7 @@ vi.mock('ws', () => {
         if (!Object.keys(state.roles).length) state.roles[message.id] = { role: 'owner' };
         else state.roles[message.id] ||= { role: 'visitor' };
         mocks.worlds.set(message.world, state);
-        mocks.sent.push({ type: 'join', world: message.world, actor: message.id, agent: message.agent });
+        mocks.sent.push({ type: 'join', world: message.world, actor: message.id, agent: message.agent, guest: message.guest });
         queueMicrotask(() => {
           callback?.(null);
           this.emit('message', JSON.stringify({
@@ -147,10 +150,12 @@ vi.mock('ws', () => {
         }
         const acknowledge = () => {
           if (this.readyState !== FakeWebSocket.OPEN) return;
-          this.emit('message', JSON.stringify({
-            type: 'log',
-            entry: { actor: this.identity, verb: message.verb, args: message.args },
-          }));
+          const log = JSON.stringify({ type: 'log', entry: { seq: mocks.nextSeq++, actor: this.identity, verb: message.verb, args: message.args } });
+          if (message.verb === 'say') {
+            for (const socket of mocks.sockets) {
+              if (socket.world === this.world && socket.readyState === FakeWebSocket.OPEN) socket.emit('message', log);
+            }
+          } else this.emit('message', log);
         };
         if (mocks.deferVerbAcks > 0) {
           mocks.deferVerbAcks -= 1;
@@ -185,6 +190,8 @@ beforeEach(async () => {
   mocks.writes = 0;
   mocks.worlds.clear();
   mocks.socketUrls.length = 0;
+  mocks.sockets.length = 0;
+  mocks.nextSeq = 0;
   mocks.sent.length = 0;
   mocks.deferredVerbAcks.length = 0;
   mocks.deferVerbAcks = 0;
@@ -1065,4 +1072,28 @@ describe('Eidoverse private-world lifecycle', () => {
       args: { clear: true },
     }));
   });
+});
+
+
+it('admits a visitor before joining and exposes only new live chat to both guest and resident', async () => {
+  await world.ensureEidoverseWorldPresence();
+  expect((await world.readEidoverseWorldChat()).messages).toEqual([]);
+  const guest = await world.admitEidoverseGuest({ agent: true });
+  const grantIndex = mocks.sent.findIndex((entry) => entry.verb === 'grant' && entry.args.id === guest.identity.name);
+  const joinIndex = mocks.sent.findIndex((entry) => entry.type === 'join' && entry.actor === guest.identity.name);
+  expect(grantIndex).toBeLessThan(joinIndex);
+  expect(mocks.sent[grantIndex].args).toEqual({ id: guest.identity.name, role: 'visitor', gen: false });
+  expect(mocks.sent[joinIndex]).toMatchObject({ agent: true, guest: true });
+  expect(guest.connection.readChat().messages).toEqual([]);
+  await guest.connection.sendVerb('say', { text: 'Example visitor greeting.' });
+  const incoming = await world.readEidoverseWorldChat();
+  expect(incoming.messages).toEqual([{ seq: expect.any(Number), actor: guest.identity.name, text: 'Example visitor greeting.' }]);
+  await world.sayInEidoverseWorld('Example resident reply.');
+  expect(guest.connection.readChat(incoming.cursor).messages).toEqual([{ seq: expect.any(Number), actor: 'portos-cos', text: 'Example resident reply.' }]);
+  for (let index = 0; index < 3; index += 1) await guest.connection.sendVerb('say', { text: 'Example text '.repeat(150) });
+  const page = guest.connection.readChat(incoming.cursor);
+  expect(JSON.stringify(page).length).toBeLessThan(3500);
+  expect(page.hasMore).toBe(true);
+  expect(guest.connection.readChat(page.cursor).cursor).toBeGreaterThan(page.cursor);
+  await guest.connection.close();
 });

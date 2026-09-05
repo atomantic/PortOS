@@ -80,6 +80,19 @@ describe('authGate middleware', () => {
     expect(result.called).toBe(true);
   });
 
+  it('exposes only the bearer guest descriptor while travel controls remain password gated', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'correct-horse' });
+    const { authGate } = await import('./authGate.js');
+    expect((await runGate(authGate, { path: '/api/eidoverse/travel/guest', headers: {} })).called).toBe(true);
+    for (const suffix of ['destinations', 'depart', 'federation/visit', 'federation/chat', 'federation/leave']) {
+      const result = await runGate(authGate, { path: `/api/eidoverse/travel/${suffix}`, headers: {} });
+      expect(result.called).toBe(false);
+      expect(result.res.statusCode).toBe(401);
+      expect(result.res.body.code).toBe('AUTH_REQUIRED');
+    }
+  });
+
   it('fails closed (auth ON) when settings.json exists but is corrupt (#2684)', async () => {
     // A present-but-malformed settings.json must NOT silently disable the gate.
     // isAuthEnabled() reads it strictly, can't confirm auth is off, and assumes

@@ -97,6 +97,11 @@ describe('cosToolRegistry', () => {
       'cos.create-task',
       'mind.cleanup',
       'user-actions.query',
+      'eidoverse.chat',
+      'eidoverse.destinations',
+      'eidoverse.visit',
+      'eidoverse.visit-chat',
+      'eidoverse.leave',
       'eidoverse.status',
       'eidoverse.project',
       'eidoverse.augment',
@@ -109,6 +114,7 @@ describe('cosToolRegistry', () => {
     const openai = formatCosToolCatalog(catalog, 'openai');
     expect(openai.tools).toEqual([
       expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'user_actions_query' }) }),
+      expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'eidoverse_chat' }) }),
       expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'eidoverse_status' }) }),
       expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'brain_search' }) }),
     ]);
@@ -229,6 +235,13 @@ describe('cosToolRegistry', () => {
     await expect(executeCosToolCall({
       call: { requestId: 'write-2', name: 'brain.capture', arguments: { text: 'example' } },
       authority: { scope: 'mind', capabilities: { writePortos: false } },
+    })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+  });
+
+  it('requires a distinct peer travel grant even when local world management is allowed', async () => {
+    await expect(executeCosToolCall({
+      call: { requestId: 'peer-travel-denied', name: 'eidoverse.visit', arguments: { peerId: 'peer-example' } },
+      authority: { scope: 'mind', capabilities: { readPortos: true, writePortos: true, manageEidoverse: true } },
     })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
   });
 

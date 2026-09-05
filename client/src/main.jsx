@@ -1,4 +1,5 @@
 import './lib/consoleFilters';
+import { isPublicGuestRoute } from './lib/publicGuestRoutes';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { createBrowserRouter, RouterProvider } from 'react-router';
@@ -95,7 +96,7 @@ const router = createBrowserRouter([
 // The QR audience route is intentionally a no-bootstrap guest surface. Avoid
 // the theme settings request on a password-gated install: its 401 redirect
 // would otherwise replace the URL and discard the fragment credentials.
-const isHostedAudienceRoute = window.location.pathname.replace(/\/+$/, '') === '/fableloom/join';
+const isHostedAudienceRoute = isPublicGuestRoute(window.location.pathname);
 const app = isHostedAudienceRoute
   ? <RouterProvider router={router} />
   : (

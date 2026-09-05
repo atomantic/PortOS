@@ -1056,3 +1056,22 @@ describe('Eidoverse saved object legend and aliases', () => {
     expect(removed.operations).toContainEqual({ layer: 'reconciliation', verb: 'remove', args: { id: object.id } });
   });
 });
+
+it('gives every available destination a functional chamber outside the live signal cap and removes departed pods', () => {
+  const source = { ...emptySources(), peers: Array.from({ length: 6 }, (_, index) => ({ id: `peer-example-${index}`, status: 'online', travelAvailable: true })) };
+  const recipe = { ...DEFAULT_EIDOVERSE_PROJECTION_RECIPE, maxEntities: 1, limits: { ...DEFAULT_EIDOVERSE_PROJECTION_RECIPE.limits, peers: 1 } };
+  const plan = buildProjectionPlan({ source, recipe });
+  const pods = plan.summary.objects.filter((object) => object.travelPeerId);
+  expect(pods).toHaveLength(6);
+  expect(plan.summary.liveEntityCount).toBeLessThanOrEqual(1);
+  const currentState = snapshotFromPlan(plan);
+  for (const pod of pods) {
+    const entity = currentState.entities[pod.id];
+    expect(pod).toMatchObject({ route: '/eidoverse', name: expect.stringContaining('Teleport pod') });
+    expect(entity.comp.portos).toMatchObject({ action: 'visit', travelPeerId: pod.travelPeerId });
+    expect(entity.comp.structure.levels[0].tiles).toHaveLength(4);
+    expect(entity.comp.motion).toBeFalsy();
+  }
+  const departed = buildProjectionPlan({ source: { ...source, peers: [] }, recipe, currentState });
+  for (const pod of pods) expect(departed.operations).toContainEqual({ layer: 'reconciliation', verb: 'remove', args: { id: pod.id } });
+});

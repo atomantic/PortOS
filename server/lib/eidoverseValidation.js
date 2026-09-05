@@ -320,3 +320,19 @@ export const eidoverseWorldConfigPatchSchema = z.object({
     }
   }).optional(),
 }).strict();
+
+
+const eidoverseTicketSchema = z.string().regex(/^[a-f0-9]{48}$/);
+export const eidoverseChatReadSchema = z.object({ after: z.number().int().min(-1).default(-1) }).strict();
+export const eidoverseTravelVisitSchema = z.object({ peerId: z.string().min(1).max(80).regex(/^[a-zA-Z0-9_-]+$/) }).strict();
+export const eidoverseVisitChatSchema = z.object({ visitId: eidoverseTicketSchema, after: z.number().int().min(-1).default(-1), text: z.string().trim().min(1).max(2000).optional() }).strict();
+export const eidoverseVisitLeaveSchema = z.object({ visitId: eidoverseTicketSchema }).strict();
+export const eidoverseGuestAdmissionSchema = z.object({ agent: z.boolean().default(false) }).strict();
+export const eidoverseGuestChatSchema = eidoverseVisitChatSchema.omit({ visitId: true }).extend({ sessionId: eidoverseTicketSchema });
+export const eidoverseGuestLeaveSchema = z.object({ sessionId: eidoverseTicketSchema }).strict();
+export const eidoverseChatResultSchema = z.object({
+  messages: z.array(z.object({
+    seq: z.number().int().min(0), actor: z.string().max(64), text: z.string().max(2000), textTruncated: z.boolean().optional(),
+  }).strict()).max(20),
+  cursor: z.number().int().min(-1), hasMore: z.boolean(), truncated: z.boolean(),
+}).strict();

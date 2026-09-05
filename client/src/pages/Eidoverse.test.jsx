@@ -9,6 +9,8 @@ vi.mock('../services/api', () => ({
   getAppRepositorySources: vi.fn(),
   getEidoverseWorldProjectionStatus: vi.fn(),
   getEidoverseWorldStatus: vi.fn(),
+  getEidoverseDestinations: vi.fn(async () => ({ destinations: [] })),
+  departEidoverse: vi.fn(),
   getInstanceFeatures: vi.fn(),
   projectEidoverseWorld: vi.fn(),
   startApp: vi.fn(),
