@@ -391,6 +391,19 @@ describe('planning autopilot boundary', () => {
     expect(mutateLoomMock).not.toHaveBeenCalled();
   });
 
+  it('blocks a structurally valid but confusing opening before planning later episodes', async () => {
+    getLoomMock.mockResolvedValue({ seriesPlan: { storyArc: 'An arc.', plotPoints: [] }, episodes: [{ id: 'ep-1', number: 1, nodes: [] }, { id: 'ep-2', number: 2, nodes: [] }] });
+    planningMocks.reviewSeriesPlan.mockResolvedValue({ analysis: { risks: [] } });
+    planningMocks.generateEpisodeOutline.mockResolvedValue({ validation: { issues: [] } });
+    planningMocks.reviewEpisodeOutline.mockResolvedValue({ analysis: { risks: ['The viewer cannot identify an immediate personal goal.'], recommendations: [] } });
+    const run = await startFableLoomEditorialAutopilot('loom-plan', { mode: 'planning', maxRounds: 1 });
+    const finished = await waitForTerminal(run.id);
+    expect(finished).toMatchObject({ status: 'paused', residualFindings: [expect.objectContaining({ problem: 'The viewer cannot identify an immediate personal goal.' })] });
+    expect(planningMocks.generateEpisodeOutline.mock.calls.map((call) => call[1])).toEqual(['ep-1']);
+    expect(planningMocks.validateEpisodeOutline).not.toHaveBeenCalled();
+    expect(remediateMock).not.toHaveBeenCalled();
+  });
+
   it('refuses planning over expanded scenes before making provider calls', async () => {
     getLoomMock.mockResolvedValue({ episodes: [{ id: 'ep-1', nodes: [{ id: 'scene-1' }] }] });
     await expect(startFableLoomEditorialAutopilot('loom-plan', { mode: 'planning' })).rejects.toMatchObject({ code: 'PLANNING_SCOPE_REQUIRED' });

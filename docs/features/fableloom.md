@@ -23,7 +23,10 @@ This explicit autopilot mode reviews the plan first, repairs concrete findings,
 then drafts and reviews each episode outline in order with bounded retries.
 Plan edits can synchronize existing episode synopses while preserving episode
 titles and scene graphs. Advice for later prose expansion does not force another
-outline rewrite.
+outline rewrite. The first episode also receives a cold opening review: only its
+first three beats are supplied, without synopsis, canon or later payoffs. Missing
+immediate motivation, orientation or understandable personal stakes blocks planning
+before the full contextual review. A missing verdict is not approval.
 Each outline scene represents one camera-cut beat, not a complete dramatic scene.
 Plot points assigned to another episode cannot be expanded into the current
 episode. Deterministic validation must pass across the complete arc. Planning does not

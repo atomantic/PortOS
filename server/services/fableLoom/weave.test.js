@@ -416,10 +416,35 @@ describe('weaveEpisode', () => {
 });
 
 describe('episode outline AI review', () => {
+  it('withholds author context and blocks an unmotivated opening before the full review', async () => {
+    const { loomId, episodeId } = await setup();
+    runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-run' });
+    await generateEpisodeOutline(loomId, episodeId, {});
+    runStagedLLM.mockClear();
+    runStagedLLM.mockResolvedValueOnce({ content: { summary: 'A puzzle appears, but no personal goal is shown.', risks: ['Establish what the protagonist wants before the clue.'] }, runId: 'cold-review' });
+    const result = await reviewEpisodeOutline(loomId, episodeId, { planningGate: true, providerId: 'writer', model: 'small', effort: 'low' });
+    expect(result.analysis.risks).toEqual(['Establish what the protagonist wants before the clue.']);
+    expect(runStagedLLM).toHaveBeenCalledTimes(1);
+    const prompt = JSON.stringify(runStagedLLM.mock.calls[0]);
+    expect(prompt).toContain('COLD OPENING REVIEW ONLY');
+    expect(prompt).toContain('(withheld for first-time-viewer review)');
+    expect(prompt).not.toContain('CURRENT EPISODE ONLY');
+    expect(prompt).not.toContain('Series arc:');
+  });
+
+  it('does not treat a missing opening verdict as approval', async () => {
+    const { loomId, episodeId } = await setup();
+    runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-run' });
+    await generateEpisodeOutline(loomId, episodeId, {});
+    runStagedLLM.mockResolvedValueOnce({ content: { summary: 'Looks fine.' }, runId: 'incomplete-review' });
+    await expect(reviewEpisodeOutline(loomId, episodeId, {})).rejects.toThrow('explicit comprehension verdict');
+  });
+
   it('returns deterministic findings alongside editorial analysis', async () => {
     const { loomId, episodeId } = await setup();
     runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-run' });
     await generateEpisodeOutline(loomId, episodeId, {});
+    runStagedLLM.mockResolvedValueOnce({ content: { summary: 'A courier wants to get home; a closed gate threatens that goal.', risks: [] }, runId: 'cold-read' });
     runStagedLLM.mockResolvedValueOnce({
       content: { summary: 'The turn lands.', strengths: ['The endings diverge.'], risks: ['The handoff needs a sharper hook.'], recommendations: ['Make the final beat reveal the next threat.'] },
       runId: 'outline-review-run',

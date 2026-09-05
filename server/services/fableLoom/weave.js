@@ -920,9 +920,48 @@ export async function reviewEpisodeOutline(loomId, episodeId, { providerId, mode
     throw new ServerError('Draft an episode outline before reviewing it', { status: 409, code: 'OUTLINE_REQUIRED' });
   }
   const structural = outlineStructuralAnalysis(loom, episode);
+  const reviewStatus = createLoomAiStatus({ operationId }, { action: 'review-episode-outline', label: 'Reviewing episode outline' });
+  if (loom.episodes[0]?.id === episode.id) {
+    // A full bible gives the reviewer knowledge the audience has not earned.
+    // Follow the opening path, withholding synopsis, canon and later payoffs.
+    const opening = [];
+    const byKey = new Map(episode.storyOutline.scenes.map((scene) => [scene.key, scene]));
+    let beat = byKey.get(episode.storyOutline.startKey);
+    while (beat && opening.length < 3 && !opening.some((item) => item.key === beat.key)) {
+      opening.push({ key: beat.key, title: beat.title, summary: beat.summary });
+      if (beat.playbackMode === 'decision') break;
+      beat = byKey.get(beat.transitions[0]?.targetKey);
+    }
+    const cold = await runLoomAi('fableloom-review-episode-outline', {
+      storyContext: 'COLD OPENING REVIEW ONLY. You are a first-time viewer with no synopsis or world bible. From the opening beats alone, explain who the protagonist is, what they want right now, what interrupts them, and why that matters emotionally. Cite observable actions for each answer. Do not infer missing motivation from genre or fill gaps using imagined dialogue. Mystery about the cause is welcome; confusion about the basic situation is a blocking risk. Put missing orientation, unearned emotional investment and unexplained terminology needed to follow the action in risks, not recommendations. Return the usual summary, strengths, risks and recommendations JSON; summary and risks are required. Evaluate only this opening, not absent later endings.',
+      canonDigest: '(withheld for first-time-viewer review)',
+      episodeSequence: '(withheld)',
+      outlineDigest: JSON.stringify(opening),
+      structuralDigest: '(not part of this cold read)',
+    }, { providerId, model, effort, operationId }, {
+      action: 'review-episode-outline', label: 'Checking first-time viewer understanding', source: 'fableloom-review-episode-outline', status: reviewStatus, complete: false,
+    });
+    if (typeof cold.content?.summary !== 'string' || !cold.content.summary.trim()
+      || !Array.isArray(cold.content?.risks) || !cold.content.risks.every((risk) => typeof risk === 'string' && risk.trim())) {
+      reviewStatus?.error('The opening review returned no explicit comprehension verdict');
+      throw aiShapeError('The opening review returned no explicit comprehension verdict');
+    }
+    if (cold.content.risks.length) {
+      reviewStatus?.complete('Opening needs revision', { runId: cold.runId, shellReady: false });
+      return {
+        structural, runId: cold.runId,
+        analysis: {
+          summary: trimTo(cold.content.summary, 2000),
+          strengths: analysisStrings(cold.content.strengths),
+          risks: analysisStrings(cold.content.risks),
+          recommendations: analysisStrings(cold.content.recommendations),
+        },
+      };
+    }
+  }
   const canonDigest = await buildCanonDigest(loom);
   const { content, runId } = await runLoomAi('fableloom-review-episode-outline', {
-    storyContext: [storyContext(loom, episode), planningGate ? 'PLANNING GATE: Put only present contradictions, missing required beats, illegible choices, or unearned consequences that require changing this outline in risks. Put execution advice for the later teleplay (for example how to avoid too much dialogue) in recommendations. Do not require finished dialogue or images at outline stage. An outline with no remaining concrete blockers should return an empty risks array.' : ''].filter(Boolean).join('\n'),
+    storyContext: [storyContext(loom, episode), planningGate ? 'PLANNING GATE: Put only present contradictions, missing required beats, missing opening orientation or emotional stakes, illegible choices, or unearned consequences that require changing this outline in risks. Put execution advice for the later teleplay (for example how to avoid too much dialogue) in recommendations. Do not require finished dialogue or images at outline stage. An outline with no remaining concrete blockers should return an empty risks array.' : ''].filter(Boolean).join('\n'),
     canonDigest: canonDigest || '(none)',
     episodeSequence: episodeSequenceDigest(loom, episode.id),
     outlineDigest: describeStoryOutlineForPrompt(episode.storyOutline),
@@ -930,7 +969,7 @@ export async function reviewEpisodeOutline(loomId, episodeId, { providerId, mode
       ? structural.issues.map((issue) => `- [${issue.severity}] ${issue.message}`).join('\n')
       : '(no structural issues)',
   }, { providerId, model, effort, operationId }, {
-    action: 'review-episode-outline', label: 'Reviewing episode outline', source: 'fableloom-review-episode-outline',
+    action: 'review-episode-outline', label: 'Reviewing episode outline', source: 'fableloom-review-episode-outline', status: reviewStatus,
   });
   const analysis = {
     summary: trimTo(content?.summary, 2000),
