@@ -213,11 +213,15 @@ export async function checkForUpdate({ manual = false } = {}) {
     // consecutive-failure backoff — the 30-min scheduler retries a failure
     // on its very next tick with no cooldown of its own, which piled up
     // alongside branch-reconcile's identical gap during a real `gh` blip
-    // (both logged the same incident).
+    // (both logged the same incident). `backoffMaxMs` must exceed
+    // CHECK_INTERVAL_MS (30 min) — execGh's default 15-min cap always expires
+    // before this scheduler's own next tick, so it would never actually skip
+    // a scheduled attempt; a comfortable margin above the interval is what
+    // lets repeated failures widen the gap between real attempts.
     const raw = await execGh(
       ['api', `repos/${UPSTREAM_OWNER}/${UPSTREAM_REPO}/releases/latest`],
       undefined,
-      manual ? {} : { backoffKey: 'update-check' }
+      manual ? {} : { backoffKey: 'update-check', backoffMaxMs: CHECK_INTERVAL_MS * 3 }
     );
     let data;
     try { data = JSON.parse(raw); } catch { throw new Error(`Failed to parse GitHub release response: ${raw.slice(0, 200)}`); }

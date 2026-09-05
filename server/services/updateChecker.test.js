@@ -304,11 +304,14 @@ describe('checkForUpdate', () => {
     await checkForUpdate();
     // The scheduler retries a failed check on its next 30-min tick with no
     // cooldown of its own — the actual backoff mechanics live in execGh
-    // itself (github.js, mocked wholesale here); see github.test.js.
+    // itself (github.js, mocked wholesale here); see github.test.js. The cap
+    // must exceed the 30-min scheduler interval (90 min = 3x here) or the
+    // cooldown always expires before the next tick and never actually
+    // suppresses a retry — a real gh call fires every tick regardless.
     expect(execGh).toHaveBeenCalledWith(
       ['api', 'repos/atomantic/PortOS/releases/latest'],
       undefined,
-      { backoffKey: 'update-check' }
+      { backoffKey: 'update-check', backoffMaxMs: 90 * 60 * 1000 }
     );
   });
 
