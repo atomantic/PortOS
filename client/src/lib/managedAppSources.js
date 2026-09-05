@@ -3,10 +3,14 @@
  * `GET /api/apps/:id/repository-sources` returns
  * (`server/services/managedAppRepositories.js`).
  *
- * The fork rule is a correctness rule rather than a formatting one — a
- * DIVERGED fork can never be fast-forwarded, so an update must not ask the
- * server to sync it — and two surfaces now read it: the app's Git tab and the
- * Eidoverse page's out-of-date advisory. One definition, so they cannot drift.
+ * Two surfaces read this payload — the app's Git tab and the Eidoverse page's
+ * out-of-date advisory — and both must agree on which drift an update can
+ * actually clear, because that is a correctness rule, not a formatting one:
+ * asking the server to sync a fork it may not move produces a failure, and
+ * announcing one as an available update produces an advisory nothing clears.
+ * The server owns that rule (`isForkSyncable`) since the same rule decides
+ * `updateAvailable`, and publishes it per source as `forkSyncable`; the readers
+ * here phrase its answer rather than re-deriving it.
  */
 
 /** The application checkout itself, as opposed to its companion checkouts. */
