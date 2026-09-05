@@ -1148,6 +1148,59 @@ export const isLocalInstanceProvider = (provider) => {
 export const isFleetProvider = (provider) =>
   !isLocalInstanceProvider(provider) && isPrivateNetworkEndpoint(provider?.endpoint);
 
+/**
+ * Has this fleet host already been configured as a provider on this instance?
+ *
+ * @param {{endpoint?: string, peerHost?: string, peerAddress?: string}|null|undefined} host
+ * @param {Array<object>} providers
+ * @returns {boolean}
+ */
+export const isFleetHostConfigured = (host, providers = []) => {
+  if (!host || !Array.isArray(providers)) return false;
+  const hostEndpoint = typeof host.endpoint === 'string' ? host.endpoint.toLowerCase().replace(/\/+$/, '') : '';
+  const hostHostname = (host.peerHost || (host.endpoint && URL.canParse(host.endpoint) ? new URL(host.endpoint).hostname : ''))?.toLowerCase();
+  const hostAddress = (host.peerAddress || '')?.toLowerCase();
+
+  return providers.some((p) => {
+    // 1. Direct endpoint string equality
+    const pEndpoint = typeof p?.endpoint === 'string' ? p.endpoint.toLowerCase().replace(/\/+$/, '') : '';
+    if (hostEndpoint && pEndpoint === hostEndpoint) return true;
+
+    // 2. Parsed hostname/IP match
+    if (pEndpoint && URL.canParse(pEndpoint)) {
+      const pUrl = new URL(pEndpoint);
+      const pHost = pUrl.hostname.toLowerCase();
+      if ((hostHostname && pHost === hostHostname) || (hostAddress && pHost === hostAddress)) {
+        return true;
+      }
+    }
+
+    // 3. OpenCode TUI provider configuration check
+    if (p?.envVars?.OPENCODE_CONFIG_CONTENT) {
+      try {
+        const config = typeof p.envVars.OPENCODE_CONFIG_CONTENT === 'string'
+          ? JSON.parse(p.envVars.OPENCODE_CONFIG_CONTENT)
+          : p.envVars.OPENCODE_CONFIG_CONTENT;
+        const vllmBaseUrl = config?.provider?.vllm?.options?.baseURL;
+        if (typeof vllmBaseUrl === 'string') {
+          const normBase = vllmBaseUrl.toLowerCase().replace(/\/+$/, '');
+          if (hostEndpoint && normBase === hostEndpoint) return true;
+          if (URL.canParse(normBase)) {
+            const bHost = new URL(normBase).hostname.toLowerCase();
+            if ((hostHostname && bHost === hostHostname) || (hostAddress && bHost === hostAddress)) {
+              return true;
+            }
+          }
+        }
+      } catch {
+        // ignore parse error
+      }
+    }
+
+    return false;
+  });
+};
+
 export const isLikelyLargeContextProvider = (provider) => {
   if (isProcessProvider(provider)) return true;
   return isApiProvider(provider) && !isLocalEndpoint(provider.endpoint);

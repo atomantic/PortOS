@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useSearchParams } from 'react-router';
 import { Network, WandSparkles } from 'lucide-react';
 import Drawer from '../Drawer';
 import FleetHostSetup from './FleetHostSetup';
@@ -7,6 +7,7 @@ import useDrawerTab from '../../hooks/useDrawerTab';
 import { FormField } from '../ui/FormField';
 import Banner from '../ui/Banner';
 import { isLocalEndpoint, isPrivateNetworkEndpoint } from '../../utils/providers';
+import { revealFleetPeerHostKey } from '../../services/apiProviders';
 import { PORTS } from '../../lib/ports.js';
 
 const FLEET_TABS = [
@@ -82,14 +83,17 @@ export const buildFleetProvider = ({ name, endpoint, apiKey, model, harness }) =
 };
 
 export default function FleetProviderSetup({ peers = [], onClose, onCreate, onConfigured }) {
+  const [searchParams] = useSearchParams();
+  const initialPeerId = searchParams.get('peerId') || '';
   const [activeTab, setActiveTab] = useDrawerTab('fleetStep', 'architecture', FLEET_TAB_IDS);
-  const [selectedPeerId, setSelectedPeerId] = useState('');
+  const [selectedPeerId, setSelectedPeerId] = useState(initialPeerId);
   const [endpointInput, setEndpointInput] = useState('');
   const [name, setName] = useState('Fleet GPU · OpenCode TUI');
   const [apiKey, setApiKey] = useState('');
   const [model, setModel] = useState(DEFAULT_MODEL);
   const [harness, setHarness] = useState('tui');
   const [saving, setSaving] = useState(false);
+  const [fetchingKey, setFetchingKey] = useState(false);
   const [error, setError] = useState('');
   const availablePeers = useMemo(
     () => peers.filter((peer) => peer?.enabled !== false && (peer?.host || peer?.address)),
@@ -101,6 +105,30 @@ export default function FleetProviderSetup({ peers = [], onClose, onCreate, onCo
     setSelectedPeerId(peerId);
     const peer = availablePeers.find(({ id }) => id === peerId);
     setEndpointInput(peer ? endpointForPeer(peer) : '');
+  };
+
+  useEffect(() => {
+    if (initialPeerId && availablePeers.length > 0 && !endpointInput) {
+      selectPeer(initialPeerId);
+    }
+  }, [initialPeerId, availablePeers]);
+
+  const handleFetchKey = async () => {
+    if (!selectedPeerId) return;
+    setFetchingKey(true);
+    setError('');
+    try {
+      const res = await revealFleetPeerHostKey(selectedPeerId, { silent: true });
+      if (res?.apiKey) {
+        setApiKey(res.apiKey);
+      } else {
+        setError('Host did not return an API key. Enter it manually.');
+      }
+    } catch (err) {
+      setError(err?.message || 'Could not retrieve API key from host.');
+    } finally {
+      setFetchingKey(false);
+    }
   };
 
   const selectHarness = (next) => {
@@ -249,9 +277,22 @@ export default function FleetProviderSetup({ peers = [], onClose, onCreate, onCo
               value={apiKey}
               onChange={(event) => setApiKey(event.target.value)}
               autoComplete="off"
+              placeholder="Enter host API key"
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
             />
           </FormField>
+          {selectedPeerId && (
+            <div className="flex justify-end -mt-2">
+              <button
+                type="button"
+                onClick={handleFetchKey}
+                disabled={fetchingKey}
+                className="text-xs text-port-accent hover:underline disabled:opacity-50"
+              >
+                {fetchingKey ? 'Fetching…' : 'Fetch API key from host'}
+              </button>
+            </div>
+          )}
 
           {error && <Banner tone="error">{error}</Banner>}
 

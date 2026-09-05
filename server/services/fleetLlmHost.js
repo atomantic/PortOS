@@ -13,6 +13,9 @@ import { runStreamingCommand } from '../lib/streamingSpawn.js';
 import { installFleetHostLoginTask, isFleetHostLoginTaskInstalled } from './fleetLlmStartup.js';
 import { ensureFleetDockerIntegration } from './fleetLlmDocker.js';
 import { createFleetLlmGateway } from './fleetLlmGateway.js';
+import { peerFetch } from '../lib/peerHttpClient.js';
+import { peerBaseUrl } from '../lib/peerUrl.js';
+import { withAbortTimeout } from '../lib/abortTimeout.js';
 
 const ENABLED_KEY = 'PORTOS_FLEET_LLM_ENABLED';
 const MODEL = 'qwen3.8-27b';
@@ -88,6 +91,70 @@ export async function getFleetLlmHostStatus() {
 export async function revealFleetLlmKey() {
   const { apiKey } = await readHostEnv();
   return apiKey;
+}
+
+export async function getFleetPeerHosts({ timeoutMs = 3000 } = {}) {
+  const { getPeers } = await import('./instances.js').catch(() => ({ getPeers: async () => [] }));
+  const peers = await getPeers().catch(() => []);
+  const candidates = peers.filter((p) => p && p.enabled !== false && p.status !== 'offline');
+  if (candidates.length === 0) return { hosts: [] };
+
+  const results = await Promise.allSettled(
+    candidates.map(async (peer) => {
+      return withAbortTimeout(timeoutMs, async (signal) => {
+        const baseUrl = peerBaseUrl(peer);
+        const res = await peerFetch(`${baseUrl}/api/providers/fleet-host`, { signal }, peer);
+        if (!res.ok) return null;
+        const status = await res.json().catch(() => null);
+        if (!status || (!status.serving && !status.enabled)) return null;
+
+        const endpoint = status.endpoint || (peer.host || peer.address
+          ? `http://${peer.host || peer.address}:${PORTS.FLEET_LLM}/v1`
+          : null);
+
+        return {
+          peerId: peer.id,
+          peerName: peer.name || peer.host || peer.address,
+          peerHost: peer.host || null,
+          peerAddress: peer.address,
+          endpoint,
+          model: status.model || MODEL,
+          serving: Boolean(status.serving),
+          enabled: Boolean(status.enabled),
+          hasApiKey: Boolean(status.hasApiKey),
+          specs: status.specs || null,
+          queue: status.queue || null,
+        };
+      }).catch(() => null);
+    })
+  );
+
+  const hosts = results
+    .filter((r) => r.status === 'fulfilled' && r.value !== null)
+    .map((r) => r.value);
+
+  return { hosts };
+}
+
+export async function revealFleetPeerHostKey(peerId, { timeoutMs = 4000 } = {}) {
+  if (!peerId) throw new Error('Peer ID is required');
+  const { getPeers } = await import('./instances.js').catch(() => ({ getPeers: async () => [] }));
+  const peers = await getPeers().catch(() => []);
+  const peer = peers.find((p) => p.id === peerId);
+  if (!peer) throw new Error('Peer not found');
+
+  const baseUrl = peerBaseUrl(peer);
+  return withAbortTimeout(timeoutMs, async (signal) => {
+    const res = await peerFetch(`${baseUrl}/api/providers/fleet-host/key`, { method: 'POST', signal }, peer);
+    if (!res.ok) {
+      throw new Error(`Host returned HTTP ${res.status}`);
+    }
+    const data = await res.json().catch(() => null);
+    if (!data?.apiKey) {
+      throw new Error('Host did not return an API key');
+    }
+    return { apiKey: data.apiKey };
+  });
 }
 
 export async function configureFleetLlmHost({ emit = () => {}, isCancelled = () => false } = {}) {

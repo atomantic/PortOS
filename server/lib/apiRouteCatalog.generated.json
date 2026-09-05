@@ -13953,6 +13953,22 @@
       ]
     },
     {
+      "method": "GET",
+      "path": "/api/providers/fleet-peer-hosts",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/providers/fleet-peer-hosts/:peerId/key",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
+      ]
+    },
+    {
       "method": "POST",
       "path": "/api/providers/opencode/install",
       "mountPath": "/api/providers",
@@ -17748,8 +17764,8 @@
   ],
   "stats": {
     "mounts": 150,
-    "operations": 2198,
-    "declarations": 2206,
+    "operations": 2200,
+    "declarations": 2208,
     "sourceFiles": 233
   }
 }

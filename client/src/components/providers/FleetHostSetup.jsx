@@ -1,24 +1,39 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { CheckCircle2, HelpCircle, Server, XCircle } from 'lucide-react';
-import { getFleetLlmHost, revealFleetLlmHostKey } from '../../services/apiProviders';
+import { getFleetLlmHost, getFleetPeerHosts, revealFleetLlmHostKey } from '../../services/apiProviders';
+import { isFleetHostConfigured } from '../../utils/providers';
 import { copyToClipboard } from '../../lib/clipboard';
 import { useAutoRefetch } from '../../hooks/useAutoRefetch';
 import RuntimeInstallModal from '../install/RuntimeInstallModal';
 import Banner from '../ui/Banner';
 
-export default function FleetHostSetup({ compact = false, onConfigured }) {
+export default function FleetHostSetup({ compact = false, providers = [], onConfigured }) {
   const [status, setStatus] = useState(null);
+  const [peerHosts, setPeerHosts] = useState([]);
   const [error, setError] = useState('');
   const [installing, setInstalling] = useState(false);
   const [key, setKey] = useState('');
   const [revealing, setRevealing] = useState(false);
-  const load = useCallback(() => getFleetLlmHost({ silent: true })
-    .then((value) => { setStatus(value); setError(''); })
-    .catch(() => setError('Could not check this machine. Retry to detect hardware and model readiness.')), []);
+  const load = useCallback(() => {
+    getFleetLlmHost({ silent: true })
+      .then((value) => { setStatus(value); setError(''); })
+      .catch(() => setError('Could not check this machine. Retry to detect hardware and model readiness.'));
+    if (compact) {
+      getFleetPeerHosts({ silent: true })
+        .then((res) => { setPeerHosts(Array.isArray(res?.hosts) ? res.hosts : []); })
+        .catch(() => setPeerHosts([]));
+    }
+  }, [compact]);
   useEffect(() => { load(); }, [load]);
   useAutoRefetch(load, 15000, { enabled: !compact && !installing, pollOnly: true, immediate: false });
   const completed = useCallback(() => { load(); onConfigured?.(); }, [load, onConfigured]);
+
+  const unconfiguredPeerHosts = useMemo(() => {
+    if (!compact) return [];
+    return peerHosts.filter((host) => (host?.serving || host?.enabled) && !isFleetHostConfigured(host, providers));
+  }, [compact, peerHosts, providers]);
+
   const reveal = () => {
     setRevealing(true);
     revealFleetLlmHostKey({ silent: true }).then(({ apiKey }) => setKey(apiKey))
@@ -27,15 +42,55 @@ export default function FleetHostSetup({ compact = false, onConfigured }) {
   };
   const actionClass = 'inline-flex items-center justify-center min-h-[40px] px-3 py-2 rounded-lg bg-port-accent text-white text-sm disabled:opacity-50';
   const title = status?.recommendation.title || 'Recommended model host setup';
-  if (compact) return (
-    <section className="rounded-xl border border-port-border bg-port-card p-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between" aria-label="Recommended model host">
-      <div className="min-w-0">
-        <p className="text-sm font-medium text-white flex items-center gap-2"><Server size={16} />{title}</p>
-        <p className="text-xs text-gray-400 mt-1">{status?.serving ? 'Serving · shared request queue enabled' : 'Use one dedicated model host from your other PortOS instances.'}</p>
-      </div>
-      <Link to="/ai/fleet?fleetStep=host" className={actionClass}>Model host setup</Link>
-    </section>
-  );
+  if (compact) {
+    if (unconfiguredPeerHosts.length > 0) {
+      return (
+        <div className="space-y-3" aria-label="Available model hosts">
+          {unconfiguredPeerHosts.map((host) => (
+            <section
+              key={host.peerId}
+              className="rounded-xl border border-port-accent/50 bg-port-card p-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between shadow-xs"
+              aria-label={`Available model host ${host.peerName}`}
+            >
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="flex h-2 w-2 rounded-full bg-port-success shrink-0" />
+                  <p className="text-sm font-medium text-white flex items-center gap-2 truncate">
+                    <Server size={16} className="text-port-accent shrink-0" />
+                    Available federated host: <span className="text-port-accent font-semibold">{host.peerName}</span>
+                  </p>
+                  <span className="text-[11px] px-1.5 py-0.5 rounded bg-port-success/20 text-port-success font-medium">
+                    {host.serving ? 'Serving' : 'Enabled'} · {host.model || 'Qwen3.8-27B'}
+                  </span>
+                </div>
+                <p className="text-xs text-gray-400 mt-1">
+                  Instance <strong className="text-gray-200">{host.peerName}</strong> is running a federated LLM host. Set it up as a provider on this machine?
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <Link
+                  to={`/ai/fleet?fleetStep=client&peerId=${encodeURIComponent(host.peerId)}`}
+                  className={actionClass}
+                >
+                  Set up as provider
+                </Link>
+              </div>
+            </section>
+          ))}
+        </div>
+      );
+    }
+
+    return (
+      <section className="rounded-xl border border-port-border bg-port-card p-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between" aria-label="Recommended model host">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-white flex items-center gap-2"><Server size={16} />{title}</p>
+          <p className="text-xs text-gray-400 mt-1">{status?.serving ? 'Serving · shared request queue enabled' : 'Use one dedicated model host from your other PortOS instances.'}</p>
+        </div>
+        <Link to="/ai/fleet?fleetStep=host" className={actionClass}>Model host setup</Link>
+      </section>
+    );
+  }
   return (
     <div className="space-y-4">
       <Banner tone={status?.serving ? 'success' : 'info'} icon={Server} title={title}>
