@@ -223,6 +223,12 @@ describe('VideoGen cross-page Remix handoff', () => {
     await act(async () => { state.navigate(`/media/video?remix=${LEGACY_RECORD.id}`); });
     await waitFor(() => expect(screen.getByLabelText('Prompt')).toHaveValue(LEGACY_RECORD.prompt));
     expect(screen.queryByText(/Couldn't load your render history/)).toBeNull();
+
+    // And the block is spent, not permanent: the record whose fetch failed is
+    // restorable once it is handed over again against a history that loaded.
+    await act(async () => { state.navigate(`/media/video?remix=${RECORD.id}`); });
+    await waitFor(() => expect(screen.getByLabelText('Prompt')).toHaveValue(RECORD.prompt));
+    expect(screen.queryByText(/Couldn't load your render history/)).toBeNull();
   });
 
   it('reports an actionable missing-record state when the load holds no such record', async () => {

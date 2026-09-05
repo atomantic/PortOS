@@ -463,6 +463,10 @@ export default function VideoGen() {
     }, { replace: true });
   }, [setSearchParams]);
   useEffect(() => {
+    // The retry-block belongs to ONE handoff. Once the URL moves off it — the
+    // param was consumed, or another record arrived — it is spent, so the same
+    // record can be handed over again later and resolve normally.
+    if (blockedRemixHandoffId && blockedRemixHandoffId !== remixHandoffId) setBlockedRemixHandoffId(null);
     // No handoff in the URL — including right after this one consumed its own.
     // Clearing the settled id here is what lets the NEXT handoff through, even
     // when it names the same record.
