@@ -312,6 +312,29 @@ describe('checkForUpdate', () => {
     );
   });
 
+  it('bypasses the backoff for a manual "check now" request', async () => {
+    readJSONFile
+      .mockResolvedValueOnce({
+        lastCheck: null,
+        latestRelease: null,
+        ignoredVersions: [],
+        updateInProgress: false,
+        lastUpdateResult: null
+      })
+      .mockResolvedValueOnce({ version: '1.26.0' });
+    execGh.mockResolvedValue(JSON.stringify({ tag_name: 'v1.27.0' }));
+
+    // A user who explicitly asked for a check must always get a real
+    // attempt, not a silent rejection from a cooldown the unattended
+    // scheduler armed on its own after an earlier failure.
+    await checkForUpdate({ manual: true });
+    expect(execGh).toHaveBeenCalledWith(
+      ['api', 'repos/atomantic/PortOS/releases/latest'],
+      undefined,
+      {}
+    );
+  });
+
   it('should not detect update when versions match', async () => {
     readJSONFile
       .mockResolvedValueOnce({

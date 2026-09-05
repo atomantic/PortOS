@@ -196,20 +196,28 @@ export async function syncFork({ branch, remoteInfo } = {}) {
  * Always polls the upstream atomantic/PortOS releases so users running
  * from a fork still see upstream version availability. Pull/checkout
  * behavior is unchanged — update.sh still pulls from origin.
+ *
+ * @param {{ manual?: boolean }} [options] - `manual: true` (the `POST
+ *   /api/update/check` "check now" route) always makes a real attempt: a
+ *   user who explicitly asked for a check must never be silently swallowed
+ *   by the background scheduler's backoff cooldown from an earlier failure
+ *   it hit on its own. Only the unattended 30-min scheduler tick opts into
+ *   that backoff.
  */
-export async function checkForUpdate() {
+export async function checkForUpdate({ manual = false } = {}) {
   return withLock(async () => {
     const state = await loadState();
     const currentVersion = await getCurrentVersion();
 
-    // `backoffKey` opts this periodic read into execGh's consecutive-failure
-    // backoff — the 30-min scheduler retries a failure on its very next tick
-    // with no cooldown of its own, which piled up alongside branch-reconcile's
-    // identical gap during a real `gh` blip (both logged the same incident).
+    // `backoffKey` opts the unattended periodic read into execGh's
+    // consecutive-failure backoff — the 30-min scheduler retries a failure
+    // on its very next tick with no cooldown of its own, which piled up
+    // alongside branch-reconcile's identical gap during a real `gh` blip
+    // (both logged the same incident).
     const raw = await execGh(
       ['api', `repos/${UPSTREAM_OWNER}/${UPSTREAM_REPO}/releases/latest`],
       undefined,
-      { backoffKey: 'update-check' }
+      manual ? {} : { backoffKey: 'update-check' }
     );
     let data;
     try { data = JSON.parse(raw); } catch { throw new Error(`Failed to parse GitHub release response: ${raw.slice(0, 200)}`); }
