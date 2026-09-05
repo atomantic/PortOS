@@ -1,0 +1,369 @@
+{
+  "schemaVersion": 1,
+  "observations": [
+    {
+      "id": "aa-v4.2-openai-gpt-5.6-sol-max",
+      "provider": "OpenAI",
+      "model": "gpt-5.6-sol",
+      "effort": "max",
+      "configuration": "Published API model; max reasoning effort",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.2",
+      "quality": {
+        "value": 51,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-sol",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.2; public model summary, rounded published values."
+        }
+      },
+      "costPerTask": {
+        "value": 1.25,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-sol",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.2; public model summary, rounded published values."
+        }
+      },
+      "inputPerMillion": {
+        "value": 4,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-sol",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Published API USD per million uncached input tokens; standard context tier."
+        }
+      },
+      "outputPerMillion": {
+        "value": 20,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-sol",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Published API USD per million output tokens; standard context tier."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": {
+        "value": 80.9,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-sol",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Published median output speed; external API benchmark, not local hardware."
+        }
+      },
+      "quota": null,
+      "notes": "Initial public reference. API pricing is not subscription quota. E2E timing and reasoning billing not independently verified; left unknown."
+    },
+    {
+      "id": "aa-v4.2-openai-gpt-5.6-terra-max",
+      "provider": "OpenAI",
+      "model": "gpt-5.6-terra",
+      "effort": "max",
+      "configuration": "Published API model; max reasoning effort",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.2",
+      "quality": {
+        "value": 47,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-terra",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.2; public model summary, rounded published values."
+        }
+      },
+      "costPerTask": {
+        "value": 0.81,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-terra",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.2; public model summary, rounded published values."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-terra",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Published API USD per million uncached input tokens; standard context tier."
+        }
+      },
+      "outputPerMillion": {
+        "value": 12,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-terra",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Published API USD per million output tokens; standard context tier."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": {
+        "value": 111.4,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-terra",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Published median output speed; external API benchmark, not local hardware."
+        }
+      },
+      "quota": null,
+      "notes": "Initial public reference. API pricing is not subscription quota. E2E timing and reasoning billing not independently verified; left unknown."
+    },
+    {
+      "id": "aa-v4.2-openai-gpt-5.6-luna-max",
+      "provider": "OpenAI",
+      "model": "gpt-5.6-luna",
+      "effort": "max",
+      "configuration": "Published API model; max reasoning effort",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.2",
+      "quality": {
+        "value": 43,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-luna",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.2; public model summary, rounded published values."
+        }
+      },
+      "costPerTask": {
+        "value": 0.1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-luna",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.2; public model summary, rounded published values."
+        }
+      },
+      "inputPerMillion": {
+        "value": 0.2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-luna",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Published API USD per million uncached input tokens; standard context tier."
+        }
+      },
+      "outputPerMillion": {
+        "value": 1.2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-luna",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Published API USD per million output tokens; standard context tier."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": {
+        "value": 127.2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-luna",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Published median output speed; external API benchmark, not local hardware."
+        }
+      },
+      "quota": null,
+      "notes": "Initial public reference. API pricing is not subscription quota. E2E timing and reasoning billing not independently verified; left unknown."
+    },
+    {
+      "id": "aa-v4.2-openai-gpt-5.6-sol-high",
+      "provider": "OpenAI",
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "configuration": "Published API model; high reasoning effort",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.2",
+      "quality": {
+        "value": 48,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-sol-high",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.2; public model summary, rounded published values."
+        }
+      },
+      "costPerTask": {
+        "value": 0.61,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-sol-high",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.2; public model summary, rounded published values."
+        }
+      },
+      "inputPerMillion": {
+        "value": 4,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-sol-high",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Published API USD per million uncached input tokens; standard context tier."
+        }
+      },
+      "outputPerMillion": {
+        "value": 20,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-sol-high",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Published API USD per million output tokens; standard context tier."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": {
+        "value": 71.9,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-sol-high",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Published median output speed; external API benchmark, not local hardware."
+        }
+      },
+      "quota": null,
+      "notes": "Initial public reference. API pricing is not subscription quota. E2E timing and reasoning billing not independently verified; left unknown."
+    },
+    {
+      "id": "aa-v4.2-openai-gpt-5.6-sol-low",
+      "provider": "OpenAI",
+      "model": "gpt-5.6-sol",
+      "effort": "low",
+      "configuration": "Published API model; low reasoning effort",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.2",
+      "quality": {
+        "value": 41,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-sol-low",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.2; public model summary, rounded published values."
+        }
+      },
+      "costPerTask": {
+        "value": 0.23,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-sol-low",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.2; public model summary, rounded published values."
+        }
+      },
+      "inputPerMillion": {
+        "value": 4,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-sol-low",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Published API USD per million uncached input tokens; standard context tier."
+        }
+      },
+      "outputPerMillion": {
+        "value": 20,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-sol-low",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Published API USD per million output tokens; standard context tier."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": {
+        "value": 66.3,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-5-6-sol-low",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Published median output speed; external API benchmark, not local hardware."
+        }
+      },
+      "quota": null,
+      "notes": "Initial public reference. API pricing is not subscription quota. E2E timing and reasoning billing not independently verified; left unknown."
+    },
+    {
+      "id": "aa-v4.2-google-gemini-3.8-flash-high",
+      "provider": "Google",
+      "model": "gemini-3.8-flash",
+      "effort": "high",
+      "configuration": "Published API model; high reasoning effort",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.2",
+      "quality": {
+        "value": 47,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-3-8-flash",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.2; public model summary, rounded published values."
+        }
+      },
+      "costPerTask": {
+        "value": 0.74,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-3-8-flash",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.2; public model summary, rounded published values."
+        }
+      },
+      "inputPerMillion": {
+        "value": 0.75,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-3-8-flash",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Published API USD per million uncached input tokens; standard context tier."
+        }
+      },
+      "outputPerMillion": {
+        "value": 3.75,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-3-8-flash",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Published API USD per million output tokens; standard context tier."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Initial public reference. API pricing is not subscription quota. E2E timing and reasoning billing not independently verified; left unknown."
+    },
+    {
+      "id": "aa-v4.2-anthropic-claude-fable-5-1-max",
+      "provider": "Anthropic",
+      "model": "claude-fable-5-1",
+      "effort": "max",
+      "configuration": "Adaptive reasoning, max effort, default fallback; published evaluation configuration",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.2",
+      "quality": {
+        "value": 57,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-1",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.2; public model summary, rounded published values."
+        }
+      },
+      "costPerTask": {
+        "value": 6.12,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-1",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.2; public model summary, rounded published values."
+        }
+      },
+      "inputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-1",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Published API USD per million uncached input tokens; standard context tier."
+        }
+      },
+      "outputPerMillion": {
+        "value": 50,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-1",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Published API USD per million output tokens; standard context tier."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": {
+        "value": 67.1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-1",
+          "retrievedAt": "2026-09-05T00:00:00Z",
+          "methodology": "Published median output speed; external API benchmark, not local hardware."
+        }
+      },
+      "quota": null,
+      "notes": "Initial public reference. API pricing is not subscription quota. E2E timing and reasoning billing not independently verified; left unknown."
+    }
+  ]
+}

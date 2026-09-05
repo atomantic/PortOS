@@ -14,6 +14,7 @@ import {
 import { INTERVAL_TYPES } from './taskScheduleConstants.js';
 
 export const SELF_IMPROVEMENT_TASK_TYPES = [
+  'model-comparison-refresh',
   'security', 'code-quality', 'test-coverage', 'performance',
   'accessibility', 'branch-reconcile', 'issue-reconcile', 'console-errors', 'dependency-updates', 'documentation',
   'ui-bugs', 'mobile-responsive', 'feature-ideas', 'plan-task', 'claim-issue', 'claim-work', 'error-handling',
@@ -202,7 +203,7 @@ export const DEFAULT_BRANCHES_PER_AGENT = 3;
  * instead of forcing every run through the app picker (which would make the
  * install-wide lane unreachable on any install that has apps).
  */
-export const INSTALL_WIDE_TASK_TYPES = new Set(['repo-sync', 'user-action-review']);
+export const INSTALL_WIDE_TASK_TYPES = new Set(['repo-sync', 'user-action-review', 'model-comparison-refresh']);
 
 // Task types that only make sense when pointed at a managed app. Keeping this
 // alongside the install-wide registry gives both the on-demand request gate
@@ -212,6 +213,12 @@ export const MANAGED_APP_TARGET_TASK_TYPES = new Set(['pr-reviewer', 'issue-watc
 
 export function requiresManagedAppTarget(taskType) {
   return MANAGED_APP_TARGET_TASK_TYPES.has(taskType);
+}
+
+// Unlike repo-sync, model research has no meaningful per-app variant: its
+// catalog and API live in the PortOS install, never another app's checkout.
+export function requiresInstallWideTarget(taskType) {
+  return taskType === 'model-comparison-refresh';
 }
 
 // The pr-reviewer pipeline is a trust boundary, not three interchangeable
@@ -266,6 +273,7 @@ export const createPrReviewerDefaultStages = () => ([
 // is code-owned and makes the task invisible and non-runnable while that
 // install-wide feature is disabled.
 export const DEFAULT_TASK_INTERVALS = {
+  'model-comparison-refresh': { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA } },
   'security':            { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
   'code-quality':        { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
   'test-coverage':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
@@ -510,7 +518,7 @@ export const MANAGED_AGENT_OPTIONS = {
   // fields, so an unmanaged `worktreeChangesExpected` would silently go absent and the
   // task bookkeeping would otherwise treat the clean worktree as missing code work.
   ...Object.fromEntries(
-    ['branch-reconcile', 'branch-cleanup', 'issue-reconcile', 'jira-status-report', 'stash-cleanup', 'repo-sync']
+    ['branch-reconcile', 'branch-cleanup', 'issue-reconcile', 'jira-status-report', 'stash-cleanup', 'repo-sync', 'model-comparison-refresh']
       .map((t) => [t, ['useWorktree', 'openPR', 'worktreeChangesExpected']])
   ),
   // claim-issue's prompt creates its own claim/issue-<num> worktree (same
@@ -617,6 +625,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'react-lifecycle': 'React lifecycle/state audit — file issues (default) or implement fixes',
   'observability': 'Logging/observability audit — file issues (default) or implement fixes',
   'copy': 'Copy/text-clarity audit — file issues (default) or implement rewrites',
+  'model-comparison-refresh': 'Research sourced model quality, effort, price, latency and quota evidence for Models Comparison',
   'stash-cleanup': 'Triage git stash list — drop entries superseded by or stale relative to main, leave real unlanded work in place',
   'repo-sync': 'Sync every managed app with origin — back on the default branch, pushed and pulled, merged branches/worktrees and redundant stashes cleared',
   'plan-feature': "Brainstorm one feature and file its decision-complete plan to the app's work tracker (no code)",

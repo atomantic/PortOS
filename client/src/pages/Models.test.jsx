@@ -21,6 +21,7 @@ vi.mock('../components/models/Image3dRuntimes', () => ({ default: () => <div>3d 
 vi.mock('../components/models/ModelStatusTab', () => ({ default: () => <div>status panel</div> }));
 vi.mock('../components/settings/CodeReviewersTab', () => ({ default: () => <div>code reviewers panel</div> }));
 vi.mock('../components/models/HarnessesTab', () => ({ default: () => <div>harnesses panel</div> }));
+vi.mock('../components/models/ModelComparison', () => ({ default: () => <div>comparison panel</div> }));
 vi.mock('./Loras', () => ({ default: () => <div>loras panel</div> }));
 vi.mock('./LoraTraining', () => ({ default: () => <div>training panel</div> }));
 vi.mock('./MediaModels', () => ({ default: () => <div>media models panel</div> }));
@@ -33,6 +34,7 @@ import Models from './Models';
 // added to the header with no entry here fails the completeness check, instead of
 // quietly going unrendered by a hand-maintained second list.
 const PANEL_MARKER = {
+  comparison: 'comparison panel',
   '3d': '3d runtimes panel',
   'code-reviewers': 'code reviewers panel',
   embeddings: 'embeddings panel',

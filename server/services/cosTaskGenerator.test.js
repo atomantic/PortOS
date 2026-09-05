@@ -80,6 +80,7 @@ import {
   resolveAppClaimReviewers,
   buildImprovementDedupSets,
   queueDueInstallWideImprovementTasks,
+  generateManagedAppImprovementTaskForType,
   normalizeWorkItemRef,
   buildTargetWorkItemBlock,
   buildPrefetchedIssueContextBlock,
@@ -109,6 +110,15 @@ const COS_SRC = readFileSync(join(__dirname, 'cos.js'), 'utf-8');
 
 const task = (id, metadata = {}) => ({ id, metadata });
 const noCooldown = () => Promise.resolve(false);
+
+it('declines an old app-scoped research request before generating a task', async () => {
+  const result = await generateManagedAppImprovementTaskForType(
+    'model-comparison-refresh',
+    { id: 'example-app', name: 'Example App', repoPath: '/tmp/example-app' },
+    { config: {} }
+  );
+  expect(result).toBeNull();
+});
 
 // The prompt pre-step layer moved to cosTaskPreStepBlocks.js, but these five
 // were PUBLIC here first — other installs and forks carry deep imports of this

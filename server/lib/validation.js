@@ -1868,3 +1868,45 @@ export * from './quotaBurnValidation.js';
 export * from './spriteValidation.js';
 export * from './agentContextValidation.js';
 export * from './eidoverseValidation.js';
+
+// Public benchmark observations. A source is attached to each metric because
+// price, quality and runtime measurements often come from different workloads.
+const comparisonSourceSchema = z.object({
+  url: z.string().url().max(2000).refine(value => /^https:\/\//i.test(value), 'Source must use HTTPS'),
+  retrievedAt: z.string().datetime().refine(value => Date.parse(value) <= Date.now(), 'Source date cannot be in the future'),
+  methodology: z.string().min(1).max(1000),
+}).strict();
+const comparisonMetricSchema = z.object({ value: z.number().finite().nonnegative(), source: comparisonSourceSchema }).strict();
+export const modelComparisonObservationSchema = z.object({
+  id: z.string().min(1).max(200),
+  provider: z.string().min(1).max(160),
+  model: z.string().min(1).max(200),
+  effort: z.string().min(1).max(80),
+  configuration: z.string().min(1).max(500),
+  billing: z.enum(['api', 'subscription', 'local', 'unknown']),
+  benchmark: z.string().min(1).max(160),
+  quality: comparisonMetricSchema.nullable(),
+  costPerTask: comparisonMetricSchema.nullable(),
+  inputPerMillion: comparisonMetricSchema.nullable(),
+  outputPerMillion: comparisonMetricSchema.nullable(),
+  reasoningPerMillion: comparisonMetricSchema.nullable(),
+  responseSeconds: comparisonMetricSchema.nullable(),
+  tokensPerSecond: comparisonMetricSchema.nullable(),
+  quota: z.object({ unitsPerTask: z.number().finite().nonnegative(), unit: z.string().min(1).max(80), source: comparisonSourceSchema }).strict().nullable(),
+  notes: z.string().max(2000),
+}).strict();
+export const modelComparisonImportSchema = z.object({
+  schemaVersion: z.literal(1),
+  observations: z.array(modelComparisonObservationSchema).min(1).max(2000),
+}).strict().superRefine((value, ctx) => {
+  const ids = new Set();
+  value.observations.forEach((row, index) => {
+    if (ids.has(row.id)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['observations', index, 'id'], message: 'Duplicate observation id' });
+    ids.add(row.id);
+    if (!row.quality && !row.costPerTask && !row.inputPerMillion && !row.outputPerMillion && !row.reasoningPerMillion && !row.responseSeconds && !row.tokensPerSecond && !row.quota) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['observations', index], message: 'At least one sourced metric is required' });
+    }
+  });
+});
+
+export const modelComparisonDiscoverySchema = z.object({ providerId: z.string().min(1).max(200) }).strict();

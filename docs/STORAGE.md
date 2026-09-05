@@ -220,3 +220,7 @@ Apply this checklist to **every new feature that persists data**, and require it
 ### Dedicated inference host
 
 `PORTOS_FLEET_LLM_ENABLED` in the install `.env` is machine-local deployment configuration, alongside `VLLM_QWEN_PROJECT_DIR`. The existing runtime project holds its API key, compose override and model weights; none enters federation sync. Provider records use the existing provider store. The bounded inference queue exists only in memory, with no prompt/response persistence and no restart replay. No new app-native data store or migration is introduced.
+
+### Model comparison reference snapshot
+
+`data/model-comparison.json` is `file-primary`: a bounded, externally researched reference snapshot, directly inspectable/importable as a portable JSON document, with no app-record foreign keys, cross-record queries, search index or accumulated history. It follows the local-assessment reference pattern, rather than representing app-native relational records. It is intentionally machine-local and never federated because configuration and quota interpretation can be install-specific. Schema version 1 is seeded for new installs and migration 351 preserves existing catalogs. Rsync backups include it; no backup exclusion, sync cursor or tombstone is added. Source dates and exact benchmark/configuration identities remain attached to metrics. The server rejects future/malformed versions and merges imports through a serialized last-good-preserving write. See [Models Comparison](MODEL-COMPARISON.md).

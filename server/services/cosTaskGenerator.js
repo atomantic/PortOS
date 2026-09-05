@@ -61,6 +61,7 @@ import {
 import { TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { isReconcileDrainTaskType } from './taskScheduleConstants.js';
+import { requiresInstallWideTarget } from './taskScheduleRegistry.js';
 import {
   appendClaimOverrideContext,
   appendPrefetchedIssueContext,
@@ -1842,12 +1843,12 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
     if (inputHook.hookPrompt) description = inputHook.hookPrompt;
   }
 
-  // user-action-review delivers filed issues / queued tasks, never a commit.
+  // Operator review and model research deliver actions/data, never a commit.
   // Stamp the action-output posture the way the audit file-issues path does —
   // `noCodeOutput` is dispatch-stamped, not user-settable, so it cannot arrive
   // from DEFAULT_TASK_INTERVALS through sanitizeTaskMetadata. Without it the
   // completion contract tells a live-checkout agent to commit and `/do:push`.
-  if (taskType === 'user-action-review') {
+  if (taskType === 'user-action-review' || taskType === 'model-comparison-refresh') {
     metadata.noCodeOutput = true;
     metadata.worktreeChangesExpected = false;
   }
@@ -2852,6 +2853,9 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   const { updateAppActivity } = await import('./appActivity.js');
   const taskSchedule = await import('./taskSchedule.js');
   const { getTaskPrompt, getStagePrompt } = await import('./taskPromptService.js');
+
+  // Also protect requests queued before the target-scope gate was installed.
+  if (requiresInstallWideTarget(taskType)) return null;
 
   // NOTE: `updateAppActivity` + the "Generating improvement task" log are
   // intentionally deferred until AFTER every gate returns non-null (see end

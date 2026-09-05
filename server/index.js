@@ -172,6 +172,7 @@ import { errorMiddleware } from './lib/errorHandler.js';
 import { setHttpsEnabledAtBoot } from './lib/httpsState.js';
 import { JSON_BODY_LIMIT } from './lib/uploadLimits.js';
 import { createPortOSProviderRoutes } from './routes/providers.js';
+import { createModelComparisonRoutes } from './routes/modelComparison.js';
 import { createPortOSRunsRoutes } from './routes/runs.js';
 import { createPortOSPromptsRoutes } from './routes/prompts.js';
 
@@ -282,6 +283,7 @@ app.use('/api/detect', detectRoutes);
 app.use('/api/scaffold', scaffoldRoutes);
 
 // AI Toolkit routes with PortOS extensions
+app.use('/api/providers/comparison', createModelComparisonRoutes(aiToolkit.services.providers));
 app.use('/api/providers', createPortOSProviderRoutes(aiToolkit));
 app.use('/api/runs', createPortOSRunsRoutes(aiToolkit));
 app.use('/api/prompts', createPortOSPromptsRoutes(aiToolkit));

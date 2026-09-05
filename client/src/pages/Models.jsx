@@ -51,6 +51,7 @@ const MediaModels = lazyWithReload(() => import('./MediaModels'));
  * reachable from ⌘K and voice (`client/src/AGENTS.md`).
  */
 const TAB_CONTENT = {
+  comparison: lazyWithReload(() => import('../components/models/ModelComparison')),
   '3d': Image3dRuntimes,
   'code-reviewers': CodeReviewersTab,
   embeddings: EmbeddingsTab,
